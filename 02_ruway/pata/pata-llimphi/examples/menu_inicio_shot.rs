@@ -35,34 +35,41 @@ fn main() {
     let bar_h = 40.0_f32;
     let screen = (W as f32, H as f32);
 
-    let estilos: [(&str, MenuStyle, View<Msg>); 3] = [
+    // Cada estilo se pinta con el theme de SU vista, para verificar que el menú
+    // sigue el acento de la paleta (XP=azul, CDE=Solaris) y no un azul fijo.
+    let tema_xp = llimphi_theme::Theme::by_name("WinXP").unwrap_or_else(|| theme.clone());
+    let tema_cde = llimphi_theme::Theme::by_name("CDE").unwrap_or_else(|| theme.clone());
+    let estilos: [(&str, MenuStyle, View<Msg>, llimphi_theme::Theme); 3] = [
         (
             "classic",
             MenuStyle::Classic,
             render::start_menu_overlay(apps, "", 0.0, bar_h, screen.1, &theme),
+            theme.clone(),
         ),
         (
             "xp",
             MenuStyle::Xp,
-            render::start_menu_xp_overlay(apps, "", 0.0, bar_h, screen, &theme),
+            render::start_menu_xp_overlay(apps, "", 0.0, bar_h, screen, &tema_xp),
+            tema_xp.clone(),
         ),
         (
             "gnome",
             MenuStyle::Gnome,
-            render::start_menu_gnome_overlay(apps, "", bar_h, screen, &theme),
+            render::start_menu_gnome_overlay(apps, "", bar_h, screen, &tema_cde),
+            tema_cde.clone(),
         ),
     ];
 
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
 
-    for (nombre, _, overlay) in estilos {
+    for (nombre, _, overlay, tema) in estilos {
         let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
-        .fill(theme.bg_app)
+        .fill(tema.bg_app)
         .children(vec![overlay]);
 
         let mut layout = LayoutTree::new();

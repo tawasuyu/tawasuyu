@@ -869,6 +869,14 @@ pub fn start_menu_view(
         apps, query, offset, viewport, theme, style, columns,
     )]);
 
+    // Una barra anclada abajo (XP/KDE/Solaris) crece hacia arriba al desplegar:
+    // el menú va ARRIBA y la barra queda pegada al borde — si no, la barra se
+    // "levanta" al tope de la región expandida.
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -877,7 +885,7 @@ pub fn start_menu_view(
         },
         ..Default::default()
     })
-    .children(vec![bar, body])
+    .children(hijos)
 }
 
 /// El historial de portapapeles para el **layer-shell**.
@@ -912,6 +920,11 @@ pub fn clipboard_menu_view(
         .on_click(Msg::ClipboardMenu)
         .children(vec![clipboard_panel(history, theme)]);
 
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -920,7 +933,7 @@ pub fn clipboard_menu_view(
         },
         ..Default::default()
     })
-    .children(vec![bar, body])
+    .children(hijos)
 }
 
 // ============================================================

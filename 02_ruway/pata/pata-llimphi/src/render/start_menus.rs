@@ -74,8 +74,37 @@ fn glifo_renderiza(c: char) -> bool {
 }
 
 // =====================================================================
-// Estilo XP — banda azul, dos columnas, footer rojo
+// Estilo XP — dos columnas + banda/footer derivados del ACENTO del theme
 // =====================================================================
+
+/// Oscurece un color multiplicando su RGB por `factor` (0..1).
+fn shade(c: Color, factor: f32) -> Color {
+    let k = c.components;
+    Color::from_rgba8(
+        (k[0] * factor * 255.0).clamp(0.0, 255.0) as u8,
+        (k[1] * factor * 255.0).clamp(0.0, 255.0) as u8,
+        (k[2] * factor * 255.0).clamp(0.0, 255.0) as u8,
+        255,
+    )
+}
+
+/// Aclara un color mezclándolo hacia el blanco en proporción `t` (0..1).
+fn tint(c: Color, t: f32) -> Color {
+    let k = c.components;
+    let m = |x: f32| ((x + (1.0 - x) * t) * 255.0).clamp(0.0, 255.0) as u8;
+    Color::from_rgba8(m(k[0]), m(k[1]), m(k[2]), 255)
+}
+
+/// El mismo color con un alfa dado (para hovers translúcidos).
+fn con_alfa(c: Color, a: u8) -> Color {
+    let k = c.components;
+    Color::from_rgba8(
+        (k[0] * 255.0) as u8,
+        (k[1] * 255.0) as u8,
+        (k[2] * 255.0) as u8,
+        a,
+    )
+}
 
 /// Ancho del panel XP. Tomado del Bliss original: ~380 px (más esbelto
 /// que el Classic Win10 pero más ancho que el Classic Win95).
@@ -147,7 +176,7 @@ pub(super) fn xp_body(
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .fill(Color::from_rgba8(245, 246, 250, 255))
+    .fill(theme.bg_panel)
     .radius(radius::LG)
     .shadow(shadow)
     .clip(true)
@@ -191,12 +220,15 @@ pub fn start_menu_xp_overlay(
     .children(vec![body])
 }
 
-/// Banda azul superior con avatar circular + nombre del usuario.
+/// Banda superior (acento del theme) con avatar circular + nombre del usuario.
 fn xp_header(theme: &Theme) -> View<Msg> {
-    // El gradiente icónico XP: azul medio → azul más oscuro abajo.
     use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, Rect as KurboRect};
     use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
-    let _ = theme;
+    // El gradiente XP, pero derivado del ACENTO de la vista: claro arriba →
+    // profundo abajo. Para la vista windows-xp el acento es azul → banda azul;
+    // para otra paleta, la banda la sigue.
+    let banda_top = tint(theme.accent, 0.20);
+    let banda_bot = shade(theme.accent, 0.62);
 
     let avatar = View::new(Style {
         size: Size { width: length(40.0_f32), height: length(40.0_f32) },
@@ -204,12 +236,12 @@ fn xp_header(theme: &Theme) -> View<Msg> {
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .fill(Color::from_rgba8(245, 247, 252, 255))
+    .fill(tint(theme.accent, 0.9))
     .radius(20.0)
     .text_aligned(
         usuario_inicial(),
         18.0,
-        Color::from_rgba8(36, 64, 140, 255),
+        shade(theme.accent, 0.55),
         Alignment::Center,
     )
     .bold();
@@ -254,14 +286,9 @@ fn xp_header(theme: &Theme) -> View<Msg> {
         let x1 = (rect.x + rect.w) as f64;
         let y1 = (rect.y + rect.h) as f64;
         let r = KurboRect::new(x0, y0, x1, y1);
-        // Verde-azul XP: arriba claro, abajo más profundo.
-        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y1)).with_stops(
-            [
-                Color::from_rgba8(52, 102, 196, 255),
-                Color::from_rgba8(28, 60, 144, 255),
-            ]
-            .as_slice(),
-        );
+        // Banda del acento: arriba clara, abajo más profunda.
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y1))
+            .with_stops([banda_top, banda_bot].as_slice());
         scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &r);
     })
     .children(vec![avatar, nombre])
@@ -290,7 +317,7 @@ fn xp_column(
         },
         ..Default::default()
     })
-    .text(title.to_string(), 11.0, Color::from_rgba8(96, 110, 132, 255));
+    .text(title.to_string(), 11.0, theme.fg_muted);
 
     let rows: Vec<View<Msg>> = apps.iter().map(|a| xp_app_row(a, theme)).collect();
 
@@ -345,7 +372,7 @@ fn xp_column_scrolling(
         },
         ..Default::default()
     })
-    .text(title.to_string(), 11.0, Color::from_rgba8(96, 110, 132, 255));
+    .text(title.to_string(), 11.0, theme.fg_muted);
 
     let rows: Vec<View<Msg>> = apps.iter().map(|a| xp_app_row(a, theme)).collect();
     let n = rows.len() as f32;
@@ -394,7 +421,7 @@ fn xp_column_scrolling(
         },
         ..Default::default()
     })
-    .fill(Color::from_rgba8(235, 238, 246, 255))
+    .fill(theme.bg_panel_alt)
     .children(vec![title_v, scroll_wrap])
 }
 
@@ -406,7 +433,7 @@ fn xp_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(icono, 14.0, Color::from_rgba8(36, 64, 140, 255), Alignment::Center);
+    .text_aligned(icono, 14.0, theme.accent, Alignment::Center);
     let nombre = View::new(Style {
         flex_grow: 1.0,
         size: Size { width: auto(), height: length(XP_ROW_H) },
@@ -416,11 +443,9 @@ fn xp_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
     .text_aligned(
         a.label.clone(),
         12.5,
-        Color::from_rgba8(20, 22, 40, 255),
+        theme.fg_text,
         Alignment::Start,
     );
-
-    let _ = theme;
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -438,15 +463,18 @@ fn xp_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
         gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
-    .hover_fill(Color::from_rgba8(28, 60, 144, 32))
+    .hover_fill(con_alfa(theme.accent, 32))
     .on_click(Msg::LaunchApp(a.id.clone()))
     .children(vec![badge, nombre])
 }
 
-/// Pie del menú XP: dos acciones (cerrar sesión / apagar).
-fn xp_footer(_theme: &Theme) -> View<Msg> {
+/// Pie del menú XP: dos acciones (cerrar sesión / apagar). Banda derivada del
+/// acento de la vista (coherente con el header).
+fn xp_footer(theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, Rect as KurboRect};
     use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+    let banda_top = tint(theme.accent, 0.06);
+    let banda_bot = shade(theme.accent, 0.55);
 
     let btn = |label: &str, glyph: &str, fg: Color, on_click: Msg| -> View<Msg> {
         View::new(Style {
@@ -525,14 +553,9 @@ fn xp_footer(_theme: &Theme) -> View<Msg> {
         let x1 = (rect.x + rect.w) as f64;
         let y1 = (rect.y + rect.h) as f64;
         let r = KurboRect::new(x0, y0, x1, y1);
-        // Banda verde apagada típica del XP "Turn Off Computer".
-        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y1)).with_stops(
-            [
-                Color::from_rgba8(118, 145, 197, 255),
-                Color::from_rgba8(60, 88, 168, 255),
-            ]
-            .as_slice(),
-        );
+        // Banda inferior del acento (más apagada que el header).
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x0, y1))
+            .with_stops([banda_top, banda_bot].as_slice());
         scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &r);
     })
     .children(vec![logout, shutdown])
@@ -844,18 +867,20 @@ pub(super) fn program_manager_view(apps: &[AppEntry], theme: &Theme) -> View<Msg
     .fill(gris)
     .children(vec![grid]);
 
-    // La "ventana": columna gris con borde sutil, tamaño fijo (no flota: es un
-    // panel persistente que la barra de la vista win3.1 centra).
+    // La "ventana" del Program Manager **llena** su superficie (la vista
+    // win3.1 le da una franja alta a pantalla): así es el escritorio Win3.1, no
+    // un recuadro chico flotando sobre una banda. Borde Motif (sombra clara
+    // arriba/izq, oscura abajo/der lo da el contenedor padre).
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(660.0_f32),
-            height: length(380.0_f32),
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
         },
         ..Default::default()
     })
     .fill(gris)
-    .radius(2.0)
+    .border(2.0, Color::from_rgba8(128, 128, 128, 255))
     .clip(true)
     .children(vec![titulo, cuerpo])
 }

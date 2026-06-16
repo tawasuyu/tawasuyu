@@ -42,6 +42,14 @@ impl Anchor {
     pub fn es_horizontal(&self) -> bool {
         matches!(self, Anchor::Top | Anchor::Bottom)
     }
+
+    /// Si una superficie anclada a este borde **crece hacia el interior de la
+    /// pantalla en sentido contrario al borde**: una barra abajo que se agranda
+    /// (al abrir su menú) gana alto hacia arriba, así que su contenido fijo (la
+    /// barra) debe quedar al final y el desplegable arriba. Idem `Right`.
+    pub fn crece_hacia_el_borde_inicial(&self) -> bool {
+        matches!(self, Anchor::Bottom | Anchor::Right)
+    }
 }
 
 /// Qué clase de superficie del marco se está describiendo.

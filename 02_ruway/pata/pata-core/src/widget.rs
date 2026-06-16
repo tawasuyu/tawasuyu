@@ -717,21 +717,31 @@ impl Widget for StartButton {
 /// view-model; el frontend lo pinta como una fila de celdas clickeables y, al
 /// click, le pide al WM saltar a ese escritorio.
 ///
-/// Si el host no reporta escritorios (`workspace_count == 0`, p. ej. no hay
-/// compositor que responda), su `view` es [`WidgetView::Empty`]: el widget
-/// desaparece en vez de pintar una fila vacía.
-#[derive(Debug, Clone, Default)]
+/// Si el host no reporta escritorios (`workspace_count == 0`, p. ej. el WM aún
+/// no respondió), cae a `fallback` celdas (prop `count`, default 9) para que el
+/// control **siempre se vea** — un switcher invisible no sirve. Sólo desaparece
+/// si `fallback` es 0 explícito.
+#[derive(Debug, Clone)]
 pub struct WorkspaceSwitcher {
     active: u8,
     count: u8,
     occupied: u16,
+    /// Celdas a pintar cuando el WM no reporta (prop `count`, default 9).
+    fallback: u8,
+}
+
+impl Default for WorkspaceSwitcher {
+    fn default() -> Self {
+        Self { active: 0, count: 0, occupied: 0, fallback: 9 }
+    }
 }
 
 impl WorkspaceSwitcher {
-    /// Construye desde el spec. Hoy no lee props (el estado viene del WM por el
-    /// [`WidgetCtx`]); la firma se mantiene homogénea con los demás widgets.
-    pub fn from_spec(_spec: &WidgetSpec) -> Self {
-        Self::default()
+    /// Construye desde el spec. Lee `count` = cuántas celdas mostrar mientras el
+    /// WM no reporta (default 9, el `WORKSPACE_COUNT` de mirada).
+    pub fn from_spec(spec: &WidgetSpec) -> Self {
+        let fallback = spec.num_prop("count", 9.0).clamp(0.0, 16.0) as u8;
+        Self { fallback, ..Self::default() }
     }
 }
 
@@ -743,12 +753,15 @@ impl Widget for WorkspaceSwitcher {
     }
 
     fn view(&self) -> WidgetView {
-        if self.count == 0 {
+        // El WM tiene prioridad; si no reportó nada todavía, usamos el fallback
+        // para que el switcher sea visible y clickeable desde el arranque.
+        let count = if self.count > 0 { self.count } else { self.fallback };
+        if count == 0 {
             WidgetView::Empty
         } else {
             WidgetView::Workspaces {
-                active: self.active,
-                count: self.count,
+                active: self.active.max(1),
+                count,
                 occupied: self.occupied,
             }
         }
@@ -1185,10 +1198,23 @@ mod tests {
     }
 
     #[test]
-    fn workspace_switcher_sin_compositor_es_vacio() {
-        // Sin estado de escritorios (count 0), el widget desaparece.
+    fn workspace_switcher_sin_compositor_cae_al_fallback() {
+        // Sin estado del WM, el switcher NO desaparece: muestra `fallback` celdas
+        // (default 9) para ser visible y clickeable desde el arranque.
         let mut w = WorkspaceSwitcher::from_spec(&WidgetSpec::new("workspaces"));
         w.tick(&ctx()); // el ctx de prueba no setea campos de workspace
+        assert_eq!(
+            w.view(),
+            WidgetView::Workspaces { active: 1, count: 9, occupied: 0 }
+        );
+    }
+
+    #[test]
+    fn workspace_switcher_count_cero_explicito_oculta() {
+        // `count = 0` en el spec apaga el fallback: el widget desaparece.
+        let mut w =
+            WorkspaceSwitcher::from_spec(&WidgetSpec::new("workspaces").with("count", Prop::Num(0.0)));
+        w.tick(&ctx());
         assert_eq!(w.view(), WidgetView::Empty);
     }
 
@@ -1212,10 +1238,14 @@ mod tests {
 
     #[test]
     fn build_despacha_el_workspace_switcher() {
-        // Ambos alias materializan el mismo widget; sin estado da Empty.
+        // Ambos alias materializan el mismo widget; sin estado del WM caen al
+        // fallback de 9 celdas (en vez de desaparecer).
         for kind in ["workspaces", "workspace_switcher"] {
             let w = build(&WidgetSpec::new(kind));
-            assert_eq!(w.view(), WidgetView::Empty);
+            assert_eq!(
+                w.view(),
+                WidgetView::Workspaces { active: 1, count: 9, occupied: 0 }
+            );
         }
     }
 
