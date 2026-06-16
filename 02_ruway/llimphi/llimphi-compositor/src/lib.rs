@@ -941,11 +941,26 @@ pub enum MaskSize {
     Explicit { x: MaskLen, y: MaskLen },
 }
 
-/// Encaje de una **máscara de luminancia** (CSS `mask-size` + `mask-position` +
-/// `mask-repeat`), resuelto contra el rect del nodo en el paint, con la misma
-/// aritmética que `background-image`. En el [`MountedNode`] viaja como
-/// `Option`: `None` = estirar la máscara al border-box (comportamiento de la
-/// Fase 7.1226). Fase 7.1227.
+/// Modo de una máscara (CSS `mask-mode`). Decide qué canal del píxel-máscara
+/// modula el alpha del contenido. Fase 7.1228.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskMode {
+    /// La **luminancia** del píxel multiplica el alpha (negro = oculto, blanco =
+    /// visible). Lo usa CSS para máscaras SVG `<mask>`. Es el default del
+    /// compositor cuando no hay `MaskPlacement` (camino estirado, Fase 7.1226).
+    #[default]
+    Luminance,
+    /// El **canal alpha** del píxel modula el alpha (transparente = oculto). Es
+    /// el default CSS para imágenes raster (`mask-mode: match-source`). Se pinta
+    /// con `Compose::DestIn` en vez de la capa de luminancia.
+    Alpha,
+}
+
+/// Encaje y modo de una **máscara** (CSS `mask-size` + `mask-position` +
+/// `mask-repeat` + `mask-mode`), resuelto contra el rect del nodo en el paint,
+/// con la misma aritmética que `background-image`. En el [`MountedNode`] viaja
+/// como `Option`: `None` = estirar la máscara al border-box en modo luminancia
+/// (comportamiento de la Fase 7.1226). Fase 7.1227 (encaje), 7.1228 (modo).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MaskPlacement {
     /// Tamaño del tile.
@@ -958,6 +973,8 @@ pub struct MaskPlacement {
     pub repeat_x: bool,
     /// Tilear en Y.
     pub repeat_y: bool,
+    /// Canal que modula el alpha (luminancia vs alpha). Fase 7.1228.
+    pub mode: MaskMode,
 }
 
 impl Default for ImageFit {

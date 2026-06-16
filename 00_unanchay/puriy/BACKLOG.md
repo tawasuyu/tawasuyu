@@ -217,14 +217,31 @@ de luminancia. El wire (`mask_placement_de`) traduce los enums CSS → neutrales
 **Tests**: builder (`mask_placement_setea_encaje`), box-tree (group03 verifica
 que el encaje por defecto `auto`/`repeat` llega al box).
 
-### 7.1228 — `mask-mode` (luminance vs alpha)
+### 7.1228 ✅ — `mask-mode` (luminance vs alpha)
 
-**Por qué**: cerrar la fidelidad CSS. `mask-mode: alpha` (y el default
-`match-source` para raster) usa el **canal alpha** de la máscara, no su
-luminancia. vello no expone capa de alpha-mask directa → se compone con
-`push_layer(Compose::SrcIn)`: pintar el subárbol, abrir capa SrcIn, dibujar la
-máscara; el alpha de la máscara recorta el contenido. `match-source` resuelve a
-`alpha` para raster `url()` y a `luminance` para `<mask>`/SVG.
+**Hecho.** `mask-mode: alpha` (y el default `match-source` para raster) usa el
+**canal alpha** de la máscara, no su luminancia. vello no expone capa de
+alpha-mask directa → se compone con `push_layer(Fill::NonZero,
+BlendMode::new(Mix::Normal, Compose::DestIn), ...)`: el subárbol ya pintado es
+el **destino** y la máscara la **fuente**; `DestIn` mantiene el destino donde la
+fuente tiene alpha (= alpha masking). `match-source` lo resuelve el wire a
+`alpha` (las máscaras de puriy son raster `url()`); `luminance` explícito sigue
+usando `push_luminance_mask_layer`. Efecto: el default CSS efectivo de una
+`mask-image: url(raster.png)` pasó de luminancia (7.1226) a **alpha**.
+
+**Encoding**: el `BoxNode::mask_image` sumó `MaskMode` a su tupla
+`(ImageData, size, position, repeat, mode)`. El compositor ganó `enum MaskMode
+{ Luminance(default), Alpha }` + campo `mode` en `MaskPlacement`;
+`paint_mask_close` elige la apertura de capa según el modo y comparte la
+aritmética de tiles. El wire (`mask_placement_de`) traduce `MaskMode` CSS →
+neutral (`Alpha|MatchSource → Alpha`).
+
+**Tests**: builder (`mask_placement_setea_encaje` incluye `mode` + default
+`MaskMode::Luminance`), box-tree (group03 verifica que el modo por defecto
+`match-source` llega al box). **NOTA**: el render real no se verifica a píxeles
+(CI sin GPU) — la composición `DestIn` está validada por construcción/spec
+Porter-Duff, no por captura. Conviene una verificación visual headless cuando
+haya GPU disponible.
 
 ### 7.1229 ✅ — `mask-repeat` (tiling de la máscara) — FOLIADO EN 7.1227
 

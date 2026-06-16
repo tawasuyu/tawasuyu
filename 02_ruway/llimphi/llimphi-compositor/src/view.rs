@@ -1407,22 +1407,27 @@ mod semantics_tests {
 
     #[test]
     fn mask_placement_setea_encaje() {
-        // `.mask_placement(...)` guarda el encaje (size/position/repeat) que el
-        // paint resuelve contra el rect, igual que background-image. Fase 7.1227.
+        // `.mask_placement(...)` guarda el encaje (size/position/repeat/mode) que
+        // el paint resuelve contra el rect, igual que background-image. Fase
+        // 7.1227 (encaje), 7.1228 (mode).
         let p = MaskPlacement {
             size: MaskSize::Contain,
             pos_x: MaskLen::Pct(50.0),
             pos_y: MaskLen::Px(8.0),
             repeat_x: true,
             repeat_y: false,
+            mode: MaskMode::Alpha,
         };
         let v = View::<()>::new(Style::default()).mask_placement(p);
         assert_eq!(v.mask_placement, Some(p));
         // No activa clip ni implica máscara por sí solo (es sólo el encaje).
         assert!(!v.clip);
         assert!(v.mask_image.is_none());
-        // Default: sin encaje (estira al border-box).
+        // Default: sin encaje (estira al border-box, modo luminancia).
         assert!(View::<()>::new(Style::default()).mask_placement.is_none());
+        // El modo default del compositor es luminancia (el camino estirado de
+        // la Fase 7.1226 sin placement). Fase 7.1228.
+        assert_eq!(MaskMode::default(), MaskMode::Luminance);
     }
 
     #[test]

@@ -223,16 +223,20 @@ pub(crate) fn transform_affine(
     )
 }
 
-/// Traduce el encaje CSS de la máscara (`mask-size`/`-position`/`-repeat`,
-/// modelados con los mismos tipos que background) al [`MaskPlacement`] neutral
-/// del compositor. `LengthVal` no resoluble (auto/keywords) → `MaskLen::Auto`
-/// (intrínseco en size, offset 0 en position). Fase 7.1227.
+/// Traduce el encaje + modo CSS de la máscara (`mask-size`/`-position`/
+/// `-repeat`/`-mode`, modelados con los mismos tipos que background) al
+/// [`MaskPlacement`] neutral del compositor. `LengthVal` no resoluble
+/// (auto/keywords) → `MaskLen::Auto` (intrínseco en size, offset 0 en position).
+/// `mask-mode: match-source` → alpha (las máscaras de puriy son raster `url()`).
+/// Fase 7.1227 (encaje), 7.1228 (modo).
 fn mask_placement_de(
     size: BackgroundSize,
     pos: BackgroundPosition,
     repeat: BackgroundRepeat,
+    mode: puriy_engine::style::MaskMode,
 ) -> llimphi_ui::MaskPlacement {
     use llimphi_ui::{MaskLen, MaskSize};
+    use puriy_engine::style::MaskMode as CssMaskMode;
     let len = |lv: LengthVal| -> MaskLen {
         match lv {
             LengthVal::Px(n) => MaskLen::Px(n),
@@ -252,12 +256,19 @@ fn mask_placement_de(
         BackgroundRepeat::RepeatY => (false, true),
         BackgroundRepeat::NoRepeat => (false, false),
     };
+    // match-source: raster url() → alpha (SVG <mask> daría luminance, pero
+    // mask-image en puriy es siempre raster). Default CSS = match-source = alpha.
+    let mode = match mode {
+        CssMaskMode::Luminance => llimphi_ui::MaskMode::Luminance,
+        CssMaskMode::Alpha | CssMaskMode::MatchSource => llimphi_ui::MaskMode::Alpha,
+    };
     llimphi_ui::MaskPlacement {
         size,
         pos_x: len(pos.x),
         pos_y: len(pos.y),
         repeat_x,
         repeat_y,
+        mode,
     }
 }
 
@@ -493,7 +504,7 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // multiplica el alpha del contenido por la luminancia de la máscara,
     // tileándola igual que background-image. Ortogonal a clip-path (un nodo
     // puede llevar ambos).
-    if let Some((mask, size, pos, repeat)) = &b.mask_image {
+    if let Some((mask, size, pos, repeat, mode)) = &b.mask_image {
         let blob = Blob::from(mask.rgba.clone());
         let peniko = PenikoImage::new(ImageData {
             data: blob,
@@ -504,7 +515,7 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
         });
         view = view
             .mask_image(peniko)
-            .mask_placement(mask_placement_de(*size, *pos, *repeat));
+            .mask_placement(mask_placement_de(*size, *pos, *repeat, *mode));
     }
 
     let link_color = Color::from_rgb8(30, 90, 200);

@@ -435,7 +435,21 @@ fn paint_mask_close(
 ) {
     let iw = img.image.width.max(1) as f64;
     let ih = img.image.height.max(1) as f64;
-    scene.push_luminance_mask_layer(Fill::NonZero, 1.0, xf, &rect);
+    // Apertura de la capa según `mask-mode` (Fase 7.1228): luminance usa la capa
+    // de luminancia nativa de vello; alpha compone la máscara con `Compose::DestIn`
+    // (mantiene el destino —el subárbol ya pintado— donde la fuente —la máscara—
+    // tiene alpha). Sin `MaskPlacement` el modo es luminancia (Fase 7.1226).
+    let mode = placement.map(|p| p.mode).unwrap_or(MaskMode::Luminance);
+    match mode {
+        MaskMode::Luminance => scene.push_luminance_mask_layer(Fill::NonZero, 1.0, xf, &rect),
+        MaskMode::Alpha => scene.push_layer(
+            Fill::NonZero,
+            vello::peniko::BlendMode::new(Mix::Normal, vello::peniko::Compose::DestIn),
+            1.0,
+            xf,
+            &rect,
+        ),
+    }
     match placement {
         // Fase 7.1226: estirar la máscara al border-box.
         None => {
