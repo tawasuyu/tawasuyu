@@ -79,7 +79,8 @@ fn main() -> ExitCode {
     };
 
     let (sw, sh) = screen;
-    let frame = pata_config::resolve(&cfg, Rect::new(0, 0, sw, sh));
+    // Volcado de diagnóstico: dientes pegados al borde interno (default global).
+    let frame = pata_config::resolve(&cfg, Rect::new(0, 0, sw, sh), false);
 
     println!("pantalla: {sw}×{sh}   ·   zona horaria: {}", cfg.general.timezone);
     println!("superficies: {}", cfg.surfaces.len());
