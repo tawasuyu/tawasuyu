@@ -56,9 +56,11 @@ pub(super) fn window_list_view(
         // taskbar — no centrados. El slot que lo hospeda ya le da el ancho.
         justify_content: Some(JustifyContent::FlexStart),
         flex_grow: 1.0,
+        // Gap CHICO entre botones de tarea (no el `surface.gap` de entre widgets
+        // grandes, que se veía exagerado). Capado a 4 px.
         gap: Size {
-            width: length(gap),
-            height: length(gap),
+            width: length(gap.min(4.0)),
+            height: length(gap.min(4.0)),
         },
         ..Default::default()
     })
@@ -149,7 +151,9 @@ pub(super) fn workspaces_view(
             workspace_cell(n, n == active, ocupado, theme)
         })
         .collect();
-    let g = gap.max(2.0);
+    // Gap CHICO entre celdas del switcher (capado a 4 px): el `surface.gap` de
+    // entre widgets grandes se veía exagerado para estos cuadraditos.
+    let g = gap.clamp(2.0, 4.0);
     View::new(Style {
         flex_direction: dir,
         align_items: Some(AlignItems::Center),
