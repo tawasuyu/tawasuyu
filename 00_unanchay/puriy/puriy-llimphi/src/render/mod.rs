@@ -239,16 +239,134 @@ fn mask_compose_de(c: puriy_engine::style::MaskComposite) -> llimphi_ui::MaskCom
     }
 }
 
+// Coeficientes de luminancia Rec.709 (los que usa CSS Filter Effects para
+// grayscale/saturate). Fase 7.1233.
+const LUMA_R: f32 = 0.2126;
+const LUMA_G: f32 = 0.7152;
+const LUMA_B: f32 = 0.0722;
+
+/// `brightness(k)`: escala lineal de RGB. `k=1` identidad. Fase 7.1233.
+fn mat_brightness(k: f32) -> [f32; 20] {
+    [
+        k, 0., 0., 0., 0., //
+        0., k, 0., 0., 0., //
+        0., 0., k, 0., 0., //
+        0., 0., 0., 1., 0.,
+    ]
+}
+
+/// `contrast(c)`: `out = c·in + (1-c)/2` sobre RGB. `c=1` identidad. Fase 7.1233.
+fn mat_contrast(c: f32) -> [f32; 20] {
+    let t = (1.0 - c) * 0.5;
+    [
+        c, 0., 0., 0., t, //
+        0., c, 0., 0., t, //
+        0., 0., c, 0., t, //
+        0., 0., 0., 1., 0.,
+    ]
+}
+
+/// `invert(a)`: `out = (1-2a)·in + a`. `a=0` identidad; `a=1` negativo. Fase 7.1233.
+fn mat_invert(a: f32) -> [f32; 20] {
+    let d = 1.0 - 2.0 * a;
+    [
+        d, 0., 0., 0., a, //
+        0., d, 0., 0., a, //
+        0., 0., d, 0., a, //
+        0., 0., 0., 1., 0.,
+    ]
+}
+
+/// `opacity(a)`: escala el canal alpha. `a=1` identidad. Fase 7.1233.
+fn mat_opacity(a: f32) -> [f32; 20] {
+    [
+        1., 0., 0., 0., 0., //
+        0., 1., 0., 0., 0., //
+        0., 0., 1., 0., 0., //
+        0., 0., 0., a, 0.,
+    ]
+}
+
+/// `saturate(s)`: interpola entre gris (s=0) e identidad (s=1) por luminancia.
+/// `s>1` sobresatura. Fase 7.1233.
+fn mat_saturate(s: f32) -> [f32; 20] {
+    let (lr, lg, lb) = (LUMA_R, LUMA_G, LUMA_B);
+    [
+        lr + s * (1.0 - lr), lg - s * lg,         lb - s * lb,         0., 0., //
+        lr - s * lr,         lg + s * (1.0 - lg), lb - s * lb,         0., 0., //
+        lr - s * lr,         lg - s * lg,         lb + s * (1.0 - lb), 0., 0., //
+        0., 0., 0., 1., 0.,
+    ]
+}
+
+/// `grayscale(g)`: `g=0` identidad, `g=1` gris total. Es `saturate(1-g)`. Fase 7.1233.
+fn mat_grayscale(g: f32) -> [f32; 20] {
+    mat_saturate(1.0 - g)
+}
+
+/// `sepia(a)`: `a=0` identidad, `a=1` viraje sepia completo (matriz fija de la
+/// spec). Fase 7.1233.
+fn mat_sepia(a: f32) -> [f32; 20] {
+    let s = 1.0 - a;
+    [
+        0.393 + 0.607 * s, 0.769 - 0.769 * s, 0.189 - 0.189 * s, 0., 0., //
+        0.349 - 0.349 * s, 0.686 + 0.314 * s, 0.168 - 0.168 * s, 0., 0., //
+        0.272 - 0.272 * s, 0.534 - 0.534 * s, 0.131 + 0.869 * s, 0., 0., //
+        0., 0., 0., 1., 0.,
+    ]
+}
+
+/// `hue-rotate(deg)`: rotación de matiz preservando luminancia (matriz estándar
+/// de SVG `feColorMatrix type="hueRotate"`). `deg=0` identidad. Fase 7.1233.
+fn mat_hue_rotate(deg: f32) -> [f32; 20] {
+    let rad = deg.to_radians();
+    let (c, s) = (rad.cos(), rad.sin());
+    [
+        0.213 + c * 0.787 - s * 0.213,
+        0.715 - c * 0.715 - s * 0.715,
+        0.072 - c * 0.072 + s * 0.928,
+        0.,
+        0., //
+        0.213 - c * 0.213 + s * 0.143,
+        0.715 + c * 0.285 + s * 0.140,
+        0.072 - c * 0.072 - s * 0.283,
+        0.,
+        0., //
+        0.213 - c * 0.213 - s * 0.787,
+        0.715 - c * 0.715 + s * 0.715,
+        0.072 + c * 0.928 + s * 0.072,
+        0.,
+        0., //
+        0.,
+        0.,
+        0.,
+        1.,
+        0.,
+    ]
+}
+
 /// Convierte la lista CSS `filter` (`Vec<FilterFn>`) a las [`llimphi_ui::FilterOp`]
-/// del compositor (filtros sobre el **propio subárbol**). Fase 7.1232: sólo
-/// `blur(<px>)` (px = sigma del Gauss, misma convención CSS); el resto de las
-/// variantes se ignora hasta su fase. Lista vacía → sin filtro.
+/// del compositor (filtros sobre el **propio subárbol**). `blur(<px>)` → `Blur`
+/// (px = sigma del Gauss, misma convención CSS); los filtros de color colapsan a
+/// una matriz 4×5 (`ColorMatrix`). `drop-shadow()` llega en 7.1234. El orden de
+/// la lista se preserva (la cadena se aplica en secuencia). Lista vacía → sin
+/// filtro. Fases 7.1232 (blur), 7.1233 (color).
 fn filtros_a_ops(fns: &[puriy_engine::style::FilterFn]) -> Vec<llimphi_ui::FilterOp> {
+    use llimphi_ui::FilterOp as Op;
     use puriy_engine::style::FilterFn as F;
     fns.iter()
         .filter_map(|f| match f {
-            F::Blur(px) if *px > 0.0 => Some(llimphi_ui::FilterOp::Blur(*px)),
-            _ => None,
+            F::Blur(px) => (*px > 0.0).then_some(Op::Blur(*px)),
+            F::Brightness(k) => Some(Op::ColorMatrix(mat_brightness(*k))),
+            F::Contrast(c) => Some(Op::ColorMatrix(mat_contrast(*c))),
+            F::Grayscale(g) => Some(Op::ColorMatrix(mat_grayscale(g.clamp(0.0, 1.0)))),
+            F::Sepia(a) => Some(Op::ColorMatrix(mat_sepia(a.clamp(0.0, 1.0)))),
+            F::Saturate(s) => Some(Op::ColorMatrix(mat_saturate(*s))),
+            F::Invert(a) => Some(Op::ColorMatrix(mat_invert(a.clamp(0.0, 1.0)))),
+            F::HueRotate(d) => Some(Op::ColorMatrix(mat_hue_rotate(*d))),
+            F::Opacity(a) => Some(Op::ColorMatrix(mat_opacity(a.clamp(0.0, 1.0)))),
+            // drop-shadow se pinta como sombra, no como matriz/blur — Fase 7.1234.
+            F::DropShadow(_) => None,
         })
         .collect()
 }
@@ -1009,5 +1127,90 @@ pub(crate) fn skip_count_details(b: &BoxNode, counter: &mut usize) {
     }
     for c in &b.children {
         skip_count_details(c, counter);
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+    use puriy_engine::style::FilterFn as F;
+
+    const IDENTITY: [f32; 20] = [
+        1., 0., 0., 0., 0., //
+        0., 1., 0., 0., 0., //
+        0., 0., 1., 0., 0., //
+        0., 0., 0., 1., 0.,
+    ];
+
+    fn aprox(a: [f32; 20], b: [f32; 20]) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-4)
+    }
+
+    #[test]
+    fn los_valores_neutros_dan_identidad() {
+        // Cada filtro en su valor "sin efecto" debe colapsar a la matriz
+        // identidad (clave: encadenar un neutro no cambia nada). Fase 7.1233.
+        assert!(aprox(mat_brightness(1.0), IDENTITY), "brightness(1)");
+        assert!(aprox(mat_contrast(1.0), IDENTITY), "contrast(1)");
+        assert!(aprox(mat_invert(0.0), IDENTITY), "invert(0)");
+        assert!(aprox(mat_opacity(1.0), IDENTITY), "opacity(1)");
+        assert!(aprox(mat_saturate(1.0), IDENTITY), "saturate(1)");
+        assert!(aprox(mat_grayscale(0.0), IDENTITY), "grayscale(0)");
+        assert!(aprox(mat_sepia(0.0), IDENTITY), "sepia(0)");
+        assert!(aprox(mat_hue_rotate(0.0), IDENTITY), "hue-rotate(0)");
+    }
+
+    #[test]
+    fn grayscale_total_es_luminancia() {
+        // grayscale(1): cada fila RGB = coeficientes de luminancia Rec.709, así
+        // los tres canales de salida quedan iguales (gris). Fase 7.1233.
+        let m = mat_grayscale(1.0);
+        for fila in 0..3 {
+            assert!((m[fila * 5] - LUMA_R).abs() < 1e-4);
+            assert!((m[fila * 5 + 1] - LUMA_G).abs() < 1e-4);
+            assert!((m[fila * 5 + 2] - LUMA_B).abs() < 1e-4);
+        }
+        // grayscale(g) == saturate(1-g).
+        assert!(aprox(mat_grayscale(0.4), mat_saturate(0.6)));
+    }
+
+    #[test]
+    fn invert_total_es_negativo() {
+        // invert(1): diagonal -1 + bias 1 → out = 1 - in. Fase 7.1233.
+        let m = mat_invert(1.0);
+        assert!((m[0] + 1.0).abs() < 1e-4, "diag R = -1");
+        assert!((m[4] - 1.0).abs() < 1e-4, "bias R = 1");
+        assert!((m[9] - 1.0).abs() < 1e-4, "bias G = 1");
+        assert!((m[14] - 1.0).abs() < 1e-4, "bias B = 1");
+    }
+
+    #[test]
+    fn brightness_y_opacity_escalan_lo_suyo() {
+        // brightness(2): diagonal RGB = 2, alpha intacta. Fase 7.1233.
+        let b = mat_brightness(2.0);
+        assert!((b[0] - 2.0).abs() < 1e-4 && (b[6] - 2.0).abs() < 1e-4 && (b[12] - 2.0).abs() < 1e-4);
+        assert!((b[18] - 1.0).abs() < 1e-4, "alpha intacta");
+        // opacity(0.5): RGB identidad, alpha *= 0.5.
+        let o = mat_opacity(0.5);
+        assert!((o[18] - 0.5).abs() < 1e-4, "alpha 0.5");
+        assert!((o[0] - 1.0).abs() < 1e-4, "RGB intacto");
+    }
+
+    #[test]
+    fn filtros_a_ops_mapea_y_preserva_orden() {
+        // Mezcla blur + color: cada uno → su FilterOp, en el mismo orden CSS.
+        // Fase 7.1233.
+        let ops = filtros_a_ops(&[
+            F::Grayscale(1.0),
+            F::Blur(3.0),
+            F::Brightness(1.5),
+        ]);
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(ops[0], llimphi_ui::FilterOp::ColorMatrix(_)));
+        assert!(matches!(ops[1], llimphi_ui::FilterOp::Blur(v) if (v - 3.0).abs() < 1e-4));
+        assert!(matches!(ops[2], llimphi_ui::FilterOp::ColorMatrix(_)));
+        // blur(0) y drop-shadow no aportan op en esta fase.
+        let vacios = filtros_a_ops(&[F::Blur(0.0)]);
+        assert!(vacios.is_empty());
     }
 }

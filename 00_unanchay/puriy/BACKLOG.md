@@ -361,16 +361,24 @@ stdev → `sigma = r` directo; multi-blur suma. Tests: builder (view.rs
 semantics_tests), `collect_filters` (mount+compute, sin GPU), box-tree
 (`b.filter` carga el Blur).
 
-### 7.1233 — filtros de color (color-matrix)
+### 7.1233 ✅ — filtros de color (color-matrix)
 
 `brightness/contrast/grayscale/invert/sepia/saturate/hue-rotate/opacity`.
-HAL: `ColorFilterCompositor` (WGSL color-matrix 4×5 RGBA+bias, single-pass
-scratch↔target, espejo de `BlurCompositor`). `FilterOp::ColorMatrix([f32;20])`.
-Builders de matriz (**aritmética pura, testeable**): brightness=diag k;
-contrast=k + bias `(1-k)/2`; grayscale/saturate vía luminancia Rec.709;
-invert; sepia (matriz fija); hue-rotate (rotación estándar); opacity=fila alpha.
-`collect_filters` emite `ColorMatrix`; runtime aplica con el compositor nuevo.
-Wire también `backdrop_filter` color. Tests: matrices (math) + builder.
+HAL: `ColorFilterCompositor` (WGSL color-matrix 4×5 RGBA+bias, dos pases
+target→scratch (aplica) + scratch→target (copia), espejo de `BlurCompositor`).
+`FilterOp::ColorMatrix([f32;20])`. Builders de matriz (**aritmética pura,
+testeable**, en `puriy-llimphi`): brightness=diag k; contrast=k + bias
+`(1-k)/2`; grayscale/saturate vía luminancia Rec.709 (`grayscale(g)=saturate(
+1-g)`); invert=`(1-2a)·in+a`; sepia (matriz fija); hue-rotate (rotación
+estándar SVG); opacity=fila alpha. `collect_filters` emite `ColorMatrix`;
+runtime aplica con el compositor nuevo (state `color_filter_compositor`). Tests
+(`puriy-llimphi::render::filter_tests`): neutros→identidad, grayscale total =
+luminancia, invert total = negativo, brightness/opacity, mapeo+orden.
+
+> **Desvío vs. plan**: `backdrop-filter` color **no** se cableó acá (sólo
+> `filter` propio). El backdrop usa un camino distinto (`View::backdrop_blur`,
+> pre-render del fondo); aplicarle color-matrix requiere extender ese mecanismo
+> o conflar con la post-pasada de `filter`. Se difiere a 7.1235.
 
 ### 7.1234 — `filter: drop-shadow()`
 

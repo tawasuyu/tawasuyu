@@ -96,6 +96,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
         let renderer = Renderer::new(&hal).expect("renderer");
         let overlay_compositor = llimphi_hal::OverlayCompositor::new(&hal.device);
         let blur_compositor = llimphi_hal::BlurCompositor::new(&hal.device);
+        let color_filter_compositor = llimphi_hal::ColorFilterCompositor::new(&hal.device);
         let typesetter = llimphi_text::Typesetter::new();
         window.request_redraw();
         self.state = Some(RuntimeState {
@@ -106,6 +107,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             scene: vello::Scene::new(),
             overlay_compositor,
             blur_compositor,
+            color_filter_compositor,
             model: Some(A::init(&self.handle)),
             cursor: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),

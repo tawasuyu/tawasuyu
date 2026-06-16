@@ -389,6 +389,17 @@ pub(super) fn handle_redraw<A: App>(
                     *sigma,
                 );
             }
+            llimphi_compositor::FilterOp::ColorMatrix(m) => {
+                state.color_filter_compositor.apply(
+                    &state.hal.device,
+                    &state.hal.queue,
+                    &mut gpu_encoder,
+                    frame.view(),
+                    viewport,
+                    p.rect,
+                    *m,
+                );
+            }
         }
     }
     let mut any_gpu = blurred

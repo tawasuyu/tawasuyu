@@ -348,13 +348,19 @@ impl Border {
 /// pintado *debajo*), un `FilterOp` modifica el contenido del nodo. El runtime
 /// los aplica como post-pasada GPU sobre la intermediate, restringidos al rect
 /// del nodo, en el orden de la lista. La lista crece por fase (CSS Filter
-/// Effects 1): hoy sólo `Blur`. Fase 7.1232.
+/// Effects 1): `Blur` (7.1232) + `ColorMatrix` (7.1233). Fase 7.1232.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FilterOp {
     /// `filter: blur(<px>)`. `px` es la desviación estándar del Gauss (igual
     /// convención que CSS). Se aplica con `BlurCompositor`, el mismo camino que
     /// `backdrop_blur`.
     Blur(f32),
+    /// Filtros de color (`brightness`/`contrast`/`grayscale`/`sepia`/`saturate`/
+    /// `invert`/`hue-rotate`/`opacity`) colapsados a una **matriz de color 4×5**
+    /// row-major: por fila `[c0, c1, c2, c3, bias]`, salida R/G/B/A
+    /// (`out = M·rgba + bias`). Se aplica con `ColorFilterCompositor`. Fase
+    /// 7.1233.
+    ColorMatrix([f32; 20]),
 }
 
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional

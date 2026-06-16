@@ -577,6 +577,11 @@ struct RuntimeState<A: App> {
     /// **antes** de los `gpu_painter`. El compositor mantiene su scratch
     /// interno; coste cero cuando no hay nodos blur.
     blur_compositor: llimphi_hal::BlurCompositor,
+    /// Post-pasada de **matriz de color** (`filter: brightness/grayscale/…`),
+    /// restringida al rect del nodo, en el mismo punto que `blur_compositor`.
+    /// Mantiene su scratch interno; coste cero sin filtros de color. Fase
+    /// 7.1233.
+    color_filter_compositor: llimphi_hal::ColorFilterCompositor,
     model: Option<A::Model>,
     cursor: PhysicalPosition<f64>,
     modifiers: Modifiers,
