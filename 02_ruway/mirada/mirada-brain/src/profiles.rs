@@ -196,9 +196,20 @@ impl KeymapProfiles {
     /// aunque el archivo se haya editado a mano. Se llama al cargar.
     fn ensure_builtins(&mut self) {
         for name in Keymap::PRESET_NAMES {
-            self.profiles
-                .entry(name.to_string())
-                .or_insert_with(|| Keymap::preset(name).expect("preset de fábrica"));
+            let fresh = Keymap::preset(name).expect("preset de fábrica");
+            match self.profiles.get_mut(name) {
+                // Preset builtin ya guardado: le fundimos los binds nuevos del
+                // preset de fábrica sin pisar los rebinds del usuario. Sin esto
+                // un perfil viejo quedaba congelado y no recibía atajos nuevos
+                // (el riesgo gemelo del bug de keymap.ron). Los perfiles custom
+                // (no-builtin) no se tocan: son del usuario.
+                Some(saved) => {
+                    saved.merge_from(&fresh);
+                }
+                None => {
+                    self.profiles.insert(name.to_string(), fresh);
+                }
+            }
         }
         if !self.profiles.contains_key(&self.active) {
             self.active = "mirada".to_string();
@@ -410,6 +421,40 @@ mod tests {
         assert!(p.create_from_preset("trabajo", "i3").is_err()); // ya existe
         assert!(p.create_from_preset("otro", "noexiste").is_err()); // preset malo
         assert!(p.create("", Keymap::dwm()).is_err()); // nombre vacío
+    }
+
+    #[test]
+    fn preset_builtin_guardado_recibe_binds_nuevos_sin_pisar() {
+        // Simula un preset i3 «viejo» guardado en disco: le falta un bind de
+        // fábrica (como si lo hubiéramos agregado después) y trae un combo
+        // propio del usuario. El round-trip por RON dispara ensure_builtins.
+        let fresco = Keymap::i3();
+        let full: Vec<_> = fresco
+            .bindings()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        assert!(full.len() >= 2, "i3 debería tener varios binds");
+        let (combo_perdido, accion) = full[0].clone();
+        let mut recortado: Vec<_> = full[1..].to_vec();
+        recortado.push(("Ctrl+Alt+Super+Q".to_string(), accion)); // combo propio
+        let viejo = Keymap::from_pairs(recortado);
+
+        let mut p = KeymapProfiles::default();
+        p.set_keymap("i3", viejo).unwrap();
+
+        let reparsed = KeymapProfiles::from_ron(&p.to_ron()).unwrap();
+        let i3 = reparsed.get("i3").unwrap();
+        // recuperó el bind de fábrica que faltaba…
+        assert!(
+            i3.bindings().contains_key(&combo_perdido),
+            "el merge debe recuperar el bind de fábrica nuevo"
+        );
+        // …sin borrar el combo propio del usuario.
+        assert!(
+            i3.bindings().contains_key("Ctrl+Alt+Super+Q"),
+            "el merge no debe pisar/borrar los rebinds del usuario"
+        );
     }
 
     #[test]

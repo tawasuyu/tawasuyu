@@ -289,6 +289,22 @@ impl Keymap {
         added
     }
 
+    /// Funde en `self` los binds de `other` cuyo combo no esté ya presente.
+    /// No pisa rebinds del usuario; sólo agrega los que faltan. Devuelve
+    /// cuántos se agregaron. Lo usa la biblioteca de perfiles para que un
+    /// preset builtin guardado reciba los binds nuevos de su preset de fábrica
+    /// (mismo remedio que [`merge_defaults`], pero contra un preset concreto).
+    pub fn merge_from(&mut self, other: &Keymap) -> usize {
+        let mut added = 0;
+        for (combo, action) in &other.bindings {
+            if !self.bindings.contains_key(combo) {
+                self.bindings.insert(combo.clone(), action.clone());
+                added += 1;
+            }
+        }
+        added
+    }
+
     /// Vigila el archivo del keymap para recargarlo en caliente — un
     /// [`FileWatch`] genérico, igual que la config y las reglas.
     pub fn watch(path: &Path) -> notify::Result<KeymapWatch> {
