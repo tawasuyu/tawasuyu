@@ -27,7 +27,7 @@ defecto de clase que tenía shuma.
 | 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | ⬜ pendiente |
 | 5 | `02_ruway/media/media-app/src/playlist.rs` | **MEDIA** | (a) **duplica** `media-core::playlist` (reimplementación divergente) | ⬜ pendiente |
 | 6 | `00_unanchay/khipu/khipu-app/src/map.rs` | MEDIA | (a) `place_note` (anclaje semántico); `gravity_layout` del core sin usar | ✅ hecho — `SemanticField::anchor_new` |
-| 7 | `02_ruway/chasqui/chasqui-broker-explorer-llimphi` | BAJA | (a) `diff_matches`/timeline de salud del broker atrapado | ⬜ pendiente |
+| 7 | `02_ruway/chasqui/chasqui-broker-explorer-llimphi` | BAJA | (a) `diff_matches`/timeline de salud del broker atrapado | ✅ hecho — `card-handshake::health` |
 | 8 | `02_ruway/pata/pata-llimphi/src/sampler.rs` | BAJA | (a) efemérides (`astro_from_jd`) atrapadas; `pata-core` es agnóstico | ✅ hecho — `pata-core::astro` |
 | 9 | `00_unanchay/khipu/khipu-app/src/estado.rs` | BAJA | (a) embedder fallback (`embed`) atrapado | ✅ hecho — `khipu_gravity::local_embed` |
 | 10 | `02_ruway/nahual/nahual-font-viewer-llimphi` | BAJA | (a) parseo TTF en el frontend; `viewer-core` sin módulo `font` | ✅ hecho — `nahual-viewer-core::font` |

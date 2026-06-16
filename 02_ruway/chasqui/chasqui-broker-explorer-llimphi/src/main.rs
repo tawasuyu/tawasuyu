@@ -56,6 +56,7 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
+#[cfg(test)]
 use ulid::Ulid;
 
 use app_bus::{AppMenu, Menu, MenuItem};
@@ -75,19 +76,10 @@ enum ProbeState {
     UpWithProvider { flow: String, producer_socket: PathBuf },
 }
 
-#[derive(Clone, Debug)]
-struct TimelineEntry {
-    at: std::time::SystemTime,
-    kind: card_handshake::messages::MatchEventKind,
-    consumer_label: String,
-    consumer_flow: String,
-    producer_label: String,
-    producer_flow: String,
-    via: chasqui_broker::MatchStrategy,
-    pinned: bool,
-}
-
-type MatchKey = (Ulid, String, Ulid, String);
+// El diff de salud del broker (TimelineEntry/MatchKey/diff_matches) vive en el
+// core agnóstico `card_handshake::health` (Regla 2): observar la diff de matches
+// entre ticks es lógica reusable, no exclusiva de este frontend.
+use card_handshake::health::{diff_matches, MatchKey, TimelineEntry};
 
 struct Model {
     theme: Theme,
@@ -665,66 +657,6 @@ fn run_probe(flow: String, type_name: String) -> Msg {
         matches,
         elapsed_ms: started.elapsed().as_millis() as u64,
     }
-}
-
-/// Diff puro entre snapshots de matches. Devuelve la lista de
-/// entries nuevas (Available + Lost) en orden Available-primero, y
-/// el set actualizado de keys.
-fn diff_matches(
-    last_keys: &HashSet<MatchKey>,
-    list: &card_handshake::messages::MatchList,
-) -> (Vec<TimelineEntry>, HashSet<MatchKey>) {
-    use card_handshake::messages::MatchEventKind;
-    let now = std::time::SystemTime::now();
-    let current_keys: HashSet<MatchKey> = list
-        .matches
-        .iter()
-        .map(|m| {
-            (
-                m.consumer.session,
-                m.consumer.flow_name.clone(),
-                m.producer.session,
-                m.producer.flow_name.clone(),
-            )
-        })
-        .collect();
-
-    let mut entries = Vec::new();
-    for m in &list.matches {
-        let key = (
-            m.consumer.session,
-            m.consumer.flow_name.clone(),
-            m.producer.session,
-            m.producer.flow_name.clone(),
-        );
-        if !last_keys.contains(&key) {
-            entries.push(TimelineEntry {
-                at: now,
-                kind: MatchEventKind::Available,
-                consumer_label: m.consumer_label.clone(),
-                consumer_flow: m.consumer.flow_name.clone(),
-                producer_label: m.producer_label.clone(),
-                producer_flow: m.producer.flow_name.clone(),
-                via: m.via,
-                pinned: m.pinned,
-            });
-        }
-    }
-    for key in last_keys.iter() {
-        if !current_keys.contains(key) {
-            entries.push(TimelineEntry {
-                at: now,
-                kind: MatchEventKind::Lost,
-                consumer_label: String::new(),
-                consumer_flow: key.1.clone(),
-                producer_label: String::new(),
-                producer_flow: key.3.clone(),
-                via: chasqui_broker::MatchStrategy::Exact,
-                pinned: false,
-            });
-        }
-    }
-    (entries, current_keys)
 }
 
 fn format_timeline_entry(e: &TimelineEntry) -> String {

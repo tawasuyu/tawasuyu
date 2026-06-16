@@ -18,6 +18,7 @@
 #![warn(rust_2018_idioms)]
 
 pub mod codec;
+pub mod health;
 pub mod identity;
 pub mod messages;
 pub mod server;
