@@ -21,7 +21,7 @@ defecto de clase que tenía shuma.
 
 | # | Crate | Severidad | Tipo | Estado |
 |---|-------|-----------|------|--------|
-| 1 | `02_ruway/nahual/nahual-shell-llimphi` | **ALTA** | (a)+(c) fat binary, motor de búsqueda+IA atrapado, sin `-shell-core` | 🟡 parcial — motor de búsqueda (find léxico+semántico+glob) extraído a `nahual-shell-core`; falta `ai.rs`, `ops.rs` y convertir bin→lib |
+| 1 | `02_ruway/nahual/nahual-shell-llimphi` | **ALTA** | (a)+(c) fat binary, motor de búsqueda+IA atrapado, sin `-shell-core` | 🟡 find + `ops` + helpers de IA extraídos a `nahual-shell-core`; queda sólo convertir bin→lib hosteable |
 | 2 | `02_ruway/takiy/takiy-app-llimphi` (`model/`) | **MEDIA** | (a) `EditorState`/undo-redo agnóstico atrapado en el binario | ✅ hecho — extraído a `takiy-editor-core` |
 | 3 | `01_yachay/cosmos/cosmos-app-llimphi/src/astrocarto.rs` | **MEDIA** | (a) astronomía (JD/GMST/oblicuidad/líneas) recalculada en la UI | ⬜ pendiente |
 | 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | ⬜ pendiente |

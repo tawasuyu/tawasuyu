@@ -12,6 +12,9 @@ description = "nahual-shell-core — lógica agnóstica del shell nahual: motor 
 # nombre si el daemon no está corriendo.
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 tokio = { workspace = true }
+# Ejecución de las operaciones de archivo (`ops`) por la cara SourceMut. ops es
+# POSIX-only: usa PosixSource, no necesita los backends nouser/minga del frontend.
+nahual-source-core = { path = "../nahual-source-core" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

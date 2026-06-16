@@ -10,23 +10,14 @@ use llimphi_ui::Handle;
 
 use crate::modelo::{AiState, BatchRename, Model, Msg};
 use nahual_source_core::NodeId;
+// Helpers puros (detección de texto, snippets, saneo) viven en el core agnóstico
+// (Regla 2); acá queda la orquestación (armar prompts, llamar al LLM, rutear Msg).
+use nahual_shell_core::ai::{es_texto, leer_snippet, sanear_nombre};
 
 /// Bytes de contenido de un archivo de texto que entran al prompt.
 const AI_SNIPPET_BYTES: usize = 4096;
 /// Tope de tokens de la respuesta.
 const AI_MAX_TOKENS: u32 = 500;
-
-/// ¿La extensión sugiere texto legible para incluir su contenido en el prompt?
-fn es_texto(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
-        Some(
-            "rs" | "toml" | "md" | "txt" | "json" | "yaml" | "yml" | "html" | "css" | "js"
-                | "ts" | "py" | "c" | "h" | "cpp" | "go" | "sh" | "lua" | "rb" | "sql" | "xml"
-                | "ini" | "cfg" | "conf" | "csv" | "rhai"
-        )
-    )
-}
 
 /// Construye `(título, prompt)` para la IA según lo seleccionado en el panel
 /// enfocado. `None` si no hay nada accionable.
@@ -88,16 +79,6 @@ pub(crate) fn contexto_para_ia(m: &Model) -> Option<(String, String)> {
     Some((titulo, prompt))
 }
 
-/// Lee hasta `max` bytes del inicio de `path` como texto (lossy).
-fn leer_snippet(path: &Path, max: usize) -> Option<String> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut buf = vec![0u8; max];
-    let n = f.read(&mut buf).ok()?;
-    buf.truncate(n);
-    Some(String::from_utf8_lossy(&buf).into_owned())
-}
-
 /// Manda `prompt` a `pluma-llm` (autodetecta backend; Mock sin credenciales) y
 /// devuelve el texto de la respuesta. Bloquea en un runtime tokio efímero —
 /// pensado para correr dentro de un worker de `Handle::spawn`, no en la UI.
@@ -117,21 +98,6 @@ pub(crate) fn ask_llm(prompt: String) -> Result<String, String> {
             .map(|r| r.content)
             .map_err(|e| format!("LLM: {e}"))
     })
-}
-
-/// Sanea una propuesta de nombre de la IA para que sea un filename válido:
-/// saca rutas (`/`, `\`), recorta y colapsa espacios. Vacío → cadena vacía
-/// (el batch la trata como "conservar el original").
-fn sanear_nombre(s: &str) -> String {
-    let limpio: String = s
-        .trim()
-        // La IA a veces numera ("1. nombre") o agrega comillas/backticks.
-        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')' || c == ' ')
-        .trim_matches(|c| c == '"' || c == '`' || c == '\'')
-        .chars()
-        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
-        .collect();
-    limpio.trim().to_string()
 }
 
 /// Pide a `pluma-llm` nombres nuevos para `targets` (`(id, nombre_original)`).
@@ -240,21 +206,8 @@ pub(crate) fn apply_ai(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
 mod tests {
     use super::*;
 
-    /// El saneo robustece el parseo de la respuesta LLM: saca numeración,
-    /// comillas/backticks, rutas y espacios sobrantes.
-    #[test]
-    fn sanear_nombre_robusto() {
-        assert_eq!(sanear_nombre("  atardecer_playa.jpg "), "atardecer_playa.jpg");
-        assert_eq!(sanear_nombre("1. informe_anual.pdf"), "informe_anual.pdf");
-        assert_eq!(sanear_nombre("`notas.md`"), "notas.md");
-        assert_eq!(sanear_nombre("\"foto final.png\""), "foto final.png");
-        // Las rutas se aplanan: ningún `/` sobrevive (no se renombra fuera del
-        // dir). El `..` inicial se recorta; las barras se vuelven `_`.
-        let aplanado = sanear_nombre("../x/y.txt");
-        assert!(!aplanado.contains('/'), "sin barras: {aplanado}");
-        assert_eq!(aplanado, "_x_y.txt");
-        assert_eq!(sanear_nombre("   "), "");
-    }
+    // El saneo de nombres (`sanear_nombre`) se testea en el core
+    // `nahual-shell-core::ai`, donde ahora vive el helper.
 
     /// End-to-end del plumbing con el backend por defecto (Mock sin
     /// credenciales): un prompt produce una respuesta no vacía sin colgar.

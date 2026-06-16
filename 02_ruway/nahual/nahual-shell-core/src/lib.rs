@@ -9,6 +9,13 @@
 
 #![forbid(unsafe_code)]
 
+/// Helpers puros de la acción IA (detección de texto, snippets, saneo de
+/// nombres). El armado de prompts y la llamada al LLM viven en el frontend.
+pub mod ai;
+/// Operaciones de archivo del shell (crear/renombrar/borrar/copiar/mover) y su
+/// cola. Agnósticas: ejecutan por `nahual_source_core::SourceMut`, sin UI.
+pub mod ops;
+
 use std::path::{Path, PathBuf};
 
 // ─── Tipos de dominio del find ──────────────────────────────────────────
