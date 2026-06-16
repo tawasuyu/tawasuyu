@@ -846,6 +846,10 @@ impl LayerApp {
                 self.marcar_menu_dirty();
             }
             Msg::LaunchApp(id) => self.lanzar_app(id),
+            // Conmutar de escritorio: lo pide el switcher de la barra (dwm/
+            // hyprland/solaris). Faltaba el arm en el path layer-shell → los
+            // botones de workspace no hacían nada en el DM (sólo en winit).
+            Msg::SwitchWorkspace(n) => crate::sampler::switch_workspace(n),
             Msg::ActivateWindow(id) => self.activar_ventana(id),
             Msg::CloseWindow(id) => self.cerrar_ventana(id),
             Msg::TrayActivate(key) => {

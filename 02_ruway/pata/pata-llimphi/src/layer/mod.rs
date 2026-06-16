@@ -712,14 +712,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Some(app.panels.len() - 1)
     };
 
-    // ¿Qué barra hospeda el start_button?
+    // ¿Qué barra hospeda el menú de inicio? La del `start_button` o, en CDE, la
+    // del `front_panel` (su botón ☰ «Gestor de aplicaciones» abre el mismo menú).
     app.menu_panel = app.panels.iter().position(|p| {
         let s = &app.cfg.surfaces[p.idx];
         s.start
             .iter()
             .chain(&s.center)
             .chain(&s.end)
-            .any(|w| w.kind == "start_button")
+            .any(|w| w.kind == "start_button" || w.kind == "front_panel")
     });
     app.menu_bar_px = app
         .menu_panel

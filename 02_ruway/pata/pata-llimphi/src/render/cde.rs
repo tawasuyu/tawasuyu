@@ -287,18 +287,22 @@ pub(super) fn front_panel_view(data: &BarData, theme: &Theme) -> View<Msg> {
 
     // Cluster izquierdo: lanzadores con sus subpaneles (file mgr, editor,
     // terminal, mail). Glifos de fallback en BMP (DejaVu los trae).
+    // Lanzadores con ids REALES del registro (default_entries). El terminal
+    // (`foot`) sólo existe si lo descubrió el .desktop del sistema; si falta, el
+    // botón cae a su inicial y no hace nada — preferimos apps de la suite.
     let izq = vec![
         launcher(data.apps, "nahual", "Gestor de archivos", steel, fg),
         launcher(data.apps, "nada", "Editor de texto", steel, fg),
-        launcher(data.apps, "foot", "Terminal", steel, fg),
-        launcher(data.apps, "ayni", "Correo", steel, fg),
+        launcher(data.apps, "puriy", "Navegador", steel, fg),
+        launcher(data.apps, "media", "Media", steel, fg),
     ];
 
-    // Cluster derecho: gestor de aplicaciones (menú), reloj, salir.
+    // Cluster derecho: gestor de aplicaciones (abre el menú de apps) y reloj.
+    // NO ponemos un botón que mate pata: el «exit» de CDE necesita un diálogo de
+    // logout real (pendiente) — por ahora el ☰ abre el menú del sistema.
     let der = vec![
         panel_button("\u{2630}", steel, fg, true, "Gestor de aplicaciones", Msg::StartToggle),
         clock_box(ch, cm, steel, theme),
-        panel_button("\u{23FB}", steel, fg, false, "Salir / bloquear", Msg::Quit),
     ];
 
     let grupo = |hijos: Vec<View<Msg>>| -> View<Msg> {
