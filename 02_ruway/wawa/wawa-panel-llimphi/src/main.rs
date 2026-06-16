@@ -251,8 +251,6 @@ enum Msg {
     ConfigChanged(Box<WawaConfig>),
     MenuOpen(Option<usize>),
     MenuCommand(String),
-    /// Conmutar el perfil de atajos activo (chip de la barra superior).
-    SetProfile(String),
     MenuNav(i32),
     MenuActivate,
     MenuTick,
@@ -445,13 +443,6 @@ impl App for Panel {
                 m.menu_open = None;
                 return handle_menu_command(m, &cmd);
             }
-            Msg::SetProfile(name) => {
-                if m.profiles.set_active(&name).is_ok() {
-                    m.keymap_rows = m.profiles.active_keymap().to_rows();
-                    m.dirty.keymap = true;
-                    m.dirty.profiles = true;
-                }
-            }
         }
         m
     }
@@ -492,7 +483,6 @@ impl App for Panel {
         let menu = app_menu();
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = build_header(&theme);
-        let profiles = profile_bar(model, &theme);
         let body = build_body(&pestanas, pest, model, &theme);
         let status = build_status(model, &theme);
 
@@ -505,7 +495,7 @@ impl App for Panel {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![menubar, header, profiles, body, status])
+        .children(vec![menubar, header, body, status])
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -561,12 +551,17 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
             icon: "🖥".into(),
             schema: info_schema(&m.host),
         },
+        PanelPestana {
+            title: "Perfiles".into(),
+            icon: "⌨".into(),
+            schema: perfiles_schema(m),
+        },
     ];
     if m.cfg.module_enabled("mirada") {
         let mut schema = prefix_schema(m.mirada.schema(), "mirada");
         // El keymap vive en su propio RON; se edita como una sección más de la
         // pestaña mirada (id ya prefijado para que el ruteo lo reconozca).
-        schema.sections.push(keymap_section(&m.keymap_rows, &m.profiles));
+        schema.sections.push(keymap_section(&m.keymap_rows));
         out.push(PanelPestana {
             title: "mirada".into(),
             icon: "☸".into(),
@@ -592,27 +587,54 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
     schema
 }
 
+/// La pestaña **Perfiles**: una sección por perfil de atajos (dwm/i3/hyprland/
+/// propios) en el sidebar; al elegir uno, el canvas muestra su config —un toggle
+/// «Usar este perfil» y su tabla de atajos editable—. Cambios en tiempo real
+/// (el activo se vuelca a keymap.ron y el compositor lo recarga) y persistentes
+/// (profiles.ron). El perfil activo se marca con ●.
+fn perfiles_schema(m: &Model) -> Schema {
+    use allichay::{Column, Field};
+    let active = m.profiles.active().to_string();
+    let mut schema = Schema::new();
+    for name in m.profiles.names() {
+        let is_active = name == active;
+        let rows = m
+            .profiles
+            .get(&name)
+            .map(|k| k.to_rows())
+            .unwrap_or_default();
+        let title = if is_active {
+            format!("● {name}")
+        } else {
+            name.clone()
+        };
+        schema = schema.section(
+            Section::new(name.clone(), title)
+                .icon("⌨")
+                .help("Los atajos de este perfil. Activalo para usarlo en el escritorio.")
+                .field(Field::toggle("activo", "Usar este perfil", is_active))
+                .field(Field::table(
+                    "bindings",
+                    "Atajos",
+                    vec![
+                        Column::new("combo", "Combinación"),
+                        Column::new("action", "Acción"),
+                    ],
+                    rows,
+                )),
+        );
+    }
+    prefix_schema(schema, "perfiles")
+}
+
 /// La sección "Atajos" de mirada: el keymap como tabla (combinación · acción).
 /// El id va prefijado (`mirada::atajos`) para que [`route_change`] lo reconozca
 /// y lo aplique al buffer del keymap (no a la `Config`).
-fn keymap_section(rows: &[Vec<String>], profiles: &mirada_brain::KeymapProfiles) -> Section {
-    use allichay::{Column, EnumOption, Field};
-    let opts: Vec<EnumOption> = profiles
-        .names()
-        .into_iter()
-        .map(|n| EnumOption::new(n.clone(), n))
-        .collect();
-    Section::new("mirada::atajos", "Atajos")
+fn keymap_section(rows: &[Vec<String>]) -> Section {
+    use allichay::{Column, Field};
+    Section::new("mirada::atajos", "Atajos (perfil activo)")
         .icon("⌨")
-        .help("Combinación → acción. Acciones tipo focus-next, layout:grid, spawn:kitty…")
-        // Selector de perfil de atajos: conmuta el activo (dwm/i3/hyprland/propio)
-        // y recarga la tabla con sus combinaciones.
-        .field(Field::dropdown(
-            "profile",
-            "Perfil activo",
-            profiles.active().to_string(),
-            opts,
-        ))
+        .help("Atajos del perfil activo. Para conmutar de perfil, andá a la pestaña Perfiles.")
         .field(Field::table(
             "bindings",
             "Atajos de teclado",
@@ -768,6 +790,34 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
         "wawa" => {
             apply_wawa(m, rel.leaf().unwrap_or(""), value);
             m.dirty.wawa = true;
+        }
+        // Pestaña Perfiles: el primer segmento es el NOMBRE del perfil.
+        "perfiles" => {
+            let name = rel.segments().first().cloned().unwrap_or_default();
+            match rel.leaf() {
+                // «Usar este perfil» → lo activa (vuelca su keymap a keymap.ron).
+                Some("activo") => {
+                    if value.as_bool() == Some(true) && m.profiles.set_active(&name).is_ok() {
+                        m.keymap_rows = m.profiles.active_keymap().to_rows();
+                        m.dirty.keymap = true;
+                        m.dirty.profiles = true;
+                    }
+                }
+                // Editar la tabla de atajos de ESE perfil.
+                Some("bindings") => {
+                    if let Some(rows) = value.as_table() {
+                        let km = mirada_brain::Keymap::from_rows(rows);
+                        let _ = m.profiles.set_keymap(&name, km);
+                        m.dirty.profiles = true;
+                        // Si es el activo, refleja el cambio en el keymap vivo.
+                        if m.profiles.active() == name {
+                            m.keymap_rows = rows.to_vec();
+                            m.dirty.keymap = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
         "mirada" if rel.segments().first().map(String::as_str) == Some("atajos") => {
             match rel.leaf() {
@@ -931,6 +981,16 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
         return Some(match rel.leaf() {
             Some("profile") => FieldValue::Text(m.profiles.active().to_string()),
             _ => FieldValue::Table(m.keymap_rows.clone()),
+        });
+    }
+    // Pestaña Perfiles: toggle «activo» + tabla de atajos de ese perfil.
+    if key == "perfiles" {
+        let name = rel.segments().first().cloned().unwrap_or_default();
+        return Some(match rel.leaf() {
+            Some("activo") => FieldValue::Bool(m.profiles.active() == name),
+            _ => FieldValue::Table(
+                m.profiles.get(&name).map(|k| k.to_rows()).unwrap_or_default(),
+            ),
         });
     }
     let schema = match key.as_str() {
@@ -1351,68 +1411,6 @@ fn build_status(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .children(vec![msg_v])
-}
-
-/// Barra de **perfiles de atajos** arriba de todo: chips conmutables (el activo
-/// resaltado). Conmutar un perfil recarga todas las personalizaciones de atajos
-/// debajo. Siempre visible, por encima de las pestañas.
-fn profile_bar(m: &Model, theme: &Theme) -> View<Msg> {
-    let active = m.profiles.active().to_string();
-    let mut row: Vec<View<Msg>> = vec![View::new(Style {
-        size: Size { width: auto(), height: percent(1.0_f32) },
-        align_items: Some(AlignItems::Center),
-        padding: Rect {
-            left: length(2.0_f32),
-            right: length(8.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .text("Perfil de atajos:", 12.0, theme.fg_muted)];
-
-    for name in m.profiles.names() {
-        let is_active = name == active;
-        row.push(
-            View::new(Style {
-                size: Size { width: auto(), height: length(24.0_f32) },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
-                padding: Rect {
-                    left: length(12.0_f32),
-                    right: length(12.0_f32),
-                    top: length(0.0_f32),
-                    bottom: length(0.0_f32),
-                },
-                ..Default::default()
-            })
-            .radius(12.0)
-            .fill(if is_active { theme.accent } else { theme.bg_button })
-            .hover_fill(theme.bg_button_hover)
-            .on_click(Msg::SetProfile(name.clone()))
-            .text(
-                name.clone(),
-                12.0,
-                if is_active { theme.bg_app } else { theme.fg_text },
-            ),
-        );
-    }
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
-        align_items: Some(AlignItems::Center),
-        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
-        padding: Rect {
-            left: length(14.0_f32),
-            right: length(10.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .children(row)
 }
 
 // =====================================================================
