@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 
 use llimphi_widget_navigator::{NavId, NavMode};
 
@@ -52,6 +52,26 @@ use nouser::{MembersOutcome, NavState, PollOutcome};
 use sampler::Sampler;
 use shuma::ShumaState;
 use tray::TrayHandle;
+
+/// `true` si el live-wire de la **shuma COMPLETA** está activo: la variable de
+/// entorno `PATA_SHUMA_FULL` está puesta. Cuando lo está, el drawer Quake monta
+/// la shuma entera (`shuma-shell-llimphi`: dientes/sesiones/menubar/canvas) en
+/// vez del módulo bare de una sola sesión, y el cabezal de la barra se reduce a
+/// un chip que despliega el drawer (la shuma trae su propio input adentro).
+///
+/// Es opt-in para preservar cero-regresión del path bare por defecto mientras se
+/// valida a ojo el diseño del drawer completo (ver `project_pata_shuma_paridad`).
+pub fn shuma_full_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PATA_SHUMA_FULL").is_some())
+}
+
+/// Eleva un `Msg` de la shuma completa al `Msg` de pata (con el `Debug` opaco).
+/// Es la función de `lift`/`map` que se pasa a `shuma_app::{view,update,…}`.
+fn lift_shuma(m: shuma_app::Msg) -> Msg {
+    Msg::ShumaFull(shuma_app::FullMsg(m))
+}
 
 /// Los mensajes de la app.
 #[derive(Clone, Debug)]
@@ -69,6 +89,11 @@ pub enum Msg {
     /// del módulo lo envuelve con su `lift`). pata sólo lo reenvía a
     /// `shuma_module_shell::update`.
     ShumaShell(shuma_module_shell::Msg),
+    /// Un evento de la **shuma COMPLETA** hospedada (`shuma-shell-llimphi`:
+    /// dientes/sesiones/menubar/canvas) cuando el live-wire está activo
+    /// (`PATA_SHUMA_FULL=1`). El `view` de la shuma lo envuelve con su `lift`;
+    /// pata lo reenvía a `shuma_app::update` con el handle del host lifteado.
+    ShumaFull(shuma_app::FullMsg),
     /// Tick de la animación de despliegue (sólo re-render). También sirve de
     /// no-op para absorber clicks sobre el borde del panel del drawer.
     ShumaAnim,
@@ -518,6 +543,12 @@ pub struct Model {
     pub cards: Vec<(FloatingCard, Vec<Box<dyn Widget>>)>,
     /// Estado del cabezal del shell y su drawer Quake.
     pub shuma: ShumaState,
+    /// La **shuma COMPLETA** hospedada (Model de `shuma-shell-llimphi` con
+    /// dientes/sesiones), presente sólo con el live-wire activo
+    /// ([`shuma_full_enabled`]) y si hay `shuma_input` declarado. Cuando está,
+    /// es la fuente de verdad del drawer; el módulo bare (`shuma.inner`) queda
+    /// inerte. `None` = path bare por defecto (cero regresión).
+    pub shuma_full: Option<shuma_app::Model>,
     /// Estado del drawer del front universal de nahual (módulo hospedado).
     pub nahual: NahualState,
     /// Registro de apps para el menú del botón de inicio.
@@ -836,6 +867,7 @@ impl App for PataApp {
             surfaces,
             cards,
             shuma,
+            shuma_full: None,
             nahual: NahualState::default(),
             registry: app_bus::AppRegistry::with_defaults(),
             menu_open: false,
@@ -875,10 +907,19 @@ impl App for PataApp {
         model.tick_widgets(&ctx);
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
-        // Latido del shell hospedado: drena su salida (`Tick` del módulo) a
-        // ~100 ms —igual que `shuma-shell-llimphi`—, sólo si la config declara un
-        // `shuma_input`. El `update` puro avanza runs y PTY/TUI sin bloquear.
-        if model.shuma.present {
+        // Live-wire de la shuma COMPLETA (opt-in): si está activo y la config
+        // declara un `shuma_input`, construimos el Model entero y le enganchamos
+        // sus efectos (ticks, watcher de config, rail, contenedores) al loop de
+        // pata vía un handle lifteado. La shuma gestiona su propio latido —no
+        // necesita el tick bare de abajo.
+        if model.shuma.present && shuma_full_enabled() {
+            let mut full = shuma_app::new();
+            shuma_app::wire_effects(&mut full, handle, lift_shuma);
+            model.shuma_full = Some(full);
+        } else if model.shuma.present {
+            // Latido del shell hospedado (path bare): drena su salida (`Tick`
+            // del módulo) a ~100 ms —igual que `shuma-shell-llimphi`—. El
+            // `update` puro avanza runs y PTY/TUI sin bloquear.
             handle.spawn_periodic(Duration::from_millis(100), || {
                 Msg::ShumaShell(shuma_module_shell::Msg::Tick)
             });
@@ -935,10 +976,19 @@ impl App for PataApp {
                     let destino = if model.shuma.open { 1.0 } else { 0.0 };
                     // A6 — al abrir el drawer estás mirando la salida: acusá el
                     // aviso de comando largo (apaga el punto ámbar del cabezal).
-                    if model.shuma.open {
+                    // En el path bare; con la shuma completa el aviso lo gestiona
+                    // ella adentro (cada diente tiene su badge).
+                    if model.shuma.open && model.shuma_full.is_none() {
                         model.shuma.inner.ack_long_alerts();
                     }
                     model.animar_shuma(destino, handle);
+                }
+            }
+            Msg::ShumaFull(m) => {
+                // Live-wire: reenviar a la shuma completa hospedada con el handle
+                // del host lifteado (sus efectos async vuelven como `ShumaFull`).
+                if let Some(full) = model.shuma_full.take() {
+                    model.shuma_full = Some(shuma_app::update(full, m.0, handle, lift_shuma));
                 }
             }
             Msg::ShumaShell(m) => {
@@ -1243,7 +1293,15 @@ impl App for PataApp {
         if let Some(d) = nahual::drawer_overlay(&model.nahual, model.screen, &model.theme) {
             return Some(d);
         }
-        if let Some(d) = shuma::drawer_overlay(&model.shuma, model.screen, &model.theme) {
+        // Live-wire: con la shuma completa montada, el drawer la pinta entera
+        // (dientes/sesiones/menubar/canvas) elevada al `Msg` de pata.
+        if let Some(full) = &model.shuma_full {
+            if let Some(d) =
+                shuma::drawer_overlay_full(&model.shuma, full, model.screen, &model.theme)
+            {
+                return Some(d);
+            }
+        } else if let Some(d) = shuma::drawer_overlay(&model.shuma, model.screen, &model.theme) {
             return Some(d);
         }
         if model.menu_open {
@@ -1363,6 +1421,11 @@ impl App for PataApp {
                     }
                 }
             }
+            // Live-wire: con la shuma completa montada, la tecla la traduce ella
+            // según su foco interno (input de la sesión activa, PTY/TUI, rails).
+            if let Some(full) = &model.shuma_full {
+                return shuma_app::on_key(full, event).map(lift_shuma);
+            }
             return Some(Msg::ShumaShell(shuma_module_shell::Msg::Key(event.clone())));
         }
         // 2.5) Con el menú de inicio abierto, el teclado va al buscador.
@@ -1424,6 +1487,22 @@ impl App for PataApp {
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
             _ => None,
         }
+    }
+
+    fn on_wheel(
+        model: &Model,
+        delta: WheelDelta,
+        cursor: (f32, f32),
+        modifiers: Modifiers,
+    ) -> Option<Msg> {
+        // Live-wire: con el drawer de la shuma completa abierto, la rueda
+        // desplaza su contenido (salida de la sesión, listas, paneles).
+        if model.shuma.open {
+            if let Some(full) = &model.shuma_full {
+                return shuma_app::on_wheel(full, delta, cursor, modifiers).map(lift_shuma);
+            }
+        }
+        None
     }
 }
 

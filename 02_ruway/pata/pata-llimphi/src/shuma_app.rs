@@ -19,6 +19,20 @@ use shuma_shell_llimphi as shuma;
 
 pub use shuma::{Model, Msg};
 
+/// Envoltorio del `Msg` de la shuma con un `Debug` **opaco**. El `Msg` de pata
+/// deriva `Debug` (convención del repo), pero el `Msg` de la shuma no lo
+/// implementa —arrastra tipos de widgets de terminal/llimphi que no lo derivan—.
+/// Este newtype cierra la brecha sin tocar la shuma: pata transporta
+/// `Msg::ShumaFull(FullMsg(..))` y `Debug` sólo imprime el discriminante.
+#[derive(Clone)]
+pub struct FullMsg(pub Msg);
+
+impl std::fmt::Debug for FullMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("shuma::Msg(..)")
+    }
+}
+
 /// Construye el `Model` de la shuma completa (puro, sin efectos del host).
 pub fn new() -> Model {
     shuma::new_model()

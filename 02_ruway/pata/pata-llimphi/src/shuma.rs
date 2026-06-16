@@ -27,7 +27,7 @@ use llimphi_ui::View;
 use pata_core::WidgetSpec;
 use shuma_module::Source;
 
-use crate::Msg;
+use crate::{shuma_app, Msg};
 
 /// Alto máximo del drawer (path winit), como fracción de la pantalla.
 const DRAWER_FRAC: f32 = 0.45;
@@ -99,6 +99,12 @@ impl ShumaState {
 /// Click en el chip → despliega el drawer (para ver la salida); el shell además
 /// recibe `FocusInput` por su propio `on_click` interno.
 pub fn headline_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
+    // Live-wire: con la shuma completa montada, el input vive *adentro* del
+    // drawer (canvas de la sesión activa), no en la barra. Acá el cabezal se
+    // reduce a un chip que despliega/repliega el drawer.
+    if crate::shuma_full_enabled() {
+        return headline_chip(state, theme);
+    }
     let input = shuma_module_shell::input_view(&state.inner, theme, Msg::ShumaShell);
     let mut children = vec![input];
     // A6 — aviso de comando largo: cuando el drawer está plegado (no estás
@@ -170,6 +176,97 @@ fn long_alert_badge() -> View<Msg> {
         );
         scene.fill(Fill::NonZero, Affine::IDENTITY, ambar, None, &Circle::new((cx, cy), rad));
     })
+}
+
+/// El cabezal en modo live-wire (shuma completa): un chip `prompt placeholder`
+/// que despliega el drawer al click. Sin input vivo —ese vive adentro del drawer.
+fn headline_chip(state: &ShumaState, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let etiqueta = format!("{} {}", state.prompt, state.placeholder);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: auto(),
+            height: auto(),
+        },
+        min_size: Size {
+            width: length(220.0_f32),
+            height: auto(),
+        },
+        flex_basis: length(0.0_f32),
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexStart),
+        ..Default::default()
+    })
+    .on_click(Msg::ShumaToggle)
+    .text_aligned(etiqueta, 13.0, theme.fg_muted, Alignment::Start)
+}
+
+/// El drawer desplegado **con la shuma COMPLETA** (live-wire): mismo scrim +
+/// panel inferior que [`drawer_overlay`], pero el cuerpo es la shuma entera
+/// (dientes/sesiones/menubar/canvas) elevada al `Msg` de pata vía `Msg::ShumaFull`.
+/// El overlay de la propia shuma (menús/modales) se pinta encima del cuerpo.
+pub fn drawer_overlay_full(
+    state: &ShumaState,
+    full: &shuma_app::Model,
+    screen: (i32, i32),
+    theme: &Theme,
+) -> Option<View<Msg>> {
+    if !state.visible() {
+        return None;
+    }
+    let t = state.anim.value().clamp(0.0, 1.0);
+    let (_sw, sh) = screen;
+    let alto = (sh as f32 * DRAWER_FRAC * t).max(1.0);
+
+    // Cuerpo: la shuma completa. Su `view` trae su propio fondo, rails y chrome.
+    let body = shuma_app::view(full, crate::lift_shuma);
+    let mut hijos = vec![body];
+    // Overlay interno de la shuma (dropdowns/menús/modales) por encima del cuerpo.
+    if let Some(ov) = shuma_app::view_overlay(full, crate::lift_shuma) {
+        hijos.push(ov);
+    }
+
+    let panel = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: auto(),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(alto),
+        },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .on_click(Msg::ShumaAnim)
+    .children(hijos);
+
+    let scrim = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .alpha(0.55 * t)
+    .on_click(Msg::ShumaToggle)
+    .children(vec![panel]);
+
+    Some(scrim)
 }
 
 /// El drawer desplegado (path **winit**): scrim que cierra al click + panel
