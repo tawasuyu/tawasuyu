@@ -613,6 +613,21 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
 /// mientras está activo, su config queda editable en mirada · pata · Atajos y
 /// cada cambio se guarda DENTRO del perfil. El activo se marca con ●. Crear y
 /// duplicar viven en el menú «Perfiles».
+/// Un glifo distinto por perfil (según su nombre conocido), para que no se vean
+/// todos iguales en el rail. Cae a un genérico para perfiles custom.
+fn icono_perfil(name: &str) -> &'static str {
+    match name {
+        "mirada" => "◉",
+        "windows-xp" => "⊞",
+        "mac" => "◆",
+        "kde" => "≡",
+        "solaris" => "◧",
+        "hyprland" => "❖",
+        "dwm" => "▦",
+        _ => "★",
+    }
+}
+
 fn perfiles_schema(m: &Model) -> Schema {
     use allichay::Field;
     let mut schema = Schema::new();
@@ -625,7 +640,7 @@ fn perfiles_schema(m: &Model) -> Schema {
         };
         schema = schema.section(
             Section::new(name.as_str(), title)
-                .icon("🖥")
+                .icon(icono_perfil(&name))
                 .help(
                     "Perfil de escritorio completo: look + decoración + layout + \
                      atajos + barra. Activarlo aplica todo en caliente; mientras \
@@ -769,12 +784,22 @@ fn interfaz_section(cfg: &WawaConfig) -> Section {
         ))
 }
 
+/// El init real del sistema (PID 1), leído de `/proc/1/comm`. En Artix será
+/// `openrc-init`/`runit`/`s6-svscan`/`init`/`dinit`, NO systemd.
+fn detectar_init() -> String {
+    std::fs::read_to_string("/proc/1/comm")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "desconocido".into())
+}
+
 /// Arranque: usar arje como init del sistema. Control real próximamente.
 fn arranque_section() -> Section {
     Section::new("wawa::arranque", "Arranque")
         .icon("▶")
         .help("Init del sistema en Linux")
-        .field(Field::display("init", "Init", "systemd (actual)"))
+        .field(Field::display("init", "Init actual", format!("{} (PID 1)", detectar_init())))
         .field(Field::display(
             "proximamente",
             "Próximamente",
