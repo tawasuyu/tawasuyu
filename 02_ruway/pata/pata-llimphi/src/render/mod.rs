@@ -508,7 +508,7 @@ fn slots_de(
     theme: &Theme,
     dir: FlexDirection,
 ) -> Vec<View<Msg>> {
-    let slot = |ws: &[SlotWidget], justify: JustifyContent| -> View<Msg> {
+    let slot = |ws: &[SlotWidget], justify: JustifyContent, grow: f32| -> View<Msg> {
         let items: Vec<View<Msg>> = ws
             .iter()
             .map(|sw| match sw {
@@ -554,13 +554,29 @@ fn slots_de(
             },
             ..Default::default()
         };
-        style.flex_grow = 1.0;
+        style.flex_grow = grow;
         View::new(style).children(items)
     };
+    // Reparto del espacio: por defecto los tres slots crecen igual (tercios,
+    // estilo waybar: grupo-izq / centrado / grupo-der). Pero si algún slot trae
+    // el cabezal `shuma` (un input que debe LLENAR el hueco), ese slot crece y
+    // los otros se ciñen a su contenido — así el input se come todo lo que dejan
+    // los demás widgets en vez de quedar en su tercio.
+    let tiene_shuma = |ws: &[SlotWidget]| ws.iter().any(|w| matches!(w, SlotWidget::Shuma));
+    let hay_shuma = tiene_shuma(&surface_widgets.start)
+        || tiene_shuma(&surface_widgets.center)
+        || tiene_shuma(&surface_widgets.end);
+    let grow_de = |ws: &[SlotWidget]| -> f32 {
+        if !hay_shuma || tiene_shuma(ws) {
+            1.0
+        } else {
+            0.0
+        }
+    };
     vec![
-        slot(&surface_widgets.start, JustifyContent::FlexStart),
-        slot(&surface_widgets.center, JustifyContent::Center),
-        slot(&surface_widgets.end, JustifyContent::FlexEnd),
+        slot(&surface_widgets.start, JustifyContent::FlexStart, grow_de(&surface_widgets.start)),
+        slot(&surface_widgets.center, JustifyContent::Center, grow_de(&surface_widgets.center)),
+        slot(&surface_widgets.end, JustifyContent::FlexEnd, grow_de(&surface_widgets.end)),
     ]
 }
 
