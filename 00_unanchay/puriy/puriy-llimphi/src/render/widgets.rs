@@ -64,6 +64,12 @@ pub(crate) fn render_input(
     // transparente: el borde del autor lo dibuja `apply_decorations` (7.1243) y el
     // afford­ance sin estilo lo da el radius + el ring de focus de cortesía.
     let fg = Color::from_rgba8(b.color.r, b.color.g, b.color.b, b.color.a);
+    // `caret-color` (Fase 7.1247): el autor puede teñir el caret; `auto` (None) lo
+    // deja seguir al texto (`color`). El widget pinta el caret sólo focado.
+    let caret = b
+        .caret_color
+        .map(|c| Color::from_rgba8(c.r, c.g, c.b, c.a))
+        .unwrap_or(fg);
     let palette = TextInputPalette {
         bg: base_bg,
         bg_focus: focus_bg,
@@ -71,6 +77,7 @@ pub(crate) fn render_input(
         border_focus: Color::TRANSPARENT,
         fg_text: fg,
         fg_placeholder: Color::from_rgba8(b.color.r, b.color.g, b.color.b, 128),
+        caret,
     };
     let input = text_input_view(state, placeholder, focused, &palette, Msg::FocusInput(idx));
 
@@ -96,9 +103,10 @@ pub(crate) fn render_input(
     // `apply_decorations` (Fase 7.1243) — antes el text-input los ignoraba. El
     // `.radius(3.0)` baseline lo pisa apply_decorations si el autor fijó
     // `border-radius`. El margin del flow va en la shell externa.
+    let box_width = css_width.unwrap_or_else(|| length(220.0_f32 * zoom));
     let inner = View::new(Style {
         size: Size {
-            width: css_width.unwrap_or_else(|| length(220.0_f32 * zoom)),
+            width: box_width,
             height: length(height),
         },
         padding: Rect {
@@ -118,8 +126,16 @@ pub(crate) fn render_input(
     // Shell externa: lleva el margin del flow y, cuando el input está focado y
     // el autor NO puso outline, el ring de cortesía azul (feedback de focus
     // gratis). Va aparte de `apply_decorations` porque `paint_with` guarda un
-    // solo painter — la shell evita pisar el painter de las decoraciones.
+    // solo painter — la shell evita pisar el painter de las decoraciones. Le
+    // fijamos el MISMO ancho que `inner` para que no se estire al cross-axis del
+    // contenedor (un `display:flex; flex-direction:column` con el default
+    // `align-items: stretch` ensanchaba la shell —y con ella el ring— más allá
+    // del input).
     let mut outer = View::new(Style {
+        size: Size {
+            width: box_width,
+            height: auto(),
+        },
         margin: Rect {
             left: margin_left_lpa(b, zoom),
             right: margin_right_lpa(b, zoom, 0.0),

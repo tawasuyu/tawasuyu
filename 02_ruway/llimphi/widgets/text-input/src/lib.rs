@@ -33,6 +33,10 @@ pub struct TextInputPalette {
     pub border_focus: Color,
     pub fg_text: Color,
     pub fg_placeholder: Color,
+    /// Color del caret (cursor de inserción) que se pinta cuando el input
+    /// está focado. Default = `fg_text` (sigue al texto, como `caret-color:
+    /// auto` en CSS).
+    pub caret: Color,
 }
 
 impl Default for TextInputPalette {
@@ -51,6 +55,7 @@ impl TextInputPalette {
             border_focus: t.border_focus,
             fg_text: t.fg_text,
             fg_placeholder: t.fg_placeholder,
+            caret: t.fg_text,
         }
     }
 }
@@ -151,9 +156,18 @@ pub fn text_input_view<Msg: Clone + 'static>(
     } else {
         raw
     };
-    // El cambio de bg al focus ya transmite "este es el activo"; sin
-    // caret glyph (la fuente default rendea cuadrados de fallback).
     let display = shown;
+    // Prefijo del texto visible hasta el caret (cursor de inserción), para
+    // medir su ancho y posicionar la barra del caret. La columna es índice de
+    // carácter (single-line ⇒ `line == 0`); `take(col)` sobre el texto MOSTRADO
+    // (placeholder/`•`/crudo) alinea el caret con lo que se ve. Cuando el input
+    // está vacío el `col` es 0 ⇒ prefijo vacío ⇒ caret al inicio (no se mide el
+    // placeholder).
+    let caret_prefix: String = if focused {
+        display.chars().take(state.editor().cursor.caret.col).collect()
+    } else {
+        String::new()
+    };
     let text_color = if is_empty {
         palette.fg_placeholder
     } else {
@@ -177,7 +191,7 @@ pub fn text_input_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .text_aligned(display, 13.0, text_color, Alignment::Start);
-    let inner = View::new(Style {
+    let mut inner = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: percent(1.0_f32),
@@ -192,8 +206,32 @@ pub fn text_input_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(bg)
-    .radius(3.0)
-    .children(vec![texto]);
+    .radius(3.0);
+    // Caret real (cursor de inserción) cuando el input está focado: una barra
+    // vertical fina a la derecha del prefijo medido. Se mide el ancho del
+    // `caret_prefix` con el MISMO tamaño/fuente que el texto (13 px, sans) y se
+    // ubica tras el padding-left (10 px). Pinta antes que el texto hijo, así que
+    // a fin de línea (el caso típico al tipear) queda totalmente visible; en
+    // medio del texto queda detrás del glifo (limitación v1).
+    if focused {
+        let caret_color = palette.caret;
+        inner = inner.paint_with(move |scene, ts, rect| {
+            use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KRect};
+            use llimphi_ui::llimphi_raster::peniko::Fill;
+            use llimphi_ui::llimphi_text::{measure, TextBlock};
+            let w = measure(
+                ts,
+                &TextBlock::simple(&caret_prefix, 13.0, caret_color, (0.0, 0.0)),
+            )
+            .width as f64;
+            let x = rect.x as f64 + 10.0 + w;
+            let h = 16.0_f64;
+            let cy = rect.y as f64 + rect.h as f64 * 0.5;
+            let bar = KRect::new(x, cy - h * 0.5, x + 1.5, cy + h * 0.5);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, caret_color, None, &bar);
+        });
+    }
+    let inner = inner.children(vec![texto]);
 
     View::new(Style {
         size: Size {
@@ -237,6 +275,17 @@ mod tests {
             modifiers: Default::default(),
             repeat: false,
         }
+    }
+
+    #[test]
+    fn palette_caret_default_sigue_al_texto() {
+        // El caret por default sigue al color del texto (`caret-color: auto`):
+        // `from_theme` y `Default` lo igualan a `fg_text`.
+        let t = llimphi_theme::Theme::dark();
+        let pal = TextInputPalette::from_theme(&t);
+        assert_eq!(pal.caret, pal.fg_text);
+        assert_eq!(pal.caret, t.fg_text);
+        assert_eq!(TextInputPalette::default().caret, TextInputPalette::default().fg_text);
     }
 
     #[test]

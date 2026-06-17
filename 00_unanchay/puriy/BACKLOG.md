@@ -640,13 +640,35 @@ imagen sin tocar, **cero cambio** para el caso común.
 > imágenes (`decode_canvas_images`), no reproducible en el harness offline; la
 > verificación se apoya en helper testeado + call-site wiring + suite verde (167).
 
-### Próximos huecos (siguiente bloque)
+### 7.1247 ✅ — caret real en `text_input_view` + `caret-color`
 
-- (bloque `image-rendering` cerrado — elegir el próximo hueco del BACKLOG general)
-- **`caret-color`** — DESCARTADO por ahora: el `text_input_view` de llimphi **no
-  pinta caret** (línea explícita "sin caret glyph" en
-  `widgets/text-input/src/lib.rs`). Sin caret renderizado, `caret-color` sería
-  no-op. Reactivar cuando el widget dibuje un caret (requeriría agregar un campo
-  `caret` a `TextInputPalette` y cablear `b.caret_color`).
+Reactiva el `caret-color` que estaba DESCARTADO (el widget no pintaba caret).
+Ahora `text_input_view` pinta un **caret real** (barra vertical de 1.5 px) cuando
+el input está focado: mide el ancho del prefijo del texto visible hasta la columna
+del cursor (`editor().cursor.caret.col`, índice de carácter; `take(col)` sobre el
+texto mostrado — placeholder/`•`/crudo) con el mismo tamaño/fuente (13 px, sans) y
+ubica la barra tras el padding-left. Nuevo campo `TextInputPalette.caret` (default
+= `fg_text`, i.e. `caret-color: auto` sigue al texto). El wire `render_input` mapea
+`b.caret_color`: `Some(c)` → ese color, `None` (`auto`) → el `color` del texto.
+**Cambio cross-crate** (widget llimphi + wire puriy) — otros consumidores
+(`from_theme`/`default`) ganan caret gratis, backward-compatible.
+
+Además **bugfix latente** del shell de focus de 7.1243: la shell externa no tenía
+ancho propio, así que en un `display:flex;flex-direction:column` (default
+`align-items: stretch`) se estiraba al cross-axis y el ring de focus salía más
+ancho que el input (un "cuadrito" sobrante a la derecha). Ahora la shell hereda el
+mismo `box_width` que `inner`.
+
+Verificado por pantallazo headless (input `autofocus` + `caret-color:#d8462a`): la
+barra roja aparece al final de «Sergio», distinta del texto navy, y el ring de
+focus calza exacto. v1: el caret pinta antes que el texto hijo (a fin de línea —el
+caso típico— totalmente visible; en medio del texto queda detrás del glifo) y no
+parpadea ni hay scroll horizontal si el texto desborda. Test:
+`palette_caret_default_sigue_al_texto` (widget) + parse en `group01` (7.238).
+
+### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
+
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).
+- **caret v2** — parpadeo (blink) + scroll horizontal cuando el texto desborda +
+  caret sobre el glifo en mitad del texto (usar `paint_over` en vez de `paint_with`).
