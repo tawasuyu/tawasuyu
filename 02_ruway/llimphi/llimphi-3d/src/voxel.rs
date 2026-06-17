@@ -95,6 +95,23 @@ impl VoxelGrid {
         self.data[self.idx(x, y, z)][3] > 0
     }
 
+    /// `true` si el voxel `(x,y,z)` es sólido. Fuera de rango → `false` (el
+    /// "afuera" del mundo es aire). Lo usa el raycast de `llimphi-voxel` para
+    /// picking/edición (mirar → bloque).
+    #[inline]
+    pub fn is_solid(&self, x: i32, y: i32, z: i32) -> bool {
+        if x < 0 || y < 0 || z < 0 {
+            return false;
+        }
+        let (x, y, z) = (x as u32, y as u32, z as u32);
+        x < self.dim[0] && y < self.dim[1] && z < self.dim[2] && self.solid(x, y, z)
+    }
+
+    /// Color RGBA del voxel `(x,y,z)`, o `None` fuera de rango. `a = 0` = aire.
+    pub fn get(&self, x: u32, y: u32, z: u32) -> Option<[u8; 4]> {
+        (x < self.dim[0] && y < self.dim[1] && z < self.dim[2]).then(|| self.data[self.idx(x, y, z)])
+    }
+
     /// Altura del voxel sólido más alto en la columna `(x, z)` (escaneando de
     /// arriba hacia abajo), o `None` si la columna está vacía. Útil para posar
     /// una cámara/entidad sobre el terreno sin meterla dentro de la roca.
