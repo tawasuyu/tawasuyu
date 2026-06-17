@@ -262,7 +262,7 @@ pub(crate) struct DragGrab {
 }
 
 /// Qué le hace un arrastre a la ventana.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DragMode {
     /// Reubicar una ventana **flotante** — la esquina la sigue al puntero.
     Move,

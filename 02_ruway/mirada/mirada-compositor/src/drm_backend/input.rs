@@ -652,7 +652,18 @@ impl DrmState {
         let (px, py) = self.app.pointer_loc;
         // Drag-to-zone: resalta la zona bajo el puntero (Move/Tile, no Resize).
         // Sobre una zona, la ventana aterrizará ahí al soltar.
-        self.drag_zone = if mode == DragMode::Resize { None } else { self.zone_at(px, py) };
+        let nueva_zona = if mode == DragMode::Resize { None } else { self.zone_at(px, py) };
+        // Diagnóstico opcional (MIRADA_ZONE_DEBUG=1): traza el arrastre y la zona
+        // objetivo cada vez que cambia — para ver en vivo si el snap se dispara.
+        if nueva_zona != self.drag_zone && std::env::var_os("MIRADA_ZONE_DEBUG").is_some() {
+            eprintln!(
+                "mirada-zone · drag mode={mode:?} ptr=({:.0},{:.0}) zona={nueva_zona:?} (zonas={})",
+                px,
+                py,
+                self.zones.len()
+            );
+        }
+        self.drag_zone = nueva_zona;
         // Arrastre de una teselada: el swap con la tesela destino se resuelve
         // al SOLTAR (ver la rama de release del botón), no en cada frame.
         // Durante el arrastre sólo resaltamos la zona/tesela bajo el puntero.
