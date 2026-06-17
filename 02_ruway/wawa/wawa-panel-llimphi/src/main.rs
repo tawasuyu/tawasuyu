@@ -883,10 +883,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     for s in themes_schema(m).sections {
         vista.sections.push(s);
     }
-    if let Some(s) = take("fondo") {
-        vista.sections.push(s); // Wallpapers
-    }
-    vista.sections.push(fondo_auto_section(&m.cfg)); // Wallpapers: automático/proveedor
+    vista.sections.push(wallpaper_section(m)); // Wallpapers (imagen + automático, unificado)
     if let Some(s) = take("vista_espacial") {
         vista.sections.push(s); // Vistas: Prezi
     }
@@ -1664,8 +1661,57 @@ fn fondo_section(wallpaper: &str) -> Section {
         .field(Field::toggle("elegir", "Elegir imagen de fondo…", false))
 }
 
+/// **Wallpaper** unificado: imagen fija (elegir) + automático (proveedor +
+/// intervalo + activar). Antes eran dos secciones separadas («Fondo» y «Fondo
+/// automático») que se veían duplicadas; el usuario las pidió juntas.
+fn wallpaper_section(m: &Model) -> Section {
+    use allichay::Field;
+    let wp = m.mirada.wallpaper_path.trim();
+    let actual = if wp.is_empty() { "(color sólido)".to_string() } else { wp.to_string() };
+    let prov = if m.cfg.wallpaper_provider.is_empty() {
+        "bing".to_string()
+    } else {
+        m.cfg.wallpaper_provider.clone()
+    };
+    Section::new("wawa::wallpaper", "Wallpaper")
+        .icon("▦")
+        .help(
+            "El fondo del escritorio, todo junto: una imagen fija (Elegir…) o \
+             automático por proveedor (foto del día, etc.). La imagen es del \
+             perfil activo.",
+        )
+        .field(Field::display("imagen", "Imagen actual", actual))
+        .field(Field::button("elegir", "Elegir imagen de fondo…"))
+        .field(Field::dropdown(
+            "wallpaper_provider",
+            "Automático · proveedor",
+            prov,
+            vec![
+                EnumOption::new("bing", "Bing — foto del día"),
+                EnumOption::new("nasa", "NASA — imagen astronómica del día"),
+                EnumOption::new("folder", "Carpeta local (rota)"),
+                EnumOption::new("solar", "Solar — según la hora del día"),
+            ],
+        ))
+        .field(Field::slider(
+            "wallpaper_hours",
+            "Automático · refrescar cada (horas)",
+            m.cfg.wallpaper_interval_hours.max(1) as f64,
+            1.0,
+            48.0,
+            1.0,
+        ))
+        .field(Field::button("aplicar_fondo", "Aplicar automático ahora"))
+        .field(Field::toggle(
+            "activar_rotacion",
+            "Activar rotación automática (cada sesión)",
+            wallpaper_autostart_enabled(),
+        ))
+}
+
 /// Fondo automático: proveedor (Bing/NASA/Carpeta) + intervalo + activar/aplicar.
 /// Escribe `~/.config/mirada/wallpaper.ron` y lanza el daemon `mirada-wallpaper`.
+#[allow(dead_code)] // fundido en `wallpaper_section`.
 fn fondo_auto_section(cfg: &WawaConfig) -> Section {
     let prov = if cfg.wallpaper_provider.is_empty() {
         "bing".to_string()
@@ -1917,11 +1963,9 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
     };
     match key.as_str() {
         "wawa" => {
-            // Sección Fondo: el toggle «elegir» abre el diálogo de archivos.
-            if rel.segments().first().map(String::as_str) == Some("fondo") {
-                if rel.leaf() == Some("elegir") && value.as_bool() == Some(true) {
-                    open_wallpaper_picker(m);
-                }
+            // Wallpaper: el botón «elegir» abre el diálogo de archivos.
+            if rel.leaf() == Some("elegir") && value.as_bool() == Some(true) {
+                open_wallpaper_picker(m);
                 return;
             }
             // Información: el toggle «monitor» abre el monitor de procesos.
