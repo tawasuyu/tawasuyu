@@ -15,6 +15,7 @@
 //! destino (`wawa` / `mirada` / `pata`) y se persiste en su formato nativo.
 
 mod perfiles;
+mod themes;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -275,6 +276,9 @@ struct Model {
     /// en la pestaña «Reglas» de Vista; se persisten en `rules.ron`.
     rules: mirada_brain::rules::Rules,
     rules_path: Option<PathBuf>,
+    /// Biblioteca de **themes** (look reusable: apariencia+teselado+decoración).
+    /// El perfil activo referencia uno; la pestaña Themes edita el referenciado.
+    themes: themes::Themes,
     allichay: AllichayState,
     host: HostInfo,
     status: String,
@@ -313,6 +317,8 @@ struct SaveDirty {
     dprofiles: bool,
     /// Reglas de ventana (`rules.ron`).
     rules: bool,
+    /// Biblioteca de themes (`themes.ron`).
+    themes: bool,
 }
 
 #[derive(Clone)]
@@ -648,6 +654,8 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         .map(mirada_brain::rules::Rules::load_or_default)
         .unwrap_or_default();
 
+    let themes = themes::Themes::load_or_seed(&cfg.theme_variant, &cfg.accent);
+
     Model {
         selected_pest: 0,
         selected_item: None,
@@ -664,6 +672,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         pata,
         rules,
         rules_path,
+        themes,
         allichay: AllichayState::new(),
         host,
         status: String::new(),
@@ -869,12 +878,10 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     for s in perfiles_schema(m).sections {
         vista.sections.push(s); // Perfiles (lista limpia: acciones + perfiles)
     }
-    vista.sections.push(appearance_section(&m.cfg)); // Themes: apariencia
-    if let Some(s) = take("teselado") {
-        vista.sections.push(s); // Themes: teselado
-    }
-    if let Some(s) = take("decoracion") {
-        vista.sections.push(s); // Themes: decoración
+    // Themes: biblioteca + edición del theme del perfil activo (apariencia +
+    // teselado + decoración). El perfil ya NO es dueño de teselado/decoración.
+    for s in themes_schema(m).sections {
+        vista.sections.push(s);
     }
     if let Some(s) = take("fondo") {
         vista.sections.push(s); // Wallpapers
@@ -1196,6 +1203,190 @@ fn apply_reglas_table(m: &mut Model, rows: &[Vec<String>]) {
     m.save_in = SAVE_DELAY_TICKS;
 }
 
+/// El nombre del theme que usa el perfil activo (acotado a uno existente).
+fn active_theme_name(m: &Model) -> String {
+    let want = m.dprofiles.get(&m.dprofiles.active).map(|p| p.theme.clone()).unwrap_or_default();
+    if m.themes.get(&want).is_some() {
+        want
+    } else {
+        m.themes.names().first().cloned().unwrap_or_default()
+    }
+}
+
+/// Vuelca el theme del perfil activo a la config viva (teselado+decoración a
+/// mirada, apariencia a wawa) y marca para persistir. Lo llaman las ediciones
+/// del theme y el cambio de theme del perfil.
+fn apply_active_theme(m: &mut Model) {
+    let name = active_theme_name(m);
+    if let Some(t) = m.themes.get_or_default(&name).cloned() {
+        t.apply_to(&mut m.mirada);
+        m.cfg.theme_variant = t.theme_variant.clone();
+        m.cfg.accent = t.accent.clone();
+        m.dirty.mirada = true;
+        m.dirty.wawa = true;
+    }
+}
+
+/// La pestaña **Themes**: biblioteca (elegir/crear/duplicar/renombrar/eliminar)
+/// + edición del theme que usa el perfil activo (apariencia+teselado+decoración).
+fn themes_schema(m: &Model) -> Schema {
+    use allichay::{EnumOption, Field};
+    let t = rimay_localize::t;
+    let active_profile = m.dprofiles.active.clone();
+    let name = active_theme_name(m);
+    let opts: Vec<EnumOption> =
+        m.themes.names().into_iter().map(|n| EnumOption::new(n.clone(), n)).collect();
+    let mut schema = Schema::new().section(
+        Section::new("theme::acciones", "Themes")
+            .icon("🎨")
+            .help(
+                "El look reusable (apariencia + teselado + decoración), \
+                 perpendicular a los perfiles. El perfil activo USA un theme; \
+                 editarlo afecta a todos los perfiles que lo referencian.",
+            )
+            .field(Field::dropdown(
+                "usar",
+                format!("Theme de «{active_profile}»"),
+                name.clone(),
+                opts,
+            ))
+            .field(Field::button("crear", "Crear theme (desde el look actual)"))
+            .field(Field::button("duplicar", format!("Duplicar «{name}»")))
+            .field(Field::text("renombrar", format!("Renombrar «{name}» a…"), ""))
+            .field(Field::button("eliminar", format!("Eliminar «{name}»"))),
+    );
+    if let Some(theme) = m.themes.get(&name) {
+        // Apariencia del theme.
+        schema = schema.section(
+            Section::new("theme::apariencia", t("wawa-panel-cat-appearance"))
+                .icon("◐")
+                .field(Field::dropdown(
+                    "variant",
+                    t("wawa-panel-label-variant"),
+                    theme.theme_variant.clone(),
+                    THEME_VARIANTS.iter().map(|(id, k)| EnumOption::new(*id, t(k))).collect(),
+                ))
+                .field(Field::dropdown(
+                    "accent",
+                    t("wawa-panel-label-accent"),
+                    theme.accent.clone(),
+                    ACCENTS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
+                )),
+        );
+        // Teselado + Decoración: reusamos las secciones de mirada sobre una
+        // config temporal con el theme aplicado (DRY), re-prefijadas a `theme::`.
+        let mut tmp = m.mirada.clone();
+        theme.apply_to(&mut tmp);
+        for sec in tmp.schema().sections {
+            if sec.id == "teselado" || sec.id == "decoracion" {
+                let mut s = sec;
+                s.id = format!("theme::{}", s.id);
+                schema = schema.section(s);
+            }
+        }
+    }
+    schema
+}
+
+/// Aplica una edición de la pestaña Themes (`rel` ya viene sin el `theme::`).
+fn apply_theme(m: &mut Model, rel: &FieldPath, value: FieldValue) {
+    let active_profile = m.dprofiles.active.clone();
+    let name = active_theme_name(m);
+    let sect = rel.segments().first().cloned().unwrap_or_default();
+    match sect.as_str() {
+        "acciones" => match rel.leaf() {
+            Some("usar") => {
+                if let Some(sel) = value.as_str() {
+                    if let Some(p) = m.dprofiles.profiles.get_mut(&active_profile) {
+                        p.theme = sel.to_string();
+                    }
+                    m.dirty.dprofiles = true;
+                    apply_active_theme(m);
+                }
+            }
+            Some("crear") if value.as_bool() == Some(true) => {
+                let theme = themes::Theme::from_config(&m.mirada, &m.cfg.theme_variant, &m.cfg.accent);
+                let nuevo = m.themes.create(theme, "theme nuevo");
+                if let Some(p) = m.dprofiles.profiles.get_mut(&active_profile) {
+                    p.theme = nuevo.clone();
+                }
+                m.dirty.themes = true;
+                m.dirty.dprofiles = true;
+                m.status = format!("theme «{nuevo}» creado");
+            }
+            Some("duplicar") if value.as_bool() == Some(true) => {
+                if let Some(nuevo) = m.themes.duplicate(&name) {
+                    if let Some(p) = m.dprofiles.profiles.get_mut(&active_profile) {
+                        p.theme = nuevo.clone();
+                    }
+                    m.dirty.themes = true;
+                    m.dirty.dprofiles = true;
+                    m.status = format!("theme «{nuevo}» duplicado");
+                }
+            }
+            Some("renombrar") => {
+                if let Some(to) = value.as_str() {
+                    let to = to.trim().to_string();
+                    if !to.is_empty() && m.themes.rename(&name, &to) {
+                        for p in m.dprofiles.profiles.values_mut() {
+                            if p.theme == name {
+                                p.theme = to.clone();
+                            }
+                        }
+                        m.dirty.themes = true;
+                        m.dirty.dprofiles = true;
+                        m.status = format!("theme renombrado a «{to}»");
+                    }
+                }
+            }
+            Some("eliminar") if value.as_bool() == Some(true) => {
+                if m.themes.names().len() > 1 {
+                    m.themes.remove(&name);
+                    let fallback = m.themes.names().first().cloned().unwrap_or_default();
+                    for p in m.dprofiles.profiles.values_mut() {
+                        if p.theme == name {
+                            p.theme = fallback.clone();
+                        }
+                    }
+                    m.dirty.themes = true;
+                    m.dirty.dprofiles = true;
+                    apply_active_theme(m);
+                    m.status = format!("theme «{name}» eliminado");
+                } else {
+                    m.status = "no podés eliminar el último theme".into();
+                }
+            }
+            _ => {}
+        },
+        "apariencia" => {
+            if let Some(theme) = m.themes.themes.get_mut(&name) {
+                match (rel.leaf(), value.as_str()) {
+                    (Some("variant"), Some(v)) => theme.theme_variant = v.to_string(),
+                    (Some("accent"), Some(v)) => theme.accent = v.to_string(),
+                    _ => {}
+                }
+                m.dirty.themes = true;
+                apply_active_theme(m);
+            }
+        }
+        "teselado" | "decoracion" => {
+            // Reusa el `apply` de mirada sobre una config temporal con el theme
+            // aplicado, y re-extrae el theme — así no duplicamos la lógica.
+            if let Some(cur) = m.themes.get(&name).cloned() {
+                let mut tmp = m.mirada.clone();
+                cur.apply_to(&mut tmp);
+                if tmp.apply(rel, value).is_ok() {
+                    let nt = themes::Theme::from_config(&tmp, &cur.theme_variant, &cur.accent);
+                    m.themes.set(&name, nt);
+                    m.dirty.themes = true;
+                    apply_active_theme(m);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Reconstruye `m.pata.surfaces` desde la tabla de barras, preservando los
 /// widgets de cada barra por índice (las filas nuevas son barras en blanco).
 fn apply_barras_table(m: &mut Model, rows: &[Vec<String>]) {
@@ -1224,6 +1415,7 @@ fn do_create_profile(m: &mut Model) {
         mirada: m.mirada.clone(),
         keymap: m.keymap_rows.clone(),
         pata: m.pata.clone(),
+        theme: active_theme_name(m),
     };
     let name = m.dprofiles.create(base, "perfil nuevo");
     activate_profile(m, &name);
@@ -1270,18 +1462,26 @@ fn activate_profile(m: &mut Model, name: &str) {
     let Some(prof) = m.dprofiles.get(name).cloned() else {
         return;
     };
+    // Reflejar en el panel + FUNDIR el theme del perfil (teselado+decoración a
+    // mirada, apariencia a wawa): el perfil ya no es dueño de esos campos.
+    m.mirada = prof.mirada.clone();
+    m.keymap_rows = prof.keymap.clone();
+    m.pata = prof.pata.clone();
+    m.dprofiles.active = name.to_string();
+    if let Some(t) = m.themes.get_or_default(&prof.theme).cloned() {
+        t.apply_to(&mut m.mirada);
+        m.cfg.theme_variant = t.theme_variant.clone();
+        m.cfg.accent = t.accent.clone();
+    }
+    // Persistir la config viva (perfil + theme fusionados) y el resto.
     if let Some(p) = m.mirada_path.clone() {
-        let _ = prof.mirada.save(&p);
+        let _ = m.mirada.save(&p);
     }
     if let Some(kp) = m.keymap_path.clone() {
         let _ = mirada_brain::Keymap::from_rows(&prof.keymap).save(&kp);
     }
     let _ = pata_config::save(&prof.pata);
-    // Reflejar en el panel: las otras pestañas editan ahora este perfil.
-    m.mirada = prof.mirada.clone();
-    m.keymap_rows = prof.keymap.clone();
-    m.pata = prof.pata.clone();
-    m.dprofiles.active = name.to_string();
+    let _ = m.cfg.save();
     let _ = m.dprofiles.save();
     m.status = format!("perfil «{name}» activado (en caliente)");
 }
@@ -1294,12 +1494,16 @@ fn sync_active_profile(m: &mut Model) {
     if active.is_empty() {
         return;
     }
+    // Preservamos la referencia de theme del perfil (no es dueño de su
+    // teselado/decoración: eso lo define el theme).
+    let theme = m.dprofiles.get(&active).map(|p| p.theme.clone()).unwrap_or_default();
     m.dprofiles.set(
         &active,
         DesktopProfile {
             mirada: m.mirada.clone(),
             keymap: m.keymap_rows.clone(),
             pata: m.pata.clone(),
+            theme,
         },
     );
     m.dirty.dprofiles = true;
@@ -1794,6 +1998,11 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
+        "theme" => {
+            apply_theme(m, &rel, value);
+            m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
         _ => return,
     }
     // Editar mirada/pata/atajos modifica el perfil ACTIVO: vuelca la config viva
@@ -1864,6 +2073,13 @@ fn flush_saves(m: &mut Model) {
             None => err = Some("· reglas: sin ruta".into()),
         }
         m.dirty.rules = false;
+    }
+    if m.dirty.themes {
+        match m.themes.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· themes save: {e}")),
+        }
+        m.dirty.themes = false;
     }
     if let Some(e) = err {
         m.status = e;

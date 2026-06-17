@@ -27,17 +27,28 @@ pub struct DesktopProfile {
     /// Keymap como filas `[combo, accion, args…]` (lo que consume la tabla).
     pub keymap: Vec<Vec<String>>,
     pub pata: PataConfig,
+    /// **Theme referenciado** (nombre en la biblioteca de themes). El perfil ya
+    /// NO es dueño de su teselado/decoración: los toma del theme al activarse.
+    /// Vacío = el theme nativo. `serde(default)` para cargar RON viejos.
+    #[serde(default)]
+    pub theme: String,
 }
 
 impl DesktopProfile {
-    /// Construye un perfil desde una vista de fábrica.
+    /// Construye un perfil desde una vista de fábrica. Su theme por defecto es el
+    /// homónimo de la vista (sembrado en la biblioteca de themes).
     fn from_vista(name: &str) -> Option<Self> {
         let v = mirada_brain::Vista::by_name(name)?;
         let keymap = mirada_brain::preset_keymap(v.keymap)
             .map(|pairs| Keymap::from_pairs(pairs).to_rows())
             .unwrap_or_default();
         let pata = PataConfig::vista_preset(name).unwrap_or_default();
-        Some(Self { mirada: v.config.clone(), keymap, pata })
+        Some(Self {
+            mirada: v.config.clone(),
+            keymap,
+            pata,
+            theme: name.to_string(),
+        })
     }
 }
 
