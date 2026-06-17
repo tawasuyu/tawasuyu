@@ -437,6 +437,34 @@ acotado).
 - **Capas**: el motor NO compite con OpenGL — va **sobre wgpu** (que Llimphi ya usa),
   que a su vez traduce a Vulkan/Metal/DX12/GL/WebGPU.
 
+### 11.5 Motor 3D GENERAL + arquitectura en 3 capas (2026-06-17)
+
+El usuario fijó el norte: **3D general completo** (no "sólo voxels"), bien
+modularizado, con **una app propia** que arranca como demo y puede ganar
+personalidad; y que haya una **rama de dinámica tipo-Minecraft reusable como
+librería por cualquier juego** de esa orientación. Resultado:
+
+- **`llimphi-3d` = motor 3D GENERAL** (agnóstico de contenido). Keystone nuevo:
+  **`Scene3d`** compone, en un único pase con **depth buffer compartido**, el
+  ray-march de voxels (que ahora escribe `frag_depth`) y mallas de triángulos
+  (`Renderer3d`, con `set_model`) → **voxels y polígonos se ocluyen mutuamente**.
+  Eso es lo que lo vuelve "3D general" y no un motor voxel a secas. (Camera3d
+  `zfar` 100→5000 y voxel depth_compare `LessEqual` por el frag_depth; ver
+  commit.)
+- **`llimphi-voxel` = librería de dinámica voxel/juego** sobre `llimphi-3d`:
+  world-gen (`terrain`, movido acá desde el motor) + casa futura de bloques/
+  biomas/streaming. NO renderiza; aporta contenido. Reusable por cualquier juego
+  voxel.
+- **`llimphi-voxel-app` = app showcase** (nombre provisional, rebrandeable): un
+  mundo procedural orbitable con atmósfera + un monumento-malla flotante que
+  prueba voxel+triángulos en vivo. Modular (`world.rs` contenido / `main.rs`
+  bucle), con `--shot` headless.
+
+Capas: `app → llimphi-voxel → llimphi-3d → wgpu`. Verificado por PNG
+(`scene_mixed`: esfera voxel ∩ cubo-malla; `voxel_app --shot`: mundo+monumento
+por el compositor real). Si en el camino sale un Minecraft, bienvenido — la capa
+`llimphi-voxel` es justo esa rama.
+
 ### 11.4 Esfuerzo vs el kernel de wawa
 
 El motor voxel es **~1/3–1/2 del esfuerzo del kernel wawa y con mucho menos riesgo**:
