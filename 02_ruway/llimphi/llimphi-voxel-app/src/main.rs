@@ -42,6 +42,7 @@ use llimphi_ui::{
 use llimphi_voxel::{forward_h, right_h};
 
 mod film;
+mod soundtrack;
 mod world;
 use world::{World, FMT};
 

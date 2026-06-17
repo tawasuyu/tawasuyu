@@ -98,13 +98,18 @@ pub fn film() {
         }
     }
 
-    // --- Muxeo a video. Si no hay ffmpeg, deja igual los PNG y avisa.
+    // --- Banda sonora: compone+sintetiza un WAV con takiy para muxear.
+    let audio = "/tmp/voxel_film.wav";
+    let secs = crate::soundtrack::render_to(audio);
+    eprintln!("film: banda sonora {audio} ({secs:.1}s)");
+
+    // --- Muxeo a video (video AV1 + audio Opus). Si no hay ffmpeg, deja los PNG.
     let pattern = format!("{FRAME_DIR}/frame_%04d.png");
-    match foreign_av::encode_frames(&pattern, FPS, 30, None, OUT) {
-        Ok(()) => eprintln!("film: video escrito {OUT} ({frames} cuadros, {W}x{H}@{FPS})"),
+    match foreign_av::encode_frames(&pattern, FPS, 30, Some(std::path::Path::new(audio)), OUT) {
+        Ok(()) => eprintln!("film: video escrito {OUT} ({frames} cuadros, {W}x{H}@{FPS}, con audio)"),
         Err(e) => eprintln!(
             "film: cuadros en {FRAME_DIR}/ pero ffmpeg falló ({e:?}); \
-             podés muxear a mano: ffmpeg -framerate {FPS} -i {pattern} -c:v libsvtav1 {OUT}"
+             podés muxear a mano: ffmpeg -framerate {FPS} -i {pattern} -i {audio} -c:v libsvtav1 -c:a libopus {OUT}"
         ),
     }
 }

@@ -600,8 +600,14 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    Verificado por PNG (zoom: siluetas suaves, no escalonadas). `--poses` queda 1×
    (su HUD se mide en pixels de pantalla). **Falta**: resolución de cine (1080p/4K) y
    TAA si se quisiera abaratar.
-6. **Audio**: `takiy` → pista, sincronizada a la timeline y muxeada (la plomería de
-   `encode_frames` ya acepta audio).
+6. ~~**Audio**~~ **HECHO**: la película tiene **banda sonora**. `soundtrack.rs`
+   compone un `Score` con `takiy-core` (progresión I–V–vi–IV: pads + bajo + una
+   melodía que sube al momento del gesto) y lo sintetiza a WAV con `takiy-synth`
+   (`OscRenderer` triángulo + reverb suave); `--film` lo muxea con
+   `foreign_av::encode_frames` (audio → Opus, `-shortest`). Verificado por ffprobe
+   (el `.mkv` lleva stream Opus estéreo, dur 5.6 s) + `volumedetect` (media −14 dB,
+   no silencio). **Falta**: sincronizar *hits* musicales a beats del guion
+   (hoy música y acción sólo comparten duración), SoundFonts/instrumentos reales.
 
 Encaja como **app/dominio "director" propio** sobre `llimphi-voxel` (hermano de la
 showcase), no como feature del motor. La rebanada prueba que el camino es viable y

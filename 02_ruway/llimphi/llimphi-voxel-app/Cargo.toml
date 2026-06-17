@@ -22,6 +22,9 @@ llimphi-ui = { path = "../llimphi-ui" }
 foreign-av = { path = "../../../shared/foreign-av" }
 # Puente MagicaVoxel (.vox): generar el modelo del demo --vox.
 foreign-vox = { path = "../../../shared/foreign-vox" }
+# Música: componer (takiy-core) + sintetizar a WAV (takiy-synth) la banda sonora.
+takiy-core = { path = "../../takiy/takiy-core" }
+takiy-synth = { path = "../../takiy/takiy-synth" }
 # Render headless a PNG para el modo --shot (verificación sin pantalla).
 pollster = { workspace = true }
 png = { workspace = true }
