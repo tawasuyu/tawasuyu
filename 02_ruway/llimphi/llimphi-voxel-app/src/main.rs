@@ -414,8 +414,12 @@ fn shot_one(
 }
 
 fn write_png(hal: &Hal, target: &wgpu::Texture, w: u32, h: u32, path: &str) {
-    use std::fs::File;
-    use std::io::BufWriter;
+    let pixels = readback_rgba(hal, target, w, h);
+    encode_png(&pixels, w, h, path);
+}
+
+/// Lee de vuelta una textura RGBA8 `w×h` a un `Vec<u8>` plano (sin padding).
+fn readback_rgba(hal: &Hal, target: &wgpu::Texture, w: u32, h: u32) -> Vec<u8> {
     let unpadded = (w * 4) as usize;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
     let padded = unpadded.div_ceil(align) * align;
@@ -461,10 +465,52 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, w: u32, h: u32, path: &str) {
     }
     drop(data);
     buf.unmap();
+    pixels
+}
+
+/// Codifica RGBA8 plano `w×h` a un PNG en `path`.
+fn encode_png(pixels: &[u8], w: u32, h: u32, path: &str) {
+    use std::fs::File;
+    use std::io::BufWriter;
     let file = File::create(path).expect("png");
     let mut enc = png::Encoder::new(BufWriter::new(file), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     let mut wtr = enc.write_header().unwrap();
-    wtr.write_image_data(&pixels).unwrap();
+    wtr.write_image_data(pixels).unwrap();
+}
+
+/// Lee una textura `src_w×src_h` y la **baja por supersampling** (promedio de
+/// bloques `factor×factor`) a `(src_w/factor)×(src_h/factor)` antes de escribir el
+/// PNG — antialias de los bordes duros del ray-march (SSAA). `factor=1` = directo.
+fn write_png_downsampled(hal: &Hal, target: &wgpu::Texture, src_w: u32, src_h: u32, factor: u32, path: &str) {
+    let src = readback_rgba(hal, target, src_w, src_h);
+    let f = factor.max(1);
+    if f == 1 {
+        encode_png(&src, src_w, src_h, path);
+        return;
+    }
+    let (dw, dh) = (src_w / f, src_h / f);
+    let mut dst = vec![0u8; (dw * dh * 4) as usize];
+    let n = (f * f) as u32;
+    for dy in 0..dh {
+        for dx in 0..dw {
+            let mut acc = [0u32; 4];
+            for sy in 0..f {
+                for sx in 0..f {
+                    let px = (dx * f + sx) as usize;
+                    let py = (dy * f + sy) as usize;
+                    let o = (py * src_w as usize + px) * 4;
+                    for c in 0..4 {
+                        acc[c] += src[o + c] as u32;
+                    }
+                }
+            }
+            let o = ((dy * dw + dx) * 4) as usize;
+            for c in 0..4 {
+                dst[o + c] = (acc[c] / n) as u8;
+            }
+        }
+    }
+    encode_png(&dst, dw, dh, path);
 }

@@ -32,6 +32,12 @@ use crate::{DIM_XZ, SEED};
 const W: u32 = 960;
 const H: u32 = 540;
 const FPS: u32 = 30;
+/// Factor de **supersampling** (SSAA): se renderiza a `SS×` y se baja promediando
+/// → antialias de los bordes duros del ray-march. El film/vox lo usan; `--poses`
+/// queda a 1× (su HUD se mide en pixels de pantalla).
+const SS: u32 = 2;
+const SSW: u32 = W * SS;
+const SSH: u32 = H * SS;
 /// Carpeta de cuadros y salida del video.
 const FRAME_DIR: &str = "/tmp/voxel_film";
 const OUT: &str = "/tmp/voxel_film.mkv";
@@ -56,7 +62,7 @@ pub fn film() {
     // Un `Renderer3d` por actor (su malla se re-sube cada frame).
     let mut actor_r: Vec<Renderer3d> = cast.iter().map(|_| Renderer3d::new(&hal.device, FMT)).collect();
 
-    let inter = make_target(&hal);
+    let inter = make_target(&hal, SSW, SSH); // render a 2× para SSAA
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
 
     prepare_dir();
@@ -85,8 +91,8 @@ pub fn film() {
         let camera = seq.camera(t);
 
         let refs: Vec<&Renderer3d> = actor_r.iter().collect();
-        render_frame(&hal, &mut renderer, &mut world, &camera, &refs, &inter, &inter_view);
-        crate::write_png(&hal, &inter, W, H, &frame_path(f));
+        render_frame(&hal, &mut renderer, &mut world, &camera, &refs, &inter_view, (SSW, SSH));
+        crate::write_png_downsampled(&hal, &inter, SSW, SSH, SS, &frame_path(f));
         if f % 15 == 0 {
             eprintln!("film: cuadro {f}/{frames}");
         }
@@ -205,7 +211,7 @@ pub fn poses_shot() {
     let mut camera = Camera3d::orbit(mid, std::f32::consts::PI, 0.16, span * 0.78);
     camera.fovy_rad = 48_f32.to_radians();
 
-    let inter = make_target(&hal);
+    let inter = make_target(&hal, W, H); // poses queda 1× (HUD en pixels de pantalla)
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
     world.tick(0.0);
     world.animate(0.6);
@@ -257,7 +263,7 @@ pub fn vox_shot() {
     let dim = grid.dim();
 
     let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
-    vr.sun_dir = [0.5, 0.7, 0.35];
+    vr.sun_dir = [0.45, 0.8, -0.4]; // sol al frente (ilumina la cara hacia cámara)
     vr.atmosphere = Atmosphere {
         sky_zenith: [60, 110, 190],
         sky_horizon: [202, 216, 236],
@@ -269,18 +275,18 @@ pub fn vox_shot() {
     // Vista 3/4 frontal (yaw ~205° mira la cara con los ojos, levemente de costado).
     let camera = Camera3d::orbit(Vec3::ZERO, 205_f32.to_radians(), 12_f32.to_radians(), d * 1.9);
 
-    let inter = make_target(&hal);
+    let inter = make_target(&hal, SSW, SSH); // 2× para SSAA
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
     renderer
-        .render_to_view(&hal, &vello::Scene::new(), &inter_view, W, H, Color::from_rgba8(0, 0, 0, 255))
+        .render_to_view(&hal, &vello::Scene::new(), &inter_view, SSW, SSH, Color::from_rgba8(0, 0, 0, 255))
         .expect("base");
     let mut enc = hal
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("vox") });
-    scene.render(&hal.device, &hal.queue, &mut enc, &inter_view, (W, H), &camera, Some(&vr), &[]);
+    scene.render(&hal.device, &hal.queue, &mut enc, &inter_view, (SSW, SSH), &camera, Some(&vr), &[]);
     hal.queue.submit(std::iter::once(enc.finish()));
     let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
-    crate::write_png(&hal, &inter, W, H, "/tmp/vox_import.png");
+    crate::write_png_downsampled(&hal, &inter, SSW, SSH, SS, "/tmp/vox_import.png");
     eprintln!(
         "vox: {} ({} voxels) → {path} → /tmp/vox_import.png (grid {}x{}x{})",
         "golem",
@@ -343,26 +349,25 @@ fn render_frame(
     world: &mut World,
     camera: &llimphi_3d::Camera3d,
     actors: &[&Renderer3d],
-    inter: &wgpu::Texture,
     inter_view: &wgpu::TextureView,
+    (w, h): (u32, u32),
 ) {
-    let _ = inter;
     renderer
-        .render_to_view(hal, &vello::Scene::new(), inter_view, W, H, Color::from_rgba8(0, 0, 0, 255))
+        .render_to_view(hal, &vello::Scene::new(), inter_view, w, h, Color::from_rgba8(0, 0, 0, 255))
         .expect("base");
     let mut enc = hal
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("film") });
-    world.render_with(&hal.device, &hal.queue, &mut enc, inter_view, (W, H), camera, actors);
+    world.render_with(&hal.device, &hal.queue, &mut enc, inter_view, (w, h), camera, actors);
     hal.queue.submit(std::iter::once(enc.finish()));
     let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
-/// Crea la textura intermedia (mismo descriptor que el modo `--shot`).
-fn make_target(hal: &Hal) -> wgpu::Texture {
+/// Crea la textura intermedia `w×h` (mismo descriptor que el modo `--shot`).
+fn make_target(hal: &Hal, w: u32, h: u32) -> wgpu::Texture {
     hal.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("film-inter"),
-        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,

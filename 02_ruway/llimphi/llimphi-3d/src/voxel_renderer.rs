@@ -935,9 +935,18 @@ fn fs(in: VOut) -> FOut {
     let sh_e = trace_entities(so, ldir, 1e30);
     let shadow = select(1.0, 0.25, sh_v.hit || sh_e.hit);
 
-    let ambient = 0.32;
-    let light = (ambient + 0.72 * diff * shadow) * (0.35 + 0.65 * ao);
-    var color = albedo * light;
+    // Luz CON COLOR (look cinematográfico) sin uniforms nuevos: el color del sol
+    // sale de su elevación (cálido al ras del horizonte → blanco en lo alto) y el
+    // ambiente del color del cielo (rebote frío del cenit). El mood se controla
+    // moviendo `sun_dir` y la paleta de cielo, que ya viajan en el uniform.
+    let ao_term = 0.35 + 0.65 * ao;
+    let sun_h = clamp(u.sun_dir.y, 0.0, 1.0);
+    let sun_col = mix(vec3<f32>(1.0, 0.52, 0.24), vec3<f32>(1.0, 0.97, 0.9), sun_h);
+    // Ambiente tintado por el cielo pero con ~la misma luminancia que el flat 0.32
+    // de antes (no oscurece las caras que no ven el sol).
+    let amb_col = mix(vec3<f32>(0.45), u.sky_zenith.xyz, 0.45) * 0.70;
+    let light = amb_col + sun_col * (0.78 * diff * shadow);
+    var color = albedo * light * ao_term;
 
     // Niebla / perspectiva aérea: lo lejano desvanece hacia el cielo en esa
     // dirección, lo que hace legible el borde de un mundo grande.

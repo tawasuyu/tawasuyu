@@ -587,10 +587,19 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    importar la **paleta oficial** de MagicaVoxel (hoy el fallback sin `RGBA` es una
    rampa HSV; los exportes reales traen `RGBA` y van bien) y soporte de escenas
    multi-modelo con transformación (`nTRN/nGRP`).
-4. **Iluminación cinematográfica**: hoy un solo sol + AO + niebla; falta hora-del-
-   día / luz coloreada / puntuales.
-5. **Calidad de cuadro**: supersampling (el ray-march aliasa en bordes), resolución
-   de cine.
+4. ~~**Iluminación cinematográfica**~~ **PRIMER PASO HECHO**: la luz del ray-march
+   pasó de escalar (ambiente plano 0.32) a **con color** — color del sol por su
+   elevación (cálido al ras → blanco en lo alto) + ambiente tintado por el color de
+   cielo (rebote frío), **sin uniforms nuevos** (sale de `sun_dir`/`sky_zenith` que
+   ya viajan). El mood se controla moviendo `sun_dir` y la paleta de cielo.
+   Verificado por PNG (golem/actores con matiz cálido-frío, misma luminancia base).
+   **Falta**: luces puntuales/coloreadas explícitas, sombras suaves.
+5. ~~**Calidad de cuadro**: supersampling~~ **HECHO**: SSAA — el `--film`/`--vox`
+   renderizan a **2×** (`SSW×SSH`) y bajan promediando bloques 2×2
+   (`write_png_downsampled`) → antialias de los bordes duros del ray-march.
+   Verificado por PNG (zoom: siluetas suaves, no escalonadas). `--poses` queda 1×
+   (su HUD se mide en pixels de pantalla). **Falta**: resolución de cine (1080p/4K) y
+   TAA si se quisiera abaratar.
 6. **Audio**: `takiy` → pista, sincronizada a la timeline y muxeada (la plomería de
    `encode_frames` ya acepta audio).
 
