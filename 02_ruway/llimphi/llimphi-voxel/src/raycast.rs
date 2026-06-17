@@ -62,7 +62,7 @@ pub fn raycast(grid: &VoxelGrid, origin: [f32; 3], dir: [f32; 3], max_dist: f32)
         return Some(VoxelHit { cell, normal: [0, 0, 0], place: cell, dist: 0.0 });
     }
 
-    let mut t = 0.0f32;
+    let mut t;
     let mut normal = [0i32; 3];
     // Tope de pasos generoso (suma de extensiones + margen) para no colgar.
     let dim = grid.dim();

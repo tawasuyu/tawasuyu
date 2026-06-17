@@ -11,8 +11,10 @@
 //! vive lo que sí: world-gen ([`terrain`]) y picking/edición ([`raycast`]).
 //! El resto (chunks, streaming, bloques tipados) crece acá sin tocar el motor.
 
+mod player;
 mod raycast;
 mod terrain;
 
+pub use player::{forward_h, look_dir, right_h, Player};
 pub use raycast::{raycast, VoxelHit};
 pub use terrain::terrain;

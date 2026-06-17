@@ -6,6 +6,7 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
+use llimphi_voxel::Player;
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -20,6 +21,9 @@ pub struct World {
     monument: Renderer3d,
     grid: VoxelGrid,
     dim: [u32; 3],
+    /// Jugador en primera persona (modo "explorar"): camina el terreno con
+    /// gravedad y colisión. En modo órbita simplemente se ignora.
+    player: Player,
 }
 
 impl World {
@@ -42,13 +46,45 @@ impl World {
 
         let monument = Renderer3d::new(device, FMT);
 
+        // Jugador posado sobre la columna central del terreno.
+        let player = Player::spawn_on(&grid, dim[0] / 2, dim[2] / 2);
+
         Self {
             scene: Scene3d::new(),
             voxel,
             monument,
             grid,
             dim,
+            player,
         }
+    }
+
+    /// Avanza la física del jugador `dt` segundos con la caminata deseada
+    /// (`wish`, horizontal, espacio de grilla) y `jump`. Devuelve el ojo del
+    /// jugador en **mundo** (centrado en el origen, listo para la cámara).
+    pub fn step_player(&mut self, wish: Vec3, jump: bool, dt: f32) -> Vec3 {
+        self.player.step(&self.grid, wish, jump, dt);
+        self.player.eye() - self.world_center()
+    }
+
+    /// Reposa al jugador sobre la columna central (al entrar a modo explorar,
+    /// por si el terreno cambió por ediciones).
+    pub fn respawn_player(&mut self) {
+        self.player = Player::spawn_on(&self.grid, self.dim[0] / 2, self.dim[2] / 2);
+    }
+
+    /// Reposa al jugador sobre una columna concreta `(x, z)` (clamp al grid).
+    /// Útil para encuadrar una vista en primera persona desde un mirador.
+    pub fn spawn_player_at(&mut self, x: u32, z: u32) {
+        let x = x.min(self.dim[0] - 1);
+        let z = z.min(self.dim[2] - 1);
+        self.player = Player::spawn_on(&self.grid, x, z);
+    }
+
+    /// Medio-`dim`: el offset entre espacio de grilla (`[0,dim]`) y mundo
+    /// (centrado en el origen). `mundo = grilla - centro`.
+    fn world_center(&self) -> Vec3 {
+        Vec3::new(self.dim[0] as f32, self.dim[1] as f32, self.dim[2] as f32) * 0.5
     }
 
     /// Edita el mundo por **raycast** desde un origen/dirección (espacio de
@@ -92,16 +128,6 @@ impl World {
         }
         self.voxel.sync(queue, &mut self.grid);
         true
-    }
-
-    /// Centro de órbita sugerido (un poco sobre el nivel medio del mundo).
-    pub fn focus(&self) -> Vec3 {
-        Vec3::new(0.0, self.dim[1] as f32 * 0.10, 0.0)
-    }
-
-    /// Radio sugerido de cámara (para encuadrar el continente).
-    pub fn orbit_dist(&self) -> f32 {
-        self.dim[0] as f32 * 1.5
     }
 
     /// Posiciona el monumento: flota sobre el centro del mundo y gira con

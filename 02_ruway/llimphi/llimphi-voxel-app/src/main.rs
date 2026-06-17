@@ -1,20 +1,27 @@
 //! # llimphi-voxel-app — showcase del motor voxel 3D
 //!
-//! Un mundo voxel procedural que se **orbita con el mouse**, con atmósfera
-//! (cielo + niebla) y un **monumento-malla** flotante que gira: prueba en vivo
-//! que voxels (ray-march) y triángulos conviven en una escena con oclusión
-//! correcta ([`llimphi_3d::Scene3d`]).
+//! Un mundo voxel procedural con dos modos:
 //!
-//! Capas: `llimphi-voxel-app → llimphi-voxel (terreno) → llimphi-3d (motor) →
-//! wgpu`. Arranca como demo; pensada para ganar personalidad (un juego) sin
-//! tocar el motor — el contenido vive en [`world`].
+//! - **Órbita** (default): se mira el continente desde afuera, con atmósfera
+//!   (cielo + niebla) y un **monumento-malla** flotante que gira — prueba en
+//!   vivo que voxels (ray-march) y triángulos conviven con oclusión correcta
+//!   ([`llimphi_3d::Scene3d`]).
+//! - **Explorar** (Tab): cámara en **primera persona** caminando el terreno con
+//!   **gravedad y colisión** ([`llimphi_voxel::Player`]) — el bucle canónico de
+//!   un juego voxel: caminar, mirar, romper, construir.
+//!
+//! Capas: `llimphi-voxel-app → llimphi-voxel (terreno/jugador/picking) →
+//! llimphi-3d (motor) → wgpu`. El contenido vive en [`world`]; el motor no sabe
+//! nada de juegos.
 //!
 //! ```bash
 //! cargo run -p llimphi-voxel-app --release            # ventana interactiva
 //! cargo run -p llimphi-voxel-app --release -- --shot  # PNG headless a /tmp
 //! ```
-//! - **Arrastrar**: orbita. **Rueda**: zoom. **b**: romper (cráter donde mira la
-//!   cámara). **g**: construir (bloque en la cara golpeada).
+//! - **Tab**: alterna órbita ↔ explorar (primera persona).
+//! - **Arrastrar**: orbita / mira. **Rueda**: zoom (órbita).
+//! - **WASD**: caminar (explorar). **Espacio**: saltar.
+//! - **b**: romper (cráter donde mira la cámara). **g**: construir.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,50 +29,84 @@ use std::time::Duration;
 use llimphi_3d::glam::Vec3;
 use llimphi_3d::Camera3d;
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
-use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
+use llimphi_ui::llimphi_layout::taffy::prelude::{
+    percent, Position, Size, Style,
+};
 use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::{
-    mount, paint_gpu, App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, View, WheelDelta,
+    mount, paint_gpu, App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View,
+    WheelDelta,
 };
+use llimphi_voxel::{forward_h, right_h};
 
 mod world;
 use world::{World, FMT};
 
 const DIM_XZ: u32 = 192;
 const SEED: u32 = 1337;
+/// Paso de física por frame (el `Tick` periódico corre a ~30 Hz).
+const DT: f32 = 1.0 / 30.0;
 
-/// Edición pendiente: rayo (origen+dir en espacio de grilla) y modo
-/// (`true` = construir, `false` = romper). La produce `update` y la consume el
-/// closure GPU (que tiene `queue` para el `sync`).
-type Edit = ([f32; 3], [f32; 3], bool);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Orbit,
+    Explore,
+}
+
+/// Dirección de caminata pulsada (WASD).
+#[derive(Clone, Copy)]
+enum Walk {
+    Fwd,
+    Back,
+    Left,
+    Right,
+}
+
+/// Snapshot del estado de teclas de movimiento (lo lee el paso de física).
+#[derive(Clone, Copy, Default)]
+struct Input {
+    fwd: bool,
+    back: bool,
+    left: bool,
+    right: bool,
+    jump: bool,
+}
 
 #[derive(Clone)]
 enum Msg {
     Orbit(f32, f32),
     Zoom(f32),
     Edit(bool),
+    ToggleMode,
+    Move(Walk, bool),
+    Jump(bool),
     Tick,
 }
 
 struct Model {
+    mode: Mode,
     yaw: f32,
     pitch: f32,
     dist: f32,
     angle: f32,
+    input: Input,
     /// Mundo perezoso: se construye en la 1ª pintada GPU (ahí hay device/queue).
     world: Arc<Mutex<Option<World>>>,
-    /// Cola de ediciones a aplicar en el próximo frame (en el hilo GPU).
-    edits: Arc<Mutex<Vec<Edit>>>,
+    /// Cola de ediciones a aplicar en el próximo frame: `true` = construir,
+    /// `false` = romper. El rayo se deriva de la cámara *de ese frame*.
+    edits: Arc<Mutex<Vec<bool>>>,
+    /// Pedido de reposar al jugador sobre el terreno (al entrar a explorar).
+    respawn: Arc<Mutex<bool>>,
 }
 
-/// Cámara actual a partir del estado de órbita del modelo.
+/// Cámara de órbita a partir del estado del modelo.
 fn camera_of(yaw: f32, pitch: f32, dist: f32) -> Camera3d {
     Camera3d::orbit(Vec3::new(0.0, focus_y(), 0.0), yaw, pitch, dist)
 }
 
-/// `dim` del mundo (igual que `World::build`).
+/// `dim` del mundo (igual que `World::build`): grilla `[0, dim]`.
 fn world_dim() -> Vec3 {
     let dy = (DIM_XZ * 4 / 10).max(48) as f32;
     Vec3::new(DIM_XZ as f32, dy, DIM_XZ as f32)
@@ -93,12 +134,15 @@ impl App for VoxelApp {
     fn init(handle: &Handle<Msg>) -> Model {
         handle.spawn_periodic(Duration::from_millis(33), || Msg::Tick);
         Model {
+            mode: Mode::Orbit,
             yaw: 35_f32.to_radians(),
             pitch: 22_f32.to_radians(),
             dist: DIM_XZ as f32 * 1.5,
             angle: 0.0,
+            input: Input::default(),
             world: Arc::new(Mutex::new(None)),
             edits: Arc::new(Mutex::new(Vec::new())),
+            respawn: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -107,12 +151,19 @@ impl App for VoxelApp {
     }
 
     fn on_key(_m: &Model, ev: &KeyEvent) -> Option<Msg> {
-        if !matches!(ev.state, KeyState::Pressed) {
-            return None;
-        }
+        let pressed = matches!(ev.state, KeyState::Pressed);
         match &ev.key {
-            Key::Character(c) if c.eq_ignore_ascii_case("b") => Some(Msg::Edit(false)), // romper
-            Key::Character(c) if c.eq_ignore_ascii_case("g") => Some(Msg::Edit(true)),  // construir
+            Key::Named(NamedKey::Tab) if pressed && !ev.repeat => Some(Msg::ToggleMode),
+            Key::Named(NamedKey::Space) => Some(Msg::Jump(pressed)),
+            Key::Character(c) => match c.to_ascii_lowercase().as_str() {
+                "w" => Some(Msg::Move(Walk::Fwd, pressed)),
+                "s" => Some(Msg::Move(Walk::Back, pressed)),
+                "a" => Some(Msg::Move(Walk::Left, pressed)),
+                "d" => Some(Msg::Move(Walk::Right, pressed)),
+                "b" if pressed && !ev.repeat => Some(Msg::Edit(false)), // romper
+                "g" if pressed && !ev.repeat => Some(Msg::Edit(true)),  // construir
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -128,34 +179,77 @@ impl App for VoxelApp {
                 let f = (1.0 + dy * 0.1).clamp(0.5, 1.5);
                 model.dist = (model.dist * f).clamp(DIM_XZ as f32 * 0.6, DIM_XZ as f32 * 3.0);
             }
-            Msg::Edit(build) => {
-                let cam = camera_of(model.yaw, model.pitch, model.dist);
-                let ro = cam.eye + world_dim() * 0.5;
-                let rd = (cam.target - cam.eye).normalize();
-                model
-                    .edits
-                    .lock()
-                    .unwrap()
-                    .push(([ro.x, ro.y, ro.z], [rd.x, rd.y, rd.z], build));
+            Msg::Edit(build) => model.edits.lock().unwrap().push(build),
+            Msg::ToggleMode => {
+                model.mode = match model.mode {
+                    Mode::Orbit => {
+                        *model.respawn.lock().unwrap() = true;
+                        Mode::Explore
+                    }
+                    Mode::Explore => Mode::Orbit,
+                };
             }
+            Msg::Move(w, on) => match w {
+                Walk::Fwd => model.input.fwd = on,
+                Walk::Back => model.input.back = on,
+                Walk::Left => model.input.left = on,
+                Walk::Right => model.input.right = on,
+            },
+            Msg::Jump(on) => model.input.jump = on,
             Msg::Tick => model.angle += 0.01,
         }
         model
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let camera = camera_of(model.yaw, model.pitch, model.dist);
+        let mode = model.mode;
+        let (yaw, pitch, dist, angle, input) =
+            (model.yaw, model.pitch, model.dist, model.angle, model.input);
         let world = model.world.clone();
         let edits = model.edits.clone();
-        let angle = model.angle;
+        let respawn = model.respawn.clone();
 
-        let canvas = View::new(fill())
+        let canvas = View::new(fill_absolute())
             .gpu_paint_with(move |device, queue, encoder, target, _rect, vp| {
                 let mut guard = world.lock().unwrap();
                 let w = guard.get_or_insert_with(|| World::build(device, queue, DIM_XZ, SEED));
-                for (o, d, b) in edits.lock().unwrap().drain(..) {
-                    w.apply_edit(queue, o, d, b);
+
+                // Cámara del frame: en explorar, primero avanza la física.
+                let camera = match mode {
+                    Mode::Explore => {
+                        if std::mem::take(&mut *respawn.lock().unwrap()) {
+                            w.respawn_player();
+                        }
+                        let mut wish = Vec3::ZERO;
+                        if input.fwd {
+                            wish += forward_h(yaw);
+                        }
+                        if input.back {
+                            wish -= forward_h(yaw);
+                        }
+                        if input.right {
+                            wish += right_h(yaw);
+                        }
+                        if input.left {
+                            wish -= right_h(yaw);
+                        }
+                        let eye = w.step_player(wish, input.jump, DT);
+                        Camera3d::fly(eye, yaw, pitch)
+                    }
+                    Mode::Orbit => camera_of(yaw, pitch, dist),
+                };
+
+                // Ediciones: el rayo sale de la cámara de este frame (en órbita,
+                // desde afuera; en explorar, desde el ojo del jugador).
+                let pending = std::mem::take(&mut *edits.lock().unwrap());
+                if !pending.is_empty() {
+                    let ro = camera.eye + world_dim() * 0.5; // a espacio de grilla
+                    let rd = (camera.target - camera.eye).normalize();
+                    for build in pending {
+                        w.apply_edit(queue, [ro.x, ro.y, ro.z], [rd.x, rd.y, rd.z], build);
+                    }
                 }
+
                 w.animate(angle);
                 w.render(device, queue, encoder, target, vp, &camera);
             })
@@ -164,12 +258,25 @@ impl App for VoxelApp {
                 DragPhase::End => None,
             });
 
-        View::new(fill()).children(vec![canvas])
+        View::new(root()).children(vec![canvas])
     }
 }
 
-fn fill() -> Style {
+/// Raíz a pantalla completa que aloja el canvas 3D.
+fn root() -> Style {
     Style {
+        size: Size {
+            width: percent(1.0),
+            height: percent(1.0),
+        },
+        ..Default::default()
+    }
+}
+
+/// Canvas a pantalla completa, posicionado absoluto.
+fn fill_absolute() -> Style {
+    Style {
+        position: Position::Absolute,
         size: Size {
             width: percent(1.0),
             height: percent(1.0),
@@ -188,33 +295,67 @@ fn main() {
 
 /// Render headless de la escena por el compositor real (mount → paint_gpu),
 /// para verificar sin pantalla que el nodo `gpu_paint_with` de la app corre y
-/// produce el mundo. Vuelca /tmp/voxel_app.png.
+/// produce el mundo. Vuelca dos PNG: la vista órbita y la primera persona.
 fn shot() {
-    const W: u32 = 1000;
-    const H: u32 = 720;
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
 
+    // Mundo compartido entre las dos tomas (se construye en la 1ª).
     let world: Arc<Mutex<Option<World>>> = Arc::new(Mutex::new(None));
-    let camera = Camera3d::orbit(
+
+    // --- Toma 1: órbita (con un cráter, prueba romper desde afuera) ---
+    let cam_orbit = Camera3d::orbit(
         Vec3::new(0.0, focus_y(), 0.0),
         35_f32.to_radians(),
         22_f32.to_radians(),
         DIM_XZ as f32 * 1.5,
     );
-    // Una edición por el camino real (apply_edit): cava un cráter donde mira la
-    // cámara, así el PNG verifica también la mecánica romper, no sólo el render.
+    shot_one(&hal, &mut renderer, &world, cam_orbit, true, "/tmp/voxel_app.png");
+
+    // --- Toma 2: primera persona, parado en un mirador del borde mirando el
+    // continente en diagonal (yaw≈45° apunta de la esquina hacia el centro) ---
+    let eye = {
+        let mut guard = world.lock().unwrap();
+        let w = guard.as_mut().expect("mundo ya construido en la toma 1");
+        w.spawn_player_at(DIM_XZ / 5, DIM_XZ / 5);
+        // Unos pasos de física para asentar al jugador sobre el suelo.
+        let mut eye = Vec3::ZERO;
+        for _ in 0..4 {
+            eye = w.step_player(Vec3::ZERO, false, DT);
+        }
+        eye
+    };
+    let cam_fps = Camera3d::fly(eye, 45_f32.to_radians(), -4_f32.to_radians());
+    shot_one(&hal, &mut renderer, &world, cam_fps, false, "/tmp/voxel_app_fps.png");
+}
+
+/// Renderiza una toma con `camera` a `path`. Si `edit`, cava un cráter por el
+/// camino real (`apply_edit`) para verificar también la mecánica de romper.
+fn shot_one(
+    hal: &Hal,
+    renderer: &mut Renderer,
+    world: &Arc<Mutex<Option<World>>>,
+    camera: Camera3d,
+    edit: bool,
+    path: &str,
+) {
+    const W: u32 = 1000;
+    const H: u32 = 720;
+    let world = world.clone();
     let ro = camera.eye + world_dim() * 0.5;
     let rd = (camera.target - camera.eye).normalize();
-    let w_arc = world.clone();
-    let canvas: View<Msg> = View::new(fill()).gpu_paint_with(move |device, queue, encoder, target, _rect, vp| {
-        let mut guard = w_arc.lock().unwrap();
-        let w = guard.get_or_insert_with(|| World::build(device, queue, DIM_XZ, SEED));
-        w.apply_edit(queue, [ro.x, ro.y, ro.z], [rd.x, rd.y, rd.z], false);
-        w.animate(0.6);
-        w.render(device, queue, encoder, target, vp, &camera);
-    });
-    let view: View<Msg> = View::new(fill()).children(vec![canvas]);
+    let canvas: View<Msg> = View::new(fill_absolute()).gpu_paint_with(
+        move |device, queue, encoder, target, _rect, vp| {
+            let mut guard = world.lock().unwrap();
+            let w = guard.get_or_insert_with(|| World::build(device, queue, DIM_XZ, SEED));
+            if edit {
+                w.apply_edit(queue, [ro.x, ro.y, ro.z], [rd.x, rd.y, rd.z], false);
+            }
+            w.animate(0.6);
+            w.render(device, queue, encoder, target, vp, &camera);
+        },
+    );
+    let view: View<Msg> = View::new(root()).children(vec![canvas]);
 
     let mut layout = LayoutTree::new();
     let mounted = mount(&mut layout, view);
@@ -235,7 +376,7 @@ fn shot() {
     });
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
     renderer
-        .render_to_view(&hal, &vello::Scene::new(), &inter_view, W, H, Color::from_rgba8(0, 0, 0, 255))
+        .render_to_view(hal, &vello::Scene::new(), &inter_view, W, H, Color::from_rgba8(0, 0, 0, 255))
         .expect("base");
 
     let mut enc = hal
@@ -246,8 +387,8 @@ fn shot() {
     let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
     assert!(any, "el gpu_painter de la app no corrió");
 
-    write_png(&hal, &inter, W, H, "/tmp/voxel_app.png");
-    eprintln!("voxel_app: escrito /tmp/voxel_app.png ({W}x{H})");
+    write_png(hal, &inter, W, H, path);
+    eprintln!("voxel_app: escrito {path} ({W}x{H})");
 }
 
 fn write_png(hal: &Hal, target: &wgpu::Texture, w: u32, h: u32, path: &str) {

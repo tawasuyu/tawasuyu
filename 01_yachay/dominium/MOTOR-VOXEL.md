@@ -465,6 +465,21 @@ Capas: `app → llimphi-voxel → llimphi-3d → wgpu`. Verificado por PNG
 por el compositor real). Si en el camino sale un Minecraft, bienvenido — la capa
 `llimphi-voxel` es justo esa rama.
 
+**Caminar el mundo (2026-06-17).** La rama `llimphi-voxel` ganó su segundo
+ingrediente de juego (tras el picking de `raycast`): **física de jugador en
+primera persona** (`llimphi_voxel::Player`) — caja AABB con gravedad, salto y
+**colisión move-and-resolve** eje por eje contra el `VoxelGrid`, más helpers de
+base (`forward_h`/`right_h`/`look_dir`). No toca GPU; reusable por cualquier
+juego voxel. La app showcase suma un **modo "explorar"** (Tab) que alterna la
+órbita con una **cámara en primera persona** (`Camera3d::fly`) caminando el
+terreno (WASD + Espacio para saltar), con romper/construir (`b`/`g`) por raycast
+desde el ojo del jugador. Verificado: 3 tests de física (caída→suelo, muro frena,
+salto sólo desde el piso) + PNG `voxel_app_fps.png` (parado en la orilla mirando
+el continente, por el camino real de `step_player`). Pendiente de polish: una
+**mira/HUD** en primera persona necesita un pase screen-space *después* del
+ray-march (el crosshair vello queda tapado por el canvas GPU full-screen, y el
+`view_overlay` modal congelaría el mouse-look) — slice aparte de HUD GPU.
+
 ### 11.4 Esfuerzo vs el kernel de wawa
 
 El motor voxel es **~1/3–1/2 del esfuerzo del kernel wawa y con mucho menos riesgo**:
