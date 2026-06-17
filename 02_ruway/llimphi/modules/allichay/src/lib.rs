@@ -62,7 +62,7 @@ const RAIL_W: f32 = 52.0;
 /// segmentados en una fila. Por encima de esto el segmented se amontona y
 /// desborda (p. ej. 7 modos de tiling), así que el renderer cae a un
 /// **radio-group vertical** (una fila seleccionable por opción).
-const SEGMENTED_MAX: usize = 4;
+const SEGMENTED_MAX: usize = 5;
 
 // =====================================================================
 // Mensajes del módulo

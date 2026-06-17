@@ -1180,9 +1180,9 @@ fn es_activa(s: &str) -> bool {
 fn barras_section(pata: &pata_core::Config) -> Section {
     use allichay::Field;
     let mut sec = Section::new("barras::lista", "Barras").icon("▭").help(
-        "Las barras de pata, como lista: prendé varias a la vez, nombralas, \
-         duplicá o borrá cada una. Posición/grosor/autohide de cada barra están \
-         en su pestaña «Superficie N». Se guardan dentro del perfil activo.",
+        "Cada barra en UNA fila: elegí su posición (o «Inactiva» para apagarla). \
+         ＋ agrega otra. Grosor/autohide de cada barra están en su pestaña \
+         «Superficie N». Se guardan dentro del perfil activo.",
     );
     for (i, s) in pata.surfaces.iter().enumerate() {
         let nombre = if s.name.trim().is_empty() {
@@ -1190,11 +1190,21 @@ fn barras_section(pata: &pata_core::Config) -> Section {
         } else {
             s.name.clone()
         };
-        sec = sec
-            .field(Field::toggle(format!("on_{i}"), format!("Activa · {nombre}"), s.enabled))
-            .field(Field::text(format!("name_{i}"), "    Nombre", s.name.clone()))
-            .field(Field::button(format!("dup_{i}"), "    Duplicar"))
-            .field(Field::button(format!("del_{i}"), "    Borrar"));
+        // Una sola fila por barra: el rótulo es su nombre; el control es un
+        // select de posición que INCLUYE «Inactiva» (reemplaza al check activo).
+        let pos = if !s.enabled { "inactivo".to_string() } else { anchor_slug(s.anchor).to_string() };
+        sec = sec.field(Field::dropdown(
+            format!("pos_{i}"),
+            nombre,
+            pos,
+            vec![
+                EnumOption::new("inactivo", "Inactiva"),
+                EnumOption::new("top", "Arriba"),
+                EnumOption::new("bottom", "Abajo"),
+                EnumOption::new("left", "Izq."),
+                EnumOption::new("right", "Der."),
+            ],
+        ));
     }
     sec.field(Field::button("agregar", "＋ Agregar barra"))
 }
@@ -1463,6 +1473,17 @@ fn apply_barras_list(m: &mut Model, leaf: &str, value: FieldValue) {
             m.pata.surfaces.push(s);
         } else {
             changed = false;
+        }
+    } else if let Some(i) = idx("pos_") {
+        // Select de posición: «inactivo» apaga la barra; un borde la prende y la
+        // ancla a ese lado.
+        if let (Some(v), Some(s)) = (value.as_str(), m.pata.surfaces.get_mut(i)) {
+            if v == "inactivo" {
+                s.enabled = false;
+            } else {
+                s.enabled = true;
+                s.anchor = parse_anchor(v);
+            }
         }
     } else if let Some(i) = idx("on_") {
         if let Some(s) = m.pata.surfaces.get_mut(i) {
@@ -2939,6 +2960,15 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
     if key == "barras" {
         let leaf = rel.leaf().unwrap_or("");
         let idx = |p: &str| leaf.strip_prefix(p).and_then(|s| s.parse::<usize>().ok());
+        if let Some(i) = idx("pos_") {
+            let v = m
+                .pata
+                .surfaces
+                .get(i)
+                .map(|s| if !s.enabled { "inactivo".to_string() } else { anchor_slug(s.anchor).to_string() })
+                .unwrap_or_else(|| "inactivo".to_string());
+            return Some(FieldValue::Enum(v));
+        }
         if let Some(i) = idx("on_") {
             return Some(FieldValue::Bool(m.pata.surfaces.get(i).map(|s| s.enabled).unwrap_or(false)));
         }
