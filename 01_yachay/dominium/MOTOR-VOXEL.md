@@ -499,6 +499,13 @@ inválido → `None` sin romper) + demo `terrain_streaming` (525 ediciones → a
 la ventana móvil — necesita pantalla) y **LOD multi-nivel** para mundos gigantes — el
 resto del §7 está cubierto.
 
+**Demo integrador "hero" (`terrain_world`):** combina las dos mitades del frente —
+streaming toroidal + falda LOD regenerada al recentrar — en un vuelo por un mundo
+ilimitado: cada cuadro es terreno voxel nuevo en primer plano **con horizonte de
+colinas lejanas**, compuestos por el depth de `Scene3d`. Valida que las piezas componen
+(la falda sigue a la ventana, oclusión correcta voxel↔malla). Verificado por PNG
+`/tmp/m6_world_*.png` (mirados: 6 ventanas distintas, todas con horizonte, sin huecos).
+
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más
 acotado).
