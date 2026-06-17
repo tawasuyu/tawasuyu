@@ -36,7 +36,6 @@ mod dimensions;
 mod mesh;
 mod renderer;
 mod scene;
-mod terrain;
 mod voxel;
 mod voxel_renderer;
 
@@ -45,6 +44,5 @@ pub use dimensions::{Dimension, Multiverse};
 pub use mesh::{cube, Vertex3d};
 pub use renderer::Renderer3d;
 pub use scene::Scene3d;
-pub use terrain::terrain;
 pub use voxel::{DirtyBox, VoxelGrid};
 pub use voxel_renderer::{Atmosphere, Entity3d, VoxelRenderer};

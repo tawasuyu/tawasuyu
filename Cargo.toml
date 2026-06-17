@@ -215,6 +215,8 @@ members = [
     "02_ruway/llimphi/llimphi-hal",
     "02_ruway/llimphi/llimphi-raster",
     "02_ruway/llimphi/llimphi-3d",
+    "02_ruway/llimphi/llimphi-voxel",
+    "02_ruway/llimphi/llimphi-voxel-app",
     "02_ruway/llimphi/llimphi-layout",
     "02_ruway/llimphi/llimphi-text",
     "02_ruway/llimphi/llimphi-compositor",

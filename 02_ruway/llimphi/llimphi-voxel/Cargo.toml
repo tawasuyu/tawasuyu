@@ -1,0 +1,19 @@
+[package]
+name = "llimphi-voxel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-voxel — capa de dinámica voxel/juego (estilo Minecraft) sobre el motor 3D general llimphi-3d: world-gen procedural (terreno por ruido fractal) y la casa de bloques/biomas/streaming. Reusable por cualquier juego con orientación voxel. NO renderiza: delega en llimphi-3d (Scene3d + VoxelRenderer)."
+
+[dependencies]
+# El motor 3D general; esta capa aporta CONTENIDO/dinámica, no render.
+llimphi-3d = { path = "../llimphi-3d" }
+
+[dev-dependencies]
+# Volcado headless a PNG de los demos de mundo (mismo patrón que llimphi-3d).
+llimphi-hal = { path = "../llimphi-hal" }
+llimphi-raster = { path = "../llimphi-raster" }
+png = { workspace = true }
+pollster = { workspace = true }

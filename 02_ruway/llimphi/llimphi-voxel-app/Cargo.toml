@@ -1,0 +1,23 @@
+[package]
+name = "llimphi-voxel-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "App showcase del motor voxel 3D (llimphi-3d + llimphi-voxel): un mundo procedural que se orbita, con atmósfera y un monumento-malla flotante que prueba la convivencia voxel+triángulos. Arranca como demo; pensada para ganar personalidad (juego). Nombre provisional, rebrandeable."
+
+[[bin]]
+name = "llimphi-voxel-app"
+path = "src/main.rs"
+
+[dependencies]
+# Motor 3D general (escena, cámara, depth compartido, voxel + mallas).
+llimphi-3d = { path = "../llimphi-3d" }
+# Dinámica voxel/juego (world-gen).
+llimphi-voxel = { path = "../llimphi-voxel" }
+# Bucle Elm + ventana + re-exports (hal/raster/layout).
+llimphi-ui = { path = "../llimphi-ui" }
+# Render headless a PNG para el modo --shot (verificación sin pantalla).
+pollster = { workspace = true }
+png = { workspace = true }

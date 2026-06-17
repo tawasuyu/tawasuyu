@@ -13,8 +13,9 @@ use std::fs::File;
 use std::io::BufWriter;
 
 use llimphi_3d::glam::Vec3;
-use llimphi_3d::{terrain, Atmosphere, Camera3d, VoxelRenderer};
+use llimphi_3d::{Atmosphere, Camera3d, VoxelRenderer};
 use llimphi_hal::{wgpu, Hal};
+use llimphi_voxel::terrain;
 use llimphi_raster::peniko::Color;
 use llimphi_raster::{vello, Renderer};
 
