@@ -175,35 +175,16 @@ pub fn workspaces_view(
 ///   un puntito de acento abajo. Se distingue de un vistazo de los vacíos.
 /// - **vacío**: apagado, borde tenue, número atenuado.
 fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Msg> {
+    // Tres rellenos bien separados — robusto en cualquier theme (no depende de
+    // que el borde sea visible): activo = acento; ocupado = tono medio
+    // (hover/botón); vacío = el más apagado. El borde refuerza el ocupado.
     let (fill, fg, borde_w, borde_col) = if active {
         (theme.accent, theme.bg_panel, 1.0, theme.accent)
     } else if occupied {
-        (theme.bg_panel, theme.fg_text, 2.0, theme.accent)
+        (theme.bg_button_hover, theme.fg_text, 2.0, theme.accent)
     } else {
         (theme.bg_panel_alt, theme.fg_muted, 1.0, theme.border)
     };
-    // Puntito de ocupación: un cuadradito de acento centrado abajo. Visible sólo
-    // en los ocupados que NO están activos (el activo ya se ve por el relleno).
-    let punto = View::new(Style {
-        position: Position::Absolute,
-        inset: TaffyRect {
-            left: auto(),
-            right: auto(),
-            top: auto(),
-            bottom: length(2.0_f32),
-        },
-        size: Size { width: length(6.0_f32), height: length(3.0_f32) },
-        ..Default::default()
-    })
-    .fill(if occupied && !active { theme.accent } else { theme.bg_panel_alt })
-    .radius(1.5);
-    let numero = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .text(n.to_string(), 13.0, fg);
     View::new(Style {
         // Más grande para acertar el click cómodo (antes 22×20 = chico).
         size: Size {
@@ -224,7 +205,7 @@ fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Ms
         format!("Escritorio {n} · vacío")
     })
     .on_click(Msg::SwitchWorkspace(n))
-    .children(vec![numero, punto])
+    .text(n.to_string(), 13.0, fg)
 }
 
 /// El **botón de inicio**: chip con su label/ícono. Clic → menú de apps.
