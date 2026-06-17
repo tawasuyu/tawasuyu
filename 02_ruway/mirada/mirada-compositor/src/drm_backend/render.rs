@@ -667,19 +667,41 @@ impl DrmState {
                 a,
             ]
         };
-        for (i, z) in self.zones.iter().enumerate() {
-            let r = z.to_rect(wr);
-            let color = if Some(i) == self.drag_zone { fill(0.40) } else { fill(0.16) };
-            let mut buf = SolidColorBuffer::default();
-            buf.update((r.w, r.h), color);
+        // Estilo KDE: pintamos SÓLO la zona objetivo (la que está bajo el
+        // puntero) como una previsualización prominente de dónde va a aterrizar
+        // la ventana — relleno translúcido + un borde sólido grueso. Si el
+        // puntero no está sobre ninguna zona, no se pinta nada (la ventana cae
+        // normal donde se suelte). Las zonas que NO son objetivo no se dibujan
+        // (antes se pintaban todas tenues, lo que confundía).
+        let Some(i) = self.drag_zone else { return };
+        let Some(z) = self.zones.get(i) else { return };
+        let r = z.to_rect(wr);
+        let (lx, ly) = (r.x - rect.x, r.y - rect.y);
+        // Orden front-to-back: lo que se empuja PRIMERO queda encima. Empujamos
+        // el borde antes que el relleno para que el contorno quede prominente.
+        let bw = 4;
+        let bcol = fill(0.95);
+        let mut push_band = |x: i32, y: i32, w: i32, h: i32, into: &mut Vec<Frame<GlesRenderer>>| {
+            if w <= 0 || h <= 0 {
+                return;
+            }
+            let mut b = SolidColorBuffer::default();
+            b.update((w, h), bcol);
             into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                &buf,
-                (r.x - rect.x, r.y - rect.y),
-                1.0,
-                1.0,
-                Kind::Unspecified,
+                &b, (x, y), 1.0, 1.0, Kind::Unspecified,
             )));
-        }
+        };
+        // Borde sólido grueso (4 lados) — el contorno claro de la previsualización.
+        push_band(lx, ly, r.w, bw, into); // arriba
+        push_band(lx, ly + r.h - bw, r.w, bw, into); // abajo
+        push_band(lx, ly, bw, r.h, into); // izquierda
+        push_band(lx + r.w - bw, ly, bw, r.h, into); // derecha
+        // Relleno translúcido del acento (debajo del borde).
+        let mut buf = SolidColorBuffer::default();
+        buf.update((r.w, r.h), fill(0.32));
+        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &buf, (lx, ly), 1.0, 1.0, Kind::Unspecified,
+        )));
     }
 
     /// Emite el menú raíz en `rect` si esta salida es la dueña del menú.
