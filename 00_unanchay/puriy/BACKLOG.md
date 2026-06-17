@@ -695,11 +695,41 @@ en la esquina sup-izq (se queda clavado ahí y rota hacia abajo-derecha). Tests:
 > v1: ignora el eje Z de `transform-origin` (3D no soportado). Origen en `Px`
 > escala por zoom; keywords/`%` ya resueltos a `Pct` por el parser.
 
+### 7.1249 ✅ — caret v2: visible sobre el glifo (`paint_over`)
+
+El caret de `text_input_view` (Fase 7.1247) se pintaba con `paint_with`, **antes**
+que el texto hijo: a fin de línea quedaba visible pero **en medio del texto
+desaparecía detrás del glifo** (limitación v1 documentada). Ahora se pinta con
+`paint_over` — pasada vello FINAL del frame, después del texto base — así el caret
+queda ENCIMA del glifo en cualquier posición del cursor.
+
+- **widget (`llimphi-widget-text-input`)**: el closure del caret pasa de
+  `inner.paint_with(...)` a `inner.paint_over(...)`. Misma firma `(scene, ts, rect)`
+  y misma geometría; sólo cambia el timing de la pasada.
+- **verificación headless (`pantallazo_puriy`)**: el ejemplo ahora llama
+  `paint_over(&mut scene, …)` después de `paint(…)` (anexa primitivas a la misma
+  `scene`, no la resetea) — espejo del orden del eventloop (`paint` → `paint_over`),
+  necesario para que el caret aparezca en el render de una sola pasada.
+
+**Tradeoff de `paint_over`**: usa el rect absoluto del nodo y **no** compone
+`transform` de ancestros ni el `clip` del contenedor (irrelevante para un input no
+transformado, el caso normal — igual que el pintor GPU). Verificado por pantallazo
+headless: input focado con `set_text("Sergio")` + cursor a col 3 (`Ser|gio`) muestra
+la barra del caret nítida entre 'r' y 'g'. Test:
+`caret_se_registra_como_over_painter_solo_focado` (monta la vista y asserta
+`has_over_painter` ⇔ `focused`).
+
+> Caret v3 pendiente: parpadeo (blink, requiere timer/`spawn_periodic`) + scroll
+> horizontal cuando el texto desborda la caja.
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).
-- **caret v2** — parpadeo (blink) + scroll horizontal cuando el texto desborda +
-  caret sobre el glifo en mitad del texto (usar `paint_over` en vez de `paint_with`).
+- **caret v3** — parpadeo (blink) + scroll horizontal cuando el texto desborda la
+  caja (lo que quedó de caret v2; el caret-sobre-glifo ya cerró en 7.1249).
 - **Familia tablas** — `border-collapse`/`border-spacing`/`caption-side`/
-  `empty-cells`/`table-layout` (computan; verificar/cablear render).
+  `empty-cells`/`table-layout` parsean y computan, pero **no hay formatting context
+  de tabla** (`table`/`tr`/`td` se tratan como bloques en `mutate.rs`): cablear
+  render de verdad implica un motor de table-layout, no una fase quirúrgica — es
+  bifurcación de diseño, decidir antes de abrir.

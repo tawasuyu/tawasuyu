@@ -138,8 +138,9 @@ impl TextInputState {
 }
 
 /// Compone el input box: borde de 1 px (rect padre coloreado), relleno
-/// interno, texto o placeholder, caret simulado al final si está focado.
-/// Click sobre el box emite `on_focus` (típicamente `Msg::Focus(Field)`).
+/// interno, texto o placeholder, y el caret (cursor de inserción) sobre el
+/// texto si está focado (caret v2: `paint_over`, visible también en medio del
+/// texto). Click sobre el box emite `on_focus` (típicamente `Msg::Focus(Field)`).
 pub fn text_input_view<Msg: Clone + 'static>(
     state: &TextInputState,
     placeholder: &str,
@@ -210,12 +211,16 @@ pub fn text_input_view<Msg: Clone + 'static>(
     // Caret real (cursor de inserción) cuando el input está focado: una barra
     // vertical fina a la derecha del prefijo medido. Se mide el ancho del
     // `caret_prefix` con el MISMO tamaño/fuente que el texto (13 px, sans) y se
-    // ubica tras el padding-left (10 px). Pinta antes que el texto hijo, así que
-    // a fin de línea (el caso típico al tipear) queda totalmente visible; en
-    // medio del texto queda detrás del glifo (limitación v1).
+    // ubica tras el padding-left (10 px). Caret v2 (Fase 7.1249): se pinta con
+    // `paint_over` (pasada vello FINAL, después del texto hijo) en vez de
+    // `paint_with`, así el caret queda ENCIMA del glifo cuando el cursor está
+    // en medio del texto — antes (v1) quedaba detrás y desaparecía. Tradeoff de
+    // `paint_over`: usa el rect absoluto y no compone `transform` de ancestros
+    // ni el clip del contenedor (irrelevante para un input no transformado, el
+    // caso normal). Sin parpadeo ni scroll horizontal todavía (caret v3).
     if focused {
         let caret_color = palette.caret;
-        inner = inner.paint_with(move |scene, ts, rect| {
+        inner = inner.paint_over(move |scene, ts, rect| {
             use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KRect};
             use llimphi_ui::llimphi_raster::peniko::Fill;
             use llimphi_ui::llimphi_text::{measure, TextBlock};
@@ -286,6 +291,32 @@ mod tests {
         assert_eq!(pal.caret, pal.fg_text);
         assert_eq!(pal.caret, t.fg_text);
         assert_eq!(TextInputPalette::default().caret, TextInputPalette::default().fg_text);
+    }
+
+    #[test]
+    fn caret_se_registra_como_over_painter_solo_focado() {
+        // Caret v2 (Fase 7.1249): el caret se pinta con `paint_over` (pasada
+        // FINAL sobre el glifo). Verificamos el wiring montando la vista: con
+        // foco hay un over-painter registrado; sin foco no hay ninguno.
+        use llimphi_ui::llimphi_layout::LayoutTree;
+        use llimphi_ui::{has_over_painter, mount};
+        let mut st = TextInputState::new();
+        st.set_text("hola");
+        let pal = TextInputPalette::default();
+
+        let mut lt = LayoutTree::new();
+        let focado = mount(&mut lt, text_input_view(&st, "ph", true, &pal, ()));
+        assert!(
+            has_over_painter(&focado),
+            "input focado debe registrar el caret como over-painter"
+        );
+
+        let mut lt2 = LayoutTree::new();
+        let sin_foco = mount(&mut lt2, text_input_view(&st, "ph", false, &pal, ()));
+        assert!(
+            !has_over_painter(&sin_foco),
+            "input sin foco no pinta caret"
+        );
     }
 
     #[test]

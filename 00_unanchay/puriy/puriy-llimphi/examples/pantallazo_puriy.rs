@@ -17,7 +17,7 @@
 use std::fs::File;
 use std::io::BufWriter;
 
-use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
+use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint, paint_over};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_layout::taffy;
 use llimphi_ui::llimphi_layout::LayoutTree;
@@ -155,6 +155,12 @@ fn main() {
     };
     let mut scene = vello::Scene::new();
     paint(&mut scene, &mounted, &computed, &mut ts, None, None);
+    // Pasada vello "over" (caret v2, Fase 7.1249): nodos con `paint_over`
+    // (el caret del text_input_view) pintan DESPUÉS del texto base, así el
+    // caret queda encima del glifo. En el eventloop esto es una pasada final
+    // tras el pase GPU; aquí, render de una sola pasada, basta con anexarla a
+    // la misma `scene` después de `paint` (no la resetea, sólo agrega).
+    paint_over(&mut scene, &mounted, &computed, &mut ts);
 
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
