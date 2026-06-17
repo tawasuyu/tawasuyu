@@ -115,10 +115,25 @@ where
     let track_width = palette.track_width.max(1.0);
 
     // Drag: dx_pixels → dv_value. Escala FIJA (no depende del valor actual).
+    //
+    // Los deltas que llegan son **por evento** (no acumulados desde el press), y
+    // durante un drag el runtime reusa ESTE handler (la vista queda congelada)
+    // → si pasáramos el delta crudo, el caller (que hace `valor_base + dv`)
+    // sumaría sólo el último evento al valor de inicio y el slider quedaba «casi
+    // estático». Por eso ACUMULAMOS los deltas dentro de la instancia del
+    // handler y pasamos el total desde el press: `base + total` = posición real.
+    // (Si en cambio la vista se repinta por evento, cada handler nuevo arranca
+    // el acumulador en 0 y el `base` ya viene fresco → también correcto.)
     let span = max - min;
+    let acumulado = std::sync::Arc::new(std::sync::Mutex::new(0.0_f32));
     let handler = move |phase: DragPhase, dx: f32, _dy: f32| -> Option<Msg> {
-        let dv = dx * span / track_width;
-        on_change(phase, dv)
+        let mut acc = acumulado.lock().unwrap_or_else(|e| e.into_inner());
+        *acc += dx * span / track_width;
+        let total = *acc;
+        if matches!(phase, DragPhase::End) {
+            *acc = 0.0; // listo para el próximo drag
+        }
+        on_change(phase, total)
     };
 
     // Bloque del label.
