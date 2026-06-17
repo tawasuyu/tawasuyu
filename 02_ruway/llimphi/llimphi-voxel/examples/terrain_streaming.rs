@@ -203,6 +203,24 @@ fn main() {
     assert!(mb > 200, "el pilar debería verse antes ({mb} px)");
     assert!(ma * 100 >= mb * 90, "el pilar se perdió al volver ({mb}→{ma} px)");
     eprintln!("PERSISTENCIA OK — la edición sobrevivió el regen del streaming.");
+
+    // --- CAS a disco: guardar el blob de ediciones en un archivo nombrado por su
+    // BLAKE3 y recargarlo en un mundo FRESCO (simula reiniciar el programa).
+    let blob = s.export_edits();
+    let addr = blake3::hash(&blob).to_hex();
+    let dir = std::path::Path::new("/tmp/m6_cas");
+    std::fs::create_dir_all(dir).ok();
+    let path = dir.join(format!("{addr}.edits"));
+    std::fs::write(&path, &blob).expect("escribir blob");
+
+    let mut loaded = WorldStream::new(dim, seed, 0, 0, llimphi_3d::VOXEL_BRICK);
+    let from_disk = std::fs::read(&path).expect("leer blob");
+    let n = loaded.import_edits(&from_disk).expect("blob válido");
+    let cas = magenta(&render_grid(loaded.grid()));
+    encode_png(&render_grid(loaded.grid()), W, H, "/tmp/m6_persist_cas.png");
+    eprintln!("CAS A DISCO: {n} ediciones desde {} ({} bytes), torre = {cas} px", path.display(), blob.len());
+    assert!(cas * 100 >= mb * 90, "la torre no se restauró desde disco ({mb}→{cas} px)");
+    eprintln!("CAS OK — las ediciones se restauraron desde un archivo direccionado por BLAKE3.");
 }
 
 /// Cámara de la ventana: posada sobre los **picos** del terreno (muestreo de

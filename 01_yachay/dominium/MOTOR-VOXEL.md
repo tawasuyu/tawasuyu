@@ -485,8 +485,19 @@ paso grueso (p.ej. cada 6 voxels) sobre un anillo alrededor de la ventana (deja 
 `terrain_lod` rinde dos PNG (sin LOD = terreno cortado + niebla; con LOD = horizonte con
 cordilleras), mirados → `/tmp/m6_lod_{off,on}.png`. MVP: un solo nivel (no pirámide),
 regenerado por ventana; pendiente fino = niebla del horizonte algo lavada (capeada 0.9)
-y LOD multi-nivel para mundos enormes. Queda de M6: **wiring en la app viva** (coords
-del jugador/HUD bajo la ventana móvil — necesita pantalla) y CAS a disco.
+y LOD multi-nivel para mundos enormes.
+
+**Persistencia CAS a disco (HECHO, 2026-06-17):** las ediciones ahora sobreviven el
+reinicio del programa, direccionadas por contenido. `WorldStream::export_edits()`
+serializa el mapa de ediciones a un blob **postcard** (canónico: ordenado → mismas
+ediciones = mismo blob = misma dirección **BLAKE3**, dedup/integridad CAS) e
+`import_edits(&[u8])` lo recarga y re-aplica. Verificado: test CPU (round-trip + dos
+mundos con las mismas ediciones en distinto orden dan la misma dirección BLAKE3; blob
+inválido → `None` sin romper) + demo `terrain_streaming` (525 ediciones → archivo
+`/tmp/m6_cas/<blake3>.edits` de 3677 B → mundo fresco lo recarga → torre restaurada,
+1261 px idénticos). Queda de M6: **wiring en la app viva** (coords del jugador/HUD bajo
+la ventana móvil — necesita pantalla) y **LOD multi-nivel** para mundos gigantes — el
+resto del §7 está cubierto.
 
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más

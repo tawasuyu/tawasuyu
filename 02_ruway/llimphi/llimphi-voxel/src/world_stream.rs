@@ -98,6 +98,31 @@ impl WorldStream {
         self.edits.len()
     }
 
+    /// Serializa las ediciones a un blob **postcard** (lista de `([wx,wy,wz],
+    /// RGBA)`), apto para guardar en la CAS de tawasuyu direccionado por su
+    /// **BLAKE3** (`mundo → BLAKE3(blob)`) y recargar entre ejecuciones. Es la
+    /// **persistencia a disco** del estado in-memory de [`Self::edit`].
+    pub fn export_edits(&self) -> Vec<u8> {
+        let mut v: Vec<([i32; 3], [u8; 4])> = self.edits.iter().map(|(&k, &val)| (k, val)).collect();
+        // Orden canónico (el HashMap no es determinista) → mismas ediciones dan el
+        // mismo blob y, por ende, la misma dirección BLAKE3 (dedup/integridad CAS).
+        v.sort_unstable_by_key(|(k, _)| *k);
+        postcard::to_allocvec(&v).expect("postcard ediciones")
+    }
+
+    /// Carga ediciones desde un blob de [`Self::export_edits`], las fusiona en el
+    /// mapa persistente y las **re-aplica** sobre la ventana actual. Devuelve la
+    /// cantidad cargada, o `None` si el blob no decodifica.
+    pub fn import_edits(&mut self, bytes: &[u8]) -> Option<usize> {
+        let v: Vec<([i32; 3], [u8; 4])> = postcard::from_bytes(bytes).ok()?;
+        let n = v.len();
+        for (k, val) in v {
+            self.edits.insert(k, val);
+        }
+        self.reapply_edits();
+        Some(n)
+    }
+
     /// Aplica un voxel `v` (RGBA, `a=0`=aire) al grid si su coordenada de mundo
     /// cae en la ventana actual. No-op si está afuera (ya quedó en `edits`).
     fn apply_voxel(&mut self, wx: i32, wy: i32, wz: i32, v: [u8; 4]) {
@@ -302,5 +327,41 @@ mod tests {
         s.follow(3000, -3000);
         s.follow(0, 0);
         assert!(!local_solid(&s), "sigue cavado tras volver");
+    }
+
+    /// CAS a disco (simulada en memoria): exportar las ediciones de un mundo y
+    /// re-importarlas en otro recién creado las restaura; el blob es canónico
+    /// (misma dirección BLAKE3) sin importar el orden de edición.
+    #[test]
+    fn ediciones_round_trip_por_blob() {
+        let dim = [48, 40, 48];
+        let seed = 99;
+
+        // Mundo A: unas cuantas ediciones (en distinto orden que B).
+        let mut a = WorldStream::new(dim, seed, 0, 0, 8);
+        a.edit(0, 30, 0, Some([10, 20, 30]));
+        a.edit(-5, 12, 7, None);
+        a.edit(3, 25, -2, Some([200, 100, 50]));
+        let blob_a = a.export_edits();
+
+        // Mundo B: las MISMAS ediciones en otro orden → mismo blob canónico.
+        let mut b = WorldStream::new(dim, seed, 0, 0, 8);
+        b.edit(3, 25, -2, Some([200, 100, 50]));
+        b.edit(0, 30, 0, Some([10, 20, 30]));
+        b.edit(-5, 12, 7, None);
+        assert_eq!(a.export_edits(), b.export_edits(), "blob canónico (orden-indep.)");
+        assert_eq!(blake3::hash(&blob_a), blake3::hash(&b.export_edits()), "misma dirección CAS");
+
+        // Mundo C: vacío → importa el blob de A → recupera las 3 ediciones.
+        let mut c = WorldStream::new(dim, seed, 0, 0, 8);
+        assert_eq!(c.edit_count(), 0);
+        assert_eq!(c.import_edits(&blob_a), Some(3));
+        assert_eq!(c.edit_count(), 3);
+        // Y el contenido coincide con A en la ventana (la edición magenta arriba).
+        let (lx, lz) = c.world_to_local(0, 0).unwrap();
+        assert_eq!(c.grid().get(lx, 30, lz), Some([10, 20, 30, 255]), "edición restaurada");
+
+        // Blob inválido → None, sin romper.
+        assert_eq!(c.import_edits(&[0xff, 0xff, 0xff]), None);
     }
 }

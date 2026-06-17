@@ -12,6 +12,9 @@ description = "llimphi-voxel — capa de dinámica voxel/juego (estilo Minecraft
 llimphi-3d = { path = "../llimphi-3d" }
 # Puente al formato MagicaVoxel (.vox): importar sets/personajes a VoxelGrid.
 foreign-vox = { path = "../../../shared/foreign-vox" }
+# (de)serialización de las ediciones persistidas para la CAS (mundo→postcard).
+serde = { workspace = true }
+postcard = { workspace = true }
 
 [dev-dependencies]
 # Volcado headless a PNG de los demos de mundo (mismo patrón que llimphi-3d).
@@ -19,3 +22,5 @@ llimphi-hal = { path = "../llimphi-hal" }
 llimphi-raster = { path = "../llimphi-raster" }
 png = { workspace = true }
 pollster = { workspace = true }
+# Direccionamiento por contenido (BLAKE3) de las ediciones en el demo de CAS.
+blake3 = { workspace = true }
