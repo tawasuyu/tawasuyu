@@ -688,9 +688,10 @@ impl DrmState {
         push_band(lx, ly + r.h - bw, r.w, bw, into); // abajo
         push_band(lx, ly, bw, r.h, into); // izquierda
         push_band(lx + r.w - bw, ly, bw, r.h, into); // derecha
-        // Relleno translúcido del acento (debajo del borde) — más transparente.
+        // Relleno translúcido del acento (debajo del borde) — bien transparente,
+        // sólo un tinte; el borde es lo que marca la zona.
         let mut buf = SolidColorBuffer::default();
-        buf.update((r.w, r.h), fill(0.18));
+        buf.update((r.w, r.h), fill(0.09));
         into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
             &buf, (lx, ly), 1.0, 1.0, Kind::Unspecified,
         )));
