@@ -577,11 +577,26 @@ del botón (genérico al elemento). Test: `appearance_none_llega_al_submit_fase_
 > autor* al text-input (`apply_decorations` en `render_input`), independiente de
 > `appearance` — fase aparte si se pide.
 
+### 7.1243 ✅ — `border`/`border-radius`/`box-shadow`/`outline` del autor en text-input
+
+`render_input` ahora pasa la caja del `text_input_view` por `apply_decorations`,
+igual que botón (7.1242) y select (7.1241): antes el text-input ignoraba el
+`border`, `border-radius`, `box-shadow` y `outline` del autor (sólo pintaba fill
+base + radius 3px + un focus-ring de cortesía). Como `paint_with` guarda **un solo
+painter**, el ring de cortesía se movió a una **shell externa** que envuelve la
+caja decorada (lleva además el `margin` del flow) — así no pisa el painter de las
+decoraciones. El ring de cortesía sólo aparece cuando el input está focado **y** el
+autor NO proveyó `outline` (si lo proveyó, lo dibuja `apply_decorations`).
+Verificado por pantallazo headless: input con `border:2px solid` + `border-radius`
++ `box-shadow` los pinta los tres. (El centro oscuro de la caja es el palette
+propio del `text_input_view`, ajeno a esta fase.)
+
 ### Próximos huecos del mismo bloque (a atacar en orden)
 
-- **border del autor en text-input** — `render_input` no llama
-  `apply_decorations`, así que `border`/`border-radius`/`box-shadow` del autor no
-  se pintan sobre `<input type=text>`/`<textarea>`. Cablear igual que botón/select.
+- **fill del autor dentro del `text_input_view`** — el widget pinta su propio
+  fondo (palette oscuro) por encima del `background` del autor; cablear
+  `b.background` → `TextInputPalette.background` para que `input { background:X }`
+  tiña el centro, no sólo el borde.
 - **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
   los otros sitios de imagen (reusar `with_image_rendering` en `decorations.rs`
   y `canvas.rs`).

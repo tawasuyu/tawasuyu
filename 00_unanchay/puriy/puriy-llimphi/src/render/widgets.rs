@@ -71,12 +71,19 @@ pub(crate) fn render_input(
     } else {
         base_bg
     };
-    let outline = b
-        .outline
-        .color
-        .filter(|_| focused && b.outline.style_active && b.outline.width > 0.0);
+    // ¿El autor proveyó un `outline` activo en `:focus`? Si sí, lo dibuja
+    // `apply_decorations`; si no, le damos el ring de cortesía azul.
+    let author_outline = focused
+        && b.outline.style_active
+        && b.outline.width > 0.0
+        && b.outline.color.is_some();
 
-    let mut wrapper = View::new(Style {
+    // Caja interna: fill base + radius default + el `text_input_view`. El
+    // `border` / `border-radius` / `box-shadow` / `outline` del autor los pinta
+    // `apply_decorations` (Fase 7.1243) — antes el text-input los ignoraba. El
+    // `.radius(3.0)` baseline lo pisa apply_decorations si el autor fijó
+    // `border-radius`. El margin del flow va en la shell externa.
+    let inner = View::new(Style {
         size: Size {
             width: css_width.unwrap_or_else(|| length(220.0_f32 * zoom)),
             height: length(height),
@@ -87,6 +94,19 @@ pub(crate) fn render_input(
             top: length(4.0_f32 * zoom),
             bottom: length(4.0_f32 * zoom),
         },
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(3.0)
+    .on_click(Msg::FocusInput(idx))
+    .children(vec![input]);
+    let inner = apply_decorations(inner, b, zoom);
+
+    // Shell externa: lleva el margin del flow y, cuando el input está focado y
+    // el autor NO puso outline, el ring de cortesía azul (feedback de focus
+    // gratis). Va aparte de `apply_decorations` porque `paint_with` guarda un
+    // solo painter — la shell evita pisar el painter de las decoraciones.
+    let mut outer = View::new(Style {
         margin: Rect {
             left: margin_left_lpa(b, zoom),
             right: margin_right_lpa(b, zoom, 0.0),
@@ -94,14 +114,9 @@ pub(crate) fn render_input(
             bottom: length(b.margin.bottom * zoom),
         },
         ..Default::default()
-    })
-    .fill(bg)
-    .radius(3.0)
-    .on_click(Msg::FocusInput(idx));
-    // Ring de focus visible: si el autor no proveyó outline, lo damos
-    // gratis para feedback. Stroke azul accent estándar.
-    if focused && outline.is_none() {
-        wrapper = wrapper.paint_with(|scene, _ts, rect| {
+    });
+    if focused && !author_outline {
+        outer = outer.paint_with(|scene, _ts, rect| {
             let stroke = Stroke::new(2.0);
             let half = stroke.width * 0.5;
             let r = RoundedRect::new(
@@ -120,7 +135,7 @@ pub(crate) fn render_input(
             );
         });
     }
-    wrapper.children(vec![input])
+    outer.children(vec![inner])
 }
 
 /// Color del glifo de un checkbox/radio según `accent-color` (Fase 7.1238).
