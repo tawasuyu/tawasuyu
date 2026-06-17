@@ -4,7 +4,9 @@
 //! sólo acá, sin reescribir el bucle.
 
 use llimphi_3d::glam::{Mat4, Vec3};
-use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, VoxelGrid, VoxelRenderer};
+use llimphi_3d::{
+    Atmosphere, Camera3d, Hud, HudQuad, Renderer3d, Scene3d, VoxelGrid, VoxelRenderer,
+};
 use llimphi_ui::llimphi_hal::wgpu;
 use llimphi_voxel::{Critter, Player};
 
@@ -36,6 +38,8 @@ pub struct World {
     /// Bichos que deambulan el terreno (misma física que el jugador). Se
     /// dibujan como cajas en el pase de ray-march (`VoxelRenderer::entities`).
     critters: Vec<Critter>,
+    /// Overlay screen-space para la mira de primera persona.
+    hud: Hud,
 }
 
 impl World {
@@ -83,6 +87,8 @@ impl World {
             }
         }
 
+        let hud = Hud::new(device, FMT);
+
         let mut world = Self {
             scene: Scene3d::new(),
             voxel,
@@ -91,6 +97,7 @@ impl World {
             dim,
             player,
             critters,
+            hud,
         };
         // Calentar la manada para que arranque desparramada (no en grilla).
         for _ in 0..150 {
@@ -232,5 +239,19 @@ impl World {
             Some(&self.voxel),
             &[&self.monument],
         );
+    }
+
+    /// Pinta la mira de primera persona encima de la escena (pase screen-space).
+    /// Llamar *después* de [`render`](Self::render), en modo explorar.
+    pub fn draw_crosshair(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        viewport: (u32, u32),
+    ) {
+        let quads = HudQuad::crosshair(viewport, 9.0, 2.0, [1.0, 1.0, 1.0, 0.85]);
+        self.hud.render(device, queue, encoder, target, viewport, &quads);
     }
 }

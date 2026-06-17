@@ -7,7 +7,6 @@
 //! Determinista (sin `rand`): cada bicho lleva su propia semilla y avanza un
 //! LCG, así un mundo se reproduce igual (y los tests/PNG son estables).
 
-use llimphi_3d::glam::Vec3;
 use llimphi_3d::{Entity3d, VoxelGrid};
 
 use crate::{forward_h, Player};
@@ -105,6 +104,7 @@ impl Critter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use llimphi_3d::glam::Vec3;
 
     /// Grid 32³ con piso sólido en `y=0`.
     fn grid_con_piso() -> VoxelGrid {

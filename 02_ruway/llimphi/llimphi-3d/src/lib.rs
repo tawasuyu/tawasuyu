@@ -33,6 +33,7 @@ pub use wgpu;
 
 mod camera;
 mod dimensions;
+mod hud;
 mod mesh;
 mod renderer;
 mod scene;
@@ -41,6 +42,7 @@ mod voxel_renderer;
 
 pub use camera::Camera3d;
 pub use dimensions::{Dimension, Multiverse};
+pub use hud::{Hud, HudQuad};
 pub use mesh::{cube, Vertex3d};
 pub use renderer::Renderer3d;
 pub use scene::Scene3d;

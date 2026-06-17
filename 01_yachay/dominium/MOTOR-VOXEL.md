@@ -475,10 +475,9 @@ juego voxel. La app showcase suma un **modo "explorar"** (Tab) que alterna la
 terreno (WASD + Espacio para saltar), con romper/construir (`b`/`g`) por raycast
 desde el ojo del jugador. Verificado: 3 tests de física (caída→suelo, muro frena,
 salto sólo desde el piso) + PNG `voxel_app_fps.png` (parado en la orilla mirando
-el continente, por el camino real de `step_player`). Pendiente de polish: una
-**mira/HUD** en primera persona necesita un pase screen-space *después* del
-ray-march (el crosshair vello queda tapado por el canvas GPU full-screen, y el
-`view_overlay` modal congelaría el mouse-look) — slice aparte de HUD GPU.
+el continente, por el camino real de `step_player`). La **mira/HUD** se cerró aparte (ver abajo): un pase screen-space en GPU
+*después* del ray-march, porque el crosshair vello queda tapado por el canvas GPU
+full-screen y el `view_overlay` modal congelaría el mouse-look.
 
 **Manada viva — M4 cerrado en la app (2026-06-17).** El motor ya tenía la *capa*
 de entidades (`Entity3d`: cajas analíticas ray-marcheadas en el mismo pase, hasta
@@ -493,8 +492,19 @@ campo `speed` (el jugador anda rápido, el bicho pasta lento). La app suelta una
 3 tests de `Critter` (deambula sin hundirse, rebota y queda en el corral, dos
 semillas divergen) + PNG `voxel_app_fps.png` (una "oveja" voxel parada en la
 orilla, encuadrada por `World::nearest_critter`). Con esto **M0–M5 + M4
-(entidades con conducta) están cerrados**; queda sólo el tramo caro de M6
-(streaming/LOD del horizonte) y el HUD GPU.
+(entidades con conducta) están cerrados**.
+
+**HUD / mira en GPU (2026-06-17).** Nuevo primitivo de motor `llimphi_3d::Hud`:
+un pase **screen-space** tonto (rectángulos de color con alpha en NDC, sin
+texturas/bind-groups/depth) que se pinta *después* del 3D, en la misma closure
+`gpu_paint_with` — la única forma de poner un overlay **encima** del canvas GPU
+full-screen (el vello del árbol queda debajo, y el `view_overlay` modal mataría
+el mouse-look). `HudQuad::crosshair` arma la mira centrada; el modo explorar la
+dibuja sobre la escena. Verificado: la cruz blanca aparece al centro en
+`voxel_app_fps.png`. Reusable para barras/marcos/HUD de cualquier app 3D.
+
+Queda sólo el tramo caro de M6 (streaming/LOD del horizonte) — y, si se quiere,
+texto/íconos en el HUD (hoy son rectángulos planos).
 
 ### 11.4 Esfuerzo vs el kernel de wawa
 
