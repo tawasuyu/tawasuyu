@@ -20,7 +20,7 @@ use llimphi_3d::{CamKey, Camera3d, CameraTrack, Hud, HudQuad, Renderer3d};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
-use llimphi_voxel::{Actor, Clip};
+use llimphi_voxel::{Actor, ActorKey, ActorScript, Clip, Sequence, Shot};
 
 use crate::world::{World, FMT};
 use crate::{DIM_XZ, SEED};
@@ -29,8 +29,6 @@ use crate::{DIM_XZ, SEED};
 const W: u32 = 960;
 const H: u32 = 540;
 const FPS: u32 = 30;
-/// Duración en segundos (→ `FPS·SECS` cuadros).
-const SECS: f32 = 4.0;
 /// Carpeta de cuadros y salida del video.
 const FRAME_DIR: &str = "/tmp/voxel_film";
 const OUT: &str = "/tmp/voxel_film.mkv";
@@ -42,55 +40,35 @@ const CAST: [([f32; 3], [f32; 3], [f32; 3]); 3] = [
     ([0.92, 0.78, 0.62], [0.92, 0.80, 0.30], [0.26, 0.22, 0.20]), // remera amarilla
 ];
 
-/// Filma la escena y escribe el video. Imprime el progreso por stderr.
+/// Filma el guion ([`screenplay`]) y escribe el video. Reproduce la [`Sequence`]
+/// cuadro a cuadro (determinista): cada actor se posa según su `ActorScript`
+/// (con cross-fade de clips), la cámara sale de los planos con cortes duros.
 pub fn film() {
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
     let mut world = World::build(&hal.device, &hal.queue, DIM_XZ, SEED);
+    world.show_monument(false); // película de personajes: sin el cubo flotante
 
-    // --- Reparto: tres figuras en fila, caminando a lo largo de +X sobre el
-    // relieve. Las posiciones de grilla las posa `World::ground_at` por frame.
-    let walk_speed = 7.0_f32; // voxels/seg de avance
-    // Busca un tramo de **tierra firme** (sobre el nivel del mar) para que no
-    // caminen sobre el agua: el casting elige dónde rodar.
-    let (gx0, lanes) = find_land_strip(&world, walk_speed * SECS);
-    let gx0 = gx0 as f32;
-    let mut cast: Vec<Actor> = lanes
-        .iter()
-        .zip(CAST)
-        .map(|(&gz, (skin, shirt, pants))| {
-            let pos = world.ground_at(gx0 as u32, gz);
-            let mut a = Actor::new(pos, std::f32::consts::FRAC_PI_2).with_colors(skin, shirt, pants); // mira a +X
-            a.set_clip(Clip::Walk);
-            a
-        })
-        .collect();
+    let (seq, mut cast) = screenplay(&world);
     // Un `Renderer3d` por actor (su malla se re-sube cada frame).
     let mut actor_r: Vec<Renderer3d> = cast.iter().map(|_| Renderer3d::new(&hal.device, FMT)).collect();
 
-    // --- Cámara guionada: encuadra el centro del reparto a media altura del
-    // cuerpo, con una grúa que baja y entra y luego un travelling lateral.
-    let focus = world.ground_at((gx0 as u32) + 8, lanes[1]) + Vec3::new(6.0, 1.1, 0.0);
-    let track = CameraTrack::new(vec![
-        CamKey::look(0.0, focus + Vec3::new(-26.0, 16.0, -30.0), focus, 50.0),
-        CamKey::look(2.0, focus + Vec3::new(-10.0, 5.0, -18.0), focus, 42.0),
-        CamKey::look(SECS, focus + Vec3::new(16.0, 4.0, -14.0), focus, 42.0),
-    ]);
-
-    // --- Textura intermedia reusada por todos los cuadros.
     let inter = make_target(&hal);
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
 
     prepare_dir();
-    let frames = (FPS as f32 * SECS) as u32;
+    let frames = seq.frames(FPS);
     let dt = 1.0 / FPS as f32;
     for f in 0..frames {
         let t = f as f32 / FPS as f32;
-        let gx = gx0 + walk_speed * t;
 
-        // Actores: avanzan en grilla, se posan sobre el suelo, caminan.
-        for (a, &gz) in cast.iter_mut().zip(lanes.iter()) {
-            a.pos = world.ground_at(gx as u32, gz);
+        // Cada actor obedece su guion: posición sobre el relieve, rumbo y clip
+        // (el cambio de clip dispara el cross-fade interno del `Actor`).
+        for (a, script) in cast.iter_mut().zip(&seq.actors) {
+            let s = script.sample(t);
+            a.pos = world.ground_at(s.gx as u32, s.gz as u32);
+            a.facing = s.facing;
+            a.set_clip(s.clip);
             a.advance(dt);
         }
         for (a, r) in cast.iter().zip(actor_r.iter_mut()) {
@@ -101,7 +79,7 @@ pub fn film() {
 
         world.tick(dt); // la manada de fondo deambula
         world.animate(t * 0.5); // el monumento gira
-        let camera = track.sample(t);
+        let camera = seq.camera(t);
 
         let refs: Vec<&Renderer3d> = actor_r.iter().collect();
         render_frame(&hal, &mut renderer, &mut world, &camera, &refs, &inter, &inter_view);
@@ -120,6 +98,60 @@ pub fn film() {
              podés muxear a mano: ffmpeg -framerate {FPS} -i {pattern} -c:v libsvtav1 {OUT}"
         ),
     }
+}
+
+/// El **guion** de la película (la "dirección", editable): tres actores entran
+/// caminando por un llano, se detienen en fila, se giran hacia la cámara y cada
+/// uno hace un gesto distinto (saludar / festejar / señalar). La cámara tiene dos
+/// planos con un **corte duro**: un establishing que entra durante la caminata, y
+/// un plano corto que empuja sobre el trío mientras gesticulan. Devuelve la
+/// [`Sequence`] (data) + los [`Actor`]es con su color (estado visual).
+fn screenplay(world: &World) -> (Sequence, Vec<Actor>) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    let span = 16.0_f32;
+    let (gx0, lanes) = find_flat_strip(world, span);
+    let gx0 = gx0 as f32;
+    let gx_start = gx0 + 3.0;
+    let gx_stop = gx0 + span - 3.0;
+    let (t_walk, t_turn, dur) = (2.6_f32, 3.0_f32, 5.6_f32);
+    let emotes = [Clip::Wave, Clip::Cheer, Clip::Point];
+
+    // Estado visual (color) + guion. Trío junto: carriles Z apretados (±2.5)
+    // alrededor del centro de la franja, para que entren los tres sin que el más
+    // cercano se coma el lente.
+    let center_z = lanes[1] as f32;
+    let offsets = [-2.5_f32, 0.0, 2.5];
+    let mut actors = Vec::with_capacity(3);
+    let mut scripts = Vec::with_capacity(3);
+    for ((&off, (skin, shirt, pants)), emote) in offsets.iter().zip(CAST).zip(emotes) {
+        let gzf = center_z + off;
+        let pos = world.ground_at(gx_start as u32, gzf as u32);
+        actors.push(Actor::new(pos, FRAC_PI_2).with_colors(skin, shirt, pants));
+        scripts.push(ActorScript::new(vec![
+            ActorKey::at(0.0, gx_start, gzf),                          // arranca a la izquierda
+            ActorKey::at(t_walk, gx_stop, gzf).facing(FRAC_PI_2),      // camina hasta la marca (mira +X)
+            ActorKey::at(t_turn, gx_stop, gzf).play(emote).facing(PI), // gira a cámara y gesticula
+            ActorKey::at(dur, gx_stop, gzf).play(emote).facing(PI),
+        ]));
+    }
+
+    // Dos focos: el plano 1 mira el punto medio de la caminata; el 2, la marca de
+    // llegada donde gesticulan. Cámara cerca (los actores grandes, sin que el
+    // relieve los oculte), a la altura del pecho.
+    let focus_walk = world.ground_at(((gx_start + gx_stop) * 0.5) as u32, lanes[1]) + Vec3::new(0.0, 1.0, 0.0);
+    let focus_emote = world.ground_at(gx_stop as u32, lanes[1]) + Vec3::new(0.0, 1.0, 0.0);
+    let cut = 2.8_f32;
+    let shot1 = CameraTrack::new(vec![
+        CamKey::look(0.0, focus_walk + Vec3::new(-3.5, 4.5, -13.0), focus_walk, 50.0),
+        CamKey::look(t_walk + 0.2, focus_walk + Vec3::new(-1.0, 3.0, -10.0), focus_walk, 46.0),
+    ]);
+    let shot2 = CameraTrack::new(vec![
+        CamKey::look(0.0, focus_emote + Vec3::new(0.4, 2.8, -11.0), focus_emote, 42.0),
+        CamKey::look(dur - cut, focus_emote + Vec3::new(1.6, 2.3, -9.0), focus_emote, 39.0),
+    ]);
+    let seq = Sequence::new(scripts, vec![Shot::new(0.0, shot1), Shot::new(cut, shot2)], dur);
+    (seq, actors)
 }
 
 /// Modo `--poses`: vuelca **un** PNG (`/tmp/actor_clips.png`) con una fila de
@@ -253,39 +285,10 @@ fn frame_path(f: u32) -> String {
     format!("{FRAME_DIR}/frame_{f:04}.png")
 }
 
-/// Busca un origen `(gx0, [carriles Z])` tal que el tramo que recorrerán los
-/// actores (`gx0 .. gx0+walk` en cada carril) caiga sobre **tierra firme** (por
-/// encima del nivel del mar), para que la escena no muestre figuras caminando
-/// sobre el agua. Si no encuentra (mundo todo agua), cae a un default central.
-fn find_land_strip(world: &World, walk: f32) -> (u32, [u32; 3]) {
-    // Nivel del mar en Y de **mundo** (centrado): el terreno arma el agua a
-    // `0.30·dy` y el mundo está centrado restando `dy/2` → `(0.30−0.5)·dy`.
-    let dy = (DIM_XZ * 4 / 10).max(48) as f32;
-    let land_min = (0.30 - 0.5) * dy + 2.0; // margen: bien sobre la orilla
-    let walk = walk.ceil() as u32;
-    let dim = DIM_XZ;
-    let is_land = |gx: u32, gz: u32| world.ground_at(gx, gz).y > land_min;
-    let lo = 12u32;
-    let hi = dim.saturating_sub(12);
-    for oz in (lo..hi.saturating_sub(12)).step_by(6) {
-        let lanes = [oz, oz + 6, oz + 12];
-        for ox in (lo..hi.saturating_sub(walk)).step_by(6) {
-            let mid = ox + walk / 2;
-            let end = ox + walk;
-            if lanes
-                .iter()
-                .all(|&gz| is_land(ox, gz) && is_land(mid, gz) && is_land(end, gz))
-            {
-                return (ox, lanes);
-            }
-        }
-    }
-    (dim / 3, [dim / 2 - 6, dim / 2, dim / 2 + 6]) // fallback
-}
-
-/// Como [`find_land_strip`] pero elige el tramo **más plano** (mínima diferencia
-/// de altura a lo largo de los carriles): pensado para alinear una fila de
-/// actores sin que el relieve los hunda/ocluya (modo `--poses`).
+/// Elige el tramo **más plano** del mundo (mínima diferencia de altura a lo largo
+/// de tres carriles Z, todos sobre el nivel del mar): así los actores caminan/
+/// gesticulan en fila sin que el relieve los hunda u ocluya. Si no hay tierra
+/// (mundo todo agua), cae a un default central.
 fn find_flat_strip(world: &World, span: f32) -> (u32, [u32; 3]) {
     let dy = (DIM_XZ * 4 / 10).max(48) as f32;
     let land_min = (0.30 - 0.5) * dy + 2.0;

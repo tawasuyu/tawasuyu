@@ -13,11 +13,13 @@
 
 mod actor;
 mod critter;
+mod director;
 mod player;
 mod raycast;
 mod terrain;
 
 pub use actor::{Actor, Clip, Pose};
+pub use director::{ActorKey, ActorSample, ActorScript, Sequence, Shot};
 pub use critter::Critter;
 pub use player::{forward_h, look_dir, right_h, Player};
 pub use raycast::{raycast, VoxelHit};

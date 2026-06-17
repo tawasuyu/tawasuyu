@@ -18,6 +18,15 @@ use llimphi_3d::{push_cube, Vertex3d};
 
 /// Amplitud base de balanceo de miembros al caminar (rad).
 const SWING: f32 = 0.7;
+/// Duración del **cross-fade** al cambiar de clip (seg): el cuerpo mezcla la pose
+/// saliente con la entrante en este lapso, en vez de saltar en seco.
+const BLEND_DUR: f32 = 0.22;
+
+/// Suavizado Hermite `3t²−2t³` (deriva nula en los extremos) para el cross-fade.
+fn smoothstep(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
 
 /// Ángulos de todas las articulaciones del muñeco en un instante. Una animación
 /// ([`Clip`]) produce una `Pose`; [`Actor::mesh`] la hornea a cajas. Ángulos en
@@ -40,6 +49,25 @@ pub struct Pose {
     pub bob: f32,
     /// Inclinación del torso hacia adelante (eje X, alrededor de los pies).
     pub lean: f32,
+}
+
+impl Pose {
+    /// Interpola campo a campo entre dos poses (`t=0`→`a`, `t=1`→`b`). Lo usa el
+    /// cross-fade entre clips.
+    pub fn lerp(a: &Pose, b: &Pose, t: f32) -> Pose {
+        let l = |x: f32, y: f32| x + (y - x) * t;
+        Pose {
+            leg_l: l(a.leg_l, b.leg_l),
+            leg_r: l(a.leg_r, b.leg_r),
+            arm_l: l(a.arm_l, b.arm_l),
+            arm_r: l(a.arm_r, b.arm_r),
+            arm_l_out: l(a.arm_l_out, b.arm_l_out),
+            arm_r_out: l(a.arm_r_out, b.arm_r_out),
+            head_pitch: l(a.head_pitch, b.head_pitch),
+            bob: l(a.bob, b.bob),
+            lean: l(a.lean, b.lean),
+        }
+    }
 }
 
 /// Animación: una función determinista `fase → `[`Pose`]. La fase la acumula
@@ -138,6 +166,12 @@ pub struct Actor {
     pub clip: Clip,
     /// Fase del clip (acumulada por [`advance`](Self::advance)).
     pub phase: f32,
+    /// Clip saliente durante un cross-fade (`None` si no hay transición en curso).
+    prev_clip: Option<Clip>,
+    /// Fase del clip saliente (sigue avanzando durante la mezcla).
+    prev_phase: f32,
+    /// Progreso del cross-fade `0..1` (a `1` se descarta el clip saliente).
+    blend: f32,
     /// Color de la piel (cabeza).
     pub skin: [f32; 3],
     /// Color de la remera (torso + brazos).
@@ -156,6 +190,9 @@ impl Actor {
             facing,
             clip: Clip::Idle,
             phase: 0.0,
+            prev_clip: None,
+            prev_phase: 0.0,
+            blend: 1.0,
             skin: [0.86, 0.68, 0.54],
             shirt: [0.20, 0.62, 0.55],
             pants: [0.18, 0.22, 0.34],
@@ -170,19 +207,41 @@ impl Actor {
         self
     }
 
-    /// Cambia la animación. Si es un clip distinto, reinicia la fase (arranca la
-    /// pose desde el principio); repetir el mismo clip no la corta.
+    /// Cambia la animación. Si es un clip distinto, arranca un **cross-fade**: la
+    /// pose saliente se mezcla con la nueva durante [`BLEND_DUR`] segundos (sin
+    /// saltos). Repetir el mismo clip no corta nada.
     pub fn set_clip(&mut self, clip: Clip) {
         if self.clip != clip {
+            self.prev_clip = Some(self.clip);
+            self.prev_phase = self.phase;
             self.clip = clip;
             self.phase = 0.0;
+            self.blend = 0.0;
         }
     }
 
-    /// Avanza la animación `dt` segundos (hace girar la fase a la cadencia del
-    /// clip). El movimiento de `pos`/`facing` lo maneja el llamador (la dirección).
+    /// Avanza la animación `dt` segundos: la fase a la cadencia del clip, y —si hay
+    /// transición— la fase saliente y el progreso del cross-fade. El movimiento de
+    /// `pos`/`facing` lo maneja el llamador (la dirección).
     pub fn advance(&mut self, dt: f32) {
         self.phase += dt * self.clip.cadence();
+        if let Some(pc) = self.prev_clip {
+            self.prev_phase += dt * pc.cadence();
+            self.blend += dt / BLEND_DUR;
+            if self.blend >= 1.0 {
+                self.prev_clip = None;
+            }
+        }
+    }
+
+    /// La pose actual del cuerpo: la del clip vigente, o —durante un cambio— la
+    /// **mezcla** suave entre el clip saliente y el entrante.
+    pub fn pose(&self) -> Pose {
+        let target = self.clip.pose(self.phase);
+        match self.prev_clip {
+            Some(pc) => Pose::lerp(&pc.pose(self.prev_phase), &target, smoothstep(self.blend)),
+            None => target,
+        }
     }
 
     /// Orienta al actor para mirar hacia `target` (sólo el plano horizontal).
@@ -207,7 +266,7 @@ impl Actor {
     /// pies del suelo. Subir con `Renderer3d::set_geometry` y ubicar con
     /// [`model`](Self::model).
     pub fn mesh(&self) -> (Vec<Vertex3d>, Vec<u16>) {
-        let p = self.clip.pose(self.phase);
+        let p = self.pose();
         let mut v = Vec::with_capacity(8 * 6);
         let mut i = Vec::with_capacity(36 * 6);
 
@@ -322,6 +381,26 @@ mod tests {
         let ph = a.phase;
         a.set_clip(Clip::Run);
         assert_eq!(a.phase, ph);
+    }
+
+    #[test]
+    fn cambio_de_clip_hace_cross_fade() {
+        // Caminando con las piernas bien abiertas…
+        let mut a = Actor::new(Vec3::ZERO, 0.0);
+        a.set_clip(Clip::Walk);
+        a.advance(FRAC_PI_2 / Clip::Walk.cadence());
+        let span_walk = z_span(&a);
+        assert!(span_walk > 0.5);
+
+        // …al pasar a Idle, JUSTO después la pose sigue siendo ~la de caminar
+        // (blend≈0), no salta de golpe a quieto.
+        a.set_clip(Clip::Idle);
+        let span_inicio = z_span(&a);
+        assert!((span_inicio - span_walk).abs() < 0.05, "el cross-fade arranca desde la pose saliente");
+
+        // Pasado el blend, ya es Idle (piernas juntas).
+        a.advance(BLEND_DUR + 0.1);
+        assert!(z_span(&a) < 0.45, "tras el cross-fade la pose es Idle");
     }
 
     #[test]
