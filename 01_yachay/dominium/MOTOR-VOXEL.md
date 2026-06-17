@@ -577,8 +577,16 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    dan **cortes duros**; `Sequence` = reparto + planos + duración (`camera(t)`,
    `cast_centroid(t)`). El `--film` ahora reproduce un `screenplay()` (tres actores
    entran caminando, se giran a cámara y gesticulan; dos planos con corte). 2 tests.
-3. **Assets**: importador `.vox` (MagicaVoxel) → `VoxelGrid` para sets y personajes
-   ricos (`foreign-vox`, no existe).
+3. ~~**Assets**: importador `.vox`~~ **HECHO**: puente `shared/foreign-vox`
+   (lee/escribe el formato MagicaVoxel — chunks `MAIN/SIZE/XYZI/RGBA`, bytes LE,
+   sin deps; `VoxModel` neutral + paleta) + conversor `llimphi_voxel::{model_to_grid,
+   stamp,load_grid}` (remapea `z`-arriba del `.vox` a `y`-arriba del motor; `stamp`
+   compone sets metiendo piezas en un grid). Verificado por PNG (`--vox`: genera un
+   golem → `foreign_vox::write` → `.vox` → `load_grid` → render; el muñeco con ojos/
+   antena se lee) + 5 tests (ida y vuelta, bytes a mano, remapeo de ejes). **Falta**:
+   importar la **paleta oficial** de MagicaVoxel (hoy el fallback sin `RGBA` es una
+   rampa HSV; los exportes reales traen `RGBA` y van bien) y soporte de escenas
+   multi-modelo con transformación (`nTRN/nGRP`).
 4. **Iluminación cinematográfica**: hoy un solo sol + AO + niebla; falta hora-del-
    día / luz coloreada / puntuales.
 5. **Calidad de cuadro**: supersampling (el ray-march aliasa en bordes), resolución

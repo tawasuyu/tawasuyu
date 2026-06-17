@@ -497,6 +497,7 @@ members = [
     "shared/foreign-psd",
     "shared/foreign-xlsx",
     "shared/foreign-platform",
+    "shared/foreign-vox",
     "shared/foreign-ytdlp",
     "shared/format",
     "shared/forth-emisor",

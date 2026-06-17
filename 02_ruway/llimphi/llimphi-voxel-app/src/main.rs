@@ -300,6 +300,10 @@ fn main() {
         film::poses_shot();
         return;
     }
+    if args.iter().any(|a| a == "--vox") {
+        film::vox_shot();
+        return;
+    }
     if args.iter().any(|a| a == "--shot") {
         shot();
         return;

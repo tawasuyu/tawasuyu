@@ -1,0 +1,24 @@
+# =============================================================================
+#  tawasuyu :: foreign-vox — puente al formato MagicaVoxel (.vox)
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
+#  nunca al núcleo de las apps. Este crate lee/escribe el formato `.vox` de
+#  MagicaVoxel (chunks RIFF-like MAIN/SIZE/XYZI/RGBA) y lo expone como un
+#  `VoxModel` **neutral** (dimensiones + voxels + paleta) — sin depender del
+#  motor: el conversor a `VoxelGrid` vive en `llimphi-voxel` (capa de juego).
+#
+#  Espejo conceptual de `shared/foreign-psd` / `shared/foreign-xlsx`: ingestar lo
+#  ajeno, dejar el formato nativo al resto. Sin dependencias (sólo `std`): el
+#  parseo es bytes planos little-endian.
+# =============================================================================
+
+[package]
+name = "foreign-vox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shared/foreign-vox — puente al formato MagicaVoxel (.vox): lee/escribe modelos voxel (SIZE/XYZI/RGBA) como un VoxModel neutral, para importar sets y personajes al motor voxel."
+
+[dependencies]

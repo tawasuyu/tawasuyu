@@ -10,6 +10,8 @@ description = "llimphi-voxel — capa de dinámica voxel/juego (estilo Minecraft
 [dependencies]
 # El motor 3D general; esta capa aporta CONTENIDO/dinámica, no render.
 llimphi-3d = { path = "../llimphi-3d" }
+# Puente al formato MagicaVoxel (.vox): importar sets/personajes a VoxelGrid.
+foreign-vox = { path = "../../../shared/foreign-vox" }
 
 [dev-dependencies]
 # Volcado headless a PNG de los demos de mundo (mismo patrón que llimphi-3d).

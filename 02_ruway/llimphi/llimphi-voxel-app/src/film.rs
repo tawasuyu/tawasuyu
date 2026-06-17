@@ -15,8 +15,11 @@
 
 use std::sync::Once;
 
+use foreign_vox::{VoxModel, Voxel};
 use llimphi_3d::glam::Vec3;
-use llimphi_3d::{CamKey, Camera3d, CameraTrack, Hud, HudQuad, Renderer3d};
+use llimphi_3d::{
+    Atmosphere, CamKey, Camera3d, CameraTrack, Hud, HudQuad, Renderer3d, Scene3d, VoxelRenderer,
+};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
@@ -236,6 +239,98 @@ pub fn poses_shot() {
     let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
     crate::write_png(&hal, &inter, W, H, "/tmp/actor_clips.png");
     eprintln!("poses: /tmp/actor_clips.png ({n} clips)");
+}
+
+/// Modo `--vox`: prueba el **puente MagicaVoxel** punta a punta. Genera un modelo
+/// reconocible (un golem), lo **escribe** a `.vox` (`foreign_vox::write`), lo
+/// **reimporta** (`llimphi_voxel::load_grid` → bytes → `VoxModel` → `VoxelGrid`)
+/// y lo renderiza orbitando a `/tmp/vox_import.png`. Así el PNG demuestra el
+/// camino real de carga sobre bytes `.vox` codificados a spec.
+pub fn vox_shot() {
+    let hal = pollster::block_on(Hal::new(None)).expect("hal");
+    let mut renderer = Renderer::new(&hal).expect("renderer");
+
+    let model = golem_model();
+    let path = "/tmp/vox_demo.vox";
+    std::fs::write(path, foreign_vox::write(&model)).expect("escribir .vox");
+    let grid = llimphi_voxel::load_grid(path).expect("importar .vox");
+    let dim = grid.dim();
+
+    let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
+    vr.sun_dir = [0.5, 0.7, 0.35];
+    vr.atmosphere = Atmosphere {
+        sky_zenith: [60, 110, 190],
+        sky_horizon: [202, 216, 236],
+        fog_density: 0.0, // modelo chico: sin niebla
+    };
+    let mut scene = Scene3d::new();
+
+    let d = dim.iter().copied().max().unwrap_or(16) as f32;
+    // Vista 3/4 frontal (yaw ~205° mira la cara con los ojos, levemente de costado).
+    let camera = Camera3d::orbit(Vec3::ZERO, 205_f32.to_radians(), 12_f32.to_radians(), d * 1.9);
+
+    let inter = make_target(&hal);
+    let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
+    renderer
+        .render_to_view(&hal, &vello::Scene::new(), &inter_view, W, H, Color::from_rgba8(0, 0, 0, 255))
+        .expect("base");
+    let mut enc = hal
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("vox") });
+    scene.render(&hal.device, &hal.queue, &mut enc, &inter_view, (W, H), &camera, Some(&vr), &[]);
+    hal.queue.submit(std::iter::once(enc.finish()));
+    let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+    crate::write_png(&hal, &inter, W, H, "/tmp/vox_import.png");
+    eprintln!(
+        "vox: {} ({} voxels) → {path} → /tmp/vox_import.png (grid {}x{}x{})",
+        "golem",
+        model.voxels.len(),
+        dim[0],
+        dim[1],
+        dim[2]
+    );
+}
+
+/// Un golem voxel de demo (espacio `.vox`, `z` arriba): piernas, torso, brazos,
+/// cabeza con ojos y una antena — pensado para leerse como un **asset diseñado**
+/// (no terreno) al importarlo.
+fn golem_model() -> VoxModel {
+    let mut m = VoxModel::new([11, 7, 17]);
+    // Paleta: cuerpo teal, cabeza gris, ojos oscuros, piernas azul, antena naranja.
+    m.palette[1] = [60, 150, 140, 255];
+    m.palette[2] = [205, 208, 214, 255];
+    m.palette[3] = [25, 28, 34, 255];
+    m.palette[4] = [40, 60, 110, 255];
+    m.palette[5] = [232, 130, 40, 255];
+
+    let v = &mut m.voxels;
+    fill_box(v, 2..4, 2..5, 0..4, 4); // pierna izq
+    fill_box(v, 7..9, 2..5, 0..4, 4); // pierna der
+    fill_box(v, 2..9, 1..6, 4..10, 1); // torso
+    fill_box(v, 0..2, 2..5, 5..10, 1); // brazo izq
+    fill_box(v, 9..11, 2..5, 5..10, 1); // brazo der
+    fill_box(v, 3..8, 1..6, 10..15, 2); // cabeza
+    v.push(Voxel { x: 4, y: 0, z: 12, i: 3 }); // ojo izq (cara y=0)
+    v.push(Voxel { x: 6, y: 0, z: 12, i: 3 }); // ojo der
+    fill_box(v, 5..6, 3..4, 15..17, 5); // antena
+    m
+}
+
+/// Apila los voxels de una caja `[xr]×[yr]×[zr]` con índice de color `i`.
+fn fill_box(
+    v: &mut Vec<Voxel>,
+    xr: std::ops::Range<u8>,
+    yr: std::ops::Range<u8>,
+    zr: std::ops::Range<u8>,
+    i: u8,
+) {
+    for z in zr.clone() {
+        for y in yr.clone() {
+            for x in xr.clone() {
+                v.push(Voxel { x, y, z, i });
+            }
+        }
+    }
 }
 
 /// Render de un cuadro: limpia la intermedia (base negra; el cielo lo pinta la

@@ -20,6 +20,8 @@ llimphi-voxel = { path = "../llimphi-voxel" }
 llimphi-ui = { path = "../llimphi-ui" }
 # Puente ffmpeg: secuencia de PNG → video (modo --film).
 foreign-av = { path = "../../../shared/foreign-av" }
+# Puente MagicaVoxel (.vox): generar el modelo del demo --vox.
+foreign-vox = { path = "../../../shared/foreign-vox" }
 # Render headless a PNG para el modo --shot (verificación sin pantalla).
 pollster = { workspace = true }
 png = { workspace = true }
