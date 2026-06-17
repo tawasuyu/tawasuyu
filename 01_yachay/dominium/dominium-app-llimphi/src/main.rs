@@ -117,6 +117,34 @@ impl App for Dominium {
             replicate_threshold: 28.0,
             child_energy_frac: 0.45,
             abundance_threshold: 50.0,
+            // ── Freno de población (fix 2026-06-17) ───────────────────────
+            // El bug: con estos params la réplica sólo miraba la energía
+            // individual → la cohorte inicial (2500) se saciaba y replicaba
+            // a la vez, disparando un boom exponencial a ~14k agentes en
+            // ~150 ticks. A esa población el tick O(N²) de `poorest`/`nearest`
+            // costaba ~73 ms → la app parecía colgada (sumado al render y al
+            // clone de snapshots de 14k agentes por tick). Verificado en
+            // `dominium-sim/examples/poblacion.rs`.
+            //
+            // El fix tiene dos patas:
+            //   1. `max_population`: tope duro a 6000. Recorta el boom inicial
+            //      sin tocar la dinámica por debajo del techo. Con el tope, la
+            //      población se asienta en N* ≈ 1050-1150 (el equilibrio
+            //      natural de esta sintonía) sin overshoot que reviente la
+            //      materia inicial — sin él, el boom a 14k consume la reserva
+            //      y oscila feo. Es la red de seguridad anti-cuelgue.
+            //   2. El O(N²) ya está domado en el motor (índice espacial por
+            //      tick + más-pobre global cacheado en `World::rebuild_tick_ctx`):
+            //      al pico de 14k el tick bajó de ~73 ms a ~3.8 ms (~19×). Esa
+            //      pata es automática (no hay param que activar).
+            //
+            // La densidad-dependencia ecológica (`density_block`/`density_cap`)
+            // existe en el motor (off por default) pero NO se usa acá: en este
+            // régimen de regrowth lento bloquea la *recuperación* tras el dip
+            // y empuja el sistema a casi-extinción (N* ≈ 47). El tope duro +
+            // el equilibrio natural dan un N* sano y fluido sin ella. Ver el
+            // benchmark para los números de ambos caminos.
+            max_population: 6000,
             ..SimParams::default()
         };
         // Relieve por bioma, recalibrado para los valores nuevos:

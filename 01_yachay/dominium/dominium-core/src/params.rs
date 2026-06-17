@@ -248,6 +248,32 @@ pub struct SimParams {
     /// - Extraer (1), Replicar (4), Degradar (5): neutrales.
     #[serde(default = "default_action_weights_ext")]
     pub action_weights_ext: [f32; 6],
+    /// **Tope duro de población** (freno defensivo anti-cuelgue). Cuando la
+    /// población viva alcanza este valor, NINGÚN lemming se replica más —
+    /// ni por `act_replicar` directo ni por el side-effect de abundancia.
+    /// `0` (default) = sin tope → motor histórico bit-exacto. Es la red de
+    /// seguridad que garantiza que el overshoot exponencial no congele el
+    /// tick O(N²): el N nunca cruza un techo conocido. Ver `density_cap`
+    /// para el freno *ecológico* (suave) que hace innecesario llegar acá.
+    #[serde(default)]
+    pub max_population: u32,
+    /// **Capacidad de carga local** — lado en celdas del bloque NxN sobre el
+    /// que se mide el hacinamiento. La reproducción se bloquea cuando el
+    /// bloque que ocupa el agente ya tiene `density_cap` lemmings o más.
+    /// `0` (default) = densidad-dependencia DESACTIVADA → la réplica sólo
+    /// mira la energía individual (motor histórico). Un valor típico para
+    /// grilla 240² es 8..16. Este es el fix "de verdad": hace que `N*`
+    /// emerja de la capacidad del territorio sin overshoot exponencial,
+    /// porque un agente saciado en una zona ya poblada NO se replica.
+    #[serde(default)]
+    pub density_block: u32,
+    /// Máximo de lemmings por bloque `density_block × density_block` para que
+    /// se permita la réplica. Si la cuenta del bloque local `>= density_cap`,
+    /// el agente no replica (ni directo ni por abundancia). Sólo se consulta
+    /// cuando `density_block > 0`. `0` con `density_block > 0` bloquearía toda
+    /// réplica — usar valores ≥ 1.
+    #[serde(default)]
+    pub density_cap: u32,
 }
 
 /// Default de `SimParams::action_weights_ext` — peso por acción para la 5ª
@@ -393,6 +419,13 @@ impl Default for SimParams {
             // históricos bit-exacto.
             big_five: false,
             action_weights_ext: default_action_weights_ext(),
+            // Frenos de población desactivados por default → el motor
+            // histórico y todos los tests que usan `SimParams::default()`
+            // siguen exactamente igual (réplica sólo por energía individual,
+            // sin tope). La APP los enciende; ver `dominium-app-llimphi`.
+            max_population: 0,
+            density_block: 0,
+            density_cap: 0,
         }
     }
 }

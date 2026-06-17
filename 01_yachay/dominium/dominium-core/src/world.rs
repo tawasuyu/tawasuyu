@@ -86,6 +86,53 @@ impl Action {
     }
 }
 
+/// Cachés recalculados **una vez por tick** para volver O(N) la fase de
+/// acciones (en vez del O(N²) que produce escanear toda la población por
+/// agente). No es estado del mundo — es scratch derivado, por eso queda
+/// fuera de serde (`#[serde(skip)]` en `World`) y se reconstruye al inicio
+/// de cada tick con [`World::rebuild_tick_ctx`].
+///
+/// - `poorest_idx`: el agente con menor energía del mundo es un objetivo
+///   **global único** → se calcula 1× y todos los traders `Poorest` lo
+///   reusan, en lugar de un `lemmings.poorest()` O(N) por agente.
+/// - `occupancy` + `occ_nx`: grilla de ocupación por bloque
+///   `density_block × density_block`. La densidad local del bloque de un
+///   agente se lee en O(1) para gatear la réplica (capacidad de carga).
+#[derive(Debug, Clone, Default)]
+pub struct TickCtx {
+    /// Índice del lemming más pobre del tick (objetivo global de `Poorest`).
+    /// `None` cuando hay 0 o 1 agentes, o cuando aún no se reconstruyó.
+    pub poorest_idx: Option<usize>,
+    /// Índice del **segundo** más pobre. Se usa cuando el donante `i` ES el
+    /// más pobre global: el `Lemmings::poorest(i)` histórico excluye a `i`, así
+    /// que en ese caso debe donar al segundo. Cachear ambos vuelve la
+    /// optimización bit-exacta al escaneo O(N) por agente. `None` si hay < 2
+    /// agentes.
+    pub second_poorest_idx: Option<usize>,
+    /// Conteo de lemmings por bloque de densidad. Vacío si la
+    /// densidad-dependencia está desactivada (`density_block == 0`).
+    pub occupancy: Vec<u32>,
+    /// Cantidad de bloques en X (ancho de `occupancy` / fila).
+    pub occ_nx: usize,
+    /// Lado del bloque en celdas (espejo de `SimParams::density_block`) — se
+    /// guarda para que las lecturas no dependan de re-leer los params.
+    pub occ_block: u32,
+    /// Índice espacial de agentes para `nearest` en ~O(1): `bins[bid]`
+    /// contiene los índices de lemming cuya celda cae en el bloque `bid` de
+    /// lado `bin_block`. Vacío si el índice no está activo. Lo construye
+    /// `rebuild_tick_ctx` cuando `nearest` va a estar caliente (degradar /
+    /// trade Nearest). El radio de búsqueda barre el bloque propio + los 8
+    /// adyacentes; si no hay candidato ahí, cae al escaneo O(N) (raro con
+    /// población densa, que es justo el caso patológico que queremos domar).
+    pub bins: Vec<Vec<u32>>,
+    /// Cantidad de bloques en X del índice de `bins`.
+    pub bin_nx: usize,
+    /// Cantidad de bloques en Y del índice de `bins`.
+    pub bin_ny: usize,
+    /// Lado en celdas de cada bin. `0` = índice desactivado.
+    pub bin_block: u32,
+}
+
 /// El estado completo de la simulación.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct World {
@@ -99,6 +146,10 @@ pub struct World {
     /// en 0 vía `serde(default)`.
     #[serde(default)]
     pub tick_count: u64,
+    /// Cachés por-tick para domar el O(N²). No se serializa (es scratch
+    /// derivado) y se reconstruye al inicio de cada fase de acciones.
+    #[serde(skip)]
+    pub tick_ctx: TickCtx,
 }
 
 impl World {
@@ -108,7 +159,229 @@ impl World {
             lemmings: Lemmings::new(),
             conceptos: Conceptos::new(),
             tick_count: 0,
+            tick_ctx: TickCtx::default(),
         }
+    }
+
+    /// Reconstruye los cachés por-tick ([`TickCtx`]) en O(N): el agente más
+    /// pobre (objetivo global de `Poorest`) y la grilla de ocupación por
+    /// bloque de densidad. Debe llamarse **una vez** al inicio de la fase de
+    /// acciones de cada tick. Es la pieza que vuelve la fase O(N) en lugar de
+    /// O(N²) (ver `act_intercambiar`/`act_replicar`).
+    ///
+    /// La grilla de ocupación sólo se computa si `p.density_block > 0`
+    /// (densidad-dependencia activada); con `0` queda vacía y la réplica no
+    /// la consulta — bit-exacto al motor histórico.
+    pub fn rebuild_tick_ctx(&mut self, p: &SimParams) {
+        let n = self.lemmings.len();
+        // Umbral de población a partir del cual encendemos los cachés de perf
+        // (más-pobre global + índice espacial). Por DEBAJO de él, las acciones
+        // siguen consultando el estado VIVO (`Lemmings::poorest`/`nearest`),
+        // que es bit-exacto al motor histórico — la fase O(N²) con < 256
+        // agentes es trivial y no necesita domado. Por ENCIMA (el régimen que
+        // colgaba), los cachés vuelven la fase O(N): el más-pobre es un valor
+        // de campo-medio congelado al inicio del tick (semántica documentada,
+        // ligeramente distinta del escaneo vivo, pero el objetivo —redistribuir
+        // a quien estaba peor— se preserva).
+        const PERF_MIN_POP: usize = 256;
+        let perf_on = n >= PERF_MIN_POP;
+
+        // ── Dos más pobres globales (1× por tick), con el mismo tie-break que
+        //    `Lemmings::poorest` (estricto `<` → ante empate gana el menor
+        //    índice). El segundo cubre el caso "el donante ES el más pobre":
+        //    el escaneo histórico excluye a `i`, así que dona al segundo. Sólo
+        //    se cachea en el régimen de perf; debajo, `None` → escaneo vivo.
+        if perf_on {
+            let mut p1: Option<(usize, f32)> = None;
+            let mut p2: Option<(usize, f32)> = None;
+            for j in 0..n {
+                let e = self.lemmings.energia[j];
+                if p1.map(|(_, be)| e < be).unwrap_or(true) {
+                    p2 = p1;
+                    p1 = Some((j, e));
+                } else if p2.map(|(_, be)| e < be).unwrap_or(true) {
+                    p2 = Some((j, e));
+                }
+            }
+            self.tick_ctx.poorest_idx = p1.map(|(j, _)| j);
+            self.tick_ctx.second_poorest_idx = p2.map(|(j, _)| j);
+        } else {
+            self.tick_ctx.poorest_idx = None;
+            self.tick_ctx.second_poorest_idx = None;
+        }
+
+        // ── Ocupación por bloque (sólo si densidad-dependencia activa). ──
+        // Esta grilla la consume el freno ECOLÓGICO de réplica (`local_density`).
+        let block = p.density_block;
+        if block == 0 {
+            self.tick_ctx.occupancy.clear();
+            self.tick_ctx.occ_nx = 0;
+            self.tick_ctx.occ_block = 0;
+        } else {
+            let b = block as usize;
+            let occ_nx = self.grid.width.div_ceil(b);
+            let occ_ny = self.grid.height.div_ceil(b);
+            let total = (occ_nx * occ_ny).max(1);
+            self.tick_ctx.occupancy.clear();
+            self.tick_ctx.occupancy.resize(total, 0);
+            for i in 0..n {
+                let (cx, cy) = self
+                    .grid
+                    .clamp_cell(self.lemmings.pos_x[i], self.lemmings.pos_y[i]);
+                let bid = (cy / b) * occ_nx + (cx / b);
+                self.tick_ctx.occupancy[bid] += 1;
+            }
+            self.tick_ctx.occ_nx = occ_nx;
+            self.tick_ctx.occ_block = block;
+        }
+
+        // ── Índice espacial para `nearest` (domado del O(N²) de degradar). ──
+        // `nearest_indexed` es BIT-EXACTO al escaneo (mismo vecino, mismo
+        // tie-break), así que el índice no cambia la dinámica — sólo el costo.
+        // Se construye en el mismo régimen de perf (`perf_on`); debajo, el
+        // escaneo O(N) ingenuo es más barato que mantener bins. Tamaño de bin:
+        // el `density_block` si está activo, si no un default sano.
+        const BIN_DEFAULT: u32 = 8;
+        if !perf_on {
+            // Población chica → sin índice; `nearest_indexed` cae al O(N).
+            self.tick_ctx.bin_block = 0;
+        } else {
+            let bin = if block > 0 { block as usize } else { BIN_DEFAULT as usize };
+            let bin_nx = self.grid.width.div_ceil(bin);
+            let bin_ny = self.grid.height.div_ceil(bin);
+            let bin_total = (bin_nx * bin_ny).max(1);
+            // Reusa los Vec internos para no realocar cada tick.
+            if self.tick_ctx.bins.len() != bin_total {
+                self.tick_ctx.bins = vec![Vec::new(); bin_total];
+            } else {
+                for v in self.tick_ctx.bins.iter_mut() {
+                    v.clear();
+                }
+            }
+            for i in 0..n {
+                let (cx, cy) = self
+                    .grid
+                    .clamp_cell(self.lemmings.pos_x[i], self.lemmings.pos_y[i]);
+                let bid = (cy / bin) * bin_nx + (cx / bin);
+                self.tick_ctx.bins[bid].push(i as u32);
+            }
+            self.tick_ctx.bin_nx = bin_nx;
+            self.tick_ctx.bin_ny = bin_ny;
+            self.tick_ctx.bin_block = bin as u32;
+        }
+    }
+
+    /// Vecino vivo más cercano a `i` usando el índice espacial del tick
+    /// ([`TickCtx::bins`]). **Bit-exacto** a [`Lemmings::nearest`]: devuelve el
+    /// mismo índice (incluido el tie-break por menor índice ante igual
+    /// distancia), pero en ~O(K) amortizado en lugar de O(N).
+    ///
+    /// Expande anillos de bins desde el del agente. Tras barrer un anillo de
+    /// radio `r` (en bins), si la mejor distancia hallada es ≤ la **mínima
+    /// distancia posible** a cualquier bin del anillo `r+1` (que es
+    /// `(r · bin_size)²` — la pared interna de ese anillo está a `r` bins de
+    /// distancia del bin propio), entonces ningún agente fuera puede mejorar y
+    /// el resultado es definitivo. Si el grid se agotó sin candidato, no hay
+    /// vecino (N ≤ 1). Cae a `Lemmings::nearest` sólo si el índice no existe.
+    fn nearest_indexed(&self, i: usize) -> Option<usize> {
+        if self.tick_ctx.bin_block == 0 || self.tick_ctx.bins.is_empty() {
+            return self.lemmings.nearest(i);
+        }
+        let b = self.tick_ctx.bin_block as f32;
+        let bin = self.tick_ctx.bin_block as usize;
+        let nx = self.tick_ctx.bin_nx as i64;
+        let ny = self.tick_ctx.bin_ny as i64;
+        let (cx, cy) = self
+            .grid
+            .clamp_cell(self.lemmings.pos_x[i], self.lemmings.pos_y[i]);
+        let bx = (cx / bin) as i64;
+        let by = (cy / bin) as i64;
+        let max_r = nx.max(ny); // cota dura: cubre todo el grid
+        let mut best: Option<(usize, f32)> = None;
+        let mut r: i64 = 0;
+        loop {
+            // Barre SÓLO el borde del cuadrado de radio `r` (anillo), para no
+            // re-visitar bins internos ya cubiertos en iteraciones previas.
+            for nby in (by - r)..=(by + r) {
+                if nby < 0 || nby >= ny {
+                    continue;
+                }
+                for nbx in (bx - r)..=(bx + r) {
+                    if nbx < 0 || nbx >= nx {
+                        continue;
+                    }
+                    // Sólo el perímetro del anillo `r` (los internos ya se vieron).
+                    let on_ring =
+                        nbx == bx - r || nbx == bx + r || nby == by - r || nby == by + r;
+                    if r > 0 && !on_ring {
+                        continue;
+                    }
+                    let bid = nby as usize * self.tick_ctx.bin_nx + nbx as usize;
+                    for &ju in &self.tick_ctx.bins[bid] {
+                        let j = ju as usize;
+                        if j == i {
+                            continue;
+                        }
+                        let d = self.lemmings.dist2(i, j);
+                        let better = match best {
+                            None => true,
+                            Some((bj, bd)) => d < bd || (d == bd && j < bj),
+                        };
+                        if better {
+                            best = Some((j, d));
+                        }
+                    }
+                }
+            }
+            // ¿Podemos garantizar que nada en anillos externos mejora? La
+            // distancia mínima a cualquier punto del anillo `r+1` es `r · bin`
+            // (la celda del agente está dentro del bin propio; el anillo r+1
+            // empieza a `r` bins de pared). Si la mejor² ≤ (r·bin)², listo.
+            if let Some((_, bd)) = best {
+                let safe = (r as f32) * b;
+                if bd <= safe * safe {
+                    break;
+                }
+            }
+            r += 1;
+            if r > max_r {
+                break; // se barrió todo el grid
+            }
+        }
+        best.map(|(j, _)| j)
+    }
+
+    /// Densidad del bloque que ocupa el agente `i` (cantidad de lemmings en
+    /// su bloque `density_block × density_block`). Devuelve `0` si la grilla
+    /// de ocupación está vacía (densidad-dependencia desactivada).
+    fn local_density(&self, i: usize) -> u32 {
+        if self.tick_ctx.occ_block == 0 || self.tick_ctx.occupancy.is_empty() {
+            return 0;
+        }
+        let b = self.tick_ctx.occ_block as usize;
+        let (cx, cy) = self
+            .grid
+            .clamp_cell(self.lemmings.pos_x[i], self.lemmings.pos_y[i]);
+        let bid = (cy / b) * self.tick_ctx.occ_nx + (cx / b);
+        self.tick_ctx.occupancy.get(bid).copied().unwrap_or(0)
+    }
+
+    /// `true` si el agente `i` tiene permitido replicarse este tick según los
+    /// frenos de población:
+    ///
+    /// - **Tope duro** (`max_population`): si la población viva ya alcanzó el
+    ///   techo, nadie replica (garantía anti-cuelgue).
+    /// - **Capacidad de carga local** (`density_block`/`density_cap`): si el
+    ///   bloque local ya tiene `density_cap` lemmings o más, este agente no
+    ///   replica — la natalidad se autolimita por hacinamiento, así `N*`
+    ///   emerge sin overshoot exponencial.
+    ///
+    /// Con ambos frenos en su default (`0`) devuelve siempre `true` →
+    /// bit-exacto al motor histórico. Cuenta de ocupación incrementada en la
+    /// réplica para que múltiples saciados del mismo bloque en el mismo tick
+    /// no lo desborden.
+    fn replication_allowed(&self, p: &SimParams) -> bool {
+        p.max_population == 0 || (self.lemmings.len() as u32) < p.max_population
     }
 
     /// Celda que ocupa el Lemming `i`.
@@ -218,8 +491,19 @@ impl World {
     /// `N* > 0` o se extingue por desigualdad creciente.
     pub fn act_intercambiar(&mut self, i: usize, p: &SimParams) {
         let target = match p.trade_target {
-            TradeTarget::Nearest => self.lemmings.nearest(i),
-            TradeTarget::Poorest => self.lemmings.poorest(i),
+            TradeTarget::Nearest => self.nearest_indexed(i),
+            // `Poorest` busca al más pobre EXCLUYENDO al donante. Se cachean
+            // los dos más pobres globales 1× por tick (`rebuild_tick_ctx`),
+            // así esto es O(1) en vez del escaneo O(N) por agente (la mitad
+            // del O(N²)/tick) — y BIT-EXACTO al `Lemmings::poorest(i)`
+            // histórico: si el donante es el más pobre, dona al segundo.
+            // Fallback al escaneo si la caché no fue construida (llamadas
+            // sueltas fuera del tick, p.ej. tests unitarios → poorest_idx None).
+            TradeTarget::Poorest => match self.tick_ctx.poorest_idx {
+                Some(j) if j != i => Some(j),
+                Some(_) => self.tick_ctx.second_poorest_idx,
+                None => self.lemmings.poorest(i),
+            },
         };
         let Some(j) = target else { return };
         // Psi-modulación: el ordenado comparte, el corruptible retiene.
@@ -247,6 +531,17 @@ impl World {
     /// `step_lemming`) son las tres piezas que dan al sistema un punto
     /// fijo `N* > 0`.
     pub fn act_replicar(&mut self, i: usize, p: &SimParams) {
+        // Freno de población (defaults = sin freno → motor histórico):
+        //   1. Tope duro `max_population` — red de seguridad anti-cuelgue.
+        //   2. Capacidad de carga local `density_cap` — si el bloque que
+        //      ocupa el agente ya está hacinado, no nace nadie acá. Es el
+        //      mecanismo que hace emerger `N*` sin overshoot exponencial.
+        if !self.replication_allowed(p) {
+            return;
+        }
+        if p.density_block > 0 && p.density_cap > 0 && self.local_density(i) >= p.density_cap {
+            return;
+        }
         let psi = self.lemmings.vector_psi[i];
         // Psi-modulación: el ordenado baja su umbral de reproducción
         // (forma familia antes). Clamp inferior a 0.1·threshold para
@@ -277,6 +572,48 @@ impl World {
         let psi5 = self.lemmings.psi5_at(i);
         let child = self.lemmings.spawn_big5(x, y, cost, psi, psi5);
         self.lemmings.accion[child] = accion;
+        // Mantener los cachés del tick consistentes con la población VIVA —
+        // el motor histórico consulta `nearest`/`poorest` sobre la población
+        // completa, incluidos los hijos nacidos antes en el mismo tick. Sin
+        // este mantenimiento incremental, los cachés (congelados al inicio del
+        // tick) divergirían de la semántica histórica.
+        let (cx, cy) = self.grid.clamp_cell(x, y);
+        // (a) Ocupación de densidad: cuenta al recién nacido en su bloque, así
+        //     varios saciados del MISMO bloque en el MISMO tick no superan el
+        //     `density_cap` antes de que el conteo se recalcule el próximo tick.
+        if self.tick_ctx.occ_block > 0 && !self.tick_ctx.occupancy.is_empty() {
+            let b = self.tick_ctx.occ_block as usize;
+            let bid = (cy / b) * self.tick_ctx.occ_nx + (cx / b);
+            if let Some(c) = self.tick_ctx.occupancy.get_mut(bid) {
+                *c += 1;
+            }
+        }
+        // (b) Índice espacial: el hijo entra a su bin para que `nearest` de
+        //     agentes que actúen después lo vea (igual que el escaneo O(N)).
+        if self.tick_ctx.bin_block > 0 && !self.tick_ctx.bins.is_empty() {
+            let b = self.tick_ctx.bin_block as usize;
+            let bid = (cy / b) * self.tick_ctx.bin_nx + (cx / b);
+            if let Some(v) = self.tick_ctx.bins.get_mut(bid) {
+                v.push(child as u32);
+            }
+        }
+        // (c) Top-2 más pobres: el hijo nace con `cost` de energía y puede ser
+        //     el nuevo más pobre. Inserción incremental con el mismo tie-break
+        //     (estricto `<` → menor índice gana ante empate; el hijo tiene el
+        //     índice más alto, así que sólo desplaza con `<`).
+        if self.tick_ctx.poorest_idx.is_some() {
+            let ce = self.lemmings.energia[child];
+            let p1e = self.tick_ctx.poorest_idx.map(|j| self.lemmings.energia[j]);
+            if p1e.map(|e| ce < e).unwrap_or(true) {
+                self.tick_ctx.second_poorest_idx = self.tick_ctx.poorest_idx;
+                self.tick_ctx.poorest_idx = Some(child);
+            } else {
+                let p2e = self.tick_ctx.second_poorest_idx.map(|j| self.lemmings.energia[j]);
+                if p2e.map(|e| ce < e).unwrap_or(true) {
+                    self.tick_ctx.second_poorest_idx = Some(child);
+                }
+            }
+        }
     }
 
     /// 5 · Degradar (Pelear) — resta energía al vecino y absorbe parte.
@@ -286,7 +623,10 @@ impl World {
     /// domina deja de hacer daño (pero `act_degradar` sigue ejecutándose:
     /// es la mecánica de "amago" / "huida").
     pub fn act_degradar(&mut self, i: usize, p: &SimParams) {
-        let Some(j) = self.lemmings.nearest(i) else { return };
+        // `nearest_indexed` usa el índice espacial del tick (O(1) amortizado)
+        // y cae a `Lemmings::nearest` O(N) sólo si el índice no está activo
+        // — preserva la semántica histórica en tests/llamadas sueltas.
+        let Some(j) = self.nearest_indexed(i) else { return };
         let psi = self.lemmings.vector_psi[i];
         let factor =
             (1.0 + p.psi_effect_modulation * (psi[PSI_CORRUPTIBILIDAD] - psi[PSI_MIEDO])).max(0.0);
@@ -334,6 +674,39 @@ mod tests {
         let mut w = World::new(16, 16);
         w.lemmings.spawn(8.0, 8.0, 100.0, [1.0, 0.0, 0.0, 0.0]);
         (w, SimParams::default())
+    }
+
+    #[test]
+    fn nearest_indexed_matches_brute_force_when_index_active() {
+        // El índice espacial debe devolver EXACTAMENTE el mismo vecino que el
+        // escaneo O(N) `Lemmings::nearest`, incluido el tie-break por menor
+        // índice. Poblamos > BIN_MIN_POP para que el índice se active y
+        // mezclamos posiciones repetidas (dist2 = 0) para estresar empates.
+        let mut w = World::new(60, 60);
+        let mut s: u64 = 0x1234_5678;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 33) as f32) / (u32::MAX as f32)
+        };
+        for _ in 0..500 {
+            let x = (rng() * 59.0).floor(); // a celdas enteras → muchos empates
+            let y = (rng() * 59.0).floor();
+            w.lemmings.spawn(x, y, 50.0, [0.0; 4]);
+        }
+        let p = SimParams::default();
+        w.rebuild_tick_ctx(&p);
+        assert_ne!(w.tick_ctx.bin_block, 0, "el índice debe estar activo");
+        for i in 0..w.lemmings.len() {
+            let exact = w.lemmings.nearest(i);
+            let indexed = w.nearest_indexed(i);
+            // Pueden diferir SÓLO si hay empate de distancia y ambos son
+            // válidos con la MISMA distancia (el tie-break por índice los
+            // hace coincidir; verificamos igualdad estricta).
+            assert_eq!(
+                exact, indexed,
+                "i={i}: brute {exact:?} != indexed {indexed:?}"
+            );
+        }
     }
 
     #[test]

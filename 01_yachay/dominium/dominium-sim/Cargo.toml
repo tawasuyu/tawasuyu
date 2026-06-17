@@ -10,3 +10,8 @@ description = "dominium — sesión de simulación agnóstica de GUI: posee el W
 [dependencies]
 dominium-core = { path = "../dominium-core" }
 dominium-physics = { path = "../dominium-physics" }
+
+[dev-dependencies]
+# Sólo para el benchmark `poblacion` — carga el pack de Conceptos default de
+# la app embebido por `include_str!` y reproduce la siembra exacta.
+serde_json = { workspace = true }

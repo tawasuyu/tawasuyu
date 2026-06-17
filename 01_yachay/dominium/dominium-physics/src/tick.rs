@@ -147,6 +147,13 @@ pub fn tick(world: &mut World, p: &SimParams) {
     // 4. Captura de acción por Conceptos. Vence cualquier transición previa:
     //    el `hack_lock` blindará al lemming hasta agotar su duración.
     apply_hacks(world);
+    // 4b. Reconstruye los cachés por-tick (más-pobre global + grilla de
+    //     ocupación + índice espacial). Es lo que vuelve la fase de acciones
+    //     O(N) en lugar de O(N²): los traders `Poorest` reusan el más-pobre,
+    //     `act_degradar`/trade `Nearest` consultan el índice espacial, y la
+    //     réplica lee la densidad local en O(1). Con los frenos en default
+    //     (0) sólo computa el más-pobre (O(N) barato).
+    world.rebuild_tick_ctx(p);
     // 5. Acciones de los agentes. Se fija `n` antes del loop: los hijos
     //    que `Replicar` agrega al final NO actúan este tick.
     let n = world.lemmings.len();
