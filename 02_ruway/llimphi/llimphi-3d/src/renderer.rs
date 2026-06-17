@@ -8,20 +8,19 @@
 //! tamaño); el color se compone con `LoadOp::Load` para preservar la UI vello
 //! que ya está debajo.
 
+use glam::Mat4;
+
 use crate::camera::Camera3d;
 use crate::mesh::{cube, Vertex3d};
+use crate::scene::{ensure_depth, DepthBuffer, DEPTH_FORMAT};
 
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-
-/// Depth attachment cacheado, recreado cuando cambia el tamaño del viewport.
-struct DepthTex {
-    view: wgpu::TextureView,
-    w: u32,
-    h: u32,
-}
-
-/// Renderer 3D de M0: dibuja un mesh indexado (por defecto un cubo) visto desde
-/// una [`Camera3d`]. Cachea pipeline, buffers de geometría, uniform y depth.
+/// Renderer de **mallas** indexadas (por defecto un cubo) visto desde una
+/// [`Camera3d`]. Cachea pipeline, buffers de geometría, uniform y (para el
+/// camino standalone) un depth propio. En [`Scene3d`](crate::Scene3d) comparte
+/// el depth con el pase de voxels para ocluirse mutuamente.
+///
+/// `model` ubica la malla en el mundo (default identidad): `mvp = view_proj ·
+/// model`, así una misma malla se instancia/posiciona sin reconstruir buffers.
 pub struct Renderer3d {
     pipeline: wgpu::RenderPipeline,
     vbuf: wgpu::Buffer,
@@ -29,7 +28,8 @@ pub struct Renderer3d {
     index_count: u32,
     ubuf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    depth: Option<DepthTex>,
+    model: Mat4,
+    depth: Option<DepthBuffer>,
 }
 
 impl Renderer3d {
@@ -167,13 +167,42 @@ impl Renderer3d {
             index_count: indices.len() as u32,
             ubuf,
             bind_group,
+            model: Mat4::IDENTITY,
             depth: None,
         }
     }
 
-    /// Dibuja la escena 3D sobre `target` (la textura intermedia del frame).
-    /// Firma compatible con la closure de `View::gpu_paint_with`. El color se
-    /// preserva (`LoadOp::Load`); el depth es propio y se limpia cada frame.
+    /// Ubica la malla en el mundo (`mvp = view_proj · model`). Default identidad.
+    pub fn set_model(&mut self, model: Mat4) {
+        self.model = model;
+    }
+
+    /// Sube el uniform del frame (`mvp = view_proj · model`). Lo llama
+    /// [`Self::render`] y [`Scene3d`](crate::Scene3d). `aspect` = w/h.
+    pub fn upload(&self, queue: &wgpu::Queue, aspect: f32, camera: &Camera3d) {
+        let mvp = camera.view_proj(aspect) * self.model;
+        // glam es column-major; el shader WGSL espera column-major → upload tal cual.
+        let mut ubytes = Vec::with_capacity(64);
+        for v in mvp.to_cols_array() {
+            ubytes.extend_from_slice(&v.to_ne_bytes());
+        }
+        queue.write_buffer(&self.ubuf, 0, &ubytes);
+    }
+
+    /// Dibuja la malla indexada en un pase **ya abierto** (color + depth). Lo usa
+    /// [`Scene3d`](crate::Scene3d) para compartir el pase con los voxels.
+    /// Requiere `upload` previo en el mismo frame.
+    pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vbuf.slice(..));
+        pass.set_index_buffer(self.ibuf.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..self.index_count, 0, 0..1);
+    }
+
+    /// Dibuja la malla sola sobre `target` (camino standalone, depth propio).
+    /// Firma compatible con `View::gpu_paint_with`; color preservado
+    /// (`LoadOp::Load`), depth propio limpiado cada frame.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -186,17 +215,9 @@ impl Renderer3d {
         if w == 0 || h == 0 {
             return;
         }
-        self.ensure_depth(device, w, h);
+        self.upload(queue, w as f32 / h as f32, camera);
+        ensure_depth(&mut self.depth, device, w, h);
         let depth_view = &self.depth.as_ref().unwrap().view;
-
-        let mvp = camera.view_proj(w as f32 / h as f32);
-        // glam es column-major; el shader WGSL espera column-major → upload tal cual.
-        let cols = mvp.to_cols_array();
-        let mut ubytes = Vec::with_capacity(64);
-        for v in cols {
-            ubytes.extend_from_slice(&v.to_ne_bytes());
-        }
-        queue.write_buffer(&self.ubuf, 0, &ubytes);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("llimphi-3d-pass"),
@@ -220,33 +241,7 @@ impl Renderer3d {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vbuf.slice(..));
-        pass.set_index_buffer(self.ibuf.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..self.index_count, 0, 0..1);
-    }
-
-    fn ensure_depth(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        if matches!(&self.depth, Some(d) if d.w == w && d.h == h) {
-            return;
-        }
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("llimphi-3d-depth"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        self.depth = Some(DepthTex { view, w, h });
+        self.draw(&mut pass);
     }
 }
 

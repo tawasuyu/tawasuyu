@@ -92,6 +92,9 @@ pub struct VoxelRenderer {
     pub sun_dir: [f32; 3],
     /// Atmósfera (cielo + niebla). `fog_density = 0` → comportamiento clásico.
     pub atmosphere: Atmosphere,
+    /// Depth buffer propio para el camino *standalone* ([`Self::render`]); en
+    /// `Scene3d` se usa el depth compartido y este queda sin tocar.
+    depth: Option<crate::scene::DepthBuffer>,
     /// Entidades vivas — se empacan y suben en cada `render`.
     pub entities: Vec<Entity3d>,
 }
@@ -184,9 +187,9 @@ impl VoxelRenderer {
 
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("llimphi-3d-voxel-ubuf"),
-            // mat4(64)+cam_eye(16)+grid_dim/brick(16)+sun(16)+cdim(16)+atlas(16)
-            // +sky_zenith/fog(16)+sky_horizon(16)
-            size: 176,
+            // inv_vp(64)+cam_eye(16)+grid_dim/brick(16)+sun(16)+cdim(16)+atlas(16)
+            // +sky_zenith/fog(16)+sky_horizon(16)+vp(64)
+            size: 240,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -239,7 +242,20 @@ impl VoxelRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            // Escribe profundidad (del voxel golpeado) → convive con mallas en
+            // un depth buffer compartido (`Scene3d`): el render volumétrico y el
+            // de triángulos se ocluyen correctamente entre sí.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: crate::scene::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                // LessEqual (no Less): el cielo en los misses escribe profundidad
+                // lejana (1.0) y debe pasar contra el clear 1.0; un `Less` lo
+                // rechazaría y dejaría ver el fondo negro. Sólo hay un fragmento
+                // de voxel por píxel (el del rayo), así que no hay z-fighting.
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -269,6 +285,7 @@ impl VoxelRenderer {
             free: Vec::new(),
             sun_dir: normalize3([0.5, 1.0, 0.35]),
             atmosphere: Atmosphere::default(),
+            depth: None,
             entities: Vec::new(),
         };
 
@@ -406,22 +423,13 @@ impl VoxelRenderer {
         uploaded + ind.len() as u32
     }
 
-    /// Ray-marchea la grilla vista desde `camera` sobre `target`. Color
-    /// `LoadOp::Load`; misses por `discard`. Grilla centrada en el origen.
-    pub fn render(
-        &mut self,
-        _device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        (w, h): (u32, u32),
-        camera: &Camera3d,
-    ) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        let inv_vp = camera.view_proj(w as f32 / h as f32).inverse();
-        let mut u = Vec::with_capacity(176);
+    /// Sube los uniforms (cámara/atmósfera/entidades) del frame. Lo llama tanto
+    /// [`Self::render`] (standalone) como [`Scene3d`](crate::Scene3d) antes de
+    /// abrir el pase compartido. `aspect` = w/h del viewport.
+    pub fn upload(&self, queue: &wgpu::Queue, aspect: f32, camera: &Camera3d) {
+        let vp = camera.view_proj(aspect);
+        let inv_vp = vp.inverse();
+        let mut u = Vec::with_capacity(240);
         for v in inv_vp.to_cols_array() {
             u.extend_from_slice(&v.to_ne_bytes());
         }
@@ -458,6 +466,10 @@ impl VoxelRenderer {
         ] {
             u.extend_from_slice(&v.to_ne_bytes());
         }
+        // Matriz forward (world→clip) para escribir frag_depth del voxel golpeado.
+        for v in vp.to_cols_array() {
+            u.extend_from_slice(&v.to_ne_bytes());
+        }
         queue.write_buffer(&self.ubuf, 0, &u);
 
         // Entidades: count (vec4) + array de [pos, half, color] (3×vec4 c/u).
@@ -488,6 +500,35 @@ impl VoxelRenderer {
             }
         }
         queue.write_buffer(&self.ubuf_ent, 0, &e);
+    }
+
+    /// Dibuja el fullscreen-triangle del ray-march en un pase **ya abierto** (con
+    /// color + depth). Lo usa [`Scene3d`](crate::Scene3d) para compartir el pase
+    /// con las mallas. Requiere `upload` previo en el mismo frame.
+    pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// Ray-marchea la grilla vista desde `camera` sobre `target` (camino
+    /// *standalone*, con depth propio). Color `LoadOp::Load`; misses por
+    /// `discard` (o cielo, con niebla). Grilla centrada en el origen.
+    pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        (w, h): (u32, u32),
+        camera: &Camera3d,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.upload(queue, w as f32 / h as f32, camera);
+        crate::scene::ensure_depth(&mut self.depth, device, w, h);
+        let depth_view = &self.depth.as_ref().unwrap().view;
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("llimphi-3d-voxel-pass"),
@@ -500,13 +541,18 @@ impl VoxelRenderer {
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        self.draw(&mut pass);
     }
 }
 
@@ -575,6 +621,7 @@ struct U {
     atlas: vec4<f32>,      // xyz = slots por eje en el atlas del pool
     sky_zenith: vec4<f32>, // xyz = color cenit, w = densidad de niebla (0 = off)
     sky_horizon: vec4<f32>,// xyz = color horizonte / hacia el que niebla desvanece
+    vp: mat4x4<f32>,       // world→clip (forward) para escribir frag_depth
 };
 struct Entity {
     pos: vec4<f32>,
@@ -819,8 +866,22 @@ fn sky_color(rd: vec3<f32>) -> vec3<f32> {
     return c;
 }
 
+// Profundidad NDC (0..1, wgpu) del punto golpeado `p` (en espacio de grilla):
+// se lleva a mundo (la grilla está centrada en el origen → world = p - dim/2) y
+// se proyecta con la matriz forward. Permite que las mallas se ocluyan con los
+// voxels en el depth buffer compartido de `Scene3d`.
+fn frag_depth(p: vec3<f32>, dim: vec3<f32>) -> f32 {
+    let clip = u.vp * vec4<f32>(p - dim * 0.5, 1.0);
+    return clip.z / clip.w;
+}
+
+struct FOut {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
 @fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
+fn fs(in: VOut) -> FOut {
     let p_near = u.inv_vp * vec4<f32>(in.ndc, 0.0, 1.0);
     let p_far  = u.inv_vp * vec4<f32>(in.ndc, 1.0, 1.0);
     let ro_world = u.cam_eye.xyz;
@@ -854,10 +915,14 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         ao = compute_ao(h.vox, h.normal, p, dim);
         t_hit = h.t;
     } else {
-        // Sin impacto: con niebla activa pintamos cielo propio; sin ella,
+        // Sin impacto: con niebla activa pintamos cielo propio (a profundidad
+        // lejana, así una malla por delante igual se dibuja); sin niebla,
         // descartamos para dejar ver el fondo vello (comportamiento clásico).
         if (fog_density > 0.0) {
-            return vec4<f32>(sky_color(rd), 1.0);
+            var sky: FOut;
+            sky.color = vec4<f32>(sky_color(rd), 1.0);
+            sky.depth = 1.0;
+            return sky;
         }
         discard;
     }
@@ -880,6 +945,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let f = 1.0 - exp(-t_hit * fog_density);
         color = mix(color, sky_color(rd), f);
     }
-    return vec4<f32>(color, 1.0);
+
+    var out: FOut;
+    out.color = vec4<f32>(color, 1.0);
+    out.depth = frag_depth(p, dim);
+    return out;
 }
 "#;

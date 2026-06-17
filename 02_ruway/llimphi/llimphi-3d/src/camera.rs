@@ -29,7 +29,11 @@ impl Default for Camera3d {
             up: Vec3::Y,
             fovy_rad: 60_f32.to_radians(),
             znear: 0.1,
-            zfar: 100.0,
+            // Generoso: cubre mundos voxel de cientos de unidades. Importa desde
+            // que el pase de voxels escribe profundidad (`Scene3d`): un hit más
+            // allá de `zfar` se clamparía a 1.0 y fallaría el depth test. Float32
+            // de depth mantiene precisión de sobra en este rango para oclusión.
+            zfar: 5000.0,
         }
     }
 }
