@@ -55,7 +55,144 @@ fn main() {
     rimay_localize::init();
     // Carga el idioma persistido en wawa-config (sobrescribe el default "es-PE").
     let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
+    // Captura headless de la UI a PNG (sin bootear el DM): `--shot <png> [W] [H]`.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--shot") {
+        let out = args.get(i + 1).cloned().unwrap_or_else(|| "greeter.png".to_string());
+        let w: u32 = args.get(i + 2).and_then(|v| v.parse().ok()).unwrap_or(1600);
+        let h: u32 = args.get(i + 3).and_then(|v| v.parse().ok()).unwrap_or(900);
+        shot_greeter(&out, w, h);
+        return;
+    }
     llimphi_ui::run::<Greeter>();
+}
+
+/// Construye un modelo de muestra (usuario+contraseña tecleados) y vuelca
+/// `Greeter::view` a un PNG, para revisar el layout del login sin loguearse.
+fn shot_greeter(out: &str, w: u32, h: u32) {
+    use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
+    use llimphi_ui::llimphi_hal::{wgpu, Hal};
+    use llimphi_ui::llimphi_layout::{taffy, LayoutTree};
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    use llimphi_ui::llimphi_raster::{vello, Renderer};
+    use llimphi_ui::llimphi_text::Typesetter;
+
+    let saved = state::GreeterState::load();
+    let sessions = sessions::discover();
+    let mut user = TextInputState::new();
+    user.set_text(if saved.last_user.is_empty() { "usuario".to_string() } else { saved.last_user });
+    let mut pass = TextInputState::masked();
+    pass.set_text("secreto".to_string());
+    let model = Model {
+        auth: pick_authenticator(),
+        user,
+        pass,
+        focus: Field::Pass,
+        status: Status::Idle,
+        sessions,
+        session_idx: 0,
+        clipboard: SystemClipboard::new(),
+        menu_open: None,
+        edit_menu: None,
+        menu_active: usize::MAX,
+        menu_anim: Tween::idle(1.0),
+        edit_active: usize::MAX,
+        edit_anim: Tween::idle(1.0),
+        rain_enabled: false,
+        rain_color: saved.rain_color,
+        rain_t: 0.0,
+    };
+    let view = <Greeter as App>::view(&model);
+
+    let hal = pollster::block_on(Hal::new(None)).expect("hal");
+    let mut renderer = Renderer::new(&hal).expect("renderer");
+    let mut layout = LayoutTree::new();
+    let mounted = mount(&mut layout, view);
+    let mut ts = Typesetter::new();
+    let computed = {
+        let tmap = &mounted.text_measures;
+        layout
+            .compute_with_measure(mounted.root, (w as f32, h as f32), |nid, known, avail| {
+                match tmap.get(&nid) {
+                    Some(tm) => measure_text_node(&mut ts, tm, known, avail),
+                    None => taffy::Size::ZERO,
+                }
+            })
+            .expect("layout")
+    };
+    let mut scene = vello::Scene::new();
+    paint(&mut scene, &mounted, &computed, &mut ts, None, None);
+
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let target = hal.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("greeter-shot"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: fmt,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let tview = target.create_view(&wgpu::TextureViewDescriptor::default());
+    renderer
+        .render_to_view(&hal, &scene, &tview, w, h, Color::from_rgba8(18, 18, 24, 255))
+        .expect("render_to_view");
+
+    let unpadded = (w * 4) as usize;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let padded = unpadded.div_ceil(align) * align;
+    let buf = hal.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (padded * h as usize) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = hal
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    hal.queue.submit(std::iter::once(enc.finish()));
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+    rx.recv().unwrap().unwrap();
+    let data = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for row in 0..h as usize {
+        let s = row * padded;
+        pixels.extend_from_slice(&data[s..s + unpadded]);
+    }
+    drop(data);
+    buf.unmap();
+    let file = std::fs::File::create(out).expect("png");
+    let mut penc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    penc.set_color(png::ColorType::Rgba);
+    penc.set_depth(png::BitDepth::Eight);
+    let mut wr = penc.write_header().unwrap();
+    wr.write_image_data(&pixels).unwrap();
+    eprintln!("mirada-greeter: {out} ({w}x{h})");
 }
 
 /// Elige el backend de autenticación según el entorno.

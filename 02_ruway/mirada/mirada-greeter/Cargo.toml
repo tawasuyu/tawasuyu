@@ -25,3 +25,6 @@ app-bus = { workspace = true }
 auth-core = { path = "../../../shared/auth/auth-core" }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
+# Sólo para el modo `--shot` (captura headless de la UI a PNG, sin bootear el DM).
+png = { workspace = true }
+pollster = { workspace = true }

@@ -15,7 +15,7 @@
 #![forbid(unsafe_code)]
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Size, Style},
+    prelude::{auto, length, percent, Size, Style},
     AlignItems, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -165,6 +165,18 @@ pub fn text_input_view<Msg: Clone + 'static>(
         (palette.bg, palette.border)
     };
 
+    // El texto va en un nodo HIJO de alto automático, centrado verticalmente
+    // por el contenedor (`align_items: Center`). Antes el texto era el contenido
+    // propio del nodo con alto fijo: `align_items` no centra el texto propio de
+    // un nodo, así que quedaba pegado arriba («inputs descentrados hacia arriba»).
+    let texto = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .text_aligned(display, 13.0, text_color, Alignment::Start);
     let inner = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -173,15 +185,15 @@ pub fn text_input_view<Msg: Clone + 'static>(
         padding: Rect {
             left: length(10.0_f32),
             right: length(10.0_f32),
-            top: length(6.0_f32),
-            bottom: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
     .fill(bg)
     .radius(3.0)
-    .text_aligned(display, 13.0, text_color, Alignment::Start);
+    .children(vec![texto]);
 
     View::new(Style {
         size: Size {
