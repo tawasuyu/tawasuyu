@@ -220,12 +220,22 @@ impl DrmState {
                     };
                     match res {
                         ClickResult::Launch(cmd) => {
+                            let target = self.menu_window.take();
                             self.root_menu = None;
                             self.menu_output_idx = None;
-                            self.app.spawn_user(&cmd);
+                            // Comandos `@win:*` = acción sobre la ventana del menú
+                            // contextual (no son shell). El resto va al usuario.
+                            if let Some(action) = cmd.strip_prefix("@win:") {
+                                if let Some(id) = target {
+                                    self.app.accion_ventana_menu(id, action);
+                                }
+                            } else {
+                                self.app.spawn_user(&cmd);
+                            }
                         }
                         ClickResult::Stay => {}
                         ClickResult::Close => {
+                            self.menu_window = None;
                             self.root_menu = None;
                             self.menu_output_idx = None;
                         }
@@ -260,6 +270,34 @@ impl DrmState {
                     return;
                 }
 
+                // Click DERECHO sobre la BARRA DE TÍTULO de una ventana: abre el
+                // menú **contextual de ventana** (minimizar/maximizar/flotar/
+                // enviar-a/cerrar). Va ANTES del menú del fondo. No en greeter.
+                if pressed && button == BTN_RIGHT && self.app.mode != BodyMode::Greeter {
+                    let (x, y) = self.app.pointer_loc;
+                    if let Some(i) = self.titlebar_at(x, y) {
+                        let id = self.app.windows[i].id;
+                        let idx = self.output_at_point(x.round() as i32, y.round() as i32);
+                        if let Some(r) = self.outputs.get(idx).map(|o| o.rect) {
+                            let ev = self.app.body.clicked(id); // enfoca la ventana
+                            self.app.brain_feed(ev);
+                            self.menu_window = Some(id);
+                            self.menu_output_idx = Some(idx);
+                            self.root_menu = Some(crate::menu::RootMenu::open(
+                                x.round() as i32 - r.x,
+                                y.round() as i32 - r.y,
+                                crate::menu::window_menu_entries(
+                                    mirada_brain::action::WORKSPACE_COUNT,
+                                ),
+                                r.w,
+                                r.h,
+                            ));
+                            crate::screencopy::danar_todo(&mut self.app);
+                            return;
+                        }
+                    }
+                }
+
                 // Click DERECHO sobre el fondo (sin ventana ni `Super`): abre el
                 // menú raíz, si hay entradas configuradas. No aplica en greeter.
                 if pressed
@@ -284,6 +322,7 @@ impl DrmState {
                             return;
                         };
                         self.menu_output_idx = Some(idx);
+                        self.menu_window = None; // menú del fondo, no de ventana
                         self.root_menu = Some(crate::menu::RootMenu::open(
                             x.round() as i32 - r.x,
                             y.round() as i32 - r.y,

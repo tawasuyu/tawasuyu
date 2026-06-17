@@ -48,6 +48,23 @@ impl MenuNode {
     }
 }
 
+/// Entradas del **menú contextual de ventana** (click derecho en el titlebar).
+/// Sus comandos llevan el prefijo `@win:` que el backend intercepta (no son
+/// comandos de shell): `min`/`max`/`float`/`close` y `ws:<n>` para enviarla a
+/// un escritorio. `workspaces` = cuántos escritorios listar en «Enviar a…».
+pub fn window_menu_entries(workspaces: usize) -> Vec<MenuNode> {
+    let destinos = (0..workspaces)
+        .map(|i| MenuNode::leaf(format!("Escritorio {}", i + 1), format!("@win:ws:{i}")))
+        .collect();
+    vec![
+        MenuNode::leaf("Minimizar", "@win:min"),
+        MenuNode::leaf("Maximizar / restaurar", "@win:max"),
+        MenuNode::leaf("Flotar / teselar", "@win:float"),
+        MenuNode::submenu("Enviar a…", destinos),
+        MenuNode::leaf("Cerrar", "@win:close"),
+    ]
+}
+
 /// Lo que devuelve [`RootMenu::click`]: qué hacer con el click.
 #[derive(Debug, PartialEq)]
 pub enum ClickResult {

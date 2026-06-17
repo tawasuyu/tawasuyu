@@ -225,6 +225,44 @@ impl App {
         self.apply_commands(cmds);
     }
 
+    /// Ejecuta una acción del **menú contextual de ventana** (click derecho en
+    /// el titlebar) sobre la ventana `id`. `cmd` es el sufijo tras `@win:`
+    /// (`close` / `max` / `min` / `float` / `ws:<n>`). Enfoca la ventana antes
+    /// de aplicar para que las acciones del Cerebro caigan sobre ella.
+    pub(crate) fn accion_ventana_menu(&mut self, id: u64, cmd: &str) {
+        use mirada_brain::DesktopAction;
+        if cmd == "close" {
+            if let Some(w) = self.windows.iter().find(|w| w.id == id) {
+                w.toplevel.send_close();
+            }
+            return;
+        }
+        if cmd == "max" {
+            self.maximizar_ventana(id);
+            return;
+        }
+        if cmd == "min" {
+            self.minimizar_ventana(id);
+            return;
+        }
+        let extra = if cmd == "float" {
+            DesktopAction::ToggleFloat
+        } else if let Some(n) = cmd.strip_prefix("ws:").and_then(|s| s.parse::<usize>().ok()) {
+            DesktopAction::MoveToWorkspace(n)
+        } else {
+            return;
+        };
+        let cmds = match &mut self.brain {
+            Brain::Embedded(d) => {
+                let mut c = d.apply(DesktopAction::FocusWindow(id));
+                c.extend(d.apply(extra));
+                c
+            }
+            Brain::Linked(_) => return,
+        };
+        self.apply_commands(cmds);
+    }
+
     /// Cambia al escritorio `idx` (0-based) — confirmación del switcher de
     /// Win+Tab. Por el Cerebro embebido.
     pub(crate) fn cambiar_workspace(&mut self, idx: usize) {
