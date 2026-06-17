@@ -130,10 +130,10 @@ fn surface_section(index: usize, s: &Surface) -> Section {
 impl Configurable for Config {
     fn schema(&self) -> Schema {
         let mut schema = Schema::new().section(
-            Section::new("general", "General")
-                .icon("⚙")
-                .field(Field::text("timezone", "Zona horaria", self.general.timezone.clone())
-                    .help("\"auto\" detecta del sistema; o un nombre IANA (America/Lima)"))
+            // El cajón/shell del panel (shuma). La zona horaria NO va acá — es
+            // del sistema (Sistema→reloj), no de pata.
+            Section::new("general", "Shuma")
+                .icon("▦")
                 .field(
                     Field::slider(
                         "shuma_height",

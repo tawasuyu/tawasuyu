@@ -1690,7 +1690,7 @@ fn atajos_schema(m: &Model) -> Schema {
         m.profiles.names().into_iter().map(|n| EnumOption::new(n.clone(), n)).collect();
     Schema::new()
         .section(
-            Section::new("atajos::conjuntos", "Conjuntos")
+            Section::new("atajos::conjuntos", "Atajos")
                 .icon("⌨")
                 .help(
                     "Conjuntos de atajos reusables (dwm/i3/hyprland o propios), \
@@ -1824,7 +1824,7 @@ fn animaciones_schema(m: &Model) -> Schema {
         m.animaciones.names().into_iter().map(|n| EnumOption::new(n.clone(), n)).collect();
     Schema::new()
         .section(
-            Section::new("animaciones::conjuntos", "Conjuntos")
+            Section::new("animaciones::conjuntos", "Animaciones")
                 .icon("✨")
                 .help(
                     "Conjuntos de animación reusables, perpendiculares a los \
