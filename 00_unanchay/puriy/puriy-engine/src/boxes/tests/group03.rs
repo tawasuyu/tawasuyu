@@ -648,3 +648,35 @@ use crate::Engine;
         });
         assert!(checked);
     }
+
+    #[test]
+    fn background_blend_mode_llega_al_box_fase_7_1236() {
+        // `background-blend-mode: multiply, screen` (lista paralela a las capas)
+        // computa y aterriza en `BoxNode.background_blend_mode`, listo para que
+        // el wire abra una capa de blend por capa de background. Los nodos sin
+        // la propiedad quedan con la lista vacía (default = `normal`).
+        use crate::style::BlendMode;
+        let html = r##"<html><body>
+            <div id="x" style="background-blend-mode: multiply, screen">x</div>
+            <p id="y">y</p>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut x_modes: Option<Vec<BlendMode>> = None;
+        let mut y_modes: Option<Vec<BlendMode>> = None;
+        doc.box_tree.walk(|b| match b.element_id.as_deref() {
+            Some("x") => x_modes = Some(b.background_blend_mode.clone()),
+            Some("y") => y_modes = Some(b.background_blend_mode.clone()),
+            _ => {}
+        });
+        assert_eq!(
+            x_modes,
+            Some(vec![BlendMode::Multiply, BlendMode::Screen]),
+            "los dos modos llegan al box en orden de lista"
+        );
+        assert_eq!(
+            y_modes,
+            Some(vec![]),
+            "sin la propiedad, la lista queda vacía (default normal)"
+        );
+    }

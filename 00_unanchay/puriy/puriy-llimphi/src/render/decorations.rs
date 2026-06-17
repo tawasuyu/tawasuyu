@@ -15,29 +15,88 @@ pub(crate) enum PreparedBgLayer {
     Gradient(puriy_engine::style::LinearGradient),
 }
 
+/// Mapea el `BlendMode` CSS del engine al `peniko::BlendMode` de vello.
+/// `Normal` → `None` (no hace falta capa de blend). Los modos de *mezcla*
+/// (multiply/screen/overlay/…) van a `Mix` (compose SrcOver); `plus-lighter`
+/// es Porter-Duff puro (`Compose::PlusLighter`). Espejo de
+/// `canvas::canvas_composite`, para `mix-blend-mode` y `background-blend-mode`.
+/// Fase 7.1236.
+pub(crate) fn blend_mode_peniko(
+    b: puriy_engine::style::BlendMode,
+) -> Option<llimphi_raster::peniko::BlendMode> {
+    use llimphi_raster::peniko::{Compose, Mix};
+    use puriy_engine::style::BlendMode as B;
+    let bm: llimphi_raster::peniko::BlendMode = match b {
+        B::Normal => return None,
+        B::Multiply => Mix::Multiply.into(),
+        B::Screen => Mix::Screen.into(),
+        B::Overlay => Mix::Overlay.into(),
+        B::Darken => Mix::Darken.into(),
+        B::Lighten => Mix::Lighten.into(),
+        B::ColorDodge => Mix::ColorDodge.into(),
+        B::ColorBurn => Mix::ColorBurn.into(),
+        B::HardLight => Mix::HardLight.into(),
+        B::SoftLight => Mix::SoftLight.into(),
+        B::Difference => Mix::Difference.into(),
+        B::Exclusion => Mix::Exclusion.into(),
+        B::Hue => Mix::Hue.into(),
+        B::Saturation => Mix::Saturation.into(),
+        B::Color => Mix::Color.into(),
+        B::Luminosity => Mix::Luminosity.into(),
+        B::PlusLighter => Compose::PlusLighter.into(),
+    };
+    Some(bm)
+}
+
+/// Resuelve el blend de la capa de background `idx` (0 = capa 0; 1.. = extra)
+/// con el ciclado de CSS: si `background-blend-mode` tiene menos entradas que
+/// capas, la lista se repite. `None` (lista vacía o `normal`) = sin blend.
+pub(crate) fn bg_blend_for(
+    list: &[puriy_engine::style::BlendMode],
+    idx: usize,
+) -> Option<llimphi_raster::peniko::BlendMode> {
+    if list.is_empty() {
+        return None;
+    }
+    blend_mode_peniko(list[idx % list.len()])
+}
+
 /// Pinta las capas de background EXTRA (debajo de la capa 0) dentro de `rect`.
 /// CSS pinta la primera capa de la lista arriba, así que estas van debajo y se
 /// pintan en orden inverso (la última de la lista, la más al fondo, primero).
 /// Cada capa es imagen (vía `paint_background_image`) o gradiente lineal.
+/// `blends[i]` es el `background-blend-mode` de la capa extra `i` (índice en
+/// orden de lista, ya ciclado por el caller): cuando es `Some`, la capa se
+/// pinta dentro de una `push_layer` de blend contra el backdrop ya acumulado
+/// (capas inferiores + `background-color`). Fase 7.1236.
 pub(crate) fn paint_extra_bg_layers(
     scene: &mut llimphi_raster::vello::Scene,
     rect: llimphi_ui::PaintRect,
     radius: f64,
     layers: &[PreparedBgLayer],
+    blends: &[Option<llimphi_raster::peniko::BlendMode>],
     alpha_mul: f32,
 ) {
-    for layer in layers.iter().rev() {
+    let clip_shape = || {
+        RoundedRect::new(
+            rect.x as f64,
+            rect.y as f64,
+            (rect.x + rect.w) as f64,
+            (rect.y + rect.h) as f64,
+            radius,
+        )
+    };
+    for (i, layer) in layers.iter().enumerate().rev() {
+        // El blend de esta capa: índice por posición de lista, no por el
+        // orden inverso de pintado.
+        let blend = blends.get(i).copied().flatten();
+        if let Some(bm) = blend {
+            scene.push_layer(Fill::NonZero, bm, 1.0, Affine::IDENTITY, &clip_shape());
+        }
         match layer {
             PreparedBgLayer::Gradient(g) => {
                 if let Some(brush) = build_linear_gradient_brush(g, rect, alpha_mul) {
-                    let r = RoundedRect::new(
-                        rect.x as f64,
-                        rect.y as f64,
-                        (rect.x + rect.w) as f64,
-                        (rect.y + rect.h) as f64,
-                        radius,
-                    );
-                    scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &clip_shape());
                 }
             }
             PreparedBgLayer::Image { img, iw, ih, size, position, repeat } => {
@@ -49,6 +108,9 @@ pub(crate) fn paint_extra_bg_layers(
                     );
                 }
             }
+        }
+        if blend.is_some() {
+            scene.pop_layer();
         }
     }
 }
@@ -390,6 +452,16 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     // Capas de background EXTRA (debajo de la capa 0). Cada una es imagen
     // (raster ya decodificado) o gradiente. Se preparan acá para no capturar
     // el BoxNode dentro del closure.
+    // `background-blend-mode` (Fase 7.1236): lista paralela a las capas, con
+    // ciclado. La capa 0 (gradiente/imagen) toma el índice 0; las extra el 1..
+    // (en orden de lista). `None` = sin blend (modo `normal` o lista vacía).
+    let bg_blend_list = b.background_blend_mode.clone();
+    let bg0_blend = bg_blend_for(&bg_blend_list, 0);
+    let extra_blends: Vec<Option<llimphi_raster::peniko::BlendMode>> = (0..b
+        .background_extra_layers
+        .len())
+        .map(|i| bg_blend_for(&bg_blend_list, i + 1))
+        .collect();
     let extra_layers: Vec<PreparedBgLayer> = b
         .background_extra_layers
         .iter()
@@ -423,7 +495,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     }
     view.paint_with(move |scene, _typesetter, rect| {
         // Capas de background EXTRA, debajo de la capa 0.
-        paint_extra_bg_layers(scene, rect, radius, &extra_layers, alpha_mul);
+        paint_extra_bg_layers(scene, rect, radius, &extra_layers, &extra_blends, alpha_mul);
         // Cajas de `background-origin` (área de posicionamiento) y
         // `background-clip` (recorte) de la capa 0. Insetean el border-box.
         let inset = |ins: (f32, f32, f32, f32)| llimphi_ui::PaintRect {
@@ -436,6 +508,22 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
         let clip_rect = inset(clip_ins);
         // El radio interno se encoge con el inset (esquina top-left como repr.).
         let clip_radius = (radius - clip_ins.0.max(clip_ins.1) as f64).max(0.0);
+        // `background-blend-mode` de la capa 0 (Fase 7.1236): si no es `normal`,
+        // la capa 0 (gradiente o imagen) se pinta dentro de una capa de blend
+        // recortada al clip box, mezclándose contra el backdrop ya acumulado
+        // (capas extra + `background-color`). v1: el backdrop es el rect final
+        // (no se aísla el subárbol del fondo) — exacto cuando hay un
+        // `background-color` opaco; aproximado si la capa de abajo es el padre.
+        if let Some(bm) = bg0_blend {
+            let r = RoundedRect::new(
+                clip_rect.x as f64,
+                clip_rect.y as f64,
+                (clip_rect.x + clip_rect.w) as f64,
+                (clip_rect.y + clip_rect.h) as f64,
+                clip_radius,
+            );
+            scene.push_layer(Fill::NonZero, bm, 1.0, Affine::IDENTITY, &r);
+        }
         // linear-gradient: se dimensiona contra el origin box y se recorta al
         // clip box. peniko interpreta `Linear { start, end }` como las dos
         // puntas — `build_linear_gradient_brush` cruza el rect dado.
@@ -462,6 +550,10 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                     bg_position, bg_repeat,
                 );
             }
+        }
+        // Cierre de la capa de blend de la capa 0 (si se abrió arriba).
+        if bg0_blend.is_some() {
+            scene.pop_layer();
         }
         // Sombras: CSS pinta back-to-front (la PRIMERA listada queda
         // ENCIMA). Iteramos en reversa para que el orden visual
@@ -721,4 +813,71 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             }
         }
     })
+}
+
+#[cfg(test)]
+mod blend_tests {
+    use super::*;
+    use llimphi_raster::peniko::{Compose, Mix};
+    use puriy_engine::style::BlendMode as B;
+
+    #[test]
+    fn normal_no_abre_capa_de_blend() {
+        // `normal` (default) no necesita capa: el camino source-over basta.
+        assert!(blend_mode_peniko(B::Normal).is_none());
+    }
+
+    #[test]
+    fn modos_de_mezcla_mapean_a_mix() {
+        // Los modos de *mezcla* van a `Mix` (compose SrcOver implícito).
+        let casos = [
+            (B::Multiply, Mix::Multiply),
+            (B::Screen, Mix::Screen),
+            (B::Overlay, Mix::Overlay),
+            (B::Darken, Mix::Darken),
+            (B::Lighten, Mix::Lighten),
+            (B::ColorDodge, Mix::ColorDodge),
+            (B::ColorBurn, Mix::ColorBurn),
+            (B::HardLight, Mix::HardLight),
+            (B::SoftLight, Mix::SoftLight),
+            (B::Difference, Mix::Difference),
+            (B::Exclusion, Mix::Exclusion),
+            (B::Hue, Mix::Hue),
+            (B::Saturation, Mix::Saturation),
+            (B::Color, Mix::Color),
+            (B::Luminosity, Mix::Luminosity),
+        ];
+        for (css, mix) in casos {
+            let bm = blend_mode_peniko(css).expect("no normal → Some");
+            assert_eq!(bm, llimphi_raster::peniko::BlendMode::from(mix), "{css:?}");
+        }
+    }
+
+    #[test]
+    fn plus_lighter_es_porter_duff() {
+        // `plus-lighter` no es un `Mix` sino un compose Porter-Duff puro.
+        let bm = blend_mode_peniko(B::PlusLighter).expect("Some");
+        assert_eq!(bm, llimphi_raster::peniko::BlendMode::from(Compose::PlusLighter));
+    }
+
+    #[test]
+    fn bg_blend_for_cicla_la_lista() {
+        // Lista vacía → siempre None (sin blend).
+        assert!(bg_blend_for(&[], 0).is_none());
+        assert!(bg_blend_for(&[], 3).is_none());
+        // Lista más corta que las capas: se repite (CSS). Con [multiply, screen]
+        // la capa 2 vuelve a multiply, la 3 a screen.
+        let lista = [B::Multiply, B::Screen];
+        let mul = llimphi_raster::peniko::BlendMode::from(Mix::Multiply);
+        let scr = llimphi_raster::peniko::BlendMode::from(Mix::Screen);
+        assert_eq!(bg_blend_for(&lista, 0), Some(mul));
+        assert_eq!(bg_blend_for(&lista, 1), Some(scr));
+        assert_eq!(bg_blend_for(&lista, 2), Some(mul));
+        assert_eq!(bg_blend_for(&lista, 3), Some(scr));
+        // Un `normal` en la lista sigue mapeando a None aunque la lista no esté
+        // vacía (esa capa no abre blend).
+        let con_normal = [B::Normal, B::Multiply];
+        assert!(bg_blend_for(&con_normal, 0).is_none());
+        assert_eq!(bg_blend_for(&con_normal, 1), Some(mul));
+    }
 }

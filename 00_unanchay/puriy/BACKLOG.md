@@ -419,7 +419,51 @@ silueta alpha; sin verificación de píxeles en CI (sí en el example con GPU).
 
 ---
 
-## Próximo bloque tras filter — a determinar
+## Familia blend (DETERMINADA 2026-06-17) — bloque elegido tras filter
 
-- **`background` per-layer avanzado** o gradientes cónicos/repeating que falten.
+**Determinación**: auditado el estado de gradientes y `background` (los 6 tipos
+de gradiente — incluidos cónicos y repeating — ya parsean, llegan al box y se
+pintan; los longhands `background-size/position/repeat/clip/origin` y las capas
+múltiples también). El hueco real es **blend**: `background-blend-mode` y
+`mix-blend-mode` **parsean y llegan al `BoxNode`** (Fases 7.254/7.255) pero
+**nada los lee para pintar** — la cadena se corta tras el parseo, igual que tenía
+`filter`. Esta familia los cablea hasta el píxel.
+
+**Arquitectura**: `push_layer(blend, …)` de vello. Cada capa/elemento que tenga
+un modo ≠ `normal` se pinta dentro de una capa de blend recortada a su caja, que
+se mezcla contra el backdrop ya acumulado. Mapeo CSS→peniko en
+`decorations.rs::blend_mode_peniko` (espejo de `canvas::canvas_composite`): modos
+de *mezcla* → `Mix` (compose SrcOver); `plus-lighter` → `Compose::PlusLighter`.
+
+**Limitación v1** (idéntica a mask/filter): el backdrop es el rect final (no se
+aísla el subárbol del fondo) — exacto cuando hay un fondo opaco debajo, aproximado
+si la capa de abajo es el contenido del padre.
+
+### 7.1236 ✅ — `background-blend-mode` se pinta
+
+Las capas de background (capa 0 = gradiente/imagen del shorthand; extra =
+`background-image: a, b, …`) se mezclan entre sí y contra `background-color`
+según `background-blend-mode` (lista paralela, con ciclado CSS). Compositor: nada
+nuevo — todo en el wire `puriy-llimphi`. `apply_decorations` resuelve el blend de
+cada capa con `bg_blend_for(&list, idx)` y envuelve el pintado de la capa 0
+(`push_layer`/`pop_layer` recortado al clip box) y de cada capa extra
+(`paint_extra_bg_layers` ganó el parámetro `blends: &[Option<BlendMode>]`). Tests:
+mapeo `blend_mode_peniko` (16 modos + normal→None), ciclado `bg_blend_for`, draw
+extra por blend (`grupo_04`), box-tree (`group03`: la lista llega al box).
+
+### 7.1237 — `mix-blend-mode` se pinta (pendiente)
+
+El elemento entero (su subárbol) se mezcla contra su backdrop. Más complejo que
+background-blend-mode: requiere envolver el `paint_range` del nodo (o su `View`)
+en una capa de blend contra todo lo pintado antes en el stacking context. El dato
+ya está en `BoxNode.mix_blend_mode`. Evaluar si se hace en el wire (envolver el
+`View` del nodo) o como post-pasada estilo filter.
+
+---
+
+## Próximo bloque tras blend — a determinar
+
+- **`mix-blend-mode`** (7.1237) cierra la familia blend.
+- **`background-attachment`** (parsea pero se descarta — no llega al box).
+- **`background-blend-mode` per-layer encaje** u otros refinamientos.
 - Lo que marque el SDD §Estado como próximo hueco.

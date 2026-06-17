@@ -632,7 +632,7 @@
 
         // Sin capas → no pinta nada.
         let mut none = llimphi_raster::vello::Scene::new();
-        paint_extra_bg_layers(&mut none, rect, 0.0, &[], 1.0);
+        paint_extra_bg_layers(&mut none, rect, 0.0, &[], &[], 1.0);
         assert!(none.encoding().is_empty(), "sin capas no debería pintar");
 
         // Una capa de gradiente → un fill.
@@ -645,8 +645,20 @@
             repeating: false,
         };
         let mut g = llimphi_raster::vello::Scene::new();
-        paint_extra_bg_layers(&mut g, rect, 0.0, &[PreparedBgLayer::Gradient(grad.clone())], 1.0);
+        paint_extra_bg_layers(&mut g, rect, 0.0, &[PreparedBgLayer::Gradient(grad.clone())], &[None], 1.0);
         assert!(!g.encoding().is_empty(), "una capa de gradiente debería pintar");
+
+        // La misma capa con `background-blend-mode: multiply` abre una
+        // push_layer de blend → más draw tags que sin blend. Fase 7.1236.
+        let mut gb = llimphi_raster::vello::Scene::new();
+        let mult = Some(llimphi_raster::peniko::BlendMode::from(llimphi_raster::peniko::Mix::Multiply));
+        paint_extra_bg_layers(&mut gb, rect, 0.0, &[PreparedBgLayer::Gradient(grad.clone())], &[mult], 1.0);
+        assert!(
+            gb.encoding().draw_tags.len() > g.encoding().draw_tags.len(),
+            "el blend debería agregar la capa (push_layer): {} vs {}",
+            gb.encoding().draw_tags.len(),
+            g.encoding().draw_tags.len()
+        );
 
         // Imagen + gradiente → más draws que el gradiente solo.
         let img = PenikoImage::new(ImageData { data: llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]), format: llimphi_raster::peniko::ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 2, height: 2 });
@@ -662,7 +674,7 @@
             PreparedBgLayer::Gradient(grad),
         ];
         let mut both = llimphi_raster::vello::Scene::new();
-        paint_extra_bg_layers(&mut both, rect, 0.0, &layers, 1.0);
+        paint_extra_bg_layers(&mut both, rect, 0.0, &layers, &[None, None], 1.0);
         assert!(
             both.encoding().draw_tags.len() > g.encoding().draw_tags.len(),
             "dos capas deberían encodar más draws que una ({} vs {})",
