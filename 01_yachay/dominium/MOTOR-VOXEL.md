@@ -472,9 +472,21 @@ como overlay** sobre el terreno fresco en cada `follow`. Verificado: 2 tests CPU
 terreno solo en ese punto es aire) + prueba visual (demo `terrain_streaming`: una torre
 magenta = 1261 px **idénticos** antes y después de alejarse 4000 voxels y volver →
 `/tmp/m6_persist_{before,after}.png`). Es el estado a serializar para la **persistencia
-CAS a disco** (futuro): `mundo → BLAKE3(postcard(patch))`. Queda de M6: **wiring en la
-app viva** (coords del jugador/HUD bajo la ventana móvil — necesita pantalla), CAS a
-disco y **LOD** del horizonte — el tramo caro de §7.
+CAS a disco** (futuro): `mundo → BLAKE3(postcard(patch))`.
+
+**LOD del horizonte (MVP HECHO, 2026-06-17):** más allá de la ventana voxel fina ya no
+hay un muro de niebla — una **malla gruesa** del terreno circundante muestra colinas
+lejanas (híbrido voxel-cerca/malla-LOD-lejos, compuesto por el **depth compartido** de
+`Scene3d`). `llimphi_voxel::lod_skirt(LodParams, dim, seed)` muestrea `column_height` a
+paso grueso (p.ej. cada 6 voxels) sobre un anillo alrededor de la ventana (deja un
+**hueco** central que llenan los voxels finos), y como `Renderer3d` es flat-color,
+**hornea la luz difusa + niebla por distancia en el color de cada vértice** (imita la
+`Atmosphere` del pase voxel → el horizonte funde sin costura). Verificado: demo
+`terrain_lod` rinde dos PNG (sin LOD = terreno cortado + niebla; con LOD = horizonte con
+cordilleras), mirados → `/tmp/m6_lod_{off,on}.png`. MVP: un solo nivel (no pirámide),
+regenerado por ventana; pendiente fino = niebla del horizonte algo lavada (capeada 0.9)
+y LOD multi-nivel para mundos enormes. Queda de M6: **wiring en la app viva** (coords
+del jugador/HUD bajo la ventana móvil — necesita pantalla) y CAS a disco.
 
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más
