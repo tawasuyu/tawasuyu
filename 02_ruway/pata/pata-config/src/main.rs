@@ -172,7 +172,7 @@ fn render_view(v: &WidgetView) -> String {
     match v {
         WidgetView::Empty => "·".to_string(),
         WidgetView::Text(t) => format!("text  «{t}»"),
-        WidgetView::TextRich { text, tooltip } => format!("text  «{text}» ↪ «{tooltip}»"),
+        WidgetView::TextRich { text, tooltip, .. } => format!("text  «{text}» ↪ «{tooltip}»"),
         WidgetView::Meter {
             label,
             fraction,
