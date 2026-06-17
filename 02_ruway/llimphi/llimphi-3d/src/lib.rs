@@ -34,7 +34,11 @@ pub use wgpu;
 mod camera;
 mod mesh;
 mod renderer;
+mod voxel;
+mod voxel_renderer;
 
 pub use camera::Camera3d;
 pub use mesh::{cube, Vertex3d};
 pub use renderer::Renderer3d;
+pub use voxel::VoxelGrid;
+pub use voxel_renderer::VoxelRenderer;
