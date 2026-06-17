@@ -16,7 +16,18 @@ llimphi-ui = { workspace = true }
 # llama a `build_plan` para que el canvas reciba un plan realista.
 dominium-core = { path = "../dominium-core" }
 dominium-iso = { path = "../dominium-iso" }
+# A/B headless (ab_compare): readback GPU → PNG.
+pollster = { workspace = true }
+png = { workspace = true }
 
 [[example]]
 name = "canvas_demo"
 path = "examples/canvas_demo.rs"
+
+[[example]]
+name = "ab_compare"
+path = "examples/ab_compare.rs"
+
+[[example]]
+name = "bench_raster"
+path = "examples/bench_raster.rs"
