@@ -121,8 +121,10 @@ impl VoxelGrid {
         (cdim, out)
     }
 
-    /// `255` si el brick `(cx,cy,cz)` (tamaño `b`) tiene algún voxel sólido.
-    fn brick_occupied(&self, b: u32, cx: u32, cy: u32, cz: u32) -> u8 {
+    /// `255` si el brick `(cx,cy,cz)` (tamaño `b`) tiene algún voxel sólido,
+    /// `0` si está todo vacío. Lo usa el brick pool para decidir si un brick
+    /// necesita slot.
+    pub fn brick_occupied(&self, b: u32, cx: u32, cy: u32, cz: u32) -> u8 {
         let (x0, y0, z0) = (cx * b, cy * b, cz * b);
         for z in z0..(z0 + b).min(self.dim[2]) {
             for y in y0..(y0 + b).min(self.dim[1]) {
@@ -134,6 +136,28 @@ impl VoxelGrid {
             }
         }
         0
+    }
+
+    /// Extrae los voxels de un brick `(cx,cy,cz)` de lado `brick` como RGBA
+    /// plano (`brick³` voxels, x contiguo), padeando con vacío los voxels fuera
+    /// del grid (bricks de borde cuando `dim` no es múltiplo de `brick`). Es la
+    /// unidad de subida al *pool* sparse (un slot del atlas = un brick).
+    pub fn extract_brick(&self, brick: u32, cx: u32, cy: u32, cz: u32) -> Vec<u8> {
+        let b = brick;
+        let mut out = vec![0u8; (b * b * b * 4) as usize];
+        for lz in 0..b {
+            for ly in 0..b {
+                for lx in 0..b {
+                    let (x, y, z) = (cx * b + lx, cy * b + ly, cz * b + lz);
+                    if x < self.dim[0] && y < self.dim[1] && z < self.dim[2] {
+                        let px = self.data[self.idx(x, y, z)];
+                        let o = ((lx + ly * b + lz * b * b) * 4) as usize;
+                        out[o..o + 4].copy_from_slice(&px);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Extrae una sub-caja RGBA contigua `[origin, origin+ext)` para subirla con

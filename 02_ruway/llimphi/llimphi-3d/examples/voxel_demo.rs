@@ -29,6 +29,15 @@ fn main() {
 
     let grid = VoxelGrid::demo_scene([dim, dim, dim]);
     let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
+    let (used, total) = vr.brick_usage();
+    let (pool, dense) = vr.memory_bytes();
+    eprintln!(
+        "brick pool: {used}/{total} bricks ocupados ({:.1}%) — pool {} KiB vs denso {} KiB ({:.1}× menos)",
+        used as f32 / total as f32 * 100.0,
+        pool / 1024,
+        dense / 1024,
+        dense as f32 / pool.max(1) as f32,
+    );
 
     let inter = hal.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("inter"),
