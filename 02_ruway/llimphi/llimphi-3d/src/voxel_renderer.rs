@@ -31,8 +31,25 @@ const BRICK: u32 = 8;
 /// ventana alineados a este múltiplo (ver [`VoxelRenderer::scroll_to`]).
 pub const VOXEL_BRICK: u32 = BRICK;
 
+/// Tope de luces puntuales por frame, expuesto para que el caller no exceda.
+pub const VOXEL_MAX_LIGHTS: usize = MAX_LIGHTS;
+
 /// Máximo de entidades vivas por frame (cabe holgado en un uniform).
 const MAX_ENTITIES: usize = 64;
+
+/// Máximo de luces puntuales por frame (cabe en el uniform principal).
+const MAX_LIGHTS: usize = 4;
+
+/// Luz puntual coloreada (antorcha/lámpara): ilumina los voxels/entidades
+/// cercanos con caída suave por distancia. Posición en coordenadas de voxel
+/// `[0, dim]` (igual que las entidades), color RGB lineal (puede pasar de 1.0
+/// para un brillo intenso), `range` = radio de alcance en voxels.
+#[derive(Clone, Copy)]
+pub struct PointLight {
+    pub pos: [f32; 3],
+    pub color: [f32; 3],
+    pub range: f32,
+}
 
 /// Una entidad (agente) — una caja analítica ray-marcheada en el mismo pase que
 /// los voxels (M4). Posición en coordenadas de voxel `[0, dim]` (sub-voxel, así
@@ -108,6 +125,9 @@ pub struct VoxelRenderer {
     depth: Option<crate::scene::DepthBuffer>,
     /// Entidades vivas — se empacan y suben en cada `render`.
     pub entities: Vec<Entity3d>,
+    /// Luces puntuales coloreadas (≤ [`MAX_LIGHTS`]) — antorchas/lámparas que
+    /// iluminan voxels y entidades cercanos. Se empacan y suben en cada `render`.
+    pub lights: Vec<PointLight>,
 }
 
 impl VoxelRenderer {
@@ -203,7 +223,8 @@ impl VoxelRenderer {
             label: Some("llimphi-3d-voxel-ubuf"),
             // inv_vp(64)+cam_eye(16)+grid_dim/brick(16)+sun(16)+cdim(16)+atlas(16)
             // +sky_zenith/fog(16)+sky_horizon(16)+vp(64)+scroll(16)
-            size: 256,
+            // +n_lights(16)+lights(4×32=128)
+            size: 400,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -303,6 +324,7 @@ impl VoxelRenderer {
             atmosphere: Atmosphere::default(),
             depth: None,
             entities: Vec::new(),
+            lights: Vec::new(),
         };
 
         // Poblar el pool: cada brick ocupado toma un slot incremental.
@@ -637,7 +659,7 @@ impl VoxelRenderer {
     pub fn upload(&self, queue: &wgpu::Queue, aspect: f32, camera: &Camera3d) {
         let vp = camera.view_proj(aspect);
         let inv_vp = vp.inverse();
-        let mut u = Vec::with_capacity(256);
+        let mut u = Vec::with_capacity(400);
         for v in inv_vp.to_cols_array() {
             u.extend_from_slice(&v.to_ne_bytes());
         }
@@ -689,6 +711,24 @@ impl VoxelRenderer {
             0.0,
         ] {
             u.extend_from_slice(&v.to_ne_bytes());
+        }
+        // Luces puntuales: count (vec4) + MAX_LIGHTS × [pos+range, color].
+        let nl = self.lights.len().min(MAX_LIGHTS);
+        for v in [nl as f32, 0.0, 0.0, 0.0] {
+            u.extend_from_slice(&v.to_ne_bytes());
+        }
+        for i in 0..MAX_LIGHTS {
+            let l = self.lights.get(i).copied().unwrap_or(PointLight {
+                pos: [0.0; 3],
+                color: [0.0; 3],
+                range: 1.0,
+            });
+            for v in [l.pos[0], l.pos[1], l.pos[2], l.range] {
+                u.extend_from_slice(&v.to_ne_bytes());
+            }
+            for v in [l.color[0], l.color[1], l.color[2], 0.0] {
+                u.extend_from_slice(&v.to_ne_bytes());
+            }
         }
         queue.write_buffer(&self.ubuf, 0, &u);
 
@@ -850,6 +890,8 @@ struct U {
     sky_horizon: vec4<f32>,// xyz = color horizonte / hacia el que niebla desvanece
     vp: mat4x4<f32>,       // world→clip (forward) para escribir frag_depth
     scroll: vec4<f32>,     // xyz = origen de brick (streaming toroidal); 0 = sin scroll
+    n_lights: vec4<f32>,   // x = cantidad de luces puntuales activas
+    lights: array<vec4<f32>, 8>, // por luz: [pos.xyz, range], [color.rgb, _]
 };
 struct Entity {
     pos: vec4<f32>,
@@ -1180,7 +1222,23 @@ fn fs(in: VOut) -> FOut {
     // Ambiente tintado por el cielo pero con ~la misma luminancia que el flat 0.32
     // de antes (no oscurece las caras que no ven el sol).
     let amb_col = mix(vec3<f32>(0.45), u.sky_zenith.xyz, 0.45) * 0.70;
-    let light = amb_col + sun_col * (0.78 * diff * shadow);
+    var light = amb_col + sun_col * (0.78 * diff * shadow);
+
+    // Luces puntuales coloreadas (antorchas/lámparas): caída suave por distancia
+    // (sin sombra, MVP). `p` está en espacio de voxel, igual que `light.pos`.
+    let nlights = i32(u.n_lights.x);
+    for (var li = 0; li < nlights; li = li + 1) {
+        let lp = u.lights[2 * li];
+        let lc = u.lights[2 * li + 1];
+        let to = lp.xyz - p;
+        let d = length(to);
+        let range = max(lp.w, 1e-3);
+        var att = clamp(1.0 - d / range, 0.0, 1.0);
+        att = att * att; // caída cuadrática suave
+        let ndl = max(dot(normal, to / max(d, 1e-3)), 0.0);
+        light = light + lc.rgb * (att * ndl);
+    }
+
     var color = albedo * light * ao_term;
 
     // Niebla / perspectiva aérea: lo lejano desvanece hacia el cielo en esa

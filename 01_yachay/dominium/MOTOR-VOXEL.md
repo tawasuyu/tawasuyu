@@ -683,7 +683,13 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    cielo (rebote frío), **sin uniforms nuevos** (sale de `sun_dir`/`sky_zenith` que
    ya viajan). El mood se controla moviendo `sun_dir` y la paleta de cielo.
    Verificado por PNG (golem/actores con matiz cálido-frío, misma luminancia base).
-   **Falta**: luces puntuales/coloreadas explícitas, sombras suaves.
+   **Luces puntuales coloreadas HECHAS (2026-06-17):** `llimphi_3d::PointLight{pos,
+   color,range}` (≤ `VOXEL_MAX_LIGHTS`=4) en `VoxelRenderer.lights` — antorchas/
+   lámparas que tiñen voxels y entidades cercanos con caída cuadrática suave (sin
+   sombra, MVP), aplicadas en el mismo fragment del ray-march (uniform 256→400 B).
+   Verificado por PNG (`lights_demo`: charcos cálido naranja + frío cian sobre el
+   piso, con falloff; off/on en `/tmp/lights_{off,on}.png`). **Falta**: sombras de
+   las puntuales, área/soft.
 5. ~~**Calidad de cuadro**: supersampling~~ **HECHO**: SSAA — el `--film`/`--vox`
    renderizan a **2×** (`SSW×SSH`) y bajan promediando bloques 2×2
    (`write_png_downsampled`) → antialias de los bordes duros del ray-march.
