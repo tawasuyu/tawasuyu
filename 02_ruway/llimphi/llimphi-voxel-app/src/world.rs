@@ -6,7 +6,16 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
-use llimphi_voxel::Player;
+use llimphi_voxel::{Critter, Player};
+
+/// Paleta de bichos (ovejas, marrones, terrosos, celestes…).
+const HERD_PALETTE: [[u8; 3]; 5] = [
+    [236, 236, 232],
+    [205, 170, 125],
+    [120, 92, 70],
+    [96, 132, 176],
+    [206, 198, 96],
+];
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -24,6 +33,9 @@ pub struct World {
     /// Jugador en primera persona (modo "explorar"): camina el terreno con
     /// gravedad y colisión. En modo órbita simplemente se ignora.
     player: Player,
+    /// Bichos que deambulan el terreno (misma física que el jugador). Se
+    /// dibujan como cajas en el pase de ray-march (`VoxelRenderer::entities`).
+    critters: Vec<Critter>,
 }
 
 impl World {
@@ -49,14 +61,53 @@ impl World {
         // Jugador posado sobre la columna central del terreno.
         let player = Player::spawn_on(&grid, dim[0] / 2, dim[2] / 2);
 
-        Self {
+        // Manada esparcida por el interior, en una grilla con jitter
+        // determinista (cada bicho su semilla → rumbos distintos).
+        let margin = 16u32;
+        let (cols, rows) = (7u32, 5u32);
+        let mut critters = Vec::with_capacity((cols * rows) as usize);
+        let mut k: u32 = 0x9e3779b9;
+        let span_x = dim[0].saturating_sub(2 * margin).max(1);
+        let span_z = dim[2].saturating_sub(2 * margin).max(1);
+        for r in 0..rows {
+            for c in 0..cols {
+                // Jitter LCG por celda para que no quede una grilla perfecta.
+                k = k.wrapping_mul(1664525).wrapping_add(1013904223);
+                let jx = (k >> 16) % 9;
+                k = k.wrapping_mul(1664525).wrapping_add(1013904223);
+                let jz = (k >> 16) % 9;
+                let x = margin + span_x * c / (cols - 1) + jx;
+                let z = margin + span_z * r / (rows - 1) + jz;
+                let color = HERD_PALETTE[(r * cols + c) as usize % HERD_PALETTE.len()];
+                critters.push(Critter::spawn_on(&grid, x.min(dim[0] - 1), z.min(dim[2] - 1), color, k));
+            }
+        }
+
+        let mut world = Self {
             scene: Scene3d::new(),
             voxel,
             monument,
             grid,
             dim,
             player,
+            critters,
+        };
+        // Calentar la manada para que arranque desparramada (no en grilla).
+        for _ in 0..150 {
+            world.tick(1.0 / 30.0);
         }
+        world
+    }
+
+    /// Avanza un frame de vida: deambula la manada y vuelca sus cajas al
+    /// renderer (la capa de entidades del ray-march). Barato (instancing
+    /// analítico) — llamar cada frame, en cualquier modo.
+    pub fn tick(&mut self, dt: f32) {
+        for c in &mut self.critters {
+            c.step(&self.grid, dt);
+        }
+        self.voxel.entities.clear();
+        self.voxel.entities.extend(self.critters.iter().map(|c| c.entity()));
     }
 
     /// Avanza la física del jugador `dt` segundos con la caminata deseada
@@ -79,6 +130,22 @@ impl World {
         let x = x.min(self.dim[0] - 1);
         let z = z.min(self.dim[2] - 1);
         self.player = Player::spawn_on(&self.grid, x, z);
+    }
+
+    /// Centro (en **mundo**) del bicho más cercano a `eye_world`, o `None` si no
+    /// hay manada. Para encuadrar un bicho en una toma de primera persona.
+    pub fn nearest_critter(&self, eye_world: Vec3) -> Option<Vec3> {
+        let center = self.world_center();
+        self.critters
+            .iter()
+            .map(|c| {
+                let e = c.entity();
+                Vec3::new(e.pos[0], e.pos[1], e.pos[2]) - center
+            })
+            .min_by(|a, b| {
+                a.distance_squared(eye_world)
+                    .total_cmp(&b.distance_squared(eye_world))
+            })
     }
 
     /// Medio-`dim`: el offset entre espacio de grilla (`[0,dim]`) y mundo

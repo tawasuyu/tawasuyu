@@ -250,6 +250,7 @@ impl App for VoxelApp {
                     }
                 }
 
+                w.tick(DT); // la manada deambula
                 w.animate(angle);
                 w.render(device, queue, encoder, target, vp, &camera);
             })
@@ -312,9 +313,9 @@ fn shot() {
     );
     shot_one(&hal, &mut renderer, &world, cam_orbit, true, "/tmp/voxel_app.png");
 
-    // --- Toma 2: primera persona, parado en un mirador del borde mirando el
-    // continente en diagonal (yaw≈45° apunta de la esquina hacia el centro) ---
-    let eye = {
+    // --- Toma 2: primera persona, parado en un mirador del borde, mirando al
+    // bicho más cercano (encuadra la manada que deambula el terreno) ---
+    let cam_fps = {
         let mut guard = world.lock().unwrap();
         let w = guard.as_mut().expect("mundo ya construido en la toma 1");
         w.spawn_player_at(DIM_XZ / 5, DIM_XZ / 5);
@@ -323,9 +324,9 @@ fn shot() {
         for _ in 0..4 {
             eye = w.step_player(Vec3::ZERO, false, DT);
         }
-        eye
+        let target = w.nearest_critter(eye).unwrap_or(eye + Vec3::Z);
+        Camera3d { eye, target, ..Camera3d::default() }
     };
-    let cam_fps = Camera3d::fly(eye, 45_f32.to_radians(), -4_f32.to_radians());
     shot_one(&hal, &mut renderer, &world, cam_fps, false, "/tmp/voxel_app_fps.png");
 }
 

@@ -52,7 +52,9 @@ pub fn look_dir(yaw: f32, pitch: f32) -> Vec3 {
     Vec3::new(cp * sy, sp, cp * cy)
 }
 
-/// Jugador físico: una caja AABB con velocidad, parada sobre el terreno.
+/// Cuerpo físico AABB con velocidad, parado sobre el terreno. Lo usa tanto el
+/// jugador (input directo) como los agentes ([`Critter`](crate::Critter), wander
+/// automático) — misma física, distinta voluntad.
 #[derive(Debug, Clone, Copy)]
 pub struct Player {
     /// Centro de los pies (espacio de grilla).
@@ -61,6 +63,9 @@ pub struct Player {
     pub vel: Vec3,
     /// `true` si el último paso terminó apoyado en suelo (habilita el salto).
     pub on_ground: bool,
+    /// Velocidad de caminata horizontal (voxels/s). Editable por cuerpo: el
+    /// jugador anda rápido, un bicho puede pastar lento.
+    pub speed: f32,
 }
 
 impl Player {
@@ -70,6 +75,7 @@ impl Player {
             pos: feet,
             vel: Vec3::ZERO,
             on_ground: false,
+            speed: MOVE_SPEED,
         }
     }
 
@@ -96,7 +102,7 @@ impl Player {
         // Velocidad horizontal: directa desde el deseo (sin inercia, simple).
         let flat = Vec3::new(wish.x, 0.0, wish.z);
         let h = if flat.length_squared() > 1e-6 {
-            flat.normalize() * MOVE_SPEED
+            flat.normalize() * self.speed
         } else {
             Vec3::ZERO
         };

@@ -480,6 +480,22 @@ el continente, por el camino real de `step_player`). Pendiente de polish: una
 ray-march (el crosshair vello queda tapado por el canvas GPU full-screen, y el
 `view_overlay` modal congelaría el mouse-look) — slice aparte de HUD GPU.
 
+**Manada viva — M4 cerrado en la app (2026-06-17).** El motor ya tenía la *capa*
+de entidades (`Entity3d`: cajas analíticas ray-marcheadas en el mismo pase, hasta
+64, con sombra; demo `voxel_entities_demo`), pero static. Ahora la rama
+`llimphi-voxel` aporta la *voluntad*: **`Critter`** — un agente que **deambula**
+reusando exactamente la física de `Player` (gravedad + colisión), con IA mínima
+determinista (LCG por bicho: cambia de rumbo cada tanto, salta a veces, gira al
+chocar contra una pared). Para que el cuerpo sirva a ambos, `Player` ganó un
+campo `speed` (el jugador anda rápido, el bicho pasta lento). La app suelta una
+**manada** (`World::tick` deambula y vuelca `Critter::entity()` a
+`VoxelRenderer::entities` cada frame; instancing analítico, barato). Verificado:
+3 tests de `Critter` (deambula sin hundirse, rebota y queda en el corral, dos
+semillas divergen) + PNG `voxel_app_fps.png` (una "oveja" voxel parada en la
+orilla, encuadrada por `World::nearest_critter`). Con esto **M0–M5 + M4
+(entidades con conducta) están cerrados**; queda sólo el tramo caro de M6
+(streaming/LOD del horizonte) y el HUD GPU.
+
 ### 11.4 Esfuerzo vs el kernel de wawa
 
 El motor voxel es **~1/3–1/2 del esfuerzo del kernel wawa y con mucho menos riesgo**:
