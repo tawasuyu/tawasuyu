@@ -156,6 +156,8 @@ pub(super) enum MenuKind {
     Clipboard,
     /// El panel del reloj (spinners de fecha/hora, sólo clicks).
     Clock,
+    /// El control panel (ajustes rápidos: volumen/brillo/batería/radios).
+    Control,
 }
 
 /// El cliente Wayland del backend layer-shell.
@@ -232,6 +234,8 @@ pub(super) struct LayerApp {
     pub(super) sampler: SamplerHandle,
     /// Último snapshot del sistema recogido del hilo de muestreo.
     pub(super) ctx: WidgetCtx,
+    /// Lecturas extra del control panel (batería/wifi/bt), refrescadas al abrirlo.
+    pub(super) control_extras: crate::render::ControlExtras,
     /// Estado del sidebar navegador.
     pub(super) nav: NavState,
     /// Canal por donde el hilo de poll de `list_monads` entrega resultados.
@@ -435,6 +439,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         menu_bar_px: 32,
         sampler: SamplerHandle::spawn(utc),
         ctx: WidgetCtx::default(),
+        control_extras: crate::render::ControlExtras::default(),
         nav: NavState::default(),
         nav_rx,
         members_tx,

@@ -22,7 +22,7 @@ use llimphi_widget_switch::{switch_view, SwitchPalette};
 use crate::Msg;
 
 /// Ancho del panel (px).
-const PANEL_W: f32 = 300.0;
+pub(super) const PANEL_W: f32 = 300.0;
 /// Alto de una fila de slider.
 const ROW_H: f32 = 30.0;
 /// Largo de la pista del slider horizontal.
@@ -149,7 +149,7 @@ pub fn control_overlay(
     .children(vec![fila])
 }
 
-fn control_panel(
+pub(super) fn control_panel(
     volume: f32,
     muted: bool,
     brightness: f32,

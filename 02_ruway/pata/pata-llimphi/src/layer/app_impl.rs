@@ -708,6 +708,20 @@ impl LayerApp {
                     self.menu_bar_px as f32,
                     &self.clock_draft,
                 ),
+                MenuKind::Control => render::control_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    self.ctx.volume,
+                    self.ctx.muted,
+                    self.ctx.brightness,
+                    &self.control_extras,
+                    self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
+                ),
             }
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
             render::shuma_open_view(
@@ -872,6 +886,15 @@ impl LayerApp {
             }
             Msg::BrightnessSet(f) => crate::sampler::set_brightness(f),
             Msg::BrightnessPanel => {}
+            Msg::ControlToggle => {
+                // Antes el engranaje ⚙ no hacía nada en el DM. Ahora abre el
+                // control panel (ajustes rápidos) como menú; al abrir, refresca
+                // batería/wifi/bt.
+                if !(self.menu_open && self.menu_kind == MenuKind::Control) {
+                    self.control_extras = crate::render::ControlExtras::read();
+                }
+                self.toggle_menu(MenuKind::Control);
+            }
             Msg::ClipboardMenu => self.toggle_menu(MenuKind::Clipboard),
             Msg::ClipboardPick(text) => {
                 crate::sampler::copiar_clipboard(&text);

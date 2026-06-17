@@ -1014,6 +1014,62 @@ pub fn clipboard_menu_view(
     .children(hijos)
 }
 
+/// El **control panel** (ajustes rápidos: volumen/brillo/batería/radios) para el
+/// **layer-shell**, anclado justo debajo del engranaje que lo abrió. Antes el
+/// botón ⚙ no hacía nada en el DM (sólo estaba cableado en el path winit).
+#[allow(clippy::too_many_arguments)]
+pub fn control_menu_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    volume: f32,
+    muted: bool,
+    brightness: f32,
+    extras: &control::ControlExtras,
+    anchor_x: f32,
+    avail_w: f32,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(bar_px) },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
+
+    let left =
+        (anchor_x - control::PANEL_W * 0.5).clamp(8.0, (avail_w - control::PANEL_W - 8.0).max(8.0));
+    let panel_abs = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect { left: length(left), top: length(0.0_f32), right: auto(), bottom: auto() },
+        size: Size { width: length(control::PANEL_W), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![control::control_panel(volume, muted, brightness, extras, theme)]);
+
+    let mut body_style = Style {
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::ControlToggle)
+        .children(vec![panel_abs]);
+
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
 // ============================================================
 // Barra layer-shell
 // ============================================================

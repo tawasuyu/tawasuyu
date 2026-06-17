@@ -489,7 +489,12 @@ impl Config {
         top.thickness = 44.0;
         // La barra superior va en TODOS los monitores (no sólo el primario).
         top.output = "*".to_string();
-        top.start = vec![WidgetSpec::new("start_button"), WidgetSpec::new("clock")];
+        top.start = vec![
+            WidgetSpec::new("start_button"),
+            WidgetSpec::new("clock"),
+            // Visualizador de audio (CAVA) en el default — el espectro vivo.
+            WidgetSpec::new("cava"),
+        ];
         top.center = vec![
             WidgetSpec::new("workspace_switcher"),
             WidgetSpec::new("window_list"),
