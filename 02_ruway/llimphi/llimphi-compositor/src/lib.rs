@@ -281,6 +281,21 @@ pub type GpuPaintFn = Arc<
         + Sync,
 >;
 
+/// Callback de pintura vello "over": idéntico en firma a [`PaintFn`]
+/// `(&mut Scene, &mut Typesetter, PaintRect)`, pero el runtime lo invoca
+/// en una pasada vello FINAL, **después** de todos los `gpu_painter` del
+/// frame. Sus primitivas se rasterizan sobre fondo transparente y se
+/// componen con alpha encima de la intermedia (que ya tiene
+/// vello-base + GPU directo). Resuelve el z-order inverso al de
+/// [`GpuPaintFn`]: permite pintar texto/sprites AA por vello **encima**
+/// de celdas instanciadas por GPU (dominium grid, futuro motor voxel).
+///
+/// Orden total del frame: `[vello base] → [gpu_painter] → [over_painter]
+/// → [overlay/menús]`. Los menús (`view_overlay`) siguen quedando por
+/// encima del over-layer. Ver [`View::paint_over`]. Es un alias de
+/// [`PaintFn`]; existe sólo para documentar la semántica temporal.
+pub type OverPaintFn = PaintFn;
+
 /// Sombra proyectada detrás del rect del nodo (drop shadow), rasterizada
 /// con el `draw_blurred_rounded_rect` nativo de vello. Se pinta **antes**
 /// del relleno, así el fill (si es opaco) tapa la parte solapada y la
@@ -436,6 +451,13 @@ pub struct View<Msg> {
     /// frame; comparte tree y orden DFS con los demás. Ver
     /// [`GpuPaintFn`].
     pub gpu_painter: Option<GpuPaintFn>,
+    /// Pintor vello "over": closure que pinta DESPUÉS del pase GPU del
+    /// frame, sobre una escena vello que el runtime compone con alpha
+    /// encima de la intermedia. Sirve para sprites/texto AA encima de
+    /// celdas instanciadas por GPU. Ver [`View::paint_over`] y
+    /// [`OverPaintFn`]. Misma firma que [`PaintFn`] — sólo cambia
+    /// *cuándo* corre (post-GPU). `None` = sin over-layer (coste cero).
+    pub over_painter: Option<PaintFn>,
     pub on_click: Option<Msg>,
     /// Handler de click que recibe la posición **relativa al rect del
     /// nodo** (esquina superior-izquierda del nodo = `(0, 0)`). Útil
@@ -720,6 +742,7 @@ impl<Msg: 'static> View<Msg> {
             mask_extra,
             painter,
             gpu_painter,
+            over_painter,
             on_click,
             on_click_at,
             on_right_click,
@@ -786,6 +809,7 @@ impl<Msg: 'static> View<Msg> {
             mask_extra,
             painter,
             gpu_painter,
+            over_painter,
             drag_payload,
             drop_hover_fill,
             clip,
@@ -1126,6 +1150,7 @@ pub struct MountedNode<Msg> {
     pub mask_extra: Vec<(Image, MaskCompose)>,
     pub painter: Option<PaintFn>,
     pub gpu_painter: Option<GpuPaintFn>,
+    pub over_painter: Option<PaintFn>,
     pub on_click: Option<Msg>,
     pub on_click_at: Option<ClickAtFn<Msg>>,
     pub on_right_click: Option<Msg>,

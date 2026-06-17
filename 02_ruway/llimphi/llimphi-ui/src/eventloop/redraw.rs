@@ -434,6 +434,95 @@ pub(super) fn handle_redraw<A: App>(
             viewport,
         );
     }
+    // Capa vello "over" (Primitivo B): nodos con `paint_over` registran
+    // primitivas vello que deben quedar ENCIMA del pase GPU directo
+    // (sprites/texto AA sobre celdas instanciadas — dominium, motor
+    // voxel). Camino opt-in y coste cero si nadie la usa (loop barato +
+    // bandera false): el orden total queda [vello base] → [gpu_paint] →
+    // [vello over] → [overlay/menús].
+    //
+    // Mecánica de z-order correcta: rasterizamos la escena over en una
+    // textura scratch transparente (vello, con su propio submit — no
+    // toca la intermedia) y luego GRABAMOS el composite alpha de esa
+    // scratch sobre la intermedia DENTRO de `gpu_encoder`, después de
+    // los pases GPU directos. Como `gpu_encoder` se submitea al final
+    // (línea de abajo), el composite corre en la GPU DESPUÉS de las
+    // primitivas GPU → el over-layer queda encima de ellas. Va ANTES
+    // del composite de menús, así los menús siguen por encima del over.
+    let over_active = has_over_painter(&mounted)
+        || overlay_built
+            .as_ref()
+            .map(|ov| has_over_painter(&ov.mounted))
+            .unwrap_or(false);
+    if over_active {
+        // Escena vello aparte (no pisamos `state.scene`, que el caller
+        // retiene/reusa). Fondo transparente: sólo lo pintado por los
+        // `over_painter` lleva alpha.
+        let mut over_scene = vello::Scene::new();
+        let mut any_over = paint_over(
+            &mut over_scene,
+            &mounted,
+            &computed,
+            &mut state.typesetter,
+        );
+        if let Some(ov) = overlay_built.as_ref() {
+            any_over |= paint_over(
+                &mut over_scene,
+                &ov.mounted,
+                &ov.computed,
+                &mut state.typesetter,
+            );
+        }
+        if any_over {
+            // Scratch transparente del tamaño del frame (mismo formato
+            // que la intermedia: Rgba8Unorm). Vello escribe via compute
+            // (STORAGE_BINDING) y el composite la lee como sampler
+            // (TEXTURE_BINDING). Por-frame: sólo se crea cuando hay
+            // over-layer activo, igual que los buffers de `GpuBatch`.
+            let over_tex = state.hal.device.create_texture(
+                &llimphi_hal::wgpu::TextureDescriptor {
+                    label: Some("llimphi-ui-over-scratch"),
+                    size: llimphi_hal::wgpu::Extent3d {
+                        width: vw,
+                        height: vh,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: llimphi_hal::wgpu::TextureDimension::D2,
+                    format: llimphi_hal::wgpu::TextureFormat::Rgba8Unorm,
+                    usage: llimphi_hal::wgpu::TextureUsages::STORAGE_BINDING
+                        | llimphi_hal::wgpu::TextureUsages::TEXTURE_BINDING
+                        | llimphi_hal::wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                },
+            );
+            let over_view =
+                over_tex.create_view(&llimphi_hal::wgpu::TextureViewDescriptor::default());
+            // Vello rasteriza la escena over a la scratch (su propio
+            // submit; limpia con TRANSPARENT). Independiente de la
+            // intermedia.
+            if let Err(e) = state.renderer.render_to_view(
+                &state.hal,
+                &over_scene,
+                &over_view,
+                vw,
+                vh,
+                palette::css::TRANSPARENT,
+            ) {
+                eprintln!("render over-layer error: {e}");
+            }
+            // Composite alpha de la scratch sobre la intermedia, grabado
+            // en `gpu_encoder` DESPUÉS de los pases GPU directos.
+            state.overlay_compositor.composite(
+                &state.hal.device,
+                &mut gpu_encoder,
+                frame.view(),
+                &over_view,
+            );
+            any_gpu = true;
+        }
+    }
     // Composición alpha del overlay SOBRE la intermedia (que ya
     // tiene UI + video). Último pase del encoder → corre después
     // del blit del video. Garantiza menús por encima del video.

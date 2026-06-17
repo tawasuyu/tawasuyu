@@ -1,7 +1,7 @@
 //! Backend GPU directo (Fases 2 + 3 del SDD §"GPU directo wgpu").
 //!
-//! Tres pipelines `wgpu` cacheadas en [`GpuPipelines`] (lines / tris /
-//! rects) + un acumulador [`GpuBatch`] que las apps usan por frame para
+//! Cuatro pipelines `wgpu` cacheadas en [`GpuPipelines`] (lines / tris /
+//! rects / discs) + un acumulador [`GpuBatch`] que las apps usan por frame para
 //! emitir centenares de miles a millones de primitivos en una draw call
 //! por tipo, sin pasar por vello.
 //!
@@ -10,8 +10,12 @@
 //! - Vertex format triángulos: `[x: f32, y: f32, rgba: u32]` (12 B/vert).
 //! - Instance format líneas: `[x0, y0, x1, y1, rgba]` (20 B/seg).
 //! - Instance format rects:  `[x, y, w, h, rgba]` (20 B/rect).
-//! - Sin texturas. Sin AA por shader — quien necesite AA fino sigue por
-//!   vello. Para puntos densos el "popping" no se nota.
+//! - Instance format discos: `[cx, cy, r, stroke, rgba]` (20 B/disco).
+//! - Sin texturas. Rects/líneas/tris sin AA por shader — quien necesite
+//!   AA fino en esas formas sigue por vello; para puntos densos el
+//!   "popping" no se nota. Los discos SÍ traen AA por SDF en el fragment
+//!   (smoothstep sobre `fwidth`), así sirven como sprites circulares
+//!   limpios sin MSAA.
 //! - Blending alfa habilitado: el alpha del color es respetado.
 //! - El viewport `(width, height)` se pasa al flush y va en un uniform —
 //!   los shaders convierten pixel → NDC ahí.
@@ -46,6 +50,11 @@ pub struct GpuPipelines {
     pub lines: wgpu::RenderPipeline,
     pub tris: wgpu::RenderPipeline,
     pub rects: wgpu::RenderPipeline,
+    /// Discos/anillos rellenos con AA por SDF en el fragment. Instance
+    /// format: `[cx, cy, r, stroke, rgba]` (20 B/disco). `stroke <= 0`
+    /// → disco lleno; `stroke > 0` → anillo de ese grosor (px). Ver
+    /// [`GpuBatch::add_disc`] / [`GpuBatch::add_ring`].
+    pub discs: wgpu::RenderPipeline,
     pub bind_layout: wgpu::BindGroupLayout,
 }
 
@@ -206,10 +215,62 @@ impl GpuPipelines {
             cache: None,
         });
 
+        // Discos/anillos (instanced quad + SDF AA en el fragment). Cada
+        // disco es una instancia de 24 B: `[cx, cy, r, stroke, rgba]`. El
+        // VS expande un quad que cubre el disco (con 1 px de margen para
+        // que el smoothstep del borde no se recorte) y pasa al FS la
+        // posición local en px; el FS calcula la distancia al centro y
+        // hace smoothstep sobre ~1 px (`fwidth`) → borde antialiased.
+        let discs = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("llimphi-raster-gpu-discs"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_discs"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 20,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &[
+                        // cx, cy
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        // r, stroke
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        // rgba
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+            },
+            primitive: tri_primitive(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_disc"),
+                compilation_options: Default::default(),
+                targets: &color_targets,
+            }),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             lines,
             tris,
             rects,
+            discs,
             bind_layout,
         }
     }
@@ -233,10 +294,12 @@ pub struct GpuBatch<'a> {
     line_verts: Vec<u8>,
     tri_verts: Vec<u8>,
     rect_insts: Vec<u8>,
+    disc_insts: Vec<u8>,
     line_width: f32,
     line_count: u32,
     tri_vert_count: u32,
     rect_count: u32,
+    disc_count: u32,
 }
 
 impl<'a> GpuBatch<'a> {
@@ -246,10 +309,12 @@ impl<'a> GpuBatch<'a> {
             line_verts: Vec::new(),
             tri_verts: Vec::new(),
             rect_insts: Vec::new(),
+            disc_insts: Vec::new(),
             line_width: 1.0,
             line_count: 0,
             tri_vert_count: 0,
             rect_count: 0,
+            disc_count: 0,
         }
     }
 
@@ -326,9 +391,37 @@ impl<'a> GpuBatch<'a> {
         self.rect_count += 1;
     }
 
+    /// Añade un disco (círculo relleno) con AA por shader como instancia.
+    /// `(cx, cy)` es el centro y `r` el radio, ambos en pixels del frame.
+    /// El borde queda antialiased vía un SDF + `smoothstep` de ~1 px en
+    /// el fragment — no escalonado, sin MSAA. El alpha del color se
+    /// respeta (blending alfa activo).
+    pub fn add_disc(&mut self, cx: f32, cy: f32, r: f32, color: Color) {
+        self.push_disc(cx, cy, r, 0.0, color);
+    }
+
+    /// Añade un anillo (círculo hueco / stroke circular) con AA por
+    /// shader. `r` es el radio exterior; `stroke` el grosor del trazo en
+    /// px (el agujero interior tiene radio `r - stroke`). `stroke <= 0`
+    /// degenera en un disco lleno. Ambos bordes (externo e interno)
+    /// quedan antialiased.
+    pub fn add_ring(&mut self, cx: f32, cy: f32, r: f32, stroke: f32, color: Color) {
+        self.push_disc(cx, cy, r, stroke.max(0.0), color);
+    }
+
+    fn push_disc(&mut self, cx: f32, cy: f32, r: f32, stroke: f32, color: Color) {
+        let rgba = pack_rgba(color);
+        self.disc_insts.extend_from_slice(&cx.to_ne_bytes());
+        self.disc_insts.extend_from_slice(&cy.to_ne_bytes());
+        self.disc_insts.extend_from_slice(&r.to_ne_bytes());
+        self.disc_insts.extend_from_slice(&stroke.to_ne_bytes());
+        self.disc_insts.extend_from_slice(&rgba.to_ne_bytes());
+        self.disc_count += 1;
+    }
+
     /// Cuenta total de primitivas pendientes (útil para benches).
     pub fn primitive_count(&self) -> u32 {
-        self.line_count + self.rect_count + self.tri_vert_count / 3
+        self.line_count + self.rect_count + self.disc_count + self.tri_vert_count / 3
     }
 
     /// Despacha las primitivas acumuladas como 1 draw call por tipo
@@ -348,7 +441,8 @@ impl<'a> GpuBatch<'a> {
         viewport: (f32, f32),
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) {
-        let total = self.line_count + self.tri_vert_count + self.rect_count;
+        let total =
+            self.line_count + self.tri_vert_count + self.rect_count + self.disc_count;
         if total == 0 {
             return;
         }
@@ -407,6 +501,16 @@ impl<'a> GpuBatch<'a> {
             queue.write_buffer(&b, 0, &self.rect_insts);
             b
         });
+        let discs_buf = (!self.disc_insts.is_empty()).then(|| {
+            let b = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("llimphi-raster-gpu-discs-buf"),
+                size: self.disc_insts.len() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&b, 0, &self.disc_insts);
+            b
+        });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("llimphi-raster-gpu-pass"),
@@ -425,12 +529,17 @@ impl<'a> GpuBatch<'a> {
         });
         pass.set_bind_group(0, &bind_group, &[]);
 
-        // Orden de draws: rects (fondo) → tris → lines (encima). Match
-        // de la convención usual "fill abajo, stroke arriba".
+        // Orden de draws: rects (fondo) → discos → tris → lines (encima).
+        // Match de la convención usual "fill abajo, stroke arriba".
         if let Some(buf) = rects_buf.as_ref() {
             pass.set_pipeline(&self.pipelines.rects);
             pass.set_vertex_buffer(0, buf.slice(..));
             pass.draw(0..6, 0..self.rect_count);
+        }
+        if let Some(buf) = discs_buf.as_ref() {
+            pass.set_pipeline(&self.pipelines.discs);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..6, 0..self.disc_count);
         }
         if let Some(buf) = tris_buf.as_ref() {
             pass.set_pipeline(&self.pipelines.tris);
@@ -545,6 +654,67 @@ fn vs_lines(
     out.pos = vec4<f32>(px_to_ndc(px), 0.0, 1.0);
     out.color = unpack_rgba(rgba);
     return out;
+}
+
+// -------- discos/anillos: 1 instancia = (cxcy, r/stroke, rgba) --------
+//
+// Quad que cubre el disco con 1.5 px de margen (para que el smoothstep
+// del borde no se recorte). El VS pasa al FS la posición local en px
+// relativa al centro; el FS evalúa el SDF del círculo y hace smoothstep
+// sobre `fwidth` → borde antialiased. `stroke > 0` recorta un anillo.
+
+struct DiscV2F {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) local: vec2<f32>,  // px relativos al centro
+    @location(2) params: vec2<f32>, // r, stroke (px)
+};
+
+@vertex
+fn vs_discs(
+    @builtin(vertex_index) vid: u32,
+    @location(0) inst_c: vec2<f32>,
+    @location(1) inst_rs: vec2<f32>,
+    @location(2) inst_rgba: u32,
+) -> DiscV2F {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0,  1.0),
+    );
+    let r = inst_rs.x;
+    let margin = r + 1.5;          // 1.5 px de aire para el AA del borde
+    let local = corners[vid] * margin;
+    let px = inst_c + local;
+    var out: DiscV2F;
+    out.pos = vec4<f32>(px_to_ndc(px), 0.0, 1.0);
+    out.color = unpack_rgba(inst_rgba);
+    out.local = local;
+    out.params = inst_rs;
+    return out;
+}
+
+@fragment
+fn fs_disc(in: DiscV2F) -> @location(0) vec4<f32> {
+    let r = in.params.x;
+    let stroke = in.params.y;
+    let dist = length(in.local);     // distancia al centro en px
+    // Ancho del filtro AA en px (≈ 1 px en pantalla).
+    let aa = fwidth(dist);
+    // Borde exterior: cobertura 1 dentro de r, 0 fuera de r+aa.
+    var cov = 1.0 - smoothstep(r - aa, r + aa, dist);
+    // Anillo: si hay stroke, recortamos el agujero interior con AA.
+    if (stroke > 0.0) {
+        let inner = max(r - stroke, 0.0);
+        cov = cov * smoothstep(inner - aa, inner + aa, dist);
+    }
+    if (cov <= 0.0) {
+        discard;
+    }
+    return vec4<f32>(in.color.rgb, in.color.a * cov);
 }
 
 @fragment

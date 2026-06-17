@@ -19,6 +19,7 @@ impl<Msg> View<Msg> {
             mask_extra: Vec::new(),
             painter: None,
             gpu_painter: None,
+            over_painter: None,
             on_pointer_enter: None,
             on_pointer_leave: None,
             on_pointer_move_at: None,
@@ -1261,6 +1262,30 @@ impl<Msg> View<Msg> {
             + 'static,
     {
         self.gpu_painter = Some(Arc::new(painter));
+        self
+    }
+
+    /// Registra una closure de pintura vello "over" — misma firma que
+    /// [`Self::paint_with`] `(&mut Scene, &mut Typesetter, PaintRect)`,
+    /// pero el runtime la ejecuta en una pasada vello FINAL **después**
+    /// del pase GPU directo del frame, componiéndola con alpha sobre la
+    /// intermedia. Es el complemento opt-in de [`Self::gpu_paint_with`]:
+    /// permite pintar sprites/texto AA por vello ENCIMA de las celdas
+    /// instanciadas por GPU del mismo (o de otro) nodo.
+    ///
+    /// Orden resultante del frame: `[vello base] → [gpu_paint] →
+    /// [paint_over] → [overlay/menús]`. Backward-compat total: si nadie
+    /// usa `paint_over`, no se crea la pasada final (coste cero) y el
+    /// resto del pipeline es idéntico. La closure no debe dejar
+    /// `push_layer` sin par ni resetear la escena. Ver [`OverPaintFn`].
+    pub fn paint_over<F>(mut self, painter: F) -> Self
+    where
+        F: Fn(&mut vello::Scene, &mut llimphi_text::Typesetter, PaintRect)
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.over_painter = Some(Arc::new(painter));
         self
     }
 

@@ -33,6 +33,7 @@ pub fn mount_recursive<Msg: Clone>(
         mask_extra,
         painter,
         gpu_painter,
+        over_painter,
         on_click,
         on_click_at,
         on_right_click,
@@ -96,6 +97,7 @@ pub fn mount_recursive<Msg: Clone>(
         mask_extra,
         painter,
         gpu_painter,
+        over_painter,
         on_click,
         on_click_at,
         on_right_click,
@@ -1159,6 +1161,52 @@ pub fn paint_gpu<Msg>(
                 h: r.h,
             },
             viewport,
+        );
+        any = true;
+    }
+    any
+}
+
+/// `true` si algún nodo del árbol registró un `over_painter` (vello
+/// "over" vía [`View::paint_over`]). El eventloop lo usa para decidir si
+/// vale la pena montar la pasada vello final + el composite sobre la
+/// intermedia. Coste cero (loop barato) cuando nadie usa el over-layer.
+pub fn has_over_painter<Msg>(mounted: &Mounted<Msg>) -> bool {
+    mounted.nodes.iter().any(|n| n.over_painter.is_some())
+}
+
+/// Pinta la pasada vello "over" en `scene`: recorre el árbol en orden
+/// DFS pre-orden e invoca cada `over_painter` con el `Typesetter`
+/// compartido y el rect absoluto del nodo. Espejo de [`paint_gpu`] pero
+/// del lado vello — la diferencia de timing la pone el caller, que
+/// rasteriza esta `scene` DESPUÉS del pase GPU y la compone sobre la
+/// intermedia. No resetea `scene` (el caller decide); sólo agrega
+/// primitivas. Como [`paint_gpu`], usa rects absolutos (no compone los
+/// `transform` de ancestros — el over-layer es contenido posicionado en
+/// coordenadas de pantalla, igual que el pintor GPU).
+pub fn paint_over<Msg>(
+    scene: &mut vello::Scene,
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    typesetter: &mut llimphi_text::Typesetter,
+) -> bool {
+    let mut any = false;
+    for node in &mounted.nodes {
+        let Some(painter) = node.over_painter.as_ref() else {
+            continue;
+        };
+        let Some(r) = computed.get(node.id) else {
+            continue;
+        };
+        (painter)(
+            scene,
+            typesetter,
+            PaintRect {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            },
         );
         any = true;
     }
