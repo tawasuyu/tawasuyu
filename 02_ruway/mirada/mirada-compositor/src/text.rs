@@ -183,6 +183,19 @@ pub fn icon_close(px: f32, color: [u8; 4]) -> Rasterized {
     Rasterized { rgba, width: s, height: s }
 }
 
+/// Ícono **minimizar** (una raya horizontal baja) dibujado a mano. Manda la
+/// ventana al scratchpad (≈ minimizar/ocultar).
+pub fn icon_minimize(px: f32, color: [u8; 4]) -> Rasterized {
+    let s = px.max(6.0) as i32;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let pad = (s as f32 * 0.28).max(2.0);
+    let (lo, hi) = (pad, s as f32 - pad);
+    let th = (s as f32 * 0.11).clamp(1.4, 2.4);
+    let yb = s as f32 - pad - th * 0.5; // raya baja, estilo macOS/GTK
+    draw_line_aa(&mut rgba, s, s, (lo, yb), (hi, yb), th, color);
+    Rasterized { rgba, width: s, height: s }
+}
+
 /// Ícono **maximizar** (un cuadrado) dibujado a mano — reemplaza el glyph □ que
 /// salía como tofu.
 pub fn icon_square(px: f32, color: [u8; 4]) -> Rasterized {

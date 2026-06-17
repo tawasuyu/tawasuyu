@@ -156,6 +156,7 @@ impl DrmState {
                     for (slot, icon) in [
                         (0i32, crate::text::icon_close(TITLE_PX, TITLE_COLOR)),
                         (1i32, crate::text::icon_square(TITLE_PX, TITLE_COLOR)),
+                        (2i32, crate::text::icon_minimize(TITLE_PX, TITLE_COLOR)),
                     ] {
                         if sw < (slot + 1) * crate::TB_BTN_W + 8 {
                             continue; // ventana muy angosta: sin botón

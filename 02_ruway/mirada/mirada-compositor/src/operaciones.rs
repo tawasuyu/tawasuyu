@@ -211,6 +211,20 @@ impl App {
         self.apply_commands(cmds);
     }
 
+    /// Minimiza la ventana `id` mandándola al scratchpad (≈ ocultar). Botón ─
+    /// del titlebar. Por el Cerebro embebido.
+    pub(crate) fn minimizar_ventana(&mut self, id: u64) {
+        let cmds = match &mut self.brain {
+            Brain::Embedded(d) => {
+                let mut c = d.apply(mirada_brain::DesktopAction::FocusWindow(id));
+                c.extend(d.apply(mirada_brain::DesktopAction::SendToScratchpad));
+                c
+            }
+            Brain::Linked(_) => return,
+        };
+        self.apply_commands(cmds);
+    }
+
     /// Cambia al escritorio `idx` (0-based) — confirmación del switcher de
     /// Win+Tab. Por el Cerebro embebido.
     pub(crate) fn cambiar_workspace(&mut self, idx: usize) {

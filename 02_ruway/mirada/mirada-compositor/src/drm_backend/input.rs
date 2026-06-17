@@ -337,13 +337,15 @@ impl DrmState {
                 // maximizar): actúa y no arranca arrastre. Va ANTES del drag.
                 if pressed && button == BTN_LEFT && self.app.mode != BodyMode::Greeter {
                     let (x, y) = self.app.pointer_loc;
-                    if let Some((id, is_close)) = self.titlebar_button_at(x, y) {
-                        if is_close {
-                            if let Some(w) = self.app.windows.iter().find(|w| w.id == id) {
-                                w.toplevel.send_close();
+                    if let Some((id, slot)) = self.titlebar_button_at(x, y) {
+                        match slot {
+                            0 => {
+                                if let Some(w) = self.app.windows.iter().find(|w| w.id == id) {
+                                    w.toplevel.send_close();
+                                }
                             }
-                        } else {
-                            self.app.maximizar_ventana(id);
+                            1 => self.app.maximizar_ventana(id),
+                            _ => self.app.minimizar_ventana(id),
                         }
                         return;
                     }
@@ -671,7 +673,10 @@ impl DrmState {
     /// La ventana y el botón de titlebar bajo `(x, y)` global: `Some((id, true))`
     /// = cerrar (✕), `Some((id, false))` = maximizar (□). Mismas posiciones que
     /// el render (botones pegados al borde derecho, ancho [`TB_BTN_W`]).
-    pub(super) fn titlebar_button_at(&self, x: f64, y: f64) -> Option<(u64, bool)> {
+    /// Devuelve `(id, slot)` del botón del titlebar bajo el puntero, donde
+    /// `slot` es 0 = cerrar (✕, el más a la derecha), 1 = maximizar (□),
+    /// 2 = minimizar (─). `None` si no hay botón ahí.
+    pub(super) fn titlebar_button_at(&self, x: f64, y: f64) -> Option<(u64, u8)> {
         let tbh = self.app.decorations.titlebar_height;
         if tbh <= 0 {
             return None;
@@ -701,11 +706,17 @@ impl DrmState {
             }
             let close_x = lx + sw - crate::TB_BTN_W;
             let max_x = lx + sw - 2 * crate::TB_BTN_W;
+            let min_x = lx + sw - 3 * crate::TB_BTN_W;
             if px >= close_x && px < close_x + crate::TB_BTN_W {
-                return Some((w.id, true));
+                return Some((w.id, 0));
             }
             if px >= max_x && px < max_x + crate::TB_BTN_W {
-                return Some((w.id, false));
+                return Some((w.id, 1));
+            }
+            // Sólo hay botón de minimizar si la ventana es lo bastante ancha
+            // (el render lo omite en ventanas angostas — mismo umbral).
+            if sw >= 3 * crate::TB_BTN_W + 8 && px >= min_x && px < min_x + crate::TB_BTN_W {
+                return Some((w.id, 2));
             }
         }
         None
