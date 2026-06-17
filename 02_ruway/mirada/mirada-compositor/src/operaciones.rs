@@ -513,12 +513,30 @@ impl App {
                     w.suspended = suspended;
                     w.frame_divisor = frame_divisor.max(1);
                     let tb = if w.is_shell || fullscreen { 0 } else { tbh };
+                    // Una ventana teselada (ni shell, ni flotante, ni fullscreen)
+                    // recibe los estados `tiled`: así los clientes CSD (GTK/Qt)
+                    // sueltan su margen de sombra flotante y las esquinas
+                    // redondeadas — antes salían «forradas dentro de un margen
+                    // grandísimo». Las flotantes conservan su decoración.
+                    let teselada = !w.is_shell && !floating && !fullscreen;
                     w.toplevel.with_pending_state(|s| {
                         s.size = Some((rect.w.max(1), (rect.h - tb).max(1)).into());
                         if fullscreen {
                             s.states.set(xdg_toplevel::State::Fullscreen);
                         } else {
                             s.states.unset(xdg_toplevel::State::Fullscreen);
+                        }
+                        for st in [
+                            xdg_toplevel::State::TiledLeft,
+                            xdg_toplevel::State::TiledRight,
+                            xdg_toplevel::State::TiledTop,
+                            xdg_toplevel::State::TiledBottom,
+                        ] {
+                            if teselada {
+                                s.states.set(st);
+                            } else {
+                                s.states.unset(st);
+                            }
                         }
                     });
                     w.toplevel.send_pending_configure();
