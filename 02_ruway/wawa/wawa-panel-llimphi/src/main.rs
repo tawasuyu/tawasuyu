@@ -931,6 +931,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     // ---- Panel SISTEMA ----
     let mut sistema = Schema::new();
     sistema.sections.push(sonido_section());
+    sistema.sections.push(teclado_section(&m.mirada));
     sistema.sections.push(idioma_section(&m.cfg));
     sistema.sections.push(modulos_section(&m.cfg));
 
@@ -1653,6 +1654,43 @@ fn sonido_section() -> Section {
                 .help("Porcentaje del sink @DEFAULT_AUDIO_SINK@"),
         )
         .field(Field::toggle("mudo", "Silenciar", muted))
+}
+
+/// Distribuciones de teclado XKB ofrecidas (id XKB → etiqueta). Lista corta de
+/// las más comunes; el id se escribe tal cual al config de mirada.
+const XKB_LAYOUTS: &[(&str, &str)] = &[
+    ("", "Sistema (por defecto)"),
+    ("us", "Inglés (EE. UU.)"),
+    ("es", "Español (España)"),
+    ("latam", "Español (Latinoamérica)"),
+    ("fr", "Francés"),
+    ("de", "Alemán"),
+    ("it", "Italiano"),
+    ("pt", "Portugués"),
+    ("br", "Portugués (Brasil)"),
+    ("ru", "Ruso"),
+    ("gb", "Inglés (Reino Unido)"),
+];
+
+/// Teclado: distribución XKB del compositor. REAL: la aplica mirada al crear el
+/// teclado (cambia al reiniciar la sesión). Ruteado a la config de mirada.
+fn teclado_section(mir: &mirada_brain::Config) -> Section {
+    Section::new("mirada::teclado", "Teclado")
+        .icon("⌨")
+        .help("Distribución del teclado (XKB). Se aplica al reiniciar la sesión.")
+        .field(Field::dropdown(
+            "xkb_layout",
+            "Distribución",
+            mir.xkb_layout.clone(),
+            XKB_LAYOUTS
+                .iter()
+                .map(|(id, l)| EnumOption::new(*id, *l))
+                .collect(),
+        ))
+        .field(
+            Field::text("xkb_variant", "Variante (opcional)", mir.xkb_variant.clone())
+                .help("p. ej. dvorak, nodeadkeys — vacío = ninguna"),
+        )
 }
 
 /// Interfaz (llimphi): toolkit del SO. Controles reales próximamente (present

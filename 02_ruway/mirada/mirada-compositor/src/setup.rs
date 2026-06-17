@@ -397,7 +397,16 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         running: true,
     };
 
-    let keyboard = app.seat.add_keyboard(Default::default(), 200, 25)?;
+    // Distribución de teclado de la config del usuario (vacío = la del
+    // sistema). `ucfg` vive hasta el final de la función; XkbConfig sólo la
+    // toma prestada para compilar el keymap dentro de `add_keyboard`.
+    let ucfg = load_user_config();
+    let xkb = smithay::input::keyboard::XkbConfig {
+        layout: &ucfg.xkb_layout,
+        variant: &ucfg.xkb_variant,
+        ..Default::default()
+    };
+    let keyboard = app.seat.add_keyboard(xkb, 200, 25)?;
     app.keyboard = Some(keyboard);
     app.pointer = Some(app.seat.add_pointer());
 

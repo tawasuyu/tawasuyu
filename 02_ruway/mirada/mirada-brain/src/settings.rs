@@ -377,6 +377,16 @@ impl Configurable for Config {
                     self.font_path = s.to_string();
                 }
             }
+            "xkb_layout" => {
+                if let Some(s) = value.as_str() {
+                    self.xkb_layout = s.to_string();
+                }
+            }
+            "xkb_variant" => {
+                if let Some(s) = value.as_str() {
+                    self.xkb_variant = s.to_string();
+                }
+            }
             "dropterm_cmd" => {
                 if let Some(s) = value.as_str() {
                     self.dropterm_cmd = s.to_string();

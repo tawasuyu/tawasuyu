@@ -202,6 +202,15 @@ pub struct Config {
     /// rectangulares (una L, una cruz, una fila, etc.).
     #[serde(default)]
     pub overview_geometry: Vec<(i32, i32)>,
+    /// Distribución de teclado XKB (`"us"`, `"es"`, `"latam"`, `"fr"`, …).
+    /// Vacío = la del sistema (XKB_DEFAULT_LAYOUT / `us`). La aplica el
+    /// compositor al crear el teclado; cambia al reiniciar la sesión.
+    #[serde(default)]
+    pub xkb_layout: String,
+    /// Variante XKB opcional (`"dvorak"`, `"nodeadkeys"`, …). Vacío = sin
+    /// variante.
+    #[serde(default)]
+    pub xkb_variant: String,
 }
 
 /// Modo de transición de Win+Tab entre escritorios. Ver
@@ -393,6 +402,8 @@ impl Default for Config {
             theme: default_theme(),
             workspace_switch_mode: WorkspaceSwitchMode::default(),
             overview_geometry: Vec::new(),
+            xkb_layout: String::new(),
+            xkb_variant: String::new(),
         }
     }
 }
