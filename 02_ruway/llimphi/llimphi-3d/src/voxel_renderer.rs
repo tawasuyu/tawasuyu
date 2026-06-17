@@ -23,6 +23,19 @@ use crate::voxel::VoxelGrid;
 /// Tamaño de brick (voxels por lado) para el mapa de ocupación grueso.
 const BRICK: u32 = 8;
 
+/// Máximo de entidades vivas por frame (cabe holgado en un uniform).
+const MAX_ENTITIES: usize = 64;
+
+/// Una entidad (agente) — una caja analítica ray-marcheada en el mismo pase que
+/// los voxels (M4). Posición en coordenadas de voxel `[0, dim]` (sub-voxel, así
+/// se mueve suave), `half` = medio-tamaño por eje, color RGB.
+#[derive(Clone, Copy)]
+pub struct Entity3d {
+    pub pos: [f32; 3],
+    pub half: [f32; 3],
+    pub color: [u8; 3],
+}
+
 /// Renderer de voxels por ray-march de dos niveles. Cachea ambas texturas 3D
 /// (fina + gruesa), uniform y pipeline.
 pub struct VoxelRenderer {
@@ -32,9 +45,13 @@ pub struct VoxelRenderer {
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
+    ubuf_ent: wgpu::Buffer,
     dim: [u32; 3],
     /// Dirección hacia el sol (normalizada). Editable antes de `render`.
     pub sun_dir: [f32; 3],
+    /// Entidades vivas — se empacan y suben en cada `render` (se mueven por
+    /// frame). Más allá de `MAX_ENTITIES` se ignoran.
+    pub entities: Vec<Entity3d>,
 }
 
 impl VoxelRenderer {
@@ -87,27 +104,31 @@ impl VoxelRenderer {
             },
             count: None,
         };
+        let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("llimphi-3d-voxel-bgl"),
-            entries: &[
-                tex_entry(0),
-                tex_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &[tex_entry(0), tex_entry(1), uniform_entry(2), uniform_entry(3)],
         });
 
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("llimphi-3d-voxel-ubuf"),
             size: 112, // mat4(64) + cam_eye(16) + grid_dim+brick(16) + sun(16)
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ubuf_ent = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-3d-voxel-ubuf-ent"),
+            // count(16) + MAX_ENTITIES × (pos+half+color = 3×vec4 = 48)
+            size: (16 + MAX_ENTITIES * 48) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -127,6 +148,10 @@ impl VoxelRenderer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: ubuf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: ubuf_ent.as_entire_binding(),
                 },
             ],
         });
@@ -173,8 +198,10 @@ impl VoxelRenderer {
             bind_group,
             pipeline,
             ubuf,
+            ubuf_ent,
             dim,
             sun_dir: normalize3([0.5, 1.0, 0.35]),
+            entities: Vec::new(),
         };
         r.upload(queue, grid);
         r
@@ -261,6 +288,35 @@ impl VoxelRenderer {
         }
         queue.write_buffer(&self.ubuf, 0, &u);
 
+        // Entidades: count (vec4) + array de [pos, half, color] (3×vec4 c/u).
+        let n = self.entities.len().min(MAX_ENTITIES);
+        let mut e = Vec::with_capacity(16 + MAX_ENTITIES * 48);
+        for v in [n as f32, 0.0, 0.0, 0.0] {
+            e.extend_from_slice(&v.to_ne_bytes());
+        }
+        for i in 0..MAX_ENTITIES {
+            let ent = self.entities.get(i).copied().unwrap_or(Entity3d {
+                pos: [0.0; 3],
+                half: [0.0; 3],
+                color: [0, 0, 0],
+            });
+            for v in [ent.pos[0], ent.pos[1], ent.pos[2], 0.0] {
+                e.extend_from_slice(&v.to_ne_bytes());
+            }
+            for v in [ent.half[0], ent.half[1], ent.half[2], 0.0] {
+                e.extend_from_slice(&v.to_ne_bytes());
+            }
+            for v in [
+                ent.color[0] as f32 / 255.0,
+                ent.color[1] as f32 / 255.0,
+                ent.color[2] as f32 / 255.0,
+                0.0,
+            ] {
+                e.extend_from_slice(&v.to_ne_bytes());
+            }
+        }
+        queue.write_buffer(&self.ubuf_ent, 0, &e);
+
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("llimphi-3d-voxel-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -331,9 +387,19 @@ struct U {
     grid_dim: vec4<f32>,   // xyz = dim fino, w = brick size
     sun_dir: vec4<f32>,    // xyz = dirección hacia el sol (normalizada)
 };
+struct Entity {
+    pos: vec4<f32>,    // xyz = centro en coords de voxel
+    half: vec4<f32>,   // xyz = medio-tamaño
+    color: vec4<f32>,  // rgb
+};
+struct EntU {
+    count: vec4<f32>,  // x = nº de entidades vivas
+    ents: array<Entity, 64>,
+};
 @group(0) @binding(0) var vox: texture_3d<f32>;
 @group(0) @binding(1) var coarse: texture_3d<f32>;
 @group(0) @binding(2) var<uniform> u: U;
+@group(0) @binding(3) var<uniform> ent: EntU;
 
 struct VOut {
     @builtin(position) clip: vec4<f32>,
@@ -498,6 +564,49 @@ fn compute_ao(voxel: vec3<f32>, normal: vec3<f32>, p: vec3<f32>, dim: vec3<f32>)
     return mix(mix(ao_mm, ao_pm, uu), mix(ao_mp, ao_pp, uu), vv);
 }
 
+struct EHit {
+    hit: bool,
+    t: f32,
+    normal: vec3<f32>,
+    color: vec3<f32>,
+};
+
+// Intersecta el rayo con las cajas-entidad; devuelve el hit más cercano con
+// t en (eps, max_t). Las entidades comparten el espacio de la grilla.
+fn trace_entities(ro: vec3<f32>, rd: vec3<f32>, max_t: f32) -> EHit {
+    var best: EHit;
+    best.hit = false;
+    best.t = max_t;
+    let safe_rd = vec3<f32>(
+        select(rd.x, 1e-6, abs(rd.x) < 1e-6),
+        select(rd.y, 1e-6, abs(rd.y) < 1e-6),
+        select(rd.z, 1e-6, abs(rd.z) < 1e-6),
+    );
+    let inv_rd = 1.0 / safe_rd;
+    let n = i32(ent.count.x);
+    for (var i = 0; i < n; i = i + 1) {
+        let e = ent.ents[i];
+        let bmin = e.pos.xyz - e.half.xyz;
+        let bmax = e.pos.xyz + e.half.xyz;
+        let tb = ray_box(ro, inv_rd, bmin, bmax);
+        if (tb.x <= tb.y && tb.x > 1e-3 && tb.x < best.t) {
+            best.hit = true;
+            best.t = tb.x;
+            best.color = e.color.rgb;
+            // Normal: cara del AABB en el punto de entrada.
+            let p = ro + rd * tb.x;
+            let c = (bmin + bmax) * 0.5;
+            let d = max((bmax - bmin) * 0.5, vec3<f32>(1e-4));
+            let q = (p - c) / d;
+            let aq = abs(q);
+            if (aq.x >= aq.y && aq.x >= aq.z) { best.normal = vec3<f32>(sign(q.x), 0.0, 0.0); }
+            else if (aq.y >= aq.z) { best.normal = vec3<f32>(0.0, sign(q.y), 0.0); }
+            else { best.normal = vec3<f32>(0.0, 0.0, sign(q.z)); }
+        }
+    }
+    return best;
+}
+
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let p_near = u.inv_vp * vec4<f32>(in.ndc, 0.0, 1.0);
@@ -509,19 +618,38 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let B = u.grid_dim.w;
     let ro = ro_world + dim * 0.5;   // centrar la grilla en el origen del mundo
 
+    // Hit más cercano entre el mundo voxel y las entidades.
     let h = trace(ro, rd, dim, B);
-    if (!h.hit) { discard; }
+    let t_vox = select(1e30, h.t, h.hit);
+    let eh = trace_entities(ro, rd, t_vox);
 
-    let albedo = textureLoad(vox, vec3<i32>(h.vox), 0).rgb;
-    let p = ro + rd * h.t;
-    let ao = compute_ao(h.vox, h.normal, p, dim);
+    var albedo: vec3<f32>;
+    var normal: vec3<f32>;
+    var p: vec3<f32>;
+    var ao: f32;
+    if (eh.hit) {
+        // Entidad (caja analítica): sin AO de vecinos voxel.
+        albedo = eh.color;
+        normal = eh.normal;
+        p = ro + rd * eh.t;
+        ao = 1.0;
+    } else if (h.hit) {
+        albedo = textureLoad(vox, vec3<i32>(h.vox), 0).rgb;
+        normal = h.normal;
+        p = ro + rd * h.t;
+        ao = compute_ao(h.vox, h.normal, p, dim);
+    } else {
+        discard;
+    }
 
     let ldir = u.sun_dir.xyz;
-    let diff = max(dot(h.normal, ldir), 0.0);
+    let diff = max(dot(normal, ldir), 0.0);
 
-    // Sombra dura: segundo rayo desde la cara hacia el sol.
-    let sh = trace(p + h.normal * 0.5 + ldir * 0.01, ldir, dim, B);
-    let shadow = select(1.0, 0.25, sh.hit);
+    // Sombra dura: rayo a la luz que prueba voxels Y entidades.
+    let so = p + normal * 0.5 + ldir * 0.01;
+    let sh_v = trace(so, ldir, dim, B);
+    let sh_e = trace_entities(so, ldir, 1e30);
+    let shadow = select(1.0, 0.25, sh_v.hit || sh_e.hit);
 
     let ambient = 0.32;
     let light = (ambient + 0.72 * diff * shadow) * (0.35 + 0.65 * ao);

@@ -40,5 +40,5 @@ mod voxel_renderer;
 pub use camera::Camera3d;
 pub use mesh::{cube, Vertex3d};
 pub use renderer::Renderer3d;
-pub use voxel::VoxelGrid;
-pub use voxel_renderer::VoxelRenderer;
+pub use voxel::{DirtyBox, VoxelGrid};
+pub use voxel_renderer::{Entity3d, VoxelRenderer};
