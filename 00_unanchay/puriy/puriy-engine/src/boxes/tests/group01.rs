@@ -1047,3 +1047,38 @@ use crate::Engine;
         assert_eq!(libre, Some(TextOverflow::Clip), "sin recorte no aplica");
     }
 
+    #[test]
+    fn white_space_hereda_al_leaf_fase_7_1253() {
+        use crate::WhiteSpace;
+        // `white-space` HEREDA (CSS): la hoja de texto del build estático toma
+        // el valor del contenedor. El wire lee `NoWrap`/`Pre` para shapear en
+        // una sola línea; `Normal` (default) envuelve.
+        let html = "<html><head><style>\
+            .nw { white-space: nowrap; }\
+            .pre { white-space: pre; }\
+            </style></head><body>\
+            <div class=\"nw\">no me envuelvas aunque sea larguisimo</div>\
+            <div class=\"pre\">preformateado</div>\
+            <div>texto normal que envuelve</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut nw: Option<WhiteSpace> = None;
+        let mut pre: Option<WhiteSpace> = None;
+        let mut normal: Option<WhiteSpace> = None;
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.contains("no me envuelvas") {
+                    nw = Some(b.white_space);
+                } else if t.contains("preformateado") {
+                    pre = Some(b.white_space);
+                } else if t.contains("texto normal") {
+                    normal = Some(b.white_space);
+                }
+            }
+        });
+        assert_eq!(nw, Some(WhiteSpace::NoWrap), "nowrap hereda al leaf");
+        assert_eq!(pre, Some(WhiteSpace::Pre), "pre hereda al leaf");
+        assert_eq!(normal, Some(WhiteSpace::Normal), "default es Normal (envuelve)");
+    }
+

@@ -104,6 +104,14 @@ pub struct TextSpec {
     /// `word-spacing`: px **extra** entre palabras (CSS). 0 = normal. Mismo
     /// régimen que [`Self::letter_spacing`].
     pub word_spacing: f32,
+    /// `white-space: nowrap`/`pre`: si `true`, el texto **no envuelve** —
+    /// se shapea en una sola línea (`break_all_lines(None)`) sin importar el
+    /// ancho disponible, y desborda la caja (lo recorta `overflow: hidden` si
+    /// lo hay). Afecta medida (taffy reserva el ancho de la línea completa) y
+    /// pintado. Default false (wrap libre, comportamiento previo). Sólo el
+    /// camino uniforme (`layout_clamped`); el de spans (RichText) lo ignora en
+    /// v1, igual que el clamp.
+    pub no_wrap: bool,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
@@ -994,6 +1002,10 @@ pub struct TextMeasure {
     pub letter_spacing: f32,
     /// Idem [`TextSpec::word_spacing`]. Mismo razonamiento que `letter_spacing`.
     pub word_spacing: f32,
+    /// Idem [`TextSpec::no_wrap`]. Entra en la medida porque cambia el ancho
+    /// reservado: con `no_wrap` el texto se mide en una sola línea (ancho
+    /// completo) en vez de envolver al `available`.
+    pub no_wrap: bool,
 }
 
 /// Cómo encajar una imagen en el rect del nodo (CSS `object-fit` /

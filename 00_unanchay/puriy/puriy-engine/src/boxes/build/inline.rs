@@ -177,6 +177,12 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
     if style.text_overflow == TextOverflow::Ellipsis && style.overflow != Overflow::Visible {
         leaf.text_overflow = TextOverflow::Ellipsis;
     }
+    // `white-space` (Fase 7.1253): la prop vive en el contenedor pero el wrap
+    // lo decide la hoja de texto. `white-space` HEREDA (CSS), así que el leaf
+    // toma el del contenedor —igual que color/font/letter-spacing— y el wire
+    // lee `NoWrap`/`Pre` para shapear en una sola línea. El colapso de espacios
+    // ya lo aplicó `collapse_whitespace` con el `white_space` del padre.
+    leaf.white_space = style.white_space;
     leaf
 }
 

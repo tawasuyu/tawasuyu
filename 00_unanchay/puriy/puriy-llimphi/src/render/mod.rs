@@ -986,6 +986,18 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
         if matches!(b.text_overflow, puriy_engine::style::TextOverflow::Ellipsis) {
             view = view.ellipsis(1);
         }
+        // `white-space: nowrap`/`pre` (Fase 7.1253): el engine heredó el
+        // `white-space` del contenedor a esta hoja. Los valores que NO envuelven
+        // (`NoWrap`/`Pre`) shapean en una sola línea; el texto desborda y lo
+        // recorta el `overflow` del contenedor. `Normal`/`PreWrap`/`PreLine`
+        // envuelven (default). Combina con `ellipsis(1)` para el clásico
+        // single-line `overflow:hidden + white-space:nowrap + text-overflow:ellipsis`.
+        if matches!(
+            b.white_space,
+            puriy_engine::WhiteSpace::NoWrap | puriy_engine::WhiteSpace::Pre
+        ) {
+            view = view.no_wrap();
+        }
         return view;
     }
 

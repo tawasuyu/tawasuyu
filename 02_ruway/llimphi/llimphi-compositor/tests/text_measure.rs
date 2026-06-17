@@ -58,6 +58,52 @@ fn parrafo_largo_reserva_varias_lineas() {
 }
 
 #[test]
+fn no_wrap_mide_una_sola_linea_fase_7_1253() {
+    use llimphi_layout::taffy::AvailableSpace;
+    // Mismo texto largo, mismo ancho disponible (angosto): con `no_wrap` se
+    // mide en una sola línea (ancho completo, ignora el available); sin él,
+    // envuelve (más alto, ancho acotado al disponible).
+    let texto = "una linea larga que normalmente envuelve en varios renglones \
+                 cuando el ancho disponible es angosto de verdad";
+    let mk = |no_wrap: bool| llimphi_compositor::TextMeasure {
+        content: texto.to_string(),
+        size_px: 16.0,
+        alignment: llimphi_text::Alignment::Start,
+        italic: false,
+        font_family: None,
+        line_height: 1.2,
+        weight: 400.0,
+        max_lines: None,
+        ellipsis: false,
+        underline: false,
+        strikethrough: false,
+        spans: None,
+        letter_spacing: 0.0,
+        word_spacing: 0.0,
+        no_wrap,
+    };
+    let mut ts = llimphi_text::Typesetter::new();
+    let known = TSize { width: None, height: None };
+    let avail = TSize {
+        width: AvailableSpace::Definite(160.0),
+        height: AvailableSpace::MaxContent,
+    };
+    let env = measure_text_node(&mut ts, &mk(false), known, avail);
+    let nw = measure_text_node(&mut ts, &mk(true), known, avail);
+    // Envuelto: ancho acotado al disponible y alto de varias líneas.
+    assert!(env.width <= 160.0 + 1.0, "wrap acota el ancho: {}", env.width);
+    assert!(env.height > 40.0, "wrap reserva varias líneas: {}", env.height);
+    // no_wrap: una sola línea → mucho más ancho que el disponible y bajo.
+    assert!(nw.width > 160.0, "no_wrap mide ancho completo: {}", nw.width);
+    assert!(
+        nw.height < env.height,
+        "no_wrap es una línea (más bajo que el envuelto): nw={} env={}",
+        nw.height,
+        env.height
+    );
+}
+
+#[test]
 fn line_height_mayor_reserva_mas_alto() {
     let texto = "una línea de texto que envuelve en dos o tres renglones según \
                  el ancho disponible para el bloque contenedor angosto";
@@ -78,6 +124,7 @@ fn line_height_mayor_reserva_mas_alto() {
             spans: None,
             letter_spacing: 0.0,
             word_spacing: 0.0,
+            no_wrap: false,
         };
         let known = TSize { width: Some(180.0_f32), height: None };
         let avail = TSize {

@@ -854,6 +854,7 @@ impl<Msg> View<Msg> {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             spans: None,
+            no_wrap: false,
         });
         self
     }
@@ -882,6 +883,7 @@ impl<Msg> View<Msg> {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             spans: None,
+            no_wrap: false,
         });
         self
     }
@@ -913,6 +915,7 @@ impl<Msg> View<Msg> {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             spans: None,
+            no_wrap: false,
         });
         self
     }
@@ -946,6 +949,7 @@ impl<Msg> View<Msg> {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             spans: None,
+            no_wrap: false,
         });
         self
     }
@@ -980,6 +984,7 @@ impl<Msg> View<Msg> {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             spans: None,
+            no_wrap: false,
         });
         self
     }
@@ -1019,6 +1024,7 @@ impl<Msg> View<Msg> {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             spans: Some(spans),
+            no_wrap: false,
         });
         self
     }
@@ -1112,6 +1118,18 @@ impl<Msg> View<Msg> {
     pub fn word_spacing(mut self, px: f32) -> Self {
         if let Some(t) = self.text.as_mut() {
             t.word_spacing = px;
+        }
+        self
+    }
+
+    /// `white-space: nowrap`/`pre` (CSS): el texto **no envuelve** — se shapea
+    /// en una sola línea (`break_all_lines(None)`) sin importar el ancho de la
+    /// caja, y desborda (lo recorta `overflow: hidden` si lo hay). Afecta
+    /// medida y pintado. No-op sin texto. Sólo el camino uniforme; el RichText
+    /// con spans lo ignora en v1.
+    pub fn no_wrap(mut self) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.no_wrap = true;
         }
         self
     }
@@ -1675,5 +1693,23 @@ mod semantics_tests {
         let mounted = mount(&mut layout, root);
         let computed = layout.compute(mounted.root, (50.0, 50.0)).expect("layout");
         assert!(collect_filters(&mounted, &computed).is_empty());
+    }
+
+    #[test]
+    fn no_wrap_setea_campo_del_texto_fase_7_1253() {
+        // `.no_wrap()` marca el TextSpec para shapear en una sola línea (CSS
+        // `white-space: nowrap`). Ortogonal al resto del estilo de texto;
+        // default false (wrap). No-op si el nodo no tiene texto.
+        let v = View::<()>::new(Style::default())
+            .text("hola mundo", 14.0, Color::BLACK)
+            .no_wrap();
+        let t = v.text.as_ref().expect("text");
+        assert!(t.no_wrap, "no_wrap=true tras el builder");
+        // Default: el texto envuelve (no_wrap=false).
+        let def = View::<()>::new(Style::default()).text("x", 14.0, Color::BLACK);
+        assert!(!def.text.as_ref().unwrap().no_wrap, "default es wrap");
+        // No-op sin texto: no panickea ni inventa un TextSpec.
+        let sin = View::<()>::new(Style::default()).no_wrap();
+        assert!(sin.text.is_none(), "no_wrap sin texto no crea TextSpec");
     }
 }

@@ -182,6 +182,7 @@ pub fn mount_recursive<Msg: Clone>(
                         spans: text.spans.clone(),
                         letter_spacing: text.letter_spacing,
                         word_spacing: text.word_spacing,
+                        no_wrap: text.no_wrap,
                     },
                 );
             }
@@ -203,11 +204,17 @@ pub fn measure_text_node(
     available: llimphi_layout::taffy::Size<llimphi_layout::taffy::AvailableSpace>,
 ) -> llimphi_layout::taffy::Size<f32> {
     use llimphi_layout::taffy::AvailableSpace;
-    let max_width: Option<f32> = known.width.or(match available.width {
-        AvailableSpace::Definite(w) => Some(w),
-        AvailableSpace::MaxContent => None,
-        AvailableSpace::MinContent => Some(0.0),
-    });
+    // `white-space: nowrap`/`pre`: el texto se mide en una sola línea (ancho
+    // completo) ignorando el `available`/`known` — equivale a MaxContent.
+    let max_width: Option<f32> = if tm.no_wrap {
+        None
+    } else {
+        known.width.or(match available.width {
+            AvailableSpace::Definite(w) => Some(w),
+            AvailableSpace::MaxContent => None,
+            AvailableSpace::MinContent => Some(0.0),
+        })
+    };
     // RichText: si hay spans, mediar con `layout_spans` para que taffy
     // reserve el alto considerando overrides de tamaño por rango (un span
     // con `size_px = 24` dentro de un párrafo de 14 px agranda esa línea).
@@ -1014,10 +1021,14 @@ pub fn paint_range<Msg>(
                 // Start/End/Justify anclamos arriba (párrafo/editor). Camino
                 // directo a `layout_clamped` para transportar `weight` y el
                 // clamp de `max_lines`/`ellipsis` del TextSpec.
+                // `white-space: nowrap`/`pre`: pintar en una sola línea (sin
+                // `max_width`), no envolver al ancho del rect — el texto
+                // desborda y lo recorta el `overflow` del contenedor si lo hay.
+                let paint_max_width = if text.no_wrap { None } else { Some(r.w) };
                 let layout = typesetter.layout_clamped(
                     &text.content,
                     text.size_px,
-                    Some(r.w),
+                    paint_max_width,
                     text.alignment,
                     text.line_height,
                     text.italic,

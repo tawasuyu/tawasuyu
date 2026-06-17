@@ -805,10 +805,44 @@ los tests) a pasar `0.0, 0.0` donde no aplica. Verificado por pantallazo headles
 
 > v1: el camino RichText (spans, mixed-inline) ignora el espaciado.
 
+### 7.1253 ✅ — `white-space: nowrap`/`pre` (el texto no envuelve)
+
+`white-space` parseaba/computaba/heredaba y `collapse_whitespace` ya colapsaba el
+texto según el valor, pero **nadie cableaba el wrap**: el texto envolvía igual
+aunque fuera `nowrap` (sólo el `ellipsis(1)` de 7.1251 forzaba la línea única,
+como efecto colateral). Ahora se cablea end-to-end:
+
+- **engine (`boxes/build/inline.rs`)**: la hoja de texto **hereda** el
+  `white-space` del contenedor (antes hardcodeaba `Normal`; es heredable como
+  color/font/letter-spacing). El colapso de espacios ya lo aplicaba
+  `collapse_whitespace` con el `white_space` del padre.
+- **compositor (llimphi)**: nuevo flag `TextSpec.no_wrap`/`TextMeasure.no_wrap` +
+  builder `View::no_wrap()`. Con `no_wrap`, `measure_text_node` mide en una sola
+  línea (`max_width = None`, equivale a MaxContent, ignora el available) y el
+  paint shapea con `max_width = None` — el texto desborda la caja y lo recorta el
+  `overflow` del contenedor si lo hay. `None` (default) = wrap, comportamiento
+  previo. El camino de spans (RichText) lo ignora en v1, igual que el clamp.
+- **wire (puriy)**: el leaf lee `b.white_space` y llama `.no_wrap()` para los
+  valores que NO envuelven (`NoWrap`/`Pre`); `Normal`/`PreWrap`/`PreLine`
+  envuelven. Combina con `ellipsis(1)` para el clásico
+  `overflow:hidden + white-space:nowrap + text-overflow:ellipsis`.
+
+Verificado por pantallazo headless: caja de 240px con `white-space:nowrap;
+overflow:hidden` rinde el texto largo en **una sola línea recortada al borde**;
+la caja vecina sin la prop **envuelve en tres renglones**. Tests:
+`white_space_hereda_al_leaf_fase_7_1253` (engine: NoWrap/Pre/Normal heredan al
+leaf), `no_wrap_mide_una_sola_linea_fase_7_1253` (compositor: con no_wrap la
+medida es ancho-completo y más baja que el envuelto), `no_wrap_setea_campo_del_
+texto_fase_7_1253` (builder del compositor: setea el campo, default false, no-op
+sin texto).
+
+> v1: `Pre`/`PreWrap` preservan el colapso (ya estaba) pero el wrap de `Pre` no
+> rompe en `\n` explícitos dentro del leaf (el build estático no parte por línea);
+> el camino RichText (spans) ignora `no_wrap`. `white-space: pre-line` sigue
+> envolviendo (correcto).
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
-- **`white-space: nowrap`** — wrap real (hoy el texto envuelve igual; sólo el
-  clamp de `ellipsis(1)` fuerza la línea única). Habilita el resto de la familia.
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).
 - **caret v3** — parpadeo (blink) + scroll horizontal cuando el texto desborda la
