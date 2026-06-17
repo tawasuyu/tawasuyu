@@ -1102,6 +1102,24 @@ fn perfiles_schema(m: &Model) -> Schema {
             .field(Field::button("eliminar", format!("Eliminar «{activo}»")))
             .field(Field::button("rescatar", "Rescatar perfiles de fábrica faltantes")),
     )
+    .section({
+        // Composición del perfil activo: qué theme / atajos / animaciones USA,
+        // eligiendo por NOMBRE entre las bibliotecas. (También se relacionan al
+        // elegirlos en cada diente; acá se ve y arma todo junto.)
+        let prof = m.dprofiles.get(&m.dprofiles.active);
+        let theme_actual = prof.map(|p| p.theme.clone()).unwrap_or_default();
+        let atajos_actual = prof.map(|p| p.keymap_set.clone()).unwrap_or_default();
+        let anim_actual = prof.map(|p| p.animation_set.clone()).unwrap_or_default();
+        let opt = |names: Vec<String>| -> Vec<EnumOption> {
+            names.into_iter().map(|n| EnumOption::new(n.clone(), n)).collect()
+        };
+        Section::new("perfiles::composicion", "Composición")
+            .icon("🧩")
+            .help("Qué usa este perfil. Elegí por nombre el theme, los atajos y las animaciones.")
+            .field(Field::radio("set_theme", "Theme", theme_actual, opt(m.themes.names())))
+            .field(Field::radio("set_atajos", "Atajos", atajos_actual, opt(m.profiles.names())))
+            .field(Field::radio("set_anim", "Animaciones", anim_actual, opt(m.animaciones.names())))
+    })
 }
 
 /// Inyecta las secciones de config del perfil activo —teselado/decoración/fondo/
@@ -2668,6 +2686,46 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                     }
                 }
                 Some("rescatar") if value.as_bool() == Some(true) => do_rescue_profiles(m),
+                // Composición: el perfil activo elige qué theme/atajos/animación
+                // USA (referencia por nombre) y se aplica en caliente.
+                Some("set_theme") => {
+                    if let Some(sel) = value.as_str() {
+                        let active = m.dprofiles.active.clone();
+                        if let Some(p) = m.dprofiles.profiles.get_mut(&active) {
+                            p.theme = sel.to_string();
+                        }
+                        m.dirty.dprofiles = true;
+                        apply_active_theme(m);
+                    }
+                }
+                Some("set_atajos") => {
+                    if let Some(sel) = value.as_str() {
+                        let active = m.dprofiles.active.clone();
+                        if let Some(p) = m.dprofiles.profiles.get_mut(&active) {
+                            p.keymap_set = sel.to_string();
+                        }
+                        if m.profiles.set_active(sel).is_ok() {
+                            m.keymap_rows = m.profiles.active_keymap().to_rows();
+                            m.dirty.keymap = true;
+                        }
+                        m.dirty.profiles = true;
+                        m.dirty.dprofiles = true;
+                    }
+                }
+                Some("set_anim") => {
+                    if let Some(sel) = value.as_str() {
+                        let active = m.dprofiles.active.clone();
+                        if let Some(p) = m.dprofiles.profiles.get_mut(&active) {
+                            p.animation_set = sel.to_string();
+                        }
+                        if m.animaciones.set_active(sel) {
+                            m.animaciones.active_animation().apply_to(&mut m.mirada);
+                            m.dirty.mirada = true;
+                        }
+                        m.dirty.animaciones = true;
+                        m.dirty.dprofiles = true;
+                    }
+                }
                 _ => {}
             }
         }
@@ -2941,9 +2999,18 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
     // Pestaña Perfiles (lista única): el selector «usar» = perfil activo; los
     // botones (crear/duplicar/eliminar/rescatar) leen false; renombrar = texto.
     if key == "perfiles" {
+        let prof = m.dprofiles.get(&m.dprofiles.active);
         return Some(match rel.leaf() {
             Some("usar") => FieldValue::Text(m.dprofiles.active.clone()),
             Some("renombrar") => FieldValue::Text(String::new()),
+            // Composición: referencias del perfil activo (por nombre).
+            Some("set_theme") => FieldValue::Enum(prof.map(|p| p.theme.clone()).unwrap_or_default()),
+            Some("set_atajos") => {
+                FieldValue::Enum(prof.map(|p| p.keymap_set.clone()).unwrap_or_default())
+            }
+            Some("set_anim") => {
+                FieldValue::Enum(prof.map(|p| p.animation_set.clone()).unwrap_or_default())
+            }
             _ => FieldValue::Bool(false),
         });
     }
