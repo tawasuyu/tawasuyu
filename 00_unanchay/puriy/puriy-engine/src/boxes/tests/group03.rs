@@ -767,3 +767,35 @@ use crate::Engine;
             "sin la propiedad, el <select> queda en Auto (chrome nativo)"
         );
     }
+
+    #[test]
+    fn appearance_none_llega_al_submit_fase_7_1242() {
+        // `appearance: none` también aterriza en el box de un `<input
+        // type=submit>`, listo para que el wire apague el fondo gris nativo y deje
+        // sólo el estilo del autor (background + color + border). Sin la
+        // propiedad, el botón queda en `Auto` (chrome nativo gris).
+        use crate::style::Appearance;
+        let html = r##"<html><body>
+            <input id="x" type="submit" value="ok" style="appearance: none">
+            <input id="y" type="submit" value="ok">
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut x_app: Option<Appearance> = None;
+        let mut y_app: Option<Appearance> = None;
+        doc.box_tree.walk(|b| match b.element_id.as_deref() {
+            Some("x") => x_app = Some(b.appearance),
+            Some("y") => y_app = Some(b.appearance),
+            _ => {}
+        });
+        assert_eq!(
+            x_app,
+            Some(Appearance::None),
+            "appearance:none llega al box del <input type=submit>"
+        );
+        assert_eq!(
+            y_app,
+            Some(Appearance::Auto),
+            "sin la propiedad, el botón queda en Auto (chrome nativo)"
+        );
+    }

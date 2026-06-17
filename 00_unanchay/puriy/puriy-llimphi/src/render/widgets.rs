@@ -223,7 +223,13 @@ pub(crate) fn render_submit_button(b: &BoxNode, idx: usize, ctx: &mut RenderCtx<
         .unwrap_or_else(|| "Submit".to_string());
     let css_width = length_to_taffy(b.width, zoom);
     let h = (b.font_size * zoom).max(14.0 * zoom) + 12.0;
-    View::new(Style {
+    // `appearance: none` (Fase 7.1242): apaga el chrome nativo del botón —el
+    // fondo gris y el radius default— y deja sólo el estilo del autor:
+    // `background` + color del texto + decoraciones (border/radius/shadow vía
+    // `apply_decorations`). Con `appearance: auto` (default) el botón conserva su
+    // look nativo gris clickeable.
+    let bare = matches!(b.appearance, puriy_engine::Appearance::None);
+    let mut view = View::new(Style {
         size: Size {
             width: css_width.unwrap_or_else(|| length(120.0 * zoom)),
             height: length(h),
@@ -243,16 +249,29 @@ pub(crate) fn render_submit_button(b: &BoxNode, idx: usize, ctx: &mut RenderCtx<
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(Color::from_rgb8(230, 230, 240))
-    .hover_fill(Color::from_rgb8(215, 220, 235))
-    .radius(3.0)
-    .on_click(Msg::SubmitForm(idx))
-    .text_aligned(
-        label,
-        b.font_size * zoom,
-        Color::from_rgb8(30, 30, 40),
-        Alignment::Center,
-    )
+    .on_click(Msg::SubmitForm(idx));
+    let text_color = if bare {
+        Color::from_rgba8(b.color.r, b.color.g, b.color.b, b.color.a)
+    } else {
+        Color::from_rgb8(30, 30, 40)
+    };
+    if bare {
+        if let Some(bg) = b.background {
+            view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, bg.a));
+        }
+        if let Some(hb) = b.hover_background {
+            view = view.hover_fill(Color::from_rgba8(hb.r, hb.g, hb.b, hb.a));
+        }
+        return apply_decorations(
+            view.text_aligned(label, b.font_size * zoom, text_color, Alignment::Center),
+            b,
+            zoom,
+        );
+    }
+    view.fill(Color::from_rgb8(230, 230, 240))
+        .hover_fill(Color::from_rgb8(215, 220, 235))
+        .radius(3.0)
+        .text_aligned(label, b.font_size * zoom, text_color, Alignment::Center)
 }
 
 /// `<select>` con `<option>`s: renderea un header click-toggle con la

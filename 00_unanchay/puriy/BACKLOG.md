@@ -560,12 +560,28 @@ aterrizaba en el box del `<select>` (Fase 7.258, genérico al elemento). Test:
 `appearance_none_llega_al_select_fase_7_1241` (`group03`: `none` llega al box del
 `<select>`, sin la prop queda `Auto`).
 
+### 7.1242 ✅ — `appearance: none` resetea el chrome de `<input type=submit|button>`
+
+Cierra la familia `appearance` para los botones. Con `appearance: none`,
+`render_submit_button` apaga el chrome nativo —el **fondo gris** y el **radius
+default**— y deja sólo el estilo del autor: `background` + `color` del texto +
+`hover` (`:hover { background }`) + decoraciones (border/radius/shadow vía
+`apply_decorations`). Con `appearance: auto` (default) el botón conserva el look
+nativo gris clickeable. Cambio de wire puro; `appearance` ya aterrizaba en el box
+del botón (genérico al elemento). Test: `appearance_none_llega_al_submit_fase_7_
+1242` (`group03`).
+
+> **text-input** queda fuera: el wrapper del `text_input_view` **no dibuja borde
+> nativo** (sólo fill del autor + radius + focus-ring de cortesía), así que
+> `appearance:none` sería casi no-op. El hueco real ahí es *aplicar el border del
+> autor* al text-input (`apply_decorations` en `render_input`), independiente de
+> `appearance` — fase aparte si se pide.
+
 ### Próximos huecos del mismo bloque (a atacar en orden)
 
-- **`appearance: none` reset de `<input type=submit|button>` / text-input** —
-  los botones y el text-input ya respetan parcialmente el estilo del autor;
-  falta el reset completo del chrome por `appearance:none` (la pieza que quedó
-  fuera de 7.1240/7.1241).
+- **border del autor en text-input** — `render_input` no llama
+  `apply_decorations`, así que `border`/`border-radius`/`box-shadow` del autor no
+  se pintan sobre `<input type=text>`/`<textarea>`. Cablear igual que botón/select.
 - **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
   los otros sitios de imagen (reusar `with_image_rendering` en `decorations.rs`
   y `canvas.rs`).
