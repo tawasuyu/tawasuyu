@@ -40,6 +40,37 @@ pub struct Entity3d {
     pub color: [u8; 3],
 }
 
+/// Atmósfera del mundo (primera rebanada de M6): cielo gradiente + niebla por
+/// distancia ("aerial perspective"). Editable antes de `render`.
+///
+/// `fog_density` controla todo el efecto: con `0.0` (default) el renderer se
+/// comporta como antes — los rayos que no pegan nada hacen `discard` (deja ver
+/// el fondo vello) y no hay niebla. Con `> 0.0` el motor pinta su **propio
+/// cielo** en los misses y desvanece lo lejano hacia el color del horizonte, que
+/// es lo que hace legible un mundo grande (sin esto, el borde lejano del terreno
+/// se ve como un muro recortado).
+#[derive(Clone, Copy)]
+pub struct Atmosphere {
+    /// Color del cielo en el cenit (mirando hacia arriba).
+    pub sky_zenith: [u8; 3],
+    /// Color del cielo en el horizonte — también el color hacia el que
+    /// desvanece la niebla.
+    pub sky_horizon: [u8; 3],
+    /// Densidad de niebla por unidad de voxel. `0.0` = desactivada (miss →
+    /// `discard`, sin niebla); valores típicos `0.002..0.02`.
+    pub fog_density: f32,
+}
+
+impl Default for Atmosphere {
+    fn default() -> Self {
+        Self {
+            sky_zenith: [70, 120, 200],
+            sky_horizon: [188, 208, 230],
+            fog_density: 0.0,
+        }
+    }
+}
+
 /// Renderer de voxels por ray-march de dos niveles sobre un brick pool sparse.
 pub struct VoxelRenderer {
     pool: wgpu::Texture,
@@ -59,6 +90,8 @@ pub struct VoxelRenderer {
     free: Vec<u32>,
     /// Dirección hacia el sol (normalizada). Editable antes de `render`.
     pub sun_dir: [f32; 3],
+    /// Atmósfera (cielo + niebla). `fog_density = 0` → comportamiento clásico.
+    pub atmosphere: Atmosphere,
     /// Entidades vivas — se empacan y suben en cada `render`.
     pub entities: Vec<Entity3d>,
 }
@@ -152,7 +185,8 @@ impl VoxelRenderer {
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("llimphi-3d-voxel-ubuf"),
             // mat4(64)+cam_eye(16)+grid_dim/brick(16)+sun(16)+cdim(16)+atlas(16)
-            size: 144,
+            // +sky_zenith/fog(16)+sky_horizon(16)
+            size: 176,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -234,6 +268,7 @@ impl VoxelRenderer {
             slots: vec![0u32; n_cells],
             free: Vec::new(),
             sun_dir: normalize3([0.5, 1.0, 0.35]),
+            atmosphere: Atmosphere::default(),
             entities: Vec::new(),
         };
 
@@ -386,7 +421,7 @@ impl VoxelRenderer {
             return;
         }
         let inv_vp = camera.view_proj(w as f32 / h as f32).inverse();
-        let mut u = Vec::with_capacity(144);
+        let mut u = Vec::with_capacity(176);
         for v in inv_vp.to_cols_array() {
             u.extend_from_slice(&v.to_ne_bytes());
         }
@@ -404,6 +439,23 @@ impl VoxelRenderer {
             u.extend_from_slice(&v.to_ne_bytes());
         }
         for v in [self.atlas[0] as f32, self.atlas[1] as f32, self.atlas[2] as f32, 0.0] {
+            u.extend_from_slice(&v.to_ne_bytes());
+        }
+        let a = &self.atmosphere;
+        for v in [
+            a.sky_zenith[0] as f32 / 255.0,
+            a.sky_zenith[1] as f32 / 255.0,
+            a.sky_zenith[2] as f32 / 255.0,
+            a.fog_density.max(0.0),
+        ] {
+            u.extend_from_slice(&v.to_ne_bytes());
+        }
+        for v in [
+            a.sky_horizon[0] as f32 / 255.0,
+            a.sky_horizon[1] as f32 / 255.0,
+            a.sky_horizon[2] as f32 / 255.0,
+            0.0,
+        ] {
             u.extend_from_slice(&v.to_ne_bytes());
         }
         queue.write_buffer(&self.ubuf, 0, &u);
@@ -521,6 +573,8 @@ struct U {
     sun_dir: vec4<f32>,    // xyz = dirección hacia el sol (normalizada)
     cdim: vec4<f32>,       // xyz = dim grueso (celdas de brick)
     atlas: vec4<f32>,      // xyz = slots por eje en el atlas del pool
+    sky_zenith: vec4<f32>, // xyz = color cenit, w = densidad de niebla (0 = off)
+    sky_horizon: vec4<f32>,// xyz = color horizonte / hacia el que niebla desvanece
 };
 struct Entity {
     pos: vec4<f32>,
@@ -754,6 +808,17 @@ fn trace_entities(ro: vec3<f32>, rd: vec3<f32>, max_t: f32) -> EHit {
     return best;
 }
 
+// Cielo procedural: gradiente horizonte→cenit por la altura del rayo, con un
+// disco solar y su halo. Es también el color al que desvanece la niebla.
+fn sky_color(rd: vec3<f32>) -> vec3<f32> {
+    let t = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
+    var c = mix(u.sky_horizon.xyz, u.sky_zenith.xyz, pow(t, 0.55));
+    let s = max(dot(rd, u.sun_dir.xyz), 0.0);
+    c = c + vec3<f32>(1.0, 0.96, 0.84) * pow(s, 260.0) * 1.6;   // disco
+    c = c + vec3<f32>(1.0, 0.90, 0.72) * pow(s, 9.0) * 0.16;    // halo
+    return c;
+}
+
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let p_near = u.inv_vp * vec4<f32>(in.ndc, 0.0, 1.0);
@@ -769,21 +834,31 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let t_vox = select(1e30, h.t, h.hit);
     let eh = trace_entities(ro, rd, t_vox);
 
+    let fog_density = u.sky_zenith.w;
+
     var albedo: vec3<f32>;
     var normal: vec3<f32>;
     var p: vec3<f32>;
     var ao: f32;
+    var t_hit: f32;
     if (eh.hit) {
         albedo = eh.color;
         normal = eh.normal;
         p = ro + rd * eh.t;
         ao = 1.0;
+        t_hit = eh.t;
     } else if (h.hit) {
         albedo = voxel_at(h.vox).rgb;
         normal = h.normal;
         p = ro + rd * h.t;
         ao = compute_ao(h.vox, h.normal, p, dim);
+        t_hit = h.t;
     } else {
+        // Sin impacto: con niebla activa pintamos cielo propio; sin ella,
+        // descartamos para dejar ver el fondo vello (comportamiento clásico).
+        if (fog_density > 0.0) {
+            return vec4<f32>(sky_color(rd), 1.0);
+        }
         discard;
     }
 
@@ -797,6 +872,14 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 
     let ambient = 0.32;
     let light = (ambient + 0.72 * diff * shadow) * (0.35 + 0.65 * ao);
-    return vec4<f32>(albedo * light, 1.0);
+    var color = albedo * light;
+
+    // Niebla / perspectiva aérea: lo lejano desvanece hacia el cielo en esa
+    // dirección, lo que hace legible el borde de un mundo grande.
+    if (fog_density > 0.0) {
+        let f = 1.0 - exp(-t_hit * fog_density);
+        color = mix(color, sky_color(rd), f);
+    }
+    return vec4<f32>(color, 1.0);
 }
 "#;

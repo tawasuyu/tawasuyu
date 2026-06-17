@@ -402,7 +402,19 @@ terreno congelado) la ruta **moderna y mejor encajada es no meshear**:
 | **M2 — sparse + color/AO/luz** | SVO o brickmap (saltar el aire), color por voxel, AO/normal en el hit, sol direccional | ~2 semanas |
 | **M3 — dinámico** | actualización incremental de la estructura GPU al mutar voxels (dominium corriendo y editándose en vivo) — **mucho más barato que el re-mesh** del paradigma clásico | ~1 semana |
 | **M4 — entidades** | agentes por instancing o como voxels en la misma estructura | ~días-1 sem |
-| **M5/M6 (opcional)** | dimensiones múltiples / streaming "infinito" con brickmaps | semanas |
+| **M5 — dimensiones** | múltiples `WorldStore` (un `Multiverse`), switch/portales | ✅ hecho |
+| **M6 — mundo grande / "infinito"** | world-gen + atmósfera (✅) → luego streaming/LOD con brickmaps | en curso |
+
+**Estado (2026-06-17):** M0–M5 cerrados (ray-march DDA de dos niveles sobre brick
+pool sparse, AO + sol + sombras, mutación incremental por `DirtyBox`/`sync`,
+entidades analíticas, `Multiverse`). **M6 — primera rebanada hecha:** world-gen
+procedural (`llimphi_3d::terrain`: heightmap fbm con océanos/playa/pasto/roca/nieve
++ árboles, sin deps de ruido) y **atmósfera** (`Atmosphere`: cielo gradiente con
+disco solar + niebla por distancia, opt-in vía `fog_density` para no alterar la
+composición clásica sobre vello). Demo verificado por PNG headless:
+`cargo run -p llimphi-3d --example terrain_demo --release` → /tmp/m6_terrain_*.png.
+Queda de M6: **streaming real** (chunks que cargan/descargan alrededor de la cámara
++ persistencia CAS) y **LOD** del horizonte — el tramo caro de §7.
 
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más
