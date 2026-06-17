@@ -123,6 +123,21 @@ pub(crate) fn render_input(
     wrapper.children(vec![input])
 }
 
+/// Color del glifo de un checkbox/radio según `accent-color` (Fase 7.1238).
+/// Sólo el estado MARCADO toma el accent: los navegadores colorean el "fill"
+/// del control (☑ / ●) pero dejan el contorno vacío (☐ / ○) en el gris neutro.
+/// `accent == None` (CSS `auto`) o el control desmarcado ⇒ gris neutro.
+pub(crate) fn checkbox_glyph_color(
+    accent: Option<puriy_engine::Color>,
+    checked: bool,
+) -> Color {
+    let neutral = Color::from_rgb8(40, 40, 50);
+    match accent {
+        Some(c) if checked => Color::from_rgba8(c.r, c.g, c.b, c.a),
+        _ => neutral,
+    }
+}
+
 /// `<input type=checkbox|radio>`: caja chica con `☐`/`☑` (o circle
 /// vacío/lleno para radio) clickeable. Sin label asociada — el `<label
 /// for="...">` no se cablea todavía, pero el click sobre el widget
@@ -144,6 +159,9 @@ pub(crate) fn render_checkbox_radio(
     };
     let msg = if radio { Msg::SelectRadio(idx) } else { Msg::ToggleCheckbox(idx) };
     let size_px = (b.font_size * zoom).max(14.0 * zoom);
+    // `accent-color` (Fase 7.1238): tinta el estado MARCADO del control (el
+    // "fill" del ☑ / ●). El dato llega heredado al box (Fase 7.239).
+    let glyph_color = checkbox_glyph_color(b.accent_color, checked);
     View::new(Style {
         size: Size {
             width: length(size_px + 4.0),
@@ -162,7 +180,7 @@ pub(crate) fn render_checkbox_radio(
     .text_aligned(
         glyph.to_string(),
         size_px,
-        Color::from_rgb8(40, 40, 50),
+        glyph_color,
         Alignment::Center,
     )
 }

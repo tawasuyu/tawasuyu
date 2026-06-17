@@ -1086,3 +1086,26 @@
         decode_canvas_images(t);
         assert_eq!(t.canvas_images.len(), 1);
     }
+
+    #[test]
+    fn checkbox_glyph_color_aplica_accent_solo_marcado_fase_7_1238() {
+        // `accent-color` tinta el glifo MARCADO (☑ / ●) de checkbox/radio.
+        let neutral = llimphi_raster::peniko::Color::from_rgb8(40, 40, 50);
+        let accent = puriy_engine::Color::rgb(0x11, 0x22, 0x33);
+        let accent_painted = llimphi_raster::peniko::Color::from_rgba8(0x11, 0x22, 0x33, 0xff);
+
+        // Marcado + accent seteado → el accent.
+        assert_eq!(checkbox_glyph_color(Some(accent), true), accent_painted);
+        // Marcado pero accent `auto` (None) → gris neutro.
+        assert_eq!(checkbox_glyph_color(None, true), neutral);
+        // Desmarcado, aunque haya accent → gris neutro (sólo el fill se tinta).
+        assert_eq!(checkbox_glyph_color(Some(accent), false), neutral);
+        // Desmarcado + auto → neutro.
+        assert_eq!(checkbox_glyph_color(None, false), neutral);
+        // El alpha del accent se respeta (rgba con a<255).
+        let translucido = puriy_engine::Color { r: 10, g: 20, b: 30, a: 128 };
+        assert_eq!(
+            checkbox_glyph_color(Some(translucido), true),
+            llimphi_raster::peniko::Color::from_rgba8(10, 20, 30, 128)
+        );
+    }

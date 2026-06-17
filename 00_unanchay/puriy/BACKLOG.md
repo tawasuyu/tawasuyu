@@ -476,9 +476,41 @@ la prop queda `Normal`); el mapeo `blend_mode_peniko` ya estaba cubierto por las
 
 ---
 
-## Próximo bloque tras blend — a determinar
+## Bloque post-blend — consumo de props que llegan al box pero nadie pinta
 
-- **`mix-blend-mode`** (7.1237) cierra la familia blend.
-- **`background-attachment`** (parsea pero se descarta — no llega al box).
-- **`background-blend-mode` per-layer encaje** u otros refinamientos.
-- Lo que marque el SDD §Estado como próximo hueco.
+**Determinación (2026-06-17)**: cerrada la familia blend, se auditó qué props
+**ya llegan al `BoxNode`** (engine completo) pero el wire `puriy-llimphi` **no
+consume**. Halladas: `accent_color`, `caret_color`, `image_rendering`,
+`appearance` (las cuatro sin lectura en `puriy-llimphi/src/`). Se descartó
+`background-attachment` como primer paso: su único valor con efecto visual
+(`fixed`) depende del rect del viewport + scroll + offset del chrome (espacios de
+coordenadas no triviales) — no es un v1 de scope cerrado. Se ataca primero lo
+self-contained.
+
+### 7.1238 ✅ — `accent-color` tinta checkbox/radio marcados
+
+`accent-color` parsea, computa y **hereda** desde Fase 7.239 (test
+`accent_color_fase_7_239` en `style/group01`), llega al `BoxNode.accent_color`,
+pero nada lo leía. El wire ahora tinta el **estado marcado** del control (el
+"fill" del `☑` / `●`) con el accent; `auto` (`None`) o el control desmarcado
+conservan el gris neutro `rgb(40,40,50)` — los navegadores sólo colorean la
+marca, no el contorno vacío (`☐` / `○`). Cambio **sólo de wire** (sin engine ni
+compositor): helper puro `checkbox_glyph_color(accent, checked) -> Color` +
+su uso en `render_checkbox_radio` (`widgets.rs`). Limitación de alcance: el wire
+sólo renderiza checkbox/radio de los controles que el accent tintaría —no hay
+`<input type=range>` / `<progress>` / `<meter>` nativos todavía—, así que la
+familia se agota acá. Test: `checkbox_glyph_color_aplica_accent_solo_marcado_fase_7_1238`
+(`grupo_04`: accent+marcado→accent, auto→neutro, desmarcado→neutro, alpha<255 se
+respeta).
+
+### Próximos huecos del mismo bloque (a atacar en orden)
+
+- **`caret-color`** — color del caret del text-input. El caret lo pinta el
+  widget `text_input_view` de llimphi; hay que ver si `TextInputPalette` expone
+  el color del caret y cablear `b.caret_color`.
+- **`image-rendering`** — `pixelated`/`crisp-edges` → muestreo nearest en `<img>`;
+  `auto`/`smooth` → bilineal. Mapea al modo de sampling de peniko en `image.rs`.
+- **`appearance`** — `none` desactiva el chrome nativo de los controles de
+  formulario; evaluar qué controles del wire respetan el reset.
+- **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
+  scroll en el closure de paint (ver determinación arriba).
