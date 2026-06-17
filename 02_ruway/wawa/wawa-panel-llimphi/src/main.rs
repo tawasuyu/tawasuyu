@@ -270,6 +270,11 @@ struct Model {
     /// las pestañas mirada · pata · Atajos.
     dprofiles: DesktopProfiles,
     pata: pata_core::Config,
+    /// Reglas de ventana de mirada (estilo Hyprland windowrule): por clase
+    /// (`app_id`) y/o título → escritorio/flotante/fullscreen/tamaño. Editables
+    /// en la pestaña «Reglas» de Vista; se persisten en `rules.ron`.
+    rules: mirada_brain::rules::Rules,
+    rules_path: Option<PathBuf>,
     allichay: AllichayState,
     host: HostInfo,
     status: String,
@@ -306,6 +311,8 @@ struct SaveDirty {
     profiles: bool,
     /// Biblioteca de perfiles de escritorio (`perfiles-escritorio.ron`).
     dprofiles: bool,
+    /// Reglas de ventana (`rules.ron`).
+    rules: bool,
 }
 
 #[derive(Clone)]
@@ -635,6 +642,12 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
 
     let dprofiles = DesktopProfiles::load_or_seed(&mirada);
 
+    let rules_path = mirada_brain::rules::Rules::default_path();
+    let rules = rules_path
+        .as_deref()
+        .map(mirada_brain::rules::Rules::load_or_default)
+        .unwrap_or_default();
+
     Model {
         selected_pest: 0,
         selected_item: None,
@@ -649,6 +662,8 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         profiles_path,
         dprofiles,
         pata,
+        rules,
+        rules_path,
         allichay: AllichayState::new(),
         host,
         status: String::new(),
@@ -878,6 +893,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     if mirada_on {
         vista.sections.push(keymap_section(&m.keymap_rows)); // Atajos
     }
+    vista.sections.push(reglas_section(&m.rules)); // Reglas (hyprland windowrule)
 
     // ---- Panel PATA ----
     let mut pata = Schema::new();
@@ -1110,6 +1126,74 @@ fn barras_section(pata: &pata_core::Config) -> Section {
             ],
             barras_rows(pata),
         ))
+}
+
+/// Sección «Reglas» (estilo Hyprland windowrule): tabla agregable/borrable de
+/// reglas de ventana del perfil/sistema (`rules.ron`).
+fn reglas_section(rules: &mirada_brain::rules::Rules) -> Section {
+    use allichay::{Column, Field};
+    let rows: Vec<Vec<String>> = rules
+        .list()
+        .iter()
+        .map(|r| {
+            vec![
+                r.app_id.clone(),
+                r.title.clone(),
+                if r.workspace == 0 { String::new() } else { r.workspace.to_string() },
+                if r.floating { "sí".into() } else { "no".into() },
+                if r.fullscreen { "sí".into() } else { "no".into() },
+                if r.size.0 > 0 { r.size.0.to_string() } else { String::new() },
+                if r.size.1 > 0 { r.size.1.to_string() } else { String::new() },
+            ]
+        })
+        .collect();
+    Section::new("reglas::lista", "Reglas")
+        .icon("▦")
+        .help(
+            "Reglas de ventana (estilo Hyprland windowrule). Casan por CLASE \
+             (app_id) y/o TÍTULO (subcadena, sin distinguir mayúsculas; vacío = \
+             cualquiera) y aplican: Escr. (1-9; vacío = no mover), Flota, Pantalla \
+             (completa) y tamaño Ancho×Alto px (sólo si flota). +/− agrega/borra.",
+        )
+        .field(Field::table(
+            "lista",
+            "Reglas",
+            vec![
+                Column::new("clase", "Clase"),
+                Column::new("titulo", "Título"),
+                Column::new("escritorio", "Escr."),
+                Column::new("flota", "Flota"),
+                Column::new("pantalla", "Pantalla"),
+                Column::new("ancho", "Ancho"),
+                Column::new("alto", "Alto"),
+            ],
+            rows,
+        ))
+}
+
+/// Reconstruye `m.rules` desde la tabla de reglas.
+fn apply_reglas_table(m: &mut Model, rows: &[Vec<String>]) {
+    let yes = |s: &str| {
+        matches!(s.trim().to_lowercase().as_str(), "sí" | "si" | "true" | "1" | "on")
+    };
+    let num = |s: &str| s.trim().parse::<i32>().unwrap_or(0).max(0);
+    let list: Vec<mirada_brain::rules::Rule> = rows
+        .iter()
+        .map(|row| {
+            let g = |i: usize| row.get(i).map(String::as_str).unwrap_or("");
+            mirada_brain::rules::Rule {
+                app_id: g(0).trim().to_string(),
+                title: g(1).trim().to_string(),
+                workspace: g(2).trim().parse::<usize>().unwrap_or(0),
+                floating: yes(g(3)),
+                fullscreen: yes(g(4)),
+                size: (num(g(5)), num(g(6))),
+            }
+        })
+        .collect();
+    m.rules = mirada_brain::rules::Rules::new(list);
+    m.dirty.rules = true;
+    m.save_in = SAVE_DELAY_TICKS;
 }
 
 /// Reconstruye `m.pata.surfaces` desde la tabla de barras, preservando los
@@ -1703,6 +1787,13 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
+        "reglas" => {
+            if let Some(rows) = value.as_table() {
+                apply_reglas_table(m, &rows.to_vec());
+            }
+            m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
         _ => return,
     }
     // Editar mirada/pata/atajos modifica el perfil ACTIVO: vuelca la config viva
@@ -1765,6 +1856,14 @@ fn flush_saves(m: &mut Model) {
             Err(e) => err = Some(format!("· perfiles save: {e}")),
         }
         m.dirty.dprofiles = false;
+    }
+    if m.dirty.rules {
+        match m.rules_path.as_deref().map(|p| m.rules.save(p)) {
+            Some(Ok(())) => ok = true,
+            Some(Err(e)) => err = Some(format!("· reglas save: {e}")),
+            None => err = Some("· reglas: sin ruta".into()),
+        }
+        m.dirty.rules = false;
     }
     if let Some(e) = err {
         m.status = e;

@@ -92,6 +92,12 @@ impl Rules {
         RuleOutcome::default()
     }
 
+    /// Las reglas, en orden. Para editores (el panel de control) que las
+    /// muestran/reescriben como tabla.
+    pub fn list(&self) -> &[Rule] {
+        &self.rules
+    }
+
     /// Cuántas reglas hay.
     pub fn len(&self) -> usize {
         self.rules.len()
@@ -105,6 +111,17 @@ impl Rules {
     /// Parsea las reglas desde el texto RON de un archivo de config.
     pub fn from_ron(text: &str) -> Result<Rules, String> {
         ron::from_str(text).map_err(|e| format!("RON inválido: {e}"))
+    }
+
+    /// Persiste las reglas a `path` en RON (lo usa el panel de control al
+    /// editar la tabla de reglas).
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let txt = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(path, txt)
     }
 
     /// La ruta canónica de las reglas: `~/.config/mirada/rules.ron`.
