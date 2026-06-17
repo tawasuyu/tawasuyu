@@ -956,6 +956,7 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
 /// duplicar viven en el menú «Perfiles».
 /// Un glifo distinto por perfil (según su nombre conocido), para que no se vean
 /// todos iguales en el rail. Cae a un genérico para perfiles custom.
+#[allow(dead_code)] // Perfiles ahora es una lista única (dropdown), sin diente por perfil.
 fn icono_perfil(name: &str) -> &'static str {
     match name {
         "mirada" => "◉",
@@ -970,53 +971,39 @@ fn icono_perfil(name: &str) -> &'static str {
 }
 
 fn perfiles_schema(m: &Model) -> Schema {
-    use allichay::Field;
-    let mut schema = Schema::new();
-    // Acciones: crear/duplicar/eliminar (toggles de acción — al activarlos
-    // ejecutan y vuelven a apagarse; valor siempre falso). También en el menú
-    // «Perfiles» de la barra. El activo se nombra en duplicar/eliminar.
+    use allichay::{EnumOption, Field};
     let activo = if m.dprofiles.active.is_empty() {
         "—".to_string()
     } else {
         m.dprofiles.active.clone()
     };
-    schema = schema.section(
-        Section::new("perfiles::acciones", "Acciones")
-            .icon("✚")
-            .help("Crear un perfil nuevo desde la config actual, o duplicar/eliminar el activo.")
-            .field(Field::button("crear", "Crear perfil nuevo (desde el actual)"))
+    // Una sola lista en el canvas (como Themes): un selector con TODOS los
+    // perfiles (el activo con «●») + acciones. No una pestaña por perfil.
+    let opts: Vec<EnumOption> = m
+        .dprofiles
+        .names()
+        .into_iter()
+        .map(|n| {
+            let label = if n == m.dprofiles.active { format!("● {n}") } else { n.clone() };
+            EnumOption::new(n, label)
+        })
+        .collect();
+    Schema::new().section(
+        Section::new("perfiles::acciones", "Perfiles")
+            .icon("👤")
+            .help(
+                "Perfiles de escritorio completos (keymap + barra + theme + fondo). \
+                 Elegí el activo; las demás pestañas de Vista editan ESE perfil. \
+                 Crear/duplicar/renombrar/eliminar; «rescatar» re-siembra los \
+                 perfiles de fábrica que falten (por si renombraste o borraste uno).",
+            )
+            .field(Field::dropdown("usar", "Perfil activo", m.dprofiles.active.clone(), opts))
+            .field(Field::button("crear", "Crear perfil (desde el actual)"))
             .field(Field::button("duplicar", format!("Duplicar «{activo}»")))
-            .field(Field::button("eliminar", format!("Eliminar «{activo}»"))),
-    );
-    for name in m.dprofiles.names() {
-        let is_active = m.dprofiles.active == name;
-        let title = if is_active {
-            format!("● {name}")
-        } else {
-            name.clone()
-        };
-        schema = schema.section(
-            Section::new(format!("perfiles::{name}"), title)
-                .icon(icono_perfil(&name))
-                .help(
-                    "Perfil de escritorio completo: look + decoración + layout + \
-                     atajos + barra. Activalo y editá su config en las pestañas de \
-                     Vista (Themes, Wallpapers, Vistas, Atajos): editan el perfil \
-                     activo y se guardan dentro de él.",
-                )
-                // Activar un perfil es una ACCIÓN (no un interruptor): botón, no
-                // radio. El activo ya se marca con «●» en el título de su diente.
-                .field(if is_active {
-                    Field::display("activo", "Estado", "● activo")
-                } else {
-                    Field::button("activo", format!("Usar «{name}»"))
-                }),
-        );
-        // La config del perfil activo ya NO se anida acá: vive en las pestañas
-        // dedicadas del panel Vista (Themes/Wallpapers/Vistas/Atajos), que editan
-        // el perfil activo. Perfiles queda como lista limpia.
-    }
-    schema
+            .field(Field::text("renombrar", format!("Renombrar «{activo}» a…"), ""))
+            .field(Field::button("eliminar", format!("Eliminar «{activo}»")))
+            .field(Field::button("rescatar", "Rescatar perfiles de fábrica faltantes")),
+    )
 }
 
 /// Inyecta las secciones de config del perfil activo —teselado/decoración/fondo/
@@ -1452,6 +1439,47 @@ fn do_delete_profile(m: &mut Model) {
         m.sidebar_open = true;
         m.status = format!("perfil «{cur}» eliminado");
     }
+}
+
+/// Renombra el perfil activo.
+fn do_rename_profile(m: &mut Model, to: &str) {
+    let to = to.trim().to_string();
+    let active = m.dprofiles.active.clone();
+    if to.is_empty() || active.is_empty() {
+        return;
+    }
+    if m.dprofiles.rename(&active, &to) {
+        m.dirty.dprofiles = true;
+        m.status = format!("perfil renombrado a «{to}»");
+    } else {
+        m.status = format!("no pude renombrar a «{to}» (¿ya existe?)");
+    }
+}
+
+/// Re-siembra los perfiles de fábrica faltantes (rescata defaults renombrados/
+/// borrados) — y sus themes homónimos.
+fn do_rescue_profiles(m: &mut Model) {
+    let n = m.dprofiles.ensure_defaults();
+    // Asegura también los themes de fábrica que falten (mismos nombres de vista).
+    let mut tn = 0;
+    for name in mirada_brain::VISTA_NAMES {
+        if m.themes.get(name).is_none() {
+            if let Some(v) = mirada_brain::Vista::by_name(name) {
+                m.themes
+                    .set(name, themes::Theme::from_config(&v.config, &m.cfg.theme_variant, &m.cfg.accent));
+                tn += 1;
+            }
+        }
+    }
+    m.dirty.dprofiles = true;
+    if tn > 0 {
+        m.dirty.themes = true;
+    }
+    m.status = if n == 0 && tn == 0 {
+        "no faltaba ningún perfil/theme de fábrica".into()
+    } else {
+        format!("rescatados: {n} perfil(es), {tn} theme(s)")
+    };
 }
 
 /// Activa un **perfil de escritorio** completo de la biblioteca: vuelca su foto
@@ -1930,19 +1958,24 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
         // Pestaña Perfiles: el primer segmento es el NOMBRE del perfil; el
         // toggle «activo» lo aplica entero (look + atajos + barra) en caliente.
         "perfiles" => {
-            let name = rel.segments().first().cloned().unwrap_or_default();
-            if name == "acciones" {
-                // Botones de acción (toggles): ejecutan al activarse.
-                if value.as_bool() == Some(true) {
-                    match rel.leaf() {
-                        Some("crear") => do_create_profile(m),
-                        Some("duplicar") => do_duplicate_profile(m),
-                        Some("eliminar") => do_delete_profile(m),
-                        _ => {}
+            match rel.leaf() {
+                // Selector «usar»: activa el perfil elegido (en caliente).
+                Some("usar") => {
+                    if let Some(sel) = value.as_str() {
+                        activate_profile(m, sel);
+                        m.dirty.dprofiles = true;
                     }
                 }
-            } else if rel.leaf() == Some("activo") && value.as_bool() == Some(true) {
-                activate_profile(m, &name);
+                Some("crear") if value.as_bool() == Some(true) => do_create_profile(m),
+                Some("duplicar") if value.as_bool() == Some(true) => do_duplicate_profile(m),
+                Some("eliminar") if value.as_bool() == Some(true) => do_delete_profile(m),
+                Some("renombrar") => {
+                    if let Some(to) = value.as_str() {
+                        do_rename_profile(m, to);
+                    }
+                }
+                Some("rescatar") if value.as_bool() == Some(true) => do_rescue_profiles(m),
+                _ => {}
             }
         }
         "mirada" if rel.segments().first().map(String::as_str) == Some("atajos") => {

@@ -9,6 +9,11 @@
 # cliente sin reiniciar el servidor.)
 set -eu
 
+# Sin XDG_RUNTIME_DIR (algunos DM no lo siembran) el socket de control de
+# mirada (`mirada-ctl.sock`) cae a otra ruta que la que ve `mirada-ctl`/pata —
+# y el switcher de workspaces queda sin hablar con el Cerebro. Lo fijamos como
+# en `mirada-session`.
+[ -z "${XDG_RUNTIME_DIR:-}" ] && export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=mirada
 export XDG_SESSION_DESKTOP=mirada

@@ -146,6 +146,38 @@ impl DesktopProfiles {
         self.profiles.insert(name.to_string(), prof);
     }
 
+    /// Renombra un perfil; mueve el «activo» si era ése. `false` si el origen no
+    /// existe o el destino está vacío/ocupado.
+    pub fn rename(&mut self, from: &str, to: &str) -> bool {
+        let to = to.trim();
+        if to.is_empty() || self.profiles.contains_key(to) || !self.profiles.contains_key(from) {
+            return false;
+        }
+        if let Some(p) = self.profiles.remove(from) {
+            self.profiles.insert(to.to_string(), p);
+            if self.active == from {
+                self.active = to.to_string();
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Re-siembra los perfiles de fábrica (vistas) que falten — por si se
+    /// renombraron o borraron. Devuelve cuántos agregó.
+    pub fn ensure_defaults(&mut self) -> usize {
+        let mut added = 0;
+        for name in mirada_brain::VISTA_NAMES {
+            if !self.profiles.contains_key(name) {
+                if let Some(prof) = DesktopProfile::from_vista(name) {
+                    self.profiles.insert(name.to_string(), prof);
+                    added += 1;
+                }
+            }
+        }
+        added
+    }
+
     /// Crea un perfil nuevo desde una foto base; nombre único si choca.
     pub fn create(&mut self, base: DesktopProfile, hint: &str) -> String {
         let name = self.unique_name(hint);
