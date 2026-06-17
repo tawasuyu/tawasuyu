@@ -25,10 +25,12 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_layout::LayoutTree;
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, Color, ImageAlphaType, ImageBrush, ImageData, ImageFormat,
+};
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
-use llimphi_ui::{measure_text_node, mount, paint, Mounted, View};
+use llimphi_ui::{measure_text_node, mount, paint, ImageFit, Mounted, View};
 use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
@@ -373,7 +375,8 @@ fn preview_pane(theme: &Theme) -> View<Msg> {
         size: Size { width: percent(1.0_f32), height: percent(0.72_f32) },
         ..Default::default()
     })
-    .fill(Color::from_rgba8(0x6b, 0x8e, 0x6e, 255))
+    .image(imagen_atardecer())
+    .image_fit(ImageFit::Contain)
     .radius(4.0)]);
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -383,6 +386,80 @@ fn preview_pane(theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel_alt)
     .children(vec![header, cuerpo])
+}
+
+/// Genera una imagen de **atardecer** (RGBA8) para el preview — en vez del
+/// rectángulo verde plano que había antes. Cielo en gradiente cálido, sol con
+/// halo, su reflejo y siluetas de montañas. Es el camino real del visor de
+/// nahual (`View::image` sobre pixels decodificados), así el pantallazo muestra
+/// un preview honesto de "atardecer.jpg".
+fn imagen_atardecer() -> ImageBrush {
+    let (w, h) = (480u32, 320u32);
+    let horizonte = (h as f32 * 0.66) as u32;
+    let (sol_x, sol_y, sol_r) = (w as f32 * 0.5, h as f32 * 0.40, 34.0_f32);
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t.clamp(0.0, 1.0);
+
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32, y as f32);
+            let (mut r, mut g, mut b);
+            if y < horizonte {
+                // Cielo: de azul-violáceo arriba a naranja en el horizonte.
+                let t = fy / horizonte as f32;
+                r = lerp(60.0, 250.0, t);
+                g = lerp(46.0, 150.0, t);
+                b = lerp(96.0, 70.0, t);
+                // Disco del sol + halo difuso alrededor.
+                let d = ((fx - sol_x).powi(2) + (fy - sol_y).powi(2)).sqrt();
+                if d < sol_r {
+                    r = 255.0;
+                    g = 240.0;
+                    b = 200.0;
+                } else {
+                    let halo = (1.0 - (d - sol_r) / 90.0).clamp(0.0, 1.0);
+                    r = lerp(r, 255.0, halo * 0.7);
+                    g = lerp(g, 220.0, halo * 0.6);
+                    b = lerp(b, 150.0, halo * 0.4);
+                }
+            } else {
+                // Agua: reflejo más oscuro del cielo, con la columna del sol.
+                let t = (fy - horizonte as f32) / (h - horizonte) as f32;
+                r = lerp(180.0, 40.0, t);
+                g = lerp(96.0, 30.0, t);
+                b = lerp(70.0, 50.0, t);
+                let refl = (1.0 - (fx - sol_x).abs() / 30.0).clamp(0.0, 1.0);
+                r = lerp(r, 240.0, refl * (1.0 - t) * 0.6);
+                g = lerp(g, 180.0, refl * (1.0 - t) * 0.5);
+            }
+            // Siluetas de montañas (dos crestas senoidales) bajo el cielo.
+            let cresta_lejana = horizonte as f32 - 24.0 - 16.0 * (fx * 0.018).sin();
+            let cresta_cercana = horizonte as f32 - 8.0 - 10.0 * (fx * 0.035 + 1.7).sin();
+            if fy > cresta_lejana && fy < horizonte as f32 {
+                r *= 0.45;
+                g *= 0.38;
+                b *= 0.52;
+            }
+            if fy > cresta_cercana && fy < horizonte as f32 {
+                r *= 0.55;
+                g *= 0.50;
+                b *= 0.62;
+            }
+            let i = ((y * w + x) * 4) as usize;
+            buf[i] = r.clamp(0.0, 255.0) as u8;
+            buf[i + 1] = g.clamp(0.0, 255.0) as u8;
+            buf[i + 2] = b.clamp(0.0, 255.0) as u8;
+            buf[i + 3] = 255;
+        }
+    }
+
+    ImageBrush::new(ImageData {
+        data: Blob::new(Arc::new(buf)),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: w,
+        height: h,
+    })
 }
 
 /// Espejo de `sidebar_view`: árbol único con íconos vectoriales reales.
