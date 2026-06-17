@@ -148,6 +148,15 @@ impl App {
         }
     }
 
+    /// Duración (ms) del slide entre escritorios, de la config (default 220).
+    /// `0` = salto seco. Con Cerebro enlazado: el default.
+    pub(crate) fn config_slide_ms(&self) -> u32 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().slide_ms,
+            Brain::Linked(_) => 220,
+        }
+    }
+
     /// `(escritorio activo 0-based, ventanas por escritorio)` del Cerebro
     /// embebido — para el switcher visual de Win+Tab. `None` con Cerebro
     /// enlazado (el dueño externo maneja los escritorios).
@@ -508,12 +517,21 @@ impl App {
     /// Cerebro enlazado o sin zonas en la config.
     pub(crate) fn config_zones(&self) -> Vec<mirada_brain::ZoneFrac> {
         match &self.brain {
-            Brain::Embedded(d) => d
-                .config()
-                .zones
-                .iter()
-                .map(|z| mirada_brain::ZoneFrac { x: z.x, y: z.y, w: z.w, h: z.h })
-                .collect(),
+            Brain::Embedded(d) => {
+                let cfg = d.config();
+                // Si la config (vieja, o de un perfil) no trae zonas, caemos a
+                // las de fábrica (mitades izq./der.) — así drag-to-zone SIEMPRE
+                // existe, sin depender de regenerar config.ron.
+                let zonas = if cfg.zones.is_empty() {
+                    mirada_brain::default_zones()
+                } else {
+                    cfg.zones.clone()
+                };
+                zonas
+                    .iter()
+                    .map(|z| mirada_brain::ZoneFrac { x: z.x, y: z.y, w: z.w, h: z.h })
+                    .collect()
+            }
             Brain::Linked(_) => Vec::new(),
         }
     }

@@ -75,11 +75,11 @@ impl DrmState {
         // Offset del slide de transición entre escritorios: las ventanas del
         // escritorio entrante se deslizan desde un costado hasta su lugar.
         // Ease-out cúbico; 0 cuando no hay slide.
+        let slide_ms = self.app.config_slide_ms().max(1);
         let slide_dx: i32 = match self.ws_slide {
             Some((start_ms, dir)) => {
                 let now = self.start.elapsed().as_millis() as u32;
-                let t = (now.saturating_sub(start_ms) as f32 / super::SLIDE_MS as f32)
-                    .clamp(0.0, 1.0);
+                let t = (now.saturating_sub(start_ms) as f32 / slide_ms as f32).clamp(0.0, 1.0);
                 let eased = 1.0 - (1.0 - t).powi(3);
                 (dir * rect.w as f32 * (1.0 - eased)) as i32
             }

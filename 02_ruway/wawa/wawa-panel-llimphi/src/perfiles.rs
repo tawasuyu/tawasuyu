@@ -38,6 +38,11 @@ pub struct DesktopProfile {
     /// `keymap` embebido (RON viejo) o el conjunto activo.
     #[serde(default)]
     pub keymap_set: String,
+    /// **Conjunto de animación referenciado** (nombre en `animaciones.ron`).
+    /// Mismo patrón que [`Self::theme`]/[`Self::keymap_set`]. Vacío = usa lo que
+    /// haya en la config (sin conjunto).
+    #[serde(default)]
+    pub animation_set: String,
 }
 
 impl DesktopProfile {
@@ -55,6 +60,7 @@ impl DesktopProfile {
             pata,
             theme: name.to_string(),
             keymap_set: String::new(),
+            animation_set: String::new(),
         })
     }
 }

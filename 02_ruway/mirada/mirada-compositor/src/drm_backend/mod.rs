@@ -163,10 +163,6 @@ const HUD_PAD: i32 = 12;
 /// Distancia del HUD al borde superior de la salida, en píxeles.
 const HUD_TOP: i32 = 40;
 
-/// Duración del slide de transición entre escritorios (Win+Tab modo
-/// Hyprland/Prezi), en milisegundos.
-pub(super) const SLIDE_MS: u32 = 220;
-
 /// Duración del HUD del preset activo al ciclar zonas.
 const HUD_DURATION: Duration = Duration::from_millis(1500);
 

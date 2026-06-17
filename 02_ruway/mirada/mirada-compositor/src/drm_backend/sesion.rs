@@ -127,7 +127,7 @@ impl DrmState {
             self.last_focused_output = foc;
         }
         if let Some((start_ms, _)) = self.ws_slide {
-            if self.start.elapsed().as_millis() as u32 >= start_ms + super::SLIDE_MS {
+            if self.start.elapsed().as_millis() as u32 >= start_ms + self.app.config_slide_ms() {
                 self.ws_slide = None;
             }
         }

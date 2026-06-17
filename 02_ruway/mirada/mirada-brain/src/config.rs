@@ -227,6 +227,15 @@ pub struct Config {
     /// (rápido). `0.0` = neutro/sistema.
     #[serde(default)]
     pub pointer_speed: f64,
+    /// Duración en ms del deslizamiento entre escritorios (Win+Tab estilo
+    /// Hyprland). `0` = salto seco. Lo lee el compositor para el ease-out.
+    #[serde(default = "default_slide_ms")]
+    pub slide_ms: u32,
+}
+
+/// Default de [`Config::slide_ms`]: un slide ágil.
+fn default_slide_ms() -> u32 {
+    220
 }
 
 /// Modo de transición de Win+Tab entre escritorios. Ver
@@ -242,6 +251,27 @@ pub enum WorkspaceSwitchMode {
     Hyprland,
     /// Zoom-out a la vista espacial «Prezi» (hoy cae al mismo slide).
     Prezi,
+}
+
+impl WorkspaceSwitchMode {
+    /// Slug estable para RON/UI (`"direct"`/`"hyprland"`/`"prezi"`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            WorkspaceSwitchMode::Direct => "direct",
+            WorkspaceSwitchMode::Hyprland => "hyprland",
+            WorkspaceSwitchMode::Prezi => "prezi",
+        }
+    }
+
+    /// Parsea un slug; `None` si no calza.
+    pub fn from_slug(s: &str) -> Option<Self> {
+        match s {
+            "direct" => Some(WorkspaceSwitchMode::Direct),
+            "hyprland" => Some(WorkspaceSwitchMode::Hyprland),
+            "prezi" => Some(WorkspaceSwitchMode::Prezi),
+            _ => None,
+        }
+    }
 }
 
 /// Default del tema del chrome (el oscuro de `llimphi-theme`).
@@ -459,6 +489,7 @@ impl Default for Config {
             natural_scroll: false,
             tap_to_click: true,
             pointer_speed: 0.0,
+            slide_ms: default_slide_ms(),
         }
     }
 }

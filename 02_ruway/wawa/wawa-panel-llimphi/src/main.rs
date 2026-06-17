@@ -14,6 +14,7 @@
 //! El renderizador es `llimphi-module-allichay`; cada cambio se rutea a su
 //! destino (`wawa` / `mirada` / `pata`) y se persiste en su formato nativo.
 
+mod animaciones;
 mod perfiles;
 mod themes;
 
@@ -92,8 +93,8 @@ const MODULES: &[(&str, &str, &str)] = &[
 ];
 
 /// Índice del panel "Acerca" (último) — para el menú Ayuda (estado/about).
-/// Orden: Vista=0, Atajos=1, Pata=2, Inicio=3, Sistema=4, Acerca=5.
-const INFO_DIENTE: usize = 5;
+/// Orden: Vista=0, Atajos=1, Animaciones=2, Pata=3, Inicio=4, Sistema=5, Acerca=6.
+const INFO_DIENTE: usize = 6;
 /// Índice del panel "Vista" (1º) — Perfiles vive ahí; saltamos tras crear/duplicar.
 const PERFILES_DIENTE: usize = 0;
 
@@ -280,6 +281,9 @@ struct Model {
     /// Biblioteca de **themes** (look reusable: apariencia+teselado+decoración).
     /// El perfil activo referencia uno; la pestaña Themes edita el referenciado.
     themes: themes::Themes,
+    /// Biblioteca de **conjuntos de animación** (transición/slide/Prezi). El
+    /// perfil activo referencia uno; el panel Animaciones edita el referenciado.
+    animaciones: animaciones::Animations,
     allichay: AllichayState,
     host: HostInfo,
     status: String,
@@ -320,6 +324,8 @@ struct SaveDirty {
     rules: bool,
     /// Biblioteca de themes (`themes.ron`).
     themes: bool,
+    /// Biblioteca de conjuntos de animación (`animaciones.ron`).
+    animaciones: bool,
 }
 
 #[derive(Clone)]
@@ -656,6 +662,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         .unwrap_or_default();
 
     let themes = themes::Themes::load_or_seed(&cfg.theme_variant, &cfg.accent);
+    let animaciones = animaciones::Animations::load_or_seed();
 
     Model {
         selected_pest: 0,
@@ -674,6 +681,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         rules,
         rules_path,
         themes,
+        animaciones,
         allichay: AllichayState::new(),
         host,
         status: String::new(),
@@ -979,6 +987,10 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     // que Themes. Antes era una sección suelta dentro de Vista.
     let atajos = if mirada_on { atajos_schema(m) } else { Schema::new() };
 
+    // ---- Panel ANIMACIONES (su propio diente) ----
+    // Conjuntos de animación (tab 1 = lista, tab 2 = parámetros), mismo patrón.
+    let animaciones = animaciones_schema(m);
+
     // ---- Panel PATA ----
     let mut pata = Schema::new();
     if pata_on {
@@ -1014,6 +1026,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     vec![
         PanelPestana { title: "Vista".into(), icon: "✦".into(), schema: vista },
         PanelPestana { title: "Atajos".into(), icon: "⌨".into(), schema: atajos },
+        PanelPestana { title: "Animaciones".into(), icon: "✨".into(), schema: animaciones },
         PanelPestana { title: "Pata".into(), icon: "🎛".into(), schema: pata },
         PanelPestana { title: "Inicio".into(), icon: "⏻".into(), schema: inicio },
         PanelPestana { title: "Sistema".into(), icon: "⚙".into(), schema: sistema },
@@ -1490,6 +1503,7 @@ fn do_create_profile(m: &mut Model) {
         pata: m.pata.clone(),
         theme: active_theme_name(m),
         keymap_set: m.profiles.active().to_string(),
+        animation_set: m.animaciones.active().to_string(),
     };
     let name = m.dprofiles.create(base, "perfil nuevo");
     activate_profile(m, &name);
@@ -1595,6 +1609,12 @@ fn activate_profile(m: &mut Model, name: &str) {
         let _ = m.profiles.set_active(&prof.keymap_set);
         m.keymap_rows = m.profiles.active_keymap().to_rows();
     }
+    // Conjunto de animación referenciado: lo activamos y volcamos sus parámetros
+    // (transición/slide/Prezi) a la config mirada. Vacío/inexistente → sin cambio.
+    if !prof.animation_set.is_empty() && m.animaciones.contains(&prof.animation_set) {
+        m.animaciones.set_active(&prof.animation_set);
+        m.animaciones.active_animation().apply_to(&mut m.mirada);
+    }
     // Persistir la config viva (perfil + theme fusionados) y el resto.
     if let Some(p) = m.mirada_path.clone() {
         let _ = m.mirada.save(&p);
@@ -1620,10 +1640,10 @@ fn sync_active_profile(m: &mut Model) {
     // Preservamos las referencias del perfil (theme + conjunto de atajos): el
     // perfil no es dueño de su teselado/decoración (theme) ni de sus teclas
     // (conjunto de atajos); las referencia por nombre.
-    let (theme, keymap_set) = m
+    let (theme, keymap_set, animation_set) = m
         .dprofiles
         .get(&active)
-        .map(|p| (p.theme.clone(), p.keymap_set.clone()))
+        .map(|p| (p.theme.clone(), p.keymap_set.clone(), p.animation_set.clone()))
         .unwrap_or_default();
     m.dprofiles.set(
         &active,
@@ -1633,6 +1653,7 @@ fn sync_active_profile(m: &mut Model) {
             pata: m.pata.clone(),
             theme,
             keymap_set,
+            animation_set,
         },
     );
     m.dirty.dprofiles = true;
@@ -1785,6 +1806,166 @@ fn apply_atajos(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                 m.dirty.keymap = true;
                 m.dirty.profiles = true;
             }
+        }
+        _ => {}
+    }
+}
+
+/// Esquema del panel **Animaciones** (su propio diente). Tab 1 = biblioteca de
+/// conjuntos de animación (relacionable con el perfil global + CRUD). Tab 2 =
+/// los parámetros del conjunto (transición Win+Tab, slide, vuelo Prezi). Mismo
+/// patrón que Themes/Atajos.
+fn animaciones_schema(m: &Model) -> Schema {
+    use allichay::Field;
+    let active_profile = m.dprofiles.active.clone();
+    let set = m.animaciones.active().to_string();
+    let a = m.animaciones.active_animation();
+    let opts: Vec<EnumOption> =
+        m.animaciones.names().into_iter().map(|n| EnumOption::new(n.clone(), n)).collect();
+    Schema::new()
+        .section(
+            Section::new("animaciones::conjuntos", "Conjuntos")
+                .icon("✨")
+                .help(
+                    "Conjuntos de animación reusables, perpendiculares a los \
+                     perfiles. El perfil activo USA uno; editarlo afecta a todos \
+                     los perfiles que lo referencian.",
+                )
+                .field(Field::dropdown(
+                    "usar",
+                    format!("Animación de «{active_profile}»"),
+                    set.clone(),
+                    opts,
+                ))
+                .field(Field::button("crear", "Crear conjunto (desde el actual)"))
+                .field(Field::button("duplicar", format!("Duplicar «{set}»")))
+                .field(Field::text("renombrar", format!("Renombrar «{set}» a…"), ""))
+                .field(Field::button("eliminar", format!("Eliminar «{set}»"))),
+        )
+        .section(
+            Section::new("animaciones::parametros", "Parámetros")
+                .icon("✨")
+                .help("Cómo anima el escritorio. Editar afecta a los perfiles que usan este conjunto.")
+                .field(Field::dropdown(
+                    "switch_mode",
+                    "Transición de escritorio (Win+Tab)",
+                    a.switch_mode.slug().to_string(),
+                    vec![
+                        EnumOption::new("direct", "Directo (sin animación)"),
+                        EnumOption::new("hyprland", "Deslizar (estilo Hyprland)"),
+                        EnumOption::new("prezi", "Zoom a vista espacial (Prezi)"),
+                    ],
+                ))
+                .field(Field::slider_int("slide_ms", "Duración del slide (ms)", a.slide_ms as i64, 0, 600))
+                .field(Field::slider_int(
+                    "overview_anim_ms",
+                    "Vuelo de cámara Prezi (ms)",
+                    a.overview_anim_ms as i64,
+                    0,
+                    800,
+                )),
+        )
+}
+
+/// Aplica una edición del panel Animaciones (`rel` sin el prefijo `animaciones::`).
+fn apply_animaciones(m: &mut Model, rel: &FieldPath, value: FieldValue) {
+    let active_profile = m.dprofiles.active.clone();
+    let relacionar = |m: &mut Model| {
+        let set = m.animaciones.active().to_string();
+        if let Some(p) = m.dprofiles.profiles.get_mut(&active_profile) {
+            p.animation_set = set;
+        }
+        m.dirty.dprofiles = true;
+    };
+    // Vuelca el conjunto activo a la config viva (para que el compositor lo
+    // recargue) y marca ambos sucios.
+    let aplicar_vivo = |m: &mut Model| {
+        m.animaciones.active_animation().apply_to(&mut m.mirada);
+        m.dirty.animaciones = true;
+        m.dirty.mirada = true;
+    };
+    match rel.segments().first().map(String::as_str) {
+        Some("conjuntos") => match rel.leaf() {
+            Some("usar") => {
+                if let Some(name) = value.as_str() {
+                    if m.animaciones.set_active(name) {
+                        relacionar(m);
+                        aplicar_vivo(m);
+                        m.status = format!("usando animación «{name}»");
+                    }
+                }
+            }
+            Some("crear") if value.as_bool() == Some(true) => {
+                let base = animaciones::Animation::from_config(&m.mirada);
+                let nombre = m.animaciones.create(base, "animación nueva");
+                m.animaciones.set_active(&nombre);
+                relacionar(m);
+                m.dirty.animaciones = true;
+                m.status = format!("conjunto «{nombre}» creado");
+            }
+            Some("duplicar") if value.as_bool() == Some(true) => {
+                let src = m.animaciones.active().to_string();
+                if let Some(nombre) = m.animaciones.duplicate(&src) {
+                    m.animaciones.set_active(&nombre);
+                    relacionar(m);
+                    m.dirty.animaciones = true;
+                    m.status = format!("conjunto «{nombre}» (copia de «{src}»)");
+                }
+            }
+            Some("renombrar") => {
+                if let Some(to) = value.as_str() {
+                    let (to, from) = (to.trim().to_string(), m.animaciones.active().to_string());
+                    if !to.is_empty() && m.animaciones.rename(&from, &to) {
+                        for p in m.dprofiles.profiles.values_mut() {
+                            if p.animation_set == from {
+                                p.animation_set = to.clone();
+                            }
+                        }
+                        m.dirty.animaciones = true;
+                        m.dirty.dprofiles = true;
+                        m.status = format!("conjunto renombrado a «{to}»");
+                    }
+                }
+            }
+            Some("eliminar") if value.as_bool() == Some(true) => {
+                let cur = m.animaciones.active().to_string();
+                if m.animaciones.len() > 1 {
+                    m.animaciones.remove(&cur);
+                    relacionar(m);
+                    aplicar_vivo(m);
+                    m.status = format!("conjunto «{cur}» eliminado");
+                } else {
+                    m.status = "no podés eliminar el último conjunto".into();
+                }
+            }
+            _ => {}
+        },
+        Some("parametros") => {
+            let mut a = m.animaciones.active_animation();
+            match rel.leaf() {
+                Some("switch_mode") => {
+                    if let Some(mode) = value.as_str().and_then(mirada_brain::WorkspaceSwitchMode::from_slug)
+                    {
+                        a.switch_mode = mode;
+                    }
+                }
+                Some("slide_ms") => {
+                    if let Some(v) = value.as_int() {
+                        a.slide_ms = v.max(0) as u32;
+                    }
+                }
+                Some("overview_anim_ms") => {
+                    if let Some(v) = value.as_int() {
+                        a.overview_anim_ms = v.max(0) as u32;
+                    }
+                }
+                _ => {}
+            }
+            let active = m.animaciones.active().to_string();
+            m.animaciones.set(&active, a.clone());
+            a.apply_to(&mut m.mirada);
+            m.dirty.animaciones = true;
+            m.dirty.mirada = true;
         }
         _ => {}
     }
@@ -2505,6 +2686,11 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
+        "animaciones" => {
+            apply_animaciones(m, &rel, value);
+            m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
         // Autoarranque: la lista reescribe ~/.config/mirada/autostart al toque.
         "autostart" => {
             if let Some(items) = value.as_list() {
@@ -2623,6 +2809,13 @@ fn flush_saves(m: &mut Model) {
         }
         m.dirty.themes = false;
     }
+    if m.dirty.animaciones {
+        match m.animaciones.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· animaciones save: {e}")),
+        }
+        m.dirty.animaciones = false;
+    }
     if let Some(e) = err {
         m.status = e;
     } else if ok {
@@ -2711,6 +2904,15 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
                 _ => FieldValue::Bool(false),
             },
             _ => FieldValue::Table(m.keymap_rows.clone()),
+        });
+    }
+    // Panel Animaciones, tab «conjuntos»: «usar» = conjunto activo; renombrar =
+    // texto; botones = false. (Los parámetros del tab 2 salen del schema.)
+    if key == "animaciones" && rel.segments().first().map(String::as_str) == Some("conjuntos") {
+        return Some(match rel.leaf() {
+            Some("usar") => FieldValue::Text(m.animaciones.active().to_string()),
+            Some("renombrar") => FieldValue::Text(String::new()),
+            _ => FieldValue::Bool(false),
         });
     }
     // Pestaña Perfiles (lista única): el selector «usar» = perfil activo; los
