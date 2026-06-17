@@ -535,6 +535,11 @@ keyframes, actores articulados, timeline) + pipeline de assets. Techo estético:
 gana/pierde: la **expresividad del personaje** (los muñecos de cajas dan "animación
 de Minecraft", no actuación matizada).
 
+> **Guía práctica de uso** (cómo correr los modos, escribir un guion, agregar
+> clips, importar `.vox`, componer la banda sonora):
+> `02_ruway/llimphi/llimphi-voxel-app/README.md`. Esta sección es el *diseño/porqué*;
+> el README es el *cómo*.
+
 ### 12.1 Rebanada vertical — HECHA y verificada
 
 Pipeline punta a punta `--film` (`llimphi-voxel-app`), determinista y sin pantalla,
