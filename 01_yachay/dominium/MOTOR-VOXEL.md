@@ -685,11 +685,18 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    Verificado por PNG (golem/actores con matiz cálido-frío, misma luminancia base).
    **Luces puntuales coloreadas HECHAS (2026-06-17):** `llimphi_3d::PointLight{pos,
    color,range}` (≤ `VOXEL_MAX_LIGHTS`=4) en `VoxelRenderer.lights` — antorchas/
-   lámparas que tiñen voxels y entidades cercanos con caída cuadrática suave (sin
-   sombra, MVP), aplicadas en el mismo fragment del ray-march (uniform 256→400 B).
-   Verificado por PNG (`lights_demo`: charcos cálido naranja + frío cian sobre el
-   piso, con falloff; off/on en `/tmp/lights_{off,on}.png`). **Falta**: sombras de
-   las puntuales, área/soft.
+   lámparas que tiñen voxels y entidades cercanos con caída cuadrática suave,
+   aplicadas en el mismo fragment del ray-march (uniform 256→400 B).
+   **Sombras de las puntuales HECHAS (2026-06-17):** cada luz tira un **shadow ray**
+   desde la superficie hacia su posición, **acotado a la distancia a la luz** (si un
+   voxel o entidad intercepta *antes* de llegar, la luz no aporta) — reusa `trace`/
+   `trace_entities` con `max_t = d - bias`; sale del punto con offset por normal para
+   no auto-sombrearse. Conmutable por `VoxelRenderer.point_shadows` (default `true`),
+   empacado en `n_lights.y` (sin uniform nuevo). Verificado por PNG (`lights_demo`:
+   losa flotante con una luz justo encima → **sombra rectangular nítida en el piso**;
+   tres tomas `off`/`noshadow`/`on`) **y por diff de píxeles**: `noshadow`→`on`
+   cambia 13.275 px y **el 100% oscurecen** (una sombra sólo quita luz, nunca agrega).
+   **Falta**: sombras blandas / luces de área (hoy sombra dura, sin penumbra).
 5. ~~**Calidad de cuadro**: supersampling~~ **HECHO**: SSAA — el `--film`/`--vox`
    renderizan a **2×** (`SSW×SSH`) y bajan promediando bloques 2×2
    (`write_png_downsampled`) → antialias de los bordes duros del ray-march.

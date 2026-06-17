@@ -128,6 +128,10 @@ pub struct VoxelRenderer {
     /// Luces puntuales coloreadas (≤ [`MAX_LIGHTS`]) — antorchas/lámparas que
     /// iluminan voxels y entidades cercanos. Se empacan y suben en cada `render`.
     pub lights: Vec<PointLight>,
+    /// Si las luces puntuales proyectan sombra (un shadow ray por luz hacia su
+    /// posición, acotado a la distancia a la luz). `true` por defecto. Apagarlo
+    /// recupera el MVP plano (más barato) — útil para comparar off/on.
+    pub point_shadows: bool,
 }
 
 impl VoxelRenderer {
@@ -325,6 +329,7 @@ impl VoxelRenderer {
             depth: None,
             entities: Vec::new(),
             lights: Vec::new(),
+            point_shadows: true,
         };
 
         // Poblar el pool: cada brick ocupado toma un slot incremental.
@@ -714,7 +719,8 @@ impl VoxelRenderer {
         }
         // Luces puntuales: count (vec4) + MAX_LIGHTS × [pos+range, color].
         let nl = self.lights.len().min(MAX_LIGHTS);
-        for v in [nl as f32, 0.0, 0.0, 0.0] {
+        let shadow_flag = if self.point_shadows { 1.0 } else { 0.0 };
+        for v in [nl as f32, shadow_flag, 0.0, 0.0] {
             u.extend_from_slice(&v.to_ne_bytes());
         }
         for i in 0..MAX_LIGHTS {
@@ -890,7 +896,7 @@ struct U {
     sky_horizon: vec4<f32>,// xyz = color horizonte / hacia el que niebla desvanece
     vp: mat4x4<f32>,       // world→clip (forward) para escribir frag_depth
     scroll: vec4<f32>,     // xyz = origen de brick (streaming toroidal); 0 = sin scroll
-    n_lights: vec4<f32>,   // x = cantidad de luces puntuales activas
+    n_lights: vec4<f32>,   // x = cantidad de luces puntuales, y = sombras on/off
     lights: array<vec4<f32>, 8>, // por luz: [pos.xyz, range], [color.rgb, _]
 };
 struct Entity {
@@ -1225,8 +1231,11 @@ fn fs(in: VOut) -> FOut {
     var light = amb_col + sun_col * (0.78 * diff * shadow);
 
     // Luces puntuales coloreadas (antorchas/lámparas): caída suave por distancia
-    // (sin sombra, MVP). `p` está en espacio de voxel, igual que `light.pos`.
+    // + sombra dura opcional (un shadow ray hacia la luz, acotado a la distancia
+    // a la luz: si un voxel/entidad intercepta *antes* de llegar, la luz no llega).
+    // `p` está en espacio de voxel, igual que `light.pos`.
     let nlights = i32(u.n_lights.x);
+    let pt_shadows = u.n_lights.y > 0.5;
     for (var li = 0; li < nlights; li = li + 1) {
         let lp = u.lights[2 * li];
         let lc = u.lights[2 * li + 1];
@@ -1235,8 +1244,19 @@ fn fs(in: VOut) -> FOut {
         let range = max(lp.w, 1e-3);
         var att = clamp(1.0 - d / range, 0.0, 1.0);
         att = att * att; // caída cuadrática suave
-        let ndl = max(dot(normal, to / max(d, 1e-3)), 0.0);
-        light = light + lc.rgb * (att * ndl);
+        let ldir2 = to / max(d, 1e-3);
+        let ndl = max(dot(normal, ldir2), 0.0);
+        var vis = 1.0;
+        if (pt_shadows && att > 0.0 && ndl > 0.0) {
+            // Sale de la superficie un pelo hacia la luz para no auto-sombrearse.
+            let lso = p + normal * 0.5 + ldir2 * 0.01;
+            let bias = 0.75; // tolerancia: no contar el propio voxel ni la luz.
+            let hv = trace(lso, ldir2, dim, B);
+            let blocked_v = hv.hit && hv.t < d - bias;
+            let he = trace_entities(lso, ldir2, d - bias);
+            vis = select(1.0, 0.0, blocked_v || he.hit);
+        }
+        light = light + lc.rgb * (att * ndl * vis);
     }
 
     var color = albedo * light * ao_term;

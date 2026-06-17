@@ -2,9 +2,14 @@
 //! lámparas que tiñen los voxels cercanos con caída por distancia. Útil para
 //! mood cinematográfico (la rama machinima) y para juegos (antorchas).
 //!
-//! Rinde dos PNG para el contraste:
-//! - `/tmp/lights_off.png` — sólo sol + ambiente (la escena base).
-//! - `/tmp/lights_on.png`  — + una luz cálida y una fría → highlights de color.
+//! Rinde tres PNG para el contraste:
+//! - `/tmp/lights_off.png`      — sólo sol + ambiente (la escena base).
+//! - `/tmp/lights_noshadow.png` — + una luz cálida y una fría (MVP plano, sin sombra).
+//! - `/tmp/lights_on.png`       — las mismas luces **con sombra dura** (default):
+//!   los pilares/esfera bloquean la luz puntual y proyectan su sombra en el piso.
+//!
+//! La diferencia `noshadow` → `on` aísla la sombra de las puntuales (el feature
+//! nuevo): se ven los conos oscuros detrás de cada obstáculo respecto de la luz.
 //!
 //! `cargo run -p llimphi-3d --example lights_demo --release`
 
@@ -26,7 +31,17 @@ fn main() {
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
 
-    let grid = VoxelGrid::demo_scene(dim);
+    let mut grid = VoxelGrid::demo_scene(dim);
+    // Losa flotante en una zona despejada del piso: con una luz puntual justo
+    // ENCIMA, proyecta una sombra rectangular nítida en el piso de abajo — la
+    // prueba más legible de que las puntuales ya ocluyen.
+    for z in 58..74 {
+        for x in 16..34 {
+            grid.set(x, 20, z, [180, 180, 190]);
+            grid.set(x, 21, z, [180, 180, 190]);
+        }
+    }
+
     let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
     // Sol bajo y tenue para que las luces puntuales destaquen.
     vr.sun_dir = [0.3, 0.35, 0.5];
@@ -46,12 +61,25 @@ fn main() {
     // la esfera). Color > 1.0 = brillo intenso; `range` en voxels.
     // Cerca del piso (gris neutro = lee bien el color) y de un pilar, intensas.
     vr.lights = vec![
-        PointLight { pos: [30.0, 6.0, 58.0], color: [3.6, 1.5, 0.5], range: 40.0 },
-        PointLight { pos: [66.0, 6.0, 58.0], color: [0.5, 1.6, 3.6], range: 40.0 },
+        // Cálida JUSTO sobre la losa flotante → sombra rectangular nítida abajo.
+        PointLight { pos: [25.0, 40.0, 66.0], color: [3.6, 1.7, 0.7], range: 70.0 },
+        // Fría junto a la esfera, a media altura → la esfera corta su luz.
+        PointLight { pos: [70.0, 30.0, 60.0], color: [0.6, 1.7, 3.6], range: 70.0 },
     ];
+
+    // 2a: MVP plano (sin sombra) — para aislar el feature nuevo.
+    vr.point_shadows = false;
+    let noshadow = render(&hal, &mut renderer, &mut vr, &camera);
+    write_png(&noshadow, "/tmp/lights_noshadow.png");
+
+    // 2b: con sombra dura (default) — los obstáculos cortan la luz puntual.
+    vr.point_shadows = true;
     let on = render(&hal, &mut renderer, &mut vr, &camera);
     write_png(&on, "/tmp/lights_on.png");
-    eprintln!("escritos /tmp/lights_off.png (sin luces) y /tmp/lights_on.png (con luces)");
+    eprintln!(
+        "escritos /tmp/lights_off.png (sin luces), /tmp/lights_noshadow.png (luz \
+         sin sombra) y /tmp/lights_on.png (luz con sombra)"
+    );
 }
 
 fn render(hal: &Hal, renderer: &mut Renderer, vr: &mut VoxelRenderer, camera: &Camera3d) -> Vec<u8> {
