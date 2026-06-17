@@ -156,6 +156,12 @@ impl App for Dominium {
             // toca la dinámica normal del bioma, sólo corta el crecimiento
             // monótono sin techo. Verificado en `dominium-sim/examples/poblacion.rs`.
             field_saturation: 150.0,
+            // Techo de energía por lemming. Con `max_population` capando la
+            // reproducción (el sumidero principal), los saciados acumulaban
+            // energía sin techo ("energía crece sin control"). Cap a 150 — muy
+            // por encima de `abundance_threshold` (50), no toca el ciclo normal
+            // de reproducción, sólo corta la divergencia de los bloqueados.
+            max_energy: 150.0,
             ..SimParams::default()
         };
         // Relieve por bioma, recalibrado para los valores nuevos:

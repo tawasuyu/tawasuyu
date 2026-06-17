@@ -291,6 +291,16 @@ pub struct SimParams {
     /// 150) para cortar el crecimiento infinito sin alterar la dinámica normal.
     #[serde(default)]
     pub field_saturation: f32,
+    /// Techo de energía por lemming. La energía sólo SUBE (extraer/recibir/
+    /// pelear); sus sumideros son metabolismo, donar, replicar y morir. Si la
+    /// reproducción se bloquea por `max_population`, desaparece el sumidero
+    /// principal de los saciados y la energía diverge sin techo. Este cap
+    /// (físico: un cuerpo no almacena energía infinita) lo corta. Va bien por
+    /// encima de `abundance_threshold` para no tocar el ciclo normal de
+    /// reproducción. `0.0` (default) = sin cap → motor histórico bit-exacto.
+    /// La APP lo setea.
+    #[serde(default)]
+    pub max_energy: f32,
 }
 
 /// Default de `SimParams::action_weights_ext` — peso por acción para la 5ª
@@ -447,6 +457,7 @@ impl Default for SimParams {
             // bit-exacto. La APP la enciende con un techo generoso para
             // cortar el "edificio cáncer"; ver `dominium-app-llimphi`.
             field_saturation: 0.0,
+            max_energy: 0.0,
         }
     }
 }

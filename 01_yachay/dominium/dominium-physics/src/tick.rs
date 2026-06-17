@@ -83,6 +83,16 @@ fn age_and_reap(world: &mut World, p: &SimParams) -> usize {
             *e -= p.metabolic_cost;
         }
     }
+    // Techo de energía: con la reproducción capada por `max_population`, los
+    // saciados pierden su sumidero principal y la energía diverge. Cap físico
+    // (un cuerpo no almacena energía infinita). `0.0` = sin cap.
+    if p.max_energy > 0.0 {
+        for e in world.lemmings.energia.iter_mut() {
+            if *e > p.max_energy {
+                *e = p.max_energy;
+            }
+        }
+    }
     for e in world.lemmings.edad.iter_mut() {
         *e += 1;
     }
@@ -187,6 +197,29 @@ pub fn run(world: &mut World, p: &SimParams, steps: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn max_energy_capa_la_energia_y_default_no_toca() {
+        // Con cap: una energía absurda se recorta al techo.
+        let mut w = World::new(8, 8);
+        let i = w.lemmings.spawn(4.0, 4.0, 500.0, [0.0; 4]);
+        let mut p = SimParams::default();
+        p.metabolic_cost = 0.0; // aislar el cap
+        p.max_energy = 150.0;
+        age_and_reap(&mut w, &p);
+        assert!(
+            w.lemmings.energia[i] <= 150.0,
+            "energía capada a 150, got {}",
+            w.lemmings.energia[i]
+        );
+        // Sin cap (default 0.0): la energía queda intacta (bit-exacto histórico).
+        let mut w2 = World::new(8, 8);
+        let j = w2.lemmings.spawn(4.0, 4.0, 500.0, [0.0; 4]);
+        let mut p2 = SimParams::default();
+        p2.metabolic_cost = 0.0;
+        age_and_reap(&mut w2, &p2);
+        assert_eq!(w2.lemmings.energia[j], 500.0, "sin cap, energía intacta");
+    }
 
     #[test]
     fn abundance_keeps_base_action_intact() {
