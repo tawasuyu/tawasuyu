@@ -442,6 +442,10 @@ struct DrmState {
     /// primaria — soporta layer-shell, tiling, menú, zonas, HUD.
     outputs: Vec<OutputCtx>,
     renderer: GlesRenderer,
+    /// Sombra bajo cada ventana (capas translúcidas, sin shader). Gateada por
+    /// la env `MIRADA_SHADOW` mientras se verifica en pantalla — así no toca el
+    /// default de nadie hasta confirmarla.
+    shadows_on: bool,
     /// Contexto `libinput` — se suspende y reanuda al conmutar de VT.
     libinput: Libinput,
     /// `false` mientras la sesión está cedida a otra VT — no se compone.
@@ -967,6 +971,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         last_windows: 0,
         last_active_ws: 0,
         last_focused_output: 0,
+        shadows_on: std::env::var_os("MIRADA_SHADOW").is_some(),
         ws_slide: None,
         overview_tiles: Vec::new(),
         wp_images: Vec::new(),

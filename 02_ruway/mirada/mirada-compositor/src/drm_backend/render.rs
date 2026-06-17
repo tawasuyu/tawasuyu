@@ -92,6 +92,7 @@ impl DrmState {
             .outputs
             .get(self.app.focused_output_index())
             .map(|o| o.rect);
+        let shadows_on = self.shadows_on;
         for w in &shown {
             if !crate::buffer_render_sano(&w.surface) {
                 continue; // buffer degenerado/desmesurado: ni decoración ni superficie
@@ -243,6 +244,24 @@ impl DrmState {
                 Kind::Unspecified,
             ) {
                 into.push(Frame::Window(el));
+            }
+            // Sombra: capas negras translúcidas DETRÁS de la ventana (se empujan
+            // después del contenido = quedan al fondo). Sin shader — rects que se
+            // expanden y se desplazan hacia abajo fingen un degradé suave. Gateada
+            // por MIRADA_SHADOW mientras se verifica en pantalla.
+            if shadows_on && !w.is_shell {
+                // (expansión, desplazamiento-y, alfa): de afuera-tenue a cerca-fuerte.
+                for &(exp, dy, a) in &[(12i32, 10i32, 0.06f32), (6, 5, 0.10), (2, 2, 0.16)] {
+                    let mut sh = SolidColorBuffer::default();
+                    sh.update((sw + exp * 2, dec_h + exp * 2), [0.0, 0.0, 0.0, a]);
+                    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &sh,
+                        (x - exp, dec_y - exp + dy),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
             }
         }
     }
