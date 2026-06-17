@@ -403,7 +403,7 @@ terreno congelado) la ruta **moderna y mejor encajada es no meshear**:
 | **M3 — dinámico** | actualización incremental de la estructura GPU al mutar voxels (dominium corriendo y editándose en vivo) — **mucho más barato que el re-mesh** del paradigma clásico | ~1 semana |
 | **M4 — entidades** | agentes por instancing o como voxels en la misma estructura | ~días-1 sem |
 | **M5 — dimensiones** | múltiples `WorldStore` (un `Multiverse`), switch/portales | ✅ hecho |
-| **M6 — mundo grande / "infinito"** | world-gen + atmósfera (✅) → luego streaming/LOD con brickmaps | en curso |
+| **M6 — mundo grande / "infinito"** | world-gen + atmósfera (✅) + streaming de ventana sobre mundo ilimitado (✅ 1ª rebanada) → falta shift incremental + LOD + persistencia CAS | en curso |
 
 **Estado (2026-06-17):** M0–M5 cerrados (ray-march DDA de dos niveles sobre brick
 pool sparse, AO + sol + sombras, mutación incremental por `DirtyBox`/`sync`,
@@ -418,8 +418,29 @@ para ver el mundo *desde adentro*), `VoxelGrid::height_at` (posar cámara/entida
 sobre el relieve) y **atmósfera por dimensión** (`Dimension::with_atmosphere` — cada
 mundo de M5 con su cielo/niebla). Demos: `terrain_flythrough` (vuelo bajo por el
 paisaje, /tmp/m6_fly_*.png) y `voxel_dimensiones` con skies temáticos.
-Queda de M6: **streaming real** (chunks que cargan/descargan alrededor de la cámara
-+ persistencia CAS) y **LOD** del horizonte — el tramo caro de §7.
+
+**M6 — streaming (primera rebanada HECHA, 2026-06-17):** mundo procedural
+**ilimitado** sobre una ventana voxel acotada que se desliza. El terreno se
+redefinió como **función pura de mundo** (`llimphi_3d`/`llimphi_voxel::column_height`:
+el mismo `(wx,wz)` da el mismo relieve en cualquier ventana) + `fill_terrain_window`
+(rellena una ventana cuya esquina cae en una columna de mundo arbitraria) +
+`VoxelGrid::clear_all` (regenerar in-place dejando dirty completo). Encima,
+`llimphi_voxel::WorldStream`: ventana de `dim` con `origin` de mundo + `step`;
+`follow(cx,cz)` la reubica (snap a `step`) y regenera sólo al **cruzar un paso** —
+O(ventana) por reubicación, no por frame. Como todo sale de `column_height`, las
+**costuras encajan**: se camina sin fin, sin muro ni repetición. Verificado: 2
+tests CPU duros (alturas independientes de la ventana; dos ventanas solapadas
+coinciden voxel-a-voxel >10k columnas) + demo PNG `terrain_streaming` (la ventana
+sigue al foco de mundo z:-80→520 y cada cuadro rinde **paisaje nuevo y distinto** —
+isla boscosa verde con agua → cordillera nevada — sin huecos; ocupación de bricks
+distinta por cuadro). **MVP:** la regeneración es de la **ventana entera** por paso
+cruzado (no un *shift* parcial que sólo rellene la franja nueva); el demo reconstruye
+el `VoxelRenderer` por cuadro (el camino incremental `sync` existe, pero su brick
+pool aún no crece si una ventana más densa lo llena). Queda de M6: **shift
+incremental** (copiar la zona común + generar sólo el borde nuevo, vía toroidal
+addressing en el shader o `sync` con pool que crece), **wiring en la app viva**
+(coordenadas del jugador/HUD bajo la ventana móvil — necesita pantalla), persistencia
+CAS de chunks y **LOD** del horizonte — el tramo caro de §7.
 
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más

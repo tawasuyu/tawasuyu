@@ -1,10 +1,17 @@
 //! World-gen procedural: terreno por ruido fractal (fbm propio, sin deps) →
 //! [`VoxelGrid`] coloreado por bandas de altura/pendiente (agua, arena, pasto,
 //! roca, nieve) con árboles. Contenido reusable por cualquier app/juego voxel.
+//!
+//! El terreno se define como **función pura de coordenadas de mundo** ([`column_height`]):
+//! el mismo punto `(wx, wz)` da siempre el mismo relieve, sin importar en qué
+//! ventana caiga. Eso es lo que hace posible el *streaming* (M6): mover una
+//! ventana acotada por un mundo ilimitado y que las costuras encajen
+//! ([`fill_terrain_window`] + [`WorldStream`](crate::WorldStream)).
 
 use llimphi_3d::VoxelGrid;
 
 /// Hash entero → `f32` en `[0, 1)`. Mezcla estilo PCG/xxhash chico, determinista.
+/// Funciona con coordenadas negativas (`as u32` envuelve de forma estable).
 #[inline]
 fn hash2(x: i32, y: i32, seed: u32) -> f32 {
     let mut h = seed
@@ -25,6 +32,7 @@ fn smooth(t: f32) -> f32 {
 }
 
 /// Ruido de valor bilineal en `(x, y)` continuos sobre la lattice entera.
+/// `floor` maneja negativos (continuidad sobre coordenadas de mundo con signo).
 fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
     let xi = x.floor() as i32;
     let yi = y.floor() as i32;
@@ -66,37 +74,59 @@ fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
     ]
 }
 
-/// Genera un paisaje voxel en un grid `dim = [dx, dy, dz]` (con `y` arriba),
-/// determinista por `seed`. El terreno ocupa hasta ~`0.85·dy` de alto; el nivel
-/// del mar queda en `~0.30·dy`. Devuelve un [`VoxelGrid`] de `llimphi-3d` listo
-/// para `VoxelRenderer`/`Scene3d`.
-pub fn terrain(dim: [u32; 3], seed: u32) -> VoxelGrid {
-    let mut g = VoxelGrid::new(dim);
-    let [dx, dy, dz] = dim;
-    let sea = (dy as f32 * 0.30) as u32;
+/// Frecuencia espacial del relieve: ~4 colinas grandes a lo ancho de una ventana
+/// de lado `span`. Es función del **tamaño de ventana** (constante mientras la
+/// ventana no cambie de tamaño), así dos ventanas del mismo `dim` comparten la
+/// misma escala → el streaming encaja. `min_h`/`amp` salen del alto del mundo.
+#[inline]
+fn world_scale(dim: [u32; 3]) -> f32 {
+    4.0 / dim[0].max(dim[2]) as f32
+}
 
-    // Frecuencia base: ~4 colinas grandes a lo ancho del mundo, más detalle fino.
-    let scale = 4.0 / dx.max(dz) as f32;
+/// Nivel del mar (índice `y`) para un mundo de alto `dy`.
+#[inline]
+fn sea_level(dy: u32) -> u32 {
+    (dy as f32 * 0.30) as u32
+}
+
+/// Altura del terreno (índice `y` del voxel sólido superior) en la columna de
+/// **mundo** `(wx, wz)`, para un mundo de dimensiones `dim` y `seed`. Es una
+/// **función pura**: el mismo punto da la misma altura en cualquier ventana —
+/// la clave de la continuidad del streaming. Combina un fbm base estirado
+/// (océanos↔picos) con un término *ridged* sólo en lo alto (crestas afiladas).
+pub fn column_height(wx: i32, wz: i32, dim: [u32; 3], seed: u32) -> u32 {
+    let dy = dim[1];
+    let scale = world_scale(dim);
     let min_h = (dy as f32 * 0.03) as u32;
     let amp = dy as f32 * 0.95;
 
-    // Heightmap por columna. Se usa el rango vertical COMPLETO para que haya de
-    // todo: el fbm crudo (~0.3..0.7) se estira para que el tercio bajo caiga al
-    // mar (océanos/lagos) y el alto llegue a roca/nieve; encima se suma un
-    // término "ridged" sólo en lo elevado, para picos afilados con nieve creíble.
-    let mut heights = vec![0u32; (dx * dz) as usize];
-    for z in 0..dz {
-        for x in 0..dx {
-            let c = fbm(x as f32 * scale, z as f32 * scale, 6, seed);
-            let e0 = ((c - 0.35) * 2.0).clamp(0.0, 1.0);
-            let e = e0 * e0 * (3.0 - 2.0 * e0); // smoothstep → mesetas + valles
-            let ridge =
-                1.0 - (fbm(x as f32 * scale * 2.3, z as f32 * scale * 2.3, 5, seed ^ 99) - 0.5).abs() * 2.0;
-            let e = (e + e * e * ridge * 0.55).min(1.0);
-            let h = (min_h + (e * amp) as u32).min(dy - 1);
-            heights[(x + z * dx) as usize] = h;
-        }
-    }
+    let c = fbm(wx as f32 * scale, wz as f32 * scale, 6, seed);
+    let e0 = ((c - 0.35) * 2.0).clamp(0.0, 1.0);
+    let e = e0 * e0 * (3.0 - 2.0 * e0); // smoothstep → mesetas + valles
+    let ridge =
+        1.0 - (fbm(wx as f32 * scale * 2.3, wz as f32 * scale * 2.3, 5, seed ^ 99) - 0.5).abs() * 2.0;
+    let e = (e + e * e * ridge * 0.55).min(1.0);
+    (min_h + (e * amp) as u32).min(dy - 1)
+}
+
+/// Padding (en voxels) alrededor de la ventana para precomputar alturas: cubre
+/// el cálculo de pendiente (±1) y la copa de los árboles rooteados afuera (±2).
+const PAD: i32 = 3;
+
+/// Rellena `g` con el paisaje voxel cuya esquina local `(0,0)` cae en la columna
+/// de **mundo** `origin = [wx, wz]`. Vacía el grid primero (`clear_all`) y lo
+/// deja **dirty** para que `VoxelRenderer::sync` re-suba (o reconstruir el
+/// renderer). Es la primitiva del streaming: dos ventanas contiguas encajan
+/// porque todo sale de [`column_height`] (función de mundo).
+///
+/// `terrain(dim, seed)` es el caso `origin = [0, 0]` con el dirty reseteado.
+pub fn fill_terrain_window(g: &mut VoxelGrid, origin: [i32; 2], seed: u32) {
+    let dim = g.dim();
+    let [dx, dy, dz] = dim;
+    let sea = sea_level(dy);
+    let (ox, oz) = (origin[0], origin[1]);
+
+    g.clear_all();
 
     let rock = [88, 86, 92];
     let snow = [236, 240, 250];
@@ -106,18 +136,36 @@ pub fn terrain(dim: [u32; 3], seed: u32) -> VoxelGrid {
     let deep = [22, 52, 96];
     let shallow = [44, 110, 150];
 
-    for z in 0..dz {
-        for x in 0..dx {
-            let h = heights[(x + z * dx) as usize];
-            // Pendiente: diferencia con vecinos → roca en acantilados.
-            let hx = heights[(x.saturating_sub(1).min(dx - 1) + z * dx) as usize];
-            let hz = heights[(x + z.saturating_sub(1).min(dz - 1) * dx) as usize];
-            let slope = (h as i32 - hx as i32).abs().max((h as i32 - hz as i32).abs()) as f32;
+    // Heightmap precomputado sobre la ventana padeada (PAD a cada lado): da
+    // pendiente y copas correctas en las costuras sin recomputar fbm de más.
+    let pw = dx as i32 + 2 * PAD;
+    let pd = dz as i32 + 2 * PAD;
+    let mut heights = vec![0u32; (pw * pd) as usize];
+    for lz in 0..pd {
+        for lx in 0..pw {
+            let wx = ox + lx - PAD;
+            let wz = oz + lz - PAD;
+            heights[(lx + lz * pw) as usize] = column_height(wx, wz, dim, seed);
+        }
+    }
+    // Altura en coordenada LOCAL de ventana (puede ser negativa hasta -PAD).
+    let h_at = |lx: i32, lz: i32| heights[((lx + PAD) + (lz + PAD) * pw) as usize];
 
-            for y in 0..=h {
+    // Terreno + agua, columna por columna de la ventana.
+    for lz in 0..dz {
+        for lx in 0..dx {
+            let (li, lj) = (lx as i32, lz as i32);
+            let (wx, wz) = (ox + li, oz + lj);
+            let h = h_at(li, lj);
+            // Pendiente: diferencia con vecinos → roca en acantilados.
+            let slope = (h as i32 - h_at(li - 1, lj) as i32)
+                .abs()
+                .max((h as i32 - h_at(li, lj - 1) as i32).abs()) as f32;
+
+            for y in 0..=h.min(dy - 1) {
                 let fh = y as f32 / dy as f32;
-                // Banda de material por altura, con un poco de jitter por ruido.
-                let jitter = hash2(x as i32, (y * 31 + z) as i32, seed ^ 0xABCD) * 0.06 - 0.03;
+                // Jitter por ruido en coordenadas de MUNDO (seamless entre ventanas).
+                let jitter = hash2(wx, wz.wrapping_mul(31).wrapping_add(y as i32), seed ^ 0xABCD) * 0.06 - 0.03;
                 let band = fh + jitter;
                 let col = if y == h && slope > 2.5 && band > 0.34 {
                     rock
@@ -132,39 +180,44 @@ pub fn terrain(dim: [u32; 3], seed: u32) -> VoxelGrid {
                 } else {
                     mix(rock, snow, (band - 0.82) / 0.10)
                 };
-                g.set(x, y, z, col);
+                g.set(lx, y, lz, col);
             }
 
-            // Agua: llena lo vacío bajo el nivel del mar (lagos/océano). Color por
-            // profundidad para dar lectura de fondo.
+            // Agua: llena lo vacío bajo el nivel del mar (lagos/océano).
             if h < sea {
-                for y in (h + 1)..=sea {
+                for y in (h + 1)..=sea.min(dy - 1) {
                     let depth = (sea - y) as f32 / sea.max(1) as f32;
-                    g.set(x, y, z, mix(shallow, deep, depth));
+                    g.set(lx, y, lz, mix(shallow, deep, depth));
                 }
             }
         }
     }
 
-    // Árboles: en columnas de pasto sobre el mar, con baja probabilidad.
-    for z in 2..dz.saturating_sub(2) {
-        for x in 2..dx.saturating_sub(2) {
-            let h = heights[(x + z * dx) as usize];
+    // Árboles: roots barridos sobre la ventana padeada (±2) para que las copas
+    // de árboles rooteados justo afuera asomen dentro, y las de borde se recorten.
+    let leaf_base = [40, 96, 44];
+    let leaf_hi = [62, 124, 58];
+    let trunk = [96, 64, 38];
+    for lz in -2..dz as i32 + 2 {
+        for lx in -2..dx as i32 + 2 {
+            let (wx, wz) = (ox + lx, oz + lz);
+            let h = h_at(lx, lz);
             let fh = h as f32 / dy as f32;
             if h <= sea + 1 || fh < 0.33 || fh > 0.56 {
                 continue;
             }
-            if hash2(x as i32, z as i32, seed ^ 0x7717) > 0.016 {
+            if hash2(wx, wz, seed ^ 0x7717) > 0.016 {
                 continue;
             }
-            let trunk = [96, 64, 38];
-            let leaf = [40, 96, 44];
-            let th = 4 + (hash2(x as i32, z as i32, seed ^ 0x33) * 3.0) as u32;
+            let th = 4 + (hash2(wx, wz, seed ^ 0x33) * 3.0) as u32;
             let top = (h + th).min(dy - 1);
-            for y in (h + 1)..=top {
-                g.set(x, y, z, trunk);
+            // Tronco (sólo si la columna cae dentro de la ventana).
+            if (0..dx as i32).contains(&lx) && (0..dz as i32).contains(&lz) {
+                for y in (h + 1)..=top {
+                    g.set(lx as u32, y, lz as u32, trunk);
+                }
             }
-            // Copa: pequeño elipsoide de hojas.
+            // Copa: elipsoide de hojas, recortada a la ventana.
             let r = 2i32;
             let cy = top as i32;
             for dz2 in -r..=r {
@@ -173,18 +226,79 @@ pub fn terrain(dim: [u32; 3], seed: u32) -> VoxelGrid {
                         if dx2 * dx2 + dy2 * dy2 + dz2 * dz2 > r * r + 1 {
                             continue;
                         }
-                        let (lx, ly, lz) = (x as i32 + dx2, cy + dy2, z as i32 + dz2);
-                        if lx >= 0 && ly >= 0 && lz >= 0 {
-                            let v = hash2(lx * 13 + ly, lz * 7 + ly, seed ^ 0x55) * 0.25;
-                            g.set(lx as u32, ly as u32, lz as u32, mix(leaf, [62, 124, 58], v));
+                        let (gx, gy, gz) = (lx + dx2, cy + dy2, lz + dz2);
+                        if (0..dx as i32).contains(&gx)
+                            && (0..dy as i32).contains(&gy)
+                            && (0..dz as i32).contains(&gz)
+                        {
+                            // Jitter de hoja por mundo (estable entre ventanas).
+                            let v = hash2((wx + dx2) * 13 + gy, (wz + dz2) * 7 + gy, seed ^ 0x55) * 0.25;
+                            g.set(gx as u32, gy as u32, gz as u32, mix(leaf_base, leaf_hi, v));
                         }
                     }
                 }
             }
         }
     }
+}
 
-    // Estado inicial: el upload completo lo cubre, no es "mutación".
+/// Genera un paisaje voxel en un grid `dim = [dx, dy, dz]` (con `y` arriba),
+/// determinista por `seed`. El terreno ocupa hasta ~`0.85·dy` de alto; el nivel
+/// del mar queda en `~0.30·dy`. Devuelve un [`VoxelGrid`] de `llimphi-3d` listo
+/// para `VoxelRenderer`/`Scene3d`. Equivale a [`fill_terrain_window`] con
+/// `origin = [0, 0]` (con el dirty reseteado: el grid es nuevo, el primer upload
+/// es completo de todos modos).
+pub fn terrain(dim: [u32; 3], seed: u32) -> VoxelGrid {
+    let mut g = VoxelGrid::new(dim);
+    fill_terrain_window(&mut g, [0, 0], seed);
     g.reset_dirty();
     g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `column_height` es función PURA de mundo: el mismo `(wx, wz)` da la misma
+    /// altura aunque el origen de ventana cambie. Sin esto el streaming tendría
+    /// costuras (escalones en los bordes de ventana).
+    #[test]
+    fn column_height_es_independiente_de_la_ventana() {
+        let dim = [96, 48, 96];
+        for &(wx, wz) in &[(0, 0), (37, -12), (-200, 5), (1000, -1000)] {
+            let a = column_height(wx, wz, dim, 7);
+            let b = column_height(wx, wz, dim, 7);
+            assert_eq!(a, b, "determinista en ({wx},{wz})");
+            assert!(a < dim[1], "altura dentro del mundo");
+        }
+    }
+
+    /// Dos ventanas que solapan en mundo coinciden voxel-a-voxel en la zona
+    /// común: una columna de mundo se ve igual desde cualquier ventana. Es la
+    /// prueba dura de continuidad del streaming (sin GPU).
+    #[test]
+    fn ventanas_solapadas_coinciden_en_la_zona_comun() {
+        let dim = [64, 40, 64];
+        let seed = 4242;
+        // Ventana A en origen (0,0); ventana B desplazada (+16,+16). Solapan en
+        // el rango de mundo x,z ∈ [16, 64).
+        let mut a = VoxelGrid::new(dim);
+        fill_terrain_window(&mut a, [0, 0], seed);
+        let mut b = VoxelGrid::new(dim);
+        fill_terrain_window(&mut b, [16, 16], seed);
+
+        let mut comparados = 0u32;
+        for wz in 16..64u32 {
+            for wx in 16..64u32 {
+                for y in 0..dim[1] {
+                    // mundo → local de cada ventana.
+                    let va = a.get(wx, y, wz).unwrap();
+                    let vb = b.get(wx - 16, y, wz - 16).unwrap();
+                    assert_eq!(va, vb, "discrepan en mundo ({wx},{y},{wz})");
+                    comparados += 1;
+                }
+            }
+        }
+        assert!(comparados > 10_000, "se compararon columnas de verdad");
+    }
 }

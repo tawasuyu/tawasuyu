@@ -81,6 +81,16 @@ impl VoxelGrid {
         }
     }
 
+    /// Vacía **todos** los voxels y marca el grid entero como dirty (la próxima
+    /// `VoxelRenderer::sync` re-sube todo). Para regenerar el contenido de una
+    /// ventana de *streaming* in-place sin reconstruir el renderer.
+    pub fn clear_all(&mut self) {
+        for px in &mut self.data {
+            *px = [0, 0, 0, 0];
+        }
+        self.dirty = Some([0, 0, 0, self.dim[0] - 1, self.dim[1] - 1, self.dim[2] - 1]);
+    }
+
     /// Vacía un voxel.
     pub fn clear(&mut self, x: u32, y: u32, z: u32) {
         if x < self.dim[0] && y < self.dim[1] && z < self.dim[2] {

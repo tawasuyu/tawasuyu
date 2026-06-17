@@ -18,6 +18,7 @@ mod player;
 mod raycast;
 mod terrain;
 mod vox;
+mod world_stream;
 
 pub use actor::{Actor, Clip, Pose};
 pub use director::{ActorKey, ActorSample, ActorScript, Sequence, Shot};
@@ -25,4 +26,5 @@ pub use vox::{load_grid, model_to_grid, stamp, VoxLoadError};
 pub use critter::Critter;
 pub use player::{forward_h, look_dir, right_h, Player};
 pub use raycast::{raycast, VoxelHit};
-pub use terrain::terrain;
+pub use terrain::{column_height, fill_terrain_window, terrain};
+pub use world_stream::WorldStream;
