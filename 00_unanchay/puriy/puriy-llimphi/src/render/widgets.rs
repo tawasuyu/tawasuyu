@@ -274,9 +274,45 @@ pub(crate) fn render_select(
         .map(|o| o.label.clone())
         .unwrap_or_default();
 
+    // `appearance: none` (Fase 7.1241): apaga el chrome nativo del `<select>` —la
+    // flecha ▼/▲ y el doble fondo gris/blanco— y deja sólo el estilo del autor:
+    // `background` + decoraciones (border/radius/shadow vía `apply_decorations`).
+    // Patrón canónico del dropdown custom: `appearance:none` + `background` +
+    // borde del autor (+ su propia flecha como background-image si la quiere). El
+    // header sigue siendo click-toggle y la lista expandida vive en el overlay.
+    let bare = matches!(b.appearance, puriy_engine::Appearance::None);
+
     let css_width = length_to_taffy(b.width, zoom);
     let header_h = (b.font_size * zoom).max(14.0_f32 * zoom) + 10.0;
-    let header = View::new(Style {
+    let mut header_kids: Vec<View<Msg>> = vec![View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(header_h - 8.0) },
+        ..Default::default()
+    })
+    .text_aligned(
+        truncate(&current_label, 80),
+        b.font_size * zoom,
+        Color::from_rgb8(30, 30, 40),
+        Alignment::Start,
+    )];
+    if !bare {
+        // Flecha nativa: sólo con chrome (`appearance: auto`).
+        header_kids.push(
+            View::new(Style {
+                size: Size {
+                    width: length(14.0_f32 * zoom),
+                    height: length(header_h - 8.0),
+                },
+                ..Default::default()
+            })
+            .text_aligned(
+                if open { "▲".to_string() } else { "▼".to_string() },
+                b.font_size * zoom * 0.8,
+                Color::from_rgb8(80, 80, 95),
+                Alignment::End,
+            ),
+        );
+    }
+    let mut header = View::new(Style {
         size: Size {
             width: css_width.clone().unwrap_or_else(|| length(220.0_f32 * zoom)),
             height: length(header_h),
@@ -291,34 +327,13 @@ pub(crate) fn render_select(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(Color::WHITE)
-    .radius(3.0)
-    .on_click(Msg::SelectToggle(idx))
-    .children(vec![
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(header_h - 8.0) },
-            ..Default::default()
-        })
-        .text_aligned(
-            truncate(&current_label, 80),
-            b.font_size * zoom,
-            Color::from_rgb8(30, 30, 40),
-            Alignment::Start,
-        ),
-        View::new(Style {
-            size: Size {
-                width: length(14.0_f32 * zoom),
-                height: length(header_h - 8.0),
-            },
-            ..Default::default()
-        })
-        .text_aligned(
-            if open { "▲".to_string() } else { "▼".to_string() },
-            b.font_size * zoom * 0.8,
-            Color::from_rgb8(80, 80, 95),
-            Alignment::End,
-        ),
-    ]);
+    .on_click(Msg::SelectToggle(idx));
+    // Con chrome: header blanco redondeado. `appearance:none`: el fondo lo pone
+    // el autor (lo aplica el wrapper de abajo), header transparente.
+    if !bare {
+        header = header.fill(Color::WHITE).radius(3.0);
+    }
+    let header = header.children(header_kids);
 
     // El header se rendera siempre; la lista expandida ahora vive en
     // `view_overlay` (popup flotante) cuando `open=true`. Esto evita
@@ -326,7 +341,7 @@ pub(crate) fn render_select(
     let _ = (selected, info, open); // ya consumidos en el overlay
     let all: Vec<View<Msg>> = vec![header];
 
-    View::new(Style {
+    let mut wrapper = View::new(Style {
         size: Size {
             width: css_width.unwrap_or_else(|| length(220.0_f32 * zoom)),
             height: auto(),
@@ -339,10 +354,18 @@ pub(crate) fn render_select(
         },
         flex_direction: FlexDirection::Column,
         ..Default::default()
-    })
-    .fill(Color::from_rgb8(220, 220, 230))
-    .radius(3.0)
-    .children(all)
+    });
+    if bare {
+        // Sólo el estilo del autor: `background` + border/radius/shadow.
+        if let Some(bg) = b.background {
+            wrapper = wrapper.fill(Color::from_rgba8(bg.r, bg.g, bg.b, bg.a));
+        }
+        return apply_decorations(wrapper.children(all), b, zoom);
+    }
+    wrapper
+        .fill(Color::from_rgb8(220, 220, 230))
+        .radius(3.0)
+        .children(all)
 }
 
 /// Overlay flotante con la lista de opciones del `<select>` abierto.

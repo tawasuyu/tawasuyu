@@ -736,3 +736,34 @@ use crate::Engine;
             "sin la propiedad, el box queda en Auto (chrome nativo)"
         );
     }
+
+    #[test]
+    fn appearance_none_llega_al_select_fase_7_1241() {
+        // `appearance: none` también aterriza en el box de un `<select>`, listo
+        // para que el wire apague la flecha ▼/▲ y el fondo nativo y deje sólo el
+        // estilo del autor. Sin la propiedad, el `<select>` queda en `Auto`.
+        use crate::style::Appearance;
+        let html = r##"<html><body>
+            <select id="x" style="appearance: none"><option>a</option></select>
+            <select id="y"><option>a</option></select>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut x_app: Option<Appearance> = None;
+        let mut y_app: Option<Appearance> = None;
+        doc.box_tree.walk(|b| match b.element_id.as_deref() {
+            Some("x") => x_app = Some(b.appearance),
+            Some("y") => y_app = Some(b.appearance),
+            _ => {}
+        });
+        assert_eq!(
+            x_app,
+            Some(Appearance::None),
+            "appearance:none llega al box del <select>"
+        );
+        assert_eq!(
+            y_app,
+            Some(Appearance::Auto),
+            "sin la propiedad, el <select> queda en Auto (chrome nativo)"
+        );
+    }

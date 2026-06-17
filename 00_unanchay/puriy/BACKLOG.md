@@ -545,10 +545,27 @@ prop queda `Auto`). v1: sólo checkbox/radio — submit/button/select/text-input
 respetan parcialmente el estilo del autor; su reset por `appearance:none` queda
 para una fase aparte si hace falta.
 
+### 7.1241 ✅ — `appearance: none` en `<select>`
+
+Extiende 7.1240 al dropdown. Con `appearance: none`, `render_select` apaga el
+chrome nativo: **sin flecha ▼/▲** y **sin el doble fondo gris/blanco**, deja sólo
+el estilo del autor — `background` + decoraciones (border/radius/shadow vía
+`apply_decorations`) sobre el wrapper. El header transparente sigue siendo
+click-toggle y la lista expandida sigue viviendo en el overlay flotante
+(`select_overlay_view`), sin cambios. Patrón canónico del dropdown custom:
+`appearance:none` + `background` + borde del autor (+ su flecha como
+`background-image` si la quiere). Con `appearance: auto` (default) el chrome
+nativo queda igual que antes. Cambio de wire puro; el dato `appearance` ya
+aterrizaba en el box del `<select>` (Fase 7.258, genérico al elemento). Test:
+`appearance_none_llega_al_select_fase_7_1241` (`group03`: `none` llega al box del
+`<select>`, sin la prop queda `Auto`).
+
 ### Próximos huecos del mismo bloque (a atacar en orden)
 
-- **`appearance: none` en `<select>`** — quitar la flecha/borde nativos del
-  dropdown y dejar sólo el estilo del autor (el más pedido tras checkbox/radio).
+- **`appearance: none` reset de `<input type=submit|button>` / text-input** —
+  los botones y el text-input ya respetan parcialmente el estilo del autor;
+  falta el reset completo del chrome por `appearance:none` (la pieza que quedó
+  fuera de 7.1240/7.1241).
 - **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
   los otros sitios de imagen (reusar `with_image_rendering` en `decorations.rs`
   y `canvas.rs`).
