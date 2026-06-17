@@ -1,0 +1,22 @@
+[package]
+name = "llimphi-3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-3d — pase 3D base de Llimphi sobre wgpu: cámara view/proj (glam), depth buffer propio y un pipeline que compone su render dentro del `View` por la misma firma que `gpu_paint_with`. M0 del motor 3D general (ver 01_yachay/dominium/MOTOR-VOXEL.md §11). No mete un segundo motor: va sobre el mismo wgpu que ya usa Llimphi."
+
+[dependencies]
+# Sólo los tipos GPU (Device/Queue/Encoder/View/Texture) — mismo wgpu que el
+# resto de Llimphi, sin windowing. No agrega un segundo stack gráfico.
+wgpu = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]
+# Volcado headless del render 3D a PNG (llvmpipe en sandbox) para VER el cubo
+# sin levantar ventana — mismo patrón que gpu_primitivos_demo.
+llimphi-hal = { path = "../llimphi-hal" }
+llimphi-raster = { path = "../llimphi-raster" }
+png = { workspace = true }
+pollster = { workspace = true }
