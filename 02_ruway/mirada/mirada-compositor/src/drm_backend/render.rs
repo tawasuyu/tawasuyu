@@ -146,14 +146,21 @@ impl DrmState {
                             into.push(Frame::Text(el));
                         }
                     }
-                    // Botones del titlebar a la derecha: maximizar (□) y cerrar
-                    // (✕). El más a la derecha es cerrar. El hit-test del click
-                    // usa las mismas posiciones (TB_BTN_W).
-                    for (slot, glyph) in [(0i32, "✕"), (1i32, "□")] {
+                    // Botones del titlebar a la derecha: maximizar (cuadrado) y
+                    // cerrar (X). El más a la derecha es cerrar. Se dibujan a
+                    // mano (no por fuente): los glyphs ✕/□ salían como tofu en
+                    // fuentes sin esos puntos. El hit-test del click usa las
+                    // mismas posiciones (TB_BTN_W).
+                    let _ = tr; // los íconos no dependen de la fuente
+                    for (slot, icon) in [
+                        (0i32, crate::text::icon_close(TITLE_PX, TITLE_COLOR)),
+                        (1i32, crate::text::icon_square(TITLE_PX, TITLE_COLOR)),
+                    ] {
                         if sw < (slot + 1) * crate::TB_BTN_W + 8 {
                             continue; // ventana muy angosta: sin botón
                         }
-                        if let Some(r) = tr.rasterize(glyph, TITLE_PX, TITLE_COLOR) {
+                        {
+                            let r = icon;
                             let cell_x = x + sw - (slot + 1) * crate::TB_BTN_W;
                             let bx = cell_x + (crate::TB_BTN_W - r.width) / 2;
                             let by = dec_y + (tb - r.height) / 2;

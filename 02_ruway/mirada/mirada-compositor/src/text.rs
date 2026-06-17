@@ -124,6 +124,80 @@ impl TextRenderer {
     }
 }
 
+/// Compone un pixel premultiplicado (orden de bytes **B,G,R,A**, igual que
+/// [`TextRenderer::rasterize`]) sobre el buffer, con cobertura `cov`.
+fn blend_px(rgba: &mut [u8], w: i32, h: i32, x: i32, y: i32, color: [u8; 4], cov: f32) {
+    if x < 0 || y < 0 || x >= w || y >= h || cov <= 0.0 {
+        return;
+    }
+    let a = (cov * (color[3] as f32 / 255.0)).clamp(0.0, 1.0);
+    if a <= 0.0 {
+        return;
+    }
+    let i = ((y * w + x) * 4) as usize;
+    let inv = 1.0 - a;
+    rgba[i] = (color[2] as f32 * a + rgba[i] as f32 * inv) as u8; // B
+    rgba[i + 1] = (color[1] as f32 * a + rgba[i + 1] as f32 * inv) as u8; // G
+    rgba[i + 2] = (color[0] as f32 * a + rgba[i + 2] as f32 * inv) as u8; // R
+    rgba[i + 3] = (a * 255.0 + rgba[i + 3] as f32 * inv) as u8; // A
+}
+
+/// Dibuja un segmento con anti-aliasing (distancia al segmento → cobertura).
+fn draw_line_aa(
+    rgba: &mut [u8],
+    w: i32,
+    h: i32,
+    p0: (f32, f32),
+    p1: (f32, f32),
+    thickness: f32,
+    color: [u8; 4],
+) {
+    let half = thickness / 2.0;
+    let (x0, y0) = p0;
+    let (x1, y1) = p1;
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let len2 = (dx * dx + dy * dy).max(1e-6);
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let t = (((px - x0) * dx + (py - y0) * dy) / len2).clamp(0.0, 1.0);
+            let (qx, qy) = (x0 + t * dx, y0 + t * dy);
+            let dist = ((px - qx).powi(2) + (py - qy).powi(2)).sqrt();
+            let cov = (half - dist + 0.5).clamp(0.0, 1.0);
+            blend_px(rgba, w, h, x, y, color, cov);
+        }
+    }
+}
+
+/// Ícono **cerrar** (una «X») dibujado a mano — sin fuente, así nunca sale como
+/// tofu (el glyph ✕ faltaba en varias fuentes del sistema). ARGB8888
+/// premultiplicado, igual formato que [`TextRenderer::rasterize`].
+pub fn icon_close(px: f32, color: [u8; 4]) -> Rasterized {
+    let s = px.max(6.0) as i32;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let pad = (s as f32 * 0.30).max(2.0);
+    let (lo, hi) = (pad, s as f32 - pad);
+    let th = (s as f32 * 0.11).clamp(1.4, 2.4);
+    draw_line_aa(&mut rgba, s, s, (lo, lo), (hi, hi), th, color);
+    draw_line_aa(&mut rgba, s, s, (hi, lo), (lo, hi), th, color);
+    Rasterized { rgba, width: s, height: s }
+}
+
+/// Ícono **maximizar** (un cuadrado) dibujado a mano — reemplaza el glyph □ que
+/// salía como tofu.
+pub fn icon_square(px: f32, color: [u8; 4]) -> Rasterized {
+    let s = px.max(6.0) as i32;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let pad = (s as f32 * 0.28).max(2.0);
+    let (lo, hi) = (pad, s as f32 - pad);
+    let th = (s as f32 * 0.10).clamp(1.4, 2.2);
+    draw_line_aa(&mut rgba, s, s, (lo, lo), (hi, lo), th, color); // arriba
+    draw_line_aa(&mut rgba, s, s, (lo, hi), (hi, hi), th, color); // abajo
+    draw_line_aa(&mut rgba, s, s, (lo, lo), (lo, hi), th, color); // izquierda
+    draw_line_aa(&mut rgba, s, s, (hi, lo), (hi, hi), th, color); // derecha
+    Rasterized { rgba, width: s, height: s }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
