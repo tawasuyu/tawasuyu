@@ -3,7 +3,9 @@
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Size, Style},
+    prelude::{
+        auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style,
+    },
     Rect as TaffyRect,
 };
 use llimphi_ui::llimphi_raster::peniko::{
@@ -167,14 +169,41 @@ pub fn workspaces_view(
 }
 
 /// Una celda del workspace switcher: cuadradito con número y estado visual.
+/// Tres estados bien diferenciados:
+/// - **activo**: relleno con el acento (el escritorio que ves).
+/// - **ocupado** (tiene ventanas): borde de acento grueso + número fuerte +
+///   un puntito de acento abajo. Se distingue de un vistazo de los vacíos.
+/// - **vacío**: apagado, borde tenue, número atenuado.
 fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Msg> {
-    let (fill, fg) = if active {
-        (theme.accent, theme.bg_panel)
+    let (fill, fg, borde_w, borde_col) = if active {
+        (theme.accent, theme.bg_panel, 1.0, theme.accent)
     } else if occupied {
-        (theme.bg_panel, theme.fg_text)
+        (theme.bg_panel, theme.fg_text, 2.0, theme.accent)
     } else {
-        (theme.bg_panel_alt, theme.fg_muted)
+        (theme.bg_panel_alt, theme.fg_muted, 1.0, theme.border)
     };
+    // Puntito de ocupación: un cuadradito de acento centrado abajo. Visible sólo
+    // en los ocupados que NO están activos (el activo ya se ve por el relleno).
+    let punto = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: auto(),
+            right: auto(),
+            top: auto(),
+            bottom: length(2.0_f32),
+        },
+        size: Size { width: length(6.0_f32), height: length(3.0_f32) },
+        ..Default::default()
+    })
+    .fill(if occupied && !active { theme.accent } else { theme.bg_panel_alt })
+    .radius(1.5);
+    let numero = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(n.to_string(), 13.0, fg);
     View::new(Style {
         // Más grande para acertar el click cómodo (antes 22×20 = chico).
         size: Size {
@@ -187,11 +216,15 @@ fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Ms
     })
     .fill(fill)
     .radius(5.0)
-    .border(1.0, theme.border)
+    .border(borde_w, borde_col)
     .hover_fill(theme.bg_button_hover)
-    .tooltip(format!("Escritorio {n}"))
+    .tooltip(if occupied {
+        format!("Escritorio {n} · con ventanas")
+    } else {
+        format!("Escritorio {n} · vacío")
+    })
     .on_click(Msg::SwitchWorkspace(n))
-    .text(n.to_string(), 13.0, fg)
+    .children(vec![numero, punto])
 }
 
 /// El **botón de inicio**: chip con su label/ícono. Clic → menú de apps.

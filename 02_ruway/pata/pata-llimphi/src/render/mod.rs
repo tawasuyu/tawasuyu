@@ -630,6 +630,19 @@ pub fn menu_filtered<'a>(apps: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry>
 
 /// Encabezado de categoría en la lista clásica: franja tenue con el nombre en
 /// mayúsculas, estilo separador de sección.
+/// Nombre legible de una categoría. Las apps de la suite usan el slug del
+/// cuadrante (`ukupacha`/`ruway`/…); lo traducimos a algo entendible. Cualquier
+/// otra categoría (apps XDG) se muestra tal cual.
+fn nombre_categoria(cat: &str) -> String {
+    match cat {
+        "unanchay" => "Percibir".to_string(),
+        "yachay" => "Conocer".to_string(),
+        "ruway" => "Crear".to_string(),
+        "ukupacha" => "Sistema".to_string(),
+        otro => otro.to_string(),
+    }
+}
+
 fn menu_category_header(cat: &str, theme: &Theme) -> View<Msg> {
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(MENU_ROW_H) },
@@ -643,7 +656,7 @@ fn menu_category_header(cat: &str, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .text(cat.to_uppercase(), 10.5, theme.fg_muted)
+    .text(nombre_categoria(cat).to_uppercase(), 10.5, theme.fg_muted)
 }
 
 /// Las filas de la lista clásica **agrupadas por categoría**: un encabezado por

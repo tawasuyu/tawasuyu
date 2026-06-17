@@ -355,6 +355,41 @@ impl OutputOverride {
     }
 }
 
+/// Zonas de arrastre por defecto: **mitad izquierda** y **mitad derecha**. Así
+/// la función drag-to-zone EXISTE de fábrica (antes `zones` venía vacío y no
+/// pasaba nada al arrastrar — parecía que la feature no estaba). Arrastrá una
+/// ventana al borde izq./der. para anclarla a esa mitad; soltala en el centro y
+/// queda flotando (overflow). Más layouts en [`default_zone_presets`]
+/// (`mirada-ctl cycle-zones`).
+pub fn default_zones() -> Vec<ZoneCfg> {
+    vec![
+        ZoneCfg { name: "izquierda".into(), x: 0.0, y: 0.0, w: 0.5, h: 1.0 },
+        ZoneCfg { name: "derecha".into(), x: 0.5, y: 0.0, w: 0.5, h: 1.0 },
+    ]
+}
+
+/// Presets adicionales que cicla `mirada-ctl cycle-zones`: cuadrantes (cuatro
+/// esquinas) y tercios verticales. El orden importa: el hit-test toma la PRIMERA
+/// zona que contiene el punto.
+pub fn default_zone_presets() -> Vec<Vec<ZoneCfg>> {
+    vec![
+        // Cuadrantes: arrastrá a una esquina para un cuarto de pantalla.
+        vec![
+            ZoneCfg { name: "sup-izq".into(), x: 0.0, y: 0.0, w: 0.5, h: 0.5 },
+            ZoneCfg { name: "sup-der".into(), x: 0.5, y: 0.0, w: 0.5, h: 0.5 },
+            ZoneCfg { name: "inf-izq".into(), x: 0.0, y: 0.5, w: 0.5, h: 0.5 },
+            ZoneCfg { name: "inf-der".into(), x: 0.5, y: 0.5, w: 0.5, h: 0.5 },
+        ],
+        // Tercios verticales: tres columnas iguales. (Literales redondeados para
+        // casar exactamente con la plantilla RON — ver test del template.)
+        vec![
+            ZoneCfg { name: "tercio-1".into(), x: 0.0, y: 0.0, w: 0.3333, h: 1.0 },
+            ZoneCfg { name: "tercio-2".into(), x: 0.3333, y: 0.0, w: 0.3333, h: 1.0 },
+            ZoneCfg { name: "tercio-3".into(), x: 0.6666, y: 0.0, w: 0.3334, h: 1.0 },
+        ],
+    ]
+}
+
 /// Una zona: `(x, y, w, h)` en fracciones `0..=1` de la pantalla. El `name` es
 /// opcional, sólo una etiqueta para tu propia referencia (no se pinta).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -407,8 +442,8 @@ impl Default for Config {
             wallpaper_dir: String::new(),
             wallpaper_interval_secs: 0,
             menu: default_root_menu(),
-            zones: Vec::new(),
-            zone_presets: Vec::new(),
+            zones: default_zones(),
+            zone_presets: default_zone_presets(),
             output_direction: "horizontal".to_string(),
             outputs: Vec::new(),
             overview_enabled: true,
@@ -835,21 +870,29 @@ const CONFIG_TEMPLATE: &str = "\
     // Zonas: blancos de arrastre (fracciones 0..=1 de la pantalla). Al arrastrar
     // una ventana sobre una zona se resalta; al soltarla encima, aterriza en ese
     // rect; soltarla fuera la deja flotando donde cae (overflow). El `name` es
-    // opcional (sólo tu referencia). Vacío = sin zonas. Ej (media/cuartos):
-    //   zones: [
-    //       (x: 0.0, y: 0.0, w: 0.5, h: 1.0),
-    //       (x: 0.5, y: 0.0, w: 0.5, h: 0.5),
-    //       (x: 0.5, y: 0.5, w: 0.5, h: 0.5),
-    //   ],
-    zones: [],
+    // opcional (sólo tu referencia). Vacío = sin zonas. Por defecto: mitades
+    // izquierda/derecha (arrastrá una ventana al borde para anclarla a esa mitad).
+    zones: [
+        (name: \"izquierda\", x: 0.0, y: 0.0, w: 0.5, h: 1.0),
+        (name: \"derecha\",   x: 0.5, y: 0.0, w: 0.5, h: 1.0),
+    ],
 
     // Presets adicionales de zonas. `mirada-ctl cycle-zones` (bindealo a un
-    // atajo) cicla zones → preset 0 → preset 1 → … → zones. Ej:
-    //   zone_presets: [
-    //       [ (x: 0.0, y: 0.0, w: 0.5, h: 1.0), (x: 0.5, y: 0.0, w: 0.5, h: 1.0) ],
-    //       [ (x: 0.0, y: 0.0, w: 1.0, h: 1.0) ],
-    //   ],
-    zone_presets: [],
+    // atajo) cicla zones → preset 0 → preset 1 → … → zones. Por defecto:
+    // cuadrantes (esquinas) y tercios verticales.
+    zone_presets: [
+        [
+            (name: \"sup-izq\", x: 0.0, y: 0.0, w: 0.5, h: 0.5),
+            (name: \"sup-der\", x: 0.5, y: 0.0, w: 0.5, h: 0.5),
+            (name: \"inf-izq\", x: 0.0, y: 0.5, w: 0.5, h: 0.5),
+            (name: \"inf-der\", x: 0.5, y: 0.5, w: 0.5, h: 0.5),
+        ],
+        [
+            (name: \"tercio-1\", x: 0.0,     y: 0.0, w: 0.3333, h: 1.0),
+            (name: \"tercio-2\", x: 0.3333,  y: 0.0, w: 0.3333, h: 1.0),
+            (name: \"tercio-3\", x: 0.6666,  y: 0.0, w: 0.3334, h: 1.0),
+        ],
+    ],
 
     // Cómo se reparten los monitores en el escritorio global cuando hay más
     // de uno: \"horizontal\" (uno al lado del otro) o \"vertical\" (encima).
