@@ -32,6 +32,12 @@ pub struct DesktopProfile {
     /// Vacío = el theme nativo. `serde(default)` para cargar RON viejos.
     #[serde(default)]
     pub theme: String,
+    /// **Conjunto de atajos referenciado** (nombre en la biblioteca de keymaps,
+    /// `profiles.ron`). Mismo patrón que [`Self::theme`]: el perfil USA un
+    /// conjunto reusable en vez de tener el suyo embebido. Vacío = usa el campo
+    /// `keymap` embebido (RON viejo) o el conjunto activo.
+    #[serde(default)]
+    pub keymap_set: String,
 }
 
 impl DesktopProfile {
@@ -48,6 +54,7 @@ impl DesktopProfile {
             keymap,
             pata,
             theme: name.to_string(),
+            keymap_set: String::new(),
         })
     }
 }

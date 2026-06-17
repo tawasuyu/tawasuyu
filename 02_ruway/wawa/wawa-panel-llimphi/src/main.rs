@@ -92,7 +92,8 @@ const MODULES: &[(&str, &str, &str)] = &[
 ];
 
 /// Índice del panel "Acerca" (último) — para el menú Ayuda (estado/about).
-const INFO_DIENTE: usize = 4;
+/// Orden: Vista=0, Atajos=1, Pata=2, Inicio=3, Sistema=4, Acerca=5.
+const INFO_DIENTE: usize = 5;
 /// Índice del panel "Vista" (1º) — Perfiles vive ahí; saltamos tras crear/duplicar.
 const PERFILES_DIENTE: usize = 0;
 
@@ -971,10 +972,12 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     if let Some(s) = take("terminal") {
         vista.sections.push(s); // Terminal dropdown
     }
-    if mirada_on {
-        vista.sections.push(keymap_section(&m.keymap_rows)); // Atajos
-    }
     vista.sections.push(reglas_section(&m.rules)); // Reglas (hyprland windowrule)
+
+    // ---- Panel ATAJOS (su propio diente) ----
+    // Conjuntos de atajos reusables (tab 1 = lista, tab 2 = teclas), mismo patrón
+    // que Themes. Antes era una sección suelta dentro de Vista.
+    let atajos = if mirada_on { atajos_schema(m) } else { Schema::new() };
 
     // ---- Panel PATA ----
     let mut pata = Schema::new();
@@ -1010,6 +1013,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
 
     vec![
         PanelPestana { title: "Vista".into(), icon: "✦".into(), schema: vista },
+        PanelPestana { title: "Atajos".into(), icon: "⌨".into(), schema: atajos },
         PanelPestana { title: "Pata".into(), icon: "🎛".into(), schema: pata },
         PanelPestana { title: "Inicio".into(), icon: "⏻".into(), schema: inicio },
         PanelPestana { title: "Sistema".into(), icon: "⚙".into(), schema: sistema },
@@ -1485,6 +1489,7 @@ fn do_create_profile(m: &mut Model) {
         keymap: m.keymap_rows.clone(),
         pata: m.pata.clone(),
         theme: active_theme_name(m),
+        keymap_set: m.profiles.active().to_string(),
     };
     let name = m.dprofiles.create(base, "perfil nuevo");
     activate_profile(m, &name);
@@ -1583,12 +1588,20 @@ fn activate_profile(m: &mut Model, name: &str) {
         m.cfg.theme_variant = t.theme_variant.clone();
         m.cfg.accent = t.accent.clone();
     }
+    // Conjunto de atajos referenciado: si el perfil apunta a uno existente, lo
+    // activamos y tomamos SUS teclas (en vez del keymap embebido). Mismo patrón
+    // que el theme. Vacío o inexistente → se queda con el keymap embebido.
+    if !prof.keymap_set.is_empty() && m.profiles.contains(&prof.keymap_set) {
+        let _ = m.profiles.set_active(&prof.keymap_set);
+        m.keymap_rows = m.profiles.active_keymap().to_rows();
+    }
     // Persistir la config viva (perfil + theme fusionados) y el resto.
     if let Some(p) = m.mirada_path.clone() {
         let _ = m.mirada.save(&p);
     }
     if let Some(kp) = m.keymap_path.clone() {
-        let _ = mirada_brain::Keymap::from_rows(&prof.keymap).save(&kp);
+        // m.keymap_rows ya refleja el conjunto referenciado (si lo hay).
+        let _ = mirada_brain::Keymap::from_rows(&m.keymap_rows).save(&kp);
     }
     let _ = pata_config::save(&prof.pata);
     let _ = m.cfg.save();
@@ -1604,9 +1617,14 @@ fn sync_active_profile(m: &mut Model) {
     if active.is_empty() {
         return;
     }
-    // Preservamos la referencia de theme del perfil (no es dueño de su
-    // teselado/decoración: eso lo define el theme).
-    let theme = m.dprofiles.get(&active).map(|p| p.theme.clone()).unwrap_or_default();
+    // Preservamos las referencias del perfil (theme + conjunto de atajos): el
+    // perfil no es dueño de su teselado/decoración (theme) ni de sus teclas
+    // (conjunto de atajos); las referencia por nombre.
+    let (theme, keymap_set) = m
+        .dprofiles
+        .get(&active)
+        .map(|p| (p.theme.clone(), p.keymap_set.clone()))
+        .unwrap_or_default();
     m.dprofiles.set(
         &active,
         DesktopProfile {
@@ -1614,6 +1632,7 @@ fn sync_active_profile(m: &mut Model) {
             keymap: m.keymap_rows.clone(),
             pata: m.pata.clone(),
             theme,
+            keymap_set,
         },
     );
     m.dirty.dprofiles = true;
@@ -1624,9 +1643,9 @@ fn sync_active_profile(m: &mut Model) {
 /// y lo aplique al buffer del keymap (no a la `Config`).
 fn keymap_section(rows: &[Vec<String>]) -> Section {
     use allichay::{Column, Field};
-    Section::new("mirada::atajos", "Atajos (perfil activo)")
+    Section::new("atajos::teclas", "Teclas")
         .icon("⌨")
-        .help("Atajos del perfil activo. Para conmutar de perfil, andá a la pestaña Perfiles.")
+        .help("Las teclas del conjunto seleccionado. Editar acá afecta a todos los perfiles que usan este conjunto. +/− agrega/borra.")
         .field(Field::table(
             "bindings",
             "Atajos de teclado",
@@ -1636,6 +1655,139 @@ fn keymap_section(rows: &[Vec<String>]) -> Section {
             ],
             rows.to_vec(),
         ))
+}
+
+/// Esquema del panel **Atajos** (su propio diente). Tab 1 = la biblioteca de
+/// conjuntos de atajos (lista reusable: elegir cuál usa el perfil activo +
+/// crear/duplicar/renombrar/eliminar). Tab 2 = las teclas del conjunto. Mismo
+/// patrón que la pestaña Themes.
+fn atajos_schema(m: &Model) -> Schema {
+    use allichay::Field;
+    let active_profile = m.dprofiles.active.clone();
+    let set = m.profiles.active().to_string();
+    let opts: Vec<EnumOption> =
+        m.profiles.names().into_iter().map(|n| EnumOption::new(n.clone(), n)).collect();
+    Schema::new()
+        .section(
+            Section::new("atajos::conjuntos", "Conjuntos")
+                .icon("⌨")
+                .help(
+                    "Conjuntos de atajos reusables (dwm/i3/hyprland o propios), \
+                     perpendiculares a los perfiles. El perfil activo USA un \
+                     conjunto; editarlo afecta a todos los perfiles que lo \
+                     referencian.",
+                )
+                .field(Field::dropdown(
+                    "usar",
+                    format!("Atajos de «{active_profile}»"),
+                    set.clone(),
+                    opts,
+                ))
+                .field(Field::button("crear", "Crear conjunto (desde el actual)"))
+                .field(Field::button("duplicar", format!("Duplicar «{set}»")))
+                .field(Field::text("renombrar", format!("Renombrar «{set}» a…"), ""))
+                .field(Field::button("eliminar", format!("Eliminar «{set}»"))),
+        )
+        .section(keymap_section(&m.keymap_rows))
+}
+
+/// Nombre único para un conjunto de atajos nuevo a partir de `hint`.
+fn unique_keymap_name(m: &Model, hint: &str) -> String {
+    let base = if hint.trim().is_empty() { "atajos" } else { hint.trim() };
+    if !m.profiles.contains(base) {
+        return base.to_string();
+    }
+    (2..).map(|n| format!("{base} {n}")).find(|c| !m.profiles.contains(c)).unwrap()
+}
+
+/// Aplica una edición del panel Atajos (`rel` sin el prefijo `atajos::`).
+fn apply_atajos(m: &mut Model, rel: &FieldPath, value: FieldValue) {
+    let active_profile = m.dprofiles.active.clone();
+    // Relaciona el conjunto activo con el perfil global (como hace theme).
+    let relacionar = |m: &mut Model| {
+        let set = m.profiles.active().to_string();
+        if let Some(p) = m.dprofiles.profiles.get_mut(&active_profile) {
+            p.keymap_set = set;
+        }
+        m.dirty.dprofiles = true;
+    };
+    match rel.segments().first().map(String::as_str) {
+        Some("conjuntos") => match rel.leaf() {
+            Some("usar") => {
+                if let Some(name) = value.as_str() {
+                    if m.profiles.set_active(name).is_ok() {
+                        m.keymap_rows = m.profiles.active_keymap().to_rows();
+                        m.dirty.keymap = true;
+                        m.dirty.profiles = true;
+                        relacionar(m);
+                        m.status = format!("usando atajos «{name}»");
+                    }
+                }
+            }
+            Some("crear") if value.as_bool() == Some(true) => {
+                let nombre = unique_keymap_name(m, "atajos nuevo");
+                let km = mirada_brain::Keymap::from_rows(&m.keymap_rows);
+                if m.profiles.create(&nombre, km).is_ok() {
+                    let _ = m.profiles.set_active(&nombre);
+                    m.dirty.profiles = true;
+                    relacionar(m);
+                    m.status = format!("conjunto «{nombre}» creado");
+                }
+            }
+            Some("duplicar") if value.as_bool() == Some(true) => {
+                let src = m.profiles.active().to_string();
+                let nombre = unique_keymap_name(m, &format!("{src} copia"));
+                if m.profiles.duplicate(&src, &nombre).is_ok() {
+                    let _ = m.profiles.set_active(&nombre);
+                    m.dirty.profiles = true;
+                    relacionar(m);
+                    m.status = format!("conjunto «{nombre}» (copia de «{src}»)");
+                }
+            }
+            Some("renombrar") => {
+                if let Some(to) = value.as_str() {
+                    let (to, from) = (to.trim().to_string(), m.profiles.active().to_string());
+                    if !to.is_empty() && m.profiles.rename(&from, &to).is_ok() {
+                        let _ = m.profiles.set_active(&to);
+                        // Re-apunta los perfiles que usaban el viejo nombre.
+                        for p in m.dprofiles.profiles.values_mut() {
+                            if p.keymap_set == from {
+                                p.keymap_set = to.clone();
+                            }
+                        }
+                        m.dirty.profiles = true;
+                        m.dirty.dprofiles = true;
+                        m.status = format!("conjunto renombrado a «{to}»");
+                    }
+                }
+            }
+            Some("eliminar") if value.as_bool() == Some(true) => {
+                let cur = m.profiles.active().to_string();
+                if m.profiles.len() > 1 && m.profiles.remove(&cur).is_ok() {
+                    m.keymap_rows = m.profiles.active_keymap().to_rows();
+                    m.dirty.keymap = true;
+                    m.dirty.profiles = true;
+                    relacionar(m);
+                    m.status = format!("conjunto «{cur}» eliminado");
+                } else {
+                    m.status = "no podés eliminar el último conjunto".into();
+                }
+            }
+            _ => {}
+        },
+        // Tab «Teclas»: la tabla edita el buffer + lo vuelca al conjunto activo.
+        Some("teclas") => {
+            if let Some(rows) = value.as_table() {
+                m.keymap_rows = rows.to_vec();
+                let km = mirada_brain::Keymap::from_rows(&m.keymap_rows);
+                let active = m.profiles.active().to_string();
+                let _ = m.profiles.set_keymap(&active, km);
+                m.dirty.keymap = true;
+                m.dirty.profiles = true;
+            }
+        }
+        _ => {}
+    }
 }
 
 /// La pestaña "Sistema": varios items de configuración del SO.
@@ -2315,29 +2467,6 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                 _ => {}
             }
         }
-        "mirada" if rel.segments().first().map(String::as_str) == Some("atajos") => {
-            match rel.leaf() {
-                // Conmutar el perfil activo: recarga la tabla con su keymap y
-                // marca para persistir profiles.ron + keymap.ron.
-                Some("profile") => {
-                    if let Some(name) = value.as_str() {
-                        if m.profiles.set_active(name).is_ok() {
-                            m.keymap_rows = m.profiles.active_keymap().to_rows();
-                            m.dirty.keymap = true;
-                            m.dirty.profiles = true;
-                        }
-                    }
-                }
-                // La tabla actualiza el buffer de filas crudas (se preserva lo
-                // a-medio-tipear; el Keymap válido se deriva al guardar).
-                _ => {
-                    if let Some(rows) = value.as_table() {
-                        m.keymap_rows = rows.to_vec();
-                        m.dirty.keymap = true;
-                    }
-                }
-            }
-        }
         "mirada" => {
             if let Err(e) = m.mirada.apply(&rel, value) {
                 m.status = format!("· mirada: {e}");
@@ -2368,6 +2497,11 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
         }
         "theme" => {
             apply_theme(m, &rel, value);
+            m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
+        "atajos" => {
+            apply_atajos(m, &rel, value);
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
@@ -2567,11 +2701,15 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
 /// lista/tabla al focarla — necesita el agregado entero, no sólo un texto).
 fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
     let (key, rel) = split_app(path)?;
-    // El keymap no está en el schema de Config: su valor es el buffer de filas,
-    // y el selector de perfil el nombre del activo.
-    if key == "mirada" && rel.segments().first().map(String::as_str) == Some("atajos") {
-        return Some(match rel.leaf() {
-            Some("profile") => FieldValue::Text(m.profiles.active().to_string()),
+    // Panel Atajos. Tab «conjuntos»: «usar» = conjunto activo; renombrar = texto;
+    // botones = false. Tab «teclas»: la tabla = el buffer de filas del keymap.
+    if key == "atajos" {
+        return Some(match rel.segments().first().map(String::as_str) {
+            Some("conjuntos") => match rel.leaf() {
+                Some("usar") => FieldValue::Text(m.profiles.active().to_string()),
+                Some("renombrar") => FieldValue::Text(String::new()),
+                _ => FieldValue::Bool(false),
+            },
             _ => FieldValue::Table(m.keymap_rows.clone()),
         });
     }
