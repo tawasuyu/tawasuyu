@@ -13,7 +13,8 @@
 //! cargo run -p llimphi-voxel-app --release            # ventana interactiva
 //! cargo run -p llimphi-voxel-app --release -- --shot  # PNG headless a /tmp
 //! ```
-//! - **Arrastrar**: orbita. **Rueda**: zoom.
+//! - **Arrastrar**: orbita. **Rueda**: zoom. **b**: romper (cráter donde mira la
+//!   cámara). **g**: construir (bloque en la cara golpeada).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,7 +26,9 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
-use llimphi_ui::{mount, paint_gpu, App, DragPhase, Handle, Modifiers, View, WheelDelta};
+use llimphi_ui::{
+    mount, paint_gpu, App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, View, WheelDelta,
+};
 
 mod world;
 use world::{World, FMT};
@@ -33,10 +36,16 @@ use world::{World, FMT};
 const DIM_XZ: u32 = 192;
 const SEED: u32 = 1337;
 
+/// Edición pendiente: rayo (origen+dir en espacio de grilla) y modo
+/// (`true` = construir, `false` = romper). La produce `update` y la consume el
+/// closure GPU (que tiene `queue` para el `sync`).
+type Edit = ([f32; 3], [f32; 3], bool);
+
 #[derive(Clone)]
 enum Msg {
     Orbit(f32, f32),
     Zoom(f32),
+    Edit(bool),
     Tick,
 }
 
@@ -47,6 +56,19 @@ struct Model {
     angle: f32,
     /// Mundo perezoso: se construye en la 1ª pintada GPU (ahí hay device/queue).
     world: Arc<Mutex<Option<World>>>,
+    /// Cola de ediciones a aplicar en el próximo frame (en el hilo GPU).
+    edits: Arc<Mutex<Vec<Edit>>>,
+}
+
+/// Cámara actual a partir del estado de órbita del modelo.
+fn camera_of(yaw: f32, pitch: f32, dist: f32) -> Camera3d {
+    Camera3d::orbit(Vec3::new(0.0, focus_y(), 0.0), yaw, pitch, dist)
+}
+
+/// `dim` del mundo (igual que `World::build`).
+fn world_dim() -> Vec3 {
+    let dy = (DIM_XZ * 4 / 10).max(48) as f32;
+    Vec3::new(DIM_XZ as f32, dy, DIM_XZ as f32)
 }
 
 /// `y` del centro de órbita (sobre el nivel medio del mundo).
@@ -76,11 +98,23 @@ impl App for VoxelApp {
             dist: DIM_XZ as f32 * 1.5,
             angle: 0.0,
             world: Arc::new(Mutex::new(None)),
+            edits: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn on_wheel(_m: &Model, delta: WheelDelta, _c: (f32, f32), _mods: Modifiers) -> Option<Msg> {
         Some(Msg::Zoom(delta.y))
+    }
+
+    fn on_key(_m: &Model, ev: &KeyEvent) -> Option<Msg> {
+        if !matches!(ev.state, KeyState::Pressed) {
+            return None;
+        }
+        match &ev.key {
+            Key::Character(c) if c.eq_ignore_ascii_case("b") => Some(Msg::Edit(false)), // romper
+            Key::Character(c) if c.eq_ignore_ascii_case("g") => Some(Msg::Edit(true)),  // construir
+            _ => None,
+        }
     }
 
     fn update(mut model: Model, msg: Msg, _handle: &Handle<Msg>) -> Model {
@@ -94,20 +128,34 @@ impl App for VoxelApp {
                 let f = (1.0 + dy * 0.1).clamp(0.5, 1.5);
                 model.dist = (model.dist * f).clamp(DIM_XZ as f32 * 0.6, DIM_XZ as f32 * 3.0);
             }
+            Msg::Edit(build) => {
+                let cam = camera_of(model.yaw, model.pitch, model.dist);
+                let ro = cam.eye + world_dim() * 0.5;
+                let rd = (cam.target - cam.eye).normalize();
+                model
+                    .edits
+                    .lock()
+                    .unwrap()
+                    .push(([ro.x, ro.y, ro.z], [rd.x, rd.y, rd.z], build));
+            }
             Msg::Tick => model.angle += 0.01,
         }
         model
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let camera = Camera3d::orbit(Vec3::new(0.0, focus_y(), 0.0), model.yaw, model.pitch, model.dist);
+        let camera = camera_of(model.yaw, model.pitch, model.dist);
         let world = model.world.clone();
+        let edits = model.edits.clone();
         let angle = model.angle;
 
         let canvas = View::new(fill())
             .gpu_paint_with(move |device, queue, encoder, target, _rect, vp| {
                 let mut guard = world.lock().unwrap();
                 let w = guard.get_or_insert_with(|| World::build(device, queue, DIM_XZ, SEED));
+                for (o, d, b) in edits.lock().unwrap().drain(..) {
+                    w.apply_edit(queue, o, d, b);
+                }
                 w.animate(angle);
                 w.render(device, queue, encoder, target, vp, &camera);
             })
@@ -154,10 +202,15 @@ fn shot() {
         22_f32.to_radians(),
         DIM_XZ as f32 * 1.5,
     );
+    // Una edición por el camino real (apply_edit): cava un cráter donde mira la
+    // cámara, así el PNG verifica también la mecánica romper, no sólo el render.
+    let ro = camera.eye + world_dim() * 0.5;
+    let rd = (camera.target - camera.eye).normalize();
     let w_arc = world.clone();
     let canvas: View<Msg> = View::new(fill()).gpu_paint_with(move |device, queue, encoder, target, _rect, vp| {
         let mut guard = w_arc.lock().unwrap();
         let w = guard.get_or_insert_with(|| World::build(device, queue, DIM_XZ, SEED));
+        w.apply_edit(queue, [ro.x, ro.y, ro.z], [rd.x, rd.y, rd.z], false);
         w.animate(0.6);
         w.render(device, queue, encoder, target, vp, &camera);
     });

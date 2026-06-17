@@ -4,18 +4,21 @@
 //! sólo acá, sin reescribir el bucle.
 
 use llimphi_3d::glam::{Mat4, Vec3};
-use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, VoxelRenderer};
+use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// Mundo render-able: el motor voxel (terreno) + una malla de triángulos (el
-/// monumento), compuestos por [`Scene3d`] en un depth compartido.
+/// Mundo render-able + editable: el motor voxel (terreno) + una malla de
+/// triángulos (el monumento), compuestos por [`Scene3d`] en un depth
+/// compartido. Conserva el [`VoxelGrid`] para editar (romper/colocar) por
+/// raycast y subir incremental con `sync`.
 pub struct World {
     scene: Scene3d,
     voxel: VoxelRenderer,
     monument: Renderer3d,
+    grid: VoxelGrid,
     dim: [u32; 3],
 }
 
@@ -43,8 +46,52 @@ impl World {
             scene: Scene3d::new(),
             voxel,
             monument,
+            grid,
             dim,
         }
+    }
+
+    /// Edita el mundo por **raycast** desde un origen/dirección (espacio de
+    /// grilla = `eye_mundo + dim/2`): `build=false` cava un cráter en el voxel
+    /// golpeado; `build=true` deposita un bloque en la celda vacía adyacente.
+    /// Sube sólo lo tocado (`sync` incremental). Devuelve `true` si pegó algo.
+    /// Se llama desde el hilo GPU (necesita `queue`).
+    pub fn apply_edit(&mut self, queue: &wgpu::Queue, origin: [f32; 3], dir: [f32; 3], build: bool) -> bool {
+        let max = self.dim[0] as f32 * 3.0;
+        let Some(hit) = llimphi_voxel::raycast(&self.grid, origin, dir, max) else {
+            return false;
+        };
+        if build {
+            let [px, py, pz] = hit.place;
+            let r = 1i32;
+            for dz in -r..=r {
+                for dy in -r..=r {
+                    for dx in -r..=r {
+                        let (x, y, z) = (px + dx, py + dy, pz + dz);
+                        if x >= 0 && y >= 0 && z >= 0 {
+                            self.grid.set(x as u32, y as u32, z as u32, [222, 184, 96]);
+                        }
+                    }
+                }
+            }
+        } else {
+            let [cx, cy, cz] = hit.cell;
+            let r = 4i32;
+            for dz in -r..=r {
+                for dy in -r..=r {
+                    for dx in -r..=r {
+                        if dx * dx + dy * dy + dz * dz <= r * r {
+                            let (x, y, z) = (cx + dx, cy + dy, cz + dz);
+                            if x >= 0 && y >= 0 && z >= 0 {
+                                self.grid.clear(x as u32, y as u32, z as u32);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.voxel.sync(queue, &mut self.grid);
+        true
     }
 
     /// Centro de órbita sugerido (un poco sobre el nivel medio del mundo).
