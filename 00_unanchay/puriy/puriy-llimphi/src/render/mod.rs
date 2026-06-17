@@ -789,7 +789,12 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // contenedor). Llimphi escala preservando aspect ratio.
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
-        let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
+        // `image-rendering` (Fase 7.1239): fija la calidad de muestreo de la
+        // imagen (`pixelated`/`crisp-edges` → nearest; `smooth` → bilineal).
+        let peniko = with_image_rendering(
+            PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height }),
+            b.image_rendering,
+        );
         return match b.object_fit {
             Some(fit) => image_fit_view(b, peniko, fit, zoom),
             None => image_view(img.width, img.height, zoom).image(peniko),

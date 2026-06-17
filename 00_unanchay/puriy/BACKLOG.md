@@ -503,14 +503,38 @@ familia se agota acá. Test: `checkbox_glyph_color_aplica_accent_solo_marcado_fa
 (`grupo_04`: accent+marcado→accent, auto→neutro, desmarcado→neutro, alpha<255 se
 respeta).
 
+### 7.1239 ✅ — `image-rendering` fija la calidad de muestreo de `<img>`
+
+`image-rendering` parsea/computa desde Fase 7.xxx y llega a
+`BoxNode.image_rendering` (enum `Auto | Smooth | CrispEdges | Pixelated`), pero
+el wire dibujaba todas las imágenes con la calidad default de peniko. Ahora el
+wire fija la calidad de muestreo de la `ImageBrush` según el modo:
+- `image_quality_for(ImageRendering) -> Option<ImageQuality>`: `auto` → `None`
+  (default `Medium`); `pixelated`/`crisp-edges` → `Low` (nearest, sin AA —
+  pixel art nítido); `smooth` → `High` (bilineal).
+- `with_image_rendering(peniko, r)`: aplica `peniko.with_quality(q)` cuando el
+  modo no es `auto`.
+Se aplica a los dos sitios de pintado de `<img>` (`render/mod.rs` directo +
+`render/image.rs` dentro de `<a>`); ambos terminan en `scene.draw_image`, que
+respeta el `sampler.quality` de la brush (verificado: el path del compositor
+`.image()` también dibuja con `draw_image`, preservando el sampler). Cambio de
+wire + 1 línea de engine (re-export de `ImageRendering` en el root de
+`puriy_engine`, antes sólo accesible vía `style::`). Test:
+`image_rendering_mapea_calidad_de_muestreo_fase_7_1239` (`grupo_04`: mapeo de
+los 4 modos + `with_image_rendering` fija `sampler.quality`, `auto` conserva
+`Medium`). v1: sólo el `<img>` de contenido — `background-image`, `border-image`
+y el escalado de `<canvas>` quedan en la calidad default.
+
 ### Próximos huecos del mismo bloque (a atacar en orden)
 
-- **`caret-color`** — color del caret del text-input. El caret lo pinta el
-  widget `text_input_view` de llimphi; hay que ver si `TextInputPalette` expone
-  el color del caret y cablear `b.caret_color`.
-- **`image-rendering`** — `pixelated`/`crisp-edges` → muestreo nearest en `<img>`;
-  `auto`/`smooth` → bilineal. Mapea al modo de sampling de peniko en `image.rs`.
+- **`caret-color`** — DESCARTADO por ahora: el `text_input_view` de llimphi **no
+  pinta caret** (línea explícita "sin caret glyph" en
+  `widgets/text-input/src/lib.rs`). Sin caret renderizado, `caret-color` sería
+  no-op. Reactivar cuando el widget dibuje un caret (requeriría agregar un campo
+  `caret` a `TextInputPalette` y cablear `b.caret_color`).
 - **`appearance`** — `none` desactiva el chrome nativo de los controles de
   formulario; evaluar qué controles del wire respetan el reset.
+- **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
+  los otros sitios de imagen.
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).

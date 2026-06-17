@@ -64,6 +64,34 @@ pub(crate) fn object_fit_scale(
     }
 }
 
+/// Mapea `image-rendering` CSS a la calidad de muestreo de peniko (Fase 7.1239).
+/// `auto` → `None` (conserva el default `Medium`). `pixelated` y `crisp-edges`
+/// → `Low` (nearest-neighbour, sin AA al escalar — pixel art nítido). `smooth`
+/// → `High` (bilineal/trilineal, máximo suavizado).
+pub(crate) fn image_quality_for(
+    r: puriy_engine::ImageRendering,
+) -> Option<llimphi_raster::peniko::ImageQuality> {
+    use llimphi_raster::peniko::ImageQuality;
+    use puriy_engine::ImageRendering as IR;
+    match r {
+        IR::Auto => None,
+        IR::Smooth => Some(ImageQuality::High),
+        IR::CrispEdges | IR::Pixelated => Some(ImageQuality::Low),
+    }
+}
+
+/// Aplica el `image-rendering` del box a la `ImageBrush` (Fase 7.1239). Si el
+/// modo no es `auto`, fija la calidad de muestreo; vello la respeta al escalar.
+pub(crate) fn with_image_rendering(
+    peniko: PenikoImage,
+    r: puriy_engine::ImageRendering,
+) -> PenikoImage {
+    match image_quality_for(r) {
+        Some(q) => peniko.with_quality(q),
+        None => peniko,
+    }
+}
+
 /// View de un `<img>` con `object-fit` explícito (Fase 7.230). A diferencia de
 /// [`image_view`] (que delega el encaje al compositor — siempre contain), aquí
 /// dibujamos la imagen a mano (`paint_with`) con el escalado pedido y la
@@ -183,7 +211,10 @@ pub(crate) fn render_link_subtree(
     }
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
-        let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
+        let peniko = with_image_rendering(
+            PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height }),
+            b.image_rendering,
+        );
         return match b.object_fit {
             Some(fit) => image_fit_view(b, peniko, fit, zoom).on_click(nav_msg(target)),
             None => image_view(img.width, img.height, zoom)

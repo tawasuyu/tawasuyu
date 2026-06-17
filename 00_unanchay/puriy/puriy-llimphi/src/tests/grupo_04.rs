@@ -1109,3 +1109,31 @@
             llimphi_raster::peniko::Color::from_rgba8(10, 20, 30, 128)
         );
     }
+
+    #[test]
+    fn image_rendering_mapea_calidad_de_muestreo_fase_7_1239() {
+        // `image-rendering` fija la calidad de muestreo de la ImageBrush.
+        use llimphi_raster::peniko::ImageQuality;
+        use puriy_engine::ImageRendering as IR;
+        // Mapeo CSS → peniko: auto deja el default (None), pixelated/crisp-edges
+        // → Low (nearest), smooth → High (bilineal).
+        assert_eq!(image_quality_for(IR::Auto), None);
+        assert_eq!(image_quality_for(IR::Smooth), Some(ImageQuality::High));
+        assert_eq!(image_quality_for(IR::CrispEdges), Some(ImageQuality::Low));
+        assert_eq!(image_quality_for(IR::Pixelated), Some(ImageQuality::Low));
+        // with_image_rendering fija sampler.quality; `auto` conserva el default
+        // Medium de la brush.
+        let mk = || {
+            PenikoImage::new(ImageData {
+                data: Blob::from(vec![255u8; 4]),
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: 1,
+                height: 1,
+            })
+        };
+        assert_eq!(with_image_rendering(mk(), IR::Auto).sampler.quality, ImageQuality::Medium);
+        assert_eq!(with_image_rendering(mk(), IR::Pixelated).sampler.quality, ImageQuality::Low);
+        assert_eq!(with_image_rendering(mk(), IR::CrispEdges).sampler.quality, ImageQuality::Low);
+        assert_eq!(with_image_rendering(mk(), IR::Smooth).sampler.quality, ImageQuality::High);
+    }
