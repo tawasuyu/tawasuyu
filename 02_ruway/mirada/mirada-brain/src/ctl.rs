@@ -99,6 +99,15 @@ pub struct WindowLine {
 /// falta `XDG_RUNTIME_DIR`, derivamos el runtime dir estándar `/run/user/<uid>`
 /// del UID real del proceso, así compositor y clientes COINCIDEN siempre.
 pub fn default_socket_path() -> PathBuf {
+    // Override explícito: el compositor lo siembra en el entorno de la sesión
+    // (`MIRADA_CTL_SOCK`) apuntando al socket REAL que ligó. Es la cura del DM
+    // root: el compositor corre con `XDG_RUNTIME_DIR=/run/mirada` y liga ahí,
+    // pero las apps de la sesión (pata, mirada-ctl) tienen
+    // `XDG_RUNTIME_DIR=/run/user/<uid>` y miraban otra ruta. Con esta env todas
+    // apuntan al mismo socket.
+    if let Some(p) = std::env::var_os("MIRADA_CTL_SOCK") {
+        return PathBuf::from(p);
+    }
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         return PathBuf::from(dir).join("mirada-ctl.sock");
     }

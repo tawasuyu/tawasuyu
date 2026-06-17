@@ -946,10 +946,16 @@ impl App {
         };
         let bus_path = format!("{xrd}/bus");
         let dbus_addr = format!("unix:path={bus_path}");
+        // El socket de control vive en el runtime dir del COMPOSITOR (p. ej.
+        // /run/mirada), no en el del usuario. Lo pasamos absoluto para que pata
+        // y `mirada-ctl` de la sesión hablen con el Cerebro (sin esto, el
+        // switcher de workspaces y el task-manager quedaban mudos).
+        let ctl_sock = mirada_brain::ctl::default_socket_path().display().to_string();
         self.session_env = vec![
             ("XDG_RUNTIME_DIR".to_string(), xrd),
             ("WAYLAND_DISPLAY".to_string(), wl),
             ("DBUS_SESSION_BUS_ADDRESS".to_string(), dbus_addr.clone()),
+            ("MIRADA_CTL_SOCK".to_string(), ctl_sock),
         ];
         // Levanta el bus de sesión D-Bus como el usuario, si no hay uno, y
         // espera (acotado) a que el socket exista: si lanzáramos waybar/GTK
