@@ -90,10 +90,10 @@ const MODULES: &[(&str, &str, &str)] = &[
     ("agora", "◯", "wawa-panel-mod-agora"),
 ];
 
-/// Índice de la pestaña "Información" (2ª) — para el menú Ayuda.
-const INFO_DIENTE: usize = 1;
-/// Índice de la pestaña "Perfiles" (3ª) — para saltar tras crear/duplicar.
-const PERFILES_DIENTE: usize = 2;
+/// Índice del panel "Acerca" (último) — para el menú Ayuda (estado/about).
+const INFO_DIENTE: usize = 4;
+/// Índice del panel "Vista" (1º) — Perfiles vive ahí; saltamos tras crear/duplicar.
+const PERFILES_DIENTE: usize = 0;
 
 // =====================================================================
 // Información del host (Linux /proc)
@@ -819,61 +819,100 @@ struct PanelPestana {
     schema: Schema,
 }
 
-/// Arma el rail aprovechando la triple jerarquía: pocas pestañas, cada una con
-/// varios items (sin paneles de un solo item).
+/// Arma el rail en **cinco paneles** (la IA pedida 2026-06-17): cada panel es un
+/// diente del rail; sus secciones son las pestañas del sidebar; el contenido de
+/// la pestaña activa va al canvas. Las secciones conservan su prefijo de ruteo
+/// (`mirada::`/`pata::`/`wawa::`/`perfiles`/`barras`), así editar cualquiera
+/// aplica al destino correcto (las `mirada::`/`pata::` editan el PERFIL ACTIVO y
+/// `sync_active_profile` las guarda).
 ///
-/// - **Sistema** (categoría SO): Apariencia · Idioma · Interfaz (llimphi) ·
-///   Arranque (arje como init) · Módulos.
-/// - **Información** (categoría SO, sólo lectura): Estado del equipo · Acerca.
-/// - **mirada** (app suscrita): sus secciones (Teselado, Decoración, …).
-/// - **pata** (app suscrita): sus secciones (General, Superficie N, …).
+/// - **Vista**: Perfiles · Themes (apariencia+teselado+decoración) · Wallpapers ·
+///   Vistas (espacial+monitores) · Interfaz/animaciones/dientes · Terminal · Atajos.
+/// - **Pata**: lista de barras + config de cada superficie.
+/// - **Inicio**: arranque (arje como init, DM) · autostarts.
+/// - **Sistema**: idioma/hora · módulos.
+/// - **Acerca**: menú raíz (openbox) · estado del equipo · acerca.
+///
+/// Pendiente (siguientes iteraciones): Themes como biblioteca (add/dup/rename),
+/// Reglas-hyprland, reuso del editor Prezi 2D de pluma para mapear workspaces,
+/// sonido/teclado/mouse, y la relación many2many barras↔perfiles. Íconos SVG
+/// a color para los dientes (hoy glifos).
 fn pestanas(m: &Model) -> Vec<PanelPestana> {
-    let mut out = vec![
-        PanelPestana {
-            title: "Sistema".into(),
-            icon: "⚙".into(),
-            schema: {
-                let mut s = sistema_schema(&m.cfg);
-                // Fondo: muestra/elige el wallpaper del perfil activo (mirada).
-                s.sections.push(fondo_section(&m.mirada.wallpaper_path));
-                // Fondo automático: proveedor + rotación (daemon mirada-wallpaper).
-                s.sections.push(fondo_auto_section(&m.cfg));
-                s
-            },
-        },
-        PanelPestana {
-            title: "Información".into(),
-            icon: "🖥".into(),
-            schema: info_schema(&m.host),
-        },
-        PanelPestana {
-            title: "Perfiles".into(),
-            icon: "⌨".into(),
-            schema: perfiles_schema(m),
-        },
-    ];
-    if m.cfg.module_enabled("mirada") {
-        let mut schema = prefix_schema(m.mirada.schema(), "mirada");
-        // El keymap vive en su propio RON; se edita como una sección más de la
-        // pestaña mirada (id ya prefijado para que el ruteo lo reconozca).
-        schema.sections.push(keymap_section(&m.keymap_rows));
-        out.push(PanelPestana {
-            title: "mirada".into(),
-            icon: "☸".into(),
-            schema,
-        });
+    let mirada_on = m.cfg.module_enabled("mirada");
+    let pata_on = m.cfg.module_enabled("pata");
+    // Secciones de mirada (config del perfil activo), prefijadas; las repartimos
+    // por id corto entre las pestañas de Vista.
+    let mir: Vec<Section> = if mirada_on {
+        prefix_schema(m.mirada.schema(), "mirada").sections
+    } else {
+        Vec::new()
+    };
+    let take = |id: &str| mir.iter().find(|s| s.id == format!("mirada::{id}")).cloned();
+
+    // ---- Panel VISTA ----
+    let mut vista = Schema::new();
+    for s in perfiles_schema(m).sections {
+        vista.sections.push(s); // Perfiles (lista limpia: acciones + perfiles)
     }
-    if m.cfg.module_enabled("pata") {
-        let mut schema = prefix_schema(m.pata.schema(), "pata");
-        // La lista de barras (agregar/borrar/nombrar/on-off) como primera sección.
-        schema.sections.insert(0, barras_section(&m.pata));
-        out.push(PanelPestana {
-            title: "pata".into(),
-            icon: "🎛".into(),
-            schema,
-        });
+    vista.sections.push(appearance_section(&m.cfg)); // Themes: apariencia
+    if let Some(s) = take("teselado") {
+        vista.sections.push(s); // Themes: teselado
     }
-    out
+    if let Some(s) = take("decoracion") {
+        vista.sections.push(s); // Themes: decoración
+    }
+    if let Some(s) = take("fondo") {
+        vista.sections.push(s); // Wallpapers
+    }
+    vista.sections.push(fondo_auto_section(&m.cfg)); // Wallpapers: automático/proveedor
+    if let Some(s) = take("vista_espacial") {
+        vista.sections.push(s); // Vistas: Prezi
+    }
+    if let Some(s) = take("monitores") {
+        vista.sections.push(s); // Vistas: monitores/workspaces
+    }
+    vista.sections.push(interfaz_section(&m.cfg)); // Animaciones/interfaz/dientes
+    if let Some(s) = take("terminal") {
+        vista.sections.push(s); // Terminal dropdown
+    }
+    if mirada_on {
+        vista.sections.push(keymap_section(&m.keymap_rows)); // Atajos
+    }
+
+    // ---- Panel PATA ----
+    let mut pata = Schema::new();
+    if pata_on {
+        pata.sections.push(barras_section(&m.pata));
+        for s in prefix_schema(m.pata.schema(), "pata").sections {
+            pata.sections.push(s);
+        }
+    }
+
+    // ---- Panel INICIO ----
+    let mut inicio = Schema::new();
+    inicio.sections.push(arranque_section());
+
+    // ---- Panel SISTEMA ----
+    let mut sistema = Schema::new();
+    sistema.sections.push(idioma_section(&m.cfg));
+    sistema.sections.push(modulos_section(&m.cfg));
+
+    // ---- Panel ACERCA ----
+    let mut acerca = Schema::new();
+    if let Some(s) = take("menu") {
+        acerca.sections.push(s); // menú raíz (openbox)
+    }
+    for s in info_schema(&m.host).sections {
+        acerca.sections.push(s); // estado del equipo + acerca
+    }
+
+    vec![
+        PanelPestana { title: "Vista".into(), icon: "✦".into(), schema: vista },
+        PanelPestana { title: "Pata".into(), icon: "🎛".into(), schema: pata },
+        PanelPestana { title: "Inicio".into(), icon: "⏻".into(), schema: inicio },
+        PanelPestana { title: "Sistema".into(), icon: "⚙".into(), schema: sistema },
+        PanelPestana { title: "Acerca".into(), icon: "🖥".into(), schema: acerca },
+    ]
 }
 
 /// Prefija el id de cada sección con el destino de ruteo (`"mirada::teselado"`),
@@ -938,9 +977,9 @@ fn perfiles_schema(m: &Model) -> Schema {
                 .icon(icono_perfil(&name))
                 .help(
                     "Perfil de escritorio completo: look + decoración + layout + \
-                     atajos + barra. Activalo con el toggle; mientras está activo, \
-                     su configuración aparece anidada debajo (▸) y se guarda dentro \
-                     del perfil.",
+                     atajos + barra. Activalo y editá su config en las pestañas de \
+                     Vista (Themes, Wallpapers, Vistas, Atajos): editan el perfil \
+                     activo y se guardan dentro de él.",
                 )
                 // Activar un perfil es una ACCIÓN (no un interruptor): botón, no
                 // radio. El activo ya se marca con «●» en el título de su diente.
@@ -950,11 +989,9 @@ fn perfiles_schema(m: &Model) -> Schema {
                     Field::button("activo", format!("Usar «{name}»"))
                 }),
         );
-        // Config ANIDADA bajo el perfil activo (jerarquizada en el sidebar): sus
-        // secciones rutean a mirada/pata → editan ESTE perfil (sync lo guarda).
-        if is_active {
-            schema = anidar_config_perfil(schema, m);
-        }
+        // La config del perfil activo ya NO se anida acá: vive en las pestañas
+        // dedicadas del panel Vista (Themes/Wallpapers/Vistas/Atajos), que editan
+        // el perfil activo. Perfiles queda como lista limpia.
     }
     schema
 }
@@ -963,6 +1000,7 @@ fn perfiles_schema(m: &Model) -> Schema {
 /// zonas (mirada) + atajos + barra (pata)— DEBAJO de él en el sidebar, con el
 /// título indentado (▸). Conservan su prefijo `mirada::`/`pata::` para que el
 /// ruteo las aplique al perfil activo (no a la pestaña «perfiles»).
+#[allow(dead_code)] // la config del perfil activo ahora vive en pestañas dedicadas de Vista.
 fn anidar_config_perfil(mut schema: Schema, m: &Model) -> Schema {
     let sangrar = |s: &mut Section| s.title = format!("  ▸ {}", s.title);
     let mut mir = prefix_schema(m.mirada.schema(), "mirada");
@@ -1203,6 +1241,7 @@ fn keymap_section(rows: &[Vec<String>]) -> Section {
 }
 
 /// La pestaña "Sistema": varios items de configuración del SO.
+#[allow(dead_code)] // reemplazado por el reparto en 5 paneles de `pestanas`.
 fn sistema_schema(cfg: &WawaConfig) -> Schema {
     Schema::new()
         .section(appearance_section(cfg))
@@ -1292,6 +1331,7 @@ fn arranque_section() -> Section {
 
 /// Fondo de escritorio: muestra la imagen actual del perfil activo y abre el
 /// diálogo de archivos para elegir otra (toggle de acción).
+#[allow(dead_code)] // Wallpapers usa la sección `fondo` de mirada (perfil activo).
 fn fondo_section(wallpaper: &str) -> Section {
     let actual = if wallpaper.trim().is_empty() {
         "(ninguna)".to_string()
