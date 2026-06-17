@@ -28,4 +28,9 @@ AUTO="${HOME}/.config/mirada/autostart"
 LINE='pata-llimphi'
 grep -qxF "$LINE" "$AUTO" 2>/dev/null || echo "$LINE" >> "$AUTO"
 
+# Volcá el perfil ACTIVO a la config viva (config.ron/keymap.ron/launcher.toml)
+# para que el escritorio arranque coherente con él — y no con un launcher.toml
+# viejo de otra vista. Best-effort: si wawa-panel no está, seguimos igual.
+command -v wawa-panel >/dev/null 2>&1 && wawa-panel --apply-active || true
+
 exec mirada-compositor --drm

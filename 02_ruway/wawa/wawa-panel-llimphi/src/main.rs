@@ -700,6 +700,21 @@ fn main() {
         shot_panel(&out, pest, item);
         return;
     }
+    // `--apply-active`: vuelca el perfil ACTIVO a la config viva (config.ron +
+    // keymap.ron + launcher.toml + theme) y sale, sin abrir ventana. Lo corre el
+    // script de sesión al arrancar para que el escritorio arranque coherente con
+    // el perfil activo (antes un launcher.toml viejo —p.ej. de mac— pisaba el
+    // default y «arrancaba algo random que no era el perfil activo»).
+    if args.iter().any(|a| a == "--apply-active") {
+        let mut m = build_model(None);
+        let active = m.dprofiles.active.clone();
+        if !active.is_empty() {
+            activate_profile(&mut m, &active);
+        }
+        flush_saves(&mut m);
+        eprintln!("wawa-panel: perfil activo «{active}» aplicado a la config viva");
+        return;
+    }
     llimphi_ui::run::<Panel>();
 }
 

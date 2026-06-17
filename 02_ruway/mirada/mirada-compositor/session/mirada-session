@@ -32,6 +32,9 @@ export QT_QPA_PLATFORM="wayland;xcb"
 export SDL_VIDEODRIVER=wayland
 export _JAVA_AWT_WM_NONREPARENTING=1
 
+# Volcá el perfil ACTIVO a la config viva para arrancar coherente con él.
+command -v wawa-panel >/dev/null 2>&1 && wawa-panel --apply-active || true
+
 # El backend DRM toma la TTY entera. Los programas de arranque van en
 # ~/.config/mirada/autostart (uno por línea).
 exec mirada-compositor --drm
