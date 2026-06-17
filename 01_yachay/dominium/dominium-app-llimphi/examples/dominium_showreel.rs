@@ -75,7 +75,7 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Point, Stroke};
 
 use dominium_canvas_llimphi::canvas_view;
 
-use crate::consts::{KMEANS_REFRESH_TICKS, LEMMINGS, SNAPSHOT_RING_CAP, TRAIL_CAP};
+use crate::consts::{KMEANS_REFRESH_TICKS, SNAPSHOT_RING_CAP, TRAIL_CAP};
 use crate::packs::default_conceptos;
 use crate::worldgen::bioma_palette;
 
@@ -83,12 +83,12 @@ const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Ticks que avanzamos ANTES de empezar a capturar — deja que la sociedad
 /// arranque (réplicas, primeros asentamientos) antes del primer frame.
-const N_TICKS_PRE: u64 = 8;
+const N_TICKS_PRE: u64 = 120;
 
 /// Ticks de simulación que avanzamos POR cada frame capturado. Con 1 tick
 /// el cambio entre frames es imperceptible (el campo medio se mueve lento);
 /// con varios, lemmings/réplicas/migración se mueven a ojo desnudo.
-const TICKS_PER_FRAME: u64 = 4;
+const TICKS_PER_FRAME: u64 = 1;
 
 /// Grilla del reel — MÁS CHICA que la de la app (240). Cada celda emite un
 /// techo + caras laterales: a 240×240 son ~150k polígonos y, a 1600×900, el
@@ -96,7 +96,14 @@ const TICKS_PER_FRAME: u64 = 4;
 /// una grilla menor la maqueta es idéntica en carácter pero la escena pesa
 /// una fracción, y el render sale vivo de punta a punta. (La app real sigue
 /// usando 240; esto es sólo presentación del reel.)
-const SHOW_GRID: usize = 120;
+const SHOW_GRID: usize = 64;
+
+/// Lemmings sembrados en el reel. `consts::LEMMINGS` (2500) está dimensionado
+/// para la grilla 240×240 de la app; aplicado a la grilla chica del reel daría
+/// una densidad ~15× y un boom-bust violento. Esta cifra siembra al mundo
+/// chico cerca de su población de equilibrio (N* ≈ 1000 para grid=64), así el
+/// pre-calentamiento converge limpio a la meseta.
+const SHOW_LEMMINGS: usize = 180;
 
 /// Color de acento (teal de marca tawasuyu).
 const ACCENT: Color = Color::from_rgba8(0x2B, 0xD9, 0xA6, 0xFF);
@@ -159,7 +166,7 @@ fn demo_weights() -> ZWeights {
 fn capture_snapshots(n: usize) -> Vec<SimSnapshot> {
     let rng_seed = 0xD0_31_31_07_u64;
     let seeder =
-        |s: u64| dominium_core::worldgen::seed(s, SHOW_GRID, LEMMINGS, default_conceptos());
+        |s: u64| dominium_core::worldgen::seed(s, SHOW_GRID, SHOW_LEMMINGS, default_conceptos());
     let mut sim = Sim::new(
         seeder(rng_seed),
         demo_params(),
@@ -433,10 +440,11 @@ fn build_view(
     // avanza lineal con `t`, así CADA frame difiere del anterior por igual.
     let cam = seg(t, 0.06, 1.0) as f64;
     // Zoom: acercamiento parejo y perceptible (lineal). La grilla del reel es
-    // 120 (la mitad lineal de la app), así que la escala arranca alta para
-    // que el continente llene el cuadro y casi se duplica hacia el primer
-    // plano. Con culling la escena se mantiene liviana en todo el rango.
-    let scale = lerp(6.0, 11.0, cam) as f32;
+    // chica (64), así que arrancamos con la escena llenando el cuadro y la
+    // escala se DUPLICA hacia el primer plano — el zoom es la fuente principal
+    // de movimiento del reel, no la sim. Con culling la escena se mantiene
+    // liviana en todo el rango.
+    let scale = lerp(9.0, 18.0, cam) as f32;
 
     // Paneo: desplazamos la geometría del plan (sin tocar su bbox), así
     // `canvas_view` —que ancla en el centro del bbox— deja la maqueta corrida
@@ -444,8 +452,8 @@ fn build_view(
     // curva en Y) para que la cámara cruce el continente revelando regiones
     // distintas a medida que el zoom aprieta. El nodo sigue siendo del tamaño
     // del viewport (estable en el render headless).
-    const PAN_AMP_X: f64 = 620.0;
-    const PAN_AMP_Y: f64 = 360.0;
+    const PAN_AMP_X: f64 = 360.0;
+    const PAN_AMP_Y: f64 = 220.0;
     // X: barrido lineal izquierda→derecha (velocidad constante).
     let pan_x = lerp(PAN_AMP_X, -PAN_AMP_X, cam);
     // Y: avance lineal arriba→abajo MÁS un arco (sin) — sobrevuelo, no recta;
