@@ -451,13 +451,28 @@ cada capa con `bg_blend_for(&list, idx)` y envuelve el pintado de la capa 0
 mapeo `blend_mode_peniko` (16 modos + normal→None), ciclado `bg_blend_for`, draw
 extra por blend (`grupo_04`), box-tree (`group03`: la lista llega al box).
 
-### 7.1237 — `mix-blend-mode` se pinta (pendiente)
+### 7.1237 ✅ — `mix-blend-mode` se pinta
 
-El elemento entero (su subárbol) se mezcla contra su backdrop. Más complejo que
-background-blend-mode: requiere envolver el `paint_range` del nodo (o su `View`)
-en una capa de blend contra todo lo pintado antes en el stacking context. El dato
-ya está en `BoxNode.mix_blend_mode`. Evaluar si se hace en el wire (envolver el
-`View` del nodo) o como post-pasada estilo filter.
+El elemento entero (su subárbol) se mezcla contra su backdrop. Resuelto
+**envolviendo el `View` del nodo** (no post-pasada): se agregó el campo
+`View::blend: Option<BlendMode>` al compositor (builder `View::blend(bm)`,
+campo en `MountedNode`, destructuring en `map` + `mount`). En `paint_range` se
+abre una capa de mezcla (`push_layer(bm, …)`) alrededor del rect del nodo
+**antes del alpha** (capa más externa) que envuelve fill + contenido + hijos +
+su propia opacidad; se cierra al fin del subárbol vía el `layer_stack`, mezclando
+contra todo lo ya pintado. El wire `puriy-llimphi` lee `b.mix_blend_mode`
+(parseo de Fase 7.255), lo mapea con `blend_mode_peniko` (reusado de 7.1236;
+`Normal→None`) y llama `view.blend(bm)`.
+
+**Limitación v1** (idéntica a mask/filter/bg-blend): el backdrop es la escena ya
+pintada, no un fondo aislado del subárbol — exacto con contenido opaco debajo,
+aproximado si la capa de abajo es el contenido del padre.
+
+Tests: builder del compositor (`view.rs` `blend_setea_campo_sin_tocar_clip_ni_filter`:
+setea el campo, ortogonal a clip/filter/alpha, sobrevive el mount); box-tree
+(`group03` `mix_blend_mode_llega_al_box_fase_7_1237`: el modo llega al box, sin
+la prop queda `Normal`); el mapeo `blend_mode_peniko` ya estaba cubierto por las
+`blend_tests` de 7.1236. **Familia blend CERRADA.**
 
 ---
 

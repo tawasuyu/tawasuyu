@@ -680,3 +680,31 @@ use crate::Engine;
             "sin la propiedad, la lista queda vacía (default normal)"
         );
     }
+
+    #[test]
+    fn mix_blend_mode_llega_al_box_fase_7_1237() {
+        // `mix-blend-mode: multiply` computa y aterriza en
+        // `BoxNode.mix_blend_mode`, listo para que el wire abra una capa de
+        // mezcla del nodo entero contra su backdrop. Sin la propiedad, el box
+        // queda en `Normal` (source-over, sin capa).
+        use crate::style::BlendMode;
+        let html = r##"<html><body>
+            <div id="x" style="mix-blend-mode: multiply">x</div>
+            <p id="y">y</p>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut x_mode: Option<BlendMode> = None;
+        let mut y_mode: Option<BlendMode> = None;
+        doc.box_tree.walk(|b| match b.element_id.as_deref() {
+            Some("x") => x_mode = Some(b.mix_blend_mode),
+            Some("y") => y_mode = Some(b.mix_blend_mode),
+            _ => {}
+        });
+        assert_eq!(x_mode, Some(BlendMode::Multiply), "el modo llega al box");
+        assert_eq!(
+            y_mode,
+            Some(BlendMode::Normal),
+            "sin la propiedad, el box queda en Normal (default)"
+        );
+    }

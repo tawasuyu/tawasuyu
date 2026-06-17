@@ -713,6 +713,15 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
         view = view.filter(fops);
     }
 
+    // `mix-blend-mode` (Fase 7.1237): el nodo entero (su subárbol) se mezcla
+    // contra su backdrop con el modo CSS resuelto. El compositor abre una capa
+    // de blend alrededor del rect del nodo y la cierra al fin del subárbol; el
+    // dato llega del box (`b.mix_blend_mode`, parseo de Fase 7.255). `normal`
+    // → None (sin capa, source-over). Ortogonal a clip/mask/filter.
+    if let Some(bm) = blend_mode_peniko(b.mix_blend_mode) {
+        view = view.blend(bm);
+    }
+
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {
         link_color

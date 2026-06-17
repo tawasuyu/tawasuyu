@@ -75,6 +75,7 @@ pub fn mount_recursive<Msg: Clone>(
         layout_builder,
         backdrop_blur,
         filter,
+        blend,
         children,
     } = v;
     let parent_idx = out.len();
@@ -140,6 +141,7 @@ pub fn mount_recursive<Msg: Clone>(
         is_layout_builder: layout_builder.is_some(),
         backdrop_blur,
         filter,
+        blend,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());
@@ -721,6 +723,23 @@ pub fn paint_range<Msg>(
         if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, r) {
             xf_stack.push((node.subtree_end, cur_xf));
             cur_xf *= centered;
+        }
+        // `mix-blend-mode` (Fase 7.1237): abrí una capa de mezcla para el
+        // subárbol del nodo con el modo CSS resuelto. Va ANTES del alpha (es la
+        // capa más externa) para que el elemento entero —incluida su propia
+        // opacidad— se mezcle como una unidad contra el backdrop ya pintado. Al
+        // cerrarse (loop de cierre / drain final) vello compone el subárbol
+        // aislado con el blend indicado. v1: el backdrop es la escena ya
+        // pintada, no un fondo aislado (exacto con contenido opaco debajo).
+        if let Some(bm) = node.blend {
+            let rect = KurboRect::new(
+                r.x as f64,
+                r.y as f64,
+                (r.x + r.w) as f64,
+                (r.y + r.h) as f64,
+            );
+            scene.push_layer(Fill::NonZero, bm, 1.0, cur_xf, &rect);
+            layer_stack.push((node.subtree_end, None));
         }
         // Alpha de subtree: push ANTES de cualquier paint de este nodo
         // para que fill/text/image/painter/children entren en la misma

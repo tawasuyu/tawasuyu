@@ -61,6 +61,7 @@ impl<Msg> View<Msg> {
             layout_builder: None,
             backdrop_blur: None,
             filter: Vec::new(),
+            blend: None,
             children: Vec::new(),
         }
     }
@@ -100,6 +101,22 @@ impl<Msg> View<Msg> {
     /// asome detrás. Adecuado para nodos opacos.
     pub fn filter(mut self, ops: Vec<FilterOp>) -> Self {
         self.filter = ops;
+        self
+    }
+
+    /// Mezcla el **nodo entero** (su subárbol) contra su backdrop con el modo
+    /// `bm` (CSS `mix-blend-mode`). El runtime abre una capa aislada
+    /// (`push_layer(bm, …)`) alrededor del rect del nodo que envuelve fill +
+    /// contenido + hijos; al cerrarla, el subárbol se compone contra todo lo
+    /// pintado antes en el stacking context según `bm` (p. ej. `Mix::Multiply`).
+    /// Es **ortogonal** a clip/mask/filter/alpha (un nodo puede llevar todos).
+    /// Fase 7.1237.
+    ///
+    /// **Limitación v1** (igual que mask/filter): el backdrop es lo que ya está
+    /// pintado en la escena, no un fondo aislado del subárbol — exacto cuando
+    /// debajo hay contenido opaco, aproximado si la capa de abajo es el padre.
+    pub fn blend(mut self, bm: BlendMode) -> Self {
+        self.blend = Some(bm);
         self
     }
 
@@ -1538,6 +1555,25 @@ mod semantics_tests {
         assert!(v.backdrop_blur.is_none(), "filter NO es backdrop_blur");
         // Default: sin filtro.
         assert!(View::<()>::new(Style::default()).filter.is_empty());
+    }
+
+    #[test]
+    fn blend_setea_campo_sin_tocar_clip_ni_filter() {
+        // `.blend(bm)` guarda el modo de mezcla del nodo entero (CSS
+        // `mix-blend-mode`). Es ORTOGONAL a clip/filter/alpha. Fase 7.1237.
+        let bm = BlendMode::from(vello::peniko::Mix::Multiply);
+        let v = View::<()>::new(Style::default()).blend(bm);
+        assert_eq!(v.blend, Some(bm));
+        assert!(!v.clip, "blend NO activa clip (es ortogonal al recorte)");
+        assert!(v.filter.is_empty(), "blend NO es filter");
+        assert!(v.alpha.is_none(), "blend NO es alpha");
+        // Default: sin blend (source-over).
+        assert!(View::<()>::new(Style::default()).blend.is_none());
+        // El campo sobrevive el mount (llega al MountedNode).
+        use llimphi_layout::LayoutTree;
+        let mut layout = LayoutTree::new();
+        let mounted = mount(&mut layout, View::<()>::new(Style::default()).blend(bm));
+        assert_eq!(mounted.nodes[0].blend, Some(bm), "blend llega al MountedNode");
     }
 
     #[test]

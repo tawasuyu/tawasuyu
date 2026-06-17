@@ -674,6 +674,13 @@ pub struct View<Msg> {
     /// Filtros CSS (`filter: …`) sobre el propio subárbol del nodo. Vacío = sin
     /// filtro. Ver [`View::filter`] / [`FilterOp`]. Fase 7.1232.
     pub filter: Vec<FilterOp>,
+    /// **Modo de mezcla** del nodo entero contra su backdrop (CSS
+    /// `mix-blend-mode`). `Some(bm)` ⇒ el subárbol del nodo se rasteriza en una
+    /// capa aislada (`scene.push_layer(bm, …)` alrededor del rect) y se mezcla
+    /// con el modo `bm` contra todo lo pintado antes en el stacking context.
+    /// `None` = source-over normal (la abrumadora mayoría). Ver [`View::blend`].
+    /// Fase 7.1237.
+    pub blend: Option<BlendMode>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -755,6 +762,7 @@ impl<Msg: 'static> View<Msg> {
             layout_builder,
             backdrop_blur,
             filter,
+            blend,
             children,
         } = self;
         // Wrappers: cada callback que produce `Option<Msg>` se reenvía y su
@@ -800,6 +808,7 @@ impl<Msg: 'static> View<Msg> {
             ripple,
             backdrop_blur,
             filter,
+            blend,
             // — Msg simples —
             on_click: on_click.map(|m| f(m)),
             on_right_click: on_right_click.map(|m| f(m)),
@@ -1201,6 +1210,12 @@ pub struct MountedNode<Msg> {
     /// del nodo, **después** de la rasterización. Vacío = sin filtro. Fase
     /// 7.1232.
     pub filter: Vec<FilterOp>,
+    /// Modo de mezcla del nodo entero contra su backdrop (CSS `mix-blend-mode`).
+    /// Ver [`View::blend`] / [`MountedNode`]. `paint_range` abre una capa de
+    /// blend (`push_layer(bm, …)`) alrededor del rect del nodo que envuelve
+    /// fill + contenido + hijos y se cierra al fin del subárbol, mezclando el
+    /// resultado contra lo ya pintado. `None` = source-over. Fase 7.1237.
+    pub blend: Option<BlendMode>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.
