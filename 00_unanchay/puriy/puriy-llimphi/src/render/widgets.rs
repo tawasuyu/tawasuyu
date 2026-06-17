@@ -159,6 +159,34 @@ pub(crate) fn render_checkbox_radio(
     };
     let msg = if radio { Msg::SelectRadio(idx) } else { Msg::ToggleCheckbox(idx) };
     let size_px = (b.font_size * zoom).max(14.0 * zoom);
+    // `appearance: none` (Fase 7.1240): apaga el chrome nativo del control —sin
+    // el glifo ☑/●/☐/○— y lo pinta como una caja normal con el `background` y
+    // las decoraciones del autor (border/radius/shadow), clickeable. Patrón
+    // canónico de toggles custom: `appearance:none` + `:checked { background }`
+    // + tamaño/borde del autor. El estado marcado lo refleja `:checked` del
+    // autor (match estático del atributo `checked`); el toggle dinámico sigue
+    // disparando el `Msg`. Tamaño: ancho/alto del autor si los fijó, si no la
+    // caja chica default (igual que el chrome nativo).
+    if matches!(b.appearance, puriy_engine::Appearance::None) {
+        let default_dim = length(size_px + 4.0);
+        let w = length_to_taffy(b.width, zoom).unwrap_or(default_dim);
+        let h = length_to_taffy(b.height, zoom).unwrap_or(default_dim);
+        let mut view = View::new(Style {
+            size: Size { width: w, height: h },
+            margin: Rect {
+                left: margin_left_lpa(b, zoom),
+                right: margin_right_lpa(b, zoom, 4.0),
+                top: length(b.margin.top * zoom),
+                bottom: length(b.margin.bottom * zoom),
+            },
+            ..Default::default()
+        })
+        .on_click(msg);
+        if let Some(bg) = b.background {
+            view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, bg.a));
+        }
+        return apply_decorations(view, b, zoom);
+    }
     // `accent-color` (Fase 7.1238): tinta el estado MARCADO del control (el
     // "fill" del ☑ / ●). El dato llega heredado al box (Fase 7.239).
     let glyph_color = checkbox_glyph_color(b.accent_color, checked);

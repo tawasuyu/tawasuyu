@@ -525,16 +525,37 @@ los 4 modos + `with_image_rendering` fija `sampler.quality`, `auto` conserva
 `Medium`). v1: sólo el `<img>` de contenido — `background-image`, `border-image`
 y el escalado de `<canvas>` quedan en la calidad default.
 
+### 7.1240 ✅ — `appearance: none` apaga el chrome nativo de checkbox/radio
+
+`appearance` parsea/computa desde Fase 7.258 y llega a `BoxNode.appearance`
+(enum `Auto | None | Textfield | MenulistButton | Button | Checkbox | Radio`,
+NO hereda), pero el wire siempre dibujaba el glifo nativo `☑/●/☐/○`. Ahora, con
+`appearance: none`, `render_checkbox_radio` apaga ese chrome: pinta el control
+como una **caja normal con el `background` + decoraciones del autor**
+(border/radius/shadow vía `apply_decorations`), sin glifo, clickeable. Tamaño:
+ancho/alto del autor (`b.width`/`b.height` vía `length_to_taffy`) o, si no los
+fijó, la caja chica default (igual que el chrome nativo). Patrón canónico de
+toggles custom: `appearance:none` + `:checked { background }` + tamaño/borde del
+autor. El estado marcado lo refleja `:checked` (match estático del atributo
+`checked`); el toggle dinámico sigue disparando el `Msg`. Los demás valores
+(`auto` + los hints de compat) conservan el glifo nativo. Cambio de wire + 1
+línea de engine (re-export de `Appearance` en el root de `puriy_engine`). Test:
+`appearance_llega_al_box_fase_7_1240` (`group03`: `none` llega al box, sin la
+prop queda `Auto`). v1: sólo checkbox/radio — submit/button/select/text-input ya
+respetan parcialmente el estilo del autor; su reset por `appearance:none` queda
+para una fase aparte si hace falta.
+
 ### Próximos huecos del mismo bloque (a atacar en orden)
 
+- **`appearance: none` en `<select>`** — quitar la flecha/borde nativos del
+  dropdown y dejar sólo el estilo del autor (el más pedido tras checkbox/radio).
+- **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
+  los otros sitios de imagen (reusar `with_image_rendering` en `decorations.rs`
+  y `canvas.rs`).
 - **`caret-color`** — DESCARTADO por ahora: el `text_input_view` de llimphi **no
   pinta caret** (línea explícita "sin caret glyph" en
   `widgets/text-input/src/lib.rs`). Sin caret renderizado, `caret-color` sería
   no-op. Reactivar cuando el widget dibuje un caret (requeriría agregar un campo
   `caret` a `TextInputPalette` y cablear `b.caret_color`).
-- **`appearance`** — `none` desactiva el chrome nativo de los controles de
-  formulario; evaluar qué controles del wire respetan el reset.
-- **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
-  los otros sitios de imagen.
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).

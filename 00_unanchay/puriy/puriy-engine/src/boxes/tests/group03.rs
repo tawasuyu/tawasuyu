@@ -708,3 +708,31 @@ use crate::Engine;
             "sin la propiedad, el box queda en Normal (default)"
         );
     }
+
+    #[test]
+    fn appearance_llega_al_box_fase_7_1240() {
+        // `appearance: none` computa y aterriza en `BoxNode.appearance`, listo
+        // para que el wire apague el chrome nativo del checkbox/radio (sin glifo,
+        // caja del autor). Sin la propiedad, el box queda en `Auto` (chrome
+        // nativo). NO hereda.
+        use crate::style::Appearance;
+        let html = r##"<html><body>
+            <input id="x" type="checkbox" style="appearance: none">
+            <input id="y" type="checkbox">
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut x_app: Option<Appearance> = None;
+        let mut y_app: Option<Appearance> = None;
+        doc.box_tree.walk(|b| match b.element_id.as_deref() {
+            Some("x") => x_app = Some(b.appearance),
+            Some("y") => y_app = Some(b.appearance),
+            _ => {}
+        });
+        assert_eq!(x_app, Some(Appearance::None), "appearance:none llega al box");
+        assert_eq!(
+            y_app,
+            Some(Appearance::Auto),
+            "sin la propiedad, el box queda en Auto (chrome nativo)"
+        );
+    }
