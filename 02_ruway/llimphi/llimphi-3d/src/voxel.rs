@@ -4,6 +4,14 @@
 //!
 //! M1 es **denso** a propósito (lo más simple que funciona). El salto a sparse
 //! (SVO/brickmap, saltar el aire) es M2 — ver `MOTOR-VOXEL.md` §11.2.
+//!
+//! M3 agrega **dirty tracking**: cada `set`/`clear` expande una caja AABB de la
+//! región cambiada. `VoxelRenderer::sync` sube sólo esa sub-caja (fina + bricks
+//! gruesos afectados) — la actualización incremental que reemplaza al re-mesh.
+
+/// Caja AABB de voxels cambiados desde el último `take_dirty`: `[xmin, ymin,
+/// zmin, xmax, ymax, zmax]` inclusiva.
+pub type DirtyBox = [u32; 6];
 
 /// Grid denso de voxels RGBA8. Índice lineal `x + y*dx + z*dx*dy` (x contiguo),
 /// que es justo el layout que espera `queue.write_texture` (filas en x, luego y,
@@ -12,6 +20,8 @@
 pub struct VoxelGrid {
     dim: [u32; 3],
     data: Vec<[u8; 4]>,
+    /// AABB de voxels mutados desde el último `take_dirty`. `None` = sin cambios.
+    dirty: Option<DirtyBox>,
 }
 
 impl VoxelGrid {
@@ -21,6 +31,7 @@ impl VoxelGrid {
         Self {
             dim,
             data: vec![[0, 0, 0, 0]; n],
+            dirty: None,
         }
     }
 
@@ -34,11 +45,39 @@ impl VoxelGrid {
         (x + y * self.dim[0] + z * self.dim[0] * self.dim[1]) as usize
     }
 
+    #[inline]
+    fn mark_dirty(&mut self, x: u32, y: u32, z: u32) {
+        match &mut self.dirty {
+            None => self.dirty = Some([x, y, z, x, y, z]),
+            Some(d) => {
+                d[0] = d[0].min(x);
+                d[1] = d[1].min(y);
+                d[2] = d[2].min(z);
+                d[3] = d[3].max(x);
+                d[4] = d[4].max(y);
+                d[5] = d[5].max(z);
+            }
+        }
+    }
+
+    /// Toma y limpia la caja de cambios pendientes. `VoxelRenderer::sync` la usa
+    /// para subir sólo lo mutado. `None` si no hubo cambios desde la última toma.
+    pub fn take_dirty(&mut self) -> Option<DirtyBox> {
+        self.dirty.take()
+    }
+
+    /// Descarta los cambios pendientes sin subirlos (tras un upload completo, el
+    /// estado inicial ya está en GPU).
+    pub fn reset_dirty(&mut self) {
+        self.dirty = None;
+    }
+
     /// Marca un voxel sólido con color `rgb` (alpha = 255). Fuera de rango: no-op.
     pub fn set(&mut self, x: u32, y: u32, z: u32, rgb: [u8; 3]) {
         if x < self.dim[0] && y < self.dim[1] && z < self.dim[2] {
             let i = self.idx(x, y, z);
             self.data[i] = [rgb[0], rgb[1], rgb[2], 255];
+            self.mark_dirty(x, y, z);
         }
     }
 
@@ -47,6 +86,7 @@ impl VoxelGrid {
         if x < self.dim[0] && y < self.dim[1] && z < self.dim[2] {
             let i = self.idx(x, y, z);
             self.data[i] = [0, 0, 0, 0];
+            self.mark_dirty(x, y, z);
         }
     }
 
@@ -79,6 +119,51 @@ impl VoxelGrid {
             }
         }
         (cdim, out)
+    }
+
+    /// `255` si el brick `(cx,cy,cz)` (tamaño `b`) tiene algún voxel sólido.
+    fn brick_occupied(&self, b: u32, cx: u32, cy: u32, cz: u32) -> u8 {
+        let (x0, y0, z0) = (cx * b, cy * b, cz * b);
+        for z in z0..(z0 + b).min(self.dim[2]) {
+            for y in y0..(y0 + b).min(self.dim[1]) {
+                for x in x0..(x0 + b).min(self.dim[0]) {
+                    if self.solid(x, y, z) {
+                        return 255;
+                    }
+                }
+            }
+        }
+        0
+    }
+
+    /// Extrae una sub-caja RGBA contigua `[origin, origin+ext)` para subirla con
+    /// `queue.write_texture` (M3: upload incremental de la región fina mutada).
+    pub fn extract_fine(&self, origin: [u32; 3], ext: [u32; 3]) -> Vec<u8> {
+        let mut out = Vec::with_capacity((ext[0] * ext[1] * ext[2] * 4) as usize);
+        for z in origin[2]..origin[2] + ext[2] {
+            for y in origin[1]..origin[1] + ext[1] {
+                let row = self.idx(origin[0], y, z);
+                for i in 0..ext[0] as usize {
+                    out.extend_from_slice(&self.data[row + i]);
+                }
+            }
+        }
+        out
+    }
+
+    /// Recalcula la ocupación gruesa de la caja de bricks `[cmin, cmin+cext)` y
+    /// la devuelve contigua (R8) para subir sólo esos bricks (M3).
+    pub fn coarse_region(&self, brick: u32, cmin: [u32; 3], cext: [u32; 3]) -> Vec<u8> {
+        let b = brick.max(1);
+        let mut out = Vec::with_capacity((cext[0] * cext[1] * cext[2]) as usize);
+        for cz in cmin[2]..cmin[2] + cext[2] {
+            for cy in cmin[1]..cmin[1] + cext[1] {
+                for cx in cmin[0]..cmin[0] + cext[0] {
+                    out.push(self.brick_occupied(b, cx, cy, cz));
+                }
+            }
+        }
+        out
     }
 
     /// Bytes RGBA planos listos para `queue.write_texture`.
@@ -143,6 +228,8 @@ impl VoxelGrid {
                 }
             }
         }
+        // Estado inicial: el upload completo lo cubre, no es "mutación".
+        g.reset_dirty();
         g
     }
 }

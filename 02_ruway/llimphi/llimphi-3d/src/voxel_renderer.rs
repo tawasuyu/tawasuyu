@@ -180,15 +180,48 @@ impl VoxelRenderer {
         r
     }
 
-    /// Re-sube el grid a ambas texturas (cimiento de M3: edición/sim en vivo).
+    /// Re-sube el grid ENTERO a ambas texturas (upload inicial / reset).
     /// El `dim` debe coincidir con el de creación.
     pub fn upload(&self, queue: &wgpu::Queue, grid: &VoxelGrid) {
         let dim = grid.dim();
         debug_assert_eq!(dim, self.dim, "upload: dim != dim de creación");
-        write_3d(queue, &self.tex, dim, 4, grid.bytes());
+        write_3d(queue, &self.tex, [0; 3], dim, 4, grid.bytes());
         let (cdim, cbytes) = grid.coarse_occupancy(BRICK);
         debug_assert_eq!(cdim, self.coarse_dim);
-        write_3d(queue, &self.coarse, cdim, 1, &cbytes);
+        write_3d(queue, &self.coarse, [0; 3], cdim, 1, &cbytes);
+    }
+
+    /// **Actualización incremental (M3).** Sube SÓLO la región mutada desde el
+    /// último sync: la sub-caja fina cambiada + los bricks gruesos que toca. Si
+    /// no hubo cambios, no hace nada. Devuelve los bytes subidos (0 si nada) —
+    /// el reemplazo barato del re-mesh: mutar un voxel = subir un puñado de
+    /// bytes, no regenerar geometría ni el grid entero.
+    ///
+    /// Nota: la región pendiente es una AABB que UNE todos los cambios desde el
+    /// último sync. Para ediciones localizadas (un pincel, un bloque que cae)
+    /// la caja es chica; para ediciones dispersas conviene sincronizar seguido
+    /// (un sync por lote localizado) para no agrandar la caja.
+    pub fn sync(&self, queue: &wgpu::Queue, grid: &mut VoxelGrid) -> u32 {
+        let Some(r) = grid.take_dirty() else {
+            return 0;
+        };
+        let origin = [r[0], r[1], r[2]];
+        let ext = [r[3] - r[0] + 1, r[4] - r[1] + 1, r[5] - r[2] + 1];
+        let fine = grid.extract_fine(origin, ext);
+        write_3d(queue, &self.tex, origin, ext, 4, &fine);
+
+        // Bricks gruesos tocados por la caja.
+        let cmin = [r[0] / BRICK, r[1] / BRICK, r[2] / BRICK];
+        let cmax = [r[3] / BRICK, r[4] / BRICK, r[5] / BRICK];
+        let cext = [
+            cmax[0] - cmin[0] + 1,
+            cmax[1] - cmin[1] + 1,
+            cmax[2] - cmin[2] + 1,
+        ];
+        let cbytes = grid.coarse_region(BRICK, cmin, cext);
+        write_3d(queue, &self.coarse, cmin, cext, 1, &cbytes);
+
+        fine.len() as u32 + cbytes.len() as u32
     }
 
     /// Ray-marchea la grilla vista desde `camera` sobre `target` (intermedia del
@@ -257,21 +290,32 @@ fn extent(dim: [u32; 3]) -> wgpu::Extent3d {
     }
 }
 
-fn write_3d(queue: &wgpu::Queue, tex: &wgpu::Texture, dim: [u32; 3], bpp: u32, data: &[u8]) {
+fn write_3d(
+    queue: &wgpu::Queue,
+    tex: &wgpu::Texture,
+    origin: [u32; 3],
+    ext: [u32; 3],
+    bpp: u32,
+    data: &[u8],
+) {
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: tex,
             mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
+            origin: wgpu::Origin3d {
+                x: origin[0],
+                y: origin[1],
+                z: origin[2],
+            },
             aspect: wgpu::TextureAspect::All,
         },
         data,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(dim[0] * bpp),
-            rows_per_image: Some(dim[1]),
+            bytes_per_row: Some(ext[0] * bpp),
+            rows_per_image: Some(ext[1]),
         },
-        extent(dim),
+        extent(ext),
     );
 }
 
