@@ -49,6 +49,12 @@ pub struct PointLight {
     pub pos: [f32; 3],
     pub color: [f32; 3],
     pub range: f32,
+    /// Radio de la luz como **fuente de área** (en voxels). `0.0` = puntual exacta
+    /// → sombra dura (1 shadow ray). `> 0.0` = el shadow ray se reparte en varios
+    /// taps sobre un disco de este radio perpendicular a la dirección a la luz →
+    /// **penumbra** (sombra blanda): cuanto más lejos el ocluyente de la superficie,
+    /// más se abre el borde. Sólo aplica si `point_shadows` está activo.
+    pub radius: f32,
 }
 
 /// Una entidad (agente) — una caja analítica ray-marcheada en el mismo pase que
@@ -728,11 +734,13 @@ impl VoxelRenderer {
                 pos: [0.0; 3],
                 color: [0.0; 3],
                 range: 1.0,
+                radius: 0.0,
             });
             for v in [l.pos[0], l.pos[1], l.pos[2], l.range] {
                 u.extend_from_slice(&v.to_ne_bytes());
             }
-            for v in [l.color[0], l.color[1], l.color[2], 0.0] {
+            // color.w lleva el radio de área (penumbra); 0 = sombra dura.
+            for v in [l.color[0], l.color[1], l.color[2], l.radius.max(0.0)] {
                 u.extend_from_slice(&v.to_ne_bytes());
             }
         }
@@ -897,8 +905,18 @@ struct U {
     vp: mat4x4<f32>,       // world→clip (forward) para escribir frag_depth
     scroll: vec4<f32>,     // xyz = origen de brick (streaming toroidal); 0 = sin scroll
     n_lights: vec4<f32>,   // x = cantidad de luces puntuales, y = sombras on/off
-    lights: array<vec4<f32>, 8>, // por luz: [pos.xyz, range], [color.rgb, _]
+    lights: array<vec4<f32>, 8>, // por luz: [pos.xyz, range], [color.rgb, radio_area]
 };
+
+// Disco de muestreo para sombras blandas (penumbra): 8 taps en un patrón anular
+// fijo (determinista, sin RNG por píxel — evita ruido temporal en el reel).
+const SOFT_TAPS: i32 = 8;
+const SOFT_DISK = array<vec2<f32>, 8>(
+    vec2<f32>( 0.35,  0.0),  vec2<f32>(-0.35,  0.0),
+    vec2<f32>( 0.0,   0.35), vec2<f32>( 0.0,  -0.35),
+    vec2<f32>( 0.7,   0.7),  vec2<f32>(-0.7,   0.7),
+    vec2<f32>( 0.7,  -0.7),  vec2<f32>(-0.7,  -0.7),
+);
 struct Entity {
     pos: vec4<f32>,
     half: vec4<f32>,
@@ -1251,10 +1269,36 @@ fn fs(in: VOut) -> FOut {
             // Sale de la superficie un pelo hacia la luz para no auto-sombrearse.
             let lso = p + normal * 0.5 + ldir2 * 0.01;
             let bias = 0.75; // tolerancia: no contar el propio voxel ni la luz.
-            let hv = trace(lso, ldir2, dim, B);
-            let blocked_v = hv.hit && hv.t < d - bias;
-            let he = trace_entities(lso, ldir2, d - bias);
-            vis = select(1.0, 0.0, blocked_v || he.hit);
+            let lrad = lc.w; // radio de área (penumbra); 0 = sombra dura.
+            if (lrad <= 0.0) {
+                // Sombra dura: un solo shadow ray hacia el centro de la luz.
+                let hv = trace(lso, ldir2, dim, B);
+                let blocked_v = hv.hit && hv.t < d - bias;
+                let he = trace_entities(lso, ldir2, d - bias);
+                vis = select(1.0, 0.0, blocked_v || he.hit);
+            } else {
+                // Sombra blanda: la luz es un disco de radio `lrad`. Se reparten
+                // varios shadow rays hacia puntos del disco (perpendicular a la
+                // dirección a la luz) y se promedia la visibilidad → penumbra.
+                // Base ortonormal del plano del disco.
+                var up = vec3<f32>(0.0, 1.0, 0.0);
+                if (abs(ldir2.y) > 0.9) { up = vec3<f32>(1.0, 0.0, 0.0); }
+                let tx = normalize(cross(up, ldir2));
+                let ty = cross(ldir2, tx);
+                var occ = 0.0;
+                for (var s = 0; s < SOFT_TAPS; s = s + 1) {
+                    let o = SOFT_DISK[s] * lrad;
+                    let lp2 = lp.xyz + tx * o.x + ty * o.y;
+                    let to2 = lp2 - p;
+                    let d2 = length(to2);
+                    let dir2 = to2 / max(d2, 1e-3);
+                    let hv = trace(lso, dir2, dim, B);
+                    let bv = hv.hit && hv.t < d2 - bias;
+                    let he = trace_entities(lso, dir2, d2 - bias);
+                    if (bv || he.hit) { occ = occ + 1.0; }
+                }
+                vis = 1.0 - occ / f32(SOFT_TAPS);
+            }
         }
         light = light + lc.rgb * (att * ndl * vis);
     }

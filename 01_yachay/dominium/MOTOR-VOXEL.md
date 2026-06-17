@@ -696,7 +696,18 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    losa flotante con una luz justo encima → **sombra rectangular nítida en el piso**;
    tres tomas `off`/`noshadow`/`on`) **y por diff de píxeles**: `noshadow`→`on`
    cambia 13.275 px y **el 100% oscurecen** (una sombra sólo quita luz, nunca agrega).
-   **Falta**: sombras blandas / luces de área (hoy sombra dura, sin penumbra).
+   **Sombras blandas / luces de área HECHAS (2026-06-17):** `PointLight.radius`
+   (en voxels; `0` = puntual exacta → sombra dura, 1 tap) convierte la luz en un
+   **disco de área** — el shadow ray se reparte en 8 taps sobre un disco perpendicular
+   a la dirección a la luz (patrón anular fijo, determinista, sin RNG por píxel para no
+   meter ruido temporal en el reel) y se promedia la visibilidad → **penumbra** que se
+   abre cuanto más lejos el ocluyente de la superficie. El radio viaja en `color.w`
+   (sin uniform nuevo). Verificado por PNG (`lights_demo` suma 4ª toma
+   `/tmp/lights_soft.png`) **y por el diff `dura`→`blanda`**: la diferencia se
+   concentra en una **banda en el borde de cada sombra** (penumbra rectangular bajo la
+   losa + anillo alrededor de la esfera), con el **umbra interior intacto** — la firma
+   exacta de un soft shadow. **Falta**: nada crítico — área real con forma (hoy disco) o
+   contact-hardening físico serían lujo.
 5. ~~**Calidad de cuadro**: supersampling~~ **HECHO**: SSAA — el `--film`/`--vox`
    renderizan a **2×** (`SSW×SSH`) y bajan promediando bloques 2×2
    (`write_png_downsampled`) → antialias de los bordes duros del ray-march.

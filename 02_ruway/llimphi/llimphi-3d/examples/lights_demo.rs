@@ -62,9 +62,9 @@ fn main() {
     // Cerca del piso (gris neutro = lee bien el color) y de un pilar, intensas.
     vr.lights = vec![
         // Cálida JUSTO sobre la losa flotante → sombra rectangular nítida abajo.
-        PointLight { pos: [25.0, 40.0, 66.0], color: [3.6, 1.7, 0.7], range: 70.0 },
+        PointLight { pos: [25.0, 40.0, 66.0], color: [3.6, 1.7, 0.7], range: 70.0, radius: 0.0 },
         // Fría junto a la esfera, a media altura → la esfera corta su luz.
-        PointLight { pos: [70.0, 30.0, 60.0], color: [0.6, 1.7, 3.6], range: 70.0 },
+        PointLight { pos: [70.0, 30.0, 60.0], color: [0.6, 1.7, 3.6], range: 70.0, radius: 0.0 },
     ];
 
     // 2a: MVP plano (sin sombra) — para aislar el feature nuevo.
@@ -72,13 +72,22 @@ fn main() {
     let noshadow = render(&hal, &mut renderer, &mut vr, &camera);
     write_png(&noshadow, "/tmp/lights_noshadow.png");
 
-    // 2b: con sombra dura (default) — los obstáculos cortan la luz puntual.
+    // 2b: con sombra DURA (radius = 0) — los obstáculos cortan la luz de golpe.
     vr.point_shadows = true;
     let on = render(&hal, &mut renderer, &mut vr, &camera);
     write_png(&on, "/tmp/lights_on.png");
+
+    // 2c: con sombra BLANDA (radius > 0) — la luz pasa a fuente de área: el borde
+    // de la sombra se abre en penumbra (más cuanto más lejos el ocluyente).
+    for l in vr.lights.iter_mut() {
+        l.radius = 7.0;
+    }
+    let soft = render(&hal, &mut renderer, &mut vr, &camera);
+    write_png(&soft, "/tmp/lights_soft.png");
+
     eprintln!(
-        "escritos /tmp/lights_off.png (sin luces), /tmp/lights_noshadow.png (luz \
-         sin sombra) y /tmp/lights_on.png (luz con sombra)"
+        "escritos /tmp/lights_off.png (sin luces), /tmp/lights_noshadow.png (sin \
+         sombra), /tmp/lights_on.png (sombra dura) y /tmp/lights_soft.png (penumbra)"
     );
 }
 
