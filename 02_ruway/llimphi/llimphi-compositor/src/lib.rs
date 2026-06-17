@@ -385,6 +385,29 @@ pub enum FilterOp {
     DropShadow(Shadow),
 }
 
+/// Punto de pivote de `transform` (CSS `transform-origin`). Cada eje se resuelve
+/// contra el rect del nodo como `px + frac · tamaño`: `px` (ya escalado por zoom
+/// por el caller) cubre offsets absolutos y `frac` los porcentuales (`0.5` = 50%
+/// del ancho/alto). El default CSS `50% 50%` (centro) es
+/// `{ px: (0.0, 0.0), frac: (0.5, 0.5) }`; un nodo con `transform_origin: None`
+/// usa ese centro. Modela `px + %` por eje igual que `transform_rel` modela el
+/// `translate(<%>)` — necesario porque el % depende del layout, desconocido hasta
+/// `paint`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformPivot {
+    /// Offset absoluto en px (ya × zoom) por eje `(x, y)`.
+    pub px: (f64, f64),
+    /// Fracción del tamaño del rect por eje `(x, y)` (`0.5` = 50%).
+    pub frac: (f64, f64),
+}
+
+impl Default for TransformPivot {
+    fn default() -> Self {
+        // CSS `transform-origin: 50% 50%` — centro del rect.
+        Self { px: (0.0, 0.0), frac: (0.5, 0.5) }
+    }
+}
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
@@ -665,6 +688,10 @@ pub struct View<Msg> {
     /// `None` = sin traslación relativa (la abrumadora mayoría). Compone con
     /// `transform` (afín fijo) si ambos están: `T_rel · transform`.
     pub transform_rel: Option<(f64, f64)>,
+    /// Punto de pivote de `transform` (CSS `transform-origin`). `None` ⇒ el
+    /// default CSS `50% 50%` (centro del rect) — el caso mayoritario. Ver
+    /// [`TransformPivot`] y [`View::transform_origin`].
+    pub transform_origin: Option<TransformPivot>,
     /// Texto de **tooltip**: si está, el runtime/cliente puede mostrar un
     /// rótulo flotante cuando el cursor se posa sobre este nodo. Llimphi sólo
     /// transporta el dato hasta el [`MountedNode`]; *quién* lo pinta (un overlay
@@ -779,6 +806,7 @@ impl<Msg: 'static> View<Msg> {
             hero,
             transform,
             transform_rel,
+            transform_origin,
             tooltip,
             cursor,
             ripple,
@@ -827,6 +855,7 @@ impl<Msg: 'static> View<Msg> {
             hero,
             transform,
             transform_rel,
+            transform_origin,
             tooltip,
             cursor,
             ripple,
@@ -1206,6 +1235,9 @@ pub struct MountedNode<Msg> {
     /// Traslación relativa al tamaño del nodo (fracciones de su rect). Ver
     /// [`View::transform_rel`]. `paint`/`hit_test` la resuelven contra el rect.
     pub transform_rel: Option<(f64, f64)>,
+    /// Pivote de `transform` (CSS `transform-origin`). `None` ⇒ centro. Ver
+    /// [`TransformPivot`] / [`View::transform_origin`].
+    pub transform_origin: Option<TransformPivot>,
     /// Texto de tooltip de este nodo (ver [`View::tooltip`]). El consumidor lo
     /// lee tras un hit-test de hover para pintar el rótulo flotante.
     pub tooltip: Option<String>,

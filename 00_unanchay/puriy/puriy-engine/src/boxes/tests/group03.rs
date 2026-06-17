@@ -799,3 +799,34 @@ use crate::Engine;
             "sin la propiedad, el botón queda en Auto (chrome nativo)"
         );
     }
+
+    #[test]
+    fn transform_origin_llega_al_box_fase_7_1248() {
+        // `transform-origin` computa y aterriza en `BoxNode.transform_origin`,
+        // listo para que el wire lo pase como pivote a Llimphi. `top left` ⇒
+        // x=0%, y=0%. Sin la propiedad, el default es `50% 50%` (centro).
+        use crate::style::LengthVal;
+        let html = r##"<html><body>
+            <div id="x" style="transform: rotate(30deg); transform-origin: top left">a</div>
+            <div id="y" style="transform: rotate(30deg)">b</div>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut x_org = None;
+        let mut y_org = None;
+        doc.box_tree.walk(|b| match b.element_id.as_deref() {
+            Some("x") => x_org = Some((b.transform_origin.x, b.transform_origin.y)),
+            Some("y") => y_org = Some((b.transform_origin.x, b.transform_origin.y)),
+            _ => {}
+        });
+        assert_eq!(
+            x_org,
+            Some((LengthVal::Pct(0.0), LengthVal::Pct(0.0))),
+            "transform-origin: top left llega como 0% 0%"
+        );
+        assert_eq!(
+            y_org,
+            Some((LengthVal::Pct(50.0), LengthVal::Pct(50.0))),
+            "sin la propiedad, el default es 50% 50% (centro)"
+        );
+    }

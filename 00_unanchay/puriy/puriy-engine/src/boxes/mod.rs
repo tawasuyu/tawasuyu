@@ -21,7 +21,7 @@ use crate::style::{
     Position, Resize, ScrollBehavior, ScrollSnapType, Sides, StyleEngine, TabSize, TextAlign,
     TextDecorationLine, TextDecorationStyle, TextOrientation, TextOverflow, TextRendering,
     TextShadow,
-    TextTransform, Transform, UnicodeBidi, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    TextTransform, Transform, TransformOrigin, UnicodeBidi, UserSelect, VerticalAlign, Visibility, WhiteSpace,
     WillChangeHint, WordBreak, WritingMode,
 };
 

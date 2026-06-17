@@ -666,9 +666,40 @@ caso típico— totalmente visible; en medio del texto queda detrás del glifo) 
 parpadea ni hay scroll horizontal si el texto desborda. Test:
 `palette_caret_default_sigue_al_texto` (widget) + parse en `group01` (7.238).
 
+### 7.1248 ✅ — `transform-origin` (pivote no-centrado de `transform`)
+
+`transform-origin` parseaba y computaba (`group04`/`group14`) pero **no aterrizaba
+en `BoxNode`** y el compositor pivoteaba SIEMPRE en el centro (`resolve_node_transform`
+hardcodeaba `r.w*0.5`). Ahora se cablea end-to-end en 3 capas:
+
+- **engine**: nuevo campo `BoxNode.transform_origin: TransformOrigin` (default
+  `50% 50%`), poblado en box-build (`node.rs`) y en la re-aplicación de estilos
+  (`mutate.rs`).
+- **compositor (llimphi)**: nuevo tipo `TransformPivot { px, frac }` (px+% por eje)
+  + campo `transform_origin: Option<TransformPivot>` en `View`/`MountedNode` +
+  builder `View::transform_origin`. `resolve_node_transform` toma el pivote
+  (`None` ⇒ centro, idéntico a antes) y ancla el afín en `T(pivote)·local·T(-pivote)`.
+  Tocó los 3 call-sites (paint + 2 walks de hit-test) — pivote correcto también para
+  clicks sobre nodos transformados.
+- **wire (puriy)**: helper `transform_pivot(origin, zoom)` mapea `Px`→offset (×zoom),
+  `Pct`→fracción, y lo setea sólo cuando hay `transform` (el default cae en el centro).
+
+**Cross-crate, blast radius del compositor controlado** (`None` preserva el
+comportamiento previo — cero cambio para nodos sin `transform-origin` explícito).
+Verificado por pantallazo headless: `rotate(30deg)` default pivota en el centro
+(queda centrado en la caja de referencia); con `transform-origin: top left` pivota
+en la esquina sup-izq (se queda clavado ahí y rota hacia abajo-derecha). Tests:
+`transform_origin_llega_al_box_fase_7_1248` (engine), `transform_origin_fija_el_pivote`
+(compositor: el pivote queda fijo bajo rotación), `transform_pivot_mapea_origin_a_px_y_fraccion_fase_7_1248` (wire).
+
+> v1: ignora el eje Z de `transform-origin` (3D no soportado). Origen en `Px`
+> escala por zoom; keywords/`%` ya resueltos a `Pct` por el parser.
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).
 - **caret v2** — parpadeo (blink) + scroll horizontal cuando el texto desborda +
   caret sobre el glifo en mitad del texto (usar `paint_over` en vez de `paint_with`).
+- **Familia tablas** — `border-collapse`/`border-spacing`/`caption-side`/
+  `empty-cells`/`table-layout` (computan; verificar/cablear render).

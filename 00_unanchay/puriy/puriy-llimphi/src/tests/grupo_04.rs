@@ -1137,3 +1137,19 @@
         assert_eq!(with_image_rendering(mk(), IR::CrispEdges).sampler.quality, ImageQuality::Low);
         assert_eq!(with_image_rendering(mk(), IR::Smooth).sampler.quality, ImageQuality::High);
     }
+
+    #[test]
+    fn transform_pivot_mapea_origin_a_px_y_fraccion_fase_7_1248() {
+        // El wire traduce `transform-origin` al pivote del compositor: `Pct` →
+        // fracción, `Px` → offset absoluto (×zoom), default `50% 50%` → centro.
+        use puriy_engine::style::{LengthVal as L, TransformOrigin};
+        let p = transform_pivot(TransformOrigin { x: L::Pct(0.0), y: L::Pct(0.0), z: 0.0 }, 1.0);
+        assert_eq!(p.frac, (0.0, 0.0));
+        assert_eq!(p.px, (0.0, 0.0));
+        let p2 = transform_pivot(TransformOrigin { x: L::Px(10.0), y: L::Px(20.0), z: 0.0 }, 2.0);
+        assert_eq!(p2.px, (20.0, 40.0));
+        assert_eq!(p2.frac, (0.0, 0.0));
+        let p3 = transform_pivot(TransformOrigin::default(), 1.0);
+        assert_eq!(p3.frac, (0.5, 0.5));
+        assert_eq!(p3.px, (0.0, 0.0));
+    }

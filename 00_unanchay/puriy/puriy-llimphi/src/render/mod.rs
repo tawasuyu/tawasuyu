@@ -223,6 +223,28 @@ pub(crate) fn transform_affine(
     )
 }
 
+/// Traduce `transform-origin` del box al pivote del compositor: cada eje como
+/// `px + frac · tamaño`. `Px(n)` → offset absoluto (×zoom); `Pct(p)` → fracción
+/// `p/100`; cualquier `LengthVal` no resoluble (auto/keywords intrínsecos, que
+/// `transform-origin` no admite) → centro del eje (`0.5`). El default CSS
+/// `50% 50%` cae en `frac = (0.5, 0.5)` = centro, idéntico a no setear pivote.
+pub(crate) fn transform_pivot(
+    origin: puriy_engine::style::TransformOrigin,
+    zoom: f32,
+) -> llimphi_ui::TransformPivot {
+    use puriy_engine::style::LengthVal as L;
+    let axis = |lv: L| -> (f64, f64) {
+        match lv {
+            L::Px(n) => (n as f64 * zoom as f64, 0.0),
+            L::Pct(p) => (0.0, p as f64 / 100.0),
+            _ => (0.0, 0.5),
+        }
+    };
+    let (px_x, fx) = axis(origin.x);
+    let (px_y, fy) = axis(origin.y);
+    llimphi_ui::TransformPivot { px: (px_x, px_y), frac: (fx, fy) }
+}
+
 /// Traduce el `MaskSpec` del box (encaje + modo + cajas `mask-clip`/`-origin`,
 /// modelados con los mismos tipos que background) al [`MaskPlacement`] neutral
 /// del compositor. `LengthVal` no resoluble (auto/keywords) → `MaskLen::Auto`
@@ -940,6 +962,12 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     }
     if let Some(rel) = rel {
         view = view.transform_rel(rel);
+    }
+    // `transform-origin` (Fase 7.1248): pivote de la transformación. Sólo importa
+    // si hay transform; lo seteamos en ese caso (el default `50% 50%` cae en el
+    // centro, idéntico al comportamiento previo sin pivote).
+    if xf.is_some() || rel.is_some() {
+        view = view.transform_origin(transform_pivot(b.transform_origin, zoom));
     }
     view
 }

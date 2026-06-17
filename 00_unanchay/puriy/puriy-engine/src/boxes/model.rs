@@ -326,6 +326,9 @@ pub struct BoxNode {
     pub letter_spacing: f32,
     pub text_shadows: Vec<TextShadow>,
     pub transforms: Vec<Transform>,
+    /// `transform-origin` — punto de pivote de `transforms`. Default `50% 50%`
+    /// (centro). El wire lo resuelve a `px + %` por eje contra el rect.
+    pub transform_origin: TransformOrigin,
     pub grid_template_columns: Vec<GridTrackSize>,
     pub grid_template_rows: Vec<GridTrackSize>,
     /// `grid-auto-flow` — dirección de auto-colocación de ítems implícitos.

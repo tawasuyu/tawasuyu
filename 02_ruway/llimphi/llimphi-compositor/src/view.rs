@@ -56,6 +56,7 @@ impl<Msg> View<Msg> {
             hero: None,
             transform: None,
             transform_rel: None,
+            transform_origin: None,
             tooltip: None,
             cursor: None,
             ripple: None,
@@ -452,6 +453,14 @@ impl<Msg> View<Msg> {
     /// [`View::transform`]. `(0.0, 0.0)` equivale a no setear.
     pub fn transform_rel(mut self, frac: (f64, f64)) -> Self {
         self.transform_rel = Some(frac);
+        self
+    }
+
+    /// Punto de pivote de `transform` (CSS `transform-origin`). Sin setear ⇒
+    /// centro del rect (`50% 50%`). Ver [`TransformPivot`]. Sólo tiene efecto
+    /// junto con `transform`/`transform_rel`.
+    pub fn transform_origin(mut self, pivot: crate::TransformPivot) -> Self {
+        self.transform_origin = Some(pivot);
         self
     }
 

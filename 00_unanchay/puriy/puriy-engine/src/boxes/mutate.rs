@@ -744,6 +744,7 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.letter_spacing = s.letter_spacing;
     b.text_shadows = s.text_shadows.clone();
     b.transforms = s.transforms.clone();
+    b.transform_origin = s.transform_origin;
     b.grid_template_columns = s.grid_template_columns.clone();
     b.grid_template_rows = s.grid_template_rows.clone();
     b.text_decoration = s.text_decoration;

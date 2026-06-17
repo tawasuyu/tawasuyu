@@ -109,6 +109,7 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         letter_spacing: 0.0,
         text_shadows: Vec::new(),
         transforms: Vec::new(),
+        transform_origin: TransformOrigin::default(),
         grid_template_columns: Vec::new(),
         grid_template_rows: Vec::new(),
         grid_auto_flow: style.grid_auto_flow,

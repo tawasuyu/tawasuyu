@@ -70,6 +70,7 @@ pub fn mount_recursive<Msg: Clone>(
         hero,
         transform,
         transform_rel,
+        transform_origin,
         tooltip,
         cursor,
         ripple,
@@ -134,6 +135,7 @@ pub fn mount_recursive<Msg: Clone>(
         hero,
         transform,
         transform_rel,
+        transform_origin,
         tooltip,
         cursor,
         ripple,
@@ -444,6 +446,7 @@ pub fn collect_filters<Msg>(
 pub(crate) fn resolve_node_transform(
     transform: Option<Affine>,
     transform_rel: Option<(f64, f64)>,
+    transform_origin: Option<crate::TransformPivot>,
     r: llimphi_layout::Rect,
 ) -> Option<Affine> {
     if transform.is_none() && transform_rel.is_none() {
@@ -453,9 +456,13 @@ pub(crate) fn resolve_node_transform(
     if let Some((fx, fy)) = transform_rel {
         local = Affine::translate((fx * r.w as f64, fy * r.h as f64)) * local;
     }
-    let cx = (r.x + r.w * 0.5) as f64;
-    let cy = (r.y + r.h * 0.5) as f64;
-    Some(Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy)))
+    // Pivote = `transform-origin`: `px + frac · tamaño` por eje contra el rect.
+    // `None` ⇒ centro (default CSS `50% 50%`). El afín se ancla al pivote:
+    // `T(pivote) · local · T(-pivote)`.
+    let pivot = transform_origin.unwrap_or_default();
+    let ox = r.x as f64 + pivot.px.0 + pivot.frac.0 * r.w as f64;
+    let oy = r.y as f64 + pivot.px.1 + pivot.frac.1 * r.h as f64;
+    Some(Affine::translate((ox, oy)) * local * Affine::translate((-ox, -oy)))
 }
 
 /// Pinta el rango de nodos `[start, end)` de `mounted` en `scene`, partiendo de
@@ -722,7 +729,7 @@ pub fn paint_range<Msg>(
         // (`transform-origin: 50% 50%`) y se compone sobre la del padre. Se
         // empuja ANTES del alpha/fill para que toda la pintura del subtree
         // (incl. la capa de alpha y el clip) caiga en el espacio transformado.
-        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, r) {
+        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, node.transform_origin, r) {
             xf_stack.push((node.subtree_end, cur_xf));
             cur_xf *= centered;
         }
@@ -1269,7 +1276,7 @@ where
         // Componé el transform de este nodo igual que `paint`, ANTES de
         // resolver el punto local (su propio rect ya cae en el espacio
         // transformado).
-        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, r) {
+        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, node.transform_origin, r) {
             xf_stack.push((node.subtree_end, cur_xf));
             cur_xf *= centered;
         }
@@ -1450,7 +1457,7 @@ pub fn hit_test_scroll_chain<Msg>(
             idx += 1;
             continue;
         };
-        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, r) {
+        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, node.transform_origin, r) {
             xf_stack.push((node.subtree_end, cur_xf));
             cur_xf *= centered;
         }
@@ -1628,6 +1635,34 @@ mod tests {
     use llimphi_layout::taffy::prelude::*;
     use llimphi_layout::{LayoutTree, Style};
     use vello::kurbo::Affine;
+
+    #[test]
+    fn transform_origin_fija_el_pivote() {
+        // El pivote de `transform-origin` queda FIJO bajo la transformación:
+        // top-left (frac 0,0) fija la esquina (0,0); el default (None) fija el
+        // centro (50,50). Rect 100×100 en el origen, rotación 90°.
+        use super::resolve_node_transform;
+        use crate::TransformPivot;
+        use vello::kurbo::Point;
+        let r = llimphi_layout::Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let rot = Affine::rotate(std::f64::consts::FRAC_PI_2);
+
+        let tl = TransformPivot { px: (0.0, 0.0), frac: (0.0, 0.0) };
+        let xf_tl = resolve_node_transform(Some(rot), None, Some(tl), r).unwrap();
+        let p = xf_tl * Point::new(0.0, 0.0);
+        assert!(p.x.abs() < 1e-6 && p.y.abs() < 1e-6, "pivote top-left fijo, fue {p:?}");
+
+        // Default (None) ⇒ centro: (50,50) queda fijo.
+        let xf_c = resolve_node_transform(Some(rot), None, None, r).unwrap();
+        let c = xf_c * Point::new(50.0, 50.0);
+        assert!(
+            (c.x - 50.0).abs() < 1e-6 && (c.y - 50.0).abs() < 1e-6,
+            "centro fijo con pivote default, fue {c:?}"
+        );
+        // Y el centro NO queda fijo con pivote top-left (distingue los dos casos).
+        let c2 = xf_tl * Point::new(50.0, 50.0);
+        assert!((c2.x - 50.0).abs() > 1.0 || (c2.y - 50.0).abs() > 1.0, "top-left mueve el centro");
+    }
 
     #[test]
     fn resolve_clip_radius_lados_y_porcentajes() {
