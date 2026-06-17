@@ -926,6 +926,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     // ---- Panel INICIO ----
     let mut inicio = Schema::new();
     inicio.sections.push(arranque_section());
+    inicio.sections.push(autostart_section());
 
     // ---- Panel SISTEMA ----
     let mut sistema = Schema::new();
@@ -1698,6 +1699,61 @@ fn arranque_section() -> Section {
         ))
 }
 
+/// Ruta del archivo de autoarranque que lee mirada al iniciar la sesión
+/// (`~/.config/mirada/autostart`, un comando por línea).
+fn autostart_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+    std::path::Path::new(&home).join(".config/mirada/autostart")
+}
+
+/// Lee los comandos de autoarranque (descarta líneas vacías y comentarios `#`).
+fn read_autostart() -> Vec<String> {
+    std::fs::read_to_string(autostart_path())
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(String::from)
+        .collect()
+}
+
+/// Reescribe el archivo de autoarranque (uno por línea). Crea el directorio si
+/// falta. Deja el error en el status si algo sale mal.
+fn write_autostart(m: &mut Model, items: &[String]) {
+    let path = autostart_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let body = items
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    match std::fs::write(&path, format!("{body}\n")) {
+        Ok(()) => m.status = format!("autoarranque guardado ({} programas)", items.iter().filter(|s| !s.trim().is_empty()).count()),
+        Err(e) => m.status = format!("· autoarranque: {e}"),
+    }
+}
+
+/// Autoarranque: programas que mirada lanza al iniciar la sesión. Lista
+/// editable (+/− agrega/borra) sobre `~/.config/mirada/autostart`. Real: mirada
+/// lee ese archivo al arrancar.
+fn autostart_section() -> Section {
+    Section::new("autostart::lista", "Autoarranque")
+        .icon("⟳")
+        .help(
+            "Programas que el escritorio lanza al iniciar sesión (uno por línea). \
+             mirada lee ~/.config/mirada/autostart al arrancar. +/− agrega/borra.",
+        )
+        .field(Field::list(
+            "lista",
+            "Programas al inicio",
+            read_autostart(),
+            "comando",
+        ))
+}
+
 /// Fondo de escritorio: muestra la imagen actual del perfil activo y abre el
 /// diálogo de archivos para elegir otra (toggle de acción).
 #[allow(dead_code)] // Wallpapers usa la sección `fondo` de mirada (perfil activo).
@@ -2132,6 +2188,14 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
         "theme" => {
             apply_theme(m, &rel, value);
             m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
+        // Autoarranque: la lista reescribe ~/.config/mirada/autostart al toque.
+        "autostart" => {
+            if let Some(items) = value.as_list() {
+                let items = items.to_vec();
+                write_autostart(m, &items);
+            }
             return;
         }
         // Sonido: aplica EN CALIENTE sobre wpctl (sin persistir nada nuestro —
