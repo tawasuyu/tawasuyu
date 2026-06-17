@@ -437,6 +437,7 @@ pub(crate) fn render_canvas(
     intrinsic_w: f32,
     intrinsic_h: f32,
     zoom: f32,
+    image_rendering: puriy_engine::ImageRendering,
 ) -> View<Msg> {
     // El View se muestra al tamaño del box (atributos width/height del engine,
     // escalado por zoom). El espacio de COORDENADAS de los comandos es el
@@ -476,7 +477,15 @@ pub(crate) fn render_canvas(
     for src in refs {
         if !frame_images.contains_key(&src) {
             if let Some(Some(img)) = images.get(&src) {
-                frame_images.insert(src, img.clone());
+                // `image-rendering` (Fase 7.1246): fija la calidad de muestreo del
+                // upscale del canvas. Aplicado a las imágenes que el frame usa
+                // (`drawImage` + patrones `createPattern`, que se construyen desde
+                // este mismo mapa) — cuando el tamaño CSS del canvas ≠ el del
+                // buffer de dibujo, `pixelated`/`crisp-edges` van nearest.
+                frame_images.insert(
+                    src,
+                    crate::render::with_image_rendering(img.clone(), image_rendering),
+                );
             }
         }
     }

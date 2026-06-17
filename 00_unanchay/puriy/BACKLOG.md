@@ -622,11 +622,27 @@ líneas del helper ya probado.
 > (próximo hueco): es más invasivo porque hay que enhebrar `image_rendering` por
 > `render_canvas` → `paint_canvas_cmds` hasta el `drawImage`/patrón.
 
-### Próximos huecos del mismo bloque (a atacar en orden)
+### 7.1246 ✅ — `image-rendering` para `<canvas>`
 
-- **`image-rendering` para `<canvas>`** — enhebrar `b.image_rendering` por
-  `render_canvas` → `paint_canvas_cmds` y aplicarlo al upscale del bitmap del
-  canvas (los `drawImage`/patrones internos), cuando el tamaño CSS ≠ el del buffer.
+Cierra el bloque `image-rendering` (tras `<img>` 7.1239 y `background-image`
+7.1245). `render_canvas` recibe ahora `b.image_rendering` y, al construir
+`frame_images` (las imágenes que el frame referencia por `drawImage` +
+`createPattern`), las envuelve con `with_image_rendering`. Como los patrones se
+construyen desde ese mismo mapa, heredan la calidad sin tocar
+`paint_canvas_cmds`. Efecto: cuando el tamaño CSS del canvas ≠ el del buffer de
+dibujo (`canvas.width/height`), `pixelated`/`crisp-edges` hacen el upscale nearest
+(pixel-art nítido), `smooth` bilineal. `auto` → `with_image_rendering` devuelve la
+imagen sin tocar, **cero cambio** para el caso común.
+
+> **Verificación:** mismo razonamiento que 7.1245 — helper `with_image_rendering`
+> unit-testeado (7.1239), landing/herencia de la prop en `group02`. El upscale de
+> imágenes dentro del canvas necesita el pipeline async de decodificación de
+> imágenes (`decode_canvas_images`), no reproducible en el harness offline; la
+> verificación se apoya en helper testeado + call-site wiring + suite verde (167).
+
+### Próximos huecos (siguiente bloque)
+
+- (bloque `image-rendering` cerrado — elegir el próximo hueco del BACKLOG general)
 - **`caret-color`** — DESCARTADO por ahora: el `text_input_view` de llimphi **no
   pinta caret** (línea explícita "sin caret glyph" en
   `widgets/text-input/src/lib.rs`). Sin caret renderizado, `caret-color` sería

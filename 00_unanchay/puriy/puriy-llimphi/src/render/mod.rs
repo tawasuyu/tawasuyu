@@ -466,7 +466,7 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             .element_id
             .as_deref()
             .and_then(|id| ctx.canvas_frames.get(id));
-        return render_canvas(frame, ctx.canvas_images, cw, ch, zoom);
+        return render_canvas(frame, ctx.canvas_images, cw, ch, zoom, b.image_rendering);
     }
     let style = box_style(b, zoom);
     let mut view = View::new(style);
