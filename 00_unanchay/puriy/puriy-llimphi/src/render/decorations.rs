@@ -414,7 +414,13 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     // `background-position` y `background-repeat` (Fase 7.204).
     let bg_image = b.background_image.as_ref().map(|img| {
         let blob = Blob::from(img.rgba.clone());
-        let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
+        // `image-rendering` (Fase 7.1245): fija la calidad de muestreo también para
+        // `background-image` (no sólo `<img>`, 7.1239). `pixelated`/`crisp-edges`
+        // → nearest, `smooth` → bilineal, `auto` → default.
+        let peniko = with_image_rendering(
+            PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height }),
+            b.image_rendering,
+        );
         (peniko, img.width as f64, img.height as f64)
     });
     let bg_size = b.background_size;
@@ -468,7 +474,11 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
         .filter_map(|l| {
             if let Some(img) = &l.image {
                 let blob = Blob::from(img.rgba.clone());
-                let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
+                // `image-rendering` también para las capas extra de background (7.1245).
+                let peniko = with_image_rendering(
+                    PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height }),
+                    b.image_rendering,
+                );
                 Some(PreparedBgLayer::Image {
                     img: peniko,
                     iw: img.width as f64,

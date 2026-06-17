@@ -604,11 +604,29 @@ el ring de focus. Verificado por pantallazo: `input{background:#fff;color:#15233
 pinta blanco con texto oscuro legible; `input.tinted{background:#fff7e6}` pinta
 crema. Cierra la familia de estilado de text-input del autor.
 
+### 7.1245 ✅ — `image-rendering` para `background-image`
+
+Extiende 7.1239 (que sólo tocaba `<img>`) a `background-image`. `apply_decorations`
+ahora envuelve la capa 0 (`bg_image`) y las capas extra (`background_extra_layers`)
+con `with_image_rendering(peniko, b.image_rendering)` antes de pintarlas: con
+`image-rendering: pixelated`/`crisp-edges` el upscale del fondo va nearest
+(pixel-art nítido), con `smooth` bilineal, con `auto` el default. Reuso de 2
+líneas del helper ya probado.
+
+> **Verificación:** el helper `with_image_rendering` está unit-testeado
+> (`grupo_04` 7.1239) y el landing+herencia de `image-rendering` en elementos
+> no-`<img>` (`body`) ya lo cubre `group02` (7.253). El `load_html` **offline**
+> no descarga `url()` (van por el pipeline async de recursos), así que un
+> pantallazo headless del fondo no es reproducible acá — la verificación se apoya
+> en el helper testeado + el reuse de call-site + suite verde. Falta el `<canvas>`
+> (próximo hueco): es más invasivo porque hay que enhebrar `image_rendering` por
+> `render_canvas` → `paint_canvas_cmds` hasta el `drawImage`/patrón.
+
 ### Próximos huecos del mismo bloque (a atacar en orden)
 
-- **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
-  los otros sitios de imagen (reusar `with_image_rendering` en `decorations.rs`
-  y `canvas.rs`).
+- **`image-rendering` para `<canvas>`** — enhebrar `b.image_rendering` por
+  `render_canvas` → `paint_canvas_cmds` y aplicarlo al upscale del bitmap del
+  canvas (los `drawImage`/patrones internos), cuando el tamaño CSS ≠ el del buffer.
 - **`caret-color`** — DESCARTADO por ahora: el `text_input_view` de llimphi **no
   pinta caret** (línea explícita "sin caret glyph" en
   `widgets/text-input/src/lib.rs`). Sin caret renderizado, `caret-color` sería
