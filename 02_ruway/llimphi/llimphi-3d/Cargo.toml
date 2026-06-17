@@ -20,3 +20,5 @@ llimphi-hal = { path = "../llimphi-hal" }
 llimphi-raster = { path = "../llimphi-raster" }
 png = { workspace = true }
 pollster = { workspace = true }
+# Demo interactivo: bucle Elm + ventana + mouse (orbita/zoom) sobre gpu_paint_with.
+llimphi-ui = { path = "../llimphi-ui" }
