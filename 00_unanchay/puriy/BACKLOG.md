@@ -746,8 +746,39 @@ cursor no se pinta a la escena (es runtime/winit), así que no hay verificación
 por PNG; la cadena se cubre con tests estructurales:
 `map_cursor_traduce_y_auto_no_overridea` (wire) + `cursor_fase_7_240` (engine).
 
+### 7.1251 ✅ — `text-overflow: ellipsis` (single-line `…`)
+
+`text-overflow` (Fase 7.241) parseaba y computaba pero **nadie lo consumía**: el
+texto que desbordaba una caja con `overflow: hidden` se recortaba seco, sin `…`.
+La infra ya existía (el `TextSpec` del compositor tiene `max_lines`/`ellipsis` y
+`Typesetter::layout_clamped` los aplica; `View::ellipsis(n)` los setea) — sólo
+faltaba cablear engine → wire.
+
+- **engine (`boxes/build/inline.rs`)**: la prop vive en el elemento contenedor,
+  pero los glifos están en la hoja de texto hija. Propagamos la intención al leaf
+  (precedente: `background-clip: text`) **sólo si** el contenedor recorta
+  (`overflow != visible`) — la precondición real de CSS UI 4. Sin recorte queda
+  en `Clip`.
+- **wire (`puriy-llimphi/src/render/mod.rs`)**: si la hoja de texto trae
+  `text_overflow == Ellipsis`, el leaf se construye con `.ellipsis(1)` (clamp a 1
+  línea + `…` cuando no entra en el ancho de la caja). `white-space: nowrap` aún
+  no está implementado para el wrap, pero `ellipsis(1)` fuerza la línea única
+  igual, así que el patrón canónico `overflow:hidden + text-overflow:ellipsis`
+  rinde el single-line clásico.
+
+Verificado por pantallazo headless: un `.cell { width:220px; overflow:hidden;
+text-overflow:ellipsis }` con texto largo rinde «Esta linea es demasiado larg…»
+en una sola línea; un `.libre` sin `overflow` envuelve en dos líneas sin recorte
+(el gating funciona). Test: `text_overflow_ellipsis_se_propaga_al_leaf_fase_7_1251`
+(engine: propaga con `overflow:hidden`, queda `Clip` sin recorte).
+
+> v1: single-line (`ellipsis(1)`). Multi-línea (`-webkit-line-clamp: n` con
+> `text-overflow` en la última) y `white-space: nowrap` real quedan pendientes.
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
+- **`white-space: nowrap`** — wrap real (hoy el texto envuelve igual; sólo el
+  clamp de `ellipsis(1)` fuerza la línea única). Habilita el resto de la familia.
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).
 - **caret v3** — parpadeo (blink) + scroll horizontal cuando el texto desborda la

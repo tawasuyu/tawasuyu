@@ -993,3 +993,33 @@ use crate::Engine;
         assert!(found_red, "no se encontró <p> con color rojo");
     }
 
+    #[test]
+    fn text_overflow_ellipsis_se_propaga_al_leaf_fase_7_1251() {
+        use crate::style::TextOverflow;
+        // `text-overflow: ellipsis` vive en el contenedor, pero el glifo está en
+        // la hoja de texto. Con `overflow: hidden` la intención se propaga al
+        // leaf; sin recorte (`overflow: visible`) NO aplica y queda en `Clip`.
+        let html = "<html><head><style>\
+            .corta { overflow: hidden; text-overflow: ellipsis; }\
+            .libre { text-overflow: ellipsis; }\
+            </style></head><body>\
+            <div class=\"corta\">recortame porque soy larguisimo</div>\
+            <div class=\"libre\">a mi no me recortes</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut recortada: Option<TextOverflow> = None;
+        let mut libre: Option<TextOverflow> = None;
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.contains("recortame") {
+                    recortada = Some(b.text_overflow);
+                } else if t.contains("no me recortes") {
+                    libre = Some(b.text_overflow);
+                }
+            }
+        });
+        assert_eq!(recortada, Some(TextOverflow::Ellipsis), "con overflow:hidden propaga");
+        assert_eq!(libre, Some(TextOverflow::Clip), "sin recorte no aplica");
+    }
+

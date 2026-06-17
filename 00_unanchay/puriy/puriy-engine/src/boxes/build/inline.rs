@@ -166,6 +166,15 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         leaf.background_clip = BackgroundClip::Text;
         leaf.background_gradient = style.background_gradient.clone();
     }
+    // `text-overflow: ellipsis` (Fase 7.1251): la prop vive en el elemento
+    // contenedor (que además debe recortar: `overflow != visible`), pero los
+    // glifos están en esta hoja de texto hija. Propagamos la intención al leaf
+    // —igual que el clip-text de arriba— para que el wire la consuma con
+    // `.ellipsis(1)`. Sin `overflow` que recorte, `text-overflow` no aplica
+    // (CSS UI 4), así que dejamos el `Clip` por defecto.
+    if style.text_overflow == TextOverflow::Ellipsis && style.overflow != Overflow::Visible {
+        leaf.text_overflow = TextOverflow::Ellipsis;
+    }
     leaf
 }
 

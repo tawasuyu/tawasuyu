@@ -955,7 +955,7 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 }
             });
         }
-        return view
+        view = view
             .text_aligned_full(
                 text.clone(),
                 size,
@@ -965,6 +965,14 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 b.font_family.clone(),
             )
             .line_height(b.line_height.unwrap_or(1.2));
+        // `text-overflow: ellipsis` (Fase 7.1251): el engine propagó la
+        // intención a esta hoja (el contenedor tiene `overflow != visible`).
+        // `ellipsis(1)` clampa a una línea y termina en `…` cuando el texto
+        // no entra en el ancho de la caja — el clásico single-line ellipsis.
+        if matches!(b.text_overflow, puriy_engine::style::TextOverflow::Ellipsis) {
+            view = view.ellipsis(1);
+        }
+        return view;
     }
 
     if !b.children.is_empty() {
