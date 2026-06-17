@@ -188,20 +188,54 @@ impl DrmState {
                         }
                     }
                 }
-                let color = rgba_f32(if w.focused {
+                let base = if w.focused {
                     self.app.decorations.border_focus
                 } else {
                     self.app.decorations.border_normal
-                });
-                let mut bar = SolidColorBuffer::default();
-                bar.update((sw, tb), color);
-                into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                    &bar,
-                    (x, dec_y),
-                    1.0,
-                    1.0,
-                    Kind::Unspecified,
-                )));
+                };
+                if self.app.decorations.titlebar_gradient && tb >= 4 {
+                    // Degradé vertical (claro arriba → base abajo) por franjas
+                    // sólidas: el compositor no tiene primitivo de gradiente, así
+                    // que apilamos ~8 bandas de luminancia decreciente.
+                    const BANDS: i32 = 8;
+                    let band_h = (tb + BANDS - 1) / BANDS; // techo, cubre todo tb
+                    for b in 0..BANDS {
+                        let by = dec_y + b * band_h;
+                        let h = band_h.min(dec_y + tb - by);
+                        if h <= 0 {
+                            break;
+                        }
+                        // t: 0 arriba (más claro) → 1 abajo (base). Aclarado del
+                        // ~28 % en la banda superior, desvaneciendo a 0.
+                        let t = b as f32 / (BANDS - 1) as f32;
+                        let lift = 0.28 * (1.0 - t);
+                        let shade = |c: u8| {
+                            let f = c as f32 / 255.0;
+                            (((f + (1.0 - f) * lift).clamp(0.0, 1.0)) * 255.0) as u8
+                        };
+                        let col = rgba_f32([shade(base[0]), shade(base[1]), shade(base[2]), base[3]]);
+                        let mut band = SolidColorBuffer::default();
+                        band.update((sw, h), col);
+                        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                            &band,
+                            (x, by),
+                            1.0,
+                            1.0,
+                            Kind::Unspecified,
+                        )));
+                    }
+                } else {
+                    let color = rgba_f32(base);
+                    let mut bar = SolidColorBuffer::default();
+                    bar.update((sw, tb), color);
+                    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &bar,
+                        (x, dec_y),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
             } else if w.focused && !w.is_shell && !w.title.is_empty() {
                 if let Some(tr) = &self.text {
                     if self.text_cache.len() > 256 {

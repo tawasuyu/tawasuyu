@@ -43,6 +43,8 @@ pub struct Theme {
     pub border_normal: [u8; 4],
     #[serde(default)]
     pub titlebar_height: i32,
+    #[serde(default)]
+    pub titlebar_gradient: bool,
 }
 
 impl Theme {
@@ -60,6 +62,7 @@ impl Theme {
             border_focus: m.border_focus,
             border_normal: m.border_normal,
             titlebar_height: m.titlebar_height,
+            titlebar_gradient: m.titlebar_gradient,
         }
     }
 
@@ -75,6 +78,7 @@ impl Theme {
         m.border_focus = self.border_focus;
         m.border_normal = self.border_normal;
         m.titlebar_height = self.titlebar_height;
+        m.titlebar_gradient = self.titlebar_gradient;
     }
 }
 

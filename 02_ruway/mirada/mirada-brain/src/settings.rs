@@ -145,6 +145,11 @@ impl Configurable for Config {
                         "border_normal",
                         "Color sin foco",
                         self.border_normal,
+                    ))
+                    .field(Field::toggle(
+                        "titlebar_gradient",
+                        "Barra de título con degradé",
+                        self.titlebar_gradient,
                     )),
             )
             .section(
@@ -340,6 +345,11 @@ impl Configurable for Config {
             "titlebar_height" => {
                 if let Some(v) = value.as_int() {
                     self.titlebar_height = v as i32;
+                }
+            }
+            "titlebar_gradient" => {
+                if let Some(b) = value.as_bool() {
+                    self.titlebar_gradient = b;
                 }
             }
             "border_focus" => {

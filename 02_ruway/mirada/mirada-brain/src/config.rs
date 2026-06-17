@@ -107,6 +107,10 @@ pub struct Config {
     /// Alto de la barra de título en px; `0` = sin barra (sólo el título de la
     /// ventana enfocada superpuesto). Se reserva arriba de cada ventana.
     pub titlebar_height: i32,
+    /// Pintar la barra de título con un degradé vertical (claro arriba → color
+    /// base abajo) en vez de plana. La fija el theme del perfil activo.
+    #[serde(default)]
+    pub titlebar_gradient: bool,
     /// Ruta a la fuente para las etiquetas del compositor (título, menú).
     /// Vacía = se prueba una lista de fuentes comunes del sistema.
     pub font_path: String,
@@ -396,6 +400,7 @@ impl Default for Config {
             border_focus: dec.border_focus,
             border_normal: dec.border_normal,
             titlebar_height: dec.titlebar_height,
+            titlebar_gradient: dec.titlebar_gradient,
             font_path: String::new(),
             wallpaper_path: String::new(),
             wallpaper_fit: WallpaperFit::default(),
@@ -522,6 +527,7 @@ impl Config {
             border_focus: self.border_focus,
             border_normal: self.border_normal,
             titlebar_height: self.titlebar_height.max(0),
+            titlebar_gradient: self.titlebar_gradient,
         }
     }
 

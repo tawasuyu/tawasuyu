@@ -81,6 +81,10 @@ pub struct Decorations {
     /// La franja se reserva arriba de cada ventana (no-shell): la superficie
     /// del cliente se achica y la barra se pinta encima.
     pub titlebar_height: i32,
+    /// Pintar la barra de título con un **degradé** vertical (claro arriba →
+    /// color base abajo) en vez de un color plano. `false` = barra sólida.
+    #[serde(default)]
+    pub titlebar_gradient: bool,
 }
 
 impl Default for Decorations {
@@ -92,6 +96,7 @@ impl Default for Decorations {
             border_focus: [92, 143, 235, 255],
             border_normal: [56, 56, 69, 255],
             titlebar_height: 24,
+            titlebar_gradient: false,
         }
     }
 }
