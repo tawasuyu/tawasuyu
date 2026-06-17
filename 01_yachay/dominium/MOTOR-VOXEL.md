@@ -413,6 +413,11 @@ procedural (`llimphi_3d::terrain`: heightmap fbm con océanos/playa/pasto/roca/n
 disco solar + niebla por distancia, opt-in vía `fog_density` para no alterar la
 composición clásica sobre vello). Demo verificado por PNG headless:
 `cargo run -p llimphi-3d --example terrain_demo --release` → /tmp/m6_terrain_*.png.
+Encima: **cámara libre / primera persona** (`Camera3d::fly`, complementa a `orbit`
+para ver el mundo *desde adentro*), `VoxelGrid::height_at` (posar cámara/entidad
+sobre el relieve) y **atmósfera por dimensión** (`Dimension::with_atmosphere` — cada
+mundo de M5 con su cielo/niebla). Demos: `terrain_flythrough` (vuelo bajo por el
+paisaje, /tmp/m6_fly_*.png) y `voxel_dimensiones` con skies temáticos.
 Queda de M6: **streaming real** (chunks que cargan/descargan alrededor de la cámara
 + persistencia CAS) y **LOD** del horizonte — el tramo caro de §7.
 

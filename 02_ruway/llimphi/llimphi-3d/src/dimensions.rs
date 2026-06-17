@@ -11,7 +11,7 @@
 
 use crate::camera::Camera3d;
 use crate::voxel::VoxelGrid;
-use crate::voxel_renderer::{Entity3d, VoxelRenderer};
+use crate::voxel_renderer::{Atmosphere, Entity3d, VoxelRenderer};
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -24,6 +24,9 @@ pub struct Dimension {
     pub sky: [u8; 3],
     /// Dirección hacia el sol de esta dimensión.
     pub sun_dir: [f32; 3],
+    /// Atmósfera (cielo + niebla) de esta dimensión. Default = niebla off, así
+    /// una dimensión sin configurar se comporta como en M5 (miss → discard).
+    pub atmosphere: Atmosphere,
     /// Entidades (agentes) de esta dimensión; se copian al renderer por frame.
     pub entities: Vec<Entity3d>,
     renderer: Option<VoxelRenderer>,
@@ -37,6 +40,7 @@ impl Dimension {
             grid,
             sky: [18, 22, 32],
             sun_dir: [0.5, 1.0, 0.35],
+            atmosphere: Atmosphere::default(),
             entities: Vec::new(),
             renderer: None,
         }
@@ -48,6 +52,13 @@ impl Dimension {
     }
     pub fn with_sun(mut self, sun_dir: [f32; 3]) -> Self {
         self.sun_dir = sun_dir;
+        self
+    }
+    /// Activa cielo + niebla propios para esta dimensión (el `render` los aplica
+    /// al renderer). Con `fog_density > 0`, el motor pinta su propio cielo en los
+    /// misses (ya no se ve el fondo vello).
+    pub fn with_atmosphere(mut self, atmosphere: Atmosphere) -> Self {
+        self.atmosphere = atmosphere;
         self
     }
     pub fn with_entities(mut self, entities: Vec<Entity3d>) -> Self {
@@ -132,6 +143,7 @@ impl Multiverse {
             .renderer
             .get_or_insert_with(|| VoxelRenderer::new(device, queue, fmt, &d.grid));
         r.sun_dir = d.sun_dir;
+        r.atmosphere = d.atmosphere;
         r.entities = d.entities.clone();
         r.render(device, queue, encoder, target, viewport, camera);
     }

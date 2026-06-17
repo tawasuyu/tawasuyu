@@ -51,6 +51,24 @@ impl Camera3d {
         }
     }
 
+    /// Cámara **libre / primera persona**: parada en `eye`, mirando según
+    /// `yaw` (giro alrededor de Y) y `pitch` (cabeceo, clamped para no cruzar el
+    /// cenit). Complementa a [`orbit`](Self::orbit): `orbit` mira un punto desde
+    /// afuera (vista de paisaje), `fly` te pone *adentro* del mundo (vuelo / FPS).
+    /// `yaw=0` mira hacia `+Z`.
+    pub fn fly(eye: Vec3, yaw: f32, pitch: f32) -> Self {
+        let lim = std::f32::consts::FRAC_PI_2 - 0.01;
+        let pitch = pitch.clamp(-lim, lim);
+        let (sy, cy) = yaw.sin_cos();
+        let (sp, cp) = pitch.sin_cos();
+        let dir = Vec3::new(cp * sy, sp, cp * cy);
+        Self {
+            eye,
+            target: eye + dir,
+            ..Self::default()
+        }
+    }
+
     /// Matriz `proj * view` lista para `mvp * vec4(pos, 1.0)` en el shader.
     /// `aspect` = ancho/alto del viewport en pixels.
     pub fn view_proj(&self, aspect: f32) -> Mat4 {

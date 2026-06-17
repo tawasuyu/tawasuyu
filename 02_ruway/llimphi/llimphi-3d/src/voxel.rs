@@ -95,6 +95,16 @@ impl VoxelGrid {
         self.data[self.idx(x, y, z)][3] > 0
     }
 
+    /// Altura del voxel sólido más alto en la columna `(x, z)` (escaneando de
+    /// arriba hacia abajo), o `None` si la columna está vacía. Útil para posar
+    /// una cámara/entidad sobre el terreno sin meterla dentro de la roca.
+    pub fn height_at(&self, x: u32, z: u32) -> Option<u32> {
+        if x >= self.dim[0] || z >= self.dim[2] {
+            return None;
+        }
+        (0..self.dim[1]).rev().find(|&y| self.solid(x, y, z))
+    }
+
     /// Mapa de ocupación grueso por *bricks* de `brick³` voxels (M2): un texel
     /// por brick, `255` si el brick contiene algún voxel sólido, `0` si está
     /// todo vacío. El shader marcha primero esta grilla gruesa y se salta los

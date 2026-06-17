@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use llimphi_3d::glam::Vec3;
-use llimphi_3d::{Camera3d, Dimension, Entity3d, Multiverse, VoxelGrid};
+use llimphi_3d::{Atmosphere, Camera3d, Dimension, Entity3d, Multiverse, VoxelGrid};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::llimphi_layout::LayoutTree;
@@ -34,6 +34,11 @@ fn world_jardin(d: u32) -> Dimension {
     Dimension::new("Jardín", VoxelGrid::demo_scene([d, d, d]))
         .with_sky([20, 30, 26])
         .with_sun([0.5, 1.0, 0.35])
+        .with_atmosphere(Atmosphere {
+            sky_zenith: [70, 130, 90],
+            sky_horizon: [196, 222, 188],
+            fog_density: 0.22 / d as f32,
+        })
         .with_entities(orbit_entities(
             d,
             &[[235, 70, 70], [70, 220, 110], [90, 130, 250], [240, 200, 60]],
@@ -72,6 +77,11 @@ fn world_inframundo(d: u32) -> Dimension {
     Dimension::new("Inframundo", g)
         .with_sky([28, 8, 8])
         .with_sun([0.35, 0.7, 0.5])
+        .with_atmosphere(Atmosphere {
+            sky_zenith: [60, 12, 10],
+            sky_horizon: [180, 70, 24],
+            fog_density: 0.4 / d as f32,
+        })
         .with_entities(orbit_entities(d, &[[255, 140, 30], [255, 90, 20], [255, 200, 60]]))
 }
 
@@ -106,6 +116,11 @@ fn world_cristal(d: u32) -> Dimension {
     Dimension::new("Cristal", g)
         .with_sky([10, 10, 22])
         .with_sun([0.4, 0.8, 0.45])
+        .with_atmosphere(Atmosphere {
+            sky_zenith: [24, 18, 60],
+            sky_horizon: [120, 90, 200],
+            fog_density: 0.28 / d as f32,
+        })
         .with_entities(orbit_entities(d, &[[120, 240, 255], [220, 180, 255]]))
 }
 
