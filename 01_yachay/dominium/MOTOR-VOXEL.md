@@ -461,9 +461,20 @@ no a mitad de loop — clave: copiar el atlas mientras hay `write_texture` de br
 vuelo deja **un brick corrupto** (race); pre-crecer antes de subir nada lo evita.
 Verificado: arrancar con pool de 64 slots y scrollear a una ventana densa lejana crece
 **64→2400 slots** y el render queda **pixel-idéntico** al rebuild (`max|Δ|=0`, demo
-`terrain_streaming`). Queda de M6: **wiring en la app viva** (coords del jugador/HUD
-bajo la ventana móvil — necesita pantalla), persistencia CAS de chunks y **LOD** del
-horizonte — el tramo caro de §7.
+`terrain_streaming`).
+
+**Persistencia de ediciones (HECHO, 2026-06-17):** el streaming regenera el terreno
+desde la semilla cada vez que la ventana vuelve a una zona, así que sin esto los
+cambios del jugador se perderían al alejarse y volver. `WorldStream` ahora guarda un
+mapa `mundo → RGBA` de ediciones (`edit(wx,wy,wz, Some(rgb)|None)`) y las **re-aplica
+como overlay** sobre el terreno fresco en cada `follow`. Verificado: 2 tests CPU
+(un bloque magenta y un cavado sobreviven alejarse 2000-4000 voxels y volver; el
+terreno solo en ese punto es aire) + prueba visual (demo `terrain_streaming`: una torre
+magenta = 1261 px **idénticos** antes y después de alejarse 4000 voxels y volver →
+`/tmp/m6_persist_{before,after}.png`). Es el estado a serializar para la **persistencia
+CAS a disco** (futuro): `mundo → BLAKE3(postcard(patch))`. Queda de M6: **wiring en la
+app viva** (coords del jugador/HUD bajo la ventana móvil — necesita pantalla), CAS a
+disco y **LOD** del horizonte — el tramo caro de §7.
 
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más

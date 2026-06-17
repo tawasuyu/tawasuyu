@@ -16,6 +16,8 @@
 
 use llimphi_3d::VoxelGrid;
 
+use std::collections::HashMap;
+
 use crate::terrain::fill_terrain_window;
 
 /// Ventana de mundo que sigue a un foco (la cámara/jugador) por un terreno
@@ -29,6 +31,13 @@ pub struct WorldStream {
     /// Granularidad de reubicación (voxels). Recentrar sólo cuando el foco se
     /// aleja del centro más de medio paso evita regenerar cada voxel caminado.
     step: i32,
+    /// **Ediciones persistentes** por coordenada de **mundo** (`[wx, wy, wz]` →
+    /// RGBA; `a = 0` = voxel cavado/aire). Como el terreno se regenera desde la
+    /// semilla cada vez que la ventana vuelve a una zona, sin esto los cambios del
+    /// jugador se perderían al alejarse y volver. Se re-aplican sobre el terreno
+    /// fresco en cada `follow` (overlay). Es el estado a serializar para la
+    /// persistencia CAS a disco (futuro): `mundo → BLAKE3(postcard(patch))`.
+    edits: HashMap<[i32; 3], [u8; 4]>,
 }
 
 impl WorldStream {
@@ -40,7 +49,7 @@ impl WorldStream {
         let origin = Self::origin_for(dim, center_x, center_z, step);
         let mut grid = VoxelGrid::new(dim);
         fill_terrain_window(&mut grid, origin, seed);
-        Self { grid, dim, seed, origin, step }
+        Self { grid, dim, seed, origin, step, edits: HashMap::new() }
     }
 
     /// Origen (esquina) de ventana que centra la columna de mundo `(cx, cz)`,
@@ -64,7 +73,68 @@ impl WorldStream {
         }
         self.origin = want;
         fill_terrain_window(&mut self.grid, want, self.seed);
+        // Re-aplicar las ediciones persistentes que caen en la ventana nueva
+        // (overlay sobre el terreno fresco): así un cráter/estructura sobrevive
+        // alejarse y volver.
+        self.reapply_edits();
         true
+    }
+
+    /// Edita un voxel en coordenadas de **mundo** y lo **persiste**: `Some(rgb)`
+    /// coloca un bloque sólido, `None` lo cava (aire). El cambio se registra en
+    /// `edits` (sobrevive el regen del streaming) y, si el voxel cae en la ventana
+    /// actual, se aplica al grid (que queda dirty → el caller hace `sync`/scroll).
+    pub fn edit(&mut self, wx: i32, wy: i32, wz: i32, block: Option<[u8; 3]>) {
+        let v = match block {
+            Some(rgb) => [rgb[0], rgb[1], rgb[2], 255],
+            None => [0, 0, 0, 0],
+        };
+        self.edits.insert([wx, wy, wz], v);
+        self.apply_voxel(wx, wy, wz, v);
+    }
+
+    /// Cantidad de voxels editados persistidos (para reportar/serializar).
+    pub fn edit_count(&self) -> usize {
+        self.edits.len()
+    }
+
+    /// Aplica un voxel `v` (RGBA, `a=0`=aire) al grid si su coordenada de mundo
+    /// cae en la ventana actual. No-op si está afuera (ya quedó en `edits`).
+    fn apply_voxel(&mut self, wx: i32, wy: i32, wz: i32, v: [u8; 4]) {
+        let lx = wx - self.origin[0];
+        let lz = wz - self.origin[1];
+        if lx < 0 || wy < 0 || lz < 0 {
+            return;
+        }
+        let (lx, ly, lz) = (lx as u32, wy as u32, lz as u32);
+        if lx < self.dim[0] && ly < self.dim[1] && lz < self.dim[2] {
+            if v[3] > 0 {
+                self.grid.set(lx, ly, lz, [v[0], v[1], v[2]]);
+            } else {
+                self.grid.clear(lx, ly, lz);
+            }
+        }
+    }
+
+    /// Re-aplica todas las ediciones que caen en la ventana actual sobre el grid.
+    fn reapply_edits(&mut self) {
+        // Split de borrows: iterar `edits` (inmutable) y mutar `grid`.
+        let Self { edits, grid, origin, dim, .. } = self;
+        for (&[wx, wy, wz], &v) in edits.iter() {
+            let lx = wx - origin[0];
+            let lz = wz - origin[1];
+            if lx < 0 || wy < 0 || lz < 0 {
+                continue;
+            }
+            let (lx, ly, lz) = (lx as u32, wy as u32, lz as u32);
+            if lx < dim[0] && ly < dim[1] && lz < dim[2] {
+                if v[3] > 0 {
+                    grid.set(lx, ly, lz, [v[0], v[1], v[2]]);
+                } else {
+                    grid.clear(lx, ly, lz);
+                }
+            }
+        }
     }
 
     /// Grid actual (para renderizar / `VoxelRenderer::new`).
@@ -168,5 +238,69 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Una edición sobrevive alejarse y volver: el terreno se regenera desde la
+    /// semilla, pero el overlay de `edits` la re-aplica.
+    #[test]
+    fn una_edicion_sobrevive_alejarse_y_volver() {
+        let dim = [48, 40, 48];
+        let seed = 7;
+        let mut s = WorldStream::new(dim, seed, 0, 0, 8);
+
+        // Bloque magenta en lo alto del aire sobre la columna de mundo (0,0):
+        // el terreno nunca pone magenta ahí (es aire), así el origen del píxel es
+        // inequívocamente la edición.
+        let (wx, wy, wz) = (0, dim[1] as i32 - 3, 0);
+        let magenta = [255, 0, 255];
+        s.edit(wx, wy, wz, Some(magenta));
+        assert_eq!(s.edit_count(), 1);
+
+        let read = |s: &WorldStream| {
+            let (lx, lz) = s.world_to_local(wx, wz).expect("en ventana");
+            s.grid().get(lx, wy as u32, lz)
+        };
+        assert_eq!(read(&s), Some([255, 0, 255, 255]), "presente recién editada");
+
+        // Alejarse MUCHO (el voxel sale de la ventana → terreno regenerado, sin él).
+        assert!(s.follow(2000, 2000));
+        assert!(s.world_to_local(wx, wz).is_none(), "fuera de la ventana lejana");
+        assert_eq!(s.edit_count(), 1, "la edición sigue persistida");
+
+        // Volver al origen: el terreno se regenera Y el overlay re-aplica la edición.
+        assert!(s.follow(0, 0));
+        assert_eq!(read(&s), Some([255, 0, 255, 255]), "sobrevivió al regen");
+
+        // Y sin la edición, ese voxel sería aire (prueba que no es terreno).
+        let mut limpio = VoxelGrid::new(dim);
+        fill_terrain_window(&mut limpio, s.origin(), seed);
+        let (lx, lz) = s.world_to_local(wx, wz).unwrap();
+        assert_eq!(limpio.get(lx, wy as u32, lz), Some([0, 0, 0, 0]), "terreno solo = aire");
+    }
+
+    /// Cavar (edit con `None`) también persiste: un voxel sólido del terreno
+    /// queda vacío tras alejarse y volver.
+    #[test]
+    fn cavar_persiste() {
+        let dim = [48, 40, 48];
+        let seed = 13;
+        let mut s = WorldStream::new(dim, seed, 0, 0, 8);
+
+        // Buscar un voxel SÓLIDO del terreno en la columna central y cavarlo.
+        let (lx0, lz0) = s.world_to_local(0, 0).unwrap();
+        let h = s.grid().height_at(lx0, lz0).expect("columna con terreno");
+        let (wx, wy, wz) = (0, h as i32, 0);
+        assert!(s.grid().is_solid(lx0 as i32, wy, lz0 as i32), "sólido antes");
+
+        s.edit(wx, wy, wz, None); // cavar
+        let local_solid = |s: &WorldStream| {
+            let (lx, lz) = s.world_to_local(wx, wz).unwrap();
+            s.grid().is_solid(lx as i32, wy, lz as i32)
+        };
+        assert!(!local_solid(&s), "cavado tras editar");
+
+        s.follow(3000, -3000);
+        s.follow(0, 0);
+        assert!(!local_solid(&s), "sigue cavado tras volver");
     }
 }

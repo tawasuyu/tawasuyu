@@ -141,6 +141,68 @@ fn main() {
     assert!(cap1 > cap0, "el pool no creció (arrancó con capacidad suficiente)");
     assert!(gmax <= 2, "el pool creció con huecos (max|Δ|={gmax})");
     eprintln!("POOL-GROW OK — el pool creció y la ventana densa quedó completa, sin huecos.");
+
+    // --- Persistencia de ediciones: un pilar magenta editado sobre la columna de
+    // mundo (0,0) debe seguir ahí tras alejarse miles de voxels y volver (el
+    // terreno se regenera desde la semilla, el overlay de `edits` lo re-aplica).
+    let mut s = WorldStream::new(dim, seed, 0, 0, llimphi_3d::VOXEL_BRICK);
+    let (lx0, lz0) = s.world_to_local(0, 0).unwrap();
+    let gh = s.grid().height_at(lx0, lz0).unwrap_or(dim[1] / 2) as i32;
+    // Torre magenta gruesa (5×5) y alta sobre la columna de mundo (0,0): el
+    // terreno nunca pone magenta, así el píxel es inequívocamente la edición.
+    let top = (gh + 22).min(dim[1] as i32 - 1);
+    for wy in (gh + 1)..top {
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                s.edit(dx, wy, dz, Some([240, 40, 220]));
+            }
+        }
+    }
+    // Cámara apuntada a la torre (mundo centrado en el origen → columna (0,0) cae
+    // en el centro; `y` de mundo = `y` de grilla − dim_y/2).
+    let half_y = dim[1] as f32 * 0.5;
+    let tower_mid = (gh + 11) as f32 - half_y;
+    let pcam = Camera3d {
+        eye: Vec3::new(14.0, tower_mid + 10.0, -(dim[2] as f32) * 0.32),
+        target: Vec3::new(0.0, tower_mid, 0.0),
+        ..Camera3d::default()
+    };
+    // Se reconstruye el renderer desde `s.grid()` en cada toma: acá probamos la
+    // PERSISTENCIA (la edición sobrevive el regen), no el upload incremental (ya
+    // verificado arriba). Subir la torre por scroll caería en bricks "bulk" que el
+    // toroidal no re-sube (asume terreno determinista; la edición rompe eso).
+    let mut render_grid = |g: &VoxelGrid| {
+        let mut r = VoxelRenderer::new(&hal.device, &hal.queue, FMT, g);
+        r.sun_dir = vr.sun_dir;
+        r.atmosphere = vr.atmosphere;
+        render_to_pixels(&hal, &mut renderer, &inter, &inter_view, &mut r, &pcam)
+    };
+    let before = render_grid(s.grid());
+    encode_png(&before, W, H, "/tmp/m6_persist_before.png");
+
+    // Alejarse miles de voxels (el terreno se regenera, la torre sale de ventana)
+    // y volver al origen (se regenera de nuevo + overlay re-aplica la torre).
+    s.follow(4000, 4000);
+    s.follow(0, 0);
+    let after = render_grid(s.grid());
+    encode_png(&after, W, H, "/tmp/m6_persist_after.png");
+
+    // Conteo de píxeles magenta (la torre) en ambas tomas: deben ser ~iguales.
+    // Magenta = rojo y azul ambos claramente por encima del verde (robusto a la
+    // luz coloreada/AO, que baja los valores absolutos pero no esa relación).
+    let magenta = |px: &[u8]| -> u32 {
+        px.chunks_exact(4)
+            .filter(|c| {
+                let (r, g, b) = (c[0] as i32, c[1] as i32, c[2] as i32);
+                r > g + 40 && b > g + 40
+            })
+            .count() as u32
+    };
+    let (mb, ma) = (magenta(&before), magenta(&after));
+    eprintln!("PERSISTENCIA: pilar magenta = {mb} px antes / {ma} px tras alejarse+volver ({} ediciones)", s.edit_count());
+    assert!(mb > 200, "el pilar debería verse antes ({mb} px)");
+    assert!(ma * 100 >= mb * 90, "el pilar se perdió al volver ({mb}→{ma} px)");
+    eprintln!("PERSISTENCIA OK — la edición sobrevivió el regen del streaming.");
 }
 
 /// Cámara de la ventana: posada sobre los **picos** del terreno (muestreo de
