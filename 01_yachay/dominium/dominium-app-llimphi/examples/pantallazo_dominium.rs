@@ -158,6 +158,7 @@ fn modelo_demo() -> Model {
         edit_active: usize::MAX,
         edit_anim: Tween::idle(1.0),
         clipboard: llimphi_clipboard::SystemClipboard::new(),
+        plan_cache: std::cell::RefCell::new(None),
     }
 }
 
@@ -185,7 +186,7 @@ fn view_demo(model: &Model, menu: &app_bus::AppMenu, theme: &Theme) -> View<Msg>
     let plan = build_plan_with_overrides(shown, &model.iso, &model.weights, &model.cfg, |i| {
         lemming_color_for(model, i)
     });
-    let canvas = canvas_pane(plan);
+    let canvas = canvas_pane(std::sync::Arc::new(plan));
     let side = side_panel(model, &stats, &psi_metrics, theme);
 
     let body = View::new(Style {

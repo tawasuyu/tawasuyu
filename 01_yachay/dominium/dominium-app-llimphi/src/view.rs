@@ -1,7 +1,6 @@
 //! Todas las vistas de la app: status bar, onboarding, canvas pane, panel
 //! lateral con sus cuatro tabs y los widgets de fila/slider reutilizados.
 
-use dominium_canvas_llimphi::canvas_view;
 use dominium_core::{Epoch, PsiMetrics, Trigger, WorldStats};
 use dominium_render_plan::{Color, RenderMode};
 use llimphi_theme::Theme;
@@ -143,9 +142,11 @@ pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
     .children(vec![label_view, estado_view])
 }
 
-pub(crate) fn canvas_pane(plan: dominium_render_plan::RenderPlan) -> View<Msg> {
+pub(crate) fn canvas_pane(
+    plan: std::sync::Arc<dominium_render_plan::RenderPlan>,
+) -> View<Msg> {
     let canvas_bg = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(11, 13, 18, 255);
-    let canvas = canvas_view::<Msg>(plan, Some(canvas_bg));
+    let canvas = dominium_canvas_llimphi::canvas_view_arc::<Msg>(plan, Some(canvas_bg));
     View::new(Style {
         size: Size {
             width: Dimension::auto(),

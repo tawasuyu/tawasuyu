@@ -53,7 +53,8 @@ use crate::packs::{
     default_conceptos, load_user_escenario, save_user_escenario, scenario_packs,
 };
 use crate::sim::{
-    lemming_color_for, mirror_zweights_to_relieve, overlay_trails, selected_mut, spawn_concepto_at,
+    lemming_color_for, mirror_zweights_to_relieve, overlay_trails, render_fingerprint, selected_mut,
+    spawn_concepto_at,
 };
 use crate::view::{canvas_pane, onboarding_bar, side_panel, status_bar};
 use crate::worldgen::{bioma_palette, seed};
@@ -205,6 +206,7 @@ impl App for Dominium {
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
             clipboard: llimphi_clipboard::SystemClipboard::new(),
+            plan_cache: std::cell::RefCell::new(None),
         }
     }
 
@@ -735,16 +737,34 @@ impl App for Dominium {
         // por frame a 11 Hz, perfectamente costeable y nos da las métricas
         // psicológicas en vivo sin un segundo bucle de cálculo.
         let psi_metrics = PsiMetrics::from_world(shown);
-        let mut plan = build_plan_with_overrides(
-            shown,
-            &model.iso,
-            &model.weights,
-            &model.cfg,
-            |i| lemming_color_for(model, i),
-        );
-        if model.show_trails && model.sim.rewind_offset == 0 {
-            overlay_trails(&mut plan, model);
-        }
+        // Plan cacheado por huella: sólo reconstruimos las ~115 k primitivas
+        // cuando el estado de render cambió (sim avanzó, conceptos/weights/cfg
+        // editados, modo). En frames sin cambio (sim pausada, sólo UI/menús)
+        // se reusa el `Arc<RenderPlan>` del frame anterior — el costo de
+        // `build_plan` baja de ~14 ms a 0 a grid 240. La huella la calcula
+        // `render_fingerprint` (sim.rs); el clon del `Arc` es O(1).
+        let fp = render_fingerprint(model);
+        let plan: std::sync::Arc<dominium_render_plan::RenderPlan> = {
+            let cached = model.plan_cache.borrow().clone();
+            match cached {
+                Some((gen, p)) if gen == fp => p,
+                _ => {
+                    let mut fresh = build_plan_with_overrides(
+                        shown,
+                        &model.iso,
+                        &model.weights,
+                        &model.cfg,
+                        |i| lemming_color_for(model, i),
+                    );
+                    if model.show_trails && model.sim.rewind_offset == 0 {
+                        overlay_trails(&mut fresh, model);
+                    }
+                    let arc = std::sync::Arc::new(fresh);
+                    *model.plan_cache.borrow_mut() = Some((fp, arc.clone()));
+                    arc
+                }
+            }
+        };
         let plan_cx = (plan.min_x + plan.max_x) * 0.5;
         let plan_cy = (plan.min_y + plan.max_y) * 0.5;
         let iso = model.iso;

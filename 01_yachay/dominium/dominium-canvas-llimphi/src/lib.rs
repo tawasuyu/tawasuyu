@@ -35,6 +35,21 @@ pub fn canvas_view<Msg>(plan: RenderPlan, background: Option<Color>) -> View<Msg
 where
     Msg: Clone + 'static,
 {
+    canvas_view_arc(std::sync::Arc::new(plan), background)
+}
+
+/// Igual que [`canvas_view`] pero recibe el plan envuelto en `Arc`. Pensado
+/// para hosts que cachean el `RenderPlan` entre frames (memoización por
+/// huella): clonar el `Arc` para meterlo en la closure de paint es O(1), en
+/// vez de copiar el `Vec` de ~115 k polígonos por frame. El resultado pintado
+/// es idéntico — sólo cambia el costo de pasaje.
+pub fn canvas_view_arc<Msg>(
+    plan: std::sync::Arc<RenderPlan>,
+    background: Option<Color>,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+{
     // El plan es Send + Sync (Vec<Quad> con Copy). Lo movemos a la
     // closure de paint; el runtime la invoca por frame.
     let view = View::new(Style {

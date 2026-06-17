@@ -66,6 +66,17 @@ pub(crate) struct Model {
     /// Clipboard del sistema, compartido por el menú de edición y el
     /// text-input de renombre.
     pub(crate) clipboard: SystemClipboard,
+    /// Caché del `RenderPlan` con memoización por huella. `view()` recibe
+    /// `&Model`, así que la reconstrucción perezosa se hace por interior
+    /// mutability: si la huella del estado de render (tick de sim, conceptos,
+    /// weights, cfg, modo) no cambió desde el último frame, se reusa el
+    /// `Arc<RenderPlan>` cacheado en vez de re-iterar las 57 600 celdas y
+    /// re-emitir ~115 k polígonos. A grid 240 esto baja el costo de
+    /// `build_plan` de ~14 ms/frame a ~0 en frames sin cambio (sim pausada,
+    /// sólo UI). El `Arc` hace que el clon por frame sea barato.
+    pub(crate) plan_cache: std::cell::RefCell<
+        Option<(u64, std::sync::Arc<dominium_render_plan::RenderPlan>)>,
+    >,
 }
 
 /// Pestañas del panel lateral. El orden es el orden visual en el tab bar.

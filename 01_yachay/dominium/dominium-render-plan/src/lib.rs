@@ -1052,38 +1052,86 @@ pub fn build_plan_with_overrides(
         a.depth.partial_cmp(&b.depth).unwrap_or(core::cmp::Ordering::Equal)
     });
 
-    // --- Caja envolvente: cubre quads + polygons + glifos ---
-    let mut plan = RenderPlan { quads, polygons, glyphs, sprites, ..Default::default() };
-    let mut have_bounds = false;
-    let bump = |plan: &mut RenderPlan, have: &mut bool, x: f32, y: f32, w: f32, h: f32| {
-        if !*have {
-            plan.min_x = x;
-            plan.min_y = y;
-            plan.max_x = x + w;
-            plan.max_y = y + h;
-            *have = true;
-        } else {
-            plan.min_x = plan.min_x.min(x);
-            plan.min_y = plan.min_y.min(y);
-            plan.max_x = plan.max_x.max(x + w);
-            plan.max_y = plan.max_y.max(y + h);
+    // --- Caja envolvente: cubre quads + polygons ---
+    // En vez de coleccionar Vecs temporales (a grid 240 eran ~115 k tuplas
+    // alocadas y copiadas por build), acumulamos in-place sobre locales —
+    // mismo resultado, sin la alloc.
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for q in &quads {
+        min_x = min_x.min(q.x);
+        min_y = min_y.min(q.y);
+        max_x = max_x.max(q.x + q.w);
+        max_y = max_y.max(q.y + q.h);
+    }
+    for p in &polygons {
+        for (vx, vy) in p.vertices {
+            min_x = min_x.min(vx);
+            min_y = min_y.min(vy);
+            max_x = max_x.max(vx);
+            max_y = max_y.max(vy);
         }
+    }
+    if quads.is_empty() && polygons.is_empty() {
+        // Sin geometría: bbox degenerada en el origen (igual que antes, que
+        // dejaba los campos en su Default 0.0).
+        min_x = 0.0;
+        min_y = 0.0;
+        max_x = 0.0;
+        max_y = 0.0;
+    }
+    RenderPlan {
+        quads,
+        polygons,
+        glyphs,
+        sprites,
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    }
+}
+
+/// Recorta del plan toda la geometría que cae FUERA del viewport (más un
+/// `margin` de holgura), dejándolo listo para un rasterizador que sólo paga
+/// por lo on-screen. A zoom alto la maqueta emite >100 k polígonos pero
+/// acercada sólo una fracción es visible; pintar todo satura el rasterizador.
+///
+/// El backend ([`crate`]'s `canvas_view`) ancla el **centro del bbox** del
+/// plan en el centro del rect del nodo, así que la posición en pantalla de un
+/// vértice es `vértice + (centro_rect − centro_bbox)`. Esta función usa el
+/// mismo anclaje para decidir visibilidad. El bbox se deja **intacto**: el
+/// culling no debe mover la cámara (sino la maqueta "saltaría" al recortar).
+///
+/// `(cw, ch)` es el tamaño del rect destino en px. Devuelve el plan con
+/// `quads`/`polygons` filtrados in-place; glifos/sprites (pocos) se dejan.
+pub fn cull_plan(mut plan: RenderPlan, cw: f32, ch: f32, margin: f32) -> RenderPlan {
+    let bbox_cx = (plan.min_x + plan.max_x) * 0.5;
+    let bbox_cy = (plan.min_y + plan.max_y) * 0.5;
+    let off_x = cw * 0.5 - bbox_cx;
+    let off_y = ch * 0.5 - bbox_cy;
+    let lo_x = -margin;
+    let lo_y = -margin;
+    let hi_x = cw + margin;
+    let hi_y = ch + margin;
+    let on_screen = |x: f32, y: f32, w: f32, h: f32| -> bool {
+        let sx = x + off_x;
+        let sy = y + off_y;
+        sx + w >= lo_x && sx <= hi_x && sy + h >= lo_y && sy <= hi_y
     };
-    // Snapshot las refs en variables locales para no chocar con el mut borrow.
-    let q_iter: Vec<(f32, f32, f32, f32)> = plan
-        .quads
-        .iter()
-        .map(|q| (q.x, q.y, q.w, q.h))
-        .collect();
-    for (x, y, w, h) in q_iter {
-        bump(&mut plan, &mut have_bounds, x, y, w, h);
-    }
-    let pg_iter: Vec<[(f32, f32); 4]> = plan.polygons.iter().map(|p| p.vertices).collect();
-    for v in pg_iter {
-        for (vx, vy) in v {
-            bump(&mut plan, &mut have_bounds, vx, vy, 0.0, 0.0);
+    plan.quads.retain(|q| on_screen(q.x, q.y, q.w, q.h));
+    plan.polygons.retain(|p| {
+        let (mut nx, mut ny, mut xx, mut xy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (vx, vy) in p.vertices {
+            nx = nx.min(vx);
+            ny = ny.min(vy);
+            xx = xx.max(vx);
+            xy = xy.max(vy);
         }
-    }
+        on_screen(nx, ny, xx - nx, xy - ny)
+    });
     plan
 }
 
@@ -1093,6 +1141,33 @@ mod tests {
 
     fn iso() -> IsoProjector {
         IsoProjector::new(1.0, 10.0)
+    }
+
+    #[test]
+    fn cull_plan_drops_offscreen_keeps_onscreen_and_bbox() {
+        // Grid grande: el plan emite muchos techos. Con un viewport chico
+        // centrado en el bbox, el culling debe descartar el grueso y dejar
+        // sólo lo que cae en pantalla — sin tocar el bbox.
+        let world = World::new(40, 40);
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        let (min_x, min_y, max_x, max_y) = (plan.min_x, plan.min_y, plan.max_x, plan.max_y);
+        let before = plan.polygons.len();
+        // Viewport mucho más chico que la maqueta → recorta de verdad.
+        let culled = cull_plan(plan, 30.0, 30.0, 0.0);
+        assert!(culled.polygons.len() < before, "culling debe descartar techos fuera de cuadro");
+        assert!(!culled.polygons.is_empty(), "el centro queda en pantalla");
+        // El bbox NO se mueve (el culling no recoloca la cámara).
+        assert_eq!((culled.min_x, culled.min_y, culled.max_x, culled.max_y), (min_x, min_y, max_x, max_y));
+    }
+
+    #[test]
+    fn cull_plan_keeps_all_when_viewport_huge() {
+        let world = World::new(20, 20);
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        let n = plan.polygons.len();
+        // Viewport gigante con margen → nada se recorta.
+        let culled = cull_plan(plan, 100_000.0, 100_000.0, 1000.0);
+        assert_eq!(culled.polygons.len(), n);
     }
 
     #[test]

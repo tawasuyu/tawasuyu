@@ -11,3 +11,7 @@ description = "dominium — maqueta isométrica agnóstica: convierte un World e
 dominium-core = { path = "../dominium-core" }
 dominium-iso = { path = "../dominium-iso" }
 serde = { workspace = true }
+
+[[example]]
+name = "bench_plan"
+path = "examples/bench_plan.rs"
