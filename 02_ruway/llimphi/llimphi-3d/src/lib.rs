@@ -32,6 +32,7 @@ pub use glam;
 pub use wgpu;
 
 mod camera;
+mod cinema;
 mod dimensions;
 mod hud;
 mod mesh;
@@ -41,9 +42,10 @@ mod voxel;
 mod voxel_renderer;
 
 pub use camera::Camera3d;
+pub use cinema::{CamKey, CameraTrack};
 pub use dimensions::{Dimension, Multiverse};
 pub use hud::{Hud, HudQuad};
-pub use mesh::{cube, Vertex3d};
+pub use mesh::{cube, push_cube, Vertex3d, CUBE_INDICES};
 pub use renderer::Renderer3d;
 pub use scene::Scene3d;
 pub use voxel::{DirtyBox, VoxelGrid};

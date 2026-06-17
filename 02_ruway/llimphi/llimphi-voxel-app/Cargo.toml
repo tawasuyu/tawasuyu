@@ -14,10 +14,12 @@ path = "src/main.rs"
 [dependencies]
 # Motor 3D general (escena, cámara, depth compartido, voxel + mallas).
 llimphi-3d = { path = "../llimphi-3d" }
-# Dinámica voxel/juego (world-gen).
+# Dinámica voxel/juego (world-gen, actores).
 llimphi-voxel = { path = "../llimphi-voxel" }
 # Bucle Elm + ventana + re-exports (hal/raster/layout).
 llimphi-ui = { path = "../llimphi-ui" }
+# Puente ffmpeg: secuencia de PNG → video (modo --film).
+foreign-av = { path = "../../../shared/foreign-av" }
 # Render headless a PNG para el modo --shot (verificación sin pantalla).
 pollster = { workspace = true }
 png = { workspace = true }

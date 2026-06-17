@@ -229,6 +229,27 @@ impl World {
         viewport: (u32, u32),
         camera: &Camera3d,
     ) {
+        self.render_with(device, queue, encoder, target, viewport, camera, &[]);
+    }
+
+    /// Como [`render`](Self::render) pero agrega **mallas extra** al pase (mismo
+    /// depth compartido → se ocluyen con el terreno y el monumento). Es el gancho
+    /// para los **actores** de una escena filmada: la app posa cada actor en su
+    /// propio [`Renderer3d`](llimphi_3d::Renderer3d) y los pasa acá.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        viewport: (u32, u32),
+        camera: &Camera3d,
+        extra: &[&Renderer3d],
+    ) {
+        let mut meshes: Vec<&Renderer3d> = Vec::with_capacity(1 + extra.len());
+        meshes.push(&self.monument);
+        meshes.extend_from_slice(extra);
         self.scene.render(
             device,
             queue,
@@ -237,8 +258,18 @@ impl World {
             viewport,
             camera,
             Some(&self.voxel),
-            &[&self.monument],
+            &meshes,
         );
+    }
+
+    /// Posición en **mundo** (centrado en el origen) del **suelo** sobre la
+    /// columna de grilla `(gx, gz)`: pies un voxel por encima del terreno (o del
+    /// piso `y=0` si la columna está vacía). Para posar un actor sobre el relieve.
+    pub fn ground_at(&self, gx: u32, gz: u32) -> Vec3 {
+        let gx = gx.min(self.dim[0] - 1);
+        let gz = gz.min(self.dim[2] - 1);
+        let top = self.grid.height_at(gx, gz).map(|y| y as f32 + 1.0).unwrap_or(0.0);
+        Vec3::new(gx as f32 + 0.5, top, gz as f32 + 0.5) - self.world_center()
     }
 
     /// Pinta el HUD de primera persona encima de la escena (pase screen-space):

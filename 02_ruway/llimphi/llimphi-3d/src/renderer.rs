@@ -177,6 +177,28 @@ impl Renderer3d {
         self.model = model;
     }
 
+    /// Reemplaza la geometría (recrea los buffers de vértices/índices). Pensado
+    /// para mallas que cambian cada frame — p.ej. un **muñeco articulado** cuya
+    /// pose se rehornea en CPU (limbos rotados) y se vuelve a subir. Las mallas
+    /// son chicas (decenas-cientos de vértices), así que recrear los buffers por
+    /// frame es despreciable; el pipeline/uniform/bind-group se conservan.
+    pub fn set_geometry(&mut self, device: &wgpu::Device, verts: &[Vertex3d], indices: &[u16]) {
+        let mut vbytes = Vec::with_capacity(verts.len() * Vertex3d::SIZE);
+        for v in verts {
+            v.write_to(&mut vbytes);
+        }
+        self.vbuf =
+            create_buffer_init(device, "llimphi-3d-vbuf", wgpu::BufferUsages::VERTEX, &vbytes);
+
+        let mut ibytes = Vec::with_capacity(indices.len() * 2);
+        for &i in indices {
+            ibytes.extend_from_slice(&i.to_ne_bytes());
+        }
+        self.ibuf =
+            create_buffer_init(device, "llimphi-3d-ibuf", wgpu::BufferUsages::INDEX, &ibytes);
+        self.index_count = indices.len() as u32;
+    }
+
     /// Sube el uniform del frame (`mvp = view_proj · model`). Lo llama
     /// [`Self::render`] y [`Scene3d`](crate::Scene3d). `aspect` = w/h.
     pub fn upload(&self, queue: &wgpu::Queue, aspect: f32, camera: &Camera3d) {

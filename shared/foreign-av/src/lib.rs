@@ -1242,6 +1242,58 @@ pub fn transcode_a_av1(
     Ok(())
 }
 
+// ─── Encode de una secuencia de PNG → video — "filmar" frame a frame ─────────
+
+/// Codifica una **secuencia de imágenes** (PNG numerados) en un video, el paso
+/// final de *filmar* una escena renderizada cuadro a cuadro (machinima): el
+/// motor 3D vuelca `frame_00000.png … frame_NNNNN.png` y esto los junta a la
+/// cadencia `fps` en un video **AV1** (`libsvtav1`, el códec nativo de la suite,
+/// reproducible por `media-source-av1`), con `-pix_fmt yuv420p` para máxima
+/// compatibilidad de reproductores.
+///
+/// - `pattern`: ruta con el comodín `printf` de ffmpeg, p.ej.
+///   `/tmp/film/frame_%05d.png` (debe arrancar en el índice `start`).
+/// - `fps`: cuadros por segundo del resultado.
+/// - `crf`: calidad SVT-AV1 (0–63; ~28–32 razonable, menor = mejor/ más pesado).
+/// - `audio`: pista opcional a muxear (cualquier cosa que ffmpeg lea); se
+///   recodifica a Opus y se corta al más corto (`-shortest`).
+///
+/// Bloquea hasta que ffmpeg termina. Mismos modos de falla que
+/// [`transcode_a_av1`] ([`FfmpegError::Spawn`] / [`FfmpegError::Probe`]).
+pub fn encode_frames(
+    pattern: impl AsRef<Path>,
+    fps: u32,
+    crf: u8,
+    audio: Option<&Path>,
+    output: impl AsRef<Path>,
+) -> Result<(), FfmpegError> {
+    let crf = crf.min(63);
+    let fps = fps.max(1);
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-loglevel", "error", "-nostdin", "-y", "-framerate", &fps.to_string()])
+        .arg("-i")
+        .arg(pattern.as_ref());
+    if let Some(a) = audio {
+        cmd.arg("-i").arg(a);
+    }
+    cmd.args(["-c:v", "libsvtav1", "-crf", &crf.to_string(), "-pix_fmt", "yuv420p"]);
+    if audio.is_some() {
+        cmd.args(["-c:a", "libopus", "-b:a", "128k", "-shortest"]);
+    }
+    let out = cmd
+        .arg(output.as_ref())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| FfmpegError::Spawn(e.to_string()))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(FfmpegError::Probe(stderr));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

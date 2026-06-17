@@ -523,3 +523,58 @@ gráfica **conocida y documentada** sobre un stack GPU que ya existe. La ruta
 ray-march mueve el esfuerzo de "pipeline de meshing" a "shaders de traversal" —
 distinto, pero dominio acotado. wawa fue el monte; esto es una colina con sendero.
 
+## 12. Rama machinima — "filmar" escenas voxel (2026-06-17)
+
+Norte nuevo del usuario, y el *porqué* original de querer un Minecraft: **generar
+escenas controladas, mover personajes y filmar una película**. Análisis: es más
+práctico de lo que suena, porque la mitad cara (un renderer que dé cuadros limpios,
+sin pantalla, reproducibles) **ya está** — `--shot` rinde headless a PNG de forma
+determinista. El hueco no es gráfica sino una **capa de dirección** (cámara con
+keyframes, actores articulados, timeline) + pipeline de assets. Techo estético:
+**machinima voxel estilizado** (no foto-realismo — ese es el atractivo). Donde se
+gana/pierde: la **expresividad del personaje** (los muñecos de cajas dan "animación
+de Minecraft", no actuación matizada).
+
+### 12.1 Rebanada vertical — HECHA y verificada
+
+Pipeline punta a punta `--film` (`llimphi-voxel-app`), determinista y sin pantalla,
+que junta cuatro piezas nuevas:
+
+- **`llimphi_3d::CameraTrack` + `CamKey`** (motor general): cámara **guionada** por
+  keyframes `(t, eye, target, fov)` interpolados con smoothstep → travelling/grúa/
+  corte sin input. 3 tests.
+- **`llimphi_3d::push_cube` / `Renderer3d::set_geometry`**: componer mallas
+  multi-caja en CPU y **re-subir geometría por frame** (un muñeco que se re-posa).
+- **`llimphi_voxel::Actor`**: **muñeco de cajas articuladas** (cabeza/torso/2 brazos/
+  2 piernas), miembros que rotan en cadera/hombro con un **ciclo de caminata**
+  procedural; produce malla en espacio local + `model()` de ubicación. No toca GPU;
+  se compone con el terreno en `Scene3d` (oclusión correcta). 4 tests.
+- **`foreign_av::encode_frames`**: secuencia de PNG → video **AV1** (libsvtav1,
+  `-pix_fmt yuv420p`), audio opcional a Opus.
+
+`World::render_with` agrega las mallas-actor al pase voxel+monumento (depth
+compartido); el casting busca **tierra firme** (`find_land_strip`) para no filmar
+gente sobre el agua. **Verificado**: `cargo run -p llimphi-voxel-app --release --
+--film` → `/tmp/voxel_film.mkv` (AV1, 960×540, 120 cuadros, 4 s) con 3 actores de
+colores caminando un pico nevado mientras la cámara hace grúa + travelling y el
+monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
+
+### 12.2 Qué falta para un "director" de verdad (orden de peso)
+
+1. **Expresividad de actor**: librería de clips (idle/caminar/saludar/señalar),
+   blending, quizá IK simple; hoy sólo hay caminata procedural.
+2. **Timeline de dirección**: secuenciar actores+eventos+cortes en un formato de
+   escena editable (hoy el guion está hardcodeado en `film.rs`).
+3. **Assets**: importador `.vox` (MagicaVoxel) → `VoxelGrid` para sets y personajes
+   ricos (`foreign-vox`, no existe).
+4. **Iluminación cinematográfica**: hoy un solo sol + AO + niebla; falta hora-del-
+   día / luz coloreada / puntuales.
+5. **Calidad de cuadro**: supersampling (el ray-march aliasa en bordes), resolución
+   de cine.
+6. **Audio**: `takiy` → pista, sincronizada a la timeline y muxeada (la plomería de
+   `encode_frames` ya acepta audio).
+
+Encaja como **app/dominio "director" propio** sobre `llimphi-voxel` (hermano de la
+showcase), no como feature del motor. La rebanada prueba que el camino es viable y
+barato; lo que sigue es content tooling, no investigación gráfica.
+

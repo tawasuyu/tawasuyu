@@ -41,6 +41,7 @@ use llimphi_ui::{
 };
 use llimphi_voxel::{forward_h, right_h};
 
+mod film;
 mod world;
 use world::{World, FMT};
 
@@ -290,7 +291,12 @@ fn fill_absolute() -> Style {
 }
 
 fn main() {
-    if std::env::args().any(|a| a == "--shot") {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--film") {
+        film::film();
+        return;
+    }
+    if args.iter().any(|a| a == "--shot") {
         shot();
         return;
     }
