@@ -1048,6 +1048,7 @@ fn anchor_slug(a: pata_core::Anchor) -> &'static str {
         Right => "right",
     }
 }
+#[allow(dead_code)]
 fn parse_kind(s: &str) -> pata_core::SurfaceKind {
     use pata_core::SurfaceKind::*;
     match s.trim().to_lowercase().as_str() {
@@ -1058,6 +1059,7 @@ fn parse_kind(s: &str) -> pata_core::SurfaceKind {
         _ => Bar,
     }
 }
+#[allow(dead_code)]
 fn parse_anchor(s: &str) -> pata_core::Anchor {
     use pata_core::Anchor::*;
     match s.trim().to_lowercase().as_str() {
@@ -1067,59 +1069,36 @@ fn parse_anchor(s: &str) -> pata_core::Anchor {
         _ => Top,
     }
 }
+#[allow(dead_code)]
 fn es_activa(s: &str) -> bool {
     !matches!(s.trim().to_lowercase().as_str(), "no" | "false" | "0" | "off" | "")
 }
 
-/// Filas de la tabla de barras: [nombre, tipo, borde, activa].
-fn barras_rows(pata: &pata_core::Config) -> Vec<Vec<String>> {
-    pata.surfaces
-        .iter()
-        .map(|s| {
-            let nombre = if s.name.trim().is_empty() {
-                format!("{} {}", kind_slug(s.kind), anchor_slug(s.anchor))
-            } else {
-                s.name.clone()
-            };
-            vec![
-                nombre,
-                kind_slug(s.kind).to_string(),
-                anchor_slug(s.anchor).to_string(),
-                if s.enabled { "sí".into() } else { "no".into() },
-                match s.reserve {
-                    Some(true) => "sí".into(),
-                    Some(false) => "no".into(),
-                    None => "auto".into(),
-                },
-            ]
-        })
-        .collect()
-}
-
-/// Sección «Barras»: tabla agregable/borrable de las superficies del perfil.
+/// Sección «Barras»: las barras de pata como **lista** (no tabla). Cada barra
+/// se prende/apaga por su cuenta (varias activas a la vez), se nombra, se
+/// duplica y se borra. Su posición/grosor/autohide viven en la pestaña
+/// «Superficie N» de cada una. Las barras se guardan DENTRO del perfil activo
+/// (por eso «aparecen» al cambiar de perfil — cada perfil trae las suyas).
 fn barras_section(pata: &pata_core::Config) -> Section {
-    use allichay::{Column, Field};
-    Section::new("barras::lista", "Barras")
-        .icon("▭")
-        .help(
-            "Las barras de este perfil. Agregá/borrá filas con +/−, nombralas, \
-             elegí tipo (bar/sidebar/dock/background) y borde (top/bottom/left/ \
-             right), y prendé/apagá con la columna Activa (sí/no). Reserva \
-             (sólo sidebar): sí = supeditada al desktop (las ventanas no la \
-             tapan), no = flota encima, auto = sigue el ajuste global.",
-        )
-        .field(Field::table(
-            "lista",
-            "Barras",
-            vec![
-                Column::new("nombre", "Nombre"),
-                Column::new("tipo", "Tipo"),
-                Column::new("borde", "Borde"),
-                Column::new("activa", "Activa"),
-                Column::new("reserva", "Reserva"),
-            ],
-            barras_rows(pata),
-        ))
+    use allichay::Field;
+    let mut sec = Section::new("barras::lista", "Barras").icon("▭").help(
+        "Las barras de pata, como lista: prendé varias a la vez, nombralas, \
+         duplicá o borrá cada una. Posición/grosor/autohide de cada barra están \
+         en su pestaña «Superficie N». Se guardan dentro del perfil activo.",
+    );
+    for (i, s) in pata.surfaces.iter().enumerate() {
+        let nombre = if s.name.trim().is_empty() {
+            format!("{} {}", kind_slug(s.kind), anchor_slug(s.anchor))
+        } else {
+            s.name.clone()
+        };
+        sec = sec
+            .field(Field::toggle(format!("on_{i}"), format!("Activa · {nombre}"), s.enabled))
+            .field(Field::text(format!("name_{i}"), "    Nombre", s.name.clone()))
+            .field(Field::button(format!("dup_{i}"), "    Duplicar"))
+            .field(Field::button(format!("del_{i}"), "    Borrar"));
+    }
+    sec.field(Field::button("agregar", "＋ Agregar barra"))
 }
 
 /// Sección «Reglas» (estilo Hyprland windowrule): tabla agregable/borrable de
@@ -1374,26 +1353,50 @@ fn apply_theme(m: &mut Model, rel: &FieldPath, value: FieldValue) {
     }
 }
 
-/// Reconstruye `m.pata.surfaces` desde la tabla de barras, preservando los
-/// widgets de cada barra por índice (las filas nuevas son barras en blanco).
-fn apply_barras_table(m: &mut Model, rows: &[Vec<String>]) {
-    let mut nuevas: Vec<pata_core::Surface> = Vec::with_capacity(rows.len());
-    for (i, row) in rows.iter().enumerate() {
-        let mut surf = m.pata.surfaces.get(i).cloned().unwrap_or_default();
-        surf.name = row.first().cloned().unwrap_or_default();
-        surf.kind = parse_kind(row.get(1).map(String::as_str).unwrap_or("bar"));
-        surf.anchor = parse_anchor(row.get(2).map(String::as_str).unwrap_or("top"));
-        surf.enabled = es_activa(row.get(3).map(String::as_str).unwrap_or("sí"));
-        surf.reserve = match row.get(4).map(|s| s.trim().to_lowercase()).as_deref() {
-            Some("sí") | Some("si") | Some("true") | Some("1") => Some(true),
-            Some("no") | Some("false") | Some("0") => Some(false),
-            _ => None, // "auto"/vacío: sigue dientes_outside
-        };
-        nuevas.push(surf);
+/// Aplica una acción de la lista de Barras (`leaf` = `on_<i>` / `name_<i>` /
+/// `dup_<i>` / `del_<i>` / `agregar`). Las barras viven en el perfil activo.
+fn apply_barras_list(m: &mut Model, leaf: &str, value: FieldValue) {
+    let idx = |p: &str| leaf.strip_prefix(p).and_then(|s| s.parse::<usize>().ok());
+    let mut changed = true;
+    if leaf == "agregar" {
+        if value.as_bool() == Some(true) {
+            let mut s = pata_core::Surface::bar(pata_core::Anchor::Top);
+            s.name = format!("barra {}", m.pata.surfaces.len() + 1);
+            m.pata.surfaces.push(s);
+        } else {
+            changed = false;
+        }
+    } else if let Some(i) = idx("on_") {
+        if let Some(s) = m.pata.surfaces.get_mut(i) {
+            s.enabled = value.as_bool().unwrap_or(s.enabled);
+        }
+    } else if let Some(i) = idx("name_") {
+        if let (Some(s), Some(v)) = (m.pata.surfaces.get_mut(i), value.as_str()) {
+            s.name = v.to_string();
+        }
+    } else if let Some(i) = idx("dup_") {
+        if value.as_bool() == Some(true) {
+            if let Some(s) = m.pata.surfaces.get(i).cloned() {
+                let mut c = s;
+                c.name = format!("{} copia", c.name);
+                m.pata.surfaces.insert((i + 1).min(m.pata.surfaces.len()), c);
+            }
+        } else {
+            changed = false;
+        }
+    } else if let Some(i) = idx("del_") {
+        if value.as_bool() == Some(true) && m.pata.surfaces.len() > 1 {
+            m.pata.surfaces.remove(i);
+        } else {
+            changed = false;
+        }
+    } else {
+        changed = false;
     }
-    m.pata.surfaces = nuevas;
-    m.dirty.pata = true;
-    sync_active_profile(m);
+    if changed {
+        m.dirty.pata = true;
+        sync_active_profile(m);
+    }
 }
 
 /// Crea un perfil nuevo desde la config viva y lo activa.
@@ -2018,9 +2021,7 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
         // Lista de barras: la tabla reconstruye m.pata.surfaces (agregar/borrar/
         // renombrar/prender-apagar). sync_active_profile lo guarda en el perfil.
         "barras" => {
-            if let Some(rows) = value.as_table() {
-                apply_barras_table(m, &rows.to_vec());
-            }
+            apply_barras_list(m, rel.leaf().unwrap_or(""), value);
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
@@ -2200,18 +2201,35 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
             _ => FieldValue::Table(m.keymap_rows.clone()),
         });
     }
-    // Pestaña Perfiles: los toggles de acción siempre leen "false" (son
-    // botones); el toggle «activo» = si este perfil es el aplicado.
+    // Pestaña Perfiles (lista única): el selector «usar» = perfil activo; los
+    // botones (crear/duplicar/eliminar/rescatar) leen false; renombrar = texto.
     if key == "perfiles" {
-        let name = rel.segments().first().cloned().unwrap_or_default();
-        if name == "acciones" {
-            return Some(FieldValue::Bool(false));
-        }
-        return Some(FieldValue::Bool(m.dprofiles.active == name));
+        return Some(match rel.leaf() {
+            Some("usar") => FieldValue::Text(m.dprofiles.active.clone()),
+            Some("renombrar") => FieldValue::Text(String::new()),
+            _ => FieldValue::Bool(false),
+        });
     }
-    // Lista de barras: la tabla refleja m.pata.surfaces.
+    // Pestaña Themes: «usar» = theme del perfil activo; renombrar = texto;
+    // botones = false. (apariencia/teselado/decoración salen del schema abajo.)
+    if key == "theme" && rel.segments().first().map(String::as_str) == Some("acciones") {
+        return Some(match rel.leaf() {
+            Some("usar") => FieldValue::Text(active_theme_name(m)),
+            Some("renombrar") => FieldValue::Text(String::new()),
+            _ => FieldValue::Bool(false),
+        });
+    }
+    // Lista de barras: on_<i> = enabled; name_<i> = nombre; botones = false.
     if key == "barras" {
-        return Some(FieldValue::Table(barras_rows(&m.pata)));
+        let leaf = rel.leaf().unwrap_or("");
+        let idx = |p: &str| leaf.strip_prefix(p).and_then(|s| s.parse::<usize>().ok());
+        if let Some(i) = idx("on_") {
+            return Some(FieldValue::Bool(m.pata.surfaces.get(i).map(|s| s.enabled).unwrap_or(false)));
+        }
+        if let Some(i) = idx("name_") {
+            return Some(FieldValue::Text(m.pata.surfaces.get(i).map(|s| s.name.clone()).unwrap_or_default()));
+        }
+        return Some(FieldValue::Bool(false));
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),
