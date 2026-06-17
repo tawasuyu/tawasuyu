@@ -627,6 +627,50 @@ pub fn menu_filtered<'a>(apps: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry>
         .collect()
 }
 
+/// Encabezado de categoría en la lista clásica: franja tenue con el nombre en
+/// mayúsculas, estilo separador de sección.
+fn menu_category_header(cat: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(MENU_ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexStart),
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .text(cat.to_uppercase(), 10.5, theme.fg_muted)
+}
+
+/// Las filas de la lista clásica **agrupadas por categoría**: un encabezado por
+/// categoría + sus apps debajo. «Otros» (sin categoría) va al final.
+fn classic_grouped_rows(matches: &[&AppEntry], theme: &Theme) -> Vec<View<Msg>> {
+    use std::collections::BTreeMap;
+    let mut by_cat: BTreeMap<String, Vec<&AppEntry>> = BTreeMap::new();
+    for a in matches {
+        let cat = a
+            .category
+            .as_deref()
+            .filter(|c| !c.trim().is_empty())
+            .unwrap_or("Otros")
+            .to_string();
+        by_cat.entry(cat).or_default().push(*a);
+    }
+    let mut cats: Vec<String> = by_cat.keys().cloned().collect();
+    cats.sort_by_key(|c| (c == "Otros", c.clone()));
+    let mut rows = Vec::new();
+    for cat in &cats {
+        rows.push(menu_category_header(cat, theme));
+        for a in &by_cat[cat] {
+            rows.push(app_row(a, theme));
+        }
+    }
+    rows
+}
+
 pub fn start_menu_body(
     apps: &[AppEntry],
     query: &str,
@@ -711,11 +755,15 @@ pub fn start_menu_body(
             12.0,
             theme.fg_muted,
         )]
+    } else if query.is_empty() {
+        // Sin búsqueda: agrupadas por categoría (encabezados de sección).
+        classic_grouped_rows(&matches, theme)
     } else {
+        // Buscando: lista plana de coincidencias (sin encabezados).
         matches.iter().map(|a| app_row(a, theme)).collect()
     };
 
-    let content_len = matches.len() as f32 * (MENU_ROW_H + MENU_ROW_GAP);
+    let content_len = filas.len() as f32 * (MENU_ROW_H + MENU_ROW_GAP);
     let lista_inner = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: auto() },
