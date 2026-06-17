@@ -17,7 +17,7 @@ mod player;
 mod raycast;
 mod terrain;
 
-pub use actor::Actor;
+pub use actor::{Actor, Clip, Pose};
 pub use critter::Critter;
 pub use player::{forward_h, look_dir, right_h, Player};
 pub use raycast::{raycast, VoxelHit};

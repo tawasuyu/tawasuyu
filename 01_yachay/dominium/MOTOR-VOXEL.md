@@ -561,8 +561,13 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
 
 ### 12.2 Qué falta para un "director" de verdad (orden de peso)
 
-1. **Expresividad de actor**: librería de clips (idle/caminar/saludar/señalar),
-   blending, quizá IK simple; hoy sólo hay caminata procedural.
+1. ~~**Expresividad de actor**: librería de clips~~ **PRIMER PASO HECHO**:
+   `llimphi_voxel::Clip` (Idle/Walk/Run/Wave/Point/Cheer) — un clip es una función
+   `fase → Pose` (ángulos de todas las articulaciones), así sumar una animación es
+   escribir una pose, no tocar el render. `Actor` tiene `clip`/`phase`/`set_clip`/
+   `advance`. Verificado por PNG (`--poses` → `/tmp/actor_clips.png`: fila de 6
+   actores etiquetados, cada pose legible). **Falta**: blending entre clips,
+   IK/transiciones suaves, animaciones de cara/manos (hoy el muñeco no las tiene).
 2. **Timeline de dirección**: secuenciar actores+eventos+cortes en un formato de
    escena editable (hoy el guion está hardcodeado en `film.rs`).
 3. **Assets**: importador `.vox` (MagicaVoxel) → `VoxelGrid` para sets y personajes

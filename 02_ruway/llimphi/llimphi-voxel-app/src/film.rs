@@ -16,11 +16,11 @@
 use std::sync::Once;
 
 use llimphi_3d::glam::Vec3;
-use llimphi_3d::{CamKey, CameraTrack, Renderer3d};
+use llimphi_3d::{CamKey, Camera3d, CameraTrack, Hud, HudQuad, Renderer3d};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
-use llimphi_voxel::Actor;
+use llimphi_voxel::{Actor, Clip};
 
 use crate::world::{World, FMT};
 use crate::{DIM_XZ, SEED};
@@ -60,7 +60,9 @@ pub fn film() {
         .zip(CAST)
         .map(|(&gz, (skin, shirt, pants))| {
             let pos = world.ground_at(gx0 as u32, gz);
-            Actor::new(pos, std::f32::consts::FRAC_PI_2).with_colors(skin, shirt, pants) // mira a +X
+            let mut a = Actor::new(pos, std::f32::consts::FRAC_PI_2).with_colors(skin, shirt, pants); // mira a +X
+            a.set_clip(Clip::Walk);
+            a
         })
         .collect();
     // Un `Renderer3d` por actor (su malla se re-sube cada frame).
@@ -89,7 +91,7 @@ pub fn film() {
         // Actores: avanzan en grilla, se posan sobre el suelo, caminan.
         for (a, &gz) in cast.iter_mut().zip(lanes.iter()) {
             a.pos = world.ground_at(gx as u32, gz);
-            a.advance(dt, true);
+            a.advance(dt);
         }
         for (a, r) in cast.iter().zip(actor_r.iter_mut()) {
             let (v, i) = a.mesh();
@@ -118,6 +120,90 @@ pub fn film() {
              podés muxear a mano: ffmpeg -framerate {FPS} -i {pattern} -c:v libsvtav1 {OUT}"
         ),
     }
+}
+
+/// Modo `--poses`: vuelca **un** PNG (`/tmp/actor_clips.png`) con una fila de
+/// actores, cada uno en un [`Clip`] distinto y **etiquetado** (reusa el texto del
+/// HUD), para verificar de un vistazo la librería de animación. Vista frontal:
+/// los actores miran a la cámara.
+pub fn poses_shot() {
+    let hal = pollster::block_on(Hal::new(None)).expect("hal");
+    let mut renderer = Renderer::new(&hal).expect("renderer");
+    let mut world = World::build(&hal.device, &hal.queue, DIM_XZ, SEED);
+    world.show_monument(false); // no tapar la fila con el cubo flotante
+
+    let clips = [Clip::Idle, Clip::Walk, Clip::Run, Clip::Wave, Clip::Point, Clip::Cheer];
+    let labels = ["IDLE", "WALK", "RUN", "WAVE", "POINT", "CHEER"];
+    let shirts: [[f32; 3]; 6] = [
+        [0.82, 0.28, 0.26],
+        [0.22, 0.55, 0.78],
+        [0.92, 0.80, 0.30],
+        [0.30, 0.70, 0.40],
+        [0.70, 0.40, 0.78],
+        [0.85, 0.50, 0.25],
+    ];
+    let span = 14.0_f32;
+    let (gx0, lanes) = find_flat_strip(&world, span);
+    let gz = lanes[1];
+    let n = clips.len();
+
+    let mut cast: Vec<Actor> = Vec::with_capacity(n);
+    let mut actor_r: Vec<Renderer3d> = Vec::with_capacity(n);
+    for k in 0..n {
+        let gx = gx0 as f32 + (k as f32 + 0.5) * span / n as f32;
+        let pos = world.ground_at(gx as u32, gz);
+        let mut a = Actor::new(pos, std::f32::consts::PI) // mira al -Z (a la cámara)
+            .with_colors([0.88, 0.70, 0.56], shirts[k], [0.18, 0.20, 0.28]);
+        a.set_clip(clips[k]);
+        a.advance(1.0); // una pose representativa (no la inicial neutra)
+        cast.push(a);
+        actor_r.push(Renderer3d::new(&hal.device, FMT));
+    }
+    for (a, r) in cast.iter().zip(actor_r.iter_mut()) {
+        let (v, i) = a.mesh();
+        r.set_geometry(&hal.device, &v, &i);
+        r.set_model(a.model());
+    }
+
+    // Cámara frontal centrada en la fila, cerca y a la altura del pecho.
+    let mid = world.ground_at((gx0 as f32 + span * 0.5) as u32, gz) + Vec3::new(0.0, 0.9, 0.0);
+    let mut camera = Camera3d::orbit(mid, std::f32::consts::PI, 0.16, span * 0.78);
+    camera.fovy_rad = 48_f32.to_radians();
+
+    let inter = make_target(&hal);
+    let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
+    world.tick(0.0);
+    world.animate(0.6);
+
+    renderer
+        .render_to_view(&hal, &vello::Scene::new(), &inter_view, W, H, Color::from_rgba8(0, 0, 0, 255))
+        .expect("base");
+    let mut enc = hal
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("poses") });
+    let refs: Vec<&Renderer3d> = actor_r.iter().collect();
+    world.render_with(&hal.device, &hal.queue, &mut enc, &inter_view, (W, H), &camera, &refs);
+
+    // Etiquetas: proyectar la cabeza de cada actor a pantalla y poner el nombre.
+    let vp = camera.view_proj(W as f32 / H as f32);
+    let mut quads: Vec<HudQuad> = Vec::new();
+    for (a, label) in cast.iter().zip(labels) {
+        let ndc = vp.project_point3(a.pos + Vec3::new(0.0, 2.15, 0.0));
+        let sx = (ndc.x * 0.5 + 0.5) * W as f32;
+        let sy = (1.0 - (ndc.y * 0.5 + 0.5)) * H as f32;
+        let px = 2.0;
+        let tw = HudQuad::text_width(label, px);
+        let (x, y) = (sx - tw * 0.5, sy);
+        quads.push(HudQuad { x: x - 4.0, y: y - 4.0, w: tw + 8.0, h: 7.0 * px + 8.0, color: [0.0, 0.0, 0.0, 0.5] });
+        quads.extend(HudQuad::text(label, x, y, px, [0.95, 0.97, 1.0, 0.96]));
+    }
+    let mut hud = Hud::new(&hal.device, FMT);
+    hud.render(&hal.device, &hal.queue, &mut enc, &inter_view, (W, H), &quads);
+
+    hal.queue.submit(std::iter::once(enc.finish()));
+    let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+    crate::write_png(&hal, &inter, W, H, "/tmp/actor_clips.png");
+    eprintln!("poses: /tmp/actor_clips.png ({n} clips)");
 }
 
 /// Render de un cuadro: limpia la intermedia (base negra; el cielo lo pinta la
@@ -195,6 +281,44 @@ fn find_land_strip(world: &World, walk: f32) -> (u32, [u32; 3]) {
         }
     }
     (dim / 3, [dim / 2 - 6, dim / 2, dim / 2 + 6]) // fallback
+}
+
+/// Como [`find_land_strip`] pero elige el tramo **más plano** (mínima diferencia
+/// de altura a lo largo de los carriles): pensado para alinear una fila de
+/// actores sin que el relieve los hunda/ocluya (modo `--poses`).
+fn find_flat_strip(world: &World, span: f32) -> (u32, [u32; 3]) {
+    let dy = (DIM_XZ * 4 / 10).max(48) as f32;
+    let land_min = (0.30 - 0.5) * dy + 2.0;
+    let walk = span.ceil() as u32;
+    let dim = DIM_XZ;
+    let (lo, hi) = (12u32, dim.saturating_sub(12));
+    let mut best: Option<(u32, [u32; 3])> = None;
+    let mut best_spread = f32::MAX;
+    for oz in (lo..hi.saturating_sub(10)).step_by(4) {
+        let lanes = [oz, oz + 5, oz + 10];
+        for ox in (lo..hi.saturating_sub(walk)).step_by(4) {
+            let mut lo_y = f32::MAX;
+            let mut hi_y = f32::MIN;
+            let mut land = true;
+            'sample: for &gz in &lanes {
+                for s in 0..=6 {
+                    let gx = ox + walk * s / 6;
+                    let y = world.ground_at(gx, gz).y;
+                    if y < land_min {
+                        land = false;
+                        break 'sample;
+                    }
+                    lo_y = lo_y.min(y);
+                    hi_y = hi_y.max(y);
+                }
+            }
+            if land && (hi_y - lo_y) < best_spread {
+                best_spread = hi_y - lo_y;
+                best = Some((ox, lanes));
+            }
+        }
+    }
+    best.unwrap_or((dim / 3, [dim / 2 - 5, dim / 2, dim / 2 + 5]))
 }
 
 /// Asegura `FRAME_DIR` vacío de PNGs viejos (una vez por proceso).

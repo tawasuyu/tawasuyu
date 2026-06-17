@@ -40,6 +40,8 @@ pub struct World {
     critters: Vec<Critter>,
     /// Overlay screen-space para la mira de primera persona.
     hud: Hud,
+    /// Si dibujar el monumento-malla flotante (se apaga p.ej. en `--poses`).
+    show_monument: bool,
 }
 
 impl World {
@@ -98,6 +100,7 @@ impl World {
             player,
             critters,
             hud,
+            show_monument: true,
         };
         // Calentar la manada para que arranque desparramada (no en grilla).
         for _ in 0..150 {
@@ -248,7 +251,9 @@ impl World {
         extra: &[&Renderer3d],
     ) {
         let mut meshes: Vec<&Renderer3d> = Vec::with_capacity(1 + extra.len());
-        meshes.push(&self.monument);
+        if self.show_monument {
+            meshes.push(&self.monument);
+        }
         meshes.extend_from_slice(extra);
         self.scene.render(
             device,
@@ -260,6 +265,12 @@ impl World {
             Some(&self.voxel),
             &meshes,
         );
+    }
+
+    /// Enciende/apaga el dibujo del monumento-malla flotante (se apaga en
+    /// `--poses` para no tapar la fila de actores).
+    pub fn show_monument(&mut self, v: bool) {
+        self.show_monument = v;
     }
 
     /// Posición en **mundo** (centrado en el origen) del **suelo** sobre la

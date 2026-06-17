@@ -296,6 +296,10 @@ fn main() {
         film::film();
         return;
     }
+    if args.iter().any(|a| a == "--poses") {
+        film::poses_shot();
+        return;
+    }
     if args.iter().any(|a| a == "--shot") {
         shot();
         return;
