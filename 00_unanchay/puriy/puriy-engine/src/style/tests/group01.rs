@@ -425,30 +425,36 @@ use super::super::*;
         assert_eq!(parse_cursor("url(a.png), pointer"), Some(Cursor::Pointer));
         assert_eq!(parse_cursor("url(a.png), nope"), Some(Cursor::Auto));
 
-        // End-to-end: declarado y heredado.
+        // End-to-end: declarado, default UA y heredado.
         let html = r##"<html><head><style>
             body { cursor: text }
             a.btn { cursor: pointer }
             a.plain {}
         </style></head><body>
-          <a class="btn">x</a><a class="plain">y</a>
+          <a class="btn">x</a><a class="plain">y</a><span>z</span>
         </body></html>"##;
         let dom = DomTree::parse(html);
         let eng = StyleEngine::from_dom(&dom);
         let mut bodies = Vec::new();
         let mut anchors = Vec::new();
+        let mut spans = Vec::new();
         crate::dom::walk(&dom.document(), &mut |n| {
             match crate::dom::element_name(n).as_deref() {
                 Some("body") => bodies.push(n.clone()),
                 Some("a") => anchors.push(n.clone()),
+                Some("span") => spans.push(n.clone()),
                 _ => {}
             }
         });
         let body_cs = eng.compute(&bodies[0]);
         assert_eq!(body_cs.cursor, Cursor::Text);
         assert_eq!(eng.compute_with_parent(&anchors[0], Some(&body_cs)).cursor, Cursor::Pointer);
-        // Heredado de body.
-        assert_eq!(eng.compute_with_parent(&anchors[1], Some(&body_cs)).cursor, Cursor::Text);
+        // `a.plain` sin regla de autor: la hoja UA `a { cursor: pointer }`
+        // (Fase 7.1250) gana sobre la herencia de `body` — como en un browser
+        // real. La herencia sólo aplica donde no hay declaración que matchee.
+        assert_eq!(eng.compute_with_parent(&anchors[1], Some(&body_cs)).cursor, Cursor::Pointer);
+        // El `<span>` (sin regla UA de cursor) sí hereda `text` de body.
+        assert_eq!(eng.compute_with_parent(&spans[0], Some(&body_cs)).cursor, Cursor::Text);
     }
 
     #[test]

@@ -722,6 +722,30 @@ la barra del caret nítida entre 'r' y 'g'. Test:
 > Caret v3 pendiente: parpadeo (blink, requiere timer/`spawn_periodic`) + scroll
 > horizontal cuando el texto desborda la caja.
 
+### 7.1250 ✅ — `cursor` consumido por el wire + UA `a { cursor: pointer }`
+
+`cursor` (Fase 7.240) parseaba, computaba y aterrizaba en `BoxNode.cursor`, pero
+**el wire nunca lo consumía**: la forma del puntero no cambiaba sobre links,
+botones ni áreas con `cursor:` del autor. Huérfano clásico "llega al box pero
+nadie lo usa". Cableado en 2 partes:
+
+- **wire (`puriy-llimphi/src/render/mod.rs`)**: nueva `map_cursor(BoxNode.cursor)
+  → Option<llimphi::Cursor>` aplicada en `render_box` (`Auto` ⇒ `None`, sin
+  override; los resize de una sola dirección `E/W`·`N/S` colapsan a
+  `EwResize`/`NsResize`, las dos formas reales de ese eje). `<input>`/`<select>`
+  retornan antes y fijan su propio cursor, así que no hay conflicto.
+- **hoja UA (`puriy-engine/.../sheet.rs`)**: `a { cursor: pointer }` (los browsers
+  lo dan vía `:any-link`; usamos `a` desnudo por consistencia con las reglas de
+  color/underline). Como `cursor` hereda, el texto hijo del `<a>` toma la manito.
+
+**Cascada correcta**: la UA `a { pointer }` gana sobre la herencia de `body`
+para un `<a>` sin regla de autor (la herencia sólo aplica donde no matchea
+ninguna declaración) — se actualizó `cursor_fase_7_240` para reflejarlo (antes
+asumía que `a.plain` heredaba `text`; ahora un `<span>` cubre la herencia). El
+cursor no se pinta a la escena (es runtime/winit), así que no hay verificación
+por PNG; la cadena se cubre con tests estructurales:
+`map_cursor_traduce_y_auto_no_overridea` (wire) + `cursor_fase_7_240` (engine).
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +

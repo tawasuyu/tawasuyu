@@ -238,6 +238,11 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             decls: vec![
                 decl(DeclKind::Color(Color::rgb(0, 0, 238))),
                 decl(DeclKind::TextDecoration(TextDecorationLine::Underline)),
+                // Manito sobre links — los browsers reales lo dan vía
+                // `:any-link`; usamos el `a` desnudo por consistencia con
+                // las reglas de color/underline de acá arriba. `cursor`
+                // hereda, así que el texto hijo del `<a>` también la toma.
+                decl(DeclKind::Cursor(Cursor::Pointer)),
             ],
         },
         // Defaults de text-decoration. `<a>` y `<u>`/`<ins>` van con

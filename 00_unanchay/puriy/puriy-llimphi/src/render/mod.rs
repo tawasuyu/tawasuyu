@@ -456,6 +456,37 @@ fn mask_placement_de(spec: &puriy_engine::MaskSpec) -> llimphi_ui::MaskPlacement
     }
 }
 
+/// Mapea el `cursor` CSS resuelto (Fase 7.240, `BoxNode.cursor`) a la forma
+/// de puntero de llimphi. `Auto` ⇒ `None` (sin override: el runtime decide su
+/// default). Los resize de una sola dirección (`E/W`, `N/S`) colapsan al par
+/// bidireccional que expone llimphi (`EwResize`/`NsResize`), que es la forma
+/// real del cursor de redimensionado en esos ejes. Fase 7.1250.
+fn map_cursor(c: puriy_engine::style::Cursor) -> Option<llimphi_ui::Cursor> {
+    use llimphi_ui::Cursor as L;
+    use puriy_engine::style::Cursor as C;
+    Some(match c {
+        C::Auto => return None,
+        C::Default => L::Default,
+        C::Pointer => L::Pointer,
+        C::Text => L::Text,
+        C::Wait => L::Wait,
+        C::Help => L::Help,
+        C::Crosshair => L::Crosshair,
+        C::Move => L::Move,
+        C::NotAllowed => L::NotAllowed,
+        C::Grab => L::Grab,
+        C::Grabbing => L::Grabbing,
+        C::ZoomIn => L::ZoomIn,
+        C::ZoomOut => L::ZoomOut,
+        C::EResize | C::WResize | C::EwResize => L::EwResize,
+        C::NResize | C::SResize | C::NsResize => L::NsResize,
+        C::NeswResize => L::NeswResize,
+        C::NwseResize => L::NwseResize,
+        C::RowResize => L::RowResize,
+        C::ColResize => L::ColResize,
+    })
+}
+
 pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // Animación CSS: si el nodo tiene una `@keyframes` resuelta, sampleamos
     // el overlay al instante actual y renderizamos un clon con las props
@@ -492,6 +523,15 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     }
     let style = box_style(b, zoom);
     let mut view = View::new(style);
+    // `cursor` CSS (Fase 7.240, resuelto en `BoxNode.cursor`): hasta ahora
+    // llegaba al box pero el wire nunca lo consumía, así que la forma del
+    // puntero no cambiaba sobre links/botones/áreas con `cursor:` del autor.
+    // Ahora lo mapeamos a la forma de llimphi. `Auto` ⇒ sin override (el
+    // runtime decide). Los <input>/<select> retornan antes (su widget fija el
+    // suyo), así que acá no hay conflicto.
+    if let Some(c) = map_cursor(b.cursor) {
+        view = view.cursor(c);
+    }
     // Si este nodo es un <details>, reservamos su slot de estado y
     // renderizamos sólo `<summary>` (precedido de la flecha clickeable)
     // si está cerrado. La rama de `<details>` retorna acá para no caer
@@ -1294,5 +1334,27 @@ mod filter_tests {
             }
             _ => panic!("esperaba DropShadow"),
         }
+    }
+
+    #[test]
+    fn map_cursor_traduce_y_auto_no_overridea() {
+        // Fase 7.1250: el `cursor` CSS resuelto se mapea a la forma de llimphi.
+        use llimphi_ui::Cursor as L;
+        use puriy_engine::style::Cursor as C;
+        // `auto` no overridea (None ⇒ el runtime decide su default).
+        assert_eq!(map_cursor(C::Auto), None);
+        // Mapeos 1:1 representativos.
+        assert_eq!(map_cursor(C::Pointer), Some(L::Pointer));
+        assert_eq!(map_cursor(C::Text), Some(L::Text));
+        assert_eq!(map_cursor(C::NotAllowed), Some(L::NotAllowed));
+        assert_eq!(map_cursor(C::Grabbing), Some(L::Grabbing));
+        assert_eq!(map_cursor(C::ZoomIn), Some(L::ZoomIn));
+        // Los resize de una sola dirección colapsan al par bidireccional.
+        assert_eq!(map_cursor(C::EResize), Some(L::EwResize));
+        assert_eq!(map_cursor(C::WResize), Some(L::EwResize));
+        assert_eq!(map_cursor(C::NResize), Some(L::NsResize));
+        assert_eq!(map_cursor(C::SResize), Some(L::NsResize));
+        assert_eq!(map_cursor(C::NeswResize), Some(L::NeswResize));
+        assert_eq!(map_cursor(C::ColResize), Some(L::ColResize));
     }
 }
