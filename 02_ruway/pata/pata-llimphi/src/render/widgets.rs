@@ -199,9 +199,12 @@ pub(super) fn barra_dims(size: MeterSize, orient: MeterOrient) -> (f32, f32) {
         (MeterSize::Small, MeterOrient::Horizontal) => (28.0, 4.0),
         (MeterSize::Medium, MeterOrient::Horizontal) => (BARRA_W, 6.0),
         (MeterSize::Large, MeterOrient::Horizontal) => (78.0, 8.0),
-        (MeterSize::Small, MeterOrient::Vertical) => (8.0, 26.0),
-        (MeterSize::Medium, MeterOrient::Vertical) => (12.0, 38.0),
-        (MeterSize::Large, MeterOrient::Vertical) => (16.0, 60.0),
+        // Vertical: `(ancho=largo, grosor)` — la barra es ALTA y fina (una
+        // columna), no corta y ancha. (Antes estaba invertido y el medidor
+        // «vertical» salía como un dash horizontal.)
+        (MeterSize::Small, MeterOrient::Vertical) => (24.0, 7.0),
+        (MeterSize::Medium, MeterOrient::Vertical) => (34.0, 9.0),
+        (MeterSize::Large, MeterOrient::Vertical) => (54.0, 12.0),
     }
 }
 
@@ -548,6 +551,70 @@ pub(super) fn astro_color(glyph: &str, fallback: Color) -> Color {
         "♋" | "♏" | "♓" => Color::from_rgba8(96, 168, 232, 255),  // agua
         _ => fallback,
     }
+}
+
+/// Medidor **vertical en dos columnas**: la barra a la izquierda y, a la
+/// derecha, dos filas — el ícono del widget arriba y el valor (porcentaje)
+/// abajo. Es el layout pedido para los medidores verticales (antes apilaba
+/// ícono + barra + leyenda en una sola columna).
+pub(super) fn meter_view_vertical_iconed(
+    kind: Option<&str>,
+    fraction: f32,
+    caption: &str,
+    size: MeterSize,
+    theme: &Theme,
+    stops: (Color, Color),
+) -> View<Msg> {
+    let (ancho, grosor) = barra_dims(size, MeterOrient::Vertical);
+    let barra = barrita(fraction, ancho, grosor, MeterOrient::Vertical, theme, stops);
+
+    // Columna derecha: ícono arriba, valor abajo.
+    let icono = match kind.and_then(kind_icon) {
+        Some((glifo, color)) => View::new(Style {
+            size: Size { width: length(18.0_f32), height: length(16.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text(glifo.to_string(), 14.0, color),
+        None => View::new(Style {
+            size: Size { width: length(0.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        }),
+    };
+    let valor = View::new(Style {
+        size: Size { width: auto(), height: length(14.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(caption.to_string(), 11.0, theme.fg_muted);
+    let columna = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![icono, valor]);
+
+    // Alto justo al contenido (barra + un respiro), para no desbordar la franja
+    // de la barra (que suele medir ~44 px).
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: auto(), height: length(ancho + 6.0) },
+        padding: TaffyRect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![barra, columna])
 }
 
 /// Antepone al chip un glifo coloreado por kind, si corresponde.

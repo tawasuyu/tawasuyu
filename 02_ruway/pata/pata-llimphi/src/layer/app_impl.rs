@@ -51,6 +51,24 @@ impl LayerApp {
         }
     }
 
+    /// Tras rodar la rueda sobre el volumen: refleja el valor nuevo YA (sin
+    /// esperar el ciclo del sampler de fondo) re-muestreando a `self.ctx` y
+    /// marcando todo para repintar — así el tooltip se actualiza en tiempo real.
+    pub(super) fn refresh_volume_now(&mut self) {
+        if let Some((v, _muted)) = crate::sampler::sample_volume() {
+            self.ctx.volume = v;
+        }
+        self.marcar_todo_dirty();
+    }
+
+    /// Igual que [`Self::refresh_volume_now`] para el brillo.
+    pub(super) fn refresh_brightness_now(&mut self) {
+        if let Some(b) = crate::sampler::sample_backlight() {
+            self.ctx.brightness = b;
+        }
+        self.marcar_todo_dirty();
+    }
+
     /// La lista de ventanas para el render del `window_list`.
     pub(super) fn window_entries(&self) -> Vec<WindowEntry> {
         self.toplevels
@@ -832,8 +850,11 @@ impl LayerApp {
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
             Msg::VolumeWheel(dy) => {
+                // Rueda arriba = subir. El stack entrega dy>0 al rodar hacia
+                // abajo, así que invertimos: scroll-up (dy<0) sube el volumen.
                 if dy != 0.0 {
-                    crate::sampler::nudge_volume(dy > 0.0);
+                    crate::sampler::nudge_volume(dy < 0.0);
+                    self.refresh_volume_now();
                 }
             }
             Msg::VolumeMute => crate::sampler::toggle_mute(),
@@ -841,7 +862,8 @@ impl LayerApp {
             Msg::VolumePanel => crate::spawn_cmd("pavucontrol || pavucontrol-qt"),
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
-                    crate::sampler::nudge_brightness(dy > 0.0);
+                    crate::sampler::nudge_brightness(dy < 0.0);
+                    self.refresh_brightness_now();
                 }
             }
             Msg::BrightnessSet(f) => crate::sampler::set_brightness(f),

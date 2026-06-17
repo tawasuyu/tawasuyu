@@ -1082,8 +1082,9 @@ impl App for PataApp {
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
             Msg::SwitchWorkspace(n) => sampler::switch_workspace(n),
             Msg::VolumeWheel(dy) => {
+                // Rueda arriba (dy<0) = subir; el stack da dy>0 al rodar abajo.
                 if dy != 0.0 {
-                    sampler::nudge_volume(dy > 0.0);
+                    sampler::nudge_volume(dy < 0.0);
                 }
             }
             Msg::VolumeMute => sampler::toggle_mute(),
@@ -1134,7 +1135,7 @@ impl App for PataApp {
             }
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
-                    sampler::nudge_brightness(dy > 0.0);
+                    sampler::nudge_brightness(dy < 0.0);
                 }
             }
             Msg::CpuPanel => {

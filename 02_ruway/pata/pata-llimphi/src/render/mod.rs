@@ -174,8 +174,14 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
                 Some(k) => meter_stops(k),
                 None => (theme.accent, aclarar(theme.accent, 0.5)),
             };
-            let m = meter_view(label.as_deref(), *fraction, caption, *size, *orient, theme, stops);
-            con_icono_de_kind(m, kind, theme)
+            // Vertical: dos columnas — barra | (ícono / valor). Horizontal: el
+            // layout clásico (etiqueta · barra · leyenda) con ícono encima.
+            if matches!(orient, pata_core::widget::MeterOrient::Vertical) {
+                meter_view_vertical_iconed(kind, *fraction, caption, *size, theme, stops)
+            } else {
+                let m = meter_view(label.as_deref(), *fraction, caption, *size, *orient, theme, stops);
+                con_icono_de_kind(m, kind, theme)
+            }
         }
         WidgetView::Cores { label, fractions, caption, size, orient } => {
             let stops = match kind {

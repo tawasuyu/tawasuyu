@@ -463,7 +463,7 @@ const DDC_REFRESH_CADA: u32 = 10;
 
 /// Brillo `0..1` desde el primer dispositivo en `/sys/class/backlight` (el panel
 /// del laptop). `None` si no hay backlight (escritorio, VM, sólo externos).
-fn sample_backlight() -> Option<f32> {
+pub(crate) fn sample_backlight() -> Option<f32> {
     let dir = std::fs::read_dir("/sys/class/backlight").ok()?;
     for entry in dir.flatten() {
         let base = entry.path();
@@ -529,7 +529,7 @@ fn parse_ddc_brief(s: &str) -> Option<f32> {
 /// `(fracción_volumen, muteado)` del sink por defecto. Prueba PipeWire (`wpctl`)
 /// y cae a PulseAudio (`pactl`). `None` si ninguno está. Corre un subproceso por
 /// muestreo (~1Hz) — barato a esa frecuencia.
-fn sample_volume() -> Option<(f32, bool)> {
+pub(crate) fn sample_volume() -> Option<(f32, bool)> {
     if let Some(out) = run("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]) {
         if let Some(r) = parse_wpctl(&out) {
             return Some(r);
