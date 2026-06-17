@@ -50,6 +50,37 @@ impl VoxelGrid {
         }
     }
 
+    #[inline]
+    fn solid(&self, x: u32, y: u32, z: u32) -> bool {
+        self.data[self.idx(x, y, z)][3] > 0
+    }
+
+    /// Mapa de ocupación grueso por *bricks* de `brick³` voxels (M2): un texel
+    /// por brick, `255` si el brick contiene algún voxel sólido, `0` si está
+    /// todo vacío. El shader marcha primero esta grilla gruesa y se salta los
+    /// bricks vacíos enteros en un paso (empty-space skipping). Devuelve
+    /// `(dim_grueso, bytes R8)` con índice `cx + cy*cdx + cz*cdx*cdy`.
+    pub fn coarse_occupancy(&self, brick: u32) -> ([u32; 3], Vec<u8>) {
+        let b = brick.max(1);
+        let cdim = [
+            self.dim[0].div_ceil(b),
+            self.dim[1].div_ceil(b),
+            self.dim[2].div_ceil(b),
+        ];
+        let mut out = vec![0u8; (cdim[0] * cdim[1] * cdim[2]) as usize];
+        for z in 0..self.dim[2] {
+            for y in 0..self.dim[1] {
+                for x in 0..self.dim[0] {
+                    if self.solid(x, y, z) {
+                        let (cx, cy, cz) = (x / b, y / b, z / b);
+                        out[(cx + cy * cdim[0] + cz * cdim[0] * cdim[1]) as usize] = 255;
+                    }
+                }
+            }
+        }
+        (cdim, out)
+    }
+
     /// Bytes RGBA planos listos para `queue.write_texture`.
     pub fn bytes(&self) -> &[u8] {
         // `[u8;4]` es contiguo: reinterpretamos el Vec como bytes planos.
@@ -92,6 +123,22 @@ impl VoxelGrid {
                         let gg = (fy / dy as f32 * 255.0) as u8;
                         let bb = (fz / dz as f32 * 255.0) as u8;
                         g.set(x, y, z, [rr, gg, bb]);
+                    }
+                }
+            }
+        }
+
+        // Pilares: dan rincones para el AO y proyectan/reciben sombras.
+        let pillars: [(u32, u32, u32, [u8; 3]); 3] = [
+            (dx / 5, dz / 4, dy * 7 / 10, [200, 120, 90]),
+            (dx * 4 / 5, dz / 3, dy / 2, [110, 170, 120]),
+            (dx / 3, dz * 4 / 5, dy * 3 / 5, [120, 130, 210]),
+        ];
+        for (px, pz, ph, col) in pillars {
+            for y in 2..(2 + ph).min(dy) {
+                for dxx in 0..3u32 {
+                    for dzz in 0..3u32 {
+                        g.set(px + dxx, y, pz + dzz, col);
                     }
                 }
             }
