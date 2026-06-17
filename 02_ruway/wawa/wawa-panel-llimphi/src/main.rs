@@ -929,6 +929,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
 
     // ---- Panel SISTEMA ----
     let mut sistema = Schema::new();
+    sistema.sections.push(sonido_section());
     sistema.sections.push(idioma_section(&m.cfg));
     sistema.sections.push(modulos_section(&m.cfg));
 
@@ -1616,6 +1617,43 @@ fn idioma_section(cfg: &WawaConfig) -> Section {
         )
 }
 
+/// Lee el volumen (0-100) y el estado de silencio del sink de audio por
+/// defecto vía `wpctl` (PipeWire/WirePlumber). Sin wpctl o sin sink devuelve
+/// `(50, false)` para que la UI muestre algo coherente.
+fn query_sound() -> (i64, bool) {
+    let out = std::process::Command::new("wpctl")
+        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .output();
+    if let Ok(o) = out {
+        if o.status.success() {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let muted = s.contains("MUTED");
+            let vol = s
+                .split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.5);
+            return (((vol * 100.0).round() as i64).clamp(0, 150), muted);
+        }
+    }
+    (50, false)
+}
+
+/// Sonido: salida de audio por defecto. Controles REALES sobre `wpctl`
+/// (PipeWire/WirePlumber) — no necesitan driver propio, hablan al servidor de
+/// audio ya corriendo. Volumen 0-150 % y silencio.
+fn sonido_section() -> Section {
+    let (vol, muted) = query_sound();
+    Section::new("sonido::salida", "Sonido")
+        .icon("🔊")
+        .help("Salida de audio por defecto · PipeWire/WirePlumber (wpctl)")
+        .field(
+            Field::slider_int("volumen", "Volumen", vol, 0, 150)
+                .help("Porcentaje del sink @DEFAULT_AUDIO_SINK@"),
+        )
+        .field(Field::toggle("mudo", "Silenciar", muted))
+}
+
 /// Interfaz (llimphi): toolkit del SO. Controles reales próximamente (present
 /// mode, fuente, animaciones) — por ahora informativo.
 fn interfaz_section(cfg: &WawaConfig) -> Section {
@@ -2094,6 +2132,38 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
         "theme" => {
             apply_theme(m, &rel, value);
             m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
+        // Sonido: aplica EN CALIENTE sobre wpctl (sin persistir nada nuestro —
+        // el estado vive en WirePlumber). Volumen 0-150 % / silencio.
+        "sonido" => {
+            match rel.leaf() {
+                Some("volumen") => {
+                    if let Some(v) = value.as_int() {
+                        let frac = (v as f64 / 100.0).clamp(0.0, 1.5);
+                        let _ = std::process::Command::new("wpctl")
+                            .args([
+                                "set-volume",
+                                "@DEFAULT_AUDIO_SINK@",
+                                &format!("{frac:.2}"),
+                            ])
+                            .spawn();
+                        m.status = format!("volumen → {v} %");
+                    }
+                }
+                Some("mudo") => {
+                    let on = value.as_bool().unwrap_or(false);
+                    let _ = std::process::Command::new("wpctl")
+                        .args([
+                            "set-mute",
+                            "@DEFAULT_AUDIO_SINK@",
+                            if on { "1" } else { "0" },
+                        ])
+                        .spawn();
+                    m.status = if on { "audio silenciado".into() } else { "audio activo".into() };
+                }
+                _ => {}
+            }
             return;
         }
         _ => return,
