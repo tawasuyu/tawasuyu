@@ -101,7 +101,9 @@ impl App for VoxelApp {
                 model.pitch += dy * 0.008;
             }
             Msg::Zoom(dy) => {
-                let f = (1.0 - dy * 0.1).clamp(0.5, 1.5);
+                // Rueda hacia adelante = acercar (reduce la distancia). El signo
+                // va invertido respecto del delta crudo para que sea natural.
+                let f = (1.0 + dy * 0.1).clamp(0.5, 1.5);
                 let d = model.dim as f32;
                 model.dist = (model.dist * f).clamp(d * 0.5, d * 4.0);
             }
