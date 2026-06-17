@@ -448,7 +448,7 @@ impl DrmState {
                         self.app.drag = None;
                         if let (Some(mode), Some(id)) = (mode, id) {
                             if matches!(mode, DragMode::Move | DragMode::Tile) {
-                                match zone.and_then(|zi| self.zone_rect(zi)) {
+                                match zone {
                                     // Sobre una zona: aterriza ahí (flotante posicional).
                                     Some(rect) => {
                                         self.app.brain_feed(BodyEvent::WindowFloatTo { id, rect })

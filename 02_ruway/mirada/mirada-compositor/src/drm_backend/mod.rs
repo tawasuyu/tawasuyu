@@ -514,8 +514,10 @@ struct DrmState {
     zone_presets: Vec<Vec<ZoneFrac>>,
     /// Índice del preset activo dentro de [`Self::zone_presets`].
     active_preset: usize,
-    /// Índice de la zona resaltada bajo el puntero durante un arrastre.
-    drag_zone: Option<usize>,
+    /// Rect destino (global) del drag-to-zone resaltado bajo el puntero durante
+    /// un arrastre. `None` = sin snap (la ventana cae libre). Lo calcula
+    /// [`Self::zone_at`] (snap por borde estilo KDE).
+    drag_zone: Option<Rect>,
     /// Instante hasta el que pintar el HUD del preset activo (al ciclar
     /// zonas). `None` = sin HUD. Se setea en cada ciclo y se respeta hasta
     /// que el reloj de `start` lo supera; el siguiente tick (~60 Hz) lo
@@ -953,13 +955,10 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let font_path = app.config_font_path();
     let menu_entries = app.config_menu();
     let zones = app.config_zones();
-    // Diagnóstico de drag-to-zone: cuántas zonas quedaron activas al arrancar.
-    // Si dice 0, el snap NO se va a disparar (esa era la causa de "no veo nada").
-    println!(
-        "mirada-compositor · drag-to-zone: {} zona(s) activas{}",
-        zones.len(),
-        if zones.is_empty() { " (¡vacío! revisá config.ron)" } else { "" }
-    );
+    // Drag-to-zone estilo KDE: el snap se calcula por proximidad al borde
+    // (esquinas→cuartos, arriba→maximizar/mitad-sup, abajo→mitad-inf,
+    // izq/der→mitades). Siempre activo, no depende de la lista de zonas.
+    println!("mirada-compositor · drag-to-zone: snap por bordes activo (KDE)");
     // Lista de presets: el 0 es `config.zones`, luego los de `zone_presets`.
     let mut zone_presets = vec![zones.clone()];
     zone_presets.extend(app.config_zone_presets());

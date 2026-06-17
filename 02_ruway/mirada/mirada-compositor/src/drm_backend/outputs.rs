@@ -342,92 +342,120 @@ impl DrmState {
         self.output_work_rect(self.output_at_point(px.round() as i32, py.round() as i32))
     }
 
-    /// El rect en píxeles de la zona `i`, escalado al work-rect del
-    /// monitor bajo el puntero. Devuelve coords globales.
-    pub(super) fn zone_rect(&self, i: usize) -> Option<Rect> {
-        let wr = self.work_rect();
-        self.zones.get(i).map(|z| z.to_rect(wr))
-    }
-
-    /// El índice de la zona de arrastre bajo `(x, y)`, si la hay. Estilo KDE:
-    /// el snap se dispara SÓLO cuando el puntero está cerca de un borde de
-    /// pantalla; en el centro devuelve `None` para que la ventana se mueva libre
-    /// y caiga donde se suelte. La decisión vive en [`zone_index_at`] (pura y
-    /// testeable).
-    pub(super) fn zone_at(&self, x: f64, y: f64) -> Option<usize> {
-        if self.zones.is_empty() {
-            return None;
-        }
+    /// El **rect destino** del drag-to-zone bajo `(x, y)`, en coords globales, o
+    /// `None` si el puntero no está pegado a ningún borde (la ventana cae libre).
+    /// Estilo KDE6: esquinas→cuartos, arriba→maximizar / mitad superior,
+    /// abajo→mitad inferior, izq/der→mitades. La decisión pura vive en
+    /// [`snap_target`].
+    pub(super) fn zone_at(&self, x: f64, y: f64) -> Option<Rect> {
         let (xi, yi) = (x.round() as i32, y.round() as i32);
         let wr = self.output_work_rect(self.output_at_point(xi, yi));
-        zone_index_at(&self.zones, wr, xi, yi, ZONE_EDGE_MARGIN)
+        snap_target(wr, xi, yi, ZONE_EDGE_MARGIN)
     }
 }
 
 /// Ancho de la banda de borde que activa el snap (estilo «aero/KDE snap»).
 pub(super) const ZONE_EDGE_MARGIN: i32 = 64;
 
-/// Decisión PURA del drag-to-zone: dado el conjunto de zonas (fracciones), el
-/// work-rect del monitor, el punto del puntero y el margen de borde, devuelve el
-/// índice de la zona objetivo o `None`. Snap sólo si el puntero está dentro de
-/// `margin` px de algún borde del work-rect (KDE); en el centro, `None`.
-pub(super) fn zone_index_at(
-    zones: &[ZoneFrac],
-    wr: Rect,
-    xi: i32,
-    yi: i32,
-    margin: i32,
-) -> Option<usize> {
-    let near_edge = (xi - wr.x) < margin
-        || (wr.x + wr.w - xi) < margin
-        || (yi - wr.y) < margin
-        || (wr.y + wr.h - yi) < margin;
-    if !near_edge {
-        return None; // centro de la pantalla: sin snap, movimiento libre
+/// Decisión PURA del drag-to-zone, estilo KDE6. Dado el work-rect del monitor
+/// (coords globales), el punto del puntero y el margen de borde, devuelve el
+/// **rect destino** donde aterrizará la ventana, o `None` si el puntero está en
+/// el centro (sin snap → cae libre). Prioridad: esquinas (cuartos) antes que
+/// bordes. En el borde superior: muy arriba (< margin/3) = maximizar; un poco
+/// más abajo = mitad superior.
+pub(super) fn snap_target(wr: Rect, xi: i32, yi: i32, margin: i32) -> Option<Rect> {
+    let dl = xi - wr.x;
+    let dr = wr.x + wr.w - xi;
+    let dt = yi - wr.y;
+    let db = wr.y + wr.h - yi;
+    let (near_l, near_r) = (dl < margin, dr < margin);
+    let (near_t, near_b) = (dt < margin, db < margin);
+
+    let hw = wr.w / 2;
+    let hh = wr.h / 2;
+    let left = Rect::new(wr.x, wr.y, hw, wr.h);
+    let right = Rect::new(wr.x + hw, wr.y, wr.w - hw, wr.h);
+    let top = Rect::new(wr.x, wr.y, wr.w, hh);
+    let bottom = Rect::new(wr.x, wr.y + hh, wr.w, wr.h - hh);
+    let tl = Rect::new(wr.x, wr.y, hw, hh);
+    let tr = Rect::new(wr.x + hw, wr.y, wr.w - hw, hh);
+    let bl = Rect::new(wr.x, wr.y + hh, hw, wr.h - hh);
+    let br = Rect::new(wr.x + hw, wr.y + hh, wr.w - hw, wr.h - hh);
+
+    // Esquinas primero (cuartos).
+    if near_t && near_l {
+        return Some(tl);
     }
-    zones.iter().position(|z| {
-        let r = z.to_rect(wr);
-        xi >= r.x && yi >= r.y && xi < r.x + r.w && yi < r.y + r.h
-    })
+    if near_t && near_r {
+        return Some(tr);
+    }
+    if near_b && near_l {
+        return Some(bl);
+    }
+    if near_b && near_r {
+        return Some(br);
+    }
+    // Bordes.
+    if near_t {
+        return Some(if dt < margin / 3 { wr } else { top }); // maximizar / mitad sup
+    }
+    if near_b {
+        return Some(bottom);
+    }
+    if near_l {
+        return Some(left);
+    }
+    if near_r {
+        return Some(right);
+    }
+    None
 }
 
 #[cfg(test)]
 mod zone_tests {
-    use super::{zone_index_at, Rect};
-    use mirada_brain::ZoneFrac;
+    use super::{snap_target, Rect};
 
-    fn halves() -> Vec<ZoneFrac> {
-        vec![
-            ZoneFrac { x: 0.0, y: 0.0, w: 0.5, h: 1.0 }, // izquierda
-            ZoneFrac { x: 0.5, y: 0.0, w: 0.5, h: 1.0 }, // derecha
-        ]
+    const WR: Rect = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+    const M: i32 = 64;
+
+    #[test]
+    fn esquina_superior_izquierda_es_un_cuarto() {
+        assert_eq!(snap_target(WR, 10, 10, M), Some(Rect::new(0, 0, 960, 540)));
     }
 
     #[test]
-    fn cerca_del_borde_izquierdo_snap_a_la_mitad_izquierda() {
-        let wr = Rect::new(0, 0, 1920, 1080);
-        // Puntero a 10px del borde izquierdo, centro vertical → zona 0 (izq).
-        assert_eq!(zone_index_at(&halves(), wr, 10, 540, 64), Some(0));
+    fn borde_superior_muy_arriba_maximiza() {
+        // y=5 (< margin/3=21) en el medio horizontal → pantalla completa.
+        assert_eq!(snap_target(WR, 960, 5, M), Some(WR));
     }
 
     #[test]
-    fn cerca_del_borde_derecho_snap_a_la_mitad_derecha() {
-        let wr = Rect::new(0, 0, 1920, 1080);
-        assert_eq!(zone_index_at(&halves(), wr, 1915, 540, 64), Some(1));
+    fn borde_superior_un_poco_mas_abajo_es_mitad_superior() {
+        // y=40 (> 21, < 64) → mitad superior.
+        assert_eq!(snap_target(WR, 960, 40, M), Some(Rect::new(0, 0, 1920, 540)));
     }
 
     #[test]
-    fn en_el_centro_no_hay_snap() {
-        let wr = Rect::new(0, 0, 1920, 1080);
-        // Lejos de todo borde → None (la ventana cae normal).
-        assert_eq!(zone_index_at(&halves(), wr, 960, 540, 64), None);
+    fn borde_inferior_es_mitad_inferior() {
+        assert_eq!(snap_target(WR, 960, 1075, M), Some(Rect::new(0, 540, 1920, 540)));
+    }
+
+    #[test]
+    fn bordes_laterales_son_mitades() {
+        assert_eq!(snap_target(WR, 10, 540, M), Some(Rect::new(0, 0, 960, 1080)));
+        assert_eq!(snap_target(WR, 1915, 540, M), Some(Rect::new(960, 0, 960, 1080)));
+    }
+
+    #[test]
+    fn el_centro_no_hace_snap() {
+        assert_eq!(snap_target(WR, 960, 540, M), None);
     }
 
     #[test]
     fn respeta_el_origen_del_monitor() {
-        // Monitor secundario con origen (1920, 0): el borde izquierdo es x=1920.
+        // Monitor secundario con origen (1920,0): borde izq = x=1920.
         let wr = Rect::new(1920, 0, 1920, 1080);
-        assert_eq!(zone_index_at(&halves(), wr, 1930, 540, 64), Some(0));
-        assert_eq!(zone_index_at(&halves(), wr, 2880, 540, 64), None); // centro
+        assert_eq!(snap_target(wr, 1930, 540, M), Some(Rect::new(1920, 0, 960, 1080)));
+        assert_eq!(snap_target(wr, 2880, 540, M), None); // centro
     }
 }

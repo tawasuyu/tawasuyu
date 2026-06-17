@@ -645,16 +645,14 @@ impl DrmState {
         if !matches!(drag_mode, Some(DragMode::Move) | Some(DragMode::Tile)) {
             return;
         }
-        if self.zones.is_empty() {
-            return;
-        }
-        let wr = self.work_rect();
-        // Las zonas son del monitor bajo el puntero — si ese no es esta
-        // salida, no las pintamos acá.
-        if wr.x + wr.w <= rect.x
-            || wr.y + wr.h <= rect.y
-            || wr.x >= rect.x + rect.w
-            || wr.y >= rect.y + rect.h
+        // Rect destino del snap (global). Sin snap (puntero en el centro) no se
+        // pinta nada — la ventana cae libre.
+        let Some(r) = self.drag_zone else { return };
+        // Sólo en la salida que contiene la zona (drag en otro monitor → nada acá).
+        if r.x + r.w <= rect.x
+            || r.y + r.h <= rect.y
+            || r.x >= rect.x + rect.w
+            || r.y >= rect.y + rect.h
         {
             return;
         }
@@ -667,20 +665,14 @@ impl DrmState {
                 a,
             ]
         };
-        // Estilo KDE: pintamos SÓLO la zona objetivo (la que está bajo el
-        // puntero) como una previsualización prominente de dónde va a aterrizar
-        // la ventana — relleno translúcido + un borde sólido grueso. Si el
-        // puntero no está sobre ninguna zona, no se pinta nada (la ventana cae
-        // normal donde se suelte). Las zonas que NO son objetivo no se dibujan
-        // (antes se pintaban todas tenues, lo que confundía).
-        let Some(i) = self.drag_zone else { return };
-        let Some(z) = self.zones.get(i) else { return };
-        let r = z.to_rect(wr);
+        // Estilo KDE: pintamos SÓLO la zona objetivo como previsualización
+        // prominente — relleno translúcido + un borde sólido. Sin objetivo no se
+        // pinta nada (ya se filtró arriba).
         let (lx, ly) = (r.x - rect.x, r.y - rect.y);
         // Orden front-to-back: lo que se empuja PRIMERO queda encima. Empujamos
         // el borde antes que el relleno para que el contorno quede prominente.
         let bw = 4;
-        let bcol = fill(0.95);
+        let bcol = fill(0.85);
         let mut push_band = |x: i32, y: i32, w: i32, h: i32, into: &mut Vec<Frame<GlesRenderer>>| {
             if w <= 0 || h <= 0 {
                 return;
@@ -696,9 +688,9 @@ impl DrmState {
         push_band(lx, ly + r.h - bw, r.w, bw, into); // abajo
         push_band(lx, ly, bw, r.h, into); // izquierda
         push_band(lx + r.w - bw, ly, bw, r.h, into); // derecha
-        // Relleno translúcido del acento (debajo del borde).
+        // Relleno translúcido del acento (debajo del borde) — más transparente.
         let mut buf = SolidColorBuffer::default();
-        buf.update((r.w, r.h), fill(0.32));
+        buf.update((r.w, r.h), fill(0.18));
         into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
             &buf, (lx, ly), 1.0, 1.0, Kind::Unspecified,
         )));
