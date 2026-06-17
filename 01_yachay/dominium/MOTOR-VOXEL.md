@@ -433,14 +433,27 @@ tests CPU duros (alturas independientes de la ventana; dos ventanas solapadas
 coinciden voxel-a-voxel >10k columnas) + demo PNG `terrain_streaming` (la ventana
 sigue al foco de mundo z:-80→520 y cada cuadro rinde **paisaje nuevo y distinto** —
 isla boscosa verde con agua → cordillera nevada — sin huecos; ocupación de bricks
-distinta por cuadro). **MVP:** la regeneración es de la **ventana entera** por paso
-cruzado (no un *shift* parcial que sólo rellene la franja nueva); el demo reconstruye
-el `VoxelRenderer` por cuadro (el camino incremental `sync` existe, pero su brick
-pool aún no crece si una ventana más densa lo llena). Queda de M6: **shift
-incremental** (copiar la zona común + generar sólo el borde nuevo, vía toroidal
-addressing en el shader o `sync` con pool que crece), **wiring en la app viva**
-(coordenadas del jugador/HUD bajo la ventana móvil — necesita pantalla), persistencia
-CAS de chunks y **LOD** del horizonte — el tramo caro de §7.
+distinta por cuadro).
+
+**M6 — streaming TOROIDAL (HECHO, 2026-06-17):** el shift incremental ya corre — el
+`VoxelRenderer` se construye **una vez** y sólo se le re-sube **la franja de bricks
+que entra** (no la ventana entera, no reconstruir). La textura del brick pool es un
+**ring buffer**: el brick de mundo `W` vive en la celda física `W mod cdim`, y el
+shader traduce la celda lógica de la ventana a la física sumando un offset de origen
+(`slot_at` envuelve; `brick_origin` nuevo uniform). `VoxelRenderer::scroll_to(origin
+_voxel, &grid)` recorre la ventana nueva, detecta los bricks que entraron (no estaban
+en la ventana vieja) y los sube a su celda física (reusando el slot que deja el brick
+que sale — bijección por residuos); el bulk queda intacto. `sync` (edición en vivo)
+quedó wrap-safe (indexa por celda física). **Verificado por PARIDAD pixel-exacta**:
+el render scrolleado da `max|Δ|=0` vs un `VoxelRenderer` reconstruido de cero en ese
+origen, subiendo ~¼ de ventana por paso (demo `terrain_streaming`, 6 ventanas
+distintas + assert de paridad). **GOTCHA clave:** el `%` de WGSL sobre enteros con
+signo es ambiguo entre plataformas → el `brick_origin` se sube YA reducido a
+`[0,cdim)` (floormod en CPU) para que el shader nunca opere un negativo (con orígenes
+negativos salía un seam de media imagen). Queda de M6: **wiring en la app viva**
+(coords del jugador/HUD bajo la ventana móvil — necesita pantalla), **crecer el brick
+pool** si una ventana más densa que la inicial lo llena, persistencia CAS de chunks y
+**LOD** del horizonte — el tramo caro de §7.
 
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más

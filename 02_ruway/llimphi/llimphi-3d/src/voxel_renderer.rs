@@ -27,6 +27,10 @@ use crate::voxel::VoxelGrid;
 /// Tamaño de brick (voxels por lado).
 const BRICK: u32 = 8;
 
+/// Lado de brick (voxels) expuesto: el streaming toroidal exige orígenes de
+/// ventana alineados a este múltiplo (ver [`VoxelRenderer::scroll_to`]).
+pub const VOXEL_BRICK: u32 = BRICK;
+
 /// Máximo de entidades vivas por frame (cabe holgado en un uniform).
 const MAX_ENTITIES: usize = 64;
 
@@ -88,6 +92,10 @@ pub struct VoxelRenderer {
     slots: Vec<u32>,
     /// Slots libres del pool (free list para allocar bricks nuevos).
     free: Vec<u32>,
+    /// Origen de brick de la ventana (streaming toroidal): `slots`/indirección se
+    /// indexan por celda **física** = `(celda_lógica + brick_origin) mod cdim`.
+    /// `[0,0,0]` = sin scroll (lógica = física, camino clásico).
+    brick_origin: [i32; 3],
     /// Dirección hacia el sol (normalizada). Editable antes de `render`.
     pub sun_dir: [f32; 3],
     /// Atmósfera (cielo + niebla). `fog_density = 0` → comportamiento clásico.
@@ -188,8 +196,8 @@ impl VoxelRenderer {
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("llimphi-3d-voxel-ubuf"),
             // inv_vp(64)+cam_eye(16)+grid_dim/brick(16)+sun(16)+cdim(16)+atlas(16)
-            // +sky_zenith/fog(16)+sky_horizon(16)+vp(64)
-            size: 240,
+            // +sky_zenith/fog(16)+sky_horizon(16)+vp(64)+scroll(16)
+            size: 256,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -283,6 +291,7 @@ impl VoxelRenderer {
             atlas,
             slots: vec![0u32; n_cells],
             free: Vec::new(),
+            brick_origin: [0, 0, 0],
             sun_dir: normalize3([0.5, 1.0, 0.35]),
             atmosphere: Atmosphere::default(),
             depth: None,
@@ -330,6 +339,19 @@ impl VoxelRenderer {
         (cx + cy * self.cdim[0] + cz * self.cdim[0] * self.cdim[1]) as usize
     }
 
+    /// Índice **físico** (en `slots`/indirección) de la celda gruesa **lógica**
+    /// `c` (relativa a la ventana): `(c + brick_origin) mod cdim`. Espeja el
+    /// `slot_at` del shader. Con `brick_origin = 0` es `cell_idx(c)` directo.
+    #[inline]
+    fn phys_cell(&self, c: [i32; 3]) -> usize {
+        let p = [
+            floormod(c[0] + self.brick_origin[0], self.cdim[0] as i32) as u32,
+            floormod(c[1] + self.brick_origin[1], self.cdim[1] as i32) as u32,
+            floormod(c[2] + self.brick_origin[2], self.cdim[2] as i32) as u32,
+        ];
+        self.cell_idx(p[0], p[1], p[2])
+    }
+
     /// Origen del slot en el atlas (en celdas de brick).
     fn slot_origin(&self, slot: u32) -> [u32; 3] {
         let ax = self.atlas[0];
@@ -374,7 +396,9 @@ impl VoxelRenderer {
         for cz in cmin[2]..=cmax[2] {
             for cy in cmin[1]..=cmax[1] {
                 for cx in cmin[0]..=cmax[0] {
-                    let idx = self.cell_idx(cx, cy, cz);
+                    // Celda FÍSICA (espeja el `slot_at` toroidal del shader); con
+                    // `brick_origin = 0` es la celda lógica directa.
+                    let idx = self.phys_cell([cx as i32, cy as i32, cz as i32]);
                     let occ = grid.brick_occupied(BRICK, cx, cy, cz) != 0;
                     let cur = self.slots[idx];
                     if occ {
@@ -405,22 +429,102 @@ impl VoxelRenderer {
             }
         }
 
-        // Re-subir la sub-región de indirección tocada.
-        let cext = [
-            cmax[0] - cmin[0] + 1,
-            cmax[1] - cmin[1] + 1,
-            cmax[2] - cmin[2] + 1,
-        ];
-        let mut ind = Vec::with_capacity((cext[0] * cext[1] * cext[2] * 4) as usize);
-        for cz in cmin[2]..=cmax[2] {
-            for cy in cmin[1]..=cmax[1] {
-                for cx in cmin[0]..=cmax[0] {
-                    ind.extend_from_slice(&self.slots[self.cell_idx(cx, cy, cz)].to_ne_bytes());
+        // Re-subir la indirección tocada. Sin scroll (caso común de edición), la
+        // física = la lógica → sub-región contigua (barato). Con scroll, las
+        // celdas físicas están envueltas (no contiguas) → re-subimos la
+        // indirección entera (es chica: cdim³ u32).
+        if self.brick_origin == [0, 0, 0] {
+            let cext = [
+                cmax[0] - cmin[0] + 1,
+                cmax[1] - cmin[1] + 1,
+                cmax[2] - cmin[2] + 1,
+            ];
+            let mut ind = Vec::with_capacity((cext[0] * cext[1] * cext[2] * 4) as usize);
+            for cz in cmin[2]..=cmax[2] {
+                for cy in cmin[1]..=cmax[1] {
+                    for cx in cmin[0]..=cmax[0] {
+                        ind.extend_from_slice(&self.slots[self.cell_idx(cx, cy, cz)].to_ne_bytes());
+                    }
+                }
+            }
+            write_3d(queue, &self.indir, cmin, cext, 4, &ind);
+            uploaded + ind.len() as u32
+        } else {
+            self.upload_indirection_full(queue);
+            uploaded + (self.slots.len() * 4) as u32
+        }
+    }
+
+    /// **Streaming toroidal (M6).** Desliza la ventana a `origin_voxel` (esquina
+    /// local `(0,0,0)` en coordenadas de mundo, alineada a brick) re-subiendo
+    /// **sólo los bricks que entran** — la franja nueva — sin reconstruir el
+    /// renderer ni re-subir la ventana entera. `grid` es la ventana ya generada
+    /// en ese origen (local `[0,dim)`), de la que se extraen los bricks de la
+    /// franja. Los bricks que salen se reemplazan en su misma celda física (la
+    /// textura es un ring buffer: `world_brick mod cdim`). Devuelve los bytes
+    /// subidos (≈ tamaño de la franja, no de la ventana). Llamar con
+    /// `origin_voxel` múltiplo de [`VOXEL_BRICK`].
+    pub fn scroll_to(&mut self, queue: &wgpu::Queue, origin_voxel: [i32; 3], grid: &VoxelGrid) -> u32 {
+        let b = BRICK as i32;
+        debug_assert!(
+            origin_voxel.iter().all(|v| v % b == 0),
+            "scroll_to: origin_voxel debe estar alineado a VOXEL_BRICK"
+        );
+        let new = [origin_voxel[0] / b, origin_voxel[1] / b, origin_voxel[2] / b];
+        let old = self.brick_origin;
+        if new == old {
+            return 0;
+        }
+        // El uniform de scroll se actualiza ANTES de poblar para que `phys_cell`
+        // calcule las celdas físicas del nuevo origen.
+        self.brick_origin = new;
+
+        let cd = [self.cdim[0] as i32, self.cdim[1] as i32, self.cdim[2] as i32];
+        let mut uploaded = 0u32;
+        let per_brick = BRICK * BRICK * BRICK * 4;
+
+        // Recorre las celdas LÓGICAS de la ventana nueva; procesa sólo las que
+        // ENTRARON (su brick de mundo no estaba en la ventana vieja). El bulk
+        // (presente en ambas) conserva su contenido físico intacto.
+        for ccz in 0..cd[2] {
+            for ccy in 0..cd[1] {
+                for ccx in 0..cd[0] {
+                    let wb = [ccx + new[0], ccy + new[1], ccz + new[2]]; // brick de mundo
+                    let in_old = (0..cd[0]).contains(&(wb[0] - old[0]))
+                        && (0..cd[1]).contains(&(wb[1] - old[1]))
+                        && (0..cd[2]).contains(&(wb[2] - old[2]));
+                    if in_old {
+                        continue;
+                    }
+                    // Celda física (= celda vieja que sale, por el ring buffer).
+                    let idx = self.phys_cell([ccx, ccy, ccz]);
+                    let (lx, ly, lz) = (ccx as u32, ccy as u32, ccz as u32);
+                    let occ = grid.brick_occupied(BRICK, lx, ly, lz) != 0;
+                    let cur = self.slots[idx];
+                    if occ {
+                        let slot = if cur != 0 {
+                            cur - 1
+                        } else {
+                            match self.free.pop() {
+                                Some(s) => {
+                                    self.slots[idx] = s + 1;
+                                    s
+                                }
+                                None => continue, // pool lleno: saltar sin romper
+                            }
+                        };
+                        self.upload_brick(queue, slot, grid, lx, ly, lz);
+                        uploaded += per_brick;
+                    } else if cur != 0 {
+                        self.free.push(cur - 1);
+                        self.slots[idx] = 0;
+                    }
                 }
             }
         }
-        write_3d(queue, &self.indir, cmin, cext, 4, &ind);
-        uploaded + ind.len() as u32
+
+        self.upload_indirection_full(queue);
+        uploaded + (self.slots.len() * 4) as u32
     }
 
     /// Sube los uniforms (cámara/atmósfera/entidades) del frame. Lo llama tanto
@@ -429,7 +533,7 @@ impl VoxelRenderer {
     pub fn upload(&self, queue: &wgpu::Queue, aspect: f32, camera: &Camera3d) {
         let vp = camera.view_proj(aspect);
         let inv_vp = vp.inverse();
-        let mut u = Vec::with_capacity(240);
+        let mut u = Vec::with_capacity(256);
         for v in inv_vp.to_cols_array() {
             u.extend_from_slice(&v.to_ne_bytes());
         }
@@ -468,6 +572,18 @@ impl VoxelRenderer {
         }
         // Matriz forward (world→clip) para escribir frag_depth del voxel golpeado.
         for v in vp.to_cols_array() {
+            u.extend_from_slice(&v.to_ne_bytes());
+        }
+        // Origen de brick (streaming toroidal): el shader envuelve la celda lógica.
+        // Se sube YA REDUCIDO a `[0, cdim)` (floormod) para que el `%` del shader
+        // nunca opere sobre un negativo — el `%` de WGSL sobre enteros con signo es
+        // ambiguo entre plataformas y rompía el wrap con orígenes negativos.
+        for v in [
+            floormod(self.brick_origin[0], self.cdim[0] as i32) as f32,
+            floormod(self.brick_origin[1], self.cdim[1] as i32) as f32,
+            floormod(self.brick_origin[2], self.cdim[2] as i32) as f32,
+            0.0,
+        ] {
             u.extend_from_slice(&v.to_ne_bytes());
         }
         queue.write_buffer(&self.ubuf, 0, &u);
@@ -611,6 +727,13 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
     [v[0] / l, v[1] / l, v[2] / l]
 }
 
+/// Módulo con resultado siempre en `[0, m)` (maneja `a` negativo). Espeja el
+/// `((x % m) + m) % m` del shader para el direccionamiento toroidal.
+#[inline]
+fn floormod(a: i32, m: i32) -> i32 {
+    ((a % m) + m) % m
+}
+
 const WGSL: &str = r#"
 struct U {
     inv_vp: mat4x4<f32>,
@@ -622,6 +745,7 @@ struct U {
     sky_zenith: vec4<f32>, // xyz = color cenit, w = densidad de niebla (0 = off)
     sky_horizon: vec4<f32>,// xyz = color horizonte / hacia el que niebla desvanece
     vp: mat4x4<f32>,       // world→clip (forward) para escribir frag_depth
+    scroll: vec4<f32>,     // xyz = origen de brick (streaming toroidal); 0 = sin scroll
 };
 struct Entity {
     pos: vec4<f32>,
@@ -663,10 +787,17 @@ fn ray_box(ro: vec3<f32>, inv_rd: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>) -
     return vec2<f32>(max(max(tmin.x, tmin.y), tmin.z), min(min(tmax.x, tmax.y), tmax.z));
 }
 
-// Slot del brick que contiene la celda gruesa `cc` (0 = vacío).
+// Slot del brick que contiene la celda gruesa LÓGICA `cc` (0 = vacío).
+// Streaming toroidal: la textura de indirección es un ring buffer indexado por
+// `world_brick mod cdim`. La celda lógica `cc` (relativa a la ventana, [0,cdim))
+// se traduce a su celda FÍSICA sumando el origen de brick y envolviendo. Sin
+// scroll (`scroll = 0`) la física = la lógica (camino clásico, sin cambios).
 fn slot_at(cc: vec3<i32>) -> u32 {
     if (any(cc < vec3<i32>(0)) || any(vec3<f32>(cc) >= u.cdim.xyz)) { return 0u; }
-    return textureLoad(indir, cc, 0).r;
+    let cd = vec3<i32>(u.cdim.xyz);
+    let bo = vec3<i32>(u.scroll.xyz);
+    let phys = ((cc + bo) % cd + cd) % cd; // floormod (maneja origen negativo)
+    return textureLoad(indir, phys, 0).r;
 }
 
 // Voxel fino vía indirección → pool. `.a > 0.5` = sólido.

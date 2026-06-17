@@ -49,4 +49,4 @@ pub use mesh::{cube, push_cube, Vertex3d, CUBE_INDICES};
 pub use renderer::Renderer3d;
 pub use scene::Scene3d;
 pub use voxel::{DirtyBox, VoxelGrid};
-pub use voxel_renderer::{Atmosphere, Entity3d, VoxelRenderer};
+pub use voxel_renderer::{Atmosphere, Entity3d, VoxelRenderer, VOXEL_BRICK};

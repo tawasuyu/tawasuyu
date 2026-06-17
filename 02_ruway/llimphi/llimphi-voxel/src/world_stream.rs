@@ -82,6 +82,13 @@ impl WorldStream {
         self.origin
     }
 
+    /// Origen en **voxels 3D** (`y = 0`: el mundo no scrollea en vertical), para
+    /// pasar a [`VoxelRenderer::scroll_to`](llimphi_3d::VoxelRenderer::scroll_to).
+    /// Si `step` es múltiplo de [`llimphi_3d::VOXEL_BRICK`] queda alineado a brick.
+    pub fn origin_voxel(&self) -> [i32; 3] {
+        [self.origin[0], 0, self.origin[1]]
+    }
+
     /// Mapea una columna de **mundo** a coordenada **local** de ventana, o `None`
     /// si cae afuera. Para ubicar al jugador/entidades dentro del grid actual.
     pub fn world_to_local(&self, wx: i32, wz: i32) -> Option<(u32, u32)> {
