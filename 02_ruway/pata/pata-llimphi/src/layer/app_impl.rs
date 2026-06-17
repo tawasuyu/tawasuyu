@@ -939,6 +939,11 @@ impl LayerApp {
             Msg::SwitchWorkspace(n) => {
                 diag!("pata diag · SwitchWorkspace({n}) → mirada-ctl workspace {n}");
                 crate::sampler::switch_workspace(n);
+                // Feedback INSTANTÁNEO: el sampler de fondo refresca cada ~1s (y
+                // cada tick corre varios subprocesos), así que el resalte tardaba
+                // segundos y parecía que el click no entraba. Movemos el activo ya.
+                self.ctx.active_workspace = n;
+                self.marcar_todo_dirty();
             }
             Msg::ActivateWindow(id) => {
                 diag!(
@@ -947,6 +952,12 @@ impl LayerApp {
                     self.toplevel_por_id(id).is_some()
                 );
                 self.activar_ventana(id);
+                // Feedback inmediato: marcá esta ventana como activa en la lista
+                // (el foco real lo confirma el compositor en el próximo censo).
+                for t in &mut self.toplevels {
+                    t.activated = t.id == id;
+                }
+                self.marcar_todo_dirty();
             }
             Msg::CloseWindow(id) => self.cerrar_ventana(id),
             Msg::TrayActivate(key) => {
