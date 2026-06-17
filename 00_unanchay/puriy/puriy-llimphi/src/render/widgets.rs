@@ -43,7 +43,35 @@ pub(crate) fn render_input(
             _ => "",
         });
 
-    let palette = TextInputPalette::default();
+    // Background base: CSS background-color del nodo si lo seteó; sino
+    // blanco. Cuando está focado y el autor escribió `:focus { background:
+    // X }`, aplicamos X.
+    let base_bg = b
+        .background
+        .map(|c| Color::from_rgba8(c.r, c.g, c.b, c.a))
+        .unwrap_or(Color::WHITE);
+    let focus_bg = b
+        .focus_background
+        .map(|c| Color::from_rgba8(c.r, c.g, c.b, c.a))
+        .unwrap_or(base_bg);
+    let bg = if focused { focus_bg } else { base_bg };
+
+    // Paleta del widget ligada al estilo del autor (Fase 7.1244): el
+    // `text_input_view` pinta su PROPIO fondo/texto encima del fill de la caja
+    // —antes con el palette oscuro default, lo que tapaba el `background` del
+    // autor con negro—. Ahora `bg`/`bg_focus`/`fg_text`/`fg_placeholder` siguen al
+    // CSS (`background`, `:focus { background }`, `color`). El borde del widget va
+    // transparente: el borde del autor lo dibuja `apply_decorations` (7.1243) y el
+    // afford­ance sin estilo lo da el radius + el ring de focus de cortesía.
+    let fg = Color::from_rgba8(b.color.r, b.color.g, b.color.b, b.color.a);
+    let palette = TextInputPalette {
+        bg: base_bg,
+        bg_focus: focus_bg,
+        border: Color::TRANSPARENT,
+        border_focus: Color::TRANSPARENT,
+        fg_text: fg,
+        fg_placeholder: Color::from_rgba8(b.color.r, b.color.g, b.color.b, 128),
+    };
     let input = text_input_view(state, placeholder, focused, &palette, Msg::FocusInput(idx));
 
     // Tamaño: ancho 100% del contenedor por default (los autores suelen
@@ -56,21 +84,6 @@ pub(crate) fn render_input(
         _ => line_h,
     };
     let css_width = length_to_taffy(b.width, zoom);
-
-    // Background base: CSS background-color del nodo si lo seteó; sino
-    // blanco. Cuando está focado y el autor escribió `:focus { background:
-    // X }`, aplicamos X.
-    let base_bg = b
-        .background
-        .map(|c| Color::from_rgba8(c.r, c.g, c.b, c.a))
-        .unwrap_or(Color::WHITE);
-    let bg = if focused {
-        b.focus_background
-            .map(|c| Color::from_rgba8(c.r, c.g, c.b, c.a))
-            .unwrap_or(base_bg)
-    } else {
-        base_bg
-    };
     // ¿El autor proveyó un `outline` activo en `:focus`? Si sí, lo dibuja
     // `apply_decorations`; si no, le damos el ring de cortesía azul.
     let author_outline = focused

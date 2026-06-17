@@ -591,12 +591,21 @@ Verificado por pantallazo headless: input con `border:2px solid` + `border-radiu
 + `box-shadow` los pinta los tres. (El centro oscuro de la caja es el palette
 propio del `text_input_view`, ajeno a esta fase.)
 
+### 7.1244 ✅ — el `text_input_view` sigue el `background`/`color` del autor
+
+El widget pintaba su propio fondo/texto con el palette oscuro default
+(`Theme::dark()`), tapando el `background` del autor con negro (visible en el
+pantallazo de 7.1243: centro oscuro pese a `background:#fff`). Ahora `render_input`
+arma la `TextInputPalette` desde el CSS: `bg` ← `background`, `bg_focus` ←
+`:focus { background }`, `fg_text` ← `color`, `fg_placeholder` ← `color` con alpha
+128. El borde del widget va **transparente** (`Color::TRANSPARENT`): el borde lo
+dibuja `apply_decorations` (7.1243) y el affordance sin estilo lo dan el radius +
+el ring de focus. Verificado por pantallazo: `input{background:#fff;color:#15233f}`
+pinta blanco con texto oscuro legible; `input.tinted{background:#fff7e6}` pinta
+crema. Cierra la familia de estilado de text-input del autor.
+
 ### Próximos huecos del mismo bloque (a atacar en orden)
 
-- **fill del autor dentro del `text_input_view`** — el widget pinta su propio
-  fondo (palette oscuro) por encima del `background` del autor; cablear
-  `b.background` → `TextInputPalette.background` para que `input { background:X }`
-  tiña el centro, no sólo el borde.
 - **`image-rendering` para `background-image` / `<canvas>`** — extender 7.1239 a
   los otros sitios de imagen (reusar `with_image_rendering` en `decorations.rs`
   y `canvas.rs`).
