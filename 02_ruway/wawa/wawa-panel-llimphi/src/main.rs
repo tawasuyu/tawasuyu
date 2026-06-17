@@ -932,6 +932,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     let mut sistema = Schema::new();
     sistema.sections.push(sonido_section());
     sistema.sections.push(teclado_section(&m.mirada));
+    sistema.sections.push(puntero_section(&m.mirada));
     sistema.sections.push(idioma_section(&m.cfg));
     sistema.sections.push(modulos_section(&m.cfg));
 
@@ -1692,6 +1693,40 @@ fn teclado_section(mir: &mirada_brain::Config) -> Section {
             Field::text("xkb_variant", "Variante (opcional)", mir.xkb_variant.clone())
                 .help("p. ej. dvorak, nodeadkeys — vacío = ninguna"),
         )
+}
+
+/// Puntero/touchpad: preferencias de libinput. REAL: mirada las aplica a cada
+/// dispositivo (al conectarlo / al reiniciar sesión). Ruteado a mirada.
+fn puntero_section(mir: &mirada_brain::Config) -> Section {
+    Section::new("mirada::puntero", "Ratón y touchpad")
+        .icon("🖱")
+        .help("Preferencias de libinput. Se aplican al (re)conectar el dispositivo.")
+        .field(Field::toggle(
+            "natural_scroll",
+            "Scroll natural",
+            mir.natural_scroll,
+        ))
+        .field(Field::toggle(
+            "tap_to_click",
+            "Tocar para clickear (touchpad)",
+            mir.tap_to_click,
+        ))
+        .field(
+            Field::slider(
+                "pointer_speed",
+                "Velocidad del puntero",
+                mir.pointer_speed,
+                -1.0,
+                1.0,
+                0.1,
+            )
+            .help("−1 lento · 0 neutro · 1 rápido"),
+        )
+        .field(Field::toggle(
+            "focus_follows_mouse",
+            "El foco sigue al puntero",
+            mir.focus_follows_mouse,
+        ))
 }
 
 /// Interfaz (llimphi): toolkit del SO. Controles reales próximamente (present

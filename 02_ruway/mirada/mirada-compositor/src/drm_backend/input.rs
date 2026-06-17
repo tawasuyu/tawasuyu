@@ -476,6 +476,23 @@ impl DrmState {
                 pointer.frame(&mut self.app);
             }
 
+            // Dispositivo nuevo (ratón/touchpad): aplica las preferencias de
+            // libinput de la config — scroll natural, tap-to-click y velocidad
+            // del puntero. Los dispositivos que no soportan una opción la
+            // ignoran (devuelven error, que descartamos).
+            InputEvent::DeviceAdded { mut device } => {
+                let (natural, tap, speed) = self.app.input_prefs();
+                if device.config_scroll_has_natural_scroll() {
+                    let _ = device.config_scroll_set_natural_scroll_enabled(natural);
+                }
+                if device.config_tap_finger_count() > 0 {
+                    let _ = device.config_tap_set_enabled(tap);
+                }
+                if device.config_accel_is_available() {
+                    let _ = device.config_accel_set_speed(speed);
+                }
+            }
+
             _ => {} // otros dispositivos: aún no
         }
     }

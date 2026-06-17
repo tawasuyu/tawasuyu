@@ -387,6 +387,21 @@ impl Configurable for Config {
                     self.xkb_variant = s.to_string();
                 }
             }
+            "natural_scroll" => {
+                if let Some(b) = value.as_bool() {
+                    self.natural_scroll = b;
+                }
+            }
+            "tap_to_click" => {
+                if let Some(b) = value.as_bool() {
+                    self.tap_to_click = b;
+                }
+            }
+            "pointer_speed" => {
+                if let Some(v) = value.as_float() {
+                    self.pointer_speed = v.clamp(-1.0, 1.0);
+                }
+            }
             "dropterm_cmd" => {
                 if let Some(s) = value.as_str() {
                     self.dropterm_cmd = s.to_string();

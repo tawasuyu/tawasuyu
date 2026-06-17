@@ -211,6 +211,18 @@ pub struct Config {
     /// variante.
     #[serde(default)]
     pub xkb_variant: String,
+    /// Scroll natural (el contenido sigue al dedo/rueda) en punteros y
+    /// touchpads. La aplica el compositor a cada dispositivo libinput.
+    #[serde(default)]
+    pub natural_scroll: bool,
+    /// Tocar para clickear en touchpads (tap-to-click). Sólo afecta a los
+    /// dispositivos que soportan tap.
+    #[serde(default = "default_true")]
+    pub tap_to_click: bool,
+    /// Velocidad del puntero (aceleración libinput), de `-1.0` (lento) a `1.0`
+    /// (rápido). `0.0` = neutro/sistema.
+    #[serde(default)]
+    pub pointer_speed: f64,
 }
 
 /// Modo de transición de Win+Tab entre escritorios. Ver
@@ -404,6 +416,9 @@ impl Default for Config {
             overview_geometry: Vec::new(),
             xkb_layout: String::new(),
             xkb_variant: String::new(),
+            natural_scroll: false,
+            tap_to_click: true,
+            pointer_speed: 0.0,
         }
     }
 }

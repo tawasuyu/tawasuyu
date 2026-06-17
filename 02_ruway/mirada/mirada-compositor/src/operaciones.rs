@@ -407,6 +407,19 @@ impl App {
         }
     }
 
+    /// Preferencias de puntero/touchpad (libinput): `(natural_scroll,
+    /// tap_to_click, pointer_speed)`. Las aplica el backend a cada dispositivo
+    /// nuevo (`DeviceAdded`). Con Cerebro enlazado cae a defaults.
+    pub(crate) fn input_prefs(&self) -> (bool, bool, f64) {
+        match &self.brain {
+            Brain::Embedded(d) => {
+                let c = d.config();
+                (c.natural_scroll, c.tap_to_click, c.pointer_speed)
+            }
+            Brain::Linked(_) => (false, true, 0.0),
+        }
+    }
+
     /// Escala HiDPI en 120-avos para la salida `name`: override si existe,
     /// si no `120` (100 % nativo). Con Cerebro enlazado: 100 %.
     pub(crate) fn config_output_scale_120_for(&self, name: &str) -> u32 {
