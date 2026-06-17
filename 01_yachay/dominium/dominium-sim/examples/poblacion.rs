@@ -65,12 +65,29 @@ fn materia_total(w: &World) -> f64 {
     w.grid.materia.iter().map(|&v| v as f64).sum()
 }
 
+/// Máximo de cada capa de la grilla — la evidencia del fix del "edificio
+/// cáncer". Sin `field_saturation` un Concepto emisor bombea su capa a +∞
+/// y este máximo crece monótono; con cap, se estabiliza en el techo.
+fn grid_max(w: &World) -> [f32; 5] {
+    let m = |l: &[f32]| l.iter().copied().fold(0.0f32, f32::max);
+    [
+        m(&w.grid.materia),
+        m(&w.grid.psique),
+        m(&w.grid.poder),
+        m(&w.grid.oro),
+        m(&w.grid.degradacion),
+    ]
+}
+
 /// Corre `max_ticks` y loguea cada `every`. Si `danger > 0` y la población lo
 /// cruza, aborta (protege contra el cuelgue del régimen "antes").
 fn run_bench(name: &str, mut w: World, p: &SimParams, max_ticks: u64, every: u64, danger: usize) {
     println!("\n=== {name} ===");
-    println!("{:>6} | {:>10} | {:>14} | {:>10}", "tick", "pob", "materia", "tick_ms");
-    println!("{}", "-".repeat(50));
+    println!(
+        "{:>6} | {:>8} | {:>12} | {:>8} | maxGrid[mat psi pod oro degr]",
+        "tick", "pob", "materia", "tick_ms"
+    );
+    println!("{}", "-".repeat(78));
     let mut peak = w.lemmings.len();
     for t in 0..max_ticks {
         let t0 = Instant::now();
@@ -79,9 +96,10 @@ fn run_bench(name: &str, mut w: World, p: &SimParams, max_ticks: u64, every: u64
         let n = w.lemmings.len();
         peak = peak.max(n);
         if t % every == 0 || t == max_ticks - 1 {
+            let g = grid_max(&w);
             println!(
-                "{:>6} | {:>10} | {:>14.0} | {:>10.3}",
-                t, n, materia_total(&w), dt_ms
+                "{:>6} | {:>8} | {:>12.0} | {:>8.3} | [{:>7.1} {:>7.1} {:>7.1} {:>7.1} {:>7.1}]",
+                t, n, materia_total(&w), dt_ms, g[0], g[1], g[2], g[3], g[4]
             );
         }
         if danger > 0 && n >= danger {
@@ -102,6 +120,29 @@ fn main() {
         .get(2)
         .and_then(|s| s.parse().ok())
         .unwrap_or(3000);
+
+    // Modo dedicado al BUG 1 ("edificio cáncer"): población acotada por el
+    // tope duro de la app, y `field_saturation` toggleable por env (SAT, 0 =
+    // sin cap). Aísla la divergencia de las CAPAS de la grilla del ruido
+    // demográfico. Correr:
+    //   SAT=0   cargo run -p dominium-sim --example poblacion --release -- field
+    //   SAT=150 cargo run -p dominium-sim --example poblacion --release -- field
+    if only == Some("field") {
+        let mut p = params_app_base();
+        p.max_population = 6000; // como la app, para que el max-grid no sea ruido de pob
+        p.field_saturation = std::env::var("SAT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(150.0);
+        eprintln!("  field_saturation = {}", p.field_saturation);
+        let label = if p.field_saturation <= 0.0 {
+            "BUG 1 — SIN cap (campos divergen)"
+        } else {
+            "BUG 1 — CON cap (campos estables)"
+        };
+        run_bench(label, seed_world(), &p, max_ticks, 100, 0);
+        return;
+    }
 
     if only != Some("after") {
         // ANTES: frenos off → motor que explota. Tope DANGER para no colgar.

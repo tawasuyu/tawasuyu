@@ -4,7 +4,7 @@
 //! de los agentes → envejecimiento y cosecha de muertos.
 
 use crate::conceptos::{apply_conceptos, apply_hacks, apply_persuasion};
-use crate::diffuse::{diffuse_with, regrow_materia};
+use crate::diffuse::{diffuse_with, regrow_materia, saturate_fields};
 use crate::social::apply_social_contagion;
 use dominium_core::{
     select_action_argmax, select_action_argmax_big5, ActionPolicy, SimParams, World,
@@ -125,6 +125,13 @@ pub fn tick(world: &mut World, p: &SimParams) {
     // 2b. Regrowth logístico de materia — cierre termodinámico que evita
     //     la extinción. Sub-fase del paso 2, no agrega fase nueva al §1.5.
     regrow_materia(&mut world.grid, p.regrowth_rate, p.carrying_capacity);
+    // 2b'. Saturación física: techo duro por celda y por capa. Cierra la
+    //      fase de emisión/difusión clampeando materia/psique/poder/oro y la
+    //      degradacion (que sólo sube por extracción) a `field_saturation`.
+    //      Sin esto un Concepto emisor bombea su campo a +∞ y la columna del
+    //      render crece infinito ("edificio cáncer"). Con cap 0.0 (default)
+    //      no toca nada → bit-exacto al motor histórico.
+    saturate_fields(&mut world.grid, p.field_saturation);
     // 2c. Persuasión institucional (Fase B.2, opt-in vía `Concepto::persuasion`).
     //     Empuja psi de agentes dentro del radio de cada Concepto persuasor
     //     hacia su `target_psi`, con falloff lineal. Va ANTES del contagio

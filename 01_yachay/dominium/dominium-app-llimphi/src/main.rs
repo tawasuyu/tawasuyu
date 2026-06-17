@@ -145,6 +145,17 @@ impl App for Dominium {
             // el equilibrio natural dan un N* sano y fluido sin ella. Ver el
             // benchmark para los números de ambos caminos.
             max_population: 6000,
+            // ── Saturación física de campos (fix "edificio cáncer" 2026-06-17) ──
+            // Un Concepto con `mods` positivos suma su campo a las celdas de su
+            // radio CADA tick sin techo (apply_conceptos). Sin cap, la celda
+            // diverge a +∞ y, como la altura del render es `ZWeights · capas`,
+            // la columna crece infinito ("edificio cáncer"). `carrying_capacity`
+            // sólo limita el regrowth de materia, no las inyecciones de
+            // Conceptos ni la `degradacion` (que sólo sube por extracción).
+            // 150 es MUY generoso (≈ 3.75× el carrying_capacity de 40): no
+            // toca la dinámica normal del bioma, sólo corta el crecimiento
+            // monótono sin techo. Verificado en `dominium-sim/examples/poblacion.rs`.
+            field_saturation: 150.0,
             ..SimParams::default()
         };
         // Relieve por bioma, recalibrado para los valores nuevos:

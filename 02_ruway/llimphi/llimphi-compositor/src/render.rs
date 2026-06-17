@@ -1782,6 +1782,72 @@ mod tests {
         (mounted, computed)
     }
 
+    /// Replica la estructura de dominium: un wrapper que clipea y lleva
+    /// `on_click_at` + `draggable_at`, con un hijo "canvas" que pinta por
+    /// uno de dos caminos. Devuelve `(mounted, computed)`. `gpu` elige el
+    /// camino: `false` = `paint_with` (camino LEGACY), `true` =
+    /// `gpu_paint_with().paint_over()` (camino Tier 1 nuevo).
+    fn dominium_like(gpu: bool) -> (crate::Mounted<()>, llimphi_layout::ComputedLayout) {
+        let mut canvas = View::<()>::new(Style {
+            size: Size { width: percent(1.0), height: percent(1.0) },
+            ..Default::default()
+        });
+        canvas = if gpu {
+            canvas
+                .gpu_paint_with(|_d, _q, _e, _t, _r, _vp| {})
+                .paint_over(|_s, _ts, _r| {})
+        } else {
+            canvas.paint_with(|_s, _ts, _r| {})
+        };
+        let wrapper = View::<()>::new(Style {
+            size: Size { width: percent(1.0), height: percent(1.0) },
+            ..Default::default()
+        })
+        .clip(true)
+        .on_click_at(|_lx, _ly, _rw, _rh| Some(()))
+        .draggable_at(|_phase, _dx, _dy, _x0, _y0| Some(()))
+        .children(vec![canvas]);
+        let mut layout = LayoutTree::new();
+        let mounted = mount(&mut layout, wrapper);
+        let computed = layout.compute(mounted.root, (400.0, 400.0)).expect("layout");
+        (mounted, computed)
+    }
+
+    #[test]
+    fn canvas_gpu_only_es_clickeable_igual_que_legacy() {
+        // BUG 2: el wrapper con `on_click_at`/`draggable_at` debe ser
+        // hit-testeable en AMBOS caminos. El click cae sobre el wrapper
+        // (índice 0, raíz) — un punto interior lo encuentra sin importar el
+        // tipo de painter del hijo.
+        let (m_leg, c_leg) = dominium_like(false);
+        assert_eq!(hit_test_click(&m_leg, &c_leg, 200.0, 200.0), Some(0), "LEGACY (paint_with)");
+        let (m_gpu, c_gpu) = dominium_like(true);
+        assert_eq!(hit_test_click(&m_gpu, &c_gpu, 200.0, 200.0), Some(0), "GPU (gpu_paint_with+paint_over)");
+    }
+
+    #[test]
+    fn nodo_gpu_paint_with_solo_es_hittable_por_si_mismo() {
+        // Crítico para el motor voxel futuro: una vista 3D GPU-only que
+        // lleve su PROPIO `on_click_at` debe ser clickeable, aunque NO
+        // tenga `paint_with` ni contenido vello — sólo `gpu_painter`.
+        let canvas = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(100.0) },
+            ..Default::default()
+        })
+        .gpu_paint_with(|_d, _q, _e, _t, _r, _vp| {})
+        .on_click(());
+        let root = View::<()>::new(Style {
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .children(vec![canvas]);
+        let mut layout = LayoutTree::new();
+        let m = mount(&mut layout, root);
+        let c = layout.compute(m.root, (400.0, 400.0)).expect("layout");
+        assert_eq!(hit_test_click(&m, &c, 50.0, 50.0), Some(1), "gpu-only con on_click debe ser hittable");
+    }
+
     #[test]
     fn transform_rel_resuelve_contra_el_tamano_del_nodo() {
         // El nodo es 100×100 en (0,0). `transform_rel(-0.5,-0.5)` =

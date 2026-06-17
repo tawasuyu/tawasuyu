@@ -72,6 +72,32 @@ pub fn regrow_materia(grid: &mut Grid, rate: f32, cap: f32) {
     }
 }
 
+/// Saturación física de los campos: clampa cada celda de las 5 capas a
+/// `cap`. Es el techo duro que evita que las inyecciones por Conceptos (que
+/// suman cada tick sin límite) o la `degradacion` (que sólo sube por
+/// extracción) lleven el valor de una celda a infinito — y con él la altura
+/// de la columna del render.
+///
+/// `cap <= 0.0` deshabilita (no toca nada) → motor histórico bit-exacto.
+pub fn saturate_fields(grid: &mut Grid, cap: f32) {
+    if cap <= 0.0 {
+        return;
+    }
+    for layer in [
+        &mut grid.materia,
+        &mut grid.psique,
+        &mut grid.poder,
+        &mut grid.oro,
+        &mut grid.degradacion,
+    ] {
+        for v in layer.iter_mut() {
+            if *v > cap {
+                *v = cap;
+            }
+        }
+    }
+}
+
 /// Aplica un paso de difusión + entropía a los 3 campos dinámicos usando
 /// las tasas base de `SimParams` sin modulación estacional, e incluye el
 /// regrowth de materia. Es el wrapper "todo en uno" — útil para tests y
@@ -153,6 +179,32 @@ mod tests {
         // Las vecinas vacías van hacia 40.
         let other = g.idx(0, 0);
         assert!((g.materia[other] - 36.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn saturate_clamps_all_layers_to_cap() {
+        let mut g = Grid::new(3, 3);
+        let c = g.idx(1, 1);
+        g.materia[c] = 500.0;
+        g.psique[c] = 1000.0;
+        g.poder[c] = 200.0;
+        g.oro[c] = 80.0;
+        g.degradacion[c] = 999.0;
+        saturate_fields(&mut g, 150.0);
+        assert_eq!(g.materia[c], 150.0);
+        assert_eq!(g.psique[c], 150.0);
+        assert_eq!(g.poder[c], 150.0);
+        assert_eq!(g.oro[c], 80.0, "lo que está debajo del cap no se toca");
+        assert_eq!(g.degradacion[c], 150.0, "la degradacion (sólo sube) también se capa");
+    }
+
+    #[test]
+    fn saturate_disabled_when_cap_zero() {
+        let mut g = Grid::new(2, 2);
+        let c = g.idx(0, 0);
+        g.materia[c] = 1e6;
+        saturate_fields(&mut g, 0.0);
+        assert_eq!(g.materia[c], 1e6, "cap 0 → no toca nada (bit-exacto histórico)");
     }
 
     #[test]

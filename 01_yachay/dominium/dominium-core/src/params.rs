@@ -274,6 +274,23 @@ pub struct SimParams {
     /// réplica — usar valores ≥ 1.
     #[serde(default)]
     pub density_cap: u32,
+    /// **Saturación física de los campos** — techo duro por celda y por capa.
+    /// Al final de la fase de emisión/difusión del tick, cada celda de
+    /// `materia / psique / poder / oro / degradacion` se clampa a este valor.
+    /// Es el freno que evita el "edificio cáncer": un Concepto con `mods`
+    /// positivos bombea su campo a las celdas cada tick sin techo; sin
+    /// saturación el valor → ∞ y la altura de la columna del render (relieve =
+    /// suma pesada de capas vía `ZWeights`) crece sin límite.
+    ///
+    /// La `degradacion` también queda capada acá — es la única capa que sólo
+    /// sube (la extracción la suma, nada la baja ni la difunde), así que sin
+    /// este techo también divergiría.
+    ///
+    /// `0.0` (default) = sin cap → motor histórico bit-exacto. La APP la setea
+    /// a un valor GENEROSO (muy por encima de `carrying_capacity`, p.ej.
+    /// 150) para cortar el crecimiento infinito sin alterar la dinámica normal.
+    #[serde(default)]
+    pub field_saturation: f32,
 }
 
 /// Default de `SimParams::action_weights_ext` — peso por acción para la 5ª
@@ -426,6 +443,10 @@ impl Default for SimParams {
             max_population: 0,
             density_block: 0,
             density_cap: 0,
+            // Sin saturación de campos por default → motor histórico
+            // bit-exacto. La APP la enciende con un techo generoso para
+            // cortar el "edificio cáncer"; ver `dominium-app-llimphi`.
+            field_saturation: 0.0,
         }
     }
 }
