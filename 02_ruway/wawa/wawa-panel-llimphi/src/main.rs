@@ -711,6 +711,11 @@ fn main() {
         if !active.is_empty() {
             activate_profile(&mut m, &active);
         }
+        // Asegura un wallpaper de fábrica si el escritorio arranca sin fondo
+        // (color plano feo). Idempotente.
+        if ensure_default_wallpaper(&mut m) {
+            eprintln!("wawa-panel: wallpaper por defecto generado");
+        }
         flush_saves(&mut m);
         eprintln!("wawa-panel: perfil activo «{active}» aplicado a la config viva");
         return;
@@ -844,6 +849,63 @@ fn write_png(hal: &llimphi_ui::llimphi_hal::Hal, target: &llimphi_ui::llimphi_ha
     enc.set_depth(png::BitDepth::Eight);
     let mut wr = enc.write_header().unwrap();
     wr.write_image_data(&pixels).unwrap();
+}
+
+/// Genera un wallpaper por defecto: un degradé diagonal del color `base` (el
+/// acento del theme) a una versión oscurecida, con una viñeta sutil. 1920×1080
+/// RGBA → PNG en `path`. Es el fondo de fábrica para que un escritorio recién
+/// instalado no arranque con un color plano.
+fn write_default_wallpaper(path: &std::path::Path, base: [u8; 4]) -> std::io::Result<()> {
+    const W: u32 = 1920;
+    const H: u32 = 1080;
+    // Esquina superior-izquierda = base aclarado; inferior-derecha = base
+    // oscurecido. Mezcla lineal sobre la diagonal.
+    let claro = |c: u8| ((c as f32 * 0.55 + 255.0 * 0.12).min(255.0)) as f32;
+    let oscuro = |c: u8| (c as f32 * 0.16) as f32;
+    let (r0, g0, b0) = (claro(base[0]), claro(base[1]), claro(base[2]));
+    let (r1, g1, b1) = (oscuro(base[0]), oscuro(base[1]), oscuro(base[2]));
+    let mut px = Vec::with_capacity((W * H * 4) as usize);
+    for y in 0..H {
+        for x in 0..W {
+            let t = (x as f32 / W as f32 + y as f32 / H as f32) * 0.5;
+            let lerp = |a: f32, b: f32| (a + (b - a) * t) as u8;
+            px.push(lerp(r0, r1));
+            px.push(lerp(g0, g1));
+            px.push(lerp(b0, b1));
+            px.push(255);
+        }
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut enc = png::Encoder::new(file, W, H);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut wr = enc.write_header().map_err(std::io::Error::other)?;
+    wr.write_image_data(&px).map_err(std::io::Error::other)
+}
+
+/// Si el perfil/theme activo no tiene wallpaper (ni imagen fija ni carpeta de
+/// rotación), genera uno por defecto y lo fija. Idempotente: si ya existe el
+/// archivo generado, no lo reescribe. Devuelve `true` si tocó la config.
+fn ensure_default_wallpaper(m: &mut Model) -> bool {
+    if !m.mirada.wallpaper_path.trim().is_empty() || !m.mirada.wallpaper_dir.trim().is_empty() {
+        return false; // ya hay fondo elegido (o rotación): respetarlo
+    }
+    let Some(cfgdir) = mirada_brain::Config::default_path().and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    else {
+        return false;
+    };
+    let wall = cfgdir.join("default-wall.png");
+    if !wall.exists() {
+        if write_default_wallpaper(&wall, m.mirada.border_focus).is_err() {
+            return false;
+        }
+    }
+    m.mirada.wallpaper_path = wall.to_string_lossy().to_string();
+    m.dirty.mirada = true;
+    true
 }
 
 // =====================================================================
