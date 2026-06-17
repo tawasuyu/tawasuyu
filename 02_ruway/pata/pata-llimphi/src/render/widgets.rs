@@ -645,6 +645,29 @@ pub(super) fn con_icono_de_kind(meter: View<Msg>, kind: Option<&str>, _theme: &T
     .children(vec![icono, meter])
 }
 
+/// Ícono de **portapapeles** dibujado como shapes (no emoji 📋, que salía como
+/// tofu o monocromo): un tablero con borde + la pinza superior.
+pub(super) fn clipboard_icon(color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(14.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .paint_with(move |scene: &mut Scene, _ts, rect: PaintRect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, RoundedRect, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let (x, y, w, h) = (rect.x as f64, rect.y as f64, rect.w as f64, rect.h as f64);
+        // Tablero con borde.
+        let body = RoundedRect::new(x + w * 0.14, y + h * 0.16, x + w * 0.86, y + h * 0.96, 2.0);
+        scene.stroke(&Stroke::new(1.3), Affine::IDENTITY, &color, None, &body);
+        // Pinza superior (rellena).
+        let clip = RoundedRect::new(x + w * 0.34, y + h * 0.04, x + w * 0.66, y + h * 0.22, 1.5);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &color, None, &clip);
+    })
+}
+
 /// Pinta la fase lunar como shapes (no glifo emoji). Un disco oscuro de fondo
 /// y un disco iluminado desplazado según `phase`.
 pub(super) fn moon_view(phase: f32) -> View<Msg> {

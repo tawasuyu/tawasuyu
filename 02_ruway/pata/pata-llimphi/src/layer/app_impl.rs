@@ -694,6 +694,10 @@ impl LayerApp {
                     &self.theme,
                     self.menu_bar_px as f32,
                     &self.clip_history,
+                    // Ancla bajo el widget que lo abrió (último x del puntero en
+                    // esa barra), acotado al ancho de la barra.
+                    self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
                 ),
                 MenuKind::Clock => render::clock_menu_view(
                     &self.cfg.surfaces[idx],

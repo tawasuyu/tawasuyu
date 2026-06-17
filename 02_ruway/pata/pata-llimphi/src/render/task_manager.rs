@@ -286,16 +286,40 @@ fn tray_icon_node(icon: &TrayIcon) -> View<Msg> {
     .image(img)
 }
 
-/// El widget `clipboard`: chip con preview del texto copiado.
+/// El widget `clipboard`: ícono (vector) + preview del texto copiado.
 pub(super) fn clipboard_view(text: Option<&str>, exec: Option<&str>, theme: &Theme) -> View<Msg> {
-    let (etiqueta, fg) = match text {
-        Some(t) if !t.is_empty() => (format!("📋 {}", super::recortar(t, CLIPBOARD_PREVIEW_MAX)), theme.fg_text),
-        _ => ("📋".to_string(), theme.fg_muted),
+    let (preview, fg) = match text {
+        Some(t) if !t.is_empty() => (Some(super::recortar(t, CLIPBOARD_PREVIEW_MAX)), theme.fg_text),
+        _ => (None, theme.fg_muted),
     };
-    let v = chip(theme)
-        .hover_fill(theme.bg_button_hover)
-        .radius(6.0)
-        .text(etiqueta, 12.0, fg);
+    let mut kids: Vec<View<Msg>> = vec![super::widgets::clipboard_icon(fg)];
+    if let Some(p) = &preview {
+        kids.push(
+            View::new(Style {
+                size: Size { width: auto(), height: length(22.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text(p.clone(), 12.0, fg),
+        );
+    }
+    let v = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: auto(), height: length(22.0_f32) },
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(5.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .radius(6.0)
+    .hover_fill(theme.bg_button_hover)
+    .children(kids);
     let v = match text {
         Some(t) if !t.is_empty() => v.tooltip(t.to_string()),
         _ => v,
@@ -308,7 +332,11 @@ pub(super) fn clipboard_view(text: Option<&str>, exec: Option<&str>, theme: &The
 }
 
 /// El **panel** del historial de portapapeles: cabecera + una fila por copia.
-pub fn clipboard_panel(history: &[String], theme: &Theme) -> View<Msg> {
+/// `anchor_x` = x (px) del widget que lo abrió, para que salga **justo debajo**;
+/// `avail_w` = ancho de la barra, para no desbordar el borde.
+pub fn clipboard_panel(history: &[String], anchor_x: f32, avail_w: f32, theme: &Theme) -> View<Msg> {
+    // El panel se centra bajo el widget, acotado a la pantalla.
+    let left = (anchor_x - CLIP_MENU_W * 0.5).clamp(8.0, (avail_w - CLIP_MENU_W - 8.0).max(8.0));
     let mut hijos: Vec<View<Msg>> = Vec::new();
     hijos.push(
         View::new(Style {
@@ -363,7 +391,7 @@ pub fn clipboard_panel(history: &[String], theme: &Theme) -> View<Msg> {
     View::new(Style {
         position: llimphi_ui::llimphi_layout::taffy::prelude::Position::Absolute,
         inset: TaffyRect {
-            left: length(0.0_f32),
+            left: length(left),
             top: length(0.0_f32),
             right: auto(),
             bottom: auto(),
@@ -403,7 +431,7 @@ pub fn clipboard_panel(history: &[String], theme: &Theme) -> View<Msg> {
 }
 
 /// El historial de portapapeles como **overlay** para winit.
-pub fn clipboard_overlay(history: &[String], bar_h: f32, theme: &Theme) -> View<Msg> {
+pub fn clipboard_overlay(history: &[String], bar_h: f32, anchor_x: f32, avail_w: f32, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::prelude::Position;
     let scrim = View::new(Style {
         position: Position::Absolute,
@@ -420,7 +448,7 @@ pub fn clipboard_overlay(history: &[String], bar_h: f32, theme: &Theme) -> View<
         ..Default::default()
     })
     .on_click(Msg::ClipboardMenu)
-    .children(vec![clipboard_panel(history, theme)]);
+    .children(vec![clipboard_panel(history, anchor_x, avail_w, theme)]);
     View::new(Style {
         position: Position::Absolute,
         inset: TaffyRect {

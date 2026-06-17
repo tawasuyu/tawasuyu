@@ -974,6 +974,8 @@ pub fn clipboard_menu_view(
     theme: &Theme,
     bar_px: f32,
     history: &[String],
+    anchor_x: f32,
+    avail_w: f32,
 ) -> View<Msg> {
     let bar = View::new(Style {
         size: Size {
@@ -994,7 +996,7 @@ pub fn clipboard_menu_view(
     body_style.flex_grow = 1.0;
     let body = View::new(body_style)
         .on_click(Msg::ClipboardMenu)
-        .children(vec![clipboard_panel(history, theme)]);
+        .children(vec![clipboard_panel(history, anchor_x, avail_w, theme)]);
 
     let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
         vec![body, bar]

@@ -1358,6 +1358,11 @@ impl App for PataApp {
             return Some(render::clipboard_overlay(
                 &model.clip_history,
                 bar_h,
+                // Path winit (app suelta de prueba): sin ancho/cursor rastreado,
+                // cae al borde izquierdo como antes. El anclado «justo debajo»
+                // del widget vive en el layer-shell (el DM).
+                0.0,
+                f32::MAX,
                 &model.theme,
             ));
         }
