@@ -943,6 +943,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     for s in info_schema(&m.host).sections {
         acerca.sections.push(s); // estado del equipo + acerca
     }
+    acerca.sections.push(monitores_section()); // pantallas conectadas (DRM)
 
     vec![
         PanelPestana { title: "Vista".into(), icon: "✦".into(), schema: vista },
@@ -2037,6 +2038,51 @@ fn modulos_section(cfg: &WawaConfig) -> Section {
 }
 
 /// La pestaña "Información": estado del equipo + acerca (sólo lectura).
+/// Lee los monitores conectados desde `/sys/class/drm` (conector → modo
+/// preferido). Es lo que ve el kernel DRM; no necesita hablar con el
+/// compositor. Devuelve `(nombre, modo)` por conector conectado.
+fn read_monitors() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir("/sys/class/drm") else {
+        return out;
+    };
+    let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        // Conectores: cardN-<NOMBRE>. Saltamos el nodo de la tarjeta a secas.
+        let Some((_, conector)) = name.split_once('-') else {
+            continue;
+        };
+        let status = std::fs::read_to_string(path.join("status")).unwrap_or_default();
+        if status.trim() != "connected" {
+            continue;
+        }
+        let modo = std::fs::read_to_string(path.join("modes"))
+            .ok()
+            .and_then(|m| m.lines().next().map(str::to_string))
+            .unwrap_or_else(|| "—".into());
+        out.push((conector.to_string(), modo));
+    }
+    out
+}
+
+/// Monitores conectados (DRM) — un campo de sólo-lectura por conector.
+fn monitores_section() -> Section {
+    let mut s = Section::new("wawa::monitores", "Monitores")
+        .icon("🖵")
+        .help("Pantallas conectadas (DRM · /sys/class/drm)");
+    let mons = read_monitors();
+    if mons.is_empty() {
+        s = s.field(Field::display("ninguno", "Estado", "sin monitores detectados"));
+    } else {
+        for (i, (name, modo)) in mons.iter().enumerate() {
+            s = s.field(Field::display(format!("mon{i}"), name.clone(), modo.clone()));
+        }
+    }
+    s
+}
+
 fn info_schema(host: &HostInfo) -> Schema {
     let t = rimay_localize::t;
     let used_kb = host.mem_total_kb.saturating_sub(host.mem_avail_kb);
