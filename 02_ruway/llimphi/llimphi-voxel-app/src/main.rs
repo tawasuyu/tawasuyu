@@ -254,7 +254,7 @@ impl App for VoxelApp {
                 w.animate(angle);
                 w.render(device, queue, encoder, target, vp, &camera);
                 if mode == Mode::Explore {
-                    w.draw_crosshair(device, queue, encoder, target, vp);
+                    w.draw_hud(device, queue, encoder, target, vp);
                 }
             })
             .draggable(|phase, dx, dy| match phase {
@@ -357,9 +357,9 @@ fn shot_one(
             }
             w.animate(0.6);
             w.render(device, queue, encoder, target, vp, &camera);
-            // La toma de primera persona (`!edit`) lleva la mira, como en vivo.
+            // La toma de primera persona (`!edit`) lleva el HUD, como en vivo.
             if !edit {
-                w.draw_crosshair(device, queue, encoder, target, vp);
+                w.draw_hud(device, queue, encoder, target, vp);
             }
         },
     );

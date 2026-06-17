@@ -8,7 +8,8 @@
 //!
 //! Deliberadamente tonto: sin texturas, sin bind groups, sin depth. Geometría
 //! en CPU → un vertex buffer dinámico → un draw. Suficiente para miras, barras,
-//! marcos; si algún día hace falta texto/íconos, se compone aparte.
+//! marcos y **texto** ([`HudQuad::text`], fuente bitmap 5×7 = un quad por píxel
+//! encendido, sin salir del pipeline de quads).
 
 /// Un rectángulo de HUD en **pixels** (origen arriba-izquierda, como la
 /// pantalla), color RGBA lineal `0..1`.
@@ -31,6 +32,98 @@ impl HudQuad {
             HudQuad { x: cx - arm, y: cy - th * 0.5, w: arm * 2.0, h: th, color },
             HudQuad { x: cx - th * 0.5, y: cy - arm, w: th, h: arm * 2.0, color },
         ]
+    }
+
+    /// Emite los quads de una cadena con la **fuente bitmap 5×7** embebida
+    /// ([`glyph`]): origen arriba-izquierda en `(x, y)` pixels, cada píxel de
+    /// glifo mide `px` pixels de lado y los caracteres avanzan `6·px` (5 de ancho
+    /// + 1 de espacio). Sólo ASCII; las minúsculas se dibujan en mayúscula y los
+    /// caracteres desconocidos quedan en blanco. Se mantiene dentro del pipeline
+    /// tonto del HUD (un quad por píxel encendido, sin texturas).
+    pub fn text(s: &str, x: f32, y: f32, px: f32, color: [f32; 4]) -> Vec<HudQuad> {
+        let mut out = Vec::new();
+        let mut cx = x;
+        for ch in s.chars() {
+            if ch != ' ' {
+                let g = glyph(ch);
+                for (r, row) in g.iter().enumerate() {
+                    for c in 0..5u32 {
+                        if row & (1 << (4 - c)) != 0 {
+                            out.push(HudQuad {
+                                x: cx + c as f32 * px,
+                                y: y + r as f32 * px,
+                                w: px,
+                                h: px,
+                                color,
+                            });
+                        }
+                    }
+                }
+            }
+            cx += 6.0 * px;
+        }
+        out
+    }
+
+    /// Ancho en pixels que ocuparía `s` con [`text`](Self::text) a tamaño `px`
+    /// (útil para dimensionar un panel de fondo antes de dibujar el texto).
+    pub fn text_width(s: &str, px: f32) -> f32 {
+        s.chars().count() as f32 * 6.0 * px
+    }
+}
+
+/// Mapa de un carácter a su bitmap **5×7**: 7 filas, cada `u8` con los 5 bits
+/// bajos = columnas de izquierda (bit 4) a derecha (bit 0). Cubre `0-9`, `A-Z`
+/// y puntuación común; lo desconocido devuelve un glifo en blanco. Las filas se
+/// escriben en binario para que la forma sea legible en el código.
+fn glyph(c: char) -> [u8; 7] {
+    match c.to_ascii_uppercase() {
+        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+        '3' => [0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110],
+        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+        '5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
+        '6' => [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
+        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100],
+        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+        'N' => [0b10001, 0b11001, 0b10101, 0b10101, 0b10011, 0b10001, 0b10001],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        ':' => [0b00000, 0b00100, 0b00000, 0b00000, 0b00100, 0b00000, 0b00000],
+        '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100],
+        ',' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100, 0b01000],
+        '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+        '+' => [0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000],
+        '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+        '(' => [0b00110, 0b01000, 0b01000, 0b01000, 0b01000, 0b01000, 0b00110],
+        ')' => [0b01100, 0b00010, 0b00010, 0b00010, 0b00010, 0b00010, 0b01100],
+        '%' => [0b11001, 0b11001, 0b00010, 0b00100, 0b01000, 0b10011, 0b10011],
+        _ => [0; 7],
     }
 }
 

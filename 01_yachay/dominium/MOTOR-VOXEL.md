@@ -503,8 +503,17 @@ el mouse-look). `HudQuad::crosshair` arma la mira centrada; el modo explorar la
 dibuja sobre la escena. Verificado: la cruz blanca aparece al centro en
 `voxel_app_fps.png`. Reusable para barras/marcos/HUD de cualquier app 3D.
 
-Queda sólo el tramo caro de M6 (streaming/LOD del horizonte) — y, si se quiere,
-texto/íconos en el HUD (hoy son rectángulos planos).
+**Texto en el HUD (2026-06-17).** `HudQuad::text` suma una **fuente bitmap 5×7**
+embebida (`glyph`: `0-9`, `A-Z`, puntuación) — cada píxel encendido = un quad,
+así que el texto sale sin texturas/bind-groups, dentro del mismo pipeline tonto
+del HUD. La app showcase pinta en explorar un panel translúcido con el **modo**
+(«EXPLORAR») y las **coordenadas** del jugador en vivo (lectura de `Player::pos`).
+Verificado por PNG (`voxel_app_fps.png`: «EXPLORAR / X 38 Y 23 Z 38» legible
+arriba-izquierda + mira al centro). Reusable para cualquier overlay 3D con texto.
+
+Queda sólo el tramo caro de M6: **streaming/LOD del horizonte** (chunks que
+cargan/descargan alrededor de la cámara + persistencia CAS + meshes groseros de
+fondo) — ver §7.
 
 ### 11.4 Esfuerzo vs el kernel de wawa
 

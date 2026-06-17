@@ -241,9 +241,11 @@ impl World {
         );
     }
 
-    /// Pinta la mira de primera persona encima de la escena (pase screen-space).
-    /// Llamar *después* de [`render`](Self::render), en modo explorar.
-    pub fn draw_crosshair(
+    /// Pinta el HUD de primera persona encima de la escena (pase screen-space):
+    /// la **mira** centrada + un panel con el **modo** y las **coordenadas** del
+    /// jugador (lectura del propio `Player`, espacio de grilla). Llamar *después*
+    /// de [`render`](Self::render), en modo explorar.
+    pub fn draw_hud(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -251,7 +253,27 @@ impl World {
         target: &wgpu::TextureView,
         viewport: (u32, u32),
     ) {
-        let quads = HudQuad::crosshair(viewport, 9.0, 2.0, [1.0, 1.0, 1.0, 0.85]);
+        let mut quads = HudQuad::crosshair(viewport, 9.0, 2.0, [1.0, 1.0, 1.0, 0.85]).to_vec();
+
+        // Texto: modo + coordenadas. La grilla es entera, redondeamos a voxel.
+        let p = self.player.pos;
+        let coords = format!("X {} Y {} Z {}", p.x as i32, p.y as i32, p.z as i32);
+        let px = 2.0; // pixel de glifo (10×14 por carácter)
+        let (tx, ty) = (16.0, 14.0);
+        let lh = 7.0 * px + 6.0; // alto de línea (glifo + interlínea)
+
+        // Panel de fondo translúcido para legibilidad sobre cualquier terreno.
+        let pw = HudQuad::text_width(&coords, px).max(HudQuad::text_width("EXPLORAR", px));
+        quads.push(HudQuad {
+            x: tx - 8.0,
+            y: ty - 8.0,
+            w: pw + 16.0,
+            h: lh * 2.0 + 8.0,
+            color: [0.0, 0.0, 0.0, 0.45],
+        });
+        quads.extend(HudQuad::text("EXPLORAR", tx, ty, px, [0.62, 0.95, 0.78, 0.95]));
+        quads.extend(HudQuad::text(&coords, tx, ty + lh, px, [0.95, 0.97, 1.0, 0.95]));
+
         self.hud.render(device, queue, encoder, target, viewport, &quads);
     }
 }
