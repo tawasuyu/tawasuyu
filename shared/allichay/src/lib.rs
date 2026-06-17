@@ -300,6 +300,14 @@ pub enum Control {
         /// Las opciones disponibles, en orden.
         options: Vec<EnumOption>,
     },
+    /// Como [`Control::Dropdown`] pero SIEMPRE como lista vertical de radios
+    /// (un círculo por opción), sin importar cuántas haya. Para listas de
+    /// "elegir uno" donde se quiere ver todas las opciones de un vistazo
+    /// (conjuntos de atajos/animaciones/themes).
+    Radio {
+        /// Las opciones disponibles, en orden.
+        options: Vec<EnumOption>,
+    },
     /// Selector de color RGBA para un [`FieldValue::Color`].
     ColorPicker,
     /// Campo de texto libre para un [`FieldValue::Text`].
@@ -431,6 +439,17 @@ impl Field {
             FieldValue::Enum(selected.into()),
             Control::Dropdown { options },
         )
+    }
+
+    /// Una selección entre opciones fijas, SIEMPRE como lista de radios
+    /// vertical. `selected` es el id actual.
+    pub fn radio(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        selected: impl Into<String>,
+        options: Vec<EnumOption>,
+    ) -> Self {
+        Self::new(id, label, FieldValue::Enum(selected.into()), Control::Radio { options })
     }
 
     /// Un campo de texto libre.

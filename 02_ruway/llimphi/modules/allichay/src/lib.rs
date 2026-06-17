@@ -561,7 +561,7 @@ fn estimate_height(schema: &Schema) -> f32 {
 fn field_height(field: &Field) -> f32 {
     match &field.control {
         Control::Toggle => 22.0,
-        Control::Slider { .. } => 22.0,
+        Control::Slider { .. } => 28.0,
         // Segmented (1 fila) para pocas opciones; radio-group (N filas) si son
         // muchas. Ver [`dropdown_control`].
         Control::Dropdown { options } => {
@@ -571,6 +571,8 @@ fn field_height(field: &Field) -> f32 {
                 options.len() as f32 * 30.0
             }
         }
+        // Radio: siempre lista vertical, una fila por opción.
+        Control::Radio { options } => options.len().max(1) as f32 * 30.0,
         Control::TextInput => 34.0,
         Control::ColorPicker => color_picker_height(true),
         Control::List { .. } => table_height(field.value.row_count(), false),
@@ -727,6 +729,7 @@ where
             slider_control(field, path, *min, *max, *step, theme, on_msg)
         }
         Control::Dropdown { options } => dropdown_control(field, path, options, theme, on_msg),
+        Control::Radio { options } => radio_group(field, path, options, theme, on_msg),
         Control::ColorPicker => color_control(field, path, state, theme, on_msg),
         Control::TextInput => text_control(field, path, state, theme, on_msg),
         Control::List { item_label } => {
@@ -902,17 +905,30 @@ where
             &SegmentedPalette::from_theme(theme),
         );
     }
-    // Muchas opciones: radio-group vertical. Cada fila emite el mismo
-    // `Change` que el segmented — sin overlay, sin estado nuevo, sin tocar el
-    // `update` del host. El segmented se amontonaba con >4 (locales, modos…).
+    // Muchas opciones: radio-group vertical (reusa el render compartido).
+    radio_group(field, path, options, theme, on_msg)
+}
+
+/// Lista vertical de radios (un círculo por opción). Es el cuerpo de
+/// [`Control::Radio`] y la rama de muchas opciones del dropdown. Cada fila
+/// emite el mismo `Change` — sin overlay, sin estado, sin tocar el `update`.
+fn radio_group<Msg, F>(
+    field: &Field,
+    path: FieldPath,
+    options: &[allichay::EnumOption],
+    theme: &Theme,
+    on_msg: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let cur = field.value.as_str().unwrap_or("");
     let rows: Vec<View<Msg>> = options
         .iter()
         .map(|o| {
             let selected = o.id == cur;
-            let msg = on_msg(AllichayMsg::Change(
-                path.clone(),
-                FieldValue::Enum(o.id.clone()),
-            ));
+            let msg = on_msg(AllichayMsg::Change(path.clone(), FieldValue::Enum(o.id.clone())));
             radio_row(&o.label, selected, msg, theme)
         })
         .collect();

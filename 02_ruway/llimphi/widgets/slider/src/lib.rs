@@ -80,12 +80,14 @@ impl SliderPalette {
             track_hover: t.bg_button_hover,
             fg_label: t.fg_muted,
             fg_value: t.fg_text,
-            radius: 3.0,
-            row_height: 22.0,
+            radius: 5.0,
+            row_height: 26.0,
             label_width: 80.0,
             value_width: 56.0,
             track_width: 120.0,
-            track_thickness: 6.0,
+            // Más grueso (antes 6px): más fácil de agarrar y arrastrar con pulso
+            // tembloroso. El área de drag = todo el track.
+            track_thickness: 12.0,
         }
     }
 }

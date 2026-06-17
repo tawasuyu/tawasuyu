@@ -1093,7 +1093,7 @@ fn perfiles_schema(m: &Model) -> Schema {
                  Crear/duplicar/renombrar/eliminar; «rescatar» re-siembra los \
                  perfiles de fábrica que falten (por si renombraste o borraste uno).",
             )
-            .field(Field::dropdown("usar", "Perfil activo", m.dprofiles.active.clone(), opts))
+            .field(Field::radio("usar", "Perfil activo", m.dprofiles.active.clone(), opts))
             .field(Field::button("crear", "Crear perfil (desde el actual)"))
             .field(Field::button("duplicar", format!("Duplicar «{activo}»")))
             .field(Field::text("renombrar", format!("Renombrar «{activo}» a…"), ""))
@@ -1306,7 +1306,7 @@ fn themes_schema(m: &Model) -> Schema {
                  perpendicular a los perfiles. El perfil activo USA un theme; \
                  editarlo afecta a todos los perfiles que lo referencian.",
             )
-            .field(Field::dropdown(
+            .field(Field::radio(
                 "usar",
                 format!("Theme de «{active_profile}»"),
                 name.clone(),
@@ -1698,7 +1698,7 @@ fn atajos_schema(m: &Model) -> Schema {
                      conjunto; editarlo afecta a todos los perfiles que lo \
                      referencian.",
                 )
-                .field(Field::dropdown(
+                .field(Field::radio(
                     "usar",
                     format!("Atajos de «{active_profile}»"),
                     set.clone(),
@@ -1831,7 +1831,7 @@ fn animaciones_schema(m: &Model) -> Schema {
                      perfiles. El perfil activo USA uno; editarlo afecta a todos \
                      los perfiles que lo referencian.",
                 )
-                .field(Field::dropdown(
+                .field(Field::radio(
                     "usar",
                     format!("Animación de «{active_profile}»"),
                     set.clone(),
