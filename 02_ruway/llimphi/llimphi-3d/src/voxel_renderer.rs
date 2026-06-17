@@ -80,6 +80,9 @@ pub struct VoxelRenderer {
     pool: wgpu::Texture,
     indir: wgpu::Texture,
     bind_group: wgpu::BindGroup,
+    /// Layout del bind group, guardado para re-armar el bind group cuando el pool
+    /// crece (la textura del atlas cambia → su view también).
+    bgl: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
     ubuf_ent: wgpu::Buffer,
@@ -143,7 +146,10 @@ impl VoxelRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D3,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // COPY_SRC para poder copiar el atlas a uno más grande al crecer.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let pool_view = pool.create_view(&wgpu::TextureViewDescriptor::default());
@@ -283,6 +289,7 @@ impl VoxelRenderer {
             pool,
             indir,
             bind_group,
+            bgl,
             pipeline,
             ubuf,
             ubuf_ent,
@@ -464,7 +471,13 @@ impl VoxelRenderer {
     /// textura es un ring buffer: `world_brick mod cdim`). Devuelve los bytes
     /// subidos (≈ tamaño de la franja, no de la ventana). Llamar con
     /// `origin_voxel` múltiplo de [`VOXEL_BRICK`].
-    pub fn scroll_to(&mut self, queue: &wgpu::Queue, origin_voxel: [i32; 3], grid: &VoxelGrid) -> u32 {
+    pub fn scroll_to(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        origin_voxel: [i32; 3],
+        grid: &VoxelGrid,
+    ) -> u32 {
         let b = BRICK as i32;
         debug_assert!(
             origin_voxel.iter().all(|v| v % b == 0),
@@ -483,17 +496,42 @@ impl VoxelRenderer {
         let mut uploaded = 0u32;
         let per_brick = BRICK * BRICK * BRICK * 4;
 
+        let entered = |ccx: i32, ccy: i32, ccz: i32| -> bool {
+            let wb = [ccx + new[0], ccy + new[1], ccz + new[2]];
+            !((0..cd[0]).contains(&(wb[0] - old[0]))
+                && (0..cd[1]).contains(&(wb[1] - old[1]))
+                && (0..cd[2]).contains(&(wb[2] - old[2])))
+        };
+
+        // **Pre-crecer el pool si hace falta, ANTES de subir nada** (la copia del
+        // atlas viejo es estable, sin carrera con write_texture en vuelo). Cota
+        // segura del pico de slots: los usados ahora + los bricks que entran
+        // ocupados (los que salen aún no se liberaron). Crecer una vez al inicio.
+        let mut entered_occ = 0u32;
+        for ccz in 0..cd[2] {
+            for ccy in 0..cd[1] {
+                for ccx in 0..cd[0] {
+                    if entered(ccx, ccy, ccz)
+                        && grid.brick_occupied(BRICK, ccx as u32, ccy as u32, ccz as u32) != 0
+                    {
+                        entered_occ += 1;
+                    }
+                }
+            }
+        }
+        let used_now = self.slots.iter().filter(|&&s| s != 0).count() as u32;
+        let need = used_now + entered_occ;
+        while self.pool_capacity() < need {
+            self.grow_layers(device, queue);
+        }
+
         // Recorre las celdas LÓGICAS de la ventana nueva; procesa sólo las que
         // ENTRARON (su brick de mundo no estaba en la ventana vieja). El bulk
         // (presente en ambas) conserva su contenido físico intacto.
         for ccz in 0..cd[2] {
             for ccy in 0..cd[1] {
                 for ccx in 0..cd[0] {
-                    let wb = [ccx + new[0], ccy + new[1], ccz + new[2]]; // brick de mundo
-                    let in_old = (0..cd[0]).contains(&(wb[0] - old[0]))
-                        && (0..cd[1]).contains(&(wb[1] - old[1]))
-                        && (0..cd[2]).contains(&(wb[2] - old[2]));
-                    if in_old {
+                    if !entered(ccx, ccy, ccz) {
                         continue;
                     }
                     // Celda física (= celda vieja que sale, por el ring buffer).
@@ -505,13 +543,9 @@ impl VoxelRenderer {
                         let slot = if cur != 0 {
                             cur - 1
                         } else {
-                            match self.free.pop() {
-                                Some(s) => {
-                                    self.slots[idx] = s + 1;
-                                    s
-                                }
-                                None => continue, // pool lleno: saltar sin romper
-                            }
+                            let s = self.free.pop().expect("capacidad pre-crecida");
+                            self.slots[idx] = s + 1;
+                            s
                         };
                         self.upload_brick(queue, slot, grid, lx, ly, lz);
                         uploaded += per_brick;
@@ -525,6 +559,76 @@ impl VoxelRenderer {
 
         self.upload_indirection_full(queue);
         uploaded + (self.slots.len() * 4) as u32
+    }
+
+    /// Capacidad del pool en slots de brick (`atlas.x·y·z`). Crece con
+    /// [`grow_layers`](Self::grow_layers).
+    pub fn pool_capacity(&self) -> u32 {
+        self.atlas[0] * self.atlas[1] * self.atlas[2]
+    }
+
+    /// **Crece el brick pool** agregando capas `z` al atlas (×1.5, mín +8 slots).
+    /// Sólo crece `atlas.z` para no remapear los slots existentes (`slot_origin`
+    /// depende de `atlas.x/y`, que quedan fijos): copia el atlas viejo al nuevo,
+    /// re-arma el bind group (la view del pool cambió) y agrega los slots nuevos a
+    /// la free list. Lo dispara `scroll_to` cuando la franja que entra no tiene
+    /// slots libres (ventana más densa que la inicial).
+    fn grow_layers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let [ax, ay, az] = self.atlas;
+        let new_az = az + (az / 2).max(8);
+        let new_pool = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("llimphi-3d-voxel-pool"),
+            size: extent([ax * BRICK, ay * BRICK, new_az * BRICK]),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        // Copia el atlas viejo (mismas dimensiones x/y, az capas) al nuevo.
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("llimphi-3d-voxel-pool-grow"),
+        });
+        enc.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.pool,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &new_pool,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            extent([ax * BRICK, ay * BRICK, az * BRICK]),
+        );
+        queue.submit(std::iter::once(enc.finish()));
+
+        // Re-armar el bind group con la view del pool nuevo (indir/ubufs intactos).
+        let pool_view = new_pool.create_view(&wgpu::TextureViewDescriptor::default());
+        let indir_view = self.indir.create_view(&wgpu::TextureViewDescriptor::default());
+        self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("llimphi-3d-voxel-bg"),
+            layout: &self.bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&pool_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&indir_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.ubuf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.ubuf_ent.as_entire_binding() },
+            ],
+        });
+
+        let old_cap = ax * ay * az;
+        let new_cap = ax * ay * new_az;
+        self.pool = new_pool;
+        self.atlas[2] = new_az;
+        self.free.extend((old_cap..new_cap).rev());
     }
 
     /// Sube los uniforms (cámara/atmósfera/entidades) del frame. Lo llama tanto

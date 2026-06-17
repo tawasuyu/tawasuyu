@@ -75,7 +75,7 @@ fn main() {
         let focus_z = i as i32 * (dim_xz as i32 / 4);
         stream.follow(0, focus_z);
         // Streaming toroidal: sube sólo la franja de bricks que entró.
-        let uploaded = vr.scroll_to(&hal.queue, stream.origin_voxel(), stream.grid());
+        let uploaded = vr.scroll_to(&hal.device, &hal.queue, stream.origin_voxel(), stream.grid());
 
         // Cámara: sobre los picos de la ventana, atrás, mirando +Z hacia abajo.
         let camera = camera_for(stream.grid(), dim);
@@ -114,6 +114,33 @@ fn main() {
         "el streaming toroidal divergió del rebuild (max |Δ|={max_d})"
     );
     eprintln!("PARIDAD OK — el toroidal rinde idéntico al rebuild, subiendo sólo la franja.");
+
+    // --- Pool-grow: arrancar con un pool minúsculo (grid vacío) y scrollear a una
+    // ventana densa **lejana** (sin solape → todo entra, sin bulk stale) fuerza al
+    // brick pool a crecer. La paridad vs un rebuild prueba que creció sin huecos.
+    let far = [dim_xz as i32 * 2, 0, dim_xz as i32 * 2]; // brick-aligned, lejos del origen
+    let mut far_grid = VoxelGrid::new(dim);
+    fill_terrain_window(&mut far_grid, [far[0], far[2]], seed);
+
+    let mut tiny = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &VoxelGrid::new(dim));
+    tiny.sun_dir = vr.sun_dir;
+    tiny.atmosphere = vr.atmosphere;
+    let cap0 = tiny.pool_capacity();
+    tiny.scroll_to(&hal.device, &hal.queue, far, &far_grid);
+    let cap1 = tiny.pool_capacity();
+
+    let cam = camera_for(&far_grid, dim);
+    let tiny_px = render_to_pixels(&hal, &mut renderer, &inter, &inter_view, &mut tiny, &cam);
+    let mut far_fresh = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &far_grid);
+    far_fresh.sun_dir = vr.sun_dir;
+    far_fresh.atmosphere = vr.atmosphere;
+    let far_fresh_px = render_to_pixels(&hal, &mut renderer, &inter, &inter_view, &mut far_fresh, &cam);
+    let (gmax, _) = diff(&tiny_px, &far_fresh_px);
+    encode_png(&tiny_px, W, H, "/tmp/m6_stream_grow.png");
+    eprintln!("POOL-GROW: pool {cap0} → {cap1} slots, render vs rebuild max|Δ|={gmax}");
+    assert!(cap1 > cap0, "el pool no creció (arrancó con capacidad suficiente)");
+    assert!(gmax <= 2, "el pool creció con huecos (max|Δ|={gmax})");
+    eprintln!("POOL-GROW OK — el pool creció y la ventana densa quedó completa, sin huecos.");
 }
 
 /// Cámara de la ventana: posada sobre los **picos** del terreno (muestreo de

@@ -450,10 +450,20 @@ origen, subiendo ~¼ de ventana por paso (demo `terrain_streaming`, 6 ventanas
 distintas + assert de paridad). **GOTCHA clave:** el `%` de WGSL sobre enteros con
 signo es ambiguo entre plataformas → el `brick_origin` se sube YA reducido a
 `[0,cdim)` (floormod en CPU) para que el shader nunca opere un negativo (con orígenes
-negativos salía un seam de media imagen). Queda de M6: **wiring en la app viva**
-(coords del jugador/HUD bajo la ventana móvil — necesita pantalla), **crecer el brick
-pool** si una ventana más densa que la inicial lo llena, persistencia CAS de chunks y
-**LOD** del horizonte — el tramo caro de §7.
+negativos salía un seam de media imagen).
+
+**Brick pool que CRECE (HECHO, 2026-06-17):** una ventana más densa que la inicial
+ya no deja huecos. `VoxelRenderer` crece el atlas agregando **capas `z`** (×1.5; sólo
+`atlas.z`, así `slot_origin` no se remapea: `atlas.x/y` fijos) — copia el atlas viejo
+al nuevo (`copy_texture_to_texture`), re-arma el bind group y suma los slots a la free
+list. `scroll_to` **pre-crece una vez al inicio** (cota = usados + bricks que entran),
+no a mitad de loop — clave: copiar el atlas mientras hay `write_texture` de bricks en
+vuelo deja **un brick corrupto** (race); pre-crecer antes de subir nada lo evita.
+Verificado: arrancar con pool de 64 slots y scrollear a una ventana densa lejana crece
+**64→2400 slots** y el render queda **pixel-idéntico** al rebuild (`max|Δ|=0`, demo
+`terrain_streaming`). Queda de M6: **wiring en la app viva** (coords del jugador/HUD
+bajo la ventana móvil — necesita pantalla), persistencia CAS de chunks y **LOD** del
+horizonte — el tramo caro de §7.
 
 **Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
 con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más
