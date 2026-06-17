@@ -561,15 +561,22 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
 
 ### 12.2 Qué falta para un "director" de verdad (orden de peso)
 
-1. ~~**Expresividad de actor**: librería de clips~~ **PRIMER PASO HECHO**:
+1. ~~**Expresividad de actor**: librería de clips + blending~~ **HECHO**:
    `llimphi_voxel::Clip` (Idle/Walk/Run/Wave/Point/Cheer) — un clip es una función
    `fase → Pose` (ángulos de todas las articulaciones), así sumar una animación es
    escribir una pose, no tocar el render. `Actor` tiene `clip`/`phase`/`set_clip`/
-   `advance`. Verificado por PNG (`--poses` → `/tmp/actor_clips.png`: fila de 6
-   actores etiquetados, cada pose legible). **Falta**: blending entre clips,
-   IK/transiciones suaves, animaciones de cara/manos (hoy el muñeco no las tiene).
-2. **Timeline de dirección**: secuenciar actores+eventos+cortes en un formato de
-   escena editable (hoy el guion está hardcodeado en `film.rs`).
+   `advance`/`pose`. **Blending**: cambiar de clip hace un **cross-fade** (`Pose::
+   lerp` + smoothstep, `BLEND_DUR`) en vez de cortar. Verificado por PNG (`--poses`
+   → `/tmp/actor_clips.png`: fila de 6 actores etiquetados, cada pose legible) +
+   tests. **Falta**: IK, animaciones de cara/manos (el muñeco no las tiene).
+2. ~~**Timeline de dirección**~~ **HECHO** (módulo `llimphi_voxel::director`):
+   timeline **determinista por tiempo**, editable como data (no más bucle
+   hardcodeado). `ActorScript` = keyframes `(t, pos grilla, clip?, rumbo?)` con
+   `sample(t)` (interpola posición, decide clip auto camina/quieto, gira suave el
+   rumbo); `Shot` = un plano (`CameraTrack`) con instante de inicio → varios planos
+   dan **cortes duros**; `Sequence` = reparto + planos + duración (`camera(t)`,
+   `cast_centroid(t)`). El `--film` ahora reproduce un `screenplay()` (tres actores
+   entran caminando, se giran a cámara y gesticulan; dos planos con corte). 2 tests.
 3. **Assets**: importador `.vox` (MagicaVoxel) → `VoxelGrid` para sets y personajes
    ricos (`foreign-vox`, no existe).
 4. **Iluminación cinematográfica**: hoy un solo sol + AO + niebla; falta hora-del-
