@@ -46,7 +46,7 @@ fn trigger_label(t: Trigger) -> String {
 /// primer click (que también es la gesture más obvia). Tiene una X a la
 /// derecha para cerrarla manualmente sin tocar el canvas.
 pub(crate) fn onboarding_bar(theme: &Theme) -> View<Msg> {
-    let hint_text = "Click vacío → crea concepto · Click sobre uno → selecciona · Drag → mover · Tabs arriba a la derecha";
+    let hint_text = "Click vacío → crea concepto · Click → selecciona · Drag (mapa) → mover cámara · Drag (concepto) → moverlo · Rueda → zoom · R → recentrar";
     let label = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -144,9 +144,10 @@ pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
 
 pub(crate) fn canvas_pane(
     plan: std::sync::Arc<dominium_render_plan::RenderPlan>,
+    pan: (f32, f32),
 ) -> View<Msg> {
     let canvas_bg = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(11, 13, 18, 255);
-    let canvas = dominium_canvas_llimphi::canvas_view_arc::<Msg>(plan, Some(canvas_bg));
+    let canvas = dominium_canvas_llimphi::canvas_view_arc::<Msg>(plan, Some(canvas_bg), pan);
     View::new(Style {
         size: Size {
             width: Dimension::auto(),
@@ -750,6 +751,18 @@ fn append_vista_tab(
     btn_palette: &ButtonPalette,
     slider_palette: &SliderPalette,
 ) {
+    children.push(label_view("[ CÁMARA ]", 11.0, theme.fg_muted));
+    children.push(sized_button(
+        &format!("Recentrar (R)  ·  zoom {:.1}×", model.iso.scale),
+        btn_palette,
+        Msg::ResetCamera,
+    ));
+    children.push(label_view(
+        "Arrastrá el mapa para mover · rueda = zoom",
+        10.0,
+        theme.fg_muted,
+    ));
+    children.push(separator(theme));
     children.push(label_view("[ MODO RENDER ]", 11.0, theme.fg_muted));
     let render_label = match model.cfg.render_mode {
         RenderMode::Composite => "Render: compuesto".to_string(),

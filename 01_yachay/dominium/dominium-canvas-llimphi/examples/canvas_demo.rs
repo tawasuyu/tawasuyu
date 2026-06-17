@@ -53,7 +53,7 @@ impl App for Showcase {
         let cfg = PlanConfig::default();
         let plan = build_plan(&model.world, &iso, &weights, &cfg);
 
-        let canvas = canvas_view::<Msg>(plan, Some(Color::from_rgba8(14, 16, 22, 255)));
+        let canvas = canvas_view::<Msg>(plan, Some(Color::from_rgba8(14, 16, 22, 255)), (0.0, 0.0));
 
         View::new(Style {
             size: Size {

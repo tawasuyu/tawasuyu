@@ -144,7 +144,7 @@ fn main() {
         renderer.render_to_view(&hal, &base, &view, W, H, BG).unwrap();
         // GPU tris (geometría opaca)
         let mut batch = GpuBatch::new(&pipelines);
-        bench::emit_tris(plan, rect, &mut batch);
+        bench::emit_tris(plan, rect, &mut batch, (0.0, 0.0));
         let mut enc = hal
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("s-gpu") });
@@ -152,7 +152,7 @@ fn main() {
         hal.queue.submit(std::iter::once(enc.finish()));
         // over (sprites + glifos AA)
         let mut over = vello::Scene::new();
-        bench::over_layer(plan, &mut over, ts, rect);
+        bench::over_layer(plan, &mut over, ts, rect, (0.0, 0.0));
         renderer.render_to_view(&hal, &over, &scratch_view, W, H, Color::TRANSPARENT).unwrap();
         let mut enc2 = hal
             .device

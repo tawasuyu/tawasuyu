@@ -126,6 +126,7 @@ fn modelo_demo() -> Model {
         // Misma cámara que la app: scale 3.0 px/celda, z_factor 0.55. En el
         // lienzo de 1600×1000 la maqueta iso 240×240 entra completa.
         iso: IsoProjector::new(3.0, 0.55),
+        pan: (0.0, 0.0),
         weights,
         cfg: PlanConfig {
             tile: 3.0,
@@ -186,7 +187,7 @@ fn view_demo(model: &Model, menu: &app_bus::AppMenu, theme: &Theme) -> View<Msg>
     let plan = build_plan_with_overrides(shown, &model.iso, &model.weights, &model.cfg, |i| {
         lemming_color_for(model, i)
     });
-    let canvas = canvas_pane(std::sync::Arc::new(plan));
+    let canvas = canvas_pane(std::sync::Arc::new(plan), (0.0, 0.0));
     let side = side_panel(model, &stats, &psi_metrics, theme);
 
     let body = View::new(Style {

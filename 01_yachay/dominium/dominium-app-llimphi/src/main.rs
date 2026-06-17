@@ -47,7 +47,10 @@ use llimphi_widget_menubar::{
 use llimphi_widget_text_input::TextInputState;
 use wawa_config_llimphi::theme_from_wawa;
 
-use crate::consts::{GRID, KMEANS_REFRESH_TICKS, SNAPSHOT_RING_CAP, TICK_MS, TRAIL_CAP};
+use crate::consts::{
+    CAM_SCALE_DEFAULT, CAM_ZFACTOR_DEFAULT, CONCEPT_GRAB_R2, GRID, KMEANS_REFRESH_TICKS,
+    SNAPSHOT_RING_CAP, TICK_MS, TRAIL_CAP, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP,
+};
 use crate::model::{Layer, Model, Msg, PanelTab, ParamSlot, ZSlot};
 use crate::packs::{
     default_conceptos, load_user_escenario, save_user_escenario, scenario_packs,
@@ -215,7 +218,8 @@ impl App for Dominium {
             // exploten: mares ~−25 px, llanura plana, colinas ~+10 px,
             // picos ~+30 px. La versión 0.35 anterior daba total ~9 px → el
             // mapa parecía plano por completo.
-            iso: IsoProjector::new(3.0, 0.55),
+            iso: IsoProjector::new(CAM_SCALE_DEFAULT, CAM_ZFACTOR_DEFAULT),
+            pan: (0.0, 0.0),
             weights,
             cfg: PlanConfig {
                 tile: 3.0,
@@ -562,6 +566,24 @@ impl App for Dominium {
                     c.pos_y = (c.pos_y + dwy).clamp(0.0, max);
                 }
             }
+            Msg::CanvasPan(dx, dy) => {
+                // Drag en vacío → la cámara se mueve junto con el cursor.
+                m.pan.0 += dx;
+                m.pan.1 += dy;
+                m.onboarding_done = true;
+            }
+            Msg::CanvasZoom(delta) => {
+                // Zoom centrado: multiplica la escala iso por ZOOM_STEP^delta,
+                // clampeada. No es focal (la rueda no entrega la posición del
+                // cursor; ver model::Msg::CanvasZoom).
+                let factor = ZOOM_STEP.powf(delta);
+                m.iso.scale = (m.iso.scale * factor).clamp(ZOOM_MIN, ZOOM_MAX);
+                m.onboarding_done = true;
+            }
+            Msg::ResetCamera => {
+                m.pan = (0.0, 0.0);
+                m.iso = IsoProjector::new(CAM_SCALE_DEFAULT, CAM_ZFACTOR_DEFAULT);
+            }
             Msg::FocusIdInput => {
                 if let Some(c) = m.selected.and_then(|i| m.sim.world.conceptos.items.get(i)) {
                     m.id_input.set_text(c.id.clone());
@@ -756,6 +778,16 @@ impl App for Dominium {
                     _ => None,
                 };
             }
+            // Atajo global de cámara: 'R' recentra (pan 0 + scale default).
+            // Sólo cuando no se está editando el nombre de un Concepto, para
+            // no robar la tecla al text-input.
+            if !model.id_input_focused {
+                if let Key::Character(s) = &event.key {
+                    if s.eq_ignore_ascii_case("r") {
+                        return Some(Msg::ResetCamera);
+                    }
+                }
+            }
         }
         if !model.id_input_focused {
             return None;
@@ -813,12 +845,41 @@ impl App for Dominium {
         let plan_cx = (plan.min_x + plan.max_x) * 0.5;
         let plan_cy = (plan.min_y + plan.max_y) * 0.5;
         let iso = model.iso;
-        let canvas = canvas_pane(plan)
+        let pan = model.pan;
+        // Posición en plan-coords (z=0, el pie) del Concepto seleccionado, si
+        // hay uno — la usamos para decidir, en el press, si un drag mueve ese
+        // Concepto o panea la cámara.
+        let sel_screen: Option<(f32, f32)> = model.selected.and_then(|i| {
+            model
+                .sim
+                .displayed_world()
+                .conceptos
+                .items
+                .get(i)
+                .map(|c| iso.project(c.pos_x, c.pos_y, 0.0))
+        });
+        // Bandera compartida press→drag: `on_click_at` (que recibe rw/rh y
+        // corre PRIMERO en el press, ver llimphi input.rs) decide si el press
+        // cayó sobre el Concepto seleccionado y la deja acá; las fases `Move`
+        // del drag la leen para elegir mover-Concepto vs panear. Un `AtomicBool`
+        // capturado por ambas closures (Send+Sync).
+        let grab_concept = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let grab_for_click = grab_concept.clone();
+        let canvas = canvas_pane(plan, pan)
             .on_click_at(move |lx, ly, rw, rh| {
-                // Mapeo inverso al que aplica canvas-llimphi para centrar la maqueta:
-                //   plan_pos = local - rect/2 + plan_center
-                let plan_x = lx - rw * 0.5 + plan_cx;
-                let plan_y = ly - rh * 0.5 + plan_cy;
+                // Mapeo inverso al que aplica canvas-llimphi para centrar la
+                // maqueta, restando el pan de cámara:
+                //   plan_pos = local - rect/2 + plan_center - pan
+                let plan_x = lx - rw * 0.5 + plan_cx - pan.0;
+                let plan_y = ly - rh * 0.5 + plan_cy - pan.1;
+                // ¿El press cae cerca del Concepto seleccionado (en plan-coords)?
+                // Si sí, el drag lo mueve; si no, panea.
+                let near = sel_screen.is_some_and(|(scx, scy)| {
+                    let cdx = plan_x - scx;
+                    let cdy = plan_y - scy;
+                    cdx * cdx + cdy * cdy <= CONCEPT_GRAB_R2
+                });
+                grab_for_click.store(near, std::sync::atomic::Ordering::Relaxed);
                 let (wx, wy) = iso.unproject_floor(plan_x, plan_y);
                 let max = (GRID as f32) - 1.0;
                 if wx >= 0.0 && wx <= max && wy >= 0.0 && wy <= max {
@@ -829,15 +890,32 @@ impl App for Dominium {
             })
             .draggable_at(move |phase, dx, dy, _lx0, _ly0| match phase {
                 DragPhase::Move => {
-                    // La inversa iso es lineal → unproject(dx, dy) = delta de mundo.
-                    let (wdx, wdy) = iso.unproject_floor(dx, dy);
-                    if wdx == 0.0 && wdy == 0.0 {
+                    // Drag contextual: mover el Concepto sólo si el press cayó
+                    // sobre él (bandera fijada por on_click_at). Si no, panear.
+                    if grab_concept.load(std::sync::atomic::Ordering::Relaxed) {
+                        // La inversa iso es lineal → unproject(dx, dy) = delta de mundo.
+                        let (wdx, wdy) = iso.unproject_floor(dx, dy);
+                        if wdx == 0.0 && wdy == 0.0 {
+                            None
+                        } else {
+                            Some(Msg::CanvasDragMove(wdx, wdy))
+                        }
+                    } else if dx == 0.0 && dy == 0.0 {
                         None
                     } else {
-                        Some(Msg::CanvasDragMove(wdx, wdy))
+                        // Pan: delta de PANTALLA directo (no unproject).
+                        Some(Msg::CanvasPan(dx, dy))
                     }
                 }
                 DragPhase::End => None,
+            })
+            .on_scroll(|_dx, dy| {
+                // Rueda → zoom centrado. dy > 0 (rueda arriba) = acercar.
+                if dy == 0.0 {
+                    None
+                } else {
+                    Some(Msg::CanvasZoom(dy))
+                }
             });
         let side = side_panel(model, &stats, &psi_metrics, &theme);
 

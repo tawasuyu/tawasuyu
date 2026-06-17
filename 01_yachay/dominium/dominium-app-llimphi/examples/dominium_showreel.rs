@@ -481,7 +481,7 @@ fn build_view(
             ..Default::default()
         })
         .alpha(diorama_a as f32)
-        .children(vec![canvas_view::<()>(plan, None)]);
+        .children(vec![canvas_view::<()>(plan, None, (0.0, 0.0))]);
         children.push(canvas);
     }
 

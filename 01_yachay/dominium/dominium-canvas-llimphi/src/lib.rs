@@ -55,11 +55,14 @@ fn legacy_path() -> bool {
 }
 
 /// Construye un View que pinta `plan` en su rect. Ver [`canvas_view_arc`].
-pub fn canvas_view<Msg>(plan: RenderPlan, background: Option<Color>) -> View<Msg>
+///
+/// `pan` es el desplazamiento de cámara en píxeles de pantalla (sumado al
+/// centrado automático): `(0.0, 0.0)` deja la maqueta centrada.
+pub fn canvas_view<Msg>(plan: RenderPlan, background: Option<Color>, pan: (f32, f32)) -> View<Msg>
 where
     Msg: Clone + 'static,
 {
-    canvas_view_arc(std::sync::Arc::new(plan), background)
+    canvas_view_arc(std::sync::Arc::new(plan), background, pan)
 }
 
 /// Igual que [`canvas_view`] pero recibe el plan envuelto en `Arc`. Pensado
@@ -73,9 +76,14 @@ where
 ///
 /// Con `DOMINIUM_RENDER_LEGACY` puesta, en cambio adjunta un único
 /// `paint_with` con el render histórico de vello (para comparar).
+///
+/// `pan` (px de pantalla) se suma al centrado automático en TODOS los
+/// caminos (GPU, legacy, over). El mapeo inverso del host (clicks/drags)
+/// debe restar el mismo `pan` o el click queda desalineado al panear.
 pub fn canvas_view_arc<Msg>(
     plan: std::sync::Arc<RenderPlan>,
     background: Option<Color>,
+    pan: (f32, f32),
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
@@ -96,7 +104,7 @@ where
     if legacy_path() {
         // Camino histórico: TODO por vello en una sola closure.
         return view.paint_with(move |scene, ts, rect: PaintRect| {
-            paint_vello_full(&plan, scene, ts, rect);
+            paint_vello_full(&plan, scene, ts, rect, pan);
         });
     }
 
@@ -110,7 +118,7 @@ where
         }
         let pipelines = pipelines_for(device);
         let mut batch = GpuBatch::new(pipelines);
-        emit_geometry_tris(&plan_gpu, rect, &mut batch);
+        emit_geometry_tris(&plan_gpu, rect, &mut batch, pan);
         batch.flush(
             device,
             queue,
@@ -121,7 +129,7 @@ where
         );
     })
     .paint_over(move |scene, ts, rect: PaintRect| {
-        let (off_x, off_y) = plan_offset(&plan_over, rect);
+        let (off_x, off_y) = plan_offset(&plan_over, rect, pan);
         paint_sprites(&plan_over, scene, off_x, off_y);
         paint_glyphs(&plan_over, scene, ts, off_x, off_y);
     })
@@ -135,14 +143,15 @@ fn pipelines_for(device: &wgpu::Device) -> &'static GpuPipelines {
     SLOT.get_or_init(|| GpuPipelines::new(device, wgpu::TextureFormat::Rgba8Unorm))
 }
 
-/// Offset de centrado: el centro de la caja envolvente del plan se alinea
-/// con el centro del rect del nodo. Idéntico en ambos caminos (vello/GPU)
-/// y debe coincidir con el mapeo inverso de la app (clicks/drags).
-fn plan_offset(plan: &RenderPlan, rect: PaintRect) -> (f64, f64) {
+/// Offset de centrado + pan de cámara: el centro de la caja envolvente del
+/// plan se alinea con el centro del rect del nodo, desplazado por `pan` (px
+/// de pantalla). Idéntico en ambos caminos (vello/GPU) y debe coincidir con
+/// el mapeo inverso de la app (clicks/drags) — que también resta `pan`.
+fn plan_offset(plan: &RenderPlan, rect: PaintRect, pan: (f32, f32)) -> (f64, f64) {
     let plan_cx = (plan.min_x + plan.max_x) * 0.5;
     let plan_cy = (plan.min_y + plan.max_y) * 0.5;
-    let off_x = (rect.x + rect.w * 0.5 - plan_cx) as f64;
-    let off_y = (rect.y + rect.h * 0.5 - plan_cy) as f64;
+    let off_x = (rect.x + rect.w * 0.5 - plan_cx + pan.0) as f64;
+    let off_y = (rect.y + rect.h * 0.5 - plan_cy + pan.1) as f64;
     (off_x, off_y)
 }
 
@@ -163,8 +172,8 @@ fn plan_offset(plan: &RenderPlan, rect: PaintRect) -> (f64, f64) {
 /// enteramente fuera del rect del canvas. Sin esto, la maqueta (mayor que
 /// el canvas a grid alto) sangraría sobre el panel lateral. El test es un
 /// solapamiento de bounding boxes — barato frente al build del plan.
-fn emit_geometry_tris(plan: &RenderPlan, rect: PaintRect, batch: &mut GpuBatch) {
-    let (off_x, off_y) = plan_offset(plan, rect);
+fn emit_geometry_tris(plan: &RenderPlan, rect: PaintRect, batch: &mut GpuBatch, pan: (f32, f32)) {
+    let (off_x, off_y) = plan_offset(plan, rect, pan);
     let ox = off_x as f32;
     let oy = off_y as f32;
     // Rect del canvas en coordenadas de frame (margen de holgura cero: las
@@ -324,6 +333,7 @@ fn paint_vello_full(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
     ts: &mut llimphi_ui::llimphi_text::Typesetter,
     rect: PaintRect,
+    pan: (f32, f32),
 ) {
     if plan.quads.is_empty()
         && plan.polygons.is_empty()
@@ -332,7 +342,7 @@ fn paint_vello_full(
     {
         return;
     }
-    let (off_x, off_y) = plan_offset(plan, rect);
+    let (off_x, off_y) = plan_offset(plan, rect, pan);
 
     let mut qi = 0usize;
     let mut pi = 0usize;
@@ -382,20 +392,33 @@ pub mod bench {
     use llimphi_ui::llimphi_text::Typesetter;
 
     /// Emite la geometría opaca del plan como tris en `batch` (camino GPU).
-    pub fn emit_tris(plan: &RenderPlan, rect: PaintRect, batch: &mut GpuBatch) {
-        emit_geometry_tris(plan, rect, batch);
+    /// `pan` = desplazamiento de cámara en px de pantalla.
+    pub fn emit_tris(plan: &RenderPlan, rect: PaintRect, batch: &mut GpuBatch, pan: (f32, f32)) {
+        emit_geometry_tris(plan, rect, batch, pan);
     }
 
     /// Pinta sprites AA + glifos en `scene` (over-layer del camino GPU).
-    pub fn over_layer(plan: &RenderPlan, scene: &mut Scene, ts: &mut Typesetter, rect: PaintRect) {
-        let (ox, oy) = plan_offset(plan, rect);
+    pub fn over_layer(
+        plan: &RenderPlan,
+        scene: &mut Scene,
+        ts: &mut Typesetter,
+        rect: PaintRect,
+        pan: (f32, f32),
+    ) {
+        let (ox, oy) = plan_offset(plan, rect, pan);
         paint_sprites(plan, scene, ox, oy);
         paint_glyphs(plan, scene, ts, ox, oy);
     }
 
     /// Render histórico completo por vello (camino legacy, Tier 0 puro).
-    pub fn vello_full(plan: &RenderPlan, scene: &mut Scene, ts: &mut Typesetter, rect: PaintRect) {
-        paint_vello_full(plan, scene, ts, rect);
+    pub fn vello_full(
+        plan: &RenderPlan,
+        scene: &mut Scene,
+        ts: &mut Typesetter,
+        rect: PaintRect,
+        pan: (f32, f32),
+    ) {
+        paint_vello_full(plan, scene, ts, rect, pan);
     }
 
     /// Re-export del constructor de pipelines para el example headless

@@ -20,6 +20,23 @@ pub(crate) const KMEANS_REFRESH_TICKS: u64 = 30;
 /// Ancho del panel de stats.
 pub(crate) const SIDE_WIDTH: f32 = 240.0;
 
+/// Escala iso por defecto (px por celda). El reset de cámara vuelve a este
+/// valor; el zoom por rueda la multiplica dentro de `[ZOOM_MIN, ZOOM_MAX]`.
+pub(crate) const CAM_SCALE_DEFAULT: f32 = 3.0;
+/// z_factor iso por defecto. No cambia con el zoom, pero el reset lo restaura
+/// por si algún día se toca.
+pub(crate) const CAM_ZFACTOR_DEFAULT: f32 = 0.55;
+/// Factor de zoom por notch de rueda (1 notch ≈ ×1.1 / ÷1.1).
+pub(crate) const ZOOM_STEP: f32 = 1.1;
+/// Cota inferior de `iso.scale` (no achicar más allá).
+pub(crate) const ZOOM_MIN: f32 = 0.4;
+/// Cota superior de `iso.scale` (no agrandar más allá).
+pub(crate) const ZOOM_MAX: f32 = 16.0;
+/// Radio² de agarre (en plan-coords / px de pantalla) para decidir, en el
+/// press, si un drag mueve el Concepto seleccionado o panea la cámara. ~30 px
+/// de radio cubre el sprite del Concepto con holgura sin "robar" pans cercanos.
+pub(crate) const CONCEPT_GRAB_R2: f32 = 30.0 * 30.0;
+
 /// Tamaño del ring de snapshots: ~18 segundos a 11 Hz. Permite ver hacia
 /// atrás un par de minutos de simulación sin pasarse en RAM (cada snapshot
 /// es un `World` clonado; con grid 40×40 y ~50 lemmings, ~30 KB).

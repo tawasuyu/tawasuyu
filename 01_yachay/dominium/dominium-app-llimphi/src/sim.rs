@@ -46,9 +46,13 @@ pub(crate) fn render_fingerprint(m: &Model) -> u64 {
     mix(f(m.weights.oro));
     mix(f(m.weights.degradacion));
 
-    // Cámara/escala.
+    // Cámara/escala + pan. SIN el pan, panear no cambiaría la huella y la
+    // caché del plan no se invalidaría → la cámara quedaría congelada (modo
+    // de falla ya visto en este frente).
     mix(f(m.iso.scale));
     mix(f(m.iso.z_factor));
+    mix(f(m.pan.0));
+    mix(f(m.pan.1));
 
     // Config de presentación.
     mix(f(m.cfg.tile));
@@ -220,5 +224,90 @@ pub(crate) fn overlay_trails(plan: &mut RenderPlan, m: &Model) {
         plan.min_y = plan.min_y.min(q.y);
         plan.max_x = plan.max_x.max(q.x + q.w);
         plan.max_y = plan.max_y.max(q.y + q.h);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Model, PanelTab};
+    use dominium_core::SimParams;
+    use dominium_iso::{IsoProjector, ZWeights};
+    use dominium_render_plan::PlanConfig;
+    use dominium_sim::Sim;
+    use llimphi_theme::Theme;
+    use llimphi_widget_text_input::TextInputState;
+
+    /// Model mínimo para tests headless de helpers puros (huella de render).
+    /// Mundo pequeño, cámara default, sin watcher ni menús abiertos.
+    fn test_model() -> Model {
+        let world = dominium_core::worldgen::seed(0x1234, 8, 16, dominium_core::Conceptos::new());
+        let sim = Sim::new(
+            world,
+            SimParams::default(),
+            0x1234,
+            8,
+            8,
+            30,
+            false,
+            Box::new(|s| dominium_core::worldgen::seed(s, 8, 16, dominium_core::Conceptos::new())),
+        );
+        Model {
+            sim,
+            iso: IsoProjector::new(3.0, 0.55),
+            pan: (0.0, 0.0),
+            weights: ZWeights::default(),
+            cfg: PlanConfig { render_mode: RenderMode::Composite, ..PlanConfig::default() },
+            selected: None,
+            sync_relieve: false,
+            id_input: TextInputState::new(),
+            id_input_focused: false,
+            scenario_idx: 0,
+            show_trails: false,
+            theme: Theme::dark(),
+            _wawa_watcher: None,
+            panel_tab: PanelTab::Mundo,
+            onboarding_done: true,
+            menu_open: None,
+            menu_active: usize::MAX,
+            menu_anim: llimphi_motion::Tween::idle(1.0),
+            edit_menu: None,
+            edit_active: usize::MAX,
+            edit_anim: llimphi_motion::Tween::idle(1.0),
+            clipboard: llimphi_clipboard::SystemClipboard::new(),
+            plan_cache: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Cambiar el pan de cámara cambia la huella de render → invalida la
+    /// caché del plan (sin esto, panear no repintaría: cámara congelada).
+    #[test]
+    fn fingerprint_changes_with_pan() {
+        let mut m = test_model();
+        let fp0 = render_fingerprint(&m);
+        m.pan = (200.0, -120.0);
+        let fp1 = render_fingerprint(&m);
+        assert_ne!(fp0, fp1, "el pan debe cambiar la huella de render");
+
+        // Mover sólo Y también cambia (las dos componentes se mezclan).
+        m.pan = (0.0, 50.0);
+        let fp2 = render_fingerprint(&m);
+        assert_ne!(fp0, fp2, "pan.1 solo debe cambiar la huella");
+
+        // Volver a (0,0) restaura la huella original (la mezcla es función
+        // pura del estado).
+        m.pan = (0.0, 0.0);
+        assert_eq!(render_fingerprint(&m), fp0, "pan (0,0) restaura la huella");
+    }
+
+    /// El zoom (iso.scale) también cambia la huella — ya estaba cubierto,
+    /// pero lo fijamos junto al pan para que ambos ejes de cámara queden
+    /// blindados contra una regresión de caché.
+    #[test]
+    fn fingerprint_changes_with_zoom() {
+        let mut m = test_model();
+        let fp0 = render_fingerprint(&m);
+        m.iso = IsoProjector::new(6.0, 0.55);
+        assert_ne!(fp0, render_fingerprint(&m), "el zoom debe cambiar la huella");
     }
 }

@@ -108,7 +108,7 @@ fn main() {
         // warmup
         let p = sim.build();
         let mut sc = vello::Scene::new();
-        bench::vello_full(&p, &mut sc, &mut ts, rect);
+        bench::vello_full(&p, &mut sc, &mut ts, rect, (0.0, 0.0));
         renderer.render_to_view(&hal, &sc, &view, W, H, BG).unwrap();
         let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
 
@@ -116,7 +116,7 @@ fn main() {
         for _ in 0..iters {
             let p = sim.build();
             let mut sc = vello::Scene::new();
-            bench::vello_full(&p, &mut sc, &mut ts, rect);
+            bench::vello_full(&p, &mut sc, &mut ts, rect, (0.0, 0.0));
             renderer.render_to_view(&hal, &sc, &view, W, H, BG).unwrap();
             let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
         }
@@ -161,13 +161,13 @@ fn raster_gpu(
     renderer.render_to_view(hal, &base, view, W, H, BG).unwrap();
     // GPU tris
     let mut batch = GpuBatch::new(pipelines);
-    bench::emit_tris(plan, rect, &mut batch);
+    bench::emit_tris(plan, rect, &mut batch, (0.0, 0.0));
     let mut enc = hal.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("br-gpu") });
     batch.flush(&hal.device, &hal.queue, &mut enc, view, (W as f32, H as f32), wgpu::LoadOp::Load);
     hal.queue.submit(std::iter::once(enc.finish()));
     // over
     let mut over = vello::Scene::new();
-    bench::over_layer(plan, &mut over, ts, rect);
+    bench::over_layer(plan, &mut over, ts, rect, (0.0, 0.0));
     renderer.render_to_view(hal, &over, scratch_view, W, H, Color::TRANSPARENT).unwrap();
     let mut enc2 = hal.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("br-over") });
     overlay.composite(&hal.device, &mut enc2, view, scratch_view);

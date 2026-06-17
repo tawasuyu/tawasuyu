@@ -101,7 +101,7 @@ fn main() {
         let inter = make_tex(&hal.device);
         let view = inter.create_view(&wgpu::TextureViewDescriptor::default());
         let mut scene = vello::Scene::new();
-        bench::vello_full(&plan, &mut scene, &mut ts, rect);
+        bench::vello_full(&plan, &mut scene, &mut ts, rect, (0.0, 0.0));
         renderer
             .render_to_view(&hal, &scene, &view, W, H, BG)
             .expect("render viejo");
@@ -122,7 +122,7 @@ fn main() {
 
         // (2) GPU: geometría opaca como tris, LoadOp::Load preserva el fondo.
         let mut batch = GpuBatch::new(&pipelines);
-        bench::emit_tris(&plan, rect, &mut batch);
+        bench::emit_tris(&plan, rect, &mut batch, (0.0, 0.0));
         let mut enc = hal.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("ab-gpu"),
         });
@@ -134,7 +134,7 @@ fn main() {
         let scratch = make_tex(&hal.device);
         let scratch_view = scratch.create_view(&wgpu::TextureViewDescriptor::default());
         let mut over = vello::Scene::new();
-        bench::over_layer(&plan, &mut over, &mut ts, rect);
+        bench::over_layer(&plan, &mut over, &mut ts, rect, (0.0, 0.0));
         renderer
             .render_to_view(&hal, &over, &scratch_view, W, H, Color::TRANSPARENT)
             .expect("render over");

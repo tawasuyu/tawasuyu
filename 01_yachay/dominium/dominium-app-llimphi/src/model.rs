@@ -17,6 +17,12 @@ pub(crate) struct Model {
     /// (`dominium-sim`); el `Model` sólo guarda estado de vista.
     pub(crate) sim: Sim,
     pub(crate) iso: IsoProjector,
+    /// Desplazamiento de cámara en píxeles de PANTALLA, sumado al centrado
+    /// automático del canvas. `(0.0, 0.0)` = maqueta centrada. Lo mueve el
+    /// drag de canvas (cuando no se arrastra un Concepto) y el zoom; el
+    /// atajo `R` / botón "Recentrar" lo vuelve a `(0,0)`. La huella de
+    /// render lo incluye (si no, panear no invalidaría la caché del plan).
+    pub(crate) pan: (f32, f32),
     pub(crate) weights: ZWeights,
     pub(crate) cfg: PlanConfig,
     /// Índice del Concepto seleccionado, si alguno. `None` cuando no hay
@@ -263,6 +269,18 @@ pub(crate) enum Msg {
     /// Delta de un Move dentro de un drag activo, en coords de mundo.
     /// Mueve el Concepto seleccionado si hay uno.
     CanvasDragMove(f32, f32),
+    /// Pan de cámara: delta en píxeles de PANTALLA. Lo emite el drag de
+    /// canvas cuando NO se está arrastrando un Concepto (clic en vacío).
+    /// Suma directo a `model.pan` (sin unproject — el pan es de pantalla).
+    CanvasPan(f32, f32),
+    /// Zoom de cámara por rueda. `delta` > 0 = acercar (notches hacia
+    /// arriba), < 0 = alejar. Multiplica `iso.scale` por `ZOOM_STEP^delta`,
+    /// clampeado a `[ZOOM_MIN, ZOOM_MAX]`. Zoom centrado (no focal): la
+    /// rueda de `on_scroll` no entrega la posición del cursor.
+    CanvasZoom(f32),
+    /// Recentra la cámara: `pan = (0,0)` y `iso.scale`/`z_factor` al default.
+    /// Atajo `R` y botón "Recentrar" en el tab Vista.
+    ResetCamera,
     FocusIdInput,
     BlurIdInput,
     IdInputKey(KeyEvent),
