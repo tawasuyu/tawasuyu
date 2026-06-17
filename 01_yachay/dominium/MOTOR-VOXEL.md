@@ -357,3 +357,74 @@ dominium: cualquier cosa que quiera mostrar un mundo voxel).
 > "que dominium deje de comer FPS y se vea lindo", **Tier 0+1 (días-semanas) ya lo
 > logran** sin nada de esto. Tier 2 es para cuando la meta sea, literal, "un
 > Minecraft" — un motor 3D voxel propio en la suite.
+
+---
+
+## 11. DECISIÓN y dirección moderna (2026-06-17)
+
+**Se hace.** Pero como **motor 3D general de Llimphi**, NO por dominium —
+dominium fue solo la puerta de entrada. Crate(s): `llimphi-3d` (base: cámara,
+depth, pipeline) + `llimphi-voxel` (el voxel propiamente). Cualquier app de la
+suite lo reusa (cosmos esfera celeste nativa, supay, viz científica, juegos).
+**Timing:** después de pulir pata + cerrar la publicación. Por ahora, los FPS de
+dominium se atacan con **Tier 0+1** sobre el render 2.5D actual (en curso), que
+NO requiere nada de este motor.
+
+### 11.1 Ruta elegida: **ray-marching / voxel sparse**, no mesh clásico
+
+El §3.3 (greedy meshing → triángulos) es la ruta *clásica, probada y estática*. Para
+un motor **dinámico** (que es lo que la suite quiere: mundos que cambian, sims, no
+terreno congelado) la ruta **moderna y mejor encajada es no meshear**:
+
+- En vez de voxels → malla de triángulos, se **marcha un rayo por píxel** a través
+  de una estructura de voxels (**DDA** lineal / **SVO** = Sparse Voxel Octree /
+  **brickmap**) en un **compute/fragment shader**. El color/normal sale del voxel
+  que el rayo toca primero.
+- **Ventaja decisiva**: **no hay re-mesh.** Eso **elimina M3** (el 70% del riesgo del
+  proyecto: el re-mesh incremental dinámico). Mutás un voxel → se actualiza la
+  estructura en GPU y el próximo frame ya lo ve. Para dominium (muta cada tick) y
+  para destrucción/edición en vivo, es el paradigma correcto.
+- **Costo**: los shaders son más difíciles (traversal, manejo de la estructura
+  sparse en GPU), y para mundos enormes hay que mantener el SVO/brickmap actualizado
+  en VRAM. Pero baja el riesgo total al sacar el pipeline de meshing entero.
+- **Híbrido** (futuro): mesh para terreno cuasi-estático + ray-march para lo
+  dinámico. Para arrancar: comprometerse a ray-march.
+- **Referencias**: Laine & Karras, *Efficient Sparse Voxel Octrees* (NVIDIA 2010);
+  Teardown (renderer voxel ray-traced); gabe rundlett / **gvox / Voxelite**;
+  **NanoVDB** (estructura sparse GPU, grado film); Amanatides-Woo (DDA voxel).
+
+### 11.2 Roadmap re-planteado para ray-march
+
+| Fase | Qué entrega | Esfuerzo |
+|---|---|---|
+| **M0 — pase 3D base** | `llimphi-3d`: cámara view/proj, depth, target 3D compuesto en el `View`, un triángulo/cubo de prueba | ~3-5 días |
+| **M1 — voxel store + DDA** | estructura de voxels (densa acotada para empezar) en GPU (textura 3D / buffer) + shader de **ray-march DDA** que la dibuja; cámara órbita | ~1-2 semanas |
+| **M2 — sparse + color/AO/luz** | SVO o brickmap (saltar el aire), color por voxel, AO/normal en el hit, sol direccional | ~2 semanas |
+| **M3 — dinámico** | actualización incremental de la estructura GPU al mutar voxels (dominium corriendo y editándose en vivo) — **mucho más barato que el re-mesh** del paradigma clásico | ~1 semana |
+| **M4 — entidades** | agentes por instancing o como voxels en la misma estructura | ~días-1 sem |
+| **M5/M6 (opcional)** | dimensiones múltiples / streaming "infinito" con brickmaps | semanas |
+
+**Total motor dinámico sólido (M0-M4): ~5-7 semanas** (similar al mesh clásico, pero
+con el riesgo movido de "re-mesh" a "shaders de traversal", que es dominio más
+acotado).
+
+### 11.3 Build vs compose (resuelto)
+
+- **Componer**: `glam` (math); para la estructura sparse, mirar `NanoVDB` (FFI,
+  evaluar) o implementar brickmap propio (no es enorme). Si algún día se hace mesh,
+  `block-mesh-rs`.
+- **NO meter Bevy**: es un motor entero con su ECS/render-graph/app — sería un
+  **segundo motor** peleándose con el bucle Elm + vello + wgpu de Llimphi, y
+  contradice el ethos soberano de la suite. **Veloren** (RPG voxel Rust sobre wgpu)
+  es **referencia/prueba de que el stack funciona**, no dependencia.
+- **Capas**: el motor NO compite con OpenGL — va **sobre wgpu** (que Llimphi ya usa),
+  que a su vez traduce a Vulkan/Metal/DX12/GL/WebGPU.
+
+### 11.4 Esfuerzo vs el kernel de wawa
+
+El motor voxel es **~1/3–1/2 del esfuerzo del kernel wawa y con mucho menos riesgo**:
+wawa es un SASOS bare-metal desde cero (territorio research); esto es una técnica
+gráfica **conocida y documentada** sobre un stack GPU que ya existe. La ruta
+ray-march mueve el esfuerzo de "pipeline de meshing" a "shaders de traversal" —
+distinto, pero dominio acotado. wawa fue el monte; esto es una colina con sendero.
+
