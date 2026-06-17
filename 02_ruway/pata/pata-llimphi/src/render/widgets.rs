@@ -3,7 +3,7 @@
 
 use llimphi_theme::{Color, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{auto, length, AlignItems, FlexDirection, JustifyContent, Size, Style},
+    prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Size, Style},
     Rect as TaffyRect,
 };
 use llimphi_ui::llimphi_raster::vello::Scene;
@@ -668,6 +668,61 @@ pub(super) fn clipboard_icon(color: Color) -> View<Msg> {
     })
 }
 
+/// Glifo (p. ej. el signo zodiacal) con un **medidor circular** que lo rodea:
+/// `ring` (0..1) es la fracción del arco — para el astro, el grado dentro del
+/// signo (0..30°). Pista tenue + arco de acento desde arriba, sentido horario.
+pub(super) fn glyph_ring_view(glyph: &str, color: Color, ring: f32, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::prelude::Position;
+    let ring = ring.clamp(0.0, 1.0);
+    let track = con_opacidad(color, 0.22);
+    let fondo = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .paint_with(move |scene: &mut Scene, _ts, rect: PaintRect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Arc, Circle, Stroke};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let r = ((rect.w.min(rect.h) as f64) * 0.5 - 1.5).max(2.0);
+        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, &track, None, &Circle::new((cx, cy), r));
+        if ring > 0.001 {
+            let arco = Arc::new(
+                (cx, cy),
+                (r, r),
+                -core::f64::consts::FRAC_PI_2,
+                ring as f64 * core::f64::consts::TAU,
+                0.0,
+            );
+            scene.stroke(&Stroke::new(1.9), Affine::IDENTITY, &color, None, &arco);
+        }
+    });
+    let glifo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(glyph.to_string(), 13.0, color);
+    let _ = theme;
+    View::new(Style {
+        size: Size { width: length(26.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![fondo, glifo])
+}
+
 /// Pinta la fase lunar como shapes (no glifo emoji). Un disco oscuro de fondo
 /// y un disco iluminado desplazado según `phase`.
 pub(super) fn moon_view(phase: f32) -> View<Msg> {
@@ -701,5 +756,22 @@ pub(super) fn moon_view(phase: f32) -> View<Msg> {
         let iluminado = Circle::new((cx + dx, cy), r);
         scene.fill(Fill::NonZero, Affine::IDENTITY, &light, None, &iluminado);
         scene.pop_layer();
+        // Medidor circular que RODEA el disco: el ciclo lunar (luna llena a
+        // luna llena) como un arco que avanza con la fase.
+        use llimphi_ui::llimphi_raster::kurbo::{Arc, Stroke};
+        let ring_r = r + 2.5;
+        let pista = Circle::new((cx, cy), ring_r);
+        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, &dark, None, &pista);
+        if phase > 0.001 {
+            // Arranca arriba (-90°) y barre `phase` de la vuelta, en sentido horario.
+            let arco = Arc::new(
+                (cx, cy),
+                (ring_r, ring_r),
+                -core::f64::consts::FRAC_PI_2,
+                phase * core::f64::consts::TAU,
+                0.0,
+            );
+            scene.stroke(&Stroke::new(1.8), Affine::IDENTITY, &light, None, &arco);
+        }
     })
 }

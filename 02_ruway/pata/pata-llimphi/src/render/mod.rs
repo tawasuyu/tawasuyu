@@ -161,13 +161,14 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             ..Default::default()
         }),
         WidgetView::Text(t) => chip(theme).text(t.clone(), 13.0, theme.fg_text),
-        WidgetView::TextRich { text, .. } => {
-            let color = match kind {
-                Some("astro") => astro_color(text, theme.fg_text),
-                _ => theme.fg_text,
-            };
-            let body_px = if matches!(kind, Some("astro")) { 19.0 } else { 16.0 };
-            chip(theme).text(text.clone(), body_px, color)
+        WidgetView::TextRich { text, ring, .. } => {
+            if matches!(kind, Some("astro")) {
+                // El signo zodiacal con su medidor circular (grado en el signo).
+                let color = astro_color(text, theme.fg_text);
+                chip(theme).children(vec![glyph_ring_view(text, color, *ring, theme)])
+            } else {
+                chip(theme).text(text.clone(), 16.0, theme.fg_text)
+            }
         }
         WidgetView::Meter { label, fraction, caption, size, orient } => {
             let stops = match kind {

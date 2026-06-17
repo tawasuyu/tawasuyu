@@ -249,6 +249,9 @@ pub enum WidgetView {
         text: String,
         /// Lectura completa que se muestra al posar el cursor.
         tooltip: String,
+        /// Fracción `0.0..=1.0` para un **medidor circular** que rodea el glifo
+        /// (p. ej. el grado dentro del signo zodiacal, 0..30°). `0.0` = sin anillo.
+        ring: f32,
     },
     /// Un medidor: `fraction` en `0.0..=1.0`, una `caption` ya formateada y una
     /// `label` opcional (el nombre corto, p. ej. `"CPU"`).
@@ -594,6 +597,8 @@ pub struct Astro {
     show_name: bool,
     glyph: String,
     tooltip: String,
+    /// Fracción del grado dentro del signo (0..30° → 0.0..1.0), para el anillo.
+    ring: f32,
 }
 
 impl Astro {
@@ -604,6 +609,7 @@ impl Astro {
             show_name: spec.bool_prop("name", true),
             glyph: String::new(),
             tooltip: String::new(),
+            ring: 0.0,
         }
     }
 }
@@ -613,6 +619,7 @@ impl Widget for Astro {
         let lon = ((ctx.sun_longitude_deg as i32) % 360 + 360) % 360;
         let (nombre, glifo) = SIGNOS[(lon / 30) as usize % 12];
         let grado = lon % 30;
+        self.ring = grado as f32 / 30.0;
 
         self.glyph = glifo.to_string();
         let mut tip = String::new();
@@ -638,6 +645,7 @@ impl Widget for Astro {
             WidgetView::TextRich {
                 text: self.glyph.clone(),
                 tooltip: self.tooltip.clone(),
+                ring: self.ring,
             }
         }
     }
@@ -1273,6 +1281,7 @@ mod tests {
             WidgetView::TextRich {
                 text: "♌".to_string(),
                 tooltip: "Leo 12°".to_string(),
+                ring: 12.0 / 30.0,
             }
         );
     }
@@ -1289,6 +1298,7 @@ mod tests {
             WidgetView::TextRich {
                 text: "♓".to_string(),
                 tooltip: "Piscis 0°".to_string(),
+                ring: 0.0,
             }
         );
     }
@@ -1308,6 +1318,7 @@ mod tests {
             WidgetView::TextRich {
                 text: "♈".to_string(),
                 tooltip: "♈".to_string(),
+                ring: 5.0 / 30.0,
             }
         );
     }
