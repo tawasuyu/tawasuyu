@@ -76,6 +76,8 @@ fn line_height_mayor_reserva_mas_alto() {
             underline: false,
             strikethrough: false,
             spans: None,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
         };
         let known = TSize { width: Some(180.0_f32), height: None };
         let avail = TSize {

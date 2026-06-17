@@ -568,6 +568,8 @@
             400.0,
             false,
             false,
+            0.0,
+            0.0,
         );
         let local = llimphi_ui::PaintRect {
             x: 0.0,

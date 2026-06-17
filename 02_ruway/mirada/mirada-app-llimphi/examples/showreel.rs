@@ -343,7 +343,7 @@ fn paint_panel(scene: &mut vello::Scene, ts: &mut Typesetter, s: &Skin, cw: f64,
             None,
             600.0,
             false,
-            false,
+            false, 0.0, 0.0,
         );
         // Texto contrastante sobre el acento.
         let on_accent = {
@@ -370,7 +370,7 @@ fn paint_panel(scene: &mut vello::Scene, ts: &mut Typesetter, s: &Skin, cw: f64,
             None,
             600.0,
             false,
-            false,
+            false, 0.0, 0.0,
         );
         let m = measurement(&layout);
         draw_text(
@@ -395,7 +395,7 @@ fn paint_panel(scene: &mut vello::Scene, ts: &mut Typesetter, s: &Skin, cw: f64,
             None,
             600.0,
             false,
-            false,
+            false, 0.0, 0.0,
         );
         let m = measurement(&layout);
         let chip_w = m.width as f64 + 22.0;
@@ -512,7 +512,7 @@ fn paint_window(scene: &mut vello::Scene, ts: &mut Typesetter, w: &WinRect, s: &
             None,
             600.0,
             false,
-            false,
+            false, 0.0, 0.0,
         );
         draw_text(scene, &layout, with_alpha(on_tb, alpha), bx0 + 12.0, cy - 8.0);
     }
@@ -627,7 +627,7 @@ fn paint_view_label(scene: &mut vello::Scene, ts: &mut Typesetter, label: &str, 
         return;
     }
     let size = 30.0_f32;
-    let layout = ts.layout(label, size, None, Alignment::Start, 1.0, false, None, 600.0, false, false);
+    let layout = ts.layout(label, size, None, Alignment::Start, 1.0, false, None, 600.0, false, false, 0.0, 0.0);
     let m = measurement(&layout);
     let pad_x = 22.0;
     let pad_y = 12.0;
@@ -656,7 +656,7 @@ fn paint_wordmark(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64
         return;
     }
     let size = 150.0_f32;
-    let layout = ts.layout("mirada", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false);
+    let layout = ts.layout("mirada", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0);
     let m = measurement(&layout);
     let rise = lerp(28.0, 0.0, word_a as f64);
     let ox = (cw - m.width as f64) / 2.0;
@@ -676,7 +676,7 @@ fn paint_wordmark(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64
             None,
             400.0,
             false,
-            false,
+            false, 0.0, 0.0,
         );
         let sm = measurement(&sub);
         let dot_r = 6.0;

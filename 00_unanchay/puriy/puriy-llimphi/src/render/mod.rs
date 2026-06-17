@@ -923,6 +923,8 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             let ff = b.font_family.clone();
             let lh = b.line_height.unwrap_or(1.2);
             let alpha = b.opacity.clamp(0.0, 1.0);
+            let ls_c = b.letter_spacing * zoom;
+            let ws_c = b.word_spacing * zoom;
             view = view.paint_with(move |scene, ts, rect| {
                 // Re-shaping idéntico al de la pasada normal (mismo
                 // size/wrap/alignment/line-height) para que las glifos del
@@ -938,6 +940,8 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                     400.0,
                     false,
                     false,
+                    ls_c,
+                    ws_c,
                 );
                 // Gradiente en coords LOCALES (0,0)-(w,h): `draw_layout_brush_xf`
                 // lo lleva al origen del texto con la afín, alineándolo.
@@ -965,6 +969,16 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 b.font_family.clone(),
             )
             .line_height(b.line_height.unwrap_or(1.2));
+        // `letter-spacing`/`word-spacing` (Fase 7.1252): px extra entre
+        // letras/palabras. Escalan por zoom como cualquier longitud. 0 = normal
+        // (no-op en el shaper). Sólo el camino uniforme; el RichText (mixed
+        // inline) los ignora en v1.
+        if b.letter_spacing != 0.0 {
+            view = view.letter_spacing(b.letter_spacing * zoom);
+        }
+        if b.word_spacing != 0.0 {
+            view = view.word_spacing(b.word_spacing * zoom);
+        }
         // `text-overflow: ellipsis` (Fase 7.1251): el engine propagó la
         // intención a esta hoja (el contenedor tiene `overflow != visible`).
         // `ellipsis(1)` clampa a una línea y termina en `…` cuando el texto

@@ -105,8 +105,10 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         object_position: None,
         pointer_events: PointerEvents::Auto,
         text_indent: 0.0,
-        word_spacing: 0.0,
-        letter_spacing: 0.0,
+        // letter-spacing/word-spacing heredan (CSS Text): la hoja de texto
+        // toma el del contenedor, igual que color/font (Fase 7.1252).
+        word_spacing: style.word_spacing,
+        letter_spacing: style.letter_spacing,
         text_shadows: Vec::new(),
         transforms: Vec::new(),
         transform_origin: TransformOrigin::default(),

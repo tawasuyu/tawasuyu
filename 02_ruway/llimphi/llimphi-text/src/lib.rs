@@ -61,6 +61,11 @@ struct ShapeKey {
     underline: bool,
     /// Strikethrough activo. Idem `underline`.
     strikethrough: bool,
+    /// `letter-spacing` (px extra entre letras). 0 = sin override. Cambia el
+    /// shaping/ancho, así que entra en la clave.
+    letter_bits: u32,
+    /// `word-spacing` (px extra entre palabras). Idem `letter_bits`.
+    word_bits: u32,
 }
 
 fn align_tag(a: Alignment) -> u8 {
@@ -302,6 +307,8 @@ impl Typesetter {
         weight: f32,
         underline: bool,
         strikethrough: bool,
+        letter_spacing: f32,
+        word_spacing: f32,
     ) -> parley::Layout<()> {
         // Caché de shaping: clave por todos los parámetros que determinan el
         // layout. En el hit clonamos el `parley::Layout` (memcpy de vectores,
@@ -319,6 +326,8 @@ impl Typesetter {
             weight_bits: weight.to_bits(),
             underline,
             strikethrough,
+            letter_bits: letter_spacing.to_bits(),
+            word_bits: word_spacing.to_bits(),
         };
         if let Some(hit) = self.cache.get(&key) {
             self.cache_hits += 1;
@@ -354,6 +363,13 @@ impl Typesetter {
         }
         if strikethrough {
             builder.push_default(parley::StyleProperty::Strikethrough(true));
+        }
+        // `letter-spacing`/`word-spacing` (px extra). 0 = sin override (normal).
+        if letter_spacing != 0.0 {
+            builder.push_default(parley::StyleProperty::LetterSpacing(letter_spacing));
+        }
+        if word_spacing != 0.0 {
+            builder.push_default(parley::StyleProperty::WordSpacing(word_spacing));
         }
         let mut layout = builder.build(text);
         layout.break_all_lines(max_width);
@@ -393,10 +409,12 @@ impl Typesetter {
         ellipsis: bool,
         underline: bool,
         strikethrough: bool,
+        letter_spacing: f32,
+        word_spacing: f32,
     ) -> parley::Layout<()> {
         let full = self.layout(
             text, size_px, max_width, alignment, line_height, italic, font_family, weight,
-            underline, strikethrough,
+            underline, strikethrough, letter_spacing, word_spacing,
         );
         let limit = match max_lines {
             Some(n) if n >= 1 => n,
@@ -419,7 +437,7 @@ impl Typesetter {
         if !ellipsis {
             return self.layout(
                 base, size_px, max_width, alignment, line_height, italic, font_family, weight,
-                underline, strikethrough,
+                underline, strikethrough, letter_spacing, word_spacing,
             );
         }
         // Recortá graphemes del final hasta que `base…` vuelva a caber en
@@ -430,7 +448,7 @@ impl Typesetter {
             let candidate = format!("{s}…");
             let lay = self.layout(
                 &candidate, size_px, max_width, alignment, line_height, italic, font_family,
-                weight, underline, strikethrough,
+                weight, underline, strikethrough, letter_spacing, word_spacing,
             );
             if s.is_empty() || lay.lines().count() <= limit {
                 return lay;
@@ -743,6 +761,10 @@ pub fn layout_block(ts: &mut Typesetter, block: &TextBlock<'_>) -> parley::Layou
         // por nodo según `TextSpec::{underline,strikethrough}`.
         false,
         false,
+        // `letter-spacing`/`word-spacing` tampoco viajan por `TextBlock`; el
+        // compositor los pasa por su camino directo (`layout_clamped`).
+        0.0,
+        0.0,
     )
 }
 
@@ -937,6 +959,8 @@ mod tests {
             ellipsis,
             false,
             false,
+            0.0,
+            0.0,
         )
         .lines()
         .count()
@@ -956,12 +980,31 @@ mod tests {
     }
 
     #[test]
+    fn letter_y_word_spacing_ensanchan_la_medida() {
+        // letter-spacing y word-spacing agregan px al ancho del shaping; 0 es
+        // el baseline (normal). Prueba directa del feature (Fase 7.1252).
+        let mut ts = Typesetter::new();
+        let w = |ts: &mut Typesetter, ls: f32, ws: f32| {
+            measurement(&ts.layout(
+                "hola mundo cruel", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false,
+                false, ls, ws,
+            ))
+            .width
+        };
+        let base = w(&mut ts, 0.0, 0.0);
+        let con_letter = w(&mut ts, 4.0, 0.0);
+        let con_word = w(&mut ts, 0.0, 10.0);
+        assert!(con_letter > base, "letter-spacing ensancha ({con_letter} > {base})");
+        assert!(con_word > base, "word-spacing ensancha ({con_word} > {base})");
+    }
+
+    #[test]
     fn clamp_no_trunca_si_ya_cabe() {
         let mut ts = Typesetter::new();
         // "Hola" cabe en una línea: pedir 3 no debe inventar truncado.
         let lay = ts.layout_clamped(
             "Hola", 14.0, Some(200.0), Alignment::Start, 1.2, false, None, 400.0, Some(3), true,
-            false, false,
+            false, false, 0.0, 0.0,
         );
         assert_eq!(lay.lines().count(), 1);
     }
@@ -972,7 +1015,7 @@ mod tests {
     fn cache_es_transparente_y_pega() {
         let mut ts = Typesetter::new();
         let m1 = {
-            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false);
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
             (l.width(), l.height(), l.lines().count())
         };
         let s1 = ts.cache_stats();
@@ -980,7 +1023,7 @@ mod tests {
         assert_eq!(s1.hits, 0);
         // Misma llamada exacta: debe ser hit y dar la misma geometría.
         let m2 = {
-            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false);
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
             (l.width(), l.height(), l.lines().count())
         };
         let s2 = ts.cache_stats();
@@ -988,7 +1031,7 @@ mod tests {
         assert_eq!(s2.misses, 1, "no hubo nuevo miss");
         assert_eq!(m1, m2, "el layout cacheado es idéntico al fresco");
         // Cambiar un parámetro (ancho) es una clave distinta: miss nuevo.
-        let _ = ts.layout(LARGO, 14.0, Some(80.0), Alignment::Start, 1.2, false, None, 400.0, false, false);
+        let _ = ts.layout(LARGO, 14.0, Some(80.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         assert_eq!(ts.cache_stats().misses, 2, "otro ancho = otra clave");
     }
 
@@ -997,11 +1040,11 @@ mod tests {
     #[test]
     fn font_context_mut_invalida_el_cache() {
         let mut ts = Typesetter::new();
-        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         assert_eq!(ts.cache_stats().entries, 1);
         let _ = ts.font_context_mut();
         assert_eq!(ts.cache_stats().entries, 0, "el caché quedó vacío");
-        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         assert_eq!(ts.cache_stats().misses, 2, "post-invalidación = miss");
     }
 
@@ -1013,7 +1056,7 @@ mod tests {
     fn underline_y_strikethrough_se_propagan_al_layout() {
         let mut ts = Typesetter::new();
         let with_dec = ts.layout(
-            "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, true, true,
+            "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, true, true, 0.0, 0.0,
         );
         // Caminamos los runs del layout y verificamos que cada GlyphRun trae
         // ambas decoraciones marcadas (no usamos `is_some` directo porque
@@ -1037,7 +1080,7 @@ mod tests {
 
         // Sin decoración el layout no las trae.
         let plain = ts.layout(
-            "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false,
+            "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0,
         );
         for line in plain.lines() {
             for item in line.items() {
@@ -1069,6 +1112,8 @@ mod tests {
             weight_bits: 0,
             underline: false,
             strikethrough: false,
+            letter_bits: 0,
+            word_bits: 0,
         };
         // Layouts vacíos como valores (sólo nos importa la presencia de claves).
         let dummy = parley::Layout::<()>::default;

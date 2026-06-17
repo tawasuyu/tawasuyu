@@ -994,6 +994,30 @@ use crate::Engine;
     }
 
     #[test]
+    fn letter_spacing_hereda_al_leaf_fase_7_1252() {
+        // letter-spacing/word-spacing heredan: la hoja de texto del build
+        // estático toma el valor del contenedor (px resueltos).
+        let html = "<html><head><style>\
+            .ancho { letter-spacing: 3px; word-spacing: 5px; }\
+            </style></head><body>\
+            <div class=\"ancho\">texto espaciado</div></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut ls = None;
+        let mut ws = None;
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.contains("espaciado") {
+                    ls = Some(b.letter_spacing);
+                    ws = Some(b.word_spacing);
+                }
+            }
+        });
+        assert_eq!(ls, Some(3.0), "letter-spacing hereda al leaf");
+        assert_eq!(ws, Some(5.0), "word-spacing hereda al leaf");
+    }
+
+    #[test]
     fn text_overflow_ellipsis_se_propaga_al_leaf_fase_7_1251() {
         use crate::style::TextOverflow;
         // `text-overflow: ellipsis` vive en el contenedor, pero el glifo está en

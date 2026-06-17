@@ -497,7 +497,7 @@ pub(crate) fn command_node(cmd: &str, color: Color) -> View<Msg> {
             return;
         }
         let avail = (rect.w - 4.0).max(1.0);
-        let layout = ts.layout(&cmd, 11.5, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
+        let layout = ts.layout(&cmd, 11.5, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         let m = measurement(&layout);
         let x = (rect.x + 2.0) as f64;
         let y = (rect.y + ((rect.h - m.height) / 2.0).max(0.0)) as f64;
@@ -510,7 +510,7 @@ pub(crate) fn command_node(cmd: &str, color: Color) -> View<Msg> {
             let fit = ((avail / avg).floor() as usize).saturating_sub(2).min(n);
             let mut s: String = cmd.chars().take(fit).collect();
             s.push_str("...");
-            let lay = ts.layout(&s, 11.5, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
+            let lay = ts.layout(&s, 11.5, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
             draw_layout(scene, &lay, color, (x, y));
         }
     })

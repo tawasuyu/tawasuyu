@@ -596,7 +596,7 @@ fn render_frame(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64, 
         let head_a = chrome_a * (1.0 - seg(frac, 0.86, 1.0)); // pequeño parpadeo al cambiar
         let head_a = head_a.max(chrome_a * 0.0);
         // Título arriba del stage.
-        let tl = ts.layout(name, 30.0, None, Alignment::Start, 1.0, false, None, 800.0, false, false);
+        let tl = ts.layout(name, 30.0, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0);
         let m = measurement(&tl);
         let tx = stage.x + 6.0;
         let ty = stage.y - 48.0;
@@ -611,7 +611,7 @@ fn render_frame(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64, 
         let brush = peniko::Brush::Solid(palpha(s.fg, head_a));
         draw_layout_brush_xf(scene, &tl, &brush, Affine::translate((tx + 22.0, ty)));
         // Subtítulo a la derecha del título.
-        let sl = ts.layout(subtitle, 15.0, None, Alignment::Start, 1.0, false, None, 400.0, false, false);
+        let sl = ts.layout(subtitle, 15.0, None, Alignment::Start, 1.0, false, None, 400.0, false, false, 0.0, 0.0);
         let sbrush = peniko::Brush::Solid(palpha(s.fg_muted, head_a));
         draw_layout_brush_xf(
             scene,
@@ -646,12 +646,12 @@ fn render_frame(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64, 
         }
 
         // Wordmark pequeño persistente arriba a la izquierda (marca).
-        let wm = ts.layout("pineal", 22.0, None, Alignment::Start, 1.0, false, None, 800.0, false, false);
+        let wm = ts.layout("pineal", 22.0, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0);
         let wmb = peniko::Brush::Solid(palpha(s.fg, chrome_a * 0.9));
         draw_layout_brush_xf(scene, &wm, &wmb, Affine::translate((margin_x, 60.0)));
         let tagl = ts.layout(
             "data visualization, in Rust",
-            13.0, None, Alignment::Start, 1.0, false, None, 400.0, false, false,
+            13.0, None, Alignment::Start, 1.0, false, None, 400.0, false, false, 0.0, 0.0,
         );
         let tagb = peniko::Brush::Solid(palpha(s.fg_muted, chrome_a * 0.9));
         draw_layout_brush_xf(scene, &tagl, &tagb, Affine::translate((margin_x + 86.0, 68.0)));
@@ -681,7 +681,7 @@ fn render_frame(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64, 
     let word_a = ease_out_cubic(seg(t, 0.90, 0.98));
     if word_a > 0.001 {
         let size = 150.0_f32;
-        let layout = ts.layout("pineal", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false);
+        let layout = ts.layout("pineal", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0);
         let m = measurement(&layout);
         let rise = lerp(28.0, 0.0, word_a as f64);
         let ox = (cw - m.width as f64) / 2.0;
@@ -695,7 +695,7 @@ fn render_frame(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64, 
             // Subtítulo con punto teal a la izquierda.
             let sl = ts.layout(
                 "data visualization, in Rust",
-                28.0, None, Alignment::Start, 1.0, false, None, 400.0, false, false,
+                28.0, None, Alignment::Start, 1.0, false, None, 400.0, false, false, 0.0, 0.0,
             );
             let sm = measurement(&sl);
             let dot_r = 6.0;

@@ -381,7 +381,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
     if prompt_a > 0.001 {
         let psz = 30.0_f32;
         let layout = ts.layout(
-            "shuma ❯ _", psz, None, Alignment::Start, 1.0, false, None, 500.0, false, false,
+            "shuma ❯ _", psz, None, Alignment::Start, 1.0, false, None, 500.0, false, false, 0.0, 0.0,
         );
         let m = measurement(&layout);
         let ox = (cw - m.width as f64) / 2.0;
@@ -396,7 +396,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
     if word_a > 0.001 {
         let size = 150.0_f32;
         let layout = ts.layout(
-            "shuma", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false,
+            "shuma", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0,
         );
         let m = measurement(&layout);
         let rise = lerp(24.0, 0.0, word_a as f64);
@@ -410,7 +410,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
             let ssz = 26.0_f32;
             let sub = ts.layout(
                 "a block-based terminal, in Rust", ssz, None, Alignment::Start, 1.0, false, None,
-                500.0, false, false,
+                500.0, false, false, 0.0, 0.0,
             );
             let sm = measurement(&sub);
             let dot_r = 6.0;

@@ -851,6 +851,8 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             spans: None,
         });
         self
@@ -877,6 +879,8 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             spans: None,
         });
         self
@@ -906,6 +910,8 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             spans: None,
         });
         self
@@ -937,6 +943,8 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             spans: None,
         });
         self
@@ -969,6 +977,8 @@ impl<Msg> View<Msg> {
             runs: Some(runs),
             underline: false,
             strikethrough: false,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             spans: None,
         });
         self
@@ -1006,6 +1016,8 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             spans: Some(spans),
         });
         self
@@ -1081,6 +1093,25 @@ impl<Msg> View<Msg> {
         if let Some(t) = self.text.as_mut() {
             t.max_lines = Some(n.max(1));
             t.ellipsis = true;
+        }
+        self
+    }
+
+    /// `letter-spacing` (CSS): px **extra** entre letras (0 = normal, negativo
+    /// junta). Afecta medida y pintado. No-op sin texto. Sólo el camino
+    /// uniforme; el RichText con spans lo ignora en v1.
+    pub fn letter_spacing(mut self, px: f32) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.letter_spacing = px;
+        }
+        self
+    }
+
+    /// `word-spacing` (CSS): px **extra** entre palabras (0 = normal). Mismo
+    /// régimen que [`Self::letter_spacing`]. No-op sin texto.
+    pub fn word_spacing(mut self, px: f32) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.word_spacing = px;
         }
         self
     }

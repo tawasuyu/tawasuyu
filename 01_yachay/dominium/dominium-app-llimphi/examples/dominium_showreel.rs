@@ -356,7 +356,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
     if word_a > 0.001 {
         let size = 136.0_f32;
         let layout = ts.layout(
-            "dominium", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false,
+            "dominium", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0,
         );
         let m = measurement(&layout);
         let rise = lerp(26.0, 0.0, word_a as f64);
@@ -370,7 +370,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
             let ssz = 25.0_f32;
             let sub = ts.layout(
                 "un simulador donde la civilización emerge de la aritmética",
-                ssz, None, Alignment::Start, 1.0, false, None, 400.0, false, false,
+                ssz, None, Alignment::Start, 1.0, false, None, 400.0, false, false, 0.0, 0.0,
             );
             let sm = measurement(&sub);
             let dot_r = 6.0;

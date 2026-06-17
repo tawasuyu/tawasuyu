@@ -97,6 +97,13 @@ pub struct TextSpec {
     /// `TextSpec` son **defaults a nivel bloque** que cada span puede
     /// sobreescribir. Tier 2 final de PARIDAD-FLUTTER (Bloque 13).
     pub spans: Option<Vec<llimphi_text::TextSpan>>,
+    /// `letter-spacing`: px **extra** entre letras (CSS). 0 = normal. Afecta
+    /// shaping y medida. Sólo el camino uniforme (`layout_clamped`); el camino
+    /// de spans (RichText) lo ignora en v1.
+    pub letter_spacing: f32,
+    /// `word-spacing`: px **extra** entre palabras (CSS). 0 = normal. Mismo
+    /// régimen que [`Self::letter_spacing`].
+    pub word_spacing: f32,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
@@ -982,6 +989,11 @@ pub struct TextMeasure {
     /// dentro de un párrafo agranda esa línea). `None`/`vacío` = medir con
     /// `layout_clamped` (camino uniforme).
     pub spans: Option<Vec<llimphi_text::TextSpan>>,
+    /// Idem [`TextSpec::letter_spacing`]. Entra en la medida porque cambia el
+    /// ancho del shaping (y la clave del caché).
+    pub letter_spacing: f32,
+    /// Idem [`TextSpec::word_spacing`]. Mismo razonamiento que `letter_spacing`.
+    pub word_spacing: f32,
 }
 
 /// Cómo encajar una imagen en el rect del nodo (CSS `object-fit` /

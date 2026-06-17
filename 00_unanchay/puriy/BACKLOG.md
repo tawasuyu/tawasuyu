@@ -775,6 +775,36 @@ en una sola línea; un `.libre` sin `overflow` envuelve en dos líneas sin recor
 > v1: single-line (`ellipsis(1)`). Multi-línea (`-webkit-line-clamp: n` con
 > `text-overflow` en la última) y `white-space: nowrap` real quedan pendientes.
 
+### 7.1252 ✅ — `letter-spacing` / `word-spacing` (px extra en el shaper)
+
+Ambas parseaban y computaban (`group13`) pero **nadie las consumía**: el shaper
+de llimphi no recibía el espaciado. parley 0.6 lo soporta nativo
+(`StyleProperty::{LetterSpacing,WordSpacing}`, px extra) — se cableó end-to-end:
+
+- **llimphi-text**: `Typesetter::layout`/`layout_clamped` toman dos params nuevos
+  (`letter_spacing`, `word_spacing`), entran en la `ShapeKey` (cambian el ancho ⇒
+  clave de caché distinta) y se empujan como `StyleProperty` cuando ≠ 0. Camino
+  uniforme; el de spans (RichText/mixed-inline) los ignora en v1 (igual que el
+  clamp `max_lines`/`ellipsis`).
+- **llimphi-compositor**: `TextSpec`/`TextMeasure` ganan los dos campos;
+  `measure_text_node` y el paint los pasan a `layout_clamped`; builders
+  `View::letter_spacing(px)` / `View::word_spacing(px)`.
+- **puriy engine**: la hoja de texto del build estático ahora **hereda**
+  `letter/word-spacing` del contenedor (antes hardcodeaba 0.0 en `inline.rs`;
+  son props heredables como `color`/`font`).
+- **puriy wire**: el leaf de texto setea ambos (× zoom como cualquier longitud);
+  el path de `background-clip: text` re-shapea con el mismo espaciado para que
+  las glifos del gradiente alineen.
+
+Blast radius: la firma de `layout`/`layout_clamped` cambió, así que se migraron
+todos los callers del workspace (compositor, ui, ~12 showreels/monitors/pluma y
+los tests) a pasar `0.0, 0.0` donde no aplica. Verificado por pantallazo headless
+(letter-spacing 6px ensancha visiblemente y envuelve) + tests:
+`letter_y_word_spacing_ensanchan_la_medida` (llimphi-text, mide que ensancha),
+`letter_spacing_hereda_al_leaf_fase_7_1252` (engine, herencia al leaf).
+
+> v1: el camino RichText (spans, mixed-inline) ignora el espaciado.
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
 - **`white-space: nowrap`** — wrap real (hoy el texto envuelve igual; sólo el

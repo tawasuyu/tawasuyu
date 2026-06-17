@@ -815,7 +815,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
     if word_a > 0.001 {
         let size = 150.0_f32;
         let layout = ts.layout(
-            "nakui", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false,
+            "nakui", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0,
         );
         let m = measurement(&layout);
         let rise = lerp(24.0, 0.0, word_a as f64);
@@ -829,7 +829,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
             let ssz = 26.0_f32;
             let sub = ts.layout(
                 "ERP · spreadsheet · graph, in Rust", ssz, None, Alignment::Start, 1.0, false,
-                None, 400.0, false, false,
+                None, 400.0, false, false, 0.0, 0.0,
             );
             let sm = measurement(&sub);
             let dot_r = 6.0;

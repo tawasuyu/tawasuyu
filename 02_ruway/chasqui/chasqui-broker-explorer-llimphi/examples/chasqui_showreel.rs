@@ -455,7 +455,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
     if word_a > 0.001 {
         let size = 140.0_f32;
         let layout = ts.layout(
-            "chasqui", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false,
+            "chasqui", size, None, Alignment::Start, 1.0, false, None, 800.0, false, false, 0.0, 0.0,
         );
         let m = measurement(&layout);
         let rise = lerp(24.0, 0.0, word_a as f64);
@@ -477,7 +477,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
                 None,
                 400.0,
                 false,
-                false,
+                false, 0.0, 0.0,
             );
             let sm = measurement(&sub);
             let dot_r = 6.0;

@@ -241,6 +241,8 @@ pub(super) fn build_selectable_layout(
         spec.weight,
         spec.underline,
         spec.strikethrough,
+        spec.letter_spacing,
+        spec.word_spacing,
     )
 }
 

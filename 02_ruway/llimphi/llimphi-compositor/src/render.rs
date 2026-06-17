@@ -180,6 +180,8 @@ pub fn mount_recursive<Msg: Clone>(
                         underline: text.underline,
                         strikethrough: text.strikethrough,
                         spans: text.spans.clone(),
+                        letter_spacing: text.letter_spacing,
+                        word_spacing: text.word_spacing,
                     },
                 );
             }
@@ -251,6 +253,8 @@ pub fn measure_text_node(
         tm.ellipsis,
         tm.underline,
         tm.strikethrough,
+        tm.letter_spacing,
+        tm.word_spacing,
     );
     let m = llimphi_text::measurement(&layout);
     llimphi_layout::taffy::Size { width: m.width, height: m.height }
@@ -1023,6 +1027,8 @@ pub fn paint_range<Msg>(
                     text.ellipsis,
                     text.underline,
                     text.strikethrough,
+                    text.letter_spacing,
+                    text.word_spacing,
                 );
                 let origin =
                     if matches!(text.alignment, llimphi_text::Alignment::Center) {

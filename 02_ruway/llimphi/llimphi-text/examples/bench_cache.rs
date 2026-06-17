@@ -21,9 +21,9 @@ const PARRAFO: &str = "Un documento es un haz de cuerpos sobre el mismo material
 fn pintar_frame(ts: &mut Typesetter, frame: usize, estatico: bool) {
     // Chrome estable + párrafo estable: misma clave cada frame ⇒ hit con caché.
     for label in CHROME {
-        let _ = ts.layout(label, 13.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
+        let _ = ts.layout(label, 13.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
     }
-    let _ = ts.layout(PARRAFO, 15.0, Some(420.0), Alignment::Start, 1.4, false, None, 400.0, false, false);
+    let _ = ts.layout(PARRAFO, 15.0, Some(420.0), Alignment::Start, 1.4, false, None, 400.0, false, false, 0.0, 0.0);
     // Una línea que cambia cada frame (caret/contador): siempre miss.
     // Con `estatico=true` la forzamos constante para ver el techo del caché.
     let dinamico = if estatico {
@@ -31,7 +31,7 @@ fn pintar_frame(ts: &mut Typesetter, frame: usize, estatico: bool) {
     } else {
         format!("línea {frame} · col {}", frame % 80)
     };
-    let _ = ts.layout(&dinamico, 13.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
+    let _ = ts.layout(&dinamico, 13.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
 }
 
 fn corrida(nombre: &str, estatico: bool) {
@@ -72,7 +72,7 @@ fn corrida_sin_cache() {
     let t0 = Instant::now();
     for f in 1..=FRAMES {
         for t in frame_texts(f) {
-            let _ = ts.layout(&t, 13.0, Some(420.0), Alignment::Start, 1.2, false, None, 400.0, false, false);
+            let _ = ts.layout(&t, 13.0, Some(420.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         }
     }
     let dt = t0.elapsed();
