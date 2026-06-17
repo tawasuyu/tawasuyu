@@ -37,6 +37,18 @@ impl Desktop {
                         return self.relayout();
                     }
                 }
+                // No está en ningún escritorio: quizás está MINIMIZADA (en el
+                // scratchpad/especial). La rescatamos al escritorio activo y la
+                // enfocamos — así el taskicon "des-minimiza". Sin esto, una
+                // ventana minimizada quedaba irrecuperable (ni taskicon ni
+                // alt-tab la veían).
+                if self.windows.contains_key(&id)
+                    && self.specials.values().any(|b| b.contains(&id))
+                {
+                    self.forget_special_window(id);
+                    self.workspaces[active].add(id); // `add` la enfoca
+                    return self.relayout();
+                }
                 Vec::new()
             }
             DesktopAction::MoveForward => {
@@ -124,6 +136,26 @@ impl Desktop {
                     ws.set_fullscreen(None);
                 } else {
                     ws.set_fullscreen(Some(id));
+                }
+                self.relayout()
+            }
+            DesktopAction::ToggleMaximize => {
+                let Some(id) = self.workspaces[active].focused() else {
+                    return Vec::new();
+                };
+                let work = self.outputs.get(self.focused_output).map(|o| o.work_rect());
+                let ws = &mut self.workspaces[active];
+                // "Maximizada" = flotando ocupando toda el área de trabajo.
+                // Conserva la barra de título (no es pantalla completa), así el
+                // mismo botón la restaura y no se "apropia" del escritorio.
+                let maximizada = ws
+                    .floating_rect(id)
+                    .zip(work)
+                    .is_some_and(|(r, w)| r == w);
+                if maximizada {
+                    ws.set_floating(id, None); // restaurar al teselado
+                } else if let Some(w) = work {
+                    ws.set_floating(id, Some(w));
                 }
                 self.relayout()
             }

@@ -91,6 +91,11 @@ pub enum DesktopAction {
     ToggleTiling,
     /// Alterna pantalla completa en la ventana enfocada.
     ToggleFullscreen,
+    /// Alterna **maximizar** la ventana enfocada: la hace flotar ocupando toda
+    /// el área de trabajo (conservando la barra de título, así se puede
+    /// restaurar) o, si ya está así, la devuelve al teselado. A diferencia de
+    /// [`ToggleFullscreen`], no oculta el chrome ni "se apropia" del escritorio.
+    ToggleMaximize,
     /// Guarda la ventana enfocada en el scratchpad (la oculta). Es el
     /// **escritorio especial por defecto** (sin nombre) — equivale a
     /// `MoveToSpecialWorkspace("")`.
@@ -224,6 +229,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::ToggleFloat => f.write_str("toggle-float"),
             DesktopAction::ToggleTiling => f.write_str("toggle-tiling"),
             DesktopAction::ToggleFullscreen => f.write_str("toggle-fullscreen"),
+            DesktopAction::ToggleMaximize => f.write_str("toggle-maximize"),
             DesktopAction::SendToScratchpad => f.write_str("send-to-scratchpad"),
             DesktopAction::ToggleScratchpad => f.write_str("toggle-scratchpad"),
             DesktopAction::MoveToSpecialWorkspace(name) => write!(f, "move-to-special:{name}"),
@@ -275,6 +281,7 @@ impl FromStr for DesktopAction {
             "toggle-float" => Self::ToggleFloat,
             "toggle-tiling" => Self::ToggleTiling,
             "toggle-fullscreen" => Self::ToggleFullscreen,
+            "toggle-maximize" => Self::ToggleMaximize,
             "send-to-scratchpad" => Self::SendToScratchpad,
             "toggle-scratchpad" => Self::ToggleScratchpad,
             "toggle-dropterm" => Self::ToggleDropterm,

@@ -504,6 +504,9 @@ struct DrmState {
     /// Ventana objetivo del menú **contextual** abierto (click derecho en el
     /// titlebar). `None` = el menú abierto es el raíz (del fondo), no de ventana.
     menu_window: Option<u64>,
+    /// Último click izquierdo sobre una barra de título: `(id, instante)`. Sirve
+    /// para detectar el **doble-click** (maximiza) antes de arrancar un arrastre.
+    last_titlebar_click: Option<(u64, Instant)>,
     /// Zonas de arrastre activas (fracciones del área útil) — el preset actual.
     zones: Vec<ZoneFrac>,
     /// Todos los presets de zonas (preset 0 = `config.zones`, luego
@@ -998,6 +1001,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         root_menu: None,
         menu_output_idx: None,
         menu_window: None,
+        last_titlebar_click: None,
         zones,
         zone_presets,
         active_preset: 0,

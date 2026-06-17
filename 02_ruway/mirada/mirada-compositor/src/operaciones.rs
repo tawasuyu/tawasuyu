@@ -202,8 +202,13 @@ impl App {
     pub(crate) fn maximizar_ventana(&mut self, id: u64) {
         let cmds = match &mut self.brain {
             Brain::Embedded(d) => {
+                // Enfoca la ventana (la trae a la salida si está en otro
+                // escritorio) y luego alterna MAXIMIZAR — flotar a toda el área
+                // de trabajo conservando la barra de título, así el mismo botón
+                // restaura. (Antes usaba ToggleFullscreen: quitaba la barra → sin
+                // botón para volver, y "se apropiaba" del escritorio.)
                 let mut c = d.apply(mirada_brain::DesktopAction::FocusWindow(id));
-                c.extend(d.apply(mirada_brain::DesktopAction::ToggleFullscreen));
+                c.extend(d.apply(mirada_brain::DesktopAction::ToggleMaximize));
                 c
             }
             Brain::Linked(_) => return,

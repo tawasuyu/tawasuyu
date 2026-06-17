@@ -405,6 +405,23 @@ impl DrmState {
                             let w = &self.app.windows[i];
                             (w.id, w.loc, w.size)
                         };
+                        // Doble-click sobre la barra de título: maximiza/restaura
+                        // (mismo gesto que el escritorio clásico), en vez de
+                        // arrastrar. Ventana de 400 ms sobre la misma ventana.
+                        let now = std::time::Instant::now();
+                        let doble = self
+                            .last_titlebar_click
+                            .is_some_and(|(prev, t)| {
+                                prev == id
+                                    && now.duration_since(t)
+                                        < std::time::Duration::from_millis(400)
+                            });
+                        if doble {
+                            self.last_titlebar_click = None;
+                            self.app.maximizar_ventana(id);
+                            return;
+                        }
+                        self.last_titlebar_click = Some((id, now));
                         self.app.drag = Some(DragGrab {
                             id,
                             mode: DragMode::Move,
