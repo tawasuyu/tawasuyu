@@ -778,6 +778,48 @@ fn heatmap_color(world: &World, idx: usize, pal: &Palette, layer: RenderLayer) -
     ]
 }
 
+/// Rectángulo de visibilidad en **coordenadas de plan** (las mismas que
+/// `Quad.x`/`Polygon.vertices`: pantalla pre-offset, origen en el centro de
+/// la proyección iso). Sirve para el **culling durante el build**: una celda
+/// cuyo prisma proyectado no solapa este rect NO emite ninguna primitiva, así
+/// el build es O(celdas visibles) en vez de O(todas).
+///
+/// Cómo obtenerlo desde la cámara del backend: el backend ancla el centro del
+/// bbox del plan al centro de su rect (`plan_offset`). Para un rect destino de
+/// `(cw, ch)` px con offset `(off_x, off_y)`, el rango visible en coords de
+/// plan es `x ∈ [-off_x, cw-off_x]`, `y ∈ [-off_y, ch-off_y]`. Como el bbox
+/// (y por tanto el offset exacto) recién se conoce al terminar el build, en la
+/// práctica se estima el offset con el bbox del frame anterior (la cámara no
+/// salta entre frames), o se centra el viewport en el punto de interés y se le
+/// da el ancho/alto del canvas más un margen. El `margin` absorbe ese error.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Viewport {
+    /// Borde izquierdo visible, en coords de plan.
+    pub min_x: f32,
+    /// Borde superior visible, en coords de plan.
+    pub min_y: f32,
+    /// Borde derecho visible, en coords de plan.
+    pub max_x: f32,
+    /// Borde inferior visible, en coords de plan.
+    pub max_y: f32,
+}
+
+impl Viewport {
+    /// Construye un viewport desde su centro `(cx, cy)` (coords de plan) y el
+    /// tamaño visible `(w, h)` en px, con un `margin` de holgura por lado.
+    pub fn centered(cx: f32, cy: f32, w: f32, h: f32, margin: f32) -> Self {
+        let hw = w * 0.5 + margin;
+        let hh = h * 0.5 + margin;
+        Self { min_x: cx - hw, min_y: cy - hh, max_x: cx + hw, max_y: cy + hh }
+    }
+
+    /// `true` si el rect `[x0,x1]×[y0,y1]` (coords de plan) solapa el viewport.
+    #[inline]
+    fn overlaps(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
+        x1 >= self.min_x && x0 <= self.max_x && y1 >= self.min_y && y0 <= self.max_y
+    }
+}
+
 /// Construye la maqueta isométrica de un `World`.
 ///
 /// Wrapper sobre [`build_plan_with_overrides`] que pinta todos los lemmings
@@ -789,7 +831,28 @@ pub fn build_plan(
     cfg: &PlanConfig,
 ) -> RenderPlan {
     let default_color = cfg.palette.lemming;
-    build_plan_with_overrides(world, iso, weights, cfg, |_| default_color)
+    build_plan_inner(world, iso, weights, cfg, |_| default_color, None)
+}
+
+/// Igual que [`build_plan`] pero con **culling durante el build**: las celdas
+/// cuyo prisma proyectado no solapa `viewport` se saltean ANTES de emitir
+/// techo/caras/andina/textura, de modo que el costo del build escala con las
+/// celdas visibles, no con el total. A grid 1000² con la cámara mostrando una
+/// fracción del mundo, esto es la diferencia entre cientos de ms/frame y unos
+/// pocos. Lemmings y conceptos (pocos relativos a las celdas) se conservan
+/// completos: no son el cuello del build.
+///
+/// El bbox del plan resultante encierra **sólo** lo emitido (la geometría
+/// visible); el backend lo usa para anclar la cámara igual que siempre.
+pub fn build_plan_culled(
+    world: &World,
+    iso: &IsoProjector,
+    weights: &ZWeights,
+    cfg: &PlanConfig,
+    viewport: Viewport,
+) -> RenderPlan {
+    let default_color = cfg.palette.lemming;
+    build_plan_inner(world, iso, weights, cfg, |_| default_color, Some(viewport))
 }
 
 /// Versión de [`build_plan`] que permite teñir cada lemming individualmente
@@ -802,6 +865,34 @@ pub fn build_plan_with_overrides(
     weights: &ZWeights,
     cfg: &PlanConfig,
     lemming_color: impl Fn(usize) -> Color,
+) -> RenderPlan {
+    build_plan_inner(world, iso, weights, cfg, lemming_color, None)
+}
+
+/// Versión de [`build_plan_with_overrides`] con **culling durante el build**.
+/// Ver [`build_plan_culled`] para la semántica del viewport.
+pub fn build_plan_culled_with_overrides(
+    world: &World,
+    iso: &IsoProjector,
+    weights: &ZWeights,
+    cfg: &PlanConfig,
+    viewport: Viewport,
+    lemming_color: impl Fn(usize) -> Color,
+) -> RenderPlan {
+    build_plan_inner(world, iso, weights, cfg, lemming_color, Some(viewport))
+}
+
+/// Núcleo común de construcción del plan. Cuando `viewport` es `Some`, cada
+/// celda se descarta antes de emitir nada si su prisma proyectado no solapa el
+/// rect visible (culling-durante-build). Cuando es `None`, emite todas las
+/// celdas (comportamiento histórico de [`build_plan`]).
+fn build_plan_inner(
+    world: &World,
+    iso: &IsoProjector,
+    weights: &ZWeights,
+    cfg: &PlanConfig,
+    lemming_color: impl Fn(usize) -> Color,
+    viewport: Option<Viewport>,
 ) -> RenderPlan {
     let g = &world.grid;
     let mut quads: Vec<Quad> = Vec::with_capacity(world.lemmings.len() * 2);
@@ -823,19 +914,76 @@ pub fn build_plan_with_overrides(
     // queda aplicado por el `IsoProjector.scale` — acá pensamos en mundo.
     let hs = 0.5_f32;
 
+    // --- Rango grueso de celdas a recorrer ---
+    // Sin culling: el grid entero. Con culling: acotamos el (cx,cy) que el
+    // viewport puede tocar, así el bucle NO escanea las ~1M celdas a grid alto
+    // (sólo las visibles + un anillo de holgura). El test fino por-celda de
+    // abajo sigue descartando los bordes; esto sólo recorta el barrido.
+    //
+    // El viewport es un rect axis-aligned en pantalla. En iso, las diagonales
+    // u=x−y y v=x+y mapean a sx=u·k1 y sy_piso=v·k2 (z=0). Como un techo a
+    // altura z se eleva (sy menor), una celda puede asomar al viewport desde
+    // MÁS ABAJO en el grid; padeamos `v` por la máxima elevación posible en px
+    // traducida a unidades de mundo. `u` no depende de z, sólo de su ancho.
+    let (cx_lo, cx_hi, cy_lo, cy_hi) = match viewport {
+        None => (0usize, g.width, 0usize, g.height),
+        Some(vp) => {
+            // Cota de elevación máxima del grid (en px de pantalla), para
+            // saber cuántas celdas "más al fondo" pueden asomar por arriba.
+            let mut z_max = 0.0f32;
+            for &m in &g.materia {
+                z_max = z_max.max(m);
+            }
+            // z compuesto puede mezclar capas; reusamos z_of sobre el máximo de
+            // cada capa como cota superior holgada (los pesos pueden ser neg.,
+            // pero una cota generosa sólo agranda el anillo, nunca recorta de
+            // más). Sumamos las contribuciones positivas de cada capa.
+            let cap = |arr: &[f32]| arr.iter().cloned().fold(0.0f32, f32::max);
+            let z_cap = weights.materia.max(0.0) * cap(&g.materia)
+                + weights.psique.max(0.0) * cap(&g.psique)
+                + weights.poder.max(0.0) * cap(&g.poder)
+                + weights.oro.max(0.0) * cap(&g.oro)
+                + weights.degradacion.max(0.0) * cap(&g.degradacion);
+            let _ = z_max;
+            let elev_px = z_cap * iso.z_factor * iso.scale;
+            // Constantes de proyección (las mismas de IsoProjector::project,
+            // recuperadas de un punto conocido para no exponer cos30/sin30).
+            let k1 = (iso.project(1.0, 0.0, 0.0).0 - iso.project(0.0, 0.0, 0.0).0).abs(); // u→sx
+            let k2 = (iso.project(1.0, 0.0, 0.0).1 - iso.project(0.0, 0.0, 0.0).1).abs(); // v→sy
+            if k1 <= f32::EPSILON || k2 <= f32::EPSILON {
+                (0usize, g.width, 0usize, g.height)
+            } else {
+                // Rango de u (=x−y) y v (=x+y) que toca el viewport.
+                let u_lo = vp.min_x / k1;
+                let u_hi = vp.max_x / k1;
+                // v_piso = sy/k2. El techo elevado resta hasta elev_px de sy,
+                // así que una celda visible puede tener v hasta elev_px/k2 MÁS
+                // grande (más al fondo) y aún asomar. Padeamos ese lado.
+                let v_lo = vp.min_y / k2;
+                let v_hi = (vp.max_y + elev_px) / k2;
+                // x=(u+v)/2, y=(v−u)/2. Para acotar cx∈[x] y cy∈[y] tomamos
+                // los extremos de u,v. +1 celda de holgura por el medio rombo.
+                let pad = 1.0f32;
+                let x_min = (u_lo + v_lo) * 0.5 - pad;
+                let x_max = (u_hi + v_hi) * 0.5 + pad;
+                let y_min = (v_lo - u_hi) * 0.5 - pad;
+                let y_max = (v_hi - u_lo) * 0.5 + pad;
+                let clamp = |v: f32, hi: usize| v.max(0.0).min(hi as f32) as usize;
+                (
+                    clamp(x_min.floor(), g.width),
+                    clamp(x_max.ceil(), g.width),
+                    clamp(y_min.floor(), g.height),
+                    clamp(y_max.ceil(), g.height),
+                )
+            }
+        }
+    };
+
     // --- Celdas: techo (rombo iso) + caras laterales visibles (paralelogramos) ---
-    for cy in 0..g.height {
-        for cx in 0..g.width {
+    for cy in cy_lo..cy_hi {
+        for cx in cx_lo..cx_hi {
             let idx = g.idx(cx, cy);
             let z = weights.z_of(g, idx);
-            let color = match cfg.render_mode {
-                RenderMode::Composite | RenderMode::PsiCluster => {
-                    cell_color(world, idx, &cfg.palette)
-                }
-                RenderMode::Heatmap(layer) => {
-                    heatmap_color(world, idx, &cfg.palette, layer)
-                }
-            };
             let depth = cx as f32 + cy as f32;
             let fx = cx as f32;
             let fy = cy as f32;
@@ -846,6 +994,36 @@ pub fn build_plan_with_overrides(
             let p_ne = iso.project(fx + hs, fy - hs, z);
             let p_se = iso.project(fx + hs, fy + hs, z);
             let p_sw = iso.project(fx - hs, fy + hs, z);
+
+            // --- Culling durante el build ---
+            // Una celda es visible si su PRISMA proyectado solapa el viewport.
+            // El prisma va desde el techo (cima a `z`) hasta el suelo (z=0, la
+            // cota mínima a la que pueden bajar las caras laterales y las capas
+            // andinas). El bbox proyectado de las 8 esquinas (4 arriba, 4 abajo)
+            // lo cubre con holgura — barato (8 proyecciones) frente a emitir.
+            // X no depende de z (sólo de x,y), así que basta el rango de las 4
+            // esquinas; Y sí, así que tomamos min(techo) y max(suelo).
+            if let Some(vp) = viewport {
+                let min_sx = p_nw.0.min(p_ne.0).min(p_se.0).min(p_sw.0);
+                let max_sx = p_nw.0.max(p_ne.0).max(p_se.0).max(p_sw.0);
+                // Cima: el techo (z). Pie: el suelo (z=0) — más abajo en pantalla.
+                let top_sy = p_nw.1.min(p_ne.1).min(p_se.1).min(p_sw.1);
+                let p_se0 = iso.project(fx + hs, fy + hs, 0.0);
+                let p_sw0 = iso.project(fx - hs, fy + hs, 0.0);
+                let bot_sy = top_sy.max(p_se0.1).max(p_sw0.1);
+                if !vp.overlaps(min_sx, top_sy, max_sx, bot_sy) {
+                    continue;
+                }
+            }
+
+            let color = match cfg.render_mode {
+                RenderMode::Composite | RenderMode::PsiCluster => {
+                    cell_color(world, idx, &cfg.palette)
+                }
+                RenderMode::Heatmap(layer) => {
+                    heatmap_color(world, idx, &cfg.palette, layer)
+                }
+            };
 
             // Estampa andina: capas previas como rombos concéntricos.
             if cfg.andina_layers > 0 && z > cfg.andina_threshold {
@@ -940,6 +1118,16 @@ pub fn build_plan_with_overrides(
         let (cx, cy) = g.clamp_cell(c.pos_x, c.pos_y);
         let z_floor = weights.z_of(g, g.idx(cx, cy));
 
+        // Culling: descartá el concepto si su pie (suelo) y su tope caen fuera
+        // del viewport, con holgura generosa por el aura/sombra (radius·tile).
+        if let Some(vp) = viewport {
+            let (fx, fy) = iso.project(c.pos_x, c.pos_y, z_floor);
+            let pad = (c.radius * cfg.tile).max(cfg.concepto_size) * 2.0;
+            if !vp.overlaps(fx - pad, fy - pad, fx + pad, fy + pad) {
+                continue;
+            }
+        }
+
         // Aura al ras del suelo.
         let (ax, ay) = iso.project(c.pos_x, c.pos_y, 0.0);
         let aura = c.radius * 2.0 * cfg.tile;
@@ -1017,6 +1205,16 @@ pub fn build_plan_with_overrides(
         let (px, py) = (lem.pos_x[i], lem.pos_y[i]);
         let (cx, cy) = g.clamp_cell(px, py);
         let z = weights.z_of(g, g.idx(cx, cy)) + cfg.lemming_lift;
+
+        // Culling: la marca + su sombra caben en un cuadrado de ~lemming_size
+        // alrededor de su proyección; descartá si no toca el viewport.
+        if let Some(vp) = viewport {
+            let (mx, my) = iso.project(px, py, z);
+            let pad = cfg.lemming_size * 1.5;
+            if !vp.overlaps(mx - pad, my - pad, mx + pad, my + pad) {
+                continue;
+            }
+        }
 
         // Sombra proyectada — pequeña, plana, al suelo de su celda.
         let (sx, sy) = iso.shadow(px, py, z, cfg.light_dir);
@@ -1158,6 +1356,48 @@ mod tests {
         assert!(!culled.polygons.is_empty(), "el centro queda en pantalla");
         // El bbox NO se mueve (el culling no recoloca la cámara).
         assert_eq!((culled.min_x, culled.min_y, culled.max_x, culled.max_y), (min_x, min_y, max_x, max_y));
+    }
+
+    #[test]
+    fn build_plan_culled_skips_cells_outside_viewport() {
+        // Grid grande, viewport chiquito centrado en el origen del plan.
+        // El build culled debe emitir MUCHAS menos celdas que el full, pero
+        // no cero (el centro del mundo cae cerca del origen iso).
+        let world = World::new(60, 60);
+        let full = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        let vp = Viewport::centered(0.0, 0.0, 40.0, 40.0, 0.0);
+        let culled = build_plan_culled(&world, &iso(), &ZWeights::default(), &PlanConfig::default(), vp);
+        assert!(
+            culled.polygons.len() < full.polygons.len(),
+            "el culling-durante-build debe descartar celdas fuera del viewport ({} vs {})",
+            culled.polygons.len(),
+            full.polygons.len()
+        );
+        assert!(!culled.polygons.is_empty(), "el centro del plan cae en el viewport");
+        // Toda la geometría emitida cae dentro del viewport (± medio rombo de
+        // holgura por el ancho de la celda).
+        for p in &culled.polygons {
+            let (mut nx, mut ny, mut xx, mut xy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for (vx, vy) in p.vertices {
+                nx = nx.min(vx);
+                ny = ny.min(vy);
+                xx = xx.max(vx);
+                xy = xy.max(vy);
+            }
+            assert!(vp.overlaps(nx, ny, xx, xy), "polygon emitido fuera del viewport");
+        }
+    }
+
+    #[test]
+    fn build_plan_culled_equals_full_when_viewport_covers_everything() {
+        // Viewport gigante → culling no descarta nada → mismo resultado que full.
+        let world = World::new(20, 20);
+        let cfg = PlanConfig::default();
+        let full = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
+        let vp = Viewport::centered(0.0, 0.0, 1_000_000.0, 1_000_000.0, 0.0);
+        let culled = build_plan_culled(&world, &iso(), &ZWeights::default(), &cfg, vp);
+        assert_eq!(full.polygons, culled.polygons);
+        assert_eq!(full.quads, culled.quads);
     }
 
     #[test]
