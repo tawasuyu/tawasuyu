@@ -93,8 +93,9 @@ const MODULES: &[(&str, &str, &str)] = &[
 ];
 
 /// Índice del panel "Acerca" (último) — para el menú Ayuda (estado/about).
-/// Orden: Vista=0, Atajos=1, Animaciones=2, Pata=3, Inicio=4, Sistema=5, Acerca=6.
-const INFO_DIENTE: usize = 6;
+/// Orden: Vista=0, Themes=1, Atajos=2, Animaciones=3, Pata=4, Inicio=5,
+/// Sistema=6, Acerca=7.
+const INFO_DIENTE: usize = 7;
 /// Índice del panel "Vista" (1º) — Perfiles vive ahí; saltamos tras crear/duplicar.
 const PERFILES_DIENTE: usize = 0;
 
@@ -964,11 +965,6 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     for s in perfiles_schema(m).sections {
         vista.sections.push(s); // Perfiles (lista limpia: acciones + perfiles)
     }
-    // Themes: biblioteca + edición del theme del perfil activo (apariencia +
-    // teselado + decoración). El perfil ya NO es dueño de teselado/decoración.
-    for s in themes_schema(m).sections {
-        vista.sections.push(s);
-    }
     vista.sections.push(wallpaper_section(m)); // Wallpapers (imagen + automático, unificado)
     if let Some(s) = take("vista_espacial") {
         vista.sections.push(s); // Vistas: Prezi
@@ -981,6 +977,11 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         vista.sections.push(s); // Terminal dropdown
     }
     vista.sections.push(reglas_section(&m.rules)); // Reglas (hyprland windowrule)
+
+    // ---- Panel THEMES (su propio diente) ----
+    // Biblioteca de themes (tab 1 «Themes» = lista radio + CRUD, tabs siguientes
+    // = apariencia/teselado/decoración del theme). Antes vivía dentro de Vista.
+    let themes = themes_schema(m);
 
     // ---- Panel ATAJOS (su propio diente) ----
     // Conjuntos de atajos reusables (tab 1 = lista, tab 2 = teclas), mismo patrón
@@ -1025,6 +1026,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
 
     vec![
         PanelPestana { title: "Vista".into(), icon: "✦".into(), schema: vista },
+        PanelPestana { title: "Themes".into(), icon: "🎨".into(), schema: themes },
         PanelPestana { title: "Atajos".into(), icon: "⌨".into(), schema: atajos },
         PanelPestana { title: "Animaciones".into(), icon: "✨".into(), schema: animaciones },
         PanelPestana { title: "Pata".into(), icon: "🎛".into(), schema: pata },
