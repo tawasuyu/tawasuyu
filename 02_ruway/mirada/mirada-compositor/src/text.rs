@@ -211,6 +211,129 @@ pub fn icon_square(px: f32, color: [u8; 4]) -> Rasterized {
     Rasterized { rgba, width: s, height: s }
 }
 
+/// Rellena un rect opaco/translúcido en el búfer (color en orden **R,G,B,A**,
+/// igual que [`blend_px`]). Recorta a los límites.
+fn fill_rect(rgba: &mut [u8], w: i32, h: i32, x: i32, y: i32, rw: i32, rh: i32, color: [u8; 4]) {
+    for yy in y.max(0)..(y + rh).min(h) {
+        for xx in x.max(0)..(x + rw).min(w) {
+            blend_px(rgba, w, h, xx, yy, color, 1.0);
+        }
+    }
+}
+
+/// Compone un búfer premultiplicado (`src`, bytes B,G,R,A) sobre `dst` con
+/// source-over, desplazado a `(ox, oy)`. Para incrustar el número en el tile.
+fn blit_premul(dst: &mut [u8], dw: i32, dh: i32, src: &[u8], sw: i32, sh: i32, ox: i32, oy: i32) {
+    for sy in 0..sh {
+        for sx in 0..sw {
+            let (x, y) = (ox + sx, oy + sy);
+            if x < 0 || y < 0 || x >= dw || y >= dh {
+                continue;
+            }
+            let si = ((sy * sw + sx) * 4) as usize;
+            let a = src[si + 3] as f32 / 255.0;
+            if a <= 0.0 {
+                continue;
+            }
+            let inv = 1.0 - a;
+            let di = ((y * dw + x) * 4) as usize;
+            for k in 0..4 {
+                dst[di + k] = (src[si + k] as f32 + dst[di + k] as f32 * inv) as u8;
+            }
+        }
+    }
+}
+
+/// Muestreo bilineal de un búfer premultiplicado (B,G,R,A) en `(fx, fy)` (centros
+/// de píxel). Fuera de rango = transparente. Devuelve `[B,G,R,A]` en `f32`.
+fn sample_bilinear(src: &[u8], sw: i32, sh: i32, fx: f32, fy: f32) -> [f32; 4] {
+    let (px, py) = (fx - 0.5, fy - 0.5);
+    let (x0, y0) = (px.floor() as i32, py.floor() as i32);
+    let (tx, ty) = (px - x0 as f32, py - y0 as f32);
+    let mut out = [0.0f32; 4];
+    for (dyi, wy) in [(0, 1.0 - ty), (1, ty)] {
+        for (dxi, wx) in [(0, 1.0 - tx), (1, tx)] {
+            let w = wx * wy;
+            if w <= 0.0 {
+                continue;
+            }
+            let (sx, sy) = (x0 + dxi, y0 + dyi);
+            if sx < 0 || sy < 0 || sx >= sw || sy >= sh {
+                continue; // borde → transparente
+            }
+            let i = ((sy * sw + sx) * 4) as usize;
+            for k in 0..4 {
+                out[k] += src[i + k] as f32 * w;
+            }
+        }
+    }
+    out
+}
+
+/// Rota un búfer ARGB8888 premultiplicado `rot` rad alrededor de su centro,
+/// emitiendo el búfer de su AABB (esquinas transparentes). Muestreo inverso
+/// bilineal — premultiplicado interpola sin halos.
+fn rotate_buffer(src: &[u8], sw: i32, sh: i32, rot: f32) -> Rasterized {
+    let (s, c) = rot.sin_cos();
+    let aw = ((sw as f32 * c.abs()) + (sh as f32 * s.abs())).ceil().max(1.0) as i32;
+    let ah = ((sw as f32 * s.abs()) + (sh as f32 * c.abs())).ceil().max(1.0) as i32;
+    let mut dst = vec![0u8; (aw * ah * 4) as usize];
+    let (scx, scy) = (sw as f32 / 2.0, sh as f32 / 2.0);
+    let (dcx, dcy) = (aw as f32 / 2.0, ah as f32 / 2.0);
+    // Rotación inversa: local = centro_src + R(-rot)·(p − centro_dst).
+    let (si, ci) = (-rot).sin_cos();
+    for dy in 0..ah {
+        for dx in 0..aw {
+            let ux = dx as f32 + 0.5 - dcx;
+            let uy = dy as f32 + 0.5 - dcy;
+            let lx = ux * ci - uy * si + scx;
+            let ly = ux * si + uy * ci + scy;
+            let px = sample_bilinear(src, sw, sh, lx, ly);
+            let i = ((dy * aw + dx) * 4) as usize;
+            for k in 0..4 {
+                dst[i + k] = px[k].round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    Rasterized { rgba: dst, width: aw, height: ah }
+}
+
+/// Compone un tile del overview **rotado** `rot` rad a un búfer ARGB8888 del
+/// tamaño de su AABB: pinta en espacio local (fondo opaco + ventanas a escala +
+/// borde activo opcional + número) y rota por muestreo inverso. Es la forma de
+/// ROTAR en el overlay GLES, donde los `SolidColorRenderElement` son
+/// axis-aligned. El llamante coloca el búfer centrado en el centro del tile.
+#[allow(clippy::too_many_arguments)]
+pub fn rasterize_tile_rotated(
+    tw: i32,
+    th: i32,
+    rot: f32,
+    tile_bg: [u8; 4],
+    border: Option<[u8; 4]>,
+    wins: &[(i32, i32, i32, i32, bool)],
+    win_bg: [u8; 4],
+    win_focus: [u8; 4],
+    badge: Option<&Rasterized>,
+) -> Rasterized {
+    let (tw, th) = (tw.max(1), th.max(1));
+    let mut local = vec![0u8; (tw * th * 4) as usize];
+    fill_rect(&mut local, tw, th, 0, 0, tw, th, tile_bg);
+    for &(wx, wy, ww, wh, focus) in wins {
+        fill_rect(&mut local, tw, th, wx, wy, ww, wh, if focus { win_focus } else { win_bg });
+    }
+    if let Some(bc) = border {
+        let t = 3;
+        fill_rect(&mut local, tw, th, 0, 0, tw, t, bc); // arriba
+        fill_rect(&mut local, tw, th, 0, th - t, tw, t, bc); // abajo
+        fill_rect(&mut local, tw, th, 0, 0, t, th, bc); // izquierda
+        fill_rect(&mut local, tw, th, tw - t, 0, t, th, bc); // derecha
+    }
+    if let Some(b) = badge {
+        blit_premul(&mut local, tw, th, &b.rgba, b.width, b.height, 8, 6);
+    }
+    rotate_buffer(&local, tw, th, rot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +379,84 @@ mod tests {
         // ARGB8888 LE = [B, G, R, A].
         assert!(reddest[2] > reddest[0], "R debería superar a B en texto rojo");
         assert!(reddest[2] > reddest[1], "R debería superar a G en texto rojo");
+    }
+}
+
+#[cfg(test)]
+mod rot_tests {
+    use super::*;
+
+    /// Helper: alpha del pixel `(x,y)` en un búfer ARGB8888 (byte A).
+    fn alpha(r: &Rasterized, x: i32, y: i32) -> u8 {
+        r.rgba[((y * r.width + x) * 4 + 3) as usize]
+    }
+
+    #[test]
+    fn rotar_cero_preserva_dimensiones_y_opacidad() {
+        let r = rasterize_tile_rotated(
+            120, 80, 0.0, [40, 50, 70, 255], None, &[], [0, 0, 0, 0], [0, 0, 0, 0], None,
+        );
+        assert_eq!((r.width, r.height), (120, 80), "rot 0 → AABB == tile");
+        // Centro opaco con el fondo del tile (premult B,G,R,A → B=70).
+        let i = ((40 * r.width + 60) * 4) as usize;
+        assert_eq!(r.rgba[i + 3], 255, "centro opaco");
+        assert!((r.rgba[i] as i32 - 70).abs() <= 2, "B≈70 (azul del fondo)");
+    }
+
+    #[test]
+    fn rotar_90_grados_intercambia_dimensiones() {
+        let r = rasterize_tile_rotated(
+            120, 80, std::f32::consts::FRAC_PI_2, [40, 50, 70, 255], None, &[], [0, 0, 0, 0],
+            [0, 0, 0, 0], None,
+        );
+        // 90° → el AABB es 80×120 (±1 por redondeo del ceil).
+        assert!((r.width - 80).abs() <= 1 && (r.height - 120).abs() <= 1, "{}x{}", r.width, r.height);
+    }
+
+    #[test]
+    fn tile_girado_opaco_dentro_y_transparente_en_las_esquinas() {
+        let r = rasterize_tile_rotated(
+            100, 100, 0.5, [40, 50, 70, 255], Some([50, 120, 240, 255]),
+            &[(10, 10, 40, 30, true)], [60, 70, 90, 255], [55, 110, 210, 255], None,
+        );
+        // El centro del AABB es el centro del tile → opaco.
+        assert_eq!(alpha(&r, r.width / 2, r.height / 2), 255, "centro opaco");
+        // Las esquinas del AABB caen fuera del rect girado → transparentes.
+        assert_eq!(alpha(&r, 0, 0), 0, "esquina sup-izq transparente");
+        assert_eq!(alpha(&r, r.width - 1, 0), 0, "esquina sup-der transparente");
+    }
+
+    /// Vuelca un tile girado a PNG (sólo con `MIRADA_DUMP_TILE=<ruta>`), para VER
+    /// el búfer exacto que el compositor sube como textura — sin GLES.
+    #[test]
+    fn dump_tile_rotado_a_png() {
+        let Ok(path) = std::env::var("MIRADA_DUMP_TILE") else {
+            return;
+        };
+        // Un tile 240×150 con 3 "ventanas" y borde activo, girado ~22°.
+        let r = rasterize_tile_rotated(
+            240,
+            150,
+            0.38,
+            [31, 33, 43, 255], // TILE_BG
+            Some([51, 128, 242, 255]), // ACTIVE_BORDER
+            &[(10, 10, 105, 130, false), (125, 10, 105, 60, true), (125, 80, 105, 60, false)],
+            [66, 77, 102, 255], // WIN_BG
+            [56, 115, 217, 255], // WIN_FOCUS
+            None,
+        );
+        // premult [B,G,R,A] → straight [R,G,B,A] para verlo.
+        let mut out = vec![0u8; r.rgba.len()];
+        for (o, px) in out.chunks_mut(4).zip(r.rgba.chunks(4)) {
+            let a = px[3];
+            let unp = |c: u8| if a == 0 { 0 } else { ((c as u32 * 255) / a as u32).min(255) as u8 };
+            o[0] = unp(px[2]);
+            o[1] = unp(px[1]);
+            o[2] = unp(px[0]);
+            o[3] = a;
+        }
+        image::save_buffer(&path, &out, r.width as u32, r.height as u32, image::ColorType::Rgba8)
+            .expect("png");
+        eprintln!("dump_tile_rotado: {path} ({}x{})", r.width, r.height);
     }
 }

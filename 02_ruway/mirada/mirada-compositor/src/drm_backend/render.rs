@@ -523,6 +523,9 @@ impl DrmState {
             y: i32,
             w: i32,
             h: i32,
+            /// Giro propio del tile (rad). `0` = camino rápido de quads sólidos;
+            /// `≠0` = se compone en CPU y se rota (ver más abajo).
+            rot: f32,
             active: bool,
             wins: Vec<(i32, i32, i32, i32, bool)>,
             num: String,
@@ -531,9 +534,8 @@ impl DrmState {
         for &i in &occ {
             let p = data.places[i];
             // Posición: pitch (celda+gap) — la grilla por defecto queda igual.
-            // Tamaño: unidades de celda. (El giro `p.rot` viaja en el dato pero el
-            // overlay GLES dibuja quads axis-aligned — la rotación la pinta la
-            // vista espacial Llimphi; rotar quads sólidos acá sería otro pipeline.)
+            // Tamaño: unidades de celda. El giro `p.rot` se respeta componiendo el
+            // tile en CPU y rotándolo (los `SolidColorRenderElement` no rotan).
             let tx = gx + p.x * (cell_w + GAP);
             let ty = gy + p.y * (cell_h + GAP);
             let tw = p.w * cell_w;
@@ -564,6 +566,7 @@ impl DrmState {
                 y: ty as i32,
                 w: tw as i32,
                 h: th as i32,
+                rot: p.rot,
                 active: i == data.active,
                 wins,
                 num: format!("{}", i + 1),
@@ -581,8 +584,62 @@ impl DrmState {
                 .collect()
         };
 
-        // CAPAS front→back: números, ventanas, borde activo, fondo de tile, scrim.
+        // Umbral para tratar un tile como "girado" (evita el costo CPU por ruido).
+        let girado = |rot: f32| rot.abs() > 1e-4;
+        // [f32;4] (R,G,B,A 0..1) → [u8;4] R,G,B,A para el rasterizador CPU.
+        let to_u8 =
+            |c: [f32; 4]| [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8];
+
+        // CAPAS front→back: tiles girados (compuestos+rotados en CPU), números,
+        // ventanas, borde activo, fondo de tile, scrim. Los tiles girados son
+        // auto-contenidos (fondo+ventanas+borde+número ya horneados) y van al
+        // frente; los rectos siguen el camino rápido de quads sólidos.
         for (t, badge) in tiles.iter().zip(badges.iter()) {
+            if !girado(t.rot) {
+                continue;
+            }
+            // Ventanas en coords LOCALES del tile (el rasterizador pinta local).
+            let wins_local: Vec<(i32, i32, i32, i32, bool)> =
+                t.wins.iter().map(|(wx, wy, ww2, wh2, f)| (wx - t.x, wy - t.y, *ww2, *wh2, *f)).collect();
+            let border = t.active.then(|| to_u8(ACTIVE_BORDER));
+            let comp = crate::text::rasterize_tile_rotated(
+                t.w,
+                t.h,
+                t.rot,
+                to_u8(TILE_BG),
+                border,
+                &wins_local,
+                to_u8(WIN_BG),
+                to_u8(WIN_FOCUS),
+                Some(badge),
+            );
+            let buf = MemoryRenderBuffer::from_slice(
+                &comp.rgba,
+                Fourcc::Argb8888,
+                (comp.width, comp.height),
+                1,
+                Transform::Normal,
+                None,
+            );
+            // Coloca el AABB centrado en el centro del tile.
+            let ax = t.x as f64 + t.w as f64 / 2.0 - comp.width as f64 / 2.0;
+            let ay = t.y as f64 + t.h as f64 / 2.0 - comp.height as f64 / 2.0;
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                (ax, ay),
+                &buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                into.push(Frame::Text(el));
+            }
+        }
+        for (t, badge) in tiles.iter().zip(badges.iter()) {
+            if girado(t.rot) {
+                continue; // el número va horneado en el tile rotado
+            }
             let buf = MemoryRenderBuffer::from_slice(
                 &badge.rgba,
                 Fourcc::Argb8888,
@@ -603,7 +660,7 @@ impl DrmState {
                 into.push(Frame::Text(el));
             }
         }
-        for t in &tiles {
+        for t in tiles.iter().filter(|t| !girado(t.rot)) {
             for (wx, wy, ww2, wh2, focus) in &t.wins {
                 let mut wb = SolidColorBuffer::default();
                 wb.update((*ww2, *wh2), if *focus { WIN_FOCUS } else { WIN_BG });
@@ -616,7 +673,7 @@ impl DrmState {
                 )));
             }
         }
-        for t in tiles.iter().filter(|t| t.active) {
+        for t in tiles.iter().filter(|t| t.active && !girado(t.rot)) {
             // Borde activo: un rect un poco más grande detrás del tile.
             let mut br = SolidColorBuffer::default();
             br.update((t.w + 6, t.h + 6), ACTIVE_BORDER);
@@ -628,7 +685,7 @@ impl DrmState {
                 Kind::Unspecified,
             )));
         }
-        for t in &tiles {
+        for t in tiles.iter().filter(|t| !girado(t.rot)) {
             let mut tb = SolidColorBuffer::default();
             tb.update((t.w, t.h), TILE_BG);
             into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
