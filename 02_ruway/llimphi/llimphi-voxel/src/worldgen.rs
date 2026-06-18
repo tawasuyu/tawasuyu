@@ -151,6 +151,31 @@ pub struct WorldRecipe {
     /// Flora y su densidad `[0,1]`.
     pub flora: Flora,
     pub flora_density: f32,
+    /// **Grano de materia** `[0,1]`: jitter de brillo *por vóxel* sobre el color del
+    /// material. `0` = caras planas de un color liso (el look "textura de Minecraft
+    /// estirada"); `~1` = superficie granular, densa, que parece materia y no bloque.
+    /// Es el **sello del motor**: lo que distancia del cubo plano sin tocar el shader
+    /// (la textura es el propio vóxel). Determinista por `(wx, y, wz, seed)`.
+    #[serde(default)]
+    pub grain: f32,
+}
+
+/// Aplica el **grano de materia** al color base de un vóxel: perturba el brillo
+/// (±`grain`·18%) y mete una pizca de variación por canal, deterministamente por
+/// la posición de mundo. `grain = 0` → color intacto. Función pura → seamless entre
+/// ventanas de streaming.
+fn grained(base: [u8; 3], grain: f32, wx: i32, y: u32, wz: i32, seed: u32) -> [u8; 3] {
+    if grain <= 0.0 {
+        return base;
+    }
+    let g = grain.clamp(0.0, 1.0);
+    // Hash por vóxel (mete `y` en la coordenada para que la columna no sea uniforme).
+    let h = hash2(wx, wz.wrapping_mul(31).wrapping_add(y as i32 * 7), seed ^ 0x6817);
+    let bright = 1.0 + (h - 0.5) * 2.0 * g * 0.18; // ±18% a grano pleno
+    let speck = hash2(wx.wrapping_mul(13).wrapping_add(y as i32), wz, seed ^ 0x51A3);
+    let tilt = (speck - 0.5) * 2.0 * g * 12.0; // ±12 niveles, rompe el liso plano
+    let ch = |c: u8, extra: f32| (c as f32 * bright + extra).clamp(0.0, 255.0) as u8;
+    [ch(base[0], tilt), ch(base[1], tilt * 0.7), ch(base[2], -tilt * 0.5)]
 }
 
 impl WorldRecipe {
@@ -171,6 +196,7 @@ impl WorldRecipe {
             peak_at: 1.0,
             flora: Flora::Cactus,
             flora_density: 0.010,
+            grain: 0.55, // arena granular, no slab plano
         }
     }
 
@@ -192,6 +218,7 @@ impl WorldRecipe {
             peak_at: 0.80,
             flora: Flora::None,
             flora_density: 0.0,
+            grain: 0.45, // pasto/roca con textura, no color liso
         }
     }
 
@@ -294,10 +321,10 @@ impl WorldRecipe {
                     .abs()
                     .max((h as i32 - h_at(lx, lz - 1) as i32).abs()) as f32;
 
-                // Columna sólida.
+                // Columna sólida (con grano de materia por vóxel — sello del motor).
                 for y in 0..=h.min(dy - 1) {
                     let m = self.ground_material(wx, wz, y, h, slope, dim);
-                    g.set(lx as u32, y, lz as u32, m.color());
+                    g.set(lx as u32, y, lz as u32, grained(m.color(), self.grain, wx, y, wz, self.seed));
                 }
                 // Agua: llena por encima del terreno hasta el nivel del agua.
                 if h < water_y {
@@ -398,6 +425,13 @@ mod tests {
         let r = WorldRecipe::desert(3);
         let g = r.generate(dim);
         let mut seen = [false; 3]; // [arena, agua, cactus]
+        // La arena lleva grano (perturbación por vóxel) → se detecta por cercanía,
+        // no por igualdad exacta. Agua y cactus van sin grano (color exacto).
+        let near = |a: [u8; 3], b: [u8; 3]| {
+            (a[0] as i32 - b[0] as i32).abs() <= 60
+                && (a[1] as i32 - b[1] as i32).abs() <= 60
+                && (a[2] as i32 - b[2] as i32).abs() <= 60
+        };
         for z in 0..dim[2] {
             for x in 0..dim[0] {
                 for y in 0..dim[1] {
@@ -406,12 +440,12 @@ mod tests {
                             continue;
                         }
                         let rgb = [c[0], c[1], c[2]];
-                        if rgb == Material::Sand.color() {
-                            seen[0] = true;
-                        } else if rgb == Material::Water.color() {
+                        if rgb == Material::Water.color() {
                             seen[1] = true;
                         } else if rgb == Material::Cactus.color() {
                             seen[2] = true;
+                        } else if near(rgb, Material::Sand.color()) {
+                            seen[0] = true;
                         }
                     }
                 }
@@ -420,6 +454,24 @@ mod tests {
         assert!(seen[0], "hay arena");
         assert!(seen[1], "hay agua (ríos)");
         assert!(seen[2], "hay cactus");
+    }
+
+    #[test]
+    fn grano_de_materia_perturba_pero_es_determinista() {
+        let base = Material::Sand.color();
+        // grain=0 → color intacto (slab plano).
+        assert_eq!(grained(base, 0.0, 5, 3, 9, 1337), base);
+        // grain>0 → el mismo vóxel no es exactamente el color base (tiene grano)…
+        let g1 = grained(base, 0.6, 5, 3, 9, 1337);
+        assert_ne!(g1, base, "con grano el vóxel se aparta del color liso");
+        // …pero es función pura: mismo (pos, seed) → mismo color (seamless/streaming).
+        let g2 = grained(base, 0.6, 5, 3, 9, 1337);
+        assert_eq!(g1, g2);
+        // Vóxeles vecinos difieren → la superficie no es un color uniforme.
+        let gn = grained(base, 0.6, 6, 3, 9, 1337);
+        assert_ne!(g1, gn, "vóxeles contiguos varían → materia granular, no bloque liso");
+        // El desierto trae grano por defecto.
+        assert!(WorldRecipe::desert(1).grain > 0.0);
     }
 
     #[test]

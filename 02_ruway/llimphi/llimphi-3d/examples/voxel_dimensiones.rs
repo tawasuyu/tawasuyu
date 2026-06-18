@@ -38,6 +38,7 @@ fn world_jardin(d: u32) -> Dimension {
             sky_zenith: [70, 130, 90],
             sky_horizon: [196, 222, 188],
             fog_density: 0.22 / d as f32,
+            god_rays: 0.0,
         })
         .with_entities(orbit_entities(
             d,
@@ -81,6 +82,7 @@ fn world_inframundo(d: u32) -> Dimension {
             sky_zenith: [60, 12, 10],
             sky_horizon: [180, 70, 24],
             fog_density: 0.4 / d as f32,
+            god_rays: 0.0,
         })
         .with_entities(orbit_entities(d, &[[255, 140, 30], [255, 90, 20], [255, 200, 60]]))
 }
@@ -120,6 +122,7 @@ fn world_cristal(d: u32) -> Dimension {
             sky_zenith: [24, 18, 60],
             sky_horizon: [120, 90, 200],
             fog_density: 0.28 / d as f32,
+            god_rays: 0.0,
         })
         .with_entities(orbit_entities(d, &[[120, 240, 255], [220, 180, 255]]))
 }

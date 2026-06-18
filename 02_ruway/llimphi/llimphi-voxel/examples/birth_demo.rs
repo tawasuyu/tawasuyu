@@ -40,7 +40,7 @@ fn main() {
 
     let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
     vr.sun_dir = [0.5, 0.7, 0.4];
-    vr.atmosphere = Atmosphere { sky_zenith: [96, 150, 210], sky_horizon: [226, 208, 168], fog_density: 0.0 };
+    vr.atmosphere = Atmosphere { sky_zenith: [96, 150, 210], sky_horizon: [226, 208, 168], fog_density: 0.0, god_rays: 0.0 };
 
     // Huevo en el centro, sobre el suelo. La secuencia hace caer la cámara sobre él.
     let egg = Egg::new(Vec3::new(0.0, feet_y, 0.0), 1.4, Hatchling::human(Age::Baby));

@@ -56,6 +56,7 @@ impl WorldPreview {
             sky_zenith: [64, 118, 196],
             sky_horizon: [202, 218, 236],
             fog_density: 0.5 / dim[0] as f32,
+            god_rays: 0.7, // haces de sol cruzando la niebla — sello anti-Minecraft
         };
         voxel
     }
@@ -75,6 +76,23 @@ impl WorldPreview {
             self.dim = dim;
             self.built_gen = gen;
         }
+    }
+
+    /// Regenera la ventana del mundo en un **origen** de grilla `[wx, wz]` (para
+    /// volar un mundo infinito: el terreno es función pura de mundo, así que mover
+    /// el origen scrollea relieve nuevo de forma continua). `fog` ajusta la niebla
+    /// (más densa esconde los bordes de la ventana en un flythrough).
+    pub fn set_window(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        recipe: &WorldRecipe,
+        origin: [i32; 2],
+        fog: f32,
+    ) {
+        self.grid = recipe.generate_window(self.dim, origin);
+        self.voxel = Self::make_voxel(device, queue, &self.grid, self.dim);
+        self.voxel.atmosphere.fog_density = fog;
     }
 
     /// Posición (espacio de grilla, igual que el render del voxel) del **suelo**

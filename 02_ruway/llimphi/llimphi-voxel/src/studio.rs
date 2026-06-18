@@ -99,12 +99,19 @@ impl ActorKeySpec {
 pub struct ActorSpec {
     pub character: usize,
     pub keys: Vec<ActorKeySpec>,
+    /// **Tasa de cuadros propia** del actor (`None` = fluido/nativo). Con un valor
+    /// bajo (12–15) el actor se anima *en doses* (stop-motion): es el sello que
+    /// separa al Héroe del Avatar. Ver [`ActorScript::quantize`].
+    #[serde(default)]
+    pub frame_rate: Option<u32>,
 }
 
 impl ActorSpec {
-    /// Compila los keyframes a un [`ActorScript`] reproducible.
+    /// Compila los keyframes a un [`ActorScript`] reproducible (con su tasa de
+    /// cuadros propia, si la tiene).
     pub fn to_script(&self) -> ActorScript {
         ActorScript::new(self.keys.iter().map(|k| k.to_key()).collect())
+            .with_frame_rate(self.frame_rate)
     }
 }
 
@@ -191,6 +198,39 @@ pub struct SceneSpec {
     pub actors: Vec<ActorSpec>,
     #[serde(default)]
     pub shots: Vec<ShotSpec>,
+    /// **Cámara en mano**: intensidad del temblor orgánico (`0` = trípode fijo,
+    /// look de dron; `~1` = respiración/pulso de camarógrafo). Ensucia la cámara
+    /// matemáticamente perfecta del motor — es el sello que mete al espectador en
+    /// el "barro" de la escena. Ver [`handheld_shake`].
+    #[serde(default)]
+    pub handheld: f32,
+}
+
+/// **Temblor de cámara en mano**, determinista (función pura de `t` → la peli sale
+/// reproducible cuadro a cuadro). Suma de senos en frecuencias inconmensurables:
+/// una **respiración** lenta (bob vertical) + un **micro-pulso** rápido en los tres
+/// ejes para el ojo, y una **deriva** aún más lenta para el objetivo (el encuadre
+/// flota, no sólo tiembla). `amt ≤ 0` → sin offset (trípode). Devuelve
+/// `(offset_ojo, offset_objetivo)` en unidades de mundo, escalado un poco con la
+/// distancia `d` del plano para que también respire en planos lejanos.
+pub fn handheld_shake(t: f32, amt: f32, d: f32) -> (Vec3, Vec3) {
+    if amt <= 0.0 {
+        return (Vec3::ZERO, Vec3::ZERO);
+    }
+    let scale = amt * (1.0 + d * 0.03);
+    // Respiración (bob) + micro-pulso por eje (fases y frecuencias dispares).
+    let breath = (t * 1.7).sin() * 0.6 + (t * 0.9).sin() * 0.4;
+    let jx = (t * 9.3).sin() * 0.5 + (t * 4.7 + 1.3).sin() * 0.5;
+    let jy = (t * 8.1 + 2.1).sin() * 0.5 + (t * 5.3 + 0.7).sin() * 0.5;
+    let jz = (t * 7.4 + 0.4).sin() * 0.5 + (t * 3.9 + 2.7).sin() * 0.5;
+    let eye = Vec3::new(jx * 0.10, breath * 0.12 + jy * 0.08, jz * 0.10) * scale;
+    // Deriva del objetivo: más lenta y desfasada → el cuadro "busca" al sujeto.
+    let tgt = Vec3::new(
+        (t * 1.3 + 0.5).sin() * 0.06,
+        (t * 1.1 + 1.9).sin() * 0.05,
+        0.0,
+    ) * scale;
+    (eye, tgt)
 }
 
 impl SceneSpec {
@@ -221,6 +261,19 @@ impl SceneSpec {
         ts.sort_by(f32::total_cmp);
         ts.dedup_by(|a, b| (*a - *b).abs() < EPS);
         ts
+    }
+
+    /// La **cámara de la escena** en `t`: resuelve el plano vigente mirando a
+    /// `look` (centroide del reparto) a distancia `d`, y le suma el temblor de
+    /// **cámara en mano** ([`handheld_shake`]) según [`Self::handheld`]. Es el
+    /// único punto por el que deberían pasar el preview y el export para que el
+    /// sello de cámara salga igual en ambos.
+    pub fn camera_at(&self, look: Vec3, d: f32, t: f32) -> Camera3d {
+        let mut cam = self.active_shot(t).resolve(look, d, t);
+        let (eo, to) = handheld_shake(t, self.handheld, d);
+        cam.eye += eo;
+        cam.target += to;
+        cam
     }
 
     /// El plano vigente en `t` (el último con `start ≤ t`); `Establishing` si no
@@ -265,6 +318,10 @@ impl SceneSpec {
                     ActorKeySpec { t: t_turn, gx: gx1, gz, clip: Some(gesture), face: Some(PI) },
                     ActorKeySpec { t: dur, gx: gx1, gz, clip: Some(gesture), face: Some(PI) },
                 ],
+                // El **Héroe** (primer actor) se anima en doses (12 fps): se mueve a
+                // tirones, pesado, contra los demás (Avatares) que van fluidos. Es el
+                // sello de animación, visible ya en la escena de arranque.
+                frame_rate: if i == 0 { Some(12) } else { None },
             });
         }
         // Dos planos: establecedor durante la caminata, primer plano en el gesto.
@@ -272,7 +329,8 @@ impl SceneSpec {
             ShotSpec { start: 0.0, kind: ShotKind::Establishing },
             ShotSpec { start: t_turn, kind: ShotKind::CloseUp },
         ];
-        Self { name: name.into(), world, duration: dur, actors, shots }
+        // Cámara en mano suave por defecto: el sello se ve sin tener que pedirlo.
+        Self { name: name.into(), world, duration: dur, actors, shots, handheld: 0.7 }
     }
 }
 
@@ -396,6 +454,36 @@ mod tests {
         assert!(!beats.is_empty(), "hay al menos un acento");
         assert!(beats.iter().all(|&t| t >= 0.0 && t <= s.duration + 0.1));
         assert!(beats.iter().any(|&t| (t - 3.0).abs() < 0.2), "acento cerca del gesto/corte");
+    }
+
+    #[test]
+    fn camara_en_mano_es_determinista_y_apagable() {
+        // amt=0 → trípode: sin offset, exactamente cero.
+        let (e0, t0) = handheld_shake(1.234, 0.0, 30.0);
+        assert_eq!(e0, Vec3::ZERO);
+        assert_eq!(t0, Vec3::ZERO);
+
+        // amt>0 → tiembla (offset no nulo) y es función pura de t (reproducible).
+        let (e1, _) = handheld_shake(1.234, 0.7, 30.0);
+        let (e2, _) = handheld_shake(1.234, 0.7, 30.0);
+        assert_eq!(e1, e2, "mismo t → mismo temblor (peli reproducible)");
+        assert!(e1.length() > 0.0, "con intensidad la cámara se mueve");
+        // Instantes distintos → temblor distinto (no está congelado).
+        let (e3, _) = handheld_shake(1.235, 0.7, 30.0);
+        assert!((e1 - e3).length() > 0.0, "el temblor evoluciona en el tiempo");
+    }
+
+    #[test]
+    fn frame_rate_del_heroe_viaja_al_guion() {
+        let dim = world_dim(128);
+        let s = SceneSpec::walk_and_emote("demo", 0, 3, Clip::Wave, dim);
+        // El primer actor (Héroe) anima en doses; los demás, fluidos.
+        assert_eq!(s.actors[0].frame_rate, Some(12));
+        assert_eq!(s.actors[1].frame_rate, None);
+        // Y sobrevive la compilación a guion.
+        assert_eq!(s.scripts()[0].frame_rate(), Some(12));
+        // Cámara en mano por defecto encendida.
+        assert!(s.handheld > 0.0);
     }
 
     #[test]

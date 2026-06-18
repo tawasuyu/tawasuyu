@@ -48,6 +48,7 @@ fn main() {
         sky_zenith: [66, 120, 198],
         sky_horizon: [202, 218, 236],
         fog_density: 1.0 / dim_xz as f32,
+        god_rays: 0.0,
     };
 
     // Renderer voxel construido UNA vez desde mundo (0,0) (invariante del ring

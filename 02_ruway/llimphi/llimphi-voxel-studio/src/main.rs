@@ -764,10 +764,12 @@ fn center_canvas(model: &Model) -> View<Msg> {
                 let mut poses = Vec::with_capacity(scripts.len());
                 let mut centroid = Vec3::ZERO;
                 for (script, ch) in scripts.iter().zip(&chars) {
-                    let s = script.sample(time);
+                    // Cuantización por actor (Héroe en doses) — igual que el export.
+                    let at = script.quantize(time);
+                    let s = script.sample(at);
                     let pos = p.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32);
                     centroid += pos;
-                    poses.push((pos, s, ch));
+                    poses.push((pos, s, ch, at));
                 }
                 let look = if poses.is_empty() {
                     orbit_center(dim)
@@ -779,15 +781,15 @@ fn center_canvas(model: &Model) -> View<Msg> {
                 let cast_d = 6.0 + poses.len() as f32 * 1.2;
                 let scene_dist = (dist * 0.18).clamp(10.0, 70.0);
                 let camera = match (script_cam, &scene) {
-                    (true, Some(sc)) => sc.active_shot(time).resolve(look, cast_d, time),
+                    (true, Some(sc)) => sc.camera_at(look, cast_d, time),
                     _ => Camera3d::orbit(look, yaw, pitch, scene_dist),
                 };
                 // Posar cada actor (mirando a la cámara) y mallar.
                 let mut metas = Vec::with_capacity(poses.len());
-                for (pos, s, ch) in &poses {
+                for (pos, s, ch, at) in &poses {
                     let mut a = ch.to_actor(*pos, s.facing);
                     a.set_clip(s.clip);
-                    a.advance(time);
+                    a.advance(*at);
                     a.look_at(Some(camera.eye));
                     let (v, i) = a.mesh();
                     metas.push((a.model(), v, i));

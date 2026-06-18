@@ -86,6 +86,15 @@ pub struct Atmosphere {
     /// Densidad de niebla por unidad de voxel. `0.0` = desactivada (miss →
     /// `discard`, sin niebla); valores típicos `0.002..0.02`.
     pub fog_density: f32,
+    /// **God rays** (luz volumétrica / *in-scattering*): `0.0` = off; `~1.0` =
+    /// haces de sol marcados cruzando la niebla. El shader marcha unas pocas
+    /// muestras a lo largo del rayo de cámara, prueba la visibilidad del sol en
+    /// cada una y acumula luz dispersada hacia el ojo (más fuerte mirando hacia el
+    /// sol, fase tipo Henyey-Greenstein). Sólo actúa con `fog_density > 0` (la
+    /// niebla es el medio que dispersa). Es el sello anti-Minecraft: la malla de
+    /// cubos no puede hacer esto; el ray-march sí. Coste: shadow rays extra por
+    /// píxel — subilo con criterio.
+    pub god_rays: f32,
 }
 
 impl Default for Atmosphere {
@@ -94,6 +103,7 @@ impl Default for Atmosphere {
             sky_zenith: [70, 120, 200],
             sky_horizon: [188, 208, 230],
             fog_density: 0.0,
+            god_rays: 0.0,
         }
     }
 }
@@ -681,7 +691,8 @@ impl VoxelRenderer {
             u.extend_from_slice(&v.to_ne_bytes());
         }
         let s = normalize3(self.sun_dir);
-        for v in [s[0], s[1], s[2], 0.0] {
+        // sun_dir.w lleva la fuerza de god rays (in-scattering volumétrico).
+        for v in [s[0], s[1], s[2], self.atmosphere.god_rays.max(0.0)] {
             u.extend_from_slice(&v.to_ne_bytes());
         }
         for v in [self.cdim[0] as f32, self.cdim[1] as f32, self.cdim[2] as f32, 0.0] {
@@ -897,7 +908,7 @@ struct U {
     inv_vp: mat4x4<f32>,
     cam_eye: vec4<f32>,
     grid_dim: vec4<f32>,   // xyz = dim fino, w = brick size
-    sun_dir: vec4<f32>,    // xyz = dirección hacia el sol (normalizada)
+    sun_dir: vec4<f32>,    // xyz = dirección hacia el sol (normalizada), w = fuerza de god rays
     cdim: vec4<f32>,       // xyz = dim grueso (celdas de brick)
     atlas: vec4<f32>,      // xyz = slots por eje en el atlas del pool
     sky_zenith: vec4<f32>, // xyz = color cenit, w = densidad de niebla (0 = off)
@@ -1181,6 +1192,36 @@ struct FOut {
     @builtin(frag_depth) depth: f32,
 };
 
+// **God rays** (in-scattering volumétrico): marcha el rayo de cámara `ro+rd·t`
+// hasta `max_t` tomando muestras; en cada una tira un shadow ray hacia el sol y
+// acumula "cuánta luz solar llega a ese punto de la niebla". El resultado, pesado
+// por una fase hacia-adelante (brilla mirando al sol) y por la densidad de niebla,
+// es la luz dispersada hacia el ojo → haces visibles cruzando el aire. Devuelve un
+// escalar [0,1+] que se multiplica por el color cálido del sol. Coste: N shadow
+// rays por píxel — sólo se llama si `u.sun_dir.w > 0` y hay niebla.
+fn god_rays(ro: vec3<f32>, rd: vec3<f32>, max_t: f32, dim: vec3<f32>, B: f32) -> f32 {
+    let strength = u.sun_dir.w;
+    let fogd = u.sky_zenith.w;
+    if (strength <= 0.0 || fogd <= 0.0) { return 0.0; }
+    let march_len = min(max_t, 220.0);
+    let steps = 12;
+    let dt = march_len / f32(steps);
+    // Dither del paso inicial para romper el bandeo de pocas muestras.
+    let jitter = fract(sin(dot(rd.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    var acc = 0.0;
+    for (var i = 0; i < steps; i = i + 1) {
+        let tt = (f32(i) + jitter) * dt;
+        if (tt >= max_t) { break; }
+        let sp = ro + rd * tt;
+        let sh = trace(sp, u.sun_dir.xyz, dim, B);
+        acc = acc + select(1.0, 0.0, sh.hit); // 1 si el sol llega, 0 si está en sombra
+    }
+    acc = acc / f32(steps);
+    let phase = pow(max(dot(rd, u.sun_dir.xyz), 0.0), 6.0); // fase hacia-adelante
+    let depth_fac = 1.0 - exp(-march_len * fogd);           // más aire, más dispersión
+    return acc * strength * (0.15 + 0.85 * phase) * depth_fac;
+}
+
 @fragment
 fn fs(in: VOut) -> FOut {
     let p_near = u.inv_vp * vec4<f32>(in.ndc, 0.0, 1.0);
@@ -1220,8 +1261,11 @@ fn fs(in: VOut) -> FOut {
         // lejana, así una malla por delante igual se dibuja); sin niebla,
         // descartamos para dejar ver el fondo vello (comportamiento clásico).
         if (fog_density > 0.0) {
+            // Cielo + god rays: los haces se ven sobre todo contra el fondo abierto.
+            let gr = god_rays(ro, rd, 1e30, dim, B);
+            let glow = vec3<f32>(1.0, 0.95, 0.82) * gr;
             var sky: FOut;
-            sky.color = vec4<f32>(sky_color(rd), 1.0);
+            sky.color = vec4<f32>(sky_color(rd) + glow, 1.0);
             sky.depth = 1.0;
             return sky;
         }
@@ -1310,6 +1354,9 @@ fn fs(in: VOut) -> FOut {
     if (fog_density > 0.0) {
         let f = 1.0 - exp(-t_hit * fog_density);
         color = mix(color, sky_color(rd), f);
+        // God rays: haz volumétrico en el aire DELANTE de la superficie golpeada.
+        let gr = god_rays(ro, rd, t_hit, dim, B);
+        color = color + vec3<f32>(1.0, 0.95, 0.82) * gr;
     }
 
     var out: FOut;

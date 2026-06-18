@@ -209,10 +209,13 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
         let mut poses = Vec::with_capacity(scripts.len());
         let mut centroid = Vec3::ZERO;
         for (script, ch) in scripts.iter().zip(&chars) {
-            let s = script.sample(t);
+            // Tiempo cuantizado a la tasa propia del actor: el Héroe (12 fps) se
+            // mueve y posa en doses; los demás, fluidos. Sello de animación.
+            let at = script.quantize(t);
+            let s = script.sample(at);
             let pos = preview.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32);
             centroid += pos;
-            poses.push((pos, s, ch));
+            poses.push((pos, s, ch, at));
         }
         let look = if poses.is_empty() {
             Vec3::new(dim[0] as f32 * 0.5, dim[1] as f32 * 0.32, dim[2] as f32 * 0.5)
@@ -220,13 +223,13 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
             centroid / poses.len() as f32 + Vec3::new(0.0, 1.0, 0.0)
         };
         let cast_d = 6.0 + poses.len() as f32 * 1.2;
-        let camera = scene.active_shot(t).resolve(look, cast_d, t);
+        let camera = scene.camera_at(look, cast_d, t);
 
         let mut metas = Vec::with_capacity(poses.len());
-        for (pos, s, ch) in &poses {
+        for (pos, s, ch, at) in &poses {
             let mut a = ch.to_actor(*pos, s.facing);
             a.set_clip(s.clip);
-            a.advance(t);
+            a.advance(*at);
             a.look_at(Some(camera.eye));
             let (v, i) = a.mesh();
             metas.push((a.model(), v, i));

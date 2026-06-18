@@ -37,6 +37,7 @@ fn main() {
         sky_zenith: [92, 146, 208],
         sky_horizon: [228, 206, 162], // horizonte arenoso/caluroso
         fog_density: 0.22 / dim_xz as f32, // niebla suave: no lavar el llano
+        god_rays: 0.0,
     };
 
     // Cámara baja, en 3/4, para leer el llano + los cactus recortados contra el cielo.

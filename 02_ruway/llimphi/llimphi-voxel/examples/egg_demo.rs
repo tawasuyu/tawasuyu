@@ -36,7 +36,7 @@ fn main() {
 
     let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
     vr.sun_dir = [0.5, 0.7, 0.4];
-    vr.atmosphere = Atmosphere { sky_zenith: [96, 150, 210], sky_horizon: [226, 208, 168], fog_density: 0.0 };
+    vr.atmosphere = Atmosphere { sky_zenith: [96, 150, 210], sky_horizon: [226, 208, 168], fog_density: 0.0, god_rays: 0.0 };
 
     let mut meshes: Vec<Renderer3d> = Vec::new();
     let push = |meshes: &mut Vec<Renderer3d>, hal: &Hal, v: &[_], i: &[u16], model| {

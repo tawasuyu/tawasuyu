@@ -60,6 +60,7 @@ impl World {
             sky_zenith: [64, 118, 196],
             sky_horizon: [202, 218, 236],
             fog_density: 0.5 / dim_xz as f32,
+            god_rays: 0.6,
         };
 
         let monument = Renderer3d::new(device, FMT);

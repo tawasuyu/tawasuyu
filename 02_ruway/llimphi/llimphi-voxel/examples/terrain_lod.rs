@@ -41,6 +41,7 @@ fn main() {
         sky_zenith: [70, 120, 196],
         sky_horizon: [200, 216, 234],
         fog_density: 1.1 / dim_xz as f32,
+        god_rays: 0.0,
     };
     let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
     vr.sun_dir = sun;

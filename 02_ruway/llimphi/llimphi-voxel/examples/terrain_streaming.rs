@@ -59,6 +59,7 @@ fn main() {
         sky_zenith: [64, 118, 196],
         sky_horizon: [202, 218, 236],
         fog_density: 0.7 / dim_xz as f32,
+        god_rays: 0.0,
     };
     let (_, total_bricks) = vr.brick_usage();
     let full_pool_kib = vr.memory_bytes().0 / 1024;

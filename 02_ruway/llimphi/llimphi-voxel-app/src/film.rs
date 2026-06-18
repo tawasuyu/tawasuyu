@@ -314,6 +314,7 @@ pub fn vox_shot() {
         sky_zenith: [60, 110, 190],
         sky_horizon: [202, 216, 236],
         fog_density: 0.0, // modelo chico: sin niebla
+        god_rays: 0.0,
     };
     let mut scene = Scene3d::new();
 

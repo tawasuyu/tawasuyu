@@ -86,13 +86,44 @@ pub struct ActorSample {
 #[derive(Debug, Clone, Default)]
 pub struct ActorScript {
     keys: Vec<ActorKey>,
+    /// **Tasa de cuadros propia** de este actor (`None` = la nativa de la peli,
+    /// fluida). Si está, el tiempo se *cuantiza* a esa rejilla antes de muestrear
+    /// posición **y** pose: el actor se mueve "a tirones" (animación *en doses*,
+    /// estilo stop-motion/Spider-Verse) aunque el render salga a 30/60. Es el
+    /// **sello de animación**: el Héroe a 12 fps contra un Avatar fluido a 60 da
+    /// una extrañeza que nadie obtiene usando el motor por defecto.
+    frame_rate: Option<u32>,
 }
 
 impl ActorScript {
     /// Crea el guion (ordena las keys por `t`).
     pub fn new(mut keys: Vec<ActorKey>) -> Self {
         keys.sort_by(|a, b| a.t.total_cmp(&b.t));
-        Self { keys }
+        Self { keys, frame_rate: None }
+    }
+
+    /// Fija la **tasa de cuadros propia** del actor (animación en doses). `0` o
+    /// quitarla = fluido (nativo). Ver [`quantize`](Self::quantize).
+    pub fn with_frame_rate(mut self, fps: Option<u32>) -> Self {
+        self.frame_rate = fps.filter(|&f| f > 0);
+        self
+    }
+
+    /// La tasa de cuadros propia del actor (`None` = fluido).
+    pub fn frame_rate(&self) -> Option<u32> {
+        self.frame_rate
+    }
+
+    /// **Cuantiza** un instante a la rejilla de cuadros del actor: si tiene
+    /// `frame_rate = Some(fps)`, devuelve el inicio del cuadro que contiene a `t`
+    /// (`floor(t·fps)/fps`); si no, devuelve `t` tal cual. El reproductor debe
+    /// muestrear **posición y pose** con este tiempo cuantizado para que el cuerpo
+    /// avance en escalones (no sólo se teletransporte la posición).
+    pub fn quantize(&self, t: f32) -> f32 {
+        match self.frame_rate {
+            Some(fps) => (t * fps as f32).floor() / fps as f32,
+            None => t,
+        }
     }
 
     /// Tiempo de la última key (duración del guion del actor).
@@ -287,6 +318,27 @@ mod tests {
         let e = s.sample(3.0);
         assert_eq!((e.gx, e.clip), (10.0, Clip::Wave));
         assert!((e.facing - FRAC_PI_2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn frame_rate_cuantiza_el_tiempo_en_doses() {
+        // Sin tasa propia: fluido (t pasa tal cual).
+        let fluido = ActorScript::new(vec![ActorKey::at(0.0, 0.0, 0.0)]);
+        assert_eq!(fluido.quantize(0.137), 0.137);
+        assert_eq!(fluido.frame_rate(), None);
+
+        // A 12 fps: el tiempo cae al inicio del cuadro (1/12 ≈ 0.0833).
+        let heroe = fluido.clone().with_frame_rate(Some(12));
+        assert_eq!(heroe.frame_rate(), Some(12));
+        // t=0.13 → cuadro 1 (0.0833); t=0.17 → cuadro 2 (0.1667).
+        assert!((heroe.quantize(0.13) - 1.0 / 12.0).abs() < 1e-6);
+        assert!((heroe.quantize(0.17) - 2.0 / 12.0).abs() < 1e-6);
+        // Dentro del mismo cuadro, dos tiempos distintos dan EL MISMO sample → "doses".
+        assert_eq!(heroe.quantize(0.090), heroe.quantize(0.160));
+        assert_eq!(heroe.sample(heroe.quantize(0.090)).gx, heroe.sample(heroe.quantize(0.160)).gx);
+
+        // 0 fps se trata como sin tasa (fluido).
+        assert_eq!(fluido.clone().with_frame_rate(Some(0)).frame_rate(), None);
     }
 
     #[test]

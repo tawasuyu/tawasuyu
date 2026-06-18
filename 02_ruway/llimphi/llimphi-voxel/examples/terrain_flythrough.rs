@@ -40,6 +40,7 @@ fn main() {
         sky_zenith: [64, 118, 196],
         sky_horizon: [202, 218, 236],
         fog_density: 0.9 / dim_xz as f32, // un poco más densa: estamos adentro
+        god_rays: 0.0,
     };
 
     let inter = hal.device.create_texture(&wgpu::TextureDescriptor {
