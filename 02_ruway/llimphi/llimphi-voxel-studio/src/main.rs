@@ -30,7 +30,8 @@ use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_voxel::{
-    world_dim, ActorScript, Age, CharSpec, Project, SceneSpec, WorldRecipe, PREVIEW_DIM_XZ,
+    world_dim, ActorScript, Age, CharSpec, Project, SceneSpec, ShotKind, ShotSpec, WorldRecipe,
+    PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
@@ -113,6 +114,11 @@ enum Msg {
     Scrub(f32),
     AiSceneGenerate,
     AiSceneResult(SceneSpec),
+    /// Cámara de escena: alterna órbita libre ↔ guion (planos); agrega/quita plano
+    /// en el instante actual.
+    ToggleSceneCam,
+    AddShot,
+    RemoveShot,
     /// Personajes (constitución + colores).
     SelectChar(usize),
     CycleCharAge,
@@ -151,6 +157,8 @@ struct Model {
     /// Tiempo de reproducción (seg) y si está corriendo.
     time: f32,
     playing: bool,
+    /// Cámara de escena guionada (planos) vs órbita libre.
+    script_cam: bool,
 }
 
 impl Model {
@@ -382,6 +390,23 @@ impl App for Studio {
                 model.ai_busy = false;
                 model.ai_input.set_text("");
                 model.status = format!("escena generada: «{}»", model.project.scenes[idx].name);
+            }
+            Msg::ToggleSceneCam => model.script_cam = !model.script_cam,
+            Msg::AddShot => {
+                let t = model.time;
+                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
+                    // El tipo del plano nuevo cicla por la cantidad ya puesta.
+                    let kind = ShotKind::ALL[s.shots.len() % ShotKind::ALL.len()];
+                    s.shots.push(ShotSpec { start: t, kind });
+                    s.shots.sort_by(|a, b| a.start.total_cmp(&b.start));
+                    model.status = format!("plano agregado: {} @ {t:.1}s", kind.label());
+                }
+            }
+            Msg::RemoveShot => {
+                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
+                    s.shots.pop();
+                    model.status = "último plano quitado".into();
+                }
             }
             Msg::SelectChar(i) => {
                 if i < model.project.characters.len() {
@@ -669,6 +694,7 @@ fn center_canvas(model: &Model) -> View<Msg> {
         Mode::Scenes => {
             let recipe = model.scene_recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
             let scene = model.scene().cloned();
+            let script_cam = model.script_cam;
             let scripts: Vec<ActorScript> =
                 scene.as_ref().map(|s| s.scripts()).unwrap_or_default();
             let chars: Vec<CharSpec> = scene
@@ -702,9 +728,14 @@ fn center_canvas(model: &Model) -> View<Msg> {
                 } else {
                     centroid / poses.len() as f32 + Vec3::new(0.0, 1.0, 0.0)
                 };
-                // Cámara cerca del reparto; la rueda (que mueve `dist`) acerca/aleja.
+                // Cámara: en modo guion, el plano vigente; si no, órbita libre
+                // (la rueda, que mueve `dist`, acerca/aleja).
+                let cast_d = 6.0 + poses.len() as f32 * 1.2;
                 let scene_dist = (dist * 0.18).clamp(10.0, 70.0);
-                let camera = Camera3d::orbit(look, yaw, pitch, scene_dist);
+                let camera = match (script_cam, &scene) {
+                    (true, Some(sc)) => sc.active_shot(time).resolve(look, cast_d, time),
+                    _ => Camera3d::orbit(look, yaw, pitch, scene_dist),
+                };
                 // Posar cada actor (mirando a la cámara) y mallar.
                 let mut metas = Vec::with_capacity(poses.len());
                 for (pos, s, ch) in &poses {
@@ -850,6 +881,8 @@ fn scene_right(model: &Model) -> View<Msg> {
     };
     let dur = s.duration;
     let n_actors = s.actors.len();
+    let n_shots = s.shots.len();
+    let cam_label = if model.script_cam { "cámara: guion" } else { "cámara: órbita" };
     let world_name = model
         .project
         .worlds
@@ -871,11 +904,20 @@ fn scene_right(model: &Model) -> View<Msg> {
                 Some(Msg::SetSceneDur(dur + dv))
             }),
             spacer(8.0),
+            section_title("CÁMARA", theme),
+            button_view(cam_label, &btn, Msg::ToggleSceneCam),
+            spacer(4.0),
+            body_text(format!("{n_shots} planos"), theme.fg_muted, theme),
+            spacer(4.0),
+            button_view("+ plano acá", &btn, Msg::AddShot),
+            spacer(4.0),
+            button_view("− quitar plano", &btn, Msg::RemoveShot),
+            spacer(8.0),
             section_title("REPARTO", theme),
             body_text(format!("{n_actors} actores"), theme.fg_muted, theme),
             spacer(8.0),
             body_text(
-                "arrastrá el canvas para orbitar · ▶ reproduce el guion".into(),
+                "▶ reproduce el guion · en órbita, arrastrá para mirar".into(),
                 theme.fg_placeholder,
                 theme,
             ),
@@ -993,6 +1035,7 @@ pub(crate) fn demo_model() -> Model {
         char_sel: 0,
         time: 0.0,
         playing: false,
+        script_cam: true,
     }
 }
 

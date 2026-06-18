@@ -14,6 +14,7 @@ use crate::actor::{Actor, Age, Clip};
 use crate::director::{ActorKey, ActorScript};
 use crate::worldgen::WorldRecipe;
 use llimphi_3d::glam::Vec3;
+use llimphi_3d::Camera3d;
 
 /// Dimensión por defecto de la grilla con la que el editor previsualiza un mundo
 /// (cúbica en XZ, alto = 0.4·lado, mínimo 48) — el mismo criterio que la app.
@@ -107,22 +108,106 @@ impl ActorSpec {
     }
 }
 
+/// **Tipo de plano** de cámara: un encuadre cinematográfico de alto nivel que se
+/// resuelve contra el **centroide del reparto** (no contra `eye/target` crudos), así
+/// es trivial de elegir y de generar por IA. [`resolve`](Self::resolve) produce la
+/// [`Camera3d`] del frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShotKind {
+    /// Establecedor: lejos y alto, presenta la escena.
+    Establishing,
+    /// Primer plano: cerca, a la altura del pecho.
+    CloseUp,
+    /// Lateral: desde el costado.
+    Side,
+    /// Órbita: gira lento alrededor del reparto.
+    Orbit,
+}
+
+impl ShotKind {
+    /// Todos los planos (para ciclar en un editor).
+    pub const ALL: [ShotKind; 4] =
+        [ShotKind::Establishing, ShotKind::CloseUp, ShotKind::Side, ShotKind::Orbit];
+
+    /// Nombre legible (español).
+    pub fn label(self) -> &'static str {
+        match self {
+            ShotKind::Establishing => "establecedor",
+            ShotKind::CloseUp => "primer plano",
+            ShotKind::Side => "lateral",
+            ShotKind::Orbit => "órbita",
+        }
+    }
+
+    /// El plano siguiente (cicla).
+    pub fn next(self) -> ShotKind {
+        let i = ShotKind::ALL.iter().position(|&k| k == self).unwrap_or(0);
+        ShotKind::ALL[(i + 1) % ShotKind::ALL.len()]
+    }
+
+    /// Resuelve la cámara del plano: mira a `look` (centroide del reparto, ya
+    /// elevado a la altura del pecho), con el ojo según el tipo, a distancia base
+    /// `d` (escala con el tamaño del reparto). `t` (seg) anima la órbita.
+    pub fn resolve(self, look: Vec3, d: f32, t: f32) -> Camera3d {
+        let (eye, fov) = match self {
+            ShotKind::Establishing => {
+                (look + Vec3::new(-0.5 * d, 0.9 * d, -1.6 * d), 50.0)
+            }
+            ShotKind::CloseUp => (look + Vec3::new(0.25 * d, 0.45 * d, -0.85 * d), 40.0),
+            ShotKind::Side => (look + Vec3::new(1.35 * d, 0.4 * d, 0.15 * d), 46.0),
+            ShotKind::Orbit => {
+                let a = t * 0.6;
+                (look + Vec3::new(a.cos() * 1.3 * d, 0.6 * d, a.sin() * 1.3 * d), 48.0)
+            }
+        };
+        Camera3d { eye, target: look, fovy_rad: fov_f32_to_rad(fov), ..Camera3d::default() }
+    }
+}
+
+/// Grados → radianes (helper local para no depender de glam en el call site).
+fn fov_f32_to_rad(deg: f32) -> f32 {
+    deg * std::f32::consts::PI / 180.0
+}
+
+/// Un **plano** de la escena: el tipo de encuadre y desde qué instante (seg) está
+/// activo. El plano vigente en `t` es el último con `start ≤ t` (corte duro entre
+/// planos).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ShotSpec {
+    pub start: f32,
+    pub kind: ShotKind,
+}
+
 /// **Especificación serializable de una escena**: el mundo de fondo (`world`,
-/// índice en [`Project::worlds`]), la duración y el reparto guionado. Es la versión
-/// editable/IA-emisible del [`Sequence`](crate::Sequence) del director; se compila
-/// con [`scripts`](Self::scripts) y se reproduce posando cada actor en `sample(t)`.
+/// índice en [`Project::worlds`]), la duración, el reparto guionado y los **planos**
+/// de cámara. Es la versión editable/IA-emisible del [`Sequence`](crate::Sequence)
+/// del director; se compila con [`scripts`](Self::scripts) y se reproduce posando
+/// cada actor en `sample(t)` con la cámara del plano vigente.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneSpec {
     pub name: String,
     pub world: usize,
     pub duration: f32,
     pub actors: Vec<ActorSpec>,
+    #[serde(default)]
+    pub shots: Vec<ShotSpec>,
 }
 
 impl SceneSpec {
     /// Los guiones de los actores, listos para `sample(t)`.
     pub fn scripts(&self) -> Vec<ActorScript> {
         self.actors.iter().map(|a| a.to_script()).collect()
+    }
+
+    /// El plano vigente en `t` (el último con `start ≤ t`); `Establishing` si no
+    /// hay planos definidos.
+    pub fn active_shot(&self, t: f32) -> ShotKind {
+        self.shots
+            .iter()
+            .filter(|s| s.start <= t)
+            .last()
+            .map(|s| s.kind)
+            .unwrap_or(ShotKind::Establishing)
     }
 
     /// **Escena patrón "entran y saludan"**: `n` actores entran caminando por el
@@ -158,7 +243,12 @@ impl SceneSpec {
                 ],
             });
         }
-        Self { name: name.into(), world, duration: dur, actors }
+        // Dos planos: establecedor durante la caminata, primer plano en el gesto.
+        let shots = vec![
+            ShotSpec { start: 0.0, kind: ShotKind::Establishing },
+            ShotSpec { start: t_turn, kind: ShotKind::CloseUp },
+        ];
+        Self { name: name.into(), world, duration: dur, actors, shots }
     }
 }
 
@@ -256,6 +346,20 @@ mod tests {
         let start = scripts[0].sample(0.0);
         let mid = scripts[0].sample(1.3);
         assert!(mid.gx > start.gx, "el actor avanza en X: {} → {}", start.gx, mid.gx);
+    }
+
+    #[test]
+    fn plano_vigente_corta_en_el_tiempo() {
+        let dim = world_dim(128);
+        let s = SceneSpec::walk_and_emote("demo", 0, 2, Clip::Wave, dim);
+        // Arranca en establecedor; tras el giro (t≈3) pasa a primer plano.
+        assert_eq!(s.active_shot(0.5), ShotKind::Establishing);
+        assert_eq!(s.active_shot(3.5), ShotKind::CloseUp);
+        // El plano resuelve una cámara que mira al centroide.
+        let look = Vec3::new(10.0, 2.0, 10.0);
+        let cam = ShotKind::CloseUp.resolve(look, 9.0, 1.0);
+        assert_eq!(cam.target, look);
+        assert!((cam.eye - look).length() > 1.0, "el ojo está separado del objetivo");
     }
 
     #[test]
