@@ -9,7 +9,7 @@ look like if you owned every layer of it?* It is a single Rust workspace of
 ~450 crates that contains, among other things:
 
 - an **operating system** that boots on bare metal, with no Linux underneath (*wawa*),
-- a **GUI engine** with its own widgets, layout, text and GPU pipeline (*llimphi*),
+- a **2D + 3D GUI engine** with its own widgets, layout, text, GPU pipeline and a voxel renderer (*llimphi*),
 - a **Wayland compositor and window manager** (*mirada*),
 - a **web browser engine** (*puriy*),
 - a **writing environment** where one document lives as many parallel bodies (*pluma*),
@@ -40,6 +40,7 @@ Pick something to run:
 | You want to see… | Run |
 |---|---|
 | The GUI engine's widget gallery | `cargo run -p llimphi-gallery --release` |
+| A voxel world creator (edit worlds/characters/scenes, AI assist, export to video) | `cargo run -p llimphi-voxel-studio --release` |
 | A fast file-tree + text editor | `cargo run -p nada --release` |
 | One document as many parallel bodies (translation/tone/summary) | `cargo run -p pluma-editor-llimphi --example multilienzo_completo_demo --release` |
 | The astronomy/astrology workbench | `cargo run -p cosmos-app-llimphi --release` |
