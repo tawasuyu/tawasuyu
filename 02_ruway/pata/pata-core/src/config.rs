@@ -590,9 +590,10 @@ impl Config {
         // global de pestañas no aparecía hasta que el usuario lo escribiera
         // a mano en el TOML.
         let mut rail = Surface::sidebar(Anchor::Left);
-        // Reserva su franja: si flota (overlay) los dientes tapan/cortan el
-        // borde izquierdo de las ventanas teseladas. «Supeditado al desktop».
-        rail.reserve = Some(true);
+        // El rail izquierdo es OVERLAY canónico (sobresale, no reserva): sigue la
+        // decisión global `dientes_outside`. El que va «supeditado al desktop»
+        // (reserva) es el DERECHO (abajo). `None` = sigue la global.
+        rail.reserve = None;
         rail.tabs.push(SidebarTab::new(
             "monads",
             "Mónadas",
