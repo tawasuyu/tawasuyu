@@ -364,6 +364,11 @@ enum Msg {
     BarWidgetAdd(usize, u8, String),
     /// Quitar el widget `idx` del slot `slot` de la superficie `surf`.
     BarWidgetRemove(usize, u8, usize),
+    /// Compositor de dientes de sidebar: agregar un diente con contenido `kind`
+    /// a la superficie `surf`.
+    SidebarTabAdd(usize, String),
+    /// Quitar el diente `idx` de la superficie `surf`.
+    SidebarTabRemove(usize, usize),
 }
 
 // =====================================================================
@@ -478,6 +483,32 @@ impl App for Panel {
                     };
                     if idx < dst.len() {
                         dst.remove(idx);
+                        m.dirty.pata = true;
+                        sync_active_profile(&mut m);
+                    }
+                }
+            }
+            Msg::SidebarTabAdd(surf, kind) => {
+                // Icono/rótulo derivados del catálogo (best-effort).
+                let (icon, label) = pata_core::widget_catalog()
+                    .iter()
+                    .find(|w| w.kind == kind)
+                    .map(|w| (w.icon.to_string(), w.label.to_string()))
+                    .unwrap_or_else(|| ("▫".to_string(), kind.clone()));
+                if let Some(s) = m.pata.surfaces.get_mut(surf) {
+                    s.tabs.push(pata_core::SidebarTab::new(
+                        icon,
+                        label,
+                        pata_core::WidgetSpec::new(kind),
+                    ));
+                    m.dirty.pata = true;
+                    sync_active_profile(&mut m);
+                }
+            }
+            Msg::SidebarTabRemove(surf, idx) => {
+                if let Some(s) = m.pata.surfaces.get_mut(surf) {
+                    if idx < s.tabs.len() {
+                        s.tabs.remove(idx);
                         m.dirty.pata = true;
                         sync_active_profile(&mut m);
                     }
@@ -3493,6 +3524,116 @@ fn bar_widgets_view(surf: usize, s: &pata_core::Surface, theme: &Theme) -> View<
     ])
 }
 
+/// Compositor de los **dientes** de un sidebar: cada diente (icono + rótulo +
+/// contenido) como una fila con ✕, y una **paleta** de widgets `on_sidebar` del
+/// catálogo para agregar un diente nuevo. Si se activan varios módulos sidebar,
+/// todos sus dientes viven en este mismo rail.
+fn sidebar_dientes_view(surf: usize, s: &pata_core::Surface, theme: &Theme) -> View<Msg> {
+    // Filas de los dientes actuales.
+    let mut filas: Vec<View<Msg>> = s
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let icon = if t.icon.chars().count() <= 2 { t.icon.clone() } else { "❖".to_string() };
+            let label = if t.label.trim().is_empty() { t.content.kind.clone() } else { t.label.clone() };
+            let nombre = View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(format!("{icon}  {label}   ·  {}", t.content.kind), 13.0, theme.fg_text, Alignment::Start)
+            .ellipsis(1);
+            let del = View::new(Style {
+                size: Size { width: length(28.0_f32), height: length(28.0_f32) },
+                flex_shrink: 0.0,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .radius(5.0)
+            .fill(theme.bg_panel_alt)
+            .hover_fill(theme.bg_button_hover)
+            .tooltip("Quitar diente".to_string())
+            .on_click(Msg::SidebarTabRemove(surf, i))
+            .text_aligned("✕".to_string(), 14.0, theme.accent, Alignment::Center);
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+                padding: Rect { left: length(8.0_f32), right: length(4.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                ..Default::default()
+            })
+            .fill(theme.bg_panel)
+            .radius(5.0)
+            .children(vec![nombre, del])
+        })
+        .collect();
+    if filas.is_empty() {
+        filas.push(
+            View::new(Style { size: Size { width: auto(), height: length(24.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+                .text_aligned("(sin dientes — agregá uno abajo)".to_string(), 12.0, theme.fg_muted, Alignment::Start),
+        );
+    }
+
+    // Paleta: widgets que pueden ser contenido de un diente.
+    let pal: Vec<View<Msg>> = pata_core::widgets_for_surface(pata_core::SurfaceKind::Sidebar)
+        .into_iter()
+        .map(|w| {
+            let kind = w.kind.to_string();
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+                size: Size { width: auto(), height: length(28.0_f32) },
+                padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                ..Default::default()
+            })
+            .radius(5.0)
+            .fill(theme.bg_panel)
+            .hover_fill(theme.bg_button_hover)
+            .border(1.0, theme.border)
+            .tooltip(format!("Agregar diente: {}", w.label))
+            .on_click(Msg::SidebarTabAdd(surf, kind))
+            .text_aligned(format!("＋ {} {}", w.icon, w.label), 12.0, theme.fg_muted, Alignment::Start)
+        })
+        .collect();
+    let paleta = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(6.0_f32), height: length(6.0_f32) },
+        ..Default::default()
+    })
+    .children(pal);
+
+    let lista = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(4.0_f32), height: length(4.0_f32) },
+        ..Default::default()
+    })
+    .children(filas);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
+        padding: Rect { left: length(16.0_f32), right: length(16.0_f32), top: length(12.0_f32), bottom: length(8.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style { size: Size { width: auto(), height: length(20.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned("Dientes del sidebar".to_string(), 13.0, theme.fg_text, Alignment::Start),
+        lista,
+        View::new(Style { size: Size { width: auto(), height: length(16.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned("agregar diente ↓".to_string(), 10.0, theme.fg_muted, Alignment::Start),
+        paleta,
+    ])
+}
+
 /// Vista custom de una **biblioteca de sets** (perfiles/themes/atajos/animaciones):
 /// una fila por item con [○ radio + nombre] [⧉ duplicar] [✕ borrar], y abajo
 /// SÓLO «＋ Crear». `section_id` es el id de la sección-lista (`"atajos::conjuntos"`,
@@ -3685,6 +3826,22 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
                 // Superficie barra/dock: los campos del tipo + el compositor de
                 // su fila de widgets (Inicio/Centro/Fin) debajo.
                 let composer = bar_widgets_view(surf, &model.pata.surfaces[surf], theme);
+                View::new(Style {
+                    flex_direction: FlexDirection::Column,
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![composer, panel])
+            } else if let Some(surf) = sec
+                .id
+                .strip_prefix("pata::surface")
+                .and_then(|n| n.parse::<usize>().ok())
+                .filter(|&i| {
+                    model.pata.surfaces.get(i).is_some_and(|s| s.kind == pata_core::SurfaceKind::Sidebar)
+                })
+            {
+                // Sidebar: compositor de sus dientes + los campos del tipo debajo.
+                let composer = sidebar_dientes_view(surf, &model.pata.surfaces[surf], theme);
                 View::new(Style {
                     flex_direction: FlexDirection::Column,
                     size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },

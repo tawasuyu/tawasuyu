@@ -220,6 +220,7 @@ pub fn widget_catalog() -> &'static [WidgetCatalogEntry] {
         W { kind: "shuma", label: "Shuma (shell completo)", icon: "❯", on_bar: false, on_sidebar: true },
         // --- ricos, de sidebar (paneles con más capacidad) ---
         W { kind: "navigator", label: "Navegador de archivos", icon: "❖", on_bar: false, on_sidebar: true },
+        W { kind: "search", label: "Buscar", icon: "🔍", on_bar: false, on_sidebar: true },
         // --- fondo de escritorio ---
         W { kind: "program_manager", label: "Program Manager", icon: "▤", on_bar: false, on_sidebar: false },
     ]
