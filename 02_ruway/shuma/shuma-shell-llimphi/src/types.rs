@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use llimphi_motion::Tween;
 use llimphi_theme::Theme;
+use llimphi_widget_panes::{Axis, PaneId, Side};
 use llimphi_widget_text_input::TextInputState;
 use shuma_module::{ModuleContributions, Source};
 use shuma_sysmon::{Snapshot, SystemSampler};
@@ -14,6 +15,7 @@ use shuma_sysmon::{Snapshot, SystemSampler};
 use crate::containers::{prepare_rootfs, rootfs_path_for, rootfs_listo};
 use crate::env::{default_shell_source, engine_preferido};
 use crate::hosts;
+use crate::workspace::Workspace;
 
 // ─── Tipos de módulos conocidos ────────────────────────────────────
 
@@ -43,12 +45,15 @@ impl Kind {
     }
 }
 
-/// Cuál de las tres instancias-módulo de una sesión direcciona un `Slot` o un `Msg`.
+/// Cuál instancia-módulo de una sesión direcciona un `Slot` o un `Msg`.
+/// `Shell` es el panel **con foco** del workspace tiling; `Pane(id)`
+/// direcciona un panel concreto (tiled o flotante) de la tab activa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Which {
     Shell,
     Canvas,
     Matilda,
+    Pane(PaneId),
 }
 
 /// Dónde corre el shell de la sesión.
@@ -519,9 +524,10 @@ pub(crate) struct Session {
     pub pending_focus: Option<PendingField>,
     /// Persistir el output del shell a disco y restaurarlo al reabrir.
     pub persist: bool,
-    #[allow(dead_code)]
     pub source: Source,
-    pub shell: Instance,
+    /// El layout tipo zellij de esta sesión: tabs + tiling + flotantes. Cada
+    /// panel es un shell vivo; `shell()` devuelve el panel con foco.
+    pub workspace: Workspace,
     pub canvas: Instance,
     pub matilda: Instance,
 }
@@ -529,7 +535,7 @@ pub(crate) struct Session {
 impl Session {
     pub(crate) fn build(name: String, kind: SessionKind, number: Option<u32>, source: Source) -> Self {
         Self {
-            shell: Instance::shell(name.clone(), source.clone()),
+            workspace: Workspace::single(Instance::shell(name.clone(), source.clone())),
             canvas: Instance::canvas(rimay_localize::t("shuma-label-canvas")),
             matilda: Instance::matilda(name.clone(), source.clone()),
             name,
@@ -577,14 +583,24 @@ impl Session {
         self.host_label.clone().unwrap_or_else(|| "local".to_string())
     }
 
+    /// El shell con foco del workspace tiling — el que recibe el teclado y el
+    /// que el chasis trata como "el shell de la sesión".
+    pub(crate) fn shell(&self) -> &Instance {
+        self.workspace.focused_instance()
+    }
+
+    pub(crate) fn shell_mut(&mut self) -> &mut Instance {
+        self.workspace.focused_instance_mut()
+    }
+
     pub(crate) fn active_data(&self) -> bool {
-        matches!(&self.shell.state, ModuleState::Shell(s) if s.is_running())
+        matches!(&self.shell().state, ModuleState::Shell(s) if s.is_running())
     }
 
     /// A6 — comandos largos terminados pendientes de acuse en esta sesión (la
     /// badge del diente). `0` si no es un shell o no hay nada pendiente.
     pub(crate) fn long_alerts(&self) -> usize {
-        match &self.shell.state {
+        match &self.shell().state {
             ModuleState::Shell(s) => s.long_alerts(),
             _ => 0,
         }
@@ -592,7 +608,7 @@ impl Session {
 
     /// A6 — el usuario miró esta sesión: limpia la badge de comando largo.
     pub(crate) fn ack_long_alerts(&mut self) {
-        if let ModuleState::Shell(s) = &mut self.shell.state {
+        if let ModuleState::Shell(s) = &mut self.shell_mut().state {
             s.ack_long_alerts();
         }
     }
@@ -651,24 +667,32 @@ impl Session {
                 Isolation::Remote => ConnState::Pending,
             }
         };
-        self.shell = Instance::shell(self.name.clone(), source.clone());
+        *self.shell_mut() = Instance::shell(self.name.clone(), source.clone());
         self.matilda = Instance::matilda(self.name.clone(), source.clone());
         self.source = source;
     }
 
     pub(crate) fn instance(&self, w: Which) -> &Instance {
         match w {
-            Which::Shell => &self.shell,
+            Which::Shell => self.shell(),
             Which::Canvas => &self.canvas,
             Which::Matilda => &self.matilda,
+            Which::Pane(id) => self.workspace.pane(id).unwrap_or_else(|| self.shell()),
         }
     }
 
     pub(crate) fn instance_mut(&mut self, w: Which) -> &mut Instance {
         match w {
-            Which::Shell => &mut self.shell,
+            Which::Shell => self.shell_mut(),
             Which::Canvas => &mut self.canvas,
             Which::Matilda => &mut self.matilda,
+            Which::Pane(id) => {
+                if self.workspace.pane(id).is_some() {
+                    self.workspace.pane_mut(id).unwrap()
+                } else {
+                    self.shell_mut()
+                }
+            }
         }
     }
 
@@ -735,7 +759,7 @@ impl Session {
             return;
         }
         let source = self.resolve_source();
-        self.shell = Instance::shell(self.name.clone(), source.clone());
+        *self.shell_mut() = Instance::shell(self.name.clone(), source.clone());
         self.matilda = Instance::matilda(self.name.clone(), source.clone());
         self.source = source;
         self.conn = ConnState::Connected;
@@ -1051,4 +1075,28 @@ pub enum Msg {
     CloseMenus,
 
     HostActivate(u32),
+
+    // ─── Workspace tipo zellij (tabs · tiling · flotantes) ──────────
+    /// Parte el panel con foco (Horizontal = lado a lado · Vertical = apilado).
+    PaneSplit(Axis),
+    /// Pone el foco en un panel concreto (click en el panel).
+    PaneFocus(PaneId),
+    /// Cierra el panel con foco.
+    PaneClose,
+    /// Cicla el foco entre paneles tiled (true = siguiente).
+    PaneCycle(bool),
+    /// Arrastra un divisor del tiling: ajusta el ratio del split por `path`.
+    PaneResize(Vec<Side>, f32),
+    /// Tab nueva (con un shell fresco).
+    TabNew,
+    /// Activa la tab `i`.
+    TabSwitch(usize),
+    /// Cierra la tab `i`.
+    TabClose(usize),
+    /// Agrega un panel flotante nuevo.
+    FloatNew,
+    /// Enciende/apaga la capa de paneles flotantes.
+    FloatToggle,
+    /// Mueve un panel flotante por (dx, dy) px.
+    FloatMove(PaneId, f32, f32),
 }

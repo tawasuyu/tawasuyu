@@ -4,11 +4,13 @@
 use super::chrome::SESSION_RAIL_W;
 use super::super::*;
 use super::widgets::*;
-use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, Dimension, Style};
-use llimphi_ui::llimphi_layout::taffy::{AlignItems, FlexDirection, JustifyContent, Rect, Size};
+use llimphi_ui::llimphi_layout::taffy::prelude::{auto, length, percent, Dimension, Style};
+use llimphi_ui::llimphi_layout::taffy::{AlignItems, FlexDirection, JustifyContent, Position, Rect, Size};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{DragPhase, View};
 use llimphi_theme::Theme;
+use llimphi_widget_panes::{panes_view, PanesPalette};
+use crate::workspace::FloatPane;
 use llimphi_widget_select::{
     select_trigger_view, SelectItem, SelectPalette,
 };
@@ -295,7 +297,7 @@ pub(super) fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn session_cwd(session: &Session) -> String {
-    match &session.shell.state {
+    match &session.shell().state {
         ModuleState::Shell(sh) => sh.cwd.display().to_string(),
         _ => "-".to_string(),
     }
@@ -645,37 +647,313 @@ pub(super) fn env_section(model: &Model, theme: &Theme) -> Vec<View<Msg>> {
     out
 }
 
-// ─── Canvas principal ───────────────────────────────────────────────
+// ─── Canvas principal (workspace tipo zellij) ───────────────────────
 
-/// El canvas principal: sólo el shell de la sesión activa.
+/// El canvas principal: el **workspace** de la sesión activa — una barra de
+/// tabs, el árbol tiling de paneles y la capa de flotantes encima. Si la sesión
+/// está en form de creación, ese form ocupa el canvas en su lugar.
 pub(super) fn canvas_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let body = match model.active() {
+        None => placeholder(theme, &rimay_localize::t("shuma-empty-no-tabs")),
+        Some(s) if s.pending => new_session_form(model, s, theme),
+        Some(s) => workspace_view(model, s, theme),
+    };
     View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![tab_content(model, theme)])
+    .children(vec![body])
 }
 
-pub(crate) fn tab_content(model: &Model, theme: &Theme) -> View<Msg> {
-    let Some(session) = model.active() else {
-        return placeholder(theme, &rimay_localize::t("shuma-empty-no-tabs"));
-    };
-    if session.pending {
-        return new_session_form(model, session, theme);
-    }
+/// Render del workspace de una sesión: barra de tabs + tiling + flotantes.
+fn workspace_view(model: &Model, session: &Session, theme: &Theme) -> View<Msg> {
     let idx = model.active_session;
-    let lift = move |m| Msg::Module(Slot::Session(idx, Which::Shell), ModuleMsg::Shell(m));
-    match &session.shell.state {
-        // Hospedado en barra (pata): el input vive en la barra del host, así que
-        // el canvas pinta sólo el cuerpo (sin input) para no duplicarlo.
-        ModuleState::Shell(state) if model.hosted_bar => {
+    let ws = &session.workspace;
+    let tab = ws.tab();
+    let focused = tab.focused;
+    let pal = PanesPalette::from_theme(theme);
+
+    // Árbol tiling. La hoja la materializa `pane_body` por id.
+    let tiled = panes_view(
+        &tab.layout,
+        focused,
+        |id| pane_body(model, idx, id, id == focused, theme),
+        |path, phase, delta| match phase {
+            DragPhase::Move => Some(Msg::PaneResize(path, delta)),
+            DragPhase::End => None,
+        },
+        Msg::PaneFocus,
+        &pal,
+    );
+    let tiled_box = View::new(Style {
+        flex_grow: 1.0,
+        size: full(),
+        min_size: zero(),
+        ..Default::default()
+    })
+    .children(vec![tiled]);
+
+    // Capa flotante: cada panel como caja absoluta sobre el tiling.
+    let mut stack_children = vec![tiled_box];
+    if tab.show_floating {
+        for f in &tab.floating {
+            stack_children.push(floating_pane(model, idx, f, f.id == focused, theme));
+        }
+    }
+    let stack = View::new(Style {
+        position: Position::Relative,
+        flex_grow: 1.0,
+        size: full(),
+        min_size: zero(),
+        ..Default::default()
+    })
+    .children(stack_children);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![tab_bar(ws, theme), stack])
+}
+
+/// Tamaño 100%/100%.
+fn full() -> Size<Dimension> {
+    Size { width: percent(1.0_f32), height: percent(1.0_f32) }
+}
+fn zero() -> Size<Dimension> {
+    Size { width: length(0.0_f32), height: length(0.0_f32) }
+}
+
+/// Materializa el contenido de un panel (tiled o flotante): el shell de ese
+/// panel, ruteado a su `Slot::Session(idx, Which::Pane(id))`. El panel con foco,
+/// si la app está hospedada en una barra (pata), pinta sólo el cuerpo (su input
+/// vive en la barra del host).
+fn pane_body(model: &Model, idx: usize, id: u64, focused: bool, theme: &Theme) -> View<Msg> {
+    let lift = move |m| Msg::Module(Slot::Session(idx, Which::Pane(id)), ModuleMsg::Shell(m));
+    let inst = model.active().and_then(|s| s.workspace.pane(id));
+    match inst.map(|i| &i.state) {
+        Some(ModuleState::Shell(state)) if model.hosted_bar && focused => {
             shuma_module_shell::body_view::<Msg>(state, theme, lift)
         }
-        ModuleState::Shell(state) => shuma_module_shell::view::<Msg>(state, theme, lift),
+        Some(ModuleState::Shell(state)) => shuma_module_shell::view::<Msg>(state, theme, lift),
         _ => placeholder(theme, ""),
     }
+}
+
+/// Un panel flotante: caja absoluta con cabecera arrastrable + cuerpo del shell.
+fn floating_pane(
+    model: &Model,
+    idx: usize,
+    f: &FloatPane,
+    focused: bool,
+    theme: &Theme,
+) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let border = if focused { theme.accent } else { theme.border };
+    let id = f.id;
+
+    // Cabecera: drag para mover + botón de cierre.
+    let title = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned("flotante".to_string(), 11.0, theme.fg_muted, Alignment::Start);
+    let close = View::new(Style {
+        size: Size { width: length(22.0_f32), height: length(22.0_f32) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .radius(4.0)
+    .text_aligned("✕".to_string(), 12.0, theme.fg_muted, Alignment::Center)
+    .on_click(Msg::PaneClose);
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .draggable(move |_phase, dx, dy| Some(Msg::FloatMove(id, dx, dy)))
+    .children(vec![title, close]);
+
+    let body = View::new(Style {
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Column,
+        size: full(),
+        min_size: zero(),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![pane_body(model, idx, id, focused, theme)]);
+
+    // Marco con el truco del padding (no hay stroke): caja exterior rellena con
+    // el color de borde + padding 2px; el interior tapa el centro.
+    let inner = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: full(),
+        min_size: zero(),
+        padding: Rect {
+            left: length(2.0_f32),
+            right: length(2.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(border)
+    .children(vec![View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: full(),
+        min_size: zero(),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![header, body])]);
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(f.x),
+            top: length(f.y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(f.w), height: length(f.h) },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .on_click(Msg::PaneFocus(id))
+    .children(vec![inner])
+}
+
+/// Barra de tabs del workspace: un chip por tab + `+` + controles de tiling.
+fn tab_bar(ws: &crate::workspace::Workspace, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let mut row: Vec<View<Msg>> = Vec::new();
+    let multi = ws.tabs.len() > 1;
+
+    for (i, t) in ws.tabs.iter().enumerate() {
+        let activa = i == ws.active_tab;
+        let fill = if activa { theme.bg_selected } else { theme.bg_panel_alt };
+        let fg = if activa { theme.fg_text } else { theme.fg_muted };
+        let n_panes = t.panes.len();
+        let label = if n_panes > 1 {
+            format!("{} · {n_panes}", t.name)
+        } else {
+            t.name.clone()
+        };
+        let name = View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(22.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(label, 12.0, fg, Alignment::Center)
+        .on_click(Msg::TabSwitch(i));
+        let mut chip_children = vec![name];
+        if multi {
+            chip_children.push(
+                View::new(Style {
+                    size: Size { width: length(16.0_f32), height: length(22.0_f32) },
+                    flex_shrink: 0.0,
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Center),
+                    ..Default::default()
+                })
+                .hover_fill(theme.bg_row_hover)
+                .radius(3.0)
+                .text_aligned("✕".to_string(), 10.0, theme.fg_muted, Alignment::Center)
+                .on_click(Msg::TabClose(i)),
+            );
+        }
+        row.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: Dimension::auto(), height: length(24.0_f32) },
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+                padding: Rect {
+                    left: length(10.0_f32),
+                    right: length(6.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(fill)
+            .radius(4.0)
+            .children(chip_children),
+        );
+    }
+
+    // `+` tab nueva.
+    row.push(bar_button("+", Msg::TabNew, theme));
+
+    // Spacer.
+    row.push(
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: length(0.0_f32), height: length(1.0_f32) },
+            ..Default::default()
+        }),
+    );
+
+    // Controles de tiling/flotantes (co-locados con las tabs). Glyphs en
+    // box-drawing / geometric shapes (presentes en DejaVu, sin tofu):
+    // `│` parte lado a lado, `─` parte apilado, `✕` cierra el panel,
+    // `▣` agrega flotante, `□` togglea la capa flotante.
+    row.push(bar_button("│", Msg::PaneSplit(llimphi_widget_panes::Axis::Horizontal), theme));
+    row.push(bar_button("─", Msg::PaneSplit(llimphi_widget_panes::Axis::Vertical), theme));
+    row.push(bar_button("✕", Msg::PaneClose, theme));
+    row.push(bar_button("▣", Msg::FloatNew, theme));
+    row.push(bar_button("□", Msg::FloatToggle, theme));
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(3.0_f32),
+            bottom: length(3.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(row)
+}
+
+/// Botón compacto de la barra de tabs.
+fn bar_button(label: &str, msg: Msg, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size { width: length(26.0_f32), height: length(22.0_f32) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .hover_fill(theme.bg_row_hover)
+    .radius(4.0)
+    .text_aligned(label.to_string(), 13.0, theme.fg_muted, Alignment::Center)
+    .on_click(msg)
 }
 
 // ─── Form de nueva sesión ───────────────────────────────────────────

@@ -30,7 +30,7 @@ pub(crate) fn save_session_outputs(m: &Model) {
         if !s.persist || s.pending || s.kind == SessionKind::Draft {
             continue;
         }
-        let ModuleState::Shell(st) = &s.shell.state else {
+        let ModuleState::Shell(st) = &s.shell().state else {
             continue;
         };
         let snap = st.output_snapshot(PERSIST_MAX_LINES);

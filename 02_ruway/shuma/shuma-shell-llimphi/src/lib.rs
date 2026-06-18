@@ -36,6 +36,7 @@ pub mod persist;
 pub mod types;
 pub mod update;
 pub mod view;
+pub mod workspace;
 
 // Superficie pública para hosts (pata) y el bin: el `Model`, el `Msg`, el `App`
 // (`Shell`) y `run()` viven en este crate-lib — la lógica de dominio ya no está
@@ -67,6 +68,7 @@ use persist::*;
 use types::*;
 use update::*;
 use view::*;
+use workspace::*;
 
 pub(crate) const HISTORY: usize = 60;
 const TICK: Duration = Duration::from_secs(1);
@@ -155,7 +157,7 @@ pub fn new_model() -> Model {
         // recién construido (los bloques viejos abren plegados).
         if sess.persist {
             if let Some(snap) = persist::load_session_output(&sess.name) {
-                if let ModuleState::Shell(st) = &mut sess.shell.state {
+                if let ModuleState::Shell(st) = &mut sess.shell_mut().state {
                     st.restore_output(snap);
                 }
             }
@@ -322,6 +324,10 @@ impl App for Shell {
             }
         }
         if let Some(msg) = menu::intercept_key(model, e) {
+            return Some(msg);
+        }
+        // Atajos del workspace tipo zellij (Alt+…): tabs, tiling, flotantes.
+        if let Some(msg) = workspace_key(model, e) {
             return Some(msg);
         }
         forward_key_to_focused_shell(model, e)
@@ -1423,6 +1429,72 @@ impl App for Shell {
                     save_chrome(&m);
                 }
             }
+
+            // ─── Workspace tipo zellij ──────────────────────────────
+            Msg::PaneSplit(axis) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    if !s.pending {
+                        let inst = Instance::shell(s.name.clone(), s.source.clone());
+                        s.workspace.split(axis, inst);
+                    }
+                }
+            }
+            Msg::PaneFocus(id) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.workspace.focus(id);
+                }
+            }
+            Msg::PaneClose => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    let _ = s.workspace.close_focused();
+                }
+            }
+            Msg::PaneCycle(fwd) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.workspace.cycle_focus(fwd);
+                }
+            }
+            Msg::PaneResize(path, delta) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.workspace.resize(&path, delta);
+                }
+            }
+            Msg::TabNew => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    if !s.pending {
+                        let inst = Instance::shell(s.name.clone(), s.source.clone());
+                        s.workspace.new_tab(inst);
+                    }
+                }
+            }
+            Msg::TabSwitch(i) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.workspace.switch_tab(i);
+                }
+            }
+            Msg::TabClose(i) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    let _ = s.workspace.close_tab(i);
+                }
+            }
+            Msg::FloatNew => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    if !s.pending {
+                        let inst = Instance::shell(s.name.clone(), s.source.clone());
+                        s.workspace.new_float(inst);
+                    }
+                }
+            }
+            Msg::FloatToggle => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.workspace.toggle_floating();
+                }
+            }
+            Msg::FloatMove(id, dx, dy) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.workspace.move_float(id, dx, dy);
+                }
+            }
         }
         m
     }
@@ -1518,7 +1590,7 @@ pub fn active_input_view(model: &Model, theme: &Theme) -> Option<View<Msg>> {
         return None;
     }
     let idx = model.active_session;
-    match &session.shell.state {
+    match &session.shell().state {
         ModuleState::Shell(state) => Some(shuma_module_shell::input_view(state, theme, move |m| {
             Msg::Module(Slot::Session(idx, Which::Shell), ModuleMsg::Shell(m))
         })),

@@ -59,7 +59,7 @@ pub(crate) fn focused_shell(model: &Model) -> Option<FocusInfo> {
     if let Some(s) = model.active() {
         if let Some(info) = from(
             Slot::Session(model.active_session, Which::Shell),
-            &s.shell.state,
+            &s.shell().state,
         ) {
             return Some(info);
         }

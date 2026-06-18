@@ -17,7 +17,6 @@ pub(crate) use chrome::{
 };
 pub(crate) use modals::{containers_modal, hosts_modal, layouts_modal};
 pub(crate) use monitors::{curve_view, monitor_card, monitor_stack};
-pub(crate) use session::tab_content;
 pub(crate) use widgets::placeholder;
 
 use super::*;

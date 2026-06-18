@@ -145,7 +145,7 @@ pub(super) fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
 
     let mut comandos: Vec<String> = Vec::new();
     if let Some(s) = model.active() {
-        if let ModuleState::Shell(sh) = &s.shell.state {
+        if let ModuleState::Shell(sh) = &s.shell().state {
             comandos = sh
                 .output
                 .iter()
@@ -290,7 +290,7 @@ pub(super) fn history_row(cmd: &str, count: usize, theme: &Theme) -> View<Msg> {
 /// `model.explorer` (lo trae `reconcile_explorer` off-thread por SSH);
 /// para locales lee el filesystem directamente con `read_dir`.
 pub(super) fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
-    let remoto = model.active().and_then(|s| match &s.shell.state {
+    let remoto = model.active().and_then(|s| match &s.shell().state {
         ModuleState::Shell(sh)
             if matches!(sh.source, Source::Remote { .. } | Source::RemoteContainer { .. }) =>
         {
@@ -308,7 +308,7 @@ pub(super) fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
 fn explorer_panel_local(model: &Model, theme: &Theme) -> View<Msg> {
     let cwd = model
         .active()
-        .and_then(|s| match &s.shell.state {
+        .and_then(|s| match &s.shell().state {
             ModuleState::Shell(sh) => Some(sh.cwd.display().to_string()),
             _ => None,
         })
