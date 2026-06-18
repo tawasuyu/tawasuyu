@@ -1158,6 +1158,16 @@ fn main() {
         shot::shot();
         return;
     }
+    if std::env::args().any(|a| a == "--turntable") {
+        // Vitrina del motor voxel: orbita un mundo (para el GIF del README).
+        let p = Project::starter();
+        let recipe = p.worlds.first().map(|w| w.recipe).unwrap_or_else(|| WorldRecipe::desert(1));
+        match render::turntable(&recipe) {
+            Ok(out) => eprintln!("turntable ok: {out}"),
+            Err(e) => eprintln!("turntable error: {e}"),
+        }
+        return;
+    }
     if std::env::args().any(|a| a == "--export") {
         // Certificación headless del pipeline de video: exporta la escena demo.
         let p = Project::starter();

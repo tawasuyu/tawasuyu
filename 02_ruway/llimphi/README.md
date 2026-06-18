@@ -1,6 +1,6 @@
 # llimphi
 
-> Native UI framework: HAL · raster · layout · text · theme · ui — plus widgets and modules.
+> Native UI framework — 2D **and** 3D: HAL · raster · layout · text · theme · ui · 3D voxel engine — plus widgets and modules.
 
 [![Llimphi showreel — real widgets (switch, slider, progress, segmented control, buttons, radial) animating live on the Tawa theme, then reflowing across layouts](https://tawasuyu.net/02_ruway/llimphi/llimphi_showreel.gif)](https://tawasuyu.net/02_ruway/llimphi/llimphi_showreel.mp4)
 
@@ -9,6 +9,14 @@
 **Usage manual:** [MANUAL.md](MANUAL.md) — full reference (Elm loop, `View<Msg>` DSL, the ~44 widgets and 10 modules, GPU path, gotchas) for humans and AI. Design rationale and roadmap: [SDD.md](SDD.md).
 
 Philosophy: **widgets aren't designed against mockups; they're designed with what `vello` and `taffy` can do.**
+
+## Not just 2D — a 3D voxel engine
+
+![A procedural voxel world (sand, cactus, carved rivers) orbiting — rendered by llimphi-3d](https://tawasuyu.net/02_ruway/llimphi/llimphi_voxel.gif)
+
+`llimphi-3d` adds a **3D engine** that composes voxels (GPU ray-march) and triangle meshes in one shared depth pass (`Scene3d` + `VoxelRenderer` + `Renderer3d` + a keyframed cinema camera). It mounts straight into any 2D `View` via the GPU paint node, so a 3D viewport can live inside a panel next to ordinary widgets.
+
+On top of it, `llimphi-voxel` brings the *content* layer — procedural world-gen (`WorldRecipe`), articulated characters (age + animation clips), and a scripted scene **director** — and `llimphi-voxel-studio` is a full **world creator**: edit worlds, cast characters and direct scenes (with a filmed camera) from a live-preview UI, describe any of them in plain language to an LLM assist, and **export the scene to a video** with a synced soundtrack. The GIF above is one such world, rendered headless frame-by-frame.
 
 ## Install
 
