@@ -18,7 +18,7 @@ use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, VoxelRenderer};
 use llimphi_hal::{wgpu, Hal};
 use llimphi_raster::peniko::Color;
 use llimphi_raster::{vello, Renderer};
-use llimphi_voxel::{lod_skirt, terrain, LodParams};
+use llimphi_voxel::{lod_skirt, lod_skirt_pyramid, terrain, LodParams, LodRing};
 
 const W: u32 = 960;
 const H: u32 = 540;
@@ -80,10 +80,67 @@ fn main() {
     // Toma 1: sólo voxels (sin falda) — horizonte = niebla/vacío.
     let off = render(&hal, &mut renderer, &mut scene, &mut vr, &[], &camera);
     write_png(&off, "/tmp/m6_lod_off.png");
-    // Toma 2: voxels + falda LOD — horizonte con relieve.
+    // Toma 2: voxels + falda LOD (un nivel) — horizonte con relieve.
     let on = render(&hal, &mut renderer, &mut scene, &mut vr, &[&skirt], &camera);
     write_png(&on, "/tmp/m6_lod_on.png");
     eprintln!("escritos /tmp/m6_lod_off.png (sin LOD) y /tmp/m6_lod_on.png (con LOD)");
+
+    // --- Un nivel vs PIRÁMIDE multi-nivel, con niebla baja para que se vea hasta
+    // dónde llega cada uno (con la niebla normal el horizonte se taparía igual). El
+    // único nivel se corta a ~3 ventanas; la pirámide llega a ~16.
+    let low_fog = 0.30 / dim_xz as f32;
+    vr.atmosphere = Atmosphere { fog_density: low_fog, ..atmo };
+    // Cámara aérea (alta, mirando hacia abajo) para esta comparación: así el terreno
+    // lejano se despliega en el suelo en vez de apretarse contra la línea del horizonte
+    // — se ve **hasta dónde** llega cada falda.
+    let cam_high = Camera3d::fly(
+        Vec3::new(0.0, eye_y + dy as f32 * 2.2, -(dim[2] as f32) * 0.5),
+        0.0,
+        -0.62,
+    );
+
+    let p_single = LodParams { fog_density: low_fog, ..clone_params(&p) };
+    let (sv, si) = lod_skirt(&p_single, dim, seed);
+    let mut single = Renderer3d::new(&hal.device, FMT);
+    single.set_geometry(&hal.device, &sv, &si);
+    let single_shot = render(&hal, &mut renderer, &mut scene, &mut vr, &[&single], &cam_high);
+    write_png(&single_shot, "/tmp/m6_lod_single.png");
+
+    let rings = [
+        LodRing { stride: 6, span: dim_xz as i32 * 3 },
+        LodRing { stride: 16, span: dim_xz as i32 * 8 },
+        LodRing { stride: 40, span: dim_xz as i32 * 16 },
+    ];
+    let p_pyr = LodParams { fog_density: low_fog, ..clone_params(&p) };
+    let meshes = lod_skirt_pyramid(&p_pyr, dim, seed, &rings);
+    let total_tris: usize = meshes.iter().map(|(_, i)| i.len() / 3).sum();
+    eprintln!("pirámide LOD: {} anillos, {} triángulos a {} voxels de alcance", meshes.len(), total_tris, dim_xz as i32 * 16);
+    let renderers: Vec<Renderer3d> = meshes
+        .iter()
+        .map(|(v, i)| {
+            let mut r = Renderer3d::new(&hal.device, FMT);
+            r.set_geometry(&hal.device, v, i);
+            r
+        })
+        .collect();
+    let refs: Vec<&Renderer3d> = renderers.iter().collect();
+    let pyr_shot = render(&hal, &mut renderer, &mut scene, &mut vr, &refs, &cam_high);
+    write_png(&pyr_shot, "/tmp/m6_lod_pyramid.png");
+    eprintln!("escritos /tmp/m6_lod_single.png (1 nivel) y /tmp/m6_lod_pyramid.png (multi-nivel)");
+}
+
+/// Copia los campos de un [`LodParams`] (no deriva `Clone` a propósito por el
+/// `sun_dir`; acá lo replicamos para variar sólo la niebla).
+fn clone_params(p: &LodParams) -> LodParams {
+    LodParams {
+        center_xz: p.center_xz,
+        window_xz: p.window_xz,
+        span: p.span,
+        stride: p.stride,
+        sky_horizon: p.sky_horizon,
+        fog_density: p.fog_density,
+        sun_dir: p.sun_dir,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

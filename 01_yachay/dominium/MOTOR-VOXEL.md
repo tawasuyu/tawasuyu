@@ -483,9 +483,21 @@ paso grueso (p.ej. cada 6 voxels) sobre un anillo alrededor de la ventana (deja 
 **hornea la luz difusa + niebla por distancia en el color de cada vértice** (imita la
 `Atmosphere` del pase voxel → el horizonte funde sin costura). Verificado: demo
 `terrain_lod` rinde dos PNG (sin LOD = terreno cortado + niebla; con LOD = horizonte con
-cordilleras), mirados → `/tmp/m6_lod_{off,on}.png`. MVP: un solo nivel (no pirámide),
-regenerado por ventana; pendiente fino = niebla del horizonte algo lavada (capeada 0.9)
-y LOD multi-nivel para mundos enormes.
+cordilleras), mirados → `/tmp/m6_lod_{off,on}.png`.
+
+**LOD multi-nivel (pirámide) HECHO (2026-06-18):** `lod_skirt_pyramid(p, dim, seed,
+&[LodRing{stride,span}])` apila **anillos concéntricos de paso creciente** — fino
+cerca, grueso lejos — cada uno como **su propia malla** (así ninguno pasa el límite de
+65 535 vértices de un `u16`, y el conjunto cubre un horizonte enorme que un nivel único
+no podría). El anillo interno deja el hueco de la ventana voxel; cada siguiente solapa
+un paso con el borde del anterior (sin rendija; el depth compartido resuelve el
+solape). Verificado: test (3 anillos, cada uno bajo el tope `u16`, el externo cubre
+~6× el área del interno con **menos** vértices) + PNG `terrain_lod` con cámara aérea
+(`/tmp/m6_lod_{single,pyramid}.png`): el nivel único corta el terreno a ~3 ventanas
+(384 vox → océano/cielo plano detrás), la pirámide (3 anillos a paso 6/16/40) lo lleva
+a **~16 ventanas (2048 vox)** con cordilleras hasta el horizonte, por 76 k triángulos.
+**Falta fino**: niebla del horizonte algo lavada (capeada 0.9) y stitching de
+T-junctions entre anillos (hoy se solapan; las grietas finas quedan bajo la niebla).
 
 **Persistencia CAS a disco (HECHO, 2026-06-17):** las ediciones ahora sobreviven el
 reinicio del programa, direccionadas por contenido. `WorldStream::export_edits()`
@@ -496,8 +508,8 @@ mundos con las mismas ediciones en distinto orden dan la misma dirección BLAKE3
 inválido → `None` sin romper) + demo `terrain_streaming` (525 ediciones → archivo
 `/tmp/m6_cas/<blake3>.edits` de 3677 B → mundo fresco lo recarga → torre restaurada,
 1261 px idénticos). Queda de M6: **wiring en la app viva** (coords del jugador/HUD bajo
-la ventana móvil — necesita pantalla) y **LOD multi-nivel** para mundos gigantes — el
-resto del §7 está cubierto.
+la ventana móvil — necesita pantalla); el **LOD multi-nivel** ya está hecho (pirámide de
+anillos, ver §11.2 punto M6) — el resto del §7 está cubierto.
 
 **Demo integrador "hero" (`terrain_world`):** combina las dos mitades del frente —
 streaming toroidal + falda LOD regenerada al recentrar — en un vuelo por un mundo

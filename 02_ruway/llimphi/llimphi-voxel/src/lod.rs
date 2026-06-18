@@ -75,19 +75,74 @@ pub struct LodParams {
     pub sun_dir: [f32; 3],
 }
 
-/// Genera la malla de la falda LOD para una ventana. Devuelve `(vértices,
-/// índices u16)` listos para [`Renderer3d::set_geometry`](llimphi_3d::Renderer3d).
-/// `dim`/`seed` definen el mismo terreno procedural que los voxels.
+/// Un **anillo** de la falda LOD piramidal: a qué paso se muestrea y hasta dónde
+/// llega. Un anillo más lejano usa `stride` mayor (más barato, más facetado) — así el
+/// horizonte se extiende mucho sin reventar el límite de 65 535 vértices de un `u16`.
+#[derive(Clone, Copy, Debug)]
+pub struct LodRing {
+    /// Paso de muestreo de este anillo (voxels). Mayor = más grueso/barato.
+    pub stride: i32,
+    /// Medio-alcance de este anillo desde el centro (voxels).
+    pub span: i32,
+}
+
+/// Genera la malla de la falda LOD para una ventana (un solo nivel). Devuelve
+/// `(vértices, índices u16)` listos para
+/// [`Renderer3d::set_geometry`](llimphi_3d::Renderer3d). `dim`/`seed` definen el mismo
+/// terreno procedural que los voxels. Para horizontes enormes usá
+/// [`lod_skirt_pyramid`] (varios anillos de paso creciente).
 pub fn lod_skirt(p: &LodParams, dim: [u32; 3], seed: u32) -> (Vec<Vertex3d>, Vec<u16>) {
-    let [cx, cz] = p.center_xz;
-    let dy = dim[1] as f32;
-    let sea = (dim[1] as f32 * 0.30) as i32;
     let stride = p.stride.max(1);
-    let span = p.span.max(stride);
     let half = p.window_xz as i32 / 2;
     // Margen: solapar un poco el hueco con la ventana para que no quede una rendija
     // entre la malla y los voxels (el depth resuelve la oclusión del solape).
     let hole = (half - stride).max(0);
+    ring_mesh(p, dim, seed, hole, p.span.max(stride), stride)
+}
+
+/// Genera una **falda LOD piramidal**: varios anillos concéntricos de paso creciente,
+/// cada uno como su **propia malla** (así ninguno pasa el límite `u16`, y el conjunto
+/// cubre un horizonte mucho mayor que un nivel único). Los anillos deben venir
+/// ordenados de **adentro hacia afuera** (`span` creciente). El anillo interno deja el
+/// hueco de la ventana voxel fina; cada anillo siguiente arranca solapando un paso con
+/// el borde del anterior (sin rendija; el depth compartido resuelve el solape).
+/// Devuelve **una malla por anillo** — la app sube cada una a un `Renderer3d`.
+pub fn lod_skirt_pyramid(
+    p: &LodParams,
+    dim: [u32; 3],
+    seed: u32,
+    rings: &[LodRing],
+) -> Vec<(Vec<Vertex3d>, Vec<u16>)> {
+    let half = p.window_xz as i32 / 2;
+    let mut out = Vec::with_capacity(rings.len());
+    // El primer anillo arranca en el borde de la ventana voxel (con un paso de solape).
+    let mut inner = (half - rings.first().map(|r| r.stride.max(1)).unwrap_or(1)).max(0);
+    for (k, r) in rings.iter().enumerate() {
+        let stride = r.stride.max(1);
+        let span = r.span.max(stride);
+        out.push(ring_mesh(p, dim, seed, inner, span, stride));
+        // El próximo anillo solapa un paso (suyo) con el borde de éste.
+        let next_stride = rings.get(k + 1).map(|n| n.stride.max(1)).unwrap_or(0);
+        inner = (span - next_stride).max(0);
+    }
+    out
+}
+
+/// Núcleo compartido: malla de un anillo `[-span, span]²` a paso `stride`, dejando un
+/// **hueco cuadrado** central de medio-lado `inner` (lo llena el nivel más fino o la
+/// ventana voxel). La luz difusa + la niebla por distancia se hornean en el color.
+fn ring_mesh(
+    p: &LodParams,
+    dim: [u32; 3],
+    seed: u32,
+    inner: i32,
+    span: i32,
+    stride: i32,
+) -> (Vec<Vertex3d>, Vec<u16>) {
+    let [cx, cz] = p.center_xz;
+    let dy = dim[1] as f32;
+    let sea = (dim[1] as f32 * 0.30) as i32;
+    let hole = inner.max(0);
 
     // Altura renderizada de la columna de mundo (tierra o superficie del mar).
     let surf = |wx: i32, wz: i32| -> (i32, bool) {
@@ -194,5 +249,42 @@ mod tests {
         let n = ((2 * p.span) / p.stride) as usize + 1;
         let full = (n - 1) * (n - 1) * 2;
         assert!(indices.len() / 3 < full, "el hueco recortó triángulos");
+    }
+
+    #[test]
+    fn piramide_apila_anillos_crecientes() {
+        let dim = [128, 56, 128];
+        let p = LodParams {
+            center_xz: [1000, -500], // lejos del origen: el streaming de verdad
+            window_xz: 128,
+            span: 0, // ignorado por la pirámide (cada anillo trae el suyo)
+            stride: 0,
+            sky_horizon: [200, 216, 234],
+            fog_density: 0.004,
+            sun_dir: [0.5, 0.6, 0.3],
+        };
+        // Tres niveles: fino cerca, grueso lejos — el horizonte llega a 1536 voxels.
+        let rings = [
+            LodRing { stride: 6, span: 256 },
+            LodRing { stride: 16, span: 640 },
+            LodRing { stride: 40, span: 1536 },
+        ];
+        let meshes = lod_skirt_pyramid(&p, dim, 1, &rings);
+        assert_eq!(meshes.len(), 3, "una malla por anillo");
+        for (k, (verts, indices)) in meshes.iter().enumerate() {
+            assert!(!verts.is_empty() && !indices.is_empty(), "anillo {k} no vacío");
+            assert_eq!(indices.len() % 3, 0, "triángulos completos en anillo {k}");
+            assert!(*indices.iter().max().unwrap() < verts.len() as u16, "índices en rango anillo {k}");
+            // Cada anillo respeta el límite u16 (es su propia malla).
+            assert!(verts.len() <= u16::MAX as usize, "anillo {k} bajo el tope u16: {}", verts.len());
+        }
+        // El anillo externo, pese a cubrir un área ~6× mayor que el interno, usa menos
+        // vértices (paso mucho más grueso) — el punto de la pirámide.
+        assert!(
+            meshes[2].0.len() < meshes[0].0.len(),
+            "el anillo lejano es más barato: ext {} vs int {}",
+            meshes[2].0.len(),
+            meshes[0].0.len()
+        );
     }
 }
