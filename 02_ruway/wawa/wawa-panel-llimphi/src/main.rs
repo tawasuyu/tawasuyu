@@ -253,6 +253,10 @@ struct Model {
     /// se abre en el canvas central). `None` = ninguno → el canvas muestra el
     /// resumen de la pestaña.
     selected_item: Option<usize>,
+    /// Último item abierto por diente (índice de pestaña → índice de sección).
+    /// Al entrar a un diente aterrizamos en su último tab (o el 1º), sin pasar
+    /// por el canvas-resumen — ahorra un clic.
+    last_item: std::collections::HashMap<usize, usize>,
     /// Si el sidebar de items está visible (se oculta clickeando la pestaña activa).
     sidebar_open: bool,
     /// Ancho del sidebar (px), arrastrable.
@@ -411,14 +415,18 @@ impl App for Panel {
                 } else {
                     m.selected_pest = id;
                     m.sidebar_open = true;
-                    // Nueva pestaña: sin item → el canvas muestra su resumen.
-                    m.selected_item = None;
-                    m.allichay.select(0);
+                    // Aterriza en el último tab abierto de este diente (o el 1º),
+                    // sin pasar por el canvas-resumen — ahorra un clic.
+                    let secs = pestanas(&m).get(id).map(|p| p.schema.sections.len()).unwrap_or(0);
+                    let item = m.last_item.get(&id).copied().unwrap_or(0).min(secs.saturating_sub(1));
+                    m.selected_item = Some(item);
+                    m.allichay.select(item);
                 }
                 m.status.clear();
             }
             Msg::SelectItem(id) => {
                 m.selected_item = Some(id as usize);
+                m.last_item.insert(m.selected_pest, id as usize);
                 m.allichay.select(id as usize);
                 m.status.clear();
             }
@@ -667,7 +675,9 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
 
     Model {
         selected_pest: 0,
-        selected_item: None,
+        // Arranca en el 1er tab de Vista (no en el canvas-resumen).
+        selected_item: Some(0),
+        last_item: std::collections::HashMap::new(),
         sidebar_open: true,
         sidebar_w: SIDEBAR_W,
         cfg,
@@ -1406,8 +1416,9 @@ fn apply_theme(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                 m.dirty.dprofiles = true;
                 m.status = format!("theme «{nuevo}» creado");
             }
-            Some("duplicar") if value.as_bool() == Some(true) => {
-                if let Some(nuevo) = m.themes.duplicate(&name) {
+            Some("duplicar") => {
+                let target = value.as_str().map(String::from).unwrap_or_else(|| name.clone());
+                if let Some(nuevo) = m.themes.duplicate(&target) {
                     if let Some(p) = m.dprofiles.profiles.get_mut(&active_profile) {
                         p.theme = nuevo.clone();
                     }
@@ -1431,19 +1442,20 @@ fn apply_theme(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                     }
                 }
             }
-            Some("eliminar") if value.as_bool() == Some(true) => {
+            Some("eliminar") => {
+                let target = value.as_str().map(String::from).unwrap_or_else(|| name.clone());
                 if m.themes.names().len() > 1 {
-                    m.themes.remove(&name);
+                    m.themes.remove(&target);
                     let fallback = m.themes.names().first().cloned().unwrap_or_default();
                     for p in m.dprofiles.profiles.values_mut() {
-                        if p.theme == name {
+                        if p.theme == target {
                             p.theme = fallback.clone();
                         }
                     }
                     m.dirty.themes = true;
                     m.dirty.dprofiles = true;
                     apply_active_theme(m);
-                    m.status = format!("theme «{name}» eliminado");
+                    m.status = format!("theme «{target}» eliminado");
                 } else {
                     m.status = "no podés eliminar el último theme".into();
                 }
@@ -1796,8 +1808,9 @@ fn apply_atajos(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                     m.status = format!("conjunto «{nombre}» creado");
                 }
             }
-            Some("duplicar") if value.as_bool() == Some(true) => {
-                let src = m.profiles.active().to_string();
+            Some("duplicar") => {
+                // El iconito de fila manda el NOMBRE; el botón viejo, Bool → activo.
+                let src = value.as_str().map(String::from).unwrap_or_else(|| m.profiles.active().to_string());
                 let nombre = unique_keymap_name(m, &format!("{src} copia"));
                 if m.profiles.duplicate(&src, &nombre).is_ok() {
                     let _ = m.profiles.set_active(&nombre);
@@ -1823,8 +1836,8 @@ fn apply_atajos(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                     }
                 }
             }
-            Some("eliminar") if value.as_bool() == Some(true) => {
-                let cur = m.profiles.active().to_string();
+            Some("eliminar") => {
+                let cur = value.as_str().map(String::from).unwrap_or_else(|| m.profiles.active().to_string());
                 if m.profiles.len() > 1 && m.profiles.remove(&cur).is_ok() {
                     m.keymap_rows = m.profiles.active_keymap().to_rows();
                     m.dirty.keymap = true;
@@ -1944,8 +1957,8 @@ fn apply_animaciones(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                 m.dirty.animaciones = true;
                 m.status = format!("conjunto «{nombre}» creado");
             }
-            Some("duplicar") if value.as_bool() == Some(true) => {
-                let src = m.animaciones.active().to_string();
+            Some("duplicar") => {
+                let src = value.as_str().map(String::from).unwrap_or_else(|| m.animaciones.active().to_string());
                 if let Some(nombre) = m.animaciones.duplicate(&src) {
                     m.animaciones.set_active(&nombre);
                     relacionar(m);
@@ -1968,8 +1981,8 @@ fn apply_animaciones(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                     }
                 }
             }
-            Some("eliminar") if value.as_bool() == Some(true) => {
-                let cur = m.animaciones.active().to_string();
+            Some("eliminar") => {
+                let cur = value.as_str().map(String::from).unwrap_or_else(|| m.animaciones.active().to_string());
                 if m.animaciones.len() > 1 {
                     m.animaciones.remove(&cur);
                     relacionar(m);
@@ -2678,8 +2691,27 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                     }
                 }
                 Some("crear") if value.as_bool() == Some(true) => do_create_profile(m),
-                Some("duplicar") if value.as_bool() == Some(true) => do_duplicate_profile(m),
-                Some("eliminar") if value.as_bool() == Some(true) => do_delete_profile(m),
+                // El iconito de fila manda el NOMBRE; el botón viejo, Bool → activo.
+                Some("duplicar") => {
+                    let src = value.as_str().map(String::from).unwrap_or_else(|| m.dprofiles.active.clone());
+                    if let Some(name) = m.dprofiles.duplicate(&src) {
+                        activate_profile(m, &name);
+                        m.status = format!("perfil «{name}» (copia de «{src}»)");
+                    }
+                }
+                Some("eliminar") => {
+                    let cur = value.as_str().map(String::from).unwrap_or_else(|| m.dprofiles.active.clone());
+                    if m.dprofiles.profiles.len() <= 1 {
+                        m.status = "no se puede eliminar el último perfil".into();
+                    } else {
+                        m.dprofiles.remove(&cur);
+                        let next = m.dprofiles.active.clone();
+                        if !next.is_empty() {
+                            activate_profile(m, &next);
+                        }
+                        m.status = format!("perfil «{cur}» eliminado");
+                    }
+                }
                 Some("renombrar") => {
                     if let Some(to) = value.as_str() {
                         do_rename_profile(m, to);
@@ -3305,6 +3337,148 @@ fn barras_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
     .children(filas)
 }
 
+/// Vista custom de una **biblioteca de sets** (perfiles/themes/atajos/animaciones):
+/// una fila por item con [○ radio + nombre] [⧉ duplicar] [✕ borrar], y abajo
+/// SÓLO «＋ Crear». `section_id` es el id de la sección-lista (`"atajos::conjuntos"`,
+/// `"theme::acciones"`, …); las hojas de ruteo son uniformes (`usar`/`duplicar`/
+/// `eliminar`/`crear`) y las maneja el `apply` de cada destino (dup/del aceptan
+/// el NOMBRE del item por valor `Enum`).
+fn lista_set_view(
+    section_id: &str,
+    items: &[String],
+    active: &str,
+    crear_label: &str,
+    theme: &Theme,
+) -> View<Msg> {
+    let sid = section_id.to_string();
+    let mk = move |leaf: &str, value: FieldValue| -> Msg {
+        Msg::Allichay(AllichayMsg::Change(FieldPath(vec![sid.clone(), leaf.into()]), value))
+    };
+
+    let mut filas: Vec<View<Msg>> = Vec::new();
+    for name in items {
+        let sel = name == active;
+        // ○ radio.
+        let dot_inner = if sel {
+            vec![View::new(Style {
+                size: Size { width: length(8.0_f32), height: length(8.0_f32) },
+                ..Default::default()
+            })
+            .radius(4.0)
+            .fill(theme.accent)]
+        } else {
+            Vec::new()
+        };
+        let dot = View::new(Style {
+            size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .radius(8.0)
+        .border(1.5, if sel { theme.accent } else { theme.border })
+        .children(dot_inner);
+        let nombre = View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(name.clone(), 13.0, if sel { theme.fg_text } else { theme.fg_muted }, Alignment::Start)
+        .ellipsis(1);
+        // [radio + nombre] clickeable = seleccionar (usar).
+        let seleccionable = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_grow: 1.0,
+            size: Size { width: percent(0.0_f32), height: length(28.0_f32) },
+            align_items: Some(AlignItems::Center),
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+            padding: Rect { left: length(6.0_f32), right: length(6.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+            ..Default::default()
+        })
+        .radius(5.0)
+        .fill(if sel { theme.bg_panel_alt } else { theme.bg_panel })
+        .hover_fill(theme.bg_button_hover)
+        .on_click(mk("usar", FieldValue::Enum(name.clone())))
+        .children(vec![dot, nombre]);
+
+        let icono = |glifo: &str, tip: &str, msg: Msg, col| {
+            View::new(Style {
+                size: Size { width: length(28.0_f32), height: length(28.0_f32) },
+                flex_shrink: 0.0,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .radius(5.0)
+            .fill(theme.bg_panel_alt)
+            .hover_fill(theme.bg_button_hover)
+            .tooltip(tip.to_string())
+            .on_click(msg)
+            .text_aligned(glifo.to_string(), 14.0, col, Alignment::Center)
+        };
+        let dup = icono("⧉", "Duplicar", mk("duplicar", FieldValue::Enum(name.clone())), theme.fg_muted);
+        let del = icono("✕", "Borrar", mk("eliminar", FieldValue::Enum(name.clone())), theme.accent);
+
+        let fila = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+            align_items: Some(AlignItems::Center),
+            gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![seleccionable, dup, del]);
+        filas.push(fila);
+    }
+
+    // ＋ Crear (único botón abajo).
+    let crear = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .radius(6.0)
+    .fill(theme.bg_panel_alt)
+    .hover_fill(theme.bg_button_hover)
+    .on_click(mk("crear", FieldValue::Bool(true)))
+    .text_aligned(format!("＋ {crear_label}"), 13.0, theme.fg_text, Alignment::Center);
+    filas.push(crear);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(12.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(filas)
+}
+
+/// Si `section_id` es una sección-lista de biblioteca de sets, devuelve
+/// `(nombres, activo, rótulo-crear)` para [`lista_set_view`]. `None` si no lo es.
+fn set_list_data(m: &Model, section_id: &str) -> Option<(Vec<String>, String, &'static str)> {
+    match section_id {
+        "perfiles::acciones" => {
+            Some((m.dprofiles.names(), m.dprofiles.active.clone(), "Crear perfil"))
+        }
+        "theme::acciones" => Some((m.themes.names(), active_theme_name(m), "Crear theme")),
+        "atajos::conjuntos" => {
+            Some((m.profiles.names(), m.profiles.active().to_string(), "Crear conjunto"))
+        }
+        "animaciones::conjuntos" => {
+            Some((m.animaciones.names(), m.animaciones.active().to_string(), "Crear conjunto"))
+        }
+        _ => None,
+    }
+}
+
 /// El cuerpo, jerarquía de 3 niveles al modo cosmos:
 /// `[ sidebar: items de la pestaña activa ] [ pestañas que sobresalen ] [ canvas: contenido del item ]`.
 /// La **pestaña** (rail) elige app/categoría; su **sidebar** lista los items
@@ -3336,6 +3510,10 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
                 // Lista de barras: vista custom (fila = nombre + posición +
                 // iconitos duplicar/borrar), que allichay no puede componer.
                 barras_editor_view(model, theme)
+            } else if let Some((items, active, crear)) = set_list_data(model, &sec.id) {
+                // Bibliotecas de sets: fila = radio + nombre + iconitos dup/del;
+                // abajo sólo «Crear». Misma estética que barras.
+                lista_set_view(&sec.id, &items, &active, crear, theme)
             } else {
                 panel
             }
