@@ -199,6 +199,30 @@ impl SceneSpec {
         self.actors.iter().map(|a| a.to_script()).collect()
     }
 
+    /// Los **instantes (seg) que merecen un acento musical**: los cortes de cámara
+    /// (inicio de cada plano salvo el primero) y los **gestos** de los actores (keys
+    /// con un clip *emote*). Es lo que deja caer la banda sonora *sobre la acción*.
+    /// Ordenados, sin repetir (dos a menos de `EPS` se funden). Espeja
+    /// [`Sequence::beat_times`](crate::Sequence::beat_times).
+    pub fn beat_times(&self) -> Vec<f32> {
+        const EPS: f32 = 0.05;
+        let mut ts: Vec<f32> = Vec::new();
+        for s in self.shots.iter().skip(1) {
+            ts.push(s.start);
+        }
+        for a in &self.actors {
+            for k in &a.keys {
+                if k.clip.is_some_and(|c| c.is_emote()) {
+                    ts.push(k.t);
+                }
+            }
+        }
+        ts.retain(|&t| t >= 0.0 && t <= self.duration + EPS);
+        ts.sort_by(f32::total_cmp);
+        ts.dedup_by(|a, b| (*a - *b).abs() < EPS);
+        ts
+    }
+
     /// El plano vigente en `t` (el último con `start ≤ t`); `Establishing` si no
     /// hay planos definidos.
     pub fn active_shot(&self, t: f32) -> ShotKind {
@@ -360,6 +384,18 @@ mod tests {
         let cam = ShotKind::CloseUp.resolve(look, 9.0, 1.0);
         assert_eq!(cam.target, look);
         assert!((cam.eye - look).length() > 1.0, "el ojo está separado del objetivo");
+    }
+
+    #[test]
+    fn beats_son_cortes_y_gestos() {
+        let dim = world_dim(128);
+        let s = SceneSpec::walk_and_emote("demo", 0, 2, Clip::Wave, dim);
+        // walk_and_emote: corte de cámara a t_turn (3.0) + el gesto Wave a t_turn.
+        // Caen en el mismo instante → se funden en un solo beat.
+        let beats = s.beat_times();
+        assert!(!beats.is_empty(), "hay al menos un acento");
+        assert!(beats.iter().all(|&t| t >= 0.0 && t <= s.duration + 0.1));
+        assert!(beats.iter().any(|&t| (t - 3.0).abs() < 0.2), "acento cerca del gesto/corte");
     }
 
     #[test]

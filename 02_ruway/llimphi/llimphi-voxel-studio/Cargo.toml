@@ -32,6 +32,9 @@ pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 tokio = { workspace = true }
 # Muxeo de la escena exportada (secuencia de PNG → .mkv) vía ffmpeg.
 foreign-av = { path = "../../../shared/foreign-av" }
+# Banda sonora del export: componer (takiy-core) + sintetizar a WAV (takiy-synth).
+takiy-core = { path = "../../takiy/takiy-core" }
+takiy-synth = { path = "../../takiy/takiy-synth" }
 # Persistencia de los artefactos en texto editable a mano (y salida de la IA).
 ron = { workspace = true }
 # Render headless a PNG para el modo --shot (verificación sin pantalla).

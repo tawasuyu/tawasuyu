@@ -42,6 +42,7 @@ mod ai;
 mod preview;
 mod render;
 mod shot;
+mod soundtrack;
 use preview::WorldPreview;
 
 /// Dónde se guarda/carga el proyecto (relativo al cwd).

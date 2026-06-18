@@ -4,6 +4,8 @@
 //! vuelca PNGs y los muxea a un `.mkv` con `foreign-av` (ffmpeg). Pensado para correr
 //! en un worker (`Handle::spawn`): es largo y bloqueante.
 
+use std::path::Path;
+
 use llimphi_3d::glam::Vec3;
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -15,8 +17,9 @@ use crate::preview::{WorldPreview, FMT};
 const W: u32 = 960;
 const H: u32 = 540;
 const FPS: u32 = 30;
-/// Carpeta de cuadros y archivo de salida.
+/// Carpeta de cuadros, banda sonora y archivo de salida.
 const FRAME_DIR: &str = "/tmp/voxel_studio_film";
+const AUDIO: &str = "/tmp/voxel_studio_film.wav";
 const OUT: &str = "/tmp/voxel_studio_film.mkv";
 
 /// Exporta `scene` (de `project`) a un video. Devuelve la ruta del `.mkv` o un
@@ -108,8 +111,12 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
         write_png(&hal, &target, &format!("{FRAME_DIR}/frame_{f:04}.png"));
     }
 
+    // Banda sonora sincronizada a los beats del guion (cortes + gestos).
+    let beats = scene.beat_times();
+    crate::soundtrack::render_to(AUDIO, &beats);
+
     let pattern = format!("{FRAME_DIR}/frame_%04d.png");
-    foreign_av::encode_frames(&pattern, FPS, 32, None, OUT)
+    foreign_av::encode_frames(&pattern, FPS, 32, Some(Path::new(AUDIO)), OUT)
         .map_err(|e| format!("ffmpeg falló ({e:?}); los PNG quedaron en {FRAME_DIR}/"))?;
     Ok(OUT.to_string())
 }
