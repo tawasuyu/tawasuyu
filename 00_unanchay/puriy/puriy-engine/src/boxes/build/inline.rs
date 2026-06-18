@@ -183,6 +183,13 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
     // lee `NoWrap`/`Pre` para shapear en una sola línea. El colapso de espacios
     // ya lo aplicó `collapse_whitespace` con el `white_space` del padre.
     leaf.white_space = style.white_space;
+    // `overflow-wrap`/`word-break` (Fase 7.1254): igual que `white-space`, la
+    // política de quiebre vive en el contenedor pero la decide la hoja de texto.
+    // Ambas HEREDAN (CSS), así que el leaf toma la del contenedor —el literal de
+    // arriba es `Normal` por defecto y este override lo corrige— y el wire lee
+    // `break-word`/`anywhere`/`break-all` para partir dentro de la palabra.
+    leaf.overflow_wrap = style.overflow_wrap;
+    leaf.word_break = style.word_break;
     leaf
 }
 

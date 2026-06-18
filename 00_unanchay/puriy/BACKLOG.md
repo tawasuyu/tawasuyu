@@ -841,6 +841,39 @@ sin texto).
 > el camino RichText (spans) ignora `no_wrap`. `white-space: pre-line` sigue
 > envolviendo (correcto).
 
+### 7.1254 ✅ — `overflow-wrap: break-word`/`anywhere` + `word-break: break-all` (partir dentro de la palabra)
+
+Continuación natural de la familia `white-space` (7.1253). `overflow-wrap` y
+`word-break` parseaban/computaban/heredaban (Fases 7.245/7.246) pero **nadie
+cableaba el quiebre**: una palabra más ancha que la caja desbordaba siempre, en
+vez de partirse. Ahora end-to-end:
+
+- **engine (`boxes/build/inline.rs`)**: la hoja de texto **hereda**
+  `overflow_wrap`/`word_break` del contenedor (antes hardcodeaba `Normal` en el
+  literal; mismo override post-construcción que `white_space`). Son heredables.
+- **text (`llimphi-text`)**: `layout`/`layout_clamped` ganan `overflow_wrap: bool`
+  (entra en la `ShapeKey` del caché); con el flag se empuja
+  `StyleProperty::OverflowWrap(Anywhere)` a parley, que parte el token largo. Sin
+  él, parley deja desbordar (comportamiento previo).
+- **compositor (llimphi)**: nuevo flag `TextSpec.overflow_wrap`/
+  `TextMeasure.overflow_wrap` + builder `View::overflow_wrap()`; lo transporta a
+  `layout_clamped` tanto en medida como en pintado.
+- **wire (puriy)**: el leaf lee `b.overflow_wrap`/`b.word_break` y llama
+  `.overflow_wrap()` cuando es `break-word`/`anywhere` (overflow-wrap) o
+  `break-all` (word-break). `Anywhere` cubre ambos valores CSS de overflow-wrap —
+  su diferencia con `BreakWord` (min-content sizing) no es visible en el wrap del
+  bloque, así que el flag al borde de la capa de texto es un único `bool`.
+
+Tests: `overflow_wrap_y_word_break_heredan_al_leaf_fase_7_1254` (engine: las tres
+variantes activas + defaults heredan al leaf), `overflow_wrap_parte_la_palabra_
+larga_fase_7_1254` (compositor: una palabra sin espacios más ancha que la caja
+mide ancho-acotado y más alto con el flag, desborda sin él), `overflow_wrap_setea_
+campo_del_texto_fase_7_1254` (builder del compositor).
+
+> v1: el camino RichText (spans, mixed-inline) ignora `overflow_wrap`, igual que
+> `no_wrap`/clamp/spacing. `word-break: keep-all`/`auto-phrase` y `hyphens` siguen
+> sin aplicar (modelados pero no cableados).
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +

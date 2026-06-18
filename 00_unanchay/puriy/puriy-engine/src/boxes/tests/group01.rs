@@ -1082,3 +1082,48 @@ use crate::Engine;
         assert_eq!(normal, Some(WhiteSpace::Normal), "default es Normal (envuelve)");
     }
 
+    #[test]
+    fn overflow_wrap_y_word_break_heredan_al_leaf_fase_7_1254() {
+        use crate::style::{OverflowWrap, WordBreak};
+        // `overflow-wrap` y `word-break` HEREDAN (CSS): la hoja de texto toma el
+        // valor del contenedor. El wire lee `BreakWord`/`Anywhere` (overflow-wrap)
+        // o `BreakAll` (word-break) para habilitar partir dentro de la palabra;
+        // `Normal` (default) deja desbordar.
+        let html = "<html><head><style>\
+            .bw { overflow-wrap: break-word; }\
+            .any { overflow-wrap: anywhere; }\
+            .ba { word-break: break-all; }\
+            </style></head><body>\
+            <div class=\"bw\">palabra_break_word</div>\
+            <div class=\"any\">palabra_anywhere</div>\
+            <div class=\"ba\">palabra_break_all</div>\
+            <div>palabra_normal</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut bw: Option<OverflowWrap> = None;
+        let mut any: Option<OverflowWrap> = None;
+        let mut ba: Option<WordBreak> = None;
+        let mut normal_ow: Option<OverflowWrap> = None;
+        let mut normal_wb: Option<WordBreak> = None;
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.contains("break_word") {
+                    bw = Some(b.overflow_wrap);
+                } else if t.contains("anywhere") {
+                    any = Some(b.overflow_wrap);
+                } else if t.contains("break_all") {
+                    ba = Some(b.word_break);
+                } else if t.contains("normal") {
+                    normal_ow = Some(b.overflow_wrap);
+                    normal_wb = Some(b.word_break);
+                }
+            }
+        });
+        assert_eq!(bw, Some(OverflowWrap::BreakWord), "break-word hereda al leaf");
+        assert_eq!(any, Some(OverflowWrap::Anywhere), "anywhere hereda al leaf");
+        assert_eq!(ba, Some(WordBreak::BreakAll), "break-all hereda al leaf");
+        assert_eq!(normal_ow, Some(OverflowWrap::Normal), "default overflow-wrap = Normal");
+        assert_eq!(normal_wb, Some(WordBreak::Normal), "default word-break = Normal");
+    }
+

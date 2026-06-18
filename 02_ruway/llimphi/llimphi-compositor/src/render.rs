@@ -183,6 +183,7 @@ pub fn mount_recursive<Msg: Clone>(
                         letter_spacing: text.letter_spacing,
                         word_spacing: text.word_spacing,
                         no_wrap: text.no_wrap,
+                        overflow_wrap: text.overflow_wrap,
                     },
                 );
             }
@@ -262,6 +263,7 @@ pub fn measure_text_node(
         tm.strikethrough,
         tm.letter_spacing,
         tm.word_spacing,
+        tm.overflow_wrap,
     );
     let m = llimphi_text::measurement(&layout);
     llimphi_layout::taffy::Size { width: m.width, height: m.height }
@@ -1040,6 +1042,7 @@ pub fn paint_range<Msg>(
                     text.strikethrough,
                     text.letter_spacing,
                     text.word_spacing,
+                    text.overflow_wrap,
                 );
                 let origin =
                     if matches!(text.alignment, llimphi_text::Alignment::Center) {

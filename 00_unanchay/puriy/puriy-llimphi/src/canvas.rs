@@ -750,6 +750,8 @@ pub(crate) fn paint_canvas_cmds(
                     false,
                     0.0,
                     0.0,
+                    // canvas fillText no envuelve (max_width None) ⇒ overflow-wrap inocuo.
+                    false,
                 );
                 // textAlign: ajusta x. Baseline alphabetic ⇒ subimos ~0.8em.
                 let tw = layout.width() as f64;

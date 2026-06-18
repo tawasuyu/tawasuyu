@@ -112,6 +112,13 @@ pub struct TextSpec {
     /// camino uniforme (`layout_clamped`); el de spans (RichText) lo ignora en
     /// v1, igual que el clamp.
     pub no_wrap: bool,
+    /// `overflow-wrap: break-word`/`anywhere` (o `word-break: break-all`): si
+    /// `true`, una palabra más ancha que la caja se **parte** para que entre,
+    /// en vez de desbordar. Afecta medida (taffy puede reservar menos ancho) y
+    /// pintado. Default false (la palabra larga desborda — comportamiento
+    /// previo). Sólo el camino uniforme (`layout_clamped`); el de spans
+    /// (RichText) lo ignora en v1, igual que `no_wrap`/clamp.
+    pub overflow_wrap: bool,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
@@ -1006,6 +1013,10 @@ pub struct TextMeasure {
     /// reservado: con `no_wrap` el texto se mide en una sola línea (ancho
     /// completo) en vez de envolver al `available`.
     pub no_wrap: bool,
+    /// Idem [`TextSpec::overflow_wrap`]. Entra en la medida porque parte la
+    /// palabra larga: con el flag, el ancho mínimo del bloque deja de estar
+    /// fijado por el token más ancho.
+    pub overflow_wrap: bool,
 }
 
 /// Cómo encajar una imagen en el rect del nodo (CSS `object-fit` /

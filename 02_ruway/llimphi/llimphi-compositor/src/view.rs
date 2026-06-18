@@ -855,6 +855,7 @@ impl<Msg> View<Msg> {
             word_spacing: 0.0,
             spans: None,
             no_wrap: false,
+            overflow_wrap: false,
         });
         self
     }
@@ -884,6 +885,7 @@ impl<Msg> View<Msg> {
             word_spacing: 0.0,
             spans: None,
             no_wrap: false,
+            overflow_wrap: false,
         });
         self
     }
@@ -916,6 +918,7 @@ impl<Msg> View<Msg> {
             word_spacing: 0.0,
             spans: None,
             no_wrap: false,
+            overflow_wrap: false,
         });
         self
     }
@@ -950,6 +953,7 @@ impl<Msg> View<Msg> {
             word_spacing: 0.0,
             spans: None,
             no_wrap: false,
+            overflow_wrap: false,
         });
         self
     }
@@ -985,6 +989,7 @@ impl<Msg> View<Msg> {
             word_spacing: 0.0,
             spans: None,
             no_wrap: false,
+            overflow_wrap: false,
         });
         self
     }
@@ -1025,6 +1030,7 @@ impl<Msg> View<Msg> {
             word_spacing: 0.0,
             spans: Some(spans),
             no_wrap: false,
+            overflow_wrap: false,
         });
         self
     }
@@ -1130,6 +1136,17 @@ impl<Msg> View<Msg> {
     pub fn no_wrap(mut self) -> Self {
         if let Some(t) = self.text.as_mut() {
             t.no_wrap = true;
+        }
+        self
+    }
+
+    /// `overflow-wrap: break-word`/`anywhere` (CSS): una palabra más ancha que
+    /// la caja se **parte** para que entre, en vez de desbordar. Afecta medida
+    /// y pintado. No-op sin texto. Sólo el camino uniforme; el RichText con
+    /// spans lo ignora en v1, igual que `no_wrap`.
+    pub fn overflow_wrap(mut self) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.overflow_wrap = true;
         }
         self
     }
@@ -1711,5 +1728,26 @@ mod semantics_tests {
         // No-op sin texto: no panickea ni inventa un TextSpec.
         let sin = View::<()>::new(Style::default()).no_wrap();
         assert!(sin.text.is_none(), "no_wrap sin texto no crea TextSpec");
+    }
+
+    #[test]
+    fn overflow_wrap_setea_campo_del_texto_fase_7_1254() {
+        // `.overflow_wrap()` marca el TextSpec para partir la palabra larga (CSS
+        // `overflow-wrap: break-word`). Ortogonal al resto; default false (la
+        // palabra desborda). No-op si el nodo no tiene texto.
+        let v = View::<()>::new(Style::default())
+            .text("palabralarga", 14.0, Color::BLACK)
+            .overflow_wrap();
+        let t = v.text.as_ref().expect("text");
+        assert!(t.overflow_wrap, "overflow_wrap=true tras el builder");
+        // Default: la palabra larga desborda (overflow_wrap=false).
+        let def = View::<()>::new(Style::default()).text("x", 14.0, Color::BLACK);
+        assert!(
+            !def.text.as_ref().unwrap().overflow_wrap,
+            "default es desbordar"
+        );
+        // No-op sin texto: no panickea ni inventa un TextSpec.
+        let sin = View::<()>::new(Style::default()).overflow_wrap();
+        assert!(sin.text.is_none(), "overflow_wrap sin texto no crea TextSpec");
     }
 }

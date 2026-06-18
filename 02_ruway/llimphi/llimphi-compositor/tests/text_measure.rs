@@ -81,6 +81,7 @@ fn no_wrap_mide_una_sola_linea_fase_7_1253() {
         letter_spacing: 0.0,
         word_spacing: 0.0,
         no_wrap,
+        overflow_wrap: false,
     };
     let mut ts = llimphi_text::Typesetter::new();
     let known = TSize { width: None, height: None };
@@ -125,6 +126,7 @@ fn line_height_mayor_reserva_mas_alto() {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             no_wrap: false,
+            overflow_wrap: false,
         };
         let known = TSize { width: Some(180.0_f32), height: None };
         let avail = TSize {
@@ -138,5 +140,59 @@ fn line_height_mayor_reserva_mas_alto() {
     assert!(
         comodo > compacto * 1.5,
         "line-height: 2 debería reservar bastante más alto que 1.0 (got {compacto} vs {comodo})"
+    );
+}
+
+#[test]
+fn overflow_wrap_parte_la_palabra_larga_fase_7_1254() {
+    use llimphi_layout::taffy::AvailableSpace;
+    // Una sola palabra sin espacios, más ancha que la caja angosta. Sin
+    // `overflow-wrap` parley la deja desbordar (mide más ancho que la caja);
+    // con `overflow-wrap` la parte para que entre (ancho acotado, varias líneas
+    // ⇒ más alto). Es el regresor directo de la Fase 7.1254.
+    let palabrota = "supercalifragilisticoexpialidosoineluctableantidisestablishmentariano";
+    let mk = |overflow_wrap: bool| llimphi_compositor::TextMeasure {
+        content: palabrota.to_string(),
+        size_px: 16.0,
+        alignment: llimphi_text::Alignment::Start,
+        italic: false,
+        font_family: None,
+        line_height: 1.2,
+        weight: 400.0,
+        max_lines: None,
+        ellipsis: false,
+        underline: false,
+        strikethrough: false,
+        spans: None,
+        letter_spacing: 0.0,
+        word_spacing: 0.0,
+        no_wrap: false,
+        overflow_wrap,
+    };
+    let mut ts = llimphi_text::Typesetter::new();
+    let known = TSize { width: None, height: None };
+    let avail = TSize {
+        width: AvailableSpace::Definite(80.0),
+        height: AvailableSpace::MaxContent,
+    };
+    let normal = measure_text_node(&mut ts, &mk(false), known, avail);
+    let roto = measure_text_node(&mut ts, &mk(true), known, avail);
+    // Sin overflow-wrap: la palabra desborda → ancho mayor que la caja.
+    assert!(
+        normal.width > 80.0,
+        "sin overflow-wrap la palabra desborda: {}",
+        normal.width
+    );
+    // Con overflow-wrap: se parte → ancho acotado a la caja y más alto.
+    assert!(
+        roto.width <= 80.0 + 1.0,
+        "overflow-wrap acota el ancho a la caja: {}",
+        roto.width
+    );
+    assert!(
+        roto.height > normal.height,
+        "overflow-wrap parte en varias líneas (más alto): roto={} normal={}",
+        roto.height,
+        normal.height
     );
 }

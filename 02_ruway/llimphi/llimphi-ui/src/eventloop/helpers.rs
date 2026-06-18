@@ -243,6 +243,7 @@ pub(super) fn build_selectable_layout(
         spec.strikethrough,
         spec.letter_spacing,
         spec.word_spacing,
+        spec.overflow_wrap,
     )
 }
 
