@@ -89,6 +89,12 @@ pub enum Clip {
 }
 
 impl Clip {
+    /// `true` si el clip es un **gesto** (no locomoción) — un momento expresivo que
+    /// merece un acento musical. Lo usa el director para derivar los "beats del guion".
+    pub fn is_emote(self) -> bool {
+        matches!(self, Clip::Wave | Clip::Point | Clip::Cheer)
+    }
+
     /// Velocidad de avance de la fase (rad/seg): pasos más rápidos = más cadencia.
     pub fn cadence(self) -> f32 {
         match self {
@@ -178,6 +184,11 @@ pub struct Actor {
     pub shirt: [f32; 3],
     /// Color del pantalón (piernas).
     pub pants: [f32; 3],
+    /// **IK de mirada** (look-at constraint): si está, la cabeza gira (yaw+pitch,
+    /// dentro de un rango creíble) para **mirar ese punto de mundo**, por encima del
+    /// cabeceo del clip — los ojos siguen al objetivo. `None` = cabeza alineada al
+    /// cuerpo. La fija [`look_at`](Self::look_at).
+    look_target: Option<Vec3>,
 }
 
 impl Actor {
@@ -196,7 +207,15 @@ impl Actor {
             skin: [0.86, 0.68, 0.54],
             shirt: [0.20, 0.62, 0.55],
             pants: [0.18, 0.22, 0.34],
+            look_target: None,
         }
+    }
+
+    /// Fija (o limpia con `None`) el **objetivo de mirada** (IK de cabeza): la cabeza
+    /// y los ojos se orientan hacia ese punto de mundo, dentro de un rango creíble,
+    /// sin mover el cuerpo. Útil para que un actor "mire a cámara" o siga algo.
+    pub fn look_at(&mut self, target: Option<Vec3>) {
+        self.look_target = target;
     }
 
     /// Tinta el actor (piel/remera/pantalón) — encadenable tras [`new`](Self::new).
@@ -267,25 +286,50 @@ impl Actor {
     /// [`model`](Self::model).
     pub fn mesh(&self) -> (Vec<Vertex3d>, Vec<u16>) {
         let p = self.pose();
-        let mut v = Vec::with_capacity(8 * 6);
-        let mut i = Vec::with_capacity(36 * 6);
+        let mut v = Vec::with_capacity(8 * 11);
+        let mut i = Vec::with_capacity(36 * 11);
 
         // Transform del cuerpo superior: rebote vertical + inclinación adelante
         // (rotación en X alrededor de los pies/origen).
         let body = Mat4::from_translation(Vec3::new(0.0, p.bob, 0.0)) * Mat4::from_rotation_x(p.lean);
 
-        // Torso y cabeza (la cabeza con su cabeceo, alrededor de su centro).
+        // Torso.
         push_cube(
             &mut v,
             &mut i,
             body * trs(Vec3::new(0.0, 1.10, 0.0), Mat4::IDENTITY, Vec3::new(0.55, 0.60, 0.30)),
             self.shirt,
         );
+
+        // Cabeza: cabeceo del clip + IK de mirada (yaw/pitch hacia el objetivo). El
+        // `head_anchor` (sin escala) ancla cabeza, ojos y boca para que giren juntos.
+        let (look_yaw, look_pitch) = self.look_angles();
+        let head_rot = Mat4::from_rotation_y(look_yaw) * Mat4::from_rotation_x(p.head_pitch + look_pitch);
+        let head_anchor = body * Mat4::from_translation(Vec3::new(0.0, 1.62, 0.0)) * head_rot;
+        push_cube(&mut v, &mut i, head_anchor * Mat4::from_scale(Vec3::new(0.42, 0.40, 0.42)), self.skin);
+
+        // Cara: dos ojos + boca en la cara `+Z` de la cabeza (media-extensión z=0.21).
+        // Parpadeo determinista (los ojos se achican un instante cada ~3 s de fase) y
+        // boca que se abre con los gestos expresivos → "animación de cara".
+        // Ojos/boca = decales finos sobre la cara (apenas sobresalen, estilo Minecraft):
+        // así no alargan la silueta, sólo pintan la cara.
+        let eye = [0.04, 0.06, 0.02];
+        let blink = self.blink(); // 1 = abierto, ~0 = cerrado
+        let eyeh = (eye[1] * blink).max(0.012);
+        for sx in [0.11_f32, -0.11] {
+            push_cube(
+                &mut v,
+                &mut i,
+                head_anchor * trs(Vec3::new(sx, 0.05, 0.205), Mat4::IDENTITY, Vec3::new(eye[0], eyeh, eye[2])),
+                EYE_COLOR,
+            );
+        }
+        let mouth_open = self.mouth_open();
         push_cube(
             &mut v,
             &mut i,
-            body * trs(Vec3::new(0.0, 1.62, 0.0), Mat4::from_rotation_x(p.head_pitch), Vec3::new(0.42, 0.40, 0.42)),
-            self.skin,
+            head_anchor * trs(Vec3::new(0.0, -0.10, 0.205), Mat4::IDENTITY, Vec3::new(0.16, 0.02 + mouth_open, 0.02)),
+            MOUTH_COLOR,
         );
 
         // Piernas (sin `body`: pies plantados). Articulación en cadera y=0.8.
@@ -295,11 +339,92 @@ impl Actor {
         // Brazos (con `body`). Hombro y=1.40; rotación = apertura(Z)·balanceo(X).
         // La apertura se espeja por lado (positivo = levantar hacia su costado).
         let arm = Vec3::new(0.18, 0.60, 0.18);
-        limb(&mut v, &mut i, body, Vec3::new(0.36, 1.40, 0.0), 0.60, arm, Mat4::from_rotation_z(p.arm_r_out) * Mat4::from_rotation_x(p.arm_r), self.shirt);
-        limb(&mut v, &mut i, body, Vec3::new(-0.36, 1.40, 0.0), 0.60, arm, Mat4::from_rotation_z(-p.arm_l_out) * Mat4::from_rotation_x(p.arm_l), self.shirt);
+        let arm_r_rot = Mat4::from_rotation_z(p.arm_r_out) * Mat4::from_rotation_x(p.arm_r);
+        let arm_l_rot = Mat4::from_rotation_z(-p.arm_l_out) * Mat4::from_rotation_x(p.arm_l);
+        limb(&mut v, &mut i, body, Vec3::new(0.36, 1.40, 0.0), 0.60, arm, arm_r_rot, self.shirt);
+        limb(&mut v, &mut i, body, Vec3::new(-0.36, 1.40, 0.0), 0.60, arm, arm_l_rot, self.shirt);
+
+        // Manos: una caja de piel en la punta de cada brazo (a `len` del hombro, donde
+        // termina la caja del brazo), siguiendo su rotación.
+        let hand = Vec3::new(0.20, 0.18, 0.20);
+        hand_at(&mut v, &mut i, body, Vec3::new(0.36, 1.40, 0.0), 0.60, arm_r_rot, hand, self.skin);
+        hand_at(&mut v, &mut i, body, Vec3::new(-0.36, 1.40, 0.0), 0.60, arm_l_rot, hand, self.skin);
 
         (v, i)
     }
+
+    /// Ángulos `(yaw, pitch)` de la cabeza para el IK de mirada: dirección al objetivo
+    /// llevada al espacio local del actor (deshaciendo `facing`) y acotada a un rango
+    /// creíble (±70° yaw, ±50° pitch) para que el cuello no se quiebre. `(0,0)` si no
+    /// hay objetivo.
+    fn look_angles(&self) -> (f32, f32) {
+        use std::f32::consts::FRAC_PI_2;
+        let Some(target) = self.look_target else { return (0.0, 0.0) };
+        // Posición aproximada de la cabeza en mundo (pies + 1.62 de altura).
+        let head_pos = self.pos + Vec3::new(0.0, 1.62, 0.0);
+        let d = target - head_pos;
+        if d.length_squared() < 1e-6 {
+            return (0.0, 0.0);
+        }
+        // A espacio local: deshacer el yaw del cuerpo.
+        let local = Mat4::from_rotation_y(-self.facing).transform_vector3(d).normalize();
+        let yaw = local.x.atan2(local.z).clamp(-1.22, 1.22); // ±70°
+        let pitch = (-local.y).asin().clamp(-0.87, 0.87); // ±50°, mirar arriba/abajo
+        let _ = FRAC_PI_2;
+        (yaw, pitch)
+    }
+
+    /// Apertura de párpados `0..1` (1 = abierto). Parpadeo determinista por la fase:
+    /// un cierre breve cada ~3 unidades de fase. Idle no necesita objetivo.
+    fn blink(&self) -> f32 {
+        let ph = self.phase * 0.33; // ciclos lentos
+        let f = ph - ph.floor();
+        // Cerrado sólo en una ventana corta (~6% del ciclo).
+        if f > 0.94 {
+            // Sube y baja rápido dentro de la ventana (triángulo invertido).
+            let w = (f - 0.94) / 0.06; // 0..1
+            (1.0 - (1.0 - (2.0 * w - 1.0).abs())).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Apertura de la boca (unidades): abierta en los gestos expresivos (festejar más
+    /// que saludar/señalar), cerrada el resto → la cara "reacciona" al clip.
+    fn mouth_open(&self) -> f32 {
+        match self.clip {
+            Clip::Cheer => 0.10 + 0.04 * self.phase.sin().abs(),
+            Clip::Wave | Clip::Point => 0.05,
+            _ => 0.0,
+        }
+    }
+}
+
+/// Color de los ojos (casi negro).
+const EYE_COLOR: [f32; 3] = [0.08, 0.07, 0.09];
+/// Color de la boca (marrón oscuro).
+const MOUTH_COLOR: [f32; 3] = [0.30, 0.12, 0.12];
+
+/// Apila la **mano** en la punta de un miembro: una caja de tamaño `hand` centrada a
+/// `len` del pivote `joint` (donde termina la caja del brazo), con la misma rotación
+/// `rot` del brazo y el mismo prefijo `pre`.
+#[allow(clippy::too_many_arguments)]
+fn hand_at(
+    v: &mut Vec<Vertex3d>,
+    i: &mut Vec<u16>,
+    pre: Mat4,
+    joint: Vec3,
+    len: f32,
+    rot: Mat4,
+    hand: Vec3,
+    color: [f32; 3],
+) {
+    let m = pre
+        * Mat4::from_translation(joint)
+        * rot
+        * Mat4::from_translation(Vec3::new(0.0, -len, 0.0))
+        * Mat4::from_scale(hand);
+    push_cube(v, i, m, color);
 }
 
 /// `T(center) · R · S(size)` — caja centrada en `center`, rotada por `rot`,
@@ -344,11 +469,32 @@ mod tests {
     }
 
     #[test]
-    fn malla_tiene_seis_cajas() {
+    fn malla_tiene_once_cajas() {
+        // 6 del cuerpo (torso/cabeza/2 piernas/2 brazos) + 2 manos + 2 ojos + boca.
         let a = Actor::new(Vec3::ZERO, 0.0);
         let (v, idx) = a.mesh();
-        assert_eq!(v.len(), 8 * 6, "6 cajas × 8 vértices");
-        assert_eq!(idx.len(), 36 * 6, "6 cajas × 36 índices");
+        assert_eq!(v.len(), 8 * 11, "11 cajas × 8 vértices");
+        assert_eq!(idx.len(), 36 * 11, "11 cajas × 36 índices");
+    }
+
+    #[test]
+    fn ik_de_mirada_gira_la_cabeza_hacia_el_objetivo() {
+        // Mirar a la derecha (mundo +X) vs a la izquierda (−X): los ojos (vértices más
+        // adelantados en la cara) deben desplazarse en X en sentidos opuestos.
+        let eye_centroid_x = |a: &Actor| {
+            // Los ojos están en la cara +Z, son los vértices con mayor z y |x|≈0.11.
+            let verts = a.mesh().0;
+            let zmax = verts.iter().map(|v| v.pos[2]).fold(f32::MIN, f32::max);
+            let front: Vec<f32> =
+                verts.iter().filter(|v| v.pos[2] > zmax - 0.05).map(|v| v.pos[0]).collect();
+            front.iter().sum::<f32>() / front.len().max(1) as f32
+        };
+        let mut right = Actor::new(Vec3::ZERO, 0.0);
+        right.look_at(Some(Vec3::new(10.0, 1.62, 1.0)));
+        let mut left = Actor::new(Vec3::ZERO, 0.0);
+        left.look_at(Some(Vec3::new(-10.0, 1.62, 1.0)));
+        // Mirar a +X adelanta la cara hacia +X; a −X, hacia −X.
+        assert!(eye_centroid_x(&right) > eye_centroid_x(&left) + 0.05, "la cabeza sigue al objetivo");
     }
 
     #[test]
