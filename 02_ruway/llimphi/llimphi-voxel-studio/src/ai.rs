@@ -7,7 +7,7 @@
 //!    fallback cuando no hay modelo real (Mock) o la salida del LLM no parsea, así
 //!    el botón **siempre** produce un mundo (de ahí lo "poor": sirve sin nube).
 
-use llimphi_voxel::{Flora, Material, WorldRecipe};
+use llimphi_voxel::{Clip, Flora, Material, SceneSpec, WorldRecipe};
 use pluma_llm::pluma_llm_core::ChatRequest;
 
 /// Instrucción del sistema: enseña el formato RON exacto y el significado de cada
@@ -134,6 +134,48 @@ pub fn local_recipe(prompt: &str) -> WorldRecipe {
     r
 }
 
+/// **Escena desde prosa** (heurística local, instantánea/offline): deduce cuántos
+/// actores y qué gesto del texto y arma la escena patrón "entran y saludan" en el
+/// mundo `world`. `dim` es el tamaño del mundo (coords de grilla del guion).
+pub fn generate_scene(prompt: &str, world: usize, dim: [u32; 3]) -> SceneSpec {
+    let p = prompt.to_lowercase();
+    let n = parse_count(&p);
+    let gesture = if p.contains("salud") {
+        Clip::Wave
+    } else if p.contains("festej") || p.contains("celebr") || p.contains("baila") || p.contains("fiesta") {
+        Clip::Cheer
+    } else if p.contains("señal") || p.contains("apunt") || p.contains("muestr") {
+        Clip::Point
+    } else {
+        Clip::Wave
+    };
+    let name = scene_name(prompt);
+    SceneSpec::walk_and_emote(name, world, n, gesture, dim)
+}
+
+/// Cuántos actores pide el texto (palabra o dígito); 3 por defecto.
+fn parse_count(p: &str) -> usize {
+    for (w, n) in [
+        ("cinco", 5usize), ("cuatro", 4), ("tres", 3), ("dos", 2), ("una", 1), ("uno", 1),
+        (" 5", 5), (" 4", 4), (" 3", 3), (" 2", 2), (" 1", 1),
+    ] {
+        if p.contains(w) {
+            return n;
+        }
+    }
+    3
+}
+
+/// Nombre de escena = primeras ~4 palabras de la descripción.
+fn scene_name(prompt: &str) -> String {
+    let s: String = prompt.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
+    if s.is_empty() {
+        "escena IA".into()
+    } else {
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +213,15 @@ peak_at: 0.8, flora: None, flora_density: 0.0)\n```\nlisto.";
         let b = local_recipe("islas tropicales con ríos");
         assert_eq!(a.seed, b.seed);
         assert!(a.water_level >= 0.5 && a.rivers >= 0.6);
+    }
+
+    #[test]
+    fn escena_lee_cantidad_y_gesto() {
+        let s = generate_scene("dos personajes que festejan", 1, [128, 56, 128]);
+        assert_eq!(s.actors.len(), 2);
+        assert_eq!(s.world, 1);
+        // El gesto festejar entra como Cheer en la key del giro.
+        let tiene_cheer = s.actors[0].keys.iter().any(|k| k.clip == Some(Clip::Cheer));
+        assert!(tiene_cheer, "festejar → Cheer");
     }
 }

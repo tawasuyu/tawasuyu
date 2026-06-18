@@ -10,7 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::actor::{Actor, Age};
+use crate::actor::{Actor, Age, Clip};
+use crate::director::{ActorKey, ActorScript};
 use crate::worldgen::WorldRecipe;
 use llimphi_3d::glam::Vec3;
 
@@ -64,26 +65,131 @@ impl CharSpec {
     }
 }
 
-/// El **proyecto**: la bolsa de artefactos del creador. Crece por artefacto
-/// (mundos hoy; personajes y escenas a medida que el editor los soporte). Vacío
-/// por defecto; [`starter`](Self::starter) trae un par de mundos de arranque.
+/// **Keyframe serializable** de un actor (espejo de [`ActorKey`]): dónde está en
+/// la grilla en `t`, y opcionalmente qué clip reproduce y hacia dónde mira.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ActorKeySpec {
+    pub t: f32,
+    pub gx: f32,
+    pub gz: f32,
+    #[serde(default)]
+    pub clip: Option<Clip>,
+    #[serde(default)]
+    pub face: Option<f32>,
+}
+
+impl ActorKeySpec {
+    /// Compila a un [`ActorKey`] del director.
+    pub fn to_key(self) -> ActorKey {
+        let mut k = ActorKey::at(self.t, self.gx, self.gz);
+        if let Some(c) = self.clip {
+            k = k.play(c);
+        }
+        if let Some(f) = self.face {
+            k = k.facing(f);
+        }
+        k
+    }
+}
+
+/// **Actor de una escena**: qué personaje del proyecto lo interpreta (`character`,
+/// índice en [`Project::characters`]) y su guion de keyframes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActorSpec {
+    pub character: usize,
+    pub keys: Vec<ActorKeySpec>,
+}
+
+impl ActorSpec {
+    /// Compila los keyframes a un [`ActorScript`] reproducible.
+    pub fn to_script(&self) -> ActorScript {
+        ActorScript::new(self.keys.iter().map(|k| k.to_key()).collect())
+    }
+}
+
+/// **Especificación serializable de una escena**: el mundo de fondo (`world`,
+/// índice en [`Project::worlds`]), la duración y el reparto guionado. Es la versión
+/// editable/IA-emisible del [`Sequence`](crate::Sequence) del director; se compila
+/// con [`scripts`](Self::scripts) y se reproduce posando cada actor en `sample(t)`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneSpec {
+    pub name: String,
+    pub world: usize,
+    pub duration: f32,
+    pub actors: Vec<ActorSpec>,
+}
+
+impl SceneSpec {
+    /// Los guiones de los actores, listos para `sample(t)`.
+    pub fn scripts(&self) -> Vec<ActorScript> {
+        self.actors.iter().map(|a| a.to_script()).collect()
+    }
+
+    /// **Escena patrón "entran y saludan"**: `n` actores entran caminando por el
+    /// centro del mundo de izquierda a derecha, se giran y hacen `gesture`. Coords
+    /// de grilla (la altura del terreno se aplica al reproducir). La base tanto del
+    /// arranque como de la generación por IA.
+    pub fn walk_and_emote(
+        name: impl Into<String>,
+        world: usize,
+        n: usize,
+        gesture: Clip,
+        dim: [u32; 3],
+    ) -> Self {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let n = n.clamp(1, 5);
+        let margin = 18.0_f32;
+        let gx0 = margin;
+        let gx1 = (dim[0] as f32 - margin).max(gx0 + 1.0);
+        let cz = dim[2] as f32 * 0.5;
+        let (t_walk, t_turn, dur) = (2.6_f32, 3.0_f32, 5.6_f32);
+
+        let mut actors = Vec::with_capacity(n);
+        for i in 0..n {
+            let off = (i as f32 - (n as f32 - 1.0) / 2.0) * 3.0;
+            let gz = cz + off;
+            actors.push(ActorSpec {
+                character: i,
+                keys: vec![
+                    ActorKeySpec { t: 0.0, gx: gx0, gz, clip: None, face: None },
+                    ActorKeySpec { t: t_walk, gx: gx1, gz, clip: None, face: Some(FRAC_PI_2) },
+                    ActorKeySpec { t: t_turn, gx: gx1, gz, clip: Some(gesture), face: Some(PI) },
+                    ActorKeySpec { t: dur, gx: gx1, gz, clip: Some(gesture), face: Some(PI) },
+                ],
+            });
+        }
+        Self { name: name.into(), world, duration: dur, actors }
+    }
+}
+
+/// El **proyecto**: la bolsa de artefactos del creador (mundos, personajes,
+/// escenas). Vacío por defecto; [`starter`](Self::starter) trae algo que tocar.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Project {
     pub worlds: Vec<NamedWorld>,
     #[serde(default)]
     pub characters: Vec<CharSpec>,
+    #[serde(default)]
+    pub scenes: Vec<SceneSpec>,
 }
 
 impl Project {
-    /// Proyecto de arranque: el desierto y la pradera (los dos presets), para que
-    /// el editor abra con algo que tocar.
+    /// Proyecto de arranque: el desierto y la pradera, un trío de personajes
+    /// distinguibles y una escena demo (entran y saludan en el desierto).
     pub fn starter() -> Self {
+        let characters = vec![
+            CharSpec { name: "rojo".into(), age: Age::Adult, skin: [0.90, 0.72, 0.58], shirt: [0.82, 0.28, 0.26], pants: [0.20, 0.20, 0.28] },
+            CharSpec { name: "azul".into(), age: Age::Adult, skin: [0.86, 0.68, 0.54], shirt: [0.22, 0.55, 0.78], pants: [0.18, 0.20, 0.24] },
+            CharSpec { name: "amarillo".into(), age: Age::Adult, skin: [0.92, 0.78, 0.62], shirt: [0.92, 0.80, 0.30], pants: [0.26, 0.22, 0.20] },
+        ];
+        let dim = world_dim(PREVIEW_DIM_XZ);
         Self {
             worlds: vec![
                 NamedWorld::new("desierto", WorldRecipe::desert(1337)),
                 NamedWorld::new("pradera", WorldRecipe::grassland(1337)),
             ],
-            characters: vec![CharSpec::new("personaje", Age::Adult)],
+            characters,
+            scenes: vec![SceneSpec::walk_and_emote("saludo en el desierto", 0, 3, Clip::Wave, dim)],
         }
     }
 
@@ -91,6 +197,21 @@ impl Project {
     pub fn add_world(&mut self, w: NamedWorld) -> usize {
         self.worlds.push(w);
         self.worlds.len() - 1
+    }
+
+    /// Agrega una escena y devuelve su índice.
+    pub fn add_scene(&mut self, s: SceneSpec) -> usize {
+        self.scenes.push(s);
+        self.scenes.len() - 1
+    }
+
+    /// Personaje `i`, o uno por defecto si el índice se sale (escenas que piden
+    /// más actores que personajes hay).
+    pub fn character_or_default(&self, i: usize) -> CharSpec {
+        self.characters
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| CharSpec::new("actor", Age::Adult))
     }
 }
 
@@ -120,5 +241,28 @@ mod tests {
     fn world_dim_minimo_48_de_alto() {
         assert_eq!(world_dim(64)[1], 48); // 64*0.4=25.6 → clamp a 48
         assert_eq!(world_dim(192)[1], 76);
+    }
+
+    #[test]
+    fn escena_round_trip_y_compila_a_guiones() {
+        let dim = world_dim(128);
+        let s = SceneSpec::walk_and_emote("demo", 0, 3, Clip::Wave, dim);
+        // RON ida y vuelta.
+        let txt = ron::ser::to_string(&s).expect("ron");
+        let back: SceneSpec = ron::from_str(&txt).expect("de-ron");
+        assert_eq!(back.actors.len(), 3);
+        // Compila a guiones reproducibles: a mitad de la caminata el actor se movió.
+        let scripts = back.scripts();
+        let start = scripts[0].sample(0.0);
+        let mid = scripts[0].sample(1.3);
+        assert!(mid.gx > start.gx, "el actor avanza en X: {} → {}", start.gx, mid.gx);
+    }
+
+    #[test]
+    fn starter_trae_escena_y_personajes() {
+        let p = Project::starter();
+        assert_eq!(p.characters.len(), 3);
+        assert_eq!(p.scenes.len(), 1);
+        assert_eq!(p.scenes[0].world, 0);
     }
 }

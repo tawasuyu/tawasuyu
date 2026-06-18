@@ -1,26 +1,32 @@
 //! Preview 3D en vivo de un [`WorldRecipe`]: genera el `VoxelGrid` de la receta y
-//! lo compone con [`Scene3d`] sobre el target del canvas. Se **regenera** cuando
-//! cambia la "generación" (un contador que el editor incrementa al tocar un
-//! parámetro) o el `dim` — así mover un slider repinta el mundo nuevo.
+//! lo compone con [`Scene3d`] sobre el target del canvas, **confinado** al rect del
+//! panel. Se **regenera** cuando cambia la "generación" (un contador que el editor
+//! incrementa al tocar un parámetro / cambiar de mundo) o el `dim`.
 //!
-//! Liviano y deliberadamente tonto: reconstruye el `VoxelRenderer` entero al
-//! regenerar (un editor edita a ritmo humano; a lo sumo un rebuild por frame). No
-//! hay jugador, manada ni monumento: sólo el terreno de la receta.
+//! Además del terreno, sabe **posar actores**: guarda el grid para consultar la
+//! altura del suelo ([`ground_at`](WorldPreview::ground_at)) y mantiene un pool de
+//! [`Renderer3d`] para dibujar las mallas de los actores de una escena en vivo.
 
-use llimphi_3d::{Atmosphere, Camera3d, Scene3d, VoxelRenderer};
+use llimphi_3d::glam::{Mat4, Vec3};
+use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
 use llimphi_voxel::WorldRecipe;
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// El mundo de preview: terreno de la receta + atmósfera, listo para componer.
+/// El mundo de preview: terreno de la receta + atmósfera + actores posados.
 pub struct WorldPreview {
     scene: Scene3d,
     voxel: VoxelRenderer,
+    /// El grid generado (se conserva para consultar la altura del suelo al posar
+    /// actores).
+    grid: VoxelGrid,
     dim: [u32; 3],
     /// Generación de la receta con la que se construyó el grid actual.
     built_gen: u64,
+    /// Pool de renderers de actor (uno por actor; la malla se re-sube por frame).
+    actor_r: Vec<Renderer3d>,
 }
 
 impl WorldPreview {
@@ -32,20 +38,19 @@ impl WorldPreview {
         dim: [u32; 3],
         gen: u64,
     ) -> Self {
-        let voxel = Self::make_voxel(device, queue, recipe, dim);
-        Self { scene: Scene3d::new(), voxel, dim, built_gen: gen }
+        let grid = recipe.generate(dim);
+        let voxel = Self::make_voxel(device, queue, &grid, dim);
+        Self { scene: Scene3d::new(), voxel, grid, dim, built_gen: gen, actor_r: Vec::new() }
     }
 
-    /// Genera el grid de la receta y arma su `VoxelRenderer` con la atmósfera
-    /// diurna del editor.
+    /// Arma el `VoxelRenderer` de un grid con la atmósfera diurna del editor.
     fn make_voxel(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        recipe: &WorldRecipe,
+        grid: &VoxelGrid,
         dim: [u32; 3],
     ) -> VoxelRenderer {
-        let grid = recipe.generate(dim);
-        let mut voxel = VoxelRenderer::new(device, queue, FMT, &grid);
+        let mut voxel = VoxelRenderer::new(device, queue, FMT, grid);
         voxel.sun_dir = [0.55, 0.5, 0.32];
         voxel.atmosphere = Atmosphere {
             sky_zenith: [64, 118, 196],
@@ -65,14 +70,24 @@ impl WorldPreview {
         gen: u64,
     ) {
         if gen != self.built_gen || dim != self.dim {
-            self.voxel = Self::make_voxel(device, queue, recipe, dim);
+            self.grid = recipe.generate(dim);
+            self.voxel = Self::make_voxel(device, queue, &self.grid, dim);
             self.dim = dim;
             self.built_gen = gen;
         }
     }
 
-    /// Compone el terreno sobre `target`, **confinado** al rect `(x, y, w, h)` del
-    /// canvas (px del target) — así no pisa el chrome del editor alrededor.
+    /// Posición (espacio de grilla, igual que el render del voxel) del **suelo**
+    /// sobre la columna `(gx, gz)`: pies un voxel por encima del terreno (o `y=0` si
+    /// la columna está vacía). Para parar un actor sobre el relieve.
+    pub fn ground_at(&self, gx: u32, gz: u32) -> Vec3 {
+        let gx = gx.min(self.dim[0] - 1);
+        let gz = gz.min(self.dim[2] - 1);
+        let top = self.grid.height_at(gx, gz).map(|y| y as f32 + 1.0).unwrap_or(0.0);
+        Vec3::new(gx as f32 + 0.5, top, gz as f32 + 0.5)
+    }
+
+    /// Compone **sólo el terreno** sobre `target`, confinado al rect del canvas.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -84,15 +99,35 @@ impl WorldPreview {
         camera: &Camera3d,
     ) {
         self.scene.render_in(
-            device,
-            queue,
-            encoder,
-            target,
-            viewport,
-            rect,
-            camera,
-            Some(&self.voxel),
-            &[],
+            device, queue, encoder, target, viewport, rect, camera, Some(&self.voxel), &[],
+        );
+    }
+
+    /// Compone terreno + **actores** (mallas `(model, vértices, índices)`) en el
+    /// mismo depth compartido — para reproducir una escena. Mantiene el pool de
+    /// renderers al tamaño del reparto.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_scene(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        viewport: (u32, u32),
+        rect: (f32, f32, f32, f32),
+        camera: &Camera3d,
+        actors: &[(Mat4, Vec<Vertex3d>, Vec<u16>)],
+    ) {
+        while self.actor_r.len() < actors.len() {
+            self.actor_r.push(Renderer3d::new(device, FMT));
+        }
+        for (r, (model, v, i)) in self.actor_r.iter_mut().zip(actors) {
+            r.set_geometry(device, v, i);
+            r.set_model(*model);
+        }
+        let refs: Vec<&Renderer3d> = self.actor_r.iter().take(actors.len()).collect();
+        self.scene.render_in(
+            device, queue, encoder, target, viewport, rect, camera, Some(&self.voxel), &refs,
         );
     }
 }

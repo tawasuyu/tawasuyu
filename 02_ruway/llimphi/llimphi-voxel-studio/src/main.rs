@@ -17,18 +17,21 @@
 //! - Derecha: sliders de relieve/montañas/ríos/agua + ciclo de materiales y flora.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use llimphi_3d::glam::Vec3;
 use llimphi_3d::Camera3d;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
-    length, percent, AlignItems, Dimension, FlexDirection, Position, Size, Style,
+    length, percent, AlignItems, Dimension, FlexDirection, JustifyContent, Position, Size, Style,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
-use llimphi_voxel::{world_dim, Project, WorldRecipe, PREVIEW_DIM_XZ};
+use llimphi_voxel::{
+    world_dim, ActorScript, CharSpec, Project, SceneSpec, WorldRecipe, PREVIEW_DIM_XZ,
+};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
@@ -40,6 +43,18 @@ use preview::WorldPreview;
 
 /// Dónde se guarda/carga el proyecto (relativo al cwd).
 const PROJECT_PATH: &str = "voxel-studio.ron";
+
+/// Paso de tiempo de la reproducción de escenas (~30 fps).
+const DT: f32 = 1.0 / 30.0;
+
+/// Qué artefacto edita la UI ahora.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Editor de mundos (receta + preview).
+    Worlds,
+    /// Editor/reproductor de escenas (director).
+    Scenes,
+}
 
 /// Los parámetros `f32` de la receta que un slider edita.
 #[derive(Clone, Copy)]
@@ -79,6 +94,17 @@ enum Msg {
     AiKey(KeyEvent),
     AiGenerate,
     AiResult(WorldRecipe, String),
+    /// Escenas (director).
+    SwitchMode(Mode),
+    SelectScene(usize),
+    CycleSceneWorld,
+    SetSceneDur(f32),
+    TogglePlay,
+    Scrub(f32),
+    AiSceneGenerate,
+    AiSceneResult(SceneSpec),
+    /// Tick periódico de reproducción.
+    Tick,
 }
 
 struct Model {
@@ -101,12 +127,29 @@ struct Model {
     ai_input: TextInputState,
     ai_focused: bool,
     ai_busy: bool,
+    /// Modo de edición + estado de escenas.
+    mode: Mode,
+    scene_sel: usize,
+    /// Tiempo de reproducción (seg) y si está corriendo.
+    time: f32,
+    playing: bool,
 }
 
 impl Model {
     /// Receta del mundo seleccionado (si hay).
     fn recipe(&self) -> Option<WorldRecipe> {
         self.project.worlds.get(self.sel).map(|w| w.recipe)
+    }
+
+    /// La escena seleccionada (si hay).
+    fn scene(&self) -> Option<&SceneSpec> {
+        self.project.scenes.get(self.scene_sel)
+    }
+
+    /// La receta del mundo de fondo de la escena seleccionada.
+    fn scene_recipe(&self) -> Option<WorldRecipe> {
+        let s = self.scene()?;
+        self.project.worlds.get(s.world).map(|w| w.recipe)
     }
 }
 
@@ -138,7 +181,9 @@ impl App for Studio {
         (1180, 760)
     }
 
-    fn init(_handle: &Handle<Msg>) -> Model {
+    fn init(handle: &Handle<Msg>) -> Model {
+        // Reloj de reproducción de escenas (avanza `time` cuando `playing`).
+        handle.spawn_periodic(Duration::from_millis(33), || Msg::Tick);
         demo_model()
     }
 
@@ -266,6 +311,65 @@ impl App for Studio {
                 model.ai_input.set_text("");
                 model.status = format!("mundo generado: «{}»", model.project.worlds[idx].name);
             }
+            Msg::SwitchMode(m) => {
+                model.mode = m;
+                model.gen += 1; // el preview pasa a mostrar otro artefacto
+            }
+            Msg::SelectScene(i) => {
+                if i < model.project.scenes.len() {
+                    model.scene_sel = i;
+                    model.time = 0.0;
+                    model.gen += 1;
+                }
+            }
+            Msg::CycleSceneWorld => {
+                let nw = model.project.worlds.len().max(1);
+                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
+                    s.world = (s.world + 1) % nw;
+                    model.gen += 1;
+                }
+            }
+            Msg::SetSceneDur(v) => {
+                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
+                    s.duration = v.clamp(1.0, 20.0);
+                }
+            }
+            Msg::TogglePlay => model.playing = !model.playing,
+            Msg::Scrub(v) => {
+                model.playing = false;
+                let dur = model.scene().map(|s| s.duration).unwrap_or(1.0);
+                model.time = v.clamp(0.0, dur);
+            }
+            Msg::AiSceneGenerate => {
+                let prompt = model.ai_input.text();
+                if !prompt.trim().is_empty() && !model.ai_busy {
+                    model.ai_busy = true;
+                    model.status = "generando escena con IA…".into();
+                    let world = model.scene().map(|s| s.world).unwrap_or(model.sel);
+                    let dim = world_dim(PREVIEW_DIM_XZ);
+                    handle.spawn(move || Msg::AiSceneResult(ai::generate_scene(&prompt, world, dim)));
+                }
+            }
+            Msg::AiSceneResult(scene) => {
+                let idx = model.project.add_scene(scene);
+                model.scene_sel = idx;
+                model.time = 0.0;
+                model.playing = true;
+                model.gen += 1;
+                model.ai_busy = false;
+                model.ai_input.set_text("");
+                model.status = format!("escena generada: «{}»", model.project.scenes[idx].name);
+            }
+            Msg::Tick => {
+                if model.playing && model.mode == Mode::Scenes {
+                    if let Some(dur) = model.scene().map(|s| s.duration) {
+                        model.time += DT;
+                        if model.time >= dur {
+                            model.time = 0.0; // loop
+                        }
+                    }
+                }
+            }
         }
         model
     }
@@ -290,46 +394,38 @@ impl App for Studio {
 //  Paneles
 // =============================================================================
 
-/// Panel izquierdo: lista de mundos + acciones (nuevo/guardar/cargar) + estado.
+/// Panel izquierdo: toggle de modo + (mundos | escenas) + IA compartida + estado.
 fn left_panel(model: &Model) -> View<Msg> {
     let theme = &model.theme;
     let btn = ButtonPalette::from_theme(theme);
 
     let mut rows: Vec<View<Msg>> = Vec::new();
-    rows.push(section_title("MUNDOS", theme));
-    for (i, w) in model.project.worlds.iter().enumerate() {
-        let selected = i == model.sel;
-        rows.push(
-            View::new(Style {
-                size: Size { width: percent(1.0), height: length(30.0) },
-                align_items: Some(AlignItems::Center),
-                padding: pad(10.0, 0.0),
-                ..Default::default()
-            })
-            .fill(if selected { theme.bg_selected } else { theme.bg_panel })
-            .radius(6.0)
-            .text(
-                w.name.clone(),
-                15.0,
-                if selected { theme.fg_text } else { theme.fg_muted },
-            )
-            .on_click(Msg::Select(i)),
-        );
+    rows.push(mode_toggle(model));
+    rows.push(spacer(8.0));
+
+    match model.mode {
+        Mode::Worlds => worlds_left(model, &btn, &mut rows),
+        Mode::Scenes => scenes_left(model, &btn, &mut rows),
     }
 
-    rows.push(spacer(10.0));
-    rows.push(button_view("nuevo mundo", &btn, Msg::NewWorld));
-    rows.push(spacer(6.0));
-    rows.push(button_view("guardar", &btn, Msg::Save));
-    rows.push(spacer(6.0));
-    rows.push(button_view("cargar", &btn, Msg::Load));
-
-    // Sección IA: describir un mundo en prosa y generarlo.
+    // Sección IA (compartida): el rótulo/acción dependen del modo.
+    let (ai_title, ai_hint, ai_msg): (&str, &str, Msg) = match model.mode {
+        Mode::Worlds => (
+            "IA — DESCRIBÍ UN MUNDO",
+            "p.ej. islas con ríos y nieve",
+            Msg::AiGenerate,
+        ),
+        Mode::Scenes => (
+            "IA — DESCRIBÍ UNA ESCENA",
+            "p.ej. tres personajes que festejan",
+            Msg::AiSceneGenerate,
+        ),
+    };
     rows.push(spacer(14.0));
-    rows.push(section_title("IA — DESCRIBÍ UN MUNDO", theme));
+    rows.push(section_title(ai_title, theme));
     rows.push(text_input_view(
         &model.ai_input,
-        "p.ej. islas con ríos y nieve",
+        ai_hint,
         model.ai_focused,
         &TextInputPalette::from_theme(theme),
         Msg::AiFocus,
@@ -338,7 +434,7 @@ fn left_panel(model: &Model) -> View<Msg> {
     rows.push(button_view(
         if model.ai_busy { "generando…" } else { "generar (IA)" },
         &btn,
-        Msg::AiGenerate,
+        ai_msg,
     ));
 
     rows.push(spacer(12.0));
@@ -362,27 +458,176 @@ fn left_panel(model: &Model) -> View<Msg> {
     .children(rows)
 }
 
-/// Centro: el canvas 3D del preview en vivo, draggable para orbitar.
+/// Toggle Mundos | Escenas (dos pastillas).
+fn mode_toggle(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let pill = |label: &str, active: bool, msg: Msg| -> View<Msg> {
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: percent(0.0), height: length(30.0) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(if active { theme.accent } else { theme.bg_button })
+        .radius(6.0)
+        .text(label.to_string(), 14.0, if active { theme.bg_app } else { theme.fg_muted })
+        .on_click(msg)
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0), height: length(30.0) },
+        gap: Size { width: length(6.0), height: length(0.0) },
+        ..Default::default()
+    })
+    .children(vec![
+        pill("Mundos", model.mode == Mode::Worlds, Msg::SwitchMode(Mode::Worlds)),
+        pill("Escenas", model.mode == Mode::Scenes, Msg::SwitchMode(Mode::Scenes)),
+    ])
+}
+
+/// Fila seleccionable (mundo o escena) de la lista izquierda.
+fn selectable_row(label: String, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0), height: length(30.0) },
+        align_items: Some(AlignItems::Center),
+        padding: pad(10.0, 0.0),
+        ..Default::default()
+    })
+    .fill(if selected { theme.bg_selected } else { theme.bg_panel })
+    .radius(6.0)
+    .text(label, 15.0, if selected { theme.fg_text } else { theme.fg_muted })
+    .on_click(msg)
+}
+
+/// Contenido izquierdo del modo Mundos.
+fn worlds_left(model: &Model, btn: &ButtonPalette, rows: &mut Vec<View<Msg>>) {
+    let theme = &model.theme;
+    rows.push(section_title("MUNDOS", theme));
+    for (i, w) in model.project.worlds.iter().enumerate() {
+        rows.push(selectable_row(w.name.clone(), i == model.sel, Msg::Select(i), theme));
+    }
+    rows.push(spacer(10.0));
+    rows.push(button_view("nuevo mundo", btn, Msg::NewWorld));
+    rows.push(spacer(6.0));
+    rows.push(button_view("guardar", btn, Msg::Save));
+    rows.push(spacer(6.0));
+    rows.push(button_view("cargar", btn, Msg::Load));
+}
+
+/// Contenido izquierdo del modo Escenas: lista + reproducción.
+fn scenes_left(model: &Model, btn: &ButtonPalette, rows: &mut Vec<View<Msg>>) {
+    let theme = &model.theme;
+    rows.push(section_title("ESCENAS", theme));
+    for (i, s) in model.project.scenes.iter().enumerate() {
+        rows.push(selectable_row(s.name.clone(), i == model.scene_sel, Msg::SelectScene(i), theme));
+    }
+    rows.push(spacer(10.0));
+    rows.push(button_view("guardar", btn, Msg::Save));
+    rows.push(spacer(6.0));
+    rows.push(button_view("cargar", btn, Msg::Load));
+
+    rows.push(spacer(12.0));
+    rows.push(section_title("REPRODUCCIÓN", theme));
+    rows.push(button_view(
+        if model.playing { "❚❚ pausa" } else { "▶ reproducir" },
+        btn,
+        Msg::TogglePlay,
+    ));
+    rows.push(spacer(6.0));
+    let dur = model.scene().map(|s| s.duration).unwrap_or(1.0);
+    let t = model.time;
+    rows.push(slider_view(
+        "tiempo",
+        t.min(dur),
+        0.0,
+        dur,
+        &SliderPalette::from_theme(theme),
+        move |_phase, dv| Some(Msg::Scrub(t + dv)),
+    ));
+}
+
+/// Centro: el canvas 3D del preview en vivo, draggable para orbitar. En modo
+/// Escenas, además posa y anima los actores del guion en el instante `time`.
 fn center_canvas(model: &Model) -> View<Msg> {
     let (yaw, pitch, dist, gen) = (model.yaw, model.pitch, model.dist, model.gen);
-    let recipe = model.recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
     let preview = model.preview.clone();
 
-    let canvas = View::new(Style {
+    let absolute = Style {
         position: Position::Absolute,
         size: Size { width: percent(1.0), height: percent(1.0) },
         ..Default::default()
-    })
-    .gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
-        let dim = world_dim(PREVIEW_DIM_XZ);
-        let mut guard = preview.lock().unwrap();
-        let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
-        p.rebuild_if(device, queue, &recipe, dim, gen);
-        // Cámara de órbita centrada en el mundo (grilla [0,dim]).
-        let center = Vec3::new(dim[0] as f32 * 0.5, dim[1] as f32 * 0.32, dim[2] as f32 * 0.5);
-        let camera = Camera3d::orbit(center, yaw, pitch, dist);
-        p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
-    })
+    };
+
+    let canvas = match model.mode {
+        Mode::Worlds => {
+            let recipe = model.recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
+            View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
+                let dim = world_dim(PREVIEW_DIM_XZ);
+                let mut guard = preview.lock().unwrap();
+                let p =
+                    guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
+                p.rebuild_if(device, queue, &recipe, dim, gen);
+                let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
+                p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
+            })
+        }
+        Mode::Scenes => {
+            let recipe = model.scene_recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
+            let scene = model.scene().cloned();
+            let scripts: Vec<ActorScript> =
+                scene.as_ref().map(|s| s.scripts()).unwrap_or_default();
+            let chars: Vec<CharSpec> = scene
+                .as_ref()
+                .map(|s| {
+                    s.actors
+                        .iter()
+                        .map(|a| model.project.character_or_default(a.character))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let time = model.time;
+            View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
+                let dim = world_dim(PREVIEW_DIM_XZ);
+                let mut guard = preview.lock().unwrap();
+                let p =
+                    guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
+                p.rebuild_if(device, queue, &recipe, dim, gen);
+                // Primero ubicar a los actores sobre el relieve para encuadrar al
+                // reparto (su centroide), no el mundo entero — si no, salen diminutos.
+                let mut poses = Vec::with_capacity(scripts.len());
+                let mut centroid = Vec3::ZERO;
+                for (script, ch) in scripts.iter().zip(&chars) {
+                    let s = script.sample(time);
+                    let pos = p.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32);
+                    centroid += pos;
+                    poses.push((pos, s, ch));
+                }
+                let look = if poses.is_empty() {
+                    orbit_center(dim)
+                } else {
+                    centroid / poses.len() as f32 + Vec3::new(0.0, 1.0, 0.0)
+                };
+                // Cámara cerca del reparto; la rueda (que mueve `dist`) acerca/aleja.
+                let scene_dist = (dist * 0.18).clamp(10.0, 70.0);
+                let camera = Camera3d::orbit(look, yaw, pitch, scene_dist);
+                // Posar cada actor (mirando a la cámara) y mallar.
+                let mut metas = Vec::with_capacity(poses.len());
+                for (pos, s, ch) in &poses {
+                    let mut a = ch.to_actor(*pos, s.facing);
+                    a.set_clip(s.clip);
+                    a.advance(time);
+                    a.look_at(Some(camera.eye));
+                    let (v, i) = a.mesh();
+                    metas.push((a.model(), v, i));
+                }
+                p.render_scene(
+                    device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera,
+                    &metas,
+                );
+            })
+        }
+    }
     .draggable(|phase, dx, dy| match phase {
         DragPhase::Move => Some(Msg::Orbit(dx, dy)),
         DragPhase::End => None,
@@ -397,54 +642,22 @@ fn center_canvas(model: &Model) -> View<Msg> {
     .children(vec![canvas])
 }
 
-/// Panel derecho: los sliders + botones de ciclo de la receta seleccionada.
+/// Centro de órbita: el medio del mundo (grilla `[0,dim]`), algo por debajo del
+/// tope para encuadrar el relieve.
+fn orbit_center(dim: [u32; 3]) -> Vec3 {
+    Vec3::new(dim[0] as f32 * 0.5, dim[1] as f32 * 0.32, dim[2] as f32 * 0.5)
+}
+
+/// Panel derecho: según el modo, los sliders de la receta o el editor de escena.
 fn right_panel(model: &Model) -> View<Msg> {
-    let theme = &model.theme;
-    let sp = SliderPalette::from_theme(theme);
-    let btn = ButtonPalette::from_theme(theme);
+    match model.mode {
+        Mode::Worlds => world_right(model),
+        Mode::Scenes => scene_right(model),
+    }
+}
 
-    let Some(r) = model.recipe() else {
-        return View::new(Style {
-            size: Size { width: length(280.0), height: percent(1.0) },
-            padding: pad(16.0, 16.0),
-            ..Default::default()
-        })
-        .fill(theme.bg_panel)
-        .text("sin mundo seleccionado", 14.0, theme.fg_muted);
-    };
-
-    let slider = |label: &str, value: f32, min: f32, max: f32, field: Field| -> View<Msg> {
-        slider_view(label, value, min, max, &sp, move |phase, dv| {
-            let _ = phase;
-            Some(Msg::Set(field, value + dv))
-        })
-    };
-
-    let children = vec![
-        section_title("RELIEVE", theme),
-        slider("semilla", r.seed as f32, 0.0, 64.0, Field::Seed),
-        slider("base (llanura)", r.base, 0.0, 0.9, Field::Base),
-        slider("dunas", r.dune, 0.0, 0.4, Field::Dune),
-        slider("relieve (alto montañas)", r.relief, 0.0, 1.0, Field::Relief),
-        slider("densidad montañas", r.mountains, 0.0, 1.0, Field::Mountains),
-        spacer(8.0),
-        section_title("AGUA", theme),
-        slider("nivel del agua", r.water_level, 0.0, 0.9, Field::Water),
-        slider("densidad ríos", r.rivers, 0.0, 1.0, Field::Rivers),
-        spacer(8.0),
-        section_title("MATERIALES", theme),
-        button_view(format!("suelo: {}", r.ground.label()), &btn, Msg::CycleGround),
-        spacer(4.0),
-        button_view(format!("acantilado: {}", r.cliff.label()), &btn, Msg::CycleCliff),
-        spacer(4.0),
-        button_view(format!("cumbre: {}", r.peak.label()), &btn, Msg::CyclePeak),
-        slider("altura cumbre", r.peak_at, 0.0, 1.0, Field::PeakAt),
-        spacer(8.0),
-        section_title("FLORA", theme),
-        button_view(format!("tipo: {}", r.flora.label()), &btn, Msg::CycleFlora),
-        slider("densidad flora", r.flora_density, 0.0, 0.05, Field::Flora),
-    ];
-
+/// Marco del panel derecho (ancho fijo + fondo) con los `children` dados.
+fn right_frame(theme: &Theme, children: Vec<View<Msg>>) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: length(280.0), height: percent(1.0) },
@@ -454,6 +667,105 @@ fn right_panel(model: &Model) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .children(children)
+}
+
+/// Editor de la receta del mundo seleccionado (sliders + ciclo de materiales).
+fn world_right(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+
+    let Some(r) = model.recipe() else {
+        return right_frame(theme, vec![section_title("sin mundo seleccionado", theme)]);
+    };
+
+    let slider = |label: &str, value: f32, min: f32, max: f32, field: Field| -> View<Msg> {
+        slider_view(label, value, min, max, &sp, move |_phase, dv| {
+            Some(Msg::Set(field, value + dv))
+        })
+    };
+
+    right_frame(
+        theme,
+        vec![
+            section_title("RELIEVE", theme),
+            slider("semilla", r.seed as f32, 0.0, 64.0, Field::Seed),
+            slider("base (llanura)", r.base, 0.0, 0.9, Field::Base),
+            slider("dunas", r.dune, 0.0, 0.4, Field::Dune),
+            slider("relieve (alto montañas)", r.relief, 0.0, 1.0, Field::Relief),
+            slider("densidad montañas", r.mountains, 0.0, 1.0, Field::Mountains),
+            spacer(8.0),
+            section_title("AGUA", theme),
+            slider("nivel del agua", r.water_level, 0.0, 0.9, Field::Water),
+            slider("densidad ríos", r.rivers, 0.0, 1.0, Field::Rivers),
+            spacer(8.0),
+            section_title("MATERIALES", theme),
+            button_view(format!("suelo: {}", r.ground.label()), &btn, Msg::CycleGround),
+            spacer(4.0),
+            button_view(format!("acantilado: {}", r.cliff.label()), &btn, Msg::CycleCliff),
+            spacer(4.0),
+            button_view(format!("cumbre: {}", r.peak.label()), &btn, Msg::CyclePeak),
+            slider("altura cumbre", r.peak_at, 0.0, 1.0, Field::PeakAt),
+            spacer(8.0),
+            section_title("FLORA", theme),
+            button_view(format!("tipo: {}", r.flora.label()), &btn, Msg::CycleFlora),
+            slider("densidad flora", r.flora_density, 0.0, 0.05, Field::Flora),
+        ],
+    )
+}
+
+/// Editor de la escena seleccionada (mundo de fondo + duración + reparto).
+fn scene_right(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+
+    let Some(s) = model.scene() else {
+        return right_frame(theme, vec![section_title("sin escena — generá una con IA", theme)]);
+    };
+    let dur = s.duration;
+    let n_actors = s.actors.len();
+    let world_name = model
+        .project
+        .worlds
+        .get(s.world)
+        .map(|w| w.name.clone())
+        .unwrap_or_else(|| "—".into());
+
+    right_frame(
+        theme,
+        vec![
+            section_title("ESCENA", theme),
+            body_text(format!("«{}»", s.name), theme.fg_text, theme),
+            spacer(8.0),
+            section_title("MUNDO DE FONDO", theme),
+            button_view(format!("mundo: {world_name}"), &btn, Msg::CycleSceneWorld),
+            spacer(8.0),
+            section_title("TIEMPO", theme),
+            slider_view("duración (s)", dur, 1.0, 20.0, &sp, move |_p, dv| {
+                Some(Msg::SetSceneDur(dur + dv))
+            }),
+            spacer(8.0),
+            section_title("REPARTO", theme),
+            body_text(format!("{n_actors} actores"), theme.fg_muted, theme),
+            spacer(8.0),
+            body_text(
+                "arrastrá el canvas para orbitar · ▶ reproduce el guion".into(),
+                theme.fg_placeholder,
+                theme,
+            ),
+        ],
+    )
+}
+
+/// Línea de texto de cuerpo (multi-línea) para los paneles.
+fn body_text(s: String, color: Color, _theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .text(s, 13.0, color)
+    .max_lines(2)
 }
 
 // =============================================================================
@@ -517,6 +829,10 @@ pub(crate) fn demo_model() -> Model {
         ai_input: TextInputState::new(),
         ai_focused: false,
         ai_busy: false,
+        mode: Mode::Worlds,
+        scene_sel: 0,
+        time: 0.0,
+        playing: false,
     }
 }
 

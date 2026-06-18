@@ -16,13 +16,14 @@ use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint, paint_gpu, App};
 
-use crate::{demo_model, Studio};
+use crate::{demo_model, Mode, Model, Studio};
 
 const W: u32 = 1180;
 const H: u32 = 760;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// Renderiza la pantalla completa del studio a un PNG.
+/// Renderiza la pantalla completa del studio a PNG: una toma del modo Mundos y
+/// otra del modo Escenas (con los actores posados a mitad del guion).
 pub fn shot() {
     let out = std::env::args()
         .skip_while(|a| a != "--shot")
@@ -32,7 +33,20 @@ pub fn shot() {
         std::fs::create_dir_all(dir).ok();
     }
 
-    let model = demo_model();
+    // Toma 1: editor de mundos.
+    render_model(demo_model(), &out);
+
+    // Toma 2: editor/reproductor de escenas, en el instante del gesto.
+    let mut scene = demo_model();
+    scene.mode = Mode::Scenes;
+    scene.time = 3.1;
+    let scene_out = out.replace(".png", "_scene.png");
+    let scene_out = if scene_out == out { "/tmp/voxel_studio_scene.png".to_string() } else { scene_out };
+    render_model(scene, &scene_out);
+}
+
+/// Renderiza un `Model` concreto (su view real) a un PNG.
+fn render_model(model: Model, out: &str) {
     let theme = model.theme.clone();
     let root = Studio::view(&model);
 
@@ -87,7 +101,7 @@ pub fn shot() {
     let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
     assert!(any, "el gpu_painter del canvas no corrió");
 
-    write_png(&hal, &target, &out);
+    write_png(&hal, &target, out);
     eprintln!("pantallazo_studio: escrito {out} ({W}x{H})");
 }
 
