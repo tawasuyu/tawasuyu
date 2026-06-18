@@ -16,6 +16,7 @@ mod critter;
 mod director;
 mod lod;
 mod player;
+mod potential;
 mod raycast;
 mod terrain;
 mod vox;
@@ -28,6 +29,7 @@ pub use vox::{load_grid, load_scene_grid, model_to_grid, scene_to_grid, stamp, V
 pub use critter::Critter;
 pub use lod::{lod_skirt, lod_skirt_pyramid, LodParams, LodRing};
 pub use player::{forward_h, look_dir, right_h, Player};
+pub use potential::{Egg, Hatchling};
 pub use raycast::{raycast, VoxelHit};
 pub use terrain::{column_height, fill_terrain_window, terrain};
 pub use world_stream::WorldStream;
