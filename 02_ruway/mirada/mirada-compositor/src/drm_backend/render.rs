@@ -489,9 +489,20 @@ impl DrmState {
             return;
         }
 
-        // Extensión de la grilla desde la geometría de los ocupados.
-        let cols = (occ.iter().map(|&i| data.geometry[i].0).max().unwrap_or(0) + 1).max(1) as f32;
-        let rows = (occ.iter().map(|&i| data.geometry[i].1).max().unwrap_or(0) + 1).max(1) as f32;
+        // Extensión del plano (en unidades de celda) desde la colocación rica de
+        // los ocupados — posición + tamaño libres.
+        let span_cols = occ
+            .iter()
+            .map(|&i| data.places[i].x + data.places[i].w)
+            .fold(1.0_f32, f32::max)
+            .max(1.0);
+        let span_rows = occ
+            .iter()
+            .map(|&i| data.places[i].y + data.places[i].h)
+            .fold(1.0_f32, f32::max)
+            .max(1.0);
+        let cols = span_cols.ceil().max(1.0);
+        let rows = span_rows.ceil().max(1.0);
         const MARGIN: f32 = 64.0;
         const GAP: f32 = 28.0;
         let aspect = data.work.w as f32 / data.work.h.max(1) as f32;
@@ -518,17 +529,20 @@ impl DrmState {
         }
         let mut tiles = Vec::new();
         for &i in &occ {
-            let (c, r) = data.geometry[i];
-            let tx = gx + c as f32 * (cell_w + GAP);
-            let ty = gy + r as f32 * (cell_h + GAP);
-            self.overview_tiles.push((
-                i,
-                Rect::new(tx as i32, ty as i32, cell_w as i32, cell_h as i32),
-            ));
+            let p = data.places[i];
+            // Posición: pitch (celda+gap) — la grilla por defecto queda igual.
+            // Tamaño: unidades de celda. (El giro `p.rot` viaja en el dato pero el
+            // overlay GLES dibuja quads axis-aligned — la rotación la pinta la
+            // vista espacial Llimphi; rotar quads sólidos acá sería otro pipeline.)
+            let tx = gx + p.x * (cell_w + GAP);
+            let ty = gy + p.y * (cell_h + GAP);
+            let tw = p.w * cell_w;
+            let th = p.h * cell_h;
+            self.overview_tiles.push((i, Rect::new(tx as i32, ty as i32, tw as i32, th as i32)));
             // Ventanas a escala dentro del tile (con un pequeño margen interno).
             const PAD: f32 = 6.0;
-            let iw = cell_w - 2.0 * PAD;
-            let ih = cell_h - 2.0 * PAD;
+            let iw = tw - 2.0 * PAD;
+            let ih = th - 2.0 * PAD;
             let wins = data.layouts[i]
                 .iter()
                 .map(|wr| {
@@ -548,8 +562,8 @@ impl DrmState {
             tiles.push(Tile {
                 x: tx as i32,
                 y: ty as i32,
-                w: cell_w as i32,
-                h: cell_h as i32,
+                w: tw as i32,
+                h: th as i32,
                 active: i == data.active,
                 wins,
                 num: format!("{}", i + 1),

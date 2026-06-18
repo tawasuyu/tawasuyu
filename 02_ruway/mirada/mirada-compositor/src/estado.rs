@@ -194,8 +194,11 @@ pub(crate) fn autohide_next_hidden(
 pub(crate) struct OverviewData {
     /// Escritorio activo (0-based).
     pub(crate) active: usize,
-    /// Celda `(col, fila)` de cada escritorio en el plano 2D.
-    pub(crate) geometry: Vec<(i32, i32)>,
+    /// Colocación rica de cada escritorio en el plano del Prezi (posición libre +
+    /// tamaño + giro, en unidades de celda). El overlay en vivo honra posición y
+    /// tamaño; el giro viaja en el dato (lo respeta la vista espacial Llimphi —
+    /// el overlay GLES dibuja quads axis-aligned, ver `emit_overview`).
+    pub(crate) places: Vec<mirada_brain::OverviewPlace>,
     /// Ventanas por escritorio (para saber cuáles están ocupados).
     pub(crate) loads: Vec<usize>,
     /// Rect de referencia en el que están los `layouts` (para normalizar).

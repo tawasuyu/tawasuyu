@@ -199,7 +199,7 @@ impl App {
             .collect();
         Some(OverviewData {
             active: d.active_index(),
-            geometry: d.config().overview_geometry_for(loads.len()),
+            places: d.config().overview_places_for(loads.len()),
             loads,
             work,
             layouts,
