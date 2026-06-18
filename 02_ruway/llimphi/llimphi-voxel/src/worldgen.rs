@@ -14,13 +14,14 @@
 //! (cuando se cablee a [`WorldStream`](crate::WorldStream)).
 
 use llimphi_3d::VoxelGrid;
+use serde::{Deserialize, Serialize};
 
 use crate::terrain::{fbm, hash2, smooth, world_scale};
 
 /// Un **material** del mundo: la unidad semántica con la que el creador pinta los
 /// voxels (en vez de un color suelto). Da color y solidez; más adelante puede
 /// llevar propiedades físicas (flotabilidad del agua, daño del cactus, etc.).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Material {
     /// Vacío (aire) — no se dibuja.
     Air,
@@ -56,10 +57,41 @@ impl Material {
     pub fn is_solid(self) -> bool {
         !matches!(self, Material::Air)
     }
+
+    /// Todos los materiales, en orden de catálogo (para que un editor cicle entre
+    /// ellos).
+    pub const ALL: [Material; 7] = [
+        Material::Air,
+        Material::Sand,
+        Material::Grass,
+        Material::Rock,
+        Material::Snow,
+        Material::Water,
+        Material::Cactus,
+    ];
+
+    /// Nombre legible (español) para la UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Material::Air => "aire",
+            Material::Sand => "arena",
+            Material::Grass => "pasto",
+            Material::Rock => "roca",
+            Material::Snow => "nieve",
+            Material::Water => "agua",
+            Material::Cactus => "cactus",
+        }
+    }
+
+    /// El material siguiente en el catálogo (cicla) — para botones de ciclo.
+    pub fn next(self) -> Material {
+        let i = Material::ALL.iter().position(|&m| m == self).unwrap_or(0);
+        Material::ALL[(i + 1) % Material::ALL.len()]
+    }
 }
 
 /// Qué planta esparce un mundo y con qué forma.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Flora {
     /// Sin vegetación.
     None,
@@ -67,10 +99,29 @@ pub enum Flora {
     Cactus,
 }
 
+impl Flora {
+    /// Todas las opciones de flora (para ciclar en un editor).
+    pub const ALL: [Flora; 2] = [Flora::None, Flora::Cactus];
+
+    /// Nombre legible (español) para la UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Flora::None => "ninguna",
+            Flora::Cactus => "cactus",
+        }
+    }
+
+    /// La flora siguiente (cicla).
+    pub fn next(self) -> Flora {
+        let i = Flora::ALL.iter().position(|&f| f == self).unwrap_or(0);
+        Flora::ALL[(i + 1) % Flora::ALL.len()]
+    }
+}
+
 /// La **receta de un mundo**: parámetros del relieve + materiales + flora. Producí
 /// el `VoxelGrid` con [`generate`](Self::generate). Presets: [`desert`](Self::desert),
 /// [`grassland`](Self::grassland).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WorldRecipe {
     /// Semilla del ruido (mismo seed → mismo mundo).
     pub seed: u32,

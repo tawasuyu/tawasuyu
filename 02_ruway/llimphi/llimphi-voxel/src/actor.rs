@@ -15,6 +15,7 @@
 
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{push_cube, Vertex3d};
+use serde::{Deserialize, Serialize};
 
 /// Amplitud base de balanceo de miembros al caminar (rad).
 const SWING: f32 = 0.7;
@@ -72,7 +73,7 @@ impl Pose {
 
 /// Animación: una función determinista `fase → `[`Pose`]. La fase la acumula
 /// [`Actor::advance`] a la [`cadence`](Clip::cadence) del clip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Clip {
     /// De pie, respirando apenas.
     Idle,
@@ -162,7 +163,7 @@ impl Clip {
 /// proporciones del cuerpo (un bebé es cabezón y de miembros cortos; un adulto es
 /// alto y proporcionado). Sirve para *mostrar al niño primero* (el corto: nace en el
 /// desierto) y envejecerlo por etapas. Cada edad deriva un [`Build`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Age {
     /// Bebé/recién nacido: chiquito, cabezón, miembros cortos.
     Baby,

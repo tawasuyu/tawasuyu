@@ -1,0 +1,30 @@
+[package]
+name = "llimphi-voxel-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Studio del creador de mundos voxel: una interfaz Llimphi para crear/editar los artefactos de llimphi-voxel (WorldRecipe, personajes, escenas) con preview 3D en vivo, persistencia RON y (próximamente) asistencia por IA. Frontend intercambiable sobre el Project agnóstico de llimphi-voxel."
+
+[[bin]]
+name = "llimphi-voxel-studio"
+path = "src/main.rs"
+
+[dependencies]
+# Motor 3D general (escena, cámara, voxel) — para el preview en vivo.
+llimphi-3d = { path = "../llimphi-3d" }
+# Artefactos + modelo-documento (Project, WorldRecipe, …) — el core agnóstico.
+llimphi-voxel = { path = "../llimphi-voxel" }
+# Bucle Elm + ventana + re-exports (hal/raster/layout).
+llimphi-ui = { workspace = true }
+# Paletas semánticas de color.
+llimphi-theme = { workspace = true }
+# Widgets de la UI del editor.
+llimphi-widget-slider = { workspace = true }
+llimphi-widget-button = { workspace = true }
+# Persistencia de los artefactos en texto editable a mano (y salida de la IA).
+ron = { workspace = true }
+# Render headless a PNG para el modo --shot (verificación sin pantalla).
+pollster = { workspace = true }
+png = { workspace = true }

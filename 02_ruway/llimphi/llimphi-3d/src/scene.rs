@@ -85,10 +85,49 @@ impl Scene3d {
         voxel: Option<&VoxelRenderer>,
         meshes: &[&Renderer3d],
     ) {
+        // El caso por defecto: la escena ocupa todo el target.
+        self.render_in(
+            device,
+            queue,
+            encoder,
+            target,
+            (w, h),
+            (0.0, 0.0, w as f32, h as f32),
+            camera,
+            voxel,
+            meshes,
+        );
+    }
+
+    /// Como [`render`](Self::render) pero **confina** la escena a la sub-región
+    /// `rect = (x, y, w, h)` (en px del target, esquina sup-izq), vía
+    /// `set_viewport` + `set_scissor_rect`. Es lo que permite montar el 3D en un
+    /// **panel** de una UI (un canvas que no ocupa toda la ventana) sin pisar el
+    /// chrome alrededor: la pasada de ray-march/mallas pinta sólo dentro del rect,
+    /// con el aspect del rect (no el de la ventana). `target`/`viewport` siguen
+    /// siendo el frame completo (load-preserve del chrome ya rasterizado).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_in(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        (w, h): (u32, u32),
+        rect: (f32, f32, f32, f32),
+        camera: &Camera3d,
+        voxel: Option<&VoxelRenderer>,
+        meshes: &[&Renderer3d],
+    ) {
         if w == 0 || h == 0 {
             return;
         }
-        let aspect = w as f32 / h as f32;
+        let (rx, ry, rw, rh) = rect;
+        if rw < 1.0 || rh < 1.0 {
+            return;
+        }
+        // El aspect es el del rect (el viewport mapea NDC a esa sub-región).
+        let aspect = rw / rh;
 
         // Subir uniforms antes de abrir el pase (queue.write_buffer se ordena
         // antes del submit).
@@ -124,6 +163,18 @@ impl Scene3d {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+
+        // Viewport (mapeo NDC→rect) + scissor (recorte físico al rect, clampeado a
+        // los límites del attachment).
+        pass.set_viewport(rx, ry, rw, rh, 0.0, 1.0);
+        let sx = rx.max(0.0);
+        let sy = ry.max(0.0);
+        let sw = (rw.min(w as f32 - sx)).max(0.0) as u32;
+        let sh = (rh.min(h as f32 - sy)).max(0.0) as u32;
+        if sw == 0 || sh == 0 {
+            return;
+        }
+        pass.set_scissor_rect(sx as u32, sy as u32, sw, sh);
 
         if let Some(v) = voxel {
             v.draw(&mut pass);
