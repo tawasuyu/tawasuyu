@@ -13,7 +13,7 @@ use llimphi_3d::VoxelGrid;
 /// Hash entero → `f32` en `[0, 1)`. Mezcla estilo PCG/xxhash chico, determinista.
 /// Funciona con coordenadas negativas (`as u32` envuelve de forma estable).
 #[inline]
-fn hash2(x: i32, y: i32, seed: u32) -> f32 {
+pub(crate) fn hash2(x: i32, y: i32, seed: u32) -> f32 {
     let mut h = seed
         .wrapping_add((x as u32).wrapping_mul(0x9E37_79B9))
         .wrapping_add((y as u32).wrapping_mul(0x85EB_CA77));
@@ -27,7 +27,7 @@ fn hash2(x: i32, y: i32, seed: u32) -> f32 {
 
 /// Suaviza `t` con la curva quíntica de Perlin (`6t⁵−15t⁴+10t³`).
 #[inline]
-fn smooth(t: f32) -> f32 {
+pub(crate) fn smooth(t: f32) -> f32 {
     t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 
@@ -49,7 +49,7 @@ fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
 
 /// Fractional Brownian motion: suma de octavas de `value_noise` (frecuencia ×2,
 /// amplitud ×`gain` por octava). Devuelve `[0, 1]` aprox (normalizado).
-fn fbm(x: f32, y: f32, octaves: u32, seed: u32) -> f32 {
+pub(crate) fn fbm(x: f32, y: f32, octaves: u32, seed: u32) -> f32 {
     let mut freq = 1.0;
     let mut amp = 1.0;
     let mut sum = 0.0;
@@ -79,7 +79,7 @@ fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
 /// ventana no cambie de tamaño), así dos ventanas del mismo `dim` comparten la
 /// misma escala → el streaming encaja. `min_h`/`amp` salen del alto del mundo.
 #[inline]
-fn world_scale(dim: [u32; 3]) -> f32 {
+pub(crate) fn world_scale(dim: [u32; 3]) -> f32 {
     4.0 / dim[0].max(dim[2]) as f32
 }
 

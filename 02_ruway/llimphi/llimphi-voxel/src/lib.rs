@@ -20,6 +20,7 @@ mod raycast;
 mod terrain;
 mod vox;
 mod world_stream;
+mod worldgen;
 
 pub use actor::{Actor, Clip, Pose};
 pub use director::{ActorKey, ActorSample, ActorScript, Sequence, Shot};
@@ -30,3 +31,4 @@ pub use player::{forward_h, look_dir, right_h, Player};
 pub use raycast::{raycast, VoxelHit};
 pub use terrain::{column_height, fill_terrain_window, terrain};
 pub use world_stream::WorldStream;
+pub use worldgen::{Flora, Material, WorldRecipe};
