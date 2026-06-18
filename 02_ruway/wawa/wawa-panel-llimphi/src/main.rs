@@ -3178,6 +3178,133 @@ fn prezi_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
     .children(vec![titulo, canvas])
 }
 
+/// Vista custom de la **lista de barras**: una fila por barra con [nombre]
+/// [select de posición segmentado] [⧉ duplicar] [✕ borrar], y «＋ Agregar» al
+/// final. Inyectada en el canvas (allichay no compone varios controles por
+/// fila). Emite los mismos `Change` que la sección `barras::lista`
+/// (`pos_{i}`/`dup_{i}`/`del_{i}`/`agregar`) → los maneja `apply_barras_list`.
+fn barras_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let cambio = |leaf: String, value: FieldValue| -> Msg {
+        Msg::Allichay(AllichayMsg::Change(
+            FieldPath(vec!["barras::lista".into(), leaf]),
+            value,
+        ))
+    };
+    const POS: &[(&str, &str)] = &[
+        ("inactivo", "Inactiva"),
+        ("top", "Arriba"),
+        ("bottom", "Abajo"),
+        ("left", "Izq."),
+        ("right", "Der."),
+    ];
+
+    let mut filas: Vec<View<Msg>> = Vec::new();
+    for (i, s) in model.pata.surfaces.iter().enumerate() {
+        let nombre = if s.name.trim().is_empty() {
+            format!("{} {}", kind_slug(s.kind), anchor_slug(s.anchor))
+        } else {
+            s.name.clone()
+        };
+        let cur = if !s.enabled { "inactivo" } else { anchor_slug(s.anchor) };
+
+        // Rótulo (nombre de la barra).
+        let label = View::new(Style {
+            size: Size { width: length(150.0_f32), height: percent(1.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(nombre, 13.0, theme.fg_text, Alignment::Start)
+        .ellipsis(1);
+
+        // Chips de posición (segmentado).
+        let chips: Vec<View<Msg>> = POS
+            .iter()
+            .map(|(slug, txt)| {
+                let sel = *slug == cur;
+                let (fill, fg) = if sel { (theme.accent, theme.bg_panel) } else { (theme.bg_panel_alt, theme.fg_muted) };
+                View::new(Style {
+                    flex_grow: 1.0,
+                    size: Size { width: percent(0.0_f32), height: length(26.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Center),
+                    ..Default::default()
+                })
+                .fill(fill)
+                .hover_fill(theme.bg_button_hover)
+                .on_click(cambio(format!("pos_{i}"), FieldValue::Enum((*slug).to_string())))
+                .text_aligned((*txt).to_string(), 12.0, fg, Alignment::Center)
+            })
+            .collect();
+        let segmento = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_grow: 1.0,
+            size: Size { width: percent(0.0_f32), height: length(26.0_f32) },
+            gap: Size { width: length(2.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .radius(5.0)
+        .children(chips);
+
+        // Iconitos de duplicar / borrar al lado del segmento.
+        let icono = |glifo: &str, tip: &str, msg: Msg, col| {
+            View::new(Style {
+                size: Size { width: length(28.0_f32), height: length(26.0_f32) },
+                flex_shrink: 0.0,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .radius(5.0)
+            .fill(theme.bg_panel_alt)
+            .hover_fill(theme.bg_button_hover)
+            .tooltip(tip.to_string())
+            .on_click(msg)
+            .text_aligned(glifo.to_string(), 14.0, col, Alignment::Center)
+        };
+        let dup = icono("⧉", "Duplicar", cambio(format!("dup_{i}"), FieldValue::Bool(true)), theme.fg_muted);
+        let del = icono("✕", "Borrar", cambio(format!("del_{i}"), FieldValue::Bool(true)), theme.accent);
+
+        let fila = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+            align_items: Some(AlignItems::Center),
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![label, segmento, dup, del]);
+        filas.push(fila);
+    }
+
+    // ＋ Agregar barra.
+    let agregar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .radius(6.0)
+    .fill(theme.bg_panel_alt)
+    .hover_fill(theme.bg_button_hover)
+    .on_click(cambio("agregar".into(), FieldValue::Bool(true)))
+    .text_aligned("＋ Agregar barra".to_string(), 13.0, theme.fg_text, Alignment::Center);
+    filas.push(agregar);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(12.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(filas)
+}
+
 /// El cuerpo, jerarquía de 3 niveles al modo cosmos:
 /// `[ sidebar: items de la pestaña activa ] [ pestañas que sobresalen ] [ canvas: contenido del item ]`.
 /// La **pestaña** (rail) elige app/categoría; su **sidebar** lista los items
@@ -3205,6 +3332,10 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
                     ..Default::default()
                 })
                 .children(vec![prezi_editor_view(model, theme), panel])
+            } else if sec.id == "barras::lista" {
+                // Lista de barras: vista custom (fila = nombre + posición +
+                // iconitos duplicar/borrar), que allichay no puede componer.
+                barras_editor_view(model, theme)
             } else {
                 panel
             }
