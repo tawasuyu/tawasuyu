@@ -73,6 +73,58 @@ pub fn load_grid(path: impl AsRef<Path>) -> Result<VoxelGrid, VoxLoadError> {
     Ok(model_to_grid(&models[0]))
 }
 
+/// Compone una **escena multi-modelo** (`nTRN/nGRP/nSHP`) en un único `VoxelGrid`,
+/// colocando cada modelo en su traslación de mundo resuelta por el grafo. En
+/// MagicaVoxel la traslación `_t` ubica el **centro** del modelo, así que la esquina
+/// va en `t − size/2`. El grid se dimensiona a la caja envolvente de todas las piezas
+/// y se desplaza para que el mínimo caiga en el origen. Si la escena no trae grafo
+/// (`.vox` viejo de un solo modelo), cae a [`model_to_grid`] del primer modelo.
+pub fn scene_to_grid(scene: &foreign_vox::Scene) -> VoxelGrid {
+    if scene.placements.is_empty() || scene.models.is_empty() {
+        return model_to_grid(&scene.models[0]);
+    }
+    // Esquina (espacio grid: [x, z, y]) y tamaño grid de cada colocación.
+    let mut corners: Vec<([i32; 3], [i32; 3])> = Vec::with_capacity(scene.placements.len());
+    for p in &scene.placements {
+        let m = &scene.models[p.model];
+        let sz_grid = [m.size[0] as i32, m.size[2] as i32, m.size[1] as i32];
+        let t = p.translation; // vox (z-arriba)
+        // Centro → esquina (vox), luego remapeo de ejes a grid.
+        let corner_vox = [t[0] - m.size[0] as i32 / 2, t[1] - m.size[1] as i32 / 2, t[2] - m.size[2] as i32 / 2];
+        let corner_grid = [corner_vox[0], corner_vox[2], corner_vox[1]];
+        corners.push((corner_grid, sz_grid));
+    }
+    // Caja envolvente.
+    let mut lo = [i32::MAX; 3];
+    let mut hi = [i32::MIN; 3];
+    for (c, s) in &corners {
+        for a in 0..3 {
+            lo[a] = lo[a].min(c[a]);
+            hi[a] = hi[a].max(c[a] + s[a]);
+        }
+    }
+    let dim = [
+        (hi[0] - lo[0]).max(1) as u32,
+        (hi[1] - lo[1]).max(1) as u32,
+        (hi[2] - lo[2]).max(1) as u32,
+    ];
+    let mut g = VoxelGrid::new(dim);
+    for (p, (c, _)) in scene.placements.iter().zip(&corners) {
+        let origin = [(c[0] - lo[0]) as u32, (c[1] - lo[1]) as u32, (c[2] - lo[2]) as u32];
+        stamp(&mut g, &scene.models[p.model], origin);
+    }
+    g.reset_dirty();
+    g
+}
+
+/// Carga una **escena** `.vox` completa (multi-modelo con grafo) como un único
+/// `VoxelGrid` compuesto. Para un `.vox` de un solo modelo equivale a [`load_grid`].
+pub fn load_scene_grid(path: impl AsRef<Path>) -> Result<VoxelGrid, VoxLoadError> {
+    let bytes = std::fs::read(path).map_err(VoxLoadError::Io)?;
+    let scene = foreign_vox::parse_scene(&bytes).map_err(VoxLoadError::Parse)?;
+    Ok(scene_to_grid(&scene))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +149,32 @@ mod tests {
         m.voxels = vec![Voxel { x: 0, y: 0, z: 0, i: 1 }];
         let g = model_to_grid(&m);
         assert!(!g.is_solid(0, 0, 0));
+    }
+
+    #[test]
+    fn escena_compone_dos_modelos_con_offset() {
+        use foreign_vox::{Placement, Scene};
+        // Dos cubitos 2³ con un voxel en su esquina; el 2º trasladado +10 en x (vox).
+        let cubo = || {
+            let mut m = VoxModel::new([2, 2, 2]);
+            m.palette[1] = [50, 60, 70, 255];
+            m.voxels = vec![Voxel { x: 0, y: 0, z: 0, i: 1 }];
+            m
+        };
+        let scene = Scene {
+            models: vec![cubo(), cubo()],
+            placements: vec![
+                Placement { model: 0, translation: [0, 0, 0] },
+                Placement { model: 1, translation: [10, 0, 0] },
+            ],
+        };
+        let g = scene_to_grid(&scene);
+        // Ambos modelos presentes y separados por ~10 en x (centro→esquina = −1 cada uno,
+        // misma resta, así que la separación entre voxels se conserva = 10).
+        let (dx, dy, dz) = (g.dim()[0] as i32, g.dim()[1] as i32, g.dim()[2] as i32);
+        let solid: Vec<i32> =
+            (0..dx).filter(|&x| (0..dy).any(|y| (0..dz).any(|z| g.is_solid(x, y, z)))).collect();
+        assert_eq!(solid.len(), 2, "dos columnas sólidas separadas");
+        assert_eq!(solid[1] - solid[0], 10, "separación de mundo preservada");
     }
 }

@@ -23,7 +23,7 @@ mod world_stream;
 
 pub use actor::{Actor, Clip, Pose};
 pub use director::{ActorKey, ActorSample, ActorScript, Sequence, Shot};
-pub use vox::{load_grid, model_to_grid, stamp, VoxLoadError};
+pub use vox::{load_grid, load_scene_grid, model_to_grid, scene_to_grid, stamp, VoxLoadError};
 pub use critter::Critter;
 pub use lod::{lod_skirt, LodParams};
 pub use player::{forward_h, look_dir, right_h, Player};

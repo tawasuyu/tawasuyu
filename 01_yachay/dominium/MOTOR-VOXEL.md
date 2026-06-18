@@ -679,8 +679,18 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    (`DEFAULT_PALETTE_ABGR`, formato `0xAABBGGRR` del spec ephtracy/voxel-model,
    desempacada a RGBA) — los modelos viejos / hechos a mano que omiten la paleta abren
    con los colores correctos. Test que fija entradas conocidas (blanco=1, amarillo=6,
-   gris=255) + opacidad de las 256. **Falta**: soporte de escenas multi-modelo con
-   transformación (`nTRN/nGRP`).
+   gris=255) + opacidad de las 256.
+   **Escenas multi-modelo (`nTRN/nGRP/nSHP`) HECHAS (2026-06-18):** `foreign_vox::
+   parse_scene` lee el **grafo de escena** (transform/group/shape nodes, con dict y
+   string del formato extendido) y resuelve la **traslación de mundo** de cada modelo
+   recorriendo desde la raíz (id 0) acumulando los `_t`. `Scene{models, placements}`;
+   `parse` queda como atajo (sólo modelos). En `llimphi-voxel`: `scene_to_grid` /
+   `load_scene_grid` componen la escena en un grid único (la `_t` ubica el **centro**
+   del modelo → esquina en `t − size/2`; caja envolvente auto, shift a origen). Tests:
+   uno arma a mano un `.vox` con 2 modelos + grafo y verifica las colocaciones
+   resueltas ([0,0,0] y [5,0,0]); otro compone 2 modelos y verifica que la separación
+   de mundo (10) se preserva; `.vox` viejo sin grafo → `placements` vacío (cae al
+   modelo 0). **Falta**: rotaciones del grafo (`_r`) — hoy sólo traslación.
 4. ~~**Iluminación cinematográfica**~~ **PRIMER PASO HECHO**: la luz del ray-march
    pasó de escalar (ambiente plano 0.32) a **con color** — color del sol por su
    elevación (cálido al ras → blanco en lo alto) + ambiente tintado por el color de
