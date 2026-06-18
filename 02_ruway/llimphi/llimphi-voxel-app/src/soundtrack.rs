@@ -10,11 +10,18 @@
 use takiy_core::{Chord, ChordQuality, Pitch, PitchClass, ReverbParams, Score, ScoreNote, Track};
 use takiy_synth::{write_wav, Adsr, OscRenderer, Renderer, Waveform};
 
+/// Tempo de la banda (BPM). 86 → ~0.70 s/beat → 8 negras ≈ 5.6 s.
+const BPM: f32 = 86.0;
+
 /// Compone y sintetiza la banda sonora a `path` (WAV PCM 16-bit). Devuelve la
-/// duración en segundos del audio generado (para informar). El tempo se elige
-/// para que las 8 negras de la progresión duren ~la película.
-pub fn render_to(path: &str) -> f32 {
-    let mut score = Score::new(86.0); // ~0.70 s/beat → 8 beats ≈ 5.6 s
+/// duración en segundos del audio generado (para informar).
+///
+/// `accents` son los **beats del guion** (segundos): cortes de cámara y gestos de los
+/// actores (ver `Sequence::beat_times`). En cada uno se coloca un **acento** — una
+/// campana brillante (seno agudo, ataque corto) — para que la música caiga *sobre la
+/// acción* en vez de sólo compartir duración. Vacío = sin acentos (comportamiento viejo).
+pub fn render_to(path: &str, accents: &[f32]) -> f32 {
+    let mut score = Score::new(BPM); // ~0.70 s/beat → 8 beats ≈ 5.6 s
     // Reverb suave: da aire sin tapar la mezcla.
     score.master_reverb = Some(ReverbParams { room_size: 0.6, damping: 0.5, mix: 0.22 });
 
@@ -62,9 +69,29 @@ pub fn render_to(path: &str) -> f32 {
         }
     }
 
+    // Acentos: una campana aguda en cada beat del guion (corte de cámara o gesto). El
+    // tiempo en segundos se pasa a beats (la unidad del Score) dividiendo por s/beat.
+    // Una nota corta + una octava arriba refuerza el "ding". Volumen alto para que
+    // pinche sobre la mezcla cálida de abajo.
+    let sec_per_beat = 60.0 / BPM;
+    let mut hits = Track::new("acentos");
+    hits.volume = 0.9;
+    for &t in accents {
+        let beat = t / sec_per_beat;
+        // Campana = fundamental aguda (C6=84) + su octava (C7=96), bien corta.
+        for midi in [84, 96] {
+            if let Some(p) = Pitch::from_midi(midi) {
+                hits.add(ScoreNote::new(p, beat, 0.5, 90));
+            }
+        }
+    }
+
     score.add_track(pads);
     score.add_track(bass);
     score.add_track(lead);
+    if !accents.is_empty() {
+        score.add_track(hits);
+    }
 
     // Síntesis: triángulo (más cuerpo que el seno, menos áspero que la sierra)
     // con una envolvente algo más dulce que la default.

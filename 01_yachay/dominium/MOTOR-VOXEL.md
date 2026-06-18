@@ -658,7 +658,21 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    `advance`/`pose`. **Blending**: cambiar de clip hace un **cross-fade** (`Pose::
    lerp` + smoothstep, `BLEND_DUR`) en vez de cortar. Verificado por PNG (`--poses`
    → `/tmp/actor_clips.png`: fila de 6 actores etiquetados, cada pose legible) +
-   tests. **Falta**: IK, animaciones de cara/manos (el muñeco no las tiene).
+   tests.
+   **Cara + manos + IK de mirada HECHOS (2026-06-18):** el muñeco pasó de 6 a **11
+   cajas** — sumó **manos** (caja de piel en la punta de cada brazo, sigue la rotación
+   del brazo) y **cara**: dos **ojos** + **boca** como decales finos sobre la cara `+Z`
+   de la cabeza, con **parpadeo** determinista (los ojos se achican un instante por la
+   fase) y **boca que se abre con el gesto** (más en `Cheer`, algo en `Wave`/`Point`,
+   cerrada el resto) → la cara *reacciona* al clip. **IK de mirada** (`Actor::look_at`):
+   la cabeza y los ojos giran (yaw+pitch, acotados a ±70°/±50° para no quebrar el
+   cuello) para **mirar un punto de mundo** sin mover el cuerpo — resuelto llevando la
+   dirección al objetivo al espacio local (deshaciendo `facing`). El `--film` lo usa:
+   los actores **siguen la cámara con la cabeza** ("conscientes del lente").
+   Verificado por PNG (`--poses`: ojos+boca visibles, **`CHEER` con la boca abierta** vs
+   los demás con boca cerrada; manos en los brazos) + test de IK (mirar a `+X` vs `−X`
+   desplaza la cara en sentidos opuestos) + test del conteo de cajas (11). **Falta**:
+   IK de pies sobre relieve y de brazo apuntando (hoy IK sólo de cabeza).
 2. ~~**Timeline de dirección**~~ **HECHO** (módulo `llimphi_voxel::director`):
    timeline **determinista por tiempo**, editable como data (no más bucle
    hardcodeado). `ActorScript` = keyframes `(t, pos grilla, clip?, rumbo?)` con
@@ -739,8 +753,18 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    (`OscRenderer` triángulo + reverb suave); `--film` lo muxea con
    `foreign_av::encode_frames` (audio → Opus, `-shortest`). Verificado por ffprobe
    (el `.mkv` lleva stream Opus estéreo, dur 5.6 s) + `volumedetect` (media −14 dB,
-   no silencio). **Falta**: sincronizar *hits* musicales a beats del guion
-   (hoy música y acción sólo comparten duración), SoundFonts/instrumentos reales.
+   no silencio).
+   **Sincronización música↔guion HECHA (2026-06-18):** `Sequence::beat_times()` deriva
+   los **beats del guion** — los **cortes de cámara** (inicio de cada plano salvo el
+   primero) + los **gestos** de los actores (`ActorKey` con clip emote, vía
+   `ActorScript::emote_onsets` y `Clip::is_emote`), ordenados y sin repetir (dedup a
+   <0.05 s). `soundtrack::render_to(path, accents)` coloca en cada beat un **acento** —
+   una campana brillante (seno agudo C6+C7, ataque corto) en su pista propia — pasando
+   segundos→beats con el tempo. Así la música **cae sobre la acción** en vez de sólo
+   compartir duración. Verificado: test de `beat_times` (corte 2.5 + gestos 3.0/4.0) +
+   análisis del WAV del `--film` (la banda de alta frecuencia pica en ~2.95 s y ~5.8 s,
+   sobre los beats computados `[2.8, 3.0, 5.6]`). **Falta**: SoundFonts / instrumentos
+   reales (hoy sólo osciladores de `takiy-synth`).
 
 Encaja como **app/dominio "director" propio** sobre `llimphi-voxel` (hermano de la
 showcase), no como feature del motor. La rebanada prueba que el camino es viable y

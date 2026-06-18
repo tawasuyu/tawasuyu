@@ -100,6 +100,13 @@ impl ActorScript {
         self.keys.last().map(|k| k.t).unwrap_or(0.0)
     }
 
+    /// Instantes (segundos) en que este actor **arranca un gesto** (clip emote
+    /// explícito en una key). Son momentos expresivos del guion — el director los usa
+    /// para acentuar la música.
+    pub fn emote_onsets(&self) -> Vec<f32> {
+        self.keys.iter().filter(|k| k.clip.is_some_and(|c| c.is_emote())).map(|k| k.t).collect()
+    }
+
     /// El estado dictado en `t`: posición interpolada + clip + rumbo. Antes/
     /// después del rango, clampa a la primera/última key (quieto).
     pub fn sample(&self, t: f32) -> ActorSample {
@@ -219,6 +226,28 @@ impl Sequence {
         }
     }
 
+    /// Los **"beats del guion"**: los instantes (segundos, ordenados, sin repetir)
+    /// que merecen un acento musical — los **cortes de cámara** (inicio de cada plano
+    /// salvo el primero) y los **gestos** de los actores. Es lo que deja que la banda
+    /// sonora caiga *sobre la acción* en vez de sólo compartir duración. Dos tiempos a
+    /// menos de `EPS` se consideran el mismo acento.
+    pub fn beat_times(&self) -> Vec<f32> {
+        const EPS: f32 = 0.05;
+        let mut ts: Vec<f32> = Vec::new();
+        // Cortes de cámara (el primer plano no es un corte).
+        for s in self.shots.iter().skip(1) {
+            ts.push(s.start);
+        }
+        // Gestos de cada actor.
+        for a in &self.actors {
+            ts.extend(a.emote_onsets());
+        }
+        ts.retain(|&t| t >= 0.0 && t <= self.duration + EPS);
+        ts.sort_by(f32::total_cmp);
+        ts.dedup_by(|a, b| (*a - *b).abs() < EPS);
+        ts
+    }
+
     /// Posición de grilla (sin altura) del **centroide** del reparto en `t`,
     /// útil para apuntar la cámara al grupo. `None` si no hay actores.
     pub fn cast_centroid(&self, t: f32) -> Option<Vec3> {
@@ -258,6 +287,30 @@ mod tests {
         let e = s.sample(3.0);
         assert_eq!((e.gx, e.clip), (10.0, Clip::Wave));
         assert!((e.facing - FRAC_PI_2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn beats_del_guion_son_cortes_y_gestos() {
+        use llimphi_3d::CamKey;
+        // Actor que camina y a los 3 s saluda; otro que a los 4 s señala.
+        let a1 = ActorScript::new(vec![
+            ActorKey::at(0.0, 0.0, 0.0),
+            ActorKey::at(3.0, 5.0, 0.0).play(Clip::Wave),
+        ]);
+        let a2 = ActorScript::new(vec![
+            ActorKey::at(0.0, 2.0, 0.0),
+            ActorKey::at(4.0, 6.0, 0.0).play(Clip::Point),
+        ]);
+        let s0 = CameraTrack::new(vec![CamKey::look(0.0, Vec3::ZERO, Vec3::Z, 50.0)]);
+        let s1 = CameraTrack::new(vec![CamKey::look(0.0, Vec3::Y, Vec3::Z, 50.0)]);
+        // Dos planos: el corte está en 2.5 s (el primero no cuenta).
+        let seq = Sequence::new(vec![a1, a2], vec![Shot::new(0.0, s0), Shot::new(2.5, s1)], 5.0);
+        let beats = seq.beat_times();
+        // Esperado: corte 2.5, saludo 3.0, señal 4.0 (ordenados, sin el inicio).
+        assert_eq!(beats.len(), 3);
+        assert!((beats[0] - 2.5).abs() < 1e-4);
+        assert!((beats[1] - 3.0).abs() < 1e-4);
+        assert!((beats[2] - 4.0).abs() < 1e-4);
     }
 
     #[test]

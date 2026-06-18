@@ -116,6 +116,14 @@ pub fn film() {
         world.animate(t * 0.5); // el monumento gira
         let camera = seq.camera(t);
 
+        // IK de mirada: los actores siguen la cámara con la cabeza (dentro del rango
+        // creíble) → "conscientes del lente". Re-malla con la cabeza ya orientada.
+        for (a, r) in cast.iter_mut().zip(actor_r.iter_mut()) {
+            a.look_at(Some(camera.eye));
+            let (v, i) = a.mesh();
+            r.set_geometry(&hal.device, &v, &i);
+        }
+
         let refs: Vec<&Renderer3d> = actor_r.iter().collect();
         render_frame(&hal, &mut renderer, &mut world, &camera, &refs, &inter_view, (ssw, ssh));
         crate::write_png_downsampled(&hal, &inter, ssw, ssh, ss, &frame_path(f));
@@ -124,10 +132,17 @@ pub fn film() {
         }
     }
 
-    // --- Banda sonora: compone+sintetiza un WAV con takiy para muxear.
+    // --- Banda sonora: compone+sintetiza un WAV con takiy para muxear, con acentos
+    // sobre los **beats del guion** (cortes de cámara + gestos) → música sincronizada.
     let audio = "/tmp/voxel_film.wav";
-    let secs = crate::soundtrack::render_to(audio);
-    eprintln!("film: banda sonora {audio} ({secs:.1}s)");
+    let beats = seq.beat_times();
+    let secs = crate::soundtrack::render_to(audio, &beats);
+    let beat_list: Vec<String> = beats.iter().map(|t| format!("{t:.2}s")).collect();
+    eprintln!(
+        "film: banda sonora {audio} ({secs:.1}s, {} acentos sobre la acción: {})",
+        beats.len(),
+        beat_list.join(", ")
+    );
 
     // --- Muxeo a video (video AV1 + audio Opus). Si no hay ffmpeg, deja los PNG.
     let pattern = format!("{FRAME_DIR}/frame_%04d.png");
