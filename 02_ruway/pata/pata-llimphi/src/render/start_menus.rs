@@ -53,6 +53,42 @@ pub(super) fn icono_o_inicial(a: &AppEntry) -> String {
     inicial(&a.label)
 }
 
+/// **Contenido del badge de ícono de una app**, unificado para todos los
+/// launchers (classic / XP / GNOME / dock). Prioridad:
+///   1. Ícono real (SVG/PNG del tema XDG) si la app declara un nombre
+///      freedesktop o un path — lo que trae casi toda `.desktop` del sistema.
+///   2. El glyph corto de la app (suite tawasuyu), si la fuente lo trae.
+///   3. La inicial del rótulo como chip.
+///
+/// Devuelve una `View` que **ocupa el rect del padre** (el caller le da tamaño,
+/// fondo y hover). `glyph_size` es el tamaño de fuente del texto del fallback;
+/// `color` el color del glyph/inicial. El padre debe ser de tamaño fijo (el
+/// ícono real se pinta en absoluto, escalado al mínimo lado).
+pub(super) fn app_icon_content(a: &AppEntry, glyph_size: f32, color: Color) -> View<Msg> {
+    let icon_raw = a.icon.as_deref();
+    // 1) Ícono real: sólo para nombres largos (freedesktop) o paths — los
+    //    glyphs de la suite son de 1–2 chars y nunca resuelven a archivo.
+    if let Some(name) = icon_raw.filter(|s| s.chars().count() > 2 || s.starts_with('/')) {
+        if let Some(icon) = crate::app_icons::get_or_load(name) {
+            return View::new(Style {
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .children(vec![icon.view::<Msg>()]);
+        }
+    }
+    // 2/3) Glyph corto renderable, o inicial.
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(icono_o_inicial(a), glyph_size, color, Alignment::Center)
+}
+
 /// La inicial alfanumérica de un rótulo, en mayúscula (chip de fallback).
 fn inicial(label: &str) -> String {
     label
@@ -471,14 +507,13 @@ fn xp_category_header(cat: &str, theme: &Theme) -> View<Msg> {
 }
 
 fn xp_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
-    let icono = icono_o_inicial(a);
     let badge = View::new(Style {
-        size: Size { width: length(22.0_f32), height: length(XP_ROW_H) },
+        size: Size { width: length(22.0_f32), height: length(22.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(icono, 14.0, theme.accent, Alignment::Center);
+    .children(vec![app_icon_content(a, 14.0, theme.accent)]);
     let nombre = View::new(Style {
         flex_grow: 1.0,
         size: Size { width: auto(), height: length(XP_ROW_H) },
@@ -840,7 +875,6 @@ fn gnome_tile(a: &AppEntry) -> View<Msg> {
     // Inicial-chip cuando no hay glifo renderizable (antes «▸» para todas las
     // .desktop sin ícono → un mar de triángulos idénticos, y «NO GLYPH» para
     // los glifos de la suite ausentes en la fuente).
-    let glyph = icono_o_inicial(a);
     let label = a.label.clone();
     let id = a.id.clone();
 
@@ -851,18 +885,19 @@ fn gnome_tile(a: &AppEntry) -> View<Msg> {
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
+        padding: TaffyRect {
+            left: length(14.0_f32),
+            right: length(14.0_f32),
+            top: length(14.0_f32),
+            bottom: length(14.0_f32),
+        },
         ..Default::default()
     })
     .fill(Color::from_rgba8(255, 255, 255, 18))
     .radius(20.0)
     .border(1.0, Color::from_rgba8(255, 255, 255, 30))
     .hover_fill(Color::from_rgba8(255, 255, 255, 48))
-    .text_aligned(
-        glyph,
-        46.0,
-        Color::from_rgba8(245, 246, 250, 255),
-        Alignment::Center,
-    );
+    .children(vec![app_icon_content(a, 46.0, Color::from_rgba8(245, 246, 250, 255))]);
 
     let label_v = View::new(Style {
         size: Size {

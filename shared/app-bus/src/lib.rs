@@ -91,11 +91,11 @@ impl AppEntry {
 pub fn default_entries() -> Vec<AppEntry> {
     // (id, label, icono, exec, categoría, handles)
     const D: &[(&str, &str, &str, &str, &str, &[&str])] = &[
-        ("nada", "Nada", "✎", "nada", "ruway",
+        ("nada", "Nada", "≡", "nada", "ruway",
             &["text/", "application/json", "application/toml", "inode/x-empty"]),
-        ("pluma", "Pluma", "✒", "pluma-editor-llimphi", "unanchay",
+        ("pluma", "Pluma", "¶", "pluma-editor-llimphi", "unanchay",
             &["text/markdown", "text/plain"]),
-        ("pluma-notebook", "Pluma Notebook", "▦", "pluma-notebook-llimphi", "unanchay",
+        ("pluma-notebook", "Pluma Notebook", "▣", "pluma-notebook-llimphi", "unanchay",
             &["application/x-pluma-notebook"]),
         ("tullpu", "Tullpu", "✦", "tullpu-app-llimphi", "ruway", &["image/"]),
         ("takiy", "Takiy", "♪", "takiy-app-llimphi", "ruway", &["audio/"]),
@@ -107,14 +107,14 @@ pub fn default_entries() -> Vec<AppEntry> {
             &["application/x-dominium"]),
         ("tinkuy", "Tinkuy", "⚛", "tinkuy-llimphi", "yachay", &["application/x-tinkuy"]),
         ("chaka", "Chaka", "◫", "chaka-app-llimphi", "unanchay", &["application/x-chaka"]),
-        ("nakui", "Nakui", "▤", "nakui-sheet-llimphi", "yachay",
+        ("nakui", "Nakui", "Σ", "nakui-sheet-llimphi", "yachay",
             &["text/csv", "application/x-nakui"]),
         ("puriy", "Puriy", "◎", "puriy", "unanchay", &["text/html"]),
         ("raymi", "Raymi", "◷", "raymi-app", "ruway", &["text/calendar"]),
         ("supay", "Supay", "✷", "supay-app-llimphi", "ruway", &[]),
         ("sandokan-monitor", "Monitor", "❤", "sandokan-monitor", "ukupacha", &[]),
         ("nahual", "Nahual", "❖", "nahual-shell-llimphi", "ruway", &["inode/directory"]),
-        ("mirada-panel", "Mirada Panel", "🗺", "mirada-llimphi", "ukupacha", &[]),
+        ("mirada-panel", "Mirada Panel", "▭", "mirada-llimphi", "ukupacha", &[]),
         ("panel-control", "Panel de control", "⚙", "wawa-panel", "ukupacha", &[]),
     ];
     D.iter()

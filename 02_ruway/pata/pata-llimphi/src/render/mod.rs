@@ -844,24 +844,13 @@ pub fn start_menu_body(
 
 /// Una fila del menú de inicio: ícono + label, clickeable.
 fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
-    let icon_raw = a.icon.as_deref();
-    let glyph_or_default: String = icon_raw
-        .filter(|s| s.chars().count() <= 2)
-        .unwrap_or("▸")
-        .to_string();
-    let svg_asset = icon_raw
-        .filter(|s| s.chars().count() > 2)
-        .and_then(crate::app_icons::get_or_load);
-    let badge_base = View::new(Style {
+    let badge = View::new(Style {
         size: Size { width: length(22.0_f32), height: length(22.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
-    });
-    let badge = match svg_asset {
-        Some(asset) => badge_base.children(vec![asset.view::<Msg>()]),
-        None => badge_base.text(glyph_or_default, 14.0, theme.accent),
-    };
+    })
+    .children(vec![start_menus::app_icon_content(a, 14.0, theme.accent)]);
     let nombre = View::new(Style {
         size: Size { width: auto(), height: length(28.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -1275,18 +1264,14 @@ fn dock_icon_inner(shell: View<Msg>, name: &str, inicial: &str, theme: &Theme, s
     }
 }
 
-/// Ícono de una **app fijada**: lanza la app al click.
+/// Ícono de una **app fijada**: lanza la app al click. Usa el badge unificado
+/// (ícono real XDG si la app es `.desktop`; glyph de la suite; o inicial).
 fn dock_pin_tile(a: &AppEntry, theme: &Theme, size: f32) -> View<Msg> {
-    let icon = a.icon.as_deref().unwrap_or(&a.id);
-    let inicial = a
-        .label
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "•".to_string());
-    dock_icon_inner(dock_icon_shell(size), icon, &inicial, theme, size)
+    dock_icon_shell(size)
+        .children(vec![start_menus::app_icon_content(a, size * 0.46, theme.accent)])
         .on_click(Msg::LaunchApp(a.id.clone()))
         .hover_fill(theme.bg_button_hover)
+        .radius(8.0)
 }
 
 /// Ícono de una **ventana abierta**: la activa al click.

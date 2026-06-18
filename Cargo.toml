@@ -700,6 +700,7 @@ llimphi-motion = { path = "02_ruway/llimphi/llimphi-motion" }
 llimphi-icons = { path = "02_ruway/llimphi/llimphi-icons" }
 # Puente fino vello_svg → Llimphi para SVG arbitrario (íconos .desktop, logos).
 llimphi-svg = { path = "02_ruway/llimphi/llimphi-svg" }
+llimphi-image = { path = "02_ruway/llimphi/llimphi-image" }
 # Widgets reusables sobre llimphi-ui — uno por crate.
 llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
 llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }

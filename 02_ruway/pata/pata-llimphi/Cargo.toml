@@ -74,6 +74,9 @@ llimphi-motion = { workspace = true }
 # Íconos `.desktop` reales en el menú de inicio: resolución XDG mínima +
 # parseo SVG vía vello_svg, cacheado entre frames.
 llimphi-svg = { workspace = true }
+# Decode de íconos raster (PNG/XPM-no, la mayoría del software del sistema trae
+# PNG, no SVG) a `peniko::Image` para `View::image`.
+llimphi-image = { workspace = true }
 chrono = { workspace = true }
 # Parseo del JSON del clima (widget `weather`): wttr.in / open-meteo por curl.
 serde_json = { workspace = true }
