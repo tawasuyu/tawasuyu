@@ -12,6 +12,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, AlignItems, JustifyContent, Position, Size, Style},
     Rect,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
@@ -75,35 +76,41 @@ where
     // --- Grilla base (a zoom = 1, centrada en el lienzo) ----------------
     let cw = sw_i as f32;
     let ch = sh_i as f32;
-    // Geometría 2D del Prezi: la celda (col,fila) de cada escritorio. Por
-    // defecto una grilla; configurable desde el editor del panel para arreglos
-    // arbitrarios (L, cruz, fila…). El overview LA RESPETA.
-    let geo = cfg.overview_geometry_for(count);
-    let cols = (geo.iter().map(|(c, _)| *c).max().unwrap_or(0) + 1).max(1) as usize;
-    let rows = (geo.iter().map(|(_, r)| *r).max().unwrap_or(0) + 1).max(1) as usize;
+    // Plano rico del Prezi: posición libre + tamaño + **giro** por escritorio (en
+    // unidades de celda). Por defecto deriva de la grilla; el editor de recorrido
+    // del panel lo puede colocar/rotar a voluntad. El overview LO RESPETA.
+    let places = cfg.overview_places_for(count);
+    // Extensión en unidades de celda (posición + tamaño) → cuántas celdas span.
+    let span_cols = places.iter().map(|p| p.x + p.w).fold(1.0_f32, f32::max).max(1.0);
+    let span_rows = places.iter().map(|p| p.y + p.h).fold(1.0_f32, f32::max).max(1.0);
+    let cols = span_cols.ceil().max(1.0);
+    let rows = span_rows.ceil().max(1.0);
     const MARGIN: f32 = 28.0;
     const GAP: f32 = 16.0;
-    let avail_w = (cw - 2.0 * MARGIN - GAP * (cols as f32 - 1.0)).max(1.0);
-    let avail_h = (ch - 2.0 * MARGIN - GAP * (rows as f32 - 1.0)).max(1.0);
-    let cell_w_max = avail_w / cols as f32;
-    let cell_h_max = avail_h / rows as f32;
-    // Preserva el aspecto del escritorio: la celda entra en su hueco.
-    let cell_w = cell_w_max.min(cell_h_max * aspect);
+    let avail_w = (cw - 2.0 * MARGIN - GAP * (cols - 1.0)).max(1.0);
+    let avail_h = (ch - 2.0 * MARGIN - GAP * (rows - 1.0)).max(1.0);
+    // Preserva el aspecto del escritorio: una celda 1×1 entra en su hueco.
+    let cell_w = (avail_w / cols).min(avail_h / rows * aspect);
     let cell_h = cell_w / aspect;
-    let grid_w = cell_w * cols as f32 + GAP * (cols as f32 - 1.0);
-    let grid_h = cell_h * rows as f32 + GAP * (rows as f32 - 1.0);
+    let grid_w = cell_w * cols + GAP * (cols - 1.0);
+    let grid_h = cell_h * rows + GAP * (rows - 1.0);
     let gx = (cw - grid_w) / 2.0;
     let gy = (ch - grid_h) / 2.0;
-    // Rect base de la celda `i` (a zoom = 1), según la geometría 2D.
+    // Rect base del escritorio `i` (a zoom = 1) desde su colocación rica: la
+    // posición usa el "pitch" (celda+gap) para que la grilla por defecto quede
+    // pixel-idéntica; el tamaño usa la celda (w/h en unidades de celda).
     let base_rect = |i: usize| -> (f32, f32, f32, f32) {
-        let (c, r) = geo.get(i).copied().unwrap_or((0, 0));
+        let p = places.get(i).copied().unwrap_or_default();
         (
-            gx + c as f32 * (cell_w + GAP),
-            gy + r as f32 * (cell_h + GAP),
-            cell_w,
-            cell_h,
+            gx + p.x * (cell_w + GAP),
+            gy + p.y * (cell_h + GAP),
+            p.w * cell_w,
+            p.h * cell_h,
         )
     };
+    // Giro propio del tile (rad), respetado vía `View::transform` (gira el tile y
+    // sus miniaturas alrededor del centro de su rect).
+    let rot_of = |i: usize| -> f64 { places.get(i).map(|p| p.rot as f64).unwrap_or(0.0) };
 
     // --- Cámara: scr(p) = O(t) + s(t)·p ---------------------------------
     let t = cam.zoom.clamp(0.0, 1.0);
@@ -240,6 +247,10 @@ where
         .fill(canvas_bg)
         .radius(5.0)
         .children(cell_children)]);
+
+        // Giro propio del escritorio: rota el tile entero (borde + miniaturas)
+        // alrededor del centro de su rect. `rotate(0)` ≡ identidad.
+        let cell = cell.transform(Affine::rotate(rot_of(i)));
 
         // En modo editor la celda se ARRASTRA para reacomodar el plano 2D: el px
         // del drag se convierte a delta-en-celdas con el pitch en pantalla.

@@ -91,6 +91,22 @@ fn main() {
         };
         d.set_config(cfg);
     }
+    // Plano rico (posición libre + giro) para demostrar que el Prezi lo respeta:
+    //   MIRADA_OVERVIEW_PLACES=tilt → grilla 3×3 con cada escritorio girado distinto
+    if let Ok(kind) = std::env::var("MIRADA_OVERVIEW_PLACES") {
+        use mirada_brain::OverviewPlace;
+        let mut cfg = d.config().clone();
+        cfg.overview_places = match kind.as_str() {
+            "tilt" => (0..9)
+                .map(|i| {
+                    let (c, r) = ((i % 3) as f32, (i / 3) as f32);
+                    OverviewPlace::new(c, r, 1.0, 1.0, (i as f32 - 4.0) * 0.12)
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        d.set_config(cfg);
+    }
     let focus = focus_arg.unwrap_or_else(|| d.active_index());
 
     let v = overview_view::<(), _, _>(
