@@ -158,10 +158,111 @@ impl Clip {
     }
 }
 
+/// **Edad cuantizada** del personaje: estadios discretos que cambian las
+/// proporciones del cuerpo (un bebé es cabezón y de miembros cortos; un adulto es
+/// alto y proporcionado). Sirve para *mostrar al niño primero* (el corto: nace en el
+/// desierto) y envejecerlo por etapas. Cada edad deriva un [`Build`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Age {
+    /// Bebé/recién nacido: chiquito, cabezón, miembros cortos.
+    Baby,
+    /// Niño.
+    Child,
+    /// Joven/adolescente.
+    Teen,
+    /// Adulto (proporciones de referencia).
+    Adult,
+    /// Anciano (apenas más bajo que el adulto).
+    Elder,
+}
+
+impl Age {
+    /// `(escala_total, refuerzo_cabeza, escala_miembros)` por edad. Más joven =
+    /// más chico, cabeza proporcionalmente más grande y miembros más cortos.
+    fn params(self) -> (f32, f32, f32) {
+        match self {
+            Age::Baby => (0.50, 1.55, 0.70),
+            Age::Child => (0.66, 1.28, 0.82),
+            Age::Teen => (0.84, 1.08, 0.93),
+            Age::Adult => (1.00, 1.00, 1.00),
+            Age::Elder => (0.96, 1.00, 0.97),
+        }
+    }
+}
+
+/// **Constitución** del muñeco: las medidas de cada parte (posiciones de
+/// articulación y tamaños de caja), en el espacio local del actor (pies en el
+/// origen, mirando a `+Z`). Es el "esqueleto + modelado" configurable: cambiarla
+/// hace personajes distintos (alto/bajo, cabezón, etc.). Se construye por
+/// [`Age`](Age) ([`Build::for_age`]) y los pies quedan **siempre en `y=0`** por
+/// construcción (`hip_y == leg_len`).
+#[derive(Debug, Clone, Copy)]
+pub struct Build {
+    /// Altura aproximada total (referencia).
+    pub height: f32,
+    /// Centro y tamaño del torso.
+    pub torso_y: f32,
+    pub torso: Vec3,
+    /// Centro y tamaño de la cabeza.
+    pub head_y: f32,
+    pub head: Vec3,
+    /// Altura del hombro y separación lateral; largo y tamaño del brazo.
+    pub shoulder_y: f32,
+    pub shoulder_x: f32,
+    pub arm_len: f32,
+    pub arm: Vec3,
+    /// Altura de la cadera (= `leg_len`, pies en el piso), separación; largo/tamaño
+    /// de la pierna.
+    pub hip_y: f32,
+    pub hip_x: f32,
+    pub leg_len: f32,
+    pub leg: Vec3,
+    /// Tamaño de la mano.
+    pub hand: Vec3,
+}
+
+impl Build {
+    /// Construye la constitución de una [`Age`]. Bottom-up desde los pies (`y=0`),
+    /// así cualquier edad queda con los pies en el piso. `Adult` reproduce las
+    /// proporciones históricas del muñeco (los 11 cubos de siempre).
+    pub fn for_age(age: Age) -> Build {
+        let (s, head_boost, limb) = age.params();
+        let neck = 0.02 * s;
+        let leg_len = 0.80 * s * limb;
+        let hip_y = leg_len; // pies en el piso
+        let torso = Vec3::new(0.55 * s, 0.60 * s, 0.30 * s);
+        let torso_y = hip_y + torso.y * 0.5;
+        let shoulder_y = hip_y + torso.y;
+        let head = Vec3::new(0.42 * s * head_boost, 0.40 * s * head_boost, 0.42 * s * head_boost);
+        let head_y = shoulder_y + head.y * 0.5 + neck;
+        Build {
+            height: head_y + head.y * 0.5,
+            torso_y,
+            torso,
+            head_y,
+            head,
+            shoulder_y,
+            shoulder_x: 0.36 * s,
+            arm_len: 0.60 * s * limb,
+            arm: Vec3::new(0.18 * s, 0.60 * s * limb, 0.18 * s),
+            hip_y,
+            hip_x: 0.14 * s,
+            leg_len,
+            leg: Vec3::new(0.22 * s, leg_len, 0.22 * s),
+            hand: Vec3::new(0.20 * s, 0.18 * s, 0.20 * s),
+        }
+    }
+
+    /// Constitución adulta de referencia.
+    pub fn adult() -> Build {
+        Build::for_age(Age::Adult)
+    }
+}
+
 /// Personaje articulado. `pos` es el **centro de los pies** en espacio de mundo
 /// (las mismas coordenadas del terreno/grid); `facing` el rumbo (yaw, `0`=`+Z`).
 /// `clip`/`phase` definen la animación actual. Colores por zona (piel/remera/
-/// pantalón).
+/// pantalón). La [`Build`] define las proporciones (edad/personaje).
 #[derive(Debug, Clone, Copy)]
 pub struct Actor {
     /// Centro de los pies, en mundo.
@@ -189,6 +290,11 @@ pub struct Actor {
     /// cabeceo del clip — los ojos siguen al objetivo. `None` = cabeza alineada al
     /// cuerpo. La fija [`look_at`](Self::look_at).
     look_target: Option<Vec3>,
+    /// Constitución (proporciones por edad/personaje). La fija
+    /// [`with_age`](Self::with_age) / [`with_build`](Self::with_build).
+    pub build: Build,
+    /// Edad actual (estadio cuantizado) — informativo; el cuerpo lo da `build`.
+    pub age: Age,
 }
 
 impl Actor {
@@ -208,7 +314,29 @@ impl Actor {
             shirt: [0.20, 0.62, 0.55],
             pants: [0.18, 0.22, 0.34],
             look_target: None,
+            build: Build::adult(),
+            age: Age::Adult,
         }
+    }
+
+    /// Fija la **edad** (estadio cuantizado) → recalcula la constitución del cuerpo.
+    /// Encadenable: `Actor::new(pos, yaw).with_age(Age::Baby)`. Para *mostrar al
+    /// niño primero* y envejecerlo por etapas.
+    pub fn with_age(mut self, age: Age) -> Self {
+        self.set_age(age);
+        self
+    }
+
+    /// Cambia la edad en caliente (recalcula `build`).
+    pub fn set_age(&mut self, age: Age) {
+        self.age = age;
+        self.build = Build::for_age(age);
+    }
+
+    /// Fija una constitución arbitraria (personaje a medida, no atado a una edad).
+    pub fn with_build(mut self, build: Build) -> Self {
+        self.build = build;
+        self
     }
 
     /// Fija (o limpia con `None`) el **objetivo de mirada** (IK de cabeza): la cabeza
@@ -286,6 +414,7 @@ impl Actor {
     /// [`model`](Self::model).
     pub fn mesh(&self) -> (Vec<Vertex3d>, Vec<u16>) {
         let p = self.pose();
+        let b = &self.build;
         let mut v = Vec::with_capacity(8 * 11);
         let mut i = Vec::with_capacity(36 * 11);
 
@@ -294,33 +423,28 @@ impl Actor {
         let body = Mat4::from_translation(Vec3::new(0.0, p.bob, 0.0)) * Mat4::from_rotation_x(p.lean);
 
         // Torso.
-        push_cube(
-            &mut v,
-            &mut i,
-            body * trs(Vec3::new(0.0, 1.10, 0.0), Mat4::IDENTITY, Vec3::new(0.55, 0.60, 0.30)),
-            self.shirt,
-        );
+        push_cube(&mut v, &mut i, body * trs(Vec3::new(0.0, b.torso_y, 0.0), Mat4::IDENTITY, b.torso), self.shirt);
 
         // Cabeza: cabeceo del clip + IK de mirada (yaw/pitch hacia el objetivo). El
         // `head_anchor` (sin escala) ancla cabeza, ojos y boca para que giren juntos.
         let (look_yaw, look_pitch) = self.look_angles();
         let head_rot = Mat4::from_rotation_y(look_yaw) * Mat4::from_rotation_x(p.head_pitch + look_pitch);
-        let head_anchor = body * Mat4::from_translation(Vec3::new(0.0, 1.62, 0.0)) * head_rot;
-        push_cube(&mut v, &mut i, head_anchor * Mat4::from_scale(Vec3::new(0.42, 0.40, 0.42)), self.skin);
+        let head_anchor = body * Mat4::from_translation(Vec3::new(0.0, b.head_y, 0.0)) * head_rot;
+        push_cube(&mut v, &mut i, head_anchor * Mat4::from_scale(b.head), self.skin);
 
-        // Cara: dos ojos + boca en la cara `+Z` de la cabeza (media-extensión z=0.21).
-        // Parpadeo determinista (los ojos se achican un instante cada ~3 s de fase) y
-        // boca que se abre con los gestos expresivos → "animación de cara".
-        // Ojos/boca = decales finos sobre la cara (apenas sobresalen, estilo Minecraft):
-        // así no alargan la silueta, sólo pintan la cara.
-        let eye = [0.04, 0.06, 0.02];
+        // Cara: dos ojos + boca en la cara `+Z` de la cabeza. Las posiciones/tamaños
+        // van como **fracción del tamaño de la cabeza** → escalan con la edad (un bebé
+        // cabezón tiene ojos más grandes). Decales finos (apenas sobresalen, estilo
+        // Minecraft). Parpadeo determinista + boca que se abre con los gestos.
+        let (hw, hh, hd) = (b.head.x, b.head.y, b.head.z);
         let blink = self.blink(); // 1 = abierto, ~0 = cerrado
-        let eyeh = (eye[1] * blink).max(0.012);
-        for sx in [0.11_f32, -0.11] {
+        let eye_sz = Vec3::new(0.095 * hw, (0.15 * hh * blink).max(0.012), 0.05 * hd);
+        let face_z = hd * 0.49; // casi en la cara +Z
+        for sx in [0.26_f32, -0.26] {
             push_cube(
                 &mut v,
                 &mut i,
-                head_anchor * trs(Vec3::new(sx, 0.05, 0.205), Mat4::IDENTITY, Vec3::new(eye[0], eyeh, eye[2])),
+                head_anchor * trs(Vec3::new(sx * hw, 0.12 * hh, face_z), Mat4::IDENTITY, eye_sz),
                 EYE_COLOR,
             );
         }
@@ -328,27 +452,26 @@ impl Actor {
         push_cube(
             &mut v,
             &mut i,
-            head_anchor * trs(Vec3::new(0.0, -0.10, 0.205), Mat4::IDENTITY, Vec3::new(0.16, 0.02 + mouth_open, 0.02)),
+            head_anchor * trs(Vec3::new(0.0, -0.25 * hh, face_z), Mat4::IDENTITY, Vec3::new(0.38 * hw, 0.05 * hh + mouth_open, 0.05 * hd)),
             MOUTH_COLOR,
         );
 
-        // Piernas (sin `body`: pies plantados). Articulación en cadera y=0.8.
-        limb(&mut v, &mut i, Mat4::IDENTITY, Vec3::new(0.14, 0.80, 0.0), 0.80, Vec3::new(0.22, 0.80, 0.22), Mat4::from_rotation_x(p.leg_r), self.pants);
-        limb(&mut v, &mut i, Mat4::IDENTITY, Vec3::new(-0.14, 0.80, 0.0), 0.80, Vec3::new(0.22, 0.80, 0.22), Mat4::from_rotation_x(p.leg_l), self.pants);
+        // Piernas (sin `body`: pies plantados). Articulación en la cadera.
+        let leg_rot_r = Mat4::from_rotation_x(p.leg_r);
+        let leg_rot_l = Mat4::from_rotation_x(p.leg_l);
+        limb(&mut v, &mut i, Mat4::IDENTITY, Vec3::new(b.hip_x, b.hip_y, 0.0), b.leg_len, b.leg, leg_rot_r, self.pants);
+        limb(&mut v, &mut i, Mat4::IDENTITY, Vec3::new(-b.hip_x, b.hip_y, 0.0), b.leg_len, b.leg, leg_rot_l, self.pants);
 
-        // Brazos (con `body`). Hombro y=1.40; rotación = apertura(Z)·balanceo(X).
-        // La apertura se espeja por lado (positivo = levantar hacia su costado).
-        let arm = Vec3::new(0.18, 0.60, 0.18);
+        // Brazos (con `body`). Rotación = apertura(Z)·balanceo(X); apertura espejada.
         let arm_r_rot = Mat4::from_rotation_z(p.arm_r_out) * Mat4::from_rotation_x(p.arm_r);
         let arm_l_rot = Mat4::from_rotation_z(-p.arm_l_out) * Mat4::from_rotation_x(p.arm_l);
-        limb(&mut v, &mut i, body, Vec3::new(0.36, 1.40, 0.0), 0.60, arm, arm_r_rot, self.shirt);
-        limb(&mut v, &mut i, body, Vec3::new(-0.36, 1.40, 0.0), 0.60, arm, arm_l_rot, self.shirt);
+        let (sh_r, sh_l) = (Vec3::new(b.shoulder_x, b.shoulder_y, 0.0), Vec3::new(-b.shoulder_x, b.shoulder_y, 0.0));
+        limb(&mut v, &mut i, body, sh_r, b.arm_len, b.arm, arm_r_rot, self.shirt);
+        limb(&mut v, &mut i, body, sh_l, b.arm_len, b.arm, arm_l_rot, self.shirt);
 
-        // Manos: una caja de piel en la punta de cada brazo (a `len` del hombro, donde
-        // termina la caja del brazo), siguiendo su rotación.
-        let hand = Vec3::new(0.20, 0.18, 0.20);
-        hand_at(&mut v, &mut i, body, Vec3::new(0.36, 1.40, 0.0), 0.60, arm_r_rot, hand, self.skin);
-        hand_at(&mut v, &mut i, body, Vec3::new(-0.36, 1.40, 0.0), 0.60, arm_l_rot, hand, self.skin);
+        // Manos: una caja de piel en la punta de cada brazo (a `arm_len` del hombro).
+        hand_at(&mut v, &mut i, body, sh_r, b.arm_len, arm_r_rot, b.hand, self.skin);
+        hand_at(&mut v, &mut i, body, sh_l, b.arm_len, arm_l_rot, b.hand, self.skin);
 
         (v, i)
     }
@@ -475,6 +598,31 @@ mod tests {
         let (v, idx) = a.mesh();
         assert_eq!(v.len(), 8 * 11, "11 cajas × 8 vértices");
         assert_eq!(idx.len(), 36 * 11, "11 cajas × 36 índices");
+    }
+
+    #[test]
+    fn edades_cambian_proporciones_y_dejan_los_pies_en_el_piso() {
+        let baby = Build::for_age(Age::Baby);
+        let adult = Build::for_age(Age::Adult);
+        // El bebé es más bajo que el adulto.
+        assert!(baby.height < adult.height, "bebé {} < adulto {}", baby.height, adult.height);
+        // ...y CABEZÓN: la cabeza ocupa una fracción mayor de su altura.
+        let head_frac = |b: &Build| b.head.y / b.height;
+        assert!(head_frac(&baby) > head_frac(&adult) + 0.05, "bebé cabezón: {} vs {}", head_frac(&baby), head_frac(&adult));
+        // Toda edad apoya los pies en y=0 (el voxel más bajo de la malla ≈ 0).
+        for age in [Age::Baby, Age::Child, Age::Teen, Age::Adult, Age::Elder] {
+            let a = Actor::new(Vec3::ZERO, 0.0).with_age(age);
+            let ymin = a.mesh().0.iter().map(|v| v.pos[1]).fold(f32::MAX, f32::min);
+            assert!(ymin.abs() < 1e-3, "pies en el piso para {age:?}: ymin={ymin}");
+        }
+    }
+
+    #[test]
+    fn adulto_conserva_los_once_cubos_y_altura_historica() {
+        // El refactor a Build no cambió al adulto: 11 cajas y altura ~1.82.
+        let a = Actor::new(Vec3::ZERO, 0.0);
+        assert_eq!(a.mesh().0.len(), 8 * 11);
+        assert!((a.build.height - 1.82).abs() < 0.05, "altura adulta {}", a.build.height);
     }
 
     #[test]

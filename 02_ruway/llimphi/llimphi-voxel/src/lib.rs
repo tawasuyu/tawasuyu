@@ -22,7 +22,7 @@ mod vox;
 mod world_stream;
 mod worldgen;
 
-pub use actor::{Actor, Clip, Pose};
+pub use actor::{Actor, Age, Build, Clip, Pose};
 pub use director::{ActorKey, ActorSample, ActorScript, Sequence, Shot};
 pub use vox::{load_grid, load_scene_grid, model_to_grid, scene_to_grid, stamp, VoxLoadError};
 pub use critter::Critter;
