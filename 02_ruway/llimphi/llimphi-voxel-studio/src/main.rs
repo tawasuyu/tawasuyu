@@ -26,12 +26,14 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{
-    App, DragPhase, Handle, Modifiers, View, WheelDelta,
+    App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_voxel::{world_dim, Project, WorldRecipe, PREVIEW_DIM_XZ};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
+mod ai;
 mod preview;
 mod shot;
 use preview::WorldPreview;
@@ -72,6 +74,11 @@ enum Msg {
     /// Cámara de órbita.
     Orbit(f32, f32),
     Zoom(f32),
+    /// IA "poor": foco/tecla del campo de descripción, disparo y resultado.
+    AiFocus,
+    AiKey(KeyEvent),
+    AiGenerate,
+    AiResult(WorldRecipe, String),
 }
 
 struct Model {
@@ -90,6 +97,10 @@ struct Model {
     preview: Arc<Mutex<Option<WorldPreview>>>,
     /// Mensaje de estado (guardado/cargado/errores).
     status: String,
+    /// Campo de descripción para la IA + foco + flag "generando".
+    ai_input: TextInputState,
+    ai_focused: bool,
+    ai_busy: bool,
 }
 
 impl Model {
@@ -102,6 +113,16 @@ impl Model {
 /// Distancia de órbita inicial/clamp en función del lado del mundo.
 fn default_dist() -> f32 {
     PREVIEW_DIM_XZ as f32 * 1.6
+}
+
+/// Nombre de mundo a partir de la descripción de la IA: las primeras ~3 palabras.
+fn world_name_from(prompt: &str) -> String {
+    let s: String = prompt.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
+    if s.is_empty() {
+        "mundo IA".into()
+    } else {
+        format!("IA: {s}")
+    }
 }
 
 struct Studio;
@@ -125,7 +146,19 @@ impl App for Studio {
         Some(Msg::Zoom(delta.y))
     }
 
-    fn update(mut model: Model, msg: Msg, _handle: &Handle<Msg>) -> Model {
+    fn on_key(model: &Model, ev: &KeyEvent) -> Option<Msg> {
+        // Con el campo de la IA enfocado, el teclado lo alimenta: Enter genera,
+        // Escape lo suelta, el resto va al buffer de texto.
+        if model.ai_focused {
+            if ev.state == KeyState::Pressed && matches!(&ev.key, Key::Named(NamedKey::Enter)) {
+                return Some(Msg::AiGenerate);
+            }
+            return Some(Msg::AiKey(ev.clone()));
+        }
+        None
+    }
+
+    fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Select(i) => {
                 if i < model.project.worlds.len() {
@@ -210,6 +243,29 @@ impl App for Studio {
                 let xz = PREVIEW_DIM_XZ as f32;
                 model.dist = (model.dist * f).clamp(xz * 0.6, xz * 3.0);
             }
+            Msg::AiFocus => model.ai_focused = true,
+            Msg::AiKey(ev) => {
+                model.ai_input.apply_key(&ev);
+            }
+            Msg::AiGenerate => {
+                let prompt = model.ai_input.text();
+                if !prompt.trim().is_empty() && !model.ai_busy {
+                    model.ai_busy = true;
+                    model.status = "generando mundo con IA…".into();
+                    let name = world_name_from(&prompt);
+                    handle.spawn(move || Msg::AiResult(ai::generate(&prompt), name));
+                }
+            }
+            Msg::AiResult(recipe, name) => {
+                let idx = model
+                    .project
+                    .add_world(llimphi_voxel::NamedWorld::new(name, recipe));
+                model.sel = idx;
+                model.gen += 1;
+                model.ai_busy = false;
+                model.ai_input.set_text("");
+                model.status = format!("mundo generado: «{}»", model.project.worlds[idx].name);
+            }
         }
         model
     }
@@ -267,6 +323,24 @@ fn left_panel(model: &Model) -> View<Msg> {
     rows.push(button_view("guardar", &btn, Msg::Save));
     rows.push(spacer(6.0));
     rows.push(button_view("cargar", &btn, Msg::Load));
+
+    // Sección IA: describir un mundo en prosa y generarlo.
+    rows.push(spacer(14.0));
+    rows.push(section_title("IA — DESCRIBÍ UN MUNDO", theme));
+    rows.push(text_input_view(
+        &model.ai_input,
+        "p.ej. islas con ríos y nieve",
+        model.ai_focused,
+        &TextInputPalette::from_theme(theme),
+        Msg::AiFocus,
+    ));
+    rows.push(spacer(6.0));
+    rows.push(button_view(
+        if model.ai_busy { "generando…" } else { "generar (IA)" },
+        &btn,
+        Msg::AiGenerate,
+    ));
+
     rows.push(spacer(12.0));
     rows.push(
         View::new(Style {
@@ -440,6 +514,9 @@ pub(crate) fn demo_model() -> Model {
         dist: default_dist(),
         preview: Arc::new(Mutex::new(None)),
         status: "proyecto de arranque · desierto + pradera".into(),
+        ai_input: TextInputState::new(),
+        ai_focused: false,
+        ai_busy: false,
     }
 }
 
