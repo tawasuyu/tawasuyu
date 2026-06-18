@@ -69,6 +69,39 @@ mod wallpaper_fit_slug_serde {
     }
 }
 
+/// Colocación **rica** de un escritorio en el plano del Prezi: posición y tamaño
+/// en **unidades de celda** (`1.0` = una celda de la grilla base) más un giro
+/// propio en radianes. Generaliza la grilla entera [`Config::overview_geometry`]
+/// — cada celda `(c, r)` equivale a `OverviewPlace { x: c, y: r, w: 1, h: 1,
+/// rot: 0 }` — para permitir colocación libre y rotación. Es lo que autoriza el
+/// editor de recorrido del panel y lo que la vista espacial respeta.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct OverviewPlace {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Giro propio del tile alrededor de su centro, en radianes.
+    pub rot: f32,
+}
+
+impl Default for OverviewPlace {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0, w: 1.0, h: 1.0, rot: 0.0 }
+    }
+}
+
+impl OverviewPlace {
+    pub fn new(x: f32, y: f32, w: f32, h: f32, rot: f32) -> Self {
+        Self { x, y, w, h, rot }
+    }
+
+    /// Centro del tile en unidades de celda.
+    pub fn center(&self) -> (f32, f32) {
+        (self.x + self.w * 0.5, self.y + self.h * 0.5)
+    }
+}
+
 /// Los ajustes del escritorio que el usuario puede configurar sin tocar el
 /// keymap ni las reglas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -206,6 +239,14 @@ pub struct Config {
     /// rectangulares (una L, una cruz, una fila, etc.).
     #[serde(default)]
     pub overview_geometry: Vec<(i32, i32)>,
+    /// Colocación **rica** de cada escritorio en el plano del Prezi (posición
+    /// libre + tamaño + giro, en unidades de celda). Tiene prioridad sobre
+    /// [`overview_geometry`](Self::overview_geometry) cuando hay una entrada por
+    /// escritorio; vacío = se deriva de la grilla (cada celda → tile 1×1 sin
+    /// giro). Lo edita el editor de recorrido del panel; la vista espacial lo
+    /// respeta, incluida la rotación.
+    #[serde(default)]
+    pub overview_places: Vec<OverviewPlace>,
     /// Distribución de teclado XKB (`"us"`, `"es"`, `"latam"`, `"fr"`, …).
     /// Vacío = la del sistema (XKB_DEFAULT_LAYOUT / `us`). La aplica el
     /// compositor al crear el teclado; cambia al reiniciar la sesión.
@@ -484,6 +525,7 @@ impl Default for Config {
             theme: default_theme(),
             workspace_switch_mode: WorkspaceSwitchMode::default(),
             overview_geometry: Vec::new(),
+            overview_places: Vec::new(),
             xkb_layout: String::new(),
             xkb_variant: String::new(),
             natural_scroll: false,
@@ -646,6 +688,22 @@ impl Config {
         }
         geo[desktop] = target;
         geo
+    }
+
+    /// La colocación **rica** de cada escritorio para `count` escritorios. Usa
+    /// [`overview_places`](Self::overview_places) si tiene una entrada por
+    /// escritorio; si no, deriva una colocación 1×1 sin giro desde la grilla
+    /// [`overview_geometry_for`](Self::overview_geometry_for). Es la fuente única
+    /// que consumen el overview (vista espacial) y el editor de recorrido del
+    /// panel cuando quieren posición libre + rotación.
+    pub fn overview_places_for(&self, count: usize) -> Vec<OverviewPlace> {
+        if self.overview_places.len() == count && count > 0 {
+            return self.overview_places.clone();
+        }
+        self.overview_geometry_for(count)
+            .into_iter()
+            .map(|(c, r)| OverviewPlace::new(c as f32, r as f32, 1.0, 1.0, 0.0))
+            .collect()
     }
 
     /// La dirección de disposición de las salidas en el escritorio compuesto.
@@ -971,6 +1029,46 @@ mod tests {
         // Mover el 3 a una celda libre (abajo) → sin swap.
         let g = c.overview_geometry_moved(4, 3, 0, 1);
         assert_eq!(g[3], (1, 2));
+    }
+
+    #[test]
+    fn overview_places_for_deriva_de_la_grilla_si_no_hay_plano_rico() {
+        // Sin overview_places: cada celda de la grilla 2×2 → tile 1×1 sin giro.
+        let c = Config::default();
+        let p = c.overview_places_for(4);
+        assert_eq!(p.len(), 4);
+        assert_eq!(p[0], OverviewPlace::new(0.0, 0.0, 1.0, 1.0, 0.0));
+        assert_eq!(p[1], OverviewPlace::new(1.0, 0.0, 1.0, 1.0, 0.0));
+        assert_eq!(p[2], OverviewPlace::new(0.0, 1.0, 1.0, 1.0, 0.0));
+        assert_eq!(p[3], OverviewPlace::new(1.0, 1.0, 1.0, 1.0, 0.0));
+    }
+
+    #[test]
+    fn overview_places_for_usa_el_plano_rico_cuando_coincide_el_conteo() {
+        // Con un plano rico de N entradas (posición libre + giro), tiene
+        // prioridad sobre la grilla; con conteo distinto, cae a la grilla.
+        let mut c = Config::default();
+        c.overview_places = vec![
+            OverviewPlace::new(0.5, 0.0, 1.0, 1.0, std::f32::consts::FRAC_PI_4),
+            OverviewPlace::new(2.0, 1.3, 1.5, 1.0, -0.2),
+        ];
+        let p = c.overview_places_for(2);
+        assert_eq!(p, c.overview_places);
+        // Conteo distinto al del plano → fallback a grilla 1×1.
+        let p3 = c.overview_places_for(3);
+        assert!(p3.iter().all(|q| q.w == 1.0 && q.h == 1.0 && q.rot == 0.0));
+    }
+
+    #[test]
+    fn overview_places_round_trip_por_ron() {
+        let mut c = Config::default();
+        c.overview_places = vec![
+            OverviewPlace::new(0.0, 0.0, 1.0, 1.0, 0.0),
+            OverviewPlace::new(1.25, 0.5, 1.0, 1.0, 0.7853982),
+        ];
+        let text = c.to_ron().expect("serializa");
+        let back = Config::from_ron(&text).expect("re-parsea");
+        assert_eq!(back.overview_places, c.overview_places);
     }
 
     #[test]

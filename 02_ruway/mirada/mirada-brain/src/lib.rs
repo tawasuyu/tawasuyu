@@ -41,8 +41,8 @@ pub use action::{
 };
 pub use activity::{ActivityGraph, Lineage};
 pub use config::{
-    default_root_menu, default_zones, Config, MenuEntry, OutputOverride, WorkspaceSwitchMode,
-    ZoneCfg,
+    default_root_menu, default_zones, Config, MenuEntry, OutputOverride, OverviewPlace,
+    WorkspaceSwitchMode, ZoneCfg,
     DROPTERM_APP_ID,
 };
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesState};

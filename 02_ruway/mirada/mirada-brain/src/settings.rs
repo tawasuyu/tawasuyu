@@ -18,7 +18,15 @@ use allichay::{
 use mirada_layout::WallpaperFit;
 
 use crate::action::{layout_from_slug, layout_slug};
-use crate::config::{Config, MenuEntry, OutputOverride};
+use crate::config::{Config, MenuEntry, OutputOverride, OverviewPlace};
+
+/// Formatea un `f32` corto para las tablas de ajustes: hasta 3 decimales, sin
+/// ceros ni punto colgantes (`1.0 → "1"`, `2.5 → "2.5"`).
+fn fmt_f32(v: f32) -> String {
+    let s = format!("{v:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.to_string()
+}
 
 /// Las opciones de modo de teselado (slug + rótulo).
 fn layout_options() -> Vec<EnumOption> {
@@ -295,6 +303,29 @@ impl Configurable for Config {
                             .into_iter()
                             .map(|(c, r)| vec![c.to_string(), r.to_string()])
                             .collect(),
+                    ))
+                    .field(Field::table(
+                        "overview_places",
+                        "Plano Prezi (x, y, ancho, alto, giro° por escritorio)",
+                        vec![
+                            Column::new("x", "X"),
+                            Column::new("y", "Y"),
+                            Column::new("w", "Ancho"),
+                            Column::new("h", "Alto"),
+                            Column::new("rot", "Giro°"),
+                        ],
+                        self.overview_places_for(crate::action::WORKSPACE_COUNT)
+                            .into_iter()
+                            .map(|p| {
+                                vec![
+                                    fmt_f32(p.x),
+                                    fmt_f32(p.y),
+                                    fmt_f32(p.w),
+                                    fmt_f32(p.h),
+                                    fmt_f32(p.rot.to_degrees()),
+                                ]
+                            })
+                            .collect(),
                     )),
             )
     }
@@ -529,6 +560,26 @@ impl Configurable for Config {
                             let c = r.first().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
                             let row = r.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
                             (c, row)
+                        })
+                        .collect();
+                }
+            }
+            "overview_places" => {
+                // Tabla (x, y, ancho, alto, giro°) por escritorio → plano rico.
+                if let Some(rows) = value.as_table() {
+                    let cell = |r: &[String], i: usize, dflt: f32| {
+                        r.get(i).and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(dflt)
+                    };
+                    self.overview_places = rows
+                        .iter()
+                        .map(|r| {
+                            OverviewPlace::new(
+                                cell(r, 0, 0.0),
+                                cell(r, 1, 0.0),
+                                cell(r, 2, 1.0),
+                                cell(r, 3, 1.0),
+                                cell(r, 4, 0.0).to_radians(),
+                            )
                         })
                         .collect();
                 }
