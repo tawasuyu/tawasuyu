@@ -673,10 +673,14 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    stamp,load_grid}` (remapea `z`-arriba del `.vox` a `y`-arriba del motor; `stamp`
    compone sets metiendo piezas en un grid). Verificado por PNG (`--vox`: genera un
    golem → `foreign_vox::write` → `.vox` → `load_grid` → render; el muñeco con ojos/
-   antena se lee) + 5 tests (ida y vuelta, bytes a mano, remapeo de ejes). **Falta**:
-   importar la **paleta oficial** de MagicaVoxel (hoy el fallback sin `RGBA` es una
-   rampa HSV; los exportes reales traen `RGBA` y van bien) y soporte de escenas
-   multi-modelo con transformación (`nTRN/nGRP`).
+   antena se lee) + 5 tests (ida y vuelta, bytes a mano, remapeo de ejes).
+   **Paleta oficial HECHA (2026-06-18):** el fallback sin `RGBA` ya no es una rampa
+   HSV inventada sino la **tabla canónica de 256 colores de MagicaVoxel**
+   (`DEFAULT_PALETTE_ABGR`, formato `0xAABBGGRR` del spec ephtracy/voxel-model,
+   desempacada a RGBA) — los modelos viejos / hechos a mano que omiten la paleta abren
+   con los colores correctos. Test que fija entradas conocidas (blanco=1, amarillo=6,
+   gris=255) + opacidad de las 256. **Falta**: soporte de escenas multi-modelo con
+   transformación (`nTRN/nGRP`).
 4. ~~**Iluminación cinematográfica**~~ **PRIMER PASO HECHO**: la luz del ray-march
    pasó de escalar (ambiente plano 0.32) a **con color** — color del sol por su
    elevación (cálido al ras → blanco en lo alto) + ambiente tintado por el color de
