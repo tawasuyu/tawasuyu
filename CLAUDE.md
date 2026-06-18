@@ -17,6 +17,7 @@ Lectura previa obligatoria al tocar cualquier cosa de fondo: `README.md`, `PLAN.
 5. **`cargo check --workspace` debe pasar en `main` siempre** — es el smoke test mínimo.
 6. **Nombres con carga semántica fuerte se respetan en su idioma** (mayormente quechua/español). No retraducir `khipu`, `rimay`, `pluma`, `wawa`, `mirada`, `nahual`, `chasqui`, `takiy`, `agora`, `arje`, `minga`, `shuma`, `nakui`, `iniy`, `tinkuy`, `chaka`, `pineal`, `puriy`, `supay`, `sandokan`, `dominium`, `cosmos`, `tullpu`, `yupay`, `llimphi`, `akasha`, `unanchay`, `yachay`, `ruway`, `ukupacha`.
 7. **Comentarios y mensajes de commit en español.** Es la convención del repo (ver `git log`).
+8. **PNG/video con moderación — cuestan muchos tokens (2026-06-18).** Vale para **todas las máquinas y agentes**. Renderizar a PNG/video y **mirarlos** (leerlos al contexto) es caro en tokens. **No los saques de rutina para "verificar".** Por defecto certificá con `cargo test`, asserts, y **stats numéricas impresas como texto** (conteos de diff de píxeles, `ffprobe`, `volumedetect`, hashes). Reservá el render-y-mirar para cuando lo amerite de verdad — un cambio **visual nuevo** que no se puede certificar de otra forma (como fue el motor `llimphi3d`). Esto **matiza** la regla de "evidencia, no aserción": la evidencia puede ser texto; el screenshot es el último recurso, no el primero.
 
 ## Un término nombrado = un artefacto concreto, no un concepto a re-derivar (lección 2026-06-05)
 
