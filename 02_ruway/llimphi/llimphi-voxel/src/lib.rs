@@ -12,6 +12,7 @@
 //! El resto (chunks, streaming, bloques tipados) crece acá sin tocar el motor.
 
 mod actor;
+mod camera_rig;
 mod critter;
 mod director;
 mod lod;
@@ -24,6 +25,7 @@ mod world_stream;
 mod worldgen;
 
 pub use actor::{Actor, Age, Build, Clip, Pose};
+pub use camera_rig::{cam_lerp, BirthSequence, CamMode};
 pub use director::{ActorKey, ActorSample, ActorScript, Sequence, Shot};
 pub use vox::{load_grid, load_scene_grid, model_to_grid, scene_to_grid, stamp, VoxLoadError};
 pub use critter::Critter;
