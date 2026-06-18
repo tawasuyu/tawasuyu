@@ -42,7 +42,8 @@ Ejemplo (cordillera nevada):
 (seed: 42, base: 0.25, dune: 0.08, relief: 0.85, mountains: 0.7, water_level: 0.3, rivers: 0.3, ground: Grass, cliff: Rock, peak: Snow, peak_at: 0.65, flora: None, flora_density: 0.0)";
 
 /// El RON del ejemplo del prompt — también sirve de aserción de que enseñamos un
-/// literal parseable.
+/// literal parseable (lo usa el test).
+#[cfg(test)]
 const SAMPLE: &str = "(seed: 7, base: 0.3, dune: 0.05, relief: 0.45, mountains: 0.12, water_level: 0.26, rivers: 0.18, ground: Sand, cliff: Rock, peak: Air, peak_at: 1.0, flora: Cactus, flora_density: 0.01)";
 
 /// Genera una receta desde una descripción. **Siempre** devuelve algo: intenta el

@@ -23,7 +23,7 @@ use llimphi_3d::glam::Vec3;
 use llimphi_3d::Camera3d;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
-    length, percent, AlignItems, Dimension, FlexDirection, JustifyContent, Position, Size, Style,
+    length, percent, AlignItems, Dimension, FlexDirection, Position, Size, Style,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{
@@ -519,22 +519,39 @@ impl App for Studio {
 //  Paneles
 // =============================================================================
 
-/// Panel izquierdo: toggle de modo + (mundos | escenas) + IA compartida + estado.
+/// Panel izquierdo: **rail de modos** (dientes Mundos·Escenas·Gente) al borde +
+/// el contenido del modo (navegación + IA + estado) al costado. Mismo widget de
+/// dientes que el sidebar derecho (`dock_rail_view`).
 fn left_panel(model: &Model) -> View<Msg> {
     let theme = &model.theme;
     let btn = ButtonPalette::from_theme(theme);
 
-    let mut rows: Vec<View<Msg>> = Vec::new();
-    rows.push(mode_toggle(model));
-    rows.push(spacer(8.0));
+    // Rail de modos: un diente por modo, el activo sobresale.
+    let active = mode_index(model.mode);
+    let mode_items: Vec<DockRailItem> = (0..3)
+        .map(|i| DockRailItem { id: i as u64, active: i == active })
+        .collect();
+    let rail = dock_rail_view(
+        &mode_items,
+        46.0,
+        &DockRailPalette::from_theme(theme),
+        |id, size, color| {
+            View::new(Style::default())
+                .text(["Mu", "Es", "Ge"][id as usize].to_string(), size * 0.7, color)
+        },
+        |id| Msg::SwitchMode(mode_from_index(id as usize)),
+        |_| None,
+    );
 
+    // Contenido del modo: navegación propia…
+    let mut rows: Vec<View<Msg>> = Vec::new();
     match model.mode {
         Mode::Worlds => worlds_left(model, &btn, &mut rows),
         Mode::Scenes => scenes_left(model, &btn, &mut rows),
         Mode::Characters => chars_left(model, &btn, &mut rows),
     }
 
-    // Sección IA (compartida): el rótulo/acción dependen del modo.
+    // …IA compartida (rótulo/acción según modo)…
     let (ai_title, ai_hint, ai_msg): (&str, &str, Msg) = match model.mode {
         Mode::Worlds => (
             "IA — DESCRIBÍ UN MUNDO",
@@ -568,6 +585,7 @@ fn left_panel(model: &Model) -> View<Msg> {
         ai_msg,
     ));
 
+    // …y el estado al pie.
     rows.push(spacer(12.0));
     rows.push(
         View::new(Style {
@@ -578,44 +596,41 @@ fn left_panel(model: &Model) -> View<Msg> {
         .max_lines(3),
     );
 
-    View::new(Style {
+    let content = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(210.0), height: percent(1.0) },
-        padding: pad(14.0, 14.0),
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0), height: percent(1.0) },
+        padding: pad(12.0, 12.0),
         gap: gap_y(6.0),
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .children(rows)
-}
+    .children(rows);
 
-/// Toggle Mundos | Escenas (dos pastillas).
-fn mode_toggle(model: &Model) -> View<Msg> {
-    let theme = &model.theme;
-    let pill = |label: &str, active: bool, msg: Msg| -> View<Msg> {
-        View::new(Style {
-            flex_grow: 1.0,
-            size: Size { width: percent(0.0), height: length(30.0) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .fill(if active { theme.accent } else { theme.bg_button })
-        .radius(6.0)
-        .text(label.to_string(), 14.0, if active { theme.bg_app } else { theme.fg_muted })
-        .on_click(msg)
-    };
     View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0), height: length(30.0) },
-        gap: Size { width: length(6.0), height: length(0.0) },
+        size: Size { width: length(256.0), height: percent(1.0) },
+        padding: pad(0.0, 6.0),
+        gap: Size { width: length(4.0), height: length(0.0) },
         ..Default::default()
     })
-    .children(vec![
-        pill("Mundos", model.mode == Mode::Worlds, Msg::SwitchMode(Mode::Worlds)),
-        pill("Escenas", model.mode == Mode::Scenes, Msg::SwitchMode(Mode::Scenes)),
-        pill("Gente", model.mode == Mode::Characters, Msg::SwitchMode(Mode::Characters)),
-    ])
+    .fill(theme.bg_panel)
+    .children(vec![rail, content])
+}
+
+/// Índice del modo (para mapearlo a un diente del rail) y su inversa.
+fn mode_index(m: Mode) -> usize {
+    match m {
+        Mode::Worlds => 0,
+        Mode::Scenes => 1,
+        Mode::Characters => 2,
+    }
+}
+fn mode_from_index(i: usize) -> Mode {
+    match i {
+        0 => Mode::Worlds,
+        1 => Mode::Scenes,
+        _ => Mode::Characters,
+    }
 }
 
 /// Fila seleccionable (mundo o escena) de la lista izquierda.

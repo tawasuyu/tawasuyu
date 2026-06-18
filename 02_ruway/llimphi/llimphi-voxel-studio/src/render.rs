@@ -4,8 +4,6 @@
 //! vuelca PNGs y los muxea a un `.mkv` con `foreign-av` (ffmpeg). Pensado para correr
 //! en un worker (`Handle::spawn`): es largo y bloqueante.
 
-use std::path::Path;
-
 use llimphi_3d::glam::Vec3;
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -186,9 +184,4 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
     if let Ok(mut w) = e.write_header() {
         let _ = w.write_image_data(&pixels);
     }
-}
-
-/// Ruta donde quedará el video (para mostrarla en la UI sin exportar).
-pub fn output_path() -> &'static Path {
-    Path::new(OUT)
 }
