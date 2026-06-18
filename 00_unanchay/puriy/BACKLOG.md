@@ -851,10 +851,13 @@ vez de partirse. Ahora end-to-end:
 - **engine (`boxes/build/inline.rs`)**: la hoja de texto **hereda**
   `overflow_wrap`/`word_break` del contenedor (antes hardcodeaba `Normal` en el
   literal; mismo override post-construcción que `white_space`). Son heredables.
-- **text (`llimphi-text`)**: `layout`/`layout_clamped` ganan `overflow_wrap: bool`
-  (entra en la `ShapeKey` del caché); con el flag se empuja
-  `StyleProperty::OverflowWrap(Anywhere)` a parley, que parte el token largo. Sin
-  él, parley deja desbordar (comportamiento previo).
+- **text (`llimphi-text`)**: el flag `overflow_wrap: bool` (que entra en la
+  `ShapeKey` del caché y empuja `StyleProperty::OverflowWrap(Anywhere)` a parley)
+  vive en un `layout_inner` **privado**; `layout_clamped` (camino del compositor)
+  lo pasa con el valor del estilo, y la firma **pública** `layout` (12-arg) queda
+  intacta delegando con `false`. Así no se rompe a los ~20 callers de
+  showreels/canvas/selección. (Revisión 7.1255: la primera versión agregó el
+  13.º arg a `layout` y reventó toda la suite tras el rebase — corregido.)
 - **compositor (llimphi)**: nuevo flag `TextSpec.overflow_wrap`/
   `TextMeasure.overflow_wrap` + builder `View::overflow_wrap()`; lo transporta a
   `layout_clamped` tanto en medida como en pintado.
@@ -874,12 +877,43 @@ campo_del_texto_fase_7_1254` (builder del compositor).
 > `no_wrap`/clamp/spacing. `word-break: keep-all`/`auto-phrase` y `hyphens` siguen
 > sin aplicar (modelados pero no cableados).
 
+### 7.1255 ✅ — caret v3: scroll horizontal (el caret se mantiene visible al desbordar)
+
+`text_input_view` (`llimphi-widget-text-input`) ya mostraba el caret sobre el
+glifo (v2, 7.1249) pero el texto **no se desplazaba**: al escribir más allá del
+borde derecho, el caret y la cola se salían de la caja y desaparecían. Ahora,
+**cuando el input está focado**, la hoja pinta texto+caret en un solo `paint_over`
+(pasada vello FINAL) con scroll:
+
+- el offset (`scroll`) depende del ancho de layout (`rect.w`) y de la posición del
+  caret, **ambos conocidos sólo en tiempo de pintado** — por eso NO se hace con un
+  nodo-hijo + `transform` estático (en `view()` no hay `Typesetter` ni rect
+  resuelto). El `paint_over` recibe `(scene, ts, rect)`: mide el prefijo hasta el
+  caret con `ts`, calcula `scroll = max(0, caret_w - vis_w + 2)` y dibuja el texto
+  en `cx0 - scroll` con `draw_layout`, recortado al área de contenido vía
+  `push_layer`/`pop_layer`. El caret va fuera del clip para no recortarse en el borde.
+- texto que entra ⇒ `scroll = 0` (idéntico al comportamiento previo, anclado al
+  padding-left). Caret al inicio ⇒ ancla a la izquierda y recorta la cola; caret al
+  final ⇒ el texto corre a la izquierda y el caret queda pegado al borde derecho.
+- sin foco se conserva el camino de **nodo-hijo de texto** (sin caret, sin scroll).
+
+Verificado por pantallazo headless (`examples/pantallazo_input_scroll.rs`): tres
+cajas de 220 px todas focadas — caret al final (texto scrolleado, caret al borde
+derecho), caret al inicio (texto anclado, cola recortada) y texto corto (sin
+scroll). El caret queda visible en los tres. Los tests de wiring del widget (8)
+verdes: `caret_se_registra_como_over_painter_solo_focado` sigue valiendo (focado ⇒
+over-painter; sin foco ⇒ ninguno).
+
+> Falta de caret v3: el **parpadeo (blink)** — necesita un timer del app-loop que
+> despache un `Msg` periódico y un flag de fase por el `text_input_view` (toca
+> todos los call-sites + el bucle de puriy). Diferido como fase aparte.
+
 ### Próximos huecos (siguiente bloque — elegir del BACKLOG general)
 
 - **`background-attachment: fixed`** — diferido: requiere el rect del viewport +
   scroll en el closure de paint (ver determinación arriba).
-- **caret v3** — parpadeo (blink) + scroll horizontal cuando el texto desborda la
-  caja (lo que quedó de caret v2; el caret-sobre-glifo ya cerró en 7.1249).
+- **caret v3 — blink** — parpadeo del caret; necesita cooperación del app-loop
+  (timer + Msg periódico + flag de fase). El scroll horizontal ya cerró en 7.1255.
 - **Familia tablas** — `border-collapse`/`border-spacing`/`caption-side`/
   `empty-cells`/`table-layout` parsean y computan, pero **no hay formatting context
   de tabla** (`table`/`tr`/`td` se tratan como bloques en `mutate.rs`): cablear

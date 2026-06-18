@@ -139,8 +139,11 @@ impl TextInputState {
 
 /// Compone el input box: borde de 1 px (rect padre coloreado), relleno
 /// interno, texto o placeholder, y el caret (cursor de inserción) sobre el
-/// texto si está focado (caret v2: `paint_over`, visible también en medio del
-/// texto). Click sobre el box emite `on_focus` (típicamente `Msg::Focus(Field)`).
+/// texto si está focado. Caret v3 (Fase 7.1255): cuando está focado la hoja
+/// pinta texto+caret en un `paint_over` con **scroll horizontal** — el texto
+/// se desplaza para mantener el caret a la vista cuando desborda la caja, y se
+/// recorta al área de contenido. Sin foco usa un nodo-hijo de texto (sin caret).
+/// Click sobre el box emite `on_focus` (típicamente `Msg::Focus(Field)`).
 pub fn text_input_view<Msg: Clone + 'static>(
     state: &TextInputState,
     placeholder: &str,
@@ -180,18 +183,6 @@ pub fn text_input_view<Msg: Clone + 'static>(
         (palette.bg, palette.border)
     };
 
-    // El texto va en un nodo HIJO de alto automático, centrado verticalmente
-    // por el contenedor (`align_items: Center`). Antes el texto era el contenido
-    // propio del nodo con alto fijo: `align_items` no centra el texto propio de
-    // un nodo, así que quedaba pegado arriba («inputs descentrados hacia arriba»).
-    let texto = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: auto(),
-        },
-        ..Default::default()
-    })
-    .text_aligned(display, 13.0, text_color, Alignment::Start);
     let mut inner = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -208,35 +199,82 @@ pub fn text_input_view<Msg: Clone + 'static>(
     })
     .fill(bg)
     .radius(3.0);
-    // Caret real (cursor de inserción) cuando el input está focado: una barra
-    // vertical fina a la derecha del prefijo medido. Se mide el ancho del
-    // `caret_prefix` con el MISMO tamaño/fuente que el texto (13 px, sans) y se
-    // ubica tras el padding-left (10 px). Caret v2 (Fase 7.1249): se pinta con
-    // `paint_over` (pasada vello FINAL, después del texto hijo) en vez de
-    // `paint_with`, así el caret queda ENCIMA del glifo cuando el cursor está
-    // en medio del texto — antes (v1) quedaba detrás y desaparecía. Tradeoff de
-    // `paint_over`: usa el rect absoluto y no compone `transform` de ancestros
-    // ni el clip del contenedor (irrelevante para un input no transformado, el
-    // caso normal). Sin parpadeo ni scroll horizontal todavía (caret v3).
-    if focused {
+    let inner = if focused {
+        // Caret v3 — scroll horizontal (Fase 7.1255). Cuando el input está
+        // focado, la propia hoja pinta el texto Y el caret en un solo `paint_over`
+        // (pasada vello FINAL): así puede DESPLAZAR el texto a la izquierda cuando
+        // el cursor se saldría por el borde derecho, manteniéndolo visible — el
+        // clásico scroll del caret de los `<input>`. El offset (`scroll`) depende
+        // del ancho de layout y de la posición del caret, ambos conocidos sólo en
+        // tiempo de pintado (acá `rect.w` ya está resuelto y `ts` puede medir), no
+        // en `view()` — por eso no se hace con un nodo hijo + `transform` estático.
+        // Sin foco se usa el camino de nodo-hijo de abajo (sin caret, sin scroll).
         let caret_color = palette.caret;
-        inner = inner.paint_over(move |scene, ts, rect| {
+        let display_c = display;
+        let caret_prefix_c = caret_prefix;
+        let tcolor = text_color;
+        inner.paint_over(move |scene, ts, rect| {
             use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KRect};
-            use llimphi_ui::llimphi_raster::peniko::Fill;
-            use llimphi_ui::llimphi_text::{measure, TextBlock};
-            let w = measure(
-                ts,
-                &TextBlock::simple(&caret_prefix, 13.0, caret_color, (0.0, 0.0)),
-            )
-            .width as f64;
-            let x = rect.x as f64 + 10.0 + w;
+            use llimphi_ui::llimphi_raster::peniko::{BlendMode, Fill};
+            use llimphi_ui::llimphi_text::{draw_layout, measurement, Alignment};
+            let pad = 10.0_f64;
+            // Ancho visible interno (entre los dos paddings de 10 px).
+            let vis_w = (rect.w as f64 - 2.0 * pad).max(0.0);
+            // Layout del texto completo en una sola línea (sin wrap).
+            let layout = ts.layout(
+                &display_c, 13.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false,
+                0.0, 0.0,
+            );
+            let th = measurement(&layout).height as f64;
+            // Ancho del prefijo hasta el caret = posición x del caret en el texto.
+            let caret_w = if caret_prefix_c.is_empty() {
+                0.0
+            } else {
+                let lp = ts.layout(
+                    &caret_prefix_c, 13.0, None, Alignment::Start, 1.2, false, None, 400.0, false,
+                    false, 0.0, 0.0,
+                );
+                measurement(&lp).width as f64
+            };
+            // Scroll: si el caret cae más allá del ancho visible, corre el texto a
+            // la izquierda lo justo para que el caret quede al borde (con 2 px de
+            // aire). Texto que entra ⇒ scroll 0 (anclado al padding-left).
+            let scroll = (caret_w - vis_w + 2.0).max(0.0);
+            let cx0 = rect.x as f64 + pad;
+            // Recorte al área de contenido para que el texto desplazado no se
+            // derrame sobre el padding ni fuera de la caja.
+            let clip = KRect::new(
+                cx0,
+                rect.y as f64,
+                rect.x as f64 + rect.w as f64 - pad,
+                rect.y as f64 + rect.h as f64,
+            );
+            scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &clip);
+            let oy = rect.y as f64 + (rect.h as f64 - th) * 0.5;
+            draw_layout(scene, &layout, tcolor, (cx0 - scroll, oy));
+            scene.pop_layer();
+            // Caret: barra vertical en la posición del caret, desplazada por el
+            // mismo scroll. Fuera del clip para que nunca se recorte en el borde.
+            let x = cx0 + caret_w - scroll;
             let h = 16.0_f64;
             let cy = rect.y as f64 + rect.h as f64 * 0.5;
             let bar = KRect::new(x, cy - h * 0.5, x + 1.5, cy + h * 0.5);
             scene.fill(Fill::NonZero, Affine::IDENTITY, caret_color, None, &bar);
-        });
-    }
-    let inner = inner.children(vec![texto]);
+        })
+    } else {
+        // Sin foco: el texto va en un nodo HIJO de alto automático, centrado
+        // verticalmente por el contenedor (`align_items: Center`). (`align_items`
+        // no centra el texto PROPIO de un nodo — por eso el hijo.)
+        let texto = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: auto(),
+            },
+            ..Default::default()
+        })
+        .text_aligned(display, 13.0, text_color, Alignment::Start);
+        inner.children(vec![texto])
+    };
 
     View::new(Style {
         size: Size {

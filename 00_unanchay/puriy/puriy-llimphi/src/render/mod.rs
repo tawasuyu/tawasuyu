@@ -925,14 +925,6 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             let alpha = b.opacity.clamp(0.0, 1.0);
             let ls_c = b.letter_spacing * zoom;
             let ws_c = b.word_spacing * zoom;
-            // `overflow-wrap`/`word-break`: mismo criterio que el wire de abajo,
-            // para que el re-shaping del gradiente parta la palabra igual que la
-            // pasada normal.
-            let ow_c = matches!(
-                b.overflow_wrap,
-                puriy_engine::style::OverflowWrap::BreakWord
-                    | puriy_engine::style::OverflowWrap::Anywhere
-            ) || matches!(b.word_break, puriy_engine::style::WordBreak::BreakAll);
             view = view.paint_with(move |scene, ts, rect| {
                 // Re-shaping idéntico al de la pasada normal (mismo
                 // size/wrap/alignment/line-height) para que las glifos del
@@ -950,7 +942,6 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                     false,
                     ls_c,
                     ws_c,
-                    ow_c,
                 );
                 // Gradiente en coords LOCALES (0,0)-(w,h): `draw_layout_brush_xf`
                 // lo lleva al origen del texto con la afín, alineándolo.

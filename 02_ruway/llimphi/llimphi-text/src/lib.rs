@@ -298,8 +298,40 @@ impl Typesetter {
     /// activan la decoración global del bloque — parley deja la metadata
     /// (offset + grosor) en cada `Run` y el pintado (`draw_layout_*`) emite
     /// el rect correspondiente sobre la línea base.
+    /// API pública 12-arg (sin `overflow-wrap`): la usan showreels, canvas,
+    /// hit-testing de selección, etc. Delega en [`Self::layout_inner`] con
+    /// `overflow_wrap = false` (la palabra larga desborda, comportamiento
+    /// histórico). El quiebre dentro de palabra entra sólo por `layout_clamped`
+    /// (camino del compositor), para no propagar el flag a todos los callers.
     #[allow(clippy::too_many_arguments)]
     pub fn layout(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        max_width: Option<f32>,
+        alignment: Alignment,
+        line_height: f32,
+        italic: bool,
+        font_family: Option<&str>,
+        weight: f32,
+        underline: bool,
+        strikethrough: bool,
+        letter_spacing: f32,
+        word_spacing: f32,
+    ) -> parley::Layout<()> {
+        self.layout_inner(
+            text, size_px, max_width, alignment, line_height, italic, font_family, weight,
+            underline, strikethrough, letter_spacing, word_spacing, false,
+        )
+    }
+
+    /// Impl real del shaping con el flag `overflow_wrap` (CSS
+    /// `overflow-wrap: break-word`/`anywhere`). Privado: sólo lo invocan
+    /// [`Self::layout`] (con `false`) y [`Self::layout_clamped`] (con el valor
+    /// del estilo). Así la firma pública 12-arg no cambia y los ~20 callers de
+    /// showreels/canvas siguen compilando sin tocar.
+    #[allow(clippy::too_many_arguments)]
+    fn layout_inner(
         &mut self,
         text: &str,
         size_px: f32,
@@ -430,7 +462,7 @@ impl Typesetter {
         word_spacing: f32,
         overflow_wrap: bool,
     ) -> parley::Layout<()> {
-        let full = self.layout(
+        let full = self.layout_inner(
             text, size_px, max_width, alignment, line_height, italic, font_family, weight,
             underline, strikethrough, letter_spacing, word_spacing, overflow_wrap,
         );
@@ -453,7 +485,7 @@ impl Typesetter {
         }
         let base = text[..cutoff].trim_end();
         if !ellipsis {
-            return self.layout(
+            return self.layout_inner(
                 base, size_px, max_width, alignment, line_height, italic, font_family, weight,
                 underline, strikethrough, letter_spacing, word_spacing, overflow_wrap,
             );
@@ -464,7 +496,7 @@ impl Typesetter {
         let mut s = base.to_string();
         loop {
             let candidate = format!("{s}…");
-            let lay = self.layout(
+            let lay = self.layout_inner(
                 &candidate, size_px, max_width, alignment, line_height, italic, font_family,
                 weight, underline, strikethrough, letter_spacing, word_spacing, overflow_wrap,
             );
@@ -783,9 +815,6 @@ pub fn layout_block(ts: &mut Typesetter, block: &TextBlock<'_>) -> parley::Layou
         // compositor los pasa por su camino directo (`layout_clamped`).
         0.0,
         0.0,
-        // `overflow-wrap` tampoco: `TextBlock` siempre deja desbordar la palabra
-        // larga (el compositor lo activa por nodo vía `TextSpec::overflow_wrap`).
-        false,
     )
 }
 
@@ -1009,7 +1038,7 @@ mod tests {
         let w = |ts: &mut Typesetter, ls: f32, ws: f32| {
             measurement(&ts.layout(
                 "hola mundo cruel", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false,
-                false, ls, ws, false,
+                false, ls, ws,
             ))
             .width
         };
@@ -1037,7 +1066,7 @@ mod tests {
     fn cache_es_transparente_y_pega() {
         let mut ts = Typesetter::new();
         let m1 = {
-            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0, false);
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
             (l.width(), l.height(), l.lines().count())
         };
         let s1 = ts.cache_stats();
@@ -1045,7 +1074,7 @@ mod tests {
         assert_eq!(s1.hits, 0);
         // Misma llamada exacta: debe ser hit y dar la misma geometría.
         let m2 = {
-            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0, false);
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
             (l.width(), l.height(), l.lines().count())
         };
         let s2 = ts.cache_stats();
@@ -1053,7 +1082,7 @@ mod tests {
         assert_eq!(s2.misses, 1, "no hubo nuevo miss");
         assert_eq!(m1, m2, "el layout cacheado es idéntico al fresco");
         // Cambiar un parámetro (ancho) es una clave distinta: miss nuevo.
-        let _ = ts.layout(LARGO, 14.0, Some(80.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0, false);
+        let _ = ts.layout(LARGO, 14.0, Some(80.0), Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         assert_eq!(ts.cache_stats().misses, 2, "otro ancho = otra clave");
     }
 
@@ -1062,11 +1091,11 @@ mod tests {
     #[test]
     fn font_context_mut_invalida_el_cache() {
         let mut ts = Typesetter::new();
-        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0, false);
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         assert_eq!(ts.cache_stats().entries, 1);
         let _ = ts.font_context_mut();
         assert_eq!(ts.cache_stats().entries, 0, "el caché quedó vacío");
-        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0, false);
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0);
         assert_eq!(ts.cache_stats().misses, 2, "post-invalidación = miss");
     }
 
@@ -1079,7 +1108,6 @@ mod tests {
         let mut ts = Typesetter::new();
         let with_dec = ts.layout(
             "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, true, true, 0.0, 0.0,
-            false,
         );
         // Caminamos los runs del layout y verificamos que cada GlyphRun trae
         // ambas decoraciones marcadas (no usamos `is_some` directo porque
@@ -1104,7 +1132,6 @@ mod tests {
         // Sin decoración el layout no las trae.
         let plain = ts.layout(
             "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false, 0.0, 0.0,
-            false,
         );
         for line in plain.lines() {
             for item in line.items() {
