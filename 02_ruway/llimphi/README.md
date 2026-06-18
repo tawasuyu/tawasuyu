@@ -12,11 +12,11 @@ Philosophy: **widgets aren't designed against mockups; they're designed with wha
 
 ## Not just 2D — a 3D voxel engine
 
-![A procedural voxel world (sand, cactus, carved rivers) orbiting — rendered by llimphi-3d](https://tawasuyu.net/02_ruway/llimphi/llimphi_voxel.gif)
+![Flying over an endless procedural voxel world — rendered by llimphi-3d](https://tawasuyu.net/02_ruway/llimphi/llimphi_voxel.gif)
 
 `llimphi-3d` adds a **3D engine** that composes voxels (GPU ray-march) and triangle meshes in one shared depth pass (`Scene3d` + `VoxelRenderer` + `Renderer3d` + a keyframed cinema camera). It mounts straight into any 2D `View` via the GPU paint node, so a 3D viewport can live inside a panel next to ordinary widgets.
 
-On top of it, `llimphi-voxel` brings the *content* layer — procedural world-gen (`WorldRecipe`), articulated characters (age + animation clips), and a scripted scene **director** — and `llimphi-voxel-studio` is a full **world creator**: edit worlds, cast characters and direct scenes (with a filmed camera) from a live-preview UI, describe any of them in plain language to an LLM assist, and **export the scene to a video** with a synced soundtrack. The GIF above is one such world, rendered headless frame-by-frame.
+On top of it, `llimphi-voxel` brings the *content* layer — procedural world-gen (`WorldRecipe`), articulated characters (age + animation clips), and a scripted scene **director** — and `llimphi-voxel-studio` is a full **world creator**: edit worlds, cast characters and direct scenes (with a filmed camera) from a live-preview UI, describe any of them in plain language to an LLM assist, and **export the scene to a video** with a synced soundtrack. The GIF above is an endless world streamed past the camera (the terrain is a pure function of world coordinates), rendered headless frame-by-frame.
 
 ## Install
 

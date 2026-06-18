@@ -72,6 +72,73 @@ pub fn turntable(recipe: &WorldRecipe) -> Result<String, String> {
     Ok(TURN_OUT.to_string())
 }
 
+/// Vuelo sobre un **mundo infinito** — para el GIF del README.
+const FLY_DIR: &str = "/tmp/voxel_studio_fly";
+const FLY_OUT: &str = "/tmp/voxel_studio_fly.mkv";
+
+/// **Flythrough de un mundo infinito**: como el relieve es función pura de mundo,
+/// regenera la ventana en un origen que avanza cada frame (el terreno scrollea sin
+/// fin) mientras la cámara vuela hacia adelante, baja, mirando un poco abajo. La
+/// niebla densa funde el horizonte y los bordes de la ventana. Headless → `.mkv`.
+pub fn flythrough(recipe: &WorldRecipe) -> Result<String, String> {
+    let hal = pollster::block_on(Hal::new(None)).map_err(|e| format!("gpu: {e:?}"))?;
+    let mut renderer = Renderer::new(&hal).map_err(|e| format!("renderer: {e:?}"))?;
+    let dim = [128u32, 56, 128]; // TODO eje ≤128 (tope del VoxelRenderer); la ventana scrollea en Z
+    let mut preview = WorldPreview::build(&hal.device, &hal.queue, recipe, dim, 1);
+    let target = make_target(&hal);
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+    std::fs::create_dir_all(FLY_DIR).map_err(|e| e.to_string())?;
+    if let Ok(rd) = std::fs::read_dir(FLY_DIR) {
+        for e in rd.flatten() {
+            if e.path().extension().is_some_and(|x| x == "png") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
+    const N: u32 = 150; // 5 s @ 30 fps
+    let speed = 1.5_f32; // voxels de mundo por frame
+    let fog = 0.55 / dim[2] as f32; // ligera (como el turntable): el relieve se ve nítido
+    let cx = dim[0] / 2;
+    let empty = vello::Scene::new();
+    let sky = Color::from_rgba8(150, 186, 224, 255);
+
+    for f in 0..N {
+        let cam_z = f as f32 * speed;
+        // La ventana scrollea (origen avanza en Z) → el mundo fluye hacia el ojo.
+        let oz = cam_z as i32;
+        preview.set_window(&hal.device, &hal.queue, recipe, [0, oz], fog);
+
+        // Vuelo bajo hacia adelante, ¡EN COORDENADAS CENTRADAS! El shader hace
+        // `ro = cam_eye + dim/2` → espera el volumen centrado en el origen.
+        // Cámara en el centro X, a 1/4 de la ventana en Z, mirando +Z.
+        let cz_grid = dim[2] as f32 * 0.25;
+        let ground = preview.ground_at(cx, cz_grid as u32).y;
+        let half = Vec3::new(dim[0] as f32, dim[1] as f32, dim[2] as f32) * 0.5;
+        let eye = Vec3::new(dim[0] as f32 * 0.5, ground + 14.0, cz_grid) - half;
+        let mut camera = llimphi_3d::Camera3d::fly(eye, 0.0, -0.28); // mira +Z, ~16° abajo
+        camera.fovy_rad = 64_f32.to_radians();
+
+        renderer
+            .render_to_view(&hal, &empty, &view, W, H, sky)
+            .map_err(|e| format!("clear: {e:?}"))?;
+        let mut enc = hal
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fly") });
+        preview.render(
+            &hal.device, &hal.queue, &mut enc, &view, (W, H), (0.0, 0.0, W as f32, H as f32),
+            &camera,
+        );
+        hal.queue.submit(std::iter::once(enc.finish()));
+        let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+        write_png(&hal, &target, &format!("{FLY_DIR}/frame_{f:04}.png"));
+    }
+    let pattern = format!("{FLY_DIR}/frame_%04d.png");
+    foreign_av::encode_frames(&pattern, FPS, 30, None, FLY_OUT).map_err(|e| format!("ffmpeg: {e:?}"))?;
+    Ok(FLY_OUT.to_string())
+}
+
 /// Textura intermedia W×H para los renders headless.
 fn make_target(hal: &Hal) -> wgpu::Texture {
     hal.device.create_texture(&wgpu::TextureDescriptor {

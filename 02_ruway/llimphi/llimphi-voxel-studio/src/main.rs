@@ -1158,6 +1158,28 @@ fn main() {
         shot::shot();
         return;
     }
+    if std::env::args().any(|a| a == "--flythrough") {
+        // Vuelo sobre un mundo infinito (para el GIF del README): relieve dramático
+        // (montañas + cumbres nevadas) para que el vuelo tenga de qué — no el
+        // desierto llano.
+        // Dunas grandes en TODO el ancho (sin gating de montañas que deja valles
+        // planos que se ven cielo) → relieve uniforme que llena el cuadro al volar.
+        let recipe = WorldRecipe {
+            base: 0.40,
+            dune: 0.30,
+            relief: 0.35,
+            mountains: 0.3,
+            water_level: 0.05,
+            rivers: 0.1,
+            peak_at: 0.92, // poca nieve
+            ..WorldRecipe::grassland(11)
+        };
+        match render::flythrough(&recipe) {
+            Ok(out) => eprintln!("flythrough ok: {out}"),
+            Err(e) => eprintln!("flythrough error: {e}"),
+        }
+        return;
+    }
     if std::env::args().any(|a| a == "--turntable") {
         // Vitrina del motor voxel: orbita un mundo (para el GIF del README).
         let p = Project::starter();
