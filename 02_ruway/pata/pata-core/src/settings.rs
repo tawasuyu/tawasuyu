@@ -91,40 +91,59 @@ impl Anchor {
 fn surface_section(index: usize, s: &Surface) -> Section {
     let id = format!("{SURFACE_PREFIX}{index}");
     let title = format!("Superficie {}", index + 1);
-    Section::new(id, title)
+    // El BORDE (posición) ya NO va acá: se elige en la lista de Barras. Acá van
+    // las configuraciones PARTICULARES, y el formulario cambia según el TIPO de
+    // superficie (cada tipo tiene capacidades distintas).
+    let mut sec = Section::new(id, title)
         .icon(s.kind.glyph())
-        .help("Una barra, panel, dock o sidebar del marco")
-        .field(Field::dropdown(
-            "kind",
-            "Tipo",
-            s.kind.as_id(),
-            SurfaceKind::options(),
-        ))
-        .field(Field::dropdown(
-            "anchor",
-            "Borde",
-            s.anchor.as_id(),
-            Anchor::options(),
-        ))
-        .field(Field::slider(
-            "thickness",
-            "Grosor",
-            s.thickness as f64,
-            16.0,
-            200.0,
-            1.0,
-        ))
-        .field(Field::slider("padding", "Padding", s.padding as f64, 0.0, 48.0, 1.0))
-        .field(Field::slider("gap", "Separación", s.gap as f64, 0.0, 48.0, 1.0))
-        .field(Field::toggle("autohide", "Autoesconder", s.autohide))
-        .field(Field::slider(
-            "panel_width",
-            "Ancho de panel (sidebar)",
-            s.panel_width as f64,
-            120.0,
-            600.0,
-            10.0,
-        ))
+        .help("Configuración particular de esta superficie (su tipo decide el formulario).")
+        .field(Field::dropdown("kind", "Tipo", s.kind.as_id(), SurfaceKind::options()));
+
+    // Grosor: el alto de una barra / el ancho del rail de un sidebar / el dock.
+    // No aplica a Panel ni Background (ocupan otra cosa).
+    if matches!(s.kind, SurfaceKind::Bar | SurfaceKind::Dock | SurfaceKind::Sidebar) {
+        let etiqueta = if s.kind == SurfaceKind::Sidebar { "Ancho del rail" } else { "Grosor" };
+        sec = sec.field(Field::slider("thickness", etiqueta, s.thickness as f64, 16.0, 200.0, 1.0));
+    }
+    // Ancho del panel que despliega un diente del sidebar.
+    if s.kind == SurfaceKind::Sidebar {
+        sec = sec
+            .field(Field::slider("panel_width", "Ancho del panel desplegado", s.panel_width as f64, 120.0, 600.0, 10.0))
+            // Reserva su franja del escritorio o flota como overlay.
+            .field(Field::dropdown(
+                "reserve",
+                "Acople al escritorio",
+                match s.reserve {
+                    None => "auto",
+                    Some(true) => "reserva",
+                    Some(false) => "flota",
+                },
+                vec![
+                    allichay::EnumOption::new("auto", "Automático (global)"),
+                    allichay::EnumOption::new("reserva", "Reserva su franja"),
+                    allichay::EnumOption::new("flota", "Flota encima"),
+                ],
+            ));
+    }
+    // Autoesconder: barras/docks/sidebars que reaparecen al rozar el borde.
+    if matches!(s.kind, SurfaceKind::Bar | SurfaceKind::Dock | SurfaceKind::Sidebar) {
+        sec = sec.field(Field::toggle("autohide", "Autoesconder", s.autohide));
+    }
+    // Espaciado interno: aplica a las que alinean widgets en línea.
+    if matches!(s.kind, SurfaceKind::Bar | SurfaceKind::Dock | SurfaceKind::Sidebar) {
+        sec = sec
+            .field(Field::slider("padding", "Padding", s.padding as f64, 0.0, 48.0, 1.0))
+            .field(Field::slider("gap", "Separación entre widgets", s.gap as f64, 0.0, 48.0, 1.0));
+    }
+    // Pincel del fondo: común a todas (incluso Panel/Background).
+    sec = sec
+        .field(Field::slider("opacity", "Opacidad del fondo", s.opacity as f64, 0.0, 1.0, 0.05))
+        .field(Field::slider("radius", "Esquinas redondeadas", s.radius as f64, 0.0, 32.0, 1.0));
+    // Margen al borde (look flotante) — no para el fondo de pantalla.
+    if s.kind != SurfaceKind::Background {
+        sec = sec.field(Field::slider("margin", "Margen al borde (flotante)", s.margin as f64, 0.0, 48.0, 1.0));
+    }
+    sec
 }
 
 impl Configurable for Config {
@@ -243,6 +262,28 @@ fn apply_surface_field(
             if let Some(v) = value.as_float() {
                 surf.panel_width = v as f32;
             }
+        }
+        "opacity" => {
+            if let Some(v) = value.as_float() {
+                surf.opacity = (v as f32).clamp(0.0, 1.0);
+            }
+        }
+        "radius" => {
+            if let Some(v) = value.as_float() {
+                surf.radius = (v as f32).max(0.0);
+            }
+        }
+        "margin" => {
+            if let Some(v) = value.as_float() {
+                surf.margin = (v as f32).max(0.0);
+            }
+        }
+        "reserve" => {
+            surf.reserve = match value.as_str() {
+                Some("reserva") => Some(true),
+                Some("flota") => Some(false),
+                _ => None, // "auto"
+            };
         }
         _ => return Err(AllichayError::UnknownPath(field.to_string())),
     }
