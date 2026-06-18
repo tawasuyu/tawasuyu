@@ -38,7 +38,10 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+// Editor de recorrido (Prezi) de la vista espacial — lienzo libre + rotación.
+use pluma_deck_core::{Camara, ContenidoMarco, Marco, Recorrido, RecorridoState, Rect as DeckRect};
+use pluma_deck_recorrido_llimphi::{panel_actual, recorrido_view_editor};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
@@ -308,6 +311,104 @@ struct Model {
     picker: Option<PickerState>,
     picker_paths: Vec<PathBuf>,
     picker_root: PathBuf,
+    /// Editor de recorrido (Prezi) de la sección «Vista espacial»: lienzo libre
+    /// con un marco por escritorio (mover/zoom/rotar). Se sincroniza a
+    /// `mirada.overview_places` en cada edición.
+    prezi: PreziEdit,
+}
+
+/// Px de mundo por celda de la grilla del Prezi dentro del editor de recorrido.
+/// Sólo es la escala de autoría; lo persistido va en **unidades de celda**.
+const PREZI_CELL: f64 = 240.0;
+
+/// Estado del editor de recorrido (Prezi) embebido en «Vista espacial». Mapea
+/// 1:1 escritorio↔marco — el id del marco es `i+1` (escritorio `i`).
+struct PreziEdit {
+    rec: Recorrido,
+    state: RecorridoState,
+    /// Marco seleccionado (objetivo de rotar). `None` = nada elegido.
+    sel: Option<u64>,
+    /// Estado de arrastre fijado en el primer Move: `None` = sin arrastre,
+    /// `Some(None)` = paneando el lienzo, `Some(Some(id))` = moviendo ese marco.
+    grip: Option<Option<u64>>,
+}
+
+impl PreziEdit {
+    /// Construye el editor desde el plano rico del config (o la grilla derivada).
+    fn from_config(cfg: &mirada_brain::Config) -> Self {
+        let n = mirada_brain::action::WORKSPACE_COUNT;
+        let places = cfg.overview_places_for(n);
+        let mut rec = Recorrido::new();
+        for (i, p) in places.iter().enumerate() {
+            let id = (i + 1) as u64;
+            let rect = DeckRect::new(
+                p.x as f64 * PREZI_CELL,
+                p.y as f64 * PREZI_CELL,
+                (p.w as f64 * PREZI_CELL).max(40.0),
+                (p.h as f64 * PREZI_CELL).max(40.0),
+            );
+            rec.agregar_marco(
+                Marco::new(id, rect, ContenidoMarco::Etiqueta(format!("Escritorio {id}")))
+                    .con_giro(p.rot as f64),
+            );
+            rec.pasos.push(id);
+        }
+        // Encuadre inicial centrado en el plano, sin depender del tamaño del panel
+        // (se reajusta con la rueda). El zoom busca que el ancho del plano entre
+        // en ~440 px del canvas del panel.
+        let (centro, span_w) = rec
+            .bbox()
+            .map(|b| (b.centro(), b.w.max(1.0)))
+            .unwrap_or(((0.0, 0.0), PREZI_CELL));
+        let mut state = RecorridoState::new();
+        state.camara = Camara::new(centro, (440.0 / span_w).clamp(0.08, 1.5), 0.0);
+        Self { rec, state, sel: None, grip: None }
+    }
+
+    /// Vuelca los marcos a `overview_places` (unidades de celda + giro en rad),
+    /// en orden de escritorio (id ascendente).
+    fn to_places(&self) -> Vec<mirada_brain::OverviewPlace> {
+        let mut marcos: Vec<&Marco> = self.rec.marcos.iter().collect();
+        marcos.sort_by_key(|m| m.id);
+        marcos
+            .into_iter()
+            .map(|m| {
+                mirada_brain::OverviewPlace::new(
+                    (m.rect.x / PREZI_CELL) as f32,
+                    (m.rect.y / PREZI_CELL) as f32,
+                    (m.rect.w / PREZI_CELL) as f32,
+                    (m.rect.h / PREZI_CELL) as f32,
+                    m.rot_rad as f32,
+                )
+            })
+            .collect()
+    }
+}
+
+/// Sensibilidad de la manija de giro: rad por px de arrastre horizontal.
+const PREZI_ROT_SENS: f64 = 0.01;
+
+/// Sincroniza el plano del editor → `mirada.overview_places` del perfil activo y
+/// arma el guardado diferido.
+fn prezi_sync(m: &mut Model) {
+    m.mirada.overview_places = m.prezi.to_places();
+    m.dirty.mirada = true;
+    sync_active_profile(m);
+    m.save_in = SAVE_DELAY_TICKS;
+}
+
+/// `true` si la sección abierta en el canvas es «Vista espacial» (donde vive el
+/// editor de recorrido) — gatea el ruteo de rueda/teclado a su lienzo.
+fn prezi_section_active(m: &Model) -> bool {
+    let pestanas = pestanas(m);
+    let pest = m.selected_pest.min(pestanas.len().saturating_sub(1));
+    let Some(secs) = pestanas.get(pest).map(|p| p.schema.sections.as_slice()) else {
+        return false;
+    };
+    m.selected_item
+        .filter(|&i| i < secs.len())
+        .and_then(|i| secs.get(i))
+        .is_some_and(|s| s.id.contains("vista_espacial"))
 }
 
 /// Ticks (de [`TICK_MS`]) que se espera tras el último cambio antes de persistir.
@@ -349,8 +450,17 @@ enum Msg {
     AllichayKey(KeyEvent),
     /// Mensaje del diálogo de archivos (elegir wallpaper).
     Picker(PickerMsg),
-    /// Editor visual 2D del Prezi: mover el escritorio `i` a la celda (col, fila).
-    PreziMove(usize, i32, i32),
+    /// Editor de recorrido (Prezi): arrastre sobre el lienzo — `(dx,dy)` delta +
+    /// `(lx,ly)` posición del press (decide en el 1er Move si agarra marco o vacío).
+    PreziDrag { dx: f32, dy: f32, lx: f32, ly: f32 },
+    /// Fin del arrastre del lienzo (suelta la presa).
+    PreziDragEnd,
+    /// Zoom-a-cursor del lienzo del Prezi (rueda).
+    PreziZoom { mult: f64, cursor: (f32, f32) },
+    /// Rota el marco seleccionado `delta` rad (teclado `[` / `]`).
+    PreziRotate(f64),
+    /// Rota el marco seleccionado arrastrando la manija: `dx` px de pantalla.
+    PreziRotateHandle(f32),
     /// Cambió la config del SO desde afuera (otro panel, edición manual).
     ConfigChanged(Box<WawaConfig>),
     MenuOpen(Option<usize>),
@@ -532,18 +642,55 @@ impl App for Panel {
                     }
                 }
             }
-            Msg::PreziMove(i, col, row) => {
-                // Asegura N celdas y mueve el escritorio i; edita el perfil activo.
-                let n = mirada_brain::action::WORKSPACE_COUNT;
-                if m.mirada.overview_geometry.len() < n {
-                    m.mirada.overview_geometry = m.mirada.overview_geometry_for(n);
+            Msg::PreziDrag { dx, dy, lx, ly } => {
+                let panel = panel_actual().unwrap_or(DeckRect::new(0.0, 0.0, 1.0, 1.0));
+                // En el primer Move fijamos qué se agarró (marco o vacío) hasta
+                // soltar — así no cambia de presa a mitad del arrastre.
+                let grip = match m.prezi.grip {
+                    Some(g) => g,
+                    None => {
+                        let world =
+                            m.prezi.state.camara.screen_to_world((lx as f64, ly as f64), panel);
+                        let hit = m.prezi.rec.marco_en_punto(world);
+                        m.prezi.grip = Some(hit);
+                        if hit.is_some() {
+                            m.prezi.sel = hit; // agarrar un marco lo selecciona
+                        }
+                        hit
+                    }
+                };
+                match grip {
+                    Some(id) => {
+                        let (wdx, wdy) =
+                            m.prezi.state.camara.delta_pantalla_a_mundo(dx as f64, dy as f64);
+                        m.prezi.rec.mover_marco(id, wdx, wdy);
+                        prezi_sync(&mut m);
+                        m.status = format!("escritorio {id} reubicado");
+                    }
+                    None => m.prezi.state.arrastrar_delta(dx as f64, dy as f64),
                 }
-                if let Some(slot) = m.mirada.overview_geometry.get_mut(i) {
-                    *slot = (col.max(0), row.max(0));
-                    m.dirty.mirada = true;
-                    sync_active_profile(&mut m);
-                    m.save_in = SAVE_DELAY_TICKS;
-                    m.status = format!("escritorio {} → ({col}, {row})", i + 1);
+            }
+            Msg::PreziDragEnd => m.prezi.grip = None,
+            Msg::PreziZoom { mult, cursor } => {
+                if let Some(panel) = panel_actual() {
+                    m.prezi.state.wheel(mult, (cursor.0 as f64, cursor.1 as f64), panel);
+                }
+            }
+            Msg::PreziRotate(delta) => {
+                if let Some(id) = m.prezi.sel {
+                    m.prezi.rec.rotar_marco(id, delta);
+                    prezi_sync(&mut m);
+                    let deg = m.prezi.rec.marco(id).map(|mr| mr.rot_rad.to_degrees()).unwrap_or(0.0);
+                    m.status = format!("escritorio {id} · giro {deg:.0}°");
+                }
+            }
+            Msg::PreziRotateHandle(dx) => {
+                if let Some(id) = m.prezi.sel {
+                    // Manija de scrub: arrastre horizontal → giro proporcional.
+                    m.prezi.rec.rotar_marco(id, dx as f64 * PREZI_ROT_SENS);
+                    prezi_sync(&mut m);
+                    let deg = m.prezi.rec.marco(id).map(|mr| mr.rot_rad.to_degrees()).unwrap_or(0.0);
+                    m.status = format!("escritorio {id} · giro {deg:.0}°");
                 }
             }
             Msg::AllichayKey(event) => {
@@ -626,7 +773,37 @@ impl App for Panel {
                 return Some(Msg::CloseMenus);
             }
         }
+        // Editor de recorrido (Prezi) abierto: `[` / `]` rotan el marco elegido.
+        if prezi_section_active(model) && model.prezi.sel.is_some() {
+            if let Key::Character(c) = &event.key {
+                match c.as_str() {
+                    "[" => return Some(Msg::PreziRotate(-0.08)),
+                    "]" => return Some(Msg::PreziRotate(0.08)),
+                    _ => {}
+                }
+            }
+        }
         None
+    }
+
+    fn on_wheel(
+        model: &Model,
+        delta: WheelDelta,
+        cursor: (f32, f32),
+        _modifiers: Modifiers,
+    ) -> Option<Msg> {
+        // Sólo capturamos la rueda cuando el lienzo del Prezi está abierto y el
+        // cursor cae dentro de su rect (registrado por el último paint); fuera de
+        // ahí devolvemos `None` para no robarle el scroll a los campos de config.
+        if !prezi_section_active(model) {
+            return None;
+        }
+        let panel = panel_actual()?;
+        if !pluma_deck_recorrido_llimphi::dentro(panel, cursor.0, cursor.1) {
+            return None;
+        }
+        let mult = pluma_deck_recorrido_llimphi::ZOOM_BASE.powf(-delta.y as f64);
+        Some(Msg::PreziZoom { mult, cursor })
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -735,6 +912,8 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
     let themes = themes::Themes::load_or_seed(&cfg.theme_variant, &cfg.accent);
     let animaciones = animaciones::Animations::load_or_seed();
 
+    let prezi = PreziEdit::from_config(&mirada);
+
     Model {
         selected_pest: 0,
         // Arranca en el 1er tab de Vista (no en el canvas-resumen).
@@ -767,6 +946,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         picker: None,
         picker_paths: Vec::new(),
         picker_root: PathBuf::from("/"),
+        prezi,
     }
 }
 
@@ -3170,89 +3350,51 @@ fn build_header(theme: &Theme) -> View<Msg> {
     app_header(rimay_localize::t("wawa-panel-title"), vec![], &palette)
 }
 
-/// Editor **visual 2D del Prezi**: una grilla donde cada escritorio es un tile
-/// arrastrable. Al soltar, el tile snapea a la celda más cercana y se guarda en
-/// `overview_geometry` del perfil activo (la vista espacial lo respeta). Es la
-/// versión visual del que antes era una tabla col/fila.
+/// Editor de **recorrido** del Prezi (la vista espacial): un lienzo libre tipo
+/// Prezi con un marco por escritorio. Arrastrar un marco lo mueve; arrastrar el
+/// vacío panea; la rueda hace zoom-a-cursor; `[` / `]` o la **manija ⟳** rotan
+/// el marco elegido. Cada edición se vuelca a `overview_places` del perfil activo
+/// (posición libre + giro), que la vista espacial respeta. Reemplaza la grilla
+/// col/fila por el mismo lienzo que `recorrido_editor_demo`.
 fn prezi_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_raster::peniko::Color;
-    const CELL: f32 = 78.0;
-    let n = mirada_brain::action::WORKSPACE_COUNT;
-    let geo = model.mirada.overview_geometry_for(n);
-    let max_c = geo.iter().map(|g| g.0).max().unwrap_or(0);
-    let max_r = geo.iter().map(|g| g.1).max().unwrap_or(0);
-    let cols = (max_c + 2).max(4) as usize;
-    let rows = (max_r + 2).max(3) as usize;
-    let cw = cols as f32 * CELL;
-    let ch = rows as f32 * CELL;
-    let linea = {
-        let k = theme.border.components;
-        Color::from_rgba8(
-            (k[0] * 255.0) as u8,
-            (k[1] * 255.0) as u8,
-            (k[2] * 255.0) as u8,
-            90,
-        )
-    };
+    /// Lado de la manija de giro, px.
+    const HANDLE: f32 = 16.0;
+    /// Alto del lienzo del editor, px.
+    const CANVAS_H: f32 = 360.0;
 
-    let mut kids: Vec<View<Msg>> = Vec::with_capacity(n);
-    for (i, &(c, r)) in geo.iter().enumerate() {
-        let x = c as f32 * CELL + 5.0;
-        let y = r as f32 * CELL + 5.0;
-        let tile = View::new(Style {
-            position: Position::Absolute,
-            inset: Rect { left: length(x), top: length(y), right: auto(), bottom: auto() },
-            size: Size { width: length(CELL - 10.0), height: length(CELL - 10.0) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .fill(theme.accent)
-        .radius(8.0)
-        .text_aligned(format!("{}", i + 1), 20.0, theme.bg_panel, Alignment::Center)
-        .draggable(move |phase, dx, dy| match phase {
-            DragPhase::End => {
-                let nc = (c + (dx / CELL).round() as i32).max(0);
-                let nr = (r + (dy / CELL).round() as i32).max(0);
-                Some(Msg::PreziMove(i, nc, nr))
-            }
-            _ => None,
+    // Lienzo: el render del recorrido (free canvas + rotación) con el arrastre
+    // cableado al `update` del panel (move = mover marco / panear; end = soltar).
+    let lienzo = recorrido_view_editor(&model.prezi.rec, &model.prezi.state, model.prezi.sel)
+        .draggable_at(|phase, dx, dy, lx, ly| match phase {
+            DragPhase::Move => Some(Msg::PreziDrag { dx, dy, lx, ly }),
+            DragPhase::End => Some(Msg::PreziDragEnd),
         });
-        kids.push(tile);
+
+    let mut canvas_kids: Vec<View<Msg>> = vec![lienzo];
+
+    // Manija de giro «sobre el marco»: anclada al borde superior (girado) del
+    // marco elegido, en coordenadas del contenedor (= rect del último paint).
+    if let Some(handle) = prezi_rotate_handle(model, theme, HANDLE) {
+        canvas_kids.push(handle);
     }
 
     let canvas = View::new(Style {
         position: Position::Relative,
-        size: Size { width: length(cw), height: length(ch) },
+        size: Size { width: percent(1.0_f32), height: length(CANVAS_H) },
         ..Default::default()
     })
-    .fill(theme.bg_panel_alt)
     .radius(8.0)
-    .paint_with(move |scene, _ts, rect| {
-        use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KRect};
-        use llimphi_ui::llimphi_raster::peniko::Fill;
-        let (x0, y0) = (rect.x as f64, rect.y as f64);
-        for col in 1..cols {
-            let gx = x0 + col as f64 * CELL as f64;
-            scene.fill(Fill::NonZero, Affine::IDENTITY, &linea, None,
-                &KRect::new(gx, y0, gx + 1.0, y0 + rect.h as f64));
-        }
-        for row in 1..rows {
-            let gy = y0 + row as f64 * CELL as f64;
-            scene.fill(Fill::NonZero, Affine::IDENTITY, &linea, None,
-                &KRect::new(x0, gy, x0 + rect.w as f64, gy + 1.0));
-        }
-    })
-    .children(kids);
+    .children(canvas_kids);
 
     let titulo = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
     .text_aligned(
-        "Plano 2D del Prezi · arrastrá cada escritorio a su celda".to_string(),
-        13.0,
+        "Plano Prezi · arrastrá un escritorio para moverlo · rueda: zoom · manija ⟳ o [ ] : rotar"
+            .to_string(),
+        12.5,
         theme.fg_text,
         Alignment::Start,
     );
@@ -3270,6 +3412,45 @@ fn prezi_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![titulo, canvas])
+}
+
+/// La **manija de giro** del marco seleccionado: un disco ámbar pegado al borde
+/// superior (girado) del marco, arrastrable horizontalmente para rotar (scrub).
+/// `None` si no hay marco elegido o todavía no se pintó el lienzo (no hay rect).
+fn prezi_rotate_handle(model: &Model, theme: &Theme, side: f32) -> Option<View<Msg>> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let id = model.prezi.sel?;
+    let panel = panel_actual()?;
+    let m = model.prezi.rec.marco(id)?;
+    let (cx, cy) = m.rect.centro();
+    let hh = m.rect.h * 0.5;
+    let (s, c) = m.rot_rad.sin_cos();
+    // Centro del borde superior del marco, girado alrededor de su centro.
+    let anchor = (cx + hh * s, cy - hh * c);
+    let (sx, sy) = model.prezi.state.camara.world_to_screen(anchor, panel);
+    // A coordenadas del contenedor (origen = panel.x/panel.y), un pelín afuera,
+    // y acotado al lienzo para que no se escape si el marco quedó fuera de vista.
+    let hx = ((sx - panel.x) as f32 - side * 0.5).clamp(0.0, (panel.w as f32 - side).max(0.0));
+    let hy = ((sy - panel.y) as f32 - side * 0.5 - 14.0)
+        .clamp(0.0, (panel.h as f32 - side).max(0.0));
+    let ambar = Color::from_rgba8(245, 180, 50, 255);
+    Some(
+        View::new(Style {
+            position: Position::Absolute,
+            inset: Rect { left: length(hx), top: length(hy), right: auto(), bottom: auto() },
+            size: Size { width: length(side), height: length(side) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(ambar)
+        .radius((side * 0.5) as f64)
+        .text_aligned("⟳".to_string(), 11.0, theme.bg_panel, Alignment::Center)
+        .draggable(|phase, dx, _dy| match phase {
+            DragPhase::Move => Some(Msg::PreziRotateHandle(dx)),
+            DragPhase::End => Some(Msg::PreziDragEnd),
+        }),
+    )
 }
 
 /// Vista custom de la **lista de barras**: una fila por barra con [nombre]
@@ -4342,4 +4523,66 @@ fn handle_menu_command(model: Model, cmd: &str) -> Model {
         _ => {}
     }
     m
+}
+
+#[cfg(test)]
+mod prezi_tests {
+    use super::*;
+
+    /// El editor arranca con un marco por escritorio (ids `1..=n`) y su plano
+    /// vuelto a `overview_places` coincide con la grilla derivada (1×1 sin giro).
+    #[test]
+    fn arranca_con_un_marco_por_escritorio_y_round_trip() {
+        let cfg = mirada_brain::Config::default();
+        let pe = PreziEdit::from_config(&cfg);
+        let n = mirada_brain::action::WORKSPACE_COUNT;
+        assert_eq!(pe.rec.marcos.len(), n);
+        assert_eq!(pe.rec.pasos.len(), n);
+        let mut ids: Vec<u64> = pe.rec.marcos.iter().map(|m| m.id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=n as u64).collect::<Vec<_>>());
+        assert_eq!(pe.to_places(), cfg.overview_places_for(n));
+    }
+
+    /// Rotar el marco elegido se refleja en el giro del `OverviewPlace` correcto.
+    #[test]
+    fn rotar_marco_se_refleja_en_places() {
+        let cfg = mirada_brain::Config::default();
+        let mut pe = PreziEdit::from_config(&cfg);
+        pe.sel = Some(1);
+        pe.rec.rotar_marco(1, 0.5);
+        let places = pe.to_places();
+        assert!((places[0].rot - 0.5).abs() < 1e-6, "giro del escritorio 1 = {}", places[0].rot);
+        // Los demás siguen rectos.
+        assert!(places[1..].iter().all(|p| p.rot == 0.0));
+    }
+
+    /// Mover un marco una celda en X cambia su `x` persistido en 1 unidad de celda.
+    #[test]
+    fn mover_marco_una_celda_mueve_una_unidad() {
+        let cfg = mirada_brain::Config::default();
+        let mut pe = PreziEdit::from_config(&cfg);
+        let before = pe.to_places()[0];
+        pe.rec.mover_marco(1, PREZI_CELL, 0.0);
+        let after = pe.to_places()[0];
+        assert!((after.x - before.x - 1.0).abs() < 1e-5, "Δx = {}", after.x - before.x);
+        assert!((after.y - before.y).abs() < 1e-5);
+    }
+
+    /// Un plano rico previo (posición libre + giro) se recupera como marcos y se
+    /// vuelve a serializar idéntico — el editor preserva lo que mirada ya guardó.
+    #[test]
+    fn preserva_un_plano_rico_existente() {
+        let mut cfg = mirada_brain::Config::default();
+        let n = mirada_brain::action::WORKSPACE_COUNT;
+        cfg.overview_places = (0..n)
+            .map(|i| mirada_brain::OverviewPlace::new(i as f32 * 1.5, 0.3, 1.0, 1.0, 0.1 * i as f32))
+            .collect();
+        let pe = PreziEdit::from_config(&cfg);
+        let places = pe.to_places();
+        assert_eq!(places.len(), n);
+        for (a, b) in places.iter().zip(cfg.overview_places.iter()) {
+            assert!((a.x - b.x).abs() < 1e-4 && (a.rot - b.rot).abs() < 1e-4, "{a:?} vs {b:?}");
+        }
+    }
 }
