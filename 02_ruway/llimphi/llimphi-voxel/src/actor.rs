@@ -178,6 +178,26 @@ pub enum Age {
 }
 
 impl Age {
+    /// Todas las edades, de menor a mayor (para que un editor cicle entre ellas).
+    pub const ALL: [Age; 5] = [Age::Baby, Age::Child, Age::Teen, Age::Adult, Age::Elder];
+
+    /// Nombre legible (español) para la UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Age::Baby => "bebé",
+            Age::Child => "niño",
+            Age::Teen => "joven",
+            Age::Adult => "adulto",
+            Age::Elder => "anciano",
+        }
+    }
+
+    /// La edad siguiente (cicla) — para botones de ciclo.
+    pub fn next(self) -> Age {
+        let i = Age::ALL.iter().position(|&a| a == self).unwrap_or(0);
+        Age::ALL[(i + 1) % Age::ALL.len()]
+    }
+
     /// `(escala_total, refuerzo_cabeza, escala_miembros)` por edad. Más joven =
     /// más chico, cabeza proporcionalmente más grande y miembros más cortos.
     fn params(self) -> (f32, f32, f32) {

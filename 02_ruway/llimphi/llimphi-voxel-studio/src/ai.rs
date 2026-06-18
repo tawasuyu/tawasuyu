@@ -7,7 +7,7 @@
 //!    fallback cuando no hay modelo real (Mock) o la salida del LLM no parsea, así
 //!    el botón **siempre** produce un mundo (de ahí lo "poor": sirve sin nube).
 
-use llimphi_voxel::{Clip, Flora, Material, SceneSpec, WorldRecipe};
+use llimphi_voxel::{Age, CharSpec, Clip, Flora, Material, SceneSpec, WorldRecipe};
 use pluma_llm::pluma_llm_core::ChatRequest;
 
 /// Instrucción del sistema: enseña el formato RON exacto y el significado de cada
@@ -166,6 +166,48 @@ fn parse_count(p: &str) -> usize {
     3
 }
 
+/// **Personaje desde prosa** (heurística local): deduce la edad y el color de la
+/// remera de las palabras del texto; piel/pantalón quedan por defecto.
+pub fn generate_character(prompt: &str) -> CharSpec {
+    let p = prompt.to_lowercase();
+    let age = if p.contains("bebé") || p.contains("bebe") || p.contains("recién") || p.contains("recien") {
+        Age::Baby
+    } else if p.contains("niñ") || p.contains("nin") || p.contains("chic") {
+        Age::Child
+    } else if p.contains("joven") || p.contains("adolesc") || p.contains("teen") {
+        Age::Teen
+    } else if p.contains("ancian") || p.contains("viej") || p.contains("abuel") {
+        Age::Elder
+    } else {
+        Age::Adult
+    };
+    let mut c = CharSpec::new(scene_name(prompt), age);
+    if let Some(rgb) = parse_color(&p) {
+        c.shirt = rgb;
+    }
+    c
+}
+
+/// Color (`[r,g,b]` en `[0,1]`) nombrado en el texto, si lo hay.
+fn parse_color(p: &str) -> Option<[f32; 3]> {
+    // Raíces (sin terminación de género/número) para casar "rojo/roja/rojas".
+    let table: [(&str, [f32; 3]); 12] = [
+        ("roj", [0.82, 0.28, 0.26]),
+        ("celest", [0.50, 0.75, 0.92]),
+        ("azul", [0.22, 0.55, 0.78]),
+        ("verd", [0.30, 0.70, 0.40]),
+        ("amarill", [0.92, 0.80, 0.30]),
+        ("naranj", [0.90, 0.50, 0.22]),
+        ("violet", [0.62, 0.40, 0.78]),
+        ("morad", [0.62, 0.40, 0.78]),
+        ("rosa", [0.90, 0.55, 0.70]),
+        ("blanc", [0.92, 0.92, 0.92]),
+        ("negr", [0.14, 0.14, 0.16]),
+        ("marr", [0.45, 0.32, 0.22]),
+    ];
+    table.iter().find(|(k, _)| p.contains(k)).map(|(_, c)| *c)
+}
+
 /// Nombre de escena = primeras ~4 palabras de la descripción.
 fn scene_name(prompt: &str) -> String {
     let s: String = prompt.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
@@ -213,6 +255,13 @@ peak_at: 0.8, flora: None, flora_density: 0.0)\n```\nlisto.";
         let b = local_recipe("islas tropicales con ríos");
         assert_eq!(a.seed, b.seed);
         assert!(a.water_level >= 0.5 && a.rivers >= 0.6);
+    }
+
+    #[test]
+    fn personaje_lee_edad_y_color() {
+        let c = generate_character("un niño de remera roja");
+        assert_eq!(c.age, Age::Child);
+        assert_eq!(c.shirt, [0.82, 0.28, 0.26]);
     }
 
     #[test]

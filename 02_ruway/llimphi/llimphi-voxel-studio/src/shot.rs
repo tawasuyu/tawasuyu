@@ -43,6 +43,15 @@ pub fn shot() {
     let scene_out = out.replace(".png", "_scene.png");
     let scene_out = if scene_out == out { "/tmp/voxel_studio_scene.png".to_string() } else { scene_out };
     render_model(scene, &scene_out);
+
+    // Toma 3: editor de personajes (turntable del muñeco).
+    let mut chars = demo_model();
+    chars.mode = Mode::Characters;
+    chars.char_sel = 0;
+    chars.time = 0.6;
+    let chars_out = out.replace(".png", "_chars.png");
+    let chars_out = if chars_out == out { "/tmp/voxel_studio_chars.png".to_string() } else { chars_out };
+    render_model(chars, &chars_out);
 }
 
 /// Renderiza un `Model` concreto (su view real) a un PNG.

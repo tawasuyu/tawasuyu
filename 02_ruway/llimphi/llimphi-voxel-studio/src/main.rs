@@ -30,7 +30,7 @@ use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_voxel::{
-    world_dim, ActorScript, CharSpec, Project, SceneSpec, WorldRecipe, PREVIEW_DIM_XZ,
+    world_dim, ActorScript, Age, CharSpec, Project, SceneSpec, WorldRecipe, PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
@@ -54,6 +54,16 @@ enum Mode {
     Worlds,
     /// Editor/reproductor de escenas (director).
     Scenes,
+    /// Editor de personajes (constitución + colores).
+    Characters,
+}
+
+/// Parte coloreable de un personaje.
+#[derive(Clone, Copy)]
+enum Part {
+    Skin,
+    Shirt,
+    Pants,
 }
 
 /// Los parámetros `f32` de la receta que un slider edita.
@@ -103,6 +113,13 @@ enum Msg {
     Scrub(f32),
     AiSceneGenerate,
     AiSceneResult(SceneSpec),
+    /// Personajes (constitución + colores).
+    SelectChar(usize),
+    CycleCharAge,
+    SetColor(Part, usize, f32),
+    NewChar,
+    AiCharGenerate,
+    AiCharResult(CharSpec),
     /// Tick periódico de reproducción.
     Tick,
 }
@@ -127,9 +144,10 @@ struct Model {
     ai_input: TextInputState,
     ai_focused: bool,
     ai_busy: bool,
-    /// Modo de edición + estado de escenas.
+    /// Modo de edición + estado de escenas/personajes.
     mode: Mode,
     scene_sel: usize,
+    char_sel: usize,
     /// Tiempo de reproducción (seg) y si está corriendo.
     time: f32,
     playing: bool,
@@ -150,6 +168,11 @@ impl Model {
     fn scene_recipe(&self) -> Option<WorldRecipe> {
         let s = self.scene()?;
         self.project.worlds.get(s.world).map(|w| w.recipe)
+    }
+
+    /// El personaje seleccionado (si hay).
+    fn char_spec(&self) -> Option<&CharSpec> {
+        self.project.characters.get(self.char_sel)
     }
 }
 
@@ -360,14 +383,61 @@ impl App for Studio {
                 model.ai_input.set_text("");
                 model.status = format!("escena generada: «{}»", model.project.scenes[idx].name);
             }
+            Msg::SelectChar(i) => {
+                if i < model.project.characters.len() {
+                    model.char_sel = i;
+                }
+            }
+            Msg::CycleCharAge => {
+                if let Some(c) = model.project.characters.get_mut(model.char_sel) {
+                    c.age = c.age.next();
+                }
+            }
+            Msg::SetColor(part, ch, v) => {
+                if let Some(c) = model.project.characters.get_mut(model.char_sel) {
+                    let rgb = match part {
+                        Part::Skin => &mut c.skin,
+                        Part::Shirt => &mut c.shirt,
+                        Part::Pants => &mut c.pants,
+                    };
+                    if ch < 3 {
+                        rgb[ch] = v.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            Msg::NewChar => {
+                let n = model.project.characters.len() + 1;
+                model.project.characters.push(CharSpec::new(format!("personaje {n}"), Age::Adult));
+                model.char_sel = model.project.characters.len() - 1;
+                model.status = "personaje nuevo".into();
+            }
+            Msg::AiCharGenerate => {
+                let prompt = model.ai_input.text();
+                if !prompt.trim().is_empty() && !model.ai_busy {
+                    model.ai_busy = true;
+                    model.status = "generando personaje con IA…".into();
+                    handle.spawn(move || Msg::AiCharResult(ai::generate_character(&prompt)));
+                }
+            }
+            Msg::AiCharResult(cs) => {
+                model.project.characters.push(cs);
+                model.char_sel = model.project.characters.len() - 1;
+                model.ai_busy = false;
+                model.ai_input.set_text("");
+                model.status =
+                    format!("personaje generado: «{}»", model.project.characters[model.char_sel].name);
+            }
             Msg::Tick => {
-                if model.playing && model.mode == Mode::Scenes {
+                if model.mode == Mode::Scenes && model.playing {
                     if let Some(dur) = model.scene().map(|s| s.duration) {
                         model.time += DT;
                         if model.time >= dur {
                             model.time = 0.0; // loop
                         }
                     }
+                } else if model.mode == Mode::Characters {
+                    // Turntable + respiración del personaje en exhibición.
+                    model.time += DT;
                 }
             }
         }
@@ -406,6 +476,7 @@ fn left_panel(model: &Model) -> View<Msg> {
     match model.mode {
         Mode::Worlds => worlds_left(model, &btn, &mut rows),
         Mode::Scenes => scenes_left(model, &btn, &mut rows),
+        Mode::Characters => chars_left(model, &btn, &mut rows),
     }
 
     // Sección IA (compartida): el rótulo/acción dependen del modo.
@@ -419,6 +490,11 @@ fn left_panel(model: &Model) -> View<Msg> {
             "IA — DESCRIBÍ UNA ESCENA",
             "p.ej. tres personajes que festejan",
             Msg::AiSceneGenerate,
+        ),
+        Mode::Characters => (
+            "IA — DESCRIBÍ UN PERSONAJE",
+            "p.ej. una niña de remera verde",
+            Msg::AiCharGenerate,
         ),
     };
     rows.push(spacer(14.0));
@@ -483,6 +559,7 @@ fn mode_toggle(model: &Model) -> View<Msg> {
     .children(vec![
         pill("Mundos", model.mode == Mode::Worlds, Msg::SwitchMode(Mode::Worlds)),
         pill("Escenas", model.mode == Mode::Scenes, Msg::SwitchMode(Mode::Scenes)),
+        pill("Gente", model.mode == Mode::Characters, Msg::SwitchMode(Mode::Characters)),
     ])
 }
 
@@ -547,8 +624,25 @@ fn scenes_left(model: &Model, btn: &ButtonPalette, rows: &mut Vec<View<Msg>>) {
     ));
 }
 
+/// Contenido izquierdo del modo Personajes: lista + nuevo.
+fn chars_left(model: &Model, btn: &ButtonPalette, rows: &mut Vec<View<Msg>>) {
+    let theme = &model.theme;
+    rows.push(section_title("GENTE", theme));
+    for (i, c) in model.project.characters.iter().enumerate() {
+        let label = format!("{} · {}", c.name, c.age.label());
+        rows.push(selectable_row(label, i == model.char_sel, Msg::SelectChar(i), theme));
+    }
+    rows.push(spacer(10.0));
+    rows.push(button_view("nuevo personaje", btn, Msg::NewChar));
+    rows.push(spacer(6.0));
+    rows.push(button_view("guardar", btn, Msg::Save));
+    rows.push(spacer(6.0));
+    rows.push(button_view("cargar", btn, Msg::Load));
+}
+
 /// Centro: el canvas 3D del preview en vivo, draggable para orbitar. En modo
-/// Escenas, además posa y anima los actores del guion en el instante `time`.
+/// Escenas, además posa y anima los actores del guion en el instante `time`; en
+/// modo Personajes, exhibe al personaje seleccionado en turntable.
 fn center_canvas(model: &Model) -> View<Msg> {
     let (yaw, pitch, dist, gen) = (model.yaw, model.pitch, model.dist, model.gen);
     let preview = model.preview.clone();
@@ -627,6 +721,36 @@ fn center_canvas(model: &Model) -> View<Msg> {
                 );
             })
         }
+        Mode::Characters => {
+            let recipe = model.recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
+            let charspec = model.char_spec().cloned();
+            let time = model.time;
+            View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
+                let dim = world_dim(PREVIEW_DIM_XZ);
+                let mut guard = preview.lock().unwrap();
+                let p =
+                    guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
+                p.rebuild_if(device, queue, &recipe, dim, gen);
+                // El personaje en el centro del mundo, en turntable; cámara cerca.
+                let pos = p.ground_at(dim[0] / 2, dim[2] / 2);
+                let look = pos + Vec3::new(0.0, 1.0, 0.0);
+                let cam_dist = (dist * 0.06).clamp(3.5, 14.0);
+                let camera = Camera3d::orbit(look, yaw, pitch, cam_dist);
+                let metas = match &charspec {
+                    Some(cs) => {
+                        let mut a = cs.to_actor(pos, time * 0.6); // gira despacio
+                        a.advance(time); // respira (Idle)
+                        let (v, i) = a.mesh();
+                        vec![(a.model(), v, i)]
+                    }
+                    None => Vec::new(),
+                };
+                p.render_scene(
+                    device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera,
+                    &metas,
+                );
+            })
+        }
     }
     .draggable(|phase, dx, dy| match phase {
         DragPhase::Move => Some(Msg::Orbit(dx, dy)),
@@ -653,6 +777,7 @@ fn right_panel(model: &Model) -> View<Msg> {
     match model.mode {
         Mode::Worlds => world_right(model),
         Mode::Scenes => scene_right(model),
+        Mode::Characters => char_right(model),
     }
 }
 
@@ -758,6 +883,40 @@ fn scene_right(model: &Model) -> View<Msg> {
     )
 }
 
+/// Editor del personaje seleccionado: edad + colores (RGB por parte).
+fn char_right(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+
+    let Some(c) = model.char_spec() else {
+        return right_frame(theme, vec![section_title("sin personaje — creá o generá uno", theme)]);
+    };
+
+    let mut children = vec![
+        section_title("PERSONAJE", theme),
+        body_text(format!("«{}»", c.name), theme.fg_text, theme),
+        spacer(8.0),
+        button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleCharAge),
+        spacer(8.0),
+    ];
+    for (title, part, rgb) in [
+        ("PIEL", Part::Skin, c.skin),
+        ("REMERA", Part::Shirt, c.shirt),
+        ("PANTALÓN", Part::Pants, c.pants),
+    ] {
+        children.push(section_title(title, theme));
+        for (ch, label) in [(0usize, "R"), (1, "G"), (2, "B")] {
+            let value = rgb[ch];
+            children.push(slider_view(label, value, 0.0, 1.0, &sp, move |_p, dv| {
+                Some(Msg::SetColor(part, ch, value + dv))
+            }));
+        }
+        children.push(spacer(6.0));
+    }
+    right_frame(theme, children)
+}
+
 /// Línea de texto de cuerpo (multi-línea) para los paneles.
 fn body_text(s: String, color: Color, _theme: &Theme) -> View<Msg> {
     View::new(Style {
@@ -831,6 +990,7 @@ pub(crate) fn demo_model() -> Model {
         ai_busy: false,
         mode: Mode::Worlds,
         scene_sel: 0,
+        char_sel: 0,
         time: 0.0,
         playing: false,
     }
