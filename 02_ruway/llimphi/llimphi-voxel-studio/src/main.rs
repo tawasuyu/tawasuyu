@@ -34,6 +34,7 @@ use llimphi_voxel::{
     PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
@@ -123,6 +124,8 @@ enum Msg {
     /// Exportar la escena a video (headless, en un worker).
     ExportVideo,
     ExportDone(Result<String, String>),
+    /// Elegir el diente (set de herramientas) del sidebar derecho.
+    SelectTool(usize),
     /// Personajes (constitución + colores).
     SelectChar(usize),
     CycleCharAge,
@@ -165,6 +168,8 @@ struct Model {
     script_cam: bool,
     /// Exportación de video en curso.
     exporting: bool,
+    /// Diente activo del sidebar derecho (qué set de herramientas se muestra).
+    tool_tab: usize,
 }
 
 impl Model {
@@ -350,8 +355,10 @@ impl App for Studio {
             }
             Msg::SwitchMode(m) => {
                 model.mode = m;
+                model.tool_tab = 0; // cada modo tiene su propio juego de dientes
                 model.gen += 1; // el preview pasa a mostrar otro artefacto
             }
+            Msg::SelectTool(i) => model.tool_tab = i,
             Msg::SelectScene(i) => {
                 if i < model.project.scenes.len() {
                     model.scene_sel = i;
@@ -826,167 +833,226 @@ fn orbit_center(dim: [u32; 3]) -> Vec3 {
     Vec3::new(dim[0] as f32 * 0.5, dim[1] as f32 * 0.32, dim[2] as f32 * 0.5)
 }
 
-/// Panel derecho: según el modo, los sliders de la receta o el editor de escena.
+/// Panel derecho: **rail de dientes** (un set de herramientas por diente) pegado al
+/// borde interno + el panel del set activo al costado. Sigue el patrón canónico de
+/// `llimphi-widget-dock-rail` (items→ids, `make_icon`, `on_activate`), como cosmos.
 fn right_panel(model: &Model) -> View<Msg> {
-    match model.mode {
-        Mode::Worlds => world_right(model),
-        Mode::Scenes => scene_right(model),
-        Mode::Characters => char_right(model),
-    }
-}
+    let theme = &model.theme;
+    let icons = tool_icons(model.mode);
+    let tab = model.tool_tab.min(icons.len().saturating_sub(1));
 
-/// Marco del panel derecho (ancho fijo + fondo) con los `children` dados.
-fn right_frame(theme: &Theme, children: Vec<View<Msg>>) -> View<Msg> {
-    View::new(Style {
+    // Dientes: uno por set de herramientas del modo. El diente activo "sobresale".
+    let rail_items: Vec<DockRailItem> = (0..icons.len())
+        .map(|i| DockRailItem { id: i as u64, active: i == tab })
+        .collect();
+    let labels = icons.clone();
+    let rail = dock_rail_view(
+        &rail_items,
+        46.0,
+        &DockRailPalette::from_theme(theme),
+        move |id, size, color| {
+            View::new(Style::default()).text(labels[id as usize].to_string(), size * 0.7, color)
+        },
+        |id| Msg::SelectTool(id as usize),
+        |_payload| None,
+    );
+
+    // Panel del set activo.
+    let panel = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(280.0), height: percent(1.0) },
-        padding: pad(16.0, 16.0),
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0), height: percent(1.0) },
+        padding: pad(14.0, 14.0),
         gap: gap_y(8.0),
         ..Default::default()
     })
+    .children(tool_content(model, tab));
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: length(300.0), height: percent(1.0) },
+        padding: pad(0.0, 6.0),
+        gap: Size { width: length(4.0), height: length(0.0) },
+        ..Default::default()
+    })
     .fill(theme.bg_panel)
-    .children(children)
+    .children(vec![rail, panel])
 }
 
-/// Editor de la receta del mundo seleccionado (sliders + ciclo de materiales).
-fn world_right(model: &Model) -> View<Msg> {
+/// Etiqueta corta de cada diente (set de herramientas) por modo.
+fn tool_icons(mode: Mode) -> Vec<&'static str> {
+    match mode {
+        Mode::Worlds => vec!["Re", "Ag", "Mt", "Fl"],
+        Mode::Scenes => vec!["Es", "Cá", "Vi"],
+        Mode::Characters => vec!["Cu", "Pi", "Cm", "Pa"],
+    }
+}
+
+/// Contenido del set de herramientas activo (`tab`) según el modo.
+fn tool_content(model: &Model, tab: usize) -> Vec<View<Msg>> {
+    match model.mode {
+        Mode::Worlds => world_tools(model, tab),
+        Mode::Scenes => scene_tools(model, tab),
+        Mode::Characters => char_tools(model, tab),
+    }
+}
+
+/// Slider de un campo de la receta (helper de los sets de mundo).
+fn wslider(
+    sp: &SliderPalette,
+    label: &str,
+    value: f32,
+    min: f32,
+    max: f32,
+    field: Field,
+) -> View<Msg> {
+    slider_view(label, value, min, max, sp, move |_phase, dv| Some(Msg::Set(field, value + dv)))
+}
+
+/// Sets de herramientas del modo Mundos: Relieve · Agua · Materiales · Flora.
+fn world_tools(model: &Model, tab: usize) -> Vec<View<Msg>> {
     let theme = &model.theme;
     let sp = SliderPalette::from_theme(theme);
     let btn = ButtonPalette::from_theme(theme);
-
     let Some(r) = model.recipe() else {
-        return right_frame(theme, vec![section_title("sin mundo seleccionado", theme)]);
+        return vec![section_title("sin mundo seleccionado", theme)];
     };
-
-    let slider = |label: &str, value: f32, min: f32, max: f32, field: Field| -> View<Msg> {
-        slider_view(label, value, min, max, &sp, move |_phase, dv| {
-            Some(Msg::Set(field, value + dv))
-        })
-    };
-
-    right_frame(
-        theme,
-        vec![
+    match tab {
+        0 => vec![
             section_title("RELIEVE", theme),
-            slider("semilla", r.seed as f32, 0.0, 64.0, Field::Seed),
-            slider("base (llanura)", r.base, 0.0, 0.9, Field::Base),
-            slider("dunas", r.dune, 0.0, 0.4, Field::Dune),
-            slider("relieve (alto montañas)", r.relief, 0.0, 1.0, Field::Relief),
-            slider("densidad montañas", r.mountains, 0.0, 1.0, Field::Mountains),
-            spacer(8.0),
+            wslider(&sp, "semilla", r.seed as f32, 0.0, 64.0, Field::Seed),
+            wslider(&sp, "base (llanura)", r.base, 0.0, 0.9, Field::Base),
+            wslider(&sp, "dunas", r.dune, 0.0, 0.4, Field::Dune),
+            wslider(&sp, "relieve (alto)", r.relief, 0.0, 1.0, Field::Relief),
+            wslider(&sp, "densidad montañas", r.mountains, 0.0, 1.0, Field::Mountains),
+        ],
+        1 => vec![
             section_title("AGUA", theme),
-            slider("nivel del agua", r.water_level, 0.0, 0.9, Field::Water),
-            slider("densidad ríos", r.rivers, 0.0, 1.0, Field::Rivers),
-            spacer(8.0),
+            wslider(&sp, "nivel del agua", r.water_level, 0.0, 0.9, Field::Water),
+            wslider(&sp, "densidad ríos", r.rivers, 0.0, 1.0, Field::Rivers),
+        ],
+        2 => vec![
             section_title("MATERIALES", theme),
             button_view(format!("suelo: {}", r.ground.label()), &btn, Msg::CycleGround),
             spacer(4.0),
             button_view(format!("acantilado: {}", r.cliff.label()), &btn, Msg::CycleCliff),
             spacer(4.0),
             button_view(format!("cumbre: {}", r.peak.label()), &btn, Msg::CyclePeak),
-            slider("altura cumbre", r.peak_at, 0.0, 1.0, Field::PeakAt),
-            spacer(8.0),
+            wslider(&sp, "altura cumbre", r.peak_at, 0.0, 1.0, Field::PeakAt),
+        ],
+        _ => vec![
             section_title("FLORA", theme),
             button_view(format!("tipo: {}", r.flora.label()), &btn, Msg::CycleFlora),
-            slider("densidad flora", r.flora_density, 0.0, 0.05, Field::Flora),
+            wslider(&sp, "densidad flora", r.flora_density, 0.0, 0.05, Field::Flora),
         ],
-    )
+    }
 }
 
-/// Editor de la escena seleccionada (mundo de fondo + duración + reparto).
-fn scene_right(model: &Model) -> View<Msg> {
+/// Sets de herramientas del modo Escenas: Escena · Cámara · Video.
+fn scene_tools(model: &Model, tab: usize) -> Vec<View<Msg>> {
     let theme = &model.theme;
     let sp = SliderPalette::from_theme(theme);
     let btn = ButtonPalette::from_theme(theme);
-
     let Some(s) = model.scene() else {
-        return right_frame(theme, vec![section_title("sin escena — generá una con IA", theme)]);
+        return vec![section_title("sin escena — generá una con IA", theme)];
     };
-    let dur = s.duration;
-    let n_actors = s.actors.len();
-    let n_shots = s.shots.len();
-    let cam_label = if model.script_cam { "cámara: guion" } else { "cámara: órbita" };
-    let world_name = model
-        .project
-        .worlds
-        .get(s.world)
-        .map(|w| w.name.clone())
-        .unwrap_or_else(|| "—".into());
-
-    right_frame(
-        theme,
-        vec![
-            section_title("ESCENA", theme),
-            body_text(format!("«{}»", s.name), theme.fg_text, theme),
-            spacer(8.0),
-            section_title("MUNDO DE FONDO", theme),
-            button_view(format!("mundo: {world_name}"), &btn, Msg::CycleSceneWorld),
-            spacer(8.0),
-            section_title("TIEMPO", theme),
-            slider_view("duración (s)", dur, 1.0, 20.0, &sp, move |_p, dv| {
-                Some(Msg::SetSceneDur(dur + dv))
-            }),
-            spacer(8.0),
-            section_title("CÁMARA", theme),
-            button_view(cam_label, &btn, Msg::ToggleSceneCam),
-            spacer(4.0),
-            body_text(format!("{n_shots} planos"), theme.fg_muted, theme),
-            spacer(4.0),
-            button_view("+ plano acá", &btn, Msg::AddShot),
-            spacer(4.0),
-            button_view("− quitar plano", &btn, Msg::RemoveShot),
-            spacer(8.0),
-            section_title("EXPORTAR", theme),
+    match tab {
+        0 => {
+            let dur = s.duration;
+            let world_name = model
+                .project
+                .worlds
+                .get(s.world)
+                .map(|w| w.name.clone())
+                .unwrap_or_else(|| "—".into());
+            vec![
+                section_title("ESCENA", theme),
+                body_text(format!("«{}»", s.name), theme.fg_text, theme),
+                spacer(6.0),
+                section_title("MUNDO DE FONDO", theme),
+                button_view(format!("mundo: {world_name}"), &btn, Msg::CycleSceneWorld),
+                spacer(6.0),
+                section_title("TIEMPO", theme),
+                slider_view("duración (s)", dur, 1.0, 20.0, &sp, move |_p, dv| {
+                    Some(Msg::SetSceneDur(dur + dv))
+                }),
+                spacer(6.0),
+                body_text(format!("{} actores", s.actors.len()), theme.fg_muted, theme),
+            ]
+        }
+        1 => {
+            let cam_label = if model.script_cam { "cámara: guion" } else { "cámara: órbita" };
+            vec![
+                section_title("CÁMARA", theme),
+                button_view(cam_label, &btn, Msg::ToggleSceneCam),
+                spacer(4.0),
+                body_text(format!("{} planos", s.shots.len()), theme.fg_muted, theme),
+                spacer(4.0),
+                button_view("+ plano acá", &btn, Msg::AddShot),
+                spacer(4.0),
+                button_view("− quitar plano", &btn, Msg::RemoveShot),
+                spacer(8.0),
+                body_text(
+                    "agregá cortes mientras scrubeás el tiempo".into(),
+                    theme.fg_placeholder,
+                    theme,
+                ),
+            ]
+        }
+        _ => vec![
+            section_title("VIDEO", theme),
             button_view(
                 if model.exporting { "exportando…" } else { "🎬 exportar video" },
                 &btn,
                 Msg::ExportVideo,
             ),
             spacer(8.0),
-            section_title("REPARTO", theme),
-            body_text(format!("{n_actors} actores"), theme.fg_muted, theme),
-            spacer(8.0),
             body_text(
-                "▶ reproduce el guion · en órbita, arrastrá para mirar".into(),
+                "renderiza el guion a un .mkv (puede tardar)".into(),
                 theme.fg_placeholder,
                 theme,
             ),
         ],
-    )
+    }
 }
 
-/// Editor del personaje seleccionado: edad + colores (RGB por parte).
-fn char_right(model: &Model) -> View<Msg> {
+/// Sets de herramientas del modo Gente: Cuerpo · Piel · Camiseta · Pantalón.
+fn char_tools(model: &Model, tab: usize) -> Vec<View<Msg>> {
     let theme = &model.theme;
     let sp = SliderPalette::from_theme(theme);
     let btn = ButtonPalette::from_theme(theme);
-
     let Some(c) = model.char_spec() else {
-        return right_frame(theme, vec![section_title("sin personaje — creá o generá uno", theme)]);
+        return vec![section_title("sin personaje — creá o generá uno", theme)];
     };
-
-    let mut children = vec![
-        section_title("PERSONAJE", theme),
-        body_text(format!("«{}»", c.name), theme.fg_text, theme),
-        spacer(8.0),
-        button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleCharAge),
-        spacer(8.0),
-    ];
-    for (title, part, rgb) in [
-        ("PIEL", Part::Skin, c.skin),
-        ("REMERA", Part::Shirt, c.shirt),
-        ("PANTALÓN", Part::Pants, c.pants),
-    ] {
-        children.push(section_title(title, theme));
-        for (ch, label) in [(0usize, "R"), (1, "G"), (2, "B")] {
-            let value = rgb[ch];
-            children.push(slider_view(label, value, 0.0, 1.0, &sp, move |_p, dv| {
-                Some(Msg::SetColor(part, ch, value + dv))
-            }));
-        }
-        children.push(spacer(6.0));
+    match tab {
+        0 => vec![
+            section_title("CUERPO", theme),
+            body_text(format!("«{}»", c.name), theme.fg_text, theme),
+            spacer(6.0),
+            button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleCharAge),
+        ],
+        1 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),
+        2 => color_tools("CAMISETA", Part::Shirt, c.shirt, &sp, theme),
+        _ => color_tools("PANTALÓN", Part::Pants, c.pants, &sp, theme),
     }
-    right_frame(theme, children)
+}
+
+/// Set de sliders R/G/B de una parte coloreable del personaje.
+fn color_tools(
+    title: &str,
+    part: Part,
+    rgb: [f32; 3],
+    sp: &SliderPalette,
+    theme: &Theme,
+) -> Vec<View<Msg>> {
+    let mut v = vec![section_title(title, theme)];
+    for (ch, label) in [(0usize, "rojo"), (1, "verde"), (2, "azul")] {
+        let value = rgb[ch];
+        v.push(slider_view(label, value, 0.0, 1.0, sp, move |_p, dv| {
+            Some(Msg::SetColor(part, ch, value + dv))
+        }));
+    }
+    v
 }
 
 /// Línea de texto de cuerpo (multi-línea) para los paneles.
@@ -1067,6 +1133,7 @@ pub(crate) fn demo_model() -> Model {
         playing: false,
         script_cam: true,
         exporting: false,
+        tool_tab: 0,
     }
 }
 
