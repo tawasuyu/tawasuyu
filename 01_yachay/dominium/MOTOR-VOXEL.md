@@ -726,8 +726,13 @@ monumento-malla flota al fondo (montaje de cuadros mirado a PNG).
    renderizan a **2×** (`SSW×SSH`) y bajan promediando bloques 2×2
    (`write_png_downsampled`) → antialias de los bordes duros del ray-march.
    Verificado por PNG (zoom: siluetas suaves, no escalonadas). `--poses` queda 1×
-   (su HUD se mide en pixels de pantalla). **Falta**: resolución de cine (1080p/4K) y
-   TAA si se quisiera abaratar.
+   (su HUD se mide en pixels de pantalla).
+   **Resolución de cine HECHA (2026-06-18):** `film_dims()` elige la salida por flag —
+   `--720`/`--1080`/`--4k` (default 960×540), aplicado tanto a `--film` como a `--vox`.
+   En 4K el supersampling baja a 1× (un buffer 4K×2 = 8K sería ~250 MB; a resolución
+   nativa el ray-march ya queda nítido), el resto a 2×. Verificado: `--vox --1080`
+   escribe un PNG **1920×1080** (golem con bordes suaves, mirado). **Falta**: TAA
+   (sólo abarataría el AA; con SSAA + resolución nativa no hace falta para el reel).
 6. ~~**Audio**~~ **HECHO**: la película tiene **banda sonora**. `soundtrack.rs`
    compone un `Score` con `takiy-core` (progresión I–V–vi–IV: pads + bajo + una
    melodía que sube al momento del gesto) y lo sintetiza a WAV con `takiy-synth`

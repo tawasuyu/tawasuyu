@@ -28,7 +28,8 @@ use llimphi_voxel::{Actor, ActorKey, ActorScript, Clip, Sequence, Shot};
 use crate::world::{World, FMT};
 use crate::{DIM_XZ, SEED};
 
-/// Resolución y cadencia del film (16:9, 30 fps).
+/// Resolución y cadencia del film (16:9, 30 fps). Por defecto 960×540 @2×; se puede
+/// subir a 720p/1080p/4K por flag (ver [`film_dims`]).
 const W: u32 = 960;
 const H: u32 = 540;
 const FPS: u32 = 30;
@@ -36,8 +37,28 @@ const FPS: u32 = 30;
 /// → antialias de los bordes duros del ray-march. El film/vox lo usan; `--poses`
 /// queda a 1× (su HUD se mide en pixels de pantalla).
 const SS: u32 = 2;
-const SSW: u32 = W * SS;
-const SSH: u32 = H * SS;
+
+/// Resolución de salida elegida por flag de línea de comandos. Devuelve `(w, h, ss)`
+/// — el ancho/alto **finales** del video y el factor de supersampling. En 4K se baja
+/// `ss` a 1 (un buffer 4K×2 = 8K sería ~250 MB y pocas GPUs lo aguantan); en cine
+/// "real" el ray-march ya queda nítido por la resolución nativa.
+/// - `--4k`            → 3840×2160 @1×
+/// - `--1080`/`--1080p`→ 1920×1080 @2×
+/// - `--720`/`--720p`  → 1280×720  @2×
+/// - (default)         → 960×540   @2×
+fn film_dims() -> (u32, u32, u32) {
+    let args: Vec<String> = std::env::args().collect();
+    let has = |f: &str| args.iter().any(|a| a == f);
+    if has("--4k") {
+        (3840, 2160, 1)
+    } else if has("--1080") || has("--1080p") {
+        (1920, 1080, 2)
+    } else if has("--720") || has("--720p") {
+        (1280, 720, 2)
+    } else {
+        (W, H, SS)
+    }
+}
 /// Carpeta de cuadros y salida del video.
 const FRAME_DIR: &str = "/tmp/voxel_film";
 const OUT: &str = "/tmp/voxel_film.mkv";
@@ -62,7 +83,12 @@ pub fn film() {
     // Un `Renderer3d` por actor (su malla se re-sube cada frame).
     let mut actor_r: Vec<Renderer3d> = cast.iter().map(|_| Renderer3d::new(&hal.device, FMT)).collect();
 
-    let inter = make_target(&hal, SSW, SSH); // render a 2× para SSAA
+    let (w, h, ss) = film_dims();
+    let (ssw, ssh) = (w * ss, h * ss);
+    if (w, h, ss) != (W, H, SS) {
+        eprintln!("film: resolución {w}x{h} @{ss}× (supersampled a {ssw}x{ssh})");
+    }
+    let inter = make_target(&hal, ssw, ssh); // render a ss× para SSAA
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
 
     prepare_dir();
@@ -91,8 +117,8 @@ pub fn film() {
         let camera = seq.camera(t);
 
         let refs: Vec<&Renderer3d> = actor_r.iter().collect();
-        render_frame(&hal, &mut renderer, &mut world, &camera, &refs, &inter_view, (SSW, SSH));
-        crate::write_png_downsampled(&hal, &inter, SSW, SSH, SS, &frame_path(f));
+        render_frame(&hal, &mut renderer, &mut world, &camera, &refs, &inter_view, (ssw, ssh));
+        crate::write_png_downsampled(&hal, &inter, ssw, ssh, ss, &frame_path(f));
         if f % 15 == 0 {
             eprintln!("film: cuadro {f}/{frames}");
         }
@@ -106,7 +132,7 @@ pub fn film() {
     // --- Muxeo a video (video AV1 + audio Opus). Si no hay ffmpeg, deja los PNG.
     let pattern = format!("{FRAME_DIR}/frame_%04d.png");
     match foreign_av::encode_frames(&pattern, FPS, 30, Some(std::path::Path::new(audio)), OUT) {
-        Ok(()) => eprintln!("film: video escrito {OUT} ({frames} cuadros, {W}x{H}@{FPS}, con audio)"),
+        Ok(()) => eprintln!("film: video escrito {OUT} ({frames} cuadros, {w}x{h}@{FPS}, con audio)"),
         Err(e) => eprintln!(
             "film: cuadros en {FRAME_DIR}/ pero ffmpeg falló ({e:?}); \
              podés muxear a mano: ffmpeg -framerate {FPS} -i {pattern} -i {audio} -c:v libsvtav1 -c:a libopus {OUT}"
@@ -280,18 +306,20 @@ pub fn vox_shot() {
     // Vista 3/4 frontal (yaw ~205° mira la cara con los ojos, levemente de costado).
     let camera = Camera3d::orbit(Vec3::ZERO, 205_f32.to_radians(), 12_f32.to_radians(), d * 1.9);
 
-    let inter = make_target(&hal, SSW, SSH); // 2× para SSAA
+    let (w, h, ss) = film_dims();
+    let (ssw, ssh) = (w * ss, h * ss);
+    let inter = make_target(&hal, ssw, ssh); // ss× para SSAA
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
     renderer
-        .render_to_view(&hal, &vello::Scene::new(), &inter_view, SSW, SSH, Color::from_rgba8(0, 0, 0, 255))
+        .render_to_view(&hal, &vello::Scene::new(), &inter_view, ssw, ssh, Color::from_rgba8(0, 0, 0, 255))
         .expect("base");
     let mut enc = hal
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("vox") });
-    scene.render(&hal.device, &hal.queue, &mut enc, &inter_view, (SSW, SSH), &camera, Some(&vr), &[]);
+    scene.render(&hal.device, &hal.queue, &mut enc, &inter_view, (ssw, ssh), &camera, Some(&vr), &[]);
     hal.queue.submit(std::iter::once(enc.finish()));
     let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
-    crate::write_png_downsampled(&hal, &inter, SSW, SSH, SS, "/tmp/vox_import.png");
+    crate::write_png_downsampled(&hal, &inter, ssw, ssh, ss, "/tmp/vox_import.png");
     eprintln!(
         "vox: {} ({} voxels) → {path} → /tmp/vox_import.png (grid {}x{}x{})",
         "golem",

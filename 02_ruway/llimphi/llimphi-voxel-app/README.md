@@ -21,6 +21,11 @@ cargo run -p llimphi-voxel-app --release              # ventana interactiva (orb
 mpv /tmp/voxel_film.mkv                                # ver la película
 ```
 
+**Resolución de salida** (aplica a `--film` y `--vox`): por defecto 960×540; subila con
+un flag extra `--720` / `--1080` / `--4k` — p.ej.
+`… --film --1080` rinde 1920×1080. En 4K el supersampling baja a 1× (a resolución
+nativa el ray-march ya queda nítido); el resto rinde a 2× y baja a la final.
+
 Todo el render de cine es **headless** (no necesita display): se rinde cada
 cuadro a una textura, se baja por supersampling a PNG, y `ffmpeg` los junta.
 
