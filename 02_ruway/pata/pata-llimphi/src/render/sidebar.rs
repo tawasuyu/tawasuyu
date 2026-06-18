@@ -189,13 +189,43 @@ fn rail_strip(
 /// El contenido del panel (cabezal con toggle de modo + navegador con scroll),
 /// dimensionado para llenar su contenedor de alto `panel_h` px. Trae su propio
 /// fondo y padding. `ti` es el diente desplegado.
-fn panel_inner(surface: &Surface, ti: usize, panel_h: f32, nav: &NavState, theme: &Theme) -> View<Msg> {
-    // --- Cabezal: título del diente + toggle Árbol/Grafo ---
+fn panel_inner(
+    surface: &Surface,
+    ti: usize,
+    panel_h: f32,
+    nav: &NavState,
+    shuma: &ShumaState,
+    theme: &Theme,
+) -> View<Msg> {
     let titulo = surface
         .tabs
         .get(ti)
         .map(|t| t.label.clone())
         .unwrap_or_default();
+    // Despacho por el `kind` del CONTENIDO del diente. shuma se conecta como
+    // diente: su contenido es el shell completo (drawer_body_view).
+    let kind = surface.tabs.get(ti).map(|t| t.content.kind.as_str()).unwrap_or("");
+    if kind == "shuma" {
+        let header = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(titulo, 13.0, theme.fg_text);
+        return View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: length(panel_h) },
+            padding: TaffyRect {
+                left: length(PAD),
+                right: length(PAD),
+                top: length(PAD),
+                bottom: length(PAD),
+            },
+            ..Default::default()
+        })
+        .children(vec![header, crate::shuma::drawer_body_view(shuma, theme)]);
+    }
+    // --- Resto: panel del navegador (Árbol/Grafo) ---
     let titulo_view = View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -343,6 +373,7 @@ pub fn nav_panel_view(
     rail_rect: Rect,
     screen: (i32, i32),
     nav: &NavState,
+    shuma: &ShumaState,
     theme: &Theme,
 ) -> View<Msg> {
     let pw = surface.panel_width;
@@ -368,7 +399,7 @@ pub fn nav_panel_view(
         },
         ..Default::default()
     })
-    .children(vec![panel_inner(surface, ti, h, nav, theme)])
+    .children(vec![panel_inner(surface, ti, h, nav, shuma, theme)])
 }
 
 // =====================================================================
@@ -409,7 +440,7 @@ pub fn sidebar_surface_view(
             flex_shrink: 0.0,
             ..Default::default()
         })
-        .children(vec![panel_inner(surface, ti, h, nav, theme)]);
+        .children(vec![panel_inner(surface, ti, h, nav, shuma, theme)]);
         // El rail va pegado a su borde: a la izquierda del panel si el sidebar
         // está anclado a la izquierda; a la derecha si está a la derecha.
         match surface.anchor {
