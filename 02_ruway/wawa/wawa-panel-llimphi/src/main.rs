@@ -359,6 +359,11 @@ enum Msg {
     MenuActivate,
     MenuTick,
     CloseMenus,
+    /// Compositor de widgets de barra: agregar `kind` al slot `slot` (0=inicio,
+    /// 1=centro, 2=fin) de la superficie `surf`.
+    BarWidgetAdd(usize, u8, String),
+    /// Quitar el widget `idx` del slot `slot` de la superficie `surf`.
+    BarWidgetRemove(usize, u8, usize),
 }
 
 // =====================================================================
@@ -452,6 +457,32 @@ impl App for Panel {
             }
             Msg::Allichay(AllichayMsg::Change(path, value)) => route_change(&mut m, &path, value),
             Msg::Allichay(AllichayMsg::ScrollTo(offset)) => m.allichay.set_scroll(offset),
+            Msg::BarWidgetAdd(surf, slot, kind) => {
+                if let Some(s) = m.pata.surfaces.get_mut(surf) {
+                    let dst = match slot {
+                        0 => &mut s.start,
+                        1 => &mut s.center,
+                        _ => &mut s.end,
+                    };
+                    dst.push(pata_core::WidgetSpec::new(kind));
+                    m.dirty.pata = true;
+                    sync_active_profile(&mut m);
+                }
+            }
+            Msg::BarWidgetRemove(surf, slot, idx) => {
+                if let Some(s) = m.pata.surfaces.get_mut(surf) {
+                    let dst = match slot {
+                        0 => &mut s.start,
+                        1 => &mut s.center,
+                        _ => &mut s.end,
+                    };
+                    if idx < dst.len() {
+                        dst.remove(idx);
+                        m.dirty.pata = true;
+                        sync_active_profile(&mut m);
+                    }
+                }
+            }
             Msg::Picker(pm) => {
                 // Tomamos el estado por valor para no chocar el borrow con
                 // picker_paths/sync_active_profile.
@@ -3337,6 +3368,131 @@ fn barras_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
     .children(filas)
 }
 
+/// Compositor de la **fila de widgets** de una barra/dock: tres slots
+/// (Inicio/Centro/Fin), cada uno con sus widgets (chip [icono nombre ✕]) y una
+/// **paleta** del catálogo (filtrado por el tipo de superficie) para agregar.
+/// `surf` es el índice de la superficie en `m.pata.surfaces`.
+fn bar_widgets_view(surf: usize, s: &pata_core::Surface, theme: &Theme) -> View<Msg> {
+    let palette = pata_core::widgets_for_surface(s.kind);
+    let label_de = |kind: &str| -> (String, String) {
+        palette
+            .iter()
+            .find(|w| w.kind == kind)
+            .map(|w| (w.icon.to_string(), w.label.to_string()))
+            .unwrap_or_else(|| ("▫".to_string(), kind.to_string()))
+    };
+
+    let slot_view = |slot_idx: u8, titulo: &str, widgets: &[pata_core::WidgetSpec]| -> View<Msg> {
+        // Chips de los widgets actuales del slot.
+        let mut chips: Vec<View<Msg>> = widgets
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let (icon, label) = label_de(&w.kind);
+                let x = View::new(Style {
+                    size: Size { width: length(18.0_f32), height: length(22.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Center),
+                    ..Default::default()
+                })
+                .hover_fill(theme.bg_button_hover)
+                .radius(4.0)
+                .tooltip("Quitar".to_string())
+                .on_click(Msg::BarWidgetRemove(surf, slot_idx, i))
+                .text_aligned("✕".to_string(), 12.0, theme.accent, Alignment::Center);
+                View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    align_items: Some(AlignItems::Center),
+                    gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+                    padding: Rect { left: length(8.0_f32), right: length(4.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                    ..Default::default()
+                })
+                .fill(theme.bg_panel_alt)
+                .radius(5.0)
+                .tooltip(label.clone())
+                .children(vec![
+                    View::new(Style { size: Size { width: auto(), height: length(24.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+                        .text_aligned(format!("{icon} {label}"), 12.0, theme.fg_text, Alignment::Start),
+                    x,
+                ])
+            })
+            .collect();
+        if chips.is_empty() {
+            chips.push(
+                View::new(Style { size: Size { width: auto(), height: length(24.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+                    .text_aligned("(vacío)".to_string(), 12.0, theme.fg_muted, Alignment::Start),
+            );
+        }
+        let fila_widgets = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            gap: Size { width: length(6.0_f32), height: length(6.0_f32) },
+            ..Default::default()
+        })
+        .children(chips);
+
+        // Paleta: un iconito por widget del catálogo → agrega a este slot.
+        let pal: Vec<View<Msg>> = palette
+            .iter()
+            .map(|w| {
+                let kind = w.kind.to_string();
+                View::new(Style {
+                    size: Size { width: length(28.0_f32), height: length(26.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Center),
+                    ..Default::default()
+                })
+                .radius(5.0)
+                .fill(theme.bg_panel)
+                .hover_fill(theme.bg_button_hover)
+                .border(1.0, theme.border)
+                .tooltip(format!("Agregar {}", w.label))
+                .on_click(Msg::BarWidgetAdd(surf, slot_idx, kind))
+                .text_aligned(w.icon.to_string(), 14.0, theme.fg_muted, Alignment::Center)
+            })
+            .collect();
+        let paleta = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: llimphi_ui::llimphi_layout::taffy::FlexWrap::Wrap,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            gap: Size { width: length(4.0_f32), height: length(4.0_f32) },
+            ..Default::default()
+        })
+        .children(pal);
+
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![
+            View::new(Style { size: Size { width: auto(), height: length(20.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+                .text_aligned(titulo.to_string(), 11.0, theme.fg_muted, Alignment::Start),
+            fila_widgets,
+            View::new(Style { size: Size { width: auto(), height: length(16.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+                .text_aligned("agregar ↓".to_string(), 10.0, theme.fg_muted, Alignment::Start),
+            paleta,
+        ])
+    };
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(14.0_f32) },
+        padding: Rect { left: length(16.0_f32), right: length(16.0_f32), top: length(12.0_f32), bottom: length(8.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style { size: Size { width: auto(), height: length(20.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
+            .text_aligned("Widgets de la barra".to_string(), 13.0, theme.fg_text, Alignment::Start),
+        slot_view(0, "Inicio", &s.start),
+        slot_view(1, "Centro", &s.center),
+        slot_view(2, "Fin", &s.end),
+    ])
+}
+
 /// Vista custom de una **biblioteca de sets** (perfiles/themes/atajos/animaciones):
 /// una fila por item con [○ radio + nombre] [⧉ duplicar] [✕ borrar], y abajo
 /// SÓLO «＋ Crear». `section_id` es el id de la sección-lista (`"atajos::conjuntos"`,
@@ -3514,6 +3670,27 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
                 // Bibliotecas de sets: fila = radio + nombre + iconitos dup/del;
                 // abajo sólo «Crear». Misma estética que barras.
                 lista_set_view(&sec.id, &items, &active, crear, theme)
+            } else if let Some(surf) = sec
+                .id
+                .strip_prefix("pata::surface")
+                .and_then(|n| n.parse::<usize>().ok())
+                .filter(|&i| {
+                    model
+                        .pata
+                        .surfaces
+                        .get(i)
+                        .is_some_and(|s| matches!(s.kind, pata_core::SurfaceKind::Bar | pata_core::SurfaceKind::Dock))
+                })
+            {
+                // Superficie barra/dock: los campos del tipo + el compositor de
+                // su fila de widgets (Inicio/Centro/Fin) debajo.
+                let composer = bar_widgets_view(surf, &model.pata.surfaces[surf], theme);
+                View::new(Style {
+                    flex_direction: FlexDirection::Column,
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![composer, panel])
             } else {
                 panel
             }

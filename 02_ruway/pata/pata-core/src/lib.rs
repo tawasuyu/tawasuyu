@@ -43,7 +43,8 @@ pub mod widget;
 pub mod wire;
 
 pub use config::{
-    Anchor, Config, FloatingCard, General, Prop, SidebarTab, Surface, SurfaceKind, WidgetSpec,
+    widget_catalog, widgets_for_surface, Anchor, Config, FloatingCard, General, Prop, SidebarTab,
+    Surface, SurfaceKind, WidgetCatalogEntry, WidgetSpec,
 };
 pub use layout::{resolve, Frame, Placed, Rect};
 pub use widget::{
