@@ -28,6 +28,8 @@ llimphi-widget-text-input = { workspace = true }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 # Runtime para bloquear la vuelta async del LLM dentro del worker (Handle::spawn).
 tokio = { workspace = true }
+# Muxeo de la escena exportada (secuencia de PNG → .mkv) vía ffmpeg.
+foreign-av = { path = "../../../shared/foreign-av" }
 # Persistencia de los artefactos en texto editable a mano (y salida de la IA).
 ron = { workspace = true }
 # Render headless a PNG para el modo --shot (verificación sin pantalla).

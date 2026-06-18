@@ -39,6 +39,7 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputStat
 
 mod ai;
 mod preview;
+mod render;
 mod shot;
 use preview::WorldPreview;
 
@@ -119,6 +120,9 @@ enum Msg {
     ToggleSceneCam,
     AddShot,
     RemoveShot,
+    /// Exportar la escena a video (headless, en un worker).
+    ExportVideo,
+    ExportDone(Result<String, String>),
     /// Personajes (constitución + colores).
     SelectChar(usize),
     CycleCharAge,
@@ -159,6 +163,8 @@ struct Model {
     playing: bool,
     /// Cámara de escena guionada (planos) vs órbita libre.
     script_cam: bool,
+    /// Exportación de video en curso.
+    exporting: bool,
 }
 
 impl Model {
@@ -407,6 +413,23 @@ impl App for Studio {
                     s.shots.pop();
                     model.status = "último plano quitado".into();
                 }
+            }
+            Msg::ExportVideo => {
+                if !model.exporting {
+                    if let Some(scene) = model.scene().cloned() {
+                        model.exporting = true;
+                        model.status = "exportando video… (puede tardar)".into();
+                        let project = model.project.clone();
+                        handle.spawn(move || Msg::ExportDone(render::export_scene(&project, &scene)));
+                    }
+                }
+            }
+            Msg::ExportDone(res) => {
+                model.exporting = false;
+                model.status = match res {
+                    Ok(p) => format!("video listo: {p}"),
+                    Err(e) => format!("export falló: {e}"),
+                };
             }
             Msg::SelectChar(i) => {
                 if i < model.project.characters.len() {
@@ -913,6 +936,13 @@ fn scene_right(model: &Model) -> View<Msg> {
             spacer(4.0),
             button_view("− quitar plano", &btn, Msg::RemoveShot),
             spacer(8.0),
+            section_title("EXPORTAR", theme),
+            button_view(
+                if model.exporting { "exportando…" } else { "🎬 exportar video" },
+                &btn,
+                Msg::ExportVideo,
+            ),
+            spacer(8.0),
             section_title("REPARTO", theme),
             body_text(format!("{n_actors} actores"), theme.fg_muted, theme),
             spacer(8.0),
@@ -1036,12 +1066,25 @@ pub(crate) fn demo_model() -> Model {
         time: 0.0,
         playing: false,
         script_cam: true,
+        exporting: false,
     }
 }
 
 fn main() {
     if std::env::args().any(|a| a == "--shot") {
         shot::shot();
+        return;
+    }
+    if std::env::args().any(|a| a == "--export") {
+        // Certificación headless del pipeline de video: exporta la escena demo.
+        let p = Project::starter();
+        match p.scenes.first() {
+            Some(s) => match render::export_scene(&p, s) {
+                Ok(out) => eprintln!("export ok: {out}"),
+                Err(e) => eprintln!("export error: {e}"),
+            },
+            None => eprintln!("export error: el proyecto no tiene escenas"),
+        }
         return;
     }
     llimphi_ui::run::<Studio>();
