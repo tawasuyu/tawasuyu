@@ -174,6 +174,71 @@ impl WidgetSpec {
     }
 }
 
+/// Una entrada del **catálogo de módulos/widgets**: qué widget es, cómo se
+/// llama/icono para el compositor, y en qué superficies puede MONTARSE. Es la
+/// pieza que faltaba para "armar una fila de widgets": el panel de control lista
+/// el catálogo filtrado por el tipo de superficie y deja agregar el elegido.
+///
+/// Un "módulo" como shuma aporta DOS entradas: `shuma_input` (widget chico para
+/// una barra) y `shuma` (contenido rico para un diente de sidebar). Las barras
+/// llevan widgets en línea (chicos); los dientes de sidebar llevan contenidos
+/// con más capacidad (navegador, shell, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WidgetCatalogEntry {
+    /// El `kind` que va al [`WidgetSpec`].
+    pub kind: &'static str,
+    /// Nombre legible para el compositor.
+    pub label: &'static str,
+    /// Glifo/icono para el compositor.
+    pub icon: &'static str,
+    /// Puede ir como widget EN LÍNEA en una barra o dock.
+    pub on_bar: bool,
+    /// Puede ir como CONTENIDO de un diente de sidebar (panel desplegado).
+    pub on_sidebar: bool,
+}
+
+/// El catálogo de widgets/módulos montables. Conjunto abierto: el frontend cae a
+/// un placeholder si no conoce un `kind`, así que esto sólo guía al compositor.
+/// `shuma` aparece dos veces (barra: el input; sidebar: el shell completo) — es
+/// el caso que motivó el catálogo: shuma se conecta a pata COMO widget.
+pub fn widget_catalog() -> &'static [WidgetCatalogEntry] {
+    use WidgetCatalogEntry as W;
+    &[
+        // --- chicos, de barra (estado / control en línea) ---
+        W { kind: "clock", label: "Reloj", icon: "◷", on_bar: true, on_sidebar: false },
+        W { kind: "workspaces", label: "Escritorios", icon: "▦", on_bar: true, on_sidebar: false },
+        W { kind: "window_list", label: "Ventanas (taskbar)", icon: "▭", on_bar: true, on_sidebar: false },
+        W { kind: "control", label: "Control (volumen/brillo)", icon: "🔊", on_bar: true, on_sidebar: false },
+        W { kind: "cava", label: "Visualizador (cava)", icon: "♪", on_bar: true, on_sidebar: false },
+        W { kind: "tray", label: "Bandeja (tray)", icon: "▽", on_bar: true, on_sidebar: false },
+        W { kind: "clipboard", label: "Portapapeles", icon: "❏", on_bar: true, on_sidebar: false },
+        W { kind: "weather", label: "Clima", icon: "☁", on_bar: true, on_sidebar: false },
+        W { kind: "astro", label: "Astro", icon: "✶", on_bar: true, on_sidebar: false },
+        W { kind: "start_button", label: "Botón inicio", icon: "◉", on_bar: true, on_sidebar: false },
+        // --- shuma: módulo que se conecta a pata como widget ---
+        W { kind: "shuma_input", label: "Shuma (barra)", icon: "❯", on_bar: true, on_sidebar: false },
+        W { kind: "shuma", label: "Shuma (shell completo)", icon: "❯", on_bar: false, on_sidebar: true },
+        // --- ricos, de sidebar (paneles con más capacidad) ---
+        W { kind: "navigator", label: "Navegador de archivos", icon: "❖", on_bar: false, on_sidebar: true },
+        // --- fondo de escritorio ---
+        W { kind: "program_manager", label: "Program Manager", icon: "▤", on_bar: false, on_sidebar: false },
+    ]
+}
+
+/// El subconjunto del catálogo montable en una superficie de este `kind`.
+pub fn widgets_for_surface(kind: SurfaceKind) -> Vec<WidgetCatalogEntry> {
+    widget_catalog()
+        .iter()
+        .copied()
+        .filter(|w| match kind {
+            SurfaceKind::Bar | SurfaceKind::Dock => w.on_bar,
+            SurfaceKind::Sidebar => w.on_sidebar,
+            // Panel (cards flotantes) y Background aceptan cualquiera por ahora.
+            SurfaceKind::Panel | SurfaceKind::Background => true,
+        })
+        .collect()
+}
+
 /// Una tarjeta posicionada en píxeles dentro de un panel (estilo conky).
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -794,6 +859,18 @@ fn default_timezone() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalogo_filtra_por_tipo_de_superficie() {
+        let bar: Vec<&str> = widgets_for_surface(SurfaceKind::Bar).iter().map(|w| w.kind).collect();
+        let side: Vec<&str> = widgets_for_surface(SurfaceKind::Sidebar).iter().map(|w| w.kind).collect();
+        // shuma se conecta a pata como widget en ambas (input en barra, shell en diente).
+        assert!(bar.contains(&"shuma_input"));
+        assert!(side.contains(&"shuma"));
+        // El navegador (rico) es de sidebar, no de barra; el reloj al revés.
+        assert!(side.contains(&"navigator") && !bar.contains(&"navigator"));
+        assert!(bar.contains(&"clock") && !side.contains(&"clock"));
+    }
 
     #[test]
     fn vista_preset_resuelve_las_vistas_y_difieren() {
