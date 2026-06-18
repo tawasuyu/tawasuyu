@@ -37,6 +37,8 @@ takiy-core = { path = "../../takiy/takiy-core" }
 takiy-synth = { path = "../../takiy/takiy-synth" }
 # Persistencia de los artefactos en texto editable a mano (y salida de la IA).
 ron = { workspace = true }
+# Deserializar el "brief" de escena que emite el LLM.
+serde = { workspace = true, features = ["derive"] }
 # Render headless a PNG para el modo --shot (verificación sin pantalla).
 pollster = { workspace = true }
 png = { workspace = true }

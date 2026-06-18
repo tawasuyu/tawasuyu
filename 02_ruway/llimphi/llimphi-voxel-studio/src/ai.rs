@@ -9,6 +9,7 @@
 
 use llimphi_voxel::{Age, CharSpec, Clip, Flora, Material, SceneSpec, WorldRecipe};
 use pluma_llm::pluma_llm_core::ChatRequest;
+use serde::Deserialize;
 
 /// Instrucción del sistema: enseña el formato RON exacto y el significado de cada
 /// parámetro, y exige responder **sólo** con el literal.
@@ -53,35 +54,41 @@ pub fn generate(prompt: &str) -> WorldRecipe {
     via_llm(prompt).unwrap_or_else(|| local_recipe(prompt))
 }
 
-/// Intenta el LLM real. `None` si el backend es Mock (sin credenciales), si la red
-/// falla, o si la salida no parsea a [`WorldRecipe`].
-fn via_llm(prompt: &str) -> Option<WorldRecipe> {
+/// Pregunta al LLM real (de `pluma-llm`, `from_env`) y devuelve el texto de la
+/// respuesta. `None` si el backend es **Mock** (sin credenciales → ni gastamos la
+/// vuelta) o si la red falla. Es el motor compartido de la asistencia para mundos,
+/// escenas y personajes; cada caller parsea la salida a su artefacto.
+fn ask_llm(system: &str, prompt: &str, max_tokens: u32) -> Option<String> {
     let client = pluma_llm::from_env().ok()?;
-    // Sin credenciales `from_env` cae a Mock: su salida no es una receta, así que
-    // ni gastamos la vuelta — directo a la heurística.
     if client.model_id().to_lowercase().contains("mock") {
         return None;
     }
-    let req = ChatRequest::una_vuelta(prompt, 400)
-        .con_sistema(SYSTEM)
+    let req = ChatRequest::una_vuelta(prompt, max_tokens)
+        .con_sistema(system)
         .con_temperatura(0.5);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .ok()?;
-    let resp = rt.block_on(client.complete(&req)).ok()?;
-    parse_recipe(&resp.content)
+    rt.block_on(client.complete(&req)).ok().map(|r| r.content)
+}
+
+/// Recorta un texto al literal RON `( … )` que contenga (tolera ``` y ruido).
+fn ron_slice(text: &str) -> Option<&str> {
+    let start = text.find('(')?;
+    let end = text.rfind(')')?;
+    (end > start).then(|| &text[start..=end])
+}
+
+/// Intenta el LLM real para un mundo. `None` si Mock/red/parseo falla.
+fn via_llm(prompt: &str) -> Option<WorldRecipe> {
+    parse_recipe(&ask_llm(SYSTEM, prompt, 400)?)
 }
 
 /// Parsea una [`WorldRecipe`] de un texto que puede traer ``` fences o ruido
 /// alrededor: recorta al literal RON `( … )` y deserializa.
 pub fn parse_recipe(text: &str) -> Option<WorldRecipe> {
-    let start = text.find('(')?;
-    let end = text.rfind(')')?;
-    if end <= start {
-        return None;
-    }
-    ron::from_str::<WorldRecipe>(&text[start..=end]).ok()
+    ron::from_str::<WorldRecipe>(ron_slice(text)?).ok()
 }
 
 /// Semilla determinista por la descripción (mismo texto → mismo mundo).
@@ -135,10 +142,43 @@ pub fn local_recipe(prompt: &str) -> WorldRecipe {
     r
 }
 
-/// **Escena desde prosa** (heurística local, instantánea/offline): deduce cuántos
-/// actores y qué gesto del texto y arma la escena patrón "entran y saludan" en el
-/// mundo `world`. `dim` es el tamaño del mundo (coords de grilla del guion).
+/// "Brief" mínimo que el LLM emite para una escena: cuántos actores y qué gesto.
+/// El resto (caminata, planos) lo arma [`SceneSpec::walk_and_emote`].
+#[derive(Deserialize)]
+struct SceneBrief {
+    actors: usize,
+    gesture: Clip,
+}
+
+/// System del LLM para escenas: pide sólo el brief (no toda la SceneSpec, que es
+/// frágil de generar). El gesto es un `Clip`.
+const SCENE_SYSTEM: &str = "\
+Dirigís una escena voxel corta. Respondé SÓLO con un literal RON de la forma
+(actors: N, gesture: G), sin markdown ni texto extra. N = cantidad de personajes
+(1..5). G = el gesto final: uno de Idle, Walk, Run, Wave, Point, Cheer.
+Ejemplo: (actors: 3, gesture: Cheer)";
+
+/// **Escena desde prosa**: LLM real (un brief `actors`+`gesture`) → escena patrón;
+/// si no hay LLM o falla, la heurística local. Siempre devuelve algo.
 pub fn generate_scene(prompt: &str, world: usize, dim: [u32; 3]) -> SceneSpec {
+    llm_scene(prompt, world, dim).unwrap_or_else(|| local_scene(prompt, world, dim))
+}
+
+/// Intenta el LLM real: parsea el brief y construye la escena con él.
+fn llm_scene(prompt: &str, world: usize, dim: [u32; 3]) -> Option<SceneSpec> {
+    let brief: SceneBrief = ron::from_str(ron_slice(&ask_llm(SCENE_SYSTEM, prompt, 80)?)?).ok()?;
+    Some(SceneSpec::walk_and_emote(
+        scene_name(prompt),
+        world,
+        brief.actors.clamp(1, 5),
+        brief.gesture,
+        dim,
+    ))
+}
+
+/// Escena por heurística local: deduce cuántos actores y qué gesto del texto y arma
+/// la escena patrón "entran y saludan" en el mundo `world`.
+fn local_scene(prompt: &str, world: usize, dim: [u32; 3]) -> SceneSpec {
     let p = prompt.to_lowercase();
     let n = parse_count(&p);
     let gesture = if p.contains("salud") {
@@ -167,9 +207,27 @@ fn parse_count(p: &str) -> usize {
     3
 }
 
-/// **Personaje desde prosa** (heurística local): deduce la edad y el color de la
-/// remera de las palabras del texto; piel/pantalón quedan por defecto.
+/// System del LLM para personajes: enseña el RON exacto de `CharSpec`.
+const CHAR_SYSTEM: &str = "\
+Generás un personaje voxel. Respondé SÓLO con un literal RON de CharSpec, sin
+markdown ni texto extra. Campos: name (texto), age (Baby|Child|Teen|Adult|Elder),
+skin/shirt/pants (cada uno [r, g, b] en 0..1).
+Ejemplo: (name: \"rojo\", age: Adult, skin: [0.9, 0.72, 0.58], shirt: [0.82, 0.28, 0.26], pants: [0.2, 0.2, 0.28])";
+
+/// **Personaje desde prosa**: LLM real (`CharSpec` en RON) y, si no hay o falla,
+/// la heurística local. Siempre devuelve algo.
 pub fn generate_character(prompt: &str) -> CharSpec {
+    llm_character(prompt).unwrap_or_else(|| local_character(prompt))
+}
+
+/// Intenta el LLM real para un personaje.
+fn llm_character(prompt: &str) -> Option<CharSpec> {
+    ron::from_str::<CharSpec>(ron_slice(&ask_llm(CHAR_SYSTEM, prompt, 200)?)?).ok()
+}
+
+/// Personaje por heurística local: deduce la edad y el color de la remera de las
+/// palabras del texto; piel/pantalón quedan por defecto.
+fn local_character(prompt: &str) -> CharSpec {
     let p = prompt.to_lowercase();
     let age = if p.contains("bebé") || p.contains("bebe") || p.contains("recién") || p.contains("recien") {
         Age::Baby
@@ -260,14 +318,15 @@ peak_at: 0.8, flora: None, flora_density: 0.0)\n```\nlisto.";
 
     #[test]
     fn personaje_lee_edad_y_color() {
-        let c = generate_character("un niño de remera roja");
+        // La heurística local directamente (sin tocar red aunque haya API key).
+        let c = local_character("un niño de remera roja");
         assert_eq!(c.age, Age::Child);
         assert_eq!(c.shirt, [0.82, 0.28, 0.26]);
     }
 
     #[test]
     fn escena_lee_cantidad_y_gesto() {
-        let s = generate_scene("dos personajes que festejan", 1, [128, 56, 128]);
+        let s = local_scene("dos personajes que festejan", 1, [128, 56, 128]);
         assert_eq!(s.actors.len(), 2);
         assert_eq!(s.world, 1);
         // El gesto festejar entra como Cheer en la key del giro.
