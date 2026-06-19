@@ -892,6 +892,15 @@ pub enum ProfKind {
 pub struct Model {
     pub theme: Theme,
 
+    /// `true` cuando shuma corre como **barra dockeada** (superficie
+    /// wlr-layer-shell vía `llimphi-layer`), no como ventana. La fija `init`
+    /// según el env `SHUMA_DOCK`. En modo dock la vista es compacta (la
+    /// command-bar). Cuando shuma se hospeda en pata (módulo), queda `false`.
+    pub dock_mode: bool,
+    /// `true` si, en modo ventana, al perder el foco shuma debe replegarse a la
+    /// barra dockeada (env `SHUMA_BAR_ON_BLUR`). Opt-in: por defecto `false`.
+    pub collapse_on_blur: bool,
+
     /// Perfiles de **atajos** del workspace (globales, conmutables con un clic).
     pub shortcuts: crate::perfiles::shortcuts::ShortcutProfiles,
     /// Perfiles de **apariencia** (default global; cada sesión puede fijar el suyo).

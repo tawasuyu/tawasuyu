@@ -27,6 +27,8 @@ shuma-intent = { path = "../sandbox/shuma-intent" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 pata-host = { path = "../../pata/pata-host" }
 llimphi-ui = { workspace = true }
+# Modo dock: correr shuma como barra wlr-layer-shell anclada a un borde.
+llimphi-layer = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-image = { workspace = true }
 # Rail de dientes (el último widget): las tabs del shell (shell/lienzo/matilda) y

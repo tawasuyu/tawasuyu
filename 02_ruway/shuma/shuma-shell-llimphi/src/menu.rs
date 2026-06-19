@@ -81,7 +81,15 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
     let t = rimay_localize::t;
 
     // Archivo: lo único universal y honesto es salir del proceso.
+    // «Endockar» (ventana → barra) o «Modo ventana» (barra → ventana) según el
+    // modo actual. Re-lanza el binario en el modo opuesto (ver `respawn_mode`).
+    let dock_label = if model.dock_mode {
+        "Modo ventana"
+    } else {
+        "Endockar"
+    };
     let archivo = Menu::new(t("file"))
+        .item(MenuItem::new(dock_label, "window.toggle-dock").separated())
         .item(MenuItem::new(t("exit"), "app.quit").shortcut("Ctrl+Q"));
 
     // Editar: opera sobre la línea de comando del shell focado. Sin
@@ -410,6 +418,12 @@ pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
 
     match cmd {
         "app.quit" => {
+            std::process::exit(0);
+        }
+        "window.toggle-dock" => {
+            // Re-lanza en el modo opuesto y cierra esta instancia. La sesión no
+            // se migra viva (arranca limpia) — ver `respawn_mode`.
+            crate::respawn_mode(!model.dock_mode);
             std::process::exit(0);
         }
         "edit.paste" => route_to_shell(model, shell_paste_key()),

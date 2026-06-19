@@ -113,7 +113,12 @@ fn tool_icon_name(t: Tool) -> &'static str {
 /// lógica vive en este crate-lib para que también la pueda hospedar pata.
 pub fn run() {
     rimay_localize::init();
-    // Cablear el askpass para sudo + ssh.
+    wire_askpass();
+    llimphi_ui::run::<Shell>();
+}
+
+/// Cablea el askpass para sudo + ssh (compartido por ventana y dock).
+fn wire_askpass() {
     if let Some(path) = resolve_askpass_path() {
         if std::env::var_os("SUDO_ASKPASS").is_none() {
             std::env::set_var("SUDO_ASKPASS", &path);
@@ -125,7 +130,47 @@ pub fn run() {
             std::env::set_var("SSH_ASKPASS_REQUIRE", "force");
         }
     }
-    llimphi_ui::run::<Shell>();
+}
+
+/// Arranca shuma **dockeada**: una barra wlr-layer-shell anclada a un borde, en
+/// vez de una ventana. Mismo `Shell` App (la lógica no cambia); el modo lo lee
+/// `init` del env `SHUMA_DOCK` y `view` pinta compacto. Borde por `SHUMA_DOCK_EDGE`
+/// (top/bottom/left/right, default bottom). Cae con aviso si el compositor no
+/// expone wlr-layer-shell.
+pub fn run_dock() {
+    rimay_localize::init();
+    wire_askpass();
+    std::env::set_var("SHUMA_DOCK", "1");
+    let edge = match std::env::var("SHUMA_DOCK_EDGE").as_deref() {
+        Ok("top") => llimphi_layer::Edge::Top,
+        Ok("left") => llimphi_layer::Edge::Left,
+        Ok("right") => llimphi_layer::Edge::Right,
+        _ => llimphi_layer::Edge::Bottom,
+    };
+    if let Err(e) = llimphi_layer::run::<Shell>(llimphi_layer::LayerConfig {
+        edge,
+        thickness: 40,
+        layer: llimphi_layer::LayerKind::Top,
+        exclusive: true,
+        keyboard: llimphi_layer::Keyboard::OnDemand,
+        namespace: "shuma".to_string(),
+    }) {
+        eprintln!("shuma · modo dock no disponible: {e}");
+    }
+}
+
+/// Re-lanza el mismo binario en el modo opuesto (ventana ↔ barra dockeada),
+/// heredando el cwd. Usado por el botón «Endockar / Modo ventana» del menú y por
+/// el repliegue al perder foco. No migra la sesión viva (historial/PTY): la
+/// nueva instancia arranca limpia — migrarla exigiría IPC entre procesos.
+pub(crate) fn respawn_mode(to_dock: bool) {
+    if let Ok(exe) = std::env::current_exe() {
+        let mut c = std::process::Command::new(exe);
+        if to_dock {
+            c.arg("--dock");
+        }
+        let _ = c.spawn();
+    }
 }
 
 /// Construye el `Model` de shuma **sin efectos del host** (sin ticks, watcher de
@@ -200,6 +245,8 @@ pub fn new_model() -> Model {
 
     let mut model = Model {
         theme,
+        dock_mode: false,
+        collapse_on_blur: false,
         shortcuts,
         appearance,
         session_profiles,
@@ -410,12 +457,23 @@ impl App for Shell {
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         let mut model = new_model();
+        model.dock_mode = std::env::var_os("SHUMA_DOCK").is_some();
+        model.collapse_on_blur = std::env::var_os("SHUMA_BAR_ON_BLUR").is_some();
         spawn_host_effects(&mut model, handle);
         model
     }
 
     fn on_resize(_model: &Self::Model, width: u32, height: u32) -> Option<Self::Msg> {
         Some(Msg::Resized(width as f32, height as f32))
+    }
+
+    fn on_window_focus(model: &Self::Model, focused: bool) -> Option<Self::Msg> {
+        // En modo ventana, al perder el foco y si está configurado, repliega a la
+        // barra dockeada (re-lanza en modo dock y cierra esta ventana). Opt-in.
+        if !focused && !model.dock_mode && model.collapse_on_blur {
+            return Some(Msg::MenuCommand("window.toggle-dock".to_string()));
+        }
+        None
     }
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
@@ -1828,6 +1886,12 @@ impl App for Shell {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let theme = &model.theme;
 
+        // Modo dock: vista compacta para la barra layer-shell — la command-bar a
+        // todo lo ancho + un botón para volver a ventana. Sin tabs/monitores.
+        if model.dock_mode {
+            return dock_bar_view(model, theme);
+        }
+
         let menubar = menu::menubar_row(model, theme);
         let topbar = render_topbar(model, theme);
         let main_area = render_main_area(model, theme);
@@ -1897,6 +1961,52 @@ impl App for Shell {
         }
         view::dropdown_overlay(model).or_else(|| menu::overlay(model))
     }
+}
+
+/// Vista compacta para el **modo dock** (barra layer-shell): la command-bar a
+/// todo lo ancho + un botón «ventana» que vuelve al modo ventana. La barra es
+/// fina (la fija `llimphi-layer`), así que no caben tabs/monitores.
+fn dock_bar_view(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::prelude::{auto, AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+
+    let bar = View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        size: Size {
+            width: auto(),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![render_bottombar(model, theme)]);
+
+    let btn = View::new(Style {
+        flex_shrink: 0.0,
+        size: Size {
+            width: length(74.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .on_click(Msg::MenuCommand("window.toggle-dock".to_string()))
+    .text_aligned("ventana".to_string(), 12.0, theme.fg_muted, Alignment::Center);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![bar, btn])
 }
 
 // ─── Superficie hosteable (para pata) ────────────────────────────────
