@@ -116,6 +116,24 @@ pub struct EditorState {
     /// Cuántos clicks consecutivos cercanos lleva la racha actual (1 = simple,
     /// 2 = palabra, 3 = párrafo). Cicla 1→2→3→1. Ver [`Self::register_click`].
     click_count: u32,
+    /// Drag de selección en curso (origen del press + delta acumulado), para
+    /// que [`Self::pointer_drag`] ancle bien y no acumule deriva. `None` = sin
+    /// drag activo.
+    drag: Option<DragSel>,
+    /// Fase visible del caret para el parpadeo: `true` = dibujado, `false` =
+    /// apagado. El caller lo alterna con [`Self::blink_toggle`] desde un timer
+    /// (~530 ms). Default `true`; cualquier edición/movimiento lo fuerza a
+    /// `true` ([`Self::caret_show`]) para que el caret no desaparezca mientras
+    /// se escribe. Sin timer, queda siempre visible (comportamiento previo).
+    pub caret_on: bool,
+}
+
+/// Estado de un drag de selección con mouse: punto del press (constante
+/// durante el drag) + delta acumulado desde el press. Ver [`EditorState::pointer_drag`].
+#[derive(Debug, Clone, Copy)]
+struct DragSel {
+    origin: (f32, f32),
+    accum: (f32, f32),
 }
 
 /// Ventana máxima entre dos clicks para que cuenten como doble/triple.
@@ -169,6 +187,8 @@ impl EditorState {
             highlight_cache: RefCell::new(None),
             last_click: None,
             click_count: 0,
+            drag: None,
+            caret_on: true,
         }
     }
 
@@ -365,11 +385,56 @@ impl EditorState {
             }
         };
         self.last_click = Some((now, pos));
+        self.drag = None; // un click nuevo cierra cualquier drag previo
+        self.caret_show();
         match n {
             2 => self.select_word_at(line, col),
             3 => self.select_paragraph_at(line, col),
             _ => self.set_caret_at(line, col),
         }
+    }
+
+    /// Procesa un paso de **drag de selección** con el mouse. `press` es la
+    /// posición del botón apretado (constante durante el drag, en coords
+    /// locales del área de texto); `(dx, dy)` el delta desde el evento
+    /// anterior. El widget ancla la selección en el punto de press la primera
+    /// vez y la extiende hasta la posición actual (= press + delta acumulado).
+    /// Detecta un drag nuevo porque `press` cambia, y reinicia el acumulador
+    /// sin acumular deriva — así no hace falta que el caller lleve estado.
+    pub fn pointer_drag(&mut self, metrics: crate::EditorMetrics, press: (f32, f32), dx: f32, dy: f32) {
+        let nuevo = self.drag.map_or(true, |d| d.origin != press);
+        if nuevo {
+            // Ancla en el punto de press.
+            let (l0, c0) = metrics.screen_to_pos(press.0, press.1, self.scroll_offset);
+            self.set_caret_at(l0, c0);
+            self.drag = Some(DragSel { origin: press, accum: (0.0, 0.0) });
+        }
+        let d = self.drag.as_mut().expect("drag recién seteado");
+        d.accum.0 += dx;
+        d.accum.1 += dy;
+        let (cx, cy) = (press.0 + d.accum.0, press.1 + d.accum.1);
+        let (l, c) = metrics.screen_to_pos(cx, cy, self.scroll_offset);
+        self.extend_selection_to(l, c);
+        self.caret_show();
+    }
+
+    /// Termina el drag de selección en curso (al soltar el botón). La
+    /// selección resultante queda como está.
+    pub fn end_drag(&mut self) {
+        self.drag = None;
+    }
+
+    /// Alterna la fase del parpadeo del caret. Lo llama el caller desde un
+    /// timer periódico (~530 ms). No-op semántico si no hay timer.
+    pub fn blink_toggle(&mut self) {
+        self.caret_on = !self.caret_on;
+    }
+
+    /// Fuerza el caret a visible y reinicia la fase de parpadeo. Se llama en
+    /// cada edición/movimiento para que el caret no titile-apague justo
+    /// mientras el usuario escribe o navega.
+    pub fn caret_show(&mut self) {
+        self.caret_on = true;
     }
 
     /// `true` si la línea `line` figura en `guard_lines`.
@@ -538,6 +603,10 @@ impl EditorState {
         let r = self.apply_key_inner(event, clipboard);
         if r.changed() {
             self.bump_edit_seq();
+        }
+        if r.touched() {
+            // Tecleo/movimiento → caret visible (no titilar-apagar al escribir).
+            self.caret_show();
         }
         if r.touched() && !self.guard_lines.is_empty() && !self.cursor.has_selection() {
             // Si hay selección viva (shift+arrow / drag) no snappeamos:
@@ -1196,6 +1265,24 @@ mod tests {
         s.set_text("uno");
         s.apply_key(&evtext("/", false, true));
         assert_eq!(s.text(), "// uno");
+    }
+
+    #[test]
+    fn pointer_drag_ancla_en_press_y_extiende() {
+        let mut s = EditorState::new();
+        s.set_text("hola mundo cruel");
+        let m = crate::EditorMetrics::for_font_size(13.0);
+        let cw = m.char_width;
+        // Press en (col 0, línea 0); el ancla queda ahí.
+        let press = (crate::view::PAD_X, crate::view::PAD_Y + 1.0);
+        s.pointer_drag(m, press, cw * 5.0, 0.0); // arrastrar 5 chars a la derecha
+        assert!(s.cursor.has_selection());
+        let (a, b) = s.cursor.selection_range(&s.buffer);
+        assert_eq!((a, b), (0, 5)); // "hola " seleccionado desde el press
+        // Más arrastre extiende sin reiniciar (mismo press).
+        s.pointer_drag(m, press, cw * 5.0, 0.0);
+        let (a, b) = s.cursor.selection_range(&s.buffer);
+        assert_eq!((a, b), (0, 10));
     }
 
     #[test]

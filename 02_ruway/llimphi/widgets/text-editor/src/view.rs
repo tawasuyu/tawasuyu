@@ -177,10 +177,33 @@ impl EditorMetrics {
     /// generalmente las pasa a `EditorState::set_caret_at` que clampea
     /// `col` al ancho real de la línea.
     pub fn screen_to_pos(self, local_x: f32, local_y: f32, scroll_offset: usize) -> (usize, usize) {
-        let line_local = (local_y / self.line_height).max(0.0) as usize;
-        let col = ((local_x - 4.0).max(0.0) / self.char_width).round() as usize;
+        let line_local = ((local_y - PAD_Y).max(0.0) / self.line_height) as usize;
+        let col = ((local_x - PAD_X).max(0.0) / self.char_width).round() as usize;
         (scroll_offset + line_local, col)
     }
+}
+
+/// Sangría izquierda del área de texto (px): aire entre el gutter y el
+/// primer carácter. El caret, la selección, el preedit y `screen_to_pos`
+/// usan la misma constante para no desalinearse.
+pub(crate) const PAD_X: f32 = 10.0;
+/// Aire vertical arriba de la primera línea (px). El gutter lo respeta para
+/// que los números queden a la par del texto.
+pub(crate) const PAD_Y: f32 = 7.0;
+/// Margen izquierdo del número de línea (px) — separa del borde del panel.
+const GUTTER_PAD_L: f32 = 6.0;
+/// Respiro entre el número de línea y el texto (px).
+const GUTTER_PAD_R: f32 = 8.0;
+
+/// X (px, dentro del área de contenido) del carácter en la columna `col`.
+#[inline]
+fn text_x(col: usize, m: EditorMetrics) -> f32 {
+    PAD_X + col as f32 * m.char_width
+}
+/// Y (px) del tope de la línea `local_line` (relativa al viewport).
+#[inline]
+fn text_y(local_line: usize, m: EditorMetrics) -> f32 {
+    PAD_Y + local_line as f32 * m.line_height
 }
 
 /// Render principal sin syntax highlight — todas las líneas visibles
@@ -292,9 +315,16 @@ pub fn text_editor_view_full<Msg: Clone + 'static>(
         on_pointer,
     );
 
+    // Llena el alto disponible (para verse como UN campo continuo: se puede
+    // clickear/tipear debajo de la última línea), pero nunca colapsa por debajo
+    // del alto del contenido — `min_size` es el piso si el contenedor es
+    // chico/indefinido. El caret y los clicks debajo del texto aterrizan en la
+    // última línea (los clampea `set_caret_at`).
     View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(height) },
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        min_size: Size { width: auto(), height: length(height) },
         ..Default::default()
     })
     .fill(palette.bg)
@@ -374,21 +404,26 @@ fn build_gutter<Msg: Clone + 'static>(
         } else {
             palette.fg_line_number
         };
-        let y = (n - scroll) as f32 * metrics.line_height;
+        let y = text_y(n - scroll, metrics);
         match metrics.gutter_style {
             GutterStyle::Numbers => {
                 let label = (n + 1).to_string();
+                // Número alineado a la derecha con un respiro de `GUTTER_PAD_R`
+                // hasta el texto (antes 4 px → se pegaba y el clip lo cortaba) y
+                // un margen izquierdo para que no toque el borde de la pantalla.
                 children.push(
                     View::new(Style {
                         position: Position::Absolute,
                         inset: Rect {
-                            left: length(0.0_f32),
+                            left: length(GUTTER_PAD_L),
                             top: length(y),
-                            right: length(4.0_f32),
+                            right: length(GUTTER_PAD_R),
                             bottom: auto(),
                         },
                         size: Size {
-                            width: length(metrics.gutter_width - 4.0),
+                            width: length(
+                                (metrics.gutter_width - GUTTER_PAD_L - GUTTER_PAD_R).max(1.0),
+                            ),
                             height: length(metrics.line_height),
                         },
                         align_items: Some(AlignItems::Center),
@@ -543,11 +578,12 @@ fn build_content<Msg: Clone + 'static>(
     // 4) Caret — uno por cursor, sólo si visible. El caret del cursor
     //    primario se corre detrás del preedit del IME en composición (el
     //    texto compuesto se pinta desde `p.col`), para que quede al final
-    //    de lo que el usuario está tecleando.
+    //    de lo que el usuario está tecleando. En la fase "apagada" del
+    //    parpadeo (`caret_on == false`) no se dibuja ningún caret.
     let preedit_cols = state.preedit.as_ref().map_or(0, |p| p.text.chars().count());
     for c in state.all_cursors() {
         let p = c.caret;
-        if p.line >= scroll && p.line < end_line {
+        if state.caret_on && p.line >= scroll && p.line < end_line {
             let is_primary = std::ptr::eq(c, &state.cursor);
             let col = if is_primary { p.col + preedit_cols } else { p.col };
             let local = crate::cursor::Pos::new(p.line - scroll, col);
@@ -571,11 +607,16 @@ fn build_content<Msg: Clone + 'static>(
     let drag_cb = on_pointer;
     View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: percent(1.0_f32), height: length(height) },
+        // Llena el alto del editor (campo continuo), con piso en el alto del
+        // contenido para el modo embebido que scrollea (`_colored`).
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        min_size: Size { width: auto(), height: length(height) },
         ..Default::default()
     })
     .fill(palette.bg)
     .clip(true)
+    // Cursor de texto (I-beam) sobre el área editable; fuera vuelve al normal.
+    .cursor(llimphi_ui::Cursor::Text)
     .on_click_at(move |x, y, _w, _h| click_cb(PointerEvent::Click { x, y }))
     .draggable_at(move |phase, dx, dy, lx, ly| match phase {
         llimphi_ui::DragPhase::Move => drag_cb(PointerEvent::Drag {
@@ -601,7 +642,7 @@ fn line_tint<Msg: Clone + 'static>(
         position: Position::Absolute,
         inset: Rect {
             left: length(0.0_f32),
-            top: length(line as f32 * metrics.line_height),
+            top: length(text_y(line, metrics)),
             right: length(0.0_f32),
             bottom: auto(),
         },
@@ -623,7 +664,7 @@ fn line_highlight<Msg: Clone + 'static>(
         position: Position::Absolute,
         inset: Rect {
             left: length(0.0_f32),
-            top: length(line as f32 * metrics.line_height),
+            top: length(text_y(line, metrics)),
             right: length(0.0_f32),
             bottom: auto(),
         },
@@ -646,7 +687,7 @@ fn phantom_guard_divider<Msg: Clone + 'static>(
     palette: &EditorPalette,
 ) -> View<Msg> {
     let h = 1.0_f32;
-    let y = line as f32 * metrics.line_height + (metrics.line_height - h) * 0.5;
+    let y = text_y(line, metrics) + (metrics.line_height - h) * 0.5;
     // Largo visual del divisor — generoso pero no infinito.
     let w = 320.0_f32;
     View::new(Style {
@@ -675,8 +716,8 @@ fn line_text_plain<Msg: Clone + 'static>(
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            left: length(4.0_f32),
-            top: length(line as f32 * metrics.line_height),
+            left: length(PAD_X),
+            top: length(text_y(line, metrics)),
             right: auto(),
             bottom: auto(),
         },
@@ -731,8 +772,8 @@ fn line_text_tokens<Msg: Clone + 'static>(
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            left: length(4.0_f32),
-            top: length(line as f32 * metrics.line_height),
+            left: length(PAD_X),
+            top: length(text_y(line, metrics)),
             right: auto(),
             bottom: auto(),
         },
@@ -762,8 +803,8 @@ fn line_text_color_runs<Msg: Clone + 'static>(
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            left: length(4.0_f32),
-            top: length(line as f32 * metrics.line_height),
+            left: length(PAD_X),
+            top: length(text_y(line, metrics)),
             right: auto(),
             bottom: auto(),
         },
@@ -785,8 +826,8 @@ fn caret_rect<Msg: Clone + 'static>(
     metrics: EditorMetrics,
     palette: &EditorPalette,
 ) -> View<Msg> {
-    let x = 4.0 + caret.col as f32 * metrics.char_width;
-    let y = caret.line as f32 * metrics.line_height;
+    let x = text_x(caret.col, metrics);
+    let y = text_y(caret.line, metrics);
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -812,8 +853,8 @@ fn preedit_views<Msg: Clone + 'static>(
     metrics: EditorMetrics,
     palette: &EditorPalette,
 ) -> Vec<View<Msg>> {
-    let x = 4.0 + col as f32 * metrics.char_width;
-    let y = local_line as f32 * metrics.line_height;
+    let x = text_x(col, metrics);
+    let y = text_y(local_line, metrics);
     let w = (text.chars().count() as f32 * metrics.char_width).max(metrics.char_width);
     vec![
         // Texto provisional, en el color de texto normal.
@@ -852,8 +893,8 @@ fn bracket_highlight<Msg: Clone + 'static>(
     metrics: EditorMetrics,
     palette: &EditorPalette,
 ) -> View<Msg> {
-    let x = 4.0 + pos.col as f32 * metrics.char_width;
-    let y = pos.line as f32 * metrics.line_height;
+    let x = text_x(pos.col, metrics);
+    let y = text_y(pos.line, metrics);
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -898,10 +939,10 @@ fn diagnostic_underline<Msg: Clone + 'static>(
         if col_end <= col_start {
             continue;
         }
-        let x = 4.0 + col_start as f32 * metrics.char_width;
+        let x = text_x(col_start, metrics);
         let w = (col_end - col_start) as f32 * metrics.char_width;
         // Subrayado de 1.5 px al final de la línea.
-        let y = (line - scroll) as f32 * metrics.line_height + metrics.line_height - 2.0;
+        let y = text_y(line - scroll, metrics) + metrics.line_height - 2.0;
         out.push(
             View::new(Style {
                 position: Position::Absolute,
@@ -947,9 +988,9 @@ fn match_rects<Msg: Clone + 'static>(
         if col_end <= col_start {
             continue;
         }
-        let x = 4.0 + col_start as f32 * metrics.char_width;
+        let x = text_x(col_start, metrics);
         let w = (col_end - col_start) as f32 * metrics.char_width;
-        let local_y = (line - scroll) as f32 * metrics.line_height;
+        let local_y = text_y(line - scroll, metrics);
         out.push(
             View::new(Style {
                 position: Position::Absolute,
@@ -993,13 +1034,13 @@ fn selection_rects_for_cursor<Msg: Clone + 'static>(
         let line_len = state.buffer.line_len_chars(line);
         let col_start = if line == start_line { start_col } else { 0 };
         let col_end = if line == end_line { end_col } else { line_len };
-        let x = 4.0 + col_start as f32 * metrics.char_width;
+        let x = text_x(col_start, metrics);
         let extra = if line < end_line { 1.0 } else { 0.0 };
         let w = ((col_end - col_start) as f32 + extra) * metrics.char_width;
         if w <= 0.0 {
             continue;
         }
-        let local_y = (line - scroll) as f32 * metrics.line_height;
+        let local_y = text_y(line - scroll, metrics);
         out.push(
             View::new(Style {
                 position: Position::Absolute,
