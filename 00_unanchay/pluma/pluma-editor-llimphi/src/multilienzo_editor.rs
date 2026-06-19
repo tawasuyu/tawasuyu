@@ -303,6 +303,13 @@ where
         ..Default::default()
     })
     .fill(palette_editor.bg)
+    // Borde sutil: da relieve al área de texto contra el fondo del panel
+    // (antes el editor se fundía con la app, sin separación visible). Un gris
+    // tenue derivado de `fg_muted` a baja opacidad — una línea, no un marco.
+    .border(1.0, {
+        let c = palette_lienzo.fg_muted.to_rgba8();
+        Color::from_rgba8(c.r, c.g, c.b, 90)
+    })
     .children(vec![editor, overlay_separadores]);
 
     // Wrapper con padding accent cuando es el activo — el padding actúa

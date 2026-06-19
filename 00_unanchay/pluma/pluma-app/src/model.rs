@@ -134,6 +134,8 @@ pub enum Msg {
     ScrollVert(f32),
     /// La ventana cambió de tamaño (ancho, alto) — para clampear el scroll.
     Resized(f32, f32),
+    /// Tick del parpadeo del caret (~530 ms) — alterna su fase visible.
+    CaretBlink,
     NuevoDoc,
     Guardar,
     PathInputKey(KeyEvent),

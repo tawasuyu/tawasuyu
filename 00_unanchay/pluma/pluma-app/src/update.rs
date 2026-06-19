@@ -43,7 +43,6 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             let scroll = model.ide.state.scroll_offset;
             match ev {
                 PointerEvent::Click { x, y } => {
-                    model.drag_accum = (0.0, 0.0);
                     let (line, col) = METRICS.screen_to_pos(x, y, scroll);
                     // Click simple = caret; doble = palabra; triple = párrafo.
                     model.ide.state.register_click(line, col);
@@ -54,12 +53,11 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                     dx,
                     dy,
                 } => {
-                    model.drag_accum.0 += dx;
-                    model.drag_accum.1 += dy;
-                    let cx = initial_x + model.drag_accum.0;
-                    let cy = initial_y + model.drag_accum.1;
-                    let (line, col) = METRICS.screen_to_pos(cx, cy, scroll);
-                    model.ide.state.extend_selection_to(line, col);
+                    // El widget ancla en el press y extiende; sin acumular acá.
+                    model
+                        .ide
+                        .state
+                        .pointer_drag(METRICS, (initial_x, initial_y), dx, dy);
                 }
             }
         }
@@ -107,6 +105,10 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::Resized(w, h) => {
             model.viewport = (w, h);
+        }
+        Msg::CaretBlink => {
+            // Sólo titila el caret del lienzo con foco; los read-only no.
+            model.ide.state.blink_toggle();
         }
         Msg::NuevoDoc => {
             crear_doc_nuevo(&mut model);
@@ -416,9 +418,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                         dx,
                         dy,
                     } => {
-                        let (l, c) =
-                            METRICS.screen_to_pos(initial_x + dx, initial_y + dy, scroll);
-                        state.extend_selection_to(l, c);
+                        state.pointer_drag(METRICS, (initial_x, initial_y), dx, dy);
                     }
                 }
             }
