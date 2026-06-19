@@ -89,6 +89,10 @@ pub struct BarData<'a> {
     pub workspace: (u8, u8, u16),
     /// Hora actual `(hora, minuto)` — para el reloj del Front Panel.
     pub clock: (u8, u8),
+    /// `true` si los botones del `window_list` deben ser arrastrables para
+    /// reordenarlos. Sólo lo activa el backend layer-shell (la barra real); el
+    /// path winit (dev) lo deja en `false`.
+    pub reorderable_tasks: bool,
 }
 
 // ============================================================
@@ -290,6 +294,8 @@ pub fn root(model: &Model) -> View<Msg> {
         // El path winit (dev) no muestrea escritorios/reloj para el front panel.
         workspace: (0, 0, 0),
         clock: (0, 0),
+        // El backend winit no maneja el reordenamiento por arrastre.
+        reorderable_tasks: false,
     };
 
     for placed in &model.frame.surfaces {
@@ -547,7 +553,7 @@ fn slots_de(
                 }
                 SlotWidget::Start { label, exec } => task_manager::start_button_view(label, exec.as_deref(), theme),
                 SlotWidget::Shuma => shuma::headline_view(shuma_state, data.shuma_full, theme),
-                SlotWidget::WindowList => task_manager::window_list_view(data.windows, surface.gap, dir, theme),
+                SlotWidget::WindowList => task_manager::window_list_view(data.windows, surface.gap, dir, data.reorderable_tasks, theme),
                 SlotWidget::Clipboard { exec } => {
                     task_manager::clipboard_view(data.clipboard, exec.as_deref(), theme)
                 }

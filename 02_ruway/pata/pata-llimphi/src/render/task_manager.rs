@@ -11,6 +11,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{
     Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
 };
+use llimphi_ui::llimphi_compositor::DragPhase;
 use llimphi_ui::View;
 
 use crate::tray::{TrayIcon, TrayItem};
@@ -47,9 +48,13 @@ pub(super) fn window_list_view(
     windows: &[WindowEntry],
     gap: f32,
     dir: FlexDirection,
+    reorderable: bool,
     theme: &Theme,
 ) -> View<Msg> {
-    let chips: Vec<View<Msg>> = windows.iter().map(|w| window_button(w, theme)).collect();
+    let chips: Vec<View<Msg>> = windows
+        .iter()
+        .map(|w| window_button(w, reorderable, theme))
+        .collect();
 
     View::new(Style {
         flex_direction: dir,
@@ -70,7 +75,11 @@ pub(super) fn window_list_view(
 }
 
 /// Un botón de ventana del task manager: badge (inicial) + título recortado.
-fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
+///
+/// Interacción: clic izquierdo activa (o, si `reorderable`, arrastra para
+/// reordenar y el click "sin movimiento" lo reinterpreta el backend como
+/// activación); clic derecho y clic medio cierran la ventana.
+fn window_button(w: &WindowEntry, reorderable: bool, theme: &Theme) -> View<Msg> {
     let (fg, fill, badge_bg, badge_fg) = if w.active {
         (theme.fg_text, theme.bg_panel, theme.accent, theme.bg_panel)
     } else if w.minimized {
@@ -106,7 +115,7 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
     })
     .text(super::recortar(&w.label, WINDOW_LABEL_MAX), 12.0, fg);
 
-    View::new(Style {
+    let boton = View::new(Style {
         flex_direction: FlexDirection::Row,
         // Ancho FIJO: todos los botones de tarea miden lo mismo (estilo taskbar),
         // no se encogen/crecen según el largo del título.
@@ -133,9 +142,24 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
     .border(1.0, theme.border)
     .hover_fill(theme.bg_button_hover)
     .tooltip(w.label.clone())
-    .on_click(Msg::ActivateWindow(w.id))
+    // Clic derecho y clic medio cierran la ventana (estándar de taskbar).
     .on_right_click(Msg::CloseWindow(w.id))
-    .children(vec![badge, titulo])
+    .on_middle_click(Msg::CloseWindow(w.id))
+    .children(vec![badge, titulo]);
+
+    if reorderable {
+        // Arrastrable para reordenar (backend layer-shell). `draggable` sustituye
+        // al `on_click`: por eso el click izquierdo se resuelve vía `TaskDragEnd`
+        // (el backend distingue click de arrastre real por la distancia movida).
+        let id = w.id;
+        boton.draggable(move |fase, dx, _dy| match fase {
+            DragPhase::Move => Some(Msg::TaskDragMove(id, dx)),
+            DragPhase::End => Some(Msg::TaskDragEnd(id)),
+        })
+    } else {
+        // Backend winit (dev): click izquierdo activa directo, sin arrastre.
+        boton.on_click(Msg::ActivateWindow(w.id))
+    }
 }
 
 /// El **workspace switcher**: una celda por escritorio virtual.

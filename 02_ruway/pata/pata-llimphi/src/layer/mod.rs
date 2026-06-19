@@ -112,6 +112,23 @@ pub(super) struct LayerDrag {
     pub(super) last: (f32, f32),
 }
 
+/// Estado de un arrastre de **reordenamiento** de un botón del task manager.
+/// Mientras dura, `LayerApp::task_order` se reescribe en vivo.
+pub(super) struct TaskDrag {
+    /// `id` de la ventana que se arrastra.
+    pub(super) id: u32,
+    /// Delta horizontal acumulado desde el inicio del arrastre (px), con signo.
+    pub(super) dx_acc: f32,
+    /// Movimiento absoluto total recorrido (px). Sirve para distinguir un click
+    /// (apenas se movió) de un arrastre real.
+    pub(super) movido: f32,
+    /// Orden de `id`s visible al iniciar el arrastre (la base sobre la que se
+    /// recalcula la posición destino en cada `Move`, sin acumular deriva).
+    pub(super) orden_base: Vec<u32>,
+    /// Índice de `id` dentro de `orden_base`.
+    pub(super) idx_base: usize,
+}
+
 /// El estado de una tarjeta flotante montada como su propia layer surface.
 pub(super) struct CardState {
     pub(super) spec: FloatingCard,
@@ -177,6 +194,12 @@ pub(super) struct LayerApp {
     pub(super) toplevel_mgr: Option<ZwlrForeignToplevelManagerV1>,
     /// Las ventanas abiertas que reporta el compositor.
     pub(super) toplevels: Vec<Toplevel>,
+    /// Orden propio de los botones del task manager (`id`s de toplevel). Vacío =
+    /// orden natural de `toplevels`. Lo edita el drag-to-reorder; las ventanas
+    /// nuevas (no presentes) quedan al final en su orden natural.
+    pub(super) task_order: Vec<u32>,
+    /// Arrastre de reordenamiento del task manager en curso, si hay uno.
+    pub(super) task_drag: Option<TaskDrag>,
     /// Contador para asignar [`Toplevel::id`] estables.
     pub(super) next_toplevel_id: u32,
     /// Texto del portapapeles (una línea).
@@ -410,6 +433,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         seat: None,
         toplevel_mgr,
         toplevels: Vec::new(),
+        task_order: Vec::new(),
+        task_drag: None,
         next_toplevel_id: 0,
         clipboard: None,
         tray,

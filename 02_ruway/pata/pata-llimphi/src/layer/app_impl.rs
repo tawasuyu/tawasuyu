@@ -26,7 +26,8 @@ use crate::toplevel::{Toplevel, WindowEntry};
 use crate::{render, Msg};
 
 use super::{
-    diag, CardState, LayerApp, LayerDrag, MenuKind, PanelGpu, Panel, RenderCache, DRAWER_H, MENU_H,
+    diag, CardState, LayerApp, LayerDrag, MenuKind, PanelGpu, Panel, RenderCache, TaskDrag,
+    DRAWER_H, MENU_H,
 };
 
 impl LayerApp {
@@ -69,9 +70,12 @@ impl LayerApp {
         self.marcar_todo_dirty();
     }
 
-    /// La lista de ventanas para el render del `window_list`.
+    /// La lista de ventanas para el render del `window_list`, en el orden propio
+    /// definido por el drag-to-reorder (`task_order`). Las ventanas que no
+    /// figuran en ese orden (recién abiertas) quedan al final en orden natural.
     pub(super) fn window_entries(&self) -> Vec<WindowEntry> {
-        self.toplevels
+        let mut entries: Vec<WindowEntry> = self
+            .toplevels
             .iter()
             .map(|t| WindowEntry {
                 id: t.id,
@@ -80,7 +84,18 @@ impl LayerApp {
                 active: t.activated,
                 minimized: t.minimized,
             })
-            .collect()
+            .collect();
+        if !self.task_order.is_empty() {
+            // `sort_by_key` es estable: las desconocidas (clave `usize::MAX`)
+            // conservan su orden natural relativo al final de la lista.
+            entries.sort_by_key(|e| {
+                self.task_order
+                    .iter()
+                    .position(|&id| id == e.id)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        entries
     }
 
     /// El toplevel con ese `id`, si sigue abierto.
@@ -663,6 +678,8 @@ impl LayerApp {
                 self.ctx.workspace_occupied,
             ),
             clock: (self.ctx.clock.hour, self.ctx.clock.minute),
+            // En la barra real los botones de ventana se reordenan arrastrándolos.
+            reorderable_tasks: true,
         };
 
         let view = if self.tooltip_pi == Some(pi) {
@@ -960,6 +977,8 @@ impl LayerApp {
                 self.marcar_todo_dirty();
             }
             Msg::CloseWindow(id) => self.cerrar_ventana(id),
+            Msg::TaskDragMove(id, dx) => self.task_drag_move(id, dx),
+            Msg::TaskDragEnd(id) => self.task_drag_end(id),
             Msg::TrayActivate(key) => {
                 if let Some(t) = &self.tray {
                     t.activate(key);
@@ -1033,4 +1052,66 @@ impl LayerApp {
             t.handle.close();
         }
     }
+
+    /// Paso de un arrastre de reordenamiento del task manager: acumula el delta
+    /// y reescribe `task_order` recolocando la ventana arrastrada según cuántos
+    /// slots se movió el puntero. Se recalcula desde `orden_base` en cada paso
+    /// para no acumular deriva.
+    fn task_drag_move(&mut self, id: u32, dx: f32) {
+        // Al primer `Move` (o si cambió la ventana arrastrada) capturamos el
+        // orden visible actual como base del arrastre.
+        if self.task_drag.as_ref().map(|d| d.id) != Some(id) {
+            let orden: Vec<u32> = self.window_entries().iter().map(|e| e.id).collect();
+            let idx_base = orden.iter().position(|&x| x == id).unwrap_or(0);
+            self.task_drag = Some(TaskDrag {
+                id,
+                dx_acc: 0.0,
+                movido: 0.0,
+                orden_base: orden,
+                idx_base,
+            });
+        }
+        let Some(d) = self.task_drag.as_mut() else { return };
+        d.dx_acc += dx;
+        d.movido += dx.abs();
+        // Cuántos slots (botón + gap) se desplazó respecto del inicio.
+        let salto = (d.dx_acc / TASK_SLOT_W).round() as isize;
+        let len = d.orden_base.len() as isize;
+        let destino = (d.idx_base as isize + salto).clamp(0, (len - 1).max(0)) as usize;
+        // Reconstruimos el orden desde la base, moviendo `id` a `destino`.
+        let mut nuevo = d.orden_base.clone();
+        if let Some(pos) = nuevo.iter().position(|&x| x == id) {
+            let v = nuevo.remove(pos);
+            nuevo.insert(destino.min(nuevo.len()), v);
+        }
+        self.task_order = nuevo;
+        self.marcar_todo_dirty();
+    }
+
+    /// Fin de un arrastre del task manager. Si la ventana apenas se movió fue un
+    /// click (el `draggable` reemplaza al `on_click`): activamos la ventana. Si
+    /// hubo arrastre real, el nuevo `task_order` ya quedó aplicado en vivo.
+    fn task_drag_end(&mut self, id: u32) {
+        let arrastrado = self
+            .task_drag
+            .take()
+            .map(|d| d.movido >= TASK_DRAG_UMBRAL)
+            .unwrap_or(false);
+        if !arrastrado {
+            self.activar_ventana(id);
+            // Feedback inmediato del foco (igual que `Msg::ActivateWindow`).
+            for t in &mut self.toplevels {
+                t.activated = t.id == id;
+            }
+        }
+        self.marcar_todo_dirty();
+    }
 }
+
+/// Ancho aproximado de un slot del task manager (botón fijo + gap), en px, para
+/// traducir el delta del arrastre a saltos de posición. Debe seguir a `TASK_W`
+/// de `render::task_manager` (170 px) + el gap chico (≤ 4 px).
+const TASK_SLOT_W: f32 = 174.0;
+
+/// Movimiento mínimo (px) para considerar un arrastre "real" y no un click.
+const TASK_DRAG_UMBRAL: f32 = 6.0;

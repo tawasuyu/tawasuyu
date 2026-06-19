@@ -185,9 +185,19 @@ pub enum Msg {
     /// ya está activa — estilo KDE). El `u32` es el [`toplevel::Toplevel::id`];
     /// sólo el backend layer-shell sabe resolverlo.
     ActivateWindow(u32),
-    /// Cerrar una ventana del task manager (clic derecho). El `u32` es el
-    /// [`toplevel::Toplevel::id`]; sólo el backend layer-shell sabe resolverlo.
+    /// Cerrar una ventana del task manager (clic derecho o clic medio). El `u32`
+    /// es el [`toplevel::Toplevel::id`]; sólo el backend layer-shell sabe
+    /// resolverlo.
     CloseWindow(u32),
+    /// Arrastre en curso de un botón del task manager: `id` de la ventana
+    /// arrastrada + `dx` (delta horizontal desde el evento anterior). El backend
+    /// layer-shell acumula el delta y reordena la lista en vivo. Sólo lo usa el
+    /// backend layer-shell (en winit los botones no son arrastrables).
+    TaskDragMove(u32, f32),
+    /// Fin del arrastre de un botón del task manager (su `id`). Si apenas se
+    /// movió, el backend lo reinterpreta como click y activa la ventana; si no,
+    /// conserva el nuevo orden ya aplicado en vivo.
+    TaskDragEnd(u32),
     /// Activar un item del `tray` (click). El `String` es la `key` del
     /// [`tray::TrayItem`]; sólo el backend layer-shell sabe resolverlo.
     TrayActivate(String),
@@ -1254,8 +1264,13 @@ impl App for PataApp {
             // foreign-toplevel; en winit lo muestreamos del WM y activamos por su
             // CLI (`mirada-ctl focus-window N`).
             Msg::ActivateWindow(id) => sampler::activate_window(id),
-            // Cierre por id del task manager (clic derecho), por la CLI del WM.
+            // Cierre por id del task manager (clic derecho / clic medio), por la
+            // CLI del WM.
             Msg::CloseWindow(id) => sampler::close_window(id),
+            // El reordenamiento por arrastre sólo vive en el backend layer-shell;
+            // en winit (dev) los botones no son arrastrables, estos no se emiten.
+            Msg::TaskDragMove(_, _) => {}
+            Msg::TaskDragEnd(_) => {}
             // --- Sidebar navegador (Fase 11c) ---
             Msg::NavTabActivate(si, ti) => model.nav.toggle_tab(si, ti),
             Msg::NavClosePanel => model.nav.open = None,

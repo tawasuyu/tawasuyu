@@ -9,7 +9,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         keyboard::{KeyboardHandler, Keysym, Modifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT, BTN_RIGHT},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT},
         Capability, SeatHandler,
     },
     shell::wlr_layer::{KeyboardInteractivity, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
@@ -397,7 +397,7 @@ impl PointerHandler for LayerApp {
                 continue;
             }
             if let PointerEventKind::Press { button, .. } = e.kind {
-                if button != BTN_LEFT && button != BTN_RIGHT {
+                if button != BTN_LEFT && button != BTN_RIGHT && button != BTN_MIDDLE {
                     continue;
                 }
                 let Some(pi) = self.panel_de(&e.surface) else {
@@ -405,8 +405,11 @@ impl PointerHandler for LayerApp {
                 };
                 let (px, py) = (e.position.0 as f32, e.position.1 as f32);
                 let derecho = button == BTN_RIGHT;
-                // Nodo arrastrable bajo el press (izquierdo): arranca un drag.
-                if !derecho {
+                let medio = button == BTN_MIDDLE;
+                let izquierdo = button == BTN_LEFT;
+                // Nodo arrastrable bajo el press (sólo botón IZQUIERDO): arranca un
+                // drag. El clic medio/derecho nunca inician arrastre.
+                if izquierdo {
                     let handler = self.panels[pi].cache.as_ref().and_then(|c| {
                         let i = hit_test_click(&c.mounted, &c.computed, px, py)?;
                         c.mounted.nodes.get(i)?.drag.clone()
@@ -448,6 +451,10 @@ impl PointerHandler for LayerApp {
                         let at = n.on_right_click_at.as_ref()?;
                         let r = c.computed.get(n.id)?;
                         at(px - r.x, py - r.y, r.w, r.h)
+                    } else if medio {
+                        // Clic medio: sólo nodos con `on_middle_click` reaccionan
+                        // (mismo modelo que el derecho).
+                        n.on_middle_click.clone()
                     } else {
                         if let Some(m) = n.on_click.clone() {
                             return Some(m);
