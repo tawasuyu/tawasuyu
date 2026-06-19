@@ -1045,7 +1045,10 @@ impl App for PataApp {
                 // drawer. La sesión standalone arranca limpia en ese cwd (no se
                 // migra el historial/PTY vivo — eso requeriría IPC entre procesos).
                 let cwd = model.shuma.inner.cwd.display().to_string();
-                spawn_cmd(&format!("SHUMA_CWD={} shuma-shell-llimphi", shell_quote(&cwd)));
+                // `cd` real al cwd del shell (el hijo hereda el cwd de pata, no el
+                // del shell); SHUMA_CWD queda también por si shuma lo consulta.
+                let q = shell_quote(&cwd);
+                spawn_cmd(&format!("cd {q} 2>/dev/null; SHUMA_CWD={q} exec shuma-shell-llimphi"));
                 model.shuma.maximized = false;
                 if model.shuma.open {
                     model.shuma.open = false;
