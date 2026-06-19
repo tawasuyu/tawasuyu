@@ -1,0 +1,18 @@
+[package]
+name = "llimphi-layer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Runner wlr-layer-shell para Llimphi: corre cualquier `App` como una superficie de capa anclada a un borde (barra/panel), no como ventana. Extrae la plumbing sctk + wgpu que pata probó en producción, parametrizada sobre el trait `App`. Sirve para que apps (p. ej. shuma) se dockeen al borde de un compositor wlroots como una barra estilo eww/waybar."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+smithay-client-toolkit = "0.19"
+wayland-client = "0.31"
+raw-window-handle = { workspace = true }
+pollster = { workspace = true }

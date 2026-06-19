@@ -224,6 +224,7 @@ members = [
     "02_ruway/llimphi/llimphi-theme",
     "02_ruway/llimphi/llimphi-surface",
     "02_ruway/llimphi/llimphi-ui",
+    "02_ruway/llimphi/llimphi-layer",
     "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-icons",
     "02_ruway/llimphi/llimphi-svg",
@@ -692,6 +693,9 @@ taffy = "0.9"
 parley = "0.6"
 # Bucle Elm (input→update→view→layout→raster→present). Lo consumen las apps.
 llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
+# Runner wlr-layer-shell: corre un `App` de Llimphi como barra anclada a un
+# borde (no como ventana), reusando la plumbing sctk+wgpu que pata probó.
+llimphi-layer = { path = "02_ruway/llimphi/llimphi-layer" }
 # Paleta semántica compartida por las apps y los widgets.
 llimphi-theme = { path = "02_ruway/llimphi/llimphi-theme" }
 # Tweens y helpers de animación sobre el bucle Elm.
