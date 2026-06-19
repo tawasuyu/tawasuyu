@@ -57,6 +57,20 @@ impl App {
         None
     }
 
+    /// El destino de teclado cuando ninguna ventana reclama el foco: la
+    /// ventana que el Cerebro marcó enfocada o —si no hay ninguna— el shell
+    /// (`pata`), para poder tipear directo en su barra sin clickear primero.
+    /// `None` sólo si tampoco hay shell visible (p. ej. greeter). Así, en un
+    /// escritorio vacío, el teclado va al shell y winit le da hasta el
+    /// auto-repeat de cada tecla.
+    pub(crate) fn keyboard_fallback_target(&self) -> Option<WlSurface> {
+        self.windows
+            .iter()
+            .find(|w| w.focused)
+            .or_else(|| self.windows.iter().find(|w| w.is_shell && w.visible))
+            .map(|w| w.surface.clone())
+    }
+
     /// Reconcilia el foco del teclado con las layers Exclusive. Una layer que
     /// reclama `Exclusive` (el drawer Quake de `pata` abierto) debe **tener**
     /// el foco — antes lo conseguía sólo si la barra era `OnDemand` y la
@@ -85,7 +99,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|s| self.windows.iter().any(|w| &w.surface == s));
                 if !on_window {
-                    let target = self.windows.iter().find(|w| w.focused).map(|w| w.surface.clone());
+                    let target = self.keyboard_fallback_target();
                     if current != target {
                         kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
                     }
@@ -675,7 +689,10 @@ impl App {
                     screencopy::danar(self, d);
                 }
                 if let Some(kb) = self.keyboard.clone() {
-                    kb.set_focus(self, Option::<WlSurface>::None, SERIAL_COUNTER.next_serial());
+                    // Sin ventana enfocada el teclado cae al shell (`pata`), no
+                    // a la nada: el escritorio vacío sigue tipeable.
+                    let target = self.keyboard_fallback_target();
+                    kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
                 }
                 crate::foreign_toplevel::refrescar_estados(self);
             }
