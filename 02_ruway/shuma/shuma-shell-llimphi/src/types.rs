@@ -524,6 +524,9 @@ pub(crate) struct Session {
     pub pending_focus: Option<PendingField>,
     /// Persistir el output del shell a disco y restaurarlo al reabrir.
     pub persist: bool,
+    /// Perfil de **apariencia** propio de esta sesión (la "ventana"). `None` =
+    /// usa el default global. Gana sobre el global cuando la sesión está activa.
+    pub appearance: Option<String>,
     pub source: Source,
     /// El layout tipo zellij de esta sesión: tabs + tiling + flotantes. Cada
     /// panel es un shell vivo; `shell()` devuelve el panel con foco.
@@ -551,6 +554,7 @@ impl Session {
             mount: TextInputState::new(),
             pending_focus: None,
             persist: false,
+            appearance: None,
             conn: ConnState::Connected,
             host_label: None,
             host: TextInputState::new(),
@@ -711,6 +715,7 @@ impl Session {
             user: self.user.text(),
             port: self.port.text(),
             persist: self.persist,
+            appearance: self.appearance.clone(),
         }
     }
 
@@ -742,6 +747,7 @@ impl Session {
             s.port.set_text(c.port);
         }
         s.persist = c.persist;
+        s.appearance = c.appearance;
         s.apply_isolation();
         s
     }
@@ -801,6 +807,9 @@ pub(crate) struct SessionConfig {
     pub port: String,
     #[serde(default)]
     pub persist: bool,
+    /// Perfil de apariencia propio de la sesión (la "ventana"). `None` = global.
+    #[serde(default)]
+    pub appearance: Option<String>,
 }
 
 /// Estado de chrome persistible.
@@ -869,6 +878,16 @@ pub(crate) enum Slot {
 
 pub struct Model {
     pub theme: Theme,
+
+    /// Perfiles de **atajos** del workspace (globales, conmutables con un clic).
+    pub shortcuts: crate::perfiles::shortcuts::ShortcutProfiles,
+    /// Perfiles de **apariencia** (default global; cada sesión puede fijar el suyo).
+    pub appearance: crate::perfiles::appearance::AppearanceProfiles,
+    /// Índice de **perfiles de sesión** (contextos tipo Firefox).
+    pub session_profiles: crate::perfiles::sessions::SessionProfiles,
+    /// `true` mientras se esperó el prefijo de un keymap con prefijo (tmux/vim).
+    /// Transitorio, no se persiste.
+    pub pending_prefix: bool,
 
     pub topbar: Option<Instance>,
     pub bottombar: Option<Instance>,
@@ -1075,6 +1094,22 @@ pub enum Msg {
     CloseMenus,
 
     HostActivate(u32),
+
+    // ─── Perfiles (atajos · apariencia · sesión) ────────────────────
+    /// Una acción de atajo resuelta por el keymap activo (directa o tras prefijo).
+    ShortcutFire(crate::perfiles::shortcuts::ShortcutAction),
+    /// Se pulsó el prefijo de un keymap con prefijo (tmux/vim): entra en pendiente.
+    ShortcutEnterPrefix,
+    /// Tecla suelta tras el prefijo (o cancelación): sale de pendiente.
+    ShortcutCancelPrefix,
+    /// Conmuta el perfil de atajos activo (global).
+    SwitchShortcutProfile(String),
+    /// Conmuta el perfil de apariencia global (default de toda ventana).
+    SwitchAppearanceProfile(String),
+    /// Fija la apariencia de la sesión activa (`None` = como el global).
+    SetSessionAppearance(Option<String>),
+    /// Conmuta el perfil de sesión activo (contexto tipo Firefox).
+    SwitchSessionProfile(String),
 
     // ─── Workspace tipo zellij (tabs · tiling · flotantes) ──────────
     /// Parte el panel con foco (Horizontal = lado a lado · Vertical = apilado).

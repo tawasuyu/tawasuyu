@@ -32,6 +32,7 @@ pub mod containers;
 pub mod env;
 pub mod hosts;
 pub mod menu;
+pub mod perfiles;
 pub mod persist;
 pub mod types;
 pub mod update;
@@ -137,6 +138,20 @@ pub fn new_model() -> Model {
     let theme = wawa_config_llimphi::theme_from_wawa(&wawa, &Theme::dark());
     let _ = rimay_localize::set_locale(&wawa.lang);
 
+    // Perfiles. El de sesión (tipo Firefox) decide el directorio de datos: hay
+    // que fijarlo ANTES de leer sesiones/chrome/layouts, que ahora resuelven su
+    // ruta vía `perfiles::sessions::active_data_dir`.
+    let session_profiles = perfiles::sessions::SessionProfiles::load_or_init(
+        &perfiles::sessions::SessionProfiles::default_path().unwrap_or_default(),
+    );
+    perfiles::sessions::set_active(session_profiles.active());
+    let shortcuts = perfiles::shortcuts::ShortcutProfiles::load_or_init(
+        &perfiles::shortcuts::ShortcutProfiles::default_path().unwrap_or_default(),
+    );
+    let appearance = perfiles::appearance::AppearanceProfiles::load_or_init(
+        &perfiles::appearance::AppearanceProfiles::default_path().unwrap_or_default(),
+    );
+
     let cfg = config::ShumaConfig::load_default();
     let topbar = resolve_slot(cfg.topbar.as_ref()).or_else(|| {
         Some(Instance::launcher(
@@ -183,8 +198,12 @@ pub fn new_model() -> Model {
     let chrome = load_chrome();
     let active_session = chrome.active_session.min(sessions.len().saturating_sub(1));
 
-    Model {
+    let mut model = Model {
         theme,
+        shortcuts,
+        appearance,
+        session_profiles,
+        pending_prefix: false,
         topbar,
         bottombar,
         main,
@@ -227,7 +246,11 @@ pub fn new_model() -> Model {
         tick_count: 0,
         hosted_bar: false,
         _host: None,
-    }
+    };
+    // Aplicar la apariencia efectiva (global o de la sesión activa) sobre el
+    // tema base: si la activa es «Sistema» queda el tema de wawa ya calculado.
+    perfiles::apply_active_appearance(&mut model);
+    model
 }
 
 /// Marca el Model como **hospedado en una barra externa** (pata): el input de la
@@ -260,6 +283,53 @@ pub fn spawn_host_effects(model: &mut Model, handle: &Handle<Msg>) {
         }
     }
     model._host = shuma_host(handle);
+}
+
+/// Conmuta el **perfil de sesión** (contexto tipo Firefox): guarda el estado del
+/// perfil actual, cambia el directorio de datos activo y **recarga** sesiones,
+/// chrome, disposiciones y containers desde el nuevo directorio. Aislamiento
+/// total entre contextos sin duplicar la lógica de persistencia.
+pub(crate) fn switch_session_profile(mut m: Model, name: &str) -> Model {
+    if m.session_profiles.active() == name {
+        return m; // ya estamos ahí
+    }
+    // Guardar el estado del perfil actual antes de irnos.
+    save_sessions(&m);
+    save_chrome(&m);
+    save_session_outputs(&m);
+    // Conmutar (sólo perfiles existentes).
+    if m.session_profiles.set_active(name).is_err() {
+        return m;
+    }
+    perfiles::sessions::set_active(name);
+    if let Some(p) = perfiles::sessions::SessionProfiles::default_path() {
+        let _ = m.session_profiles.save(&p);
+    }
+    // Recargar desde el nuevo directorio.
+    let mut sessions = vec![Session::draft()];
+    for c in load_sessions() {
+        let mut sess = Session::from_config(c);
+        if sess.persist {
+            if let Some(snap) = persist::load_session_output(&sess.name) {
+                if let ModuleState::Shell(st) = &mut sess.shell_mut().state {
+                    st.restore_output(snap);
+                }
+            }
+        }
+        sessions.push(sess);
+    }
+    m.sessions = sessions;
+    let chrome = load_chrome();
+    m.active_session = chrome.active_session.min(m.sessions.len().saturating_sub(1));
+    m.active_tool = chrome.active_tool;
+    m.session_panel_open = chrome.session_panel_open;
+    m.session_w = chrome.session_w;
+    m.monitors_width = chrome.monitors_width;
+    m.layouts = load_layouts();
+    m.container_cfgs = load_container_cfgs();
+    m.pending_prefix = false;
+    perfiles::apply_active_appearance(&mut m);
+    m
 }
 
 // ─── App impl ───────────────────────────────────────────────────────
@@ -326,8 +396,9 @@ impl App for Shell {
         if let Some(msg) = menu::intercept_key(model, e) {
             return Some(msg);
         }
-        // Atajos del workspace tipo zellij (Alt+…): tabs, tiling, flotantes.
-        if let Some(msg) = workspace_key(model, e) {
+        // Atajos del workspace según el perfil de atajos activo (shuma/hyprland/
+        // tmux/zellij/vim o uno propio): tabs, tiling, flotantes.
+        if let Some(msg) = perfiles::shortcuts::resolve_key(model, e) {
             return Some(msg);
         }
         forward_key_to_focused_shell(model, e)
@@ -402,7 +473,12 @@ impl App for Shell {
                 }
             }
             Msg::WawaConfigChanged(cfg) => {
-                m.theme = wawa_config_llimphi::theme_from_wawa(&cfg, &m.theme);
+                // El tema del sistema sólo pisa el de shuma si la apariencia
+                // efectiva es «Sistema» (sigue a wawa). Un perfil de apariencia
+                // fijo (global o de sesión) manda sobre wawa.
+                if perfiles::follows_system(&m) {
+                    m.theme = wawa_config_llimphi::theme_from_wawa(&cfg, &m.theme);
+                }
                 let _ = rimay_localize::set_locale(&cfg.lang);
             }
             Msg::SelectSession(i) => {
@@ -417,6 +493,9 @@ impl App for Shell {
                     // de comando largo.
                     m.sessions[i].ack_long_alerts();
                     save_chrome(&m);
+                    // La sesión activa puede fijar su propia apariencia (la
+                    // "ventana"): re-aplicar al cambiar de sesión.
+                    perfiles::apply_active_appearance(&mut m);
                     reconcile_explorer(&mut m, handle);
                 }
             }
@@ -1494,6 +1573,46 @@ impl App for Shell {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.workspace.move_float(id, dx, dy);
                 }
+            }
+
+            // ─── Perfiles ───────────────────────────────────────────
+            Msg::ShortcutEnterPrefix => {
+                m.pending_prefix = true;
+            }
+            Msg::ShortcutCancelPrefix => {
+                m.pending_prefix = false;
+            }
+            Msg::ShortcutFire(act) => {
+                m.pending_prefix = false;
+                if let Some(concrete) = act.to_concrete(&m) {
+                    handle.dispatch(concrete);
+                }
+            }
+            Msg::SwitchShortcutProfile(name) => {
+                if m.shortcuts.set_active(&name).is_ok() {
+                    m.pending_prefix = false;
+                    if let Some(p) = perfiles::shortcuts::ShortcutProfiles::default_path() {
+                        let _ = m.shortcuts.save(&p);
+                    }
+                }
+            }
+            Msg::SwitchAppearanceProfile(name) => {
+                if m.appearance.set_active(&name).is_ok() {
+                    if let Some(p) = perfiles::appearance::AppearanceProfiles::default_path() {
+                        let _ = m.appearance.save(&p);
+                    }
+                    perfiles::apply_active_appearance(&mut m);
+                }
+            }
+            Msg::SetSessionAppearance(name) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.appearance = name;
+                }
+                save_sessions(&m);
+                perfiles::apply_active_appearance(&mut m);
+            }
+            Msg::SwitchSessionProfile(name) => {
+                m = switch_session_profile(m, &name);
             }
         }
         m

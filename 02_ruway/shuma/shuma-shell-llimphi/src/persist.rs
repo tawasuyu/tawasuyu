@@ -13,14 +13,20 @@ use crate::types::{
 /// sin que el JSON crezca sin techo.
 const PERSIST_MAX_LINES: usize = 2000;
 
-/// `$XDG_CONFIG_HOME/shuma/outputs/<sesión>.json`.
+/// El directorio de datos del perfil de **sesión** activo (tipo Firefox). Todas
+/// las rutas de estado cuelgan de acá: el perfil `default` usa el directorio
+/// histórico `~/.config/shuma/`; otro perfil `<n>` usa `…/profiles/<n>/`.
+fn data_dir() -> Option<std::path::PathBuf> {
+    crate::perfiles::sessions::active_data_dir()
+}
+
+/// `<perfil>/outputs/<sesión>.json`.
 pub(crate) fn session_output_path(name: &str) -> Option<std::path::PathBuf> {
     let sane: String = name
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
-    directories::BaseDirs::new()
-        .map(|b| b.config_dir().join("shuma").join("outputs").join(format!("{sane}.json")))
+    data_dir().map(|d| d.join("outputs").join(format!("{sane}.json")))
 }
 
 /// Guarda el output de TODAS las sesiones con `persist` activo. Barato:
@@ -77,7 +83,7 @@ pub(crate) fn env_groups_mtime() -> Option<std::time::SystemTime> {
 // ─── Containers ────────────────────────────────────────────────────
 
 pub(crate) fn containers_cfg_path() -> Option<std::path::PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("containers.json"))
+    data_dir().map(|d| d.join("containers.json"))
 }
 
 pub(crate) fn load_container_cfgs() -> Vec<ContainerCfg> {
@@ -103,7 +109,7 @@ pub(crate) fn save_container_cfgs(cfgs: &[ContainerCfg]) {
 
 /// `$XDG_CONFIG_HOME/shuma/sessions.json`.
 pub(crate) fn sessions_path() -> Option<std::path::PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("sessions.json"))
+    data_dir().map(|d| d.join("sessions.json"))
 }
 
 /// Guarda las sesiones reales (no la draft).
@@ -137,7 +143,7 @@ pub(crate) fn load_sessions() -> Vec<SessionConfig> {
 
 /// `$XDG_CONFIG_HOME/shuma/chrome.json`.
 pub(crate) fn chrome_path() -> Option<std::path::PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("chrome.json"))
+    data_dir().map(|d| d.join("chrome.json"))
 }
 
 /// Guarda el estado de chrome (paneles + pestaña activa).
@@ -172,7 +178,7 @@ pub(crate) fn load_chrome() -> ChromeState {
 
 /// `$XDG_CONFIG_HOME/shuma/layouts.json`.
 pub(crate) fn layouts_path() -> Option<std::path::PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("layouts.json"))
+    data_dir().map(|d| d.join("layouts.json"))
 }
 
 /// Lee las disposiciones guardadas.

@@ -149,8 +149,72 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
         .menu(archivo)
         .menu(editar)
         .menu(ver)
+        .menu(perfiles_menu(model))
         .menu(ayuda)
         .menu(idioma)
+}
+
+/// El menú **Perfiles**: tres bloques conmutables con un clic — atajos
+/// (globales), apariencia (global + de la sesión actual) y perfiles de sesión
+/// (contextos tipo Firefox). El activo lleva ●.
+fn perfiles_menu(model: &Model) -> Menu {
+    const DOT: &str = "\u{25CF}"; // ●
+    let header = |label: &str| MenuItem::new(label, "noop").disabled().separated();
+    let mut menu = Menu::new("Perfiles");
+
+    // ── Atajos (global) ──
+    menu = menu.item(header("Atajos"));
+    let sk_active = model.shortcuts.active().to_string();
+    for name in model.shortcuts.names() {
+        let mut it = MenuItem::new(name.clone(), format!("prof.sk.{name}"));
+        if name == sk_active {
+            it = it.icon(DOT);
+        }
+        menu = menu.item(it);
+    }
+
+    // ── Apariencia (default global) ──
+    menu = menu.item(header("Apariencia (global)"));
+    let ap_active = model.appearance.active().to_string();
+    for name in model.appearance.names() {
+        let mut it = MenuItem::new(name.clone(), format!("prof.ap.{name}"));
+        if name == ap_active {
+            it = it.icon(DOT);
+        }
+        menu = menu.item(it);
+    }
+
+    // ── Apariencia de ESTA sesión (la "ventana") ──
+    menu = menu.item(header("Apariencia (esta sesión)"));
+    let sess_ap = model
+        .active()
+        .and_then(|s| s.appearance.clone());
+    let mut como_global = MenuItem::new("Como el global", "prof.aps.~");
+    if sess_ap.is_none() {
+        como_global = como_global.icon(DOT);
+    }
+    menu = menu.item(como_global);
+    for name in model.appearance.names() {
+        let mut it = MenuItem::new(name.clone(), format!("prof.aps.{name}"));
+        if sess_ap.as_deref() == Some(name.as_str()) {
+            it = it.icon(DOT);
+        }
+        menu = menu.item(it);
+    }
+
+    // ── Sesión (contextos tipo Firefox) ──
+    menu = menu.item(header("Sesión / contexto"));
+    let se_active = model.session_profiles.active().to_string();
+    for name in model.session_profiles.names() {
+        let mut it = MenuItem::new(name.clone(), format!("prof.sess.{name}"));
+        if *name == se_active {
+            it = it.icon(DOT);
+        }
+        menu = menu.item(it);
+    }
+    menu = menu.item(MenuItem::new("Nuevo contexto", "prof.sess.new").separated());
+
+    menu
 }
 
 /// `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
@@ -267,6 +331,61 @@ pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
         let mut cfg = wawa_config::WawaConfig::load();
         cfg.lang = code.to_string();
         let _ = cfg.save();
+        return model;
+    }
+
+    // ── Perfiles ──
+    // Atajos (global): conmuta el keymap activo y lo persiste.
+    if let Some(name) = cmd.strip_prefix("prof.sk.") {
+        if model.shortcuts.set_active(name).is_ok() {
+            model.pending_prefix = false;
+            if let Some(p) = crate::perfiles::shortcuts::ShortcutProfiles::default_path() {
+                let _ = model.shortcuts.save(&p);
+            }
+        }
+        return model;
+    }
+    // Apariencia de la sesión activa (la "ventana"): "~" = como el global.
+    if let Some(name) = cmd.strip_prefix("prof.aps.") {
+        let val = if name == "~" { None } else { Some(name.to_string()) };
+        if let Some(s) = model.sessions.get_mut(model.active_session) {
+            s.appearance = val;
+        }
+        super::persist::save_sessions(&model);
+        crate::perfiles::apply_active_appearance(&mut model);
+        return model;
+    }
+    // Apariencia global (default de toda ventana).
+    if let Some(name) = cmd.strip_prefix("prof.ap.") {
+        if model.appearance.set_active(name).is_ok() {
+            if let Some(p) = crate::perfiles::appearance::AppearanceProfiles::default_path() {
+                let _ = model.appearance.save(&p);
+            }
+            crate::perfiles::apply_active_appearance(&mut model);
+        }
+        return model;
+    }
+    // Perfil de sesión (contexto tipo Firefox).
+    if cmd == "prof.sess.new" {
+        // Auto-nombre "contexto N" libre.
+        let mut n = model.session_profiles.names().len();
+        let name = loop {
+            let candidate = format!("contexto {n}");
+            if !model.session_profiles.contains(&candidate) {
+                break candidate;
+            }
+            n += 1;
+        };
+        if model.session_profiles.create(&name).is_ok() {
+            if let Some(p) = crate::perfiles::sessions::SessionProfiles::default_path() {
+                let _ = model.session_profiles.save(&p);
+            }
+            model = super::switch_session_profile(model, &name);
+        }
+        return model;
+    }
+    if let Some(name) = cmd.strip_prefix("prof.sess.") {
+        model = super::switch_session_profile(model, name);
         return model;
     }
 

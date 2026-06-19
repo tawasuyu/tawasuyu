@@ -622,56 +622,6 @@ pub(crate) fn forward_wheel_to_focused_shell(model: &Model, dpx: f32) -> Option<
     ))
 }
 
-/// Atajos del **workspace tipo zellij** (prefijo `Alt`). Se chequean antes de
-/// reenviar la tecla al shell, así que `Alt`+algo gobierna tabs/tiling/flotantes
-/// en vez de ir al PTY. Sólo un puñado de combos se interceptan; el resto de
-/// `Alt`+tecla cae al shell (Meta de readline/emacs sigue llegando). No actúa si
-/// la sesión activa está en el form de creación.
-pub(crate) fn workspace_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
-    use llimphi_ui::{Key, NamedKey};
-    if !e.modifiers.alt {
-        return None;
-    }
-    if model
-        .sessions
-        .get(model.active_session)
-        .map(|s| s.pending)
-        .unwrap_or(true)
-    {
-        return None;
-    }
-    // Flechas: ciclar el foco entre paneles tiled.
-    if let Key::Named(nk) = &e.key {
-        match nk {
-            NamedKey::ArrowLeft => return Some(Msg::PaneCycle(false)),
-            NamedKey::ArrowRight => return Some(Msg::PaneCycle(true)),
-            _ => {}
-        }
-    }
-    let ch: Option<&str> = match &e.key {
-        Key::Character(c) => Some(c.as_str()),
-        _ => e.text.as_deref(),
-    };
-    let ws = model.active().map(|s| &s.workspace);
-    let active_tab = ws.map(|w| w.active_tab).unwrap_or(0);
-    let n_tabs = ws.map(|w| w.tabs.len().max(1)).unwrap_or(1);
-    match ch {
-        Some("t") => Some(Msg::TabNew),
-        Some("w") => Some(Msg::PaneClose),
-        Some("\\") | Some("v") => Some(Msg::PaneSplit(llimphi_widget_panes::Axis::Horizontal)),
-        Some("-") | Some("s") => Some(Msg::PaneSplit(llimphi_widget_panes::Axis::Vertical)),
-        Some("f") => Some(Msg::FloatToggle),
-        Some("n") => Some(Msg::FloatNew),
-        Some("[") => Some(Msg::TabSwitch((active_tab + n_tabs - 1) % n_tabs)),
-        Some("]") => Some(Msg::TabSwitch((active_tab + 1) % n_tabs)),
-        Some(d) if d.len() == 1 && d.chars().next().unwrap().is_ascii_digit() => {
-            let n = d.chars().next().unwrap().to_digit(10).unwrap() as usize;
-            (n >= 1).then_some(Msg::TabSwitch(n - 1))
-        }
-        _ => None,
-    }
-}
-
 pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Option<Msg> {
     // Si una ventana secundaria tiene un draft con foco de campo, las
     // teclas van al draft (no al shell). El runtime de Llimphi dispatcha
