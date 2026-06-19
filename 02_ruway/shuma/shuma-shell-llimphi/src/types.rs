@@ -909,6 +909,15 @@ pub struct Model {
     pub prof_name: TextInputState,
     /// `true` si el campo de nombre del modal de perfiles tiene foco.
     pub prof_name_focused: bool,
+    /// Wallpaper decodificado de la apariencia efectiva (cacheado; clon barato
+    /// por frame). `None` = sin wallpaper. Lo refresca `apply_active_appearance`.
+    pub wallpaper_img: Option<llimphi_image::Image>,
+    /// Path del wallpaper cacheado — para no re-decodificar si no cambió.
+    pub wallpaper_path: Option<String>,
+    /// Campo del modal de perfiles para escribir el path del wallpaper.
+    pub wp_path: TextInputState,
+    /// `true` si el campo de wallpaper tiene foco.
+    pub wp_path_focused: bool,
 
     pub topbar: Option<Instance>,
     pub bottombar: Option<Instance>,
@@ -1151,6 +1160,14 @@ pub enum Msg {
     ProfDelete(ProfKind, String),
     /// Crea un perfil nuevo con el nombre del campo (desde una base sensata).
     ProfCreate(ProfKind),
+    /// Foca el campo de path del wallpaper.
+    WpPathFocus,
+    /// Tecla en el campo de path del wallpaper.
+    WpPathKey(llimphi_ui::KeyEvent),
+    /// Fija el wallpaper del perfil de apariencia activo al path del campo.
+    SetWallpaperActive,
+    /// Quita el wallpaper del perfil de apariencia activo.
+    ClearWallpaperActive,
 
     // ─── Workspace tipo zellij (tabs · tiling · flotantes) ──────────
     /// Parte el panel con foco (Horizontal = lado a lado · Vertical = apilado).

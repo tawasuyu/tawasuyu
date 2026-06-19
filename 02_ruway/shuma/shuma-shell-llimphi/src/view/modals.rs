@@ -888,9 +888,57 @@ fn perfiles_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .children({
         let mut all = vec![tabs, sub, panel_label("Crear / duplicar / renombrar", theme), name_input, create_btn];
+        // Sección de wallpaper, sólo en la pestaña de apariencia.
+        if kind == ProfKind::Appearance {
+            all.extend(wallpaper_section(model, theme));
+        }
         all.extend(rows);
         all
     })
+}
+
+/// La sub-sección de wallpaper del modal (pestaña Apariencia): muestra el
+/// wallpaper actual del perfil activo + un campo de path para fijarlo/quitarlo.
+fn wallpaper_section(model: &Model, theme: &Theme) -> Vec<View<Msg>> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let tpal = TextInputPalette::from_theme(theme);
+    let active = model.appearance.active().to_string();
+    let is_system = active == crate::perfiles::appearance::SYSTEM_NAME;
+
+    let header = panel_label(&format!("Wallpaper (perfil «{active}»)"), theme);
+
+    let hint = if is_system {
+        "«Sistema» sigue al tema global y no lleva wallpaper. Activá/creá otro perfil.".to_string()
+    } else {
+        match model.appearance.active_wallpaper() {
+            Some(p) => format!("Actual: {p}"),
+            None => "Sin wallpaper. Pegá una ruta de imagen (PNG/JPG/WEBP) y «Aplicar».".to_string(),
+        }
+    };
+    let hint_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .text_aligned(hint, 10.5, theme.fg_muted, Alignment::Start);
+
+    let input = text_input_view(
+        &model.wp_path,
+        "/ruta/al/wallpaper.jpg",
+        model.wp_path_focused,
+        &tpal,
+        Msg::WpPathFocus,
+    );
+    let apply = action_button_small("Aplicar wallpaper", Msg::SetWallpaperActive, theme);
+    let clear = action_button_small("Quitar wallpaper", Msg::ClearWallpaperActive, theme);
+    let btns = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![apply, clear]);
+
+    vec![header, hint_view, input, btns]
 }
 
 /// Una fila de perfil: nombre (● si activo) + acciones.

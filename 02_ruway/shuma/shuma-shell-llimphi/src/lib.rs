@@ -51,10 +51,10 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
-    Rect,
+    Position, Rect,
 };
 use llimphi_ui::{
-    App, DragPhase, Handle, KeyEvent, KeyState, Modifiers, View, WheelDelta,
+    App, DragPhase, Handle, ImageFit, KeyEvent, KeyState, Modifiers, View, WheelDelta,
 };
 use llimphi_widget_text_input::TextInputState;
 use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, Source};
@@ -208,6 +208,10 @@ pub fn new_model() -> Model {
         perfiles_tab: ProfKind::Shortcuts,
         prof_name: TextInputState::new(),
         prof_name_focused: false,
+        wallpaper_img: None,
+        wallpaper_path: None,
+        wp_path: TextInputState::new(),
+        wp_path_focused: false,
         topbar,
         bottombar,
         main,
@@ -440,6 +444,9 @@ impl App for Shell {
         if model.perfiles_modal_open {
             if let llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) = &e.key {
                 return Some(Msg::ClosePerfilesModal);
+            }
+            if model.wp_path_focused {
+                return Some(Msg::WpPathKey(e.clone()));
             }
             return Some(Msg::ProfNameKey(e.clone()));
         }
@@ -1683,6 +1690,7 @@ impl App for Shell {
                 m.perfiles_modal_open = false;
                 m.prof_name_focused = false;
                 m.prof_name.set_text("");
+                m.wp_path_focused = false;
             }
             Msg::PerfilesTab(kind) => {
                 m.perfiles_tab = kind;
@@ -1777,6 +1785,42 @@ impl App for Shell {
                     }
                 }
             }
+            Msg::WpPathFocus => {
+                m.wp_path_focused = true;
+                m.prof_name_focused = false;
+            }
+            Msg::WpPathKey(e) => match &e.key {
+                llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
+                    m.wp_path_focused = false;
+                }
+                llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
+                    handle.dispatch(Msg::SetWallpaperActive);
+                }
+                _ => {
+                    let _ = m.wp_path.apply_key(&e);
+                }
+            },
+            Msg::SetWallpaperActive => {
+                let path = m.wp_path.text().trim().to_string();
+                if !path.is_empty() {
+                    let active = m.appearance.active().to_string();
+                    if m.appearance.set_wallpaper(&active, Some(path)).is_ok() {
+                        save_profiles(&m, ProfKind::Appearance);
+                        // Forzar re-decodificación aunque el path lógico no haya
+                        // cambiado de nombre (p.ej. mismo perfil, archivo nuevo).
+                        m.wallpaper_path = None;
+                        perfiles::apply_active_appearance(&mut m);
+                    }
+                }
+            }
+            Msg::ClearWallpaperActive => {
+                let active = m.appearance.active().to_string();
+                if m.appearance.set_wallpaper(&active, None).is_ok() {
+                    save_profiles(&m, ProfKind::Appearance);
+                    m.wp_path.set_text("");
+                    perfiles::apply_active_appearance(&mut m);
+                }
+            }
         }
         m
     }
@@ -1788,6 +1832,42 @@ impl App for Shell {
         let topbar = render_topbar(model, theme);
         let main_area = render_main_area(model, theme);
         let bottombar = render_bottombar(model, theme);
+        let content = vec![menubar, topbar, main_area, bottombar];
+
+        // Con wallpaper: capa de imagen a tamaño completo (Cover) detrás de una
+        // columna de contenido con fondo (translúcido) que la deja ver.
+        if let Some(img) = &model.wallpaper_img {
+            let full = Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            };
+            let bg = View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    top: length(0.0_f32),
+                    right: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                size: full,
+                ..Default::default()
+            })
+            .image(img.clone())
+            .image_fit(ImageFit::Cover);
+            let column = View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: full,
+                ..Default::default()
+            })
+            .fill(theme.bg_app)
+            .children(content);
+            return View::new(Style {
+                size: full,
+                ..Default::default()
+            })
+            .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
+            .children(vec![bg, column]);
+        }
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -1799,7 +1879,7 @@ impl App for Shell {
         })
         .fill(theme.bg_app)
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, topbar, main_area, bottombar])
+        .children(content)
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {

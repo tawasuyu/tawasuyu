@@ -31,6 +31,31 @@ pub(crate) fn apply_active_appearance(model: &mut Model) {
         .and_then(|s| s.appearance.clone());
     let name = per_session.unwrap_or_else(|| model.appearance.active().to_string());
     model.theme = resolve_named(model, &name);
+
+    // Wallpaper efectivo: el de la apariencia activa (no aplica a «Sistema»).
+    let wp: Option<String> = if name == appearance::SYSTEM_NAME {
+        None
+    } else {
+        model
+            .appearance
+            .get(&name)
+            .and_then(|ap| ap.wallpaper.clone())
+            .filter(|s| !s.trim().is_empty())
+    };
+    // Re-decodificar sólo si el path cambió (decodificar es caro; la Image es
+    // clon barato por frame).
+    if wp != model.wallpaper_path {
+        model.wallpaper_path = wp.clone();
+        model.wallpaper_img = wp.and_then(|p| {
+            match llimphi_image::load_path(std::path::Path::new(&p), 64 * 1024 * 1024) {
+                Ok(img) => Some(img),
+                Err(e) => {
+                    eprintln!("shuma · no pude cargar el wallpaper «{p}»: {e}");
+                    None
+                }
+            }
+        });
+    }
 }
 
 /// Resuelve un nombre de apariencia a un `Theme`. `Sistema` (o un nombre

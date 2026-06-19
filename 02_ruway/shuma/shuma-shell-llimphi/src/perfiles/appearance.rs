@@ -69,10 +69,18 @@ impl Appearance {
             t.accent = Color::from_rgba8(r, g, b, a);
             t.border_focus = Color::from_rgba8(r, g, b, a);
         }
-        if self.opacity < 1.0 {
-            t.bg_app = with_opacity(t.bg_app, self.opacity);
-            t.bg_panel = with_opacity(t.bg_panel, self.opacity);
-            t.bg_panel_alt = with_opacity(t.bg_panel_alt, self.opacity);
+        // Con wallpaper, el fondo debe dejarlo ver: si el perfil quedó opaco,
+        // forzamos una translucidez mínima para que la imagen asome.
+        let has_wp = self
+            .wallpaper
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let eff_op = if has_wp { self.opacity.min(0.7) } else { self.opacity };
+        if eff_op < 1.0 {
+            t.bg_app = with_opacity(t.bg_app, eff_op);
+            t.bg_panel = with_opacity(t.bg_panel, eff_op);
+            t.bg_panel_alt = with_opacity(t.bg_panel_alt, eff_op);
         }
         t
     }
@@ -204,6 +212,23 @@ impl AppearanceProfiles {
         }
         self.profiles.insert(name.to_string(), ap);
         Ok(())
+    }
+
+    /// Fija (o quita, con `None`) el wallpaper de un perfil. Funciona también
+    /// sobre presets (queda un override en disco; `ensure_builtins` no lo pisa).
+    pub fn set_wallpaper(&mut self, name: &str, path: Option<String>) -> Result<(), super::shortcuts::ProfileError> {
+        match self.profiles.get_mut(name) {
+            Some(ap) => {
+                ap.wallpaper = path.filter(|s| !s.trim().is_empty());
+                Ok(())
+            }
+            None => Err(super::shortcuts::ProfileError::NotFound(name.to_string())),
+        }
+    }
+
+    /// El wallpaper del perfil activo (si lo tiene).
+    pub fn active_wallpaper(&self) -> Option<String> {
+        self.profiles.get(&self.active).and_then(|ap| ap.wallpaper.clone())
     }
 
     /// Duplica un perfil existente con un nombre nuevo.
@@ -368,5 +393,30 @@ mod tests {
         let mut p = AppearanceProfiles::default();
         assert!(p.remove("Oscuro").is_err());
         assert!(p.contains("Oscuro"));
+    }
+
+    #[test]
+    fn set_y_clear_wallpaper_en_el_activo() {
+        let mut p = AppearanceProfiles::default();
+        p.duplicate("Oscuro", "Foto").unwrap();
+        p.set_active("Foto").unwrap();
+        assert_eq!(p.active_wallpaper(), None);
+        p.set_wallpaper("Foto", Some("/img/x.jpg".to_string())).unwrap();
+        assert_eq!(p.active_wallpaper().as_deref(), Some("/img/x.jpg"));
+        // vacío cuenta como quitar.
+        p.set_wallpaper("Foto", Some("   ".to_string())).unwrap();
+        assert_eq!(p.active_wallpaper(), None);
+        // perfil inexistente falla.
+        assert!(p.set_wallpaper("nope", Some("/y".to_string())).is_err());
+    }
+
+    #[test]
+    fn con_wallpaper_el_fondo_se_vuelve_translucido_aunque_opacity_sea_1() {
+        let mut a = preset("Oscuro").unwrap();
+        assert_eq!(a.opacity, 1.0);
+        a.wallpaper = Some("/img/x.jpg".to_string());
+        let t = a.resolve();
+        let alpha = (t.bg_app.components[3] * 255.0).round() as u8;
+        assert!(alpha < 255, "con wallpaper el fondo debe dejar ver la imagen");
     }
 }

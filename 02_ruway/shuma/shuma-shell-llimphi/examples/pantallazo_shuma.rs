@@ -49,6 +49,30 @@ fn main() {
     model = update(model, Msg::TabNew, &handle); // segunda tab
     model = update(model, Msg::TabSwitch(0), &handle); // volver a la 1ª
 
+    // Wallpaper opcional (cert. visual del feature): SHUMA_WALLPAPER=/ruta.png
+    // inyecta la imagen y baja la opacidad del chrome para que asome detrás.
+    let wp_mode = std::env::var("SHUMA_WALLPAPER").ok().filter(|s| !s.is_empty());
+    if let Some(path) = &wp_mode {
+        match llimphi_image::load_path(std::path::Path::new(path), 64 * 1024 * 1024) {
+            Ok(img) => {
+                model.wallpaper_img = Some(img);
+                let dim = |c: Color, a: f32| {
+                    let k = c.components;
+                    Color::from_rgba8(
+                        (k[0] * 255.0) as u8,
+                        (k[1] * 255.0) as u8,
+                        (k[2] * 255.0) as u8,
+                        (a * 255.0) as u8,
+                    )
+                };
+                model.theme.bg_app = dim(model.theme.bg_app, 0.5);
+                model.theme.bg_panel = dim(model.theme.bg_panel, 0.6);
+                model.theme.bg_panel_alt = dim(model.theme.bg_panel_alt, 0.6);
+            }
+            Err(e) => eprintln!("pantallazo_shuma: no pude cargar wallpaper {path}: {e}"),
+        }
+    }
+
     let root = view(&model);
 
     let mut layout = LayoutTree::new();
@@ -88,11 +112,33 @@ fn main() {
         .render_to_view(&hal, &scene, &tview, W, H, bg)
         .expect("render_to_view");
 
-    write_png(&hal, &target, &out);
+    let rgba = write_png(&hal, &target, &out);
     eprintln!("pantallazo_shuma: escrito {out} ({W}x{H})");
+
+    // Cert. numérica del wallpaper: con un fondo magenta sintético detrás del
+    // chrome translúcido, deben quedar muchos píxeles magenta-ish compuestos.
+    if wp_mode.is_some() {
+        // Detección por TINTE magenta: el chrome oscuro translúcido sobre la
+        // imagen magenta deja r y b notablemente por encima de g (el dark puro
+        // tiene r≈g≈b). Robusto al oscurecimiento del overlay.
+        let mut tint = 0usize;
+        let mut max_r = 0u8;
+        for px in rgba.chunks_exact(4) {
+            let (r, g, b) = (px[0], px[1], px[2]);
+            if r as i32 > g as i32 + 25 && b as i32 > g as i32 + 25 {
+                tint += 1;
+            }
+            max_r = max_r.max(r);
+        }
+        let total = (W * H) as usize;
+        let pct = tint as f32 * 100.0 / total as f32;
+        eprintln!(
+            "pantallazo_shuma: wallpaper tinte-magenta en {tint}/{total} px ({pct:.1}%), max_r={max_r}"
+        );
+    }
 }
 
-fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
+fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) -> Vec<u8> {
     let unpadded = (W * 4) as usize;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
     let padded = unpadded.div_ceil(align) * align;
@@ -146,4 +192,5 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
     enc.set_depth(png::BitDepth::Eight);
     let mut w = enc.write_header().expect("png header");
     w.write_image_data(&rgba).expect("png data");
+    rgba
 }
