@@ -99,7 +99,17 @@ pub struct EditorState {
     /// actualice on-demand. Se invalida cuando cambian `edit_seq` o el
     /// `Language` solicitado.
     pub highlight_cache: RefCell<Option<HighlightCache>>,
+    /// Último click registrado por [`Self::register_click`]: instante +
+    /// posición. Sirve para contar clicks consecutivos (doble/triple) sin
+    /// que el caller lleve el tiempo. `None` = no hubo click reciente.
+    last_click: Option<(std::time::Instant, Pos)>,
+    /// Cuántos clicks consecutivos cercanos lleva la racha actual (1 = simple,
+    /// 2 = palabra, 3 = párrafo). Cicla 1→2→3→1. Ver [`Self::register_click`].
+    click_count: u32,
 }
+
+/// Ventana máxima entre dos clicks para que cuenten como doble/triple.
+const MULTI_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(450);
 
 /// Texto en composición del IME — el que el método de entrada está
 /// armando antes de confirmarlo (un acento muerto a medio componer, una
@@ -147,6 +157,8 @@ impl EditorState {
             edit_seq: 0,
             pending_input_edits: RefCell::new(Vec::new()),
             highlight_cache: RefCell::new(None),
+            last_click: None,
+            click_count: 0,
         }
     }
 
@@ -302,6 +314,51 @@ impl EditorState {
         self.cursor.set_caret(&self.buffer, Pos::new(line, col));
         if !self.guard_lines.is_empty() {
             snap_cursor_off_guard(&mut self.cursor, &self.buffer, &self.guard_lines, 0);
+        }
+    }
+
+    /// Selecciona la palabra bajo `(line, col)` (doble-click). Delegado a
+    /// [`Cursor::select_word`].
+    pub fn select_word_at(&mut self, line: usize, col: usize) {
+        self.cursor.select_word(&self.buffer, Pos::new(line, col));
+    }
+
+    /// Selecciona el párrafo bajo `(line, col)` (triple-click). Delegado a
+    /// [`Cursor::select_paragraph`].
+    pub fn select_paragraph_at(&mut self, line: usize, col: usize) {
+        self.cursor.select_paragraph(&self.buffer, Pos::new(line, col));
+    }
+
+    /// Registra un click del mouse en `(line, col)` y aplica la selección
+    /// según cuántos clicks consecutivos cercanos hubo:
+    /// **1** = caret simple · **2** = palabra · **3** = párrafo · **4+** =
+    /// vuelve a caret. La racha se reinicia si pasó más de
+    /// [`MULTI_CLICK_WINDOW`] desde el click anterior o si éste cayó lejos
+    /// (otra línea, o más de un char de distancia). Reemplaza a
+    /// [`Self::set_caret_at`] como handler de `PointerEvent::Click` cuando
+    /// se quiere doble/triple click.
+    pub fn register_click(&mut self, line: usize, col: usize) {
+        let now = std::time::Instant::now();
+        let pos = Pos::new(line, col);
+        let n = match self.last_click {
+            Some((t, p))
+                if now.duration_since(t) <= MULTI_CLICK_WINDOW
+                    && p.line == pos.line
+                    && p.col.abs_diff(pos.col) <= 1 =>
+            {
+                self.click_count = self.click_count % 3 + 1;
+                self.click_count
+            }
+            _ => {
+                self.click_count = 1;
+                1
+            }
+        };
+        self.last_click = Some((now, pos));
+        match n {
+            2 => self.select_word_at(line, col),
+            3 => self.select_paragraph_at(line, col),
+            _ => self.set_caret_at(line, col),
         }
     }
 
@@ -914,6 +971,40 @@ mod tests {
         s.apply_key(&evtext("h", false, false));
         s.apply_key(&evtext("i", false, false));
         assert_eq!(s.text(), "hi");
+    }
+
+    #[test]
+    fn register_click_cuenta_simple_doble_triple() {
+        let mut s = EditorState::new();
+        s.set_text("hola mundo\notro\n\nparrafo dos");
+
+        // Click simple en "mundo": caret, sin selección.
+        s.register_click(0, 7);
+        assert!(!s.cursor.has_selection());
+
+        // Doble click (mismo punto, dentro de la ventana): palabra.
+        s.register_click(0, 7);
+        let (a, b) = s.cursor.selection_range(&s.buffer);
+        assert_eq!(s.buffer.slice(a, b), "mundo");
+
+        // Triple click: párrafo (bloque de líneas no vacías).
+        s.register_click(0, 7);
+        let (a, b) = s.cursor.selection_range(&s.buffer);
+        assert_eq!(s.buffer.slice(a, b), "hola mundo\notro");
+
+        // Cuarto click: vuelve a caret simple.
+        s.register_click(0, 7);
+        assert!(!s.cursor.has_selection());
+    }
+
+    #[test]
+    fn register_click_lejos_reinicia_a_simple() {
+        let mut s = EditorState::new();
+        s.set_text("hola mundo");
+        s.register_click(0, 1);
+        // Segundo click en otra columna lejana → racha reiniciada, no palabra.
+        s.register_click(0, 8);
+        assert!(!s.cursor.has_selection());
     }
 
     #[test]

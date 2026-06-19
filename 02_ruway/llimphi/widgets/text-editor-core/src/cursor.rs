@@ -14,6 +14,29 @@ fn is_ws(c: char) -> bool {
     c.is_whitespace() && c != '\n'
 }
 
+/// Clase de un char para la selección por doble-click: una palabra, un
+/// run de espacios, un salto de línea o puntuación suelta. Dos chars de
+/// la misma clase pertenecen a la misma "unidad" seleccionable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Word,
+    Space,
+    Newline,
+    Punct,
+}
+
+fn classify(c: char) -> CharClass {
+    if c == '\n' {
+        CharClass::Newline
+    } else if is_word(c) {
+        CharClass::Word
+    } else if c.is_whitespace() {
+        CharClass::Space
+    } else {
+        CharClass::Punct
+    }
+}
+
 /// Posición lógica del cursor — (línea, columna en chars).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pos {
@@ -228,6 +251,92 @@ impl Cursor {
         self.desired_col = c;
     }
 
+    // ----- Selección por palabra / párrafo (doble / triple click) -----
+
+    /// Selecciona la "palabra" bajo `pos` (doble-click): ancla al inicio y
+    /// caret al fin del run de chars de la misma clase que `pos`. Sobre una
+    /// palabra toma el run alfanumérico; sobre whitespace, el run de
+    /// espacios; sobre puntuación, el run de puntuación. Si el click cae
+    /// justo después de una palabra, prefiere la palabra. No-op de
+    /// selección (sólo caret) si la línea está vacía o estamos al final.
+    pub fn select_word(&mut self, buf: &Buffer, pos: Pos) {
+        let line = pos.line.min(buf.len_lines().saturating_sub(1));
+        let col = pos.col.min(buf.line_len_chars(line));
+        let off = buf.pos_to_offset(line, col);
+        let len = buf.len_chars();
+        let class_at = |o: usize| buf.char_at(o).map(classify);
+
+        // Clase de referencia: el char en `off`; pero si ahí hay algo que no
+        // es palabra y el char anterior sí lo es, preferí la palabra (click
+        // pegado al borde derecho de una palabra).
+        let class = match class_at(off) {
+            Some(CharClass::Word) => Some(CharClass::Word),
+            other => {
+                if off > 0 && class_at(off - 1) == Some(CharClass::Word) {
+                    Some(CharClass::Word)
+                } else {
+                    other.or_else(|| off.checked_sub(1).and_then(class_at))
+                }
+            }
+        };
+        let Some(class) = class else {
+            self.set_caret(buf, Pos::new(line, col));
+            return;
+        };
+        if class == CharClass::Newline {
+            self.set_caret(buf, Pos::new(line, col));
+            return;
+        }
+        let mut start = off;
+        while start > 0 && class_at(start - 1) == Some(class) {
+            start -= 1;
+        }
+        let mut end = off;
+        while end < len && class_at(end) == Some(class) {
+            end += 1;
+        }
+        if start == end {
+            // `off` quedó en el borde derecho del run: incluí el char previo.
+            start = off.saturating_sub(1);
+        }
+        let (sl, sc) = buf.offset_to_pos(start);
+        let (el, ec) = buf.offset_to_pos(end);
+        self.anchor = Some(Pos::new(sl, sc));
+        self.caret = Pos::new(el, ec);
+        self.desired_col = ec;
+    }
+
+    /// Selecciona el párrafo que contiene `pos` (triple-click): bloque de
+    /// líneas no-vacías consecutivas, delimitado por líneas en blanco (las
+    /// que separan átomos con `\n\n`). Ancla al inicio de la primera línea,
+    /// caret al fin de la última. Sobre una línea separadora, selecciona
+    /// sólo esa línea.
+    pub fn select_paragraph(&mut self, buf: &Buffer, pos: Pos) {
+        let n = buf.len_lines();
+        if n == 0 {
+            return;
+        }
+        let line = pos.line.min(n - 1);
+        let is_blank = |l: usize| buf.line(l).trim().is_empty();
+        if is_blank(line) {
+            self.anchor = Some(Pos::new(line, 0));
+            self.caret = Pos::new(line, buf.line_len_chars(line));
+            self.desired_col = self.caret.col;
+            return;
+        }
+        let mut start = line;
+        while start > 0 && !is_blank(start - 1) {
+            start -= 1;
+        }
+        let mut end = line;
+        while end + 1 < n && !is_blank(end + 1) {
+            end += 1;
+        }
+        self.anchor = Some(Pos::new(start, 0));
+        self.caret = Pos::new(end, buf.line_len_chars(end));
+        self.desired_col = self.caret.col;
+    }
+
     // ----- Setters -----
 
     pub fn set_caret(&mut self, buf: &Buffer, pos: Pos) {
@@ -321,5 +430,44 @@ mod tests {
         assert_eq!(c.caret, Pos::new(2, 3));
         c.move_doc_start(&b, false);
         assert_eq!(c.caret, Pos::ORIGIN);
+    }
+
+    #[test]
+    fn select_word_toma_la_palabra_completa() {
+        let b = Buffer::from_str("hola mundo cruel");
+        let mut c = Cursor::new();
+        // click en medio de "mundo" (col 7).
+        c.select_word(&b, Pos::new(0, 7));
+        let (s, e) = c.selection_range(&b);
+        assert_eq!(b.slice(s, e), "mundo");
+    }
+
+    #[test]
+    fn select_word_borde_derecho_prefiere_palabra() {
+        let b = Buffer::from_str("hola mundo");
+        let mut c = Cursor::new();
+        // click justo después de la "a" de "hola" (col 4 = el espacio).
+        c.select_word(&b, Pos::new(0, 4));
+        let (s, e) = c.selection_range(&b);
+        assert_eq!(b.slice(s, e), "hola");
+    }
+
+    #[test]
+    fn select_paragraph_entre_lineas_en_blanco() {
+        let b = Buffer::from_str("uno\ndos\n\ntres\ncuatro\n\ncinco");
+        let mut c = Cursor::new();
+        // click en "tres" (línea 3) → párrafo "tres\ncuatro".
+        c.select_paragraph(&b, Pos::new(3, 1));
+        let (s, e) = c.selection_range(&b);
+        assert_eq!(b.slice(s, e), "tres\ncuatro");
+    }
+
+    #[test]
+    fn select_paragraph_primer_bloque() {
+        let b = Buffer::from_str("uno\ndos\n\ntres");
+        let mut c = Cursor::new();
+        c.select_paragraph(&b, Pos::new(0, 0));
+        let (s, e) = c.selection_range(&b);
+        assert_eq!(b.slice(s, e), "uno\ndos");
     }
 }
