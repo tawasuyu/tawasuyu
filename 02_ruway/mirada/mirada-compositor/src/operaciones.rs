@@ -57,6 +57,35 @@ impl App {
         None
     }
 
+    /// La superficie de la ventana visible bajo el puntero (front-to-back: el
+    /// shell gana a las flotantes, y éstas a las teseladas), si la hay. Espeja
+    /// el hit-test de `DrmState::window_at` pero usando sólo campos de `App`
+    /// (sin la lista de salidas del backend) — lo necesitan los handlers de
+    /// restricción de puntero, que sólo ven `App`. La altura de salida se toma
+    /// de `output_size` (correcta en monitor único; aproximada en multi-monitor,
+    /// suficiente para decidir activación de un lock).
+    pub(crate) fn surface_under_pointer(&self) -> Option<WlSurface> {
+        let (x, y) = self.pointer_loc;
+        let output_h = self.output_size.1;
+        let tbh = self.decorations.titlebar_height;
+        let mut idx: Vec<usize> = (0..self.windows.len())
+            .filter(|&i| self.windows[i].visible)
+            .collect();
+        idx.sort_by_key(|&i| {
+            let w = &self.windows[i];
+            (!w.is_shell, !w.floating, !w.focused)
+        });
+        idx.into_iter().find_map(|i| {
+            let w = &self.windows[i];
+            let tb = crate::titlebar_for(w, tbh);
+            let (lx, ly) = crate::render_loc(w, output_h, tbh);
+            let (sw, sh) =
+                crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+            (x >= lx as f64 && y >= ly as f64 && x < (lx + sw) as f64 && y < (ly + sh) as f64)
+                .then(|| w.surface.clone())
+        })
+    }
+
     /// El destino de teclado cuando ninguna ventana reclama el foco: la
     /// ventana que el Cerebro marcó enfocada o —si no hay ninguna— el shell
     /// (`pata`), para poder tipear directo en su barra sin clickear primero.

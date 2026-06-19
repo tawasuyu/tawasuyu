@@ -6,7 +6,10 @@ use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::compositor::CompositorState;
 use smithay::wayland::dmabuf::DmabufState;
 use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState;
+use smithay::wayland::pointer_constraints::PointerConstraintsState;
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::foreign_toplevel_list::ForeignToplevelListState;
 use smithay::wayland::output::OutputManagerState;
@@ -297,6 +300,16 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     let caps_ftm_filter = caps.clone();
     let caps_sc_filter = caps.clone();
 
+    // TODO idle-notify (ext_idle_notify_v1) + DPMS por inactividad.
+    // No se cablea acá porque `IdleNotifierState<App>` exige un
+    // `calloop::LoopHandle<'static, App>` en su constructor (lo usa para sus
+    // timers internos de idled/resumed), pero el bucle de eventos del backend
+    // DRM despacha `DrmState` (`EventLoop<DrmState>`), no `App`, y el backend
+    // `winit` no usa calloop en absoluto. Integrarlo requiere unificar el tipo
+    // de estado del bucle (que el `EventLoop` despache el mismo tipo que
+    // implementa los handlers Wayland) — un refactor del bucle, no un parche
+    // local. El punto de apagado físico de la pantalla (DPMS real sobre DRM)
+    // iría en el handler del timer de inactividad, sobre `DrmState::outputs`.
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
@@ -308,6 +321,15 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         dmabuf_state: DmabufState::new(),
         seat_state,
         data_device_state: DataDeviceState::new::<App>(&dh),
+        // Selección primaria (middle-click paste): protocolo abierto a todos los
+        // clientes, igual que `wl_data_device` (no es una capacidad sensible).
+        primary_selection_state: PrimarySelectionState::new::<App>(&dh),
+        // Restricciones de puntero y movimiento relativo: globales abiertos a
+        // todos (los necesitan juegos/apps 3D; el lock sólo se activa cuando la
+        // superficie restringida tiene el foco del puntero).
+        _pointer_constraints_state: PointerConstraintsState::new::<App>(&dh),
+        _relative_pointer_state: RelativePointerManagerState::new::<App>(&dh),
+        led_state: smithay::input::keyboard::LedState::default(),
         // `zwlr_data_control` (snoop de portapapeles): el filtro consulta los
         // permisos por el **ejecutable real** del cliente (de su PID por
         // `SO_PEERCRED`). Sin PID identificable → se permite (no romper).

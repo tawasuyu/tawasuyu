@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use smithay::backend::renderer::element::solid::SolidColorBuffer;
-use smithay::input::keyboard::KeyboardHandle;
+use smithay::input::keyboard::{KeyboardHandle, LedState};
 use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatState};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -10,8 +10,11 @@ use smithay::output::Output;
 use smithay::wayland::compositor::CompositorState;
 use smithay::wayland::dmabuf::{DmabufState};
 use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
 use smithay::wayland::selection::wlr_data_control::DataControlState;
+use smithay::wayland::pointer_constraints::PointerConstraintsState;
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::shell::xdg::{XdgShellState};
 use smithay::wayland::output::OutputManagerState;
@@ -286,6 +289,24 @@ pub(crate) struct App {
     pub(crate) dmabuf_state: DmabufState,
     pub(crate) seat_state: SeatState<App>,
     pub(crate) data_device_state: DataDeviceState,
+    /// Estado de `zwp_primary_selection_v1` — la **selección primaria** de X11:
+    /// seleccionar texto lo copia a un buffer aparte, y el clic central lo pega.
+    /// Es ortogonal al portapapeles normal (`Ctrl+C`/`Ctrl+V`, `wl_data_device`).
+    pub(crate) primary_selection_state: PrimarySelectionState,
+    /// Estado de `zwp_pointer_constraints_v1` — lock/confine del cursor sobre una
+    /// superficie. Lo usan juegos y apps 3D para capturar el ratón (mirada libre).
+    /// Sólo se conserva para mantener vivo el global (el handler no lee el estado;
+    /// la activación de la restricción va por `with_pointer_constraint`).
+    pub(crate) _pointer_constraints_state: PointerConstraintsState,
+    /// Estado de `zwp_relative_pointer_v1` — entrega del delta crudo del ratón
+    /// (sin acotar a la pantalla) a la superficie con foco; compañero natural del
+    /// pointer-lock para cámaras 3D / FPS. Sólo se conserva para mantener vivo el
+    /// global (la entrega va por `PointerHandle::relative_motion`).
+    pub(crate) _relative_pointer_state: RelativePointerManagerState,
+    /// Último estado de los LEDs del teclado (Bloq Mayús / Bloq Num / Bloq Despl),
+    /// que `smithay` calcula al procesar modificadores. El backend lo propaga a
+    /// los teclados físicos (`libinput::Device::led_update`).
+    pub(crate) led_state: LedState,
     /// Estado de `zwlr_data_control_manager_v1` — lectura/escritura del
     /// portapapeles SIN robar foco. Sin esto, `wl-paste` (el widget `clipboard`
     /// de pata lo corre ~1Hz) caía a su fallback: crear una surface de tamaño 0,

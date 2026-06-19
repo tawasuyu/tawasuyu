@@ -98,6 +98,14 @@ impl DrmState {
                         FilterResult::Forward
                     },
                 );
+                // LEDs físicos del teclado: `smithay` recalculó el estado de
+                // Bloq Mayús / Num / Despl (vía `led_state_changed`) al procesar
+                // los modificadores; lo reflejamos en el teclado real con el que
+                // se tipeó. Los dispositivos sin esos LEDs ignoran la orden.
+                {
+                    let mut device = event.device();
+                    device.led_update(self.app.led_state.into());
+                }
                 if let Some(combo) = self.app.pending_keybind.take() {
                     let ev = self.app.body.keybind(combo);
                     self.app.brain_feed(ev);
@@ -133,12 +141,18 @@ impl DrmState {
             // --- Puntero: movimiento relativo (ratón, touchpad) ----------
             InputEvent::PointerMotion { event } => {
                 let (x0, y0) = self.app.pointer_loc;
+                let delta = (event.delta_x(), event.delta_y());
+                let delta_unaccel = (event.delta_x_unaccel(), event.delta_y_unaccel());
                 // Pre-acotado al bounding box: descarta los outliers extremos
                 // sin hacer rondas innecesarias en `clamp_to_outputs`.
-                let x = (x0 + event.delta_x()).clamp(0.0, self.output_size.0);
-                let y = (y0 + event.delta_y()).clamp(0.0, self.output_size.1);
+                let x = (x0 + delta.0).clamp(0.0, self.output_size.0);
+                let y = (y0 + delta.1).clamp(0.0, self.output_size.1);
                 // Proyectado al output más cercano si cayó en zona muerta.
-                let (x, y) = self.clamp_to_outputs(x, y);
+                let prop = self.clamp_to_outputs(x, y);
+                // Movimiento relativo (delta crudo a la superficie con foco) +
+                // restricciones de puntero (lock/confine). Si la superficie con
+                // foco tiene un lock activo, el cursor queda clavado donde estaba.
+                let (x, y) = self.relative_y_restriccion(prop, delta, delta_unaccel, time);
                 self.app.pointer_loc = (x, y);
                 if self.root_menu.is_some() {
                     // El menú vive en coords locales a su salida. Si esa salida
@@ -547,10 +561,91 @@ impl DrmState {
                 if device.config_accel_is_available() {
                     let _ = device.config_accel_set_speed(speed);
                 }
+                // Estado inicial de los LEDs (un teclado recién enchufado debe
+                // reflejar el Bloq Mayús/Num/Despl ya vigente). No-op si el
+                // dispositivo no tiene esos LEDs.
+                device.led_update(self.app.led_state.into());
             }
 
             _ => {} // otros dispositivos: aún no
         }
+    }
+
+    /// Emite el movimiento **relativo** (delta crudo, sin acotar a la pantalla)
+    /// a la superficie con foco del puntero y aplica las restricciones de puntero
+    /// (`zwp_pointer_constraints_v1`):
+    /// - **Lock**: el cursor queda clavado donde estaba (apps 3D / FPS).
+    /// - **Confine**: el cursor se acota al rectángulo de la superficie.
+    ///
+    /// Devuelve la posición final del cursor (la propuesta `prop` salvo que una
+    /// restricción la corrija). El movimiento relativo se emite SIEMPRE: es un
+    /// no-op si el cliente con foco no usó el protocolo `relative_pointer`.
+    fn relative_y_restriccion(
+        &mut self,
+        prop: (f64, f64),
+        delta: (f64, f64),
+        delta_unaccel: (f64, f64),
+        time: u32,
+    ) -> (f64, f64) {
+        use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint};
+        let Some(pointer) = self.app.pointer.clone() else {
+            return prop;
+        };
+        // Superficie con foco = la ventana bajo el puntero ACTUAL (para un lock
+        // el cursor no se movió, así que sigue siendo la misma).
+        let (cx, cy) = self.app.pointer_loc;
+        let Some(i) = self.window_at(cx, cy) else {
+            // Sin ventana bajo el puntero no hay a quién mandarle movimiento
+            // relativo ni restricción que aplicar: va a la posición propuesta.
+            return prop;
+        };
+        let tbh = self.app.decorations.titlebar_height;
+        let (surface, lx, ly, sw, sh) = {
+            let w = &self.app.windows[i];
+            let (lx, ly) = crate::render_loc(w, self.app.output_size.1, tbh);
+            let tb = crate::titlebar_for(w, tbh);
+            let (sw, sh) =
+                crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+            (w.surface.clone(), lx, ly, sw, sh)
+        };
+        // Movimiento relativo a la superficie con foco (delta sin acotar).
+        let foco = Some((
+            surface.clone(),
+            Point::<f64, Logical>::from((lx as f64, ly as f64)),
+        ));
+        pointer.relative_motion(
+            &mut self.app,
+            foco,
+            &RelativeMotionEvent {
+                delta: Point::from(delta),
+                delta_unaccel: Point::from(delta_unaccel),
+                utime: time as u64 * 1000,
+            },
+        );
+        pointer.frame(&mut self.app);
+        // Restricción activa sobre esa superficie, si la hay.
+        let mut resultado = prop;
+        with_pointer_constraint(&surface, &pointer, |c| {
+            let Some(c) = c else { return };
+            // El puntero está sobre la superficie restringida → tiene su foco:
+            // activamos la restricción si aún no lo estaba (la desactivación al
+            // perder el foco la maneja smithay sola).
+            if !c.is_active() {
+                c.activate();
+            }
+            match &*c {
+                // Lock: el cursor no se mueve.
+                PointerConstraint::Locked(_) => resultado = (cx, cy),
+                // Confine: acotado al rectángulo de la superficie. (Aprox.: no se
+                // recorta a la región fina `c.region()` — TODO si hace falta.)
+                PointerConstraint::Confined(_) => {
+                    let x = prop.0.clamp(lx as f64, (lx + sw) as f64 - 1.0);
+                    let y = prop.1.clamp(ly as f64, (ly + sh) as f64 - 1.0);
+                    resultado = (x, y);
+                }
+            }
+        });
+        resultado
     }
 
     /// Reenvía el puntero a la ventana que tiene debajo y, si esa ventana

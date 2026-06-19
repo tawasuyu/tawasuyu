@@ -13,10 +13,14 @@ use smithay::wayland::shell::xdg::{PopupSurface, PositionerState, ToplevelSurfac
 use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::wayland::selection::data_device::{with_source_metadata, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler};
+use smithay::wayland::selection::data_device::{set_data_device_focus, with_source_metadata, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler};
 use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
+use smithay::wayland::selection::primary_selection::{set_primary_focus, PrimarySelectionHandler, PrimarySelectionState};
 use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
+use smithay::input::pointer::PointerHandle;
+use smithay::input::keyboard::LedState;
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::input::{Seat, SeatHandler, SeatState};
@@ -28,8 +32,10 @@ use smithay::utils::SERIAL_COUNTER;
 use smithay::desktop::WindowSurfaceType as WST2;
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
-    delegate_foreign_toplevel_list, delegate_layer_shell, delegate_output, delegate_seat,
-    delegate_shm, delegate_virtual_keyboard_manager, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_foreign_toplevel_list, delegate_layer_shell, delegate_output,
+    delegate_pointer_constraints, delegate_primary_selection, delegate_relative_pointer,
+    delegate_seat, delegate_shm, delegate_virtual_keyboard_manager, delegate_xdg_decoration,
+    delegate_xdg_shell,
 };
 
 impl CompositorHandler for App {
@@ -491,12 +497,64 @@ impl SeatHandler for App {
         &mut self.seat_state
     }
 
-    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
+    /// Al cambiar el foco de teclado, mudamos también el foco de las
+    /// **selecciones** (portapapeles normal y selección primaria) al cliente
+    /// enfocado: así `Ctrl+V` y el pegado con clic central entregan la
+    /// selección al que está escribiendo.
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        let client = focused.and_then(|s| s.client());
+        let dh = self.dh.clone();
+        set_data_device_focus(&dh, seat, client.clone());
+        set_primary_focus(&dh, seat, client);
+    }
 
     /// El cliente enfocado pidió un cursor — guardamos su petición; el
     /// backend la pinta (su superficie, o el cuadrado si es con nombre).
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         self.cursor_status = image;
+    }
+
+    /// `smithay` recalculó los LEDs del teclado (al togglear Bloq Mayús / Num /
+    /// Despl). Guardamos el estado; el backend lo aplica al teclado físico —el
+    /// backend `winit` no tiene LEDs que prender, así que sólo se guarda.
+    fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: LedState) {
+        self.led_state = led_state;
+    }
+}
+
+/// Restricciones de puntero (`zwp_pointer_constraints_v1`): lock/confine del
+/// cursor sobre una superficie, para apps 3D / juegos. La **activación** real
+/// de la restricción se hace en el camino del movimiento del puntero (cuando
+/// la superficie restringida tiene el foco del puntero) — ver `drm_backend::input`.
+impl PointerConstraintsHandler for App {
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Si la superficie restringida ya tiene el puntero encima al crearse la
+        // restricción, la activamos de una (un juego que captura el ratón sin
+        // moverlo todavía). Si no, se activará en el primer movimiento sobre ella.
+        if self.surface_under_pointer().as_ref() == Some(surface) {
+            with_pointer_constraint(surface, pointer, |c| {
+                if let Some(c) = c {
+                    c.activate();
+                }
+            });
+        }
+    }
+
+    fn cursor_position_hint(
+        &mut self,
+        _surface: &WlSurface,
+        _pointer: &PointerHandle<Self>,
+        _location: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        // Pista de dónde el cliente dibuja su cursor mientras está bloqueado.
+        // Útil para reposicionar el cursor de SW al desbloquear; por ahora el
+        // backend no lo usa (el cursor físico no se mueve durante el lock).
+    }
+}
+
+impl PrimarySelectionHandler for App {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection_state
     }
 }
 
@@ -513,6 +571,9 @@ delegate_shm!(App);
 delegate_seat!(App);
 delegate_data_device!(App);
 delegate_data_control!(App);
+delegate_primary_selection!(App);
+delegate_pointer_constraints!(App);
+delegate_relative_pointer!(App);
 delegate_virtual_keyboard_manager!(App);
 delegate_foreign_toplevel_list!(App);
 

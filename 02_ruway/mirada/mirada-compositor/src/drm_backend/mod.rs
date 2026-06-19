@@ -26,8 +26,8 @@ use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisSource, ButtonState, InputEvent, KeyState, KeyboardKeyEvent,
-    PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
+    KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::element::memory::{
@@ -45,7 +45,9 @@ use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::input::keyboard::FilterResult;
-use smithay::input::pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent};
+use smithay::input::pointer::{
+    AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent, RelativeMotionEvent,
+};
 use smithay::output::OutputModeSource;
 use smithay::reexports::calloop::channel::{channel as ticket_channel, Event as TicketEvent};
 use smithay::reexports::calloop::generic::Generic;
