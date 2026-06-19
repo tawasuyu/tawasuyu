@@ -20,6 +20,12 @@ use llimphi_3d::Camera3d;
 /// (cúbica en XZ, alto = 0.4·lado, mínimo 48) — el mismo criterio que la app.
 pub const PREVIEW_DIM_XZ: u32 = 128;
 
+/// **Dirección del sol** de la escena (hacia el sol, sin normalizar). Una sola
+/// fuente de verdad: la usa el preview/export para iluminar (`voxel.sun_dir`) y el
+/// plano [`ShotKind::Backlight`] para saber adónde mirar. Sol algo bajo → luz
+/// rasante (claroscuro) y, en contraluz, **god rays** legibles.
+pub const SCENE_SUN: [f32; 3] = [0.5, 0.36, 0.45];
+
 /// Calcula el `dim` `[x, y, z]` de un mundo de lado `xz` (alto derivado).
 pub fn world_dim(xz: u32) -> [u32; 3] {
     let dy = (xz * 4 / 10).max(48);
@@ -129,12 +135,21 @@ pub enum ShotKind {
     Side,
     /// Órbita: gira lento alrededor del reparto.
     Orbit,
+    /// **Contraluz**: cámara del lado opuesto al sol, mirando hacia él con el reparto
+    /// a contraluz (silueta en el tercio bajo) y el disco solar en lo alto del cuadro
+    /// → rim light + **god rays** (haces volumétricos). El plano "héroe" del motor.
+    Backlight,
 }
 
 impl ShotKind {
     /// Todos los planos (para ciclar en un editor).
-    pub const ALL: [ShotKind; 4] =
-        [ShotKind::Establishing, ShotKind::CloseUp, ShotKind::Side, ShotKind::Orbit];
+    pub const ALL: [ShotKind; 5] = [
+        ShotKind::Establishing,
+        ShotKind::CloseUp,
+        ShotKind::Side,
+        ShotKind::Orbit,
+        ShotKind::Backlight,
+    ];
 
     /// Nombre legible (español).
     pub fn label(self) -> &'static str {
@@ -143,6 +158,7 @@ impl ShotKind {
             ShotKind::CloseUp => "primer plano",
             ShotKind::Side => "lateral",
             ShotKind::Orbit => "órbita",
+            ShotKind::Backlight => "contraluz",
         }
     }
 
@@ -156,18 +172,30 @@ impl ShotKind {
     /// elevado a la altura del pecho), con el ojo según el tipo, a distancia base
     /// `d` (escala con el tamaño del reparto). `t` (seg) anima la órbita.
     pub fn resolve(self, look: Vec3, d: f32, t: f32) -> Camera3d {
-        let (eye, fov) = match self {
+        // `(eye, fov, target)` por tipo. Casi todos miran al reparto (`look`); el
+        // contraluz sube el objetivo hacia el sol para meterlo en el cuadro.
+        let (eye, fov, target) = match self {
             ShotKind::Establishing => {
-                (look + Vec3::new(-0.5 * d, 0.9 * d, -1.6 * d), 50.0)
+                (look + Vec3::new(-0.5 * d, 0.9 * d, -1.6 * d), 50.0, look)
             }
-            ShotKind::CloseUp => (look + Vec3::new(0.25 * d, 0.45 * d, -0.85 * d), 40.0),
-            ShotKind::Side => (look + Vec3::new(1.35 * d, 0.4 * d, 0.15 * d), 46.0),
+            ShotKind::CloseUp => (look + Vec3::new(0.25 * d, 0.45 * d, -0.85 * d), 40.0, look),
+            ShotKind::Side => (look + Vec3::new(1.35 * d, 0.4 * d, 0.15 * d), 46.0, look),
             ShotKind::Orbit => {
                 let a = t * 0.6;
-                (look + Vec3::new(a.cos() * 1.3 * d, 0.6 * d, a.sin() * 1.3 * d), 48.0)
+                (look + Vec3::new(a.cos() * 1.3 * d, 0.6 * d, a.sin() * 1.3 * d), 48.0, look)
+            }
+            ShotKind::Backlight => {
+                // Detrás del reparto respecto al sol (horizontal anti-sol), apenas
+                // elevado; el objetivo sube hacia el cielo → la cámara mira hacia el
+                // sol con el reparto a contraluz en el tercio bajo.
+                let s = Vec3::new(SCENE_SUN[0], SCENE_SUN[1], SCENE_SUN[2]).normalize();
+                let back = Vec3::new(-s.x, 0.0, -s.z).normalize();
+                let eye = look + back * (1.2 * d) + Vec3::new(0.0, 0.15 * d, 0.0);
+                let target = look + Vec3::new(0.0, 0.55 * d, 0.0);
+                (eye, 55.0, target)
             }
         };
-        Camera3d { eye, target: look, fovy_rad: fov_f32_to_rad(fov), ..Camera3d::default() }
+        Camera3d { eye, target, fovy_rad: fov_f32_to_rad(fov), ..Camera3d::default() }
     }
 }
 
@@ -324,9 +352,11 @@ impl SceneSpec {
                 frame_rate: if i == 0 { Some(12) } else { None },
             });
         }
-        // Dos planos: establecedor durante la caminata, primer plano en el gesto.
+        // Tres planos: establecedor, **contraluz** a mitad de la caminata (el reparto
+        // entra al sol → luce los god rays), y primer plano en el gesto.
         let shots = vec![
             ShotSpec { start: 0.0, kind: ShotKind::Establishing },
+            ShotSpec { start: t_walk * 0.5, kind: ShotKind::Backlight },
             ShotSpec { start: t_turn, kind: ShotKind::CloseUp },
         ];
         // Cámara en mano suave por defecto: el sello se ve sin tener que pedirlo.

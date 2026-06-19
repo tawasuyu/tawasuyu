@@ -10,7 +10,7 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
-use llimphi_voxel::WorldRecipe;
+use llimphi_voxel::{WorldRecipe, SCENE_SUN};
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -51,12 +51,12 @@ impl WorldPreview {
         dim: [u32; 3],
     ) -> VoxelRenderer {
         let mut voxel = VoxelRenderer::new(device, queue, FMT, grid);
-        voxel.sun_dir = [0.5, 0.36, 0.45]; // sol más bajo: luz rasante, sombras largas (claroscuro) + god rays que leen
+        voxel.sun_dir = SCENE_SUN; // sol bajo: luz rasante, claroscuro; el plano Backlight mira hacia acá
         voxel.atmosphere = Atmosphere {
             sky_zenith: [64, 118, 196],
             sky_horizon: [202, 218, 236],
-            fog_density: 0.5 / dim[0] as f32,
-            god_rays: 0.7, // haces de sol cruzando la niebla — sello anti-Minecraft
+            fog_density: 1.1 / dim[0] as f32, // bruma de desierto: medio que dispersa → god rays legibles
+            god_rays: 0.9, // haces de sol cruzando la niebla — sello anti-Minecraft
         };
         voxel
     }
