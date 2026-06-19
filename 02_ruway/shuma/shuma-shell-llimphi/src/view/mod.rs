@@ -15,7 +15,7 @@ mod widgets;
 pub(crate) use chrome::{
     empty_bar, render_bottombar, render_main_area, render_topbar, status_bar,
 };
-pub(crate) use modals::{containers_modal, hosts_modal, layouts_modal};
+pub(crate) use modals::{containers_modal, hosts_modal, layouts_modal, perfiles_modal};
 pub(crate) use monitors::{curve_view, monitor_card, monitor_stack};
 pub(crate) use widgets::placeholder;
 

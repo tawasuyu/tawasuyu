@@ -874,6 +874,19 @@ pub(crate) enum Slot {
     Session(usize, Which),
 }
 
+// ─── Perfiles ───────────────────────────────────────────────────────
+
+/// Cuál de las tres bibliotecas de perfiles está mirando/gestionando el modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfKind {
+    /// Atajos del workspace (globales).
+    Shortcuts,
+    /// Apariencia (global + por sesión).
+    Appearance,
+    /// Perfiles de sesión (contextos tipo Firefox).
+    Sessions,
+}
+
 // ─── Modelo ─────────────────────────────────────────────────────────
 
 pub struct Model {
@@ -888,6 +901,14 @@ pub struct Model {
     /// `true` mientras se esperó el prefijo de un keymap con prefijo (tmux/vim).
     /// Transitorio, no se persiste.
     pub pending_prefix: bool,
+    /// Modal de gestión de perfiles abierto.
+    pub perfiles_modal_open: bool,
+    /// Pestaña activa del modal de perfiles.
+    pub perfiles_tab: ProfKind,
+    /// Campo de nombre del modal de perfiles (crear/duplicar/renombrar).
+    pub prof_name: TextInputState,
+    /// `true` si el campo de nombre del modal de perfiles tiene foco.
+    pub prof_name_focused: bool,
 
     pub topbar: Option<Instance>,
     pub bottombar: Option<Instance>,
@@ -1110,6 +1131,26 @@ pub enum Msg {
     SetSessionAppearance(Option<String>),
     /// Conmuta el perfil de sesión activo (contexto tipo Firefox).
     SwitchSessionProfile(String),
+    /// Abre el modal de gestión de perfiles.
+    OpenPerfilesModal,
+    /// Cierra el modal de gestión de perfiles.
+    ClosePerfilesModal,
+    /// Cambia la pestaña del modal de perfiles.
+    PerfilesTab(ProfKind),
+    /// Foca el campo de nombre del modal de perfiles.
+    ProfNameFocus,
+    /// Tecla en el campo de nombre del modal de perfiles.
+    ProfNameKey(llimphi_ui::KeyEvent),
+    /// Activa un perfil (lo mismo que conmutarlo) desde el modal.
+    ProfUse(ProfKind, String),
+    /// Duplica un perfil con el nombre del campo (o `<src> copia` si vacío).
+    ProfDuplicate(ProfKind, String),
+    /// Renombra un perfil al nombre del campo (sólo perfiles propios).
+    ProfRename(ProfKind, String),
+    /// Borra un perfil propio.
+    ProfDelete(ProfKind, String),
+    /// Crea un perfil nuevo con el nombre del campo (desde una base sensata).
+    ProfCreate(ProfKind),
 
     // ─── Workspace tipo zellij (tabs · tiling · flotantes) ──────────
     /// Parte el panel con foco (Horizontal = lado a lado · Vertical = apilado).

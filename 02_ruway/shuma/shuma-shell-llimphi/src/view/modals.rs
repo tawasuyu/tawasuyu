@@ -746,3 +746,188 @@ fn layout_row(idx: usize, name: &str, n_sessions: usize, theme: &Theme) -> View<
     .hover_fill(theme.bg_row_hover)
     .children(vec![display, restore_btn, rm_btn])
 }
+
+// ─── Modal de gestión de perfiles ───────────────────────────────────
+
+/// Diálogo de gestión de perfiles: tres pestañas (atajos · apariencia ·
+/// sesión), cada una lista sus perfiles con activar/duplicar/renombrar/borrar,
+/// más un campo de nombre para crear/duplicar/renombrar.
+pub(crate) fn perfiles_modal(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
+    modal_view(ModalSpec {
+        title: "Perfiles".to_string(),
+        body: perfiles_modal_body(model, theme),
+        buttons: vec![ModalButton::cancel("Listo", Msg::ClosePerfilesModal)],
+        size: (560.0, 600.0),
+        viewport: model.viewport,
+        on_dismiss: Msg::Noop,
+        palette: ModalPalette::from_theme(theme),
+    })
+}
+
+/// Botón de pestaña del modal (resaltado si es la activa).
+fn prof_tab_btn(label: &str, kind: ProfKind, active: bool, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    let fill = if active { theme.bg_selected } else { theme.bg_button };
+    View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(28.0_f32) },
+        flex_grow: 1.0,
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(fill)
+    .hover_fill(theme.bg_button_hover)
+    .radius(4.0)
+    .text_aligned(label.to_string(), 11.5, theme.fg_text, Alignment::Center)
+    .on_click(Msg::PerfilesTab(kind))
+}
+
+fn perfiles_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let kind = model.perfiles_tab;
+    let tpal = TextInputPalette::from_theme(theme);
+
+    // Datos del tipo en pestaña: (nombre, es_activo, es_de_fábrica).
+    let rows_data: Vec<(String, bool, bool)> = match kind {
+        ProfKind::Shortcuts => {
+            let active = model.shortcuts.active().to_string();
+            model
+                .shortcuts
+                .names()
+                .into_iter()
+                .map(|n| {
+                    let b = crate::perfiles::shortcuts::is_builtin(&n);
+                    let a = n == active;
+                    (n, a, b)
+                })
+                .collect()
+        }
+        ProfKind::Appearance => {
+            let active = model.appearance.active().to_string();
+            model
+                .appearance
+                .names()
+                .into_iter()
+                .map(|n| {
+                    let b = crate::perfiles::appearance::is_builtin(&n);
+                    let a = n == active;
+                    (n, a, b)
+                })
+                .collect()
+        }
+        ProfKind::Sessions => {
+            let active = model.session_profiles.active().to_string();
+            model
+                .session_profiles
+                .names()
+                .iter()
+                .map(|n| {
+                    let b = n == crate::perfiles::sessions::DEFAULT_NAME;
+                    let a = *n == active;
+                    (n.clone(), a, b)
+                })
+                .collect()
+        }
+    };
+
+    let descr = match kind {
+        ProfKind::Shortcuts => "Atajos del workspace (globales). Nuevos/duplicados arrancan como «shuma».",
+        ProfKind::Appearance => "Coloración por ventana. Nuevos/duplicados arrancan del perfil activo.",
+        ProfKind::Sessions => "Contextos tipo Firefox: cada uno aísla sus sesiones y workspaces.",
+    };
+
+    // Pestañas.
+    let tabs = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        prof_tab_btn("Atajos", ProfKind::Shortcuts, kind == ProfKind::Shortcuts, theme),
+        prof_tab_btn("Apariencia", ProfKind::Appearance, kind == ProfKind::Appearance, theme),
+        prof_tab_btn("Sesión", ProfKind::Sessions, kind == ProfKind::Sessions, theme),
+    ]);
+
+    let sub = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .text_aligned(descr.to_string(), 11.0, theme.fg_muted, Alignment::Start);
+
+    // Campo de nombre + crear.
+    let name_input = text_input_view(
+        &model.prof_name,
+        "nombre (para crear / duplicar / renombrar)",
+        model.prof_name_focused,
+        &tpal,
+        Msg::ProfNameFocus,
+    );
+    let create_btn = action_button_small("+ Crear con este nombre", Msg::ProfCreate(kind), theme);
+
+    // Lista de perfiles.
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    rows.push(panel_label("Perfiles", theme));
+    for (name, is_active, is_builtin) in rows_data {
+        rows.push(prof_row(kind, &name, is_active, is_builtin, theme));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .children({
+        let mut all = vec![tabs, sub, panel_label("Crear / duplicar / renombrar", theme), name_input, create_btn];
+        all.extend(rows);
+        all
+    })
+}
+
+/// Una fila de perfil: nombre (● si activo) + acciones.
+fn prof_row(kind: ProfKind, name: &str, is_active: bool, is_builtin: bool, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let label = if is_active { format!("\u{25CF} {name}") } else { name.to_string() };
+    let display = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(label, 12.0, theme.fg_text, Alignment::Start);
+
+    let mut kids: Vec<View<Msg>> = vec![display];
+    if !is_active {
+        kids.push(action_button_small("Usar", Msg::ProfUse(kind, name.to_string()), theme));
+    }
+    kids.push(action_button_small("Duplicar", Msg::ProfDuplicate(kind, name.to_string()), theme));
+    if !is_builtin {
+        kids.push(action_button_small("Renombrar", Msg::ProfRename(kind, name.to_string()), theme));
+        kids.push(action_button_small("\u{1F5D1}", Msg::ProfDelete(kind, name.to_string()), theme));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .children(kids)
+}

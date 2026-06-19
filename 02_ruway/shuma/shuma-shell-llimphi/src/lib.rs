@@ -204,6 +204,10 @@ pub fn new_model() -> Model {
         appearance,
         session_profiles,
         pending_prefix: false,
+        perfiles_modal_open: false,
+        perfiles_tab: ProfKind::Shortcuts,
+        prof_name: TextInputState::new(),
+        prof_name_focused: false,
         topbar,
         bottombar,
         main,
@@ -332,6 +336,54 @@ pub(crate) fn switch_session_profile(mut m: Model, name: &str) -> Model {
     m
 }
 
+/// Persiste a disco la biblioteca de perfiles del tipo dado.
+pub(crate) fn save_profiles(m: &Model, kind: ProfKind) {
+    match kind {
+        ProfKind::Shortcuts => {
+            if let Some(p) = perfiles::shortcuts::ShortcutProfiles::default_path() {
+                let _ = m.shortcuts.save(&p);
+            }
+        }
+        ProfKind::Appearance => {
+            if let Some(p) = perfiles::appearance::AppearanceProfiles::default_path() {
+                let _ = m.appearance.save(&p);
+            }
+        }
+        ProfKind::Sessions => {
+            if let Some(p) = perfiles::sessions::SessionProfiles::default_path() {
+                let _ = m.session_profiles.save(&p);
+            }
+        }
+    }
+}
+
+/// Renombra un **perfil de sesión**: mueve su directorio de datos en disco y
+/// actualiza el índice. Si es el activo, reapunta el directorio global.
+pub(crate) fn rename_session_profile(mut m: Model, from: &str, to: &str) -> Model {
+    // Mover el directorio en disco antes de tocar el índice (si existe).
+    if let (Some(old), Some(new)) = (
+        perfiles::sessions::data_dir_for(from),
+        perfiles::sessions::data_dir_for(to),
+    ) {
+        if old.exists() && !new.exists() {
+            if let Some(parent) = new.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::rename(&old, &new);
+        }
+    }
+    let was_active = m.session_profiles.active() == from;
+    if m.session_profiles.rename(from, to).is_ok() {
+        if was_active {
+            perfiles::sessions::set_active(to);
+        }
+        if let Some(p) = perfiles::sessions::SessionProfiles::default_path() {
+            let _ = m.session_profiles.save(&p);
+        }
+    }
+    m
+}
+
 // ─── App impl ───────────────────────────────────────────────────────
 
 pub struct Shell;
@@ -384,6 +436,12 @@ impl App for Shell {
                 return Some(Msg::CloseLayoutsModal);
             }
             return Some(Msg::LayoutNameKey(e.clone()));
+        }
+        if model.perfiles_modal_open {
+            if let llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) = &e.key {
+                return Some(Msg::ClosePerfilesModal);
+            }
+            return Some(Msg::ProfNameKey(e.clone()));
         }
         if model.focused_field.is_some() {
             return Some(Msg::RemoteKey(e.clone()));
@@ -1614,6 +1672,111 @@ impl App for Shell {
             Msg::SwitchSessionProfile(name) => {
                 m = switch_session_profile(m, &name);
             }
+
+            // ─── Modal de gestión de perfiles ───────────────────────
+            Msg::OpenPerfilesModal => {
+                m.perfiles_modal_open = true;
+                m.prof_name_focused = true;
+                m.menu_open = None;
+            }
+            Msg::ClosePerfilesModal => {
+                m.perfiles_modal_open = false;
+                m.prof_name_focused = false;
+                m.prof_name.set_text("");
+            }
+            Msg::PerfilesTab(kind) => {
+                m.perfiles_tab = kind;
+            }
+            Msg::ProfNameFocus => {
+                m.prof_name_focused = true;
+            }
+            Msg::ProfNameKey(e) => match &e.key {
+                llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
+                    m.prof_name_focused = false;
+                }
+                llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
+                    handle.dispatch(Msg::ProfCreate(m.perfiles_tab));
+                }
+                _ => {
+                    let _ = m.prof_name.apply_key(&e);
+                }
+            },
+            Msg::ProfUse(kind, name) => {
+                let next = match kind {
+                    ProfKind::Shortcuts => Msg::SwitchShortcutProfile(name),
+                    ProfKind::Appearance => Msg::SwitchAppearanceProfile(name),
+                    ProfKind::Sessions => Msg::SwitchSessionProfile(name),
+                };
+                handle.dispatch(next);
+            }
+            Msg::ProfDuplicate(kind, src) => {
+                let typed = m.prof_name.text().trim().to_string();
+                let name = if typed.is_empty() { format!("{src} copia") } else { typed };
+                let ok = match kind {
+                    ProfKind::Shortcuts => m.shortcuts.duplicate(&src, &name).is_ok(),
+                    ProfKind::Appearance => m.appearance.duplicate(&src, &name).is_ok(),
+                    ProfKind::Sessions => m.session_profiles.create(&name).is_ok(),
+                };
+                if ok {
+                    save_profiles(&m, kind);
+                    m.prof_name.set_text("");
+                }
+            }
+            Msg::ProfRename(kind, src) => {
+                let to = m.prof_name.text().trim().to_string();
+                if to.is_empty() {
+                    // sin nombre nuevo no hay nada que hacer
+                } else {
+                    let ok = match kind {
+                        ProfKind::Shortcuts => m.shortcuts.rename(&src, &to).is_ok(),
+                        ProfKind::Appearance => m.appearance.rename(&src, &to).is_ok(),
+                        ProfKind::Sessions => {
+                            m = rename_session_profile(m, &src, &to);
+                            m.session_profiles.contains(&to)
+                        }
+                    };
+                    if ok {
+                        save_profiles(&m, kind);
+                        m.prof_name.set_text("");
+                    }
+                }
+            }
+            Msg::ProfDelete(kind, name) => {
+                let ok = match kind {
+                    ProfKind::Shortcuts => m.shortcuts.remove(&name).is_ok(),
+                    ProfKind::Appearance => m.appearance.remove(&name).is_ok(),
+                    ProfKind::Sessions => m.session_profiles.remove(&name).is_ok(),
+                };
+                if ok {
+                    save_profiles(&m, kind);
+                    if kind == ProfKind::Appearance {
+                        perfiles::apply_active_appearance(&mut m);
+                    }
+                }
+            }
+            Msg::ProfCreate(kind) => {
+                let name = m.prof_name.text().trim().to_string();
+                if !name.is_empty() {
+                    let ok = match kind {
+                        // Atajos: arranca como el nativo `shuma`.
+                        ProfKind::Shortcuts => {
+                            let base = perfiles::shortcuts::preset("shuma").expect("preset");
+                            m.shortcuts.create(&name, base).is_ok()
+                        }
+                        // Apariencia: arranca como el perfil activo (o Oscuro).
+                        ProfKind::Appearance => {
+                            let base = m.appearance.active_appearance();
+                            m.appearance.create(&name, base).is_ok()
+                        }
+                        // Sesión: contexto nuevo y vacío.
+                        ProfKind::Sessions => m.session_profiles.create(&name).is_ok(),
+                    };
+                    if ok {
+                        save_profiles(&m, kind);
+                        m.prof_name.set_text("");
+                    }
+                }
+            }
         }
         m
     }
@@ -1648,6 +1811,9 @@ impl App for Shell {
         }
         if model.layouts_modal_open {
             return Some(view::layouts_modal(model, &model.theme));
+        }
+        if model.perfiles_modal_open {
+            return Some(view::perfiles_modal(model, &model.theme));
         }
         view::dropdown_overlay(model).or_else(|| menu::overlay(model))
     }

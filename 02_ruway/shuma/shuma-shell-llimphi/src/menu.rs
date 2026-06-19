@@ -162,6 +162,9 @@ fn perfiles_menu(model: &Model) -> Menu {
     let header = |label: &str| MenuItem::new(label, "noop").disabled().separated();
     let mut menu = Menu::new("Perfiles");
 
+    // Gestor (crear/duplicar/renombrar/borrar).
+    menu = menu.item(MenuItem::new("Gestionar perfiles…", "prof.manage"));
+
     // ── Atajos (global) ──
     menu = menu.item(header("Atajos"));
     let sk_active = model.shortcuts.active().to_string();
@@ -335,6 +338,12 @@ pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
     }
 
     // ── Perfiles ──
+    // Abre el modal de gestión (crear/duplicar/renombrar/borrar).
+    if cmd == "prof.manage" {
+        model.perfiles_modal_open = true;
+        model.prof_name_focused = true;
+        return model;
+    }
     // Atajos (global): conmuta el keymap activo y lo persiste.
     if let Some(name) = cmd.strip_prefix("prof.sk.") {
         if model.shortcuts.set_active(name).is_ok() {

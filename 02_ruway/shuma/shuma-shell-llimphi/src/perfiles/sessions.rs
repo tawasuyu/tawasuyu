@@ -148,6 +148,35 @@ impl SessionProfiles {
         Ok(())
     }
 
+    /// Renombra un perfil propio (`default` no se renombra). Si se renombra el
+    /// activo, el activo sigue al nombre nuevo. (El movimiento del directorio en
+    /// disco lo hace quien conmuta — ver `lib::rename_session_profile`.)
+    pub fn rename(&mut self, from: &str, to: &str) -> Result<(), super::shortcuts::ProfileError> {
+        use super::shortcuts::ProfileError;
+        let to = to.trim();
+        if to.is_empty() {
+            return Err(ProfileError::EmptyName);
+        }
+        if from == DEFAULT_NAME {
+            return Err(ProfileError::BuiltinProtected(from.to_string()));
+        }
+        if !self.contains(from) {
+            return Err(ProfileError::NotFound(from.to_string()));
+        }
+        if self.contains(to) {
+            return Err(ProfileError::AlreadyExists(to.to_string()));
+        }
+        for n in &mut self.names {
+            if n == from {
+                *n = to.to_string();
+            }
+        }
+        if self.active == from {
+            self.active = to.to_string();
+        }
+        Ok(())
+    }
+
     // --- Disco --------------------------------------------------------
 
     /// La ruta canónica del índice: `~/.config/shuma/session-profiles.ron`
@@ -229,6 +258,17 @@ mod tests {
         // borrar el activo cae a default.
         p.remove("trabajo").unwrap();
         assert_eq!(p.active(), DEFAULT_NAME);
+    }
+
+    #[test]
+    fn renombrar_protege_default_y_sigue_al_activo() {
+        let mut p = SessionProfiles::default();
+        p.create("trabajo").unwrap();
+        p.set_active("trabajo").unwrap();
+        assert!(p.rename(DEFAULT_NAME, "x").is_err()); // protegido
+        p.rename("trabajo", "obra").unwrap();
+        assert!(p.contains("obra") && !p.contains("trabajo"));
+        assert_eq!(p.active(), "obra");
     }
 
     #[test]

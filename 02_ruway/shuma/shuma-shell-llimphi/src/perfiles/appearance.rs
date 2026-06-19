@@ -216,6 +216,31 @@ impl AppearanceProfiles {
         self.create(name, ap)
     }
 
+    /// Renombra un perfil propio (los presets no se renombran). Si se renombra
+    /// el activo, el activo sigue al nombre nuevo.
+    pub fn rename(&mut self, from: &str, to: &str) -> Result<(), super::shortcuts::ProfileError> {
+        use super::shortcuts::ProfileError;
+        let to = to.trim();
+        if to.is_empty() {
+            return Err(ProfileError::EmptyName);
+        }
+        if is_builtin(from) {
+            return Err(ProfileError::BuiltinProtected(from.to_string()));
+        }
+        if !self.profiles.contains_key(from) {
+            return Err(ProfileError::NotFound(from.to_string()));
+        }
+        if self.profiles.contains_key(to) {
+            return Err(ProfileError::AlreadyExists(to.to_string()));
+        }
+        let ap = self.profiles.remove(from).expect("recién comprobado");
+        self.profiles.insert(to.to_string(), ap);
+        if self.active == from {
+            self.active = to.to_string();
+        }
+        Ok(())
+    }
+
     /// Borra un perfil. Los presets de fábrica no se pueden borrar; si se borra
     /// el activo, cae a `Sistema`.
     pub fn remove(&mut self, name: &str) -> Result<(), super::shortcuts::ProfileError> {
@@ -327,6 +352,15 @@ mod tests {
         let back = AppearanceProfiles::from_ron(&p.to_ron()).unwrap();
         assert_eq!(back.active(), "Mío");
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn renombrar_respeta_presets() {
+        let mut p = AppearanceProfiles::default();
+        assert!(p.rename("Oscuro", "x").is_err()); // de fábrica
+        p.duplicate("Oscuro", "Mío").unwrap();
+        p.rename("Mío", "Tuyo").unwrap();
+        assert!(p.contains("Tuyo") && !p.contains("Mío"));
     }
 
     #[test]

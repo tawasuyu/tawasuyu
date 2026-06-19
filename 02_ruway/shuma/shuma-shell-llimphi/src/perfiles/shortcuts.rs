@@ -345,6 +345,30 @@ impl ShortcutProfiles {
         self.create(name, km)
     }
 
+    /// Renombra un perfil propio (los presets no se renombran). Si se renombra
+    /// el activo, el activo sigue al nombre nuevo.
+    pub fn rename(&mut self, from: &str, to: &str) -> Result<(), ProfileError> {
+        let to = to.trim();
+        if to.is_empty() {
+            return Err(ProfileError::EmptyName);
+        }
+        if is_builtin(from) {
+            return Err(ProfileError::BuiltinProtected(from.to_string()));
+        }
+        if !self.profiles.contains_key(from) {
+            return Err(ProfileError::NotFound(from.to_string()));
+        }
+        if self.profiles.contains_key(to) {
+            return Err(ProfileError::AlreadyExists(to.to_string()));
+        }
+        let km = self.profiles.remove(from).expect("recién comprobado");
+        self.profiles.insert(to.to_string(), km);
+        if self.active == from {
+            self.active = to.to_string();
+        }
+        Ok(())
+    }
+
     /// Borra un perfil. Los presets de fábrica no se pueden borrar. Si se borra
     /// el activo, cae a `shuma`.
     pub fn remove(&mut self, name: &str) -> Result<(), ProfileError> {
@@ -567,6 +591,17 @@ mod tests {
         p.remove("mío").unwrap();
         assert!(!p.contains("mío"));
         assert_eq!(p.active(), "shuma"); // el activo cae al nativo
+    }
+
+    #[test]
+    fn renombrar_respeta_presets_y_sigue_al_activo() {
+        let mut p = ShortcutProfiles::default();
+        assert!(p.rename("tmux", "x").is_err()); // de fábrica
+        p.duplicate("vim", "a").unwrap();
+        p.set_active("a").unwrap();
+        p.rename("a", "b").unwrap();
+        assert!(p.contains("b") && !p.contains("a"));
+        assert_eq!(p.active(), "b");
     }
 
     #[test]
