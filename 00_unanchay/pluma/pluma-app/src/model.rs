@@ -184,6 +184,16 @@ pub enum Msg {
         carta: CartaHebras,
         transformacion: Transformacion,
     },
+    /// Como `LlmListo` pero **reemplaza** a la hija `vieja` en su mismo lugar
+    /// (regeneración reactiva in-place): no apila una traducción nueva ni mueve
+    /// el foco. La disparan `Ctrl+Enter` / `Enter` al final del último párrafo.
+    HijaEnLugar {
+        vieja: Uuid,
+        hija: Cuerpo,
+        atoms_nuevos: Vec<NarrativeAtom>,
+        carta: CartaHebras,
+        transformacion: Transformacion,
+    },
     LlmError(String),
 
     // --- Diente Grafo: grafo semántico de filtros → línea de lienzo ---

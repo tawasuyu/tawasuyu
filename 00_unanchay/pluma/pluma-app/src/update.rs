@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use llimphi_motion::{animate, motion, Tween};
-use llimphi_ui::{DragPhase, Handle};
+use llimphi_ui::{DragPhase, Handle, Key, NamedKey};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_text_editor::{EditorState, PointerEvent};
 use llimphi_widget_text_input::TextInputState;
@@ -32,7 +32,19 @@ use crate::view::etiqueta_filtro;
 pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
     match msg {
         Msg::EditorKey(ev) => {
-            let _ = model.ide.apply_key_with_clipboard(&ev, &mut model.clipboard);
+            // Disparo reactivo: `Ctrl+Enter` (en cualquier lado) o `Enter` al
+            // final del último párrafo regeneran el haz del activo. Ctrl+Enter
+            // NO inserta salto de línea; el Enter-al-final sí (comportamiento
+            // normal del editor) y además dispara.
+            let es_enter = matches!(ev.key, Key::Named(NamedKey::Enter));
+            let ctrl = ev.modifiers.ctrl || ev.modifiers.meta;
+            let disparar = es_enter && (ctrl || caret_al_final(&model.ide.state));
+            if !(disparar && ctrl) {
+                let _ = model.ide.apply_key_with_clipboard(&ev, &mut model.clipboard);
+            }
+            if disparar {
+                disparar_regen_reactivo(&mut model, handle);
+            }
         }
         Msg::MultiPointer(id, ev) => {
             // Click en una columna que no es el activo → primero le da el foco
@@ -218,6 +230,17 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             transformacion,
         } => {
             recibir_hija(&mut model, hija, atoms_nuevos, carta, transformacion);
+        }
+        Msg::HijaEnLugar {
+            vieja,
+            hija,
+            atoms_nuevos,
+            carta,
+            transformacion,
+        } => {
+            recibir_hija_en_lugar(&mut model, vieja, hija, atoms_nuevos, carta, transformacion);
+            // Cascada: regenerar la próxima hija stale del activo, si queda.
+            regenerar_siguiente_in_place(&mut model, handle);
         }
         Msg::LlmError(s) => {
             eprintln!("pluma-app :: error LLM: {s}");
@@ -1192,6 +1215,111 @@ fn regenerar_siguiente_stale(model: &mut Model, handle: &Handle<Msg>) {
     lanzar(model, handle, trabajo);
 }
 
+/// La próxima hija *stale* de `madre_id` + el tipo de su transformación, si la
+/// hay. Factor común entre la regeneración manual y la reactiva.
+fn siguiente_hija_stale(model: &Model, madre_id: Uuid) -> Option<(Uuid, TipoTransformacion)> {
+    let madre_modif = model
+        .cuerpos
+        .iter()
+        .find(|c| c.id == madre_id)?
+        .metadatos
+        .modificado_en;
+    let hija_id = model
+        .cuerpos
+        .iter()
+        .find(|c| {
+            c.metadatos.derivado_de == Some(madre_id) && c.es_derivado() && c.es_stale(madre_modif)
+        })
+        .map(|c| c.id)?;
+    let tipo = model
+        .transformaciones
+        .iter()
+        .find(|t| t.madre == madre_id && t.hija == hija_id)
+        .map(|t| t.tipo.clone())?;
+    Some((hija_id, tipo))
+}
+
+/// Disparo de la **regeneración reactiva** (Ctrl+Enter / Enter al final del
+/// último párrafo): persiste la edición, marca la madre como modificada (sus
+/// hijas quedan *stale*) y arranca la cascada in-place. Con backend Mock corre
+/// gratis y offline.
+fn disparar_regen_reactivo(model: &mut Model, handle: &Handle<Msg>) {
+    guardar_activo(model);
+    tocar_madre(model);
+    regenerar_siguiente_in_place(model, handle);
+}
+
+/// Regenera la próxima hija stale del activo **in-place** (reemplaza en su
+/// lugar, sin apilar ni mover el foco). Al completar, `Msg::HijaEnLugar`
+/// continúa la cascada hasta que no quede ninguna stale (cada una, al
+/// regenerarse, vuelve fresca → la cascada termina sola).
+fn regenerar_siguiente_in_place(model: &mut Model, handle: &Handle<Msg>) {
+    if model.en_curso {
+        return;
+    }
+    let Some(activo_id) = model.activo else {
+        return;
+    };
+    let Some((hija_id, tipo)) = siguiente_hija_stale(model, activo_id) else {
+        return; // no quedan hijas stale — cascada terminada
+    };
+    let Some(trabajo) = trabajo_de_tipo(&tipo) else {
+        return;
+    };
+    lanzar_modo(model, handle, trabajo, Some(hija_id));
+}
+
+/// Reemplaza la hija `vieja_id` por `nueva` (con sus átomos/carta/transformación)
+/// **en su mismo lugar**: misma posición en `orden` y `seleccionados`, sin tocar
+/// el foco. Es la regeneración reactiva — no apila una traducción nueva ni roba
+/// el cursor. Los átomos de la hija vieja quedan huérfanos en `atoms`
+/// (inofensivos; la limpieza del store queda para después). Función pura sobre
+/// las colecciones → testeable sin levantar el modelo entero.
+#[allow(clippy::too_many_arguments)]
+fn reemplazar_hija(
+    cuerpos: &mut Vec<Cuerpo>,
+    atoms: &mut HashMap<Uuid, NarrativeAtom>,
+    cartas: &mut Vec<CartaHebras>,
+    transformaciones: &mut Vec<Transformacion>,
+    orden: &mut [Uuid],
+    seleccionados: &mut [Uuid],
+    vieja_id: Uuid,
+    nueva: Cuerpo,
+    atoms_nuevos: Vec<NarrativeAtom>,
+    carta: CartaHebras,
+    transf: Transformacion,
+) {
+    let nueva_id = nueva.id;
+    cuerpos.retain(|c| c.id != vieja_id);
+    cuerpos.push(nueva);
+    cartas.retain(|c| c.cuerpo_a != Some(vieja_id) && c.cuerpo_b != Some(vieja_id));
+    cartas.push(carta);
+    transformaciones.retain(|t| t.hija != vieja_id);
+    transformaciones.push(transf);
+    for a in atoms_nuevos {
+        atoms.insert(a.id, a);
+    }
+    // Misma ranura visible: la nueva ocupa el lugar de la vieja.
+    for x in orden.iter_mut() {
+        if *x == vieja_id {
+            *x = nueva_id;
+        }
+    }
+    for x in seleccionados.iter_mut() {
+        if *x == vieja_id {
+            *x = nueva_id;
+        }
+    }
+}
+
+/// `true` si el caret del editor está al final del buffer (última línea, última
+/// columna) — el "Enter al final del último párrafo".
+fn caret_al_final(state: &EditorState) -> bool {
+    let caret = state.cursor.caret;
+    let ultima = state.buffer.len_lines().saturating_sub(1);
+    caret.line == ultima && caret.col == state.buffer.line_len_chars(ultima)
+}
+
 /// Traduce un `TipoTransformacion` persistido al `TrabajoLlm` que
 /// `lanzar` sabe correr. `Identidad`/`Reescribir`/`Custom` no son
 /// auto-regenerables — Reescribir necesita prompt humano, Custom Rhai,
@@ -1454,6 +1582,46 @@ fn recibir_hija(
     cambiar_activo(model, hija_id);
 }
 
+/// Recibe una regeneración **reactiva** (in-place): reemplaza la hija `vieja`
+/// por la nueva en su mismo lugar — **sin** apilar una traducción nueva ni
+/// mover el foco (seguís editando el original). Persiste y refresca los
+/// editores read-only para que la columna muestre el texto nuevo.
+fn recibir_hija_en_lugar(
+    model: &mut Model,
+    vieja: Uuid,
+    hija: Cuerpo,
+    atoms_nuevos: Vec<NarrativeAtom>,
+    carta: CartaHebras,
+    transformacion: Transformacion,
+) {
+    for a in &atoms_nuevos {
+        let _ = model.store.put_atom(a);
+    }
+    let _ = model.store.put_cuerpo(&hija);
+    let _ = model.store.put_carta(&carta);
+    let _ = model.store.put_transformacion(&transformacion);
+    let _ = model.store.flush();
+    let nombre = hija.metadatos.nombre_legible.clone();
+    reemplazar_hija(
+        &mut model.cuerpos,
+        &mut model.atoms,
+        &mut model.cartas,
+        &mut model.transformaciones,
+        &mut model.orden_lienzos,
+        &mut model.seleccionados,
+        vieja,
+        hija,
+        atoms_nuevos,
+        carta,
+        transformacion,
+    );
+    model.en_curso = false;
+    // El activo NO cambia: seguís en el original. Refrescamos los editores
+    // read-only para que la columna regenerada muestre el texto nuevo.
+    reconstruir_ides_ro(model);
+    model.ultimo_status = format!("«{nombre}» regenerada en su lugar");
+}
+
 // ---------------------------------------------------------------------
 // Trabajo LLM
 // ---------------------------------------------------------------------
@@ -1467,6 +1635,18 @@ pub(crate) enum TrabajoLlm {
 }
 
 fn lanzar(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
+    lanzar_modo(model, handle, trabajo, None);
+}
+
+/// Como [`lanzar`] pero con modo: `reemplazar = Some(hija_vieja)` produce un
+/// `Msg::HijaEnLugar` (regeneración reactiva in-place) en vez de apilar una
+/// hija nueva. `None` = comportamiento clásico (crear variante).
+fn lanzar_modo(
+    model: &mut Model,
+    handle: &Handle<Msg>,
+    trabajo: TrabajoLlm,
+    reemplazar: Option<Uuid>,
+) {
     if model.en_curso {
         return;
     }
@@ -1573,11 +1753,22 @@ fn lanzar(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
 
         let _ = h;
         match resultado {
-            Ok((prod, transformacion)) => Msg::LlmListo {
-                hija: prod.hija,
-                atoms_nuevos: prod.atoms_nuevos,
-                carta: prod.carta,
-                transformacion,
+            Ok((prod, transformacion)) => match reemplazar {
+                // Reactivo: reemplaza la hija vieja en su lugar.
+                Some(vieja) => Msg::HijaEnLugar {
+                    vieja,
+                    hija: prod.hija,
+                    atoms_nuevos: prod.atoms_nuevos,
+                    carta: prod.carta,
+                    transformacion,
+                },
+                // Clásico: apila una hija nueva.
+                None => Msg::LlmListo {
+                    hija: prod.hija,
+                    atoms_nuevos: prod.atoms_nuevos,
+                    carta: prod.carta,
+                    transformacion,
+                },
             },
             Err(e) => Msg::LlmError(format!("{e:?}")),
         }
@@ -1994,5 +2185,67 @@ mod tests_concepto {
         let cuerpo = cuerpo_con(&atoms);
         let hija = block_on(filtrar_concepto(&cuerpo, &idx, "dragón", 0, None));
         assert_eq!(hija.orden, vec![a1.id]);
+    }
+}
+
+#[cfg(test)]
+mod tests_reactividad {
+    use super::*;
+    use pluma_cuerpo::Intencion;
+
+    fn traducir() -> TipoTransformacion {
+        TipoTransformacion::Traducir { lengua_destino: "en".into() }
+    }
+
+    #[test]
+    fn reemplazar_hija_ocupa_el_mismo_lugar_sin_apilar() {
+        let madre = Cuerpo::nuevo("es", "es", Intencion::Original, 100);
+        let mut vieja = Cuerpo::nuevo("en", "en", Intencion::Traduccion, 100);
+        vieja.metadatos.derivado_de = Some(madre.id);
+        let (madre_id, vieja_id) = (madre.id, vieja.id);
+
+        let mut cuerpos = vec![madre, vieja];
+        let mut atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
+        let mut cartas = vec![CartaHebras::nueva().con_par(madre_id, vieja_id)];
+        let mut transformaciones =
+            vec![Transformacion::nueva(madre_id, vieja_id, traducir(), "x", 100)];
+        let mut orden = vec![madre_id, vieja_id];
+        let mut sel = vec![madre_id, vieja_id];
+
+        // Nueva hija fresca (otro id) — lo que devuelve el ejecutor.
+        let mut nueva = Cuerpo::nuevo("en", "en", Intencion::Traduccion, 200);
+        nueva.metadatos.derivado_de = Some(madre_id);
+        let nueva_id = nueva.id;
+        let carta_n = CartaHebras::nueva().con_par(madre_id, nueva_id);
+        let transf_n = Transformacion::nueva(madre_id, nueva_id, traducir(), "x", 200);
+        let atomo = NarrativeAtom::new("hello", "en");
+
+        reemplazar_hija(
+            &mut cuerpos, &mut atoms, &mut cartas, &mut transformaciones,
+            &mut orden, &mut sel, vieja_id, nueva, vec![atomo], carta_n, transf_n,
+        );
+
+        // No apila: siguen 2 cuerpos; la vieja se fue, la nueva está.
+        assert_eq!(cuerpos.len(), 2);
+        assert!(!cuerpos.iter().any(|c| c.id == vieja_id));
+        assert!(cuerpos.iter().any(|c| c.id == nueva_id));
+        // Mismo lugar en orden y selección (la columna no se mueve).
+        assert_eq!(orden, vec![madre_id, nueva_id]);
+        assert_eq!(sel, vec![madre_id, nueva_id]);
+        // Una sola carta y una sola transformación, apuntando a la nueva.
+        assert_eq!(cartas.len(), 1);
+        assert_eq!(cartas[0].cuerpo_b, Some(nueva_id));
+        assert_eq!(transformaciones.len(), 1);
+        assert_eq!(transformaciones[0].hija, nueva_id);
+    }
+
+    #[test]
+    fn caret_al_final_detecta_fin_de_buffer() {
+        let mut s = EditorState::new();
+        s.set_text("hola\nmundo");
+        s.set_caret_at(0, 0);
+        assert!(!caret_al_final(&s));
+        s.set_caret_at(1, 5); // fin de "mundo"
+        assert!(caret_al_final(&s));
     }
 }
