@@ -1,0 +1,11 @@
+[package]
+name = "pluma-reactor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — motor reactivo del multilienzo: cada sección es una celda (CellRef), cada relación-función entre lienzos es una fórmula yupay (TRADUCIR/RESUMIR…), y un grafo de dependencias da el orden de recálculo cuando una celda cambia. yupay aporta el lenguaje + el orden; el cómputo del texto (LLM, async) lo dispara pluma aparte."
+
+[dependencies]
+yupay-core = { path = "../../../01_yachay/nakui/yupay-core" }
