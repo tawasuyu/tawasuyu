@@ -105,7 +105,9 @@ pub fn init_modelo() -> Model {
         transformaciones,
         activo,
         ide,
-        modo: crate::model::Modo::Lienzos,
+        // El editor ES el multilienzo: pluma abre directo en él (antes abría en
+        // las cajas read-only de `Lienzos`, que parecían "otra app").
+        modo: crate::model::Modo::Plano,
         editando: None,
         recorrido_state: pluma_deck_core::RecorridoState::new(),
         salidas: HashMap::new(),
