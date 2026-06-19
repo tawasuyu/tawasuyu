@@ -179,12 +179,23 @@ impl Cursor {
         }
     }
 
-    pub fn move_home(&mut self, _buf: &Buffer, extending: bool) {
+    /// Home "inteligente": el primer Home lleva el caret al primer carácter
+    /// no-blanco de la línea (el inicio real del texto, salteando la
+    /// indentación); un segundo Home —ya parado ahí— va a la columna 0. Es
+    /// el comportamiento de VS Code / Sublime / la mayoría de los editores.
+    pub fn move_home(&mut self, buf: &Buffer, extending: bool) {
         self.set_extending(extending);
-        // Atajo: ir al inicio del primer non-whitespace; segundo Home
-        // iría al 0 — por ahora siempre al 0.
-        self.caret.col = 0;
-        self.desired_col = 0;
+        let line = buf.line(self.caret.line);
+        let indent = line
+            .chars()
+            .take_while(|c| c.is_whitespace() && *c != '\n')
+            .count()
+            .min(buf.line_len_chars(self.caret.line));
+        // Si ya estamos en el primer no-blanco, el toggle va a col 0; si no
+        // (incluida col 0), va al primer no-blanco.
+        let target = if self.caret.col == indent { 0 } else { indent };
+        self.caret.col = target;
+        self.desired_col = target;
     }
 
     pub fn move_end(&mut self, buf: &Buffer, extending: bool) {
@@ -460,6 +471,18 @@ mod tests {
         c.select_paragraph(&b, Pos::new(3, 1));
         let (s, e) = c.selection_range(&b);
         assert_eq!(b.slice(s, e), "tres\ncuatro");
+    }
+
+    #[test]
+    fn smart_home_alterna_indent_y_col0() {
+        let b = Buffer::from_str("    hola mundo");
+        let mut c = Cursor::at(0, 9); // en medio del texto
+        c.move_home(&b, false);
+        assert_eq!(c.caret.col, 4); // primer no-blanco
+        c.move_home(&b, false);
+        assert_eq!(c.caret.col, 0); // segundo Home → col 0
+        c.move_home(&b, false);
+        assert_eq!(c.caret.col, 4); // y vuelve al no-blanco
     }
 
     #[test]

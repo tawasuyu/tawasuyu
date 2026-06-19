@@ -12,8 +12,8 @@ use crate::clipboard::{Clipboard, NullClipboard};
 use crate::cursor::{Cursor, Pos};
 use crate::highlight::{Highlighter, Language, Span};
 use crate::ops::{
-    dedent, delete_backward, delete_forward, indent_or_insert_tab,
-    insert_newline_auto_indent, replace_selection,
+    dedent, delete_backward, delete_forward, delete_word_backward, delete_word_forward,
+    indent_or_insert_tab, insert_newline_auto_indent, replace_selection,
 };
 use crate::undo::UndoStack;
 
@@ -648,14 +648,24 @@ impl EditorState {
                 ApplyResult::Changed
             }
             Key::Named(NamedKey::Backspace) => {
-                if self.apply_edit_all(|b, c, _opts| delete_backward(b, c)) {
+                let changed = if ctrl {
+                    self.apply_edit_all(|b, c, _opts| delete_word_backward(b, c))
+                } else {
+                    self.apply_edit_all(|b, c, _opts| delete_backward(b, c))
+                };
+                if changed {
                     ApplyResult::Changed
                 } else {
                     ApplyResult::Ignored
                 }
             }
             Key::Named(NamedKey::Delete) => {
-                if self.apply_edit_all(|b, c, _opts| delete_forward(b, c)) {
+                let changed = if ctrl {
+                    self.apply_edit_all(|b, c, _opts| delete_word_forward(b, c))
+                } else {
+                    self.apply_edit_all(|b, c, _opts| delete_forward(b, c))
+                };
+                if changed {
                     ApplyResult::Changed
                 } else {
                     ApplyResult::Ignored

@@ -131,6 +131,74 @@ pub fn delete_forward(buf: &mut Buffer, cursor: &mut Cursor) -> Option<EditDelta
     })
 }
 
+/// Borra la palabra a la izquierda del caret (Ctrl+Backspace). Si hay
+/// selección, la borra como [`delete_backward`]. El límite de palabra es
+/// el mismo que usa `Ctrl+Left` ([`Cursor::move_word_left`]): salta el
+/// whitespace y luego el run de caracteres de palabra. `None` si el caret
+/// ya estaba al inicio del buffer.
+pub fn delete_word_backward(buf: &mut Buffer, cursor: &mut Cursor) -> Option<EditDelta> {
+    if cursor.has_selection() {
+        return Some(replace_selection(buf, cursor, ""));
+    }
+    let before = *cursor;
+    let caret_off = buf.pos_to_offset(cursor.caret.line, cursor.caret.col);
+    if caret_off == 0 {
+        return None;
+    }
+    let mut probe = *cursor;
+    probe.move_word_left(buf, false);
+    let target = buf.pos_to_offset(probe.caret.line, probe.caret.col);
+    let (start, end) = (target.min(caret_off), target.max(caret_off));
+    if start == end {
+        return None;
+    }
+    let removed = buf.slice(start, end);
+    buf.delete(start, end);
+    let (line, col) = buf.offset_to_pos(start);
+    cursor.caret = Pos::new(line, col);
+    cursor.desired_col = col;
+    cursor.anchor = None;
+    Some(EditDelta {
+        start,
+        removed,
+        inserted: String::new(),
+        cursor_before: before,
+        cursor_after: *cursor,
+    })
+}
+
+/// Borra la palabra a la derecha del caret (Ctrl+Delete). Espejo de
+/// [`delete_word_backward`] usando el límite de `Ctrl+Right`. `None` si el
+/// caret ya estaba al final del buffer.
+pub fn delete_word_forward(buf: &mut Buffer, cursor: &mut Cursor) -> Option<EditDelta> {
+    if cursor.has_selection() {
+        return Some(replace_selection(buf, cursor, ""));
+    }
+    let before = *cursor;
+    let caret_off = buf.pos_to_offset(cursor.caret.line, cursor.caret.col);
+    if caret_off >= buf.len_chars() {
+        return None;
+    }
+    let mut probe = *cursor;
+    probe.move_word_right(buf, false);
+    let target = buf.pos_to_offset(probe.caret.line, probe.caret.col);
+    let (start, end) = (caret_off.min(target), caret_off.max(target));
+    if start == end {
+        return None;
+    }
+    let removed = buf.slice(start, end);
+    buf.delete(start, end);
+    // El caret se queda en `start` (= caret original).
+    cursor.anchor = None;
+    Some(EditDelta {
+        start,
+        removed,
+        inserted: String::new(),
+        cursor_before: before,
+        cursor_after: *cursor,
+    })
+}
+
 /// Inserta un salto de línea con **indentación automática**: copia los
 /// whitespace iniciales del renglón actual al renglón nuevo.
 pub fn insert_newline_auto_indent(buf: &mut Buffer, cursor: &mut Cursor) -> EditDelta {
@@ -324,6 +392,32 @@ mod tests {
         let mut c = Cursor::at(0, 0);
         delete_forward(&mut b, &mut c);
         assert_eq!(b.text(), "b");
+    }
+
+    #[test]
+    fn ctrl_backspace_borra_palabra() {
+        let mut b = Buffer::from_str("hola mundo");
+        let mut c = Cursor::at(0, 10); // al final
+        delete_word_backward(&mut b, &mut c);
+        assert_eq!(b.text(), "hola ");
+        assert_eq!(c.caret, Pos::new(0, 5));
+    }
+
+    #[test]
+    fn ctrl_backspace_en_inicio_no_hace_nada() {
+        let mut b = Buffer::from_str("hola");
+        let mut c = Cursor::at(0, 0);
+        assert!(delete_word_backward(&mut b, &mut c).is_none());
+    }
+
+    #[test]
+    fn ctrl_delete_borra_palabra_adelante() {
+        let mut b = Buffer::from_str("hola mundo");
+        let mut c = Cursor::at(0, 0);
+        delete_word_forward(&mut b, &mut c);
+        // borra "hola" + el espacio siguiente (límite de Ctrl+Right).
+        assert_eq!(b.text(), "mundo");
+        assert_eq!(c.caret, Pos::new(0, 0));
     }
 
     #[test]
