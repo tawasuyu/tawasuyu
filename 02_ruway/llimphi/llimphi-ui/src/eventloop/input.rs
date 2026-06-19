@@ -89,6 +89,19 @@ impl<A: App> Runtime<A> {
             WindowEvent::CursorMoved { position, .. } => {
                 self.handle_cursor_moved(position);
             }
+            WindowEvent::Focused(focused) => {
+                // El foco de la ventana entró/salió. La app puede replegarse a
+                // una barra, pausar animaciones, etc. (distinto del foco de nodo
+                // que maneja `on_focus`).
+                if let Some(msg) =
+                    A::on_window_focus(state.model.as_ref().expect("model"), focused)
+                {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                    state.window.request_redraw();
+                }
+            }
             WindowEvent::ModifiersChanged(mods) => {
                 let Some(state) = self.state.as_mut() else { return };
                 state.modifiers = mods.state().into();

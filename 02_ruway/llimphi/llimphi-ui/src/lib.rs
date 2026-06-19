@@ -166,6 +166,16 @@ pub trait App: 'static {
         None
     }
 
+    /// La **ventana** ganó (`true`) o perdió (`false`) el foco del sistema —
+    /// el `WindowEvent::Focused` de winit. Distinto de [`App::on_focus`], que
+    /// es el foco de un nodo enfocable *dentro* de la app (navegación Tab).
+    /// Útil para apps que cambian de forma según tengan o no el foco (p. ej.
+    /// shuma replegándose a una barra al perder el foco). Devolver `Some(Msg)`
+    /// dispara un update; `None` (default) lo ignora.
+    fn on_window_focus(_model: &Self::Model, _focused: bool) -> Option<Self::Msg> {
+        None
+    }
+
     /// Título de la ventana (sólo se lee al arrancar). Es el título inicial;
     /// para uno que cambie en runtime, ver [`App::window_title`].
     fn title() -> &'static str {
