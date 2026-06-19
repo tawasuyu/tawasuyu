@@ -8,6 +8,7 @@ pub(crate) mod clipboard;
 pub mod dump;
 pub mod init;
 pub mod model;
+pub mod reactor;
 pub mod showreel;
 pub mod update;
 pub(crate) mod util;

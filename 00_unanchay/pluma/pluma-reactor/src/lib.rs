@@ -27,10 +27,11 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use yupay_core::{
-    compile, dependencies, eval_formula, CellRef, CellResolver, FormulaExpr, FuncDispatch,
-    ParseError, SheetValue,
-};
+use yupay_core::{compile, dependencies, eval_formula, FormulaExpr};
+
+// Re-exportados para que los callers (el puente de pluma) no dependan de
+// `yupay-core` directamente.
+pub use yupay_core::{CellRef, CellResolver, FuncDispatch, ParseError, SheetValue};
 
 /// Grafo de relaciones-fórmula entre secciones-celda + recálculo propagado.
 #[derive(Default)]

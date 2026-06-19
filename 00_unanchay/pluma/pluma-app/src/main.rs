@@ -44,6 +44,8 @@ mod dump;
 mod init;
 #[path = "model.rs"]
 mod model;
+#[path = "reactor.rs"]
+mod reactor;
 #[path = "showreel.rs"]
 mod showreel;
 #[path = "update.rs"]
