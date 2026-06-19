@@ -239,8 +239,8 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             transformacion,
         } => {
             recibir_hija_en_lugar(&mut model, vieja, hija, atoms_nuevos, carta, transformacion);
-            // Cascada: regenerar la próxima hija stale del activo, si queda.
-            regenerar_siguiente_in_place(&mut model, handle);
+            // Cascada: el próximo eslabón stale del haz (traducción → resumen…).
+            avanzar_reactivo(&mut model, handle);
         }
         Msg::LlmError(s) => {
             eprintln!("pluma-app :: error LLM: {s}");
@@ -1215,28 +1215,31 @@ fn regenerar_siguiente_stale(model: &mut Model, handle: &Handle<Msg>) {
     lanzar(model, handle, trabajo);
 }
 
-/// La próxima hija *stale* de `madre_id` + el tipo de su transformación, si la
-/// hay. Factor común entre la regeneración manual y la reactiva.
-fn siguiente_hija_stale(model: &Model, madre_id: Uuid) -> Option<(Uuid, TipoTransformacion)> {
-    let madre_modif = model
-        .cuerpos
-        .iter()
-        .find(|c| c.id == madre_id)?
-        .metadatos
-        .modificado_en;
-    let hija_id = model
-        .cuerpos
-        .iter()
-        .find(|c| {
-            c.metadatos.derivado_de == Some(madre_id) && c.es_derivado() && c.es_stale(madre_modif)
-        })
-        .map(|c| c.id)?;
-    let tipo = model
-        .transformaciones
-        .iter()
-        .find(|t| t.madre == madre_id && t.hija == hija_id)
-        .map(|t| t.tipo.clone())?;
-    Some((hija_id, tipo))
+/// La próxima hija a regenerar de **todo el haz** del activo, en **orden
+/// topológico** (madre antes que hija — el orden lo da [`ReactorHaz`]): la
+/// primera que esté *stale* respecto de su propia madre. Devuelve
+/// `(hija, madre, tipo)`. Que la madre sea la traducción (no el activo) es lo
+/// que habilita las **cadenas**: el resumen-de-la-traducción se regenera
+/// después de la traducción.
+fn siguiente_stale_en_orden(model: &Model, raiz: Uuid) -> Option<(Uuid, Uuid, TipoTransformacion)> {
+    let rh = crate::reactor::ReactorHaz::construir(&model.orden_lienzos, &model.transformaciones);
+    for hija_id in rh.regenerar_en_orden(raiz) {
+        let Some(t) = model.transformaciones.iter().find(|t| t.hija == hija_id) else {
+            continue;
+        };
+        let Some(madre) = model.cuerpos.iter().find(|c| c.id == t.madre) else {
+            continue;
+        };
+        let stale = model
+            .cuerpos
+            .iter()
+            .find(|c| c.id == hija_id)
+            .is_some_and(|h| h.es_derivado() && h.es_stale(madre.metadatos.modificado_en));
+        if stale {
+            return Some((hija_id, t.madre, t.tipo.clone()));
+        }
+    }
+    None
 }
 
 /// Disparo de la **regeneración reactiva** (Ctrl+Enter / Enter al final del
@@ -1246,69 +1249,66 @@ fn siguiente_hija_stale(model: &Model, madre_id: Uuid) -> Option<(Uuid, TipoTran
 fn disparar_regen_reactivo(model: &mut Model, handle: &Handle<Msg>) {
     guardar_activo(model);
     tocar_madre(model);
-    regenerar_siguiente_in_place(model, handle);
+    avanzar_reactivo(model, handle);
 }
 
-/// Regenera la próxima hija stale del activo **in-place** (reemplaza en su
-/// lugar, sin apilar ni mover el foco). Al completar, `Msg::HijaEnLugar`
-/// continúa la cascada hasta que no quede ninguna stale (cada una, al
-/// regenerarse, vuelve fresca → la cascada termina sola).
-fn regenerar_siguiente_in_place(model: &mut Model, handle: &Handle<Msg>) {
+/// Da **un paso** de la cascada reactiva: busca la próxima hija stale del haz
+/// (en orden) y la regenera **in-place** desde su propia madre. Al completar,
+/// `Msg::HijaEnLugar` vuelve a llamar acá; como cada hija, al regenerarse,
+/// queda fresca, la cascada termina sola (la edición de la madre propaga hacia
+/// abajo: traducción → resumen-de-la-traducción → …).
+fn avanzar_reactivo(model: &mut Model, handle: &Handle<Msg>) {
     if model.en_curso {
         return;
     }
-    let Some(activo_id) = model.activo else {
+    let Some(raiz) = model.activo else {
         return;
     };
-    let Some((hija_id, tipo)) = siguiente_hija_stale(model, activo_id) else {
-        return; // no quedan hijas stale — cascada terminada
+    let Some((hija_id, madre_id, tipo)) = siguiente_stale_en_orden(model, raiz) else {
+        return; // nada stale aguas abajo — cascada terminada
     };
     let Some(trabajo) = trabajo_de_tipo(&tipo) else {
         return;
     };
-    lanzar_modo(model, handle, trabajo, Some(hija_id));
+    lanzar_modo(model, handle, trabajo, Some(hija_id), Some(madre_id));
 }
 
-/// Reemplaza la hija `vieja_id` por `nueva` (con sus átomos/carta/transformación)
-/// **en su mismo lugar**: misma posición en `orden` y `seleccionados`, sin tocar
-/// el foco. Es la regeneración reactiva — no apila una traducción nueva ni roba
-/// el cursor. Los átomos de la hija vieja quedan huérfanos en `atoms`
-/// (inofensivos; la limpieza del store queda para después). Función pura sobre
-/// las colecciones → testeable sin levantar el modelo entero.
+/// `true` si la carta conecta exactamente los cuerpos `a` y `b` (en cualquier
+/// orden).
+fn carta_conecta(c: &CartaHebras, a: Uuid, b: Uuid) -> bool {
+    (c.cuerpo_a == Some(a) && c.cuerpo_b == Some(b))
+        || (c.cuerpo_a == Some(b) && c.cuerpo_b == Some(a))
+}
+
+/// Actualiza la hija `hija_id` **in-place** en las colecciones, **preservando
+/// su id** — así los nietos que derivan de ella siguen apuntando bien (clave
+/// para las cadenas). Reemplaza su cuerpo, su carta-con-la-madre `madre_id` y
+/// su transformación; deja intactas las cartas con sus propios nietos. El
+/// caller ya forzó `nueva.id`, `transf.hija` y el lado-hija de `carta` a
+/// `hija_id`. Pura sobre las colecciones → testeable.
 #[allow(clippy::too_many_arguments)]
-fn reemplazar_hija(
-    cuerpos: &mut Vec<Cuerpo>,
+fn actualizar_hija_in_place(
+    cuerpos: &mut [Cuerpo],
     atoms: &mut HashMap<Uuid, NarrativeAtom>,
     cartas: &mut Vec<CartaHebras>,
     transformaciones: &mut Vec<Transformacion>,
-    orden: &mut [Uuid],
-    seleccionados: &mut [Uuid],
-    vieja_id: Uuid,
+    hija_id: Uuid,
+    madre_id: Uuid,
     nueva: Cuerpo,
     atoms_nuevos: Vec<NarrativeAtom>,
     carta: CartaHebras,
     transf: Transformacion,
 ) {
-    let nueva_id = nueva.id;
-    cuerpos.retain(|c| c.id != vieja_id);
-    cuerpos.push(nueva);
-    cartas.retain(|c| c.cuerpo_a != Some(vieja_id) && c.cuerpo_b != Some(vieja_id));
+    if let Some(slot) = cuerpos.iter_mut().find(|c| c.id == hija_id) {
+        *slot = nueva;
+    }
+    // Sólo la carta (madre, hija) se reemplaza; la del nieto (hija, nieto) queda.
+    cartas.retain(|c| !carta_conecta(c, madre_id, hija_id));
     cartas.push(carta);
-    transformaciones.retain(|t| t.hija != vieja_id);
+    transformaciones.retain(|t| t.hija != hija_id);
     transformaciones.push(transf);
     for a in atoms_nuevos {
         atoms.insert(a.id, a);
-    }
-    // Misma ranura visible: la nueva ocupa el lugar de la vieja.
-    for x in orden.iter_mut() {
-        if *x == vieja_id {
-            *x = nueva_id;
-        }
-    }
-    for x in seleccionados.iter_mut() {
-        if *x == vieja_id {
-            *x = nueva_id;
-        }
     }
 }
 
@@ -1589,11 +1589,25 @@ fn recibir_hija(
 fn recibir_hija_en_lugar(
     model: &mut Model,
     vieja: Uuid,
-    hija: Cuerpo,
+    mut hija: Cuerpo,
     atoms_nuevos: Vec<NarrativeAtom>,
-    carta: CartaHebras,
-    transformacion: Transformacion,
+    mut carta: CartaHebras,
+    mut transformacion: Transformacion,
 ) {
+    // Forzar la identidad de lo producido al id de la hija EXISTENTE: el
+    // ejecutor crea un cuerpo con id nuevo, pero queremos preservar el id para
+    // que los nietos que derivan de esta hija sigan apuntando bien (cadenas).
+    let prod_id = hija.id;
+    let madre_id = transformacion.madre;
+    hija.id = vieja;
+    transformacion.hija = vieja;
+    if carta.cuerpo_a == Some(prod_id) {
+        carta.cuerpo_a = Some(vieja);
+    }
+    if carta.cuerpo_b == Some(prod_id) {
+        carta.cuerpo_b = Some(vieja);
+    }
+
     for a in &atoms_nuevos {
         let _ = model.store.put_atom(a);
     }
@@ -1602,14 +1616,13 @@ fn recibir_hija_en_lugar(
     let _ = model.store.put_transformacion(&transformacion);
     let _ = model.store.flush();
     let nombre = hija.metadatos.nombre_legible.clone();
-    reemplazar_hija(
+    actualizar_hija_in_place(
         &mut model.cuerpos,
         &mut model.atoms,
         &mut model.cartas,
         &mut model.transformaciones,
-        &mut model.orden_lienzos,
-        &mut model.seleccionados,
         vieja,
+        madre_id,
         hija,
         atoms_nuevos,
         carta,
@@ -1635,28 +1648,41 @@ pub(crate) enum TrabajoLlm {
 }
 
 fn lanzar(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
-    lanzar_modo(model, handle, trabajo, None);
+    lanzar_modo(model, handle, trabajo, None, None);
 }
 
-/// Como [`lanzar`] pero con modo: `reemplazar = Some(hija_vieja)` produce un
-/// `Msg::HijaEnLugar` (regeneración reactiva in-place) en vez de apilar una
-/// hija nueva. `None` = comportamiento clásico (crear variante).
+/// Como [`lanzar`] pero con modo:
+/// - `reemplazar = Some(hija)` → produce `Msg::HijaEnLugar` (regeneración
+///   reactiva in-place) en vez de apilar una hija nueva.
+/// - `madre_override = Some(m)` → transforma `m` en vez del activo (para
+///   regenerar un nieto desde su madre real, p.ej. la traducción). Cuando es
+///   `None` usa el activo y persiste su edición primero.
 fn lanzar_modo(
     model: &mut Model,
     handle: &Handle<Msg>,
     trabajo: TrabajoLlm,
     reemplazar: Option<Uuid>,
+    madre_override: Option<Uuid>,
 ) {
     if model.en_curso {
         return;
     }
-    let Some(activo_id) = model.activo else {
-        model.ultimo_status = "sin doc activo".into();
-        return;
+    let activo_id = match madre_override {
+        Some(m) => m,
+        None => match model.activo {
+            Some(a) => a,
+            None => {
+                model.ultimo_status = "sin doc activo".into();
+                return;
+            }
+        },
     };
     // Sincronizar antes de transformar — si el usuario tipeó sin Ctrl+S,
-    // queremos que el LLM vea el texto editado.
-    guardar_activo(model);
+    // queremos que el LLM vea el texto editado. Sólo cuando la madre ES el
+    // activo (sin override): regenerar un nieto no debe tocar el editor activo.
+    if madre_override.is_none() {
+        guardar_activo(model);
+    }
 
     let madre = match model.cuerpos.iter().find(|c| c.id == activo_id) {
         Some(c) => c.clone(),
@@ -2198,45 +2224,50 @@ mod tests_reactividad {
     }
 
     #[test]
-    fn reemplazar_hija_ocupa_el_mismo_lugar_sin_apilar() {
-        let madre = Cuerpo::nuevo("es", "es", Intencion::Original, 100);
-        let mut vieja = Cuerpo::nuevo("en", "en", Intencion::Traduccion, 100);
-        vieja.metadatos.derivado_de = Some(madre.id);
-        let (madre_id, vieja_id) = (madre.id, vieja.id);
+    fn actualizar_in_place_preserva_id_y_la_carta_del_nieto() {
+        let madre_id = Uuid::from_u128(1);
+        let hija_id = Uuid::from_u128(2);
+        let nieto_id = Uuid::from_u128(3);
 
-        let mut cuerpos = vec![madre, vieja];
+        // hija existente (traducción) en el modelo.
+        let mut hija = Cuerpo::nuevo("en", "en", Intencion::Traduccion, 100);
+        hija.id = hija_id;
+        hija.metadatos.derivado_de = Some(madre_id);
+        let mut cuerpos = vec![hija];
         let mut atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
-        let mut cartas = vec![CartaHebras::nueva().con_par(madre_id, vieja_id)];
+        let mut cartas = vec![
+            CartaHebras::nueva().con_par(madre_id, hija_id), // madre↔hija (se reemplaza)
+            CartaHebras::nueva().con_par(hija_id, nieto_id), // hija↔nieto (DEBE quedar)
+        ];
         let mut transformaciones =
-            vec![Transformacion::nueva(madre_id, vieja_id, traducir(), "x", 100)];
-        let mut orden = vec![madre_id, vieja_id];
-        let mut sel = vec![madre_id, vieja_id];
+            vec![Transformacion::nueva(madre_id, hija_id, traducir(), "x", 100)];
 
-        // Nueva hija fresca (otro id) — lo que devuelve el ejecutor.
+        // Lo regenerado (el caller ya forzó el id a `hija_id`).
         let mut nueva = Cuerpo::nuevo("en", "en", Intencion::Traduccion, 200);
+        nueva.id = hija_id;
         nueva.metadatos.derivado_de = Some(madre_id);
-        let nueva_id = nueva.id;
-        let carta_n = CartaHebras::nueva().con_par(madre_id, nueva_id);
-        let transf_n = Transformacion::nueva(madre_id, nueva_id, traducir(), "x", 200);
+        let carta_n = CartaHebras::nueva().con_par(madre_id, hija_id);
+        let transf_n = Transformacion::nueva(madre_id, hija_id, traducir(), "x", 200);
         let atomo = NarrativeAtom::new("hello", "en");
 
-        reemplazar_hija(
+        actualizar_hija_in_place(
             &mut cuerpos, &mut atoms, &mut cartas, &mut transformaciones,
-            &mut orden, &mut sel, vieja_id, nueva, vec![atomo], carta_n, transf_n,
+            hija_id, madre_id, nueva, vec![atomo], carta_n, transf_n,
         );
 
-        // No apila: siguen 2 cuerpos; la vieja se fue, la nueva está.
-        assert_eq!(cuerpos.len(), 2);
-        assert!(!cuerpos.iter().any(|c| c.id == vieja_id));
-        assert!(cuerpos.iter().any(|c| c.id == nueva_id));
-        // Mismo lugar en orden y selección (la columna no se mueve).
-        assert_eq!(orden, vec![madre_id, nueva_id]);
-        assert_eq!(sel, vec![madre_id, nueva_id]);
-        // Una sola carta y una sola transformación, apuntando a la nueva.
-        assert_eq!(cartas.len(), 1);
-        assert_eq!(cartas[0].cuerpo_b, Some(nueva_id));
-        assert_eq!(transformaciones.len(), 1);
-        assert_eq!(transformaciones[0].hija, nueva_id);
+        // id preservado, sin apilar; contenido nuevo.
+        assert_eq!(cuerpos.len(), 1);
+        assert_eq!(cuerpos[0].id, hija_id);
+        assert_eq!(cuerpos[0].metadatos.modificado_en, 200);
+        // La carta del nieto sobrevive; la (madre,hija) se reemplazó (sigue 1).
+        assert!(cartas.iter().any(|c| carta_conecta(c, hija_id, nieto_id)));
+        assert_eq!(
+            cartas.iter().filter(|c| carta_conecta(c, madre_id, hija_id)).count(),
+            1
+        );
+        // Una sola transformación para la hija.
+        assert_eq!(transformaciones.iter().filter(|t| t.hija == hija_id).count(), 1);
+        assert_eq!(transformaciones[0].madre, madre_id);
     }
 
     #[test]
