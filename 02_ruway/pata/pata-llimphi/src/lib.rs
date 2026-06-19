@@ -97,6 +97,11 @@ pub enum Msg {
     /// Tick de la animación de despliegue (sólo re-render). También sirve de
     /// no-op para absorber clicks sobre el borde del panel del drawer.
     ShumaAnim,
+    /// Conmuta el drawer entre alto normal (45%) y maximizado (97%). Botón ▢.
+    ShumaMaximize,
+    /// Desdockea: abre la sesión en una instancia **standalone** de shuma (en el
+    /// mismo cwd) y repliega el drawer. Botón ⇱.
+    ShumaUndock,
     /// Desplegar/replegar el drawer del **front universal de nahual** (Super+E).
     NahualToggle,
     /// Un evento del módulo `nahual-module` hospedado (navegación, abrir, vista,
@@ -1032,6 +1037,21 @@ impl App for PataApp {
                 }
             }
             Msg::ShumaAnim => {}
+            Msg::ShumaMaximize => {
+                model.shuma.maximized = !model.shuma.maximized;
+            }
+            Msg::ShumaUndock => {
+                // Lanza shuma standalone en el mismo directorio y repliega el
+                // drawer. La sesión standalone arranca limpia en ese cwd (no se
+                // migra el historial/PTY vivo — eso requeriría IPC entre procesos).
+                let cwd = model.shuma.inner.cwd.display().to_string();
+                spawn_cmd(&format!("SHUMA_CWD={} shuma-shell-llimphi", shell_quote(&cwd)));
+                model.shuma.maximized = false;
+                if model.shuma.open {
+                    model.shuma.open = false;
+                    model.animar_shuma(0.0, handle);
+                }
+            }
             Msg::NahualToggle => {
                 model.nahual.ensure();
                 model.nahual.open = !model.nahual.open;

@@ -53,6 +53,9 @@ pub struct ShumaState {
     /// `true` si el config declaró algún `shuma_input` (si no, no hay cabezal
     /// ni drawer).
     pub present: bool,
+    /// `true` si el drawer está maximizado (ocupa casi toda la pantalla en vez
+    /// del 45% por defecto). Lo conmuta el botón ▢ de la barra de título.
+    pub maximized: bool,
 }
 
 impl Default for ShumaState {
@@ -65,6 +68,7 @@ impl Default for ShumaState {
             placeholder: "shuma".into(),
             anim: Tween::idle(0.0),
             present: false,
+            maximized: false,
         }
     }
 }
@@ -221,6 +225,135 @@ fn headline_chip(state: &ShumaState, theme: &Theme) -> View<Msg> {
     .text_aligned(etiqueta, 13.0, theme.fg_muted, Alignment::Start)
 }
 
+/// La fracción de pantalla que ocupa el drawer según esté o no maximizado.
+fn drawer_frac(maximized: bool) -> f32 {
+    if maximized {
+        0.97
+    } else {
+        DRAWER_FRAC
+    }
+}
+
+/// Tipo de botón de la barra de título del drawer — cada uno se pinta a mano
+/// (vectores) para no depender de glifos que no estén en la fuente fallback.
+#[derive(Clone, Copy)]
+enum TbKind {
+    /// Desdockea: abre la sesión en una instancia standalone de shuma.
+    Undock,
+    /// Minimiza: repliega el drawer (el input sigue en la barra).
+    Minimize,
+    /// Maximiza / restaura el alto del drawer.
+    Maximize,
+    /// Cierra el drawer.
+    Close,
+}
+
+/// Un botón cuadrado de la barra de título, con su ícono pintado y su `on_click`.
+fn tb_button(kind: TbKind, msg: Msg, theme: &Theme) -> View<Msg> {
+    let fg = theme.fg_muted;
+    let danger = kind_is_close(kind);
+    View::new(Style {
+        size: Size { width: length(28.0_f32), height: length(24.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Line, Rect as KRect, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::Color;
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        // Caja de 12×12 centrada en la que se dibuja el glifo.
+        let s = 11.0_f64;
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let (x0, y0, x1, y1) = (cx - s * 0.5, cy - s * 0.5, cx + s * 0.5, cy + s * 0.5);
+        let col = if danger {
+            Color::from_rgb8(0xe0, 0x6c, 0x6c)
+        } else {
+            Color::new([fg.components[0], fg.components[1], fg.components[2], 0.85])
+        };
+        let st = Stroke::new(1.4);
+        match kind {
+            TbKind::Minimize => {
+                scene.stroke(&st, Affine::IDENTITY, col, None, &Line::new((x0, y1), (x1, y1)));
+            }
+            TbKind::Maximize => {
+                scene.stroke(
+                    &st,
+                    Affine::IDENTITY,
+                    col,
+                    None,
+                    &KRect::new(x0, y0, x1, y1),
+                );
+            }
+            TbKind::Close => {
+                scene.stroke(&st, Affine::IDENTITY, col, None, &Line::new((x0, y0), (x1, y1)));
+                scene.stroke(&st, Affine::IDENTITY, col, None, &Line::new((x0, y1), (x1, y0)));
+            }
+            TbKind::Undock => {
+                // Cajita con una flecha saliendo hacia arriba-derecha.
+                scene.stroke(
+                    &st,
+                    Affine::IDENTITY,
+                    col,
+                    None,
+                    &KRect::new(x0, y0 + 2.5, x1 - 2.5, y1),
+                );
+                let a = (x1 - 4.0, y0 + 4.0);
+                let b = (x1 + 1.0, y0 - 1.0);
+                scene.stroke(&st, Affine::IDENTITY, col, None, &Line::new(a, b));
+                scene.stroke(&st, Affine::IDENTITY, col, None, &Line::new(b, (b.0 - 4.5, b.1)));
+                scene.stroke(&st, Affine::IDENTITY, col, None, &Line::new(b, (b.0, b.1 + 4.5)));
+            }
+        }
+    })
+    .on_click(msg)
+}
+
+fn kind_is_close(kind: TbKind) -> bool {
+    matches!(kind, TbKind::Close)
+}
+
+/// La barra de título del drawer: el título a la izquierda y, a la derecha, los
+/// controles desdockear · minimizar · maximizar · cerrar. Click en su fondo es
+/// un no-op (`ShumaAnim`) para no cerrar el drawer al arrastrar/pulsar el borde.
+fn drawer_titlebar(state: &ShumaState, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let titulo = View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(state.placeholder.clone(), 12.0, theme.fg_muted, Alignment::Start);
+
+    let controles = vec![
+        tb_button(TbKind::Undock, Msg::ShumaUndock, theme),
+        tb_button(TbKind::Minimize, Msg::ShumaToggle, theme),
+        tb_button(TbKind::Maximize, Msg::ShumaMaximize, theme),
+        tb_button(TbKind::Close, Msg::ShumaToggle, theme),
+    ];
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(10.0_f32),
+            right: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        gap: Size { width: length(2.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .on_click(Msg::ShumaAnim)
+    .children(vec![titulo].into_iter().chain(controles).collect())
+}
+
 /// El drawer desplegado **con la shuma COMPLETA** (live-wire): mismo scrim +
 /// panel inferior que [`drawer_overlay`], pero el cuerpo es la shuma entera
 /// (dientes/sesiones/menubar/canvas) elevada al `Msg` de pata vía `Msg::ShumaFull`.
@@ -236,11 +369,18 @@ pub fn drawer_overlay_full(
     }
     let t = state.anim.value().clamp(0.0, 1.0);
     let (_sw, sh) = screen;
-    let alto = (sh as f32 * DRAWER_FRAC * t).max(1.0);
+    let alto = (sh as f32 * drawer_frac(state.maximized) * t).max(1.0);
 
     // Cuerpo: la shuma completa. Su `view` trae su propio fondo, rails y chrome.
-    let body = shuma_app::view(full, crate::lift_shuma);
-    let mut hijos = vec![body];
+    // Va dentro de un contenedor que crece bajo la barra de título.
+    let cuerpo = View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size { width: auto(), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![shuma_app::view(full, crate::lift_shuma)]);
+    let mut hijos = vec![drawer_titlebar(state, theme), cuerpo];
     // Overlay interno de la shuma (dropdowns/menús/modales) por encima del cuerpo.
     if let Some(ov) = shuma_app::view_overlay(full, crate::lift_shuma) {
         hijos.push(ov);
@@ -294,12 +434,19 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
     }
     let t = state.anim.value().clamp(0.0, 1.0);
     let (_sw, sh) = screen;
-    let alto = (sh as f32 * DRAWER_FRAC * t).max(1.0);
+    let alto = (sh as f32 * drawer_frac(state.maximized) * t).max(1.0);
 
     // El cuerpo es el shell real: su `view` ya trae cards/input/scroll/PTY y
     // pinta su propio fondo (`bg_app`). Los clicks de sus widgets vuelven como
-    // `Msg::ShumaShell(..)` gracias al `lift`.
-    let body = shuma_module_shell::view(&state.inner, theme, Msg::ShumaShell);
+    // `Msg::ShumaShell(..)` gracias al `lift`. Va dentro de un contenedor que
+    // crece bajo la barra de título.
+    let cuerpo = View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size { width: auto(), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![shuma_module_shell::view(&state.inner, theme, Msg::ShumaShell)]);
 
     let panel = View::new(Style {
         position: Position::Absolute,
@@ -319,7 +466,7 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
     // Absorbe los clicks sobre el borde del panel (padding) para que no se
     // filtren al scrim y cierren el drawer; `ShumaAnim` es un no-op de re-render.
     .on_click(Msg::ShumaAnim)
-    .children(vec![body]);
+    .children(vec![drawer_titlebar(state, theme), cuerpo]);
 
     // Scrim a pantalla completa: oscurece el fondo y cierra al click.
     let scrim = View::new(Style {
