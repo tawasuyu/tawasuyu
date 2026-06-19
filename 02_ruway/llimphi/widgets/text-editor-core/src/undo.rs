@@ -47,6 +47,33 @@ impl UndoStack {
         }
     }
 
+    /// Registra un delta intentando **fusionarlo** con el anterior cuando
+    /// `coalesce` es true. Sirve para que una ráfaga de tecleo cuente como
+    /// un solo undo en vez de uno por carácter. Sólo fusiona inserciones
+    /// puras (sin borrado) y contiguas (el nuevo arranca justo donde
+    /// terminó el previo), y nunca a través de un salto de línea. En
+    /// cualquier otro caso cae a [`Self::push`] normal. El caller pasa
+    /// `coalesce = false` para forzar un corte de grupo (movimiento de
+    /// caret, pegado, borrado, etc.).
+    pub fn push_coalesce(&mut self, delta: EditDelta, coalesce: bool) {
+        if coalesce {
+            if let Some(prev) = self.done.last_mut() {
+                let prev_insert = prev.removed.is_empty() && !prev.inserted.is_empty();
+                let new_insert = delta.removed.is_empty() && !delta.inserted.is_empty();
+                let contiguous = delta.start == prev.start + prev.inserted.chars().count();
+                let no_newline =
+                    !prev.inserted.ends_with('\n') && !delta.inserted.contains('\n');
+                if prev_insert && new_insert && contiguous && no_newline {
+                    prev.inserted.push_str(&delta.inserted);
+                    prev.cursor_after = delta.cursor_after;
+                    self.undone.clear();
+                    return;
+                }
+            }
+        }
+        self.push(delta);
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.done.is_empty()
     }
@@ -114,6 +141,41 @@ mod tests {
         assert!(st.can_redo());
         st.push(replace_selection(&mut b, &mut c, "X"));
         assert!(!st.can_redo());
+    }
+
+    #[test]
+    fn push_coalesce_fusiona_tecleo_contiguo() {
+        let mut b = Buffer::from_str("");
+        let mut c = Cursor::at(0, 0);
+        let mut st = UndoStack::new();
+        // Tipear "abc" carácter por carácter, coalescing.
+        for ch in ["a", "b", "c"] {
+            let d = replace_selection(&mut b, &mut c, ch);
+            st.push_coalesce(d, true);
+        }
+        assert_eq!(b.text(), "abc");
+        // Un solo undo borra los tres.
+        assert!(st.undo(&mut b, &mut c));
+        assert_eq!(b.text(), "");
+        assert!(!st.can_undo());
+    }
+
+    #[test]
+    fn push_coalesce_corta_en_newline_y_sin_coalesce() {
+        let mut b = Buffer::from_str("");
+        let mut c = Cursor::at(0, 0);
+        let mut st = UndoStack::new();
+        st.push_coalesce(replace_selection(&mut b, &mut c, "ab"), true);
+        // Enter / salto de línea = grupo aparte (coalesce false).
+        st.push_coalesce(replace_selection(&mut b, &mut c, "\n"), false);
+        st.push_coalesce(replace_selection(&mut b, &mut c, "cd"), true);
+        assert_eq!(b.text(), "ab\ncd");
+        st.undo(&mut b, &mut c);
+        assert_eq!(b.text(), "ab\n"); // sólo "cd"
+        st.undo(&mut b, &mut c);
+        assert_eq!(b.text(), "ab"); // sólo el "\n"
+        st.undo(&mut b, &mut c);
+        assert_eq!(b.text(), ""); // "ab"
     }
 
     #[test]

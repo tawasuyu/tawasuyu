@@ -95,6 +95,72 @@ fn positions_of(buf: &Buffer, (start, end): (usize, usize)) -> (Pos, Pos) {
     (Pos::new(sl, sc), Pos::new(el, ec))
 }
 
+/// Reemplaza la **próxima** ocurrencia desde el caret por `replacement` y
+/// deja el caret al final del texto insertado. Devuelve el [`EditDelta`]
+/// para la pila de undo, o `None` si no hay ninguna ocurrencia. El
+/// wrap-around es el de [`find_next`].
+pub fn replace_next(
+    buf: &mut Buffer,
+    find: &FindState,
+    cursor: &mut Cursor,
+    replacement: &str,
+) -> Option<crate::ops::EditDelta> {
+    let (start_pos, end_pos) = find_next(buf, find, cursor)?;
+    cursor.anchor = Some(start_pos);
+    cursor.caret = end_pos;
+    Some(crate::ops::replace_selection(buf, cursor, replacement))
+}
+
+/// Reemplaza **todas** las ocurrencias del query por `replacement` en una
+/// sola operación reversible. Devuelve `(delta, n)` con el delta para undo
+/// y la cantidad reemplazada, o `None` si no había ninguna. El reemplazo
+/// es literal (sin grupos/regex).
+pub fn replace_all(
+    buf: &mut Buffer,
+    find: &FindState,
+    cursor: &mut Cursor,
+    replacement: &str,
+) -> Option<(crate::ops::EditDelta, usize)> {
+    let matches = all_matches(buf, find);
+    if matches.is_empty() {
+        return None;
+    }
+    let n = matches.len();
+    // Región mínima que cubre de la primera a la última match: un único
+    // delta atómico (un solo undo deshace todo el reemplazo).
+    let region_start = matches.first().unwrap().0;
+    let region_end = matches.last().unwrap().1;
+    let removed = buf.slice(region_start, region_end);
+
+    // Reconstruimos la región reemplazando cada match, copiando lo de entre
+    // medio tal cual.
+    let mut inserted = String::with_capacity(removed.len());
+    let mut prev_end = region_start;
+    for (s, e) in &matches {
+        inserted.push_str(&buf.slice(prev_end, *s));
+        inserted.push_str(replacement);
+        prev_end = *e;
+    }
+    inserted.push_str(&buf.slice(prev_end, region_end));
+
+    let before = *cursor;
+    buf.delete(region_start, region_end);
+    buf.insert(region_start, &inserted);
+    let new_off = region_start + inserted.chars().count();
+    let (line, col) = buf.offset_to_pos(new_off);
+    cursor.caret = Pos::new(line, col);
+    cursor.desired_col = col;
+    cursor.anchor = None;
+    let delta = crate::ops::EditDelta {
+        start: region_start,
+        removed,
+        inserted,
+        cursor_before: before,
+        cursor_after: *cursor,
+    };
+    Some((delta, n))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +219,36 @@ mod tests {
         let c = Cursor::at(0, 0);
         let (a, _) = find_next(&b, &f, &c).unwrap();
         assert_eq!(a, Pos::new(0, 0));
+    }
+
+    #[test]
+    fn replace_next_reemplaza_una() {
+        let mut b = Buffer::from_str("ab cd ab");
+        let f = FindState::with_query("ab");
+        let mut c = Cursor::at(0, 0);
+        replace_next(&mut b, &f, &mut c, "XY");
+        assert_eq!(b.text(), "XY cd ab");
+    }
+
+    #[test]
+    fn replace_all_reemplaza_todas() {
+        let mut b = Buffer::from_str("ab cd ab ef ab");
+        let f = FindState::with_query("ab");
+        let mut c = Cursor::at(0, 0);
+        let (_, n) = replace_all(&mut b, &f, &mut c, "Z").unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(b.text(), "Z cd Z ef Z");
+    }
+
+    #[test]
+    fn replace_all_distinto_largo_y_undo() {
+        let mut b = Buffer::from_str("foo foo");
+        let f = FindState::with_query("foo");
+        let mut c = Cursor::at(0, 0);
+        let (delta, _) = replace_all(&mut b, &f, &mut c, "barbar").unwrap();
+        assert_eq!(b.text(), "barbar barbar");
+        delta.undo(&mut b, &mut c);
+        assert_eq!(b.text(), "foo foo");
     }
 
     #[test]

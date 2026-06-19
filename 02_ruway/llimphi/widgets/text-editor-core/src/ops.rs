@@ -199,6 +199,172 @@ pub fn delete_word_forward(buf: &mut Buffer, cursor: &mut Cursor) -> Option<Edit
     })
 }
 
+/// Duplica la línea del caret hacia abajo (Ctrl+D). La copia queda
+/// inmediatamente debajo y el caret baja a ella conservando la columna.
+pub fn duplicate_line(buf: &mut Buffer, cursor: &mut Cursor) -> EditDelta {
+    let before = *cursor;
+    let line = cursor.caret.line;
+    let start = buf.pos_to_offset(line, 0);
+    let text = buf.line(line); // incluye '\n' salvo en la última línea
+    let after_line = start + text.chars().count();
+    // Si la línea ya termina en '\n', la copia es el texto tal cual; si es
+    // la última (sin '\n'), anteponemos uno para abrir renglón nuevo.
+    let inserted = if text.ends_with('\n') {
+        text.clone()
+    } else {
+        format!("\n{text}")
+    };
+    buf.insert(after_line, &inserted);
+    let col = cursor.caret.col.min(buf.line_len_chars(line + 1));
+    cursor.caret = Pos::new(line + 1, col);
+    cursor.desired_col = col;
+    cursor.anchor = None;
+    EditDelta {
+        start: after_line,
+        removed: String::new(),
+        inserted,
+        cursor_before: before,
+        cursor_after: *cursor,
+    }
+}
+
+/// Texto de las dos líneas `l` y `l+1` intercambiadas, listo para
+/// reemplazar la región `[inicio_de_l .. inicio_de_l+2)`. `None` si no hay
+/// línea siguiente. No muta el buffer.
+fn swap_lines_text(buf: &Buffer, l: usize) -> Option<(usize, String, String)> {
+    if l + 1 >= buf.len_lines() {
+        return None;
+    }
+    let start = buf.pos_to_offset(l, 0);
+    let a = buf.line(l); // "A\n"
+    let b = buf.line(l + 1); // "B\n" o "B" (si es la última)
+    let removed = format!("{a}{b}");
+    let inserted = if b.ends_with('\n') {
+        format!("{b}{a}")
+    } else {
+        // `b` es la última línea (sin '\n'); `a` sí termina en '\n'.
+        let a_no_nl = a.strip_suffix('\n').unwrap_or(a.as_str());
+        format!("{b}\n{a_no_nl}")
+    };
+    Some((start, removed, inserted))
+}
+
+/// Mueve la línea del caret una posición hacia abajo (Alt+Down),
+/// intercambiándola con la siguiente. El caret la sigue. `None` si ya está
+/// en la última línea.
+pub fn move_line_down(buf: &mut Buffer, cursor: &mut Cursor) -> Option<EditDelta> {
+    let l = cursor.caret.line;
+    let before = *cursor;
+    let (start, removed, inserted) = swap_lines_text(buf, l)?;
+    buf.delete(start, start + removed.chars().count());
+    buf.insert(start, &inserted);
+    let col = cursor.caret.col.min(buf.line_len_chars(l + 1));
+    cursor.caret = Pos::new(l + 1, col);
+    cursor.desired_col = col;
+    cursor.anchor = None;
+    Some(EditDelta {
+        start,
+        removed,
+        inserted,
+        cursor_before: before,
+        cursor_after: *cursor,
+    })
+}
+
+/// Mueve la línea del caret una posición hacia arriba (Alt+Up). `None` si
+/// ya está en la primera línea.
+pub fn move_line_up(buf: &mut Buffer, cursor: &mut Cursor) -> Option<EditDelta> {
+    let l = cursor.caret.line;
+    if l == 0 {
+        return None;
+    }
+    let before = *cursor;
+    let (start, removed, inserted) = swap_lines_text(buf, l - 1)?;
+    buf.delete(start, start + removed.chars().count());
+    buf.insert(start, &inserted);
+    let col = cursor.caret.col.min(buf.line_len_chars(l - 1));
+    cursor.caret = Pos::new(l - 1, col);
+    cursor.desired_col = col;
+    cursor.anchor = None;
+    Some(EditDelta {
+        start,
+        removed,
+        inserted,
+        cursor_before: before,
+        cursor_after: *cursor,
+    })
+}
+
+/// Comenta o descomenta las líneas tocadas por la selección (o la línea
+/// del caret) con el `token` de comentario de línea (`//`, `#`, `--`…).
+/// Si **todas** las líneas no vacías ya están comentadas, las
+/// descomenta; si no, las comenta insertando `token ` tras la
+/// indentación. `None` si no hay cambio que aplicar.
+pub fn toggle_line_comment(buf: &mut Buffer, cursor: &mut Cursor, token: &str) -> Option<EditDelta> {
+    if token.is_empty() {
+        return None;
+    }
+    let before = *cursor;
+    let (sel_start, sel_end) = cursor.selection_range(buf);
+    let l0 = buf.char_to_line(sel_start);
+    let l1 = if sel_end > sel_start {
+        buf.char_to_line(sel_end - 1)
+    } else {
+        l0
+    };
+    let start = buf.pos_to_offset(l0, 0);
+    let end = if l1 + 1 < buf.len_lines() {
+        buf.pos_to_offset(l1 + 1, 0)
+    } else {
+        buf.len_chars()
+    };
+    let removed = buf.slice(start, end);
+
+    let lines: Vec<&str> = removed.split_inclusive('\n').collect();
+    let all_commented = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .all(|l| l.trim_start().starts_with(token));
+
+    let mut out = String::with_capacity(removed.len() + lines.len() * (token.len() + 1));
+    for line in &lines {
+        if line.trim().is_empty() {
+            out.push_str(line);
+            continue;
+        }
+        let indent_len = line.len() - line.trim_start().len();
+        let (indent, rest) = line.split_at(indent_len);
+        out.push_str(indent);
+        if all_commented {
+            let rest = rest.strip_prefix(token).unwrap_or(rest);
+            let rest = rest.strip_prefix(' ').unwrap_or(rest);
+            out.push_str(rest);
+        } else {
+            out.push_str(token);
+            out.push(' ');
+            out.push_str(rest);
+        }
+    }
+    if out == removed {
+        return None;
+    }
+
+    buf.delete(start, end);
+    buf.insert(start, &out);
+    let line = before.caret.line.min(buf.len_lines().saturating_sub(1));
+    let col = before.caret.col.min(buf.line_len_chars(line));
+    cursor.caret = Pos::new(line, col);
+    cursor.desired_col = col;
+    cursor.anchor = None;
+    Some(EditDelta {
+        start,
+        removed,
+        inserted: out,
+        cursor_before: before,
+        cursor_after: *cursor,
+    })
+}
+
 /// Inserta un salto de línea con **indentación automática**: copia los
 /// whitespace iniciales del renglón actual al renglón nuevo.
 pub fn insert_newline_auto_indent(buf: &mut Buffer, cursor: &mut Cursor) -> EditDelta {
@@ -418,6 +584,75 @@ mod tests {
         // borra "hola" + el espacio siguiente (límite de Ctrl+Right).
         assert_eq!(b.text(), "mundo");
         assert_eq!(c.caret, Pos::new(0, 0));
+    }
+
+    #[test]
+    fn duplicate_line_copia_debajo() {
+        let mut b = Buffer::from_str("uno\ndos");
+        let mut c = Cursor::at(0, 1);
+        duplicate_line(&mut b, &mut c);
+        assert_eq!(b.text(), "uno\nuno\ndos");
+        assert_eq!(c.caret, Pos::new(1, 1));
+    }
+
+    #[test]
+    fn duplicate_line_ultima_sin_newline() {
+        let mut b = Buffer::from_str("uno\ndos");
+        let mut c = Cursor::at(1, 0);
+        duplicate_line(&mut b, &mut c);
+        assert_eq!(b.text(), "uno\ndos\ndos");
+    }
+
+    #[test]
+    fn move_line_down_intercambia() {
+        let mut b = Buffer::from_str("uno\ndos\ntres");
+        let mut c = Cursor::at(0, 2);
+        move_line_down(&mut b, &mut c);
+        assert_eq!(b.text(), "dos\nuno\ntres");
+        assert_eq!(c.caret, Pos::new(1, 2));
+    }
+
+    #[test]
+    fn move_line_down_con_ultima_sin_newline() {
+        let mut b = Buffer::from_str("uno\ndos");
+        let mut c = Cursor::at(0, 0);
+        move_line_down(&mut b, &mut c);
+        assert_eq!(b.text(), "dos\nuno");
+    }
+
+    #[test]
+    fn move_line_up_intercambia() {
+        let mut b = Buffer::from_str("uno\ndos\ntres");
+        let mut c = Cursor::at(2, 1);
+        move_line_up(&mut b, &mut c);
+        assert_eq!(b.text(), "uno\ntres\ndos");
+        assert_eq!(c.caret, Pos::new(1, 1));
+    }
+
+    #[test]
+    fn move_line_up_en_primera_no_hace_nada() {
+        let mut b = Buffer::from_str("uno\ndos");
+        let mut c = Cursor::at(0, 0);
+        assert!(move_line_up(&mut b, &mut c).is_none());
+    }
+
+    #[test]
+    fn toggle_comment_comenta_y_descomenta() {
+        let mut b = Buffer::from_str("uno\ndos");
+        let mut c = Cursor::at(0, 0);
+        // sin selección → línea del caret
+        toggle_line_comment(&mut b, &mut c, "//");
+        assert_eq!(b.text(), "// uno\ndos");
+        toggle_line_comment(&mut b, &mut c, "//");
+        assert_eq!(b.text(), "uno\ndos");
+    }
+
+    #[test]
+    fn toggle_comment_seleccion_multilinea_respeta_indent() {
+        let mut b = Buffer::from_str("  uno\n  dos");
+        let mut c = Cursor { caret: Pos::new(1, 5), anchor: Some(Pos::new(0, 0)), desired_col: 5 };
+        toggle_line_comment(&mut b, &mut c, "#");
+        assert_eq!(b.text(), "  # uno\n  # dos");
     }
 
     #[test]

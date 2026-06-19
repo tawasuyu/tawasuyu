@@ -13,7 +13,8 @@ use crate::cursor::{Cursor, Pos};
 use crate::highlight::{Highlighter, Language, Span};
 use crate::ops::{
     dedent, delete_backward, delete_forward, delete_word_backward, delete_word_forward,
-    indent_or_insert_tab, insert_newline_auto_indent, replace_selection,
+    duplicate_line, indent_or_insert_tab, insert_newline_auto_indent, move_line_down,
+    move_line_up, replace_selection, toggle_line_comment,
 };
 use crate::undo::UndoStack;
 
@@ -28,6 +29,13 @@ pub struct EditorOptions {
     /// `true` = Enter no inserta `\n`; el caller maneja submit. (modo
     /// single-line para el text-input refactorizado).
     pub single_line: bool,
+    /// Token de comentario de línea para el toggle de Ctrl+/. Lo fija el
+    /// caller según el lenguaje (`//`, `#`, `--`, `;`…). Default `//`.
+    pub line_comment: &'static str,
+    /// `true` = al tipear un bracket/comilla de apertura se inserta el
+    /// cierre y el caret queda en medio; tipear el cierre justo antes de
+    /// uno igual lo "saltea" en vez de duplicarlo. Default `true`.
+    pub auto_close_brackets: bool,
 }
 
 impl Default for EditorOptions {
@@ -37,6 +45,8 @@ impl Default for EditorOptions {
             indent_size: 2,
             page_size: 12,
             single_line: false,
+            line_comment: "//",
+            auto_close_brackets: true,
         }
     }
 }
@@ -607,12 +617,29 @@ impl EditorState {
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::ArrowUp) => {
-                self.apply_move_all(|b, c| c.move_up(b, extending));
-                ApplyResult::CursorMoved
+                // Alt+Up (sin Ctrl) = mover la línea hacia arriba.
+                if alt && !ctrl {
+                    if self.apply_edit_all(|b, c, _o| move_line_up(b, c)) {
+                        ApplyResult::Changed
+                    } else {
+                        ApplyResult::Ignored
+                    }
+                } else {
+                    self.apply_move_all(|b, c| c.move_up(b, extending));
+                    ApplyResult::CursorMoved
+                }
             }
             Key::Named(NamedKey::ArrowDown) => {
-                self.apply_move_all(|b, c| c.move_down(b, extending));
-                ApplyResult::CursorMoved
+                if alt && !ctrl {
+                    if self.apply_edit_all(|b, c, _o| move_line_down(b, c)) {
+                        ApplyResult::Changed
+                    } else {
+                        ApplyResult::Ignored
+                    }
+                } else {
+                    self.apply_move_all(|b, c| c.move_down(b, extending));
+                    ApplyResult::CursorMoved
+                }
             }
             Key::Named(NamedKey::Home) => {
                 if ctrl {
@@ -735,6 +762,24 @@ impl EditorState {
                 if did { ApplyResult::Changed } else { ApplyResult::Ignored }
             }
 
+            // Duplicar línea (Ctrl+D).
+            Key::Character(s) if ctrl && s.as_str().eq_ignore_ascii_case("d") => {
+                if self.apply_edit_all(|b, c, _o| Some(duplicate_line(b, c))) {
+                    ApplyResult::Changed
+                } else {
+                    ApplyResult::Ignored
+                }
+            }
+            // Comentar / descomentar (Ctrl+/).
+            Key::Character(s) if ctrl && s.as_str() == "/" => {
+                let token = self.options.line_comment;
+                if self.apply_edit_all(|b, c, _o| toggle_line_comment(b, c, token)) {
+                    ApplyResult::Changed
+                } else {
+                    ApplyResult::Ignored
+                }
+            }
+
             // Inserción de chars imprimibles vía event.text (respeta IME +
             // layouts no-US). Ignoramos cuando ctrl/meta están activos
             // para no comernos Ctrl+S, Ctrl+C, etc. (eso lo hace el
@@ -750,7 +795,14 @@ impl EditorState {
                     return ApplyResult::Ignored;
                 }
                 let text = text.clone();
-                self.apply_edit_all(|b, c, _opts| Some(replace_selection(b, c, &text)));
+                // Auto-cierre de brackets/comillas (un solo char, sin
+                // multi-cursor): puede insertar el par o saltear el cierre.
+                if let Some(res) = self.try_auto_close(&text) {
+                    return res;
+                }
+                // Tecleo normal: coalescing de undo cuando hay un solo cursor.
+                let coalesce = self.extra_cursors.is_empty();
+                self.apply_edit_all_co(|b, c, _opts| Some(replace_selection(b, c, &text)), coalesce);
                 ApplyResult::Changed
             }
         }
@@ -778,7 +830,18 @@ impl EditorState {
     /// posteriores. Devuelve `true` si al menos uno produjo un delta.
     /// Cada delta también genera un `tree_sitter::InputEdit` que va a
     /// `pending_input_edits` para alimentar el incremental parsing.
-    fn apply_edit_all<F>(&mut self, mut f: F) -> bool
+    fn apply_edit_all<F>(&mut self, f: F) -> bool
+    where
+        F: FnMut(&mut Buffer, &mut Cursor, &EditorOptions) -> Option<crate::ops::EditDelta>,
+    {
+        self.apply_edit_all_co(f, false)
+    }
+
+    /// Como [`Self::apply_edit_all`] pero con `coalesce`: cuando es `true`,
+    /// cada delta se registra con [`UndoStack::push_coalesce`] para que una
+    /// ráfaga de tecleo cuente como un solo undo. Lo usa sólo el camino de
+    /// inserción de caracteres imprimibles (con un cursor).
+    fn apply_edit_all_co<F>(&mut self, mut f: F, coalesce: bool) -> bool
     where
         F: FnMut(&mut Buffer, &mut Cursor, &EditorOptions) -> Option<crate::ops::EditDelta>,
     {
@@ -812,12 +875,97 @@ impl EditorState {
             if let Some(d) = f(&mut self.buffer, cursor, &opts) {
                 let edit = compute_input_edit(start_byte, pre_pt, &d);
                 self.pending_input_edits.borrow_mut().push(edit);
-                self.undo.push(d);
+                self.undo.push_coalesce(d, coalesce);
                 any = true;
             }
         }
         self.dedupe_cursors();
         any
+    }
+
+    /// Auto-cierre de brackets/comillas para un carácter tecleado. Devuelve
+    /// `Some(resultado)` si manejó la tecla (insertó el par o salteó el
+    /// cierre), `None` para que siga el camino de inserción normal.
+    fn try_auto_close(&mut self, text: &str) -> Option<ApplyResult> {
+        if !self.options.auto_close_brackets
+            || self.options.single_line
+            || !self.extra_cursors.is_empty()
+        {
+            return None;
+        }
+        if self.cursor.has_selection() {
+            return None;
+        }
+        let mut it = text.chars();
+        let ch = it.next()?;
+        if it.next().is_some() {
+            return None; // más de un char (p.ej. un commit de IME)
+        }
+        let caret_off = self
+            .buffer
+            .pos_to_offset(self.cursor.caret.line, self.cursor.caret.col);
+        let next_char = self.buffer.char_at(caret_off);
+        let prev_char = caret_off.checked_sub(1).and_then(|o| self.buffer.char_at(o));
+
+        let is_quote = |c: char| matches!(c, '"' | '\'' | '`');
+        let close_for = |c: char| match c {
+            '(' => Some(')'),
+            '[' => Some(']'),
+            '{' => Some('}'),
+            _ => None,
+        };
+        let is_closer = |c: char| matches!(c, ')' | ']' | '}');
+
+        // Saltear el cierre: tipeás un cierre (o comilla) y justo adelante ya
+        // está ese mismo char — lo que el auto-cierre había puesto.
+        if (is_closer(ch) || is_quote(ch)) && next_char == Some(ch) {
+            self.cursor.move_right(&self.buffer, false);
+            return Some(ApplyResult::CursorMoved);
+        }
+
+        let close = if let Some(cl) = close_for(ch) {
+            cl
+        } else if is_quote(ch) {
+            // No autocerrar comillas pegadas a una palabra (apóstrofes).
+            if prev_char.is_some_and(|c| c.is_alphanumeric()) {
+                return None;
+            }
+            ch
+        } else {
+            return None;
+        };
+        // No autocerrar pegado al inicio de una palabra (evita `(` antes de
+        // texto existente como `(foo` → `()foo`).
+        if next_char.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            return None;
+        }
+        self.insert_pair(ch, close);
+        Some(ApplyResult::Changed)
+    }
+
+    /// Inserta el par `open``close` en el caret y lo deja en el medio.
+    /// Registra un delta propio (no coalescente) en la pila de undo.
+    fn insert_pair(&mut self, open: char, close: char) {
+        let before = self.cursor;
+        let caret_off = self
+            .buffer
+            .pos_to_offset(self.cursor.caret.line, self.cursor.caret.col);
+        let mut s = String::with_capacity(2);
+        s.push(open);
+        s.push(close);
+        self.buffer.insert(caret_off, &s);
+        let (l, c) = self.buffer.offset_to_pos(caret_off + 1);
+        self.cursor.caret = Pos::new(l, c);
+        self.cursor.desired_col = c;
+        self.cursor.anchor = None;
+        let delta = crate::ops::EditDelta {
+            start: caret_off,
+            removed: String::new(),
+            inserted: s,
+            cursor_before: before,
+            cursor_after: self.cursor,
+        };
+        self.undo.push_coalesce(delta, false);
     }
 
     /// Elimina cursores extras que están en la misma posición que el
@@ -1018,6 +1166,64 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_d_duplica_linea() {
+        let mut s = EditorState::new();
+        s.set_text("uno\ndos");
+        s.cursor.set_caret(&s.buffer, Pos::new(0, 1));
+        s.apply_key(&evtext("d", false, true));
+        assert_eq!(s.text(), "uno\nuno\ndos");
+    }
+
+    #[test]
+    fn alt_down_mueve_linea() {
+        let mut s = EditorState::new();
+        s.set_text("uno\ndos\ntres");
+        s.cursor.set_caret(&s.buffer, Pos::new(0, 0));
+        let ev = KeyEvent {
+            key: Key::Named(NamedKey::ArrowDown),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: Modifiers { shift: false, ctrl: false, alt: true, meta: false },
+            repeat: false,
+        };
+        s.apply_key(&ev);
+        assert_eq!(s.text(), "dos\nuno\ntres");
+    }
+
+    #[test]
+    fn ctrl_slash_comenta() {
+        let mut s = EditorState::new();
+        s.set_text("uno");
+        s.apply_key(&evtext("/", false, true));
+        assert_eq!(s.text(), "// uno");
+    }
+
+    #[test]
+    fn auto_close_inserta_par_y_saltea_cierre() {
+        let mut s = EditorState::new();
+        // tipear '(' inserta '()' con el caret en medio
+        s.apply_key(&evtext("(", false, false));
+        assert_eq!(s.text(), "()");
+        assert_eq!(s.cursor.caret, Pos::new(0, 1));
+        // tipear ')' justo antes del ')' existente lo saltea, no duplica
+        s.apply_key(&evtext(")", false, false));
+        assert_eq!(s.text(), "()");
+        assert_eq!(s.cursor.caret, Pos::new(0, 2));
+    }
+
+    #[test]
+    fn tecleo_coalesce_en_un_solo_undo() {
+        let mut s = EditorState::new();
+        for ch in ["h", "o", "l", "a"] {
+            s.apply_key(&evtext(ch, false, false));
+        }
+        assert_eq!(s.text(), "hola");
+        // Un solo Ctrl+Z borra toda la ráfaga.
+        s.apply_key(&evtext("z", false, true));
+        assert_eq!(s.text(), "");
+    }
+
+    #[test]
     fn enter_con_indent_auto() {
         let mut s = EditorState::new();
         s.set_text("    hola");
@@ -1059,11 +1265,12 @@ mod tests {
     #[test]
     fn ctrl_z_y_ctrl_y_son_undo_redo() {
         let mut s = EditorState::new();
+        // "a" y "b" contiguos coalescen en un solo grupo de undo.
         s.apply_key(&evtext("a", false, false));
         s.apply_key(&evtext("b", false, false));
         assert_eq!(s.text(), "ab");
         s.apply_key(&evtext("z", false, true));
-        assert_eq!(s.text(), "a");
+        assert_eq!(s.text(), ""); // un Ctrl+Z deshace toda la ráfaga
         s.apply_key(&evtext("y", false, true));
         assert_eq!(s.text(), "ab");
     }
