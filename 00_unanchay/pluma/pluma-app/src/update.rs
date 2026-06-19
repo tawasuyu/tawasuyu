@@ -45,7 +45,8 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 PointerEvent::Click { x, y } => {
                     model.drag_accum = (0.0, 0.0);
                     let (line, col) = METRICS.screen_to_pos(x, y, scroll);
-                    model.ide.set_caret(line, col);
+                    // Click simple = caret; doble = palabra; triple = párrafo.
+                    model.ide.state.register_click(line, col);
                 }
                 PointerEvent::Drag {
                     initial_x,
@@ -406,7 +407,8 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 match ev {
                     PointerEvent::Click { x, y } => {
                         let (l, c) = METRICS.screen_to_pos(x, y, scroll);
-                        state.set_caret_at(l, c);
+                        // Click simple = caret; doble = palabra; triple = párrafo.
+                        state.register_click(l, c);
                     }
                     PointerEvent::Drag {
                         initial_x,

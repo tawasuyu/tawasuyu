@@ -290,10 +290,14 @@ where
     let overlay_separadores =
         overlay_separadores_atomos::<Msg>(ide, metrics, palette_lienzo, cfg.colorear_secciones);
 
+    // `height: 100%` (no `auto`) para que el contenedor llene el alto
+    // disponible bajo el header: el editor mide sólo el alto de su contenido
+    // (N líneas × line_height), así que sin esto el panel quedaba recortado a
+    // la altura del texto y dejaba el fondo de la app a la vista debajo.
     let contenedor_editor = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: auto(),
+            height: percent(1.0_f32),
         },
         flex_grow: 1.0,
         ..Default::default()
