@@ -1203,8 +1203,14 @@ fn god_rays(ro: vec3<f32>, rd: vec3<f32>, max_t: f32, dim: vec3<f32>, B: f32) ->
     let strength = u.sun_dir.w;
     let fogd = u.sky_zenith.w;
     if (strength <= 0.0 || fogd <= 0.0) { return 0.0; }
+    // Fase hacia-adelante PRIMERO: los haces sólo se ven mirando hacia el sol. Los
+    // píxeles que miran lejos aportan ~0 → cortamos ANTES de la marcha (la marcha es
+    // lo caro: N shadow rays/píxel). God rays queda casi gratis salvo en la cuña que
+    // enfrenta al sol, que es justo donde el efecto importa.
+    let phase = pow(max(dot(rd, u.sun_dir.xyz), 0.0), 6.0);
+    if (phase < 0.003) { return 0.0; }
     let march_len = min(max_t, 220.0);
-    let steps = 12;
+    let steps = 8; // pocas muestras: el efecto es atmosférico, no necesita más (y cuesta)
     let dt = march_len / f32(steps);
     // Dither del paso inicial para romper el bandeo de pocas muestras.
     let jitter = fract(sin(dot(rd.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
@@ -1217,9 +1223,8 @@ fn god_rays(ro: vec3<f32>, rd: vec3<f32>, max_t: f32, dim: vec3<f32>, B: f32) ->
         acc = acc + select(1.0, 0.0, sh.hit); // 1 si el sol llega, 0 si está en sombra
     }
     acc = acc / f32(steps);
-    let phase = pow(max(dot(rd, u.sun_dir.xyz), 0.0), 6.0); // fase hacia-adelante
-    let depth_fac = 1.0 - exp(-march_len * fogd);           // más aire, más dispersión
-    return acc * strength * (0.15 + 0.85 * phase) * depth_fac;
+    let depth_fac = 1.0 - exp(-march_len * fogd); // más aire, más dispersión
+    return acc * strength * phase * depth_fac;
 }
 
 @fragment

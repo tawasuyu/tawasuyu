@@ -206,6 +206,11 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
             .map_err(|e| format!("clear: {e:?}"))?;
 
         // Posar a los actores sobre el relieve y encuadrar al reparto.
+        // El shader voxel espera la cámara/posiciones en COORDS CENTRADAS (la grilla
+        // está centrada en el origen: world = grilla − dim/2). `ground_at` devuelve
+        // coords de grilla → hay que restar `half`, o el terreno queda corrido fuera
+        // de cuadro en los planos cercanos del guion (el reparto "flota" en el cielo).
+        let half = Vec3::new(dim[0] as f32, dim[1] as f32, dim[2] as f32) * 0.5;
         let mut poses = Vec::with_capacity(scripts.len());
         let mut centroid = Vec3::ZERO;
         for (script, ch) in scripts.iter().zip(&chars) {
@@ -213,12 +218,12 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
             // mueve y posa en doses; los demás, fluidos. Sello de animación.
             let at = script.quantize(t);
             let s = script.sample(at);
-            let pos = preview.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32);
+            let pos = preview.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32) - half;
             centroid += pos;
             poses.push((pos, s, ch, at));
         }
         let look = if poses.is_empty() {
-            Vec3::new(dim[0] as f32 * 0.5, dim[1] as f32 * 0.32, dim[2] as f32 * 0.5)
+            Vec3::new(0.0, dim[1] as f32 * (0.32 - 0.5), 0.0)
         } else {
             centroid / poses.len() as f32 + Vec3::new(0.0, 1.0, 0.0)
         };

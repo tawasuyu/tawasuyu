@@ -51,7 +51,7 @@ impl WorldPreview {
         dim: [u32; 3],
     ) -> VoxelRenderer {
         let mut voxel = VoxelRenderer::new(device, queue, FMT, grid);
-        voxel.sun_dir = [0.55, 0.5, 0.32];
+        voxel.sun_dir = [0.5, 0.36, 0.45]; // sol más bajo: luz rasante, sombras largas (claroscuro) + god rays que leen
         voxel.atmosphere = Atmosphere {
             sky_zenith: [64, 118, 196],
             sky_horizon: [202, 218, 236],

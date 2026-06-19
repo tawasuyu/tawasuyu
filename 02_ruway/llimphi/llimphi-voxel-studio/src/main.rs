@@ -761,18 +761,22 @@ fn center_canvas(model: &Model) -> View<Msg> {
                 p.rebuild_if(device, queue, &recipe, dim, gen);
                 // Primero ubicar a los actores sobre el relieve para encuadrar al
                 // reparto (su centroide), no el mundo entero — si no, salen diminutos.
+                // El shader voxel espera coords CENTRADAS (grilla centrada en el
+                // origen: world = grilla − dim/2). Sin esto el reparto del guion
+                // "flota" en cielo vacío (el terreno queda corrido fuera de cuadro).
+                let half = Vec3::new(dim[0] as f32, dim[1] as f32, dim[2] as f32) * 0.5;
                 let mut poses = Vec::with_capacity(scripts.len());
                 let mut centroid = Vec3::ZERO;
                 for (script, ch) in scripts.iter().zip(&chars) {
                     // Cuantización por actor (Héroe en doses) — igual que el export.
                     let at = script.quantize(time);
                     let s = script.sample(at);
-                    let pos = p.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32);
+                    let pos = p.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32) - half;
                     centroid += pos;
                     poses.push((pos, s, ch, at));
                 }
                 let look = if poses.is_empty() {
-                    orbit_center(dim)
+                    orbit_center(dim) - half
                 } else {
                     centroid / poses.len() as f32 + Vec3::new(0.0, 1.0, 0.0)
                 };
