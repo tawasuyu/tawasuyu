@@ -63,6 +63,10 @@ const SIDEBAR_W: f32 = 232.0;
 /// de ventana inicial menos menubar/header/status; si la ventana es más alta
 /// queda algo de aire abajo. (Mejorable cuando el host trackee el resize.)
 const VIEWPORT_H: f32 = 500.0;
+/// Alto reservado para el editor visual del Prezi en «Vista espacial» (lienzo +
+/// título + padding). Se le resta a [`VIEWPORT_H`] para el viewport de los
+/// campos, así editor y campos reparten el alto en lugar de aplastarse.
+const PREZI_EDITOR_H: f32 = 280.0;
 
 /// Variantes del theme. El id casa con `Theme::by_name`; el label es key i18n.
 const THEME_VARIANTS: &[(&str, &str)] = &[
@@ -3359,8 +3363,9 @@ fn build_header(theme: &Theme) -> View<Msg> {
 fn prezi_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
     /// Lado de la manija de giro, px.
     const HANDLE: f32 = 16.0;
-    /// Alto del lienzo del editor, px.
-    const CANVAS_H: f32 = 360.0;
+    /// Alto del lienzo del editor, px. El bloque entero (título + lienzo +
+    /// padding) debe caber en [`PREZI_EDITOR_H`] para no comerse los campos.
+    const CANVAS_H: f32 = PREZI_EDITOR_H - 60.0;
 
     // Lienzo: el render del recorrido (free canvas + rotación) con el arrastre
     // cableado al `update` del panel (move = mover marco / panear; end = soltar).
@@ -3978,12 +3983,20 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
             // La sección «Vista espacial» suma arriba el editor visual 2D del
             // Prezi (canvas con tiles arrastrables); los campos van debajo.
             if sec.id.contains("vista_espacial") {
+                // El editor visual del Prezi vive ARRIBA de los campos. El editor
+                // tiene alto fijo (~`PREZI_EDITOR_H`); para que los campos no
+                // queden aplastados en una franja sin scroll utilizable, su
+                // viewport propio = el del panel menos el editor. Así ambos
+                // (editor + campos) reparten el alto y el scroll de los campos
+                // recorre toda la sección.
+                let fields_vp = (VIEWPORT_H - PREZI_EDITOR_H).max(180.0);
+                let fields = schema_panel(&one, &model.allichay, theme, fields_vp, Msg::Allichay);
                 View::new(Style {
                     flex_direction: FlexDirection::Column,
                     size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
                     ..Default::default()
                 })
-                .children(vec![prezi_editor_view(model, theme), panel])
+                .children(vec![prezi_editor_view(model, theme), fields])
             } else if sec.id == "barras::lista" {
                 // Lista de barras: vista custom (fila = nombre + posición +
                 // iconitos duplicar/borrar), que allichay no puede componer.
