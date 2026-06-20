@@ -89,13 +89,22 @@ pub(crate) fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnap
     }
     let _ = SKY_BAND_BOT;
 
-    // Floor backdrop: si tenemos al menos un sector, usá su paleta.
-    // Como heurística pickeamos el sector con más light_level (la
-    // habitación más iluminada — suele ser donde el jugador está
-    // cuando arranca el nivel). No es exacto pero quita el "gris muerto"
-    // de la 3.0 cuando mirás al vacío.
-    let brightest = snap.sectors.iter().max_by_key(|s| s.light_level);
-    let floor_rgb = brightest
+    // Floor backdrop (Fase 3.58): el piso del **sector del jugador** con un
+    // gradiente vertical de cerca (brillante, al pie de la pantalla) al
+    // horizonte (atenuado por niebla). Rellena el hueco de near-floor que
+    // dejan los polígonos de subsector cuya cadena de segs no cierra hacia
+    // la cámara (caveat 3.2) — antes ese hueco caía a un gris muerto casi
+    // negro (0.45× del flat más oscuro), el "agujero negro" bajo los pies.
+    // Los polígonos de piso reales se pintan encima donde existen; el
+    // backdrop sólo asoma en el hueco, ya con el color y brillo correctos.
+    use llimphi_ui::llimphi_raster::peniko::Gradient;
+    let player_sec = subsector_at_point(&snap.nodes, snap.player.x, snap.player.y)
+        .and_then(|ss| snap.subsectors.get(ss as usize))
+        .map(|ss| ss.sector)
+        .and_then(|si| snap.sectors.get(si as usize));
+    // Sin sector del jugador (stub sin BSP) ⇒ el más brillante, como antes.
+    let sec = player_sec.or_else(|| snap.sectors.iter().max_by_key(|s| s.light_level));
+    let floor_rgb = sec
         .and_then(|s| {
             cfg.atlas
                 .as_ref()
@@ -103,14 +112,18 @@ pub(crate) fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnap
                 .or_else(|| Some(FLOOR_PALETTE[(s.floor_pic as usize) % FLOOR_PALETTE.len()]))
         })
         .unwrap_or((0x32, 0x2E, 0x28));
-    let backdrop_shade = 0.45;
-    let bg = Color::from_rgba8(
-        ((floor_rgb.0 as f32) * backdrop_shade) as u8,
-        ((floor_rgb.1 as f32) * backdrop_shade) as u8,
-        ((floor_rgb.2 as f32) * backdrop_shade) as u8,
-        255,
-    );
-    scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &floor_rect);
+    let light = sec.map(|s| s.light_level).unwrap_or(160);
+    // Cerca (pie de pantalla): poca niebla. Horizonte: niebla plena.
+    let near_shade = shade_for(light, 0.0, cfg) * 0.9;
+    let far_shade = shade_for(light, cfg.far_fog * 0.85, cfg) * 0.9;
+    let bottom = tint(floor_rgb, near_shade.clamp(0.04, 1.0));
+    let horizon = tint(floor_rgb, far_shade.clamp(0.04, 1.0));
+    let grad = Gradient::new_linear(
+        Point::new(rect.x as f64, (rect.y + rect.h) as f64),
+        Point::new(rect.x as f64, mid_y),
+    )
+    .with_stops([(0.0, bottom), (1.0, horizon)].as_slice());
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &grad, None, &floor_rect);
 }
 
 // =====================================================================

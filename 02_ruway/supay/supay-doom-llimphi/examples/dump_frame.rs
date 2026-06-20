@@ -116,6 +116,12 @@ fn main() {
     } else {
         Some(atlas)
     };
+    // Occlusion culling OFF por default (Fase 3.58 — over-culleaba paredes
+    // visibles). SUPAY_CULL=1 lo reactiva para experimentar.
+    let occlusion_cull = std::env::var("SUPAY_CULL").is_ok();
+    if occlusion_cull {
+        eprintln!("dump_frame: SUPAY_CULL — occlusion culling ON (experimental)");
+    }
     let cfg = RenderConfig {
         atlas: atlas_opt,
         crosshair: true,
@@ -126,6 +132,7 @@ fn main() {
         wall_vertical_bands: 4,
         wall_vertical_gradient: true,
         plane_depth_gradient: true,
+        occlusion_cull,
         ..RenderConfig::default()
     };
 
@@ -163,6 +170,34 @@ fn main() {
 
     write_texture_png(&hal, &target, &out);
     eprintln!("dump_frame: escrito {out} ({W}x{H})");
+
+    // Ground truth: el framebuffer del renderer software propio de Doom
+    // (640×400 ARGB). Sirve para comparar lado a lado qué *debería* verse
+    // contra lo que produce el renderer 3D moderno. Se escribe junto al
+    // PNG principal con sufijo `.fb.png`.
+    let fb = engine.framebuffer();
+    let fb_out = out.strip_suffix(".png").map(|s| format!("{s}.fb.png")).unwrap_or_else(|| format!("{out}.fb.png"));
+    write_framebuffer_png(&fb, &fb_out);
+    eprintln!("dump_frame: framebuffer (ground truth) escrito {fb_out} (640x400)");
+}
+
+/// Vuelca el framebuffer 640×400 ARGB de Doom (su renderer software) a PNG.
+fn write_framebuffer_png(fb: &[u32], path: &str) {
+    const FW: u32 = 640;
+    const FH: u32 = 400;
+    let mut pixels = Vec::with_capacity((FW * FH * 4) as usize);
+    for &p in fb.iter().take((FW * FH) as usize) {
+        pixels.push(((p >> 16) & 0xff) as u8); // R
+        pixels.push(((p >> 8) & 0xff) as u8); // G
+        pixels.push((p & 0xff) as u8); // B
+        pixels.push(0xff); // A
+    }
+    let file = File::create(path).expect("crear fb PNG");
+    let mut encoder = png::Encoder::new(BufWriter::new(file), FW, FH);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut w = encoder.write_header().expect("png header");
+    w.write_image_data(&pixels).expect("png data");
 }
 
 /// Copia la textura a un buffer mapeable, lee y escribe PNG. wgpu exige

@@ -55,8 +55,17 @@ pub(crate) fn ceiling_is_sky(sec: &SectorSnap, sky_pic: u16) -> bool {
 // Shading
 // =====================================================================
 
+/// Gamma de la luz del sector (Fase 3.58). Doom **no** atenúa la luz
+/// linealmente: su colormap mantiene la imagen casi a tope hasta luces
+/// medias (~L≥160) y sólo cae rápido en la mitad baja. Una curva `< 1`
+/// levanta los tonos medios/altos para igualar el renderer software de
+/// Doom (ground truth) — sin ella, `light/255` lineal dejaba todo el nivel
+/// notablemente más apagado que el original (L=192 daba 0.75 en vez de
+/// ~0.86). Los sectores realmente oscuros (L<96) siguen oscuros.
+pub(crate) const LIGHT_GAMMA: f32 = 0.62;
+
 pub(crate) fn shade_for(light_level: u8, depth: f32, cfg: &RenderConfig) -> f32 {
-    let light = light_level as f32 / 255.0;
+    let light = (light_level as f32 / 255.0).powf(LIGHT_GAMMA);
     let fog = 1.0 - (depth / cfg.far_fog).clamp(0.0, 0.85);
     (light * fog).clamp(0.05, 1.0)
 }

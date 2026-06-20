@@ -276,11 +276,18 @@ pub struct RenderConfig {
     /// one-sided; los subsectores cuyo span angular queda íntegramente
     /// tapado **no** emiten sus polígonos de piso/techo ni sus sprites.
     /// Reduce el overdraw/fill de geometría que de todas formas quedaría
-    /// cubierta (el pendiente "Visibility BSP-walking" del SDD). Es
-    /// conservador: sólo descarta lo que comprueba completamente tapado,
-    /// nunca recorta algo visible. Las paredes no se descartan (son los
-    /// propios bloqueadores). Cuando `false`, o en modo stub sin BSP, se
-    /// pinta todo — comportamiento 3.53 bit-equivalente. Default `true`.
+    /// cubierta (el pendiente "Visibility BSP-walking" del SDD). Cuando
+    /// `false`, o en modo stub sin BSP, se pinta todo.
+    ///
+    /// **Default `false` desde Fase 3.58.** Verificado contra el renderer
+    /// software de Doom (ground truth, vía `dump_frame` + Freedoom): con el
+    /// culling activo, en interiores **desaparecían paredes visibles** y se
+    /// veía el cielo/vacío a través (el spawn de E1M1 — una sala techbase
+    /// cerrada — se renderizaba como un exterior con montañas). El test de
+    /// contención angular de intervalos **no es sound**: marca como ocluido
+    /// geometría que sí se ve. Queda apagado hasta reescribir la visibilidad
+    /// al estilo Doom (solidsegs / cliprange por columna). El toggle se
+    /// conserva para experimentar.
     pub occlusion_cull: bool,
 }
 
@@ -316,7 +323,7 @@ impl Default for RenderConfig {
             decals: Vec::new(),
             decal_rim_directional: true,
             decal_clip_walls: true,
-            occlusion_cull: true,
+            occlusion_cull: false,
         }
     }
 }
