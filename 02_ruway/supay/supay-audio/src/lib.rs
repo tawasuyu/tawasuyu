@@ -82,6 +82,27 @@ fn air_lp_coef(distance: f32, sr: f32) -> f32 {
     coef.clamp(0.0, 1.0)
 }
 
+/// Distancia (unidades Doom) a la que el envío al reverb satura.
+const REVERB_SEND_FULL_DIST: f32 = 1000.0;
+/// Fracción máxima de la voz que se manda a la cola del reverb a distancia
+/// `≥ REVERB_SEND_FULL_DIST` (además del dry global del sector). Tuneado
+/// suave: el efecto suma cola, no debe ahogar la fuente directa.
+const REVERB_SEND_MAX: f32 = 0.7;
+
+/// Fase 4.8 — envío al reverb proporcional a la `distance` fuente→oyente
+/// (unidades Doom). `0` al ras (sólo el dry global del sector entra a la
+/// cola, como en 4.7); crece lineal hasta [`REVERB_SEND_MAX`] en
+/// [`REVERB_SEND_FULL_DIST`]. Modela el ratio reverberante/directo que sube
+/// con la distancia: una fuente lejana en una sala viva se oye más a través
+/// de sus reflexiones que en directo — la pista de profundidad más fuerte.
+fn reverb_send_gain(distance: f32) -> f32 {
+    if distance <= 1.0 {
+        return 0.0;
+    }
+    let t = (distance / REVERB_SEND_FULL_DIST).clamp(0.0, 1.0);
+    t * REVERB_SEND_MAX
+}
+
 /// Una voz activa: muestras del sfx + cursor de reproducción (en
 /// unidades de muestra *source*) + ganancias por canal.
 struct Voice {
@@ -116,6 +137,14 @@ pub struct DoomMixer {
     voices: Vec<Voice>,
     /// Ganancia maestra para evitar clipping al sumar varias voces.
     master: f32,
+    /// Fase 4.8 — buffer scratch mono con el **envío extra al reverb** del
+    /// frame: cada voz aporta `dry_mono · reverb_send_gain(distancia)`, así
+    /// las fuentes lejanas mandan más señal a la cola (suenan más
+    /// reverberantes — la pista de profundidad acústica más fuerte). Lo
+    /// rellena [`Self::fill`] y lo lee [`DoomAudio`]. Longitud = frames del
+    /// último callback. Vacío / todo-cero ⇒ sin envío extra (fuentes al ras
+    /// o sin reverb), comportamiento 4.7 bit-equivalente.
+    reverb_send: Vec<f32>,
 }
 
 impl Default for DoomMixer {
@@ -129,6 +158,7 @@ impl DoomMixer {
         Self {
             voices: Vec::new(),
             master: 0.6,
+            reverb_send: Vec::new(),
         }
     }
 
@@ -177,10 +207,18 @@ impl AudioSource for DoomMixer {
         let dev_rate = sample_rate.max(1) as f64;
         let master = self.master;
 
+        // Fase 4.8 — buffer de envío al reverb del frame (mono), reseteado.
+        self.reverb_send.clear();
+        self.reverb_send.resize(frames, 0.0);
+
         let dev_rate_f = dev_rate as f32;
         for v in self.voices.iter_mut() {
             let step = v.src_rate as f64 / dev_rate;
             let n = v.samples.len();
+            // Fase 4.8 — fracción de la señal de esta voz que va a la cola
+            // del reverb por su distancia: 0 al ras (compat 4.7), creciente
+            // con la lejanía. Constante dentro del callback.
+            let send_gain = reverb_send_gain(v.air_distance);
             // Fase 4.5 — coef del pasa-bajos 1-polo de oclusión, constante
             // dentro del callback (sr fijo). `occlusion==0` ⇒ coef 1.0 =
             // bypass bit-exacto (compat 4.4). Al subir, baja el corte:
@@ -217,6 +255,12 @@ impl AudioSource for DoomMixer {
                     // Canales extra (5.1 etc.) quedan en silencio — MVP estéreo.
                 } else {
                     buf[base] += s * (v.gain_l + v.gain_r) * 0.5;
+                }
+                // Fase 4.8 — envío al reverb en las mismas unidades que el
+                // dry mono que lee `DoomAudio` ((L+R)/2). 0 cuando la fuente
+                // está al ras (send_gain 0) ⇒ sin efecto.
+                if send_gain > 0.0 {
+                    self.reverb_send[f] += s * (v.gain_l + v.gain_r) * 0.5 * send_gain;
                 }
                 v.cursor += step;
             }
@@ -851,7 +895,11 @@ impl AudioSource for DoomAudio {
                 } else {
                     buf[base]
                 };
-                let (wl, wr) = self.reverb.process(dry);
+                // Fase 4.8 — entrada al reverb = dry global del sector +
+                // envío extra de las voces lejanas (suena más reverberante a
+                // la distancia). `0` para fuentes al ras ⇒ compat 4.7.
+                let extra = self.sfx.reverb_send.get(f).copied().unwrap_or(0.0);
+                let (wl, wr) = self.reverb.process(dry + extra);
                 if ch >= 2 {
                     buf[base] += wl * wet;
                     buf[base + 1] += wr * wet;
@@ -1338,6 +1386,66 @@ mod tests {
         // haber energía de la cola.
         let tail: f32 = buf[400..].iter().map(|x| x.abs()).sum();
         assert!(tail > 1e-3, "el reverb debe dejar cola audible, tail={tail}");
+    }
+
+    #[test]
+    fn reverb_send_gain_grows_with_distance() {
+        // Fase 4.8 — al ras: sin envío extra (compat 4.7). Crece monótono y
+        // satura en REVERB_SEND_MAX a partir de REVERB_SEND_FULL_DIST.
+        assert_eq!(reverb_send_gain(0.0), 0.0);
+        assert_eq!(reverb_send_gain(1.0), 0.0);
+        let mid = reverb_send_gain(REVERB_SEND_FULL_DIST * 0.5);
+        let full = reverb_send_gain(REVERB_SEND_FULL_DIST);
+        assert!(mid > 0.0 && mid < full, "monótono: mid={mid} full={full}");
+        assert!((full - REVERB_SEND_MAX).abs() < 1e-6, "satura en el máximo: {full}");
+        // Más allá de la distancia de saturación no crece.
+        assert_eq!(reverb_send_gain(REVERB_SEND_FULL_DIST * 3.0), REVERB_SEND_MAX);
+    }
+
+    #[test]
+    fn distant_source_is_more_reverberant() {
+        // Fase 4.8 — el mismo impulso en la misma sala viva deja MÁS cola de
+        // reverb cuando la fuente está lejos (más envío) que al ras.
+        let tail = |dist: f32| {
+            let mut da = DoomAudio {
+                sfx: DoomMixer::new(),
+                music: None,
+                reverb: Reverb::new(),
+            };
+            let amb = RoomAmbience { wet: 0.8, room_size: 0.9, damping: 0.2 };
+            da.reverb.amb = amb;
+            da.reverb.target = amb;
+            da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0, 0.0, dist);
+            let mut buf = vec![0.0f32; 2000];
+            da.fill(&mut buf, 1000, 2);
+            buf[400..].iter().map(|x| x.abs()).sum::<f32>()
+        };
+        let near = tail(0.0);
+        let far = tail(REVERB_SEND_FULL_DIST);
+        assert!(near > 1e-3, "ambos dejan cola: near={near}");
+        assert!(
+            far > near * 1.3,
+            "la fuente lejana suena más reverberante: near={near} far={far}"
+        );
+    }
+
+    #[test]
+    fn near_source_reverb_unchanged_vs_dry_send() {
+        // Compat 4.7: con la fuente al ras (distancia 0), el envío extra es
+        // 0 ⇒ la cola es exactamente la del dry global (sin Fase 4.8).
+        let mut da = DoomAudio {
+            sfx: DoomMixer::new(),
+            music: None,
+            reverb: Reverb::new(),
+        };
+        da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0, 0.0, 0.0);
+        let mut buf = vec![0.0f32; 64];
+        da.fill(&mut buf, 1000, 2);
+        // El buffer de envío quedó en cero (ninguna voz lejana).
+        assert!(
+            da.sfx.reverb_send.iter().all(|&x| x == 0.0),
+            "sin fuentes lejanas el envío extra es cero"
+        );
     }
 
     #[test]
