@@ -24,7 +24,7 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, FlexDirection, Position, Rect, Size, Style,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Join, Point, Stroke};
-use llimphi_ui::llimphi_raster::peniko::{Color, Extend, Fill, Gradient};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Gradient, Mix};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use uuid::Uuid;
@@ -275,6 +275,24 @@ fn armar_multilienzo<Msg: Clone + 'static>(
         + cfg.alto_header
         + alto_max as f32 * (cfg.altura_atom + cfg.gap_atom);
 
+    // Tinte de continuidad horizontal: cada bloque de texto hereda el color
+    // del Sankey que lo toca — el del haz que ENTRA por su izquierda y el
+    // que SALE por su derecha. Así el color corre ininterrumpido
+    // texto→cinta→texto→cinta por toda la fila (`tints[col][atom] =
+    // (izq, der)`). Las columnas de los extremos sólo tienen un lado.
+    let mut tints: Vec<HashMap<Uuid, (Option<Color>, Option<Color>)>> =
+        vec![HashMap::new(); cuerpos.len()];
+    for i in 0..cuerpos.len().saturating_sub(1) {
+        if let Some(carta) = cartas.get(i).copied().flatten() {
+            for (a_izq, a_der, color) in
+                hebras_orientadas(carta, cuerpos[i], cuerpos[i + 1], paleta_hebras)
+            {
+                tints[i].entry(a_izq).or_insert((None, None)).1 = Some(color);
+                tints[i + 1].entry(a_der).or_insert((None, None)).0 = Some(color);
+            }
+        }
+    }
+
     let mut hijos: Vec<View<Msg>> = Vec::with_capacity(cuerpos.len() * 2 - 1);
     for (i, c) in cuerpos.iter().enumerate() {
         hijos.push(columna_cuerpo::<Msg>(
@@ -285,6 +303,7 @@ fn armar_multilienzo<Msg: Clone + 'static>(
             palette,
             alto_contenido,
             resaltar,
+            &tints[i],
             on_atom_click,
         ));
         if i + 1 < cuerpos.len() {
@@ -330,6 +349,7 @@ fn columna_cuerpo<Msg: Clone + 'static>(
     palette: &Palette,
     alto_total: f32,
     resaltar: &str,
+    tints: &HashMap<Uuid, (Option<Color>, Option<Color>)>,
     on_atom_click: &dyn Fn(usize, Uuid) -> Option<Msg>,
 ) -> View<Msg> {
     let header_text = format!(
@@ -372,7 +392,10 @@ fn columna_cuerpo<Msg: Clone + 'static>(
             .unwrap_or_else(|| ("(átomo ausente)".to_string(), false));
         let y = cfg.padding_top + cfg.alto_header + i as f32 * (cfg.altura_atom + cfg.gap_atom);
         let click_msg = on_atom_click(i_cuerpo, *atom_id);
-        bloques.push(bloque_atom::<Msg>(&preview, y, cfg, palette, hit, click_msg));
+        let (tint_izq, tint_der) = tints.get(atom_id).copied().unwrap_or((None, None));
+        bloques.push(bloque_atom::<Msg>(
+            &preview, y, cfg, palette, hit, tint_izq, tint_der, click_msg,
+        ));
     }
 
     View::new(Style {
@@ -393,18 +416,21 @@ fn columna_cuerpo<Msg: Clone + 'static>(
 /// Bloque de un párrafo dentro de una columna: caja con preview de texto,
 /// absolutamente posicionada para que las posiciones Y coincidan con las
 /// que el carril usa al pintar hebras.
+#[allow(clippy::too_many_arguments)]
 fn bloque_atom<Msg: Clone + 'static>(
     preview: &str,
     y: f32,
     cfg: &MultilienzoConfig,
     palette: &Palette,
     hit_busqueda: bool,
+    tint_izq: Option<Color>,
+    tint_der: Option<Color>,
     click_msg: Option<Msg>,
 ) -> View<Msg> {
     // Fondo destacado cuando el átomo matchea la búsqueda transversal.
     // Mezcla 30% del color accent con el bg_panel base — visible sin
     // ser estridente.
-    let fondo = if hit_busqueda {
+    let base = if hit_busqueda {
         mezclar(palette.bg_panel, palette.border_strong, 0.35)
     } else {
         palette.bg_panel
@@ -428,10 +454,26 @@ fn bloque_atom<Msg: Clone + 'static>(
             bottom: length(8.0_f32),
         },
         ..Default::default()
-    })
-    .fill(fondo)
-    .radius(4.0)
-    .text_aligned(preview.to_string(), cfg.font_size, palette.fg_text, Alignment::Start);
+    });
+
+    // Tinte de continuidad: degradé horizontal del color del haz que entra
+    // por la izquierda al que sale por la derecha. Cada lado se mezcla suave
+    // con el fondo (28%) para no tapar el texto; el lado sin haz queda
+    // neutro. Sin haces a ninguno de los lados → fondo plano de siempre.
+    if tint_izq.is_some() || tint_der.is_some() {
+        const T: f32 = 0.28;
+        let lc = tint_izq.map(|c| mezclar(base, c, T)).unwrap_or(base);
+        let rc = tint_der.map(|c| mezclar(base, c, T)).unwrap_or(base);
+        let grad = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(1.0, 0.0))
+            .with_stops([(0.0_f32, lc), (1.0_f32, rc)]);
+        v = v.fill_gradient(grad);
+    } else {
+        v = v.fill(base);
+    }
+
+    v = v
+        .radius(4.0)
+        .text_aligned(preview.to_string(), cfg.font_size, palette.fg_text, Alignment::Start);
     if let Some(msg) = click_msg {
         v = v.on_click(msg);
     }
@@ -486,7 +528,7 @@ fn carril_hebras<Msg: Clone + 'static>(
         return nodo;
     }
     nodo.paint_with(move |scene, _ts, rect| {
-        for h in &hebras {
+        for (hi, h) in hebras.iter().enumerate() {
             // --- Geometría de la cinta: una banda Sankey rellena que engrosa
             // para ocupar el cauce. El alto de la banda en cada extremo es
             // proporcional a la fuerza del alineamiento (más fuerte = caudal
@@ -528,50 +570,72 @@ fn carril_hebras<Msg: Clone + 'static>(
                 continue;
             }
 
-            // --- Fluido 2D · 1. Frente de onda: un gradiente lineal
-            // repetido cuyas bandas brillantes barren el cauce de la madre a
-            // la hija. Rellenando la PROPIA cinta con el gradiente, queda
-            // recortado a la banda sin clip aparte — el brillo cubre todo el
-            // ancho del cauce, no una línea. ---
-            const PER: f64 = 58.0; // largo de un período de banda, en px
-            let sx = x0 - fase * PER; // corre con la fase → bandas hacia la hija
-            let y_ref = (it + ib) * 0.5;
-            let claro = aclarar(h.color, 0.55);
-            let hueco = atenuar_alpha(claro, 0.0); // mismo tinte, transparente
-            let onda = Gradient::new_linear(Point::new(sx, y_ref), Point::new(sx + PER, y_ref))
-                .with_extend(Extend::Repeat)
-                .with_stops([
-                    (0.0_f32, hueco),
-                    (0.38_f32, hueco),
-                    (0.5_f32, claro),
-                    (0.62_f32, hueco),
-                    (1.0_f32, hueco),
-                ]);
-            scene.fill(Fill::NonZero, Affine::IDENTITY, &onda, None, &cinta);
+            // --- Fluido 2D caótico: un tráfico de "natas" de tamaños
+            // irregulares que resbalan unas sobre otras y friccionan con las
+            // paredes del cauce. Nada de bandas regulares: cada nata tiene su
+            // tamaño, su carril, su fase y —clave— su VELOCIDAD propia, con
+            // perfil parabólico (rápida al centro, lenta en las orillas, como
+            // un fluido viscoso). Velocidades distintas ⇒ se adelantan entre
+            // sí (desorden). Todo va clipeado a la cinta: las natas que tocan
+            // la orilla quedan recortadas → se ve la fricción contra la pared.
+            //
+            // Muestreo de la cinta en t∈[0,1]: x(t) y los bordes top/bot son
+            // cúbicas (mismos puntos de control que la cinta dibujada arriba).
+            scene.push_layer(Fill::NonZero, Mix::Normal, 1.0, Affine::IDENTITY, &cinta);
+            const NATAS: usize = 18;
+            for bi in 0..NATAS {
+                let seed = (hi as u32)
+                    .wrapping_mul(2917)
+                    .wrapping_add(bi as u32 * 101)
+                    .wrapping_add(7);
+                let yf0 = hash01(seed.wrapping_mul(3).wrapping_add(1)) as f64;
+                let sz = 0.40 + 1.30 * hash01(seed.wrapping_mul(3).wrapping_add(2)) as f64;
+                let jit = 0.65 + 0.70 * hash01(seed.wrapping_mul(3).wrapping_add(5)) as f64;
+                let fase0 = hash01(seed.wrapping_mul(3).wrapping_add(3)) as f64;
+                let tono = hash01(seed.wrapping_mul(3).wrapping_add(4)) as f64;
+                // Perfil de velocidad parabólico: ~0 en las paredes, máximo
+                // al centro. Más una jitter por nata para romper toda simetría.
+                let vperfil = 0.18 + 0.95 * (1.0 - (2.0 * yf0 - 1.0).powi(2));
+                let vel = vperfil * jit;
+                let s = (fase0 + fase * vel).rem_euclid(1.0);
+                // Vaivén transversal lento: las natas no van en raíl recto,
+                // serpentean y rozan a sus vecinas.
+                let sway = 0.08 * (std::f64::consts::TAU * (fase * 0.6 + fase0)).sin();
+                let yf = (yf0 + sway).clamp(0.02, 0.98);
 
-            // --- Fluido 2D · 2. Líneas de corriente: filamentos finos a
-            // varias fracciones del alto de la banda, cada uno una curva-S
-            // con dash-offset que marcha con la fase. Dan la lectura laminar
-            // del fluido recorriendo el cauce (no sólo un destello). ---
-            const PERIODO_DASH: f64 = 16.0;
-            let off = -fase * PERIODO_DASH;
-            for frac in [0.26_f64, 0.5, 0.74] {
-                let yi = it + (ib - it) * frac;
-                let yd = dt + (db - dt) * frac;
-                let mut linea = BezPath::new();
-                linea.move_to((x0, yi));
-                linea.curve_to((x0 + dx, yi), (x1 - dx, yd), (x1, yd));
-                let trazo = Stroke::new(1.4)
-                    .with_caps(Cap::Round)
-                    .with_dashes(off, [3.0, 9.0]);
-                scene.stroke(
-                    &trazo,
+                let cx = cub(x0, x0 + dx, x1 - dx, x1, s);
+                let ct = cub(it, it, dt, dt, s);
+                let cb = cub(ib, ib, db, db, s);
+                let grosor_local = (cb - ct).max(2.0);
+                let cy = ct + grosor_local * yf;
+                // Radio relativo al alto local del cauce, modulado por tamaño.
+                let r = grosor_local * 0.5 * (0.18 + 0.40 * sz);
+                let rx = r * 1.55; // elongada en el sentido del flujo (resbala)
+                let ry = r;
+
+                // Desvanecer en los extremos para que entren/salgan suave en
+                // vez de aparecer/teleportarse al envolver la fase.
+                let fin = ((s / 0.12).clamp(0.0, 1.0) * ((1.0 - s) / 0.12).clamp(0.0, 1.0)) as f32;
+                let a = (0.26 + 0.40 * sz as f32).min(0.78) * fin;
+                let cuerpo = atenuar_alpha(aclarar(h.color, 0.30 + 0.40 * tono as f32), a);
+                scene.fill(
+                    Fill::NonZero,
                     Affine::IDENTITY,
-                    atenuar_alpha(claro, 0.7),
+                    cuerpo,
                     None,
-                    &linea,
+                    &nata_path(cx, cy, rx, ry, seed),
+                );
+                // Núcleo más claro y chico, descentrado, para dar volumen.
+                let nucleo = atenuar_alpha(aclarar(h.color, 0.72), a * 0.85);
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    nucleo,
+                    None,
+                    &nata_path(cx + rx * 0.15, cy - ry * 0.12, rx * 0.5, ry * 0.5, seed ^ 0x9e37_79b9),
                 );
             }
+            scene.pop_layer();
         }
     })
 }
@@ -668,6 +732,97 @@ fn aclarar(c: Color, hacia_blanco: f32) -> Color {
         b + (1.0 - b) * t,
         1.0,
     ])
+}
+
+/// Hash entero→`[0,1]` determinista (integer finalizer estilo MurmurHash).
+/// Da la pseudo-aleatoriedad del fluido caótico sin `rand` y sin romper la
+/// reproducibilidad de los renders/tests: misma semilla, misma nata.
+fn hash01(x: u32) -> f32 {
+    let mut h = x.wrapping_mul(2_654_435_761);
+    h ^= h >> 15;
+    h = h.wrapping_mul(2_246_822_519);
+    h ^= h >> 13;
+    h = h.wrapping_mul(3_266_489_917);
+    h ^= h >> 16;
+    (h & 0x00ff_ffff) as f32 / 16_777_215.0
+}
+
+/// Evalúa un Bézier cúbico escalar (un eje) en `t ∈ [0,1]`. Se usa para
+/// muestrear el borde superior/inferior y el eje del cauce y así colocar
+/// las natas sobre la curva-S real de la cinta.
+fn cub(a: f64, b: f64, c: f64, d: f64, t: f64) -> f64 {
+    let u = 1.0 - t;
+    u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * d
+}
+
+/// Construye una "nata": un blob cerrado **irregular** (sin forma) centrado
+/// en `(cx, cy)`, con radios base `rx`/`ry` perturbados vértice a vértice por
+/// `seed`. K puntos en un anillo con radio y ángulo jiterados, unidos por
+/// Catmull-Rom convertido a Bézier → contorno orgánico y suave, no un óvalo.
+fn nata_path(cx: f64, cy: f64, rx: f64, ry: f64, seed: u32) -> BezPath {
+    const K: usize = 7;
+    let mut pts = [(0.0_f64, 0.0_f64); K];
+    for (k, p) in pts.iter_mut().enumerate() {
+        let kk = k as u32;
+        let ang = std::f64::consts::TAU * (k as f64) / K as f64
+            + (hash01(seed.wrapping_add(kk.wrapping_mul(131)).wrapping_add(7)) as f64 - 0.5) * 0.7;
+        let rr = 0.58 + 0.66 * hash01(seed.wrapping_add(kk.wrapping_mul(977)).wrapping_add(3)) as f64;
+        *p = (cx + ang.cos() * rx * rr, cy + ang.sin() * ry * rr);
+    }
+    let mut path = BezPath::new();
+    path.move_to(pts[0]);
+    for i in 0..K {
+        let p0 = pts[(i + K - 1) % K];
+        let p1 = pts[i];
+        let p2 = pts[(i + 1) % K];
+        let p3 = pts[(i + 2) % K];
+        let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+        let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+        path.curve_to(c1, c2, p2);
+    }
+    path.close_path();
+    path
+}
+
+/// Color sólido (tono pleno, sin modular alpha) de una hebra según su
+/// origen — el mismo criterio que [`precomputar_hebras`], pero pensado para
+/// **teñir** los bloques de texto: la sección hereda el color del Sankey que
+/// la conecta, dando continuidad de color a través de toda la horizontal.
+fn color_solido_origen(fresco: bool, origen: &OrigenAlineamiento, paleta: &PaletaHebras) -> Color {
+    if !fresco {
+        return paleta.stale;
+    }
+    match origen {
+        OrigenAlineamiento::Derivado { .. } => paleta.derivada,
+        OrigenAlineamiento::Manual { .. } => paleta.manual,
+        OrigenAlineamiento::Embeddings { .. } => paleta.embeddings,
+    }
+}
+
+/// Para una carta entre `izq` y `der`, resuelve cada hebra a la terna
+/// `(atom_izq, atom_der, color_sólido)` orientada por columna (misma lógica
+/// de desambiguación que [`precomputar_hebras`]). Alimenta el tintado.
+fn hebras_orientadas(
+    carta: &CartaHebras,
+    izq: &Cuerpo,
+    der: &Cuerpo,
+    paleta: &PaletaHebras,
+) -> Vec<(Uuid, Uuid, Color)> {
+    use std::collections::HashSet;
+    let set_izq: HashSet<Uuid> = izq.orden.iter().copied().collect();
+    let set_der: HashSet<Uuid> = der.orden.iter().copied().collect();
+    let mut out = Vec::with_capacity(carta.hebras.len());
+    for h in &carta.hebras {
+        let (a_izq, a_der) = if set_izq.contains(&h.atom_a) && set_der.contains(&h.atom_b) {
+            (h.atom_a, h.atom_b)
+        } else if set_izq.contains(&h.atom_b) && set_der.contains(&h.atom_a) {
+            (h.atom_b, h.atom_a)
+        } else {
+            continue;
+        };
+        out.push((a_izq, a_der, color_solido_origen(h.fresco, &h.origen, paleta)));
+    }
+    out
 }
 
 /// Rótulo corto y legible para cada variante de `Intencion`. La UI lo
