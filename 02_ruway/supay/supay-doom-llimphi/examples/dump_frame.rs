@@ -175,11 +175,11 @@ fn main() {
     } else {
         Some(atlas)
     };
-    // Occlusion culling OFF por default (Fase 3.58 — over-culleaba paredes
-    // visibles). SUPAY_CULL=1 lo reactiva para experimentar.
-    let occlusion_cull = std::env::var("SUPAY_CULL").is_ok();
-    if occlusion_cull {
-        eprintln!("dump_frame: SUPAY_CULL — occlusion culling ON (experimental)");
+    // Occlusion culling ON por default (Fase 3.63 — reescrito sound por X de
+    // pantalla). SUPAY_NO_CULL=1 lo apaga para comparar.
+    let occlusion_cull = std::env::var("SUPAY_NO_CULL").is_err();
+    if !occlusion_cull {
+        eprintln!("dump_frame: SUPAY_NO_CULL — occlusion culling OFF");
     }
     let cfg = RenderConfig {
         atlas: atlas_opt,

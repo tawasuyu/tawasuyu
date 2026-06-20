@@ -1057,16 +1057,36 @@
             // Seg de B: angosto, detrás de A (su span cae dentro del de A; linedef 1).
             SegSnap { x1: 200.0, y1: -30.0, x2: 200.0, y2: 30.0, solid: false, linedef: 1 },
         ]);
-        // Partición vertical a X=150: viewer en origen (X=0 < 150) cae al
-        // front (children[0]) ⇒ A es near, B es far.
+        // Partición vertical a X=150 (dy=1): R_PointOnSide → front
+        // (children[0]) es el lado X>150, back (children[1]) el X<150. A
+        // (X=100) vive en back, B (X=200) en front ⇒ children = [B=ss1,
+        // A=ss0]. El viewer en origen (X=0<150) cae en back (A) ⇒ A near.
         snap.nodes = Arc::from(vec![NodeSnap {
             partition_x: 150.0,
             partition_y: 0.0,
             partition_dx: 0.0,
             partition_dy: 1.0,
-            children: [NF_SUBSECTOR | 0, NF_SUBSECTOR | 1],
+            children: [NF_SUBSECTOR | 1, NF_SUBSECTOR | 0],
         }]);
         snap
+    }
+
+    // Fase 3.63: la visibilidad ahora toma proj + rect + cells. Estos
+    // helpers construyen un viewport estándar y pasan `cells=None` (las
+    // escenas de test tienen un seg por subsector, así que el span de segs
+    // coincide con el del cell).
+    fn test_proj_rect() -> (Projection, PaintRect) {
+        let rect = PaintRect { x: 0.0, y: 0.0, w: 320.0, h: 200.0 };
+        let proj = Projection::new(rect, 75.0_f32.to_radians());
+        (proj, rect)
+    }
+    fn vis_subs(snap: &SceneSnapshot, cam: &Camera) -> Option<Vec<bool>> {
+        let (proj, rect) = test_proj_rect();
+        compute_visible_subsectors(snap, cam, &proj, &rect, 4.0, None)
+    }
+    fn vis_all(snap: &SceneSnapshot, cam: &Camera) -> Option<Visibility> {
+        let (proj, rect) = test_proj_rect();
+        compute_visibility(snap, cam, &proj, &rect, 4.0, None)
     }
 
     #[test]
@@ -1075,7 +1095,7 @@
         // tapa angularmente a B → B se descarta, A queda visible.
         let snap = two_subsector_occlusion_snap(true);
         let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
-        let vis = compute_visible_subsectors(&snap, &cam, 4.0).expect("hay BSP");
+        let vis = vis_subs(&snap, &cam).expect("hay BSP");
         assert_eq!(vis.len(), 2);
         assert!(vis[0], "A (la pared cercana) es visible");
         assert!(!vis[1], "B detrás de la pared sólida se descarta");
@@ -1087,7 +1107,7 @@
         // (solid=false): no ocluye, así que B sigue visible.
         let snap = two_subsector_occlusion_snap(false);
         let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
-        let vis = compute_visible_subsectors(&snap, &cam, 4.0).expect("hay BSP");
+        let vis = vis_subs(&snap, &cam).expect("hay BSP");
         assert!(vis[0], "A visible");
         assert!(vis[1], "B visible a través del portal");
     }
@@ -1097,7 +1117,7 @@
         // Sin nodos BSP (modo stub) devuelve None → el caller pinta todo.
         let snap = SceneSnapshot::empty(0);
         let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
-        assert!(compute_visible_subsectors(&snap, &cam, 4.0).is_none());
+        assert!(vis_subs(&snap, &cam).is_none());
     }
 
     #[test]
@@ -1107,7 +1127,7 @@
         // tampoco es confiable → todo queda visible (lado seguro).
         let snap = two_subsector_occlusion_snap(true);
         let cam = Camera::new(0.0, 0.0, 40.0, std::f32::consts::PI);
-        let vis = compute_visible_subsectors(&snap, &cam, 4.0).expect("hay BSP");
+        let vis = vis_subs(&snap, &cam).expect("hay BSP");
         assert!(vis[0] && vis[1], "nada se descarta mirando al lado opuesto");
     }
 
@@ -1145,7 +1165,7 @@
         // pared sólida cercana (linedef 0) → se descarta; la cercana queda.
         let snap = two_wall_occlusion_snap(true);
         let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
-        let vis = compute_visibility(&snap, &cam, 4.0).expect("hay BSP");
+        let vis = vis_all(&snap, &cam).expect("hay BSP");
         assert_eq!(vis.walls.len(), 2);
         assert!(vis.walls[0], "la pared cercana es visible (es el bloqueador)");
         assert!(!vis.walls[1], "la pared lejana tapada se descarta");
@@ -1157,7 +1177,7 @@
         // permanece visible.
         let snap = two_wall_occlusion_snap(false);
         let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
-        let vis = compute_visibility(&snap, &cam, 4.0).expect("hay BSP");
+        let vis = vis_all(&snap, &cam).expect("hay BSP");
         assert!(vis.walls[0] && vis.walls[1], "ninguna pared se descarta");
     }
 
@@ -1174,7 +1194,7 @@
         }
         snap.segs = Arc::from(segs);
         let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
-        let vis = compute_visibility(&snap, &cam, 4.0).expect("hay BSP");
+        let vis = vis_all(&snap, &cam).expect("hay BSP");
         assert!(
             vis.walls[1],
             "el linedef 1 conserva visibilidad porque su seg cercano no está tapado"
@@ -1187,5 +1207,5 @@
         // devuelve None (el caller pinta todas las paredes).
         let snap = SceneSnapshot::empty(0);
         let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
-        assert!(compute_visibility(&snap, &cam, 4.0).is_none());
+        assert!(vis_all(&snap, &cam).is_none());
     }

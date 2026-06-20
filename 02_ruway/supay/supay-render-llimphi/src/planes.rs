@@ -96,10 +96,12 @@ pub(crate) fn subsector_at_point(nodes: &[NodeSnap], px: f32, py: f32) -> Option
             return Some((cur & !NF_SUBSECTOR) as u32);
         }
         let node = nodes.get(cur as usize)?;
-        // Mismo signo que `walk_bsp`: side > 0 → near = children[0].
+        // R_PointOnSide de Doom: front (children[0]) cuando
+        // `dx·(y−py) − dy·(x−px) < 0` (Fase 3.63 — antes `> 0`, invertido,
+        // así que las consultas de punto→subsector caían al lado opuesto).
         let side = node.partition_dx * (py - node.partition_y)
             - node.partition_dy * (px - node.partition_x);
-        cur = if side > 0.0 {
+        cur = if side < 0.0 {
             node.children[0]
         } else {
             node.children[1]
@@ -162,11 +164,14 @@ pub(crate) fn walk_bsp(nodes: &[NodeSnap], child: u16, view_x: f32, view_y: f32,
     let Some(node) = nodes.get(child as usize) else {
         return;
     };
-    // Convención R_PointOnSide: side = dx·(py - y) - dy·(px - x).
-    // side > 0 → viewer en el lado front (children[0]); side < 0 → back.
+    // `side = dx·(y−py) − dy·(x−px)` (punto − nodo): el lado **front**
+    // (children[0], el del viewer) es `side < 0` — R_PointOnSide de Doom.
+    // (Fase 3.63: antes decía `side > 0 → front`, invertido, así que los
+    // ranks de painter's salían al revés y lo lejano se pintaba sobre lo
+    // cercano.)
     let side = node.partition_dx * (view_y - node.partition_y)
         - node.partition_dy * (view_x - node.partition_x);
-    let (near_child, far_child) = if side > 0.0 {
+    let (near_child, far_child) = if side < 0.0 {
         (node.children[0], node.children[1])
     } else {
         (node.children[1], node.children[0])
@@ -200,17 +205,16 @@ pub(crate) fn walk_bsp(nodes: &[NodeSnap], child: u16, view_x: f32, view_y: f32,
 //     span angular (con un margen de seguridad) cae dentro de lo ya
 //     ocluido. Si algún extremo está detrás del near, lo deja visible.
 
-/// Margen angular de seguridad (rad, ~3°) que se exige a la oclusión por
-/// encima del span real del subsector antes de descartarlo. Cubre el caso
-/// de que la cadena de segs de un subsector no represente su polígono
-/// convexo completo (lados de partición BSP sin seg) y su extensión
-/// angular real sea un poco mayor que la de sus vértices de seg.
-const CULL_ANGLE_MARGIN: f32 = 0.05;
+/// Margen (px) que se le **resta** al span de pantalla de un subsector/pared
+/// antes de exigir que la oclusión lo cubra. Evita descartar por jitter de
+/// sub-pixel en bordes compartidos con la pared bloqueadora — es el lado
+/// conservador (preferir dibujar de más antes que recortar algo visible).
+const CULL_PIXEL_MARGIN: f32 = 0.75;
 
-/// Conjunto de intervalos angulares ocluidos (rad), mantenidos disjuntos y
-/// fusionados, ordenados por extremo inferior. Los ángulos viven en el
-/// dominio cam-space `atan2(y_cam, x_cam)` con `x_cam > 0` ⇒ `(-π/2, π/2)`,
-/// sin wraparound (sólo se insertan/consultan puntos delante de cámara).
+/// Conjunto de intervalos ocluidos en **X de pantalla** (px), mantenidos
+/// disjuntos y fusionados (Fase 3.63 — antes eran ángulos cam-space, que
+/// subestimaban el span del subsector y sobre-recortaban). Es la cliprange /
+/// `solidsegs` de Doom: columnas ya tapadas por paredes sólidas más cercanas.
 #[derive(Default)]
 pub(crate) struct OcclusionSet {
     ivals: Vec<(f32, f32)>,
@@ -271,9 +275,15 @@ pub(crate) fn walk_bsp_front_to_back(
     let Some(node) = nodes.get(child as usize) else {
         return;
     };
+    // `side = dx·(y−py) − dy·(x−px)`: con esta forma (punto − nodo) el lado
+    // **front** (children[0], el del viewer) es `side < 0` — R_PointOnSide de
+    // Doom devuelve 0 cuando `node_dx·(y−ny) − node_dy·(x−nx) < 0`. Antes el
+    // código usaba `side > 0 → children[0]`, invertido, así que el paseo
+    // salía back-to-front (verificado por distancias) y la oclusión se
+    // llenaba con subsectores lejanos antes de testear los cercanos.
     let side = node.partition_dx * (view_y - node.partition_y)
         - node.partition_dy * (view_x - node.partition_x);
-    let (near_child, far_child) = if side > 0.0 {
+    let (near_child, far_child) = if side < 0.0 {
         (node.children[0], node.children[1])
     } else {
         (node.children[1], node.children[0])
@@ -282,49 +292,129 @@ pub(crate) fn walk_bsp_front_to_back(
     walk_bsp_front_to_back(nodes, far_child, view_x, view_y, out);
 }
 
-/// Span angular `[min, max]` (rad, cam-space) de los segs de un subsector,
-/// o `None` si: no tiene segs, o algún extremo cae detrás del near plane
-/// (caso en que el span no es confiable → no descartar). El span sólo se
-/// usa para *decidir si descartar*, así que devolver `None` es el lado
-/// seguro (se trata como visible).
-fn subsector_angular_span(
-    sub: &SubsectorSnap,
-    snap: &SceneSnapshot,
+/// Span `[minX, maxX]` en **pantalla** (px) de un segmento mundial,
+/// near-clippeado y proyectado. `None` si el segmento queda íntegramente
+/// detrás del near plane o íntegramente fuera del viewport. El span sólo se
+/// usa para decidir oclusión, así que recortar al viewport es seguro.
+fn seg_screen_span(
+    x1w: f32,
+    y1w: f32,
+    x2w: f32,
+    y2w: f32,
     cam: &Camera,
+    proj: &Projection,
+    rect: &PaintRect,
     near: f32,
 ) -> Option<(f32, f32)> {
-    let first = sub.first_seg as usize;
-    let count = sub.num_segs as usize;
-    if count == 0 {
+    let (mut x1, mut y1) = cam.to_cam_2d(x1w, y1w);
+    let (mut x2, mut y2) = cam.to_cam_2d(x2w, y2w);
+    if x1 < near && x2 < near {
+        return None; // todo detrás del near.
+    }
+    // Clip del extremo que cae detrás del near (proyección estable: x_cam≥near).
+    if x1 < near {
+        let t = (near - x1) / (x2 - x1);
+        y1 += (y2 - y1) * t;
+        x1 = near;
+    } else if x2 < near {
+        let t = (near - x2) / (x1 - x2);
+        y2 += (y1 - y2) * t;
+        x2 = near;
+    }
+    let sx1 = proj.project(x1, y1, 0.0).x as f32; // X es independiente de z.
+    let sx2 = proj.project(x2, y2, 0.0).x as f32;
+    let lo = sx1.min(sx2).max(rect.x);
+    let hi = sx1.max(sx2).min(rect.x + rect.w);
+    if hi <= lo {
+        return None; // fuera de pantalla.
+    }
+    Some((lo, hi))
+}
+
+/// Span `[minX, maxX]` en pantalla de un seg **sin near-clip**: `None` si
+/// algún extremo cae detrás del near plane. Para **bloqueadores** y el test
+/// de oclusión de paredes — evita el blow-up del near-clip (un seg que cruza
+/// el near se proyectaba a ±∞, clampeado a ambos bordes → un occluder
+/// espurio de pantalla completa que tapaba todo). Saltar el seg que cruza es
+/// el lado conservador (no ocluye de más).
+fn seg_screen_span_strict(
+    x1w: f32,
+    y1w: f32,
+    x2w: f32,
+    y2w: f32,
+    cam: &Camera,
+    proj: &Projection,
+    rect: &PaintRect,
+    near: f32,
+) -> Option<(f32, f32)> {
+    let (x1, y1) = cam.to_cam_2d(x1w, y1w);
+    let (x2, y2) = cam.to_cam_2d(x2w, y2w);
+    if x1 < near || x2 < near {
+        return None; // cruza/está detrás del near → no se usa.
+    }
+    let sx1 = proj.project(x1, y1, 0.0).x as f32;
+    let sx2 = proj.project(x2, y2, 0.0).x as f32;
+    let lo = sx1.min(sx2).max(rect.x);
+    let hi = sx1.max(sx2).min(rect.x + rect.w);
+    if hi <= lo {
         return None;
     }
-    let segs: &[SegSnap] = snap.segs.get(first..first + count)?;
+    Some((lo, hi))
+}
+
+/// Span `[minX, maxX]` en pantalla del **cell convexo** de un subsector
+/// (Fase 3.60), near-clippeado y proyectado — el span verdadero del
+/// subsector, no el subestimado por la cadena de segs (que era la causa del
+/// sobre-recorte angular en 3.54/3.55). Si no hay cell, cae a la unión de
+/// los spans de sus segs. `None` ⇒ fuera de pantalla / detrás del near (no
+/// descartar, lado seguro).
+fn subsector_screen_span(
+    sub: &SubsectorSnap,
+    snap: &SceneSnapshot,
+    cell: Option<&[(f32, f32)]>,
+    cam: &Camera,
+    proj: &Projection,
+    rect: &PaintRect,
+    near: f32,
+) -> Option<(f32, f32)> {
     let mut lo = f32::INFINITY;
     let mut hi = f32::NEG_INFINITY;
-    for s in segs {
-        for (wx, wy) in [(s.x1, s.y1), (s.x2, s.y2)] {
-            let (x_cam, y_cam) = cam.to_cam_2d(wx, wy);
-            if x_cam <= near {
-                return None; // extremo detrás → span no confiable.
-            }
-            let a = y_cam.atan2(x_cam);
+    let mut acc = |span: Option<(f32, f32)>| {
+        if let Some((a, b)) = span {
             lo = lo.min(a);
-            hi = hi.max(a);
+            hi = hi.max(b);
+        }
+    };
+    if let Some(poly) = cell.filter(|c| c.len() >= 3) {
+        // Cada arista del polígono del cell, near-clippeada y proyectada.
+        for i in 0..poly.len() {
+            let (ax, ay) = poly[i];
+            let (bx, by) = poly[(i + 1) % poly.len()];
+            acc(seg_screen_span(ax, ay, bx, by, cam, proj, rect, near));
+        }
+    } else {
+        let first = sub.first_seg as usize;
+        let count = sub.num_segs as usize;
+        let segs = snap.segs.get(first..first + count)?;
+        for s in segs {
+            acc(seg_screen_span(s.x1, s.y1, s.x2, s.y2, cam, proj, rect, near));
         }
     }
-    if lo.is_finite() && hi.is_finite() {
+    if lo.is_finite() && hi.is_finite() && hi > lo {
         Some((lo, hi))
     } else {
         None
     }
 }
 
-/// Agrega al [`OcclusionSet`] los rangos angulares de las paredes sólidas
-/// (`seg.solid`) del subsector cuyos dos extremos estén delante del near.
+/// Agrega al [`OcclusionSet`] (en X de pantalla) las paredes **sólidas**
+/// (`seg.solid`) del subsector.
 fn add_subsector_occluders(
     sub: &SubsectorSnap,
     snap: &SceneSnapshot,
     cam: &Camera,
+    proj: &Projection,
+    rect: &PaintRect,
     near: f32,
     occ: &mut OcclusionSet,
 ) {
@@ -337,14 +427,10 @@ fn add_subsector_occluders(
         if !s.solid {
             continue; // portal two-sided: no bloquea visión.
         }
-        let (x1, y1) = cam.to_cam_2d(s.x1, s.y1);
-        let (x2, y2) = cam.to_cam_2d(s.x2, s.y2);
-        if x1 <= near || x2 <= near {
-            continue; // parte detrás del near → no lo usamos como bloqueador.
+        if let Some((lo, hi)) = seg_screen_span_strict(s.x1, s.y1, s.x2, s.y2, cam, proj, rect, near)
+        {
+            occ.insert(lo, hi);
         }
-        let a1 = y1.atan2(x1);
-        let a2 = y2.atan2(x2);
-        occ.insert(a1.min(a2), a1.max(a2));
     }
 }
 
@@ -361,26 +447,29 @@ pub(crate) struct Visibility {
     pub walls: Vec<bool>,
 }
 
-/// **Fase 3.54 + 3.55** — calcula la visibilidad de subsectores **y** de
-/// paredes completas en un único paseo front-to-back del BSP. Devuelve
-/// `None` si el snapshot no tiene BSP (modo stub) — el caller trata todo
-/// como visible (comportamiento histórico).
+/// **Fase 3.63** — visibilidad por **oclusión en X de pantalla** (cliprange
+/// estilo Doom), en un paseo front-to-back del BSP. Devuelve `None` sin BSP
+/// (modo stub) → el caller pinta todo.
 ///
-/// El subsector se descarta si su span angular cae dentro de lo ya ocluido
-/// (Fase 3.54). La pared se descarta sólo si **todos** sus segs quedaron
-/// angularmente tapados por muros sólidos estrictamente más cercanos (Fase
-/// 3.55): un linedef se reparte en uno o más segs entre subsectores, y
-/// basta con que un seg caiga en zona visible para conservar la pared.
+/// Para cada subsector, en orden de cercanía: (1) si su span de pantalla
+/// (del **cell convexo** completo, Fase 3.60 — no de la cadena de segs, que
+/// lo subestimaba y causaba el sobre-recorte de 3.54/3.55) cae dentro de las
+/// columnas ya ocluidas, se descarta; (2) cuenta cuántos segs de cada pared
+/// quedan ocluidos; (3) suma sus paredes sólidas a la oclusión. La pared se
+/// descarta sólo si **todos** sus segs quedaron ocluidos.
 ///
-/// **Conservador por diseño** (igual que 3.54): la oclusión de cada seg se
-/// testea *antes* de sumar los bloqueadores de su propio subsector, así un
-/// seg nunca se ocluye por una pared a su misma profundidad; y un extremo
-/// detrás del near plane vuelve el span no confiable → el seg cuenta como
-/// no ocluido (lado seguro, nunca sobre-descarta).
+/// **Sound y conservador:** los spans salen del polígono real near-clippeado
+/// (sin el wraparound ni la subestimación de los ángulos); se resta
+/// `CULL_PIXEL_MARGIN` antes de exigir cobertura, y se testea *antes* de
+/// sumar los bloqueadores del propio subsector — un seg nunca se ocluye por
+/// una pared a su misma profundidad.
 pub(crate) fn compute_visibility(
     snap: &SceneSnapshot,
     cam: &Camera,
+    proj: &Projection,
+    rect: &PaintRect,
     near: f32,
+    cells: Option<&[Vec<(f32, f32)>]>,
 ) -> Option<Visibility> {
     if snap.nodes.is_empty() || snap.subsectors.is_empty() || snap.segs.is_empty() {
         return None;
@@ -388,8 +477,6 @@ pub(crate) fn compute_visibility(
     let n_sub = snap.subsectors.len();
     let n_wall = snap.walls.len();
     let mut subs = vec![true; n_sub];
-    // Conteo por pared: cuántos segs aporta y cuántos quedaron ocluidos.
-    // Cull sólo cuando total > 0 && ocluidos == total.
     let mut seg_total = vec![0u32; n_wall];
     let mut seg_occ = vec![0u32; n_wall];
 
@@ -402,76 +489,67 @@ pub(crate) fn compute_visibility(
         let Some(sub) = snap.subsectors.get(ss as usize) else {
             continue;
         };
-        // 1. Visibilidad del subsector contra lo ya ocluido por subsectores
-        //    más cercanos. Sólo descartar con span confiable + margen.
-        if let Some((lo, hi)) = subsector_angular_span(sub, snap, cam, near) {
-            if occ.covers(lo - CULL_ANGLE_MARGIN, hi + CULL_ANGLE_MARGIN) {
+        let cell = cells.and_then(|c| c.get(ss as usize)).map(|v| v.as_slice());
+        // 1. Visibilidad del subsector contra lo ya ocluido por los más
+        //    cercanos. Span del cell completo. Conservador: se exige que la
+        //    oclusión cubra el span **expandido** por el margen (cubrir de
+        //    más antes que recortar algo visible).
+        if let Some((lo, hi)) = subsector_screen_span(sub, snap, cell, cam, proj, rect, near) {
+            if hi > lo && occ.covers(lo - CULL_PIXEL_MARGIN, hi + CULL_PIXEL_MARGIN) {
                 if let Some(slot) = subs.get_mut(ss as usize) {
                     *slot = false;
                 }
             }
         }
-        // 2. Oclusión por seg → pared. Antes de aportar los bloqueadores de
-        //    este subsector (ver nota de conservadurismo en el docstring).
+        // 2. Oclusión por seg → pared (antes de sumar los bloqueadores
+        //    propios: un seg nunca se ocluye por una pared a su profundidad).
         let first = sub.first_seg as usize;
         let count = sub.num_segs as usize;
         if let Some(seg_slice) = snap.segs.get(first..first + count) {
             for s in seg_slice {
                 let w = s.linedef as usize;
                 if w >= n_wall {
-                    continue; // linedef fuera de rango (sentinel) → no cuenta.
+                    continue;
                 }
                 seg_total[w] += 1;
-                if let Some((lo, hi)) = seg_angular_span(s, cam, near) {
-                    if occ.covers(lo - CULL_ANGLE_MARGIN, hi + CULL_ANGLE_MARGIN) {
+                if let Some((lo, hi)) =
+                    seg_screen_span_strict(s.x1, s.y1, s.x2, s.y2, cam, proj, rect, near)
+                {
+                    if hi > lo && occ.covers(lo - CULL_PIXEL_MARGIN, hi + CULL_PIXEL_MARGIN) {
                         seg_occ[w] += 1;
                     }
                 }
             }
         }
-        // 3. Aportar las paredes sólidas de este subsector como nuevos
-        //    bloqueadores para los subsectores que vienen detrás.
-        add_subsector_occluders(sub, snap, cam, near, &mut occ);
+        // 3. Sumar las paredes sólidas de este subsector como bloqueadores.
+        add_subsector_occluders(sub, snap, cam, proj, rect, near, &mut occ);
     }
 
-    let walls = (0..n_wall)
+    let walls: Vec<bool> = (0..n_wall)
         .map(|w| !(seg_total[w] > 0 && seg_occ[w] == seg_total[w]))
         .collect();
     Some(Visibility { subs, walls })
 }
 
-/// **Fase 3.54** — variante histórica que devuelve sólo la visibilidad de
-/// subsectores. Delega en [`compute_visibility`]; se conserva por los tests
-/// y como API simple para callers que no necesitan el culling de paredes.
+/// Variante que devuelve sólo la visibilidad de subsectores. Delega en
+/// [`compute_visibility`]; se conserva por los tests.
 pub(crate) fn compute_visible_subsectors(
     snap: &SceneSnapshot,
     cam: &Camera,
+    proj: &Projection,
+    rect: &PaintRect,
     near: f32,
+    cells: Option<&[Vec<(f32, f32)>]>,
 ) -> Option<Vec<bool>> {
-    compute_visibility(snap, cam, near).map(|v| v.subs)
-}
-
-/// Span angular `[min, max]` (rad, cam-space) de un único seg, o `None` si
-/// algún extremo cae detrás del near plane (span no confiable → el seg se
-/// trata como no ocluido, lado seguro). Análogo a
-/// [`subsector_angular_span`] pero para un seg suelto.
-fn seg_angular_span(s: &SegSnap, cam: &Camera, near: f32) -> Option<(f32, f32)> {
-    let (x1, y1) = cam.to_cam_2d(s.x1, s.y1);
-    let (x2, y2) = cam.to_cam_2d(s.x2, s.y2);
-    if x1 <= near || x2 <= near {
-        return None;
-    }
-    let a1 = y1.atan2(x1);
-    let a2 = y2.atan2(x2);
-    Some((a1.min(a2), a1.max(a2)))
+    compute_visibility(snap, cam, proj, rect, near, cells).map(|v| v.subs)
 }
 
 /// **Fase 3.60** — recorta el polígono convexo `poly` por el semiplano de
 /// la partición de `node`. `keep_front=true` conserva el lado front
-/// (children[0], `f ≥ 0`), `false` el back (children[1], `f ≤ 0`). La
-/// función de lado es la misma convención del BSP walk:
-/// `f(x,y) = dx·(y−py) − dy·(x−px)`. Sutherland-Hodgman sobre un polígono
-/// convexo cerrado → polígono convexo.
+/// (children[0], `f ≤ 0` según R_PointOnSide — Fase 3.63 corrigió el signo),
+/// `false` el back (children[1], `f ≥ 0`). La función de lado es la misma
+/// convención del BSP walk: `f(x,y) = dx·(y−py) − dy·(x−px)`.
+/// Sutherland-Hodgman sobre un polígono convexo cerrado → polígono convexo.
 pub(crate) fn clip_poly_halfplane(
     poly: &[(f32, f32)],
     node: &NodeSnap,
@@ -490,8 +568,8 @@ pub(crate) fn clip_poly_halfplane(
         let (bx, by) = poly[(i + 1) % n];
         let fa = f(ax, ay);
         let fb = f(bx, by);
-        let ina = if keep_front { fa >= 0.0 } else { fa <= 0.0 };
-        let inb = if keep_front { fb >= 0.0 } else { fb <= 0.0 };
+        let ina = if keep_front { fa <= 0.0 } else { fa >= 0.0 };
+        let inb = if keep_front { fb <= 0.0 } else { fb >= 0.0 };
         if ina {
             out.push((ax, ay));
         }

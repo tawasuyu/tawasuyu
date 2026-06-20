@@ -102,7 +102,7 @@ mod grupo_05;
             SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
         ]);
         snap.nodes = Arc::from(simple_two_leaf_bsp());
-        snap.player.x = -10.0;
+        snap.player.x = 10.0;  // Fase 3.63: +X = ss0/sector0 (R_PointOnSide)
         snap.player.y = 0.0;
 
         // Pared con midpoint en `(mx, my)` (segmento `[mx, my]→[mx, my]`
@@ -165,7 +165,7 @@ mod grupo_05;
             SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
         ]);
         snap.nodes = Arc::from(simple_two_leaf_bsp());
-        snap.player.x = -10.0;
+        snap.player.x = 10.0;  // Fase 3.63: +X = ss0/sector0 (R_PointOnSide)
         snap.player.y = 0.0;
 
         let wall = |fs: u32, bs: u32, mx: f32, my: f32| WallSeg {

@@ -493,7 +493,7 @@
         let nodes = simple_two_leaf_bsp();
         let mut out = Vec::new();
         walk_bsp(&nodes, (nodes.len() - 1) as u16, 10.0, 0.0, &mut out);
-        assert_eq!(out, vec![0, 1], "viewer al +X visita ss0 (far) primero");
+        assert_eq!(out, vec![1, 0], "viewer al +X (ss0) visita ss1 (far) primero");
     }
 
     #[test]
@@ -503,7 +503,7 @@
         let nodes = simple_two_leaf_bsp();
         let mut out = Vec::new();
         walk_bsp(&nodes, (nodes.len() - 1) as u16, -10.0, 0.0, &mut out);
-        assert_eq!(out, vec![1, 0], "viewer al -X visita ss1 (far) primero");
+        assert_eq!(out, vec![0, 1], "viewer al -X (ss1) visita ss0 (far) primero");
     }
 
     // -----------------------------------------------------------------
@@ -516,8 +516,8 @@
         // Punto (+10, 0): side = 0 - 1·10 = -10 < 0 → near = children[1] = ss1.
         // Punto (-10, 0): side = 0 + 10 = +10 > 0 → near = children[0] = ss0.
         let nodes = simple_two_leaf_bsp();
-        assert_eq!(subsector_at_point(&nodes, 10.0, 0.0), Some(1));
-        assert_eq!(subsector_at_point(&nodes, -10.0, 0.0), Some(0));
+        assert_eq!(subsector_at_point(&nodes, 10.0, 0.0), Some(0));
+        assert_eq!(subsector_at_point(&nodes, -10.0, 0.0), Some(1));
     }
 
     #[test]
@@ -557,10 +557,10 @@
 
         snap.player.x = 10.0;
         snap.player.y = 0.0;
-        assert_eq!(player_sector_light(&snap), 240, "player en ss1 (bright)");
+        assert_eq!(player_sector_light(&snap), 64, "player en ss0 (dim)");
 
         snap.player.x = -10.0;
-        assert_eq!(player_sector_light(&snap), 64, "player en ss0 (dim)");
+        assert_eq!(player_sector_light(&snap), 240, "player en ss1 (bright)");
     }
 
     #[test]
@@ -699,7 +699,7 @@
         // ss0 visitado primero → depth grande. ss1 segundo → depth chico.
         let d0 = depths[0].expect("ss0 reached");
         let d1 = depths[1].expect("ss1 reached");
-        assert!(d0 > d1, "ss0 (far) {d0} debe ser > ss1 (near) {d1}");
+        assert!(d1 > d0, "ss1 (far) {d1} debe ser > ss0 (near) {d0}");
         // Ambos depths están sobre BSP_DEPTH_BASE para estar siempre detrás
         // de walls/sprites con depths euclidianos.
         assert!(d0 > BSP_DEPTH_BASE);
@@ -723,10 +723,10 @@
         snap.nodes = Arc::from(simple_two_leaf_bsp());
         let ranks = compute_bsp_ranks(&snap);
         assert_eq!(ranks.len(), 2);
-        assert!(ranks[0] > ranks[1], "ss0 (far) {} > ss1 (near) {}", ranks[0], ranks[1]);
+        assert!(ranks[1] > ranks[0], "ss1 (far) {} > ss0 (near) {}", ranks[1], ranks[0]);
         assert!(ranks[1] >= 1, "ningún subsector alcanzado debe quedar en 0");
         // bsp_rank_at: el punto del jugador cae en el subsector near (ss1).
-        assert_eq!(bsp_rank_at(&snap.nodes, &ranks, 10.0, 0.0), ranks[1]);
+        assert_eq!(bsp_rank_at(&snap.nodes, &ranks, 10.0, 0.0), ranks[0]);
         // Un punto del lado opuesto cae en el subsector far (ss0).
-        assert_eq!(bsp_rank_at(&snap.nodes, &ranks, -10.0, 0.0), ranks[0]);
+        assert_eq!(bsp_rank_at(&snap.nodes, &ranks, -10.0, 0.0), ranks[1]);
     }

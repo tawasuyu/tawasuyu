@@ -279,15 +279,13 @@ pub struct RenderConfig {
     /// cubierta (el pendiente "Visibility BSP-walking" del SDD). Cuando
     /// `false`, o en modo stub sin BSP, se pinta todo.
     ///
-    /// **Default `false` desde Fase 3.58.** Verificado contra el renderer
-    /// software de Doom (ground truth, vía `dump_frame` + Freedoom): con el
-    /// culling activo, en interiores **desaparecían paredes visibles** y se
-    /// veía el cielo/vacío a través (el spawn de E1M1 — una sala techbase
-    /// cerrada — se renderizaba como un exterior con montañas). El test de
-    /// contención angular de intervalos **no es sound**: marca como ocluido
-    /// geometría que sí se ve. Queda apagado hasta reescribir la visibilidad
-    /// al estilo Doom (solidsegs / cliprange por columna). El toggle se
-    /// conserva para experimentar.
+    /// **Default `true` desde Fase 3.63** (apagado entre 3.58 y 3.62 mientras
+    /// la versión angular era unsound). La nueva visibilidad usa oclusión por
+    /// **X de pantalla** (cliprange estilo Doom) con el span del **cell
+    /// convexo** del subsector (Fase 3.60), no la cadena de segs que lo
+    /// subestimaba — eso corrige a la vez el over-cull (paredes que
+    /// desaparecían en interiores) y el over-draw (geometría ocluida pintada
+    /// encima). `false` o sin BSP ⇒ se pinta todo.
     pub occlusion_cull: bool,
     /// **Fase 3.60 — pisos/techos sobre el cell completo del subsector.** Si
     /// `true` (y hay BSP), el polígono de piso/techo se reconstruye
@@ -337,7 +335,7 @@ impl Default for RenderConfig {
             decals: Vec::new(),
             decal_rim_directional: true,
             decal_clip_walls: true,
-            occlusion_cull: false,
+            occlusion_cull: true,
             bsp_floor_cells: true,
             debug_untextured: false,
         }

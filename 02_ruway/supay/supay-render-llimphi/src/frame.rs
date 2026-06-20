@@ -139,13 +139,30 @@ pub(crate) fn render_frame(
     };
     let world_lights_ref: &[WorldLight] = &world_lights;
 
-    // Fase 3.54 + 3.55: occlusion culling. Caminamos el BSP front-to-back
-    // acumulando los rangos angulares tapados por paredes sólidas. El
-    // resultado dice qué subsectores (planos/sprites) y qué paredes
-    // (linedefs) quedan tapadas por muros sólidos más cercanos. `None` ⇒
-    // stub sin BSP o toggle apagado → todo visible (comportamiento histórico).
+    // Fase 3.60: cells convexos de subsector reconstruidos por el BSP, para
+    // que piso/techo cubran el subsector entero (sin el hueco hacia la cámara
+    // que dejaba la cadena de segs). Se computa una vez por frame y la
+    // visibilidad (Fase 3.63) lo reusa para el span de pantalla correcto.
+    let subsector_cells = if use_subsectors && (cfg.bsp_floor_cells || cfg.occlusion_cull) {
+        build_subsector_cells(snap)
+    } else {
+        None
+    };
+
+    // Fase 3.63: occlusion culling por X de pantalla (cliprange estilo Doom),
+    // front-to-back. Usa el cell completo del subsector para el span (la
+    // versión angular 3.54/3.55 lo subestimaba → sobre-recorte). El resultado
+    // dice qué subsectores (planos/sprites) y qué paredes quedan tapadas.
+    // `None` ⇒ stub sin BSP o toggle apagado → todo visible.
     let visibility: Option<Visibility> = if cfg.occlusion_cull && use_subsectors {
-        compute_visibility(snap, &cam, cfg.near)
+        compute_visibility(
+            snap,
+            &cam,
+            &proj,
+            &rect,
+            cfg.near,
+            subsector_cells.as_deref(),
+        )
     } else {
         None
     };
@@ -156,15 +173,6 @@ pub(crate) fn render_frame(
         + snap.subsectors.len() * 2
         + snap.sprites.len();
     let mut renderables: Vec<Renderable> = Vec::with_capacity(cap);
-
-    // Fase 3.60: cells convexos de subsector reconstruidos por el BSP, para
-    // que piso/techo cubran el subsector entero (sin el hueco hacia la cámara
-    // que dejaba la cadena de segs). Se computa una vez por frame.
-    let subsector_cells = if use_subsectors && cfg.bsp_floor_cells {
-        build_subsector_cells(snap)
-    } else {
-        None
-    };
 
     if use_subsectors {
         for (idx, sub) in snap.subsectors.iter().enumerate() {
