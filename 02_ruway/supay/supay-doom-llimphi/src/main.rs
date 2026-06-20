@@ -605,6 +605,23 @@ impl App for Supay {
                             }
                         }
                     }
+                    // Fase 3.59: el psprite del arma en mano (y su flash) NO
+                    // está en `snap.sprites` — su spritenum (SPR_PISG, etc.)
+                    // hay que registrarlo aparte o `draw_weapon_sprite` no
+                    // resuelve el patch y el arma nunca se dibuja.
+                    for ws in [
+                        snap.weapon.active.then_some(snap.weapon.sprite),
+                        snap.weapon_flash.active.then_some(snap.weapon_flash.sprite),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if m.known_sprites.insert(ws) {
+                            if let Some(name) = m.engine.sprite_name(ws) {
+                                atlas.set_sprite_name(ws, name);
+                            }
+                        }
+                    }
                 }
                 // Fase 3.22: detectamos un fogonazo del arma vía bit
                 // FF_FULLBRIGHT (0x80) en `weapon.frame` (pistol fire
@@ -1144,7 +1161,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.58 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.59 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

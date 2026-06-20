@@ -37,10 +37,13 @@ fn main() {
         .next()
         .and_then(|s| s.parse().ok())
         .unwrap_or(70);
-    // Ticks de giro a la derecha tras asentarse (para capturar otras vistas
-    // donde el ordering BSP se pone a prueba). 0 = vista del spawn.
-    let turn: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    // Ticks de giro tras asentarse (para capturar otras vistas). Positivo =
+    // derecha, negativo = izquierda. 0 = vista del spawn.
+    let turn: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let out = args.next().unwrap_or_else(|| "frame.png".to_string());
+    // Ticks de avance (mantener adelante) DESPUÉS de girar — para recorrer el
+    // nivel y llegar a cuartos con enemigos/items. `SUPAY_FWD=N`.
+    let forward: u64 = std::env::var("SUPAY_FWD").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
 
     // 1. Motor: cargar doom1.wad (cwd) y warpear directo a E1M1.
     let engine_args = vec![
@@ -87,14 +90,41 @@ fn main() {
             }
         }
     }
-    // Fase de giro: mantener RIGHTARROW para rotar la cámara y capturar otra
-    // vista del mismo cuarto.
-    for t in 0..turn {
-        engine.push_key(true, supay_core::keys::KEY_RIGHTARROW);
+    // Fase de giro: mantener LEFT/RIGHTARROW para rotar la cámara.
+    let turn_key = if turn >= 0 {
+        supay_core::keys::KEY_RIGHTARROW
+    } else {
+        supay_core::keys::KEY_LEFTARROW
+    };
+    let turn_n = turn.unsigned_abs();
+    for t in 0..turn_n {
+        engine.push_key(true, turn_key);
         engine.tick();
         snap = engine.capture_scene(ticks + t + 1);
     }
-    engine.push_key(false, supay_core::keys::KEY_RIGHTARROW);
+    engine.push_key(false, turn_key);
+    // Fase de avance: mantener UPARROW para caminar hacia adelante.
+    for t in 0..forward {
+        engine.push_key(true, supay_core::keys::KEY_UPARROW);
+        engine.tick();
+        snap = engine.capture_scene(ticks + turn_n + t + 1);
+    }
+    engine.push_key(false, supay_core::keys::KEY_UPARROW);
+    // Fase 3.59: registrar el nombre del sprite del arma en mano (no está en
+    // snap.sprites) para que draw_weapon_sprite resuelva su patch.
+    for ws in [
+        snap.weapon.active.then_some(snap.weapon.sprite),
+        snap.weapon_flash.active.then_some(snap.weapon_flash.sprite),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if known_sprites.insert(ws) {
+            if let Some(name) = engine.sprite_name(ws) {
+                atlas.set_sprite_name(ws, name);
+            }
+        }
+    }
     eprintln!(
         "dump_frame: tick {ticks} — jugador en ({:.0},{:.0}) ang {:.2}; {} sectores, {} paredes, {} subsectores, {} sprites, {} nodos BSP",
         snap.player.x,
