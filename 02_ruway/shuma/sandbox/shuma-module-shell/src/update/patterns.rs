@@ -54,14 +54,26 @@ fn markers_in(dir: &str) -> Vec<String> {
         .collect()
 }
 
+/// Ventana de historial reciente que alimenta la detección de patrones. La
+/// minería corre en CADA submit (sincrónica dentro de `update`), y su costo
+/// crece con el corpus —`detect_patterns` es O(N·len) en ventaneo + O(Q²) en el
+/// filtro maximal—. Sobre un historial real grande (~5 k entradas) eso eran
+/// ~150 ms por comando, que bloqueaban la UI. La predicción del próximo comando
+/// es por naturaleza sobre el hábito RECIENTE: acotamos a las últimas
+/// `PATTERN_HISTORY_WINDOW` entradas. Hábitos viejos que no recurren hace rato
+/// dejan de predecir (deseable), y el costo queda acotado sin importar cuánto
+/// crezca el historial total.
+const PATTERN_HISTORY_WINDOW: usize = 1500;
+
 /// Construye los `CommandRecord` de `shuma-infer` a partir del historial
-/// (éxito = exit 0).
+/// reciente (éxito = exit 0).
 fn infer_records(s: &State) -> Vec<shuma_infer::CommandRecord> {
     let Ok(history) = s.history.lock() else {
         return Vec::new();
     };
-    history
-        .entries()
+    let entries = history.entries();
+    let recent = &entries[entries.len().saturating_sub(PATTERN_HISTORY_WINDOW)..];
+    recent
         .iter()
         // El historial Llimphi aún no graba el exit (siempre `None`):
         // tratamos lo desconocido como éxito para no descartar todo el

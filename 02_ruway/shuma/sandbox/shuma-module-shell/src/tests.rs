@@ -817,6 +817,47 @@
     }
 
     #[test]
+    fn pattern_detection_window_excludes_old_and_keeps_recent() {
+        // `refresh_patterns` corre en CADA submit; sobre un historial grande
+        // `detect_patterns` era O(n) con constante alta (~150 ms con 5 k
+        // entradas) y bloqueaba el `update`. Se acota a la ventana reciente.
+        // Acá verificamos la SEMÁNTICA: un patrón que sólo vive en lo viejo
+        // (más allá de la ventana) NO se detecta; uno reciente sí.
+        let mut s = State::new(Source::Local);
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
+        {
+            let mut h = s.history.lock().unwrap();
+            // Patrón viejo (2 ocurrencias) al principio del todo.
+            for _ in 0..2 {
+                let _ = h.append(shuma_history::Entry::new("viejocmd", "/", 0));
+                let _ = h.append(shuma_history::Entry::new("viejodos", "/", 0));
+            }
+            // Relleno único que empuja lo viejo fuera de la ventana (cada línea
+            // distinta: ni dedup ni patrón espurio).
+            for i in 0..1600u32 {
+                let _ = h.append(shuma_history::Entry::new(format!("relleno{i}"), "/", 0));
+            }
+            // Patrón reciente (2 ocurrencias) al final.
+            for _ in 0..2 {
+                let _ = h.append(shuma_history::Entry::new("nuevocmd", "/", 0));
+                let _ = h.append(shuma_history::Entry::new("nuevodos", "/", 0));
+            }
+        }
+        refresh_patterns(&mut s);
+        let firmas: Vec<&Vec<String>> = s.patterns.iter().map(|p| &p.signature).collect();
+        assert!(
+            firmas.iter().any(|f| f.contains(&"nuevocmd".to_string())),
+            "el patrón reciente debe detectarse: {firmas:?}"
+        );
+        assert!(
+            !firmas.iter().any(|f| f.contains(&"viejocmd".to_string())),
+            "el patrón fuera de la ventana NO debe detectarse: {firmas:?}"
+        );
+    }
+
+    #[test]
     fn completion_arrows_cycle_both_ways() {
         let mut s = State::new(Source::Local);
         s.completion = Some(fake_completion(&["a", "b", "c"], 0, 0));
