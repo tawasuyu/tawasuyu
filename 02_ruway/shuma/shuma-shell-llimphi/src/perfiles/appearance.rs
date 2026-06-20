@@ -322,7 +322,15 @@ impl AppearanceProfiles {
     pub fn load_or_init(path: &Path) -> AppearanceProfiles {
         if path.exists() {
             match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| Self::from_ron(&t)) {
-                Ok(p) => p,
+                Ok(p) => {
+                    // `ensure_builtins` (en `from_ron`) puede haber reseteado el
+                    // activo a «Sistema» si apuntaba a un perfil borrado, o
+                    // inyectado presets faltantes. Re-persistimos para que el
+                    // disco coincida con lo que se aplica y se muestra — si no,
+                    // el activo del archivo queda colgado y reaparece el desfase.
+                    let _ = p.save(path);
+                    p
+                }
                 Err(e) => {
                     eprintln!("shuma · apariencia «{}» inválida ({e}); uso la de fábrica.", path.display());
                     AppearanceProfiles::default()
