@@ -136,6 +136,8 @@ pub enum Msg {
     Resized(f32, f32),
     /// Tick del parpadeo del caret (~530 ms) — alterna su fase visible.
     CaretBlink,
+    /// Tick del fluido de los cauces (~33 Hz) — avanza `fase_flujo`.
+    FlujoTick,
     NuevoDoc,
     Guardar,
     PathInputKey(KeyEvent),
@@ -288,6 +290,9 @@ pub struct Model {
     pub(crate) salidas: HashMap<Uuid, String>,
     /// Desplazamiento vertical del modo Lienzos, en px (≥ 0).
     pub(crate) lienzos_scroll_y: f32,
+    /// Fase `[0,1)` del fluido animado de los cauces Sankey (modo Plano).
+    /// La avanza `Msg::FlujoTick` (~33 Hz).
+    pub(crate) fase_flujo: f32,
     /// Conjunto de cuerpos visibles en el multilienzo (membresía). Siempre
     /// contiene al `activo`. El ORDEN de columnas lo da `orden_lienzos`, no
     /// este vector.

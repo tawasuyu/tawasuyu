@@ -98,7 +98,13 @@ fn armar_view(s: &Semilla) -> View<()> {
     let palette_editor = EditorPalette::default();
     let palette_lienzo = Palette::default();
     let paleta_hebras = PaletaHebras::default();
-    let cfg = ConfigMultilienzoEditor::default();
+    let cfg = ConfigMultilienzoEditor {
+        // Fluido vivo (natas + glow) congelado a una fase media — igual que
+        // lo pinta el modo Plano de pluma-app.
+        mostrar_flujo: true,
+        fase_flujo: 0.35,
+        ..ConfigMultilienzoEditor::default()
+    };
     let met = EditorMetrics::for_font_size(14.0);
 
     let idx: HashMap<Uuid, &NarrativeAtom> = s.atoms.iter().map(|a| (a.id, a)).collect();

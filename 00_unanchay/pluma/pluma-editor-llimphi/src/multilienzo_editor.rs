@@ -45,7 +45,7 @@ use pluma_cuerpo::Cuerpo;
 use uuid::Uuid;
 
 use crate::cuerpo_ide::{cuerpo_ide_view, CuerpoIde};
-use crate::multilienzo::PaletaHebras;
+use crate::multilienzo::{pintar_cauce_fluido, Cauce, PaletaHebras};
 use crate::Palette;
 
 /// Configuración geométrica de la vista de editores lado-a-lado.
@@ -73,6 +73,11 @@ pub struct ConfigMultilienzoEditor {
     /// y dentro de un mismo lienzo las divide (separadores) sin perder la
     /// unión (color). Las hebras, cuando hay carta, toman ese mismo color.
     pub colorear_secciones: bool,
+    /// Si las cintas llevan el **fluido** animado (natas caóticas + glow).
+    /// Opt-in: default `false` para no animar sin que la app lo pida.
+    pub mostrar_flujo: bool,
+    /// Fase del fluido en `[0,1)`. La app la avanza por tick.
+    pub fase_flujo: f32,
 }
 
 impl Default for ConfigMultilienzoEditor {
@@ -84,6 +89,8 @@ impl Default for ConfigMultilienzoEditor {
             grosor_foco: 2.0,
             ancho_cuerpo: None,
             colorear_secciones: true,
+            mostrar_flujo: false,
+            fase_flujo: 0.0,
         }
     }
 }
@@ -385,29 +392,29 @@ fn carril_editor<Msg: Clone + 'static>(
     if hebras.is_empty() {
         return nodo;
     }
+    let mostrar_flujo = cfg.mostrar_flujo;
+    let fase = cfg.fase_flujo.rem_euclid(1.0) as f64;
     nodo.paint_with(move |scene, _ts, rect| {
-        use llimphi_ui::llimphi_raster::peniko::Fill;
         let alto = rect.h;
-        // Curva-S con tangentes horizontales en ambos extremos (igual que
-        // `pineal-flow`): el control point arranca a `0.5 * ancho` del extremo.
-        let dx = (rect.w * 0.5) as f64;
         let x1 = rect.x as f64;
         let x2 = (rect.x + rect.w) as f64;
-        for h in &hebras {
-            // Clamp de cada borde al alto visible del carril.
+        for (hi, h) in hebras.iter().enumerate() {
+            // Cada cinta es un cauce Sankey con el mismo fluido/luminoso que el
+            // multilienzo de preview (pintor compartido). `color` ya es el de
+            // la identidad de sección (`color_seccion`).
             let it = (rect.y + h.izq_top.clamp(0.0, alto)) as f64;
             let ib = (rect.y + h.izq_bot.clamp(0.0, alto)) as f64;
             let dt = (rect.y + h.der_top.clamp(0.0, alto)) as f64;
             let db = (rect.y + h.der_bot.clamp(0.0, alto)) as f64;
-            // Cinta cerrada: borde superior (S) → lado derecho → borde
-            // inferior (S de vuelta) → lado izquierdo (close) → relleno.
-            let mut path = BezPath::new();
-            path.move_to((x1, it));
-            path.curve_to((x1 + dx, it), (x2 - dx, dt), (x2, dt));
-            path.line_to((x2, db));
-            path.curve_to((x2 - dx, db), (x1 + dx, ib), (x1, ib));
-            path.close_path();
-            scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &path);
+            pintar_cauce_fluido(
+                scene,
+                Cauce { x0: x1, x1: x2, it, ib, dt, db },
+                h.color,
+                fase,
+                mostrar_flujo,
+                false,
+                hi as u32,
+            );
         }
     })
 }

@@ -23,8 +23,9 @@ use std::collections::HashMap;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, FlexDirection, Position, Rect, Size, Style,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Join, Stroke};
-use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Mix};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Join, Point, Stroke};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Gradient, Mix};
+use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use uuid::Uuid;
@@ -527,119 +528,164 @@ fn carril_hebras<Msg: Clone + 'static>(
     }
     nodo.paint_with(move |scene, _ts, rect| {
         for (hi, h) in hebras.iter().enumerate() {
-            // --- Geometría de la cinta: una banda Sankey rellena que engrosa
-            // para ocupar el cauce. El alto de la banda en cada extremo es
-            // proporcional a la fuerza del alineamiento (más fuerte = caudal
-            // más ancho), recortado para no rebasar el bloque. Bordes
-            // superior e inferior en curva-S con tangentes horizontales. ---
+            // Banda Sankey que engrosa para ocupar el cauce; alto por extremo
+            // proporcional a la fuerza del alineamiento, recortado al bloque.
             let x0 = rect.x as f64;
             let x1 = (rect.x + rect.w) as f64;
-            let dx = (x1 - x0) * 0.5;
             let yc_izq = (rect.y + h.y_izq) as f64;
             let yc_der = (rect.y + h.y_der) as f64;
             let media = ((altura_atom * 0.5) * (0.5 + 0.42 * h.fuerza.clamp(0.0, 1.0)))
                 .clamp(5.0, altura_atom * 0.46) as f64;
-            let (it, ib) = (yc_izq - media, yc_izq + media);
-            let (dt, db) = (yc_der - media, yc_der + media);
-
-            // Cinta cerrada: borde superior (S) → lado derecho → borde
-            // inferior (S de vuelta) → close → relleno.
-            let mut cinta = BezPath::new();
-            cinta.move_to((x0, it));
-            cinta.curve_to((x0 + dx, it), (x1 - dx, dt), (x1, dt));
-            cinta.line_to((x1, db));
-            cinta.curve_to((x1 - dx, db), (x0 + dx, ib), (x0, ib));
-            cinta.close_path();
-
-            // --- Cuerpo del cauce: relleno translúcido del color de la
-            // sección. Es lo que se ve en reposo (Sankey estático). ---
-            scene.fill(Fill::NonZero, Affine::IDENTITY, atenuar_alpha(h.color, 0.6), None, &cinta);
-
-            // --- Borde nítido que define la orilla. Punteado si stale. ---
-            let orilla = if h.punteada {
-                Stroke::new(1.3).with_caps(Cap::Round).with_dashes(0.0, [6.0, 4.0])
-            } else {
-                Stroke::new(1.3).with_caps(Cap::Round).with_join(Join::Round)
-            };
-            scene.stroke(&orilla, Affine::IDENTITY, atenuar_alpha(h.color, 0.85), None, &cinta);
-
-            // Las hebras stale no transmiten: cauce seco, sin fluido.
-            if !mostrar_flujo || h.punteada {
-                continue;
-            }
-
-            // --- Fluido 2D caótico: un tráfico de "natas" de tamaños
-            // irregulares que resbalan unas sobre otras y friccionan con las
-            // paredes del cauce. Nada de bandas regulares: cada nata tiene su
-            // tamaño, su carril, su fase y —clave— su VELOCIDAD propia, con
-            // perfil parabólico (rápida al centro, lenta en las orillas, como
-            // un fluido viscoso). Velocidades distintas ⇒ se adelantan entre
-            // sí (desorden). Todo va clipeado a la cinta: las natas que tocan
-            // la orilla quedan recortadas → se ve la fricción contra la pared.
-            //
-            // Muestreo de la cinta en t∈[0,1]: x(t) y los bordes top/bot son
-            // cúbicas (mismos puntos de control que la cinta dibujada arriba).
-            scene.push_layer(Fill::NonZero, Mix::Normal, 1.0, Affine::IDENTITY, &cinta);
-            const NATAS: usize = 18;
-            for bi in 0..NATAS {
-                let seed = (hi as u32)
-                    .wrapping_mul(2917)
-                    .wrapping_add(bi as u32 * 101)
-                    .wrapping_add(7);
-                let yf0 = hash01(seed.wrapping_mul(3).wrapping_add(1)) as f64;
-                let sz = 0.40 + 1.30 * hash01(seed.wrapping_mul(3).wrapping_add(2)) as f64;
-                let jit = 0.65 + 0.70 * hash01(seed.wrapping_mul(3).wrapping_add(5)) as f64;
-                let fase0 = hash01(seed.wrapping_mul(3).wrapping_add(3)) as f64;
-                let tono = hash01(seed.wrapping_mul(3).wrapping_add(4)) as f64;
-                // Perfil de velocidad parabólico: ~0 en las paredes, máximo
-                // al centro. Más una jitter por nata para romper toda simetría.
-                let vperfil = 0.18 + 0.95 * (1.0 - (2.0 * yf0 - 1.0).powi(2));
-                let vel = vperfil * jit;
-                let s = (fase0 + fase * vel).rem_euclid(1.0);
-                // Vaivén transversal lento: las natas no van en raíl recto,
-                // serpentean y rozan a sus vecinas.
-                let sway = 0.08 * (std::f64::consts::TAU * (fase * 0.6 + fase0)).sin();
-                let yf = (yf0 + sway).clamp(0.02, 0.98);
-
-                let cx = cub(x0, x0 + dx, x1 - dx, x1, s);
-                let ct = cub(it, it, dt, dt, s);
-                let cb = cub(ib, ib, db, db, s);
-                let grosor_local = (cb - ct).max(2.0);
-                let cy = ct + grosor_local * yf;
-                // Radio relativo al alto local del cauce, modulado por tamaño.
-                let r = grosor_local * 0.5 * (0.18 + 0.40 * sz);
-                let rx = r * 1.55; // elongada en el sentido del flujo (resbala)
-                let ry = r;
-
-                // Desvanecer en los extremos para que entren/salgan suave en
-                // vez de aparecer/teleportarse al envolver la fase.
-                let fin = ((s / 0.14).clamp(0.0, 1.0) * ((1.0 - s) / 0.14).clamp(0.0, 1.0)) as f32;
-                // Natas disueltas: alpha baja y radios algo mayores → se
-                // funden entre sí y con el cauce en vez de leerse como gotas
-                // nítidas. Varias pasadas translúcidas se suman suave.
-                let a = (0.14 + 0.26 * sz as f32).min(0.52) * fin;
-                let cuerpo = atenuar_alpha(aclarar(h.color, 0.22 + 0.34 * tono as f32), a);
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    cuerpo,
-                    None,
-                    &nata_path(cx, cy, rx * 1.12, ry * 1.12, seed),
-                );
-                // Núcleo apenas más claro, muy tenue y descentrado: da volumen
-                // sin recortar un borde duro.
-                let nucleo = atenuar_alpha(aclarar(h.color, 0.5), a * 0.5);
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    nucleo,
-                    None,
-                    &nata_path(cx + rx * 0.15, cy - ry * 0.12, rx * 0.55, ry * 0.55, seed ^ 0x9e37_79b9),
-                );
-            }
-            scene.pop_layer();
+            pintar_cauce_fluido(
+                scene,
+                Cauce { x0, x1, it: yc_izq - media, ib: yc_izq + media, dt: yc_der - media, db: yc_der + media },
+                h.color,
+                fase,
+                mostrar_flujo,
+                h.punteada,
+                hi as u32,
+            );
         }
     })
+}
+
+/// Bordes de un cauce Sankey: x del extremo izquierdo/derecho y, en cada
+/// uno, el tope y la base de la banda. La cinta se dibuja con curva-S entre
+/// los bordes izquierdos y los derechos.
+#[derive(Clone, Copy)]
+pub(crate) struct Cauce {
+    pub x0: f64,
+    pub x1: f64,
+    pub it: f64,
+    pub ib: f64,
+    pub dt: f64,
+    pub db: f64,
+}
+
+/// Pinta un cauce Sankey con fluido: cuerpo translúcido + **gradiente sheen**
+/// (brillo al centro, oscuro en las orillas → tubo iluminado) + **glow**
+/// luminoso por el eje + **natas** caóticas (si `fluir`) + orilla nítida.
+/// Compartido por el multilienzo de preview y el de editores para que ambos
+/// se vean igual. `color` ya es el de la identidad de fila/sección.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pintar_cauce_fluido(
+    scene: &mut Scene,
+    c: Cauce,
+    color: Color,
+    fase: f64,
+    fluir: bool,
+    punteada: bool,
+    semilla: u32,
+) {
+    let Cauce { x0, x1, it, ib, dt, db } = c;
+    let dx = (x1 - x0) * 0.5;
+
+    // Cinta cerrada: borde superior (S) → lado derecho → borde inferior (S de
+    // vuelta) → close.
+    let mut cinta = BezPath::new();
+    cinta.move_to((x0, it));
+    cinta.curve_to((x0 + dx, it), (x1 - dx, dt), (x1, dt));
+    cinta.line_to((x1, db));
+    cinta.curve_to((x1 - dx, db), (x0 + dx, ib), (x0, ib));
+    cinta.close_path();
+
+    // 1. Cuerpo del cauce: relleno translúcido. Lo que se ve en reposo.
+    scene.fill(Fill::NonZero, Affine::IDENTITY, atenuar_alpha(color, 0.55), None, &cinta);
+
+    // Eje (curva-S por el centro de la banda) y semialto medio — base del
+    // gradiente y del glow.
+    let yc0 = (it + ib) * 0.5;
+    let yc1 = (dt + db) * 0.5;
+    let semialto = (((ib - it) + (db - dt)) * 0.25).max(3.0);
+    let brillo = aclarar(color, 0.5);
+
+    // 2. Gradiente "sheen": vertical, brillante al centro de la banda y
+    // transparente en las orillas → la cinta parece un tubo de luz. Se
+    // rellena la propia cinta, así queda recortado a la banda.
+    let ymid = (yc0 + yc1) * 0.5;
+    let sheen = Gradient::new_linear(
+        Point::new(x0, ymid - semialto),
+        Point::new(x0, ymid + semialto),
+    )
+    .with_stops([
+        (0.0_f32, atenuar_alpha(brillo, 0.0)),
+        (0.5_f32, atenuar_alpha(brillo, if punteada { 0.10 } else { 0.32 })),
+        (1.0_f32, atenuar_alpha(brillo, 0.0)),
+    ]);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &sheen, None, &cinta);
+
+    // 3. Glow por el eje: un halo ancho muy translúcido + un núcleo fino
+    // brillante, ambos siguiendo la curva-S → luminosidad que sigue al cauce.
+    let mut eje = BezPath::new();
+    eje.move_to((x0, yc0));
+    eje.curve_to((x0 + dx, yc0), (x1 - dx, yc1), (x1, yc1));
+    if !punteada {
+        let halo = Stroke::new(semialto * 1.5).with_caps(Cap::Round).with_join(Join::Round);
+        scene.stroke(&halo, Affine::IDENTITY, atenuar_alpha(brillo, 0.10), None, &eje);
+        let nucleo = Stroke::new((semialto * 0.35).max(1.4)).with_caps(Cap::Round);
+        scene.stroke(&nucleo, Affine::IDENTITY, atenuar_alpha(aclarar(color, 0.62), 0.34), None, &eje);
+    }
+
+    // 4. Fluido caótico: natas irregulares que resbalan y friccionan con las
+    // paredes (clipeadas a la cinta). Velocidad parabólica (lenta en las
+    // orillas) ⇒ se adelantan entre sí. Stale = cauce seco, sin natas.
+    if fluir && !punteada {
+        scene.push_layer(Fill::NonZero, Mix::Normal, 1.0, Affine::IDENTITY, &cinta);
+        const NATAS: usize = 18;
+        for bi in 0..NATAS {
+            let seed = semilla
+                .wrapping_mul(2917)
+                .wrapping_add(bi as u32 * 101)
+                .wrapping_add(7);
+            let yf0 = hash01(seed.wrapping_mul(3).wrapping_add(1)) as f64;
+            let sz = 0.40 + 1.30 * hash01(seed.wrapping_mul(3).wrapping_add(2)) as f64;
+            let jit = 0.65 + 0.70 * hash01(seed.wrapping_mul(3).wrapping_add(5)) as f64;
+            let fase0 = hash01(seed.wrapping_mul(3).wrapping_add(3)) as f64;
+            let tono = hash01(seed.wrapping_mul(3).wrapping_add(4)) as f64;
+            let vperfil = 0.18 + 0.95 * (1.0 - (2.0 * yf0 - 1.0).powi(2));
+            let vel = vperfil * jit;
+            let s = (fase0 + fase * vel).rem_euclid(1.0);
+            let sway = 0.08 * (std::f64::consts::TAU * (fase * 0.6 + fase0)).sin();
+            let yf = (yf0 + sway).clamp(0.02, 0.98);
+
+            let cx = cub(x0, x0 + dx, x1 - dx, x1, s);
+            let ct = cub(it, it, dt, dt, s);
+            let cb = cub(ib, ib, db, db, s);
+            let grosor_local = (cb - ct).max(2.0);
+            let cy = ct + grosor_local * yf;
+            let r = grosor_local * 0.5 * (0.18 + 0.40 * sz);
+            let rx = r * 1.55;
+            let ry = r;
+
+            let fin = ((s / 0.14).clamp(0.0, 1.0) * ((1.0 - s) / 0.14).clamp(0.0, 1.0)) as f32;
+            let a = (0.14 + 0.26 * sz as f32).min(0.52) * fin;
+            let cuerpo = atenuar_alpha(aclarar(color, 0.22 + 0.34 * tono as f32), a);
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                cuerpo,
+                None,
+                &nata_path(cx, cy, rx * 1.12, ry * 1.12, seed),
+            );
+            let nucleo = atenuar_alpha(aclarar(color, 0.5), a * 0.5);
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                nucleo,
+                None,
+                &nata_path(cx + rx * 0.15, cy - ry * 0.12, rx * 0.55, ry * 0.55, seed ^ 0x9e37_79b9),
+            );
+        }
+        scene.pop_layer();
+    }
+
+    // 5. Orilla nítida por encima — define la pared. Punteada si stale.
+    let orilla = if punteada {
+        Stroke::new(1.3).with_caps(Cap::Round).with_dashes(0.0, [6.0, 4.0])
+    } else {
+        Stroke::new(1.3).with_caps(Cap::Round).with_join(Join::Round)
+    };
+    scene.stroke(&orilla, Affine::IDENTITY, atenuar_alpha(color, 0.85), None, &cinta);
 }
 
 /// Pre-calcula `HebraPintada`s para un par de cuerpos. Resuelve la

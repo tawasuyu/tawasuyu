@@ -122,6 +122,10 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             // Sólo titila el caret del lienzo con foco; los read-only no.
             model.ide.state.blink_toggle();
         }
+        Msg::FlujoTick => {
+            // Avanza la fase del fluido (~2.4 s por vuelta a 33 Hz).
+            model.fase_flujo = (model.fase_flujo + 0.0125).rem_euclid(1.0);
+        }
         Msg::NuevoDoc => {
             crear_doc_nuevo(&mut model);
         }

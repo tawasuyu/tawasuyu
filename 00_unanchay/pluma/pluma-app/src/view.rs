@@ -1166,6 +1166,10 @@ fn centro_plano(model: &Model, theme: &Theme) -> View<Msg> {
     let fijo = n >= 2;
     let cfg = ConfigMultilienzoEditor {
         ancho_cuerpo: if fijo { Some(ANCHO_COL) } else { None },
+        // Fluido vivo en los cauces: natas + glow corriendo con la fase que la
+        // app avanza por tick (`Msg::FlujoTick`).
+        mostrar_flujo: true,
+        fase_flujo: model.fase_flujo,
         ..Default::default()
     };
 

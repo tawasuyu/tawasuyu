@@ -152,6 +152,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         recorrido_state: pluma_deck_core::RecorridoState::new(),
         salidas: HashMap::new(),
         lienzos_scroll_y: 0.0,
+        fase_flujo: 0.0,
         seleccionados,
         orden_lienzos,
         ides_ro,

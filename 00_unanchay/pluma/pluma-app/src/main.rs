@@ -110,6 +110,9 @@ impl App for Pluma {
         let mut m = init_modelo();
         // Parpadeo del caret: un tick cada ~530 ms alterna su fase visible.
         handle.spawn_periodic(std::time::Duration::from_millis(530), || Msg::CaretBlink);
+        // Fluido de los cauces Sankey (modo Plano): ~33 Hz para que las natas
+        // corran suave.
+        handle.spawn_periodic(std::time::Duration::from_millis(30), || Msg::FlujoTick);
         // Rail hospedado: si delega, publica sus secciones como dientes en pata.
         if m.delegated {
             let teeth = vec![
