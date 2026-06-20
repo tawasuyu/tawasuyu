@@ -19,3 +19,4 @@ pkg/
 
 # Frames intermedios del showreel (regenerables con scripts/showreel.sh)
 showreel_frames*/
+doom1.wad
