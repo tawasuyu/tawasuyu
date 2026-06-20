@@ -182,7 +182,7 @@ fn armar_view(s: &Semilla, fase: f32) -> View<()> {
             ..Default::default()
         })
         .text_aligned(
-            "pluma · flujo — pulsos viajando por los haces (corriente de la transformación)"
+            "pluma · flujo — fluido 2D recorriendo los cauces Sankey (corriente de la transformación)"
                 .to_string(),
             15.0,
             palette.fg_text,

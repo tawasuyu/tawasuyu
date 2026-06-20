@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, FlexDirection, Position, Rect, Size, Style,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Circle, Join, Stroke};
-use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Join, Point, Stroke};
+use llimphi_ui::llimphi_raster::peniko::{Color, Extend, Fill, Gradient};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use uuid::Uuid;
@@ -467,11 +467,13 @@ fn carril_hebras<Msg: Clone + 'static>(
         Some(c) => precomputar_hebras(izq, der, c, cfg, paleta),
         None => Vec::new(),
     };
-    let grosor = cfg.grosor_hebra;
     let mostrar_flujo = cfg.mostrar_flujo;
-    // Fase normalizada a [0, 1): los pulsos avanzan al subir; la app la
-    // hace girar con `rem_euclid` desde un acumulador de tiempo.
+    // Fase normalizada a [0, 1): el fluido avanza al subir; la app la hace
+    // girar con `rem_euclid` desde un acumulador de tiempo.
     let fase = cfg.fase_flujo.rem_euclid(1.0) as f64;
+    // Alto del bloque de párrafo: determina cuánto engrosa la cinta para
+    // ocupar el cauce (banda Sankey, no línea).
+    let altura_atom = cfg.altura_atom;
 
     let nodo = View::new(Style {
         size: Size {
@@ -485,129 +487,90 @@ fn carril_hebras<Msg: Clone + 'static>(
     }
     nodo.paint_with(move |scene, _ts, rect| {
         for h in &hebras {
-            // --- Geometría: curva en S con tangentes horizontales en ambos
-            // extremos, para que la hebra "salga" del párrafo izquierdo y
-            // "entre" al derecho en perpendicular a la columna (look de
-            // diagrama Sankey/git-graph, no diagonal cruda). ---
+            // --- Geometría de la cinta: una banda Sankey rellena que engrosa
+            // para ocupar el cauce. El alto de la banda en cada extremo es
+            // proporcional a la fuerza del alineamiento (más fuerte = caudal
+            // más ancho), recortado para no rebasar el bloque. Bordes
+            // superior e inferior en curva-S con tangentes horizontales. ---
             let x0 = rect.x as f64;
-            let y0 = (rect.y + h.y_izq) as f64;
             let x1 = (rect.x + rect.w) as f64;
-            let y1 = (rect.y + h.y_der) as f64;
-            let tirante = (x1 - x0) * 0.5;
-            let mut path = BezPath::new();
-            path.move_to((x0, y0));
-            path.curve_to((x0 + tirante, y0), (x1 - tirante, y1), (x1, y1));
+            let dx = (x1 - x0) * 0.5;
+            let yc_izq = (rect.y + h.y_izq) as f64;
+            let yc_der = (rect.y + h.y_der) as f64;
+            let media = ((altura_atom * 0.5) * (0.5 + 0.42 * h.fuerza.clamp(0.0, 1.0)))
+                .clamp(5.0, altura_atom * 0.46) as f64;
+            let (it, ib) = (yc_izq - media, yc_izq + media);
+            let (dt, db) = (yc_der - media, yc_der + media);
 
-            // Grosor modulado por confianza: una hebra fuerte se ve más
-            // sólida. Rango [0.7·g, 1.6·g].
-            let g = grosor as f64;
-            let ancho = g * (0.7 + 0.9 * h.fuerza.clamp(0.0, 1.0) as f64);
+            // Cinta cerrada: borde superior (S) → lado derecho → borde
+            // inferior (S de vuelta) → close → relleno.
+            let mut cinta = BezPath::new();
+            cinta.move_to((x0, it));
+            cinta.curve_to((x0 + dx, it), (x1 - dx, dt), (x1, dt));
+            cinta.line_to((x1, db));
+            cinta.curve_to((x1 - dx, db), (x0 + dx, ib), (x0, ib));
+            cinta.close_path();
 
-            // --- Halo/glow: una pasada ancha y muy translúcida por debajo
-            // del trazo nítido. Da profundidad y hace que las hebras se
-            // "iluminen" sin necesidad de un blur real. ---
-            let glow = Stroke::new(ancho * 3.2)
-                .with_caps(Cap::Round)
-                .with_join(Join::Round);
-            scene.stroke(&glow, Affine::IDENTITY, atenuar_alpha(h.color, 0.16), None, &path);
+            // --- Cuerpo del cauce: relleno translúcido del color de la
+            // sección. Es lo que se ve en reposo (Sankey estático). ---
+            scene.fill(Fill::NonZero, Affine::IDENTITY, atenuar_alpha(h.color, 0.6), None, &cinta);
 
-            // --- Trazo principal nítido. Punteado si stale/tentativa. ---
-            let principal = if h.punteada {
-                Stroke::new(ancho)
-                    .with_caps(Cap::Round)
-                    .with_dashes(0.0, [6.0, 4.0])
+            // --- Borde nítido que define la orilla. Punteado si stale. ---
+            let orilla = if h.punteada {
+                Stroke::new(1.3).with_caps(Cap::Round).with_dashes(0.0, [6.0, 4.0])
             } else {
-                Stroke::new(ancho).with_caps(Cap::Round).with_join(Join::Round)
+                Stroke::new(1.3).with_caps(Cap::Round).with_join(Join::Round)
             };
-            scene.stroke(&principal, Affine::IDENTITY, h.color, None, &path);
+            scene.stroke(&orilla, Affine::IDENTITY, atenuar_alpha(h.color, 0.85), None, &cinta);
 
-            // --- Dash-offset animado: una cinta punteada brillante por
-            // encima del trazo sólido, cuyo offset corre con la fase → las
-            // rayas marchan de la madre a la hija. Complementa los pulsos:
-            // el dash da la "textura" de corriente continua, los pulsos las
-            // cargas discretas. Sólo en hebras frescas. ---
-            if mostrar_flujo && !h.punteada {
-                const PERIODO: f64 = 16.0; // suma del patrón on+off
-                // Offset decreciente → las rayas avanzan en el sentido del
-                // path (madre→hija). Una vuelta entera de fase = un período,
-                // así el ciclo es continuo (sin salto al envolver).
-                let offset = -fase * PERIODO;
-                let cinta = Stroke::new(ancho * 0.55)
-                    .with_caps(Cap::Round)
-                    .with_dashes(offset, [4.0, 12.0]);
-                scene.stroke(&cinta, Affine::IDENTITY, aclarar(h.color, 0.35), None, &path);
+            // Las hebras stale no transmiten: cauce seco, sin fluido.
+            if !mostrar_flujo || h.punteada {
+                continue;
             }
 
-            // --- Nodos en los extremos: discos pequeños que anclan la
-            // hebra al párrafo. Radio crece con la confianza. ---
-            let r = (ancho * 0.85 + 1.4).max(2.0);
-            scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &Circle::new((x0, y0), r));
-            scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &Circle::new((x1, y1), r));
+            // --- Fluido 2D · 1. Frente de onda: un gradiente lineal
+            // repetido cuyas bandas brillantes barren el cauce de la madre a
+            // la hija. Rellenando la PROPIA cinta con el gradiente, queda
+            // recortado a la banda sin clip aparte — el brillo cubre todo el
+            // ancho del cauce, no una línea. ---
+            const PER: f64 = 58.0; // largo de un período de banda, en px
+            let sx = x0 - fase * PER; // corre con la fase → bandas hacia la hija
+            let y_ref = (it + ib) * 0.5;
+            let claro = aclarar(h.color, 0.55);
+            let hueco = atenuar_alpha(claro, 0.0); // mismo tinte, transparente
+            let onda = Gradient::new_linear(Point::new(sx, y_ref), Point::new(sx + PER, y_ref))
+                .with_extend(Extend::Repeat)
+                .with_stops([
+                    (0.0_f32, hueco),
+                    (0.38_f32, hueco),
+                    (0.5_f32, claro),
+                    (0.62_f32, hueco),
+                    (1.0_f32, hueco),
+                ]);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, &onda, None, &cinta);
 
-            // --- Flujo: pulsos viajeros madre→hija sobre la hebra fresca.
-            // Cada pulso es un disco brillante (núcleo claro + halo) que
-            // recorre la curva-S de izquierda a derecha; varios espaciados
-            // dan la lectura de "corriente"/"fluido" recorriendo el haz.
-            // Las hebras stale/punteadas no fluyen (no transmiten nada). ---
-            if mostrar_flujo && !h.punteada {
-                // Evalúa el cubic Bézier (P0, C1, C2, P3) en t ∈ [0,1].
-                let bezier = |t: f64| -> (f64, f64) {
-                    let u = 1.0 - t;
-                    let (cx1, cy1) = (x0 + tirante, y0);
-                    let (cx2, cy2) = (x1 - tirante, y1);
-                    let bx = u * u * u * x0
-                        + 3.0 * u * u * t * cx1
-                        + 3.0 * u * t * t * cx2
-                        + t * t * t * x1;
-                    let by = u * u * u * y0
-                        + 3.0 * u * u * t * cy1
-                        + 3.0 * u * t * t * cy2
-                        + t * t * t * y1;
-                    (bx, by)
-                };
-                const PULSOS: usize = 3; // cuántas "cargas" simultáneas por hebra
-                const COLA: usize = 4; // muestras de estela detrás de cada cabeza
-                let nucleo = aclarar(h.color, 0.65); // casi blanco, alpha pleno
-                let r_cabeza = (ancho * 1.15 + 1.6).max(2.6);
-                for k in 0..PULSOS {
-                    let cabeza = (fase + k as f64 / PULSOS as f64).rem_euclid(1.0);
-                    // Halo amplio y translúcido alrededor de la cabeza: el
-                    // "brillo" que delata la carga sin blur real.
-                    let (hx, hy) = bezier(cabeza);
-                    scene.fill(
-                        Fill::NonZero,
-                        Affine::IDENTITY,
-                        atenuar_alpha(h.color, 0.22),
-                        None,
-                        &Circle::new((hx, hy), r_cabeza * 2.4),
-                    );
-                    // Estela: muestras detrás de la cabeza, cada vez más
-                    // tenues y chicas — el rastro del fluido.
-                    for s in 0..COLA {
-                        let atras = (s as f64 + 1.0) * 0.022;
-                        let t = cabeza - atras;
-                        if t < 0.0 {
-                            continue; // no envolver: la estela no salta al otro extremo
-                        }
-                        let desvanece = 1.0 - s as f64 / COLA as f64;
-                        let (px, py) = bezier(t);
-                        scene.fill(
-                            Fill::NonZero,
-                            Affine::IDENTITY,
-                            atenuar_alpha(nucleo, 0.5 * desvanece as f32),
-                            None,
-                            &Circle::new((px, py), r_cabeza * (0.4 + 0.5 * desvanece)),
-                        );
-                    }
-                    // Núcleo brillante de la cabeza, encima de todo.
-                    scene.fill(
-                        Fill::NonZero,
-                        Affine::IDENTITY,
-                        nucleo,
-                        None,
-                        &Circle::new((hx, hy), r_cabeza),
-                    );
-                }
+            // --- Fluido 2D · 2. Líneas de corriente: filamentos finos a
+            // varias fracciones del alto de la banda, cada uno una curva-S
+            // con dash-offset que marcha con la fase. Dan la lectura laminar
+            // del fluido recorriendo el cauce (no sólo un destello). ---
+            const PERIODO_DASH: f64 = 16.0;
+            let off = -fase * PERIODO_DASH;
+            for frac in [0.26_f64, 0.5, 0.74] {
+                let yi = it + (ib - it) * frac;
+                let yd = dt + (db - dt) * frac;
+                let mut linea = BezPath::new();
+                linea.move_to((x0, yi));
+                linea.curve_to((x0 + dx, yi), (x1 - dx, yd), (x1, yd));
+                let trazo = Stroke::new(1.4)
+                    .with_caps(Cap::Round)
+                    .with_dashes(off, [3.0, 9.0]);
+                scene.stroke(
+                    &trazo,
+                    Affine::IDENTITY,
+                    atenuar_alpha(claro, 0.7),
+                    None,
+                    &linea,
+                );
             }
         }
     })
