@@ -743,6 +743,107 @@ const FV_GAIN: f32 = 0.015;
 /// clickear al cruzar una puerta.
 const AMB_TAU: f32 = 0.10;
 
+// ── Fase 4.9 — reflexiones tempranas ──────────────────────────────────
+// El Freeverb (combs+allpass) modela sólo el campo *tardío* difuso. Las
+// **reflexiones tempranas** son los primeros ecos discretos (las paredes,
+// piso y techo cercanos) que llegan antes de que la cola se vuelva densa —
+// la pista que el oído usa para juzgar el *tamaño* de la sala y la
+// distancia de la fuente. Sin ellas el reverb suena "sin onset", como una
+// nube de cola pegada al sonido seco. Las modelamos como un banco de taps
+// discretos de un delay line mono, antes del campo tardío.
+
+/// Retardos base de los taps (ms a [`FV_RATE`]); se reescalan al rate real
+/// y al `room_size`. Valores primos-ish para evitar coloración por
+/// alineación. Un cuarto chico colapsa los ecos cerca del directo; un
+/// hangar los separa (la sala "se agranda" al oído).
+const EARLY_TAP_MS: [f32; 6] = [8.0, 12.0, 17.0, 21.0, 26.0, 31.0];
+/// Ganancia global de las reflexiones tempranas (relativa al campo tardío).
+/// Suave: deben dar onset y tamaño, no opacar la cola difusa ni el directo.
+const EARLY_GAIN: f32 = 0.6;
+/// Decaimiento de la ganancia por índice de tap (`EARLY_FALLOFF^k`): los
+/// ecos más tardíos llegan más débiles (recorrieron más camino).
+const EARLY_FALLOFF: f32 = 0.78;
+
+/// Retardo de cada tap en *muestras* para un `room_size ∈ [0,1]` y rate
+/// `sr`. El tamaño de sala estira los retardos (`0.5 + room_size` ⇒ de la
+/// mitad al 1.5× del nominal): cuarto chico ⇒ ecos juntos, hangar ⇒ ecos
+/// espaciados. Determinista y puro ⇒ unit-testable.
+fn early_tap_delays(room_size: f32, sr: f32) -> [usize; 6] {
+    let scale = (0.5 + room_size.clamp(0.0, 1.0)) * (sr / 1000.0);
+    let mut out = [0usize; 6];
+    for (o, &ms) in out.iter_mut().zip(EARLY_TAP_MS.iter()) {
+        *o = ((ms * scale) as usize).max(1);
+    }
+    out
+}
+
+/// Ganancia (L, R) de cada tap para un `damping ∈ [0,1]`. Decae por índice
+/// (`EARLY_FALLOFF^k`) y la amortiguación recorta los ecos tardíos (una
+/// sala absorbente "traga" las reflexiones lejanas antes). Los taps se
+/// paneаn alternados (par→izquierda, impar→derecha, 0.85/0.45) para abrir
+/// la imagen estéreo sin colapsar a un punto.
+fn early_tap_gains(damping: f32) -> [(f32, f32); 6] {
+    let damp = damping.clamp(0.0, 1.0);
+    let mut out = [(0.0f32, 0.0f32); 6];
+    for (k, o) in out.iter_mut().enumerate() {
+        // Decaimiento por camino + absorción creciente con el índice.
+        let g = EARLY_GAIN
+            * EARLY_FALLOFF.powi(k as i32)
+            * (1.0 - 0.6 * damp * (k as f32 / (EARLY_TAP_MS.len() - 1) as f32));
+        let (wl, wr) = if k % 2 == 0 { (0.85, 0.45) } else { (0.45, 0.85) };
+        *o = (g * wl, g * wr);
+    }
+    out
+}
+
+/// Banco de reflexiones tempranas: un delay line mono del que se leen
+/// [`EARLY_TAP_MS`] taps discretos, paneados a L/R. Alimentado por la misma
+/// entrada que el campo tardío (`dry + envío por distancia`), su salida se
+/// suma a la cola húmeda antes de escalar por `wet`.
+struct EarlyReflections {
+    buf: Vec<f32>,
+    idx: usize,
+    sr: f32,
+}
+impl EarlyReflections {
+    fn new() -> Self {
+        EarlyReflections { buf: Vec::new(), idx: 0, sr: 0.0 }
+    }
+    /// Dimensiona el delay line para cubrir el tap más lejano al máximo
+    /// `room_size` (1.0) y al rate real. Se rellama sólo si cambia `sr`.
+    fn rebuild(&mut self, sr: f32) {
+        let max_delay = early_tap_delays(1.0, sr)[EARLY_TAP_MS.len() - 1];
+        self.buf = vec![0.0; (max_delay + 1).max(1)];
+        self.idx = 0;
+        self.sr = sr;
+    }
+    /// Procesa una muestra mono → (early_l, early_r). Lee los taps *antes*
+    /// de escribir la entrada, así un retardo de `d` muestras devuelve la
+    /// entrada de hace `d` frames. `room_size`/`damping` resuelven retardos
+    /// y ganancias por frame (siguen el crossfade de ambiente de 4.4).
+    fn process(&mut self, input: f32, room_size: f32, damping: f32) -> (f32, f32) {
+        let n = self.buf.len();
+        if n == 0 {
+            return (0.0, 0.0);
+        }
+        let delays = early_tap_delays(room_size, self.sr);
+        let gains = early_tap_gains(damping);
+        let mut l = 0.0;
+        let mut r = 0.0;
+        for (&d, &(gl, gr)) in delays.iter().zip(gains.iter()) {
+            // idx apunta al slot que vamos a sobrescribir (el más viejo,
+            // hace `n` muestras). El tap de `d` muestras está `d` atrás.
+            let read = (self.idx + n - (d % n)) % n;
+            let s = self.buf[read];
+            l += s * gl;
+            r += s * gr;
+        }
+        self.buf[self.idx] = input;
+        self.idx = (self.idx + 1) % n;
+        (l, r)
+    }
+}
+
 /// Comb con amortiguación pasa-bajos en el lazo de realimentación.
 struct Comb {
     buf: Vec<f32>,
@@ -788,6 +889,10 @@ struct Reverb {
     combs_r: Vec<Comb>,
     aps_l: Vec<Allpass>,
     aps_r: Vec<Allpass>,
+    /// Fase 4.9 — banco de reflexiones tempranas (ecos discretos antes del
+    /// campo tardío). Se alimenta de la misma entrada y suma su salida a la
+    /// cola húmeda.
+    early: EarlyReflections,
     sr: f32,
     /// Acústica **actual** (suavizada). Persigue a `target` con una
     /// constante de tiempo de [`AMB_TAU`] para que un cambio de cuarto no
@@ -804,6 +909,7 @@ impl Reverb {
             combs_r: Vec::new(),
             aps_l: Vec::new(),
             aps_r: Vec::new(),
+            early: EarlyReflections::new(),
             sr: 0.0,
             amb: RoomAmbience::default(),
             target: RoomAmbience::default(),
@@ -828,6 +934,7 @@ impl Reverb {
         self.combs_r = COMB_TUNING.iter().map(|&n| Comb::new(len(n, STEREO_SPREAD))).collect();
         self.aps_l = ALLPASS_TUNING.iter().map(|&n| Allpass::new(len(n, 0))).collect();
         self.aps_r = ALLPASS_TUNING.iter().map(|&n| Allpass::new(len(n, STEREO_SPREAD))).collect();
+        self.early.rebuild(sr);
         self.sr = sr;
     }
 
@@ -851,7 +958,11 @@ impl Reverb {
         for a in self.aps_r.iter_mut() {
             r = a.process(r);
         }
-        (l, r)
+        // Fase 4.9 — reflexiones tempranas: ecos discretos del mismo input
+        // (escalado por FV_GAIN para nivelar con el campo tardío) sumados al
+        // wet. Dan onset y tamaño de sala antes de que la cola se densifique.
+        let (el, er) = self.early.process(inp, self.amb.room_size, self.amb.damping);
+        (l + el, r + er)
     }
 }
 
@@ -1468,6 +1579,73 @@ mod tests {
         da.fill(&mut buf2, 1000, 2);
         assert!((da.reverb.amb.wet - 0.5).abs() < 1e-3, "converge al target: {}", da.reverb.amb.wet);
         assert!((da.reverb.amb.room_size - 0.8).abs() < 1e-3);
+    }
+
+    #[test]
+    fn early_tap_delays_grow_with_room_size() {
+        // Fase 4.9 — los taps crecen monótonos dentro de una sala, y una
+        // sala grande los empuja a todos más tarde (la sala "se agranda").
+        let small = early_tap_delays(0.0, 44_100.0);
+        let big = early_tap_delays(1.0, 44_100.0);
+        for w in small.windows(2) {
+            assert!(w[1] > w[0], "taps crecientes: {:?}", small);
+        }
+        for (s, b) in small.iter().zip(big.iter()) {
+            assert!(b > s, "sala grande retarda más: {b} > {s}");
+        }
+        assert!(small.iter().all(|&d| d >= 1), "ningún tap colapsa a 0");
+    }
+
+    #[test]
+    fn early_reflections_emit_discrete_taps() {
+        // Fase 4.9 — un impulso produce ecos discretos exactamente en los
+        // offsets de tap, silencio entre medio, y paneo alternado L/R.
+        let mut er = EarlyReflections::new();
+        er.rebuild(1000.0);
+        let delays = early_tap_delays(0.5, 1000.0); // [8,12,17,21,26,31]
+        let mut outs = Vec::new();
+        for t in 0..40 {
+            let inp = if t == 0 { 1.0 } else { 0.0 };
+            outs.push(er.process(inp, 0.5, 0.0));
+        }
+        for &d in delays.iter() {
+            let (l, r) = outs[d];
+            assert!(l.abs() + r.abs() > 1e-6, "el tap en {d} suena");
+        }
+        // Un frame entre el primer y el segundo tap está en silencio
+        // (los ecos son discretos, no una cola continua).
+        let between = (delays[0] + delays[1]) / 2;
+        assert!(
+            outs[between].0.abs() + outs[between].1.abs() < 1e-9,
+            "silencio entre taps en {between}"
+        );
+        // El primer tap (par) panea a la izquierda; el segundo (impar) a la
+        // derecha — abre la imagen estéreo.
+        assert!(outs[delays[0]].0 > outs[delays[0]].1, "tap0 a la izquierda");
+        assert!(outs[delays[1]].1 > outs[delays[1]].0, "tap1 a la derecha");
+    }
+
+    #[test]
+    fn reverb_process_includes_early_reflections() {
+        // Fase 4.9 — prueba de cableado: a 1000 Hz las líneas del campo
+        // tardío (combs/allpass) miden >20 muestras, así que no devuelven
+        // nada en los primeros frames. Lo que suena en el primer tap es la
+        // reflexión temprana → confirma que `process` la suma a la cola.
+        let mut rv = Reverb::new();
+        rv.amb = RoomAmbience { wet: 1.0, room_size: 0.0, damping: 0.0 };
+        rv.rebuild(1000.0);
+        let first = early_tap_delays(0.0, 1000.0)[0]; // ~4 muestras
+        let mut outs = Vec::new();
+        for t in 0..30 {
+            let inp = if t == 0 { 1.0 } else { 0.0 };
+            outs.push(rv.process(inp));
+        }
+        let (l, r) = outs[first];
+        assert!(l.abs() + r.abs() > 1e-6, "reflexión temprana en frame {first}");
+        assert!(
+            outs[first - 1].0.abs() + outs[first - 1].1.abs() < 1e-9,
+            "silencio antes del primer tap (campo tardío aún mudo)"
+        );
     }
 
     #[test]
