@@ -60,6 +60,28 @@ fn occlusion_lp_coef(occ: f32, sr: f32) -> f32 {
     coef.clamp(0.0, 1.0)
 }
 
+/// Distancia (unidades Doom) a la que la absorción de aire satura. Más
+/// allá no oscurece más — el `vol` del motor ya bajó por la atenuación
+/// vanilla, esto sólo modela el filtro de agudos.
+const AIR_FULL_DIST: f32 = 1400.0;
+
+/// Fase 4.7 — coeficiente del pasa-bajos 1-polo de **absorción de aire**
+/// para la `distance` fuente→oyente (unidades Doom). `distance≈0` ⇒ `1.0`
+/// (bypass exacto). Al alejarse, el corte baja suave de ~`0.45·sr`
+/// (transparente) a `2200 Hz` en `AIR_FULL_DIST` — bastante más alto que
+/// el de la oclusión (`700 Hz`): el aire se come los brillos, no tapa el
+/// sonido como una pared. `coef = 1 − exp(−2π·fc/sr)`, rate-independiente.
+fn air_lp_coef(distance: f32, sr: f32) -> f32 {
+    if distance <= 1.0 || sr <= 1.0 {
+        return 1.0;
+    }
+    let t = (distance / AIR_FULL_DIST).clamp(0.0, 1.0);
+    let fc_open = sr * 0.45;
+    let fc = fc_open + t * (2200.0 - fc_open);
+    let coef = 1.0 - (-2.0 * std::f32::consts::PI * fc / sr).exp();
+    coef.clamp(0.0, 1.0)
+}
+
 /// Una voz activa: muestras del sfx + cursor de reproducción (en
 /// unidades de muestra *source*) + ganancias por canal.
 struct Voice {
@@ -77,6 +99,13 @@ struct Voice {
     /// Estado del pasa-bajos 1-polo de oclusión (memoria de la muestra
     /// anterior). `0` cuando `occlusion == 0` (filtro inerte).
     lp: f32,
+    /// Fase 4.7 — distancia fuente→oyente en unidades Doom. Modela la
+    /// **absorción de aire**: a más distancia, más se comen los agudos
+    /// (pasa-bajos suave, análogo acústico de la perspectiva atmosférica
+    /// del lado visual). `0` = sin filtrar (fuente al ras del oyente o
+    /// sonido no posicionado). Comparte el estado `lp` con la oclusión:
+    /// el filtro corre al corte más restrictivo de los dos.
+    air_distance: f32,
 }
 
 /// Mixer de SFX. Implementa [`AudioSource`]: en cada callback del sink
@@ -112,6 +141,7 @@ impl DoomMixer {
         gain_l: f32,
         gain_r: f32,
         occlusion: f32,
+        air_distance: f32,
     ) {
         if samples.is_empty() {
             return;
@@ -127,6 +157,7 @@ impl DoomMixer {
             gain_r,
             occlusion: occlusion.clamp(0.0, 1.0),
             lp: 0.0,
+            air_distance: air_distance.max(0.0),
         });
     }
 
@@ -154,8 +185,16 @@ impl AudioSource for DoomMixer {
             // dentro del callback (sr fijo). `occlusion==0` ⇒ coef 1.0 =
             // bypass bit-exacto (compat 4.4). Al subir, baja el corte:
             // 0→~0.45·sr (sin filtro), 1→700 Hz (apagado, tras la pared).
-            let lp_coef = occlusion_lp_coef(v.occlusion, dev_rate_f);
+            // Fase 4.7 — el filtro de la voz corre al corte más restrictivo
+            // entre oclusión (pared) y absorción de aire (distancia): el
+            // menor coef = el menor corte = el que más oscurece. Un solo
+            // pasa-bajos cubre ambos efectos. Ambos en `0`/cerca ⇒ coef 1.0
+            // = bypass bit-exacto (compat 4.6).
+            let lp_coef =
+                occlusion_lp_coef(v.occlusion, dev_rate_f).min(air_lp_coef(v.air_distance, dev_rate_f));
             // La oclusión también atenúa ~−4.5 dB a tope (la pared absorbe).
+            // El aire NO atenúa volumen extra — el `vol` del motor ya cayó
+            // por la distancia (atenuación vanilla); esto sólo filtra agudos.
             let occ_gain = 1.0 - 0.4 * v.occlusion;
             for f in 0..frames {
                 let i0 = v.cursor.floor() as usize;
@@ -882,9 +921,12 @@ impl AudioEngine {
     /// Reproduce un sfx por su nombre base (e.g. `"pistol"` → lump
     /// `DSPISTOL`). `vol` 0..127, `sep` 0..255 (128 ≈ centro). `occlusion`
     /// `0..1` (Fase 4.5): cuántas paredes sólidas hay entre la fuente y el
-    /// oyente — `0` suena seco/directo, `1` apagado tras la pared. Si el
-    /// lump no existe, no hace nada.
-    pub fn play(&mut self, name: &str, vol: u8, sep: u8, occlusion: f32) {
+    /// oyente — `0` suena seco/directo, `1` apagado tras la pared.
+    /// `distance` (Fase 4.7): distancia fuente→oyente en unidades Doom para
+    /// la absorción de aire (los agudos se apagan a la distancia); `0` para
+    /// sonidos no posicionados (UI, emitidos por el jugador). Si el lump no
+    /// existe, no hace nada.
+    pub fn play(&mut self, name: &str, vol: u8, sep: u8, occlusion: f32, distance: f32) {
         let lump = format!("DS{}", name.to_uppercase());
         let resolved = self.resolve(&lump);
         if let Some((samples, rate)) = resolved {
@@ -895,7 +937,7 @@ impl AudioEngine {
             self.audio
                 .lock()
                 .sfx
-                .add(samples, rate, g * pl, g * pr, occlusion);
+                .add(samples, rate, g * pl, g * pr, occlusion, distance);
         }
     }
 
@@ -919,10 +961,11 @@ impl AudioEngine {
         }
         let g = vol as f32 / 127.0;
         let (pl, pr) = equal_power_pan(sep);
+        // Jingle no posicionado → sin oclusión ni absorción de aire.
         self.audio
             .lock()
             .sfx
-            .add(mono.into(), dev_rate as f32, g * pl, g * pr, 0.0);
+            .add(mono.into(), dev_rate as f32, g * pl, g * pr, 0.0, 0.0);
     }
 
     /// Empieza a reproducir un lump de música MUS (bytes crudos). Si no
@@ -975,7 +1018,7 @@ mod tests {
         let mut m = DoomMixer::new();
         m.master = 1.0;
         // pan a la derecha: gain_l=0, gain_r=1.
-        m.add(voice_samples(), 100.0, 0.0, 1.0, 0.0);
+        m.add(voice_samples(), 100.0, 0.0, 1.0, 0.0, 0.0);
         let mut buf = vec![0.0f32; 8]; // 4 frames estéreo
         m.fill(&mut buf, 100, 2);
         // Canal izquierdo (índices pares) en silencio.
@@ -991,7 +1034,7 @@ mod tests {
         let mut m = DoomMixer::new();
         m.master = 1.0;
         // src_rate = mitad del dev_rate → cada muestra source dura 2 frames.
-        m.add(voice_samples(), 50.0, 1.0, 1.0, 0.0);
+        m.add(voice_samples(), 50.0, 1.0, 1.0, 0.0, 0.0);
         let mut buf = vec![0.0f32; 4]; // 4 frames mono
         m.fill(&mut buf, 100, 1);
         // step = 0.5: cursors 0.0, 0.5, 1.0, 1.5.
@@ -1006,7 +1049,7 @@ mod tests {
     #[test]
     fn mixer_drops_finished_voices() {
         let mut m = DoomMixer::new();
-        m.add(voice_samples(), 100.0, 1.0, 1.0, 0.0);
+        m.add(voice_samples(), 100.0, 1.0, 1.0, 0.0, 0.0);
         assert_eq!(m.active_voices(), 1);
         // Buffer largo: consume las 4 muestras y deja la voz agotada.
         let mut buf = vec![0.0f32; 16];
@@ -1042,7 +1085,7 @@ mod tests {
         let energy = |occ: f32| {
             let mut m = DoomMixer::new();
             m.master = 1.0;
-            m.add(nyquist.clone(), 44100.0, 1.0, 1.0, occ);
+            m.add(nyquist.clone(), 44100.0, 1.0, 1.0, occ, 0.0);
             let mut buf = vec![0.0f32; 64];
             m.fill(&mut buf, 44100, 1);
             buf.iter().map(|x| x.abs()).sum::<f32>()
@@ -1055,6 +1098,64 @@ mod tests {
         assert!(
             occluded < clear * 0.25,
             "oclusión total apaga los agudos: clear={clear} occluded={occluded}"
+        );
+    }
+
+    #[test]
+    fn air_lp_coef_passthrough_at_zero() {
+        // Fase 4.7 — distancia ~0: coef 1.0 ⇒ el pasa-bajos de aire es
+        // inerte (bypass exacto). Al alejarse el coef baja (filtra agudos).
+        assert_eq!(air_lp_coef(0.0, 44100.0), 1.0);
+        assert_eq!(air_lp_coef(1.0, 44100.0), 1.0);
+        assert!(air_lp_coef(AIR_FULL_DIST, 44100.0) < 1.0);
+        // Monótono: más distancia ⇒ corte más bajo ⇒ coef menor.
+        assert!(air_lp_coef(AIR_FULL_DIST, 44100.0) < air_lp_coef(AIR_FULL_DIST * 0.5, 44100.0));
+    }
+
+    #[test]
+    fn air_absorption_muffles_distant_high_frequencies() {
+        // Fase 4.7 — la misma onda a Nyquist suena llena de cerca y
+        // apagada de lejos, sin oclusión de por medio (distancia pura).
+        let nyquist: Arc<[f32]> =
+            Arc::from((0..64).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect::<Vec<_>>());
+        let energy = |dist: f32| {
+            let mut m = DoomMixer::new();
+            m.master = 1.0;
+            m.add(nyquist.clone(), 44100.0, 1.0, 1.0, 0.0, dist);
+            let mut buf = vec![0.0f32; 64];
+            m.fill(&mut buf, 44100, 1);
+            buf.iter().map(|x| x.abs()).sum::<f32>()
+        };
+        let near = energy(0.0);
+        let far = energy(AIR_FULL_DIST);
+        assert!(near > 50.0, "fuente cercana conserva energía: {near}");
+        assert!(
+            far < near * 0.6,
+            "la distancia se come los agudos: near={near} far={far}"
+        );
+    }
+
+    #[test]
+    fn air_absorption_does_not_change_volume() {
+        // El aire filtra agudos pero NO atenúa volumen extra (el `vol` del
+        // motor ya cayó por la distancia). Una señal DC (sin agudos) pasa
+        // intacta aun a distancia máxima.
+        let dc: Arc<[f32]> = Arc::from(vec![1.0f32; 64]);
+        let sum = |dist: f32| {
+            let mut m = DoomMixer::new();
+            m.master = 1.0;
+            m.add(dc.clone(), 44100.0, 1.0, 1.0, 0.0, dist);
+            let mut buf = vec![0.0f32; 64];
+            m.fill(&mut buf, 44100, 1);
+            // Promedio del estado estacionario (saltea el ramp del 1-polo).
+            buf[32..].iter().copied().sum::<f32>() / 32.0
+        };
+        let near = sum(0.0);
+        let far = sum(AIR_FULL_DIST);
+        assert!((near - 1.0).abs() < 1e-3, "DC cercano pasa intacto: {near}");
+        assert!(
+            (far - near).abs() < 1e-2,
+            "DC lejano no pierde volumen (sólo agudos): near={near} far={far}"
         );
     }
 
@@ -1210,7 +1311,7 @@ mod tests {
             music: None,
             reverb: Reverb::new(),
         };
-        da.sfx.add(Arc::from(vec![1.0f32, 1.0, 1.0, 1.0]), 100.0, 1.0, 1.0, 0.0);
+        da.sfx.add(Arc::from(vec![1.0f32, 1.0, 1.0, 1.0]), 100.0, 1.0, 1.0, 0.0, 0.0);
         let mut buf = vec![0.0f32; 8];
         da.fill(&mut buf, 100, 2);
         // Sin cola: las muestras son exactamente el dry del mixer (master 0.6).
@@ -1230,7 +1331,7 @@ mod tests {
         da.reverb.amb = amb;
         da.reverb.target = amb; // ya asentado: sin crossfade en este test.
         // Impulso corto: 2 muestras, luego silencio seco.
-        da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0, 0.0);
+        da.sfx.add(Arc::from(vec![1.0f32, 1.0]), 1000.0, 1.0, 1.0, 0.0, 0.0);
         let mut buf = vec![0.0f32; 2000]; // 1000 frames estéreo a 1000 Hz
         da.fill(&mut buf, 1000, 2);
         // Pasados los primeros frames (donde la voz seca ya terminó) debe
@@ -1316,7 +1417,7 @@ mod tests {
 
         // Esa voz mono se encola en el mixer como cualquier SFX.
         let mut m = DoomMixer::new();
-        m.add(mono.into(), 44_100.0, 0.7, 0.7, 0.0);
+        m.add(mono.into(), 44_100.0, 0.7, 0.7, 0.0, 0.0);
         assert_eq!(m.active_voices(), 1);
     }
 }

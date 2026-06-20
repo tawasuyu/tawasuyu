@@ -1265,6 +1265,14 @@ Cada feature como toggle:
 - **Sin cambios en supay-audio, supay-core ni el host** — todo vive en `supay-scene::occlusion`; el host ya pasaba el snapshot (con sectores) por tick. +3 tests (puerta cerrada tapa como sólida, puerta abierta pasa, media puerta → 0.25). 15 verde scene.
 - **Caveat.** El vano es global a la linedef (no considera la altura `z` de la fuente/oyente: un sonido alto sobre una baranda baja se trata igual que uno al ras). Tampoco modela el material de la puerta (todas amortiguan igual). Difracción/reflexión siguen fuera. **A validar al correr** igual que 4.5.
 
+**Fase 4.7 (2026-06-20, este bloque):** absorción de aire por distancia — el análogo acústico de la perspectiva atmosférica del lado visual (la niebla/fog que el renderer aplica a los muros lejanos). En 4.5/4.6 un sfx lejano sonaba con los mismos agudos que uno cercano, sólo más bajo de volumen (atenuación vanilla por `vol`). Ahora la distancia además se **come los brillos**: lejos suena más opaco, no sólo más callado.
+
+- **`air_lp_coef(distance, sr)`** (`supay-audio`) — pasa-bajos 1-polo suave cuyo corte baja de ~`0.45·sr` (transparente, de cerca) a `2200 Hz` en `AIR_FULL_DIST = 1400` unidades Doom. Bastante más alto que el corte de la oclusión (`700 Hz`): el aire mata agudos, no tapa el sonido como una pared. `distance ≤ 1` ⇒ `coef = 1.0` (bypass exacto).
+- **Un solo filtro para ambos efectos.** La voz corre su pasa-bajos al **menor corte** entre oclusión y aire (`occ_coef.min(air_coef)`), reusando el estado `lp` que ya existía para la oclusión — sin segunda etapa ni CPU extra. El aire **no** atenúa volumen (sólo agudos): el `vol` del motor ya cayó por la distancia, duplicar la atenuación sería incorrecto. `occ_gain` sigue derivando sólo de la oclusión.
+- **Distancia real, no proxy.** El host ya tenía la posición de la fuente (`ev.pos`, capturada en 4.5 para la oclusión) y del oyente — `play` gana un parámetro `distance` con la euclidiana fuente→oyente. Sonidos no posicionados (UI, emitidos por el jugador, jingles de takiy) pasan `distance = 0` ⇒ sin filtrar.
+- **Compat 4.6 bit-exacta** cuando `distance ≤ 1` y `occlusion == 0` (coef 1.0 ⇒ filtro inerte). +3 tests audio (23 verde): bypass a distancia 0 + monotonía del corte; onda Nyquist apagada de lejos sin oclusión; señal DC conserva volumen a distancia máxima (filtra agudos, no loudness).
+- **Caveat.** El modelo es por-voz al disparar (la distancia se fija al arrancar el sfx, no sigue al oyente si se aleja mientras suena — los sfx de Doom son cortos, aceptable). No depende de humedad/temperatura ni del espectro real de absorción del aire (un 1-polo plano, no la curva ISO 9613). **A validar al correr** igual que 4.5/4.6.
+
 ## Anti-features (rechazadas con motivo)
 
 - **Geometry enrichment procedural** (tuberías/molduras añadidas a paredes): rompe la correspondencia visual-hitbox. El jugador apunta a la tubería, el lineseg está donde estaba. Toda decoración nueva queda **flush** con linedefs originales.
@@ -1293,6 +1301,7 @@ Cada feature como toggle:
 
 ## Estado
 
+- **2026-06-20 (+1):** Fase 4.7 — absorción de aire por distancia. Los sfx lejanos ahora pierden agudos (pasa-bajos suave 0.45·sr→2200 Hz a 1400 unidades), el análogo acústico del fog visual. `air_lp_coef` en `supay-audio`; un solo filtro corre al menor corte entre oclusión y aire (reusa el estado `lp`); el aire no atenúa volumen (el `vol` vanilla ya cayó). `play` gana `distance` (euclidiana fuente→oyente que el host ya tenía de 4.5). Compat 4.6 bit-exacta con distancia 0 + sin oclusión. +3 tests audio (23 verde). A validar al correr.
 - **2026-06-20:** Fase 3.55 — occlusion culling de paredes completas. Cierra el defer de 3.54 ("las paredes nunca se cullean"). `SegSnap` gana `linedef` (exportado por `scene_export.c`), que mapea la oclusión por seg de vuelta a la pared; `compute_visibility` reemplaza a `compute_visible_subsectors` como motor (un solo paseo front-to-back computa `{subs, walls}`) y descarta una pared sólo si TODOS sus segs quedaron tapados por muros sólidos más cercanos. `frame.rs` saltea esas paredes. Conservador (mismo margen que 3.54, basta un seg visible para conservar la pared). +4 tests render (192 verde). Header `PHASE 3.53 → 3.55`. A validar al correr.
 - **2026-05-25:** SDD escrito.
 - **2026-05-25 (tarde):** Fase 0 (raycaster hardcoded como Hello inframundo) en código — DDA + perp_dist + niebla + bias E/W + minimap.

@@ -565,10 +565,13 @@ impl App for Supay {
                     for ev in sounds {
                         // Fase 4.5: oclusión geométrica de los sfx con origen
                         // (los emitidos por el jugador no traen pos → 0, secos).
-                        let occ = ev
-                            .pos
-                            .map_or(0.0, |(sx, sy)| snap.occlusion(lx, ly, sx, sy));
-                        audio.play(&ev.name, ev.vol, ev.sep, occ);
+                        // Fase 4.7: distancia fuente→oyente para la absorción
+                        // de aire (sin pos → 0, sin filtrar).
+                        let (occ, dist) = ev.pos.map_or((0.0, 0.0), |(sx, sy)| {
+                            let d = ((sx - lx).powi(2) + (sy - ly).powi(2)).sqrt();
+                            (snap.occlusion(lx, ly, sx, sy), d)
+                        });
+                        audio.play(&ev.name, ev.vol, ev.sep, occ, dist);
                     }
                     match music {
                         Some(supay_core::MusicCommand::Play { data, looping }) => {
