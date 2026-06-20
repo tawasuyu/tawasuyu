@@ -4,11 +4,13 @@
 //! sintéticos, no visual": ahora una sala armada en Rust se **ve** como PNG
 //! en cualquier máquina con llvmpipe.
 //!
-//! La escena: una sala 512×512 de cuatro muros sólidos, partida por el BSP
-//! en dos subsectores (piso bajo al sur, piso alto + techo bajo al norte,
-//! para que se vean escalón y dintel reales por subsector, no el fake-floor
-//! de 3.1), un sector con luz pulsante, dos antorchas como sprites y el
-//! jugador mirando al norte. Sin atlas: colores planos por material/paleta.
+//! La escena: una sala 512×512 de cuatro muros sólidos, un único sector
+//! convexo (un subsector con sus cuatro segs ⇒ piso y techo reales por
+//! subsector, no el fake-floor de 3.1) con luz pulsante, dos antorchas como
+//! sprites y el jugador mirando al norte. Sin atlas: colores planos por
+//! material/paleta. (Un escalón real necesita una linedef two-sided que
+//! cargue el contramuro del desnivel; sin ella el riser no se dibuja y queda
+//! una costura — por eso la sala es de un solo nivel.)
 //!
 //! No toca `supay-core` → corre con o sin vendor de doomgeneric. Es un banco
 //! de diagnóstico de proyección/cámara/planos/sprites/HUD; el render con
@@ -32,7 +34,7 @@ use llimphi_ui::llimphi_text::Typesetter;
 use supay_render_llimphi::{render_snapshot, RenderConfig};
 use supay_scene::{
     NodeSnap, PlayerOverlays, PlayerSnap, PlayerStats, SceneSnapshot, SectorSnap, SegSnap,
-    SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
+    SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, NO_SECTOR, NO_SKY_PIC,
 };
 
 const W: u32 = 960;
@@ -80,84 +82,57 @@ fn synth(tick: u64) -> SceneSnapshot {
 
     // Muros del recinto (CW visto desde +Z ⇒ front hacia adentro).
     let walls = vec![
-        wall(0.0, 0.0, 0.0, ROOM, 0),     // 0 oeste
-        wall(0.0, ROOM, ROOM, ROOM, 1),   // 1 norte (sector alto)
-        wall(ROOM, ROOM, ROOM, 0.0, 0),   // 2 este
-        wall(ROOM, 0.0, 0.0, 0.0, 0),     // 3 sur
+        wall(0.0, 0.0, 0.0, ROOM, 0),   // 0 oeste
+        wall(0.0, ROOM, ROOM, ROOM, 0), // 1 norte
+        wall(ROOM, ROOM, ROOM, 0.0, 0), // 2 este
+        wall(ROOM, 0.0, 0.0, 0.0, 0),   // 3 sur
     ];
 
-    // Dos sectores: sur bajo y abierto, norte como un escalón elevado con
-    // el techo más bajo (dintel). El renderer dibuja escalón + dintel
-    // reales porque hay BSP (subsectors + segs + nodes).
+    // Un único sector con luz pulsante (flicker determinista por tick).
     let light = (190.0 + (t * 0.7).sin() * 40.0).clamp(0.0, 255.0) as u8;
-    let sectors = vec![
-        SectorSnap {
-            floor_height: 0.0,
-            ceiling_height: 224.0,
-            light_level: light,
-            floor_pic: 0,
-            ceiling_pic: 0,
-        },
-        SectorSnap {
-            floor_height: 48.0,
-            ceiling_height: 176.0,
-            light_level: 150,
-            floor_pic: 1,
-            ceiling_pic: 1,
-        },
-    ];
-
-    // BSP: una partición horizontal en y=MID separa sur (sector 0) de
-    // norte (sector 1). Dos subsectores, cada uno bordeado por sus segs.
-    // Segs del sur (sector 0): muros oeste/este/sur + la partición interna.
-    let segs = vec![
-        // Subsector 0 (sur): bordes contra los muros sur/oeste/este.
-        seg(ROOM, 0.0, 0.0, 0.0, 3),       // sur
-        seg(0.0, 0.0, 0.0, MID, 0),        // oeste-bajo
-        seg(ROOM, MID, ROOM, 0.0, 2),      // este-bajo
-        // Subsector 1 (norte): muros oeste/norte/este altos.
-        seg(0.0, MID, 0.0, ROOM, 0),       // oeste-alto
-        seg(0.0, ROOM, ROOM, ROOM, 1),     // norte
-        seg(ROOM, ROOM, ROOM, MID, 2),     // este-alto
-    ];
-    let subsectors = vec![
-        SubsectorSnap { sector: 0, first_seg: 0, num_segs: 3 },
-        SubsectorSnap { sector: 1, first_seg: 3, num_segs: 3 },
-    ];
-    // Árbol BSP de un solo nodo: partición y=MID, front=sur, back=norte.
-    // side = dx·(py-y) - dy·(px-x); con (x,y)=(0,MID),(dx,dy)=(1,0):
-    // side = py-MID ⇒ sur (py<MID) = back, norte (py>MID) = front. Para que
-    // children[0]=front sea el norte y children[1]=back el sur:
-    let nodes = vec![NodeSnap {
-        partition_x: 0.0,
-        partition_y: MID,
-        partition_dx: 1.0,
-        partition_dy: 0.0,
-        children: [
-            1 | NF_SUBSECTOR as u16, // front (py>MID): subsector 1 (norte)
-            0 | NF_SUBSECTOR as u16, // back  (py<MID): subsector 0 (sur)
-        ],
+    let sectors = vec![SectorSnap {
+        floor_height: 0.0,
+        ceiling_height: 224.0,
+        light_level: light,
+        floor_pic: 0,
+        ceiling_pic: 0,
     }];
 
-    // Dos antorchas (sprite arbitrario) que bobean suave con el tick.
+    // Un subsector convexo (la sala cuadrada) bordeado por sus cuatro segs
+    // ⇒ el renderer pinta piso y techo reales por subsector. Sin nodos: el
+    // ordering de painter cae al euclidiano (correcto con un solo plano).
+    let segs = vec![
+        seg(ROOM, 0.0, 0.0, 0.0, 3),    // sur
+        seg(0.0, 0.0, 0.0, ROOM, 0),    // oeste
+        seg(0.0, ROOM, ROOM, ROOM, 1),  // norte
+        seg(ROOM, ROOM, ROOM, 0.0, 2),  // este
+    ];
+    let subsectors = vec![SubsectorSnap { sector: 0, first_seg: 0, num_segs: 4 }];
+    let nodes: Vec<NodeSnap> = Vec::new();
+
+    // Dos antorchas (sprite arbitrario) que bobean suave con el tick. Bit 7
+    // del frame = FF_FULLBRIGHT ⇒ cuentan como luces del mundo (gather_world_lights)
+    // y por tanto irradian god rays (Fase 3.57). z elevado para que el halo
+    // quede a media pared, no al ras del piso.
     let bob = (t * 2.0).sin() * 4.0;
+    let fb = |f: u64| ((f / 4 % 4) as u8) | 0x80;
     let sprites = vec![
         SpriteSnap {
             x: 120.0,
             y: 300.0,
-            z: bob,
+            z: 80.0 + bob,
             angle: 0.0,
             sprite: 5,
-            frame: (tick / 4 % 4) as u8,
+            frame: fb(tick),
             sector: 0,
         },
         SpriteSnap {
             x: ROOM - 120.0,
             y: 300.0,
-            z: -bob,
+            z: 80.0 - bob,
             angle: 0.0,
             sprite: 7,
-            frame: (tick / 4 % 4) as u8,
+            frame: fb(tick),
             sector: 0,
         },
     ];

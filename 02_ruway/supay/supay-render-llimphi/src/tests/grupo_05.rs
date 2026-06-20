@@ -46,6 +46,41 @@
     }
 
     #[test]
+    fn godray_halo_near_brighter_and_bigger_than_far() {
+        // Fase 3.57 — la luz cercana irradia un halo más grande (radio por
+        // perspectiva focal/x_cam) y más brillante (atenuación por
+        // distancia) que la lejana; una detrás del near plane no da halo.
+        let rect = PaintRect { x: 0.0, y: 0.0, w: 960.0, h: 600.0 };
+        let proj = Projection::new(rect, 75.0_f32.to_radians());
+        let light = |x_cam: f32| WorldLight {
+            x_cam,
+            y_cam: 0.0,
+            z_cam: 0.0,
+            sector: 0,
+            tint_rgb: (255, 220, 140),
+            lit_sectors: None,
+        };
+        let near = godray_halo(&light(100.0), &proj, 4.0, 0.6).expect("cercana da halo");
+        let far = godray_halo(&light(600.0), &proj, 4.0, 0.6).expect("lejana da halo");
+        assert!(
+            near.radius > far.radius,
+            "radio: cercana {} > lejana {}",
+            near.radius,
+            far.radius
+        );
+        assert!(
+            near.alpha > far.alpha,
+            "alpha: cercana {} > lejana {}",
+            near.alpha,
+            far.alpha
+        );
+        // Detrás del near plane ⇒ sin halo.
+        assert!(godray_halo(&light(0.5), &proj, 4.0, 0.6).is_none());
+        // god_rays = 0 ⇒ sin halo aunque esté a la vista.
+        assert!(godray_halo(&light(100.0), &proj, 4.0, 0.0).is_none());
+    }
+
+    #[test]
     fn wall_gradient_colors_top_brighter_than_bottom() {
         // Fase 3.56 — la pared sin textura, en el camino de gradiente
         // vertical, va de más oscuro abajo (piso) a más claro arriba

@@ -275,6 +275,12 @@ pub(crate) fn render_frame(
         }
     }
 
+    // Fase 3.57: god rays volumétricos — resplandor radial aditivo de cada
+    // luz del mundo, sobre la geometría ya rasterizada y bajo el arma. Las
+    // antorchas/lámparas/proyectiles irradian un halo que el ojo lee como
+    // aire iluminado. `cfg.god_rays == 0` ⇒ no-op.
+    draw_god_rays(scene, rect, &proj, world_lights_ref, cfg);
+
     // Fase 3.15: sprite del arma del jugador (pistol/shotgun/etc.) —
     // pintado *encima* de la escena 3D pero *debajo* del overlay de
     // PLAYPAL (porque los damage flashes en Doom tintan el arma también).

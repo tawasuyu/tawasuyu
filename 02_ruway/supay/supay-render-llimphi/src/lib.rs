@@ -93,6 +93,7 @@ mod planes;
 mod sprites;
 mod palette;
 mod hud;
+mod godrays;
 
 pub use atlas::*;
 pub use config::*;
@@ -104,6 +105,7 @@ pub(crate) use planes::*;
 pub(crate) use sprites::*;
 pub(crate) use palette::*;
 pub(crate) use hud::*;
+pub(crate) use godrays::*;
 
 #[cfg(test)]
 mod tests;

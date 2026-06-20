@@ -78,6 +78,13 @@ pub struct RenderConfig {
     /// lejano del centro. Pintada antes que el crosshair y los overlays
     /// para que las flashes de damage la cubran.
     pub vignette: f32,
+    /// **Fase 3.57 — god rays volumétricos**. Fuerza del resplandor radial
+    /// aditivo alrededor de cada luz del mundo (sprite full-bright:
+    /// antorcha, lámpara, proyectil). `0.0` = off (sin capa, sin costo);
+    /// `1.0` = halo marcado. Default `0.6`: el aire alrededor del foco se
+    /// ilumina sin lavar la escena. Perceptual puro — no toca geometría ni
+    /// timing. Se pinta tras la geometría y bajo el arma/overlays.
+    pub god_rays: f32,
     /// **Fase 3.20 — HUD inferior**. Si `true`, pinta una banda slim al
     /// pie del viewport con health/armor/ammo/keys leídos del
     /// `PlayerStats` del snapshot. Modernización de la status bar
@@ -290,6 +297,7 @@ impl Default for RenderConfig {
             atlas: None,
             crosshair: true,
             vignette: 0.55,
+            god_rays: 0.6,
             hud: true,
             sprite_shadows: true,
             muzzle_glow_alpha: 0.0,
