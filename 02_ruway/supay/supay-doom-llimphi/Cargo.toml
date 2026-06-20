@@ -31,7 +31,14 @@ rimay-localize = { path = "../../../shared/rimay-localize" }
 # renderer produce sin levantar ventana ni event loop.
 png = { workspace = true }
 pollster = { workspace = true }
+# Escena sintética construida a mano (examples/pantallazo_synth.rs) para ver
+# el renderer sin doom1.wad ni el motor C.
+supay-scene = { path = "../supay-scene" }
 
 [[example]]
 name = "dump_frame"
 path = "examples/dump_frame.rs"
+
+[[example]]
+name = "pantallazo_synth"
+path = "examples/pantallazo_synth.rs"
