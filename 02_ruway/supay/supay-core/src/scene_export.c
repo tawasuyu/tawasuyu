@@ -355,11 +355,20 @@ static int supay_mobj_cache_len = 0;
 
 static void supay_mobj_cache_rebuild(void) {
     supay_mobj_cache_len = 0;
+    /* El cuerpo del propio jugador (`players[consoleplayer].mo`) es un mobj
+     * (sprite PLAY) en la posición exacta de la cámara. Doom NUNCA lo dibuja
+     * desde la vista en primera persona; si lo exportamos, el renderer 3D lo
+     * billboardea a distancia 0 → una caja gigante tapando la pantalla. Lo
+     * excluimos, igual que `R_DrawPlayerSprites` vs el mundo en Doom. */
+    mobj_t *player_mo = players[consoleplayer].mo;
     thinker_t *th = thinkercap.next;
     while (th && th != &thinkercap
            && supay_mobj_cache_len < SUPAY_MOBJ_CACHE_CAP) {
         if (th->function.acp1 == (actionf_p1)P_MobjThinker) {
-            supay_mobj_cache[supay_mobj_cache_len++] = (mobj_t *)th;
+            mobj_t *mo = (mobj_t *)th;
+            if (mo != player_mo) {
+                supay_mobj_cache[supay_mobj_cache_len++] = mo;
+            }
         }
         th = th->next;
     }

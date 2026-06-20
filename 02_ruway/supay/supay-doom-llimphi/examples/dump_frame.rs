@@ -110,6 +110,31 @@ fn main() {
         snap = engine.capture_scene(ticks + turn_n + t + 1);
     }
     engine.push_key(false, supay_core::keys::KEY_UPARROW);
+    // Registrar los nombres de TODOS los flats del snapshot final — los
+    // sectores que entraron en vista durante el giro/avance no se
+    // registraron en el loop de asentamiento, y sin nombre `flat_color` cae
+    // a la paleta sintética (un piso pintado de marrón fuera de lugar — la
+    // "caja"). Espeja lo que el host hace cada tick.
+    for sec in snap.sectors.iter() {
+        for pic in [sec.floor_pic, sec.ceiling_pic] {
+            if known_flats.insert(pic) {
+                if let Some(name) = engine.flat_name(pic) {
+                    atlas.set_flat_name(pic, name);
+                }
+            }
+        }
+    }
+    // Registrar los nombres de TODOS los sprites del snapshot final — los que
+    // entraron en vista durante el giro/avance no se registraron en el loop
+    // de asentamiento, y sin nombre `gather_sprite` cae al billboard sólido
+    // de color (la "caja" tapa-todo). Espeja lo que el host hace cada tick.
+    for spr in snap.sprites.iter() {
+        if known_sprites.insert(spr.sprite) {
+            if let Some(name) = engine.sprite_name(spr.sprite) {
+                atlas.set_sprite_name(spr.sprite, name);
+            }
+        }
+    }
     // Fase 3.59: registrar el nombre del sprite del arma en mano (no está en
     // snap.sprites) para que draw_weapon_sprite resuelva su patch.
     for ws in [
@@ -124,6 +149,10 @@ fn main() {
                 atlas.set_sprite_name(ws, name);
             }
         }
+    }
+    if std::env::var("SUPAY_NO_SPRITES").is_ok() {
+        snap.sprites = std::sync::Arc::from(Vec::new());
+        eprintln!("dump_frame: SUPAY_NO_SPRITES — sprites del mundo vaciados");
     }
     eprintln!(
         "dump_frame: tick {ticks} — jugador en ({:.0},{:.0}) ang {:.2}; {} sectores, {} paredes, {} subsectores, {} sprites, {} nodos BSP",
@@ -163,6 +192,7 @@ fn main() {
         wall_vertical_gradient: true,
         plane_depth_gradient: true,
         occlusion_cull,
+        bsp_floor_cells: std::env::var("SUPAY_NO_CELLS").is_err(),
         ..RenderConfig::default()
     };
 
