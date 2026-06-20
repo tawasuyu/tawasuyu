@@ -65,14 +65,30 @@ fn markers_in(dir: &str) -> Vec<String> {
 /// crezca el historial total.
 const PATTERN_HISTORY_WINDOW: usize = 1500;
 
-/// Construye los `CommandRecord` de `shuma-infer` a partir del historial
-/// reciente (éxito = exit 0).
-fn infer_records(s: &State) -> Vec<shuma_infer::CommandRecord> {
+/// Cola de la sesión que mira `predict_next` para anticipar la próxima línea.
+/// Las firmas de patrón llegan a `max_len` (5), así que con la última decena
+/// alcanza; parsear sólo esto evita reconstruir el corpus entero en cada render
+/// (el ghost se recalcula por frame).
+const PREDICT_TAIL: usize = 12;
+
+/// Ventana reciente del historial que alimenta el corpus del **ghost** (la
+/// sugerencia inline de la línea). `ghost_suggestion` devuelve la PRIMERA
+/// coincidencia, y el corpus va de más reciente a más viejo: una línea fuera de
+/// esta ventana sólo ghostearía si no hubo ninguna más nueva con ese prefijo —
+/// caso de bajísimo valor. Acotar evita clonar todo el historial por frame.
+const GHOST_CORPUS_WINDOW: usize = 2000;
+
+/// Construye los `CommandRecord` de `shuma-infer` a partir de las últimas
+/// `window` entradas del historial (éxito = exit 0). Acotar el `window` mantiene
+/// el costo constante por más que el historial total crezca; los consumidores
+/// piden el corpus que necesitan (la minería de patrones, [`PATTERN_HISTORY_WINDOW`];
+/// la predicción de la próxima línea, sólo la cola).
+fn infer_records(s: &State, window: usize) -> Vec<shuma_infer::CommandRecord> {
     let Ok(history) = s.history.lock() else {
         return Vec::new();
     };
     let entries = history.entries();
-    let recent = &entries[entries.len().saturating_sub(PATTERN_HISTORY_WINDOW)..];
+    let recent = &entries[entries.len().saturating_sub(window)..];
     recent
         .iter()
         // El historial Llimphi aún no graba el exit (siempre `None`):
@@ -89,7 +105,7 @@ fn infer_records(s: &State) -> Vec<shuma_infer::CommandRecord> {
 /// Recalcula los patrones emergentes del historial y los cachea en el
 /// state. Se llama al cerrar cada comando (cuando el historial creció).
 pub(crate) fn refresh_patterns(s: &mut State) {
-    let records = infer_records(s);
+    let records = infer_records(s, PATTERN_HISTORY_WINDOW);
     s.patterns = shuma_infer::detect_patterns(&records, &shuma_infer::InferConfig::default());
 }
 
@@ -331,9 +347,10 @@ pub(crate) fn predicted_sequence(s: &State) -> Option<String> {
     if s.patterns.is_empty() {
         return None;
     }
-    let records = infer_records(s);
-    let tail = &records[records.len().saturating_sub(6)..];
-    let (pi, next) = shuma_infer::predict_next(tail, &s.patterns)?;
+    // `predict_next` sólo mira la cola de la sesión (los últimos comandos): no
+    // hace falta reconstruir todo el corpus, sólo esa cola.
+    let tail = infer_records(s, PREDICT_TAIL);
+    let (pi, next) = shuma_infer::predict_next(&tail, &s.patterns)?;
     if next.is_empty() {
         return None;
     }
@@ -505,7 +522,11 @@ pub(crate) fn current_ghost(s: &State) -> Option<String> {
         let base = s.cwd.to_string_lossy();
         let mut local: Vec<String> = Vec::new();
         let mut global: Vec<String> = Vec::new();
-        for e in history.entries().iter().rev() {
+        // Sólo la ventana reciente: `current_ghost` corre por frame, así que
+        // clonar todo el historial sería O(N) por render.
+        let entries = history.entries();
+        let recent = &entries[entries.len().saturating_sub(GHOST_CORPUS_WINDOW)..];
+        for e in recent.iter().rev() {
             if cwd_within(&e.cwd, &base) {
                 local.push(e.line.clone());
             } else {

@@ -858,6 +858,39 @@
     }
 
     #[test]
+    fn ghost_corpus_is_bounded_to_recent_window() {
+        // `current_ghost` corre por frame; el corpus se acota a la ventana
+        // reciente para no clonar todo el historial. Verificamos el límite: una
+        // coincidencia que quedó FUERA de la ventana ya no ghostea; una dentro sí.
+        let mut s = State::new(Source::Local);
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
+        s.cwd = PathBuf::from("/");
+        {
+            let mut h = s.history.lock().unwrap();
+            // Única coincidencia, al principio del todo.
+            let _ = h.append(shuma_history::Entry::new("zzfantasma --bandera", "/", 0));
+            // Relleno que la empuja fuera de la ventana del ghost (2000).
+            for i in 0..2200u32 {
+                let _ = h.append(shuma_history::Entry::new(format!("relleno{i}"), "/", 0));
+            }
+        }
+        s.input.set_text("zzfantasma");
+        assert_eq!(
+            current_ghost(&s),
+            None,
+            "una coincidencia fuera de la ventana no debe ghostear"
+        );
+        // La misma línea, ahora reciente, sí ghostea.
+        {
+            let mut h = s.history.lock().unwrap();
+            let _ = h.append(shuma_history::Entry::new("zzfantasma --bandera", "/", 0));
+        }
+        assert_eq!(current_ghost(&s).as_deref(), Some(" --bandera"));
+    }
+
+    #[test]
     fn completion_arrows_cycle_both_ways() {
         let mut s = State::new(Source::Local);
         s.completion = Some(fake_completion(&["a", "b", "c"], 0, 0));
