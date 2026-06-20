@@ -225,6 +225,24 @@ pub fn new_model() -> Model {
         sessions.push(sess);
     }
 
+    // Handoff de desacople (botón Undock de pata): si `SHUMA_HANDOFF` apunta a
+    // un snapshot de salida, rehidratarlo en la sesión draft y abrir directo en
+    // ella. Es la otra mitad del "mover de verdad" — pata serializa la sesión
+    // embebida, nos la pasa, y la cierra de su lado, así no queda duplicada.
+    // El cwd ya llega por `SHUMA_CWD`/`cd` y el historial por la history
+    // persistente compartida; esto suma el scrollback visible. Consumimos el
+    // archivo para que no se re-aplique si reabrís shuma.
+    let mut handoff_active: Option<usize> = None;
+    if let Ok(path) = std::env::var("SHUMA_HANDOFF") {
+        if let Some(snap) = persist::load_output_snapshot_file(&path) {
+            if let ModuleState::Shell(st) = &mut sessions[0].shell_mut().state {
+                st.restore_output(snap);
+                handoff_active = Some(0);
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
     // Grupos de environment: cargar env.json (garantizando el grupo «general»,
     // destino del builtin `:env`) y aplicar los activos al proceso — los shells
     // hijos los heredan.
@@ -241,7 +259,10 @@ pub fn new_model() -> Model {
     let env_groups_mtime = persist::env_groups_mtime();
 
     let chrome = load_chrome();
-    let active_session = chrome.active_session.min(sessions.len().saturating_sub(1));
+    // Si vino un handoff de desacople, abrimos en esa sesión; si no, la última
+    // activa persistida.
+    let active_session = handoff_active
+        .unwrap_or_else(|| chrome.active_session.min(sessions.len().saturating_sub(1)));
 
     let mut model = Model {
         theme,

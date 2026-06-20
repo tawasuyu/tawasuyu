@@ -317,6 +317,41 @@ pub fn spawn_cmd(cmd: &str) {
     let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
 }
 
+/// Desacopla ("mover de verdad") la sesión embebida del shell a un shuma
+/// standalone: serializa su salida visible a un archivo de handoff, lanza shuma
+/// apuntándole `SHUMA_HANDOFF` + `SHUMA_CWD`, y deja la sesión embebida en
+/// limpio (es un *mover*, no copiar — ya no queda duplicada). El cwd y el
+/// historial de comandos viajan solos (la history es persistente y compartida;
+/// el `cd` fija el directorio); este handoff suma además el scrollback. No migra
+/// el PTY vivo: un proceso corriendo no salta de proceso.
+pub(crate) fn undock_shuma_session(inner: &mut shuma_module_shell::State) {
+    let cwd = inner.cwd.display().to_string();
+    let q = shell_quote(&cwd);
+    // Snapshot de la salida vigente a un temporal único; si está vacía, sin
+    // handoff (el standalone abre limpio igual).
+    let mut handoff_env = String::new();
+    let snap = inner.output_snapshot(4000);
+    if !snap.lines.is_empty() {
+        if let Ok(json) = serde_json::to_string(&snap) {
+            let path = std::env::temp_dir().join(format!(
+                "shuma-handoff-{}-{}.json",
+                std::process::id(),
+                inner.output_len()
+            ));
+            if std::fs::write(&path, json).is_ok() {
+                handoff_env =
+                    format!("SHUMA_HANDOFF={} ", shell_quote(&path.display().to_string()));
+            }
+        }
+    }
+    spawn_cmd(&format!(
+        "cd {q} 2>/dev/null; {handoff_env}SHUMA_CWD={q} exec shuma-shell-llimphi"
+    ));
+    // Mover, no copiar: la sesión embebida arranca limpia (su contenido se fue
+    // al standalone).
+    *inner = shuma_module_shell::State::new(shuma_module::Source::Local);
+}
+
 /// Ejecuta un [`nahual_module::Effect`] del módulo hospedado: el host tiene el
 /// `Handle` (para spawnear la generación de miniaturas) y el registro de apps
 /// (para lanzar). Las miniaturas reentran como `Msg::Nahual(ThumbReady/Failed)`.
@@ -1051,14 +1086,11 @@ impl App for PataApp {
                 model.shuma.maximized = !model.shuma.maximized;
             }
             Msg::ShumaUndock => {
-                // Lanza shuma standalone en el mismo directorio y repliega el
-                // drawer. La sesión standalone arranca limpia en ese cwd (no se
-                // migra el historial/PTY vivo — eso requeriría IPC entre procesos).
-                let cwd = model.shuma.inner.cwd.display().to_string();
-                // `cd` real al cwd del shell (el hijo hereda el cwd de pata, no el
-                // del shell); SHUMA_CWD queda también por si shuma lo consulta.
-                let q = shell_quote(&cwd);
-                spawn_cmd(&format!("cd {q} 2>/dev/null; SHUMA_CWD={q} exec shuma-shell-llimphi"));
+                // Desacople real ("mover de verdad"): la sesión embebida se va a
+                // un shuma standalone —con su scrollback vía handoff, cwd e
+                // historial incluidos— y el drawer queda en limpio. Ya no
+                // duplica ni deja la sesión colgada en la barra.
+                undock_shuma_session(&mut model.shuma.inner);
                 model.shuma.maximized = false;
                 if model.shuma.open {
                     model.shuma.open = false;

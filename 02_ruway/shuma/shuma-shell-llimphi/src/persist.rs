@@ -65,6 +65,15 @@ pub(crate) fn load_session_output(name: &str) -> Option<shuma_module_shell::Outp
     serde_json::from_str(&text).ok()
 }
 
+/// Lee un snapshot de salida desde una ruta arbitraria — el archivo de handoff
+/// que escribe `pata` al desacoplar ("mover de verdad") una sesión a un shuma
+/// standalone. Distinto de [`load_session_output`], que resuelve la ruta por
+/// nombre de sesión persistida.
+pub(crate) fn load_output_snapshot_file(path: &str) -> Option<shuma_module_shell::OutputSnapshot> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// Borra el output persistido (al apagar el flag o cerrar la sesión).
 pub(crate) fn remove_session_output(name: &str) {
     if let Some(p) = session_output_path(name) {

@@ -880,13 +880,10 @@ impl LayerApp {
                 self.marcar_shuma_dirty();
             }
             Msg::ShumaUndock => {
-                // Abre la sesión en una shuma standalone (mismo cwd) y repliega
-                // el drawer. El hijo hereda el cwd de pata, así que `cd` explícito.
-                let cwd = self.shuma.inner.cwd.display().to_string();
-                let q = crate::shell_quote(&cwd);
-                crate::spawn_cmd(&format!(
-                    "cd {q} 2>/dev/null; SHUMA_CWD={q} exec shuma-shell-llimphi"
-                ));
+                // Desacople real ("mover de verdad"): la sesión embebida se va a
+                // un shuma standalone con su scrollback (handoff), cwd e
+                // historial, y el drawer queda en limpio — ya no duplica.
+                crate::undock_shuma_session(&mut self.shuma.inner);
                 self.set_shuma_open(false);
             }
             Msg::ShumaShell(m) => {
