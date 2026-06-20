@@ -274,6 +274,14 @@ pub struct SegSnap {
     /// cercanas. En modo stub (sin BSP) no hay segs, así que el flag
     /// nunca se evalúa.
     pub solid: bool,
+    /// **Fase 3.55** — índice de la linedef (`SceneSnapshot::walls`) a la
+    /// que pertenece este seg. Un linedef se subdivide en uno o más segs
+    /// repartidos entre subsectores por los splits del BSP; este campo
+    /// permite mapear la oclusión calculada a nivel de seg de vuelta a la
+    /// pared completa. Lo usa el occlusion culling de paredes: una pared se
+    /// descarta sólo si TODOS sus segs quedaron ocluidos. En modo stub (sin
+    /// BSP) no hay segs, así que el campo nunca se evalúa.
+    pub linedef: u32,
 }
 
 /// Flag de Doom: si un `NodeSnap::children[i]` tiene este bit set, el

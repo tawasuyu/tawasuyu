@@ -1052,10 +1052,10 @@
             SubsectorSnap { sector: 0, first_seg: 1, num_segs: 1 },
         ]);
         snap.segs = Arc::from(vec![
-            // Pared de A: cruza todo el campo de visión frontal.
-            SegSnap { x1: 100.0, y1: -60.0, x2: 100.0, y2: 60.0, solid: a_solid },
-            // Seg de B: angosto, detrás de A (su span cae dentro del de A).
-            SegSnap { x1: 200.0, y1: -30.0, x2: 200.0, y2: 30.0, solid: false },
+            // Pared de A: cruza todo el campo de visión frontal (linedef 0).
+            SegSnap { x1: 100.0, y1: -60.0, x2: 100.0, y2: 60.0, solid: a_solid, linedef: 0 },
+            // Seg de B: angosto, detrás de A (su span cae dentro del de A; linedef 1).
+            SegSnap { x1: 200.0, y1: -30.0, x2: 200.0, y2: 30.0, solid: false, linedef: 1 },
         ]);
         // Partición vertical a X=150: viewer en origen (X=0 < 150) cae al
         // front (children[0]) ⇒ A es near, B es far.
@@ -1109,4 +1109,83 @@
         let cam = Camera::new(0.0, 0.0, 40.0, std::f32::consts::PI);
         let vis = compute_visible_subsectors(&snap, &cam, 4.0).expect("hay BSP");
         assert!(vis[0] && vis[1], "nada se descarta mirando al lado opuesto");
+    }
+
+    // =================================================================
+    // Fase 3.55 — Occlusion culling de paredes completas (linedefs)
+    // =================================================================
+
+    /// Igual que [`two_subsector_occlusion_snap`] pero además puebla
+    /// `snap.walls` con dos linedefs (0 = pared de A, 1 = pared de B) y
+    /// referencia cada seg a su linedef vía `SegSnap::linedef`. Permite
+    /// ejercitar el culling de paredes de la Fase 3.55.
+    fn two_wall_occlusion_snap(a_solid: bool) -> SceneSnapshot {
+        let mut snap = two_subsector_occlusion_snap(a_solid);
+        let mk_wall = |x1: f32, y1: f32, x2: f32, y2: f32, back: u32| WallSeg {
+            x1, y1, x2, y2,
+            front_sector: 0,
+            back_sector: back,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        };
+        snap.walls = Arc::from(vec![
+            // Linedef 0 = pared de A (cercana).
+            mk_wall(100.0, -60.0, 100.0, 60.0, if a_solid { NO_SECTOR } else { 0 }),
+            // Linedef 1 = pared de B (lejana, detrás de A).
+            mk_wall(200.0, -30.0, 200.0, 30.0, 0),
+        ]);
+        snap
+    }
+
+    #[test]
+    fn cull_hides_wall_behind_solid_wall() {
+        // La pared lejana (linedef 1) queda angularmente tapada por la
+        // pared sólida cercana (linedef 0) → se descarta; la cercana queda.
+        let snap = two_wall_occlusion_snap(true);
+        let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
+        let vis = compute_visibility(&snap, &cam, 4.0).expect("hay BSP");
+        assert_eq!(vis.walls.len(), 2);
+        assert!(vis.walls[0], "la pared cercana es visible (es el bloqueador)");
+        assert!(!vis.walls[1], "la pared lejana tapada se descarta");
+    }
+
+    #[test]
+    fn portal_does_not_cull_far_wall() {
+        // Con la pared de A como portal (no ocluye), la pared lejana
+        // permanece visible.
+        let snap = two_wall_occlusion_snap(false);
+        let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
+        let vis = compute_visibility(&snap, &cam, 4.0).expect("hay BSP");
+        assert!(vis.walls[0] && vis.walls[1], "ninguna pared se descarta");
+    }
+
+    #[test]
+    fn wall_visible_when_any_seg_unoccluded() {
+        // Si un linedef aporta dos segs y sólo uno queda tapado, la pared
+        // se conserva (basta un seg visible). Reasignamos ambos segs al
+        // linedef 1: el seg cercano (A, no tapado) lo mantiene visible
+        // pese a que el lejano sí caería en zona ocluida.
+        let mut snap = two_wall_occlusion_snap(true);
+        let mut segs: Vec<SegSnap> = snap.segs.to_vec();
+        for s in &mut segs {
+            s.linedef = 1; // ambos segs pertenecen ahora al linedef 1.
+        }
+        snap.segs = Arc::from(segs);
+        let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
+        let vis = compute_visibility(&snap, &cam, 4.0).expect("hay BSP");
+        assert!(
+            vis.walls[1],
+            "el linedef 1 conserva visibilidad porque su seg cercano no está tapado"
+        );
+    }
+
+    #[test]
+    fn wall_cull_none_without_bsp() {
+        // Sin BSP (modo stub) no hay culling de paredes → compute_visibility
+        // devuelve None (el caller pinta todas las paredes).
+        let snap = SceneSnapshot::empty(0);
+        let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
+        assert!(compute_visibility(&snap, &cam, 4.0).is_none());
     }

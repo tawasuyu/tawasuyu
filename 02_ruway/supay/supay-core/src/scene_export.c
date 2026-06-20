@@ -403,7 +403,7 @@ int supay_scene_num_segs(void) {
 
 int supay_scene_seg(int i,
                     float *x1, float *y1, float *x2, float *y2,
-                    int *solid) {
+                    int *solid, uint32_t *linedef) {
     if (i < 0 || i >= numsegs || !segs) {
         return 0;
     }
@@ -416,6 +416,10 @@ int supay_scene_seg(int i,
      * ocluyen visión por completo; el culling por subsector los usa como
      * bloqueadores. Los portales two-sided dejan ver detrás. */
     *solid = (s->backsector == NULL) ? 1 : 0;
+    /* Fase 3.55: índice de la linedef del seg, para mapear la oclusión por
+     * seg de vuelta a la pared completa (`lines[]` y `SceneSnapshot::walls`
+     * comparten orden). Todo seg deriva de una linedef. */
+    *linedef = s->linedef ? (uint32_t)(s->linedef - lines) : 0xFFFFFFFFu;
     return 1;
 }
 

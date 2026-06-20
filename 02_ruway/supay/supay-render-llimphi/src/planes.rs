@@ -348,25 +348,52 @@ fn add_subsector_occluders(
     }
 }
 
-/// **Fase 3.54** — calcula, por subsector, si es visible desde la cámara
-/// tras descartar los tapados por paredes sólidas más cercanas. Devuelve
+/// **Fase 3.55** — resultado del paseo de oclusión front-to-back: qué
+/// subsectores y qué paredes (linedefs) quedan visibles tras descartar lo
+/// tapado por muros sólidos más cercanos.
+pub(crate) struct Visibility {
+    /// `subs[ss] == false` ⇒ subsector tapado: saltar sus polígonos de
+    /// piso/techo y los sprites cuyo punto cae en él. Indexado por subsector.
+    pub subs: Vec<bool>,
+    /// `walls[w] == false` ⇒ linedef `w` íntegramente tapada: saltar su
+    /// `gather_wall` (slabs + strips). Indexado por índice de linedef, que
+    /// coincide con el índice en [`SceneSnapshot::walls`].
+    pub walls: Vec<bool>,
+}
+
+/// **Fase 3.54 + 3.55** — calcula la visibilidad de subsectores **y** de
+/// paredes completas en un único paseo front-to-back del BSP. Devuelve
 /// `None` si el snapshot no tiene BSP (modo stub) — el caller trata todo
 /// como visible (comportamiento histórico).
 ///
-/// El bit `visible[ss] == false` autoriza a saltar los polígonos de plano
-/// del subsector `ss` y los sprites cuyo punto cae en él. Las paredes no
-/// se descartan (son los propios bloqueadores y su costo es menor).
-pub(crate) fn compute_visible_subsectors(
+/// El subsector se descarta si su span angular cae dentro de lo ya ocluido
+/// (Fase 3.54). La pared se descarta sólo si **todos** sus segs quedaron
+/// angularmente tapados por muros sólidos estrictamente más cercanos (Fase
+/// 3.55): un linedef se reparte en uno o más segs entre subsectores, y
+/// basta con que un seg caiga en zona visible para conservar la pared.
+///
+/// **Conservador por diseño** (igual que 3.54): la oclusión de cada seg se
+/// testea *antes* de sumar los bloqueadores de su propio subsector, así un
+/// seg nunca se ocluye por una pared a su misma profundidad; y un extremo
+/// detrás del near plane vuelve el span no confiable → el seg cuenta como
+/// no ocluido (lado seguro, nunca sobre-descarta).
+pub(crate) fn compute_visibility(
     snap: &SceneSnapshot,
     cam: &Camera,
     near: f32,
-) -> Option<Vec<bool>> {
+) -> Option<Visibility> {
     if snap.nodes.is_empty() || snap.subsectors.is_empty() || snap.segs.is_empty() {
         return None;
     }
-    let n = snap.subsectors.len();
-    let mut visible = vec![true; n];
-    let mut order: Vec<u32> = Vec::with_capacity(n);
+    let n_sub = snap.subsectors.len();
+    let n_wall = snap.walls.len();
+    let mut subs = vec![true; n_sub];
+    // Conteo por pared: cuántos segs aporta y cuántos quedaron ocluidos.
+    // Cull sólo cuando total > 0 && ocluidos == total.
+    let mut seg_total = vec![0u32; n_wall];
+    let mut seg_occ = vec![0u32; n_wall];
+
+    let mut order: Vec<u32> = Vec::with_capacity(n_sub);
     let root = (snap.nodes.len() - 1) as u16;
     walk_bsp_front_to_back(&snap.nodes, root, cam.px, cam.py, &mut order);
 
@@ -375,20 +402,68 @@ pub(crate) fn compute_visible_subsectors(
         let Some(sub) = snap.subsectors.get(ss as usize) else {
             continue;
         };
-        // 1. Testear visibilidad contra lo ya ocluido por subsectores más
-        //    cercanos. Sólo descartar con span confiable + margen.
+        // 1. Visibilidad del subsector contra lo ya ocluido por subsectores
+        //    más cercanos. Sólo descartar con span confiable + margen.
         if let Some((lo, hi)) = subsector_angular_span(sub, snap, cam, near) {
             if occ.covers(lo - CULL_ANGLE_MARGIN, hi + CULL_ANGLE_MARGIN) {
-                if let Some(slot) = visible.get_mut(ss as usize) {
+                if let Some(slot) = subs.get_mut(ss as usize) {
                     *slot = false;
                 }
             }
         }
-        // 2. Aportar las paredes sólidas de este subsector como nuevos
+        // 2. Oclusión por seg → pared. Antes de aportar los bloqueadores de
+        //    este subsector (ver nota de conservadurismo en el docstring).
+        let first = sub.first_seg as usize;
+        let count = sub.num_segs as usize;
+        if let Some(seg_slice) = snap.segs.get(first..first + count) {
+            for s in seg_slice {
+                let w = s.linedef as usize;
+                if w >= n_wall {
+                    continue; // linedef fuera de rango (sentinel) → no cuenta.
+                }
+                seg_total[w] += 1;
+                if let Some((lo, hi)) = seg_angular_span(s, cam, near) {
+                    if occ.covers(lo - CULL_ANGLE_MARGIN, hi + CULL_ANGLE_MARGIN) {
+                        seg_occ[w] += 1;
+                    }
+                }
+            }
+        }
+        // 3. Aportar las paredes sólidas de este subsector como nuevos
         //    bloqueadores para los subsectores que vienen detrás.
         add_subsector_occluders(sub, snap, cam, near, &mut occ);
     }
-    Some(visible)
+
+    let walls = (0..n_wall)
+        .map(|w| !(seg_total[w] > 0 && seg_occ[w] == seg_total[w]))
+        .collect();
+    Some(Visibility { subs, walls })
+}
+
+/// **Fase 3.54** — variante histórica que devuelve sólo la visibilidad de
+/// subsectores. Delega en [`compute_visibility`]; se conserva por los tests
+/// y como API simple para callers que no necesitan el culling de paredes.
+pub(crate) fn compute_visible_subsectors(
+    snap: &SceneSnapshot,
+    cam: &Camera,
+    near: f32,
+) -> Option<Vec<bool>> {
+    compute_visibility(snap, cam, near).map(|v| v.subs)
+}
+
+/// Span angular `[min, max]` (rad, cam-space) de un único seg, o `None` si
+/// algún extremo cae detrás del near plane (span no confiable → el seg se
+/// trata como no ocluido, lado seguro). Análogo a
+/// [`subsector_angular_span`] pero para un seg suelto.
+fn seg_angular_span(s: &SegSnap, cam: &Camera, near: f32) -> Option<(f32, f32)> {
+    let (x1, y1) = cam.to_cam_2d(s.x1, s.y1);
+    let (x2, y2) = cam.to_cam_2d(s.x2, s.y2);
+    if x1 <= near || x2 <= near {
+        return None;
+    }
+    let a1 = y1.atan2(x1);
+    let a2 = y2.atan2(x2);
+    Some((a1.min(a2), a1.max(a2)))
 }
 
 #[allow(clippy::too_many_arguments)]

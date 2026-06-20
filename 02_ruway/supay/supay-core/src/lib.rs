@@ -249,6 +249,7 @@ extern "C" {
         x2: *mut f32,
         y2: *mut f32,
         solid: *mut std::ffi::c_int,
+        linedef: *mut u32,
     ) -> std::ffi::c_int;
     fn supay_scene_sky_pic() -> u16;
     /// Resuelve un `pic_idx` (índice de flat) al nombre del lump.
@@ -928,6 +929,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         let mut x2 = 0.0_f32;
         let mut y2 = 0.0_f32;
         let mut solid = 0_i32;
+        let mut linedef = 0_u32;
         // SAFETY: idem.
         let ok = unsafe {
             supay_scene_seg(
@@ -937,6 +939,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
                 &mut x2,
                 &mut y2,
                 &mut solid,
+                &mut linedef,
             )
         };
         if ok != 0 {
@@ -946,6 +949,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
                 x2,
                 y2,
                 solid: solid != 0,
+                linedef,
             });
         }
     }
