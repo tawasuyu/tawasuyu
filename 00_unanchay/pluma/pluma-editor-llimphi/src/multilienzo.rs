@@ -55,6 +55,16 @@ pub struct MultilienzoConfig {
     /// Tamaño de fuente del preview de párrafo dentro de cada bloque, en px.
     /// La cabecera de columna usa ~0.85 de este valor.
     pub font_size: f32,
+    /// Si se pinta el **flujo** animado sobre las hebras frescas: pulsos
+    /// brillantes que viajan de la columna madre a la hija, como corriente
+    /// eléctrica o fluido recorriendo el haz. Opt-in: el default es `false`
+    /// para que los renders estáticos queden idénticos.
+    pub mostrar_flujo: bool,
+    /// Fase del flujo en `[0, 1)`: dónde están los pulsos a lo largo de la
+    /// hebra en este frame. La app la avanza ~`dt/periodo` por tick (vía
+    /// `llimphi-motion`) y la envuelve con `rem_euclid(1.0)`. Sólo se usa
+    /// cuando `mostrar_flujo` está activo.
+    pub fase_flujo: f32,
 }
 
 impl Default for MultilienzoConfig {
@@ -68,6 +78,8 @@ impl Default for MultilienzoConfig {
             alto_header: 28.0,
             grosor_hebra: 2.0,
             font_size: 13.0,
+            mostrar_flujo: false,
+            fase_flujo: 0.0,
         }
     }
 }
@@ -92,6 +104,8 @@ impl MultilienzoConfig {
             // un trazo proporcional al zoom se vería tosco al ampliar.
             padding_top: base.padding_top,
             grosor_hebra: base.grosor_hebra * (1.0 + (e - 1.0) * 0.5),
+            mostrar_flujo: base.mostrar_flujo,
+            fase_flujo: base.fase_flujo,
         }
     }
 }
@@ -454,6 +468,10 @@ fn carril_hebras<Msg: Clone + 'static>(
         None => Vec::new(),
     };
     let grosor = cfg.grosor_hebra;
+    let mostrar_flujo = cfg.mostrar_flujo;
+    // Fase normalizada a [0, 1): los pulsos avanzan al subir; la app la
+    // hace girar con `rem_euclid` desde un acumulador de tiempo.
+    let fase = cfg.fase_flujo.rem_euclid(1.0) as f64;
 
     let nodo = View::new(Style {
         size: Size {
@@ -508,6 +526,72 @@ fn carril_hebras<Msg: Clone + 'static>(
             let r = (ancho * 0.85 + 1.4).max(2.0);
             scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &Circle::new((x0, y0), r));
             scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &Circle::new((x1, y1), r));
+
+            // --- Flujo: pulsos viajeros madre→hija sobre la hebra fresca.
+            // Cada pulso es un disco brillante (núcleo claro + halo) que
+            // recorre la curva-S de izquierda a derecha; varios espaciados
+            // dan la lectura de "corriente"/"fluido" recorriendo el haz.
+            // Las hebras stale/punteadas no fluyen (no transmiten nada). ---
+            if mostrar_flujo && !h.punteada {
+                // Evalúa el cubic Bézier (P0, C1, C2, P3) en t ∈ [0,1].
+                let bezier = |t: f64| -> (f64, f64) {
+                    let u = 1.0 - t;
+                    let (cx1, cy1) = (x0 + tirante, y0);
+                    let (cx2, cy2) = (x1 - tirante, y1);
+                    let bx = u * u * u * x0
+                        + 3.0 * u * u * t * cx1
+                        + 3.0 * u * t * t * cx2
+                        + t * t * t * x1;
+                    let by = u * u * u * y0
+                        + 3.0 * u * u * t * cy1
+                        + 3.0 * u * t * t * cy2
+                        + t * t * t * y1;
+                    (bx, by)
+                };
+                const PULSOS: usize = 3; // cuántas "cargas" simultáneas por hebra
+                const COLA: usize = 4; // muestras de estela detrás de cada cabeza
+                let nucleo = aclarar(h.color, 0.65); // casi blanco, alpha pleno
+                let r_cabeza = (ancho * 1.15 + 1.6).max(2.6);
+                for k in 0..PULSOS {
+                    let cabeza = (fase + k as f64 / PULSOS as f64).rem_euclid(1.0);
+                    // Halo amplio y translúcido alrededor de la cabeza: el
+                    // "brillo" que delata la carga sin blur real.
+                    let (hx, hy) = bezier(cabeza);
+                    scene.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        atenuar_alpha(h.color, 0.22),
+                        None,
+                        &Circle::new((hx, hy), r_cabeza * 2.4),
+                    );
+                    // Estela: muestras detrás de la cabeza, cada vez más
+                    // tenues y chicas — el rastro del fluido.
+                    for s in 0..COLA {
+                        let atras = (s as f64 + 1.0) * 0.022;
+                        let t = cabeza - atras;
+                        if t < 0.0 {
+                            continue; // no envolver: la estela no salta al otro extremo
+                        }
+                        let desvanece = 1.0 - s as f64 / COLA as f64;
+                        let (px, py) = bezier(t);
+                        scene.fill(
+                            Fill::NonZero,
+                            Affine::IDENTITY,
+                            atenuar_alpha(nucleo, 0.5 * desvanece as f32),
+                            None,
+                            &Circle::new((px, py), r_cabeza * (0.4 + 0.5 * desvanece)),
+                        );
+                    }
+                    // Núcleo brillante de la cabeza, encima de todo.
+                    scene.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        nucleo,
+                        None,
+                        &Circle::new((hx, hy), r_cabeza),
+                    );
+                }
+            }
         }
     })
 }
@@ -590,6 +674,20 @@ fn atenuar_alpha(c: Color, factor: f32) -> Color {
     let f = factor.clamp(0.0, 1.0);
     let [r, g, b, a] = c.components;
     Color::new([r, g, b, a * f])
+}
+
+/// Mezcla el color hacia el blanco por un factor `[0, 1]` y le pone alpha
+/// pleno. Útil para el núcleo brillante de un pulso de flujo: conserva el
+/// tinte de la hebra pero "enciende" la carga que la recorre.
+fn aclarar(c: Color, hacia_blanco: f32) -> Color {
+    let t = hacia_blanco.clamp(0.0, 1.0);
+    let [r, g, b, _] = c.components;
+    Color::new([
+        r + (1.0 - r) * t,
+        g + (1.0 - g) * t,
+        b + (1.0 - b) * t,
+        1.0,
+    ])
 }
 
 /// Rótulo corto y legible para cada variante de `Intencion`. La UI lo
