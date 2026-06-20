@@ -521,6 +521,23 @@ fn carril_hebras<Msg: Clone + 'static>(
             };
             scene.stroke(&principal, Affine::IDENTITY, h.color, None, &path);
 
+            // --- Dash-offset animado: una cinta punteada brillante por
+            // encima del trazo sólido, cuyo offset corre con la fase → las
+            // rayas marchan de la madre a la hija. Complementa los pulsos:
+            // el dash da la "textura" de corriente continua, los pulsos las
+            // cargas discretas. Sólo en hebras frescas. ---
+            if mostrar_flujo && !h.punteada {
+                const PERIODO: f64 = 16.0; // suma del patrón on+off
+                // Offset decreciente → las rayas avanzan en el sentido del
+                // path (madre→hija). Una vuelta entera de fase = un período,
+                // así el ciclo es continuo (sin salto al envolver).
+                let offset = -fase * PERIODO;
+                let cinta = Stroke::new(ancho * 0.55)
+                    .with_caps(Cap::Round)
+                    .with_dashes(offset, [4.0, 12.0]);
+                scene.stroke(&cinta, Affine::IDENTITY, aclarar(h.color, 0.35), None, &path);
+            }
+
             // --- Nodos en los extremos: discos pequeños que anclan la
             // hebra al párrafo. Radio crece con la confianza. ---
             let r = (ancho * 0.85 + 1.4).max(2.0);

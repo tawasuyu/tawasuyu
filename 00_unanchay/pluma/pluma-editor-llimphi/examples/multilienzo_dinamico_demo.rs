@@ -56,6 +56,9 @@ enum Msg {
         carta: CartaHebras,
     },
     LlmError(String),
+    /// Pulso de animación del flujo (~33 Hz). Avanza `fase_flujo` mientras
+    /// haya algo que fluir (transformación en curso o burst de llegada).
+    Tick,
 }
 
 struct Model {
@@ -65,6 +68,15 @@ struct Model {
     chat: Arc<dyn ChatClient>,
     en_curso: bool,
     ultimo_error: Option<String>,
+    /// Fase del flujo en `[0, 1)`; corre mientras `en_curso` o `burst > 0`.
+    fase_flujo: f32,
+    /// Ticks restantes del "burst" de llegada: cuando una columna nueva
+    /// aterriza, el flujo sigue corriendo unos frames más para que se vea
+    /// la corriente surcar el haz recién nacido antes de apagarse.
+    burst: u32,
+    /// El ticker periódico se arma una sola vez (en el primer trabajo) y
+    /// vive lo que resta del proceso; este flag evita re-armarlo.
+    ticker_armado: bool,
 }
 
 struct Demo;
@@ -100,6 +112,9 @@ impl App for Demo {
             chat: construir_chat(),
             en_curso: false,
             ultimo_error: None,
+            fase_flujo: 0.0,
+            burst: 0,
+            ticker_armado: false,
         }
     }
 
@@ -137,18 +152,34 @@ impl App for Demo {
                 m.cuerpos.push(hija);
                 m.cartas.push(carta);
                 m.en_curso = false;
+                // Burst de llegada: ~1.4 s de flujo extra para ver la
+                // corriente surcar el haz recién nacido antes de apagarse.
+                m.burst = 45;
             }
             Msg::LlmError(s) => {
                 eprintln!("multilienzo_dinamico_demo :: error LLM: {s}");
                 m.ultimo_error = Some(s);
                 m.en_curso = false;
             }
+            Msg::Tick => {
+                if m.en_curso || m.burst > 0 {
+                    // ~33 Hz · período de flujo ~2.4 s (0.0125 por tick).
+                    m.fase_flujo = (m.fase_flujo + 0.0125).rem_euclid(1.0);
+                    m.burst = m.burst.saturating_sub(1);
+                }
+            }
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let cfg = MultilienzoConfig::default();
+        let cfg = MultilienzoConfig {
+            // Flujo encendido mientras se transforma o durante el burst de
+            // llegada; apagado en reposo (los haces quedan estáticos).
+            mostrar_flujo: model.en_curso || model.burst > 0,
+            fase_flujo: model.fase_flujo,
+            ..MultilienzoConfig::default()
+        };
         let paleta_hebras = PaletaHebras::default();
         let palette = Palette::default();
 
@@ -191,6 +222,13 @@ enum TrabajoLlm {
 /// owned de la madre + atoms; el handle dispatcha el resultado al
 /// volver al hilo de UI.
 fn lanzar_trabajo(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
+    // Arma el ticker del flujo la primera vez que se dispara un trabajo:
+    // ~33 Hz, perpetuo (spawn_periodic no se cancela), pero el `update`
+    // sólo avanza la fase cuando hay algo que fluir.
+    if !model.ticker_armado {
+        model.ticker_armado = true;
+        handle.spawn_periodic(std::time::Duration::from_millis(30), || Msg::Tick);
+    }
     // Madre = primer cuerpo (la "raíz" del haz en este demo).
     let madre = model.cuerpos[0].clone();
     // Snapshot owned de los atoms para sobrevivir al thread.
