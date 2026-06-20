@@ -941,6 +941,10 @@ fn spawn_pty_thread(
     // sobreescribe el TERM heredado por si el caller corre desde una
     // shell sin TERM (cron, systemd-run, etc.).
     cmd.env("TERM", "xterm-256color");
+    // Muchos programas (fastfetch, eza, bat…) sólo emiten color de 24 bits si
+    // ven `COLORTERM=truecolor`; sin esto fastfetch avisa «limitaciones de
+    // color» y cae a 256. El grid vt100 ya pinta RGB, así que lo declaramos.
+    cmd.env("COLORTERM", "truecolor");
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
         Err(e) => {
