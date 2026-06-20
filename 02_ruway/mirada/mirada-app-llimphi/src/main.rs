@@ -104,6 +104,10 @@ struct Model {
     overview_sel: usize,
     /// Arrastre en curso en el editor: `(escritorio, dcol acumulado, dfila acum)`.
     overview_drag: Option<(usize, f32, f32)>,
+    /// Pedido pendiente de abrir/cerrar la vista espacial vía el atajo global
+    /// (`Super+e`) que el Cuerpo nos reenvía como `BodyEvent::Keybind`. Se
+    /// procesa en `Msg::Tick`, que tiene el `handle` para animar el zoom.
+    pending_overview_toggle: bool,
     /// Geometría vigente — lo que se pinta. Es la última `Place` emitida.
     placements: Vec<WindowPlacement>,
     /// Contador de ids para las ventanas sintéticas.
@@ -266,6 +270,7 @@ impl App for Mirada {
             overview_edit: false,
             overview_sel: 0,
             overview_drag: None,
+            pending_overview_toggle: false,
             placements: Vec::new(),
             next_id: 1,
             link,
@@ -284,7 +289,7 @@ impl App for Mirada {
             last_session: None,
         };
         if let Some(link) = model.link.as_mut() {
-            let _ = link.send(&model.desktop.grab_keys());
+            let _ = link.send(&with_overview_grab(model.desktop.grab_keys()));
             model.note = rimay_localize::t("mirada-status-body-connected");
         } else {
             // Simulación: una pantalla virtual y tres ventanas de muestra.
@@ -375,7 +380,15 @@ impl App for Mirada {
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let mut m = model;
         match msg {
-            Msg::Tick => tick(&mut m),
+            Msg::Tick => {
+                tick(&mut m);
+                // El atajo global del overview llega como `Keybind` y `feed` lo
+                // marca pendiente; lo ejecutamos acá, con `handle` para el zoom.
+                if m.pending_overview_toggle {
+                    m.pending_overview_toggle = false;
+                    toggle_overview(&mut m, handle);
+                }
+            }
             Msg::Key(ev) => handle_key(&mut m, &ev),
             Msg::SwitchWorkspace(i) => act(&mut m, DesktopAction::SwitchWorkspace(i)),
             Msg::FocusWindow(id) => act(&mut m, DesktopAction::FocusWindow(id)),
@@ -671,7 +684,37 @@ fn open_window(m: &mut Model) {
     m.note = format!("abierta ventana {id}");
 }
 
+/// Atajo global que abre/cierra la vista espacial (Prezi). El overview es estado
+/// de la **app**, no del escritorio, así que no es un `DesktopAction`: lo
+/// agregamos a los grabs (ver [`with_overview_grab`]) para que el Cuerpo nos lo
+/// reenvíe como `BodyEvent::Keybind` y lo atendemos en [`feed`].
+const OVERVIEW_KEYBIND: &str = "Super+e";
+
+/// Aumenta un `BrainCommand::GrabKeys` con el atajo del overview (idempotente).
+/// Se aplica en cada envío de grabs al Cuerpo para que sobreviva a recargas de
+/// keymap y cambios de perfil.
+fn with_overview_grab(cmd: BrainCommand) -> BrainCommand {
+    match cmd {
+        BrainCommand::GrabKeys(mut keys) => {
+            if !keys.iter().any(|k| k == OVERVIEW_KEYBIND) {
+                keys.push(OVERVIEW_KEYBIND.to_string());
+            }
+            BrainCommand::GrabKeys(keys)
+        }
+        other => other,
+    }
+}
+
 fn feed(m: &mut Model, event: BodyEvent) {
+    // El overview (Prezi) es estado de la app, no del escritorio: el Cuerpo nos
+    // reenvía su atajo global como `Keybind` (lo grabeamos en `with_overview_grab`).
+    // Lo marcamos pendiente y lo procesa `Msg::Tick` (que tiene el `handle`).
+    if let BodyEvent::Keybind(combo) = &event {
+        if combo == OVERVIEW_KEYBIND {
+            m.pending_overview_toggle = true;
+            return;
+        }
+    }
     let cmds = m.desktop.on_event(event);
     dispatch(m, cmds);
 }
@@ -687,7 +730,7 @@ fn reload_keymap(m: &mut Model) {
     };
     match Keymap::load(&path) {
         Ok(km) => {
-            let cmd = m.desktop.set_keymap(km);
+            let cmd = with_overview_grab(m.desktop.set_keymap(km));
             dispatch(m, vec![cmd]);
             m.note = rimay_localize::t("mirada-status-keymap-reloaded");
         }
@@ -710,7 +753,7 @@ fn apply_active_profile(m: &mut Model) {
         let _ = m.profiles.write_active_keymap(&kp);
     }
     let km = m.profiles.active_keymap();
-    let cmd = m.desktop.set_keymap(km);
+    let cmd = with_overview_grab(m.desktop.set_keymap(km));
     dispatch(m, vec![cmd]);
 }
 

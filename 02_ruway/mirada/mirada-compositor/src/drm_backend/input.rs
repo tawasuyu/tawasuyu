@@ -63,9 +63,15 @@ impl DrmState {
                                     st.switcher_step = Some((Workspaces, false));
                                     return FilterResult::Intercept(());
                                 }
-                                // Vista espacial (Prezi): zoom-out a todos los
-                                // escritorios. Toggle con Super+e, Esc cierra.
-                                "Super+e" => {
+                                // Vista espacial (Prezi): con Cerebro EMBEBIDO la
+                                // pinta el compositor (emit_overview), toggle
+                                // local con Super+e (Esc cierra). Con Cerebro
+                                // ENLAZADO el dueño externo (mirada-app) tiene su
+                                // propio overview —con los datos de escritorios
+                                // que el compositor no ve en linked—, así que NO
+                                // interceptamos: el atajo cae a los grabs y se
+                                // reenvía como `BodyEvent::Keybind`.
+                                "Super+e" if st.brain_is_embedded() => {
                                     st.overview_open = !st.overview_open;
                                     return FilterResult::Intercept(());
                                 }

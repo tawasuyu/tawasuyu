@@ -207,6 +207,14 @@ impl App {
         }
     }
 
+    /// `true` si el Cerebro es **embebido** (no enlazado). El overview del
+    /// compositor (Super+e local + `emit_overview`) sólo aplica embebido —
+    /// `overview_data()` es `None` enlazado—; con Cerebro enlazado el dueño
+    /// externo (mirada-app) tiene su propio overview y le reenviamos el atajo.
+    pub(crate) fn brain_is_embedded(&self) -> bool {
+        matches!(self.brain, Brain::Embedded(_))
+    }
+
     /// El modo de transición de Win+Tab configurado (`direct`/`hyprland`/
     /// `prezi`). `Direct` con Cerebro enlazado (no decide animaciones acá).
     pub(crate) fn config_workspace_switch_mode(&self) -> mirada_brain::WorkspaceSwitchMode {
