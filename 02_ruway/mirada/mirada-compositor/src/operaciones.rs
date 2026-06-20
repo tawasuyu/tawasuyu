@@ -375,7 +375,13 @@ impl App {
     /// keymap es asunto suyo). Lo dispara [`ConfigWatches::poll`].
     pub(crate) fn reload_keymap_from(&mut self, path: &std::path::Path) {
         match Keymap::load(path) {
-            Ok(km) => {
+            Ok(mut km) => {
+                // Mismo auto-curado que `load_or_init`: un keymap.ron recargado
+                // en caliente (al cambiar de vista, p. ej.) puede venir
+                // incompleto; `merge_defaults` rellena los binds que falten sin
+                // pisar los propios. Sin esto, una vista que escribe un keymap
+                // ralo dejaba los atajos sin grabs → «los shortcuts no andan».
+                km.merge_defaults();
                 let cmd = if let Brain::Embedded(d) = &mut self.brain {
                     Some(d.set_keymap(km))
                 } else {
