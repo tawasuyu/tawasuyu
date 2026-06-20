@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, FlexDirection, Position, Rect, Size, Style,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Join, Point, Stroke};
-use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Gradient, Mix};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Join, Stroke};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Mix};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use uuid::Uuid;
@@ -275,21 +275,28 @@ fn armar_multilienzo<Msg: Clone + 'static>(
         + cfg.alto_header
         + alto_max as f32 * (cfg.altura_atom + cfg.gap_atom);
 
-    // Tinte de continuidad horizontal: cada bloque de texto hereda el color
-    // del Sankey que lo toca — el del haz que ENTRA por su izquierda y el
-    // que SALE por su derecha. Así el color corre ininterrumpido
-    // texto→cinta→texto→cinta por toda la fila (`tints[col][atom] =
-    // (izq, der)`). Las columnas de los extremos sólo tienen un lado.
-    let mut tints: Vec<HashMap<Uuid, (Option<Color>, Option<Color>)>> =
-        vec![HashMap::new(); cuerpos.len()];
+    // Identidad de fila: cada sección horizontal lleva un color propio que
+    // corre idéntico por toda la fila — texto y cintas. Se siembra en la
+    // primera columna por índice de fila y se PROPAGA hacia la derecha
+    // siguiendo los haces: el átomo derecho hereda la identidad del
+    // izquierdo con el que se alinea. Un átomo sin haz entrante cae a un
+    // color por su propia fila (orphan). Así el color es una continuidad
+    // horizontal, no una etiqueta por columna.
+    let mut identidad: Vec<HashMap<Uuid, Color>> = vec![HashMap::new(); cuerpos.len()];
+    for (row, id) in cuerpos[0].orden.iter().enumerate() {
+        identidad[0].insert(*id, identidad_color(row));
+    }
     for i in 0..cuerpos.len().saturating_sub(1) {
         if let Some(carta) = cartas.get(i).copied().flatten() {
-            for (a_izq, a_der, color) in
-                hebras_orientadas(carta, cuerpos[i], cuerpos[i + 1], paleta_hebras)
-            {
-                tints[i].entry(a_izq).or_insert((None, None)).1 = Some(color);
-                tints[i + 1].entry(a_der).or_insert((None, None)).0 = Some(color);
+            for (a_izq, a_der) in hebras_orientadas(carta, cuerpos[i], cuerpos[i + 1]) {
+                if let Some(&col) = identidad[i].get(&a_izq) {
+                    identidad[i + 1].entry(a_der).or_insert(col);
+                }
             }
+        }
+        // Orphans de la columna i+1: identidad por su propia fila.
+        for (row, id) in cuerpos[i + 1].orden.iter().enumerate() {
+            identidad[i + 1].entry(*id).or_insert_with(|| identidad_color(row));
         }
     }
 
@@ -303,7 +310,7 @@ fn armar_multilienzo<Msg: Clone + 'static>(
             palette,
             alto_contenido,
             resaltar,
-            &tints[i],
+            &identidad[i],
             on_atom_click,
         ));
         if i + 1 < cuerpos.len() {
@@ -317,6 +324,7 @@ fn armar_multilienzo<Msg: Clone + 'static>(
                 paleta_hebras,
                 palette,
                 alto_contenido,
+                &identidad[i],
             ));
         }
     }
@@ -349,7 +357,7 @@ fn columna_cuerpo<Msg: Clone + 'static>(
     palette: &Palette,
     alto_total: f32,
     resaltar: &str,
-    tints: &HashMap<Uuid, (Option<Color>, Option<Color>)>,
+    identidad: &HashMap<Uuid, Color>,
     on_atom_click: &dyn Fn(usize, Uuid) -> Option<Msg>,
 ) -> View<Msg> {
     let header_text = format!(
@@ -392,10 +400,8 @@ fn columna_cuerpo<Msg: Clone + 'static>(
             .unwrap_or_else(|| ("(átomo ausente)".to_string(), false));
         let y = cfg.padding_top + cfg.alto_header + i as f32 * (cfg.altura_atom + cfg.gap_atom);
         let click_msg = on_atom_click(i_cuerpo, *atom_id);
-        let (tint_izq, tint_der) = tints.get(atom_id).copied().unwrap_or((None, None));
-        bloques.push(bloque_atom::<Msg>(
-            &preview, y, cfg, palette, hit, tint_izq, tint_der, click_msg,
-        ));
+        let tinte = identidad.get(atom_id).copied();
+        bloques.push(bloque_atom::<Msg>(&preview, y, cfg, palette, hit, tinte, click_msg));
     }
 
     View::new(Style {
@@ -416,15 +422,13 @@ fn columna_cuerpo<Msg: Clone + 'static>(
 /// Bloque de un párrafo dentro de una columna: caja con preview de texto,
 /// absolutamente posicionada para que las posiciones Y coincidan con las
 /// que el carril usa al pintar hebras.
-#[allow(clippy::too_many_arguments)]
 fn bloque_atom<Msg: Clone + 'static>(
     preview: &str,
     y: f32,
     cfg: &MultilienzoConfig,
     palette: &Palette,
     hit_busqueda: bool,
-    tint_izq: Option<Color>,
-    tint_der: Option<Color>,
+    identidad: Option<Color>,
     click_msg: Option<Msg>,
 ) -> View<Msg> {
     // Fondo destacado cuando el átomo matchea la búsqueda transversal.
@@ -456,19 +460,12 @@ fn bloque_atom<Msg: Clone + 'static>(
         ..Default::default()
     });
 
-    // Tinte de continuidad: degradé horizontal del color del haz que entra
-    // por la izquierda al que sale por la derecha. Cada lado se mezcla suave
-    // con el fondo (28%) para no tapar el texto; el lado sin haz queda
-    // neutro. Sin haces a ninguno de los lados → fondo plano de siempre.
-    if tint_izq.is_some() || tint_der.is_some() {
-        const T: f32 = 0.28;
-        let lc = tint_izq.map(|c| mezclar(base, c, T)).unwrap_or(base);
-        let rc = tint_der.map(|c| mezclar(base, c, T)).unwrap_or(base);
-        let grad = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(1.0, 0.0))
-            .with_stops([(0.0_f32, lc), (1.0_f32, rc)]);
-        v = v.fill_gradient(grad);
-    } else {
-        v = v.fill(base);
+    // Tinte de identidad de fila: la sección entera (texto + cintas) comparte
+    // un color, igual a izquierda y derecha. Se mezcla suave con el fondo
+    // (28%) para no tapar el texto. Sin identidad → fondo plano de siempre.
+    match identidad {
+        Some(c) => v = v.fill(mezclar(base, c, 0.28)),
+        None => v = v.fill(base),
     }
 
     v = v
@@ -504,9 +501,10 @@ fn carril_hebras<Msg: Clone + 'static>(
     paleta: &PaletaHebras,
     _palette: &Palette,
     alto_total: f32,
+    identidad_izq: &HashMap<Uuid, Color>,
 ) -> View<Msg> {
     let hebras = match carta {
-        Some(c) => precomputar_hebras(izq, der, c, cfg, paleta),
+        Some(c) => precomputar_hebras(izq, der, c, cfg, paleta, identidad_izq),
         None => Vec::new(),
     };
     let mostrar_flujo = cfg.mostrar_flujo;
@@ -615,24 +613,28 @@ fn carril_hebras<Msg: Clone + 'static>(
 
                 // Desvanecer en los extremos para que entren/salgan suave en
                 // vez de aparecer/teleportarse al envolver la fase.
-                let fin = ((s / 0.12).clamp(0.0, 1.0) * ((1.0 - s) / 0.12).clamp(0.0, 1.0)) as f32;
-                let a = (0.26 + 0.40 * sz as f32).min(0.78) * fin;
-                let cuerpo = atenuar_alpha(aclarar(h.color, 0.30 + 0.40 * tono as f32), a);
+                let fin = ((s / 0.14).clamp(0.0, 1.0) * ((1.0 - s) / 0.14).clamp(0.0, 1.0)) as f32;
+                // Natas disueltas: alpha baja y radios algo mayores → se
+                // funden entre sí y con el cauce en vez de leerse como gotas
+                // nítidas. Varias pasadas translúcidas se suman suave.
+                let a = (0.14 + 0.26 * sz as f32).min(0.52) * fin;
+                let cuerpo = atenuar_alpha(aclarar(h.color, 0.22 + 0.34 * tono as f32), a);
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
                     cuerpo,
                     None,
-                    &nata_path(cx, cy, rx, ry, seed),
+                    &nata_path(cx, cy, rx * 1.12, ry * 1.12, seed),
                 );
-                // Núcleo más claro y chico, descentrado, para dar volumen.
-                let nucleo = atenuar_alpha(aclarar(h.color, 0.72), a * 0.85);
+                // Núcleo apenas más claro, muy tenue y descentrado: da volumen
+                // sin recortar un borde duro.
+                let nucleo = atenuar_alpha(aclarar(h.color, 0.5), a * 0.5);
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
                     nucleo,
                     None,
-                    &nata_path(cx + rx * 0.15, cy - ry * 0.12, rx * 0.5, ry * 0.5, seed ^ 0x9e37_79b9),
+                    &nata_path(cx + rx * 0.15, cy - ry * 0.12, rx * 0.55, ry * 0.55, seed ^ 0x9e37_79b9),
                 );
             }
             scene.pop_layer();
@@ -649,6 +651,7 @@ fn precomputar_hebras(
     carta: &CartaHebras,
     cfg: &MultilienzoConfig,
     paleta: &PaletaHebras,
+    identidad_izq: &HashMap<Uuid, Color>,
 ) -> Vec<HebraPintada> {
     let pos_izq: HashMap<Uuid, usize> = izq
         .orden
@@ -671,33 +674,34 @@ fn precomputar_hebras(
 
     let mut out = Vec::with_capacity(carta.hebras.len());
     for h in &carta.hebras {
-        // Resolver cuál atom va a la izquierda y cuál a la derecha.
-        let (i_izq, i_der) = if let (Some(&a), Some(&b)) =
+        // Resolver cuál atom va a la izquierda y cuál a la derecha, guardando
+        // el id del átomo izquierdo para leer su identidad de fila.
+        let (i_izq, i_der, id_izq) = if let (Some(&a), Some(&b)) =
             (pos_izq.get(&h.atom_a), pos_der.get(&h.atom_b))
         {
-            (a, b)
+            (a, b, h.atom_a)
         } else if let (Some(&a), Some(&b)) =
             (pos_izq.get(&h.atom_b), pos_der.get(&h.atom_a))
         {
-            (a, b)
+            (a, b, h.atom_b)
         } else {
             // La hebra apunta a átomos ajenos a este par — ignorar.
             continue;
         };
 
-        let (color_base, atenuar_por_fuerza) = if !h.fresco {
-            (paleta.stale, false)
+        // Color = identidad de la FILA (la del átomo izquierdo), no el origen
+        // del alineamiento: la cinta lleva el mismo color que el texto que une.
+        // Stale conserva el gris mate de la paleta. Embeddings modula alpha
+        // por fuerza (alineamiento tentativo = cauce más translúcido).
+        let color = if !h.fresco {
+            paleta.stale
         } else {
-            match &h.origen {
-                OrigenAlineamiento::Derivado { .. } => (paleta.derivada, false),
-                OrigenAlineamiento::Manual { .. } => (paleta.manual, false),
-                OrigenAlineamiento::Embeddings { .. } => (paleta.embeddings, true),
+            let base = identidad_izq.get(&id_izq).copied().unwrap_or(paleta.embeddings);
+            if matches!(h.origen, OrigenAlineamiento::Embeddings { .. }) {
+                atenuar_alpha(base, h.fuerza)
+            } else {
+                base
             }
-        };
-        let color = if atenuar_por_fuerza {
-            atenuar_alpha(color_base, h.fuerza)
-        } else {
-            color_base
         };
 
         out.push(HebraPintada {
@@ -784,43 +788,52 @@ fn nata_path(cx: f64, cy: f64, rx: f64, ry: f64, seed: u32) -> BezPath {
     path
 }
 
-/// Color sólido (tono pleno, sin modular alpha) de una hebra según su
-/// origen — el mismo criterio que [`precomputar_hebras`], pero pensado para
-/// **teñir** los bloques de texto: la sección hereda el color del Sankey que
-/// la conecta, dando continuidad de color a través de toda la horizontal.
-fn color_solido_origen(fresco: bool, origen: &OrigenAlineamiento, paleta: &PaletaHebras) -> Color {
-    if !fresco {
-        return paleta.stale;
-    }
-    match origen {
-        OrigenAlineamiento::Derivado { .. } => paleta.derivada,
-        OrigenAlineamiento::Manual { .. } => paleta.manual,
-        OrigenAlineamiento::Embeddings { .. } => paleta.embeddings,
-    }
+/// Color de **identidad de fila**: cada sección horizontal (un átomo y sus
+/// alineados a través de las columnas) recibe un tono propio, estable de
+/// izquierda a derecha. Tonos repartidos por la rueda con el ángulo áureo
+/// para que filas vecinas contrasten; saturación/valor fijos y suaves para
+/// que el tinte no compita con el texto.
+fn identidad_color(idx: usize) -> Color {
+    let h = (idx as f32 * 0.618_034).fract();
+    hsv(h, 0.58, 0.80)
 }
 
-/// Para una carta entre `izq` y `der`, resuelve cada hebra a la terna
-/// `(atom_izq, atom_der, color_sólido)` orientada por columna (misma lógica
-/// de desambiguación que [`precomputar_hebras`]). Alimenta el tintado.
-fn hebras_orientadas(
-    carta: &CartaHebras,
-    izq: &Cuerpo,
-    der: &Cuerpo,
-    paleta: &PaletaHebras,
-) -> Vec<(Uuid, Uuid, Color)> {
+/// HSV→RGB (alpha 1.0). `h`, `s`, `v` en `[0,1]`.
+fn hsv(h: f32, s: f32, v: f32) -> Color {
+    let h6 = (h.fract() * 6.0).max(0.0);
+    let i = h6.floor();
+    let f = h6 - i;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    let (r, g, b) = match i as i32 % 6 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    Color::new([r, g, b, 1.0])
+}
+
+/// Para una carta entre `izq` y `der`, resuelve cada hebra al par
+/// `(atom_izq, atom_der)` orientado por columna (misma desambiguación que
+/// [`precomputar_hebras`]). Alimenta la propagación de identidad de fila.
+fn hebras_orientadas(carta: &CartaHebras, izq: &Cuerpo, der: &Cuerpo) -> Vec<(Uuid, Uuid)> {
     use std::collections::HashSet;
     let set_izq: HashSet<Uuid> = izq.orden.iter().copied().collect();
     let set_der: HashSet<Uuid> = der.orden.iter().copied().collect();
     let mut out = Vec::with_capacity(carta.hebras.len());
     for h in &carta.hebras {
-        let (a_izq, a_der) = if set_izq.contains(&h.atom_a) && set_der.contains(&h.atom_b) {
+        let par = if set_izq.contains(&h.atom_a) && set_der.contains(&h.atom_b) {
             (h.atom_a, h.atom_b)
         } else if set_izq.contains(&h.atom_b) && set_der.contains(&h.atom_a) {
             (h.atom_b, h.atom_a)
         } else {
             continue;
         };
-        out.push((a_izq, a_der, color_solido_origen(h.fresco, &h.origen, paleta)));
+        out.push(par);
     }
     out
 }
