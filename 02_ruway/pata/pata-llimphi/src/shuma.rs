@@ -318,7 +318,7 @@ fn kind_is_close(kind: TbKind) -> bool {
 /// La barra de título del drawer: el título a la izquierda y, a la derecha, los
 /// controles desdockear · minimizar · maximizar · cerrar. Click en su fondo es
 /// un no-op (`ShumaAnim`) para no cerrar el drawer al arrastrar/pulsar el borde.
-fn drawer_titlebar(state: &ShumaState, theme: &Theme) -> View<Msg> {
+pub fn drawer_titlebar(state: &ShumaState, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
     let titulo = View::new(Style {
         flex_grow: 1.0,

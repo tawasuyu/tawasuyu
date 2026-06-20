@@ -492,7 +492,21 @@ pub fn shuma_open_view(
         Some(full) => shuma::drawer_body_view_full(full, theme),
         None => shuma::drawer_body_view(shuma_state, theme),
     };
+    // Barra de título del drawer (desdockear/minimizar/maximizar/cerrar) +
+    // contenido. Columna: la barra arriba (fija), el cuerpo crece debajo.
+    let titlebar = shuma::drawer_titlebar(shuma_state, theme);
+    let cuerpo = View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size {
+            width: auto(),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![body_inner]);
     let body = View::new(Style {
+        flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
             height: length(drawer_h),
@@ -500,7 +514,7 @@ pub fn shuma_open_view(
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![body_inner]);
+    .children(vec![titlebar, cuerpo]);
 
     let bar = View::new(Style {
         size: Size {

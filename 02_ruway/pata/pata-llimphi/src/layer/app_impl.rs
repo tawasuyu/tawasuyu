@@ -753,7 +753,13 @@ impl LayerApp {
                 // pantalla, ya que al abrir crece a 10_000 y el compositor la
                 // capa). Cae a DRAWER_H si la superficie aún no se configuró.
                 {
-                    let frac = self.cfg.general.shuma_height.clamp(0.1, 0.95);
+                    // Maximizado (botón ▢ de la barra de título) → casi pantalla
+                    // completa; si no, la fracción configurable.
+                    let frac = if self.shuma.maximized {
+                        0.95
+                    } else {
+                        self.cfg.general.shuma_height.clamp(0.1, 0.95)
+                    };
                     if h > self.shuma_bar_px + 10 {
                         h as f32 * frac
                     } else {
@@ -869,6 +875,20 @@ impl LayerApp {
     pub(super) fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
+            Msg::ShumaMaximize => {
+                self.shuma.maximized = !self.shuma.maximized;
+                self.marcar_shuma_dirty();
+            }
+            Msg::ShumaUndock => {
+                // Abre la sesión en una shuma standalone (mismo cwd) y repliega
+                // el drawer. El hijo hereda el cwd de pata, así que `cd` explícito.
+                let cwd = self.shuma.inner.cwd.display().to_string();
+                let q = crate::shell_quote(&cwd);
+                crate::spawn_cmd(&format!(
+                    "cd {q} 2>/dev/null; SHUMA_CWD={q} exec shuma-shell-llimphi"
+                ));
+                self.set_shuma_open(false);
+            }
             Msg::ShumaShell(m) => {
                 let focusing = matches!(m, shuma_module_shell::Msg::FocusInput);
                 self.shuma.inner = shuma_module_shell::update(self.shuma.inner.clone(), m);
