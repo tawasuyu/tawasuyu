@@ -124,6 +124,10 @@ impl BodyState {
     /// idéntico al estado actual no produce ninguna `BodyOp`.
     pub fn apply(&mut self, cmd: BrainCommand) -> Vec<BodyOp> {
         match cmd {
+            // El estado de escritorios (switcher Win+Tab en modo enlazado) lo
+            // consume el compositor en `apply_commands` antes de delegar acá; el
+            // `Body` no materializa superficies para él.
+            BrainCommand::SetWorkspaces { .. } => Vec::new(),
             BrainCommand::Place(placements) => {
                 let mut ops = Vec::new();
                 let listed: Vec<WindowId> = placements.iter().map(|p| p.id).collect();

@@ -14,6 +14,9 @@ impl Desktop {
     /// comandos a enviar de vuelta.
     pub fn on_event(&mut self, event: BodyEvent) -> Vec<BrainCommand> {
         match event {
+            // El salto de escritorio (Win+Tab en modo enlazado) lo aplica
+            // mirada-app en su `feed` antes de delegar acá; el Desktop no lo ve.
+            BodyEvent::SwitchWorkspace(_) => Vec::new(),
             BodyEvent::OutputAdded { id, width, height } => {
                 let taken: Vec<usize> = self.outputs.iter().map(|o| o.workspace).collect();
                 // Si hay una sesión restaurada, esta salida —por su orden de

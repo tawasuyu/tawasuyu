@@ -192,6 +192,18 @@ pub(crate) fn autohide_next_hidden(
     }
 }
 
+/// Estado de escritorios que el Cerebro **enlazado** empuja vía
+/// `BrainCommand::SetWorkspaces`, para que el switcher Win+Tab (HUD + slide)
+/// funcione en modo DE —donde el compositor no tiene el `Desktop` local—.
+pub(crate) struct LinkedWorkspaces {
+    /// Escritorio activo (0-based).
+    pub(crate) active: usize,
+    /// Nº de ventanas por escritorio (las cargas; el switcher lista los ocupados).
+    pub(crate) loads: Vec<usize>,
+    /// Duración del slide de transición en ms (`0` = salto seco, sin animación).
+    pub(crate) slide_ms: u32,
+}
+
 /// Datos para pintar la vista espacial (Prezi) en vivo. Ver
 /// [`App::overview_data`](crate::App::overview_data).
 pub(crate) struct OverviewData {
@@ -414,6 +426,9 @@ pub(crate) struct App {
     /// Vista espacial (Prezi) abierta: zoom-out a todos los escritorios. Se
     /// togglea desde el filtro de teclado (Super+e) y el render la pinta.
     pub(crate) overview_open: bool,
+    /// Estado de escritorios empujado por el Cerebro enlazado (`SetWorkspaces`),
+    /// para el switcher Win+Tab + slide en modo DE. `None` con Cerebro embebido.
+    pub(crate) linked_ws: Option<LinkedWorkspaces>,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
     /// Permisos de capacidad por ejecutable que fija el Cerebro. El filtro del

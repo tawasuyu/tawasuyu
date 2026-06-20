@@ -230,6 +230,12 @@ pub enum BrainCommand {
     Spawn(String),
     /// Apaga el Cuerpo y libera el hardware.
     Shutdown,
+    /// Estado de escritorios que el Cerebro **enlazado** empuja al Cuerpo para
+    /// que su switcher Win+Tab (HUD + slide de transición) funcione en modo DE:
+    /// el escritorio activo, las cargas (nº de ventanas por escritorio) y la
+    /// duración del slide en ms (`0` = salto seco). En modo embebido el Cuerpo
+    /// ya tiene estos datos y no recibe esto.
+    SetWorkspaces { active: u32, loads: Vec<u32>, slide_ms: u32 },
 }
 
 /// Un hecho del Cuerpo que el Cerebro debe conocer.
@@ -293,6 +299,10 @@ pub enum BodyEvent {
     /// (mover o redimensionar interactivos). El Cerebro la hace flotar
     /// ahí; si estaba teselada, deja de estarlo.
     WindowFloatTo { id: WindowId, rect: Rect },
+    /// El switcher Win+Tab del Cuerpo confirmó un salto a un escritorio
+    /// (modo **enlazado**): el Cerebro externo lo aplica. En modo embebido el
+    /// Cuerpo cambia el escritorio él mismo y no emite esto.
+    SwitchWorkspace(u32),
 }
 
 /// Tamaño máximo de un marco, en bytes. Acota el búfer de [`read_frame`]
@@ -540,6 +550,7 @@ mod tests {
             border_focus: [10, 20, 30, 255],
             border_normal: [1, 2, 3, 4],
             titlebar_height: 24,
+            titlebar_gradient: true,
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();

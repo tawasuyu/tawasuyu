@@ -108,6 +108,9 @@ struct Model {
     /// (`Super+e`) que el Cuerpo nos reenvía como `BodyEvent::Keybind`. Se
     /// procesa en `Msg::Tick`, que tiene el `handle` para animar el zoom.
     pending_overview_toggle: bool,
+    /// Último `(activo, cargas)` empujado al Cuerpo vía `SetWorkspaces` (para el
+    /// switcher Win+Tab + slide en modo enlazado). Evita re-enviar sin cambios.
+    last_ws_push: Option<(usize, Vec<usize>)>,
     /// Geometría vigente — lo que se pinta. Es la última `Place` emitida.
     placements: Vec<WindowPlacement>,
     /// Contador de ids para las ventanas sintéticas.
@@ -271,6 +274,7 @@ impl App for Mirada {
             overview_sel: 0,
             overview_drag: None,
             pending_overview_toggle: false,
+            last_ws_push: None,
             placements: Vec::new(),
             next_id: 1,
             link,
@@ -648,7 +652,41 @@ fn tick(m: &mut Model) {
     for ev in events {
         feed(m, ev);
     }
+    push_workspaces_if_changed(m);
     save_session_if_changed(m);
+}
+
+/// Empuja al Cuerpo el estado de escritorios (`SetWorkspaces`) para que su
+/// switcher Win+Tab —HUD + slide de transición— funcione en modo enlazado,
+/// donde el compositor no tiene el `Desktop` local. Sólo con Cuerpo conectado y
+/// sólo si cambió (activo/cargas). El `slide_ms` traduce el modo: `0` en
+/// `Direct` (salto seco), la duración configurada en `Hyprland`/`Prezi`.
+fn push_workspaces_if_changed(m: &mut Model) {
+    if m.link.is_none() {
+        return;
+    }
+    let active = m.desktop.active_index();
+    let loads = m.desktop.workspace_loads();
+    if m.last_ws_push.as_ref() == Some(&(active, loads.clone())) {
+        return;
+    }
+    let slide_ms = {
+        let cfg = m.desktop.config();
+        if cfg.workspace_switch_mode == mirada_brain::WorkspaceSwitchMode::Direct {
+            0
+        } else {
+            cfg.slide_ms
+        }
+    };
+    let cmd = BrainCommand::SetWorkspaces {
+        active: active as u32,
+        loads: loads.iter().map(|&n| n as u32).collect(),
+        slide_ms,
+    };
+    if let Some(link) = m.link.as_mut() {
+        let _ = link.send(&cmd);
+    }
+    m.last_ws_push = Some((active, loads));
 }
 
 /// Persiste la forma del escritorio cuando cambia. Sólo escribe si el snapshot
@@ -706,17 +744,22 @@ fn with_overview_grab(cmd: BrainCommand) -> BrainCommand {
 }
 
 fn feed(m: &mut Model, event: BodyEvent) {
-    // El overview (Prezi) es estado de la app, no del escritorio: el Cuerpo nos
-    // reenvía su atajo global como `Keybind` (lo grabeamos en `with_overview_grab`).
-    // Lo marcamos pendiente y lo procesa `Msg::Tick` (que tiene el `handle`).
-    if let BodyEvent::Keybind(combo) = &event {
-        if combo == OVERVIEW_KEYBIND {
+    match event {
+        // El overview (Prezi) es estado de la app, no del escritorio: el Cuerpo
+        // nos reenvía su atajo global como `Keybind` (grabeado en
+        // `with_overview_grab`). Lo marcamos pendiente y lo procesa `Msg::Tick`
+        // (que tiene el `handle` para animar el zoom).
+        BodyEvent::Keybind(ref combo) if combo == OVERVIEW_KEYBIND => {
             m.pending_overview_toggle = true;
-            return;
+        }
+        // Win+Tab confirmó un salto de escritorio en el Cuerpo (modo enlazado):
+        // lo aplicamos como una acción de escritorio normal.
+        BodyEvent::SwitchWorkspace(i) => act(m, DesktopAction::SwitchWorkspace(i as usize)),
+        other => {
+            let cmds = m.desktop.on_event(other);
+            dispatch(m, cmds);
         }
     }
-    let cmds = m.desktop.on_event(event);
-    dispatch(m, cmds);
 }
 
 fn act(m: &mut Model, action: DesktopAction) {

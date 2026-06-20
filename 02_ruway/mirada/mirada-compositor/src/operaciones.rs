@@ -220,7 +220,12 @@ impl App {
     pub(crate) fn config_workspace_switch_mode(&self) -> mirada_brain::WorkspaceSwitchMode {
         match &self.brain {
             Brain::Embedded(d) => d.config().workspace_switch_mode,
-            Brain::Linked(_) => mirada_brain::WorkspaceSwitchMode::Direct,
+            // Enlazado: el Cerebro nos manda `slide_ms` ya resuelto (`0` = sin
+            // animación). Lo traducimos a un modo que dispare (o no) el slide.
+            Brain::Linked(_) => match self.linked_ws.as_ref().map_or(0, |w| w.slide_ms) {
+                0 => mirada_brain::WorkspaceSwitchMode::Direct,
+                _ => mirada_brain::WorkspaceSwitchMode::Hyprland,
+            },
         }
     }
 
@@ -229,7 +234,8 @@ impl App {
     pub(crate) fn config_slide_ms(&self) -> u32 {
         match &self.brain {
             Brain::Embedded(d) => d.config().slide_ms,
-            Brain::Linked(_) => 220,
+            // Enlazado: el `slide_ms` que empujó el Cerebro (0 hasta el 1er push).
+            Brain::Linked(_) => self.linked_ws.as_ref().map_or(0, |w| w.slide_ms),
         }
     }
 
@@ -239,7 +245,8 @@ impl App {
     pub(crate) fn workspace_overview(&self) -> Option<(usize, Vec<usize>)> {
         match &self.brain {
             Brain::Embedded(d) => Some((d.active_index(), d.workspace_loads())),
-            Brain::Linked(_) => None,
+            // Enlazado: el estado que empujó el Cerebro (`SetWorkspaces`).
+            Brain::Linked(_) => self.linked_ws.as_ref().map(|w| (w.active, w.loads.clone())),
         }
     }
 
@@ -358,7 +365,12 @@ impl App {
     pub(crate) fn cambiar_workspace(&mut self, idx: usize) {
         let cmds = match &mut self.brain {
             Brain::Embedded(d) => d.apply(mirada_brain::DesktopAction::SwitchWorkspace(idx)),
-            Brain::Linked(_) => return,
+            // Enlazado: el dueño externo cambia el escritorio; le mandamos el
+            // salto y él reenvía el `SetWorkspaces` actualizado.
+            Brain::Linked(link) => {
+                let _ = link.send(&BodyEvent::SwitchWorkspace(idx as u32));
+                return;
+            }
         };
         self.apply_commands(cmds);
     }
@@ -649,9 +661,25 @@ impl App {
     /// Traduce los comandos del Cerebro a operaciones y las ejecuta.
     pub(crate) fn apply_commands(&mut self, cmds: Vec<BrainCommand>) {
         for cmd in cmds {
-            let ops = self.body.apply(cmd);
-            for op in ops {
-                self.exec_op(op);
+            match cmd {
+                // El Cerebro enlazado empuja el estado de escritorios para el
+                // switcher Win+Tab + slide; no produce BodyOps sobre superficies.
+                BrainCommand::SetWorkspaces {
+                    active,
+                    loads,
+                    slide_ms,
+                } => {
+                    self.linked_ws = Some(crate::estado::LinkedWorkspaces {
+                        active: active as usize,
+                        loads: loads.into_iter().map(|n| n as usize).collect(),
+                        slide_ms,
+                    });
+                }
+                other => {
+                    for op in self.body.apply(other) {
+                        self.exec_op(op);
+                    }
+                }
             }
         }
     }
