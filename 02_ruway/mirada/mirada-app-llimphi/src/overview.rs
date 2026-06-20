@@ -197,16 +197,19 @@ where
             cell_children.push(win);
         }
 
-        // Badge con el número de escritorio (arriba-izquierda de la celda).
+        // Badge con el número de escritorio. Va arriba-DERECHA: los títulos de
+        // las miniaturas se alinean a la izquierda, así que la esquina izquierda
+        // está siempre ocupada por el título de la primera ventana — el badge en
+        // la derecha no lo pisa (era el solape "badge encima del título").
         let badge_bg = if is_active { theme.accent } else { theme.bg_row_hover };
         let badge_fg = if is_active { on_accent } else { theme.fg_muted };
         cell_children.push(
             View::new(Style {
                 position: Position::Absolute,
                 inset: Rect {
-                    left: length(6.0_f32),
+                    left: auto(),
                     top: length(6.0_f32),
-                    right: auto(),
+                    right: length(6.0_f32),
                     bottom: auto(),
                 },
                 size: Size { width: length(20.0_f32), height: length(18.0_f32) },
