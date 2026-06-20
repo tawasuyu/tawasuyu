@@ -289,6 +289,16 @@ pub struct RenderConfig {
     /// al estilo Doom (solidsegs / cliprange por columna). El toggle se
     /// conserva para experimentar.
     pub occlusion_cull: bool,
+    /// **Fase 3.60 — pisos/techos sobre el cell completo del subsector.** Si
+    /// `true` (y hay BSP), el polígono de piso/techo se reconstruye
+    /// recortando un quad del mapa contra las particiones del BSP
+    /// (`build_subsector_cells`) en vez de encadenar sólo los segs del
+    /// subsector. Cierra el caveat 3.2: la cadena de segs no cubre los lados
+    /// que son particiones internas, dejando un hueco hacia la cámara (el
+    /// "agujero negro" bajo los pies). Con el cell el piso llega hasta los
+    /// pies, texturizado. `false` o sin BSP ⇒ polígono de segs (3.59).
+    /// Default `true`.
+    pub bsp_floor_cells: bool,
 }
 
 impl Default for RenderConfig {
@@ -324,6 +334,7 @@ impl Default for RenderConfig {
             decal_rim_directional: true,
             decal_clip_walls: true,
             occlusion_cull: false,
+            bsp_floor_cells: true,
         }
     }
 }

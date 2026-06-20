@@ -157,6 +157,15 @@ pub(crate) fn render_frame(
         + snap.sprites.len();
     let mut renderables: Vec<Renderable> = Vec::with_capacity(cap);
 
+    // Fase 3.60: cells convexos de subsector reconstruidos por el BSP, para
+    // que piso/techo cubran el subsector entero (sin el hueco hacia la cámara
+    // que dejaba la cadena de segs). Se computa una vez por frame.
+    let subsector_cells = if use_subsectors && cfg.bsp_floor_cells {
+        build_subsector_cells(snap)
+    } else {
+        None
+    };
+
     if use_subsectors {
         for (idx, sub) in snap.subsectors.iter().enumerate() {
             // Fase 3.54: subsector tapado por paredes sólidas → no emitir
@@ -180,6 +189,10 @@ pub(crate) fn render_frame(
                 bsp_rank,
                 lit_ref,
                 world_lights_ref,
+                subsector_cells
+                    .as_ref()
+                    .and_then(|c| c.get(idx))
+                    .map(|v| v.as_slice()),
             );
         }
     }

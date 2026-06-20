@@ -46,6 +46,38 @@
     }
 
     #[test]
+    fn clip_poly_halfplane_keeps_correct_side() {
+        // Fase 3.60 — partición vertical en x=0 (dir (0,1) ⇒ f = -x). El
+        // lado front (f≥0) es x≤0, el back (f≤0) es x≥0. Recortar el
+        // cuadrado [-1,1]² debe quedarse con la mitad correcta y cerrar el
+        // polígono (≥3 vértices).
+        let node = NodeSnap {
+            partition_x: 0.0,
+            partition_y: 0.0,
+            partition_dx: 0.0,
+            partition_dy: 1.0,
+            children: [0, 0],
+        };
+        let square = vec![(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let front = clip_poly_halfplane(&square, &node, true);
+        assert!(front.len() >= 3, "front cierra polígono: {front:?}");
+        assert!(
+            front.iter().all(|&(x, _)| x <= 1e-4),
+            "front se queda con x≤0: {front:?}"
+        );
+        assert!(
+            front.iter().any(|&(x, _)| x < -0.9),
+            "front incluye el borde izquierdo"
+        );
+        let back = clip_poly_halfplane(&square, &node, false);
+        assert!(back.len() >= 3);
+        assert!(
+            back.iter().all(|&(x, _)| x >= -1e-4),
+            "back se queda con x≥0: {back:?}"
+        );
+    }
+
+    #[test]
     fn godray_halo_near_brighter_and_bigger_than_far() {
         // Fase 3.57 — la luz cercana irradia un halo más grande (radio por
         // perspectiva focal/x_cam) y más brillante (atenuación por

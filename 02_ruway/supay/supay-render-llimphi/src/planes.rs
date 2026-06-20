@@ -466,6 +466,113 @@ fn seg_angular_span(s: &SegSnap, cam: &Camera, near: f32) -> Option<(f32, f32)> 
     Some((a1.min(a2), a1.max(a2)))
 }
 
+/// **Fase 3.60** — recorta el polígono convexo `poly` por el semiplano de
+/// la partición de `node`. `keep_front=true` conserva el lado front
+/// (children[0], `f ≥ 0`), `false` el back (children[1], `f ≤ 0`). La
+/// función de lado es la misma convención del BSP walk:
+/// `f(x,y) = dx·(y−py) − dy·(x−px)`. Sutherland-Hodgman sobre un polígono
+/// convexo cerrado → polígono convexo.
+pub(crate) fn clip_poly_halfplane(
+    poly: &[(f32, f32)],
+    node: &NodeSnap,
+    keep_front: bool,
+) -> Vec<(f32, f32)> {
+    let f = |x: f32, y: f32| {
+        node.partition_dx * (y - node.partition_y) - node.partition_dy * (x - node.partition_x)
+    };
+    let n = poly.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(n + 1);
+    for i in 0..n {
+        let (ax, ay) = poly[i];
+        let (bx, by) = poly[(i + 1) % n];
+        let fa = f(ax, ay);
+        let fb = f(bx, by);
+        let ina = if keep_front { fa >= 0.0 } else { fa <= 0.0 };
+        let inb = if keep_front { fb >= 0.0 } else { fb <= 0.0 };
+        if ina {
+            out.push((ax, ay));
+        }
+        if ina != inb {
+            let denom = fa - fb;
+            if denom.abs() > 1e-9 {
+                let t = fa / denom;
+                out.push((ax + (bx - ax) * t, ay + (by - ay) * t));
+            }
+        }
+    }
+    out
+}
+
+/// **Fase 3.60** — polígono convexo (cell) de cada subsector, reconstruido
+/// recortando un quad que cubre el mapa contra las particiones del BSP en el
+/// camino root→hoja. Resuelve el caveat 3.2: la cadena de segs de un
+/// subsector no cubre los lados que son particiones internas (sin seg), así
+/// que el piso/techo quedaba con huecos hacia la cámara (el "agujero negro"
+/// bajo los pies). El cell completo no tiene huecos.
+///
+/// Devuelve un `Vec` indexado por subsector; una entrada vacía (`len < 3`)
+/// señala "no computable" → el caller cae al polígono de segs. `None` global
+/// si no hay BSP. Costo: O(nodos × tamaño medio de polígono) por frame.
+pub(crate) fn build_subsector_cells(snap: &SceneSnapshot) -> Option<Vec<Vec<(f32, f32)>>> {
+    if snap.nodes.is_empty() || snap.subsectors.is_empty() || snap.walls.is_empty() {
+        return None;
+    }
+    let (mut minx, mut miny, mut maxx, mut maxy) =
+        (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for w in snap.walls.iter() {
+        for (x, y) in [(w.x1, w.y1), (w.x2, w.y2)] {
+            minx = minx.min(x);
+            miny = miny.min(y);
+            maxx = maxx.max(x);
+            maxy = maxy.max(y);
+        }
+    }
+    if !minx.is_finite() || maxx <= minx || maxy <= miny {
+        return None;
+    }
+    const MARGIN: f32 = 128.0;
+    let quad = vec![
+        (minx - MARGIN, miny - MARGIN),
+        (maxx + MARGIN, miny - MARGIN),
+        (maxx + MARGIN, maxy + MARGIN),
+        (minx - MARGIN, maxy + MARGIN),
+    ];
+    let mut cells: Vec<Vec<(f32, f32)>> = vec![Vec::new(); snap.subsectors.len()];
+    let root = (snap.nodes.len() - 1) as u16;
+    descend_cell(&snap.nodes, root, quad, &mut cells);
+    Some(cells)
+}
+
+/// Recursión de [`build_subsector_cells`]: parte el polígono por la
+/// partición y baja a cada hijo con su mitad.
+fn descend_cell(
+    nodes: &[NodeSnap],
+    child: u16,
+    poly: Vec<(f32, f32)>,
+    cells: &mut [Vec<(f32, f32)>],
+) {
+    if poly.len() < 3 {
+        return;
+    }
+    if child & NF_SUBSECTOR != 0 {
+        let ss = (child & !NF_SUBSECTOR) as usize;
+        if let Some(slot) = cells.get_mut(ss) {
+            *slot = poly;
+        }
+        return;
+    }
+    let Some(node) = nodes.get(child as usize) else {
+        return;
+    };
+    let front = clip_poly_halfplane(&poly, node, true);
+    let back = clip_poly_halfplane(&poly, node, false);
+    descend_cell(nodes, node.children[0], front, cells);
+    descend_cell(nodes, node.children[1], back, cells);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gather_subsector_planes(
     out: &mut Vec<Renderable>,
@@ -479,6 +586,11 @@ pub(crate) fn gather_subsector_planes(
     bsp_rank: u32,
     lit_sectors: Option<&HashSet<u32>>,
     world_lights: &[WorldLight],
+    // **Fase 3.60** — polígono convexo (cell) del subsector reconstruido por
+    // el BSP. Cuando viene con ≥3 vértices, es la fuente del polígono de
+    // piso/techo (cubre el cell entero, sin el hueco hacia la cámara que
+    // dejaba la cadena de segs). `None`/vacío ⇒ fallback al polígono de segs.
+    cell: Option<&[(f32, f32)]>,
 ) {
     if sub.num_segs < 2 {
         return;
@@ -494,18 +606,25 @@ pub(crate) fn gather_subsector_planes(
     }
     let seg_slice = &snap.segs[first..end];
 
-    // Construir polígono mundial: v1 de cada seg + v2 del último.
-    let mut world: Vec<(f32, f32)> = Vec::with_capacity(count + 1);
-    for s in seg_slice {
-        world.push((s.x1, s.y1));
-    }
-    // Cerrar con v2 del último seg sólo si difiere del primer v1
-    // (algunos subsectores ya cierran naturalmente).
-    let last_v2 = (seg_slice[count - 1].x2, seg_slice[count - 1].y2);
-    let first_v1 = world[0];
-    if (last_v2.0 - first_v1.0).abs() > 0.01 || (last_v2.1 - first_v1.1).abs() > 0.01 {
-        world.push(last_v2);
-    }
+    // Polígono mundial del plano. Preferimos el cell del BSP (Fase 3.60), que
+    // cubre el subsector completo; si no está, caemos a la cadena de segs
+    // (`v1` de cada seg + `v2` del último), que puede no cerrar hacia la
+    // cámara.
+    let world: Vec<(f32, f32)> = match cell {
+        Some(c) if c.len() >= 3 => c.to_vec(),
+        _ => {
+            let mut w: Vec<(f32, f32)> = Vec::with_capacity(count + 1);
+            for s in seg_slice {
+                w.push((s.x1, s.y1));
+            }
+            let last_v2 = (seg_slice[count - 1].x2, seg_slice[count - 1].y2);
+            let first_v1 = w[0];
+            if (last_v2.0 - first_v1.0).abs() > 0.01 || (last_v2.1 - first_v1.1).abs() > 0.01 {
+                w.push(last_v2);
+            }
+            w
+        }
+    };
 
     // Transformar a cámara 2D.
     let cam_poly: Vec<(f32, f32)> = world
