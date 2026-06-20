@@ -165,16 +165,25 @@ fn launcher(apps: &[AppEntry], id: &str, tip: &str, base: Color, fg: Color) -> V
 /// La caja **recessed** del switcher de escritorios (centro del panel): los
 /// botones numerados (1..N, default 4) en una caja hundida, con la lucecita de
 /// actividad. El activo va resaltado; al click salta a ese escritorio.
-fn switcher_box(active: u8, count: u8, base: Color, theme: &Theme) -> View<Msg> {
+fn switcher_box(active: u8, count: u8, occ: u16, base: Color, theme: &Theme) -> View<Msg> {
     let n = if count == 0 { 4 } else { count.min(8) };
     let cells: Vec<View<Msg>> = (1..=n)
         .map(|i| {
             let activo = i == active.max(1);
-            let cara = if activo { theme.accent } else { tint(base, 0.12) };
-            let fg = if activo { theme.bg_panel } else { theme.fg_text };
+            let ocupado = occ & (1u16 << (i as u16 - 1)) != 0;
+            // Tres estados, como la barra nativa: activo = acento (hundido);
+            // ocupado = cara clara realzada (sobresale) + número en acento;
+            // vacío = cara apagada. Antes ocupado y vacío se veían iguales.
+            let (cara, fg) = if activo {
+                (theme.accent, theme.bg_panel)
+            } else if ocupado {
+                (tint(base, 0.30), theme.accent)
+            } else {
+                (tint(base, 0.08), theme.fg_muted)
+            };
             beveled(
                 cara,
-                !activo, // el activo se ve hundido (presionado)
+                !activo, // el activo se ve hundido (presionado); el resto sobresale
                 Style {
                     size: Size { width: length(26.0_f32), height: length(22.0_f32) },
                     align_items: Some(AlignItems::Center),
@@ -190,7 +199,11 @@ fn switcher_box(active: u8, count: u8, base: Color, theme: &Theme) -> View<Msg> 
                 .text_aligned(i.to_string(), 12.0, fg, Alignment::Center)],
             )
             .radius(1.0)
-            .tooltip(format!("Escritorio {i}"))
+            .tooltip(if ocupado {
+                format!("Escritorio {i} · con ventanas")
+            } else {
+                format!("Escritorio {i} · vacío")
+            })
             .on_click(Msg::SwitchWorkspace(i))
         })
         .collect();
@@ -282,7 +295,7 @@ fn clock_box(h: u8, m: u8, base: Color, theme: &Theme) -> View<Msg> {
 pub(super) fn front_panel_view(data: &BarData, theme: &Theme) -> View<Msg> {
     let steel = theme.bg_panel;
     let fg = theme.fg_text;
-    let (ws_active, ws_count, _occ) = data.workspace;
+    let (ws_active, ws_count, ws_occ) = data.workspace;
     let (ch, cm) = data.clock;
 
     // Cluster izquierdo: lanzadores con sus subpaneles (file mgr, editor,
@@ -328,7 +341,7 @@ pub(super) fn front_panel_view(data: &BarData, theme: &Theme) -> View<Msg> {
     .children(vec![
         grupo(izq),
         separador(steel),
-        switcher_box(ws_active, ws_count, steel, theme),
+        switcher_box(ws_active, ws_count, ws_occ, steel, theme),
         separador(steel),
         grupo(der),
     ]);
