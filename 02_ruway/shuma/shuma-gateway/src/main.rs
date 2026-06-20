@@ -40,6 +40,7 @@ use axum::{
 use serde::Deserialize;
 use shuma_protocol::{default_socket_path, read_frame, write_frame, Request, Response};
 use tokio::net::UnixStream;
+use tokio::sync::broadcast;
 use tracing::{info, warn};
 use ulid::Ulid;
 
@@ -49,6 +50,10 @@ const DEFAULT_LISTEN: &str = "127.0.0.1:7378";
 struct AppState {
     sock: Arc<PathBuf>,
     token: Option<Arc<String>>,
+    /// Bus de eventos de supervisión: los hooks de Claude Code los publican
+    /// por `POST /event` y los clientes (consola) los reciben por
+    /// `GET /ws/events`. El gateway solo retransmite el JSON tal cual.
+    events: broadcast::Sender<String>,
 }
 
 #[tokio::main]
@@ -60,9 +65,11 @@ async fn main() -> anyhow::Result<()> {
         .filter(|s| !s.is_empty())
         .map(Arc::new);
 
+    let (events, _) = broadcast::channel::<String>(256);
     let state = AppState {
         sock: Arc::new(default_socket_path()),
         token,
+        events,
     };
 
     let app = Router::new()
@@ -70,6 +77,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/rpc", post(rpc))
         .route("/ws/pty", get(ws_pty))
+        .route("/event", post(post_event))
+        .route("/ws/events", get(ws_events))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&listen).await?;
@@ -214,6 +223,65 @@ async fn ws_pty(
     }
     let sock = state.sock.clone();
     ws.on_upgrade(move |socket| pty_bridge(socket, sock))
+}
+
+// =====================================================================
+// Bus de eventos de supervisión (hooks de Claude Code → consola)
+// =====================================================================
+
+/// POST /event — un hook publica un evento (JSON arbitrario) que se
+/// retransmite tal cual a los clientes de `/ws/events`. Pensado para los
+/// hooks `Notification`/`Stop` de Claude Code, que corren en localhost.
+async fn post_event(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> AxumResponse {
+    if !authorized(&state, &headers, None) {
+        return (StatusCode::UNAUTHORIZED, Json(err("unauthorized"))).into_response();
+    }
+    let payload = match String::from_utf8(body.to_vec()) {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => return (StatusCode::BAD_REQUEST, Json(err("evento vacío o no-UTF8"))).into_response(),
+    };
+    // send() falla solo si no hay suscriptores (teléfono desconectado): no es
+    // un error, simplemente nadie escucha ahora mismo.
+    let subscribers = state.events.send(payload).unwrap_or(0);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "subscribers": subscribers }))).into_response()
+}
+
+/// GET /ws/events — el cliente se suscribe y recibe cada evento como texto.
+async fn ws_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+    ws: WebSocketUpgrade,
+) -> AxumResponse {
+    if !authorized(&state, &headers, q.token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let rx = state.events.subscribe();
+    ws.on_upgrade(move |socket| events_bridge(socket, rx))
+}
+
+async fn events_bridge(mut ws: WebSocket, mut rx: broadcast::Receiver<String>) {
+    loop {
+        tokio::select! {
+            msg = rx.recv() => match msg {
+                Ok(s) => {
+                    if ws.send(Message::Text(s)).await.is_err() {
+                        break;
+                    }
+                }
+                // Si el cliente se retrasa y pierde eventos, seguimos con los
+                // siguientes en vez de cortar la conexión.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            inbound = ws.recv() => match inbound {
+                // Ignoramos lo que mande el cliente (keepalive); solo nos
+                // importa detectar el cierre/caída para soltar la suscripción.
+                Some(Ok(_)) => continue,
+                _ => break,
+            },
+        }
+    }
 }
 
 async fn pty_bridge(mut ws: WebSocket, sock: Arc<PathBuf>) {
