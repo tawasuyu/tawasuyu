@@ -49,6 +49,7 @@ TABLA=(
   "pata-front|pata-llimphi|front_panel_shot"
   "pata-menu|pata-llimphi|menu_inicio_shot"
   "pata-control|pata-llimphi|control_shot"
+  "pata-shuma-drawer|pata-llimphi|pantallazo_shuma_drawer"
 )
 
 FILTRO=("$@")

@@ -9,10 +9,14 @@
 //! del host**: construir el Model, engancharle los efectos al loop del host,
 //! rutearle eventos y pintarlo elevado al `Msg` de pata.
 //!
-//! **Estado: scaffold compilable, todavía NO cableado al App vivo de pata.** El
-//! `shuma.rs` actual sigue siendo el integration por defecto (cero regresión);
-//! el live-wire final (rediseñar barra/drawer para mostrar dientes/sesiones sin
-//! perder el input inline) se hace con pantalla para validar a ojo.
+//! **Estado: cableado y vivo en ambos paths** (winit en `lib.rs` y layer-shell
+//! en `layer/mod.rs`): cuando `PATA_SHUMA_FULL` está seteada se construye el
+//! `Model` completo, se le enganchan los efectos con un `Handle` lifteado y se
+//! rendea/rutea (view, on_key, on_wheel, update). Es **opt-in** (off por
+//! defecto) para cero-regresión del path bare mientras se valida la interacción
+//! a ojo; el render del drawer ya está validado headless por el example
+//! `pantallazo_shuma_drawer`. El `shuma.rs` (una sesión, sin rails) sigue siendo
+//! el integration por defecto hasta prender la flag globalmente.
 
 use llimphi_ui::{Handle, KeyEvent, Modifiers, View, WheelDelta};
 use shuma_shell_llimphi as shuma;
