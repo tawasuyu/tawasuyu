@@ -503,6 +503,21 @@ impl DrmState {
                                 let ev = self.app.body.clicked(id);
                                 self.app.brain_feed(ev);
                             }
+                        } else {
+                            // Click en escritorio vacío (ni layer focusable ni
+                            // ventana): el teclado cae al shell —sea toplevel o
+                            // layer-shell (shuma/pata en barra)— para tipear sin
+                            // tener que clickear primero la barra.
+                            if let Some(kb) = self.app.keyboard.clone() {
+                                let target = self.app.keyboard_fallback_target();
+                                if kb.current_focus() != target {
+                                    kb.set_focus(
+                                        &mut self.app,
+                                        target,
+                                        SERIAL_COUNTER.next_serial(),
+                                    );
+                                }
+                            }
                         }
                     }
                 }

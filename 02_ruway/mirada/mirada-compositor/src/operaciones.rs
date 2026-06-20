@@ -86,18 +86,43 @@ impl App {
         })
     }
 
+    /// Una layer (Overlay/Top, top-most) que acepta foco de teclado, **sin**
+    /// mirar la posición del puntero — a diferencia de
+    /// `keyboard_focusable_layer_under`. El shell-barra (`shuma`/`pata` en modo
+    /// dock) se monta como wlr-layer-shell con `OnDemand`, así que NO es un
+    /// toplevel y `keyboard_fallback_target` no lo encontraría entre `windows`.
+    /// Esto lo cubre: es el destino de teclado del escritorio vacío cuando el
+    /// shell es un layer-shell. `None` si ninguna layer quiere teclado (sólo
+    /// hay wallpaper Background/None, p. ej.).
+    pub(crate) fn keyboard_focusable_shell_layer(&self) -> Option<WlSurface> {
+        let output = self.output.as_ref()?;
+        let map = layer_map_for_output(output);
+        for kind in [Layer::Overlay, Layer::Top] {
+            if let Some(layer) = map
+                .layers_on(kind)
+                .rev()
+                .find(|l| l.can_receive_keyboard_focus())
+            {
+                return Some(layer.wl_surface().clone());
+            }
+        }
+        None
+    }
+
     /// El destino de teclado cuando ninguna ventana reclama el foco: la
     /// ventana que el Cerebro marcó enfocada o —si no hay ninguna— el shell
     /// (`pata`), para poder tipear directo en su barra sin clickear primero.
-    /// `None` sólo si tampoco hay shell visible (p. ej. greeter). Así, en un
-    /// escritorio vacío, el teclado va al shell y winit le da hasta el
-    /// auto-repeat de cada tecla.
+    /// Si el shell no es un toplevel sino un **layer-shell** (`shuma`/`pata`
+    /// en modo barra), cae a esa layer. `None` sólo si no hay ni ventana ni
+    /// layer que acepte teclado (p. ej. greeter). Así, en un escritorio vacío,
+    /// el teclado va al shell y winit le da hasta el auto-repeat de cada tecla.
     pub(crate) fn keyboard_fallback_target(&self) -> Option<WlSurface> {
         self.windows
             .iter()
             .find(|w| w.focused)
             .or_else(|| self.windows.iter().find(|w| w.is_shell && w.visible))
             .map(|w| w.surface.clone())
+            .or_else(|| self.keyboard_focusable_shell_layer())
     }
 
     /// Reconcilia el foco del teclado con las layers Exclusive. Una layer que
