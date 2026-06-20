@@ -352,8 +352,15 @@ impl PreziEdit {
                 (p.h as f64 * PREZI_CELL).max(40.0),
             );
             rec.agregar_marco(
-                Marco::new(id, rect, ContenidoMarco::Etiqueta(format!("Escritorio {id}")))
-                    .con_giro(p.rot as f64),
+                Marco::new(
+                    id,
+                    rect,
+                    ContenidoMarco::Croquis {
+                        titulo: Some(format!("{id}")),
+                        cajas: croquis_escritorio(id),
+                    },
+                )
+                .con_giro(p.rot as f64),
             );
             rec.pasos.push(id);
         }
@@ -386,6 +393,46 @@ impl PreziEdit {
                 )
             })
             .collect()
+    }
+}
+
+/// Miniatura esquemática del escritorio `id` para el croquis del editor: un
+/// patrón de teselado **representativo** (no las ventanas vivas — el panel edita
+/// config, no observa el compositor), variado por `id` para que el plano se vea
+/// poblado y deje de parecer un numpad. Cajas `[x,y,w,h]` normalizadas a `0..1`.
+/// Algunos escritorios quedan vacíos a propósito (como en un escritorio real).
+fn croquis_escritorio(id: u64) -> Vec<[f32; 4]> {
+    match (id - 1) % 6 {
+        // Monocle: una ventana grande.
+        0 => vec![[0.07, 0.10, 0.86, 0.80]],
+        // Master + 2 apiladas a la derecha.
+        1 => vec![
+            [0.06, 0.10, 0.50, 0.80],
+            [0.60, 0.10, 0.34, 0.37],
+            [0.60, 0.53, 0.34, 0.37],
+        ],
+        // Grilla 2×2.
+        2 => vec![
+            [0.06, 0.09, 0.41, 0.39],
+            [0.53, 0.09, 0.41, 0.39],
+            [0.06, 0.52, 0.41, 0.39],
+            [0.53, 0.52, 0.41, 0.39],
+        ],
+        // Tres columnas.
+        3 => vec![
+            [0.06, 0.10, 0.27, 0.80],
+            [0.37, 0.10, 0.26, 0.80],
+            [0.67, 0.10, 0.27, 0.80],
+        ],
+        // Master + 3 apiladas.
+        4 => vec![
+            [0.06, 0.10, 0.50, 0.80],
+            [0.60, 0.10, 0.34, 0.24],
+            [0.60, 0.38, 0.34, 0.24],
+            [0.60, 0.66, 0.34, 0.24],
+        ],
+        // Escritorio vacío.
+        _ => Vec::new(),
     }
 }
 

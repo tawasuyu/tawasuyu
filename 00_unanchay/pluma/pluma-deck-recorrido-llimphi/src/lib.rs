@@ -103,6 +103,9 @@ enum Pintura {
     Etiqueta(String),
     Texto { titulo: Option<String>, parrafos: Vec<String> },
     Imagen(PenikoImage),
+    /// Wireframe de cajas (`[x,y,w,h]` normalizadas a `0..1` del marco) + título
+    /// opcional. Miniatura esquemática — p. ej. un escritorio teselado.
+    Croquis { titulo: Option<String>, cajas: Vec<[f32; 4]> },
     Nada,
 }
 
@@ -130,6 +133,12 @@ const SELECCION: Color = Color::from_rgba8(255, 196, 92, 255);
 // HUD "paso X / N": píldora sobria abajo-centro, en espacio de pantalla.
 const HUD_FONDO: Color = Color::from_rgba8(12, 14, 20, 190);
 const HUD_TEXTO: Color = Color::from_rgba8(205, 212, 226, 235);
+// Croquis (miniatura esquemática de cajas, p. ej. un escritorio teselado):
+// ventana tenue con borde, y un badge de número arriba-izquierda.
+const CROQUIS_VENTANA: Color = Color::from_rgba8(72, 80, 102, 235);
+const CROQUIS_VENTANA_BORDE: Color = Color::from_rgba8(124, 134, 162, 255);
+const CROQUIS_BADGE: Color = Color::from_rgba8(120, 180, 255, 235);
+const CROQUIS_BADGE_TEXTO: Color = Color::from_rgba8(12, 16, 24, 255);
 
 /// Nodo a pantalla completa que pinta el recorrido y registra el rect del
 /// panel. `Msg` es libre: el caller suele colgarle un `.draggable(...)` para
@@ -163,6 +172,9 @@ fn vista<Msg: 'static>(rec: &Recorrido, state: &RecorridoState, seleccionado: Op
                 }
                 ContenidoMarco::Imagen { bytes, .. } => {
                     imagen_cacheada(m.id, bytes).map(Pintura::Imagen).unwrap_or(Pintura::Nada)
+                }
+                ContenidoMarco::Croquis { titulo, cajas } => {
+                    Pintura::Croquis { titulo: titulo.clone(), cajas: cajas.clone() }
                 }
                 _ => Pintura::Nada,
             };
@@ -275,6 +287,9 @@ fn pintar(
             Pintura::Texto { titulo, parrafos } => {
                 pintar_texto(scene, ts, local, w_px, h_px, cam.zoom, titulo.as_deref(), parrafos);
             }
+            Pintura::Croquis { titulo, cajas } => {
+                pintar_croquis(scene, ts, local, w_px, h_px, cam.zoom, titulo.as_deref(), cajas);
+            }
             Pintura::Imagen(_) | Pintura::Nada => {}
         }
     }
@@ -364,6 +379,73 @@ fn pintar_etiqueta(scene: &mut Scene, ts: &mut Ts, local: Affine, w_px: f32, h_p
     };
     let layout = layout_block(ts, &block);
     draw_layout_xf(scene, &layout, block.color, local * Affine::translate(block.origin));
+}
+
+/// Pinta un **croquis**: una lista de cajas (wireframe, `[x,y,w,h]` normalizadas
+/// a `0..1` del marco) como rectángulos redondeados rellenos + borde, y un badge
+/// con el título (p. ej. el número de escritorio) arriba-izquierda. Todo en el
+/// espacio local del marco, así gira con él. Es la miniatura del editor de Prezi.
+#[allow(clippy::too_many_arguments)]
+fn pintar_croquis(
+    scene: &mut Scene,
+    ts: &mut Ts,
+    local: Affine,
+    w_px: f32,
+    h_px: f32,
+    zoom: f64,
+    titulo: Option<&str>,
+    cajas: &[[f32; 4]],
+) {
+    if w_px < 20.0 || h_px < 16.0 {
+        return; // demasiado chico para el croquis
+    }
+    let (wf, hf) = (w_px as f64, h_px as f64);
+    let r = (3.0 * zoom).clamp(1.5, 6.0);
+    // Clip al marco: una caja con w/h ≈ 1.0 no debe derramar fuera del rect.
+    let clip = KurboRect::new(0.0, 0.0, wf, hf);
+    scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, local, &clip);
+    for c in cajas {
+        let x = c[0].clamp(0.0, 1.0) as f64 * wf;
+        let y = c[1].clamp(0.0, 1.0) as f64 * hf;
+        let w = (c[2].clamp(0.0, 1.0) as f64 * wf).max(2.0);
+        let h = (c[3].clamp(0.0, 1.0) as f64 * hf).max(2.0);
+        let rr = RoundedRect::new(x, y, x + w, y + h, r);
+        scene.fill(Fill::NonZero, local, CROQUIS_VENTANA, None, &rr);
+        scene.stroke(&Stroke::new(1.0), local, CROQUIS_VENTANA_BORDE, None, &rr);
+    }
+    // Badge con el título (número de escritorio), arriba-izquierda.
+    if let Some(t) = titulo.filter(|s| !s.is_empty()) {
+        if w_px >= 42.0 {
+            let size_px = ((11.0 * zoom) as f32).clamp(8.0, 16.0);
+            let block = TextBlock {
+                text: t,
+                size_px,
+                color: CROQUIS_BADGE_TEXTO,
+                origin: (0.0, 0.0),
+                max_width: Some(w_px),
+                alignment: Alignment::Start,
+                line_height: 1.0,
+                italic: false,
+                font_family: None,
+            };
+            let layout = layout_block(ts, &block);
+            let medida = measurement(&layout);
+            let pad = (4.0 * zoom).clamp(2.0, 6.0);
+            let bw = medida.width as f64 + 2.0 * pad;
+            let bh = medida.height as f64 + 1.4 * pad;
+            let bx = (5.0 * zoom).clamp(2.0, 8.0);
+            let by = bx;
+            let badge = RoundedRect::new(bx, by, bx + bw, by + bh, r);
+            scene.fill(Fill::NonZero, local, CROQUIS_BADGE, None, &badge);
+            draw_layout_xf(
+                scene,
+                &layout,
+                CROQUIS_BADGE_TEXTO,
+                local * Affine::translate((bx + pad, by + 0.6 * pad)),
+            );
+        }
+    }
+    scene.pop_layer();
 }
 
 /// Contenido de "slide": título (si hay) + párrafos, fluidos desde la esquina

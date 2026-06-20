@@ -25,7 +25,8 @@ pub type MarcoId = u64;
 /// Qué pinta el host dentro de un marco. El core es agnóstico: guarda una
 /// referencia o etiqueta y deja la resolución (cuerpo, subgrafo de átomos,
 /// imagen, página de deck) al frontend vía `pluma-render-plan` u otro.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+// Sin `Eq`: `Croquis` lleva `f32` (geometría normalizada), que no es `Eq`.
+#[derive(Clone, Debug, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ContenidoMarco {
     #[default]
@@ -42,6 +43,12 @@ pub enum ContenidoMarco {
     Imagen { bytes: Vec<u8>, ancho: u32, alto: u32 },
     /// Referencia opaca que el host resuelve (hash BLAKE3, id de cuerpo, ruta…).
     Ref(String),
+    /// **Croquis**: un título opcional + una lista de cajas (wireframe). Cada
+    /// caja es `[x, y, w, h]` **normalizada** a `0..1` del marco. Sirve para
+    /// "slides diagrama" — un esquema de rectángulos (p. ej. la miniatura de un
+    /// escritorio teselado en el editor de recorrido de mirada). El frontend lo
+    /// pinta como cajas dentro del marco; el core sólo guarda la geometría.
+    Croquis { titulo: Option<String>, cajas: Vec<[f32; 4]> },
 }
 
 /// Un marco colocado en el lienzo: su rectángulo en coordenadas de mundo, su
