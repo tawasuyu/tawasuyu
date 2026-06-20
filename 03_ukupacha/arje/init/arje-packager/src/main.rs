@@ -49,7 +49,12 @@ use arje_packager::{gzip, CpioWriter, EntryKind};
 
 struct Args {
     seed: PathBuf,
-    out: PathBuf,
+    /// Initramfs cpio.gz de salida. Opcional si se pide sólo `--seed-out`.
+    out: Option<PathBuf>,
+    /// Emite el SEED firmado standalone (JSON) a este path, sin (o además del)
+    /// cpio. Lo usa hammer: necesita el `Card::attest` firmado para inyectarlo
+    /// en su product-rootfs (que arma como disco, no como initramfs).
+    seed_out: Option<PathBuf>,
     bins: BTreeMap<String, PathBuf>,
     /// Rootkey del seed para firmar el manifiesto de atestación (A1). 32 bytes
     /// raw. Si no se pasa, el seed se empaqueta sin `attest` (boot sin gate).
@@ -61,6 +66,7 @@ struct Args {
 fn parse_args() -> anyhow::Result<Args> {
     let mut seed: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
+    let mut seed_out: Option<PathBuf> = None;
     let mut bins: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut rootkey: Option<PathBuf> = None;
     let mut gen_rootkey = false;
@@ -73,6 +79,9 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--out" => {
                 out = Some(it.next().context("--out requiere path")?.into());
+            }
+            "--seed-out" => {
+                seed_out = Some(it.next().context("--seed-out requiere path")?.into());
             }
             "--rootkey" => {
                 rootkey = Some(it.next().context("--rootkey requiere path")?.into());
@@ -95,9 +104,13 @@ fn parse_args() -> anyhow::Result<Args> {
         }
     }
 
+    if out.is_none() && seed_out.is_none() {
+        bail!("falta --out (initramfs) y/o --seed-out (seed firmado); pasá al menos uno");
+    }
     Ok(Args {
         seed: seed.ok_or_else(|| anyhow!("falta --seed"))?,
-        out: out.ok_or_else(|| anyhow!("falta --out"))?,
+        out,
+        seed_out,
         bins,
         rootkey,
         gen_rootkey,
@@ -183,6 +196,23 @@ fn run() -> anyhow::Result<()> {
         );
     }
 
+    // Seed firmado standalone (--seed-out): el JSON canónico de la Card ya con
+    // `attest`/`attest_rootkey`. Es lo que hammer inyecta en su product-rootfs.
+    if let Some(seed_out) = &args.seed_out {
+        let seed_bytes = serde_json::to_vec_pretty(&card)?;
+        if let Some(parent) = seed_out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(seed_out, &seed_bytes)
+            .with_context(|| format!("escribiendo seed firmado {}", seed_out.display()))?;
+        eprintln!("arje-packager :: seed firmado -> {}", seed_out.display());
+    }
+
+    // Sin --out: sólo se pidió el seed firmado, no el initramfs.
+    let Some(out_path) = args.out.clone() else {
+        return Ok(());
+    };
+
     // Emitimos el archive.
     let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024 * 1024);
     let mut w = CpioWriter::new(&mut buf);
@@ -224,16 +254,16 @@ fn run() -> anyhow::Result<()> {
 
     let gz = gzip(&buf).context("comprimiendo cpio")?;
     let out_size = gz.len();
-    if let Some(parent) = args.out.parent() {
+    if let Some(parent) = out_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(&args.out, &gz)
-        .with_context(|| format!("escribiendo {}", args.out.display()))?;
+    std::fs::write(&out_path, &gz)
+        .with_context(|| format!("escribiendo {}", out_path.display()))?;
 
     eprintln!(
         "arje-packager :: {} -> {} ({} entradas, {} bytes gzipeados)",
         args.seed.display(),
-        args.out.display(),
+        out_path.display(),
         required.len() + 12, // dirs + dev + init + seed + binarios
         out_size,
     );
