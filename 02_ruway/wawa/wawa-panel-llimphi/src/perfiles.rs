@@ -89,6 +89,24 @@ impl DesktopProfiles {
                 if let Ok(mut lib) = ron::from_str::<DesktopProfiles>(&txt) {
                     if !lib.profiles.is_empty() {
                         lib.repair_active();
+                        // Re-derivar el activo de la config VIVA: la vista cuya
+                        // config coincide con la del compositor es la que está
+                        // realmente aplicada. Si se cambió de vista por otra vía
+                        // (mirada-ctl, menú de mirada) que no tocó este RON, el
+                        // `active` guardado quedaba colgado y el panel mostraba
+                        // «mirada» aunque estuvieras en otra. Si ninguna coincide
+                        // (config personalizada), se respeta el activo guardado.
+                        if let Some(n) = lib
+                            .profiles
+                            .iter()
+                            .find(|(_, p)| &p.mirada == live)
+                            .map(|(n, _)| n.clone())
+                        {
+                            if lib.active != n {
+                                lib.active = n;
+                                let _ = lib.save();
+                            }
+                        }
                         return lib;
                     }
                 }
