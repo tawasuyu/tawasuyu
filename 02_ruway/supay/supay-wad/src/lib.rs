@@ -799,9 +799,32 @@ impl Wad {
         name: &str,
         palette: &[(u8, u8, u8); PALETTE_ENTRIES],
     ) -> Option<Texture> {
-        let lump_t1 = self.lump("TEXTURE1").or_else(|| self.lump("TEXTURE2"))?;
         let pnames = self.pnames()?;
         let want = name.to_ascii_uppercase();
+        // Las texturas se reparten entre TEXTURE1 y TEXTURE2 (Doom registrado
+        // y Freedoom usan ambos; p.ej. CRATE*/METAL/ASHWALL viven en
+        // TEXTURE2). Hay que buscar en LOS DOS — antes un `or_else` sólo
+        // miraba TEXTURE1 y todas las de TEXTURE2 caían a fallback plano.
+        for tex_lump_name in ["TEXTURE1", "TEXTURE2"] {
+            let Some(lump_t1) = self.lump(tex_lump_name) else {
+                continue;
+            };
+            if let Some(tex) = self.texture_from_lump(lump_t1, &pnames, &want, palette) {
+                return Some(tex);
+            }
+        }
+        None
+    }
+
+    /// Busca y compone una textura por nombre dentro de un lump de directorio
+    /// de texturas (TEXTURE1 o TEXTURE2). `want` ya en mayúsculas.
+    fn texture_from_lump(
+        &self,
+        lump_t1: &[u8],
+        pnames: &[String],
+        want: &str,
+        palette: &[(u8, u8, u8); PALETTE_ENTRIES],
+    ) -> Option<Texture> {
         if lump_t1.len() < 4 {
             return None;
         }
@@ -1092,6 +1115,78 @@ mod tests {
         // Parchear el dir_off.
         out[dir_off_placeholder..dir_off_placeholder + 4].copy_from_slice(&dir_off.to_le_bytes());
         out
+    }
+
+    /// Construye un lump de directorio de texturas con UNA textura `name`
+    /// de 64×64 y patchcount 0 (sin patches → rgba transparente, suficiente
+    /// para testear el *lookup* por nombre sin lumps de patch).
+    fn build_texture_lump(name: &str) -> Vec<u8> {
+        let mut mt = Vec::new();
+        let mut nm = [0u8; 8];
+        for (i, b) in name.bytes().take(8).enumerate() {
+            nm[i] = b;
+        }
+        mt.extend_from_slice(&nm); // name[8]
+        mt.extend_from_slice(&0u32.to_le_bytes()); // masked
+        mt.extend_from_slice(&64i16.to_le_bytes()); // width
+        mt.extend_from_slice(&64i16.to_le_bytes()); // height
+        mt.extend_from_slice(&0u32.to_le_bytes()); // columndirectory (obsoleto)
+        mt.extend_from_slice(&0i16.to_le_bytes()); // patchcount = 0
+        let mut lump = Vec::new();
+        lump.extend_from_slice(&1u32.to_le_bytes()); // numtextures = 1
+        let off = 4 + 4; // count + 1 offset
+        lump.extend_from_slice(&(off as u32).to_le_bytes());
+        lump.extend_from_slice(&mt);
+        lump
+    }
+
+    /// WAD con PNAMES (vacío), TEXTURE1 (con `t1`) y TEXTURE2 (con `t2`).
+    fn build_two_texture_lumps_wad(t1: &str, t2: &str) -> Vec<u8> {
+        let pnames = 0u32.to_le_bytes().to_vec(); // 0 patches
+        let tex1 = build_texture_lump(t1);
+        let tex2 = build_texture_lump(t2);
+        let lumps: [(&str, &[u8]); 3] =
+            [("PNAMES", &pnames), ("TEXTURE1", &tex1), ("TEXTURE2", &tex2)];
+        let mut out = Vec::new();
+        out.extend_from_slice(b"IWAD");
+        out.extend_from_slice(&(lumps.len() as u32).to_le_bytes());
+        let dir_off_ph = out.len();
+        out.extend_from_slice(&0u32.to_le_bytes());
+        let mut offs = Vec::new();
+        for (_, body) in lumps.iter() {
+            offs.push(out.len() as u32);
+            out.extend_from_slice(body);
+        }
+        let dir_off = out.len() as u32;
+        for ((name, body), &off) in lumps.iter().zip(offs.iter()) {
+            out.extend_from_slice(&off.to_le_bytes());
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            let mut nm = [0u8; 8];
+            for (i, b) in name.bytes().take(8).enumerate() {
+                nm[i] = b;
+            }
+            out.extend_from_slice(&nm);
+        }
+        out[dir_off_ph..dir_off_ph + 4].copy_from_slice(&dir_off.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn texture_found_in_texture2_not_only_texture1() {
+        // Regresión Fase 3.62: las texturas se reparten entre TEXTURE1 y
+        // TEXTURE2 (Freedoom pone CRATE*/METAL/ASHWALL en TEXTURE2). El
+        // builder debe buscar en AMBOS — antes un `or_else` sólo miraba
+        // TEXTURE1 y las de TEXTURE2 caían a fallback (cajas sin textura).
+        let wad = Wad::parse(build_two_texture_lumps_wad("WALL1", "CRATE2")).unwrap();
+        let pal = [(0u8, 0u8, 0u8); PALETTE_ENTRIES];
+        assert!(wad.texture("WALL1", &pal).is_some(), "encuentra la de TEXTURE1");
+        assert!(
+            wad.texture("CRATE2", &pal).is_some(),
+            "encuentra la de TEXTURE2 (el bug arreglado)"
+        );
+        let t = wad.texture("CRATE2", &pal).unwrap();
+        assert_eq!((t.width, t.height), (64, 64));
+        assert!(wad.texture("NOPE", &pal).is_none(), "inexistente sigue None");
     }
 
     #[test]

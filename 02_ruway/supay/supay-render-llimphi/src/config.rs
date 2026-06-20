@@ -299,6 +299,10 @@ pub struct RenderConfig {
     /// pies, texturizado. `false` o sin BSP ⇒ polígono de segs (3.59).
     /// Default `true`.
     pub bsp_floor_cells: bool,
+    /// **Debug** — tiñe de magenta las paredes sin textura (fallback) y de
+    /// cian los planos sin flat resuelto, para diagnosticar qué superficies
+    /// caen al color plano. Default `false`.
+    pub debug_untextured: bool,
 }
 
 impl Default for RenderConfig {
@@ -335,6 +339,7 @@ impl Default for RenderConfig {
             decal_clip_walls: true,
             occlusion_cull: false,
             bsp_floor_cells: true,
+            debug_untextured: false,
         }
     }
 }

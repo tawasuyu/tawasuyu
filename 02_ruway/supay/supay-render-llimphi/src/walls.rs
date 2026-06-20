@@ -475,6 +475,16 @@ pub(crate) fn gather_wall(
             // planos escalonados — mismo suavizado que el camino texturizado
             // de 3.43. Cierra el desnivel visual entre paredes con y sin
             // atlas (escena stub, app cargada temprano, texturas ausentes).
+            if cfg.debug_untextured {
+                out.push(Renderable {
+                    bsp_rank,
+                    depth,
+                    color: Color::from_rgba8(255, 0, 255, 255),
+                    path,
+                    kind: RenderKind::Fill,
+                });
+                continue;
+            }
             use llimphi_ui::llimphi_raster::peniko::Gradient;
             let (c_bot, c_top) = wall_gradient_colors(wall_idx, wall, sec, depth, cfg);
             let c_bot = apply_color_boost(c_bot, boost_rgb);
@@ -508,13 +518,18 @@ pub(crate) fn gather_wall(
                 p.line_to(tr_b);
                 p.line_to(br_b);
                 p.close_path();
+                let fill_color = if cfg.debug_untextured {
+                    Color::from_rgba8(255, 0, 255, 255) // magenta = pared sin textura
+                } else {
+                    apply_color_boost(
+                        wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
+                        boost_rgb,
+                    )
+                };
                 out.push(Renderable {
                 bsp_rank,
                     depth,
-                    color: apply_color_boost(
-                        wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
-                        boost_rgb,
-                    ),
+                    color: fill_color,
                     path: p,
                     kind: RenderKind::Fill,
                 });

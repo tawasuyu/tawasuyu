@@ -193,6 +193,7 @@ fn main() {
         plane_depth_gradient: true,
         occlusion_cull,
         bsp_floor_cells: std::env::var("SUPAY_NO_CELLS").is_err(),
+        debug_untextured: std::env::var("SUPAY_DEBUG_UNTEX").is_ok(),
         ..RenderConfig::default()
     };
 
