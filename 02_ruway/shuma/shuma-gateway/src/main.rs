@@ -220,13 +220,29 @@ async fn pty_bridge(mut ws: WebSocket, sock: Arc<PathBuf>) {
     // 1) Primer mensaje = spec de apertura (texto JSON).
     let open: PtyOpen = loop {
         match ws.recv().await {
-            Some(Ok(Message::Text(t))) => match serde_json::from_str(&t) {
-                Ok(o) => break o,
-                Err(e) => {
-                    let _ = ws.send(Message::Text(ctl_err(&format!("bad open: {e}")))).await;
-                    return;
+            Some(Ok(Message::Text(t))) => {
+                let v: serde_json::Value = match serde_json::from_str(&t) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = ws.send(Message::Text(ctl_err(&format!("bad open: {e}")))).await;
+                        return;
+                    }
+                };
+                // Un cliente puede encolar un control (p.ej. {"t":"resize"})
+                // antes del open por una carrera de UI (el layout dispara el
+                // resize antes de que onOpen mande el open). Esos frames llevan
+                // `t`; ignóralos y sigue esperando el verdadero open.
+                if v.get("t").is_some() {
+                    continue;
                 }
-            },
+                match serde_json::from_value(v) {
+                    Ok(o) => break o,
+                    Err(e) => {
+                        let _ = ws.send(Message::Text(ctl_err(&format!("bad open: {e}")))).await;
+                        return;
+                    }
+                }
+            }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
             _ => return, // cerró o mandó binario antes de abrir
         }
