@@ -63,14 +63,23 @@ const W: u32 = 1600;
 const H: u32 = 1000;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// Cuántos ticks de física avanzamos antes del pantallazo. Con la
-/// calibración de `init` la población **crece** (2500 → ~6300 en 15 ticks):
-/// hay actividad real (réplicas, extracciones, contadores de acciones) sin
-/// reventar el presupuesto de vello — el plan ya trae 57 600 celdas de
-/// terreno, y por encima de ~7000 lemmings extra el raster GPU desborda sus
-/// buffers internos y devuelve un frame vacío (verificado empíricamente:
-/// 20 ticks ≈ 7100 lemmings → PNG en blanco).
-const TICKS_SEMBRADOS: u64 = 15;
+/// Techo de población antes de pintar. Por encima de ~7000 lemmings el raster
+/// GPU desborda sus buffers internos y devuelve un frame vacío (verificado:
+/// ~7100 lemmings → PNG en blanco; el plan ya trae 57 600 celdas de terreno).
+/// La sim **crece** tick a tick y su calibración deriva con el tiempo (antes
+/// 15 ticks daban ~6300, hoy dan 7062 → un nº fijo de ticks ya cruzaba el
+/// umbral). Por eso avanzamos hasta cruzar este techo y frenamos: el pantallazo
+/// se autocalibra y, en hardware con GPU, muestra una sociedad viva sin reventar
+/// el raster pase lo que pase con la física.
+///
+/// OJO (headless sin GPU): en el camino software (llvmpipe) vello no soporta una
+/// escena tan densa — las 57 600 celdas de terreno *solas* desbordan sus buffers
+/// y el canvas sale negro aunque la población sea baja (verificado: negro ya con
+/// 4671 lemmings). Este pantallazo sólo se confirma visualmente en una máquina
+/// con GPU real; en CI/headless el panel lateral sí renderiza, el lienzo no.
+const POP_TECHO: usize = 6200;
+/// Tope duro de ticks por si la población nunca llega al techo (sim estancada).
+const MAX_TICKS: u64 = 60;
 
 /// Construye el `Model` demo: el mismo estado que `Dominium::init`, pero
 /// con seeder determinista (pack embebido, sin leer el pack del usuario) y
@@ -117,8 +126,12 @@ fn modelo_demo() -> Model {
     // Avanzamos la simulación de verdad: cada `advance` es un tick completo
     // de `dominium-physics` (mover/extraer/sincronizar/replicar/degradar…),
     // así el canvas y las métricas del panel muestran una sociedad viva.
-    for _ in 0..TICKS_SEMBRADOS {
+    // Frenamos al cruzar `POP_TECHO` para no desbordar el raster GPU.
+    for _ in 0..MAX_TICKS {
         sim.advance(false);
+        if sim.world.lemmings.len() >= POP_TECHO {
+            break;
+        }
     }
 
     Model {
