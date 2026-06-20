@@ -46,6 +46,44 @@
     }
 
     #[test]
+    fn wall_gradient_colors_top_brighter_than_bottom() {
+        // Fase 3.56 — la pared sin textura, en el camino de gradiente
+        // vertical, va de más oscuro abajo (piso) a más claro arriba
+        // (techo), reproduciendo la curva zenital de `wall_color` en sus
+        // dos puntas sin las costuras de banda.
+        let wall = WallSeg {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 64.0,
+            y2: 0.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+            textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
+        };
+        let sec = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 200,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let cfg = RenderConfig::default();
+        let (bot, top) = wall_gradient_colors(3, &wall, &sec, 64.0, &cfg);
+        let lb = bot.to_rgba8().to_u8_array();
+        let lt = top.to_rgba8().to_u8_array();
+        let luma = |c: [u8; 4]| c[0] as u32 + c[1] as u32 + c[2] as u32;
+        assert!(
+            luma(lt) > luma(lb),
+            "techo ({:?}) debe ser más claro que piso ({:?})",
+            lt,
+            lb
+        );
+    }
+
+    #[test]
     fn muzzle_brdf_plane_far_horizontal_attenuates() {
         // Floor lejos horizontalmente, poco vertical: centroide (100, 0, -8).
         // direction surf→muzzle = (-100, 0, 8)/sqrt(10064) ≈ (-0.997, 0, 0.080).

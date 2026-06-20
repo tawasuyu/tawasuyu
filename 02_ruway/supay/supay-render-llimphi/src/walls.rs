@@ -469,6 +469,28 @@ pub(crate) fn gather_wall(
                     }
                 }
             }
+        } else if cfg.wall_vertical_gradient {
+            // Fase 3.56: pared sin textura con gradiente vertical continuo
+            // (un solo `GradientFill` piso→techo) en vez de `bands` fills
+            // planos escalonados — mismo suavizado que el camino texturizado
+            // de 3.43. Cierra el desnivel visual entre paredes con y sin
+            // atlas (escena stub, app cargada temprano, texturas ausentes).
+            use llimphi_ui::llimphi_raster::peniko::Gradient;
+            let (c_bot, c_top) = wall_gradient_colors(wall_idx, wall, sec, depth, cfg);
+            let c_bot = apply_color_boost(c_bot, boost_rgb);
+            let c_top = apply_color_boost(c_top, boost_rgb);
+            let start = Point::new((bl.x + br.x) * 0.5, (bl.y + br.y) * 0.5);
+            let end = Point::new((tl.x + tr.x) * 0.5, (tl.y + tr.y) * 0.5);
+            let stops: Vec<(f32, Color)> = vec![(0.0, c_bot), (1.0, c_top)];
+            out.push(Renderable {
+                bsp_rank,
+                depth,
+                color: Color::WHITE,
+                path,
+                kind: RenderKind::GradientFill {
+                    gradient: Gradient::new_linear(start, end).with_stops(stops.as_slice()),
+                },
+            });
         } else {
             // Fallback: bandas horizontales coloreadas (3.1 behavior).
             for b in 0..bands {

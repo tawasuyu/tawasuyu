@@ -117,6 +117,32 @@ pub(crate) fn wall_color(
     tint(base, shade)
 }
 
+/// Colores `(abajo, arriba)` de una pared **sin textura** para el camino de
+/// gradiente vertical continuo (Fase 3.56). Mismo color base + shading por
+/// distancia que [`wall_color`], pero con el multiplicador zenital evaluado
+/// en los extremos `band_t = 0` (piso, más oscuro) y `band_t = 1` (techo,
+/// más claro) en vez de en `bands` escalones discretos — el renderer
+/// interpola entre ambos con un solo `GradientFill`, sin las costuras de
+/// banda. Se omite el jitter por-banda (era un truco de textura falsa para
+/// los escalones; con gradiente suave no aporta). Reproduce el rango
+/// `[0.78, 1.12]·base_shade` de `wall_color` en sus dos puntas.
+pub(crate) fn wall_gradient_colors(
+    wall_idx: u32,
+    wall: &WallSeg,
+    sec: &SectorSnap,
+    depth: f32,
+    cfg: &RenderConfig,
+) -> (Color, Color) {
+    let h = wall_hash(wall_idx).wrapping_add(wall.front_sector.wrapping_mul(7));
+    let base = WALL_PALETTE[(h as usize) % WALL_PALETTE.len()];
+    let base_shade = shade_for(sec.light_level, depth, cfg);
+    let at = |band_t: f32| {
+        let band_mul = 0.78 + 0.34 * band_t;
+        tint(base, (base_shade * band_mul).clamp(0.05, 1.0))
+    };
+    (at(0.0), at(1.0))
+}
+
 pub(crate) fn floor_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig) -> Color {
     let rgb = cfg
         .atlas
