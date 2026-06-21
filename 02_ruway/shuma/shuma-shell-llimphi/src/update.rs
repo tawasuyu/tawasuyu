@@ -346,6 +346,48 @@ pub(crate) fn poll_matilda_fleet(m: &Model, handle: &Handle<Msg>) {
     }
 }
 
+/// M4 — polling del runtime del Source montado **remoto**. El `poll_matilda_
+/// runtime` sólo cubre instancias locales (re-observar local es barato); las
+/// remotas necesitan SSH, así que se poll-ean a la cadencia lenta (~30 s) y
+/// silenciosas (`SetRuntimeQuiet`). Un guard atómico (`runtime_poll_inflight`)
+/// evita apilar fetches si el host montado queda colgado.
+pub(crate) fn poll_matilda_remote_runtime(m: &Model, handle: &Handle<Msg>) {
+    use std::sync::atomic::Ordering;
+    for slot in [Slot::TopBar, Slot::BottomBar, Slot::Main] {
+        let inst = match slot {
+            Slot::TopBar => m.topbar.as_ref(),
+            Slot::BottomBar => m.bottombar.as_ref(),
+            Slot::Main => m.main.as_ref(),
+            _ => None,
+        };
+        let Some(inst) = inst else { continue };
+        let ModuleState::Matilda(st) = &inst.state else { continue };
+        if !st.source.is_remote() {
+            continue;
+        }
+        let inflight = st.runtime_poll_inflight.clone();
+        // compare_exchange false→true: si ya había un fetch en vuelo, saltamos.
+        if inflight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            continue;
+        }
+        let source = st.source.clone();
+        let slot_back = slot.clone();
+        handle.spawn(move || {
+            let msg = match shuma_module_matilda::source_runtime_remote_blocking(&source) {
+                Ok(rt) => shuma_module_matilda::Msg::SetRuntimeQuiet(rt),
+                // Un fallo de SSH no debe spamear: lo dejamos pasar silencioso
+                // (el próximo tick reintenta). LogLines vacío = no-op visible.
+                Err(_) => shuma_module_matilda::Msg::LogLines(Vec::new()),
+            };
+            inflight.store(false, Ordering::Release);
+            Msg::Module(slot_back, ModuleMsg::Matilda(msg))
+        });
+    }
+}
+
 /// E5 — cumple las peticiones LLM pendientes de los shells montados. El
 /// módulo sólo expresa la intención (`State::llm_request`); acá la tomamos,
 /// corremos `pluma-llm` en un thread (con su propio runtime tokio) y

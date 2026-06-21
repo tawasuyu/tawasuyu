@@ -594,6 +594,8 @@ impl App for Shell {
                 // runtime local. Sólo corre si la flota ya fue activada.
                 if m.tick_count % 30 == 0 {
                     update::poll_matilda_fleet(&m, handle);
+                    // M4 — y el runtime del Source montado si es remoto.
+                    update::poll_matilda_remote_runtime(&m, handle);
                 }
                 // env.json cambió (builtin `:env` u otra instancia) → recargar.
                 let mtime = persist::env_groups_mtime();

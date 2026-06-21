@@ -74,10 +74,16 @@ sistema). El panel lista "SERVICES declarados" con sus flags y si corren. El
 loop declarar→plan→apply→runtime queda cerrado. **Pendiente:** discovery de
 estado de servicios por SSH (remoto v1 los ve como Create, idempotente).
 
-### M4. Polling periódico real ✅ (2026-06-13, local)
+### M4. Polling periódico real ✅ (2026-06-13 local · 2026-06-21 remoto)
 El chasis poll-ea `poll_runtime()` cada 5 s en un thread para las instancias
 matilda Local (topbar/bottombar/main) → `Msg::SetRuntimeQuiet`. El semáforo
-queda vivo sin pulsar Discover. **Pendiente:** polling remoto (SSH por tick).
+queda vivo sin pulsar Discover. **Remoto ✅ (2026-06-21):** el Source montado
+remoto se re-observa por SSH a la cadencia lenta (~30 s, no cada 5 s porque el
+fetch es caro) vía `poll_matilda_remote_runtime` + `source_runtime_remote_
+blocking` (factorizado con el fetch de flota en `fetch_remote_runtime`),
+silencioso (`SetRuntimeQuiet`) y con guard atómico (`runtime_poll_inflight`)
+contra el apilamiento si el host queda colgado. Un fallo de SSH se deja pasar
+silencioso y el próximo tick reintenta.
 
 ### M5. Multi-host fan-out ✅ (2026-06-13, monitoreo de flota)
 `matilda_core::Host` gana `user`/`port` SSH (default root/22). El bloque tiene
@@ -126,5 +132,6 @@ ves qué corre y qué se cayó en cada host, operás el host montado sin bajar a
 terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Operás
 también recursos de cualquier host de la flota sin montarlo (M5, 2026-06-21).
 Lo que queda son los "pendientes" acotados de cada M: stream de logs `-f`
-continuo + series CPU/mem (M2), servicios remotos por SSH para el drift (M3),
-polling remoto del Source montado (M4).
+continuo + series CPU/mem (M2) y discovery de drift de servicios remotos por
+SSH (M3). El polling (local, remoto y de flota) y las acciones (local, Source
+remoto y flota) quedaron cerrados el 2026-06-21.

@@ -101,6 +101,11 @@ pub struct State {
     /// tick tras tick. Lo comparte el chasis con el thread de polling; el
     /// thread se borra a sí mismo al terminar. Vacío = nada en vuelo.
     pub fleet_poll_inflight: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// `true` mientras un fetch de runtime del Source montado remoto está en
+    /// vuelo (M4) — guard anti-apilamiento del polling, igual criterio que
+    /// `fleet_poll_inflight` pero para el host montado. Compartido con el
+    /// thread, que lo baja al terminar.
+    pub runtime_poll_inflight: Arc<std::sync::atomic::AtomicBool>,
     /// Contenedor de la flota seleccionado dentro del host expandido — abre
     /// la barra de acciones remotas (M5). Scoped al `selected_host`; se
     /// limpia al cambiar de host. `None` = nada seleccionado.
@@ -135,6 +140,7 @@ impl State {
             fleet: std::collections::BTreeMap::new(),
             selected_host: None,
             fleet_poll_inflight: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            runtime_poll_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             selected_fleet_container: None,
             selected_fleet_service: None,
             pending_steps: Arc::new(Mutex::new(0)),
@@ -618,38 +624,66 @@ pub fn update(state: State, msg: Msg) -> State {
 /// parsers del discover local. Pensado para que el chasis lo corra en un
 /// thread por host y reenvíe `Msg::SetHostRuntime`/`SetHostError`.
 pub fn host_runtime_remote_blocking(host: &Host) -> Result<RuntimeState, String> {
-    let auth = SshAuth::Key { path: default_ssh_key(), passphrase: None };
-    let mut config = SshConfig::new(host.address.as_str(), host.ssh_user(), auth);
-    config.port = host.ssh_port();
+    let config = ssh_config_for_host(host);
     let rt = blocking_runtime()?;
     rt.block_on(async move {
         let linker = Linker::connect(&config)
             .await
             .map_err(|e| format!("ssh connect: {e}"))?;
-        let ps = linker
-            .exec(&format!(
-                "docker ps -a --format '{}' 2>/dev/null || true",
-                matilda_discover::DOCKER_PS_FORMAT
-            ))
-            .await
-            .map_err(|e| format!("docker ps: {e}"))?;
-        let svc = linker
-            .exec(
-                "systemctl list-units --type=service --state=running,failed \
-                 --no-legend --plain 2>/dev/null || true",
-            )
-            .await
-            .map_err(|e| format!("systemctl: {e}"))?;
-        let nginx = linker
-            .exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null || true")
-            .await
-            .map_err(|e| format!("ls sites-enabled: {e}"))?;
-        Ok(RuntimeState {
-            containers: matilda_discover::parse_docker_ps(&ps),
-            services: matilda_discover::parse_systemctl_units(&svc),
-            vhosts: matilda_discover::parse_nginx_sites(&nginx),
-        })
+        fetch_remote_runtime(&linker).await
     })
+}
+
+/// Corre las consultas de runtime (`docker ps` + `systemctl` + `ls
+/// sites-enabled`) sobre un `Linker` ya conectado y arma el `RuntimeState`
+/// con los mismos parsers del discover local. Compartido por el fetch de un
+/// host de la flota (M5) y el polling del Source montado remoto (M4).
+async fn fetch_remote_runtime(linker: &Linker) -> Result<RuntimeState, String> {
+    let ps = linker
+        .exec(&format!(
+            "docker ps -a --format '{}' 2>/dev/null || true",
+            matilda_discover::DOCKER_PS_FORMAT
+        ))
+        .await
+        .map_err(|e| format!("docker ps: {e}"))?;
+    let svc = linker
+        .exec(
+            "systemctl list-units --type=service --state=running,failed \
+             --no-legend --plain 2>/dev/null || true",
+        )
+        .await
+        .map_err(|e| format!("systemctl: {e}"))?;
+    let nginx = linker
+        .exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null || true")
+        .await
+        .map_err(|e| format!("ls sites-enabled: {e}"))?;
+    Ok(RuntimeState {
+        containers: matilda_discover::parse_docker_ps(&ps),
+        services: matilda_discover::parse_systemctl_units(&svc),
+        vhosts: matilda_discover::parse_nginx_sites(&nginx),
+    })
+}
+
+/// M4 — re-observa el runtime del **Source montado** cuando es remoto (lo que
+/// `poll_runtime` hace local). **Bloqueante**: el chasis lo corre en un thread
+/// a cadencia lenta y reenvía `Msg::SetRuntimeQuiet`. Para Source local cae a
+/// `discover_runtime` por uniformidad (sin abrir SSH).
+pub fn source_runtime_remote_blocking(source: &Source) -> Result<RuntimeState, String> {
+    match source {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
+            Ok(discover_runtime())
+        }
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                fetch_remote_runtime(&linker).await
+            })
+        }
+    }
 }
 
 /// Config SSH para un `Host` de la flota: clave default del usuario +
@@ -2201,6 +2235,14 @@ mod tests {
         s = update(s, Msg::SelectHost("edge-2".into()));
         assert!(s.selected_fleet_container.is_none());
         assert!(s.selected_fleet_service.is_none());
+    }
+
+    #[test]
+    fn source_runtime_remote_blocking_local_no_abre_ssh() {
+        // Para Source::Local cae a `discover_runtime` (sin SSH). En CI sin
+        // docker retorna un runtime vacío, pero Ok.
+        let res = source_runtime_remote_blocking(&Source::Local);
+        assert!(res.is_ok());
     }
 
     #[test]
