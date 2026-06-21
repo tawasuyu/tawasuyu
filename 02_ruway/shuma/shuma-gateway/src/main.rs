@@ -26,8 +26,10 @@
 //!
 //! Pensado para clientes no-Rust (app Android, web, curl) que no hablan postcard.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::{
     body::Bytes,
@@ -69,6 +71,53 @@ struct AppState {
     /// por `POST /event` y los clientes (consola) los reciben por
     /// `GET /ws/events`. El gateway solo retransmite el JSON tal cual.
     events: broadcast::Sender<String>,
+    /// Endpoints UnifiedPush registrados por la app (consola): cada `/event`
+    /// se reenvía a ellos para entrega en background con la app cerrada.
+    up: Arc<UpStore>,
+    /// Cliente HTTP para empujar a los endpoints UnifiedPush (ntfy).
+    http: reqwest::Client,
+}
+
+/// Registro persistente de endpoints UnifiedPush. Set en memoria + archivo
+/// JSON (sobrevive reinicios del gateway).
+struct UpStore {
+    path: PathBuf,
+    set: Mutex<HashSet<String>>,
+}
+
+impl UpStore {
+    fn load(path: PathBuf) -> Self {
+        let set = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_default();
+        UpStore { path, set: Mutex::new(set) }
+    }
+    fn save(&self) {
+        if let Some(dir) = self.path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let v: Vec<String> = self.set.lock().unwrap().iter().cloned().collect();
+        if let Ok(s) = serde_json::to_string(&v) {
+            let _ = std::fs::write(&self.path, s);
+        }
+    }
+    fn add(&self, ep: String) {
+        let nuevo = self.set.lock().unwrap().insert(ep);
+        if nuevo {
+            self.save();
+        }
+    }
+    fn remove(&self, ep: &str) {
+        let había = self.set.lock().unwrap().remove(ep);
+        if había {
+            self.save();
+        }
+    }
+    fn list(&self) -> Vec<String> {
+        self.set.lock().unwrap().iter().cloned().collect()
+    }
 }
 
 #[tokio::main]
@@ -81,10 +130,19 @@ async fn main() -> anyhow::Result<()> {
         .map(Arc::new);
 
     let (events, _) = broadcast::channel::<String>(256);
+    let up_path = std::env::var("SHUMA_UP_STORE")
+        .unwrap_or_else(|_| "/home/sergio/.local/share/shuma/up-endpoints.json".into());
+    let up = Arc::new(UpStore::load(PathBuf::from(up_path)));
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?;
+    info!(endpoints = up.list().len(), "UnifiedPush endpoints cargados");
     let state = AppState {
         sock: Arc::new(default_socket_path()),
         token,
         events,
+        up,
+        http,
     };
 
     let app = Router::new()
@@ -98,6 +156,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/ws/pty", get(ws_pty))
         .route("/event", post(post_event))
         .route("/ws/events", get(ws_events))
+        .route("/register", post(post_register))
+        .route("/unregister", post(post_unregister))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&listen).await?;
@@ -289,14 +349,82 @@ async fn post_event(State(state): State<AppState>, headers: HeaderMap, body: Byt
     if !authorized(&state, &headers, None) {
         return (StatusCode::UNAUTHORIZED, Json(err("unauthorized"))).into_response();
     }
-    let payload = match String::from_utf8(body.to_vec()) {
+    let raw = match String::from_utf8(body.to_vec()) {
         Ok(s) if !s.trim().is_empty() => s,
         _ => return (StatusCode::BAD_REQUEST, Json(err("evento vacío o no-UTF8"))).into_response(),
     };
-    // send() falla solo si no hay suscriptores (teléfono desconectado): no es
-    // un error, simplemente nadie escucha ahora mismo.
+    // Sellamos un `id` único si no lo trae: el cliente deduplica entre el WS
+    // (foreground) y el push UnifiedPush (background), que entregan lo mismo.
+    let payload = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(serde_json::Value::Object(mut m)) => {
+            m.entry("id")
+                .or_insert_with(|| serde_json::Value::String(Ulid::new().to_string()));
+            serde_json::to_string(&m).unwrap_or(raw)
+        }
+        _ => raw,
+    };
+
+    // 1) Reenvío a los endpoints UnifiedPush (background, app cerrada).
+    let endpoints = state.up.list();
+    for ep in endpoints {
+        let http = state.http.clone();
+        let up = state.up.clone();
+        let msg = payload.clone();
+        tokio::spawn(async move {
+            match http
+                .post(&ep)
+                .header("Content-Type", "application/json")
+                .body(msg)
+                .send()
+                .await
+            {
+                // 404/410 = endpoint muerto (la app se dio de baja): purgar.
+                Ok(r) if r.status() == 404 || r.status() == 410 => up.remove(&ep),
+                _ => {}
+            }
+        });
+    }
+
+    // 2) Broadcast a los clientes WS (foreground). send() falla solo si no hay
+    //    suscriptores: no es error, simplemente nadie escucha ahora.
     let subscribers = state.events.send(payload).unwrap_or(0);
     (StatusCode::OK, Json(serde_json::json!({ "ok": true, "subscribers": subscribers }))).into_response()
+}
+
+#[derive(Deserialize)]
+struct RegisterBody {
+    endpoint: String,
+}
+
+/// POST /register — la app registra su endpoint UnifiedPush para recibir los
+/// eventos en background. Idempotente.
+async fn post_register(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(b): Json<RegisterBody>,
+) -> AxumResponse {
+    if !authorized(&state, &headers, None) {
+        return (StatusCode::UNAUTHORIZED, Json(err("unauthorized"))).into_response();
+    }
+    if !b.endpoint.starts_with("http") {
+        return (StatusCode::BAD_REQUEST, Json(err("endpoint inválido"))).into_response();
+    }
+    state.up.add(b.endpoint);
+    info!(total = state.up.list().len(), "endpoint UnifiedPush registrado");
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+/// POST /unregister — la app se da de baja (cambió de distribuidor, etc.).
+async fn post_unregister(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(b): Json<RegisterBody>,
+) -> AxumResponse {
+    if !authorized(&state, &headers, None) {
+        return (StatusCode::UNAUTHORIZED, Json(err("unauthorized"))).into_response();
+    }
+    state.up.remove(&b.endpoint);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
 /// GET /ws/events — el cliente se suscribe y recibe cada evento como texto.
