@@ -109,6 +109,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":scrollback" => return apply_scrollback(s, rest),
             ":save" => return save_group(s, rest),
             ":write" => return apply_write(s, rest),
+            ":yank" | ":copy" => return apply_yank(s, rest),
             ":groups" => return apply_groups_list(s),
             ":macro" => return apply_macro(s, rest),
             ":macros" => return list_macros(s),

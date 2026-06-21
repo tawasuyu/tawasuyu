@@ -1219,6 +1219,39 @@ pub(crate) fn apply_write(mut s: State, rest: &str) -> State {
     s
 }
 
+/// `:yank [%cN]` (alias `:copy`) — copia el stdout de un bloque al clipboard
+/// del SO (el par de `:write`, pero a portapapeles). Sin ref usa el último
+/// bloque con salida. Reusa `set_clipboard` (best-effort: no-op silencioso sin
+/// display server, igual que el copy de la selección).
+pub(crate) fn apply_yank(mut s: State, rest: &str) -> State {
+    let first = rest.trim().split_whitespace().next().unwrap_or("");
+    let block = if first.starts_with("%c") || first.starts_with("%p") {
+        parse_block_ref(&s, first)
+    } else {
+        parse_block_ref(&s, "")
+    };
+    let Some(block) = block else {
+        s.push_output(OutputLine::notice(
+            "✘ :yank — no hay salida de un bloque previo para copiar",
+        ));
+        return s;
+    };
+    let data = gather_block_stdout(&s, block);
+    if data.is_empty() {
+        s.push_output(OutputLine::notice(format!(
+            "✘ :yank — el bloque %c{block} no tiene stdout"
+        )));
+        return s;
+    }
+    set_clipboard(&data);
+    s.push_output(OutputLine::notice(format!(
+        "✔ %c{block}: {} bytes ({} líneas) → clipboard",
+        data.len(),
+        data.lines().count()
+    )));
+    s
+}
+
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
     let mut out = String::new();
     for l in &s.output {

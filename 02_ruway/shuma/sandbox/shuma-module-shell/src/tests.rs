@@ -238,6 +238,32 @@
     }
 
     #[test]
+    fn yank_copia_el_bloque_y_avisa() {
+        // El write al clipboard es best-effort (no-op headless); probamos el
+        // resolver + el aviso con el conteo correcto.
+        let mut s = State::new(Source::Local);
+        for t in ["uno", "dos"] {
+            let mut l = OutputLine::stdout(t);
+            l.block = 4;
+            s.output.push(l);
+        }
+        s.input.set_text(":yank %c4");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.text.contains("2 líneas") && l.text.contains("clipboard")));
+    }
+
+    #[test]
+    fn yank_sin_salida_avisa() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text(":yank");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("no hay salida")));
+    }
+
+    #[test]
     fn explica_arma_request_text_con_la_salida_del_bloque() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
