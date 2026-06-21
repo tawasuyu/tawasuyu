@@ -21,10 +21,49 @@ pub(crate) fn apply_scroll_delta(mut s: State, delta: f32) -> State {
     if new_scroll_y >= overflow - 0.5 {
         s.scroll_px = 0.0;
         s.surf_scroll_anchor = 0.0;
+        // Re-pinned al fondo: la ventana del archive vuelve a "cola" liviana
+        // (las últimas N), así no carga de más cuando no se la mira.
+        if let Ok(mut c) = s.surf_spilled_visible.lock() {
+            c.window_start = None;
+        }
     } else {
         s.scroll_px = overflow - new_scroll_y;
         s.surf_scroll_anchor = overflow;
+        s = maybe_page_spill_back(s, new_scroll_y, overflow);
     }
+    s
+}
+
+/// Altura de una línea de output (espeja `view::command_card::ROW_H`, privado
+/// a ese módulo). Usada para la matemática de anclaje del paginado del archive.
+const SPILL_ROW_H: f32 = 16.0;
+
+/// Fase 5.12 — al rozar el borde superior del contenido, paginá el archive
+/// spilled hacia atrás cargando una página más vieja. Prepender K líneas no
+/// cambia la distancia al fondo (`scroll_px` queda igual): sólo subimos el
+/// ancla por `K·row_h` para que la línea que el usuario mira no salte cuando el
+/// próximo render agregue esas líneas arriba.
+fn maybe_page_spill_back(mut s: State, new_scroll_y: f32, overflow: f32) -> State {
+    let row_h = SPILL_ROW_H * s.font_zoom.clamp(0.5, 3.0);
+    let spilled_count = s
+        .surf_history
+        .lock()
+        .map(|h| h.spilled_count())
+        .unwrap_or(0);
+    let window_start = s.surf_spilled_visible.lock().ok().and_then(|c| c.window_start);
+    let Some(new_start) =
+        crate::spill_page_back(window_start, spilled_count, new_scroll_y, row_h)
+    else {
+        return s;
+    };
+    let effective = crate::spill_effective_start(window_start, spilled_count);
+    let k = effective.saturating_sub(new_start);
+    if let Ok(mut c) = s.surf_spilled_visible.lock() {
+        c.window_start = Some(new_start);
+    }
+    // El render sumará K líneas arriba → overflow crece K·row_h. Subimos el
+    // ancla igual para preservar la posición visual (scroll_px ya quedó fijo).
+    s.surf_scroll_anchor = overflow + k as f32 * row_h;
     s
 }
 

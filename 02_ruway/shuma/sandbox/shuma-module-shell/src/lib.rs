@@ -105,12 +105,52 @@ fn build_surf_history(config: &shuma_config::Config) -> llimphi_widget_terminal:
     sb
 }
 
-/// Refresca el cache de líneas spilled visibles si `spilled_count` cambió
-/// desde el último refresh. Lee las últimas [`MAX_SPILLED_VISIBLE`] líneas
-/// del archive vía `Scrollback::read_spilled`. Si el read falla por I/O,
-/// la entrada queda como `<I/O error>` (no propaga el error — el view
-/// sigue mostrando el resto). Sincrono: el costo del refresh es N reads
-/// del archivo, una sola vez por cambio de spill (no por frame).
+/// Inicio efectivo (global id) de la ventana del archive para un
+/// `window_start` deseado y un `spilled_count` dado. Puro y testeable.
+///
+/// - `None` (cola automática): las últimas [`MAX_SPILLED_VISIBLE`].
+/// - `Some(id)`: el inicio que pidió el paginado, pero **clampeado** a no
+///   cargar más de [`MAX_SPILLED_LOADED`] líneas desde el final (piso duro) y
+///   a no pasar del propio `spilled_count`.
+pub(crate) fn spill_effective_start(window_start: Option<u64>, spilled_count: usize) -> u64 {
+    let floor = spilled_count.saturating_sub(MAX_SPILLED_LOADED) as u64;
+    match window_start {
+        None => spilled_count.saturating_sub(MAX_SPILLED_VISIBLE) as u64,
+        Some(id) => id.max(floor).min(spilled_count as u64),
+    }
+}
+
+/// Decide si paginar hacia atrás el archive al estar cerca del tope del
+/// contenido. Devuelve `Some(nuevo_window_start)` si hay líneas más viejas
+/// por cargar y el scroll está a tiro del borde superior; `None` si no hay
+/// que paginar (ya en el inicio, contra el piso de carga, o lejos del tope).
+/// Puro y testeable — no toca I/O ni estado.
+pub(crate) fn spill_page_back(
+    window_start: Option<u64>,
+    spilled_count: usize,
+    scroll_y: f32,
+    row_h: f32,
+) -> Option<u64> {
+    // Sólo cuando el viewport está pegado al borde superior del contenido.
+    if scroll_y > row_h * 3.0 {
+        return None;
+    }
+    let effective = spill_effective_start(window_start, spilled_count);
+    let floor = spilled_count.saturating_sub(MAX_SPILLED_LOADED) as u64;
+    // Ya en el inicio del archive, o tocando el piso de carga → nada que traer.
+    if effective == 0 || effective <= floor {
+        return None;
+    }
+    let new_start = effective.saturating_sub(SPILL_PAGE as u64).max(floor);
+    (new_start < effective).then_some(new_start)
+}
+
+/// Refresca el cache de líneas spilled visibles si la ventana cambió (nuevo
+/// spill al final, o el usuario paginó hacia atrás). Lee `[effective_start,
+/// spilled_count)` del archive vía `Scrollback::read_spilled`. Si el read
+/// falla por I/O, la entrada queda como `<I/O error>` (no propaga — el view
+/// sigue). Síncrono: el costo es N reads, una sola vez por cambio de ventana
+/// (early-return si nada cambió, así no cuesta por frame).
 pub(crate) fn refresh_surf_spilled_visible(
     history: &Arc<Mutex<llimphi_widget_terminal::Scrollback>>,
     cache: &Arc<Mutex<SurfSpilledCache>>,
@@ -120,15 +160,21 @@ pub(crate) fn refresh_surf_spilled_visible(
         let Ok(h) = history.lock() else { return };
         (h.spilled_count(), h.clone())
     };
-    {
+    let first_id = {
         let Ok(c) = cache.lock() else { return };
-        if c.cached_at == spilled_count {
-            return; // no hubo append al spill desde el último refresh
+        let first_id = spill_effective_start(c.window_start, spilled_count);
+        // Fresco si no spilleó más Y la ventana arranca donde ya está cargada.
+        if c.cached_at == spilled_count && c.first_id == first_id && !c.lines.is_empty() {
+            return;
         }
-    }
-    // Refresh: leer las últimas N spilled.
-    let n = spilled_count.min(MAX_SPILLED_VISIBLE);
-    let first_id = (spilled_count - n) as u64;
+        // Caso degenerado: sin nada spilleado, limpiá el cache.
+        if spilled_count == 0 {
+            return;
+        }
+        first_id
+    };
+    // Refresh: leer `[first_id, spilled_count)`.
+    let n = (spilled_count as u64).saturating_sub(first_id) as usize;
     let mut lines = Vec::with_capacity(n);
     for i in 0..n {
         let id = first_id + i as u64;

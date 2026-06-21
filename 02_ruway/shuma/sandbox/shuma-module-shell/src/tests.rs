@@ -1930,6 +1930,108 @@
     }
 
     #[test]
+    fn spill_effective_start_cola_y_paginada() {
+        // Cola (None): arranca en las últimas MAX_SPILLED_VISIBLE.
+        assert_eq!(
+            spill_effective_start(None, 1000),
+            (1000 - MAX_SPILLED_VISIBLE) as u64
+        );
+        // Menos historial que la ventana → arranca en 0.
+        assert_eq!(spill_effective_start(None, 50), 0);
+        // Paginada Some(id) sobre el piso → respeta el id.
+        assert_eq!(spill_effective_start(Some(100), 1000), 100);
+        // Clampea al piso: no más de MAX_SPILLED_LOADED desde el final.
+        let floor = (5000 - MAX_SPILLED_LOADED) as u64;
+        assert_eq!(spill_effective_start(Some(0), 5000), floor);
+    }
+
+    #[test]
+    fn spill_page_back_decision() {
+        let row_h = 16.0;
+        let near = row_h; // < row_h*3 → "cerca del tope"
+        // Lejos del tope → no pagina.
+        assert!(spill_page_back(None, 1000, 500.0, row_h).is_none());
+        // Cerca del tope con historial por delante → retrocede una página.
+        let got = spill_page_back(None, 1000, near, row_h).expect("pagina");
+        assert_eq!(got, (1000 - MAX_SPILLED_VISIBLE - SPILL_PAGE) as u64);
+        // En el inicio del archive (effective 0) → nada más que traer.
+        assert!(spill_page_back(Some(0), 50, near, row_h).is_none());
+        // Contra el piso de carga → no pagina más.
+        let floor = (5000 - MAX_SPILLED_LOADED) as u64;
+        assert!(spill_page_back(Some(floor), 5000, near, row_h).is_none());
+    }
+
+    #[test]
+    fn refresh_carga_ventana_paginada_mas_vieja() {
+        use llimphi_widget_terminal::{Scrollback, SpillStore};
+        let dir = tempfile::tempdir().unwrap();
+        let mut sb = Scrollback::new(10);
+        let spill = SpillStore::create(dir.path().join("test.spill")).unwrap();
+        sb.enable_spill(spill);
+        let history = Arc::new(Mutex::new(sb));
+        for i in 0..400 {
+            history.lock().unwrap().push_line(&format!("L{i:04}"));
+        }
+        let spilled = history.lock().unwrap().spilled_count();
+        assert!(spilled > MAX_SPILLED_VISIBLE);
+        let cache = Arc::new(Mutex::new(SurfSpilledCache::default()));
+        // Cola (default): carga sólo las últimas MAX_SPILLED_VISIBLE.
+        refresh_surf_spilled_visible(&history, &cache);
+        {
+            let c = cache.lock().unwrap();
+            assert_eq!(c.lines.len(), MAX_SPILLED_VISIBLE);
+            assert_eq!(c.first_id, (spilled - MAX_SPILLED_VISIBLE) as u64);
+        }
+        // Paginar al inicio: window_start = Some(0) → carga desde la id 0.
+        cache.lock().unwrap().window_start = Some(0);
+        refresh_surf_spilled_visible(&history, &cache);
+        let c = cache.lock().unwrap();
+        assert_eq!(c.first_id, 0, "la ventana arranca en el inicio del archive");
+        assert_eq!(c.lines.len(), spilled, "todo el archive (< MAX_SPILLED_LOADED)");
+        assert_eq!(c.lines.first(), Some(&"L0000".to_string()));
+    }
+
+    #[test]
+    fn scroll_al_tope_pagina_el_archive_y_estabiliza() {
+        use llimphi_widget_terminal::{Scrollback, SpillStore};
+        let mut s = State::new(Source::Local);
+        let dir = tempfile::tempdir().unwrap();
+        let mut sb = Scrollback::new(10);
+        let spill = SpillStore::create(dir.path().join("t.spill")).unwrap();
+        sb.enable_spill(spill);
+        // Suficientes para que la cola + una página no agoten el archive.
+        for i in 0..1000 {
+            sb.push_line(&format!("L{i:04}"));
+        }
+        *s.surf_history.lock().unwrap() = sb;
+        let spilled = s.surf_history.lock().unwrap().spilled_count();
+        assert!(spilled > MAX_SPILLED_VISIBLE + SPILL_PAGE);
+        // Simulamos estar scrolled-up pegados al borde superior: overflow
+        // grande y scroll_px ~ overflow (scroll_y ≈ 0).
+        *s.out_overflow.lock().unwrap() = 1000.0;
+        s.scroll_px = 1000.0;
+        s.surf_scroll_anchor = 1000.0;
+        assert!(s.surf_spilled_visible.lock().unwrap().window_start.is_none());
+
+        // Rueda hacia arriba estando en el tope → pagina el archive.
+        s = crate::update::apply_scroll_delta(s, 50.0);
+        let ws = s.surf_spilled_visible.lock().unwrap().window_start;
+        assert_eq!(
+            ws,
+            Some((spilled - MAX_SPILLED_VISIBLE - SPILL_PAGE) as u64),
+            "retrocedió una página desde la cola"
+        );
+        // El ancla subió (K·row_h) para que la vista no salte al prependear.
+        assert!(s.surf_scroll_anchor > 1000.0, "ancla compensada");
+
+        // Volver al fondo resetea la ventana a "cola" liviana.
+        *s.out_overflow.lock().unwrap() = 1000.0;
+        s.scroll_px = 0.0;
+        s = crate::update::apply_scroll_delta(s, -5000.0); // delta abajo fuerte
+        assert!(s.surf_spilled_visible.lock().unwrap().window_start.is_none());
+    }
+
+    #[test]
     fn clear_output_tambien_resetea_history() {
         let mut s = State::new(Source::Local);
         s.push_output(OutputLine::stdout("a"));

@@ -286,17 +286,33 @@ pub struct FindState {
 pub struct SurfSpilledCache {
     /// Líneas spilleadas en orden cronológico (las más recientes que caben).
     /// La 0 corresponde a `global_id = first_id`; la última a `first_id +
-    /// lines.len() - 1`. Cap a [`MAX_SPILLED_VISIBLE`].
+    /// lines.len() - 1`. Cap a [`MAX_SPILLED_LOADED`].
     pub lines: Vec<String>,
     /// Global id de la primera línea cacheada (la más vieja del cache).
     pub first_id: u64,
     /// `spilled_count` al momento del último refresh — para detectar staleness.
     pub cached_at: usize,
+    /// Inicio deseado de la ventana del archive (Fase 5.12 — paginado al
+    /// scrollear hacia arriba). `None` = ventana "cola" automática (las
+    /// últimas [`MAX_SPILLED_VISIBLE`], liviana, sigue el final cuando spillea
+    /// más). `Some(id)` = el usuario paginó hacia atrás: la ventana arranca en
+    /// `id` (clampeado a no más de [`MAX_SPILLED_LOADED`] desde el final) y se
+    /// congela ahí hasta que vuelva al fondo. Lo mueve `apply_scroll_delta`.
+    pub window_start: Option<u64>,
 }
 
-/// Tope de líneas spilleadas visibles directamente al frente del view.
-/// Más allá → `:scrollback open`. ~30 KB para líneas típicas de 150 chars.
+/// Tope de líneas spilleadas que la ventana "cola" muestra de entrada
+/// (pegadas al buffer vivo). Más atrás se carga paginando al scrollear.
+/// ~30 KB para líneas típicas de 150 chars.
 pub const MAX_SPILLED_VISIBLE: usize = 200;
+
+/// Tope duro de líneas spilleadas cargadas a la vez al paginar hacia atrás
+/// (acota memoria + tiempo de refresh). Más viejo que esto → `:scrollback
+/// open`. ~300 KB para líneas típicas.
+pub const MAX_SPILLED_LOADED: usize = 2000;
+
+/// Cuántas líneas más viejas carga cada paginación al tocar el tope.
+pub const SPILL_PAGE: usize = 200;
 
 /// Snapshot del layout del cuerpo de output bajo `SHUMA_TERMINAL_SURFACE=1`.
 /// Lo escribe `output_pane_surface` al final del render; lo lee el handler

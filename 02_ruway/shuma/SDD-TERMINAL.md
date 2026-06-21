@@ -338,7 +338,22 @@ deja el shell funcionando (flag de migración hasta la Fase 5).
 - Spill a disco: configurable vía `[scrollback]` en `shumarc.toml`, archive automático al recortar el frente, chip de status en UI, builtin `:scrollback open` para abrirlo con `$EDITOR`.
 - **Borrado del `output_pane`/per-command-editor viejo** (2026-06-14): ver el detalle en la lista de Fases (Fase 5). Migración de `view()`/`body_view()` a `output_pane_surface` incondicional; eliminados los módulos/funciones/`Msg`/campos de `State` legacy; helpers compartidos reubicados. `cargo check --workspace` verde, downstream (`shuma-shell-llimphi`, `pata-llimphi`, `shuma-cli`) compila, 181 tests pasan (2 fallos pre-existentes en `main`).
 
-**Pendiente** (post-Fase 5):
-- Integrar líneas spilled al view (servirlas cuando el usuario scrollea way up — requiere extender el virtualizador para id < dropped via spill async/cache). Hoy el archive se ve mediante `:scrollback open` (fuera del shell).
+**Fase 5.12 — paginado del archive al scrollear (✅ 2026-06-21):** el view ya
+no se queda en las últimas `MAX_SPILLED_VISIBLE` (200) líneas spilled. El cache
+(`SurfSpilledCache`) gana `window_start: Option<u64>` — `None` = ventana "cola"
+liviana (las últimas N, sigue el final cuando spillea más); `Some(id)` = el
+usuario paginó hacia atrás. `refresh_surf_spilled_visible` carga
+`[effective_start, spilled_count)` con `spill_effective_start` (clampea a no
+más de `MAX_SPILLED_LOADED` = 2000 desde el final). Al rozar el borde superior
+del contenido, `apply_scroll_delta` llama `spill_page_back` (función pura) y, si
+hay más archive, retrocede `window_start` una página (`SPILL_PAGE` = 200);
+**prependear K líneas no cambia la distancia al fondo**, así que sólo sube el
+ancla `K·row_h` para que la vista no salte (estabilidad gratis del modelo
+anclado-desde-el-fondo de la Fase 5). Volver al fondo resetea la ventana a
+"cola". El header del archive avisa cuántas líneas quedan más arriba; pasado
+`MAX_SPILLED_LOADED`, `:scrollback open` sigue siendo el escape para forense
+profundo. Lógica pura testeada (`spill_effective_start`/`spill_page_back`/
+refresh paginado/wiring scroll→page); el *feel* fino del scroll pide validar a
+ojo en GUI.
 
 Decisión de construir tomada con el usuario 2026-06-05; ejecución completa de Fase 0 a 5.10 entre 2026-06-06 y 2026-06-07. El control nuevo se justifica por el techo arquitectónico de ~500 líneas del path viejo y por la eficiencia GPU-directo en grilla/TUI.

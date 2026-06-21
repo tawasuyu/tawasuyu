@@ -347,16 +347,16 @@ fn section_header<HostMsg: Clone + 'static>(
 /// spill (N visibles · M total)" y avisa al usuario que el resto se ve
 /// con `:scrollback open`. Sin click handler (informativo).
 fn spilled_archive_header<HostMsg: Clone + 'static>(
-    visible: usize,
-    total: usize,
+    loaded: usize,
+    above: u64,
     theme: &Theme,
 ) -> View<HostMsg> {
-    let label = if total > visible {
+    let label = if above > 0 {
         format!(
-            "≡ Archivado de spill ({visible} visibles · {total} total · `:scrollback open` para todo)"
+            "≡ Archivado ({loaded} cargadas · ▲ {above} más arriba — scrolleá al tope · `:scrollback open` para todo)"
         )
     } else {
-        format!("≡ Archivado de spill ({total} líneas)")
+        format!("≡ Archivado · inicio del historial ({loaded} líneas)")
     };
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -766,16 +766,11 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     // file sólo si `spilled_count` cambió desde el último frame. El cache
     // es up-to-`MAX_SPILLED_VISIBLE` líneas; el view las prepende al store.
     crate::refresh_surf_spilled_visible(&state.surf_history, &state.surf_spilled_visible);
-    let spilled_cache_lines: Vec<String> = state
+    let (spilled_cache_lines, spilled_first_id): (Vec<String>, u64) = state
         .surf_spilled_visible
         .lock()
-        .map(|c| c.lines.clone())
+        .map(|c| (c.lines.clone(), c.first_id))
         .unwrap_or_default();
-    let total_spilled = state
-        .surf_history
-        .lock()
-        .map(|h| h.spilled_count())
-        .unwrap_or(0);
 
     // Store de scrollback + items + estilo por línea (alineado al índice del
     // store, que crece en lockstep con `push_line`).
@@ -785,16 +780,16 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         Vec::new();
 
     // Prepend de las líneas spilleadas: arrancan en `store[0..]`. Tinte
-    // discreto (fg_muted) para marcarlas visualmente como archive y un
-    // chrome header antes con cuántas hay en total. Si el spill tiene más
-    // que `MAX_SPILLED_VISIBLE`, el header lo avisa (el usuario abre el
-    // resto con `:scrollback open`).
+    // discreto (fg_muted) para marcarlas visualmente como archive y un chrome
+    // header antes. `first_id` = cuántas líneas quedan AÚN más arriba de la
+    // ventana cargada (Fase 5.12): scrollear al tope las pagina hacia atrás;
+    // más allá del tope de carga, `:scrollback open`.
     if !spilled_cache_lines.is_empty() {
         items.push(Item::chrome(
             SURFACE_HEADER_H,
             spilled_archive_header::<HostMsg>(
                 spilled_cache_lines.len(),
-                total_spilled,
+                spilled_first_id,
                 theme,
             ),
         ));
