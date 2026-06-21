@@ -166,10 +166,20 @@ impl PtyRegistry {
         cols: u16,
         label: String,
     ) -> Ulid {
+        // El id de la sesión se siembra como `SHUMA_SESSION` en el entorno del
+        // PTY (lo hereda el shell, claude y sus hooks), para que un aviso de
+        // hook pueda enlazar a ESTA sesión exacta. Envolvemos con `/usr/bin/
+        // env` en vez de tocar `CommandSpec`: el `Meta` guarda el comando
+        // original (la lista queda limpia), pero el proceso recibe la env.
+        let id = Ulid::new();
+        let mut wrapped = Vec::with_capacity(args.len() + 2);
+        wrapped.push(format!("SHUMA_SESSION={id}"));
+        wrapped.push(program.clone());
+        wrapped.extend(args.iter().cloned());
         let spec = shuma_exec::CommandSpec {
             exec: shuma_exec::Exec::Pty {
-                program: program.clone(),
-                args: args.clone(),
+                program: "/usr/bin/env".to_string(),
+                args: wrapped,
                 cols,
                 rows,
             },
@@ -276,7 +286,6 @@ impl PtyRegistry {
             tx,
         });
 
-        let id = Ulid::new();
         self.sessions
             .lock()
             .expect("pty registry lock")
