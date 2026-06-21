@@ -54,6 +54,13 @@ const DEFAULT_LISTEN: &str = "127.0.0.1:7378";
 /// el gateway lo exige) va en `?token=…` de la URL.
 const TERM_HTML: &str = include_str!("term.html");
 
+// xterm.js (5.3.0) + fit addon (0.8.0) VENDORIZADOS — embebidos en el binario
+// y servidos en `/vendor/…` para que el cliente móvil ande 100% offline en una
+// LAN sin internet (cero dependencia de CDN). ~290 KB al binario.
+const XTERM_CSS: &str = include_str!("vendor/xterm.min.css");
+const XTERM_JS: &str = include_str!("vendor/xterm.min.js");
+const XTERM_FIT_JS: &str = include_str!("vendor/xterm-addon-fit.min.js");
+
 #[derive(Clone)]
 struct AppState {
     sock: Arc<PathBuf>,
@@ -84,6 +91,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(health))
         .route("/health", get(health))
         .route("/term", get(term_page))
+        .route("/vendor/xterm.css", get(vendor_css))
+        .route("/vendor/xterm.js", get(vendor_js))
+        .route("/vendor/xterm-addon-fit.js", get(vendor_fit))
         .route("/rpc", post(rpc))
         .route("/ws/pty", get(ws_pty))
         .route("/event", post(post_event))
@@ -110,6 +120,33 @@ async fn health() -> &'static str {
 /// gateados. Por eso la página en sí no requiere auth para cargar.
 async fn term_page() -> Html<&'static str> {
     Html(TERM_HTML)
+}
+
+/// Activos vendorizados de xterm.js, servidos con su content-type. Estáticos
+/// y públicos (sin secretos): no requieren token.
+async fn vendor_css() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        XTERM_CSS,
+    )
+}
+async fn vendor_js() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        XTERM_JS,
+    )
+}
+async fn vendor_fit() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        XTERM_FIT_JS,
+    )
 }
 
 // =====================================================================
@@ -519,6 +556,25 @@ mod tests {
         assert!(TERM_HTML.contains("xterm"));
         assert!(TERM_HTML.contains("Bearer "));
         assert!(TERM_HTML.contains("token="));
+    }
+
+    #[test]
+    fn term_html_usa_vendor_local_no_cdn() {
+        // Offline-LAN: la página referencia los activos locales, no un CDN.
+        assert!(TERM_HTML.contains("/vendor/xterm.css"));
+        assert!(TERM_HTML.contains("/vendor/xterm.js"));
+        assert!(TERM_HTML.contains("/vendor/xterm-addon-fit.js"));
+        assert!(!TERM_HTML.contains("cdn.jsdelivr.net"));
+    }
+
+    #[test]
+    fn vendor_assets_embebidos_son_los_reales() {
+        // xterm.js define `Terminal`; el fit addon define `FitAddon`. Tamaños
+        // razonables (no páginas de error de ~0 bytes).
+        assert!(XTERM_JS.contains("Terminal"));
+        assert!(XTERM_JS.len() > 100_000);
+        assert!(XTERM_FIT_JS.contains("FitAddon"));
+        assert!(XTERM_CSS.contains(".xterm"));
     }
 
     #[tokio::test]

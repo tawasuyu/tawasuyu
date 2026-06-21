@@ -206,17 +206,19 @@ y rinde como TUI), `:sessions` (lista), `:attach <id>` (re-adjunta), y
 →kill).
 
 **Cliente móvil vía gateway ✅ (2026-06-21):** `shuma-gateway` sirve `GET /term`
-— una página HTML autocontenida (xterm.js de CDN pinneado) pensada para un
-teléfono en la misma red. Lista las sesiones por `POST /rpc` (`"PtyList"`),
-adjunta a una (o crea) por el WebSocket `/ws/pty` (primer msg JSON
-`{"session":id,rows,cols}` o `{"program",args,…}`; binarios = stdin/salida;
-`{"t":"resize",…}`), con botones Abrir/Matar/Nueva. El token (si el gateway lo
-exige) va en `?token=…`: el JS lo manda como `Authorization: Bearer` a `/rpc` y
-como `?token=` al WS. La página en sí no requiere auth (no tiene secretos; el
-gateo está en /rpc y /ws/pty). Servido verificado por curl
-(`text/html`, 8.9 KB, markers del protocolo); el flujo terminal en vivo pide
-daemon + navegador real. Quedaría como follow-up vendorizar xterm.js para uso
-100% offline-LAN. **E4 cerrado del todo.**
+— una página HTML autocontenida pensada para un teléfono en la misma red. Lista
+las sesiones por `POST /rpc` (`"PtyList"`), adjunta a una (o crea) por el
+WebSocket `/ws/pty` (primer msg JSON `{"session":id,rows,cols}` o
+`{"program",args,…}`; binarios = stdin/salida; `{"t":"resize",…}`), con botones
+Abrir/Matar/Nueva. El token (si el gateway lo exige) va en `?token=…`: el JS lo
+manda como `Authorization: Bearer` a `/rpc` y como `?token=` al WS. La página en
+sí no requiere auth (no tiene secretos; el gateo está en /rpc y /ws/pty).
+**xterm.js (5.3.0) + fit addon (0.8.0) VENDORIZADOS** (`src/vendor/*`,
+embebidos por `include_str!`, servidos en `/vendor/…` con su content-type) — la
+consola anda **100% offline en una LAN sin internet**, cero CDN. Servido y
+content-types verificados por curl (`/term` text/html sin refs a CDN;
+`/vendor/xterm.js` 283 KB application/javascript). El flujo terminal en vivo
+pide daemon + navegador real. **E4 cerrado del todo.**
 
 ### E5. LLM como instrumento invocado (`:?`) ✅ (2026-06-13)
 **Hecho** con `pluma-llm` (backend por env, Mock sin credenciales):

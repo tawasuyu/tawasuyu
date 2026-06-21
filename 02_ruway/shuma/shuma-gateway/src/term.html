@@ -9,9 +9,9 @@
   va en `?token=…` de la URL: se usa como `Authorization: Bearer` para /rpc y
   como `?token=` para el WebSocket.
 
-  xterm.js viene de un CDN pinneado. Para uso 100% offline/LAN habría que
-  vendorizarlo (follow-up); el caso típico (teléfono con datos, dev box en la
-  LAN) anda con CDN.
+  xterm.js (5.3.0) + fit addon (0.8.0) van VENDORIZADOS: el propio gateway los
+  sirve en `/vendor/…` (embebidos por `include_str!`). Cero red externa — anda
+  100% offline en una LAN sin internet.
 -->
 <html lang="es">
 <head>
@@ -19,7 +19,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <meta name="color-scheme" content="dark" />
   <title>shuma · terminal</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <link rel="stylesheet" href="/vendor/xterm.css" />
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -71,8 +71,8 @@
     <div id="termwrap"><div id="term"></div></div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
   <script>
     const TOKEN = new URLSearchParams(location.search).get("token") || "";
     const $ = (id) => document.getElementById(id);
@@ -144,7 +144,7 @@
 
     // `open` = { session } para adjuntar, o { program, args, cwd, label } para crear.
     function attach(open) {
-      if (!window.Terminal) { status("xterm no cargó (¿sin internet para el CDN?)", true); return; }
+      if (!window.Terminal) { status("xterm no cargó (recargá la página)", true); return; }
       if (ws) { try { ws.close(); } catch (_) {} }
       if (!term) {
         term = new Terminal({ fontSize: 13, cursorBlink: true, convertEol: false,
