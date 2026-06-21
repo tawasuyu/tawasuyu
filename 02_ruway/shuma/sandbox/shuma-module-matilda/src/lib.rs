@@ -1206,13 +1206,25 @@ async fn fetch_remote_inventory(
         .exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null || true")
         .await
         .map_err(|e| format!("ls sites-enabled: {e}"))?;
+    // M3 — estado declarativo de los servicios por SSH: sondeamos
+    // `is-enabled`/`is-active` de TODAS las unidades declaradas en un solo
+    // round-trip (un loop shell), para que el plan emita Update si difieren
+    // del deseado en vez de un Create espurio.
+    let units: Vec<&str> = desired.services().map(|s| s.unit.as_str()).collect();
+    let services = if units.is_empty() {
+        Vec::new()
+    } else {
+        let probe = matilda_discover::remote_service_probe_command(&units);
+        let services_text = linker
+            .exec(&format!("{probe} 2>/dev/null || true"))
+            .await
+            .map_err(|e| format!("systemctl is-enabled/active: {e}"))?;
+        matilda_discover::parse_service_states(&services_text)
+    };
     let state = ServerState {
         containers: matilda_discover::parse_docker_names(&containers_text),
         vhosts: matilda_discover::parse_nginx_sites(&vhosts_text),
-        // Servicios declarativos por SSH: v1 no los consulta (cada uno sería
-        // un round-trip). El plan los verá como Create → `enable --now`, que
-        // es idempotente. Consultar el estado remoto queda pendiente.
-        services: Vec::new(),
+        services,
     };
     Ok(observed_inventory(&state, desired))
 }

@@ -84,8 +84,16 @@ enable --now / disable / start / stop` (combina `--now` cuando enable+active
 coinciden); `matilda-discover` consulta `is-enabled`/`is-active` por unidad
 declarada para el drift (sólo administra las declaradas, no las cientos del
 sistema). El panel lista "SERVICES declarados" con sus flags y si corren. El
-loop declarar→plan→apply→runtime queda cerrado. **Pendiente:** discovery de
-estado de servicios por SSH (remoto v1 los ve como Create, idempotente).
+loop declarar→plan→apply→runtime queda cerrado.
+**Discovery remoto de drift de servicios ✅ (2026-06-21):** `fetch_remote_
+inventory` ya no hardcodea `services: Vec::new()`. Sondea `is-enabled`/
+`is-active` de TODAS las unidades declaradas en **un solo round-trip** (un loop
+shell `for u in …; do printf …; done`, `remote_service_probe_command` +
+`parse_service_states` en `matilda-discover`), llena `ServerState.services` y
+deja que `observed_inventory` arme el `current`. Resultado: el plan remoto
+emite **Update** sobre drift real (p. ej. declarado active pero inactive) en
+vez de un **Create** espurio. Tests del payoff con `plan` (coincide→0 acciones,
+drift→1 Update).
 
 ### M4. Polling periódico real ✅ (2026-06-13 local · 2026-06-21 remoto)
 El chasis poll-ea `poll_runtime()` cada 5 s en un thread para las instancias
@@ -144,8 +152,8 @@ tab pasó de "visor declarativo" a **consola de operación viva de una flota**:
 ves qué corre y qué se cayó en cada host, operás el host montado sin bajar a la
 terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Operás
 también recursos de cualquier host de la flota sin montarlo (M5, 2026-06-21).
-Lo que queda son dos pendientes acotados: stream de logs `-f` continuo (M2,
-bloqueado por la `exec` no-streaming de la capa SSH) y discovery de drift de
-servicios remotos por SSH (M3). El polling (local, remoto y de flota), las
-acciones (local, Source remoto y flota) y las series CPU/mem (M2) quedaron
-cerrados el 2026-06-21.
+Queda **un solo** pendiente acotado: el stream de logs `-f` continuo (M2,
+bloqueado por la `exec` no-streaming de la capa SSH). Todo lo demás —
+polling (local, remoto, flota), acciones (local, Source remoto, flota), series
+CPU/mem (M2) y discovery de drift de servicios remotos (M3) — quedó cerrado el
+2026-06-21. M1·M3·M4·M5·M6 completos; M2 completo salvo el live-tail.

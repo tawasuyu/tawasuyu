@@ -309,6 +309,51 @@ pub fn parse_docker_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Comando shell que sondea el estado declarativo (`is-enabled`/`is-active`)
+/// de cada unidad en **un solo round-trip** SSH: emite una línea
+/// `unit<TAB>enabled-state<TAB>active-state` por unidad. Pareja de
+/// [`parse_service_states`]. Cadena vacía si no hay unidades. Las unidades se
+/// asumen tokens válidos (declaradas en el inventario, no entrada de usuario);
+/// se les quitan comillas simples por las dudas para no romper el quoting.
+pub fn remote_service_probe_command(units: &[&str]) -> String {
+    if units.is_empty() {
+        return String::new();
+    }
+    let list = units
+        .iter()
+        .map(|u| format!("'{}'", u.replace('\'', "")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "for u in {list}; do printf '%s\\t%s\\t%s\\n' \"$u\" \
+         \"$(systemctl is-enabled \"$u\" 2>/dev/null || echo disabled)\" \
+         \"$(systemctl is-active \"$u\" 2>/dev/null || echo inactive)\"; done"
+    )
+}
+
+/// Parsea la salida del sondeo de servicios declarados (una línea
+/// `unit<TAB>enabled-state<TAB>active-state`). `enabled` ⇔ estado `enabled`;
+/// `active` ⇔ estado `active` (mismo criterio que el `is-enabled`/`is-active`
+/// local). Puro y testeable.
+pub fn parse_service_states(text: &str) -> Vec<ObservedService> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.trim().is_empty() {
+                return None;
+            }
+            let mut f = line.split('\t');
+            let unit = f.next()?.trim().to_string();
+            if unit.is_empty() {
+                return None;
+            }
+            let enabled = f.next().unwrap_or("").trim() == "enabled";
+            let active = f.next().unwrap_or("").trim() == "active";
+            Some(ObservedService { unit, enabled, active })
+        })
+        .collect()
+}
+
 /// Parsea un listado de `/etc/nginx/sites-enabled` — un archivo por
 /// línea; el sufijo `.conf` se quita para quedarse con el dominio.
 pub fn parse_nginx_sites(text: &str) -> Vec<String> {
@@ -589,6 +634,52 @@ mod tests {
         assert!(!cs[1].state.is_up());
         // Campos faltantes (sin ports) no rompen el parseo.
         assert_eq!(cs[1].ports, "");
+    }
+
+    #[test]
+    fn remote_service_probe_command_y_parser() {
+        // Sin unidades → comando vacío.
+        assert_eq!(remote_service_probe_command(&[]), "");
+        // Con unidades → loop que las menciona.
+        let cmd = remote_service_probe_command(&["nginx.service", "sshd.service"]);
+        assert!(cmd.contains("'nginx.service'"));
+        assert!(cmd.contains("'sshd.service'"));
+        assert!(cmd.contains("is-enabled") && cmd.contains("is-active"));
+        // El parser lee unit/enabled/active.
+        let out = "nginx.service\tenabled\tactive\nsshd.service\tdisabled\tinactive\n";
+        let svcs = parse_service_states(out);
+        assert_eq!(svcs.len(), 2);
+        assert_eq!(svcs[0].unit, "nginx.service");
+        assert!(svcs[0].enabled && svcs[0].active);
+        assert!(!svcs[1].enabled && !svcs[1].active);
+    }
+
+    #[test]
+    fn servicio_remoto_coincidente_no_es_create_espurio() {
+        use matilda_core::{Inventory, Service};
+        let mut desired = Inventory::new();
+        desired.add_service(Service::new("nginx")); // nginx.service, enabled+active
+        // El sondeo remoto coincide con el deseo.
+        let services = parse_service_states("nginx.service\tenabled\tactive\n");
+        let state = ServerState { containers: vec![], vhosts: vec![], services };
+        let current = observed_inventory(&state, &desired);
+        let p = plan(&desired, &current);
+        assert_eq!(p.count(Op::Create), 0, "el servicio existe → no Create");
+        assert_eq!(p.count(Op::Update), 0, "coincide → no Update");
+    }
+
+    #[test]
+    fn servicio_remoto_desviado_emite_update() {
+        use matilda_core::{Inventory, Service};
+        let mut desired = Inventory::new();
+        desired.add_service(Service::new("nginx")); // quiere enabled+active
+        // Observado enabled pero NO active → drift → Update (no Create).
+        let services = parse_service_states("nginx.service\tenabled\tinactive\n");
+        let state = ServerState { containers: vec![], vhosts: vec![], services };
+        let current = observed_inventory(&state, &desired);
+        let p = plan(&desired, &current);
+        assert_eq!(p.count(Op::Create), 0);
+        assert_eq!(p.count(Op::Update), 1);
     }
 
     #[test]
