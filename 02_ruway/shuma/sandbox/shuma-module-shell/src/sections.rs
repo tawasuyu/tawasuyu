@@ -103,13 +103,46 @@ pub fn detect_sections(cmd: &str, lines: &[String]) -> Option<Vec<Section>> {
         // columna). El detector es seguro: si no ve un header tabular,
         // devuelve `None` y el bloque cae al render plano.
         "docker" | "podman" | "kubectl" | "systemctl" | "ps" | "df" | "lsblk" | "ss"
-        | "netstat" => {
-            header_table(lines).map(|(columns, rows)| {
+        | "netstat" => header_table(lines)
+            .map(|(columns, rows)| {
                 vec![Section { title: String::new(), kind: SectionKind::Table { columns, rows } }]
             })
-        }
-        _ => None,
+            // `docker inspect`/`kubectl … -o json` emiten JSON, no tabla: si el
+            // header_table no enganchó, probamos pretty-print de JSON.
+            .or_else(|| detect_json(lines)),
+        // Fallback por contenido: si la salida es un blob JSON compacto
+        // (típico de `docker inspect`, `kubectl -o json`, una API), lo
+        // pretty-printeamos para que sea legible. Gated y barato (ver guardas).
+        _ => detect_json(lines),
     }
+}
+
+/// Tope de bytes para intentar parsear JSON (corre por frame en el render —
+/// acotamos el costo). Más grande que esto cae al plano.
+const JSON_MAX_BYTES: usize = 64 * 1024;
+
+/// Detecta un **blob JSON compacto** y lo pretty-printea como sección `json`.
+/// Sólo se mete cuando aporta: salida que arranca con `{`/`[`, ≤4 líneas no
+/// vacías (ya multilínea = ya formateada, se respeta), bajo `JSON_MAX_BYTES`,
+/// y que parsea a objeto/array. `None` en cualquier otro caso (cae al plano).
+fn detect_json(lines: &[String]) -> Option<Vec<Section>> {
+    let no_vacias = lines.iter().filter(|l| !l.trim().is_empty()).count();
+    if no_vacias == 0 || no_vacias > 4 {
+        return None; // vacío, o ya viene en varias líneas (formateado)
+    }
+    let joined = lines.join("\n");
+    let t = joined.trim();
+    if t.len() > JSON_MAX_BYTES || !(t.starts_with('{') || t.starts_with('[')) {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(t).ok()?;
+    // Sólo contenedores (un escalar `"hola"` o `42` no gana nada con esto).
+    if !val.is_object() && !val.is_array() {
+        return None;
+    }
+    let pretty = serde_json::to_string_pretty(&val).ok()?;
+    let body: Vec<String> = pretty.lines().map(String::from).collect();
+    Some(vec![Section { title: "json".into(), kind: SectionKind::Lines(body) }])
 }
 
 /// Tabla con header alineado a ancho fijo (`docker ps`, `kubectl get`, `ps
@@ -924,6 +957,42 @@ mod tests {
             }
             _ => panic!("esperaba Table"),
         }
+    }
+
+    #[test]
+    fn json_compacto_se_pretty_printea() {
+        let lines = vec![r#"{"name":"web","ports":[80,443],"tls":true}"#.to_string()];
+        let secs = detect_sections("docker inspect web", &lines).expect("detect");
+        assert_eq!(secs[0].title, "json");
+        let body = secs[0].as_lines_for_test().unwrap();
+        // Pretty-print: varias líneas indentadas.
+        assert!(body.len() > 3);
+        assert!(body.iter().any(|l| l.contains("\"name\": \"web\"")));
+    }
+
+    #[test]
+    fn json_array_tambien() {
+        let lines = vec![r#"[{"a":1},{"a":2}]"#.to_string()];
+        let secs = detect_sections("curl -s http://x/api", &lines).expect("detect");
+        assert_eq!(secs[0].title, "json");
+    }
+
+    #[test]
+    fn json_no_estructurado_o_escalar_cae_al_plano() {
+        // No-JSON.
+        assert!(detect_sections("echo hola", &[String::from("hola mundo")]).is_none());
+        // Escalar JSON: no gana nada.
+        assert!(detect_sections("echo", &[String::from("42")]).is_none());
+        // Ya multilínea (formateado): se respeta, no se re-envuelve.
+        let pretty = vec![
+            "{".to_string(),
+            "  \"a\": 1,".to_string(),
+            "  \"b\": 2,".to_string(),
+            "  \"c\": 3,".to_string(),
+            "  \"d\": 4".to_string(),
+            "}".to_string(),
+        ];
+        assert!(detect_sections("cat x.json", &pretty).is_none());
     }
 
     #[test]
