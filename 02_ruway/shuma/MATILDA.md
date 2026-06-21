@@ -88,8 +88,24 @@ por host declarado (`host_runtime_remote_blocking`: SSH + `docker ps` +
 `SetHostRuntime`/`SetHostError`. La sección FLEET pinta cada host con
 semáforo (●/◐/✖/◌) + resumen up/down/svc o el error, y al seleccionarlo
 expande sus contenedores/servicios (grilla "host × estado", read-only).
-**Pendiente:** acciones sobre recursos de un host de la flota (hoy operar va
-por el `Source` montado) y polling de la flota (hoy es a-pedido por «Fleet»).
+**Acciones sobre la flota ✅ (2026-06-21):** dentro del host expandido, cada
+contenedor/servicio es clickeable → abre una barra de acciones **remotas**.
+El click emite `FleetContainerAction`/`FleetServiceAction { host, name, action }`;
+el módulo sólo deja la intención en el log y el chasis corre el `docker`/
+`systemctl` por SSH contra ESE host (`fleet_container_action_blocking`/
+`fleet_service_action_blocking`, exit code real vía `; echo __rc:$?`). Si la
+acción fue mutante y exitosa, re-observa el host (`host_runtime_remote_blocking`)
+y refresca su `FleetEntry` con `FleetActionDone { lines, runtime }` — el
+semáforo queda al día sin re-pulsar «Fleet». La selección de recurso es
+scoped al host (se limpia al cambiar de host expandido). **Pendiente:**
+polling de la flota (hoy es a-pedido por «Fleet»).
+
+**Acciones del Source montado remoto ✅ (2026-06-21):** la barra de acciones
+de CONTAINERS/SERVICES sobre un Source remoto antes sólo logueaba "delegado al
+chasis" y no ejecutaba nada. Ahora el chasis intercepta `ContainerActionMsg`/
+`ServiceActionMsg` cuando el source es remoto y corre el comando por SSH
+(`container_action_remote_blocking`/`service_action_remote_blocking`),
+volcando la salida por `Msg::LogLines`.
 
 ### M6. Drift visible en la UI ✅ (2026-06-13)
 El contenedor que el discover marcó `(desviado)` lleva un chip `⚠ drift` en
@@ -100,7 +116,8 @@ su fila — el operador lo ve sin leer el plan.
 M1–M6 entregados 2026-06-13 (varios con el alcance acotado anotado arriba). El
 tab pasó de "visor declarativo" a **consola de operación viva de una flota**:
 ves qué corre y qué se cayó en cada host, operás el host montado sin bajar a la
-terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Lo que
-queda son los "pendientes" acotados de cada M: stream de logs `-f` continuo +
-series CPU/mem (M2), servicios remotos por SSH (M3), polling remoto (M4),
-acciones sobre recursos de la flota + polling de flota (M5).
+terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Operás
+también recursos de cualquier host de la flota sin montarlo (M5, 2026-06-21).
+Lo que queda son los "pendientes" acotados de cada M: stream de logs `-f`
+continuo + series CPU/mem (M2), servicios remotos por SSH para el drift (M3),
+polling remoto (M4), polling de flota (M5).

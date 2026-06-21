@@ -1585,6 +1585,95 @@ impl App for Shell {
                 save_chrome(&m);
             }
             Msg::Module(slot, mmsg) => {
+                // M5 — acciones sobre recursos de un host de la flota: necesitan
+                // SSH en un thread. El módulo sólo dejó la intención en el log;
+                // el chasis corre el `docker`/`systemctl` remoto y, si fue
+                // mutante, re-observa el host para refrescar su semáforo.
+                if let ModuleMsg::Matilda(mat) = &mmsg {
+                    use shuma_module_matilda::Msg as MMsg;
+                    if let MMsg::FleetContainerAction { host, name, action } = mat {
+                        if let Some(h) = matilda_host_by_name(&slot, &m, host) {
+                            let (name, action) = (name.clone(), *action);
+                            let slot_back = slot.clone();
+                            handle.spawn(move || {
+                                let (ok, lines) = shuma_module_matilda::fleet_container_action_blocking(
+                                    &h, &name, action,
+                                );
+                                let runtime = if ok && action.is_mutating() {
+                                    shuma_module_matilda::host_runtime_remote_blocking(&h).ok()
+                                } else {
+                                    None
+                                };
+                                Msg::Module(
+                                    slot_back,
+                                    ModuleMsg::Matilda(MMsg::FleetActionDone {
+                                        host: h.name.clone(),
+                                        lines,
+                                        runtime,
+                                    }),
+                                )
+                            });
+                        }
+                        return apply_module_msg(m, slot, mmsg);
+                    }
+                    if let MMsg::FleetServiceAction { host, name, action } = mat {
+                        if let Some(h) = matilda_host_by_name(&slot, &m, host) {
+                            let (name, action) = (name.clone(), *action);
+                            let slot_back = slot.clone();
+                            handle.spawn(move || {
+                                let (ok, lines) = shuma_module_matilda::fleet_service_action_blocking(
+                                    &h, &name, action,
+                                );
+                                let runtime = if ok && action.is_mutating() {
+                                    shuma_module_matilda::host_runtime_remote_blocking(&h).ok()
+                                } else {
+                                    None
+                                };
+                                Msg::Module(
+                                    slot_back,
+                                    ModuleMsg::Matilda(MMsg::FleetActionDone {
+                                        host: h.name.clone(),
+                                        lines,
+                                        runtime,
+                                    }),
+                                )
+                            });
+                        }
+                        return apply_module_msg(m, slot, mmsg);
+                    }
+                    // Acciones sobre el Source montado cuando es remoto: el
+                    // módulo ya logueó "delegado al chasis"; acá corremos el
+                    // `docker`/`systemctl` por SSH y volcamos la salida.
+                    if let MMsg::ContainerActionMsg { name, action } = mat {
+                        if let Some((source, _)) = remote_matilda_inputs(&slot, &m) {
+                            let (name, action) = (name.clone(), *action);
+                            let slot_back = slot.clone();
+                            handle.spawn(move || {
+                                let lines = shuma_module_matilda::container_action_remote_blocking(
+                                    &source, &name, action,
+                                )
+                                .unwrap_or_else(|e| vec![format!("✘ {} {name}: {e}", action.label())]);
+                                Msg::Module(slot_back, ModuleMsg::Matilda(MMsg::LogLines(lines)))
+                            });
+                        }
+                        return apply_module_msg(m, slot, mmsg);
+                    }
+                    if let MMsg::ServiceActionMsg { name, action } = mat {
+                        if let Some((source, _)) = remote_matilda_inputs(&slot, &m) {
+                            let (name, action) = (name.clone(), *action);
+                            let slot_back = slot.clone();
+                            handle.spawn(move || {
+                                let cmd = action.command(&name);
+                                let lines = shuma_module_matilda::service_action_remote_blocking(
+                                    &source, &cmd, action.label(), &name,
+                                )
+                                .unwrap_or_else(|e| vec![format!("✘ {} {name}: {e}", action.label())]);
+                                Msg::Module(slot_back, ModuleMsg::Matilda(MMsg::LogLines(lines)))
+                            });
+                        }
+                        return apply_module_msg(m, slot, mmsg);
+                    }
+                }
                 if let ModuleMsg::Minga(shuma_module_minga::Msg::SelectRoot(alpha)) = &mmsg {
                     if let Some(repo_path) = minga_repo_path(&slot, &m) {
                         let alpha = *alpha;

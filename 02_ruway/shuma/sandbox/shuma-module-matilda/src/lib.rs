@@ -96,6 +96,13 @@ pub struct State {
     pub fleet: std::collections::BTreeMap<String, FleetEntry>,
     /// Host de la flota seleccionado — expande sus contenedores/servicios.
     pub selected_host: Option<String>,
+    /// Contenedor de la flota seleccionado dentro del host expandido — abre
+    /// la barra de acciones remotas (M5). Scoped al `selected_host`; se
+    /// limpia al cambiar de host. `None` = nada seleccionado.
+    pub selected_fleet_container: Option<String>,
+    /// Servicio de la flota seleccionado dentro del host expandido — abre su
+    /// barra de acciones remotas. Scoped al `selected_host`.
+    pub selected_fleet_service: Option<String>,
     pending_steps: Arc<Mutex<usize>>,
     /// `(up, down)` compartido con el sampler del monitor de runtime.
     runtime_counts: Arc<Mutex<(usize, usize)>>,
@@ -122,6 +129,8 @@ impl State {
             selected_service: None,
             fleet: std::collections::BTreeMap::new(),
             selected_host: None,
+            selected_fleet_container: None,
+            selected_fleet_service: None,
             pending_steps: Arc::new(Mutex::new(0)),
             runtime_counts: Arc::new(Mutex::new((0, 0))),
         }
@@ -180,6 +189,10 @@ pub enum Msg {
     /// Línea informativa para el log — útil para que el chasis avise
     /// "conectando", "fallo de SSH", etc., sin acoplarse al módulo.
     LogLine(String),
+    /// Varias líneas de una sola vez — el chasis vuelca acá la salida de una
+    /// acción remota (`container_action_remote_blocking`) que corrió en un
+    /// thread. Equivale a N `LogLine` pero en un único Msg.
+    LogLines(Vec<String>),
     /// Inyecta el reporte de un dry-run remoto que el chasis corrió en
     /// un thread aparte (cada `String` es una línea del log).
     DryRunReport(Vec<String>),
@@ -217,6 +230,26 @@ pub enum Msg {
     /// Click en un host de la flota: lo selecciona (toggle) y expande su
     /// runtime (contenedores + servicios).
     SelectHost(String),
+    /// Click en un contenedor dentro del host expandido de la flota: lo
+    /// selecciona (toggle) y abre su barra de acciones remotas.
+    SelectFleetContainer(String),
+    /// Click en un servicio dentro del host expandido de la flota.
+    SelectFleetService(String),
+    /// M5 — acción de ciclo de vida sobre un contenedor de un host de la
+    /// flota. Siempre remota: el módulo sólo registra la intención en el log;
+    /// el chasis la toma, corre el SSH en un thread (`fleet_container_action_
+    /// blocking`) y re-observa el host (`SetHostRuntime`).
+    FleetContainerAction { host: String, name: String, action: ContainerAction },
+    /// M5 — acción sobre un servicio systemd de un host de la flota.
+    FleetServiceAction { host: String, name: String, action: ServiceAction },
+    /// M5 — resultado de una acción de flota que el chasis corrió por SSH:
+    /// líneas para el log y, si fue mutante y exitosa, el runtime re-observado
+    /// del host para refrescar su `FleetEntry` sin volver a pulsar «Fleet».
+    FleetActionDone {
+        host: String,
+        lines: Vec<String>,
+        runtime: Option<RuntimeState>,
+    },
 }
 
 /// Mapea el `action_id` de un `ShortcutAction::ModuleAction` al `Msg`
@@ -396,6 +429,12 @@ pub fn update(state: State, msg: Msg) -> State {
             s.log.push(line);
             cap_log(&mut s.log);
         }
+        Msg::LogLines(lines) => {
+            for l in lines {
+                s.log.push(l);
+            }
+            cap_log(&mut s.log);
+        }
         Msg::SetDesired(inv) => {
             s.log.push(format!(
                 "✔ inventario recargado: {} hosts, {} containers, {} vhosts",
@@ -508,6 +547,48 @@ pub fn update(state: State, msg: Msg) -> State {
             } else {
                 Some(name)
             };
+            // Cambiar de host expandido invalida la selección de recurso de la
+            // flota — sus action bars pertenecen al host anterior.
+            s.selected_fleet_container = None;
+            s.selected_fleet_service = None;
+        }
+        Msg::SelectFleetContainer(name) => {
+            s.selected_fleet_container =
+                if s.selected_fleet_container.as_deref() == Some(name.as_str()) {
+                    None
+                } else {
+                    s.selected_fleet_service = None;
+                    Some(name)
+                };
+        }
+        Msg::SelectFleetService(name) => {
+            s.selected_fleet_service =
+                if s.selected_fleet_service.as_deref() == Some(name.as_str()) {
+                    None
+                } else {
+                    s.selected_fleet_container = None;
+                    Some(name)
+                };
+        }
+        Msg::FleetContainerAction { host, name, action } => {
+            // Siempre remota: el SSH lo corre el chasis en un thread y reenvía
+            // el log + el `SetHostRuntime` re-observado.
+            s.log.push(format!("→ {} {name} en {host} (flota) delegado al chasis", action.label()));
+            cap_log(&mut s.log);
+        }
+        Msg::FleetServiceAction { host, name, action } => {
+            s.log.push(format!("→ {} {name} en {host} (flota) delegado al chasis", action.label()));
+            cap_log(&mut s.log);
+        }
+        Msg::FleetActionDone { host, lines, runtime } => {
+            for l in lines {
+                s.log.push(l);
+            }
+            cap_log(&mut s.log);
+            // Si la acción re-observó el host, su `FleetEntry` queda al día.
+            if let Some(rt) = runtime {
+                s.fleet.insert(host, FleetEntry::Ready(rt));
+            }
         }
     }
     s
@@ -551,6 +632,78 @@ pub fn host_runtime_remote_blocking(host: &Host) -> Result<RuntimeState, String>
             vhosts: matilda_discover::parse_nginx_sites(&nginx),
         })
     })
+}
+
+/// Config SSH para un `Host` de la flota: clave default del usuario +
+/// usuario/puerto declarados en el inventario. Espeja la conexión de
+/// `host_runtime_remote_blocking` para que acción y discovery usen el mismo
+/// criterio de credenciales.
+fn ssh_config_for_host(host: &Host) -> SshConfig {
+    let auth = SshAuth::Key { path: default_ssh_key(), passphrase: None };
+    let mut config = SshConfig::new(host.address.as_str(), host.ssh_user(), auth);
+    config.port = host.ssh_port();
+    config
+}
+
+/// M5 — corre un comando de acción contra un host de la flota por SSH.
+/// **Bloqueante**: pensado para que el chasis lo corra en un thread y reenvíe
+/// las líneas por `Msg::LogLine`. Devuelve `(éxito, líneas)` — el éxito sale
+/// del exit code real del comando remoto (no de la conexión).
+fn host_action_blocking(host: &Host, cmd: &str, label: &str, name: &str) -> (bool, Vec<String>) {
+    let config = ssh_config_for_host(host);
+    let rt = match blocking_runtime() {
+        Ok(rt) => rt,
+        Err(e) => return (false, vec![format!("✘ runtime: {e}")]),
+    };
+    // `; echo __rc:$?` deja el exit code del comando en la última línea para
+    // distinguir "conectó pero el comando falló" de "no conectó".
+    let probe = format!("{cmd} 2>&1; echo __rc:$?");
+    let result: Result<String, String> = rt.block_on(async move {
+        let linker = Linker::connect(&config)
+            .await
+            .map_err(|e| format!("ssh connect: {e}"))?;
+        linker.exec(&probe).await.map_err(|e| format!("{cmd}: {e}"))
+    });
+    match result {
+        Ok(text) => {
+            let mut ok = true;
+            let mut lines = vec![format!("$ {cmd}")];
+            for l in text.lines() {
+                if let Some(rc) = l.strip_prefix("__rc:") {
+                    ok = rc.trim() == "0";
+                } else {
+                    lines.push(l.to_string());
+                }
+            }
+            // Cap defensivo: un `docker logs` largo no debe inundar el log.
+            lines.truncate(31);
+            lines.push(if ok {
+                format!("✔ {label} {name} en {} (remoto)", host.name)
+            } else {
+                format!("✘ {label} {name} en {} falló", host.name)
+            });
+            (ok, lines)
+        }
+        Err(e) => (false, vec![format!("✘ {label} {name} en {}: {e}", host.name)]),
+    }
+}
+
+/// M5 — acción de ciclo de vida sobre un contenedor de un host de la flota.
+pub fn fleet_container_action_blocking(
+    host: &Host,
+    name: &str,
+    action: ContainerAction,
+) -> (bool, Vec<String>) {
+    host_action_blocking(host, &action.command(name), action.label(), name)
+}
+
+/// M5 — acción sobre un servicio systemd de un host de la flota.
+pub fn fleet_service_action_blocking(
+    host: &Host,
+    name: &str,
+    action: ServiceAction,
+) -> (bool, Vec<String>) {
+    host_action_blocking(host, &action.command(name), action.label(), name)
 }
 
 /// Ejecuta un comando de shell local y captura stdout+stderr como líneas.
@@ -602,6 +755,44 @@ pub fn container_action_remote_blocking(
                 let mut lines = vec![format!("$ {cmd}")];
                 lines.extend(text.lines().take(30).map(str::to_string));
                 lines.push(format!("✔ {} {name} (remoto)", action.label()));
+                Ok(lines)
+            })
+        }
+    }
+}
+
+/// Ejecuta una acción sobre el Source montado, dado el comando ya armado y
+/// su etiqueta. **Bloqueante** — el chasis lo corre en un thread y vuelca las
+/// líneas por `Msg::LogLines`. Generaliza el path de servicios (que no tiene
+/// un enum-con-`command()` propio para el Source remoto como contenedores).
+pub fn service_action_remote_blocking(
+    source: &Source,
+    cmd: &str,
+    label: &str,
+    name: &str,
+) -> Result<Vec<String>, String> {
+    match source {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
+            let (ok, mut out) = run_shell_capture(cmd);
+            out.insert(0, format!("$ {cmd}"));
+            out.push(if ok { format!("✔ {label} {name}") } else { format!("✘ {label} {name} falló") });
+            Ok(out)
+        }
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            let cmd = cmd.to_string();
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                let text = linker
+                    .exec(&format!("{cmd} 2>&1"))
+                    .await
+                    .map_err(|e| format!("{cmd}: {e}"))?;
+                let mut lines = vec![format!("$ {cmd}")];
+                lines.extend(text.lines().take(30).map(str::to_string));
+                lines.push(format!("✔ {label} {name} (remoto)"));
                 Ok(lines)
             })
         }
@@ -980,16 +1171,32 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
         let entry = state.fleet.get(&h.name);
         let sel = state.selected_host.as_deref() == Some(h.name.as_str());
         children.push(host_row(h, entry, sel, theme, lift.clone()));
-        // Expandido: el runtime del host (contenedores + servicios, read-only).
+        // Expandido: el runtime del host (contenedores + servicios). Cada
+        // recurso es clickeable → abre su barra de acciones REMOTAS (M5): el
+        // chasis corre `docker`/`systemctl` por SSH contra ESTE host.
         if sel {
             if let Some(FleetEntry::Ready(rt)) = entry {
                 for c in &rt.containers {
-                    children.push(fleet_status_row(c.state.glyph(), &c.name, &c.status, c.state.is_up(), theme));
+                    let csel = state.selected_fleet_container.as_deref() == Some(c.name.as_str());
+                    children.push(fleet_resource_row(
+                        c.state.glyph(), &c.name, &c.status, c.state.is_up(), csel,
+                        Msg::SelectFleetContainer(c.name.clone()), theme, lift.clone(),
+                    ));
+                    if csel {
+                        children.push(fleet_container_action_bar(&h.name, &c.name, theme, lift.clone()));
+                    }
                 }
                 for svc in &rt.services {
                     use matilda_discover::ServiceState;
                     let ok = svc.state == ServiceState::Active;
-                    children.push(fleet_status_row(svc.state.glyph(), &svc.name, &svc.sub, ok, theme));
+                    let ssel = state.selected_fleet_service.as_deref() == Some(svc.name.as_str());
+                    children.push(fleet_resource_row(
+                        svc.state.glyph(), &svc.name, &svc.sub, ok, ssel,
+                        Msg::SelectFleetService(svc.name.clone()), theme, lift.clone(),
+                    ));
+                    if ssel {
+                        children.push(fleet_service_action_bar(&h.name, &svc.name, theme, lift.clone()));
+                    }
                 }
             }
         }
@@ -1192,15 +1399,20 @@ fn host_row<HostMsg: Clone + Send + Sync + 'static>(
     row
 }
 
-/// Fila read-only de un recurso dentro de un host expandido de la flota:
-/// glifo + nombre + detalle, indentada. Sin acciones (el v1 de la flota es
-/// monitoreo; operar va por el Source montado).
-fn fleet_status_row<HostMsg: Clone + 'static>(
+/// Fila de un recurso dentro de un host expandido de la flota: glifo +
+/// nombre + detalle, indentada. **Clickeable** (M5) → emite `select` para
+/// abrir la barra de acciones remotas. El prefijo `▸` y el fondo marcan la
+/// selección, igual que las filas del Source montado.
+#[allow(clippy::too_many_arguments)]
+fn fleet_resource_row<HostMsg: Clone + Send + Sync + 'static>(
     glyph: char,
     name: &str,
     detail: &str,
     ok: bool,
+    selected: bool,
+    select: Msg,
     theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
 ) -> View<HostMsg> {
     use llimphi_ui::llimphi_raster::peniko::Color;
     let color = if ok {
@@ -1213,7 +1425,113 @@ fn fleet_status_row<HostMsg: Clone + 'static>(
     } else {
         format!("  · {detail}")
     };
-    text_row(&format!("      {glyph} {name}{tail}"), color, theme)
+    let prefix = if selected { "    ▸ " } else { "      " };
+    let mut row = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(select))
+    .text_aligned(
+        format!("{prefix}{glyph} {name}{tail}"),
+        11.0,
+        color,
+        Alignment::Start,
+    );
+    if selected {
+        row = row.fill(theme.bg_row_hover);
+    }
+    row
+}
+
+/// Barra de acciones remotas para un contenedor de un host de la flota (M5).
+/// Idéntica a `container_action_bar` salvo que el click emite
+/// `FleetContainerAction { host, … }` — el chasis corre el `docker` por SSH
+/// contra `host` y re-observa su runtime.
+fn fleet_container_action_bar<HostMsg: Clone + Send + Sync + 'static>(
+    host: &str,
+    name: &str,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let mut buttons: Vec<View<HostMsg>> = Vec::new();
+    for action in ContainerAction::all() {
+        let color = if matches!(action, ContainerAction::Remove) {
+            Color::from_rgba8(0xE0, 0x6C, 0x6C, 0xFF)
+        } else {
+            theme.accent
+        };
+        buttons.push(
+            View::new(Style {
+                size: Size { width: length(54.0_f32), height: length(18.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::FleetContainerAction {
+                host: host.to_string(),
+                name: name.to_string(),
+                action,
+            }))
+            .text_aligned(action.label().to_string(), 11.0, color, Alignment::Start),
+        );
+    }
+    fleet_action_bar_frame(buttons)
+}
+
+/// Barra de acciones remotas para un servicio systemd de un host de la flota.
+fn fleet_service_action_bar<HostMsg: Clone + Send + Sync + 'static>(
+    host: &str,
+    name: &str,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let mut buttons: Vec<View<HostMsg>> = Vec::new();
+    for action in ServiceAction::all() {
+        let color = if matches!(action, ServiceAction::Stop | ServiceAction::Disable) {
+            Color::from_rgba8(0xE0, 0x6C, 0x6C, 0xFF)
+        } else {
+            theme.accent
+        };
+        buttons.push(
+            View::new(Style {
+                size: Size { width: length(60.0_f32), height: length(18.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::FleetServiceAction {
+                host: host.to_string(),
+                name: name.to_string(),
+                action,
+            }))
+            .text_aligned(action.label().to_string(), 11.0, color, Alignment::Start),
+        );
+    }
+    fleet_action_bar_frame(buttons)
+}
+
+/// Marco común de las barras de acción de la flota: fila con sangría extra
+/// (los recursos de flota ya van indentados) y el mismo gap/padding que las
+/// barras del Source montado.
+fn fleet_action_bar_frame<HostMsg: Clone + 'static>(
+    buttons: Vec<View<HostMsg>>,
+) -> View<HostMsg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        padding: Rect {
+            left: length(40.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(2.0_f32),
+        },
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(buttons)
 }
 
 /// Fila de contenedor con semáforo runtime, clickeable. Sin estado
@@ -1810,6 +2128,83 @@ mod tests {
         assert_eq!(s.selected_host.as_deref(), Some("edge-1"));
         s = update(s, Msg::SelectHost("edge-1".into()));
         assert!(s.selected_host.is_none());
+    }
+
+    #[test]
+    fn fleet_container_action_se_delega_al_chasis() {
+        // El módulo no abre SSH: sólo deja la intención en el log; el chasis
+        // corre `fleet_container_action_blocking` en un thread.
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::FleetContainerAction {
+            host: "edge-1".into(),
+            name: "web".into(),
+            action: ContainerAction::Restart,
+        });
+        assert!(s.log.iter().any(|l| l.contains("Restart")
+            && l.contains("web")
+            && l.contains("edge-1")
+            && l.contains("delegado al chasis")));
+    }
+
+    #[test]
+    fn fleet_service_action_se_delega_al_chasis() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::FleetServiceAction {
+            host: "edge-1".into(),
+            name: "nginx.service".into(),
+            action: ServiceAction::Stop,
+        });
+        assert!(s.log.iter().any(|l| l.contains("nginx.service")
+            && l.contains("edge-1")
+            && l.contains("delegado al chasis")));
+    }
+
+    #[test]
+    fn select_fleet_resource_es_toggle_y_excluyente() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::SelectFleetContainer("web".into()));
+        assert_eq!(s.selected_fleet_container.as_deref(), Some("web"));
+        // Seleccionar un servicio limpia el contenedor (mutuamente excluyentes).
+        s = update(s, Msg::SelectFleetService("sshd.service".into()));
+        assert!(s.selected_fleet_container.is_none());
+        assert_eq!(s.selected_fleet_service.as_deref(), Some("sshd.service"));
+        // Re-click deselecciona.
+        s = update(s, Msg::SelectFleetService("sshd.service".into()));
+        assert!(s.selected_fleet_service.is_none());
+    }
+
+    #[test]
+    fn cambiar_de_host_limpia_la_seleccion_de_recurso() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::SelectHost("edge-1".into()));
+        s = update(s, Msg::SelectFleetContainer("web".into()));
+        assert_eq!(s.selected_fleet_container.as_deref(), Some("web"));
+        // Expandir otro host abandona la selección anterior.
+        s = update(s, Msg::SelectHost("edge-2".into()));
+        assert!(s.selected_fleet_container.is_none());
+        assert!(s.selected_fleet_service.is_none());
+    }
+
+    #[test]
+    fn fleet_action_done_loguea_y_refresca_el_host() {
+        use matilda_discover::RuntimeState;
+        let mut s = State::new(Source::Local);
+        // Sin runtime → sólo loguea, no toca el FleetEntry.
+        s = update(s, Msg::FleetActionDone {
+            host: "edge-1".into(),
+            lines: vec!["$ docker logs web".into(), "✔ Logs web en edge-1 (remoto)".into()],
+            runtime: None,
+        });
+        assert!(s.log.iter().any(|l| l.contains("Logs web en edge-1")));
+        assert!(s.fleet.get("edge-1").is_none());
+        // Con runtime (acción mutante re-observada) → el host queda Ready.
+        let rt = RuntimeState { containers: vec![], services: vec![], vhosts: vec![] };
+        s = update(s, Msg::FleetActionDone {
+            host: "edge-1".into(),
+            lines: vec!["✔ Restart web en edge-1 (remoto)".into()],
+            runtime: Some(rt),
+        });
+        assert!(matches!(s.fleet.get("edge-1"), Some(FleetEntry::Ready(_))));
     }
 
     #[test]

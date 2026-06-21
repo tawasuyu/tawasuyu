@@ -735,6 +735,22 @@ pub(crate) fn remote_matilda_inputs(
     }
 }
 
+/// Si `slot` aloja un matilda, busca un host de la flota por nombre en su
+/// inventario deseado. Clonado para que el thread SSH lo consuma sin tomar
+/// prestado del modelo. Usado por las acciones de flota (M5).
+pub(crate) fn matilda_host_by_name(
+    slot: &Slot,
+    model: &Model,
+    name: &str,
+) -> Option<matilda_core::Host> {
+    let inst = instance_for_slot(model, slot)?;
+    let state = match &inst.state {
+        ModuleState::Matilda(s) => s.as_ref(),
+        _ => return None,
+    };
+    state.desired.hosts().find(|h| h.name == name).cloned()
+}
+
 pub(crate) fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) -> Option<ModuleMsg> {
     let inst = instance_for_slot(model, slot)?;
     match inst.kind {
