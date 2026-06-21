@@ -154,6 +154,15 @@ solo se re-muestra con `cat`. Tiene prioridad sobre el reprocess del chip
 al input. Combinado con las secciones-tabla, un `ls -l` viejo es una tabla
 consultable. 4 tests (ref como fuente, ref sola→cat, %pN, línea sin ref).
 
+**Persistir la scrollback (2026-06-21):** dos builtins complementan a `%cN` —
+el stdout de un bloque no sólo se re-procesa, también se **saca**:
+- `:write [%cN] <archivo>` (`apply_write`) → vuelca el stdout a un archivo
+  (expande `~`, resuelve relativo al cwd, `std::fs` sin shell).
+- `:yank [%cN]` / `:copy` (`apply_yank`) → lo copia al clipboard del SO
+  (`set_clipboard`, best-effort).
+Sin ref usan el último bloque con salida. Reusan `parse_block_ref` (el resolver
+de `:explica`) + `gather_block_stdout`. 6 tests.
+
 ### E3. Reglas declarativas en el rc (`[rules]`) — el plano de control ✅ (2026-06-13)
 El shumarc gana gatillos deterministas (`shuma_config::RulesConfig`):
 
