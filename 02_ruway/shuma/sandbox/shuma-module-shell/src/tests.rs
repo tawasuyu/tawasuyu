@@ -197,20 +197,31 @@
 
     #[test]
     fn long_running_command_does_not_block_update() {
-        // `sleep 0.3` debería volver de `update` inmediatamente (no
-        // bloquear ~300 ms como con `Command::output`). Si el spawn es
-        // no-bloqueante, `update` retorna en pocos milisegundos.
+        // `update(Enter)` debe spawnear sin bloquear: vuelve enseguida con el
+        // run AÚN vivo, en vez de esperar a que el comando termine (como haría
+        // `Command::output`).
+        //
+        // La prueba semántica (independiente del reloj) es `is_running()` justo
+        // después: si `update` hubiera corrido el comando a completarse, el
+        // proceso ya estaría muerto. El reloj es belt-and-suspenders.
+        //
+        // Usamos `sleep 1` (no 0.3) a propósito: bajo carga pesada (suite en
+        // paralelo + builds) el overhead de setup —spawn de thread + fork— puede
+        // robar varios cientos de ms. Con un sleep largo ese stall sigue siendo
+        // chico frente al segundo de duración, así `is_running()` no se vuelve
+        // flaky; y el umbral de 500 ms separa cómodamente "no-bloqueó" (~ms, o
+        // unos cientos bajo carga) de "bloqueó toda la duración" (~1000 ms).
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
-        s.input.set_text("sleep 0.3");
+        s.input.set_text("sleep 1");
         let t0 = std::time::Instant::now();
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         let elapsed = t0.elapsed();
-        assert!(
-            elapsed.as_millis() < 100,
-            "update bloqueó {elapsed:?} — debería volver al instante"
-        );
         assert!(s.is_running(), "el sleep debe seguir vivo tras Enter");
+        assert!(
+            elapsed.as_millis() < 500,
+            "update tardó {elapsed:?} — debería volver sin esperar al comando (~1 s)"
+        );
         s = drain_until_idle(s);
         assert!(s.output.iter().any(|l| l.text == "✔ exit 0"));
     }
@@ -325,6 +336,11 @@
     fn arrow_up_walks_history_backwards() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
+        // Historial aislado: si no, entradas de tests paralelos se cuelan y el
+        // ArrowUp camina sobre comandos ajenos.
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
         // Insertar entradas a mano vía History (no via run_submitted, que
         // dispararía procesos reales).
         {
@@ -360,6 +376,11 @@
     #[test]
     fn ghost_extends_from_history_when_prefix_matches() {
         let mut s = State::new(Source::Local);
+        // Historial aislado: evita que un `cargo …` ajeno (de otro test
+        // paralelo) gane el match del ghost y cambie el sufijo esperado.
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
         {
             let mut h = s.history.lock().unwrap();
             let _ = h.append(shuma_history::Entry::new("cargo build --release", "/", 1));
@@ -486,6 +507,12 @@
         // un `git pull` final: el motor debe predecir `make` como
         // continuación. cwd `/tmp/...` sin marcadores → sin gating.
         let mut s = State::new(Source::Local);
+        // Historial AISLADO en memoria: `State::new` abre el real del disco y
+        // varios tests en paralelo lo contaminarían (la minería vería entradas
+        // ajenas y el patrón no emergería limpio).
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
         let dir = "/tmp/shuma-infer-pred-test";
         {
             let mut h = s.history.lock().unwrap();
@@ -512,6 +539,11 @@
         // Con el patrón aprendido, tipear `ma` debe sugerir `ke` (de la
         // predicción `make`), aunque el historial no tenga un match mejor.
         let mut s = State::new(Source::Local);
+        // Historial aislado (mismo motivo que `infer_predicts_…`): evita la
+        // contaminación cruzada entre tests paralelos vía el archivo real.
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
         let dir = "/tmp/shuma-infer-ghost-test";
         {
             let mut h = s.history.lock().unwrap();
@@ -524,7 +556,12 @@
         }
         refresh_patterns(&mut s);
         s.input.set_text("ma");
-        assert_eq!(current_ghost(&s).as_deref(), Some("ke"));
+        // El ghost arranca con `ke` (sufijo de `make`, de la predicción). Con
+        // el historial aislado la predicción es el patrón completo (`make &&
+        // git pull`), así que el sufijo puede ser `ke && git pull` — basta con
+        // que empiece por `ke` para probar que vino de la predicción `make…`.
+        let ghost = current_ghost(&s).expect("hay ghost de la predicción");
+        assert!(ghost.starts_with("ke"), "el ghost debe venir de `make…`, fue {ghost:?}");
     }
 
     #[test]
@@ -1187,6 +1224,10 @@
     #[test]
     fn arrow_right_at_end_accepts_ghost() {
         let mut s = State::new(Source::Local);
+        // Historial aislado: un `cargo …` ajeno cambiaría el ghost aceptado.
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
         {
             let mut h = s.history.lock().unwrap();
             let _ = h.append(shuma_history::Entry::new("cargo build --release", "/", 1));
