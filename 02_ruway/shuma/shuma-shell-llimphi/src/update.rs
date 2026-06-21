@@ -881,6 +881,23 @@ pub(crate) fn matilda_host_by_name(
     state.desired.hosts().find(|h| h.name == name).cloned()
 }
 
+/// M2 — inputs para el thread del live-tail: el `Source`, el contenedor y la
+/// bandera `stop` que el módulo acaba de crear en su `log_stream`. `None` si el
+/// slot no es matilda o no hay stream activo (no debería pasar tras un
+/// `StartLogStream` aplicado). Clonados para que el thread no tome prestado.
+pub(crate) fn matilda_log_stream_inputs(
+    slot: &Slot,
+    model: &Model,
+) -> Option<(Source, String, std::sync::Arc<std::sync::atomic::AtomicBool>)> {
+    let inst = instance_for_slot(model, slot)?;
+    let state = match &inst.state {
+        ModuleState::Matilda(s) => s.as_ref(),
+        _ => return None,
+    };
+    let ls = state.log_stream.as_ref()?;
+    Some((state.source.clone(), ls.container.clone(), ls.stop.clone()))
+}
+
 pub(crate) fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) -> Option<ModuleMsg> {
     let inst = instance_for_slot(model, slot)?;
     match inst.kind {

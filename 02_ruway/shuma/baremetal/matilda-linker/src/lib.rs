@@ -110,6 +110,26 @@ impl Linker {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// Streamea la salida de un comando de larga vida (`docker logs -f`).
+    /// `on_data` recibe cada chunk apenas llega; `should_stop` se chequea
+    /// cada `poll` para poder cortar el stream cerrando el canal. Delegado a
+    /// [`ssh::SshSession::exec_streaming`].
+    pub async fn exec_streaming<F, S>(
+        &self,
+        cmd: &str,
+        poll: std::time::Duration,
+        on_data: F,
+        should_stop: S,
+    ) -> Result<(), SshError>
+    where
+        F: FnMut(&[u8]),
+        S: FnMut() -> bool,
+    {
+        self.session
+            .exec_streaming(cmd, poll, on_data, should_stop)
+            .await
+    }
+
     /// Aplica los pasos en orden sobre el host remoto. Se detiene en el
     /// primero que falle (semántica `set -e`).
     pub async fn apply(&self, steps: &[ApplyStep]) -> ApplyReport {

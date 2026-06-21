@@ -11,3 +11,4 @@ description = "Brahman — sesión SSH maestra con canales multiplexados (russh)
 [dependencies]
 russh = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }

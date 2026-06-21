@@ -1599,6 +1599,40 @@ impl App for Shell {
                 // mutante, re-observa el host para refrescar su semáforo.
                 if let ModuleMsg::Matilda(mat) = &mmsg {
                     use shuma_module_matilda::Msg as MMsg;
+                    // M2 — live-tail (`docker logs -f`): el módulo ya preparó el
+                    // `log_stream` (buffer + bandera stop) al aplicar el Msg;
+                    // acá leemos esos inputs y lanzamos un thread lector que
+                    // dispatcha `LogStreamLine` por línea y `LogStreamEnded` al
+                    // terminar. Un thread crudo (no `handle.spawn`) porque emite
+                    // N mensajes a lo largo del tiempo, no uno solo.
+                    if matches!(mat, MMsg::StartLogStream(_)) {
+                        m = apply_module_msg(m, slot.clone(), mmsg);
+                        if let Some((source, name, stop)) =
+                            matilda_log_stream_inputs(&slot, &m)
+                        {
+                            let slot_back = slot.clone();
+                            let h = handle.clone();
+                            std::thread::spawn(move || {
+                                let _ = shuma_module_matilda::stream_logs_blocking(
+                                    &source,
+                                    &name,
+                                    200,
+                                    &stop,
+                                    |line| {
+                                        h.dispatch(Msg::Module(
+                                            slot_back.clone(),
+                                            ModuleMsg::Matilda(MMsg::LogStreamLine(line)),
+                                        ));
+                                    },
+                                );
+                                h.dispatch(Msg::Module(
+                                    slot_back.clone(),
+                                    ModuleMsg::Matilda(MMsg::LogStreamEnded),
+                                ));
+                            });
+                        }
+                        return m;
+                    }
                     if let MMsg::FleetContainerAction { host, name, action } = mat {
                         if let Some(h) = matilda_host_by_name(&slot, &m, host) {
                             let (name, action) = (name.clone(), *action);

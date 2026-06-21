@@ -65,11 +65,20 @@ silencioso); el chasis sólo lo muestrea **si hay un contenedor seleccionado**
 La fila del contenedor seleccionado muestra `CPU x%  ▁▂▅▇▆▃  MEM y%` —
 sparkline de bloques Unicode (`sparkline()` puro, auto-escala al máximo
 observado). Funciona local y remoto (Source montado).
-**Pendiente:** stream continuo `docker logs -f` a una card. Bloqueante real:
-`matilda-linker::exec` (y `shared/ssh`) colecta la salida COMPLETA, no
-streamea — un live-tail remoto necesita primero una `exec` por canal
-incremental en la capa SSH; el local necesita un subproceso de larga vida con
-control start/stop. No se puede certificar acá sin docker/host.
+**Live-tail `docker logs -f` ✅ (2026-06-21):** se destrabó extendiendo la capa
+SSH. `shared/ssh::SshSession::exec_streaming` (nuevo) corre un comando de larga
+vida y entrega cada chunk por callback a medida que llega, con `should_stop`
+chequeado cada `poll` (cierra el canal → SIGHUP al proceso remoto); expuesto en
+`matilda-linker::exec_streaming`. El módulo gana `stream_logs_blocking(source,
+name, tail, stop, on_line)` (local = subproceso `sh -c … 2>&1`; remoto = canal
+SSH, líneas re-ensambladas por `LineSplitter`) + estado `LogStream{container,
+lines (cap 500), stop: Arc<AtomicBool>, ended}`. La barra de acciones del
+contenedor gana **Tail ▶**: emite `StartLogStream`; el chasis lee el `stop` que
+el módulo creó y lanza un **thread crudo** (no `handle.spawn`: emite N msgs en
+el tiempo) que dispatcha `LogStreamLine` por línea y `LogStreamEnded` al cerrar.
+Una card bajo el contenedor muestra las últimas 12 líneas en vivo + `Stop ⏹`.
+Probado por partes (LineSplitter, handlers, corte por bandera); el live real
+necesita docker/host (degradación: sin docker, `2>&1` emite el error y cierra).
 
 ### M3. Servicios systemd ✅ (2026-06-13, runtime + acciones + declarativos)
 **Runtime:** `matilda-discover` `ServiceState`/`ServiceStatus` +
@@ -152,8 +161,8 @@ tab pasó de "visor declarativo" a **consola de operación viva de una flota**:
 ves qué corre y qué se cayó en cada host, operás el host montado sin bajar a la
 terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Operás
 también recursos de cualquier host de la flota sin montarlo (M5, 2026-06-21).
-Queda **un solo** pendiente acotado: el stream de logs `-f` continuo (M2,
-bloqueado por la `exec` no-streaming de la capa SSH). Todo lo demás —
-polling (local, remoto, flota), acciones (local, Source remoto, flota), series
-CPU/mem (M2) y discovery de drift de servicios remotos (M3) — quedó cerrado el
-2026-06-21. M1·M3·M4·M5·M6 completos; M2 completo salvo el live-tail.
+**M1–M6 COMPLETOS** al 2026-06-21. La consola matilda no tiene pendientes de
+roadmap: polling (local/remoto/flota), acciones (local/Source-remoto/flota),
+series CPU/mem con sparkline, live-tail `docker logs -f` (local y remoto, vía
+streaming SSH) y discovery de drift de servicios remotos por SSH — todo
+cerrado. Lo que reste será pulido o features nuevas, no huecos del plan.

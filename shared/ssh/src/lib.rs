@@ -191,6 +191,59 @@ impl SshSession {
         }
         Ok(out)
     }
+
+    /// Ejecuta `command` y **streamea** su salida (stdout+stderr) a medida que
+    /// llega, en vez de juntarla. Pensado para comandos de larga vida
+    /// (`docker logs -f`, `tail -f`): `on_data` recibe cada chunk de bytes
+    /// apenas el host lo emite.
+    ///
+    /// El bucle no termina solo si el comando no termina; para cortarlo, hacé
+    /// que `should_stop` devuelva `true` — entonces cierra el canal (lo que
+    /// manda EOF/SIGHUP al proceso remoto) y retorna. `poll` acota cuánto se
+    /// espera por datos antes de re-chequear `should_stop`, para que el corte
+    /// sea responsivo aún con el stream inactivo. Retorna al cerrarse el canal
+    /// (proceso terminado) o tras un stop.
+    pub async fn exec_streaming<F, S>(
+        &self,
+        command: &str,
+        poll: Duration,
+        mut on_data: F,
+        mut should_stop: S,
+    ) -> Result<(), SshError>
+    where
+        F: FnMut(&[u8]),
+        S: FnMut() -> bool,
+    {
+        let mut channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| SshError::Channel(e.to_string()))?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| SshError::Channel(e.to_string()))?;
+
+        loop {
+            if should_stop() {
+                let _ = channel.close().await;
+                break;
+            }
+            match tokio::time::timeout(poll, channel.wait()).await {
+                Ok(Some(msg)) => match msg {
+                    russh::ChannelMsg::Data { ref data } => on_data(data),
+                    russh::ChannelMsg::ExtendedData { ref data, .. } => on_data(data),
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                    _ => {}
+                },
+                // Canal cerrado por el otro lado → proceso terminó.
+                Ok(None) => break,
+                // Sin datos en `poll`: volvé a chequear `should_stop`.
+                Err(_timeout) => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

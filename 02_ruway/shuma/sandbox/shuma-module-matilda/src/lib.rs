@@ -35,8 +35,8 @@
 #![forbid(unsafe_code)]
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
-    AlignItems, Rect,
+    prelude::{auto, length, percent, FlexDirection, Size, Style},
+    AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, View};
@@ -52,6 +52,7 @@ use matilda_linker::{Linker, SshAuth, SshConfig};
 use matilda_plan::{plan, Op, Plan};
 use shuma_module::{ModuleContributions, MonitorSpec, Rgb, Sample, ShortcutSpec, Source};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub const ID: &str = "matilda";
@@ -90,6 +91,9 @@ pub struct State {
     /// por el polling (`docker stats --no-stream`). La sparkline de la fila
     /// seleccionada lo lee. Capado a `STATS_HISTORY_CAP` por contenedor.
     pub stats_history: std::collections::BTreeMap<String, std::collections::VecDeque<matilda_discover::ContainerStats>>,
+    /// Live-tail de logs activo (M2), si lo hay — `docker logs -f` de un
+    /// contenedor streameado a un buffer. `None` = sin stream.
+    pub log_stream: Option<LogStream>,
     /// Contenedor seleccionado en el panel — abre la barra de acciones
     /// (start/stop/restart/logs/rm). `None` = nada seleccionado.
     pub selected_container: Option<String>,
@@ -140,6 +144,7 @@ impl State {
             inventory_path: None,
             runtime: None,
             stats_history: std::collections::BTreeMap::new(),
+            log_stream: None,
             selected_container: None,
             selected_service: None,
             fleet: std::collections::BTreeMap::new(),
@@ -270,6 +275,18 @@ pub enum Msg {
     /// M2 — incorpora una tanda de muestras CPU/mem (`docker stats`) al
     /// historial por contenedor. Silencioso por diseño (lo manda el polling).
     SetStatsQuiet(std::collections::BTreeMap<String, matilda_discover::ContainerStats>),
+    /// M2 — arranca el live-tail (`docker logs -f`) de un contenedor. El
+    /// módulo prepara el `LogStream` (buffer + bandera stop); el chasis toma
+    /// la bandera + source y spawnea el thread lector.
+    StartLogStream(String),
+    /// M2 — una línea nueva del live-tail (la manda el thread lector).
+    LogStreamLine(String),
+    /// M2 — el operador corta el live-tail (alza la bandera stop; el thread
+    /// sale y manda `LogStreamEnded`).
+    StopLogStream,
+    /// M2 — el thread lector terminó (proceso cerrado o stop). Marca el stream
+    /// como cerrado; el buffer queda visible.
+    LogStreamEnded,
     /// Línea informativa para el log — útil para que el chasis avise
     /// "conectando", "fallo de SSH", etc., sin acoplarse al módulo.
     LogLine(String),
@@ -517,6 +534,39 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::SetStatsQuiet(stats) => {
             s.record_stats(&stats);
+        }
+        Msg::StartLogStream(name) => {
+            // Corta cualquier stream previo (su thread verá la bandera y sale).
+            if let Some(prev) = &s.log_stream {
+                prev.stop.store(true, Ordering::Relaxed);
+            }
+            s.log_stream = Some(LogStream {
+                container: name.clone(),
+                lines: std::collections::VecDeque::new(),
+                stop: Arc::new(AtomicBool::new(false)),
+                ended: false,
+            });
+            s.log.push(format!("▶ siguiendo logs de {name} (logs -f)"));
+            cap_log(&mut s.log);
+        }
+        Msg::LogStreamLine(line) => {
+            if let Some(ls) = &mut s.log_stream {
+                ls.lines.push_back(line);
+                while ls.lines.len() > LOG_STREAM_CAP {
+                    ls.lines.pop_front();
+                }
+            }
+        }
+        Msg::StopLogStream => {
+            if let Some(ls) = &mut s.log_stream {
+                ls.stop.store(true, Ordering::Relaxed);
+                ls.ended = true;
+            }
+        }
+        Msg::LogStreamEnded => {
+            if let Some(ls) = &mut s.log_stream {
+                ls.ended = true;
+            }
         }
         Msg::LogLine(line) => {
             s.log.push(line);
@@ -787,6 +837,102 @@ pub fn source_runtime_remote_blocking(source: &Source) -> Result<RuntimeState, S
                     .await
                     .map_err(|e| format!("ssh connect: {e}"))?;
                 fetch_remote_runtime(&linker).await
+            })
+        }
+    }
+}
+
+/// Estado del live-tail de logs (M2): el contenedor seguido, su buffer de
+/// líneas (capado a [`LOG_STREAM_CAP`]) y la bandera `stop` compartida con el
+/// thread lector del chasis. `ended` se marca cuando el stream terminó (el
+/// proceso cerró o el usuario pulsó Stop) — el buffer queda visible.
+#[derive(Debug, Clone)]
+pub struct LogStream {
+    pub container: String,
+    pub lines: std::collections::VecDeque<String>,
+    pub stop: Arc<AtomicBool>,
+    pub ended: bool,
+}
+
+/// Cuántas líneas retiene el buffer del live-tail antes de tirar las viejas.
+pub const LOG_STREAM_CAP: usize = 500;
+
+/// Acumula bytes de un stream y emite líneas completas (split por `\n`, sin el
+/// `\n` ni el `\r` final). El resto incompleto queda para el próximo chunk —
+/// los chunks de un canal SSH no vienen alineados a línea.
+#[derive(Default)]
+struct LineSplitter {
+    buf: Vec<u8>,
+}
+
+impl LineSplitter {
+    fn push(&mut self, data: &[u8], mut emit: impl FnMut(String)) {
+        self.buf.extend_from_slice(data);
+        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=pos).collect();
+            let end = line.len().saturating_sub(1); // sin el '\n'
+            let s = String::from_utf8_lossy(&line[..end]);
+            emit(s.trim_end_matches('\r').to_string());
+        }
+    }
+}
+
+/// M2 — streamea `docker logs -f` de `name` línea por línea a `on_line`, hasta
+/// que `stop` se ponga en true o el proceso termine. **Bloqueante**: corre en
+/// un thread del chasis. Local = subproceso `sh -c`; remoto = canal SSH
+/// incremental (`Linker::exec_streaming`). El corte remoto es responsivo aún
+/// con el stream inactivo (poll de 400 ms); el local corta en la próxima línea
+/// o al terminar el proceso (luego lo mata).
+pub fn stream_logs_blocking(
+    source: &Source,
+    name: &str,
+    tail: usize,
+    stop: &AtomicBool,
+    mut on_line: impl FnMut(String),
+) -> Result<(), String> {
+    let cmd = format!("docker logs -f --tail {tail} {name} 2>&1");
+    match source {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
+            use std::io::{BufRead, BufReader};
+            use std::process::{Command, Stdio};
+            let mut child = Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("spawn docker logs: {e}"))?;
+            let stdout = child.stdout.take().ok_or("sin stdout del subproceso")?;
+            for line in BufReader::new(stdout).lines() {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                match line {
+                    Ok(l) => on_line(l),
+                    Err(_) => break,
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            Ok(())
+        }
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            let mut splitter = LineSplitter::default();
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                linker
+                    .exec_streaming(
+                        &cmd,
+                        std::time::Duration::from_millis(400),
+                        |data| splitter.push(data, &mut on_line),
+                        || stop.load(Ordering::Relaxed),
+                    )
+                    .await
+                    .map_err(|e| format!("docker logs -f: {e}"))
             })
         }
     }
@@ -1409,6 +1555,9 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
                 children.push(spark);
             }
             children.push(container_action_bar(&c.name, theme, lift.clone()));
+            if let Some(card) = log_stream_card(state, &c.name, theme, lift.clone()) {
+                children.push(card);
+            }
         }
     }
     // Huérfanos: contenedores que corren pero no están en el inventario
@@ -1425,6 +1574,9 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
                         children.push(spark);
                     }
                     children.push(container_action_bar(&cs.name, theme, lift.clone()));
+                    if let Some(card) = log_stream_card(state, &cs.name, theme, lift.clone()) {
+                        children.push(card);
+                    }
                 }
             }
         }
@@ -1804,6 +1956,18 @@ fn container_action_bar<HostMsg: Clone + Send + Sync + 'static>(
             .text_aligned(action.label().to_string(), 11.0, color, Alignment::Start),
         );
     }
+    // M2 — "Tail ▶": live-tail (`docker logs -f`), distinto del `Logs`
+    // snapshot. Arranca el stream a una card bajo el contenedor.
+    buttons.push(
+        View::new(Style {
+            size: Size { width: length(54.0_f32), height: length(18.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(Msg::StartLogStream(name.to_string())))
+        .text_aligned("Tail ▶".to_string(), 11.0, theme.accent, Alignment::Start),
+    );
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
@@ -1817,6 +1981,88 @@ fn container_action_bar<HostMsg: Clone + Send + Sync + 'static>(
         ..Default::default()
     })
     .children(buttons)
+}
+
+/// M2 — card del live-tail bajo el contenedor `name`, si hay un stream activo
+/// PARA ese contenedor. Header `▶ logs: name  [Stop]` (Stop clickeable, alza la
+/// bandera) + las últimas ~12 líneas en monospace tenue. `None` si no hay
+/// stream o es de otro contenedor.
+fn log_stream_card<HostMsg: Clone + Send + Sync + 'static>(
+    state: &State,
+    name: &str,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> Option<View<HostMsg>> {
+    let ls = state.log_stream.as_ref()?;
+    if ls.container != name {
+        return None;
+    }
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let red = Color::from_rgba8(0xE0, 0x6C, 0x6C, 0xFF);
+    let estado = if ls.ended { "cerrado" } else { "en vivo" };
+    // Header: título + botón Stop.
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(8.0_f32),
+            top: length(2.0_f32),
+            bottom: length(0.0_f32),
+        },
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style::default()).text_aligned(
+            format!("▶ logs: {name}  ({estado}, {} líneas)", ls.lines.len()),
+            11.0,
+            theme.accent,
+            Alignment::Start,
+        ),
+        View::new(Style {
+            size: Size { width: length(48.0_f32), height: length(16.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(Msg::StopLogStream))
+        .text_aligned("Stop ⏹".to_string(), 11.0, red, Alignment::Start),
+    ]);
+    // Cuerpo: las últimas líneas (las viejas ya están capadas en el buffer).
+    const VISIBLE: usize = 12;
+    let mut rows: Vec<View<HostMsg>> = vec![header];
+    let start = ls.lines.len().saturating_sub(VISIBLE);
+    for line in ls.lines.iter().skip(start) {
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(14.0_f32) },
+                padding: Rect {
+                    left: length(20.0_f32),
+                    right: length(0.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(line.clone(), 10.5, theme.fg_muted, Alignment::Start),
+        );
+    }
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            padding: Rect {
+                left: length(0.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(4.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .children(rows),
+    )
 }
 
 /// Fila de servicio systemd con semáforo (●/✖/○) + `sub` + descripción,
@@ -2423,6 +2669,68 @@ mod tests {
         s = update(s, Msg::SetStatsQuiet(m));
         assert_eq!(s.log.len(), log_before);
         assert_eq!(s.last_stats("web").unwrap().mem_pct, 20.0);
+    }
+
+    #[test]
+    fn line_splitter_emite_lineas_completas() {
+        let mut sp = LineSplitter::default();
+        let mut out: Vec<String> = Vec::new();
+        // Chunk parcial: nada se emite hasta el '\n'.
+        sp.push(b"hola mun", |l| out.push(l));
+        assert!(out.is_empty());
+        // Completa la línea y arranca otra; el '\r' final se recorta.
+        sp.push(b"do\r\nseg", |l| out.push(l));
+        assert_eq!(out, vec!["hola mundo".to_string()]);
+        sp.push(b"unda\n", |l| out.push(l));
+        assert_eq!(out, vec!["hola mundo".to_string(), "segunda".to_string()]);
+    }
+
+    #[test]
+    fn start_log_stream_prepara_buffer_y_loguea() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::StartLogStream("web".into()));
+        let ls = s.log_stream.as_ref().expect("stream armado");
+        assert_eq!(ls.container, "web");
+        assert!(!ls.stop.load(Ordering::Relaxed));
+        assert!(!ls.ended);
+        assert!(s.log.iter().any(|l| l.contains("siguiendo logs de web")));
+    }
+
+    #[test]
+    fn log_stream_line_acumula_y_capa() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::StartLogStream("web".into()));
+        for i in 0..(LOG_STREAM_CAP + 10) {
+            s = update(s, Msg::LogStreamLine(format!("línea {i}")));
+        }
+        let ls = s.log_stream.as_ref().unwrap();
+        assert_eq!(ls.lines.len(), LOG_STREAM_CAP);
+        // La más vieja se descartó; la más nueva está.
+        assert_eq!(ls.lines.back().unwrap(), &format!("línea {}", LOG_STREAM_CAP + 9));
+    }
+
+    #[test]
+    fn stop_log_stream_alza_bandera_y_marca_ended() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::StartLogStream("web".into()));
+        let stop = s.log_stream.as_ref().unwrap().stop.clone();
+        s = update(s, Msg::StopLogStream);
+        assert!(stop.load(Ordering::Relaxed));
+        assert!(s.log_stream.as_ref().unwrap().ended);
+    }
+
+    #[test]
+    fn start_log_stream_corta_el_anterior() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::StartLogStream("web".into()));
+        let old_stop = s.log_stream.as_ref().unwrap().stop.clone();
+        // Arrancar otro corta el viejo (su thread vería la bandera) y crea uno
+        // nuevo con bandera fresca.
+        s = update(s, Msg::StartLogStream("api".into()));
+        assert!(old_stop.load(Ordering::Relaxed), "el stream anterior se cortó");
+        let ls = s.log_stream.as_ref().unwrap();
+        assert_eq!(ls.container, "api");
+        assert!(!ls.stop.load(Ordering::Relaxed));
     }
 
     #[test]
