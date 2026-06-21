@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<!--
+  shuma-gateway — cliente móvil de terminal (E4).
+
+  Página autocontenida que adjunta a una sesión PTY persistente del daemon
+  shuma vía el gateway: lista sesiones (`POST /rpc` con "PtyList"), adjunta a
+  una (`/ws/pty`) o crea una nueva, y la pinta con xterm.js. Pensada para un
+  teléfono en la misma red que el gateway. El token (si el gateway lo exige)
+  va en `?token=…` de la URL: se usa como `Authorization: Bearer` para /rpc y
+  como `?token=` para el WebSocket.
+
+  xterm.js viene de un CDN pinneado. Para uso 100% offline/LAN habría que
+  vendorizarlo (follow-up); el caso típico (teléfono con datos, dev box en la
+  LAN) anda con CDN.
+-->
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="color-scheme" content="dark" />
+  <title>shuma · terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #0e0f13; color: #cdd2dc;
+      font: 14px/1.4 -apple-system, system-ui, "Segoe UI", sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100%; }
+    header { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      background: #15171d; border-bottom: 1px solid #23262f; }
+    header b { color: #8ab4f8; }
+    header .sp { flex: 1; }
+    button { background: #23262f; color: #cdd2dc; border: 1px solid #333845;
+      border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+    button.kill { color: #e06c6c; }
+    button:active { background: #2e323c; }
+    #picker { padding: 10px; overflow: auto; flex: 1; }
+    .sess { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      border: 1px solid #23262f; border-radius: 8px; margin-bottom: 8px; background: #15171d; }
+    .sess .meta { flex: 1; min-width: 0; }
+    .sess .meta .lab { font-weight: 600; }
+    .sess .meta .sub { color: #8b93a3; font-size: 12px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #82cd8c; flex: none; }
+    .dot.dead { background: #555b66; }
+    .newform { display: flex; gap: 6px; margin-bottom: 12px; }
+    .newform input { flex: 1; min-width: 0; background: #0e0f13; color: #cdd2dc;
+      border: 1px solid #333845; border-radius: 6px; padding: 7px 9px; }
+    #termwrap { flex: 1; display: none; min-height: 0; }
+    #term { width: 100%; height: 100%; }
+    #status { padding: 6px 10px; color: #8b93a3; font-size: 12px; }
+    .err { color: #e06c6c; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <b>shuma</b><span>· terminal</span>
+      <span class="sp"></span>
+      <button id="back" style="display:none">← Sesiones</button>
+      <button id="reload">Recargar</button>
+    </header>
+    <div id="picker">
+      <div class="newform">
+        <input id="prog" placeholder="programa (ej. bash, claude)" />
+        <button id="spawn">Nueva</button>
+      </div>
+      <div id="list"></div>
+      <div id="status"></div>
+    </div>
+    <div id="termwrap"><div id="term"></div></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script>
+    const TOKEN = new URLSearchParams(location.search).get("token") || "";
+    const $ = (id) => document.getElementById(id);
+    const status = (msg, isErr) => { const s = $("status"); s.textContent = msg || ""; s.className = isErr ? "err" : ""; };
+
+    function rpcHeaders() {
+      const h = { "Content-Type": "application/json" };
+      if (TOKEN) h["Authorization"] = "Bearer " + TOKEN;
+      return h;
+    }
+    async function rpc(body) {
+      const r = await fetch("/rpc", { method: "POST", headers: rpcHeaders(), body: JSON.stringify(body) });
+      if (!r.ok) throw new Error("rpc " + r.status);
+      return r.json();
+    }
+    function wsUrl() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      let u = proto + "//" + location.host + "/ws/pty";
+      if (TOKEN) u += "?token=" + encodeURIComponent(TOKEN);
+      return u;
+    }
+
+    async function loadSessions() {
+      status("cargando sesiones…");
+      try {
+        const resp = await rpc("PtyList");
+        const sessions = (resp.PtyList && resp.PtyList.sessions) || [];
+        renderList(sessions);
+        status(sessions.length ? "" : "sin sesiones — creá una con «Nueva».");
+      } catch (e) {
+        status("error: " + e.message, true);
+      }
+    }
+
+    function renderList(sessions) {
+      const list = $("list");
+      list.innerHTML = "";
+      sessions.sort((a, b) => b.created_unix_ms - a.created_unix_ms);
+      for (const s of sessions) {
+        const div = document.createElement("div");
+        div.className = "sess";
+        const args = (s.args || []).join(" ");
+        const state = s.alive ? (s.attached + " adjunta(s)") : ("muerta" + (s.exit_code != null ? " (exit " + s.exit_code + ")" : ""));
+        div.innerHTML =
+          '<span class="dot ' + (s.alive ? "" : "dead") + '"></span>' +
+          '<div class="meta"><div class="lab"></div><div class="sub"></div></div>';
+        div.querySelector(".lab").textContent = s.label || s.program;
+        div.querySelector(".sub").textContent = (s.program + " " + args).trim() + " · " + s.cwd + " · " + state;
+        const open = document.createElement("button");
+        open.textContent = "Abrir";
+        open.onclick = () => attach({ session: s.session });
+        const kill = document.createElement("button");
+        kill.className = "kill";
+        kill.textContent = "Matar";
+        kill.onclick = async () => { try { await rpc({ PtyKill: { session: s.session } }); loadSessions(); } catch (e) { status(e.message, true); } };
+        div.appendChild(open);
+        div.appendChild(kill);
+        list.appendChild(div);
+      }
+    }
+
+    let term = null, fit = null, ws = null;
+
+    function showTerminal(on) {
+      $("termwrap").style.display = on ? "flex" : "none";
+      $("picker").style.display = on ? "none" : "block";
+      $("back").style.display = on ? "" : "none";
+    }
+
+    // `open` = { session } para adjuntar, o { program, args, cwd, label } para crear.
+    function attach(open) {
+      if (!window.Terminal) { status("xterm no cargó (¿sin internet para el CDN?)", true); return; }
+      if (ws) { try { ws.close(); } catch (_) {} }
+      if (!term) {
+        term = new Terminal({ fontSize: 13, cursorBlink: true, convertEol: false,
+          theme: { background: "#0e0f13", foreground: "#cdd2dc" } });
+        fit = new FitAddon.FitAddon();
+        term.loadAddon(fit);
+        term.open($("term"));
+        term.onData((d) => { if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(d)); });
+        term.onResize(({ rows, cols }) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "resize", rows, cols })); });
+        window.addEventListener("resize", () => { if (fit && $("termwrap").style.display !== "none") fit.fit(); });
+      } else {
+        term.reset();
+      }
+      showTerminal(true);
+      setTimeout(() => fit.fit(), 0);
+
+      ws = new WebSocket(wsUrl());
+      ws.binaryType = "arraybuffer";
+      ws.onopen = () => {
+        const spec = Object.assign({ rows: term.rows, cols: term.cols }, open);
+        ws.send(JSON.stringify(spec));
+        term.focus();
+      };
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === "string") {
+          let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+          if (m.t === "error") term.write("\r\n\x1b[31m[gateway] " + m.msg + "\x1b[0m\r\n");
+          else if (m.t === "exit") term.write("\r\n\x1b[33m[sesión terminó · exit " + m.code + "]\x1b[0m\r\n");
+          // m.t === "session" → id aprendido (re-adjuntar luego); no hace falta acá.
+        } else {
+          term.write(new Uint8Array(ev.data));
+        }
+      };
+      ws.onclose = () => term && term.write("\r\n\x1b[90m[desconectado — la sesión sigue viva]\x1b[0m\r\n");
+      ws.onerror = () => status("error de WebSocket", true);
+    }
+
+    $("reload").onclick = loadSessions;
+    $("back").onclick = () => { if (ws) { try { ws.close(); } catch (_) {} } showTerminal(false); loadSessions(); };
+    $("spawn").onclick = () => {
+      const line = $("prog").value.trim();
+      if (!line) { status("escribí un programa (ej. bash)", true); return; }
+      const parts = line.split(/\s+/);
+      attach({ program: parts[0], args: parts.slice(1), cwd: ".", label: parts[0] });
+    };
+    $("prog").addEventListener("keydown", (e) => { if (e.key === "Enter") $("spawn").click(); });
+
+    loadSessions();
+  </script>
+</body>
+</html>

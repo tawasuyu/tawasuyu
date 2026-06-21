@@ -14,6 +14,9 @@
 //!   servidor la salida cruda del terminal (empezando por el scrollback).
 //!   Resize por `{"t":"resize","rows":R,"cols":C}`. **Cerrar el WS =
 //!   DETACH**: la sesión sigue viva; se la mata con `PtyKill` (`POST /rpc`).
+//! - `GET /term`    : cliente móvil de terminal (HTML autocontenido con
+//!   xterm.js). Lista sesiones por `/rpc`, adjunta por `/ws/pty`. El token va
+//!   en `?token=…`. Pensado para abrir desde un teléfono en la misma red.
 //! - `GET /` y `GET /health` : healthcheck.
 //!
 //! Auth opcional por token (`SHIPOTE_GATEWAY_TOKEN`): header
@@ -33,7 +36,7 @@ use axum::{
         Query, State,
     },
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
-    response::{IntoResponse, Response as AxumResponse},
+    response::{Html, IntoResponse, Response as AxumResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -45,6 +48,11 @@ use tracing::{info, warn};
 use ulid::Ulid;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:7378";
+
+/// Cliente móvil de terminal (E4): página autocontenida servida en `/term`.
+/// Adjunta a sesiones PTY persistentes vía `/rpc` + `/ws/pty`. El token (si
+/// el gateway lo exige) va en `?token=…` de la URL.
+const TERM_HTML: &str = include_str!("term.html");
 
 #[derive(Clone)]
 struct AppState {
@@ -75,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(health))
         .route("/health", get(health))
+        .route("/term", get(term_page))
         .route("/rpc", post(rpc))
         .route("/ws/pty", get(ws_pty))
         .route("/event", post(post_event))
@@ -94,6 +103,13 @@ async fn main() -> anyhow::Result<()> {
 
 async fn health() -> &'static str {
     "shuma-gateway ok\n"
+}
+
+/// GET /term — el cliente móvil de terminal. HTML estático (sin secretos): el
+/// token va por la URL y lo usa el JS para `/rpc` y `/ws/pty`, que sí están
+/// gateados. Por eso la página en sí no requiere auth para cargar.
+async fn term_page() -> Html<&'static str> {
+    Html(TERM_HTML)
 }
 
 // =====================================================================
@@ -468,21 +484,50 @@ mod tests {
         assert!(!ct_eq("short", "longer"));
     }
 
+    fn test_state(token: Option<&str>) -> AppState {
+        let (events, _) = broadcast::channel::<String>(8);
+        AppState {
+            sock: Arc::new(PathBuf::from("/x")),
+            token: token.map(|t| Arc::new(t.to_string())),
+            events,
+        }
+    }
+
     #[test]
     fn auth_open_when_no_token() {
-        let st = AppState { sock: Arc::new(PathBuf::from("/x")), token: None };
+        let st = test_state(None);
         assert!(authorized(&st, &HeaderMap::new(), None));
     }
 
     #[test]
     fn auth_requires_token_when_set() {
-        let st = AppState {
-            sock: Arc::new(PathBuf::from("/x")),
-            token: Some(Arc::new("abc".into())),
-        };
+        let st = test_state(Some("abc"));
         assert!(!authorized(&st, &HeaderMap::new(), None));
         assert!(authorized(&st, &HeaderMap::new(), Some("abc")));
         assert!(!authorized(&st, &HeaderMap::new(), Some("nope")));
+    }
+
+    #[test]
+    fn term_html_habla_el_protocolo_del_gateway() {
+        // El cliente embebido debe cablear los endpoints/protocolo reales:
+        // listar por /rpc "PtyList", adjuntar por /ws/pty, resize/kill.
+        assert!(TERM_HTML.contains("/ws/pty"));
+        assert!(TERM_HTML.contains("\"PtyList\""));
+        assert!(TERM_HTML.contains("PtyKill"));
+        assert!(TERM_HTML.contains("\"resize\""));
+        // Y monta un terminal de verdad (xterm) + pasa el token a las dos vías.
+        assert!(TERM_HTML.contains("xterm"));
+        assert!(TERM_HTML.contains("Bearer "));
+        assert!(TERM_HTML.contains("token="));
+    }
+
+    #[tokio::test]
+    async fn term_page_devuelve_html_sin_auth() {
+        // La página carga sin token (no tiene secretos); el gateo está en
+        // /rpc y /ws/pty, que el JS llama con el token de la URL.
+        let Html(body) = term_page().await;
+        assert!(body.contains("<!DOCTYPE html>"));
+        assert_eq!(body, TERM_HTML);
     }
 
     #[test]

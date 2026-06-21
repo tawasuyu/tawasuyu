@@ -203,7 +203,20 @@ y rinde como TUI), `:sessions` (lista), `:attach <id>` (re-adjunta), y
 `:kill-session <id>`. Cerrar shuma = detach (la sesión vive); reconectás con
 `:attach` o `shuma pty attach`. Verificado e2e contra daemon vivo
 (`examples/session_smoke`: spawn→list→attach lee scrollback→detach-sigue-viva
-→kill). Queda sólo el cliente móvil vía gateway (el WS ya soporta attach).
+→kill).
+
+**Cliente móvil vía gateway ✅ (2026-06-21):** `shuma-gateway` sirve `GET /term`
+— una página HTML autocontenida (xterm.js de CDN pinneado) pensada para un
+teléfono en la misma red. Lista las sesiones por `POST /rpc` (`"PtyList"`),
+adjunta a una (o crea) por el WebSocket `/ws/pty` (primer msg JSON
+`{"session":id,rows,cols}` o `{"program",args,…}`; binarios = stdin/salida;
+`{"t":"resize",…}`), con botones Abrir/Matar/Nueva. El token (si el gateway lo
+exige) va en `?token=…`: el JS lo manda como `Authorization: Bearer` a `/rpc` y
+como `?token=` al WS. La página en sí no requiere auth (no tiene secretos; el
+gateo está en /rpc y /ws/pty). Servido verificado por curl
+(`text/html`, 8.9 KB, markers del protocolo); el flujo terminal en vivo pide
+daemon + navegador real. Quedaría como follow-up vendorizar xterm.js para uso
+100% offline-LAN. **E4 cerrado del todo.**
 
 ### E5. LLM como instrumento invocado (`:?`) ✅ (2026-06-13)
 **Hecho** con `pluma-llm` (backend por env, Mock sin credenciales):
@@ -255,5 +268,5 @@ rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 test
 ---
 
 **Roadmap COMPLETO (2026-06-13):** A1·A2·A3·A4·A5·A6 + E1·E2·E3·E4·E5·E6 ✅ —
-toda la lista de inteligencia, cerrada. Pendiente sólo el pulido de E4 (cliente
-móvil vía gateway: el WS ya soporta attach, falta el cliente).
+toda la lista de inteligencia, cerrada. El pulido de E4 (cliente móvil vía
+gateway) quedó cerrado el 2026-06-21 con `GET /term`. **Sin pendientes.**
