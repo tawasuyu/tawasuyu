@@ -80,13 +80,25 @@ pub fn detect_sections(cmd: &str, lines: &[String]) -> Option<Vec<Section>> {
         "diff" => detect_diff(lines),
         "env" | "printenv" => detect_env(lines),
         "cargo" | "rustc" => detect_cargo(lines),
+        // `ip addr`/`ip link` (e `ifconfig`): un volcado denso de interfaces.
+        // Lo partimos en una sección por interfaz (como `git status` largo).
+        // `ip route`/`ip neigh` NO aplican (no son por-interfaz) → quedan fuera.
+        "ip" if matches!(
+            tokens.get(1).copied(),
+            Some("addr" | "a" | "address" | "link" | "l")
+        ) =>
+        {
+            detect_net_interfaces(lines)
+        }
+        "ifconfig" => detect_net_interfaces(lines),
         // Comandos cuya salida es una tabla con header alineado a ancho fijo:
         // `docker ps`, `podman ps`, `kubectl get`, `systemctl list-units`,
         // `ps aux`, `df -h`, `lsblk`… Las columnas se cortan por la posición
         // de inicio de cada header (left-aligned, padded al ancho de la
         // columna). El detector es seguro: si no ve un header tabular,
         // devuelve `None` y el bloque cae al render plano.
-        "docker" | "podman" | "kubectl" | "systemctl" | "ps" | "df" | "lsblk" => {
+        "docker" | "podman" | "kubectl" | "systemctl" | "ps" | "df" | "lsblk" | "ss"
+        | "netstat" => {
             header_table(lines).map(|(columns, rows)| {
                 vec![Section { title: String::new(), kind: SectionKind::Table { columns, rows } }]
             })
@@ -422,6 +434,55 @@ fn detect_env(lines: &[String]) -> Option<Vec<Section>> {
     }])
 }
 
+/// Extrae el nombre de interfaz del encabezado de un bloque de `ip addr`
+/// (`1: eth0: <…>`) o `ifconfig` (`eth0: flags=…`). Cae al primer token si
+/// el formato no matchea.
+fn iface_name(line: &str) -> String {
+    let t = line.trim_end();
+    // `ip addr`: "N: name: <flags> …" — el primer campo es el índice numérico.
+    if let Some((head, rest)) = t.split_once(": ") {
+        if !head.is_empty() && head.chars().all(|c| c.is_ascii_digit()) {
+            return rest.split(':').next().unwrap_or(rest).trim().to_string();
+        }
+    }
+    // `ifconfig`: "name: flags=…" o "name  Link encap:…" — el nombre va antes
+    // del primer ':' o espacio.
+    t.split([':', ' ']).next().unwrap_or(t).trim().to_string()
+}
+
+/// `ip addr`/`ip link`/`ifconfig`: un volcado plano de varias interfaces.
+/// Cada encabezado **no indentado** abre una interfaz; sus líneas indentadas
+/// (link/inet/inet6/…) son su cuerpo. Devuelve una sección por interfaz, con
+/// el nombre como título navegable. `None` si no hay ≥2 interfaces (entonces
+/// no vale la pena estructurar — cae al render plano).
+fn detect_net_interfaces(lines: &[String]) -> Option<Vec<Section>> {
+    let mut sections: Vec<Section> = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    let flush = |cur: &mut Option<(String, Vec<String>)>, out: &mut Vec<Section>| {
+        if let Some((title, body)) = cur.take() {
+            out.push(Section { title, kind: SectionKind::Lines(body) });
+        }
+    };
+    for line in lines {
+        if line.trim().is_empty() {
+            continue; // las blancas separan bloques; no aportan al cuerpo
+        }
+        let indented = line.starts_with(char::is_whitespace);
+        if !indented {
+            // Encabezado de interfaz nueva.
+            flush(&mut cur, &mut sections);
+            cur = Some((iface_name(line), vec![line.clone()]));
+        } else if let Some((_, body)) = cur.as_mut() {
+            body.push(line.clone());
+        } else {
+            // Línea indentada antes de cualquier encabezado: preámbulo suelto.
+            cur = Some((String::new(), vec![line.clone()]));
+        }
+    }
+    flush(&mut cur, &mut sections);
+    (sections.len() >= 2).then_some(sections)
+}
+
 /// Salida de `cargo`/`rustc`: una sección colapsable por diagnóstico
 /// (cada `error…`/`warning:` arranca uno; el preámbulo `Compiling…` va a
 /// «salida»). `None` si no hay ningún diagnóstico — así un `cargo run`
@@ -675,6 +736,77 @@ mod tests {
         assert_eq!(secs[0].as_lines_for_test(), Some(vec!["a  b  c".to_string()]));
         assert_eq!(secs[1].title, "./sub");
         assert_eq!(secs[1].as_lines_for_test(), Some(vec!["d  e".to_string()]));
+    }
+
+    #[test]
+    fn ip_addr_se_parte_por_interfaz() {
+        let lines = vec![
+            "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN".to_string(),
+            "    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00".to_string(),
+            "    inet 127.0.0.1/8 scope host lo".to_string(),
+            "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq state UP".to_string(),
+            "    link/ether aa:bb:cc:dd:ee:ff brd ff:ff:ff:ff:ff:ff".to_string(),
+            "    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0".to_string(),
+        ];
+        let secs = detect_sections("ip addr", &lines).expect("detect");
+        assert_eq!(secs.len(), 2);
+        assert_eq!(secs[0].title, "lo");
+        assert_eq!(secs[1].title, "eth0");
+        // El cuerpo conserva encabezado + líneas indentadas de la interfaz.
+        let body0 = secs[0].as_lines_for_test().unwrap();
+        assert_eq!(body0.len(), 3);
+        assert!(body0[2].contains("127.0.0.1/8"));
+    }
+
+    #[test]
+    fn ifconfig_se_parte_por_interfaz() {
+        let lines = vec![
+            "eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500".to_string(),
+            "        inet 192.168.1.10  netmask 255.255.255.0".to_string(),
+            "        ether aa:bb:cc:dd:ee:ff  txqueuelen 1000".to_string(),
+            "lo: flags=73<UP,LOOPBACK,RUNNING>  mtu 65536".to_string(),
+            "        inet 127.0.0.1  netmask 255.0.0.0".to_string(),
+        ];
+        let secs = detect_sections("ifconfig", &lines).expect("detect");
+        assert_eq!(secs.len(), 2);
+        assert_eq!(secs[0].title, "eth0");
+        assert_eq!(secs[1].title, "lo");
+    }
+
+    #[test]
+    fn ip_route_no_se_estructura() {
+        // `ip route` no es por-interfaz → el detector ni se invoca.
+        let lines = vec![
+            "default via 192.168.1.1 dev eth0".to_string(),
+            "192.168.1.0/24 dev eth0 proto kernel scope link".to_string(),
+        ];
+        assert!(detect_sections("ip route", &lines).is_none());
+    }
+
+    #[test]
+    fn una_sola_interfaz_no_vale_la_pena() {
+        let lines = vec![
+            "1: lo: <LOOPBACK,UP> mtu 65536".to_string(),
+            "    inet 127.0.0.1/8 scope host lo".to_string(),
+        ];
+        assert!(detect_sections("ip addr", &lines).is_none());
+    }
+
+    #[test]
+    fn ss_se_lee_como_tabla() {
+        let lines = vec![
+            "Netid  State   Recv-Q  Send-Q  Local-Address  Peer-Address".to_string(),
+            "tcp    LISTEN  0       128     0.0.0.0:22     0.0.0.0:*".to_string(),
+            "tcp    ESTAB   0       0       10.0.0.1:22    10.0.0.5:5051".to_string(),
+        ];
+        let secs = detect_sections("ss -tn", &lines).expect("detect");
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                assert!(columns.len() >= 4);
+                assert_eq!(rows.len(), 2);
+            }
+            _ => panic!("esperaba Table"),
+        }
     }
 
     #[test]
