@@ -283,6 +283,22 @@ pub(crate) fn poll_matilda_runtime(m: &Model, handle: &Handle<Msg>) {
                             ModuleMsg::Matilda(shuma_module_matilda::Msg::SetRuntimeQuiet(rt)),
                         )
                     });
+                    // M2 — y las series CPU/mem, pero sólo si el operador está
+                    // inspeccionando un contenedor (la sparkline sólo se pinta
+                    // bajo el seleccionado, y `docker stats` es caro).
+                    if st.selected_container.is_some() {
+                        let slot_back = slot.clone();
+                        let source = st.source.clone();
+                        handle.spawn(move || {
+                            let stats =
+                                shuma_module_matilda::source_stats_remote_blocking(&source)
+                                    .unwrap_or_default();
+                            Msg::Module(
+                                slot_back,
+                                ModuleMsg::Matilda(shuma_module_matilda::Msg::SetStatsQuiet(stats)),
+                            )
+                        });
+                    }
                 }
             }
         }
@@ -374,6 +390,7 @@ pub(crate) fn poll_matilda_remote_runtime(m: &Model, handle: &Handle<Msg>) {
             continue;
         }
         let source = st.source.clone();
+        let want_stats = st.selected_container.is_some();
         let slot_back = slot.clone();
         handle.spawn(move || {
             let msg = match shuma_module_matilda::source_runtime_remote_blocking(&source) {
@@ -385,6 +402,20 @@ pub(crate) fn poll_matilda_remote_runtime(m: &Model, handle: &Handle<Msg>) {
             inflight.store(false, Ordering::Release);
             Msg::Module(slot_back, ModuleMsg::Matilda(msg))
         });
+        // M2 — series CPU/mem del Source remoto, sólo si hay un contenedor
+        // bajo inspección (la sparkline sólo se pinta bajo el seleccionado).
+        if want_stats {
+            let source = st.source.clone();
+            let slot_back = slot.clone();
+            handle.spawn(move || {
+                let stats = shuma_module_matilda::source_stats_remote_blocking(&source)
+                    .unwrap_or_default();
+                Msg::Module(
+                    slot_back,
+                    ModuleMsg::Matilda(shuma_module_matilda::Msg::SetStatsQuiet(stats)),
+                )
+            });
+        }
     }
 }
 

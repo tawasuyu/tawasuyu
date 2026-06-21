@@ -52,11 +52,24 @@ clickeables → barra de acciones; ejecución local (`sh -c`, captura al log) +
 `container_action_remote_blocking` (SSH) para el chasis; tras acción mutante
 re-observa el runtime.
 
-### M2. Logs y stats en vivo ✅ (2026-06-13, on-demand)
+### M2. Logs y stats en vivo ✅ (2026-06-13 on-demand · series CPU/mem 2026-06-21)
 Acciones `Logs` (`docker logs --tail 200`) y `Stats` (`docker stats
---no-stream`) vuelcan al log del bloque. **Pendiente:** stream continuo
-(`-f`) a una card y series de CPU/mem en el `MonitorSpec` (history+sparkline)
-— hoy es a-pedido, no continuo.
+--no-stream`) vuelcan al log del bloque.
+**Series CPU/mem ✅ (2026-06-21):** `matilda-discover` gana `ContainerStats
+{cpu_pct,mem_pct}` + `DOCKER_STATS_FORMAT` + `parse_docker_stats` +
+`discover_stats()`. El módulo guarda un ring por contenedor
+(`stats_history`, cap `STATS_HISTORY_CAP=40`) alimentado por el polling
+(`source_stats_remote_blocking` local/SSH → `Msg::SetStatsQuiet`,
+silencioso); el chasis sólo lo muestrea **si hay un contenedor seleccionado**
+(`docker stats` es caro y la sparkline sólo se pinta bajo el seleccionado).
+La fila del contenedor seleccionado muestra `CPU x%  ▁▂▅▇▆▃  MEM y%` —
+sparkline de bloques Unicode (`sparkline()` puro, auto-escala al máximo
+observado). Funciona local y remoto (Source montado).
+**Pendiente:** stream continuo `docker logs -f` a una card. Bloqueante real:
+`matilda-linker::exec` (y `shared/ssh`) colecta la salida COMPLETA, no
+streamea — un live-tail remoto necesita primero una `exec` por canal
+incremental en la capa SSH; el local necesita un subproceso de larga vida con
+control start/stop. No se puede certificar acá sin docker/host.
 
 ### M3. Servicios systemd ✅ (2026-06-13, runtime + acciones + declarativos)
 **Runtime:** `matilda-discover` `ServiceState`/`ServiceStatus` +
@@ -131,7 +144,8 @@ tab pasó de "visor declarativo" a **consola de operación viva de una flota**:
 ves qué corre y qué se cayó en cada host, operás el host montado sin bajar a la
 terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Operás
 también recursos de cualquier host de la flota sin montarlo (M5, 2026-06-21).
-Lo que queda son los "pendientes" acotados de cada M: stream de logs `-f`
-continuo + series CPU/mem (M2) y discovery de drift de servicios remotos por
-SSH (M3). El polling (local, remoto y de flota) y las acciones (local, Source
-remoto y flota) quedaron cerrados el 2026-06-21.
+Lo que queda son dos pendientes acotados: stream de logs `-f` continuo (M2,
+bloqueado por la `exec` no-streaming de la capa SSH) y discovery de drift de
+servicios remotos por SSH (M3). El polling (local, remoto y de flota), las
+acciones (local, Source remoto y flota) y las series CPU/mem (M2) quedaron
+cerrados el 2026-06-21.

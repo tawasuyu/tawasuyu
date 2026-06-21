@@ -86,6 +86,10 @@ pub struct State {
     /// `None` hasta el primer discover. Es la base del monitoreo en vivo,
     /// distinto del inventario declarativo (`desired`/`current`).
     pub runtime: Option<RuntimeState>,
+    /// Historial CPU/mem por contenedor (M2): un ring de muestras alimentado
+    /// por el polling (`docker stats --no-stream`). La sparkline de la fila
+    /// seleccionada lo lee. Capado a `STATS_HISTORY_CAP` por contenedor.
+    pub stats_history: std::collections::BTreeMap<String, std::collections::VecDeque<matilda_discover::ContainerStats>>,
     /// Contenedor seleccionado en el panel — abre la barra de acciones
     /// (start/stop/restart/logs/rm). `None` = nada seleccionado.
     pub selected_container: Option<String>,
@@ -135,6 +139,7 @@ impl State {
             split_width: 380.0,
             inventory_path: None,
             runtime: None,
+            stats_history: std::collections::BTreeMap::new(),
             selected_container: None,
             selected_service: None,
             fleet: std::collections::BTreeMap::new(),
@@ -173,6 +178,70 @@ impl State {
         *self.runtime_counts.lock().unwrap() = (rt.up_count(), rt.down_count());
         self.runtime = Some(rt);
     }
+
+    /// Incorpora una tanda de muestras CPU/mem (M2): empuja cada una a su ring
+    /// por contenedor (capado a [`STATS_HISTORY_CAP`]) y descarta el historial
+    /// de contenedores que ya no aparecen (se fueron). Idempotente por tanda.
+    pub fn record_stats(
+        &mut self,
+        stats: &std::collections::BTreeMap<String, matilda_discover::ContainerStats>,
+    ) {
+        for (name, sample) in stats {
+            let ring = self.stats_history.entry(name.clone()).or_default();
+            ring.push_back(*sample);
+            while ring.len() > STATS_HISTORY_CAP {
+                ring.pop_front();
+            }
+        }
+        // Limpia rings de contenedores ausentes de esta tanda (evita fugas y
+        // sparklines fantasma de contenedores borrados).
+        self.stats_history.retain(|name, _| stats.contains_key(name));
+    }
+
+    /// La sparkline CPU del contenedor `name`, o `None` si no hay historial.
+    pub fn cpu_sparkline(&self, name: &str) -> Option<String> {
+        let ring = self.stats_history.get(name)?;
+        if ring.is_empty() {
+            return None;
+        }
+        let cpu: Vec<f32> = ring.iter().map(|s| s.cpu_pct).collect();
+        Some(sparkline(&cpu))
+    }
+
+    /// La última muestra CPU/mem del contenedor `name`, si la hay.
+    pub fn last_stats(&self, name: &str) -> Option<matilda_discover::ContainerStats> {
+        self.stats_history.get(name).and_then(|r| r.back().copied())
+    }
+}
+
+/// Cuántas muestras CPU/mem guarda el ring por contenedor (M2). A ~5 s de
+/// polling local, 40 muestras ≈ 3-4 min de ventana en la sparkline.
+pub const STATS_HISTORY_CAP: usize = 40;
+
+/// Caracteres de barra para la sparkline (8 niveles, de menor a mayor).
+const SPARK_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Sparkline de bloques Unicode para una serie de muestras. Auto-escala al
+/// máximo observado (mín. 1.0) — CPU% puede pasar 100 en multi-core, así que
+/// escala relativa lee mejor que un techo fijo. Serie vacía → cadena vacía.
+/// Puro y testeable (no toca `View`).
+pub fn sparkline(samples: &[f32]) -> String {
+    if samples.is_empty() {
+        return String::new();
+    }
+    let max = samples
+        .iter()
+        .cloned()
+        .fold(0.0_f32, f32::max)
+        .max(1.0);
+    samples
+        .iter()
+        .map(|&v| {
+            let frac = (v / max).clamp(0.0, 1.0);
+            let idx = (frac * (SPARK_BARS.len() as f32 - 1.0)).round() as usize;
+            SPARK_BARS[idx.min(SPARK_BARS.len() - 1)]
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +267,9 @@ pub enum Msg {
     /// Como `SetRuntime` pero **sin loguear** — para el polling periódico
     /// (M4), que no debe spamear el log cada 5 s.
     SetRuntimeQuiet(RuntimeState),
+    /// M2 — incorpora una tanda de muestras CPU/mem (`docker stats`) al
+    /// historial por contenedor. Silencioso por diseño (lo manda el polling).
+    SetStatsQuiet(std::collections::BTreeMap<String, matilda_discover::ContainerStats>),
     /// Línea informativa para el log — útil para que el chasis avise
     /// "conectando", "fallo de SSH", etc., sin acoplarse al módulo.
     LogLine(String),
@@ -443,6 +515,9 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::SetRuntimeQuiet(rt) => {
             s.set_runtime(rt);
         }
+        Msg::SetStatsQuiet(stats) => {
+            s.record_stats(&stats);
+        }
         Msg::LogLine(line) => {
             s.log.push(line);
             cap_log(&mut s.log);
@@ -662,6 +737,37 @@ async fn fetch_remote_runtime(linker: &Linker) -> Result<RuntimeState, String> {
         services: matilda_discover::parse_systemctl_units(&svc),
         vhosts: matilda_discover::parse_nginx_sites(&nginx),
     })
+}
+
+/// M2 — re-observa el uso CPU/mem de los contenedores (`docker stats
+/// --no-stream`) del Source montado. **Bloqueante** (~1-2 s): el chasis lo
+/// corre en un thread y reenvía `Msg::SetStatsQuiet`. Local → `discover_stats`;
+/// remoto → SSH. Vacío si docker no está (no es error).
+pub fn source_stats_remote_blocking(
+    source: &Source,
+) -> Result<std::collections::BTreeMap<String, matilda_discover::ContainerStats>, String> {
+    match source {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
+            Ok(matilda_discover::discover_stats())
+        }
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                let text = linker
+                    .exec(&format!(
+                        "docker stats --no-stream --format '{}' 2>/dev/null || true",
+                        matilda_discover::DOCKER_STATS_FORMAT
+                    ))
+                    .await
+                    .map_err(|e| format!("docker stats: {e}"))?;
+                Ok(matilda_discover::parse_docker_stats(&text))
+            })
+        }
+    }
 }
 
 /// M4 — re-observa el runtime del **Source montado** cuando es remoto (lo que
@@ -1285,8 +1391,11 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
             theme,
             lift.clone(),
         ));
-        // Barra de acciones bajo el contenedor seleccionado.
+        // Barra de acciones + sparkline CPU/mem bajo el seleccionado.
         if state.selected_container.as_deref() == Some(c.name.as_str()) {
+            if let Some(spark) = cpu_mem_spark_row(state, &c.name, theme) {
+                children.push(spark);
+            }
             children.push(container_action_bar(&c.name, theme, lift.clone()));
         }
     }
@@ -1300,6 +1409,9 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
                     &cs.name, &cs.image, Some(cs), false, sel, theme, lift.clone(),
                 ));
                 if sel {
+                    if let Some(spark) = cpu_mem_spark_row(state, &cs.name, theme) {
+                        children.push(spark);
+                    }
                     children.push(container_action_bar(&cs.name, theme, lift.clone()));
                 }
             }
@@ -1630,6 +1742,24 @@ fn container_row<HostMsg: Clone + Send + Sync + 'static>(
         row = row.fill(theme.bg_row_hover);
     }
     row
+}
+
+/// Fila CPU/mem (M2) del contenedor seleccionado: lectura actual + sparkline
+/// del histórico CPU. `None` si todavía no hay muestras (el polling no corrió
+/// o el contenedor está parado y `docker stats` no lo lista). Tinte del accent
+/// del tema; texto monoespaciado para que las barras se alineen.
+fn cpu_mem_spark_row<HostMsg: Clone + 'static>(
+    state: &State,
+    name: &str,
+    theme: &Theme,
+) -> Option<View<HostMsg>> {
+    let spark = state.cpu_sparkline(name)?;
+    let last = state.last_stats(name)?;
+    let text = format!(
+        "    CPU {:>5.1}%  {spark}   MEM {:>5.1}%",
+        last.cpu_pct, last.mem_pct
+    );
+    Some(text_row(&text, theme.accent, theme))
 }
 
 /// Barra de acciones para el contenedor seleccionado: un botón por
@@ -2235,6 +2365,60 @@ mod tests {
         s = update(s, Msg::SelectHost("edge-2".into()));
         assert!(s.selected_fleet_container.is_none());
         assert!(s.selected_fleet_service.is_none());
+    }
+
+    #[test]
+    fn sparkline_escala_y_mapea_niveles() {
+        // Vacío → cadena vacía.
+        assert_eq!(sparkline(&[]), "");
+        // Monótona creciente: el último carácter es el bloque lleno, el
+        // primero el más bajo. Auto-escala al máximo (8.0 acá).
+        let s = sparkline(&[0.0, 2.0, 4.0, 8.0]);
+        assert_eq!(s.chars().count(), 4);
+        assert_eq!(s.chars().next_back().unwrap(), '█');
+        assert_eq!(s.chars().next().unwrap(), '▁');
+    }
+
+    #[test]
+    fn record_stats_acumula_y_capa_y_limpia_ausentes() {
+        use matilda_discover::ContainerStats;
+        let mut s = State::new(Source::Local);
+        // Empuja CAP+5 muestras de "web" → el ring se capa.
+        for i in 0..(STATS_HISTORY_CAP + 5) {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("web".to_string(), ContainerStats { cpu_pct: i as f32, mem_pct: 1.0 });
+            s.record_stats(&m);
+        }
+        assert_eq!(s.stats_history["web"].len(), STATS_HISTORY_CAP);
+        // La última muestra es la más reciente.
+        assert_eq!(s.last_stats("web").unwrap().cpu_pct, (STATS_HISTORY_CAP + 4) as f32);
+        assert!(s.cpu_sparkline("web").is_some());
+        // Una tanda sin "web" lo borra del historial (se fue el contenedor).
+        let mut other = std::collections::BTreeMap::new();
+        other.insert("db".to_string(), ContainerStats { cpu_pct: 3.0, mem_pct: 2.0 });
+        s.record_stats(&other);
+        assert!(s.cpu_sparkline("web").is_none());
+        assert!(s.cpu_sparkline("db").is_some());
+    }
+
+    #[test]
+    fn set_stats_quiet_no_loguea() {
+        use matilda_discover::ContainerStats;
+        let mut s = State::new(Source::Local);
+        let log_before = s.log.len();
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("web".to_string(), ContainerStats { cpu_pct: 10.0, mem_pct: 20.0 });
+        s = update(s, Msg::SetStatsQuiet(m));
+        assert_eq!(s.log.len(), log_before);
+        assert_eq!(s.last_stats("web").unwrap().mem_pct, 20.0);
+    }
+
+    #[test]
+    fn source_stats_remote_blocking_local_no_abre_ssh() {
+        // Source::Local → discover_stats local (sin SSH). En CI sin docker da
+        // un mapa vacío, pero Ok.
+        let res = source_stats_remote_blocking(&Source::Local);
+        assert!(res.is_ok());
     }
 
     #[test]

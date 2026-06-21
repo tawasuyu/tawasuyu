@@ -246,6 +246,59 @@ pub fn parse_docker_ps(text: &str) -> Vec<ContainerStatus> {
         .collect()
 }
 
+/// Muestra de uso de un contenedor: CPU y memoria como porcentaje. La unidad
+/// del histograma CPU/mem del monitoreo (M2). Numérico (no el texto crudo de
+/// Docker) para alimentar la sparkline.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ContainerStats {
+    pub cpu_pct: f32,
+    pub mem_pct: f32,
+}
+
+/// Formato que pedimos a `docker stats --no-stream` para el muestreo: nombre
+/// + CPU% + MEM%. Tab-separado, reutilizable local y remoto (SSH).
+pub const DOCKER_STATS_FORMAT: &str = "{{.Name}}\t{{.CPUPerc}}\t{{.MemPerc}}";
+
+/// Parsea un porcentaje de Docker (`12.34%`, `0.00%`) a `f32`. Tolera el
+/// sufijo `%`, espacios y `--` (sin dato → 0.0).
+fn parse_percent(s: &str) -> f32 {
+    s.trim().trim_end_matches('%').trim().parse::<f32>().unwrap_or(0.0)
+}
+
+/// Parsea la salida de `docker stats --no-stream --format DOCKER_STATS_FORMAT`:
+/// una fila `nombre<TAB>cpu%<TAB>mem%` por contenedor. Devuelve un mapa
+/// `nombre → ContainerStats`. Puro y testeable.
+pub fn parse_docker_stats(text: &str) -> std::collections::BTreeMap<String, ContainerStats> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.trim().is_empty() {
+                return None;
+            }
+            let mut f = line.split('\t');
+            let name = f.next()?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let cpu_pct = parse_percent(f.next().unwrap_or(""));
+            let mem_pct = parse_percent(f.next().unwrap_or(""));
+            Some((name, ContainerStats { cpu_pct, mem_pct }))
+        })
+        .collect()
+}
+
+/// Observa el uso CPU/mem de los contenedores corriendo en *esta* máquina
+/// (`docker stats --no-stream`). Vacío si docker no está. Bloqueante (~1-2 s:
+/// docker muestrea un intervalo), pensado para correr en un thread de polling.
+pub fn discover_stats() -> std::collections::BTreeMap<String, ContainerStats> {
+    run_local(
+        "docker",
+        &["stats", "--no-stream", "--format", DOCKER_STATS_FORMAT],
+    )
+    .map(|t| parse_docker_stats(&t))
+    .unwrap_or_default()
+}
+
 /// Parsea la salida de `docker ps -a --format '{{.Names}}'` — un nombre
 /// por línea.
 pub fn parse_docker_names(text: &str) -> Vec<String> {
@@ -536,6 +589,19 @@ mod tests {
         assert!(!cs[1].state.is_up());
         // Campos faltantes (sin ports) no rompen el parseo.
         assert_eq!(cs[1].ports, "");
+    }
+
+    #[test]
+    fn parse_docker_stats_porcentajes() {
+        let text = "web\t12.34%\t5.67%\ndb\t0.00%\t40.10%\nbad\t--\t--\n";
+        let m = parse_docker_stats(text);
+        assert_eq!(m.len(), 3);
+        assert!((m["web"].cpu_pct - 12.34).abs() < 0.01);
+        assert!((m["web"].mem_pct - 5.67).abs() < 0.01);
+        assert_eq!(m["db"].cpu_pct, 0.0);
+        // `--` (sin dato) cae a 0.0 sin romper.
+        assert_eq!(m["bad"].cpu_pct, 0.0);
+        assert_eq!(m["bad"].mem_pct, 0.0);
     }
 
     #[test]
