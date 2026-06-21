@@ -1150,6 +1150,75 @@ pub(crate) fn apply_kill_session(mut s: State, rest: &str) -> State {
 
 /// Reconstruye el stdout de un bloque (su card) uniendo las líneas
 /// `Stdout` sin etapa — para alimentarlo como stdin de un reprocess.
+/// Expande `~` al HOME y resuelve rutas relativas contra el cwd del shell.
+fn resolve_write_path(path: &str, s: &State) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    let p = std::path::PathBuf::from(path);
+    if p.is_absolute() {
+        p
+    } else {
+        s.cwd.join(p)
+    }
+}
+
+/// `:write [%cN] <archivo>` — vuelca el stdout de un bloque a un archivo
+/// (el flujo "lo corrí, ahora guardalo"). Sin ref usa el último bloque con
+/// salida. Es complemento de `%cN` (E2): la scrollback como fuente de datos
+/// también se persiste. No corre shell — `std::fs::write` directo.
+pub(crate) fn apply_write(mut s: State, rest: &str) -> State {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :write [%cN] <archivo> — vuelca el stdout de un bloque a un archivo",
+        ));
+        return s;
+    }
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or("");
+    // Si el primer token es una ref `%cN`/`%pN`, ese es el bloque y el resto el
+    // archivo; si no, no hay ref → último bloque con stdout y todo es el path.
+    let first_is_ref = first.starts_with("%c") || first.starts_with("%p");
+    let (block, path) = if first_is_ref {
+        (parse_block_ref(&s, first), parts.next().unwrap_or("").trim().to_string())
+    } else {
+        (parse_block_ref(&s, ""), rest.to_string())
+    };
+    let Some(block) = block else {
+        s.push_output(OutputLine::notice(
+            "✘ :write — no hay salida de un bloque previo para volcar",
+        ));
+        return s;
+    };
+    if path.is_empty() {
+        s.push_output(OutputLine::notice("✘ :write — falta el archivo destino"));
+        return s;
+    }
+    let data = gather_block_stdout(&s, block);
+    if data.is_empty() {
+        s.push_output(OutputLine::notice(format!(
+            "✘ :write — el bloque %c{block} no tiene stdout"
+        )));
+        return s;
+    }
+    let target = resolve_write_path(&path, &s);
+    match std::fs::write(&target, data.as_bytes()) {
+        Ok(()) => s.push_output(OutputLine::notice(format!(
+            "✔ %c{block}: {} bytes → {}",
+            data.len(),
+            target.display()
+        ))),
+        Err(e) => s.push_output(OutputLine::notice(format!(
+            "✘ :write {} — {e}",
+            target.display()
+        ))),
+    }
+    s
+}
+
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
     let mut out = String::new();
     for l in &s.output {

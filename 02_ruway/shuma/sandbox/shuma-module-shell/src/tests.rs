@@ -180,6 +180,64 @@
     }
 
     #[test]
+    fn write_vuelca_el_bloque_a_un_archivo() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("salida.txt");
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        // Bloque 3 con dos líneas de stdout.
+        for t in ["linea uno", "linea dos"] {
+            let mut l = OutputLine::stdout(t);
+            l.block = 3;
+            s.output.push(l);
+        }
+        s.input.set_text(&format!(":write %c3 {}", file.display()));
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let written = std::fs::read_to_string(&file).expect("archivo escrito");
+        assert_eq!(written, "linea uno\nlinea dos\n");
+        assert!(s.output.iter().any(|l| l.text.contains("bytes →")));
+    }
+
+    #[test]
+    fn write_sin_ref_usa_el_ultimo_bloque() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("ultimo.txt");
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        let mut a = OutputLine::stdout("viejo");
+        a.block = 1;
+        s.output.push(a);
+        let mut b = OutputLine::stdout("reciente");
+        b.block = 2;
+        s.output.push(b);
+        s.input.set_text(&format!(":write {}", file.display()));
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "reciente\n");
+    }
+
+    #[test]
+    fn write_sin_archivo_avisa() {
+        let mut s = State::new(Source::Local);
+        let mut l = OutputLine::stdout("algo");
+        l.block = 5;
+        s.output.push(l);
+        s.input.set_text(":write %c5");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("falta el archivo")));
+    }
+
+    #[test]
+    fn write_bloque_sin_stdout_avisa() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("x.txt");
+        let mut s = State::new(Source::Local);
+        s.input.set_text(&format!(":write %c99 {}", file.display()));
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("no tiene stdout")));
+        assert!(!file.exists(), "no debe crear el archivo si no hay datos");
+    }
+
+    #[test]
     fn explica_arma_request_text_con_la_salida_del_bloque() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
