@@ -91,6 +91,11 @@ pub fn detect_sections(cmd: &str, lines: &[String]) -> Option<Vec<Section>> {
             detect_net_interfaces(lines)
         }
         "ifconfig" => detect_net_interfaces(lines),
+        "mount" => detect_mount(lines),
+        "du" => detect_du(lines),
+        // `free` no va por `header_table`: su columna de etiqueta (`Mem:`,
+        // `Swap:`) no tiene header, así que se perdería. Parser dedicado.
+        "free" => detect_free(lines),
         // Comandos cuya salida es una tabla con header alineado a ancho fijo:
         // `docker ps`, `podman ps`, `kubectl get`, `systemctl list-units`,
         // `ps aux`, `df -h`, `lsblk`… Las columnas se cortan por la posición
@@ -483,6 +488,118 @@ fn detect_net_interfaces(lines: &[String]) -> Option<Vec<Section>> {
     (sections.len() >= 2).then_some(sections)
 }
 
+/// `mount`: cada línea es `DISPOSITIVO on MONTAJE type FS (opciones)`. Lo
+/// volcamos a una tabla ordenable (dispositivo · montaje · tipo · opciones).
+/// Las líneas que no matchean el patrón se saltan; `None` si ninguna lo hace.
+fn detect_mount(lines: &[String]) -> Option<Vec<Section>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for l in lines {
+        let t = l.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let Some((dev, rest)) = t.split_once(" on ") else {
+            continue;
+        };
+        let Some((mnt, rest2)) = rest.split_once(" type ") else {
+            continue;
+        };
+        // `rest2` = "ext4 (rw,relatime)" → tipo + opciones entre paréntesis.
+        let (fstype, opts) = match rest2.split_once(" (") {
+            Some((fs, o)) => (fs.trim(), o.trim_end_matches(')')),
+            None => (rest2.trim(), ""),
+        };
+        rows.push(vec![
+            dev.to_string(),
+            mnt.to_string(),
+            fstype.to_string(),
+            opts.to_string(),
+        ]);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    Some(vec![Section {
+        title: String::new(),
+        kind: SectionKind::Table {
+            columns: vec!["dispositivo".into(), "montaje".into(), "tipo".into(), "opciones".into()],
+            rows,
+        },
+    }])
+}
+
+/// `du`/`du -h`: cada línea es `TAMAÑO<sep>RUTA`. Tabla ordenable (tamaño ·
+/// ruta) — ordenar por tamaño es el caso de uso. El tamaño debe empezar con
+/// dígito (filtra ruido); `None` si la mayoría de las líneas no son `du`.
+fn detect_du(lines: &[String]) -> Option<Vec<Section>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut no_vacias = 0usize;
+    for l in lines {
+        let t = l.trim_end();
+        if t.trim().is_empty() {
+            continue;
+        }
+        no_vacias += 1;
+        let mut it = t.split_whitespace();
+        let Some(size) = it.next() else { continue };
+        // Un tamaño de `du` empieza con dígito (`4.0K`, `4096`, `1.2G`).
+        if !size.starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        let path = it.collect::<Vec<_>>().join(" ");
+        if path.is_empty() {
+            continue;
+        }
+        rows.push(vec![size.to_string(), path]);
+    }
+    // Guarda contra falsos positivos: la mayoría de las líneas deben matchear.
+    if rows.is_empty() || rows.len() * 5 < no_vacias * 3 {
+        return None;
+    }
+    Some(vec![Section {
+        title: String::new(),
+        kind: SectionKind::Table {
+            columns: vec!["tamaño".into(), "ruta".into()],
+            rows,
+        },
+    }])
+}
+
+/// `free`/`free -h`: el header (`total used free shared buff/cache available`)
+/// no tiene columna para las etiquetas de fila (`Mem:`, `Swap:`), así que
+/// `header_table` las perdería. Acá prependeamos una columna vacía y leemos
+/// cada fila como `etiqueta + valores`. `None` si el header no parece de `free`.
+fn detect_free(lines: &[String]) -> Option<Vec<Section>> {
+    let header_idx = lines.iter().position(|l| !l.trim().is_empty())?;
+    let header_cols: Vec<String> = lines[header_idx].split_whitespace().map(String::from).collect();
+    // Confianza: el header de `free` lleva `total` y `used`.
+    if !header_cols.iter().any(|c| c == "total") || !header_cols.iter().any(|c| c == "used") {
+        return None;
+    }
+    let mut columns = vec![String::new()]; // columna de la etiqueta de fila
+    columns.extend(header_cols);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for l in &lines[header_idx + 1..] {
+        if l.trim().is_empty() {
+            continue;
+        }
+        let mut cells: Vec<String> = l.split_whitespace().map(String::from).collect();
+        if cells.is_empty() {
+            continue;
+        }
+        // Pad/trunca al ancho de columnas (Swap: trae menos campos que Mem:).
+        cells.resize(columns.len(), String::new());
+        rows.push(cells);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    Some(vec![Section {
+        title: String::new(),
+        kind: SectionKind::Table { columns, rows },
+    }])
+}
+
 /// Salida de `cargo`/`rustc`: una sección colapsable por diagnóstico
 /// (cada `error…`/`warning:` arranca uno; el preámbulo `Compiling…` va a
 /// «salida»). `None` si no hay ningún diagnóstico — así un `cargo run`
@@ -804,6 +921,75 @@ mod tests {
             SectionKind::Table { columns, rows } => {
                 assert!(columns.len() >= 4);
                 assert_eq!(rows.len(), 2);
+            }
+            _ => panic!("esperaba Table"),
+        }
+    }
+
+    #[test]
+    fn mount_se_lee_como_tabla() {
+        let lines = vec![
+            "/dev/sda1 on / type ext4 (rw,relatime)".to_string(),
+            "proc on /proc type proc (rw,nosuid,nodev,noexec)".to_string(),
+            "tmpfs on /run type tmpfs (rw,nosuid,nodev)".to_string(),
+        ];
+        let secs = detect_sections("mount", &lines).expect("detect");
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                assert_eq!(columns.len(), 4);
+                assert_eq!(rows.len(), 3);
+                assert_eq!(rows[0], vec!["/dev/sda1", "/", "ext4", "rw,relatime"]);
+            }
+            _ => panic!("esperaba Table"),
+        }
+    }
+
+    #[test]
+    fn du_se_lee_como_tabla_tamaño_ruta() {
+        let lines = vec![
+            "4.0K\t./a".to_string(),
+            "12K\t./carpeta con espacios".to_string(),
+            "16K\t.".to_string(),
+        ];
+        let secs = detect_sections("du -h", &lines).expect("detect");
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                assert_eq!(columns, &vec!["tamaño".to_string(), "ruta".to_string()]);
+                assert_eq!(rows.len(), 3);
+                assert_eq!(rows[1], vec!["12K", "./carpeta con espacios"]);
+            }
+            _ => panic!("esperaba Table"),
+        }
+    }
+
+    #[test]
+    fn du_descarta_si_no_parece_du() {
+        // Salida que no es `du` (no empieza con tamaño) → cae al plano.
+        let lines = vec![
+            "hola mundo".to_string(),
+            "esto no es du".to_string(),
+        ];
+        assert!(detect_sections("du", &lines).is_none());
+    }
+
+    #[test]
+    fn free_conserva_las_etiquetas_de_fila() {
+        let lines = vec![
+            "              total        used        free      shared  buff/cache   available".to_string(),
+            "Mem:           15Gi       8.0Gi       2.0Gi       500Mi       5.0Gi       6.0Gi".to_string(),
+            "Swap:         8.0Gi       1.0Gi       7.0Gi".to_string(),
+        ];
+        let secs = detect_sections("free -h", &lines).expect("detect");
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                // Columna 0 = etiqueta (sin header) + las 6 de free.
+                assert_eq!(columns.len(), 7);
+                assert_eq!(columns[1], "total");
+                assert_eq!(rows[0][0], "Mem:");
+                assert_eq!(rows[0][1], "15Gi");
+                // Swap trae menos campos → se rellena al ancho.
+                assert_eq!(rows[1][0], "Swap:");
+                assert_eq!(rows[1].len(), 7);
             }
             _ => panic!("esperaba Table"),
         }
