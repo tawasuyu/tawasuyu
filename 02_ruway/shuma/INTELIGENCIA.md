@@ -160,8 +160,11 @@ el stdout de un bloque no sólo se re-procesa, también se **saca**:
   (expande `~`, resuelve relativo al cwd, `std::fs` sin shell).
 - `:yank [%cN]` / `:copy` (`apply_yank`) → lo copia al clipboard del SO
   (`set_clipboard`, best-effort).
-Sin ref usan el último bloque con salida. Reusan `parse_block_ref` (el resolver
-de `:explica`) + `gather_block_stdout`. 6 tests.
+- `:diff %cN %cM` (`apply_diff`) → compara el stdout de dos bloques con
+  `similar::TextDiff` (Myers) y vuelca los cambios (`-`/`+`) + resumen
+  `X+ / Y-` (o «idénticos»). "¿qué cambió entre estas dos corridas?".
+Los de salida-única sin ref usan el último bloque con salida. Reusan
+`parse_block_ref` (el resolver de `:explica`) + `gather_block_stdout`. 9 tests.
 
 ### E3. Reglas declarativas en el rc (`[rules]`) — el plano de control ✅ (2026-06-13)
 El shumarc gana gatillos deterministas (`shuma_config::RulesConfig`):

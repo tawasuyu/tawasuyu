@@ -110,6 +110,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":save" => return save_group(s, rest),
             ":write" => return apply_write(s, rest),
             ":yank" | ":copy" => return apply_yank(s, rest),
+            ":diff" => return apply_diff(s, rest),
             ":groups" => return apply_groups_list(s),
             ":macro" => return apply_macro(s, rest),
             ":macros" => return list_macros(s),

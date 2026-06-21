@@ -1252,6 +1252,72 @@ pub(crate) fn apply_yank(mut s: State, rest: &str) -> State {
     s
 }
 
+/// `:diff %cN %cM` — compara el stdout de dos bloques y vuelca el diff por
+/// líneas (sólo los cambios: `-` quitada, `+` agregada) + un resumen. Útil
+/// para "¿qué cambió entre estas dos corridas?". Usa `similar::TextDiff`
+/// (Myers). Capado a [`DIFF_VISIBLE_CAP`] líneas visibles.
+pub(crate) fn apply_diff(mut s: State, rest: &str) -> State {
+    let refs: Vec<&str> = rest.split_whitespace().collect();
+    if refs.len() < 2 {
+        s.push_output(OutputLine::notice(
+            "uso: :diff %cN %cM — compara el stdout de dos bloques",
+        ));
+        return s;
+    }
+    let (Some(a), Some(b)) = (parse_block_ref(&s, refs[0]), parse_block_ref(&s, refs[1])) else {
+        s.push_output(OutputLine::notice(
+            "✘ :diff — refs inválidas (esperado `%cN %cM`)",
+        ));
+        return s;
+    };
+    let ta = gather_block_stdout(&s, a);
+    let tb = gather_block_stdout(&s, b);
+    if ta.is_empty() && tb.is_empty() {
+        s.push_output(OutputLine::notice(
+            "✘ :diff — ninguno de los bloques tiene stdout",
+        ));
+        return s;
+    }
+    s.push_output(OutputLine::notice(format!("≡ diff %c{a} → %c{b}")));
+    const DIFF_VISIBLE_CAP: usize = 200;
+    let diff = similar::TextDiff::from_lines(&ta, &tb);
+    let (mut adds, mut dels, mut shown, mut capped) = (0usize, 0usize, 0usize, false);
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            similar::ChangeTag::Delete => {
+                dels += 1;
+                '-'
+            }
+            similar::ChangeTag::Insert => {
+                adds += 1;
+                '+'
+            }
+            similar::ChangeTag::Equal => continue,
+        };
+        if shown < DIFF_VISIBLE_CAP {
+            let text = change.value().trim_end_matches('\n');
+            s.push_output(OutputLine::notice(format!("{sign} {text}")));
+            shown += 1;
+        } else {
+            capped = true;
+        }
+    }
+    if adds == 0 && dels == 0 {
+        s.push_output(OutputLine::notice("✔ idénticos"));
+    } else {
+        if capped {
+            s.push_output(OutputLine::notice(format!(
+                "  … (cap a {DIFF_VISIBLE_CAP} líneas visibles)"
+            )));
+        }
+        s.push_output(OutputLine::notice(format!(
+            "✔ {adds}+ / {dels}- ({} cambios)",
+            adds + dels
+        )));
+    }
+    s
+}
+
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
     let mut out = String::new();
     for l in &s.output {

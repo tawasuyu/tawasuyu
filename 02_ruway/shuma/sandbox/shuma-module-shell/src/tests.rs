@@ -238,6 +238,53 @@
     }
 
     #[test]
+    fn diff_compara_dos_bloques() {
+        let mut s = State::new(Source::Local);
+        // Bloque 1: a/b/c · Bloque 2: a/B/c/d → -b +B +d.
+        for t in ["a", "b", "c"] {
+            let mut l = OutputLine::stdout(t);
+            l.block = 1;
+            s.output.push(l);
+        }
+        for t in ["a", "B", "c", "d"] {
+            let mut l = OutputLine::stdout(t);
+            l.block = 2;
+            s.output.push(l);
+        }
+        s.input.set_text(":diff %c1 %c2");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let texts: Vec<String> = s.output.iter().map(|l| l.text.clone()).collect();
+        assert!(texts.iter().any(|t| t == "- b"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "+ B"));
+        assert!(texts.iter().any(|t| t == "+ d"));
+        // Resumen: 2 agregadas (B, d), 1 quitada (b).
+        assert!(texts.iter().any(|t| t.contains("2+ / 1-")));
+    }
+
+    #[test]
+    fn diff_identicos_lo_dice() {
+        let mut s = State::new(Source::Local);
+        for b in [1u64, 2] {
+            for t in ["x", "y"] {
+                let mut l = OutputLine::stdout(t);
+                l.block = b;
+                s.output.push(l);
+            }
+        }
+        s.input.set_text(":diff %c1 %c2");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("idénticos")));
+    }
+
+    #[test]
+    fn diff_sin_dos_refs_avisa() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text(":diff %c1");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("uso: :diff")));
+    }
+
+    #[test]
     fn yank_copia_el_bloque_y_avisa() {
         // El write al clipboard es best-effort (no-op headless); probamos el
         // resolver + el aviso con el conteo correcto.
