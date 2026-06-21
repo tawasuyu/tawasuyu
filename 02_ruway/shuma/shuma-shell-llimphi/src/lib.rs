@@ -589,6 +589,12 @@ impl App for Shell {
                     // Local montada): refresca el semáforo sin pulsar Discover.
                     update::poll_matilda_runtime(&m, handle);
                 }
+                // M5 — polling de la flota a cadencia más lenta (~30 s): un
+                // fetch SSH por host es caro, así que se espacia más que el
+                // runtime local. Sólo corre si la flota ya fue activada.
+                if m.tick_count % 30 == 0 {
+                    update::poll_matilda_fleet(&m, handle);
+                }
                 // env.json cambió (builtin `:env` u otra instancia) → recargar.
                 let mtime = persist::env_groups_mtime();
                 if mtime != m.env_groups_mtime {

@@ -97,8 +97,15 @@ el módulo sólo deja la intención en el log y el chasis corre el `docker`/
 acción fue mutante y exitosa, re-observa el host (`host_runtime_remote_blocking`)
 y refresca su `FleetEntry` con `FleetActionDone { lines, runtime }` — el
 semáforo queda al día sin re-pulsar «Fleet». La selección de recurso es
-scoped al host (se limpia al cambiar de host expandido). **Pendiente:**
-polling de la flota (hoy es a-pedido por «Fleet»).
+scoped al host (se limpia al cambiar de host expandido).
+**Polling de la flota ✅ (2026-06-21):** una vez que el usuario activó la flota
+(pulsó «Fleet»), el chasis re-observa cada host por SSH cada ~30 s
+(`poll_matilda_fleet` en el `Tick`, cadencia más lenta que el runtime local
+porque un fetch SSH por host es caro) y reenvía resultados **silenciosos**
+(`SetHostRuntimeQuiet`/`SetHostErrorQuiet`: refrescan el `FleetEntry` sin
+loguear ni parpadear a «consultando»). Un guard por host
+(`fleet_poll_inflight`, compartido con el thread, que se borra a sí mismo al
+terminar) evita que un host colgado acumule threads tick tras tick.
 
 **Acciones del Source montado remoto ✅ (2026-06-21):** la barra de acciones
 de CONTAINERS/SERVICES sobre un Source remoto antes sólo logueaba "delegado al
@@ -120,4 +127,4 @@ terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Operás
 también recursos de cualquier host de la flota sin montarlo (M5, 2026-06-21).
 Lo que queda son los "pendientes" acotados de cada M: stream de logs `-f`
 continuo + series CPU/mem (M2), servicios remotos por SSH para el drift (M3),
-polling remoto (M4), polling de flota (M5).
+polling remoto del Source montado (M4).

@@ -289,6 +289,63 @@ pub(crate) fn poll_matilda_runtime(m: &Model, handle: &Handle<Msg>) {
     }
 }
 
+/// M5 — polling periódico de la flota. Si una instancia matilda ya tiene
+/// flota poblada (el usuario pulsó «Fleet» al menos una vez), re-observa cada
+/// host declarado por SSH en un thread y reenvía el resultado **silencioso**
+/// (`SetHostRuntimeQuiet`/`SetHostErrorQuiet`) — refresca el semáforo sin
+/// spamear el log ni parpadear a «consultando». Cadencia lenta (cada ~30 s,
+/// llamado desde `Tick`). Un guard por host (`fleet_poll_inflight`) evita que
+/// un host colgado acumule threads tick tras tick.
+pub(crate) fn poll_matilda_fleet(m: &Model, handle: &Handle<Msg>) {
+    for slot in [Slot::TopBar, Slot::BottomBar, Slot::Main] {
+        let inst = match slot {
+            Slot::TopBar => m.topbar.as_ref(),
+            Slot::BottomBar => m.bottombar.as_ref(),
+            Slot::Main => m.main.as_ref(),
+            _ => None,
+        };
+        let Some(inst) = inst else { continue };
+        let ModuleState::Matilda(st) = &inst.state else { continue };
+        // Sólo se poll-ea una flota que el usuario ya activó (no abrir SSH
+        // de rutina sin que lo haya pedido pulsando «Fleet»).
+        if st.fleet.is_empty() {
+            continue;
+        }
+        let inflight = st.fleet_poll_inflight.clone();
+        for host in st.desired.hosts().cloned() {
+            // Guard anti-apilamiento: si ya hay un fetch en vuelo para este
+            // host, lo saltamos este tick.
+            {
+                let mut set = match inflight.lock() {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
+                if !set.insert(host.name.clone()) {
+                    continue;
+                }
+            }
+            let slot_back = slot.clone();
+            let inflight = inflight.clone();
+            handle.spawn(move || {
+                let msg = match shuma_module_matilda::host_runtime_remote_blocking(&host) {
+                    Ok(runtime) => shuma_module_matilda::Msg::SetHostRuntimeQuiet {
+                        host: host.name.clone(),
+                        runtime,
+                    },
+                    Err(error) => shuma_module_matilda::Msg::SetHostErrorQuiet {
+                        host: host.name.clone(),
+                        error,
+                    },
+                };
+                if let Ok(mut set) = inflight.lock() {
+                    set.remove(&host.name);
+                }
+                Msg::Module(slot_back, ModuleMsg::Matilda(msg))
+            });
+        }
+    }
+}
+
 /// E5 — cumple las peticiones LLM pendientes de los shells montados. El
 /// módulo sólo expresa la intención (`State::llm_request`); acá la tomamos,
 /// corremos `pluma-llm` en un thread (con su propio runtime tokio) y

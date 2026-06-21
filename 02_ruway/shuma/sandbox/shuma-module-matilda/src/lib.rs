@@ -96,6 +96,11 @@ pub struct State {
     pub fleet: std::collections::BTreeMap<String, FleetEntry>,
     /// Host de la flota seleccionado — expande sus contenedores/servicios.
     pub selected_host: Option<String>,
+    /// Hosts de la flota con un fetch SSH en vuelo — guarda anti-apilamiento
+    /// del polling periódico (M5): un host colgado no debe acumular threads
+    /// tick tras tick. Lo comparte el chasis con el thread de polling; el
+    /// thread se borra a sí mismo al terminar. Vacío = nada en vuelo.
+    pub fleet_poll_inflight: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Contenedor de la flota seleccionado dentro del host expandido — abre
     /// la barra de acciones remotas (M5). Scoped al `selected_host`; se
     /// limpia al cambiar de host. `None` = nada seleccionado.
@@ -129,6 +134,7 @@ impl State {
             selected_service: None,
             fleet: std::collections::BTreeMap::new(),
             selected_host: None,
+            fleet_poll_inflight: Arc::new(Mutex::new(std::collections::HashSet::new())),
             selected_fleet_container: None,
             selected_fleet_service: None,
             pending_steps: Arc::new(Mutex::new(0)),
@@ -227,6 +233,12 @@ pub enum Msg {
     SetHostRuntime { host: String, runtime: RuntimeState },
     /// Error al alcanzar un host de la flota.
     SetHostError { host: String, error: String },
+    /// Como `SetHostRuntime`/`SetHostError` pero **sin loguear** — los usa el
+    /// polling periódico de la flota (M5), que refresca cada host cada ~30 s y
+    /// no debe spamear el log ni parpadear el host a «consultando».
+    SetHostRuntimeQuiet { host: String, runtime: RuntimeState },
+    /// Variante silenciosa del error de host para el polling de la flota.
+    SetHostErrorQuiet { host: String, error: String },
     /// Click en un host de la flota: lo selecciona (toggle) y expande su
     /// runtime (contenedores + servicios).
     SelectHost(String),
@@ -540,6 +552,12 @@ pub fn update(state: State, msg: Msg) -> State {
             s.log.push(format!("✘ {host}: {error}"));
             s.fleet.insert(host, FleetEntry::Failed(error));
             cap_log(&mut s.log);
+        }
+        Msg::SetHostRuntimeQuiet { host, runtime } => {
+            s.fleet.insert(host, FleetEntry::Ready(runtime));
+        }
+        Msg::SetHostErrorQuiet { host, error } => {
+            s.fleet.insert(host, FleetEntry::Failed(error));
         }
         Msg::SelectHost(name) => {
             s.selected_host = if s.selected_host.as_deref() == Some(name.as_str()) {
@@ -2183,6 +2201,21 @@ mod tests {
         s = update(s, Msg::SelectHost("edge-2".into()));
         assert!(s.selected_fleet_container.is_none());
         assert!(s.selected_fleet_service.is_none());
+    }
+
+    #[test]
+    fn fleet_quiet_actualiza_sin_loguear() {
+        use matilda_discover::RuntimeState;
+        let mut s = State::new(Source::Local);
+        let log_before = s.log.len();
+        let rt = RuntimeState { containers: vec![], services: vec![], vhosts: vec![] };
+        s = update(s, Msg::SetHostRuntimeQuiet { host: "edge-1".into(), runtime: rt });
+        assert!(matches!(s.fleet.get("edge-1"), Some(FleetEntry::Ready(_))));
+        // El polling no debe agregar nada al log.
+        assert_eq!(s.log.len(), log_before);
+        s = update(s, Msg::SetHostErrorQuiet { host: "edge-1".into(), error: "timeout".into() });
+        assert!(matches!(s.fleet.get("edge-1"), Some(FleetEntry::Failed(_))));
+        assert_eq!(s.log.len(), log_before);
     }
 
     #[test]
