@@ -1086,6 +1086,9 @@ fn audit_request(peer: &str, req: &Request) {
         ),
         Request::PtyAttach { session, .. } => ("pty.attach", format!("session={session}")),
         Request::PtyKill { session } => ("pty.kill", format!("session={session}")),
+        Request::PtySendInput { session, bytes } => {
+            ("pty.input", format!("session={session} bytes={}", bytes.len()))
+        }
         // Reads / alta frecuencia (no audit). Las teclas y resizes de un
         // PTY no se auditan línea a línea — la apertura (`exec.pty` /
         // `pty.spawn`) ya quedó registrada.
@@ -1499,6 +1502,16 @@ async fn dispatch(
             session,
             existed: pty.kill(session),
         },
+        Request::PtySendInput { session, bytes } => {
+            let existed = match pty.get(session) {
+                Some(s) => {
+                    s.write_input(bytes);
+                    true
+                }
+                None => false,
+            };
+            Response::PtyInputSent { session, existed }
+        }
 
         // `ExecStream`/`ExecPty`/`PtyAttach` se atienden inline en los
         // handlers de conexión con sus subprotocolos full-duplex; los

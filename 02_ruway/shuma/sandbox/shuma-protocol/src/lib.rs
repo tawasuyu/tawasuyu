@@ -246,6 +246,11 @@ pub enum Request {
     /// Matar (o reapear, si ya murió) una sesión y quitarla del registro.
     /// Request/response 1:1 → [`Response::PtyKilled`].
     PtyKill { session: Ulid },
+
+    /// Inyectar input (teclas) a una sesión persistente **por id**, sin
+    /// adjuntarse. Request/response 1:1 → [`Response::PtyInputSent`]. Pensado
+    /// para acciones rápidas (responder/continuar desde una notificación).
+    PtySendInput { session: Ulid, bytes: Vec<u8> },
 }
 
 /// Cómo ejecutar — variante serializable paralela a `shuma_exec::Exec`.
@@ -430,6 +435,9 @@ pub enum Response {
     /// Respuesta a [`Request::PtyKill`]: `existed=false` si no había tal
     /// sesión en el registro.
     PtyKilled { session: Ulid, existed: bool },
+    /// Respuesta a [`Request::PtySendInput`]: `existed=false` si no había tal
+    /// sesión (o ya estaba muerta).
+    PtyInputSent { session: Ulid, existed: bool },
 }
 
 /// Metadatos de una sesión PTY persistente, para `PtyList`.
