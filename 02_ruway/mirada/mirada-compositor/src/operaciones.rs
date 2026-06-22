@@ -405,6 +405,7 @@ impl App {
                     loads: d.workspace_loads(),
                     layout: mirada_brain::layout_slug(d.active_workspace().params().mode)
                         .to_string(),
+                    on_other_outputs: d.workspaces_on_other_outputs(),
                 }),
                 Brain::Linked(_) => CtlReply::Error("el Cerebro es externo".into()),
             },

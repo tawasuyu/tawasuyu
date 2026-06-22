@@ -167,14 +167,19 @@ pub fn workspaces_view(
     active: u8,
     count: u8,
     occupied: u16,
+    others: u16,
     gap: f32,
     dir: FlexDirection,
     theme: &Theme,
 ) -> View<Msg> {
     let celdas: Vec<View<Msg>> = (1..=count)
         .map(|n| {
-            let ocupado = occupied & (1u16 << (n as u16 - 1)) != 0;
-            workspace_cell(n, n == active, ocupado, theme)
+            let bit = 1u16 << (n as u16 - 1);
+            let ocupado = occupied & bit != 0;
+            // En otro monitor (y no es el escritorio enfocado): se muestra en una
+            // pantalla distinta; cliquearlo lleva el foco a ese monitor.
+            let en_otro = (others & bit != 0) && n != active;
+            workspace_cell(n, n == active, ocupado, en_otro, theme)
         })
         .collect();
     // Gap CHICO entre celdas del switcher (capado a 4 px): el `surface.gap` de
@@ -193,21 +198,34 @@ pub fn workspaces_view(
 }
 
 /// Una celda del workspace switcher: cuadradito con número y estado visual.
-/// Tres estados bien diferenciados:
-/// - **activo**: relleno con el acento (el escritorio que ves).
-/// - **ocupado** (tiene ventanas): borde de acento grueso + número fuerte +
-///   un puntito de acento abajo. Se distingue de un vistazo de los vacíos.
+/// Cuatro estados bien diferenciados:
+/// - **activo**: relleno con el acento (el escritorio que ves en el monitor
+///   enfocado).
+/// - **en otro monitor**: borde grueso en `border_focus` (tono distinto del
+///   acento) + relleno medio — está abierto en otra pantalla; cliquearlo lleva
+///   el foco a ese monitor.
+/// - **ocupado** (tiene ventanas): borde de acento grueso + número fuerte.
 /// - **vacío**: apagado, borde tenue, número atenuado.
-fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Msg> {
-    // Tres rellenos bien separados — robusto en cualquier theme (no depende de
-    // que el borde sea visible): activo = acento; ocupado = tono medio
-    // (hover/botón); vacío = el más apagado. El borde refuerza el ocupado.
+fn workspace_cell(n: u8, active: bool, occupied: bool, on_other: bool, theme: &Theme) -> View<Msg> {
+    // Rellenos bien separados — robusto en cualquier theme (no depende de que el
+    // borde sea visible): activo = acento; en-otro/ocupado = tono medio
+    // (hover/botón); vacío = el más apagado. El borde discrimina en-otro
+    // (border_focus) de ocupado (accent).
     let (fill, fg, borde_w, borde_col) = if active {
         (theme.accent, theme.bg_panel, 1.0, theme.accent)
+    } else if on_other {
+        (theme.bg_button_hover, theme.fg_text, 2.0, theme.border_focus)
     } else if occupied {
         (theme.bg_button_hover, theme.fg_text, 2.0, theme.accent)
     } else {
         (theme.bg_panel_alt, theme.fg_muted, 1.0, theme.border)
+    };
+    let tooltip = if on_other {
+        format!("Escritorio {n} · en otro monitor (clic = ir allá)")
+    } else if occupied {
+        format!("Escritorio {n} · con ventanas")
+    } else {
+        format!("Escritorio {n} · vacío")
     };
     View::new(Style {
         // Más grande para acertar el click cómodo (antes 22×20 = chico).
@@ -223,11 +241,7 @@ fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Ms
     .radius(5.0)
     .border(borde_w, borde_col)
     .hover_fill(theme.bg_button_hover)
-    .tooltip(if occupied {
-        format!("Escritorio {n} · con ventanas")
-    } else {
-        format!("Escritorio {n} · vacío")
-    })
+    .tooltip(tooltip)
     .on_click(Msg::SwitchWorkspace(n))
     .text(n.to_string(), 13.0, fg)
 }

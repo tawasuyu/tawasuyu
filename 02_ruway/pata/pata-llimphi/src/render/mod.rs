@@ -195,8 +195,8 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             };
             cores_view(label.as_deref(), fractions, caption, *size, *orient, theme, stops)
         }
-        WidgetView::Workspaces { active, count, occupied } => {
-            task_manager::workspaces_view(*active, *count, *occupied, 4.0, FlexDirection::Row, theme)
+        WidgetView::Workspaces { active, count, occupied, others } => {
+            task_manager::workspaces_view(*active, *count, *occupied, *others, 4.0, FlexDirection::Row, theme)
         }
         WidgetView::Moon { phase, .. } => moon_view(*phase),
         WidgetView::Placeholder(kind) => widgets::chip(theme)
@@ -552,8 +552,8 @@ fn slots_de(
             .map(|sw| match sw {
                 SlotWidget::Core { kind, widget, exec, cells } => {
                     let wv = widget.view();
-                    if let WidgetView::Workspaces { active, count, occupied } = wv {
-                        task_manager::workspaces_view(active, count, occupied, surface.gap, dir, theme)
+                    if let WidgetView::Workspaces { active, count, occupied, others } = wv {
+                        task_manager::workspaces_view(active, count, occupied, others, surface.gap, dir, theme)
                     } else {
                         let mut v = widget_view_kinded(&wv, Some(kind), theme)
                             .radius(6.0)

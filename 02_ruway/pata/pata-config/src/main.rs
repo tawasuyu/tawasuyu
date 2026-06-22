@@ -193,8 +193,8 @@ fn render_view(v: &WidgetView) -> String {
                 fractions.len()
             )
         }
-        WidgetView::Workspaces { active, count, occupied } => {
-            format!("workspaces {active}/{count} ocupados={occupied:#b}")
+        WidgetView::Workspaces { active, count, occupied, others } => {
+            format!("workspaces {active}/{count} ocupados={occupied:#b} otros={others:#b}")
         }
         WidgetView::Moon { phase, name } => format!("moon  {phase:.2} «{name}»"),
         WidgetView::Placeholder(k) => format!("placeholder ⟨{k}⟩"),

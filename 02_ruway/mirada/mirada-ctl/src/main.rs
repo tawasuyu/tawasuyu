@@ -289,12 +289,19 @@ fn print_workspaces(st: &WorkspacesState) {
         .map(|n| n.to_string())
         .collect::<Vec<_>>()
         .join(",");
+    let others = st
+        .on_other_outputs
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     println!(
-        "active={} count={} loads={} layout={}",
+        "active={} count={} loads={} layout={} others={}",
         st.active,
         st.loads.len(),
         loads,
-        st.layout
+        st.layout,
+        others
     );
 }
 

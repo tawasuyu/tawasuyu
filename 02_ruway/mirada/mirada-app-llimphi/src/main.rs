@@ -947,6 +947,7 @@ fn serve_ctl(m: &mut Model, req: CtlRequest) -> CtlReply {
             loads: m.desktop.workspace_loads(),
             layout: mirada_brain::layout_slug(m.desktop.active_workspace().params().mode)
                 .to_string(),
+            on_other_outputs: m.desktop.workspaces_on_other_outputs(),
         }),
         // Las zonas de arrastre son del compositor; esta app de Cerebro no las
         // gestiona.

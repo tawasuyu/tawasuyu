@@ -55,8 +55,8 @@ impl Sampler {
         let (ram, ram_used_mb, ram_total_mb) = sample_ram();
         let (sun_longitude_deg, moon_phase) = astro_from_jd(jd_from_unix(Utc::now().timestamp()));
         let (volume, muted) = sample_volume().unwrap_or((0.0, false));
-        let (active_workspace, workspace_count, workspace_occupied, layout) =
-            sample_workspaces().unwrap_or((0, 0, 0, LayoutGlyph::Unknown));
+        let (active_workspace, workspace_count, workspace_occupied, workspace_others, layout) =
+            sample_workspaces().unwrap_or((0, 0, 0, 0, LayoutGlyph::Unknown));
         let focused_title = sample_focused_title();
         // /proc/stat se lee una sola vez por tick: el agregado (línea `cpu`) y
         // el detalle por core (líneas `cpuN`) salen del mismo texto.
@@ -77,6 +77,7 @@ impl Sampler {
             active_workspace,
             workspace_count,
             workspace_occupied,
+            workspace_others,
             cpu_cores,
             cpu_cores_n,
             layout,
@@ -319,21 +320,31 @@ mod tests {
     #[test]
     fn parse_workspaces_deriva_activo_y_mascara_de_ocupados() {
         // Escritorios 1 y 3 con ventanas → bits 0 y 2 (0b101 = 5); activo el 2.
-        let (active, count, mask) =
+        let (active, count, mask, others) =
             parse_workspaces("active=2 count=9 loads=1,0,3,0,0,0,0,0,0").unwrap();
         assert_eq!(active, 2);
         assert_eq!(count, 9);
         assert_eq!(mask, 0b0000_0101);
+        assert_eq!(others, 0, "sin others= la máscara de otros monitores es 0");
     }
 
     #[test]
     fn parse_workspaces_sin_count_cae_al_largo_de_loads() {
-        let (active, count, mask) = parse_workspaces("active=1 loads=2,0,0").unwrap();
+        let (active, count, mask, _others) = parse_workspaces("active=1 loads=2,0,0").unwrap();
         assert_eq!(active, 1);
         assert_eq!(count, 3);
         assert_eq!(mask, 0b001);
         // Una línea sin `active=` no es válida.
         assert_eq!(parse_workspaces("count=9 loads=0,0"), None);
+    }
+
+    #[test]
+    fn parse_workspaces_others_marca_los_de_otro_monitor() {
+        // Escritorios 2 y 5 visibles en otra pantalla → bits 1 y 4 (0b10010 = 18).
+        let (_active, _count, _mask, others) =
+            parse_workspaces("active=1 count=9 loads=1,1,0,0,1,0,0,0,0 layout=master-stack others=2,5")
+                .unwrap();
+        assert_eq!(others, 0b0001_0010);
     }
 
     #[test]
@@ -614,10 +625,10 @@ pub fn switch_workspace(n: u8) {
 /// `None` si no hay compositor que responda (`mirada-ctl` falla o no está) — el
 /// switcher se oculta entonces. Corre un subproceso por muestreo (~1Hz), con el
 /// mismo tope de tiempo que el resto (barato a esa frecuencia).
-fn sample_workspaces() -> Option<(u8, u8, u16, LayoutGlyph)> {
+fn sample_workspaces() -> Option<(u8, u8, u16, u16, LayoutGlyph)> {
     let out = run("mirada-ctl", &["workspaces"])?;
-    let (active, count, occupied) = parse_workspaces(&out)?;
-    Some((active, count, occupied, parse_layout(&out)))
+    let (active, count, occupied, others) = parse_workspaces(&out)?;
+    Some((active, count, occupied, others, parse_layout(&out)))
 }
 
 /// Extrae el `layout=<slug>` de la línea de `mirada-ctl workspaces` y lo mapea a
@@ -642,14 +653,17 @@ fn sample_focused_title() -> String {
 }
 
 /// Parsea la línea estable de `mirada-ctl workspaces`:
-/// `active=2 count=9 loads=1,0,3,0,0,0,0,0,0`. La máscara de ocupados se deriva
-/// de `loads` (un escritorio con ≥1 ventana enciende su bit). `count` cae al
-/// largo de `loads` si no viniera. `None` si la línea no trae lo mínimo.
-fn parse_workspaces(s: &str) -> Option<(u8, u8, u16)> {
+/// `active=2 count=9 loads=1,0,3,0,0,0,0,0,0 layout=… others=2,5`. La máscara de
+/// ocupados se deriva de `loads` (un escritorio con ≥1 ventana enciende su bit);
+/// la de `others` viene de `others=` (escritorios 1-based visibles en otro
+/// monitor). `count` cae al largo de `loads` si no viniera. `None` si la línea no
+/// trae lo mínimo. Devuelve `(active, count, occupied, others)`.
+fn parse_workspaces(s: &str) -> Option<(u8, u8, u16, u16)> {
     let line = s.lines().find(|l| l.contains("active="))?;
     let mut active = None;
     let mut count = None;
     let mut occupied = 0u16;
+    let mut others = 0u16;
     let mut loads_len = 0u8;
     for tok in line.split_whitespace() {
         if let Some(v) = tok.strip_prefix("active=") {
@@ -666,11 +680,18 @@ fn parse_workspaces(s: &str) -> Option<(u8, u8, u16)> {
                     occupied |= 1 << i;
                 }
             }
+        } else if let Some(v) = tok.strip_prefix("others=") {
+            // `others=` es 1-based; el bit `n-1` marca el escritorio `n`.
+            for n in v.split(',').filter_map(|t| t.parse::<u32>().ok()) {
+                if (1..=16).contains(&n) {
+                    others |= 1 << (n - 1);
+                }
+            }
         }
     }
     let count = count.filter(|&c| c > 0).unwrap_or(loads_len);
     let active = active?;
-    (count > 0).then_some((active, count, occupied))
+    (count > 0).then_some((active, count, occupied, others))
 }
 
 // --- Lista de ventanas (task manager, backend winit) --------------------------

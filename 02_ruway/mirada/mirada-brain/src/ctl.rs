@@ -69,6 +69,12 @@ pub struct WorkspacesState {
     /// estilo dwm. Vacío si lo reporta una versión vieja.
     #[serde(default)]
     pub layout: String,
+    /// Escritorios que se muestran en **otros monitores** (no el enfocado),
+    /// 1-based. El switcher los marca distinto: ocupan otra pantalla y
+    /// cliquearlos lleva el foco a ese monitor. Vacío en mono-monitor o si lo
+    /// reporta una versión vieja.
+    #[serde(default)]
+    pub on_other_outputs: Vec<usize>,
 }
 
 /// Una ventana en la vista de `mirada-ctl windows`.

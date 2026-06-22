@@ -206,6 +206,20 @@ impl Desktop {
         self.focused_output
     }
 
+    /// Los escritorios que se están mostrando en salidas **distintas** de la
+    /// enfocada, **1-based**. Un *workspace switcher* los marca aparte: están
+    /// «ocupando» otro monitor, y cliquearlos mueve el foco a ese monitor (ver
+    /// `show_workspace`). Vacío en mono-monitor. Puede repetir si dos salidas
+    /// muestran el mismo escritorio (no debería, pero el dato es honesto).
+    pub fn workspaces_on_other_outputs(&self) -> Vec<usize> {
+        self.outputs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != self.focused_output)
+            .map(|(_, o)| o.workspace + 1)
+            .collect()
+    }
+
     /// Mueve la salida enfocada a la que contiene el punto global `(x, y)` —
     /// para que el escritorio activo siga al monitor donde está el puntero
     /// (foco-de-output sigue-al-mouse). Devuelve `true` si cambió. No re-tesela

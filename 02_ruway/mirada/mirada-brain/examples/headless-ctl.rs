@@ -90,6 +90,7 @@ fn main() {
                             desktop.active_workspace().params().mode,
                         )
                         .to_string(),
+                        on_other_outputs: desktop.workspaces_on_other_outputs(),
                     }),
                     // Las zonas son del Cuerpo (compositor); este ejemplo
                     // headless del Cerebro no las tiene.

@@ -133,6 +133,11 @@ pub struct WidgetCtx {
     /// (desde el menos significativo) marca el escritorio `i + 1`. Cubre hasta 16
     /// escritorios — de sobra para los 9 de mirada.
     pub workspace_occupied: u16,
+    /// Máscara de escritorios visibles en **otro monitor** (no el enfocado):
+    /// bit `i` = escritorio `i + 1` que está abierto en otra pantalla. El
+    /// switcher los marca aparte (cliquearlos lleva el foco a ese monitor). `0`
+    /// en mono-monitor o sin datos.
+    pub workspace_others: u16,
     /// Uso por núcleo lógico, fracción `0.0..=1.0`. Sólo los primeros
     /// `cpu_cores_n` son válidos; el resto queda en cero. Lo llena el host
     /// (en Linux, leyendo todas las líneas `cpuN` de `/proc/stat`); el widget
@@ -165,6 +170,7 @@ impl Default for WidgetCtx {
             active_workspace: 0,
             workspace_count: 0,
             workspace_occupied: 0,
+            workspace_others: 0,
             cpu_cores: [0.0_f32; MAX_CORES],
             cpu_cores_n: 0,
             layout: LayoutGlyph::Unknown,
@@ -293,6 +299,9 @@ pub enum WidgetView {
         count: u8,
         /// Máscara de ocupados (bit `i` → escritorio `i + 1`).
         occupied: u16,
+        /// Máscara de escritorios visibles en **otro monitor** (bit `i` →
+        /// escritorio `i + 1`). El frontend los marca distinto.
+        others: u16,
     },
     /// Fase lunar — fracción del ciclo sinódico (`0`/`1` = nueva, `0.5` = llena)
     /// + el nombre de la fase para el tooltip. El frontend pinta el disco con
@@ -734,13 +743,14 @@ pub struct WorkspaceSwitcher {
     active: u8,
     count: u8,
     occupied: u16,
+    others: u16,
     /// Celdas a pintar cuando el WM no reporta (prop `count`, default 9).
     fallback: u8,
 }
 
 impl Default for WorkspaceSwitcher {
     fn default() -> Self {
-        Self { active: 0, count: 0, occupied: 0, fallback: 9 }
+        Self { active: 0, count: 0, occupied: 0, others: 0, fallback: 9 }
     }
 }
 
@@ -758,6 +768,7 @@ impl Widget for WorkspaceSwitcher {
         self.active = ctx.active_workspace;
         self.count = ctx.workspace_count;
         self.occupied = ctx.workspace_occupied;
+        self.others = ctx.workspace_others;
     }
 
     fn view(&self) -> WidgetView {
@@ -771,6 +782,7 @@ impl Widget for WorkspaceSwitcher {
                 active: self.active.max(1),
                 count,
                 occupied: self.occupied,
+                others: self.others,
             }
         }
     }
@@ -1213,7 +1225,7 @@ mod tests {
         w.tick(&ctx()); // el ctx de prueba no setea campos de workspace
         assert_eq!(
             w.view(),
-            WidgetView::Workspaces { active: 1, count: 9, occupied: 0 }
+            WidgetView::Workspaces { active: 1, count: 9, occupied: 0, others: 0 }
         );
     }
 
@@ -1232,6 +1244,7 @@ mod tests {
         c.active_workspace = 2;
         c.workspace_count = 9;
         c.workspace_occupied = 0b0000_0101; // escritorios 1 y 3 ocupados
+        c.workspace_others = 0b0001_0000; // escritorio 5 en otro monitor
         let mut w = WorkspaceSwitcher::from_spec(&WidgetSpec::new("workspace_switcher"));
         w.tick(&c);
         assert_eq!(
@@ -1240,6 +1253,7 @@ mod tests {
                 active: 2,
                 count: 9,
                 occupied: 0b0000_0101,
+                others: 0b0001_0000,
             }
         );
     }
@@ -1252,7 +1266,7 @@ mod tests {
             let w = build(&WidgetSpec::new(kind));
             assert_eq!(
                 w.view(),
-                WidgetView::Workspaces { active: 1, count: 9, occupied: 0 }
+                WidgetView::Workspaces { active: 1, count: 9, occupied: 0, others: 0 }
             );
         }
     }
