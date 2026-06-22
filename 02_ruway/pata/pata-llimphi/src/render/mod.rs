@@ -703,9 +703,11 @@ pub fn start_menu_body(
         classic_two_pane(apps, menu_cat, offset, content_h, theme)
     };
 
-    // Apertura: fade + leve deslizamiento hacia abajo (ease-out cúbico).
+    // Apertura: leve deslizamiento hacia abajo (ease-out cúbico). Sin `alpha`:
+    // arrancar en alpha 0 dejaba el panel invisible si el primer frame no
+    // avanzaba la animación — el menú se quedaba sin aparecer.
     let eased = 1.0 - (1.0 - open_t.clamp(0.0, 1.0)).powi(3);
-    let dy = ((1.0 - eased) * -10.0) as f64;
+    let dy = ((1.0 - eased) * -8.0) as f64;
 
     // Fondo con gradiente vertical sutil (un brillo arriba que cae al tono base).
     let g = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(0.0, 1.0))
@@ -736,7 +738,6 @@ pub fn start_menu_body(
     .fill_gradient(g)
     .radius(14.0)
     .border(1.0, widgets::aclarar(theme.border, 0.10))
-    .alpha(eased)
     .transform(Affine::translate((0.0, dy)))
     .children(vec![search, separador_h(theme), content]);
 
