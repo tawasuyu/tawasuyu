@@ -31,6 +31,7 @@
 pub use glam;
 pub use wgpu;
 
+mod billboard;
 mod camera;
 mod cinema;
 mod dimensions;
@@ -39,11 +40,14 @@ mod mesh;
 mod postfx;
 mod renderer;
 mod scene;
+mod sky;
 mod voxel;
 mod voxel_renderer;
 
+pub use billboard::{Billboard, Billboards};
 pub use camera::Camera3d;
 pub use cinema::{CamKey, CameraTrack};
+pub use sky::{SkyBackdrop, SkyParams};
 pub use dimensions::{Dimension, Multiverse};
 pub use hud::{Hud, HudQuad};
 pub use mesh::{cube, push_cube, Vertex3d, CUBE_INDICES};
