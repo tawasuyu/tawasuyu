@@ -110,6 +110,16 @@ fn main() {
             }
         }
         eprintln!("flats de piso en escena: {:?}", flats);
+        // Certificar que los frames de animación existen y DIFIEREN.
+        for n in ["NUKAGE1", "NUKAGE2", "NUKAGE3", "FWATER1", "FWATER4"] {
+            match atlas.decode_flat(n) {
+                Some(rgba) => {
+                    let sum: u64 = rgba.iter().map(|&b| b as u64).sum();
+                    eprintln!("  frame {n}: {} bytes, checksum {}", rgba.len(), sum);
+                }
+                None => eprintln!("  frame {n}: NO existe en el WAD"),
+            }
+        }
     }
     eprintln!(
         "escena: {} walls, {} sectors, {} subsectores, {} nodes; player ({:.0},{:.0}) ang {:.2}",

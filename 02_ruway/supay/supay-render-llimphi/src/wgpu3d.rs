@@ -116,6 +116,15 @@ struct Batch {
     count: u32,
 }
 
+/// Lote de piso líquido: como un Batch pero con la **secuencia de frames** de
+/// la animación de flat de Doom (NUKAGE1→2→3, FWATER1→4, …). `draw` elige el
+/// frame por tiempo. Si el flat no anima, `frames` tiene un solo elemento.
+struct WaterBatch {
+    buffer: wgpu::Buffer,
+    count: u32,
+    frames: Vec<Arc<GpuTexture>>,
+}
+
 /// El renderer. Cachea las texturas (caras) entre frames; la geometría se
 /// reconstruye por frame desde el snapshot (las puertas/plataformas se
 /// mueven), que para E1M1 son unos pocos miles de tris — barato.
@@ -155,7 +164,9 @@ pub struct DoomGpuRenderer {
     /// Reflexión planar: batches de pisos líquidos (separados para muestrear
     /// el mapa de reflexión), uniforme con la MVP reflejada, y el render
     /// target de reflexión (color+depth+bind group), recreado al cambiar size.
-    water_batches: Vec<Batch>,
+    water_batches: Vec<WaterBatch>,
+    /// Cache de texturas de frame de flat por nombre (NUKAGE1, NUKAGE2, …).
+    flat_frame_tex: HashMap<String, Arc<GpuTexture>>,
     /// Altura `z` del plano de agua (la superficie líquida) — `None` si no hay
     /// líquido en escena. Una sola aproximación por escena.
     water_z: Option<f32>,
@@ -503,6 +514,7 @@ impl DoomGpuRenderer {
             weapon: zero_weap,
             weapon_flash: zero_weap,
             water_batches: Vec::new(),
+            flat_frame_tex: HashMap::new(),
             water_z: None,
             uniform_buf_reflect,
             uniform_bg_reflect,
@@ -589,9 +601,81 @@ impl DoomGpuRenderer {
             }
         }
 
-        // 3. Subir un vertex buffer por lote (mundo seco + agua por separado).
+        // 3. Subir un vertex buffer por lote. El mundo seco normal; el agua
+        //    con su secuencia de frames de animación de flat.
         self.batches = build_batches(device, by_tex);
-        self.water_batches = build_batches(device, water_by_tex);
+        self.water_batches.clear();
+        for (key, verts) in water_by_tex {
+            if verts.is_empty() {
+                continue;
+            }
+            // Nombre base del flat → nombres de los frames de la animación.
+            let base = match &key {
+                TexKey::Flat(pic) => atlas.flat_name(*pic),
+                TexKey::Wall(_) => None,
+            };
+            let frame_names = base
+                .as_deref()
+                .map(liquid_anim_frames)
+                .unwrap_or_default();
+            // Resolver/cachear la textura GPU de cada frame.
+            let mut frames: Vec<Arc<GpuTexture>> = Vec::new();
+            for name in &frame_names {
+                if let Some(t) = self.flat_frame_tex.get(name) {
+                    frames.push(t.clone());
+                    continue;
+                }
+                if let Some(rgba) = atlas.decode_flat(name) {
+                    if rgba.len() >= 64 * 64 * 4 {
+                        let t = Arc::new(upload_texture(
+                            device,
+                            queue,
+                            &self.tex_layout,
+                            &self.sampler,
+                            &rgba,
+                            64,
+                            64,
+                        ));
+                        self.flat_frame_tex.insert(name.clone(), t.clone());
+                        frames.push(t);
+                    }
+                }
+            }
+            // Fallback: si no se resolvió ningún frame (flat raro o forzado),
+            // usamos la textura por pic del cache normal o `white`.
+            if frames.is_empty() {
+                if let TexKey::Flat(pic) = &key {
+                    if let Some(rgba) = atlas.flat_rgba(*pic) {
+                        if rgba.len() >= 64 * 64 * 4 {
+                            frames.push(Arc::new(upload_texture(
+                                device,
+                                queue,
+                                &self.tex_layout,
+                                &self.sampler,
+                                &rgba,
+                                64,
+                                64,
+                            )));
+                        }
+                    }
+                }
+            }
+            if frames.is_empty() {
+                frames.push(self.white.clone());
+            }
+
+            let mut bytes = Vec::with_capacity(verts.len() * Vertex::SIZE as usize);
+            for v in &verts {
+                v.write(&mut bytes);
+            }
+            let buffer =
+                create_buffer_init(device, "doom3d-water", wgpu::BufferUsages::VERTEX, &bytes);
+            self.water_batches.push(WaterBatch {
+                buffer,
+                count: verts.len() as u32,
+                frames,
+            });
+        }
     }
 
     /// Pinta la escena en `target` (firma compatible con `gpu_paint_with`).
@@ -748,9 +832,12 @@ impl DoomGpuRenderer {
             pass.set_vertex_buffer(0, b.buffer.slice(..));
             pass.draw(0..b.count, 0..1);
         }
-        // Agua (muestrea el mapa de reflexión en group 2).
+        // Agua: frame de animación por tiempo (8 tics/frame a 35 Hz, como
+        // Doom) + muestrea el mapa de reflexión en group 2.
+        let frame_idx = (cam.time * (35.0 / 8.0)).max(0.0) as usize;
         for b in &self.water_batches {
-            let tex = self.textures.get(&b.key).unwrap_or(&self.white);
+            let n = b.frames.len().max(1);
+            let tex = &b.frames[frame_idx % n];
             pass.set_bind_group(1, &tex.bind_group, &[]);
             pass.set_vertex_buffer(0, b.buffer.slice(..));
             pass.draw(0..b.count, 0..1);
@@ -1402,6 +1489,44 @@ fn fan_flat(out: &mut Vec<Vertex>, poly: &[(f32, f32)], z: f32, light: f32, kind
     }
 }
 
+/// Secuencia de nombres de lump de la animación de flat de Doom para `base`
+/// (NUKAGE1→[NUKAGE1,NUKAGE2,NUKAGE3], FWATER1→FWATER4, SLIME0X por grupos de
+/// 4, …). Si el flat no anima, devuelve `[base]`. Los frames inexistentes en
+/// el WAD se descartan luego al decodificar, así que la tabla puede ser
+/// generosa.
+fn liquid_anim_frames(base: &str) -> Vec<String> {
+    let up = base.to_ascii_uppercase();
+    let Some(ds) = up.find(|c: char| c.is_ascii_digit()) else {
+        return vec![up];
+    };
+    let prefix = &up[..ds];
+    let width = up.len() - ds;
+    let num: u32 = up[ds..].parse().unwrap_or(0);
+
+    // SLIME tiene 3 animaciones de 4 frames (01-04, 05-08, 09-12).
+    if prefix == "SLIME" && (1..=12).contains(&num) {
+        let gs = ((num - 1) / 4) * 4 + 1;
+        return (gs..=gs + 3).map(|n| format!("SLIME{n:02}")).collect();
+    }
+
+    // (prefijo, primer_frame, último_frame).
+    const ANIMS: &[(&str, u32, u32)] = &[
+        ("NUKAGE", 1, 3),
+        ("FWATER", 1, 4),
+        ("SWATER", 1, 4),
+        ("LAVA", 1, 4),
+        ("BLOOD", 1, 3),
+    ];
+    for &(p, s, e) in ANIMS {
+        if prefix == p && (s..=e).contains(&num) {
+            return (s..=e)
+                .map(|n| format!("{prefix}{n:0width$}", width = width))
+                .collect();
+        }
+    }
+    vec![up]
+}
+
 /// `true` si el nombre de flat corresponde a un líquido animable de Doom
 /// (agua/nukage/lava/sangre/slime). Detección por prefijo, case-insensitive.
 fn is_liquid_flat(name: &str) -> bool {
@@ -1621,7 +1746,24 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_liquid_flat;
+    use super::{is_liquid_flat, liquid_anim_frames};
+
+    #[test]
+    fn anim_frames_nukage_fwater_slime() {
+        assert_eq!(liquid_anim_frames("NUKAGE1"), ["NUKAGE1", "NUKAGE2", "NUKAGE3"]);
+        assert_eq!(
+            liquid_anim_frames("FWATER1"),
+            ["FWATER1", "FWATER2", "FWATER3", "FWATER4"]
+        );
+        // SLIME por grupos de 4, preservando el ancho de 2 dígitos.
+        assert_eq!(
+            liquid_anim_frames("SLIME06"),
+            ["SLIME05", "SLIME06", "SLIME07", "SLIME08"]
+        );
+        // Un flat seco / desconocido se queda solo (sin animación).
+        assert_eq!(liquid_anim_frames("FLOOR0_5"), ["FLOOR0_5"]);
+        assert_eq!(liquid_anim_frames("AQF001"), ["AQF001"]);
+    }
 
     #[test]
     fn detecta_liquidos_doom_y_freedoom() {

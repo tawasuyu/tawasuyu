@@ -218,6 +218,14 @@ impl WadAtlas {
         decoded
     }
 
+    /// Decodifica un flat a RGBA8 64×64 **por nombre** (no por pic_idx). Lo
+    /// usa el renderer wgpu para los frames de animación de líquidos
+    /// (NUKAGE2/NUKAGE3…), que no tienen pic_idx en el snapshot. Sin caché
+    /// propia — el consumidor cachea la textura GPU resultante.
+    pub fn decode_flat(&self, name: &str) -> Option<Arc<Vec<u8>>> {
+        self.wad.flat_rgba(name, &self.palette).map(Arc::new)
+    }
+
     /// Recupera (decodificando + cacheando) la textura de pared
     /// compuesta `name` (de TEXTURE1). Devuelve `None` si no existe
     /// o no parsea. Cache: `Some(Arc<Texture>)` o `None` para misses.
