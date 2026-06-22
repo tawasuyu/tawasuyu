@@ -205,6 +205,15 @@ impl<A: App> Runtime<A> {
                 state.pending_long_press = None;
             }
         }
+        // `on_click` armado: si el cursor se alejó del origen del press más que
+        // el umbral, el usuario quiso arrastrar/barrer, no cliquear → cancelar.
+        if let Some(p) = state.pending_click.as_ref() {
+            let dx = position.x - p.origin.x;
+            let dy = position.y - p.origin.y;
+            if (dx * dx + dy * dy).sqrt() > CLICK_MOVE_CANCEL {
+                state.pending_click = None;
+            }
+        }
         // Drag activo: dispatchear delta al handler + actualizar
         // tracking del drop target hovereado (solo si hay payload).
         if let Some(drag) = state.drag.as_mut() {
@@ -866,10 +875,12 @@ impl<A: App> Runtime<A> {
                 state.window.request_redraw();
             }
         } else if let Some((_, _, _, _, Some(msg), _, _)) = idx_and_action {
-            let model = state.model.take().expect("model");
-            state.model = Some(A::update(model, msg, &self.handle));
-            state.last_render = None;
-            state.window.request_redraw();
+            // `on_click` plano: NO se dispara en el press. Semántica de
+            // escritorio — se arma y se dispara al soltar (`handle_left_release`)
+            // si el cursor no se alejó más que `CLICK_MOVE_CANCEL`. Así el click
+            // no salta en mousedown y un arrastre minúsculo accidental sigue
+            // contando como click. No invalidamos el cache: nada visual cambió.
+            state.pending_click = Some(PendingClick { msg, origin: cursor });
         }
     }
 
@@ -964,6 +975,16 @@ impl<A: App> Runtime<A> {
         // El botón se soltó antes de vencer el long-press → no era un
         // long-press (fue un click/drag); cancelá el gesto armado.
         state.pending_long_press = None;
+        // `on_click` armado en el press y no cancelado por movimiento → este es
+        // el click real: se dispara ahora, al soltar. Es mutuamente excluyente
+        // con `drag` (rama else-if en el press), así que no colisiona con el
+        // cierre del drag de más abajo.
+        if let Some(pending) = state.pending_click.take() {
+            let model = state.model.take().expect("model");
+            state.model = Some(A::update(model, pending.msg, &self.handle));
+            state.last_render = None;
+            state.window.request_redraw();
+        }
         // Fin del arrastre de selección: la selección queda viva (para
         // Ctrl/Cmd+C) pero deja de extenderse con el cursor.
         if let Some(tsel) = state.selection.as_mut() {

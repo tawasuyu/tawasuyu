@@ -125,6 +125,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             ripple_registry: llimphi_compositor::RippleRegistry::new(),
             last_tap: None,
             pending_long_press: None,
+            pending_click: None,
             retained: None,
             selection: None,
             a11y_adapter,

@@ -663,6 +663,9 @@ struct RuntimeState<A: App> {
     /// Long-press armado (ver [`PendingLongPress`]). El runtime lo vence por
     /// tiempo en `about_to_wait` y lo cancela en movimiento/release.
     pending_long_press: Option<PendingLongPress<A::Msg>>,
+    /// `on_click` plano armado (ver [`PendingClick`]). Se dispara en el release
+    /// y se cancela si el cursor se aleja del origen más que [`CLICK_MOVE_CANCEL`].
+    pending_click: Option<PendingClick<A::Msg>>,
     /// **Retención de frame entero**. Tras un paint exitoso, guardamos las
     /// dimensiones del viewport y los flags de animación del frame. Si en el
     /// próximo `RedrawRequested` ningún sitio invalidó `last_render` (la
@@ -770,11 +773,27 @@ struct PendingLongPress<Msg> {
     handler: GestureResolved<Msg>,
 }
 
+/// `on_click` **armado**: el press cayó sobre un nodo con `on_click` plano (sin
+/// drag ni `on_click_at`). El click NO se dispara en el press — semántica de
+/// escritorio: se dispara al **soltar** (`handle_left_release`), salvo que antes
+/// el cursor se aleje de `origin` más que [`CLICK_MOVE_CANCEL`] (el gesto pasó a
+/// arrastre/barrido y se cancela). Esto evita el disparo prematuro en mousedown
+/// y tolera arrastres minúsculos accidentales sobre el botón.
+struct PendingClick<Msg> {
+    msg: Msg,
+    origin: PhysicalPosition<f64>,
+}
+
 /// Umbral de duración para que un press se convierta en long-press.
 const LONG_PRESS_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 /// Si el cursor se aleja más que esto (px físicos) del origen del press, deja
 /// de ser long-press (pasó a drag/scroll) y se cancela.
 const LONG_PRESS_MOVE_CANCEL: f64 = 8.0;
+/// Si el cursor se aleja más que esto (px físicos) del origen del press, el
+/// `on_click` armado deja de contar como click (el usuario quiso arrastrar /
+/// barrer, no cliquear) y se cancela. Por debajo del umbral, un arrastre
+/// minúsculo accidental **sigue valiendo como click** al soltar.
+const CLICK_MOVE_CANCEL: f64 = 6.0;
 /// Ventana temporal máxima entre los dos taps de un doble-tap.
 const DOUBLE_TAP_WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
 /// Distancia máxima (px físicos) entre los dos taps de un doble-tap.
