@@ -290,7 +290,7 @@ impl DoomGpuRenderer {
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("doom3d-uniform"),
-            size: 96, // mat4 (64) + eye/fog (16) + params: time (16)
+            size: 112, // mat4(64) + eye(16) + params(16) + clip(16)
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -305,7 +305,7 @@ impl DoomGpuRenderer {
         // Uniforme gemelo para el pase de reflexión (MVP reflejada).
         let uniform_buf_reflect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("doom3d-uniform-reflect"),
-            size: 96,
+            size: 112,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -614,9 +614,12 @@ impl DoomGpuRenderer {
         // ¿Hay agua con plano definido? → activamos la reflexión planar.
         let do_reflect = !self.water_batches.is_empty() && self.water_z.is_some();
 
-        // Uniform principal: MVP + eye/fog + params(time, w, h, refl_strength).
-        let write_uniform = |buf: &wgpu::Buffer, mat: &Mat4, refl: f32| {
-            let mut bytes = Vec::with_capacity(96);
+        let water_z = self.water_z.unwrap_or(0.0);
+        // Uniform: MVP + eye/fog + params(time,w,h,refl_strength) +
+        // clip(water_z, clip_enable, 0, 0). `clip_enable=1` en el pase de
+        // reflexión → el fragment descarta lo que está bajo el agua.
+        let write_uniform = |buf: &wgpu::Buffer, mat: &Mat4, refl: f32, clip_enable: f32| {
+            let mut bytes = Vec::with_capacity(112);
             for v in mat.to_cols_array() {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
@@ -626,12 +629,17 @@ impl DoomGpuRenderer {
             for v in [cam.time, w as f32, h as f32, refl] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
+            for v in [water_z, clip_enable, 0.0, 0.0] {
+                bytes.extend_from_slice(&v.to_ne_bytes());
+            }
             queue.write_buffer(buf, 0, &bytes);
         };
-        write_uniform(&self.uniform_buf, &mvp, if do_reflect { 1.0 } else { 0.0 });
+        // SUPAY_NO_CLIP desactiva el clip bajo el agua (para A/B del efecto).
+        let clip_enable = if std::env::var_os("SUPAY_NO_CLIP").is_some() { 0.0 } else { 1.0 };
+        write_uniform(&self.uniform_buf, &mvp, if do_reflect { 1.0 } else { 0.0 }, 0.0);
         if do_reflect {
-            let mvp_r = mvp * reflect_across_z(self.water_z.unwrap());
-            write_uniform(&self.uniform_buf_reflect, &mvp_r, 0.0);
+            let mvp_r = mvp * reflect_across_z(water_z);
+            write_uniform(&self.uniform_buf_reflect, &mvp_r, 0.0, clip_enable);
         }
 
         // Uniform del cielo: yaw, pitch, fov_x, aspect.
@@ -1527,6 +1535,7 @@ struct U {
     mvp: mat4x4<f32>,
     eye: vec4<f32>,     // .xyz = cámara, .w = densidad de diminishing
     params: vec4<f32>,  // .x=time .y=w .z=h .w=fuerza de reflexión (0/1)
+    clip: vec4<f32>,    // .x=water_z .y=clip_enable (1 en pase de reflexión)
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var tex: texture_2d<f32>;
@@ -1540,7 +1549,7 @@ struct VOut {
     @location(1) light: f32,
     @location(2) dist: f32,
     @location(3) kind: f32,
-    @location(4) world: vec2<f32>,  // xy mundo (para fase de ondas del agua)
+    @location(4) world: vec3<f32>,  // xyz mundo (ondas del agua + clip de reflexión)
 };
 
 @vertex
@@ -1556,12 +1565,17 @@ fn vs(
     o.light = light;
     o.dist = distance(pos, u.eye.xyz);
     o.kind = kind;
-    o.world = pos.xy;
+    o.world = pos;
     return o;
 }
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
+    // Clip bajo el agua (sólo en el pase de reflexión): no reflejar la
+    // geometría sumergida — produciría fugas por encima de la línea de agua.
+    if (u.clip.y > 0.5 && in.world.z < u.clip.x - 0.5) {
+        discard;
+    }
     var uv = in.uv;
     let t = u.params.x;
     let is_water = in.kind > 0.5;
