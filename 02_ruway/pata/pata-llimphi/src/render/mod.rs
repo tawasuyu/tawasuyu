@@ -703,11 +703,12 @@ pub fn start_menu_body(
         classic_two_pane(apps, menu_cat, offset, content_h, theme)
     };
 
-    // Apertura: leve deslizamiento hacia abajo (ease-out cúbico). Sin `alpha`:
-    // arrancar en alpha 0 dejaba el panel invisible si el primer frame no
-    // avanzaba la animación — el menú se quedaba sin aparecer.
+    // Apertura: fade + leve deslizamiento hacia abajo (ease-out cúbico). El fade
+    // arranca desde un PISO visible (0.4), nunca 0: así el primer frame ya se ve
+    // —si la animación no avanzara, el menú igual aparece— y de ahí sube a opaco.
     let eased = 1.0 - (1.0 - open_t.clamp(0.0, 1.0)).powi(3);
     let dy = ((1.0 - eased) * -8.0) as f64;
+    let alpha = 0.4 + 0.6 * eased;
 
     // Fondo con gradiente vertical sutil (un brillo arriba que cae al tono base).
     let g = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(0.0, 1.0))
@@ -738,6 +739,7 @@ pub fn start_menu_body(
     .fill_gradient(g)
     .radius(14.0)
     .border(1.0, widgets::aclarar(theme.border, 0.10))
+    .alpha(alpha)
     .transform(Affine::translate((0.0, dy)))
     .children(vec![search, separador_h(theme), content]);
 
@@ -837,7 +839,8 @@ fn menu_search_bar(query: &str, count: usize, theme: &Theme) -> View<Msg> {
         .text("⌕".to_string(), 14.0, theme.accent),
         View::new(Style {
             flex_grow: 1.0,
-            size: Size { width: auto(), height: length(MENU_SEARCH_H) },
+            // Alto AUTO para que la fila centre verticalmente el texto Start.
+            size: Size { width: auto(), height: auto() },
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
@@ -875,6 +878,39 @@ fn separador_v(theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(widgets::aclarar(theme.border, 0.06))
+}
+
+/// Divisor sutil entre items de app: una línea apenas perceptible, indentada
+/// bajo el texto (no cruza el ícono) — estilo lista de Material.
+fn divisor_item(theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(1.0_f32) },
+        flex_shrink: 0.0,
+        padding: TaffyRect {
+            left: length(42.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(widgets::aclarar(theme.border, 0.05))])
+}
+
+/// Intercala [`divisor_item`] entre filas de app consecutivas.
+fn con_divisores(apps: &[&AppEntry], theme: &Theme) -> Vec<View<Msg>> {
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(apps.len() * 2);
+    for (i, a) in apps.iter().enumerate() {
+        if i > 0 {
+            rows.push(divisor_item(theme));
+        }
+        rows.push(menu_app_row(a, theme));
+    }
+    rows
 }
 
 /// Los dos paneles: categorías (izq) → apps de la activa (der).
@@ -916,10 +952,9 @@ fn classic_two_pane(
     })
     .children(cat_rows);
 
-    // Columna de apps de la categoría activa (scrolleable).
-    let app_rows: Vec<View<Msg>> =
-        cats[activa].apps.iter().map(|a| menu_app_row(a, theme)).collect();
-    let content_len = app_rows.len() as f32 * (APP_ROW_H + 2.0);
+    // Columna de apps de la categoría activa (scrolleable), con divisores sutiles.
+    let app_rows: Vec<View<Msg>> = con_divisores(&cats[activa].apps, theme);
+    let content_len = cats[activa].apps.len() as f32 * (APP_ROW_H + 3.0);
     let app_inner = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: auto() },
@@ -968,8 +1003,8 @@ fn classic_search_results(
         })
         .text(format!("sin resultados para «{query}»"), 12.0, theme.fg_muted);
     }
-    let rows: Vec<View<Msg>> = matches.iter().map(|a| menu_app_row(a, theme)).collect();
-    let content_len = rows.len() as f32 * (APP_ROW_H + 2.0);
+    let rows: Vec<View<Msg>> = con_divisores(matches, theme);
+    let content_len = matches.len() as f32 * (APP_ROW_H + 3.0);
     let inner = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: auto() },
@@ -1014,7 +1049,10 @@ fn category_row(i: usize, cat: &MenuCat, selected: bool, theme: &Theme) -> View<
     let fg = if selected { theme.bg_panel } else { theme.fg_text };
     let nombre = View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: auto(), height: length(APP_ROW_H) },
+        // Alto AUTO: el texto Start se ancla arriba de su rect, así que para
+        // centrarlo verticalmente dejamos que el rect sea del alto del texto y
+        // que la fila (align_items: Center) lo centre.
+        size: Size { width: auto(), height: auto() },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
@@ -1073,7 +1111,10 @@ fn menu_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
     .children(vec![start_menus::app_icon_content(a, 14.0, theme.accent)]);
     let nombre = View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: auto(), height: length(APP_ROW_H) },
+        // Alto AUTO: el texto Start se ancla arriba de su rect, así que para
+        // centrarlo verticalmente dejamos que el rect sea del alto del texto y
+        // que la fila (align_items: Center) lo centre.
+        size: Size { width: auto(), height: auto() },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
