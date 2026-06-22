@@ -255,6 +255,7 @@ impl LayerApp {
             return;
         }
         self.menu_open = open;
+        self.menu_opened_at = open.then(std::time::Instant::now);
         if !open {
             self.menu_query.clear();
             self.menu_scroll = 0.0;

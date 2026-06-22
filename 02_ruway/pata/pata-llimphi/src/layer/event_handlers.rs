@@ -28,7 +28,7 @@ use llimphi_ui::llimphi_compositor::{hit_test_click, hit_test_hover, hit_test_sc
 
 use crate::toplevel::Toplevel;
 
-use super::{app_impl::*, diag, LayerApp, LayerDrag, MenuKind};
+use super::{app_impl::*, diag, LayerApp, LayerDrag, MenuKind, MENU_LEAVE_GRACE};
 
 /// Si el puntero se aleja más que esto (px) del origen del press, el `on_click`
 /// armado deja de contar como click (fue un arrastre/barrido). Espeja el umbral
@@ -209,7 +209,16 @@ impl KeyboardHandler for LayerApp {
                 && self.menu_open
                 && self.menu_kind == MenuKind::Apps
             {
-                self.set_menu_open(false);
+                // Ignorá el `leave` que llega justo al abrir: es el reacomodo de
+                // foco del compositor al darle el teclado al menú (Exclusive), no
+                // que el usuario se haya ido. Sin esta guarda el menú se cerraba
+                // al instante en escritorio vacío (regresión del foco-al-shell).
+                let churn = self
+                    .menu_opened_at
+                    .is_some_and(|t| t.elapsed() < MENU_LEAVE_GRACE);
+                if !churn {
+                    self.set_menu_open(false);
+                }
             }
             if self.shuma_panel == Some(pi) && self.shuma.open {
                 self.set_shuma_open(false);

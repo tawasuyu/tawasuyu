@@ -163,6 +163,12 @@ const DRAWER_H: u32 = 420;
 /// Alto de la barra superior cuando despliega el menú de inicio (px).
 pub(super) const MENU_H: u32 = 480;
 
+/// Tras abrir el menú, ignoramos el `leave`-cierre durante este lapso: el
+/// compositor reacomoda el foco al darle el teclado al menú (Exclusive) y le
+/// manda un `leave` espurio que, sin guarda, lo cerraría al instante. Un `leave`
+/// legítimo (el usuario clava el foco en una ventana) llega mucho más tarde.
+pub(super) const MENU_LEAVE_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
+
 /// Qué cuerpo muestra el drawer que crece de la barra del `start_button`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum MenuKind {
@@ -239,6 +245,13 @@ pub(super) struct LayerApp {
     pub(super) registry: app_bus::AppRegistry,
     /// `true` cuando el drawer de la barra del menú está desplegado.
     pub(super) menu_open: bool,
+    /// Cuándo se abrió el menú. El menú toma el teclado (Exclusive) al abrir, y
+    /// el compositor reacomoda el foco en ese instante (p.ej. el fallback «teclado
+    /// al shell en escritorio vacío»): eso le manda un `leave` espurio al panel del
+    /// menú que, sin guarda, lo cerraría de inmediato. Ignoramos el `leave`-cierre
+    /// durante [`MENU_LEAVE_GRACE`] tras abrir; un `leave` legítimo (clic en una
+    /// ventana) llega mucho después.
+    pub(super) menu_opened_at: Option<std::time::Instant>,
     /// Qué cuerpo muestra el drawer desplegado.
     pub(super) menu_kind: MenuKind,
     /// Historial de copias (más reciente al frente, sin repetidos, tope 16).
@@ -460,6 +473,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         dientes_outside,
         registry: app_bus::AppRegistry::discover_merged(),
         menu_open: false,
+        menu_opened_at: None,
         menu_kind: MenuKind::Apps,
         clip_history: Vec::new(),
         clock_draft: crate::ClockDraft::default(),
