@@ -259,6 +259,9 @@
         assert!(texts.iter().any(|t| t == "+ d"));
         // Resumen: 2 agregadas (B, d), 1 quitada (b).
         assert!(texts.iter().any(|t| t.contains("2+ / 1-")));
+        // Contexto: las líneas sin cambios (a, c) aparecen con prefijo "  ".
+        assert!(texts.iter().any(|t| t == "  a"), "falta contexto: {texts:?}");
+        assert!(texts.iter().any(|t| t == "  c"));
     }
 
     #[test]

@@ -1280,41 +1280,60 @@ pub(crate) fn apply_diff(mut s: State, rest: &str) -> State {
     }
     s.push_output(OutputLine::notice(format!("≡ diff %c{a} → %c{b}")));
     const DIFF_VISIBLE_CAP: usize = 200;
+    const CONTEXT: usize = 3;
     let diff = similar::TextDiff::from_lines(&ta, &tb);
-    let (mut adds, mut dels, mut shown, mut capped) = (0usize, 0usize, 0usize, false);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            similar::ChangeTag::Delete => {
-                dels += 1;
-                '-'
-            }
-            similar::ChangeTag::Insert => {
-                adds += 1;
-                '+'
-            }
-            similar::ChangeTag::Equal => continue,
-        };
-        if shown < DIFF_VISIBLE_CAP {
-            let text = change.value().trim_end_matches('\n');
-            s.push_output(OutputLine::notice(format!("{sign} {text}")));
-            shown += 1;
-        } else {
-            capped = true;
+    // Totales (sobre todos los cambios) para el resumen.
+    let mut adds = 0usize;
+    let mut dels = 0usize;
+    for c in diff.iter_all_changes() {
+        match c.tag() {
+            similar::ChangeTag::Insert => adds += 1,
+            similar::ChangeTag::Delete => dels += 1,
+            similar::ChangeTag::Equal => {}
         }
     }
     if adds == 0 && dels == 0 {
         s.push_output(OutputLine::notice("✔ idénticos"));
-    } else {
-        if capped {
-            s.push_output(OutputLine::notice(format!(
-                "  … (cap a {DIFF_VISIBLE_CAP} líneas visibles)"
-            )));
+        return s;
+    }
+    // Hunks con `CONTEXT` líneas de contexto alrededor de cada cambio: ubica
+    // qué cambió sin volcar el archivo entero. `⋮` separa hunks no contiguos.
+    let mut shown = 0usize;
+    let mut capped = false;
+    for (hi, group) in diff.grouped_ops(CONTEXT).iter().enumerate() {
+        if shown >= DIFF_VISIBLE_CAP {
+            capped = true;
+            break;
         }
+        if hi > 0 {
+            s.push_output(OutputLine::notice("  ⋮"));
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                if shown >= DIFF_VISIBLE_CAP {
+                    capped = true;
+                    break;
+                }
+                let sign = match change.tag() {
+                    similar::ChangeTag::Delete => '-',
+                    similar::ChangeTag::Insert => '+',
+                    similar::ChangeTag::Equal => ' ',
+                };
+                let text = change.value().trim_end_matches('\n');
+                s.push_output(OutputLine::notice(format!("{sign} {text}")));
+                shown += 1;
+            }
+        }
+    }
+    if capped {
         s.push_output(OutputLine::notice(format!(
-            "✔ {adds}+ / {dels}- ({} cambios)",
-            adds + dels
+            "  … (cap a {DIFF_VISIBLE_CAP} líneas visibles)"
         )));
     }
+    s.push_output(OutputLine::notice(format!(
+        "✔ {adds}+ / {dels}- ({} cambios)",
+        adds + dels
+    )));
     s
 }
 
