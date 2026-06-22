@@ -54,3 +54,7 @@ path = "examples/fb_enhance_shot.rs"
 [[example]]
 name = "wgpu_shot"
 path = "examples/wgpu_shot.rs"
+
+[[example]]
+name = "wgpu_live_shot"
+path = "examples/wgpu_live_shot.rs"

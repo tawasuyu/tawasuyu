@@ -514,6 +514,8 @@ enum Msg {
     Frame,
     Key(KeyEvent),
     ToggleViewMode,
+    /// Cambia al renderer viejo (vello, deforme) — sólo para comparar.
+    ViewVello,
     /// Fase 4-post: alterna el realce del framebuffer clásico (F2).
     ToggleFbEnhance,
     /// Fase 3.17: cambio de pitch cosmético. `delta` se suma al
@@ -632,7 +634,9 @@ impl App for Supay {
             framebuffer_rgba: vec![0; DOOM_PIXELS * 4],
             snapshots: SnapshotPair::new(),
             last_tick_at: Instant::now(),
-            view_mode: ViewMode::Framebuffer,
+            // Default = el renderer wgpu 2.5D (el bueno). El framebuffer
+            // clásico y el vello viejo quedan accesibles aparte.
+            view_mode: ViewMode::Wgpu3d,
             atlas,
             known_pics: std::collections::HashSet::new(),
             known_sprites: std::collections::HashSet::new(),
@@ -954,11 +958,18 @@ impl App for Supay {
                 }
             }
             Msg::ToggleViewMode => {
+                // F3 alterna SOLO entre los dos renderers correctos (wgpu
+                // 2.5D ↔ framebuffer clásico). El vello viejo (deforme) NO
+                // está en el ciclo — se llega por el menú Ver para comparar,
+                // y F3 siempre escapa de él hacia el wgpu.
                 m.view_mode = match m.view_mode {
-                    ViewMode::Framebuffer => ViewMode::Scene3d,
-                    ViewMode::Scene3d => ViewMode::Wgpu3d,
                     ViewMode::Wgpu3d => ViewMode::Framebuffer,
+                    ViewMode::Framebuffer => ViewMode::Wgpu3d,
+                    ViewMode::Scene3d => ViewMode::Wgpu3d,
                 };
+            }
+            Msg::ViewVello => {
+                m.view_mode = ViewMode::Scene3d;
             }
             Msg::ToggleFbEnhance => {
                 m.fb_enhance = !m.fb_enhance;
@@ -1299,6 +1310,7 @@ fn app_menu(model: &Model) -> AppMenu {
         .menu(
             Menu::new("Ver")
                 .item(MenuItem::new(view_label, "view.toggle_mode").shortcut("F3"))
+                .item(MenuItem::new("Comparar: renderer viejo (vello)", "view.vello"))
                 .item(
                     toggle("Realce (bloom+grading)", model.fb_enhance, "view.fb_enhance")
                         .shortcut("F2"),
@@ -1328,6 +1340,7 @@ fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
         "play.use" => Some(Msg::DoomKeyTap(keys::KEY_USE)),
         "play.map" => Some(Msg::DoomKeyTap(keys::KEY_TAB)),
         "view.toggle_mode" => Some(Msg::ToggleViewMode),
+        "view.vello" => Some(Msg::ViewVello),
         "view.fb_enhance" => Some(Msg::ToggleFbEnhance),
         "view.crosshair" => Some(Msg::ToggleCrosshair),
         "view.vignette" => Some(Msg::CycleVignette),
