@@ -887,7 +887,7 @@ fn divisor_item(theme: &Theme) -> View<Msg> {
         size: Size { width: percent(1.0_f32), height: length(1.0_f32) },
         flex_shrink: 0.0,
         padding: TaffyRect {
-            left: length(42.0_f32),
+            left: length(48.0_f32),
             right: length(8.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
@@ -1113,13 +1113,13 @@ fn category_row(i: usize, cat: &MenuCat, selected: bool, theme: &Theme) -> View<
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(APP_ROW_H) },
         padding: TaffyRect {
-            left: length(8.0_f32),
+            left: length(10.0_f32),
             right: length(8.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
-        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        gap: Size { width: length(12.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
     .radius(8.0)
@@ -1164,13 +1164,13 @@ fn menu_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(APP_ROW_H) },
         padding: TaffyRect {
-            left: length(8.0_f32),
+            left: length(10.0_f32),
             right: length(8.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
-        gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
+        gap: Size { width: length(14.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
     .radius(8.0)
@@ -1249,7 +1249,10 @@ pub fn start_menu_view(
     })
     .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
 
-    let viewport = (menu_h - bar_px - MENU_SEARCH_H - 28.0).max(MENU_ROW_H);
+    // Restamos el cromo del panel (search + separador + padding + gaps ≈ 71) más
+    // un margen inferior para que las esquinas redondeadas de ABAJO queden dentro
+    // de la superficie y no las recorte el borde.
+    let viewport = (menu_h - bar_px - MENU_SEARCH_H - 55.0).max(MENU_ROW_H);
     let mut body_style = Style {
         size: Size {
             width: percent(1.0_f32),
