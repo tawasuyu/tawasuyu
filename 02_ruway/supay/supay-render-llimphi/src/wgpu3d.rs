@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 use supay_scene::{
-    NodeSnap, SceneSnapshot, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
+    NodeSnap, SceneSnapshot, SpriteSnap, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 
 use crate::WadAtlas;
@@ -125,6 +125,13 @@ pub struct DoomGpuRenderer {
     sky_uniform_buf: wgpu::Buffer,
     sky_uniform_bg: wgpu::BindGroup,
     sky_tex: Option<Arc<GpuTexture>>,
+    /// Datos para billboards de sprites (resueltos por frame en `draw`, ya que
+    /// la rotación 1..8 depende de la cámara). Guardados en `set_scene`.
+    atlas: Option<Arc<WadAtlas>>,
+    sprites: Vec<SpriteSnap>,
+    sector_lights: Vec<u8>,
+    /// Cache de texturas de sprite por (spritenum, frame_letter, angle 1..8).
+    sprite_tex: HashMap<(u16, u8, u8), Arc<GpuTexture>>,
 }
 
 impl DoomGpuRenderer {
@@ -358,6 +365,10 @@ impl DoomGpuRenderer {
             sky_uniform_buf,
             sky_uniform_bg,
             sky_tex: None,
+            atlas: None,
+            sprites: Vec::new(),
+            sector_lights: Vec::new(),
+            sprite_tex: HashMap::new(),
         }
     }
 
@@ -367,9 +378,15 @@ impl DoomGpuRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        atlas: &WadAtlas,
+        atlas: &Arc<WadAtlas>,
         snap: &SceneSnapshot,
     ) {
+        // Guardamos lo que `draw` necesita para los sprites (su rotación 1..8
+        // depende de la cámara, que sólo está en `draw`).
+        self.atlas = Some(atlas.clone());
+        self.sprites = snap.sprites.to_vec();
+        self.sector_lights = snap.sectors.iter().map(|s| s.light_level).collect();
+
         // 1. Acumular vértices por clave de textura (CPU). Las paredes
         //    necesitan el tamaño real de cada textura (para UV correctas +
         //    pegging de Doom), así que el builder consulta el atlas.
@@ -484,6 +501,9 @@ impl DoomGpuRenderer {
         }
         queue.write_buffer(&self.sky_uniform_buf, 0, &sky_bytes);
 
+        // Billboards de sprites (rotación 1..8 dependiente de la cámara).
+        let sprite_draws = self.build_sprite_draws(device, queue, cam);
+
         self.ensure_depth(device, w, h);
         let depth_view = &self.depth.as_ref().unwrap().2;
 
@@ -526,6 +546,94 @@ impl DoomGpuRenderer {
             pass.set_vertex_buffer(0, b.buffer.slice(..));
             pass.draw(0..b.count, 0..1);
         }
+        // Sprites (billboards) — mismo pipeline (pos/uv/light, alpha-discard).
+        for (tex, buf, count) in &sprite_draws {
+            pass.set_bind_group(1, &tex.bind_group, &[]);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..*count, 0..1);
+        }
+    }
+
+    /// Resuelve los sprites del snapshot a billboards orientados a la cámara,
+    /// subiendo/cacheando su textura. Devuelve (textura, vbuf, n_vértices).
+    fn build_sprite_draws(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cam: &CameraParams,
+    ) -> Vec<(Arc<GpuTexture>, wgpu::Buffer, u32)> {
+        use std::f32::consts::{FRAC_PI_4, FRAC_PI_8, TAU};
+        let mut draws = Vec::new();
+        let Some(atlas) = self.atlas.clone() else {
+            return draws;
+        };
+        // Eje horizontal del billboard: perpendicular al forward de la cámara.
+        let right = (-cam.yaw.sin(), cam.yaw.cos());
+        let sprites = self.sprites.clone();
+        for spr in &sprites {
+            // Rotación 1..8: ángulo desde el que vemos el sprite vs su facing.
+            let to_view = (cam.y - spr.y).atan2(cam.x - spr.x);
+            let rel = (to_view - spr.angle + FRAC_PI_8).rem_euclid(TAU);
+            let angle_arg = (rel / FRAC_PI_4).floor() as u8 % 8 + 1;
+            let letter = spr.frame & 0x1F;
+            let key = (spr.sprite, letter, angle_arg);
+
+            let Some((patch, mirror)) = atlas.sprite_patch(spr.sprite, spr.frame, angle_arg)
+            else {
+                continue;
+            };
+            if patch.width == 0 || patch.height == 0 {
+                continue;
+            }
+            // Subir/cachear la textura del patch.
+            let tex = if let Some(t) = self.sprite_tex.get(&key) {
+                t.clone()
+            } else {
+                let t = Arc::new(upload_texture(
+                    device,
+                    queue,
+                    &self.tex_layout,
+                    &self.sampler,
+                    &patch.rgba,
+                    patch.width as u32,
+                    patch.height as u32,
+                ));
+                self.sprite_tex.insert(key, t.clone());
+                t
+            };
+
+            let w = patch.width as f32;
+            let h = patch.height as f32;
+            let lo = patch.leftoffset as f32;
+            let to = patch.topoffset as f32;
+            let z_top = spr.z + to;
+            let z_bot = z_top - h;
+            // Columnas 0..w mapeadas a lo largo de `right`, anclando la columna
+            // `lo` (el origen del patch) en (spr.x, spr.y).
+            let lx = spr.x - right.0 * lo;
+            let ly = spr.y - right.1 * lo;
+            let rx = spr.x + right.0 * (w - lo);
+            let ry = spr.y + right.1 * (w - lo);
+            let (ul, ur) = if mirror { (1.0, 0.0) } else { (0.0, 1.0) };
+            let fullbright = spr.frame & 0x80 != 0;
+            let light = if fullbright {
+                1.0
+            } else {
+                light_of(self.sector_lights.get(spr.sector as usize).copied().unwrap_or(160))
+            };
+            let tl = Vertex { pos: [lx, ly, z_top], uv: [ul, 0.0], light };
+            let tr = Vertex { pos: [rx, ry, z_top], uv: [ur, 0.0], light };
+            let bl = Vertex { pos: [lx, ly, z_bot], uv: [ul, 1.0], light };
+            let br = Vertex { pos: [rx, ry, z_bot], uv: [ur, 1.0], light };
+            let verts = [tl, bl, br, tl, br, tr];
+            let mut bytes = Vec::with_capacity(6 * Vertex::SIZE as usize);
+            for v in &verts {
+                v.write(&mut bytes);
+            }
+            let buf = create_buffer_init(device, "doom3d-sprite", wgpu::BufferUsages::VERTEX, &bytes);
+            draws.push((tex, buf, 6));
+        }
+        draws
     }
 
     fn ensure_depth(&mut self, device: &wgpu::Device, w: u32, h: u32) {

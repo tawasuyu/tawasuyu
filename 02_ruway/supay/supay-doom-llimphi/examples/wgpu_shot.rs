@@ -41,7 +41,7 @@ fn main() {
         std::process::exit(1);
     }
     let wad = supay_wad::Wad::open("doom1.wad").expect("abrir doom1.wad");
-    let atlas = WadAtlas::new(wad, HashMap::new());
+    let atlas = std::sync::Arc::new(WadAtlas::new(wad, HashMap::new()));
 
     let mut snap = engine.capture_scene(0);
     let (mut kf, mut ks) = (HashSet::new(), HashSet::new());
