@@ -393,6 +393,10 @@ struct Model {
     /// `gpu_paint_with` (necesita el `device`); `Arc<Mutex<…>>` porque la
     /// closure de pintura es `Fn + Send + Sync`.
     wgpu_renderer: Arc<Mutex<Option<DoomGpuRenderer>>>,
+    /// Caras hiperrealistas de doomguy (sheet 5×3 → 15 celdas) para el HUD del
+    /// modo wgpu. Índice = `fila*5 + columna`; la columna es el nivel de salud
+    /// (de sano a moribundo). Vacío si el asset no decodificó.
+    faces: Vec<Image>,
     /// Pantalla de adquisición del WAD. `Some` ⇒ falta el IWAD y pintamos
     /// el panel de descarga (campo de directorio + botón Descargar) en
     /// lugar del juego; `None` ⇒ el motor ya booteó con un WAD válido.
@@ -661,6 +665,7 @@ impl App for Supay {
             context_menu: None,
             fb_enhance: true,
             wgpu_renderer: Arc::new(Mutex::new(None)),
+            faces: load_faces(),
             acquire,
         }
     }
@@ -1242,11 +1247,19 @@ impl App for Supay {
         }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
-        menubar_overlay_animated(
+        if let Some(ov) = menubar_overlay_animated(
             &menubar_spec(&menu, model),
             model.menu_active,
             model.menu_anim.value(),
-        )
+        ) {
+            return Some(ov);
+        }
+        // Sin menú abierto: el HUD moderno con la cara (sólo modo wgpu — el
+        // framebuffer y el vello traen su propio HUD).
+        if model.view_mode == ViewMode::Wgpu3d && model.acquire.is_none() && model.engine.real {
+            return hud_overlay(model);
+        }
+        None
     }
 }
 
@@ -1712,6 +1725,209 @@ fn wgpu3d_pane(model: &Model) -> View<Msg> {
         }),
         _ => None,
     })
+}
+
+// =====================================================================
+// HUD moderno del modo wgpu — salud/munición/armadura + cara hiperrealista
+// =====================================================================
+
+/// Sprite-sheet de caras de doomguy (5 columnas = nivel de salud, 3 filas =
+/// expresiones), embebido en el binario.
+const FACE_SHEET: &[u8] = include_bytes!("../assets/doomguy_faces.png");
+const FACE_COLS: usize = 5;
+const FACE_ROWS: usize = 3;
+
+/// Decodifica el sheet y lo parte en 15 celdas (`Image` por celda). Devuelve
+/// vacío si el PNG no decodifica (el HUD cae a sin-cara).
+fn load_faces() -> Vec<Image> {
+    let dec = png::Decoder::new(std::io::Cursor::new(FACE_SHEET));
+    let Ok(mut reader) = dec.read_info() else {
+        return Vec::new();
+    };
+    let Some(bufsize) = reader.output_buffer_size() else {
+        return Vec::new();
+    };
+    let mut buf = vec![0u8; bufsize];
+    let Ok(oi) = reader.next_frame(&mut buf) else {
+        return Vec::new();
+    };
+    let (w, h) = (oi.width as usize, oi.height as usize);
+    // Aseguramos RGBA8.
+    let rgba: Vec<u8> = match oi.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => {
+            let mut o = vec![0u8; w * h * 4];
+            for i in 0..w * h {
+                o[i * 4] = buf[i * 3];
+                o[i * 4 + 1] = buf[i * 3 + 1];
+                o[i * 4 + 2] = buf[i * 3 + 2];
+                o[i * 4 + 3] = 255;
+            }
+            o
+        }
+        _ => return Vec::new(),
+    };
+    if rgba.len() < w * h * 4 {
+        return Vec::new();
+    }
+    let (cw, ch) = (w / FACE_COLS, h / FACE_ROWS);
+    let mut faces = Vec::with_capacity(FACE_COLS * FACE_ROWS);
+    for row in 0..FACE_ROWS {
+        for col in 0..FACE_COLS {
+            let mut cell = vec![0u8; cw * ch * 4];
+            for y in 0..ch {
+                let so = ((row * ch + y) * w + col * cw) * 4;
+                let dorow = y * cw * 4;
+                cell[dorow..dorow + cw * 4].copy_from_slice(&rgba[so..so + cw * 4]);
+            }
+            faces.push(Image::new(ImageData {
+                data: Blob::from(cell),
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: cw as u32,
+                height: ch as u32,
+            }));
+        }
+    }
+    faces
+}
+
+fn hud_overlay(model: &Model) -> Option<View<Msg>> {
+    let snap = model.snapshots.next()?;
+    let stats = &snap.player_stats;
+    let health = stats.health.max(0);
+    let armor = stats.armor_points.max(0);
+    let ammo = stats.weapon_ammo_slot().map(|i| stats.ammo[i]);
+    let weapon = match stats.ready_weapon {
+        0 => "PUÑO",
+        1 => "PISTOLA",
+        2 => "ESCOPETA",
+        3 => "AMETRALL.",
+        4 => "COHETES",
+        5 => "PLASMA",
+        6 => "BFG",
+        7 => "MOTOSIERRA",
+        8 => "SÚPER-ESC.",
+        _ => "—",
+    };
+
+    // Columna por salud (sano → moribundo); fila varía despacio para que la
+    // cara "reaccione" (cada ~1.2 s) como el rostro original de Doom.
+    let face_col = if health >= 80 {
+        0
+    } else if health >= 60 {
+        1
+    } else if health >= 40 {
+        2
+    } else if health >= 20 {
+        3
+    } else {
+        4
+    };
+    let face_row = ((model.tick / 42) % FACE_ROWS as u64) as usize;
+    let face = model.faces.get(face_row * FACE_COLS + face_col).cloned();
+
+    let health_color = if health > 66 {
+        (0.62, 0.95, 0.55)
+    } else if health > 33 {
+        (0.95, 0.85, 0.30)
+    } else {
+        (0.95, 0.30, 0.25)
+    };
+
+    // Celda de stat: etiqueta chica arriba + número grande.
+    let stat = |label: &str, value: String, color: (f32, f32, f32)| -> View<Msg> {
+        let lbl = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(14.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(label.to_string(), 11.0, COLOR_DUST, Alignment::Center);
+        let val = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(
+            value,
+            30.0,
+            Color::from_rgba8(
+                (color.0 * 255.0) as u8,
+                (color.1 * 255.0) as u8,
+                (color.2 * 255.0) as u8,
+                255,
+            ),
+            Alignment::Center,
+        );
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: length(120.0_f32), height: percent(1.0_f32) },
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![lbl, val])
+    };
+
+    // Cara enmarcada (borde crimson + fondo oscuro).
+    let mut frame = View::new(Style {
+        size: Size { width: length(96.0_f32), height: length(96.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect {
+            left: length(3.0_f32),
+            right: length(3.0_f32),
+            top: length(3.0_f32),
+            bottom: length(3.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(COLOR_CRIMSON_DEEP)
+    .radius(6.0);
+    if let Some(face) = face {
+        frame = frame.children(vec![View::new(Style {
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .radius(4.0)
+        .image(face)]);
+    }
+
+    let bar = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(108.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(18.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(24.0_f32),
+            right: length(24.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(8, 6, 8, 205))
+    .children(vec![
+        stat("SALUD", format!("{health}%"), health_color),
+        stat("ARMADURA", format!("{armor}%"), (0.55, 0.75, 0.95)),
+        frame,
+        stat(
+            "MUNICIÓN",
+            ammo.map(|a| a.to_string()).unwrap_or_else(|| "∞".to_string()),
+            (0.95, 0.85, 0.30),
+        ),
+        stat("ARMA", weapon.to_string(), (0.82, 0.80, 0.74)),
+    ]);
+
+    // Contenedor full-window que empuja la barra al fondo.
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            justify_content: Some(JustifyContent::FlexEnd),
+            ..Default::default()
+        })
+        .children(vec![bar]),
+    )
 }
 
 fn game_pane(model: &Model) -> View<Msg> {

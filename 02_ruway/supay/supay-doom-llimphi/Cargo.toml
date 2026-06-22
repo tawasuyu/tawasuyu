@@ -28,6 +28,8 @@ supay-render-llimphi = { path = "../supay-render-llimphi" }
 supay-wad = { path = "../supay-wad" }
 supay-audio = { path = "../supay-audio" }
 rimay-localize = { path = "../../../shared/rimay-localize" }
+# Decodifica el sprite-sheet de caras (HUD del modo wgpu) a RGBA en runtime.
+png = { workspace = true }
 
 [dev-dependencies]
 # Volcado headless de frames a PNG (examples/dump_frame.rs): render a textura
@@ -58,3 +60,7 @@ path = "examples/wgpu_shot.rs"
 [[example]]
 name = "wgpu_live_shot"
 path = "examples/wgpu_live_shot.rs"
+
+[[example]]
+name = "hud_shot"
+path = "examples/hud_shot.rs"
