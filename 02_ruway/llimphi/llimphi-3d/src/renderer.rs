@@ -13,6 +13,16 @@ use glam::Mat4;
 use crate::camera::Camera3d;
 use crate::mesh::{cube, Vertex3d};
 use crate::scene::{ensure_depth, DepthBuffer, DEPTH_FORMAT};
+use crate::voxel_renderer::PointLight;
+
+/// Tope de luces puntuales por frame en el forward-mesh (caben en el uniform).
+/// El caller puede agregar más a [`Renderer3d::lights`]; las que excedan se
+/// ignoran (las primeras `MESH_MAX_LIGHTS`).
+pub const MESH_MAX_LIGHTS: usize = 8;
+
+/// Tamaño del uniform en bytes: `view_proj`(64) + `model`(64) + `eye_nlights`(16)
+/// + `ambient`(16) + `lpos`(MAX·16) + `lcol`(MAX·16).
+const UNIFORM_SIZE: usize = 64 + 64 + 16 + 16 + MESH_MAX_LIGHTS * 16 * 2;
 
 /// Renderer de **mallas** indexadas (por defecto un cubo) visto desde una
 /// [`Camera3d`]. Cachea pipeline, buffers de geometría, uniform y (para el
@@ -30,6 +40,18 @@ pub struct Renderer3d {
     bind_group: wgpu::BindGroup,
     model: Mat4,
     depth: Option<DepthBuffer>,
+    /// Luces puntuales coloreadas que iluminan la malla (≤ [`MESH_MAX_LIGHTS`];
+    /// las que sobren se ignoran). `pos`/`range` en **coordenadas de mundo** (no
+    /// de voxel: ojo con el doc de [`PointLight`], que está redactado para el
+    /// ray-marcher); `range` = radio de caída, `radius` se ignora (no hay
+    /// sombras en el forward-mesh). Editable antes de `upload`/`render`. Vacío =
+    /// sin luces → sólo el término ambiente.
+    pub lights: Vec<PointLight>,
+    /// Luz ambiente RGB que multiplica el color base donde no llega ninguna luz.
+    /// Default `[1, 1, 1]`: sin luces, el render es **idéntico** al plano de
+    /// antes (color base tal cual). Para que las luces se noten, bajalo
+    /// (p.ej. `[0.12, 0.12, 0.14]`).
+    pub ambient: [f32; 3],
 }
 
 impl Renderer3d {
@@ -57,7 +79,8 @@ impl Renderer3d {
             label: Some("llimphi-3d-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                // El fragment también lee el uniform (luces + ambiente + eye).
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -146,7 +169,7 @@ impl Renderer3d {
 
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("llimphi-3d-ubuf"),
-            size: 64, // una mat4x4<f32>
+            size: UNIFORM_SIZE as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -169,6 +192,8 @@ impl Renderer3d {
             bind_group,
             model: Mat4::IDENTITY,
             depth: None,
+            lights: Vec::new(),
+            ambient: [1.0, 1.0, 1.0],
         }
     }
 
@@ -199,16 +224,44 @@ impl Renderer3d {
         self.index_count = indices.len() as u32;
     }
 
-    /// Sube el uniform del frame (`mvp = view_proj · model`). Lo llama
-    /// [`Self::render`] y [`Scene3d`](crate::Scene3d). `aspect` = w/h.
+    /// Sube el uniform del frame: `view_proj` y `model` por separado (el shader
+    /// necesita la posición de mundo `model · pos` para iluminar), `eye`, número
+    /// de luces, ambiente y los arrays de luces. Lo llama [`Self::render`] y
+    /// [`Scene3d`](crate::Scene3d). `aspect` = w/h. glam es column-major, igual
+    /// que WGSL → se sube tal cual.
     pub fn upload(&self, queue: &wgpu::Queue, aspect: f32, camera: &Camera3d) {
-        let mvp = camera.view_proj(aspect) * self.model;
-        // glam es column-major; el shader WGSL espera column-major → upload tal cual.
-        let mut ubytes = Vec::with_capacity(64);
-        for v in mvp.to_cols_array() {
-            ubytes.extend_from_slice(&v.to_ne_bytes());
+        let view_proj = camera.view_proj(aspect);
+        let mut b = Vec::with_capacity(UNIFORM_SIZE);
+        for v in view_proj.to_cols_array() {
+            b.extend_from_slice(&v.to_ne_bytes());
         }
-        queue.write_buffer(&self.ubuf, 0, &ubytes);
+        for v in self.model.to_cols_array() {
+            b.extend_from_slice(&v.to_ne_bytes());
+        }
+        let n = self.lights.len().min(MESH_MAX_LIGHTS);
+        for v in [camera.eye.x, camera.eye.y, camera.eye.z, n as f32] {
+            b.extend_from_slice(&v.to_ne_bytes());
+        }
+        for v in [self.ambient[0], self.ambient[1], self.ambient[2], 0.0] {
+            b.extend_from_slice(&v.to_ne_bytes());
+        }
+        // Posiciones (xyz) + range (w).
+        for i in 0..MESH_MAX_LIGHTS {
+            let l = self.lights.get(i).copied();
+            let (p, r) = l.map_or(([0.0; 3], 1.0), |l| (l.pos, l.range));
+            for v in [p[0], p[1], p[2], r] {
+                b.extend_from_slice(&v.to_ne_bytes());
+            }
+        }
+        // Colores (rgb) + relleno.
+        for i in 0..MESH_MAX_LIGHTS {
+            let c = self.lights.get(i).copied().map_or([0.0; 3], |l| l.color);
+            for v in [c[0], c[1], c[2], 0.0] {
+                b.extend_from_slice(&v.to_ne_bytes());
+            }
+        }
+        debug_assert_eq!(b.len(), UNIFORM_SIZE);
+        queue.write_buffer(&self.ubuf, 0, &b);
     }
 
     /// Dibuja la malla indexada en un pase **ya abierto** (color + depth). Lo usa
@@ -287,7 +340,15 @@ fn create_buffer_init(
 }
 
 const WGSL: &str = r#"
-struct Uniforms { mvp: mat4x4<f32> };
+const MAXL: u32 = 8u;
+struct Uniforms {
+    view_proj: mat4x4<f32>,
+    model: mat4x4<f32>,
+    eye_n: vec4<f32>,      // xyz = ojo en mundo, w = nº de luces
+    ambient: vec4<f32>,    // rgb = luz ambiente
+    lpos: array<vec4<f32>, MAXL>,  // xyz = posición mundo, w = range (radio caída)
+    lcol: array<vec4<f32>, MAXL>,  // rgb = color de la luz
+};
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 struct VIn {
@@ -297,18 +358,77 @@ struct VIn {
 struct VOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec3<f32>,
+    @location(1) world: vec3<f32>,
 };
 
 @vertex
 fn vs(in: VIn) -> VOut {
     var out: VOut;
-    out.clip = u.mvp * vec4<f32>(in.pos, 1.0);
+    let world = (u.model * vec4<f32>(in.pos, 1.0)).xyz;
+    out.clip = u.view_proj * vec4<f32>(world, 1.0);
     out.color = in.color;
+    out.world = world;
     return out;
 }
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
+    // Normal geométrica plana (faceteada) por derivadas screen-space: no exige
+    // normales por vértice y sirve para cualquier malla (cubos, muñecos…).
+    let dx = dpdx(in.world);
+    let dy = dpdy(in.world);
+    let ncross = cross(dx, dy);
+    let nlen = length(ncross);
+    if (nlen < 1e-8) {
+        // Triángulo degenerado / visto de canto: sólo ambiente.
+        return vec4<f32>(in.color * u.ambient.rgb, 1.0);
+    }
+    var n = ncross / nlen;
+    // Orientar la normal hacia la cámara (independiente del winding/signo de las
+    // derivadas) para que la cara visible siempre se ilumine bien.
+    let view_dir = u.eye_n.xyz - in.world;
+    if (dot(n, view_dir) < 0.0) {
+        n = -n;
+    }
+
+    var lit = u.ambient.rgb;
+    let count = u32(u.eye_n.w);
+    for (var i: u32 = 0u; i < count; i = i + 1u) {
+        let lp = u.lpos[i];
+        let d = lp.xyz - in.world;
+        let dist = length(d);
+        let range = max(lp.w, 1e-3);
+        // Caída suave: (1 - d/range)^2, recortada a 0 fuera del radio.
+        let a = clamp(1.0 - dist / range, 0.0, 1.0);
+        let atten = a * a;
+        let ndotl = max(dot(n, d / max(dist, 1e-4)), 0.0);
+        lit = lit + u.lcol[i].rgb * (ndotl * atten);
+    }
+    return vec4<f32>(in.color * lit, 1.0);
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// El shader del forward-mesh (con luces + derivadas) parsea y valida sin
+    /// GPU. Ataja errores que sólo saldrían al crear el pipeline en runtime.
+    #[test]
+    fn shader_wgsl_valida() {
+        let module = naga::front::wgsl::parse_str(WGSL).expect("WGSL no parsea");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("WGSL no valida");
+    }
+
+    /// El uniform empaquetado mide exactamente lo que declara el struct WGSL.
+    #[test]
+    fn uniform_size_coincide() {
+        assert_eq!(UNIFORM_SIZE, 64 + 64 + 16 + 16 + 8 * 16 * 2);
+        assert_eq!(UNIFORM_SIZE % 16, 0);
+    }
+}

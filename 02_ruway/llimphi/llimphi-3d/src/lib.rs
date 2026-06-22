@@ -48,7 +48,7 @@ pub use dimensions::{Dimension, Multiverse};
 pub use hud::{Hud, HudQuad};
 pub use mesh::{cube, push_cube, Vertex3d, CUBE_INDICES};
 pub use postfx::{PostFx, PostFxConfig};
-pub use renderer::Renderer3d;
+pub use renderer::{Renderer3d, MESH_MAX_LIGHTS};
 pub use scene::Scene3d;
 pub use voxel::{DirtyBox, VoxelGrid};
 pub use voxel_renderer::{
