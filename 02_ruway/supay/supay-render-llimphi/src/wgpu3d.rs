@@ -819,7 +819,17 @@ impl DoomGpuRenderer {
         // Uniform: MVP + eye/fog + params(time,w,h,refl_strength) +
         // clip(water_z, clip_enable, 0, 0). `clip_enable=1` en el pase de
         // reflexión → el fragment descarta lo que está bajo ese plano de agua.
-        let write_uniform = |buf: &wgpu::Buffer, mat: &Mat4, refl: f32, water_z: f32, clip: f32| {
+        // Fogonazo activo si el arma o su flash están en frame fullbright /
+        // activo (≈ disparando) → luz cálida dinámica este frame.
+        let muzzle = if std::env::var_os("SUPAY_MUZZLE").is_some()
+            || self.weapon_flash.active
+            || (self.weapon.frame & 0x80 != 0)
+        {
+            1.0
+        } else {
+            0.0
+        };
+        let write_uniform = |buf: &wgpu::Buffer, mat: &Mat4, refl: f32, water_z: f32, clip: f32, muz: f32| {
             let mut bytes = Vec::with_capacity(112);
             for v in mat.to_cols_array() {
                 bytes.extend_from_slice(&v.to_ne_bytes());
@@ -830,19 +840,19 @@ impl DoomGpuRenderer {
             for v in [cam.time, rw as f32, rh as f32, refl] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
-            for v in [water_z, clip, 0.0, 0.0] {
+            for v in [water_z, clip, muz, 0.0] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
             queue.write_buffer(buf, 0, &bytes);
         };
         // SUPAY_NO_CLIP desactiva el clip bajo el agua (para A/B del efecto).
         let clip_enable = if std::env::var_os("SUPAY_NO_CLIP").is_some() { 0.0 } else { 1.0 };
-        write_uniform(&self.uniform_buf, &mvp, if do_reflect { 1.0 } else { 0.0 }, 0.0, 0.0);
+        write_uniform(&self.uniform_buf, &mvp, if do_reflect { 1.0 } else { 0.0 }, 0.0, 0.0, muzzle);
         if do_reflect {
             for i in 0..n_planes {
                 let z = self.water_planes[i];
                 let mvp_r = mvp * reflect_across_z(z);
-                write_uniform(&self.refl_uniform_bufs[i], &mvp_r, 0.0, z, clip_enable);
+                write_uniform(&self.refl_uniform_bufs[i], &mvp_r, 0.0, z, clip_enable, muzzle);
             }
         }
 
@@ -1967,6 +1977,15 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let s1 = pow(0.5 + 0.5 * sin(q.x + q.y * 0.7 + t * 2.2), 8.0);
         let s2 = pow(0.5 + 0.5 * sin(q.x * 1.7 - q.y + t * 1.5), 10.0);
         col += vec3<f32>(0.14, 0.20, 0.26) * (s1 + s2 * 0.7);
+    }
+
+    // Fogonazo: al disparar (clip.z > 0), un boost cálido que cae con la
+    // distancia al jugador → la escena cercana se ilumina como con el flash
+    // del cañón (luz dinámica de disparo, estilo GZDoom).
+    if (u.clip.z > 0.0) {
+        let d = distance(in.world, u.eye.xyz);
+        let m = u.clip.z * exp(-d / 450.0);
+        col += col * vec3<f32>(0.60, 0.42, 0.18) * (m * 2.4);
     }
 
     return vec4<f32>(col, 1.0);
