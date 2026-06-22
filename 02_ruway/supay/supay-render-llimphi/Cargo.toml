@@ -16,6 +16,9 @@ supay-wad = { path = "../supay-wad" }
 # correctas). Mismo wgpu del workspace que Llimphi pasa a `gpu_paint_with`.
 wgpu = { workspace = true }
 glam = { workspace = true }
+# Post-proceso genérico (SSAA + bloom) cosechado a Llimphi: supay es ahora
+# consumidor de `llimphi-3d::PostFx` en vez de mantener su propio blit/bloom.
+llimphi-3d = { path = "../../llimphi/llimphi-3d" }
 
 [dev-dependencies]
 # Validación headless de los shaders WGSL (sin GPU): naga parsea + valida
