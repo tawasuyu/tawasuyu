@@ -346,14 +346,16 @@ impl DoomGpuRenderer {
             refl_uniform_bufs.push(buf);
             refl_uniform_bgs.push(bg);
         }
+        // Filtrado lineal (mag+min) → texturas suaves "alta definición" en vez
+        // del pixelado nearest clásico. Es el look GZDoom-con-filtrado.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("doom3d-sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -1871,8 +1873,11 @@ fn fs(in: SOut) -> @location(0) vec4<f32> {
     // tilea 4× por 360°, así que a 90° de FOV cubre ~1 tile de ancho.
     let colang = s.yaw - (in.scr.x - 0.5) * s.fov_x;
     let su = fract(colang / (2.0 * PI) * 4.0);
-    // Vertical: arriba de pantalla = arriba del cielo, con shift por pitch.
-    let sv = clamp(in.scr.y - s.pitch * 0.5, 0.0, 1.0);
+    // Vertical: la textura del cielo ocupa la franja SUPERIOR (~55% de la
+    // pantalla), así el horizonte/montañas cae cerca del medio y se ve por
+    // encima de las paredes (antes se comprimía abajo y quedaba tapado). El
+    // pitch lo desplaza al mirar arriba/abajo.
+    let sv = clamp(in.scr.y * 1.8 - s.pitch * 0.6, 0.0, 1.0);
     return textureSample(sky, samp, vec2<f32>(su, sv));
 }
 "#;
