@@ -28,22 +28,24 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 use supay_scene::{
-    NodeSnap, SceneSnapshot, SpriteSnap, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
+    NodeSnap, SceneSnapshot, SpriteSnap, WeaponSpriteSnap, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 
 use crate::WadAtlas;
 
-/// Vértice: posición mundo + UV de textura + multiplicador de luz (0..1 del
-/// `light_level` del sector). 6×f32 = 24 bytes, empaquetado native-endian.
+/// Vértice: posición mundo + UV + multiplicador de luz + `kind` (0 = normal,
+/// 1 = superficie líquida → el shader la ondula y la hace brillar). 7×f32 =
+/// 28 bytes, empaquetado native-endian.
 #[derive(Clone, Copy)]
 struct Vertex {
     pos: [f32; 3],
     uv: [f32; 2],
     light: f32,
+    kind: f32,
 }
 
 impl Vertex {
-    const SIZE: u64 = 6 * 4;
+    const SIZE: u64 = 7 * 4;
     fn write(&self, out: &mut Vec<u8>) {
         for v in self.pos {
             out.extend_from_slice(&v.to_ne_bytes());
@@ -52,6 +54,7 @@ impl Vertex {
             out.extend_from_slice(&v.to_ne_bytes());
         }
         out.extend_from_slice(&self.light.to_ne_bytes());
+        out.extend_from_slice(&self.kind.to_ne_bytes());
     }
 }
 
@@ -73,6 +76,9 @@ pub struct CameraParams {
     pub pitch: f32,
     /// FOV horizontal en radianes (Doom clásico ≈ π/2 = 90°).
     pub fov_x: f32,
+    /// Tiempo en segundos para animar el agua. Monótono; el host lo pasa
+    /// desde un `Instant` (o un contador de ticks/35 en headless).
+    pub time: f32,
 }
 
 impl CameraParams {
@@ -132,6 +138,12 @@ pub struct DoomGpuRenderer {
     sector_lights: Vec<u8>,
     /// Cache de texturas de sprite por (spritenum, frame_letter, angle 1..8).
     sprite_tex: HashMap<(u16, u8, u8), Arc<GpuTexture>>,
+    /// Pipeline para overlays 2D en clip-space (el arma en mano). Sin depth
+    /// write, se dibuja al final encima de todo.
+    overlay_pipeline: wgpu::RenderPipeline,
+    /// psprites del arma del frame actual (weapon + weapon_flash).
+    weapon: WeaponSpriteSnap,
+    weapon_flash: WeaponSpriteSnap,
 }
 
 impl DoomGpuRenderer {
@@ -209,6 +221,11 @@ impl DoomGpuRenderer {
                             offset: 20,
                             shader_location: 2,
                         },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 24,
+                            shader_location: 3,
+                        },
                     ],
                 }],
             },
@@ -243,7 +260,7 @@ impl DoomGpuRenderer {
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("doom3d-uniform"),
-            size: 80, // mat4x4<f32> (64) + vec4 eye/fog (16)
+            size: 96, // mat4 (64) + eye/fog (16) + params: time (16)
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -351,6 +368,74 @@ impl DoomGpuRenderer {
             cache: None,
         });
 
+        // --- Overlay 2D (arma en mano) ---
+        let overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("doom3d-overlay-shader"),
+            source: wgpu::ShaderSource::Wgsl(OVERLAY_WGSL.into()),
+        });
+        let overlay_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("doom3d-overlay-pipeline-layout"),
+            bind_group_layouts: &[&tex_layout],
+            push_constant_ranges: &[],
+        });
+        let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("doom3d-overlay-pipeline"),
+            layout: Some(&overlay_layout),
+            vertex: wgpu::VertexState {
+                module: &overlay_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 16, // pos[2] + uv[2]
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &overlay_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+
+        let zero_weap = WeaponSpriteSnap {
+            active: false,
+            sprite: 0,
+            frame: 0,
+            sx: 0.0,
+            sy: 0.0,
+        };
+
         Self {
             pipeline,
             uniform_buf,
@@ -369,6 +454,9 @@ impl DoomGpuRenderer {
             sprites: Vec::new(),
             sector_lights: Vec::new(),
             sprite_tex: HashMap::new(),
+            overlay_pipeline,
+            weapon: zero_weap,
+            weapon_flash: zero_weap,
         }
     }
 
@@ -386,13 +474,15 @@ impl DoomGpuRenderer {
         self.atlas = Some(atlas.clone());
         self.sprites = snap.sprites.to_vec();
         self.sector_lights = snap.sectors.iter().map(|s| s.light_level).collect();
+        self.weapon = snap.weapon.clone();
+        self.weapon_flash = snap.weapon_flash.clone();
 
         // 1. Acumular vértices por clave de textura (CPU). Las paredes
         //    necesitan el tamaño real de cada textura (para UV correctas +
         //    pegging de Doom), así que el builder consulta el atlas.
         let mut by_tex: HashMap<TexKey, Vec<Vertex>> = HashMap::new();
         build_walls(snap, atlas, &mut by_tex);
-        build_flats(snap, &mut by_tex);
+        build_flats(snap, atlas, &mut by_tex);
 
         // 2. Asegurar que cada textura referida esté subida a GPU.
         for key in by_tex.keys() {
@@ -492,6 +582,10 @@ impl DoomGpuRenderer {
         for v in [cam.x, cam.y, cam.eye_z, 1.0 / 2500.0] {
             bytes.extend_from_slice(&v.to_ne_bytes());
         }
+        // params: time (animación del agua) + padding.
+        for v in [cam.time, 0.0, 0.0, 0.0] {
+            bytes.extend_from_slice(&v.to_ne_bytes());
+        }
         queue.write_buffer(&self.uniform_buf, 0, &bytes);
 
         // Uniform del cielo: yaw, pitch, fov_x, aspect.
@@ -503,6 +597,8 @@ impl DoomGpuRenderer {
 
         // Billboards de sprites (rotación 1..8 dependiente de la cámara).
         let sprite_draws = self.build_sprite_draws(device, queue, cam);
+        // Overlays 2D del arma en mano (weapon + weapon_flash), en clip-space.
+        let weapon_draws = self.build_weapon_draws(device, queue, w, h);
 
         self.ensure_depth(device, w, h);
         let depth_view = &self.depth.as_ref().unwrap().2;
@@ -552,6 +648,96 @@ impl DoomGpuRenderer {
             pass.set_vertex_buffer(0, buf.slice(..));
             pass.draw(0..*count, 0..1);
         }
+        // Arma en mano (overlay 2D), encima de todo.
+        if !weapon_draws.is_empty() {
+            pass.set_pipeline(&self.overlay_pipeline);
+            for (tex, buf) in &weapon_draws {
+                pass.set_bind_group(0, &tex.bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..1);
+            }
+        }
+    }
+
+    /// Construye los quads clip-space del arma en mano (weapon + flash) según
+    /// `sx/sy` del psprite, igual que el HUD del renderer viejo.
+    fn build_weapon_draws(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        w: u32,
+        h: u32,
+    ) -> Vec<(Arc<GpuTexture>, wgpu::Buffer)> {
+        const DOOM_VIEW_W: f32 = 320.0;
+        const DOOM_VIEW_H: f32 = 200.0;
+        const WEAPON_TOP: f32 = 32.0;
+        let mut out = Vec::new();
+        let Some(atlas) = self.atlas.clone() else {
+            return out;
+        };
+        let scale = (w as f32 / DOOM_VIEW_W).min(h as f32 / DOOM_VIEW_H);
+        // weapon primero, weapon_flash encima (muzzle).
+        for weap in [self.weapon.clone(), self.weapon_flash.clone()] {
+            if !weap.active {
+                continue;
+            }
+            let Some((patch, mirror)) = atlas.sprite_patch(weap.sprite, weap.frame, 1) else {
+                continue;
+            };
+            if patch.width == 0 || patch.height == 0 {
+                continue;
+            }
+            // Cache reusa el mismo HashMap que los sprites del mundo.
+            let key = (weap.sprite, weap.frame & 0x1F, 1u8);
+            let tex = if let Some(t) = self.sprite_tex.get(&key) {
+                t.clone()
+            } else {
+                let t = Arc::new(upload_texture(
+                    device,
+                    queue,
+                    &self.tex_layout,
+                    &self.sampler,
+                    &patch.rgba,
+                    patch.width as u32,
+                    patch.height as u32,
+                ));
+                self.sprite_tex.insert(key, t.clone());
+                t
+            };
+
+            let pw = patch.width as f32 * scale;
+            let ph = patch.height as f32 * scale;
+            let cx = w as f32 * 0.5 + weap.sx * scale;
+            let left = cx - pw * 0.5;
+            let top = h as f32 - ph + (weap.sy - WEAPON_TOP) * scale;
+            let right = left + pw;
+            let bottom = top + ph;
+            // Pixel → clip space.
+            let to_clip = |px: f32, py: f32| (px / w as f32 * 2.0 - 1.0, 1.0 - py / h as f32 * 2.0);
+            let (lx, ty) = to_clip(left, top);
+            let (rx, by) = to_clip(right, bottom);
+            let (ul, ur) = if mirror { (1.0, 0.0) } else { (0.0, 1.0) };
+            // pos[2] + uv[2] por vértice; dos triángulos.
+            let v = |x: f32, y: f32, u: f32, vv: f32| [x, y, u, vv];
+            let quad = [
+                v(lx, ty, ul, 0.0),
+                v(lx, by, ul, 1.0),
+                v(rx, by, ur, 1.0),
+                v(lx, ty, ul, 0.0),
+                v(rx, by, ur, 1.0),
+                v(rx, ty, ur, 0.0),
+            ];
+            let mut bytes = Vec::with_capacity(6 * 16);
+            for vert in &quad {
+                for f in vert {
+                    bytes.extend_from_slice(&f.to_ne_bytes());
+                }
+            }
+            let buf =
+                create_buffer_init(device, "doom3d-weapon", wgpu::BufferUsages::VERTEX, &bytes);
+            out.push((tex, buf));
+        }
+        out
     }
 
     /// Resuelve los sprites del snapshot a billboards orientados a la cámara,
@@ -621,10 +807,10 @@ impl DoomGpuRenderer {
             } else {
                 light_of(self.sector_lights.get(spr.sector as usize).copied().unwrap_or(160))
             };
-            let tl = Vertex { pos: [lx, ly, z_top], uv: [ul, 0.0], light };
-            let tr = Vertex { pos: [rx, ry, z_top], uv: [ur, 0.0], light };
-            let bl = Vertex { pos: [lx, ly, z_bot], uv: [ul, 1.0], light };
-            let br = Vertex { pos: [rx, ry, z_bot], uv: [ur, 1.0], light };
+            let tl = Vertex { pos: [lx, ly, z_top], uv: [ul, 0.0], light, kind: 0.0 };
+            let tr = Vertex { pos: [rx, ry, z_top], uv: [ur, 0.0], light, kind: 0.0 };
+            let bl = Vertex { pos: [lx, ly, z_bot], uv: [ul, 1.0], light, kind: 0.0 };
+            let br = Vertex { pos: [rx, ry, z_bot], uv: [ur, 1.0], light, kind: 0.0 };
             let verts = [tl, bl, br, tl, br, tr];
             let mut bytes = Vec::with_capacity(6 * Vertex::SIZE as usize);
             for v in &verts {
@@ -832,17 +1018,17 @@ fn push_wall_quad(
     let v_t = v_top_texels / th;
     let v_b = (v_top_texels + (z_top - z_bot)) / th;
     let verts = out.entry(TexKey::Wall(tex_name)).or_default();
-    let tl = Vertex { pos: [x1, y1, z_top], uv: [u0, v_t], light };
-    let tr = Vertex { pos: [x2, y2, z_top], uv: [u1, v_t], light };
-    let bl = Vertex { pos: [x1, y1, z_bot], uv: [u0, v_b], light };
-    let br = Vertex { pos: [x2, y2, z_bot], uv: [u1, v_b], light };
+    let tl = Vertex { pos: [x1, y1, z_top], uv: [u0, v_t], light, kind: 0.0 };
+    let tr = Vertex { pos: [x2, y2, z_top], uv: [u1, v_t], light, kind: 0.0 };
+    let bl = Vertex { pos: [x1, y1, z_bot], uv: [u0, v_b], light, kind: 0.0 };
+    let br = Vertex { pos: [x2, y2, z_bot], uv: [u1, v_b], light, kind: 0.0 };
     // Dos triángulos (sin cull, el winding no importa).
     verts.extend_from_slice(&[tl, bl, br, tl, br, tr]);
 }
 
 /// Reconstruye el polígono convexo de cada subsector vía clipping de los
 /// semiplanos del BSP y emite sus triángulos de piso y techo.
-fn build_flats(snap: &SceneSnapshot, out: &mut HashMap<TexKey, Vec<Vertex>>) {
+fn build_flats(snap: &SceneSnapshot, atlas: &WadAtlas, out: &mut HashMap<TexKey, Vec<Vertex>>) {
     if snap.nodes.is_empty() {
         return;
     }
@@ -871,7 +1057,7 @@ fn build_flats(snap: &SceneSnapshot, out: &mut HashMap<TexKey, Vec<Vertex>>) {
     // Raíz del BSP: último nodo (convención Doom).
     let root = (snap.nodes.len() - 1) as u16;
     let mut planes: Vec<(f32, f32, f32, f32, bool)> = Vec::new();
-    collect_subsectors(&snap.nodes, root, &bounds, &mut planes, snap, out);
+    collect_subsectors(&snap.nodes, root, &bounds, &mut planes, snap, atlas, out);
 }
 
 /// DFS del BSP acumulando semiplanos; en cada hoja, clippea el bounding box
@@ -883,11 +1069,12 @@ fn collect_subsectors(
     // (px, py, dx, dy, front_side): el subsector está del lado `front_side`.
     planes: &mut Vec<(f32, f32, f32, f32, bool)>,
     snap: &SceneSnapshot,
+    atlas: &WadAtlas,
     out: &mut HashMap<TexKey, Vec<Vertex>>,
 ) {
     if child & NF_SUBSECTOR != 0 {
         let ssidx = (child & !NF_SUBSECTOR) as usize;
-        emit_subsector_flats(ssidx, bounds, planes, snap, out);
+        emit_subsector_flats(ssidx, bounds, planes, snap, atlas, out);
         return;
     }
     let Some(node) = nodes.get(child as usize) else {
@@ -901,7 +1088,7 @@ fn collect_subsectors(
         node.partition_dy,
         true,
     ));
-    collect_subsectors(nodes, node.children[0], bounds, planes, snap, out);
+    collect_subsectors(nodes, node.children[0], bounds, planes, snap, atlas, out);
     planes.pop();
     // Back (children[1]).
     planes.push((
@@ -911,7 +1098,7 @@ fn collect_subsectors(
         node.partition_dy,
         false,
     ));
-    collect_subsectors(nodes, node.children[1], bounds, planes, snap, out);
+    collect_subsectors(nodes, node.children[1], bounds, planes, snap, atlas, out);
     planes.pop();
 }
 
@@ -920,6 +1107,7 @@ fn emit_subsector_flats(
     bounds: &[(f32, f32); 4],
     planes: &[(f32, f32, f32, f32, bool)],
     snap: &SceneSnapshot,
+    atlas: &WadAtlas,
     out: &mut HashMap<TexKey, Vec<Vertex>>,
 ) {
     let Some(sub) = snap.subsectors.get(ssidx) else {
@@ -941,32 +1129,57 @@ fn emit_subsector_flats(
     }
     let light = light_of(sec.light_level);
 
+    // ¿El piso es líquido? → marca kind=1 para que el shader lo ondule.
+    let floor_kind = if std::env::var_os("SUPAY_WATER_ALL").is_some()
+        || atlas
+            .flat_name(sec.floor_pic)
+            .map(|n| is_liquid_flat(&n))
+            .unwrap_or(false)
+    {
+        1.0
+    } else {
+        0.0
+    };
+
     // Piso: triángulo-fan del polígono convexo, winding tal cual.
     let floor = out.entry(TexKey::Flat(sec.floor_pic)).or_default();
-    fan_flat(floor, &poly, sec.floor_height, light, false);
+    fan_flat(floor, &poly, sec.floor_height, light, floor_kind);
 
-    // Techo: igual, a la altura del techo, salvo que sea cielo.
+    // Techo: igual, a la altura del techo, salvo que sea cielo (kind 0 — los
+    // techos no ondulan).
     let is_sky = snap.sky_pic != NO_SKY_PIC && sec.ceiling_pic == snap.sky_pic;
     if !is_sky {
         let ceil = out.entry(TexKey::Flat(sec.ceiling_pic)).or_default();
-        fan_flat(ceil, &poly, sec.ceiling_height, light, true);
+        fan_flat(ceil, &poly, sec.ceiling_height, light, 0.0);
     }
 }
 
 /// Triángula un polígono convexo como fan a altura `z`. Los flats de Doom son
-/// 64×64 alineados a la grilla mundial → UV = (x,y)/64.
-fn fan_flat(out: &mut Vec<Vertex>, poly: &[(f32, f32)], z: f32, light: f32, _ceiling: bool) {
+/// 64×64 alineados a la grilla mundial → UV = (x,y)/64. `kind` = 1.0 marca un
+/// flat líquido (lo ondula el shader).
+fn fan_flat(out: &mut Vec<Vertex>, poly: &[(f32, f32)], z: f32, light: f32, kind: f32) {
     let s = 1.0 / 64.0;
     let v = |(x, y): (f32, f32)| Vertex {
         pos: [x, y, z],
         uv: [x * s, y * s],
         light,
+        kind,
     };
     for i in 1..poly.len() - 1 {
         out.push(v(poly[0]));
         out.push(v(poly[i]));
         out.push(v(poly[i + 1]));
     }
+}
+
+/// `true` si el nombre de flat corresponde a un líquido animable de Doom
+/// (agua/nukage/lava/sangre/slime). Detección por prefijo, case-insensitive.
+fn is_liquid_flat(name: &str) -> bool {
+    let n = name.to_ascii_uppercase();
+    const LIQUIDS: &[&str] = &[
+        "NUKAGE", "FWATER", "SWATER", "BLOOD", "LAVA", "SLIME", "WATER",
+    ];
+    LIQUIDS.iter().any(|p| n.starts_with(p))
 }
 
 /// Clip Sutherland-Hodgman de un polígono convexo contra un semiplano. La
@@ -1090,7 +1303,8 @@ fn create_buffer_init(
 const WGSL: &str = r#"
 struct U {
     mvp: mat4x4<f32>,
-    eye: vec4<f32>,   // .xyz = posición de cámara, .w = densidad de diminishing
+    eye: vec4<f32>,     // .xyz = cámara, .w = densidad de diminishing
+    params: vec4<f32>,  // .x = time (s) para animar el agua
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var tex: texture_2d<f32>;
@@ -1101,26 +1315,108 @@ struct VOut {
     @location(0) uv: vec2<f32>,
     @location(1) light: f32,
     @location(2) dist: f32,
+    @location(3) kind: f32,
+    @location(4) world: vec2<f32>,  // xy mundo (para fase de ondas del agua)
 };
 
 @vertex
-fn vs(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) light: f32) -> VOut {
+fn vs(
+    @location(0) pos: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) light: f32,
+    @location(3) kind: f32,
+) -> VOut {
     var o: VOut;
     o.clip = u.mvp * vec4<f32>(pos, 1.0);
     o.uv = uv;
     o.light = light;
     o.dist = distance(pos, u.eye.xyz);
+    o.kind = kind;
+    o.world = pos.xy;
     return o;
 }
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
+    var uv = in.uv;
+    let t = u.params.x;
+    let is_water = in.kind > 0.5;
+
+    if (is_water) {
+        // Ondulación de la superficie: desplaza la UV con dos senos cruzados
+        // en fase con la posición mundial → la textura del líquido ondea.
+        let p = in.world * 0.06;
+        uv += vec2<f32>(sin(p.y + t * 1.6), cos(p.x + t * 1.4)) * 0.06;
+    }
+
+    let c = textureSample(tex, samp, uv);
+    if (c.a < 0.5) { discard; }
+
+    // Light diminishing estilo Doom: lo lejano se oscurece (piso 0.22).
+    let atten = clamp(1.0 - in.dist * u.eye.w, 0.22, 1.0);
+    var col = c.rgb * in.light * atten;
+
+    if (is_water) {
+        // Brillo especular móvil — destellos que recorren la superficie como
+        // reflejos sobre el líquido. Dos trenes de onda cruzados a distinta
+        // frecuencia para que no se vea periódico.
+        let p = in.world * 0.10;
+        let s1 = pow(0.5 + 0.5 * sin(p.x + p.y * 0.7 + t * 2.2), 8.0);
+        let s2 = pow(0.5 + 0.5 * sin(p.x * 1.7 - p.y + t * 1.5), 10.0);
+        let sh = s1 + s2 * 0.7;
+        // Sheen frío (azul-verdoso) aditivo + leve realce general para que el
+        // líquido "viva" más que un piso seco.
+        col += vec3<f32>(0.14, 0.20, 0.26) * sh;
+        col *= 1.10;
+    }
+
+    return vec4<f32>(col, 1.0);
+}
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::is_liquid_flat;
+
+    #[test]
+    fn detecta_liquidos_doom_y_freedoom() {
+        for n in ["NUKAGE1", "FWATER4", "SWATER1", "BLOOD3", "LAVA1", "SLIME05", "WATER"] {
+            assert!(is_liquid_flat(n), "{n} debería ser líquido");
+        }
+    }
+
+    #[test]
+    fn rechaza_flats_secos() {
+        for n in ["FLOOR0_5", "CEIL5_1", "RROCK17", "GRASS1", "MFLR8_3", "CRATOP1", "AQF001"] {
+            assert!(!is_liquid_flat(n), "{n} NO debería ser líquido");
+        }
+    }
+}
+
+/// Overlay 2D en clip-space (el arma en mano): posiciones ya en clip, sólo
+/// muestrea la textura con alpha-discard.
+const OVERLAY_WGSL: &str = r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct OOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>) -> OOut {
+    var o: OOut;
+    o.clip = vec4<f32>(pos, 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+
+@fragment
+fn fs(in: OOut) -> @location(0) vec4<f32> {
     let c = textureSample(tex, samp, in.uv);
     if (c.a < 0.5) { discard; }
-    // Light diminishing estilo Doom: lo lejano se oscurece (no funde a niebla,
-    // E1M1 no es brumoso). Piso 0.22 para que el fondo no quede negro.
-    let atten = clamp(1.0 - in.dist * u.eye.w, 0.22, 1.0);
-    return vec4<f32>(c.rgb * in.light * atten, 1.0);
+    return c;
 }
 "#;
 

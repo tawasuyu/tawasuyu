@@ -1681,6 +1681,7 @@ fn wgpu3d_pane(model: &Model) -> View<Msg> {
             yaw: snap.player.angle,
             pitch: snap.player.view_pitch,
             fov_x: std::f32::consts::FRAC_PI_2,
+            time: snap.tick as f32 / TICK_HZ as f32,
         };
         let mut guard = match renderer.lock() {
             Ok(g) => g,

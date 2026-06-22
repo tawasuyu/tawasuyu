@@ -92,7 +92,25 @@ fn main() {
     }
     engine.push_key(false, supay_core::keys::KEY_UPARROW);
     register(&snap, &engine, &mut kf, &mut ks);
+    // El sprite del arma en mano no está en snap.sprites — registrarlo aparte.
+    for ws in [snap.weapon.sprite, snap.weapon_flash.sprite] {
+        if ks.insert(ws) {
+            if let Some(name) = engine.sprite_name(ws) {
+                atlas.set_sprite_name(ws, name);
+            }
+        }
+    }
 
+    {
+        use std::collections::BTreeSet;
+        let mut flats = BTreeSet::new();
+        for sec in snap.sectors.iter() {
+            if let Some(n) = atlas.flat_name(sec.floor_pic) {
+                flats.insert(n);
+            }
+        }
+        eprintln!("flats de piso en escena: {:?}", flats);
+    }
     eprintln!(
         "escena: {} walls, {} sectors, {} subsectores, {} nodes; player ({:.0},{:.0}) ang {:.2}",
         snap.walls.len(),
@@ -128,6 +146,7 @@ fn main() {
         yaw: snap.player.angle,
         pitch: snap.player.view_pitch,
         fov_x: std::f32::consts::FRAC_PI_2, // 90°
+        time: snap.tick as f32 / 35.0,
     };
 
     let mut enc = hal

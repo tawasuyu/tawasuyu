@@ -112,6 +112,16 @@ impl WadAtlas {
             .unwrap_or(false)
     }
 
+    /// Nombre del flat para `pic_idx` (registrado vía `set_flat_name`), o
+    /// `None` si todavía no se vio. Lo usa el renderer wgpu para detectar
+    /// flats líquidos (NUKAGE/FWATER/LAVA/BLOOD/SLIME…) y animarlos.
+    pub fn flat_name(&self, pic_idx: u16) -> Option<String> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|i| i.flat_names.get(&pic_idx).cloned())
+    }
+
     /// Registra el 4-char name del sprite para un `spritenum`. Usado
     /// por el host análogo a [`Self::set_flat_name`]. Invalida los
     /// patches cacheados para ese spritenum (por si los frames
