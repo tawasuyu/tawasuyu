@@ -229,7 +229,7 @@ impl DoomGpuRenderer {
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("doom3d-uniform"),
-            size: 64, // mat4x4<f32>
+            size: 80, // mat4x4<f32> (64) + vec4 eye/fog (16)
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -284,9 +284,11 @@ impl DoomGpuRenderer {
         atlas: &WadAtlas,
         snap: &SceneSnapshot,
     ) {
-        // 1. Acumular vértices por clave de textura (CPU).
+        // 1. Acumular vértices por clave de textura (CPU). Las paredes
+        //    necesitan el tamaño real de cada textura (para UV correctas +
+        //    pegging de Doom), así que el builder consulta el atlas.
         let mut by_tex: HashMap<TexKey, Vec<Vertex>> = HashMap::new();
-        build_walls(snap, &mut by_tex);
+        build_walls(snap, atlas, &mut by_tex);
         build_flats(snap, &mut by_tex);
 
         // 2. Asegurar que cada textura referida esté subida a GPU.
@@ -358,8 +360,12 @@ impl DoomGpuRenderer {
         }
         let mvp = cam.mvp(w as f32 / h as f32);
         let m = mvp.to_cols_array();
-        let mut bytes = Vec::with_capacity(64);
+        let mut bytes = Vec::with_capacity(80);
         for v in m {
+            bytes.extend_from_slice(&v.to_ne_bytes());
+        }
+        // eye.xyz + densidad de diminishing en .w (≈ 1/2500 unidades Doom).
+        for v in [cam.x, cam.y, cam.eye_z, 1.0 / 2500.0] {
             bytes.extend_from_slice(&v.to_ne_bytes());
         }
         queue.write_buffer(&self.uniform_buf, 0, &bytes);
@@ -444,13 +450,21 @@ fn light_of(level: u8) -> f32 {
     0.12 + 0.88 * (level as f32 / 255.0)
 }
 
+/// Tamaño (w, h) en téxeles de una textura de pared, o `None` si no resuelve.
+fn wall_tex_dims(atlas: &WadAtlas, name: &str) -> Option<(f32, f32)> {
+    atlas
+        .wall_texture(name)
+        .map(|t| (t.width as f32, t.height as f32))
+}
+
 /// Emite los quads de una pared. Cada linedef se procesa por lado: el lado
 /// frente (front_sector como "cerca") y, si es two-sided, el lado de atrás.
-fn build_walls(snap: &SceneSnapshot, out: &mut HashMap<TexKey, Vec<Vertex>>) {
+fn build_walls(snap: &SceneSnapshot, atlas: &WadAtlas, out: &mut HashMap<TexKey, Vec<Vertex>>) {
     for wall in snap.walls.iter() {
         // Lado frente.
         emit_wall_side(
             snap,
+            atlas,
             out,
             wall.x1,
             wall.y1,
@@ -458,6 +472,7 @@ fn build_walls(snap: &SceneSnapshot, out: &mut HashMap<TexKey, Vec<Vertex>>) {
             wall.y2,
             wall.front_sector,
             wall.back_sector,
+            wall.flags,
             [&wall.textures[0], &wall.textures[1], &wall.textures[2]],
             wall.tex_x_offsets[0],
             wall.tex_y_offsets[0],
@@ -467,6 +482,7 @@ fn build_walls(snap: &SceneSnapshot, out: &mut HashMap<TexKey, Vec<Vertex>>) {
         if wall.back_sector != NO_SECTOR {
             emit_wall_side(
                 snap,
+                atlas,
                 out,
                 wall.x2,
                 wall.y2,
@@ -474,6 +490,7 @@ fn build_walls(snap: &SceneSnapshot, out: &mut HashMap<TexKey, Vec<Vertex>>) {
                 wall.y1,
                 wall.back_sector,
                 wall.front_sector,
+                wall.flags,
                 [&wall.textures[3], &wall.textures[4], &wall.textures[5]],
                 wall.tex_x_offsets[1],
                 wall.tex_y_offsets[1],
@@ -485,6 +502,7 @@ fn build_walls(snap: &SceneSnapshot, out: &mut HashMap<TexKey, Vec<Vertex>>) {
 #[allow(clippy::too_many_arguments)]
 fn emit_wall_side(
     snap: &SceneSnapshot,
+    atlas: &WadAtlas,
     out: &mut HashMap<TexKey, Vec<Vertex>>,
     x1: f32,
     y1: f32,
@@ -492,6 +510,7 @@ fn emit_wall_side(
     y2: f32,
     near_idx: u32,
     far_idx: u32,
+    flags: u32,
     texs: [&[u8; 8]; 3], // [mid, upper, lower]
     xoff: f32,
     yoff: f32,
@@ -509,39 +528,47 @@ fn emit_wall_side(
     } else {
         None
     };
+    let (far_floor, far_ceil) = (far.map(|f| f.floor_height), far.map(|f| f.ceiling_height));
+
+    // Helper: resuelve dims + pegging (vía wall_v_top) y empuja el quad.
+    let mut emit = |out: &mut HashMap<TexKey, Vec<Vertex>>,
+                    slot: &[u8; 8],
+                    kind: usize,
+                    z_bot: f32,
+                    z_top: f32| {
+        let Some(name) = tex_name(slot) else {
+            return;
+        };
+        let (tw, th) = wall_tex_dims(atlas, &name).unwrap_or((64.0, 64.0));
+        // V (en téxeles) en el borde superior del slab, según pegging Doom.
+        let v_top = crate::walls::wall_v_top(
+            kind, flags, nf, nc, far_floor, far_ceil, z_top, th, yoff,
+        );
+        push_wall_quad(
+            out, name, tw, th, x1, y1, x2, y2, z_bot, z_top, len, xoff, v_top, light,
+        );
+    };
 
     match far {
         None => {
-            // Pared sólida: un quad piso→techo con la textura "mid" (front).
-            if let Some(name) = tex_name(texs[0]) {
-                push_wall_quad(out, name, x1, y1, x2, y2, nf, nc, len, xoff, yoff, light);
-            }
+            // Pared sólida: un quad piso→techo con la textura "mid" (kind 0).
+            emit(out, texs[0], 0, nf, nc);
         }
         Some(far) => {
-            // Lower: el piso del far sube por encima del near.
+            // Lower (kind 2): el piso del far sube por encima del near.
             if far.floor_height > nf {
-                if let Some(name) = tex_name(texs[2]) {
-                    push_wall_quad(
-                        out, name, x1, y1, x2, y2, nf, far.floor_height, len, xoff, yoff, light,
-                    );
-                }
+                emit(out, texs[2], 2, nf, far.floor_height);
             }
-            // Upper: el techo del far baja por debajo del near.
+            // Upper (kind 1): el techo del far baja por debajo del near.
             if far.ceiling_height < nc {
-                if let Some(name) = tex_name(texs[1]) {
-                    push_wall_quad(
-                        out, name, x1, y1, x2, y2, far.ceiling_height, nc, len, xoff, yoff, light,
-                    );
-                }
+                emit(out, texs[1], 1, far.ceiling_height, nc);
             }
-            // Middle: textura colgante (rejas/transparencias). El shader
-            // descarta los téxeles con alpha < 0.5.
-            if let Some(name) = tex_name(texs[0]) {
-                let zb = nf.max(far.floor_height);
-                let zt = nc.min(far.ceiling_height);
-                if zt > zb {
-                    push_wall_quad(out, name, x1, y1, x2, y2, zb, zt, len, xoff, yoff, light);
-                }
+            // Middle (kind 0): textura colgante (rejas/transparencias). El
+            // shader descarta los téxeles con alpha < 0.5.
+            let zb = nf.max(far.floor_height);
+            let zt = nc.min(far.ceiling_height);
+            if zt > zb {
+                emit(out, texs[0], 0, zb, zt);
             }
         }
     }
@@ -551,6 +578,8 @@ fn emit_wall_side(
 fn push_wall_quad(
     out: &mut HashMap<TexKey, Vec<Vertex>>,
     tex_name: String,
+    tex_w: f32,
+    tex_h: f32,
     x1: f32,
     y1: f32,
     x2: f32,
@@ -559,33 +588,23 @@ fn push_wall_quad(
     z_top: f32,
     len: f32,
     xoff: f32,
-    yoff: f32,
+    v_top_texels: f32,
     light: f32,
 ) {
-    // UV: U a lo largo del linedef en téxeles (xoff..xoff+len), V vertical
-    // anclada arriba (z_top → V=yoff). El shader hace Repeat, así que dividir
-    // por el tamaño de la textura lo hace el sampler en téxeles → pasamos
-    // coords en téxeles y el sampler las envuelve. (Para Repeat correcto, las
-    // coords deben estar en [0,1] escaladas; acá usamos téxeles asumiendo
-    // texturas potencia-de-dos típicas de Doom; el wrap mod-1 del sampler
-    // tras normalizar lo resolvemos pasando u/w. Pero como no conocemos w
-    // acá, normalizamos en téxeles y dejamos que el sampler envuelva por la
-    // fracción — ver nota.) Aproximación de milestone: U,V en téxeles / 64.
-    // NOTA: la alineación fina de téxeles depende del tamaño real de la
-    // textura; eso se ajusta en el paso de texturas. Acá garantizamos NO
-    // warping (perspectiva correcta) que es lo que prueba el milestone.
-    let u0 = xoff;
-    let u1 = xoff + len;
-    let v_top = yoff;
-    let v_bot = yoff + (z_top - z_bot);
-    // Dividimos por 64 como escala nominal de téxel→UV; el sampler Repeat
-    // envuelve. Texturas de otro tamaño se reescalan en una iteración futura.
-    let s = 1.0 / 64.0;
+    // UV normalizadas al tamaño REAL de la textura (el sampler Repeat envuelve
+    // las fracciones > 1). U a lo largo del linedef; V con el pegging de Doom
+    // ya resuelto por `wall_v_top` (téxeles desde el borde superior).
+    let tw = tex_w.max(1.0);
+    let th = tex_h.max(1.0);
+    let u0 = xoff / tw;
+    let u1 = (xoff + len) / tw;
+    let v_t = v_top_texels / th;
+    let v_b = (v_top_texels + (z_top - z_bot)) / th;
     let verts = out.entry(TexKey::Wall(tex_name)).or_default();
-    let tl = Vertex { pos: [x1, y1, z_top], uv: [u0 * s, v_top * s], light };
-    let tr = Vertex { pos: [x2, y2, z_top], uv: [u1 * s, v_top * s], light };
-    let bl = Vertex { pos: [x1, y1, z_bot], uv: [u0 * s, v_bot * s], light };
-    let br = Vertex { pos: [x2, y2, z_bot], uv: [u1 * s, v_bot * s], light };
+    let tl = Vertex { pos: [x1, y1, z_top], uv: [u0, v_t], light };
+    let tr = Vertex { pos: [x2, y2, z_top], uv: [u1, v_t], light };
+    let bl = Vertex { pos: [x1, y1, z_bot], uv: [u0, v_b], light };
+    let br = Vertex { pos: [x2, y2, z_bot], uv: [u1, v_b], light };
     // Dos triángulos (sin cull, el winding no importa).
     verts.extend_from_slice(&[tl, bl, br, tl, br, tr]);
 }
@@ -838,7 +857,10 @@ fn create_buffer_init(
 }
 
 const WGSL: &str = r#"
-struct U { mvp: mat4x4<f32> };
+struct U {
+    mvp: mat4x4<f32>,
+    eye: vec4<f32>,   // .xyz = posición de cámara, .w = densidad de diminishing
+};
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -847,6 +869,7 @@ struct VOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) light: f32,
+    @location(2) dist: f32,
 };
 
 @vertex
@@ -855,6 +878,7 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) ligh
     o.clip = u.mvp * vec4<f32>(pos, 1.0);
     o.uv = uv;
     o.light = light;
+    o.dist = distance(pos, u.eye.xyz);
     return o;
 }
 
@@ -862,6 +886,9 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) ligh
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let c = textureSample(tex, samp, in.uv);
     if (c.a < 0.5) { discard; }
-    return vec4<f32>(c.rgb * in.light, 1.0);
+    // Light diminishing estilo Doom: lo lejano se oscurece (no funde a niebla,
+    // E1M1 no es brumoso). Piso 0.22 para que el fondo no quede negro.
+    let atten = clamp(1.0 - in.dist * u.eye.w, 0.22, 1.0);
+    return vec4<f32>(c.rgb * in.light * atten, 1.0);
 }
 "#;
