@@ -194,6 +194,11 @@ impl SkyBackdrop {
         }
     }
 
+    /// ¿Ya tiene textura cargada? Útil para subirla una sola vez.
+    pub fn has_texture(&self) -> bool {
+        self.tex.is_some()
+    }
+
     /// Sube/reemplaza la textura del cielo (RGBA8, `w×h`, fila contigua sin
     /// padding). `data.len()` debe ser `w*h*4`.
     pub fn set_texture(
