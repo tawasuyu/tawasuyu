@@ -94,6 +94,7 @@ mod sprites;
 mod palette;
 mod hud;
 mod godrays;
+pub mod postproc;
 
 pub use atlas::*;
 pub use config::*;

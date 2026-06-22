@@ -69,7 +69,7 @@ use app_bus::{AppMenu, Menu, MenuItem};
 use supay_core::{
     keys, DoomEngine, SceneSnapshot, SnapshotPair, WallSeg, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH,
 };
-use supay_render_llimphi::{scene_view, RenderConfig, WadAtlas};
+use supay_render_llimphi::{postproc, scene_view, RenderConfig, WadAtlas};
 use supay_wad::Wad;
 
 // =====================================================================
@@ -374,6 +374,10 @@ struct Model {
     /// — el contextual expone las acciones de juego (disparar / usar /
     /// vista), no edición.
     context_menu: Option<(f32, f32)>,
+    /// Fase 4-post: realce del framebuffer clásico (bloom + grading +
+    /// viñeta) on/off (F2). Default on — el modo Framebuffer se ve más vivo
+    /// sin tocar la geometría. Off = doomgeneric crudo bit-exacto.
+    fb_enhance: bool,
     /// Pantalla de adquisición del WAD. `Some` ⇒ falta el IWAD y pintamos
     /// el panel de descarga (campo de directorio + botón Descargar) en
     /// lugar del juego; `None` ⇒ el motor ya booteó con un WAD válido.
@@ -495,6 +499,8 @@ enum Msg {
     Frame,
     Key(KeyEvent),
     ToggleViewMode,
+    /// Fase 4-post: alterna el realce del framebuffer clásico (F2).
+    ToggleFbEnhance,
     /// Fase 3.17: cambio de pitch cosmético. `delta` se suma al
     /// `view_pitch` actual y se clampea a ±PITCH_MAX. `delta=0.0` con
     /// `reset=true` fuerza pitch=0.
@@ -634,6 +640,7 @@ impl App for Supay {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
+            fb_enhance: true,
             acquire,
         }
     }
@@ -683,6 +690,10 @@ impl App for Supay {
             if matches!(&e.key, Key::Named(NamedKey::F12)) {
                 // F12 cierra la ventana — Esc lo manejamos como KEY_ESCAPE del juego.
                 return Some(Msg::Quit);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F2)) {
+                // F2 alterna el realce del framebuffer clásico (Fase 4-post).
+                return Some(Msg::ToggleFbEnhance);
             }
             if matches!(&e.key, Key::Named(NamedKey::F3)) {
                 // F3 alterna framebuffer ↔ renderer 3D (Fase 1 ↔ Fase 3.0).
@@ -931,6 +942,12 @@ impl App for Supay {
                     ViewMode::Framebuffer => ViewMode::Scene3d,
                     ViewMode::Scene3d => ViewMode::Framebuffer,
                 };
+            }
+            Msg::ToggleFbEnhance => {
+                m.fb_enhance = !m.fb_enhance;
+                // Reaplicar el realce al frame actual ya (sin esperar al
+                // próximo tick) para que el toggle se vea instantáneo.
+                refresh_framebuffer(&mut m);
             }
             Msg::PitchDelta { delta, reset } => {
                 m.view_pitch = if reset {
@@ -1270,6 +1287,10 @@ fn app_menu(model: &Model) -> AppMenu {
                     )
                     .shortcut("F3"),
                 )
+                .item(
+                    toggle("Realce (bloom+grading)", model.fb_enhance, "view.fb_enhance")
+                        .shortcut("F2"),
+                )
                 .item(toggle("Crosshair", model.show_crosshair, "view.crosshair").shortcut("F4"))
                 .item(MenuItem::new("Ciclar viñeta", "view.vignette").shortcut("F5"))
                 .item(toggle("HUD", model.show_hud, "view.hud").shortcut("F6"))
@@ -1295,6 +1316,7 @@ fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
         "play.use" => Some(Msg::DoomKeyTap(keys::KEY_USE)),
         "play.map" => Some(Msg::DoomKeyTap(keys::KEY_TAB)),
         "view.toggle_mode" => Some(Msg::ToggleViewMode),
+        "view.fb_enhance" => Some(Msg::ToggleFbEnhance),
         "view.crosshair" => Some(Msg::ToggleCrosshair),
         "view.vignette" => Some(Msg::CycleVignette),
         "view.hud" => Some(Msg::ToggleHud),
@@ -2058,6 +2080,18 @@ fn refresh_framebuffer(m: &mut Model) {
         dst[o + 2] = b;
         dst[o + 3] = a;
     }
+    // Fase 4-post: realce screen-space del framebuffer correcto (bloom +
+    // grading + viñeta). `Enhance::OFF` es identidad bit-exacta, así que con
+    // el toggle apagado el píxel sale igual que el doomgeneric original.
+    let cfg = if m.fb_enhance {
+        postproc::Enhance::RICH
+    } else {
+        postproc::Enhance::OFF
+    };
+    // La status bar clásica de Doom ocupa las últimas 32/200 filas → 64 a
+    // 640×400. La protegemos del realce para no oscurecer el HUD.
+    const STATUSBAR_PX: usize = DOOM_HEIGHT * 32 / 200;
+    postproc::enhance_framebuffer(dst, DOOM_WIDTH, DOOM_HEIGHT, &cfg, STATUSBAR_PX);
 }
 
 /// Traduce un evento de teclado Llimphi a código Doom. Devolver
