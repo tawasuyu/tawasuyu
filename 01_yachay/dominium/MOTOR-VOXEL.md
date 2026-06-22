@@ -620,6 +620,43 @@ gráfica **conocida y documentada** sobre un stack GPU que ya existe. La ruta
 ray-march mueve el esfuerzo de "pipeline de meshing" a "shaders de traversal" —
 distinto, pero dominio acotado. wawa fue el monte; esto es una colina con sendero.
 
+### 11.6 Efectos genéricos cosechados de supay (2026-06-22)
+
+El renderer wgpu 2.5D de Doom (`02_ruway/supay/supay-render-llimphi/wgpu3d.rs`)
+había acumulado efectos GPU que en realidad son **generales**. Se subieron a
+`llimphi-3d` en su forma agnóstica (sin tipos de Doom) — disponibles para
+cosmos (cartas/cuerpos 3D), nahual (galerías) y la app voxel. Cada uno trae
+test naga del shader + un `example` headless certificado por texto (no por mirar
+PNG, ver regla #8 de CLAUDE.md):
+
+- **`PostFx` / `PostFxConfig`** (`postfx.rs`, example `postfx_demo`): SSAA
+  (supersampling) + bloom como post-proceso reutilizable. API idiomática wgpu:
+  `prepare()` (targets+uniforms) → `scene_pass()` (pase supersampleado, depth
+  Depth32Float) → `resolve()` (bright-pass+blur→bloom, blit SSAA+suma con
+  `LoadOp::Load`). **supay ES consumidor**.
+- **Point-lights en `Renderer3d`** (forward-mesh, example `mesh_lights_demo`):
+  luces puntuales coloreadas (`PointLight`, el mismo tipo del ray-marcher).
+  Normal **plana por derivadas screen-space** (no exige normales por vértice).
+  `ambient` default `[1,1,1]` + 0 luces ⇒ render idéntico al plano de antes.
+- **`SkyBackdrop` / `SkyParams`** (`sky.rs`): cielo cilíndrico fullscreen (depth
+  Always, sin write). Los números Doom (tileo 4×, estiramiento 1.8×) son params.
+  **supay ES consumidor**.
+- **`Billboards` / `Billboard`** (`billboard.rs`, example `sky_billboard_demo`):
+  quads instanciados de cara a la cámara (atlas + sub-rect UV + tinte,
+  alpha-discard); el quad lo arma el vertex shader con los ejes right/up.
+- **`PlanarReflection` / `ReflectionPlane` / `SurfaceParams`** (`reflection.rs`,
+  example `reflection_demo`): plano espejo arbitrario (Householder `mirror()`),
+  render target de reflexión (`reflection_pass()`) + superficie reflectante lista
+  (muestreo screen-space + ondas + Fresnel + tinte). **supay consume `mirror()`**
+  (su `reflect_across_z` era un caso particular).
+
+**Qué NO se migró en supay** (a propósito): sprites y agua siguen fusionados al
+shader principal del mundo de Doom porque comparten fog / light-diminishing /
+luces dinámicas / textura de líquido animada / multi-plano. Consumir los módulos
+genéricos ahí sería un downgrade visual salvo que se les porten esos features
+Doom (lo que rompería el "genérico"). Sólo se migró lo que era 100% equivalente
+sin pérdida (PostFx, cielo, matriz espejo).
+
 ## 12. Rama machinima — "filmar" escenas voxel (2026-06-17)
 
 Norte nuevo del usuario, y el *porqué* original de querer un Minecraft: **generar
