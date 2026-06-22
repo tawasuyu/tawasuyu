@@ -353,9 +353,29 @@ impl PointerHandler for LayerApp {
                             .as_ref()
                             .and_then(|c| hit_test_hover(&c.mounted, &c.computed, px, py));
                         if self.panels[pi].hover_idx != nuevo {
+                            let viejo = self.panels[pi].hover_idx;
                             self.panels[pi].hover_idx = nuevo;
                             self.panels[pi].dirty = true;
                             self.update_tooltip(pi, nuevo, qh);
+                            // Despachar on_pointer_leave del nodo que abandonamos y
+                            // on_pointer_enter del recién hovereado — habilita los
+                            // submenús al hover (categorías → apps del menú inicio).
+                            let leave = viejo.and_then(|i| {
+                                self.panels[pi].cache.as_ref().and_then(|c| {
+                                    c.mounted.nodes.get(i).and_then(|n| n.on_pointer_leave.clone())
+                                })
+                            });
+                            let enter = nuevo.and_then(|i| {
+                                self.panels[pi].cache.as_ref().and_then(|c| {
+                                    c.mounted.nodes.get(i).and_then(|n| n.on_pointer_enter.clone())
+                                })
+                            });
+                            if let Some(m) = leave {
+                                self.handle_msg(m);
+                            }
+                            if let Some(m) = enter {
+                                self.handle_msg(m);
+                            }
                         }
                         // Dock: la lupa sigue al puntero — re-render por cada
                         // motion guardando la X local del panel.

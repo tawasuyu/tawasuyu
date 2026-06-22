@@ -25,6 +25,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     Rect as TaffyRect,
 };
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, Point};
+use llimphi_ui::llimphi_raster::peniko::{Color, Gradient};
+use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
 use app_bus::AppEntry;
@@ -643,8 +646,6 @@ const MENU_ROW_H: f32 = 28.0;
 const MENU_ROW_GAP: f32 = 2.0;
 /// Alto del campo de búsqueda (px).
 const MENU_SEARCH_H: f32 = 34.0;
-/// Ancho del menú de inicio desplegado, en px.
-const START_MENU_W: f32 = 280.0;
 
 /// Filtra el registro por `query` (substring, sin distinguir mayúsculas).
 pub fn menu_filtered<'a>(apps: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry> {
@@ -654,8 +655,6 @@ pub fn menu_filtered<'a>(apps: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry>
         .collect()
 }
 
-/// Encabezado de categoría en la lista clásica: franja tenue con el nombre en
-/// mayúsculas, estilo separador de sección.
 /// Nombre legible de una categoría. Las apps de la suite usan el slug del
 /// cuadrante (`ukupacha`/`ruway`/…); lo traducimos a algo entendible. Cualquier
 /// otra categoría (apps XDG) se muestra tal cual.
@@ -669,48 +668,7 @@ fn nombre_categoria(cat: &str) -> String {
     }
 }
 
-fn menu_category_header(cat: &str, theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(MENU_ROW_H) },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::FlexStart),
-        padding: TaffyRect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .text(nombre_categoria(cat).to_uppercase(), 10.5, theme.fg_muted)
-}
-
-/// Las filas de la lista clásica **agrupadas por categoría**: un encabezado por
-/// categoría + sus apps debajo. «Otros» (sin categoría) va al final.
-fn classic_grouped_rows(matches: &[&AppEntry], theme: &Theme) -> Vec<View<Msg>> {
-    use std::collections::BTreeMap;
-    let mut by_cat: BTreeMap<String, Vec<&AppEntry>> = BTreeMap::new();
-    for a in matches {
-        let cat = a
-            .category
-            .as_deref()
-            .filter(|c| !c.trim().is_empty())
-            .unwrap_or("Otros")
-            .to_string();
-        by_cat.entry(cat).or_default().push(*a);
-    }
-    let mut cats: Vec<String> = by_cat.keys().cloned().collect();
-    cats.sort_by_key(|c| (c == "Otros", c.clone()));
-    let mut rows = Vec::new();
-    for cat in &cats {
-        rows.push(menu_category_header(cat, theme));
-        for a in &by_cat[cat] {
-            rows.push(app_row(a, theme));
-        }
-    }
-    rows
-}
-
+#[allow(clippy::too_many_arguments)]
 pub fn start_menu_body(
     apps: &[AppEntry],
     query: &str,
@@ -719,6 +677,8 @@ pub fn start_menu_body(
     theme: &Theme,
     style: crate::MenuStyle,
     columns: u32,
+    menu_cat: Option<usize>,
+    open_t: f32,
 ) -> View<Msg> {
     // El control único: el estilo elige el cuerpo. `Classic` = la lista sobria
     // de abajo; `Xp`/`Gnome` reutilizan los cuerpos de `start_menus`.
@@ -731,99 +691,25 @@ pub fn start_menu_body(
     }
     let matches = menu_filtered(apps, query);
 
-    let texto_busqueda = if query.is_empty() {
-        "Buscar aplicaciones…".to_string()
-    } else {
-        query.to_string()
-    };
-    let conteo = format!("{}", matches.len());
-    let search = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(MENU_SEARCH_H) },
-        align_items: Some(AlignItems::Center),
-        padding: TaffyRect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_app)
-    .radius(6.0)
-    .children(vec![
-        View::new(Style {
-            size: Size { width: length(16.0_f32), height: length(MENU_SEARCH_H) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .text("⌕".to_string(), 14.0, theme.accent),
-        View::new(Style {
-            flex_grow: 1.0,
-            size: Size { width: auto(), height: length(MENU_SEARCH_H) },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text(
-            texto_busqueda,
-            13.0,
-            if query.is_empty() { theme.fg_muted } else { theme.fg_text },
-        ),
-        View::new(Style {
-            size: Size { width: auto(), height: length(MENU_SEARCH_H) },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text(conteo, 11.0, theme.fg_muted),
-    ]);
+    let search = menu_search_bar(query, matches.len(), theme);
 
-    let filas: Vec<View<Msg>> = if matches.is_empty() {
-        vec![View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(MENU_ROW_H) },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text(
-            if query.is_empty() {
-                "sin apps (¿XDG_DATA_DIRS? ¿~/.config/tawasuyu/apps/?)".to_string()
-            } else {
-                format!("sin resultados para «{query}»")
-            },
-            12.0,
-            theme.fg_muted,
-        )]
-    } else if query.is_empty() {
-        // Sin búsqueda: agrupadas por categoría (encabezados de sección).
-        classic_grouped_rows(&matches, theme)
+    let content_h = viewport_h.max(MENU_ROW_H);
+    let content = if !query.is_empty() {
+        // Buscando: lista plana de coincidencias a ancho completo (sin paneles).
+        classic_search_results(&matches, query, offset, content_h, theme)
     } else {
-        // Buscando: lista plana de coincidencias (sin encabezados).
-        matches.iter().map(|a| app_row(a, theme)).collect()
+        // Reposo: dos paneles — categorías a la izquierda, sus apps a la derecha
+        // (el hover sobre una categoría las trae; ver `Msg::MenuHoverCategory`).
+        classic_two_pane(apps, menu_cat, offset, content_h, theme)
     };
 
-    let content_len = filas.len() as f32 * (MENU_ROW_H + MENU_ROW_GAP);
-    let lista_inner = View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: auto() },
-        gap: Size { width: length(0.0_f32), height: length(MENU_ROW_GAP) },
-        ..Default::default()
-    })
-    .children(filas);
-    let lista = scroll_y(
-        clamp_offset(offset, content_len, viewport_h),
-        content_len,
-        viewport_h,
-        lista_inner,
-        Msg::StartScroll,
-        &ScrollPalette::from_theme(theme),
-    );
-    let lista_wrap = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(viewport_h.max(MENU_ROW_H)) },
-        ..Default::default()
-    })
-    .children(vec![lista]);
+    // Apertura: fade + leve deslizamiento hacia abajo (ease-out cúbico).
+    let eased = 1.0 - (1.0 - open_t.clamp(0.0, 1.0)).powi(3);
+    let dy = ((1.0 - eased) * -10.0) as f64;
+
+    // Fondo con gradiente vertical sutil (un brillo arriba que cae al tono base).
+    let g = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(0.0, 1.0))
+        .with_stops([widgets::aclarar(theme.bg_panel, 0.07), theme.bg_panel].as_slice());
 
     let panel = View::new(Style {
         position: Position::Absolute,
@@ -834,22 +720,25 @@ pub fn start_menu_body(
             bottom: auto(),
         },
         size: Size {
-            width: length(START_MENU_W),
+            width: length(MENU_PANEL_W),
             height: auto(),
         },
         flex_direction: FlexDirection::Column,
         padding: TaffyRect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
-            top: length(8.0_f32),
-            bottom: length(8.0_f32),
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
         },
-        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .radius(10.0)
-    .children(vec![search, lista_wrap]);
+    .fill_gradient(g)
+    .radius(14.0)
+    .border(1.0, widgets::aclarar(theme.border, 0.10))
+    .alpha(eased)
+    .transform(Affine::translate((0.0, dy)))
+    .children(vec![search, separador_h(theme), content]);
 
     // Scrim a ancho completo del área: cierra al click fuera del panel.
     View::new(Style {
@@ -867,28 +756,287 @@ pub fn start_menu_body(
     .children(vec![panel])
 }
 
-/// Una fila del menú de inicio: ícono + label, clickeable.
-fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
-    let badge = View::new(Style {
-        size: Size { width: length(22.0_f32), height: length(22.0_f32) },
+/// Ancho del menú de inicio Classic (dos paneles).
+const MENU_PANEL_W: f32 = 460.0;
+/// Ancho de la columna de categorías.
+const CAT_COL_W: f32 = 150.0;
+/// Lado del recuadro del ícono de una app (uniforme para todas).
+const ICON_BOX: f32 = 24.0;
+/// Alto de una fila de app / categoría.
+const APP_ROW_H: f32 = 32.0;
+
+/// Una categoría del menú: nombre legible + sus apps (ya ordenadas).
+struct MenuCat<'a> {
+    name: String,
+    apps: Vec<&'a AppEntry>,
+}
+
+/// Agrupa las apps por categoría y las ordena: primero los cuatro cuadrantes de
+/// la suite (Percibir/Conocer/Crear/Sistema), luego el resto alfabético, y
+/// «Otros» al final. Dentro de cada categoría, las apps van por rótulo.
+fn build_menu_cats(apps: &[AppEntry]) -> Vec<MenuCat<'_>> {
+    use std::collections::BTreeMap;
+    let mut by: BTreeMap<String, Vec<&AppEntry>> = BTreeMap::new();
+    for a in apps {
+        let c = a
+            .category
+            .as_deref()
+            .filter(|c| !c.trim().is_empty())
+            .unwrap_or("Otros")
+            .to_string();
+        by.entry(c).or_default().push(a);
+    }
+    let order = ["unanchay", "yachay", "ruway", "ukupacha"];
+    let mut keys: Vec<String> = by.keys().cloned().collect();
+    keys.sort_by_key(|k| match order.iter().position(|o| o == k) {
+        Some(i) => (0u8, i, String::new()),
+        None if k == "Otros" => (2, 0, k.clone()),
+        None => (1, 0, k.clone()),
+    });
+    keys.into_iter()
+        .map(|k| {
+            let mut apps = by.remove(&k).unwrap_or_default();
+            apps.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+            MenuCat { name: nombre_categoria(&k), apps }
+        })
+        .collect()
+}
+
+/// Barra de búsqueda del menú: lupa + texto/placeholder + conteo, fondo hundido.
+fn menu_search_bar(query: &str, count: usize, theme: &Theme) -> View<Msg> {
+    let texto = if query.is_empty() {
+        "Buscar aplicaciones…".to_string()
+    } else {
+        query.to_string()
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(MENU_SEARCH_H) },
         align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
+        padding: TaffyRect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![start_menus::app_icon_content(a, 14.0, theme.accent)]);
-    let nombre = View::new(Style {
-        size: Size { width: auto(), height: length(28.0_f32) },
-        align_items: Some(AlignItems::Center),
+    .fill(theme.bg_app)
+    .radius(8.0)
+    .border(1.0, widgets::aclarar(theme.border, 0.08))
+    .children(vec![
+        View::new(Style {
+            size: Size { width: length(16.0_f32), height: length(MENU_SEARCH_H) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text("⌕".to_string(), 14.0, theme.accent),
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: auto(), height: length(MENU_SEARCH_H) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(
+            texto,
+            13.0,
+            if query.is_empty() { theme.fg_muted } else { theme.fg_text },
+            Alignment::Start,
+        )
+        .ellipsis(1),
+        View::new(Style {
+            size: Size { width: auto(), height: length(MENU_SEARCH_H) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(format!("{count}"), 11.0, theme.fg_muted),
+    ])
+}
+
+/// Separador horizontal fino (línea tenue de sección).
+fn separador_h(theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(1.0_f32) },
+        flex_shrink: 0.0,
         ..Default::default()
     })
-    .text(a.label.clone(), 13.0, theme.fg_text);
+    .fill(widgets::aclarar(theme.border, 0.06))
+}
+
+/// Separador vertical fino (entre la columna de categorías y la de apps).
+fn separador_v(theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(1.0_f32), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(widgets::aclarar(theme.border, 0.06))
+}
+
+/// Los dos paneles: categorías (izq) → apps de la activa (der).
+fn classic_two_pane(
+    apps: &[AppEntry],
+    menu_cat: Option<usize>,
+    offset: f32,
+    viewport_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    let cats = build_menu_cats(apps);
+    if cats.is_empty() {
+        return View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(viewport_h) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text(
+            "sin apps (¿XDG_DATA_DIRS? ¿~/.config/tawasuyu/apps/?)".to_string(),
+            12.0,
+            theme.fg_muted,
+        );
+    }
+    let activa = menu_cat.unwrap_or(0).min(cats.len() - 1);
+
+    // Columna de categorías.
+    let cat_rows: Vec<View<Msg>> = cats
+        .iter()
+        .enumerate()
+        .map(|(i, c)| category_row(i, c, i == activa, theme))
+        .collect();
+    let cat_col = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(CAT_COL_W), height: length(viewport_h) },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(cat_rows);
+
+    // Columna de apps de la categoría activa (scrolleable).
+    let app_rows: Vec<View<Msg>> =
+        cats[activa].apps.iter().map(|a| menu_app_row(a, theme)).collect();
+    let content_len = app_rows.len() as f32 * (APP_ROW_H + 2.0);
+    let app_inner = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .children(app_rows);
+    let app_scroll = scroll_y(
+        clamp_offset(offset, content_len, viewport_h),
+        content_len,
+        viewport_h,
+        app_inner,
+        Msg::StartScroll,
+        &ScrollPalette::from_theme(theme),
+    );
+    let app_col = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(viewport_h) },
+        ..Default::default()
+    })
+    .children(vec![app_scroll]);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        size: Size { width: percent(1.0_f32), height: length(viewport_h) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![cat_col, separador_v(theme), app_col])
+}
+
+/// Resultados de búsqueda: lista plana a ancho completo.
+fn classic_search_results(
+    matches: &[&AppEntry],
+    query: &str,
+    offset: f32,
+    viewport_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    if matches.is_empty() {
+        return View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(viewport_h) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text(format!("sin resultados para «{query}»"), 12.0, theme.fg_muted);
+    }
+    let rows: Vec<View<Msg>> = matches.iter().map(|a| menu_app_row(a, theme)).collect();
+    let content_len = rows.len() as f32 * (APP_ROW_H + 2.0);
+    let inner = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .children(rows);
+    let scroll = scroll_y(
+        clamp_offset(offset, content_len, viewport_h),
+        content_len,
+        viewport_h,
+        inner,
+        Msg::StartScroll,
+        &ScrollPalette::from_theme(theme),
+    );
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(viewport_h) },
+        ..Default::default()
+    })
+    .children(vec![scroll])
+}
+
+/// Una fila de la columna de categorías: ícono (de su 1ª app) + nombre + conteo.
+/// La activa se resalta con un gradiente de acento; el hover la selecciona.
+fn category_row(i: usize, cat: &MenuCat, selected: bool, theme: &Theme) -> View<Msg> {
+    let icon_src = cat.apps.first();
+    let icon = View::new(Style {
+        size: Size { width: length(18.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![match icon_src {
+        Some(a) => start_menus::app_icon_content(
+            a,
+            12.0,
+            if selected { theme.bg_panel } else { theme.fg_muted },
+        ),
+        None => View::new(Style::default()),
+    }]);
+    let fg = if selected { theme.bg_panel } else { theme.fg_text };
+    let nombre = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(APP_ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(cat.name.clone(), 12.5, fg, Alignment::Start)
+    .ellipsis(1);
+    let conteo = View::new(Style {
+        size: Size { width: auto(), height: length(APP_ROW_H) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text(
+        format!("{}", cat.apps.len()),
+        10.5,
+        if selected { theme.bg_panel } else { theme.fg_muted },
+    );
+
+    let fila = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(APP_ROW_H) },
         padding: TaffyRect {
-            left: length(6.0_f32),
-            right: length(6.0_f32),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -896,10 +1044,65 @@ fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
         gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
-    .radius(6.0)
-    .hover_fill(theme.bg_button_hover)
+    .radius(8.0)
+    .on_pointer_enter(Msg::MenuHoverCategory(i))
+    .on_click(Msg::MenuHoverCategory(i))
+    .children(vec![icon, nombre, conteo]);
+
+    if selected {
+        // Activa: gradiente de acento (un brillo a la izquierda que cae al acento).
+        let g = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(1.0, 0.0))
+            .with_stops([widgets::aclarar(theme.accent, 0.16), theme.accent].as_slice());
+        fila.fill_gradient(g)
+    } else {
+        fila.hover_fill(widgets::aclarar(theme.bg_panel, 0.10))
+    }
+}
+
+/// Una fila de app del menú: ícono de tamaño uniforme + rótulo en una sola línea
+/// con ellipsis. Hover con tinte de acento.
+fn menu_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
+    let badge = View::new(Style {
+        size: Size { width: length(ICON_BOX), height: length(ICON_BOX) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![start_menus::app_icon_content(a, 14.0, theme.accent)]);
+    let nombre = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(APP_ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(a.label.clone(), 13.0, theme.fg_text, Alignment::Start)
+    .ellipsis(1);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(APP_ROW_H) },
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .radius(8.0)
+    .hover_fill(con_alfa_accent(theme))
     .on_click(Msg::LaunchApp(a.id.clone()))
     .children(vec![badge, nombre])
+}
+
+/// Tinte de acento translúcido para el hover de las filas de app.
+fn con_alfa_accent(theme: &Theme) -> Color {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let [r, g, b, _] = theme.accent.components;
+    AlphaColor::new([r, g, b, 0.16])
 }
 
 /// El menú de inicio como **overlay** para el path winit.
@@ -934,6 +1137,8 @@ pub fn start_menu_overlay(
         theme,
         crate::MenuStyle::Classic,
         0,
+        None,
+        1.0,
     )])
 }
 
@@ -951,6 +1156,8 @@ pub fn start_menu_view(
     menu_h: f32,
     style: crate::MenuStyle,
     columns: u32,
+    menu_cat: Option<usize>,
+    open_t: f32,
 ) -> View<Msg> {
     let bar = View::new(Style {
         size: Size {
@@ -971,7 +1178,7 @@ pub fn start_menu_view(
     };
     body_style.flex_grow = 1.0;
     let body = View::new(body_style).children(vec![start_menu_body(
-        apps, query, offset, viewport, theme, style, columns,
+        apps, query, offset, viewport, theme, style, columns, menu_cat, open_t,
     )]);
 
     // Una barra anclada abajo (XP/KDE/Solaris) crece hacia arriba al desplegar:

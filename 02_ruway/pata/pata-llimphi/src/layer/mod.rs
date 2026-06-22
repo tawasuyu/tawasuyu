@@ -172,6 +172,9 @@ pub(super) const MENU_LEAVE_GRACE: std::time::Duration = std::time::Duration::fr
 /// Duración del viaje del resaltado del switcher al cambiar de escritorio.
 pub(super) const WS_ANIM: std::time::Duration = std::time::Duration::from_millis(420);
 
+/// Duración de la animación de apertura del menú de inicio (fade + slide).
+pub(super) const MENU_OPEN: std::time::Duration = std::time::Duration::from_millis(170);
+
 /// Estado de la animación del switcher: el resaltado viaja de `from` a `to`
 /// (1-based) desde `start`. La cometa se calcula por frame (ver `LayerApp::ws_comet`).
 #[derive(Clone, Copy)]
@@ -264,6 +267,10 @@ pub(super) struct LayerApp {
     /// durante [`MENU_LEAVE_GRACE`] tras abrir; un `leave` legítimo (clic en una
     /// ventana) llega mucho después.
     pub(super) menu_opened_at: Option<std::time::Instant>,
+    /// Categoría activa del menú de inicio (índice en la lista de categorías):
+    /// sus apps se muestran en el panel derecho. `None` = la primera. La fija el
+    /// hover sobre la columna de categorías (`Msg::MenuHoverCategory`).
+    pub(super) menu_cat: Option<usize>,
     /// Qué cuerpo muestra el drawer desplegado.
     pub(super) menu_kind: MenuKind,
     /// Historial de copias (más reciente al frente, sin repetidos, tope 16).
@@ -491,6 +498,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         registry: app_bus::AppRegistry::discover_merged(),
         menu_open: false,
         menu_opened_at: None,
+        menu_cat: None,
         menu_kind: MenuKind::Apps,
         clip_history: Vec::new(),
         clock_draft: crate::ClockDraft::default(),

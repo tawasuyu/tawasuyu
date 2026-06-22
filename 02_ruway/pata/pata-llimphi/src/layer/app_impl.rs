@@ -256,9 +256,13 @@ impl LayerApp {
         }
         self.menu_open = open;
         self.menu_opened_at = open.then(std::time::Instant::now);
-        if !open {
+        if open {
+            // Cada apertura arranca en la primera categoría.
+            self.menu_cat = None;
+        } else {
             self.menu_query.clear();
             self.menu_scroll = 0.0;
+            self.menu_cat = None;
         }
         let h = if open { MENU_H } else { self.menu_bar_px };
         let layer = &self.panels[pi].layer;
@@ -615,6 +619,16 @@ impl LayerApp {
         }
     }
 
+    /// Fase de apertura del menú de inicio `0..1` (0 = recién abierto, 1 =
+    /// asentado). `1.0` si no hay menú abierto. Mueve el fade + slide de entrada.
+    pub(super) fn menu_open_t(&self) -> f32 {
+        match self.menu_opened_at {
+            Some(t) => (t.elapsed().as_secs_f32() / crate::layer::MENU_OPEN.as_secs_f32())
+                .clamp(0.0, 1.0),
+            None => 1.0,
+        }
+    }
+
     /// La cometa del switcher para este frame (posición interpolada de la cabeza),
     /// o `None` si no hay animación en curso.
     pub(super) fn ws_comet(&self) -> Option<render::WsComet> {
@@ -714,6 +728,10 @@ impl LayerApp {
         if ws_anim.is_some() {
             self.panels[pi].dirty = true;
         }
+        // Mientras el menú de inicio entra (fade + slide), repintá su panel.
+        if self.menu_open && self.menu_panel == Some(pi) && self.menu_open_t() < 1.0 {
+            self.panels[pi].dirty = true;
+        }
         self.ensure_gpu(pi);
 
         // Shell hospedado: avanza solo.
@@ -779,6 +797,8 @@ impl LayerApp {
                     // El estilo del menú lo fija la vista vía la config de pata.
                     crate::MenuStyle::from_cfg(&self.cfg.general.menu_style),
                     self.cfg.general.menu_columns,
+                    self.menu_cat,
+                    self.menu_open_t(),
                 ),
                 MenuKind::Clipboard => render::clipboard_menu_view(
                     &self.cfg.surfaces[idx],
@@ -1030,6 +1050,13 @@ impl LayerApp {
                 self.set_menu_open(false);
             }
             Msg::StartToggle => self.toggle_menu(MenuKind::Apps),
+            Msg::MenuHoverCategory(i) => {
+                if self.menu_cat != Some(i) {
+                    self.menu_cat = Some(i);
+                    self.menu_scroll = 0.0;
+                    self.marcar_menu_dirty();
+                }
+            }
             Msg::StartScroll(delta) => {
                 let count =
                     render::menu_filtered(self.registry.all(), &self.menu_query).len();

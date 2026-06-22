@@ -179,6 +179,9 @@ pub enum Msg {
     StartLaunchFirst,
     /// Desplazar la lista del menú de inicio `delta` px (rueda).
     StartScroll(f32),
+    /// El puntero entró en la categoría `i` del menú de inicio: muestra sus apps
+    /// en el panel de la derecha (submenú al hover).
+    MenuHoverCategory(usize),
     /// Lanzar una app del menú de inicio por su `id` en el [`app_bus::AppRegistry`].
     LaunchApp(String),
     /// Activar una ventana del `window_list` (traerla al frente, o minimizarla si
@@ -1266,6 +1269,9 @@ impl App for PataApp {
                 model.menu_scroll = 0.0;
             }
             Msg::StartScroll(delta) => model.menu_scroll += delta,
+            // El path winit (dev) muestra la primera categoría estática; el
+            // hover-submenú vivo es del backend layer-shell (la barra real).
+            Msg::MenuHoverCategory(_) => {}
             Msg::StartLaunchFirst => {
                 let id = render::menu_filtered(model.registry.all(), &model.menu_query)
                     .first()
