@@ -11,17 +11,28 @@ práctica**: cómo correrla y cómo escribir tu propia película.
 
 ---
 
-## Los tres modos
+## Los modos
 
 ```bash
 cargo run -p llimphi-voxel-app --release -- --film    # filma el guion → /tmp/voxel_film.mkv (AV1+Opus, con audio)
+cargo run -p llimphi-voxel-app --release -- --born    # corto "nace en el desierto" → /tmp/voxel_born.mkv (AV1+Opus)
 cargo run -p llimphi-voxel-app --release -- --poses   # catálogo de clips de actor → /tmp/actor_clips.png
 cargo run -p llimphi-voxel-app --release -- --vox     # importa un .vox y lo renderiza → /tmp/vox_import.png
 cargo run -p llimphi-voxel-app --release              # ventana interactiva (orbitar / explorar en 1ª persona)
 mpv /tmp/voxel_film.mkv                                # ver la película
 ```
 
-**Resolución de salida** (aplica a `--film` y `--vox`): por defecto 960×540; subila con
+El modo **`--born`** filma la *secuencia de nacimiento*: un mundo de **desierto
+llano** (`World::build_desert`, vía `WorldRecipe::desert` aplanada), un **huevo**
+(`Egg`) posado sobre la arena, y la cámara guionada por `BirthSequence` que **cae
+del cielo**, ve el huevo, **aterriza en el punto de vista** del recién nacido y
+**sale a tercera persona** mientras el huevo eclosiona y el niño emerge hacia un
+costado del cascarón. Banda sonora con el acento en el instante del nacimiento.
+Une las cuatro piezas del corto (creador de mundos · personaje por edad · huevo/
+eclosión · modos de cámara) en un pipeline punta a punta, determinista y sin
+pantalla.
+
+**Resolución de salida** (aplica a `--film`, `--born` y `--vox`): por defecto 960×540; subila con
 un flag extra `--720` / `--1080` / `--4k` — p.ej.
 `… --film --1080` rinde 1920×1080. En 4K el supersampling baja a 1× (a resolución
 nativa el ray-march ya queda nítido); el resto rinde a 2× y baja a la final.
@@ -261,9 +272,9 @@ Some(audio_path), out)` → pista **Opus**, recortada a la duración del video
 
 | Archivo | Qué tiene |
 |---|---|
-| `src/main.rs` | flags (`--film/--poses/--vox`), bucle interactivo, `write_png[_downsampled]` |
-| `src/film.rs` | `screenplay()` (el guion), `--film`/`--poses`/`--vox`, `golem_model()`, SSAA |
-| `src/world.rs` | escenario: terreno + atmósfera + monumento + manada; `render_with`, `ground_at` |
+| `src/main.rs` | flags (`--film/--born/--poses/--vox`), bucle interactivo, `write_png[_downsampled]` |
+| `src/film.rs` | `screenplay()` (el guion), `--film`/`--born`/`--poses`/`--vox`, `golem_model()`, SSAA |
+| `src/world.rs` | escenario: terreno + atmósfera + monumento + manada; `build_desert`, `render_with`, `ground_at` |
 | `src/soundtrack.rs` | la banda sonora (takiy) |
 | `llimphi-voxel/src/{actor,director,vox}.rs` | reparto, timeline, import `.vox` (reusables) |
 | `llimphi-3d/src/{scene,camera,cinema,voxel_renderer,renderer,hud}.rs` | el motor 3D general |

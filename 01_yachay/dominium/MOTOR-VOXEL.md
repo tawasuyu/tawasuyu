@@ -819,3 +819,27 @@ Encaja como **app/dominio "director" propio** sobre `llimphi-voxel` (hermano de 
 showcase), no como feature del motor. La rebanada prueba que el camino es viable y
 barato; lo que sigue es content tooling, no investigación gráfica.
 
+### 12.3 Primer corto completo — "nace en el desierto" (`--born`, 2026-06-22)
+
+Las cuatro piezas del corto (creador de mundos `WorldRecipe` · personaje por edad
+`Build`/`Age` · objeto potencial `Egg`/`Hatchling` · modos de cámara
+`CamMode`/`BirthSequence`) ya estaban en `llimphi-voxel` con tests, pero sueltas.
+El modo **`--born`** de `llimphi-voxel-app` (`src/film.rs::born` +
+`World::build_desert`) las hilvana en un pipeline punta a punta, determinista y sin
+pantalla, **sobre terreno real**: un **desierto llano** (receta `desert` aplanada:
+`mountains/relief/rivers = 0`, sólo dunas mínimas — fiel al "desierto llano" que
+pidió el guion), un **huevo** posado sobre la arena, y la cámara guionada por
+`BirthSequence` que cae del cielo (establishing aéreo del llano) → aterriza en el
+POV del recién nacido → sale a tercera persona mientras el huevo eclosiona y el
+**niño emerge hacia un costado** del cascarón. Banda sonora (takiy) con el acento
+en el instante del nacimiento. Salida `/tmp/voxel_born.mkv` (AV1+Opus). Verificado
+por ffprobe (AV1+Opus), `volumedetect` (−13.6 dB, no silencio) y PNG mirados
+(establishing del llano con cactus; plano héroe final con el niño parado junto al
+huevo rajado).
+
+**Gotcha de composición (costó dos re-renders):** colocar el huevo a ciegas en la
+columna central caía en un punto rodeado de mesas altas → al retroceder, el plano
+de seguimiento **se metía dentro de una mesa** (negro). Fix: desierto llano (sin
+mesas) + el recién nacido **sale de costado** (si camina recto hacia atrás queda
+detrás del cuenco del cascarón, que está entre la cámara y él, y lo tapa).
+

@@ -110,6 +110,50 @@ impl World {
         world
     }
 
+    /// Construye un mundo de **desierto** (vía [`WorldRecipe::desert`](llimphi_voxel::WorldRecipe)):
+    /// llano de arena con pocas montañas/ríos y cactus ralos, sin manada (escena
+    /// solemne del corto de nacimiento) y sin el monumento. Atmósfera diurna cálida.
+    /// Pensado para el modo `--born`.
+    pub fn build_desert(device: &wgpu::Device, queue: &wgpu::Queue, dim_xz: u32, seed: u32) -> Self {
+        let dy = (dim_xz * 4 / 10).max(48);
+        let dim = [dim_xz, dy, dim_xz];
+
+        // Desierto **llano** (como lo pidió el corto): sin mesas/relieve ni ríos,
+        // sólo una ondulación de dunas mínima. Así el huevo siempre tiene despeje y
+        // el plano de seguimiento (que retrocede detrás del sujeto) ve arena abierta
+        // en vez de meterse dentro de una columna de terreno.
+        let mut recipe = llimphi_voxel::WorldRecipe::desert(seed);
+        recipe.mountains = 0.0;
+        recipe.relief = 0.0;
+        recipe.dune = 0.035;
+        recipe.rivers = 0.0;
+        let grid = recipe.generate(dim);
+        let mut voxel = VoxelRenderer::new(device, queue, FMT, &grid);
+        voxel.sun_dir = [0.5, 0.62, 0.30]; // sol alto y cálido
+        voxel.atmosphere = Atmosphere {
+            sky_zenith: [108, 152, 206],  // azul de mediodía
+            sky_horizon: [226, 212, 178], // horizonte arenoso/caluroso
+            fog_density: 0.18 / dim_xz as f32, // baja: hay tomas aéreas (cámara lejos)
+            god_rays: 0.5,
+        };
+
+        let monument = Renderer3d::new(device, FMT);
+        let player = Player::spawn_on(&grid, dim[0] / 2, dim[2] / 2);
+        let hud = Hud::new(device, FMT);
+
+        Self {
+            scene: Scene3d::new(),
+            voxel,
+            monument,
+            grid,
+            dim,
+            player,
+            critters: Vec::new(), // desierto vacío
+            hud,
+            show_monument: false,
+        }
+    }
+
     /// Avanza un frame de vida: deambula la manada y vuelca sus cajas al
     /// renderer (la capa de entidades del ray-march). Barato (instancing
     /// analítico) — llamar cada frame, en cualquier modo.

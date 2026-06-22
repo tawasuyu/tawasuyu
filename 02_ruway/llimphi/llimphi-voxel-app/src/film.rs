@@ -13,8 +13,6 @@
 //! *dirección* (quién camina a dónde, dónde corta la cámara) vive acá, en la capa
 //! de contenido; el motor sólo provee cámara/escena/actor genéricos.
 
-use std::sync::Once;
-
 use foreign_vox::{VoxModel, Voxel};
 use llimphi_3d::glam::Vec3;
 use llimphi_3d::{
@@ -23,7 +21,10 @@ use llimphi_3d::{
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
-use llimphi_voxel::{Actor, ActorKey, ActorScript, Clip, Sequence, Shot};
+use llimphi_voxel::{
+    forward_h, right_h, Actor, ActorKey, ActorScript, Age, BirthSequence, Clip, Egg, Hatchling,
+    Sequence, Shot,
+};
 
 use crate::world::{World, FMT};
 use crate::{DIM_XZ, SEED};
@@ -62,6 +63,9 @@ fn film_dims() -> (u32, u32, u32) {
 /// Carpeta de cuadros y salida del video.
 const FRAME_DIR: &str = "/tmp/voxel_film";
 const OUT: &str = "/tmp/voxel_film.mkv";
+/// Carpeta de cuadros y salida del corto de nacimiento (`--born`).
+const BORN_DIR: &str = "/tmp/voxel_born";
+const BORN_OUT: &str = "/tmp/voxel_born.mkv";
 
 /// Paleta del reparto (piel, remera, pantalón) — tres figuras distinguibles.
 const CAST: [([f32; 3], [f32; 3], [f32; 3]); 3] = [
@@ -91,7 +95,7 @@ pub fn film() {
     let inter = make_target(&hal, ssw, ssh); // render a ss× para SSAA
     let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
 
-    prepare_dir();
+    prepare_dir(FRAME_DIR);
     let frames = seq.frames(FPS);
     let dt = 1.0 / FPS as f32;
     for f in 0..frames {
@@ -126,7 +130,7 @@ pub fn film() {
 
         let refs: Vec<&Renderer3d> = actor_r.iter().collect();
         render_frame(&hal, &mut renderer, &mut world, &camera, &refs, &inter_view, (ssw, ssh));
-        crate::write_png_downsampled(&hal, &inter, ssw, ssh, ss, &frame_path(f));
+        crate::write_png_downsampled(&hal, &inter, ssw, ssh, ss, &frame_path(FRAME_DIR, f));
         if f % 15 == 0 {
             eprintln!("film: cuadro {f}/{frames}");
         }
@@ -151,6 +155,111 @@ pub fn film() {
         Err(e) => eprintln!(
             "film: cuadros en {FRAME_DIR}/ pero ffmpeg falló ({e:?}); \
              podés muxear a mano: ffmpeg -framerate {FPS} -i {pattern} -i {audio} -c:v libsvtav1 -c:a libopus {OUT}"
+        ),
+    }
+}
+
+/// Modo `--born`: filma la **secuencia de nacimiento** del corto *"nace en el
+/// desierto"*. Reúne las piezas del corto **sobre terreno real**: un mundo de
+/// desierto ([`World::build_desert`]), un huevo ([`Egg`]) posado sobre la arena, y
+/// la cámara guionada por [`BirthSequence`] que cae del cielo, ve el huevo,
+/// aterriza en el punto de vista del recién nacido y sale a tercera persona
+/// mientras el huevo eclosiona y nace el niño. Determinista (todo en función del
+/// tiempo) → reproducible; muxea a video con banda sonora cuyo acento cae en el
+/// instante del nacimiento.
+pub fn born() {
+    let hal = pollster::block_on(Hal::new(None)).expect("hal");
+    let mut renderer = Renderer::new(&hal).expect("renderer");
+    let mut world = World::build_desert(&hal.device, &hal.queue, DIM_XZ, SEED);
+
+    // El huevo, posado sobre la columna central del desierto, mirando a −Z (de
+    // frente a la cámara de seguimiento, que termina detrás del sujeto).
+    let (cx, cz) = (DIM_XZ / 2, DIM_XZ / 2);
+    let egg_pos = world.ground_at(cx, cz);
+    let mut egg = Egg::new(egg_pos, 1.4, Hatchling::human(Age::Baby));
+    egg.facing = std::f32::consts::PI;
+    egg.shell = [0.95, 0.92, 0.84];
+
+    // La secuencia: caída lenta desde bien alto (muestra el llano del desierto) +
+    // una salida holgada. Total ≈ 5.6 s → calza con la banda sonora.
+    let mut seq = BirthSequence::new(egg);
+    seq.sky_height = 72.0;
+    seq.t_land = 3.0;
+    seq.t_pull = 1.6;
+    seq.follow_distance = 4.5;
+    seq.follow_height = 1.4;
+
+    // Un renderer para el cascarón y otro para el recién nacido (mallas re-subidas).
+    let mut egg_r = Renderer3d::new(&hal.device, FMT);
+    let mut baby_r = Renderer3d::new(&hal.device, FMT);
+    let mut newborn = seq.newborn();
+    newborn.set_clip(Clip::Idle);
+
+    let (w, h, ss) = film_dims();
+    let (ssw, ssh) = (w * ss, h * ss);
+    if (w, h, ss) != (W, H, SS) {
+        eprintln!("born: resolución {w}x{h} @{ss}× (supersampled a {ssw}x{ssh})");
+    }
+    let inter = make_target(&hal, ssw, ssh);
+    let inter_view = inter.create_view(&wgpu::TextureViewDescriptor::default());
+
+    prepare_dir(BORN_DIR);
+    let dur = seq.duration();
+    let frames = (dur * FPS as f32).ceil() as u32;
+    let dt = 1.0 / FPS as f32;
+    // El bebé se dibuja recién cuando la cámara salió del sujeto: durante el
+    // aterrizaje la cámara está *dentro* de su cabeza (1ª persona) y veríamos sus
+    // caras internas.
+    let show_baby_from = seq.t_land + 0.3 * seq.t_pull;
+
+    for f in 0..frames {
+        let t = f as f32 / FPS as f32;
+        let camera = seq.camera(t);
+
+        // Cascarón: el progreso de eclosión lo guiona la secuencia (se abre al
+        // aterrizar).
+        egg.hatch = seq.hatch(t);
+        let (ev, ei) = egg.mesh();
+        egg_r.set_geometry(&hal.device, &ev, &ei);
+        egg_r.set_model(egg.model());
+
+        let mut meshes: Vec<&Renderer3d> = vec![&egg_r];
+        if t >= show_baby_from {
+            // Emerge: sale del cascarón hacia un **costado** (si no, el cuenco —entre
+            // la cámara de seguimiento y el niño— lo taparía) caminando mientras dura
+            // la salida, luego queda quieto. Sigue el lente con la cabeza.
+            let e = ((t - show_baby_from) / (seq.t_pull + 0.5)).clamp(0.0, 1.0);
+            let step = right_h(seq.egg.facing) * (e * 1.5) + forward_h(seq.egg.facing) * (e * 0.5);
+            newborn.pos = seq.egg.pos + step;
+            newborn.set_clip(if e < 1.0 { Clip::Walk } else { Clip::Idle });
+            newborn.advance(dt);
+            newborn.look_at(Some(camera.eye));
+            let (bv, bi) = newborn.mesh();
+            baby_r.set_geometry(&hal.device, &bv, &bi);
+            baby_r.set_model(newborn.model());
+            meshes.push(&baby_r);
+        }
+
+        render_frame(&hal, &mut renderer, &mut world, &camera, &meshes, &inter_view, (ssw, ssh));
+        crate::write_png_downsampled(&hal, &inter, ssw, ssh, ss, &frame_path(BORN_DIR, f));
+        if f % 15 == 0 {
+            eprintln!("born: cuadro {f}/{frames}");
+        }
+    }
+
+    // Banda sonora: acentos en el nacimiento (aterrizaje) y al asentarse el plano
+    // de seguimiento → la música cae sobre la acción.
+    let audio = "/tmp/voxel_born.wav";
+    let beats = vec![seq.t_land, seq.t_land + seq.t_pull];
+    let secs = crate::soundtrack::render_to(audio, &beats);
+    eprintln!("born: banda sonora {audio} ({secs:.1}s, acentos en {beats:?})");
+
+    let pattern = format!("{BORN_DIR}/frame_%04d.png");
+    match foreign_av::encode_frames(&pattern, FPS, 30, Some(std::path::Path::new(audio)), BORN_OUT) {
+        Ok(()) => eprintln!("born: video escrito {BORN_OUT} ({frames} cuadros, {w}x{h}@{FPS}, con audio)"),
+        Err(e) => eprintln!(
+            "born: cuadros en {BORN_DIR}/ pero ffmpeg falló ({e:?}); \
+             muxeá a mano: ffmpeg -framerate {FPS} -i {pattern} -i {audio} -c:v libsvtav1 -c:a libopus {BORN_OUT}"
         ),
     }
 }
@@ -430,8 +539,8 @@ fn make_target(hal: &Hal, w: u32, h: u32) -> wgpu::Texture {
 }
 
 /// Ruta del cuadro `f` (`frame_0000.png`, …).
-fn frame_path(f: u32) -> String {
-    format!("{FRAME_DIR}/frame_{f:04}.png")
+fn frame_path(dir: &str, f: u32) -> String {
+    format!("{dir}/frame_{f:04}.png")
 }
 
 /// Elige el tramo **más plano** del mundo (mínima diferencia de altura a lo largo
@@ -473,17 +582,14 @@ fn find_flat_strip(world: &World, span: f32) -> (u32, [u32; 3]) {
     best.unwrap_or((dim / 3, [dim / 2 - 5, dim / 2, dim / 2 + 5]))
 }
 
-/// Asegura `FRAME_DIR` vacío de PNGs viejos (una vez por proceso).
-fn prepare_dir() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let _ = std::fs::create_dir_all(FRAME_DIR);
-        if let Ok(rd) = std::fs::read_dir(FRAME_DIR) {
-            for e in rd.flatten() {
-                if e.path().extension().is_some_and(|x| x == "png") {
-                    let _ = std::fs::remove_file(e.path());
-                }
+/// Asegura `dir` creado y vacío de PNGs viejos.
+fn prepare_dir(dir: &str) {
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if e.path().extension().is_some_and(|x| x == "png") {
+                let _ = std::fs::remove_file(e.path());
             }
         }
-    });
+    }
 }
