@@ -169,6 +169,18 @@ pub(super) const MENU_H: u32 = 480;
 /// legítimo (el usuario clava el foco en una ventana) llega mucho más tarde.
 pub(super) const MENU_LEAVE_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
 
+/// Duración del viaje del resaltado del switcher al cambiar de escritorio.
+pub(super) const WS_ANIM: std::time::Duration = std::time::Duration::from_millis(420);
+
+/// Estado de la animación del switcher: el resaltado viaja de `from` a `to`
+/// (1-based) desde `start`. La cometa se calcula por frame (ver `LayerApp::ws_comet`).
+#[derive(Clone, Copy)]
+pub(super) struct WsAnimState {
+    pub(super) from: u8,
+    pub(super) to: u8,
+    pub(super) start: std::time::Instant,
+}
+
 /// Qué cuerpo muestra el drawer que crece de la barra del `start_button`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum MenuKind {
@@ -279,6 +291,11 @@ pub(super) struct LayerApp {
     /// Canal para que los hilos one-shot de `resolve_monad` entreguen miembros.
     pub(super) members_tx: Sender<MembersOutcome>,
     pub(super) members_rx: Receiver<MembersOutcome>,
+    /// Animación del switcher en curso (resaltado viajando entre escritorios).
+    pub(super) ws_anim: Option<WsAnimState>,
+    /// Último escritorio activo visto (para detectar el cambio que dispara la
+    /// animación). `0` = aún sin dato.
+    pub(super) ws_last_active: u8,
     /// Arrastre en curso.
     pub(super) drag: Option<LayerDrag>,
     /// `on_click` plano armado en el press, pendiente de soltar (semántica de
@@ -488,6 +505,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         nav_rx,
         members_tx,
         members_rx,
+        ws_anim: None,
+        ws_last_active: 0,
         drag: None,
         pending_click: None,
         host: (!sidebars.is_empty()).then(HostServer::spawn).flatten(),

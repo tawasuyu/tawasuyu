@@ -9,7 +9,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     Rect as TaffyRect,
 };
 use llimphi_ui::llimphi_raster::peniko::{
-    Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+    Blob, Color, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
 };
 use llimphi_ui::llimphi_compositor::DragPhase;
 use llimphi_ui::View;
@@ -162,12 +162,48 @@ fn window_button(w: &WindowEntry, reorderable: bool, theme: &Theme) -> View<Msg>
     }
 }
 
-/// El **workspace switcher**: una celda por escritorio virtual.
+/// Una **cometa** del resaltado del switcher: durante el cambio de escritorio,
+/// el color activo viaja de la celda vieja a la nueva. `head` es la posición de
+/// la cabeza en espacio de índice de celda (0-based, ya interpolada); `dir` el
+/// sentido del viaje (`+1` derecha, `-1` izquierda) para dejar una cola detrás.
+#[derive(Clone, Copy)]
+pub struct WsComet {
+    pub head: f32,
+    pub dir: f32,
+}
+
+/// Interpola dos colores componente a componente (`t` en `0..1`).
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let [ar, ag, ab, aa] = a.components;
+    let [br, bg, bb, ba] = b.components;
+    let t = t.clamp(0.0, 1.0);
+    AlphaColor::new([
+        ar + (br - ar) * t,
+        ag + (bg - ag) * t,
+        ab + (bb - ab) * t,
+        aa + (ba - aa) * t,
+    ])
+}
+
+/// Resplandor `0..1` de la celda `i` (0-based) bajo la cometa: agudo en la
+/// cabeza, con **cola** larga por detrás (sentido contrario a `dir`) — el sello
+/// del cometa. `0` si la celda queda fuera del alcance.
+fn cell_glow(i: f32, c: &WsComet) -> f32 {
+    let d = i - c.head; // distancia con signo en celdas
+    let ahead = d * c.dir > 0.0; // por delante de la cabeza en el sentido del viaje
+    let width = if ahead { 0.55 } else { 1.9 }; // frente nítido, cola larga
+    (1.0 - d.abs() / width).clamp(0.0, 1.0)
+}
+
+/// El **workspace switcher**: una celda por escritorio virtual. Durante un
+/// cambio, `comet` hace viajar el resaltado activo de la celda vieja a la nueva.
 pub fn workspaces_view(
     active: u8,
     count: u8,
     occupied: u16,
     others: u16,
+    comet: Option<WsComet>,
     gap: f32,
     dir: FlexDirection,
     theme: &Theme,
@@ -179,7 +215,11 @@ pub fn workspaces_view(
             // En otro monitor (y no es el escritorio enfocado): se muestra en una
             // pantalla distinta; cliquearlo lleva el foco a ese monitor.
             let en_otro = (others & bit != 0) && n != active;
-            workspace_cell(n, n == active, ocupado, en_otro, theme)
+            // Con cometa en vuelo, el resaltado activo NO se pinta estático: lo
+            // lleva el glow del cometa (que aterriza en la celda nueva al final).
+            let glow = comet.map(|c| cell_glow((n - 1) as f32, &c)).unwrap_or(0.0);
+            let activo = comet.is_none() && n == active;
+            workspace_cell(n, activo, ocupado, en_otro, glow, theme)
         })
         .collect();
     // Gap CHICO entre celdas del switcher (capado a 4 px): el `surface.gap` de
@@ -206,20 +246,36 @@ pub fn workspaces_view(
 ///   el foco a ese monitor.
 /// - **ocupado** (tiene ventanas): borde de acento grueso + número fuerte.
 /// - **vacío**: apagado, borde tenue, número atenuado.
-fn workspace_cell(n: u8, active: bool, occupied: bool, on_other: bool, theme: &Theme) -> View<Msg> {
+fn workspace_cell(
+    n: u8,
+    active: bool,
+    occupied: bool,
+    on_other: bool,
+    glow: f32,
+    theme: &Theme,
+) -> View<Msg> {
     // Rellenos bien separados — robusto en cualquier theme (no depende de que el
     // borde sea visible): activo = acento; en-otro/ocupado = tono medio
     // (hover/botón); vacío = el más apagado. El borde discrimina en-otro
     // (border_focus) de ocupado (accent).
-    let (fill, fg, borde_w, borde_col) = if active {
-        (theme.accent, theme.bg_panel, 1.0, theme.accent)
+    let (mut fill, mut fg, mut borde_w, mut borde_col) = if active {
+        (theme.accent, theme.bg_panel, 1.0_f64, theme.accent)
     } else if on_other {
-        (theme.bg_button_hover, theme.fg_text, 2.0, theme.border_focus)
+        (theme.bg_button_hover, theme.fg_text, 2.0_f64, theme.border_focus)
     } else if occupied {
-        (theme.bg_button_hover, theme.fg_text, 2.0, theme.accent)
+        (theme.bg_button_hover, theme.fg_text, 2.0_f64, theme.accent)
     } else {
-        (theme.bg_panel_alt, theme.fg_muted, 1.0, theme.border)
+        (theme.bg_panel_alt, theme.fg_muted, 1.0_f64, theme.border)
     };
+    // Cometa de transición: el resaltado activo viaja por las celdas. El glow
+    // tiñe la celda hacia el acento (cabeza intensa, cola que se desvanece).
+    if glow > 0.0 {
+        let g = glow.clamp(0.0, 1.0);
+        fill = lerp_color(fill, theme.accent, g);
+        fg = lerp_color(fg, theme.bg_panel, g);
+        borde_col = lerp_color(borde_col, theme.accent, g);
+        borde_w = borde_w.max(1.0 + g as f64);
+    }
     let tooltip = if on_other {
         format!("Escritorio {n} · en otro monitor (clic = ir allá)")
     } else if occupied {

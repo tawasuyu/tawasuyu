@@ -588,6 +588,48 @@ impl LayerApp {
         }
     }
 
+    /// Detecta el cambio de escritorio activo y arranca/expira la animación del
+    /// switcher (el resaltado que viaja de la celda vieja a la nueva).
+    pub(super) fn update_ws_anim(&mut self) {
+        let cur = self.ctx.active_workspace;
+        if cur != 0 && self.ws_last_active != 0 && cur != self.ws_last_active {
+            // Arranca desde donde estábamos (o desde el destino de una cometa aún
+            // en vuelo, si el usuario encadena cambios rápidos).
+            let from = self
+                .ws_anim
+                .map(|a| a.to)
+                .unwrap_or(self.ws_last_active);
+            self.ws_anim = Some(crate::layer::WsAnimState {
+                from,
+                to: cur,
+                start: std::time::Instant::now(),
+            });
+        }
+        if cur != 0 {
+            self.ws_last_active = cur;
+        }
+        if let Some(a) = self.ws_anim {
+            if a.start.elapsed() >= crate::layer::WS_ANIM {
+                self.ws_anim = None;
+            }
+        }
+    }
+
+    /// La cometa del switcher para este frame (posición interpolada de la cabeza),
+    /// o `None` si no hay animación en curso.
+    pub(super) fn ws_comet(&self) -> Option<render::WsComet> {
+        let a = self.ws_anim?;
+        let dur = crate::layer::WS_ANIM.as_secs_f32();
+        let t = (a.start.elapsed().as_secs_f32() / dur).clamp(0.0, 1.0);
+        let e = 1.0 - (1.0 - t).powi(3); // ease-out cúbico
+        let from = a.from as f32 - 1.0;
+        let to = a.to as f32 - 1.0;
+        Some(render::WsComet {
+            head: from + (to - from) * e,
+            dir: if to >= from { 1.0 } else { -1.0 },
+        })
+    }
+
     /// Crea el estado wgpu de un panel.
     pub(super) fn ensure_gpu(&mut self, pi: usize) {
         if self.panels[pi].gpu.is_some() {
@@ -665,6 +707,13 @@ impl LayerApp {
         self.maybe_cava();
         self.poll_nav();
         self.poll_host();
+        // Animación del switcher: si cambió el escritorio, el resaltado viaja.
+        // Mientras dura, mantené el panel pintándose para animar suave.
+        self.update_ws_anim();
+        let ws_anim = self.ws_comet();
+        if ws_anim.is_some() {
+            self.panels[pi].dirty = true;
+        }
         self.ensure_gpu(pi);
 
         // Shell hospedado: avanza solo.
@@ -707,6 +756,7 @@ impl LayerApp {
             clock: (self.ctx.clock.hour, self.ctx.clock.minute),
             // En la barra real los botones de ventana se reordenan arrastrándolos.
             reorderable_tasks: true,
+            ws_anim,
         };
 
         let view = if self.tooltip_pi == Some(pi) {

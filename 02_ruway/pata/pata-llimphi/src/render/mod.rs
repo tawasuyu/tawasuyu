@@ -55,7 +55,7 @@ pub use panels::{
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};
-pub use task_manager::{clipboard_overlay, clipboard_panel, start_button_view, tray_view, workspaces_view};
+pub use task_manager::{clipboard_overlay, clipboard_panel, start_button_view, tray_view, workspaces_view, WsComet};
 pub use weather_cava::{cava_view, weather_view};
 pub use widgets::parse_hex;
 
@@ -93,6 +93,9 @@ pub struct BarData<'a> {
     /// reordenarlos. Sólo lo activa el backend layer-shell (la barra real); el
     /// path winit (dev) lo deja en `false`.
     pub reorderable_tasks: bool,
+    /// Cometa de transición del workspace switcher: presente mientras el
+    /// resaltado activo viaja de un escritorio al otro. `None` en reposo.
+    pub ws_anim: Option<task_manager::WsComet>,
 }
 
 // ============================================================
@@ -196,7 +199,7 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             cores_view(label.as_deref(), fractions, caption, *size, *orient, theme, stops)
         }
         WidgetView::Workspaces { active, count, occupied, others } => {
-            task_manager::workspaces_view(*active, *count, *occupied, *others, 4.0, FlexDirection::Row, theme)
+            task_manager::workspaces_view(*active, *count, *occupied, *others, None, 4.0, FlexDirection::Row, theme)
         }
         WidgetView::Moon { phase, .. } => moon_view(*phase),
         WidgetView::Placeholder(kind) => widgets::chip(theme)
@@ -296,6 +299,8 @@ pub fn root(model: &Model) -> View<Msg> {
         clock: (0, 0),
         // El backend winit no maneja el reordenamiento por arrastre.
         reorderable_tasks: false,
+        // La animación del switcher sólo vive en la barra real (layer-shell).
+        ws_anim: None,
     };
 
     for placed in &model.frame.surfaces {
@@ -553,7 +558,7 @@ fn slots_de(
                 SlotWidget::Core { kind, widget, exec, cells } => {
                     let wv = widget.view();
                     if let WidgetView::Workspaces { active, count, occupied, others } = wv {
-                        task_manager::workspaces_view(active, count, occupied, others, surface.gap, dir, theme)
+                        task_manager::workspaces_view(active, count, occupied, others, data.ws_anim, surface.gap, dir, theme)
                     } else {
                         let mut v = widget_view_kinded(&wv, Some(kind), theme)
                             .radius(6.0)
