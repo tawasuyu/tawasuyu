@@ -50,3 +50,7 @@ path = "examples/pantallazo_synth.rs"
 [[example]]
 name = "fb_enhance_shot"
 path = "examples/fb_enhance_shot.rs"
+
+[[example]]
+name = "wgpu_shot"
+path = "examples/wgpu_shot.rs"

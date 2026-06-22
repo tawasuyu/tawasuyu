@@ -95,6 +95,7 @@ mod palette;
 mod hud;
 mod godrays;
 pub mod postproc;
+pub mod wgpu3d;
 
 pub use atlas::*;
 pub use config::*;

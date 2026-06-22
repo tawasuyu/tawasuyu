@@ -12,3 +12,7 @@ description = "supay-render-llimphi — Fase 3 de supay. Renderer 3D moderno que
 llimphi-ui = { workspace = true }
 supay-scene = { path = "../supay-scene" }
 supay-wad = { path = "../supay-wad" }
+# Fase 2: renderer wgpu 2.5D (malla + depth buffer + texturas perspectiva-
+# correctas). Mismo wgpu del workspace que Llimphi pasa a `gpu_paint_with`.
+wgpu = { workspace = true }
+glam = { workspace = true }
