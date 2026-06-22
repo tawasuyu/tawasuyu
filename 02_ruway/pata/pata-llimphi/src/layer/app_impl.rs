@@ -222,9 +222,35 @@ impl LayerApp {
         })
     }
 
+    /// Reencuentra el panel que hospeda el menú de inicio (el del `start_button`
+    /// o, en CDE, el `front_panel`). Se computa una vez al arrancar, pero un
+    /// hot-reload o un orden de creación inesperado lo pueden dejar en `None`;
+    /// esto lo resana sobre los paneles vivos. Devuelve `None` si de verdad no
+    /// hay barra con botón de inicio.
+    pub(super) fn resolve_menu_panel(&mut self) -> Option<usize> {
+        if self.menu_panel.is_none() {
+            self.menu_panel = self.panels.iter().position(|p| {
+                let s = &self.cfg.surfaces[p.idx];
+                s.start
+                    .iter()
+                    .chain(&s.center)
+                    .chain(&s.end)
+                    .any(|w| w.kind == "start_button" || w.kind == "front_panel")
+            });
+            if self.menu_panel.is_none() && std::env::var_os("PATA_DIAG").is_some() {
+                eprintln!(
+                    "pata diag · menú inicio: ningún panel tiene start_button/front_panel \
+                     (paneles={}); el botón no abrirá nada",
+                    self.panels.len()
+                );
+            }
+        }
+        self.menu_panel
+    }
+
     /// Despliega/repliega el menú de inicio.
     pub(super) fn set_menu_open(&mut self, open: bool) {
-        let Some(pi) = self.menu_panel else { return };
+        let Some(pi) = self.resolve_menu_panel() else { return };
         if self.menu_open == open {
             return;
         }
