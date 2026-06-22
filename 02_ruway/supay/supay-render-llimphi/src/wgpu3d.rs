@@ -146,8 +146,6 @@ pub struct DoomGpuRenderer {
     textures: HashMap<TexKey, Arc<GpuTexture>>,
     /// Textura blanca 1×1 para superficies sin lump resuelto.
     white: Arc<GpuTexture>,
-    /// Depth buffer, recreado al cambiar de tamaño.
-    depth: Option<(u32, u32, wgpu::TextureView)>,
     batches: Vec<Batch>,
     /// Backdrop de cielo: pipeline fullscreen + su uniform + la textura SKY.
     /// Se dibuja primero, sin escribir depth, así el mundo lo tapa donde hay
@@ -183,6 +181,24 @@ pub struct DoomGpuRenderer {
     refl_uniform_bufs: Vec<wgpu::Buffer>,
     refl_uniform_bgs: Vec<wgpu::BindGroup>,
     refl_targets: Vec<ReflTarget>,
+    /// SSAA: la escena se rinde a `SUPERSAMPLE`× la resolución en este target
+    /// propio y luego se baja al target real con filtro lineal (antialiasing).
+    scene: Option<SceneTarget>,
+    blit_pipeline: wgpu::RenderPipeline,
+}
+
+/// Factor de supersampling (antialiasing). 2 = rinde a 2× en cada eje (4× de
+/// fragmentos) y promedia al bajar al target real.
+const SUPERSAMPLE: u32 = 2;
+
+/// Target intermedio de la escena (color + depth) a resolución supersampleada.
+struct SceneTarget {
+    w: u32,
+    h: u32,
+    color_view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+    /// Bind group que expone el color como textura para el blit de bajada.
+    blit_bg: wgpu::BindGroup,
 }
 
 /// Render target de la reflexión planar.
@@ -504,6 +520,46 @@ impl DoomGpuRenderer {
             cache: None,
         });
 
+        // --- Blit de bajada SSAA: muestrea la escena supersampleada y la
+        //     escribe (downscale lineal) al target real. ---
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("doom3d-blit-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
+        });
+        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("doom3d-blit-layout"),
+            bind_group_layouts: &[&tex_layout],
+            push_constant_ranges: &[],
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("doom3d-blit-pipeline"),
+            layout: Some(&blit_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+
         let zero_weap = WeaponSpriteSnap {
             active: false,
             sprite: 0,
@@ -520,7 +576,6 @@ impl DoomGpuRenderer {
             sampler,
             textures: HashMap::new(),
             white,
-            depth: None,
             batches: Vec::new(),
             sky_pipeline,
             sky_uniform_buf,
@@ -539,6 +594,8 @@ impl DoomGpuRenderer {
             refl_uniform_bufs,
             refl_uniform_bgs,
             refl_targets: Vec::new(),
+            scene: None,
+            blit_pipeline,
         }
     }
 
@@ -719,6 +776,8 @@ impl DoomGpuRenderer {
         if w == 0 || h == 0 {
             return;
         }
+        // SSAA: rendimos a (rw,rh) = SUPERSAMPLE× y bajamos al target real.
+        let (rw, rh) = (w * SUPERSAMPLE, h * SUPERSAMPLE);
         let aspect = w as f32 / h as f32;
         let mvp = cam.mvp(aspect);
 
@@ -737,7 +796,7 @@ impl DoomGpuRenderer {
             for v in [cam.x, cam.y, cam.eye_z, 1.0 / 2500.0] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
-            for v in [cam.time, w as f32, h as f32, refl] {
+            for v in [cam.time, rw as f32, rh as f32, refl] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
             for v in [water_z, clip, 0.0, 0.0] {
@@ -764,11 +823,11 @@ impl DoomGpuRenderer {
         queue.write_buffer(&self.sky_uniform_buf, 0, &sky_bytes);
 
         let sprite_draws = self.build_sprite_draws(device, queue, cam);
-        let weapon_draws = self.build_weapon_draws(device, queue, w, h);
+        let weapon_draws = self.build_weapon_draws(device, queue, rw, rh);
 
-        self.ensure_depth(device, w, h);
+        self.ensure_scene(device, rw, rh);
         if do_reflect {
-            self.ensure_refls(device, w, h, n_planes);
+            self.ensure_refls(device, rw, rh, n_planes);
         }
 
         // --- Pases de reflexión: uno por plano de agua. El mundo seco +
@@ -813,16 +872,20 @@ impl DoomGpuRenderer {
             }
         }
 
-        // --- Pase principal ---
-        let depth_view = &self.depth.as_ref().unwrap().2;
+        // --- Pase principal (a la escena supersampleada) ---
+        let scene = self.scene.as_ref().unwrap();
+        let scene_color = &scene.color_view;
+        let depth_view = &scene.depth_view;
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("doom3d-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: scene_color,
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
+                    // La escena se rinde fresca cada frame; el cielo cubre el
+                    // fondo, este clear sólo se ve en gaps (azul nocturno).
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.06, b: 0.10, a: 1.0 }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -886,6 +949,74 @@ impl DoomGpuRenderer {
                 pass.draw(0..6, 0..1);
             }
         }
+        drop(pass);
+
+        // --- Blit de bajada SSAA: la escena supersampleada → target real,
+        //     promediada con filtro lineal (antialiasing). ---
+        let blit_bg = &self.scene.as_ref().unwrap().blit_bg;
+        let mut blit = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("doom3d-blit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        blit.set_pipeline(&self.blit_pipeline);
+        blit.set_bind_group(0, blit_bg, &[]);
+        blit.draw(0..3, 0..1);
+    }
+
+    /// Asegura el target de escena supersampleado (color + depth + bind group
+    /// para el blit) a `(w,h)`. Recrea al cambiar de tamaño.
+    fn ensure_scene(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        if matches!(&self.scene, Some(s) if s.w == w && s.h == h) {
+            return;
+        }
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("doom3d-scene-color"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let color_view = color.create_view(&Default::default());
+        let depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("doom3d-scene-depth"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth.create_view(&Default::default());
+        let blit_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("doom3d-scene-blit-bg"),
+            layout: &self.tex_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        self.scene = Some(SceneTarget { w, h, color_view, depth_view, blit_bg });
     }
 
     /// Asegura `n` render targets de reflexión (color+depth+bind group) al
@@ -1099,28 +1230,6 @@ impl DoomGpuRenderer {
             draws.push((tex, buf, 6));
         }
         draws
-    }
-
-    fn ensure_depth(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        if matches!(&self.depth, Some((dw, dh, _)) if *dw == w && *dh == h) {
-            return;
-        }
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("doom3d-depth"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&Default::default());
-        self.depth = Some((w, h, view));
     }
 }
 
@@ -1810,6 +1919,37 @@ mod tests {
         }
     }
 }
+
+/// Blit de bajada SSAA: triángulo fullscreen que muestrea la escena
+/// supersampleada (filtro lineal del sampler) y la escribe al target real.
+const BLIT_WGSL: &str = r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+    var p = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var o: VOut;
+    let c = p[vi];
+    o.clip = vec4<f32>(c, 0.0, 1.0);
+    o.uv = vec2<f32>(c.x * 0.5 + 0.5, 1.0 - (c.y * 0.5 + 0.5));
+    return o;
+}
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    return textureSample(tex, samp, in.uv);
+}
+"#;
 
 /// Overlay 2D en clip-space (el arma en mano): posiciones ya en clip, sólo
 /// muestrea la textura con alpha-discard.
