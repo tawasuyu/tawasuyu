@@ -268,6 +268,11 @@ pub(super) struct LayerApp {
     pub(super) members_rx: Receiver<MembersOutcome>,
     /// Arrastre en curso.
     pub(super) drag: Option<LayerDrag>,
+    /// `on_click` plano armado en el press, pendiente de soltar (semántica de
+    /// escritorio: el click se dispara al RELEASE sobre el mismo punto, no en el
+    /// mousedown). Se cancela si el puntero se aleja más de [`CLICK_MOVE_CANCEL`]
+    /// del origen. `(panel, msg, origen)`.
+    pub(super) pending_click: Option<(usize, Msg, (f32, f32))>,
     /// Servidor del rail hospedado.
     pub(super) host: Option<HostServer>,
     /// Última revisión vista del `host`.
@@ -470,6 +475,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         members_tx,
         members_rx,
         drag: None,
+        pending_click: None,
         host: (!sidebars.is_empty()).then(HostServer::spawn).flatten(),
         last_host_rev: 0,
         panels: Vec::new(),

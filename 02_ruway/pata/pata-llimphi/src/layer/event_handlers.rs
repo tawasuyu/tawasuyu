@@ -30,6 +30,11 @@ use crate::toplevel::Toplevel;
 
 use super::{app_impl::*, diag, LayerApp, LayerDrag, MenuKind};
 
+/// Si el puntero se aleja más que esto (px) del origen del press, el `on_click`
+/// armado deja de contar como click (fue un arrastre/barrido). Espeja el umbral
+/// del runtime de Llimphi para una sensación uniforme en todo el escritorio.
+const CLICK_MOVE_CANCEL: f32 = 6.0;
+
 impl CompositorHandler for LayerApp {
     fn scale_factor_changed(
         &mut self,
@@ -308,6 +313,15 @@ impl PointerHandler for LayerApp {
         for e in events {
             match e.kind {
                 PointerEventKind::Motion { .. } => {
+                    // `on_click` armado: si el puntero se alejó del origen del
+                    // press más que el umbral, fue un arrastre/barrido → cancelar
+                    // el click (no se disparará al soltar).
+                    if let Some((_, _, (ox, oy))) = self.pending_click.as_ref() {
+                        let (dx, dy) = (e.position.0 as f32 - ox, e.position.1 as f32 - oy);
+                        if (dx * dx + dy * dy).sqrt() > CLICK_MOVE_CANCEL {
+                            self.pending_click = None;
+                        }
+                    }
                     // Drag en curso: el delta va al handler del nodo.
                     if self.drag.is_some() {
                         let (px, py) = (e.position.0 as f32, e.position.1 as f32);
@@ -347,6 +361,8 @@ impl PointerHandler for LayerApp {
                     continue;
                 }
                 PointerEventKind::Leave { .. } => {
+                    // El puntero salió de la superficie: cancelá cualquier click armado.
+                    self.pending_click = None;
                     if let Some(pi) = self.panel_de(&e.surface) {
                         if self.panels[pi].hover_idx.is_some() {
                             self.panels[pi].hover_idx = None;
@@ -392,6 +408,10 @@ impl PointerHandler for LayerApp {
                         if let Some(msg) = (d.handler)(DragPhase::End, 0.0, 0.0) {
                             self.handle_msg(msg);
                         }
+                    } else if let Some((_, msg, _)) = self.pending_click.take() {
+                        // `on_click` armado en el press y no cancelado por
+                        // movimiento → este es el click real, al soltar.
+                        self.handle_msg(msg);
                     }
                 }
                 continue;
@@ -441,6 +461,21 @@ impl PointerHandler for LayerApp {
                         info.unwrap_or_else(|| "sin cache".into())
                     );
                 }
+                // Para el clic IZQUIERDO con `on_click` plano NO disparamos en el
+                // press: armamos el click y lo disparamos al RELEASE (semántica
+                // de escritorio), salvo que el puntero se aleje del origen. Lo
+                // posicional (`on_click_at`) y el clic derecho/medio sí van en el
+                // press (gestos de press por diseño).
+                if izquierdo {
+                    let armado = self.panels[pi].cache.as_ref().and_then(|c| {
+                        let i = hit_test_click(&c.mounted, &c.computed, px, py)?;
+                        c.mounted.nodes.get(i)?.on_click.clone()
+                    });
+                    if let Some(msg) = armado {
+                        self.pending_click = Some((pi, msg, (px, py)));
+                        continue;
+                    }
+                }
                 let msg = self.panels[pi].cache.as_ref().and_then(|c| {
                     let i = hit_test_click(&c.mounted, &c.computed, px, py)?;
                     let n = c.mounted.nodes.get(i)?;
@@ -456,9 +491,7 @@ impl PointerHandler for LayerApp {
                         // (mismo modelo que el derecho).
                         n.on_middle_click.clone()
                     } else {
-                        if let Some(m) = n.on_click.clone() {
-                            return Some(m);
-                        }
+                        // Izquierdo sin `on_click` plano: lo posicional va en el press.
                         let at = n.on_click_at.as_ref()?;
                         let r = c.computed.get(n.id)?;
                         at(px - r.x, py - r.y, r.w, r.h)
