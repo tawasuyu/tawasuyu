@@ -238,6 +238,18 @@
     }
 
     #[test]
+    fn persist_status_no_miente_sobre_pty_persistente() {
+        // E4 entregó la persistencia PTY (`:spawn`/`:attach`): el status no debe
+        // decir que está "pendiente"; debe apuntar a `:spawn`.
+        let mut s = State::new(Source::Local);
+        s.input.set_text(":persist");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let texts: Vec<String> = s.output.iter().map(|l| l.text.clone()).collect();
+        assert!(!texts.iter().any(|t| t.contains("pendiente")), "{texts:?}");
+        assert!(texts.iter().any(|t| t.contains(":spawn")));
+    }
+
+    #[test]
     fn diff_compara_dos_bloques() {
         let mut s = State::new(Source::Local);
         // Bloque 1: a/b/c · Bloque 2: a/B/c/d → -b +B +d.

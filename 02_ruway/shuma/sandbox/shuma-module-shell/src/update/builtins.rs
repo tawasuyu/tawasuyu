@@ -262,7 +262,8 @@ pub(crate) fn apply_persist(mut s: State, rest: &str) -> State {
                  (guarda y restaura el historial visible al reabrir)",
             ));
             s.push_output(OutputLine::notice(
-                "  ⚠ comandos vivos mueren con la app — PTY persistente en el daemon: pendiente",
+                "  · comandos en primer plano mueren con la app — `:spawn <cmd>` lo corre \
+                 en el daemon y SOBREVIVE a cerrar shuma (`:sessions`/`:attach` para reconectar)",
             ));
         }
         "on" => {
