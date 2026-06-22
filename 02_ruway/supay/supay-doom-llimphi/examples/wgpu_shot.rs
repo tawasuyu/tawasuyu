@@ -83,6 +83,14 @@ fn main() {
         snap = engine.capture_scene(40 + t + 1);
     }
     engine.push_key(false, turn_key);
+    // Avance opcional (SUPAY_FWD=N) para meterse al courtyard (cielo abierto).
+    let fwd: u64 = std::env::var("SUPAY_FWD").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    for t in 0..fwd {
+        engine.push_key(true, supay_core::keys::KEY_UPARROW);
+        engine.tick();
+        snap = engine.capture_scene(100 + t + 1);
+    }
+    engine.push_key(false, supay_core::keys::KEY_UPARROW);
     register(&snap, &engine, &mut kf, &mut ks);
 
     eprintln!(

@@ -118,6 +118,13 @@ pub struct DoomGpuRenderer {
     /// Depth buffer, recreado al cambiar de tamaño.
     depth: Option<(u32, u32, wgpu::TextureView)>,
     batches: Vec<Batch>,
+    /// Backdrop de cielo: pipeline fullscreen + su uniform + la textura SKY.
+    /// Se dibuja primero, sin escribir depth, así el mundo lo tapa donde hay
+    /// geometría y queda visible donde el techo es cielo (skip de techo).
+    sky_pipeline: wgpu::RenderPipeline,
+    sky_uniform_buf: wgpu::Buffer,
+    sky_uniform_bg: wgpu::BindGroup,
+    sky_tex: Option<Arc<GpuTexture>>,
 }
 
 impl DoomGpuRenderer {
@@ -130,7 +137,7 @@ impl DoomGpuRenderer {
             label: Some("doom3d-uniform-layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -262,6 +269,81 @@ impl DoomGpuRenderer {
             1,
         ));
 
+        // --- Backdrop de cielo ---
+        let sky_uniform_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("doom3d-sky-uniform-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let sky_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("doom3d-sky-uniform"),
+            size: 16, // yaw, pitch, fov_x, aspect
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let sky_uniform_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("doom3d-sky-uniform-bg"),
+            layout: &sky_uniform_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: sky_uniform_buf.as_entire_binding(),
+            }],
+        });
+        let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("doom3d-sky-shader"),
+            source: wgpu::ShaderSource::Wgsl(SKY_WGSL.into()),
+        });
+        let sky_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("doom3d-sky-pipeline-layout"),
+                bind_group_layouts: &[&sky_uniform_layout, &tex_layout],
+                push_constant_ranges: &[],
+            });
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("doom3d-sky-pipeline"),
+            layout: Some(&sky_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                // No escribe depth y siempre pasa: es un fondo, el mundo lo tapa.
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             pipeline,
             uniform_buf,
@@ -272,6 +354,10 @@ impl DoomGpuRenderer {
             white,
             depth: None,
             batches: Vec::new(),
+            sky_pipeline,
+            sky_uniform_buf,
+            sky_uniform_bg,
+            sky_tex: None,
         }
     }
 
@@ -316,6 +402,27 @@ impl DoomGpuRenderer {
                         h,
                     );
                     self.textures.insert(key.clone(), Arc::new(gpu));
+                }
+            }
+        }
+
+        // 2b. Textura de cielo (una vez). El snapshot no expone el nombre del
+        //     skytexture, así que probamos los lumps canónicos por episodio.
+        if self.sky_tex.is_none() {
+            for name in ["SKY1", "SKY2", "SKY3", "SKY4"] {
+                if let Some(t) = atlas.wall_texture(name) {
+                    if t.width > 0 && t.height > 0 {
+                        self.sky_tex = Some(Arc::new(upload_texture(
+                            device,
+                            queue,
+                            &self.tex_layout,
+                            &self.sampler,
+                            &t.rgba,
+                            t.width as u32,
+                            t.height as u32,
+                        )));
+                        break;
+                    }
                 }
             }
         }
@@ -370,6 +477,13 @@ impl DoomGpuRenderer {
         }
         queue.write_buffer(&self.uniform_buf, 0, &bytes);
 
+        // Uniform del cielo: yaw, pitch, fov_x, aspect.
+        let mut sky_bytes = Vec::with_capacity(16);
+        for v in [cam.yaw, cam.pitch, cam.fov_x, w as f32 / h as f32] {
+            sky_bytes.extend_from_slice(&v.to_ne_bytes());
+        }
+        queue.write_buffer(&self.sky_uniform_buf, 0, &sky_bytes);
+
         self.ensure_depth(device, w, h);
         let depth_view = &self.depth.as_ref().unwrap().2;
 
@@ -395,6 +509,15 @@ impl DoomGpuRenderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+        // Cielo primero (fondo, sin escribir depth) — el mundo lo tapa donde
+        // hay geometría; donde el techo es cielo queda visible.
+        if let Some(sky) = &self.sky_tex {
+            pass.set_pipeline(&self.sky_pipeline);
+            pass.set_bind_group(0, &self.sky_uniform_bg, &[]);
+            pass.set_bind_group(1, &sky.bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bg, &[]);
         for b in &self.batches {
@@ -890,5 +1013,46 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // E1M1 no es brumoso). Piso 0.22 para que el fondo no quede negro.
     let atten = clamp(1.0 - in.dist * u.eye.w, 0.22, 1.0);
     return vec4<f32>(c.rgb * in.light * atten, 1.0);
+}
+"#;
+
+/// Backdrop de cielo: triángulo fullscreen + muestreo cilíndrico por yaw.
+const SKY_WGSL: &str = r#"
+struct SkyU { yaw: f32, pitch: f32, fov_x: f32, aspect: f32 };
+@group(0) @binding(0) var<uniform> s: SkyU;
+@group(1) @binding(0) var sky: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+
+const PI: f32 = 3.14159265;
+
+struct SOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) scr: vec2<f32>,   // uv de pantalla, (0,0) = arriba-izquierda
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> SOut {
+    // Triángulo grande que cubre la pantalla.
+    var p = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var o: SOut;
+    let c = p[vi];
+    o.clip = vec4<f32>(c, 0.0, 1.0);
+    o.scr = vec2<f32>(c.x * 0.5 + 0.5, 1.0 - (c.y * 0.5 + 0.5));
+    return o;
+}
+
+@fragment
+fn fs(in: SOut) -> @location(0) vec4<f32> {
+    // Ángulo de la columna: centro = yaw, bordes ± fov/2. El cielo de Doom
+    // tilea 4× por 360°, así que a 90° de FOV cubre ~1 tile de ancho.
+    let colang = s.yaw - (in.scr.x - 0.5) * s.fov_x;
+    let su = fract(colang / (2.0 * PI) * 4.0);
+    // Vertical: arriba de pantalla = arriba del cielo, con shift por pitch.
+    let sv = clamp(in.scr.y - s.pitch * 0.5, 0.0, 1.0);
+    return textureSample(sky, samp, vec2<f32>(su, sv));
 }
 "#;
