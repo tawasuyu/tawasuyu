@@ -123,7 +123,15 @@ struct WaterBatch {
     buffer: wgpu::Buffer,
     count: u32,
     frames: Vec<Arc<GpuTexture>>,
+    /// Índice del plano de agua (en `water_planes`) al que pertenece esta
+    /// superficie → de qué mapa de reflexión se muestrea.
+    plane: usize,
 }
+
+/// Máximo de planos de agua distintos con reflexión por escena (cada uno es
+/// un pase + textura de reflexión extra). Las superficies a otras alturas se
+/// asocian al plano más cercano.
+const MAX_WATER_PLANES: usize = 4;
 
 /// El renderer. Cachea las texturas (caras) entre frames; la geometría se
 /// reconstruye por frame desde el snapshot (las puertas/plataformas se
@@ -167,12 +175,14 @@ pub struct DoomGpuRenderer {
     water_batches: Vec<WaterBatch>,
     /// Cache de texturas de frame de flat por nombre (NUKAGE1, NUKAGE2, …).
     flat_frame_tex: HashMap<String, Arc<GpuTexture>>,
-    /// Altura `z` del plano de agua (la superficie líquida) — `None` si no hay
-    /// líquido en escena. Una sola aproximación por escena.
-    water_z: Option<f32>,
-    uniform_buf_reflect: wgpu::Buffer,
-    uniform_bg_reflect: wgpu::BindGroup,
-    refl: Option<ReflTarget>,
+    /// Alturas `z` de los planos de agua distintos (≤ MAX_WATER_PLANES). Cada
+    /// uno tiene su propio pase + textura de reflexión.
+    water_planes: Vec<f32>,
+    /// Uniformes (MVP reflejada) por plano — MAX_WATER_PLANES creados al
+    /// inicio. Y los render targets de reflexión, recreados al cambiar size.
+    refl_uniform_bufs: Vec<wgpu::Buffer>,
+    refl_uniform_bgs: Vec<wgpu::BindGroup>,
+    refl_targets: Vec<ReflTarget>,
 }
 
 /// Render target de la reflexión planar.
@@ -313,21 +323,29 @@ impl DoomGpuRenderer {
                 resource: uniform_buf.as_entire_binding(),
             }],
         });
-        // Uniforme gemelo para el pase de reflexión (MVP reflejada).
-        let uniform_buf_reflect = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("doom3d-uniform-reflect"),
-            size: 112,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniform_bg_reflect = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("doom3d-uniform-reflect-bg"),
-            layout: &uniform_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf_reflect.as_entire_binding(),
-            }],
-        });
+        // Uniformes gemelos para los pases de reflexión (MVP reflejada), uno
+        // por plano de agua posible.
+        let mut refl_uniform_bufs = Vec::with_capacity(MAX_WATER_PLANES);
+        let mut refl_uniform_bgs = Vec::with_capacity(MAX_WATER_PLANES);
+        for i in 0..MAX_WATER_PLANES {
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("doom3d-uniform-reflect"),
+                size: 112,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("doom3d-uniform-reflect-bg"),
+                layout: &uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                }],
+            });
+            let _ = i;
+            refl_uniform_bufs.push(buf);
+            refl_uniform_bgs.push(bg);
+        }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("doom3d-sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -515,10 +533,10 @@ impl DoomGpuRenderer {
             weapon_flash: zero_weap,
             water_batches: Vec::new(),
             flat_frame_tex: HashMap::new(),
-            water_z: None,
-            uniform_buf_reflect,
-            uniform_bg_reflect,
-            refl: None,
+            water_planes: Vec::new(),
+            refl_uniform_bufs,
+            refl_uniform_bgs,
+            refl_targets: Vec::new(),
         }
     }
 
@@ -544,12 +562,21 @@ impl DoomGpuRenderer {
         //    pegging de Doom), así que el builder consulta el atlas. Los pisos
         //    líquidos van a un mapa aparte (`water_by_tex`) para la reflexión.
         let mut by_tex: HashMap<TexKey, Vec<Vertex>> = HashMap::new();
-        let mut water_by_tex: HashMap<TexKey, Vec<Vertex>> = HashMap::new();
-        let mut water_heights: Vec<f32> = Vec::new();
+        let mut water_map: WaterMap = HashMap::new();
         build_walls(snap, atlas, &mut by_tex);
-        build_flats(snap, atlas, &mut by_tex, &mut water_by_tex, &mut water_heights);
-        // Plano de agua: la altura líquida que más se repite (aprox. única).
-        self.water_z = representative_height(&water_heights);
+        build_flats(snap, atlas, &mut by_tex, &mut water_map);
+        // Planos de agua: hasta MAX_WATER_PLANES alturas distintas, elegidas
+        // por área (cantidad de vértices). Cada superficie se asocia luego al
+        // plano más cercano.
+        self.water_planes = pick_water_planes(&water_map);
+        if std::env::var_os("SUPAY_DIAG").is_some() {
+            eprintln!(
+                "wgpu3d: {} grupos de agua → {} planos de reflexión {:?}",
+                water_map.len(),
+                self.water_planes.len(),
+                self.water_planes,
+            );
+        }
 
         // 2. Asegurar que cada textura referida esté subida a GPU.
         for key in by_tex.keys() {
@@ -605,16 +632,15 @@ impl DoomGpuRenderer {
         //    con su secuencia de frames de animación de flat.
         self.batches = build_batches(device, by_tex);
         self.water_batches.clear();
-        for (key, verts) in water_by_tex {
+        for ((pic, _hk), (height, verts)) in water_map {
             if verts.is_empty() {
                 continue;
             }
+            // Plano más cercano a esta altura de agua.
+            let plane = nearest_plane(&self.water_planes, height);
             // Nombre base del flat → nombres de los frames de la animación.
-            let base = match &key {
-                TexKey::Flat(pic) => atlas.flat_name(*pic),
-                TexKey::Wall(_) => None,
-            };
-            let frame_names = base
+            let frame_names = atlas
+                .flat_name(pic)
                 .as_deref()
                 .map(liquid_anim_frames)
                 .unwrap_or_default();
@@ -644,19 +670,17 @@ impl DoomGpuRenderer {
             // Fallback: si no se resolvió ningún frame (flat raro o forzado),
             // usamos la textura por pic del cache normal o `white`.
             if frames.is_empty() {
-                if let TexKey::Flat(pic) = &key {
-                    if let Some(rgba) = atlas.flat_rgba(*pic) {
-                        if rgba.len() >= 64 * 64 * 4 {
-                            frames.push(Arc::new(upload_texture(
-                                device,
-                                queue,
-                                &self.tex_layout,
-                                &self.sampler,
-                                &rgba,
-                                64,
-                                64,
-                            )));
-                        }
+                if let Some(rgba) = atlas.flat_rgba(pic) {
+                    if rgba.len() >= 64 * 64 * 4 {
+                        frames.push(Arc::new(upload_texture(
+                            device,
+                            queue,
+                            &self.tex_layout,
+                            &self.sampler,
+                            &rgba,
+                            64,
+                            64,
+                        )));
                     }
                 }
             }
@@ -674,6 +698,7 @@ impl DoomGpuRenderer {
                 buffer,
                 count: verts.len() as u32,
                 frames,
+                plane,
             });
         }
     }
@@ -695,14 +720,14 @@ impl DoomGpuRenderer {
         let aspect = w as f32 / h as f32;
         let mvp = cam.mvp(aspect);
 
-        // ¿Hay agua con plano definido? → activamos la reflexión planar.
-        let do_reflect = !self.water_batches.is_empty() && self.water_z.is_some();
+        // ¿Hay agua con planos? → reflexión planar multi-plano.
+        let n_planes = self.water_planes.len().min(MAX_WATER_PLANES);
+        let do_reflect = !self.water_batches.is_empty() && n_planes > 0;
 
-        let water_z = self.water_z.unwrap_or(0.0);
         // Uniform: MVP + eye/fog + params(time,w,h,refl_strength) +
         // clip(water_z, clip_enable, 0, 0). `clip_enable=1` en el pase de
-        // reflexión → el fragment descarta lo que está bajo el agua.
-        let write_uniform = |buf: &wgpu::Buffer, mat: &Mat4, refl: f32, clip_enable: f32| {
+        // reflexión → el fragment descarta lo que está bajo ese plano de agua.
+        let write_uniform = |buf: &wgpu::Buffer, mat: &Mat4, refl: f32, water_z: f32, clip: f32| {
             let mut bytes = Vec::with_capacity(112);
             for v in mat.to_cols_array() {
                 bytes.extend_from_slice(&v.to_ne_bytes());
@@ -713,17 +738,20 @@ impl DoomGpuRenderer {
             for v in [cam.time, w as f32, h as f32, refl] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
-            for v in [water_z, clip_enable, 0.0, 0.0] {
+            for v in [water_z, clip, 0.0, 0.0] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
             queue.write_buffer(buf, 0, &bytes);
         };
         // SUPAY_NO_CLIP desactiva el clip bajo el agua (para A/B del efecto).
         let clip_enable = if std::env::var_os("SUPAY_NO_CLIP").is_some() { 0.0 } else { 1.0 };
-        write_uniform(&self.uniform_buf, &mvp, if do_reflect { 1.0 } else { 0.0 }, 0.0);
+        write_uniform(&self.uniform_buf, &mvp, if do_reflect { 1.0 } else { 0.0 }, 0.0, 0.0);
         if do_reflect {
-            let mvp_r = mvp * reflect_across_z(water_z);
-            write_uniform(&self.uniform_buf_reflect, &mvp_r, 0.0, clip_enable);
+            for i in 0..n_planes {
+                let z = self.water_planes[i];
+                let mvp_r = mvp * reflect_across_z(z);
+                write_uniform(&self.refl_uniform_bufs[i], &mvp_r, 0.0, z, clip_enable);
+            }
         }
 
         // Uniform del cielo: yaw, pitch, fov_x, aspect.
@@ -738,13 +766,13 @@ impl DoomGpuRenderer {
 
         self.ensure_depth(device, w, h);
         if do_reflect {
-            self.ensure_refl(device, w, h);
+            self.ensure_refls(device, w, h, n_planes);
         }
 
-        // --- Pase de reflexión: el mundo seco + sprites con la MVP reflejada,
-        //     a una textura aparte. El agua la muestrea después. ---
-        if do_reflect {
-            let refl = self.refl.as_ref().unwrap();
+        // --- Pases de reflexión: uno por plano de agua. El mundo seco +
+        //     sprites con la MVP reflejada de ese plano (clippeando bajo él). ---
+        for i in 0..(if do_reflect { n_planes } else { 0 }) {
+            let refl = &self.refl_targets[i];
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("doom3d-reflect-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -752,7 +780,6 @@ impl DoomGpuRenderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        // Fondo del reflejo = cielo nocturno (donde no hay mundo).
                         load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.06, b: 0.10, a: 1.0 }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -769,7 +796,7 @@ impl DoomGpuRenderer {
                 occlusion_query_set: None,
             });
             rp.set_pipeline(&self.pipeline);
-            rp.set_bind_group(0, &self.uniform_bg_reflect, &[]);
+            rp.set_bind_group(0, &self.refl_uniform_bgs[i], &[]);
             rp.set_bind_group(2, &self.white.bind_group, &[]); // sin reflexión anidada
             for b in &self.batches {
                 let tex = self.textures.get(&b.key).unwrap_or(&self.white);
@@ -786,12 +813,6 @@ impl DoomGpuRenderer {
 
         // --- Pase principal ---
         let depth_view = &self.depth.as_ref().unwrap().2;
-        // group 2 = mapa de reflexión (o `white` si no hay agua).
-        let refl_bg = if do_reflect {
-            &self.refl.as_ref().unwrap().bind_group
-        } else {
-            &self.white.bind_group
-        };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("doom3d-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -824,18 +845,24 @@ impl DoomGpuRenderer {
 
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bg, &[]);
-        pass.set_bind_group(2, refl_bg, &[]);
-        // Mundo seco.
+        // Mundo seco: group 2 = white (no muestrea reflexión).
+        pass.set_bind_group(2, &self.white.bind_group, &[]);
         for b in &self.batches {
             let tex = self.textures.get(&b.key).unwrap_or(&self.white);
             pass.set_bind_group(1, &tex.bind_group, &[]);
             pass.set_vertex_buffer(0, b.buffer.slice(..));
             pass.draw(0..b.count, 0..1);
         }
-        // Agua: frame de animación por tiempo (8 tics/frame a 35 Hz, como
-        // Doom) + muestrea el mapa de reflexión en group 2.
+        // Agua: frame de animación por tiempo (8 tics/frame a 35 Hz) + el mapa
+        // de reflexión de SU plano (group 2).
         let frame_idx = (cam.time * (35.0 / 8.0)).max(0.0) as usize;
         for b in &self.water_batches {
+            let refl_bg = if do_reflect {
+                &self.refl_targets[b.plane.min(n_planes - 1)].bind_group
+            } else {
+                &self.white.bind_group
+            };
+            pass.set_bind_group(2, refl_bg, &[]);
             let n = b.frames.len().max(1);
             let tex = &b.frames[frame_idx % n];
             pass.set_bind_group(1, &tex.bind_group, &[]);
@@ -859,49 +886,54 @@ impl DoomGpuRenderer {
         }
     }
 
-    /// (Re)crea el render target de reflexión (color + depth + bind group) si
-    /// cambió el tamaño.
-    fn ensure_refl(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        if matches!(&self.refl, Some(r) if r.w == w && r.h == h) {
+    /// Asegura `n` render targets de reflexión (color+depth+bind group) al
+    /// tamaño `(w,h)`. Recrea todos si cambió el tamaño o el conteo.
+    fn ensure_refls(&mut self, device: &wgpu::Device, w: u32, h: u32, n: usize) {
+        let ok = self.refl_targets.len() == n
+            && self.refl_targets.iter().all(|r| r.w == w && r.h == h);
+        if ok {
             return;
         }
-        let color = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("doom3d-refl-color"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let color_view = color.create_view(&Default::default());
-        let depth = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("doom3d-refl-depth"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let depth_view = depth.create_view(&Default::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("doom3d-refl-bg"),
-            layout: &self.tex_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&color_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-        self.refl = Some(ReflTarget { w, h, color_view, depth_view, bind_group });
+        self.refl_targets.clear();
+        for _ in 0..n {
+            let color = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("doom3d-refl-color"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let color_view = color.create_view(&Default::default());
+            let depth = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("doom3d-refl-depth"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let depth_view = depth.create_view(&Default::default());
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("doom3d-refl-bg"),
+                layout: &self.tex_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&color_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            self.refl_targets.push(ReflTarget { w, h, color_view, depth_view, bind_group });
+        }
     }
 
     /// Construye los quads clip-space del arma en mano (weapon + flash) según
@@ -1134,20 +1166,32 @@ fn build_batches(device: &wgpu::Device, by_tex: HashMap<TexKey, Vec<Vertex>>) ->
     batches
 }
 
-/// Altura representativa de un conjunto de superficies líquidas: la moda
-/// (la que más se repite). Una sola escena suele tener el agua a una altura;
-/// si hay varias, elegimos la dominante (el plano de reflexión es único).
-fn representative_height(heights: &[f32]) -> Option<f32> {
-    if heights.is_empty() {
-        return None;
+/// Elige hasta [`MAX_WATER_PLANES`] alturas de agua distintas, priorizando las
+/// de mayor área (más vértices). El resto de superficies se asociará al plano
+/// más cercano vía [`nearest_plane`].
+fn pick_water_planes(water: &WaterMap) -> Vec<f32> {
+    // Área (n.º de vértices) por altura redondeada.
+    let mut by_h: HashMap<i32, (u64, f32)> = HashMap::new();
+    for ((_pic, hk), (h, verts)) in water {
+        let e = by_h.entry(*hk).or_insert((0, *h));
+        e.0 += verts.len() as u64;
     }
-    // Agrupamos por valor redondeado (las alturas Doom son enteras).
-    let mut counts: HashMap<i32, (u32, f32)> = HashMap::new();
-    for &h in heights {
-        let e = counts.entry(h.round() as i32).or_insert((0, h));
-        e.0 += 1;
-    }
-    counts.values().max_by_key(|(c, _)| *c).map(|(_, h)| *h)
+    let mut v: Vec<(u64, f32)> = by_h.into_values().collect();
+    v.sort_by(|a, b| b.0.cmp(&a.0)); // mayor área primero
+    v.truncate(MAX_WATER_PLANES);
+    v.into_iter().map(|(_, h)| h).collect()
+}
+
+/// Índice del plano de `planes` más cercano a la altura `h` (0 si vacío).
+fn nearest_plane(planes: &[f32], h: f32) -> usize {
+    planes
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (**a - h).abs().partial_cmp(&(**b - h).abs()).unwrap()
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(0)
 }
 
 /// Tamaño (w, h) en téxeles de una textura de pared, o `None` si no resuelve.
@@ -1311,12 +1355,16 @@ fn push_wall_quad(
 
 /// Reconstruye el polígono convexo de cada subsector vía clipping de los
 /// semiplanos del BSP y emite sus triángulos de piso y techo.
+/// Mapa de superficies líquidas: clave (pic_idx del flat, altura redondeada)
+/// → (altura real, vértices). Separar por altura permite un plano de
+/// reflexión por nivel de agua.
+type WaterMap = HashMap<(u16, i32), (f32, Vec<Vertex>)>;
+
 fn build_flats(
     snap: &SceneSnapshot,
     atlas: &WadAtlas,
     out: &mut HashMap<TexKey, Vec<Vertex>>,
-    water_out: &mut HashMap<TexKey, Vec<Vertex>>,
-    water_heights: &mut Vec<f32>,
+    water_out: &mut WaterMap,
 ) {
     if snap.nodes.is_empty() {
         return;
@@ -1355,7 +1403,6 @@ fn build_flats(
         atlas,
         out,
         water_out,
-        water_heights,
     );
 }
 
@@ -1371,21 +1418,11 @@ fn collect_subsectors(
     snap: &SceneSnapshot,
     atlas: &WadAtlas,
     out: &mut HashMap<TexKey, Vec<Vertex>>,
-    water_out: &mut HashMap<TexKey, Vec<Vertex>>,
-    water_heights: &mut Vec<f32>,
+    water_out: &mut WaterMap,
 ) {
     if child & NF_SUBSECTOR != 0 {
         let ssidx = (child & !NF_SUBSECTOR) as usize;
-        emit_subsector_flats(
-            ssidx,
-            bounds,
-            planes,
-            snap,
-            atlas,
-            out,
-            water_out,
-            water_heights,
-        );
+        emit_subsector_flats(ssidx, bounds, planes, snap, atlas, out, water_out);
         return;
     }
     let Some(node) = nodes.get(child as usize) else {
@@ -1399,17 +1436,7 @@ fn collect_subsectors(
             node.partition_dy,
             front,
         ));
-        collect_subsectors(
-            nodes,
-            idx,
-            bounds,
-            planes,
-            snap,
-            atlas,
-            out,
-            water_out,
-            water_heights,
-        );
+        collect_subsectors(nodes, idx, bounds, planes, snap, atlas, out, water_out);
         planes.pop();
     }
 }
@@ -1422,8 +1449,7 @@ fn emit_subsector_flats(
     snap: &SceneSnapshot,
     atlas: &WadAtlas,
     out: &mut HashMap<TexKey, Vec<Vertex>>,
-    water_out: &mut HashMap<TexKey, Vec<Vertex>>,
-    water_heights: &mut Vec<f32>,
+    water_out: &mut WaterMap,
 ) {
     let Some(sub) = snap.subsectors.get(ssidx) else {
         return;
@@ -1454,9 +1480,12 @@ fn emit_subsector_flats(
 
     // Piso: triángulo-fan del polígono convexo, winding tal cual.
     if is_liquid {
-        water_heights.push(sec.floor_height);
-        let floor = water_out.entry(TexKey::Flat(sec.floor_pic)).or_default();
-        fan_flat(floor, &poly, sec.floor_height, light, 1.0);
+        // Clave (pic, altura redondeada): un grupo por flat y nivel de agua.
+        let key = (sec.floor_pic, sec.floor_height.round() as i32);
+        let entry = water_out
+            .entry(key)
+            .or_insert_with(|| (sec.floor_height, Vec::new()));
+        fan_flat(&mut entry.1, &poly, sec.floor_height, light, 1.0);
     } else {
         let floor = out.entry(TexKey::Flat(sec.floor_pic)).or_default();
         fan_flat(floor, &poly, sec.floor_height, light, 0.0);
