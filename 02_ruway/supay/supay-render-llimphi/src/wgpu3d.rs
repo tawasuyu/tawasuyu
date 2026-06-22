@@ -133,6 +133,33 @@ struct WaterBatch {
 /// asocian al plano más cercano.
 const MAX_WATER_PLANES: usize = 4;
 
+/// Máximo de luces dinámicas puntuales por frame en el shader 3D. Cada
+/// mobj `FF_FULLBRIGHT` (proyectil en vuelo, antorcha, llave, fog) aporta
+/// una; nos quedamos con las `N_DYN_LIGHTS` más cercanas al jugador. 8
+/// cubre escenarios típicos de Doom (BFG en cluster, spam de cyberdemon).
+/// Espeja `MAX_WORLD_LIGHTS` del path CPU (`lighting.rs`).
+const N_DYN_LIGHTS: usize = 8;
+/// Bytes del uniform `U`: `mat4(64)+eye(16)+params(16)+clip(16)` = 112, más
+/// `nlights(16)` + `lpos[N](16·N)` + `lcol[N](16·N)`.
+const UNIFORM_SIZE: u64 = 112 + 16 + (N_DYN_LIGHTS as u64) * 32;
+/// Pico de intensidad de una luz dinámica en el shader (multiplica el
+/// tinte). Calibrado para que un fireball ilumine un cuarto oscuro sin
+/// "blow out" — el fogonazo del arma (×2.4) sigue siendo dominante.
+const DYN_LIGHT_INTENSITY: f32 = 1.4;
+/// Altura sumada a `sprite.z` (los pies del mobj) para colocar la luz en
+/// el centro del proyectil/decoración en lugar del piso.
+const DYN_LIGHT_Z_OFFSET: f32 = 16.0;
+
+/// Luz puntual dinámica resuelta para un frame, lista para empaquetar al
+/// uniform. Posición mundo + radio + tinte normalizado + intensidad.
+#[derive(Clone, Copy)]
+struct DynLight {
+    pos: [f32; 3],
+    radius: f32,
+    col: [f32; 3],
+    intensity: f32,
+}
+
 /// El renderer. Cachea las texturas (caras) entre frames; la geometría se
 /// reconstruye por frame desde el snapshot (las puertas/plataformas se
 /// mueven), que para E1M1 son unos pocos miles de tris — barato.
@@ -338,7 +365,7 @@ impl DoomGpuRenderer {
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("doom3d-uniform"),
-            size: 112, // mat4(64) + eye(16) + params(16) + clip(16)
+            size: UNIFORM_SIZE, // 112 + nlights(16) + lpos[N] + lcol[N]
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -357,7 +384,7 @@ impl DoomGpuRenderer {
         for i in 0..MAX_WATER_PLANES {
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("doom3d-uniform-reflect"),
-                size: 112,
+                size: UNIFORM_SIZE,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -829,8 +856,37 @@ impl DoomGpuRenderer {
         } else {
             0.0
         };
+        // Luces dinámicas: cada proyectil/antorcha FF_FULLBRIGHT irradia su
+        // tinte característico al mundo (paredes, pisos, sprites) — espeja el
+        // sistema `WorldLight` del path CPU (`lighting.rs`). Se computa una
+        // vez por frame y se empaqueta idéntico en todos los uniforms
+        // (principal + pases de reflexión). `SUPAY_NO_DYNLIGHTS` lo apaga
+        // para A/B del efecto.
+        let dyn_lights = if std::env::var_os("SUPAY_NO_DYNLIGHTS").is_some() {
+            Vec::new()
+        } else {
+            self.gather_dyn_lights(cam)
+        };
+        let mut light_bytes = Vec::with_capacity(16 + N_DYN_LIGHTS * 32);
+        for v in [dyn_lights.len() as f32, 0.0, 0.0, 0.0] {
+            light_bytes.extend_from_slice(&v.to_ne_bytes());
+        }
+        for i in 0..N_DYN_LIGHTS {
+            let l = dyn_lights.get(i).copied();
+            let (p, r) = l.map_or(([0.0; 3], 1.0), |l| (l.pos, l.radius));
+            for v in [p[0], p[1], p[2], r] {
+                light_bytes.extend_from_slice(&v.to_ne_bytes());
+            }
+        }
+        for i in 0..N_DYN_LIGHTS {
+            let l = dyn_lights.get(i).copied();
+            let (c, it) = l.map_or(([0.0; 3], 0.0), |l| (l.col, l.intensity));
+            for v in [c[0], c[1], c[2], it] {
+                light_bytes.extend_from_slice(&v.to_ne_bytes());
+            }
+        }
         let write_uniform = |buf: &wgpu::Buffer, mat: &Mat4, refl: f32, water_z: f32, clip: f32, muz: f32| {
-            let mut bytes = Vec::with_capacity(112);
+            let mut bytes = Vec::with_capacity(UNIFORM_SIZE as usize);
             for v in mat.to_cols_array() {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
@@ -843,6 +899,7 @@ impl DoomGpuRenderer {
             for v in [water_z, clip, muz, 0.0] {
                 bytes.extend_from_slice(&v.to_ne_bytes());
             }
+            bytes.extend_from_slice(&light_bytes);
             queue.write_buffer(buf, 0, &bytes);
         };
         // SUPAY_NO_CLIP desactiva el clip bajo el agua (para A/B del efecto).
@@ -1251,6 +1308,52 @@ impl DoomGpuRenderer {
 
     /// Resuelve los sprites del snapshot a billboards orientados a la cámara,
     /// subiendo/cacheando su textura. Devuelve (textura, vbuf, n_vértices).
+    /// Recolecta las luces dinámicas del frame: cada sprite con bit
+    /// `FF_FULLBRIGHT` (0x80) y sector válido aporta una luz puntual en su
+    /// posición mundo, con el tinte característico del mobj resuelto por la
+    /// misma tabla del path CPU (`sprite_tint_for_name`: fireballs rojos,
+    /// plasma azul, BFG verde, antorchas teñidas…). Se queda con las
+    /// [`N_DYN_LIGHTS`] más cercanas al jugador.
+    fn gather_dyn_lights(&self, cam: &CameraParams) -> Vec<DynLight> {
+        let atlas = self.atlas.as_ref();
+        let mut lights: Vec<(f32, DynLight)> = self
+            .sprites
+            .iter()
+            .filter(|s| s.frame & 0x80 != 0 && s.sector != NO_SECTOR)
+            .map(|s| {
+                let dx = s.x - cam.x;
+                let dy = s.y - cam.y;
+                let d2 = dx * dx + dy * dy;
+                // Tinte per-mobj; cae al amarillo cálido del muzzle si el
+                // atlas no resuelve el nombre (modo sin WAD).
+                let tint = atlas
+                    .and_then(|a| a.sprite_name(s.sprite))
+                    .map(|n| crate::sprite_tint_for_name(&n))
+                    .unwrap_or(crate::MUZZLE_TINT_RGB);
+                (
+                    d2,
+                    DynLight {
+                        pos: [s.x, s.y, s.z + DYN_LIGHT_Z_OFFSET],
+                        radius: crate::WORLD_LIGHT_RADIUS_WORLD,
+                        col: [
+                            tint.0 as f32 / 255.0,
+                            tint.1 as f32 / 255.0,
+                            tint.2 as f32 / 255.0,
+                        ],
+                        intensity: DYN_LIGHT_INTENSITY,
+                    },
+                )
+            })
+            .collect();
+        if lights.len() > N_DYN_LIGHTS {
+            lights.select_nth_unstable_by(N_DYN_LIGHTS, |a, b| {
+                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            lights.truncate(N_DYN_LIGHTS);
+        }
+        lights.into_iter().map(|(_, l)| l).collect()
+    }
+
     fn build_sprite_draws(
         &mut self,
         device: &wgpu::Device,
@@ -1899,7 +2002,10 @@ struct U {
     mvp: mat4x4<f32>,
     eye: vec4<f32>,     // .xyz = cámara, .w = densidad de diminishing
     params: vec4<f32>,  // .x=time .y=w .z=h .w=fuerza de reflexión (0/1)
-    clip: vec4<f32>,    // .x=water_z .y=clip_enable (1 en pase de reflexión)
+    clip: vec4<f32>,    // .x=water_z .y=clip_enable (1 en pase de reflexión) .z=muzzle
+    nlights: vec4<f32>, // .x = nº de luces dinámicas activas
+    lpos: array<vec4<f32>, 8>, // .xyz = pos mundo, .w = radio
+    lcol: array<vec4<f32>, 8>, // .rgb = tinte (0..1), .w = intensidad
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var tex: texture_2d<f32>;
@@ -1988,13 +2094,58 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         col += col * vec3<f32>(0.60, 0.42, 0.18) * (m * 2.4);
     }
 
+    // Luces dinámicas de proyectiles: cada fireball/plasma/BFG/antorcha
+    // FF_FULLBRIGHT irradia su tinte al mundo. Falloff cuadrático
+    // (1 - d²/r²)² como el path CPU. El término `col*0.85 + 0.06` mezcla
+    // realce multiplicativo (superficies ya iluminadas) con un piso aditivo
+    // (un cuarto negro igual capta el resplandor de color).
+    let nl = i32(u.nlights.x);
+    for (var i = 0; i < nl; i = i + 1) {
+        let lp = u.lpos[i];
+        let dv = in.world - lp.xyz;
+        let d2 = dot(dv, dv);
+        let r2 = lp.w * lp.w;
+        if (d2 < r2) {
+            let f = 1.0 - d2 / r2;
+            let att = f * f;
+            let lc = u.lcol[i];
+            col += (col * 0.85 + vec3<f32>(0.06)) * lc.rgb * (att * lc.w);
+        }
+    }
+
     return vec4<f32>(col, 1.0);
 }
 "#;
 
 #[cfg(test)]
 mod tests {
-    use super::{is_liquid_flat, liquid_anim_frames};
+    use super::{
+        is_liquid_flat, liquid_anim_frames, BLIT_WGSL, BRIGHT_WGSL, OVERLAY_WGSL, SKY_WGSL, WGSL,
+    };
+
+    /// Valida headless (sin GPU) que cada shader WGSL parsea y pasa el
+    /// validador de naga — el mismo que wgpu corre al crear el pipeline.
+    /// Sin esto, un error de sintaxis (p.ej. en el loop de luces dinámicas)
+    /// sólo aparecería al arrancar la app con GPU.
+    #[test]
+    fn shaders_wgsl_validan() {
+        let validar = |name: &str, src: &str| {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("WGSL `{name}` no parsea: {e}"));
+            let mut validator = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            );
+            validator
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("WGSL `{name}` no valida: {e:?}"));
+        };
+        validar("WGSL", WGSL);
+        validar("BLIT_WGSL", BLIT_WGSL);
+        validar("BRIGHT_WGSL", BRIGHT_WGSL);
+        validar("OVERLAY_WGSL", OVERLAY_WGSL);
+        validar("SKY_WGSL", SKY_WGSL);
+    }
 
     #[test]
     fn anim_frames_nukage_fwater_slime() {

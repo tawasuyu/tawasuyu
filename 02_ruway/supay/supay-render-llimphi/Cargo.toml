@@ -16,3 +16,9 @@ supay-wad = { path = "../supay-wad" }
 # correctas). Mismo wgpu del workspace que Llimphi pasa a `gpu_paint_with`.
 wgpu = { workspace = true }
 glam = { workspace = true }
+
+[dev-dependencies]
+# Validación headless de los shaders WGSL (sin GPU): naga parsea + valida
+# los módulos en un test, atajando errores que de otro modo sólo saldrían
+# al crear el pipeline en runtime.
+naga = { version = "27", features = ["wgsl-in"] }
