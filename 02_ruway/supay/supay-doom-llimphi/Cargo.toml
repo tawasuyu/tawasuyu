@@ -17,8 +17,12 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
+# Descarga in-app del WAD shareware: HTTP síncrono minimalista que corre en
+# un hilo de fondo y reentra al update vía Handle::dispatch.
+ureq = { workspace = true }
 supay-core = { path = "../supay-core" }
 supay-render-llimphi = { path = "../supay-render-llimphi" }
 supay-wad = { path = "../supay-wad" }

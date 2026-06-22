@@ -249,6 +249,16 @@ supay-stub-step-3-cmd =     cargo run -p supay-doom-llimphi --release
 supay-stub-footer = doomgeneric (C) ticks at 35 Hz; the 320×200 ARGB framebuffer paints in aspect-fit.
 supay-controls-hint = WASD · Ctrl fire · Space use · Tab map · F3 view · F4 cross · F5 vig · F6 HUD · F7 shadows · F8 muzzle · F9 occl · F10 mobj-lit · F11 rim · F12 quit
 supay-stub-controls-hint = F3 toggles FB/3D  ·  F12 closes the window
+# WAD acquisition screen (in-app download)
+supay-wad-title = Doom's WAD is missing — download it to play
+supay-wad-dir-label = Destination directory
+supay-wad-download = Download WAD
+supay-wad-downloading = Downloading the shareware WAD…
+supay-wad-hint = Pick a directory and hit Download (Enter). We fetch the shareware there and boot it for you.
+supay-wad-error = Download failed
+supay-wad-not-here = No WAD found in that directory
+supay-wad-play-existing = I already have it — Play
+supay-wad-legal = DOOM1.WAD shareware (episode 1, ~4 MB, freely distributable). Saved as doom1.wad.
 
 # === shuma-shell ===
 shuma-label-launcher = Launcher

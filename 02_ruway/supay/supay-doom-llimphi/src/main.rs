@@ -26,13 +26,20 @@
 //! ## Requiere
 //!
 //! 1. Vendoring de doomgeneric. Ver `supay-core/vendor/README.md`.
-//! 2. Un WAD legalmente distribuible (DOOM1.WAD shareware) en el
-//!    cwd desde donde se corre. Sin WAD, doomgeneric aborta.
+//! 2. Un WAD legalmente distribuible (DOOM1.WAD shareware). Si **falta**,
+//!    la app ya no aborta: construimos el motor sin bootear y mostramos la
+//!    pantalla de adquisición ([`acquire_pane`]) con un campo de directorio
+//!    editable y un botón **Descargar** que baja el shareware al directorio
+//!    elegido (en un hilo de fondo) y bootea el motor en caliente — sin
+//!    terminal ni recompilación. `SUPAY_FORCE_WAD_SCREEN=1` la fuerza para
+//!    previsualizarla aunque ya haya WAD.
 //!
-//! En modo stub (sin vendor), la app arranca igual y pinta un mensaje
-//! explicando qué falta — útil para verificar el plumbing Llimphi.
+//! En modo stub (sin vendor doomgeneric), la app arranca igual y pinta las
+//! instrucciones de build ([`stub_message_pane`]) — ahí sí hace falta
+//! recompilar, así que un botón no alcanza.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -54,6 +61,7 @@ use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
 };
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_motion::{animate, motion, Tween};
 
 use app_bus::{AppMenu, Menu, MenuItem};
@@ -93,6 +101,165 @@ const TICK_PERIOD: Duration = Duration::from_millis(TICK_MS);
 /// de ~0.58). En Framebuffer mode el redraw también ayuda al smoothing
 /// del scaling del FB.
 const FRAME_MS: u64 = 1_000 / 60;
+
+// =====================================================================
+// Adquisición del WAD — descarga in-app del shareware DOOM1.WAD
+// =====================================================================
+//
+// El motor C (doomgeneric) no arranca sin un IWAD: si falta, aborta el
+// proceso. Antes esta app pintaba una pantalla-consola con comandos para
+// copiar a mano (`curl …`, `cargo run …`). Ahora, cuando no encontramos
+// un WAD, mostramos un panel con un campo de directorio editable y un
+// botón **Descargar** que baja el shareware (≈ 4 MB, legalmente
+// distribuible) al directorio elegido y bootea el motor en caliente —
+// sin tocar la terminal ni recompilar.
+
+/// URL del shareware DOOM1.WAD (la misma que documentaba el viejo paso de
+/// `curl`). Episodio 1 de Doom, distribuible sin costo.
+const WAD_URL: &str = "https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad";
+
+/// Nombres de IWAD que sabemos cargar, en orden de preferencia. Probar
+/// varias capitalizaciones cubre tanto el shareware (`doom1.wad`) como un
+/// `DOOM1.WAD` traído de otra fuente, más Freedoom como alternativa libre.
+const WAD_CANDIDATES: &[&str] = &[
+    "doom1.wad",
+    "DOOM1.WAD",
+    "doom.wad",
+    "DOOM.WAD",
+    "freedoom1.wad",
+    "freedoom2.wad",
+];
+
+/// Busca un IWAD reconocible en `dir`. Devuelve el primer candidato que
+/// exista como archivo.
+fn find_wad_in(dir: &Path) -> Option<PathBuf> {
+    for name in WAD_CANDIDATES {
+        let p = dir.join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Directorio de descarga por defecto: el cwd (donde doomgeneric busca el
+/// IWAD relativo históricamente). Si no se puede resolver, `.`.
+fn default_dest_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Args estilo `argv` para bootear doomgeneric apuntando al WAD `path`
+/// (absoluto). doomgeneric resuelve `-iwad <path>` directo si existe.
+fn boot_args(path: &Path) -> Vec<String> {
+    vec![
+        "doomgeneric".to_string(),
+        "-iwad".to_string(),
+        path.to_string_lossy().into_owned(),
+    ]
+}
+
+/// Descarga el WAD a `dir/doom1.wad` por HTTP. Síncrona y bloqueante —
+/// el llamador la corre en un hilo de fondo. Devuelve el path final o un
+/// mensaje de error legible.
+fn download_wad(dir: &Path) -> Result<PathBuf, String> {
+    use std::io::copy;
+    std::fs::create_dir_all(dir).map_err(|e| format!("no se pudo crear {dir:?}: {e}"))?;
+    let target = dir.join("doom1.wad");
+    let resp = ureq::get(WAD_URL)
+        .call()
+        .map_err(|e| format!("HTTP: {e}"))?;
+    // Escribimos primero a un temporal y renombramos al final, para no
+    // dejar un doom1.wad truncado si la descarga se corta a la mitad.
+    let tmp = dir.join("doom1.wad.part");
+    let mut reader = resp.into_reader();
+    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("crear {tmp:?}: {e}"))?;
+    let n = copy(&mut reader, &mut file).map_err(|e| format!("escribir: {e}"))?;
+    drop(file);
+    // Un IWAD válido pesa varios MB; si bajaron 4 bytes es un error/redirect.
+    if n < 1024 {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("descarga sospechosamente corta ({n} bytes)"));
+    }
+    std::fs::rename(&tmp, &target).map_err(|e| format!("renombrar: {e}"))?;
+    Ok(target)
+}
+
+/// Bootea `engine` con el WAD en `path` y arma el atlas (renderer 3D) +
+/// el motor de audio desde el mismo archivo. Cualquiera de los dos puede
+/// quedar `None` sin romper el juego (renderer cae a paletas fallback;
+/// audio queda mudo). Devuelve `(atlas, audio)` para el Model.
+fn boot_engine(
+    engine: &mut DoomEngine,
+    path: &Path,
+) -> (Option<Arc<WadAtlas>>, Option<supay_audio::AudioEngine>) {
+    // Fase 4.0: sin `-nosound`. Ese flag sólo lo honra `i_sound.c`, EXCLUIDO
+    // del build (arrastra SDL_mixer); nuestro `audio_stubs.c` provee la API
+    // y graba cada SFX en un ring buffer que drenamos por tick.
+    engine.boot(boot_args(path));
+    // Cargamos el WAD desde el mismo path que pasamos al motor. Si falla,
+    // seguimos sin atlas — el renderer cae a las paletas hardcoded de 3.1.
+    let atlas = match Wad::open(path) {
+        Ok(wad) => Some(Arc::new(WadAtlas::new(wad, HashMap::new()))),
+        Err(e) => {
+            eprintln!("supay: WAD no cargado ({e}) — renderer 3D usará paletas fallback");
+            None
+        }
+    };
+    // Segundo `Wad` (el del atlas lo consumió `WadAtlas::new`) + device de
+    // salida. Sin WAD o sin device queda `None` y el juego corre mudo.
+    let audio = match Wad::open(path) {
+        Ok(wad) => match supay_audio::AudioEngine::new(wad) {
+            Ok(eng) => Some(eng),
+            Err(e) => {
+                eprintln!("supay: audio no disponible ({e}) — juego mudo");
+                None
+            }
+        },
+        Err(_) => None,
+    };
+    (atlas, audio)
+}
+
+/// Estado de la pantalla de adquisición del WAD. Presente sólo mientras no
+/// hay un IWAD booteado; al bootear se limpia a `None`.
+struct AcquireState {
+    /// Directorio destino editable (campo de texto). El botón Descargar
+    /// baja el WAD acá; un IWAD ya presente acá habilita Jugar.
+    dest: TextInputState,
+    /// Estado de la descarga en curso / último intento.
+    status: DownloadStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DownloadStatus {
+    /// Esperando acción del usuario.
+    Idle,
+    /// Hilo de descarga corriendo.
+    Running,
+    /// Falló — guardamos el mensaje para pintarlo.
+    Failed(String),
+}
+
+impl AcquireState {
+    fn new(dest_dir: &Path) -> Self {
+        let mut dest = TextInputState::new();
+        dest.set_text(dest_dir.to_string_lossy().into_owned());
+        Self {
+            dest,
+            status: DownloadStatus::Idle,
+        }
+    }
+
+    /// Path del directorio destino tal cual está escrito en el campo.
+    fn dest_dir(&self) -> PathBuf {
+        let raw = self.dest.text();
+        if raw.trim().is_empty() {
+            default_dest_dir()
+        } else {
+            PathBuf::from(raw.trim())
+        }
+    }
+}
 
 /// Modo de visualización. Toggleable con F3 — Fase 1 vs Fase 3.0.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -207,6 +374,10 @@ struct Model {
     /// — el contextual expone las acciones de juego (disparar / usar /
     /// vista), no edición.
     context_menu: Option<(f32, f32)>,
+    /// Pantalla de adquisición del WAD. `Some` ⇒ falta el IWAD y pintamos
+    /// el panel de descarga (campo de directorio + botón Descargar) en
+    /// lugar del juego; `None` ⇒ el motor ya booteó con un WAD válido.
+    acquire: Option<AcquireState>,
 }
 
 /// Fase 3.46: tipo de marca de impacto.
@@ -369,6 +540,21 @@ enum Msg {
     /// Inyecta un tap (press+release) de una tecla del motor Doom — lo
     /// usan los comandos de menú "Disparar" / "Usar" / "Menú del juego".
     DoomKeyTap(u8),
+
+    // --- Pantalla de adquisición del WAD ---
+    /// Tecla dirigida al campo de directorio destino (sólo activo en la
+    /// pantalla de descarga, cuando el motor todavía no booteó).
+    AcquireKey(KeyEvent),
+    /// Botón **Descargar**: lanza la bajada del shareware al directorio
+    /// elegido en un hilo de fondo.
+    StartDownload,
+    /// La descarga terminó OK con el WAD en `path` → bootea el motor.
+    DownloadOk(PathBuf),
+    /// La descarga falló — `msg` describe el error para pintarlo.
+    DownloadErr(String),
+    /// Botón **Jugar**: bootea con un WAD ya presente en el directorio
+    /// (sin descargar). Útil si el usuario lo copió a mano.
+    PlayExisting,
 }
 
 struct Supay;
@@ -391,46 +577,35 @@ impl App for Supay {
     fn init(handle: &Handle<Msg>) -> Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         handle.spawn_periodic(Duration::from_millis(FRAME_MS), || Msg::Frame);
-        // Args estilo argv. `-iwad doom1.wad` busca el WAD en cwd.
-        // Fase 4.0: quitamos `-nosound`. Ese flag sólo lo honra
-        // `i_sound.c`, que está EXCLUIDO del build (arrastra SDL_mixer);
-        // nuestro `audio_stubs.c` provee la API. `S_StartSound`
-        // (s_sound.c) llega a `I_StartSound` sin guard, así que ahora
-        // ese stub graba el evento (lump + vol + sep) en un ring buffer
-        // que drenamos cada tick y reproducimos con `supay-audio`. El
-        // stub no derefencia ningún lump → sin el segfault que motivó
-        // el flag histórico.
-        let args = vec![
-            "doomgeneric".to_string(),
-            "-iwad".to_string(),
-            "doom1.wad".to_string(),
-        ];
-        // Cargamos el WAD desde el mismo path que pasamos al motor.
-        // Si falla (no existe, mal formato), seguimos sin atlas — el
-        // renderer cae a las paletas hardcoded de 3.1 sin romperse.
-        let atlas = match Wad::open("doom1.wad") {
-            Ok(wad) => Some(Arc::new(WadAtlas::new(wad, HashMap::new()))),
-            Err(e) => {
-                eprintln!("supay: WAD no cargado ({e}) — renderer 3D usará paletas fallback");
-                None
+        // El motor C aborta el proceso si no hay IWAD, así que probamos su
+        // presencia ANTES de bootear. Si está, arrancamos el juego directo;
+        // si falta, dejamos el engine sin bootear y mostramos la pantalla de
+        // descarga (campo de directorio + botón Descargar), que bajará el
+        // WAD y booteará en caliente — sin terminal ni recompilación.
+        let probe_dir = default_dest_dir();
+        let mut engine = DoomEngine::new_unbooted();
+        // Hook de verificación/preview: fuerza la pantalla de descarga aunque
+        // ya haya un WAD en disco (para mirarla sin borrar el doom1.wad).
+        let force_screen = std::env::var_os("SUPAY_FORCE_WAD_SCREEN").is_some();
+        let probed = if force_screen { None } else { find_wad_in(&probe_dir) };
+        let (atlas, audio, acquire) = match probed {
+            Some(path) => {
+                let (atlas, audio) = boot_engine(&mut engine, &path);
+                (atlas, audio, None)
+            }
+            None if engine.real => {
+                // Motor compilado pero sin IWAD: ofrecé la descarga.
+                (None, None, Some(AcquireState::new(&probe_dir)))
+            }
+            None => {
+                // Build stub (sin vendor doomgeneric): la descarga sola no
+                // alcanza, hace falta recompilar — dejamos la pantalla de
+                // instrucciones legacy (`stub_message_pane`).
+                (None, None, None)
             }
         };
-        // Fase 4.0: motor de audio. Carga un segundo `Wad` (el del atlas
-        // lo consumió `WadAtlas::new`) y abre el dispositivo de salida
-        // por defecto. Si no hay WAD o no hay device, queda `None` y el
-        // juego corre mudo — el sink es best-effort.
-        let audio = match Wad::open("doom1.wad") {
-            Ok(wad) => match supay_audio::AudioEngine::new(wad) {
-                Ok(eng) => Some(eng),
-                Err(e) => {
-                    eprintln!("supay: audio no disponible ({e}) — juego mudo");
-                    None
-                }
-            },
-            Err(_) => None,
-        };
         Model {
-            engine: DoomEngine::new(args),
+            engine,
             audio,
             tick: 0,
             framebuffer_rgba: vec![0; DOOM_PIXELS * 4],
@@ -459,10 +634,26 @@ impl App for Supay {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
+            acquire,
         }
     }
 
     fn on_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
+        // Pantalla de descarga del WAD: el teclado edita el campo de
+        // directorio en vez de manejar al motor. Enter dispara la descarga,
+        // Esc cierra la ventana. (Si hay un menú abierto, dejamos que lo
+        // maneje la lógica de menú de abajo.)
+        if model.acquire.is_some() && model.menu_open.is_none() {
+            if e.state == KeyState::Pressed {
+                if matches!(&e.key, Key::Named(NamedKey::Enter)) {
+                    return Some(Msg::StartDownload);
+                }
+                if matches!(&e.key, Key::Named(NamedKey::Escape)) {
+                    return Some(Msg::Quit);
+                }
+            }
+            return Some(Msg::AcquireKey(e.clone()));
+        }
         if e.state == KeyState::Pressed {
             // Con el menú principal abierto las flechas navegan: ←/→ cambian
             // de menú raíz (con wrap), ↑/↓ mueven la fila activa, Enter
@@ -543,6 +734,11 @@ impl App for Supay {
         let mut m = model;
         match msg {
             Msg::Quit => handle.quit(),
+            Msg::Tick if !m.engine.booted => {
+                // Sin WAD booteado no hay simulación que avanzar — la
+                // pantalla de descarga es estática salvo por el campo de
+                // texto. Evitamos tocar el motor C sin inicializar.
+            }
             Msg::Tick => {
                 m.tick = m.tick.wrapping_add(1);
                 m.engine.tick();
@@ -828,6 +1024,62 @@ impl App for Supay {
                 m.context_menu = None;
                 handle_menu_command(&cmd, handle);
             }
+
+            // --- Pantalla de adquisición del WAD ---
+            Msg::AcquireKey(e) => {
+                if let Some(acq) = m.acquire.as_mut() {
+                    acq.dest.apply_key(&e);
+                    // Editar el destino tras un error vuelve el panel a
+                    // estado neutro (el mensaje viejo ya no aplica).
+                    if matches!(acq.status, DownloadStatus::Failed(_)) {
+                        acq.status = DownloadStatus::Idle;
+                    }
+                }
+            }
+            Msg::StartDownload => {
+                if let Some(acq) = m.acquire.as_mut() {
+                    if acq.status != DownloadStatus::Running {
+                        let dir = acq.dest_dir();
+                        // Si ya hay un WAD en ese directorio, no bajamos nada:
+                        // booteamos directo (lo mismo que el botón Jugar).
+                        if let Some(path) = find_wad_in(&dir) {
+                            handle.dispatch(Msg::DownloadOk(path));
+                        } else {
+                            acq.status = DownloadStatus::Running;
+                            let h = handle.clone();
+                            std::thread::spawn(move || match download_wad(&dir) {
+                                Ok(path) => h.dispatch(Msg::DownloadOk(path)),
+                                Err(e) => h.dispatch(Msg::DownloadErr(e)),
+                            });
+                        }
+                    }
+                }
+            }
+            Msg::PlayExisting => {
+                if let Some(acq) = m.acquire.as_ref() {
+                    if let Some(path) = find_wad_in(&acq.dest_dir()) {
+                        handle.dispatch(Msg::DownloadOk(path));
+                    } else if let Some(acq) = m.acquire.as_mut() {
+                        acq.status = DownloadStatus::Failed(
+                            rimay_localize::t("supay-wad-not-here"),
+                        );
+                    }
+                }
+            }
+            Msg::DownloadOk(path) => {
+                // WAD en disco: booteamos el motor + atlas + audio en caliente
+                // y cerramos la pantalla de descarga.
+                let (atlas, audio) = boot_engine(&mut m.engine, &path);
+                m.atlas = atlas;
+                m.audio = audio;
+                m.last_tick_at = Instant::now();
+                m.acquire = None;
+            }
+            Msg::DownloadErr(e) => {
+                if let Some(acq) = m.acquire.as_mut() {
+                    acq.status = DownloadStatus::Failed(e);
+                }
+            }
         }
         m
     }
@@ -836,7 +1088,12 @@ impl App for Supay {
         let menu = app_menu(model);
         let menubar = menubar_view(&menubar_spec(&menu, model));
         let header = header_bar(model);
-        let body = match model.view_mode {
+        // Falta el WAD ⇒ pantalla de descarga (campo de directorio + botón
+        // Descargar) en lugar del juego. Tiene prioridad sobre el view_mode.
+        let body = if let Some(acq) = model.acquire.as_ref() {
+            framed_pane(acquire_pane(acq, &model.theme))
+        } else {
+            match model.view_mode {
             ViewMode::Framebuffer => {
                 if model.engine.real {
                     framed_pane(game_pane(model))
@@ -912,6 +1169,7 @@ impl App for Supay {
                 }),
                 _ => None,
             })),
+            }
         };
         let footer = footer_bar(model);
         // Right-click sobre el View RAÍZ (origen 0,0) ⇒ las coords locales
@@ -1389,6 +1647,197 @@ fn game_pane(model: &Model) -> View<Msg> {
 }
 
 // =====================================================================
+// Acquire screen — pantalla "falta el WAD" con descarga in-app:
+// banner crimson, campo de directorio editable, botón Descargar que baja
+// el shareware al directorio elegido y bootea en caliente. Reemplaza la
+// vieja consola de comandos a copiar a mano.
+// =====================================================================
+
+/// Botón rectangular clickeable: relleno `bg` (aclarado al hover), texto
+/// `fg` centrado, emite `msg` al click.
+fn acquire_button(label: String, fg: Color, bg: Color, hover: Color, msg: Msg) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(180.0_f32),
+            height: length(36.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(hover)
+    .radius(4.0)
+    .text_aligned(label, 14.0, fg, Alignment::Center)
+    .on_click(msg)
+}
+
+fn acquire_pane(acq: &AcquireState, theme: &Theme) -> View<Msg> {
+    let t = rimay_localize::t;
+
+    let banner = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(110.0_f32),
+        },
+        padding: Rect {
+            left: length(40.0_f32),
+            right: length(40.0_f32),
+            top: length(34.0_f32),
+            bottom: length(0.0_f32),
+        },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(44.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned("SUPAY · DOOM".to_string(), 32.0, COLOR_CRIMSON, Alignment::Start),
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(24.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(t("supay-wad-title"), 13.0, COLOR_DUST, Alignment::Start),
+    ]);
+
+    // Etiqueta del campo de directorio.
+    let dir_label = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(t("supay-wad-dir-label"), 12.0, COLOR_BONE, Alignment::Start);
+
+    // Campo de texto (siempre focado en esta pantalla) + botón Descargar.
+    let input = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(36.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        &acq.dest,
+        "/ruta/al/directorio",
+        true,
+        &TextInputPalette::from_theme(theme),
+        Msg::MenuTick,
+    )]);
+
+    let downloading = acq.status == DownloadStatus::Running;
+    let dl_label = if downloading {
+        t("supay-wad-downloading")
+    } else {
+        t("supay-wad-download")
+    };
+    let (dl_bg, dl_hover, dl_fg) = if downloading {
+        (COLOR_BG_SUNKEN, COLOR_BG_SUNKEN, COLOR_DUST)
+    } else {
+        (COLOR_AMBER, COLOR_BONE, COLOR_BG_ABYSS)
+    };
+    let download_btn = acquire_button(dl_label, dl_fg, dl_bg, dl_hover, Msg::StartDownload);
+
+    let input_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(36.0_f32),
+        },
+        gap: Size {
+            width: length(12.0_f32),
+            height: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![input, download_btn]);
+
+    // Línea de estado: hint en reposo, "descargando…" en curso, error en rojo.
+    let (status_text, status_color) = match &acq.status {
+        DownloadStatus::Idle => (t("supay-wad-hint"), COLOR_DUST),
+        DownloadStatus::Running => (t("supay-wad-downloading"), COLOR_AMBER),
+        DownloadStatus::Failed(e) => (format!("{}: {e}", t("supay-wad-error")), COLOR_CRIMSON),
+    };
+    let status = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(status_text, 12.0, status_color, Alignment::Start);
+
+    // Botón secundario: bootear con un WAD ya copiado a mano al directorio.
+    let play_btn = acquire_button(
+        t("supay-wad-play-existing"),
+        COLOR_BONE,
+        COLOR_BG_SUNKEN,
+        COLOR_CRIMSON_DEEP,
+        Msg::PlayExisting,
+    );
+
+    let body = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        padding: Rect {
+            left: length(40.0_f32),
+            right: length(40.0_f32),
+            top: length(8.0_f32),
+            bottom: length(20.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![dir_label, input_row, status, play_btn]);
+
+    let foot = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(36.0_f32),
+        },
+        padding: Rect {
+            left: length(40.0_f32),
+            right: length(40.0_f32),
+            top: length(0.0_f32),
+            bottom: length(12.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(t("supay-wad-legal"), 11.0, COLOR_DUST, Alignment::Start);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(COLOR_BG_PANEL)
+    .children(vec![banner, body, foot])
+}
+
+// =====================================================================
 // Stub screen — pantalla "no hay WAD" rediseñada como console-prompt:
 // banner crimson arriba, pasos numerados con su comando en color CRT,
 // pie con el porqué técnico del motor.
@@ -1650,4 +2099,69 @@ fn translate_key(key: &Key, text: Option<&str>) -> Option<u8> {
 fn main() {
     rimay_localize::init();
     llimphi_ui::run::<Supay>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Directorio temporal único para el test (sin depender de crates de
+    /// tempfile): `<tmp>/supay-test-<pid>-<tag>`.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("supay-test-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn find_wad_detecta_doom1_y_respeta_orden() {
+        let dir = scratch("find");
+        // Sin WAD ⇒ None.
+        assert!(find_wad_in(&dir).is_none());
+        // Con doom1.wad ⇒ Some apuntando a ese archivo.
+        let wad = dir.join("doom1.wad");
+        std::fs::write(&wad, b"IWAD....").unwrap();
+        assert_eq!(find_wad_in(&dir), Some(wad));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_wad_acepta_freedoom() {
+        let dir = scratch("free");
+        let wad = dir.join("freedoom1.wad");
+        std::fs::write(&wad, b"IWAD").unwrap();
+        assert_eq!(find_wad_in(&dir), Some(wad));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn boot_args_apunta_iwad_al_path() {
+        let p = Path::new("/data/doom1.wad");
+        assert_eq!(
+            boot_args(p),
+            vec![
+                "doomgeneric".to_string(),
+                "-iwad".to_string(),
+                "/data/doom1.wad".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn acquire_state_prefilla_y_resuelve_el_destino() {
+        let dir = PathBuf::from("/home/user/wads");
+        let acq = AcquireState::new(&dir);
+        // El campo arranca con el directorio sugerido y arranca en Idle.
+        assert_eq!(acq.dest.text(), "/home/user/wads");
+        assert_eq!(acq.dest_dir(), dir);
+        assert_eq!(acq.status, DownloadStatus::Idle);
+    }
+
+    #[test]
+    fn acquire_state_destino_vacio_cae_al_default() {
+        let mut acq = AcquireState::new(Path::new("/x"));
+        acq.dest.clear();
+        assert_eq!(acq.dest_dir(), default_dest_dir());
+    }
 }

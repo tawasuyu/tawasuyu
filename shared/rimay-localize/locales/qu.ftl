@@ -253,6 +253,16 @@ supay-stub-step-3-cmd =     cargo run -p supay-doom-llimphi --release
 supay-stub-footer = doomgeneric (C) 35 Hz-pi puriy; framebuffer 320×200 ARGB aspect-fit-wan llimpisqa.
 supay-controls-hint = WASD · Ctrl tuksiy · Space kichay · Tab mapa · F3 qhaway · F4 ñawi · F5 llantu · F6 HUD · F7 ll-chaki · F8 q'ancha · F9 hark'ay · F10 mobj-k'anchay · F11 maki-k'anchay · F12 lluqsiy
 supay-stub-controls-hint = F3 FB/3D tikray  ·  F12 wisq'ay
+# WAD apaykamuy pantalla (in-app)
+supay-wad-title = Doom WAD pisin — pukllanaykipaq apamuy
+supay-wad-dir-label = Mayman churana directorio
+supay-wad-download = WAD-ta apamuy
+supay-wad-downloading = WAD shareware-ta apamuchkan…
+supay-wad-hint = Directorio-ta akllay, Apamuy ñit'iy (Enter). Chayman apamusun, kikinmanta qallarin.
+supay-wad-error = Apamuy mana atikunchu
+supay-wad-not-here = Chay directorio-pi mana WAD kanchu
+supay-wad-play-existing = Ñam kapuwan — Pukllay
+supay-wad-legal = DOOM1.WAD shareware (1 ñiqi, ~4 MB, qispisqa rakikuy). doom1.wad hina waqaychasqa.
 
 # === shuma-shell ===
 shuma-label-launcher = Launcher

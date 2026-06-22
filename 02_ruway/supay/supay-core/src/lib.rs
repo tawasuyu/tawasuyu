@@ -404,6 +404,13 @@ pub struct DoomEngine {
     /// `true` si vendor/doomgeneric/ se compiló y el motor real está
     /// linkeado. `false` en modo stub.
     pub real: bool,
+    /// `true` una vez que `doomgeneric_Create` corrió con un WAD válido.
+    /// Permite construir el engine *sin* arrancarlo (`new_unbooted`) para
+    /// que el host muestre la pantalla de descarga del WAD sin que el
+    /// motor C aborte el proceso por IWAD ausente, y bootear más tarde
+    /// (`boot`) cuando el WAD ya está en disco. `tick`/`capture_scene`
+    /// son no-op mientras esto sea `false`.
+    pub booted: bool,
     /// Fase 4.1: última generación de música vista (`supay_music_gen`).
     /// `poll_music` la compara para detectar cambios sin copiar el lump.
     last_music_gen: u32,
@@ -425,8 +432,36 @@ impl DoomEngine {
     /// En modo stub no hace nada útil — devuelve un engine que pinta
     /// pantalla negra y consume input sin reaccionar.
     pub fn new(args: Vec<String>) -> Self {
+        let mut e = Self::new_unbooted();
+        e.boot(args);
+        e
+    }
+
+    /// Construye el engine **sin** arrancar doomgeneric. No toca el WAD ni
+    /// llama a `doomgeneric_Create`, así que es seguro aunque no haya IWAD
+    /// en disco — el motor C aborta el proceso (`I_Error`) cuando no
+    /// encuentra el WAD, y eso es justo lo que queremos evitar mientras el
+    /// host muestra la pantalla de descarga. Llamar [`boot`](Self::boot)
+    /// cuando el WAD ya esté disponible.
+    pub fn new_unbooted() -> Self {
         // Inicializa el singleton.
         let _ = state();
+        Self {
+            _args: Vec::new(),
+            _argv: Vec::new(),
+            real: cfg!(not(doomgeneric_stub)),
+            booted: false,
+            last_music_gen: 0,
+        }
+    }
+
+    /// Arranca doomgeneric con `args` estilo `argv` (`["doomgeneric",
+    /// "-iwad", "<path>"]`). Idempotente: si ya booteó, no hace nada. En
+    /// modo stub sólo marca `booted` sin tocar el motor C.
+    pub fn boot(&mut self, args: Vec<String>) {
+        if self.booted {
+            return;
+        }
         let cstrings: Vec<CString> = args
             .into_iter()
             .filter_map(|s| CString::new(s).ok())
@@ -444,16 +479,16 @@ impl DoomEngine {
                 doomgeneric_Create(cstrings.len() as std::ffi::c_int, argv.as_mut_ptr());
             }
         }
-        Self {
-            _args: cstrings,
-            _argv: argv,
-            real: cfg!(not(doomgeneric_stub)),
-            last_music_gen: 0,
-        }
+        self._args = cstrings;
+        self._argv = argv;
+        self.booted = true;
     }
 
-    /// Avanza un tick del motor. En modo stub: no-op.
+    /// Avanza un tick del motor. En modo stub o sin bootear: no-op.
     pub fn tick(&mut self) {
+        if !self.booted {
+            return;
+        }
         #[cfg(not(doomgeneric_stub))]
         unsafe {
             doomgeneric_Tick();
@@ -710,6 +745,12 @@ impl DoomEngine {
         }
         #[cfg(not(doomgeneric_stub))]
         {
+            // Sin bootear no hay mundo que capturar — el motor C todavía no
+            // corrió `doomgeneric_Create`, así que devolvemos un snapshot
+            // vacío en lugar de leer globales sin inicializar.
+            if !self.booted {
+                return SceneSnapshot::default();
+            }
             capture_scene_real(tick)
         }
     }
