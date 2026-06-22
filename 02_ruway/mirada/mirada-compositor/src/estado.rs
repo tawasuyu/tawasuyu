@@ -369,6 +369,14 @@ pub(crate) struct App {
     #[allow(dead_code)]
     pub(crate) output_manager_state: OutputManagerState,
     pub(crate) keyboard: Option<KeyboardHandle<App>>,
+    /// Foco de teclado **diferido**: cuando el Cerebro enfoca una ventana
+    /// recién abierta, su superficie todavía no presentó buffer (no está
+    /// mapeada) y `set_focus` se perdería —el cliente puede no haber bindeado
+    /// `wl_keyboard` aún, así que el `enter` no llega y el teclado queda mudo
+    /// hasta abrir otra ventana. Guardamos acá el destino y lo aplicamos en el
+    /// primer commit con buffer de esa superficie (ya mapeada, ya con teclado
+    /// bindeado). `None` cuando no hay foco pendiente.
+    pub(crate) pending_kb_focus: Option<WlSurface>,
     pub(crate) pointer: Option<PointerHandle<App>>,
     /// Posición del puntero en coordenadas globales.
     pub(crate) pointer_loc: (f64, f64),

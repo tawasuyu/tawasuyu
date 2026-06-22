@@ -105,6 +105,23 @@ impl CompositorHandler for App {
                 self.reconcile_layer_keyboard();
             }
         }
+        // Foco de teclado diferido: el Cerebro enfocó esta ventana cuando aún
+        // no estaba mapeada (ver `BodyOp::Focus`), así que el `set_focus` se
+        // pospuso a su primer commit con buffer. Ya pintó → ahora el cliente
+        // tiene `wl_keyboard` y el `enter` llega. Esto cura el «teclado mudo al
+        // arranque hasta abrir otra ventana».
+        if let Some(pending) = self.pending_kb_focus.clone() {
+            let mut raiz = surface.clone();
+            while let Some(p) = get_parent(&raiz) {
+                raiz = p;
+            }
+            if raiz == pending && surface_mapeada(&pending) {
+                self.pending_kb_focus = None;
+                if let Some(kb) = self.keyboard.clone() {
+                    kb.set_focus(self, Some(pending), SERIAL_COUNTER.next_serial());
+                }
+            }
+        }
     }
 }
 

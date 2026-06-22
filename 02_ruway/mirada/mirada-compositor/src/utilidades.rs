@@ -288,6 +288,16 @@ pub(crate) fn buffer_render_sano(surface: &WlSurface) -> bool {
     }
 }
 
+/// `true` si la superficie ya presentó un buffer (está **mapeada**). Antes del
+/// primer commit con buffer smithay no tiene `renderer_surface_state`, así que
+/// devuelve `false`. Lo usa el foco de teclado para no enfocar una ventana que
+/// el cliente todavía no pintó (ver `App::pending_kb_focus`).
+pub(crate) fn surface_mapeada(surface: &WlSurface) -> bool {
+    with_renderer_surface_state(surface, |s| s.surface_size())
+        .flatten()
+        .is_some()
+}
+
 /// El punto caliente (hotspot) de una superficie de cursor: el píxel de
 /// la imagen que debe quedar bajo la posición real del puntero. `(0, 0)`
 /// si el cliente no lo declaró.

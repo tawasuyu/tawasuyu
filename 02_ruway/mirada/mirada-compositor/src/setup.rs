@@ -389,6 +389,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         pending_screencopy: Vec::new(),
         seat,
         keyboard: None,
+        pending_kb_focus: None,
         pointer: None,
         pointer_loc: (0.0, 0.0),
         cursor_status: CursorImageStatus::default_named(),

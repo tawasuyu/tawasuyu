@@ -769,7 +769,22 @@ impl App {
                     screencopy::danar(self, d);
                 }
                 if let Some(kb) = self.keyboard.clone() {
-                    kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
+                    // Si la superficie destino aún no presentó buffer (ventana
+                    // recién abierta, no mapeada), `set_focus` se perdería: el
+                    // cliente puede no tener `wl_keyboard` bindeado todavía y el
+                    // `enter` no llegaría —teclado mudo hasta abrir otra ventana.
+                    // En ese caso diferimos el foco al primer commit con buffer
+                    // (ver `handlers::commit`). Si ya está mapeada (re-foco por
+                    // alt-tab/click), lo aplicamos al instante.
+                    let mapeada = target
+                        .as_ref()
+                        .is_some_and(|s| surface_mapeada(s));
+                    if target.is_none() || mapeada {
+                        self.pending_kb_focus = None;
+                        kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
+                    } else {
+                        self.pending_kb_focus = target;
+                    }
                 }
                 crate::foreign_toplevel::refrescar_estados(self);
             }
@@ -786,7 +801,9 @@ impl App {
                 }
                 if let Some(kb) = self.keyboard.clone() {
                     // Sin ventana enfocada el teclado cae al shell (`pata`), no
-                    // a la nada: el escritorio vacío sigue tipeable.
+                    // a la nada: el escritorio vacío sigue tipeable. Cualquier
+                    // foco diferido pendiente queda obsoleto.
+                    self.pending_kb_focus = None;
                     let target = self.keyboard_fallback_target();
                     kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
                 }
