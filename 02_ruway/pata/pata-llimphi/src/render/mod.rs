@@ -1027,10 +1027,53 @@ fn classic_search_results(
     .children(vec![scroll])
 }
 
-/// Una fila de la columna de categorías: ícono (de su 1ª app) + nombre + conteo.
-/// La activa se resalta con un gradiente de acento; el hover la selecciona.
+/// Mapea una categoría (nombre legible) a un ícono **freedesktop** estándar para
+/// la columna de categorías. Los cuadrantes de la suite (Percibir/Conocer/Crear/
+/// Sistema) eligen uno temático; las categorías XDG (app-bus las da en español)
+/// el `applications-*` que les corresponde. `None` → cae al ícono de la 1ª app.
+fn categoria_icono_fd(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Percibir" => "applications-graphics",
+        "Conocer" => "applications-science",
+        "Crear" => "applications-development",
+        "Sistema" => "applications-system",
+        "Accesorios" => "applications-utilities",
+        "Configuración" | "Ajustes" => "preferences-system",
+        "Desarrollo" => "applications-development",
+        "Internet" | "Red" => "applications-internet",
+        "Multimedia" | "Sonido y video" | "AudioVideo" => "applications-multimedia",
+        "Oficina" => "applications-office",
+        "Gráficos" => "applications-graphics",
+        "Juegos" => "applications-games",
+        "Educación" => "applications-science",
+        "Otros" => "applications-other",
+        _ => return None,
+    })
+}
+
+/// Ícono de una categoría para la columna: el ícono freedesktop de la categoría
+/// si el theme lo trae; si no, el de su 1ª app (último recurso, puede ser glyph).
+fn category_icon_content(cat: &MenuCat, color: Color) -> View<Msg> {
+    if let Some(fd) = categoria_icono_fd(&cat.name) {
+        if let Some(icon) = crate::app_icons::get_or_load(fd) {
+            return View::new(Style {
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .children(vec![icon.view::<Msg>()]);
+        }
+    }
+    match cat.apps.first() {
+        Some(a) => start_menus::app_icon_content(a, 12.0, color),
+        None => View::new(Style::default()),
+    }
+}
+
+/// Una fila de la columna de categorías: ícono + nombre + conteo. La activa se
+/// resalta con un gradiente de acento; el hover la selecciona.
 fn category_row(i: usize, cat: &MenuCat, selected: bool, theme: &Theme) -> View<Msg> {
-    let icon_src = cat.apps.first();
     let icon = View::new(Style {
         size: Size { width: length(18.0_f32), height: length(18.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -1038,14 +1081,10 @@ fn category_row(i: usize, cat: &MenuCat, selected: bool, theme: &Theme) -> View<
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![match icon_src {
-        Some(a) => start_menus::app_icon_content(
-            a,
-            12.0,
-            if selected { theme.bg_panel } else { theme.fg_muted },
-        ),
-        None => View::new(Style::default()),
-    }]);
+    .children(vec![category_icon_content(
+        cat,
+        if selected { theme.bg_panel } else { theme.fg_muted },
+    )]);
     let fg = if selected { theme.bg_panel } else { theme.fg_text };
     let nombre = View::new(Style {
         flex_grow: 1.0,

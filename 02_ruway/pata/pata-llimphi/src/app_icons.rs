@@ -120,11 +120,21 @@ pub fn resolve_icon_path(name: &str) -> Option<PathBuf> {
     // Themes en orden de preferencia: Adwaita (GNOME), Papirus (popular),
     // breeze (KDE) y hicolor (el fallback obligatorio del spec).
     const THEMES: &[&str] = &[
-        "Adwaita", "Papirus", "Papirus-Dark", "breeze", "breeze-dark", "hicolor",
+        "Adwaita",
+        // Adwaita moderno dejó de traer muchos íconos fullcolor de app/categoría;
+        // AdwaitaLegacy (instalado junto con Adwaita) los conserva en su contexto
+        // `legacy/`. Lo buscamos para que resuelvan `applications-*` y similares.
+        "AdwaitaLegacy",
+        "Papirus",
+        "Papirus-Dark",
+        "breeze",
+        "breeze-dark",
+        "hicolor",
     ];
-    // Subdirs por tamaño/categoría. `scalable/apps` (SVG) primero; luego tamaños
-    // raster grandes a chicos (mejor nitidez). Algunos themes guardan SVG en
-    // symbolic, otros en apps; probamos varios.
+    // Subdirs por contexto × tamaño. `apps` primero (la mayoría de los íconos de
+    // app); luego `categories` y `legacy` (íconos de categoría freedesktop como
+    // `applications-multimedia`, que viven ahí, no en `apps`). SVG antes que
+    // raster, y raster de grande a chico (mejor nitidez al escalar).
     const SUBDIRS: &[&str] = &[
         "scalable/apps",
         "512x512/apps",
@@ -134,6 +144,17 @@ pub fn resolve_icon_path(name: &str) -> Option<PathBuf> {
         "64x64/apps",
         "48x48/apps",
         "symbolic/apps",
+        "scalable/categories",
+        "64x64/categories",
+        "48x48/categories",
+        "32x32/categories",
+        "24x24/categories",
+        "22x22/categories",
+        "scalable/legacy",
+        "48x48/legacy",
+        "32x32/legacy",
+        "24x24/legacy",
+        "22x22/legacy",
     ];
     // Extensiones, en orden: vector primero (escala sin perder), luego raster.
     const EXTS: &[&str] = &["svg", "png"];
