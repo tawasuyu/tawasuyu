@@ -1519,7 +1519,19 @@ impl App for PataApp {
             // Live-wire: con la shuma completa montada, la tecla la traduce ella
             // según su foco interno (input de la sesión activa, PTY/TUI, rails).
             if let Some(full) = &model.shuma_full {
+                // Esc repliega el drawer SALVO que shuma tenga algo propio que
+                // descartar (modal/dropdown/campo) o el shell corra una TUI de
+                // pantalla completa que necesite el Esc — ahí se lo dejamos a ella.
+                if matches!(&event.key, Key::Named(NamedKey::Escape))
+                    && shuma_app::escape_closes_drawer(full)
+                {
+                    return Some(Msg::ShumaToggle);
+                }
                 return shuma_app::on_key(full, event).map(lift_shuma);
+            }
+            // Módulo bare (sin shuma completa): Esc repliega el drawer.
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::ShumaToggle);
             }
             return Some(Msg::ShumaShell(shuma_module_shell::Msg::Key(event.clone())));
         }

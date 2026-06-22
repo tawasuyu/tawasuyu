@@ -890,6 +890,14 @@ impl State {
         self.running.is_some()
     }
 
+    /// `true` si el PTY vivo está en **alternate screen** — una TUI de pantalla
+    /// completa (vim, htop, less, man…) que necesita capturar Esc. El chasis lo
+    /// consulta para decidir si Esc cierra el drawer Quake (no hay TUI) o se
+    /// reenvía al programa (sí la hay).
+    pub fn is_fullscreen_tui(&self) -> bool {
+        crate::update::pty::is_tui_fullscreen(self)
+    }
+
     /// A6 — comandos largos terminados pendientes de acuse (los que el chasis
     /// badgea en el diente de la sesión cuando no está activa).
     pub fn long_alerts(&self) -> usize {

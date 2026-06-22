@@ -95,6 +95,13 @@ pub fn on_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
     shuma::on_key(model, e)
 }
 
+/// `true` si Esc debe **replegar el drawer** en vez de ir a shuma: no hay
+/// modal/dropdown/campo con foco ni TUI de pantalla completa que necesite el
+/// Esc. Lo consulta el chasis antes de rutear la tecla (ver `lib.rs`).
+pub fn escape_closes_drawer(model: &Model) -> bool {
+    shuma::escape_closes_drawer(model)
+}
+
 /// Traduce la rueda a un `shuma::Msg`.
 pub fn on_wheel(
     model: &Model,

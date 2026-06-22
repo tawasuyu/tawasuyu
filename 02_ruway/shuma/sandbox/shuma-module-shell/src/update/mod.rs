@@ -5,7 +5,7 @@ mod scroll;
 mod surface;
 mod completion;
 mod history;
-mod pty;
+pub(crate) mod pty;
 mod clipboard;
 mod body_editor;
 mod patterns;

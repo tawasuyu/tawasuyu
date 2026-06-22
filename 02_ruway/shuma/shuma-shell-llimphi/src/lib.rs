@@ -2115,6 +2115,46 @@ impl App for Shell {
     }
 }
 
+/// ¿Debe Esc cerrar el drawer Quake que hospeda a esta shuma? El chasis (pata)
+/// lo pregunta ANTES de reenviar la tecla a `on_key`. Devuelve `false` cuando
+/// shuma tiene algo propio que descartar con Esc —un modal, un dropdown, un
+/// campo/draft con foco, una sesión en creación— o cuando el shell enfocado
+/// corre una TUI de pantalla completa (vim/htop/less/man) que necesita el Esc.
+/// En cualquier otro caso (prompt ocioso, modo líneas) Esc repliega el drawer.
+pub fn escape_closes_drawer(model: &Model) -> bool {
+    if model.hosts_modal_open
+        || model.containers_modal_open
+        || model.layouts_modal_open
+        || model.perfiles_modal_open
+        || model.focused_field.is_some()
+        || model.dropdown_open.is_some()
+    {
+        return false;
+    }
+    if model.host_draft.as_ref().is_some_and(|d| d.focused.is_some()) {
+        return false;
+    }
+    if model.container_draft.as_ref().is_some_and(|d| d.focus.is_some()) {
+        return false;
+    }
+    if model.active().is_some_and(|s| s.pending) {
+        return false;
+    }
+    let fullscreen_tui =
+        |state: &ModuleState| matches!(state, ModuleState::Shell(s) if s.is_fullscreen_tui());
+    if let Some(inst) = model.main.as_ref() {
+        if fullscreen_tui(&inst.state) {
+            return false;
+        }
+    }
+    if let Some(s) = model.active() {
+        if fullscreen_tui(&s.shell().state) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Vista compacta para el **modo dock** (barra layer-shell): la command-bar a
 /// todo lo ancho + un botón «ventana» que vuelve al modo ventana. La barra es
 /// fina (la fija `llimphi-layer`), así que no caben tabs/monitores.
