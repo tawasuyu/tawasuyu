@@ -40,7 +40,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -69,7 +69,14 @@ use app_bus::{AppMenu, Menu, MenuItem};
 use supay_core::{
     keys, DoomEngine, SceneSnapshot, SnapshotPair, WallSeg, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH,
 };
+use llimphi_ui::llimphi_hal::wgpu;
+use supay_render_llimphi::wgpu3d::{CameraParams, DoomGpuRenderer};
 use supay_render_llimphi::{postproc, scene_view, RenderConfig, WadAtlas};
+
+/// Formato del target intermedio de `gpu_paint_with` en Llimphi (ver
+/// `llimphi-ui/src/eventloop/redraw.rs`). El pipeline wgpu del renderer 2.5D
+/// debe crearse con este mismo formato.
+const GPU_PAINT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 use supay_wad::Wad;
 
 // =====================================================================
@@ -268,8 +275,12 @@ enum ViewMode {
     /// (renderer software clásico de Doom).
     Framebuffer,
     /// Renderer 3D moderno consumiendo snapshots interpolados
-    /// (Fase 3.0 — supay-render-llimphi sobre vello).
+    /// (Fase 3.0 — supay-render-llimphi sobre vello). El viejo: afín 2D,
+    /// texturas deformadas, painter's sort. Lo dejamos para comparar.
     Scene3d,
+    /// Renderer **wgpu 2.5D** (Fase 2): malla 3D + depth buffer + texturas
+    /// perspectiva-correctas. El cimiento nuevo, sin warping ni huecos.
+    Wgpu3d,
 }
 
 struct Model {
@@ -378,6 +389,10 @@ struct Model {
     /// viñeta) on/off (F2). Default on — el modo Framebuffer se ve más vivo
     /// sin tocar la geometría. Off = doomgeneric crudo bit-exacto.
     fb_enhance: bool,
+    /// Renderer wgpu 2.5D (modo `Wgpu3d`). Lazily creado dentro del
+    /// `gpu_paint_with` (necesita el `device`); `Arc<Mutex<…>>` porque la
+    /// closure de pintura es `Fn + Send + Sync`.
+    wgpu_renderer: Arc<Mutex<Option<DoomGpuRenderer>>>,
     /// Pantalla de adquisición del WAD. `Some` ⇒ falta el IWAD y pintamos
     /// el panel de descarga (campo de directorio + botón Descargar) en
     /// lugar del juego; `None` ⇒ el motor ya booteó con un WAD válido.
@@ -641,6 +656,7 @@ impl App for Supay {
             menu_anim: Tween::idle(1.0),
             context_menu: None,
             fb_enhance: true,
+            wgpu_renderer: Arc::new(Mutex::new(None)),
             acquire,
         }
     }
@@ -940,7 +956,8 @@ impl App for Supay {
             Msg::ToggleViewMode => {
                 m.view_mode = match m.view_mode {
                     ViewMode::Framebuffer => ViewMode::Scene3d,
-                    ViewMode::Scene3d => ViewMode::Framebuffer,
+                    ViewMode::Scene3d => ViewMode::Wgpu3d,
+                    ViewMode::Wgpu3d => ViewMode::Framebuffer,
                 };
             }
             Msg::ToggleFbEnhance => {
@@ -1186,6 +1203,7 @@ impl App for Supay {
                 }),
                 _ => None,
             })),
+            ViewMode::Wgpu3d => framed_pane(wgpu3d_pane(model)),
             }
         };
         let footer = footer_bar(model);
@@ -1254,7 +1272,11 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &'a Model) -> MenuBarSpec<'a, Msg>
 /// Doom). El submenú Ver refleja en gris/check los toggles cosméticos
 /// del renderer 3D.
 fn app_menu(model: &Model) -> AppMenu {
-    let scene3d = model.view_mode == ViewMode::Scene3d;
+    let view_label = match model.view_mode {
+        ViewMode::Framebuffer => "Vista: framebuffer →",
+        ViewMode::Scene3d => "Vista: 3D vello →",
+        ViewMode::Wgpu3d => "Vista: wgpu 2.5D →",
+    };
 
     // Helper: item de toggle marcado con [x]/[ ] según el flag.
     let toggle = |label: &str, on: bool, cmd: &str| -> MenuItem {
@@ -1276,17 +1298,7 @@ fn app_menu(model: &Model) -> AppMenu {
         )
         .menu(
             Menu::new("Ver")
-                .item(
-                    MenuItem::new(
-                        if scene3d {
-                            "Cambiar a framebuffer"
-                        } else {
-                            "Cambiar a renderer 3D"
-                        },
-                        "view.toggle_mode",
-                    )
-                    .shortcut("F3"),
-                )
+                .item(MenuItem::new(view_label, "view.toggle_mode").shortcut("F3"))
                 .item(
                     toggle("Realce (bloom+grading)", model.fb_enhance, "view.fb_enhance")
                         .shortcut("F2"),
@@ -1338,19 +1350,15 @@ fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
 fn context_menu_for_game(model: &Model, x: f32, y: f32) -> View<Msg> {
     let header = match model.view_mode {
         ViewMode::Framebuffer => "framebuffer",
-        ViewMode::Scene3d => "renderer 3D",
+        ViewMode::Scene3d => "renderer 3D (vello)",
+        ViewMode::Wgpu3d => "renderer wgpu 2.5D",
     };
 
     let items = vec![
         ContextMenuItem::action("Disparar").with_shortcut("Ctrl"),
         ContextMenuItem::action("Usar / abrir").with_shortcut("Space"),
         ContextMenuItem::separator(),
-        ContextMenuItem::action(if model.view_mode == ViewMode::Scene3d {
-            "Cambiar a framebuffer"
-        } else {
-            "Cambiar a renderer 3D"
-        })
-        .with_shortcut("F3"),
+        ContextMenuItem::action("Cambiar de vista").with_shortcut("F3"),
         ContextMenuItem::action("Menú del juego").with_shortcut("Esc"),
     ];
 
@@ -1502,6 +1510,7 @@ fn header_bar(model: &Model) -> View<Msg> {
     let view_tag = rimay_localize::t(match model.view_mode {
         ViewMode::Framebuffer => "supay-view-fb",
         ViewMode::Scene3d => "supay-view-3d",
+        ViewMode::Wgpu3d => "supay-view-wgpu",
     });
     let stats = View::new(Style {
         size: Size {
@@ -1639,6 +1648,56 @@ fn framed_pane(content: View<Msg>) -> View<Msg> {
     })
     .fill(COLOR_CRIMSON_DEEP)
     .children(vec![inner])
+}
+
+/// Modo `Wgpu3d`: canvas con un `gpu_paint_with` que rinde la escena Doom
+/// con el renderer wgpu 2.5D (malla + depth + texturas perspectiva-correctas).
+/// El `fill` pinta el cielo nocturno de fondo (la pasada vello base), y el
+/// pase 3D lo preserva con `LoadOp::Load` — así donde hay cielo/gaps se ve el
+/// fondo en vez de basura.
+fn wgpu3d_pane(model: &Model) -> View<Msg> {
+    let renderer = model.wgpu_renderer.clone();
+    let snap = model.snapshots.next().cloned();
+    let atlas = model.atlas.clone();
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(13, 15, 26, 255))
+    .gpu_paint_with(move |device, queue, encoder, target, _rect, (w, h)| {
+        let (Some(snap), Some(atlas)) = (snap.as_ref(), atlas.as_ref()) else {
+            return;
+        };
+        let cam = CameraParams {
+            x: snap.player.x,
+            y: snap.player.y,
+            eye_z: snap.player.z + snap.player.view_height,
+            yaw: snap.player.angle,
+            pitch: snap.player.view_pitch,
+            fov_x: std::f32::consts::FRAC_PI_2,
+        };
+        let mut guard = match renderer.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let r = guard
+            .get_or_insert_with(|| DoomGpuRenderer::new(device, queue, GPU_PAINT_FORMAT));
+        r.set_scene(device, queue, atlas, snap);
+        r.draw(device, queue, encoder, target, (w, h), &cam);
+    })
+    .draggable(|phase, _dx, dy| match phase {
+        DragPhase::Move => Some(Msg::PitchDelta {
+            delta: -dy * MOUSE_LOOK_SENS,
+            reset: false,
+        }),
+        _ => None,
+    })
 }
 
 fn game_pane(model: &Model) -> View<Msg> {

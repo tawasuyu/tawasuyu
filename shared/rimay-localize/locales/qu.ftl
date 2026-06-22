@@ -242,6 +242,7 @@ supay-mode-real = MOTOR PAQARIQ
 supay-mode-stub = STUB
 supay-view-fb = qhaway=FB (F3→3D)
 supay-view-3d = qhaway=3D (F3→FB)
+supay-view-wgpu = qhaway=wgpu 2.5D (F3)
 supay-header = { $title }  ·  thaski { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
 supay-stub-title = Motor (doomgeneric) mana kikinmanta apamusqachu
 supay-stub-step-1 = Internet-man tinkuy

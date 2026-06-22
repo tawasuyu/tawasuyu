@@ -241,6 +241,7 @@ supay-mode-real = ENGINE REAL
 supay-mode-stub = STUB
 supay-view-fb = view=FB (F3→3D)
 supay-view-3d = view=3D (F3→FB)
+supay-view-wgpu = view=wgpu 2.5D (F3)
 supay-header = { $title }  ·  tick { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
 supay-stub-title = No se pudo bajar el motor (doomgeneric) automáticamente
 supay-stub-step-1 = Conectate a internet
