@@ -11,27 +11,80 @@
 //! ```
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Clona doomgeneric en `vendor/` automáticamente (shallow). Best-effort:
+/// si `git` no está, no hay red, o ya existe el directorio destino, no
+/// rompe el build — simplemente no deja el clone y el caller cae a stub.
+///
+/// Se puede desactivar con `SUPAY_NO_AUTOCLONE=1` (p.ej. en CI offline o
+/// para forzar el modo stub a propósito).
+fn try_clone_doomgeneric(vendor: &Path) {
+    if env::var_os("SUPAY_NO_AUTOCLONE").is_some() {
+        eprintln!("cargo:warning=SUPAY_NO_AUTOCLONE — salto el clone automático de doomgeneric");
+        return;
+    }
+    let dest = vendor.join("doomgeneric");
+    if dest.exists() {
+        return; // un clone a medias o ajeno; no lo tocamos
+    }
+    if let Err(e) = std::fs::create_dir_all(vendor) {
+        eprintln!("cargo:warning=no pude crear {}: {e}", vendor.display());
+        return;
+    }
+    eprintln!("cargo:warning=doomgeneric ausente — clonándolo automáticamente (una vez)…");
+    let status = std::process::Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "https://github.com/ozkl/doomgeneric.git",
+        ])
+        .arg(&dest)
+        .status();
+    match status {
+        Ok(s) if s.success() => {
+            eprintln!("cargo:warning=doomgeneric clonado OK — compilando el motor real.");
+        }
+        Ok(s) => {
+            eprintln!("cargo:warning=git clone de doomgeneric falló (status {s}).");
+            // Limpiamos un clone parcial para reintentar limpio la próxima.
+            let _ = std::fs::remove_dir_all(&dest);
+        }
+        Err(e) => {
+            eprintln!("cargo:warning=no pude ejecutar git ({e}). ¿git instalado / hay red?");
+        }
+    }
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     // Registrar la cfg custom para que rustc no warning-ee.
     println!("cargo::rustc-check-cfg=cfg(doomgeneric_stub)");
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let vendor = manifest.join("vendor");
     let dg_dir = manifest.join("vendor/doomgeneric/doomgeneric");
     println!("cargo:rerun-if-changed={}", dg_dir.display());
 
+    // El motor C de doomgeneric es un clone gitignored (no trackeado). Si
+    // falta, antes caíamos a stub y la app pedía clonar a mano en la
+    // terminal. Ahora lo clonamos automáticamente acá — durante el `cargo
+    // build` que el usuario ya corre — para que el motor real quede siempre
+    // linkeado sin pasos manuales. Si no hay red/git (offline), avisamos y
+    // caemos a stub como antes; reintenta en el próximo build.
+    if !dg_dir.exists() {
+        try_clone_doomgeneric(&vendor);
+    }
+
     if !dg_dir.exists() {
         eprintln!(
-            "cargo:warning=doomgeneric NO encontrado en {}",
+            "cargo:warning=doomgeneric NO encontrado en {} y el clone automático no funcionó.",
             dg_dir.display()
         );
+        eprintln!("cargo:warning=Para activar el motor real, corré (con red):");
         eprintln!(
-            "cargo:warning=Para activar el motor real, corré:"
-        );
-        eprintln!(
-            "cargo:warning=  cd {} && git clone https://github.com/ozkl/doomgeneric.git",
-            manifest.join("vendor").display()
+            "cargo:warning=  cd {} && git clone --depth 1 https://github.com/ozkl/doomgeneric.git",
+            vendor.display()
         );
         eprintln!("cargo:warning=Compilando supay-core como stub (Doom no corre).");
         println!("cargo:rustc-cfg=doomgeneric_stub");

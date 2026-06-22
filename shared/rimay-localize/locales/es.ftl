@@ -242,13 +242,13 @@ supay-mode-stub = STUB
 supay-view-fb = view=FB (F3→3D)
 supay-view-3d = view=3D (F3→FB)
 supay-header = { $title }  ·  tick { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
-supay-stub-title = supay-doom-llimphi corre en modo STUB
-supay-stub-step-1 = Cloná doomgeneric
-supay-stub-step-1-cmd =     cd 02_ruway/supay/supay-core/vendor && git clone https://github.com/ozkl/doomgeneric.git
-supay-stub-step-2 = Bajá el WAD shareware al cwd
-supay-stub-step-2-cmd =     curl -O https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad
-supay-stub-step-3 = Volvé a correr
-supay-stub-step-3-cmd =     cargo run -p supay-doom-llimphi --release
+supay-stub-title = No se pudo bajar el motor (doomgeneric) automáticamente
+supay-stub-step-1 = Conectate a internet
+supay-stub-step-1-cmd =     el motor C se clona solo durante la compilación
+supay-stub-step-2 = Reconstruí supay
+supay-stub-step-2-cmd =     cargo run -p supay-doom-llimphi --release
+supay-stub-step-3 = El WAD ya se descarga con un botón al abrir
+supay-stub-step-3-cmd =     (sin curl ni terminal — sólo apretar Descargar)
 supay-stub-footer = doomgeneric (C) avanza a 35 Hz; el framebuffer 320×200 ARGB se pinta en aspect-fit.
 supay-controls-hint = WASD · Ctrl disp · Space usa · Tab map · F3 vista · F4 mira · F5 viñeta · F6 HUD · F7 sombras · F8 fogonazo · F9 oclusión · F10 luz-mobj · F11 rim-arma · F12 salir
 supay-stub-controls-hint = F3 alterna FB/3D  ·  F12 cierra la ventana
