@@ -22,3 +22,7 @@ png = { workspace = true }
 pollster = { workspace = true }
 # Demo interactivo: bucle Elm + ventana + mouse (orbita/zoom) sobre gpu_paint_with.
 llimphi-ui = { path = "../llimphi-ui" }
+# Validación headless de los shaders WGSL de post-proceso (sin GPU): naga
+# parsea + valida los módulos en un test, atajando errores que de otro modo
+# sólo saldrían al crear el pipeline en runtime.
+naga = { version = "27", features = ["wgsl-in"] }
