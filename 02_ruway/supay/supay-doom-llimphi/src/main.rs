@@ -1219,7 +1219,19 @@ impl App for Supay {
                 }),
                 _ => None,
             })),
-            ViewMode::Wgpu3d => framed_pane(wgpu3d_pane(model)),
+            ViewMode::Wgpu3d => {
+                if !model.engine.real {
+                    stub_message_pane()
+                } else if in_level(model) {
+                    framed_pane(wgpu3d_pane(model))
+                } else {
+                    // Intermission ("hangar finished"), menú, título o finale:
+                    // no hay escena 3D que rendir (snapshot vacío) → el modo
+                    // wgpu se quedaba en blanco/pasmado. Caemos al framebuffer
+                    // del motor, que SÍ pinta esas pantallas.
+                    framed_pane(game_pane(model))
+                }
+            }
             }
         };
         let footer = footer_bar(model);
@@ -1256,7 +1268,11 @@ impl App for Supay {
         }
         // Sin menú abierto: el HUD moderno con la cara (sólo modo wgpu — el
         // framebuffer y el vello traen su propio HUD).
-        if model.view_mode == ViewMode::Wgpu3d && model.acquire.is_none() && model.engine.real {
+        if model.view_mode == ViewMode::Wgpu3d
+            && model.acquire.is_none()
+            && model.engine.real
+            && in_level(model)
+        {
             return hud_overlay(model);
         }
         None
@@ -1681,6 +1697,18 @@ fn framed_pane(content: View<Msg>) -> View<Msg> {
 /// El `fill` pinta el cielo nocturno de fondo (la pasada vello base), y el
 /// pase 3D lo preserva con `LoadOp::Load` — así donde hay cielo/gaps se ve el
 /// fondo en vez de basura.
+/// ¿El snapshot actual corresponde a un nivel jugable? El motor devuelve un
+/// snapshot **vacío** (sin geometría) cuando el jugador no está en un mapa —
+/// pantalla de título, menú, intermission ("finished"), finale. El renderer
+/// wgpu no tiene nada que pintar en esos casos, así que el host cae al
+/// framebuffer del motor (que sí dibuja esas pantallas).
+fn in_level(model: &Model) -> bool {
+    model
+        .snapshots
+        .next()
+        .is_some_and(|s| !s.walls.is_empty() || !s.nodes.is_empty())
+}
+
 fn wgpu3d_pane(model: &Model) -> View<Msg> {
     let renderer = model.wgpu_renderer.clone();
     let snap = model.snapshots.next().cloned();
