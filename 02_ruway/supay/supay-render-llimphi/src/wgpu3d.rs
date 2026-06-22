@@ -185,6 +185,17 @@ pub struct DoomGpuRenderer {
     /// propio y luego se baja al target real con filtro lineal (antialiasing).
     scene: Option<SceneTarget>,
     blit_pipeline: wgpu::RenderPipeline,
+    /// Bloom: bright-pass + blur de la escena → glow sumado en el blit.
+    bright_pipeline: wgpu::RenderPipeline,
+    bloom: Option<BloomTarget>,
+}
+
+/// Target de bloom (medio-resolución): color + su bind group para el blit.
+struct BloomTarget {
+    w: u32,
+    h: u32,
+    color_view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
 }
 
 /// Factor de supersampling (antialiasing). 2 = rinde a 2× en cada eje (4× de
@@ -526,39 +537,57 @@ impl DoomGpuRenderer {
             label: Some("doom3d-blit-shader"),
             source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
         });
+        // Blit final: group 0 = escena, group 1 = bloom (se suman).
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("doom3d-blit-layout"),
+            bind_group_layouts: &[&tex_layout, &tex_layout],
+            push_constant_ranges: &[],
+        });
+        let fullscreen = |layout: &wgpu::PipelineLayout,
+                          shader: &wgpu::ShaderModule,
+                          label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let blit_pipeline = fullscreen(&blit_layout, &blit_shader, "doom3d-blit-pipeline");
+
+        // Bright-pass + blur de bloom: group 0 = escena → textura de bloom.
+        let bright_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("doom3d-bright-shader"),
+            source: wgpu::ShaderSource::Wgsl(BRIGHT_WGSL.into()),
+        });
+        let bright_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("doom3d-bright-layout"),
             bind_group_layouts: &[&tex_layout],
             push_constant_ranges: &[],
         });
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("doom3d-blit-pipeline"),
-            layout: Some(&blit_layout),
-            vertex: wgpu::VertexState {
-                module: &blit_shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &blit_shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
-        });
+        let bright_pipeline = fullscreen(&bright_layout, &bright_shader, "doom3d-bright-pipeline");
 
         let zero_weap = WeaponSpriteSnap {
             active: false,
@@ -596,6 +625,8 @@ impl DoomGpuRenderer {
             refl_targets: Vec::new(),
             scene: None,
             blit_pipeline,
+            bright_pipeline,
+            bloom: None,
         }
     }
 
@@ -826,6 +857,7 @@ impl DoomGpuRenderer {
         let weapon_draws = self.build_weapon_draws(device, queue, rw, rh);
 
         self.ensure_scene(device, rw, rh);
+        self.ensure_bloom(device, (w / 2).max(1), (h / 2).max(1));
         if do_reflect {
             self.ensure_refls(device, rw, rh, n_planes);
         }
@@ -951,9 +983,32 @@ impl DoomGpuRenderer {
         }
         drop(pass);
 
-        // --- Blit de bajada SSAA: la escena supersampleada → target real,
-        //     promediada con filtro lineal (antialiasing). ---
-        let blit_bg = &self.scene.as_ref().unwrap().blit_bg;
+        let scene_bg = &self.scene.as_ref().unwrap().blit_bg;
+        let bloom = self.bloom.as_ref().unwrap();
+
+        // --- Bright-pass + blur: la escena → textura de bloom (medio-res). ---
+        {
+            let mut bp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("doom3d-bright"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &bloom.color_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            bp.set_pipeline(&self.bright_pipeline);
+            bp.set_bind_group(0, scene_bg, &[]);
+            bp.draw(0..3, 0..1);
+        }
+
+        // --- Blit final: escena (SSAA, antialiasing) + bloom → target real. ---
         let mut blit = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("doom3d-blit"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -970,7 +1025,8 @@ impl DoomGpuRenderer {
             occlusion_query_set: None,
         });
         blit.set_pipeline(&self.blit_pipeline);
-        blit.set_bind_group(0, blit_bg, &[]);
+        blit.set_bind_group(0, scene_bg, &[]);
+        blit.set_bind_group(1, &bloom.bind_group, &[]);
         blit.draw(0..3, 0..1);
     }
 
@@ -1017,6 +1073,39 @@ impl DoomGpuRenderer {
             ],
         });
         self.scene = Some(SceneTarget { w, h, color_view, depth_view, blit_bg });
+    }
+
+    /// Asegura el target de bloom (medio-res) a `(w,h)`.
+    fn ensure_bloom(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        if matches!(&self.bloom, Some(b) if b.w == w && b.h == h) {
+            return;
+        }
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("doom3d-bloom"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let color_view = color.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("doom3d-bloom-bg"),
+            layout: &self.tex_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        self.bloom = Some(BloomTarget { w, h, color_view, bind_group });
     }
 
     /// Asegura `n` render targets de reflexión (color+depth+bind group) al
@@ -1925,6 +2014,8 @@ mod tests {
 const BLIT_WGSL: &str = r#"
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
+@group(1) @binding(0) var bloom: texture_2d<f32>;
+@group(1) @binding(1) var bsamp: sampler;
 
 struct VOut {
     @builtin(position) clip: vec4<f32>,
@@ -1947,7 +2038,54 @@ fn vs(@builtin(vertex_index) vi: u32) -> VOut {
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
-    return textureSample(tex, samp, in.uv);
+    let s = textureSample(tex, samp, in.uv).rgb;
+    // El bloom (medio-res, ya con bright-pass+blur) se suma → glow.
+    let b = textureSample(bloom, bsamp, in.uv).rgb;
+    return vec4<f32>(s + b * 0.85, 1.0);
+}
+"#;
+
+/// Bright-pass + blur 5×5 de la escena → textura de bloom (medio-res). En una
+/// pasada: bilinear downsample + extracción de lo brillante + suavizado.
+const BRIGHT_WGSL: &str = r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+    var p = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var o: VOut;
+    let c = p[vi];
+    o.clip = vec4<f32>(c, 0.0, 1.0);
+    o.uv = vec2<f32>(c.x * 0.5 + 0.5, 1.0 - (c.y * 0.5 + 0.5));
+    return o;
+}
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let dim = vec2<f32>(textureDimensions(tex, 0));
+    let texel = 1.0 / dim;
+    var acc = vec3<f32>(0.0);
+    for (var j = -2; j <= 2; j = j + 1) {
+        for (var i = -2; i <= 2; i = i + 1) {
+            let o = vec2<f32>(f32(i), f32(j)) * texel * 2.5;
+            let c = textureSample(tex, samp, in.uv + o).rgb;
+            let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+            // Bright-pass suave: lo que supera ~0.62 de luminancia sangra.
+            let k = clamp((l - 0.62) / 0.38, 0.0, 1.0);
+            acc += c * k;
+        }
+    }
+    return vec4<f32>(acc / 25.0, 1.0);
 }
 "#;
 
