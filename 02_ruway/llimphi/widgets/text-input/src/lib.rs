@@ -475,6 +475,32 @@ mod tests {
     }
 
     #[test]
+    fn pointer_click_escalates_caret_word_all() {
+        let mut s = TextInputState::new();
+        s.set_text("hola mundo");
+        // x cae dentro de "mundo" (col ~7 con char_w = 13*0.5 = 6.5; x = 11 + 7*6.5).
+        let x = 11.0 + 7.0 * 6.5;
+        // 1 click: caret simple, sin selección.
+        s.pointer_click(x, 13.0);
+        assert!(!s.editor().has_selection(), "1 click no debe seleccionar");
+        // 2 clicks: palabra bajo el cursor.
+        s.pointer_click(x, 13.0);
+        assert!(s.editor().has_selection(), "2 clicks debe seleccionar palabra");
+        assert_eq!(s.editor().selected_text().as_deref(), Some("mundo"));
+        // 3 clicks: todo (párrafo = la línea entera en single-line).
+        s.pointer_click(x, 13.0);
+        assert_eq!(s.editor().selected_text().as_deref(), Some("hola mundo"));
+    }
+
+    #[test]
+    fn select_all_selecciona_todo() {
+        let mut s = TextInputState::new();
+        s.set_text("Frida Kahlo");
+        s.select_all();
+        assert_eq!(s.editor().selected_text().as_deref(), Some("Frida Kahlo"));
+    }
+
+    #[test]
     fn apply_key_backspace_pops() {
         let mut s = TextInputState::new();
         s.set_text("hola");
