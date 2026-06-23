@@ -367,6 +367,33 @@ fn view_demo(model: &Model) -> View<Msg> {
     .children(vec![menu, body_box, status])
 }
 
+/// Siembra el diálogo «Nueva carta» en un estado representativo: combobox de
+/// contacto activo con texto «Fri» (lista de coincidencias + opción de
+/// crear), tipo radix, calendario inline abierto en julio 1907 y hora con
+/// steppers.
+fn seed_dialog(model: &mut Model) {
+    model.dialog = Some(dialog::Dialog::NewChart(dialog::NewChartForm {
+        contact: None,
+        group: None,
+        contact_query: "Fri".into(),
+        kind: ChartKind::Natal,
+        label: "Carta nueva".into(),
+        date: "1907-07-06".into(),
+        time: "08:30".into(),
+        city_query: String::new(),
+        place: "Coyoacán, MX".into(),
+        lat: 19.35,
+        lon: -99.16,
+        tz: -360,
+        kind_open: false,
+        cal_open: true,
+        cal_year: 1907,
+        cal_month: 7,
+    }));
+    model.dialog_field = dialog::DialogField::Contact;
+    model.dialog_input.set_text("Fri".to_string());
+}
+
 fn main() {
     let out = std::env::args()
         .nth(1)
@@ -376,8 +403,43 @@ fn main() {
     }
 
     rimay_localize::init();
-    let model = modelo_demo();
-    let root = view_demo(&model);
+    let mut model = modelo_demo();
+    // Con COSMOS_SHOT_DIALOG=1 abre el diálogo «Nueva carta» rediseñado
+    // (combobox de contacto + select de tipo + calendario + steppers de
+    // hora) por encima de la app, para certificar la UX nueva.
+    let dialog_shot = std::env::var("COSMOS_SHOT_DIALOG").is_ok();
+    if dialog_shot {
+        seed_dialog(&mut model);
+    }
+    let main_view = view_demo(&model);
+    let root = if dialog_shot {
+        let overlay = dialog::dialog_overlay(&model, &model.theme).expect("overlay");
+        let overlay_abs = View::new(Style {
+            position: taffy::Position::Absolute,
+            inset: taffy::Rect {
+                left: length(0.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![overlay]);
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![main_view, overlay_abs])
+    } else {
+        main_view
+    };
 
     // view → layout → scene (misma secuencia que el eventloop real).
     let mut layout = LayoutTree::new();
