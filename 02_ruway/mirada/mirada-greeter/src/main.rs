@@ -109,7 +109,9 @@ fn shot_greeter(out: &str, w: u32, h: u32) {
         sessions,
         session_idx: 0,
         clipboard: SystemClipboard::new(),
-        menu_open: None,
+        // `MIRADA_SHOT_MENU=<idx>` abre ese menú raíz para certificar que el
+        // dropdown cae sobre el monitor activo.
+        menu_open: std::env::var("MIRADA_SHOT_MENU").ok().and_then(|v| v.parse().ok()),
         edit_menu: None,
         menu_active: usize::MAX,
         menu_anim: Tween::idle(1.0),
@@ -148,6 +150,25 @@ fn shot_greeter(out: &str, w: u32, h: u32) {
     };
     let mut scene = vello::Scene::new();
     paint(&mut scene, &mounted, &computed, &mut ts, None, None);
+
+    // Si hay overlay (menú abierto), se compone encima en el mismo lienzo —
+    // así el shot certifica la posición del dropdown en multi-monitor.
+    if let Some(ov) = <Greeter as App>::view_overlay(&model) {
+        let mut olayout = LayoutTree::new();
+        let omounted = mount(&mut olayout, ov);
+        let ocomputed = {
+            let tmap = &omounted.text_measures;
+            olayout
+                .compute_with_measure(omounted.root, (w as f32, h as f32), |nid, known, avail| {
+                    match tmap.get(&nid) {
+                        Some(tm) => measure_text_node(&mut ts, tm, known, avail),
+                        None => taffy::Size::ZERO,
+                    }
+                })
+                .expect("layout overlay")
+        };
+        paint(&mut scene, &omounted, &ocomputed, &mut ts, None, None);
+    }
 
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
     let target = hal.device.create_texture(&wgpu::TextureDescriptor {
@@ -964,19 +985,27 @@ impl App for Greeter {
     }
 }
 
-/// Envuelve `view` en un contenedor absoluto sobre el rect del monitor activo,
-/// para que los overlays con coords relativas a la ventana (el dropdown del
-/// menú) caigan bajo el contenido y no en el monitor primario. Sin info de
-/// monitores devuelve la vista tal cual.
+/// Desplaza `view` (el dropdown del menú) al rect del monitor activo, para que
+/// caiga bajo la barra y no en el monitor primario. El offset va en un **hijo**
+/// absoluto, no en la raíz: taffy ignora el `inset` del nodo raíz (siempre lo
+/// pone en 0,0), así que la raíz es de ventana completa y el contenedor
+/// desplazado cuelga de ella. Sin info de monitores devuelve la vista tal cual.
 fn offset_to_active_monitor(model: &Model, view: View<Msg>) -> View<Msg> {
     match content_rect(model) {
-        Some((x, y, w, h)) => View::new(Style {
-            position: Position::Absolute,
-            inset: Rect { left: length(x), top: length(y), right: auto(), bottom: auto() },
-            size: Size { width: length(w), height: length(h) },
-            ..Default::default()
-        })
-        .children(vec![view]),
+        Some((x, y, w, h)) => {
+            let shifted = View::new(Style {
+                position: Position::Absolute,
+                inset: Rect { left: length(x), top: length(y), right: auto(), bottom: auto() },
+                size: Size { width: length(w), height: length(h) },
+                ..Default::default()
+            })
+            .children(vec![view]);
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![shifted])
+        }
         None => view,
     }
 }
