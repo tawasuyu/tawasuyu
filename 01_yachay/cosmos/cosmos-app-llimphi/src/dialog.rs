@@ -14,7 +14,7 @@ use cosmos_model::{ChartKind, ContactId, GroupId};
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
@@ -160,7 +160,17 @@ impl Dialog {
                 c.contact_query = v;
             }
             (Dialog::NewChart(c), DialogField::Label) => c.label = v,
-            (Dialog::NewChart(c), DialogField::Date) => c.date = v,
+            (Dialog::NewChart(c), DialogField::Date) => {
+                c.date = v;
+                // Escribir la fecha (incluido el año) mueve el calendario
+                // inline a ese mes/año — así se navega a años lejanos sin
+                // clickar el stepper mil veces.
+                if let Some(d) = parse_naive_date(&c.date) {
+                    use chrono::Datelike;
+                    c.cal_year = d.year();
+                    c.cal_month = d.month();
+                }
+            }
             (Dialog::NewChart(c), DialogField::Time) => c.time = v,
             (Dialog::NewChart(c), DialogField::City) => c.city_query = v,
             (Dialog::HoyLoc(c), DialogField::Label) => c.label = v,
@@ -321,7 +331,10 @@ fn chart_body(model: &Model, theme: &Theme) -> Vec<View<Msg>> {
                 &format!("Crear contacto «{q}»"),
                 false,
                 glyphs::icon_view(Icon::Plus, 13.0, theme.accent),
-                Msg::DialogFocus(DialogField::Contact),
+                // Acepta el nombre tecleado como contacto nuevo y avanza el
+                // foco a Etiqueta (eso cierra el desplegable). El contacto se
+                // crea de verdad al confirmar (contact == None + query).
+                Msg::DialogFocus(DialogField::Label),
             ));
         }
     }
@@ -795,17 +808,81 @@ fn calendar_block(form: &NewChartForm, theme: &Theme) -> View<Msg> {
         }),
         on_view_change: std::sync::Arc::new(|y, m| Msg::DialogCalView(y, m)),
     });
-    View::new(Style {
+    // Navegación rápida de año (el header del calendar sólo mueve meses):
+    // «  ‹  AÑO  ›  »  donde « = −10, ‹ = −1, › = +1, » = +10.
+    let y = form.cal_year;
+    let mo = form.cal_month;
+    let yr_btn = |label: &str, delta: i32| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: length(26.0_f32),
+                height: length(22.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .radius(4.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(Msg::DialogCalView(y + delta, mo))
+        .children(vec![View::new(Style {
+            size: Size {
+                width: auto(),
+                height: auto(),
+            },
+            ..Default::default()
+        })
+        .text_aligned(label.to_string(), 11.0, theme.fg_text, Alignment::Center)])
+    };
+    let year_nav = View::new(Style {
+        flex_direction: FlexDirection::Row,
         size: Size {
-            width: percent(1.0_f32),
-            height: length(248.0_f32),
+            width: auto(),
+            height: length(22.0_f32),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(4.0_f32),
+            height: length(0.0_f32),
+        },
         ..Default::default()
     })
-    .children(vec![cal])
+    .children(vec![
+        yr_btn("«", -10),
+        yr_btn("‹", -1),
+        View::new(Style {
+            size: Size {
+                width: length(48.0_f32),
+                height: auto(),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .text_aligned(format!("{y}"), 12.0, theme.accent, Alignment::Center),
+        yr_btn("›", 1),
+        yr_btn("»", 10),
+    ]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(278.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![year_nav, cal])
 }
 
 /// Parsea `AAAA-MM-DD` a `NaiveDate` (None si inválida).
