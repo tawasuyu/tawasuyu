@@ -97,6 +97,24 @@ impl DrmState {
             .get(self.app.focused_output_index())
             .map(|o| o.rect);
         let shadows_on = self.shadows_on;
+
+        // Popups (menú de aplicación y contextuales de apps GTK/Qt) PRIMERO: el
+        // backend compone front-to-back (el primer elemento queda ARRIBA), así
+        // que apilarlos antes de las ventanas los deja por ENCIMA. Antes iban al
+        // final = detrás de la ventana → «el menú existe pero no pinta». Se
+        // dibujan recursivamente (submenús) relativos al origen de geometría del
+        // parent.
+        for w in &shown {
+            if !crate::buffer_render_sano(&w.surface) {
+                continue;
+            }
+            let (gx, gy) = crate::render_loc(w, primary_h, tbh);
+            let on_focused = focused_rect.map_or(true, |fr| gx >= fr.x && gx < fr.x + fr.w);
+            let gx = if w.is_shell || !on_focused { gx } else { gx + slide_dx };
+            let (off_x, off_y) = crate::content_offset(w);
+            emit_popups(&mut self.renderer, &w.surface, (gx + off_x, gy + off_y), rect, into);
+        }
+
         for w in &shown {
             if !crate::buffer_render_sano(&w.surface) {
                 continue; // buffer degenerado/desmesurado: ni decoración ni superficie
@@ -319,22 +337,6 @@ impl DrmState {
                     )));
                 }
             }
-        }
-
-        // Segunda pasada: los popups de cada ventana (menú de aplicación y
-        // contextuales de apps GTK/Qt) por ENCIMA de todas las ventanas. Se
-        // dibujan recursivamente (submenús) relativos al origen de geometría de
-        // su parent. Sin esto los `xdg_popup` nunca se pintan = «el menú no abre».
-        for w in &shown {
-            if !crate::buffer_render_sano(&w.surface) {
-                continue;
-            }
-            let (gx, gy) = crate::render_loc(w, primary_h, tbh);
-            let on_focused = focused_rect.map_or(true, |fr| gx >= fr.x && gx < fr.x + fr.w);
-            let gx = if w.is_shell || !on_focused { gx } else { gx + slide_dx };
-            let (off_x, off_y) = crate::content_offset(w);
-            // base = origen de geometría (contenido) del parent, en coords globales.
-            emit_popups(&mut self.renderer, &w.surface, (gx + off_x, gy + off_y), rect, into);
         }
     }
 
