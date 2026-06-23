@@ -144,6 +144,16 @@ pub fn build_initramfs(
     seed_path: &Path,
     bins: &[(String, PathBuf)],
 ) -> anyhow::Result<(Vec<u8>, EntityCard)> {
+    build_initramfs_with_assets(seed_path, bins, &[])
+}
+
+/// Como [`build_initramfs`], pero además hornea archivos extra `dest → src`
+/// (config del splash, imagen, frames…). Espeja `arje-packager --asset`.
+pub fn build_initramfs_with_assets(
+    seed_path: &Path,
+    bins: &[(String, PathBuf)],
+    assets: &[(String, PathBuf)],
+) -> anyhow::Result<(Vec<u8>, EntityCard)> {
     use anyhow::Context;
     let card = EntityCard::from_path(seed_path)
         .with_context(|| format!("cargando seed {}", seed_path.display()))?;
@@ -188,6 +198,34 @@ pub fn build_initramfs(
     )?;
     for (rel, data) in &tree {
         w.append(rel, EntryKind::Regular { data, perm: 0o755 })?;
+    }
+
+    // Assets extra (config del splash, imagen, frames) con sus directorios padre.
+    let mut dirs: std::collections::BTreeSet<String> = [
+        "dev", "ente", "proc", "run", "sys", "sbin", "usr", "usr/lib", "usr/lib/arje",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    for (dest, src) in assets {
+        let dest = dest.trim_start_matches('/');
+        let comps: Vec<&str> = dest.split('/').collect();
+        let mut acc = String::new();
+        for comp in &comps[..comps.len().saturating_sub(1)] {
+            if comp.is_empty() {
+                continue;
+            }
+            if !acc.is_empty() {
+                acc.push('/');
+            }
+            acc.push_str(comp);
+            if dirs.insert(acc.clone()) {
+                w.append(&acc, EntryKind::Directory)?;
+            }
+        }
+        let data = std::fs::read(src)
+            .with_context(|| format!("leyendo asset {dest} desde {}", src.display()))?;
+        w.append(dest, EntryKind::Regular { data: &data, perm: 0o644 })?;
     }
     let _: &mut Vec<u8> = w.finish()?;
 

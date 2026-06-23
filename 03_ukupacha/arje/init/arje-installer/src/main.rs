@@ -29,7 +29,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{anyhow, bail, Context};
 use arje_installer::{
-    build_initramfs, canonical_cmdline, efibootmgr_create_args, render_entry_conf,
+    canonical_cmdline, efibootmgr_create_args, render_entry_conf,
     render_loader_conf, EspLayout,
 };
 
@@ -49,6 +49,9 @@ COMUNES:
     --seed      Seed canónica del fractal (.card.json).
     --bin       LABEL=PATH del binario por cada Ente Native/Legacy del genesis.
                 'arje-zero' siempre se requiere.
+    --asset     DEST=SRC: archivo extra a hornear en el initramfs (config del
+                splash, imagen, frames). Repetible. Ej.:
+                --asset etc/arje/splash.conf=/tmp/splash.conf
     --cmdline   Args extra del kernel cmdline (sin el `initrd=` — lo agrega el
                 installer). Ej.: \"console=ttyS0 panic=10\".
     --label     Nombre para la entrada de boot / .conf. Default: \"arje\".
@@ -69,6 +72,8 @@ struct CommonArgs {
     kernel: PathBuf,
     seed: PathBuf,
     bins: Vec<(String, PathBuf)>,
+    /// Archivos extra a hornear (config del splash, imagen, frames): dest → src.
+    assets: Vec<(String, PathBuf)>,
     cmdline_extra: String,
     label: String,
 }
@@ -107,6 +112,7 @@ struct CommonAcc {
     kernel: Option<PathBuf>,
     seed: Option<PathBuf>,
     bins: Vec<(String, PathBuf)>,
+    assets: Vec<(String, PathBuf)>,
     cmdline_extra: String,
     label: Option<String>,
 }
@@ -128,6 +134,13 @@ impl CommonAcc {
                     .ok_or_else(|| anyhow!("--bin esperaba LABEL=PATH, vino {kv:?}"))?;
                 self.bins.push((l.to_string(), PathBuf::from(p)));
             }
+            "--asset" => {
+                let kv = args.next().context("--asset requiere DEST=SRC")?;
+                let (d, s) = kv
+                    .split_once('=')
+                    .ok_or_else(|| anyhow!("--asset esperaba DEST=SRC, vino {kv:?}"))?;
+                self.assets.push((d.to_string(), PathBuf::from(s)));
+            }
             "--cmdline" => self.cmdline_extra = args.next().context("--cmdline requiere string")?,
             "--label" => self.label = Some(args.next().context("--label requiere nombre")?),
             _ => return Ok(false),
@@ -140,6 +153,7 @@ impl CommonAcc {
             kernel: self.kernel.ok_or_else(|| anyhow!("falta --kernel"))?,
             seed: self.seed.ok_or_else(|| anyhow!("falta --seed"))?,
             bins: self.bins,
+            assets: self.assets,
             cmdline_extra: self.cmdline_extra,
             label: self.label.unwrap_or_else(|| "arje".to_string()),
         })
@@ -280,7 +294,8 @@ fn ensure_dir_exists(p: &Path) -> anyhow::Result<()> {
 }
 
 fn stage_files(common: &CommonArgs, layout: &EspLayout) -> anyhow::Result<()> {
-    let (initramfs, card) = build_initramfs(&common.seed, &common.bins)?;
+    let (initramfs, card) =
+        arje_installer::build_initramfs_with_assets(&common.seed, &common.bins, &common.assets)?;
     std::fs::create_dir_all(layout.arje_dir())
         .with_context(|| format!("mkdir {}", layout.arje_dir().display()))?;
     std::fs::copy(&common.kernel, layout.kernel())
