@@ -452,6 +452,12 @@ pub(crate) struct App {
     /// Vista espacial (Prezi) abierta: zoom-out a todos los escritorios. Se
     /// togglea desde el filtro de teclado (Super+e) y el render la pinta.
     pub(crate) overview_open: bool,
+    /// Pedido de **cierre** de la vista espacial: el render anima el zoom de
+    /// salida y, al terminar, baja `overview_open`. Así el cierre no es seco.
+    pub(crate) overview_closing: bool,
+    /// La vista espacial se abrió por **Win+Tab** (Super sostenido): se cierra al
+    /// soltar Super, como un switcher. Si se abrió por Super+e (toggle), no.
+    pub(crate) overview_via_wintab: bool,
     /// Estado de escritorios empujado por el Cerebro enlazado (`SetWorkspaces`),
     /// para el switcher Win+Tab + slide en modo DE. `None` con Cerebro embebido.
     pub(crate) linked_ws: Option<LinkedWorkspaces>,

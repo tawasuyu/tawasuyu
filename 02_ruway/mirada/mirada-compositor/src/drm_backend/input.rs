@@ -66,6 +66,8 @@ impl DrmState {
                                             == mirada_brain::WorkspaceSwitchMode::Prezi
                                     {
                                         st.overview_open = true;
+                                        st.overview_closing = false;
+                                        st.overview_via_wintab = true;
                                     } else {
                                         st.switcher_step = Some((Workspaces, true));
                                     }
@@ -84,7 +86,16 @@ impl DrmState {
                                 // interceptamos: el atajo cae a los grabs y se
                                 // reenvía como `BodyEvent::Keybind`.
                                 "Super+e" if st.brain_is_embedded() => {
-                                    st.overview_open = !st.overview_open;
+                                    // Toggle: abre (con zoom-out) o pide cierre (con
+                                    // zoom-in). No es Win+Tab, así que NO se cierra
+                                    // al soltar Super — sólo con Super+e/Esc/click.
+                                    if st.overview_open {
+                                        st.overview_closing = true;
+                                    } else {
+                                        st.overview_open = true;
+                                        st.overview_closing = false;
+                                        st.overview_via_wintab = false;
+                                    }
                                     return FilterResult::Intercept(());
                                 }
                                 "Escape" if st.switcher.is_some() => {
@@ -92,7 +103,7 @@ impl DrmState {
                                     return FilterResult::Intercept(());
                                 }
                                 "Escape" if st.overview_open => {
-                                    st.overview_open = false;
+                                    st.overview_closing = true; // anima el cierre
                                     return FilterResult::Intercept(());
                                 }
                                 _ => {}
@@ -152,6 +163,19 @@ impl DrmState {
                         .is_some_and(|kb| kind.modifier_held(&kb.modifier_state()));
                     if !held {
                         crate::switcher::commit(&mut self.app);
+                    }
+                }
+                // Vista espacial abierta por Win+Tab: se cierra (con zoom-in) al
+                // soltar Super, como un switcher.
+                if self.app.overview_open && self.app.overview_via_wintab && !self.app.overview_closing
+                {
+                    let super_held = self
+                        .app
+                        .keyboard
+                        .as_ref()
+                        .is_some_and(|kb| kb.modifier_state().logo);
+                    if !super_held {
+                        self.app.overview_closing = true;
                     }
                 }
             }
@@ -281,8 +305,9 @@ impl DrmState {
                 // Vista espacial (Prezi) abierta: un click izquierdo sobre un
                 // tile salta a ese escritorio; cualquier click la cierra. Los
                 // tiles están en coords locales de la salida primaria.
-                if pressed && self.app.overview_open {
-                    self.app.overview_open = false;
+                if pressed && self.app.overview_open && !self.app.overview_closing {
+                    // Click izquierdo sobre un tile → salta a ese escritorio; luego
+                    // anima el cierre (zoom-in). Cualquier otro click sólo cierra.
                     if button == BTN_LEFT {
                         let (gx, gy) = self.app.pointer_loc;
                         let origin = self
@@ -298,6 +323,7 @@ impl DrmState {
                             self.app.cambiar_workspace(ws);
                         }
                     }
+                    self.app.overview_closing = true;
                     crate::screencopy::danar_todo(&mut self.app);
                     return;
                 }

@@ -521,6 +521,13 @@ struct DrmState {
     /// `None` = sin transición. El signo: +1 desliza desde la derecha (fuiste a
     /// un escritorio mayor), -1 desde la izquierda.
     ws_slide: Option<(u32, f32)>,
+    /// Animación de zoom de la vista espacial (Prezi): `(ms de inicio, abriendo)`.
+    /// `abriendo=true` = zoom-OUT (del escritorio activo al mosaico); `false` =
+    /// zoom-IN de cierre. `None` = sin animación (abierta-quieta o cerrada).
+    overview_anim: Option<(u32, bool)>,
+    /// Valor de `overview_open` del tick anterior — para detectar el flanco de
+    /// apertura y arrancar la animación de zoom-out.
+    prev_overview_open: bool,
     /// Rects en pantalla de cada tile de la vista espacial (Prezi) `(escritorio,
     /// rect)` — poblado al pintar, usado para el hit-test del click. (El flag
     /// `overview_open` vive en `App` para togglearlo desde el filtro de teclado.)
@@ -1037,6 +1044,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         last_focused_output: 0,
         shadows_on: std::env::var_os("MIRADA_SHADOW").is_some(),
         ws_slide: None,
+        overview_anim: None,
+        prev_overview_open: false,
         overview_tiles: Vec::new(),
         wp_images: Vec::new(),
         wp_index: 0,

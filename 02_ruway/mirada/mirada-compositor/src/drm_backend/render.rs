@@ -465,7 +465,21 @@ impl DrmState {
             self.app.overview_open = false;
             return;
         };
-        const SCRIM: [f32; 4] = [0.04, 0.05, 0.07, 0.96];
+        // Progreso del zoom: 1 = mosaico desplegado; 0 = el escritorio activo
+        // llena la pantalla (el punto de partida/llegada del vuelo de cámara).
+        let t_open = match self.overview_anim {
+            Some((start, opening)) => {
+                let now = self.start.elapsed().as_millis() as u32;
+                let anim_ms = self.app.config_overview_anim_ms().max(1) as f32;
+                let raw = (now.saturating_sub(start) as f32 / anim_ms).clamp(0.0, 1.0);
+                let eased = 1.0 - (1.0 - raw).powi(3); // ease-out
+                if opening { eased } else { 1.0 - eased }
+            }
+            None => 1.0,
+        };
+        // Scrim OPACO cuando está desplegada (esconde el escritorio real detrás);
+        // se desvanece con el zoom para que al «salir» del activo no haya corte.
+        const SCRIM: [f32; 4] = [0.04, 0.05, 0.07, 1.0];
         const TILE_BG: [f32; 4] = [0.12, 0.13, 0.17, 1.0];
         const WIN_BG: [f32; 4] = [0.26, 0.30, 0.40, 1.0];
         const WIN_FOCUS: [f32; 4] = [0.22, 0.45, 0.85, 1.0];
@@ -483,7 +497,7 @@ impl DrmState {
                 &scrim,
                 (0, 0),
                 1.0,
-                1.0,
+                t_open,
                 Kind::Unspecified,
             )));
             return;
@@ -592,6 +606,43 @@ impl DrmState {
                 .filter_map(|t| tr.rasterize(&t.num, 20.0, BADGE_TX))
                 .collect()
         };
+
+        // ── Vuelo de cámara (zoom Prezi) ──────────────────────────────────────
+        // A `t_open=1` se ve el mosaico tal cual; a `t_open=0` el escritorio
+        // ACTIVO llena la pantalla. Interpolamos una escala + traslación global
+        // (pivote = centro del tile activo) y la aplicamos a cada tile y a las
+        // posiciones/escala de sus ventanas. Así el Win+Tab «sale» del activo y
+        // hace zoom-out al mosaico, y al cerrar hace zoom-in de vuelta.
+        if t_open < 0.999 {
+            let (acx, acy, s0) = match tiles.iter().find(|t| t.active) {
+                Some(a) => {
+                    let aw = a.w.max(1) as f32;
+                    let ah = a.h.max(1) as f32;
+                    (a.x as f32 + aw / 2.0, a.y as f32 + ah / 2.0, (cw / aw).max(ch / ah))
+                }
+                // Activo vacío (sin tile): zoom desde el centro, sin ampliar.
+                None => (cw / 2.0, ch / 2.0, 1.0),
+            };
+            let s = 1.0 + (s0 - 1.0) * (1.0 - t_open);
+            let ox = cw / 2.0 + (acx - cw / 2.0) * t_open;
+            let oy = ch / 2.0 + (acy - ch / 2.0) * t_open;
+            let cam = |x: f32, y: f32| ((x - acx) * s + ox, (y - acy) * s + oy);
+            for tl in &mut tiles {
+                let (nx, ny) = cam(tl.x as f32, tl.y as f32);
+                tl.x = nx.round() as i32;
+                tl.y = ny.round() as i32;
+                tl.w = (tl.w as f32 * s).round() as i32;
+                tl.h = (tl.h as f32 * s).round() as i32;
+                tl.scale *= s;
+                for win in &mut tl.wins {
+                    let (wx, wy) = cam(win.1 as f32, win.2 as f32);
+                    win.1 = wx.round() as i32;
+                    win.2 = wy.round() as i32;
+                    win.3 = (win.3 as f32 * s).round() as i32;
+                    win.4 = (win.4 as f32 * s).round() as i32;
+                }
+            }
+        }
 
         // Umbral para tratar un tile como "girado" (evita el costo CPU por ruido).
         let girado = |rot: f32| rot.abs() > 1e-4;
@@ -740,7 +791,7 @@ impl DrmState {
             &scrim,
             (0, 0),
             1.0,
-            1.0,
+            t_open,
             Kind::Unspecified,
         )));
     }

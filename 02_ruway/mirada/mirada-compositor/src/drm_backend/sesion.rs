@@ -131,6 +131,37 @@ impl DrmState {
             }
         }
 
+        // Vista espacial (Prezi): animación de zoom de apertura/cierre. Al
+        // detectar el flanco de apertura arranca el zoom-OUT; al pedir cierre
+        // (`overview_closing`) arranca el zoom-IN y, al terminar, baja la vista.
+        {
+            let now = self.start.elapsed().as_millis() as u32;
+            let anim_ms = self.app.config_overview_anim_ms().max(1);
+            if self.app.overview_open && !self.prev_overview_open {
+                self.overview_anim = Some((now, true)); // recién abierta → zoom-out
+            }
+            self.prev_overview_open = self.app.overview_open;
+            if self.app.overview_closing && !matches!(self.overview_anim, Some((_, false))) {
+                self.overview_anim = Some((now, false)); // cierre → zoom-in
+            }
+            if let Some((start, opening)) = self.overview_anim {
+                if now >= start.saturating_add(anim_ms) {
+                    if opening {
+                        self.overview_anim = None; // queda abierta, desplegada
+                    } else {
+                        self.app.overview_open = false;
+                        self.app.overview_closing = false;
+                        self.app.overview_via_wintab = false;
+                        self.overview_anim = None;
+                        self.prev_overview_open = false;
+                    }
+                } else {
+                    // En animación: forzar repaint cada tick para que fluya.
+                    crate::screencopy::danar_todo(&mut self.app);
+                }
+            }
+        }
+
         // Fondo automático (slideshow): rota por la carpeta cada N segundos.
         let (wp_dir, wp_interval) = self.app.config_wallpaper_slideshow();
         if !wp_dir.is_empty() && wp_interval > 0 {

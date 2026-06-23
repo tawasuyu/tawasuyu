@@ -239,6 +239,14 @@ impl App {
         }
     }
 
+    /// Duración (ms) del vuelo de cámara (zoom) de la vista espacial (Prezi).
+    pub(crate) fn config_overview_anim_ms(&self) -> u32 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().overview_anim_ms,
+            Brain::Linked(_) => 260,
+        }
+    }
+
     /// `(escritorio activo 0-based, ventanas por escritorio)` del Cerebro
     /// embebido — para el switcher visual de Win+Tab. `None` con Cerebro
     /// enlazado (el dueño externo maneja los escritorios).
