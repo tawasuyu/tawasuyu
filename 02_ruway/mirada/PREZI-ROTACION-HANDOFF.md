@@ -77,10 +77,25 @@ rotado se dibuja. Quedaban tres defectos visuales, los tres arreglados:
    des-rota de 1→0. Cuando el ángulo interpolado es ~0 cae al camino recto de
    quads (full-res), así que sólo mid-vuelo usa el bitmap rotado de baja-res.
 
-**PRÓXIMO PASO EN EL METAL:** correr el compositor DRM con el build nuevo,
-abrir Prezi con un escritorio rotado y confirmar: derecho (no de cabeza),
-vivo durante el zoom (no gris), sin parpadeo, y el giro entrando/saliendo
-con la curva del zoom (no de golpe).
+5. **«Plop» gris al cerrar (crossfade al escritorio real).** Al final del cierre
+   el tile activo llena la pantalla y su fondo opaco `TILE_BG` tapaba el
+   escritorio real (que sí se compone detrás), cortando con un flash gris antes
+   de aparecer la ventana. Fix: un **fade corto** (`fade = (t_open/0.12).min(1)`)
+   sobre todo el contenido opaco del overview (fondo de tile, borde, bitmap
+   rotado, número, ventanas) — disuelve al escritorio real en lugar de cortar.
+   El ramp es CORTO a propósito: a mitad de vuelo el contenido del overview está
+   desalineado del layout real (la cámara recién los superpone cerca de
+   `t_open=0`), así que un fade largo revelaría ventanas reales desalineadas
+   (ghosting). `0.12` es conservador; se puede alargar si se quiere más dissolve
+   y se tolera algo de ghost. Ambos `from_buffer` aceptan alpha
+   (`SolidColorRenderElement` f32, `MemoryRenderBufferRenderElement` Option<f32>).
+
+**ESTADO: mirada-prezi CERRADO.** Los cinco defectos resueltos y verificados en
+metal. Posible optimización futura (NO hecha, no vale el riesgo de reabrir):
+cachear el bitmap rotado en estado asentado (`t_open=1`) e invalidar sólo al
+cambiar ventanas/rot, en vez de recomponer offscreen+readback+rotación por
+frame. Hoy el costo queda acotado por `LIVE_ROT_MAX=560` y por el redibujo por
+daño, así que no apremia.
 
 ---
 

@@ -637,6 +637,14 @@ impl DrmState {
             }
             None => 1.0,
         };
+        // Crossfade del contenido al/desde el escritorio real en el TRAMO FINAL
+        // del zoom. El fondo opaco del tile (TILE_BG) tapaba el escritorio real y
+        // cortaba con un «plop» gris al cerrar (y un flash al abrir). Con un fade
+        // corto pegado a `t_open=0` —donde el tile activo ya está alineado con el
+        // layout real— el overview DISUELVE en vez de cortar. El ramp es corto a
+        // propósito: a mitad de vuelo el contenido está desalineado del real, así
+        // que recién lo dejamos asomar cuando están casi superpuestos.
+        let fade = (t_open / 0.12).min(1.0);
         // Scrim OPACO cuando está desplegada (esconde el escritorio real detrás);
         // se desvanece con el zoom para que al «salir» del activo no haya corte.
         const SCRIM: [f32; 4] = [0.04, 0.05, 0.07, 1.0];
@@ -896,7 +904,7 @@ impl DrmState {
                 &mut self.renderer,
                 (ax, ay),
                 &buf,
-                None,
+                Some(fade),
                 None,
                 None,
                 Kind::Unspecified,
@@ -927,7 +935,7 @@ impl DrmState {
                 &mut self.renderer,
                 ((t.x + 8) as f64, (t.y + 6) as f64),
                 &buf,
-                None,
+                Some(fade),
                 None,
                 None,
                 Kind::Unspecified,
@@ -960,7 +968,7 @@ impl DrmState {
                         &surface,
                         (*wx, *wy),
                         1.0,
-                        1.0,
+                        fade,
                         Kind::Unspecified,
                     );
                     if !elems.is_empty() {
@@ -981,7 +989,7 @@ impl DrmState {
                     &wb,
                     (*wx, *wy),
                     1.0,
-                    1.0,
+                    fade,
                     Kind::Unspecified,
                 )));
             }
@@ -994,7 +1002,7 @@ impl DrmState {
                 &br,
                 (t.x - 3, t.y - 3),
                 1.0,
-                1.0,
+                fade,
                 Kind::Unspecified,
             )));
         }
@@ -1005,7 +1013,7 @@ impl DrmState {
                 &tb,
                 (t.x, t.y),
                 1.0,
-                1.0,
+                fade,
                 Kind::Unspecified,
             )));
         }
