@@ -776,17 +776,28 @@ impl DrmState {
                     .filter(|w| crate::buffer_render_sano(&w.surface))
                     .map(|w| w.surface.clone());
                 if let Some(surface) = surface {
+                    // La pintamos a TAMAÑO COMPLETO anclada en `(wx,wy)` y luego la
+                    // reescalamos por `t.scale` alrededor de ese mismo punto: el
+                    // `scale` de `render_elements_from_surface_tree` es la escala de
+                    // SALIDA (no achica la ventana), así que el encogido real lo hace
+                    // el `RescaleRenderElement`. Sin esto las ventanas salían a
+                    // pantalla completa apiladas y «no se veía reducido».
                     let elems = render_elements_from_surface_tree(
                         &mut self.renderer,
                         &surface,
                         (*wx, *wy),
-                        t.scale as f64,
+                        1.0,
                         1.0,
                         Kind::Unspecified,
                     );
                     if !elems.is_empty() {
+                        let origin = Point::<i32, Physical>::from((*wx, *wy));
                         for el in elems {
-                            into.push(Frame::Window(el));
+                            into.push(Frame::ScaledWindow(RescaleRenderElement::from_element(
+                                el,
+                                origin,
+                                t.scale as f64,
+                            )));
                         }
                         continue;
                     }

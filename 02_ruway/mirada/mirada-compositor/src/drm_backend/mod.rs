@@ -37,6 +37,7 @@ use smithay::backend::renderer::element::solid::{SolidColorBuffer, SolidColorRen
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
+use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{render_elements, Id, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
@@ -118,11 +119,16 @@ struct OutputCtx {
 render_elements! {
     /// Lo que el backend DRM compone en un cuadro: superficies de cliente,
     /// rectángulos de color sólido (cursor, marcos) y etiquetas de texto
-    /// (búferes RGBA rasterizados — títulos, menú).
+    /// (búferes RGBA rasterizados — títulos, menú). `ScaledWindow` es una
+    /// superficie de cliente **reescalada** (miniatura viva de la vista
+    /// espacial): el `scale` de `render_elements_from_surface_tree` es la escala
+    /// de salida, no un resize, así que para achicar de verdad la envolvemos en
+    /// un `RescaleRenderElement`.
     Frame<R> where R: ImportAll + ImportMem;
     Window = WaylandSurfaceRenderElement<R>,
     Solid = SolidColorRenderElement,
     Text = MemoryRenderBufferRenderElement<R>,
+    ScaledWindow = RescaleRenderElement<WaylandSurfaceRenderElement<R>>,
 }
 
 /// Color de fondo del escritorio cuando no hay nada que lo tape.
