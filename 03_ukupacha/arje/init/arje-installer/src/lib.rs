@@ -85,10 +85,20 @@ impl EspLayout {
 /// invoca un bootloader (systemd-boot/rEFInd). Ambos paths convergen.
 pub fn canonical_cmdline(extra: &str) -> String {
     let base = r"initrd=\EFI\arje\initramfs.cpio.gz";
-    if extra.trim().is_empty() {
-        base.to_string()
+    // Flags de arranque **sin parpadeo** (ver SDD-ARRANQUE-SIN-PARPADEO.md):
+    // - `quiet loglevel=3` — el kernel no escribe logs sobre el framebuffer
+    //   (evita el flash de texto); deja errores graves.
+    // - `vt.global_cursor_default=0` — sin cursor de consola parpadeando.
+    // - `i915.fastboot=1` — takeover sin re-modeset en Intel (inocuo en otras
+    //   GPUs: el driver que no existe ignora su parámetro). amdgpu ya hace
+    //   seamless por defecto.
+    // El splash nativo (`arje-splash`) cubre el resto del hueco hasta mirada.
+    let flicker_free = "quiet loglevel=3 vt.global_cursor_default=0 i915.fastboot=1";
+    let extra = extra.trim();
+    if extra.is_empty() {
+        format!("{base} {flicker_free}")
     } else {
-        format!("{base} {}", extra.trim())
+        format!("{base} {flicker_free} {extra}")
     }
 }
 
@@ -242,22 +252,23 @@ mod tests {
 
     #[test]
     fn cmdline_canonico_sin_extra() {
-        assert_eq!(
-            canonical_cmdline(""),
-            r"initrd=\EFI\arje\initramfs.cpio.gz"
-        );
-        assert_eq!(
-            canonical_cmdline("   "),
-            r"initrd=\EFI\arje\initramfs.cpio.gz"
-        );
+        let c = canonical_cmdline("");
+        assert!(c.starts_with(r"initrd=\EFI\arje\initramfs.cpio.gz"), "{c}");
+        // Flags flicker-free siempre presentes.
+        assert!(c.contains("quiet"), "{c}");
+        assert!(c.contains("vt.global_cursor_default=0"), "{c}");
+        // Sin extra ⇒ no hay basura colgando al final.
+        assert!(!c.trim_end().ends_with(' '), "{c}");
+        assert_eq!(canonical_cmdline("   "), canonical_cmdline(""));
     }
 
     #[test]
     fn cmdline_canonico_con_extra() {
-        assert_eq!(
-            canonical_cmdline("console=ttyS0 panic=10"),
-            r"initrd=\EFI\arje\initramfs.cpio.gz console=ttyS0 panic=10"
-        );
+        let c = canonical_cmdline("console=ttyS0 panic=10");
+        assert!(c.starts_with(r"initrd=\EFI\arje\initramfs.cpio.gz"), "{c}");
+        assert!(c.contains("quiet"), "{c}");
+        // El extra del usuario va al final, tras los flicker-free.
+        assert!(c.ends_with("console=ttyS0 panic=10"), "{c}");
     }
 
     #[test]
