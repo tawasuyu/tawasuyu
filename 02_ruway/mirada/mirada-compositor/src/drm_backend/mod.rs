@@ -611,6 +611,13 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     println!("mirada-compositor · backend DRM.");
     println!("──────────────────────────────────────────────────");
 
+    // 0 · Handoff sin parpadeo: si arje-splash está mostrando el splash del
+    // arranque y tiene el DRM master, le pedimos la pantalla y esperamos a que
+    // haga su fade-out y suelte el master antes de que libseat/DrmDevice lo
+    // reclamen. Best-effort: sin splash, seguimos de largo. (Fase 2 del
+    // SDD-ARRANQUE-SIN-PARPADEO.)
+    crate::handoff::esperar_release_del_splash();
+
     // 1 · Sesión.
     println!("[1/8] abriendo la sesión (libseat) …");
     let (mut session, session_notifier) = LibSeatSession::new().map_err(|e| {

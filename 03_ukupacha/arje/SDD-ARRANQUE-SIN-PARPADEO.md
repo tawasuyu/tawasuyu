@@ -114,6 +114,24 @@ animación; eso queda cubierto por los tests de `render.rs`. La observación vis
 (cero parpadeo percibido, crossfade) se hace abriendo la ventana de QEMU
 (`DISPLAY_ARGS= ./scripts/test-arje-splash-qemu.sh`).
 
+**Handoff Fase 2** verificado con `arje-splash --poke` (mirada falsa) como Ente
+extra del génesis. Secuencia observada (serial):
+
+```
+[arje-splash] conector ... modo 1280x800 — reusando modo vigente
+[arje-splash] handoff escuchando en /run/arje-splash.sock
+[arje-splash --poke] conectado; mando READY
+[arje-splash] READY de mirada — fade-out + handoff
+[arje-splash] RELEASED enviado — mirada toma la pantalla
+[arje-splash --poke] respuesta: RELEASED
+Ente disuelto label=arje-splash status=Exit(0)   (~0.44 s, no a los 8 s del tope)
+```
+
+El handoff corta el tope de tiempo: el splash suelta apenas mirada avisa. El
+protocolo es idéntico al que implementa `mirada-compositor::handoff`, así que
+queda certificado; la integración real del greeter sobre hardware es la
+observación visual pendiente.
+
 ### Dos gotchas de integración (encontrados al verificar)
 
 1. **Binarios estáticos.** El initramfs no trae `libc.so`; arje-zero/splash deben
@@ -141,7 +159,16 @@ animación; eso queda cubierto por los tests de `render.rs`. La observación vis
   `OneShot`, `requires Device{Drm}`. En `synthesize_dev_seed` (dev) y en los
   seeds canónicos `seeds/arje-{host,qemu}.card.json` — declarado **antes** del
   display-manager (host) / primero (qemu, para verificar el splash aislado).
-- [ ] Fase 2 — contrato de handoff splash↔mirada + crossfade
+- [x] Fase 2 — contrato de handoff splash↔mirada + crossfade. Socket Unix
+  `/run/arje-splash.sock` (env `ARJE_SPLASH_SOCK`). Protocolo: mirada manda
+  `READY` → splash hace fade-out al `BG` (400 ms), suelta el DRM master, y
+  responde `RELEASED`; mirada espera ese `RELEASED` (timeout 3 s) antes de
+  tomar master con libseat. Lado splash en `arje-splash::handoff` (con
+  `--poke`, cliente de prueba); lado mirada en `mirada-compositor::handoff`
+  (`esperar_release_del_splash`, llamado al inicio de `drm_backend::run`).
+  Degradación elegante en ambos lados: sin socket / sin respuesta, cada uno
+  sigue solo. **Verificado end-to-end en QEMU** (ver abajo); falta la
+  observación visual del crossfade con el greeter real en hardware.
 
 ## Empaquetado (cómo llega al boot)
 

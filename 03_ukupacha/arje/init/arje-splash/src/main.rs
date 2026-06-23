@@ -19,6 +19,7 @@
 //! - `ARJE_SPLASH_FPS` — frames por segundo objetivo (def 30).
 
 mod drm_present;
+mod handoff;
 mod render;
 
 use std::process::ExitCode;
@@ -28,6 +29,19 @@ const DEFAULT_MAX_MS: u64 = 8000;
 const DEFAULT_FPS: u64 = 30;
 
 fn main() -> ExitCode {
+    // Modo cliente de prueba (`arje-splash --poke`): simula a mirada mandando
+    // READY al socket de handoff y esperando RELEASED. Para verificar Fase 2
+    // end-to-end en QEMU sin levantar el compositor.
+    if std::env::args().any(|a| a == "--poke") {
+        match handoff::poke(&handoff::sock_path()) {
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("[arje-splash --poke] error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     let device = std::env::args()
         .nth(1)
         .filter(|a| !a.starts_with('-'))

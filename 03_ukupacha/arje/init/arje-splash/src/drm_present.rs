@@ -25,6 +25,7 @@ use drm::control::{connector, crtc, framebuffer, Device as ControlDevice, Mode, 
 use drm::control::dumbbuffer::DumbBuffer;
 use drm::Device as DrmDevice;
 
+use crate::handoff::{self, Handoff};
 use crate::render;
 
 /// Bandera de parada compartida con el handler de señales (SIGTERM/SIGINT).
@@ -112,11 +113,20 @@ fn try_run(opts: &Opts) -> Result<(), String> {
     // Dos superficies para alternar (double buffer).
     let mut a = make_surface(&card, w as u32, h as u32)?;
     let mut b = make_surface(&card, w as u32, h as u32)?;
+    let con_handle = con.handle();
+
+    // Socket de handoff (Fase 2). Best-effort: si no bindea, sólo tope de tiempo.
+    let mut handoff = Handoff::bind(&handoff::sock_path());
+    if handoff.active() {
+        log!("handoff escuchando en {}", handoff::sock_path().display());
+    } else {
+        log!("sin socket de handoff — sólo tope de tiempo (Fase 1)");
+    }
 
     let start = Instant::now();
     // Primer present: set_crtc reusando el modo → mismo timing, sin flash.
-    paint_into(&card, &mut a, w, h, 0)?;
-    card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con.handle()], Some(mode))
+    paint_into(&card, &mut a, w, h, 0, 0.0)?;
+    card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con_handle], Some(mode))
         .map_err(|e| format!("set_crtc inicial: {e}"))?;
 
     let frame_dt = Duration::from_millis((1000 / opts.fps.max(1)).max(1));
@@ -124,6 +134,7 @@ fn try_run(opts: &Opts) -> Result<(), String> {
     // ¿El driver soporta page-flip? Lo descubrimos en el primer intento y
     // recordamos para no reintentar un ioctl que ya sabemos que no está.
     let mut can_flip = true;
+    let mut do_handoff = false;
 
     loop {
         if STOP.load(Ordering::SeqCst) {
@@ -136,38 +147,39 @@ fn try_run(opts: &Opts) -> Result<(), String> {
                 break;
             }
         }
-
-        let t = start.elapsed().as_millis() as u64;
-        let frame_start = Instant::now();
-
-        // Pintar el back buffer (b) y presentarlo.
-        paint_into(&card, &mut b, w, h, t)?;
-        let presented = if can_flip {
-            match card.page_flip(crtc_handle, b.fb, PageFlipFlags::EVENT, None) {
-                Ok(()) => {
-                    wait_flip(&card, frame_dt);
-                    true
-                }
-                Err(e) => {
-                    log!("page_flip no disponible ({e}); caigo a set_crtc (mismo modo)");
-                    can_flip = false;
-                    false
-                }
-            }
-        } else {
-            false
-        };
-        if !presented {
-            // Fallback: set_crtc con el MISMO modo (no re-modeset, sólo cambia
-            // el puntero de scanout). Pacing por sleep.
-            card.set_crtc(crtc_handle, Some(b.fb), (0, 0), &[con.handle()], Some(mode))
-                .map_err(|e| format!("set_crtc frame: {e}"))?;
-            if let Some(rem) = frame_dt.checked_sub(frame_start.elapsed()) {
-                std::thread::sleep(rem);
-            }
+        if handoff.poll_ready() {
+            log!("READY de mirada — fade-out + handoff");
+            do_handoff = true;
+            break;
         }
 
+        let t = start.elapsed().as_millis() as u64;
+        present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 0.0,
+                    &mut can_flip, frame_dt)?;
         std::mem::swap(&mut a, &mut b);
+    }
+
+    // Fade-out del handoff: fundimos el contenido al fondo de marca `BG` (no a
+    // negro) en ~FADE_MS. Al terminar la pantalla queda en el mismo `bg_app`
+    // que mirada va a mostrar, así el traspaso de master no se nota.
+    if do_handoff {
+        const FADE_MS: u64 = 400;
+        let fade_start = Instant::now();
+        loop {
+            let e = fade_start.elapsed().as_millis() as u64;
+            if e >= FADE_MS {
+                break;
+            }
+            let f = e as f32 / FADE_MS as f32;
+            let t = start.elapsed().as_millis() as u64;
+            present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, f,
+                        &mut can_flip, frame_dt)?;
+            std::mem::swap(&mut a, &mut b);
+        }
+        // Frame final: BG sólido garantizado.
+        let t = start.elapsed().as_millis() as u64;
+        present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 1.0,
+                    &mut can_flip, frame_dt)?;
     }
 
     // Salida: NO destruimos el framebuffer en scanout ni reponemos el modo —
@@ -176,7 +188,59 @@ fn try_run(opts: &Opts) -> Result<(), String> {
     // compuesto sobre el mismo modo (el crossfade percibido de Fase 2).
     drop(a);
     drop(b);
-    drop(card);
+    drop(card); // ← suelta el DRM master
+
+    // Recién con el master ya soltado le avisamos a mirada que puede tomarlo.
+    if do_handoff {
+        handoff.send_released();
+        log!("RELEASED enviado — mirada toma la pantalla");
+    }
+    Ok(())
+}
+
+/// Pinta `surf` para el instante `t` con `fade` y lo presenta (page-flip si el
+/// driver lo soporta; si no, `set_crtc` con el mismo modo — nunca re-modeset).
+/// Marca el ritmo del frame (`frame_dt`).
+#[allow(clippy::too_many_arguments)]
+fn present_one(
+    card: &Card,
+    surf: &mut Surface,
+    crtc_handle: crtc::Handle,
+    con_handle: connector::Handle,
+    mode: Mode,
+    w: usize,
+    h: usize,
+    t: u64,
+    fade: f32,
+    can_flip: &mut bool,
+    frame_dt: Duration,
+) -> Result<(), String> {
+    let frame_start = Instant::now();
+    paint_into(card, surf, w, h, t, fade)?;
+    let presented = if *can_flip {
+        match card.page_flip(crtc_handle, surf.fb, PageFlipFlags::EVENT, None) {
+            Ok(()) => {
+                wait_flip(card, frame_dt);
+                true
+            }
+            Err(e) => {
+                log!("page_flip no disponible ({e}); caigo a set_crtc (mismo modo)");
+                *can_flip = false;
+                false
+            }
+        }
+    } else {
+        false
+    };
+    if !presented {
+        // Fallback: set_crtc con el MISMO modo (no re-modeset, sólo cambia el
+        // puntero de scanout). Pacing por sleep.
+        card.set_crtc(crtc_handle, Some(surf.fb), (0, 0), &[con_handle], Some(mode))
+            .map_err(|e| format!("set_crtc frame: {e}"))?;
+        if let Some(rem) = frame_dt.checked_sub(frame_start.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
     Ok(())
 }
 
@@ -233,13 +297,13 @@ fn make_surface(card: &Card, w: u32, h: u32) -> Result<Surface, String> {
     Ok(Surface { db, fb })
 }
 
-/// Mapea el dumb buffer de la superficie y pinta el frame `t` en él.
-fn paint_into(card: &Card, s: &mut Surface, w: usize, h: usize, t: u64) -> Result<(), String> {
+/// Mapea el dumb buffer de la superficie y pinta el frame `t` (con `fade`) en él.
+fn paint_into(card: &Card, s: &mut Surface, w: usize, h: usize, t: u64, fade: f32) -> Result<(), String> {
     let pitch = s.db.pitch() as usize;
     let mut map = card
         .map_dumb_buffer(&mut s.db)
         .map_err(|e| format!("map_dumb_buffer: {e}"))?;
-    render::paint_frame(map.as_mut(), w, h, pitch, t);
+    render::paint_frame(map.as_mut(), w, h, pitch, t, fade);
     Ok(())
 }
 

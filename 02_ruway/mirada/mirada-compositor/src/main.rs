@@ -94,6 +94,7 @@ use mirada_brain::{
 use mirada_link::BodyLink;
 
 mod drm_backend;
+mod handoff;
 mod menu;
 mod screencopy;
 mod foreign_toplevel;

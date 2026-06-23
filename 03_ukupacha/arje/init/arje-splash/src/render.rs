@@ -29,8 +29,14 @@ const SWEEP_MS: f32 = 1600.0;
 /// `pitch` es el stride en bytes de cada fila. Los bytes de padding más allá de
 /// `w*4` en cada fila se dejan intactos (no son visibles). `buf` debe tener al
 /// menos `pitch * h` bytes; filas/píxeles que no entren se ignoran (defensivo).
-pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64) {
+///
+/// `fade` ∈ [0,1] funde todo el contenido hacia el fondo de marca `BG` (no a
+/// negro): `0` = splash normal, `1` = `BG` sólido. Es el fade-out del handoff
+/// hacia mirada (Fase 2) — al terminar la pantalla queda en el mismo `bg_app`
+/// que mirada va a mostrar, así el traspaso no se nota.
+pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64, fade: f32) {
     let t = t_ms as f32;
+    let fade = fade.clamp(0.0, 1.0);
 
     // Respiración: brillo del logo oscilando suave entre `lo` y 1.0.
     let breath = 0.5 + 0.5 * (t / BREATH_MS * std::f32::consts::TAU).sin(); // 0..1
@@ -53,10 +59,14 @@ pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64) 
     let sweep = ((t / SWEEP_MS).fract() * (w + band) as f32) as i64 - band as i64; // -band..w
     let bar_col = scale(ACCENT, 0.7);
 
-    let bg = encode(BG);
-    let logo_px = encode(logo);
-    let bar_px = encode(bar_col);
-    let bg_bar = encode(scale(BG, 1.8)); // riel del progreso, apenas más claro
+    let bg_bar = scale(BG, 1.8); // riel del progreso, apenas más claro
+
+    // Pre-encodamos los píxeles ya fundidos (el fade es uniforme en el frame),
+    // así el doble loop sólo elige cuál escribir — sin lerp por píxel.
+    let bg = encode(lerp(BG, BG, fade)); // == BG, pero deja explícito el patrón
+    let logo_px = encode(lerp(logo, BG, fade));
+    let bar_px = encode(lerp(bar_col, BG, fade));
+    let bg_bar_px = encode(lerp(bg_bar, BG, fade));
 
     for y in 0..h {
         let row = y * pitch;
@@ -76,7 +86,7 @@ pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64) 
                 if xi >= sweep && xi < sweep + band as i64 {
                     bar_px
                 } else {
-                    bg_bar
+                    bg_bar_px
                 }
             } else {
                 bg
@@ -84,6 +94,12 @@ pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64) 
             buf[idx..idx + 4].copy_from_slice(&px);
         }
     }
+}
+
+/// Interpola linealmente `a → b` por `t` ∈ [0,1] (por canal).
+fn lerp(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
+    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round().clamp(0.0, 255.0) as u8;
+    (f(a.0, b.0), f(a.1, b.1), f(a.2, b.2))
 }
 
 /// Multiplica un color por un factor de brillo `k` (saturando a 0..255).
@@ -118,7 +134,7 @@ mod tests {
     fn fondo_en_esquina_es_bg() {
         let pitch = W * 4;
         let mut b = buf_for(pitch);
-        paint_frame(&mut b, W, H, pitch, 0);
+        paint_frame(&mut b, W, H, pitch, 0, 0.0);
         assert_eq!(px_at(&b, pitch, 0, 0), BG);
     }
 
@@ -126,7 +142,7 @@ mod tests {
     fn centro_es_el_logo_no_el_fondo() {
         let pitch = W * 4;
         let mut b = buf_for(pitch);
-        paint_frame(&mut b, W, H, pitch, 0);
+        paint_frame(&mut b, W, H, pitch, 0, 0.0);
         let c = px_at(&b, pitch, W / 2, H / 2);
         assert_ne!(c, BG, "el centro debe ser el logo, no el fondo");
         // El logo es el acento (atenuado por la respiración) → su rojo domina
@@ -140,14 +156,39 @@ mod tests {
         // Pico de la respiración (t=BREATH/4 → sin=1) vs valle (t=3·BREATH/4).
         let mut pico = buf_for(pitch);
         let mut valle = buf_for(pitch);
-        paint_frame(&mut pico, W, H, pitch, (BREATH_MS / 4.0) as u64);
-        paint_frame(&mut valle, W, H, pitch, (3.0 * BREATH_MS / 4.0) as u64);
+        paint_frame(&mut pico, W, H, pitch, (BREATH_MS / 4.0) as u64, 0.0);
+        paint_frame(&mut valle, W, H, pitch, (3.0 * BREATH_MS / 4.0) as u64, 0.0);
         let cp = px_at(&pico, pitch, W / 2, H / 2);
         let cv = px_at(&valle, pitch, W / 2, H / 2);
         assert!(
             cp.0 > cv.0 && cp.1 > cv.1 && cp.2 > cv.2,
             "el logo en el pico ({cp:?}) debe ser más brillante que en el valle ({cv:?})"
         );
+    }
+
+    #[test]
+    fn fade_uno_funde_todo_a_bg() {
+        // Con fade=1.0 todo el frame queda en BG sólido (handoff terminado):
+        // ni el logo ni la barra deben sobresalir.
+        let pitch = W * 4;
+        let mut b = buf_for(pitch);
+        paint_frame(&mut b, W, H, pitch, 0, 1.0);
+        assert_eq!(px_at(&b, pitch, W / 2, H / 2), BG, "centro funde a BG");
+        assert_eq!(px_at(&b, pitch, 0, 0), BG, "esquina sigue BG");
+    }
+
+    #[test]
+    fn fade_intermedio_atenua_el_logo_hacia_bg() {
+        // A media fundición el logo está entre su color pleno y BG.
+        let pitch = W * 4;
+        let mut pleno = buf_for(pitch);
+        let mut medio = buf_for(pitch);
+        paint_frame(&mut pleno, W, H, pitch, 0, 0.0);
+        paint_frame(&mut medio, W, H, pitch, 0, 0.5);
+        let cp = px_at(&pleno, pitch, W / 2, H / 2);
+        let cm = px_at(&medio, pitch, W / 2, H / 2);
+        // El logo es más brillante que BG; al fundir, su brillo baja hacia BG.
+        assert!(cm.0 < cp.0 && cm.0 > BG.0, "el rojo del logo baja pero aún supera BG");
     }
 
     #[test]
@@ -159,7 +200,7 @@ mod tests {
         for i in (W * 4)..pitch {
             b[i] = 0xAB;
         }
-        paint_frame(&mut b, W, H, pitch, 0);
+        paint_frame(&mut b, W, H, pitch, 0, 0.0);
         for i in (W * 4)..pitch {
             assert_eq!(b[i], 0xAB, "el padding del pitch no debe tocarse");
         }
@@ -170,6 +211,6 @@ mod tests {
         // Un buffer más corto que pitch*h no debe entrar en pánico.
         let pitch = W * 4;
         let mut b = vec![0u8; pitch * (H / 2)];
-        paint_frame(&mut b, W, H, pitch, 123);
+        paint_frame(&mut b, W, H, pitch, 123, 0.0);
     }
 }
