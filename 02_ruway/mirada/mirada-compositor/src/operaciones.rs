@@ -355,6 +355,62 @@ impl App {
         })
     }
 
+    /// El `id` de la ventana que respalda este toplevel, si la conocemos.
+    pub(crate) fn id_para_superficie(
+        &self,
+        surface: &smithay::wayland::shell::xdg::ToplevelSurface,
+    ) -> Option<u64> {
+        self.windows
+            .iter()
+            .find(|w| w.surface == *surface.wl_surface())
+            .map(|w| w.id)
+    }
+
+    /// Arranca un arrastre interactivo de **mover** sobre la ventana `id`,
+    /// como si el usuario hubiera agarrado su barra. Lo pide un cliente CSD
+    /// (Zen, GTK…) vía `xdg_toplevel.move` al arrastrar su propia barra de
+    /// título — sin esto esas apps no se podían mover. Reusa la misma infra de
+    /// `DragGrab` que `Super`+arrastre: el puntero ya está apretado, así que el
+    /// release lo termina.
+    pub(crate) fn start_interactive_move(&mut self, id: u64) {
+        let Some(rect) = self
+            .windows
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| (w.loc.0, w.loc.1, w.size.0, w.size.1))
+        else {
+            return;
+        };
+        self.drag = Some(DragGrab {
+            id,
+            mode: DragMode::Move,
+            start_pointer: self.pointer_loc,
+            start_rect: rect,
+        });
+    }
+
+    /// Como [`start_interactive_move`](Self::start_interactive_move) pero
+    /// **redimensiona** (lo pide un cliente vía `xdg_toplevel.resize`). El
+    /// borde concreto se ignora: redimensiona desde la esquina inferior-derecha
+    /// (igual que `Super`+derecho) — suficiente para que el gesto del cliente
+    /// surta efecto.
+    pub(crate) fn start_interactive_resize(&mut self, id: u64) {
+        let Some(rect) = self
+            .windows
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| (w.loc.0, w.loc.1, w.size.0, w.size.1))
+        else {
+            return;
+        };
+        self.drag = Some(DragGrab {
+            id,
+            mode: DragMode::Resize,
+            start_pointer: self.pointer_loc,
+            start_rect: rect,
+        });
+    }
+
     /// Maximiza/restaura la ventana `id` (botón □ del titlebar): la enfoca y
     /// togglea su pantalla completa. Por el Cerebro embebido.
     pub(crate) fn maximizar_ventana(&mut self, id: u64) {

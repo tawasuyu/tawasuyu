@@ -420,17 +420,16 @@ impl DrmState {
                         .keyboard
                         .as_ref()
                         .is_some_and(|kb| kb.modifier_state().logo);
-                    // `Super`+izquierdo arrastra: una flotante se mueve, una
-                    // teselada se reordena (swap). `Super`+derecho redimensiona
-                    // (flotando la ventana si estaba teselada).
+                    // `Super`+izquierdo **mueve** la ventana (estilo Hyprland):
+                    // la saca del mosaico flotándola y la sigue al puntero; al
+                    // soltar sobre una tesela el Cerebro la reacomoda, sobre vacío
+                    // queda flotando. `Super`+derecho redimensiona. (Antes el
+                    // izquierdo sobre una teselada sólo hacía swap sin moverse en
+                    // vivo, y daba la sensación de que «win+drag no mueve».)
                     let (x, y) = self.app.pointer_loc;
                     let hit = self.window_at(x, y);
                     let mode = match (button, hit) {
-                        (BTN_LEFT, Some(i)) if super_held => Some(if self.app.windows[i].floating {
-                            DragMode::Move
-                        } else {
-                            DragMode::Tile
-                        }),
+                        (BTN_LEFT, Some(_)) if super_held => Some(DragMode::Move),
                         (BTN_RIGHT, Some(_)) if super_held => Some(DragMode::Resize),
                         _ => None,
                     };

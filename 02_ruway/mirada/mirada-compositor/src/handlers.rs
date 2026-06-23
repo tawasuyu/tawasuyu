@@ -378,6 +378,50 @@ impl XdgShellHandler for App {
         }
     }
 
+    // --- Operaciones interactivas que pide el CLIENTE (`xdg_toplevel`) ---
+    // Las apps CSD (Zen/Firefox, GTK…) dibujan su propia barra y botones, y
+    // cuando el usuario los usa **le piden al compositor** que mueva / redimensione
+    // / maximice / minimice la ventana. Sin estos handlers esos gestos no hacían
+    // nada (la ventana "no se podía mover ni tocar"). Cerrar lo maneja el cliente
+    // solo (manda `destroy`), así que no necesita handler.
+
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
+        if let Some(id) = self.id_para_superficie(&surface) {
+            self.start_interactive_move(id);
+        }
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: wl_seat::WlSeat,
+        _serial: Serial,
+        _edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+    ) {
+        if let Some(id) = self.id_para_superficie(&surface) {
+            self.start_interactive_resize(id);
+        }
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(id) = self.id_para_superficie(&surface) {
+            self.maximizar_ventana(id);
+        }
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        // `maximizar_ventana` togglea: si estaba maximizada, restaura.
+        if let Some(id) = self.id_para_superficie(&surface) {
+            self.maximizar_ventana(id);
+        }
+    }
+
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(id) = self.id_para_superficie(&surface) {
+            self.minimizar_ventana(id);
+        }
+    }
+
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
         let _ = surface.send_configure();
     }
