@@ -114,9 +114,12 @@ impl DrmState {
                 // monitor (mover el mouse), `active_index` cambia sin que ningún
                 // monitor cambie de contenido — animar ahí causaba el parpadeo
                 // «los contenidos se intercambian entre monitores».
+                // Sólo el modo Hyprland usa el slide horizontal. En Prezi la
+                // transición es el vuelo de cámara de la vista espacial (no
+                // queremos las dos animaciones peleando); en Direct, salto seco.
                 if foc == self.last_focused_output
                     && self.app.config_workspace_switch_mode()
-                        != mirada_brain::WorkspaceSwitchMode::Direct
+                        == mirada_brain::WorkspaceSwitchMode::Hyprland
                 {
                     let dir = if active > self.last_active_ws { 1.0 } else { -1.0 };
                     self.ws_slide = Some((self.start.elapsed().as_millis() as u32, dir));

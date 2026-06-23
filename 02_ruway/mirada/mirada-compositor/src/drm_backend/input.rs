@@ -65,16 +65,21 @@ impl DrmState {
                                         && st.config_workspace_switch_mode()
                                             == mirada_brain::WorkspaceSwitchMode::Prezi
                                     {
-                                        st.overview_open = true;
-                                        st.overview_closing = false;
-                                        st.overview_via_wintab = true;
+                                        st.overview_step(true); // navega/abre
                                     } else {
                                         st.switcher_step = Some((Workspaces, true));
                                     }
                                     return FilterResult::Intercept(());
                                 }
                                 "Super+Shift+Tab" => {
-                                    st.switcher_step = Some((Workspaces, false));
+                                    if st.brain_is_embedded()
+                                        && st.config_workspace_switch_mode()
+                                            == mirada_brain::WorkspaceSwitchMode::Prezi
+                                    {
+                                        st.overview_step(false);
+                                    } else {
+                                        st.switcher_step = Some((Workspaces, false));
+                                    }
                                     return FilterResult::Intercept(());
                                 }
                                 // Vista espacial (Prezi): con Cerebro EMBEBIDO la
@@ -95,6 +100,11 @@ impl DrmState {
                                         st.overview_open = true;
                                         st.overview_closing = false;
                                         st.overview_via_wintab = false;
+                                        // Resaltado en el escritorio actual (se
+                                        // navega con click; no se cierra al soltar
+                                        // Super porque no es Win+Tab).
+                                        st.overview_selected =
+                                            st.workspace_overview().map_or(0, |(a, _)| a);
                                     }
                                     return FilterResult::Intercept(());
                                 }
@@ -103,7 +113,11 @@ impl DrmState {
                                     return FilterResult::Intercept(());
                                 }
                                 "Escape" if st.overview_open => {
-                                    st.overview_closing = true; // anima el cierre
+                                    // Cancelar: cierra SIN saltar (zoom-in de vuelta
+                                    // al escritorio actual).
+                                    st.overview_selected =
+                                        st.workspace_overview().map_or(0, |(a, _)| a);
+                                    st.overview_closing = true;
                                     return FilterResult::Intercept(());
                                 }
                                 _ => {}
@@ -165,8 +179,9 @@ impl DrmState {
                         crate::switcher::commit(&mut self.app);
                     }
                 }
-                // Vista espacial abierta por Win+Tab: se cierra (con zoom-in) al
-                // soltar Super, como un switcher.
+                // Vista espacial abierta por Win+Tab: al soltar Super se SALTA al
+                // escritorio resaltado y se cierra (zoom-in hacia él), como un
+                // switcher.
                 if self.app.overview_open && self.app.overview_via_wintab && !self.app.overview_closing
                 {
                     let super_held = self
@@ -175,7 +190,7 @@ impl DrmState {
                         .as_ref()
                         .is_some_and(|kb| kb.modifier_state().logo);
                     if !super_held {
-                        self.app.overview_closing = true;
+                        self.app.overview_commit();
                     }
                 }
             }
@@ -320,6 +335,7 @@ impl DrmState {
                         if let Some(&(ws, _)) =
                             self.overview_tiles.iter().find(|(_, r)| r.contains(lx, ly))
                         {
+                            self.app.overview_selected = ws;
                             self.app.cambiar_workspace(ws);
                         }
                     }

@@ -519,10 +519,14 @@ impl DrmState {
         let rows = span_rows.ceil().max(1.0);
         const MARGIN: f32 = 64.0;
         const GAP: f32 = 28.0;
+        // Fracción del área disponible que ocupa el mosaico — `<1` deja aire y da
+        // un zoom-out marcado (las miniaturas quedan claramente chicas, no casi a
+        // pantalla completa como cuando hay pocos escritorios).
+        const MOSAIC_FILL: f32 = 0.62;
         let aspect = data.work.w as f32 / data.work.h.max(1) as f32;
         let avail_w = (cw - 2.0 * MARGIN - GAP * (cols - 1.0)).max(1.0);
         let avail_h = (ch - 2.0 * MARGIN - GAP * (rows - 1.0)).max(1.0);
-        let cell_w = (avail_w / cols).min(avail_h / rows * aspect);
+        let cell_w = (avail_w / cols).min(avail_h / rows * aspect) * MOSAIC_FILL;
         let cell_h = cell_w / aspect;
         let grid_w = cell_w * cols + GAP * (cols - 1.0);
         let grid_h = cell_h * rows + GAP * (rows - 1.0);
@@ -540,7 +544,12 @@ impl DrmState {
             /// Giro propio del tile (rad). `0` = camino rápido de quads sólidos;
             /// `≠0` = se compone en CPU y se rota (ver más abajo).
             rot: f32,
+            /// El escritorio del que SALE/ENTRA el zoom (el activo del Cerebro) —
+            /// pivote de la cámara.
             active: bool,
+            /// El escritorio RESALTADO (cursor de navegación Win+Tab) — su borde
+            /// se marca. Coincide con `active` salvo mientras se navega con Tab.
+            selected: bool,
             /// `(id, x, y, w, h, focus)` por ventana: el `id` mapea a la superficie
             /// viva; el rect es la miniatura ya posicionada.
             wins: Vec<(u64, i32, i32, i32, i32, bool)>,
@@ -549,6 +558,7 @@ impl DrmState {
             scale: f32,
             num: String,
         }
+        let selected_ws = self.app.overview_selected;
         let mut tiles = Vec::new();
         for &i in &occ {
             let p = data.places[i];
@@ -590,6 +600,7 @@ impl DrmState {
                 h: th as i32,
                 rot: p.rot,
                 active: i == data.active,
+                selected: i == selected_ws,
                 wins,
                 scale,
                 num: format!("{}", i + 1),
@@ -663,7 +674,7 @@ impl DrmState {
             // la superficie viva — el camino vivo es sólo para tiles rectos.
             let wins_local: Vec<(i32, i32, i32, i32, bool)> =
                 t.wins.iter().map(|(_id, wx, wy, ww2, wh2, f)| (wx - t.x, wy - t.y, *ww2, *wh2, *f)).collect();
-            let border = t.active.then(|| to_u8(ACTIVE_BORDER));
+            let border = t.selected.then(|| to_u8(ACTIVE_BORDER));
             let comp = crate::text::rasterize_tile_rotated(
                 t.w,
                 t.h,
@@ -762,7 +773,7 @@ impl DrmState {
                 )));
             }
         }
-        for t in tiles.iter().filter(|t| t.active && !girado(t.rot)) {
+        for t in tiles.iter().filter(|t| t.selected && !girado(t.rot)) {
             // Borde activo: un rect un poco más grande detrás del tile.
             let mut br = SolidColorBuffer::default();
             br.update((t.w + 6, t.h + 6), ACTIVE_BORDER);

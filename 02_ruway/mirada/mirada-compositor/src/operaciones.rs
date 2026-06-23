@@ -239,6 +239,37 @@ impl App {
         }
     }
 
+    /// Win+Tab estilo switcher sobre la vista espacial: abre la vista (si hacía
+    /// falta) y mueve el resaltado al escritorio siguiente/anterior. La primera
+    /// pulsación ya avanza uno (un Win+Tab suelto = saltar al siguiente al
+    /// soltar Super). El salto real lo hace [`Self::overview_commit`] al soltar.
+    pub(crate) fn overview_step(&mut self, forward: bool) {
+        let Some((active, loads)) = self.workspace_overview() else {
+            return;
+        };
+        let count = loads.len().max(1);
+        if !self.overview_open {
+            self.overview_open = true;
+            self.overview_closing = false;
+            self.overview_via_wintab = true;
+            self.overview_selected = active;
+        }
+        self.overview_selected = if forward {
+            (self.overview_selected + 1) % count
+        } else {
+            (self.overview_selected + count - 1) % count
+        };
+    }
+
+    /// Confirma la navegación de la vista espacial: salta al escritorio
+    /// resaltado y pide el cierre (zoom-in animado hacia él).
+    pub(crate) fn overview_commit(&mut self) {
+        if self.overview_open {
+            self.cambiar_workspace(self.overview_selected);
+            self.overview_closing = true;
+        }
+    }
+
     /// Duración (ms) del vuelo de cámara (zoom) de la vista espacial (Prezi).
     pub(crate) fn config_overview_anim_ms(&self) -> u32 {
         match &self.brain {

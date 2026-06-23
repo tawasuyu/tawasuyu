@@ -458,6 +458,10 @@ pub(crate) struct App {
     /// La vista espacial se abrió por **Win+Tab** (Super sostenido): se cierra al
     /// soltar Super, como un switcher. Si se abrió por Super+e (toggle), no.
     pub(crate) overview_via_wintab: bool,
+    /// Escritorio **resaltado** (cursor de navegación) en la vista espacial.
+    /// Tab/Shift+Tab lo mueven mientras Super está sostenido; al soltar Super se
+    /// salta a éste. El borde activo del mosaico lo marca.
+    pub(crate) overview_selected: usize,
     /// Estado de escritorios empujado por el Cerebro enlazado (`SetWorkspaces`),
     /// para el switcher Win+Tab + slide en modo DE. `None` con Cerebro embebido.
     pub(crate) linked_ws: Option<LinkedWorkspaces>,
