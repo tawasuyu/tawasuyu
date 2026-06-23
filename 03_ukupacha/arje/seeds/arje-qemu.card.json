@@ -31,7 +31,7 @@
             "id": "01HQAR53D4M2NBV8KZTYXFQM03",
             "label": "arje-splash",
             "provides": [],
-            "requires": [{ "Device": { "class": "Drm" } }],
+            "requires": [],
             "permissions": {
                 "networking": "none",
                 "filesystem": "read-only",

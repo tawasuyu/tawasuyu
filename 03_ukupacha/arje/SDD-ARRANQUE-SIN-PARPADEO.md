@@ -94,9 +94,36 @@ bootear wawa o Linux; el splash es del camino Linux.
 
 ## Verificación
 
-No reproducible en el sandbox (sin UEFI/DRM). Se certifica en QEMU+OVMF (el
-maker lo corre): lógica de render del splash y del cmdline con tests unitarios;
-lo visual (cero parpadeo, crossfade) por captura/observación en QEMU.
+Render del splash y cmdline con tests unitarios. La cadena DRM se certifica en
+QEMU+OVMF con **evidencia de texto** (Regla 8): `scripts/test-arje-splash-qemu.sh`
+compila estáticos (musl), empaqueta el initramfs y bootea headless capturando el
+serial. Veredicto Fase 1 (2026-06-23, kernel host + OVMF, modo 1280x800):
+
+```
+[drm] Initialized simpledrm 1.0.0 for simple-framebuffer.0 on minor 0
+INFO  arje_zero::graph::lifecycle: Ente encarnado label=arje-splash pid=Some(Pid(75))
+[arje-splash] device=/dev/dri/card0 max_ms=8000 fps=30
+[arje-splash] conector ... crtc ... modo 1280x800 — reusando modo vigente
+[arje-splash] tope de 8000 ms alcanzado — soltando la pantalla
+INFO  arje_zero::graph::lifecycle: Ente disuelto label=arje-splash status=Exit(0)
+```
+
+Sin warning de fallback → `page_flip` funcionó en `simpledrm` (camino vblank-sync,
+sin re-modeset). Lo único no certificable en texto son los píxeles de la
+animación; eso queda cubierto por los tests de `render.rs`. La observación visual
+(cero parpadeo percibido, crossfade) se hace abriendo la ventana de QEMU
+(`DISPLAY_ARGS= ./scripts/test-arje-splash-qemu.sh`).
+
+### Dos gotchas de integración (encontrados al verificar)
+
+1. **Binarios estáticos.** El initramfs no trae `libc.so`; arje-zero/splash deben
+   compilarse para `x86_64-unknown-linux-musl` (o `+crt-static`). Con binarios
+   glibc-dinámicos el kernel panica con *«No working init found»*.
+2. **`requires` es un gate duro.** arje-zero rechaza encarnar un Ente con un
+   `requires` sin provider registrado. Declarar `requires Device{Drm}` bloqueaba
+   el splash (*«requires no satisfecho»*). El acceso a DRM es físico al device,
+   no una capacidad brokeada — el splash va con `requires` vacío, igual que el
+   display-manager de mirada.
 
 ## Estado de implementación
 

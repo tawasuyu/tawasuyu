@@ -294,17 +294,18 @@ fn arje_splash_card() -> Option<EntityCard> {
     if !Path::new(SPLASH_BIN).exists() {
         return None;
     }
-    // Abre /dev/dri/* directo (igual que mirada). Declaramos la capacidad para
-    // que quien valide la card sepa que esta Ente toca DRM.
-    let mut requires = BTreeSet::new();
-    requires.insert(Capability::Device { class: arje_card::DeviceClass::Drm });
+    // Abre /dev/dri/* directo. NO declaramos `requires Device{Drm}`: en
+    // arje-zero `requires` es un gate duro que exige un provider registrado de
+    // esa capacidad, y nadie la provee — el acceso a DRM es físico al device,
+    // no una capacidad brokeada. El display-manager de mirada hace lo mismo
+    // (requires vacío). Declararla bloquearía la encarnación del Ente.
     Some(EntityCard {
         schema_version: CARD_SCHEMA_VERSION,
         id: Ulid::new(),
         lineage: None,
         label: "arje-splash".into(),
         provides: BTreeSet::new(),
-        requires,
+        requires: BTreeSet::new(),
         soma: SomaSpec::default(),
         payload: Payload::Native {
             exec: SPLASH_BIN.into(),
