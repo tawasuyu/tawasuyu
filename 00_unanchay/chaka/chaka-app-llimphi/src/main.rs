@@ -735,6 +735,7 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
             icon: None,
             on_context: None,
             editor: None,
+            trailing: None,
         })
         .collect();
 

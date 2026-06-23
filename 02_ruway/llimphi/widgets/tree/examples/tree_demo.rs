@@ -195,6 +195,7 @@ fn visit(
             icon: None,
             on_context: None,
             editor: None,
+            trailing: None,
         });
         if has_children && is_expanded {
             visit(*id, depth + 1, expanded, selected, out);

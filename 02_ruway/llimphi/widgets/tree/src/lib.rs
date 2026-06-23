@@ -21,7 +21,7 @@
 #![forbid(unsafe_code)]
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Line as KurboLine, Stroke};
@@ -91,6 +91,11 @@ pub struct TreeRow<Msg> {
     /// cablea `on_select` (las teclas las rutea el App). `None` = fila
     /// normal de sólo-lectura.
     pub editor: Option<View<Msg>>,
+    /// Acción opcional alineada a la **derecha** de la fila (cualquier
+    /// `View`, típicamente un botón "+"/"Nueva"). Se pinta después del
+    /// label —que es elástico— así que queda pegada al borde derecho. Su
+    /// propio `on_click` tiene prioridad sobre el `on_select` de la fila.
+    pub trailing: Option<View<Msg>>,
 }
 
 impl<Msg> TreeRow<Msg> {
@@ -116,6 +121,7 @@ impl<Msg> TreeRow<Msg> {
             icon: None,
             on_context: None,
             editor: None,
+            trailing: None,
         }
     }
 
@@ -131,6 +137,11 @@ impl<Msg> TreeRow<Msg> {
 
     pub fn with_editor(mut self, editor: View<Msg>) -> Self {
         self.editor = Some(editor);
+        self
+    }
+
+    pub fn with_trailing(mut self, trailing: View<Msg>) -> Self {
+        self.trailing = Some(trailing);
         self
     }
 }
@@ -306,6 +317,30 @@ fn tree_row_view<Msg: Clone + 'static>(
         .on_click(row.on_select)
     };
     row_children.push(label);
+
+    // Acción alineada a la derecha (botón "+"/"Nueva"). Va después del
+    // label elástico, así que el flex la empuja al borde derecho.
+    if let Some(trailing) = row.trailing {
+        row_children.push(
+            View::new(Style {
+                size: Size {
+                    width: auto(),
+                    height: length(height),
+                },
+                flex_shrink: 0.0,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                padding: Rect {
+                    left: length(4.0_f32),
+                    right: length(6.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![trailing]),
+        );
+    }
 
     let mut v = View::new(Style {
         flex_direction: FlexDirection::Row,

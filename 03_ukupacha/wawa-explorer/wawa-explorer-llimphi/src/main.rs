@@ -593,6 +593,7 @@ fn emitir_subtree(
         icon: None,
         on_context: None,
         editor: None,
+        trailing: None,
     });
 
     if expanded_aqui {
