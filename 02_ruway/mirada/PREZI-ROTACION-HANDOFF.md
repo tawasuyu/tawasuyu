@@ -14,7 +14,41 @@ Falta lo último: que los tiles **rotados** (el usuario rota escritorios en el
 editor del panel) muestren su **contenido vivo rotado**, no el esquema de
 rectángulos. Esto "le da el stunning al compositor" (palabras del usuario).
 
-## El blocker (diagnosticado a ciegas, falta confirmarlo en metal)
+## ⟶ ACTUALIZACIÓN 2026-06-23 (en el metal del usuario: Intel Iris Xe, Mesa 26.1.1)
+
+**El blocker de abajo es FALSO en este metal.** Se midió headless con dos tests
+standalone (quedaron en el repo como examples del crate `mirada-compositor`):
+
+- `cargo run -p mirada-compositor --example offscreen_texture_diag` → un
+  `import_memory` (textura 2D, = el badge del número) dibujado a un offscreen
+  anidado: **16 buckets de color, 0% clear → SÍ dibuja**.
+- `cargo run -p mirada-compositor --example offscreen_dmabuf_diag` → una textura
+  **external-OES** (dmabuf, = una ventana cliente real) dibujada al offscreen:
+  **16 buckets, 0% clear → SÍ dibuja**.
+
+O sea: en esta GPU/Mesa el offscreen anidado dibuja **ambos** tipos de textura.
+El diagnóstico a ciegas de la otra máquina (que decía que ni el número se
+dibujaba) no es confiable / era otra máquina. **El Plan B NO hace falta acá.**
+
+Conclusión: si el tile vivo-rotado todavía cae al esquema, es por la
+**EXTRACCIÓN** de la textura de la ventana (`with_renderer_surface_state(&s,
+|st| st.texture(ctx)).flatten()` devolviendo `None`, o `buffer_render_sano`
+filtrando la superficie), **no** por el dibujo. Se agregó un **log one-shot** en
+`render_tile_live_rotated` que imprime «N/M ventanas con textura» la primera vez
+que se compone un tile con ventanas — correr el compositor en DRM, abrir Prezi
+con un escritorio rotado, y leer ese log da la respuesta sin mirar píxeles:
+- `M/M con textura` → la extracción anda → el tile vivo-rotado debería verse;
+  si igual no se ve, mirar la captura (el problema sería la rotación/colocación).
+- `0/M con textura` → la extracción falla → arreglar ahí (probablemente el
+  texture() necesita el context_id correcto, o importar en el mismo paso de
+  composición que el frame principal).
+
+**PRÓXIMO PASO EN EL METAL:** correr el compositor DRM y leer ese log (ver
+«Cómo probar» abajo). Lo demás de esta sección quedó como contexto histórico.
+
+---
+
+## El blocker (diagnosticado a ciegas — ver actualización de arriba: FALSO en este metal)
 
 Para rotar contenido vivo, la estrategia fue: componer el tile (fondo + ventanas
 + número) en una **textura offscreen** axis-aligned, leerla de vuelta, **rotarla

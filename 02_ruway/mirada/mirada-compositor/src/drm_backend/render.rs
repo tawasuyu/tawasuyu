@@ -521,6 +521,21 @@ impl DrmState {
             });
             draws.push((tex, (lx, ly, (*ww2).max(1), (*wh2).max(1)), *focus));
         }
+        // Diag one-shot: el offscreen dibuja texturas (probado headless en metal,
+        // examples/offscreen_*_diag), así que si el tile vivo rotado cae al
+        // esquema, es porque la EXTRACCIÓN devolvió None. Esto lo confirma sin
+        // mirar píxeles: cuántas ventanas dieron textura vs None, una sola vez.
+        if !wins.is_empty() {
+            use std::sync::atomic::{AtomicBool, Ordering as O};
+            static DIAG: AtomicBool = AtomicBool::new(false);
+            if !DIAG.swap(true, O::Relaxed) {
+                let con = draws.iter().filter(|(t, ..)| t.is_some()).count();
+                eprintln!(
+                    "mirada-compositor · prezi vivo-rotado · extracción: {con}/{} ventanas con textura",
+                    draws.len()
+                );
+            }
+        }
         // 2) Número como textura (RGBA → Abgr8888).
         let (bw, bh) = (badge.width.max(1), badge.height.max(1));
         let badge_size: SSize<i32, BufCoord> = (bw, bh).into();
