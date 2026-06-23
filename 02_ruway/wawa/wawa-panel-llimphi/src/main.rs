@@ -16,6 +16,7 @@
 
 mod animaciones;
 mod greeter;
+mod splash;
 mod perfiles;
 mod themes;
 
@@ -300,6 +301,10 @@ struct Model {
     /// Config del **greeter** (DM): fondo animado + paleta. Se persiste en
     /// `greeter.conf`; el greeter la lee en el próximo login.
     greeter: greeter::GreeterCfg,
+    /// Config del **splash de arranque** (`arje-splash`): fuente (logo/imagen/
+    /// animación) + colores + panel de logs. Se persiste en `arje/splash.conf`;
+    /// el instalador la hornea en el initramfs (ver [`splash`]).
+    splash: splash::SplashCfg,
     allichay: AllichayState,
     host: HostInfo,
     status: String,
@@ -489,6 +494,8 @@ struct SaveDirty {
     animaciones: bool,
     /// Config del greeter (`greeter.conf`).
     greeter: bool,
+    /// Config del splash de arranque (`arje/splash.conf`).
+    splash: bool,
 }
 
 #[derive(Clone)]
@@ -975,6 +982,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
     let themes = themes::Themes::load_or_seed(&cfg.theme_variant, &cfg.accent);
     let animaciones = animaciones::Animations::load_or_seed();
     let greeter_cfg = greeter::GreeterCfg::load();
+    let splash_cfg = splash::SplashCfg::load();
 
     let prezi = PreziEdit::from_config(&mirada);
 
@@ -999,6 +1007,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         themes,
         animaciones,
         greeter: greeter_cfg,
+        splash: splash_cfg,
         allichay: AllichayState::new(),
         host,
         status: String::new(),
@@ -1284,6 +1293,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     }
     vista.sections.push(wallpaper_section(m)); // Wallpapers (imagen + automático, unificado)
     vista.sections.push(greeter_section(&m.greeter)); // Fondo del greeter (pantalla de login)
+    vista.sections.push(splash_section(&m.splash)); // Splash del arranque (arje-splash)
     if let Some(s) = take("vista_espacial") {
         vista.sections.push(s); // Vistas: Prezi
     }
@@ -1411,6 +1421,43 @@ fn greeter_section(g: &greeter::GreeterCfg) -> Section {
             "Color",
             g.rain_color.clone(),
             greeter::COLORS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
+        ))
+}
+
+/// Sección «Arranque»: el splash sin parpadeo (`arje-splash`). Escribe
+/// `arje/splash.conf`; el instalador lo hornea en el initramfs/ESP. El catálogo
+/// de fuentes/logs sale de [`splash::SOURCES`] / [`splash::LOG_MODES`].
+fn splash_section(s: &splash::SplashCfg) -> Section {
+    use allichay::{EnumOption, Field};
+    let mut sec = Section::new("splash::arranque", "Arranque (splash)")
+        .icon("🌅")
+        .help(
+            "El splash sin parpadeo que se ve desde el encendido hasta el login. \
+             Elegí el logo nativo, una imagen PNG o una animación (carpeta de \
+             PNG). Los cambios se guardan en ~/.config/arje/splash.conf; corré \
+             el instalador (scripts/install-arje-splash.sh) para que el próximo \
+             arranque los tome.",
+        )
+        .field(Field::dropdown(
+            "source",
+            "Fuente",
+            s.source.clone(),
+            splash::SOURCES.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
+        ));
+    // Mostramos el campo de ruta según la fuente elegida.
+    if s.source == "image" {
+        sec = sec.field(Field::text("image", "Ruta del PNG", s.image.clone()));
+    } else if s.source == "frames" {
+        sec = sec.field(Field::text("frames", "Carpeta de PNG (animación)", s.frames.clone()));
+    }
+    sec.field(Field::text("fps", "Cuadros por segundo", s.fps.to_string()))
+        .field(Field::text("bg", "Color de fondo (#rrggbb)", s.bg.clone()))
+        .field(Field::text("accent", "Color de acento (#rrggbb)", s.accent.clone()))
+        .field(Field::dropdown(
+            "logs",
+            "Logs de arranque",
+            s.logs.clone(),
+            splash::LOG_MODES.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
         ))
 }
 
@@ -3170,6 +3217,31 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
+        // Splash del arranque (arje-splash): fuente + colores + logs →
+        // arje/splash.conf (lo hornea el instalador en el próximo build).
+        "splash" => {
+            match rel.leaf() {
+                Some("source") => if let Some(v) = value.as_str() { m.splash.source = v.to_string() },
+                Some("image") => if let Some(v) = value.as_str() {
+                    m.splash.image = v.to_string();
+                    if !v.is_empty() { m.splash.source = "image".into(); }
+                },
+                Some("frames") => if let Some(v) = value.as_str() {
+                    m.splash.frames = v.to_string();
+                    if !v.is_empty() { m.splash.source = "frames".into(); }
+                },
+                Some("fps") => if let Some(v) = value.as_str() {
+                    if let Ok(n) = v.trim().parse() { m.splash.fps = n; }
+                },
+                Some("bg") => if let Some(v) = value.as_str() { m.splash.bg = v.to_string() },
+                Some("accent") => if let Some(v) = value.as_str() { m.splash.accent = v.to_string() },
+                Some("logs") => if let Some(v) = value.as_str() { m.splash.logs = v.to_string() },
+                _ => {}
+            }
+            m.dirty.splash = true;
+            m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
         // Autoarranque: la lista reescribe ~/.config/mirada/autostart al toque.
         "autostart" => {
             if let Some(items) = value.as_list() {
@@ -3301,6 +3373,13 @@ fn flush_saves(m: &mut Model) {
             Err(e) => err = Some(format!("· greeter save: {e}")),
         }
         m.dirty.greeter = false;
+    }
+    if m.dirty.splash {
+        match m.splash.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· splash save: {e}")),
+        }
+        m.dirty.splash = false;
     }
     if let Some(e) = err {
         m.status = e;

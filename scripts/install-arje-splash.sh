@@ -48,6 +48,18 @@ done
 [ -n "$MODE" ] || die "elegí un modo: --system  y/o  --esp DIR (ver --help)"
 have cargo || die "falta cargo (instalá Rust: https://rustup.rs)"
 
+# Si no se pasó --image/--frames, tomamos la config que dejó wawa-panel
+# (sección «Arranque»): ~/.config/arje/splash.conf. Leemos su source y la ruta.
+PANEL_CONF="${ARJE_SPLASH_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/arje/splash.conf}"
+if [ -z "$IMAGE" ] && [ -z "$FRAMES" ] && [ -f "$PANEL_CONF" ]; then
+    psrc=$(sed -n 's/^source *= *//p' "$PANEL_CONF" | tail -1)
+    case "$psrc" in
+        image)  IMAGE=$(sed -n 's/^image *= *//p' "$PANEL_CONF" | tail -1) ;;
+        frames) FRAMES=$(sed -n 's/^frames *= *//p' "$PANEL_CONF" | tail -1) ;;
+    esac
+    [ -n "$IMAGE$FRAMES" ] && echo "==> usando la config de wawa-panel ($PANEL_CONF)"
+fi
+
 # ── Genera /etc/arje/splash.conf según --image/--frames ─────────────────────
 write_conf() {  # $1 = destino del .conf, $2 = base de rutas en disco destino
     local conf="$1" base="$2"
