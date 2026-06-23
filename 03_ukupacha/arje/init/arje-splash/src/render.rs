@@ -96,6 +96,69 @@ pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64, 
     }
 }
 
+/// Color del panel de la tarjeta del greeter simulado.
+const CARD: (u8, u8, u8) = (32, 32, 46);
+/// Color de los campos/inputs de la tarjeta.
+const FIELD: (u8, u8, u8) = (52, 52, 70);
+
+/// Pinta un **greeter simulado** (mockup de la tarjeta de login) sobre `BG`,
+/// apareciendo según `appear` ∈ [0,1] (`0` = sólo `BG`, igual que el frame final
+/// del fade-out del splash → el traspaso es continuo; `1` = tarjeta visible).
+///
+/// No es el greeter real de mirada (eso es EGL/GLES, necesita GPU). Es un
+/// sustituto sobre DRM dumb-buffer para **ver el crossfade end-to-end** en
+/// QEMU sin GPU: el splash funde a `BG`, suelta el master, y este frame hace
+/// aparecer la tarjeta sobre el mismo `BG`. Demostración, no producto.
+pub fn paint_greeter(buf: &mut [u8], w: usize, h: usize, pitch: usize, appear: f32) {
+    let appear = appear.clamp(0.0, 1.0);
+    // Tarjeta centrada, ~28% del ancho × ~46% del alto, acotada a la pantalla
+    // (en pantallas chicas, como en los tests, no debe desbordar).
+    let cw = (w * 28 / 100).clamp(16, w);
+    let ch = (h * 46 / 100).clamp(16, h);
+    let cx = (w - cw) / 2;
+    let cy = (h - ch) / 2;
+    // Banda de acento (cabecera) arriba de la tarjeta.
+    let head_h = (ch / 8).max(8);
+    // Dos "campos" (usuario / contraseña) dentro de la tarjeta.
+    let pad = (cw / 10).max(8);
+    let field_h = (ch / 9).max(10);
+    let field_w = cw - pad * 2;
+    let f1_y = cy + head_h + pad;
+    let f2_y = f1_y + field_h + pad / 2;
+
+    let bg = encode(BG);
+    let card_px = encode(lerp(BG, CARD, appear));
+    let head_px = encode(lerp(BG, ACCENT, appear));
+    let field_px = encode(lerp(BG, FIELD, appear));
+
+    for y in 0..h {
+        let row = y * pitch;
+        if row >= buf.len() {
+            break;
+        }
+        for x in 0..w {
+            let idx = row + x * 4;
+            if idx + 4 > buf.len() {
+                break;
+            }
+            let in_card = x >= cx && x < cx + cw && y >= cy && y < cy + ch;
+            let px = if !in_card {
+                bg
+            } else if y < cy + head_h {
+                head_px
+            } else if x >= cx + pad
+                && x < cx + pad + field_w
+                && ((y >= f1_y && y < f1_y + field_h) || (y >= f2_y && y < f2_y + field_h))
+            {
+                field_px
+            } else {
+                card_px
+            };
+            buf[idx..idx + 4].copy_from_slice(&px);
+        }
+    }
+}
+
 /// Interpola linealmente `a → b` por `t` ∈ [0,1] (por canal).
 fn lerp(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
     let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round().clamp(0.0, 255.0) as u8;
@@ -189,6 +252,21 @@ mod tests {
         let cm = px_at(&medio, pitch, W / 2, H / 2);
         // El logo es más brillante que BG; al fundir, su brillo baja hacia BG.
         assert!(cm.0 < cp.0 && cm.0 > BG.0, "el rojo del logo baja pero aún supera BG");
+    }
+
+    #[test]
+    fn greeter_aparece_desde_bg() {
+        let pitch = W * 4;
+        // appear=0 → todo BG (continuidad con el frame final del splash).
+        let mut cero = buf_for(pitch);
+        paint_greeter(&mut cero, W, H, pitch, 0.0);
+        assert_eq!(px_at(&cero, pitch, W / 2, H / 2), BG, "appear=0 es BG puro");
+        // appear=1 → el centro (dentro de la tarjeta) deja de ser BG.
+        let mut uno = buf_for(pitch);
+        paint_greeter(&mut uno, W, H, pitch, 1.0);
+        assert_ne!(px_at(&uno, pitch, W / 2, H / 2), BG, "appear=1 muestra la tarjeta");
+        // La esquina siempre es BG (la tarjeta está centrada).
+        assert_eq!(px_at(&uno, pitch, 0, 0), BG, "el fondo fuera de la tarjeta es BG");
     }
 
     #[test]

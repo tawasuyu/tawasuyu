@@ -132,6 +132,21 @@ protocolo es idéntico al que implementa `mirada-compositor::handoff`, así que
 queda certificado; la integración real del greeter sobre hardware es la
 observación visual pendiente.
 
+### Demo visual del crossfade (sin GPU): greeter simulado
+
+El greeter real de mirada usa EGL/GLES y necesita una GPU en el guest, que QEMU
+sin virgl no da. Para **ver el crossfade completo** igual, `arje-splash` trae un
+greeter SIMULADO sobre DRM dumb-buffer (`--greeter-sim`, render
+`paint_greeter`): hace de cliente del handoff, y al recibir `RELEASED` toma el
+DRM reusando el mismo modo y hace **aparecer** la tarjeta de login desde `BG`.
+El seed `seeds/arje-demo.card.json` encadena `arje-splash` + `greeter-sim`
+(delay 3.5 s) + agetty. El script `scripts/test-arje-splash-qemu.sh` (portable:
+encuentra OVMF/kernel/display solos) lo corre con ventana por defecto, o
+`--headless` para el veredicto por texto. Secuencia observada: splash 3.5 s →
+fade 0.4 s → la tarjeta del greeter aparece sobre el mismo `BG`, sin negro ni
+re-modeset. Es una **demostración** del crossfade percibido; el greeter real lo
+reemplaza cuando hay rootfs con Mesa.
+
 ### Dos gotchas de integración (encontrados al verificar)
 
 1. **Binarios estáticos.** El initramfs no trae `libc.so`; arje-zero/splash deben

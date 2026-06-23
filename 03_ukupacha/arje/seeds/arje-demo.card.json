@@ -1,0 +1,135 @@
+{
+    "schema_version": 1,
+    "id": "01HQAR53D4M2NBV8KZTYXFDE01",
+    "lineage": null,
+    "label": "arje-demo",
+    "provides": ["Spawn", "Journal"],
+    "requires": [],
+    "permissions": {
+        "networking": "none",
+        "filesystem": "read-write",
+        "ipc": { "allow": [] },
+        "processes": true
+    },
+    "soma": {
+        "namespaces": {
+            "mount": false, "pid": false, "net": false,
+            "uts": false, "ipc": false, "user": false, "cgroup": false
+        },
+        "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+        "cgroup": { "path": "arje.slice/demo", "cpu_weight": null, "io_weight": null },
+        "cpu_affinity": null
+    },
+    "payload": "Virtual",
+    "supervision": "OneShot",
+    "lifecycle": "daemon",
+    "priority": "normal",
+    "flow": { "input": [], "output": [] },
+    "genesis": [
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFDE02",
+            "label": "arje-splash",
+            "provides": [],
+            "requires": [],
+            "permissions": {
+                "networking": "none",
+                "filesystem": "read-only",
+                "ipc": { "allow": [] },
+                "processes": true
+            },
+            "soma": {
+                "namespaces": {
+                    "mount": false, "pid": false, "net": false,
+                    "uts": false, "ipc": false, "user": false, "cgroup": false
+                },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/splash", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": {
+                "Native": {
+                    "exec": "/usr/lib/arje/arje-splash",
+                    "argv": [],
+                    "envp": [["ARJE_SPLASH_MAX_MS", "10000"]]
+                }
+            },
+            "supervision": "OneShot",
+            "lifecycle": "oneshot",
+            "priority": "high",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFDE03",
+            "label": "greeter-sim",
+            "provides": [],
+            "requires": [],
+            "permissions": {
+                "networking": "none",
+                "filesystem": "read-only",
+                "ipc": { "allow": [] },
+                "processes": true
+            },
+            "soma": {
+                "namespaces": {
+                    "mount": false, "pid": false, "net": false,
+                    "uts": false, "ipc": false, "user": false, "cgroup": false
+                },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/greeter", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": {
+                "Native": {
+                    "exec": "/usr/lib/arje/arje-splash",
+                    "argv": ["--greeter-sim"],
+                    "envp": [
+                        ["ARJE_GREETER_DELAY_MS", "3500"],
+                        ["ARJE_SPLASH_MAX_MS", "6000"]
+                    ]
+                }
+            },
+            "supervision": "OneShot",
+            "lifecycle": "oneshot",
+            "priority": "high",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFDE04",
+            "label": "agetty-ttyS0",
+            "provides": [],
+            "requires": [],
+            "permissions": {
+                "networking": "none",
+                "filesystem": "read-write",
+                "ipc": { "allow": [] },
+                "processes": true
+            },
+            "soma": {
+                "namespaces": {
+                    "mount": false, "pid": false, "net": false,
+                    "uts": false, "ipc": false, "user": false, "cgroup": false
+                },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/getty", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": {
+                "Native": {
+                    "exec": "/sbin/agetty",
+                    "argv": ["--noclear", "ttyS0", "115200,38400,9600", "vt100"],
+                    "envp": []
+                }
+            },
+            "supervision": { "Restart": { "initial": 200, "max": 10000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        }
+    ]
+}

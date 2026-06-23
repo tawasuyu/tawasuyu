@@ -42,6 +42,8 @@ fn main() -> ExitCode {
         }
     }
 
+    let greeter_sim = std::env::args().any(|a| a == "--greeter-sim");
+
     let device = std::env::args()
         .nth(1)
         .filter(|a| !a.starts_with('-'))
@@ -50,10 +52,15 @@ fn main() -> ExitCode {
     let max_ms = env_u64("ARJE_SPLASH_MAX_MS", DEFAULT_MAX_MS);
     let fps = env_u64("ARJE_SPLASH_FPS", DEFAULT_FPS).clamp(1, 240);
 
-    eprintln!("[arje-splash] device={device} max_ms={max_ms} fps={fps}");
+    eprintln!("[arje-splash] device={device} max_ms={max_ms} fps={fps} greeter_sim={greeter_sim}");
 
     drm_present::install_signal_handlers();
-    drm_present::run(&drm_present::Opts { device, max_ms, fps });
+    let opts = drm_present::Opts { device, max_ms, fps };
+    if greeter_sim {
+        drm_present::run_greeter(&opts);
+    } else {
+        drm_present::run(&opts);
+    }
 
     // Siempre salimos 0: el splash es decorativo, su fallo no debe marcar el
     // Ente como CRASHED ni disparar back-off en el supervisor.

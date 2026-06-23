@@ -78,16 +78,97 @@ pub fn run(opts: &Opts) {
     }
 }
 
+/// Greeter **simulado** (`arje-splash --greeter-sim`): hace de cliente del
+/// handoff (avisa READY al splash y espera RELEASED), luego toma el DRM
+/// reusando el mismo modo y hace **aparecer** la tarjeta de login desde BG.
+/// No es el greeter real de mirada (eso necesita GPU/EGL) — es para VER el
+/// crossfade end-to-end en QEMU sin GPU. Best-effort.
+pub fn run_greeter(opts: &Opts) {
+    // Demora opcional antes de pedir la pantalla: deja que el splash se vea un
+    // rato antes del crossfade (sólo para la demo). `ARJE_GREETER_DELAY_MS`.
+    let delay = std::env::var("ARJE_GREETER_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    if delay > 0 {
+        log!("greeter-sim: espero {delay} ms antes del handoff");
+        std::thread::sleep(Duration::from_millis(delay));
+    }
+    // 1 · Handoff como cliente: pedir la pantalla y esperar a que el splash
+    // suelte el master. Si no hay splash, seguimos igual (tomamos el DRM ya).
+    match handoff::poke(&handoff::sock_path()) {
+        Ok(()) => log!("greeter-sim: RELEASED recibido, tomo la pantalla"),
+        Err(e) => log!("greeter-sim: sin splash en el socket ({e}); tomo la pantalla directo"),
+    }
+    if let Err(e) = try_run_greeter(opts) {
+        log!("greeter-sim sin gráfico ({e})");
+    }
+}
+
+fn try_run_greeter(opts: &Opts) -> Result<(), String> {
+    let Drm { card, crtc: crtc_handle, con: con_handle, mode, w, h } = setup(&opts.device)?;
+    let mut a = make_surface(&card, w as u32, h as u32)?;
+    let mut b = make_surface(&card, w as u32, h as u32)?;
+
+    // Primer frame = BG puro (appear=0): idéntico al frame final del fade-out
+    // del splash, así el traspaso de master no introduce ningún salto.
+    paint_into(&card, &mut a, w, h, 0, 0.0, Scene::Greeter)?;
+    card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con_handle], Some(mode))
+        .map_err(|e| format!("set_crtc inicial: {e}"))?;
+
+    let frame_dt = Duration::from_millis((1000 / opts.fps.max(1)).max(1));
+    let mut can_flip = true;
+
+    // Aparición de la tarjeta (~600 ms) y luego sostener hasta el tope.
+    const APPEAR_MS: u64 = 600;
+    let start = Instant::now();
+    loop {
+        if STOP.load(Ordering::SeqCst) {
+            break;
+        }
+        let e = start.elapsed().as_millis() as u64;
+        if opts.max_ms > 0 && e >= opts.max_ms {
+            break;
+        }
+        let appear = ((e as f32) / APPEAR_MS as f32).min(1.0);
+        present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, e, appear,
+                    Scene::Greeter, &mut can_flip, frame_dt)?;
+        std::mem::swap(&mut a, &mut b);
+    }
+    Ok(())
+}
+
 /// Un buffer de la cadena de double-buffering: dumb buffer + su framebuffer.
 struct Surface {
     db: DumbBuffer,
     fb: framebuffer::Handle,
 }
 
-fn try_run(opts: &Opts) -> Result<(), String> {
-    let card = open(&opts.device)?;
+/// Qué escena pinta el bucle de present.
+#[derive(Clone, Copy)]
+enum Scene {
+    /// El splash de arranque (logo respirando + barra). `blend` = fade-out a BG.
+    Splash,
+    /// El greeter simulado (tarjeta de login). `blend` = aparición desde BG.
+    Greeter,
+}
 
-    // Conector conectado + su CRTC y modo vigentes (los que dejó efifb).
+/// Lo esencial del nodo DRM ya resuelto: tarjeta abierta, CRTC/conector/modo
+/// vigentes y la resolución. Lo comparten el splash y el greeter simulado.
+struct Drm {
+    card: Card,
+    crtc: crtc::Handle,
+    con: connector::Handle,
+    mode: Mode,
+    w: usize,
+    h: usize,
+}
+
+/// Abre el nodo DRM y resuelve conector conectado + CRTC + modo vigentes (los
+/// que dejó efifb/simpledrm, heredados del GOP). Reusar ese modo es lo que
+/// evita el parpadeo.
+fn setup(device: &str) -> Result<Drm, String> {
+    let card = open(device)?;
     let res = card
         .resource_handles()
         .map_err(|e| format!("resource_handles: {e}"))?;
@@ -97,23 +178,25 @@ fn try_run(opts: &Opts) -> Result<(), String> {
         .filter_map(|h| card.get_connector(*h, true).ok())
         .find(|c| c.state() == connector::State::Connected)
         .ok_or("ningún conector conectado")?;
-
-    let crtc_handle = current_crtc(&card, &con, &res).ok_or("sin CRTC para el conector")?;
-    let mode = present_mode(&card, crtc_handle, &con).ok_or("sin modo presentable")?;
+    let crtc = current_crtc(&card, &con, &res).ok_or("sin CRTC para el conector")?;
+    let mode = present_mode(&card, crtc, &con).ok_or("sin modo presentable")?;
     let (w, h) = mode.size();
-    let (w, h) = (w as usize, h as usize);
     log!(
         "conector {:?} crtc {:?} modo {}x{} — reusando modo vigente",
         con.handle(),
-        crtc_handle,
+        crtc,
         w,
         h
     );
+    Ok(Drm { card, crtc, con: con.handle(), mode, w: w as usize, h: h as usize })
+}
+
+fn try_run(opts: &Opts) -> Result<(), String> {
+    let Drm { card, crtc: crtc_handle, con: con_handle, mode, w, h } = setup(&opts.device)?;
 
     // Dos superficies para alternar (double buffer).
     let mut a = make_surface(&card, w as u32, h as u32)?;
     let mut b = make_surface(&card, w as u32, h as u32)?;
-    let con_handle = con.handle();
 
     // Socket de handoff (Fase 2). Best-effort: si no bindea, sólo tope de tiempo.
     let mut handoff = Handoff::bind(&handoff::sock_path());
@@ -125,7 +208,7 @@ fn try_run(opts: &Opts) -> Result<(), String> {
 
     let start = Instant::now();
     // Primer present: set_crtc reusando el modo → mismo timing, sin flash.
-    paint_into(&card, &mut a, w, h, 0, 0.0)?;
+    paint_into(&card, &mut a, w, h, 0, 0.0, Scene::Splash)?;
     card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con_handle], Some(mode))
         .map_err(|e| format!("set_crtc inicial: {e}"))?;
 
@@ -155,7 +238,7 @@ fn try_run(opts: &Opts) -> Result<(), String> {
 
         let t = start.elapsed().as_millis() as u64;
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 0.0,
-                    &mut can_flip, frame_dt)?;
+                    Scene::Splash, &mut can_flip, frame_dt)?;
         std::mem::swap(&mut a, &mut b);
     }
 
@@ -173,13 +256,13 @@ fn try_run(opts: &Opts) -> Result<(), String> {
             let f = e as f32 / FADE_MS as f32;
             let t = start.elapsed().as_millis() as u64;
             present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, f,
-                        &mut can_flip, frame_dt)?;
+                        Scene::Splash, &mut can_flip, frame_dt)?;
             std::mem::swap(&mut a, &mut b);
         }
         // Frame final: BG sólido garantizado.
         let t = start.elapsed().as_millis() as u64;
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 1.0,
-                    &mut can_flip, frame_dt)?;
+                    Scene::Splash, &mut can_flip, frame_dt)?;
     }
 
     // Salida: NO destruimos el framebuffer en scanout ni reponemos el modo —
@@ -211,12 +294,13 @@ fn present_one(
     w: usize,
     h: usize,
     t: u64,
-    fade: f32,
+    blend: f32,
+    scene: Scene,
     can_flip: &mut bool,
     frame_dt: Duration,
 ) -> Result<(), String> {
     let frame_start = Instant::now();
-    paint_into(card, surf, w, h, t, fade)?;
+    paint_into(card, surf, w, h, t, blend, scene)?;
     let presented = if *can_flip {
         match card.page_flip(crtc_handle, surf.fb, PageFlipFlags::EVENT, None) {
             Ok(()) => {
@@ -297,13 +381,18 @@ fn make_surface(card: &Card, w: u32, h: u32) -> Result<Surface, String> {
     Ok(Surface { db, fb })
 }
 
-/// Mapea el dumb buffer de la superficie y pinta el frame `t` (con `fade`) en él.
-fn paint_into(card: &Card, s: &mut Surface, w: usize, h: usize, t: u64, fade: f32) -> Result<(), String> {
+/// Mapea el dumb buffer de la superficie y pinta la escena en él. Para `Splash`,
+/// `blend` es el fade-out a BG y `t` el tiempo de la animación; para `Greeter`,
+/// `blend` es la aparición de la tarjeta desde BG (`t` no se usa).
+fn paint_into(card: &Card, s: &mut Surface, w: usize, h: usize, t: u64, blend: f32, scene: Scene) -> Result<(), String> {
     let pitch = s.db.pitch() as usize;
     let mut map = card
         .map_dumb_buffer(&mut s.db)
         .map_err(|e| format!("map_dumb_buffer: {e}"))?;
-    render::paint_frame(map.as_mut(), w, h, pitch, t, fade);
+    match scene {
+        Scene::Splash => render::paint_frame(map.as_mut(), w, h, pitch, t, blend),
+        Scene::Greeter => render::paint_greeter(map.as_mut(), w, h, pitch, blend),
+    }
     Ok(())
 }
 
