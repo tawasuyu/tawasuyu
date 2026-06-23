@@ -474,6 +474,16 @@ impl DrmState {
         if tw <= 0 || th <= 0 {
             return None;
         }
+        // Marcador (una vez): confirma que ESTE binario tiene el camino de tile
+        // rotado VIVO. Si nunca aparece y los tiles giran esquemáticos, estás
+        // corriendo un binario viejo (otra ruta que la que rebuildeás).
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static L: AtomicBool = AtomicBool::new(false);
+            if !L.swap(true, Ordering::Relaxed) {
+                eprintln!("mirada-compositor · prezi: intentando tile rotado VIVO ({tw}x{th}, rot={rot:.2})");
+            }
+        }
         let (tile_bg, win_bg, win_focus) = colors;
         let mut live: Vec<Frame<GlesRenderer>> = Vec::new();
         // Fondo opaco del tile (llena todo → el offscreen no tiene zonas
