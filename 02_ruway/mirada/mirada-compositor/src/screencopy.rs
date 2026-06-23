@@ -637,20 +637,44 @@ where
     if size.0 <= 0 || size.1 <= 0 {
         return None;
     }
+    // Reporta el PRIMER fallo (con el paso) una sola vez — si no, spamearía a
+    // 60fps porque falla cada frame. Sirve para saber qué primitiva de GPU no
+    // está disponible y poder cazarlo sin volar el log.
+    fn log_once(paso: &str, e: &dyn std::fmt::Display) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static L: AtomicBool = AtomicBool::new(false);
+        if !L.swap(true, Ordering::Relaxed) {
+            eprintln!("mirada-compositor · prezi offscreen falló en {paso}: {e}");
+        }
+    }
+    macro_rules! paso {
+        ($paso:literal, $e:expr) => {
+            match $e {
+                Ok(v) => v,
+                Err(e) => {
+                    log_once($paso, &e);
+                    return None;
+                }
+            }
+        };
+    }
     let buffer_size: Size<i32, BufferCoord> = (size.0, size.1).into();
-    let mut tex = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buffer_size).ok()?;
-    let mut target = renderer.bind(&mut tex).ok()?;
+    let mut tex = paso!(
+        "create_buffer",
+        Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buffer_size)
+    );
+    let mut target = paso!("bind", renderer.bind(&mut tex));
     let fisico: Size<i32, smithay::utils::Physical> = (size.0, size.1).into();
     let damage = [Rectangle::from_size(fisico)];
     {
-        let mut frame = renderer.render(&mut target, fisico, Transform::Normal).ok()?;
-        frame.clear(Color32F::TRANSPARENT, &damage).ok()?;
-        draw_render_elements(&mut frame, 1.0, elements, &damage).ok()?;
-        let _ = frame.finish().ok()?;
+        let mut frame = paso!("render", renderer.render(&mut target, fisico, Transform::Normal));
+        paso!("clear", frame.clear(Color32F::TRANSPARENT, &damage));
+        paso!("draw", draw_render_elements(&mut frame, 1.0, elements, &damage));
+        paso!("finish", frame.finish());
     }
     let rect: Rectangle<i32, BufferCoord> = Rectangle::from_size(buffer_size);
-    let mapping = renderer.copy_framebuffer(&target, rect, FOURCC).ok()?;
-    let bytes = renderer.map_texture(&mapping).ok()?;
+    let mapping = paso!("copy_framebuffer", renderer.copy_framebuffer(&target, rect, FOURCC));
+    let bytes = paso!("map_texture", renderer.map_texture(&mapping));
     let (w, h) = (size.0 as usize, size.1 as usize);
     if bytes.len() < w * h * 4 {
         return None;
