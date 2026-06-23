@@ -15,7 +15,11 @@
 //! - `MIRADA_GREETER_MOCK="usuario:secreto"` usa el mock, para iterar la UI
 //!   en cajas sin PAM o con el greeter anidado en otro escritorio.
 
+mod aurora;
 mod bg;
+mod fire;
+mod lightning;
+mod plasma;
 mod rain;
 mod sessions;
 mod stars;
@@ -118,7 +122,7 @@ fn shot_greeter(out: &str, w: u32, h: u32) {
         rain_enabled: saved.rain_enabled,
         rain_color: saved.rain_color,
         anim: saved.anim,
-        rain_t: 3.2,
+        rain_t: std::env::var("MIRADA_SHOT_T").ok().and_then(|v| v.parse().ok()).unwrap_or(3.2),
         monitors: shot_monitors().0,
         active_mon: shot_monitors().1,
         prev_mon: shot_monitors().1,
@@ -1042,6 +1046,10 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
         .item(bg_item(&t("mirada-greeter-bg-matrix"), state::BgAnim::Matrix))
         .item(bg_item(&t("mirada-greeter-bg-stars"), state::BgAnim::Stars))
         .item(bg_item(&t("mirada-greeter-bg-waves"), state::BgAnim::Waves))
+        .item(bg_item(&t("mirada-greeter-bg-fire"), state::BgAnim::Fire))
+        .item(bg_item(&t("mirada-greeter-bg-plasma"), state::BgAnim::Plasma))
+        .item(bg_item(&t("mirada-greeter-bg-aurora"), state::BgAnim::Aurora))
+        .item(bg_item(&t("mirada-greeter-bg-lightning"), state::BgAnim::Lightning))
         .item(MenuItem::new(t("mirada-greeter-bg-off"), "bg.off").separated());
 
     AppMenu::new()
@@ -1087,6 +1095,10 @@ fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) 
             "matrix" => state::BgAnim::Matrix,
             "stars" => state::BgAnim::Stars,
             "waves" => state::BgAnim::Waves,
+            "fire" => state::BgAnim::Fire,
+            "plasma" => state::BgAnim::Plasma,
+            "aurora" => state::BgAnim::Aurora,
+            "lightning" => state::BgAnim::Lightning,
             _ => return model,
         };
         return Greeter::update(model, Msg::SetAnim(anim), handle);

@@ -17,7 +17,11 @@ use std::path::PathBuf;
 pub const ANIMS: &[(&str, &str)] = &[
     ("matrix", "Matrix (lluvia de glifos)"),
     ("stars", "Estrellas (starfield)"),
-    ("waves", "Ondas (plasma)"),
+    ("waves", "Ondas"),
+    ("fire", "Fuego"),
+    ("plasma", "Plasma"),
+    ("aurora", "Aurora"),
+    ("lightning", "Rayos"),
 ];
 
 /// Paletas del fondo: `(tag, etiqueta)`. Espejo de

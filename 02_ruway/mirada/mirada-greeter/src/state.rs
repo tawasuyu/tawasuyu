@@ -54,8 +54,16 @@ pub enum BgAnim {
     Matrix,
     /// Campo de estrellas en warp (`stars`).
     Stars,
-    /// Ondas/plasma sinusoidal (`waves`).
+    /// Ondas sinusoidal (`waves`).
     Waves,
+    /// Fuego ascendente (`fire`).
+    Fire,
+    /// Plasma de interferencia (`plasma`).
+    Plasma,
+    /// Cortinas de aurora boreal (`aurora`).
+    Aurora,
+    /// Rayos ramificados (`lightning`).
+    Lightning,
 }
 
 impl BgAnim {
@@ -63,7 +71,11 @@ impl BgAnim {
         match s.trim().to_ascii_lowercase().as_str() {
             "matrix" | "rain" | "lluvia" => Some(Self::Matrix),
             "stars" | "estrellas" | "starfield" => Some(Self::Stars),
-            "waves" | "ondas" | "plasma" => Some(Self::Waves),
+            "waves" | "ondas" => Some(Self::Waves),
+            "fire" | "fuego" => Some(Self::Fire),
+            "plasma" => Some(Self::Plasma),
+            "aurora" => Some(Self::Aurora),
+            "lightning" | "rayos" | "rayo" => Some(Self::Lightning),
             _ => None,
         }
     }
@@ -73,6 +85,10 @@ impl BgAnim {
             Self::Matrix => "matrix",
             Self::Stars => "stars",
             Self::Waves => "waves",
+            Self::Fire => "fire",
+            Self::Plasma => "plasma",
+            Self::Aurora => "aurora",
+            Self::Lightning => "lightning",
         }
     }
 }

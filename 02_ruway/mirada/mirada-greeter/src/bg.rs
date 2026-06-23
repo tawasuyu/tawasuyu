@@ -9,7 +9,7 @@ use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::PaintRect;
 
 use crate::state::BgAnim;
-use crate::{rain, stars, waves};
+use crate::{aurora, fire, lightning, plasma, rain, stars, waves};
 
 /// Pinta un frame de la animación `anim` sobre `rect`. `t` es el reloj en
 /// segundos; `bright` el color base ya resuelto (RGB del tema o de la paleta).
@@ -25,5 +25,9 @@ pub fn paint(
         BgAnim::Matrix => rain::paint(scene, ts, rect, t, bright),
         BgAnim::Stars => stars::paint(scene, ts, rect, t, bright),
         BgAnim::Waves => waves::paint(scene, ts, rect, t, bright),
+        BgAnim::Fire => fire::paint(scene, ts, rect, t, bright),
+        BgAnim::Plasma => plasma::paint(scene, ts, rect, t, bright),
+        BgAnim::Aurora => aurora::paint(scene, ts, rect, t, bright),
+        BgAnim::Lightning => lightning::paint(scene, ts, rect, t, bright),
     }
 }
