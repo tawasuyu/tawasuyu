@@ -847,9 +847,10 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // `calloop`. Modo normal: autoarranque + `MIRADA_STARTUP`.
     let greeter_rx = if app.mode == BodyMode::Greeter {
         let (tx, rx) = ticket_channel::<SessionTicket>();
-        crate::spawn_greeter(move |ticket| {
+        let stdin = crate::spawn_greeter(move |ticket| {
             let _ = tx.send(ticket);
         })?;
+        app.greeter_stdin = Some(stdin);
         Some(rx)
     } else {
         // Autoarranque: los programas de `~/.config/mirada/autostart`.

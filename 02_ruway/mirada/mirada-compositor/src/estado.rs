@@ -484,4 +484,13 @@ pub(crate) struct App {
     pub(crate) pending_session: Option<(String, Option<UserInfo>)>,
     pub(crate) next_id: u64,
     pub(crate) running: bool,
+    /// Tubería de escritura al stdin del greeter (sólo en modo DM). El
+    /// compositor le empuja por acá la disposición de monitores y cuál tiene
+    /// el ratón, para que la tarjeta de login viaje al monitor activo. `None`
+    /// fuera de modo greeter o si la tubería se cerró.
+    pub(crate) greeter_stdin: Option<std::process::ChildStdin>,
+    /// Último índice de salida que se le informó al greeter como «activo»
+    /// (la del ratón). `usize::MAX` ⇒ aún no se empujó nada — fuerza el
+    /// primer envío.
+    pub(crate) greeter_active_output: usize,
 }

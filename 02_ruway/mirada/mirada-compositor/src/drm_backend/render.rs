@@ -9,6 +9,10 @@ impl DrmState {
             return; // la sesión está en otra VT — no tocamos la GPU
         }
         self.refresh_window_borders();
+        // Modo DM: si el ratón cruzó a otro monitor, avisale al greeter para
+        // que la tarjeta de login viaje allí (no-op fuera de greeter o si el
+        // monitor activo no cambió).
+        self.sync_greeter_layout(false);
         for i in 0..self.outputs.len() {
             self.render_output(i);
         }

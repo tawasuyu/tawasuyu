@@ -777,32 +777,45 @@ impl App {
                 // fullscreen). `w.size` guarda la celda entera; `render_loc`
                 // baja la superficie por `tb`.
                 let tbh = self.decorations.titlebar_height.max(0);
+                // En modo DM la ventana del greeter (el único cliente, no-shell)
+                // cubre TODO el espacio: la unión de las salidas, anclada en
+                // (0,0). Así el fondo animado se pinta en cada monitor y la
+                // tarjeta de login —que posiciona el propio cliente— viaja al
+                // monitor con el ratón. Y sin barra de título (`tb = 0`).
+                let greeter_mode = self.mode == BodyMode::Greeter;
+                let span = self.output_size;
                 let mut danio = None;
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                    let greeter_win = greeter_mode && !w.is_shell;
+                    let (rx, ry, rw, rh) = if greeter_win {
+                        (0, 0, span.0, span.1)
+                    } else {
+                        (rect.x, rect.y, rect.w, rect.h)
+                    };
                     // La celda vieja y la nueva quedan dañadas (screencopy):
                     // mover/redimensionar/ocultar repinta ambas regiones.
                     let viejo: Rectangle<i32, Logical> =
                         Rectangle::new(w.loc.into(), w.size.into());
-                    let nuevo = Rectangle::new((rect.x, rect.y).into(), (rect.w, rect.h).into());
+                    let nuevo = Rectangle::new((rx, ry).into(), (rw, rh).into());
                     if viejo != nuevo || w.visible != visible {
                         danio = Some(viejo.merge(nuevo));
                     }
-                    w.loc = (rect.x, rect.y);
-                    w.size = (rect.w, rect.h);
+                    w.loc = (rx, ry);
+                    w.size = (rw, rh);
                     w.visible = visible;
                     w.floating = floating;
                     w.fullscreen = fullscreen;
                     w.suspended = suspended;
                     w.frame_divisor = frame_divisor.max(1);
-                    let tb = if w.is_shell || fullscreen { 0 } else { tbh };
+                    let tb = if w.is_shell || fullscreen || greeter_win { 0 } else { tbh };
                     // Una ventana teselada (ni shell, ni flotante, ni fullscreen)
                     // recibe los estados `tiled`: así los clientes CSD (GTK/Qt)
                     // sueltan su margen de sombra flotante y las esquinas
                     // redondeadas — antes salían «forradas dentro de un margen
                     // grandísimo». Las flotantes conservan su decoración.
-                    let teselada = !w.is_shell && !floating && !fullscreen;
+                    let teselada = !w.is_shell && !floating && !fullscreen && !greeter_win;
                     w.toplevel.with_pending_state(|s| {
-                        s.size = Some((rect.w.max(1), (rect.h - tb).max(1)).into());
+                        s.size = Some((rw.max(1), (rh - tb).max(1)).into());
                         if fullscreen {
                             s.states.set(xdg_toplevel::State::Fullscreen);
                         } else {

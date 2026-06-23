@@ -586,6 +586,11 @@ mirada-win-kind-surface = · Cuerpop sawanpi ·
 
 # === mirada-greeter ===
 mirada-greeter-menu-session = Yaykuy
+mirada-greeter-menu-bg = Hawan
+mirada-greeter-bg-matrix = Matrix para
+mirada-greeter-bg-stars = Quyllurkuna
+mirada-greeter-bg-waves = Quchu quchu
+mirada-greeter-bg-off = Hawanta wañuchiy
 mirada-greeter-session-submit = Yaykuy qallariy
 mirada-greeter-session-goto-user = Sutiyman ri
 mirada-greeter-session-goto-pass = Pasakllavaman ri

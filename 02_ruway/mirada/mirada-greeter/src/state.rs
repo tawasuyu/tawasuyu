@@ -45,6 +45,38 @@ impl RainColor {
     }
 }
 
+/// Animación de fondo elegida. El fondo es enchufable: cada variante es una
+/// función pura `paint(scene, ts, rect, t, color)`. `rain_enabled` es el
+/// interruptor maestro; `anim` elige cuál se pinta.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BgAnim {
+    /// Lluvia de glifos estilo Matrix (`rain`).
+    Matrix,
+    /// Campo de estrellas en warp (`stars`).
+    Stars,
+    /// Ondas/plasma sinusoidal (`waves`).
+    Waves,
+}
+
+impl BgAnim {
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "matrix" | "rain" | "lluvia" => Some(Self::Matrix),
+            "stars" | "estrellas" | "starfield" => Some(Self::Stars),
+            "waves" | "ondas" | "plasma" => Some(Self::Waves),
+            _ => None,
+        }
+    }
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Matrix => "matrix",
+            Self::Stars => "stars",
+            Self::Waves => "waves",
+        }
+    }
+}
+
 /// Estado persistido del greeter.
 #[derive(Clone, Debug)]
 pub struct GreeterState {
@@ -52,10 +84,12 @@ pub struct GreeterState {
     pub last_user: String,
     /// Nombre del último escritorio elegido (se matchea contra `sessions`).
     pub last_session: String,
-    /// ¿Pintar el fondo de lluvia?
+    /// ¿Pintar el fondo animado?
     pub rain_enabled: bool,
     /// Paleta del fondo.
     pub rain_color: RainColor,
+    /// Qué animación de fondo pintar.
+    pub anim: BgAnim,
 }
 
 impl Default for GreeterState {
@@ -67,6 +101,7 @@ impl Default for GreeterState {
             // por `MIRADA_GREETER_RAIN=0`.
             rain_enabled: true,
             rain_color: RainColor::Green,
+            anim: BgAnim::Matrix,
         }
     }
 }
@@ -114,6 +149,11 @@ impl GreeterState {
                         self.rain_color = c;
                     }
                 }
+                "bg" | "anim" => {
+                    if let Some(a) = BgAnim::parse(v) {
+                        self.anim = a;
+                    }
+                }
                 _ => {}
             }
         }
@@ -130,6 +170,11 @@ impl GreeterState {
                 self.rain_color = c;
             }
         }
+        if let Ok(v) = std::env::var("MIRADA_GREETER_BG") {
+            if let Some(a) = BgAnim::parse(&v) {
+                self.anim = a;
+            }
+        }
     }
 
     /// Serializa a `clave = valor`.
@@ -139,11 +184,13 @@ impl GreeterState {
              last_user = {}\n\
              last_session = {}\n\
              rain = {}\n\
-             rain_color = {}\n",
+             rain_color = {}\n\
+             bg = {}\n",
             self.last_user,
             self.last_session,
             self.rain_enabled,
             self.rain_color.tag(),
+            self.anim.tag(),
         )
     }
 
@@ -206,6 +253,7 @@ mod tests {
             last_session: "mirada · pata".into(),
             rain_enabled: true,
             rain_color: RainColor::Amber,
+            anim: BgAnim::Stars,
         };
         let mut back = GreeterState::default();
         back.merge_text(&st.to_text());
@@ -213,5 +261,6 @@ mod tests {
         assert_eq!(back.last_session, "mirada · pata");
         assert!(back.rain_enabled);
         assert_eq!(back.rain_color, RainColor::Amber);
+        assert_eq!(back.anim, BgAnim::Stars);
     }
 }

@@ -90,9 +90,10 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
     // lanza el greeter y recibe su tiquet por un canal que el bucle sondea.
     let greeter_rx = if state.mode == BodyMode::Greeter {
         let (tx, rx) = std::sync::mpsc::channel::<SessionTicket>();
-        spawn_greeter(move |ticket| {
+        let stdin = spawn_greeter(move |ticket| {
             let _ = tx.send(ticket);
         })?;
+        state.greeter_stdin = Some(stdin);
         Some(rx)
     } else {
         None

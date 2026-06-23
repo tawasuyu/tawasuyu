@@ -459,7 +459,11 @@ pub(crate) fn greeter_bin() -> String {
 /// entrega por `send` (el bucle de eventos hará el traspaso); el resto
 /// del stdout se reenvía a la consola con el prefijo `greeter ·`. El
 /// hilo es dueño del `Child` y lo cosecha cuando el greeter termina.
-pub(crate) fn spawn_greeter<S>(send: S) -> std::io::Result<()>
+///
+/// Devuelve el `stdin` del greeter: el compositor le empuja por ahí la
+/// disposición de monitores (qué monitor tiene el ratón) para que la tarjeta
+/// de login viaje al monitor activo. Ver [`crate::estado::App::greeter_stdin`].
+pub(crate) fn spawn_greeter<S>(send: S) -> std::io::Result<std::process::ChildStdin>
 where
     S: Fn(SessionTicket) + Send + 'static,
 {
@@ -468,9 +472,11 @@ where
 
     let mut child = Command::new(greeter_bin())
         .envs(THEME_ENV.iter().copied())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
     let stdout = child.stdout.take().expect("stdout pedido con Stdio::piped");
+    let stdin = child.stdin.take().expect("stdin pedido con Stdio::piped");
     println!("mirada-compositor · greeter lanzado (pid {}).", child.id());
 
     std::thread::spawn(move || {
@@ -488,5 +494,5 @@ where
             Err(e) => eprintln!("mirada-compositor · wait(greeter): {e}"),
         }
     });
-    Ok(())
+    Ok(stdin)
 }

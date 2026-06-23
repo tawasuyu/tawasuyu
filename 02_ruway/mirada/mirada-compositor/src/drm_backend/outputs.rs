@@ -332,6 +332,52 @@ impl DrmState {
         self.app.pointer_loc = (px, py);
         // Reservas y borders pueden cambiar con la nueva geometría.
         self.app.recompute_reservations();
+        // Modo DM: la unión de salidas cambió — reenviá la disposición al
+        // greeter (rects nuevos aunque el índice activo no haya cambiado).
+        self.sync_greeter_layout(true);
+    }
+
+    /// Empuja al greeter (modo DM) la disposición de monitores y cuál tiene el
+    /// ratón, por su `stdin`. El greeter usa esto para que la tarjeta de login
+    /// viaje al monitor activo mientras el fondo animado sigue en todos. Los
+    /// rects van en coordenadas **locales a la superficie** (el greeter cubre la
+    /// unión de las salidas anclada en su origen). No-op fuera de modo greeter o
+    /// sin tubería. Con `force`, reenvía aunque el monitor activo no haya
+    /// cambiado (arranque / hotplug, donde cambian los rects pero no el índice).
+    pub(super) fn sync_greeter_layout(&mut self, force: bool) {
+        use std::io::Write;
+        if self.app.mode != crate::estado::BodyMode::Greeter || self.outputs.is_empty() {
+            return;
+        }
+        let (px, py) = self.app.pointer_loc;
+        let active = self.output_at_point(px.round() as i32, py.round() as i32);
+        if !force && active == self.app.greeter_active_output {
+            return;
+        }
+        // Origen de la superficie = esquina superior-izquierda de la unión.
+        let ox = self.outputs.iter().map(|o| o.rect.x).min().unwrap_or(0);
+        let oy = self.outputs.iter().map(|o| o.rect.y).min().unwrap_or(0);
+        let mut line = format!("LAYOUT {active}");
+        for o in &self.outputs {
+            line.push_str(&format!(
+                " {},{},{},{}",
+                o.rect.x - ox,
+                o.rect.y - oy,
+                o.rect.w,
+                o.rect.h
+            ));
+        }
+        line.push('\n');
+        let mut drop_pipe = false;
+        if let Some(stdin) = self.app.greeter_stdin.as_mut() {
+            if stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()).is_err() {
+                drop_pipe = true; // el greeter cerró su stdin: dejamos de empujar
+            }
+        }
+        if drop_pipe {
+            self.app.greeter_stdin = None;
+        }
+        self.app.greeter_active_output = active;
     }
 
     /// Work rect del monitor bajo el puntero — el "lienzo" de zonas para

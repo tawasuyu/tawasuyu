@@ -15,9 +15,12 @@
 //! - `MIRADA_GREETER_MOCK="usuario:secreto"` usa el mock, para iterar la UI
 //!   en cajas sin PAM o con el greeter anidado en otro escritorio.
 
+mod bg;
 mod rain;
 mod sessions;
+mod stars;
 mod state;
+mod waves;
 
 use std::io::Write;
 use std::sync::Arc;
@@ -28,8 +31,8 @@ use auth_core::{
     DEFAULT_SERVICE,
 };
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
-    AlignItems, JustifyContent, Rect,
+    prelude::{auto, length, percent, Dimension, FlexDirection, Size, Style},
+    AlignItems, JustifyContent, Position, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
@@ -67,6 +70,16 @@ fn main() {
     llimphi_ui::run::<Greeter>();
 }
 
+/// Monitores simulados para `--shot` desde `MIRADA_SHOT_MONITORS`
+/// (`"<activo> x,y,w,h x,y,w,h …"`). Vacío ⇒ un solo monitor (tarjeta
+/// centrada en toda la ventana).
+fn shot_monitors() -> (Vec<MonRect>, usize) {
+    std::env::var("MIRADA_SHOT_MONITORS")
+        .ok()
+        .and_then(|v| parse_layout(&format!("LAYOUT {v}")))
+        .unwrap_or((Vec::new(), 0))
+}
+
 /// Construye un modelo de muestra (usuario+contraseña tecleados) y vuelca
 /// `Greeter::view` a un PNG, para revisar el layout del login sin loguearse.
 fn shot_greeter(out: &str, w: u32, h: u32) {
@@ -98,9 +111,18 @@ fn shot_greeter(out: &str, w: u32, h: u32) {
         menu_anim: Tween::idle(1.0),
         edit_active: usize::MAX,
         edit_anim: Tween::idle(1.0),
-        rain_enabled: false,
+        // `--shot` puede simular multi-monitor y animación para certificar el
+        // viaje de la tarjeta y los fondos sin bootear el DM:
+        //   MIRADA_SHOT_MONITORS="1 0,0,1280,720 1280,0,1280,720"  (activo + rects)
+        //   MIRADA_GREETER_RAIN=1 MIRADA_GREETER_BG=stars
+        rain_enabled: saved.rain_enabled,
         rain_color: saved.rain_color,
-        rain_t: 0.0,
+        anim: saved.anim,
+        rain_t: 3.2,
+        monitors: shot_monitors().0,
+        active_mon: shot_monitors().1,
+        prev_mon: shot_monitors().1,
+        card_anim: 1.0,
     };
     let view = <Greeter as App>::view(&model);
 
@@ -258,13 +280,31 @@ struct Model {
     edit_active: usize,
     /// Animación de aparición del menú de edición.
     edit_anim: Tween<f32>,
-    /// ¿Pintar el fondo de lluvia de glifos (rusty rain)?
+    /// ¿Pintar el fondo animado?
     rain_enabled: bool,
-    /// Paleta del fondo de lluvia.
+    /// Paleta del fondo.
     rain_color: state::RainColor,
+    /// Qué animación de fondo pintar (enchufable, ver [`bg`]).
+    anim: state::BgAnim,
     /// Reloj del fondo (segundos), avanzado por `Msg::RainTick`.
     rain_t: f32,
+    /// Disposición de monitores (rects locales a la ventana, que cubre la unión
+    /// de las salidas). Vacío ⇒ un solo monitor / desconocido: la tarjeta se
+    /// centra en toda la ventana, como siempre. Lo empuja el compositor por
+    /// stdin en modo DM multi-monitor.
+    monitors: Vec<MonRect>,
+    /// Índice del monitor con el ratón — adonde viaja la tarjeta de login.
+    active_mon: usize,
+    /// Monitor del que viene la tarjeta (origen de la animación de viaje).
+    prev_mon: usize,
+    /// Progreso 0→1 de la animación de viaje de la tarjeta entre monitores.
+    /// `1.0` = asentada en `active_mon`.
+    card_anim: f32,
 }
+
+/// Rect de un monitor en coordenadas de la ventana del greeter (px):
+/// `(x, y, w, h)`.
+type MonRect = (f32, f32, f32, f32);
 
 #[derive(Clone)]
 enum Msg {
@@ -299,8 +339,14 @@ enum Msg {
     EditActivate,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
-    /// Tick del fondo de lluvia — avanza el reloj y repinta.
+    /// Tick del fondo — avanza el reloj del fondo y la animación de viaje de
+    /// la tarjeta, y repinta.
     RainTick,
+    /// El compositor (modo DM) informa la disposición de monitores y cuál
+    /// tiene el ratón: `(rects locales a la ventana, índice activo)`.
+    SetLayout(Vec<MonRect>, usize),
+    /// Elegir la animación de fondo (desde el menú «Fondo»).
+    SetAnim(state::BgAnim),
 }
 
 // ---------------------------------------------------------------------
@@ -345,9 +391,27 @@ impl App for Greeter {
             .position(|s| s.name == saved.last_session)
             .unwrap_or(0);
 
-        // Si el fondo está encendido, arranca el reloj de animación (~30 fps).
-        if saved.rain_enabled {
-            handle.spawn_periodic(Duration::from_millis(33), || Msg::RainTick);
+        // Reloj de animación (~30 fps): mueve el fondo y el viaje de la tarjeta
+        // entre monitores. Siempre encendido — barato para una pantalla de
+        // login, y el viaje de la tarjeta lo necesita aunque el fondo esté
+        // apagado.
+        handle.spawn_periodic(Duration::from_millis(33), || Msg::RainTick);
+
+        // Hilo lector del stdin: el compositor (modo DM) empuja por acá la
+        // disposición de monitores y cuál tiene el ratón. Cada línea `LAYOUT …`
+        // reentra al bucle Elm como `Msg::SetLayout`. En modo dev (sin
+        // compositor) el stdin queda mudo y el hilo simplemente espera.
+        {
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let stdin = std::io::stdin();
+                for line in stdin.lock().lines().map_while(Result::ok) {
+                    if let Some((mons, active)) = parse_layout(&line) {
+                        h.dispatch(Msg::SetLayout(mons, active));
+                    }
+                }
+            });
         }
 
         Model {
@@ -367,7 +431,12 @@ impl App for Greeter {
             edit_anim: Tween::idle(1.0),
             rain_enabled: saved.rain_enabled,
             rain_color: saved.rain_color,
+            anim: saved.anim,
             rain_t: 0.0,
+            monitors: Vec::new(),
+            active_mon: 0,
+            prev_mon: 0,
+            card_anim: 1.0,
         }
     }
 
@@ -474,6 +543,7 @@ impl App for Greeter {
                     last_session: chosen.map(|s| s.name.clone()).unwrap_or_default(),
                     rain_enabled: m.rain_enabled,
                     rain_color: m.rain_color,
+                    anim: m.anim,
                 }
                 .save();
                 let ticket = SessionTicket::new(user);
@@ -558,6 +628,29 @@ impl App for Greeter {
                 // Avanza el reloj del fondo. Se envuelve para no perder
                 // precisión `f32` en sesiones largas del greeter.
                 m.rain_t = (m.rain_t + 0.033) % 100_000.0;
+                // Avanza el viaje de la tarjeta entre monitores (~280 ms).
+                if m.card_anim < 1.0 {
+                    m.card_anim = (m.card_anim + 0.033 / 0.28).min(1.0);
+                }
+            }
+            Msg::SetLayout(mons, active) => {
+                let active = if mons.is_empty() {
+                    0
+                } else {
+                    active.min(mons.len() - 1)
+                };
+                // Si cambió el monitor activo, arranca el viaje desde el actual.
+                if active != m.active_mon {
+                    m.prev_mon = m.active_mon;
+                    m.card_anim = 0.0;
+                }
+                m.monitors = mons;
+                m.active_mon = active;
+            }
+            Msg::SetAnim(a) => {
+                m.anim = a;
+                m.rain_enabled = true;
+                persist(&m);
             }
         }
         m
@@ -751,11 +844,10 @@ impl App for Greeter {
             row(13.0, &rimay_localize::t("mirada-greeter-hint-console"), 9.0, theme.fg_muted),
         ]);
 
-        // Zona central que aloja la tarjeta de login. Ocupa todo el
-        // espacio sobrante bajo la barra de menú. Si el fondo de lluvia está
-        // activo, su `paint_with` pinta detrás de la tarjeta (el painter de un
-        // nodo corre antes que sus hijos).
-        let mut body = View::new(Style {
+        // Zona central que aloja la tarjeta de login, centrada. Transparente:
+        // el fondo animado (pintado en la raíz) se ve por detrás, también en el
+        // monitor activo.
+        let body = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
                 height: percent(1.0_f32),
@@ -765,31 +857,64 @@ impl App for Greeter {
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .fill(theme.bg_app);
-        if model.rain_enabled {
-            let t = model.rain_t;
-            let bright = rain_bright(model.rain_color, &theme);
-            body = body.paint_with(move |scene, ts, rect| {
-                rain::paint(scene, ts, rect, t, bright);
-            });
-        }
-        let body = body.children(vec![card]);
+        .children(vec![card]);
 
-        // Raíz en columna: barra de menú arriba + cuerpo centrado. El
-        // right-click se engancha en la raíz (origen 0,0 ⇒ las coords
-        // locales ya son de ventana) y abre el menú de edición sobre el
-        // campo focuseado.
-        View::new(Style {
-            flex_direction: FlexDirection::Column,
+        // Panel de contenido (barra de menú + tarjeta). En multi-monitor (modo
+        // DM) se posiciona —absoluto— sobre el monitor con el ratón y viaja
+        // hacia él con una animación; el fondo sigue en todos los monitores.
+        // Sin info de monitores (un solo monitor / modo dev) ocupa toda la
+        // ventana, como siempre.
+        let content_style = match content_rect(model) {
+            Some((x, y, w, h)) => Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(x),
+                    top: length(y),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(w),
+                    height: length(h),
+                },
+                flex_direction: FlexDirection::Column,
+                ..Default::default()
+            },
+            None => Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    top: length(0.0_f32),
+                    right: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                flex_direction: FlexDirection::Column,
+                ..Default::default()
+            },
+        };
+        let content = View::new(content_style).children(vec![menubar, body]);
+
+        // Raíz: cubre toda la ventana (la unión de las salidas en multi-monitor)
+        // y pinta el fondo animado por detrás de todo. El right-click se
+        // engancha acá (origen 0,0 ⇒ las coords locales ya son de ventana).
+        let mut root = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
                 height: percent(1.0_f32),
             },
             ..Default::default()
         })
-        .fill(theme.bg_app)
-        .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-        .children(vec![menubar, body])
+        .fill(theme.bg_app);
+        if model.rain_enabled {
+            let t = model.rain_t;
+            let anim = model.anim;
+            let bright = rain_bright(model.rain_color, &theme);
+            root = root.paint_with(move |scene, ts, rect| {
+                bg::paint(anim, scene, ts, rect, t, bright);
+            });
+        }
+        root.on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
+            .children(vec![content])
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
@@ -905,6 +1030,20 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
         it
     };
 
+    // Menú "Fondo": elige la animación enchufable. La activa lleva ✔.
+    let bg_item = |label: &str, a: state::BgAnim| {
+        let mut it = MenuItem::new(label, format!("bg.{}", a.tag()));
+        if model.rain_enabled && model.anim == a {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+    let bg_menu = Menu::new(t("mirada-greeter-menu-bg"))
+        .item(bg_item(&t("mirada-greeter-bg-matrix"), state::BgAnim::Matrix))
+        .item(bg_item(&t("mirada-greeter-bg-stars"), state::BgAnim::Stars))
+        .item(bg_item(&t("mirada-greeter-bg-waves"), state::BgAnim::Waves))
+        .item(MenuItem::new(t("mirada-greeter-bg-off"), "bg.off").separated());
+
     AppMenu::new()
         .menu(sesion)
         .menu(
@@ -916,6 +1055,7 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(paste)
                 .item(sel_all),
         )
+        .menu(bg_menu)
         .menu(
             Menu::new(t("language"))
                 .item(lang_item("Español", "es-PE"))
@@ -935,6 +1075,21 @@ fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) 
         cfg.lang = code.to_string();
         let _ = cfg.save();
         return model;
+    }
+    // Fondo animado: «bg.<tag>» elige la animación, «bg.off» lo apaga.
+    if let Some(tag) = command.strip_prefix("bg.") {
+        if tag == "off" {
+            model.rain_enabled = false;
+            persist(&model);
+            return model;
+        }
+        let anim = match tag {
+            "matrix" => state::BgAnim::Matrix,
+            "stars" => state::BgAnim::Stars,
+            "waves" => state::BgAnim::Waves,
+            _ => return model,
+        };
+        return Greeter::update(model, Msg::SetAnim(anim), handle);
     }
     // Elección de sesión: «session.pick.<idx>».
     if let Some(rest) = command.strip_prefix("session.pick.") {
@@ -980,6 +1135,58 @@ fn apply_edit_menu_action(mut model: Model, action: EditAction) -> Model {
         model.status = Status::Idle;
     }
     model
+}
+
+/// Persiste la config del fondo (animación + paleta) sin esperar al login —
+/// para que la elección del menú sobreviva un reinicio del greeter. Conserva
+/// el último usuario/sesión recordados (no los pisa con el estado en curso).
+fn persist(m: &Model) {
+    let mut st = state::GreeterState::load();
+    st.rain_enabled = m.rain_enabled;
+    st.rain_color = m.rain_color;
+    st.anim = m.anim;
+    st.save();
+}
+
+/// Rect (px, locales a la ventana) donde colocar el panel de contenido: el
+/// monitor activo, interpolado desde el anterior por la animación de viaje.
+/// `None` si no hay info de monitores (un solo monitor / modo dev) ⇒ el panel
+/// ocupa toda la ventana.
+fn content_rect(m: &Model) -> Option<MonRect> {
+    if m.monitors.is_empty() {
+        return None;
+    }
+    let to = *m.monitors.get(m.active_mon)?;
+    let from = m.monitors.get(m.prev_mon).copied().unwrap_or(to);
+    // Ease-out cúbico: arranca rápido y desacelera al asentarse.
+    let t = m.card_anim.clamp(0.0, 1.0);
+    let e = 1.0 - (1.0 - t).powi(3);
+    let lerp = |a: f32, b: f32| a + (b - a) * e;
+    Some((
+        lerp(from.0, to.0),
+        lerp(from.1, to.1),
+        lerp(from.2, to.2),
+        lerp(from.3, to.3),
+    ))
+}
+
+/// Parsea una línea `LAYOUT <activo> x,y,w,h x,y,w,h …` empujada por el
+/// compositor. Devuelve `(rects de monitor, índice activo)`, o `None` si la
+/// línea no es un `LAYOUT` bien formado.
+fn parse_layout(line: &str) -> Option<(Vec<MonRect>, usize)> {
+    let rest = line.trim().strip_prefix("LAYOUT ")?;
+    let mut it = rest.split_whitespace();
+    let active: usize = it.next()?.parse().ok()?;
+    let mut mons = Vec::new();
+    for tok in it {
+        let mut nums = tok.split(',');
+        let x: f32 = nums.next()?.parse().ok()?;
+        let y: f32 = nums.next()?.parse().ok()?;
+        let w: f32 = nums.next()?.parse().ok()?;
+        let h: f32 = nums.next()?.parse().ok()?;
+        mons.push((x, y, w, h));
+    }
+    Some((mons, active))
 }
 
 /// Resuelve el color base (RGB brillante) del fondo de lluvia. `Accent` toma
@@ -1031,3 +1238,75 @@ fn row(height: f32, text: &str, size: f32, color: Color) -> View<Msg> {
     .text_aligned(text.to_string(), size, color, Alignment::Start)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_layout_dos_monitores() {
+        let (mons, active) = parse_layout("LAYOUT 1 0,0,1920,1080 1920,0,2560,1440").unwrap();
+        assert_eq!(active, 1);
+        assert_eq!(mons, vec![(0.0, 0.0, 1920.0, 1080.0), (1920.0, 0.0, 2560.0, 1440.0)]);
+    }
+
+    #[test]
+    fn parse_layout_rechaza_basura() {
+        assert!(parse_layout("hola mundo").is_none());
+        assert!(parse_layout("LAYOUT").is_none());
+        assert!(parse_layout("LAYOUT x 0,0,1,1").is_none());
+    }
+
+    /// Construye un modelo mínimo para ejercitar `content_rect` (los campos no
+    /// usados van por defecto vía un modelo de `--shot`).
+    fn model_con_monitores(mons: Vec<MonRect>, active: usize, prev: usize, t: f32) -> Model {
+        let saved = state::GreeterState::default();
+        Model {
+            auth: pick_authenticator(),
+            user: TextInputState::new(),
+            pass: TextInputState::masked(),
+            focus: Field::User,
+            status: Status::Idle,
+            sessions: Vec::new(),
+            session_idx: 0,
+            clipboard: SystemClipboard::new(),
+            menu_open: None,
+            edit_menu: None,
+            menu_active: usize::MAX,
+            menu_anim: Tween::idle(1.0),
+            edit_active: usize::MAX,
+            edit_anim: Tween::idle(1.0),
+            rain_enabled: true,
+            rain_color: saved.rain_color,
+            anim: saved.anim,
+            rain_t: 0.0,
+            monitors: mons,
+            active_mon: active,
+            prev_mon: prev,
+            card_anim: t,
+        }
+    }
+
+    #[test]
+    fn content_rect_sin_monitores_es_none() {
+        let m = model_con_monitores(Vec::new(), 0, 0, 1.0);
+        assert!(content_rect(&m).is_none());
+    }
+
+    #[test]
+    fn content_rect_asentado_en_monitor_activo() {
+        let mons = vec![(0.0, 0.0, 1920.0, 1080.0), (1920.0, 0.0, 2560.0, 1440.0)];
+        // card_anim = 1.0 ⇒ asentada exactamente en el activo (monitor 1).
+        let m = model_con_monitores(mons, 1, 0, 1.0);
+        assert_eq!(content_rect(&m).unwrap(), (1920.0, 0.0, 2560.0, 1440.0));
+    }
+
+    #[test]
+    fn content_rect_viaja_entre_monitores() {
+        let mons = vec![(0.0, 0.0, 1000.0, 1000.0), (1000.0, 0.0, 1000.0, 1000.0)];
+        // A mitad del viaje, el panel está entre ambos (x estrictamente dentro).
+        let m = model_con_monitores(mons, 1, 0, 0.5);
+        let (x, _, _, _) = content_rect(&m).unwrap();
+        assert!(x > 0.0 && x < 1000.0, "x={x} debería estar entre 0 y 1000");
+    }
+}

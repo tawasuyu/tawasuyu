@@ -422,6 +422,8 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         pending_session: None,
         next_id: 1,
         running: true,
+        greeter_stdin: None,
+        greeter_active_output: usize::MAX,
     };
 
     // Distribución de teclado de la config del usuario (vacío = la del

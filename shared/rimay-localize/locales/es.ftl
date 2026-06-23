@@ -585,6 +585,11 @@ mirada-win-kind-surface = · superficie del Cuerpo ·
 
 # === mirada-greeter ===
 mirada-greeter-menu-session = Sesión
+mirada-greeter-menu-bg = Fondo
+mirada-greeter-bg-matrix = Lluvia Matrix
+mirada-greeter-bg-stars = Estrellas
+mirada-greeter-bg-waves = Ondas
+mirada-greeter-bg-off = Apagar fondo
 mirada-greeter-session-submit = Iniciar sesión
 mirada-greeter-session-goto-user = Ir a usuario
 mirada-greeter-session-goto-pass = Ir a contraseña
