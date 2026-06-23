@@ -3148,6 +3148,10 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                     if let Some(v) = value.as_str() {
                         m.greeter.anim = v.to_string();
                         m.greeter.rain_enabled = true; // elegir animación la enciende
+                        // El fuego pide ámbar por defecto (en verde parece pasto).
+                        if v == "fire" {
+                            m.greeter.rain_color = "amber".into();
+                        }
                     }
                 }
                 Some("rain_color") => {

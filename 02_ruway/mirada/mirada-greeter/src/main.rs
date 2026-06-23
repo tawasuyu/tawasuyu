@@ -654,6 +654,10 @@ impl App for Greeter {
             Msg::SetAnim(a) => {
                 m.anim = a;
                 m.rain_enabled = true;
+                // El fuego pide ámbar por defecto (en verde parece pasto).
+                if a == state::BgAnim::Fire {
+                    m.rain_color = state::RainColor::Amber;
+                }
                 persist(&m);
             }
         }
