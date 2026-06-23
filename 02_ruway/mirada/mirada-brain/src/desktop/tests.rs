@@ -644,6 +644,48 @@ fn removing_an_output_keeps_its_windows_in_their_workspace() {
     assert_eq!(d.outputs().len(), 1);
 }
 
+#[test]
+fn dragging_a_window_across_monitors_moves_it_to_that_outputs_workspace() {
+    let mut d = desktop_with_two_outputs(); // salida 0 @x0 (ws0), salida 1 @x1920 (ws1)
+    open(&mut d, 1); // en la salida 0 (ws 0)
+    assert!(d.workspaces[0].windows().contains(&1));
+    // Arrastre cuyo centro cae en la salida 1 (x≈2320, dentro de 1920..3840).
+    d.on_event(BodyEvent::WindowFloatTo { id: 1, rect: Rect::new(2000, 100, 640, 480) });
+    // Se mudó al escritorio de la salida 1 y el foco la siguió.
+    assert!(d.workspaces[1].windows().contains(&1), "mudada al ws de la salida 1");
+    assert!(!d.workspaces[0].windows().contains(&1), "ya no en el ws de origen");
+    assert_eq!(d.focused_output(), 1);
+}
+
+#[test]
+fn maximizing_a_window_dragged_to_another_monitor_stays_there() {
+    let mut d = desktop_with_two_outputs();
+    open(&mut d, 1);
+    d.on_event(BodyEvent::WindowFloatTo { id: 1, rect: Rect::new(2000, 100, 640, 480) });
+    // Maximizar debe aterrizar en la geometría de la salida 1 (x=1920), no
+    // volver al monitor de origen (era «la muevo, la maximizo y se regresa»).
+    let cmds = d.apply(DesktopAction::ToggleMaximize);
+    let win = places(&cmds).iter().find(|x| x.id == 1).expect("la 1 colocada");
+    assert!(win.floating, "maximizar = flotar al área de trabajo");
+    assert_eq!(win.rect.x, 1920, "maximiza donde está, no en el monitor de origen");
+}
+
+#[test]
+fn switching_workspace_on_an_empty_monitor_keeps_the_other_monitors_window() {
+    let mut d = desktop_with_two_outputs();
+    open(&mut d, 1);
+    // La arrastro a la salida 1.
+    d.on_event(BodyEvent::WindowFloatTo { id: 1, rect: Rect::new(2000, 100, 640, 480) });
+    // Vuelvo el foco a la salida 0 (ahora vacía) y le cambio el escritorio.
+    assert!(d.focus_output_at(500, 100));
+    assert_eq!(d.focused_output(), 0);
+    let cmds = d.apply(DesktopAction::SwitchWorkspace(3)); // ws 3 vacío en la salida 0
+    // La ventana de la salida 1 sigue colocada y visible (antes desaparecía:
+    // vivía en el ws de origen que ya no mostraba ningún monitor).
+    let win = places(&cmds).iter().find(|x| x.id == 1).expect("la 1 sigue colocada");
+    assert!(win.visible, "no debe ocultarse al cambiar de ws en el OTRO monitor");
+}
+
 // --- Scratchpad ----------------------------------------------------
 
 #[test]

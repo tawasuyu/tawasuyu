@@ -262,21 +262,39 @@ impl Desktop {
                 }
             }
             BodyEvent::WindowFloatTo { id, rect } => {
-                // Arrastre interactivo: la ventana pasa a flotar en el
-                // rectángulo dado, en el escritorio donde viva.
-                let mut changed = false;
-                for ws in &mut self.workspaces {
-                    if ws.windows().contains(&id) {
-                        ws.set_floating(id, Some(rect));
-                        changed = true;
-                        break;
+                // Arrastre interactivo de una flotante. La reposiciona y —clave en
+                // multi-monitor— si su centro cruzó a OTRA salida, la **muda al
+                // escritorio de esa salida** (el foco la sigue). Sin esto la
+                // ventana seguía perteneciendo al escritorio del monitor de origen
+                // aunque se viera en el otro: al maximizarla volvía al monitor
+                // viejo (ToggleMaximize usa `focused_output`+`active`), y al
+                // cambiar de escritorio en el de origen se ocultaba (vivía en un
+                // ws que ya no mostraba ningún monitor).
+                let Some(cur_ws) =
+                    self.workspaces.iter().position(|ws| ws.windows().contains(&id))
+                else {
+                    return Vec::new();
+                };
+                let (cx, cy) = (rect.x + rect.w / 2, rect.y + rect.h / 2);
+                let target_output = self.outputs.iter().position(|o| o.rect.contains(cx, cy));
+                let dest_ws = match target_output {
+                    Some(oi) => {
+                        let target_ws = self.outputs[oi].workspace;
+                        if target_ws != cur_ws {
+                            self.workspaces[cur_ws].remove(id);
+                            self.workspaces[target_ws].add(id);
+                            // Que `focused()` la devuelva, así ToggleMaximize y los
+                            // atajos la agarran en su nuevo monitor.
+                            self.workspaces[target_ws].focus_window(id);
+                            self.focused_output = oi;
+                        }
+                        target_ws
                     }
-                }
-                if changed {
-                    self.relayout()
-                } else {
-                    Vec::new()
-                }
+                    // Entre monitores / fuera de toda salida: queda donde vive.
+                    None => cur_ws,
+                };
+                self.workspaces[dest_ws].set_floating(id, Some(rect));
+                self.relayout()
             }
         }
     }
