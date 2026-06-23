@@ -273,7 +273,7 @@ fn sample_bilinear(src: &[u8], sw: i32, sh: i32, fx: f32, fy: f32) -> [f32; 4] {
 /// Rota un búfer ARGB8888 premultiplicado `rot` rad alrededor de su centro,
 /// emitiendo el búfer de su AABB (esquinas transparentes). Muestreo inverso
 /// bilineal — premultiplicado interpola sin halos.
-fn rotate_buffer(src: &[u8], sw: i32, sh: i32, rot: f32) -> Rasterized {
+pub fn rotate_buffer(src: &[u8], sw: i32, sh: i32, rot: f32) -> Rasterized {
     let (s, c) = rot.sin_cos();
     let aw = ((sw as f32 * c.abs()) + (sh as f32 * s.abs())).ceil().max(1.0) as i32;
     let ah = ((sw as f32 * s.abs()) + (sh as f32 * c.abs())).ceil().max(1.0) as i32;

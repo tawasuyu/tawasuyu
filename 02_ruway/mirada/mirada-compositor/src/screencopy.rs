@@ -617,6 +617,59 @@ pub fn servir_offscreen<E>(
     servir(renderer, &target, capturas);
 }
 
+/// Renderiza `elements` en un **offscreen** `size` y devuelve sus píxeles RGBA
+/// (en realidad bytes `Xrgb8888` = `[B,G,R,X]`, listos para subir como
+/// `Argb8888`), corregidos de orientación (el framebuffer GL es bottom-up). Lo
+/// usa la vista espacial para sacar una miniatura VIVA de un escritorio y luego
+/// **rotarla en CPU** ([`crate::text::rotate_buffer`]) — la única forma de
+/// rotar contenido vivo a un ángulo libre, ya que los elementos GL no rotan. La
+/// transparencia de las esquinas la pone la rotación, así que acá el contenido
+/// puede ir opaco (`Xrgb8888`, el camino probado de screencopy). `None` si algún
+/// paso de GPU falla (el llamante cae al esquema rotado).
+pub fn render_elements_offscreen<E>(
+    renderer: &mut GlesRenderer,
+    size: (i32, i32),
+    elements: &[E],
+) -> Option<Vec<u8>>
+where
+    E: smithay::backend::renderer::element::RenderElement<GlesRenderer>,
+{
+    if size.0 <= 0 || size.1 <= 0 {
+        return None;
+    }
+    let buffer_size: Size<i32, BufferCoord> = (size.0, size.1).into();
+    let mut tex = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buffer_size).ok()?;
+    let mut target = renderer.bind(&mut tex).ok()?;
+    let fisico: Size<i32, smithay::utils::Physical> = (size.0, size.1).into();
+    let damage = [Rectangle::from_size(fisico)];
+    {
+        let mut frame = renderer.render(&mut target, fisico, Transform::Normal).ok()?;
+        frame.clear(Color32F::TRANSPARENT, &damage).ok()?;
+        draw_render_elements(&mut frame, 1.0, elements, &damage).ok()?;
+        let _ = frame.finish().ok()?;
+    }
+    let rect: Rectangle<i32, BufferCoord> = Rectangle::from_size(buffer_size);
+    let mapping = renderer.copy_framebuffer(&target, rect, FOURCC).ok()?;
+    let bytes = renderer.map_texture(&mapping).ok()?;
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    if bytes.len() < w * h * 4 {
+        return None;
+    }
+    let mut out = bytes[..w * h * 4].to_vec();
+    if mapping.flipped() {
+        // El framebuffer GL es bottom-up: invertimos las filas para que la
+        // miniatura quede con el origen arriba-izquierda como el resto.
+        let row = w * 4;
+        for y in 0..h / 2 {
+            let (a, b) = (y * row, (h - 1 - y) * row);
+            for k in 0..row {
+                out.swap(a + k, b + k);
+            }
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

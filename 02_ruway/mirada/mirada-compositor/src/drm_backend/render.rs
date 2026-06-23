@@ -452,6 +452,125 @@ impl DrmState {
         )));
     }
 
+    /// Renderiza un tile **rotado** de la vista espacial con su contenido VIVO:
+    /// compone (fondo + ventanas reales a escala + borde + número) en una textura
+    /// offscreen axis-aligned y la rota en CPU ([`crate::text::rotate_buffer`]) —
+    /// la única forma de rotar superficies vivas a un ángulo libre, ya que los
+    /// elementos GL sólo giran en pasos de 90°. Devuelve el búfer del AABB rotado
+    /// (`Argb8888`, esquinas transparentes) listo para colocar centrado, o `None`
+    /// si algún paso de GPU falla (el llamante cae al esquema de rects).
+    #[allow(clippy::too_many_arguments)]
+    fn render_tile_live_rotated(
+        &mut self,
+        tile: (i32, i32, i32, i32), // (x, y, w, h) en pantalla
+        scale: f32,
+        rot: f32,
+        wins: &[(u64, i32, i32, i32, i32, bool)],
+        border: Option<[u8; 4]>,
+        badge: &crate::text::Rasterized,
+        colors: ([f32; 4], [f32; 4], [f32; 4]), // (tile_bg, win_bg, win_focus)
+    ) -> Option<crate::text::Rasterized> {
+        let (tx, ty, tw, th) = tile;
+        if tw <= 0 || th <= 0 {
+            return None;
+        }
+        let (tile_bg, win_bg, win_focus) = colors;
+        let mut live: Vec<Frame<GlesRenderer>> = Vec::new();
+        // Fondo opaco del tile (llena todo → el offscreen no tiene zonas
+        // transparentes; la transparencia de las esquinas la pone la rotación).
+        let mut bg = SolidColorBuffer::default();
+        bg.update((tw, th), tile_bg);
+        live.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &bg,
+            (0, 0),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        )));
+        // Ventanas: superficie viva a escala (coords LOCALES al tile), o rect.
+        for (id, wx, wy, ww2, wh2, focus) in wins {
+            let (lx, ly) = (wx - tx, wy - ty);
+            let surface = self
+                .app
+                .windows
+                .iter()
+                .find(|w| w.id == *id)
+                .filter(|w| crate::buffer_render_sano(&w.surface))
+                .map(|w| w.surface.clone());
+            let mut puesto = false;
+            if let Some(surface) = surface {
+                let elems = render_elements_from_surface_tree(
+                    &mut self.renderer,
+                    &surface,
+                    (lx, ly),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                );
+                if !elems.is_empty() {
+                    let origin = Point::<i32, Physical>::from((lx, ly));
+                    for el in elems {
+                        live.push(Frame::ScaledWindow(RescaleRenderElement::from_element(
+                            el,
+                            origin,
+                            scale as f64,
+                        )));
+                    }
+                    puesto = true;
+                }
+            }
+            if !puesto {
+                let mut wb = SolidColorBuffer::default();
+                wb.update((*ww2, *wh2), if *focus { win_focus } else { win_bg });
+                live.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                    &wb,
+                    (lx, ly),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )));
+            }
+        }
+        // Borde del resaltado: cuatro franjas finas.
+        if let Some(bc) = border {
+            let cf = [bc[0] as f32 / 255.0, bc[1] as f32 / 255.0, bc[2] as f32 / 255.0, bc[3] as f32 / 255.0];
+            for (x, y, w, h) in [(0, 0, tw, 3), (0, th - 3, tw, 3), (0, 0, 3, th), (tw - 3, 0, 3, th)] {
+                let mut b = SolidColorBuffer::default();
+                b.update((w, h), cf);
+                live.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                    &b,
+                    (x, y),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )));
+            }
+        }
+        // Número del escritorio (arriba-izquierda del tile).
+        let bbuf = MemoryRenderBuffer::from_slice(
+            &badge.rgba,
+            Fourcc::Argb8888,
+            (badge.width, badge.height),
+            1,
+            Transform::Normal,
+            None,
+        );
+        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+            &mut self.renderer,
+            (8.0, 6.0),
+            &bbuf,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            live.push(Frame::Text(el));
+        }
+        // Offscreen → píxeles → rotar en CPU.
+        let px = crate::screencopy::render_elements_offscreen(&mut self.renderer, (tw, th), &live)?;
+        Some(crate::text::rotate_buffer(&px, tw, th, rot))
+    }
+
     /// Emite la **vista espacial (Prezi)** en vivo: un zoom-out con un mosaico
     /// por escritorio ocupado, arreglado según la geometría 2D, con las ventanas
     /// a escala y el activo resaltado. Pobla `overview_tiles` para el hit-test
@@ -673,23 +792,40 @@ impl DrmState {
             if !girado(t.rot) {
                 continue;
             }
-            // Ventanas en coords LOCALES del tile (el rasterizador pinta local).
-            // Los tiles girados se componen en CPU como esquema (rects), no con
-            // la superficie viva — el camino vivo es sólo para tiles rectos.
-            let wins_local: Vec<(i32, i32, i32, i32, bool)> =
-                t.wins.iter().map(|(_id, wx, wy, ww2, wh2, f)| (wx - t.x, wy - t.y, *ww2, *wh2, *f)).collect();
             let border = t.selected.then(|| to_u8(ACTIVE_BORDER));
-            let comp = crate::text::rasterize_tile_rotated(
-                t.w,
-                t.h,
-                t.rot,
-                to_u8(TILE_BG),
-                border,
-                &wins_local,
-                to_u8(WIN_BG),
-                to_u8(WIN_FOCUS),
-                Some(badge),
-            );
+            // CAMINO VIVO: renderizamos el tile (fondo + ventanas REALES a escala +
+            // borde + número) a una textura offscreen, lo leemos y lo ROTAMOS en
+            // CPU. Así el contenido vivo se ve girado de verdad. Si algún paso de
+            // GPU falla, caemos al esquema (rects) —rotado igual— para no quedar
+            // sin nada.
+            let comp = self
+                .render_tile_live_rotated(
+                    (t.x, t.y, t.w, t.h),
+                    t.scale,
+                    t.rot,
+                    &t.wins,
+                    border,
+                    badge,
+                    (TILE_BG, WIN_BG, WIN_FOCUS),
+                )
+                .unwrap_or_else(|| {
+                    let wins_local: Vec<(i32, i32, i32, i32, bool)> = t
+                        .wins
+                        .iter()
+                        .map(|(_id, wx, wy, ww2, wh2, f)| (wx - t.x, wy - t.y, *ww2, *wh2, *f))
+                        .collect();
+                    crate::text::rasterize_tile_rotated(
+                        t.w,
+                        t.h,
+                        t.rot,
+                        to_u8(TILE_BG),
+                        border,
+                        &wins_local,
+                        to_u8(WIN_BG),
+                        to_u8(WIN_FOCUS),
+                        Some(badge),
+                    )
+                });
             let buf = MemoryRenderBuffer::from_slice(
                 &comp.rgba,
                 Fourcc::Argb8888,
