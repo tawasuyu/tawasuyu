@@ -15,6 +15,7 @@
 //! destino (`wawa` / `mirada` / `pata`) y se persiste en su formato nativo.
 
 mod animaciones;
+mod greeter;
 mod perfiles;
 mod themes;
 
@@ -296,6 +297,9 @@ struct Model {
     /// Biblioteca de **conjuntos de animación** (transición/slide/Prezi). El
     /// perfil activo referencia uno; el panel Animaciones edita el referenciado.
     animaciones: animaciones::Animations,
+    /// Config del **greeter** (DM): fondo animado + paleta. Se persiste en
+    /// `greeter.conf`; el greeter la lee en el próximo login.
+    greeter: greeter::GreeterCfg,
     allichay: AllichayState,
     host: HostInfo,
     status: String,
@@ -483,6 +487,8 @@ struct SaveDirty {
     themes: bool,
     /// Biblioteca de conjuntos de animación (`animaciones.ron`).
     animaciones: bool,
+    /// Config del greeter (`greeter.conf`).
+    greeter: bool,
 }
 
 #[derive(Clone)]
@@ -968,6 +974,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
 
     let themes = themes::Themes::load_or_seed(&cfg.theme_variant, &cfg.accent);
     let animaciones = animaciones::Animations::load_or_seed();
+    let greeter_cfg = greeter::GreeterCfg::load();
 
     let prezi = PreziEdit::from_config(&mirada);
 
@@ -991,6 +998,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         rules_path,
         themes,
         animaciones,
+        greeter: greeter_cfg,
         allichay: AllichayState::new(),
         host,
         status: String::new(),
@@ -1275,6 +1283,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         vista.sections.push(s); // Perfiles (lista limpia: acciones + perfiles)
     }
     vista.sections.push(wallpaper_section(m)); // Wallpapers (imagen + automático, unificado)
+    vista.sections.push(greeter_section(&m.greeter)); // Fondo del greeter (pantalla de login)
     if let Some(s) = take("vista_espacial") {
         vista.sections.push(s); // Vistas: Prezi
     }
@@ -1375,6 +1384,34 @@ fn icono_perfil(name: &str) -> &'static str {
         "dwm" => "▦",
         _ => "★",
     }
+}
+
+/// Sección «Greeter»: el fondo animado de la pantalla de login (DM). Escribe
+/// `greeter.conf`; el greeter lo lee en el próximo arranque. El catálogo de
+/// animaciones/paletas sale de [`greeter::ANIMS`] / [`greeter::COLORS`].
+fn greeter_section(g: &greeter::GreeterCfg) -> Section {
+    use allichay::{EnumOption, Field};
+    Section::new("greeter::fondo", "Greeter (login)")
+        .icon("🔐")
+        .help(
+            "El fondo animado de la pantalla de inicio (greeter). En \
+             multi-monitor se pinta en todos los monitores y la tarjeta de \
+             login viaja al que tiene el ratón. Los cambios entran en el \
+             próximo login.",
+        )
+        .field(Field::toggle("rain", "Fondo animado", g.rain_enabled))
+        .field(Field::dropdown(
+            "anim",
+            "Animación",
+            g.anim.clone(),
+            greeter::ANIMS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
+        ))
+        .field(Field::dropdown(
+            "rain_color",
+            "Color",
+            g.rain_color.clone(),
+            greeter::COLORS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
+        ))
 }
 
 fn perfiles_schema(m: &Model) -> Schema {
@@ -3103,6 +3140,27 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
+        // Greeter (DM): fondo animado + paleta → greeter.conf (próximo login).
+        "greeter" => {
+            match rel.leaf() {
+                Some("rain") => m.greeter.rain_enabled = value.as_bool().unwrap_or(false),
+                Some("anim") => {
+                    if let Some(v) = value.as_str() {
+                        m.greeter.anim = v.to_string();
+                        m.greeter.rain_enabled = true; // elegir animación la enciende
+                    }
+                }
+                Some("rain_color") => {
+                    if let Some(v) = value.as_str() {
+                        m.greeter.rain_color = v.to_string();
+                    }
+                }
+                _ => {}
+            }
+            m.dirty.greeter = true;
+            m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
         // Autoarranque: la lista reescribe ~/.config/mirada/autostart al toque.
         "autostart" => {
             if let Some(items) = value.as_list() {
@@ -3227,6 +3285,13 @@ fn flush_saves(m: &mut Model) {
             Err(e) => err = Some(format!("· animaciones save: {e}")),
         }
         m.dirty.animaciones = false;
+    }
+    if m.dirty.greeter {
+        match m.greeter.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· greeter save: {e}")),
+        }
+        m.dirty.greeter = false;
     }
     if let Some(e) = err {
         m.status = e;
