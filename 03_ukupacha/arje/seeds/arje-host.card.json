@@ -96,6 +96,40 @@
         },
         {
             "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFHS05",
+            "label": "arje-splash",
+            "provides": [],
+            "requires": [{ "Device": { "class": "Drm" } }],
+            "permissions": {
+                "networking": "none",
+                "filesystem": "read-only",
+                "ipc": { "allow": [] },
+                "processes": true
+            },
+            "soma": {
+                "namespaces": {
+                    "mount": false, "pid": false, "net": false,
+                    "uts": false, "ipc": false, "user": false, "cgroup": false
+                },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/splash", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": {
+                "Native": {
+                    "exec": "/usr/lib/arje/arje-splash",
+                    "argv": [],
+                    "envp": []
+                }
+            },
+            "supervision": "OneShot",
+            "lifecycle": "oneshot",
+            "priority": "high",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
             "id": "01HQAR53D4M2NBV8KZTYXFHS04",
             "label": "display-manager-mesa",
             "provides": [],

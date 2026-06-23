@@ -103,6 +103,31 @@ lo visual (cero parpadeo, crossfade) por captura/observación en QEMU.
 - [x] SDD (este documento)
 - [x] Fase 0 — cmdline flicker-free (`arje-installer`)
 - [x] Fase 0 — logo GOP en `arje-loader` (`gop::paint_boot_splash`, marca central placeholder; falta verificar en QEMU+OVMF)
-- [ ] Fase 1 — crate `arje-splash` (DRM dumb buffer + animación)
-- [ ] Fase 1 — Ente génesis de `arje-splash` en el seed
+- [x] Fase 1 — crate `arje-splash` (DRM dumb buffer + animación): render puro
+  testeable (`render.rs`, 5 tests) + capa DRM best-effort (`drm_present.rs`)
+  que reusa el modo vigente del CRTC (sin re-modeset), double-buffer con
+  page-flip y fallback a `set_crtc`. Animación: respiración del logo de marca
+  (misma paleta que el loader) + barra de progreso indeterminada. Suelta la
+  pantalla por SIGTERM o por tope `ARJE_SPLASH_MAX_MS` (def 8 s). **Falta
+  verificar en QEMU+OVMF** (no reproducible en el sandbox).
+- [x] Fase 1 — Ente génesis de `arje-splash` en el seed: `priority: high`,
+  `OneShot`, `requires Device{Drm}`. En `synthesize_dev_seed` (dev) y en los
+  seeds canónicos `seeds/arje-{host,qemu}.card.json` — declarado **antes** del
+  display-manager (host) / primero (qemu, para verificar el splash aislado).
 - [ ] Fase 2 — contrato de handoff splash↔mirada + crossfade
+
+## Empaquetado (cómo llega al boot)
+
+El `arje-packager` recorre `genesis` y, por cada Ente `Native`, exige el binario
+del host vía `--bin <label>=<path>`. Para incluir el splash:
+
+```bash
+cargo build -p arje-splash --release
+arje-packager --seed 03_ukupacha/arje/seeds/arje-qemu.card.json \
+  --bin arje-splash=target/release/arje-splash \
+  --bin agetty-ttyS0=/sbin/agetty \
+  --out initramfs.cpio.gz
+```
+
+Queda en el initramfs como `/usr/lib/arje/arje-splash` (la ruta del `exec` de su
+Card). Sin el `--bin`, el packager falla pidiéndolo (integridad seed↔binarios).

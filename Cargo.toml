@@ -461,6 +461,7 @@ members = [
     "03_ukupacha/arje/init/arje-packager",
     "03_ukupacha/arje/init/arje-snapshot",
     "03_ukupacha/arje/init/arje-soma",
+    "03_ukupacha/arje/init/arje-splash",
     "03_ukupacha/arje/init/arje-zero",
     "03_ukupacha/arje/runtime/arje-attest",
     "03_ukupacha/arje/runtime/arje-brain",
@@ -576,6 +577,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # === Linux primitives (arje) ===
 nix = { version = "0.29", features = ["signal", "process", "sched", "mount", "fs", "socket", "net", "user"] }
 libc = "0.2"
+# DRM/KMS legacy (dumb buffer) para el splash nativo del arranque sin parpadeo.
+# Misma versión que reexporta smithay (mirada-compositor) — el lock ya la fija.
+drm = "0.14"
 
 # === IDs / Hash / Crypto ===
 ulid = { version = "1", features = ["serde"] }

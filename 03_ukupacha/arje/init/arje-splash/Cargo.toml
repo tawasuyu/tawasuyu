@@ -1,0 +1,15 @@
+[package]
+name = "arje-splash"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "arje-splash — splash nativo del arranque sin parpadeo. Ente génesis de prioridad alta que toma el nodo DRM reusando el modo vigente (sin re-modeset → sin flash desde el logo del loader) y pinta un splash animado sobre un dumb buffer hasta que mirada toma la pantalla. Equivalente nativo de Plymouth. Ver SDD-ARRANQUE-SIN-PARPADEO.md (Fase 1)."
+
+[[bin]]
+name = "arje-splash"
+path = "src/main.rs"
+
+[dependencies]
+drm = { workspace = true }
+libc = { workspace = true }

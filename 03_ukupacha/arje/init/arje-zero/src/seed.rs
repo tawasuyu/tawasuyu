@@ -172,6 +172,15 @@ fn synthesize_dev_seed() -> EntityCard {
         }
     }
 
+    // El splash nativo del arranque sin parpadeo (`arje-splash`): Ente de
+    // prioridad alta que toma el DRM reusando el modo del loader y pinta el
+    // splash animado hasta que mirada toma la pantalla. Va ANTES de mirada en
+    // el orden de génesis para que pinte el primer frame gráfico. Best-effort:
+    // si el binario no está o no hay GPU, el fractal arranca igual.
+    if let Some(card) = arje_splash_card() {
+        genesis.push(card);
+    }
+
     // El compositor Wayland tawasuyu (`mirada-compositor --drm`) como Ente
     // supervisado por arje-zero. Si el binario no esta instalado en el
     // host, el fractal arranca sin compositor — util en CI o devs sin GPU.
@@ -270,6 +279,44 @@ fn restart_supervision() -> Supervision {
 ///     quedar la pantalla negra esperando a que el DM externo lo note;
 ///   - los envp se versionan con el resto del fractal en seed.card.json,
 ///     no en un script shell desperdigado en `/usr/local/bin`.
+/// Construye el Ente `arje-splash`: el splash nativo del arranque sin
+/// parpadeo (`SDD-ARRANQUE-SIN-PARPADEO.md`, Fase 1). Toma el nodo DRM
+/// reusando el modo que dejó el GOP del loader (sin re-modeset → sin flash) y
+/// pinta un splash animado hasta soltar la pantalla para mirada.
+///
+/// Va declarado **antes** que `mirada_session_card()` en el génesis para que
+/// pinte el primer frame gráfico. `OneShot`: es decorativo y se autotermina
+/// (por SIGTERM o por su tope de tiempo), así que no debe reiniciarse con
+/// back-off. Devuelve `None` si el binario no está instalado — el fractal
+/// arranca igual sin splash (CI, dev sin GPU).
+fn arje_splash_card() -> Option<EntityCard> {
+    const SPLASH_BIN: &str = "/usr/local/bin/arje-splash";
+    if !Path::new(SPLASH_BIN).exists() {
+        return None;
+    }
+    // Abre /dev/dri/* directo (igual que mirada). Declaramos la capacidad para
+    // que quien valide la card sepa que esta Ente toca DRM.
+    let mut requires = BTreeSet::new();
+    requires.insert(Capability::Device { class: arje_card::DeviceClass::Drm });
+    Some(EntityCard {
+        schema_version: CARD_SCHEMA_VERSION,
+        id: Ulid::new(),
+        lineage: None,
+        label: "arje-splash".into(),
+        provides: BTreeSet::new(),
+        requires,
+        soma: SomaSpec::default(),
+        payload: Payload::Native {
+            exec: SPLASH_BIN.into(),
+            argv: vec![],
+            envp: vec![],
+        },
+        supervision: Supervision::OneShot,
+        genesis: vec![],
+        ..Default::default()
+    })
+}
+
 fn mirada_session_card() -> Option<EntityCard> {
     const COMPOSITOR_BIN: &str = "/usr/local/bin/mirada-compositor";
     if !Path::new(COMPOSITOR_BIN).exists() {
