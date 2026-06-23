@@ -1,5 +1,6 @@
 // Implementación de App — operaciones del compositor.
 use crate::*;
+use smithay::utils::IsAlive;
 
 impl App {
     /// La layer surface **interactiva** (capas Overlay/Top — p. ej. las barras de
@@ -57,6 +58,45 @@ impl App {
                 .next()
                 .is_some()
         })
+    }
+
+    /// La superficie del popup más PROFUNDO abierto (la hoja del árbol de menús
+    /// = el submenú activo), o `None` si no hay ninguno. Sólo cuenta superficies
+    /// vivas. Es a quien debe ir el foco de teclado para navegar el menú.
+    pub(crate) fn topmost_popup_surface(&self) -> Option<WlSurface> {
+        let mut best: Option<(usize, WlSurface)> = None;
+        for w in &self.windows {
+            deepest_popup(&w.surface, 0, &mut best);
+        }
+        best.map(|(_, s)| s)
+    }
+
+    /// Mantiene el foco de teclado sobre el menú abierto para que el cliente
+    /// (GTK/Qt) lo navegue con flechas/Enter/Escape. Al abrirse el primer popup
+    /// recuerda a quién devolvérselo; sigue el foco al submenú más profundo; y al
+    /// cerrarse todos lo restaura. Se llama desde `grab`, `commit` (con menú
+    /// activo) y `popup_destroyed`.
+    pub(crate) fn reconcile_popup_keyboard(&mut self) {
+        let Some(kb) = self.keyboard.clone() else {
+            return;
+        };
+        match self.topmost_popup_surface() {
+            Some(surface) => {
+                if self.popup_saved_focus.is_none() {
+                    // Primer popup del menú: recordamos el foco actual.
+                    self.popup_saved_focus = Some(kb.current_focus());
+                }
+                if kb.current_focus().as_ref() != Some(&surface) {
+                    kb.set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+                }
+            }
+            None => {
+                // El menú se cerró del todo: devolvemos el teclado a su dueño.
+                if let Some(prev) = self.popup_saved_focus.take() {
+                    kb.set_focus(self, prev, smithay::utils::SERIAL_COUNTER.next_serial());
+                }
+            }
+        }
     }
 
     /// Cierra todos los popups abiertos mandándoles `popup_done` (el cliente
@@ -1513,6 +1553,24 @@ fn popup_under_tree(
         }
     }
     hit
+}
+
+/// Busca el popup VIVO más profundo colgado de `parent` (la hoja del árbol de
+/// menús). Guarda en `best` el par `(profundidad, superficie)` de mayor
+/// profundidad. Ignora superficies muertas (un popup recién destruido puede
+/// seguir listado en el árbol hasta el `cleanup`).
+fn deepest_popup(parent: &WlSurface, depth: usize, best: &mut Option<(usize, WlSurface)>) {
+    for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(parent) {
+        let s = popup.wl_surface().clone();
+        if !s.alive() {
+            continue;
+        }
+        let d = depth + 1;
+        if best.as_ref().map_or(true, |(bd, _)| d > *bd) {
+            *best = Some((d, s.clone()));
+        }
+        deepest_popup(&s, d, best);
+    }
 }
 
 /// Junta recursivamente todos los popups (menús) colgados de `parent`.

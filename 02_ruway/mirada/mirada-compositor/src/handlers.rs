@@ -54,6 +54,11 @@ impl CompositorHandler for App {
         // se posicionen y persistan.
         self.popups.commit(surface);
         self.popups.cleanup();
+        // Con un menú activo, seguí el foco de teclado al submenú más profundo
+        // que acaba de mapear (para navegar con flechas hacia los submenús).
+        if self.popup_saved_focus.is_some() {
+            self.reconcile_popup_keyboard();
+        }
         // Daño para screencopy `copy_with_damage`: el commit de un toplevel
         // gestionado (o de una de sus subsuperficies) daña su celda; el de
         // un layer surface (waybar y cía.) daña todo — granularidad gruesa
@@ -444,9 +449,21 @@ impl XdgShellHandler for App {
     // El cliente pide hacer su popup modal (grab de menú). El `grab_popup` de
     // smithay exige un tipo de foco que implemente `From<PopupKind>`, y el de
     // mirada es `WlSurface` (no lo implementa) — así que el grab modal no se
-    // monta acá. En su lugar, el input enruta el puntero al popup bajo el cursor
-    // y un click afuera lo cierra (ver `popup_under` / `dismiss_popups` en input).
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+    // monta acá. En su lugar: el puntero se enruta al popup bajo el cursor y un
+    // click afuera lo cierra (`popup_under`/`dismiss_popups`), y le damos el FOCO
+    // DE TECLADO al menú para navegarlo con flechas/Enter/Escape (lo maneja el
+    // cliente). `reconcile_popup_keyboard` recuerda el foco previo y lo restaura
+    // al cerrarse (ver `popup_destroyed`).
+    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
+        self.reconcile_popup_keyboard();
+    }
+
+    fn popup_destroyed(&mut self, _surface: PopupSurface) {
+        // Un nivel de menú se cerró: purga el árbol y reajusta el foco de teclado
+        // —al submenú padre si queda, o de vuelta a la ventana si era el último.
+        self.popups.cleanup();
+        self.reconcile_popup_keyboard();
+    }
 
     fn reposition_request(
         &mut self,

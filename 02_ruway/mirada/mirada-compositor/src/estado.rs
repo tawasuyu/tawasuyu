@@ -415,6 +415,12 @@ pub(crate) struct App {
     /// primer commit con buffer de esa superficie (ya mapeada, ya con teclado
     /// bindeado). `None` cuando no hay foco pendiente.
     pub(crate) pending_kb_focus: Option<WlSurface>,
+    /// Mientras hay un menú (popup con grab) abierto, guarda **a quién** hay que
+    /// devolverle el foco de teclado al cerrarse (la ventana que lo tenía). El
+    /// foco se mueve al popup para navegar con flechas/Enter/Escape (lo maneja
+    /// el cliente). `Some(prev)` = menú activo; `None` = sin menú. Ver
+    /// `reconcile_popup_keyboard`.
+    pub(crate) popup_saved_focus: Option<Option<WlSurface>>,
     pub(crate) pointer: Option<PointerHandle<App>>,
     /// Posición del puntero en coordenadas globales.
     pub(crate) pointer_loc: (f64, f64),
