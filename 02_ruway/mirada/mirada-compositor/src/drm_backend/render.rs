@@ -474,15 +474,14 @@ impl DrmState {
         if tw <= 0 || th <= 0 {
             return None;
         }
-        // Marcador (una vez): confirma que ESTE binario tiene el camino de tile
-        // rotado VIVO. Si nunca aparece y los tiles giran esquemáticos, estás
-        // corriendo un binario viejo (otra ruta que la que rebuildeás).
-        {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static L: AtomicBool = AtomicBool::new(false);
-            if !L.swap(true, Ordering::Relaxed) {
-                eprintln!("mirada-compositor · prezi: intentando tile rotado VIVO ({tw}x{th}, rot={rot:.2})");
-            }
+        // Cap de rendimiento: el render-vivo-rotado hace un offscreen + readback +
+        // rotación CPU por frame, O(área). Con el tile agrandado durante el zoom
+        // (cerca de pantalla completa) eso tironea. Sólo lo hacemos con el tile
+        // CHICO (mosaico asentado), donde el giro se aprecia; mientras el zoom lo
+        // tiene grande, devolvemos None → esquema barato (el giro rápido no se nota).
+        const LIVE_ROT_MAX: i32 = 560;
+        if tw.max(th) > LIVE_ROT_MAX {
+            return None;
         }
         let (tile_bg, win_bg, win_focus) = colors;
         let mut live: Vec<Frame<GlesRenderer>> = Vec::new();
