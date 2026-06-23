@@ -218,8 +218,10 @@ pub(crate) struct OverviewData {
     pub(crate) loads: Vec<usize>,
     /// Rect de referencia en el que están los `layouts` (para normalizar).
     pub(crate) work: mirada_brain::Rect,
-    /// Rects de ventanas de cada escritorio, en el espacio de `work`.
-    pub(crate) layouts: Vec<Vec<mirada_brain::Rect>>,
+    /// Ventanas de cada escritorio en el espacio de `work`: `(id, rect)`. El `id`
+    /// permite mapear cada rect a su `ManagedWindow` y pintar su **superficie
+    /// viva** a escala en la miniatura (no un rectángulo plano).
+    pub(crate) layouts: Vec<Vec<(u64, mirada_brain::Rect)>>,
 }
 
 /// Una ventana de cliente que el compositor gestiona.

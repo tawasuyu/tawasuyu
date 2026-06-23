@@ -278,7 +278,7 @@ impl App {
         let layouts = d
             .workspace_layouts(work)
             .into_iter()
-            .map(|ws| ws.iter().filter(|p| p.visible).map(|p| p.rect).collect())
+            .map(|ws| ws.iter().filter(|p| p.visible).map(|p| (p.id, p.rect)).collect())
             .collect();
         Some(OverviewData {
             active: d.active_index(),

@@ -527,7 +527,12 @@ impl DrmState {
             /// `≠0` = se compone en CPU y se rota (ver más abajo).
             rot: f32,
             active: bool,
-            wins: Vec<(i32, i32, i32, i32, bool)>,
+            /// `(id, x, y, w, h, focus)` por ventana: el `id` mapea a la superficie
+            /// viva; el rect es la miniatura ya posicionada.
+            wins: Vec<(u64, i32, i32, i32, i32, bool)>,
+            /// Factor de miniaturización (miniatura/real) para escalar la
+            /// superficie viva de cada ventana al pintarla en el tile.
+            scale: f32,
             num: String,
         }
         let mut tiles = Vec::new();
@@ -545,14 +550,17 @@ impl DrmState {
             const PAD: f32 = 6.0;
             let iw = tw - 2.0 * PAD;
             let ih = th - 2.0 * PAD;
+            // Escala miniatura: el área de trabajo (`ww` px) entra en `iw` px.
+            let scale = (iw / ww).max(0.0);
             let wins = data.layouts[i]
                 .iter()
-                .map(|wr| {
+                .map(|(id, wr)| {
                     let nx = (wr.x - data.work.x) as f32 / ww;
                     let ny = (wr.y - data.work.y) as f32 / wh;
                     let nw = (wr.w as f32 / ww).clamp(0.0, 1.0);
                     let nh = (wr.h as f32 / wh).clamp(0.0, 1.0);
                     (
+                        *id,
                         (tx + PAD + nx * iw) as i32,
                         (ty + PAD + ny * ih) as i32,
                         (nw * iw).max(2.0) as i32,
@@ -569,6 +577,7 @@ impl DrmState {
                 rot: p.rot,
                 active: i == data.active,
                 wins,
+                scale,
                 num: format!("{}", i + 1),
             });
         }
@@ -599,8 +608,10 @@ impl DrmState {
                 continue;
             }
             // Ventanas en coords LOCALES del tile (el rasterizador pinta local).
+            // Los tiles girados se componen en CPU como esquema (rects), no con
+            // la superficie viva — el camino vivo es sólo para tiles rectos.
             let wins_local: Vec<(i32, i32, i32, i32, bool)> =
-                t.wins.iter().map(|(wx, wy, ww2, wh2, f)| (wx - t.x, wy - t.y, *ww2, *wh2, *f)).collect();
+                t.wins.iter().map(|(_id, wx, wy, ww2, wh2, f)| (wx - t.x, wy - t.y, *ww2, *wh2, *f)).collect();
             let border = t.active.then(|| to_u8(ACTIVE_BORDER));
             let comp = crate::text::rasterize_tile_rotated(
                 t.w,
@@ -661,7 +672,34 @@ impl DrmState {
             }
         }
         for t in tiles.iter().filter(|t| !girado(t.rot)) {
-            for (wx, wy, ww2, wh2, focus) in &t.wins {
+            for (id, wx, wy, ww2, wh2, focus) in &t.wins {
+                // Miniatura VIVA: pintamos la superficie real de la ventana a
+                // escala `t.scale` en su lugar del tile. Si la ventana no tiene
+                // buffer sano (recién abierta, sin presentar), caemos al rect
+                // sólido — así el overview nunca queda "vacío" ni revienta.
+                let surface = self
+                    .app
+                    .windows
+                    .iter()
+                    .find(|w| w.id == *id)
+                    .filter(|w| crate::buffer_render_sano(&w.surface))
+                    .map(|w| w.surface.clone());
+                if let Some(surface) = surface {
+                    let elems = render_elements_from_surface_tree(
+                        &mut self.renderer,
+                        &surface,
+                        (*wx, *wy),
+                        t.scale as f64,
+                        1.0,
+                        Kind::Unspecified,
+                    );
+                    if !elems.is_empty() {
+                        for el in elems {
+                            into.push(Frame::Window(el));
+                        }
+                        continue;
+                    }
+                }
                 let mut wb = SolidColorBuffer::default();
                 wb.update((*ww2, *wh2), if *focus { WIN_FOCUS } else { WIN_BG });
                 into.push(Frame::Solid(SolidColorRenderElement::from_buffer(

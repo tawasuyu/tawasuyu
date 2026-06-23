@@ -56,7 +56,19 @@ impl DrmState {
                                     return FilterResult::Intercept(());
                                 }
                                 "Super+Tab" => {
-                                    st.switcher_step = Some((Workspaces, true));
+                                    // En modo **Prezi** el Win+Tab abre la VISTA
+                                    // ESPACIAL viva (mosaico de escritorios con sus
+                                    // ventanas reales a escala). En los demás modos
+                                    // (Hyprland/Direct) usa el switcher de celdas +
+                                    // slide de siempre.
+                                    if st.brain_is_embedded()
+                                        && st.config_workspace_switch_mode()
+                                            == mirada_brain::WorkspaceSwitchMode::Prezi
+                                    {
+                                        st.overview_open = true;
+                                    } else {
+                                        st.switcher_step = Some((Workspaces, true));
+                                    }
                                     return FilterResult::Intercept(());
                                 }
                                 "Super+Shift+Tab" => {
