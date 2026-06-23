@@ -247,18 +247,28 @@ impl App {
         let Some((active, loads)) = self.workspace_overview() else {
             return;
         };
-        let count = loads.len().max(1);
+        // La RUEDA de Tab sólo recorre escritorios CON ventanas — los vacíos se
+        // ven en el mapa pero no se navegan (saltar a uno vacío no aporta).
+        let occupied: Vec<usize> = (0..loads.len()).filter(|&i| loads[i] > 0).collect();
+        if occupied.is_empty() {
+            return;
+        }
         if !self.overview_open {
             self.overview_open = true;
             self.overview_closing = false;
             self.overview_via_wintab = true;
             self.overview_selected = active;
         }
-        self.overview_selected = if forward {
-            (self.overview_selected + 1) % count
-        } else {
-            (self.overview_selected + count - 1) % count
+        let n = occupied.len();
+        // Posición del resaltado dentro de la rueda de ocupados (si el resaltado
+        // cae en un vacío —p. ej. el activo está vacío— arrancamos del extremo).
+        let next = match occupied.iter().position(|&w| w == self.overview_selected) {
+            Some(p) if forward => (p + 1) % n,
+            Some(p) => (p + n - 1) % n,
+            None if forward => 0,
+            None => n - 1,
         };
+        self.overview_selected = occupied[next];
     }
 
     /// Confirma la navegación de la vista espacial: salta al escritorio

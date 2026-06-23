@@ -486,7 +486,11 @@ impl DrmState {
         const ACTIVE_BORDER: [f32; 4] = [0.20, 0.50, 0.95, 1.0];
         const BADGE_TX: [u8; 4] = [235, 238, 245, 255];
 
-        let occ: Vec<usize> = (0..data.loads.len()).filter(|&i| data.loads[i] > 0).collect();
+        // Mostramos TODOS los escritorios (mapa completo), también los vacíos —
+        // así se ve el mapa entero reducido. Los vacíos salen como tiles sin
+        // ventanas (sólo fondo + número) y no se resaltan (la rueda de Tab los
+        // saltea, ver `overview_step`).
+        let occ: Vec<usize> = (0..data.loads.len()).collect();
         // Scrim siempre (al fondo, lo empujamos último).
         let cw = rect.w as f32;
         let ch = rect.h as f32;
