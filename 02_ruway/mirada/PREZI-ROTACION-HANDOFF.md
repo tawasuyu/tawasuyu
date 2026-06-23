@@ -69,9 +69,18 @@ rotado se dibuja. Quedaban tres defectos visuales, los tres arreglados:
    devuelve `None` sólo ante fallo REAL de GPU; las ventanas sin buffer sano ya
    caen a un rect sólido dentro de la composición.
 
+4. **Rotación atada a la curva del zoom.** El vuelo de cámara interpolaba
+   posición/tamaño/escala por `t_open` pero NO el ángulo: el tile aparecía
+   rotado de golpe al abrir y se quedaba en diagonal al cerrar. Fix: `tl.rot *=
+   t_open` en el loop de cámara — a `t_open=0` (activo a pantalla completa) el
+   tile está derecho, a `t_open=1` (mosaico) toma su ángulo pleno; al cerrar
+   des-rota de 1→0. Cuando el ángulo interpolado es ~0 cae al camino recto de
+   quads (full-res), así que sólo mid-vuelo usa el bitmap rotado de baja-res.
+
 **PRÓXIMO PASO EN EL METAL:** correr el compositor DRM con el build nuevo,
 abrir Prezi con un escritorio rotado y confirmar: derecho (no de cabeza),
-vivo durante el zoom (no gris), sin parpadeo.
+vivo durante el zoom (no gris), sin parpadeo, y el giro entrando/saliendo
+con la curva del zoom (no de golpe).
 
 ---
 

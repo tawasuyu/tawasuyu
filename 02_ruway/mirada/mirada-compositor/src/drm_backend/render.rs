@@ -809,6 +809,12 @@ impl DrmState {
                 tl.w = (tl.w as f32 * s).round() as i32;
                 tl.h = (tl.h as f32 * s).round() as i32;
                 tl.scale *= s;
+                // El GIRO también sigue la curva del zoom: a `t_open=0` (escritorio
+                // activo a pantalla completa) el tile está DERECHO; a `t_open=1`
+                // (mosaico) toma su ángulo pleno. Sin esto aparecía rotado de golpe
+                // al abrir y se quedaba en diagonal al cerrar. Lineal en la `t_open`
+                // ya eased → se voltea «según la curva», y des-rota al cerrar.
+                tl.rot *= t_open;
                 for win in &mut tl.wins {
                     let (wx, wy) = cam(win.1 as f32, win.2 as f32);
                     win.1 = wx.round() as i32;
