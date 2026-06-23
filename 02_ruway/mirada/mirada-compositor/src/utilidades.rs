@@ -128,6 +128,17 @@ pub(crate) fn named_key(sym: Keysym) -> Option<String> {
     }
 }
 
+/// Despacha frame callbacks a los popups (menús) colgados de `parent`, recursivo
+/// (submenús incluidos). Sin esto un menú GTK/Qt pinta el primer cuadro y no
+/// vuelve a repintar — el resaltado al pasar el mouse quedaría congelado.
+pub(crate) fn send_frames_popups(parent: &WlSurface, time: u32) {
+    for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(parent) {
+        let s = popup.wl_surface().clone();
+        send_frames_surface_tree(&s, time);
+        send_frames_popups(&s, time);
+    }
+}
+
 /// Despacha los callbacks de frame de un árbol de superficies: avisa a
 /// cada cliente de que puede dibujar el siguiente cuadro.
 pub(crate) fn send_frames_surface_tree(surface: &WlSurface, time: u32) {

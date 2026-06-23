@@ -320,6 +320,22 @@ impl DrmState {
                 }
             }
         }
+
+        // Segunda pasada: los popups de cada ventana (menú de aplicación y
+        // contextuales de apps GTK/Qt) por ENCIMA de todas las ventanas. Se
+        // dibujan recursivamente (submenús) relativos al origen de geometría de
+        // su parent. Sin esto los `xdg_popup` nunca se pintan = «el menú no abre».
+        for w in &shown {
+            if !crate::buffer_render_sano(&w.surface) {
+                continue;
+            }
+            let (gx, gy) = crate::render_loc(w, primary_h, tbh);
+            let on_focused = focused_rect.map_or(true, |fr| gx >= fr.x && gx < fr.x + fr.w);
+            let gx = if w.is_shell || !on_focused { gx } else { gx + slide_dx };
+            let (off_x, off_y) = crate::content_offset(w);
+            // base = origen de geometría (contenido) del parent, en coords globales.
+            emit_popups(&mut self.renderer, &w.surface, (gx + off_x, gy + off_y), rect, into);
+        }
     }
 
     /// Emite el HUD del preset activo en la salida `rect` — un panel discreto
@@ -1320,6 +1336,8 @@ impl DrmState {
                 continue;
             }
             send_frames_surface_tree(&w.surface, time);
+            // Sus popups (menús) también, si no el resaltado del menú se congela.
+            crate::send_frames_popups(&w.surface, time);
         }
         // Layers de TODAS las salidas — un cliente puede tener barras en
         // distintos monitores, cada una con su frame-callback propio.
@@ -1438,5 +1456,38 @@ impl DrmState {
                 );
             }
         }
+    }
+}
+
+/// Dibuja recursivamente los `xdg_popup` colgados de `parent` (los menús de las
+/// apps). `base` es el origen de geometría (contenido) del parent en coords
+/// GLOBALES; `rect` es la salida que se está rindiendo (para pasar a locales).
+/// Cada popup va en `base + posición_relativa - su_offset_de_geometría`; sus
+/// hijos (submenús) cuelgan de su propio origen de geometría. Es función libre
+/// (no método) para tomar `&mut renderer` sin chocar con el préstamo de `windows`.
+fn emit_popups(
+    renderer: &mut GlesRenderer,
+    parent: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    base: (i32, i32),
+    rect: Rect,
+    into: &mut Vec<Frame<GlesRenderer>>,
+) {
+    for (popup, ploc) in smithay::desktop::PopupManager::popups_for_surface(parent) {
+        let psurf = popup.wl_surface().clone();
+        let pgeo = popup.geometry();
+        let geo_origin = (base.0 + ploc.x, base.1 + ploc.y);
+        let draw_x = geo_origin.0 - pgeo.loc.x - rect.x;
+        let draw_y = geo_origin.1 - pgeo.loc.y - rect.y;
+        for el in render_elements_from_surface_tree(
+            renderer,
+            &psurf,
+            (draw_x, draw_y),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        ) {
+            into.push(Frame::Window(el));
+        }
+        emit_popups(renderer, &psurf, geo_origin, rect, into);
     }
 }

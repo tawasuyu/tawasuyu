@@ -313,6 +313,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
+        popups: smithay::desktop::PopupManager::default(),
         layer_shell_state: WlrLayerShellState::new::<App>(&dh),
         output_manager_state: OutputManagerState::new_with_xdg_output::<App>(&dh),
         output: None,

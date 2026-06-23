@@ -23,6 +23,56 @@ impl App {
         None
     }
 
+    /// El popup (menú de app) topmost bajo `(x, y)` y el origen GLOBAL de su
+    /// superficie — para entregarle el puntero igual que a una ventana. `None`
+    /// si el cursor no está sobre ningún popup. Recorre las ventanas en orden de
+    /// pintado inverso (topmost primero) y, por cada una, su árbol de popups
+    /// (submenús incluidos). Sin esto los clicks sobre un menú GTK irían a la
+    /// ventana de atrás y el menú quedaría inerte.
+    pub(crate) fn popup_under(&self, x: f64, y: f64) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let output_h = self.output_size.1;
+        let tbh = self.decorations.titlebar_height;
+        let mut order: Vec<usize> =
+            (0..self.windows.len()).filter(|&i| self.windows[i].visible).collect();
+        order.sort_by_key(|&i| {
+            let w = &self.windows[i];
+            (!w.is_shell, !w.floating, !w.focused)
+        });
+        for &i in order.iter().rev() {
+            let w = &self.windows[i];
+            let (gx, gy) = crate::render_loc(w, output_h, tbh);
+            let (ox, oy) = crate::content_offset(w);
+            if let Some(found) = popup_under_tree(&w.surface, (gx + ox, gy + oy), x, y) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// `true` si hay algún popup (menú) abierto. Lo usa el handler de click para
+    /// decidir si un click afuera debe cerrarlos.
+    pub(crate) fn has_popups(&self) -> bool {
+        self.windows.iter().any(|w| {
+            smithay::desktop::PopupManager::popups_for_surface(&w.surface)
+                .next()
+                .is_some()
+        })
+    }
+
+    /// Cierra todos los popups abiertos mandándoles `popup_done` (el cliente
+    /// destruye el menú). Se llama al click fuera de cualquier popup.
+    pub(crate) fn dismiss_popups(&mut self) {
+        let mut kinds = Vec::new();
+        for w in &self.windows {
+            collect_popup_kinds(&w.surface, &mut kinds);
+        }
+        for k in kinds {
+            if let smithay::desktop::PopupKind::Xdg(p) = k {
+                p.send_popup_done();
+            }
+        }
+    }
+
     /// La layer surface bajo `(x, y)` que **acepta foco de teclado** (OnDemand o
     /// Exclusive), para enfocarla al clickearla — el cabezal de shuma de `pata`
     /// pide `OnDemand` y, al desplegar el drawer, `Exclusive`. `None` si la layer
@@ -1429,5 +1479,47 @@ impl App {
                 );
             }
         }
+    }
+}
+
+/// Recorre recursivamente los popups colgados de `parent` y devuelve el topmost
+/// bajo `(x, y)` con el origen GLOBAL de su superficie. Los hijos (submenús) se
+/// prueban primero porque se pintan por encima. `base` es el origen de geometría
+/// del parent en coords globales. Función libre para reusar sin `&self`.
+fn popup_under_tree(
+    parent: &WlSurface,
+    base: (i32, i32),
+    x: f64,
+    y: f64,
+) -> Option<(WlSurface, Point<f64, Logical>)> {
+    let mut hit = None;
+    for (popup, ploc) in smithay::desktop::PopupManager::popups_for_surface(parent) {
+        let psurf = popup.wl_surface().clone();
+        let pgeo = popup.geometry();
+        let geo_origin = (base.0 + ploc.x, base.1 + ploc.y);
+        if let Some(found) = popup_under_tree(&psurf, geo_origin, x, y) {
+            return Some(found);
+        }
+        let (rx, ry) = geo_origin;
+        if x >= rx as f64
+            && y >= ry as f64
+            && x < (rx + pgeo.size.w) as f64
+            && y < (ry + pgeo.size.h) as f64
+        {
+            // Origen de la SUPERFICIE (0,0) = origen de geometría − su offset.
+            let sx = (rx - pgeo.loc.x) as f64;
+            let sy = (ry - pgeo.loc.y) as f64;
+            hit = Some((psurf, Point::from((sx, sy))));
+        }
+    }
+    hit
+}
+
+/// Junta recursivamente todos los popups (menús) colgados de `parent`.
+fn collect_popup_kinds(parent: &WlSurface, out: &mut Vec<smithay::desktop::PopupKind>) {
+    for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(parent) {
+        let s = popup.wl_surface().clone();
+        out.push(popup);
+        collect_popup_kinds(&s, out);
     }
 }

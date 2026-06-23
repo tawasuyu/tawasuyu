@@ -323,6 +323,11 @@ pub(crate) enum DragMode {
 pub(crate) struct App {
     pub(crate) compositor_state: CompositorState,
     pub(crate) xdg_shell_state: XdgShellState,
+    /// Trackea los `xdg_popup` (menús de apps GTK/Qt: el de aplicación y los
+    /// contextuales). Sin él, sus popups nunca se posicionan ni se dibujan —
+    /// los menús «no abren». Lo alimentan `new_popup`/`reposition_request`, el
+    /// `commit`, y el render itera [`smithay::desktop::PopupManager::popups_for_surface`].
+    pub(crate) popups: smithay::desktop::PopupManager,
     pub(crate) shm_state: ShmState,
     /// Estado de `zwp_linux_dmabuf` — deja que los clientes con GPU
     /// (apps GPUI, navegadores acelerados) compartan búferes de vídeo.

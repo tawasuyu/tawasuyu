@@ -49,6 +49,11 @@ impl CompositorHandler for App {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        // Mantiene vivo el árbol de popups (recalcula geometría/configura tras
+        // el commit) y purga los muertos. Necesario para que los menús GTK/Qt
+        // se posicionen y persistan.
+        self.popups.commit(surface);
+        self.popups.cleanup();
         // Daño para screencopy `copy_with_damage`: el commit de un toplevel
         // gestionado (o de una de sus subsuperficies) daña su celda; el de
         // un layer surface (waybar y cía.) daña todo — granularidad gruesa
@@ -422,18 +427,40 @@ impl XdgShellHandler for App {
         }
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        // Calcula la geometría del popup desde el positioner (anchor/gravity/
+        // offset relativos al parent) y la fija en el estado pendiente: sin esto
+        // el cliente no sabe DÓNDE pintarse. Lo trackeamos para poder dibujarlo
+        // (el render itera `popups_for_surface`) y mantener su ciclo de vida.
+        surface.with_pending_state(|state| {
+            state.geometry = positioner.get_geometry();
+        });
+        if let Err(e) = self.popups.track_popup(smithay::desktop::PopupKind::Xdg(surface.clone())) {
+            eprintln!("mirada · no se pudo trackear el popup: {e}");
+        }
         let _ = surface.send_configure();
     }
 
+    // El cliente pide hacer su popup modal (grab de menú). El `grab_popup` de
+    // smithay exige un tipo de foco que implemente `From<PopupKind>`, y el de
+    // mirada es `WlSurface` (no lo implementa) — así que el grab modal no se
+    // monta acá. En su lugar, el input enruta el puntero al popup bajo el cursor
+    // y un click afuera lo cierra (ver `popup_under` / `dismiss_popups` en input).
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
 
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
-        _positioner: PositionerState,
-        _token: u32,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
     ) {
+        // Reubicación interactiva (submenú que se reposiciona, etc.): recalcula
+        // la geometría y confirma con el token que pidió el cliente.
+        surface.with_pending_state(|state| {
+            state.geometry = positioner.get_geometry();
+        });
+        surface.send_repositioned(token);
+        let _ = surface.send_configure();
     }
 }
 

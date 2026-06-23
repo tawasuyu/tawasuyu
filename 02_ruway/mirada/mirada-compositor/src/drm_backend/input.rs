@@ -269,6 +269,32 @@ impl DrmState {
                 let pressed = event.state() == ButtonState::Pressed;
                 let button = event.button_code();
 
+                // Popups (menús de apps GTK/Qt) abiertos: al APRETAR, un click
+                // sobre el menú se le reenvía (el motion ya lo enfocó), sin pasar
+                // por la lógica de ventanas/drag; un click AFUERA cierra el menú y
+                // consume el click. El release cae al reenvío normal de abajo, así
+                // el ítem se activa al soltar.
+                if pressed && self.app.has_popups() {
+                    let (x, y) = self.app.pointer_loc;
+                    if self.app.popup_under(x, y).is_some() {
+                        if let Some(pointer) = self.app.pointer.clone() {
+                            pointer.button(
+                                &mut self.app,
+                                &ButtonEvent {
+                                    serial: SERIAL_COUNTER.next_serial(),
+                                    time,
+                                    button,
+                                    state: event.state(),
+                                },
+                            );
+                            pointer.frame(&mut self.app);
+                        }
+                        return;
+                    }
+                    self.app.dismiss_popups();
+                    return;
+                }
+
                 // Menú raíz abierto: el botón se lo come el menú. Click
                 // izquierdo sobre una hoja la lanza y cierra; sobre una
                 // fila-submenú la abre y sigue; click derecho o fuera cierra.
@@ -748,6 +774,23 @@ impl DrmState {
             // El cliente del layer pondría su propio cursor; por ahora, el default.
             self.app.cursor_status = CursorImageStatus::default_named();
             // Dejamos de sobrevolar cualquier ventana.
+            self.last_pointer_window = None;
+            return;
+        }
+
+        // Un popup (menú de app) abierto está por encima de las ventanas: el
+        // puntero va ahí primero, así sus ítems resaltan y reciben el click.
+        if let Some((surface, loc)) = self.app.popup_under(x, y) {
+            pointer.motion(
+                &mut self.app,
+                Some((surface, loc)),
+                &MotionEvent {
+                    location: Point::from((x, y)),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                },
+            );
+            pointer.frame(&mut self.app);
             self.last_pointer_window = None;
             return;
         }
