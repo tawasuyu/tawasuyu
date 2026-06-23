@@ -317,6 +317,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         output_manager_state: OutputManagerState::new_with_xdg_output::<App>(&dh),
         output: None,
         outputs: Vec::new(),
+        output_ids: Vec::new(),
         shm_state: ShmState::new::<App>(&dh, Vec::new()),
         dmabuf_state: DmabufState::new(),
         seat_state,

@@ -6,7 +6,7 @@ use mirada_protocol::{BodyEvent, BrainCommand};
 use crate::config::DROPTERM_APP_ID;
 
 use super::estado::Desktop;
-use super::geometria::{centered_float_rect, dropdown_rect};
+use super::geometria::{cascaded_float_rect, dropdown_rect};
 use super::tipos::WindowInfo;
 
 impl Desktop {
@@ -62,6 +62,21 @@ impl Desktop {
                     Vec::new()
                 }
             }
+            BodyEvent::OutputMoved { id, x, y } => {
+                // El Cuerpo es la fuente única de la disposición de monitores
+                // (conoce nombres, `order` y dirección): adoptamos su origen
+                // global tal cual, sin recomputar por orden de aparición. Así el
+                // rect del Cerebro casa exacto con el del backend y una ventana
+                // maximizada/teselada aterriza en el monitor correcto.
+                if let Some(o) = self.outputs.iter_mut().find(|o| o.id == id) {
+                    if o.rect.x != x || o.rect.y != y {
+                        o.rect.x = x;
+                        o.rect.y = y;
+                        return self.relayout();
+                    }
+                }
+                Vec::new()
+            }
             BodyEvent::OutputReserved {
                 id,
                 top,
@@ -105,9 +120,16 @@ impl Desktop {
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                     self.workspaces[ws].set_floating(id, Some(rect));
                 } else if outcome.floating {
+                    // Escalonar sobre los flotantes que ya estén en ese
+                    // escritorio, para que dos diálogos no caigan encima.
+                    let n = self.workspaces[ws]
+                        .windows()
+                        .iter()
+                        .filter(|&&w| w != id && self.workspaces[ws].is_floating(w))
+                        .count();
                     let mut rect = self
                         .screen()
-                        .map(centered_float_rect)
+                        .map(|s| cascaded_float_rect(s, n))
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                     // Regla con `size`: respeta el tamaño pedido, centrado en pantalla.
                     if let Some((w, h)) = outcome.size {

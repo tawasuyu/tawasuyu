@@ -597,6 +597,32 @@ fn relayout_places_windows_on_every_output() {
 }
 
 #[test]
+fn output_moved_relocates_so_windows_land_on_the_real_monitor() {
+    // El Cuerpo (que conoce nombres/`order`/dirección) es la fuente única de la
+    // posición global. Aquí reubica el monitor 1 lejos de donde el Cerebro lo
+    // dedujo por orden de aparición (simula orden por `(order, name)` o un
+    // hotplug que reordenó la lista).
+    let mut d = Desktop::new();
+    d.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+    d.on_event(BodyEvent::OutputAdded { id: 1, width: 1280, height: 1024 });
+    // Por reflow arrancó pegado a x=1920; el Cuerpo lo manda a x=5000.
+    assert_eq!(d.outputs()[1].rect.x, 1920);
+    d.on_event(BodyEvent::OutputMoved { id: 1, x: 5000, y: 0 });
+    assert_eq!(d.outputs()[1].rect.x, 5000);
+
+    // Una ventana maximizada en el monitor 1 debe aterrizar en SU geometría
+    // real (x=5000, ancho 1280), no en la que el Cerebro suponía (x=1920). Era
+    // el «la maximizo y se va al otro monitor / se desborda».
+    d.apply(DesktopAction::FocusOutputNext); // foco a la salida 1 (ws 1)
+    open(&mut d, 7);
+    let cmds = d.apply(DesktopAction::ToggleMaximize);
+    let win = places(&cmds).iter().find(|x| x.id == 7).expect("la 7 colocada");
+    assert!(win.floating, "maximizar = flotar al área de trabajo");
+    assert_eq!(win.rect.x, 5000);
+    assert_eq!(win.rect.w, 1280);
+}
+
+#[test]
 fn keyboard_focus_is_unique_across_outputs() {
     let mut d = desktop_with_two_outputs();
     open(&mut d, 1);

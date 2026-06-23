@@ -87,6 +87,12 @@ type Compositor =
 /// **primaria**: ahí van layer-shell, tiling, menú, zonas y HUD; las
 /// secundarias renderizan sólo wallpaper hasta tener distribución global.
 struct OutputCtx {
+    /// Identidad **estable** de esta salida ante el Cerebro (el `OutputId` con
+    /// que se registró). No es el índice en [`DrmState::outputs`]: ese cambia al
+    /// reordenar por `(order, name)`, pero este id sigue siendo el mismo monitor
+    /// físico toda su vida, así que reservas y geometría (`OutputMoved`) le
+    /// llegan al monitor correcto aunque la lista se haya reordenado.
+    id: u32,
     /// Nombre legible (`DP-1`, `HDMI-A-1`, …) — sale del conector DRM.
     name: String,
     /// El `Output` smithay (vive mientras el compositor corre).
@@ -512,6 +518,11 @@ struct DrmState {
     /// Vigías de los archivos de config recargables en caliente.
     watches: crate::ConfigWatches,
     ctl: Option<crate::CtlServer>,
+    /// Próximo `OutputId` a asignar a un monitor recién enchufado. Monótono y
+    /// **nunca reusado** (a diferencia de `outputs.len()`, que reciclaba ids
+    /// tras un desenchufe y los hacía colisionar): así cada salida tiene una
+    /// identidad estable de por vida ante el Cerebro.
+    next_output_id: u32,
     /// Inicio del compositor — base de tiempos para los frame-callbacks.
     start: Instant,
     /// Nº de ventanas en el último `tick` — para registrar los cambios.
@@ -795,15 +806,24 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             scale_120,
             transform,
         );
-        // Brain: cada salida es un id incremental con su tamaño local.
-        let ev = app.body.add_output(i as u32, w as i32, h as i32);
+        // Brain: cada salida es un id incremental con su tamaño local. El id
+        // (= índice inicial, ya en orden ordenado) es ESTABLE: lo guardamos en
+        // el `OutputCtx` para direccionar reservas/geometría aunque luego se
+        // reordene la lista.
+        let id = i as u32;
+        let ev = app.body.add_output(id, w as i32, h as i32);
         app.brain_feed(ev);
         let rect = rects[i];
+        // El Cuerpo es la fuente única de la posición global: se la fijamos al
+        // Cerebro explícitamente (no que la reconstruya por orden de aparición).
+        let ev = app.body.move_output(id, rect.x, rect.y);
+        app.brain_feed(ev);
         // Wallpaper resuelto por salida (override por nombre o global).
         let wp_path = app.config_wallpaper_path_for(&name);
         let wp_fit = app.config_wallpaper_fit_for(&name);
         println!("      compositor de «{name}» listo · rect global {rect:?}");
         output_ctxs.push(OutputCtx {
+            id,
             name,
             output: smithay_out,
             crtc: crtc_h,
@@ -832,6 +852,10 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // Primary `smithay::Output` para layer-shell, xdg-output handlers, etc.
     app.output = Some(output_ctxs[0].output.clone());
     app.outputs = output_ctxs.iter().map(|c| c.output.clone()).collect();
+    // `output_ids[i]` = id estable del monitor en `outputs[i]` (mismo orden):
+    // las reservas se direccionan por id, no por índice, así sobreviven a un
+    // reordenamiento por hotplug.
+    app.output_ids = output_ctxs.iter().map(|c| c.id).collect();
 
     // El socket Wayland por el que se conectan los clientes.
     let listener = ListeningSocket::bind_auto("wayland", 1..32)?;
@@ -1030,6 +1054,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let mut zone_presets = vec![zones.clone()];
     zone_presets.extend(app.config_zone_presets());
     let dh = display.handle();
+    // Próximo id a repartir en hotplug = uno más que el último inicial.
+    let next_output_id = output_ctxs.len() as u32;
     let mut state = DrmState {
         app,
         session: session.clone(),
@@ -1046,6 +1072,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         active: true,
         watches,
         ctl,
+        next_output_id,
         start: Instant::now(),
         last_windows: 0,
         last_active_ws: 0,

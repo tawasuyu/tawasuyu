@@ -237,6 +237,18 @@ impl BodyState {
         BodyEvent::OutputResized { id, width, height }
     }
 
+    /// Fija el **origen global** de una salida (su esquina superior-izquierda en
+    /// el espacio compuesto). El backend lo emite tras recalcular la disposición
+    /// de monitores; el Cuerpo es la fuente única de esa geometría, así que el
+    /// Cerebro la adopta tal cual en vez de reconstruirla. No toca el tamaño.
+    pub fn move_output(&mut self, id: OutputId, x: i32, y: i32) -> BodyEvent {
+        if let Some((_, rect)) = self.outputs.iter_mut().find(|(o, _)| *o == id) {
+            rect.x = x;
+            rect.y = y;
+        }
+        BodyEvent::OutputMoved { id, x, y }
+    }
+
     /// Reserva —o libera— franjas en los bordes de una salida: las zonas
     /// exclusivas (px desde cada borde) que el teselado debe esquivar. Las usa
     /// el marco (`pata`) para acoplar sus barras sin que las ventanas las tapen;
@@ -490,6 +502,18 @@ mod tests {
         let ev = b.retitle_surface(1, "uno bis");
         assert_eq!(ev, Some(BodyEvent::WindowRetitled { id: 1, title: "uno bis".into() }));
         assert_eq!(b.surface(1).unwrap().title, "uno bis");
+    }
+
+    #[test]
+    fn move_output_repositions_and_emits_the_event() {
+        let mut b = BodyState::new();
+        b.add_output(0, 1920, 1080);
+        b.add_output(1, 1280, 1024);
+        let ev = b.move_output(1, 5000, 0);
+        assert_eq!(ev, BodyEvent::OutputMoved { id: 1, x: 5000, y: 0 });
+        assert_eq!(b.outputs()[1].1, Rect::new(5000, 0, 1280, 1024));
+        // No toca el otro monitor.
+        assert_eq!(b.outputs()[0].1, Rect::new(0, 0, 1920, 1080));
     }
 
     #[test]

@@ -208,14 +208,16 @@ impl DrmState {
             };
             taken.push(crtc_h);
             match self.armar_output_ctx(*conn_handle, crtc_h, mode, name.clone()) {
-                Ok(ctx) => {
+                Ok(mut ctx) => {
                     println!("mirada-compositor · hotplug · monitor «{}» enchufado", ctx.name);
                     let (w, h) = mode.size();
-                    let ev = self.app.body.add_output(
-                        self.outputs.len() as u32,
-                        w as i32,
-                        h as i32,
-                    );
+                    // Id estable y nunca reusado (ver `next_output_id`): así un
+                    // monitor que reaparece tras un desenchufe no colisiona con
+                    // otro que heredó su antiguo índice.
+                    let id = self.next_output_id;
+                    self.next_output_id += 1;
+                    ctx.id = id;
+                    let ev = self.app.body.add_output(id, w as i32, h as i32);
                     self.app.brain_feed(ev);
                     self.outputs.push(ctx);
                     changed = true;
@@ -278,6 +280,8 @@ impl DrmState {
         let wp_path = self.app.config_wallpaper_path_for(&name);
         let wp_fit = self.app.config_wallpaper_fit_for(&name);
         Ok(OutputCtx {
+            // id real lo asigna `detect_connector_changes` antes de registrar.
+            id: 0,
             name,
             output: smithay_out,
             crtc: crtc_h,
@@ -300,6 +304,7 @@ impl DrmState {
     pub(super) fn redisponer_outputs(&mut self) {
         if self.outputs.is_empty() {
             self.app.outputs.clear();
+            self.app.output_ids.clear();
             self.app.output = None;
             self.app.output_size = (1, 1);
             return;
@@ -318,6 +323,16 @@ impl DrmState {
             ctx.rect = *r;
             ctx.wallpaper = None; // el tamaño global no cambia, pero la posición sí
         }
+        // Empujar al Cerebro la posición global de cada monitor por su id
+        // estable: es la fuente única de la disposición. Sin esto el Cerebro
+        // la reconstruía por orden de aparición y, al diferir del orden real
+        // `(order, name)`, maximizaba/teselaba en el monitor equivocado.
+        let geo: Vec<(u32, i32, i32)> =
+            self.outputs.iter().map(|c| (c.id, c.rect.x, c.rect.y)).collect();
+        for (id, x, y) in geo {
+            let ev = self.app.body.move_output(id, x, y);
+            self.app.brain_feed(ev);
+        }
         let env = mirada_brain::envolvente(&rects);
         let total_w = env.w.max(1);
         let total_h = env.h.max(1);
@@ -325,6 +340,7 @@ impl DrmState {
         self.output_size = (total_w as f64, total_h as f64);
         // Resincronizar el registro Wayland.
         self.app.outputs = self.outputs.iter().map(|c| c.output.clone()).collect();
+        self.app.output_ids = self.outputs.iter().map(|c| c.id).collect();
         self.app.output = self.outputs.first().map(|c| c.output.clone());
         // Reposicionar el puntero al centro de la primaria si quedó fuera.
         let (px, py) = self.app.pointer_loc;

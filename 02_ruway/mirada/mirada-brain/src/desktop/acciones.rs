@@ -7,7 +7,9 @@ use crate::action::{DesktopAction, Direction};
 use crate::config::DROPTERM_APP_ID;
 
 use super::estado::Desktop;
-use super::geometria::{centered_float_rect, dropdown_rect, nearest_in_direction};
+use super::geometria::{
+    cascaded_float_rect, centered_float_rect, dropdown_rect, nearest_in_direction,
+};
 
 impl Desktop {
     /// Aplica una acción de escritorio directamente (sin pasar por una
@@ -87,8 +89,15 @@ impl Desktop {
                 if ws.is_floating(id) {
                     ws.set_floating(id, None);
                 } else {
+                    // Escalonar sobre los flotantes ya presentes: no apilarlos
+                    // todos en el mismo centro.
+                    let n = ws
+                        .windows()
+                        .iter()
+                        .filter(|&&w| w != id && ws.is_floating(w))
+                        .count();
                     let rect = screen
-                        .map(centered_float_rect)
+                        .map(|s| cascaded_float_rect(s, n))
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                     ws.set_floating(id, Some(rect));
                 }
@@ -476,13 +485,27 @@ impl Desktop {
         self.relayout()
     }
 
-    /// Recoloca las salidas en fila horizontal, en su orden de aparición.
+    /// Recoloca las salidas en su orden de aparición según la **dirección** de
+    /// la config (horizontal por defecto, o vertical). Es sólo el arreglo
+    /// provisional: el Cuerpo —que conoce nombres y `order`— reafirma el origen
+    /// real de cada monitor con [`BodyEvent::OutputMoved`], que manda. Sin un
+    /// backend que lo corrija (tests, simulación), este arreglo es el efectivo.
     pub(super) fn reflow_outputs(&mut self) {
-        let mut x = 0;
+        let vertical = matches!(
+            self.config.output_disposition(),
+            mirada_layout::Disposicion::Vertical
+        );
+        let mut avance = 0;
         for o in &mut self.outputs {
-            o.rect.x = x;
-            o.rect.y = 0;
-            x += o.rect.w;
+            if vertical {
+                o.rect.x = 0;
+                o.rect.y = avance;
+                avance += o.rect.h;
+            } else {
+                o.rect.x = avance;
+                o.rect.y = 0;
+                avance += o.rect.w;
+            }
         }
     }
 

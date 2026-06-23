@@ -384,6 +384,11 @@ pub(crate) struct App {
     /// las publica acá tras armarlas, así un layer surface con `output_hint`
     /// puede mapearse al monitor que el cliente pidió, no siempre al primario.
     pub(crate) outputs: Vec<Output>,
+    /// Id estable del Cerebro de cada salida, **en el mismo orden** que
+    /// [`Self::outputs`]. Las reservas (`reserve_output`) se direccionan por
+    /// este id, no por el índice: tras un hotplug la lista se reordena por
+    /// `(order, name)` pero el id sigue señalando al mismo monitor físico.
+    pub(crate) output_ids: Vec<u32>,
     /// Gestor de salidas con `xdg-output` (`zxdg_output_manager_v1`): waybar
     /// y otras barras lo exigen para conocer nombre/geometría de las salidas.
     /// Se conserva sólo para mantener vivo el global (de ahí el `allow`).

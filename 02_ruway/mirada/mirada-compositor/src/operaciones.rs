@@ -202,8 +202,24 @@ impl App {
     /// las ventanas nuevas y los cambios de escritorio van ahí.
     pub(crate) fn follow_pointer_output(&mut self) {
         let (x, y) = self.pointer_loc;
-        if let Brain::Embedded(d) = &mut self.brain {
-            d.focus_output_at(x as i32, y as i32);
+        let cmds = match &mut self.brain {
+            Brain::Embedded(d) => {
+                // Si el puntero cruzó a otro monitor, la salida activa lo siguió:
+                // re-emitimos la colocación para que el FOCO DE TECLADO la siga
+                // también. Sin esto, la salida activa cambiaba pero el teclado se
+                // quedaba en el monitor anterior — escribías en la pantalla
+                // equivocada o en ninguna (el síntoma «el 2º monitor pierde el
+                // foco»). `refresh` es idempotente: si nada cambió, no hay BodyOps.
+                if d.focus_output_at(x as i32, y as i32) {
+                    d.refresh()
+                } else {
+                    Vec::new()
+                }
+            }
+            Brain::Linked(_) => Vec::new(),
+        };
+        if !cmds.is_empty() {
+            self.apply_commands(cmds);
         }
     }
 
@@ -1111,7 +1127,12 @@ impl App {
             if is_primary {
                 self.reserved = (top, bottom, left, right);
             }
-            let ev = self.body.reserve_output(i as u32, top, bottom, left, right);
+            // Direccionar la reserva por el id ESTABLE del monitor (no el índice
+            // `i`, que cambia al reordenar): así un dock en el monitor secundario
+            // reserva en ESE monitor aunque la lista se haya reordenado. Sin un
+            // id mapeado (no debería pasar) cae al índice como antes.
+            let oid = self.output_ids.get(i).copied().unwrap_or(i as u32);
+            let ev = self.body.reserve_output(oid, top, bottom, left, right);
             self.brain_feed(ev);
         }
     }

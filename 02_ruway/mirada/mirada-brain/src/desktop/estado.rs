@@ -189,6 +189,16 @@ impl Desktop {
         self.outputs.get(self.focused_output).map(|o| o.rect)
     }
 
+    /// Re-emite la colocación (`Place`) sin mutar nada: re-deriva el foco de
+    /// teclado global a partir de la **salida enfocada** actual. El Cuerpo lo
+    /// usa cuando el puntero cruza a otro monitor ([`focus_output_at`] devolvió
+    /// `true`): la salida activa siguió al ratón, así que el teclado debe
+    /// seguirla también — si no, escribías en el monitor donde quedó el foco
+    /// viejo (o en ninguno). Idempotente: un `Place` igual no produce `BodyOp`s.
+    pub fn refresh(&self) -> Vec<BrainCommand> {
+        self.relayout()
+    }
+
     // --- Accesores de sólo lectura, para el HUD ---------
 
     /// El escritorio activo — el de la salida enfocada.

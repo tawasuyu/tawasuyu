@@ -303,6 +303,17 @@ pub enum BodyEvent {
     /// (modo **enlazado**): el Cerebro externo lo aplica. En modo embebido el
     /// Cuerpo cambia el escritorio él mismo y no emite esto.
     SwitchWorkspace(u32),
+    /// El Cuerpo movió el **origen global** de un monitor: `(x, y)` es su
+    /// esquina superior-izquierda en el espacio compuesto. Lo emite el backend
+    /// cada vez que recalcula la disposición de salidas (arranque, hotplug,
+    /// reordenamiento por config), porque el Cuerpo —que conoce nombres,
+    /// `order` y dirección— es la **fuente única** de la geometría. Sin esto el
+    /// Cerebro la reconstruía por su cuenta (fila por orden de aparición), y al
+    /// diferir del backend las ventanas maximizadas/teseladas aterrizaban en el
+    /// monitor equivocado o se desbordaban. El alto/ancho siguen llegando por
+    /// [`OutputAdded`](BodyEvent::OutputAdded)/[`OutputResized`](BodyEvent::OutputResized);
+    /// esto fija sólo la posición.
+    OutputMoved { id: OutputId, x: i32, y: i32 },
 }
 
 /// Tamaño máximo de un marco, en bytes. Acota el búfer de [`read_frame`]

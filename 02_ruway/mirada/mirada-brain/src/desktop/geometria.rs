@@ -69,3 +69,23 @@ pub fn centered_float_rect(screen: Rect) -> Rect {
         h,
     )
 }
+
+/// Como [`centered_float_rect`], pero **escalonado**: el `n`-ésimo flotante se
+/// desplaza en diagonal para no caer exactamente sobre los anteriores (todos
+/// centrados se «pisaban»). El escalón da la vuelta antes de salirse de la
+/// pantalla, así una ráfaga de ventanas flotantes queda en cascada visible en
+/// vez de un solo montón.
+pub fn cascaded_float_rect(screen: Rect, n: usize) -> Rect {
+    let base = centered_float_rect(screen);
+    const STEP: i32 = 32;
+    // Cuántos escalones caben antes de tocar el borde inferior/derecho del
+    // área flotante; pasado eso, el contador da la vuelta (módulo).
+    let margin = STEP * 6;
+    let span_x = (screen.w - base.w - margin).max(STEP);
+    let span_y = (screen.h - base.h - margin).max(STEP);
+    let ciclo_x = (span_x / STEP).max(1) as usize;
+    let ciclo_y = (span_y / STEP).max(1) as usize;
+    let off_x = (n % ciclo_x) as i32 * STEP;
+    let off_y = (n % ciclo_y) as i32 * STEP;
+    Rect::new(base.x + off_x, base.y + off_y, base.w, base.h)
+}
