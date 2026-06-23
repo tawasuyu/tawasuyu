@@ -483,6 +483,16 @@ impl DrmState {
         if tw.max(th) > LIVE_ROT_MAX {
             return None;
         }
+        // Latch del soporte de texturas en offscreen: en algunas GPU/Mesa el
+        // render offscreen anidado sólo compone colores sólidos, no texturas
+        // (ni superficies ni imágenes). Si ya lo detectamos roto, ni intentamos
+        // (evita un render+readback por frame para nada) → esquema directo.
+        // 0 = sin probar, 1 = anda, 2 = roto.
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static OFFSCREEN: AtomicU8 = AtomicU8::new(0);
+        if OFFSCREEN.load(Ordering::Relaxed) == 2 {
+            return None;
+        }
         let (tile_bg, win_bg, win_focus) = colors;
         let mut live: Vec<Frame<GlesRenderer>> = Vec::new();
         // Fondo opaco del tile (llena todo → el offscreen no tiene zonas
@@ -595,16 +605,11 @@ impl DrmState {
         for c in px.chunks_exact(4).step_by(7) {
             buckets.insert((c[0] / 40, c[1] / 40, c[2] / 40));
         }
-        {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static L: AtomicBool = AtomicBool::new(false);
-            if !L.swap(true, Ordering::Relaxed) {
-                eprintln!(
-                    "mirada-compositor · prezi offscreen: {} colores tras importar superficies ({} ventanas)",
-                    buckets.len(),
-                    wins.len(),
-                );
-            }
+        // Sólo un tile CON ventanas es prueba válida del soporte de texturas (uno
+        // vacío da pocos colores aunque ande). Si capturó variedad → anda; si no →
+        // roto, y latcheamos para no reintentar.
+        if !wins.is_empty() {
+            OFFSCREEN.store(if buckets.len() >= 4 { 1 } else { 2 }, Ordering::Relaxed);
         }
         if buckets.len() < 4 {
             return None;
