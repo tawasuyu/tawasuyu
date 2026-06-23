@@ -591,10 +591,12 @@ impl Config {
         // global de pestañas no aparecía hasta que el usuario lo escribiera
         // a mano en el TOML.
         let mut rail = Surface::sidebar(Anchor::Left);
-        // El rail izquierdo es OVERLAY canónico (sobresale, no reserva): sigue la
-        // decisión global `dientes_outside`. El que va «supeditado al desktop»
-        // (reserva) es el DERECHO (abajo). `None` = sigue la global.
-        rail.reserve = None;
+        // Ambos rails van «supeditados al desktop» (reservan su franja): así
+        // quedan SIEMPRE visibles junto a las ventanas en vez de flotar como
+        // overlay (donde el izquierdo quedaba tapado por las ventanas y «no se
+        // mostraba»). `reserve = Some(true)` pisa la decisión global
+        // `dientes_outside`. Para volverlos overlay basta `reserve = Some(false)`.
+        rail.reserve = Some(true);
         rail.tabs.push(SidebarTab::new(
             "monads",
             "Mónadas",
@@ -948,6 +950,7 @@ mod tests {
         let rail = &cfg.surfaces[1];
         assert_eq!(rail.kind, SurfaceKind::Sidebar);
         assert_eq!(rail.anchor, Anchor::Left);
+        assert_eq!(rail.reserve, Some(true));
         assert!(!rail.tabs.is_empty());
 
         // Sidebar derecho «supeditado al desktop»: reserva su franja.

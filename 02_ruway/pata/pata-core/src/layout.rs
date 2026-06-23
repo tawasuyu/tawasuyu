@@ -198,22 +198,21 @@ mod tests {
     }
 
     #[test]
-    fn preset_default_reserva_top_pero_los_dientes_van_dentro() {
+    fn preset_default_reserva_top_y_ambos_rails() {
         // Con `dientes_outside=false` (default global): la top reserva su franja;
-        // el rail IZQUIERDO flota DENTRO (overlay, canónico) y no reserva; el
-        // rail DERECHO sí reserva (su `reserve = Some(true)` pisa la global). El
-        // shell autohide no reserva.
+        // AMBOS rails reservan (su `reserve = Some(true)` pisa la global) → quedan
+        // supeditados al desktop, siempre visibles. El shell autohide no reserva.
         let cfg = Config::preset();
         let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces.len(), 4);
         assert!(f.surfaces[0].reserva); // top reserva
-        assert!(!f.surfaces[1].reserva); // rail izq DENTRO → overlay
+        assert!(f.surfaces[1].reserva); // rail izq «supeditado» → reserva
         assert!(f.surfaces[2].reserva); // rail der «supeditado» → reserva
         assert!(!f.surfaces[3].reserva); // shell autohide
         let wa = f.work_area;
         assert_eq!(wa.y, 44); // la top descuenta arriba
-        assert_eq!(wa.x, 0); // el rail izq no descuenta (overlay)
-        assert_eq!(wa.w, 1920 - 44); // el rail der descuenta a la derecha
+        assert_eq!(wa.x, 44); // el rail izq descuenta a la izquierda
+        assert_eq!(wa.w, 1920 - 88); // ambos rails descuentan (44 + 44)
     }
 
     #[test]

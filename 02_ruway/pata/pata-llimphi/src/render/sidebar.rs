@@ -28,7 +28,7 @@ use llimphi_ui::View;
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use pata_host::HostedTooth;
 use llimphi_widget_navigator::{
-    navigator_view, NavId, NavKind, NavMode, NavNode, NavPalette, NavSpec,
+    navigator_view, NavId, NavMode, NavNode, NavPalette, NavSpec,
 };
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
@@ -566,17 +566,18 @@ fn count_visible(roots: &[NavNode], expanded: &HashSet<u64>) -> usize {
     acc
 }
 
-/// El icono de un diente del rail: un glifo vectorial según el nombre declarado
-/// en el `SidebarTab` (`monads` → diamante, `files` → cuadrado, otro → círculo),
-/// con el color que el rail ya resolvió (acento si activo, atenuado si no).
-fn tooth_icon(name: &str, size: f32, color: Color) -> View<Msg> {
-    // Reusamos la semántica de iconos del navegador para coherencia visual.
-    let kind = match name {
-        "monads" | "monadas" | "monad" | "astro" => NavKind::Monad,
-        "files" | "archivos" | "file" | "dir" | "folder" | "tree" => NavKind::Dir,
-        "tools" | "group" | "settings" | "system" | "shell" | "terminal" => NavKind::Group,
-        _ => NavKind::Other,
-    };
+/// El icono de un diente del rail: un **icono vectorial coloreado** (Lucide-like,
+/// `llimphi-icons`) según el nombre declarado en el `SidebarTab`. Cada tipo trae
+/// su propio color vivo y distintivo, así el rail se lee de un vistazo (Mónadas
+/// violeta, Archivos ámbar, Buscar azul, etc.) en vez de glifos monocromos.
+///
+/// El `_color` que el rail resuelve (acento/atenuado) se ignora a propósito: el
+/// estado activo ya lo marca el fondo del diente (pastilla + barra de acento),
+/// así que el icono puede quedarse siempre a todo color.
+fn tooth_icon(name: &str, size: f32, _color: Color) -> View<Msg> {
+    let (icon, color) = tooth_icon_kind(name);
+    // Contenedor de tamaño fijo (`size`×`size`): `icon_view` se pinta en
+    // posición absoluta llenando a su padre, así que necesita una caja acotada.
     View::new(Style {
         size: Size {
             width: length(size),
@@ -586,46 +587,37 @@ fn tooth_icon(name: &str, size: f32, color: Color) -> View<Msg> {
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .paint_with(move |scene, _ts, rect| {
-        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Point, RoundedRect};
-        use llimphi_ui::llimphi_raster::peniko::Fill;
-        if rect.w <= 0.0 || rect.h <= 0.0 {
-            return;
+    .children(vec![llimphi_icons::icon_view::<Msg>(icon, color, 1.9)])
+}
+
+/// Mapea el nombre del diente a `(icono, color vivo)`. Tolerante a sinónimos
+/// es/en y a los nombres que usan los dientes hospedados / shuma.
+fn tooth_icon_kind(name: &str) -> (llimphi_icons::Icon, Color) {
+    use llimphi_icons::Icon;
+    match name {
+        "monads" | "monadas" | "monad" | "astro" => (Icon::Link, Color::from_rgba8(167, 139, 250, 255)), // violeta
+        "files" | "archivos" | "file" | "dir" | "folder" | "tree" => {
+            (Icon::Folder, Color::from_rgba8(251, 191, 36, 255)) // ámbar
         }
-        let cx = (rect.x + rect.w * 0.5) as f64;
-        let cy = (rect.y + rect.h * 0.5) as f64;
-        let r = (rect.w.min(rect.h) as f64 * 0.38).max(2.0);
-        match kind {
-            NavKind::Monad => {
-                let mut p = BezPath::new();
-                p.move_to(Point::new(cx, cy - r));
-                p.line_to(Point::new(cx + r, cy));
-                p.line_to(Point::new(cx, cy + r));
-                p.line_to(Point::new(cx - r, cy));
-                p.close_path();
-                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &p);
-            }
-            NavKind::Group | NavKind::Dir => {
-                let sq = RoundedRect::new(cx - r, cy - r, cx + r, cy + r, 2.0);
-                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &sq);
-            }
-            NavKind::File | NavKind::Other => {
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    color,
-                    None,
-                    &Circle::new((cx, cy), r * 0.7),
-                );
-            }
+        "search" | "buscar" | "find" => (Icon::Search, Color::from_rgba8(96, 165, 250, 255)), // azul
+        "home" | "inicio" => (Icon::Home, Color::from_rgba8(52, 211, 153, 255)),              // verde
+        "tools" | "herramientas" | "settings" | "system" | "config" => {
+            (Icon::Settings, Color::from_rgba8(45, 212, 191, 255)) // teal
         }
-    })
+        "shell" | "terminal" | "consola" => (Icon::Code, Color::from_rgba8(74, 222, 128, 255)), // verde lima
+        "image" | "imagen" | "gallery" | "galeria" => (Icon::Image, Color::from_rgba8(244, 114, 182, 255)), // rosa
+        "music" | "audio" | "musica" => (Icon::Music, Color::from_rgba8(232, 121, 249, 255)), // fucsia
+        "film" | "video" | "media" => (Icon::Film, Color::from_rgba8(248, 113, 113, 255)),    // rojo
+        "code" | "codigo" | "dev" => (Icon::Code, Color::from_rgba8(125, 211, 252, 255)),     // celeste
+        "info" => (Icon::Info, Color::from_rgba8(96, 165, 250, 255)),
+        _ => (Icon::File, Color::from_rgba8(148, 163, 184, 255)), // gris azulado neutro
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llimphi_widget_navigator::NavNode;
+    use llimphi_widget_navigator::{NavKind, NavNode};
 
     fn forest() -> Vec<NavNode> {
         vec![

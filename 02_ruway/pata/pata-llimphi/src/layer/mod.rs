@@ -613,8 +613,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             );
             layer.set_anchor(sctk_anchor);
             layer.set_size(size.0, size.1);
-            // Reserva franja sólo si dientes-fuera y no autohide; si no, flota.
-            let excl = if dientes_outside && !s.autohide { thickness as i32 } else { 0 };
+            // Reserva franja si la superficie está «supeditada al desktop» y no es
+            // autohide; si no, flota como overlay. El override por-superficie
+            // `reserve` pisa la decisión global `dientes_outside` — igual que el
+            // path winit en `pata_core::layout::resolve`. Sin esto el sidebar
+            // derecho (`reserve = Some(true)`) flotaba sobre las ventanas.
+            let outside = s.reserve.unwrap_or(dientes_outside);
+            let excl = if outside && !s.autohide { thickness as i32 } else { 0 };
             layer.set_exclusive_zone(excl);
             layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer.commit();

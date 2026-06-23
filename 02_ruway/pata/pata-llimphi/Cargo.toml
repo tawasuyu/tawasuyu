@@ -50,6 +50,8 @@ llimphi-widget-scroll = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-navigator = { workspace = true }
 llimphi-widget-segmented = { workspace = true }
+# Íconos vectoriales (Lucide-like) para los dientes de los rails — coloreados.
+llimphi-icons = { workspace = true }
 # Wrap + chip para el grid de íconos del menú activities GNOME.
 llimphi-widget-wrap = { workspace = true }
 llimphi-widget-chip = { workspace = true }
