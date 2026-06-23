@@ -3153,6 +3153,8 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                         match v {
                             "fire" => m.greeter.rain_color = "amber".into(),
                             "plasma" => m.greeter.rain_color = "cyan".into(),
+                            "aurora" => m.greeter.rain_color = "green".into(),
+                            "lightning" => m.greeter.rain_color = "cyan".into(),
                             _ => {}
                         }
                     }

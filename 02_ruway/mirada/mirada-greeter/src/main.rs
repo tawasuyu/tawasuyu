@@ -680,6 +680,8 @@ impl App for Greeter {
                 match a {
                     state::BgAnim::Fire => m.rain_color = state::RainColor::Amber,
                     state::BgAnim::Plasma => m.rain_color = state::RainColor::Cyan,
+                    state::BgAnim::Aurora => m.rain_color = state::RainColor::Green,
+                    state::BgAnim::Lightning => m.rain_color = state::RainColor::Cyan,
                     _ => {}
                 }
                 persist(&m);
