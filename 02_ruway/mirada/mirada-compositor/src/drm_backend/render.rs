@@ -493,20 +493,19 @@ impl DrmState {
         if OFFSCREEN.load(Ordering::Relaxed) == 2 {
             return None;
         }
+        let _ = scale; // el tamaño de la miniatura ya viene en (ww2,wh2)
         let (tile_bg, win_bg, win_focus) = colors;
-        let mut live: Vec<Frame<GlesRenderer>> = Vec::new();
-        // Fondo opaco del tile (llena todo → el offscreen no tiene zonas
-        // transparentes; la transparencia de las esquinas la pone la rotación).
-        let mut bg = SolidColorBuffer::default();
-        bg.update((tw, th), tile_bg);
-        live.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-            &bg,
-            (0, 0),
-            1.0,
-            1.0,
-            Kind::Unspecified,
-        )));
-        // Ventanas: superficie viva a escala (coords LOCALES al tile), o rect.
+        use smithay::backend::renderer::gles::GlesTexture;
+        use smithay::backend::renderer::utils::{import_surface_tree, with_renderer_surface_state};
+        use smithay::backend::renderer::{Color32F, ImportMem, Renderer, Texture};
+        use smithay::utils::{Buffer as BufCoord, Physical as Phys, Rectangle as SRect, Size as SSize};
+
+        // 1) Extraer la GlesTexture de cada ventana (importándola antes) + su rect
+        //    destino local al tile. Pasarla EXPLÍCITA a `render_texture_from_to`
+        //    salta la búsqueda por context_id del render-element, que en este
+        //    contexto devolvía None → ventana vacía. Esta es la apuesta.
+        let ctx = self.renderer.context_id();
+        let mut draws: Vec<(Option<GlesTexture>, (i32, i32, i32, i32), bool)> = Vec::new();
         for (id, wx, wy, ww2, wh2, focus) in wins {
             let (lx, ly) = (wx - tx, wy - ty);
             let surface = self
@@ -516,98 +515,73 @@ impl DrmState {
                 .find(|w| w.id == *id)
                 .filter(|w| crate::buffer_render_sano(&w.surface))
                 .map(|w| w.surface.clone());
-            let mut puesto = false;
-            if let Some(surface) = surface {
-                // IMPORTAR la textura de la superficie ANTES de dibujar al
-                // offscreen: el render principal pasa por `render_frame` (que
-                // importa), pero `draw_render_elements` directo no — sin esto la
-                // ventana se dibujaba vacía (sólo el fondo del tile).
-                let _ = smithay::backend::renderer::utils::import_surface_tree(
-                    &mut self.renderer,
-                    &surface,
-                );
-                let elems = render_elements_from_surface_tree(
-                    &mut self.renderer,
-                    &surface,
-                    (lx, ly),
-                    1.0,
-                    1.0,
-                    Kind::Unspecified,
-                );
-                if !elems.is_empty() {
-                    let origin = Point::<i32, Physical>::from((lx, ly));
-                    for el in elems {
-                        live.push(Frame::ScaledWindow(RescaleRenderElement::from_element(
-                            el,
-                            origin,
-                            scale as f64,
-                        )));
-                    }
-                    puesto = true;
-                }
-            }
-            if !puesto {
-                let mut wb = SolidColorBuffer::default();
-                wb.update((*ww2, *wh2), if *focus { win_focus } else { win_bg });
-                live.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                    &wb,
-                    (lx, ly),
-                    1.0,
-                    1.0,
-                    Kind::Unspecified,
-                )));
-            }
+            let tex = surface.and_then(|s| {
+                let _ = import_surface_tree(&mut self.renderer, &s);
+                with_renderer_surface_state(&s, |st| st.texture(ctx.clone()).cloned()).flatten()
+            });
+            draws.push((tex, (lx, ly, (*ww2).max(1), (*wh2).max(1)), *focus));
         }
-        // Borde del resaltado: cuatro franjas finas.
-        if let Some(bc) = border {
-            let cf = [bc[0] as f32 / 255.0, bc[1] as f32 / 255.0, bc[2] as f32 / 255.0, bc[3] as f32 / 255.0];
-            for (x, y, w, h) in [(0, 0, tw, 3), (0, th - 3, tw, 3), (0, 0, 3, th), (tw - 3, 0, 3, th)] {
-                let mut b = SolidColorBuffer::default();
-                b.update((w, h), cf);
-                live.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                    &b,
-                    (x, y),
-                    1.0,
-                    1.0,
-                    Kind::Unspecified,
-                )));
-            }
-        }
-        // Número del escritorio (arriba-izquierda del tile).
-        let bbuf = MemoryRenderBuffer::from_slice(
-            &badge.rgba,
-            Fourcc::Argb8888,
-            (badge.width, badge.height),
-            1,
-            Transform::Normal,
-            None,
-        );
-        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+        // 2) Número como textura (RGBA → Abgr8888).
+        let (bw, bh) = (badge.width.max(1), badge.height.max(1));
+        let badge_size: SSize<i32, BufCoord> = (bw, bh).into();
+        let badge_tex = self
+            .renderer
+            .import_memory(&badge.rgba, Fourcc::Abgr8888, badge_size, false)
+            .ok();
+        let border_f = border
+            .map(|bc| [bc[0] as f32 / 255.0, bc[1] as f32 / 255.0, bc[2] as f32 / 255.0, bc[3] as f32 / 255.0]);
+
+        // 3) Componer el offscreen DIBUJANDO las texturas a mano (clear = fondo).
+        let px = crate::screencopy::render_offscreen_drawing(
             &mut self.renderer,
-            (8.0, 6.0),
-            &bbuf,
-            None,
-            None,
-            None,
-            Kind::Unspecified,
-        ) {
-            live.push(Frame::Text(el));
-        }
-        // Offscreen → píxeles → rotar en CPU.
-        let px = crate::screencopy::render_elements_offscreen(&mut self.renderer, (tw, th), &live)?;
-        // Si el offscreen sólo capturó el fondo (las texturas no se dibujaron en
-        // este contexto GLES anidado), el resultado sería peor que el esquema
-        // (rect pelado, sin número). Lo detectamos por variedad de color: con
-        // ventanas reales hay muchos colores; sólo-fondo da 1–2. En ese caso
-        // devolvemos None → el llamante usa el esquema (rotado, con número y
-        // recuadros). Si algún día las texturas se dibujan, sube solo a vivo.
+            (tw, th),
+            Color32F::from(tile_bg),
+            |frame| {
+                let dmg = [SRect::<i32, Phys>::from_size((tw, th).into())];
+                for (tex, (lx, ly, w2, h2), focus) in &draws {
+                    let dst = SRect::<i32, Phys>::new((*lx, *ly).into(), (*w2, *h2).into());
+                    match tex {
+                        Some(t) => {
+                            let src = SRect::from_size(t.size().to_f64());
+                            frame.render_texture_from_to(
+                                t, src, dst, &dmg, &[], Transform::Normal, 1.0, None, &[],
+                            )?;
+                        }
+                        None => {
+                            frame.draw_solid(
+                                dst,
+                                &dmg,
+                                Color32F::from(if *focus { win_focus } else { win_bg }),
+                            )?;
+                        }
+                    }
+                }
+                if let Some(bt) = &badge_tex {
+                    let bdst = SRect::<i32, Phys>::new((8, 6).into(), (bw, bh).into());
+                    let bsrc = SRect::from_size(bt.size().to_f64());
+                    frame.render_texture_from_to(
+                        bt, bsrc, bdst, &dmg, &[], Transform::Normal, 1.0, None, &[],
+                    )?;
+                }
+                if let Some(bf) = border_f {
+                    for (x, y, w, h) in [(0, 0, tw, 3), (0, th - 3, tw, 3), (0, 0, 3, th), (tw - 3, 0, 3, th)] {
+                        frame.draw_solid(
+                            SRect::<i32, Phys>::new((x, y).into(), (w, h).into()),
+                            &dmg,
+                            Color32F::from(bf),
+                        )?;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+
+        // 4) Latch + fallback por variedad de color (uno con ventanas que sale
+        //    casi monocromo = las texturas no se dibujaron → esquema).
         let mut buckets = std::collections::HashSet::new();
         for c in px.chunks_exact(4).step_by(7) {
             buckets.insert((c[0] / 40, c[1] / 40, c[2] / 40));
         }
-        // Sólo un tile CON ventanas es prueba válida del soporte de texturas (uno
-        // vacío da pocos colores aunque ande). Si capturó variedad → anda; si no →
-        // roto, y latcheamos para no reintentar.
         if !wins.is_empty() {
             OFFSCREEN.store(if buckets.len() >= 4 { 1 } else { 2 }, Ordering::Relaxed);
         }

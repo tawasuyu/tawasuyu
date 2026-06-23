@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::{Buffer as _, Fourcc};
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTarget, GlesTexture};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTarget, GlesTexture};
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{
     Bind, Blit, Color32F, ExportMem, Frame as _, Offscreen, Renderer, TextureFilter, TextureMapping,
@@ -683,6 +683,56 @@ where
     if mapping.flipped() {
         // El framebuffer GL es bottom-up: invertimos las filas para que la
         // miniatura quede con el origen arriba-izquierda como el resto.
+        let row = w * 4;
+        for y in 0..h / 2 {
+            let (a, b) = (y * row, (h - 1 - y) * row);
+            for k in 0..row {
+                out.swap(a + k, b + k);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Como [`render_elements_offscreen`] pero el dibujo lo hace un **closure** con
+/// acceso crudo al [`GlesFrame`] — para componer con `render_texture_from_to`
+/// pasando texturas EXTRAÍDAS a mano (la vista espacial rotada lo necesita: el
+/// dibujo por render-elements no encontraba la textura de la superficie en este
+/// contexto, pero pasándola explícita sí). Limpia con `clear` (poné el fondo del
+/// tile, opaco). Devuelve los píxeles `Xrgb8888` corregidos de orientación, o
+/// `None` si la GPU falla.
+pub fn render_offscreen_drawing<F>(
+    renderer: &mut GlesRenderer,
+    size: (i32, i32),
+    clear: Color32F,
+    draw: F,
+) -> Option<Vec<u8>>
+where
+    F: FnOnce(&mut GlesFrame<'_, '_>) -> Result<(), GlesError>,
+{
+    if size.0 <= 0 || size.1 <= 0 {
+        return None;
+    }
+    let buffer_size: Size<i32, BufferCoord> = (size.0, size.1).into();
+    let mut tex = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buffer_size).ok()?;
+    let mut target = renderer.bind(&mut tex).ok()?;
+    let fisico: Size<i32, smithay::utils::Physical> = (size.0, size.1).into();
+    let damage = [Rectangle::from_size(fisico)];
+    {
+        let mut frame = renderer.render(&mut target, fisico, Transform::Normal).ok()?;
+        frame.clear(clear, &damage).ok()?;
+        draw(&mut frame).ok()?;
+        let _ = frame.finish().ok()?;
+    }
+    let rect: Rectangle<i32, BufferCoord> = Rectangle::from_size(buffer_size);
+    let mapping = renderer.copy_framebuffer(&target, rect, FOURCC).ok()?;
+    let bytes = renderer.map_texture(&mapping).ok()?;
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    if bytes.len() < w * h * 4 {
+        return None;
+    }
+    let mut out = bytes[..w * h * 4].to_vec();
+    if mapping.flipped() {
         let row = w * 4;
         for y in 0..h / 2 {
             let (a, b) = (y * row, (h - 1 - y) * row);
