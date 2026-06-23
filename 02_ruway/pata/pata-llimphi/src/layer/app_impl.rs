@@ -1157,13 +1157,30 @@ impl LayerApp {
 
     /// Click en una ventana del task manager: activa o minimiza.
     pub(super) fn activar_ventana(&mut self, id: u32) {
-        let Some(seat) = self.seat.clone() else { return };
+        // El `activate` del foreign-toplevel necesita un `wl_seat`. Normalmente
+        // lo captura `new_seat`, pero si ese callback aún no corrió (o la barra
+        // no bindeó capacidades) `self.seat` quedaba `None` y el click "no hacía
+        // nada" SILENCIOSAMENTE. Caemos al primer seat conocido por `SeatState`.
+        let seat = self.seat.clone().or_else(|| {
+            let s = self.seat_state.seats().next();
+            if s.is_some() {
+                self.seat = s.clone();
+            }
+            s
+        });
+        let Some(seat) = seat else {
+            diag!("pata diag · activar_ventana({id}) SIN seat — activate NO enviado");
+            return;
+        };
         if let Some(t) = self.toplevel_por_id(id) {
             // SIEMPRE activar (enfocar/levantar). Antes alternaba a minimizar la
             // ventana ya activa, pero mirada ignora `set_minimized` (no-op) → el
             // click sobre el taskicon de la ventana enfocada "no hacía nada".
             t.handle.unset_minimized();
             t.handle.activate(&seat);
+            diag!("pata diag · activar_ventana({id}) → activate enviado");
+        } else {
+            diag!("pata diag · activar_ventana({id}) sin toplevel para ese id");
         }
     }
 
