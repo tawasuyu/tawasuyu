@@ -252,11 +252,18 @@ pub(crate) fn render_loc(w: &ManagedWindow, output_h: i32, titlebar_height: i32)
     let tb = titlebar_for(w, titlebar_height);
     let content_top = w.loc.1 + tb;
     let content_h = (w.size.1 - tb).max(1);
-    match with_renderer_surface_state(&w.surface, |s| s.surface_size()) {
-        Some(Some(size)) => {
-            let dx = ((w.size.0 - size.w) / 2).max(0);
-            let dy = ((content_h - size.h) / 2).max(0);
-            (w.loc.0 + dx, content_top + dy)
+    // El tamaño VISIBLE (contenido sin la sombra CSD) centra la ventana; el
+    // `offset` de la sombra corre el buffer hacia atrás para que el CONTENIDO
+    // —no el borde del buffer— caiga en la celda. La sombra rebalsa hacia afuera
+    // (translúcida, no estorba). Sin geometría declarada esto es idéntico al
+    // comportamiento previo (offset 0, tamaño = buffer). Devuelve el origen del
+    // BUFFER a dibujar; el contenido queda en `(origen + offset)`.
+    match content_px_size(w) {
+        Some((cw, ch)) => {
+            let (off_x, off_y) = content_offset(w);
+            let dx = ((w.size.0 - cw) / 2).max(0);
+            let dy = ((content_h - ch) / 2).max(0);
+            (w.loc.0 + dx - off_x, content_top + dy - off_y)
         }
         _ => (w.loc.0, content_top),
     }
@@ -270,6 +277,44 @@ pub(crate) fn surface_px_size(w: &ManagedWindow) -> Option<(i32, i32)> {
     with_renderer_surface_state(&w.surface, |s| s.surface_size())
         .flatten()
         .map(|s| (s.w, s.h))
+}
+
+/// El rectángulo de **geometría de ventana** declarado por el cliente
+/// (`xdg_surface.set_window_geometry`): el contenido real dentro del buffer.
+/// Las apps CSD (Firefox/Zen, GTK) meten una **sombra invisible** en el buffer
+/// y declaran acá el recorte de contenido — `loc` es el desplazamiento de la
+/// sombra (cuánto entra el contenido) y `size` el contenido sin sombra.
+/// `None` si el cliente no la declaró o es nula (entonces contenido = buffer).
+pub(crate) fn window_geometry(
+    surface: &WlSurface,
+) -> Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>> {
+    with_states(surface, |states| {
+        states
+            .cached_state
+            .get::<smithay::wayland::shell::xdg::SurfaceCachedState>()
+            .current()
+            .geometry
+    })
+    .filter(|g| g.size.w > 0 && g.size.h > 0)
+}
+
+/// El desplazamiento `(x, y)` de la sombra CSD dentro del buffer (el `loc` de
+/// la geometría), o `(0, 0)` si no hay geometría. El buffer se dibuja corrido
+/// por **`-offset`** para que el contenido —no la sombra— caiga en la celda.
+pub(crate) fn content_offset(w: &ManagedWindow) -> (i32, i32) {
+    window_geometry(&w.surface)
+        .map(|g| (g.loc.x, g.loc.y))
+        .unwrap_or((0, 0))
+}
+
+/// El tamaño **visible** de la ventana: el contenido declarado por geometría
+/// (sin la sombra CSD) si lo hay; si no, el buffer entero. Lo que deben abrazar
+/// el marco y la barra de mirada y el hit-test, no el buffer-con-sombra.
+pub(crate) fn content_px_size(w: &ManagedWindow) -> Option<(i32, i32)> {
+    if let Some(g) = window_geometry(&w.surface) {
+        return Some((g.size.w, g.size.h));
+    }
+    surface_px_size(w)
 }
 
 /// Tope de lado para el buffer raíz de una superficie a componer. Encima de

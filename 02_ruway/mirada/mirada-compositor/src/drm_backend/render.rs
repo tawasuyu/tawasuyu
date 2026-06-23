@@ -109,6 +109,12 @@ impl DrmState {
             let on_focused = focused_rect.map_or(true, |fr| gx >= fr.x && gx < fr.x + fr.w);
             let gx = if w.is_shell || !on_focused { gx } else { gx + slide_dx };
             let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+            // Tamaño del CONTENIDO (sin la sombra CSD) y desplazamiento de la
+            // sombra dentro del buffer: las decoraciones (barra/marco/sombra)
+            // abrazan el contenido, no el buffer-con-sombra. Sin geometría
+            // declarada coinciden con el buffer (offset 0).
+            let (cw, ch) = crate::content_px_size(w).unwrap_or((sw, sh));
+            let (off_x, off_y) = crate::content_offset(w);
             // Rect decorado en coords globales (incluye barra + superficie).
             let gxd = gx;
             let gyd = gy - tb;
@@ -122,11 +128,15 @@ impl DrmState {
             {
                 continue;
             }
-            // Posición local de la superficie y de la decoración.
+            // `x,y` = origen del BUFFER (donde se pinta el árbol de superficie).
+            // `cx,cy` = origen del CONTENIDO (buffer + offset de sombra): ahí
+            // arrancan barra y marco para que abracen lo visible.
             let x = gx - rect.x;
             let y = gy - rect.y;
-            let dec_y = y - tb;
-            let dec_h = sh + tb;
+            let cx = x + off_x;
+            let cy = y + off_y;
+            let dec_y = cy - tb;
+            let dec_h = ch + tb;
 
             if tb > 0 {
                 if let Some(tr) = &self.text {
@@ -141,7 +151,7 @@ impl DrmState {
                         let ty = dec_y + (tb - TITLE_PX as i32) / 2;
                         if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                             &mut self.renderer,
-                            ((x + 8) as f64, ty as f64),
+                            ((cx + 8) as f64, ty as f64),
                             buf,
                             None,
                             None,
@@ -162,12 +172,12 @@ impl DrmState {
                         (1i32, crate::text::icon_square(TITLE_PX, TITLE_COLOR)),
                         (2i32, crate::text::icon_minimize(TITLE_PX, TITLE_COLOR)),
                     ] {
-                        if sw < (slot + 1) * crate::TB_BTN_W + 8 {
+                        if cw < (slot + 1) * crate::TB_BTN_W + 8 {
                             continue; // ventana muy angosta: sin botón
                         }
                         {
                             let r = icon;
-                            let cell_x = x + sw - (slot + 1) * crate::TB_BTN_W;
+                            let cell_x = cx + cw - (slot + 1) * crate::TB_BTN_W;
                             let bx = cell_x + (crate::TB_BTN_W - r.width) / 2;
                             let by = dec_y + (tb - r.height) / 2;
                             let bbuf = MemoryRenderBuffer::from_slice(
@@ -219,10 +229,10 @@ impl DrmState {
                         };
                         let col = rgba_f32([shade(base[0]), shade(base[1]), shade(base[2]), base[3]]);
                         let mut band = SolidColorBuffer::default();
-                        band.update((sw, h), col);
+                        band.update((cw, h), col);
                         into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
                             &band,
-                            (x, by),
+                            (cx, by),
                             1.0,
                             1.0,
                             Kind::Unspecified,
@@ -231,10 +241,10 @@ impl DrmState {
                 } else {
                     let color = rgba_f32(base);
                     let mut bar = SolidColorBuffer::default();
-                    bar.update((sw, tb), color);
+                    bar.update((cw, tb), color);
                     into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
                         &bar,
-                        (x, dec_y),
+                        (cx, dec_y),
                         1.0,
                         1.0,
                         Kind::Unspecified,
@@ -254,7 +264,7 @@ impl DrmState {
                         .or_insert_with(|| title_buffer(tr, &w.title));
                     if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                         &mut self.renderer,
-                        ((x + 6) as f64, (y + 4) as f64),
+                        ((cx + 6) as f64, (cy + 4) as f64),
                         buf,
                         None,
                         None,
@@ -270,7 +280,7 @@ impl DrmState {
             // borde abraza el contenido). En CSD flotante lo omitimos: el borde
             // envolvería la sombra invisible del buffer → el «margen grande».
             if !w.is_shell && self.app.decorations.border_width > 0 && (w.ssd || !w.floating) {
-                let rects = border_rects(x, dec_y, sw, dec_h, self.app.decorations.border_width);
+                let rects = border_rects(cx, dec_y, cw, dec_h, self.app.decorations.border_width);
                 for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
                     into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
                         buf,
@@ -299,10 +309,10 @@ impl DrmState {
                 // (expansión, desplazamiento-y, alfa): de afuera-tenue a cerca-fuerte.
                 for &(exp, dy, a) in &[(12i32, 10i32, 0.06f32), (6, 5, 0.10), (2, 2, 0.16)] {
                     let mut sh = SolidColorBuffer::default();
-                    sh.update((sw + exp * 2, dec_h + exp * 2), [0.0, 0.0, 0.0, a]);
+                    sh.update((cw + exp * 2, dec_h + exp * 2), [0.0, 0.0, 0.0, a]);
                     into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
                         &sh,
-                        (x - exp, dec_y - exp + dy),
+                        (cx - exp, dec_y - exp + dy),
                         1.0,
                         1.0,
                         Kind::Unspecified,
@@ -1269,24 +1279,24 @@ impl DrmState {
     /// rindiendo — se hace una vez al inicio de [`Self::render`].
     fn refresh_window_borders(&mut self) {
         let dec = self.app.decorations;
-        let Some(primary) = self.outputs.get(Self::PRIMARY) else {
+        if self.outputs.get(Self::PRIMARY).is_none() {
             return; // sin monitores: no hay bordes que recalcular
-        };
-        let output_h = primary.rect.h;
+        }
         for w in &mut self.app.windows {
             if !w.visible || w.is_shell {
                 continue;
             }
             let tb = crate::titlebar_for(w, dec.titlebar_height);
-            let (x, y) = crate::render_loc(w, output_h, dec.titlebar_height);
-            let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, w.size.1 - tb));
-            let (x, y, sh) = (x, y - tb, sh + tb);
+            // Sólo importan los TAMAÑOS de los 4 lados (la posición se calcula al
+            // pintar). Se dimensionan sobre el CONTENIDO (sin sombra CSD), igual
+            // que el marco que se dibuja en el loop principal.
+            let (cw, ch) = crate::content_px_size(w).unwrap_or((w.size.0, w.size.1 - tb));
             let color = rgba_f32(if w.focused {
                 dec.border_focus
             } else {
                 dec.border_normal
             });
-            let rects = border_rects(x, y, sw, sh, dec.border_width);
+            let rects = border_rects(0, 0, cw, ch + tb, dec.border_width);
             for (buf, (_, _, bw, bh)) in w.borders.iter_mut().zip(rects) {
                 buf.update((bw, bh), color);
             }
