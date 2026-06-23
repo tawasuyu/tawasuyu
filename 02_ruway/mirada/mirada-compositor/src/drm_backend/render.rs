@@ -576,7 +576,28 @@ impl DrmState {
             live.push(Frame::Text(el));
         }
         // Offscreen → píxeles → rotar en CPU.
+        let n_elem = live.len();
         let px = crate::screencopy::render_elements_offscreen(&mut self.renderer, (tw, th), &live)?;
+        // Diag (una vez): ¿el offscreen capturó CONTENIDO o sólo el fondo? Cuenta
+        // cubos de color distintos — si es ~1, el offscreen sólo pintó el fondo
+        // (ventanas/badge no se dibujaron); si es >varios, el problema es el
+        // readback/rotación/subida posterior.
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static L: AtomicBool = AtomicBool::new(false);
+            if !L.swap(true, Ordering::Relaxed) {
+                let mut buckets = std::collections::HashSet::new();
+                for c in px.chunks_exact(4) {
+                    buckets.insert((c[0] / 48, c[1] / 48, c[2] / 48));
+                }
+                eprintln!(
+                    "mirada-compositor · prezi offscreen OK: {tw}x{th}, {} elems ({} ventanas), {} colores en el readback",
+                    n_elem,
+                    wins.len(),
+                    buckets.len(),
+                );
+            }
+        }
         Some(crate::text::rotate_buffer(&px, tw, th, rot))
     }
 
