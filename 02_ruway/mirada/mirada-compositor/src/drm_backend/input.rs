@@ -95,7 +95,7 @@ impl DrmState {
                                     // zoom-in). No es Win+Tab, así que NO se cierra
                                     // al soltar Super — sólo con Super+e/Esc/click.
                                     if st.overview_open {
-                                        st.overview_closing = true;
+                                        st.overview_open = false; // cierre instantáneo
                                     } else {
                                         st.overview_open = true;
                                         st.overview_closing = false;
@@ -113,11 +113,9 @@ impl DrmState {
                                     return FilterResult::Intercept(());
                                 }
                                 "Escape" if st.overview_open => {
-                                    // Cancelar: cierra SIN saltar (zoom-in de vuelta
-                                    // al escritorio actual).
-                                    st.overview_selected =
-                                        st.workspace_overview().map_or(0, |(a, _)| a);
-                                    st.overview_closing = true;
+                                    // Cancelar: cierra al instante SIN saltar.
+                                    st.overview_open = false;
+                                    st.overview_via_wintab = false;
                                     return FilterResult::Intercept(());
                                 }
                                 _ => {}
@@ -339,7 +337,9 @@ impl DrmState {
                             self.app.cambiar_workspace(ws);
                         }
                     }
-                    self.app.overview_closing = true;
+                    // Cierre instantáneo (sin zoom-in que deje las ventanas grandes).
+                    self.app.overview_open = false;
+                    self.app.overview_via_wintab = false;
                     crate::screencopy::danar_todo(&mut self.app);
                     return;
                 }

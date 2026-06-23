@@ -159,25 +159,17 @@ impl DrmState {
                 self.overview_anim = Some((now, true)); // recién abierta → zoom-out
             }
             self.prev_overview_open = self.app.overview_open;
-            if self.app.overview_closing && !matches!(self.overview_anim, Some((_, false))) {
-                self.overview_anim = Some((now, false)); // cierre → zoom-in
-            }
-            if let Some((start, opening)) = self.overview_anim {
+            // El cierre es INSTANTÁNEO (sin zoom-in): si ya no está abierta, no hay
+            // animación pendiente.
+            if !self.app.overview_open {
+                self.overview_anim = None;
+            } else if let Some((start, _)) = self.overview_anim {
                 if now >= start.saturating_add(anim_ms) {
-                    if opening {
-                        self.overview_anim = None; // queda abierta, desplegada
-                    } else {
-                        self.app.overview_open = false;
-                        self.app.overview_closing = false;
-                        self.app.overview_via_wintab = false;
-                        self.overview_anim = None;
-                        self.prev_overview_open = false;
-                    }
+                    self.overview_anim = None; // zoom-out terminó: mosaico quieto
                 }
             }
-            // Mientras la vista esté abierta repintamos cada tick: así la animación
-            // FLUYE y, sobre todo, el frame final (mosaico desplegado, t=1) sí se
-            // dibuja — antes se congelaba un frame antes, con el activo agrandado.
+            // Mientras la vista esté abierta repintamos cada tick: así el zoom-out
+            // FLUYE y el frame final (mosaico desplegado, t=1) sí se dibuja.
             if self.app.overview_open {
                 crate::screencopy::danar_todo(&mut self.app);
             }
