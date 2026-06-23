@@ -731,17 +731,14 @@ where
     if bytes.len() < w * h * 4 {
         return None;
     }
-    let mut out = bytes[..w * h * 4].to_vec();
-    if mapping.flipped() {
-        let row = w * 4;
-        for y in 0..h / 2 {
-            let (a, b) = (y * row, (h - 1 - y) * row);
-            for k in 0..row {
-                out.swap(a + k, b + k);
-            }
-        }
-    }
-    Some(out)
+    // NO corregir por `mapping.flipped()`: en smithay 0.7 `GlesMapping::flipped()`
+    // está HARDCODEADO a `true` (gles/texture.rs), pensado para el framebuffer de
+    // una `EGLSurface` (glReadPixels lee bottom-up). Pero acá el target es un
+    // **offscreen `GlesTexture`**, donde smithay renderiza top-down: el readback
+    // YA viene derecho. Aplicar el swap lo dejaba «de cabeza» (medido headless en
+    // examples/offscreen_orient_diag: crudo = IDENTIDAD, tras el swap = flip
+    // vertical). Es universal, no depende de la GPU.
+    Some(bytes[..w * h * 4].to_vec())
 }
 
 #[cfg(test)]

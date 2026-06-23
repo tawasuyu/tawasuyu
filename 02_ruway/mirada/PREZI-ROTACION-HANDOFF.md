@@ -43,8 +43,35 @@ con un escritorio rotado, y leer ese log da la respuesta sin mirar píxeles:
   texture() necesita el context_id correcto, o importar en el mismo paso de
   composición que el frame principal).
 
-**PRÓXIMO PASO EN EL METAL:** correr el compositor DRM y leer ese log (ver
-«Cómo probar» abajo). Lo demás de esta sección quedó como contexto histórico.
+**RESULTADO EN EL METAL (confirmado corriendo el compositor DRM):**
+`extracción: 1/1 ventanas con textura` → la extracción ANDA, el tile vivo
+rotado se dibuja. Quedaban tres defectos visuales, los tres arreglados:
+
+1. **«Queda de cabeza» (flip vertical).** Causa: `GlesMapping::flipped()` en
+   smithay 0.7 está **hardcodeado a `true`** (`gles/texture.rs`), pensado para
+   el framebuffer de una `EGLSurface` (glReadPixels bottom-up). Pero el target
+   es un **offscreen `GlesTexture`**, donde el readback YA viene top-down. La
+   corrección por `flipped()` en `render_offscreen_drawing` lo daba vuelta.
+   Medido headless (`examples/offscreen_orient_diag`): crudo = IDENTIDAD, tras
+   el swap = flip vertical. Fix: **no aplicar el swap** en
+   `render_offscreen_drawing` (es universal, no depende de la GPU).
+
+2. **Zoom-in gris.** Causa: el cap `LIVE_ROT_MAX` devolvía `None` cuando el tile
+   estaba grande (durante el zoom) → esquema gris. Fix: componer SIEMPRE a una
+   **resolución acotada** (≤560) y que el llamante **escale el bitmap por GPU**
+   (`RescaleRenderElement`, nueva variante `Frame::ScaledText`) hasta el tamaño
+   real. El giro vivo se ve durante todo el zoom; el costo CPU queda acotado.
+
+3. **Parpadeo.** Causa: el heurístico de «variedad de color» (buckets) devolvía
+   `None` por frame cuando la composición tenía poca variedad → alternaba
+   vivo/esquema. Como ya está PROBADO que el offscreen dibuja texturas, se
+   **eliminó** ese heurístico (y el latch). `render_offscreen_drawing` ya
+   devuelve `None` sólo ante fallo REAL de GPU; las ventanas sin buffer sano ya
+   caen a un rect sólido dentro de la composición.
+
+**PRÓXIMO PASO EN EL METAL:** correr el compositor DRM con el build nuevo,
+abrir Prezi con un escritorio rotado y confirmar: derecho (no de cabeza),
+vivo durante el zoom (no gris), sin parpadeo.
 
 ---
 

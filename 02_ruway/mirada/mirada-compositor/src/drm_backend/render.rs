@@ -469,30 +469,25 @@ impl DrmState {
         border: Option<[u8; 4]>,
         badge: &crate::text::Rasterized,
         colors: ([f32; 4], [f32; 4], [f32; 4]), // (tile_bg, win_bg, win_focus)
-    ) -> Option<crate::text::Rasterized> {
+    ) -> Option<(crate::text::Rasterized, f32)> {
         let (tx, ty, tw, th) = tile;
         if tw <= 0 || th <= 0 {
             return None;
         }
-        // Cap de rendimiento: el render-vivo-rotado hace un offscreen + readback +
-        // rotación CPU por frame, O(área). Con el tile agrandado durante el zoom
-        // (cerca de pantalla completa) eso tironea. Sólo lo hacemos con el tile
-        // CHICO (mosaico asentado), donde el giro se aprecia; mientras el zoom lo
-        // tiene grande, devolvemos None → esquema barato (el giro rápido no se nota).
+        // Resolución de composición ACOTADA. El render-vivo-rotado hace un
+        // offscreen + readback + rotación CPU, O(área). Con el tile agrandado
+        // durante el zoom (cerca de pantalla completa) componer a tamaño pleno
+        // tironea. En vez de caer al esquema gris (lo de antes), componemos a una
+        // resolución TOPE y el llamante ESCALA el bitmap por GPU hasta el tamaño
+        // real: el giro vivo se ve durante todo el zoom y el costo CPU queda
+        // acotado. Devolvemos `rs` (escala de composición) para que el llamante
+        // escale por `1/rs`. Asentado (tile ≤ tope) → rs=1 → sin escalar, nítido.
         const LIVE_ROT_MAX: i32 = 560;
-        if tw.max(th) > LIVE_ROT_MAX {
-            return None;
-        }
-        // Latch del soporte de texturas en offscreen: en algunas GPU/Mesa el
-        // render offscreen anidado sólo compone colores sólidos, no texturas
-        // (ni superficies ni imágenes). Si ya lo detectamos roto, ni intentamos
-        // (evita un render+readback por frame para nada) → esquema directo.
-        // 0 = sin probar, 1 = anda, 2 = roto.
-        use std::sync::atomic::{AtomicU8, Ordering};
-        static OFFSCREEN: AtomicU8 = AtomicU8::new(0);
-        if OFFSCREEN.load(Ordering::Relaxed) == 2 {
-            return None;
-        }
+        let rs = (LIVE_ROT_MAX as f32 / tw.max(th) as f32).min(1.0);
+        let (cw, ch) = (
+            ((tw as f32 * rs).round() as i32).max(1),
+            ((th as f32 * rs).round() as i32).max(1),
+        );
         let _ = scale; // el tamaño de la miniatura ya viene en (ww2,wh2)
         let (tile_bg, win_bg, win_focus) = colors;
         use smithay::backend::renderer::gles::GlesTexture;
@@ -507,7 +502,11 @@ impl DrmState {
         let ctx = self.renderer.context_id();
         let mut draws: Vec<(Option<GlesTexture>, (i32, i32, i32, i32), bool)> = Vec::new();
         for (id, wx, wy, ww2, wh2, focus) in wins {
-            let (lx, ly) = (wx - tx, wy - ty);
+            // Local al tile y escalado a la resolución de composición `rs`.
+            let lx = (((wx - tx) as f32) * rs).round() as i32;
+            let ly = (((wy - ty) as f32) * rs).round() as i32;
+            let w2 = ((*ww2 as f32 * rs).round() as i32).max(1);
+            let h2 = ((*wh2 as f32 * rs).round() as i32).max(1);
             let surface = self
                 .app
                 .windows
@@ -519,7 +518,7 @@ impl DrmState {
                 let _ = import_surface_tree(&mut self.renderer, &s);
                 with_renderer_surface_state(&s, |st| st.texture(ctx.clone()).cloned()).flatten()
             });
-            draws.push((tex, (lx, ly, (*ww2).max(1), (*wh2).max(1)), *focus));
+            draws.push((tex, (lx, ly, w2, h2), *focus));
         }
         // Diag one-shot: el offscreen dibuja texturas (probado headless en metal,
         // examples/offscreen_*_diag), así que si el tile vivo rotado cae al
@@ -547,12 +546,20 @@ impl DrmState {
             .map(|bc| [bc[0] as f32 / 255.0, bc[1] as f32 / 255.0, bc[2] as f32 / 255.0, bc[3] as f32 / 255.0]);
 
         // 3) Componer el offscreen DIBUJANDO las texturas a mano (clear = fondo).
+        //    Todo a la resolución de composición acotada `(cw, ch)`; el badge y el
+        //    grosor del borde se escalan por `rs` para mantener proporción.
+        let (bdx, bdy) = ((8.0 * rs).round() as i32, (6.0 * rs).round() as i32);
+        let (bdw, bdh) = (
+            ((bw as f32 * rs).round() as i32).max(1),
+            ((bh as f32 * rs).round() as i32).max(1),
+        );
+        let bt_px = ((3.0 * rs).round() as i32).max(1);
         let px = crate::screencopy::render_offscreen_drawing(
             &mut self.renderer,
-            (tw, th),
+            (cw, ch),
             Color32F::from(tile_bg),
             |frame| {
-                let dmg = [SRect::<i32, Phys>::from_size((tw, th).into())];
+                let dmg = [SRect::<i32, Phys>::from_size((cw, ch).into())];
                 for (tex, (lx, ly, w2, h2), focus) in &draws {
                     let dst = SRect::<i32, Phys>::new((*lx, *ly).into(), (*w2, *h2).into());
                     match tex {
@@ -572,14 +579,19 @@ impl DrmState {
                     }
                 }
                 if let Some(bt) = &badge_tex {
-                    let bdst = SRect::<i32, Phys>::new((8, 6).into(), (bw, bh).into());
+                    let bdst = SRect::<i32, Phys>::new((bdx, bdy).into(), (bdw, bdh).into());
                     let bsrc = SRect::from_size(bt.size().to_f64());
                     frame.render_texture_from_to(
                         bt, bsrc, bdst, &dmg, &[], Transform::Normal, 1.0, None, &[],
                     )?;
                 }
                 if let Some(bf) = border_f {
-                    for (x, y, w, h) in [(0, 0, tw, 3), (0, th - 3, tw, 3), (0, 0, 3, th), (tw - 3, 0, 3, th)] {
+                    for (x, y, w, h) in [
+                        (0, 0, cw, bt_px),
+                        (0, ch - bt_px, cw, bt_px),
+                        (0, 0, bt_px, ch),
+                        (cw - bt_px, 0, bt_px, ch),
+                    ] {
                         frame.draw_solid(
                             SRect::<i32, Phys>::new((x, y).into(), (w, h).into()),
                             &dmg,
@@ -591,19 +603,13 @@ impl DrmState {
             },
         )?;
 
-        // 4) Latch + fallback por variedad de color (uno con ventanas que sale
-        //    casi monocromo = las texturas no se dibujaron → esquema).
-        let mut buckets = std::collections::HashSet::new();
-        for c in px.chunks_exact(4).step_by(7) {
-            buckets.insert((c[0] / 40, c[1] / 40, c[2] / 40));
-        }
-        if !wins.is_empty() {
-            OFFSCREEN.store(if buckets.len() >= 4 { 1 } else { 2 }, Ordering::Relaxed);
-        }
-        if buckets.len() < 4 {
-            return None;
-        }
-        Some(crate::text::rotate_buffer(&px, tw, th, rot))
+        // 4) Rotar el bitmap (a resolución acotada) y devolverlo junto con `rs`.
+        //    No hay heurístico de "variedad de color": probamos en metal (headless,
+        //    examples/offscreen_*_diag) que el offscreen dibuja texturas, así que
+        //    `render_offscreen_drawing` sólo devuelve None ante un fallo REAL de
+        //    GPU — y ahí el llamante ya cae al esquema. Las ventanas sin buffer
+        //    sano ya caen a un rect sólido dentro de la composición.
+        Some((crate::text::rotate_buffer(&px, cw, ch, rot), rs))
     }
 
     /// Emite la **vista espacial (Prezi)** en vivo: un zoom-out con un mosaico
@@ -833,7 +839,9 @@ impl DrmState {
             // CPU. Así el contenido vivo se ve girado de verdad. Si algún paso de
             // GPU falla, caemos al esquema (rects) —rotado igual— para no quedar
             // sin nada.
-            let comp = self
+            // `comp` viene compuesto a resolución acotada `rs` (≤1): durante el
+            // zoom `rs<1` y el bitmap se escala por GPU (`1/rs`); asentado `rs=1`.
+            let (comp, rs) = self
                 .render_tile_live_rotated(
                     (t.x, t.y, t.w, t.h),
                     t.scale,
@@ -849,16 +857,19 @@ impl DrmState {
                         .iter()
                         .map(|(_id, wx, wy, ww2, wh2, f)| (wx - t.x, wy - t.y, *ww2, *wh2, *f))
                         .collect();
-                    crate::text::rasterize_tile_rotated(
-                        t.w,
-                        t.h,
-                        t.rot,
-                        to_u8(TILE_BG),
-                        border,
-                        &wins_local,
-                        to_u8(WIN_BG),
-                        to_u8(WIN_FOCUS),
-                        Some(badge),
+                    (
+                        crate::text::rasterize_tile_rotated(
+                            t.w,
+                            t.h,
+                            t.rot,
+                            to_u8(TILE_BG),
+                            border,
+                            &wins_local,
+                            to_u8(WIN_BG),
+                            to_u8(WIN_FOCUS),
+                            Some(badge),
+                        ),
+                        1.0,
                     )
                 });
             let buf = MemoryRenderBuffer::from_slice(
@@ -869,9 +880,12 @@ impl DrmState {
                 Transform::Normal,
                 None,
             );
-            // Coloca el AABB centrado en el centro del tile.
-            let ax = t.x as f64 + t.w as f64 / 2.0 - comp.width as f64 / 2.0;
-            let ay = t.y as f64 + t.h as f64 / 2.0 - comp.height as f64 / 2.0;
+            // Coloca el AABB (escalado por `1/rs`) centrado en el centro del tile.
+            let k = (1.0 / rs as f64).max(1.0);
+            let cx = t.x as f64 + t.w as f64 / 2.0;
+            let cy = t.y as f64 + t.h as f64 / 2.0;
+            let ax = cx - k * comp.width as f64 / 2.0;
+            let ay = cy - k * comp.height as f64 / 2.0;
             if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                 &mut self.renderer,
                 (ax, ay),
@@ -881,7 +895,14 @@ impl DrmState {
                 None,
                 Kind::Unspecified,
             ) {
-                into.push(Frame::Text(el));
+                if (k - 1.0).abs() < 1e-3 {
+                    into.push(Frame::Text(el));
+                } else {
+                    // Escala el bitmap (GPU) alrededor de su esquina = posición del
+                    // elemento, así el centro del AABB cae en el centro del tile.
+                    let origin = Point::<i32, Physical>::from((ax.round() as i32, ay.round() as i32));
+                    into.push(Frame::ScaledText(RescaleRenderElement::from_element(el, origin, k)));
+                }
             }
         }
         for (t, badge) in tiles.iter().zip(badges.iter()) {

@@ -129,6 +129,7 @@ render_elements! {
     Solid = SolidColorRenderElement,
     Text = MemoryRenderBufferRenderElement<R>,
     ScaledWindow = RescaleRenderElement<WaylandSurfaceRenderElement<R>>,
+    ScaledText = RescaleRenderElement<MemoryRenderBufferRenderElement<R>>,
 }
 
 /// Color de fondo del escritorio cuando no hay nada que lo tape.
