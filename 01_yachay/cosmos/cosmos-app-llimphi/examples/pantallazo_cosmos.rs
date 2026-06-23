@@ -375,7 +375,7 @@ fn seed_dialog(model: &mut Model) {
     model.dialog = Some(dialog::Dialog::NewChart(dialog::NewChartForm {
         contact: None,
         group: None,
-        contact_query: "Fri".into(),
+        contact_query: "Frida Kahlo".into(),
         kind: ChartKind::Natal,
         label: "Carta nueva".into(),
         date: "1907-07-06".into(),
@@ -391,7 +391,9 @@ fn seed_dialog(model: &mut Model) {
         cal_month: 7,
     }));
     model.dialog_field = dialog::DialogField::Contact;
-    model.dialog_input.set_text("Fri".to_string());
+    model.dialog_input.set_text("Frida Kahlo".to_string());
+    // Selección activa (como tras triple-click) para certificar el resaltado.
+    model.dialog_input.select_all();
 }
 
 fn main() {

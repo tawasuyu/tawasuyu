@@ -535,6 +535,12 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             open_new_chart_or_hoy(&mut m);
         }
         Msg::DialogFocus(f) => dialog_focus(&mut m, f),
+        Msg::DialogClickAt(f, x) => {
+            // Enfocar el campo (carga su valor en el buffer vivo) y registrar
+            // el click para caret/selección (doble = palabra, triple = todo).
+            dialog_focus(&mut m, f);
+            m.dialog_input.pointer_click(x, 13.0);
+        }
         Msg::DialogKey(ev) => {
             m.dialog_input.apply_key(&ev);
             let txt = m.dialog_input.text();

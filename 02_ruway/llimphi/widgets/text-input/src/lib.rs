@@ -14,6 +14,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, Size, Style},
     AlignItems, Rect,
@@ -37,6 +39,8 @@ pub struct TextInputPalette {
     /// está focado. Default = `fg_text` (sigue al texto, como `caret-color:
     /// auto` en CSS).
     pub caret: Color,
+    /// Fondo del texto seleccionado (con Shift+flechas o doble/triple click).
+    pub selection: Color,
 }
 
 impl Default for TextInputPalette {
@@ -56,6 +60,7 @@ impl TextInputPalette {
             fg_text: t.fg_text,
             fg_placeholder: t.fg_placeholder,
             caret: t.fg_text,
+            selection: t.bg_selected,
         }
     }
 }
@@ -135,6 +140,30 @@ impl TextInputState {
     pub fn editor_mut(&mut self) -> &mut EditorState {
         &mut self.inner
     }
+
+    /// Registra un click del mouse a `local_x` px del borde izquierdo del box
+    /// (coords del nodo, incluido el borde de 1 px + el padding de 10 px).
+    /// Mapea x → columna de carácter y delega en
+    /// [`EditorState::register_click`], que escala **1 click = caret**,
+    /// **2 = palabra**, **3 = todo** por ventana de tiempo. `font_size` es el
+    /// de render (13.0 por defecto en `text_input_view`).
+    ///
+    /// El mapeo usa un ancho de carácter aproximado (`font_size * 0.5`): para
+    /// una fuente proporcional no es exacto al píxel, pero como doble/triple
+    /// click snapean a límites de palabra/línea, basta caer dentro de la
+    /// palabra. (No contempla scroll horizontal — pensado para campos cortos.)
+    pub fn pointer_click(&mut self, local_x: f32, font_size: f32) {
+        const PAD: f32 = 11.0; // borde 1px + padding interno 10px
+        let char_w = (font_size * 0.5).max(1.0);
+        let col = (((local_x - PAD) / char_w).round().max(0.0)) as usize;
+        // Single-line ⇒ línea 0; register_click clampa la columna al texto.
+        self.inner.register_click(0, col);
+    }
+
+    /// Selecciona todo el texto (equivalente a triple-click / Ctrl+A).
+    pub fn select_all(&mut self) {
+        self.inner.select_all();
+    }
 }
 
 /// Compone el input box: borde de 1 px (rect padre coloreado), relleno
@@ -150,6 +179,50 @@ pub fn text_input_view<Msg: Clone + 'static>(
     focused: bool,
     palette: &TextInputPalette,
     on_focus: Msg,
+) -> View<Msg> {
+    build_input(state, placeholder, focused, palette, ClickHandler::Focus(on_focus))
+}
+
+/// Cómo responde el box al click.
+enum ClickHandler<Msg> {
+    /// Click plano → un solo `Msg` (toma foco). Sin selección por mouse.
+    Focus(Msg),
+    /// Click con posición → `Msg(local_x)`. El caller suele enfocar el campo
+    /// **y** llamar [`TextInputState::pointer_click`] para posicionar el caret
+    /// / seleccionar palabra (2 clicks) / todo (3 clicks).
+    At(Arc<dyn Fn(f32) -> Msg + Send + Sync>),
+}
+
+/// Como [`text_input_view`] pero el click lleva la posición `local_x` (px
+/// desde el borde izquierdo del box) — habilita posicionar el caret y la
+/// selección por **doble/triple click** (vía [`TextInputState::pointer_click`]).
+/// La selección activa se pinta resaltada.
+pub fn text_input_view_mouse<Msg, F>(
+    state: &TextInputState,
+    placeholder: &str,
+    focused: bool,
+    palette: &TextInputPalette,
+    on_click_at: F,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    F: Fn(f32) -> Msg + Send + Sync + 'static,
+{
+    build_input(
+        state,
+        placeholder,
+        focused,
+        palette,
+        ClickHandler::At(Arc::new(on_click_at)),
+    )
+}
+
+fn build_input<Msg: Clone + 'static>(
+    state: &TextInputState,
+    placeholder: &str,
+    focused: bool,
+    palette: &TextInputPalette,
+    click: ClickHandler<Msg>,
 ) -> View<Msg> {
     let raw = state.text();
     let is_empty = raw.is_empty();
@@ -172,6 +245,17 @@ pub fn text_input_view<Msg: Clone + 'static>(
     } else {
         String::new()
     };
+    // Rango de selección en columnas (= char offsets, single-line). `None` si
+    // no hay selección o el input no está focado. Se captura por valor para el
+    // closure de pintado (no puede tomar prestado `state`).
+    let sel_cols: Option<(usize, usize)> = if focused {
+        let ed = state.editor();
+        let (s, e) = ed.cursor.selection_range(&ed.buffer);
+        (s != e).then_some((s, e))
+    } else {
+        None
+    };
+    let sel_color = palette.selection;
     let text_color = if is_empty {
         palette.fg_placeholder
     } else {
@@ -213,6 +297,7 @@ pub fn text_input_view<Msg: Clone + 'static>(
         let display_c = display;
         let caret_prefix_c = caret_prefix;
         let tcolor = text_color;
+        let sel_cols_c = sel_cols;
         inner.paint_over(move |scene, ts, rect| {
             use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KRect};
             use llimphi_ui::llimphi_raster::peniko::{BlendMode, Fill};
@@ -251,6 +336,25 @@ pub fn text_input_view<Msg: Clone + 'static>(
             );
             scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &clip);
             let oy = rect.y as f64 + (rect.h as f64 - th) * 0.5;
+            // Resaltado de selección (debajo del texto). Mide el prefijo hasta
+            // el inicio y el fin del rango para ubicar el rect en x.
+            if let Some((s, e)) = sel_cols_c {
+                let mut prefix_w = |n: usize| -> f64 {
+                    if n == 0 {
+                        return 0.0;
+                    }
+                    let p: String = display_c.chars().take(n).collect();
+                    let lp = ts.layout(
+                        &p, 13.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false,
+                        0.0, 0.0,
+                    );
+                    measurement(&lp).width as f64
+                };
+                let xs = cx0 + prefix_w(s) - scroll;
+                let xe = cx0 + prefix_w(e) - scroll;
+                let sel_rect = KRect::new(xs, oy, xe.max(xs + 1.0), oy + th);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, sel_color, None, &sel_rect);
+            }
             draw_layout(scene, &layout, tcolor, (cx0 - scroll, oy));
             scene.pop_layer();
             // Caret: barra vertical en la posición del caret, desplazada por el
@@ -276,7 +380,7 @@ pub fn text_input_view<Msg: Clone + 'static>(
         inner.children(vec![texto])
     };
 
-    View::new(Style {
+    let node = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(34.0_f32),
@@ -299,10 +403,15 @@ pub fn text_input_view<Msg: Clone + 'static>(
     // que el lector lo enuncie como pista. `value` queda vacío en masked.
     .role(llimphi_ui::Role::TextInput)
     .aria_value(if state.masked { String::new() } else { state.text() })
-    .aria_description(if is_empty { placeholder.to_string() } else { String::new() })
-    .on_click(on_focus)
-    .cursor(llimphi_ui::Cursor::Text)
-    .children(vec![inner])
+    .aria_description(if is_empty { placeholder.to_string() } else { String::new() });
+    // Click: plano (toma foco) o con posición (foco + caret/selección). El
+    // `on_click_at` da `x` relativo al rect del box; el caller lo pasa a
+    // `pointer_click`.
+    let node = match click {
+        ClickHandler::Focus(m) => node.on_click(m),
+        ClickHandler::At(cb) => node.on_click_at(move |x, _y, _w, _h| Some(cb(x))),
+    };
+    node.cursor(llimphi_ui::Cursor::Text).children(vec![inner])
 }
 
 #[cfg(test)]

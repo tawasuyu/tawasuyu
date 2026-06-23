@@ -686,6 +686,9 @@ pub(crate) enum Msg {
     OpenNewContactDialog,
     OpenNewChartDialog,
     DialogFocus(crate::dialog::DialogField),
+    /// Click con posición sobre un campo: enfoca + posiciona el caret /
+    /// selecciona palabra (2 clicks) / todo (3 clicks). `f32` = x local px.
+    DialogClickAt(crate::dialog::DialogField, f32),
     DialogKey(llimphi_ui::KeyEvent),
     DialogPickCity(usize),
     /// Elige un contacto existente en el combobox de «Nueva carta».

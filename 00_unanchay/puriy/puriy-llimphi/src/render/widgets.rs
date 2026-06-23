@@ -78,6 +78,7 @@ pub(crate) fn render_input(
         fg_text: fg,
         fg_placeholder: Color::from_rgba8(b.color.r, b.color.g, b.color.b, 128),
         caret,
+        selection: Color::from_rgba8(b.color.r, b.color.g, b.color.b, 64),
     };
     let input = text_input_view(state, placeholder, focused, &palette, Msg::FocusInput(idx));
 

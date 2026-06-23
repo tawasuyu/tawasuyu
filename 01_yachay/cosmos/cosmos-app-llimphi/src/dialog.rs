@@ -21,7 +21,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_calendar::{calendar_view, CalendarPalette, CalendarSpec, WeekStart};
 use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
-use llimphi_widget_text_input::{text_input_view, TextInputPalette};
+use llimphi_widget_text_input::{text_input_view_mouse, TextInputPalette};
 
 use crate::chrome::kind_label_es;
 use crate::glyphs::{self, Icon};
@@ -505,12 +505,12 @@ fn label_cell(theme: &Theme, label: &str) -> View<Msg> {
 fn input_slot(model: &Model, theme: &Theme, field: DialogField) -> View<Msg> {
     let focused = model.dialog_field == field;
     let input: View<Msg> = if focused {
-        text_input_view(
+        text_input_view_mouse(
             &model.dialog_input,
             "",
             true,
             &TextInputPalette::from_theme(theme),
-            Msg::DialogFocus(field),
+            move |x| Msg::DialogClickAt(field, x),
         )
     } else {
         let val = model
@@ -536,7 +536,7 @@ fn input_slot(model: &Model, theme: &Theme, field: DialogField) -> View<Msg> {
         .fill(theme.bg_panel)
         .radius(4.0)
         .hover_fill(theme.bg_row_hover)
-        .on_click(Msg::DialogFocus(field))
+        .on_click_at(move |x, _y, _w, _h| Some(Msg::DialogClickAt(field, x)))
         .children(vec![View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
