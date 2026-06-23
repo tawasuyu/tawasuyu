@@ -659,6 +659,31 @@ impl DrmState {
             }
         }
 
+        // Diag opt-in (`MIRADA_PREZI_DIAG=1`): imprime t_open + tamaño del primer
+        // tile cada ~150 ms — para ver si el zoom progresa o queda pegado.
+        if std::env::var_os("MIRADA_PREZI_DIAG").is_some() {
+            let now = self.start.elapsed().as_millis() as u32;
+            if now.saturating_sub(self.prezi_diag_ms) >= 150 {
+                self.prezi_diag_ms = now;
+                let t0 = tiles.first().map(|t| (t.w, t.h)).unwrap_or((0, 0));
+                let (wsz, wscale) = tiles
+                    .iter()
+                    .find_map(|t| t.wins.first().map(|w| ((w.3, w.4), t.scale)))
+                    .unwrap_or(((0, 0), 0.0));
+                eprintln!(
+                    "prezi diag · t_open={t_open:.2} anim={:?} tiles={} tile0={}x{} win0={}x{} scale={wscale:.3} (pantalla {}x{})",
+                    self.overview_anim,
+                    tiles.len(),
+                    t0.0,
+                    t0.1,
+                    wsz.0,
+                    wsz.1,
+                    rect.w,
+                    rect.h,
+                );
+            }
+        }
+
         // Umbral para tratar un tile como "girado" (evita el costo CPU por ruido).
         let girado = |rot: f32| rot.abs() > 1e-4;
         // [f32;4] (R,G,B,A 0..1) → [u8;4] R,G,B,A para el rasterizador CPU.

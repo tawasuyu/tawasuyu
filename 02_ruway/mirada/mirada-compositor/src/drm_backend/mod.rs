@@ -528,6 +528,8 @@ struct DrmState {
     /// Valor de `overview_open` del tick anterior — para detectar el flanco de
     /// apertura y arrancar la animación de zoom-out.
     prev_overview_open: bool,
+    /// Último ms en que se imprimió el diag de la vista espacial (throttle).
+    prezi_diag_ms: u32,
     /// Rects en pantalla de cada tile de la vista espacial (Prezi) `(escritorio,
     /// rect)` — poblado al pintar, usado para el hit-test del click. (El flag
     /// `overview_open` vive en `App` para togglearlo desde el filtro de teclado.)
@@ -1046,6 +1048,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         ws_slide: None,
         overview_anim: None,
         prev_overview_open: false,
+        prezi_diag_ms: 0,
         overview_tiles: Vec::new(),
         wp_images: Vec::new(),
         wp_index: 0,
