@@ -18,15 +18,15 @@
 //!   (def 8000; `0` = sólo por señal).
 //! - `ARJE_SPLASH_FPS` — frames por segundo objetivo (def 30).
 
+mod config;
 mod drm_present;
 mod handoff;
+mod image;
 mod render;
 
 use std::process::ExitCode;
 
 const DEFAULT_DEVICE: &str = "/dev/dri/card0";
-const DEFAULT_MAX_MS: u64 = 8000;
-const DEFAULT_FPS: u64 = 30;
 
 fn main() -> ExitCode {
     // Modo cliente de prueba (`arje-splash --poke`): simula a mirada mandando
@@ -44,18 +44,25 @@ fn main() -> ExitCode {
 
     let greeter_sim = std::env::args().any(|a| a == "--greeter-sim");
 
+    // Config del splash (la escribe wawa-panel; la lee acá). Los env la pueden
+    // pisar puntualmente — útil para los seeds de demo/test.
+    let cfg = config::SplashCfg::load();
     let device = std::env::args()
         .nth(1)
         .filter(|a| !a.starts_with('-'))
         .or_else(|| std::env::var("ARJE_SPLASH_DEVICE").ok())
         .unwrap_or_else(|| DEFAULT_DEVICE.to_string());
-    let max_ms = env_u64("ARJE_SPLASH_MAX_MS", DEFAULT_MAX_MS);
-    let fps = env_u64("ARJE_SPLASH_FPS", DEFAULT_FPS).clamp(1, 240);
+    // La config manda; los env la pisan puntualmente (demos/tests).
+    let max_ms = env_u64("ARJE_SPLASH_MAX_MS", cfg.max_ms);
+    let fps = env_u64("ARJE_SPLASH_FPS", cfg.fps).clamp(1, 240);
 
-    eprintln!("[arje-splash] device={device} max_ms={max_ms} fps={fps} greeter_sim={greeter_sim}");
+    eprintln!(
+        "[arje-splash] device={device} max_ms={max_ms} fps={fps} source={:?} greeter_sim={greeter_sim}",
+        cfg.source
+    );
 
     drm_present::install_signal_handlers();
-    let opts = drm_present::Opts { device, max_ms, fps };
+    let opts = drm_present::Opts { device, max_ms, fps, cfg };
     if greeter_sim {
         drm_present::run_greeter(&opts);
     } else {

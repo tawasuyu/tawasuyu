@@ -56,6 +56,9 @@ struct Args {
     /// en su product-rootfs (que arma como disco, no como initramfs).
     seed_out: Option<PathBuf>,
     bins: BTreeMap<String, PathBuf>,
+    /// Archivos extra a hornear en el initramfs: `ruta-en-imagen` → `ruta-host`.
+    /// P. ej. la config del splash y su imagen (`etc/arje/splash.conf`, etc).
+    assets: BTreeMap<String, PathBuf>,
     /// Rootkey del seed para firmar el manifiesto de atestación (A1). 32 bytes
     /// raw. Si no se pasa, el seed se empaqueta sin `attest` (boot sin gate).
     rootkey: Option<PathBuf>,
@@ -68,6 +71,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut out: Option<PathBuf> = None;
     let mut seed_out: Option<PathBuf> = None;
     let mut bins: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut assets: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut rootkey: Option<PathBuf> = None;
     let mut gen_rootkey = false;
 
@@ -96,6 +100,14 @@ fn parse_args() -> anyhow::Result<Args> {
                     .ok_or_else(|| anyhow!("--bin esperaba label=path, vino {kv:?}"))?;
                 bins.insert(label.to_string(), PathBuf::from(path));
             }
+            "--asset" => {
+                let kv = it.next().context("--asset requiere dest=src")?;
+                let (dest, src) = kv
+                    .split_once('=')
+                    .ok_or_else(|| anyhow!("--asset esperaba dest=src, vino {kv:?}"))?;
+                let dest = dest.trim_start_matches('/').to_string();
+                assets.insert(dest, PathBuf::from(src));
+            }
             "-h" | "--help" => {
                 eprintln!("{HELP}");
                 std::process::exit(0);
@@ -112,6 +124,7 @@ fn parse_args() -> anyhow::Result<Args> {
         out,
         seed_out,
         bins,
+        assets,
         rootkey,
         gen_rootkey,
     })
@@ -129,6 +142,9 @@ OPCIONES:
     --bin    Mapea un label del genesis a un binario del host. Repetible.
              El packager exige una entrada por cada Payload::Native del fractal.
              Para el Ente raíz se asume label=\"arje-zero\".
+    --asset  Hornea un archivo extra: dest-en-imagen=ruta-host. Repetible.
+             P. ej. --asset etc/arje/splash.conf=/tmp/splash.conf
+                    --asset etc/arje/splash.png=/ruta/logo.png
     --rootkey <FILE>  Rootkey (32 bytes raw) para FIRMAR el manifiesto de
              atestación al arranque (A1): una ConcesionCapacidad por binario
              crítico sobre su BLAKE3. Sin esta opción el seed va sin attest.
@@ -250,6 +266,34 @@ fn run() -> anyhow::Result<()> {
         w.append(rel, EntryKind::Regular { data, perm: 0o755 })?;
     }
 
+    // Assets extra (config del splash, imagen, frames…). Creamos los
+    // directorios padre que falten, en orden, y escribimos los archivos 0644.
+    let mut dirs_hechos: std::collections::BTreeSet<String> = [
+        "dev", "ente", "proc", "run", "sys", "sbin", "usr", "usr/lib", "usr/lib/arje",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    for (dest, src) in &args.assets {
+        let mut acc = String::new();
+        let comps: Vec<&str> = dest.split('/').collect();
+        for comp in &comps[..comps.len().saturating_sub(1)] {
+            if comp.is_empty() {
+                continue;
+            }
+            if !acc.is_empty() {
+                acc.push('/');
+            }
+            acc.push_str(comp);
+            if dirs_hechos.insert(acc.clone()) {
+                w.append(&acc, EntryKind::Directory)?;
+            }
+        }
+        let data = std::fs::read(src)
+            .with_context(|| format!("leyendo asset {} desde {}", dest, src.display()))?;
+        w.append(dest, EntryKind::Regular { data: &data, perm: 0o644 })?;
+    }
+
     let _: &mut Vec<u8> = w.finish()?;
 
     let gz = gzip(&buf).context("comprimiendo cpio")?;
@@ -264,7 +308,7 @@ fn run() -> anyhow::Result<()> {
         "arje-packager :: {} -> {} ({} entradas, {} bytes gzipeados)",
         args.seed.display(),
         out_path.display(),
-        required.len() + 12, // dirs + dev + init + seed + binarios
+        required.len() + args.assets.len() + 12, // dirs + dev + init + seed + binarios + assets
         out_size,
     );
     Ok(())

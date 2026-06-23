@@ -55,6 +55,9 @@ pub struct Opts {
     pub max_ms: u64,
     /// Frames por segundo objetivo de la animación.
     pub fps: u64,
+    /// Config del splash (fuente: builtin/imagen/frames, colores). La escribe
+    /// wawa-panel; la lee el binario del initramfs. Ver `config::SplashCfg`.
+    pub cfg: crate::config::SplashCfg,
 }
 
 /// Wrapper mínimo del nodo DRM (lo que pide el crate `drm`: `AsFd` + traits).
@@ -110,9 +113,10 @@ fn try_run_greeter(opts: &Opts) -> Result<(), String> {
     let mut a = make_surface(&card, w as u32, h as u32)?;
     let mut b = make_surface(&card, w as u32, h as u32)?;
 
+    let bg = opts.cfg.bg;
     // Primer frame = BG puro (appear=0): idéntico al frame final del fade-out
     // del splash, así el traspaso de master no introduce ningún salto.
-    paint_into(&card, &mut a, w, h, 0, 0.0, Scene::Greeter)?;
+    paint_into(&card, &mut a, w, h, 0, 0.0, Scene::Greeter, bg)?;
     card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con_handle], Some(mode))
         .map_err(|e| format!("set_crtc inicial: {e}"))?;
 
@@ -132,7 +136,7 @@ fn try_run_greeter(opts: &Opts) -> Result<(), String> {
         }
         let appear = ((e as f32) / APPEAR_MS as f32).min(1.0);
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, e, appear,
-                    Scene::Greeter, &mut can_flip, frame_dt)?;
+                    Scene::Greeter, bg, &mut can_flip, frame_dt)?;
         std::mem::swap(&mut a, &mut b);
     }
     Ok(())
@@ -144,13 +148,77 @@ struct Surface {
     fb: framebuffer::Handle,
 }
 
-/// Qué escena pinta el bucle de present.
+/// Qué escena pinta el bucle de present (con la imagen ya resuelta para el
+/// cuadro actual, así `paint_into` no necesita el catálogo de frames ni fps).
 #[derive(Clone, Copy)]
-enum Scene {
-    /// El splash de arranque (logo respirando + barra). `blend` = fade-out a BG.
+enum Scene<'a> {
+    /// El splash nativo (logo respirando + barra). `blend` = fade-out a BG.
     Splash,
+    /// Una imagen (PNG estático o el cuadro N de una animación). `blend` = fade.
+    Image(&'a crate::image::Image),
     /// El greeter simulado (tarjeta de login). `blend` = aparición desde BG.
     Greeter,
+}
+
+/// La fuente del splash ya cargada en memoria (decodificada una sola vez).
+enum Loaded {
+    Builtin,
+    Image(crate::image::Image),
+    Frames(Vec<crate::image::Image>),
+}
+
+impl Loaded {
+    /// Carga la fuente declarada en la config; best-effort (cae a Builtin).
+    fn from_cfg(src: &crate::config::Source) -> Self {
+        use crate::config::Source;
+        match src {
+            Source::Builtin => Loaded::Builtin,
+            Source::Image(p) => match crate::image::load_png(p) {
+                Some(img) => {
+                    log!("splash: imagen {} ({}x{})", p.display(), img.w, img.h);
+                    Loaded::Image(img)
+                }
+                None => {
+                    log!("splash: no pude leer la imagen {} — uso el splash nativo", p.display());
+                    Loaded::Builtin
+                }
+            },
+            Source::Frames(dir) => {
+                let frames = load_frames(dir);
+                if frames.is_empty() {
+                    log!("splash: sin frames en {} — uso el splash nativo", dir.display());
+                    Loaded::Builtin
+                } else {
+                    log!("splash: {} frames desde {}", frames.len(), dir.display());
+                    Loaded::Frames(frames)
+                }
+            }
+        }
+    }
+
+    /// Resuelve la escena del cuadro `t` (elige el frame de la animación).
+    fn scene_at(&self, t: u64, fps: u64) -> Scene<'_> {
+        match self {
+            Loaded::Builtin => Scene::Splash,
+            Loaded::Image(img) => Scene::Image(img),
+            Loaded::Frames(v) => {
+                let dt = (1000 / fps.max(1)).max(1);
+                let idx = ((t / dt) as usize) % v.len();
+                Scene::Image(&v[idx])
+            }
+        }
+    }
+}
+
+/// Lee los `*.png` de un directorio en orden alfabético.
+fn load_frames(dir: &Path) -> Vec<crate::image::Image> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut paths: Vec<_> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|x| x.eq_ignore_ascii_case("png")).unwrap_or(false))
+        .collect();
+    paths.sort();
+    paths.iter().filter_map(|p| crate::image::load_png(p)).collect()
 }
 
 /// Lo esencial del nodo DRM ya resuelto: tarjeta abierta, CRTC/conector/modo
@@ -198,6 +266,10 @@ fn try_run(opts: &Opts) -> Result<(), String> {
     let mut a = make_surface(&card, w as u32, h as u32)?;
     let mut b = make_surface(&card, w as u32, h as u32)?;
 
+    // Fuente del splash (builtin / imagen / frames) decodificada una vez.
+    let loaded = Loaded::from_cfg(&opts.cfg.source);
+    let bg = opts.cfg.bg;
+
     // Socket de handoff (Fase 2). Best-effort: si no bindea, sólo tope de tiempo.
     let mut handoff = Handoff::bind(&handoff::sock_path());
     if handoff.active() {
@@ -208,7 +280,7 @@ fn try_run(opts: &Opts) -> Result<(), String> {
 
     let start = Instant::now();
     // Primer present: set_crtc reusando el modo → mismo timing, sin flash.
-    paint_into(&card, &mut a, w, h, 0, 0.0, Scene::Splash)?;
+    paint_into(&card, &mut a, w, h, 0, 0.0, loaded.scene_at(0, opts.fps), bg)?;
     card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con_handle], Some(mode))
         .map_err(|e| format!("set_crtc inicial: {e}"))?;
 
@@ -238,11 +310,11 @@ fn try_run(opts: &Opts) -> Result<(), String> {
 
         let t = start.elapsed().as_millis() as u64;
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 0.0,
-                    Scene::Splash, &mut can_flip, frame_dt)?;
+                    loaded.scene_at(t, opts.fps), bg, &mut can_flip, frame_dt)?;
         std::mem::swap(&mut a, &mut b);
     }
 
-    // Fade-out del handoff: fundimos el contenido al fondo de marca `BG` (no a
+    // Fade-out del handoff: fundimos el contenido al fondo de marca `bg` (no a
     // negro) en ~FADE_MS. Al terminar la pantalla queda en el mismo `bg_app`
     // que mirada va a mostrar, así el traspaso de master no se nota.
     if do_handoff {
@@ -256,13 +328,13 @@ fn try_run(opts: &Opts) -> Result<(), String> {
             let f = e as f32 / FADE_MS as f32;
             let t = start.elapsed().as_millis() as u64;
             present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, f,
-                        Scene::Splash, &mut can_flip, frame_dt)?;
+                        loaded.scene_at(t, opts.fps), bg, &mut can_flip, frame_dt)?;
             std::mem::swap(&mut a, &mut b);
         }
-        // Frame final: BG sólido garantizado.
+        // Frame final: bg sólido garantizado.
         let t = start.elapsed().as_millis() as u64;
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 1.0,
-                    Scene::Splash, &mut can_flip, frame_dt)?;
+                    loaded.scene_at(t, opts.fps), bg, &mut can_flip, frame_dt)?;
     }
 
     // Salida: NO destruimos el framebuffer en scanout ni reponemos el modo —
@@ -296,11 +368,12 @@ fn present_one(
     t: u64,
     blend: f32,
     scene: Scene,
+    bg: (u8, u8, u8),
     can_flip: &mut bool,
     frame_dt: Duration,
 ) -> Result<(), String> {
     let frame_start = Instant::now();
-    paint_into(card, surf, w, h, t, blend, scene)?;
+    paint_into(card, surf, w, h, t, blend, scene, bg)?;
     let presented = if *can_flip {
         match card.page_flip(crtc_handle, surf.fb, PageFlipFlags::EVENT, None) {
             Ok(()) => {
@@ -384,13 +457,23 @@ fn make_surface(card: &Card, w: u32, h: u32) -> Result<Surface, String> {
 /// Mapea el dumb buffer de la superficie y pinta la escena en él. Para `Splash`,
 /// `blend` es el fade-out a BG y `t` el tiempo de la animación; para `Greeter`,
 /// `blend` es la aparición de la tarjeta desde BG (`t` no se usa).
-fn paint_into(card: &Card, s: &mut Surface, w: usize, h: usize, t: u64, blend: f32, scene: Scene) -> Result<(), String> {
+fn paint_into(
+    card: &Card,
+    s: &mut Surface,
+    w: usize,
+    h: usize,
+    t: u64,
+    blend: f32,
+    scene: Scene,
+    bg: (u8, u8, u8),
+) -> Result<(), String> {
     let pitch = s.db.pitch() as usize;
     let mut map = card
         .map_dumb_buffer(&mut s.db)
         .map_err(|e| format!("map_dumb_buffer: {e}"))?;
     match scene {
         Scene::Splash => render::paint_frame(map.as_mut(), w, h, pitch, t, blend),
+        Scene::Image(img) => crate::image::blit_fit(map.as_mut(), w, h, pitch, img, bg, blend),
         Scene::Greeter => render::paint_greeter(map.as_mut(), w, h, pitch, blend),
     }
     Ok(())

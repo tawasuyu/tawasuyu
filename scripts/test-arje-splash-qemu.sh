@@ -18,6 +18,8 @@
 #   scripts/test-arje-splash-qemu.sh --headless      # sin ventana, veredicto por texto
 #   scripts/test-arje-splash-qemu.sh --splash-only    # sólo el splash (Fase 1)
 #   scripts/test-arje-splash-qemu.sh --stage-esp DIR  # copia a una ESP booteable (instalable)
+#   scripts/test-arje-splash-qemu.sh --image logo.png # probá tu propio PNG de splash
+#   scripts/test-arje-splash-qemu.sh --frames anim/   # carpeta de *.png en loop
 # Overrides por env: KERNEL=, OVMF_CODE=, OVMF_VARS=, SEED=, TIMEOUT=.
 set -euo pipefail
 
@@ -28,13 +30,17 @@ STAGE_DIR=""
 SEED="${SEED:-03_ukupacha/arje/seeds/arje-demo.card.json}"
 TIMEOUT="${TIMEOUT:-25}"
 TARGET="x86_64-unknown-linux-musl"
+IMAGE=""               # PNG de splash propio (--image)
+FRAMES=""              # carpeta de frames *.png (--frames)
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --headless)    MODE="headless" ;;
         --splash-only) SEED="03_ukupacha/arje/seeds/arje-qemu.card.json" ;;
         --stage-esp)   MODE="stage"; STAGE_DIR="${2:?--stage-esp requiere un directorio}"; shift ;;
-        -h|--help)     sed -n '2,24p' "$0"; exit 0 ;;
+        --image)       IMAGE="${2:?--image requiere un PNG}"; shift ;;
+        --frames)      FRAMES="${2:?--frames requiere una carpeta de *.png}"; shift ;;
+        -h|--help)     sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "opción desconocida: $1" >&2; exit 2 ;;
     esac
     shift
@@ -88,6 +94,26 @@ M="target/$TARGET/release"
 
 OUT="$(mktemp -d)"
 echo "==> artefactos en $OUT (initramfs + log; podés borrarlo cuando quieras)"
+# ── Config del splash (--image / --frames) → assets horneados ───────────────
+# En producción esta config la escribe wawa-panel (sección «Arranque»). Acá la
+# generamos para probar tu PNG/animación sin abrir el panel.
+ASSETS=()
+if [ -n "$IMAGE" ]; then
+    [ -f "$IMAGE" ] || die "no existe la imagen $IMAGE"
+    printf 'source = image\nimage = /etc/arje/splash.png\n' > "$OUT/splash.conf"
+    ASSETS+=(--asset "etc/arje/splash.conf=$OUT/splash.conf" --asset "etc/arje/splash.png=$IMAGE")
+    echo "==> splash = imagen $IMAGE"
+elif [ -n "$FRAMES" ]; then
+    [ -d "$FRAMES" ] || die "no existe la carpeta de frames $FRAMES"
+    printf 'source = frames\nframes = /etc/arje/frames\n' > "$OUT/splash.conf"
+    ASSETS+=(--asset "etc/arje/splash.conf=$OUT/splash.conf")
+    for f in "$FRAMES"/*.png; do
+        [ -f "$f" ] || die "no hay *.png en $FRAMES"
+        ASSETS+=(--asset "etc/arje/frames/$(basename "$f")=$f")
+    done
+    echo "==> splash = $(ls "$FRAMES"/*.png | wc -l) frames de $FRAMES"
+fi
+
 echo "==> empaquetando initramfs ($SEED)"
 # Pasamos todos los bins posibles; el packager toma sólo los que el seed declara.
 ./target/release/arje-packager \
@@ -96,6 +122,7 @@ echo "==> empaquetando initramfs ($SEED)"
     --bin arje-splash="$M/arje-splash" \
     --bin greeter-sim="$M/arje-splash" \
     --bin agetty-ttyS0="$M/arje-getty-stub" \
+    "${ASSETS[@]}" \
     --out "$OUT/initramfs.cpio.gz"
 
 # ── Modo stage: copiar a una ESP booteable y salir ──────────────────────────
