@@ -508,6 +508,14 @@ impl DrmState {
                 .map(|w| w.surface.clone());
             let mut puesto = false;
             if let Some(surface) = surface {
+                // IMPORTAR la textura de la superficie ANTES de dibujar al
+                // offscreen: el render principal pasa por `render_frame` (que
+                // importa), pero `draw_render_elements` directo no — sin esto la
+                // ventana se dibujaba vacía (sólo el fondo del tile).
+                let _ = smithay::backend::renderer::utils::import_surface_tree(
+                    &mut self.renderer,
+                    &surface,
+                );
                 let elems = render_elements_from_surface_tree(
                     &mut self.renderer,
                     &surface,
@@ -586,8 +594,16 @@ impl DrmState {
         let mut buckets = std::collections::HashSet::new();
         for c in px.chunks_exact(4).step_by(7) {
             buckets.insert((c[0] / 40, c[1] / 40, c[2] / 40));
-            if buckets.len() >= 4 {
-                break;
+        }
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static L: AtomicBool = AtomicBool::new(false);
+            if !L.swap(true, Ordering::Relaxed) {
+                eprintln!(
+                    "mirada-compositor · prezi offscreen: {} colores tras importar superficies ({} ventanas)",
+                    buckets.len(),
+                    wins.len(),
+                );
             }
         }
         if buckets.len() < 4 {
