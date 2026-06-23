@@ -7,7 +7,11 @@ use std::sync::Arc;
 
 use crate::astroview::compute_astro;
 use crate::chrome::MenuCmd;
-use crate::dialog_ops::{dialog_confirm, dialog_focus, dialog_pick_city, open_chart_dialog, open_contact_dialog};
+use crate::dialog_ops::{
+    dialog_cal_pick, dialog_cal_view, dialog_confirm, dialog_focus, dialog_pick_city,
+    dialog_pick_contact, dialog_set_kind, dialog_time_step, dialog_toggle_calendar,
+    dialog_toggle_kind, open_chart_dialog, open_contact_dialog,
+};
 use crate::model::{MenuKind, Model, Msg, OverlayKind, WheelOpt};
 use crate::nav_ops::{
     activate_tab, close_chart_tab, commit_rename, delete_selected, do_duplicar, do_export_group,
@@ -19,6 +23,22 @@ use crate::rectify_ops::{apply_rectify, compute_triggers, run_rectify};
 use crate::{chrome, library, model, tools};
 
 use llimphi_ui::Handle;
+
+/// Abre el diálogo de creación adecuado al nodo seleccionado: sobre la rama
+/// «Hoy» agrega una carta del día por coordenadas; en cualquier otro lado,
+/// el diálogo normal de «Nueva carta».
+fn open_new_chart_or_hoy(m: &mut Model) {
+    let on_hoy = m
+        .nav_selected
+        .as_deref()
+        .map(|k| k == library::HOY_CONTACT_KEY || library::is_hoy_chart_key(k))
+        .unwrap_or(false);
+    if on_hoy {
+        open_add_hoy(m);
+    } else {
+        open_chart_dialog(m);
+    }
+}
 
 // =====================================================================
 // Helpers compartidos de recomputo
@@ -508,19 +528,11 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::RectifyTriggers => compute_triggers(&mut m),
         // diálogos modales
         Msg::OpenNewContactDialog => open_contact_dialog(&mut m),
-        Msg::OpenNewChartDialog => {
-            // Sobre la rama «Hoy», «carta» agrega una carta del día por
-            // coordenadas; en cualquier otro lado, el diálogo normal.
-            let on_hoy = m
-                .nav_selected
-                .as_deref()
-                .map(|k| k == library::HOY_CONTACT_KEY || library::is_hoy_chart_key(k))
-                .unwrap_or(false);
-            if on_hoy {
-                open_add_hoy(&mut m);
-            } else {
-                open_chart_dialog(&mut m);
-            }
+        Msg::OpenNewChartDialog => open_new_chart_or_hoy(&mut m),
+        Msg::NavAdd(key) => {
+            // El «+»/«Nueva» de una fila ancla la creación a ese nodo.
+            m.nav_selected = Some(key);
+            open_new_chart_or_hoy(&mut m);
         }
         Msg::DialogFocus(f) => dialog_focus(&mut m, f),
         Msg::DialogKey(ev) => {
@@ -532,11 +544,19 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             }
         }
         Msg::DialogPickCity(idx) => dialog_pick_city(&mut m, idx),
+        Msg::DialogPickContact(id) => dialog_pick_contact(&mut m, id),
+        Msg::DialogSetKind(k) => dialog_set_kind(&mut m, k),
+        Msg::DialogToggleKind => dialog_toggle_kind(&mut m),
+        Msg::DialogToggleCalendar => dialog_toggle_calendar(&mut m),
+        Msg::DialogCalPick(y, mo, d) => dialog_cal_pick(&mut m, y, mo, d),
+        Msg::DialogCalView(y, mo) => dialog_cal_view(&mut m, y, mo),
+        Msg::DialogTimeStep(hours, delta) => dialog_time_step(&mut m, hours, delta),
         Msg::DialogConfirm => {
             dialog_confirm(&mut m);
             persist = true;
         }
         Msg::DialogCancel => m.dialog = None,
+        Msg::DialogNop => {}
         // layout guardable
         Msg::SetNavWidth(dx) => m.nudge_nav(dx),
         Msg::SetToolsWidth(dx) => m.nudge_tools(dx),

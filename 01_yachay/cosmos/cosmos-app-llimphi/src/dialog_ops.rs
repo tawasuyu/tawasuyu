@@ -28,22 +28,46 @@ pub(crate) fn open_contact_dialog(m: &mut Model) {
     m.nav_ctx = None;
 }
 
-/// Abre el diálogo de nueva carta bajo el contacto seleccionado. Prefill
-/// desde la carta de trabajo. Sin contacto destino → error.
-pub(crate) fn open_chart_dialog(m: &mut Model) {
-    use crate::model::Msg;
-    let contact = m.selected_node().and_then(|n| match n.kind {
-        library::NavKind::Contact => library::parse_contact_key(&n.key),
-        library::NavKind::Chart => n.parent.as_deref().and_then(library::parse_contact_key),
-        library::NavKind::Group => None,
-    });
-    let Some(contact) = contact else {
-        m.error = Some("Nueva carta: seleccioná un contacto".into());
-        return;
+/// Resuelve el contexto de creación desde el nodo seleccionado: contacto
+/// destino + su nombre (para prefijar el combobox) + grupo donde aterriza un
+/// contacto nuevo. Un grupo no fija contacto (se elige en el diálogo).
+fn chart_context(m: &Model) -> (Option<cosmos_model::ContactId>, String, Option<cosmos_model::GroupId>) {
+    let Some(n) = m.selected_node() else {
+        return (None, String::new(), None);
     };
+    match n.kind {
+        library::NavKind::Contact => {
+            let id = library::parse_contact_key(&n.key);
+            let group = n.parent.as_deref().and_then(library::parse_group_key);
+            (id, n.label.clone(), group)
+        }
+        library::NavKind::Chart => {
+            // Subir al contacto padre por su clave para nombre + grupo.
+            let ckey = n.parent.clone();
+            let contact = ckey.as_deref().and_then(library::parse_contact_key);
+            let (name, group) = ckey
+                .as_deref()
+                .and_then(|k| m.nav_nodes.iter().find(|nn| nn.key == k))
+                .map(|cn| (cn.label.clone(), cn.parent.as_deref().and_then(library::parse_group_key)))
+                .unwrap_or_default();
+            (contact, name, group)
+        }
+        library::NavKind::Group => (None, String::new(), library::parse_group_key(&n.key)),
+    }
+}
+
+/// Abre el diálogo de nueva carta. Si el nodo de origen es un contacto (o
+/// una carta), lo preelige; si es un grupo, recuerda el grupo y deja el
+/// contacto a elegir/crear en el combobox. Prefill de fecha/lugar desde la
+/// carta de trabajo.
+pub(crate) fn open_chart_dialog(m: &mut Model) {
+    let (contact, contact_name, group) = chart_context(m);
     let bd = &m.chart.birth_data;
     m.dialog = Some(dialog::Dialog::NewChart(dialog::NewChartForm {
         contact,
+        group,
+        contact_query: contact_name,
+        kind: cosmos_model::ChartKind::Natal,
         label: "Carta nueva".into(),
         date: format!("{:04}-{:02}-{:02}", bd.year, bd.month, bd.day),
         time: format!("{:02}:{:02}", bd.hour, bd.minute),
@@ -52,11 +76,114 @@ pub(crate) fn open_chart_dialog(m: &mut Model) {
         lat: bd.latitude_deg,
         lon: bd.longitude_deg,
         tz: bd.tz_offset_minutes,
+        kind_open: false,
+        cal_open: false,
+        cal_year: bd.year,
+        cal_month: bd.month.clamp(1, 12),
     }));
-    m.dialog_field = dialog::DialogField::Label;
-    m.dialog_input.set_text("Carta nueva".to_string());
+    // Si no hay contacto preelegido, arrancar en el combobox de contacto;
+    // si lo hay, en la etiqueta.
+    m.dialog_field = if contact.is_none() {
+        dialog::DialogField::Contact
+    } else {
+        dialog::DialogField::Label
+    };
+    m.dialog_input.set_text(if contact.is_none() {
+        String::new()
+    } else {
+        "Carta nueva".to_string()
+    });
     m.menu_open = None;
     m.nav_ctx = None;
+}
+
+// =====================================================================
+// Interacción con el diálogo de carta (combobox / tipo / calendario / hora)
+// =====================================================================
+
+/// Elige un contacto existente en el combobox.
+pub(crate) fn dialog_pick_contact(m: &mut Model, id: cosmos_model::ContactId) {
+    let name = m
+        .nav_nodes
+        .iter()
+        .find(|n| library::parse_contact_key(&n.key) == Some(id))
+        .map(|n| n.label.clone())
+        .unwrap_or_default();
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        c.contact = Some(id);
+        c.contact_query = name.clone();
+    }
+    if m.dialog_field == dialog::DialogField::Contact {
+        m.dialog_input.set_text(name);
+    }
+}
+
+/// Fija el tipo de carta y cierra la lista.
+pub(crate) fn dialog_set_kind(m: &mut Model, kind: cosmos_model::ChartKind) {
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        c.kind = kind;
+        c.kind_open = false;
+    }
+}
+
+/// Despliega/cierra la lista de tipos.
+pub(crate) fn dialog_toggle_kind(m: &mut Model) {
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        c.kind_open = !c.kind_open;
+    }
+}
+
+/// Despliega/cierra el calendario inline (sincroniza su mes con la fecha).
+pub(crate) fn dialog_toggle_calendar(m: &mut Model) {
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        c.cal_open = !c.cal_open;
+        if c.cal_open {
+            if let Some((y, mo, _)) = parse_date(&c.date) {
+                c.cal_year = y;
+                c.cal_month = mo;
+            }
+        }
+    }
+}
+
+/// Día elegido en el calendario: escribe la fecha y cierra el calendario.
+pub(crate) fn dialog_cal_pick(m: &mut Model, y: i32, mo: u32, d: u32) {
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        c.date = format!("{y:04}-{mo:02}-{d:02}");
+        c.cal_year = y;
+        c.cal_month = mo;
+        c.cal_open = false;
+    }
+    if m.dialog_field == dialog::DialogField::Date {
+        let txt = m.dialog.as_ref().map(|dg| dg.field(dialog::DialogField::Date)).unwrap_or_default();
+        m.dialog_input.set_text(txt);
+    }
+}
+
+/// Cambia el mes/año en foco del calendario.
+pub(crate) fn dialog_cal_view(m: &mut Model, y: i32, mo: u32) {
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        c.cal_year = y;
+        c.cal_month = mo;
+    }
+}
+
+/// Ajusta hora/minuto con wrap (HH 0..23, MM 0..59).
+pub(crate) fn dialog_time_step(m: &mut Model, hours: bool, delta: i32) {
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        let (h, mi) = parse_time(&c.time).unwrap_or((0, 0));
+        let (mut h, mut mi) = (h as i32, mi as i32);
+        if hours {
+            h = (h + delta).rem_euclid(24);
+        } else {
+            mi = (mi + delta).rem_euclid(60);
+        }
+        c.time = format!("{h:02}:{mi:02}");
+    }
+    if m.dialog_field == dialog::DialogField::Time {
+        let txt = m.dialog.as_ref().map(|dg| dg.field(dialog::DialogField::Time)).unwrap_or_default();
+        m.dialog_input.set_text(txt);
+    }
 }
 
 // =====================================================================
@@ -135,6 +262,33 @@ pub(crate) fn dialog_confirm(m: &mut Model) {
                 m.dialog = Some(dialog::Dialog::NewChart(f));
                 return;
             };
+            // Resolver el contacto destino: el elegido, o crear uno nuevo
+            // con el nombre tecleado (bajo el grupo recordado).
+            let contact = match f.contact {
+                Some(id) => id,
+                None => {
+                    let name = f.contact_query.trim();
+                    if name.is_empty() {
+                        m.error = Some("Nueva carta: elegí o nombrá un contacto".into());
+                        m.dialog = Some(dialog::Dialog::NewChart(f));
+                        return;
+                    }
+                    match m.store.as_ref().map(|s| s.create_contact(f.group, name, None)) {
+                        Some(Ok(c)) => {
+                            if let Some(g) = f.group {
+                                m.nav_expanded.insert(format!("g:{g}"));
+                            }
+                            c.id
+                        }
+                        Some(Err(e)) => {
+                            m.error = Some(format!("crear contacto: {e}"));
+                            m.dialog = Some(dialog::Dialog::NewChart(f));
+                            return;
+                        }
+                        None => return,
+                    }
+                }
+            };
             let mut bd = m.chart.birth_data.clone();
             bd.year = y;
             bd.month = mo;
@@ -156,18 +310,11 @@ pub(crate) fn dialog_confirm(m: &mut Model) {
                 f.label.trim()
             };
             let res = m.store.as_ref().map(|s| {
-                s.create_chart(
-                    f.contact,
-                    cosmos_model::ChartKind::Natal,
-                    label,
-                    &bd,
-                    &m.chart.config,
-                    None,
-                )
+                s.create_chart(contact, f.kind, label, &bd, &m.chart.config, None)
             });
             match res {
                 Some(Ok(ch)) => {
-                    m.nav_expanded.insert(format!("c:{}", f.contact));
+                    m.nav_expanded.insert(format!("c:{contact}"));
                     refresh_nav(m);
                     m.status_note = Some(format!("Carta creada: {label}"));
                     crate::nav_ops::do_cargar(m, ch.id.to_string());

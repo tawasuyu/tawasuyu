@@ -603,6 +603,9 @@ pub(crate) enum Msg {
     ToggleNavNode(String),
     /// Selecciona un nodo del árbol; carta→carga, contenedor→toggle.
     NavClick(String),
+    /// Botón «+»/«Nueva» de una fila contenedora: selecciona ese nodo y
+    /// abre «Nueva carta» con su contexto (contacto preelegido / grupo).
+    NavAdd(String),
     // CRUD del árbol de datos (cosmos-store)
     NewGroup,
     DeleteSelected,
@@ -685,8 +688,24 @@ pub(crate) enum Msg {
     DialogFocus(crate::dialog::DialogField),
     DialogKey(llimphi_ui::KeyEvent),
     DialogPickCity(usize),
+    /// Elige un contacto existente en el combobox de «Nueva carta».
+    DialogPickContact(cosmos_model::ContactId),
+    /// Fija el tipo de carta y cierra la lista.
+    DialogSetKind(cosmos_model::ChartKind),
+    /// Despliega/cierra la lista de tipos de carta.
+    DialogToggleKind,
+    /// Despliega/cierra el calendario inline.
+    DialogToggleCalendar,
+    /// Día elegido en el calendario inline (año, mes, día).
+    DialogCalPick(i32, u32, u32),
+    /// Cambia el mes/año en foco del calendario (año, mes).
+    DialogCalView(i32, u32),
+    /// Ajusta la hora: `true` = horas, `false` = minutos; `delta` ±.
+    DialogTimeStep(bool, i32),
     DialogConfirm,
     DialogCancel,
+    /// No-op: absorbe el clic del scrim del diálogo bloqueante.
+    DialogNop,
     // layout guardable (paneles laterales tipo móvil)
     SetNavWidth(f32),
     SetToolsWidth(f32),

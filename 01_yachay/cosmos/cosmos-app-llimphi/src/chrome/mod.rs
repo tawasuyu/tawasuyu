@@ -34,6 +34,7 @@ mod rectificar;
 pub(crate) use menu::{ctx_entries, menu_entries, nav_ctx_entries, MenuCmd, MenuEntry, NavAct, NavCtxItem};
 pub(crate) use nav::{nav_content_h, nav_viewport_h, NAV_HEADER_H, NAV_ROW_H, NAV_TOOLBAR_H};
 pub(crate) use nav::visible_nav_nodes;
+pub(crate) use nav::kind_label_es;
 pub(crate) use dock::{dock_collapsed, dock_panel_for, dock_rail_for};
 pub(crate) use estado::{menu_bar, status_bar};
 pub(crate) use graficas::center_view;

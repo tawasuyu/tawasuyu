@@ -76,6 +76,125 @@ fn nav_icon(n: &NavNode, _expanded: bool, _theme: &Theme) -> View<Msg> {
     }
 }
 
+/// Nombre corto y amigable del tipo de carta (es). `Natal` = «radix» por
+/// pedido del dominio. Se pinta apagado a la derecha de las hojas para que
+/// una carta se lea distinta de un contenedor.
+pub(crate) fn kind_label_es(k: ChartKind) -> &'static str {
+    match k {
+        ChartKind::Natal => "radix",
+        ChartKind::Transit => "tránsito",
+        ChartKind::SecondaryProgression => "prog. secund.",
+        ChartKind::TertiaryProgression => "prog. terc.",
+        ChartKind::MinorProgression => "prog. menor",
+        ChartKind::SolarArc => "arco solar",
+        ChartKind::SolarReturn => "revol. solar",
+        ChartKind::LunarReturn => "revol. lunar",
+        ChartKind::Synastry => "sinastría",
+        ChartKind::Composite => "compuesta",
+        ChartKind::Davison => "davison",
+        ChartKind::Profection => "profección",
+        ChartKind::PrimaryDirection => "direc. primaria",
+        ChartKind::Mundane => "mundana",
+    }
+}
+
+/// `true` si el nodo es el grupo raíz «Cartas» — el hogar canónico de las
+/// cartas, fijo y siempre presente tras el sembrado. Su botón de añadir es
+/// el call-to-action prominente «Nueva»; el resto de contenedores llevan un
+/// «+» discreto.
+fn is_cartas_root(n: &NavNode) -> bool {
+    n.kind == NavKind::Group && n.depth == 0 && n.label == "Cartas"
+}
+
+/// Botón de añadir alineado a la derecha de una fila contenedora. El grupo
+/// «Cartas» recibe la píldora accent «Nueva»; los demás contenedores, un
+/// «+» discreto que aparece al hover. Click → abre «Nueva carta» con el
+/// contexto del nodo (contacto preelegido / grupo recordado).
+fn add_button(n: &NavNode, theme: &Theme) -> Option<View<Msg>> {
+    if n.kind == NavKind::Chart {
+        return None;
+    }
+    let msg = Msg::NavAdd(n.key.clone());
+    if is_cartas_root(n) {
+        // Píldora prominente «＋ Nueva».
+        Some(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: auto(),
+                    height: length(20.0_f32),
+                },
+                flex_shrink: 0.0,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                gap: Size {
+                    width: length(3.0_f32),
+                    height: length(0.0_f32),
+                },
+                padding: Rect {
+                    left: length(7.0_f32),
+                    right: length(9.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.accent)
+            .radius(10.0)
+            .hover_fill(theme.bg_selected)
+            .on_click(msg)
+            .children(vec![
+                glyphs::icon_view(Icon::Plus, 11.0, theme.bg_app),
+                View::new(Style {
+                    size: Size {
+                        width: auto(),
+                        height: auto(),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned("Nueva".to_string(), 10.5, theme.bg_app, Alignment::Center),
+            ]),
+        )
+    } else {
+        // «+» discreto.
+        Some(
+            View::new(Style {
+                size: Size {
+                    width: length(20.0_f32),
+                    height: length(20.0_f32),
+                },
+                flex_shrink: 0.0,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .radius(5.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(msg)
+            .children(vec![glyphs::icon_view(Icon::Plus, 13.0, theme.accent)]),
+        )
+    }
+}
+
+/// Etiqueta apagada del tipo de carta, a la derecha de una hoja.
+fn chart_kind_tag(n: &NavNode, theme: &Theme) -> Option<View<Msg>> {
+    if n.kind != NavKind::Chart {
+        return None;
+    }
+    let k = n.chart_kind.unwrap_or(ChartKind::Natal);
+    Some(
+        View::new(Style {
+            size: Size {
+                width: auto(),
+                height: auto(),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .text_aligned(kind_label_es(k).to_string(), 9.5, theme.fg_muted, Alignment::End),
+    )
+}
+
 /// Header del árbol de datos: título a la izquierda y acciones de archivo
 /// (importar/exportar un grupo de contactos desde/hacia un archivo) a la
 /// derecha.
@@ -279,6 +398,13 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         } else {
             Msg::NavClick(n.key.clone())
         };
+        let trailing = if editor.is_some() {
+            None
+        } else if is_container {
+            add_button(n, theme)
+        } else {
+            chart_kind_tag(n, theme)
+        };
         rows.push(TreeRow {
             label: n.label.clone(),
             depth: n.depth,
@@ -290,6 +416,7 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
             icon: Some(nav_icon(n, expanded, theme)),
             on_context: Some(Msg::OpenNavCtx(n.key.clone())),
             editor,
+            trailing,
         });
     }
 
