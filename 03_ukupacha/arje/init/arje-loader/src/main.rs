@@ -46,6 +46,8 @@ use uefi::proto::media::file::{File, FileAttribute, FileInfo, FileMode, FileType
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::{boot, guid, CStr16, Guid, Identify};
 
+mod gop;
+
 /// Ruta canónica donde arje-installer deja la entry.
 const ENTRY_PATH: &str = r"\loader\entries\arje.conf";
 
@@ -64,6 +66,10 @@ fn main() -> Status {
 }
 
 fn run() -> Result<(), Status> {
+    // Primer píxel gráfico cuanto antes: pinta el GOP mientras todavía no
+    // cargamos nada. Best-effort — si no hay GOP, sigue de largo.
+    gop::paint_boot_splash();
+
     let mut fs_root = open_boot_fs()?;
     let entry_text = read_file_utf8(&mut fs_root, ENTRY_PATH)?;
     let entry = parse_entry(&entry_text);

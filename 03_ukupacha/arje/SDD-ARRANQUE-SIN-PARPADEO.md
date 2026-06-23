@@ -101,8 +101,8 @@ lo visual (cero parpadeo, crossfade) por captura/observación en QEMU.
 ## Estado de implementación
 
 - [x] SDD (este documento)
-- [ ] Fase 0 — cmdline flicker-free (`arje-installer`)
-- [ ] Fase 0 — logo GOP en `arje-loader`
+- [x] Fase 0 — cmdline flicker-free (`arje-installer`)
+- [x] Fase 0 — logo GOP en `arje-loader` (`gop::paint_boot_splash`, marca central placeholder; falta verificar en QEMU+OVMF)
 - [ ] Fase 1 — crate `arje-splash` (DRM dumb buffer + animación)
 - [ ] Fase 1 — Ente génesis de `arje-splash` en el seed
 - [ ] Fase 2 — contrato de handoff splash↔mirada + crossfade
