@@ -962,9 +962,14 @@ impl App {
         });
         // La ventana del shell (el marco pata) no se tesela: se acopla a un borde.
         let is_shell = is_shell_app_id(&app_id);
-        // La ventana del greeter (DM): sin barra de título, y el backend la muda
-        // al monitor con el ratón.
-        let is_greeter = app_id == "mirada.greeter";
+        // La ventana del greeter (DM): sin barra de título, y el backend la
+        // expande a la unión de salidas. Se detecta por MODO, no por `app_id`:
+        // al registrar el toplevel el cliente todavía no presentó su `app_id`
+        // (lo setea en el primer commit), así que comparar la cadena daba
+        // siempre falso — de ahí que volviera el titlebar y se quedara en un
+        // solo monitor. En modo greeter el único cliente no-shell ES el greeter.
+        let is_greeter =
+            (self.mode == BodyMode::Greeter && !is_shell) || app_id == "mirada.greeter";
 
         // PID del cliente (lo guardó el accept-loop en `ClientState`) para el
         // linaje de las constelaciones — se lee ANTES de mover `surface` abajo.
