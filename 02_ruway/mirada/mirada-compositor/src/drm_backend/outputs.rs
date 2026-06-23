@@ -349,14 +349,34 @@ impl DrmState {
         if self.app.mode != crate::estado::BodyMode::Greeter || self.outputs.is_empty() {
             return;
         }
+        // Origen de la superficie = esquina superior-izquierda de la unión.
+        let ox = self.outputs.iter().map(|o| o.rect.x).min().unwrap_or(0);
+        let oy = self.outputs.iter().map(|o| o.rect.y).min().unwrap_or(0);
+        let (span_w, span_h) = self.app.output_size;
+
+        // Auto-reparación de la geometría: reafirma que el greeter cubre la
+        // unión entera. Sin esto, una carrera de arranque (el Cerebro lo teseló
+        // en un solo monitor antes de descubrir el segundo, o el cliente no
+        // había redimensionado aún) dejaba un monitor en negro. Sólo re-emite el
+        // configure cuando el tamaño difiere — no spamea cada frame.
+        if let Some(w) = self.app.windows.iter_mut().find(|w| w.is_greeter) {
+            if w.loc != (ox, oy) || w.size != (span_w, span_h) {
+                w.loc = (ox, oy);
+                w.size = (span_w, span_h);
+                w.visible = true;
+                w.toplevel.with_pending_state(|s| {
+                    s.size = Some((span_w.max(1), span_h.max(1)).into());
+                });
+                w.toplevel.send_pending_configure();
+                crate::screencopy::danar_todo(&mut self.app);
+            }
+        }
+
         let (px, py) = self.app.pointer_loc;
         let active = self.output_at_point(px.round() as i32, py.round() as i32);
         if !force && active == self.app.greeter_active_output {
             return;
         }
-        // Origen de la superficie = esquina superior-izquierda de la unión.
-        let ox = self.outputs.iter().map(|o| o.rect.x).min().unwrap_or(0);
-        let oy = self.outputs.iter().map(|o| o.rect.y).min().unwrap_or(0);
         let mut line = format!("LAYOUT {active}");
         for o in &self.outputs {
             line.push_str(&format!(

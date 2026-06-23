@@ -257,6 +257,9 @@ pub(crate) struct ManagedWindow {
     pub(crate) focused: bool,
     /// `true` si es la ventana del shell — acoplada al pie, sin teselar.
     pub(crate) is_shell: bool,
+    /// `true` si es la ventana del greeter (DM): sin barra de título, y el
+    /// backend la muda al monitor con el ratón en multi-monitor.
+    pub(crate) is_greeter: bool,
     /// `true` si está a pantalla completa — no lleva barra de título ni marco.
     pub(crate) fullscreen: bool,
     /// `true` si duerme tras una capa de zoom: no se le envían frame

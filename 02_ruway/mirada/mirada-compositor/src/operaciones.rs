@@ -777,16 +777,17 @@ impl App {
                 // fullscreen). `w.size` guarda la celda entera; `render_loc`
                 // baja la superficie por `tb`.
                 let tbh = self.decorations.titlebar_height.max(0);
-                // En modo DM la ventana del greeter (el único cliente, no-shell)
-                // cubre TODO el espacio: la unión de las salidas, anclada en
-                // (0,0). Así el fondo animado se pinta en cada monitor y la
-                // tarjeta de login —que posiciona el propio cliente— viaja al
-                // monitor con el ratón. Y sin barra de título (`tb = 0`).
-                let greeter_mode = self.mode == BodyMode::Greeter;
+                // En modo DM la ventana del greeter cubre TODO el espacio: la
+                // unión de las salidas, anclada en (0,0). Así el fondo animado se
+                // pinta en cada monitor y la tarjeta de login —que posiciona el
+                // propio cliente— viaja al monitor con el ratón. Sin barra de
+                // título (`tb = 0`). El backend reafirma esta geometría cada
+                // frame (`sync_greeter_layout`) por si una carrera de arranque la
+                // dejó en un solo monitor.
                 let span = self.output_size;
                 let mut danio = None;
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
-                    let greeter_win = greeter_mode && !w.is_shell;
+                    let greeter_win = w.is_greeter;
                     let (rx, ry, rw, rh) = if greeter_win {
                         (0, 0, span.0, span.1)
                     } else {
@@ -961,6 +962,9 @@ impl App {
         });
         // La ventana del shell (el marco pata) no se tesela: se acopla a un borde.
         let is_shell = is_shell_app_id(&app_id);
+        // La ventana del greeter (DM): sin barra de título, y el backend la muda
+        // al monitor con el ratón.
+        let is_greeter = app_id == "mirada.greeter";
 
         // PID del cliente (lo guardó el accept-loop en `ClientState`) para el
         // linaje de las constelaciones — se lee ANTES de mover `surface` abajo.
@@ -985,6 +989,7 @@ impl App {
             floating: false,
             focused: false,
             is_shell,
+            is_greeter,
             fullscreen: false,
             suspended: false,
             frame_divisor: 1,

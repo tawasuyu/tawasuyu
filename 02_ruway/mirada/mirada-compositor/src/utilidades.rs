@@ -225,7 +225,7 @@ pub(crate) fn list_wallpaper_images(dir: &str) -> Vec<std::path::PathBuf> {
 /// ventanas a pantalla completa (no llevan), el `titlebar_height` configurado
 /// para el resto. Acotado a `>= 0`.
 pub(crate) fn titlebar_for(w: &ManagedWindow, titlebar_height: i32) -> i32 {
-    if w.is_shell || w.fullscreen {
+    if w.is_shell || w.fullscreen || w.is_greeter {
         0
     } else {
         titlebar_height.max(0)
