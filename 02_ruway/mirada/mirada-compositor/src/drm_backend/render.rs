@@ -576,27 +576,22 @@ impl DrmState {
             live.push(Frame::Text(el));
         }
         // Offscreen → píxeles → rotar en CPU.
-        let n_elem = live.len();
         let px = crate::screencopy::render_elements_offscreen(&mut self.renderer, (tw, th), &live)?;
-        // Diag (una vez): ¿el offscreen capturó CONTENIDO o sólo el fondo? Cuenta
-        // cubos de color distintos — si es ~1, el offscreen sólo pintó el fondo
-        // (ventanas/badge no se dibujaron); si es >varios, el problema es el
-        // readback/rotación/subida posterior.
-        {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static L: AtomicBool = AtomicBool::new(false);
-            if !L.swap(true, Ordering::Relaxed) {
-                let mut buckets = std::collections::HashSet::new();
-                for c in px.chunks_exact(4) {
-                    buckets.insert((c[0] / 48, c[1] / 48, c[2] / 48));
-                }
-                eprintln!(
-                    "mirada-compositor · prezi offscreen OK: {tw}x{th}, {} elems ({} ventanas), {} colores en el readback",
-                    n_elem,
-                    wins.len(),
-                    buckets.len(),
-                );
+        // Si el offscreen sólo capturó el fondo (las texturas no se dibujaron en
+        // este contexto GLES anidado), el resultado sería peor que el esquema
+        // (rect pelado, sin número). Lo detectamos por variedad de color: con
+        // ventanas reales hay muchos colores; sólo-fondo da 1–2. En ese caso
+        // devolvemos None → el llamante usa el esquema (rotado, con número y
+        // recuadros). Si algún día las texturas se dibujan, sube solo a vivo.
+        let mut buckets = std::collections::HashSet::new();
+        for c in px.chunks_exact(4).step_by(7) {
+            buckets.insert((c[0] / 40, c[1] / 40, c[2] / 40));
+            if buckets.len() >= 4 {
+                break;
             }
+        }
+        if buckets.len() < 4 {
+            return None;
         }
         Some(crate::text::rotate_buffer(&px, tw, th, rot))
     }
