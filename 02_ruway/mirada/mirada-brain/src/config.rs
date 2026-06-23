@@ -742,8 +742,25 @@ impl Config {
     /// que consumen el overview (vista espacial) y el editor de recorrido del
     /// panel cuando quieren posición libre + rotación.
     pub fn overview_places_for(&self, count: usize) -> Vec<OverviewPlace> {
-        if self.overview_places.len() == count && count > 0 {
-            return self.overview_places.clone();
+        if count == 0 {
+            return Vec::new();
+        }
+        // Si el usuario arregló el mapa a mano (`overview_places`), RESPETAMOS su
+        // arreglo aunque el conteo de escritorios haya cambiado: usamos las
+        // colocaciones guardadas para los que existan y completamos los que
+        // falten con la grilla por defecto (en vez de tirar todo —posición +
+        // rotación— a la basura al primer desajuste de conteo, que reordenaba el
+        // mapa y «perdía» lo que el panel mostraba guardado).
+        if !self.overview_places.is_empty() {
+            let mut v = self.overview_places.clone();
+            if v.len() < count {
+                let grid = self.overview_geometry_for(count);
+                for (i, &(c, r)) in grid.iter().enumerate().take(count).skip(v.len()) {
+                    v.push(OverviewPlace::new(c as f32, r as f32, 1.0, 1.0, 0.0));
+                }
+            }
+            v.truncate(count);
+            return v;
         }
         self.overview_geometry_for(count)
             .into_iter()
@@ -1089,19 +1106,29 @@ mod tests {
     }
 
     #[test]
-    fn overview_places_for_usa_el_plano_rico_cuando_coincide_el_conteo() {
+    fn overview_places_for_respeta_el_plano_rico_y_lo_adapta_al_conteo() {
         // Con un plano rico de N entradas (posición libre + giro), tiene
-        // prioridad sobre la grilla; con conteo distinto, cae a la grilla.
+        // prioridad sobre la grilla. Si el conteo cambia, se RESPETA el arreglo
+        // guardado: se completa con grilla lo que falte y se trunca lo que sobre
+        // (en vez de tirar posición+rotación a la basura, que reordenaba el mapa).
         let mut c = Config::default();
         c.overview_places = vec![
             OverviewPlace::new(0.5, 0.0, 1.0, 1.0, std::f32::consts::FRAC_PI_4),
             OverviewPlace::new(2.0, 1.3, 1.5, 1.0, -0.2),
         ];
-        let p = c.overview_places_for(2);
-        assert_eq!(p, c.overview_places);
-        // Conteo distinto al del plano → fallback a grilla 1×1.
+        // Conteo exacto → el plano rico tal cual.
+        assert_eq!(c.overview_places_for(2), c.overview_places);
+        // Conteo MAYOR → conserva los 2 guardados (con su giro) + completa el 3º
+        // con grilla por defecto (sin giro).
         let p3 = c.overview_places_for(3);
-        assert!(p3.iter().all(|q| q.w == 1.0 && q.h == 1.0 && q.rot == 0.0));
+        assert_eq!(p3.len(), 3);
+        assert_eq!(p3[0], c.overview_places[0]);
+        assert_eq!(p3[1], c.overview_places[1]);
+        assert_eq!(p3[2].w, 1.0);
+        assert_eq!(p3[2].rot, 0.0);
+        // Conteo MENOR → trunca conservando los primeros (con su giro).
+        let p1 = c.overview_places_for(1);
+        assert_eq!(p1, vec![c.overview_places[0]]);
     }
 
     #[test]
