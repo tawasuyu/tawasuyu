@@ -700,8 +700,14 @@ impl App for Panel {
                 let grip = match m.prezi.grip {
                     Some(g) => g,
                     None => {
-                        let world =
-                            m.prezi.state.camara.screen_to_world((lx as f64, ly as f64), panel);
+                        // `lx,ly` vienen LOCALES al lienzo (origen = esquina del
+                        // nodo); `screen_to_world` espera coords ABSOLUTAS de
+                        // ventana (resta `panel.centro()`, que es absoluto). Sin
+                        // sumar el origen del panel, el hit-test caía corrido por
+                        // la posición del editor en la pantalla y NUNCA agarraba un
+                        // marco → el editor se sentía read-only (sólo paneaba).
+                        let abs = (lx as f64 + panel.x, ly as f64 + panel.y);
+                        let world = m.prezi.state.camara.screen_to_world(abs, panel);
                         let hit = m.prezi.rec.marco_en_punto(world);
                         m.prezi.grip = Some(hit);
                         if hit.is_some() {
