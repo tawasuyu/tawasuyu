@@ -272,14 +272,12 @@ impl App {
     }
 
     /// Confirma la navegación de la vista espacial: salta al escritorio
-    /// resaltado y CIERRA al instante (sin zoom-in de vuelta — ese zoom dejaba
-    /// las ventanas a tamaño completo apiladas un momento). El escritorio elegido
-    /// ya queda activo detrás.
+    /// resaltado y pide el cierre ANIMADO (zoom-in hacia él — que ahora ya pasó a
+    /// ser el activo, así que la cámara aterriza sobre él).
     pub(crate) fn overview_commit(&mut self) {
         if self.overview_open {
             self.cambiar_workspace(self.overview_selected);
-            self.overview_open = false;
-            self.overview_via_wintab = false;
+            self.overview_closing = true;
         }
     }
 

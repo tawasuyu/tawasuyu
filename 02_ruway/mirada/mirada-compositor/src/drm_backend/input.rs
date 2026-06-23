@@ -95,7 +95,7 @@ impl DrmState {
                                     // zoom-in). No es Win+Tab, así que NO se cierra
                                     // al soltar Super — sólo con Super+e/Esc/click.
                                     if st.overview_open {
-                                        st.overview_open = false; // cierre instantáneo
+                                        st.overview_closing = true; // cierre animado
                                     } else {
                                         st.overview_open = true;
                                         st.overview_closing = false;
@@ -113,9 +113,11 @@ impl DrmState {
                                     return FilterResult::Intercept(());
                                 }
                                 "Escape" if st.overview_open => {
-                                    // Cancelar: cierra al instante SIN saltar.
-                                    st.overview_open = false;
-                                    st.overview_via_wintab = false;
+                                    // Cancelar: cierra con zoom-in de vuelta al
+                                    // escritorio ACTUAL (sin saltar).
+                                    st.overview_selected =
+                                        st.workspace_overview().map_or(0, |(a, _)| a);
+                                    st.overview_closing = true;
                                     return FilterResult::Intercept(());
                                 }
                                 _ => {}
@@ -337,9 +339,8 @@ impl DrmState {
                             self.app.cambiar_workspace(ws);
                         }
                     }
-                    // Cierre instantáneo (sin zoom-in que deje las ventanas grandes).
-                    self.app.overview_open = false;
-                    self.app.overview_via_wintab = false;
+                    // Cierre ANIMADO (zoom-in hacia el elegido).
+                    self.app.overview_closing = true;
                     crate::screencopy::danar_todo(&mut self.app);
                     return;
                 }
