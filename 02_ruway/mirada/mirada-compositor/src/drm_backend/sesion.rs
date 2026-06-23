@@ -138,6 +138,21 @@ impl DrmState {
         // detectar el flanco de apertura arranca el zoom-OUT; al pedir cierre
         // (`overview_closing`) arranca el zoom-IN y, al terminar, baja la vista.
         {
+            // Cierre ROBUSTO de Win+Tab: en vez de depender de capturar el evento
+            // de release de Super (que a veces no llega como esperamos), SONDEAMOS
+            // su estado cada tick. Apenas Super deja de estar sostenido, se salta
+            // al resaltado y se cierra — así la vista nunca queda «pegada» tapando
+            // el escritorio (que dejaba sin funcionar el resto de la UI).
+            if self.app.overview_open && self.app.overview_via_wintab && !self.app.overview_closing {
+                let super_held = self
+                    .app
+                    .keyboard
+                    .as_ref()
+                    .is_some_and(|kb| kb.modifier_state().logo);
+                if !super_held {
+                    self.app.overview_commit();
+                }
+            }
             let now = self.start.elapsed().as_millis() as u32;
             let anim_ms = self.app.config_overview_anim_ms().max(1);
             if self.app.overview_open && !self.prev_overview_open {
@@ -158,10 +173,13 @@ impl DrmState {
                         self.overview_anim = None;
                         self.prev_overview_open = false;
                     }
-                } else {
-                    // En animación: forzar repaint cada tick para que fluya.
-                    crate::screencopy::danar_todo(&mut self.app);
                 }
+            }
+            // Mientras la vista esté abierta repintamos cada tick: así la animación
+            // FLUYE y, sobre todo, el frame final (mosaico desplegado, t=1) sí se
+            // dibuja — antes se congelaba un frame antes, con el activo agrandado.
+            if self.app.overview_open {
+                crate::screencopy::danar_todo(&mut self.app);
             }
         }
 
