@@ -90,6 +90,16 @@ rotado se dibuja. Quedaban tres defectos visuales, los tres arreglados:
    y se tolera algo de ghost. Ambos `from_buffer` aceptan alpha
    (`SolidColorRenderElement` f32, `MemoryRenderBufferRenderElement` Option<f32>).
 
+**Bug colateral del mismo `flipped()` (ARREGLADO): screencopy en DRM.**
+`servir_offscreen → copiar_a_{shm,dmabuf}` heredaban el mismo `flipped()`
+hardcodeado, así que un screenshot/grabación bajo el backend **DRM** salía de
+cabeza (el camino winit anidado estaba bien). Fix: `servir` recibe ahora
+`target_top_down: bool` — `false` para el backbuffer real de la `EGLSurface`
+(winit, bottom-up), `true` para el offscreen `GlesTexture` (DRM, top-down). En
+shm endereza el flag `YInvert`; en dmabuf elige blit recto (top-down) o
+invertido (bottom-up). Verificable con `grim` bajo DRM (camino shm). El camino
+dmabuf (wf-recorder/PipeWire) se razonó por geometría del blit, no se midió.
+
 **ESTADO: mirada-prezi CERRADO.** Los cinco defectos resueltos y verificados en
 metal. Posible optimización futura (NO hecha, no vale el riesgo de reabrir):
 cachear el bitmap rotado en estado asentado (`t_open=1`) e invalidar sólo al

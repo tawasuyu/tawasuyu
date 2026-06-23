@@ -244,7 +244,8 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                 if let Some(out) = state.output.clone() {
                     // Salida única del backend winit: origen global (0,0).
                     let capturas = screencopy::tomar_capturas(&mut state, &out, (0, 0));
-                    screencopy::servir(renderer, &framebuffer, capturas);
+                    // El backbuffer real de la `EGLSurface` se lee bottom-up.
+                    screencopy::servir(renderer, &framebuffer, capturas, false);
                 }
             }
         }

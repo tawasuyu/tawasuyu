@@ -430,13 +430,21 @@ pub fn tomar_capturas(
 /// Sirve las capturas desde un target ya compuesto (el backbuffer winit, o el
 /// offscreen del backend DRM): `ReadPixels` región por región y los eventos
 /// `flags`+`ready` (o `failed` si la GPU no quiso).
+///
+/// `target_top_down`: la ORIENTACIÓN del readback del target, que **depende del
+/// tipo de target** y smithay 0.7 NO la expresa (`GlesMapping::flipped()` está
+/// hardcodeado a `true`). El backbuffer real de una `EGLSurface` (winit) se lee
+/// bottom-up → `false`. Un offscreen `GlesTexture` (el del backend DRM) se lee
+/// **top-down** → `true` (medido en `examples/offscreen_orient_diag`). Pasar mal
+/// este flag deja el screenshot/grabación de cabeza.
 pub fn servir(
     renderer: &mut GlesRenderer,
     target: &GlesTarget<'_>,
     capturas: Vec<PendingScreencopy>,
+    target_top_down: bool,
 ) {
     for c in capturas {
-        match copiar_una(renderer, target, &c) {
+        match copiar_una(renderer, target, &c, target_top_down) {
             Ok(()) => {}
             Err(e) => {
                 eprintln!("mirada-compositor · screencopy falló: {e}");
@@ -453,13 +461,14 @@ fn copiar_una(
     renderer: &mut GlesRenderer,
     target: &GlesTarget<'_>,
     c: &PendingScreencopy,
+    target_top_down: bool,
 ) -> Result<(), String> {
     // `cloned()` corta el préstamo de `c.buffer` ya: lo que sigue sólo toca `c`
     // por valores `Copy` (el rect) o re-lee `c.buffer` en el path shm.
     let dmabuf = get_dmabuf(&c.buffer).ok().cloned();
     let flipped = match &dmabuf {
-        Some(d) => copiar_a_dmabuf(renderer, target, c.rect, d)?,
-        None => copiar_a_shm(renderer, target, c.rect, &c.buffer)?,
+        Some(d) => copiar_a_dmabuf(renderer, target, c.rect, d, target_top_down)?,
+        None => copiar_a_shm(renderer, target, c.rect, &c.buffer, target_top_down)?,
     };
 
     // El cliente endereza con el flag — grim y wf-recorder lo honran.
@@ -489,12 +498,16 @@ fn copiar_una(
 }
 
 /// Camino `wl_shm`: `ReadPixels` del target a CPU y memcpy al buffer del cliente.
-/// Devuelve si el resultado quedó y-invertido (`ReadPixels` lee de abajo-arriba).
+/// Devuelve si el resultado quedó y-invertido (lo endereza el cliente con el flag
+/// `YInvert`). `target_top_down` = el readback ya viene derecho (offscreen
+/// `GlesTexture`): entonces NO está invertido, sin importar lo que diga
+/// `mapping.flipped()` (que en smithay 0.7 miente: siempre `true`).
 fn copiar_a_shm(
     renderer: &mut GlesRenderer,
     target: &GlesTarget<'_>,
     rect: Rectangle<i32, BufferCoord>,
     buffer: &WlBuffer,
+    target_top_down: bool,
 ) -> Result<bool, String> {
     let mapping = renderer
         .copy_framebuffer(target, rect, FOURCC)
@@ -523,7 +536,9 @@ fn copiar_a_shm(
     if !escrito {
         return Err("buffer shm: offset+tamaño fuera del mapeo".into());
     }
-    Ok(mapping.flipped())
+    // El target offscreen se lee top-down → no hay inversión. El framebuffer real
+    // se lee bottom-up → `mapping.flipped()` (que acá sí acierta, da `true`).
+    Ok(if target_top_down { false } else { mapping.flipped() })
 }
 
 /// Camino **dmabuf zero-copy**: enlaza el dmabuf del cliente como framebuffer y
@@ -540,11 +555,18 @@ fn copiar_a_shm(
 ///
 /// Si el renderer no puede enlazar el dmabuf (modifier no soportado), propaga el
 /// error y [`servir`] le manda `failed` al cliente (que reintenta con shm).
+///
+/// `target_top_down`: si el target ya se lee top-down (offscreen `GlesTexture`,
+/// visual-top en Y bajo) el blit va RECTO; si es bottom-up (framebuffer real,
+/// visual-top en Y alto) se voltea. En ambos casos el dmabuf queda físicamente
+/// top-down → devolvemos `false` (sin YInvert), correcto incluso para clientes
+/// dmabuf que ignoran el flag (wf-recorder).
 fn copiar_a_dmabuf(
     renderer: &mut GlesRenderer,
     target: &GlesTarget<'_>,
     rect: Rectangle<i32, BufferCoord>,
     dmabuf: &Dmabuf,
+    target_top_down: bool,
 ) -> Result<bool, String> {
     let mut dst = dmabuf.clone();
     let mut dst_fb = renderer
@@ -553,10 +575,13 @@ fn copiar_a_dmabuf(
     // A escala 1 sin transform las coordenadas de buffer y físicas coinciden.
     let src: Rectangle<i32, Physical> =
         Rectangle::new((rect.loc.x, rect.loc.y).into(), (rect.size.w, rect.size.h).into());
-    // Destino con Y invertido: loc.y = alto, size.h = -alto → glBlitFramebuffer
-    // recibe dstY0 = h, dstY1 = 0 y voltea verticalmente al copiar.
-    let dst_rect: Rectangle<i32, Physical> =
-        Rectangle::new((0, rect.size.h).into(), (rect.size.w, -rect.size.h).into());
+    // Bottom-up: destino con Y invertido (loc.y = alto, size.h = -alto →
+    // glBlitFramebuffer recibe dstY0 = h, dstY1 = 0 y voltea). Top-down: recto.
+    let dst_rect: Rectangle<i32, Physical> = if target_top_down {
+        Rectangle::new((0, 0).into(), (rect.size.w, rect.size.h).into())
+    } else {
+        Rectangle::new((0, rect.size.h).into(), (rect.size.w, -rect.size.h).into())
+    };
     renderer
         .blit(target, &mut dst_fb, src, dst_rect, TextureFilter::Linear)
         .map_err(|e| format!("blit dmabuf: {e}"))?;
@@ -614,7 +639,8 @@ pub fn servir_offscreen<E>(
             Err(e) => return fallar_todas(capturas, format!("finish: {e}")),
         }
     }
-    servir(renderer, &target, capturas);
+    // El target es un offscreen `GlesTexture`: su readback viene top-down.
+    servir(renderer, &target, capturas, true);
 }
 
 /// Renderiza `elements` en un **offscreen** `size` y devuelve sus píxeles RGBA
