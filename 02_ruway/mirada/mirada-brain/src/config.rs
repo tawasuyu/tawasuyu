@@ -165,6 +165,32 @@ pub struct Config {
     /// Segundos entre cambios de wallpaper del slideshow. `0` = sin rotar.
     #[serde(default)]
     pub wallpaper_interval_secs: u32,
+    /// **Fuente** del fondo — el select inconfundible de arriba del formulario.
+    /// `"auto"` (compat: imagen `wallpaper_path` / slideshow `wallpaper_dir` /
+    /// gradiente por defecto, según qué esté seteado), `"color"` (color sólido),
+    /// `"gradient"` (gradiente de `wallpaper_gradient`), `"local"` (una imagen,
+    /// estática), `"directory"` (carpeta en rotación), `"procedural"` (geometría
+    /// generada, `wallpaper_pattern` + `wallpaper_palette`) o `"remote"` (el
+    /// daemon `mirada-wallpaper` baja la imagen y reescribe `wallpaper_path`).
+    /// El compositor despacha sobre este valor.
+    #[serde(default = "default_wallpaper_source")]
+    pub wallpaper_source: String,
+    /// Color sólido (RGB) para `wallpaper_source = "color"`.
+    #[serde(default = "default_wallpaper_color")]
+    pub wallpaper_color: [u8; 3],
+    /// Stops del gradiente (RGB, de arriba a abajo) para `"gradient"`. Vacío o
+    /// con un solo stop → el gradiente sobrio por defecto.
+    #[serde(default)]
+    pub wallpaper_gradient: Vec<[u8; 3]>,
+    /// Patrón procedural (slug de `mirada_procedural::Pattern`: `"stripes"`,
+    /// `"rings"`, `"waves"`, `"low-poly"`, `"voronoi"`, `"bauhaus"`) para
+    /// `"procedural"`.
+    #[serde(default = "default_wallpaper_pattern")]
+    pub wallpaper_pattern: String,
+    /// Paleta (RGB) del patrón procedural. Vacía → la paleta por defecto del
+    /// motor.
+    #[serde(default)]
+    pub wallpaper_palette: Vec<[u8; 3]>,
     /// Entradas del menú raíz (estilo openbox) que aparece al click derecho
     /// sobre el fondo. Vacío = sin menú (el click derecho en el fondo no hace
     /// nada). Cada entrada lanza su `command` con `sh -c`. Si la config no trae
@@ -512,6 +538,11 @@ impl Default for Config {
             wallpaper_fit: WallpaperFit::default(),
             wallpaper_dir: String::new(),
             wallpaper_interval_secs: 0,
+            wallpaper_source: default_wallpaper_source(),
+            wallpaper_color: default_wallpaper_color(),
+            wallpaper_gradient: Vec::new(),
+            wallpaper_pattern: default_wallpaper_pattern(),
+            wallpaper_palette: Vec::new(),
             menu: default_root_menu(),
             zones: default_zones(),
             zone_presets: default_zone_presets(),
@@ -541,6 +572,20 @@ impl Default for Config {
 /// fondo (terminal, navegador, lanzador, recargar config, cerrar sesión). Los
 /// comandos usan fallbacks `||` para que funcionen sin saber qué tiene el
 /// sistema instalado.
+/// Fuente de wallpaper por defecto: `"auto"` — preserva el comportamiento
+/// histórico (imagen/slideshow/gradiente según los campos legacy).
+fn default_wallpaper_source() -> String {
+    "auto".to_string()
+}
+/// Color sólido por defecto (azul-noche sobrio) para la fuente `"color"`.
+fn default_wallpaper_color() -> [u8; 3] {
+    [0x14, 0x16, 0x28]
+}
+/// Patrón procedural por defecto.
+fn default_wallpaper_pattern() -> String {
+    "waves".to_string()
+}
+
 pub fn default_root_menu() -> Vec<MenuEntry> {
     let leaf = |label: &str, cmd: &str| MenuEntry {
         label: label.to_string(),

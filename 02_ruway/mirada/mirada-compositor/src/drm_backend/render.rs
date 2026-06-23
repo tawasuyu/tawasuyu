@@ -925,24 +925,35 @@ impl DrmState {
     /// su propio modo de ajuste — un override por nombre puede pintarle un
     /// fondo distinto a cada monitor.
     fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame<GlesRenderer>>) {
-        let ctx = &mut self.outputs[idx];
-        let path = ctx.wallpaper_path.clone();
-        let fit = ctx.wallpaper_fit;
-        let size = (ctx.rect.w, ctx.rect.h);
+        let name = self.outputs[idx].name.clone();
+        let cur_path = self.outputs[idx].wallpaper_path.clone();
+        let size = (self.outputs[idx].rect.w, self.outputs[idx].rect.h);
         if size.0 <= 0 || size.1 <= 0 {
             return;
         }
-        let stale = ctx
+        let stale = self.outputs[idx]
             .wallpaper
             .as_ref()
             .map(|(_, s)| *s != size)
             .unwrap_or(true);
         if stale {
-            ctx.wallpaper = match path {
-                Some(p) => load_wallpaper(&p, fit, size.0, size.1).map(|b| (b, size)),
-                None => Some((make_default_wallpaper(size.0, size.1), size)),
+            // Despacho por la FUENTE elegida (color/gradiente/procedural/imagen).
+            use crate::estado::WallpaperSpec;
+            let spec = self.app.config_wallpaper_spec_for(&name, cur_path.as_deref());
+            let buf = match spec {
+                WallpaperSpec::Image(p, fit) => load_wallpaper(&p, fit, size.0, size.1),
+                WallpaperSpec::Solid(c) => Some(make_solid_wallpaper(c, size.0, size.1)),
+                WallpaperSpec::Gradient(stops) => {
+                    Some(make_gradient_wallpaper(&stops, size.0, size.1))
+                }
+                WallpaperSpec::Procedural(pat, pal) => {
+                    Some(make_procedural_wallpaper(pat, &pal, size.0, size.1))
+                }
+                WallpaperSpec::Default => Some(make_default_wallpaper(size.0, size.1)),
             };
+            self.outputs[idx].wallpaper = buf.map(|b| (b, size));
         }
+        let ctx = &self.outputs[idx];
         let Some((buf, _)) = &ctx.wallpaper else {
             return;
         };

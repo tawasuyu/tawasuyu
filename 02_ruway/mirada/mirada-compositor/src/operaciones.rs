@@ -522,6 +522,39 @@ impl App {
         }
     }
 
+    /// Resuelve la **fuente** del fondo de la salida `name` a un
+    /// [`WallpaperSpec`] materializable. `ctx_path` es la ruta que la salida
+    /// tiene cargada ahora (la global/override de la config, ya posiblemente
+    /// pisada por el slideshow o el daemon remoto) — se usa para las fuentes de
+    /// imagen. Las fuentes generadas (color/gradiente/procedural) ignoran la
+    /// ruta. Con Cerebro enlazado cae a imagen-por-ruta o al default.
+    pub(crate) fn config_wallpaper_spec_for(
+        &self,
+        name: &str,
+        ctx_path: Option<&str>,
+    ) -> crate::estado::WallpaperSpec {
+        use crate::estado::WallpaperSpec;
+        let img_or_default = |fit: mirada_brain::WallpaperFit| match ctx_path {
+            Some(p) if !p.is_empty() => WallpaperSpec::Image(p.to_string(), fit),
+            _ => WallpaperSpec::Default,
+        };
+        let Brain::Embedded(d) = &self.brain else {
+            return img_or_default(mirada_brain::WallpaperFit::default());
+        };
+        let c = d.config();
+        let fit = c.wallpaper_fit_for(name);
+        match c.wallpaper_source.as_str() {
+            "color" => WallpaperSpec::Solid(c.wallpaper_color),
+            "gradient" => WallpaperSpec::Gradient(c.wallpaper_gradient.clone()),
+            "procedural" => WallpaperSpec::Procedural(
+                mirada_procedural::Pattern::from_slug(&c.wallpaper_pattern).unwrap_or_default(),
+                c.wallpaper_palette.clone(),
+            ),
+            // auto / local / directory / remote → imagen por la ruta resuelta.
+            _ => img_or_default(fit),
+        }
+    }
+
     /// Cómo se ajusta el wallpaper a la salida `name` (stretch/fit/fill/…) —
     /// el override de [`mirada_brain::OutputOverride`] si existe, o el global.
     /// Con Cerebro enlazado cae al default (stretch) — es sólo cosmético, el

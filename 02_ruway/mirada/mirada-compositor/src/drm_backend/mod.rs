@@ -233,6 +233,60 @@ fn make_default_wallpaper(w: i32, h: i32) -> MemoryRenderBuffer {
     )
 }
 
+/// Buffer de color sólido `w×h` (BGRA opaco).
+fn make_solid_wallpaper(rgb: [u8; 3], w: i32, h: i32) -> MemoryRenderBuffer {
+    let (w_u, h_u) = (w.max(1) as usize, h.max(1) as usize);
+    let mut bgra = vec![0u8; w_u * h_u * 4];
+    for px in bgra.chunks_exact_mut(4) {
+        px[0] = rgb[2];
+        px[1] = rgb[1];
+        px[2] = rgb[0];
+        px[3] = 255;
+    }
+    MemoryRenderBuffer::from_slice(&bgra, Fourcc::Argb8888, (w, h), 1, Transform::Normal, None)
+}
+
+/// Gradiente vertical `w×h` (BGRA opaco) a partir de stops RGB equiespaciados.
+/// Con menos de 2 stops cae al gradiente sobrio por defecto.
+fn make_gradient_wallpaper(stops_rgb: &[[u8; 3]], w: i32, h: i32) -> MemoryRenderBuffer {
+    if stops_rgb.len() < 2 {
+        return make_default_wallpaper(w, h);
+    }
+    let (w_u, h_u) = (w.max(1) as usize, h.max(1) as usize);
+    let n = stops_rgb.len();
+    let stops: Vec<(f32, [u8; 3])> = stops_rgb
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i as f32 / (n - 1) as f32, *c))
+        .collect();
+    let mut bgra = vec![0u8; w_u * h_u * 4];
+    let denom = (h_u.saturating_sub(1)).max(1) as f32;
+    for y in 0..h_u {
+        let (r, g, b) = mezcla_stops(&stops, y as f32 / denom);
+        let row = &mut bgra[y * w_u * 4..(y + 1) * w_u * 4];
+        for x in 0..w_u {
+            let i = x * 4;
+            row[i] = b;
+            row[i + 1] = g;
+            row[i + 2] = r;
+            row[i + 3] = 255;
+        }
+    }
+    MemoryRenderBuffer::from_slice(&bgra, Fourcc::Argb8888, (w, h), 1, Transform::Normal, None)
+}
+
+/// Fondo **procedural** `w×h` (BGRA opaco): delega en `mirada-procedural`. Seed
+/// fijo → determinista por tamaño (mismo patrón en cada arranque/monitor).
+fn make_procedural_wallpaper(
+    pattern: mirada_procedural::Pattern,
+    palette: &[[u8; 3]],
+    w: i32,
+    h: i32,
+) -> MemoryRenderBuffer {
+    let bgra = mirada_procedural::generate_bgra(pattern, palette, w.max(1) as u32, h.max(1) as u32, 1);
+    MemoryRenderBuffer::from_slice(&bgra, Fourcc::Argb8888, (w, h), 1, Transform::Normal, None)
+}
+
 /// Interpola entre stops `(t, rgb)` para `t in 0..1`. Lineal por tramo.
 fn mezcla_stops(stops: &[(f32, [u8; 3])], t: f32) -> (u8, u8, u8) {
     let t = t.clamp(0.0, 1.0);

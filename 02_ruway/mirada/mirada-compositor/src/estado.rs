@@ -224,6 +224,22 @@ pub(crate) struct OverviewData {
     pub(crate) layouts: Vec<Vec<(u64, mirada_brain::Rect)>>,
 }
 
+/// Cómo resolver el fondo de una salida, según la **fuente** elegida en la
+/// config (`wallpaper_source`). El compositor lo materializa en un buffer.
+pub(crate) enum WallpaperSpec {
+    /// Imagen por su ruta + ajuste (fuentes `local`/`directory`/`remote`/`auto`
+    /// con `wallpaper_path` resuelto — el slideshow/daemon pudo overridearlo).
+    Image(String, mirada_brain::WallpaperFit),
+    /// Color sólido RGB.
+    Solid([u8; 3]),
+    /// Gradiente vertical de stops RGB (de arriba a abajo).
+    Gradient(Vec<[u8; 3]>),
+    /// Patrón procedural + paleta.
+    Procedural(mirada_procedural::Pattern, Vec<[u8; 3]>),
+    /// Gradiente sobrio por defecto (auto sin imagen).
+    Default,
+}
+
 /// Una ventana de cliente que el compositor gestiona.
 pub(crate) struct ManagedWindow {
     pub(crate) id: u64,

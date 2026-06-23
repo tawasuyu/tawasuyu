@@ -66,13 +66,12 @@ impl DrmState {
             // Refresca el wallpaper por salida: cada `OutputCtx` resuelve su
             // ruta y su `fit` por nombre del conector (override o global).
             for ctx in &mut self.outputs {
-                let new_wp = self.app.config_wallpaper_path_for(&ctx.name);
-                let new_fit = self.app.config_wallpaper_fit_for(&ctx.name);
-                if new_wp != ctx.wallpaper_path || new_fit != ctx.wallpaper_fit {
-                    ctx.wallpaper_path = new_wp;
-                    ctx.wallpaper_fit = new_fit;
-                    ctx.wallpaper = None; // se rearma en el próximo render
-                }
+                ctx.wallpaper_path = self.app.config_wallpaper_path_for(&ctx.name);
+                ctx.wallpaper_fit = self.app.config_wallpaper_fit_for(&ctx.name);
+                // Siempre rearmar: la fuente puede ser color/gradiente/procedural
+                // (sin ruta), donde el cambio está en otros campos del config y
+                // no en `wallpaper_path`. Rebuild una vez por guardado es barato.
+                ctx.wallpaper = None;
             }
             self.text = crate::text::TextRenderer::system(self.app.config_font_path().as_deref());
         }
