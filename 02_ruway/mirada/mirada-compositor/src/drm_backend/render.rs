@@ -240,7 +240,9 @@ impl DrmState {
                         Kind::Unspecified,
                     )));
                 }
-            } else if w.focused && !w.is_shell && !w.title.is_empty() {
+            } else if w.focused && !w.is_shell && !w.is_greeter && !w.title.is_empty() {
+                // El greeter no lleva ni barra ni este título flotante (aplastaba
+                // su barra de menú).
                 if let Some(tr) = &self.text {
                     if self.text_cache.len() > 256 {
                         self.text_cache.clear();

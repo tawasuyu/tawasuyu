@@ -950,13 +950,34 @@ impl App for Greeter {
                 ContextMenuExtras { appear: model.edit_anim.value(), ..Default::default() },
             ));
         }
-        // Si no, el dropdown del menú principal.
+        // Si no, el dropdown del menú principal. La barra vive en el panel de
+        // contenido —desplazado al monitor activo—, pero el overlay se posiciona
+        // en coords del menubar con origen (0,0); hay que correrlo el mismo
+        // offset para que caiga bajo la barra y no en el monitor primario.
         let menu = app_menu(model);
-        menubar_overlay_animated(
+        let overlay = menubar_overlay_animated(
             &menubar_spec(&menu, model, &theme),
             model.menu_active,
             model.menu_anim.value(),
-        )
+        )?;
+        Some(offset_to_active_monitor(model, overlay))
+    }
+}
+
+/// Envuelve `view` en un contenedor absoluto sobre el rect del monitor activo,
+/// para que los overlays con coords relativas a la ventana (el dropdown del
+/// menú) caigan bajo el contenido y no en el monitor primario. Sin info de
+/// monitores devuelve la vista tal cual.
+fn offset_to_active_monitor(model: &Model, view: View<Msg>) -> View<Msg> {
+    match content_rect(model) {
+        Some((x, y, w, h)) => View::new(Style {
+            position: Position::Absolute,
+            inset: Rect { left: length(x), top: length(y), right: auto(), bottom: auto() },
+            size: Size { width: length(w), height: length(h) },
+            ..Default::default()
+        })
+        .children(vec![view]),
+        None => view,
     }
 }
 
