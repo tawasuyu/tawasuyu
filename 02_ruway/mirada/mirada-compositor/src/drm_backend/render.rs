@@ -240,9 +240,10 @@ impl DrmState {
                         Kind::Unspecified,
                     )));
                 }
-            } else if w.focused && !w.is_shell && !w.is_greeter && !w.title.is_empty() {
+            } else if w.focused && w.ssd && !w.is_shell && !w.is_greeter && !w.title.is_empty() {
                 // El greeter no lleva ni barra ni este título flotante (aplastaba
-                // su barra de menú).
+                // su barra de menú). Las ventanas CSD (`!w.ssd`) tampoco: el
+                // cliente ya pinta su propio título.
                 if let Some(tr) = &self.text {
                     if self.text_cache.len() > 256 {
                         self.text_cache.clear();
@@ -264,7 +265,11 @@ impl DrmState {
                     }
                 }
             }
-            if !w.is_shell && self.app.decorations.border_width > 0 {
+            // Marco del servidor: para SSD siempre; para CSD sólo si está
+            // teselada (los estados `tiled` ya le quitaron la sombra, así que el
+            // borde abraza el contenido). En CSD flotante lo omitimos: el borde
+            // envolvería la sombra invisible del buffer → el «margen grande».
+            if !w.is_shell && self.app.decorations.border_width > 0 && (w.ssd || !w.floating) {
                 let rects = border_rects(x, dec_y, sw, dec_h, self.app.decorations.border_width);
                 for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
                     into.push(Frame::Solid(SolidColorRenderElement::from_buffer(

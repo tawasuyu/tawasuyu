@@ -824,7 +824,10 @@ impl App {
                     w.fullscreen = fullscreen;
                     w.suspended = suspended;
                     w.frame_divisor = frame_divisor.max(1);
-                    let tb = if w.is_shell || fullscreen || greeter_win { 0 } else { tbh };
+                    // `titlebar_for` ya descuenta shell/fullscreen/greeter y,
+                    // ahora, las ventanas CSD (`!w.ssd`): a éstas se les configura
+                    // la celda entera, sin reservar barra (la dibuja el cliente).
+                    let tb = crate::titlebar_for(w, tbh);
                     // Una ventana teselada (ni shell, ni flotante, ni fullscreen)
                     // recibe los estados `tiled`: así los clientes CSD (GTK/Qt)
                     // sueltan su margen de sombra flotante y las esquinas
@@ -963,6 +966,11 @@ impl App {
         let id = self.next_id;
         self.next_id += 1;
 
+        // ¿El cliente aceptó decoración del servidor? La negociación
+        // `xdg-decoration` suele completarse antes del mapeo, así que el set
+        // ya refleja su preferencia. Ausente = se decora solo (CSD).
+        let ssd = self.ssd_surfaces.contains(&surface);
+
         let (app_id, title) = with_states(&surface, |states| {
             states
                 .data_map
@@ -1019,6 +1027,7 @@ impl App {
             foreign_handle,
             wlr_handles: Vec::new(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
+            ssd,
         });
 
         // Alta en el servidor wlr-foreign-toplevel (taskbar de pata): crea un
@@ -1042,6 +1051,42 @@ impl App {
                     ancestors,
                 });
             }
+        }
+    }
+
+    /// Apunta/desapunta una superficie como decorada por el servidor (SSD) y,
+    /// si su ventana ya está mapeada, refleja el cambio: ajusta `w.ssd`,
+    /// reconfigura el tamaño (reservar o liberar la franja de barra) y marca
+    /// daño para que el render aparezca/quite la barra. La negociación suele
+    /// llegar antes del mapeo: en ese caso sólo toca el set y `register_toplevel`
+    /// lee el flag al crear la ventana.
+    pub(crate) fn set_ssd_for(
+        &mut self,
+        toplevel: &smithay::wayland::shell::xdg::ToplevelSurface,
+        ssd: bool,
+    ) {
+        let surface = toplevel.wl_surface().clone();
+        if ssd {
+            self.ssd_surfaces.insert(surface.clone());
+        } else {
+            self.ssd_surfaces.remove(&surface);
+        }
+        let tbh = self.decorations.titlebar_height;
+        let mut danio = None;
+        if let Some(w) = self.windows.iter_mut().find(|w| w.surface == surface) {
+            if w.ssd != ssd {
+                w.ssd = ssd;
+                danio = Some(Rectangle::new(w.loc.into(), w.size.into()));
+                let tb = crate::titlebar_for(w, tbh);
+                let (rw, rh) = w.size;
+                w.toplevel.with_pending_state(|s| {
+                    s.size = Some((rw.max(1), (rh - tb).max(1)).into());
+                });
+                w.toplevel.send_pending_configure();
+            }
+        }
+        if let Some(d) = danio {
+            screencopy::danar(self, d);
         }
     }
 

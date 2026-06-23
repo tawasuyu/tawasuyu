@@ -265,6 +265,7 @@ impl XdgShellHandler for App {
             .windows
             .iter()
             .position(|w| w.surface == *surface.wl_surface());
+        self.ssd_surfaces.remove(surface.wl_surface());
         if let Some(pos) = pos {
             let w = self.windows.remove(pos);
             // La celda que ocupaba queda dañada (screencopy): se repinta
@@ -392,25 +393,44 @@ impl XdgShellHandler for App {
     }
 }
 
-/// Decoración de ventana: mirada tesela, así que las ventanas no llevan
-/// barra de título. Le decimos a todo cliente que la decoración la pone
-/// el servidor (`ServerSide`) — y como el servidor no dibuja ninguna, la
-/// ventana queda sin marco. Sin esto, clientes como `foot` se dibujan su
-/// propia barra (CSD), que estorba en un escritorio teselante.
+/// Decoración de ventana (`xdg-decoration`). Antes forzábamos `ServerSide` a
+/// todos para que clientes como `foot` no se dibujaran su propia barra (CSD)
+/// en un escritorio teselante. Pero mirada *sí* dibuja barra+marco, y los
+/// clientes que ignoran el `ServerSide` y se decoran igual (Firefox/Zen, GTK
+/// como pavucontrol) terminaban con **doble** barra y la sombra forrada en un
+/// margen. Ahora **honramos la preferencia del cliente**: ofrecemos SSD por
+/// defecto (mirada decora), pero si el cliente pide `ClientSide` lo respetamos
+/// y nos hacemos a un lado. El set [`App::ssd_surfaces`] recuerda quién aceptó
+/// SSD; las apps que ni hablan el protocolo nunca entran al set y quedan en CSD
+/// (no las decoramos). Ver [`crate::titlebar_for`].
 impl XdgDecorationHandler for App {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        // El cliente bindeó el manager: le ofrecemos SSD por defecto. Si
+        // prefiere CSD, lo corregirá con un `set_mode` → `request_mode`.
         toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
         toplevel.send_configure();
+        self.set_ssd_for(&toplevel, true);
     }
 
-    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
-        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
+        // Honramos lo que pide: SSD → mirada decora; cualquier otro (ClientSide)
+        // → el cliente se decora solo y mirada se aparta.
+        let server = matches!(mode, DecorationMode::ServerSide);
+        let chosen = if server {
+            DecorationMode::ServerSide
+        } else {
+            DecorationMode::ClientSide
+        };
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(chosen));
         toplevel.send_configure();
+        self.set_ssd_for(&toplevel, server);
     }
 
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        // El cliente retira su preferencia: volvemos al default (SSD).
         toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
         toplevel.send_configure();
+        self.set_ssd_for(&toplevel, true);
     }
 }
 

@@ -221,11 +221,14 @@ pub(crate) fn list_wallpaper_images(dir: &str) -> Vec<std::path::PathBuf> {
     out
 }
 
-/// El alto efectivo de la barra de título de `w`: `0` para el shell y las
-/// ventanas a pantalla completa (no llevan), el `titlebar_height` configurado
-/// para el resto. Acotado a `>= 0`.
+/// El alto efectivo de la barra de título de `w`: `0` para el shell, las
+/// ventanas a pantalla completa y las que se decoran solas (CSD, `!w.ssd`) —
+/// no llevan barra del servidor—; el `titlebar_height` configurado para el
+/// resto. Acotado a `>= 0`. Es el gate único: render, `render_loc`, el
+/// hit-test del input y el `configure` del cliente pasan todos por acá, así
+/// que apagar la barra de una ventana CSD se propaga consistente.
 pub(crate) fn titlebar_for(w: &ManagedWindow, titlebar_height: i32) -> i32 {
-    if w.is_shell || w.fullscreen || w.is_greeter {
+    if w.is_shell || w.fullscreen || w.is_greeter || !w.ssd {
         0
     } else {
         titlebar_height.max(0)

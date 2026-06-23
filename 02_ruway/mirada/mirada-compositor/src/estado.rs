@@ -286,6 +286,13 @@ pub(crate) struct ManagedWindow {
     /// Búferes de los 4 lados del marco (arriba, abajo, izq., der.) —
     /// cada uno con su `Id` estable para el seguimiento de daño.
     pub(crate) borders: [SolidColorBuffer; 4],
+    /// `true` si la decoración la pone el servidor (mirada dibuja barra de
+    /// título + marco). `false` = el cliente se decora solo (CSD: Firefox/Zen,
+    /// GTK como pavucontrol) y mirada se hace a un lado para no duplicar la
+    /// barra ni forrar la sombra del cliente en un margen. Se resuelve por la
+    /// negociación `xdg-decoration` ([`App::ssd_surfaces`]); las apps que ni
+    /// hablan el protocolo quedan en CSD (no las decoramos).
+    pub(crate) ssd: bool,
 }
 
 /// Un arrastre de ratón en curso: mueve o redimensiona una ventana.
@@ -475,6 +482,12 @@ pub(crate) struct App {
     pub(crate) linked_ws: Option<LinkedWorkspaces>,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
+    /// Superficies cuyo cliente aceptó decoración del servidor (SSD) vía
+    /// `xdg-decoration`. Fuente de verdad de [`ManagedWindow::ssd`]; una
+    /// ventana ausente de este set se decora sola (CSD) y mirada no le pinta
+    /// barra ni marco. Se mantiene en el handler de `xdg-decoration` y se
+    /// limpia al destruirse el toplevel.
+    pub(crate) ssd_surfaces: std::collections::HashSet<WlSurface>,
     /// Permisos de capacidad por ejecutable que fija el Cerebro. El filtro del
     /// global `zwlr_data_control` (creado al arrancar) los consulta para decidir
     /// qué clientes ven el snoop de portapapeles — de ahí el [`Arc`]/[`RwLock`]:

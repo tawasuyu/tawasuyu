@@ -417,6 +417,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         overview_selected: 0,
         linked_ws: None,
         decorations: mirada_brain::Decorations::default(),
+        ssd_surfaces: std::collections::HashSet::new(),
         caps,
         pending_keybind: None,
         pending_vt: None,
