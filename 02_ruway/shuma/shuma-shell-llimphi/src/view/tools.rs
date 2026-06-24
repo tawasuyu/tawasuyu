@@ -334,7 +334,7 @@ fn explorer_panel_local(model: &Model, theme: &Theme) -> View<Msg> {
             entradas.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             entradas.truncate(200);
             for (dir, name) in entradas {
-                filas.push(explorer_row(dir, &name, theme));
+                filas.push(explorer_row(dir, &name, true, theme));
             }
         }
         Err(_) => filas.push(explorer_note("(cwd inaccesible)", theme)),
@@ -364,7 +364,7 @@ fn explorer_panel_remote(model: &Model, cwd: &str, theme: &Theme) -> View<Msg> {
             }
             ExplorerState::Loaded(entries) => {
                 for e in entries {
-                    filas.push(explorer_row(e.is_dir, &e.name, theme));
+                    filas.push(explorer_row(e.is_dir, &e.name, false, theme));
                 }
             }
             ExplorerState::Error(err) => filas.push(explorer_note(&format!("✘ {err}"), theme)),
@@ -413,12 +413,20 @@ fn explorer_remote_header(cwd: &str, theme: &Theme) -> View<Msg> {
     .children(vec![titulo, refrescar])
 }
 
-/// Una fila del Explorer: click en un dir → `cd`, en un archivo → inserta su
+/// Una fila del Explorer: click en un dir → `cd`. En un archivo, si
+/// `open_files` (sesión local), lo abre con el visor por contenido
+/// (`Msg::OpenFile`); si no (remoto, sin acceso local al archivo), inserta su
 /// nombre en el input. Compartida por el panel local y el remoto.
-fn explorer_row(dir: bool, name: &str, theme: &Theme) -> View<Msg> {
+fn explorer_row(dir: bool, name: &str, open_files: bool, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
     let etiqueta = if dir { format!("{name}/") } else { name.to_string() };
-    let cmd = if dir { format!("cd {name}") } else { name.to_string() };
+    let msg = if dir {
+        Msg::RunFromHistory(format!("cd {name}"))
+    } else if open_files {
+        Msg::OpenFile(name.to_string())
+    } else {
+        Msg::RunFromHistory(name.to_string())
+    };
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
         padding: Rect {
@@ -431,7 +439,7 @@ fn explorer_row(dir: bool, name: &str, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .hover_fill(theme.bg_row_hover)
-    .on_click(Msg::RunFromHistory(cmd))
+    .on_click(msg)
     .text_aligned(
         etiqueta,
         12.0,
