@@ -10,9 +10,14 @@ description = "paloma-rail-net — transporte TCP directo del rail soberano: ent
 
 [dependencies]
 paloma-rail = { path = "../paloma-rail" }
+card-net = { path = "../../../shared/card/card-net" }
 serde = { workspace = true }
 postcard = { workspace = true }
 thiserror = { workspace = true }
+libp2p = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 agora-core = { path = "../../../03_ukupacha/agora/agora-core" }

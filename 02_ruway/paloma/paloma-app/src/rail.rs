@@ -5,20 +5,26 @@
 //! transporte P2P. La identidad es la misma seed que firma el correo SMTP (ver
 //! `identity`) — un solo "yo" para toda la soberanía.
 //!
-//! ## Transporte
+//! ## Transporte (por env, de más a menos capaz)
 //!
-//! Con `PALOMA_RAIL_BIND` (p. ej. `0.0.0.0:7710`) usa el **transporte TCP real**
-//! (`paloma-rail-net::TcpRail`): escucha, se conecta a los peers de
-//! `PALOMA_RAIL_PEERS` (lista `host:port` separada por comas), y un hilo drena
-//! los sobres entrantes → `open`/verifica → `Msg::RailReceived`. Sin esa env,
-//! cae a `MockTransport` (sólo loopback: enviarte a vos mismo entrega a "Suyu").
-//! En ambos casos, enviarte a tu propia dirección hace loopback en proceso.
+//! - `PALOMA_RAIL_P2P=1` → **libp2p** (`Libp2pRail`): discovery por DHT +
+//!   NAT traversal (relay/dcutr) de `card-net`. `PALOMA_RAIL_BIND` = multiaddr
+//!   (default `/ip4/0.0.0.0/tcp/0`), `PALOMA_RAIL_PEERS` = multiaddrs a dialear
+//!   (rendezvous/relay/contactos). Se anuncia bajo su identidad.
+//! - `PALOMA_RAIL_BIND=host:port` (sin P2P) → **TCP directo** (`TcpRail`),
+//!   ruteado por identidad; `PALOMA_RAIL_PEERS` = `host:port,…`.
+//! - sin nada → **loopback** (enviarte a vos mismo entrega a "Suyu").
+//!
+//! En todos los casos, enviarte a tu propia dirección hace loopback en proceso,
+//! y un hilo abre/verifica cada sobre entrante y despacha `Msg::RailReceived`.
+
+use std::sync::mpsc::Receiver;
 
 use agora_core::Keypair;
-use paloma_core::Message;
+use paloma_core::{Address, Message};
 use paloma_llimphi::{Handle, Msg, RailLink};
-use paloma_rail::{MockTransport, RailId, RailTransport};
-use paloma_rail_net::TcpRail;
+use paloma_rail::{MockTransport, RailEnvelope, RailId, RailTransport};
+use paloma_rail_net::{Libp2pRail, TcpRail};
 
 pub struct RailHost {
     keypair: Keypair,
@@ -32,56 +38,87 @@ fn env(k: &str) -> Option<String> {
 }
 
 impl RailHost {
-    /// Crea el enlace desde la seed de identidad y el `Handle` de la app. Si hay
-    /// `PALOMA_RAIL_BIND`, levanta el transporte TCP real y el hilo de recepción.
+    /// Crea el enlace desde la seed de identidad y el `Handle` de la app, eligiendo
+    /// el transporte por entorno (ver doc del módulo) y arrancando la recepción.
     pub fn new(seed: [u8; 32], handle: Handle<Msg>) -> Self {
         let keypair = Keypair::from_seed(seed);
         let me = keypair.public_key();
 
-        let transport: Box<dyn RailTransport> = match env("PALOMA_RAIL_BIND") {
-            Some(bind) => match TcpRail::escuchar(&bind, me) {
-                Ok((tcp, rx)) => {
-                    eprintln!("paloma · rail TCP escuchando en {}", tcp.direccion_local());
-                    // Conectar a los peers conocidos.
-                    if let Some(peers) = env("PALOMA_RAIL_PEERS") {
-                        for addr in peers.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                            match tcp.conectar(addr) {
-                                Ok(()) => eprintln!("  → conectado a {addr}"),
-                                Err(e) => eprintln!("  ✗ {addr}: {e}"),
-                            }
+        let (transport, rx): (Box<dyn RailTransport>, Option<Receiver<RailEnvelope>>) =
+            if env("PALOMA_RAIL_P2P").is_some() {
+                Self::build_libp2p(seed, me)
+            } else if let Some(bind) = env("PALOMA_RAIL_BIND") {
+                Self::build_tcp(&bind, me)
+            } else {
+                (Box::new(MockTransport::new()), None)
+            };
+
+        // Recepción unificada: abre/verifica cada sobre y lo despacha. Estampa la
+        // dirección del remitente = su identidad (para responder/guardar por rail).
+        if let Some(rx) = rx {
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                for envelope in rx {
+                    match paloma_rail::open(&envelope, me) {
+                        Ok(mut msg) => {
+                            let name = msg.from.name.clone();
+                            msg.from = Address { name, email: paloma_rail::rail_address(&envelope.from) };
+                            h.dispatch(Msg::RailReceived(msg));
                         }
+                        Err(e) => eprintln!("paloma · sobre del rail rechazado: {e}"),
                     }
-                    // Hilo de recepción: abre/verifica cada sobre y lo despacha.
-                    let h = handle.clone();
-                    std::thread::spawn(move || {
-                        for envelope in rx {
-                            match paloma_rail::open(&envelope, me) {
-                                Ok(mut msg) => {
-                                    // El remitente autenticado ES su identidad del
-                                    // rail: ponela como dirección (para responder y
-                                    // guardar contacto), conservando su nombre.
-                                    let name = msg.from.name.clone();
-                                    msg.from = paloma_core::Address {
-                                        name,
-                                        email: paloma_rail::rail_address(&envelope.from),
-                                    };
-                                    h.dispatch(Msg::RailReceived(msg));
-                                }
-                                Err(e) => eprintln!("paloma · sobre del rail rechazado: {e}"),
-                            }
-                        }
-                    });
-                    Box::new(tcp)
                 }
-                Err(e) => {
-                    eprintln!("paloma · rail TCP falló ({e}); usando loopback");
-                    Box::new(MockTransport::new())
-                }
-            },
-            None => Box::new(MockTransport::new()),
-        };
+            });
+        }
 
         Self { keypair, me, transport, handle }
+    }
+
+    fn build_libp2p(seed: [u8; 32], me: RailId) -> (Box<dyn RailTransport>, Option<Receiver<RailEnvelope>>) {
+        match Libp2pRail::new(seed, me) {
+            Ok((p2p, rx)) => {
+                let bind = env("PALOMA_RAIL_BIND").unwrap_or_else(|| "/ip4/0.0.0.0/tcp/0".to_string());
+                match p2p.listen(&bind) {
+                    Ok(addr) => eprintln!("paloma · rail libp2p escuchando: {addr}"),
+                    Err(e) => eprintln!("paloma · rail libp2p listen falló: {e}"),
+                }
+                if let Some(peers) = env("PALOMA_RAIL_PEERS") {
+                    for addr in peers.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                        match p2p.dial(addr) {
+                            Ok(()) => eprintln!("  → dial {addr}"),
+                            Err(e) => eprintln!("  ✗ {addr}: {e}"),
+                        }
+                    }
+                }
+                p2p.announce();
+                (Box::new(p2p), Some(rx))
+            }
+            Err(e) => {
+                eprintln!("paloma · rail libp2p falló ({e}); usando loopback");
+                (Box::new(MockTransport::new()), None)
+            }
+        }
+    }
+
+    fn build_tcp(bind: &str, me: RailId) -> (Box<dyn RailTransport>, Option<Receiver<RailEnvelope>>) {
+        match TcpRail::escuchar(bind, me) {
+            Ok((tcp, rx)) => {
+                eprintln!("paloma · rail TCP escuchando en {}", tcp.direccion_local());
+                if let Some(peers) = env("PALOMA_RAIL_PEERS") {
+                    for addr in peers.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                        match tcp.conectar(addr) {
+                            Ok(()) => eprintln!("  → conectado a {addr}"),
+                            Err(e) => eprintln!("  ✗ {addr}: {e}"),
+                        }
+                    }
+                }
+                (Box::new(tcp), Some(rx))
+            }
+            Err(e) => {
+                eprintln!("paloma · rail TCP falló ({e}); usando loopback");
+                (Box::new(MockTransport::new()), None)
+            }
+        }
     }
 
     /// La dirección del rail de este usuario (`<hex>@rail.suyu`), para logging.

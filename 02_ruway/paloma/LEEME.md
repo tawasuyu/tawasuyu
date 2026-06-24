@@ -198,9 +198,19 @@ intercambiables, como el resto de la suite.
     `Msg::RailReceived`. Sin esas envs, cae a loopback. **Certificado**: test
     e2e `rail_tcp_entrega_entre_dos_nodos` (dos `TcpRail` sobre TCP de loopback:
     Ana sella → red → Bob abre → `Verified`) + peer desconocido falla.
-  - **Pendiente:** discovery/NAT entre máquinas en internet (hoy asume conocer
-    `host:port` del peer — el salto a `card-net`/DHT da descubrimiento y NAT
-    traversal) + libreta `contacto ↔ identidad` + confianza `pubkey ↔ persona`.
+  - **Transporte libp2p + discovery por DHT (`paloma-rail-net::Libp2pRail`):**
+    sobre `card-net` (Kademlia + relay/dcutr/autonat). Cada nodo **se anuncia**
+    bajo su `RailId`; el emisor hace `find_providers(id)` → `PeerId` → abre stream
+    `/paloma/rail/1.0.0` y empuja el sobre (modelo push, espejo de
+    `khipu-brahman`). Identidad libp2p derivada de la misma seed. `RailHost` lo
+    activa con `PALOMA_RAIL_P2P=1` (`PALOMA_RAIL_BIND`=multiaddr,
+    `PALOMA_RAIL_PEERS`=multiaddrs/rendezvous). **Certificado**: test
+    `rail_libp2p_descubre_por_dht_y_entrega` (dos nodos + rendezvous: B descubre
+    a A por DHT y le entrega un sobre → `Verified`).
+  - **Pendiente:** resolución autónoma `PeerId → dirección` vía relay (hoy
+    `find_closest_peers` no propaga la addr en LAN sin relay; el test siembra la
+    dirección, que en producción llega por el rendezvous/relay) + confianza
+    `pubkey ↔ persona`.
 
 - **Fase 14 (2026-06-24):** **multilienzo** — escribir una vez, leer en tu
   idioma (Eje 4, como `pluma`).

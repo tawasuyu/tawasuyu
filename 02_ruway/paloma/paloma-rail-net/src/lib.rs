@@ -29,6 +29,9 @@ use std::thread;
 use paloma_rail::{RailEnvelope, RailError, RailId, RailTransport};
 use serde::{Deserialize, Serialize};
 
+pub mod libp2p_rail;
+pub use libp2p_rail::Libp2pRail;
+
 /// Techo de un frame serializado: 16 MiB (igual que el resto de la suite).
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 
