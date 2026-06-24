@@ -10,10 +10,12 @@
 //! se adueña del hilo principal con su propio event loop (winit/wgpu) —
 //! dos dueños del main no conviven en un proceso.
 //!
-//! Aparte de navegar carpetas, el panel izquierdo lista las **mónadas**
-//! (clusters semánticos de archivos de `chasqui`) si su daemon está vivo;
-//! abrir una mónada muestra sus archivos miembros como destino directo.
-//! Si el daemon no responde, la sección simplemente queda vacía.
+//! La navegación de carpetas **no se reimplementa**: reusa
+//! [`nahual_file_explorer_llimphi::FileExplorerState`] + `file_explorer_view`
+//! — el mismo explorador que monta `nahual-shell-llimphi` (listado,
+//! ordenado dirs-primero, selección, scroll por rueda). Encima ponemos lo
+//! propio de un diálogo: panel de **lugares** + **mónadas** de `chasqui`,
+//! campo de nombre para guardar y los botones Aceptar/Cancelar.
 //!
 //! Probarlo suelto, sin D-Bus:
 //! ```text
@@ -22,7 +24,6 @@
 //! cat /tmp/fc.json
 //! ```
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -39,9 +40,11 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 
 use llimphi_widget_button::{button_styled, ButtonPalette};
-use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
+use llimphi_widget_list::ListPalette;
+use llimphi_widget_scroll::{scroll_y, ScrollPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
+
+use nahual_file_explorer_llimphi::{file_explorer_view, FileExplorerState, DEFAULT_ROW_HEIGHT};
 
 // ============================================================================
 // Geometría
@@ -55,14 +58,20 @@ const ROW_H: f32 = 24.0;
 /// Timeout corto al daemon de chasqui: si no contesta, seguimos sin mónadas.
 const MONAD_TIMEOUT: Duration = Duration::from_millis(700);
 
+/// Cuántas filas del explorador caben en el alto de ventana dado.
+fn rows_for_height(win_h: f32) -> usize {
+    let body = (win_h - HEADER_H - TOOLBAR_H - FOOTER_H - 8.0).max(DEFAULT_ROW_HEIGHT);
+    (body / DEFAULT_ROW_HEIGHT).floor().max(1.0) as usize
+}
+
 // ============================================================================
 // Configuración del invocador (CLI) — set una sola vez en `main`
 // ============================================================================
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
-    /// Abrir: elegir archivos existentes. `multiple` = selección múltiple.
-    Open { multiple: bool },
+    /// Abrir: elegir un archivo existente.
+    Open,
     /// Guardar como: tipear un nombre nuevo en una carpeta.
     Save,
 }
@@ -86,7 +95,6 @@ fn cfg() -> &'static Config {
 /// no pretende cubrir GNU getopt.
 fn parse_args() -> Config {
     let mut mode_save = false;
-    let mut multiple = false;
     let mut title = String::new();
     let mut accept_label = String::new();
     let mut folder: Option<PathBuf> = None;
@@ -97,7 +105,9 @@ fn parse_args() -> Config {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--mode" => mode_save = it.next().as_deref() == Some("save"),
-            "--multiple" => multiple = true,
+            // `--multiple` se acepta por compatibilidad pero hoy colapsa a
+            // selección simple (el explorador reusado es de selección única).
+            "--multiple" => {}
             "--title" => title = it.next().unwrap_or_default(),
             "--accept-label" => accept_label = it.next().unwrap_or_default(),
             "--current-folder" => folder = it.next().map(PathBuf::from),
@@ -107,25 +117,21 @@ fn parse_args() -> Config {
         }
     }
 
-    let mode = if mode_save {
-        Mode::Save
-    } else {
-        Mode::Open { multiple }
-    };
+    let mode = if mode_save { Mode::Save } else { Mode::Open };
     let folder = folder
         .filter(|p| p.is_dir())
-        .or_else(|| dirs_home())
+        .or_else(dirs_home)
         .unwrap_or_else(|| PathBuf::from("/"));
     if title.is_empty() {
         title = match mode {
             Mode::Save => "Guardar como".to_string(),
-            Mode::Open { .. } => "Abrir".to_string(),
+            Mode::Open => "Abrir".to_string(),
         };
     }
     if accept_label.is_empty() {
         accept_label = match mode {
             Mode::Save => "Guardar".to_string(),
-            Mode::Open { .. } => "Abrir".to_string(),
+            Mode::Open => "Abrir".to_string(),
         };
     }
 
@@ -180,76 +186,27 @@ fn finish(model: &Model, response: u32, uris: Vec<String>, handle: &Handle<Msg>)
 // Modelo
 // ============================================================================
 
-/// Una fila del listado de carpeta.
-struct Entry {
-    name: String,
-    path: PathBuf,
-    is_dir: bool,
-}
-
 /// Qué muestra el panel central.
 enum Pane {
-    /// El contenido de `cwd`.
+    /// El contenido de una carpeta — delegado a `FileExplorerState`.
     Folder,
-    /// Los archivos miembros de una mónada.
+    /// Los archivos miembros de una mónada de chasqui.
     Monad(MonadId),
 }
 
 struct Model {
-    cwd: PathBuf,
-    entries: Vec<Entry>,
-    /// Índices seleccionados en la vista de carpeta.
-    selected: BTreeSet<usize>,
+    /// Explorador de carpetas reutilizado de nahual.
+    explorer: FileExplorerState,
     pane: Pane,
     monads: Vec<MonadView>,
     monad_files: Vec<FileView>,
-    monad_sel: BTreeSet<usize>,
+    monad_sel: Option<usize>,
     filename: TextInputState,
     /// `true` cuando el campo de nombre tiene el foco (rutea el teclado).
     name_focused: bool,
-    list_scroll: f32,
     side_scroll: f32,
     win_h: f32,
     status: String,
-}
-
-impl Model {
-    fn list_viewport(&self) -> f32 {
-        (self.win_h - HEADER_H - TOOLBAR_H - FOOTER_H - 8.0).max(80.0)
-    }
-    fn list_content(&self) -> f32 {
-        let n = match self.pane {
-            Pane::Folder => self.entries.len(),
-            Pane::Monad(_) => self.monad_files.len() + 1, // +1 por la cabecera
-        };
-        n as f32 * ROW_H
-    }
-}
-
-/// Lee `dir`, ordena carpetas primero y luego por nombre (case-insensitive),
-/// ocultando los archivos dot. Errores de lectura → lista vacía.
-fn read_entries(dir: &Path) -> Vec<Entry> {
-    let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for ent in rd.flatten() {
-            let name = ent.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
-                continue;
-            }
-            let is_dir = ent.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            out.push(Entry {
-                name,
-                path: ent.path(),
-                is_dir,
-            });
-        }
-    }
-    out.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-    out
 }
 
 // ============================================================================
@@ -258,9 +215,12 @@ fn read_entries(dir: &Path) -> Vec<Entry> {
 
 #[derive(Clone)]
 enum Msg {
-    EnterDir(PathBuf),
-    GoUp,
-    SelectEntry(usize),
+    Go(PathBuf),
+    Select(usize),
+    OpenSelected,
+    Nav(i32),
+    Parent,
+    Wheel(f32),
     ShowMonad(MonadId),
     BackToFolder,
     SelectMonadFile(usize),
@@ -268,7 +228,6 @@ enum Msg {
     MonadFilesLoaded(MonadId, Vec<FileView>),
     NameFocus,
     Key(KeyEvent),
-    ListScroll(f32),
     SideScroll(f32),
     Resize(f32),
     Accept,
@@ -299,7 +258,8 @@ impl App for FileChooser {
 
     fn init(handle: &Handle<Msg>) -> Model {
         let c = cfg();
-        let entries = read_entries(&c.folder);
+        let mut explorer = FileExplorerState::new(c.folder.clone());
+        explorer.visible_rows = rows_for_height(580.0);
         let mut filename = TextInputState::new();
         filename.set_text(c.current_name.clone());
 
@@ -314,16 +274,13 @@ impl App for FileChooser {
         });
 
         Model {
-            cwd: c.folder.clone(),
-            entries,
-            selected: BTreeSet::new(),
+            explorer,
             pane: Pane::Folder,
             monads: Vec::new(),
             monad_files: Vec::new(),
-            monad_sel: BTreeSet::new(),
+            monad_sel: None,
             filename,
             name_focused: matches!(c.mode, Mode::Save),
-            list_scroll: 0.0,
             side_scroll: 0.0,
             win_h: 580.0,
             status: String::new(),
@@ -332,50 +289,60 @@ impl App for FileChooser {
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
-            Msg::EnterDir(path) => {
-                model.entries = read_entries(&path);
-                model.cwd = path;
-                model.selected.clear();
+            Msg::Go(path) => {
+                let mut ex = FileExplorerState::new(path);
+                ex.visible_rows = rows_for_height(model.win_h);
+                model.explorer = ex;
                 model.pane = Pane::Folder;
-                model.list_scroll = 0.0;
                 model.status.clear();
             }
-            Msg::GoUp => {
-                if let Some(parent) = model.cwd.parent().map(|p| p.to_path_buf()) {
-                    model.entries = read_entries(&parent);
-                    model.cwd = parent;
-                    model.selected.clear();
-                    model.pane = Pane::Folder;
-                    model.list_scroll = 0.0;
-                }
-            }
-            Msg::SelectEntry(i) => {
-                if let Some(e) = model.entries.get(i) {
-                    if e.is_dir {
-                        let path = e.path.clone();
-                        return Self::update(model, Msg::EnterDir(path), handle);
-                    }
-                    let multiple = matches!(cfg().mode, Mode::Open { multiple: true });
-                    if multiple {
-                        if !model.selected.insert(i) {
-                            model.selected.remove(&i);
-                        }
-                    } else {
-                        model.selected.clear();
-                        model.selected.insert(i);
-                        // En "guardar", elegir un archivo precarga su nombre.
-                        if matches!(cfg().mode, Mode::Save) {
-                            model.filename.set_text(e.name.clone());
+            Msg::Select(idx) => {
+                if matches!(model.pane, Pane::Folder) {
+                    model.explorer.select(idx);
+                    if let Some(e) = model.explorer.selected_entry() {
+                        if e.is_dir {
+                            // Click en carpeta = entrar (el explorador relee).
+                            model.explorer.open_selected();
+                        } else if matches!(cfg().mode, Mode::Save) {
+                            // Click en archivo, guardando = precargar su nombre.
+                            model.filename.set_text(e.name);
                         }
                     }
                     model.status.clear();
                 }
             }
+            Msg::OpenSelected => {
+                if matches!(model.pane, Pane::Folder) {
+                    // Sólo entra si es carpeta; si es archivo no hace nada (lo
+                    // resuelve Aceptar).
+                    if model.explorer.selected_entry().map(|e| e.is_dir) == Some(true) {
+                        model.explorer.open_selected();
+                    }
+                }
+            }
+            Msg::Nav(d) => {
+                if matches!(model.pane, Pane::Folder) {
+                    if d < 0 {
+                        model.explorer.up();
+                    } else {
+                        model.explorer.down();
+                    }
+                }
+            }
+            Msg::Parent => {
+                if matches!(model.pane, Pane::Folder) {
+                    model.explorer.parent();
+                }
+            }
+            Msg::Wheel(delta) => {
+                if matches!(model.pane, Pane::Folder) {
+                    model.explorer.apply_wheel(delta);
+                }
+            }
             Msg::ShowMonad(id) => {
                 model.pane = Pane::Monad(id);
                 model.monad_files.clear();
-                model.monad_sel.clear();
-                model.list_scroll = 0.0;
+                model.monad_sel = None;
                 model.status = "Resolviendo mónada…".to_string();
                 handle.spawn(move || {
                     let sock = transport::default_socket_path();
@@ -387,20 +354,11 @@ impl App for FileChooser {
             }
             Msg::BackToFolder => {
                 model.pane = Pane::Folder;
-                model.list_scroll = 0.0;
                 model.status.clear();
             }
             Msg::SelectMonadFile(i) => {
-                if model.monad_files.get(i).is_some() {
-                    let multiple = matches!(cfg().mode, Mode::Open { multiple: true });
-                    if multiple {
-                        if !model.monad_sel.insert(i) {
-                            model.monad_sel.remove(&i);
-                        }
-                    } else {
-                        model.monad_sel.clear();
-                        model.monad_sel.insert(i);
-                    }
+                if i < model.monad_files.len() {
+                    model.monad_sel = Some(i);
                     model.status.clear();
                 }
             }
@@ -417,35 +375,21 @@ impl App for FileChooser {
                     model.filename.apply_key(&e);
                 }
             }
-            Msg::ListScroll(delta) => {
-                model.list_scroll = clamp_offset(
-                    model.list_scroll + delta,
-                    model.list_content(),
-                    model.list_viewport(),
-                );
-            }
             Msg::SideScroll(delta) => {
                 model.side_scroll = (model.side_scroll + delta).max(0.0);
             }
             Msg::Resize(h) => {
                 model.win_h = h;
-                model.list_scroll = clamp_offset(
-                    model.list_scroll,
-                    model.list_content(),
-                    model.list_viewport(),
-                );
+                model.explorer.visible_rows = rows_for_height(h);
             }
             Msg::Accept => return accept(model, handle),
-            Msg::Cancel => {
-                finish(&model, 1, Vec::new(), handle);
-            }
+            Msg::Cancel => finish(&model, 1, Vec::new(), handle),
         }
         model
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
-            // El texto sí necesita ver el release/repeat: lo maneja apply_key.
             if model.name_focused {
                 return Some(Msg::Key(event.clone()));
             }
@@ -453,8 +397,20 @@ impl App for FileChooser {
         }
         match &event.key {
             Key::Named(NamedKey::Escape) => Some(Msg::Cancel),
-            Key::Named(NamedKey::Enter) => Some(Msg::Accept),
-            Key::Named(NamedKey::Backspace) if !model.name_focused => Some(Msg::GoUp),
+            Key::Named(NamedKey::Enter) => {
+                if model.name_focused {
+                    Some(Msg::Accept)
+                } else if matches!(model.pane, Pane::Folder)
+                    && model.explorer.selected_entry().map(|e| e.is_dir) == Some(true)
+                {
+                    Some(Msg::OpenSelected)
+                } else {
+                    Some(Msg::Accept)
+                }
+            }
+            Key::Named(NamedKey::Backspace) if !model.name_focused => Some(Msg::Parent),
+            Key::Named(NamedKey::ArrowUp) if !model.name_focused => Some(Msg::Nav(-1)),
+            Key::Named(NamedKey::ArrowDown) if !model.name_focused => Some(Msg::Nav(1)),
             _ if model.name_focused => Some(Msg::Key(event.clone())),
             _ => None,
         }
@@ -469,14 +425,12 @@ impl App for FileChooser {
         if delta.y == 0.0 {
             None
         } else {
-            Some(Msg::ListScroll(delta.y * ROW_H * 2.0))
+            // El acumulador fraccional vive en FileExplorerState::apply_wheel.
+            Some(Msg::Wheel(delta.y * 3.0))
         }
     }
 
     fn on_resize(_model: &Model, _w: u32, h: u32) -> Option<Msg> {
-        // El layout flex se reacomoda solo; guardamos la altura sólo para
-        // dimensionar el viewport del scroll. `h` es físico; a 1.0 de escala
-        // coincide con el lógico — suficiente para el cálculo del thumb.
         Some(Msg::Resize(h as f32))
     }
 
@@ -486,7 +440,7 @@ impl App for FileChooser {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = load_theme();
-        let root = View::new(Style {
+        View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -496,42 +450,39 @@ impl App for FileChooser {
         })
         .fill(theme.bg_app)
         .children(vec![
-            header(model, &theme),
+            header(&theme),
             toolbar(model, &theme),
             body(model, &theme),
             footer(model, &theme),
-        ]);
-        root
+        ])
     }
 }
 
 /// Resuelve la acción de Aceptar según el modo, o deja un status si falta
 /// algo (nombre vacío, nada seleccionado).
-fn accept(model: Model, handle: &Handle<Msg>) -> Model {
+fn accept(mut model: Model, handle: &Handle<Msg>) -> Model {
     match cfg().mode {
         Mode::Save => {
-            let name = model.filename.text();
-            let name = name.trim();
+            let raw = model.filename.text();
+            let name = raw.trim();
             if name.is_empty() {
-                let mut m = model;
-                m.status = "Escribí un nombre de archivo".to_string();
-                return m;
+                model.status = "Escribí un nombre de archivo".to_string();
+                return model;
             }
             let candidate = Path::new(name);
             let path = if candidate.is_absolute() {
                 candidate.to_path_buf()
             } else {
-                model.cwd.join(name)
+                model.explorer.cwd.join(name)
             };
             finish(&model, 0, vec![path_to_uri(&path)], handle);
             model
         }
-        Mode::Open { .. } => {
+        Mode::Open => {
             let uris = selected_uris(&model);
             if uris.is_empty() {
-                let mut m = model;
-                m.status = "Seleccioná al menos un archivo".to_string();
-                return m;
+                model.status = "Seleccioná un archivo".to_string();
+                return model;
             }
             finish(&model, 0, uris, handle);
             model
@@ -542,18 +493,17 @@ fn accept(model: Model, handle: &Handle<Msg>) -> Model {
 fn selected_uris(model: &Model) -> Vec<String> {
     match model.pane {
         Pane::Folder => model
-            .selected
-            .iter()
-            .filter_map(|&i| model.entries.get(i))
+            .explorer
+            .selected_entry()
             .filter(|e| !e.is_dir)
-            .map(|e| path_to_uri(&e.path))
-            .collect(),
+            .and_then(|_| model.explorer.selected_path())
+            .map(|p| vec![path_to_uri(&p)])
+            .unwrap_or_default(),
         Pane::Monad(_) => model
             .monad_sel
-            .iter()
-            .filter_map(|&i| model.monad_files.get(i))
-            .map(|f| path_to_uri(Path::new(&f.path)))
-            .collect(),
+            .and_then(|i| model.monad_files.get(i))
+            .map(|f| vec![path_to_uri(Path::new(&f.path))])
+            .unwrap_or_default(),
     }
 }
 
@@ -561,7 +511,7 @@ fn selected_uris(model: &Model) -> Vec<String> {
 // Vistas
 // ============================================================================
 
-fn header(_model: &Model, theme: &Theme) -> View<Msg> {
+fn header(theme: &Theme) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -574,8 +524,12 @@ fn header(_model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![View::new(grow())
-        .text_aligned(cfg().title.clone(), 14.0, theme.fg_text, Alignment::Start)])
+    .children(vec![View::new(grow()).text_aligned(
+        cfg().title.clone(),
+        14.0,
+        theme.fg_text,
+        Alignment::Start,
+    )])
 }
 
 fn toolbar(model: &Model, theme: &Theme) -> View<Msg> {
@@ -593,7 +547,7 @@ fn toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         },
         Alignment::Center,
         &ButtonPalette::from_theme(theme),
-        Msg::GoUp,
+        Msg::Parent,
     );
 
     let crumb = View::new(Style {
@@ -607,7 +561,7 @@ fn toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        model.cwd.display().to_string(),
+        model.explorer.cwd.display().to_string(),
         11.5,
         theme.fg_muted,
         Alignment::Start,
@@ -638,17 +592,18 @@ fn body(model: &Model, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .children(vec![sidebar(model, theme), main_list(model, theme)])
+    .children(vec![sidebar(model, theme), main_pane(model, theme)])
 }
 
 fn sidebar(model: &Model, theme: &Theme) -> View<Msg> {
+    let cwd = &model.explorer.cwd;
     let mut rows: Vec<View<Msg>> = Vec::new();
     rows.push(section_header("LUGARES", theme));
     if let Some(home) = dirs_home() {
-        rows.push(place_row("🏠 Inicio", &home, &model.cwd, theme));
+        rows.push(place_row("🏠 Inicio", &home, cwd, theme));
     }
-    rows.push(place_row("⌂ Raíz", Path::new("/"), &model.cwd, theme));
-    rows.push(place_row("◇ Carpeta inicial", &cfg().folder, &model.cwd, theme));
+    rows.push(place_row("⌂ Raíz", Path::new("/"), cwd, theme));
+    rows.push(place_row("◇ Carpeta inicial", &cfg().folder, cwd, theme));
 
     if !model.monads.is_empty() {
         rows.push(spacer(8.0));
@@ -675,8 +630,8 @@ fn sidebar(model: &Model, theme: &Theme) -> View<Msg> {
 
     let scrolled = scroll_y(
         model.side_scroll,
-        0.0, // contenido natural; el scroll sólo aparece si desborda el clip
-        model.list_viewport(),
+        0.0,
+        (model.win_h - HEADER_H - TOOLBAR_H - FOOTER_H).max(80.0),
         content,
         Msg::SideScroll,
         &ScrollPalette::from_theme(theme),
@@ -694,56 +649,22 @@ fn sidebar(model: &Model, theme: &Theme) -> View<Msg> {
     .children(vec![scrolled])
 }
 
-fn main_list(model: &Model, theme: &Theme) -> View<Msg> {
+fn main_pane(model: &Model, theme: &Theme) -> View<Msg> {
     let content = match model.pane {
-        Pane::Folder => {
-            let rows: Vec<TreeRow<Msg>> = model
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, e)| {
-                    let label = if e.is_dir {
-                        format!("{}/", e.name)
-                    } else {
-                        e.name.clone()
-                    };
-                    TreeRow {
-                        label,
-                        depth: 0,
-                        has_children: e.is_dir,
-                        expanded: false,
-                        selected: model.selected.contains(&i),
-                        on_toggle: Msg::SelectEntry(i),
-                        on_select: Msg::SelectEntry(i),
-                        icon: None,
-                        on_context: None,
-                        editor: None,
-                        trailing: None,
-                    }
-                })
-                .collect();
-            tree_view(TreeSpec {
-                rows,
-                row_height: ROW_H,
-                indent_px: 14.0,
-                palette: TreePalette::from_theme(theme),
-                guides: false,
-            })
-        }
+        // Aquí está el reuso: el explorador de nahual pinta el listado.
+        Pane::Folder => file_explorer_view(&model.explorer, ListPalette::from_theme(theme), Msg::Select),
         Pane::Monad(_) => {
             let mut rows: Vec<View<Msg>> = Vec::new();
-            rows.push(
-                row_button("‹ Volver a carpetas", false, theme, Msg::BackToFolder),
-            );
+            rows.push(row_button("‹ Volver a carpetas", false, theme, Msg::BackToFolder));
             for (i, f) in model.monad_files.iter().enumerate() {
                 rows.push(row_button(
                     f.path.clone(),
-                    model.monad_sel.contains(&i),
+                    model.monad_sel == Some(i),
                     theme,
                     Msg::SelectMonadFile(i),
                 ));
             }
-            if model.monad_files.is_empty() {
+            if model.monad_files.is_empty() && !model.status.is_empty() {
                 rows.push(
                     View::new(Style {
                         size: Size {
@@ -754,12 +675,7 @@ fn main_list(model: &Model, theme: &Theme) -> View<Msg> {
                         align_items: Some(AlignItems::Center),
                         ..Default::default()
                     })
-                    .text_aligned(
-                        model.status.clone(),
-                        11.5,
-                        theme.fg_muted,
-                        Alignment::Start,
-                    ),
+                    .text_aligned(model.status.clone(), 11.5, theme.fg_muted, Alignment::Start),
                 );
             }
             View::new(Style {
@@ -768,20 +684,12 @@ fn main_list(model: &Model, theme: &Theme) -> View<Msg> {
                     width: percent(1.0_f32),
                     height: auto_h(),
                 },
+                padding: pad(6.0, 6.0),
                 ..Default::default()
             })
             .children(rows)
         }
     };
-
-    let scrolled = scroll_y(
-        model.list_scroll,
-        model.list_content(),
-        model.list_viewport(),
-        content,
-        Msg::ListScroll,
-        &ScrollPalette::from_theme(theme),
-    );
 
     View::new(Style {
         flex_grow: 1.0,
@@ -792,7 +700,7 @@ fn main_list(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![scrolled])
+    .children(vec![content])
 }
 
 fn footer(model: &Model, theme: &Theme) -> View<Msg> {
@@ -830,24 +738,12 @@ fn footer(model: &Model, theme: &Theme) -> View<Msg> {
             )]),
         );
     } else {
-        // En "abrir", el hueco izquierdo muestra el status o la selección.
         let info = if !model.status.is_empty() {
             model.status.clone()
         } else {
-            let n = match model.pane {
-                Pane::Folder => model.selected.len(),
-                Pane::Monad(_) => model.monad_sel.len(),
-            };
-            match n {
-                0 => String::new(),
-                1 => "1 archivo seleccionado".to_string(),
-                k => format!("{k} archivos seleccionados"),
-            }
+            selection_label(model)
         };
-        left.push(
-            View::new(grow())
-                .text_aligned(info, 11.5, theme.fg_muted, Alignment::Start),
-        );
+        left.push(View::new(grow()).text_aligned(info, 11.5, theme.fg_muted, Alignment::Start));
     }
 
     let cancel = button_styled(
@@ -891,6 +787,23 @@ fn footer(model: &Model, theme: &Theme) -> View<Msg> {
     .children(children)
 }
 
+/// Texto del footer en modo Abrir: el archivo actualmente elegido, o vacío.
+fn selection_label(model: &Model) -> String {
+    match model.pane {
+        Pane::Folder => model
+            .explorer
+            .selected_entry()
+            .filter(|e| !e.is_dir)
+            .map(|e| e.name)
+            .unwrap_or_default(),
+        Pane::Monad(_) => model
+            .monad_sel
+            .and_then(|i| model.monad_files.get(i))
+            .map(|f| f.path.clone())
+            .unwrap_or_default(),
+    }
+}
+
 // ============================================================================
 // Pequeños constructores de vista
 // ============================================================================
@@ -910,16 +823,10 @@ fn section_header(label: &str, theme: &Theme) -> View<Msg> {
 
 /// Fila de "lugar" del sidebar: navega a `path`, resaltada si es el cwd.
 fn place_row(label: &str, path: &Path, cwd: &Path, theme: &Theme) -> View<Msg> {
-    row_button(
-        label.to_string(),
-        path == cwd,
-        theme,
-        Msg::EnterDir(path.to_path_buf()),
-    )
+    row_button(label.to_string(), path == cwd, theme, Msg::Go(path.to_path_buf()))
 }
 
-/// Fila clickeable genérica (sidebar / archivos de mónada): texto a la
-/// izquierda, fondo resaltado si `active`, hover.
+/// Fila clickeable genérica (sidebar / archivos de mónada).
 fn row_button(label: impl Into<String>, active: bool, theme: &Theme, msg: Msg) -> View<Msg> {
     let bg = if active { theme.bg_selected } else { theme.bg_panel };
     View::new(Style {
@@ -1046,7 +953,6 @@ mod tests {
     #[test]
     fn uri_encodes_unsafe_bytes_not_slashes() {
         assert_eq!(path_to_uri(Path::new("/home/a/x.txt")), "file:///home/a/x.txt");
-        // Espacios y acentos se codifican; las barras no.
         assert_eq!(
             path_to_uri(Path::new("/home/a b/c.txt")),
             "file:///home/a%20b/c.txt"
@@ -1056,21 +962,9 @@ mod tests {
     }
 
     #[test]
-    fn entries_dirs_first_and_skip_hidden() {
-        let dir = std::env::temp_dir().join(format!("mfc-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("zsub")).unwrap();
-        std::fs::create_dir_all(dir.join("asub")).unwrap();
-        std::fs::write(dir.join("b.txt"), b"x").unwrap();
-        std::fs::write(dir.join("a.txt"), b"x").unwrap();
-        std::fs::write(dir.join(".oculto"), b"x").unwrap();
-
-        let entries = read_entries(&dir);
-        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
-        // Carpetas primero (ordenadas), luego archivos (ordenados); sin dotfiles.
-        assert_eq!(names, vec!["asub", "zsub", "a.txt", "b.txt"]);
-        assert!(entries[0].is_dir && !entries[2].is_dir);
-
-        let _ = std::fs::remove_dir_all(&dir);
+    fn rows_scale_with_height() {
+        // Una ventana más alta muestra más filas del explorador.
+        assert!(rows_for_height(900.0) > rows_for_height(400.0));
+        assert!(rows_for_height(100.0) >= 1);
     }
 }

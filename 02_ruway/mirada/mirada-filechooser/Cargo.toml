@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "mirada-filechooser — el diálogo gráfico de Abrir/Guardar de mirada (ventana Llimphi). Lo lanza mirada-portal como subproceso para servir org.freedesktop.impl.portal.FileChooser; navega carpetas y mónadas de chasqui, y devuelve los URIs elegidos."
+description = "mirada-filechooser — el diálogo gráfico de Abrir/Guardar de mirada (ventana Llimphi). Lo lanza mirada-portal como subproceso para servir org.freedesktop.impl.portal.FileChooser; reusa el explorador de archivos de nahual y las mónadas de chasqui, y devuelve los URIs elegidos."
 
 [[bin]]
 name = "mirada-filechooser"
@@ -15,9 +15,12 @@ path = "src/main.rs"
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-llimphi-widget-tree = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+llimphi-widget-list = { workspace = true }
+# El explorador de archivos reutilizable (el mismo que usa nahual-shell):
+# FileExplorerState + file_explorer_view. No reimplementamos navegación.
+nahual-file-explorer-llimphi = { workspace = true }
 chasqui-card = { path = "../../chasqui/chasqui-card" }
 serde_json = { workspace = true }
