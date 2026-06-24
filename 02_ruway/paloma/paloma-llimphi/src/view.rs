@@ -621,6 +621,7 @@ fn reading_panel(model: &Model) -> View<Msg> {
     .fill(theme.bg_panel_alt)
     .children(actions);
 
+    let lang = model.effective_view_lang().to_string();
     let mut cards: Vec<View<Msg>> = Vec::new();
     // Banner de resumen LLM (si se pidió o está en curso), arriba del hilo.
     if model.summary_busy() {
@@ -628,9 +629,24 @@ fn reading_panel(model: &Model) -> View<Msg> {
     } else if let Some(s) = model.summary() {
         cards.push(summary_banner(theme, s, true));
     }
+    // Multilienzo: si algún mensaje del hilo trae lienzos, ofrecer el selector
+    // de idioma (Original + cada lienzo disponible).
+    let mut langs: Vec<String> = Vec::new();
     for id in &thread.message_ids {
         if let Some(m) = model.store_ref().message(id) {
-            cards.push(message_card(theme, m));
+            for l in m.cuerpo_langs() {
+                if !langs.iter().any(|x| x.eq_ignore_ascii_case(&l)) {
+                    langs.push(l);
+                }
+            }
+        }
+    }
+    if !langs.is_empty() {
+        cards.push(lang_selector(theme, &langs, model.view_lang()));
+    }
+    for id in &thread.message_ids {
+        if let Some(m) = model.store_ref().message(id) {
+            cards.push(message_card(theme, m, &lang));
         }
     }
     let content = View::new(Style {
@@ -689,7 +705,7 @@ pub(crate) fn reading_content_height(model: &Model) -> f32 {
 }
 
 /// Tarjeta de un mensaje: avatar + (de · fecha) + para + cuerpo.
-fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
+fn message_card(theme: &Theme, m: &Message, lang: &str) -> View<Msg> {
     let from = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         flex_grow: 1.0,
@@ -748,7 +764,13 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
     })
     .children(vec![avatar(m.from.display_name(), &m.from.email), head_col]);
 
-    let body_text = m.display_body();
+    // Multilienzo: si hay un lienzo en el idioma del lector, mostralo; si no, el
+    // cuerpo principal (display_body cae a texto-desde-HTML cuando hace falta).
+    let body_text = if m.has_lang(lang) {
+        m.body_for(lang).to_string()
+    } else {
+        m.display_body()
+    };
     let body_h = card_body_height(&body_text);
     let body = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(body_h) },
@@ -832,9 +854,38 @@ pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
         button(&format!("{}  ⏎", t("paloma-compose-send")), theme.accent, theme.bg_app, Msg::ComposeSend),
     ]);
 
+    // Multilienzo (Eje 4): derivar el cuerpo a otro idioma con el LLM. Sólo si
+    // hay asistente. Un chip por idioma (✓ si ya hay lienzo, + si falta).
+    let mut card_children = vec![title_view, to, cc, subject, body];
+    if model.llm_available() {
+        let mut kids = vec![View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(24.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(format!("✨ {}:", t("paloma-btn-lienzo")), 12.0, theme.fg_muted, Alignment::Start)];
+        for lang in ["es", "en", "qu"] {
+            let has = c.cuerpos.iter().any(|x| x.lang.eq_ignore_ascii_case(lang));
+            let lbl = if has { format!("✓ {}", lang.to_uppercase()) } else { format!("+ {}", lang.to_uppercase()) };
+            let fg = if has { theme.accent } else { theme.fg_text };
+            kids.push(button(&lbl, theme.bg_button, fg, Msg::DeriveCuerpo(lang.to_string())));
+        }
+        card_children.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+                ..Default::default()
+            })
+            .children(kids),
+        );
+    }
+    card_children.push(actions);
+
     let card = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(580.0_f32), height: length(480.0_f32) },
+        size: Size { width: length(580.0_f32), height: length(520.0_f32) },
         gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
         padding: pad(20.0),
         ..Default::default()
@@ -842,7 +893,7 @@ pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
     .fill(theme.bg_panel)
     .radius(10.0)
     .on_click(Msg::ComposeFocus(c.focus))
-    .children(vec![title_view, to, cc, subject, body, actions]);
+    .children(card_children);
 
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -1019,6 +1070,42 @@ fn summary_banner(theme: &Theme, text: &str, dismissable: bool) -> View<Msg> {
     .fill(theme.bg_panel_alt)
     .radius(8.0)
     .children(vec![head, body])
+}
+
+/// Selector de idioma de lectura (multilienzo): "Original" + un chip por lienzo.
+/// `current` es el idioma elegido a mano (`None` = auto/Original).
+fn lang_selector(theme: &Theme, langs: &[String], current: Option<&str>) -> View<Msg> {
+    let chip = |label: &str, active: bool, msg: Msg| {
+        let (bg, fg) = if active { (theme.accent, theme.bg_app) } else { (theme.bg_button, theme.fg_muted) };
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(24.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            padding: pad_xy(10.0, 0.0),
+            ..Default::default()
+        })
+        .fill(bg)
+        .radius(12.0)
+        .text(label, 11.5, fg)
+        .on_click(msg)
+    };
+    let mut chips = vec![chip(
+        &rimay_localize::t("paloma-read-original"),
+        current.is_none(),
+        Msg::SetViewLang(None),
+    )];
+    for l in langs {
+        let active = current.map(|c| c.eq_ignore_ascii_case(l)).unwrap_or(false);
+        chips.push(chip(&format!("🌐 {}", l.to_uppercase()), active, Msg::SetViewLang(Some(l.clone()))));
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(chips)
 }
 
 /// Barra de acento vertical de 3 px (marca selección a la izquierda de una fila).

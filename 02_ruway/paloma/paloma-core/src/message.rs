@@ -47,6 +47,21 @@ pub enum SignatureStatus {
     Invalid,
 }
 
+/// Un **lienzo** del mensaje (multilienzo, Eje 4): una versión derivada del
+/// cuerpo en otro idioma y/o tono. El mensaje se escribe una vez y viaja con sus
+/// lienzos; el lector ve el que matchea su idioma. La derivación la produce el
+/// LLM (`pluma-llm`), igual que en `pluma` multilienzo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailCuerpo {
+    /// Idioma del lienzo, BCP-47 simple ("es", "en", "qu").
+    pub lang: String,
+    /// Tono/registro opcional ("formal", "cercano"). `None` = neutro.
+    #[serde(default)]
+    pub tone: Option<String>,
+    /// El cuerpo en ese idioma/tono.
+    pub body_text: String,
+}
+
 /// Firma Ed25519 que viaja con un saliente (clave pública + 64 bytes de firma
 /// sobre los [`canonical_signing_bytes`] del mensaje). El transporte la
 /// serializa a dos headers `X-Paloma-Pubkey` / `X-Paloma-Signature`; el cómputo
@@ -116,6 +131,11 @@ pub struct Message {
     pub signature: SignatureStatus,
     /// Nombre del buzón donde reside (clave en [`crate::MailStore`]).
     pub mailbox: String,
+    /// Lienzos del mensaje (multilienzo, Eje 4): versiones del cuerpo en otros
+    /// idiomas/tonos que viajaron con él. `#[serde(default)]` para que las
+    /// cachés viejas sigan decodificando.
+    #[serde(default)]
+    pub cuerpos: Vec<MailCuerpo>,
 }
 
 impl Message {
@@ -124,6 +144,28 @@ impl Message {
     pub fn canonical_signing_bytes(&self) -> Vec<u8> {
         let to: Vec<String> = self.to.iter().map(|a| a.email.clone()).collect();
         canonical_signing_bytes(&self.from.email, &to, &self.subject, &self.body_text)
+    }
+
+    /// El cuerpo a mostrar para un lector de idioma `lang`: el lienzo que matchee
+    /// (idioma exacto, sin distinguir mayúsculas); si ninguno, el cuerpo
+    /// principal. Es el corazón de "escribir una vez, leer en tu idioma".
+    pub fn body_for(&self, lang: &str) -> &str {
+        self.cuerpos
+            .iter()
+            .find(|c| c.lang.eq_ignore_ascii_case(lang))
+            .map(|c| c.body_text.as_str())
+            .unwrap_or(&self.body_text)
+    }
+
+    /// ¿Tiene un lienzo en `lang`?
+    pub fn has_lang(&self, lang: &str) -> bool {
+        self.cuerpos.iter().any(|c| c.lang.eq_ignore_ascii_case(lang))
+    }
+
+    /// Idiomas con lienzo disponible (sólo los derivados, sin el principal —
+    /// que no se autodeclara idioma). Para el selector de la UI.
+    pub fn cuerpo_langs(&self) -> Vec<String> {
+        self.cuerpos.iter().map(|c| c.lang.clone()).collect()
     }
 
     /// Un extracto de una línea para la lista de mensajes: colapsa whitespace
@@ -262,6 +304,7 @@ mod tests {
             flags: Flags::default(),
             signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
+            cuerpos: Vec::new(),
         }
     }
 
@@ -270,6 +313,16 @@ mod tests {
         let m = msg("  hola   mundo\n  esto es  largo ", "x");
         assert_eq!(m.snippet(100), "hola mundo esto es largo");
         assert_eq!(m.snippet(5), "hola…");
+    }
+
+    #[test]
+    fn body_for_elige_el_lienzo_del_idioma() {
+        let mut m = msg("nos vemos el viernes", "x");
+        m.cuerpos.push(MailCuerpo { lang: "en".into(), tone: None, body_text: "see you friday".into() });
+        assert!(m.has_lang("EN")); // case-insensitive
+        assert_eq!(m.body_for("en"), "see you friday");
+        assert_eq!(m.body_for("qu"), "nos vemos el viernes"); // sin lienzo → principal
+        assert_eq!(m.cuerpo_langs(), vec!["en".to_string()]);
     }
 
     #[test]

@@ -281,6 +281,7 @@ mod tests {
             flags: Flags::default(),
             signature: Default::default(),
             mailbox: "INBOX".to_string(),
+            cuerpos: Vec::new(),
         }
     }
 

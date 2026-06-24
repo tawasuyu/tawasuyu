@@ -197,6 +197,24 @@ intercambiables, como el resto de la suite.
     `contacto ↔ identidad` (libreta). El protocolo, el enrutado y el buzón están
     cerrados y certificados; falta el salto de red entre máquinas.
 
+- **Fase 14 (2026-06-24):** **multilienzo** — escribir una vez, leer en tu
+  idioma (Eje 4, como `pluma`).
+  - `paloma-core`: `MailCuerpo { lang, tone, body_text }` + `Message.cuerpos` /
+    `OutgoingMessage.cuerpos` (`#[serde(default)]`, cache-compat) +
+    `Message::body_for(lang)` / `has_lang` / `cuerpo_langs`. Test de selección.
+  - **Compose**: en el modal, chips "✨ Lienzo +ES/+EN/+QU" (si hay LLM) derivan
+    el cuerpo a ese idioma con `LlmAssistant::translate` y lo adjuntan (✓ cuando
+    ya existe). Los lienzos viajan con el mensaje.
+  - **Wire**: SMTP emite `X-Paloma-Cuerpos` (base64 postcard); MIME lo decodifica
+    a `Message.cuerpos`. El rail los lleva nativos (Message serializado). Test
+    e2e: lienzos viajan y vuelven; header corrupto se ignora.
+  - **Read**: el panel de lectura muestra el lienzo del idioma del lector
+    (`wawa-config`); selector de idioma (Original + un chip por lienzo) para
+    cambiar. `LlmAssistant::translate` en `paloma-app::llm` (local-first).
+  - **Nota**: en SMTP la firma Ed25519 cubre el cuerpo principal, no los lienzos
+    (en el rail sí van firmados, dentro del sobre). Atar la firma a los lienzos
+    es una mejora futura.
+
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
   `PALOMA_EMAIL` + `PALOMA_PASSWORD` (contraseña de **aplicación** en Gmail);
@@ -214,6 +232,7 @@ intercambiables, como el resto de la suite.
    `Verified` signifique identidad, no sólo integridad; + seed cifrada
    (`agora-keystore`) en vez del `identity.seed` en claro (firma básica ✅).
 5. **Rail soberano** `chasqui`/`ayni` — correo suite-a-suite sin SMTP (Eje 3.B).
-6. **Multilienzo** (como `pluma`) — escribir una vez, leer en otro idioma/tono.
+6. **Multilienzo por tono** — idioma ✅ (Fase 14); falta el eje de *tono*
+   (formal/cercano) y atar la firma SMTP a los lienzos.
 7. **Calendario/Contactos** (CalDAV/CardDAV) compartiendo la capa de cuentas.
 8. **HTML rico vía puriy** cuando el usuario lo pida (hoy: texto despojado).

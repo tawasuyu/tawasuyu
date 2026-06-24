@@ -84,6 +84,7 @@ mod tests {
             in_reply_to: None,
             references: vec![],
             signature: None,
+            cuerpos: Vec::new(),
         }
     }
 
@@ -105,6 +106,7 @@ mod tests {
             flags: Flags::default(),
             signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
+            cuerpos: Vec::new(),
         }
     }
 

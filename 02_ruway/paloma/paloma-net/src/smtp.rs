@@ -44,6 +44,22 @@ impl Header for XPalomaSignature {
     }
 }
 
+/// Header propio que transporta los lienzos multilienzo (base64 postcard).
+#[derive(Clone)]
+struct XPalomaCuerpos(String);
+
+impl Header for XPalomaCuerpos {
+    fn name() -> HeaderName {
+        HeaderName::new_from_ascii_str("X-Paloma-Cuerpos")
+    }
+    fn parse(s: &str) -> Result<Self, BoxErr> {
+        Ok(Self(s.to_string()))
+    }
+    fn display(&self) -> HeaderValue {
+        HeaderValue::new(Self::name(), self.0.clone())
+    }
+}
+
 /// Envía `msg` por el servidor `cfg`. Devuelve el `Message-ID` asignado
 /// (lo generamos nosotros y lo fijamos en el header, así el store puede
 /// referenciar el enviado).
@@ -77,6 +93,10 @@ pub fn send(cfg: &ServerConfig, password: &str, msg: &OutgoingMessage) -> Result
         builder = builder
             .header(XPalomaPubkey(pubkey_b64))
             .header(XPalomaSignature(sig_b64));
+    }
+    // Lienzos multilienzo (Eje 4): un header base64 con los cuerpos derivados.
+    if let Some(cuerpos_b64) = crate::mime::encode_cuerpos(&msg.cuerpos) {
+        builder = builder.header(XPalomaCuerpos(cuerpos_b64));
     }
 
     let email = match &msg.body_html {

@@ -90,6 +90,45 @@ impl LlmAssistant for LlmHelper {
         let user = format!("Hilo al que respondo:\n\n{}", truncar(&thread_text));
         self.run(system, user, MAX_TOKENS_DRAFT, handle, Msg::LlmDraft);
     }
+
+    fn translate(&self, text: String, target_lang: String, handle: Handle<Msg>) {
+        // Multilienzo: traducir el cuerpo a `target_lang` preservando sentido y
+        // formato. Devolvemos sólo la traducción (sin notas) → lienzo.
+        let nombre = nombre_idioma(&target_lang);
+        let system = format!(
+            "Sos un traductor profesional. Traducí el texto al {nombre} preservando el \
+             sentido, el tono y el formato (saltos de línea). Devolvé SÓLO la traducción, \
+             sin comentarios ni comillas."
+        );
+        let user = format!("Traducí al {nombre}:\n\n{}", truncar(&text));
+        let client = self.client.clone();
+        self.rt.spawn(async move {
+            let req = ChatRequest::una_vuelta(user, MAX_TOKENS_DRAFT)
+                .con_sistema(system)
+                .con_temperatura(0.2);
+            match client.complete(&req).await {
+                Ok(resp) => handle.dispatch(Msg::LlmTranslation {
+                    lang: target_lang,
+                    text: resp.content.trim().to_string(),
+                }),
+                Err(e) => handle.dispatch(Msg::LlmError(format!("IA: {e}"))),
+            }
+        });
+    }
+}
+
+/// Nombre legible de un código de idioma para el prompt del traductor.
+fn nombre_idioma(code: &str) -> &str {
+    match code.to_ascii_lowercase().as_str() {
+        "es" => "español",
+        "en" => "inglés",
+        "qu" => "quechua (runasimi, variante sureña)",
+        "pt" => "portugués",
+        "fr" => "francés",
+        "de" => "alemán",
+        "it" => "italiano",
+        _ => code,
+    }
 }
 
 /// Acota el contexto a [`MAX_CONTEXT_CHARS`] caracteres (corta por el final, que

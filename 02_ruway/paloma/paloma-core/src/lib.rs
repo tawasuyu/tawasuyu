@@ -36,7 +36,7 @@ pub use backend::{MailBackend, MockBackend, OutgoingMessage};
 pub use error::MailError;
 pub use mailbox::{Mailbox, MailboxRole};
 pub use message::{
-    canonical_signing_bytes, Flags, MailSignature, Message, MessageId, SignatureStatus,
+    canonical_signing_bytes, Flags, MailCuerpo, MailSignature, Message, MessageId, SignatureStatus,
 };
 pub use store::MailStore;
 pub use thread::{build_threads, Thread};

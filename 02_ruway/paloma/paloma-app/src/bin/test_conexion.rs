@@ -200,6 +200,7 @@ fn main() -> ExitCode {
             in_reply_to: None,
             references: vec![],
             signature: None,
+            cuerpos: Vec::new(),
         };
         match backend.send(&out) {
             Ok(id) => println!("OK (Message-ID {id})"),

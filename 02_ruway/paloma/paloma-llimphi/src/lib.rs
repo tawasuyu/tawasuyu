@@ -23,8 +23,8 @@ use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::TextInputState;
 
 use paloma_core::{
-    parse_address_list, Address, Flags, MailBackend, MailSignature, MailStore, Message, MessageId,
-    OutgoingMessage, Thread,
+    parse_address_list, Address, Flags, MailBackend, MailCuerpo, MailSignature, MailStore, Message,
+    MessageId, OutgoingMessage, Thread,
 };
 
 pub mod demo;
@@ -60,6 +60,9 @@ pub trait LlmAssistant: Send {
     /// Redacta un borrador de respuesta al hilo → despacha `Msg::LlmDraft` con
     /// el cuerpo, o `Msg::LlmError` si falla.
     fn draft_reply(&self, thread_text: String, handle: llimphi_ui::Handle<Msg>);
+    /// Traduce `text` a `target_lang` (multilienzo) → despacha
+    /// `Msg::LlmTranslation { lang, text }`, o `Msg::LlmError` si falla.
+    fn translate(&self, text: String, target_lang: String, handle: llimphi_ui::Handle<Msg>);
 }
 
 /// Identidad firmante del usuario, inyectada por el anfitrión (Eje 3:
@@ -119,6 +122,9 @@ pub struct Compose {
     /// Firmar el saliente con la identidad Ed25519 de la cuenta (gancho de
     /// `agora`; hoy es una preferencia de UI hasta integrar el keystore).
     pub sign: bool,
+    /// Lienzos multilienzo (Eje 4): versiones del cuerpo en otros idiomas que el
+    /// LLM derivó y viajarán con el mensaje. Vacío = sólo el cuerpo principal.
+    pub cuerpos: Vec<MailCuerpo>,
 }
 
 impl Compose {
@@ -132,6 +138,7 @@ impl Compose {
             in_reply_to: None,
             references: Vec::new(),
             sign: false,
+            cuerpos: Vec::new(),
         }
     }
 
@@ -199,6 +206,12 @@ pub struct Model {
     /// Enlace al rail P2P (Eje 3.B), inyectado por el anfitrión. `None` = sin
     /// buzón "Suyu" ni enrutado por el rail.
     rail: Option<Box<dyn RailLink>>,
+    /// Idioma del lector (de wawa-config): el lienzo que se autoselecciona al
+    /// leer (multilienzo, Eje 4).
+    reader_lang: String,
+    /// Idioma elegido a mano para ver el hilo abierto; `None` = auto (lee
+    /// `reader_lang`). Lo fija el selector de lienzos. Se limpia al cambiar hilo.
+    view_lang: Option<String>,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -237,8 +250,10 @@ impl Model {
     ) -> Self {
         // Inicializar rimay-localize (idempotente si ya fue llamado).
         rimay_localize::init();
-        // Cargar el idioma global configurado en wawa-config.
-        let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
+        // Cargar el idioma global configurado en wawa-config (también el idioma
+        // del lector para el multilienzo).
+        let reader_lang = wawa_config::WawaConfig::load().lang;
+        let _ = rimay_localize::set_locale(&reader_lang);
 
         let mut store = MailStore::new();
         // Offline-first: pintar lo cacheado antes de tocar la red.
@@ -287,6 +302,8 @@ impl Model {
             draft_busy: false,
             signer: None,
             rail: None,
+            reader_lang,
+            view_lang: None,
             db,
             account_id,
             status,
@@ -358,6 +375,17 @@ impl Model {
     /// contactos. `None` si no hay rail.
     pub fn my_rail_address(&self) -> Option<String> {
         self.rail.as_ref().map(|r| r.my_address())
+    }
+
+    /// Idioma efectivo de lectura (multilienzo): el elegido a mano, si no el del
+    /// lector. Decide qué lienzo muestra el panel de lectura.
+    pub fn effective_view_lang(&self) -> &str {
+        self.view_lang.as_deref().unwrap_or(&self.reader_lang)
+    }
+
+    /// El idioma elegido a mano para ver (None = auto).
+    pub fn view_lang(&self) -> Option<&str> {
+        self.view_lang.as_deref()
     }
 
     /// El resumen LLM del hilo abierto, si se pidió.
@@ -494,6 +522,8 @@ impl Model {
         // El resumen LLM es por hilo: al cambiar de hilo, se descarta.
         self.summary = None;
         self.summary_busy = false;
+        // El idioma de lectura vuelve a auto (el del lector) en cada hilo.
+        self.view_lang = None;
         // Reflejar el estado de leído en la caché en disco.
         if let Some(d) = self.db.clone() {
             let _ = d.save_messages(&self.account_id, &mailbox, self.store.messages(&mailbox));
@@ -611,6 +641,13 @@ pub enum Msg {
     RailReceived(Message),
     /// Mostrar la propia dirección del rail en la barra de estado (para copiar).
     ShowRailAddress,
+    /// Pedir al LLM derivar un lienzo del cuerpo en redacción a `lang` (Eje 4).
+    DeriveCuerpo(String),
+    /// Lienzo traducido devuelto por el LLM: se agrega a la redacción.
+    LlmTranslation { lang: String, text: String },
+    /// Elegir el idioma con el que se lee el hilo (`None` = auto). Selector de
+    /// lienzos del panel de lectura.
+    SetViewLang(Option<String>),
 }
 
 /// Dispara una búsqueda por significado: arma el corpus y se lo entrega al
@@ -794,6 +831,28 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
                 model.status = format!("tu dirección del rail: {addr}");
             }
         }
+        Msg::DeriveCuerpo(lang) => {
+            // Multilienzo: el LLM traduce el cuerpo en redacción a `lang`.
+            if let (Some(llm), Some(c)) = (model.llm.as_ref(), model.compose.as_ref()) {
+                let body = c.body.text();
+                if !body.trim().is_empty() {
+                    model.draft_busy = true;
+                    model.status = rimay_localize::t("paloma-status-llm-translating");
+                    llm.translate(body, lang, handle.clone());
+                }
+            }
+        }
+        Msg::LlmTranslation { lang, text } => {
+            model.draft_busy = false;
+            if let Some(c) = model.compose.as_mut() {
+                // Reemplaza el lienzo de ese idioma si ya existía.
+                c.cuerpos.retain(|x| !x.lang.eq_ignore_ascii_case(&lang));
+                c.cuerpos.push(MailCuerpo { lang: lang.clone(), tone: None, body_text: text });
+                model.status =
+                    rimay_localize::t("paloma-status-llm-lienzo-done").replace("{lang}", &lang);
+            }
+        }
+        Msg::SetViewLang(lang) => model.view_lang = lang,
         Msg::OpenMessage(id) => {
             model.open_message(&id);
             model.search_focused = false;
@@ -872,6 +931,7 @@ fn send_compose(mut model: Model) -> Model {
     let cc = parse_address_list(&c.cc.text());
     let in_reply_to = c.in_reply_to.clone();
     let references = c.references.clone();
+    let cuerpos = c.cuerpos.clone(); // lienzos multilienzo que viajan con el mensaje
 
     let mut sent_any = false;
     let mut signed_smtp = false;
@@ -896,6 +956,7 @@ fn send_compose(mut model: Model) -> Model {
                     flags: Flags::default(),
                     signature: paloma_core::SignatureStatus::Unsigned,
                     mailbox: SUYU_MAILBOX.to_string(),
+                    cuerpos: cuerpos.clone(),
                 };
                 for id in &rail_to {
                     match rail.send(*id, &msg) {
@@ -921,6 +982,7 @@ fn send_compose(mut model: Model) -> Model {
             in_reply_to,
             references,
             signature: None,
+            cuerpos: cuerpos.clone(),
         };
         // Firma Ed25519 (agora) si se pidió y hay identidad.
         if want_sign {

@@ -15,6 +15,8 @@ mail-parser = "0.9"
 imap = "2"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "native-tls", "builder"] }
 native-tls = "0.2"
+base64 = { workspace = true }
+postcard = { workspace = true }
 
 [dev-dependencies]
 agora-core = { path = "../../../03_ukupacha/agora/agora-core" }

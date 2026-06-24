@@ -248,6 +248,7 @@ mod tests {
             flags: Flags::default(),
             signature: SignatureStatus::Unsigned,
             mailbox: "Borradores".into(),
+            cuerpos: Vec::new(),
         }
     }
 

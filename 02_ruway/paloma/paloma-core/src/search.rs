@@ -73,6 +73,7 @@ mod tests {
             flags: Flags::default(),
             signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
+            cuerpos: Vec::new(),
         }
     }
 

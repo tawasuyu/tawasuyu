@@ -59,6 +59,12 @@ pub fn parse_message(raw: &[u8], mailbox: &str, flags: Flags) -> Result<Message,
         _ => SignatureStatus::Unsigned,
     };
 
+    // Lienzos multilienzo (Eje 4): header `X-Paloma-Cuerpos` (base64 postcard).
+    let cuerpos = parsed
+        .header_raw("X-Paloma-Cuerpos")
+        .and_then(decode_cuerpos)
+        .unwrap_or_default();
+
     Ok(Message {
         id,
         from,
@@ -74,7 +80,26 @@ pub fn parse_message(raw: &[u8], mailbox: &str, flags: Flags) -> Result<Message,
         flags,
         signature,
         mailbox: mailbox.to_string(),
+        cuerpos,
     })
+}
+
+/// Serializa los lienzos para el header `X-Paloma-Cuerpos` (base64 de postcard).
+/// `None` si no hay lienzos (no se emite el header).
+pub fn encode_cuerpos(cuerpos: &[paloma_core::MailCuerpo]) -> Option<String> {
+    if cuerpos.is_empty() {
+        return None;
+    }
+    let bytes = postcard::to_allocvec(cuerpos).ok()?;
+    Some(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes))
+}
+
+/// Decodifica el header `X-Paloma-Cuerpos` a los lienzos. `None` si no es base64
+/// válido o no decodifica (header corrupto → se ignora, sin romper el parseo).
+pub fn decode_cuerpos(header: &str) -> Option<Vec<paloma_core::MailCuerpo>> {
+    let bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, header.trim()).ok()?;
+    postcard::from_bytes(&bytes).ok()
 }
 
 /// Aplana una dirección `mail-parser` (que puede ser lista o grupo) a nuestras
@@ -180,6 +205,31 @@ ok\r\n";
         let _ = m;
     }
 
+    /// Multilienzo: los lienzos viajan en el header `X-Paloma-Cuerpos` y vuelven
+    /// intactos al parsear (escribir una vez → leer en otro idioma).
+    #[test]
+    fn lienzos_viajan_y_vuelven() {
+        use paloma_core::MailCuerpo;
+        let cuerpos = vec![
+            MailCuerpo { lang: "en".into(), tone: None, body_text: "see you friday".into() },
+            MailCuerpo { lang: "qu".into(), tone: Some("cercano".into()), body_text: "tinkusunchik".into() },
+        ];
+        let header = encode_cuerpos(&cuerpos).unwrap();
+        let raw = format!(
+            "From: Yo <yo@x.com>\r\nTo: Ana <ana@x.com>\r\nSubject: hola\r\n\
+             X-Paloma-Cuerpos: {header}\r\n\r\nnos vemos el viernes\r\n"
+        );
+        let m = parse_message(raw.as_bytes(), "INBOX", Flags::default()).unwrap();
+        assert_eq!(m.cuerpos.len(), 2);
+        assert_eq!(m.body_for("en"), "see you friday");
+        assert_eq!(m.body_for("qu"), "tinkusunchik");
+        // Sin lienzo en ese idioma → cae al cuerpo principal.
+        assert_eq!(m.body_for("fr").trim(), "nos vemos el viernes");
+        // Header corrupto → se ignora, no rompe el parseo.
+        let roto = raw.replace(&header, "no-base64!!");
+        assert!(parse_message(roto.as_bytes(), "INBOX", Flags::default()).unwrap().cuerpos.is_empty());
+    }
+
     /// Sin los headers `X-Paloma-*`, la firma queda `Unsigned`.
     #[test]
     fn sin_headers_de_firma_es_unsigned() {
@@ -208,6 +258,7 @@ ok\r\n";
             in_reply_to: None,
             references: vec![],
             signature: None,
+            cuerpos: Vec::new(),
         };
         paloma_sign::sign_outgoing(&kp, &mut out);
         let (pk_b64, sg_b64) = paloma_sign::encode_signature(out.signature.as_ref().unwrap());

@@ -37,6 +37,7 @@ fn msg(
         flags: Flags { seen, ..Default::default() },
         signature: SignatureStatus::Unsigned,
         mailbox: "INBOX".into(),
+        cuerpos: Vec::new(),
     }
 }
 
@@ -145,5 +146,6 @@ fn html_only(id: &str, from: Address, subject: &str, html: &str, hours: i64) -> 
         flags: Flags { seen: false, ..Default::default() },
         signature: SignatureStatus::Unsigned,
         mailbox: "INBOX".into(),
+        cuerpos: Vec::new(),
     }
 }

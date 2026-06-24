@@ -26,6 +26,10 @@ pub struct OutgoingMessage {
     /// capa de firma (`paloma-sign`) sobre los [`crate::canonical_signing_bytes`];
     /// el transporte la emite como headers `X-Paloma-*`.
     pub signature: Option<crate::MailSignature>,
+    /// Lienzos multilienzo (Eje 4): versiones del cuerpo en otros idiomas/tonos
+    /// que viajan con el mensaje. El transporte las emite (header `X-Paloma-Cuerpos`
+    /// en SMTP; nativo en el rail).
+    pub cuerpos: Vec<crate::MailCuerpo>,
 }
 
 impl OutgoingMessage {
@@ -52,6 +56,7 @@ impl OutgoingMessage {
             in_reply_to: Some(original.id.clone()),
             references,
             signature: None,
+            cuerpos: Vec::new(),
         }
     }
 
@@ -76,6 +81,7 @@ impl OutgoingMessage {
             in_reply_to: None,
             references: vec![],
             signature: None,
+            cuerpos: Vec::new(),
         }
     }
 }
@@ -169,6 +175,7 @@ impl MailBackend for MockBackend {
             flags: Flags { seen: true, ..Default::default() },
             signature: SignatureStatus::Unsigned,
             mailbox: "Sent".to_string(),
+            cuerpos: msg.cuerpos.clone(),
         };
         self.messages.lock().unwrap().entry("Sent".to_string()).or_default().push(stored);
         Ok(id)
@@ -208,6 +215,7 @@ mod tests {
             flags: Flags::default(),
             signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
+            cuerpos: Vec::new(),
         }
     }
 
@@ -233,6 +241,7 @@ mod tests {
             in_reply_to: None,
             references: vec![],
             signature: None,
+            cuerpos: Vec::new(),
         };
         let id = b.send(&out).unwrap();
         let sent = b.fetch_messages("Sent").unwrap();
