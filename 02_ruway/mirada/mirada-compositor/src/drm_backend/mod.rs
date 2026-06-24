@@ -788,7 +788,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| format!("EGLDisplay::new falló: {e}"))?;
     let egl_context =
         EGLContext::new(&egl_display).map_err(|e| format!("EGLContext::new falló: {e}"))?;
-    let renderer =
+    let mut renderer =
         unsafe { GlesRenderer::new(egl_context) }.map_err(|e| format!("GlesRenderer falló: {e}"))?;
     println!("      renderer GLES listo.");
 
@@ -855,7 +855,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             scale: Scale::from(scale_f64),
             transform,
         };
-        let comp: Compositor = DrmCompositor::new(
+        let mut comp: Compositor = DrmCompositor::new(
             mode_source,
             surface,
             None,
@@ -867,6 +867,34 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             Some(gbm.clone()),
         )
         .map_err(|e| format!("DrmCompositor::new[{name}] falló: {e}"))?;
+
+        // Incremento 1 del crossfade limpio (SDD §Fase 2): present inmediato del
+        // fondo común apenas existe el compositor —ANTES de armar Wayland y
+        // lanzar el greeter—. Así el PRIMER scanout de mirada es un frame
+        // controlado (`CLEAR_COLOR` = `BG` del splash, 18,18,24) en vez del bo
+        // GBM sin inicializar, que en hardware se veía como líneas horizontales
+        // random durante todo el arranque del greeter. El wallpaper y la tarjeta
+        // del greeter se componen ENCIMA en el bucle de eventos. (Componer la
+        // tarjeta del greeter ANTES de presentar = refactor cross-node, SDD
+        // §Fase 2-bis.) Marcamos `pending_flip` para que el primer render del
+        // bucle no encole otro flip antes del VBlank de este.
+        let presento_inicial = {
+            let vacio: Vec<Frame<GlesRenderer>> = Vec::new();
+            match comp.render_frame::<_, _>(&mut renderer, &vacio, CLEAR_COLOR, FrameFlags::DEFAULT) {
+                Ok(res) if !res.is_empty => match comp.queue_frame(()) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("      present inicial[{name}]: {e}");
+                        false
+                    }
+                },
+                Ok(_) => false,
+                Err(e) => {
+                    eprintln!("      render inicial[{name}]: {e}");
+                    false
+                }
+            }
+        };
         let refresh_mhz = mode.vrefresh() as i32 * 1000;
         let smithay_out = crate::announce_output(
             &display.handle(),
@@ -904,7 +932,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             wallpaper: None,
             wallpaper_path: wp_path,
             wallpaper_fit: wp_fit,
-            pending_flip: false,
+            pending_flip: presento_inicial,
         });
     }
 

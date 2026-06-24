@@ -168,6 +168,65 @@ reemplaza cuando hay rootfs con Mesa.
    no una capacidad brokeada — el splash va con `requires` vacío, igual que el
    display-manager de mirada.
 
+## Verificación sobre hardware real (2026-06-24, Intel Iris Xe)
+
+El greeter REAL usa EGL/GLES y necesita Mesa, así que la cadena
+`arje-splash → mirada-greeter` sólo se certifica sobre una GPU de verdad (no
+QEMU sin virgl). Script: `scripts/test-drm-greeter-metal.sh` (arranca el splash
+y `mirada-compositor --drm --greeter` desde un VT libre, con instrumentación de
+timestamps). Hallazgos:
+
+1. **El traspaso de DRM master daba `EACCES` determinista** en el modeset de
+   `DrmDevice::new`. Causa: el seat manager (seatd/logind) hace `SET_MASTER` al
+   `session.open()` de un nodo DRM si la sesión está activa; mirada abría el
+   device **antes** del handoff, mientras el splash todavía tenía el master
+   (tomado directo, fuera del seat manager) → el `SET_MASTER` chocaba y el fd
+   quedaba sin master para siempre. **Arreglo:** abrir el device vía libseat
+   **después** del `RELEASED`, con el master ya libre. Verificado: cadena
+   completa, sin `EACCES`. (commit `fc4bae7b`.)
+2. **No es un blank de modeset.** El traspaso master→master con el modo
+   reusado no apaga el panel; el gap es contenido, no un apagón.
+3. **Artefactos del gap (lo que se ve entre el splash y la tarjeta):**
+   - *Líneas horizontales random* = el bo GBM del primer scanout de mirada
+     **sin inicializar**, visible durante todo el arranque del proceso greeter.
+   - *Escalón de color* slate → púrpura: el splash funde a `BG (18,18,24)` pero
+     el greeter pinta el wallpaper por defecto (gradiente). La premisa vieja
+     («BG == bg_app del greeter») era falsa.
+
+### Incremento 1 — present inmediato del fondo común (hecho)
+
+Apenas se crea cada `DrmCompositor`, mirada hace un present de `CLEAR_COLOR`
+(= `BG` del splash) **antes** de armar Wayland y lanzar el greeter. El primer
+scanout pasa a ser un frame controlado en vez del bo sin inicializar → mata las
+líneas random y empalma slate→slate sin costura. `CLEAR_COLOR` se unificó al
+`BG` del splash. El wallpaper y la tarjeta del greeter se componen encima en el
+bucle. Limitación: el wallpaper y la tarjeta siguen apareciendo como pasos
+posteriores (no en el frame 1).
+
+### Fase 2-bis — crossfade limpio: render-node / card-node (pendiente)
+
+El cero-artefactos del SDD pide que el **primer scanout de mirada ya sea la
+tarjeta del greeter compuesta sobre su fondo**. Pero hay un huevo-y-gallina:
+componer con GL necesita el device, y el master lo tiene el splash hasta el
+`RELEASED`. La única salida es **separar nodos**:
+
+- Abrir el **render-node** (`/dev/dri/renderD128`, **no** necesita DRM master) y
+  montar EGL/GLES ahí. Componer el primer frame del greeter **offscreen**
+  mientras el splash sigue dueño del **card-node** (`/dev/dri/card1`).
+- Para tener la tarjeta en ese primer frame hay que **bombear el bucle Wayland**
+  (dispatch de clientes) hasta el primer commit del greeter, o un timeout corto,
+  **sin presentar todavía**.
+- Recién entonces hacer el handoff (`READY`/`RELEASED`), tomar master del
+  card-node e **importar el frame offscreen por dmabuf cross-node** para el
+  primer page-flip.
+
+**Riesgo central (sólo visible en metal):** el scanout cross-node por dmabuf
+depende de los **modifiers** del driver — un mismatch compila bien pero da
+**pantalla negra** en runtime. Por eso esta fase se verifica únicamente sobre
+hardware y se ataca en incrementos chicos. Métrica de cierre: comparar la
+duración del gap (`epoch_ms` del primer `queue_frame` de mirada menos el del
+`RELEASED` del splash, ya instrumentados) contra el baseline del Incremento 1.
+
 ## Estado de implementación
 
 - [x] SDD (este documento)
