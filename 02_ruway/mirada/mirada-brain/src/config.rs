@@ -991,8 +991,9 @@ const CONFIG_TEMPLATE: &str = "\
     // de fuentes comunes del sistema (Liberation, DejaVu, Noto, Adwaita…).
     font_path: \"\",
 
-    // Imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía = color sólido.
-    // Ej: \"/home/yo/.config/mirada/fondo.png\".
+    // Imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía = el wallpaper de
+    // MARCA de la suite (chakana + cuatro cuadrantes), embebido vía el crate
+    // `marca`. Ej: \"/home/yo/.config/mirada/fondo.png\".
     wallpaper_path: \"\",
     // Cómo encaja la imagen en la salida:
     //   stretch — deforma para cubrir exactamente (default).

@@ -209,11 +209,9 @@ fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32, bw: i32) -> [(i32, i32, i32,
     ]
 }
 
-/// Fondo default cuando el usuario no configura `wallpaper_path`: un gradient
-/// vertical sobrio (noche profunda → púrpura → azul-medianoche) generado
-/// runtime, sin bytes embebidos en el binario. La idea es que arrancar mirada
-/// "vacío" no se sienta como una pantalla muerta — un par de stops bastan
-/// para que el escritorio respire.
+/// Gradiente vertical sobrio (noche profunda → púrpura → azul-medianoche),
+/// generado runtime. Es el **fallback** cuando el wallpaper de marca no
+/// decodifica; el default real sin config es [`make_marca_wallpaper`].
 fn make_default_wallpaper(w: i32, h: i32) -> MemoryRenderBuffer {
     let w_u = w as usize;
     let h_u = h as usize;
@@ -335,7 +333,6 @@ fn load_wallpaper(
     w: i32,
     h: i32,
 ) -> Option<MemoryRenderBuffer> {
-    use mirada_brain::WallpaperFit;
     if w <= 0 || h <= 0 {
         return None;
     }
@@ -346,6 +343,41 @@ fn load_wallpaper(
             return None;
         }
     };
+    compose_wallpaper(&img, fit, w, h)
+}
+
+/// El wallpaper de **marca** como fondo por defecto (embebido en el crate
+/// `marca`, con override por disco). Cae a `None` si los bytes no decodifican —
+/// el llamador usa entonces el gradiente sobrio de `make_default_wallpaper`.
+fn make_marca_wallpaper(
+    fit: mirada_brain::WallpaperFit,
+    w: i32,
+    h: i32,
+) -> Option<MemoryRenderBuffer> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let bytes = marca::wallpaper();
+    let img = match image::load_from_memory(&bytes) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("mirada-compositor · wallpaper de marca no decodifica ({e}); gradiente.");
+            return None;
+        }
+    };
+    compose_wallpaper(&img, fit, w, h)
+}
+
+/// Compone una imagen ya decodificada en un buffer del tamaño de la salida
+/// (`w`×`h`) según `fit`; el resto queda en negro opaco. Núcleo compartido por
+/// `load_wallpaper` (desde ruta) y `make_marca_wallpaper` (bytes embebidos).
+fn compose_wallpaper(
+    img: &image::DynamicImage,
+    fit: mirada_brain::WallpaperFit,
+    w: i32,
+    h: i32,
+) -> Option<MemoryRenderBuffer> {
+    use mirada_brain::WallpaperFit;
     let rgba = img.to_rgba8();
     let sw = rgba.width() as i32;
     let sh = rgba.height() as i32;

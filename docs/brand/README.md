@@ -54,27 +54,33 @@ suite/hammer/wawa, p. ej. la pantalla de bienvenida de `churay`) vive en el crat
 [`shared/marca`](../../shared/marca), no acá. Esta carpeta es la **fuente vectorial**
 (wallpaper + chakana + logo) y la guía; `marca` es el **consumo en runtime**.
 
-`marca` trae un set embebido (`assets/{suite,hammer,wawa}.png`) y un **override por
-disco sin recompilar**: dejá `<dir>/suite.png` en `$TAWASUYU_MARCA` o en
-`~/.config/tawasuyu/marca/` y gana sobre el embebido. Para que el logo en runtime sea
-la **chakana** (y no el ring placeholder), usá `logo-suite-256.png` como ese override:
+`marca` **embebe** (`include_bytes!`) el set: el logo de cada marca
+(`assets/{suite,hammer,wawa}.png` — el de la suite **es la chakana**) y el
+**wallpaper** del escritorio (`assets/wallpaper.png`). Viaja dentro de cada
+binario que la consuma; no hay que instalar nada aparte.
+
+API: `Brand::Suite.image()` (logo), `Brand::Suite.meta()` (nombre/tagline/acento),
+`marca::wallpaper()` (fondo). Todas resuelven primero un **override por disco sin
+recompilar** — dejá `suite.png` / `wallpaper.png` en `$TAWASUYU_MARCA` o
+`~/.config/tawasuyu/marca/` y gana sobre el embebido. Es el gancho del rebrand.
+
+Para regenerar los assets embebidos desde las fuentes vectoriales:
 
 ```bash
-mkdir -p ~/.config/tawasuyu/marca
-cp docs/brand/logo-suite-256.png ~/.config/tawasuyu/marca/suite.png
+scripts/build-brand.sh
+cp docs/brand/logo-suite-256.png    shared/marca/assets/suite.png
+cp docs/brand/wallpaper-2560x1440.png shared/marca/assets/wallpaper.png
 ```
 
-Si en algún momento se decide que la chakana es el logo embebido por defecto, este
-mismo PNG reemplaza a `shared/marca/assets/suite.png`.
+## Fondo por defecto de mirada
 
-## Uso como fondo de mirada
-
-mirada lee `~/.config/mirada/config.ron`. Con `wallpaper_source: "auto"` (o
-`"local"`) y `wallpaper_path` apuntando al PNG, el compositor lo usa como fondo
-del escritorio:
+No hace falta configurar nada: con `wallpaper_path` vacío (el default), mirada usa
+el **wallpaper de marca** (`marca::wallpaper()`, fit `fill`) como fondo del
+escritorio; sólo cae a un gradiente sobrio si el PNG no decodificara. El usuario
+puede pisar el default poniendo su propia imagen en `~/.config/mirada/config.ron`:
 
 ```ron
 wallpaper_source: "local",
-wallpaper_path: "/home/<user>/.local/share/tawasuyu/wallpaper.png",
+wallpaper_path: "/home/<user>/fondos/lo-que-sea.png",
 wallpaper_fit: "fill",
 ```

@@ -1271,7 +1271,12 @@ impl DrmState {
                 WallpaperSpec::Procedural(pat, pal) => {
                     Some(make_procedural_wallpaper(pat, &pal, size.0, size.1))
                 }
-                WallpaperSpec::Default => Some(make_default_wallpaper(size.0, size.1)),
+                // Sin imagen configurada: el wallpaper de marca (chakana + 4
+                // cuadrantes) es el fondo por defecto; si no decodifica, gradiente.
+                WallpaperSpec::Default => {
+                    make_marca_wallpaper(mirada_brain::WallpaperFit::Fill, size.0, size.1)
+                        .or_else(|| Some(make_default_wallpaper(size.0, size.1)))
+                }
             };
             self.outputs[idx].wallpaper = buf.map(|b| (b, size));
         }

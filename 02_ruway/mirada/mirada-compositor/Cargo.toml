@@ -28,3 +28,6 @@ smithay = "0.7"
 ab_glyph = "0.2"
 # Decodifica y escala el wallpaper (PNG/JPEG/WebP) para componerlo en el fondo.
 image = { workspace = true }
+# Identidad visual central: el wallpaper de marca es el fondo por defecto cuando
+# el usuario no configura ninguno (embebido; override por disco vía marca).
+marca = { workspace = true }

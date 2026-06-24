@@ -8,11 +8,13 @@
 //! ```
 //! let bytes = marca::Brand::Suite.image();        // PNG (override o default)
 //! let meta = marca::Brand::Suite.meta();           // nombre, tagline, acento
+//! let fondo = marca::wallpaper();                  // wallpaper del escritorio (PNG)
 //! ```
 //!
-//! Override sin recompilar: dejá `<dir>/suite.png` (o `hammer.png` / `wawa.png`)
-//! en `$TAWASUYU_MARCA` o en `~/.config/tawasuyu/marca/`. Si está, gana sobre el
-//! embebido. Es el gancho para el día del rebrand.
+//! Override sin recompilar: dejá `<dir>/suite.png` (o `hammer.png` / `wawa.png`,
+//! o `wallpaper.png` para el fondo) en `$TAWASUYU_MARCA` o en
+//! `~/.config/tawasuyu/marca/`. Si está, gana sobre el embebido. Es el gancho
+//! para el día del rebrand.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -42,6 +44,7 @@ pub struct Meta {
 const SUITE_PNG: &[u8] = include_bytes!("../assets/suite.png");
 const HAMMER_PNG: &[u8] = include_bytes!("../assets/hammer.png");
 const WAWA_PNG: &[u8] = include_bytes!("../assets/wawa.png");
+const WALLPAPER_PNG: &[u8] = include_bytes!("../assets/wallpaper.png");
 
 impl Brand {
     /// Identificador en minúsculas — también el nombre de archivo del override.
@@ -95,6 +98,26 @@ impl Brand {
     }
 }
 
+/// El wallpaper del escritorio embebido por defecto (PNG): la chakana sobre el
+/// plano de los cuatro cuadrantes, con la paleta de la suite. Es la marca, no un
+/// adorno — el mismo glifo del logo y de las landings.
+pub fn default_wallpaper() -> &'static [u8] {
+    WALLPAPER_PNG
+}
+
+/// El wallpaper a usar: el override en disco (`wallpaper.png`) si existe, si no
+/// el embebido. Lo consume el compositor (`mirada`) como fondo por defecto cuando
+/// el usuario no configuró ninguno.
+pub fn wallpaper() -> Cow<'static, [u8]> {
+    if let Some(dir) = override_dir() {
+        let p = dir.join("wallpaper.png");
+        if let Ok(bytes) = std::fs::read(&p) {
+            return Cow::Owned(bytes);
+        }
+    }
+    Cow::Borrowed(WALLPAPER_PNG)
+}
+
 /// Directorio de overrides: `$TAWASUYU_MARCA` o `~/.config/tawasuyu/marca/`.
 pub fn override_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("TAWASUYU_MARCA") {
@@ -114,6 +137,14 @@ mod tests {
             assert!(img.starts_with(b"\x89PNG\r\n\x1a\n"), "{} no es PNG", b.slug());
             assert!(!b.meta().name.is_empty());
         }
+    }
+
+    #[test]
+    fn el_wallpaper_embebido_es_png() {
+        // Sin tocar el env (el override busca `wallpaper.png`, que el otro test no
+        // crea) → siempre debe resolver a un PNG válido.
+        assert!(default_wallpaper().starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(wallpaper().starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 
     #[test]
