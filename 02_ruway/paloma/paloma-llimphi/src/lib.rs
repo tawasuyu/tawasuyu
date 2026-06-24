@@ -396,6 +396,14 @@ impl Model {
         self.contacts.len()
     }
 
+    /// Confianza del remitente de `m`: el nombre del contacto cuya dirección
+    /// coincide, o `None` si no está en la libreta. Para el rail la dirección es
+    /// la clave pública, así que un match + firma `Verified` = identidad
+    /// criptográfica conocida (no sólo integridad).
+    pub fn sender_contact(&self, m: &Message) -> Option<&str> {
+        self.contacts.name_for(&m.from.email)
+    }
+
     /// Idioma efectivo de lectura (multilienzo): el elegido a mano, si no el del
     /// lector. Decide qué lienzo muestra el panel de lectura.
     pub fn effective_view_lang(&self) -> &str {
@@ -1204,6 +1212,41 @@ mod tests {
         let sent = grabado.lock().unwrap();
         assert_eq!(sent.len(), 1, "el alias se resolvió y enrutó por el rail");
         assert_eq!(sent[0].0, [9u8; 32]);
+    }
+
+    #[test]
+    fn confianza_remitente_conocido_por_la_libreta() {
+        let me = Address::named("Yo", "yo@x.com");
+        let mut model = Model::new(Box::new(MockBackend::new(vec![])), me, Theme::dark());
+        let ana_addr = paloma_rail::rail_address(&[9u8; 32]);
+        let mut book = paloma_contacts::Contactbook::new();
+        book.upsert("Ana", &ana_addr);
+        model.set_contacts(book, std::path::PathBuf::from("/tmp/x.json"));
+
+        // Mensaje del rail: from.email = la identidad (dirección del rail).
+        let msg = paloma_core::Message {
+            id: MessageId("<r@suyu>".into()),
+            from: Address::named("Ana", &ana_addr),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: "hola".into(),
+            date: 0,
+            in_reply_to: None,
+            references: vec![],
+            body_text: "qué tal".into(),
+            body_html: None,
+            flags: Flags::default(),
+            signature: paloma_core::SignatureStatus::Verified,
+            mailbox: SUYU_MAILBOX.into(),
+            cuerpos: vec![],
+        };
+        assert_eq!(model.sender_contact(&msg), Some("Ana"), "remitente en la libreta");
+
+        let otro = Address::named("X", "desconocido@rail.suyu");
+        let mut ajeno = msg.clone();
+        ajeno.from = otro;
+        assert_eq!(model.sender_contact(&ajeno), None, "remitente desconocido");
     }
 
     #[test]

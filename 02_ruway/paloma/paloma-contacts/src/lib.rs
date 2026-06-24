@@ -66,6 +66,18 @@ impl Contactbook {
             .map(|c| c.address.as_str())
     }
 
+    /// Lookup inverso: el **nombre** del contacto cuya dirección es `address`
+    /// (case-insensitive). Es la base de la confianza "¿este remitente es alguien
+    /// de mi libreta?" — para el rail, la dirección es la clave pública, así que
+    /// un match equivale a identidad criptográfica conocida.
+    pub fn name_for(&self, address: &str) -> Option<&str> {
+        let a = address.trim();
+        self.contacts
+            .iter()
+            .find(|c| c.address.eq_ignore_ascii_case(a))
+            .map(|c| c.name.as_str())
+    }
+
     /// Expande un campo *Para* (`"Ana, bob@x.com"`): cada token que sea un alias
     /// conocido se reemplaza por su dirección; el resto pasa igual. Así el campo
     /// queda listo para `parse_address_list`. Preserva el orden y los espacios
@@ -154,6 +166,10 @@ mod tests {
             "ef01@rail.suyu, bob@gmail.com, carla@x.com"
         );
         assert_eq!(lib.len(), 2);
+        // Lookup inverso (confianza): dirección → nombre.
+        assert_eq!(lib.name_for("BOB@GMAIL.COM"), Some("Bob"));
+        assert_eq!(lib.name_for("ef01@rail.suyu"), Some("Ana"));
+        assert_eq!(lib.name_for("desconocido@x.com"), None);
     }
 
     #[test]

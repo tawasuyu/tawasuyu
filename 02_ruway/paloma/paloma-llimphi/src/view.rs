@@ -653,7 +653,8 @@ fn reading_panel(model: &Model) -> View<Msg> {
     }
     for id in &thread.message_ids {
         if let Some(m) = model.store_ref().message(id) {
-            cards.push(message_card(theme, m, &lang));
+            let sender = model.sender_contact(m);
+            cards.push(message_card(theme, m, &lang, sender));
         }
     }
     let content = View::new(Style {
@@ -711,8 +712,9 @@ pub(crate) fn reading_content_height(model: &Model) -> f32 {
     total
 }
 
-/// Tarjeta de un mensaje: avatar + (de · fecha) + para + cuerpo.
-fn message_card(theme: &Theme, m: &Message, lang: &str) -> View<Msg> {
+/// Tarjeta de un mensaje: avatar + (de · fecha) + para + cuerpo. `sender` es el
+/// nombre del contacto si el remitente está en la libreta (confianza).
+fn message_card(theme: &Theme, m: &Message, lang: &str, sender: Option<&str>) -> View<Msg> {
     let from = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         flex_grow: 1.0,
@@ -729,6 +731,10 @@ fn message_card(theme: &Theme, m: &Message, lang: &str) -> View<Msg> {
     let mut head_children = vec![from];
     if let Some(badge) = signature_badge(theme, m.signature) {
         head_children.push(badge);
+    }
+    // Chip de confianza de identidad (pubkey↔persona).
+    if let Some(chip) = identity_chip(theme, m.signature, sender) {
+        head_children.push(chip);
     }
     head_children.push(date);
     let head = View::new(Style {
@@ -1146,6 +1152,38 @@ fn signature_badge(theme: &Theme, status: SignatureStatus) -> Option<View<Msg>> 
         SignatureStatus::Unsigned => return None,
         SignatureStatus::Verified => (format!("✓ {}", rimay_localize::t("paloma-sig-verified")), Color::from_rgba8(90, 180, 120, 255)),
         SignatureStatus::Invalid => (format!("⚠ {}", rimay_localize::t("paloma-sig-invalid")), theme.fg_destructive),
+    };
+    Some(
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            padding: pad_xy(8.0, 0.0),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt)
+        .radius(9.0)
+        .text(label, 10.5, fg),
+    )
+}
+
+/// Chip de **confianza de identidad** (pubkey↔persona). Sobre un mensaje con
+/// firma `Verified`: si el remitente está en la libreta → "✓ <nombre>" (verde,
+/// identidad conocida); si no → "remitente no guardado" (ámbar, TOFU). Sin firma
+/// válida no aplica (no hay identidad criptográfica que atar).
+fn identity_chip(theme: &Theme, status: SignatureStatus, sender: Option<&str>) -> Option<View<Msg>> {
+    if status != SignatureStatus::Verified {
+        return None;
+    }
+    let (label, fg) = match sender {
+        Some(name) => (
+            format!("👤 {}", rimay_localize::t_args("paloma-trust-known", &[("name", name.to_string().into())])),
+            Color::from_rgba8(90, 180, 120, 255),
+        ),
+        None => (
+            format!("? {}", rimay_localize::t("paloma-trust-unknown")),
+            Color::from_rgba8(200, 160, 70, 255),
+        ),
     };
     Some(
         View::new(Style {

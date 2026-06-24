@@ -243,6 +243,19 @@ intercambiables, como el resto de la suite.
     dirección del remitente = su identidad** (`<hex>@rail.suyu`), así guardarlo y
     responderle funcionan por el rail (la identidad autenticada es la dirección).
 
+- **Fase 16 (2026-06-24):** **confianza pubkey↔persona** — que `Verified`
+  signifique identidad, no sólo integridad.
+  - En el rail, la **dirección es la clave pública**: si el remitente de un
+    mensaje firmado está en la libreta, es **criptográficamente esa persona**.
+  - `paloma-contacts`: lookup inverso `name_for(address)`. `paloma-llimphi`:
+    `Model::sender_contact(m)` + **chip de identidad** en la tarjeta: con firma
+    `Verified`, "👤 <nombre>" (verde, contacto conocido) o "? remitente no
+    guardado" (ámbar, TOFU). Test: remitente del rail en la libreta → conocido.
+  - **Pendiente**: confianza para SMTP firmado (atar `pubkey ↔ email`: hoy el
+    `X-Paloma-Pubkey` se verifica pero no se guarda en el `Message`, así que la
+    confianza por nombre cubre el rail; el SMTP firmado muestra integridad) +
+    red de confianza transitiva de `agora` (avales entre contactos).
+
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
   `PALOMA_EMAIL` + `PALOMA_PASSWORD` (contraseña de **aplicación** en Gmail);
