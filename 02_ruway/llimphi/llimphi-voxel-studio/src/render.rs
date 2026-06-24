@@ -14,8 +14,8 @@ use llimphi_voxel::{world_dim, CharSpec, Project, SceneSpec, WorldRecipe, PREVIE
 
 use crate::preview::{WorldPreview, FMT};
 
-const W: u32 = 960;
-const H: u32 = 540;
+const W: u32 = 1280;
+const H: u32 = 720;
 const FPS: u32 = 30;
 /// Carpeta de cuadros, banda sonora y archivo de salida.
 const FRAME_DIR: &str = "/tmp/voxel_studio_film";
