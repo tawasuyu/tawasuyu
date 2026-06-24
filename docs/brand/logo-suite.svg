@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- tawasuyu — logo de app (estilo ícono): cuadrado redondeado oscuro + chakana
+     con núcleo luminoso. Formato pensado para el set de `shared/marca`
+     (suite/hammer/wawa) y para usarse como override de marca en disco. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0%" stop-color="#1B2030"/>
+      <stop offset="100%" stop-color="#0E1016"/>
+    </radialGradient>
+    <radialGradient id="fill" cx="50%" cy="42%" r="70%">
+      <stop offset="0%" stop-color="#232A3D"/>
+      <stop offset="100%" stop-color="#12161E"/>
+    </radialGradient>
+    <filter id="glow" x="-200%" y="-200%" width="500%" height="500%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="52" fill="url(#bg)"/>
+  <g transform="translate(128,124) scale(40)">
+    <path fill="url(#fill)" stroke="#6E8CDC" stroke-width="0.1" d="
+      M -0.5 -2.5 L 0.5 -2.5 L 0.5 -2.0 L 1.0 -2.0 L 1.0 -1.5
+      L 1.5 -1.5 L 1.5 -1.0 L 2.0 -1.0 L 2.0 -0.5 L 2.5 -0.5
+      L 2.5 0.5 L 2.0 0.5 L 2.0 1.0 L 1.5 1.0 L 1.5 1.5 L 1.0 1.5
+      L 1.0 2.0 L 0.5 2.0 L 0.5 2.5 L -0.5 2.5 L -0.5 2.0 L -1.0 2.0
+      L -1.0 1.5 L -1.5 1.5 L -1.5 1.0 L -2.0 1.0 L -2.0 0.5 L -2.5 0.5
+      L -2.5 -0.5 L -2.0 -0.5 L -2.0 -1.0 L -1.5 -1.0 L -1.5 -1.5
+      L -1.0 -1.5 L -1.0 -2.0 L -0.5 -2.0 Z"/>
+    <circle cx="0" cy="0" r="0.9" fill="#6E8CDC" opacity="0.4" filter="url(#glow)"/>
+    <circle cx="0" cy="0" r="0.5" fill="#C9D6F2"/>
+  </g>
+</svg>

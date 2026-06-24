@@ -43,8 +43,29 @@ Noto Sans.
 - `wallpaper.svg` — fuente vectorial del fondo (chakana + plano + verbos + wordmark).
 - `wallpaper-{1920x1080,2560x1440,3840x2160}.png` — derivados rasterizados.
 - `chakana.svg` / `chakana-512.png` — marca suelta (favicon, README, web).
+- `logo-suite.svg` / `logo-suite-256.png` — logo de app (ícono redondeado + chakana).
 
 Regenerar los PNG: `scripts/build-brand.sh` (requiere `rsvg-convert`).
+
+## Runtime: el crate `shared/marca`
+
+La identidad que las **apps muestran en vivo** (logo + nombre + tagline + acento de
+suite/hammer/wawa, p. ej. la pantalla de bienvenida de `churay`) vive en el crate
+[`shared/marca`](../../shared/marca), no acá. Esta carpeta es la **fuente vectorial**
+(wallpaper + chakana + logo) y la guía; `marca` es el **consumo en runtime**.
+
+`marca` trae un set embebido (`assets/{suite,hammer,wawa}.png`) y un **override por
+disco sin recompilar**: dejá `<dir>/suite.png` en `$TAWASUYU_MARCA` o en
+`~/.config/tawasuyu/marca/` y gana sobre el embebido. Para que el logo en runtime sea
+la **chakana** (y no el ring placeholder), usá `logo-suite-256.png` como ese override:
+
+```bash
+mkdir -p ~/.config/tawasuyu/marca
+cp docs/brand/logo-suite-256.png ~/.config/tawasuyu/marca/suite.png
+```
+
+Si en algún momento se decide que la chakana es el logo embebido por defecto, este
+mismo PNG reemplaza a `shared/marca/assets/suite.png`.
 
 ## Uso como fondo de mirada
 
