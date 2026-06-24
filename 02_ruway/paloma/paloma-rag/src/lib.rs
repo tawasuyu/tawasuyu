@@ -100,6 +100,44 @@ pub struct RagEngine {
     corpus_len: usize,
 }
 
+/// Construye el cliente LLM del RAG desde la config global (`wawa.ai.llm`): si
+/// fija un backend lo arma con `build_client`; si no, cae a `from_env`
+/// (local-first). Devuelve `(cliente, _)`. `None` si el backend nombrado es
+/// desconocido / no se pudo construir, o si el cliente resultante es el Mock y
+/// nadie lo pidió explícito (ni global ni `PLUMA_LLM_BACKEND`).
+fn build_rag_llm(s: &wawa_config::LlmSettings) -> Option<(Arc<dyn ChatClient>, bool)> {
+    use pluma_llm::{build_client, BackendKind, LlmConfig};
+    let explicit = s.is_set() || std::env::var("PLUMA_LLM_BACKEND").is_ok();
+    let client: Arc<dyn ChatClient> = if s.is_set() {
+        let kind = match s.backend.trim().to_lowercase().as_str() {
+            "anthropic" => BackendKind::Anthropic,
+            "gemini" => BackendKind::Gemini,
+            "deepseek" => BackendKind::DeepSeek,
+            "cohere" => BackendKind::Cohere,
+            "ollama" => BackendKind::Ollama,
+            "mock" => BackendKind::Mock,
+            _ => return None,
+        };
+        let nz = |v: &str| {
+            let v = v.trim();
+            (!v.is_empty()).then(|| v.to_string())
+        };
+        build_client(&LlmConfig {
+            kind,
+            model: nz(&s.model),
+            api_key: nz(&s.api_key),
+            endpoint: nz(&s.endpoint),
+        })
+        .ok()?
+    } else {
+        pluma_llm::from_env().ok()?
+    };
+    if client.model_id() == "pluma-llm-mock" && !explicit {
+        return None;
+    }
+    Some((client, true))
+}
+
 impl RagEngine {
     /// Arma el motor leyendo la caché de paloma. `None` si no hay caché con
     /// correo, si no hay daemon de embeddings, si no hay índice semántico, o si
@@ -120,16 +158,28 @@ impl RagEngine {
             .build()
             .ok()?;
 
-        // Proveedor de embeddings: el daemon de rimay-verbo, o mock sólo bajo
-        // opt-in explícito (mismo criterio que `paloma-app::semantic`).
+        // Config GLOBAL del SO (wawa.ai): de acá salen el daemon de embeddings y
+        // el backend LLM —una sola vez en wawa-panel, no por app.
+        let ai = wawa_config::WawaConfig::load().ai;
+
+        // Proveedor de embeddings: el daemon de rimay-verbo (socket de
+        // `wawa.ai.semantic.socket` o el default), o mock sólo bajo opt-in
+        // explícito (mismo criterio que `paloma-app::semantic`).
         let want_mock = std::env::var("PALOMA_SEMANTIC")
             .map(|v| v.eq_ignore_ascii_case("mock"))
             .unwrap_or(false);
+        let socket = ai.semantic.socket.trim().to_string();
+        let mock_dim = ai.semantic.effective_dim();
         let provider: Arc<dyn Provider> = rt.block_on(async {
-            match rimay_verbo::conectar().await {
+            let connected = if socket.is_empty() {
+                rimay_verbo::conectar().await
+            } else {
+                rimay_verbo::conectar_en(std::path::Path::new(&socket)).await
+            };
+            match connected {
                 Ok(c) => Some(Arc::new(c) as Arc<dyn Provider>),
                 Err(_) if want_mock => {
-                    Some(Arc::new(rimay_verbo::MockProvider::new(384)) as Arc<dyn Provider>)
+                    Some(Arc::new(rimay_verbo::MockProvider::new(mock_dim)) as Arc<dyn Provider>)
                 }
                 Err(_) => None,
             }
@@ -143,13 +193,10 @@ impl RagEngine {
             return None;
         }
 
-        // Cliente LLM (Eje 2): mismo criterio local-first que el resto de la
-        // suite. Sin backend real (y sin opt-in), no hay generación → sin panel.
-        let explicit = std::env::var("PLUMA_LLM_BACKEND").is_ok();
-        let client = pluma_llm::from_env().ok()?;
-        if client.model_id() == "pluma-llm-mock" && !explicit {
-            return None;
-        }
+        // Cliente LLM (Eje 2): backend de `wawa.ai.llm` (config global); si no se
+        // fijó uno, cae a `from_env` (local-first). Sin backend real y sin opt-in
+        // (ni global ni env), no hay generación → sin panel.
+        let (client, _real) = build_rag_llm(&ai.llm)?;
 
         let corpus: HashMap<MessageId, Message> =
             corpus_vec.into_iter().map(|m| (m.id.clone(), m)).collect();

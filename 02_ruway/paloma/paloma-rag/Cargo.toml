@@ -13,6 +13,9 @@ paloma-core = { path = "../paloma-core" }
 paloma-semantic = { path = "../paloma-semantic" }
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+# Config global del SO: el backend LLM + el daemon de embeddings se eligen una
+# sola vez en wawa-panel (wawa.ai); el RAG los lee de acá, no por su cuenta.
+wawa-config = { path = "../../../shared/wawa-config" }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 postcard = { workspace = true }
 directories = { workspace = true }
