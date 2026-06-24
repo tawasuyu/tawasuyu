@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tawasuyu — wallpaper de marca.
+  La chakana (cruz andina escalonada, núcleo luminoso) en el cruce de un plano
+  cartesiano cuyos cuatro cuadrantes son las cuatro fases del ciclo de la
+  información. Cada cuadrante lleva su verbo en su color de tema (tomados de
+  llimphi-theme::dark): unanchay/PERCIBIR, yachay/CONOCER, ruway/HACER,
+  ukupacha/RAÍZ. Render: scripts/build-brand.sh (rsvg-convert a PNG).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2560 1440" width="2560" height="1440">
+  <defs>
+    <radialGradient id="centerGlow" cx="50%" cy="48%" r="55%">
+      <stop offset="0%"  stop-color="#6E8CDC" stop-opacity="0.20"/>
+      <stop offset="45%" stop-color="#6E8CDC" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#6E8CDC" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="chakFill" cx="50%" cy="42%" r="70%">
+      <stop offset="0%"   stop-color="#1B2030"/>
+      <stop offset="100%" stop-color="#0F121A"/>
+    </radialGradient>
+    <radialGradient id="qUnanchay" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#B9C9E8" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#B9C9E8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="qYachay" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E8C97A" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#E8C97A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="qUkupacha" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8FB58C" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#8FB58C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="qRuway" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E89B6E" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#E89B6E" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <filter id="coreGlow" x="-200%" y="-200%" width="500%" height="500%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+  </defs>
+
+  <!-- fondo -->
+  <rect x="0" y="0" width="2560" height="1440" fill="#0E1016"/>
+
+  <!-- tintes de cuadrante (muy sutiles) -->
+  <circle cx="560"  cy="340"  r="900" fill="url(#qUnanchay)"/>
+  <circle cx="2000" cy="340"  r="900" fill="url(#qYachay)"/>
+  <circle cx="560"  cy="1100" r="900" fill="url(#qUkupacha)"/>
+  <circle cx="2000" cy="1100" r="900" fill="url(#qRuway)"/>
+
+  <!-- resplandor central -->
+  <rect x="0" y="0" width="2560" height="1440" fill="url(#centerGlow)"/>
+
+  <!-- ejes del plano (apenas visibles) -->
+  <g stroke="#1E2533" stroke-width="2" opacity="0.7">
+    <line x1="1280" y1="170" x2="1280" y2="1300"/>
+    <line x1="300"  y1="700" x2="2260" y2="700"/>
+  </g>
+
+  <!-- verbos de cada cuadrante, en su color de tema -->
+  <g font-family="JetBrains Mono, Noto Sans, sans-serif" font-size="34"
+     font-weight="500" letter-spacing="8" text-anchor="middle" opacity="0.82">
+    <text x="855"  y="452" fill="#B9C9E8">PERCIBIR</text>
+    <text x="1705" y="452" fill="#E8C97A">CONOCER</text>
+    <text x="855"  y="978" fill="#8FB58C">RAÍZ</text>
+    <text x="1705" y="978" fill="#E89B6E">HACER</text>
+  </g>
+
+  <!-- chakana centrada en el cruce de los ejes -->
+  <g transform="translate(1280,700) scale(66)">
+    <!-- halo difuso -->
+    <path filter="url(#soft)" opacity="0.5" fill="#6E8CDC" d="
+      M -0.5 -2.5 L 0.5 -2.5 L 0.5 -2.0 L 1.0 -2.0 L 1.0 -1.5
+      L 1.5 -1.5 L 1.5 -1.0 L 2.0 -1.0 L 2.0 -0.5 L 2.5 -0.5
+      L 2.5 0.5 L 2.0 0.5 L 2.0 1.0 L 1.5 1.0 L 1.5 1.5 L 1.0 1.5
+      L 1.0 2.0 L 0.5 2.0 L 0.5 2.5 L -0.5 2.5 L -0.5 2.0 L -1.0 2.0
+      L -1.0 1.5 L -1.5 1.5 L -1.5 1.0 L -2.0 1.0 L -2.0 0.5 L -2.5 0.5
+      L -2.5 -0.5 L -2.0 -0.5 L -2.0 -1.0 L -1.5 -1.0 L -1.5 -1.5
+      L -1.0 -1.5 L -1.0 -2.0 L -0.5 -2.0 Z"/>
+    <!-- cuerpo -->
+    <path fill="url(#chakFill)" stroke="#6E8CDC" stroke-width="0.06" stroke-opacity="0.85" d="
+      M -0.5 -2.5 L 0.5 -2.5 L 0.5 -2.0 L 1.0 -2.0 L 1.0 -1.5
+      L 1.5 -1.5 L 1.5 -1.0 L 2.0 -1.0 L 2.0 -0.5 L 2.5 -0.5
+      L 2.5 0.5 L 2.0 0.5 L 2.0 1.0 L 1.5 1.0 L 1.5 1.5 L 1.0 1.5
+      L 1.0 2.0 L 0.5 2.0 L 0.5 2.5 L -0.5 2.5 L -0.5 2.0 L -1.0 2.0
+      L -1.0 1.5 L -1.5 1.5 L -1.5 1.0 L -2.0 1.0 L -2.0 0.5 L -2.5 0.5
+      L -2.5 -0.5 L -2.0 -0.5 L -2.0 -1.0 L -1.5 -1.0 L -1.5 -1.5
+      L -1.0 -1.5 L -1.0 -2.0 L -0.5 -2.0 Z"/>
+    <!-- núcleo luminoso -->
+    <circle cx="0" cy="0" r="0.95" fill="#6E8CDC" opacity="0.45" filter="url(#coreGlow)"/>
+    <circle cx="0" cy="0" r="0.5"  fill="#C9D6F2"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="1280" y="1250" text-anchor="middle"
+        font-family="JetBrains Mono, Noto Sans, sans-serif" font-size="104"
+        font-weight="300" letter-spacing="26" fill="#D6DEE8">tawasuyu</text>
+</svg>

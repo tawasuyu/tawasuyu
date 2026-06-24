@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- tawasuyu — la chakana: marca suelta (favicon, README, web). Núcleo
+     luminoso accent sobre cuerpo escalonado. Fondo transparente. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3 -3 6 6" width="512" height="512">
+  <defs>
+    <radialGradient id="fill" cx="50%" cy="42%" r="70%">
+      <stop offset="0%" stop-color="#1B2030"/>
+      <stop offset="100%" stop-color="#0F121A"/>
+    </radialGradient>
+  </defs>
+  <path fill="url(#fill)" stroke="#6E8CDC" stroke-width="0.08" d="
+    M -0.5 -2.5 L 0.5 -2.5 L 0.5 -2.0 L 1.0 -2.0 L 1.0 -1.5
+    L 1.5 -1.5 L 1.5 -1.0 L 2.0 -1.0 L 2.0 -0.5 L 2.5 -0.5
+    L 2.5 0.5 L 2.0 0.5 L 2.0 1.0 L 1.5 1.0 L 1.5 1.5 L 1.0 1.5
+    L 1.0 2.0 L 0.5 2.0 L 0.5 2.5 L -0.5 2.5 L -0.5 2.0 L -1.0 2.0
+    L -1.0 1.5 L -1.5 1.5 L -1.5 1.0 L -2.0 1.0 L -2.0 0.5 L -2.5 0.5
+    L -2.5 -0.5 L -2.0 -0.5 L -2.0 -1.0 L -1.5 -1.0 L -1.5 -1.5
+    L -1.0 -1.5 L -1.0 -2.0 L -0.5 -2.0 Z"/>
+  <circle cx="0" cy="0" r="0.55" fill="#C9D6F2"/>
+</svg>
