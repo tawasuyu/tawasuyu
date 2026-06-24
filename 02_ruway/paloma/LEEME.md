@@ -114,14 +114,39 @@ intercambiables, como el resto de la suite.
     `rimay`); botón **Ver HTML enriquecido** en mensajes con `body_html` (avisa
     que el render rico vía puriy está pendiente).
 
+- **Fase 10 (2026-06-24):** búsqueda **por significado** (`paloma-semantic`).
+  - Crate nuevo `paloma-semantic`: índice de embeddings (`rimay-verbo`) sobre
+    los mensajes cacheados. El **cómputo es async** (`embed_messages`/
+    `embed_query`, fuera del hilo de UI); el **ranking es síncrono y puro**
+    (`SemanticIndex::search`, coseno) para el bucle Elm. Persistencia postcard +
+    embedding **incremental** (`missing`) + purga (`retain`). Agnóstico al
+    proveedor (mock/fastembed/Cohere). 6 tests verde (incl. el pipeline e2e).
+  - El puente sync↔async vive en `paloma-app::semantic::DaemonSemantic`: runtime
+    tokio + `rimay_verbo::conectar()` (daemon) o, con `PALOMA_SEMANTIC=mock`, el
+    mock determinista. `paloma-llimphi` define el trait `SemanticEngine` y el
+    `Msg::SemanticResults`; el motor embebe/rankea y despacha los ids por
+    `Handle`. Sin daemon, el modo 🧠 cae a la búsqueda exacta avisándolo.
+  - UI: en modo semántico se escribe y se presiona **Enter**; el panel muestra
+    los resultados rankeados (o "buscando…"/"presioná Enter").
+  - Requiere un `rimay-verbo-daemon` corriendo para ser útil de verdad
+    (`cargo run -p rimay-verbo-daemon-bin -- --provider fastembed`).
+
+- **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
+  verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
+  `PALOMA_EMAIL` + `PALOMA_PASSWORD` (contraseña de **aplicación** en Gmail);
+  `PALOMA_SEND_TEST=1` manda un correo de prueba a uno mismo.
+
 ## Pendiente (orden sugerido)
 
 1. **Verificar contra un servidor real** (laptop, con credenciales) los caminos
-   IMAP (TLS/STARTTLS/plano) y SMTP — sólo testeados por tipos hasta ahora.
-2. **Búsqueda semántica con `rimay`** — exige un puente sync↔async al
-   `rimay-verbo-daemon` (embeddings) + índice persistido; hoy la búsqueda es
-   exacta. Es el gancho que falta para "buscar por significado".
-3. **Firma/verificación con `agora`** (Ed25519) — firmar salientes y verificar
-   entrantes; necesita keystore de `agora` + un header propio.
-4. **Calendario/Contactos** (CalDAV/CardDAV) compartiendo la capa de cuentas.
-5. **HTML rico vía puriy** cuando el usuario lo pida (hoy: texto despojado).
+   IMAP (TLS/STARTTLS/plano) y SMTP — sólo testeados por tipos. Usar `paloma-test`.
+2. **Bandeja-canvas por significado** — sobre `paloma-semantic`, ordenar la
+   bandeja por tema/atención (estilo `khipu`) en vez de lista cronológica.
+3. **LLM-nativo** (`pluma-llm`, local-first/Ollama) — resumir hilos, extraer
+   pendientes/fechas, borrador de respuesta, triage por importancia.
+4. **Firma/verificación con `agora`** (Ed25519) — firmar salientes y verificar
+   entrantes; keystore de `agora` + header propio (el badge ya está en UI).
+5. **Rail soberano** `chasqui`/`ayni` — correo suite-a-suite sin SMTP.
+6. **Multilienzo** (como `pluma`) — escribir una vez, leer en otro idioma/tono.
+7. **Calendario/Contactos** (CalDAV/CardDAV) compartiendo la capa de cuentas.
+8. **HTML rico vía puriy** cuando el usuario lo pida (hoy: texto despojado).

@@ -357,6 +357,57 @@ mod tests {
         assert!(matches!(idx.search(&q, 5, 0.0), Err(SemanticError::ModelMismatch { .. })));
     }
 
+    /// Reproduce **exactamente** la secuencia que corre `DaemonSemantic::search`
+    /// en `paloma-app` (embeber faltantes → ingerir → purgar → persistir →
+    /// recargar → embeber consulta → rankear), para certificar el pipeline del
+    /// motor sin levantar el runtime de UI.
+    #[tokio::test]
+    async fn pipeline_del_motor_de_punta_a_punta() {
+        let p = MockProvider::new(384); // misma dim que el daemon real (e5-small)
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("semantic").join("cuenta.pc");
+
+        // Arranque: índice vacío cargado de una ruta inexistente.
+        let mut idx = SemanticIndex::load(&path, p.model_id().clone()).unwrap();
+        assert!(idx.is_empty());
+
+        // Corpus inicial de 3; el motor embebe sólo los que faltan (todos).
+        let corpus = vec![
+            msg("a", "factura atrasada", "el pago del mes vence pronto"),
+            msg("b", "asado", "traé carbón"),
+            msg("c", "daily", "movemos la reunión"),
+        ];
+        let faltan: Vec<Message> = idx.missing(&corpus).into_iter().cloned().collect();
+        assert_eq!(faltan.len(), 3);
+        idx.ingest(embed_messages(&p, &faltan).await.unwrap());
+        let keep: Vec<MessageId> = corpus.iter().map(|m| m.id.clone()).collect();
+        idx.retain(&keep);
+        idx.save(&path).unwrap();
+
+        // Segundo ciclo: llega un mensaje nuevo y desaparece uno viejo ("b").
+        let corpus2 = vec![
+            msg("a", "factura atrasada", "el pago del mes vence pronto"),
+            msg("c", "daily", "movemos la reunión"),
+            msg("d", "vacaciones", "pedido aprobado"),
+        ];
+        let mut idx = SemanticIndex::load(&path, p.model_id().clone()).unwrap();
+        assert_eq!(idx.len(), 3, "recargó el índice persistido");
+        let faltan2: Vec<Message> = idx.missing(&corpus2).into_iter().cloned().collect();
+        assert_eq!(faltan2.len(), 1, "sólo 'd' es nuevo");
+        idx.ingest(embed_messages(&p, &faltan2).await.unwrap());
+        let keep2: Vec<MessageId> = corpus2.iter().map(|m| m.id.clone()).collect();
+        idx.retain(&keep2);
+        assert_eq!(idx.len(), 3, "'b' purgado, 'd' agregado");
+        assert!(!idx.contains(&MessageId("b".to_string())));
+
+        // Consulta: el texto del mensaje "a" → "a" primero (mock determinista).
+        let q = embed_query(&p, &embeddable_text(&corpus2[0])).await.unwrap();
+        let hits = idx.search(&q, TOP_K_TEST, 0.0).unwrap();
+        assert_eq!(hits[0].id, MessageId("a".to_string()));
+    }
+
+    const TOP_K_TEST: usize = 50;
+
     #[tokio::test]
     async fn roundtrip_a_disco() {
         let p = MockProvider::new(16);

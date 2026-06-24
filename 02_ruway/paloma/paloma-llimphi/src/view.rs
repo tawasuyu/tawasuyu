@@ -358,17 +358,42 @@ fn star_toggle(theme: &Theme, flagged: bool, id: Option<paloma_core::MessageId>)
 fn search_results_panel(model: &Model) -> View<Msg> {
     let theme = &model.theme;
     let query = model.search.text();
-    let hits = model.store_ref().search(&query);
 
-    let header = panel_header(theme, &format!("🔍  {} resultado(s) · «{}»", hits.len(), query.trim()));
+    // En modo semántico (con motor inyectado) los resultados llegan async y se
+    // leen de `semantic_hits`; en exacto, se calculan en el acto sobre la caché.
+    let semantic = model.semantic_active();
+    let (header_txt, rows): (String, Vec<View<Msg>>) = if semantic {
+        if model.semantic_busy() {
+            (
+                format!("🧠  {}", rimay_localize::t("paloma-search-semantic-running")),
+                vec![empty_note(theme, &rimay_localize::t("paloma-search-semantic-running"))],
+            )
+        } else if let Some(hits) = model.semantic_hits() {
+            let n = hits.len();
+            let mut rows: Vec<View<Msg>> =
+                hits.into_iter().skip(model.list_scroll).map(|m| result_row(theme, m)).collect();
+            if rows.is_empty() {
+                rows.push(empty_note(theme, &rimay_localize::t("paloma-empty-search")));
+            }
+            (format!("🧠  {n} · «{}»", query.trim()), rows)
+        } else {
+            (
+                format!("🧠  {}", rimay_localize::t("paloma-search-semantic")),
+                vec![empty_note(theme, &rimay_localize::t("paloma-search-semantic-hint"))],
+            )
+        }
+    } else {
+        let hits = model.store_ref().search(&query);
+        let n = hits.len();
+        let mut rows: Vec<View<Msg>> =
+            hits.into_iter().skip(model.list_scroll).map(|m| result_row(theme, m)).collect();
+        if rows.is_empty() {
+            rows.push(empty_note(theme, &rimay_localize::t("paloma-empty-search")));
+        }
+        (format!("🔍  {n} resultado(s) · «{}»", query.trim()), rows)
+    };
 
-    let mut rows: Vec<View<Msg>> = Vec::new();
-    for m in hits.into_iter().skip(model.list_scroll) {
-        rows.push(result_row(theme, m));
-    }
-    if rows.is_empty() {
-        rows.push(empty_note(theme, &rimay_localize::t("paloma-empty-search")));
-    }
+    let header = panel_header(theme, &header_txt);
 
     let list = View::new(Style {
         flex_direction: FlexDirection::Column,

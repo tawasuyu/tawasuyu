@@ -641,7 +641,12 @@ nakui-sheet-pivot-hint = A function · G group · V value · H header · Esc clo
 
 # === paloma-llimphi ===
 paloma-status-init = paloma · not synced
-paloma-status-search-semantic = semantic search (rimay): pending — using exact
+paloma-status-search-semantic = search by meaning — type and press Enter
+paloma-status-search-semantic-running = searching by meaning…
+paloma-status-search-semantic-done = { $n } result(s) by meaning
+paloma-status-search-semantic-fallback = no embeddings daemon: using exact search
+paloma-search-semantic-running = searching by meaning…
+paloma-search-semantic-hint = type and press Enter to search by meaning
 paloma-status-view-rich = rich HTML via puriy: pending (plain text for now)
 paloma-status-no-recipient = cannot send: missing a valid recipient
 paloma-status-sent = sent

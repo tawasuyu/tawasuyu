@@ -20,7 +20,10 @@ path = "src/bin/test_conexion.rs"
 paloma-core = { path = "../paloma-core" }
 paloma-net = { path = "../paloma-net" }
 paloma-store = { path = "../paloma-store" }
+paloma-semantic = { path = "../paloma-semantic" }
 paloma-llimphi = { path = "../paloma-llimphi" }
+rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 serde = { workspace = true }

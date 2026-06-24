@@ -23,11 +23,27 @@ use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::TextInputState;
 
 use paloma_core::{
-    parse_address_list, Address, Flags, MailBackend, MailStore, MessageId, OutgoingMessage, Thread,
+    parse_address_list, Address, Flags, MailBackend, MailStore, Message, MessageId, OutgoingMessage,
+    Thread,
 };
 
 pub mod demo;
 mod view;
+
+/// Motor de **búsqueda por significado**, inyectado por el anfitrión.
+///
+/// El cómputo de embeddings es async y pega contra el `rimay-verbo-daemon`; no
+/// puede vivir en el bucle Elm síncrono. Por eso el motor recibe el [`Handle`]
+/// y **despacha [`Msg::SemanticResults`]** cuando termina, en vez de devolver.
+/// `Model::semantic == None` (demos, o sin daemon) ⇒ el modo semántico cae a la
+/// búsqueda exacta. La implementación concreta vive en el anfitrión
+/// (`paloma-app`), sobre `paloma-semantic` + un runtime async.
+pub trait SemanticEngine: Send {
+    /// Embebe lo que falte de `corpus`, lo rankea contra `query` por similitud
+    /// coseno, y despacha `Msg::SemanticResults(ids ordenados)` por `handle`.
+    /// No bloquea: corre todo en su propio runtime.
+    fn search(&self, query: String, corpus: Vec<Message>, handle: llimphi_ui::Handle<Msg>);
+}
 
 /// Campo enfocado del formulario de redacción.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,10 +134,18 @@ pub struct Model {
     search: TextInputState,
     /// `true` si la caja de búsqueda tiene el foco del teclado.
     search_focused: bool,
-    /// Modo de búsqueda: `false` = exacta (texto), `true` = semántica. La
-    /// semántica (embeddings vía `rimay`) está pendiente de integrar; el toggle
-    /// existe y, por ahora, cae a la exacta avisándolo.
+    /// Modo de búsqueda: `false` = exacta (texto), `true` = semántica
+    /// (embeddings vía `rimay`). Sin [`Model::semantic`] inyectado, el modo
+    /// semántico cae a la exacta.
     search_semantic: bool,
+    /// Motor de búsqueda por significado, inyectado por el anfitrión. `None` en
+    /// demos o si no hay daemon de embeddings.
+    semantic: Option<Box<dyn SemanticEngine>>,
+    /// Última tanda de resultados semánticos (ids rankeados), o `None` si no se
+    /// buscó aún / la consulta se vació. Llega async vía `Msg::SemanticResults`.
+    semantic_results: Option<Vec<MessageId>>,
+    /// `true` mientras hay una búsqueda semántica en vuelo (embebiendo/rankeando).
+    semantic_busy: bool,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -201,6 +225,9 @@ impl Model {
             search: TextInputState::new(),
             search_focused: false,
             search_semantic: false,
+            semantic: None,
+            semantic_results: None,
+            semantic_busy: false,
             db,
             account_id,
             status,
@@ -210,6 +237,48 @@ impl Model {
             model.open_mailbox(&name);
         }
         model
+    }
+
+    /// Inyecta el motor de búsqueda por significado (lo hace el anfitrión tras
+    /// construir el modelo). Sin esto, el modo semántico cae a la exacta.
+    pub fn attach_semantic(&mut self, engine: Box<dyn SemanticEngine>) {
+        self.semantic = engine.into();
+    }
+
+    /// Todos los mensajes cacheados, deduplicados por `Message-ID` (un mismo
+    /// mensaje puede aparecer en varios buzones, p. ej. etiquetas de Gmail). Es
+    /// el corpus que se le pasa al motor semántico para embeber/rankear.
+    fn corpus(&self) -> Vec<Message> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for mb in self.store.mailboxes() {
+            for m in self.store.messages(&mb.name) {
+                if seen.insert(m.id.clone()) {
+                    out.push(m.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// ¿Está activo el modo semántico **y** hay motor inyectado? (Si no, la UI
+    /// muestra los resultados exactos.)
+    pub fn semantic_active(&self) -> bool {
+        self.search_semantic && self.semantic.is_some()
+    }
+
+    /// ¿Hay una búsqueda semántica en vuelo?
+    pub fn semantic_busy(&self) -> bool {
+        self.semantic_busy
+    }
+
+    /// Los mensajes de la última tanda semántica, en orden de relevancia y ya
+    /// resueltos a `&Message` (descarta ids que ya no estén en la caché).
+    /// `None` si todavía no se buscó nada por significado.
+    pub fn semantic_hits(&self) -> Option<Vec<&Message>> {
+        self.semantic_results
+            .as_ref()
+            .map(|ids| ids.iter().filter_map(|id| self.store.message(id)).collect())
     }
 
     /// Abre el mensaje `id`: salta a su buzón y selecciona el hilo que lo
@@ -372,12 +441,33 @@ pub enum Msg {
     OpenMessage(MessageId),
     /// Cambiar el modo de búsqueda (false = exacta, true = semántica).
     SearchMode(bool),
+    /// Resultados de una búsqueda semántica (ids rankeados), despachados por el
+    /// motor cuando termina de embeber/rankear fuera del hilo de UI.
+    SemanticResults(Vec<MessageId>),
     /// Pedir el render HTML enriquecido de un mensaje (gancho de puriy).
     ViewRich(MessageId),
 }
 
+/// Dispara una búsqueda por significado: arma el corpus y se lo entrega al
+/// motor, que embebe/rankea async y despacha `Msg::SemanticResults`. Sin motor
+/// o con consulta vacía, no hace nada (limpia resultados).
+fn fire_semantic(model: &mut Model, handle: &llimphi_ui::Handle<Msg>) {
+    let query = model.search.text();
+    if query.trim().is_empty() {
+        model.semantic_results = None;
+        model.semantic_busy = false;
+        return;
+    }
+    let Some(engine) = model.semantic.as_ref() else { return };
+    let corpus = model.corpus();
+    model.semantic_busy = true;
+    model.semantic_results = None;
+    model.status = rimay_localize::t("paloma-status-search-semantic-running");
+    engine.search(query, corpus, handle.clone());
+}
+
 /// La transición Elm. Toma el modelo por valor y lo devuelve mutado.
-pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> Model {
+pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> Model {
     match msg {
         Msg::SelectMailbox(name) => model.open_mailbox(&name),
         Msg::SelectThread(idx) => model.open_thread(idx),
@@ -460,9 +550,28 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
         Msg::SearchFocus(on) => model.search_focused = on,
         Msg::SearchMode(semantic) => {
             model.search_semantic = semantic;
+            model.semantic_results = None;
+            model.semantic_busy = false;
             if semantic {
-                model.status = rimay_localize::t("paloma-status-search-semantic");
+                if model.semantic.is_some() {
+                    // Con motor y consulta ya escrita, buscá de una.
+                    if model.search.text().trim().is_empty() {
+                        model.status = rimay_localize::t("paloma-status-search-semantic");
+                    } else {
+                        fire_semantic(&mut model, handle);
+                    }
+                } else {
+                    // Sin motor: el modo semántico cae a la exacta.
+                    model.status = rimay_localize::t("paloma-status-search-semantic-fallback");
+                }
             }
+        }
+        Msg::SemanticResults(ids) => {
+            model.semantic_busy = false;
+            let n = ids.len();
+            model.semantic_results = Some(ids);
+            model.status =
+                rimay_localize::t_args("paloma-status-search-semantic-done", &[("n", n.to_string().into())]);
         }
         Msg::ViewRich(_id) => {
             model.status = rimay_localize::t("paloma-status-view-rich");
@@ -479,17 +588,28 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
                         model.search_focused = false;
                     }
                     Key::Named(NamedKey::Enter) => {
-                        // Enter abre el primer resultado.
-                        let q = model.search.text();
-                        let first = model.store.search(&q).first().map(|m| m.id.clone());
-                        if let Some(id) = first {
-                            model.open_message(&id);
-                            model.search_focused = false;
+                        if model.semantic_active() {
+                            // En semántico, Enter dispara la búsqueda por
+                            // significado (el resultado llega async).
+                            fire_semantic(&mut model, handle);
+                        } else {
+                            // Exacta: Enter abre el primer resultado.
+                            let q = model.search.text();
+                            let first = model.store.search(&q).first().map(|m| m.id.clone());
+                            if let Some(id) = first {
+                                model.open_message(&id);
+                                model.search_focused = false;
+                            }
                         }
                     }
                     _ => {
                         model.search.apply_key(&event);
                         model.list_scroll = 0;
+                        // En semántico, tipear invalida la tanda anterior: hay
+                        // que volver a presionar Enter para re-rankear.
+                        if model.semantic_active() {
+                            model.semantic_results = None;
+                        }
                     }
                 }
             }

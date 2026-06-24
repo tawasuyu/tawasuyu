@@ -37,6 +37,8 @@ use serde::Deserialize;
 use paloma_core::{Account, Address, MailBackend, Security, ServerConfig};
 use paloma_llimphi::{Model, Msg};
 
+mod semantic;
+
 /// La cuenta tal como se escribe en el JSON: plana y cómoda de editar a mano.
 /// Se traduce a [`Account`] al arrancar.
 #[derive(Debug, Deserialize)]
@@ -163,18 +165,14 @@ impl App for Paloma {
     }
 
     fn init(_handle: &Handle<Msg>) -> Model {
-        match try_net() {
+        let (mut model, account_id) = match try_net() {
             Ok(s) => {
+                let account_id = s.account_id.clone();
                 // Caché en disco si la plataforma la permite; si no, sin persistencia.
-                match cache_dir().and_then(|d| paloma_store::MailDb::open(d).ok()) {
+                let model = match cache_dir().and_then(|d| paloma_store::MailDb::open(d).ok()) {
                     Some(db) => {
-                        let mut model = Model::with_persistence(
-                            s.backend,
-                            s.me,
-                            Theme::dark(),
-                            db,
-                            s.account_id,
-                        );
+                        let mut model =
+                            Model::with_persistence(s.backend, s.me, Theme::dark(), db, s.account_id);
                         model.status = s.label;
                         model
                     }
@@ -183,16 +181,27 @@ impl App for Paloma {
                         model.status = s.label;
                         model
                     }
-                }
+                };
+                (model, account_id)
             }
             Err(why) => {
                 eprintln!("paloma · modo demo: {why}");
                 let me = Address::named("Sergio", "sergio@jlsoltech.com");
-                let mut model = Model::new(Box::new(paloma_llimphi::demo::backend()), me, Theme::dark());
+                let mut model =
+                    Model::new(Box::new(paloma_llimphi::demo::backend()), me, Theme::dark());
                 model.status = format!("modo demo (sin red) · {why}");
-                model
+                (model, "demo".to_string())
             }
+        };
+
+        // Búsqueda por significado: se engancha si hay daemon de embeddings (o
+        // PALOMA_SEMANTIC=mock para dev). Sin motor, el modo semántico de la UI
+        // cae a la búsqueda exacta — la app arranca igual.
+        if let Some(engine) = semantic::DaemonSemantic::try_build(&account_id, cache_dir()) {
+            model.attach_semantic(Box::new(engine));
         }
+
+        model
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {

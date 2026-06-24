@@ -645,7 +645,12 @@ nakui-sheet-pivot-hint = A ruwana · G huñuy · V chanin · H uma · Esc wisq'a
 
 # === paloma-llimphi ===
 paloma-status-init = paloma · mana tupachisqa
-paloma-status-search-semantic = rimay maskay: suyasqam — chiqan maskaywan
+paloma-status-search-semantic = ñiqniy maskay — qillqaspa Enter ñit'iy
+paloma-status-search-semantic-running = ñiqniy maskaspa…
+paloma-status-search-semantic-done = { $n } maskay ñiqninpi
+paloma-status-search-semantic-fallback = mana embeddings daemon: chiqan maskaywan
+paloma-search-semantic-running = ñiqniy maskaspa…
+paloma-search-semantic-hint = qillqaspa Enter ñit'iy ñiqniy maskanapaq
 paloma-status-view-rich = puriy HTML: suyasqam (kunanmanta llamp'u qillqa)
 paloma-status-no-recipient = mana kachayta atikuchu: mana allin chaskiqkuna
 paloma-status-sent = kachasqa
