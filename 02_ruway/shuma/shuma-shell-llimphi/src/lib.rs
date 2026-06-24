@@ -34,6 +34,7 @@ pub mod hosts;
 pub mod menu;
 pub mod perfiles;
 pub mod persist;
+pub(crate) mod semantic;
 pub mod types;
 pub mod update;
 pub mod view;

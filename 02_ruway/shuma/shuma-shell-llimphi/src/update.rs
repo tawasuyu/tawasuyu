@@ -563,30 +563,39 @@ fn run_semantic_blocking(
         .build()
         .map_err(|e| format!("runtime: {e}"))?;
     rt.block_on(async {
+        use crate::semantic::SemanticIndex;
         use rimay_verbo::Provider;
         let provider = if req.socket.trim().is_empty() {
             rimay_verbo::conectar_o_mock(req.dim).await
         } else {
             rimay_verbo::conectar_o_mock_en(std::path::Path::new(req.socket.trim()), req.dim).await
         };
+        // Índice persistido por scope (history/files): sólo embebe lo nuevo, poda
+        // lo caído y se reconstruye solo si cambió el modelo de embeddings.
+        let mut idx = SemanticIndex::load(SemanticIndex::path_for(&req.scope), provider.model_id().clone());
+        idx.ensure(&*provider, &req.candidates).await?;
+        let keys: Vec<String> = req.candidates.iter().map(|(k, _)| k.clone()).collect();
+        idx.retain(&keys);
+        if let Err(e) = idx.save() {
+            // No es fatal: la búsqueda igual responde, sólo no cacheó.
+            eprintln!("shuma · no pude persistir el índice semántico: {e}");
+        }
         let q = provider
             .embed(&req.query)
             .await
             .map_err(|e| format!("embeddings: {e}"))?;
-        let vecs = provider
-            .embed_batch(&req.candidates)
-            .await
-            .map_err(|e| format!("embeddings: {e}"))?;
-        let mut scored: Vec<(String, f32)> = req
-            .candidates
-            .iter()
-            .zip(vecs.iter())
-            .filter_map(|(line, v)| q.cosine(v).ok().map(|s| (line.clone(), s)))
-            .filter(|(_, s)| *s >= MIN_SCORE)
-            .collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(TOP_K);
-        Ok(scored)
+        let hits = idx.search(&q, TOP_K, MIN_SCORE);
+        // En `files` la clave es `mtime\0ruta` (para re-embeber al cambiar el
+        // archivo); mostramos sólo la ruta.
+        let hits = if req.scope == "files" {
+            hits
+                .into_iter()
+                .map(|(k, s)| (k.split_once('\0').map(|(_, p)| p.to_string()).unwrap_or(k), s))
+                .collect()
+        } else {
+            hits
+        };
+        Ok(hits)
     })
 }
 

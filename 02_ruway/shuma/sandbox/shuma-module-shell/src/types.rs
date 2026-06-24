@@ -632,15 +632,23 @@ pub struct LlmRequest {
     pub llm: shuma_config::LlmSettings,
 }
 
-/// Petición de **búsqueda semántica** (`:buscar`) que el chasis debe cumplir:
-/// embebe `query` + `candidates` con el daemon de embeddings (o mock) y devuelve
-/// los más parecidos. Campos públicos para que el host arme la búsqueda.
+/// Petición de **búsqueda semántica** que el chasis debe cumplir: embebe `query`
+/// + `candidates` con el daemon de embeddings (o mock), contra un índice
+/// persistido por `scope`, y devuelve los más parecidos. Campos públicos para
+/// que el host arme la búsqueda.
 #[derive(Debug, Clone)]
 pub struct SemanticRequest {
+    /// Espacio del índice persistido: `"history"` (comandos) · `"files"`
+    /// (archivos). Cada scope tiene su archivo de índice en disco.
+    pub scope: String,
     /// Lo que el usuario busca por significado.
     pub query: String,
-    /// Corpus a rankear (líneas de comando del historial, deduplicadas).
-    pub candidates: Vec<String>,
+    /// Corpus a rankear como pares `(clave, texto_a_embeber)`. La **clave** es
+    /// estable e identifica la entrada en el índice (y es lo que se muestra); el
+    /// **texto** es lo que se embebe (puede traer más contexto que la clave).
+    /// Para comandos clave==texto; para archivos clave incluye el mtime (para
+    /// re-embeber al cambiar) y el texto es ruta + fragmento del contenido.
+    pub candidates: Vec<(String, String)>,
     /// Socket del daemon de embeddings (`""` = por defecto).
     pub socket: String,
     /// Dimensión del fallback mock si no hay daemon.

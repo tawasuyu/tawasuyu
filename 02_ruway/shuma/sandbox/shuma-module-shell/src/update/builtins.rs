@@ -977,10 +977,10 @@ pub(crate) fn apply_search(mut s: State, rest: &str) -> State {
         return s;
     }
     // Corpus: líneas de comando del historial, deduplicadas (las más recientes
-    // primero), capadas para no embeber miles por consulta.
+    // primero), capadas para no embeber miles por consulta. Clave==texto.
     const MAX_CANDIDATES: usize = 500;
     let mut seen = std::collections::HashSet::new();
-    let mut candidates: Vec<String> = Vec::new();
+    let mut candidates: Vec<(String, String)> = Vec::new();
     {
         let guard = match s.history.lock() {
             Ok(g) => g,
@@ -992,7 +992,7 @@ pub(crate) fn apply_search(mut s: State, rest: &str) -> State {
                 continue;
             }
             if seen.insert(line.to_string()) {
-                candidates.push(line.to_string());
+                candidates.push((line.to_string(), line.to_string()));
                 if candidates.len() >= MAX_CANDIDATES {
                     break;
                 }
@@ -1005,6 +1005,7 @@ pub(crate) fn apply_search(mut s: State, rest: &str) -> State {
     }
     let n = candidates.len();
     s.semantic_request = Some(SemanticRequest {
+        scope: "history".to_string(),
         query: q.to_string(),
         candidates,
         socket: s.config.ai.semantic.socket.clone(),
@@ -1014,6 +1015,111 @@ pub(crate) fn apply_search(mut s: State, rest: &str) -> State {
         "🔎 buscando «{q}» por significado en {n} comandos…"
     )));
     s
+}
+
+/// `:buscar-archivos <consulta>` (`:fbuscar`/`:fsearch`) — búsqueda **semántica
+/// de archivos** bajo el cwd: rankea por significado el nombre + un fragmento
+/// del contenido de cada archivo (espeja el `run_find_semantic` de nahual, pero
+/// sobre el índice persistido de shuma). Opt-in por `[ai.semantic] enabled`.
+pub(crate) fn apply_search_files(mut s: State, rest: &str) -> State {
+    let q = rest.trim();
+    if q.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :buscar-archivos <qué buscás> — encuentra archivos del cwd por significado",
+        ));
+        return s;
+    }
+    if !s.config.ai.semantic.enabled {
+        s.push_output(OutputLine::notice(
+            "búsqueda semántica apagada — activala en wawa-panel (IA · semántica) o en \
+             [ai.semantic] enabled = true del shumarc",
+        ));
+        return s;
+    }
+    let root = s.cwd.clone();
+    let cwd_label = s.cwd.display().to_string();
+    let candidates = collect_file_candidates(&root);
+    if candidates.is_empty() {
+        s.push_output(OutputLine::notice(format!(
+            "no encontré archivos para indexar bajo {cwd_label}"
+        )));
+        return s;
+    }
+    let n = candidates.len();
+    s.semantic_request = Some(SemanticRequest {
+        scope: "files".to_string(),
+        query: q.to_string(),
+        candidates,
+        socket: s.config.ai.semantic.socket.clone(),
+        dim: s.config.ai.semantic.effective_dim(),
+    });
+    s.push_output(OutputLine::notice(format!(
+        "🔎 buscando archivos «{q}» por significado en {n} bajo {cwd_label}…"
+    )));
+    s
+}
+
+/// Recolecta archivos bajo `root` para la búsqueda semántica: recorre acotado
+/// (sin entrar en dirs pesados/ocultos), y por cada archivo arma un par
+/// `(clave, texto)`. La **clave** es `mtime\0ruta` (cambia al editar el archivo,
+/// forzando re-embeber); el **texto** es la ruta relativa + un fragmento del
+/// contenido si es texto. Acotado en cantidad y bytes para no embeber un árbol.
+fn collect_file_candidates(root: &std::path::Path) -> Vec<(String, String)> {
+    const MAX_FILES: usize = 800;
+    const SNIPPET_BYTES: usize = 1500;
+    const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".cache", "dist", ".venv"];
+
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if out.len() >= MAX_FILES {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for ent in rd.flatten() {
+            let path = ent.path();
+            let name = ent.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue; // ocultos fuera
+            }
+            let Ok(ft) = ent.file_type() else { continue };
+            if ft.is_dir() {
+                if !SKIP_DIRS.contains(&name.as_str()) {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string();
+            // mtime como token de versión (segundos unix); 0 si no se puede leer.
+            let mtime = ent
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            // Texto a embeber: ruta relativa + fragmento del contenido si parece
+            // texto (leemos pocos bytes y descartamos binarios con bytes nulos).
+            let mut text = rel.clone();
+            if let Ok(bytes) = std::fs::read(&path) {
+                let head = &bytes[..bytes.len().min(SNIPPET_BYTES)];
+                if !head.contains(&0) {
+                    if let Ok(snippet) = std::str::from_utf8(head) {
+                        text.push('\n');
+                        text.push_str(snippet);
+                    }
+                }
+            }
+            out.push((format!("{mtime}\0{rel}"), text));
+            if out.len() >= MAX_FILES {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Resuelve el bloque objetivo de `:explica`/`:resume`: un `%cN`/`%pN`, un
