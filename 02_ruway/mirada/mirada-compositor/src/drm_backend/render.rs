@@ -1,5 +1,11 @@
 use super::*;
 
+/// One-shot: marca el instante (epoch ms) en que mirada presenta su PRIMER
+/// frame sobre el DRM. Sirve para medir el gap del handoff contra el `RELEASED`
+/// del splash (ver `SDD-ARRANQUE-SIN-PARPADEO.md` §Verificación). Es un `Once`
+/// de proceso para no engordar `DrmState` ni su constructor.
+static PRIMER_FRAME: std::sync::Once = std::sync::Once::new();
+
 impl DrmState {
     /// Compone un cuadro por cada salida y avisa a los clientes una sola vez.
     /// Si una salida tiene su `pending_flip` puesto, se saltea hasta el
@@ -1432,7 +1438,19 @@ impl DrmState {
             Ok(result) => {
                 if !result.is_empty {
                     match ctx.compositor.queue_frame(()) {
-                        Ok(()) => ctx.pending_flip = true,
+                        Ok(()) => {
+                            ctx.pending_flip = true;
+                            let name = ctx.name.clone();
+                            PRIMER_FRAME.call_once(|| {
+                                let ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis())
+                                    .unwrap_or(0);
+                                eprintln!(
+                                    "[handoff] primer queue_frame presentado · epoch_ms={ms} salida={name}"
+                                );
+                            });
+                        }
                         Err(e) => eprintln!(
                             "mirada-compositor · queue_frame[{}]: {e}",
                             ctx.name

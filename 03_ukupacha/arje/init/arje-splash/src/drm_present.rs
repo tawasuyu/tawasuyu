@@ -384,7 +384,11 @@ fn try_run(opts: &Opts) -> Result<(), String> {
     // Recién con el master ya soltado le avisamos a mirada que puede tomarlo.
     if do_handoff {
         handoff.send_released();
-        log!("RELEASED enviado — mirada toma la pantalla");
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        log!("RELEASED enviado · epoch_ms={ms} — mirada toma la pantalla");
     }
     Ok(())
 }

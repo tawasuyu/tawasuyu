@@ -138,8 +138,12 @@ render_elements! {
     ScaledText = RescaleRenderElement<MemoryRenderBufferRenderElement<R>>,
 }
 
-/// Color de fondo del escritorio cuando no hay nada que lo tape.
-const CLEAR_COLOR: [f32; 4] = [0.05, 0.05, 0.08, 1.0];
+/// Color de fondo del escritorio cuando no hay nada que lo tape. **Debe ser
+/// idéntico al `BG` de `arje-splash` (18,18,24)** para que el handoff de Fase 2
+/// no muestre un escalón de color: el splash funde a ese fondo común y mirada
+/// limpia al mismo, así el gap (mientras el greeter aún no pintó) se ve como el
+/// fondo común y no como un pseudonegro. Ver `SDD-ARRANQUE-SIN-PARPADEO.md`.
+const CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0];
 
 /// Lado del cursor de software, en píxeles.
 const CURSOR_SIZE: i32 = 12;
@@ -661,28 +665,45 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         .ok_or("no encontré ninguna GPU — ¿existe algún /dev/dri/card*?")?;
     println!("      GPU primaria: {}", gpu.display());
 
-    // 3 · Dispositivo DRM.
+    // Handoff sin parpadeo (Fase 2 del SDD-ARRANQUE-SIN-PARPADEO): si arje-splash
+    // está mostrando el splash del arranque y tiene el DRM master, le pedimos la
+    // pantalla y esperamos su fade-out + `RELEASED` ANTES de abrir el device.
+    // El orden es crítico: el seat manager (seatd/logind) hace `SET_MASTER` al
+    // `session.open()` de un nodo DRM si la sesión está activa. Si abrimos
+    // mientras el splash todavía tiene el master (lo tomó directo, fuera del
+    // seat manager), ese `SET_MASTER` choca y el fd queda **sin master para
+    // siempre** → el modeset de `DrmDevice::new` cae con `EACCES`. Abriendo
+    // después del `RELEASED`, el master ya está libre y seatd lo concede limpio.
+    // Best-effort: sin splash, `esperar_release` vuelve enseguida y seguimos.
+    crate::handoff::esperar_release_del_splash();
+
+    // 3 · Dispositivo DRM (con el master ya libre tras el handoff).
     println!("[3/8] abriendo el dispositivo DRM …");
     let fd = session
         .open(&gpu, OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK)
         .map_err(|e| format!("no pude abrir {}: {e}", gpu.display()))?;
 
-    // Handoff sin parpadeo (Fase 2 del SDD-ARRANQUE-SIN-PARPADEO): si arje-splash
-    // está mostrando el splash del arranque y tiene el DRM master, le pedimos la
-    // pantalla y esperamos su fade-out + `RELEASED` antes de agarrar master.
-    // Se hace acá —y no antes de libseat/udev/open— a propósito: el master se
-    // toma en el `DrmDeviceFd::new` de abajo (smithay → `acquire_master_lock`,
-    // DRM_IOCTL_SET_MASTER), que es la operación irreversible y la única que
-    // pelea con el splash. Hasta este punto todo (sesión, GPU primaria, abrir el
-    // device) no toca el master, así que el splash sigue vivo y animando —con su
-    // panel de logs— por si algo de eso falla. Best-effort: sin splash, seguimos
-    // de largo. (El diseño completo del SDD —componer el primer frame antes del
-    // handoff— pide separar render-node/card-node; esto es el paso seguro previo.)
-    crate::handoff::esperar_release_del_splash();
-
     let drm_fd = DrmDeviceFd::new(DeviceFd::from(fd));
-    let (mut drm, drm_notifier) =
-        DrmDevice::new(drm_fd.clone(), true).map_err(|e| format!("DrmDevice::new falló: {e}"))?;
+    // Red de seguridad ante una carrera residual: si tras el `RELEASED` el
+    // kernel todavía está finalizando la liberación del master del splash, el
+    // primer `DrmDevice::new` puede ver `EACCES`. Reintentamos con backoff
+    // corto; sin splash (arranque a mano) entra al primer intento.
+    let (mut drm, drm_notifier) = {
+        let mut intento = 0u32;
+        loop {
+            match DrmDevice::new(drm_fd.clone(), true) {
+                Ok(par) => break par,
+                Err(_) if intento < 20 => {
+                    if intento == 0 {
+                        println!("      esperando el master del splash …");
+                    }
+                    intento += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(e) => return Err(format!("DrmDevice::new falló: {e}").into()),
+            }
+        }
+    };
     println!("      dispositivo DRM listo.");
 
     // 4 · Enumerar TODAS las salidas conectadas: conector + CRTC + modo.
