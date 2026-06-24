@@ -1,0 +1,20 @@
+[package]
+name = "hapiy-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "hapiy — la GUI de captura (el 'Spectacle'): captura, preview, guardar y 'Editar en tullpu', sobre hapiy-core/hapiy-capture y Llimphi."
+
+[[bin]]
+name = "hapiy-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+hapiy-core = { path = "../hapiy-core" }
+hapiy-capture = { path = "../hapiy-capture" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-image = { workspace = true }

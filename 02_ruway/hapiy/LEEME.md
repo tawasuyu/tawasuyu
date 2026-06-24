@@ -19,12 +19,15 @@ depender de grim) y con un handoff limpio al editor de imágenes propio.
   GPU, sin UI): `Shot` (buffer RGBA) + `Region`/recorte, codificación PNG, el
   trait `Capturer` (+ `MockCapturer`), y el **handoff a tullpu** (`tullpu_launch`
   — tullpu ya abre un PNG pasado como primer argumento).
-- **`hapiy`** — el binario `hapiy`. CLI + dos backends de captura tras el trait
-  `Capturer`:
+- **`hapiy-capture`** — los backends de captura tras el trait `Capturer`,
+  compartidos por el CLI y la GUI:
   - **nativo** (default, feature `wayland`) — cliente `zwlr_screencopy` propio
     sobre `wayland-client`, buffer por `wl_shm` (tempfile + mmap). Sin grim.
   - **grim** — delega en el binario `grim` (que mirada ya permite). Fallback.
-  - `--backend auto` (default) prueba el nativo y cae a grim.
+  - `capturer(Backend::Auto)` prueba el nativo y cae a grim.
+- **`hapiy`** — el binario CLI (`hapiy`): captura scripteable para terminal/CI.
+- **`hapiy-llimphi`** — la GUI (`hapiy-llimphi`, la "ventana Spectacle"):
+  captura, preview en vivo, **Guardar** y **Editar en tullpu**, sobre Llimphi.
 
 ## Uso
 
@@ -41,10 +44,11 @@ hapiy --backend grim|native|auto
 ## Estado
 
 `hapiy-core` está cubierto por tests (recorte, roundtrip PNG, handoff a tullpu,
-captura mock). El backend grim funciona hoy. El cliente `zwlr_screencopy` nativo
-compila y sigue el flujo estándar (capture_output → buffer → copy → ready → leer
-mmap); falta **verificarlo en vivo contra mirada** en una máquina con compositor
-— por eso `--backend auto` cae a grim ante cualquier fallo.
+captura mock). El cliente `zwlr_screencopy` nativo está **verificado funcionando
+contra mirada**; `--backend auto` igual cae a grim ante cualquier fallo. Corren
+tanto el CLI como la GUI.
 
-Siguiente: una GUI Llimphi (`hapiy-llimphi`) — selección de región con preview en
-vivo, retardo, copiar al portapapeles y botón "Editar en tullpu" sobre `hapiy-core`.
+Siguiente: selección de región en la GUI (arrastrar un rectángulo sobre el
+preview), retardo de captura (para que la ventana de hapiy se esconda primero) y
+copiar al portapapeles. El recorte/anotado fino ya funciona hoy con **Editar en
+tullpu**.

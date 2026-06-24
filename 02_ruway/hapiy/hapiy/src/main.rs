@@ -16,20 +16,11 @@
 //! Backends: `native` = cliente `zwlr_screencopy` propio (feature `wayland`),
 //! `grim` = el binario grim. `auto` (default) prueba el nativo y cae a grim.
 
-mod grim;
-#[cfg(feature = "wayland")]
-mod wayland;
-
-use hapiy_core::{default_dir, default_filename, tullpu_launch, Capturer, Region};
+use hapiy_capture::{capturer, Backend};
+use hapiy_core::{default_dir, default_filename, tullpu_launch, Region};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-enum Backend {
-    Auto,
-    Native,
-    Grim,
-}
 
 struct Args {
     display: Option<String>,
@@ -59,7 +50,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<(), String> {
-    let cap = make_capturer(&args.backend)?;
+    let cap = capturer(args.backend)?;
 
     if args.list {
         for o in cap.outputs()? {
@@ -89,30 +80,6 @@ fn run(args: Args) -> Result<(), String> {
         println!("abriendo en tullpu para anotar…");
     }
     Ok(())
-}
-
-fn make_capturer(backend: &Backend) -> Result<Box<dyn Capturer>, String> {
-    match backend {
-        Backend::Grim => Ok(Box::new(grim::GrimCapturer)),
-        Backend::Native => native_capturer(),
-        Backend::Auto => match native_capturer() {
-            Ok(c) => Ok(c),
-            Err(e) => {
-                eprintln!("hapiy: backend nativo no disponible ({e}); uso grim.");
-                Ok(Box::new(grim::GrimCapturer))
-            }
-        },
-    }
-}
-
-#[cfg(feature = "wayland")]
-fn native_capturer() -> Result<Box<dyn Capturer>, String> {
-    Ok(Box::new(wayland::WaylandCapturer::connect()?))
-}
-
-#[cfg(not(feature = "wayland"))]
-fn native_capturer() -> Result<Box<dyn Capturer>, String> {
-    Err("compilado sin el backend nativo (feature `wayland`)".into())
 }
 
 /// Sello para el nombre de archivo: segundos desde epoch (suficiente para no

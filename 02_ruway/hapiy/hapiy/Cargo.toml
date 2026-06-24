@@ -6,24 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "hapiy — la captura de pantalla de la suite (el 'Spectacle'): captura pantalla/monitor/región, guarda PNG y la abre en tullpu para anotar. Cliente zwlr_screencopy nativo (feature `wayland`) con fallback a grim."
+description = "hapiy — CLI de captura de pantalla de la suite: captura pantalla/monitor/región, guarda PNG y la abre en tullpu para anotar (--edit). Backends en hapiy-capture (nativo zwlr_screencopy + grim)."
 
 [[bin]]
 name = "hapiy"
 path = "src/main.rs"
 
-[features]
-# El backend nativo (cliente zwlr_screencopy sobre sctk) es opt-in mientras se
-# verifica contra mirada en una máquina con compositor; el default usa grim, que
-# mirada ya soporta. `--backend auto` (default en runtime) prueba el nativo y cae
-# a grim.
-default = ["wayland"]
-wayland = ["dep:wayland-client", "dep:wayland-protocols-wlr", "dep:memmap2", "dep:tempfile"]
-
 [dependencies]
 hapiy-core = { path = "../hapiy-core" }
-image = { workspace = true }
-wayland-client = { workspace = true, optional = true }
-wayland-protocols-wlr = { workspace = true, optional = true }
-memmap2 = { workspace = true, optional = true }
-tempfile = { version = "3", optional = true }
+hapiy-capture = { path = "../hapiy-capture" }

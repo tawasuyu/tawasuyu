@@ -19,12 +19,15 @@ external grim required) with a clean handoff to the suite's own image editor.
   GPU, no UI): `Shot` (RGBA buffer) + `Region`/crop, PNG encoding, the `Capturer`
   trait (+ `MockCapturer`), and the **tullpu handoff** (`tullpu_launch` — tullpu
   already opens a PNG passed as its first arg).
-- **`hapiy`** — the `hapiy` binary. CLI + two capture backends behind the
-  `Capturer` trait:
+- **`hapiy-capture`** — the capture backends behind the `Capturer` trait, shared
+  by the CLI and the GUI:
   - **native** (default, feature `wayland`) — our own `zwlr_screencopy` client
     over `wayland-client`, buffer via `wl_shm` (tempfile + mmap). No grim.
   - **grim** — shells out to `grim` (which mirada already allows). Fallback.
-  - `--backend auto` (default) tries native and falls back to grim.
+  - `capturer(Backend::Auto)` tries native and falls back to grim.
+- **`hapiy`** — the CLI binary (`hapiy`): scriptable capture for terminal/CI.
+- **`hapiy-llimphi`** — the GUI (`hapiy-llimphi`, the "Spectacle window"):
+  capture, live preview, **Save**, and **Edit in tullpu**, on Llimphi.
 
 ## Usage
 
@@ -41,10 +44,10 @@ hapiy --backend grim|native|auto
 ## Status
 
 `hapiy-core` is covered by tests (crop, PNG roundtrip, tullpu handoff, mock
-capture). The grim backend works today. The native `zwlr_screencopy` client
-compiles and follows the standard flow (capture_output → buffer → copy → ready →
-read mmap); it still needs **live verification against mirada** on a machine with
-a running compositor — hence `--backend auto` degrades to grim on any failure.
+capture). The native `zwlr_screencopy` client is **verified working against
+mirada**; `--backend auto` still degrades to grim on any failure. Both the CLI
+and the GUI run.
 
-Next: a Llimphi GUI (`hapiy-llimphi`) — region select with live preview, delay,
-copy-to-clipboard, and an "Edit in tullpu" button over `hapiy-core`.
+Next: region select in the GUI (drag a rectangle on the preview), a capture
+delay (so the hapiy window can hide first), and copy-to-clipboard. Fine cropping
+and annotation already work today via **Edit in tullpu**.
