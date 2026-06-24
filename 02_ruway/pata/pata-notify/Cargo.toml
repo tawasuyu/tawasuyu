@@ -1,0 +1,28 @@
+[package]
+name = "pata-notify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Daemon de notificaciones de escritorio de tawasuyu: implementa org.freedesktop.Notifications (D-Bus) y se pinta a sí mismo como una caja wlr-layer-shell en la esquina (toasts), reusando llimphi-widget-toast. Agnóstico del compositor (mirada/Sway/Hyprland). Persiste cada notificación en un store sled — sustrato para el panel de historial y la capa de triage semántico/IA."
+
+[[bin]]
+name = "pata-notify"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-layer = { workspace = true }
+llimphi-widget-toast = { workspace = true }
+zbus = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sled = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
