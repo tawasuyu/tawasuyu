@@ -55,18 +55,25 @@ use sampler::Sampler;
 use shuma::ShumaState;
 use tray::TrayHandle;
 
-/// `true` si el live-wire de la **shuma COMPLETA** está activo: la variable de
-/// entorno `PATA_SHUMA_FULL` está puesta. Cuando lo está, el drawer Quake monta
-/// la shuma entera (`shuma-shell-llimphi`: dientes/sesiones/menubar/canvas) en
-/// vez del módulo bare de una sola sesión, y el cabezal de la barra se reduce a
-/// un chip que despliega el drawer (la shuma trae su propio input adentro).
+/// `true` si el live-wire de la **shuma COMPLETA** está activo. Cuando lo está,
+/// el drawer Quake monta la shuma entera (`shuma-shell-llimphi`:
+/// dientes/sesiones/menubar/canvas + tabs/tiling/atajos/semántico) en vez del
+/// módulo bare de una sola sesión, y el cabezal de la barra se reduce a un chip
+/// que despliega el drawer (la shuma trae su propio input adentro).
 ///
-/// Es opt-in para preservar cero-regresión del path bare por defecto mientras se
-/// valida a ojo el diseño del drawer completo (ver `project_pata_shuma_paridad`).
+/// **Default ON** (2026-06-24): es el modo querido — todas las features de
+/// shuma-en-pata (tabs, atajos tipo Ctrl+Shift+T, colores de actividad,
+/// `:buscar`, Explorer) sólo viven acá. El path bare quedó atrás. Opt-OUT con
+/// `PATA_SHUMA_FULL=0` (o `false`/`no`) para volver al módulo de una sesión.
 pub fn shuma_full_enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PATA_SHUMA_FULL").is_some())
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PATA_SHUMA_FULL").as_deref(),
+            Ok("0") | Ok("false") | Ok("no")
+        )
+    })
 }
 
 /// Eleva un `Msg` de la shuma completa al `Msg` de pata (con el `Debug` opaco).
