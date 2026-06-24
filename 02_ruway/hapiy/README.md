@@ -32,14 +32,24 @@ external grim required) with a clean handoff to the suite's own image editor.
 ## Usage
 
 ```bash
-hapiy                       # capture → ~/Pictures/hapiy-<ts>.png
+hapiy                       # whole desktop (all monitors) → ~/Pictures/hapiy-<ts>.png
 hapiy -o /tmp/foo.png       # explicit destination
 hapiy --region 100,80,640,480
-hapiy --display eDP-1       # one monitor (see --list-displays)
+hapiy --display eDP-1       # one monitor only (see --list-displays)
 hapiy --edit                # capture and open it in tullpu to annotate
 hapiy --list-displays
 hapiy --backend grim|native|auto
 ```
+
+## Monitors
+
+Without `--display`, hapiy captures the **whole desktop**: the native backend
+captures each output and **composites them by their global position**
+(`wl_output` geometry) into one image. For a single monitor, pass
+`--display <name>` (CLI) or pick it in the GUI (**🖥 Todas** + one button per
+monitor; default is all). This avoids depending on the arbitrary order the
+compositor advertises outputs in — which is why running on one monitor could grab
+another.
 
 ## Status
 

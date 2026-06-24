@@ -31,6 +31,10 @@ struct OutputAcc {
     name: Option<String>,
     width: i32,
     height: i32,
+    /// Posición de la salida en el espacio global del compositor (px lógicos),
+    /// del evento `geometry`. Sirve para componer todos los monitores.
+    x: i32,
+    y: i32,
 }
 
 /// Parámetros del buffer shm que anuncia el compositor.
@@ -107,41 +111,108 @@ impl Capturer for WaylandCapturer {
 
     fn capture(&self, output: Option<&str>) -> Result<Shot, String> {
         let (mut queue, mut app) = self.bootstrap()?;
-        let qh = queue.handle();
-
-        // Elegir la salida: por nombre, o la primera.
-        let idx = match output {
-            Some(want) => app
-                .outputs
-                .iter()
-                .position(|(_, a)| a.name.as_deref() == Some(want))
-                .ok_or_else(|| format!("no hay una salida llamada «{want}»"))?,
-            None => {
-                if app.outputs.is_empty() {
-                    return Err("el compositor no anunció ninguna salida".into());
-                }
-                0
-            }
-        };
-        let wl_out = app.outputs[idx].0.clone();
-        let manager = app.manager.clone().unwrap();
-
-        // Pedir la captura; los eventos del frame conducen el resto.
-        manager.capture_output(0, &wl_out, &qh, ());
-
-        // Bombear hasta que el frame termine (ready/failed).
-        while app.done.is_none() {
-            queue
-                .blocking_dispatch(&mut app)
-                .map_err(|e| format!("dispatch durante la captura falló: {e}"))?;
+        if app.outputs.is_empty() {
+            return Err("el compositor no anunció ninguna salida".into());
         }
-        app.done.take().unwrap()?;
 
-        let fmt = app.buf_fmt.ok_or("el compositor no anunció el formato del buffer")?;
-        let (mmap, _buffer) = app.mapping.as_ref().ok_or("no se mapeó el buffer de captura")?;
-        let rgba = to_rgba(&mmap[..], fmt, app.y_invert)?;
-        Shot::new(fmt.width, fmt.height, rgba)
+        match output {
+            // Una salida puntual, por nombre.
+            Some(want) => {
+                let idx = app
+                    .outputs
+                    .iter()
+                    .position(|(_, a)| a.name.as_deref() == Some(want))
+                    .ok_or_else(|| format!("no hay una salida llamada «{want}»"))?;
+                let wl_out = app.outputs[idx].0.clone();
+                capture_one(&mut queue, &mut app, &wl_out)
+            }
+            // Sin salida pedida: TODO el escritorio — capturar cada monitor y
+            // componerlos por su posición global. Es el comportamiento esperado
+            // de un "screenshot" multi-monitor (no un monitor arbitrario).
+            None => {
+                let outs: Vec<(WlOutput, i32, i32)> = app
+                    .outputs
+                    .iter()
+                    .map(|(o, a)| (o.clone(), a.x, a.y))
+                    .collect();
+                if outs.len() == 1 {
+                    return capture_one(&mut queue, &mut app, &outs[0].0);
+                }
+                let mut tiles: Vec<(i32, i32, Shot)> = Vec::with_capacity(outs.len());
+                for (wl_out, x, y) in &outs {
+                    let shot = capture_one(&mut queue, &mut app, wl_out)?;
+                    tiles.push((*x, *y, shot));
+                }
+                Ok(compose(tiles))
+            }
+        }
     }
+}
+
+/// Captura **una** salida: resetea el estado del frame, pide `capture_output`,
+/// bombea hasta `ready`/`failed`, y arma el [`Shot`] desde el buffer mapeado.
+fn capture_one(
+    queue: &mut wayland_client::EventQueue<App>,
+    app: &mut App,
+    wl_out: &WlOutput,
+) -> Result<Shot, String> {
+    let qh = queue.handle();
+    app.buf_fmt = None;
+    app.mapping = None;
+    app.y_invert = false;
+    app.done = None;
+
+    let manager = app.manager.clone().ok_or("sin zwlr_screencopy_manager")?;
+    manager.capture_output(0, wl_out, &qh, ());
+
+    while app.done.is_none() {
+        queue
+            .blocking_dispatch(app)
+            .map_err(|e| format!("dispatch durante la captura falló: {e}"))?;
+    }
+    app.done.take().unwrap()?;
+
+    let fmt = app.buf_fmt.ok_or("el compositor no anunció el formato del buffer")?;
+    let (mmap, _buffer) = app.mapping.as_ref().ok_or("no se mapeó el buffer de captura")?;
+    let rgba = to_rgba(&mmap[..], fmt, app.y_invert)?;
+    Shot::new(fmt.width, fmt.height, rgba)
+}
+
+/// Compone varios monitores en un solo [`Shot`] ubicándolos por su posición
+/// global `(x, y)`. Asume escala 1 (px lógicos ≈ px físicos); con escalado
+/// fraccionario por monitor puede quedar desalineado — caso raro y mejorable.
+fn compose(tiles: Vec<(i32, i32, Shot)>) -> Shot {
+    let min_x = tiles.iter().map(|(x, _, _)| *x).min().unwrap_or(0);
+    let min_y = tiles.iter().map(|(_, y, _)| *y).min().unwrap_or(0);
+    let max_x = tiles.iter().map(|(x, _, s)| x + s.width as i32).max().unwrap_or(0);
+    let max_y = tiles.iter().map(|(_, y, s)| y + s.height as i32).max().unwrap_or(0);
+    let w = (max_x - min_x).max(1) as usize;
+    let h = (max_y - min_y).max(1) as usize;
+
+    let mut canvas = vec![0u8; w * h * 4];
+    for px in canvas.chunks_exact_mut(4) {
+        px[3] = 255; // opaco; los huecos entre monitores quedan negros
+    }
+    for (x, y, s) in &tiles {
+        let ox = (x - min_x).max(0) as usize;
+        let oy = (y - min_y).max(0) as usize;
+        let sw = s.width as usize;
+        for row in 0..s.height as usize {
+            let dy = oy + row;
+            if dy >= h {
+                break;
+            }
+            let copy_w = sw.min(w.saturating_sub(ox));
+            let so = row * sw * 4;
+            let do_ = (dy * w + ox) * 4;
+            canvas[do_..do_ + copy_w * 4].copy_from_slice(&s.rgba[so..so + copy_w * 4]);
+        }
+    }
+    Shot::new(w as u32, h as u32, canvas).unwrap_or(Shot {
+        width: w as u32,
+        height: h as u32,
+        rgba: vec![0; w * h * 4],
+    })
 }
 
 /// Convierte el buffer shm crudo (según su formato) a RGBA8 contiguo.
@@ -225,6 +296,10 @@ impl Dispatch<WlOutput, ()> for App {
             return;
         };
         match event {
+            wl_output::Event::Geometry { x, y, .. } => {
+                acc.x = x;
+                acc.y = y;
+            }
             wl_output::Event::Mode { flags, width, height, .. } => {
                 if let WEnum::Value(f) = flags {
                     if f.contains(wl_output::Mode::Current) {

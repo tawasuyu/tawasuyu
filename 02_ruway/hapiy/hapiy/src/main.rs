@@ -155,9 +155,10 @@ fn print_help() {
     println!(
         "hapiy — captura de pantalla de la suite\n\n\
          USO:\n  hapiy [opciones]\n\n\
+         Sin --display captura TODO el escritorio (todos los monitores compuestos).\n\n\
          OPCIONES:\n\
          \x20 -o, --output <ruta>     destino del PNG (default ~/Pictures/hapiy-<ts>.png)\n\
-         \x20     --display <nombre>  capturar sólo esa salida (ver --list-displays)\n\
+         \x20     --display <nombre>  capturar sólo ese monitor (ver --list-displays)\n\
          \x20 -g, --region x,y,w,h    recortar a esa región\n\
          \x20 -e, --edit             abrir la captura en tullpu para anotar\n\
          \x20     --list-displays    listar las salidas (monitores)\n\

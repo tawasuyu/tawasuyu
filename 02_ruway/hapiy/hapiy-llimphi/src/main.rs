@@ -45,14 +45,16 @@ enum Msg {
     PreviewClick(f32, f32, f32, f32),
     /// Cursor moviéndose sobre el preview: `(local_x, local_y)` (px del nodo).
     PointerAt(f32, f32),
-    SelectOutput(usize),
+    /// Qué capturar: `None` = todo el escritorio, `Some(i)` = ese monitor.
+    SelectOutput(Option<usize>),
 }
 
 struct Model {
     cap: Box<dyn Capturer>,
     clip: Option<arboard::Clipboard>,
     outputs: Vec<OutputInfo>,
-    sel: usize,
+    /// Qué capturar: `None` = todo el escritorio (default), `Some(i)` = un monitor.
+    sel: Option<usize>,
     shot: Option<Shot>,
     preview: Option<Image>,
     /// Modo de selección de región activo.
@@ -87,7 +89,7 @@ impl App for Hapiy {
             cap,
             clip: arboard::Clipboard::new().ok(),
             outputs,
-            sel: 0,
+            sel: None,
             shot: None,
             preview: None,
             select_mode: false,
@@ -230,13 +232,20 @@ impl App for Hapiy {
             boton("🗑 Limpiar", MUTED, BTN, Msg::Clear),
         ];
         if model.outputs.len() > 1 {
+            let todas = model.sel.is_none();
+            toolbar.push(boton(
+                "🖥 Todas",
+                if todas { BG } else { MUTED },
+                if todas { ACCENT } else { PANEL },
+                Msg::SelectOutput(None),
+            ));
             for (i, o) in model.outputs.iter().enumerate() {
-                let activo = i == model.sel;
+                let activo = model.sel == Some(i);
                 toolbar.push(boton(
                     &o.name,
                     if activo { BG } else { MUTED },
                     if activo { ACCENT } else { PANEL },
-                    Msg::SelectOutput(i),
+                    Msg::SelectOutput(Some(i)),
                 ));
             }
         }
@@ -313,7 +322,7 @@ impl App for Hapiy {
 /// Cuerpo de la captura: usa la salida seleccionada (o la primera) y refresca el
 /// preview. Resetea la selección.
 fn capture(model: &mut Model) {
-    let out = model.outputs.get(model.sel).map(|o| o.name.clone());
+    let out = model.sel.and_then(|i| model.outputs.get(i)).map(|o| o.name.clone());
     match model.cap.capture(out.as_deref()) {
         Ok(s) => {
             model.preview = Some(from_rgba8(s.rgba.clone(), s.width, s.height));

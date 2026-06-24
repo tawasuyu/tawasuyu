@@ -32,14 +32,22 @@ depender de grim) y con un handoff limpio al editor de imágenes propio.
 ## Uso
 
 ```bash
-hapiy                       # captura → ~/Pictures/hapiy-<ts>.png
+hapiy                       # todo el escritorio (todos los monitores) → ~/Pictures/hapiy-<ts>.png
 hapiy -o /tmp/foo.png       # destino explícito
 hapiy --region 100,80,640,480
-hapiy --display eDP-1       # un monitor (ver --list-displays)
+hapiy --display eDP-1       # un solo monitor (ver --list-displays)
 hapiy --edit                # captura y la abre en tullpu para anotar
 hapiy --list-displays
 hapiy --backend grim|native|auto
 ```
+
+## Monitores
+
+Sin `--display`, hapiy captura **todo el escritorio**: el backend nativo captura
+cada salida y las **compone por su posición global** (`wl_output` geometry) en una
+sola imagen. Para un monitor puntual, pasá `--display <nombre>` (CLI) o elegilo en
+la GUI (botón **🖥 Todas** + uno por monitor; por defecto, Todas). Así no depende
+del orden arbitrario en que el compositor publica las salidas.
 
 ## Estado
 
