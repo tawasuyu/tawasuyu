@@ -55,6 +55,7 @@ fn main() {
         "install" => cmd_install(&cfg, &units, &ids),
         "update" => cmd_update(&cfg, &units, remote_manifest.as_ref(), &ids),
         "uninstall" => cmd_uninstall(&cfg, &units, &ids),
+        "base" => cmd_base(&cfg, &ids),
         other => {
             eprintln!("comando desconocido: {other}");
             2
@@ -191,6 +192,43 @@ fn cmd_uninstall(cfg: &InstallConfig, units: &[Unit], ids: &[String]) -> i32 {
         }
     }
     0
+}
+
+/// Instala el sistema base (escritorio mirada) en el sistema (root). Acepta
+/// ids de componentes; sin ids, instala todos. Honra `$CHURAY_SYSROOT` (para
+/// pruebas) — por defecto `/`.
+fn cmd_base(cfg: &InstallConfig, ids: &[String]) -> i32 {
+    let sysroot = std::env::var_os("CHURAY_SYSROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let comps = churay_core::base_system();
+    let refs: Vec<&churay_core::Component> = comps
+        .iter()
+        .filter(|c| ids.is_empty() || ids.iter().any(|id| id == c.id))
+        .collect();
+    if refs.is_empty() {
+        eprintln!("ningún componente coincide; disponibles:");
+        for c in &comps {
+            eprintln!("  {} — {}", c.id, c.label);
+        }
+        return 2;
+    }
+    println!("instalando sistema base en {} ({} componentes)…", sysroot.display(), refs.len());
+    let res = churay_core::install_base(&sysroot, cfg, None, &refs, &mut |id, step, _| {
+        if step == Step::Hecho {
+            println!("  ✓ {id}");
+        }
+    });
+    match res {
+        Ok(()) => {
+            println!("listo. reiniciá y elegí «mirada» en el greeter (o desde TTY: sudo mirada-dm).");
+            0
+        }
+        Err(e) => {
+            eprintln!("✗ {e}");
+            1
+        }
+    }
 }
 
 fn instalar_una(cfg: &InstallConfig, u: &Unit, state: &mut InstalledState) -> i32 {

@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use churay_core::manifest::Manifest;
+use churay_core::manifest::{Manifest, Unit};
 use churay_core::{suite_catalog, ArtifactHash};
 
 fn main() {
@@ -43,6 +43,28 @@ fn main() {
     }
 
     let mut units = suite_catalog();
+    // Sumá los binarios del SISTEMA BASE (compositor/DM/sesión), que no son apps
+    // pero el bundle debe traer para instalar el escritorio en cualquier Linux.
+    for prog in churay_core::base_programs() {
+        if !units.iter().any(|u| u.program == prog) {
+            units.push(Unit {
+                id: prog.to_string(),
+                label: prog.to_string(),
+                version: churay_core::SUITE_VERSION.to_string(),
+                category: "sistema".to_string(),
+                icon: "⚙".to_string(),
+                description: "componente del sistema base".to_string(),
+                program: prog.to_string(),
+                scope: churay_core::Scope::System,
+                suggests: Vec::new(),
+                handles: Vec::new(),
+                launchable: false,
+                post_install: None,
+                bin_hash: None,
+                size_bytes: None,
+            });
+        }
+    }
     let mut incluidas = 0usize;
     let mut omitidas = Vec::new();
 

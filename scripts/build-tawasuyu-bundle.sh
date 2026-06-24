@@ -35,6 +35,9 @@ PROGRAMS=(
   mirada-llimphi wawa-panel
   # barra + shell (no están en app-bus):
   pata shuma-shell-llimphi
+  # sistema base / escritorio mirada (opción especial del instalador):
+  mirada-compositor mirada-greeter pata-llimphi mirada-launcher mirada-ctl
+  mirada-portal mirada-wallpaper pata-notify pata-notify-panel pata-notify-triage
   # componente de sistema (root):
   arje
 )

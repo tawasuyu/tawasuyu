@@ -16,6 +16,7 @@
 //!   con actualización.
 //! * [`hash`] — `ArtifactHash` (`b3:…`), vendorizado de `hammer-core`.
 
+pub mod base;
 pub mod catalog;
 pub mod hash;
 pub mod install;
@@ -25,6 +26,7 @@ pub mod repo;
 pub mod state;
 pub mod update;
 
+pub use base::{base_programs, base_system, install_base, Component};
 pub use catalog::{local_manifest, suite_catalog, SUITE_VERSION};
 pub use hash::ArtifactHash;
 pub use install::{

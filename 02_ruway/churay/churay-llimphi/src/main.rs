@@ -50,6 +50,7 @@ enum Screen {
     Bienvenida,
     Catalogo,
     Resultado,
+    SistemaBase,
 }
 
 struct Model {
@@ -74,6 +75,12 @@ struct Model {
     logo: Option<Image>,
     /// Checkbox de la portada: no volver a mostrarla.
     skip_welcome: bool,
+    /// Componentes del sistema base (compositor/DM mirada) — no son apps.
+    base: Vec<churay_core::Component>,
+    base_sel: Vec<bool>,
+    base_status: Vec<UnitStatus>,
+    base_installing: bool,
+    base_done: bool,
 }
 
 #[derive(Clone)]
@@ -98,6 +105,12 @@ enum Msg {
     VolverCatalogo,
     InstalarSugeridasResultado,
     Cerrar,
+    AbrirSistemaBase,
+    ToggleBaseComp(usize),
+    InstalarBase,
+    BaseProgress(String, f32),
+    BaseCompDone(String),
+    BaseAllDone,
 }
 
 struct Churay;
@@ -212,6 +225,14 @@ impl App for Churay {
             logo: llimphi_image::decode_bytes(&Brand::Suite.image()).ok(),
             // El checkbox de la portada arranca activado ("no mostrar de nuevo").
             skip_welcome: true,
+            base: {
+                let b = churay_core::base_system();
+                b
+            },
+            base_sel: vec![true; churay_core::base_system().len()],
+            base_status: vec![UnitStatus::Idle; churay_core::base_system().len()],
+            base_installing: false,
+            base_done: false,
         }
     }
 
@@ -365,6 +386,77 @@ impl App for Churay {
                 model.screen = Screen::Catalogo;
             }
             Msg::Cerrar => handle.quit(),
+            Msg::AbrirSistemaBase => model.screen = Screen::SistemaBase,
+            Msg::ToggleBaseComp(i) => {
+                if let Some(s) = model.base_sel.get_mut(i) {
+                    *s = !*s;
+                }
+            }
+            Msg::InstalarBase => {
+                if model.base_installing {
+                    return model;
+                }
+                let sel_ids: Vec<String> = model
+                    .base
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| model.base_sel[*i])
+                    .map(|(_, c)| c.id.to_string())
+                    .collect();
+                if sel_ids.is_empty() {
+                    return model;
+                }
+                for i in 0..model.base.len() {
+                    if model.base_sel[i] {
+                        model.base_status[i] = UnitStatus::Working(Step::Resolviendo, 0.0);
+                    }
+                }
+                model.base_installing = true;
+                model.base_done = false;
+                let cfg = InstallConfig::detect(InstallMode::System);
+                let h = handle.clone();
+                handle.spawn(move || {
+                    let comps = churay_core::base_system();
+                    let refs: Vec<&churay_core::Component> =
+                        comps.iter().filter(|c| sel_ids.iter().any(|id| id == c.id)).collect();
+                    let _ = churay_core::install_base(
+                        std::path::Path::new("/"),
+                        &cfg,
+                        None,
+                        &refs,
+                        &mut |id, step, ratio| {
+                            if step == Step::Hecho {
+                                h.dispatch(Msg::BaseCompDone(id.to_string()));
+                            } else {
+                                h.dispatch(Msg::BaseProgress(id.to_string(), ratio));
+                            }
+                        },
+                    );
+                    Msg::BaseAllDone
+                });
+            }
+            Msg::BaseProgress(id, ratio) => {
+                if let Some(i) = model.base.iter().position(|c| c.id == id) {
+                    if model.base_status[i] != UnitStatus::Done {
+                        model.base_status[i] = UnitStatus::Working(Step::Copiando, ratio);
+                    }
+                }
+            }
+            Msg::BaseCompDone(id) => {
+                if let Some(i) = model.base.iter().position(|c| c.id == id) {
+                    model.base_status[i] = UnitStatus::Done;
+                }
+            }
+            Msg::BaseAllDone => {
+                model.base_installing = false;
+                model.base_done = true;
+                // Lo que quedó a medias = falló (install_base corta en el 1er error).
+                for s in model.base_status.iter_mut() {
+                    if matches!(s, UnitStatus::Working(_, _)) {
+                        *s = UnitStatus::Failed("no se pudo instalar".into());
+                    }
+                }
+            }
             Msg::InstalarSugeridasResultado => {
                 for i in model.sugeridas_de_instaladas() {
                     model.selected[i] = true;
@@ -383,6 +475,7 @@ impl App for Churay {
         match model.screen {
             Screen::Bienvenida => return bienvenida(model),
             Screen::Resultado => return resultado(model),
+            Screen::SistemaBase => return sistema_base(model),
             Screen::Catalogo => {}
         }
         let body = match model.tab {
@@ -724,15 +817,138 @@ fn catalogo(model: &Model) -> View<Msg> {
 
     let wrap = View::new(Style {
         flex_grow: 1.0,
-        size: Size { width: percent(1.0), height: length(VIEWPORT) },
+        size: Size { width: percent(1.0), height: length(VIEWPORT - 64.0) },
         ..Default::default()
     })
     .clip(true)
     .children(vec![scroller]);
 
+    // Entrada especial al sistema base (NO es una app): el escritorio completo.
+    let card = row(percent(1.0), length(52.0))
+        .gap(10.0)
+        .pad(12.0)
+        .fill(t.bg_panel)
+        .radius(10.0)
+        .children(vec![
+            View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
+                "🖥  Sistema base / Escritorio mirada — instalar el entorno completo",
+                14.0,
+                t.fg_text,
+                Alignment::Start,
+            ),
+            View::new(Style { size: Size { width: length(28.0), height: length(28.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+                .text("›", 22.0, t.accent),
+        ])
+        .on_click(Msg::AbrirSistemaBase);
+
     col(percent(1.0), length(VIEWPORT))
         .pad(16.0)
-        .children(vec![wrap])
+        .gap(10.0)
+        .children(vec![card, wrap])
+}
+
+/// Pantalla del **sistema base**: los componentes del escritorio mirada
+/// (compositor, DM, barra…), todos activos por defecto, instalación real con
+/// root en cualquier Linux.
+fn sistema_base(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+    let needs_root = InstallConfig::detect(InstallMode::System).needs_root();
+
+    let titulo = View::new(Style { size: Size { width: percent(1.0), height: length(30.0) }, ..Default::default() })
+        .text_aligned("Sistema base — Escritorio mirada", 22.0, t.fg_text, Alignment::Start);
+    let sub = View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
+        .text_aligned(
+            "El display manager + compositor + sesión. Se instala en el sistema (/usr, /etc).",
+            12.0,
+            t.fg_muted,
+            Alignment::Start,
+        );
+    let mut head = vec![titulo, sub];
+    if needs_root && !model.base_done {
+        head.push(banner_root(t));
+    }
+    if model.base_done {
+        head.push(linea(
+            "Listo. Reiniciá la sesión y elegí «mirada» en el greeter (TTY: sudo mirada-dm). Si instalaste un init aparte, elegilo en GRUB.",
+            t.accent,
+            t,
+        ));
+    }
+
+    // Filas de componentes (todos marcados por defecto).
+    let mut filas: Vec<View<Msg>> = Vec::new();
+    for (i, c) in model.base.iter().enumerate() {
+        let sw = View::new(Style { size: Size { width: length(54.0), height: length(40.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+            .children(vec![switch_view(
+                if model.base_sel[i] { 1.0 } else { 0.0 },
+                Msg::ToggleBaseComp(i),
+                &SwitchPalette::from_theme(t),
+            )]);
+        let textos = col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+            .gap(2.0)
+            .grow()
+            .children(vec![
+                View::new(Style { size: Size { width: percent(1.0), height: length(18.0) }, ..Default::default() })
+                    .text_aligned(c.label, 14.0, t.fg_text, Alignment::Start),
+                View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+                    .text_aligned(c.description, 11.0, t.fg_muted, Alignment::Start),
+            ]);
+        let estado = {
+            let (txt, color) = match &model.base_status[i] {
+                UnitStatus::Working(_, _) => ("instalando…".to_string(), t.accent),
+                UnitStatus::Done => ("✓".to_string(), t.accent),
+                UnitStatus::Failed(_) => ("✗".to_string(), t.fg_destructive),
+                UnitStatus::Idle => (String::new(), t.fg_muted),
+            };
+            View::new(Style { size: Size { width: length(90.0), height: length(40.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+                .text(txt, 12.0, color)
+        };
+        filas.push(row(percent(1.0), length(44.0)).gap(8.0).pad_x(6.0).children(vec![sw, textos, estado]));
+    }
+
+    // Acciones.
+    let n_sel = model.base_sel.iter().filter(|x| **x).count();
+    let instalar = if needs_root {
+        boton("Reabrir como root", t.accent, t.bg_app, 180.0, Msg::ReexecRoot)
+    } else {
+        let activo = n_sel > 0 && !model.base_installing;
+        let label = if model.base_installing { "Instalando…" } else { "Instalar (root)" };
+        let bg = if activo { t.accent } else { t.bg_button };
+        let fg = if activo { t.bg_app } else { t.fg_muted };
+        let mut v = View::new(Style { size: Size { width: length(180.0), height: length(36.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+            .fill(bg).radius(8.0).text(label, 15.0, fg);
+        if activo {
+            v = v.on_click(Msg::InstalarBase);
+        }
+        v
+    };
+    let acciones = row(percent(1.0), length(40.0))
+        .gap(10.0)
+        .children(vec![
+            View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
+                format!("{n_sel} de {} componentes", model.base.len()),
+                12.0,
+                t.fg_muted,
+                Alignment::Start,
+            ),
+            boton("Volver", t.bg_button, t.fg_text, 110.0, Msg::VolverCatalogo),
+            instalar,
+        ]);
+
+    let cuerpo = col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+        .gap(4.0)
+        .grow()
+        .children(filas);
+
+    col(percent(1.0), percent(1.0))
+        .fill(t.bg_app)
+        .gap(10.0)
+        .pad(24.0)
+        .children(vec![
+            col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto()).gap(8.0).children(head),
+            cuerpo,
+            acciones,
+        ])
 }
 
 fn fila(model: &Model, i: usize) -> View<Msg> {
