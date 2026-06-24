@@ -331,7 +331,7 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
 /// (zoom) acerca/aleja la cámara. La botonera ◀▶▲▼⟳ espeja el drag.
 fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
     let pal = graphics_palette(model);
-    let (verts, indices) = crate::sphere_gpu::sphere_geometry(render, &pal);
+    let geom = crate::sphere_gpu::sphere_geometry(render, &pal);
     let bg = graphics_bg(model);
     let yaw = model.sphere_yaw;
     let pitch = model.sphere_pitch;
@@ -360,8 +360,7 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
             target,
             vp,
             (rect.x, rect.y, rect.w, rect.h),
-            &verts,
-            &indices,
+            &geom,
             yaw,
             pitch,
             dist,
