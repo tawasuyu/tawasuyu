@@ -167,6 +167,26 @@ intercambiables, como el resto de la suite.
     contenido bajo la clave declarada). Falta atar `pubkey ↔ contacto` (red de
     confianza de `agora`) para que signifique "y la clave es de quien dice ser".
 
+- **Fase 13 (2026-06-24):** **rail soberano** P2P — el protocolo (Eje 3.B).
+  - `paloma-rail` (crate nuevo): correo suite-a-suite **sin SMTP**. La unidad es
+    el `RailEnvelope` — el `Message` nativo (postcard) + identidades emisor/
+    receptor + firma Ed25519 sobre todo. La dirección **es la clave pública**
+    (`agora`), no un `usuario@dominio`: no hay "From spoofing".
+    - `seal(keypair, to, msg)` / `open(env, me)` — sellar/abrir+verificar; el
+      mensaje llega `Verified` (el sobre firmado lo autentica).
+    - trait `RailTransport` (enviar a una identidad) — la implementación concreta
+      va sobre chasqui; `MockTransport` corre el rail sin red. `RailInbox`
+      acumula lo recibido (el futuro buzón "Suyu").
+    - 6 tests verde: roundtrip, sobre para otra identidad rechazado, payload
+      manipulado → BadSignature, **reenvío a otro receptor no cuela** (la firma
+      ata `to`), bytes del cable, y **rail completo de punta a punta** sobre el
+      transporte.
+  - **Pendiente de 3.B (integración viva, requiere 2 nodos):** transporte real
+    sobre chasqui (request-response / canal akasha) + resolución `contacto ↔
+    identidad` + buzón "Suyu" en la UI + enrutar el envío (destinatarios `@suyu`
+    por el rail, el resto por SMTP). El protocolo está cerrado y certificado; la
+    capa de red/UI es el siguiente bloque.
+
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
   `PALOMA_EMAIL` + `PALOMA_PASSWORD` (contraseña de **aplicación** en Gmail);

@@ -1,0 +1,17 @@
+[package]
+name = "paloma-rail"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-rail — el rail soberano del correo: entrega suite-a-suite sin SMTP. Sobres firmados Ed25519 (agora) direccionados por identidad, sobre un transporte P2P abstracto (chasqui/ayni). El correo viaja persona-a-persona, no por un servidor."
+
+[dependencies]
+paloma-core = { path = "../paloma-core" }
+paloma-sign = { path = "../paloma-sign" }
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
