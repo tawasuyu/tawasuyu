@@ -416,9 +416,28 @@ impl LayerApp {
             }
             cambios = true;
         }
+        // Resultados del motor RAG (respuesta/error/listo): los procesa el mismo
+        // `handle_msg`, que marca los sidebars sucios al mutar el estado.
+        while let Ok(m) = self.rag_rx.try_recv() {
+            self.handle_msg(m);
+        }
         if cambios {
             self.marcar_sidebars_dirty();
         }
+    }
+
+    /// `true` si el diente abierto del sidebar es el panel RAG (su contenido es
+    /// `rag`/`search`). El teclado se rutea a su buscador sólo entonces.
+    pub(super) fn rag_panel_open(&self) -> bool {
+        let Some((si, ti)) = self.nav.open else {
+            return false;
+        };
+        self.cfg
+            .surfaces
+            .get(si)
+            .and_then(|s| s.tabs.get(ti))
+            .map(|t| crate::rag::is_rag_kind(&t.content.kind))
+            .unwrap_or(false)
     }
 
     /// El `app_id` del toplevel que tiene foco ahora.
@@ -890,6 +909,7 @@ impl LayerApp {
                 hosted_teeth,
                 hosted_app,
                 &self.shuma,
+                &self.rag,
                 &self.theme,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {
@@ -1162,6 +1182,85 @@ impl LayerApp {
             }
             Msg::NavScroll(delta) => {
                 self.nav.scroll = (self.nav.scroll + delta).max(0.0);
+                self.marcar_sidebars_dirty();
+            }
+            // --- Sidebar RAG ---
+            Msg::RagEngineReady { ok, corpus } => {
+                self.rag.corpus_len = corpus;
+                self.rag.status = if ok {
+                    crate::rag::RagStatus::Idle
+                } else {
+                    crate::rag::RagStatus::Unavailable
+                };
+                self.marcar_sidebars_dirty();
+            }
+            Msg::RagChar(c) => {
+                if !c.is_control()
+                    && matches!(
+                        self.rag.status,
+                        crate::rag::RagStatus::Idle | crate::rag::RagStatus::Ready
+                    )
+                {
+                    self.rag.query.push(c);
+                    self.marcar_sidebars_dirty();
+                }
+            }
+            Msg::RagBackspace => {
+                self.rag.query.pop();
+                self.marcar_sidebars_dirty();
+            }
+            Msg::RagClear => {
+                self.rag.query.clear();
+                self.rag.answer.clear();
+                self.rag.sources.clear();
+                self.rag.error = None;
+                if matches!(self.rag.status, crate::rag::RagStatus::Ready) {
+                    self.rag.status = crate::rag::RagStatus::Idle;
+                }
+                self.marcar_sidebars_dirty();
+            }
+            Msg::RagSubmit => {
+                let q = self.rag.query.trim().to_string();
+                if !q.is_empty()
+                    && matches!(
+                        self.rag.status,
+                        crate::rag::RagStatus::Idle | crate::rag::RagStatus::Ready
+                    )
+                {
+                    self.rag.status = crate::rag::RagStatus::Asking;
+                    self.rag.answer.clear();
+                    self.rag.sources.clear();
+                    self.rag.error = None;
+                    if let Ok(guard) = self.rag.engine.lock() {
+                        if let Some(engine) = guard.as_ref() {
+                            let tx = self.rag_tx.clone();
+                            engine.ask(q, move |res| {
+                                let m = match res {
+                                    Ok(a) => Msg::RagResult {
+                                        answer: a.answer,
+                                        sources: a.sources,
+                                    },
+                                    Err(e) => Msg::RagError(e.to_string()),
+                                };
+                                let _ = tx.send(m);
+                            });
+                        } else {
+                            self.rag.status = crate::rag::RagStatus::Unavailable;
+                        }
+                    }
+                    self.marcar_sidebars_dirty();
+                }
+            }
+            Msg::RagResult { answer, sources } => {
+                self.rag.answer = answer;
+                self.rag.sources = sources;
+                self.rag.error = None;
+                self.rag.status = crate::rag::RagStatus::Ready;
+                self.marcar_sidebars_dirty();
+            }
+            Msg::RagError(e) => {
+                self.rag.error = Some(e);
+                self.rag.status = crate::rag::RagStatus::Ready;
                 self.marcar_sidebars_dirty();
             }
             Msg::Quit => self.exit = true,

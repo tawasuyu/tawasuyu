@@ -345,6 +345,7 @@ pub fn root(model: &Model) -> View<Msg> {
                         (sw, sh),
                         &model.nav,
                         &model.shuma,
+                        &model.rag,
                         &model.theme,
                     ));
                 }

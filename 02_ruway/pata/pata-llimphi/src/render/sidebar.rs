@@ -39,6 +39,7 @@ use pata_core::config::{Anchor, Surface};
 use pata_core::layout::Rect;
 
 use crate::nouser::NavState;
+use crate::rag::RagState;
 use crate::shuma::ShumaState;
 use crate::Msg;
 
@@ -195,6 +196,7 @@ fn panel_inner(
     panel_h: f32,
     nav: &NavState,
     shuma: &ShumaState,
+    rag: &RagState,
     theme: &Theme,
 ) -> View<Msg> {
     let titulo = surface
@@ -205,6 +207,11 @@ fn panel_inner(
     // Despacho por el `kind` del CONTENIDO del diente. shuma se conecta como
     // diente: su contenido es el shell completo (drawer_body_view).
     let kind = surface.tabs.get(ti).map(|t| t.content.kind.as_str()).unwrap_or("");
+    // Panel RAG (preguntale a tu correo): su contenido es `rag`/`search`. Trae su
+    // propio cabezal + buscador + respuesta + fuentes.
+    if crate::rag::is_rag_kind(kind) {
+        return crate::rag::panel_view(rag, &titulo, panel_h, theme);
+    }
     if kind == "shuma" {
         let header = View::new(Style {
             size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
@@ -374,6 +381,7 @@ pub fn nav_panel_view(
     screen: (i32, i32),
     nav: &NavState,
     shuma: &ShumaState,
+    rag: &RagState,
     theme: &Theme,
 ) -> View<Msg> {
     let pw = surface.panel_width;
@@ -399,7 +407,7 @@ pub fn nav_panel_view(
         },
         ..Default::default()
     })
-    .children(vec![panel_inner(surface, ti, h, nav, shuma, theme)])
+    .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, theme)])
 }
 
 // =====================================================================
@@ -420,6 +428,7 @@ pub fn sidebar_surface_view(
     hosted: &[HostedTooth],
     hosted_app: &str,
     shuma: &ShumaState,
+    rag: &RagState,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
@@ -440,7 +449,7 @@ pub fn sidebar_surface_view(
             flex_shrink: 0.0,
             ..Default::default()
         })
-        .children(vec![panel_inner(surface, ti, h, nav, shuma, theme)]);
+        .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, theme)]);
         // El rail va pegado a su borde: a la izquierda del panel si el sidebar
         // está anclado a la izquierda; a la derecha si está a la derecha.
         match surface.anchor {
@@ -600,6 +609,9 @@ fn tooth_icon_kind(name: &str) -> (llimphi_icons::Icon, Color) {
             (Icon::Folder, Color::from_rgba8(251, 191, 36, 255)) // ámbar
         }
         "search" | "buscar" | "find" => (Icon::Search, Color::from_rgba8(96, 165, 250, 255)), // azul
+        "rag" | "ask" | "ai" | "correo" | "mail" => {
+            (Icon::Search, Color::from_rgba8(167, 139, 250, 255)) // violeta: preguntale a tu correo
+        }
         "home" | "inicio" => (Icon::Home, Color::from_rgba8(52, 211, 153, 255)),              // verde
         "tools" | "herramientas" | "settings" | "system" | "config" => {
             (Icon::Settings, Color::from_rgba8(45, 212, 191, 255)) // teal

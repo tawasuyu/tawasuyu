@@ -221,6 +221,7 @@ pub fn widget_catalog() -> &'static [WidgetCatalogEntry] {
         // --- ricos, de sidebar (paneles con más capacidad) ---
         W { kind: "navigator", label: "Navegador de archivos", icon: "❖", on_bar: false, on_sidebar: true },
         W { kind: "search", label: "Buscar", icon: "🔍", on_bar: false, on_sidebar: true },
+        W { kind: "rag", label: "Correo IA (RAG)", icon: "✨", on_bar: false, on_sidebar: true },
         // --- fondo de escritorio ---
         W { kind: "program_manager", label: "Program Manager", icon: "▤", on_bar: false, on_sidebar: false },
     ]
@@ -608,9 +609,9 @@ impl Config {
             WidgetSpec::new("navigator").with("source", Prop::Str("home".to_string())),
         ));
         rail.tabs.push(SidebarTab::new(
-            "search",
-            "Buscar",
-            WidgetSpec::new("search"),
+            "rag",
+            "Correo IA",
+            WidgetSpec::new("rag").with("source", Prop::Str("paloma".to_string())),
         ));
 
         // Sidebar DERECHO «supeditado al desktop»: reserva su franja (las
@@ -619,9 +620,9 @@ impl Config {
         let mut rrail = Surface::sidebar(Anchor::Right);
         rrail.reserve = Some(true);
         rrail.tabs.push(SidebarTab::new(
-            "search",
-            "Buscar",
-            WidgetSpec::new("search"),
+            "rag",
+            "Correo IA",
+            WidgetSpec::new("rag").with("source", Prop::Str("paloma".to_string())),
         ));
         rrail.tabs.push(SidebarTab::new(
             "files",

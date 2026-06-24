@@ -256,6 +256,23 @@ impl KeyboardHandler for LayerApp {
             }
             return;
         }
+        // Panel RAG abierto: el teclado va a su buscador (texto → consulta, Enter
+        // pregunta, Esc cierra el panel, Backspace borra).
+        if self.rag_panel_open() {
+            match event.keysym {
+                Keysym::Escape => self.cerrar_sidebar(),
+                Keysym::BackSpace => self.handle_msg(crate::Msg::RagBackspace),
+                Keysym::Return | Keysym::KP_Enter => self.handle_msg(crate::Msg::RagSubmit),
+                _ => {
+                    if let Some(txt) = event.utf8 {
+                        for c in txt.chars().filter(|c| !c.is_control()) {
+                            self.handle_msg(crate::Msg::RagChar(c));
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // Ctrl+Shift+W repliega el drawer (sólo tiene sentido abierto).
         if self.shuma.open
             && self.mods.ctrl

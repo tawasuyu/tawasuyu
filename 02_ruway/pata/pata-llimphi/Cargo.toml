@@ -42,6 +42,11 @@ shuma-shell-llimphi = { path = "../../shuma/shuma-shell-llimphi" }
 # Registro de apps para el menú del botón de inicio (descubre ~/.config/tawasuyu/
 # apps/*.toml). El menú nativo reemplaza a depender de wofi/rofi externos.
 app-bus = { path = "../../../shared/app-bus" }
+# El motor RAG sobre el correo de paloma, hospedado como sidebar: lee la caché en
+# disco de paloma de sólo-lectura (corpus + índice semántico), embebe la consulta
+# por el daemon de rimay-verbo, recupera los mails relevantes y redacta una
+# respuesta citada con pluma-llm. pata sólo le rutea el input y pinta el panel.
+paloma-rag = { path = "../../paloma/paloma-rag" }
 llimphi-ui = { workspace = true }
 # Área de scroll del historial del drawer (clip + offset + barra arrastrable).
 llimphi-widget-scroll = { workspace = true }

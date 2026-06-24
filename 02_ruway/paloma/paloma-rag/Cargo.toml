@@ -1,0 +1,22 @@
+[package]
+name = "paloma-rag"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-rag — asistente RAG sobre el correo: recupera del índice semántico de paloma (rimay-verbo) y redacta una respuesta citada con pluma-llm. Lee la caché en disco de paloma de sólo-lectura, así se hospeda como sidebar (p. ej. en pata) sin tocar la app de correo."
+
+[dependencies]
+paloma-core = { path = "../paloma-core" }
+paloma-semantic = { path = "../paloma-semantic" }
+rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
+pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+postcard = { workspace = true }
+directories = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

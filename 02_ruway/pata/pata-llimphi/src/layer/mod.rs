@@ -298,6 +298,13 @@ pub(super) struct LayerApp {
     pub(super) control_extras: crate::render::ControlExtras,
     /// Estado del sidebar navegador.
     pub(super) nav: NavState,
+    /// Estado del sidebar RAG (preguntale a tu correo).
+    pub(super) rag: crate::rag::RagState,
+    /// Sender que las consultas RAG (y el armado del motor) usan para devolver su
+    /// `Msg` al loop; se drena por `rag_rx` cada frame.
+    pub(super) rag_tx: Sender<Msg>,
+    /// Canal por donde llegan los resultados del motor RAG (respuesta/error/listo).
+    pub(super) rag_rx: Receiver<Msg>,
     /// Canal por donde el hilo de poll de `list_monads` entrega resultados.
     pub(super) nav_rx: Option<Receiver<PollOutcome>>,
     /// Canal para que los hilos one-shot de `resolve_monad` entreguen miembros.
@@ -440,6 +447,32 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     });
     let (members_tx, members_rx) = std::sync::mpsc::channel::<MembersOutcome>();
 
+    // Sidebar RAG: igual modelo channel-backed que el resto del path layer. El
+    // motor (pesado: daemon + caché de paloma + LLM) se arma en un hilo aparte y
+    // sus resultados —y el aviso de «listo»— caen en `rag_rx`, drenado cada frame.
+    let rag_present = crate::config_tiene_rag(&cfg);
+    let (rag_tx, rag_rx) = std::sync::mpsc::channel::<Msg>();
+    let rag = if rag_present {
+        crate::rag::RagState::presente()
+    } else {
+        crate::rag::RagState::default()
+    };
+    if rag_present {
+        let slot = rag.engine.clone();
+        let tx = rag_tx.clone();
+        std::thread::spawn(move || {
+            let engine = paloma_rag::RagEngine::try_build();
+            let (ok, corpus) = match &engine {
+                Some(e) => (true, e.corpus_len()),
+                None => (false, 0),
+            };
+            if let Ok(mut g) = slot.lock() {
+                *g = engine;
+            }
+            let _ = tx.send(Msg::RagEngineReady { ok, corpus });
+        });
+    }
+
     let (surfaces, shuma) = Model::construir(&cfg);
 
     // Live-wire de la shuma COMPLETA (opt-in). El loop smithay no tiene un
@@ -519,6 +552,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         nav_rx,
         members_tx,
         members_rx,
+        rag,
+        rag_tx,
+        rag_rx,
         ws_anim: None,
         ws_last_active: 0,
         drag: None,

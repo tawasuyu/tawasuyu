@@ -27,6 +27,7 @@ pub mod nouser;
 pub mod config_watch;
 pub mod nahual;
 pub mod open;
+pub mod rag;
 pub mod render;
 pub mod sampler;
 pub mod shuma;
@@ -49,6 +50,7 @@ use pata_core::{Config, Frame, Rect};
 
 use nahual::NahualState;
 use nouser::{MembersOutcome, NavState, PollOutcome};
+use rag::{RagState, RagStatus};
 use sampler::Sampler;
 use shuma::ShumaState;
 use tray::TrayHandle;
@@ -241,6 +243,25 @@ pub enum Msg {
     NavPoll(PollOutcome),
     /// Resultado de resolver los miembros de una Mónada.
     NavMembers(MembersOutcome),
+    // --- Sidebar RAG (preguntale a tu correo) ---
+    /// El hilo de fondo terminó de armar (o no) el motor RAG: `ok` = quedó
+    /// disponible; `corpus` = cuántos mensajes leyó de la caché de paloma.
+    RagEngineReady { ok: bool, corpus: usize },
+    /// Carácter al buscador del panel RAG.
+    RagChar(char),
+    /// Backspace en el buscador del panel RAG.
+    RagBackspace,
+    /// Enter en el buscador: lanza la consulta al motor.
+    RagSubmit,
+    /// Limpia la consulta y la respuesta (click en el buscador / nueva pregunta).
+    RagClear,
+    /// El motor devolvió una respuesta redactada + sus fuentes citadas.
+    RagResult {
+        answer: String,
+        sources: Vec<paloma_rag::RagSource>,
+    },
+    /// La consulta falló (sin hits, embeddings o IA caídos).
+    RagError(String),
     /// Cerrar la app.
     Quit,
 }
@@ -558,6 +579,32 @@ pub fn config_tiene_navigator(cfg: &Config) -> bool {
         .any(|t| t.content.kind == "navigator")
 }
 
+/// `true` si la config declara al menos un `SurfaceKind::Sidebar` con un diente
+/// cuyo contenido es el panel RAG (`kind = "rag"`/`"search"`). Sólo entonces se
+/// arma el motor RAG (lectura de la caché de paloma + daemon + LLM).
+pub fn config_tiene_rag(cfg: &Config) -> bool {
+    cfg.surfaces
+        .iter()
+        .filter(|s| s.kind == SurfaceKind::Sidebar)
+        .flat_map(|s| s.tabs.iter())
+        .any(|t| rag::is_rag_kind(&t.content.kind))
+}
+
+/// `true` si el diente abierto del sidebar es un panel RAG (su contenido es
+/// `rag`/`search`). El teclado del panel se rutea sólo entonces.
+fn rag_panel_open(model: &Model) -> bool {
+    let Some((si, ti)) = model.nav.open else {
+        return false;
+    };
+    model
+        .cfg
+        .surfaces
+        .get(si)
+        .and_then(|s| s.tabs.get(ti))
+        .map(|t| rag::is_rag_kind(&t.content.kind))
+        .unwrap_or(false)
+}
+
 /// Los widgets vivos de una superficie, repartidos por slot.
 pub struct SurfaceWidgets {
     /// Slot inicial (izquierda / arriba).
@@ -671,6 +718,9 @@ pub struct Model {
     /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
     /// declara ningún `SurfaceKind::Sidebar` con un navegador.
     pub nav: NavState,
+    /// Estado del sidebar RAG (preguntale a tu correo). Inerte si la config no
+    /// declara ningún diente con contenido `rag`/`search`.
+    pub rag: RagState,
     /// Tamaño de la pantalla en píxeles.
     pub screen: (i32, i32),
     /// Ventanas abiertas para el `window_list`, en el backend winit. Se muestrean
@@ -904,6 +954,7 @@ impl App for PataApp {
 
     fn init(handle: &Handle<Msg>) -> Model {
         let cfg = pata_config::load();
+        let rag_present = config_tiene_rag(&cfg);
         let screen = PANTALLA;
         let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
         let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1), dientes_outside);
@@ -959,6 +1010,11 @@ impl App for PataApp {
             cava,
             cava_frame: Vec::new(),
             nav: NavState::default(),
+            rag: if rag_present {
+                rag::RagState::presente()
+            } else {
+                RagState::default()
+            },
             screen,
             windows: Vec::new(),
             // Vigilamos el primer candidato (el que `save` escribe), exista o no:
@@ -1000,6 +1056,25 @@ impl App for PataApp {
         if config_tiene_navigator(&model.cfg) {
             handle.dispatch(Msg::NavTick);
             handle.spawn_periodic(nouser::REFRESH_INTERVAL, || Msg::NavTick);
+        }
+        // Motor RAG: pesado (conecta al daemon de embeddings, lee la caché de
+        // paloma, levanta un cliente LLM), así que se arma en un hilo aparte para
+        // no demorar el arranque. El resultado se deja en el slot compartido y se
+        // avisa al bucle con `RagEngineReady`. Sólo si la config declara un diente RAG.
+        if rag_present {
+            let slot = model.rag.engine.clone();
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                let engine = paloma_rag::RagEngine::try_build();
+                let (ok, corpus) = match &engine {
+                    Some(e) => (true, e.corpus_len()),
+                    None => (false, 0),
+                };
+                if let Ok(mut g) = slot.lock() {
+                    *g = engine;
+                }
+                h.dispatch(Msg::RagEngineReady { ok, corpus });
+            });
         }
         model
     }
@@ -1386,6 +1461,69 @@ impl App for PataApp {
                 MembersOutcome::Ok { monad, members } => model.nav.apply_members(monad, members),
                 MembersOutcome::Failed(e) => model.nav.error = Some(e),
             },
+            // --- Sidebar RAG (preguntale a tu correo) ---
+            Msg::RagEngineReady { ok, corpus } => {
+                model.rag.corpus_len = corpus;
+                model.rag.status = if ok { RagStatus::Idle } else { RagStatus::Unavailable };
+            }
+            Msg::RagChar(c) => {
+                // Ignoramos controles; el resto va al buscador (motor listo o con
+                // una respuesta ya servida, para encadenar otra pregunta).
+                if !c.is_control()
+                    && matches!(model.rag.status, RagStatus::Idle | RagStatus::Ready)
+                {
+                    model.rag.query.push(c);
+                }
+            }
+            Msg::RagBackspace => {
+                model.rag.query.pop();
+            }
+            Msg::RagClear => {
+                model.rag.query.clear();
+                model.rag.answer.clear();
+                model.rag.sources.clear();
+                model.rag.error = None;
+                if matches!(model.rag.status, RagStatus::Ready) {
+                    model.rag.status = RagStatus::Idle;
+                }
+            }
+            Msg::RagSubmit => {
+                let q = model.rag.query.trim().to_string();
+                if !q.is_empty()
+                    && matches!(model.rag.status, RagStatus::Idle | RagStatus::Ready)
+                {
+                    model.rag.status = RagStatus::Asking;
+                    model.rag.answer.clear();
+                    model.rag.sources.clear();
+                    model.rag.error = None;
+                    // El `ask` del motor sólo encola en su runtime y vuelve
+                    // enseguida; el lock es breve y no contiende con el hilo de UI.
+                    if let Ok(guard) = model.rag.engine.lock() {
+                        if let Some(engine) = guard.as_ref() {
+                            let h = handle.clone();
+                            engine.ask(q, move |res| match res {
+                                Ok(a) => h.dispatch(Msg::RagResult {
+                                    answer: a.answer,
+                                    sources: a.sources,
+                                }),
+                                Err(e) => h.dispatch(Msg::RagError(e.to_string())),
+                            });
+                        } else {
+                            model.rag.status = RagStatus::Unavailable;
+                        }
+                    }
+                }
+            }
+            Msg::RagResult { answer, sources } => {
+                model.rag.answer = answer;
+                model.rag.sources = sources;
+                model.rag.error = None;
+                model.rag.status = RagStatus::Ready;
+            }
+            Msg::RagError(e) => {
+                model.rag.error = Some(e);
+                model.rag.status = RagStatus::Ready;
+            }
         }
         model
     }
@@ -1593,6 +1731,17 @@ impl App for PataApp {
             if let Key::Named(NamedKey::Escape) = &event.key {
                 return Some(Msg::BrightnessPanel);
             }
+        }
+        // 2.7) Con el panel RAG desplegado, el teclado va a su buscador: texto a
+        // la consulta, Enter pregunta, Esc cierra el panel.
+        if rag_panel_open(model) {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::NavClosePanel),
+                Key::Named(NamedKey::Backspace) => Some(Msg::RagBackspace),
+                Key::Named(NamedKey::Enter) => Some(Msg::RagSubmit),
+                Key::Character(s) => s.chars().next().map(Msg::RagChar),
+                _ => None,
+            };
         }
         // 3) Con el menú "Abrir con…" abierto, Esc lo cierra primero.
         if model.nav.menu.is_some() {

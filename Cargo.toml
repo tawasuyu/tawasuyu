@@ -347,6 +347,7 @@ members = [
     "02_ruway/paloma/paloma-contacts",
     "02_ruway/paloma/paloma-trust",
     "02_ruway/paloma/paloma-llimphi",
+    "02_ruway/paloma/paloma-rag",
     "02_ruway/paloma/paloma-app",
     "02_ruway/raymi/raymi-core",
     "02_ruway/raymi/raymi-net",
