@@ -12,6 +12,7 @@ description = "paloma-llimphi — frontend del correo sobre Llimphi: tres panele
 paloma-core = { path = "../paloma-core" }
 paloma-store = { path = "../paloma-store" }
 paloma-rail = { path = "../paloma-rail" }
+paloma-contacts = { path = "../paloma-contacts" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }

@@ -212,6 +212,11 @@ pub struct Model {
     /// Idioma elegido a mano para ver el hilo abierto; `None` = auto (lee
     /// `reader_lang`). Lo fija el selector de lienzos. Se limpia al cambiar hilo.
     view_lang: Option<String>,
+    /// Libreta de contactos: alias → dirección (correo o rail). Resuelve el
+    /// campo "Para" al redactar. Vacía si no hay archivo.
+    contacts: paloma_contacts::Contactbook,
+    /// Ruta del archivo de contactos (para persistir altas). `None` = sin disco.
+    contacts_path: Option<std::path::PathBuf>,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -304,6 +309,8 @@ impl Model {
             rail: None,
             reader_lang,
             view_lang: None,
+            contacts: paloma_contacts::Contactbook::new(),
+            contacts_path: None,
             db,
             account_id,
             status,
@@ -375,6 +382,18 @@ impl Model {
     /// contactos. `None` si no hay rail.
     pub fn my_rail_address(&self) -> Option<String> {
         self.rail.as_ref().map(|r| r.my_address())
+    }
+
+    /// Inyecta la libreta de contactos cargada del disco y su ruta (para
+    /// persistir altas). Lo hace el anfitrión al arrancar.
+    pub fn set_contacts(&mut self, book: paloma_contacts::Contactbook, path: std::path::PathBuf) {
+        self.contacts = book;
+        self.contacts_path = Some(path);
+    }
+
+    /// Cuántos contactos hay en la libreta.
+    pub fn contacts_len(&self) -> usize {
+        self.contacts.len()
     }
 
     /// Idioma efectivo de lectura (multilienzo): el elegido a mano, si no el del
@@ -648,6 +667,8 @@ pub enum Msg {
     /// Elegir el idioma con el que se lee el hilo (`None` = auto). Selector de
     /// lienzos del panel de lectura.
     SetViewLang(Option<String>),
+    /// Guardar el remitente del hilo abierto en la libreta de contactos.
+    SaveSenderContact,
 }
 
 /// Dispara una búsqueda por significado: arma el corpus y se lo entrega al
@@ -853,6 +874,22 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
             }
         }
         Msg::SetViewLang(lang) => model.view_lang = lang,
+        Msg::SaveSenderContact => {
+            // Guarda el remitente del mensaje más reciente del hilo abierto.
+            if let Some(m) = model.current_newest().and_then(|id| model.store.message(&id)) {
+                let addr = m.from.email.clone();
+                let name = m.from.display_name().to_string();
+                let name = if name.is_empty() || name == addr { addr.clone() } else { name };
+                let nuevo = model.contacts.upsert(&name, &addr);
+                if let Some(p) = &model.contacts_path {
+                    let _ = model.contacts.save(p);
+                }
+                model.status = rimay_localize::t_args(
+                    if nuevo { "paloma-status-contact-added" } else { "paloma-status-contact-updated" },
+                    &[("name", name.into())],
+                );
+            }
+        }
         Msg::OpenMessage(id) => {
             model.open_message(&id);
             model.search_focused = false;
@@ -909,7 +946,9 @@ fn fresh_rail_id() -> MessageId {
 /// Sin destinatario válido, sólo avisa.
 fn send_compose(mut model: Model) -> Model {
     let Some(c) = model.compose.as_ref() else { return model };
-    let all_to = parse_address_list(&c.to.text());
+    // Libreta: expandir alias del "Para" a sus direcciones antes de parsear.
+    let to_expanded = model.contacts.expand(&c.to.text());
+    let all_to = parse_address_list(&to_expanded);
     if all_to.is_empty() {
         model.status = rimay_localize::t("paloma-status-no-recipient");
         return model;
@@ -1140,6 +1179,31 @@ mod tests {
         assert_eq!(sent[0].1.to.len(), 2, "el Message lleva ambos destinatarios");
         // El compositor se cerró → se envió (rail + smtp por el MockBackend).
         assert!(model.compose.is_none());
+    }
+
+    #[test]
+    fn alias_de_la_libreta_se_resuelve_y_enruta() {
+        let me = Address::named("Yo", "yo@x.com");
+        let mut model = Model::new(Box::new(MockBackend::new(vec![])), me, Theme::dark());
+        let grabado = Arc::new(Mutex::new(Vec::new()));
+        model.attach_rail(Box::new(RecRail { sent: grabado.clone() }));
+
+        // Libreta: "Ana" → su dirección del rail.
+        let rail_addr = paloma_rail::rail_address(&[9u8; 32]);
+        let mut book = paloma_contacts::Contactbook::new();
+        book.upsert("Ana", &rail_addr);
+        model.set_contacts(book, std::path::PathBuf::from("/tmp/no-existe-igual.json"));
+
+        // Escribo "Ana" (alias), no la dirección.
+        let mut c = Compose::empty();
+        c.to.set_text("Ana");
+        c.subject.set_text("hola");
+        model.compose = Some(c);
+        model = send_compose(model);
+
+        let sent = grabado.lock().unwrap();
+        assert_eq!(sent.len(), 1, "el alias se resolvió y enrutó por el rail");
+        assert_eq!(sent[0].0, [9u8; 32]);
     }
 
     #[test]

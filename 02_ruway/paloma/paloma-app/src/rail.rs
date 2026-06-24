@@ -56,7 +56,17 @@ impl RailHost {
                     std::thread::spawn(move || {
                         for envelope in rx {
                             match paloma_rail::open(&envelope, me) {
-                                Ok(msg) => h.dispatch(Msg::RailReceived(msg)),
+                                Ok(mut msg) => {
+                                    // El remitente autenticado ES su identidad del
+                                    // rail: ponela como dirección (para responder y
+                                    // guardar contacto), conservando su nombre.
+                                    let name = msg.from.name.clone();
+                                    msg.from = paloma_core::Address {
+                                        name,
+                                        email: paloma_rail::rail_address(&envelope.from),
+                                    };
+                                    h.dispatch(Msg::RailReceived(msg));
+                                }
                                 Err(e) => eprintln!("paloma · sobre del rail rechazado: {e}"),
                             }
                         }

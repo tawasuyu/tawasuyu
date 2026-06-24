@@ -1,0 +1,17 @@
+[package]
+name = "paloma-contacts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-contacts — la libreta del correo: alias → dirección (correo o identidad del rail). Resuelve nombres en el campo «Para» para no tipear ni un email largo ni una clave hex. Agnóstico a la UI; persistencia JSON editable a mano."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

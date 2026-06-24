@@ -220,6 +220,19 @@ intercambiables, como el resto de la suite.
     (en el rail sí van firmados, dentro del sobre). Atar la firma a los lienzos
     es una mejora futura.
 
+- **Fase 15 (2026-06-24):** **libreta de contactos** — escribir a "Ana", no a
+  un hex de 64 chars.
+  - `paloma-contacts` (crate nuevo): `Contact { name, address }` +
+    `Contactbook` con `resolve`/`expand`/`upsert`/`remove` + persistencia JSON
+    **editable a mano** (`~/.config/paloma/contactos.json`). 3 tests.
+  - `paloma-llimphi`: `send_compose` **expande** el campo "Para" con la libreta
+    (alias → dirección) antes de enrutar; botón **＋ Contacto** en lectura
+    (`Msg::SaveSenderContact`) guarda el remitente del hilo y persiste. Test:
+    alias "Ana" → se resuelve a su `@rail.suyu` y enruta por el rail.
+  - `paloma-app`: carga/guarda la libreta; al recibir por el rail, **estampa la
+    dirección del remitente = su identidad** (`<hex>@rail.suyu`), así guardarlo y
+    responderle funcionan por el rail (la identidad autenticada es la dirección).
+
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
   `PALOMA_EMAIL` + `PALOMA_PASSWORD` (contraseña de **aplicación** en Gmail);

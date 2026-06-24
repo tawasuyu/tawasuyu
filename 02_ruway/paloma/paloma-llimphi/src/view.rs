@@ -608,6 +608,13 @@ fn reading_panel(model: &Model) -> View<Msg> {
         ));
         actions.push(button(&seen_lbl, theme.bg_button, theme.fg_text, Msg::ToggleSeen(id.clone())));
     }
+    // Guardar el remitente en la libreta de contactos.
+    actions.push(button(
+        &format!("＋ {}", t("paloma-btn-add-contact")),
+        theme.bg_button,
+        theme.fg_text,
+        Msg::SaveSenderContact,
+    ));
     actions.push(spacer());
     actions.push(button(&format!("🗑  {}", t("delete")), theme.bg_button, theme.fg_destructive, Msg::DeleteThread));
     let action_bar = View::new(Style {

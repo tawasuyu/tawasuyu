@@ -234,6 +234,13 @@ impl App for Paloma {
             model.attach_rail(Box::new(rail));
         }
 
+        // Libreta de contactos (alias → dirección), JSON editable en config.
+        if let Some(dir) = config_dir() {
+            let path = dir.join("contactos.json");
+            let book = paloma_contacts::Contactbook::load(&path).unwrap_or_default();
+            model.set_contacts(book, path);
+        }
+
         model
     }
 
