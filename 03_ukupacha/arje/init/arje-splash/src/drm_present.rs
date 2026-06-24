@@ -276,7 +276,7 @@ fn try_run(opts: &Opts) -> Result<(), String> {
     let log_after_ms = std::env::var("ARJE_SPLASH_LOG_AFTER_MS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(6000u64);
+        .unwrap_or(opts.cfg.log_after_ms);
     let mut kmsg = if logs_auto {
         let k = crate::logs::Kmsg::open();
         if !k.active() {

@@ -41,6 +41,9 @@ pub struct SplashCfg {
     pub bg: (u8, u8, u8),
     pub accent: (u8, u8, u8),
     pub logs: LogMode,
+    /// Ms tras los que, si el arranque sigue, aparece el panel de logs
+    /// (también aparece ante un error, sin esperar). Sólo con `logs = auto`.
+    pub log_after_ms: u64,
 }
 
 impl Default for SplashCfg {
@@ -52,6 +55,7 @@ impl Default for SplashCfg {
             bg: crate::render::BG,
             accent: crate::render::ACCENT,
             logs: LogMode::Auto,
+            log_after_ms: 6000,
         }
     }
 }
@@ -95,6 +99,7 @@ impl SplashCfg {
                     "off" | "no" | "0" => LogMode::Off,
                     _ => LogMode::Auto,
                 },
+                "log_after_ms" => if let Ok(n) = v.parse() { self.log_after_ms = n },
                 _ => {}
             }
         }
@@ -120,12 +125,14 @@ impl SplashCfg {
              max_ms = {}\n\
              bg = {}\n\
              accent = {}\n\
-             logs = {}\n",
+             logs = {}\n\
+             log_after_ms = {}\n",
             self.fps,
             self.max_ms,
             hex(self.bg),
             hex(self.accent),
             match self.logs { LogMode::Off => "off", LogMode::Auto => "auto" },
+            self.log_after_ms,
         )
     }
 }
