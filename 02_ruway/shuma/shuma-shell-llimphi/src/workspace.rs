@@ -79,6 +79,24 @@ impl WsTab {
     fn refocus_tiled(&mut self) {
         self.focused = self.layout.first_leaf();
     }
+
+    /// Estado de actividad agregado de la tab para el aviso visual: claude tiene
+    /// prioridad, luego movimiento (algún panel corriendo), si no quieto. Mira
+    /// **todos** los paneles, así una tab inactiva igual avisa que algo pasa.
+    pub fn activity(&self) -> shuma_module_shell::Activity {
+        use shuma_module_shell::Activity;
+        let mut acc = Activity::Idle;
+        for inst in self.panes.values() {
+            if let crate::types::ModuleState::Shell(s) = &inst.state {
+                match s.activity() {
+                    Activity::Claude => return Activity::Claude,
+                    Activity::Busy => acc = Activity::Busy,
+                    Activity::Idle => {}
+                }
+            }
+        }
+        acc
+    }
 }
 
 /// El layout completo de una sesión.
@@ -299,6 +317,23 @@ impl Workspace {
             self.active_tab -= 1;
         }
         tab.panes.into_values().collect()
+    }
+
+    /// Cierra todas las tabs menos la `keep`, que pasa a ser la activa.
+    /// Devuelve las instancias de las tabs cerradas para que el caller las
+    /// deje caer. No-op (vector vacío) si `keep` no existe o es la única.
+    pub fn close_others(&mut self, keep: usize) -> Vec<Instance> {
+        if keep >= self.tabs.len() || self.tabs.len() <= 1 {
+            return Vec::new();
+        }
+        let mut dropped = Vec::new();
+        let kept = self.tabs.remove(keep);
+        for tab in self.tabs.drain(..) {
+            dropped.extend(tab.panes.into_values());
+        }
+        self.tabs.push(kept);
+        self.active_tab = 0;
+        dropped
     }
 
     // ─── Flotantes ──────────────────────────────────────────────────

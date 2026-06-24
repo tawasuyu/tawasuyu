@@ -18,6 +18,7 @@ mod animaciones;
 mod greeter;
 mod splash;
 mod perfiles;
+mod shuma_shortcuts;
 mod themes;
 
 use std::path::PathBuf;
@@ -281,6 +282,11 @@ struct Model {
     /// del panel conmuta el activo; al cambiar, recarga el keymap visible.
     profiles: mirada_brain::KeymapProfiles,
     profiles_path: Option<PathBuf>,
+    /// Atajos de **terminal de shuma** (perfil activo + nombres disponibles),
+    /// leídos de `~/.config/shuma/shortcuts.ron`. El selector del panel conmuta
+    /// el activo; toma efecto en el próximo arranque de shuma.
+    shuma_atajos_active: String,
+    shuma_atajos_names: Vec<String>,
     /// Biblioteca de **perfiles de escritorio completos** (custom, editables,
     /// creables y duplicables). Cada perfil = foto de config mirada + keymap +
     /// barra pata. El activo (`dprofiles.active`) es el que se está editando en
@@ -971,6 +977,8 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         .map(mirada_brain::KeymapProfiles::load_or_init)
         .unwrap_or_default();
 
+    let (shuma_atajos_active, shuma_atajos_names) = shuma_shortcuts::load();
+
     let dprofiles = DesktopProfiles::load_or_seed(&mirada);
 
     let rules_path = mirada_brain::rules::Rules::default_path();
@@ -1000,6 +1008,8 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         keymap_path,
         profiles,
         profiles_path,
+        shuma_atajos_active,
+        shuma_atajos_names,
         dprofiles,
         pata,
         rules,
@@ -2146,6 +2156,34 @@ fn atajos_schema(m: &Model) -> Schema {
                 .field(Field::button("eliminar", format!("Eliminar «{set}»"))),
         )
         .section(keymap_section(&m.keymap_rows))
+        .section(shuma_atajos_section(m))
+}
+
+/// Sección «Terminal (shuma)» del panel Atajos: conmuta el perfil de atajos del
+/// workspace de shuma (tabs/tiling/flotantes: nativo `shuma`, `terminal` con los
+/// acordes acostumbrados, hyprland/tmux/zellij/vim o propios). Toma efecto en el
+/// próximo arranque de shuma.
+fn shuma_atajos_section(m: &Model) -> Section {
+    use allichay::Field;
+    let opts: Vec<EnumOption> = m
+        .shuma_atajos_names
+        .iter()
+        .map(|n| EnumOption::new(n.clone(), n.clone()))
+        .collect();
+    Section::new("atajos::terminal", "Terminal (shuma)")
+        .icon("▭")
+        .help(
+            "Atajos del workspace de la terminal shuma (tabs, tiling y flotantes). \
+             «terminal» trae los acordes acostumbrados de emuladores \
+             (Ctrl+Shift+T tab nueva, Ctrl+Tab siguiente, Ctrl+Shift+W cerrar). \
+             El cambio toma efecto la próxima vez que abrís shuma.",
+        )
+        .field(Field::radio(
+            "usar",
+            "Perfil de atajos de shuma",
+            m.shuma_atajos_active.clone(),
+            opts,
+        ))
 }
 
 /// Nombre único para un conjunto de atajos nuevo a partir de `hint`.
@@ -2242,6 +2280,22 @@ fn apply_atajos(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                 let _ = m.profiles.set_keymap(&active, km);
                 m.dirty.keymap = true;
                 m.dirty.profiles = true;
+            }
+        }
+        // Sección «Terminal (shuma)»: conmuta el perfil de atajos de shuma y lo
+        // persiste directo a su RON (archivo ajeno, sin bandera de sucio nuestra).
+        Some("terminal") => {
+            if rel.leaf() == Some("usar") {
+                if let Some(name) = value.as_str() {
+                    match shuma_shortcuts::set_active(name) {
+                        Ok(()) => {
+                            m.shuma_atajos_active = name.to_string();
+                            m.status =
+                                format!("atajos de shuma → «{name}» (al reabrir shuma)");
+                        }
+                        Err(e) => m.status = format!("· no pude guardar atajos de shuma: {e}"),
+                    }
+                }
             }
         }
         _ => {}
@@ -3468,6 +3522,8 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
                 Some("renombrar") => FieldValue::Text(String::new()),
                 _ => FieldValue::Bool(false),
             },
+            // Sección «Terminal (shuma)»: el selector «usar» = perfil shuma activo.
+            Some("terminal") => FieldValue::Text(m.shuma_atajos_active.clone()),
             _ => FieldValue::Table(m.keymap_rows.clone()),
         });
     }

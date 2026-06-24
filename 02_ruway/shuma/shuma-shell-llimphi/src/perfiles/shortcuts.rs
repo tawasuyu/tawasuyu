@@ -129,7 +129,7 @@ impl Keymap {
 use ShortcutAction::*;
 
 /// Los nombres de los presets de fábrica, en orden de presentación.
-pub const PRESET_NAMES: &[&str] = &["shuma", "hyprland", "tmux", "zellij", "vim"];
+pub const PRESET_NAMES: &[&str] = &["shuma", "terminal", "hyprland", "tmux", "zellij", "vim"];
 
 /// `true` si `name` es un preset de fábrica (protegido contra borrado/renombre).
 pub fn is_builtin(name: &str) -> bool {
@@ -156,6 +156,46 @@ pub fn preset(name: &str) -> Option<Keymap> {
                 ("Alt+]", NextTab),
                 ("Alt+Left", CyclePrev),
                 ("Alt+Right", CycleNext),
+                ("Alt+1", GotoTab(1)),
+                ("Alt+2", GotoTab(2)),
+                ("Alt+3", GotoTab(3)),
+                ("Alt+4", GotoTab(4)),
+                ("Alt+5", GotoTab(5)),
+                ("Alt+6", GotoTab(6)),
+                ("Alt+7", GotoTab(7)),
+                ("Alt+8", GotoTab(8)),
+                ("Alt+9", GotoTab(9)),
+                // Atajos acostumbrados de terminal, además de los Alt nativos.
+                // `Ctrl+Shift+…` (no `Ctrl+…` solo) para no comerse los códigos
+                // de control que el shell necesita (Ctrl+T = transpose, etc.).
+                ("Ctrl+Shift+t", NewTab),
+                ("Ctrl+Shift+w", CloseTab),
+                ("Ctrl+Tab", NextTab),
+                ("Ctrl+Shift+Tab", PrevTab),
+                ("Ctrl+PageDown", NextTab),
+                ("Ctrl+PageUp", PrevTab),
+                ("Ctrl+Shift+e", SplitH),
+                ("Ctrl+Shift+o", SplitV),
+                ("Ctrl+Shift+d", ClosePane),
+            ],
+        ),
+        // Terminal puro: sólo los acordes acostumbrados de emuladores
+        // (gnome-terminal/konsole/terminator), sin los Alt nativos de shuma.
+        "terminal" => Keymap::from_pairs(
+            None,
+            &[
+                ("Ctrl+Shift+t", NewTab),
+                ("Ctrl+Shift+w", CloseTab),
+                ("Ctrl+Tab", NextTab),
+                ("Ctrl+Shift+Tab", PrevTab),
+                ("Ctrl+PageDown", NextTab),
+                ("Ctrl+PageUp", PrevTab),
+                ("Ctrl+Shift+Right", NextTab),
+                ("Ctrl+Shift+Left", PrevTab),
+                ("Ctrl+Shift+e", SplitH),
+                ("Ctrl+Shift+o", SplitV),
+                ("Ctrl+Shift+d", ClosePane),
+                ("Ctrl+Shift+f", FloatToggle),
                 ("Alt+1", GotoTab(1)),
                 ("Alt+2", GotoTab(2)),
                 ("Alt+3", GotoTab(3)),
@@ -499,6 +539,8 @@ pub(crate) fn chord_of(e: &llimphi_ui::KeyEvent) -> Option<String> {
             NamedKey::Enter => "Return".to_string(),
             NamedKey::Tab => "Tab".to_string(),
             NamedKey::Space => "Space".to_string(),
+            NamedKey::PageUp => "PageUp".to_string(),
+            NamedKey::PageDown => "PageDown".to_string(),
             _ => return None,
         },
         _ => return None,
@@ -622,6 +664,40 @@ mod tests {
             assert!(p.contains(n));
         }
         assert!(p.contains("solo"));
+    }
+
+    #[test]
+    fn terminal_trae_los_acordes_acostumbrados() {
+        let km = preset("terminal").expect("preset terminal");
+        assert!(km.prefix.is_none());
+        assert_eq!(km.binds.get("Ctrl+Shift+t"), Some(&NewTab));
+        assert_eq!(km.binds.get("Ctrl+Shift+w"), Some(&CloseTab));
+        assert_eq!(km.binds.get("Ctrl+Tab"), Some(&NextTab));
+        assert_eq!(km.binds.get("Ctrl+Shift+Tab"), Some(&PrevTab));
+        // shuma nativo también incorpora los de terminal sin perder los Alt.
+        let shuma = preset("shuma").unwrap();
+        assert_eq!(shuma.binds.get("Ctrl+Shift+t"), Some(&NewTab));
+        assert_eq!(shuma.binds.get("Alt+t"), Some(&NewTab));
+    }
+
+    #[test]
+    fn chord_de_ctrl_tab_y_pagedown() {
+        let tab = llimphi_ui::KeyEvent {
+            key: llimphi_ui::Key::Named(llimphi_ui::NamedKey::Tab),
+            state: llimphi_ui::KeyState::Pressed,
+            text: None,
+            modifiers: llimphi_ui::Modifiers { ctrl: true, alt: false, shift: false, meta: false },
+            repeat: false,
+        };
+        assert_eq!(chord_of(&tab).as_deref(), Some("Ctrl+Tab"));
+        let pgdn = llimphi_ui::KeyEvent {
+            key: llimphi_ui::Key::Named(llimphi_ui::NamedKey::PageDown),
+            state: llimphi_ui::KeyState::Pressed,
+            text: None,
+            modifiers: llimphi_ui::Modifiers { ctrl: true, alt: false, shift: false, meta: false },
+            repeat: false,
+        };
+        assert_eq!(chord_of(&pgdn).as_deref(), Some("Ctrl+PageDown"));
     }
 
     #[test]

@@ -110,13 +110,18 @@ impl LayerApp {
             return;
         }
         self.shuma.open = open;
+        self.shuma_opened_at = open.then(std::time::Instant::now);
         let h = if open { 10_000 } else { self.shuma_bar_px };
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
+        // Abierto = Exclusive (el drawer agarra todo el teclado). Plegado =
+        // OnDemand (no `None`): la barra sigue pudiendo reclamar el teclado, así
+        // mirada se lo da en escritorio vacío (keyboard_fallback_target) sin
+        // robárselo a una ventana enfocada.
         layer.set_keyboard_interactivity(if open {
             smithay_client_toolkit::shell::wlr_layer::KeyboardInteractivity::Exclusive
         } else {
-            smithay_client_toolkit::shell::wlr_layer::KeyboardInteractivity::None
+            smithay_client_toolkit::shell::wlr_layer::KeyboardInteractivity::OnDemand
         });
         layer.commit();
         self.panels[pi].cache = None;

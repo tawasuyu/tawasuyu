@@ -402,6 +402,18 @@ impl PointerHandler for LayerApp {
                             self.panels[pi].cursor_x = None;
                             self.panels[pi].dirty = true;
                         }
+                        // Hover-drawer: el puntero abandonó la superficie de shuma →
+                        // replegá el drawer ("cierre con deshover"). Con guarda
+                        // anti-churn: ignorá el `leave` espurio del reacomodo de foco
+                        // justo al abrir (mismo patrón que el menú de inicio).
+                        if self.shuma_panel == Some(pi) && self.shuma.open {
+                            let churn = self
+                                .shuma_opened_at
+                                .is_some_and(|t| t.elapsed() < MENU_LEAVE_GRACE);
+                            if !churn {
+                                self.set_shuma_open(false);
+                            }
+                        }
                     }
                     self.hide_tooltip(qh);
                     continue;

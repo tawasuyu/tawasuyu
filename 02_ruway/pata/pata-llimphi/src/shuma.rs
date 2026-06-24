@@ -114,7 +114,7 @@ pub fn headline_view(
     // sesión), caemos al chip como fallback.
     if let Some(full) = full {
         if let Some(input) = shuma_app::active_input_view(full, theme, crate::lift_shuma) {
-            return wrap_headline(vec![input]);
+            return wrap_headline(vec![input], state.open);
         }
         return headline_chip(state, theme);
     }
@@ -127,15 +127,15 @@ pub fn headline_view(
     if !state.open && state.inner.long_alerts() > 0 {
         children.push(long_alert_badge());
     }
-    wrap_headline(children)
+    wrap_headline(children, state.open)
 }
 
 /// Envuelve los hijos del cabezal (input vivo + badge) en el contenedor que
 /// llena el espacio de la barra. Click sobre el borde (no sobre el input)
 /// despliega/repliega el drawer; el click directo sobre el input lo focaliza
 /// (handler más profundo gana) y, en live-wire, abre el drawer vía el `update`.
-fn wrap_headline(children: Vec<View<Msg>>) -> View<Msg> {
-    View::new(Style {
+fn wrap_headline(children: Vec<View<Msg>>, open: bool) -> View<Msg> {
+    let v = View::new(Style {
         flex_direction: FlexDirection::Row,
         // Llenar el espacio disponible de la barra en vez de un bloque fijo de
         // 380 px "botado en el medio": flex_basis 0 + grow toma el remanente; un
@@ -167,7 +167,16 @@ fn wrap_headline(children: Vec<View<Msg>>) -> View<Msg> {
         ..Default::default()
     })
     .on_click(Msg::ShumaToggle)
-    .children(children)
+    .children(children);
+    // Hover-drawer: con el drawer plegado, pasar el puntero por el cabezal lo
+    // despliega ("abre con hover"); el `leave` de la superficie lo repliega.
+    // Sólo cuando está plegado, para no re-togglear al recorrer el drawer ya
+    // abierto.
+    if open {
+        v
+    } else {
+        v.on_pointer_enter(Msg::ShumaToggle)
+    }
 }
 
 /// A6 — el punto ámbar con halo del cabezal: «terminó un comando largo». Mismo

@@ -317,6 +317,7 @@ pub fn new_model() -> Model {
         menu_active: usize::MAX,
         menu_anim: Tween::idle(1.0),
         ctx_menu: None,
+        tab_ctx: None,
         env_groups,
         env_groups_mtime,
         tick_count: 0,
@@ -1773,6 +1774,7 @@ impl App for Shell {
                 m.menu_open = None;
                 m.menu_active = usize::MAX;
                 m.ctx_menu = None;
+                m.tab_ctx = None;
             }
             Msg::MenuCommand(cmd) => {
                 m = menu::handle_command(m, &cmd);
@@ -1827,9 +1829,22 @@ impl App for Shell {
                 }
             }
             Msg::TabClose(i) => {
+                m.tab_ctx = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     let _ = s.workspace.close_tab(i);
                 }
+            }
+            Msg::TabCloseOthers(i) => {
+                m.tab_ctx = None;
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    let _ = s.workspace.close_others(i);
+                }
+            }
+            Msg::TabCtxOpen(i, x, y) => {
+                m.tab_ctx = Some((i, x, y));
+                m.ctx_menu = None;
+                m.menu_open = None;
+                m.menu_active = usize::MAX;
             }
             Msg::FloatNew => {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {

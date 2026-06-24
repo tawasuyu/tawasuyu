@@ -256,6 +256,9 @@ pub(crate) fn menubar_row(model: &Model, theme: &Theme) -> View<Msg> {
 /// Construye el overlay a mostrar: prioriza el menú contextual de
 /// terminal; si no, el dropdown del menú principal abierto.
 pub(crate) fn overlay(model: &Model) -> Option<View<Msg>> {
+    if let Some((i, x, y)) = model.tab_ctx {
+        return Some(tab_context_menu(model, i, x, y));
+    }
     if let Some((x, y)) = model.ctx_menu {
         return Some(terminal_context_menu(model, x, y));
     }
@@ -316,6 +319,48 @@ fn terminal_context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
         anchor: (x, y),
         viewport: viewport(),
         header: Some(rimay_localize::t("terminal")),
+        items,
+        active: usize::MAX,
+        on_pick,
+        on_dismiss: Msg::CloseMenus,
+        palette: ContextMenuPalette::from_theme(&model.theme),
+    })
+}
+
+/// Menú contextual de una **tab** (click derecho sobre el chip): operaciones de
+/// tab sin la ✕ riesgosa. `i` es el índice de la tab clickeada.
+fn tab_context_menu(model: &Model, i: usize, x: f32, y: f32) -> View<Msg> {
+    let n_tabs = model
+        .active()
+        .map(|s| s.workspace.tabs.len())
+        .unwrap_or(1);
+
+    let mut cerrar = ContextMenuItem::action("Cerrar tab");
+    let mut cerrar_otras = ContextMenuItem::action("Cerrar otras");
+    if n_tabs <= 1 {
+        cerrar = cerrar.disabled();
+        cerrar_otras = cerrar_otras.disabled();
+    }
+
+    // Orden de items — el índice es el que recibe `on_pick`.
+    let items = vec![
+        ContextMenuItem::action("Nueva tab"), // 0
+        ContextMenuItem::separator(),         // 1
+        cerrar,                               // 2
+        cerrar_otras,                         // 3
+    ];
+
+    let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |k: usize| match k {
+        0 => Msg::TabNew,
+        2 => Msg::TabClose(i),
+        3 => Msg::TabCloseOthers(i),
+        _ => Msg::CloseMenus,
+    });
+
+    context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: viewport(),
+        header: Some(format!("Tab {}", i + 1)),
         items,
         active: usize::MAX,
         on_pick,

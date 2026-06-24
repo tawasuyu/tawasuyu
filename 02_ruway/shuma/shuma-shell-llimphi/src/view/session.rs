@@ -35,7 +35,7 @@ pub(super) fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             // activa el usuario ya está mirando). Avisa que algo largo terminó
             // mientras estabas en otro diente.
             let alerta_larga = !activa && s.long_alerts() > 0;
-            let icon = session_tooth_icon(s.kind, s.active_data(), alerta_larga, 22.0, icon_color);
+            let icon = session_tooth_icon(s.kind, s.activity(), alerta_larga, 22.0, icon_color);
             let num = View::new(Style {
                 size: Size { width: percent(1.0_f32), height: length(12.0_f32) },
                 align_items: Some(AlignItems::Center),
@@ -123,11 +123,22 @@ pub(super) fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
     .children(teeth)
 }
 
+/// Color del LED de actividad para el aviso visual: quieto (gris), movimiento
+/// (verde), claude (naranja claude). Transversal a diente y tab.
+pub(super) fn activity_led_color(act: shuma_module_shell::Activity) -> Color {
+    use shuma_module_shell::Activity;
+    match act {
+        Activity::Idle => Color::from_rgb8(0x55, 0x5a, 0x66),
+        Activity::Busy => Color::from_rgb8(0x4a, 0xde, 0x80),
+        Activity::Claude => Color::from_rgb8(0xd9, 0x77, 0x57),
+    }
+}
+
 /// Icono vectorial del diente de una sesión según su tipo. `alert` (A6) pinta
 /// una badge ámbar cuando un comando largo terminó en una sesión no-activa.
 fn session_tooth_icon(
     kind: SessionKind,
-    active_data: bool,
+    activity: shuma_module_shell::Activity,
     alert: bool,
     size: f32,
     color: Color,
@@ -177,12 +188,18 @@ fn session_tooth_icon(
                 scene.stroke(&stroke, Affine::IDENTITY, color, None, &m);
             }
         }
-        // LED de actividad.
-        let led = if active_data {
-            PColor::from_rgb8(0x4a, 0xde, 0x80)
-        } else {
-            PColor::from_rgb8(0x55, 0x5a, 0x66)
-        };
+        // LED de actividad — quieto / movimiento / claude por color.
+        let led = activity_led_color(activity);
+        // claude/movimiento llevan halo tenue para que cante; quieto va seco.
+        if !matches!(activity, shuma_module_shell::Activity::Idle) {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                led.with_alpha(0.30),
+                None,
+                &Circle::new((cx + r * 1.05, cy - r * 1.05), (r * 0.32).max(1.5) * 1.9),
+            );
+        }
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
@@ -844,7 +861,6 @@ fn floating_pane(
 fn tab_bar(ws: &crate::workspace::Workspace, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
     let mut row: Vec<View<Msg>> = Vec::new();
-    let multi = ws.tabs.len() > 1;
 
     for (i, t) in ws.tabs.iter().enumerate() {
         let activa = i == ws.active_tab;
@@ -856,46 +872,44 @@ fn tab_bar(ws: &crate::workspace::Workspace, theme: &Theme) -> View<Msg> {
         } else {
             t.name.clone()
         };
+        // Punto de actividad: quieto / movimiento / claude por color. En tabs
+        // inactivas con claude/movimiento es la única forma de enterarte.
+        let dot = View::new(Style {
+            size: Size { width: length(7.0_f32), height: length(7.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .fill(activity_led_color(t.activity()))
+        .radius(4.0);
         let name = View::new(Style {
             size: Size { width: Dimension::auto(), height: length(22.0_f32) },
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text_aligned(label, 12.0, fg, Alignment::Center)
-        .on_click(Msg::TabSwitch(i));
-        let mut chip_children = vec![name];
-        if multi {
-            chip_children.push(
-                View::new(Style {
-                    size: Size { width: length(16.0_f32), height: length(22.0_f32) },
-                    flex_shrink: 0.0,
-                    align_items: Some(AlignItems::Center),
-                    justify_content: Some(JustifyContent::Center),
-                    ..Default::default()
-                })
-                .hover_fill(theme.bg_row_hover)
-                .radius(3.0)
-                .text_aligned("✕".to_string(), 10.0, theme.fg_muted, Alignment::Center)
-                .on_click(Msg::TabClose(i)),
-            );
-        }
+        .text_aligned(label, 12.0, fg, Alignment::Center);
+        // Chip: click activa, click-medio cierra (sin la ✕ riesgosa), click
+        // derecho abre el menú contextual de la tab.
         row.push(
             View::new(Style {
                 flex_direction: FlexDirection::Row,
                 size: Size { width: Dimension::auto(), height: length(24.0_f32) },
                 align_items: Some(AlignItems::Center),
-                gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+                gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
                 padding: Rect {
                     left: length(10.0_f32),
-                    right: length(6.0_f32),
+                    right: length(10.0_f32),
                     top: length(0.0_f32),
                     bottom: length(0.0_f32),
                 },
                 ..Default::default()
             })
             .fill(fill)
+            .hover_fill(if activa { fill } else { theme.bg_row_hover })
             .radius(4.0)
-            .children(chip_children),
+            .on_click(Msg::TabSwitch(i))
+            .on_middle_click(Msg::TabClose(i))
+            .on_right_click_at(move |x, y, _w, _h| Some(Msg::TabCtxOpen(i, x, y)))
+            .children(vec![dot, name]),
         );
     }
 

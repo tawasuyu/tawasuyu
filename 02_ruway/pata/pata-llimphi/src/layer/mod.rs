@@ -267,6 +267,11 @@ pub(super) struct LayerApp {
     /// durante [`MENU_LEAVE_GRACE`] tras abrir; un `leave` legítimo (clic en una
     /// ventana) llega mucho después.
     pub(super) menu_opened_at: Option<std::time::Instant>,
+    /// Cuándo se abrió el drawer de shuma — misma guarda anti-churn que
+    /// `menu_opened_at`: al abrir, el drawer toma el teclado (Exclusive) y el
+    /// compositor reacomoda el foco/puntero; ignoramos el `leave`-cierre por
+    /// hover durante [`MENU_LEAVE_GRACE`] para no togglear apenas se abre.
+    pub(super) shuma_opened_at: Option<std::time::Instant>,
     /// Categoría activa del menú de inicio (índice en la lista de categorías):
     /// sus apps se muestran en el panel derecho. `None` = la primera. La fija el
     /// hover sobre la columna de categorías (`Msg::MenuHoverCategory`).
@@ -498,6 +503,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         registry: app_bus::AppRegistry::discover_merged(),
         menu_open: false,
         menu_opened_at: None,
+        shuma_opened_at: None,
         menu_cat: None,
         menu_kind: MenuKind::Apps,
         clip_history: Vec::new(),
@@ -763,9 +769,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .map(|pi| app.cfg.surfaces[app.panels[pi].idx].thickness.max(1.0) as u32)
         .unwrap_or(40);
     if let Some(pi) = app.shuma_panel {
+        // `OnDemand` (no `None`): con el drawer plegado la barra igual puede
+        // reclamar el teclado. mirada lo enruta al shell-layer cuando el
+        // escritorio está vacío (keyboard_fallback_target), así shuma agarra el
+        // teclado en workspaces sin ventanas y podés tipear sin clickear.
         app.panels[pi]
             .layer
-            .set_keyboard_interactivity(KeyboardInteractivity::None);
+            .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         app.panels[pi].layer.commit();
     }
 

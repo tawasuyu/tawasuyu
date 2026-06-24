@@ -43,6 +43,14 @@ pub(crate) fn is_tui_fullscreen(s: &State) -> bool {
         .unwrap_or(false)
 }
 
+/// El `AppSkin` del run vivo (si hay PTY/TUI), para el aviso visual. Misma
+/// política `try_lock` que [`is_tui_fullscreen`]: ante contienda, `None`.
+pub(crate) fn running_skin(s: &State) -> Option<crate::AppSkin> {
+    let arc = s.running.as_ref()?;
+    let g = arc.try_lock().ok()?;
+    g.tui.as_ref().map(|t| t.skin)
+}
+
 /// Contenido de la pantalla del PTY vivo cuando está en **modo líneas**
 /// (PTY presente, sin alt-screen). Devuelve las filas como texto (sin
 /// formato), recortando las filas vacías del final. `None` si no hay PTY

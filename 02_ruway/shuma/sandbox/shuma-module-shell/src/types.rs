@@ -170,6 +170,19 @@ pub enum AppSkin {
     Claude,
 }
 
+/// Estado de actividad de una sesión/panel — alimenta el aviso visual
+/// (color del LED en el diente y en la tab). Tres signos que el usuario pidió:
+/// quieto, con movimiento (algo corriendo / saliendo output) y claude.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activity {
+    /// Sin comando en curso ni novedad — prompt ocioso.
+    Idle,
+    /// Hay un comando corriendo (foreground): movimiento.
+    Busy,
+    /// La sesión corre `claude` (TUI) — color propio para distinguirla.
+    Claude,
+}
+
 /// Elige el skin a partir del nombre del programa (acepta un path —
 /// toma el basename).
 pub fn app_skin_for(program: &str) -> AppSkin {
@@ -888,6 +901,19 @@ impl State {
     /// `true` si hay un comando ejecutándose ahora.
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// Estado de actividad para el aviso visual (color del LED): claude tiene
+    /// prioridad (aunque "corra", queremos su color propio), luego comando en
+    /// curso = movimiento, si no quieto.
+    pub fn activity(&self) -> Activity {
+        if crate::update::pty::running_skin(self) == Some(AppSkin::Claude) {
+            Activity::Claude
+        } else if self.is_running() {
+            Activity::Busy
+        } else {
+            Activity::Idle
+        }
     }
 
     /// `true` si el PTY vivo está en **alternate screen** — una TUI de pantalla

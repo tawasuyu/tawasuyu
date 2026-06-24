@@ -601,6 +601,15 @@ impl Session {
         matches!(&self.shell().state, ModuleState::Shell(s) if s.is_running())
     }
 
+    /// Estado de actividad del shell con foco — alimenta el color del LED del
+    /// diente (quieto / movimiento / claude).
+    pub(crate) fn activity(&self) -> shuma_module_shell::Activity {
+        match &self.shell().state {
+            ModuleState::Shell(s) => s.activity(),
+            _ => shuma_module_shell::Activity::Idle,
+        }
+    }
+
     /// A6 — comandos largos terminados pendientes de acuse en esta sesión (la
     /// badge del diente). `0` si no es un shell o no hay nada pendiente.
     pub(crate) fn long_alerts(&self) -> usize {
@@ -969,6 +978,8 @@ pub struct Model {
     pub menu_active: usize,
     pub menu_anim: Tween<f32>,
     pub ctx_menu: Option<(f32, f32)>,
+    /// Menú contextual de una tab abierto: (índice de tab, x, y).
+    pub tab_ctx: Option<(usize, f32, f32)>,
 
     /// Grupos de environment (env.json) — el panel del sidebar los lista
     /// y activa/desactiva en bloque; `:env` los alimenta desde el teclado.
@@ -1195,6 +1206,10 @@ pub enum Msg {
     TabSwitch(usize),
     /// Cierra la tab `i`.
     TabClose(usize),
+    /// Cierra todas las tabs menos la `i`.
+    TabCloseOthers(usize),
+    /// Abre el menú contextual de la tab `i` en (x, y).
+    TabCtxOpen(usize, f32, f32),
     /// Agrega un panel flotante nuevo.
     FloatNew,
     /// Enciende/apaga la capa de paneles flotantes.
