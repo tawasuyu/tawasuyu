@@ -365,6 +365,7 @@ members = [
     "02_ruway/mirada/mirada-brain",
     "02_ruway/mirada/mirada-compositor",
     "02_ruway/mirada/mirada-ctl",
+    "02_ruway/mirada/mirada-filechooser",
     "02_ruway/mirada/mirada-procedural",
     "02_ruway/mirada/mirada-greeter",
     "02_ruway/mirada/mirada-launcher",

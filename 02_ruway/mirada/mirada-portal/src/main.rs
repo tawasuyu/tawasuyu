@@ -28,6 +28,7 @@ use tracing_subscriber::EnvFilter;
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::{fdo, interface, SignalContext};
 
+mod file_chooser;
 mod theme_facts;
 use theme_facts::ThemeFacts;
 
@@ -47,7 +48,7 @@ const APPEARANCE_NS: &str = "org.freedesktop.appearance";
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
-    info!("mirada-portal: arrancando backend org.freedesktop.impl.portal.Settings");
+    info!("mirada-portal: arrancando backend (Settings + FileChooser)");
 
     let theme_path = theme_config_path();
     let initial = read_facts(theme_path.as_deref());
@@ -67,7 +68,9 @@ async fn main() -> anyhow::Result<()> {
     // servicio del escritorio del usuario, no del sistema.
     let conn_result = zbus::connection::Builder::session()
         .and_then(|b| b.name(BUS_NAME))
-        .and_then(|b| b.serve_at(OBJ_PATH, portal));
+        .and_then(|b| b.serve_at(OBJ_PATH, portal))
+        // Misma ruta de objeto, segunda interfaz: el diálogo de archivos.
+        .and_then(|b| b.serve_at(OBJ_PATH, file_chooser::FileChooserPortal));
 
     match conn_result {
         Ok(builder) => match builder.build().await {
