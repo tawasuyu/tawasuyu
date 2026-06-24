@@ -580,6 +580,7 @@ libc = "0.2"
 # DRM/KMS legacy (dumb buffer) para el splash nativo del arranque sin parpadeo.
 # Misma versión que reexporta smithay (mirada-compositor) — el lock ya la fija.
 drm = "0.14"
+font8x8 = { version = "0.3", default-features = false }
 
 # === IDs / Hash / Crypto ===
 ulid = { version = "1", features = ["serde"] }

@@ -116,7 +116,7 @@ fn try_run_greeter(opts: &Opts) -> Result<(), String> {
     let bg = opts.cfg.bg;
     // Primer frame = BG puro (appear=0): idéntico al frame final del fade-out
     // del splash, así el traspaso de master no introduce ningún salto.
-    paint_into(&card, &mut a, w, h, 0, 0.0, Scene::Greeter, bg)?;
+    paint_into(&card, &mut a, w, h, 0, 0.0, Scene::Greeter, bg, None)?;
     card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con_handle], Some(mode))
         .map_err(|e| format!("set_crtc inicial: {e}"))?;
 
@@ -136,7 +136,7 @@ fn try_run_greeter(opts: &Opts) -> Result<(), String> {
         }
         let appear = ((e as f32) / APPEAR_MS as f32).min(1.0);
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, e, appear,
-                    Scene::Greeter, bg, &mut can_flip, frame_dt)?;
+                    Scene::Greeter, bg, None, &mut can_flip, frame_dt)?;
         std::mem::swap(&mut a, &mut b);
     }
     Ok(())
@@ -270,6 +270,24 @@ fn try_run(opts: &Opts) -> Result<(), String> {
     let loaded = Loaded::from_cfg(&opts.cfg.source);
     let bg = opts.cfg.bg;
 
+    // Panel de logs automático (sólo si la config lo permite). Aparece si el
+    // arranque tarda más de `log_after_ms` o si el kernel reporta un error.
+    let logs_auto = matches!(opts.cfg.logs, crate::config::LogMode::Auto);
+    let log_after_ms = std::env::var("ARJE_SPLASH_LOG_AFTER_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6000u64);
+    let mut kmsg = if logs_auto {
+        let k = crate::logs::Kmsg::open();
+        if !k.active() {
+            log!("logs: /dev/kmsg no disponible — sin panel de logs");
+        }
+        Some(k)
+    } else {
+        None
+    };
+    let mut log_reveal = 0.0f32;
+
     // Socket de handoff (Fase 2). Best-effort: si no bindea, sólo tope de tiempo.
     let mut handoff = Handoff::bind(&handoff::sock_path());
     if handoff.active() {
@@ -280,7 +298,7 @@ fn try_run(opts: &Opts) -> Result<(), String> {
 
     let start = Instant::now();
     // Primer present: set_crtc reusando el modo → mismo timing, sin flash.
-    paint_into(&card, &mut a, w, h, 0, 0.0, loaded.scene_at(0, opts.fps), bg)?;
+    paint_into(&card, &mut a, w, h, 0, 0.0, loaded.scene_at(0, opts.fps), bg, None)?;
     card.set_crtc(crtc_handle, Some(a.fb), (0, 0), &[con_handle], Some(mode))
         .map_err(|e| format!("set_crtc inicial: {e}"))?;
 
@@ -309,8 +327,26 @@ fn try_run(opts: &Opts) -> Result<(), String> {
         }
 
         let t = start.elapsed().as_millis() as u64;
+        // Panel de logs: ¿lo mostramos? (boot lento o error). Una vez activo,
+        // se queda; revelamos progresivamente (~250 ms).
+        if let Some(k) = kmsg.as_mut() {
+            k.poll();
+            if k.error_seen() || t >= log_after_ms {
+                if log_reveal == 0.0 {
+                    log!("panel de logs: {}", if k.error_seen() { "error en kmsg" } else { "boot lento" });
+                }
+                log_reveal = (log_reveal + frame_dt.as_millis() as f32 / 250.0).min(1.0);
+            }
+        }
+        let lines = if log_reveal > 0.0 {
+            kmsg.as_ref().map(|k| k.recent(64)).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let overlay = (log_reveal > 0.0).then(|| (lines.as_slice(), log_reveal));
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 0.0,
-                    loaded.scene_at(t, opts.fps), bg, &mut can_flip, frame_dt)?;
+                    loaded.scene_at(t, opts.fps), bg, overlay,
+                    &mut can_flip, frame_dt)?;
         std::mem::swap(&mut a, &mut b);
     }
 
@@ -328,13 +364,13 @@ fn try_run(opts: &Opts) -> Result<(), String> {
             let f = e as f32 / FADE_MS as f32;
             let t = start.elapsed().as_millis() as u64;
             present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, f,
-                        loaded.scene_at(t, opts.fps), bg, &mut can_flip, frame_dt)?;
+                        loaded.scene_at(t, opts.fps), bg, None, &mut can_flip, frame_dt)?;
             std::mem::swap(&mut a, &mut b);
         }
         // Frame final: bg sólido garantizado.
         let t = start.elapsed().as_millis() as u64;
         present_one(&card, &mut b, crtc_handle, con_handle, mode, w, h, t, 1.0,
-                    loaded.scene_at(t, opts.fps), bg, &mut can_flip, frame_dt)?;
+                    loaded.scene_at(t, opts.fps), bg, None, &mut can_flip, frame_dt)?;
     }
 
     // Salida: NO destruimos el framebuffer en scanout ni reponemos el modo —
@@ -369,11 +405,12 @@ fn present_one(
     blend: f32,
     scene: Scene,
     bg: (u8, u8, u8),
+    overlay: Option<(&[String], f32)>,
     can_flip: &mut bool,
     frame_dt: Duration,
 ) -> Result<(), String> {
     let frame_start = Instant::now();
-    paint_into(card, surf, w, h, t, blend, scene, bg)?;
+    paint_into(card, surf, w, h, t, blend, scene, bg, overlay)?;
     let presented = if *can_flip {
         match card.page_flip(crtc_handle, surf.fb, PageFlipFlags::EVENT, None) {
             Ok(()) => {
@@ -466,6 +503,7 @@ fn paint_into(
     blend: f32,
     scene: Scene,
     bg: (u8, u8, u8),
+    overlay: Option<(&[String], f32)>,
 ) -> Result<(), String> {
     let pitch = s.db.pitch() as usize;
     let mut map = card
@@ -475,6 +513,10 @@ fn paint_into(
         Scene::Splash => render::paint_frame(map.as_mut(), w, h, pitch, t, blend),
         Scene::Image(img) => crate::image::blit_fit(map.as_mut(), w, h, pitch, img, bg, blend),
         Scene::Greeter => render::paint_greeter(map.as_mut(), w, h, pitch, blend),
+    }
+    // Panel de logs encima de la escena (si está revelándose/visible).
+    if let Some((lines, reveal)) = overlay {
+        crate::logs::render_panel(map.as_mut(), w, h, pitch, lines, reveal);
     }
     Ok(())
 }

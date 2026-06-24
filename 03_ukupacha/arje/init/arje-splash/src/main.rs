@@ -22,6 +22,7 @@ mod config;
 mod drm_present;
 mod handoff;
 mod image;
+mod logs;
 mod render;
 
 use std::process::ExitCode;

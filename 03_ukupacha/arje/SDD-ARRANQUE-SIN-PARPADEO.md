@@ -86,6 +86,16 @@ El contrato de coordinación (borrador):
   espera `RELEASED` antes de tomar DRM master; si no hay splash (timeout corto)
   sigue solo (degradación elegante).
 
+## Panel de logs de arranque (automático)
+
+Estilo «details» de Plymouth pero **automático**: el panel aparece sólo si el
+arranque tarda de más (`ARJE_SPLASH_LOG_AFTER_MS`, def 6 s) o si el kernel
+reporta un error (prioridad de syslog ≤ 3 en `/dev/kmsg`). Sin GL: `arje-splash`
+lee `/dev/kmsg`, y dibuja el texto con la fuente bitmap 8×8 de dominio público
+(`font8x8`) sobre el mismo dumb buffer (`logs.rs`). Se controla con `logs =
+auto | off` en la config (wawa-panel). Best-effort: sin `/dev/kmsg`, no hay
+panel. Verificado en QEMU (dispara por umbral; render unit-testeado).
+
 ## Relación con wawa
 
 `wawa-kernel` **ya** es dueño del GOP y compone desde el frame cero (no tiene

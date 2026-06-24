@@ -12,5 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 drm = { workspace = true }
+font8x8 = { workspace = true }
 libc = { workspace = true }
 png = { workspace = true }
