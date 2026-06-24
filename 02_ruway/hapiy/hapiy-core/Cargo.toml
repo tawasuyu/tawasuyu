@@ -1,0 +1,13 @@
+[package]
+name = "hapiy-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "hapiy — núcleo agnóstico de captura de pantalla: Shot/Region, recorte, encode PNG, destino (archivo / editar en tullpu) y el trait Capturer. Sin Wayland ni UI."
+
+[dependencies]
+image = { workspace = true }
+directories = { workspace = true }

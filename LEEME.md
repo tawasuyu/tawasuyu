@@ -72,7 +72,7 @@ tawasuyu/
 ├── 00_unanchay/   PERCIBIR — pluma · khipu · rimay · chaka · pineal · puriy
 ├── 01_yachay/     CONOCER  — cosmos · dominium · nakui · iniy · tinkuy
 ├── 02_ruway/      HACER    — mirada · shuma · nahual · chasqui · takiy · llimphi · paloma
-│                             supay · media · nada · tullpu · churay · cards · wawa (host)
+│                             supay · media · nada · tullpu · churay · hapiy · cards · wawa (host)
 ├── 03_ukupacha/   RAÍZ     — arje · wawa (kernel + apps WASM) · agora · minga
 │                             sandokan · wawa-explorer
 ├── shared/        núcleos transversales — sandokan · format · card · auth · ssh
@@ -106,6 +106,8 @@ administrativas. Un quién-es-quién rápido:
 - **churay** — instalador/actualizador gráfico estilo Office para la suite en
   cualquier Linux (catálogo de apps, instalación con un clic, entradas
   `.desktop`); comparte un formato de hash direccionado por contenido con **hammer**.
+- **hapiy** — captura de pantalla (el "Spectacle"): un cliente `zwlr_screencopy`
+  soberano que atrapa lo que pinta mirada y pasa la captura a tullpu para anotar.
 - **arje** — init; **agora** — identidad y firmas Ed25519 end-to-end;
   **minga** — colaboración P2P; **sandokan** — el plano de control (quién
   arranca, para, supervisa y observa unidades en Linux y en wawa).

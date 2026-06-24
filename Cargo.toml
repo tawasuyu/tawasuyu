@@ -180,6 +180,8 @@ members = [
     "02_ruway/nada",
     "02_ruway/churay/churay-core",
     "02_ruway/churay/churay-llimphi",
+    "02_ruway/hapiy/hapiy-core",
+    "02_ruway/hapiy/hapiy",
     "02_ruway/cards",
     "02_ruway/tullpu/tullpu-core",
     "02_ruway/tullpu/tullpu-render",
@@ -950,6 +952,10 @@ glob = "0.3"
 indicatif = "0.18"
 lz4_flex = "0.11"
 memmap2 = "0.9"
+# Cliente Wayland (lado cliente) — lo usa hapiy para hablar zwlr_screencopy
+# contra mirada (u otro compositor wlroots) y capturar la pantalla.
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 mockito = "1.0"
 ndarray = "0.15"
 num-traits = "0.2"

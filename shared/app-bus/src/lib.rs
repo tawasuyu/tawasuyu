@@ -98,6 +98,7 @@ pub fn default_entries() -> Vec<AppEntry> {
         ("pluma-notebook", "Pluma Notebook", "▣", "pluma-notebook-llimphi", "unanchay",
             &["application/x-pluma-notebook"]),
         ("tullpu", "Tullpu", "✦", "tullpu-app-llimphi", "ruway", &["image/"]),
+        ("hapiy", "Hapiy", "⛶", "hapiy", "ruway", &[]),
         ("takiy", "Takiy", "♪", "takiy-app-llimphi", "ruway", &["audio/"]),
         ("media", "Media", "▶", "media-app", "ruway", &["video/", "audio/"]),
         ("media-tube", "Media Tube", "▷", "media-tube", "ruway", &[]),
