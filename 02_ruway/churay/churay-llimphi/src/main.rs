@@ -53,6 +53,11 @@ struct Model {
     tab: Tab,
     scroll: f32,
     installing: bool,
+    /// Manifiesto del repo remoto, una vez bajado y verificado.
+    remote_manifest: Option<Manifest>,
+    /// Mensaje de estado del repo remoto (resultado del último chequeo).
+    repo_msg: String,
+    buscando: bool,
 }
 
 #[derive(Clone)]
@@ -68,6 +73,8 @@ enum Msg {
     UnitFailed(String, String),
     AllDone,
     ReexecRoot,
+    BuscarRemoto,
+    RemotoListo(Result<Manifest, String>),
 }
 
 struct Churay;
@@ -125,6 +132,9 @@ impl App for Churay {
             tab: Tab::Catalogo,
             scroll: 0.0,
             installing: false,
+            remote_manifest: None,
+            repo_msg: String::new(),
+            buscando: false,
         }
     }
 
@@ -215,6 +225,42 @@ impl App for Churay {
                         .env("CHURAY_MODE", "system")
                         .spawn();
                     handle.quit();
+                }
+            }
+            Msg::BuscarRemoto => {
+                let Some(url) = model.cfg.remote_base_url.clone() else {
+                    model.repo_msg = "No hay repo remoto configurado (CHURAY_REPO).".into();
+                    return model;
+                };
+                model.buscando = true;
+                model.repo_msg = format!("Consultando {url}…");
+                handle.spawn(move || {
+                    let res = churay_core::fetch_signed_manifest(
+                        &url,
+                        &churay_core::CurlFetcher,
+                        None,
+                    )
+                    .map_err(|e| e.to_string());
+                    Msg::RemotoListo(res)
+                });
+            }
+            Msg::RemotoListo(res) => {
+                model.buscando = false;
+                match res {
+                    Ok(m) => {
+                        let pend = pending_updates(&model.state, &m)
+                            .into_iter()
+                            .filter(|u| u.kind != churay_core::UpdateKind::Nueva)
+                            .count();
+                        model.repo_msg = format!(
+                            "Repo {} · {} unidad(es) · {} con actualización",
+                            m.suite_version,
+                            m.units.len(),
+                            pend
+                        );
+                        model.remote_manifest = Some(m);
+                    }
+                    Err(e) => model.repo_msg = format!("Falló el chequeo: {e}"),
                 }
             }
         }
@@ -410,37 +456,72 @@ fn estado_view(model: &Model, i: usize, instalada: bool, t: &Theme) -> View<Msg>
 
 fn actualizaciones(model: &Model) -> View<Msg> {
     let t = &model.theme;
-    // Sin manifiesto remoto todavía: diagnóstico contra el catálogo local.
-    let manifest = Manifest::new(churay_core::SUITE_VERSION, model.units.clone());
+    // Si bajamos un manifiesto remoto firmado, comparamos contra él; si no,
+    // contra el catálogo local.
+    let (manifest, fuente) = match &model.remote_manifest {
+        Some(m) => (m.clone(), "repo remoto"),
+        None => (Manifest::new(churay_core::SUITE_VERSION, model.units.clone()), "catálogo local"),
+    };
     let pend = pending_updates(&model.state, &manifest);
-    let instaladas: Vec<_> = pend.iter().filter(|u| u.kind != UpdateKind::Nueva).collect();
+    let con_update: Vec<_> = pend.iter().filter(|u| u.kind != UpdateKind::Nueva).collect();
 
-    let mut hijos: Vec<View<Msg>> = Vec::new();
+    // Encabezado: botón de chequeo remoto + estado.
+    let label_btn = if model.buscando { "Buscando…" } else { "Buscar actualizaciones" };
+    let tiene_repo = model.cfg.remote_base_url.is_some();
+    let mut btn = View::new(Style {
+        size: Size { width: length(220.0), height: length(32.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(if tiene_repo { t.accent } else { t.bg_button })
+    .radius(8.0)
+    .text(label_btn, 14.0, if tiene_repo { t.bg_app } else { t.fg_muted });
+    if tiene_repo && !model.buscando {
+        btn = btn.on_click(Msg::BuscarRemoto);
+    }
+    let estado_repo = View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
+        if model.repo_msg.is_empty() {
+            if tiene_repo {
+                format!("Repo: {}", model.cfg.remote_base_url.as_deref().unwrap_or(""))
+            } else {
+                "Sin repo remoto (definí CHURAY_REPO para actualizar online).".to_string()
+            }
+        } else {
+            model.repo_msg.clone()
+        },
+        13.0,
+        t.fg_muted,
+        Alignment::Start,
+    );
+    let cabecera = row(percent(1.0), length(34.0)).gap(10.0).children(vec![estado_repo, btn]);
+
+    let mut hijos: Vec<View<Msg>> = vec![cabecera];
+    hijos.push(linea(&format!("Comparando contra: {fuente}"), t.fg_placeholder, t));
+
     if model.state.units.is_empty() {
         hijos.push(linea("Todavía no instalaste nada.", t.fg_muted, t));
     } else {
         for (id, inst) in model.state.units.iter() {
-            let label = model.units.iter().find(|u| &u.id == id).map(|u| u.label.clone()).unwrap_or_else(|| id.clone());
-            let disponible = instaladas.iter().any(|u| &u.id == id);
-            let txt = if disponible {
-                format!("{label} — {}  ·  hay actualización", inst.version)
-            } else {
-                format!("{label} — {}  ·  al día", inst.version)
+            let label = model
+                .units
+                .iter()
+                .find(|u| &u.id == id)
+                .map(|u| u.label.clone())
+                .unwrap_or_else(|| id.clone());
+            let nueva = con_update
+                .iter()
+                .find(|u| &u.id == id)
+                .map(|u| u.available_version.clone());
+            let (txt, color) = match nueva {
+                Some(v) => (format!("{label} — {} → {}  ·  actualizar", inst.version, v), t.accent),
+                None => (format!("{label} — {}  ·  al día", inst.version), t.fg_text),
             };
-            let color = if disponible { t.accent } else { t.fg_text };
             hijos.push(linea(&txt, color, t));
         }
     }
-    hijos.push(linea(
-        "El chequeo contra un repositorio remoto firmado llega con el bundle de release.",
-        t.fg_placeholder,
-        t,
-    ));
 
-    col(percent(1.0), length(VIEWPORT))
-        .pad(20.0)
-        .gap(8.0)
-        .children(hijos)
+    col(percent(1.0), length(VIEWPORT)).pad(20.0).gap(8.0).children(hijos)
 }
 
 fn footer(model: &Model) -> View<Msg> {

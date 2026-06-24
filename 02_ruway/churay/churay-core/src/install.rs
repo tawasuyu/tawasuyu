@@ -57,16 +57,22 @@ pub struct InstallConfig {
     pub bundle_dir: Option<PathBuf>,
     /// Raíz del workspace para compilar desde fuente (lado B), si existe.
     pub workspace_root: Option<PathBuf>,
+    /// URL base de un repo remoto firmado (actualizador), si está configurado.
+    pub remote_base_url: Option<String>,
+    /// Caché local de blobs descargados del repo remoto.
+    pub cache_dir: PathBuf,
 }
 
 impl InstallConfig {
-    /// Config para un modo, autodetectando bundle y workspace del entorno.
+    /// Config para un modo, autodetectando bundle, workspace y repo del entorno.
     pub fn detect(mode: InstallMode) -> Self {
         Self {
             mode,
             prefix: mode.default_prefix(),
             bundle_dir: detect_bundle_dir(),
             workspace_root: detect_workspace_root(),
+            remote_base_url: std::env::var("CHURAY_REPO").ok().filter(|s| !s.is_empty()),
+            cache_dir: default_cache_dir(),
         }
     }
 
@@ -91,6 +97,7 @@ impl InstallConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Resolviendo,
+    Descargando,
     Compilando,
     Copiando,
     Desktop,
@@ -110,6 +117,8 @@ pub enum InstallError {
     HashNoCoincide { esperado: String, obtuvo: String },
     #[error("falló `cargo build --bin {program}`: {detalle}")]
     BuildFallo { program: String, detalle: String },
+    #[error("descarga del repo remoto: {0}")]
+    Descarga(String),
     #[error("E/S: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -213,12 +222,22 @@ impl Source for BuildSource {
     }
 }
 
-/// Elige la fuente para `unit`: bundle si trae el binario, si no compila desde
-/// el workspace. `None` si no hay ninguna disponible.
+/// Elige la fuente para `unit`, por prioridad: **bundle** local (instantáneo) →
+/// **repo remoto** firmado (descarga, si la unidad trae hash) → **compilar**
+/// del workspace. `None` si ninguna está disponible.
 pub fn resolve_source(cfg: &InstallConfig, unit: &Unit) -> Option<Box<dyn Source>> {
     if let Some(dir) = &cfg.bundle_dir {
         if dir.join("bin").join(&unit.program).exists() {
             return Some(Box::new(BundleSource { dir: dir.clone() }));
+        }
+    }
+    if let Some(url) = &cfg.remote_base_url {
+        // El repo remoto sólo puede servir lo que declara por hash.
+        if unit.bin_hash.is_some() {
+            return Some(Box::new(crate::repo::RemoteRepo::curl(
+                url.clone(),
+                cfg.cache_dir.clone(),
+            )));
         }
     }
     if let Some(ws) = &cfg.workspace_root {
@@ -272,7 +291,7 @@ pub fn uninstall_unit(
 
 /// Copia `src` a `dest` de forma atómica (`dest.tmp` + rename) y le pone el bit
 /// de ejecución. Devuelve el hash del binario instalado.
-fn atomic_install_bin(src: &Path, dest: &Path) -> Result<ArtifactHash, InstallError> {
+pub(crate) fn atomic_install_bin(src: &Path, dest: &Path) -> Result<ArtifactHash, InstallError> {
     use std::os::unix::fs::PermissionsExt;
     let tmp = dest.with_extension("tmp-install");
     std::fs::copy(src, &tmp)?;
@@ -399,6 +418,13 @@ fn detect_workspace_root() -> Option<PathBuf> {
     }
 }
 
+/// Caché de blobs del repo remoto: `~/.cache/tawasuyu/churay/blobs`.
+fn default_cache_dir() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|b| b.cache_dir().join("tawasuyu").join("churay").join("blobs"))
+        .unwrap_or_else(|| std::env::temp_dir().join("churay-cache"))
+}
+
 fn is_writable(p: &Path) -> bool {
     // Heurística portable sin libc: intentar crear un archivo temporal dentro
     // (si es dir) o chequear permisos de escritura del metadata.
@@ -458,6 +484,8 @@ mod tests {
             prefix: prefix.clone(),
             bundle_dir: Some(bundle.clone()),
             workspace_root: None,
+            remote_base_url: None,
+            cache_dir: std::env::temp_dir().join("churay-test-cache"),
         };
         let mut state = InstalledState::default();
         let mut pasos = Vec::new();
@@ -485,6 +513,8 @@ mod tests {
             prefix: std::env::temp_dir().join("churay-noop"),
             bundle_dir: None,
             workspace_root: None,
+            remote_base_url: None,
+            cache_dir: std::env::temp_dir().join("churay-test-cache"),
         };
         let mut u = unidad("arje");
         u.scope = Scope::System;
@@ -507,6 +537,8 @@ mod tests {
             prefix: base.join("prefix"),
             bundle_dir: Some(bundle),
             workspace_root: None,
+            remote_base_url: None,
+            cache_dir: std::env::temp_dir().join("churay-test-cache"),
         };
         let mut u = unidad("demo-app");
         // El manifiesto declara exactamente el hash del binario presente.
@@ -532,6 +564,8 @@ mod tests {
             prefix: base.join("prefix"),
             bundle_dir: Some(bundle),
             workspace_root: None,
+            remote_base_url: None,
+            cache_dir: std::env::temp_dir().join("churay-test-cache"),
         };
         let mut u = unidad("demo-app");
         u.bin_hash = Some(ArtifactHash::of_bytes(b"otro contenido"));

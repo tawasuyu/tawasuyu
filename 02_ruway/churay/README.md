@@ -37,10 +37,17 @@ Tres ejes que fijaron el diseño:
   - `state` — `installed.json` en `<prefix>/share/tawasuyu/`.
   - `update` — `check_updates` / `pending_updates`.
   - `hash` — `ArtifactHash` vendorizado de hammer.
+  - `repo` — `RemoteRepo` (Source) + `fetch_signed_manifest`: repo remoto
+    firmado servido por HTTP; baja binarios **por hash** (`blobs/<hex>`),
+    verifica BLAKE3 y los cachea. Transporte `Fetcher` (curl en producción,
+    local en tests). Es lo que cierra el actualizador online.
   - bin **`churay-bundle`** — forja el bundle precompilado + manifiesto firmado.
+    Emite también `blobs/<hex>`: **un bundle servido por HTTP es un repo remoto**.
+  - bin **`churay-cli`** — frente headless (servidores/scripts/CI):
+    `list` · `check` · `install <id…>` · `update [<id…>]` · `uninstall <id…>`.
 - **`churay-llimphi`** — la GUI (bin `churay`): catálogo con checkboxes por
-  cuadrante, selector de modo, progreso por app, pestaña de actualizaciones,
-  botón "Reabrir como root" (`pkexec`) para el modo Sistema.
+  cuadrante, selector de modo, progreso por app, pestaña de actualizaciones con
+  chequeo contra el repo remoto, botón "Reabrir como root" (`pkexec`).
 
 ## Uso
 
@@ -54,15 +61,24 @@ scripts/build-tawasuyu-bundle.sh dist/tawasuyu-bundle
 
 # instalar contra un bundle, sin compilar
 CHURAY_BUNDLE=$PWD/dist/tawasuyu-bundle cargo run -p churay-llimphi
+
+# servir el bundle como repo remoto y actualizar online (headless)
+( cd dist/tawasuyu-bundle && python3 -m http.server 8080 ) &
+CHURAY_REPO=http://localhost:8080 churay-cli --local check
+CHURAY_REPO=http://localhost:8080 churay-cli --local install cosmos nada
+CHURAY_REPO=http://localhost:8080 churay-cli update      # baja lo que cambió
 ```
 
 Envs: `CHURAY_BUNDLE` (dir del bundle), `CHURAY_WORKSPACE` (raíz para compilar),
-`CHURAY_MODE=system|local` (modo inicial), `CHURAY_SIGN_SEED` (firma del bundle).
+`CHURAY_REPO` (repo remoto firmado), `CHURAY_MODE=system|local`,
+`CHURAY_SIGN_SEED` (firma del bundle).
+
+Prioridad de fuente al instalar: **bundle local → repo remoto → compilar**.
 
 ## Pendiente
 
-- Repo **remoto** firmado (HTTP) para que el actualizador compare contra una
-  versión publicada, no sólo contra el catálogo local. El `Source` ya está
-  preparado para un tercer backend `RemoteRepo`.
 - Bundle 100% portable (musl estático / AppImage) para apps GPU. Hoy el bundle
   es dinámico (glibc comparable).
+- Confianza anclada por defecto: hoy la firma se autoverifica; falta sembrar la
+  clave pública del publicador para exigirla (`SignedManifest::verify(Some(&k))`
+  ya lo soporta).

@@ -34,9 +34,12 @@ fn main() {
     let release_dir = release_dir.unwrap_or_else(default_release_dir);
 
     let bin_out = out_dir.join("bin");
-    if let Err(e) = std::fs::create_dir_all(&bin_out) {
-        eprintln!("no se pudo crear {}: {e}", bin_out.display());
-        std::process::exit(1);
+    let blobs_out = out_dir.join("blobs");
+    for d in [&bin_out, &blobs_out] {
+        if let Err(e) = std::fs::create_dir_all(d) {
+            eprintln!("no se pudo crear {}: {e}", d.display());
+            std::process::exit(1);
+        }
     }
 
     let mut units = suite_catalog();
@@ -56,7 +59,12 @@ fn main() {
             continue;
         }
         let bytes = std::fs::read(&dst).expect("releer binario copiado");
-        u.bin_hash = Some(ArtifactHash::of_bytes(&bytes));
+        let hash = ArtifactHash::of_bytes(&bytes);
+        // Espejo direccionado por contenido: `blobs/<hex>`, lo que sirve el repo
+        // remoto. Un bundle servido por HTTP es, así, un CHURAY_REPO válido.
+        let hex = hash.as_str().strip_prefix("b3:").unwrap_or(hash.as_str());
+        let _ = std::fs::copy(&dst, blobs_out.join(hex));
+        u.bin_hash = Some(hash);
         u.size_bytes = Some(bytes.len() as u64);
         incluidas += 1;
         println!("✓ {}  ({} bytes)", u.program, bytes.len());
