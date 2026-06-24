@@ -47,9 +47,22 @@ Tres ejes que fijaron el diseño:
     Emite también `blobs/<hex>`: **un bundle servido por HTTP es un repo remoto**.
   - bin **`churay-cli`** — frente headless (servidores/scripts/CI):
     `list` · `check` · `install <id…>` · `update [<id…>]` · `uninstall <id…>`.
-- **`churay-llimphi`** — la GUI (bin `churay`): catálogo con checkboxes por
-  cuadrante, selector de modo, progreso por app, pestaña de actualizaciones con
-  chequeo contra el repo remoto, botón "Reabrir como root" (`pkexec`).
+- **`churay-llimphi`** — la GUI (bin `churay`): **pantalla de bienvenida** con el
+  logo de la suite (de `marca`) y checkbox "no mostrar de nuevo" (persistido en
+  `Prefs`); catálogo con checkboxes por cuadrante, selector de modo, **progreso
+  por app con etiqueta de etapa** (bajando/compilando/copiando — ya no se clava
+  en 0%), **banner de sugerencias** (pata ↔ shuma), **aviso de fuente** (avisa si
+  algo se va a compilar o si no hay con qué), **pantalla de resultado** (qué quedó
+  instalado, dónde, botón **Abrir**, y sugerencias), pestaña de actualizaciones
+  con chequeo contra el repo remoto, botón "Reabrir como root".
+
+**Agnóstico al sistema**: compilar desde fuente sólo se ofrece si hay `cargo` +
+workspace (modo dev). Un sistema de usuario sin cargo instala desde bundle o repo
+remoto; si no hay ninguno, lo dice claro en vez de intentar compilar.
+
+Identidad visual centralizada en **`shared/marca`**: logo + nombre + tagline +
+acento de la suite/hammer/wawa, con override por disco (`$TAWASUYU_MARCA` o
+`~/.config/tawasuyu/marca/<suite|hammer|wawa>.png`) para rebrandear sin recompilar.
 
 ## Uso
 
