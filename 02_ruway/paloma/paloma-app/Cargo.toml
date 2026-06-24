@@ -12,6 +12,10 @@ description = "paloma-app — el binario lanzable del correo: arma el frontend L
 name = "paloma"
 path = "src/main.rs"
 
+[[bin]]
+name = "paloma-test"
+path = "src/bin/test_conexion.rs"
+
 [dependencies]
 paloma-core = { path = "../paloma-core" }
 paloma-net = { path = "../paloma-net" }
