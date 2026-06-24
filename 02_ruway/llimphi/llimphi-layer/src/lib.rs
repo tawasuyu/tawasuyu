@@ -78,6 +78,34 @@ pub enum Edge {
     Right,
 }
 
+/// La esquina a la que se ancla una **caja** de tamaño fijo (no una barra de
+/// borde completo). La usa, p. ej., un daemon de notificaciones: una caja en
+/// la esquina, no una franja que cruza la pantalla.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// Márgenes (px) respecto de los bordes a los que la superficie se ancla.
+/// El compositor los respeta como separación entre la caja y el borde.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Margins {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+impl Margins {
+    /// El mismo margen en los cuatro lados.
+    pub fn all(px: i32) -> Self {
+        Self { top: px, right: px, bottom: px, left: px }
+    }
+}
+
 /// La capa de composición (orden en Z respecto de las ventanas).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerKind {
@@ -104,18 +132,37 @@ pub enum Keyboard {
 }
 
 /// Configuración de la superficie de capa.
+///
+/// Dos modos de anclaje, según `corner`:
+/// - **Barra de borde** (`corner: None`, el default): se ancla a `edge` y el
+///   compositor estira el eje paralelo a toda la salida; `thickness` fija el
+///   perpendicular. Es el modo waybar/eww.
+/// - **Caja de esquina** (`corner: Some(_)`): se ancla a una esquina con
+///   `size` explícito (ancho, alto) y `margins`. Ignora `edge`/`thickness` y
+///   nunca reserva zona exclusiva (flota). Es el modo de un toast/OSD/popover.
 #[derive(Debug, Clone)]
 pub struct LayerConfig {
     pub edge: Edge,
     /// Grosor (px) en el eje perpendicular al borde (alto para Top/Bottom, ancho
     /// para Left/Right). El otro eje lo estira el compositor al tamaño de salida.
+    /// Solo aplica en modo barra de borde (`corner: None`).
     pub thickness: u32,
     pub layer: LayerKind,
     /// Si `true`, reserva la franja (las ventanas no la tapan); si `false`, flota.
+    /// En modo caja de esquina siempre flota, independientemente de este valor.
     pub exclusive: bool,
     pub keyboard: Keyboard,
     /// El namespace que ve el compositor (para reglas por-superficie).
     pub namespace: String,
+    /// Si es `Some`, ancla una **caja** a esa esquina en vez de una barra de
+    /// borde. Requiere `size`; usa `margins`.
+    pub corner: Option<Corner>,
+    /// Tamaño explícito `(ancho, alto)` en px para el modo caja de esquina.
+    /// Ignorado en modo barra de borde. Si falta en modo esquina, se usa un
+    /// default razonable.
+    pub size: Option<(u32, u32)>,
+    /// Separación (px) respecto de los bordes anclados, en modo caja de esquina.
+    pub margins: Margins,
 }
 
 impl Default for LayerConfig {
@@ -127,6 +174,9 @@ impl Default for LayerConfig {
             exclusive: true,
             keyboard: Keyboard::OnDemand,
             namespace: "llimphi-layer".to_string(),
+            corner: None,
+            size: None,
+            margins: Margins::default(),
         }
     }
 }
@@ -153,7 +203,7 @@ pub fn run<A: App>(cfg: LayerConfig) -> Result<(), Box<dyn Error>> {
     });
     let model = A::init(&handle);
 
-    let (anchor, size) = anchor_and_size(cfg.edge, cfg.thickness);
+    let resolved = resolve_anchor(&cfg);
     let wl_surface = compositor.create_surface(&qh);
     let layer = layer_shell.create_layer_surface(
         &qh,
@@ -162,11 +212,15 @@ pub fn run<A: App>(cfg: LayerConfig) -> Result<(), Box<dyn Error>> {
         Some(cfg.namespace.clone()),
         None,
     );
-    layer.set_anchor(anchor);
-    layer.set_size(size.0, size.1);
-    layer.set_exclusive_zone(if cfg.exclusive { cfg.thickness as i32 } else { 0 });
+    layer.set_anchor(resolved.anchor);
+    layer.set_size(resolved.size.0, resolved.size.1);
+    layer.set_exclusive_zone(resolved.exclusive_zone);
+    if let Some(m) = resolved.margins {
+        layer.set_margin(m.top, m.right, m.bottom, m.left);
+    }
     layer.set_keyboard_interactivity(cfg.keyboard.into());
     layer.commit();
+    let size = resolved.size;
 
     let mut runner = Runner::<A> {
         registry_state: RegistryState::new(&globals),
@@ -198,6 +252,41 @@ pub fn run<A: App>(cfg: LayerConfig) -> Result<(), Box<dyn Error>> {
 }
 
 // ── Interno ─────────────────────────────────────────────────────────────────
+
+/// Tamaño por defecto de una caja de esquina cuando `cfg.size` es `None`.
+const DEFAULT_CORNER_SIZE: (u32, u32) = (360, 280);
+
+/// El anclaje resuelto para la superficie: anclas sctk, tamaño pedido, zona
+/// exclusiva y márgenes opcionales. Unifica los dos modos (barra/caja).
+struct Resolved {
+    anchor: LayerAnchor,
+    size: (u32, u32),
+    exclusive_zone: i32,
+    margins: Option<Margins>,
+}
+
+/// Resuelve el anclaje según el modo de `cfg`: caja de esquina si `corner` es
+/// `Some`, barra de borde en caso contrario.
+fn resolve_anchor(cfg: &LayerConfig) -> Resolved {
+    match cfg.corner {
+        Some(corner) => {
+            let size = cfg.size.unwrap_or(DEFAULT_CORNER_SIZE);
+            let anchor = match corner {
+                Corner::TopLeft => LayerAnchor::TOP | LayerAnchor::LEFT,
+                Corner::TopRight => LayerAnchor::TOP | LayerAnchor::RIGHT,
+                Corner::BottomLeft => LayerAnchor::BOTTOM | LayerAnchor::LEFT,
+                Corner::BottomRight => LayerAnchor::BOTTOM | LayerAnchor::RIGHT,
+            };
+            // Una caja flota siempre: no tiene sentido reservar zona exclusiva.
+            Resolved { anchor, size, exclusive_zone: 0, margins: Some(cfg.margins) }
+        }
+        None => {
+            let (anchor, size) = anchor_and_size(cfg.edge, cfg.thickness);
+            let exclusive_zone = if cfg.exclusive { cfg.thickness as i32 } else { 0 };
+            Resolved { anchor, size, exclusive_zone, margins: None }
+        }
+    }
+}
 
 /// El anclaje sctk + el tamaño `(w, h)` pedido para un borde y grosor. El eje
 /// paralelo al borde va en 0 → el compositor lo estira a la salida completa.

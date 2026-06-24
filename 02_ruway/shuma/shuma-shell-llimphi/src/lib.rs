@@ -191,6 +191,7 @@ pub fn run_dock() {
         exclusive: true,
         keyboard: llimphi_layer::Keyboard::OnDemand,
         namespace: "shuma".to_string(),
+        ..Default::default()
     }) {
         eprintln!("shuma · modo dock no disponible: {e}");
     }
