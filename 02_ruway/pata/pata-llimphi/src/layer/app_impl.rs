@@ -977,6 +977,15 @@ impl LayerApp {
     pub(super) fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
+            Msg::ShumaAutoClose => {
+                // Deshover: replegá salvo el evento espurio de recién abierto.
+                let churn = self
+                    .shuma_opened_at
+                    .is_some_and(|t| t.elapsed() < super::MENU_LEAVE_GRACE);
+                if self.shuma.open && !churn {
+                    self.set_shuma_open(false);
+                }
+            }
             Msg::ShumaMaximize => {
                 self.shuma.maximized = !self.shuma.maximized;
                 self.marcar_shuma_dirty();

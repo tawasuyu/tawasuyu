@@ -928,6 +928,12 @@ impl App {
                 }
             }
         }
+        // Tras cualquier acción del Cerebro (cambiar de escritorio, cerrar la
+        // última ventana, reenfocar…) reconciliamos el foco de teclado: en un
+        // escritorio que quedó **vacío** cae al shell-barra (shuma/pata), así se
+        // puede tipear sin clickear. Idempotente y nunca le roba el foco a una
+        // ventana enfocada.
+        self.reconcile_layer_keyboard();
     }
 
     /// Ejecuta una operación concreta sobre las superficies reales.

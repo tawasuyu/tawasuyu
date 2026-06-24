@@ -83,6 +83,10 @@ pub enum Msg {
     CavaTick,
     /// Desplegar/replegar el drawer de shuma.
     ShumaToggle,
+    /// Repliega el drawer por **deshover**: el puntero entró al scrim (área
+    /// fuera del contenido). Con guarda anti-churn — ignora el evento espurio del
+    /// instante de apertura.
+    ShumaAutoClose,
     /// Un evento del **shell real** hospedado (`shuma-module-shell`): teclas,
     /// latido que drena la salida, clicks en cards/etapas, scroll, selección del
     /// cuerpo IDE-text… Todo el contenido del drawer llega por aquí (el `view`
@@ -1032,6 +1036,13 @@ impl App for PataApp {
                 }
             }
             Msg::Quit => handle.quit(),
+            Msg::ShumaAutoClose => {
+                // Deshover (path ventana, sin layer-shell): repliega si está abierto.
+                if model.shuma.present && model.shuma.open {
+                    model.shuma.open = false;
+                    model.animar_shuma(0.0, handle);
+                }
+            }
             Msg::ShumaToggle => {
                 if model.shuma.present {
                     model.shuma.open = !model.shuma.open;

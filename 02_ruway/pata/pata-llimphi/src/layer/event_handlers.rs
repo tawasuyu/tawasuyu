@@ -256,17 +256,22 @@ impl KeyboardHandler for LayerApp {
             }
             return;
         }
-        if !self.shuma.open {
-            return;
-        }
-        // Ctrl+Shift+W repliega el drawer.
-        if self.mods.ctrl
+        // Ctrl+Shift+W repliega el drawer (sólo tiene sentido abierto).
+        if self.shuma.open
+            && self.mods.ctrl
             && self.mods.shift
             && matches!(event.keysym, Keysym::w | Keysym::W)
         {
             self.set_shuma_open(false);
             return;
         }
+        // OJO: NO descartamos las teclas con el drawer plegado. `press_key` sólo
+        // llega cuando la barra TIENE el foco de teclado (clic, o el fallback de
+        // mirada en escritorio vacío); en ese caso ruteamos las teclas a shuma
+        // para poder tipear en la barra sin abrir el drawer. Enter despliega el
+        // drawer para ver la salida del comando.
+        let abrir_por_enter =
+            !self.shuma.open && matches!(event.keysym, Keysym::Return | Keysym::KP_Enter);
         if let Some(ke) = self.keysym_to_keyevent(&event) {
             if self.shuma_full.is_some() {
                 // Live-wire: la tecla la traduce la shuma completa según su foco
@@ -284,6 +289,9 @@ impl KeyboardHandler for LayerApp {
                     shuma_module_shell::Msg::Key(ke),
                 );
             }
+        }
+        if abrir_por_enter {
+            self.set_shuma_open(true);
         }
         self.marcar_shuma_dirty();
     }

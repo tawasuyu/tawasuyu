@@ -491,7 +491,11 @@ pub fn shuma_open_view(
             ..Default::default()
         };
         style.flex_grow = 1.0;
-        View::new(style).on_click(Msg::ShumaToggle)
+        // Click fuera = cerrar; además, que el puntero ENTRE al scrim (se alejó
+        // del contenido hacia arriba) repliega por deshover.
+        View::new(style)
+            .on_click(Msg::ShumaToggle)
+            .on_pointer_enter(Msg::ShumaAutoClose)
     };
 
     // Live-wire: si la shuma completa está montada, el cuerpo es ella entera
