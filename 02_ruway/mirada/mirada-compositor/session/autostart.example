@@ -13,6 +13,12 @@ pata-llimphi
 # launcher. Es el binario que instala install-mirada-dm.sh.
 shuma-shell-llimphi
 
+# El daemon de notificaciones de escritorio (org.freedesktop.Notifications):
+# pinta los toasts en la esquina y guarda el historial. install-mirada-dm.sh lo
+# siembra acá automáticamente. El sidebar de historial es on-demand:
+# `pata-notify-panel`.
+pata-notify
+
 # Una terminal para empezar.
 foot
 

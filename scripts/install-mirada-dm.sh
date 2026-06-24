@@ -9,9 +9,11 @@
 # Deja instalado:
 #   /usr/local/bin/{mirada-compositor,mirada-greeter,pata-llimphi}
 #   /usr/local/bin/{shuma-shell-llimphi,mirada-launcher}
+#   /usr/local/bin/{pata-notify,pata-notify-panel,pata-notify-triage}
 #   /usr/local/bin/{mirada-session,mirada-session-pata,mirada-dm}
 #   /etc/pam.d/mirada                              (login del greeter)
 #   /usr/share/wayland-sessions/{mirada,mirada-pata}.desktop
+#   ~/.config/mirada/autostart                     (siembra el daemon pata-notify)
 #
 # Para desinstalar: borrá esos archivos.
 set -eu
@@ -26,11 +28,12 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 MC="$REPO/02_ruway/mirada/mirada-compositor"
 
-echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers, panel, ctl, portal y wallpaper"
+echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers, panel, ctl, portal, wallpaper y notificaciones"
 cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \
     -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi \
-    -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi
+    -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi \
+    -p pata-notify -p pata-notify-panel -p pata-notify-triage
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -62,6 +65,16 @@ sudo install -Dm755 "$BIN/mirada-wallpaper"        /usr/local/bin/mirada-wallpap
 # el sistema —cada app una pestaña—, incluida la «Vista espacial» con el Prezi.
 # Es el panel donde las apps integran sus ajustes. No estaba instalado.
 sudo install -Dm755 "$BIN/wawa-panel"              /usr/local/bin/wawa-panel
+# Notificaciones de escritorio (org.freedesktop.Notifications):
+#   · pata-notify        — el daemon; pinta los toasts y guarda el historial.
+#                          Autoarranca con la sesión (lo sembramos en el
+#                          autostart, más abajo) porque necesita el compositor
+#                          vivo para su capa wlr-layer-shell.
+#   · pata-notify-panel  — sidebar de historial AGRUPADO por el triage (on-demand).
+#   · pata-notify-triage — CLI de triage semántico del historial (on-demand).
+sudo install -Dm755 "$BIN/pata-notify"             /usr/local/bin/pata-notify
+sudo install -Dm755 "$BIN/pata-notify-panel"       /usr/local/bin/pata-notify-panel
+sudo install -Dm755 "$BIN/pata-notify-triage"      /usr/local/bin/pata-notify-triage
 
 # Apps de la suite: los binarios que LANZAN los lanzadores de la barra (botón
 # Inicio, dock de mac, front panel de CDE, menú de apps). Sin esto, click en un
@@ -103,6 +116,16 @@ for g in seat video input; do
     fi
 done
 
+# Sembramos el daemon de notificaciones en TU autostart de mirada (idempotente,
+# igual que mirada-session-pata hace con pata-llimphi). Se lanza al arrancar el
+# compositor, con WAYLAND_DISPLAY puesto. El panel y el triage son on-demand, no
+# se autoarrancan. (Para recibir notificaciones de apps ajenas hace falta un bus
+# de sesión D-Bus; si no hay, el daemon igual corre y avisa por log.)
+mkdir -p "${HOME}/.config/mirada"
+AUTO="${HOME}/.config/mirada/autostart"
+grep -qxF 'pata-notify' "$AUTO" 2>/dev/null || echo 'pata-notify' >> "$AUTO"
+echo "==> pata-notify sembrado en $AUTO"
+
 cat <<'FIN'
 
 ==> listo.
@@ -118,6 +141,12 @@ cat <<'FIN'
 
   Si te agregué a grupos nuevos (seat/video/input), cerrá sesión y volvé a
   entrar antes de elegir una sesión AJENA (KDE/sway); las nativas no lo piden.
+
+  Notificaciones: el daemon `pata-notify` ya quedó en tu autostart. Probalo en
+  la sesión con  `notify-send "hola" "mundo"`  (necesita un bus de sesión
+  D-Bus). El historial agrupado:  `pata-notify-panel`. El triage por texto:
+  `pata-notify-triage`  (o  `pata-notify-triage --aplicar`  para las acciones
+  autorizadas de ~/.config/pata-notify/reglas.json).
 
   Un segundo DM en otra consola: cambiá de VT (Ctrl+Alt+F4) y corré `sudo mirada-dm` de nuevo.
 FIN
