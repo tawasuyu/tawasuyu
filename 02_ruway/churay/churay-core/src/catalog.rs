@@ -1,11 +1,12 @@
-//! El catálogo de la suite — la lista de unidades instalables.
+//! El catálogo de la suite — la lista de unidades **app** instalables.
 //!
 //! Las apps salen de la **única tabla de apps** del repo
-//! ([`app_bus::default_entries`]); no se reinventa la lista. A eso se suman
-//! componentes que `app-bus` no lista (la barra `pata`, el shell `shuma`) y los
-//! de **sistema** (`arje`, el init) que sólo tienen sentido con root. Acá
-//! también se corrigen descripciones y se declaran las **sugerencias** entre
-//! unidades (p.ej. `pata` ↔ `shuma`).
+//! ([`app_bus::default_entries`]); no se reinventa la lista. A eso se suman la
+//! barra `pata` y el shell `shuma` (que `app-bus` no lista). El **sistema base**
+//! (compositor + display manager mirada, init) NO es una app: vive aparte, en
+//! [`crate::base`], como opción especial. Acá se corrigen descripciones, se
+//! declaran sugerencias, se propagan los mimes que cada app abre, y se marca
+//! cuáles tienen sentido "Abrir" sueltas.
 
 use crate::manifest::{Manifest, Scope, Unit};
 
@@ -33,27 +34,20 @@ fn descripcion(id: &str) -> &'static str {
         "supay" => "Motor de juego / raycaster Doom",
         "sandokan-monitor" => "Monitor de procesos del sistema",
         "nahual" => "Explorador de archivos universal",
-        // Correcciones pedidas: mirada NO es un panel, es el compositor.
-        "mirada-panel" => "Compositor Wayland y gestor de ventanas",
-        "panel-control" => "Panel de control de la suite",
+        // `mirada-panel` = el binario `mirada-llimphi`: el **panel de control**
+        // de mirada (escritorios, atajos, vista Prezi). El compositor en sí es
+        // del sistema base, no esta entrada.
+        "mirada-panel" => "Panel de control de mirada (escritorios, atajos)",
+        "panel-control" => "Panel de control unificado de la suite",
         "pata" => "Barra de estado / panel tipo waybar para el escritorio",
         "shuma" => "Terminal y workspace inteligente (estilo zellij), con sesión standalone",
-        "arje" => "Init y supervisor del sistema (arranque, servicios)",
         _ => "",
-    }
-}
-
-/// Etiqueta corregida para algunos ids (cuando la de `app-bus` confunde).
-fn label_override(id: &str) -> Option<&'static str> {
-    match id {
-        "mirada-panel" => Some("Mirada (compositor)"),
-        _ => None,
     }
 }
 
 /// Sugerencias blandas: unidades que se complementan. `pata` y `shuma` se
 /// potencian mutuamente (pata hospeda el shell de shuma; shuma anda mejor con la
-/// barra); `mirada` (compositor) gana con `pata` (su barra).
+/// barra); el panel de mirada gana con la barra `pata`.
 fn sugerencias(id: &str) -> Vec<String> {
     let v: &[&str] = match id {
         "pata" => &["shuma", "mirada-panel"],
@@ -62,6 +56,21 @@ fn sugerencias(id: &str) -> Vec<String> {
         _ => &[],
     };
     v.iter().map(|s| s.to_string()).collect()
+}
+
+/// `false` para las piezas "complicadas" que corren en contexto de sesión y no
+/// se abren sueltas (la barra `pata`). El resto son apps normales.
+fn launchable_de(id: &str) -> bool {
+    !matches!(id, "pata")
+}
+
+/// Instrucción exacta tras instalar, si la unidad la necesita.
+fn post_install_de(id: &str) -> Option<String> {
+    match id {
+        "pata" => Some("La barra se inicia con la sesión de mirada; no se abre suelta.".into()),
+        "mirada-panel" => Some("Necesita el compositor mirada corriendo (instalalo desde «Sistema base»).".into()),
+        _ => None,
+    }
 }
 
 /// Construye una `Unit` de app desde una entrada de `app-bus`.
@@ -77,7 +86,7 @@ fn unit_de_app(e: &app_bus::AppEntry) -> Option<Unit> {
     let desc = descripcion(&e.id);
     Some(Unit {
         id: e.id.clone(),
-        label: label_override(&e.id).map(String::from).unwrap_or_else(|| e.label.clone()),
+        label: e.label.clone(),
         version: SUITE_VERSION.to_string(),
         category,
         icon,
@@ -85,13 +94,16 @@ fn unit_de_app(e: &app_bus::AppEntry) -> Option<Unit> {
         program,
         scope: Scope::App,
         suggests: sugerencias(&e.id),
+        handles: e.handles.clone(),
+        launchable: launchable_de(&e.id),
+        post_install: post_install_de(&e.id),
         bin_hash: None,
         size_bytes: None,
     })
 }
 
 /// Una unidad armada a mano (las que `app-bus` no lista).
-fn unit(id: &str, label: &str, icon: &str, program: &str, category: &str, scope: Scope) -> Unit {
+fn unit(id: &str, label: &str, icon: &str, program: &str, category: &str) -> Unit {
     Unit {
         id: id.into(),
         label: label.into(),
@@ -100,8 +112,11 @@ fn unit(id: &str, label: &str, icon: &str, program: &str, category: &str, scope:
         icon: icon.into(),
         description: descripcion(id).to_string(),
         program: program.into(),
-        scope,
+        scope: Scope::App,
         suggests: sugerencias(id),
+        handles: Vec::new(),
+        launchable: launchable_de(id),
+        post_install: post_install_de(id),
         bin_hash: None,
         size_bytes: None,
     }
@@ -110,25 +125,19 @@ fn unit(id: &str, label: &str, icon: &str, program: &str, category: &str, scope:
 /// Unidades que `app-bus` no trae: la barra `pata` y el shell `shuma`.
 fn unidades_extra() -> Vec<Unit> {
     vec![
-        unit("pata", "Pata", "▬", "pata", "ukupacha", Scope::App),
-        unit("shuma", "Shuma", "❯", "shuma-shell-llimphi", "ruway", Scope::App),
+        unit("pata", "Pata", "▬", "pata", "ukupacha"),
+        unit("shuma", "Shuma", "❯", "shuma-shell-llimphi", "ruway"),
     ]
 }
 
-/// Las unidades **de sistema** — componentes fuertes que exigen root.
-fn unidades_de_sistema() -> Vec<Unit> {
-    vec![unit("arje", "Arje (init)", "⏻", "arje", "sistema", Scope::System)]
-}
-
-/// El catálogo completo de la suite: apps de `app-bus` (orden alfabético por
-/// label) + barra/shell + componentes de sistema. Fuente del lado B (compilar)
-/// y de la UI cuando no hay manifiesto firmado.
+/// El catálogo de **apps**: las de `app-bus` (orden alfabético por label) + la
+/// barra y el shell. El sistema base (compositor/DM) no está acá — ver
+/// [`crate::base`]. Fuente del lado B (compilar) y de la UI sin manifiesto.
 pub fn suite_catalog() -> Vec<Unit> {
     let mut units: Vec<Unit> =
         app_bus::default_entries().iter().filter_map(unit_de_app).collect();
     units.extend(unidades_extra());
     units.sort_by(|a, b| a.label.cmp(&b.label));
-    units.extend(unidades_de_sistema());
     units
 }
 
@@ -144,17 +153,31 @@ mod tests {
     #[test]
     fn catalogo_no_vacio_y_trae_apps_conocidas() {
         let cat = suite_catalog();
-        assert!(cat.len() >= 21, "19 apps Exec + pata + shuma + sistema");
+        assert!(cat.len() >= 20, "19 apps Exec + pata + shuma");
         assert!(cat.iter().any(|u| u.id == "nada" && u.program == "nada"));
         assert!(cat.iter().any(|u| u.id == "cosmos" && u.program == "cosmos-app-llimphi"));
+        // El sistema base no es app: no debe aparecer acá.
+        assert!(!cat.iter().any(|u| u.id == "arje"));
     }
 
     #[test]
-    fn mirada_es_compositor_no_panel() {
+    fn apps_propagan_los_mimes_que_abren() {
         let cat = suite_catalog();
-        let m = cat.iter().find(|u| u.id == "mirada-panel").unwrap();
-        assert!(m.description.to_lowercase().contains("compositor"));
-        assert!(m.label.to_lowercase().contains("compositor"));
+        // tullpu abre image/*; nada abre text/*.
+        let tullpu = cat.iter().find(|u| u.id == "tullpu").unwrap();
+        assert!(tullpu.handles.iter().any(|h| h.starts_with("image/")));
+        let nada = cat.iter().find(|u| u.id == "nada").unwrap();
+        assert!(nada.handles.iter().any(|h| h.starts_with("text/")));
+    }
+
+    #[test]
+    fn pata_no_es_lanzable_pero_las_apps_si() {
+        let cat = suite_catalog();
+        let pata = cat.iter().find(|u| u.id == "pata").unwrap();
+        assert!(!pata.launchable, "la barra no se abre suelta");
+        assert!(pata.post_install.is_some());
+        let cosmos = cat.iter().find(|u| u.id == "cosmos").unwrap();
+        assert!(cosmos.launchable);
     }
 
     #[test]
@@ -166,13 +189,5 @@ mod tests {
         assert_eq!(shuma.program, "shuma-shell-llimphi");
         assert!(pata.suggests.contains(&"shuma".to_string()));
         assert!(shuma.suggests.contains(&"pata".to_string()));
-    }
-
-    #[test]
-    fn arje_es_system_y_pide_root() {
-        let cat = suite_catalog();
-        let arje = cat.iter().find(|u| u.id == "arje").expect("arje en catálogo");
-        assert_eq!(arje.scope, Scope::System);
-        assert!(arje.requires_root());
     }
 }

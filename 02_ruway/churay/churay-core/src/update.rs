@@ -93,6 +93,9 @@ mod tests {
             program: id.into(),
             scope: Scope::App,
             suggests: Vec::new(),
+            launchable: true,
+            handles: Vec::new(),
+            post_install: None,
             bin_hash: None,
             size_bytes: None,
         }

@@ -346,6 +346,7 @@ pub fn install_unit(
 
     on(Step::Desktop, 0.0);
     write_desktop_entry(&cfg.prefix, unit, &dest)?;
+    register_mime_defaults(&cfg.prefix, unit)?;
     copy_icon_if_present(cfg, unit)?;
 
     state.upsert(unit.id.clone(), unit.version.clone(), hash);
@@ -410,6 +411,15 @@ pub fn write_desktop_entry(prefix: &Path, unit: &Unit, bin: &Path) -> Result<(),
     // del programa, que casa con el PNG que el bundle pueda haber instalado.
     let icon_name = &unit.program;
     let categories = freedesktop_categories(&unit.category);
+    // MimeType= con las extensiones/formatos que la app abre (de app-bus). Un
+    // handle que termina en `/` (familia, p.ej. `image/`) no es un mime válido
+    // para `.desktop`; lo dejamos igual — los lectores ignoran lo que no matchea,
+    // y el registro de defaults usa los mimes concretos (ver register_mime_defaults).
+    let mime_line = if unit.handles.is_empty() {
+        String::new()
+    } else {
+        format!("MimeType={};\n", unit.handles.join(";"))
+    };
     let entry = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
@@ -419,15 +429,70 @@ pub fn write_desktop_entry(prefix: &Path, unit: &Unit, bin: &Path) -> Result<(),
          Icon={icon}\n\
          Terminal=false\n\
          Categories={cats}\n\
+         {mime}\
          X-Tawasuyu-Id={id}\n",
         label = unit.label,
         desc = unit.description,
         exec = bin.display(),
         icon = icon_name,
         cats = categories,
+        mime = mime_line,
         id = unit.id,
     );
     std::fs::write(&path, entry)?;
+    Ok(())
+}
+
+/// Registra la app como **handler por defecto** de los mimes concretos que
+/// declara, en `<prefix>/share/applications/mimeapps.list` ([Default
+/// Applications]), y refresca la base de datos de mimes si la herramienta está.
+/// Los handles "familia" (`image/`) se omiten — sólo se anclan mimes concretos.
+pub fn register_mime_defaults(prefix: &Path, unit: &Unit) -> Result<(), InstallError> {
+    let concretos: Vec<&String> = unit.handles.iter().filter(|h| !h.ends_with('/')).collect();
+    if concretos.is_empty() {
+        return Ok(());
+    }
+    let apps_dir = prefix.join("share").join("applications");
+    std::fs::create_dir_all(&apps_dir)?;
+    let list = apps_dir.join("mimeapps.list");
+    let desktop = format!("tawasuyu-{}.desktop", unit.id);
+
+    // Merge mínimo de la sección [Default Applications].
+    let mut defaults: Vec<(String, String)> = Vec::new();
+    if let Ok(txt) = std::fs::read_to_string(&list) {
+        let mut en_seccion = false;
+        for line in txt.lines() {
+            let l = line.trim();
+            if l.starts_with('[') {
+                en_seccion = l == "[Default Applications]";
+                continue;
+            }
+            if en_seccion {
+                if let Some((k, v)) = l.split_once('=') {
+                    defaults.push((k.trim().to_string(), v.trim().to_string()));
+                }
+            }
+        }
+    }
+    for mime in concretos {
+        if let Some(slot) = defaults.iter_mut().find(|(k, _)| k == mime.as_str()) {
+            slot.1 = desktop.clone();
+        } else {
+            defaults.push((mime.clone(), desktop.clone()));
+        }
+    }
+    let mut out = String::from("[Default Applications]\n");
+    for (k, v) in &defaults {
+        out.push_str(&format!("{k}={v}\n"));
+    }
+    std::fs::write(&list, out)?;
+
+    // Refrescá el caché de mimes si la herramienta está (no es fatal si falta).
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(&apps_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
     Ok(())
 }
 
@@ -552,6 +617,9 @@ mod tests {
             program: program.into(),
             scope: Scope::App,
             suggests: Vec::new(),
+            launchable: true,
+            handles: Vec::new(),
+            post_install: None,
             bin_hash: None,
             size_bytes: None,
         }
@@ -615,6 +683,45 @@ mod tests {
         // Detección de la línea de cargo.
         assert!(is_artifact_line(r#"{"reason":"compiler-artifact","package_id":"x"}"#));
         assert!(!is_artifact_line(r#"{"reason":"build-finished","success":true}"#));
+    }
+
+    #[test]
+    fn asocia_mimes_al_instalar() {
+        let base = std::env::temp_dir().join(format!("churay-mime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let bundle = base.join("bundle");
+        let prefix = base.join("prefix");
+        std::fs::create_dir_all(bundle.join("bin")).unwrap();
+        std::fs::write(bundle.join("bin").join("demo-app"), b"#!/bin/sh\n").unwrap();
+
+        let mut u = unidad("demo-app");
+        u.handles = vec!["image/png".into(), "image/".into(), "text/x-rust".into()];
+        let cfg = InstallConfig {
+            mode: InstallMode::Local,
+            prefix: prefix.clone(),
+            bundle_dir: Some(bundle),
+            workspace_root: None,
+            remote_base_url: None,
+            cache_dir: base.join("c"),
+        };
+        let mut state = InstalledState::default();
+        install_unit(&cfg, &u, &mut state, &mut |_, _| {}).unwrap();
+
+        // .desktop trae MimeType con los handles.
+        let desk = std::fs::read_to_string(
+            prefix.join("share/applications/tawasuyu-demo-app.desktop"),
+        )
+        .unwrap();
+        assert!(desk.contains("MimeType=image/png;image/;text/x-rust;"));
+        // mimeapps.list ancla los mimes CONCRETOS (no la familia `image/`).
+        let list = std::fs::read_to_string(
+            prefix.join("share/applications/mimeapps.list"),
+        )
+        .unwrap();
+        assert!(list.contains("image/png=tawasuyu-demo-app.desktop"));
+        assert!(list.contains("text/x-rust=tawasuyu-demo-app.desktop"));
+        assert!(!list.contains("image/=")); // la familia no se ancla
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

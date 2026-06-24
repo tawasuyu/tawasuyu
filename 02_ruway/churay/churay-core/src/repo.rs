@@ -191,6 +191,9 @@ mod tests {
             program: program.into(),
             scope: Scope::App,
             suggests: Vec::new(),
+            launchable: true,
+            handles: Vec::new(),
+            post_install: None,
             bin_hash: Some(hash),
             size_bytes: None,
         }

@@ -29,6 +29,10 @@ impl Default for Scope {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Una unidad instalable: una app de la suite o un componente del sistema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unit {
@@ -54,6 +58,17 @@ pub struct Unit {
     /// no bloquea la instalación.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggests: Vec<String>,
+    /// Mimes/extensiones que esta app sabe abrir (de `app-bus`). Se escriben en
+    /// el `.desktop` (`MimeType=`) y se registran como handler por defecto.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handles: Vec<String>,
+    /// `true` si tiene sentido "Abrirla" sola. Las piezas "complicadas" (una
+    /// barra, un compositor) corren en contexto de sesión: no van con botón Abrir.
+    #[serde(default = "default_true")]
+    pub launchable: bool,
+    /// Instrucción exacta tras instalar (p.ej. "elegí mirada en el greeter").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_install: Option<String>,
     /// Hash BLAKE3 del binario precompilado, si el manifiesto lo conoce
     /// (lado bundle/repo). `None` cuando la unidad se compila desde fuente.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,6 +218,9 @@ mod tests {
             program: "nada".into(),
             scope: Scope::App,
             suggests: Vec::new(),
+            launchable: true,
+            handles: Vec::new(),
+            post_install: None,
             bin_hash: Some(ArtifactHash::of_bytes(b"binario falso")),
             size_bytes: Some(123),
         }

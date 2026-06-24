@@ -496,6 +496,7 @@ fn resultado(model: &Model) -> View<Msg> {
     .text_aligned("Listo", 28.0, t.fg_text, Alignment::Start);
 
     let mut filas: Vec<View<Msg>> = vec![titulo];
+    filas.push(linea(&instruccion_modo(model), t.fg_muted, t));
 
     // Unidades tocadas en esta corrida (Done / Failed).
     for (i, u) in model.units.iter().enumerate() {
@@ -552,16 +553,11 @@ fn resultado(model: &Model) -> View<Msg> {
         ])
 }
 
-/// Fila de una unidad instalada OK: ✓, dónde quedó y un botón para abrirla.
+/// Fila de una unidad instalada OK: ✓, dónde quedó, instrucción si la necesita,
+/// y botón Abrir sólo si es algo que se abre suelto.
 fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
     let bin = model.cfg.prefix.join("bin").join(&u.program);
-    let info = View::new(Style {
-        flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
-        ..Default::default()
-    })
-    .gap(2.0)
-    .children(vec![
+    let mut info_hijos = vec![
         View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
             .text_aligned(format!("✓ {}", u.label), 16.0, t.accent, Alignment::Start),
         View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
@@ -571,13 +567,44 @@ fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
                 t.fg_muted,
                 Alignment::Start,
             ),
-    ]);
-    // Sólo las apps de usuario se "abren"; los componentes de sistema no.
+    ];
+    // Instrucción exacta si la pieza la necesita (p.ej. la barra no se abre sola).
+    if let Some(nota) = &u.post_install {
+        info_hijos.push(
+            View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+                .text_aligned(format!("ⓘ {nota}"), 11.0, t.accent, Alignment::Start),
+        );
+    }
+    let alto = if u.post_install.is_some() { 60.0 } else { 46.0 };
+    let info = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .gap(2.0)
+    .children(info_hijos);
+
+    // Sólo lo "abrible" (apps reales) lleva botón Abrir. Las piezas complicadas
+    // (barra, compositor, init) corren en contexto de sesión: sin Abrir.
     let mut hijos = vec![info];
-    if !u.requires_root() {
+    if u.launchable && !u.requires_root() {
         hijos.push(boton("Abrir", t.accent, t.bg_app, 90.0, Msg::Lanzar(u.program.clone())));
     }
-    row(percent(1.0), length(46.0)).gap(10.0).pad_x(6.0).children(hijos)
+    row(percent(1.0), length(alto)).gap(10.0).pad_x(6.0).children(hijos)
+}
+
+/// Instrucción según el modo de instalación (local vs sistema).
+fn instruccion_modo(model: &Model) -> String {
+    match model.mode {
+        InstallMode::Local => format!(
+            "Instalado en {}/bin. Si no aparecen en el menú, asegurate de que esa carpeta esté en tu PATH.",
+            model.cfg.prefix.display()
+        ),
+        InstallMode::System => format!(
+            "Instalado en {}/bin (en el PATH del sistema).",
+            model.cfg.prefix.display()
+        ),
+    }
 }
 
 /// Botón compacto reutilizable.
