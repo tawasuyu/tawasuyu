@@ -600,6 +600,12 @@ pub struct State {
     /// `true` mientras una petición LLM está en vuelo (la tomó el host) —
     /// evita que el host la re-dispare en cada tick.
     pub llm_inflight: bool,
+    /// Búsqueda semántica pendiente (`:buscar`). Mismo patrón que `llm_request`:
+    /// el módulo expresa la intención, el chasis embebe y devuelve
+    /// `Msg::SemanticResult`. `None` salvo entre la invocación y su resultado.
+    pub semantic_request: Option<SemanticRequest>,
+    /// `true` mientras una búsqueda semántica está en vuelo (la tomó el host).
+    pub semantic_inflight: bool,
 }
 
 /// E5 — qué hacer con la respuesta del LLM.
@@ -621,6 +627,24 @@ pub struct LlmRequest {
     pub system: String,
     pub prompt: String,
     pub max_tokens: u32,
+    /// Backend a usar (de `[ai.llm]` del shumarc). Si `backend` está vacío, el
+    /// chasis cae a `from_env`. Así el LLM es configurable desde wawa-panel.
+    pub llm: shuma_config::LlmSettings,
+}
+
+/// Petición de **búsqueda semántica** (`:buscar`) que el chasis debe cumplir:
+/// embebe `query` + `candidates` con el daemon de embeddings (o mock) y devuelve
+/// los más parecidos. Campos públicos para que el host arme la búsqueda.
+#[derive(Debug, Clone)]
+pub struct SemanticRequest {
+    /// Lo que el usuario busca por significado.
+    pub query: String,
+    /// Corpus a rankear (líneas de comando del historial, deduplicadas).
+    pub candidates: Vec<String>,
+    /// Socket del daemon de embeddings (`""` = por defecto).
+    pub socket: String,
+    /// Dimensión del fallback mock si no hay daemon.
+    pub dim: usize,
 }
 
 /// Snapshot serializable del output de una sesión — lo que el chasis
@@ -817,6 +841,8 @@ impl State {
             in_cwd_rule: false,
             llm_request: None,
             llm_inflight: false,
+            semantic_request: None,
+            semantic_inflight: false,
         }
     }
 
@@ -829,6 +855,18 @@ impl State {
         }
         let req = self.llm_request.take()?;
         self.llm_inflight = true;
+        Some(req)
+    }
+
+    /// El host toma la búsqueda semántica pendiente (si la hay y no hay otra en
+    /// vuelo), marcándola en vuelo. El host la corre y responde con
+    /// `Msg::SemanticResult`.
+    pub fn take_semantic_request(&mut self) -> Option<SemanticRequest> {
+        if self.semantic_inflight {
+            return None;
+        }
+        let req = self.semantic_request.take()?;
+        self.semantic_inflight = true;
         Some(req)
     }
 

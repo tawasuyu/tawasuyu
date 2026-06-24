@@ -906,6 +906,7 @@ pub(crate) fn apply_ask(mut s: State, rest: &str) -> State {
         system,
         prompt: q.to_string(),
         max_tokens: 200,
+        llm: s.config.ai.llm.clone(),
     });
     s.push_output(OutputLine::notice(format!("🜲 llm · pensando una línea para: {q}")));
     s
@@ -949,8 +950,69 @@ pub(crate) fn apply_explain(mut s: State, rest: &str, summarize: bool) -> State 
         system: system.to_string(),
         prompt: format!("Salida del bloque %c{block}:\n\n{body}"),
         max_tokens: 600,
+        llm: s.config.ai.llm.clone(),
     });
     s.push_output(OutputLine::notice(format!("🜲 llm · {verbo} el bloque %c{block}…")));
+    s
+}
+
+/// `:buscar <consulta>` (`:search`) — búsqueda **semántica** sobre el historial:
+/// rankea los comandos pasados por significado, no por substring. El módulo sólo
+/// arma la petición (`State::semantic_request`); el chasis embebe con el daemon
+/// `rimay-verbo` (o un mock determinista si no hay daemon) y devuelve
+/// `Msg::SemanticResult`. Opt-in: requiere `[ai.semantic] enabled = true`.
+pub(crate) fn apply_search(mut s: State, rest: &str) -> State {
+    let q = rest.trim();
+    if q.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :buscar <qué recordás> — encuentra comandos pasados por significado",
+        ));
+        return s;
+    }
+    if !s.config.ai.semantic.enabled {
+        s.push_output(OutputLine::notice(
+            "búsqueda semántica apagada — activala en wawa-panel (IA · semántica) o en \
+             [ai.semantic] enabled = true del shumarc",
+        ));
+        return s;
+    }
+    // Corpus: líneas de comando del historial, deduplicadas (las más recientes
+    // primero), capadas para no embeber miles por consulta.
+    const MAX_CANDIDATES: usize = 500;
+    let mut seen = std::collections::HashSet::new();
+    let mut candidates: Vec<String> = Vec::new();
+    {
+        let guard = match s.history.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        for e in guard.entries().iter().rev() {
+            let line = e.line.trim();
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            if seen.insert(line.to_string()) {
+                candidates.push(line.to_string());
+                if candidates.len() >= MAX_CANDIDATES {
+                    break;
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        s.push_output(OutputLine::notice("no hay historial sobre el cual buscar todavía"));
+        return s;
+    }
+    let n = candidates.len();
+    s.semantic_request = Some(SemanticRequest {
+        query: q.to_string(),
+        candidates,
+        socket: s.config.ai.semantic.socket.clone(),
+        dim: s.config.ai.semantic.effective_dim(),
+    });
+    s.push_output(OutputLine::notice(format!(
+        "🔎 buscando «{q}» por significado en {n} comandos…"
+    )));
     s
 }
 

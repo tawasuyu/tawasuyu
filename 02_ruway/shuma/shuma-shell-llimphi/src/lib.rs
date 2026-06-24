@@ -617,6 +617,9 @@ impl App for Shell {
                 // E5 — despachar peticiones LLM pendientes (`:?`/`:explica`/
                 // `:resume`) a un thread; el resultado vuelve por LlmResult.
                 update::fulfill_llm_requests(&mut m, handle);
+                // Búsqueda semántica (`:buscar`) pendiente → thread; el
+                // resultado vuelve por SemanticResult.
+                update::fulfill_semantic_requests(&mut m, handle);
                 // El cwd remoto pudo cambiar tras un `cd`: re-listar si hace falta.
                 reconcile_explorer(&mut m, handle);
             }

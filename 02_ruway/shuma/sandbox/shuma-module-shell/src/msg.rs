@@ -207,4 +207,12 @@ pub enum Msg {
         ok: bool,
         text: String,
     },
+    /// Resultado de una búsqueda semántica (`:buscar`). Lo dispatcha el host
+    /// tras embeber con `rimay-verbo`; el módulo sólo expresó la intención
+    /// (`State::semantic_request`). `ok=false` → `hits` trae un único mensaje de
+    /// error; si no, `hits` son `(comando, score)` ordenados por parecido.
+    SemanticResult {
+        ok: bool,
+        hits: Vec<(String, f32)>,
+    },
 }

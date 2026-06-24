@@ -590,6 +590,20 @@ pub fn update(state: State, msg: Msg) -> State {
                 }
             }
         }
+        Msg::SemanticResult { ok, hits } => {
+            s.semantic_inflight = false;
+            if !ok {
+                let msg = hits.first().map(|(t, _)| t.clone()).unwrap_or_default();
+                s.push_output(OutputLine::notice(format!("🔎 búsqueda semántica · {msg}")));
+            } else if hits.is_empty() {
+                s.push_output(OutputLine::notice("🔎 sin coincidencias por significado"));
+            } else {
+                s.push_output(OutputLine::notice("🔎 comandos por significado:"));
+                for (line, score) in hits {
+                    s.push_output(OutputLine::stdout(format!("  {:>3}%  {line}", (score * 100.0).round() as i32)));
+                }
+            }
+        }
     }
     s
 }

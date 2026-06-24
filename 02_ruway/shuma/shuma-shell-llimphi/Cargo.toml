@@ -61,6 +61,9 @@ wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }
 # E5 — LLM como instrumento invocado (`:?`/`:explica`/`:resume`). El módulo
 # sólo expresa la intención; el chasis corre pluma-llm en un thread.
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+# Búsqueda semántica (`:buscar`): embeddings por el daemon rimay-verbo, con
+# fallback a mock determinista si no hay daemon. El chasis embebe en un thread.
+rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 tokio = { workspace = true }
 
 [dev-dependencies]

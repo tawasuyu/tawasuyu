@@ -468,7 +468,9 @@ fn run_llm_blocking(req: &shuma_module_shell::LlmRequest) -> Result<String, Stri
         .build()
         .map_err(|e| format!("runtime: {e}"))?;
     rt.block_on(async {
-        let client = pluma_llm::from_env().map_err(|e| format!("sin backend LLM: {e}"))?;
+        // Backend según `[ai.llm]` del shumarc (configurable en wawa-panel); si
+        // no se fijó uno, cae a la resolución por env (Mock sin credenciales).
+        let client = build_llm_client(&req.llm).map_err(|e| format!("sin backend LLM: {e}"))?;
         let chat = ChatRequest::una_vuelta(req.prompt.clone(), req.max_tokens)
             .con_sistema(req.system.clone());
         client
@@ -476,6 +478,115 @@ fn run_llm_blocking(req: &shuma_module_shell::LlmRequest) -> Result<String, Stri
             .await
             .map(|r| r.content)
             .map_err(|e| format!("{e}"))
+    })
+}
+
+/// Construye el cliente LLM desde `[ai.llm]`. Si `backend` está vacío, resuelve
+/// por env (`from_env`). Traduce los tipos planos de `shuma-config` al
+/// `LlmConfig` de `pluma-llm` (mantiene a `shuma-config` liviano).
+fn build_llm_client(
+    s: &shuma_config::LlmSettings,
+) -> Result<std::sync::Arc<dyn pluma_llm::pluma_llm_core::ChatClient>, String> {
+    use pluma_llm::{build_client, BackendKind, LlmConfig};
+    if !s.is_set() {
+        return pluma_llm::from_env().map_err(|e| format!("{e}"));
+    }
+    let kind = match s.backend.trim().to_lowercase().as_str() {
+        "anthropic" => BackendKind::Anthropic,
+        "gemini" => BackendKind::Gemini,
+        "deepseek" => BackendKind::DeepSeek,
+        "cohere" => BackendKind::Cohere,
+        "ollama" => BackendKind::Ollama,
+        "mock" => BackendKind::Mock,
+        other => return Err(format!("backend LLM desconocido: «{other}»")),
+    };
+    let none_if_empty = |v: &str| {
+        let v = v.trim();
+        (!v.is_empty()).then(|| v.to_string())
+    };
+    let cfg = LlmConfig {
+        kind,
+        model: none_if_empty(&s.model),
+        api_key: none_if_empty(&s.api_key),
+        endpoint: none_if_empty(&s.endpoint),
+    };
+    build_client(&cfg).map_err(|e| format!("{e}"))
+}
+
+/// Cumple las búsquedas semánticas pendientes (`:buscar`) de los shells
+/// montados. Mismo patrón que [`fulfill_llm_requests`]: el módulo expresa la
+/// intención (`State::semantic_request`), acá la corremos en un thread con
+/// `rimay-verbo` (daemon o mock) y devolvemos `Msg::SemanticResult`.
+pub(crate) fn fulfill_semantic_requests(m: &mut Model, handle: &Handle<Msg>) {
+    fn one(slot: Slot, st: &mut shuma_module_shell::State, handle: &Handle<Msg>) {
+        let Some(req) = st.take_semantic_request() else {
+            return;
+        };
+        let slot_back = slot.clone();
+        handle.spawn(move || {
+            let (ok, hits) = match run_semantic_blocking(&req) {
+                Ok(h) => (true, h),
+                Err(e) => (false, vec![(e, 0.0)]),
+            };
+            Msg::Module(
+                slot_back,
+                ModuleMsg::Shell(shuma_module_shell::Msg::SemanticResult { ok, hits }),
+            )
+        });
+    }
+    if let Some(Instance { state: ModuleState::Shell(st), .. }) = m.topbar.as_mut() {
+        one(Slot::TopBar, st, handle);
+    }
+    if let Some(Instance { state: ModuleState::Shell(st), .. }) = m.bottombar.as_mut() {
+        one(Slot::BottomBar, st, handle);
+    }
+    if let Some(Instance { state: ModuleState::Shell(st), .. }) = m.main.as_mut() {
+        one(Slot::Main, st, handle);
+    }
+    for (i, sess) in m.sessions.iter_mut().enumerate() {
+        if let ModuleState::Shell(st) = &mut sess.shell_mut().state {
+            one(Slot::Session(i, Which::Shell), st, handle);
+        }
+    }
+}
+
+/// Corre una búsqueda semántica bloqueante (en un thread del chasis): embebe la
+/// consulta + candidatos con el daemon `rimay-verbo` (o un mock determinista si
+/// no hay daemon), rankea por coseno y devuelve los mejores `(comando, score)`.
+fn run_semantic_blocking(
+    req: &shuma_module_shell::SemanticRequest,
+) -> Result<Vec<(String, f32)>, String> {
+    const TOP_K: usize = 10;
+    const MIN_SCORE: f32 = 0.20;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    rt.block_on(async {
+        use rimay_verbo::Provider;
+        let provider = if req.socket.trim().is_empty() {
+            rimay_verbo::conectar_o_mock(req.dim).await
+        } else {
+            rimay_verbo::conectar_o_mock_en(std::path::Path::new(req.socket.trim()), req.dim).await
+        };
+        let q = provider
+            .embed(&req.query)
+            .await
+            .map_err(|e| format!("embeddings: {e}"))?;
+        let vecs = provider
+            .embed_batch(&req.candidates)
+            .await
+            .map_err(|e| format!("embeddings: {e}"))?;
+        let mut scored: Vec<(String, f32)> = req
+            .candidates
+            .iter()
+            .zip(vecs.iter())
+            .filter_map(|(line, v)| q.cosine(v).ok().map(|s| (line.clone(), s)))
+            .filter(|(_, s)| *s >= MIN_SCORE)
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(TOP_K);
+        Ok(scored)
     })
 }
 
