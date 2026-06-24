@@ -190,10 +190,119 @@ reemplaza cuando hay rootfs con Mesa.
   responde `RELEASED`; mirada espera ese `RELEASED` (timeout 3 s) antes de
   tomar master con libseat. Lado splash en `arje-splash::handoff` (con
   `--poke`, cliente de prueba); lado mirada en `mirada-compositor::handoff`
-  (`esperar_release_del_splash`, llamado al inicio de `drm_backend::run`).
-  Degradación elegante en ambos lados: sin socket / sin respuesta, cada uno
-  sigue solo. **Verificado end-to-end en QEMU** (ver abajo); falta la
-  observación visual del crossfade con el greeter real en hardware.
+  (`esperar_release_del_splash`). Degradación elegante en ambos lados: sin
+  socket / sin respuesta, cada uno sigue solo. **Verificado end-to-end en QEMU**
+  (ver abajo); falta la observación visual del crossfade con el greeter real en
+  hardware.
+- [x] Fase 2 — robustez: el handoff se llama **justo antes de `DrmDeviceFd::new`**
+  (la toma irreversible de master vía SET_MASTER), no en el paso 0. Así el splash
+  sigue vivo durante libseat + GPU primaria + abrir el device, y solo suelta la
+  pantalla en el punto irreversible; si esos pasos fallan, el splash (con su panel
+  de logs) sigue visible. `mirada-compositor/src/drm_backend/mod.rs`.
+- [ ] **Fase 3 — greeter/renderer antes del handoff (split render-node/card-node).**
+  Diseñada (ver sección "Fase 3" abajo); sin implementar. Requiere verificación
+  en GPU real.
+
+## Fase 3 — Greeter compuesto antes del handoff (split render-node/card-node)
+
+Estado: **diseñado, sin implementar** (2026-06-24). Requiere verificación en GPU
+real (ver más abajo) — no reproducible en este entorno ni en QEMU sin virgl.
+
+### El gap que falta cerrar
+
+El handoff Fase 2 (`esperar_release_del_splash`) hoy ocurre **antes** del init de
+GPU de mirada. Secuencia real (`mirada-compositor/src/drm_backend/mod.rs::run`):
+
+```
+libseat → udev::primary_gpu → session.open(card)
+  → [HANDOFF: READY → splash fade-out → RELEASED]   ← splash suelta acá
+  → DrmDeviceFd::new (SET_MASTER) → DrmDevice::new(fd, true)
+  → enumerar salidas → GbmDevice + EGL + GlesRenderer  ← PARTE LENTA (shaders)
+  → create_surface + DrmCompositor → primer tick → render_frame → queue_frame
+```
+
+Entre que el splash suelta y el primer `queue_frame`, la pantalla queda en el
+`BG` estático (último frame del splash, que persiste tras soltar master). Esa
+ventana la domina `GlesRenderer::new` (init EGL + compilación de shaders,
+~cientos de ms). El SDD original (§ Fase 2, puntos 2–4) pide lo contrario:
+*mirada compone su primer frame y recién entonces se hace el handoff*. Fase 3
+cierra ese gap.
+
+### Por qué obliga al split (verificado contra smithay 0.7.0)
+
+- `DrmDeviceFd::new` (smithay `backend/drm/device/fd.rs`) llama
+  `acquire_master_lock()` **al construirse**. Si falla porque otro proceso (el
+  splash) ya es master, deja `privileged=false` **permanente**: `DrmDevice::
+  activate()` solo re-adquiere master `if is_privileged()`. ⇒ no se puede
+  construir el device del **card node** mientras el splash vive.
+- Los handles GEM son **por-fd**. Para construir el `GlesRenderer` (la parte
+  lenta) *antes* del handoff hay que hacerlo en **otro fd sin master** → el
+  **render node** (`/dev/dri/renderD128`) → y cruzar los buffers de scanout al
+  card node por **dmabuf**. No hay variante de un solo nodo. Es el camino
+  multi-GPU de smithay (el de `anvil`).
+- A favor: `DrmCompositor::render_frame` (smithay `backend/drm/compositor/
+  mod.rs:1684`) **no** toca master (solo chequea `surface.is_active()`).
+  `queue_frame` (íd. 2433) es lo único que hace el page-flip/commit KMS. El
+  split render(sin master)/flip(con master) es limpio.
+
+### Reordenamiento de `run()`
+
+- **Fase A — sin master, splash vivo:**
+  1. `LibSeatSession::new`, `udev::primary_gpu` → path del card node.
+  2. Derivar render node: `DrmNode::from_path(card)?.node_with_type(NodeType::
+     Render)` (crate `drm` 0.14, re-exportado por smithay como
+     `backend::drm::{DrmNode, NodeType}`). Abrir su fd (no necesita master ni
+     libseat — `/dev/dri/renderD*` no tiene concepto de master).
+  3. `GbmDevice::new(render_fd)` → `EGLDisplay` → `EGLContext` →
+     **`GlesRenderer::new`** (la parte lenta, ahora solapada con el splash).
+  4. `build_app(greeter)` + `announce_dmabuf(&renderer)` (estado Wayland; sin
+     GPU ni master).
+- **Fase B — handoff:** `esperar_release_del_splash()`.
+- **Fase C — con master:**
+  5. `session.open(card)` → `DrmDeviceFd::new` (ahora **sí** agarra master) →
+     `DrmDevice::new(fd, true)`.
+  6. Enumerar salidas (conector/CRTC/modo — solo lectura, rápido).
+  7. `GbmDevice::new(card_fd)` para el exporter.
+  8. Por salida: `create_surface` + `DrmCompositor::new(mode, surface, None,`
+     `allocator=GbmAllocator(gbm_render, RENDERING|SCANOUT),`
+     `exporter=GbmFramebufferExporter::new(gbm_card, Some(render_drm_node)),`
+     `renderer_formats, …)`. El `import_node` (render node) hace que el exporter
+     trate los buffers del render node como dmabuf foráneo y los importe al card
+     node para scanout (`backend/drm/exporter/gbm.rs::add_framebuffer`).
+  9. calloop + primer tick → `render_frame` (render node) → import dmabuf →
+     `queue_frame` (card node, master) → primer frame.
+
+Los type-aliases no cambian (`Compositor` = `DrmCompositor<GbmAllocator,
+GbmFramebufferExporter>`, `GlesRenderer`); solo cambia **sobre qué device** vive
+cada pieza. `DrmState.renderer` pasa a ser el del render node; hay que retener el
+`gbm_card` para clonarlo en cada exporter.
+
+### Detalle: el greeter es cliente aparte
+
+Para cumplir el SDD a la letra ("primer frame **del greeter** compuesto antes
+del handoff") habría que, en Fase A, levantar el socket Wayland, `spawn_greeter`,
+y bombear el event loop hasta que el greeter mande su primer buffer y mirada lo
+componga off-screen — todo sin master. Es factible (es render/IPC, no KMS) pero
+suma complejidad. **Variante mínima recomendada:** en Fase A solo se adelanta el
+`GlesRenderer::new` (el costo dominante); el greeter sigue componiéndose en Fase
+C como hoy. Captura la mayor parte del beneficio con mucho menos riesgo. El
+"greeter compuesto antes del handoff" completo queda como refinamiento posterior.
+
+### Fallback
+
+El camino nuevo es oportunista. Si abrir el render node o crear EGL/GLES sobre él
+falla, se cae al orden actual (handoff → `GlesRenderer` sobre el card node). Peor
+caso estructural = comportamiento de hoy.
+
+### Verificación (pendiente, requiere GPU)
+
+- `cargo check -p mirada-compositor` cubre lo estructural.
+- El scanout cross-node por dmabuf depende de los **modifiers** del driver:
+  compila bien pero un mismatch en runtime = pantalla negra, solo visible en
+  hardware. Validar en una máquina con GPU real (Intel/AMD) observando el
+  crossfade splash→greeter sin gap de `BG` estático, y comparando la duración del
+  gap contra el baseline actual (evidencia de texto: timestamps de "splash
+  RELEASED" vs primer `queue_frame`).
 
 ## Empaquetado (cómo llega al boot)
 
