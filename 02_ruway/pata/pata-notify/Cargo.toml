@@ -11,12 +11,6 @@ description = "Daemon de notificaciones de escritorio de tawasuyu: implementa or
 name = "pata-notify"
 path = "src/main.rs"
 
-# El panel de historial: cliente del daemon (no abre el sled directo, lo
-# consulta por D-Bus), dockeado como sidebar derecho vía llimphi-layer.
-[[bin]]
-name = "pata-notify-panel"
-path = "src/bin/panel.rs"
-
 [lib]
 path = "src/lib.rs"
 
@@ -24,7 +18,6 @@ path = "src/lib.rs"
 llimphi-ui = { workspace = true }
 llimphi-layer = { workspace = true }
 llimphi-widget-toast = { workspace = true }
-llimphi-widget-scroll = { workspace = true }
 zbus = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

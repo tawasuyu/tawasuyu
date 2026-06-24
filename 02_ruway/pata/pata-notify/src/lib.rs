@@ -17,7 +17,6 @@
 
 pub mod app;
 pub mod dbus;
-pub mod panel;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +35,10 @@ pub struct Notificacion {
     pub body: String,
     /// Urgencia freedesktop: 0 baja, 1 normal, 2 crítica.
     pub urgency: u8,
+    /// Acciones `(clave, etiqueta)` ofrecidas por el emisor. Al clickear una,
+    /// el daemon emite la señal `ActionInvoked(id, clave)`.
+    #[serde(default)]
+    pub actions: Vec<(String, String)>,
     /// Timeout pedido por el cliente: `-1` default del servidor, `0` nunca
     /// expira, `>0` milisegundos explícitos.
     pub timeout_ms: i32,
@@ -51,8 +54,23 @@ pub enum Msg {
     Entrante(Notificacion),
     /// Venció el timeout de la notificación `id` — sacarla del stack.
     Expira(u32),
-    /// El usuario la cerró (click) o el cliente llamó `CloseNotification`.
+    /// El usuario la cerró con un click en el cuerpo del toast.
     Descarta(u32),
+    /// El cliente pidió cerrarla vía `CloseNotification` (motivo 3).
+    CerrarPorCliente(u32),
+    /// El usuario clickeó un botón de acción.
+    Accion { id: u32, clave: String },
+}
+
+/// Evento del loop de render hacia el hilo D-Bus, para emitir señales del
+/// protocolo freedesktop hacia los clientes.
+#[derive(Debug, Clone)]
+pub enum Cierre {
+    /// Emitir `NotificationClosed(id, motivo)`. Motivo: 1 expiró, 2 la cerró el
+    /// usuario, 3 vía `CloseNotification`.
+    Cerrada { id: u32, motivo: u32 },
+    /// Emitir `ActionInvoked(id, clave)`.
+    Accion { id: u32, clave: String },
 }
 
 /// Instante actual en µs desde epoch (best-effort).

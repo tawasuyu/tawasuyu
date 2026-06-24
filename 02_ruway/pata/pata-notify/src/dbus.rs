@@ -2,20 +2,22 @@
 //! sesión. Molde tomado de los shims de `arje-compat` (zbus v4 + tokio).
 //!
 //! Cada `Notify` se persiste en el historial y se reenvía al loop de render
-//! vía `Handle::dispatch`. El daemon es deliberadamente tonto: no decide,
-//! no agrupa, no filtra — eso vive (más adelante) en una capa aparte que lee
-//! el mismo store.
+//! vía `Handle::dispatch`. El daemon emite las señales del spec
+//! (`NotificationClosed`, `ActionInvoked`) y una propia (`Cambio`) que el panel
+//! de historial usa para refrescar sin polling.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use llimphi_ui::Handle;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, warn};
-use zbus::interface;
+use zbus::object_server::SignalContext;
 use zbus::zvariant::{OwnedValue, Value};
+use zbus::{interface, proxy};
 
 use crate::store::Store;
-use crate::{now_usec, Msg, Notificacion};
+use crate::{now_usec, Cierre, Msg, Notificacion};
 
 const BUS_NAME: &str = "org.freedesktop.Notifications";
 const OBJ_PATH: &str = "/org/freedesktop/Notifications";
@@ -27,8 +29,8 @@ const OBJ_PATH: &str = "/org/freedesktop/Notifications";
 const HIST_IFACE: &str = "net.tawasuyu.Notificaciones1";
 const HIST_PATH: &str = "/net/tawasuyu/Notificaciones1";
 
-/// El objeto que sirve la interfaz. `Send + Sync` (lo exige el object server):
-/// el contador es atómico, el store y el handle son clonables/compartibles.
+/// El objeto que sirve la interfaz freedesktop. `Send + Sync` (lo exige el
+/// object server): el contador es atómico, store y handle son compartibles.
 pub struct Servicio {
     next_id: AtomicU32,
     handle: Handle<Msg>,
@@ -46,9 +48,10 @@ impl Servicio {
         _app_icon: String,
         summary: String,
         body: String,
-        _actions: Vec<String>,
+        actions_planas: Vec<String>,
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
+        #[zbus(connection)] conn: &zbus::Connection,
     ) -> u32 {
         // replaces_id != 0 → el cliente actualiza una notificación viva.
         let id = if replaces_id != 0 {
@@ -57,12 +60,14 @@ impl Servicio {
             self.next_id.fetch_add(1, Ordering::Relaxed)
         };
         let urgency = hints.get("urgency").and_then(urgency_u8).unwrap_or(1);
+        let actions = parsear_acciones(&actions_planas);
         let n = Notificacion {
             id,
             app_name,
             summary,
             body,
             urgency,
+            actions,
             timeout_ms: expire_timeout,
             created_usec: now_usec(),
         };
@@ -71,21 +76,23 @@ impl Servicio {
         }
         info!(id, app = %n.app_name, urgency = n.urgency, "Notify");
         self.handle.dispatch(Msg::Entrante(n));
+
+        // Avisar al panel que el historial cambió (señal en la otra interfaz).
+        if let Ok(ctxt) = SignalContext::new(conn, HIST_PATH) {
+            let _ = Historiador::cambio(&ctxt).await;
+        }
         id
     }
 
-    /// Cierre pedido por el cliente. Saca el toast del stack vivo (el historial
-    /// queda intacto). La señal `NotificationClosed` queda pendiente para una
-    /// iteración futura.
+    /// Cierre pedido por el cliente. Dispara el cierre en el loop de render, que
+    /// es el único que emite `NotificationClosed` (con el motivo correcto).
     async fn close_notification(&self, id: u32) {
-        self.handle.dispatch(Msg::Descarta(id));
+        self.handle.dispatch(Msg::CerrarPorCliente(id));
     }
 
-    /// Capacidades que el daemon realmente cumple. No anunciamos `actions`
-    /// porque todavía no pintamos botones de acción (los toasts son
-    /// click-para-descartar) — anunciarlo engañaría a los clientes.
+    /// Capacidades cumplidas: cuerpo, botones de acción e historial persistente.
     async fn get_capabilities(&self) -> Vec<String> {
-        vec!["body".into(), "persistence".into()]
+        vec!["body".into(), "actions".into(), "persistence".into()]
     }
 
     /// Identificación del servidor: (nombre, vendor, versión, versión-spec).
@@ -97,6 +104,19 @@ impl Servicio {
             "1.2".into(),
         )
     }
+
+    /// Señal del spec: la notificación `id` se cerró. `reason`: 1 expiró, 2 la
+    /// cerró el usuario, 3 vía `CloseNotification`, 4 indefinido.
+    #[zbus(signal)]
+    async fn notification_closed(ctxt: &SignalContext<'_>, id: u32, reason: u32) -> zbus::Result<()>;
+
+    /// Señal del spec: el usuario invocó la acción `action_key` de `id`.
+    #[zbus(signal)]
+    async fn action_invoked(
+        ctxt: &SignalContext<'_>,
+        id: u32,
+        action_key: String,
+    ) -> zbus::Result<()>;
 }
 
 /// Extrae la urgencia (hint `urgency`, byte freedesktop) de un valor del dict.
@@ -105,6 +125,18 @@ fn urgency_u8(v: &OwnedValue) -> Option<u8> {
         Value::U8(b) => Some(*b),
         _ => None,
     }
+}
+
+/// El array de acciones del spec viene plano `[clave1, etiqueta1, clave2, …]`;
+/// lo volvemos pares `(clave, etiqueta)`.
+fn parsear_acciones(planas: &[String]) -> Vec<(String, String)> {
+    planas
+        .chunks(2)
+        .filter_map(|c| match c {
+            [clave, etiqueta] => Some((clave.clone(), etiqueta.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Sirve el historial persistido. Devuelve JSON (lista de [`Notificacion`])
@@ -132,12 +164,30 @@ impl Historiador {
             warn!(?e, "no se pudo limpiar el historial");
         }
     }
+
+    /// Señal: el historial cambió (llegó una notificación). El panel refresca.
+    #[zbus(signal)]
+    async fn cambio(ctxt: &SignalContext<'_>) -> zbus::Result<()>;
 }
 
-// ── Cliente (lo usa el panel de historial) ──────────────────────────────────
+// ── Cliente proxy (lo usa el panel de historial) ────────────────────────────
 
-/// Trae el historial del daemon. El panel vive en otro proceso y no puede abrir
-/// el sled directamente (lock exclusivo), así que pregunta por D-Bus.
+/// Proxy generado para consumir la interfaz del historial: consultar, limpiar y
+/// suscribirse a `Cambio` (refresco por señal en vez de polling).
+#[proxy(
+    default_service = "org.freedesktop.Notifications",
+    default_path = "/net/tawasuyu/Notificaciones1",
+    interface = "net.tawasuyu.Notificaciones1"
+)]
+pub trait Historial {
+    fn historial(&self) -> zbus::Result<String>;
+    fn limpiar(&self) -> zbus::Result<()>;
+    #[zbus(signal)]
+    fn cambio(&self) -> zbus::Result<()>;
+}
+
+/// Trae el historial del daemon (atajo sin proxy, para consumidores simples
+/// como el CLI de triage).
 pub async fn fetch_historial() -> anyhow::Result<Vec<Notificacion>> {
     let conn = zbus::Connection::session().await?;
     let reply = conn
@@ -155,10 +205,12 @@ pub async fn limpiar_historial() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Registra el nombre en el bus de sesión y sirve la interfaz hasta que el
-/// proceso termina. Pensado para correr dentro de un runtime tokio en su
-/// propio hilo (ver [`crate::app::Daemon::init`]).
-pub async fn serve(handle: Handle<Msg>, store: Store) {
+// ── Servidor ────────────────────────────────────────────────────────────────
+
+/// Registra el nombre en el bus de sesión, sirve ambas interfaces y, en el mismo
+/// hilo, drena `rx` para emitir `NotificationClosed`/`ActionInvoked` cuando el
+/// loop de render cierra un toast o se invoca una acción.
+pub async fn serve(handle: Handle<Msg>, store: Store, mut rx: UnboundedReceiver<Cierre>) {
     let historiador = Historiador { store: store.clone() };
     let svc = Servicio {
         next_id: AtomicU32::new(1),
@@ -169,15 +221,40 @@ pub async fn serve(handle: Handle<Msg>, store: Store) {
         .and_then(|b| b.name(BUS_NAME))
         .and_then(|b| b.serve_at(OBJ_PATH, svc))
         .and_then(|b| b.serve_at(HIST_PATH, historiador));
-    match built {
+    let conn = match built {
         Ok(builder) => match builder.build().await {
-            Ok(_conn) => {
+            Ok(conn) => {
                 info!(name = BUS_NAME, "name adquirido — sirviendo notificaciones");
-                // Mantener viva la conexión; el object server atiende en tareas.
-                std::future::pending::<()>().await;
+                conn
             }
-            Err(e) => warn!(?e, "build de conexión D-Bus falló — ¿ya hay otro daemon?"),
+            Err(e) => {
+                warn!(?e, "build de conexión D-Bus falló — ¿ya hay otro daemon?");
+                return;
+            }
         },
-        Err(e) => warn!(?e, "builder D-Bus falló (¿sin bus de sesión?)"),
+        Err(e) => {
+            warn!(?e, "builder D-Bus falló (¿sin bus de sesión?)");
+            return;
+        }
+    };
+
+    // Emitir señales del spec cuando el render cierra toasts / invoca acciones.
+    let ctxt = match SignalContext::new(&conn, OBJ_PATH) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(?e, "no se pudo armar el SignalContext — sin señales de cierre");
+            std::future::pending::<()>().await;
+            return;
+        }
+    };
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            Cierre::Cerrada { id, motivo } => {
+                let _ = Servicio::notification_closed(&ctxt, id, motivo).await;
+            }
+            Cierre::Accion { id, clave } => {
+                let _ = Servicio::action_invoked(&ctxt, id, clave).await;
+            }
+        }
     }
 }

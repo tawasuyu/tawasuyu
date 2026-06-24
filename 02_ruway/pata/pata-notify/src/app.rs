@@ -5,10 +5,11 @@
 use std::time::{Duration, Instant};
 
 use llimphi_ui::{App, Handle, View};
-use llimphi_widget_toast::{toast_stack_view, Toast, ToastKind};
+use llimphi_widget_toast::{toast_stack_view_con_acciones, Toast, ToastKind};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::store::Store;
-use crate::{dbus, Msg, Notificacion};
+use crate::{dbus, Cierre, Msg, Notificacion};
 
 /// Ancho de la caja en la esquina (px). `TOAST_W` (320) + márgenes del widget.
 pub const BOX_W: u32 = 352;
@@ -22,11 +23,18 @@ const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 /// hasta que el usuario la descarte.
 const PERSISTENTE: Duration = Duration::from_secs(10 * 365 * 24 * 3_600);
 
+// Motivos de `NotificationClosed` (spec freedesktop).
+const MOTIVO_EXPIRO: u32 = 1;
+const MOTIVO_USUARIO: u32 = 2;
+const MOTIVO_CLIENTE: u32 = 3;
+
 pub struct Daemon;
 
 pub struct Model {
     /// Toasts vivos en pantalla. El historial completo vive en `sled`, no acá.
     toasts: Vec<Toast>,
+    /// Canal hacia el hilo D-Bus para emitir señales de cierre/acción.
+    eventos: UnboundedSender<Cierre>,
 }
 
 impl App for Daemon {
@@ -37,6 +45,10 @@ impl App for Daemon {
         let store = Store::open()
             .or_else(|_| Store::temporary())
             .expect("store de notificaciones (ni disco ni memoria)");
+
+        // Canal inverso render → D-Bus: las señales del spec se emiten desde el
+        // hilo que tiene la conexión.
+        let (tx, rx) = unbounded_channel::<Cierre>();
 
         // El frontend D-Bus corre en su propio hilo: zbus es async y el loop de
         // llimphi-layer es bloqueante (sctk). El handler reentra acá vía el
@@ -50,13 +62,16 @@ impl App for Daemon {
                     .enable_all()
                     .build()
                 {
-                    Ok(rt) => rt.block_on(dbus::serve(h, st)),
+                    Ok(rt) => rt.block_on(dbus::serve(h, st, rx)),
                     Err(e) => eprintln!("pata-notify · sin runtime tokio: {e}"),
                 }
             })
             .expect("hilo del frontend D-Bus");
 
-        Model { toasts: Vec::new() }
+        Model {
+            toasts: Vec::new(),
+            eventos: tx,
+        }
     }
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -74,6 +89,7 @@ impl App for Daemon {
                     kind,
                     text: texto(&n),
                     expires_at: Instant::now() + dur,
+                    actions: n.actions.clone(),
                 };
                 // replaces_id: reemplazá el slot si ya existe ese id.
                 if let Some(slot) = model.toasts.iter_mut().find(|t| t.id == id) {
@@ -90,8 +106,13 @@ impl App for Daemon {
                     });
                 }
             }
-            Msg::Expira(id) | Msg::Descarta(id) => {
-                model.toasts.retain(|t| t.id != id as u64);
+            Msg::Expira(id) => model.cerrar(id, MOTIVO_EXPIRO),
+            Msg::Descarta(id) => model.cerrar(id, MOTIVO_USUARIO),
+            Msg::CerrarPorCliente(id) => model.cerrar(id, MOTIVO_CLIENTE),
+            Msg::Accion { id, clave } => {
+                let _ = model.eventos.send(Cierre::Accion { id, clave });
+                // Invocar una acción también cierra la notificación.
+                model.cerrar(id, MOTIVO_USUARIO);
             }
         }
         model
@@ -105,9 +126,15 @@ impl App for Daemon {
             .filter(|t| t.is_alive(ahora))
             .cloned()
             .collect();
-        toast_stack_view(&vivos, (BOX_W as f32, BOX_H as f32), |id| {
-            Msg::Descarta(id as u32)
-        })
+        toast_stack_view_con_acciones(
+            &vivos,
+            (BOX_W as f32, BOX_H as f32),
+            |id| Msg::Descarta(id as u32),
+            |id, clave| Msg::Accion {
+                id: id as u32,
+                clave: clave.to_string(),
+            },
+        )
     }
 
     fn app_id() -> Option<&'static str> {
@@ -116,6 +143,18 @@ impl App for Daemon {
 
     fn title() -> &'static str {
         "pata-notify"
+    }
+}
+
+impl Model {
+    /// Saca un toast del stack y emite `NotificationClosed(id, motivo)`.
+    fn cerrar(&mut self, id: u32, motivo: u32) {
+        let antes = self.toasts.len();
+        self.toasts.retain(|t| t.id != id as u64);
+        // Sólo emitir si de verdad había algo (evita señales espurias).
+        if self.toasts.len() != antes {
+            let _ = self.eventos.send(Cierre::Cerrada { id, motivo });
+        }
     }
 }
 
