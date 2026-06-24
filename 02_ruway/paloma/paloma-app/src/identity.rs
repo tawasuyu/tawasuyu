@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use agora_core::Keypair;
-use paloma_llimphi::MailSigner;
+use paloma_llimphi::{MailSigner, Voucher};
 
 pub struct AgoraSigner {
     kp: Keypair,
@@ -34,6 +34,27 @@ impl AgoraSigner {
     /// Clave pública (para logging / mostrar la identidad).
     pub fn public_key(&self) -> [u8; 32] {
         self.kp.public_key()
+    }
+}
+
+/// Generador de avales (web-of-trust): firma con la identidad del usuario.
+pub struct AgoraVoucher {
+    kp: Keypair,
+}
+
+impl AgoraVoucher {
+    pub fn from_seed(seed: [u8; 32]) -> Self {
+        Self { kp: Keypair::from_seed(seed) }
+    }
+}
+
+impl Voucher for AgoraVoucher {
+    fn vouch(&self, subject: [u8; 32], display: &str) -> paloma_trust::Attestation {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        paloma_trust::vouch(&self.kp, &subject, display, now)
     }
 }
 

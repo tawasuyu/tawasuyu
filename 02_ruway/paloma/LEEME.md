@@ -253,8 +253,23 @@ intercambiables, como el resto de la suite.
     guardado" (ámbar, TOFU). Test: remitente del rail en la libreta → conocido.
   - **Pendiente**: confianza para SMTP firmado (atar `pubkey ↔ email`: hoy el
     `X-Paloma-Pubkey` se verifica pero no se guarda en el `Message`, así que la
-    confianza por nombre cubre el rail; el SMTP firmado muestra integridad) +
-    red de confianza transitiva de `agora` (avales entre contactos).
+    confianza por nombre cubre el rail; el SMTP firmado muestra integridad).
+
+- **Fase 17 (2026-06-24):** **red de avales** — web-of-trust transitiva (Eje 3).
+  - `paloma-trust` (crate nuevo, sobre las atestaciones de `agora`): un **aval**
+    es una `Attestation` donde un contacto firma "esta clave es alguien que
+    conozco". `vouch()` crea avales; `TrustStore` los verifica/persiste (JSON) y
+    evalúa `vouched_by(subject, trusted)` — confianza transitiva **a un salto**:
+    si confiás en Ana y Ana avaló a Bob, reconocés a Bob por Ana. 3 tests
+    (transitivo, aval manipulado rechazado, dedup+roundtrip).
+  - `paloma-llimphi`: `SenderTrust { Direct(n) | Vouched(by) | Unknown }`;
+    `sender_trust(m)` evalúa directa → avalada → desconocida; el chip de
+    identidad muestra "👤 nombre" / "🔗 avalado por X" / "? no guardado".
+    Botón **🔗 Avalar** (`Msg::VouchSender`) firma un aval por el remitente.
+    Trait `Voucher` inyectado (`paloma-app::identity::AgoraVoucher`, con la seed).
+  - **Pendiente**: **propagación** de avales (adjuntarlos a los mensajes / gossip
+    por el rail) — hoy se crean/persisten localmente o se importan por
+    `~/.config/paloma/avales.json`; el intercambio automático es el próximo paso.
 
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).

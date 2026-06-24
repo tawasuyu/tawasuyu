@@ -86,6 +86,25 @@ pub trait RailLink: Send {
     fn my_address(&self) -> String;
 }
 
+/// Crea **avales** (web-of-trust, Eje 3): firma con la identidad del usuario que
+/// `subject` (clave pública) es alguien conocido. Lo inyecta el anfitrión (tiene
+/// la `Keypair`). `None` ⇒ no se puede avalar desde la UI.
+pub trait Voucher: Send {
+    /// Firma un aval por `subject` con etiqueta `display`; devuelve la atestación.
+    fn vouch(&self, subject: [u8; 32], display: &str) -> paloma_trust::Attestation;
+}
+
+/// Confianza de identidad de un remitente (pubkey↔persona).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SenderTrust {
+    /// Está en tu libreta: identidad conocida directa.
+    Direct(String),
+    /// No está, pero un contacto tuyo lo avaló (transitivo a un salto).
+    Vouched(String),
+    /// Firmado e íntegro, pero de identidad desconocida (TOFU).
+    Unknown,
+}
+
 /// Campo enfocado del formulario de redacción.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposeField {
@@ -217,6 +236,12 @@ pub struct Model {
     contacts: paloma_contacts::Contactbook,
     /// Ruta del archivo de contactos (para persistir altas). `None` = sin disco.
     contacts_path: Option<std::path::PathBuf>,
+    /// Red de avales (web-of-trust transitiva sobre agora).
+    trust: paloma_trust::TrustStore,
+    /// Ruta del archivo de avales (para persistir). `None` = sin disco.
+    trust_path: Option<std::path::PathBuf>,
+    /// Generador de avales (inyectado; tiene la `Keypair`). `None` = no avalar.
+    voucher: Option<Box<dyn Voucher>>,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -311,6 +336,9 @@ impl Model {
             view_lang: None,
             contacts: paloma_contacts::Contactbook::new(),
             contacts_path: None,
+            trust: paloma_trust::TrustStore::new(),
+            trust_path: None,
+            voucher: None,
             db,
             account_id,
             status,
@@ -396,12 +424,49 @@ impl Model {
         self.contacts.len()
     }
 
-    /// Confianza del remitente de `m`: el nombre del contacto cuya dirección
-    /// coincide, o `None` si no está en la libreta. Para el rail la dirección es
-    /// la clave pública, así que un match + firma `Verified` = identidad
-    /// criptográfica conocida (no sólo integridad).
-    pub fn sender_contact(&self, m: &Message) -> Option<&str> {
-        self.contacts.name_for(&m.from.email)
+    /// Inyecta la red de avales cargada del disco + su ruta, y el generador de
+    /// avales (con la `Keypair`). Lo hace el anfitrión al arrancar.
+    pub fn set_trust(
+        &mut self,
+        store: paloma_trust::TrustStore,
+        path: std::path::PathBuf,
+        voucher: Box<dyn Voucher>,
+    ) {
+        self.trust = store;
+        self.trust_path = Some(path);
+        self.voucher = voucher.into();
+    }
+
+    /// Las claves públicas de los contactos del rail (en las que se confía
+    /// directo) — base de la confianza transitiva.
+    fn direct_rail_keys(&self) -> Vec<[u8; 32]> {
+        self.contacts
+            .all()
+            .iter()
+            .filter_map(|c| paloma_rail::parse_rail_address(&c.address))
+            .collect()
+    }
+
+    /// Confianza de identidad del remitente de `m` (pubkey↔persona): directa
+    /// (en la libreta), avalada (un contacto lo vouchea, transitivo a un salto),
+    /// o desconocida. Para el rail la dirección es la clave pública, así que esto
+    /// + firma `Verified` = identidad criptográfica.
+    pub fn sender_trust(&self, m: &Message) -> SenderTrust {
+        if let Some(name) = self.contacts.name_for(&m.from.email) {
+            return SenderTrust::Direct(name.to_string());
+        }
+        if let Some(pk) = paloma_rail::parse_rail_address(&m.from.email) {
+            let trusted = self.direct_rail_keys();
+            if let Some(attester) = self.trust.vouched_by(&pk, &trusted) {
+                let by = self
+                    .contacts
+                    .name_for(&paloma_rail::rail_address(&attester))
+                    .unwrap_or("?")
+                    .to_string();
+                return SenderTrust::Vouched(by);
+            }
+        }
+        SenderTrust::Unknown
     }
 
     /// Idioma efectivo de lectura (multilienzo): el elegido a mano, si no el del
@@ -677,6 +742,9 @@ pub enum Msg {
     SetViewLang(Option<String>),
     /// Guardar el remitente del hilo abierto en la libreta de contactos.
     SaveSenderContact,
+    /// Avalar (web-of-trust) al remitente del hilo abierto: firmás que su
+    /// identidad es conocida, para que tus contactos la reconozcan por vos.
+    VouchSender,
 }
 
 /// Dispara una búsqueda por significado: arma el corpus y se lo entrega al
@@ -896,6 +964,28 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
                     if nuevo { "paloma-status-contact-added" } else { "paloma-status-contact-updated" },
                     &[("name", name.into())],
                 );
+            }
+        }
+        Msg::VouchSender => {
+            // Avalar al remitente: firma que su identidad (clave del rail) es
+            // conocida. Sólo aplica a remitentes con identidad del rail.
+            let info = model.current_newest().and_then(|id| model.store.message(&id)).and_then(|m| {
+                paloma_rail::parse_rail_address(&m.from.email)
+                    .map(|pk| (pk, m.from.display_name().to_string(), m.from.email.clone()))
+            });
+            match (info, model.voucher.as_ref()) {
+                (Some((pk, name, addr)), Some(voucher)) => {
+                    let display = if name.is_empty() || name == addr { addr } else { name };
+                    let aval = voucher.vouch(pk, &display);
+                    if model.trust.add(aval) {
+                        if let Some(p) = &model.trust_path {
+                            let _ = model.trust.save(p);
+                        }
+                    }
+                    model.status = rimay_localize::t_args("paloma-status-vouched", &[("name", display.into())]);
+                }
+                (None, _) => model.status = rimay_localize::t("paloma-status-vouch-not-rail"),
+                (_, None) => {}
             }
         }
         Msg::OpenMessage(id) => {
@@ -1241,12 +1331,12 @@ mod tests {
             mailbox: SUYU_MAILBOX.into(),
             cuerpos: vec![],
         };
-        assert_eq!(model.sender_contact(&msg), Some("Ana"), "remitente en la libreta");
+        assert_eq!(model.sender_trust(&msg), SenderTrust::Direct("Ana".into()), "remitente en la libreta");
 
         let otro = Address::named("X", "desconocido@rail.suyu");
         let mut ajeno = msg.clone();
         ajeno.from = otro;
-        assert_eq!(model.sender_contact(&ajeno), None, "remitente desconocido");
+        assert_eq!(model.sender_trust(&ajeno), SenderTrust::Unknown, "remitente desconocido");
     }
 
     #[test]

@@ -24,6 +24,7 @@ paloma-semantic = { path = "../paloma-semantic" }
 paloma-rail = { path = "../paloma-rail" }
 paloma-rail-net = { path = "../paloma-rail-net" }
 paloma-contacts = { path = "../paloma-contacts" }
+paloma-trust = { path = "../paloma-trust" }
 paloma-llimphi = { path = "../paloma-llimphi" }
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }

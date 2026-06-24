@@ -615,6 +615,15 @@ fn reading_panel(model: &Model) -> View<Msg> {
         theme.fg_text,
         Msg::SaveSenderContact,
     ));
+    // Avalar al remitente (web-of-trust): sólo si su firma es válida.
+    if newest.map(|m| m.signature == SignatureStatus::Verified).unwrap_or(false) {
+        actions.push(button(
+            &format!("🔗 {}", t("paloma-btn-vouch")),
+            theme.bg_button,
+            theme.fg_text,
+            Msg::VouchSender,
+        ));
+    }
     actions.push(spacer());
     actions.push(button(&format!("🗑  {}", t("delete")), theme.bg_button, theme.fg_destructive, Msg::DeleteThread));
     let action_bar = View::new(Style {
@@ -653,8 +662,8 @@ fn reading_panel(model: &Model) -> View<Msg> {
     }
     for id in &thread.message_ids {
         if let Some(m) = model.store_ref().message(id) {
-            let sender = model.sender_contact(m);
-            cards.push(message_card(theme, m, &lang, sender));
+            let trust = model.sender_trust(m);
+            cards.push(message_card(theme, m, &lang, &trust));
         }
     }
     let content = View::new(Style {
@@ -712,9 +721,9 @@ pub(crate) fn reading_content_height(model: &Model) -> f32 {
     total
 }
 
-/// Tarjeta de un mensaje: avatar + (de · fecha) + para + cuerpo. `sender` es el
-/// nombre del contacto si el remitente está en la libreta (confianza).
-fn message_card(theme: &Theme, m: &Message, lang: &str, sender: Option<&str>) -> View<Msg> {
+/// Tarjeta de un mensaje: avatar + (de · fecha) + para + cuerpo. `trust` es la
+/// confianza de identidad del remitente (directa / avalada / desconocida).
+fn message_card(theme: &Theme, m: &Message, lang: &str, trust: &crate::SenderTrust) -> View<Msg> {
     let from = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         flex_grow: 1.0,
@@ -733,7 +742,7 @@ fn message_card(theme: &Theme, m: &Message, lang: &str, sender: Option<&str>) ->
         head_children.push(badge);
     }
     // Chip de confianza de identidad (pubkey↔persona).
-    if let Some(chip) = identity_chip(theme, m.signature, sender) {
+    if let Some(chip) = identity_chip(theme, m.signature, trust) {
         head_children.push(chip);
     }
     head_children.push(date);
@@ -1171,18 +1180,25 @@ fn signature_badge(theme: &Theme, status: SignatureStatus) -> Option<View<Msg>> 
 /// firma `Verified`: si el remitente está en la libreta → "✓ <nombre>" (verde,
 /// identidad conocida); si no → "remitente no guardado" (ámbar, TOFU). Sin firma
 /// válida no aplica (no hay identidad criptográfica que atar).
-fn identity_chip(theme: &Theme, status: SignatureStatus, sender: Option<&str>) -> Option<View<Msg>> {
+fn identity_chip(theme: &Theme, status: SignatureStatus, trust: &crate::SenderTrust) -> Option<View<Msg>> {
     if status != SignatureStatus::Verified {
         return None;
     }
-    let (label, fg) = match sender {
-        Some(name) => (
-            format!("👤 {}", rimay_localize::t_args("paloma-trust-known", &[("name", name.to_string().into())])),
-            Color::from_rgba8(90, 180, 120, 255),
+    use crate::SenderTrust;
+    let green = Color::from_rgba8(90, 180, 120, 255);
+    let amber = Color::from_rgba8(200, 160, 70, 255);
+    let (label, fg) = match trust {
+        SenderTrust::Direct(name) => (
+            format!("👤 {}", rimay_localize::t_args("paloma-trust-known", &[("name", name.clone().into())])),
+            green,
         ),
-        None => (
+        SenderTrust::Vouched(by) => (
+            format!("🔗 {}", rimay_localize::t_args("paloma-trust-vouched", &[("name", by.clone().into())])),
+            green,
+        ),
+        SenderTrust::Unknown => (
             format!("? {}", rimay_localize::t("paloma-trust-unknown")),
-            Color::from_rgba8(200, 160, 70, 255),
+            amber,
         ),
     };
     Some(

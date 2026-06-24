@@ -232,6 +232,13 @@ impl App for Paloma {
             let rail = rail::RailHost::new(seed, handle.clone());
             eprintln!("paloma · rail P2P · tu dirección: {}", rail.address());
             model.attach_rail(Box::new(rail));
+
+            // Red de avales (web-of-trust): almacén JSON + generador con la seed.
+            if let Some(dir) = config_dir() {
+                let path = dir.join("avales.json");
+                let store = paloma_trust::TrustStore::load(&path).unwrap_or_default();
+                model.set_trust(store, path, Box::new(identity::AgoraVoucher::from_seed(seed)));
+            }
         }
 
         // Libreta de contactos (alias → dirección), JSON editable en config.

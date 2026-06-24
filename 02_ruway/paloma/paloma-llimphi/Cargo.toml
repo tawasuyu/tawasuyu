@@ -13,6 +13,7 @@ paloma-core = { path = "../paloma-core" }
 paloma-store = { path = "../paloma-store" }
 paloma-rail = { path = "../paloma-rail" }
 paloma-contacts = { path = "../paloma-contacts" }
+paloma-trust = { path = "../paloma-trust" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
