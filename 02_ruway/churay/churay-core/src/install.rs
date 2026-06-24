@@ -262,28 +262,66 @@ impl Source for BuildSource {
     }
 }
 
-/// Elige la fuente para `unit`, por prioridad: **bundle** local (instantáneo) →
-/// **repo remoto** firmado (descarga, si la unidad trae hash) → **compilar**
-/// del workspace. `None` si ninguna está disponible.
-pub fn resolve_source(cfg: &InstallConfig, unit: &Unit) -> Option<Box<dyn Source>> {
+/// De qué fuente saldría el binario de una unidad — para que la UI lo anticipe
+/// (y avise antes de un compilado largo, o de que no hay forma).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Binario precompilado en el bundle local.
+    Bundle,
+    /// Descarga del repo remoto firmado.
+    Remote,
+    /// Compilar desde el workspace (modo dev; lento; **requiere cargo**).
+    Build,
+    /// Ninguna disponible: ni bundle, ni repo, ni cargo+workspace.
+    None,
+}
+
+/// `true` si hay un `cargo` ejecutable en el sistema. Un sistema de usuario
+/// normal **no tiene cargo**: en ese caso no se ofrece compilar desde fuente.
+pub fn cargo_disponible() -> bool {
+    std::process::Command::new("cargo")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Qué fuente se usaría para `unit` con esta config, sin instalar nada.
+pub fn source_kind(cfg: &InstallConfig, unit: &Unit) -> SourceKind {
     if let Some(dir) = &cfg.bundle_dir {
         if dir.join("bin").join(&unit.program).exists() {
-            return Some(Box::new(BundleSource { dir: dir.clone() }));
+            return SourceKind::Bundle;
         }
     }
-    if let Some(url) = &cfg.remote_base_url {
-        // El repo remoto sólo puede servir lo que declara por hash.
-        if unit.bin_hash.is_some() {
-            return Some(Box::new(crate::repo::RemoteRepo::curl(
-                url.clone(),
-                cfg.cache_dir.clone(),
-            )));
-        }
+    if cfg.remote_base_url.is_some() && unit.bin_hash.is_some() {
+        return SourceKind::Remote;
     }
-    if let Some(ws) = &cfg.workspace_root {
-        return Some(Box::new(BuildSource { workspace_root: ws.clone() }));
+    if cfg.workspace_root.is_some() && cargo_disponible() {
+        return SourceKind::Build;
     }
-    None
+    SourceKind::None
+}
+
+/// Elige la fuente para `unit`, por prioridad: **bundle** local (instantáneo) →
+/// **repo remoto** firmado (descarga, si la unidad trae hash) → **compilar**
+/// del workspace (sólo si hay `cargo`). `None` si ninguna está disponible — un
+/// sistema sin cargo y sin bundle/repo no puede instalar esa unidad.
+pub fn resolve_source(cfg: &InstallConfig, unit: &Unit) -> Option<Box<dyn Source>> {
+    match source_kind(cfg, unit) {
+        SourceKind::Bundle => Some(Box::new(BundleSource {
+            dir: cfg.bundle_dir.clone().unwrap(),
+        })),
+        SourceKind::Remote => Some(Box::new(crate::repo::RemoteRepo::curl(
+            cfg.remote_base_url.clone().unwrap(),
+            cfg.cache_dir.clone(),
+        ))),
+        SourceKind::Build => Some(Box::new(BuildSource {
+            workspace_root: cfg.workspace_root.clone().unwrap(),
+        })),
+        SourceKind::None => None,
+    }
 }
 
 /// Instala una unidad de punta a punta: resuelve la fuente, escribe el binario,
@@ -577,6 +615,41 @@ mod tests {
         // Detección de la línea de cargo.
         assert!(is_artifact_line(r#"{"reason":"compiler-artifact","package_id":"x"}"#));
         assert!(!is_artifact_line(r#"{"reason":"build-finished","success":true}"#));
+    }
+
+    #[test]
+    fn source_kind_elige_bundle_remoto_o_nada() {
+        let base = std::env::temp_dir().join(format!("churay-sk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let bundle = base.join("bundle");
+        std::fs::create_dir_all(bundle.join("bin")).unwrap();
+        std::fs::write(bundle.join("bin").join("demo-app"), b"x").unwrap();
+
+        let mut u = unidad("demo-app");
+        // Sin nada: ni bundle, ni repo, ni workspace ⇒ None.
+        let vacio = InstallConfig {
+            mode: InstallMode::Local,
+            prefix: base.join("p"),
+            bundle_dir: None,
+            workspace_root: None,
+            remote_base_url: None,
+            cache_dir: base.join("c"),
+        };
+        assert_eq!(source_kind(&vacio, &u), SourceKind::None);
+
+        // Con bundle que trae el binario ⇒ Bundle.
+        let con_bundle = InstallConfig { bundle_dir: Some(bundle.clone()), ..vacio.clone() };
+        assert_eq!(source_kind(&con_bundle, &u), SourceKind::Bundle);
+
+        // Con repo remoto y la unidad declarando hash ⇒ Remote.
+        u.bin_hash = Some(ArtifactHash::of_bytes(b"x"));
+        let con_repo = InstallConfig {
+            remote_base_url: Some("http://repo".into()),
+            ..vacio.clone()
+        };
+        assert_eq!(source_kind(&con_repo, &u), SourceKind::Remote);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

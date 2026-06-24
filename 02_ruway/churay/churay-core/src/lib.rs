@@ -20,13 +20,18 @@ pub mod catalog;
 pub mod hash;
 pub mod install;
 pub mod manifest;
+pub mod prefs;
 pub mod repo;
 pub mod state;
 pub mod update;
 
 pub use catalog::{local_manifest, suite_catalog, SUITE_VERSION};
 pub use hash::ArtifactHash;
-pub use install::{install_unit, uninstall_unit, InstallConfig, InstallError, InstallMode, Step};
+pub use install::{
+    cargo_disponible, install_unit, source_kind, uninstall_unit, InstallConfig, InstallError,
+    InstallMode, SourceKind, Step,
+};
+pub use prefs::Prefs;
 pub use manifest::{Manifest, Scope, SignedManifest, Unit, VerifyError};
 pub use repo::{fetch_signed_manifest, CurlFetcher, Fetcher, LocalFetcher, RemoteRepo, RepoError};
 pub use state::{InstalledState, InstalledUnit};

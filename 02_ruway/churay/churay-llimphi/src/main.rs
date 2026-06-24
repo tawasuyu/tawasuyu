@@ -7,8 +7,8 @@
 
 use churay_core::install::Step;
 use churay_core::{
-    install_unit, pending_updates, InstallConfig, InstallMode, InstalledState, Manifest, Unit,
-    UpdateKind,
+    install_unit, pending_updates, source_kind, InstallConfig, InstallMode, InstalledState,
+    Manifest, SourceKind, Unit, UpdateKind,
 };
 
 use llimphi_theme::Theme;
@@ -44,11 +44,12 @@ enum Tab {
     Actualizaciones,
 }
 
-/// Pantalla actual: bienvenida (branding) → catálogo.
+/// Pantalla actual: bienvenida (branding) → catálogo → resultado.
 #[derive(Clone, Copy, PartialEq)]
 enum Screen {
     Bienvenida,
     Catalogo,
+    Resultado,
 }
 
 struct Model {
@@ -71,6 +72,8 @@ struct Model {
     screen: Screen,
     /// Logo de la suite (de `marca`), decodificado una vez.
     logo: Option<Image>,
+    /// Checkbox de la portada: no volver a mostrarla.
+    skip_welcome: bool,
 }
 
 #[derive(Clone)]
@@ -90,6 +93,11 @@ enum Msg {
     RemotoListo(Result<Manifest, String>),
     Comenzar,
     AgregarSugeridas,
+    ToggleSkipWelcome,
+    Lanzar(String),
+    VolverCatalogo,
+    InstalarSugeridasResultado,
+    Cerrar,
 }
 
 struct Churay;
@@ -138,6 +146,27 @@ impl Model {
         }
         faltan
     }
+
+    /// Índices de unidades **sugeridas por las ya instaladas** que todavía no se
+    /// instalaron — para la pantalla de resultado ("te sugerimos también…").
+    fn sugeridas_de_instaladas(&self) -> Vec<usize> {
+        let sugeridas: Vec<String> = self
+            .units
+            .iter()
+            .filter(|u| self.state.is_installed(&u.id))
+            .flat_map(|u| u.suggests.iter().cloned())
+            .collect();
+        self.units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| {
+                self.mode.admits(u.scope)
+                    && !self.state.is_installed(&u.id)
+                    && sugeridas.contains(&u.id)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
 }
 
 impl App for Churay {
@@ -162,6 +191,9 @@ impl App for Churay {
         let units = churay_core::suite_catalog();
         let n = units.len();
         let state = InstalledState::load(&cfg.prefix);
+        let prefs = churay_core::Prefs::load();
+        // La portada se salta si el usuario ya lo pidió (es también actualizador).
+        let screen = if prefs.skip_welcome { Screen::Catalogo } else { Screen::Bienvenida };
         Model {
             theme: Theme::dark(),
             mode,
@@ -176,8 +208,10 @@ impl App for Churay {
             remote_manifest: None,
             repo_msg: String::new(),
             buscando: false,
-            screen: Screen::Bienvenida,
+            screen,
             logo: llimphi_image::decode_bytes(&Brand::Suite.image()).ok(),
+            // El checkbox de la portada arranca activado ("no mostrar de nuevo").
+            skip_welcome: true,
         }
     }
 
@@ -260,6 +294,8 @@ impl App for Churay {
             Msg::AllDone => {
                 model.installing = false;
                 model.reload_state();
+                // Mostrá el resultado: qué quedó instalado y cómo abrirlo.
+                model.screen = Screen::Resultado;
             }
             Msg::ReexecRoot => {
                 if let Ok(exe) = std::env::current_exe() {
@@ -306,11 +342,37 @@ impl App for Churay {
                     Err(e) => model.repo_msg = format!("Falló el chequeo: {e}"),
                 }
             }
-            Msg::Comenzar => model.screen = Screen::Catalogo,
+            Msg::Comenzar => {
+                if model.skip_welcome {
+                    let _ = (churay_core::Prefs { skip_welcome: true }).save();
+                }
+                model.screen = Screen::Catalogo;
+            }
+            Msg::ToggleSkipWelcome => model.skip_welcome = !model.skip_welcome,
             Msg::AgregarSugeridas => {
                 for i in model.sugeridas_faltantes() {
                     model.selected[i] = true;
                 }
+            }
+            Msg::Lanzar(program) => {
+                let bin = model.cfg.prefix.join("bin").join(&program);
+                let _ = std::process::Command::new(bin).spawn();
+            }
+            Msg::VolverCatalogo => {
+                for s in model.status.iter_mut() {
+                    *s = UnitStatus::Idle;
+                }
+                model.screen = Screen::Catalogo;
+            }
+            Msg::Cerrar => handle.quit(),
+            Msg::InstalarSugeridasResultado => {
+                for i in model.sugeridas_de_instaladas() {
+                    model.selected[i] = true;
+                }
+                for s in model.status.iter_mut() {
+                    *s = UnitStatus::Idle;
+                }
+                model.screen = Screen::Catalogo;
             }
         }
         model
@@ -318,8 +380,10 @@ impl App for Churay {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let t = &model.theme;
-        if model.screen == Screen::Bienvenida {
-            return bienvenida(model);
+        match model.screen {
+            Screen::Bienvenida => return bienvenida(model),
+            Screen::Resultado => return resultado(model),
+            Screen::Catalogo => {}
         }
         let body = match model.tab {
             Tab::Catalogo => catalogo(model),
@@ -377,6 +441,34 @@ fn bienvenida(model: &Model) -> View<Msg> {
     .text("Comenzar", 17.0, t.bg_app)
     .on_click(Msg::Comenzar);
 
+    // "No mostrar de nuevo" — activado por defecto (es también actualizador).
+    let sw = View::new(Style {
+        size: Size { width: length(54.0), height: length(28.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![switch_view(
+        if model.skip_welcome { 1.0 } else { 0.0 },
+        Msg::ToggleSkipWelcome,
+        &SwitchPalette::from_theme(t),
+    )]);
+    let chk_label = View::new(Style {
+        size: Size { width: length(180.0), height: length(28.0) },
+        ..Default::default()
+    })
+    .text_aligned("No mostrar de nuevo", 13.0, t.fg_muted, Alignment::Start)
+    .on_click(Msg::ToggleSkipWelcome);
+    let chk = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0), height: length(30.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(8.0), height: length(0.0) },
+        ..Default::default()
+    })
+    .children(vec![sw, chk_label]);
+
     col(percent(1.0), percent(1.0))
         .fill(t.bg_app)
         .gap(18.0)
@@ -387,8 +479,119 @@ fn bienvenida(model: &Model) -> View<Msg> {
             nombre,
             tagline,
             wrap_center(comenzar),
+            chk,
             View::new(Style { flex_grow: 1.0, ..Default::default() }),
         ])
+}
+
+/// Pantalla de resultado: qué se instaló, cómo abrirlo, qué falló, y
+/// sugerencias de lo que combina con lo instalado.
+fn resultado(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0), height: length(40.0) },
+        ..Default::default()
+    })
+    .text_aligned("Listo", 28.0, t.fg_text, Alignment::Start);
+
+    let mut filas: Vec<View<Msg>> = vec![titulo];
+
+    // Unidades tocadas en esta corrida (Done / Failed).
+    for (i, u) in model.units.iter().enumerate() {
+        match &model.status[i] {
+            UnitStatus::Done => filas.push(fila_resultado_ok(model, u, t)),
+            UnitStatus::Failed(err) => filas.push(linea(
+                &format!("✗ {} — {}", u.label, err),
+                t.fg_destructive,
+                t,
+            )),
+            _ => {}
+        }
+    }
+
+    // Sugerencias de lo instalado.
+    let sug = model.sugeridas_de_instaladas();
+    if !sug.is_empty() {
+        let nombres: Vec<&str> = sug.iter().map(|&i| model.units[i].label.as_str()).collect();
+        let txt = View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
+            format!("Combinan con lo que instalaste: {}", nombres.join(", ")),
+            14.0,
+            t.fg_text,
+            Alignment::Start,
+        );
+        let add = boton("Instalar sugeridas", t.accent, t.bg_app, 170.0, Msg::InstalarSugeridasResultado);
+        filas.push(
+            row(percent(1.0), length(40.0))
+                .gap(10.0)
+                .pad(8.0)
+                .fill(t.bg_input)
+                .radius(8.0)
+                .children(vec![txt, add]),
+        );
+    }
+
+    // Acciones finales.
+    let volver = boton("Volver al catálogo", t.bg_button, t.fg_text, 180.0, Msg::VolverCatalogo);
+    let cerrar = boton("Cerrar", t.bg_button, t.fg_text, 110.0, Msg::Cerrar);
+    let acciones = row(percent(1.0), length(40.0))
+        .gap(10.0)
+        .justify(JustifyContent::End)
+        .children(vec![volver, cerrar]);
+
+    col(percent(1.0), percent(1.0))
+        .fill(t.bg_app)
+        .gap(10.0)
+        .pad(28.0)
+        .children(vec![
+            col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+                .gap(8.0)
+                .grow()
+                .children(filas),
+            acciones,
+        ])
+}
+
+/// Fila de una unidad instalada OK: ✓, dónde quedó y un botón para abrirla.
+fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
+    let bin = model.cfg.prefix.join("bin").join(&u.program);
+    let info = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .gap(2.0)
+    .children(vec![
+        View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
+            .text_aligned(format!("✓ {}", u.label), 16.0, t.accent, Alignment::Start),
+        View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+            .text_aligned(
+                format!("En el menú de apps · {}", bin.display()),
+                11.0,
+                t.fg_muted,
+                Alignment::Start,
+            ),
+    ]);
+    // Sólo las apps de usuario se "abren"; los componentes de sistema no.
+    let mut hijos = vec![info];
+    if !u.requires_root() {
+        hijos.push(boton("Abrir", t.accent, t.bg_app, 90.0, Msg::Lanzar(u.program.clone())));
+    }
+    row(percent(1.0), length(46.0)).gap(10.0).pad_x(6.0).children(hijos)
+}
+
+/// Botón compacto reutilizable.
+fn boton(label: &str, bg: Color, fg: Color, w: f32, msg: Msg) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(w), height: length(34.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(8.0)
+    .text(label, 14.0, fg)
+    .on_click(msg)
 }
 
 /// Centra horizontalmente un hijo en una fila de ancho completo.
@@ -710,6 +913,28 @@ fn footer(model: &Model) -> View<Msg> {
         );
     }
 
+    // Aviso de fuente: si lo elegido se va a compilar (lento) o no hay con qué
+    // (sistema sin bundle/repo/cargo). Anticipa la sorpresa del "compilando".
+    let kinds: Vec<SourceKind> = model
+        .visibles()
+        .into_iter()
+        .filter(|&i| model.selected[i])
+        .map(|i| source_kind(&model.cfg, &model.units[i]))
+        .collect();
+    if kinds.iter().any(|k| *k == SourceKind::None) {
+        hijos.push(linea(
+            "⚠ Sin fuente para algo de lo elegido: hace falta un bundle o CHURAY_REPO (este sistema no puede compilar).",
+            t.fg_destructive,
+            t,
+        ));
+    } else if kinds.iter().any(|k| *k == SourceKind::Build) {
+        hijos.push(linea(
+            "⚙ Algo se compilará desde fuente (lento; modo dev, requiere cargo).",
+            t.fg_muted,
+            t,
+        ));
+    }
+
     hijos.push(row(percent(1.0), length(34.0)).gap(10.0).children(vec![resumen, acciones]));
 
     if model.installing {
@@ -824,6 +1049,7 @@ trait ViewExt {
     fn pad(self, p: f32) -> Self;
     fn pad_x(self, p: f32) -> Self;
     fn grow(self) -> Self;
+    fn justify(self, j: JustifyContent) -> Self;
 }
 impl ViewExt for View<Msg> {
     fn gap(mut self, g: f32) -> Self {
@@ -840,6 +1066,10 @@ impl ViewExt for View<Msg> {
     }
     fn grow(mut self) -> Self {
         self.style.flex_grow = 1.0;
+        self
+    }
+    fn justify(mut self, j: JustifyContent) -> Self {
+        self.style.justify_content = Some(j);
         self
     }
 }

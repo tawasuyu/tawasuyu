@@ -204,7 +204,12 @@ fn instalar_una(cfg: &InstallConfig, u: &Unit, state: &mut InstalledState) -> i3
     });
     match res {
         Ok(()) => {
-            println!("✓");
+            // Cómo ejecutar lo instalado.
+            let bin = cfg.prefix.join("bin").join(&u.program);
+            println!("✓  ejecutá: {}  (o desde el menú de apps)", bin.display());
+            if !u.suggests.is_empty() {
+                println!("   sugerido: {}", u.suggests.join(", "));
+            }
             0
         }
         Err(e) => {
