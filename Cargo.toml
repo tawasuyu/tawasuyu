@@ -379,6 +379,7 @@ members = [
     "02_ruway/pata/pata-host",
     "02_ruway/pata/pata-llimphi",
     "02_ruway/pata/pata-notify",
+    "02_ruway/pata/pata-notify-triage",
     "02_ruway/media/media-app",
     "02_ruway/media/media-recorder-app",
     "02_ruway/media/media-audio-cpal",
