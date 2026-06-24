@@ -249,6 +249,10 @@ pub enum UserEvent<Msg> {
     },
     /// Pide cerrar la ventana secundaria con esa `key`. No afecta a la primaria.
     CloseWindow { key: u64 },
+    /// Minimiza (o restaura) la ventana **primaria**. Útil para apps que deben
+    /// quitarse de en medio un instante — p. ej. una captura de pantalla que no
+    /// quiere salir en su propia toma. Es una *petición* al compositor.
+    SetMinimized(bool),
     /// Evento del adapter AccessKit: el lector de pantalla solicitó el árbol
     /// inicial, pidió ejecutar una acción (focus, click, etc.) o se desactivó.
     /// El adapter usa el `EventLoopProxy` para enviarlos al hilo del runtime.
@@ -366,6 +370,15 @@ impl<Msg: Send + 'static> Handle<Msg> {
     pub fn close_window(&self, key: u64) {
         if let HandleInner::Real(p) = &self.inner {
             let _ = p.send_event(UserEvent::CloseWindow { key });
+        }
+    }
+
+    /// Minimiza (`true`) o restaura (`false`) la ventana primaria. Es una
+    /// petición al compositor (en Wayland, `xdg_toplevel.set_minimized`); honrarla
+    /// depende del WM. Pensado para apartarse un instante (captura de pantalla).
+    pub fn set_minimized(&self, minimized: bool) {
+        if let HandleInner::Real(p) = &self.inner {
+            let _ = p.send_event(UserEvent::SetMinimized(minimized));
         }
     }
 

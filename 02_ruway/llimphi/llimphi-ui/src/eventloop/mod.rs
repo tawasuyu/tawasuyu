@@ -164,6 +164,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     self.secondaries.remove(pos);
                 }
             }
+            UserEvent::SetMinimized(min) => {
+                if let Some(state) = self.state.as_ref() {
+                    state.window.set_minimized(min);
+                }
+            }
             UserEvent::A11y(ev) => {
                 self.handle_a11y_event(ev);
             }

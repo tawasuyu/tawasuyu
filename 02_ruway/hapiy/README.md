@@ -48,7 +48,7 @@ capture). The native `zwlr_screencopy` client is **verified working against
 mirada**; `--backend auto` still degrades to grim on any failure. Both the CLI
 and the GUI run.
 
-The GUI does region select (mark two corners on the preview → crop), a capture
-delay (`⏱ Capturar 3s`), copy-to-clipboard, save, and Edit-in-tullpu. Next: a
-live drag-rectangle overlay while selecting, and hiding the hapiy window during
-the shot.
+The GUI does region select with a **live selection rectangle** (mark two corners
+on the preview → crop), a capture **delay** (`⏱ Capturar 3s`), copy-to-clipboard,
+save, and Edit-in-tullpu — and it **minimizes its own window during the shot** so
+hapiy stays out of the capture (via `Handle::set_minimized`, added to llimphi-ui).

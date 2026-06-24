@@ -13,8 +13,9 @@ use hapiy_capture::{capturer, Backend};
 use hapiy_core::{default_dir, default_filename, tullpu_launch, Capturer, OutputInfo, Region, Shot};
 use llimphi_image::from_rgba8;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
-    length, percent, AlignItems, FlexDirection, JustifyContent, Size, Style,
+    auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style,
 };
+use llimphi_ui::llimphi_layout::taffy::Rect;
 use llimphi_ui::llimphi_raster::peniko::{Color, ImageBrush as Image};
 use llimphi_ui::{App, Handle, View};
 use std::process::Command;
@@ -27,19 +28,23 @@ const ACCENT: Color = Color::from_rgb8(0x6E, 0x8C, 0xDC);
 const FG: Color = Color::from_rgb8(0xD6, 0xDE, 0xE8);
 const MUTED: Color = Color::from_rgb8(0x8C, 0x98, 0xAA);
 
-const DELAY_SECS: u64 = 3;
-
 #[derive(Clone)]
 enum Msg {
+    /// Botón Capturar: minimiza la ventana y agenda [`Msg::DoCapture`].
     Capture,
+    /// Captura efectiva (tras el retardo de ocultamiento) + restaura la ventana.
+    DoCapture,
+    /// Capturar con retardo de staging: agenda [`Msg::Capture`] en N s.
     CaptureDelayed,
     Save,
     Copy,
     Edit,
     Clear,
     ToggleSelect,
-    /// Click en el preview: `(local_x, local_y, rect_w, rect_h)`.
+    /// Click en el preview: `(local_x, local_y, rect_w, rect_h)` (px del nodo).
     PreviewClick(f32, f32, f32, f32),
+    /// Cursor moviéndose sobre el preview: `(local_x, local_y)` (px del nodo).
+    PointerAt(f32, f32),
     SelectOutput(usize),
 }
 
@@ -50,11 +55,20 @@ struct Model {
     sel: usize,
     shot: Option<Shot>,
     preview: Option<Image>,
-    /// Modo de selección de región activo + primera esquina ya fijada (px imagen).
+    /// Modo de selección de región activo.
     select_mode: bool,
-    corner: Option<(u32, u32)>,
+    /// Primera esquina marcada, en px del nodo del preview.
+    corner_node: Option<(f32, f32)>,
+    /// Última posición del cursor sobre el preview (px del nodo) — para el
+    /// rectángulo de selección en vivo.
+    cursor_node: Option<(f32, f32)>,
     status: String,
 }
+
+/// Segundos de retardo de **staging** (Capturar 3s) y de **ocultamiento** de la
+/// ventana antes del disparo, respectivamente.
+const STAGING_SECS: u64 = 3;
+const HIDE_MS: u64 = 400;
 
 struct Hapiy;
 
@@ -77,20 +91,34 @@ impl App for Hapiy {
             shot: None,
             preview: None,
             select_mode: false,
-            corner: None,
+            corner_node: None,
+            cursor_node: None,
             status: "Pulsá Capturar.".into(),
         }
     }
 
     fn update(mut model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         match msg {
-            Msg::Capture => capture(&mut model),
+            Msg::Capture => {
+                // Apartarse de la toma: minimizar, esperar a que el compositor
+                // desmapee, capturar y restaurar (en DoCapture).
+                handle.set_minimized(true);
+                handle.spawn(move || {
+                    std::thread::sleep(Duration::from_millis(HIDE_MS));
+                    Msg::DoCapture
+                });
+                model.status = "Capturando…".into();
+            }
+            Msg::DoCapture => {
+                capture(&mut model);
+                handle.set_minimized(false);
+            }
             Msg::CaptureDelayed => {
                 handle.spawn(move || {
-                    std::thread::sleep(Duration::from_secs(DELAY_SECS));
+                    std::thread::sleep(Duration::from_secs(STAGING_SECS));
                     Msg::Capture
                 });
-                model.status = format!("Capturando en {DELAY_SECS} s…");
+                model.status = format!("Capturando en {STAGING_SECS} s…");
             }
             Msg::Save => match &model.shot {
                 Some(s) => {
@@ -131,13 +159,15 @@ impl App for Hapiy {
                 model.shot = None;
                 model.preview = None;
                 model.select_mode = false;
-                model.corner = None;
+                model.corner_node = None;
+                model.cursor_node = None;
                 model.status = "Pulsá Capturar.".into();
             }
             Msg::ToggleSelect => {
                 if model.shot.is_some() {
                     model.select_mode = !model.select_mode;
-                    model.corner = None;
+                    model.corner_node = None;
+                    model.cursor_node = None;
                     model.status = if model.select_mode {
                         "Región: clic una esquina y luego la opuesta.".into()
                     } else {
@@ -147,18 +177,24 @@ impl App for Hapiy {
                     model.status = "Capturá primero.".into();
                 }
             }
+            Msg::PointerAt(lx, ly) => {
+                if model.select_mode {
+                    model.cursor_node = Some((lx, ly));
+                }
+            }
             Msg::PreviewClick(lx, ly, rw, rh) => {
                 if model.select_mode {
                     if let Some(s) = &model.shot {
-                        let p = to_image_px(lx, ly, rw, rh, s.width, s.height);
-                        match model.corner.take() {
+                        match model.corner_node.take() {
                             None => {
-                                model.corner = Some(p);
+                                model.corner_node = Some((lx, ly));
+                                model.cursor_node = Some((lx, ly));
                                 model.status = "Esquina 1 fijada — clic la opuesta.".into();
                             }
                             Some(a) => {
-                                let region = region_between(a, p);
-                                match s.crop(region) {
+                                let pa = to_image_px(a.0, a.1, rw, rh, s.width, s.height);
+                                let pb = to_image_px(lx, ly, rw, rh, s.width, s.height);
+                                match s.crop(region_between(pa, pb)) {
                                     Some(c) => {
                                         model.preview = Some(from_rgba8(c.rgba.clone(), c.width, c.height));
                                         model.status = format!("Recortado a {}×{}.", c.width, c.height);
@@ -167,6 +203,7 @@ impl App for Hapiy {
                                     None => model.status = "Región vacía; probá de nuevo.".into(),
                                 }
                                 model.select_mode = false;
+                                model.cursor_node = None;
                             }
                         }
                     }
@@ -180,7 +217,7 @@ impl App for Hapiy {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let mut toolbar = vec![
             boton("⛶ Capturar", BG, ACCENT, Msg::Capture),
-            boton(&format!("⏱ Capturar {DELAY_SECS}s"), FG, BTN, Msg::CaptureDelayed),
+            boton(&format!("⏱ Capturar {STAGING_SECS}s"), FG, BTN, Msg::CaptureDelayed),
             boton(
                 if model.select_mode { "✂ Cancelar" } else { "✂ Región" },
                 if model.select_mode { BG } else { FG },
@@ -217,16 +254,32 @@ impl App for Hapiy {
 
         let lienzo = match &model.preview {
             Some(img) => {
-                let mut v = View::new(Style {
+                let mut imagen = View::new(Style {
                     size: Size { width: percent(1.0), height: percent(1.0) },
                     flex_grow: 1.0,
                     ..Default::default()
                 })
                 .image(img.clone());
                 if model.select_mode {
-                    v = v.on_click_at(|lx, ly, rw, rh| Some(Msg::PreviewClick(lx, ly, rw, rh)));
+                    imagen = imagen
+                        .on_click_at(|lx, ly, rw, rh| Some(Msg::PreviewClick(lx, ly, rw, rh)))
+                        .on_pointer_move_at(|lx, ly, _rw, _rh| Some(Msg::PointerAt(lx, ly)));
                 }
-                v
+                // Container relativo: la imagen llena, y el rectángulo de
+                // selección se posiciona absoluto sobre ella (mismas coords de nodo).
+                let mut hijos = vec![imagen];
+                if model.select_mode {
+                    if let (Some(a), Some(c)) = (model.corner_node, model.cursor_node) {
+                        hijos.push(marquee(a, c));
+                    }
+                }
+                View::new(Style {
+                    position: Position::Relative,
+                    size: Size { width: percent(1.0), height: percent(1.0) },
+                    flex_grow: 1.0,
+                    ..Default::default()
+                })
+                .children(hijos)
             }
             None => View::new(Style {
                 size: Size { width: percent(1.0), height: percent(1.0) },
@@ -270,7 +323,8 @@ fn capture(model: &mut Model) {
         Err(e) => model.status = format!("Error al capturar: {e}"),
     }
     model.select_mode = false;
-    model.corner = None;
+    model.corner_node = None;
+    model.cursor_node = None;
 }
 
 /// Mapea coords locales del nodo (con la imagen en `Contain`/letterbox) a píxeles
@@ -292,6 +346,23 @@ fn region_between(a: (u32, u32), b: (u32, u32)) -> Region {
     let w = a.0.max(b.0).saturating_sub(x);
     let h = a.1.max(b.1).saturating_sub(y);
     Region { x, y, w, h }
+}
+
+/// Rectángulo de selección en vivo: posicionado absoluto entre dos puntos en px
+/// del nodo del preview (borde acento + relleno translúcido).
+fn marquee(a: (f32, f32), c: (f32, f32)) -> View<Msg> {
+    let x = a.0.min(c.0);
+    let y = a.1.min(c.1);
+    let w = (a.0 - c.0).abs();
+    let h = (a.1 - c.1).abs();
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect { left: length(x), top: length(y), right: auto(), bottom: auto() },
+        size: Size { width: length(w), height: length(h) },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0x6E, 0x8C, 0xDC, 40))
+    .border(2.0, ACCENT)
 }
 
 fn boton(label: &str, fg: Color, bg: Color, msg: Msg) -> View<Msg> {
