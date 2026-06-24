@@ -611,13 +611,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     println!("mirada-compositor · backend DRM.");
     println!("──────────────────────────────────────────────────");
 
-    // 0 · Handoff sin parpadeo: si arje-splash está mostrando el splash del
-    // arranque y tiene el DRM master, le pedimos la pantalla y esperamos a que
-    // haga su fade-out y suelte el master antes de que libseat/DrmDevice lo
-    // reclamen. Best-effort: sin splash, seguimos de largo. (Fase 2 del
-    // SDD-ARRANQUE-SIN-PARPADEO.)
-    crate::handoff::esperar_release_del_splash();
-
     // 1 · Sesión.
     println!("[1/8] abriendo la sesión (libseat) …");
     let (mut session, session_notifier) = LibSeatSession::new().map_err(|e| {
@@ -641,6 +634,20 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let fd = session
         .open(&gpu, OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK)
         .map_err(|e| format!("no pude abrir {}: {e}", gpu.display()))?;
+
+    // Handoff sin parpadeo (Fase 2 del SDD-ARRANQUE-SIN-PARPADEO): si arje-splash
+    // está mostrando el splash del arranque y tiene el DRM master, le pedimos la
+    // pantalla y esperamos su fade-out + `RELEASED` antes de agarrar master.
+    // Se hace acá —y no antes de libseat/udev/open— a propósito: el master se
+    // toma en el `DrmDeviceFd::new` de abajo (smithay → `acquire_master_lock`,
+    // DRM_IOCTL_SET_MASTER), que es la operación irreversible y la única que
+    // pelea con el splash. Hasta este punto todo (sesión, GPU primaria, abrir el
+    // device) no toca el master, así que el splash sigue vivo y animando —con su
+    // panel de logs— por si algo de eso falla. Best-effort: sin splash, seguimos
+    // de largo. (El diseño completo del SDD —componer el primer frame antes del
+    // handoff— pide separar render-node/card-node; esto es el paso seguro previo.)
+    crate::handoff::esperar_release_del_splash();
+
     let drm_fd = DrmDeviceFd::new(DeviceFd::from(fd));
     let (mut drm, drm_notifier) =
         DrmDevice::new(drm_fd.clone(), true).map_err(|e| format!("DrmDevice::new falló: {e}"))?;
