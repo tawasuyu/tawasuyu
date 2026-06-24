@@ -1,0 +1,18 @@
+[package]
+name = "churay-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "churay-core — motor del instalador/actualizador de la suite: catálogo, manifiesto firmado (CAS BLAKE3 + ed25519 agora), instalación atómica a un prefix y chequeo de actualizaciones."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+directories = { workspace = true }
+thiserror = { workspace = true }
+app-bus = { path = "../../../shared/app-bus" }
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }

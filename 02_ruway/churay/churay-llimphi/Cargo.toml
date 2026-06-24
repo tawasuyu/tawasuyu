@@ -1,0 +1,22 @@
+[package]
+name = "churay-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "churay — instalador/actualizador gráfico de la suite tawasuyu (tipo Office) sobre Llimphi: catálogo por cuadrante, modo sistema/local, progreso por app y actualizaciones."
+
+[[bin]]
+name = "churay"
+path = "src/main.rs"
+
+[dependencies]
+churay-core = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-button = { workspace = true }
+llimphi-widget-switch = { workspace = true }
+llimphi-widget-progress = { workspace = true }
+llimphi-widget-scroll = { workspace = true }
