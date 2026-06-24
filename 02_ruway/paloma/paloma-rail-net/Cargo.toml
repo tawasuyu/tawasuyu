@@ -1,0 +1,19 @@
+[package]
+name = "paloma-rail-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-rail-net — transporte TCP directo del rail soberano: entrega RailEnvelope entre nodos, ruteado por identidad (pubkey). Mismo trazado length-prefixed que el resto de la suite (ayni-sync). El salto de red real del correo P2P."
+
+[dependencies]
+paloma-rail = { path = "../paloma-rail" }
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+paloma-core = { path = "../paloma-core" }

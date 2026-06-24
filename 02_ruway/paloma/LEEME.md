@@ -190,12 +190,17 @@ intercambiables, como el resto de la suite.
     identidad Ed25519 que firma el SMTP; **loopback en proceso** (enviarte a vos
     mismo entrega a tu Suyu y la marca Verified — ejercita el rail completo sin
     red). 2 tests de enrutado en `paloma-llimphi` + 1 de buzón pinned en core.
-  - **Pendiente (requiere 2 nodos):** el **transporte de red real** (chasqui
-    request-response / canal akasha) que implemente `RailTransport` y dispare
-    `Msg::RailReceived` desde su loop de recepción — hoy `RailHost` usa
-    `MockTransport` (los envíos a peers remotos se encolan). + resolución
-    `contacto ↔ identidad` (libreta). El protocolo, el enrutado y el buzón están
-    cerrados y certificados; falta el salto de red entre máquinas.
+  - **Transporte de red real (vivo):** `paloma-rail-net::TcpRail` — TCP directo
+    ruteado por **identidad** (handshake `Hello{pubkey}` + mapa pubkey→stream),
+    mismo trazado length-prefixed que `ayni-sync`. `paloma-app::rail::RailHost`
+    lo usa con `PALOMA_RAIL_BIND` (escucha) + `PALOMA_RAIL_PEERS` (dial
+    `host:port,…`); un hilo drena los sobres, `open`/verifica y despacha
+    `Msg::RailReceived`. Sin esas envs, cae a loopback. **Certificado**: test
+    e2e `rail_tcp_entrega_entre_dos_nodos` (dos `TcpRail` sobre TCP de loopback:
+    Ana sella → red → Bob abre → `Verified`) + peer desconocido falla.
+  - **Pendiente:** discovery/NAT entre máquinas en internet (hoy asume conocer
+    `host:port` del peer — el salto a `card-net`/DHT da descubrimiento y NAT
+    traversal) + libreta `contacto ↔ identidad` + confianza `pubkey ↔ persona`.
 
 - **Fase 14 (2026-06-24):** **multilienzo** — escribir una vez, leer en tu
   idioma (Eje 4, como `pluma`).

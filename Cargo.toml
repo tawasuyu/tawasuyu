@@ -178,6 +178,8 @@ members = [
     "01_yachay/tinkuy/tinkuy-llimphi",
     "01_yachay/tinkuy/tinkuy-sim",
     "02_ruway/nada",
+    "02_ruway/churay/churay-core",
+    "02_ruway/churay/churay-llimphi",
     "02_ruway/cards",
     "02_ruway/tullpu/tullpu-core",
     "02_ruway/tullpu/tullpu-render",
@@ -341,6 +343,7 @@ members = [
     "02_ruway/paloma/paloma-semantic",
     "02_ruway/paloma/paloma-sign",
     "02_ruway/paloma/paloma-rail",
+    "02_ruway/paloma/paloma-rail-net",
     "02_ruway/paloma/paloma-llimphi",
     "02_ruway/paloma/paloma-app",
     "02_ruway/raymi/raymi-core",
@@ -549,6 +552,7 @@ repository = "https://git.tawasuyu.net/tawasuyu/tawasuyu"
 allichay = { path = "shared/allichay" }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
+churay-core = { path = "02_ruway/churay/churay-core" }
 # === Puente de drag-and-drop compositor → app (suple winit en Wayland) ===
 drop-bridge = { path = "shared/drop-bridge" }
 # === Serialización ===
