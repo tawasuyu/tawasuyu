@@ -48,6 +48,7 @@ capture). The native `zwlr_screencopy` client is **verified working against
 mirada**; `--backend auto` still degrades to grim on any failure. Both the CLI
 and the GUI run.
 
-Next: region select in the GUI (drag a rectangle on the preview), a capture
-delay (so the hapiy window can hide first), and copy-to-clipboard. Fine cropping
-and annotation already work today via **Edit in tullpu**.
+The GUI does region select (mark two corners on the preview → crop), a capture
+delay (`⏱ Capturar 3s`), copy-to-clipboard, save, and Edit-in-tullpu. Next: a
+live drag-rectangle overlay while selecting, and hiding the hapiy window during
+the shot.

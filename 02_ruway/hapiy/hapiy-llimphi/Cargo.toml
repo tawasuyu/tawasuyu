@@ -18,3 +18,4 @@ hapiy-capture = { path = "../hapiy-capture" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-image = { workspace = true }
+arboard = "3"

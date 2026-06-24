@@ -48,7 +48,7 @@ captura mock). El cliente `zwlr_screencopy` nativo está **verificado funcionand
 contra mirada**; `--backend auto` igual cae a grim ante cualquier fallo. Corren
 tanto el CLI como la GUI.
 
-Siguiente: selección de región en la GUI (arrastrar un rectángulo sobre el
-preview), retardo de captura (para que la ventana de hapiy se esconda primero) y
-copiar al portapapeles. El recorte/anotado fino ya funciona hoy con **Editar en
-tullpu**.
+La GUI hace selección de región (marcás dos esquinas en el preview → recorta),
+retardo de captura (`⏱ Capturar 3s`), copiar al portapapeles, guardar y Editar en
+tullpu. Siguiente: un rectángulo de arrastre en vivo mientras seleccionás, y
+esconder la ventana de hapiy durante la toma.
