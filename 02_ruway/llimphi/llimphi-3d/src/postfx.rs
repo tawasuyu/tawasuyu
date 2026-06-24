@@ -338,10 +338,37 @@ impl PostFx {
     }
 
     /// Resuelve la escena ya dibujada: bright-pass + blur → bloom, luego blit
-    /// (bajada SSAA + suma de bloom) sobre `target`, preservando lo que haya
-    /// debajo (`LoadOp::Load`). Requiere [`Self::prepare`] + el pase de
-    /// [`Self::scene_pass`] ya soltado.
+    /// (bajada SSAA + suma de bloom) sobre **todo** `target`, preservando lo
+    /// que haya debajo (`LoadOp::Load`). Requiere [`Self::prepare`] + el pase
+    /// de [`Self::scene_pass`] ya soltado.
     pub fn resolve(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+        self.resolve_impl(encoder, target, None);
+    }
+
+    /// Como [`Self::resolve`] pero **confina** el blit final a la sub-región
+    /// `rect = (x, y, w, h)` (px del target, esquina sup-izq) vía
+    /// `set_viewport` + `set_scissor_rect`. Es lo que permite montar el
+    /// post-proceso en un **panel** de una UI sin pisar el chrome alrededor:
+    /// la escena supersampleada se baja ajustada al rect y el resto del
+    /// `target` queda intacto (`LoadOp::Load`). `viewport` = tamaño del
+    /// `target` completo (para clampear el scissor). El bright-pass sigue
+    /// siendo offscreen a media res (no necesita confinarse).
+    pub fn resolve_in(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        rect: (f32, f32, f32, f32),
+        viewport: (u32, u32),
+    ) {
+        self.resolve_impl(encoder, target, Some((rect, viewport)));
+    }
+
+    fn resolve_impl(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        confine: Option<((f32, f32, f32, f32), (u32, u32))>,
+    ) {
         let scene_bg = match self.scene.as_ref() {
             Some(s) => &s.tex_bg,
             None => return,
@@ -388,6 +415,23 @@ impl PostFx {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            // Confinar al rect: el viewport mapea NDC→rect (la escena se ajusta
+            // al panel) y el scissor recorta el triángulo fullscreen, que de
+            // otro modo desbordaría el rect y pisaría el chrome.
+            if let Some(((rx, ry, rw, rh), (vw, vh))) = confine {
+                if rw < 1.0 || rh < 1.0 {
+                    return;
+                }
+                blit.set_viewport(rx, ry, rw, rh, 0.0, 1.0);
+                let sx = rx.max(0.0);
+                let sy = ry.max(0.0);
+                let sw = (rw.min(vw as f32 - sx)).max(0.0) as u32;
+                let sh = (rh.min(vh as f32 - sy)).max(0.0) as u32;
+                if sw == 0 || sh == 0 {
+                    return;
+                }
+                blit.set_scissor_rect(sx as u32, sy as u32, sw, sh);
+            }
             blit.set_pipeline(&self.blit_pipeline);
             blit.set_bind_group(0, scene_bg, &[]);
             blit.set_bind_group(1, &bloom.tex_bg, &[]);
