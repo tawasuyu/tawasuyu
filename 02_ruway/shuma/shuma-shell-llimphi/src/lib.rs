@@ -79,9 +79,10 @@ const TICK: Duration = Duration::from_secs(1);
 const SHELL_TICK: Duration = Duration::from_millis(100);
 pub(crate) const MONITORS_INITIAL_WIDTH: f32 = 280.0;
 
-/// Construye el cliente del rail hospedado si `SHUMA_DELEGATE_SIDEBAR` está set.
+/// Construye el cliente del rail hospedado: por default delega a pata cuando
+/// está corriendo (opt-out con `SHUMA_DELEGATE_SIDEBAR=0`).
 fn shuma_host(handle: &Handle<Msg>) -> Option<pata_host::HostClient> {
-    if std::env::var_os("SHUMA_DELEGATE_SIDEBAR").is_none() {
+    if !pata_host::delegate_sidebar_default("SHUMA_DELEGATE_SIDEBAR") {
         return None;
     }
     let teeth = host_tool_teeth();

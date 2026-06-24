@@ -103,6 +103,30 @@ pub fn socket_path() -> PathBuf {
         .join(SOCKET_NAME)
 }
 
+/// `true` si pata está corriendo ahora (su socket existe en disco).
+pub fn shell_present() -> bool {
+    socket_path().exists()
+}
+
+/// **Decisión de delegación de sidebar** para una app: ¿debe entregarle sus
+/// dientes a pata (rail hospedado) en vez de pintar su propio sidebar?
+///
+/// Default querido (2026-06-24): **sí, cuando pata está corriendo** —así hay una
+/// sola barra de rails en toda la pantalla (la de pata) que absorbe el sidebar
+/// de la app activa, sin duplicar. Si pata no está (app standalone), `false`: la
+/// app pinta su propio sidebar como siempre. `env_var` (p.ej.
+/// `COSMOS_DELEGATE_SIDEBAR`) es un **opt-out** explícito: `=0`/`false`/`no`
+/// fuerza no-delegar aunque pata esté.
+pub fn delegate_sidebar_default(env_var: &str) -> bool {
+    if matches!(
+        std::env::var(env_var).as_deref(),
+        Ok("0") | Ok("false") | Ok("no")
+    ) {
+        return false;
+    }
+    shell_present()
+}
+
 fn postcard_err(e: postcard::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
 }

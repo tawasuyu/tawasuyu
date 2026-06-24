@@ -149,8 +149,9 @@ pub fn init_modelo() -> Model {
         edit_menu: None,
         edit_active: usize::MAX,
         edit_anim: llimphi_motion::Tween::idle(1.0),
-        // Rail hospedado: opt-in por env; el HostClient se conecta en `init`.
-        delegated: std::env::var_os("PLUMA_DELEGATE_SIDEBAR").is_some(),
+        // Rail hospedado: por default delega a pata cuando está corriendo
+        // (opt-out con PLUMA_DELEGATE_SIDEBAR=0); el HostClient se conecta en `init`.
+        delegated: pata_host::delegate_sidebar_default("PLUMA_DELEGATE_SIDEBAR"),
         _host: None,
     }
 }

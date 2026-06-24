@@ -110,9 +110,10 @@ pub(crate) fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'stat
     })
 }
 
-/// Conecta el cliente del rail hospedado si `MEDIA_DELEGATE_SIDEBAR` está set.
+/// Conecta el cliente del rail hospedado: por default delega a pata cuando está
+/// corriendo (opt-out con `MEDIA_DELEGATE_SIDEBAR=0`).
 pub(crate) fn media_host(handle: &llimphi_ui::Handle<Msg>) -> Option<pata_host::HostClient> {
-    if std::env::var_os("MEDIA_DELEGATE_SIDEBAR").is_none() {
+    if !pata_host::delegate_sidebar_default("MEDIA_DELEGATE_SIDEBAR") {
         return None;
     }
     let teeth = vec![

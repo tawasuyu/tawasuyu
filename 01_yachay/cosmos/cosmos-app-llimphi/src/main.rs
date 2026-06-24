@@ -142,9 +142,11 @@ impl App for Cosmos {
             render: render.clone(),
         }];
 
-        // Rail hospedado: si `COSMOS_DELEGATE_SIDEBAR` está set, cosmos delega su
-        // sidebar a pata — publica sus dientes y queda puro canvas.
-        let delegated = std::env::var_os("COSMOS_DELEGATE_SIDEBAR").is_some();
+        // Rail hospedado: por default, cuando pata está corriendo cosmos delega
+        // su sidebar a pata —publica sus dientes y queda puro canvas (una sola
+        // barra de rails en pantalla). Standalone (sin pata) pinta el suyo.
+        // Opt-out: `COSMOS_DELEGATE_SIDEBAR=0`.
+        let delegated = pata_host::delegate_sidebar_default("COSMOS_DELEGATE_SIDEBAR");
         let host = if delegated {
             let teeth: Vec<pata_host::HostedTooth> = ui
                 .dock_left
