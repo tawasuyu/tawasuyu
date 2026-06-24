@@ -524,7 +524,7 @@ fn explorer_search_row(path: &str, score: f32, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .hover_fill(theme.bg_row_hover)
-    .on_click(Msg::RunFromHistory(path.to_string()))
+    .on_click(Msg::OpenFile(path.to_string()))
     .children(vec![pct, nombre])
 }
 

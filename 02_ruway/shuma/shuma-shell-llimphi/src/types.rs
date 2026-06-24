@@ -1093,6 +1093,9 @@ pub enum Msg {
     /// Limpia la búsqueda de archivos activa (botón ✕ del panel) — el Explorer
     /// vuelve a mostrar el cwd.
     ClearFileSearch,
+    /// Abre un archivo (ruta relativa al cwd de la sesión activa, o absoluta) con
+    /// el visor de la suite elegido **por su contenido** (shuma-discern + app-bus).
+    OpenFile(String),
     RemoteContainersLoaded(Vec<String>),
     SubscribeContainer(usize),
     PickRemoteContainer(String),

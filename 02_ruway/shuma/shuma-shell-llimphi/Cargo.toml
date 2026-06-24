@@ -50,6 +50,9 @@ llimphi-widget-modal = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
+# Open-with por contenido: discierne el tipo del archivo (clic en el Explorer)
+# y lo abre con el visor de la suite vía app-bus, como hace nahual.
+shuma-discern = { path = "../sandbox/shuma-discern" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ron = { workspace = true }

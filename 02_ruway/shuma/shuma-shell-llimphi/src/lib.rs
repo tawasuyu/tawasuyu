@@ -118,6 +118,42 @@ pub fn run() {
     llimphi_ui::run::<Shell>();
 }
 
+/// Abre `path` con el visor de la suite elegido **por su contenido**: discierne
+/// el tipo (shuma-discern, sobre el header del archivo) y despacha el open-with
+/// universal de app-bus (mismo camino que nahual). Devuelve la etiqueta de la
+/// app lanzada, o un error legible (no existe, no es archivo, sin visor).
+fn open_with_viewer(path: &std::path::Path) -> Result<String, String> {
+    if !path.exists() {
+        return Err("no existe".to_string());
+    }
+    if !path.is_file() {
+        return Err("no es un archivo".to_string());
+    }
+    // Header para discernir (primeros 8 KiB alcanzan para magic-bytes/probes).
+    let sample = {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut buf = vec![0u8; 8192];
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        buf.truncate(n);
+        buf
+    };
+    let path_str = path.to_str().ok_or_else(|| "ruta no-UTF8".to_string())?;
+    let hint = shuma_discern::Hint {
+        path: Some(path_str),
+        size_total: std::fs::metadata(path).ok().map(|m| m.len()),
+    };
+    let mime = shuma_discern::DiscernPipeline::default()
+        .discern(&sample, &hint)
+        .and_then(|d| d.mime)
+        .ok_or_else(|| "no pude discernir el tipo".to_string())?;
+    let registry = app_bus::AppRegistry::with_defaults();
+    match registry.open_with(&mime, path_str).map_err(|e| e.to_string())? {
+        Some((entry, _child)) => Ok(entry.label.clone()),
+        None => Err(format!("sin visor para {mime}")),
+    }
+}
+
 /// Cablea el askpass para sudo + ssh (compartido por ventana y dock).
 fn wire_askpass() {
     if let Some(path) = resolve_askpass_path() {
@@ -810,6 +846,32 @@ impl App for Shell {
             }
             Msg::ClearFileSearch => {
                 m.file_search = None;
+            }
+            Msg::OpenFile(rel) => {
+                // Ruta absoluta: relativa al cwd de la sesión activa salvo que ya
+                // venga absoluta.
+                let cwd = m.active().and_then(|s| match &s.shell().state {
+                    ModuleState::Shell(st) => Some(st.cwd.clone()),
+                    _ => None,
+                });
+                let abs = {
+                    let p = std::path::Path::new(&rel);
+                    if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        cwd.unwrap_or_default().join(p)
+                    }
+                };
+                let nota = match open_with_viewer(&abs) {
+                    Ok(label) => format!("📂 abriendo {rel} con {label}"),
+                    Err(e) => format!("📂 {rel}: {e}"),
+                };
+                let idx = m.active_session;
+                if let Some(s) = m.sessions.get_mut(idx) {
+                    if let ModuleState::Shell(st) = &mut s.instance_mut(Which::Shell).state {
+                        st.push_notice(nota);
+                    }
+                }
             }
             Msg::RemoteContainersLoaded(v) => m.remote_containers = v,
             Msg::SubscribeContainer(i) => {
