@@ -661,6 +661,7 @@ paloma-status-view-rich = rich HTML via puriy: pending (plain text for now)
 paloma-status-no-recipient = cannot send: missing a valid recipient
 paloma-status-sent = sent
 paloma-status-sent-signed = sent · signed (Ed25519)
+paloma-status-sent-unsigned-nokey = sent UNSIGNED · no identity configured
 paloma-placeholder-search = Search… ( / )
 paloma-btn-compose = ✎ Compose
 paloma-nav-calendar = Calendar

@@ -10,7 +10,11 @@ description = "paloma-net — puente de red del correo: parser MIME (RFC 822 →
 
 [dependencies]
 paloma-core = { path = "../paloma-core" }
+paloma-sign = { path = "../paloma-sign" }
 mail-parser = "0.9"
 imap = "2"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "native-tls", "builder"] }
 native-tls = "0.2"
+
+[dev-dependencies]
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }

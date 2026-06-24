@@ -665,6 +665,7 @@ paloma-status-view-rich = puriy HTML: suyasqam (kunanmanta llamp'u qillqa)
 paloma-status-no-recipient = mana kachayta atikuchu: mana allin chaskiqkuna
 paloma-status-sent = kachasqa
 paloma-status-sent-signed = kachasqa · firmayuq (Ed25519)
+paloma-status-sent-unsigned-nokey = kachasqa MANA firmasqa · mana identidad kanchu
 paloma-placeholder-search = Maskay… ( / )
 paloma-btn-compose = ✎ Qillqay
 paloma-nav-calendar = Killaka

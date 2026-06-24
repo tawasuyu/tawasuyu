@@ -147,6 +147,26 @@ intercambiables, como el resto de la suite.
   - Certificado: 2 tests en `paloma-app` (camino de la request contra el mock +
     `truncar`); el despacho por `Handle` reusa el patrón probado del semántico.
 
+- **Fase 12 (2026-06-24):** **firma/verificación Ed25519** real (Eje 3.A).
+  - `paloma-core`: `MailSignature` + `canonical_signing_bytes` (versionado, cubre
+    remitente/destinatarios/asunto/cuerpo, body normalizado CRLF→LF + trim para
+    sobrevivir el ida-y-vuelta por SMTP/MIME). `OutgoingMessage.signature`.
+  - `paloma-sign` (crate nuevo, sobre `agora-core`): `sign_outgoing` /
+    `verify_message` + `encode/decode_signature` (formato del cable, base64).
+    5 tests (roundtrip, cuerpo/asunto/remitente manipulado → Invalid, clave
+    equivocada → Invalid).
+  - `paloma-net`: SMTP emite los headers `X-Paloma-Pubkey` / `X-Paloma-Signature`;
+    MIME los lee, recomputa los bytes canónicos y **verifica** → puebla el
+    `SignatureStatus` (el badge de la UI ya lo pinta). Test e2e: firmar → cable →
+    parsear → `Verified`; cuerpo alterado → `Invalid`.
+  - `paloma-llimphi`: trait `MailSigner` inyectado; "Firmar" en el compositor
+    ahora produce firma real (o avisa si no hay identidad).
+  - `paloma-app::identity::AgoraSigner`: `Keypair` Ed25519 desde
+    `~/.config/paloma/identity.seed` (0600, CSPRNG la 1ª vez).
+  - **Alcance honesto**: `Verified` = integridad (la firma cierra sobre el
+    contenido bajo la clave declarada). Falta atar `pubkey ↔ contacto` (red de
+    confianza de `agora`) para que signifique "y la clave es de quien dice ser".
+
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
   `PALOMA_EMAIL` + `PALOMA_PASSWORD` (contraseña de **aplicación** en Gmail);
@@ -160,9 +180,10 @@ intercambiables, como el resto de la suite.
    bandeja por tema/atención (estilo `khipu`) en vez de lista cronológica.
 3. **LLM-nativo — triage** — sobre `LlmAssistant`, falta el triage/importancia
    automático y la extracción de pendientes a una lista (resumen + borrador ✅).
-4. **Firma/verificación con `agora`** (Ed25519) — firmar salientes y verificar
-   entrantes; keystore de `agora` + header propio (el badge ya está en UI).
-5. **Rail soberano** `chasqui`/`ayni` — correo suite-a-suite sin SMTP.
+4. **Confianza** — red de confianza `agora` (`pubkey ↔ contacto`) para que
+   `Verified` signifique identidad, no sólo integridad; + seed cifrada
+   (`agora-keystore`) en vez del `identity.seed` en claro (firma básica ✅).
+5. **Rail soberano** `chasqui`/`ayni` — correo suite-a-suite sin SMTP (Eje 3.B).
 6. **Multilienzo** (como `pluma`) — escribir una vez, leer en otro idioma/tono.
 7. **Calendario/Contactos** (CalDAV/CardDAV) compartiendo la capa de cuentas.
 8. **HTML rico vía puriy** cuando el usuario lo pida (hoy: texto despojado).

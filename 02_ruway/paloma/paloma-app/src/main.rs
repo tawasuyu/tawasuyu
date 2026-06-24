@@ -37,6 +37,7 @@ use serde::Deserialize;
 use paloma_core::{Account, Address, MailBackend, Security, ServerConfig};
 use paloma_llimphi::{Model, Msg};
 
+mod identity;
 mod llm;
 mod semantic;
 
@@ -120,6 +121,12 @@ struct NetSession {
 /// plataforma no expone ProjectDirs.
 fn cache_dir() -> Option<PathBuf> {
     ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.cache_dir().to_path_buf())
+}
+
+/// Directorio de config (`~/.config/paloma` en Linux). Hogar de `cuenta.json` y
+/// de la seed de identidad (`identity.seed`).
+fn config_dir() -> Option<PathBuf> {
+    ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.config_dir().to_path_buf())
 }
 
 /// Intenta armar el `NetBackend` real. Devuelve `Err(motivo)` legible si falta
@@ -207,6 +214,17 @@ impl App for Paloma {
         // local-first con Ollama. Sin backend, los botones ✨ no aparecen.
         if let Some(assistant) = llm::LlmHelper::try_build() {
             model.attach_llm(Box::new(assistant));
+        }
+
+        // Identidad firmante (Eje 3): firma Ed25519/agora de los salientes. Crea
+        // la seed la primera vez; sin dir de config, el correo va sin firmar.
+        if let Some(signer) = identity::AgoraSigner::load_or_create(config_dir()) {
+            let pk = signer.public_key();
+            eprintln!(
+                "paloma · identidad Ed25519: {:02x}{:02x}{:02x}{:02x}…",
+                pk[0], pk[1], pk[2], pk[3]
+            );
+            model.attach_signer(Box::new(signer));
         }
 
         model

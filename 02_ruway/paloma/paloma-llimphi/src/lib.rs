@@ -23,8 +23,8 @@ use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::TextInputState;
 
 use paloma_core::{
-    parse_address_list, Address, Flags, MailBackend, MailStore, Message, MessageId, OutgoingMessage,
-    Thread,
+    parse_address_list, Address, Flags, MailBackend, MailSignature, MailStore, Message, MessageId,
+    OutgoingMessage, Thread,
 };
 
 pub mod demo;
@@ -57,6 +57,15 @@ pub trait LlmAssistant: Send {
     /// Redacta un borrador de respuesta al hilo → despacha `Msg::LlmDraft` con
     /// el cuerpo, o `Msg::LlmError` si falla.
     fn draft_reply(&self, thread_text: String, handle: llimphi_ui::Handle<Msg>);
+}
+
+/// Identidad firmante del usuario, inyectada por el anfitrión (Eje 3:
+/// soberanía). Firma los bytes canónicos de un saliente con la `Keypair` de
+/// `agora`. Síncrono y rápido (Ed25519); no necesita runtime. `Model::signer ==
+/// None` ⇒ los salientes van sin firmar aunque se tilde "Firmar".
+pub trait MailSigner: Send {
+    /// Firma `canonical`; devuelve `(pubkey 32 bytes, firma 64 bytes)`.
+    fn sign(&self, canonical: &[u8]) -> ([u8; 32], [u8; 64]);
 }
 
 /// Campo enfocado del formulario de redacción.
@@ -169,6 +178,9 @@ pub struct Model {
     summary_busy: bool,
     /// `true` mientras se redacta un borrador de respuesta con el LLM.
     draft_busy: bool,
+    /// Identidad firmante (Ed25519/agora), inyectada por el anfitrión. `None` =
+    /// sin identidad → los salientes no se firman.
+    signer: Option<Box<dyn MailSigner>>,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -255,6 +267,7 @@ impl Model {
             summary: None,
             summary_busy: false,
             draft_busy: false,
+            signer: None,
             db,
             account_id,
             status,
@@ -297,6 +310,17 @@ impl Model {
     /// ¿Hay asistente LLM disponible? (Gobierna si la UI muestra los botones ✨.)
     pub fn llm_available(&self) -> bool {
         self.llm.is_some()
+    }
+
+    /// Inyecta la identidad firmante (Ed25519/agora). Sin esto, "Firmar" en el
+    /// compositor no produce firma.
+    pub fn attach_signer(&mut self, signer: Box<dyn MailSigner>) {
+        self.signer = signer.into();
+    }
+
+    /// ¿Hay identidad para firmar salientes?
+    pub fn signer_available(&self) -> bool {
+        self.signer.is_some()
     }
 
     /// El resumen LLM del hilo abierto, si se pidió.
@@ -757,8 +781,8 @@ fn send_compose(mut model: Model) -> Model {
         model.status = rimay_localize::t("paloma-status-no-recipient");
         return model;
     }
-    let signed = c.sign;
-    let out = OutgoingMessage {
+    let want_sign = c.sign;
+    let mut out = OutgoingMessage {
         from: model.me.clone(),
         to,
         cc: parse_address_list(&c.cc.text()),
@@ -768,12 +792,28 @@ fn send_compose(mut model: Model) -> Model {
         body_html: None,
         in_reply_to: c.in_reply_to.clone(),
         references: c.references.clone(),
+        signature: None,
+    };
+    // Firma Ed25519 (agora) si el usuario la pidió y hay identidad inyectada.
+    let signed = if want_sign {
+        match model.signer.as_ref() {
+            Some(signer) => {
+                let (pubkey, sig) = signer.sign(&out.canonical_signing_bytes());
+                out.signature = Some(MailSignature { pubkey, sig });
+                true
+            }
+            None => false, // pidió firmar pero no hay identidad: se envía sin firma
+        }
+    } else {
+        false
     };
     match model.backend.send(&out) {
         Ok(_id) => {
             model.compose = None;
             model.status = if signed {
                 rimay_localize::t("paloma-status-sent-signed")
+            } else if want_sign {
+                rimay_localize::t("paloma-status-sent-unsigned-nokey")
             } else {
                 rimay_localize::t("paloma-status-sent")
             };

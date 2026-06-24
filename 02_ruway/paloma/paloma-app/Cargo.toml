@@ -24,6 +24,8 @@ paloma-semantic = { path = "../paloma-semantic" }
 paloma-llimphi = { path = "../paloma-llimphi" }
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+rand = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

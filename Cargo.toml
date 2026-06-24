@@ -339,6 +339,7 @@ members = [
     "02_ruway/paloma/paloma-net",
     "02_ruway/paloma/paloma-store",
     "02_ruway/paloma/paloma-semantic",
+    "02_ruway/paloma/paloma-sign",
     "02_ruway/paloma/paloma-llimphi",
     "02_ruway/paloma/paloma-app",
     "02_ruway/raymi/raymi-core",

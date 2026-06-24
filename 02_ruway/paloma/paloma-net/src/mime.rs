@@ -41,6 +41,24 @@ pub fn parse_message(raw: &[u8], mailbox: &str, flags: Flags) -> Result<Message,
     let body_text = parsed.body_text(0).map(|c| c.into_owned()).unwrap_or_default();
     let body_html = parsed.body_html(0).map(|c| c.into_owned());
 
+    // Firma Ed25519 (Eje 3): si vienen los headers `X-Paloma-*`, recomputamos
+    // los bytes canónicos del mensaje y verificamos. Sin headers → Unsigned.
+    let pubkey_b64 = parsed.header_raw("X-Paloma-Pubkey");
+    let sig_b64 = parsed.header_raw("X-Paloma-Signature");
+    let signature = match (pubkey_b64, sig_b64) {
+        (Some(pk), Some(sg)) => match paloma_sign::decode_signature(pk, sg) {
+            Some(ms) => {
+                let to_emails: Vec<String> = to.iter().map(|a| a.email.clone()).collect();
+                let canonical =
+                    paloma_core::canonical_signing_bytes(&from.email, &to_emails, &subject, &body_text);
+                paloma_sign::verify(&canonical, &ms.pubkey, &ms.sig)
+            }
+            // Headers presentes pero corruptos → firma rota.
+            None => SignatureStatus::Invalid,
+        },
+        _ => SignatureStatus::Unsigned,
+    };
+
     Ok(Message {
         id,
         from,
@@ -54,9 +72,7 @@ pub fn parse_message(raw: &[u8], mailbox: &str, flags: Flags) -> Result<Message,
         body_text,
         body_html,
         flags,
-        // La verificación Ed25519 del entrante llega con la integración de
-        // `agora`; por ahora el puente no firma ni verifica.
-        signature: SignatureStatus::Unsigned,
+        signature,
         mailbox: mailbox.to_string(),
     })
 }
@@ -162,5 +178,56 @@ ok\r\n";
         let m = parse_message(b"", "INBOX", Flags::default());
         // vacío → o Err(Parse) o un Message degenerado; no debe panicar.
         let _ = m;
+    }
+
+    /// Sin los headers `X-Paloma-*`, la firma queda `Unsigned`.
+    #[test]
+    fn sin_headers_de_firma_es_unsigned() {
+        let m = parse_message(SAMPLE, "INBOX", Flags::default()).unwrap();
+        assert_eq!(m.signature, SignatureStatus::Unsigned);
+    }
+
+    /// Roundtrip de firma de punta a punta por el cable: firmamos un saliente,
+    /// emitimos los headers base64 como lo hace SMTP, parseamos los bytes y la
+    /// verificación recomputa los bytes canónicos → `Verified`. Manipular el
+    /// cuerpo deja la firma `Invalid`.
+    #[test]
+    fn verifica_firma_del_entrante() {
+        use agora_core::Keypair;
+        use paloma_core::{Address, OutgoingMessage};
+
+        let kp = Keypair::from_seed([7; 32]);
+        let mut out = OutgoingMessage {
+            from: Address::named("Yo", "yo@suyu.net"),
+            to: vec![Address::named("Ana", "ana@otro.net")],
+            cc: vec![],
+            bcc: vec![],
+            subject: "factura".into(),
+            body_text: "el pago vence el viernes".into(),
+            body_html: None,
+            in_reply_to: None,
+            references: vec![],
+            signature: None,
+        };
+        paloma_sign::sign_outgoing(&kp, &mut out);
+        let (pk_b64, sg_b64) = paloma_sign::encode_signature(out.signature.as_ref().unwrap());
+
+        // Construimos los bytes RFC822 como saldrían por SMTP (headers + cuerpo).
+        let raw = format!(
+            "From: Yo <yo@suyu.net>\r\n\
+             To: Ana <ana@otro.net>\r\n\
+             Subject: factura\r\n\
+             X-Paloma-Pubkey: {pk_b64}\r\n\
+             X-Paloma-Signature: {sg_b64}\r\n\
+             \r\n\
+             el pago vence el viernes\r\n"
+        );
+        let m = parse_message(raw.as_bytes(), "INBOX", Flags::default()).unwrap();
+        assert_eq!(m.signature, SignatureStatus::Verified, "la firma íntegra verifica");
+
+        // Mismo correo con el cuerpo manipulado → la firma no cierra.
+        let tampered = raw.replace("el viernes", "el LUNES");
+        let mt = parse_message(tampered.as_bytes(), "INBOX", Flags::default()).unwrap();
+        assert_eq!(mt.signature, SignatureStatus::Invalid, "cuerpo alterado invalida");
     }
 }

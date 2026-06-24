@@ -47,6 +47,47 @@ pub enum SignatureStatus {
     Invalid,
 }
 
+/// Firma Ed25519 que viaja con un saliente (clave pública + 64 bytes de firma
+/// sobre los [`canonical_signing_bytes`] del mensaje). El transporte la
+/// serializa a dos headers `X-Paloma-Pubkey` / `X-Paloma-Signature`; el cómputo
+/// de la firma vive fuera del núcleo (en `paloma-sign`, sobre `agora`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MailSignature {
+    pub pubkey: [u8; 32],
+    pub sig: [u8; 64],
+}
+
+/// Bytes canónicos sobre los que se firma/verifica un mensaje. Versionados y
+/// estables: cubren remitente, destinatarios (orden-independiente), asunto y
+/// cuerpo, de modo que cualquier alteración invalida la firma. Lo comparten el
+/// firmado del saliente y la verificación del entrante — por eso vive en el
+/// núcleo, agnóstico a `agora` y a la red.
+pub fn canonical_signing_bytes(
+    from_email: &str,
+    to_emails: &[String],
+    subject: &str,
+    body: &str,
+) -> Vec<u8> {
+    let mut to: Vec<String> = to_emails.iter().map(|e| e.trim().to_lowercase()).collect();
+    to.sort();
+    format!(
+        "paloma-sig-v1\nfrom:{}\nto:{}\nsubject:{}\n\n{}",
+        from_email.trim().to_lowercase(),
+        to.join(","),
+        subject.trim(),
+        normalize_body(body),
+    )
+    .into_bytes()
+}
+
+/// Normaliza el cuerpo para que la firma sobreviva al ida-y-vuelta por SMTP/MIME:
+/// el transporte reescribe finales de línea (CRLF) y suele agregar/quitar saltos
+/// al final. Unificamos a LF y recortamos el whitespace de cola. Como la misma
+/// función la usan firmante y verificador, queda consistente.
+fn normalize_body(body: &str) -> String {
+    body.replace("\r\n", "\n").trim_end().to_string()
+}
+
 /// Un mensaje ya parseado: headers relevantes + cuerpo + flags + el buzón en
 /// el que vive. El cuerpo se guarda en texto plano (siempre) y, si el mensaje
 /// era `multipart/alternative`, también el HTML — el frontend elige cuál
@@ -78,6 +119,13 @@ pub struct Message {
 }
 
 impl Message {
+    /// Bytes canónicos de este mensaje para verificar su firma Ed25519 (espeja
+    /// los que el remitente firmó al enviarlo). Ver [`canonical_signing_bytes`].
+    pub fn canonical_signing_bytes(&self) -> Vec<u8> {
+        let to: Vec<String> = self.to.iter().map(|a| a.email.clone()).collect();
+        canonical_signing_bytes(&self.from.email, &to, &self.subject, &self.body_text)
+    }
+
     /// Un extracto de una línea para la lista de mensajes: colapsa whitespace
     /// y recorta a `max` caracteres con elipsis.
     pub fn snippet(&self, max: usize) -> String {

@@ -1,0 +1,17 @@
+[package]
+name = "paloma-sign"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-sign — firma y verificación Ed25519 del correo sobre agora: firma los salientes y verifica los entrantes contra sus bytes canónicos (paloma-core). El puente entre el correo y la raíz de confianza de la suite."
+
+[dependencies]
+paloma-core = { path = "../paloma-core" }
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+base64 = { workspace = true }
+
+[dev-dependencies]
+# (los tests usan sólo agora-core + paloma-core)

@@ -199,6 +199,7 @@ fn main() -> ExitCode {
             body_html: None,
             in_reply_to: None,
             references: vec![],
+            signature: None,
         };
         match backend.send(&out) {
             Ok(id) => println!("OK (Message-ID {id})"),

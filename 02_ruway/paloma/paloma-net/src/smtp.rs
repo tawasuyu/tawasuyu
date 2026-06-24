@@ -5,10 +5,44 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lettre::message::header::{Header, HeaderName, HeaderValue};
 use lettre::message::{Mailbox as LettreMailbox, MultiPart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message as LettreMessage, SmtpTransport, Transport};
 use paloma_core::{Address, MailError, MessageId, OutgoingMessage, Security, ServerConfig};
+
+type BoxErr = Box<dyn std::error::Error + Send + Sync>;
+
+/// Header propio que transporta la clave pública del firmante (base64).
+#[derive(Clone)]
+struct XPalomaPubkey(String);
+/// Header propio que transporta la firma Ed25519 (base64).
+#[derive(Clone)]
+struct XPalomaSignature(String);
+
+impl Header for XPalomaPubkey {
+    fn name() -> HeaderName {
+        HeaderName::new_from_ascii_str("X-Paloma-Pubkey")
+    }
+    fn parse(s: &str) -> Result<Self, BoxErr> {
+        Ok(Self(s.to_string()))
+    }
+    fn display(&self) -> HeaderValue {
+        HeaderValue::new(Self::name(), self.0.clone())
+    }
+}
+
+impl Header for XPalomaSignature {
+    fn name() -> HeaderName {
+        HeaderName::new_from_ascii_str("X-Paloma-Signature")
+    }
+    fn parse(s: &str) -> Result<Self, BoxErr> {
+        Ok(Self(s.to_string()))
+    }
+    fn display(&self) -> HeaderValue {
+        HeaderValue::new(Self::name(), self.0.clone())
+    }
+}
 
 /// Envía `msg` por el servidor `cfg`. Devuelve el `Message-ID` asignado
 /// (lo generamos nosotros y lo fijamos en el header, así el store puede
@@ -36,6 +70,13 @@ pub fn send(cfg: &ServerConfig, password: &str, msg: &OutgoingMessage) -> Result
     if !msg.references.is_empty() {
         let refs = msg.references.iter().map(|r| r.0.clone()).collect::<Vec<_>>().join(" ");
         builder = builder.references(refs);
+    }
+    // Firma Ed25519 (Eje 3): dos headers base64 que el receptor verifica.
+    if let Some(sig) = &msg.signature {
+        let (pubkey_b64, sig_b64) = paloma_sign::encode_signature(sig);
+        builder = builder
+            .header(XPalomaPubkey(pubkey_b64))
+            .header(XPalomaSignature(sig_b64));
     }
 
     let email = match &msg.body_html {

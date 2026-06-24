@@ -664,6 +664,7 @@ paloma-status-view-rich = HTML enriquecido vía puriy: pendiente (texto despojad
 paloma-status-no-recipient = no se puede enviar: falta un destinatario válido
 paloma-status-sent = enviado
 paloma-status-sent-signed = enviado · firmado (Ed25519)
+paloma-status-sent-unsigned-nokey = enviado SIN firmar · no hay identidad configurada
 paloma-placeholder-search = Buscar… ( / )
 paloma-btn-compose = ✎ Redactar
 paloma-nav-calendar = Calendario

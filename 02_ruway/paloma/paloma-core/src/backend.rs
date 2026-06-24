@@ -22,9 +22,20 @@ pub struct OutgoingMessage {
     /// `In-Reply-To`/`References` en el header).
     pub in_reply_to: Option<MessageId>,
     pub references: Vec<MessageId>,
+    /// Firma Ed25519 a adjuntar (si el usuario pidió firmar). La calcula la
+    /// capa de firma (`paloma-sign`) sobre los [`crate::canonical_signing_bytes`];
+    /// el transporte la emite como headers `X-Paloma-*`.
+    pub signature: Option<crate::MailSignature>,
 }
 
 impl OutgoingMessage {
+    /// Bytes canónicos a firmar para este saliente. Espejan los que el receptor
+    /// recomputará para verificar. Ver [`crate::canonical_signing_bytes`].
+    pub fn canonical_signing_bytes(&self) -> Vec<u8> {
+        let to: Vec<String> = self.to.iter().map(|a| a.email.clone()).collect();
+        crate::canonical_signing_bytes(&self.from.email, &to, &self.subject, &self.body_text)
+    }
+
     /// Arma una respuesta a `original` desde `from`, con el asunto `Re:` y la
     /// cadena de `References` extendida. El cuerpo lo completa el redactor.
     pub fn reply_to(original: &Message, from: Address) -> Self {
@@ -40,6 +51,7 @@ impl OutgoingMessage {
             body_html: None,
             in_reply_to: Some(original.id.clone()),
             references,
+            signature: None,
         }
     }
 
@@ -63,6 +75,7 @@ impl OutgoingMessage {
             body_html: None,
             in_reply_to: None,
             references: vec![],
+            signature: None,
         }
     }
 }
@@ -219,6 +232,7 @@ mod tests {
             body_html: None,
             in_reply_to: None,
             references: vec![],
+            signature: None,
         };
         let id = b.send(&out).unwrap();
         let sent = b.fetch_messages("Sent").unwrap();
