@@ -26,32 +26,38 @@ impl MailSigner for AgoraSigner {
 }
 
 impl AgoraSigner {
-    /// Carga la identidad desde `<config_dir>/identity.seed`, o la crea (CSPRNG)
-    /// si no existe. `None` si no se puede resolver el dir o escribir la seed.
-    pub fn load_or_create(config_dir: Option<PathBuf>) -> Option<Self> {
-        let dir = config_dir?;
-        let path = dir.join("identity.seed");
-        let seed = match std::fs::read(&path) {
-            Ok(b) if b.len() == 32 => {
-                let mut s = [0u8; 32];
-                s.copy_from_slice(&b);
-                s
-            }
-            _ => {
-                let mut s = [0u8; 32];
-                use rand::RngCore;
-                rand::rngs::OsRng.fill_bytes(&mut s);
-                std::fs::create_dir_all(&dir).ok()?;
-                write_private(&path, &s)?;
-                s
-            }
-        };
-        Some(Self { kp: Keypair::from_seed(seed) })
+    /// Construye el firmante desde una seed de 32 bytes.
+    pub fn from_seed(seed: [u8; 32]) -> Self {
+        Self { kp: Keypair::from_seed(seed) }
     }
 
     /// Clave pública (para logging / mostrar la identidad).
     pub fn public_key(&self) -> [u8; 32] {
         self.kp.public_key()
+    }
+}
+
+/// Carga la seed de identidad desde `<config_dir>/identity.seed`, o la crea
+/// (CSPRNG) si no existe. La comparten el firmante (`AgoraSigner`) y el rail
+/// (`RailHost`) — una sola identidad para todo. `None` si no se puede resolver
+/// el dir o escribir la seed.
+pub fn load_or_create_seed(config_dir: Option<PathBuf>) -> Option<[u8; 32]> {
+    let dir = config_dir?;
+    let path = dir.join("identity.seed");
+    match std::fs::read(&path) {
+        Ok(b) if b.len() == 32 => {
+            let mut s = [0u8; 32];
+            s.copy_from_slice(&b);
+            Some(s)
+        }
+        _ => {
+            let mut s = [0u8; 32];
+            use rand::RngCore;
+            rand::rngs::OsRng.fill_bytes(&mut s);
+            std::fs::create_dir_all(&dir).ok()?;
+            write_private(&path, &s)?;
+            Some(s)
+        }
     }
 }
 

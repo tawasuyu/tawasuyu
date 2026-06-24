@@ -34,6 +34,42 @@ use thiserror::Error;
 /// "dirección" — sustituye al `usuario@dominio` del correo clásico.
 pub type RailId = [u8; 32];
 
+/// Sufijo de dominio de las direcciones del rail. Una dirección "Suyu" es la
+/// clave pública en hex seguida de `@rail.suyu` — encaja en los campos de
+/// destinatario del compositor (el dominio lleva punto, como exige el validador
+/// de direcciones) y se distingue de un correo normal.
+pub const RAIL_DOMAIN: &str = "rail.suyu";
+
+/// Formatea una identidad como dirección del rail: `<hex64>@suyu`.
+pub fn rail_address(id: &RailId) -> String {
+    let mut s = String::with_capacity(64 + 5);
+    for b in id {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
+    }
+    s.push('@');
+    s.push_str(RAIL_DOMAIN);
+    s
+}
+
+/// Parsea una dirección del rail (`<hex64>@suyu`) a su identidad. `None` si no
+/// tiene el dominio `@suyu` o el hex no son 32 bytes válidos — así el enrutador
+/// distingue un destinatario del rail de un correo SMTP normal.
+pub fn parse_rail_address(addr: &str) -> Option<RailId> {
+    let (local, domain) = addr.trim().rsplit_once('@')?;
+    if !domain.eq_ignore_ascii_case(RAIL_DOMAIN) || local.len() != 64 {
+        return None;
+    }
+    let mut id = [0u8; 32];
+    let bytes = local.as_bytes();
+    for (i, slot) in id.iter_mut().enumerate() {
+        let hi = (bytes[i * 2] as char).to_digit(16)?;
+        let lo = (bytes[i * 2 + 1] as char).to_digit(16)?;
+        *slot = (hi * 16 + lo) as u8;
+    }
+    Some(id)
+}
+
 /// Un sobre del rail: el `Message` serializado + emisor/receptor + firma.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RailEnvelope {
@@ -260,6 +296,17 @@ mod tests {
         let mut env = seal(&ana, bob.public_key(), &mensaje("x", "y")).unwrap();
         env.to = carla.public_key();
         assert!(matches!(open(&env, carla.public_key()), Err(RailError::BadSignature)));
+    }
+
+    #[test]
+    fn direccion_del_rail_roundtrip() {
+        let id = Keypair::from_seed([5; 32]).public_key();
+        let addr = rail_address(&id);
+        assert!(addr.ends_with("@rail.suyu"));
+        assert_eq!(parse_rail_address(&addr), Some(id));
+        // Un correo normal no es una dirección del rail.
+        assert_eq!(parse_rail_address("ana@gmail.com"), None);
+        assert_eq!(parse_rail_address("corto@rail.suyu"), None);
     }
 
     #[test]

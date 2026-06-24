@@ -30,6 +30,9 @@ use paloma_core::{
 pub mod demo;
 mod view;
 
+/// Nombre del buzón local donde aterriza el correo del rail P2P (Eje 3.B).
+pub const SUYU_MAILBOX: &str = "Suyu";
+
 /// Motor de **búsqueda por significado**, inyectado por el anfitrión.
 ///
 /// El cómputo de embeddings es async y pega contra el `rimay-verbo-daemon`; no
@@ -66,6 +69,18 @@ pub trait LlmAssistant: Send {
 pub trait MailSigner: Send {
     /// Firma `canonical`; devuelve `(pubkey 32 bytes, firma 64 bytes)`.
     fn sign(&self, canonical: &[u8]) -> ([u8; 32], [u8; 64]);
+}
+
+/// Enlace al **rail soberano** P2P (Eje 3.B), inyectado por el anfitrión. Envía
+/// un `Message` a una identidad `agora` (sin SMTP): el anfitrión lo sella
+/// (`paloma-rail`) y lo entrega por el transporte. La recepción es push: el
+/// anfitrión despacha `Msg::RailReceived` cuando llega un sobre. `Model::rail ==
+/// None` ⇒ no hay buzón "Suyu" ni enrutado por el rail.
+pub trait RailLink: Send {
+    /// Entrega `msg` a la identidad `to` (32 bytes de clave pública).
+    fn send(&self, to: [u8; 32], msg: &Message) -> Result<(), String>;
+    /// La dirección del rail de **este** usuario (`<hex>@suyu`), para compartir.
+    fn my_address(&self) -> String;
 }
 
 /// Campo enfocado del formulario de redacción.
@@ -181,6 +196,9 @@ pub struct Model {
     /// Identidad firmante (Ed25519/agora), inyectada por el anfitrión. `None` =
     /// sin identidad → los salientes no se firman.
     signer: Option<Box<dyn MailSigner>>,
+    /// Enlace al rail P2P (Eje 3.B), inyectado por el anfitrión. `None` = sin
+    /// buzón "Suyu" ni enrutado por el rail.
+    rail: Option<Box<dyn RailLink>>,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -268,6 +286,7 @@ impl Model {
             summary_busy: false,
             draft_busy: false,
             signer: None,
+            rail: None,
             db,
             account_id,
             status,
@@ -321,6 +340,24 @@ impl Model {
     /// ¿Hay identidad para firmar salientes?
     pub fn signer_available(&self) -> bool {
         self.signer.is_some()
+    }
+
+    /// Inyecta el enlace al rail P2P y crea el buzón local "Suyu" (donde
+    /// aterriza el correo soberano recibido). Lo hace el anfitrión al arrancar.
+    pub fn attach_rail(&mut self, rail: Box<dyn RailLink>) {
+        self.store.pin_mailbox(paloma_core::Mailbox::new(SUYU_MAILBOX));
+        self.rail = rail.into();
+    }
+
+    /// ¿Hay rail P2P disponible? (Gobierna el buzón "Suyu" y el enrutado.)
+    pub fn rail_available(&self) -> bool {
+        self.rail.is_some()
+    }
+
+    /// La dirección del rail de este usuario (`<hex>@suyu`), para compartir con
+    /// contactos. `None` si no hay rail.
+    pub fn my_rail_address(&self) -> Option<String> {
+        self.rail.as_ref().map(|r| r.my_address())
     }
 
     /// El resumen LLM del hilo abierto, si se pidió.
@@ -394,6 +431,16 @@ impl Model {
     /// no hay red), reconstruye hilos y limpia la selección de hilo. Persiste el
     /// snapshot fresco en disco cuando la red responde.
     fn open_mailbox(&mut self, mailbox: &str) {
+        // Buzones locales (rail "Suyu"): no existen en el backend IMAP; se leen
+        // directo de la caché local, sin tocar la red.
+        if self.store.is_pinned(mailbox) {
+            self.threads = self.store.threads(mailbox);
+            self.selected_mailbox = Some(mailbox.to_string());
+            self.selected_thread = None;
+            self.list_scroll = 0;
+            self.status = format!("{mailbox} · {} hilos (rail P2P)", self.threads.len());
+            return;
+        }
         let db = self.db.clone();
         let account = self.account_id.clone();
         match self.store.sync_messages(&*self.backend, mailbox) {
@@ -560,6 +607,10 @@ pub enum Msg {
     LlmDraft(String),
     /// Falla del asistente LLM (la muestra la barra de estado).
     LlmError(String),
+    /// Un mensaje llegó por el rail P2P: se ingiere en el buzón "Suyu".
+    RailReceived(Message),
+    /// Mostrar la propia dirección del rail en la barra de estado (para copiar).
+    ShowRailAddress,
 }
 
 /// Dispara una búsqueda por significado: arma el corpus y se lo entrega al
@@ -729,6 +780,20 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
             model.draft_busy = false;
             model.status = e;
         }
+        Msg::RailReceived(mut msg) => {
+            msg.mailbox = SUYU_MAILBOX.to_string();
+            model.store.add_message(SUYU_MAILBOX, msg);
+            // Si estamos mirando "Suyu", refrescar la lista de hilos.
+            if model.selected_mailbox.as_deref() == Some(SUYU_MAILBOX) {
+                model.threads = model.store.threads(SUYU_MAILBOX);
+            }
+            model.status = rimay_localize::t("paloma-status-rail-received");
+        }
+        Msg::ShowRailAddress => {
+            if let Some(addr) = model.my_rail_address() {
+                model.status = format!("tu dirección del rail: {addr}");
+            }
+        }
         Msg::OpenMessage(id) => {
             model.open_message(&id);
             model.search_focused = false;
@@ -771,60 +836,133 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
     model
 }
 
-/// Arma el `OutgoingMessage` desde el compositor, lo envía por el backend y
-/// refresca el buzón `Sent` si está abierto. Sin destinatario válido, no hace
-/// nada salvo avisar.
+/// Un `Message-ID` fresco para un mensaje del rail (sin servidor que lo asigne).
+fn fresh_rail_id() -> MessageId {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    MessageId(format!("<rail-{nanos}@suyu>"))
+}
+
+/// Arma y envía lo redactado, **enrutando por destinatario**: las direcciones
+/// `@suyu` van por el rail P2P (selladas Ed25519, sin SMTP) y el resto por SMTP.
+/// Sin destinatario válido, sólo avisa.
 fn send_compose(mut model: Model) -> Model {
     let Some(c) = model.compose.as_ref() else { return model };
-    let to = parse_address_list(&c.to.text());
-    if to.is_empty() {
+    let all_to = parse_address_list(&c.to.text());
+    if all_to.is_empty() {
         model.status = rimay_localize::t("paloma-status-no-recipient");
         return model;
     }
+
+    // Partir destinatarios: rail (`@suyu` → identidad agora) vs SMTP.
+    let mut rail_to: Vec<[u8; 32]> = Vec::new();
+    let mut smtp_to: Vec<Address> = Vec::new();
+    for a in &all_to {
+        match paloma_rail::parse_rail_address(&a.email) {
+            Some(id) => rail_to.push(id),
+            None => smtp_to.push(a.clone()),
+        }
+    }
+
     let want_sign = c.sign;
-    let mut out = OutgoingMessage {
-        from: model.me.clone(),
-        to,
-        cc: parse_address_list(&c.cc.text()),
-        bcc: Vec::new(),
-        subject: c.subject.text(),
-        body_text: c.body.text(),
-        body_html: None,
-        in_reply_to: c.in_reply_to.clone(),
-        references: c.references.clone(),
-        signature: None,
-    };
-    // Firma Ed25519 (agora) si el usuario la pidió y hay identidad inyectada.
-    let signed = if want_sign {
-        match model.signer.as_ref() {
-            Some(signer) => {
+    let subject = c.subject.text();
+    let body = c.body.text();
+    let cc = parse_address_list(&c.cc.text());
+    let in_reply_to = c.in_reply_to.clone();
+    let references = c.references.clone();
+
+    let mut sent_any = false;
+    let mut signed_smtp = false;
+    let mut errs: Vec<String> = Vec::new();
+
+    // --- Rail P2P: un Message nativo sellado por identidad ---
+    if !rail_to.is_empty() {
+        match model.rail.as_ref() {
+            Some(rail) => {
+                let msg = Message {
+                    id: fresh_rail_id(),
+                    from: model.me.clone(),
+                    to: all_to.clone(),
+                    cc: cc.clone(),
+                    bcc: vec![],
+                    subject: subject.clone(),
+                    date: 0,
+                    in_reply_to: in_reply_to.clone(),
+                    references: references.clone(),
+                    body_text: body.clone(),
+                    body_html: None,
+                    flags: Flags::default(),
+                    signature: paloma_core::SignatureStatus::Unsigned,
+                    mailbox: SUYU_MAILBOX.to_string(),
+                };
+                for id in &rail_to {
+                    match rail.send(*id, &msg) {
+                        Ok(()) => sent_any = true,
+                        Err(e) => errs.push(format!("rail: {e}")),
+                    }
+                }
+            }
+            None => errs.push("rail no disponible".into()),
+        }
+    }
+
+    // --- SMTP: el resto de los destinatarios ---
+    if !smtp_to.is_empty() {
+        let mut out = OutgoingMessage {
+            from: model.me.clone(),
+            to: smtp_to,
+            cc,
+            bcc: Vec::new(),
+            subject,
+            body_text: body,
+            body_html: None,
+            in_reply_to,
+            references,
+            signature: None,
+        };
+        // Firma Ed25519 (agora) si se pidió y hay identidad.
+        if want_sign {
+            if let Some(signer) = model.signer.as_ref() {
                 let (pubkey, sig) = signer.sign(&out.canonical_signing_bytes());
                 out.signature = Some(MailSignature { pubkey, sig });
-                true
+                signed_smtp = true;
             }
-            None => false, // pidió firmar pero no hay identidad: se envía sin firma
         }
+        match model.backend.send(&out) {
+            Ok(_id) => sent_any = true,
+            Err(e) => errs.push(format!("smtp: {e}")),
+        }
+    }
+
+    // --- Resultado ---
+    if sent_any && errs.is_empty() {
+        model.compose = None;
+        model.status = if signed_smtp {
+            rimay_localize::t("paloma-status-sent-signed")
+        } else if want_sign && !smtp_to_was_empty(&all_to) {
+            rimay_localize::t("paloma-status-sent-unsigned-nokey")
+        } else if !rail_to.is_empty() {
+            rimay_localize::t("paloma-status-rail-sent")
+        } else {
+            rimay_localize::t("paloma-status-sent")
+        };
+        if model.selected_mailbox.as_deref() == Some("Sent") {
+            model.open_mailbox("Sent");
+        }
+    } else if sent_any {
+        model.compose = None;
+        model.status = format!("enviado parcialmente · {}", errs.join("; "));
     } else {
-        false
-    };
-    match model.backend.send(&out) {
-        Ok(_id) => {
-            model.compose = None;
-            model.status = if signed {
-                rimay_localize::t("paloma-status-sent-signed")
-            } else if want_sign {
-                rimay_localize::t("paloma-status-sent-unsigned-nokey")
-            } else {
-                rimay_localize::t("paloma-status-sent")
-            };
-            // Si estamos viendo Sent, reflejar el envío recién aterrizado.
-            if model.selected_mailbox.as_deref() == Some("Sent") {
-                model.open_mailbox("Sent");
-            }
-        }
-        Err(e) => model.status = format!("error al enviar: {e}"),
+        model.status = format!("error al enviar: {}", errs.join("; "));
     }
     model
+}
+
+/// ¿La lista de destinatarios no tenía ninguno SMTP? (todos eran del rail).
+fn smtp_to_was_empty(all_to: &[Address]) -> bool {
+    all_to.iter().all(|a| paloma_rail::parse_rail_address(&a.email).is_some())
 }
 
 /// El árbol de la UI. Delega en el módulo `view`.
@@ -893,3 +1031,69 @@ const READ_VIEWPORT_H: f32 = 600.0;
 
 // Reexport para que el binario del demo arme su `impl App` con tipos estables.
 pub use llimphi_ui::Handle;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llimphi_theme::Theme;
+    use paloma_core::MockBackend;
+    use std::sync::{Arc, Mutex};
+
+    /// Enlace de rail que graba a quién y qué se le entregó.
+    struct RecRail {
+        sent: Arc<Mutex<Vec<([u8; 32], Message)>>>,
+    }
+    impl RailLink for RecRail {
+        fn send(&self, to: [u8; 32], msg: &Message) -> Result<(), String> {
+            self.sent.lock().unwrap().push((to, msg.clone()));
+            Ok(())
+        }
+        fn my_address(&self) -> String {
+            "test@suyu".into()
+        }
+    }
+
+    #[test]
+    fn send_compose_enruta_rail_y_smtp_por_separado() {
+        let me = Address::named("Yo", "yo@x.com");
+        let mut model = Model::new(Box::new(MockBackend::new(vec![])), me, Theme::dark());
+        let grabado = Arc::new(Mutex::new(Vec::new()));
+        model.attach_rail(Box::new(RecRail { sent: grabado.clone() }));
+        assert!(model.store.is_pinned(SUYU_MAILBOX), "attach_rail fija el buzón Suyu");
+
+        // Un destinatario del rail (@suyu) + uno SMTP.
+        let rail_addr = paloma_rail::rail_address(&[9u8; 32]);
+        let mut c = Compose::empty();
+        c.to.set_text(format!("{rail_addr}, ana@gmail.com"));
+        c.subject.set_text("minga");
+        c.body.set_text("vení el sábado");
+        model.compose = Some(c);
+
+        model = send_compose(model);
+
+        let sent = grabado.lock().unwrap();
+        assert_eq!(sent.len(), 1, "exactamente una entrega por el rail");
+        assert_eq!(sent[0].0, [9u8; 32], "a la identidad correcta");
+        assert_eq!(sent[0].1.subject, "minga");
+        assert_eq!(sent[0].1.to.len(), 2, "el Message lleva ambos destinatarios");
+        // El compositor se cerró → se envió (rail + smtp por el MockBackend).
+        assert!(model.compose.is_none());
+    }
+
+    #[test]
+    fn correo_normal_no_toca_el_rail() {
+        let me = Address::named("Yo", "yo@x.com");
+        let mut model = Model::new(Box::new(MockBackend::new(vec![])), me, Theme::dark());
+        let grabado = Arc::new(Mutex::new(Vec::new()));
+        model.attach_rail(Box::new(RecRail { sent: grabado.clone() }));
+
+        let mut c = Compose::empty();
+        c.to.set_text("ana@gmail.com");
+        c.subject.set_text("hola");
+        model.compose = Some(c);
+        model = send_compose(model);
+
+        assert!(grabado.lock().unwrap().is_empty(), "un correo normal va por SMTP, no por el rail");
+        assert!(model.compose.is_none());
+    }
+}

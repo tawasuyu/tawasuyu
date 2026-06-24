@@ -98,6 +98,22 @@ fn toolbar(model: &Model) -> View<Msg> {
         Msg::SearchFocus(true),
     )]);
 
+    let mut items = vec![
+        brand,
+        search,
+        button(&t("paloma-btn-compose"), theme.accent, theme.bg_app, Msg::ComposeOpen),
+    ];
+    // Botón para ver/compartir la propia dirección del rail P2P (si hay rail).
+    if model.rail_available() {
+        items.push(button(
+            &format!("🛰 {}", t("paloma-btn-my-rail")),
+            theme.bg_button,
+            theme.fg_text,
+            Msg::ShowRailAddress,
+        ));
+    }
+    items.push(button("⟳", theme.bg_button, theme.fg_text, Msg::Refresh));
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(TOOLBAR_H) },
@@ -107,12 +123,7 @@ fn toolbar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![
-        brand,
-        search,
-        button(&t("paloma-btn-compose"), theme.accent, theme.bg_app, Msg::ComposeOpen),
-        button("⟳", theme.bg_button, theme.fg_text, Msg::Refresh),
-    ])
+    .children(items)
 }
 
 /// Panel izquierdo: los buzones, con rol e indicador de no-leídos.

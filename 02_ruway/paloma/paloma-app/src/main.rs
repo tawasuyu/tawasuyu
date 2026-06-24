@@ -39,6 +39,7 @@ use paloma_llimphi::{Model, Msg};
 
 mod identity;
 mod llm;
+mod rail;
 mod semantic;
 
 /// La cuenta tal como se escribe en el JSON: plana y cómoda de editar a mano.
@@ -172,7 +173,7 @@ impl App for Paloma {
         (1180, 720)
     }
 
-    fn init(_handle: &Handle<Msg>) -> Model {
+    fn init(handle: &Handle<Msg>) -> Model {
         let (mut model, account_id) = match try_net() {
             Ok(s) => {
                 let account_id = s.account_id.clone();
@@ -216,15 +217,21 @@ impl App for Paloma {
             model.attach_llm(Box::new(assistant));
         }
 
-        // Identidad firmante (Eje 3): firma Ed25519/agora de los salientes. Crea
-        // la seed la primera vez; sin dir de config, el correo va sin firmar.
-        if let Some(signer) = identity::AgoraSigner::load_or_create(config_dir()) {
+        // Identidad Ed25519/agora (Eje 3): una sola seed para firmar el correo
+        // SMTP y para el rail P2P. Se crea la primera vez.
+        if let Some(seed) = identity::load_or_create_seed(config_dir()) {
+            let signer = identity::AgoraSigner::from_seed(seed);
             let pk = signer.public_key();
             eprintln!(
                 "paloma · identidad Ed25519: {:02x}{:02x}{:02x}{:02x}…",
                 pk[0], pk[1], pk[2], pk[3]
             );
             model.attach_signer(Box::new(signer));
+
+            // Rail soberano P2P (Eje 3.B): buzón "Suyu" + enrutado @rail.suyu.
+            let rail = rail::RailHost::new(seed, handle.clone());
+            eprintln!("paloma · rail P2P · tu dirección: {}", rail.address());
+            model.attach_rail(Box::new(rail));
         }
 
         model
