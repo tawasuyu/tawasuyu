@@ -635,6 +635,16 @@ impl<A: App> LayerShellHandler for Runner<A> {
         if (1..=MAX_DIM).contains(&ch) {
             self.height = ch;
         }
+        // La app puede necesitar su tamaño (p. ej. para calcular el viewport de
+        // un scroll). El compositor estira el eje paralelo al borde, así que es
+        // acá —no en `run`— donde se conoce el alto/ancho real.
+        let resize_msg = self
+            .model
+            .as_ref()
+            .and_then(|m| A::on_resize(m, self.width, self.height));
+        if let Some(msg) = resize_msg {
+            self.apply(msg);
+        }
         self.draw(qh);
     }
 }
