@@ -66,9 +66,13 @@ fn launchable_de(id: &str) -> bool {
 
 /// Instrucción exacta tras instalar, si la unidad la necesita.
 fn post_install_de(id: &str) -> Option<String> {
+    // Las piezas que también forman parte del sistema base se pueden instalar
+    // sueltas como apps, con un resultado personalizado que aclara su rol.
     match id {
         "pata" => Some("La barra se inicia con la sesión de mirada; no se abre suelta.".into()),
+        "shuma" => Some("Usala suelta como terminal, o como shell de la sesión mirada.".into()),
         "mirada-panel" => Some("Necesita el compositor mirada corriendo (instalalo desde «Sistema base»).".into()),
+        "panel-control" => Some("Ajusta mirada, pata y el sistema; algunos ajustes piden la sesión mirada.".into()),
         _ => None,
     }
 }

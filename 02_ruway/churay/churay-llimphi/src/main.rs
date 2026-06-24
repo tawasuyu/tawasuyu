@@ -19,7 +19,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_image::Image;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use marca::Brand;
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_progress::linear_progress_view;
@@ -81,6 +81,10 @@ struct Model {
     base_status: Vec<UnitStatus>,
     base_installing: bool,
     base_done: bool,
+    /// Contraseña de sudo tecleada in-app (se borra al usarla).
+    password: String,
+    /// Error de la instalación elevada (contraseña, etc.).
+    base_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -111,6 +115,9 @@ enum Msg {
     BaseProgress(String, f32),
     BaseCompDone(String),
     BaseAllDone,
+    BaseError(String),
+    PassType(String),
+    PassBackspace,
 }
 
 struct Churay;
@@ -160,6 +167,11 @@ impl Model {
         faltan
     }
 
+    /// `true` si instalar el sistema base hace falta root (prefix no escribible).
+    fn base_needs_root(&self) -> bool {
+        InstallConfig::detect(InstallMode::System).needs_root()
+    }
+
     /// Índices de unidades **sugeridas por las ya instaladas** que todavía no se
     /// instalaron — para la pantalla de resultado ("te sugerimos también…").
     fn sugeridas_de_instaladas(&self) -> Vec<usize> {
@@ -192,6 +204,27 @@ impl App for Churay {
 
     fn initial_size() -> (u32, u32) {
         (780, 640)
+    }
+
+    /// En la pantalla del sistema base, cuando hace falta root, tecleás la
+    /// contraseña de sudo directamente (campo enmascarado in-app).
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        if model.screen != Screen::SistemaBase || !model.base_needs_root() || model.base_installing {
+            return None;
+        }
+        if !matches!(event.state, KeyState::Pressed) {
+            return None;
+        }
+        match &event.key {
+            Key::Named(NamedKey::Backspace) => Some(Msg::PassBackspace),
+            Key::Named(NamedKey::Enter) => Some(Msg::InstalarBase),
+            _ => match &event.text {
+                Some(s) if !s.is_empty() && !s.chars().any(|c| c.is_control()) => {
+                    Some(Msg::PassType(s.clone()))
+                }
+                _ => None,
+            },
+        }
     }
 
     fn init(_: &Handle<Self::Msg>) -> Self::Model {
@@ -233,6 +266,8 @@ impl App for Churay {
             base_status: vec![UnitStatus::Idle; churay_core::base_system().len()],
             base_installing: false,
             base_done: false,
+            password: String::new(),
+            base_error: None,
         }
     }
 
@@ -406,6 +441,13 @@ impl App for Churay {
                 if sel_ids.is_empty() {
                     return model;
                 }
+                let needs_root = model.base_needs_root();
+                // Si hace falta root y todavía no hay contraseña, esperá a que la
+                // tecleen (el campo está en pantalla). No cierres la app.
+                if needs_root && model.password.is_empty() {
+                    model.base_error = Some("Escribí tu contraseña de sudo abajo.".into());
+                    return model;
+                }
                 for i in 0..model.base.len() {
                     if model.base_sel[i] {
                         model.base_status[i] = UnitStatus::Working(Step::Resolviendo, 0.0);
@@ -413,27 +455,53 @@ impl App for Churay {
                 }
                 model.base_installing = true;
                 model.base_done = false;
+                model.base_error = None;
                 let cfg = InstallConfig::detect(InstallMode::System);
                 let h = handle.clone();
-                handle.spawn(move || {
-                    let comps = churay_core::base_system();
-                    let refs: Vec<&churay_core::Component> =
-                        comps.iter().filter(|c| sel_ids.iter().any(|id| id == c.id)).collect();
-                    let _ = churay_core::install_base(
-                        std::path::Path::new("/"),
-                        &cfg,
-                        None,
-                        &refs,
-                        &mut |id, step, ratio| {
-                            if step == Step::Hecho {
-                                h.dispatch(Msg::BaseCompDone(id.to_string()));
-                            } else {
-                                h.dispatch(Msg::BaseProgress(id.to_string(), ratio));
-                            }
-                        },
-                    );
-                    Msg::BaseAllDone
-                });
+                if needs_root {
+                    // Elevación in-app: corremos el modo headless del propio binario
+                    // bajo `sudo -S`, pasándole la contraseña por stdin. La app NO
+                    // se cierra; leemos el progreso por stdout.
+                    let pass = std::mem::take(&mut model.password);
+                    let ids = sel_ids.join(",");
+                    handle.spawn(move || {
+                        elevated_install(&cfg, &ids, &pass, &h);
+                        Msg::BaseAllDone
+                    });
+                } else {
+                    handle.spawn(move || {
+                        let comps = churay_core::base_system();
+                        let refs: Vec<&churay_core::Component> =
+                            comps.iter().filter(|c| sel_ids.iter().any(|id| id == c.id)).collect();
+                        let _ = churay_core::install_base(
+                            std::path::Path::new("/"),
+                            &cfg,
+                            None,
+                            &refs,
+                            &mut |id, step, ratio| {
+                                if step == Step::Hecho {
+                                    h.dispatch(Msg::BaseCompDone(id.to_string()));
+                                } else {
+                                    h.dispatch(Msg::BaseProgress(id.to_string(), ratio));
+                                }
+                            },
+                        );
+                        Msg::BaseAllDone
+                    });
+                }
+            }
+            Msg::PassType(s) => model.password.push_str(&s),
+            Msg::PassBackspace => {
+                model.password.pop();
+            }
+            Msg::BaseError(e) => {
+                model.base_installing = false;
+                model.base_error = Some(e);
+                for s in model.base_status.iter_mut() {
+                    if matches!(s, UnitStatus::Working(_, _)) {
+                        *s = UnitStatus::Idle;
+                    }
+                }
             }
             Msg::BaseProgress(id, ratio) => {
                 if let Some(i) = model.base.iter().position(|c| c.id == id) {
@@ -449,6 +517,10 @@ impl App for Churay {
             }
             Msg::BaseAllDone => {
                 model.base_installing = false;
+                // Si hubo un error elevado (contraseña, etc.), no marques "listo".
+                if model.base_error.is_some() {
+                    return model;
+                }
                 model.base_done = true;
                 // Lo que quedó a medias = falló (install_base corta en el 1er error).
                 for s in model.base_status.iter_mut() {
@@ -823,28 +895,55 @@ fn catalogo(model: &Model) -> View<Msg> {
     .clip(true)
     .children(vec![scroller]);
 
-    // Entrada especial al sistema base (NO es una app): el escritorio completo.
-    let card = row(percent(1.0), length(52.0))
-        .gap(10.0)
-        .pad(12.0)
-        .fill(t.bg_panel)
-        .radius(10.0)
-        .children(vec![
-            View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
-                "🖥  Sistema base / Escritorio mirada — instalar el entorno completo",
-                14.0,
-                t.fg_text,
-                Alignment::Start,
-            ),
-            View::new(Style { size: Size { width: length(28.0), height: length(28.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
-                .text("›", 22.0, t.accent),
-        ])
-        .on_click(Msg::AbrirSistemaBase);
-
     col(percent(1.0), length(VIEWPORT))
         .pad(16.0)
         .gap(10.0)
-        .children(vec![card, wrap])
+        .children(vec![base_card(t), wrap])
+}
+
+/// La opción principal — destacada (no un subtítulo perdido): badge, borde de
+/// acento, título y subtítulo.
+fn base_card(t: &Theme) -> View<Msg> {
+    let accent = t.accent;
+    let badge = View::new(Style {
+        size: Size { width: length(48.0), height: length(48.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(110, 140, 220, 46))
+    .radius(12.0)
+    .text("🖥", 26.0, accent);
+
+    let textos = col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto())
+        .gap(3.0)
+        .grow()
+        .children(vec![
+            View::new(Style { size: Size { width: percent(1.0), height: length(22.0) }, ..Default::default() })
+                .text_aligned("Instalar el escritorio completo", 17.0, t.fg_text, Alignment::Start)
+                .text_weight(700.0),
+            View::new(Style { size: Size { width: percent(1.0), height: length(18.0) }, ..Default::default() })
+                .text_aligned(
+                    "Sistema base mirada: compositor · display manager · barra · sesión",
+                    12.0,
+                    t.fg_muted,
+                    Alignment::Start,
+                ),
+        ]);
+
+    let chevron = View::new(Style { size: Size { width: length(34.0), height: length(34.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+        .fill(accent)
+        .radius(17.0)
+        .text("›", 22.0, t.bg_app);
+
+    row(percent(1.0), length(72.0))
+        .gap(14.0)
+        .pad(12.0)
+        .fill(t.bg_panel)
+        .radius(14.0)
+        .border(1.5, accent)
+        .children(vec![badge, textos, chevron])
+        .on_click(Msg::AbrirSistemaBase)
 }
 
 /// Pantalla del **sistema base**: los componentes del escritorio mirada
@@ -864,9 +963,6 @@ fn sistema_base(model: &Model) -> View<Msg> {
             Alignment::Start,
         );
     let mut head = vec![titulo, sub];
-    if needs_root && !model.base_done {
-        head.push(banner_root(t));
-    }
     if model.base_done {
         head.push(linea(
             "Listo. Reiniciá la sesión y elegí «mirada» en el greeter (TTY: sudo mirada-dm). Si instalaste un init aparte, elegilo en GRUB.",
@@ -908,20 +1004,21 @@ fn sistema_base(model: &Model) -> View<Msg> {
 
     // Acciones.
     let n_sel = model.base_sel.iter().filter(|x| **x).count();
-    let instalar = if needs_root {
-        boton("Reabrir como root", t.accent, t.bg_app, 180.0, Msg::ReexecRoot)
+    let label_btn = if model.base_installing {
+        "Instalando…"
+    } else if needs_root {
+        "Instalar (sudo)"
     } else {
-        let activo = n_sel > 0 && !model.base_installing;
-        let label = if model.base_installing { "Instalando…" } else { "Instalar (root)" };
-        let bg = if activo { t.accent } else { t.bg_button };
-        let fg = if activo { t.bg_app } else { t.fg_muted };
-        let mut v = View::new(Style { size: Size { width: length(180.0), height: length(36.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
-            .fill(bg).radius(8.0).text(label, 15.0, fg);
-        if activo {
-            v = v.on_click(Msg::InstalarBase);
-        }
-        v
+        "Instalar"
     };
+    let activo = n_sel > 0 && !model.base_installing && (!needs_root || !model.password.is_empty());
+    let bg = if activo { t.accent } else { t.bg_button };
+    let fg = if activo { t.bg_app } else { t.fg_muted };
+    let mut instalar = View::new(Style { size: Size { width: length(170.0), height: length(36.0) }, align_items: Some(AlignItems::Center), justify_content: Some(JustifyContent::Center), ..Default::default() })
+        .fill(bg).radius(8.0).text(label_btn, 15.0, fg);
+    if activo {
+        instalar = instalar.on_click(Msg::InstalarBase);
+    }
     let acciones = row(percent(1.0), length(40.0))
         .gap(10.0)
         .children(vec![
@@ -940,15 +1037,41 @@ fn sistema_base(model: &Model) -> View<Msg> {
         .grow()
         .children(filas);
 
-    col(percent(1.0), percent(1.0))
-        .fill(t.bg_app)
-        .gap(10.0)
-        .pad(24.0)
-        .children(vec![
-            col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto()).gap(8.0).children(head),
-            cuerpo,
-            acciones,
-        ])
+    let mut hijos = vec![
+        col(percent(1.0), llimphi_ui::llimphi_layout::taffy::prelude::auto()).gap(8.0).children(head),
+        cuerpo,
+    ];
+    // Campo de contraseña sudo in-app (sólo si hace falta root y no terminó).
+    if needs_root && !model.base_done {
+        hijos.push(campo_password(model, t));
+    }
+    if let Some(err) = &model.base_error {
+        hijos.push(linea(err, t.fg_destructive, t));
+    }
+    hijos.push(acciones);
+
+    col(percent(1.0), percent(1.0)).fill(t.bg_app).gap(10.0).pad(24.0).children(hijos)
+}
+
+/// El campo de contraseña de sudo, enmascarado, que se llena tecleando (lo
+/// captura `on_key`). No abre un proceso externo ni cierra la app.
+fn campo_password(model: &Model, t: &Theme) -> View<Msg> {
+    let dots: String = "•".repeat(model.password.chars().count());
+    let contenido = if dots.is_empty() {
+        ("🔒  Escribí tu contraseña de sudo y presioná Enter".to_string(), t.fg_placeholder)
+    } else {
+        (format!("🔒  {dots}"), t.fg_text)
+    };
+    View::new(Style {
+        size: Size { width: percent(1.0), height: length(40.0) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(t.bg_input)
+    .radius(8.0)
+    .border(1.0, t.border_focus)
+    .pad_x(12.0)
+    .text_aligned(contenido.0, 14.0, contenido.1, Alignment::Start)
 }
 
 fn fila(model: &Model, i: usize) -> View<Msg> {
@@ -970,13 +1093,23 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
     })
     .children(vec![sw]);
 
+    // Ícono en una pastilla tintada por cuadrante.
     let icono = View::new(Style {
-        size: Size { width: length(40.0), height: length(ROW_H) },
+        size: Size { width: length(38.0), height: length(38.0) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text(u.icon.clone(), 22.0, t.fg_text);
+    .fill(icon_tint(&u.category))
+    .radius(9.0)
+    .text(u.icon.clone(), 20.0, icon_color(&u.category));
+    let icono = View::new(Style {
+        size: Size { width: length(46.0), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![icono]);
 
     let titulo = View::new(Style {
         size: Size { width: percent(1.0), height: length(22.0) },
@@ -1236,6 +1369,26 @@ fn row(w: Dimension, h: Dimension) -> View<Msg> {
     })
 }
 
+/// Color del ícono (RGB) según el cuadrante — para que el catálogo no sea gris.
+fn icon_rgb(category: &str) -> [u8; 3] {
+    match category {
+        "ruway" => [232, 156, 74],     // HACER — ámbar
+        "yachay" => [120, 168, 240],   // CONOCER — azul
+        "unanchay" => [118, 214, 150], // PERCIBIR — verde
+        "ukupacha" => [186, 146, 236], // RAÍZ — violeta
+        "sistema" => [228, 132, 132],  // sistema — rojo suave
+        _ => [160, 180, 210],
+    }
+}
+fn icon_color(category: &str) -> Color {
+    let c = icon_rgb(category);
+    Color::from_rgba8(c[0], c[1], c[2], 255)
+}
+fn icon_tint(category: &str) -> Color {
+    let c = icon_rgb(category);
+    Color::from_rgba8(c[0], c[1], c[2], 40)
+}
+
 fn paso_label(step: Step, r: f32) -> String {
     let pct = (r * 100.0) as u32;
     match step {
@@ -1317,6 +1470,114 @@ impl ViewExt for View<Msg> {
     }
 }
 
+/// Corre el modo headless del propio binario bajo `sudo -S`, pasándole la
+/// contraseña por stdin. Lee `DONE <id>` por stdout y los redespacha como
+/// componentes terminados; si falla, dispara `BaseError`. La app no se cierra.
+fn elevated_install(cfg: &InstallConfig, ids: &str, pass: &str, h: &Handle<Msg>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let Ok(exe) = std::env::current_exe() else {
+        h.dispatch(Msg::BaseError("no encontré el ejecutable de churay".into()));
+        return;
+    };
+    let mut cmd = std::process::Command::new("sudo");
+    cmd.arg("-S").arg("-p").arg(""); // sin prompt (la clave va por stdin)
+    cmd.arg(&exe).arg(format!("--install-base={ids}"));
+    if let Some(b) = &cfg.bundle_dir {
+        cmd.arg(format!("--bundle={}", b.display()));
+    }
+    if let Some(r) = &cfg.remote_base_url {
+        cmd.arg(format!("--repo={r}"));
+    }
+    if let Some(w) = &cfg.workspace_root {
+        cmd.arg(format!("--workspace={}", w.display()));
+    }
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            h.dispatch(Msg::BaseError(format!("no se pudo lanzar sudo: {e}")));
+            return;
+        }
+    };
+    if let Some(mut sin) = child.stdin.take() {
+        let _ = writeln!(sin, "{pass}");
+    }
+    let mut any = false;
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            if let Some(id) = line.strip_prefix("DONE ") {
+                any = true;
+                h.dispatch(Msg::BaseCompDone(id.to_string()));
+            }
+        }
+    }
+    let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+    if !ok && !any {
+        let mut err = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut err);
+        }
+        let low = err.to_lowercase();
+        let msg = if low.contains("incorrect") || low.contains("contraseña") || low.contains("sorry") {
+            "Contraseña incorrecta.".to_string()
+        } else {
+            format!("No se pudo instalar. {}", err.lines().last().unwrap_or("").trim())
+        };
+        h.dispatch(Msg::BaseError(msg));
+    }
+}
+
+/// Modo headless: `churay --install-base=<ids> [--bundle=…] [--repo=…]
+/// [--workspace=…]`. Corre como root (bajo sudo/pkexec), instala el sistema base
+/// y emite `DONE <id>` por componente. No abre ventana.
+fn run_install_base_headless(args: &[String]) -> i32 {
+    use std::io::Write;
+    let getarg = |k: &str| args.iter().find_map(|a| a.strip_prefix(k).map(|s| s.to_string()));
+    let ids: Vec<String> = getarg("--install-base=")
+        .unwrap_or_default()
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    let mut cfg = InstallConfig::detect(InstallMode::System);
+    if let Some(b) = getarg("--bundle=") {
+        cfg.bundle_dir = Some(b.into());
+    }
+    if let Some(r) = getarg("--repo=") {
+        cfg.remote_base_url = Some(r);
+    }
+    if let Some(w) = getarg("--workspace=") {
+        cfg.workspace_root = Some(w.into());
+    }
+    let comps = churay_core::base_system();
+    let refs: Vec<&churay_core::Component> = comps
+        .iter()
+        .filter(|c| ids.is_empty() || ids.iter().any(|id| id == c.id))
+        .collect();
+    // `$CHURAY_SYSROOT` (default `/`) — para probar sin tocar el sistema.
+    let sysroot = std::env::var_os("CHURAY_SYSROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    match churay_core::install_base(&sysroot, &cfg, None, &refs, &mut |id, step, _| {
+        if step == Step::Hecho {
+            println!("DONE {id}");
+            let _ = std::io::stdout().flush();
+        }
+    }) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("ERR {e}");
+            1
+        }
+    }
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a.starts_with("--install-base")) {
+        std::process::exit(run_install_base_headless(&args));
+    }
     llimphi_ui::run::<Churay>();
 }
