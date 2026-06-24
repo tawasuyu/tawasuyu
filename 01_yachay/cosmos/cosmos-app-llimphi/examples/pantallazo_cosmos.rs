@@ -39,6 +39,8 @@ mod model;
 mod persist;
 #[path = "../src/print.rs"]
 mod print;
+#[path = "../src/sphere_gpu.rs"]
+mod sphere_gpu;
 #[path = "../src/tools.rs"]
 mod tools;
 #[path = "../src/view.rs"]
@@ -61,7 +63,7 @@ use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
-use llimphi_ui::{measure_text_node, mount, paint, DragPhase, View};
+use llimphi_ui::{measure_text_node, mount, paint, paint_gpu, DragPhase, View};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 
 use crate::astroview::compute_astro;
@@ -232,6 +234,7 @@ fn modelo_demo() -> Model {
         nav_cut: None,
         sphere_yaw: 26.0,
         sphere_pitch: -64.0,
+        sphere_gpu: sphere_gpu::slot(),
         sky_nadir: false,
         wheel_zoom: 1.0,
         wheel_pan: (0.0, 0.0),
@@ -414,6 +417,12 @@ fn main() {
     if dialog_shot {
         seed_dialog(&mut model);
     }
+    // Con COSMOS_SHOT_SPHERE=1 muestra la esfera celeste 3D (motor GPU
+    // llimphi-3d): requiere un pase paint_gpu además del vello.
+    let sphere_shot = std::env::var("COSMOS_SHOT_SPHERE").is_ok();
+    if sphere_shot {
+        model.chart_view = model::ChartView::Esfera3d;
+    }
     let main_view = view_demo(&model);
     let root = if dialog_shot {
         let overlay = dialog::dialog_overlay(&model, &model.theme).expect("overlay");
@@ -476,6 +485,7 @@ fn main() {
         dimension: wgpu::TextureDimension::D2,
         format: FMT,
         usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
@@ -486,6 +496,17 @@ fn main() {
     renderer
         .render_to_view(&hal, &scene, &view, W, H, bg)
         .expect("render_to_view");
+
+    // Pase GPU (gpu_paint_with): la esfera 3D se compone aquí, sobre el vello.
+    if sphere_shot {
+        let mut enc = hal
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gpu") });
+        let any = paint_gpu(&mounted, &computed, &hal.device, &hal.queue, &mut enc, &view, (W, H));
+        hal.queue.submit(std::iter::once(enc.finish()));
+        let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+        assert!(any, "el gpu_painter de la esfera no corrió");
+    }
 
     write_png(&hal, &target, &out);
     eprintln!("pantallazo_cosmos: escrito {out} ({W}x{H})");

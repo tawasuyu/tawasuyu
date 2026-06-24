@@ -10,8 +10,7 @@ pub(super) mod dial;
 
 use cosmos_canvas_llimphi::{canvas_view_clickable_ex, ViewTransform};
 use cosmos_render::{
-    compose_sphere, compose_wheel_with_hits, CompositionOpts, DrawCommand, Palette, Rgba,
-    SphereOpts, SphereView, TextAnchor,
+    compose_wheel_with_hits, CompositionOpts, DrawCommand, Palette, Rgba, TextAnchor,
 };
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -325,31 +324,53 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
 // Esfera 3D
 // =====================================================================
 
-/// Esfera celeste 3D (wireframe) — compone con `cosmos-render::sphere3d`
-/// y pinta los `DrawCommand` en el mismo canvas que la rueda. La botonera
-/// ◀▶▲▼⟳ rota yaw/pitch (el canvas committeado no expone drag todavía).
+/// Esfera celeste 3D sobre el motor GPU **`llimphi-3d`** (asimilado
+/// 2026-06-24). La geometría (cuentas de la eclíptica/ecuador/cuerpos…) se
+/// arma en CPU desde el `RenderModel` y se dibuja en `gpu_paint_with` con
+/// depth real y cámara en perspectiva. Drag rota yaw/pitch; la rueda
+/// (zoom) acerca/aleja la cámara. La botonera ◀▶▲▼⟳ espeja el drag.
 fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
-    let opts = SphereOpts {
-        size,
-        palette: graphics_palette(model),
+    let pal = graphics_palette(model);
+    let (verts, indices) = crate::sphere_gpu::sphere_geometry(render, &pal);
+    let bg = graphics_bg(model);
+    let yaw = model.sphere_yaw;
+    let pitch = model.sphere_pitch;
+    // Zoom de la rueda → distancia de cámara (acercar = menor distancia).
+    let dist = (3.0 / model.wheel_zoom.max(0.25)).clamp(1.7, 9.0);
+    let slot = model.sphere_gpu.clone();
+
+    let canvas = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
         ..Default::default()
-    };
-    let view = SphereView {
-        yaw_deg: model.sphere_yaw,
-        pitch_deg: model.sphere_pitch,
-    };
-    let commands = compose_sphere(render, &view, &opts);
-    let canvas_bg = graphics_bg(model);
-    let t = ViewTransform {
-        zoom: model.wheel_zoom,
-        pan: model.wheel_pan,
-    };
-    // Drag para rotar (yaw/pitch); la rueda hace zoom vía el transform.
-    let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(commands, size, Some(canvas_bg), t)
-        .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
-            DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),
-            DragPhase::End => None,
-        });
+    })
+    .fill(bg)
+    .gpu_paint_with(move |device, queue, encoder, target, rect: PaintRect, vp| {
+        crate::sphere_gpu::paint(
+            &slot,
+            device,
+            queue,
+            encoder,
+            target,
+            vp,
+            (rect.x, rect.y, rect.w, rect.h),
+            &verts,
+            &indices,
+            yaw,
+            pitch,
+            dist,
+        );
+    })
+    .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+        DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),
+        DragPhase::End => None,
+    });
     canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
 }
 

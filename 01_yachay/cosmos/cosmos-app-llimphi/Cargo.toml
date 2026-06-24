@@ -30,6 +30,7 @@ cosmos-rise-set = { path = "../cosmos-rise-set" }
 cosmos-eclipses = { path = "../cosmos-eclipses" }
 nahual-geo-core = { workspace = true }
 llimphi-ui = { workspace = true }
+llimphi-3d = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-panel = { workspace = true }
 llimphi-widget-tree = { workspace = true }

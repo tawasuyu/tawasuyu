@@ -30,6 +30,7 @@ mod nav_ops;
 mod persist;
 mod print;
 mod rectify_ops;
+mod sphere_gpu;
 mod tools;
 mod update;
 mod view;
@@ -186,6 +187,7 @@ impl App for Cosmos {
             nav_cut: None,
             sphere_yaw: ui.sphere_yaw,
             sphere_pitch: ui.sphere_pitch,
+            sphere_gpu: sphere_gpu::slot(),
             sky_nadir: ui.sky_nadir,
             wheel_zoom: 1.0,
             wheel_pan: (0.0, 0.0),

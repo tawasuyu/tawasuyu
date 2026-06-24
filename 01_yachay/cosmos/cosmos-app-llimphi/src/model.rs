@@ -777,6 +777,9 @@ pub(crate) struct Model {
     // esfera 3D (orientación)
     pub(crate) sphere_yaw: f32,
     pub(crate) sphere_pitch: f32,
+    /// Estado GPU persistente de la esfera 3D (`llimphi-3d`): se crea perezoso
+    /// en el primer `gpu_paint_with`. No se persiste ni se clona por frame.
+    pub(crate) sphere_gpu: crate::sphere_gpu::SphereGpuSlot,
     // Cielo del observador (vista alt/az)
     /// `false` = cénit al centro (cielo visible); `true` = nadir al
     /// centro (el hemisferio bajo el horizonte).
