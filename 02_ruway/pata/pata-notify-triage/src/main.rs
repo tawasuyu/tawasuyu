@@ -19,10 +19,12 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let aplicar = std::env::args().any(|a| a == "--aplicar");
+
     // Embeddings: daemon `verbo` o Mock. LLM: autodetectado o Mock.
     let provider = rimay_verbo::conectar_o_mock(384).await;
     let llm = pluma_llm::from_env().ok();
-    let reglas = pata_notify_triage::reglas_por_defecto();
+    let reglas = pata_notify_triage::cargar_reglas();
 
     let digest =
         pata_notify_triage::triage(&historial, &reglas, provider.as_ref(), llm.as_deref()).await?;
@@ -33,5 +35,12 @@ async fn main() -> anyhow::Result<()> {
         digest.grupos.len()
     );
     pata_notify_triage::imprimir(&digest);
+
+    if aplicar {
+        println!("\n— aplicando acciones autorizadas —");
+        for linea in pata_notify_triage::aplicar(&digest) {
+            println!("{linea}");
+        }
+    }
     Ok(())
 }

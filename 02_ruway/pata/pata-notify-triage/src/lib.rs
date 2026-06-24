@@ -14,8 +14,11 @@
 //! el daemon. Y *sugiere* — no auto-ejecuta acciones; eso queda detrás de
 //! reglas explícitas que el usuario autorice más adelante.
 
+use std::path::PathBuf;
+
 use pluma_llm_core::{ChatClient, ChatRequest};
 use rimay_verbo_core::Provider;
+use serde::{Deserialize, Serialize};
 
 use pata_notify::Notificacion;
 
@@ -25,7 +28,7 @@ const UMBRAL_CLUSTER: f32 = 0.82;
 
 /// Qué hacer con un grupo que matchea una regla. No incluye "agrupar": el
 /// clustering es incondicional; las reglas solo tiñen el grupo resultante.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Accion {
     /// Fija la prioridad del grupo (0 baja … 2 crítica).
     Priorizar(u8),
@@ -33,10 +36,14 @@ pub enum Accion {
     Silenciar,
     /// Adjunta una acción sugerida (texto), sin ejecutarla.
     Sugerir(String),
+    /// Acción a ejecutar: un comando de shell. Solo corre si `autorizado` es
+    /// `true` Y se invoca el triage con `--aplicar` — auto-acción explícita,
+    /// nunca por defecto.
+    Ejecutar { comando: String, autorizado: bool },
 }
 
 /// Una regla semántica: matchea por parecido a un ejemplo, no por patrón.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Regla {
     pub nombre: String,
     /// Texto prototípico contra el que se mide la similitud.
@@ -57,6 +64,9 @@ pub struct Grupo {
     /// Reglas que matchearon (por nombre), para trazabilidad.
     pub reglas: Vec<String>,
     pub sugerencia: Option<String>,
+    /// Comando a ejecutar `(comando, autorizado)`, si una regla `Ejecutar`
+    /// matcheó. Solo corre con `aplicar` + `autorizado`.
+    pub ejecutar: Option<(String, bool)>,
     pub silenciado: bool,
 }
 
@@ -105,6 +115,63 @@ pub fn reglas_por_defecto() -> Vec<Regla> {
             accion: Accion::Silenciar,
         },
     ]
+}
+
+/// Carga reglas del archivo del usuario, con fallback a [`reglas_por_defecto`].
+/// El archivo es JSON en `$XDG_CONFIG_HOME/pata-notify/reglas.json`.
+pub fn cargar_reglas() -> Vec<Regla> {
+    match leer_reglas() {
+        Some(reglas) => reglas,
+        None => reglas_por_defecto(),
+    }
+}
+
+/// Ruta del archivo de reglas del usuario.
+pub fn ruta_reglas() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("pata-notify").join("reglas.json")
+}
+
+fn leer_reglas() -> Option<Vec<Regla>> {
+    let ruta = ruta_reglas();
+    let txt = std::fs::read_to_string(&ruta).ok()?;
+    match serde_json::from_str::<Vec<Regla>>(&txt) {
+        Ok(r) => {
+            tracing::info!(reglas = r.len(), ruta = %ruta.display(), "reglas cargadas de archivo");
+            Some(r)
+        }
+        Err(e) => {
+            tracing::warn!(?e, ruta = %ruta.display(), "reglas.json inválido — uso las default");
+            None
+        }
+    }
+}
+
+/// Ejecuta las acciones `Ejecutar` autorizadas de los grupos del digest. Es la
+/// auto-acción explícita: solo corre acá (no en `triage`), solo si la regla
+/// está marcada `autorizado: true`. Devuelve un log de lo ejecutado.
+pub fn aplicar(d: &Digest) -> Vec<String> {
+    let mut log = Vec::new();
+    for g in &d.grupos {
+        if let Some((comando, autorizado)) = &g.ejecutar {
+            if *autorizado {
+                let estado = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(comando)
+                    .status();
+                match estado {
+                    Ok(s) => log.push(format!("✓ ejecutado [{}]: {comando} ({s})", g.titulo)),
+                    Err(e) => log.push(format!("✗ falló [{}]: {comando} ({e})", g.titulo)),
+                }
+            } else {
+                log.push(format!("· omitido (no autorizado) [{}]: {comando}", g.titulo));
+            }
+        }
+    }
+    log
 }
 
 /// Texto representativo de una notificación para embeber.
@@ -168,6 +235,7 @@ pub async fn triage(
         // Prioridad base = máxima urgencia del grupo.
         let mut prioridad = items.iter().map(|n| n.urgency).max().unwrap_or(1);
         let mut sugerencia = None;
+        let mut ejecutar = None;
         let mut silenciado = false;
         let mut matched = Vec::new();
 
@@ -178,6 +246,9 @@ pub async fn triage(
                     Accion::Priorizar(p) => prioridad = prioridad.max(*p),
                     Accion::Silenciar => silenciado = true,
                     Accion::Sugerir(s) => sugerencia = Some(s.clone()),
+                    Accion::Ejecutar { comando, autorizado } => {
+                        ejecutar = Some((comando.clone(), *autorizado))
+                    }
                 }
             }
         }
@@ -190,6 +261,7 @@ pub async fn triage(
             prioridad,
             reglas: matched,
             sugerencia,
+            ejecutar,
             silenciado,
         });
     }
@@ -291,6 +363,10 @@ pub fn imprimir(d: &Digest) {
             String::new()
         };
         println!("▾ P{} {}{}{}{}", g.prioridad, g.titulo, conteo, etiquetas, sug);
+        if let Some((comando, autorizado)) = &g.ejecutar {
+            let marca = if *autorizado { "⚙ autorizado" } else { "⚙ requiere autorización" };
+            println!("    {marca}: {comando}");
+        }
         for n in &g.items {
             let app = if n.app_name.trim().is_empty() {
                 "—"
@@ -318,6 +394,7 @@ mod tests {
             summary: summary.into(),
             body: String::new(),
             urgency: 1,
+            actions: Vec::new(),
             timeout_ms: -1,
             created_usec: id as u64,
         }
