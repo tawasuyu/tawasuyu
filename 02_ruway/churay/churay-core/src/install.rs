@@ -185,26 +185,66 @@ impl Source for BuildSource {
         on: &mut dyn FnMut(Step, f32),
     ) -> Result<ArtifactHash, InstallError> {
         on(Step::Compilando, 0.0);
-        // `--bin <program>` no necesita el nombre del crate: cargo encuentra el
-        // binario en el workspace (error claro si fuera ambiguo).
-        let out = std::process::Command::new("cargo")
+        // Compilar desde fuente es largo (release, todo el árbol Llimphi). Si
+        // sólo reportáramos 0%, la barra parecería congelada — el bug que vimos.
+        // Por eso usamos `--message-format=json` y movemos la barra con **cada
+        // crate compilado** (asintótica, ver `build_ratio`).
+        use std::io::{BufRead, BufReader, Read};
+        use std::process::{Command, Stdio};
+        // `--bin <program>` no necesita el nombre del crate: cargo lo encuentra
+        // en el workspace (error claro si fuera ambiguo).
+        let mut child = Command::new("cargo")
             .current_dir(&self.workspace_root)
-            .args(["build", "--release", "--bin", &unit.program])
-            .output()
+            .args([
+                "build",
+                "--release",
+                "--message-format=json-render-diagnostics",
+                "--bin",
+                &unit.program,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| InstallError::BuildFallo {
                 program: unit.program.clone(),
                 detalle: e.to_string(),
             })?;
-        if !out.status.success() {
-            let detalle = String::from_utf8_lossy(&out.stderr)
+        // Drenar stderr en un hilo: evita el deadlock por pipe lleno y captura
+        // el detalle del error de compilación.
+        let stderr = child.stderr.take().expect("stderr piped");
+        let err_handle = std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = BufReader::new(stderr).read_to_string(&mut s);
+            s
+        });
+        // Cada `compiler-artifact` en stdout = un crate más compilado.
+        let stdout = child.stdout.take().expect("stdout piped");
+        let mut compilados = 0u32;
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if is_artifact_line(&line) {
+                compilados += 1;
+                on(Step::Compilando, build_ratio(compilados));
+            }
+        }
+        let status = child.wait().map_err(|e| InstallError::BuildFallo {
+            program: unit.program.clone(),
+            detalle: e.to_string(),
+        })?;
+        let stderr_txt = err_handle.join().unwrap_or_default();
+        if !status.success() {
+            let detalle = stderr_txt
                 .lines()
+                .filter(|l| !l.trim().is_empty())
                 .rev()
                 .take(4)
                 .collect::<Vec<_>>()
                 .join(" | ");
-            return Err(InstallError::BuildFallo { program: unit.program.clone(), detalle });
+            return Err(InstallError::BuildFallo {
+                program: unit.program.clone(),
+                detalle: if detalle.is_empty() { "ver salida de cargo".into() } else { detalle },
+            });
         }
-        on(Step::Copiando, 0.5);
+        on(Step::Copiando, 0.95);
         let built = self
             .workspace_root
             .join("target")
@@ -300,6 +340,20 @@ pub(crate) fn atomic_install_bin(src: &Path, dest: &Path) -> Result<ArtifactHash
     std::fs::set_permissions(&tmp, perms)?;
     std::fs::rename(&tmp, dest)?; // atómico dentro del mismo filesystem
     ArtifactHash::of_file(dest).map_err(InstallError::Io)
+}
+
+/// `true` si la línea JSON de cargo anuncia un crate compilado.
+fn is_artifact_line(line: &str) -> bool {
+    line.contains("\"reason\":\"compiler-artifact\"")
+}
+
+/// Progreso del compilado a partir de cuántos crates se compilaron. Asintótica
+/// hacia 1 (nunca llega: el 100% lo da la copia final), pero **siempre avanza**
+/// con cada crate — así la barra no se queda clavada en 0%. ~10 crates ≈ 0.5,
+/// ~40 ≈ 0.8.
+pub(crate) fn build_ratio(compilados: u32) -> f32 {
+    let n = compilados as f32;
+    1.0 - 1.0 / (n / 10.0 + 1.0)
 }
 
 fn desktop_path(prefix: &Path, unit: &Unit) -> PathBuf {
@@ -459,6 +513,7 @@ mod tests {
             description: "demo".into(),
             program: program.into(),
             scope: Scope::App,
+            suggests: Vec::new(),
             bin_hash: None,
             size_bytes: None,
         }
@@ -504,6 +559,24 @@ mod tests {
         assert!(pasos.contains(&Step::Hecho));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn progreso_de_build_avanza_monotono_y_no_se_clava() {
+        // El bug era barra clavada en 0%. Certificamos que cada crate compilado
+        // mueve la barra hacia arriba, sin llegar nunca a 1.0 (eso lo da la copia).
+        assert_eq!(build_ratio(0), 0.0);
+        let mut prev = 0.0;
+        for n in 1..=60 {
+            let r = build_ratio(n);
+            assert!(r > prev, "ratio debe crecer en {n}");
+            assert!(r < 1.0, "ratio nunca llega a 1.0 compilando");
+            prev = r;
+        }
+        assert!(build_ratio(10) > 0.4 && build_ratio(10) < 0.6);
+        // Detección de la línea de cargo.
+        assert!(is_artifact_line(r#"{"reason":"compiler-artifact","package_id":"x"}"#));
+        assert!(!is_artifact_line(r#"{"reason":"build-finished","success":true}"#));
     }
 
     #[test]

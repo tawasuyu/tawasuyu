@@ -49,6 +49,11 @@ pub struct Unit {
     /// Alcance (app de usuario / componente del sistema).
     #[serde(default)]
     pub scope: Scope,
+    /// Otras unidades que **complementan** a ésta (sugerencias blandas, no
+    /// requisitos). P.ej. `pata` sugiere `shuma` y viceversa. La UI las ofrece;
+    /// no bloquea la instalación.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggests: Vec<String>,
     /// Hash BLAKE3 del binario precompilado, si el manifiesto lo conoce
     /// (lado bundle/repo). `None` cuando la unidad se compila desde fuente.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -197,6 +202,7 @@ mod tests {
             description: "Editor de archivos".into(),
             program: "nada".into(),
             scope: Scope::App,
+            suggests: Vec::new(),
             bin_hash: Some(ArtifactHash::of_bytes(b"binario falso")),
             size_bytes: Some(123),
         }

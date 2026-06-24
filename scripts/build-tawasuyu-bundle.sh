@@ -33,6 +33,8 @@ PROGRAMS=(
   dominium-app-llimphi tinkuy-llimphi chaka-app-llimphi nakui-sheet-llimphi
   puriy raymi-app supay-app-llimphi sandokan-monitor nahual-shell-llimphi
   mirada-llimphi wawa-panel
+  # barra + shell (no están en app-bus):
+  pata shuma-shell-llimphi
   # componente de sistema (root):
   arje
 )

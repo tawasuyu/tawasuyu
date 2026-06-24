@@ -190,6 +190,7 @@ mod tests {
             description: "demo".into(),
             program: program.into(),
             scope: Scope::App,
+            suggests: Vec::new(),
             bin_hash: Some(hash),
             size_bytes: None,
         }

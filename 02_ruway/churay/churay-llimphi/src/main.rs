@@ -16,9 +16,11 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
+use llimphi_image::Image;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
+use marca::Brand;
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_progress::linear_progress_view;
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
@@ -31,7 +33,7 @@ const VIEWPORT: f32 = 392.0;
 #[derive(Clone, PartialEq)]
 enum UnitStatus {
     Idle,
-    Working(f32),
+    Working(Step, f32),
     Done,
     Failed(String),
 }
@@ -40,6 +42,13 @@ enum UnitStatus {
 enum Tab {
     Catalogo,
     Actualizaciones,
+}
+
+/// Pantalla actual: bienvenida (branding) → catálogo.
+#[derive(Clone, Copy, PartialEq)]
+enum Screen {
+    Bienvenida,
+    Catalogo,
 }
 
 struct Model {
@@ -58,6 +67,10 @@ struct Model {
     /// Mensaje de estado del repo remoto (resultado del último chequeo).
     repo_msg: String,
     buscando: bool,
+    /// Pantalla actual.
+    screen: Screen,
+    /// Logo de la suite (de `marca`), decodificado una vez.
+    logo: Option<Image>,
 }
 
 #[derive(Clone)]
@@ -75,6 +88,8 @@ enum Msg {
     ReexecRoot,
     BuscarRemoto,
     RemotoListo(Result<Manifest, String>),
+    Comenzar,
+    AgregarSugeridas,
 }
 
 struct Churay;
@@ -96,6 +111,32 @@ impl Model {
 
     fn reload_state(&mut self) {
         self.state = InstalledState::load(&self.cfg.prefix);
+    }
+
+    /// Índices de unidades **sugeridas** por las seleccionadas que todavía no
+    /// están marcadas (y son visibles en el modo). Para el banner "Agregar".
+    fn sugeridas_faltantes(&self) -> Vec<usize> {
+        let vis = self.visibles();
+        let seleccionadas: Vec<&str> = vis
+            .iter()
+            .filter(|&&i| self.selected[i])
+            .map(|&i| self.units[i].id.as_str())
+            .collect();
+        let mut faltan = Vec::new();
+        for &i in &vis {
+            if self.selected[i] {
+                continue;
+            }
+            let id = &self.units[i].id;
+            let sugerida = vis.iter().any(|&j| {
+                self.selected[j] && self.units[j].suggests.iter().any(|s| s == id)
+            });
+            // Evitá repetir las ya seleccionadas.
+            if sugerida && !seleccionadas.contains(&id.as_str()) {
+                faltan.push(i);
+            }
+        }
+        faltan
     }
 }
 
@@ -135,6 +176,8 @@ impl App for Churay {
             remote_manifest: None,
             repo_msg: String::new(),
             buscando: false,
+            screen: Screen::Bienvenida,
+            logo: llimphi_image::decode_bytes(&Brand::Suite.image()).ok(),
         }
     }
 
@@ -175,7 +218,7 @@ impl App for Churay {
                 }
                 for i in model.visibles() {
                     if model.selected[i] {
-                        model.status[i] = UnitStatus::Working(0.0);
+                        model.status[i] = UnitStatus::Working(Step::Resolviendo, 0.0);
                     }
                 }
                 model.installing = true;
@@ -197,10 +240,10 @@ impl App for Churay {
                     Msg::AllDone
                 });
             }
-            Msg::Progress(id, _step, r) => {
+            Msg::Progress(id, step, r) => {
                 if let Some(i) = model.units.iter().position(|u| u.id == id) {
                     if model.status[i] != UnitStatus::Done {
-                        model.status[i] = UnitStatus::Working(r);
+                        model.status[i] = UnitStatus::Working(step, r);
                     }
                 }
             }
@@ -263,12 +306,21 @@ impl App for Churay {
                     Err(e) => model.repo_msg = format!("Falló el chequeo: {e}"),
                 }
             }
+            Msg::Comenzar => model.screen = Screen::Catalogo,
+            Msg::AgregarSugeridas => {
+                for i in model.sugeridas_faltantes() {
+                    model.selected[i] = true;
+                }
+            }
         }
         model
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let t = &model.theme;
+        if model.screen == Screen::Bienvenida {
+            return bienvenida(model);
+        }
         let body = match model.tab {
             Tab::Catalogo => catalogo(model),
             Tab::Actualizaciones => actualizaciones(model),
@@ -277,6 +329,77 @@ impl App for Churay {
             .fill(t.bg_app)
             .children(vec![header(model), body, footer(model)])
     }
+}
+
+/// Pantalla introductoria: logo de la suite (de `marca`), nombre, tagline y un
+/// botón para entrar al catálogo.
+fn bienvenida(model: &Model) -> View<Msg> {
+    let t = &model.theme;
+    let meta = Brand::Suite.meta();
+    let accent = Color::from_rgba8(meta.accent[0], meta.accent[1], meta.accent[2], meta.accent[3]);
+
+    let logo = match &model.logo {
+        Some(img) => View::new(Style {
+            size: Size { width: length(168.0), height: length(168.0) },
+            ..Default::default()
+        })
+        .image(img.clone()),
+        None => View::new(Style {
+            size: Size { width: length(168.0), height: length(168.0) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(accent)
+        .radius(24.0)
+        .text("◆", 72.0, t.bg_app),
+    };
+
+    let nombre = View::new(Style {
+        size: Size { width: percent(1.0), height: length(48.0) },
+        ..Default::default()
+    })
+    .text_aligned(meta.name, 40.0, t.fg_text, Alignment::Center);
+    let tagline = View::new(Style {
+        size: Size { width: percent(1.0), height: length(28.0) },
+        ..Default::default()
+    })
+    .text_aligned(meta.tagline, 16.0, t.fg_muted, Alignment::Center);
+
+    let comenzar = View::new(Style {
+        size: Size { width: length(220.0), height: length(46.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(accent)
+    .radius(10.0)
+    .text("Comenzar", 17.0, t.bg_app)
+    .on_click(Msg::Comenzar);
+
+    col(percent(1.0), percent(1.0))
+        .fill(t.bg_app)
+        .gap(18.0)
+        .pad(40.0)
+        .children(vec![
+            View::new(Style { flex_grow: 1.0, ..Default::default() }),
+            wrap_center(logo),
+            nombre,
+            tagline,
+            wrap_center(comenzar),
+            View::new(Style { flex_grow: 1.0, ..Default::default() }),
+        ])
+}
+
+/// Centra horizontalmente un hijo en una fila de ancho completo.
+fn wrap_center(child: View<Msg>) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0), height: llimphi_ui::llimphi_layout::taffy::prelude::auto() },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![child])
 }
 
 // ---------- secciones ----------
@@ -434,7 +557,7 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
 
 fn estado_view(model: &Model, i: usize, instalada: bool, t: &Theme) -> View<Msg> {
     let (txt, color) = match &model.status[i] {
-        UnitStatus::Working(r) => (format!("{}%", (r * 100.0) as u32), t.accent),
+        UnitStatus::Working(step, r) => (paso_label(*step, *r), t.accent),
         UnitStatus::Done => ("✓ instalada".to_string(), t.accent),
         UnitStatus::Failed(_) => ("✗ falló".to_string(), t.fg_destructive),
         UnitStatus::Idle => {
@@ -555,7 +678,39 @@ fn footer(model: &Model) -> View<Msg> {
             instalar_boton(model, n_sel, t),
         ]);
 
-    let mut hijos = vec![row(percent(1.0), length(34.0)).gap(10.0).children(vec![resumen, acciones])];
+    let mut hijos = Vec::new();
+
+    // Banner de sugerencias: si lo elegido sugiere unidades sin marcar.
+    let sugeridas = model.sugeridas_faltantes();
+    if !sugeridas.is_empty() && !model.installing {
+        let nombres: Vec<&str> = sugeridas.iter().map(|&i| model.units[i].label.as_str()).collect();
+        let txt = View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
+            format!("Se complementan con: {}", nombres.join(", ")),
+            13.0,
+            t.fg_text,
+            Alignment::Start,
+        );
+        let add = View::new(Style {
+            size: Size { width: length(150.0), height: length(30.0) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(t.accent)
+        .radius(8.0)
+        .text("Agregar sugeridas", 12.0, t.bg_app)
+        .on_click(Msg::AgregarSugeridas);
+        hijos.push(
+            row(percent(1.0), length(38.0))
+                .gap(10.0)
+                .pad(8.0)
+                .fill(t.bg_input)
+                .radius(8.0)
+                .children(vec![txt, add]),
+        );
+    }
+
+    hijos.push(row(percent(1.0), length(34.0)).gap(10.0).children(vec![resumen, acciones]));
 
     if model.installing {
         let total = model.units.len().max(1) as f32;
@@ -611,6 +766,18 @@ fn row(w: Dimension, h: Dimension) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
+}
+
+fn paso_label(step: Step, r: f32) -> String {
+    let pct = (r * 100.0) as u32;
+    match step {
+        Step::Resolviendo => "resolviendo…".into(),
+        Step::Descargando => "bajando…".into(),
+        Step::Compilando => format!("compilando {pct}%"),
+        Step::Copiando => "copiando…".into(),
+        Step::Desktop => "instalando…".into(),
+        Step::Hecho => "✓".into(),
+    }
 }
 
 fn linea(txt: &str, color: Color, _t: &Theme) -> View<Msg> {

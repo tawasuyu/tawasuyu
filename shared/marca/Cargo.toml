@@ -1,0 +1,12 @@
+[package]
+name = "marca"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "marca — fuente única de la identidad visual (logos + nombre + tagline + acento) de la suite, hammer y wawa. Cambiás acá (o por override en disco) y se propaga a toda app que la muestre."
+
+[dependencies]
+directories = { workspace = true }

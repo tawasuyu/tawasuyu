@@ -92,6 +92,7 @@ mod tests {
             description: "x".into(),
             program: id.into(),
             scope: Scope::App,
+            suggests: Vec::new(),
             bin_hash: None,
             size_bytes: None,
         }

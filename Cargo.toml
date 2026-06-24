@@ -500,6 +500,7 @@ members = [
     "03_ukupacha/wawa-explorer/wawa-explorer-llimphi",
     "shared/allichay",
     "shared/app-bus",
+    "shared/marca",
     "shared/auth/auth-core",
     "shared/card/card-core",
     "shared/card/card-net",
@@ -551,6 +552,7 @@ repository = "https://git.tawasuyu.net/tawasuyu/tawasuyu"
 [workspace.dependencies]
 # === Configuración declarativa (vocabulario de esquemas) ===
 allichay = { path = "shared/allichay" }
+marca = { path = "shared/marca" }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
 churay-core = { path = "02_ruway/churay/churay-core" }

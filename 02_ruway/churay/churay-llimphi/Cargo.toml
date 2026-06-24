@@ -14,7 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 churay-core = { workspace = true }
+marca = { workspace = true }
 llimphi-ui = { workspace = true }
+llimphi-image = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-switch = { workspace = true }
