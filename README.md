@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/chakana-512.png" alt="tawasuyu" width="116"></p>
+
 # tawasuyu
 
 **A vertical software suite, built from the metal up.**
@@ -6,7 +8,7 @@
 
 tawasuyu is one person's answer to a simple question: *what would computing
 look like if you owned every layer of it?* It is a single Rust workspace of
-~450 crates that contains, among other things:
+~520 crates that contains, among other things:
 
 - an **operating system** that boots on bare metal, with no Linux underneath (*wawa*),
 - a **2D + 3D GUI engine** with its own widgets, layout, text, GPU pipeline and a voxel renderer (*llimphi*),
@@ -14,12 +16,13 @@ look like if you owned every layer of it?* It is a single Rust workspace of
 - a **web browser engine** (*puriy*),
 - a **writing environment** where one document lives as many parallel bodies (*pluma*),
 - an **ERP**, an **astronomy engine**, a **physics DSL**, a **P2P note system**,
-  an **image editor**, a **music engine**, a **terminal**… and the glue that
-  makes them one coherent system instead of a pile of programs.
+  an **image editor**, a **music engine**, a **native mail client**, a
+  **terminal**… and the glue that makes them one coherent system instead of a
+  pile of programs.
 
 Everything is built on the same native foundations — content-addressed
 storage (BLAKE3 + DAG + postcard), Ed25519 identity, a P2P layer — and
-foreign formats (docx, psd…) enter only through explicit bridges. No
+foreign formats (psd, xlsx…) enter only through explicit bridges. No
 Electron, no web stack in the desktop apps, no inherited UI toolkit.
 
 It is a working system in motion, not a polished product. The code is the
@@ -47,6 +50,7 @@ Pick something to run:
 | Particle physics from a DSL | `cargo run -p tinkuy-llimphi --example tinkuy_demo --release` |
 | A layered, non-destructive image editor | `cargo run -p tullpu-app-llimphi --release` |
 | The terminal / workspace shell | `cargo run -p shuma-shell-llimphi --release` |
+| A native mail client (IMAP/SMTP, semantic search, signed P2P "rail") | `cargo run -p paloma-app --release` |
 | A process manager (Linux units, live controls) | `SANDOKAN_MONITOR_SEED=1 cargo run -p sandokan-monitor-llimphi --release` |
 | A desktop launcher (bars, dock, global menu) | `cargo run -p launcher-llimphi --example launcher_demo` |
 | **The operating system booting in QEMU** | `cd 03_ukupacha/wawa && cargo +nightly run -p boot -Z bindeps` |
@@ -68,12 +72,12 @@ quadrants that mirror the four phases of the information cycle:
 tawasuyu/
 ├── 00_unanchay/   PERCEIVE — pluma · khipu · rimay · chaka · pineal · puriy
 ├── 01_yachay/     KNOW     — cosmos · dominium · nakui · iniy · tinkuy
-├── 02_ruway/      DO       — mirada · shuma · nahual · chasqui · takiy · llimphi
-│                             supay · media · nada · tullpu · cards · wawa (host)
+├── 02_ruway/      DO       — mirada · shuma · nahual · chasqui · takiy · llimphi · paloma
+│                             supay · media · nada · tullpu · churay · cards · wawa (host)
 ├── 03_ukupacha/   ROOT     — arje · wawa (kernel + WASM apps) · agora · minga
 │                             sandokan · wawa-explorer
 ├── shared/        cross-cutting cores — sandokan · format · card · auth · ssh
-│                             foreign-docx · rimay-localize · app-bus · launcher
+│                             foreign-psd · rimay-localize · app-bus · launcher
 └── web/           the landing you may have arrived from (not a product)
 ```
 
@@ -85,7 +89,8 @@ administrative folders. A quick who-is-who:
 - **khipu** — notes that fade unless attention keeps them alive; P2P, local-first.
 - **rimay** — language: embeddings daemon, localization.
 - **puriy** — a web browser engine (CSS/layout/JS via QuickJS).
-- **cosmos** — astronomy + astrology: ephemeris, sky-watching, tides, charts.
+- **cosmos** — astronomy + astrology: ephemeris, sky-watching, tides, charts,
+  and a 3D celestial sphere running on llimphi's GPU engine.
 - **dominium** — simulation; **tinkuy** — physics DSL; **nakui** — an ERP;
   **iniy** — claim verification.
 - **llimphi** — the GUI engine everything graphical is built on
@@ -94,6 +99,12 @@ administrative folders. A quick who-is-who:
 - **shuma** — terminal and workspace runtime; **nada** — a fast editor;
   **nahual** — universal viewers; **tullpu** — image editor; **takiy** — music;
   **media** — audio/video; **supay** — a retro 3D engine; **chasqui** — message broker.
+- **paloma** — native mail: IMAP/SMTP, semantic search, LLM-native
+  summarize/draft (local-first), Ed25519-signed messages, and a sovereign P2P
+  *rail* where the address *is* the public key — no From-spoofing.
+- **churay** — an Office-style graphical installer/updater for the suite on any
+  Linux (app catalog, one-click install, `.desktop` entries); shares a
+  content-addressed hash format with **hammer**.
 - **arje** — init; **agora** — identity and Ed25519 signatures end-to-end;
   **minga** — P2P collaboration; **sandokan** — the control plane (who starts,
   stops, supervises and observes units on Linux and on wawa).
