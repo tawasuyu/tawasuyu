@@ -15,14 +15,14 @@ impl DrmState {
     /// el estado de cada compositor y repinta.
     pub(super) fn resume_session(&mut self) {
         if self.libinput.resume().is_err() {
-            eprintln!("mirada-compositor · libinput.resume falló.");
+            dlog!("mirada-compositor · libinput.resume falló.");
         }
         if let Err(e) = self.drm.activate(false) {
-            eprintln!("mirada-compositor · drm.activate falló: {e}");
+            dlog!("mirada-compositor · drm.activate falló: {e}");
         }
         for ctx in &mut self.outputs {
             if let Err(e) = ctx.compositor.reset_state() {
-                eprintln!(
+                dlog!(
                     "mirada-compositor · compositor.reset_state[{}]: {e}",
                     ctx.name
                 );
@@ -41,7 +41,7 @@ impl DrmState {
 
         let n = self.app.windows.len();
         if n != self.last_windows {
-            eprintln!("mirada-compositor · ventanas en pantalla: {n}");
+            dlog!("mirada-compositor · ventanas en pantalla: {n}");
             self.last_windows = n;
         }
 

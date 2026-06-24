@@ -22,3 +22,9 @@ notify = { workspace = true }
 # El vocabulario de config declarativa: mirada describe su Config como un
 # Schema editable (impl Configurable) para el panel de control.
 allichay = { workspace = true }
+
+[dev-dependencies]
+# Fuzzing por propiedades: secuencias aleatorias de BodyEvent contra
+# Desktop::on_event — el Cerebro nunca debe paniquear y el foco siempre
+# debe apuntar a una ventana viva.
+proptest = { workspace = true }

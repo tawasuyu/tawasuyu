@@ -32,8 +32,8 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
     let (mut backend, mut winit) = match winit::init::<GlesRenderer>() {
         Ok(pair) => pair,
         Err(e) => {
-            eprintln!("mirada-compositor · no pude abrir la ventana: {e}");
-            eprintln!(
+            dlog!("mirada-compositor · no pude abrir la ventana: {e}");
+            dlog!(
                 "   El backend `winit` necesita una sesión gráfica anfitriona\n   \
                  (X11 o Wayland) donde dibujar la ventana del compositor.\n   \
                  Aquí no hay ninguna: DISPLAY='{}', WAYLAND_DISPLAY='{}',\n   \
@@ -123,7 +123,7 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                         }
                         if let Some(combo) = combo_string(mods, handle.modified_sym()) {
                             if is_escape_hatch(&combo) {
-                                eprintln!("mirada-compositor · salida de emergencia ({combo}).");
+                                dlog!("mirada-compositor · salida de emergencia ({combo}).");
                                 st.running = false;
                                 return FilterResult::Intercept(());
                             }
@@ -182,7 +182,7 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
             let (renderer, mut framebuffer) = match backend.bind() {
                 Ok(rf) => rf,
                 Err(e) => {
-                    eprintln!("mirada-compositor · bind del backbuffer winit falló ({e}); salteo el frame.");
+                    dlog!("mirada-compositor · bind del backbuffer winit falló ({e}); salteo el frame.");
                     break 'frame;
                 }
             };
@@ -222,20 +222,20 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
             let mut frame = match renderer.render(&mut framebuffer, size, Transform::Flipped180) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("mirada-compositor · render winit falló ({e}); salteo el frame.");
+                    dlog!("mirada-compositor · render winit falló ({e}); salteo el frame.");
                     break 'frame;
                 }
             };
             if let Err(e) = frame.clear(Color32F::new(0.05, 0.05, 0.08, 1.0), &[damage]) {
-                eprintln!("mirada-compositor · clear winit falló ({e}); salteo el frame.");
+                dlog!("mirada-compositor · clear winit falló ({e}); salteo el frame.");
                 break 'frame;
             }
             if let Err(e) = draw_render_elements(&mut frame, 1.0, &elements, &[damage]) {
-                eprintln!("mirada-compositor · draw winit falló ({e}); salteo el frame.");
+                dlog!("mirada-compositor · draw winit falló ({e}); salteo el frame.");
                 break 'frame;
             }
             if let Err(e) = frame.finish() {
-                eprintln!("mirada-compositor · finish winit falló ({e}); salteo el frame.");
+                dlog!("mirada-compositor · finish winit falló ({e}); salteo el frame.");
                 break 'frame;
             }
 
@@ -281,14 +281,20 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                 .insert_client(stream, Arc::new(ClientState::with_pid(pid)))
             {
                 Ok(client) => clients.push(client),
-                Err(e) => eprintln!("mirada-compositor · no pude registrar un cliente winit ({e})."),
+                Err(e) => dlog!("mirada-compositor · no pude registrar un cliente winit ({e})."),
             }
         }
-        display.dispatch_clients(&mut state)?;
+        // Aislado igual que en DRM: un panic en un handler de cliente no
+        // debe tumbar la sesión anidada (queda crash-*.log con las migas).
+        crate::diag::aislar("winit:dispatch_clients", || {
+            if let Err(e) = display.dispatch_clients(&mut state) {
+                dlog!("dispatch (winit): {e}");
+            }
+        });
         display.flush_clients()?;
 
         if let Err(e) = backend.submit(Some(&[damage])) {
-            eprintln!("mirada-compositor · submit winit falló ({e}); sigo al próximo frame.");
+            dlog!("mirada-compositor · submit winit falló ({e}); sigo al próximo frame.");
         }
     }
 

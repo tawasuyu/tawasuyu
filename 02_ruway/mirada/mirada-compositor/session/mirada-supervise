@@ -1,0 +1,88 @@
+#!/bin/sh
+# mirada-supervise — corre `mirada-compositor` bajo supervisión con
+# reinicio + backoff, para los caminos de arranque FALLBACK (DM externo o
+# `mirada-dm`). El camino CANÓNICO es arje-zero como PID 1, que ya da esta
+# supervisión por el fractal; esto es su equivalente para hosts que aún no
+# migraron.
+#
+# Por qué: el compositor persiste la forma del escritorio (session.ron) y la
+# restaura al arrancar. Así, si un frame/cliente lo tumba, reiniciarlo deja
+# al usuario de vuelta con su teselado en lugar de patearlo a la TTY. El
+# postmortem de cada caída queda en el directorio de debug (crash-*.log del
+# propio compositor + esta bitácora de supervisión).
+#
+# Uso:   mirada-supervise [args del compositor...]   (p. ej. --drm  ·  --greeter --drm)
+#
+# Política (overridable por entorno):
+#   MIRADA_SUPERVISE=0          desactiva el reinicio (un solo exec, como antes).
+#   MIRADA_RESTART_MAX=5        cortar si hay > N caídas dentro de la ventana.
+#   MIRADA_RESTART_WINDOW=60    ventana en segundos para contar caídas seguidas.
+set -u
+
+# Mismo dir de debug que resuelve el compositor (diag.rs): persistente, no /tmp.
+DIR="${MIRADA_DEBUG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mirada}"
+mkdir -p "$DIR" 2>/dev/null || true
+LOG="$DIR/supervisor.log"
+
+stamp() { date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '?'; }
+note()  { echo "[$(stamp)] $*" >>"$LOG" 2>/dev/null || true; echo "mirada-supervise · $*" >&2; }
+
+COMPOSITOR="${MIRADA_COMPOSITOR_BIN:-mirada-compositor}"
+
+# Salida directa (sin supervisión) si se pidió: un solo exec, como el viejo
+# comportamiento. Útil para depurar el arranque sin el lazo de reinicio.
+if [ "${MIRADA_SUPERVISE:-1}" = "0" ]; then
+    exec "$COMPOSITOR" "$@"
+fi
+
+MAX="${MIRADA_RESTART_MAX:-5}"
+WINDOW="${MIRADA_RESTART_WINDOW:-60}"
+
+delay_ms=500          # backoff inicial
+window_start=$(date +%s 2>/dev/null || echo 0)
+crashes=0
+
+note "arranco la supervisión de «$COMPOSITOR $*» (dir de debug: $DIR)"
+
+while : ; do
+    "$COMPOSITOR" "$@"
+    code=$?
+
+    # Salida limpia = logout / salida de emergencia (Ctrl+Alt+Backspace).
+    # No reiniciamos: el usuario quiso terminar la sesión.
+    if [ "$code" -eq 0 ]; then
+        note "el compositor salió limpio (logout); fin de la sesión."
+        exit 0
+    fi
+
+    # Caída. Contamos dentro de la ventana deslizante.
+    now=$(date +%s 2>/dev/null || echo 0)
+    elapsed=$(( now - window_start ))
+    if [ "$elapsed" -gt "$WINDOW" ]; then
+        # La ventana venció con la sesión sana: reseteamos conteo y backoff.
+        window_start=$now
+        crashes=0
+        delay_ms=500
+    fi
+    crashes=$(( crashes + 1 ))
+
+    # Apuntamos al último reporte del compositor, si dejó alguno.
+    last_crash=$(ls -t "$DIR"/crash-*.log 2>/dev/null | head -1)
+    note "CAÍDA #$crashes (exit $code) en ${elapsed}s. Reporte: ${last_crash:-<ninguno>}"
+
+    # Tope anti-loop: demasiadas caídas seguidas → no insistir (evita freír la
+    # máquina con un crash-loop). Salimos con fallo para que el DM externo
+    # muestre su pantalla, o `mirada-dm` devuelva a la TTY.
+    if [ "$crashes" -gt "$MAX" ]; then
+        note "más de $MAX caídas en ${WINDOW}s — corto la supervisión. Revisá $DIR/crash-*.log"
+        exit "$code"
+    fi
+
+    # Backoff exponencial con tope 30s antes de reintentar.
+    secs=$(( delay_ms / 1000 ))
+    frac=$(( delay_ms % 1000 ))
+    note "reintento en $(printf '%d.%03d' "$secs" "$frac")s (restaura session.ron)…"
+    sleep "$(printf '%d.%03d' "$secs" "$frac")" 2>/dev/null || sleep 1
+    delay_ms=$(( delay_ms * 2 ))
+    [ "$delay_ms" -gt 30000 ] && delay_ms=30000
+done

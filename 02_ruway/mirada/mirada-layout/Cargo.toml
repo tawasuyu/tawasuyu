@@ -23,3 +23,9 @@ serde = { version = "1", optional = true, default-features = false, features = [
 
 [features]
 serde = ["dep:serde"]
+
+[dev-dependencies]
+# Fuzzing por propiedades del motor de teselado: invariantes (cuenta exacta,
+# rects no degenerados, contención en pantalla) sobre entradas aleatorias.
+# Versión directa (no `workspace = true`): este crate es self-contained.
+proptest = "1"

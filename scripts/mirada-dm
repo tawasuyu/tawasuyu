@@ -52,4 +52,14 @@ umask 0
 # de lo que lanza, que hereda estos descriptores) va a un log diagnosticable.
 LOG="${MIRADA_LOG:-/tmp/mirada.log}"
 echo "mirada-dm: log de la sesión en $LOG"
-exec mirada-compositor --greeter --drm "$@" >"$LOG" 2>&1
+
+# Bajo supervisión: si el compositor cae, vuelve (con backoff) y restaura la
+# sesión, en vez de devolver la TTY pelada. El postmortem detallado queda en el
+# dir de debug del compositor (~/.local/state/mirada o /root/.local/state/mirada
+# acá, que corre como root); este `$LOG` guarda el flujo de la sesión.
+# `MIRADA_SUPERVISE=0` desactiva. Fallback al exec pelado sin el supervisor.
+if command -v mirada-supervise >/dev/null 2>&1; then
+    exec mirada-supervise --greeter --drm "$@" >"$LOG" 2>&1
+else
+    exec mirada-compositor --greeter --drm "$@" >"$LOG" 2>&1
+fi

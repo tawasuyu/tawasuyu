@@ -193,7 +193,7 @@ pub(crate) fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &Gles
                 formats,
                 move |client| dmabuf_permitido_para(&caps, client),
             );
-            eprintln!(
+            dlog!(
                 "mirada-compositor · dmabuf v3 sin feedback ({n} fmt) — sin nodo de render; \
                  los clientes Vulkan podrían ver 0 formatos."
             );
@@ -489,7 +489,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
                     Some(s)
                 }
                 Err(e) => {
-                    eprintln!("mirada-compositor · sin API de control: {e}");
+                    dlog!("mirada-compositor · sin API de control: {e}");
                     None
                 }
             }

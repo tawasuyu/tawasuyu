@@ -186,7 +186,7 @@ impl WlrLayerShellHandler for App {
         let desktop = DesktopLayerSurface::new(surface, namespace.clone());
         let mut map = layer_map_for_output(&output);
         if let Err(e) = map.map_layer(&desktop) {
-            eprintln!("mirada-compositor · no pude mapear el layer surface «{namespace}»: {e:?}");
+            dlog!("mirada-compositor · no pude mapear el layer surface «{namespace}»: {e:?}");
         }
         drop(map);
         self.recompute_reservations();
@@ -441,7 +441,7 @@ impl XdgShellHandler for App {
             state.geometry = positioner.get_geometry();
         });
         if let Err(e) = self.popups.track_popup(smithay::desktop::PopupKind::Xdg(surface.clone())) {
-            eprintln!("mirada · no se pudo trackear el popup: {e}");
+            dlog!("mirada · no se pudo trackear el popup: {e}");
         }
         let _ = surface.send_configure();
     }
@@ -557,7 +557,7 @@ impl ClientDndGrabHandler for App {
         let (read_fd, write_fd) = match nix::unistd::pipe() {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("mirada: dnd pipe falló: {e}");
+                dlog!("mirada: dnd pipe falló: {e}");
                 return;
             }
         };
@@ -573,7 +573,9 @@ impl ClientDndGrabHandler for App {
             let mut f = std::fs::File::from(read_fd);
             let _ = f.read_to_end(&mut buf);
             let paths = drop_bridge::parse_uri_list(&buf);
-            *slot.lock().unwrap() = Some(paths);
+            // Tolerante a envenenamiento: si el otro lado paniqueó tenemos el
+            // dato igual, no hay razón para propagar el panic a este hilo.
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(paths);
         });
     }
 
@@ -590,11 +592,11 @@ impl ClientDndGrabHandler for App {
         std::thread::spawn(move || {
             // El hilo lector suele terminar en µs; toleramos hasta ~500ms.
             for _ in 0..100 {
-                let ready = slot.lock().unwrap().clone();
+                let ready = slot.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 if let Some(paths) = ready {
                     if !paths.is_empty() {
                         match drop_bridge::send(pid as u32, &paths) {
-                            Ok(()) => eprintln!(
+                            Ok(()) => dlog!(
                                 "mirada: drop → pid {pid}: {} archivo(s) reenviados",
                                 paths.len()
                             ),
@@ -605,7 +607,7 @@ impl ClientDndGrabHandler for App {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            eprintln!("mirada: drop: el origen no entregó el uri-list a tiempo");
+            dlog!("mirada: drop: el origen no entregó el uri-list a tiempo");
         });
     }
 }

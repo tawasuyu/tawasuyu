@@ -37,4 +37,13 @@ command -v wawa-panel >/dev/null 2>&1 && wawa-panel --apply-active || true
 
 # El backend DRM toma la TTY entera. Los programas de arranque van en
 # ~/.config/mirada/autostart (uno por línea).
-exec mirada-compositor --drm
+#
+# Bajo supervisión (reinicio + backoff): si el compositor cae, vuelve y
+# restaura la sesión (session.ron) en vez de patearte a la TTY. El postmortem
+# queda en el dir de debug. `MIRADA_SUPERVISE=0` vuelve al exec pelado.
+# Fallback al binario directo si `mirada-supervise` no está instalado.
+if command -v mirada-supervise >/dev/null 2>&1; then
+    exec mirada-supervise --drm
+else
+    exec mirada-compositor --drm
+fi

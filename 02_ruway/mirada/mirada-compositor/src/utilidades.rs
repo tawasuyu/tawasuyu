@@ -113,7 +113,7 @@ pub(crate) fn exec_session(cmd: &str, as_user: Option<&UserInfo>) -> ! {
         }
     }
     let err = command.exec(); // sólo retorna si falla
-    eprintln!("mirada-compositor · no pude ceder a «{cmd}»: {err}");
+    dlog!("mirada-compositor · no pude ceder a «{cmd}»: {err}");
     std::process::exit(1);
 }
 
@@ -426,7 +426,7 @@ pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: 
     }
     match command.spawn() {
         Ok(child) => println!("mirada-compositor · lanzado (pid {}): {cmd}", child.id()),
-        Err(e) => eprintln!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
+        Err(e) => dlog!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
     }
 }
 
@@ -550,7 +550,7 @@ where
         }
         match child.wait() {
             Ok(status) => println!("mirada-compositor · el greeter terminó ({status})."),
-            Err(e) => eprintln!("mirada-compositor · wait(greeter): {e}"),
+            Err(e) => dlog!("mirada-compositor · wait(greeter): {e}"),
         }
     });
     Ok(stdin)

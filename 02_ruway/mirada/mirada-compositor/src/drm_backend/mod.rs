@@ -304,8 +304,12 @@ fn make_procedural_wallpaper(
 
 /// Interpola entre stops `(t, rgb)` para `t in 0..1`. Lineal por tramo.
 fn mezcla_stops(stops: &[(f32, [u8; 3])], t: f32) -> (u8, u8, u8) {
+    // Los stops vienen de config: una lista vacía no debe tumbar el arranque.
+    let Some(&first) = stops.first() else {
+        return (0, 0, 0);
+    };
     let t = t.clamp(0.0, 1.0);
-    let mut prev = stops[0];
+    let mut prev = first;
     for s in &stops[1..] {
         if t <= s.0 {
             let span = (s.0 - prev.0).max(1e-6);
@@ -343,7 +347,7 @@ fn load_wallpaper(
     let img = match image::open(path) {
         Ok(i) => i,
         Err(e) => {
-            eprintln!("mirada-compositor · wallpaper «{path}» no carga ({e}); fondo sólido.");
+            dlog!("mirada-compositor · wallpaper «{path}» no carga ({e}); fondo sólido.");
             return None;
         }
     };
@@ -365,7 +369,7 @@ fn make_marca_wallpaper(
     let img = match image::load_from_memory(&bytes) {
         Ok(i) => i,
         Err(e) => {
-            eprintln!("mirada-compositor · wallpaper de marca no decodifica ({e}); gradiente.");
+            dlog!("mirada-compositor · wallpaper de marca no decodifica ({e}); gradiente.");
             return None;
         }
     };
@@ -736,7 +740,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             } else {
                 ""
             };
-            eprintln!("      modo de «{name}»: {mw}×{mh} @ {} Hz{pref}", m.vrefresh());
+            dlog!("      modo de «{name}»: {mw}×{mh} @ {} Hz{pref}", m.vrefresh());
         }
         // Elige el modo de mayor área (a igualdad, mayor refresco) — el
         // nativo del panel.
@@ -768,7 +772,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             used_crtcs.push(crtc_h);
             chosen.push((conn_handle, crtc_h, mode, name));
         } else {
-            eprintln!("      salida «{name}» sin CRTC libre — se ignora");
+            dlog!("      salida «{name}» sin CRTC libre — se ignora");
         }
     }
     if chosen.is_empty() {
@@ -980,7 +984,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
                 if let Some(idx) = state.output_index_by_crtc(crtc) {
                     let ctx = &mut state.outputs[idx];
                     if let Err(e) = ctx.compositor.frame_submitted() {
-                        eprintln!(
+                        dlog!(
                             "mirada-compositor · frame_submitted[{}]: {e}",
                             ctx.name
                         );
@@ -988,7 +992,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
                     ctx.pending_flip = false;
                 }
             }
-            DrmEvent::Error(e) => eprintln!("mirada-compositor · DRM: {e}"),
+            DrmEvent::Error(e) => dlog!("mirada-compositor · DRM: {e}"),
         })
         .map_err(|e| format!("insert drm: {e}"))?;
 
@@ -1001,7 +1005,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let udev = match smithay::backend::udev::UdevBackend::new(&seat_name) {
         Ok(u) => u,
         Err(e) => {
-            eprintln!("mirada-compositor · UdevBackend no arranca ({e}); sin hotplug");
+            dlog!("mirada-compositor · UdevBackend no arranca ({e}); sin hotplug");
             return Err(format!("insert drm: udev: {e}").into());
         }
     };
@@ -1010,14 +1014,14 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             use smithay::backend::udev::UdevEvent;
             match event {
                 UdevEvent::Added { device_id, path } => {
-                    eprintln!(
+                    dlog!(
                         "mirada-compositor · hotplug · GPU añadida: {} ({device_id:?}); ignorada (multi-GPU pendiente)",
                         path.display()
                     );
                 }
                 UdevEvent::Changed { device_id: _ } => state.detect_connector_changes(),
                 UdevEvent::Removed { device_id, .. } => {
-                    eprintln!(
+                    dlog!(
                         "mirada-compositor · hotplug · GPU retirada ({device_id:?}); ignorada (multi-GPU pendiente)"
                     );
                 }
@@ -1045,7 +1049,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             Generic::new(listener, Interest::READ, CalloopMode::Level),
             |_readiness, listener, state| {
                 while let Some(stream) = listener.accept()? {
-                    eprintln!("mirada-compositor · cliente Wayland conectado.");
+                    dlog!("mirada-compositor · cliente Wayland conectado.");
                     // PID del cliente para el linaje de las constelaciones.
                     let pid = crate::peer_pid(&stream);
                     let _ = state
@@ -1065,9 +1069,14 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             Generic::new(poll_fd, Interest::READ, CalloopMode::Level),
             |_readiness, _fd, state| {
                 let DrmState { display, app, .. } = state;
-                if let Err(e) = display.dispatch_clients(app) {
-                    eprintln!("mirada-compositor · dispatch: {e}");
-                }
+                // Aislado: el dispatch corre los handlers de protocolo, que es
+                // donde un cliente buggy podría disparar un panic. Lo atajamos
+                // para que tumbe su request, no la sesión entera (queda crash-*.log).
+                crate::diag::aislar("drm:dispatch_clients", || {
+                    if let Err(e) = display.dispatch_clients(app) {
+                        dlog!("dispatch (drm): {e}");
+                    }
+                });
                 let _ = display.flush_clients();
                 Ok(PostAction::Continue)
             },
@@ -1161,7 +1170,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             if t.is_some() {
                 println!("mirada-compositor · fuente de etiquetas cargada.");
             } else {
-                eprintln!("mirada-compositor · sin fuente para etiquetas; no pinto títulos.");
+                dlog!("mirada-compositor · sin fuente para etiquetas; no pinto títulos.");
             }
             t
         },

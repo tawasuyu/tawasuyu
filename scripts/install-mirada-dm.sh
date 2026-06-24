@@ -98,6 +98,11 @@ done
 sudo install -Dm755 "$MC/session/mirada-session"      /usr/local/bin/mirada-session
 sudo install -Dm755 "$MC/session/mirada-session-pata" /usr/local/bin/mirada-session-pata
 sudo install -Dm755 "$REPO/scripts/mirada-dm"         /usr/local/bin/mirada-dm
+# Supervisor de fallback: reinicia el compositor con backoff y restaura la
+# sesión si cae (los scripts de arriba lo usan si está presente; el camino
+# canónico arje-zero da esta supervisión por el fractal). Registra cada caída
+# en el directorio de debug del compositor.
+sudo install -Dm755 "$MC/session/mirada-supervise"    /usr/local/bin/mirada-supervise
 
 # PAM del greeter (Artix/Arch: la pila system-login sirve tal cual).
 sudo install -Dm644 "$REPO/shared/auth/auth-core/data/mirada" /etc/pam.d/mirada

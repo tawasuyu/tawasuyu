@@ -33,4 +33,10 @@ grep -qxF "$LINE" "$AUTO" 2>/dev/null || echo "$LINE" >> "$AUTO"
 # viejo de otra vista. Best-effort: si wawa-panel no está, seguimos igual.
 command -v wawa-panel >/dev/null 2>&1 && wawa-panel --apply-active || true
 
-exec mirada-compositor --drm
+# Bajo supervisión (reinicio + backoff con restauración de session.ron). Ver
+# mirada-supervise. `MIRADA_SUPERVISE=0` desactiva. Fallback al exec pelado.
+if command -v mirada-supervise >/dev/null 2>&1; then
+    exec mirada-supervise --drm
+else
+    exec mirada-compositor --drm
+fi

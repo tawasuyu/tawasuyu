@@ -93,6 +93,8 @@ use mirada_brain::{
 };
 use mirada_link::BodyLink;
 
+#[macro_use]
+mod diag;
 mod drm_backend;
 mod handoff;
 mod menu;
@@ -115,6 +117,11 @@ pub(crate) use utilidades::*;
 pub(crate) use setup::*;
 
 fn main() {
+    // Telemetría primero: el panic hook y la bitácora deben estar en pie
+    // antes de tocar nada, para que cualquier fallo del arranque ya quede
+    // en disco (en el directorio local persistente, no /tmp).
+    diag::init();
+
     // Banderas en cualquier orden: `--greeter` (modo DM) es ortogonal
     // al backend (`--winit` anidado · `--drm` nativo · auto si falta).
     let args: Vec<String> = std::env::args().skip(1).collect();

@@ -254,6 +254,9 @@ impl App {
 
     /// Inyecta un evento del Cuerpo en el Cerebro y aplica su respuesta.
     pub(crate) fn brain_feed(&mut self, event: BodyEvent) {
+        // Miga para el contexto de un eventual crash: el último puñado de
+        // eventos del Cuerpo suele explicar el panic mejor que el backtrace.
+        crate::diag::miga(format!("evt {event:?}"));
         let cmds = match &mut self.brain {
             Brain::Embedded(desktop) => desktop.on_event(event),
             Brain::Linked(link) => {
@@ -651,7 +654,7 @@ impl App {
                 }
             }
             Err(e) => {
-                eprintln!("mirada-compositor · keymap inválido, conservo el anterior: {e}")
+                dlog!("mirada-compositor · keymap inválido, conservo el anterior: {e}")
             }
         }
     }
@@ -673,7 +676,7 @@ impl App {
                 }
             }
             Err(e) => {
-                eprintln!("mirada-compositor · config inválida, conservo la anterior: {e}")
+                dlog!("mirada-compositor · config inválida, conservo la anterior: {e}")
             }
         }
     }
@@ -690,7 +693,7 @@ impl App {
                 }
             }
             Err(e) => {
-                eprintln!("mirada-compositor · reglas inválidas, conservo las anteriores: {e}")
+                dlog!("mirada-compositor · reglas inválidas, conservo las anteriores: {e}")
             }
         }
     }
@@ -898,7 +901,7 @@ impl App {
     /// salvo en modo greeter, donde no se lanza nada. Lo usa el menú raíz.
     pub(crate) fn spawn_user(&self, cmd: &str) {
         if self.mode == BodyMode::Greeter {
-            eprintln!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
+            dlog!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
             return;
         }
         spawn_command(cmd, self.session_user.as_ref(), &self.session_env);
@@ -1103,7 +1106,7 @@ impl App {
                 // En modo greeter no se lanza nada: la pantalla de login
                 // no es un sitio desde donde abrir programas.
                 if self.mode == BodyMode::Greeter {
-                    eprintln!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
+                    dlog!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
                 } else {
                     spawn_command(&cmd, self.session_user.as_ref(), &self.session_env);
                 }
@@ -1417,7 +1420,7 @@ impl App {
             ticket.user.name, ticket.user.uid
         );
         if !nix::unistd::geteuid().is_root() {
-            eprintln!(
+            dlog!(
                 "mirada-compositor · aviso: no corro como root — la sesión \
                  heredará mis privilegios, sin setuid al usuario."
             );
@@ -1520,7 +1523,7 @@ impl App {
             if std::path::Path::new(&bus_path).exists() {
                 println!("mirada-compositor · bus D-Bus de sesión listo en {bus_path}.");
             } else {
-                eprintln!(
+                dlog!(
                     "mirada-compositor · el bus D-Bus no apareció (¿dbus-daemon instalado?); las apps que lo exijan pueden fallar."
                 );
             }
