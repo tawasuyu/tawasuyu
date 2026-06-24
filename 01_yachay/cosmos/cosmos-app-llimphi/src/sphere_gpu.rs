@@ -29,14 +29,14 @@ use std::sync::{Arc, Mutex};
 
 use cosmos_render::{LayerKind, Palette, RenderModel, Rgba};
 use llimphi_3d::glam::{Mat4, Vec3};
-use llimphi_3d::{push_cube, Billboard, Billboards, Camera3d, Renderer3d, SkyBackdrop, SkyParams, Vertex3d};
+use llimphi_3d::{
+    push_cube, Billboard, Billboards, Camera3d, PostFx, PostFxConfig, Renderer3d, SkyBackdrop,
+    SkyParams, Vertex3d,
+};
 use llimphi_ui::llimphi_hal::wgpu;
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub(crate) const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// Depth de la escena 3D. Debe coincidir con el de `llimphi-3d` (su
-/// `scene::DEPTH_FORMAT` es `pub(crate)`, así que lo espejamos acá).
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Oblicuidad de la eclíptica (J2000), para inclinar el ecuador celeste.
 const OBLIQUITY_DEG: f32 = 23.439_29;
@@ -48,17 +48,11 @@ pub(crate) struct SphereGeom {
     billboards: Vec<Billboard>,
 }
 
-/// Depth attachment cacheado, recreado cuando cambia el tamaño del frame.
-struct DepthBuffer {
-    view: wgpu::TextureView,
-    w: u32,
-    h: u32,
-}
-
-/// Estado GPU persistente de la esfera: depth + estructura (malla) + cuerpos
-/// (billboards) + campo estelar. Vive en el `Model` tras `Arc<Mutex<…>>`.
+/// Estado GPU persistente de la esfera: post-proceso (SSAA + bloom) +
+/// estructura (malla) + cuerpos (billboards) + campo estelar. Vive en el
+/// `Model` tras `Arc<Mutex<…>>`.
 pub(crate) struct SphereGpu {
-    depth: Option<DepthBuffer>,
+    fx: PostFx,
     mesh: Renderer3d,
     bodies: Billboards,
     sky: SkyBackdrop,
@@ -80,35 +74,25 @@ impl SphereGpu {
         let mut sky = SkyBackdrop::new(device, FMT);
         let (sw, sh, field) = starfield_panorama();
         sky.set_texture(device, queue, sw, sh, &field);
-        Self {
-            depth: None,
-            mesh: Renderer3d::new(device, FMT),
-            bodies,
-            sky,
-        }
-    }
-
-    fn ensure_depth(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        if matches!(&self.depth, Some(d) if d.w == w && d.h == h) {
-            return;
-        }
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("cosmos-sphere-depth"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        self.depth = Some(DepthBuffer { view, w, h });
+        // Bloom suave para una carta astral: SSAA 2× + glow que prende los
+        // puntos brillantes (planetas/estrellas) sin lavar las estructuras.
+        let fx = PostFx::with_config(
+            device,
+            FMT,
+            PostFxConfig {
+                supersample: 2,
+                bloom_strength: 0.9,
+                bloom_threshold: 0.45,
+                bloom_knee: 0.35,
+                bloom_radius: 2.6,
+            },
+        );
+        Self { fx, mesh: Renderer3d::new(device, FMT), bodies, sky }
     }
 
     /// Sube la geometría del frame y dibuja la esfera orbitada dentro de
-    /// `rect` (px del target). `yaw`/`pitch` en grados; `dist` = distancia
-    /// de la cámara al centro.
+    /// `rect` (px del target), con SSAA + bloom. `yaw`/`pitch` en grados;
+    /// `dist` = distancia de la cámara al centro.
     #[allow(clippy::too_many_arguments)]
     fn draw(
         &mut self,
@@ -132,7 +116,7 @@ impl SphereGpu {
         let pitch = pitch_deg.to_radians();
         let cam = Camera3d::orbit(Vec3::ZERO, yaw, pitch, dist);
 
-        // Subir buffers/uniforms antes de abrir el pase.
+        // Subir buffers/uniforms antes de abrir los pases.
         self.mesh.set_geometry(device, &geom.verts, &geom.indices);
         self.mesh.set_model(Mat4::IDENTITY);
         self.mesh.upload(queue, aspect, &cam);
@@ -156,45 +140,22 @@ impl SphereGpu {
             },
         );
 
-        self.ensure_depth(device, w, h);
-        let depth_view = &self.depth.as_ref().unwrap().view;
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("cosmos-sphere-pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        pass.set_viewport(rx, ry, rw, rh, 0.0, 1.0);
-        let sx = rx.max(0.0);
-        let sy = ry.max(0.0);
-        let sw = (rw.min(w as f32 - sx)).max(0.0) as u32;
-        let sh = (rh.min(h as f32 - sy)).max(0.0) as u32;
-        if sw == 0 || sh == 0 {
-            return;
+        // Escena → target intermedio supersampleado (del tamaño del panel).
+        let ow = rw.round().max(1.0) as u32;
+        let oh = rh.round().max(1.0) as u32;
+        self.fx.prepare(device, queue, (ow, oh));
+        // Clear = azul-noche (mismo base que el campo estelar) donde el
+        // panorama no llega.
+        let clear = wgpu::Color { r: 6.0 / 255.0, g: 8.0 / 255.0, b: 18.0 / 255.0, a: 1.0 };
+        {
+            let mut pass = self.fx.scene_pass(encoder, clear);
+            // Fondo (sin escribir depth) → estructura (escribe) → cuerpos.
+            self.sky.draw(&mut pass);
+            self.mesh.draw(&mut pass);
+            self.bodies.draw(&mut pass);
         }
-        pass.set_scissor_rect(sx as u32, sy as u32, sw, sh);
-
-        // Fondo (sin escribir depth) → estructura (escribe depth) → cuerpos.
-        self.sky.draw(&mut pass);
-        self.mesh.draw(&mut pass);
-        self.bodies.draw(&mut pass);
+        // Bajada SSAA + bloom, confinada al rect del panel (no pisa el chrome).
+        self.fx.resolve_in(encoder, target, rect, (w, h));
     }
 }
 
