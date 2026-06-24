@@ -528,10 +528,16 @@ pub(crate) fn fulfill_semantic_requests(m: &mut Model, handle: &Handle<Msg>) {
                 Ok(h) => (true, h),
                 Err(e) => (false, vec![(e, 0.0)]),
             };
-            Msg::Module(
-                slot_back,
-                ModuleMsg::Shell(shuma_module_shell::Msg::SemanticResult { ok, hits }),
-            )
+            // `files` va al panel del Explorer (chasis); `history` al output del
+            // shell (módulo).
+            if req.scope == "files" {
+                Msg::FileSearchResult { slot: slot_back, query: req.query.clone(), ok, hits }
+            } else {
+                Msg::Module(
+                    slot_back,
+                    ModuleMsg::Shell(shuma_module_shell::Msg::SemanticResult { ok, hits }),
+                )
+            }
         });
     }
     if let Some(Instance { state: ModuleState::Shell(st), .. }) = m.topbar.as_mut() {

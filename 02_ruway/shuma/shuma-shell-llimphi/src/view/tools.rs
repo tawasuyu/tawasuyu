@@ -290,6 +290,13 @@ pub(super) fn history_row(cmd: &str, count: usize, theme: &Theme) -> View<Msg> {
 /// `model.explorer` (lo trae `reconcile_explorer` off-thread por SSH);
 /// para locales lee el filesystem directamente con `read_dir`.
 pub(super) fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    // Una búsqueda de archivos activa (`:buscar-archivos`) de la sesión actual
+    // reemplaza el listado del cwd por sus resultados rankeados.
+    if let Some(fs) = &model.file_search {
+        if fs.session == model.active_session {
+            return explorer_search_panel(fs, theme);
+        }
+    }
     let remoto = model.active().and_then(|s| match &s.shell().state {
         ModuleState::Shell(sh)
             if matches!(sh.source, Source::Remote { .. } | Source::RemoteContainer { .. }) =>
@@ -431,6 +438,94 @@ fn explorer_row(dir: bool, name: &str, theme: &Theme) -> View<Msg> {
         if dir { theme.accent } else { theme.fg_text },
         Alignment::Start,
     )
+}
+
+/// Panel del Explorer en modo **búsqueda de archivos** (`:buscar-archivos`):
+/// encabezado con la consulta + ✕ para volver al cwd, y las rutas rankeadas
+/// como filas clickeables (insertan la ruta en el input).
+fn explorer_search_panel(fs: &crate::types::FileSearch, theme: &Theme) -> View<Msg> {
+    let mut filas: Vec<View<Msg>> = vec![explorer_search_header(&fs.query, theme)];
+    if fs.hits.is_empty() {
+        filas.push(explorer_note("(sin coincidencias por significado)", theme));
+    } else {
+        for (path, score) in &fs.hits {
+            filas.push(explorer_search_row(path, *score, theme));
+        }
+    }
+    explorer_column(filas)
+}
+
+/// Encabezado del modo búsqueda: «🔎 query» + botón ✕ que limpia la búsqueda.
+fn explorer_search_header(query: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let titulo = View::new(Style {
+        size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(format!("🔎 {query}"), 11.0, theme.fg_muted, Alignment::Start);
+    let limpiar = View::new(Style {
+        size: Size { width: length(24.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_button_hover)
+    .text_aligned("✕".to_string(), 12.0, theme.accent, Alignment::Center)
+    .on_click(Msg::ClearFileSearch);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![titulo, limpiar])
+}
+
+/// Una fila de resultado de búsqueda: `NN% ruta`, click inserta la ruta en el
+/// input (como una fila de archivo del Explorer).
+fn explorer_search_row(path: &str, score: f32, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let pct = View::new(Style {
+        size: Size { width: length(34.0_f32), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(format!("{}%", (score * 100.0).round() as i32), 10.0, theme.fg_muted, Alignment::Center);
+    let nombre = View::new(Style {
+        size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(path.to_string(), 12.0, theme.fg_text, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::RunFromHistory(path.to_string()))
+    .children(vec![pct, nombre])
 }
 
 /// Una línea de nota tenue del Explorer (vacío / cargando / error).

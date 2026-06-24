@@ -881,6 +881,13 @@ impl State {
     /// Empuja una línea al buffer asignándole bloque. Cada `Prompt` abre
     /// un bloque nuevo (id monotónico); las demás líneas heredan el
     /// bloque abierto. El render usa esto para agrupar cada comando con
+    /// Empuja una **nota** (línea informativa del shell) al buffer. Público para
+    /// que el host (chasis) deje avisos en el output —p.ej. el resultado de una
+    /// búsqueda de archivos que se pintó en el panel del Explorer.
+    pub fn push_notice(&mut self, text: impl Into<String>) {
+        self.push_output(OutputLine::notice(text.into()));
+    }
+
     /// su salida en una card desplegable.
     pub(crate) fn push_output(&mut self, mut line: OutputLine) {
         if line.kind == OutputKind::Prompt {

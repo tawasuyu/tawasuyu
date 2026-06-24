@@ -304,6 +304,7 @@ pub fn new_model() -> Model {
         layouts: load_layouts(),
         layouts_modal_open: false,
         explorer: ExplorerCache::default(),
+        file_search: None,
         layout_name: TextInputState::new(),
         layout_name_focused: false,
         viewport: (1280.0, 800.0),
@@ -782,6 +783,33 @@ impl App for Shell {
             Msg::RefreshExplorer => {
                 m.explorer = ExplorerCache::default();
                 reconcile_explorer(&mut m, handle);
+            }
+            Msg::FileSearchResult { slot, query, ok, hits } => {
+                // Limpia el «en vuelo» de la sesión y avisa en su output; si salió
+                // bien, llena el panel del Explorer y lo abre.
+                if let Slot::Session(i, w) = slot {
+                    if let Some(s) = m.sessions.get_mut(i) {
+                        if let ModuleState::Shell(st) = &mut s.instance_mut(w).state {
+                            st.semantic_inflight = false;
+                            if ok {
+                                st.push_notice(format!(
+                                    "🔎 {} archivo(s) por significado — en el panel Explorer",
+                                    hits.len()
+                                ));
+                            } else {
+                                let err = hits.first().map(|(t, _)| t.clone()).unwrap_or_default();
+                                st.push_notice(format!("🔎 búsqueda de archivos · {err}"));
+                            }
+                        }
+                    }
+                    if ok {
+                        m.file_search = Some(FileSearch { session: i, query, hits });
+                        m.active_tool = Some(Tool::Explorer);
+                    }
+                }
+            }
+            Msg::ClearFileSearch => {
+                m.file_search = None;
             }
             Msg::RemoteContainersLoaded(v) => m.remote_containers = v,
             Msg::SubscribeContainer(i) => {

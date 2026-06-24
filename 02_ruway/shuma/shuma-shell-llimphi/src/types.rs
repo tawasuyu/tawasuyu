@@ -186,6 +186,19 @@ pub(crate) struct ExplorerCache {
     pub state: ExplorerState,
 }
 
+/// Resultados de `:buscar-archivos` para pintar en el panel del Explorer en vez
+/// del listado normal: rutas relativas rankeadas por significado, clickeables.
+/// `None` = sin búsqueda activa (el Explorer muestra el cwd). El botón ✕ del
+/// panel la limpia.
+pub(crate) struct FileSearch {
+    /// Sesión a la que pertenece (el panel sólo la muestra si es la activa).
+    pub session: usize,
+    /// La consulta, para el encabezado del panel.
+    pub query: String,
+    /// `(ruta relativa, score)` de mayor a menor parecido.
+    pub hits: Vec<(String, f32)>,
+}
+
 /// Un directorio del host montado dentro del contenedor.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Mount {
@@ -962,6 +975,9 @@ pub struct Model {
     pub layouts_modal_open: bool,
     /// Listado del Explorer para sesiones remotas (off-thread por SSH).
     pub explorer: ExplorerCache,
+    /// Resultados de `:buscar-archivos` a mostrar en el panel del Explorer (en
+    /// vez del cwd). `None` = sin búsqueda activa.
+    pub file_search: Option<FileSearch>,
     pub layout_name: TextInputState,
     pub layout_name_focused: bool,
     pub viewport: (f32, f32),
@@ -1066,6 +1082,17 @@ pub enum Msg {
     },
     /// Fuerza re-listar el cwd remoto del Explorer (botón ↻).
     RefreshExplorer,
+    /// Resultado de `:buscar-archivos` (scope `files`): el chasis lo pinta en el
+    /// panel del Explorer. `slot` identifica la sesión que la pidió.
+    FileSearchResult {
+        slot: Slot,
+        query: String,
+        ok: bool,
+        hits: Vec<(String, f32)>,
+    },
+    /// Limpia la búsqueda de archivos activa (botón ✕ del panel) — el Explorer
+    /// vuelve a mostrar el cwd.
+    ClearFileSearch,
     RemoteContainersLoaded(Vec<String>),
     SubscribeContainer(usize),
     PickRemoteContainer(String),
