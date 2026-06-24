@@ -113,6 +113,7 @@ members = [
     "01_yachay/cosmos/cosmos-astrology",
     "01_yachay/cosmos/cosmos-astrocartography",
     "01_yachay/cosmos/cosmos-canvas-llimphi",
+    "01_yachay/cosmos/cosmos-cities",
     "01_yachay/cosmos/cosmos-card",
     "01_yachay/cosmos/cosmos-catalog",
     "01_yachay/cosmos/cosmos-cli",
@@ -914,6 +915,7 @@ iniy-store = { path = "01_yachay/iniy/iniy-store" }
 
 # === auto: declarados por crates internos faltantes ===
 cosmos-coords = { path = "01_yachay/cosmos/cosmos-coords" }
+cosmos-cities = { path = "01_yachay/cosmos/cosmos-cities" }
 cosmos-core = { path = "01_yachay/cosmos/cosmos-core" }
 cosmos-ephemeris = { path = "01_yachay/cosmos/cosmos-ephemeris" }
 cosmos-time = { path = "01_yachay/cosmos/cosmos-time" }
@@ -925,6 +927,7 @@ approx = "0.5"
 byteorder = "1.5"
 cc = "1.0"
 chrono = "0.4"
+chrono-tz = "0.10"
 crc32fast = "1.4"
 criterion = "0.5"
 csv = "1.4"

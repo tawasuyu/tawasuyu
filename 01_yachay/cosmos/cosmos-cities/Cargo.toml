@@ -1,0 +1,13 @@
+[package]
+name = "cosmos-cities"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-cities — atlas offline de ciudades (GeoNames cities15000, ~34k) con búsqueda fuzzy y zona horaria IANA. El picker de ciudad de cosmos resuelve lat/lon + tz sin red, y el offset histórico (con DST de la época) se computa con chrono-tz al instante de nacimiento — soberano, sin filtrar datos de nacimiento a terceros."
+
+[dependencies]
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
