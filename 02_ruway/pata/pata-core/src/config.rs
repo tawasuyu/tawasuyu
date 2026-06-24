@@ -374,14 +374,22 @@ pub struct Surface {
     /// Para `kind = panel`: las tarjetas flotantes que contiene.
     #[cfg_attr(feature = "serde", serde(default))]
     pub cards: Vec<FloatingCard>,
-    /// Monitor al que anclar la superficie (nombre del conector, ej.
-    /// `"HDMI-A-1"` o `"DP-1"`). Vacío = el compositor elige el primario.
-    /// **`"*"` o `"all"` replica la superficie en CADA monitor conectado** —
-    /// una barra por pantalla. El backend `wlr-layer-shell` pasa este
-    /// `wl_output` a `create_layer_surface`; si el nombre no matchea ninguno
-    /// conectado, también cae al primario y se loguea un aviso.
-    #[cfg_attr(feature = "serde", serde(default))]
+    /// Monitor al que anclar la superficie. **Default `"*"` = la superficie se
+    /// replica en CADA monitor conectado** (una barra por pantalla). Un nombre
+    /// de conector (`"HDMI-A-1"`, `"DP-1"`) la fija a ese monitor; `""` (vacío)
+    /// la deja en el primario que elija el compositor. El backend
+    /// `wlr-layer-shell` pasa este `wl_output` a `create_layer_surface`; si el
+    /// nombre no matchea ninguno conectado, cae al primario y se loguea un aviso.
+    /// Para excluir monitores puntuales del `"*"`, ver [`Surface::exclude_outputs`].
+    #[cfg_attr(feature = "serde", serde(default = "default_output"))]
     pub output: String,
+    /// Monitores a **excluir** cuando `output = "*"` (nombres de conector). La
+    /// barra aparece en todos los monitores conectados MENOS estos. Vacío = en
+    /// todos. Sólo tiene efecto con `output = "*"`/`"all"`; con un monitor fijo
+    /// o el primario se ignora. Permite el patrón «todas las pantallas salvo la
+    /// del proyector / la secundaria».
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub exclude_outputs: Vec<String>,
     /// Para `kind = sidebar`: los dientes del rail. Cada uno despliega su panel.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tabs: Vec<SidebarTab>,
@@ -418,7 +426,8 @@ impl Default for Surface {
             center: Vec::new(),
             end: Vec::new(),
             cards: Vec::new(),
-            output: String::new(),
+            output: default_output(),
+            exclude_outputs: Vec::new(),
             tabs: Vec::new(),
             panel_width: default_panel_width(),
             dock_pins: Vec::new(),
@@ -529,6 +538,13 @@ fn default_menu_style() -> String {
     "list".to_string()
 }
 
+/// Monitor por defecto de una superficie: `"*"` = TODOS los monitores
+/// conectados (una barra por pantalla). Para fijarla a uno solo, poné el
+/// nombre del conector; para excluir algunos del `"*"`, usá `exclude_outputs`.
+fn default_output() -> String {
+    "*".to_string()
+}
+
 /// El marco completo: settings generales + las superficies a desplegar.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -554,8 +570,9 @@ impl Config {
         // mostrándolos achicados o cayendo a horizontal.
         let mut top = Surface::bar(Anchor::Top);
         top.thickness = 44.0;
-        // La barra superior va en TODOS los monitores (no sólo el primario).
-        top.output = "*".to_string();
+        // `output` ya viene en `"*"` por default (todas las pantallas); para
+        // dejarla sólo en una, fijá `top.output` al conector o usá
+        // `top.exclude_outputs` para sacarla de monitores puntuales.
         top.start = vec![
             WidgetSpec::new("start_button"),
             WidgetSpec::new("clock"),

@@ -586,7 +586,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     let resolve_output =
         |name: &str| -> Option<wl_output::WlOutput> {
-            if name.is_empty() {
+            // Vacío o el comodín `"*"`/`"all"` → primario (None). El comodín cae
+            // acá sólo en los paths de una sola surface (tarjetas flotantes), no
+            // es un nombre de conector — no se loguea como «no conectado».
+            if name.is_empty() || name == "*" || name.eq_ignore_ascii_case("all") {
                 return None;
             }
             if let Some(o) = outputs_by_name.get(name) {
@@ -596,11 +599,19 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             None
         };
 
-    // Los monitores destino de una superficie: `output = "*"`/`"all"` la
-    // replica en CADA monitor conectado; si no, su monitor (o el primario).
-    let targets_de = |out: &str| -> Vec<Option<wl_output::WlOutput>> {
+    // Los monitores destino de una superficie: `output = "*"`/`"all"` la replica
+    // en CADA monitor conectado MENOS los de `exclude`; si no, su monitor (o el
+    // primario). El default de `output` es `"*"`, así que sin config una barra va
+    // a todas las pantallas.
+    let targets_de = |out: &str, exclude: &[String]| -> Vec<Option<wl_output::WlOutput>> {
         if (out == "*" || out.eq_ignore_ascii_case("all")) && !outputs_by_name.is_empty() {
-            outputs_by_name.values().cloned().map(Some).collect()
+            // Si la exclusión vacía la lista (excluyeron todos), no se crea
+            // ninguna surface: la barra simplemente no aparece, que es lo pedido.
+            outputs_by_name
+                .iter()
+                .filter(|(name, _)| !exclude.iter().any(|ex| ex.eq_ignore_ascii_case(name)))
+                .map(|(_, o)| Some(o.clone()))
+                .collect()
         } else {
             vec![resolve_output(out)]
         }
@@ -611,7 +622,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         let s = &app.cfg.surfaces[idx];
         let thickness = s.thickness.max(1.0) as u32;
         let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
-        for target in targets_de(&s.output) {
+        for target in targets_de(&s.output, &s.exclude_outputs) {
             let wl_surface = compositor.create_surface(&qh);
             let layer = layer_shell.create_layer_surface(
                 &qh,
@@ -644,7 +655,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         let s = &app.cfg.surfaces[idx];
         let thickness = s.thickness.max(1.0) as u32;
         let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
-        for target in targets_de(&s.output) {
+        for target in targets_de(&s.output, &s.exclude_outputs) {
             let wl_surface = compositor.create_surface(&qh);
             let layer = layer_shell.create_layer_surface(
                 &qh,
@@ -687,7 +698,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         let s = &app.cfg.surfaces[idx];
         let thickness = s.thickness.max(1.0) as u32;
         let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
-        for target in targets_de(&s.output) {
+        for target in targets_de(&s.output, &s.exclude_outputs) {
             let wl_surface = compositor.create_surface(&qh);
             let layer = layer_shell.create_layer_surface(
                 &qh,
@@ -722,7 +733,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // reporta el tamaño real. Sin zona exclusiva ni teclado.
     for &idx in &backgrounds {
         let s = &app.cfg.surfaces[idx];
-        for target in targets_de(&s.output) {
+        for target in targets_de(&s.output, &s.exclude_outputs) {
             let wl_surface = compositor.create_surface(&qh);
             let layer = layer_shell.create_layer_surface(
                 &qh,

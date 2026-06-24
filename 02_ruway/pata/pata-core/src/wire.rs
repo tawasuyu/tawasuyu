@@ -235,6 +235,8 @@ impl From<WireSurface> for Surface {
             end: de_wire(s.end),
             cards: s.cards.into_iter().map(FloatingCard::from).collect(),
             output: s.output,
+            // El wire (wawa) no transporta la lista de monitores excluidos todavía.
+            exclude_outputs: Vec::new(),
             tabs: s.tabs.into_iter().map(SidebarTab::from).collect(),
             panel_width: s.panel_width,
             // El wire (wawa) no transporta apps fijadas del dock todavía.
