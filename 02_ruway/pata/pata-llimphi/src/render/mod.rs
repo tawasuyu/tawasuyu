@@ -493,9 +493,14 @@ pub fn shuma_open_view(
         style.flex_grow = 1.0;
         // Click fuera = cerrar; además, que el puntero ENTRE al scrim (se alejó
         // del contenido hacia arriba) repliega por deshover.
+        // El `hover_fill` transparente (alpha 0, invisible) es lo que hace al
+        // scrim **hover-hit-testeable**: `hit_test_hover` sólo considera nodos con
+        // `hover_fill`, así que sin esto el `on_pointer_enter` nunca se dispara y
+        // el deshover no cierra.
         View::new(style)
             .on_click(Msg::ShumaToggle)
             .on_pointer_enter(Msg::ShumaAutoClose)
+            .hover_fill(Color::new([0.0, 0.0, 0.0, 0.0]))
     };
 
     // Live-wire: si la shuma completa está montada, el cuerpo es ella entera

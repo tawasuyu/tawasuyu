@@ -169,13 +169,16 @@ fn wrap_headline(children: Vec<View<Msg>>, open: bool) -> View<Msg> {
     .on_click(Msg::ShumaToggle)
     .children(children);
     // Hover-drawer: con el drawer plegado, pasar el puntero por el cabezal lo
-    // despliega ("abre con hover"); el `leave` de la superficie lo repliega.
-    // Sólo cuando está plegado, para no re-togglear al recorrer el drawer ya
-    // abierto.
+    // despliega ("abre con hover"); el scrim lo repliega por deshover. Sólo
+    // cuando está plegado, para no re-togglear al recorrer el drawer abierto. El
+    // `hover_fill` transparente (alpha 0) es lo que hace al cabezal
+    // hover-hit-testeable: `hit_test_hover` exige `hover_fill`, sin él el
+    // `on_pointer_enter` nunca se dispararía.
     if open {
         v
     } else {
         v.on_pointer_enter(Msg::ShumaToggle)
+            .hover_fill(llimphi_ui::llimphi_raster::peniko::Color::new([0.0, 0.0, 0.0, 0.0]))
     }
 }
 

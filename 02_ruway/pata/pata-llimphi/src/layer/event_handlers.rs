@@ -280,6 +280,16 @@ impl KeyboardHandler for LayerApp {
                     .shuma_full
                     .as_ref()
                     .and_then(|f| crate::shuma_app::on_key(f, &ke));
+                if std::env::var_os("PATA_DIAG").is_some() {
+                    eprintln!(
+                        "pata·shuma key={:?} ctrl={} shift={} alt={} → on_key={}",
+                        ke.key,
+                        self.mods.ctrl,
+                        self.mods.shift,
+                        self.mods.alt,
+                        if m.is_some() { "Some(msg)" } else { "None" }
+                    );
+                }
                 if let Some(m) = m {
                     self.apply_shuma_full(vec![m]);
                 }
