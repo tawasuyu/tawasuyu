@@ -76,6 +76,7 @@ pub(crate) fn open_chart_dialog(m: &mut Model) {
         lat: bd.latitude_deg,
         lon: bd.longitude_deg,
         tz: bd.tz_offset_minutes,
+        tz_iana: String::new(),
         kind_open: false,
         cal_open: false,
         cal_year: bd.year,
@@ -197,31 +198,57 @@ pub(crate) fn dialog_focus(m: &mut Model, f: dialog::DialogField) {
     m.dialog_input.set_text(v);
 }
 
-/// Aplica una ciudad del atlas al form de carta (autocompleta lat/lon/tz).
+/// Aplica una ciudad del atlas al form (autocompleta lat/lon + zona). `idx`
+/// indexa el mismo resultado de búsqueda que pintó las filas — el handler
+/// re-corre la búsqueda sobre la query del form para resolverlo.
 pub(crate) fn dialog_pick_city(m: &mut Model, idx: usize) {
-    let Some(city) = dialog::CITY_PRESETS.get(idx) else { return };
+    // Re-resolver la ciudad desde la query del form activo.
+    let query = match m.dialog.as_ref() {
+        Some(dialog::Dialog::NewChart(c)) => c.city_query.clone(),
+        Some(dialog::Dialog::HoyLoc(c)) => c.city_query.clone(),
+        _ => return,
+    };
+    let Some(city) = dialog::city_matches(&query).into_iter().nth(idx) else { return };
+    let label = city.label();
     match m.dialog.as_mut() {
         Some(dialog::Dialog::NewChart(c)) => {
-            c.place = city.name.to_string();
+            c.place = label.clone();
             c.lat = city.lat;
             c.lon = city.lon;
-            c.tz = city.tz;
-            c.city_query = city.name.to_string();
+            c.tz_iana = city.tz.to_string();
+            // Offset histórico para la fecha/hora actuales del form (se
+            // recomputa al confirmar contra la fecha final).
+            if let Some(off) = offset_for(&c.tz_iana, &c.date, &c.time) {
+                c.tz = off;
+            }
+            c.city_query = label.clone();
         }
         Some(dialog::Dialog::HoyLoc(c)) => {
-            c.place = city.name.to_string();
+            c.place = label.clone();
             c.lat = format!("{:.4}", city.lat);
             c.lon = format!("{:.4}", city.lon);
-            c.city_query = city.name.to_string();
+            c.city_query = label.clone();
             if c.label.trim().is_empty() {
-                c.label = city.name.to_string();
+                c.label = label.clone();
             }
         }
         _ => {}
     }
     if m.dialog_field == dialog::DialogField::City {
-        m.dialog_input.set_text(city.name.to_string());
+        m.dialog_input.set_text(label);
     }
+}
+
+/// Offset UTC en minutos de una zona IANA para `date`+`time` (`AAAA-MM-DD`,
+/// `HH:MM`). `None` si algo no parsea.
+fn offset_for(tz_iana: &str, date: &str, time: &str) -> Option<i32> {
+    if tz_iana.is_empty() {
+        return None;
+    }
+    let (y, mo, d) = parse_date(date)?;
+    let (h, mi) = parse_time(time)?;
+    let naive = chrono::NaiveDate::from_ymd_opt(y, mo, d)?.and_hms_opt(h, mi, 0)?;
+    cosmos_cities::offset_minutes_at(tz_iana, naive)
 }
 
 // =====================================================================
@@ -296,7 +323,10 @@ pub(crate) fn dialog_confirm(m: &mut Model) {
             bd.hour = h;
             bd.minute = mi;
             bd.second = 0.0;
-            bd.tz_offset_minutes = f.tz;
+            // Offset autoritativo: recomputado de la zona IANA contra la
+            // fecha final (con el DST de la época). Si no hubo ciudad con
+            // zona, cae al offset que tenía el form.
+            bd.tz_offset_minutes = offset_for(&f.tz_iana, &f.date, &f.time).unwrap_or(f.tz);
             bd.latitude_deg = f.lat;
             bd.longitude_deg = f.lon;
             bd.birthplace_label = if f.place.is_empty() {

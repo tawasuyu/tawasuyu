@@ -385,6 +385,7 @@ fn seed_dialog(model: &mut Model) {
         lat: 19.35,
         lon: -99.16,
         tz: -360,
+        tz_iana: "America/Mexico_City".into(),
         kind_open: false,
         cal_open: true,
         cal_year: 1907,
