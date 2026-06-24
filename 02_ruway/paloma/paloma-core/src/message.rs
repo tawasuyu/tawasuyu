@@ -136,6 +136,12 @@ pub struct Message {
     /// cachés viejas sigan decodificando.
     #[serde(default)]
     pub cuerpos: Vec<MailCuerpo>,
+    /// Clave pública del **firmante verificado** (Ed25519), si la firma del
+    /// mensaje validó (SMTP `X-Paloma-*` o rail). Es la base de la confianza
+    /// `pubkey ↔ persona`, unificada para ambos transportes. `None` si no está
+    /// firmado o no verificó. `#[serde(default)]` para cachés viejas.
+    #[serde(default)]
+    pub signer: Option<[u8; 32]>,
 }
 
 impl Message {
@@ -305,6 +311,7 @@ mod tests {
             signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
             cuerpos: Vec::new(),
+            signer: None,
         }
     }
 

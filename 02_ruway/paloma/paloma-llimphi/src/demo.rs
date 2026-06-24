@@ -38,6 +38,7 @@ fn msg(
         signature: SignatureStatus::Unsigned,
         mailbox: "INBOX".into(),
         cuerpos: Vec::new(),
+        signer: None,
     }
 }
 
@@ -147,5 +148,6 @@ fn html_only(id: &str, from: Address, subject: &str, html: &str, hours: i64) -> 
         signature: SignatureStatus::Unsigned,
         mailbox: "INBOX".into(),
         cuerpos: Vec::new(),
+        signer: None,
     }
 }

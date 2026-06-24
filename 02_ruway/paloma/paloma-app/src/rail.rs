@@ -63,7 +63,7 @@ impl RailHost {
                         Ok(mut msg) => {
                             let name = msg.from.name.clone();
                             msg.from = Address { name, email: paloma_rail::rail_address(&envelope.from) };
-                            h.dispatch(Msg::RailReceived(msg));
+                            h.dispatch(Msg::RailReceived { msg, avales: envelope.avales.clone() });
                         }
                         Err(e) => eprintln!("paloma · sobre del rail rechazado: {e}"),
                     }
@@ -128,12 +128,12 @@ impl RailHost {
 }
 
 impl RailLink for RailHost {
-    fn send(&self, to: RailId, msg: &Message) -> Result<(), String> {
-        let env = paloma_rail::seal(&self.keypair, to, msg).map_err(|e| e.to_string())?;
+    fn send(&self, to: RailId, msg: &Message, avales: &[Vec<u8>]) -> Result<(), String> {
+        let env = paloma_rail::seal(&self.keypair, to, msg, avales.to_vec()).map_err(|e| e.to_string())?;
         if to == self.me {
             // Loopback: entrega local inmediata (te escribís a vos mismo).
             let recibido = paloma_rail::open(&env, self.me).map_err(|e| e.to_string())?;
-            self.handle.dispatch(Msg::RailReceived(recibido));
+            self.handle.dispatch(Msg::RailReceived { msg: recibido, avales: env.avales });
             Ok(())
         } else {
             self.transport.send(to, &env).map_err(|e| e.to_string())

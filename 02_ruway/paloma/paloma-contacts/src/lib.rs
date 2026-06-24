@@ -20,6 +20,40 @@ pub struct Contact {
     pub name: String,
     /// Dirección canónica: `usuario@dominio` (SMTP) o `<hex>@rail.suyu` (rail).
     pub address: String,
+    /// Clave pública Ed25519 **fijada** (hex de 64), para confianza de correo
+    /// SMTP firmado: ata `pubkey ↔ email` (en el rail la dirección ya es la
+    /// clave). `None` hasta que se fija al guardar un remitente firmado.
+    #[serde(default)]
+    pub pubkey: Option<String>,
+}
+
+impl Contact {
+    /// La clave pública fijada (32 bytes), decodificada del hex. `None` si no hay
+    /// o el hex es inválido.
+    pub fn pinned_pubkey(&self) -> Option<[u8; 32]> {
+        let h = self.pubkey.as_ref()?;
+        if h.len() != 64 {
+            return None;
+        }
+        let bytes = h.as_bytes();
+        let mut out = [0u8; 32];
+        for (i, slot) in out.iter_mut().enumerate() {
+            let hi = (bytes[i * 2] as char).to_digit(16)?;
+            let lo = (bytes[i * 2 + 1] as char).to_digit(16)?;
+            *slot = (hi * 16 + lo) as u8;
+        }
+        Some(out)
+    }
+}
+
+/// Formatea 32 bytes como hex de 64 (para fijar una clave en un contacto).
+pub fn pubkey_hex(pubkey: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in pubkey {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
+    }
+    s
 }
 
 /// La libreta: una lista de contactos. Barata de clonar; se ordena por nombre al
@@ -108,10 +142,18 @@ impl Contactbook {
                 false
             }
             None => {
-                self.contacts.push(Contact { name, address });
+                self.contacts.push(Contact { name, address, pubkey: None });
                 self.contacts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
                 true
             }
+        }
+    }
+
+    /// Fija la clave pública (identidad) de un contacto por nombre — para atar
+    /// `pubkey ↔ persona` en correo SMTP firmado. No-op si el contacto no existe.
+    pub fn pin_pubkey(&mut self, name: &str, pubkey: &[u8; 32]) {
+        if let Some(c) = self.contacts.iter_mut().find(|c| c.name.eq_ignore_ascii_case(name.trim())) {
+            c.pubkey = Some(pubkey_hex(pubkey));
         }
     }
 

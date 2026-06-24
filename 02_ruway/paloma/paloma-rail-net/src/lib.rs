@@ -208,6 +208,7 @@ mod tests {
             signature: SignatureStatus::Unsigned,
             mailbox: "Borradores".into(),
             cuerpos: vec![],
+            signer: None,
         }
     }
 
@@ -238,7 +239,7 @@ mod tests {
         assert!(esperar(|| rail_a.tiene_peer(&bob.public_key())), "handshake no completó");
 
         // Ana sella un mensaje para Bob y lo manda por el rail TCP.
-        let env = paloma_rail::seal(&ana, bob.public_key(), &mensaje("minga", "vení el sábado")).unwrap();
+        let env = paloma_rail::seal(&ana, bob.public_key(), &mensaje("minga", "vení el sábado"), vec![]).unwrap();
         rail_a.send(bob.public_key(), &env).unwrap();
 
         // Bob recibe el sobre, lo abre y verifica.
@@ -253,7 +254,7 @@ mod tests {
     fn enviar_a_peer_desconocido_falla() {
         let ana = Keypair::from_seed([1; 32]);
         let (rail_a, _rx) = TcpRail::escuchar("127.0.0.1:0", ana.public_key()).unwrap();
-        let env = paloma_rail::seal(&ana, [9; 32], &mensaje("x", "y")).unwrap();
+        let env = paloma_rail::seal(&ana, [9; 32], &mensaje("x", "y"), vec![]).unwrap();
         assert!(rail_a.send([9; 32], &env).is_err());
     }
 }

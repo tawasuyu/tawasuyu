@@ -45,18 +45,21 @@ pub fn parse_message(raw: &[u8], mailbox: &str, flags: Flags) -> Result<Message,
     // los bytes canónicos del mensaje y verificamos. Sin headers → Unsigned.
     let pubkey_b64 = parsed.header_raw("X-Paloma-Pubkey");
     let sig_b64 = parsed.header_raw("X-Paloma-Signature");
-    let signature = match (pubkey_b64, sig_b64) {
+    let (signature, signer) = match (pubkey_b64, sig_b64) {
         (Some(pk), Some(sg)) => match paloma_sign::decode_signature(pk, sg) {
             Some(ms) => {
                 let to_emails: Vec<String> = to.iter().map(|a| a.email.clone()).collect();
                 let canonical =
                     paloma_core::canonical_signing_bytes(&from.email, &to_emails, &subject, &body_text);
-                paloma_sign::verify(&canonical, &ms.pubkey, &ms.sig)
+                let st = paloma_sign::verify(&canonical, &ms.pubkey, &ms.sig);
+                // Sólo confiamos en la identidad si la firma verifica.
+                let signer = (st == SignatureStatus::Verified).then_some(ms.pubkey);
+                (st, signer)
             }
             // Headers presentes pero corruptos → firma rota.
-            None => SignatureStatus::Invalid,
+            None => (SignatureStatus::Invalid, None),
         },
-        _ => SignatureStatus::Unsigned,
+        _ => (SignatureStatus::Unsigned, None),
     };
 
     // Lienzos multilienzo (Eje 4): header `X-Paloma-Cuerpos` (base64 postcard).
@@ -81,6 +84,7 @@ pub fn parse_message(raw: &[u8], mailbox: &str, flags: Flags) -> Result<Message,
         signature,
         mailbox: mailbox.to_string(),
         cuerpos,
+        signer,
     })
 }
 

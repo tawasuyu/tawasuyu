@@ -80,8 +80,9 @@ pub trait MailSigner: Send {
 /// anfitrión despacha `Msg::RailReceived` cuando llega un sobre. `Model::rail ==
 /// None` ⇒ no hay buzón "Suyu" ni enrutado por el rail.
 pub trait RailLink: Send {
-    /// Entrega `msg` a la identidad `to` (32 bytes de clave pública).
-    fn send(&self, to: [u8; 32], msg: &Message) -> Result<(), String>;
+    /// Entrega `msg` a la identidad `to` (32 bytes), adjuntando `avales`
+    /// (atestaciones serializadas a propagar; `&[]` si ninguna).
+    fn send(&self, to: [u8; 32], msg: &Message, avales: &[Vec<u8>]) -> Result<(), String>;
     /// La dirección del rail de **este** usuario (`<hex>@suyu`), para compartir.
     fn my_address(&self) -> String;
 }
@@ -437,34 +438,41 @@ impl Model {
         self.voucher = voucher.into();
     }
 
-    /// Las claves públicas de los contactos del rail (en las que se confía
+    /// La identidad (clave pública) de un contacto: del rail la dice la dirección
+    /// (`<hex>@rail.suyu`); para SMTP, la clave fijada. `None` si no se conoce.
+    fn contact_identity(c: &paloma_contacts::Contact) -> Option<[u8; 32]> {
+        paloma_rail::parse_rail_address(&c.address).or_else(|| c.pinned_pubkey())
+    }
+
+    /// Las claves públicas de los contactos (las identidades en las que confiás
     /// directo) — base de la confianza transitiva.
-    fn direct_rail_keys(&self) -> Vec<[u8; 32]> {
+    fn direct_keys(&self) -> Vec<[u8; 32]> {
+        self.contacts.all().iter().filter_map(Self::contact_identity).collect()
+    }
+
+    /// Nombre del contacto cuya identidad (clave) es `pk`.
+    fn name_for_identity(&self, pk: &[u8; 32]) -> Option<&str> {
         self.contacts
             .all()
             .iter()
-            .filter_map(|c| paloma_rail::parse_rail_address(&c.address))
-            .collect()
+            .find(|c| Self::contact_identity(c).as_ref() == Some(pk))
+            .map(|c| c.name.as_str())
     }
 
-    /// Confianza de identidad del remitente de `m` (pubkey↔persona): directa
-    /// (en la libreta), avalada (un contacto lo vouchea, transitivo a un salto),
-    /// o desconocida. Para el rail la dirección es la clave pública, así que esto
-    /// + firma `Verified` = identidad criptográfica.
+    /// Confianza de identidad del remitente de `m`, **unificada por la clave
+    /// firmante** (`m.signer`, presente sólo si la firma verificó): directa (su
+    /// clave está en tu libreta), avalada (un contacto la vouchea, transitivo a
+    /// un salto), o desconocida. Vale igual para el rail y el SMTP firmado.
     pub fn sender_trust(&self, m: &Message) -> SenderTrust {
-        if let Some(name) = self.contacts.name_for(&m.from.email) {
+        let Some(pk) = m.signer else {
+            return SenderTrust::Unknown;
+        };
+        if let Some(name) = self.name_for_identity(&pk) {
             return SenderTrust::Direct(name.to_string());
         }
-        if let Some(pk) = paloma_rail::parse_rail_address(&m.from.email) {
-            let trusted = self.direct_rail_keys();
-            if let Some(attester) = self.trust.vouched_by(&pk, &trusted) {
-                let by = self
-                    .contacts
-                    .name_for(&paloma_rail::rail_address(&attester))
-                    .unwrap_or("?")
-                    .to_string();
-                return SenderTrust::Vouched(by);
-            }
+        if let Some(attester) = self.trust.vouched_by(&pk, &self.direct_keys()) {
+            let by = self.name_for_identity(&attester).unwrap_or("?").to_string();
+            return SenderTrust::Vouched(by);
         }
         SenderTrust::Unknown
     }
@@ -729,8 +737,9 @@ pub enum Msg {
     LlmDraft(String),
     /// Falla del asistente LLM (la muestra la barra de estado).
     LlmError(String),
-    /// Un mensaje llegó por el rail P2P: se ingiere en el buzón "Suyu".
-    RailReceived(Message),
+    /// Un mensaje llegó por el rail P2P: se ingiere en el buzón "Suyu". Trae los
+    /// avales que el emisor propagó (se ingieren en la red de confianza).
+    RailReceived { msg: Message, avales: Vec<Vec<u8>> },
     /// Mostrar la propia dirección del rail en la barra de estado (para copiar).
     ShowRailAddress,
     /// Pedir al LLM derivar un lienzo del cuerpo en redacción a `lang` (Eje 4).
@@ -914,7 +923,16 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
             model.draft_busy = false;
             model.status = e;
         }
-        Msg::RailReceived(mut msg) => {
+        Msg::RailReceived { mut msg, avales } => {
+            // Propagación: ingerir los avales que trajo el emisor (crecen la WoT).
+            if !avales.is_empty() {
+                let n = model.trust.import_bytes(&avales);
+                if n > 0 {
+                    if let Some(p) = &model.trust_path {
+                        let _ = model.trust.save(p);
+                    }
+                }
+            }
             msg.mailbox = SUYU_MAILBOX.to_string();
             model.store.add_message(SUYU_MAILBOX, msg);
             // Si estamos mirando "Suyu", refrescar la lista de hilos.
@@ -956,7 +974,15 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
                 let addr = m.from.email.clone();
                 let name = m.from.display_name().to_string();
                 let name = if name.is_empty() || name == addr { addr.clone() } else { name };
+                let signer = m.signer;
                 let nuevo = model.contacts.upsert(&name, &addr);
+                // Correo SMTP firmado: fijamos su clave (en el rail la dirección
+                // ya la lleva). Ata pubkey ↔ persona para la confianza.
+                if let Some(pk) = signer {
+                    if paloma_rail::parse_rail_address(&addr).is_none() {
+                        model.contacts.pin_pubkey(&name, &pk);
+                    }
+                }
                 if let Some(p) = &model.contacts_path {
                     let _ = model.contacts.save(p);
                 }
@@ -1094,9 +1120,13 @@ fn send_compose(mut model: Model) -> Model {
                     signature: paloma_core::SignatureStatus::Unsigned,
                     mailbox: SUYU_MAILBOX.to_string(),
                     cuerpos: cuerpos.clone(),
+                    signer: None,
                 };
+                // Propagación de avales: adjuntamos los que tenemos para que la
+                // red de confianza del receptor crezca sola.
+                let avales = model.trust.export();
                 for id in &rail_to {
-                    match rail.send(*id, &msg) {
+                    match rail.send(*id, &msg, &avales) {
                         Ok(()) => sent_any = true,
                         Err(e) => errs.push(format!("rail: {e}")),
                     }
@@ -1243,7 +1273,7 @@ mod tests {
         sent: Arc<Mutex<Vec<([u8; 32], Message)>>>,
     }
     impl RailLink for RecRail {
-        fn send(&self, to: [u8; 32], msg: &Message) -> Result<(), String> {
+        fn send(&self, to: [u8; 32], msg: &Message, _avales: &[Vec<u8>]) -> Result<(), String> {
             self.sent.lock().unwrap().push((to, msg.clone()));
             Ok(())
         }
@@ -1330,13 +1360,38 @@ mod tests {
             signature: paloma_core::SignatureStatus::Verified,
             mailbox: SUYU_MAILBOX.into(),
             cuerpos: vec![],
+            // La confianza se evalúa por la clave firmante (no por la dirección).
+            signer: Some([9u8; 32]),
         };
         assert_eq!(model.sender_trust(&msg), SenderTrust::Direct("Ana".into()), "remitente en la libreta");
 
-        let otro = Address::named("X", "desconocido@rail.suyu");
+        // Otra clave firmante, no en la libreta → desconocido.
         let mut ajeno = msg.clone();
-        ajeno.from = otro;
+        ajeno.signer = Some([7u8; 32]);
         assert_eq!(model.sender_trust(&ajeno), SenderTrust::Unknown, "remitente desconocido");
+
+        // Transitivo: Ana ([9;32]) avala a Bob ([7;32]) → Bob avalado por Ana.
+        let ana_kp = paloma_trust::Keypair::from_seed([9u8; 32]);
+        // (la dirección de Ana en la libreta debe ser su clave pública real)
+        let ana_pub = ana_kp.public_key();
+        let mut book2 = paloma_contacts::Contactbook::new();
+        book2.upsert("Ana", &paloma_rail::rail_address(&ana_pub));
+        model.set_contacts(book2, std::path::PathBuf::from("/tmp/x.json"));
+        let bob_pub = paloma_trust::Keypair::from_seed([7u8; 32]).public_key();
+        let mut store = paloma_trust::TrustStore::new();
+        store.add(paloma_trust::vouch(&ana_kp, &bob_pub, "Bob", 0));
+        model.set_trust(store, std::path::PathBuf::from("/tmp/a.json"), Box::new(NoVouch));
+        let mut de_bob = msg.clone();
+        de_bob.signer = Some(bob_pub);
+        assert_eq!(model.sender_trust(&de_bob), SenderTrust::Vouched("Ana".into()));
+    }
+
+    /// Voucher de prueba que no se usa (el test sólo evalúa, no crea avales).
+    struct NoVouch;
+    impl Voucher for NoVouch {
+        fn vouch(&self, _subject: [u8; 32], _display: &str) -> paloma_trust::Attestation {
+            unreachable!()
+        }
     }
 
     #[test]

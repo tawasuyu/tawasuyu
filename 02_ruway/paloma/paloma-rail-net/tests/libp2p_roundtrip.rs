@@ -29,6 +29,7 @@ fn mensaje(subject: &str, body: &str) -> Message {
         signature: SignatureStatus::Unsigned,
         mailbox: "Borradores".into(),
         cuerpos: vec![],
+        signer: None,
     }
 }
 
@@ -78,7 +79,7 @@ fn rail_libp2p_descubre_por_dht_y_entrega() {
     thread::sleep(Duration::from_secs(1));
 
     // Bob sella y empuja; reintenta por si el stream tarda en establecerse.
-    let env = seal(&bob, ana.public_key(), &mensaje("minga", "vení el sábado")).unwrap();
+    let env = seal(&bob, ana.public_key(), &mensaje("minga", "vení el sábado"), vec![]).unwrap();
     let recibido = {
         let t0 = Instant::now();
         loop {

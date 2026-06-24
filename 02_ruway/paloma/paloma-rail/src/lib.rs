@@ -79,19 +79,31 @@ pub struct RailEnvelope {
     pub to: RailId,
     /// `Message` nativo serializado con postcard.
     pub payload: Vec<u8>,
+    /// **Avales** (web-of-trust) que el emisor propaga: atestaciones `agora`
+    /// serializadas (postcard). Cada una se autovalida por su propia firma; el
+    /// receptor las ingiere para que su red de confianza crezca sola. Van dentro
+    /// de la firma del sobre (no se pueden quitar/agregar en tránsito).
+    #[serde(default)]
+    pub avales: Vec<Vec<u8>>,
     /// Firma Ed25519 del emisor sobre [`Self::signed_bytes`] (64 bytes).
     pub sig: Vec<u8>,
 }
 
 impl RailEnvelope {
-    /// Bytes que la firma cubre: versión + from + to + payload. Atar emisor y
-    /// destinatario impide reusar un sobre para otro receptor.
-    fn signed_bytes(from: &RailId, to: &RailId, payload: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(13 + 64 + payload.len());
+    /// Bytes que la firma cubre: versión + from + to + payload + avales. Atar
+    /// emisor y destinatario impide reusar un sobre para otro receptor.
+    fn signed_bytes(from: &RailId, to: &RailId, payload: &[u8], avales: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(14 + 64 + payload.len());
         out.extend_from_slice(b"paloma-rail-v1");
         out.extend_from_slice(from);
         out.extend_from_slice(to);
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
         out.extend_from_slice(payload);
+        out.extend_from_slice(&(avales.len() as u64).to_le_bytes());
+        for a in avales {
+            out.extend_from_slice(&(a.len() as u64).to_le_bytes());
+            out.extend_from_slice(a);
+        }
         out
     }
 
@@ -122,17 +134,25 @@ pub enum RailError {
     Transport(String),
 }
 
-/// Sella un `Message` para `to`: lo serializa, firma con `keypair` y arma el
-/// sobre. El emisor queda atado a su identidad por la firma.
-pub fn seal(keypair: &Keypair, to: RailId, message: &Message) -> Result<RailEnvelope, RailError> {
+/// Sella un `Message` para `to` adjuntando `avales` (atestaciones serializadas a
+/// propagar; `vec![]` si ninguna): serializa, firma con `keypair` y arma el
+/// sobre. El emisor queda atado a su identidad y los avales quedan dentro de la
+/// firma.
+pub fn seal(
+    keypair: &Keypair,
+    to: RailId,
+    message: &Message,
+    avales: Vec<Vec<u8>>,
+) -> Result<RailEnvelope, RailError> {
     let payload = postcard::to_allocvec(message).map_err(|e| RailError::Codec(e.to_string()))?;
     let from = keypair.public_key();
-    let signed = RailEnvelope::signed_bytes(&from, &to, &payload);
+    let signed = RailEnvelope::signed_bytes(&from, &to, &payload, &avales);
     let sig = keypair.sign(&signed);
     Ok(RailEnvelope {
         from,
         to,
         payload,
+        avales,
         sig: sig.to_vec(),
     })
 }
@@ -145,14 +165,16 @@ pub fn open(env: &RailEnvelope, me: RailId) -> Result<Message, RailError> {
         return Err(RailError::WrongRecipient);
     }
     let sig: [u8; 64] = env.sig.as_slice().try_into().map_err(|_| RailError::BadSignature)?;
-    let signed = RailEnvelope::signed_bytes(&env.from, &env.to, &env.payload);
+    let signed = RailEnvelope::signed_bytes(&env.from, &env.to, &env.payload, &env.avales);
     if paloma_sign::verify(&signed, &env.from, &sig) != SignatureStatus::Verified {
         return Err(RailError::BadSignature);
     }
     let mut message: Message =
         postcard::from_bytes(&env.payload).map_err(|e| RailError::Codec(e.to_string()))?;
-    // El sobre firmado autentica al emisor: el mensaje llega verificado.
+    // El sobre firmado autentica al emisor: el mensaje llega verificado y con la
+    // identidad del firmante (su clave) para la confianza pubkey↔persona.
     message.signature = SignatureStatus::Verified;
+    message.signer = Some(env.from);
     Ok(message)
 }
 
@@ -249,6 +271,7 @@ mod tests {
             signature: SignatureStatus::Unsigned,
             mailbox: "Borradores".into(),
             cuerpos: Vec::new(),
+            signer: None,
         }
     }
 
@@ -258,7 +281,7 @@ mod tests {
         let bob = Keypair::from_seed([2; 32]);
         let msg = mensaje("hola", "nos vemos el viernes");
 
-        let env = seal(&ana, bob.public_key(), &msg).unwrap();
+        let env = seal(&ana, bob.public_key(), &msg, vec![]).unwrap();
         let recibido = open(&env, bob.public_key()).unwrap();
 
         assert_eq!(recibido.subject, "hola");
@@ -272,7 +295,7 @@ mod tests {
         let ana = Keypair::from_seed([1; 32]);
         let bob = Keypair::from_seed([2; 32]);
         let carla = Keypair::from_seed([3; 32]);
-        let env = seal(&ana, bob.public_key(), &mensaje("x", "y")).unwrap();
+        let env = seal(&ana, bob.public_key(), &mensaje("x", "y"), vec![]).unwrap();
         assert!(matches!(open(&env, carla.public_key()), Err(RailError::WrongRecipient)));
     }
 
@@ -280,7 +303,7 @@ mod tests {
     fn payload_manipulado_invalida_la_firma() {
         let ana = Keypair::from_seed([1; 32]);
         let bob = Keypair::from_seed([2; 32]);
-        let mut env = seal(&ana, bob.public_key(), &mensaje("x", "original")).unwrap();
+        let mut env = seal(&ana, bob.public_key(), &mensaje("x", "original"), vec![]).unwrap();
         // Manipular el payload tras sellar.
         if let Some(b) = env.payload.last_mut() {
             *b ^= 0xff;
@@ -294,7 +317,7 @@ mod tests {
         let ana = Keypair::from_seed([1; 32]);
         let bob = Keypair::from_seed([2; 32]);
         let carla = Keypair::from_seed([3; 32]);
-        let mut env = seal(&ana, bob.public_key(), &mensaje("x", "y")).unwrap();
+        let mut env = seal(&ana, bob.public_key(), &mensaje("x", "y"), vec![]).unwrap();
         env.to = carla.public_key();
         assert!(matches!(open(&env, carla.public_key()), Err(RailError::BadSignature)));
     }
@@ -311,10 +334,25 @@ mod tests {
     }
 
     #[test]
+    fn avales_viajan_y_van_firmados() {
+        let ana = Keypair::from_seed([1; 32]);
+        let bob = Keypair::from_seed([2; 32]);
+        let avales = vec![b"aval-uno".to_vec(), b"aval-dos".to_vec()];
+        let env = seal(&ana, bob.public_key(), &mensaje("x", "y"), avales.clone()).unwrap();
+        // Llegan intactos al abrir.
+        assert!(open(&env, bob.public_key()).is_ok());
+        assert_eq!(env.avales, avales);
+        // Manipular los avales en tránsito invalida la firma del sobre.
+        let mut tocado = env.clone();
+        tocado.avales[0] = b"falsificado".to_vec();
+        assert!(matches!(open(&tocado, bob.public_key()), Err(RailError::BadSignature)));
+    }
+
+    #[test]
     fn bytes_roundtrip_del_cable() {
         let ana = Keypair::from_seed([1; 32]);
         let bob = Keypair::from_seed([2; 32]);
-        let env = seal(&ana, bob.public_key(), &mensaje("asunto", "cuerpo")).unwrap();
+        let env = seal(&ana, bob.public_key(), &mensaje("asunto", "cuerpo"), vec![]).unwrap();
         let bytes = env.to_bytes().unwrap();
         let env2 = RailEnvelope::from_bytes(&bytes).unwrap();
         assert_eq!(env, env2);
@@ -328,7 +366,7 @@ mod tests {
         let transporte = MockTransport::new();
         let mut bandeja_bob = RailInbox::new(bob.public_key());
 
-        let env = seal(&ana, bob.public_key(), &mensaje("minga", "vení el sábado")).unwrap();
+        let env = seal(&ana, bob.public_key(), &mensaje("minga", "vení el sábado"), vec![]).unwrap();
         transporte.send(bob.public_key(), &env).unwrap();
 
         // Bob recibe (poll del transporte) e ingiere.

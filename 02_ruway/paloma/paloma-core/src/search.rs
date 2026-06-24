@@ -74,6 +74,7 @@ mod tests {
             signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
             cuerpos: Vec::new(),
+            signer: None,
         }
     }
 

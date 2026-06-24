@@ -176,6 +176,7 @@ impl MailBackend for MockBackend {
             signature: SignatureStatus::Unsigned,
             mailbox: "Sent".to_string(),
             cuerpos: msg.cuerpos.clone(),
+            signer: None,
         };
         self.messages.lock().unwrap().entry("Sent".to_string()).or_default().push(stored);
         Ok(id)
@@ -216,6 +217,7 @@ mod tests {
             signature: SignatureStatus::Unsigned,
             mailbox: "INBOX".into(),
             cuerpos: Vec::new(),
+            signer: None,
         }
     }
 

@@ -98,6 +98,27 @@ impl TrustStore {
             .map(|a| a.attester_key)
     }
 
+    /// Serializa los avales para **propagarlos** (cada uno postcard). El rail los
+    /// adjunta a los mensajes para que la red de confianza crezca sola.
+    pub fn export(&self) -> Vec<Vec<u8>> {
+        self.avales.iter().filter_map(|a| serde_json::to_vec(a).ok()).collect()
+    }
+
+    /// Ingiere avales recibidos (serializados con [`Self::export`]): deserializa,
+    /// verifica y guarda los nuevos. Devuelve cuántos se incorporaron. Tolera
+    /// blobs corruptos (los saltea).
+    pub fn import_bytes(&mut self, blobs: &[Vec<u8>]) -> usize {
+        let mut n = 0;
+        for b in blobs {
+            if let Ok(a) = serde_json::from_slice::<Attestation>(b) {
+                if self.add(a) {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
     /// Carga el almacén de `path` (JSON). Inexistente → vacío.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, TrustError> {
         match std::fs::read(path.as_ref()) {

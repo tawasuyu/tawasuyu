@@ -282,6 +282,7 @@ mod tests {
             signature: Default::default(),
             mailbox: "INBOX".to_string(),
             cuerpos: Vec::new(),
+            signer: None,
         }
     }
 

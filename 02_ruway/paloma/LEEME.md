@@ -267,9 +267,17 @@ intercambiables, como el resto de la suite.
     identidad muestra "👤 nombre" / "🔗 avalado por X" / "? no guardado".
     Botón **🔗 Avalar** (`Msg::VouchSender`) firma un aval por el remitente.
     Trait `Voucher` inyectado (`paloma-app::identity::AgoraVoucher`, con la seed).
-  - **Pendiente**: **propagación** de avales (adjuntarlos a los mensajes / gossip
-    por el rail) — hoy se crean/persisten localmente o se importan por
-    `~/.config/paloma/avales.json`; el intercambio automático es el próximo paso.
+  - **Propagación (Fase 18):** los avales **viajan con los mensajes del rail**.
+    `RailEnvelope.avales` (atestaciones serializadas, **dentro de la firma** del
+    sobre); `TrustStore::export`/`import_bytes`. Al enviar por el rail se adjuntan
+    los avales propios; al recibir se ingieren (verificados) y la red de
+    confianza **crece sola**. Test: avales viajan y van firmados (manipularlos
+    invalida el sobre).
+  - **Confianza unificada por la clave firmante (Fase 18):** `Message.signer`
+    (clave del firmante verificado, set por MIME en SMTP y por el rail);
+    `sender_trust` evalúa por `signer` para **ambos** transportes. SMTP firmado:
+    al guardar el remitente se **fija su clave** (`Contact.pubkey`), atando
+    `pubkey ↔ email`. Tests: directo, desconocido y **avalado** (transitivo).
 
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
