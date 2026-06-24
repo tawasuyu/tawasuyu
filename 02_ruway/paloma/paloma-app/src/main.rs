@@ -37,6 +37,7 @@ use serde::Deserialize;
 use paloma_core::{Account, Address, MailBackend, Security, ServerConfig};
 use paloma_llimphi::{Model, Msg};
 
+mod llm;
 mod semantic;
 
 /// La cuenta tal como se escribe en el JSON: plana y cómoda de editar a mano.
@@ -199,6 +200,13 @@ impl App for Paloma {
         // cae a la búsqueda exacta — la app arranca igual.
         if let Some(engine) = semantic::DaemonSemantic::try_build(&account_id, cache_dir()) {
             model.attach_semantic(Box::new(engine));
+        }
+
+        // Asistente LLM (Eje 2): resumir hilo + borrador de respuesta. Se
+        // engancha si hay un backend real (o PLUMA_LLM_BACKEND explícito);
+        // local-first con Ollama. Sin backend, los botones ✨ no aparecen.
+        if let Some(assistant) = llm::LlmHelper::try_build() {
+            model.attach_llm(Box::new(assistant));
         }
 
         model

@@ -131,6 +131,22 @@ intercambiables, como el resto de la suite.
   - Requiere un `rimay-verbo-daemon` corriendo para ser útil de verdad
     (`cargo run -p rimay-verbo-daemon-bin -- --provider fastembed`).
 
+- **Fase 11 (2026-06-24):** correo **LLM-nativo** (Eje 2).
+  - `paloma-llimphi` define el trait `LlmAssistant` (`summarize` / `draft_reply`)
+    + los `Msg::{Summarize,LlmSummary,DismissSummary,DraftReply,LlmDraft,LlmError}`.
+    Mismo patrón async que el semántico: el asistente corre fuera del hilo de UI
+    y despacha el resultado por `Handle`.
+  - UI: botones **✨ Resumir** / **✨ Borrador IA** en la barra de acciones del
+    hilo (sólo si hay asistente). El resumen aparece como banner descartable
+    arriba del hilo; el borrador abre el compositor de respuesta con el cuerpo
+    redactado (Para/Asunto/References ya puestos — listo para revisar y enviar).
+  - El puente vive en `paloma-app::llm::LlmHelper`: runtime tokio + `pluma-llm`
+    (`from_env`). **Local-first**: con `PLUMA_LLM_BACKEND=ollama` +
+    `PLUMA_LLM_MODEL=...` el correo no sale de la máquina. Sin backend real (y
+    sin opt-in) el asistente no se engancha y los botones ✨ no aparecen.
+  - Certificado: 2 tests en `paloma-app` (camino de la request contra el mock +
+    `truncar`); el despacho por `Handle` reusa el patrón probado del semántico.
+
 - **Probador de conexión (2026-06-24):** binario `paloma-test` (en `paloma-app`)
   verifica IMAP+SMTP reales sin GUI. Gmail-aware (defaults `imap/smtp.gmail.com`).
   `PALOMA_EMAIL` + `PALOMA_PASSWORD` (contraseña de **aplicación** en Gmail);
@@ -142,8 +158,8 @@ intercambiables, como el resto de la suite.
    IMAP (TLS/STARTTLS/plano) y SMTP — sólo testeados por tipos. Usar `paloma-test`.
 2. **Bandeja-canvas por significado** — sobre `paloma-semantic`, ordenar la
    bandeja por tema/atención (estilo `khipu`) en vez de lista cronológica.
-3. **LLM-nativo** (`pluma-llm`, local-first/Ollama) — resumir hilos, extraer
-   pendientes/fechas, borrador de respuesta, triage por importancia.
+3. **LLM-nativo — triage** — sobre `LlmAssistant`, falta el triage/importancia
+   automático y la extracción de pendientes a una lista (resumen + borrador ✅).
 4. **Firma/verificación con `agora`** (Ed25519) — firmar salientes y verificar
    entrantes; keystore de `agora` + header propio (el badge ya está en UI).
 5. **Rail soberano** `chasqui`/`ayni` — correo suite-a-suite sin SMTP.

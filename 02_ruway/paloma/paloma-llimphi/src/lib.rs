@@ -45,6 +45,20 @@ pub trait SemanticEngine: Send {
     fn search(&self, query: String, corpus: Vec<Message>, handle: llimphi_ui::Handle<Msg>);
 }
 
+/// Asistente LLM, inyectado por el anfitrión. Igual que [`SemanticEngine`]: el
+/// trabajo es async (pega contra el modelo vía `pluma-llm`, local con Ollama o
+/// remoto), corre fuera del hilo de UI y **despacha** el resultado como `Msg`.
+/// `Model::llm == None` (sin backend / sin opt-in) ⇒ los botones ✨ no aparecen.
+/// La implementación concreta vive en `paloma-app`.
+pub trait LlmAssistant: Send {
+    /// Resume el hilo (`thread_text`, texto plano) → despacha `Msg::LlmSummary`
+    /// con el resumen, o `Msg::LlmError` si falla.
+    fn summarize(&self, thread_text: String, handle: llimphi_ui::Handle<Msg>);
+    /// Redacta un borrador de respuesta al hilo → despacha `Msg::LlmDraft` con
+    /// el cuerpo, o `Msg::LlmError` si falla.
+    fn draft_reply(&self, thread_text: String, handle: llimphi_ui::Handle<Msg>);
+}
+
 /// Campo enfocado del formulario de redacción.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposeField {
@@ -146,6 +160,15 @@ pub struct Model {
     semantic_results: Option<Vec<MessageId>>,
     /// `true` mientras hay una búsqueda semántica en vuelo (embebiendo/rankeando).
     semantic_busy: bool,
+    /// Asistente LLM inyectado por el anfitrión. `None` sin backend disponible.
+    llm: Option<Box<dyn LlmAssistant>>,
+    /// Resumen LLM del hilo abierto (banner sobre la lectura). Se limpia al
+    /// cambiar de hilo. `None` = no se pidió / se descartó.
+    summary: Option<String>,
+    /// `true` mientras se está resumiendo el hilo.
+    summary_busy: bool,
+    /// `true` mientras se redacta un borrador de respuesta con el LLM.
+    draft_busy: bool,
     /// Caché en disco (offline-first). `None` = sin persistencia (demos).
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
@@ -228,6 +251,10 @@ impl Model {
             semantic: None,
             semantic_results: None,
             semantic_busy: false,
+            llm: None,
+            summary: None,
+            summary_busy: false,
+            draft_busy: false,
             db,
             account_id,
             status,
@@ -259,6 +286,54 @@ impl Model {
             }
         }
         out
+    }
+
+    /// Inyecta el asistente LLM (lo hace el anfitrión tras construir el modelo).
+    /// Sin esto, los botones ✨ (resumir / borrador) no se muestran.
+    pub fn attach_llm(&mut self, assistant: Box<dyn LlmAssistant>) {
+        self.llm = assistant.into();
+    }
+
+    /// ¿Hay asistente LLM disponible? (Gobierna si la UI muestra los botones ✨.)
+    pub fn llm_available(&self) -> bool {
+        self.llm.is_some()
+    }
+
+    /// El resumen LLM del hilo abierto, si se pidió.
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
+
+    /// ¿Se está resumiendo el hilo ahora mismo?
+    pub fn summary_busy(&self) -> bool {
+        self.summary_busy
+    }
+
+    /// ¿Se está redactando un borrador con el LLM ahora mismo?
+    pub fn draft_busy(&self) -> bool {
+        self.draft_busy
+    }
+
+    /// El hilo abierto como texto plano (asunto + cada mensaje: de + cuerpo),
+    /// para pasárselo al asistente LLM. `None` si no hay hilo abierto.
+    fn thread_plain_text(&self) -> Option<String> {
+        let thread = self.current_thread()?;
+        let mut out = String::new();
+        if !thread.subject.is_empty() {
+            out.push_str("Asunto: ");
+            out.push_str(&thread.subject);
+            out.push_str("\n\n");
+        }
+        for id in &thread.message_ids {
+            if let Some(m) = self.store.message(id) {
+                out.push_str("De: ");
+                out.push_str(&m.from.to_string());
+                out.push('\n');
+                out.push_str(&m.display_body());
+                out.push_str("\n\n---\n\n");
+            }
+        }
+        Some(out)
     }
 
     /// ¿Está activo el modo semántico **y** hay motor inyectado? (Si no, la UI
@@ -345,6 +420,9 @@ impl Model {
         self.threads = self.store.threads(&mailbox);
         self.selected_thread = Some(idx);
         self.read_scroll = 0.0;
+        // El resumen LLM es por hilo: al cambiar de hilo, se descarta.
+        self.summary = None;
+        self.summary_busy = false;
         // Reflejar el estado de leído en la caché en disco.
         if let Some(d) = self.db.clone() {
             let _ = d.save_messages(&self.account_id, &mailbox, self.store.messages(&mailbox));
@@ -446,6 +524,18 @@ pub enum Msg {
     SemanticResults(Vec<MessageId>),
     /// Pedir el render HTML enriquecido de un mensaje (gancho de puriy).
     ViewRich(MessageId),
+    /// Pedir al LLM un resumen del hilo abierto.
+    Summarize,
+    /// Resumen del hilo, devuelto por el asistente LLM.
+    LlmSummary(String),
+    /// Descartar el banner de resumen.
+    DismissSummary,
+    /// Pedir al LLM un borrador de respuesta al hilo abierto.
+    DraftReply,
+    /// Borrador de respuesta del LLM: abre el compositor con el cuerpo redactado.
+    LlmDraft(String),
+    /// Falla del asistente LLM (la muestra la barra de estado).
+    LlmError(String),
 }
 
 /// Dispara una búsqueda por significado: arma el corpus y se lo entrega al
@@ -464,6 +554,24 @@ fn fire_semantic(model: &mut Model, handle: &llimphi_ui::Handle<Msg>) {
     model.semantic_results = None;
     model.status = rimay_localize::t("paloma-status-search-semantic-running");
     engine.search(query, corpus, handle.clone());
+}
+
+/// Arma un compositor de **respuesta** al hilo abierto (Para/Asunto/References
+/// prellenados, cuerpo vacío). `None` si no hay hilo o mensaje. Lo comparten la
+/// respuesta manual (`ComposeReply`) y el borrador LLM (`LlmDraft`).
+fn reply_compose(model: &Model) -> Option<Compose> {
+    let original = model
+        .current_thread()
+        .and_then(|t| t.message_ids.last())
+        .and_then(|id| model.store.message(id))?;
+    let out = OutgoingMessage::reply_to(original, model.me.clone());
+    let mut c = Compose::empty();
+    c.to.set_text(out.to.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "));
+    c.subject.set_text(out.subject);
+    c.focus = ComposeField::Body;
+    c.in_reply_to = out.in_reply_to;
+    c.references = out.references;
+    Some(c)
 }
 
 /// La transición Elm. Toma el modelo por valor y lo devuelve mutado.
@@ -493,20 +601,7 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
         Msg::ComposeOpen => model.compose = Some(Compose::empty()),
         Msg::ComposeClose => model.compose = None,
         Msg::ComposeReply => {
-            if let Some(original) = model
-                .current_thread()
-                .and_then(|t| t.message_ids.last())
-                .and_then(|id| model.store.message(id))
-            {
-                let out = OutgoingMessage::reply_to(original, model.me.clone());
-                let mut c = Compose::empty();
-                c.to.set_text(
-                    out.to.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "),
-                );
-                c.subject.set_text(out.subject);
-                c.focus = ComposeField::Body;
-                c.in_reply_to = out.in_reply_to;
-                c.references = out.references;
+            if let Some(c) = reply_compose(&model) {
                 model.compose = Some(c);
             }
         }
@@ -575,6 +670,40 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
         }
         Msg::ViewRich(_id) => {
             model.status = rimay_localize::t("paloma-status-view-rich");
+        }
+        Msg::Summarize => {
+            if let (Some(llm), Some(text)) = (model.llm.as_ref(), model.thread_plain_text()) {
+                model.summary_busy = true;
+                model.summary = None;
+                model.status = rimay_localize::t("paloma-status-llm-summarizing");
+                llm.summarize(text, handle.clone());
+            }
+        }
+        Msg::LlmSummary(s) => {
+            model.summary = Some(s);
+            model.summary_busy = false;
+            model.status = rimay_localize::t("paloma-status-llm-summary-done");
+        }
+        Msg::DismissSummary => model.summary = None,
+        Msg::DraftReply => {
+            if let (Some(llm), Some(text)) = (model.llm.as_ref(), model.thread_plain_text()) {
+                model.draft_busy = true;
+                model.status = rimay_localize::t("paloma-status-llm-drafting");
+                llm.draft_reply(text, handle.clone());
+            }
+        }
+        Msg::LlmDraft(body) => {
+            model.draft_busy = false;
+            if let Some(mut c) = reply_compose(&model) {
+                c.body.set_text(body);
+                model.compose = Some(c);
+                model.status = rimay_localize::t("paloma-status-llm-draft-done");
+            }
+        }
+        Msg::LlmError(e) => {
+            model.summary_busy = false;
+            model.draft_busy = false;
+            model.status = e;
         }
         Msg::OpenMessage(id) => {
             model.open_message(&id);

@@ -573,6 +573,21 @@ fn reading_panel(model: &Model) -> View<Msg> {
         button(&format!("↩  {}", t("paloma-btn-reply")), theme.accent, theme.bg_app, Msg::ComposeReply),
         button(&format!("↪  {}", t("paloma-btn-forward")), theme.bg_button, theme.fg_text, Msg::ComposeForward),
     ];
+    // Acciones LLM (sólo si hay asistente inyectado).
+    if model.llm_available() {
+        let sum_lbl = if model.summary_busy() {
+            format!("✨ {}", t("paloma-btn-summarizing"))
+        } else {
+            format!("✨ {}", t("paloma-btn-summarize"))
+        };
+        let draft_lbl = if model.draft_busy() {
+            format!("✨ {}", t("paloma-btn-drafting"))
+        } else {
+            format!("✨ {}", t("paloma-btn-ai-draft"))
+        };
+        actions.push(button(&sum_lbl, theme.bg_button, theme.fg_text, Msg::Summarize));
+        actions.push(button(&draft_lbl, theme.bg_button, theme.fg_text, Msg::DraftReply));
+    }
     if let Some(id) = &newest_id {
         actions.push(button(
             &star_lbl,
@@ -596,6 +611,12 @@ fn reading_panel(model: &Model) -> View<Msg> {
     .children(actions);
 
     let mut cards: Vec<View<Msg>> = Vec::new();
+    // Banner de resumen LLM (si se pidió o está en curso), arriba del hilo.
+    if model.summary_busy() {
+        cards.push(summary_banner(theme, &rimay_localize::t("paloma-llm-summarizing"), false));
+    } else if let Some(s) = model.summary() {
+        cards.push(summary_banner(theme, s, true));
+    }
     for id in &thread.message_ids {
         if let Some(m) = model.store_ref().message(id) {
             cards.push(message_card(theme, m));
@@ -943,6 +964,50 @@ fn empty_note(theme: &Theme, text: &str) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(text, 13.0, theme.fg_placeholder, Alignment::Center)
+}
+
+/// Banner del resumen LLM sobre el hilo: título ✨ + (✕ descartar si hay texto)
+/// y el cuerpo del resumen (o el aviso "resumiendo…"). `dismissable` agrega la
+/// cruz para cerrarlo.
+fn summary_banner(theme: &Theme, text: &str, dismissable: bool) -> View<Msg> {
+    let title = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(rimay_localize::t("paloma-llm-summary-title"), 12.0, theme.accent, Alignment::Start);
+
+    let mut head_children = vec![title];
+    if dismissable {
+        head_children.push(button("✕", theme.bg_button, theme.fg_muted, Msg::DismissSummary));
+    }
+    let head = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(head_children);
+
+    let body_h = card_body_height(text);
+    let body = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(body_h) },
+        ..Default::default()
+    })
+    .text_aligned(text.to_string(), 13.0, theme.fg_text, Alignment::Start);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        padding: pad(14.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(8.0)
+    .children(vec![head, body])
 }
 
 /// Barra de acento vertical de 3 px (marca selección a la izquierda de una fila).
