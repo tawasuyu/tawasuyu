@@ -194,6 +194,65 @@ pub mod modules {
     }
 }
 
+/// **IA + semántica globales** del SO: el backend del LLM (instrumento de
+/// asistentes como `:?`/`:explica` de shuma, RAG de paloma…) y la búsqueda
+/// semántica por embeddings (`:buscar` de shuma, etc.). Una sola fuente de
+/// verdad, editable en wawa-panel; las apps la leen de acá (no per-app). Tipos
+/// planos (`""`/`0` = "sin fijar, usar el default") para no acoplar este crate a
+/// pluma-llm ni rimay-verbo.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiConfig {
+    #[serde(default)]
+    pub llm: LlmSettings,
+    #[serde(default)]
+    pub semantic: SemanticSettings,
+}
+
+/// Selección de backend LLM. `backend` vacío = resolver por entorno (`from_env`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LlmSettings {
+    /// `""` = auto (from_env). Si no: `anthropic`/`gemini`/`deepseek`/`cohere`/`ollama`/`mock`.
+    #[serde(default)]
+    pub backend: String,
+    /// Modelo; `""` = default del backend.
+    #[serde(default)]
+    pub model: String,
+    /// API key; `""` = leer del entorno (recomendado, no guardar la clave en claro).
+    #[serde(default)]
+    pub api_key: String,
+    /// Endpoint custom (p.ej. Ollama remoto); `""` = default.
+    #[serde(default)]
+    pub endpoint: String,
+}
+
+impl LlmSettings {
+    /// `true` si fija un backend explícito (si no, el consumidor cae a `from_env`).
+    pub fn is_set(&self) -> bool {
+        !self.backend.trim().is_empty()
+    }
+}
+
+/// Ajustes de la búsqueda semántica por embeddings.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SemanticSettings {
+    /// Habilita la búsqueda semántica. Apagada por defecto.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Socket del daemon de embeddings; `""` = socket por defecto.
+    #[serde(default)]
+    pub socket: String,
+    /// Dimensión del provider mock cuando no hay daemon; `0` = 384.
+    #[serde(default)]
+    pub dim: usize,
+}
+
+impl SemanticSettings {
+    /// La dimensión efectiva del fallback mock (default 384).
+    pub fn effective_dim(&self) -> usize {
+        if self.dim == 0 { 384 } else { self.dim }
+    }
+}
+
 /// Configuración del sistema operativo wawa. Serializada como el JSON
 /// del módulo. Campos nuevos se agregan con `#[serde(default = "…")]`
 /// para preservar compatibilidad hacia atrás.
@@ -242,6 +301,11 @@ pub struct WawaConfig {
     /// Cada cuántas **horas** refresca el fondo automático (default 6).
     #[serde(default = "default_wallpaper_hours")]
     pub wallpaper_interval_hours: u32,
+
+    /// IA + semántica globales (LLM + embeddings). Vacío = LLM por entorno y
+    /// búsqueda semántica apagada. Lo edita wawa-panel; lo leen shuma, paloma, …
+    #[serde(default)]
+    pub ai: AiConfig,
 }
 
 fn default_wallpaper_hours() -> u32 {
@@ -278,6 +342,7 @@ impl Default for WawaConfig {
             dientes_outside: false,
             wallpaper_provider: String::new(),
             wallpaper_interval_hours: default_wallpaper_hours(),
+            ai: AiConfig::default(),
         }
     }
 }

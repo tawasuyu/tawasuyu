@@ -906,7 +906,7 @@ pub(crate) fn apply_ask(mut s: State, rest: &str) -> State {
         system,
         prompt: q.to_string(),
         max_tokens: 200,
-        llm: s.config.ai.llm.clone(),
+        llm: wawa_config::WawaConfig::load().ai.llm,
     });
     s.push_output(OutputLine::notice(format!("🜲 llm · pensando una línea para: {q}")));
     s
@@ -950,7 +950,7 @@ pub(crate) fn apply_explain(mut s: State, rest: &str, summarize: bool) -> State 
         system: system.to_string(),
         prompt: format!("Salida del bloque %c{block}:\n\n{body}"),
         max_tokens: 600,
-        llm: s.config.ai.llm.clone(),
+        llm: wawa_config::WawaConfig::load().ai.llm,
     });
     s.push_output(OutputLine::notice(format!("🜲 llm · {verbo} el bloque %c{block}…")));
     s
@@ -969,10 +969,10 @@ pub(crate) fn apply_search(mut s: State, rest: &str) -> State {
         ));
         return s;
     }
-    if !s.config.ai.semantic.enabled {
+    let ai_sem = wawa_config::WawaConfig::load().ai.semantic;
+    if !ai_sem.enabled {
         s.push_output(OutputLine::notice(
-            "búsqueda semántica apagada — activala en wawa-panel (IA · semántica) o en \
-             [ai.semantic] enabled = true del shumarc",
+            "búsqueda semántica apagada — activala en wawa-panel (IA y semántica)",
         ));
         return s;
     }
@@ -1008,8 +1008,8 @@ pub(crate) fn apply_search(mut s: State, rest: &str) -> State {
         scope: "history".to_string(),
         query: q.to_string(),
         candidates,
-        socket: s.config.ai.semantic.socket.clone(),
-        dim: s.config.ai.semantic.effective_dim(),
+        socket: ai_sem.socket.clone(),
+        dim: ai_sem.effective_dim(),
     });
     s.push_output(OutputLine::notice(format!(
         "🔎 buscando «{q}» por significado en {n} comandos…"
@@ -1029,10 +1029,10 @@ pub(crate) fn apply_search_files(mut s: State, rest: &str) -> State {
         ));
         return s;
     }
-    if !s.config.ai.semantic.enabled {
+    let ai_sem = wawa_config::WawaConfig::load().ai.semantic;
+    if !ai_sem.enabled {
         s.push_output(OutputLine::notice(
-            "búsqueda semántica apagada — activala en wawa-panel (IA · semántica) o en \
-             [ai.semantic] enabled = true del shumarc",
+            "búsqueda semántica apagada — activala en wawa-panel (IA y semántica)",
         ));
         return s;
     }
@@ -1050,8 +1050,8 @@ pub(crate) fn apply_search_files(mut s: State, rest: &str) -> State {
         scope: "files".to_string(),
         query: q.to_string(),
         candidates,
-        socket: s.config.ai.semantic.socket.clone(),
-        dim: s.config.ai.semantic.effective_dim(),
+        socket: ai_sem.socket.clone(),
+        dim: ai_sem.effective_dim(),
     });
     s.push_output(OutputLine::notice(format!(
         "🔎 buscando archivos «{q}» por significado en {n} bajo {cwd_label}…"

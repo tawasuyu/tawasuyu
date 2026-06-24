@@ -17,6 +17,9 @@ ulid = { workspace = true }
 shuma-line = { path = "../shuma-line" }
 shuma-history = { path = "../shuma-history" }
 shuma-config = { path = "../shuma-config" }
+# Config global del SO: la IA + semántica viven acá (no per-app), editadas en
+# wawa-panel. Los builtins (`:?`/`:buscar`) la leen en vivo.
+wawa-config = { path = "../../../../shared/wawa-config" }
 shuma-intent = { path = "../shuma-intent" }
 shuma-infer = { path = "../shuma-infer" }
 llimphi-ui = { workspace = true }

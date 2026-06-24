@@ -31,9 +31,6 @@ wawa-config = { path = "../../../shared/wawa-config" }
 mirada-brain = { path = "../../mirada/mirada-brain" }
 pata-core = { path = "../../pata/pata-core" }
 pata-config = { path = "../../pata/pata-config" }
-# Config nativa de shuma (shumarc.toml): editamos su sección [ai.*] (LLM +
-# semántica) desde el panel. Crate liviano (serde/toml/directories).
-shuma-config = { path = "../../shuma/sandbox/shuma-config" }
 # Editor de recorrido (Prezi) de la vista espacial: lienzo libre + rotación.
 pluma-deck-core = { path = "../../../00_unanchay/pluma/pluma-deck-core" }
 pluma-deck-recorrido-llimphi = { path = "../../../00_unanchay/pluma/pluma-deck-recorrido-llimphi" }

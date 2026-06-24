@@ -485,7 +485,7 @@ fn run_llm_blocking(req: &shuma_module_shell::LlmRequest) -> Result<String, Stri
 /// por env (`from_env`). Traduce los tipos planos de `shuma-config` al
 /// `LlmConfig` de `pluma-llm` (mantiene a `shuma-config` liviano).
 fn build_llm_client(
-    s: &shuma_config::LlmSettings,
+    s: &wawa_config::LlmSettings,
 ) -> Result<std::sync::Arc<dyn pluma_llm::pluma_llm_core::ChatClient>, String> {
     use pluma_llm::{build_client, BackendKind, LlmConfig};
     if !s.is_set() {

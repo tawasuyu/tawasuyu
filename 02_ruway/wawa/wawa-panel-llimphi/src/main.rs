@@ -287,10 +287,6 @@ struct Model {
     /// el activo; toma efecto en el próximo arranque de shuma.
     shuma_atajos_active: String,
     shuma_atajos_names: Vec<String>,
-    /// IA + semántica de shuma (sección `[ai.*]` de su shumarc.toml). El panel
-    /// la edita y la persiste con `shuma_config::upsert_key`; toma efecto al
-    /// reabrir shuma.
-    shuma_ai: shuma_config::AiConfig,
     /// Biblioteca de **perfiles de escritorio completos** (custom, editables,
     /// creables y duplicables). Cada perfil = foto de config mirada + keymap +
     /// barra pata. El activo (`dprofiles.active`) es el que se está editando en
@@ -982,7 +978,6 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         .unwrap_or_default();
 
     let (shuma_atajos_active, shuma_atajos_names) = shuma_shortcuts::load();
-    let shuma_ai = shuma_config::Config::load_default().map(|c| c.ai).unwrap_or_default();
 
     let dprofiles = DesktopProfiles::load_or_seed(&mirada);
 
@@ -1015,7 +1010,6 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         profiles_path,
         shuma_atajos_active,
         shuma_atajos_names,
-        shuma_ai,
         dprofiles,
         pata,
         rules,
@@ -1356,7 +1350,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     sistema.sections.push(teclado_section(&m.mirada));
     sistema.sections.push(puntero_section(&m.mirada));
     sistema.sections.push(idioma_section(&m.cfg));
-    sistema.sections.push(shuma_ai_section(m));
+    sistema.sections.push(wawa_ai_section(m));
     sistema.sections.push(modulos_section(&m.cfg));
 
     // ---- Panel ACERCA ----
@@ -2193,11 +2187,12 @@ fn shuma_atajos_section(m: &Model) -> Section {
         ))
 }
 
-/// Sección «IA y semántica (shuma)» del panel Sistema: el backend del LLM
-/// (instrumento de `:?`/`:explica`/`:resume`) y la búsqueda semántica
-/// (`:buscar`). Se persiste en la sección `[ai.*]` del shumarc.toml de shuma;
-/// toma efecto al reabrir shuma.
-fn shuma_ai_section(m: &Model) -> Section {
+/// Sección **«IA y semántica»** del panel Sistema (config GLOBAL del SO, en
+/// `WawaConfig::ai`): el backend del LLM (instrumento de asistentes como `:?` de
+/// shuma o el RAG de paloma) y la búsqueda semántica por embeddings. Una sola
+/// fuente de verdad para todas las apps; toma efecto en vivo (las apps leen
+/// `wawa.ai`).
+fn wawa_ai_section(m: &Model) -> Section {
     use allichay::Field;
     let backends = [
         ("", "Automático (por entorno)"),
@@ -2212,71 +2207,51 @@ fn shuma_ai_section(m: &Model) -> Section {
         .iter()
         .map(|(v, l)| EnumOption::new((*v).to_string(), (*l).to_string()))
         .collect();
-    Section::new("shuma_ai::ia", "IA y semántica (shuma)")
+    Section::new("wawa_ai::ia", "IA y semántica")
         .icon("🜲")
         .help(
-            "El asistente LLM de shuma (`:?` propone comando · `:explica`/`:resume` \
-             sobre la salida) y la búsqueda semántica (`:buscar` encuentra comandos \
-             pasados por significado). El cambio toma efecto al reabrir shuma. La API \
-             key, si la dejás vacía, se lee del entorno (recomendado).",
+            "Config GLOBAL del SO: el backend del LLM (asistentes como `:?` de shuma \
+             o el RAG de correo) y la búsqueda semántica por significado (`:buscar`). \
+             Lo usan todas las apps. La API key, vacía, se lee del entorno \
+             (recomendado, no se guarda en claro).",
         )
         .field(Field::radio(
             "backend",
             "Backend del LLM",
-            m.shuma_ai.llm.backend.clone(),
+            m.cfg.ai.llm.backend.clone(),
             opts,
         ))
         .field(Field::text(
             "model",
             "Modelo (vacío = default del backend)",
-            m.shuma_ai.llm.model.clone(),
+            m.cfg.ai.llm.model.clone(),
         ))
         .field(Field::toggle(
             "sem_enabled",
-            "Búsqueda semántica (:buscar)",
-            m.shuma_ai.semantic.enabled,
+            "Búsqueda semántica por significado",
+            m.cfg.ai.semantic.enabled,
         ))
         .field(Field::text(
             "sem_socket",
             "Socket del daemon de embeddings (vacío = por defecto)",
-            m.shuma_ai.semantic.socket.clone(),
+            m.cfg.ai.semantic.socket.clone(),
         ))
 }
 
-/// Aplica una edición de la sección «IA y semántica (shuma)»: actualiza el
-/// estado en memoria y la persiste en `[ai.llm]`/`[ai.semantic]` del shumarc.
-fn apply_shuma_ai(m: &mut Model, field: &str, value: FieldValue) {
-    let Some(path) = shuma_config::Config::default_path() else {
-        m.status = "· no pude resolver el shumarc de shuma".into();
-        return;
-    };
-    let res = match field {
-        "backend" => {
-            let v = value.as_str().unwrap_or("").to_string();
-            m.shuma_ai.llm.backend = v.clone();
-            shuma_config::upsert_key(&path, "ai.llm", "backend", &shuma_config::toml_string(&v))
-        }
-        "model" => {
-            let v = value.as_str().unwrap_or("").to_string();
-            m.shuma_ai.llm.model = v.clone();
-            shuma_config::upsert_key(&path, "ai.llm", "model", &shuma_config::toml_string(&v))
-        }
-        "sem_enabled" => {
-            let b = value.as_bool().unwrap_or(false);
-            m.shuma_ai.semantic.enabled = b;
-            shuma_config::upsert_key(&path, "ai.semantic", "enabled", if b { "true" } else { "false" })
-        }
-        "sem_socket" => {
-            let v = value.as_str().unwrap_or("").to_string();
-            m.shuma_ai.semantic.socket = v.clone();
-            shuma_config::upsert_key(&path, "ai.semantic", "socket", &shuma_config::toml_string(&v))
-        }
+/// Aplica una edición de la sección «IA y semántica»: muta la config GLOBAL en
+/// memoria (`m.cfg.ai`) y marca para persistir (la escribe [`flush_saves`] a la
+/// capa de usuario de `WawaConfig`). Toma efecto en vivo (las apps releen `wawa.ai`).
+fn apply_wawa_ai(m: &mut Model, field: &str, value: FieldValue) {
+    match field {
+        "backend" => m.cfg.ai.llm.backend = value.as_str().unwrap_or("").to_string(),
+        "model" => m.cfg.ai.llm.model = value.as_str().unwrap_or("").to_string(),
+        "sem_enabled" => m.cfg.ai.semantic.enabled = value.as_bool().unwrap_or(false),
+        "sem_socket" => m.cfg.ai.semantic.socket = value.as_str().unwrap_or("").to_string(),
         _ => return,
-    };
-    match res {
-        Ok(()) => m.status = "ajuste de IA de shuma guardado (al reabrir shuma)".into(),
-        Err(e) => m.status = format!("· no pude guardar el shumarc: {e}"),
     }
+    m.dirty.wawa = true;
+    m.save_in = SAVE_DELAY_TICKS;
+    m.status = "ajuste de IA/semántica global guardado".into();
 }
 
 /// Nombre único para un conjunto de atajos nuevo a partir de `hint`.
@@ -3334,10 +3309,9 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.save_in = SAVE_DELAY_TICKS;
             return;
         }
-        // IA + semántica de shuma → sección [ai.*] del shumarc.toml (escritura
-        // quirúrgica directa: es config ajena, sin bandera de sucio nuestra).
-        "shuma_ai" => {
-            apply_shuma_ai(m, rel.leaf().unwrap_or(""), value);
+        // IA + semántica GLOBAL → WawaConfig::ai (capa de usuario).
+        "wawa_ai" => {
+            apply_wawa_ai(m, rel.leaf().unwrap_or(""), value);
             return;
         }
         // Greeter (DM): fondo animado + paleta → greeter.conf (próximo login).
@@ -3597,10 +3571,10 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
     let Some((key, rel)) = split_app(path) else {
         return String::new();
     };
-    if key == "shuma_ai" {
+    if key == "wawa_ai" {
         return match rel.leaf() {
-            Some("model") => m.shuma_ai.llm.model.clone(),
-            Some("sem_socket") => m.shuma_ai.semantic.socket.clone(),
+            Some("model") => m.cfg.ai.llm.model.clone(),
+            Some("sem_socket") => m.cfg.ai.semantic.socket.clone(),
             _ => String::new(),
         };
     }
@@ -3634,12 +3608,12 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
         });
     }
     // Sección «IA y semántica (shuma)»: valores vivos del shumarc.
-    if key == "shuma_ai" {
+    if key == "wawa_ai" {
         return Some(match rel.leaf() {
-            Some("backend") => FieldValue::Text(m.shuma_ai.llm.backend.clone()),
-            Some("model") => FieldValue::Text(m.shuma_ai.llm.model.clone()),
-            Some("sem_enabled") => FieldValue::Bool(m.shuma_ai.semantic.enabled),
-            Some("sem_socket") => FieldValue::Text(m.shuma_ai.semantic.socket.clone()),
+            Some("backend") => FieldValue::Text(m.cfg.ai.llm.backend.clone()),
+            Some("model") => FieldValue::Text(m.cfg.ai.llm.model.clone()),
+            Some("sem_enabled") => FieldValue::Bool(m.cfg.ai.semantic.enabled),
+            Some("sem_socket") => FieldValue::Text(m.cfg.ai.semantic.socket.clone()),
             _ => FieldValue::Text(String::new()),
         });
     }

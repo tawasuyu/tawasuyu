@@ -627,9 +627,9 @@ pub struct LlmRequest {
     pub system: String,
     pub prompt: String,
     pub max_tokens: u32,
-    /// Backend a usar (de `[ai.llm]` del shumarc). Si `backend` está vacío, el
-    /// chasis cae a `from_env`. Así el LLM es configurable desde wawa-panel.
-    pub llm: shuma_config::LlmSettings,
+    /// Backend a usar (de la config global del SO `wawa.ai.llm`). Si `backend`
+    /// está vacío, el chasis cae a `from_env`. Configurable desde wawa-panel.
+    pub llm: wawa_config::LlmSettings,
 }
 
 /// Petición de **búsqueda semántica** que el chasis debe cumplir: embebe `query`
