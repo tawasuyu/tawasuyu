@@ -17,6 +17,7 @@
 
 pub mod app;
 pub mod dbus;
+pub mod panel;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
