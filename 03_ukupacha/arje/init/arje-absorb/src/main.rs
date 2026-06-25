@@ -35,6 +35,9 @@ OPCIONES:
                      binario de servicio (leído de <root>) bajo su BLAKE3,
                      anclada en el seed. Sin esto el seed va sin attest.
     --gen-rootkey    si --rootkey no existe, generarla (/dev/urandom, 0600)
+    --harvest-cas    cosechar los binarios de los servicios (leídos de <root>) al
+                     CAS local (BLAKE3), para que `arje-cas-aoe` los distribuya
+                     por Akasha Over Ether
     --attest-from <f>  integra concesiones YA firmadas (JSON: objeto o array),
                      p. ej. emitidas por un `hammer commit`. Verifica la firma
                      de cada una y descarta inválidas; deduplica por bytecode.
@@ -62,6 +65,7 @@ fn run() -> anyhow::Result<()> {
     let mut rootkey: Option<PathBuf> = None;
     let mut gen_rootkey = false;
     let mut attest_from: Option<PathBuf> = None;
+    let mut harvest_cas = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -98,6 +102,7 @@ fn run() -> anyhow::Result<()> {
                     args.next().ok_or_else(|| anyhow::anyhow!("--attest-from necesita un valor"))?,
                 ))
             }
+            "--harvest-cas" => harvest_cas = true,
             other => anyhow::bail!("opción desconocida «{other}» (usá --help)"),
         }
     }
@@ -140,9 +145,37 @@ fn run() -> anyhow::Result<()> {
         eprintln!("arje-absorb: agregado carmen-dm (gestor de login gráfico).");
     }
 
-    // Atestación al arranque (A1): firma propia (--rootkey) y/o integración de
-    // concesiones pre-firmadas (--attest-from, p. ej. de hammer).
-    aplicar_atestacion(&mut seed, &root, &rootkey, gen_rootkey, &attest_from)?;
+    // Binarios de cada servicio leídos del sistema fuente (`root/<exec>`). Se
+    // necesitan para firmar (--rootkey), cross-checkear concesiones
+    // (--attest-from) y/o cosechar al CAS (--harvest-cas). Se leen UNA vez.
+    if rootkey.is_some() || attest_from.is_some() || harvest_cas {
+        let (bins, skipped) = collect_exec_bins(&seed, &root);
+        for s in &skipped {
+            eprintln!(
+                "arje-absorb: aviso: no pude leer «{s}» bajo {} — queda SIN atestar/cosechar",
+                root.display()
+            );
+        }
+
+        // Atestación al arranque (A1): firma propia (--rootkey) y/o integración
+        // de concesiones pre-firmadas (--attest-from, p. ej. de hammer).
+        aplicar_atestacion(&mut seed, &bins, &rootkey, gen_rootkey, &attest_from)?;
+
+        // Cosecha al CAS: los binarios de los servicios quedan direccionados por
+        // su BLAKE3, así `arje-cas-aoe` los distribuye por Akasha.
+        if harvest_cas {
+            if bins.is_empty() {
+                eprintln!("arje-absorb: aviso: 0 binarios legibles — nada que cosechar al CAS.");
+            } else {
+                let hashes = arje_cas::cosechar(bins.values().map(|b| b.as_slice()))?;
+                eprintln!(
+                    "arje-absorb: cosechados {} binario(s) al CAS en {}",
+                    hashes.len(),
+                    arje_cas::cas_root().display(),
+                );
+            }
+        }
+    }
 
     seed.validate()
         .map_err(|e| anyhow::anyhow!("la Semilla generada no valida: {e}"))?;
@@ -201,29 +234,17 @@ fn collect_exec_bins(
     (bins, skipped)
 }
 
-/// Aplica atestación al seed: firma propia con `--rootkey` (sobre los binarios
-/// leídos de `root`) y/o integra concesiones pre-firmadas con `--attest-from`,
-/// y reconcilia el ancla soberana del manifiesto resultante. No-op si no se
-/// pidió ninguna.
+/// Aplica atestación al seed sobre los `bins` ya leídos: firma propia con
+/// `--rootkey` y/o integra concesiones pre-firmadas con `--attest-from`, y
+/// reconcilia el ancla soberana del manifiesto resultante. No-op si no se pidió
+/// ninguna.
 fn aplicar_atestacion(
     seed: &mut card_core::Card,
-    root: &Path,
+    bins: &std::collections::BTreeMap<String, Vec<u8>>,
     rootkey: &Option<PathBuf>,
     gen_rootkey: bool,
     attest_from: &Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    if rootkey.is_none() && attest_from.is_none() {
-        return Ok(());
-    }
-    // Binarios de los servicios — para firmar y/o cross-checkear concesiones.
-    let (bins, skipped) = collect_exec_bins(seed, root);
-    for s in &skipped {
-        eprintln!(
-            "arje-absorb: aviso: no pude leer «{s}» bajo {} — queda SIN atestar",
-            root.display()
-        );
-    }
-
     // (1) Firma propia con la rootkey del operador (mismo firmador que
     //     packager/installer → manifiesto idéntico por cualquier ruta).
     if let Some(rootkey_path) = rootkey {
@@ -235,7 +256,7 @@ fn aplicar_atestacion(
         if bins.is_empty() {
             eprintln!("arje-absorb: aviso: 0 binarios legibles — no se firma manifiesto propio.");
         } else {
-            let (pubkey, concesiones) = arje_attest::firmar_arbol(seed_key, &bins);
+            let (pubkey, concesiones) = arje_attest::firmar_arbol(seed_key, bins);
             seed.attest = concesiones;
             seed.attest_rootkey = Some(pubkey);
             eprintln!(
@@ -247,7 +268,7 @@ fn aplicar_atestacion(
 
     // (2) Integración de concesiones pre-firmadas (p. ej. de un hammer commit).
     if let Some(af) = attest_from {
-        integrar_concesiones_hammer(seed, &bins, af)?;
+        integrar_concesiones_hammer(seed, bins, af)?;
     }
 
     // (3) Reconciliar el ancla soberana del manifiesto resultante.
@@ -464,5 +485,35 @@ mod tests {
         let antes = seed.attest.len();
         integrar_concesiones_hammer(&mut seed, &bins, &json_mala).unwrap();
         assert_eq!(seed.attest.len(), antes, "una firma corrupta no debe integrarse");
+    }
+
+    #[test]
+    fn harvest_cosecha_los_binarios_de_servicios_al_cas() {
+        use card_core::{Card, Payload};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/bin/svc"), b"service binary harvest").unwrap();
+
+        let mut seed = Card::new("seed");
+        let mut svc = Card::new("svc");
+        svc.payload = Payload::Native { exec: "/usr/bin/svc".into(), argv: vec![], envp: vec![] };
+        seed.genesis.push(svc);
+
+        // CAS aislado (único test de absorb que toca el CAS → sin carrera).
+        let cas = tmp.path().join("cas");
+        std::env::set_var("ENTE_CAS_ROOT", &cas);
+
+        // La composición del harvest: leer los binarios de los servicios y
+        // cosecharlos al CAS, direccionados por su BLAKE3.
+        let (bins, _skipped) = collect_exec_bins(&seed, root);
+        let hashes = arje_cas::cosechar(bins.values().map(|b| b.as_slice())).unwrap();
+        assert_eq!(hashes.len(), 1);
+        assert_eq!(
+            arje_cas::resolve(&hashes[0]).unwrap().as_slice(),
+            b"service binary harvest",
+        );
+
+        std::env::remove_var("ENTE_CAS_ROOT");
     }
 }

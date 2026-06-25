@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 card-core = { path = "../../../../shared/card/card-core" }
 arje-attest = { path = "../../runtime/arje-attest" }   # firmar el manifiesto de atestación (A1)
+arje-cas = { path = "../../runtime/arje-cas" }   # cosechar los binarios de servicios al CAS (--harvest-cas)
 anyhow = { workspace = true }
 serde_json = { workspace = true }   # leer concesiones pre-firmadas de hammer (--attest-from)
 

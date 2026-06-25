@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 arje-card = { path = "../../arje-card" }
 arje-attest = { path = "../../runtime/arje-attest" }   # firma del manifiesto de atestación (A1)
+arje-cas = { path = "../../runtime/arje-cas" }   # cosechar los binarios empaquetados al CAS (--harvest-cas)
 flate2 = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

@@ -64,6 +64,9 @@ struct Args {
     rootkey: Option<PathBuf>,
     /// Si la rootkey no existe, generarla (32 bytes de `/dev/urandom`, 0600).
     gen_rootkey: bool,
+    /// Cosechar los binarios empaquetados al CAS local (BLAKE3), para que
+    /// `arje-cas-aoe` pueda distribuirlos por la red.
+    harvest_cas: bool,
 }
 
 fn parse_args() -> anyhow::Result<Args> {
@@ -74,6 +77,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut assets: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut rootkey: Option<PathBuf> = None;
     let mut gen_rootkey = false;
+    let mut harvest_cas = false;
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -92,6 +96,9 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--gen-rootkey" => {
                 gen_rootkey = true;
+            }
+            "--harvest-cas" => {
+                harvest_cas = true;
             }
             "--bin" => {
                 let kv = it.next().context("--bin requiere label=path")?;
@@ -127,6 +134,7 @@ fn parse_args() -> anyhow::Result<Args> {
         assets,
         rootkey,
         gen_rootkey,
+        harvest_cas,
     })
 }
 
@@ -149,6 +157,8 @@ OPCIONES:
              atestación al arranque (A1): una ConcesionCapacidad por binario
              crítico sobre su BLAKE3. Sin esta opción el seed va sin attest.
     --gen-rootkey     Si --rootkey no existe, generarla (/dev/urandom, 0600).
+    --harvest-cas     Cosechar los binarios empaquetados al CAS local (BLAKE3),
+             para que `arje-cas-aoe` los distribuya por Akasha Over Ether.
     -h, --help   Esta ayuda.
 ";
 
@@ -205,6 +215,18 @@ fn run() -> anyhow::Result<()> {
             n = card.attest.len(),
         );
         eprintln!("arje-packager :: {}", arje_packager::guia_anclado_soberano(&pubhex));
+    }
+
+    // Cosecha al CAS: los binarios empaquetados quedan direccionados por su
+    // BLAKE3 (el mismo hash que firma la atestación), así `arje-cas-aoe` los
+    // sirve por Akasha y un peer reproduce la imagen bajándolos por hash.
+    if args.harvest_cas {
+        let hashes = arje_cas::cosechar(tree.values().map(|b| b.as_slice()))?;
+        eprintln!(
+            "arje-packager :: cosechados {} binario(s) al CAS en {}",
+            hashes.len(),
+            arje_cas::cas_root().display(),
+        );
     }
 
     // Seed firmado standalone (--seed-out): el JSON canónico de la Card ya con
