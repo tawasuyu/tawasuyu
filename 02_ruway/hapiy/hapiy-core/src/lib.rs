@@ -123,6 +123,40 @@ pub fn default_filename(stamp: &str) -> String {
     format!("hapiy-{stamp}.png")
 }
 
+/// Construye el [`willay_core::Evento`] de una captura ya guardada — la entrada
+/// que hapiy emite al centro de eventos. Es **puro** (no toca el socket): el
+/// binario lo arma con esto y lo manda con `willay_emit::emitir_silencioso`. El
+/// payload referencia el PNG por ruta (federación: el archivo se queda en disco,
+/// el índice sólo apunta).
+///
+/// `display` = conector del monitor capturado (o `None` si fue todo el
+/// escritorio); `region` = recorte si lo hubo; `width`/`height` = tamaño del PNG.
+pub fn evento_captura(
+    path: &Path,
+    display: Option<&str>,
+    region: Option<Region>,
+    width: u32,
+    height: u32,
+    ts_usec: u64,
+) -> willay_core::Evento {
+    let titulo = match (region, display) {
+        (Some(r), _) => format!("Captura región {}×{}", r.w, r.h),
+        (None, Some(name)) => format!("Captura {name} {width}×{height}"),
+        (None, None) => format!("Captura escritorio {width}×{height}"),
+    };
+    let ruta = path.display().to_string();
+    willay_core::Evento::nuevo(
+        willay_core::Clase::Captura,
+        ts_usec,
+        "hapiy",
+        titulo,
+        // El cuerpo (lo que se busca/embebe) lleva la ruta, así una búsqueda por
+        // nombre de archivo o carpeta encuentra la captura.
+        ruta.clone(),
+        willay_core::Payload::Archivo { ruta, mime: "image/png".to_string() },
+    )
+}
+
 /// Directorio destino por defecto: `~/Pictures` si existe, si no el directorio de
 /// imágenes XDG, si no el directorio actual.
 pub fn default_dir() -> PathBuf {
@@ -223,6 +257,24 @@ mod tests {
     #[test]
     fn default_filename_formatea() {
         assert_eq!(default_filename("20260624-160000"), "hapiy-20260624-160000.png");
+    }
+
+    #[test]
+    fn evento_captura_arma_titulo_y_payload() {
+        use willay_core::{Clase, Payload};
+        // Monitor específico.
+        let e = evento_captura(Path::new("/p/x.png"), Some("DP-1"), None, 2560, 1440, 100);
+        assert_eq!(e.clase, Clase::Captura);
+        assert_eq!(e.origen, "hapiy");
+        assert_eq!(e.titulo, "Captura DP-1 2560×1440");
+        assert_eq!(e.cuerpo, "/p/x.png", "la ruta va al cuerpo para buscar por nombre");
+        assert!(matches!(e.payload, Payload::Archivo { mime, .. } if mime == "image/png"));
+        // Región: el título la describe.
+        let r = evento_captura(Path::new("/p/y.png"), None, Some(Region { x: 0, y: 0, w: 640, h: 480 }), 640, 480, 1);
+        assert_eq!(r.titulo, "Captura región 640×480");
+        // Escritorio completo.
+        let d = evento_captura(Path::new("/p/z.png"), None, None, 1920, 1080, 1);
+        assert_eq!(d.titulo, "Captura escritorio 1920×1080");
     }
 
     #[test]

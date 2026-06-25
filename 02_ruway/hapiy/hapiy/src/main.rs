@@ -71,6 +71,17 @@ fn run(args: Args) -> Result<(), String> {
     shot.save_png(&path)?;
     println!("captura guardada en {}", path.display());
 
+    // Emitir al centro de eventos (no-op si el daemon willay no corre).
+    let ev = hapiy_core::evento_captura(
+        &path,
+        args.display.as_deref(),
+        args.region,
+        shot.width,
+        shot.height,
+        willay_emit::ahora_usec(),
+    );
+    willay_emit::emitir_silencioso(&ev);
+
     if args.edit {
         let (prog, a) = tullpu_launch(&path);
         Command::new(&prog)

@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 hapiy-core = { path = "../hapiy-core" }
 hapiy-capture = { path = "../hapiy-capture" }
+# Emisión al centro de eventos (no-op si el daemon willay no corre).
+willay-emit = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-image = { workspace = true }

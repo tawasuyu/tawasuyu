@@ -92,6 +92,16 @@ impl Emisor {
     }
 }
 
+/// Microsegundos desde epoch — el `ts_usec` de un evento que acaba de ocurrir.
+/// Conveniencia para los productores (el esquema `willay-core` es no_std y no
+/// puede leer el reloj del sistema).
+pub fn ahora_usec() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}
+
 /// Emite un evento **sin fallar nunca**: si el daemon no corre o algo sale mal,
 /// no-opea (silencioso). Es la vía que usan los productores — un screenshot o un
 /// copy-paste no se rompen porque el centro de eventos esté caído.

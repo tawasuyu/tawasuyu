@@ -11,3 +11,6 @@ description = "hapiy — núcleo agnóstico de captura de pantalla: Shot/Region,
 [dependencies]
 image = { workspace = true }
 directories = { workspace = true }
+# Sólo el esquema (no_std) del centro de eventos, para construir el Evento de una
+# captura. El envío (willay-emit, socket) lo hacen los binarios, no el núcleo.
+willay-core = { workspace = true }

@@ -126,7 +126,14 @@ impl App for Hapiy {
                 Some(s) => {
                     let p = default_dir().join(default_filename(&stamp()));
                     model.status = match s.save_png(&p) {
-                        Ok(()) => format!("Guardado en {}", p.display()),
+                        Ok(()) => {
+                            // Emitir al centro de eventos (no-op si willay no corre).
+                            let ev = hapiy_core::evento_captura(
+                                &p, None, None, s.width, s.height, willay_emit::ahora_usec(),
+                            );
+                            willay_emit::emitir_silencioso(&ev);
+                            format!("Guardado en {}", p.display())
+                        }
                         Err(e) => e,
                     };
                 }
