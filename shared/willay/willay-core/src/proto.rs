@@ -24,6 +24,10 @@ pub enum Solicitud {
     Buscar(String, u32),
     /// Vaciá el índice entero. Responde [`Respuesta::Ok`].
     Limpiar,
+    /// Suscribite a los cambios: el daemon no responde de inmediato, sino que
+    /// empuja un [`Respuesta::Cambio`] cada vez que el índice cambia (un append),
+    /// hasta que la conexión caiga. La conexión queda dedicada a esto.
+    Suscribir,
 }
 
 /// Lo que el daemon responde a una [`Solicitud`].
@@ -35,4 +39,6 @@ pub enum Respuesta {
     Eventos(Vec<Evento>),
     /// Algo falló del lado del daemon (mensaje para log, no para el usuario).
     Error(String),
+    /// Notificación push (sólo en una conexión suscrita): el índice cambió.
+    Cambio,
 }

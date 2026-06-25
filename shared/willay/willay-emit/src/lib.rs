@@ -81,13 +81,30 @@ impl Emisor {
         Ok(postcard::from_bytes(&resp)?)
     }
 
+    /// Se **suscribe** a los cambios del índice y bloquea, llamando `on_cambio`
+    /// por cada notificación push del daemon, hasta que la conexión caiga. La
+    /// conexión queda dedicada a esto (no la uses para consultar). Pensado para
+    /// correr en su propio hilo (el feed lo usa para refrescar al instante en vez
+    /// de pollear).
+    pub fn escuchar_cambios(mut self, mut on_cambio: impl FnMut()) -> anyhow::Result<()> {
+        let bytes = postcard::to_stdvec(&Solicitud::Suscribir)?;
+        escribir_marco(&mut self.stream, &bytes)?;
+        // En modo suscripción, cada frame del daemon es un `Cambio`.
+        while leer_marco(&mut self.stream)?.is_some() {
+            on_cambio();
+        }
+        Ok(())
+    }
+
     /// Emite un evento (escritura). Error si el daemon respondió algo que no es
     /// [`Respuesta::Ok`].
     pub fn emitir(&mut self, e: &Evento) -> anyhow::Result<()> {
         match self.pedir(&Solicitud::Emitir(e.clone()))? {
             Respuesta::Ok => Ok(()),
             Respuesta::Error(m) => Err(anyhow::anyhow!("daemon: {m}")),
-            Respuesta::Eventos(_) => Err(anyhow::anyhow!("respuesta inesperada a Emitir")),
+            Respuesta::Eventos(_) | Respuesta::Cambio => {
+                Err(anyhow::anyhow!("respuesta inesperada a Emitir"))
+            }
         }
     }
 }

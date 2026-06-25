@@ -31,8 +31,9 @@ const SEP_H: f32 = 28.0;
 const TITLE_H: f32 = 44.0;
 const CHIPS_H: f32 = 40.0;
 const HEADER_H: f32 = TITLE_H + CHIPS_H;
-/// Cada cuánto el hilo de red re-consulta el índice (no hay señal de cambio).
-const POLL: Duration = Duration::from_millis(1500);
+/// Poll de **seguridad**: la actualización inmediata la da la suscripción push
+/// del daemon; esto es sólo un respaldo por si la conexión de push se cayó.
+const POLL: Duration = Duration::from_secs(10);
 /// Tope de eventos que pide el feed.
 const LIMITE: u32 = 300;
 
@@ -111,6 +112,9 @@ enum Cmd {
     Filtro(Option<Clase>),
     /// Vaciar el índice.
     Limpiar,
+    /// Re-consultar ya (lo dispara el hilo de suscripción al recibir un push, o
+    /// el poll de seguridad).
+    Refrescar,
 }
 
 #[derive(Clone)]
@@ -540,12 +544,33 @@ fn spawn_red(handle: Handle<Msg>) -> Sender<Cmd> {
                             let _ = em.pedir(&Solicitud::Limpiar);
                         }
                     }
+                    // Re-consulta ya (cae al inicio del loop). El push o el poll.
+                    Ok(Cmd::Refrescar) => {}
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
         })
         .expect("hilo de red del panel willay");
+
+    // Hilo de suscripción: se cuelga del push del daemon y, en cada cambio del
+    // índice, pide un refresco inmediato al hilo de red. Si la conexión cae,
+    // reintenta. Es lo que vuelve el feed instantáneo (el poll queda de respaldo).
+    let sub_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("willay-panel-sub".into())
+        .spawn(move || loop {
+            if let Ok(em) = Emisor::conectar() {
+                let cmd = sub_tx.clone();
+                let _ = em.escuchar_cambios(|| {
+                    let _ = cmd.send(Cmd::Refrescar);
+                });
+            }
+            // Conexión caída (o daemon ausente): esperar y reintentar.
+            std::thread::sleep(Duration::from_secs(2));
+        })
+        .expect("hilo de suscripción del panel willay");
+
     tx
 }
 
