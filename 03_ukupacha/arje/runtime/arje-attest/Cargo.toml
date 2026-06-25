@@ -10,3 +10,4 @@ description = "Atestación de integridad al arranque de arje: firma/verifica Con
 format = { path = "../../../../shared/format" }
 agora-core = { path = "../../../agora/agora-core" }
 agora-channel = { path = "../../../agora/agora-channel" }
+anyhow = { workspace = true }   # load_or_gen_rootkey: errores de FS legibles

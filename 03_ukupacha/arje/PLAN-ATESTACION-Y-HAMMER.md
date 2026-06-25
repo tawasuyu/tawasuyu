@@ -97,18 +97,26 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    **`arje-attest`** (`firmar_binarios`), que reusa `agora_channel::firmar_capacidad` — cero
    criptografía nueva.
 
-   **Paridad del installer → ✅ HECHO (2026-06-25).** Hasta ahora sólo el `arje-packager`
-   (initramfs) sabía firmar; el `arje-installer` (instalación real a ESP/USB) dejaba el seed
-   SIN `attest` — un hueco: instalar a disco no daba boot atestable. La firma se extrajo a
-   `arje-packager` lib (`sign_seed_attest` + `load_or_gen_rootkey` + `hex32` +
-   `guia_anclado_soberano`), **una sola implementación** que ahora usan ambas rutas → el
-   manifiesto es **idéntico** por initramfs o por ESP (un binario firmado por una verifica bajo
-   la otra). `arje-installer` gana `--rootkey`/`--gen-rootkey`: firma el seed embebido en el
-   initramfs Y el que escribe a la ESP. Tests: `arje-installer` lib verifica que los binarios
-   atestan Ok contra el manifiesto firmado, e integración (`to_partition_firma_attest_con_rootkey`)
-   corre el binario end-to-end y confirma que el seed instalado en la ESP trae concesiones +
-   `attest_rootkey`. (De paso se arregló `to_partition_arma_layout_completo`, roto desde que el
-   seed qemu ganó `arje-splash` el 2026-06-23 y el test no le pasaba el `--bin`.)
+   **Paridad de las 3 rutas de seed → ✅ HECHO (2026-06-25).** Al principio sólo `arje-packager`
+   (initramfs) sabía firmar; `arje-installer` (ESP/USB) y `arje-absorb` (migración) emitían el
+   seed SIN `attest` — hueco: instalar a disco o migrar de otro init no daba boot atestable. El
+   firmador y los helpers de rootkey viven ahora en **`arje-attest`** (su hogar natural y lean):
+   `firmar_arbol` (firma un `BTreeMap` de binarios, `permisos=0`), `load_or_gen_rootkey`,
+   `rootkey_a_hex`, `guia_anclado_soberano`. **Una sola implementación** que comparten las tres
+   rutas → el manifiesto es **idéntico** por cualquiera (un binario firmado por una verifica bajo
+   las otras). `arje-packager` conserva el azúcar `sign_seed_attest` (firma + muta la Card) y
+   re-exporta los helpers para no romper callers. Cada ruta gana `--rootkey`/`--gen-rootkey`:
+   - **installer**: firma el seed embebido en el initramfs Y el que escribe a la ESP.
+   - **absorb**: firma los binarios de cada servicio **leídos del sistema fuente** (`root/<exec>`)
+     — captura su estado confiable al absorber; binarios ausentes se avisan y saltean (survey
+     read-only, no aborta). `arje-zero` NO se firma acá (no es un servicio del init absorbido; lo
+     agrega el packager/installer al armar la imagen). Es la base del round-trip de B.3.
+
+   Tests: `arje-attest` (`firmar_arbol`), `arje-installer` (lib verifica atestación Ok +
+   `to_partition_firma_attest_con_rootkey` e2e por el binario), `arje-absorb`
+   (`collect_exec_bins_lee_presentes_y_saltea_ausentes` + verificación), y demo CLI e2e de absorb
+   sobre un OpenRC falso. (De paso se arregló `to_partition_arma_layout_completo`, roto desde que
+   el seed qemu ganó `arje-splash` el 2026-06-23 y el test no le pasaba el `--bin`.)
 3. **A2** — Gate en `arje-zero`: verificar antes del target gráfico, emitir `AuditEntry`,
    aplicar política `halt`/`degraded`. ✅ (2026-06-14) `attest_gate::run` corre tras `spawn_bus` y
    **antes** de `instantiate_seed_dependencies` (el genesis/target): por cada binario crítico

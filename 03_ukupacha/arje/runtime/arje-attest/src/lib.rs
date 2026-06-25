@@ -90,6 +90,71 @@ pub fn firmar_binarios(
     (pubkey, concesiones)
 }
 
+/// Firma una concesión por cada binario del **árbol** `bins` (los *valores*, en
+/// orden de `BTreeMap` = reproducible) sobre su BLAKE3, con `permisos = 0` —
+/// esto es atestación de **integridad**, no concesión de capacidades. Devuelve
+/// la pubkey + las concesiones para que el caller las ancle en `Card::attest`.
+///
+/// Es el firmador compartido por las tres rutas que producen una seed atestada
+/// (`arje-packager` initramfs, `arje-installer` ESP/USB, `arje-absorb`
+/// migración), para que el manifiesto sea **idéntico** por cualquiera de ellas.
+pub fn firmar_arbol(
+    rootkey_seed: [u8; 32],
+    bins: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> (AgoraId, Vec<ConcesionCapacidad>) {
+    let items: Vec<(Vec<u8>, Permisos)> = bins.values().map(|b| (b.clone(), 0)).collect();
+    firmar_binarios(rootkey_seed, &items)
+}
+
+/// Carga la rootkey (32 bytes raw) desde `path`, o la genera si no existe y
+/// `gen` es `true` (32 bytes de `/dev/urandom`, permisos 0600). La rootkey es el
+/// secreto soberano del seed; nunca se embebe en una imagen — sólo se deriva su
+/// pubkey para `attest_rootkey`. **No imprime**: el caller decide el log (sabe
+/// si fue creación o lectura comparando `path.exists()` antes de llamar).
+pub fn load_or_gen_rootkey(path: &std::path::Path, gen: bool) -> anyhow::Result<[u8; 32]> {
+    use anyhow::{bail, Context};
+    if path.exists() {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("leyendo rootkey {}", path.display()))?;
+        bytes.as_slice().try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "rootkey {} debe ser exactamente 32 bytes (son {})",
+                path.display(),
+                bytes.len()
+            )
+        })
+    } else if gen {
+        use std::io::Read;
+        let mut seed = [0u8; 32];
+        std::fs::File::open("/dev/urandom")
+            .context("abriendo /dev/urandom")?
+            .read_exact(&mut seed)
+            .context("leyendo 32 bytes de /dev/urandom")?;
+        std::fs::write(path, seed)
+            .with_context(|| format!("escribiendo rootkey {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(seed)
+    } else {
+        bail!("rootkey {} no existe (pasá --gen-rootkey para crearla)", path.display())
+    }
+}
+
+/// Texto de guía soberana tras firmar: la rootkey en la propia Card es el modelo
+/// **débil** (un seed reescrito la reemplaza); para endurecer a `Halt` hay que
+/// anclar la pubkey FUERA de la Card. Compartido por packager/installer/absorb
+/// para que el mensaje sea uno solo.
+pub fn guia_anclado_soberano(pubhex: &str) -> String {
+    format!(
+        "para endurecer (política Halt) anclá esta pubkey FUERA del seed:\n  \
+         · compilá arje-zero con  ARJE_ATTEST_ROOTKEY={pubhex}\n  \
+         · o escribila en  /etc/arje/rootkey.pub  (o ARJE_ATTEST_ROOTKEY_FILE), 32 bytes raw o el hex de arriba"
+    )
+}
+
 /// Veredicto de atestar un binario vivo contra su concesión firmada.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Veredicto {

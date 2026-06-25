@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 card-core = { path = "../../../../shared/card/card-core" }
+arje-attest = { path = "../../runtime/arje-attest" }   # firmar el manifiesto de atestación (A1)
 anyhow = { workspace = true }
 
 [dev-dependencies]
