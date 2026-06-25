@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 arje-card = { path = "../../arje-card" }
 arje-packager = { path = "../arje-packager" }
+arje-cas = { path = "../../runtime/arje-cas" }   # cosechar los binarios instalados al CAS (--harvest-cas)
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

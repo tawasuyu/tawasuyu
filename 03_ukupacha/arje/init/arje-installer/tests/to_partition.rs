@@ -181,6 +181,54 @@ fn to_partition_firma_attest_con_rootkey() {
 }
 
 #[test]
+fn to_partition_cosecha_binarios_al_cas() {
+    let esp = tempfile::tempdir().expect("tempdir ESP");
+    let bins_dir = tempfile::tempdir().expect("tempdir bins");
+    let cas_dir = tempfile::tempdir().expect("tempdir CAS");
+
+    let arje_zero = bins_dir.path().join("arje-zero");
+    let agetty = bins_dir.path().join("agetty");
+    let splash = bins_dir.path().join("arje-splash");
+    let kernel_path = bins_dir.path().join("vmlinuz-test");
+    // Contenidos distintos → 3 blobs distintos en el CAS (sin dedup).
+    std::fs::write(&arje_zero, b"arje-zero harvest bytes").unwrap();
+    std::fs::write(&agetty, b"agetty harvest bytes").unwrap();
+    std::fs::write(&splash, b"arje-splash harvest bytes").unwrap();
+    std::fs::write(&kernel_path, b"KERNEL\n").unwrap();
+
+    let seed_path = workspace_root().join("03_ukupacha/arje/seeds/arje-qemu.card.json");
+
+    let st = Command::new(installer_bin())
+        // CAS aislado al subproceso vía env — sin tocar el real ni otros tests.
+        .env("ENTE_CAS_ROOT", cas_dir.path())
+        .arg("to-partition")
+        .args([
+            "--esp", esp.path().to_str().unwrap(),
+            "--kernel", kernel_path.to_str().unwrap(),
+            "--seed", seed_path.to_str().unwrap(),
+            "--bin", &format!("arje-zero={}", arje_zero.to_str().unwrap()),
+            "--bin", &format!("agetty-ttyS0={}", agetty.to_str().unwrap()),
+            "--bin", &format!("arje-splash={}", splash.to_str().unwrap()),
+            "--harvest-cas",
+        ])
+        .status()
+        .expect("spawn arje-installer");
+    assert!(st.success(), "installer con --harvest-cas falló con {st}");
+
+    // El CAS contiene los 3 binarios cosechados, cada uno con nombre = 64 hex.
+    let blobs: Vec<_> = std::fs::read_dir(cas_dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name();
+            n.to_str().map(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(blobs.len(), 3, "deberían cosecharse 3 binarios distintos al CAS");
+}
+
+#[test]
 fn to_partition_falla_grácil_si_falta_bin() {
     let esp = tempfile::tempdir().unwrap();
     let bins_dir = tempfile::tempdir().unwrap();

@@ -274,6 +274,12 @@ gana `firma_valida` + el re-export de `ConcesionCapacidad`; un init vivo NO hace
   viaja content-agnostic y se verifica de punta a punta. Núcleo testeable sin socket
   (`objetos_del_cas` + `absorber` con chequeo de hash); ejemplo `servir_cas` para el operador. Es la
   vía nativa para que un nodo arje/hammer y una wawa intercambien objetos del CAS sin TCP/IP.
+  **Cosecha al instalar → ✅ HECHO (2026-06-25).** `arje-installer --harvest-cas` mete al CAS local
+  cada binario que instala (`arje_cas::cosechar`, direccionados por su BLAKE3 — el MISMO hash que
+  firma la atestación). Cierra el lazo **instalar → CAS → AoE**: tras instalar (y firmar el seed),
+  los binarios quedan servibles por `servir_cas`, así un peer que recibió el seed firmado los baja
+  por su hash (`traer_al_cas`), los verifica contra el manifiesto, y **reproduce el sistema exacto**
+  por la red. Verificado e2e: el binario instala 3 stubs y aparecen como 3 blobs en el CAS aislado.
 - Bus unificado (B.2) antes de que hammerd corra bajo arje — vocabulario de eventos ✅; falta
   el cable de transporte arje-bus ↔ hammerd.
 

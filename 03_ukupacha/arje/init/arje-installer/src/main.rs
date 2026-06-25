@@ -63,6 +63,9 @@ COMUNES:
                 Para endurecer a Halt: anclá la pubkey fuera del seed
                 (ARJE_ATTEST_ROOTKEY o /etc/arje/rootkey.pub) — el installer
                 imprime la receta. Validá con `arje-zero --attest-check` antes.
+    --harvest-cas  Cosechar los binarios instalados al CAS local (BLAKE3), para
+                que `arje-cas-aoe` los distribuya por Akasha Over Ether. Un peer
+                puede entonces reproducir el sistema bajándolos por su hash.
 
 to-partition:
     --esp       Ruta donde está montada la ESP (p. ej. /boot o /mnt/esp).
@@ -89,6 +92,9 @@ struct CommonArgs {
     rootkey: Option<PathBuf>,
     /// Si la rootkey no existe, generarla (`/dev/urandom`, 0600).
     gen_rootkey: bool,
+    /// Cosechar los binarios instalados al CAS local (direccionados por BLAKE3),
+    /// para que `arje-cas-aoe` pueda distribuirlos por la red.
+    harvest_cas: bool,
 }
 
 enum Mode {
@@ -130,6 +136,7 @@ struct CommonAcc {
     label: Option<String>,
     rootkey: Option<PathBuf>,
     gen_rootkey: bool,
+    harvest_cas: bool,
 }
 
 impl CommonAcc {
@@ -160,6 +167,7 @@ impl CommonAcc {
             "--label" => self.label = Some(args.next().context("--label requiere nombre")?),
             "--rootkey" => self.rootkey = Some(args.next().context("--rootkey requiere path")?.into()),
             "--gen-rootkey" => self.gen_rootkey = true,
+            "--harvest-cas" => self.harvest_cas = true,
             _ => return Ok(false),
         }
         Ok(true)
@@ -178,6 +186,7 @@ impl CommonAcc {
             label: self.label.unwrap_or_else(|| "arje".to_string()),
             rootkey: self.rootkey,
             gen_rootkey: self.gen_rootkey,
+            harvest_cas: self.harvest_cas,
         })
     }
 }
@@ -358,6 +367,24 @@ fn stage_files(common: &CommonArgs, layout: &EspLayout) -> anyhow::Result<()> {
             n = card.attest.len(),
         );
         eprintln!("arje-installer :: {}", arje_packager::guia_anclado_soberano(&pubhex));
+    }
+
+    // Cosechar los binarios instalados al CAS local: quedan direccionados por su
+    // BLAKE3 (el MISMO hash que firma la atestación), así `arje-cas-aoe` los
+    // sirve por Akasha y un peer puede reproducir el sistema bajándolos por hash.
+    if common.harvest_cas {
+        let mut blobs = Vec::with_capacity(common.bins.len());
+        for (label, path) in &common.bins {
+            blobs.push(std::fs::read(path).with_context(|| {
+                format!("leyendo {label} desde {} para cosechar al CAS", path.display())
+            })?);
+        }
+        let hashes = arje_cas::cosechar(blobs.iter().map(|b| b.as_slice()))?;
+        eprintln!(
+            "arje-installer :: cosechados {} binario(s) al CAS en {}",
+            hashes.len(),
+            arje_cas::cas_root().display(),
+        );
     }
     Ok(())
 }

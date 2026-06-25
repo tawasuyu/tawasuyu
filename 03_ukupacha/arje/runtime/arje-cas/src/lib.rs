@@ -123,6 +123,17 @@ pub fn store(bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
     Ok(sha)
 }
 
+/// Cosecha (almacena) varios blobs en el CAS de una pasada, devolviendo sus
+/// hashes en orden. Idempotente (cada `store` deduplica por contenido). Lo usa
+/// el instalador para meter al CAS los binarios de arje que está instalando —
+/// así quedan direccionados por su BLAKE3 (el mismo que firma la atestación) y
+/// `arje-cas-aoe::servir_cas` puede distribuirlos por la red.
+pub fn cosechar<'a>(
+    blobs: impl IntoIterator<Item = &'a [u8]>,
+) -> anyhow::Result<Vec<[u8; 32]>> {
+    blobs.into_iter().map(store).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +156,14 @@ mod tests {
         assert!(list_all_shas().unwrap().contains(&h));
         // El hex es de 64 chars (256 bits), igual que antes: el layout no cambió.
         assert_eq!(hex(&h).len(), 64);
+
+        // cosechar almacena varios blobs de una pasada y devuelve sus hashes en
+        // orden; idempotente con uno ya presente (el tercero == `data`).
+        let hashes = cosechar([&b"alfa"[..], &b"beta"[..], &data[..]]).unwrap();
+        assert_eq!(hashes.len(), 3);
+        assert_eq!(hashes[2], h, "el tercer blob es `data` → mismo hash, dedup");
+        assert_eq!(resolve(&hashes[0]).unwrap(), b"alfa");
+        assert!(list_all_shas().unwrap().contains(&hashes[1]));
 
         std::env::remove_var("ENTE_CAS_ROOT");
         let _ = std::fs::remove_dir_all(&tmp);
