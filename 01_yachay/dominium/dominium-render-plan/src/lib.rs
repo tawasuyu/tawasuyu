@@ -616,7 +616,12 @@ fn blend(parts: &[(f32, Color)]) -> Color {
 
 /// Color de una celda: mezcla de la paleta pesada por el valor relativo
 /// de sus 5 capas. Una celda vacía cae al color `floor`.
-fn cell_color(world: &World, idx: usize, pal: &Palette) -> Color {
+///
+/// Público para que backends que NO son la maqueta iso (p.ej.
+/// `dominium-voxel`, que pinta columnas de voxels) reusen **exactamente** la
+/// misma semántica de color por celda — así el mundo 3D "es" el de dominium,
+/// no una recoloración paralela. Ver `MOTOR-VOXEL.md` §3.2/§4.
+pub fn cell_color(world: &World, idx: usize, pal: &Palette) -> Color {
     let g = &world.grid;
     let layers = [
         (g.materia[idx].max(0.0), pal.materia),

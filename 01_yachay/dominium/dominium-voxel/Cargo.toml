@@ -1,0 +1,27 @@
+[package]
+name = "dominium-voxel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium — puente al motor 3D: voxeliza un World (5 capas + agentes) en un VoxelGrid de llimphi-3d. Reusa el color por celda del render iso (cell_color) y la altura compuesta (ZWeights); la sim queda intacta. Ver MOTOR-VOXEL.md §3.2."
+
+[dependencies]
+dominium-core = { path = "../dominium-core" }
+dominium-iso = { path = "../dominium-iso" }
+dominium-render-plan = { path = "../dominium-render-plan" }
+llimphi-3d = { path = "../../../02_ruway/llimphi/llimphi-3d" }
+
+[dev-dependencies]
+# Mundo de prueba para el ejemplo headless (siembra fractal + tick determinista).
+dominium-physics = { path = "../dominium-physics" }
+# Volcado headless del render 3D a PNG — mismo patrón que los examples de llimphi-3d.
+llimphi-hal = { path = "../../../02_ruway/llimphi/llimphi-hal" }
+llimphi-raster = { path = "../../../02_ruway/llimphi/llimphi-raster" }
+png = { workspace = true }
+pollster = { workspace = true }
+
+[[example]]
+name = "mundo3d"
+path = "examples/mundo3d.rs"
