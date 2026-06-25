@@ -366,3 +366,59 @@ impl BusClient {
         }
     }
 }
+
+#[cfg(test)]
+mod contrato_wire {
+    //! Contrato de wire con el **espejo** de hammer (`hammerd::arje_link`).
+    //!
+    //! hammer NO depende de este crate: relee el frame postcard con tipos espejo
+    //! y discriminantes hardcodeados (B.2 del PLAN-ATESTACION-Y-HAMMER). Si acá se
+    //! reordena un enum del wire, el espejo se rompe **en silencio** (el init deja
+    //! de entregar crashes). Estos asserts fijan los bytes exactos que el espejo
+    //! asume; si fallan, hay que actualizar `hammerd::arje_link` en el repo hammer.
+    use super::*;
+
+    #[test]
+    fn subscribe_serializa_a_los_bytes_que_espera_hammer() {
+        // hammerd::arje_link::subscribe_body(1) hardcodea [0x00,0x01,0x00,0x0D]:
+        // from=None, seq=1, BusPayload::Request(0), BusRequest::Subscribe(13).
+        let m = BusMessage {
+            from: None,
+            seq: 1,
+            payload: BusPayload::Request(BusRequest::Subscribe),
+        };
+        assert_eq!(
+            postcard::to_stdvec(&m).unwrap(),
+            vec![0x00, 0x01, 0x00, 0x0D],
+            "el frame Subscribe cambió — actualizá hammerd::arje_link::subscribe_body \
+             (¿se reordenó BusRequest o BusPayload?)",
+        );
+    }
+
+    #[test]
+    fn ente_crashed_conserva_los_discriminantes_del_espejo() {
+        let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let m = BusMessage {
+            from: None,
+            seq: 0,
+            payload: BusPayload::Event(BusEvent::EnteCrashed {
+                id,
+                label: "d".into(),
+                status: LifecycleStatus::Killed(11),
+            }),
+        };
+        let bytes = postcard::to_stdvec(&m).unwrap();
+        // [from=None=0x00][seq=0=0x00][payload=Event=0x02][event=EnteCrashed=0x00]…
+        assert_eq!(
+            &bytes[0..4],
+            &[0x00, 0x00, 0x02, 0x00],
+            "el layout de BusPayload::Event/BusEvent::EnteCrashed cambió — \
+             actualizá el espejo de hammerd::arje_link",
+        );
+        // …seguido del Ulid serializado como string de 26 chars (el espejo lo asume).
+        assert_eq!(
+            bytes[4], 26,
+            "Ulid dejó de serializarse como string de 26 — rompe el espejo de hammer",
+        );
+    }
+}

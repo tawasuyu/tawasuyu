@@ -183,11 +183,20 @@ observabilidad de ciclo de vida que faltaba: `BusRequest::Subscribe` (anónimo, 
 backoff) y `EnteExited{id,label}` (exit 0), purgando perezosamente los suscriptores con el
 extremo cerrado. 4 tests en `graph/lifecycle.rs::broadcast_tests`. Del lado hammer, el sink
 `hammerd::crashes` (3 tests) traduce la señal normalizada → `Event::Crashed` y la bombea a su
-`EventBus` → `agent.sock`. **Resta el adaptador de transporte** (un thread hammerd que conecte
-a `$ARJE_BUS_SOCK`, mande `Subscribe` y reenvíe cada `BusEvent` a `crashes::pump` vía
-`BusClient::{subscribe,next_event}`) + la decisión de cómo comparten el wire los dos repos
-(dep directa a `arje-bus` vs. crate de proto compartido vs. relectura del frame postcard) —
-único tramo que necesita un init vivo para validarse end-to-end.
+`EventBus` → `agent.sock`. **Adaptador de transporte → ✅ HECHO (2026-06-25).** `hammerd::arje_link`
+(thread lanzado por `spawn_if_configured` en `hammerd::main`, gateado por `ENTE_BUS_SOCK`) conecta
+al bus de arje, manda `Subscribe`, y traduce cada `BusEvent` → `crashes::Lifecycle` → `Event::Crashed`
+→ `EventBus`. **Decisión de wire: relectura del frame postcard** — hammer NO depende de `arje-bus`
+(arrastraría arje-card→card-core→…, rompe su build hermético); espeja el subconjunto de suscriptor
+con tipos `Deserialize` y discriminantes documentados. El riesgo de ese mirror (drift silencioso si
+arje reordena un enum) se cierra con **dos guardas deterministas, sin init vivo:** (1) del lado arje,
+`arje-bus::contrato_wire` (2 tests) fija por bytes el frame `Subscribe` (`[00 01 00 0D]`) y los
+discriminantes de `BusEvent::EnteCrashed` — si arje reordena, CI falla acá apuntando al espejo; (2)
+del lado hammer, `hammerd/tests/arje_link_e2e.rs` levanta un socket falso de arje-bus, valida el
+`Subscribe` emitido e inyecta un `EnteCrashed`, verificando que sale como `Event::Crashed` por el
+`EventBus` (ruta completa connect→subscribe→leer→traducir→publicar). Contrato verificado contra el
+árbol vigente: `BusPayload` 0/1/2, `BusRequest::Subscribe`=13, `BusEvent` 0/1/2, `LifecycleStatus`
+`Exited(i32)`/`Killed(i32)`.
 
 ### B.3 Modelo de confianza en capas (el puente elegante)
 
@@ -207,8 +216,8 @@ que ninguno de los dos sepa de criptografía del otro.
 ### B.4 Roadmap conjunto
 
 - hammer *Track posterior → init propio* = **adoptar arje**. arje entrega el `CRASHED` real
-  (supervisión) que la Fase 5 de hammer dejó diferido — **fuente y sink ya cableados (B.2),
-  resta el adaptador de transporte** (ver §B.2).
+  (supervisión) que la Fase 5 de hammer dejó diferido — **fuente, sink y adaptador de transporte
+  cableados y validados e2e (B.2)**; el `CRASHED` de hammer ya nace de un Ente que muere bajo arje.
 - `arje-cas` → BLAKE3 (A0) desbloquea el CAS compartido (hammer ya usa prefijo `b3:`).
 - Bus unificado (B.2) antes de que hammerd corra bajo arje — vocabulario de eventos ✅; falta
   el cable de transporte arje-bus ↔ hammerd.
