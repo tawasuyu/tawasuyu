@@ -17,3 +17,5 @@ willay-emit = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-layer = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+# Hora/fecha en la zona local del sistema (no UTC) — la convención de fecha del repo.
+chrono = { workspace = true }

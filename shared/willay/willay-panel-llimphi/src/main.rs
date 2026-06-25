@@ -59,19 +59,32 @@ fn etiqueta_clase(c: Clase) -> &'static str {
     }
 }
 
-const USEC_DIA: u64 = 86_400_000_000;
-
-/// Número de día (UTC) de un timestamp en µs.
-fn dia(ts_usec: u64) -> u64 {
-    ts_usec / USEC_DIA
+/// Número de día local (días desde la era común, en la zona del sistema) de un
+/// timestamp en µs. `chrono::Local` aplica el offset de la zona — el corte de
+/// «Hoy» respeta la medianoche local, no la UTC.
+fn dia_local(ts_usec: u64) -> i64 {
+    use chrono::{Datelike, Local, TimeZone};
+    Local
+        .timestamp_micros(ts_usec as i64)
+        .single()
+        .map(|dt| dt.date_naive().num_days_from_ce() as i64)
+        .unwrap_or(0)
 }
 
-/// Etiqueta del separador de fecha de `ts` respecto de `now` (ambos µs, UTC).
-/// v1 en UTC — el corte de «Hoy» no respeta la zona local todavía.
-fn bucket_fecha(ts_usec: u64, now_usec: u64) -> String {
-    let d = dia(now_usec) as i64 - dia(ts_usec) as i64;
-    match d {
-        x if x <= 0 => "Hoy".to_string(),
+/// Hora `HH:MM` local de un timestamp en µs.
+fn hora_local(ts_usec: u64) -> String {
+    use chrono::{Local, TimeZone, Timelike};
+    Local
+        .timestamp_micros(ts_usec as i64)
+        .single()
+        .map(|dt| format!("{:02}:{:02}", dt.hour(), dt.minute()))
+        .unwrap_or_else(|| "--:--".to_string())
+}
+
+/// Etiqueta del separador a partir de la diferencia de **días locales**. Pura.
+fn etiqueta_bucket(dia_ev: i64, dia_now: i64) -> String {
+    match dia_now - dia_ev {
+        d if d <= 0 => "Hoy".to_string(),
         1 => "Ayer".to_string(),
         2..=6 => "Esta semana".to_string(),
         7..=30 => "Este mes".to_string(),
@@ -79,10 +92,10 @@ fn bucket_fecha(ts_usec: u64, now_usec: u64) -> String {
     }
 }
 
-/// Hora `HH:MM` (UTC) de un timestamp en µs.
-fn hora(ts_usec: u64) -> String {
-    let s_in_day = (ts_usec / 1_000_000) % 86_400;
-    format!("{:02}:{:02}", s_in_day / 3600, (s_in_day % 3600) / 60)
+/// Etiqueta del separador de fecha de `ts` respecto de `now` (ambos µs), en hora
+/// local.
+fn bucket_fecha(ts_usec: u64, now_usec: u64) -> String {
+    etiqueta_bucket(dia_local(ts_usec), dia_local(now_usec))
 }
 
 // ---- App ------------------------------------------------------------------
@@ -340,7 +353,7 @@ fn item_row(e: &Evento) -> View<Msg> {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .text_aligned(hora(e.ts_usec), 10.0, DIM, Alignment::End);
+    .text_aligned(hora_local(e.ts_usec), 10.0, DIM, Alignment::End);
 
     let linea_meta = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -429,34 +442,40 @@ mod tests {
     use super::*;
     use willay_core::Payload;
 
+    const USEC_DIA: u64 = 86_400_000_000;
+    /// Mediodía UTC: ± cualquier offset de zona razonable (|tz| < 12 h) cae el
+    /// mismo día local, así los tests de separadores son robustos a la zona.
+    const MEDIODIA: u64 = 12 * 3600 * 1_000_000;
+
     fn ev(clase: Clase, ts: u64) -> Evento {
         Evento::nuevo(clase, ts, "o", "t", "", Payload::Nada)
     }
 
     #[test]
-    fn buckets_de_fecha() {
-        let now = 100 * USEC_DIA + 5_000_000; // día 100
-        assert_eq!(bucket_fecha(100 * USEC_DIA, now), "Hoy");
-        assert_eq!(bucket_fecha(99 * USEC_DIA, now), "Ayer");
-        assert_eq!(bucket_fecha(96 * USEC_DIA, now), "Esta semana");
-        assert_eq!(bucket_fecha(80 * USEC_DIA, now), "Este mes");
-        assert_eq!(bucket_fecha(10 * USEC_DIA, now), "Más antiguo");
+    fn etiqueta_bucket_por_diferencia_de_dias() {
+        assert_eq!(etiqueta_bucket(100, 100), "Hoy");
+        assert_eq!(etiqueta_bucket(100, 99), "Hoy"); // futuro/empate → Hoy
+        assert_eq!(etiqueta_bucket(99, 100), "Ayer");
+        assert_eq!(etiqueta_bucket(96, 100), "Esta semana");
+        assert_eq!(etiqueta_bucket(80, 100), "Este mes");
+        assert_eq!(etiqueta_bucket(10, 100), "Más antiguo");
     }
 
     #[test]
-    fn hora_utc() {
-        assert_eq!(hora(0), "00:00");
-        assert_eq!(hora(14 * 3600 * 1_000_000 + 30 * 60 * 1_000_000), "14:30");
+    fn hora_local_formatea_hh_mm() {
+        let h = hora_local(0);
+        assert_eq!(h.len(), 5);
+        assert_eq!(h.as_bytes()[2], b':');
     }
 
     #[test]
     fn filas_meten_un_separador_por_cambio_de_dia() {
-        let now = 100 * USEC_DIA;
+        let now = 100 * USEC_DIA + MEDIODIA;
         // Dos eventos hoy + uno ayer → 2 separadores ("Hoy", "Ayer") + 3 items.
         let eventos = vec![
-            ev(Clase::Clip, 100 * USEC_DIA + 2),
-            ev(Clase::Captura, 100 * USEC_DIA + 1),
-            ev(Clase::Notificacion, 99 * USEC_DIA),
+            ev(Clase::Clip, 100 * USEC_DIA + MEDIODIA + 2),
+            ev(Clase::Captura, 100 * USEC_DIA + MEDIODIA + 1),
+            ev(Clase::Notificacion, 99 * USEC_DIA + MEDIODIA),
         ];
         let (filas, alto) = construir_filas(&eventos, now);
         assert_eq!(filas.len(), 5, "3 items + 2 separadores");
