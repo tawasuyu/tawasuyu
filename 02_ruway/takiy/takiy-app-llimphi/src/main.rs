@@ -1,3 +1,6 @@
+// En release sobre Windows: subsistema GUI (sin consola negra detrás).
+// No-op en Linux/otros targets — preserva `cargo check --workspace`.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! `takiy-app-llimphi` — piano roll visor + reproductor sobre Llimphi.
 //!
 //! Carga un `Score` (built-in o desde `TAKIY_SCORE_JSON`), lo pinta como

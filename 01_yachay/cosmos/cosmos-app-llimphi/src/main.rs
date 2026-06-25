@@ -1,3 +1,6 @@
+// En release sobre Windows: subsistema GUI (sin consola negra detrás).
+// No-op en Linux/otros targets — preserva `cargo check --workspace`.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! `cosmos-app-llimphi` — shell astronómico/astrológico sobre Llimphi.
 //!
 //! IDE de cartas: barra de menú principal arriba (`Archivo`/`Vista`/
