@@ -21,6 +21,7 @@ pub fn manejar(sol: Solicitud, indice: &Indice) -> Respuesta {
         Solicitud::Recientes(n) => indice.recientes(n as usize).map(Respuesta::Eventos),
         Solicitud::PorClase(c, n) => indice.por_clase(c, n as usize).map(Respuesta::Eventos),
         Solicitud::Buscar(s, n) => indice.buscar(&s, n as usize).map(Respuesta::Eventos),
+        Solicitud::Limpiar => indice.clear().map(|_| Respuesta::Ok),
     };
     r.unwrap_or_else(|e| Respuesta::Error(e.to_string()))
 }

@@ -117,9 +117,24 @@ accionar notif, fijar, borrar).
 
 ## 6. Plan de bloques
 
-1. **(este) backbone** — `willay-core` (esquema + id) + `willay-store` (índice
-   sled + consultas) + tests. Sin daemon, sin UI.
-2. emisión — `willay-daemon` (escritor único) + `willay-emit`, y enganchar los
-   tres productores (notify espejo, hapiy, clipboard con historia).
-3. lectura — `willay-panel-llimphi` (feed heterogéneo, generaliza notify-panel).
-4. semántica — willay como `source` del widget `rag`; generalizar el triage.
+1. **✅ backbone** — `willay-core` (esquema + id) + `willay-store` (índice sled +
+   consultas) + tests.
+2. **✅ emisión** — `willay-daemon` (escritor único, socket Unix) + `willay-emit`
+   (cliente + códec), y los tres productores enganchados: hapiy (captura),
+   pata-notify (espejo), pata clipboard (clip nuevo). Todos con
+   `emitir_silencioso` (no-op si el daemon no corre).
+3. **✅ lectura** — `willay-panel-llimphi`: el feed (sidebar wlr-layer-shell)
+   con timeline reciente→viejo, separadores de fecha y facetas por clase (chips
+   Todo/Notif/Capturas/Clips). Cliente del daemon por socket (pollea
+   `Recientes`/`PorClase`/`Limpiar`). Generaliza `pata-notify-panel`.
+4. semántica — willay como `source` del widget `rag` (búsqueda en lenguaje
+   natural) + generalizar el triage; y autostart del daemon.
+
+### Pendientes conocidos del v1
+
+- Buckets de fecha y `hora()` del panel son **UTC** (el corte de «Hoy» no
+  respeta la zona local todavía).
+- El panel **pollea** cada 1.5 s (el daemon no emite señal de cambio). Una señal
+  push (o un long-poll) lo haría instantáneo.
+- Sin thumbnails de captura ni acciones por evento (recopiar clip, abrir en
+  tullpu) — el panel es read-only por ahora.

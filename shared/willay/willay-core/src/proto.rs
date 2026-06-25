@@ -22,6 +22,8 @@ pub enum Solicitud {
     PorClase(Clase, u32),
     /// Búsqueda literal: los `n` más recientes que matcheen la aguja.
     Buscar(String, u32),
+    /// Vaciá el índice entero. Responde [`Respuesta::Ok`].
+    Limpiar,
 }
 
 /// Lo que el daemon responde a una [`Solicitud`].

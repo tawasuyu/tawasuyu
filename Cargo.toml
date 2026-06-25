@@ -538,6 +538,7 @@ members = [
     "shared/willay/willay-core",
     "shared/willay/willay-daemon",
     "shared/willay/willay-emit",
+    "shared/willay/willay-panel-llimphi",
     "shared/willay/willay-store",
     "web/tawasuyu-canvas-web",
     "web/tawasuyu-geom",

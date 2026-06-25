@@ -1,0 +1,19 @@
+[package]
+name = "willay-panel-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "willay — el feed del centro de eventos: sidebar (wlr-layer-shell) que lista el timeline heterogéneo (notificaciones + capturas + clips) con separadores de fecha y facetas por clase. Cliente del daemon willay por socket Unix (Recientes/PorClase/Limpiar), polleando. Generaliza pata-notify-panel."
+
+[[bin]]
+name = "willay-panel"
+path = "src/main.rs"
+
+[dependencies]
+willay-core = { workspace = true }
+willay-emit = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-layer = { workspace = true }
+llimphi-widget-scroll = { workspace = true }
