@@ -152,11 +152,20 @@ El daemon autostartea con la sesión. Productores emiten sin acoplarse. Lectura
 por feed (literal/facetas) y por rag (semántico). Todo lo pesado se queda en su
 productor (federación).
 
-### Pendientes conocidos del v1
+### Pulidos del feed (hechos)
 
-- Buckets de fecha y `hora()` del panel son **UTC** (el corte de «Hoy» no
-  respeta la zona local todavía).
-- El panel **pollea** cada 1.5 s (el daemon no emite señal de cambio). Una señal
-  push (o un long-poll) lo haría instantáneo.
-- Sin thumbnails de captura ni acciones por evento (recopiar clip, abrir en
-  tullpu) — el panel es read-only por ahora.
+- ✅ Fechas/hora en **zona local** (`chrono::Local`), no UTC.
+- ✅ **Push** por suscripción: el daemon empuja `Cambio` en cada append y el feed
+  refresca al instante (el poll de 10 s queda de respaldo).
+- ✅ **Thumbnails** de captura (decodificados con guardia de tamaño, cacheados).
+- ✅ **Acciones por evento**: clic copia el clip (wl-copy) o abre la captura en
+  tullpu.
+- ✅ **Agrupación de ráfagas**: runs de eventos idénticos se colapsan en `×N`
+  (en la práctica, notificaciones repetidas).
+
+### Pendiente real restante
+
+- **Triage semántico** (clustering por embeddings + resumen LLM, estilo
+  `pata-notify-triage`) para agrupar eventos *relacionados* (no sólo idénticos).
+  Implicaría meterle embeddings/LLM al panel (hoy liviano) o una capa aparte —
+  por eso queda fuera del v1.
