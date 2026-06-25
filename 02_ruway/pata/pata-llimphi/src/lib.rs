@@ -515,18 +515,41 @@ pub const CLIP_HISTORY_MAX: usize = 16;
 
 /// Agrega `nuevo` al frente del `historial` de portapapeles si no es vacío ni
 /// igual al actual tope; deduplica (mueve al frente) y recorta a
-/// [`CLIP_HISTORY_MAX`]. Compartido por ambos backends.
-pub fn push_clip_history(historial: &mut Vec<String>, nuevo: &Option<String>) {
-    let Some(s) = nuevo else { return };
+/// [`CLIP_HISTORY_MAX`]. Compartido por ambos backends. Devuelve `true` si
+/// efectivamente entró un clip **nuevo** — la señal que usan los call-sites para
+/// emitir el evento al centro de eventos (willay).
+pub fn push_clip_history(historial: &mut Vec<String>, nuevo: &Option<String>) -> bool {
+    let Some(s) = nuevo else { return false };
     if s.is_empty() {
-        return;
+        return false;
     }
     if historial.first().map(|f| f == s).unwrap_or(false) {
-        return; // ya es el tope
+        return false; // ya es el tope
     }
     historial.retain(|x| x != s);
     historial.insert(0, s.clone());
     historial.truncate(CLIP_HISTORY_MAX);
+    true
+}
+
+/// El [`willay_core::Evento`] de un texto recién copiado, para el centro de
+/// eventos. **Puro** (no toca el socket): los call-sites lo emiten con
+/// `willay_emit::emitir_silencioso` cuando [`push_clip_history`] confirma un clip
+/// nuevo. El texto va inline en el payload (es chico) con un tope para que un
+/// clip enorme no infle el índice.
+pub fn evento_clip(texto: &str, ts_usec: u64) -> willay_core::Evento {
+    const MAX: usize = 16 * 1024;
+    let recortado: String = texto.chars().take(MAX).collect();
+    // Título = primera línea, acotada — el preview del clip en el timeline.
+    let titulo: String = recortado.lines().next().unwrap_or("").chars().take(80).collect();
+    willay_core::Evento::nuevo(
+        willay_core::Clase::Clip,
+        ts_usec,
+        "portapapeles",
+        titulo,
+        recortado.clone(),
+        willay_core::Payload::Texto(recortado),
+    )
 }
 
 /// Envuelve `s` en comillas simples para `sh -c`, escapando comillas internas.
@@ -1093,7 +1116,11 @@ impl App for PataApp {
                 model.tick_widgets(&ctx);
                 model.last_ctx = ctx;
                 model.clipboard = crate::sampler::leer_clipboard();
-                push_clip_history(&mut model.clip_history, &model.clipboard);
+                if push_clip_history(&mut model.clip_history, &model.clipboard) {
+                    if let Some(t) = &model.clipboard {
+                        willay_emit::emitir_silencioso(&evento_clip(t, willay_emit::ahora_usec()));
+                    }
+                }
                 if let Some(h) = &model.weather {
                     if let Some(w) = h.latest() {
                         model.weather_now = Some(w);
@@ -1793,19 +1820,32 @@ mod tests {
     #[test]
     fn historial_dedup_y_tope() {
         let mut h = Vec::new();
-        push_clip_history(&mut h, &Some("a".into()));
-        push_clip_history(&mut h, &Some("b".into()));
-        push_clip_history(&mut h, &Some("a".into())); // re-copia: a vuelve al frente
+        assert!(push_clip_history(&mut h, &Some("a".into())), "clip nuevo");
+        assert!(push_clip_history(&mut h, &Some("b".into())));
+        assert!(push_clip_history(&mut h, &Some("a".into())), "re-copia: a vuelve al frente"); // nuevo evento
         assert_eq!(h, vec!["a".to_string(), "b".to_string()]);
-        // vacío y repetido del tope se ignoran
-        push_clip_history(&mut h, &Some(String::new()));
-        push_clip_history(&mut h, &Some("a".into()));
+        // vacío y repetido del tope se ignoran → no es clip nuevo (false)
+        assert!(!push_clip_history(&mut h, &Some(String::new())));
+        assert!(!push_clip_history(&mut h, &Some("a".into())), "ya es el tope");
+        assert!(!push_clip_history(&mut h, &None));
         assert_eq!(h.len(), 2);
         // tope
         for i in 0..30 {
             push_clip_history(&mut h, &Some(format!("x{i}")));
         }
         assert_eq!(h.len(), CLIP_HISTORY_MAX);
+    }
+
+    #[test]
+    fn evento_clip_preview_y_payload() {
+        use willay_core::{Clase, Payload};
+        let e = evento_clip("primera línea\nsegunda", 42);
+        assert_eq!(e.clase, Clase::Clip);
+        assert_eq!(e.ts_usec, 42);
+        assert_eq!(e.origen, "portapapeles");
+        assert_eq!(e.titulo, "primera línea", "título = 1ra línea");
+        assert_eq!(e.cuerpo, "primera línea\nsegunda", "cuerpo = texto completo (búsqueda)");
+        assert!(matches!(e.payload, Payload::Texto(t) if t == "primera línea\nsegunda"));
     }
 
     #[test]

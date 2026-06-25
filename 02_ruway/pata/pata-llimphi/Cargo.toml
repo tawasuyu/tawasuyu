@@ -17,6 +17,9 @@ path = "src/lib.rs"
 [dependencies]
 pata-core = { path = "../pata-core" }
 pata-config = { path = "../pata-config" }
+# Emisión de cada clip nuevo al centro de eventos (no-op si willay no corre).
+willay-core = { workspace = true }
+willay-emit = { workspace = true }
 # Rail hospedado (sidebar delegado): pata hospeda los dientes de la app enfocada
 # y le reenvía las activaciones. Lado servidor del protocolo.
 pata-host = { path = "../pata-host" }

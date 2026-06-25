@@ -576,7 +576,11 @@ impl LayerApp {
             self.re_exec_pata("cambió «dientes fuera del área de trabajo»");
         }
         self.ctx = ctx;
-        crate::push_clip_history(&mut self.clip_history, &clipboard);
+        if crate::push_clip_history(&mut self.clip_history, &clipboard) {
+            if let Some(t) = &clipboard {
+                willay_emit::emitir_silencioso(&crate::evento_clip(t, willay_emit::ahora_usec()));
+            }
+        }
         self.clipboard = clipboard;
         if let Some(h) = &self.weather {
             if let Some(w) = h.latest() {
