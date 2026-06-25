@@ -117,6 +117,17 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    `ancla_externa_vence_a_un_seed_reescrito` demuestra que SIN ancla el seed reescrito se auto-valida
    y CON ancla legítima es rechazado. **Resta sólo al operador:** generar la rootkey, anclarla por una
    de las dos vías, y flipear `attest_policy` a `Halt` en su seed — ya no hay hueco de diseño.
+
+   **Dry-run off-boot — ✅ HECHO (2026-06-25).** Flipear a `Halt` y reiniciar a ciegas era el último
+   "fallo tonto": si el manifiesto no casa (hash cambió, falta `/etc/arje/rootkey.pub`), la máquina
+   se queda en la shell de rescate al arrancar. `arje-zero --attest-check [seed]` corre **el mismo
+   gate** (`attest_gate::check` → `gather_verdicts`, idéntico al boot, con `current_exe` y ancla
+   soberana) **sin volverse PID 1** y reporta por binario (`✓`/`✗ <motivo>`), de dónde salió el ancla,
+   y qué haría cada política; sale con código 1 si algún binario no atesta (gateable en CI). El seed
+   sale de la ruta dada o de los candidatos canónicos (`/ente/seed.card.json`, …). Refactor mínimo:
+   `run_inner` se partió en `gather_verdicts` (junta veredictos) + aplicación de política, sin tocar
+   la semántica de boot; +1 test (`gather_verdicts_junta_sin_abortar_aun_con_halt`). Así el operador
+   valida `2 ✓ / 0 ✗` ANTES de endurecer. Verificado end-to-end con un seed firmado por el packager.
 4. **A3** — Card de escritorio (`arje-card-llimphi`): mostrar el veredicto de atestación por
    unidad (verde/comprometido) en el panel del brain que ya existe. ✅ (2026-06-14) `formatear_entrada`
    renderiza las entradas `AuditAction::AttestationCheck` del audit log en el panel "Audit log" por

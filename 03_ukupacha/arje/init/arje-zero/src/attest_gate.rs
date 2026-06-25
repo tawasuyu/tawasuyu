@@ -40,10 +40,16 @@ const ANCLA_FILE_DEFAULT: &str = "/etc/arje/rootkey.pub";
 /// por completo podría también reemplazar su rootkey. El ancla externa es lo que
 /// cierra ese hueco (la "resta soberano" de A2).
 fn ancla_externa() -> Option<AgoraId> {
+    ancla_externa_con_fuente().map(|(k, _)| k)
+}
+
+/// Como [`ancla_externa`] pero también devuelve una descripción legible de
+/// **de dónde** salió el ancla (para el reporte del dry-run `--attest-check`).
+fn ancla_externa_con_fuente() -> Option<(AgoraId, String)> {
     // (1) compilada en el binario.
     if let Some(hex) = option_env!("ARJE_ATTEST_ROOTKEY") {
         match rootkey_desde_hex(hex) {
-            Some(k) => return Some(k),
+            Some(k) => return Some((k, "compilada en el binario (ARJE_ATTEST_ROOTKEY)".into())),
             None => warn!(
                 "ARJE_ATTEST_ROOTKEY compilada no es hex de 32 bytes — se ignora"
             ),
@@ -56,10 +62,10 @@ fn ancla_externa() -> Option<AgoraId> {
         Ok(bytes) if bytes.len() == 32 => {
             let mut k = [0u8; 32];
             k.copy_from_slice(&bytes);
-            Some(k)
+            Some((k, format!("archivo {path} (32 bytes raw)")))
         }
         Ok(bytes) => match rootkey_desde_hex(&String::from_utf8_lossy(&bytes)) {
-            Some(k) => Some(k),
+            Some(k) => Some((k, format!("archivo {path} (hex)"))),
             None => {
                 warn!(%path, "ancla de rootkey en disco no es 32 bytes ni hex válido — se ignora");
                 None
@@ -137,6 +143,50 @@ fn run_inner(
     paths: Vec<String>,
     ancla: Option<AgoraId>,
 ) -> anyhow::Result<Vec<AttestVerdict>> {
+    let verdicts = gather_verdicts(seed, paths, ancla);
+    let hubo_fallo = verdicts.iter().any(|v| !v.verdict.es_ok());
+
+    if hubo_fallo && seed.attest_policy == AttestPolicy::Halt {
+        anyhow::bail!(
+            "atestación al arranque falló y la política es Halt — abortando antes \
+             de incarnar el target"
+        );
+    }
+    if hubo_fallo && seed.attest_policy == AttestPolicy::Degraded {
+        warn!(
+            "atestación: arranque DEGRADADO — hubo binarios sin atestar; el target \
+             se levanta igual (marcar la unidad comprometida en el brain queda como \
+             follow-up A3)"
+        );
+    }
+    Ok(verdicts)
+}
+
+/// Dry-run del gate (`--attest-check`): corre la **misma** verificación que el
+/// boot pero **nunca aborta** — devuelve todos los veredictos para que el
+/// operador inspeccione off-boot antes de endurecer la política a `Halt`.
+/// Vacío si el seed no trae manifiesto.
+pub fn check(seed: &EntityCard) -> Vec<AttestVerdict> {
+    if seed.attest.is_empty() {
+        return Vec::new();
+    }
+    gather_verdicts(seed, critical_paths(seed), ancla_externa())
+}
+
+/// Descripción legible del ancla soberana externa resuelta (o `None` si no hay
+/// — el gate cae a la rootkey auto-declarada del seed). Para el reporte.
+pub fn ancla_fuente() -> Option<String> {
+    ancla_externa_con_fuente().map(|(_, src)| src)
+}
+
+/// Núcleo compartido: lee cada binario crítico del disco vivo y lo atesta
+/// contra el manifiesto del seed con la rootkey efectiva. No aplica política
+/// (eso lo hace [`run_inner`]); sólo junta veredictos.
+fn gather_verdicts(
+    seed: &EntityCard,
+    paths: Vec<String>,
+    ancla: Option<AgoraId>,
+) -> Vec<AttestVerdict> {
     let trust = ancla.or(seed.attest_rootkey);
     match (ancla, seed.attest_rootkey) {
         (Some(a), Some(s)) if a != s => warn!(
@@ -166,7 +216,6 @@ fn run_inner(
     );
 
     let mut verdicts = Vec::with_capacity(paths.len());
-    let mut hubo_fallo = false;
 
     for path in paths {
         match std::fs::read(&path) {
@@ -176,7 +225,6 @@ fn run_inner(
                 if verdict.es_ok() {
                     info!(%path, "atestación ✓");
                 } else {
-                    hubo_fallo = true;
                     warn!(%path, motivo = verdict.motivo(), "atestación ✗");
                 }
                 verdicts.push(AttestVerdict { binary: path, verdict, got_hash });
@@ -184,7 +232,6 @@ fn run_inner(
             Err(e) => {
                 // No poder leer un binario crítico cuenta como fallo: no
                 // podemos afirmar que el binario que correrá es el atestado.
-                hubo_fallo = true;
                 warn!(%path, error = %e, "atestación: no pude leer el binario crítico");
                 verdicts.push(AttestVerdict {
                     binary: path,
@@ -195,20 +242,7 @@ fn run_inner(
         }
     }
 
-    if hubo_fallo && seed.attest_policy == AttestPolicy::Halt {
-        anyhow::bail!(
-            "atestación al arranque falló y la política es Halt — abortando antes \
-             de incarnar el target"
-        );
-    }
-    if hubo_fallo && seed.attest_policy == AttestPolicy::Degraded {
-        warn!(
-            "atestación: arranque DEGRADADO — hubo binarios sin atestar; el target \
-             se levanta igual (marcar la unidad comprometida en el brain queda como \
-             follow-up A3)"
-        );
-    }
-    Ok(verdicts)
+    verdicts
 }
 
 #[cfg(test)]
@@ -262,6 +296,32 @@ mod tests {
         std::fs::write(&path, b"binario + backdoor").unwrap();
         let v2 = run_inner(&seed, vec![path.clone()], None).expect("warn nunca aborta");
         assert_eq!(v2[0].verdict, Veredicto::NoAtestada);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gather_verdicts_junta_sin_abortar_aun_con_halt() {
+        // El núcleo del dry-run (`check` → `gather_verdicts`) debe devolver
+        // veredictos SIEMPRE, incluso bajo política Halt con un binario alterado
+        // — no aborta como el boot. (Probamos el núcleo con paths explícitos y
+        // ancla None: hermético y rápido, sin hashear `current_exe`.)
+        let bytes = b"binario para dry-run".to_vec();
+        let (dir, path) = fake_bin("check", &bytes);
+        let seed = seed_con_attest([7u8; 32], &bytes, AttestPolicy::Halt);
+
+        // Intacto → ✓.
+        let v = gather_verdicts(&seed, vec![path.clone()], None);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].verdict, Veredicto::Ok);
+
+        // Alterado → ✗, pero NO aborta (devuelve el veredicto malo).
+        std::fs::write(&path, b"alterado").unwrap();
+        let v2 = gather_verdicts(&seed, vec![path.clone()], None);
+        assert!(
+            !v2[0].verdict.es_ok(),
+            "el dry-run debe reportar el binario comprometido, no abortar",
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

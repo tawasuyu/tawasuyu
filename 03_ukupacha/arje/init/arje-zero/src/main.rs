@@ -46,10 +46,14 @@ struct CliArgs {
     metrics_addr: Option<String>,
     brain_half_life: Option<f64>,
     autopromote_secs: Option<u64>,
+    /// Modo dry-run de atestación (`--attest-check [seed]`): corre el gate
+    /// real off-boot y reporta, sin volverse PID 1.
+    attest_check: bool,
+    attest_seed: Option<PathBuf>,
 }
 
 fn parse_args() -> CliArgs {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
     let mut checkpoint = None;
     let mut restore = None;
     let mut rules = None;
@@ -58,6 +62,8 @@ fn parse_args() -> CliArgs {
     let mut metrics_addr = None;
     let mut brain_half_life = None;
     let mut autopromote_secs = None;
+    let mut attest_check = false;
+    let mut attest_seed = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--checkpoint" => checkpoint = args.next().map(PathBuf::from),
@@ -68,18 +74,36 @@ fn parse_args() -> CliArgs {
             "--metrics-addr" => metrics_addr = args.next(),
             "--brain-half-life" => brain_half_life = args.next().and_then(|s| s.parse().ok()),
             "--autopromote-secs" => autopromote_secs = args.next().and_then(|s| s.parse().ok()),
+            "--attest-check" => {
+                attest_check = true;
+                // Ruta del seed opcional como siguiente token (si no es otra flag).
+                if let Some(next) = args.peek() {
+                    if !next.starts_with("--") {
+                        attest_seed = args.next().map(PathBuf::from);
+                    }
+                }
+            }
             other => warn!(arg = %other, "argumento desconocido, ignorado"),
         }
     }
     CliArgs {
         checkpoint, restore, rules, rules_out, audit_head,
         metrics_addr, brain_half_life, autopromote_secs,
+        attest_check, attest_seed,
     }
 }
 
 fn main() -> anyhow::Result<()> {
     init_tracing();
     let cli = parse_args();
+
+    // Modo diagnóstico: dry-run de atestación off-boot. NO se vuelve PID 1 ni
+    // monta nada — corre el mismo gate que el arranque y reporta. Pensado para
+    // que el operador valide ANTES de endurecer la política a Halt y reiniciar.
+    if cli.attest_check {
+        return attest_check_main(cli.attest_seed);
+    }
+
     let pid = getpid();
     let dev_mode = pid != Pid::from_raw(1);
 
@@ -128,6 +152,97 @@ fn run(cli: CliArgs, dev_mode: bool) -> anyhow::Result<()> {
         cli.audit_head, cli.metrics_addr, cli.brain_half_life,
         cli.autopromote_secs,
     ))
+}
+
+/// Dry-run de atestación (`--attest-check [seed]`). Carga el seed (del path
+/// dado o de los candidatos canónicos), corre el **mismo** gate que el boot
+/// (`attest_gate::check`, sin abortar) y reporta por unidad. Sale con código 1
+/// si algún binario crítico no atesta — así es gateable en scripts/CI. NO se
+/// vuelve PID 1.
+fn attest_check_main(seed_path: Option<PathBuf>) -> anyhow::Result<()> {
+    use anyhow::anyhow;
+
+    let seed = match seed_path {
+        Some(p) => arje_brain::load_card_file(&p)
+            .with_context(|| format!("cargar seed {}", p.display()))?,
+        None => {
+            let cands = [
+                "/ente/seed.card.json", "/ente/seed.card",
+                "seed.card.json", "seed.card",
+            ];
+            let found = cands.iter().map(PathBuf::from).find(|p| p.exists());
+            match found {
+                Some(p) => arje_brain::load_card_file(&p)
+                    .with_context(|| format!("cargar seed {}", p.display()))?,
+                None => return Err(anyhow!(
+                    "no encontré un seed; pasá la ruta: arje-zero --attest-check <seed.card.json>"
+                )),
+            }
+        }
+    };
+
+    println!("== arje-zero · dry-run de atestación (--attest-check) ==");
+    println!(
+        "seed: {} · política {:?} · {} concesión(es) en el manifiesto",
+        seed.label, seed.attest_policy, seed.attest.len(),
+    );
+
+    if seed.attest.is_empty() {
+        println!(
+            "seed SIN manifiesto de atestación (attest vacío) — el gate es no-op; \
+             nada que verificar. Firmá el seed con `arje-packager --rootkey` para activarlo.",
+        );
+        return Ok(());
+    }
+
+    match attest_gate::ancla_fuente() {
+        Some(src) => println!("ancla soberana externa: {src}"),
+        None if seed.attest_rootkey.is_some() => println!(
+            "ancla soberana externa: NINGUNA — se usa la rootkey auto-declarada del \
+             seed (modelo débil: un seed reescrito podría reemplazarla)",
+        ),
+        None => println!(
+            "ancla soberana externa: NINGUNA y el seed no declara rootkey — sólo se \
+             valida firma+hash, no la procedencia",
+        ),
+    }
+    println!();
+
+    let verdicts = attest_gate::check(&seed);
+    let mut fail = 0usize;
+    for v in &verdicts {
+        let mark = if v.verdict.es_ok() {
+            "✓"
+        } else {
+            fail += 1;
+            "✗"
+        };
+        println!("  {mark} {:<44} {}", v.binary, v.verdict.motivo());
+    }
+    let ok = verdicts.len().saturating_sub(fail);
+    println!();
+    println!(
+        "Resumen: {ok} ✓ / {fail} ✗ sobre {} binario(s) crítico(s).",
+        verdicts.len(),
+    );
+
+    if fail > 0 {
+        match seed.attest_policy {
+            arje_card::AttestPolicy::Halt => println!(
+                "Con política Halt, este arranque ABORTARÍA a la shell de rescate. \
+                 NO endurezcas a Halt hasta que esto dé 0 ✗.",
+            ),
+            arje_card::AttestPolicy::Degraded => println!(
+                "Con política Degraded, arrancaría DEGRADADO (binarios marcados comprometidos).",
+            ),
+            arje_card::AttestPolicy::Warn => println!(
+                "Con política Warn, arrancaría igual (sólo se registra el aviso).",
+            ),
+        }
+        std::process::exit(1);
+    }
+    println!("Todos los binarios críticos atestan. Es seguro endurecer la política a Halt.");
+    Ok(())
 }
 
 /// Último recurso de PID 1: imprime el diagnóstico en la consola y abre
