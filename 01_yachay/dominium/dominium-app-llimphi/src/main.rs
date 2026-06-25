@@ -1196,9 +1196,12 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
 }
 
 /// Traduce el `command` del menú principal al `Msg` real y lo despacha.
-/// Cada cuántos ticks se re-voxeliza el mundo para la vista 3D (throttle: el
-/// terreno cambia poco entre ticks y subir 240² es caro).
-const REVOX_TICKS: u64 = 8;
+/// Cada cuántos ticks se re-voxeliza el mundo para la vista 3D. Con el camino
+/// incremental (`ColumnCache`: sólo reescribe columnas que cambiaron de altura/
+/// color) el refresh es barato cuando el mundo está estable, así que el throttle
+/// puede ser fino — el costo real lo manda la dispersión de los cambios, no su
+/// frecuencia.
+const REVOX_TICKS: u64 = 3;
 
 /// Re-voxeliza el mundo actual en la vista 3D persistente. Usa relieve por
 /// `materia` (ZWeights default — terreno legible) y la paleta de bioma de la app

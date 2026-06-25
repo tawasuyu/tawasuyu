@@ -11,7 +11,7 @@
 
 use dominium_core::World;
 use dominium_iso::ZWeights;
-use dominium_voxel::{lemming_entities, voxelize_into, VoxelConfig};
+use dominium_voxel::{lemming_entities, ColumnCache, VoxelConfig};
 use llimphi_3d::wgpu;
 use llimphi_3d::{Atmosphere, Camera3d, Entity3d, VoxelGrid, VoxelRenderer};
 
@@ -25,6 +25,9 @@ const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub(crate) struct View3d {
     /// Grilla voxel persistente — se re-rellena in-place al cambiar el mundo.
     grid: VoxelGrid,
+    /// Caché por-columna para la voxelización incremental (sólo reescribe lo que
+    /// cambió de altura/color; evita el `clear_all` + relleno total cada vez).
+    cache: ColumnCache,
     /// Renderer ray-march; `None` hasta el primer paint (necesita `device`).
     vr: Option<VoxelRenderer>,
     /// Entidades (lemmings) del último `revoxelize`, subidas en cada render.
@@ -39,21 +42,26 @@ impl View3d {
     pub(crate) fn new(grid_w: u32, grid_h: u32, max_height: u32) -> Self {
         Self {
             grid: VoxelGrid::new([grid_w, max_height.max(2), grid_h]),
+            cache: ColumnCache::new(grid_w as usize, grid_h as usize),
             vr: None,
             entities: Vec::new(),
             needs_sync: false,
         }
     }
 
-    /// Re-voxeliza el terreno y recalcula las entidades desde `world`. No toca
-    /// la GPU (eso ocurre en el próximo `render`): rellena la grilla persistente
-    /// (que queda dirty) y guarda las entidades. Lo llama el `update` cuando el
-    /// mundo cambió (al activar el 3D y, con throttle, mientras la sim corre).
+    /// Re-voxeliza el terreno **incrementalmente** y recalcula las entidades
+    /// desde `world`. No toca la GPU (eso ocurre en el próximo `render`): sólo
+    /// reescribe las columnas cuyo (altura, color) cambió — el dirty del grid
+    /// queda acotado a eso, así el `sync` sube mucho menos que un relleno total.
+    /// Si nada cambió, no marca `needs_sync` (la GPU no recibe upload). Lo llama
+    /// el `update` al activar el 3D y, con throttle, mientras la sim corre.
     pub(crate) fn revoxelize(&mut self, world: &World, zw: &ZWeights, cfg: &VoxelConfig) {
-        voxelize_into(&mut self.grid, world, zw, cfg);
+        let changed = self.cache.apply(&mut self.grid, world, zw, cfg);
         let (ents, _dropped) = lemming_entities(world, zw, cfg);
         self.entities = ents;
-        self.needs_sync = true;
+        if changed > 0 {
+            self.needs_sync = true;
+        }
     }
 
     /// Pinta la escena voxel sobre `target`. Crea el renderer la primera vez,

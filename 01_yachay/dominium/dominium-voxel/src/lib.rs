@@ -22,7 +22,7 @@
 
 use dominium_core::World;
 use dominium_iso::ZWeights;
-use dominium_render_plan::{cell_color, Palette};
+use dominium_render_plan::{cell_color, Color, Palette};
 use llimphi_3d::{Entity3d, VoxelGrid};
 
 /// Tope de entidades que el motor dibuja por frame (`VoxelRenderer` lo capa en
@@ -100,29 +100,111 @@ pub fn voxelize_into(grid: &mut VoxelGrid, world: &World, zw: &ZWeights, cfg: &V
     let g = &world.grid;
     let dim = grid.dim();
     let (gw, gh) = (dim[0] as usize, dim[2] as usize);
+    let max_y = dim[1].saturating_sub(1).max(1);
     for cy in 0..g.height.min(gh) {
         for cx in 0..g.width.min(gw) {
             let idx = g.idx(cx, cy);
-            let top = column_height(world, zw, cfg, idx).min(dim[1].saturating_sub(1).max(1));
+            let top = column_height(world, zw, cfg, idx).min(max_y);
             let base = cell_color(world, idx, &cfg.palette);
-            for y in 0..top {
-                // Sombreado vertical: el lecho va más oscuro y aclara hacia la
-                // cima. Da volumen a la columna sin iluminación extra y lee la
-                // profundidad de un vistazo (≈ el `shade` de las caras del iso).
-                let t = if top > 1 {
-                    y as f32 / (top - 1) as f32
+            fill_column(grid, cx as u32, cy as u32, 0, top, base);
+        }
+    }
+}
+
+/// Pinta la columna `(cx, cy)` con el material `base` desde `y=0` hasta `top`
+/// (exclusivo), y **vacía** los voxels viejos en `[top, old_top)` que quedaron
+/// por encima. Con esto reescribir una columna (que encogió, creció o cambió de
+/// color) sólo toca esa columna — la base del camino incremental.
+fn fill_column(grid: &mut VoxelGrid, cx: u32, cy: u32, old_top: u32, top: u32, base: Color) {
+    for y in 0..top {
+        // Sombreado vertical: el lecho va más oscuro y aclara hacia la cima.
+        // Da volumen a la columna sin iluminación extra y lee la profundidad de
+        // un vistazo (≈ el `shade` de las caras del iso).
+        let t = if top > 1 {
+            y as f32 / (top - 1) as f32
+        } else {
+            1.0
+        };
+        let k = 0.55 + 0.45 * t;
+        let rgb = [to_u8(base[0] * k), to_u8(base[1] * k), to_u8(base[2] * k)];
+        grid.set(cx, y, cy, rgb);
+    }
+    // Si la columna encogió, borrar los voxels que sobran arriba.
+    for y in top..old_top {
+        grid.clear(cx, y, cy);
+    }
+}
+
+/// Caché por-columna para **voxelización incremental**: recuerda el `(top,
+/// color_base)` con que se pintó cada columna y, en cada `apply`, sólo reescribe
+/// las columnas cuyo par cambió. Como `top` (`u32`) y el color (`u8`) ya están
+/// **cuantizados**, la comparación es exacta — un cambio sub-voxel de los campos
+/// `f32` (difusión, regrowth) NO dispara reescritura. Evita el `clear_all` +
+/// re-relleno de las ~57k columnas cada refresh; el `VoxelGrid` acumula el dirty
+/// sólo de lo reescrito, así `VoxelRenderer::sync` sube mucho menos.
+///
+/// Limitación: el dirty del `VoxelGrid` es una sola caja AABB, así que si las
+/// columnas cambiadas quedan dispersas, la subida sigue cubriendo su envolvente.
+/// El ahorro de CPU (no reescribir lo estable) es siempre real; el de GPU manda
+/// cuando los cambios se localizan (mundo asentado, actividad agrupada).
+pub struct ColumnCache {
+    width: usize,
+    height: usize,
+    /// `None` = columna nunca pintada (primer `apply` la escribe). `Some(top,
+    /// base)` = último estado con que se pintó.
+    cols: Vec<Option<(u32, Color)>>,
+}
+
+impl ColumnCache {
+    /// Caché para una grilla de `world_w × world_h` columnas, vacía (el primer
+    /// `apply` pinta todo).
+    pub fn new(world_w: usize, world_h: usize) -> Self {
+        Self {
+            width: world_w,
+            height: world_h,
+            cols: vec![None; world_w * world_h],
+        }
+    }
+
+    /// Re-voxeliza `world` en `grid` reescribiendo **sólo** las columnas cuyo
+    /// `(top, color)` cambió desde el último `apply`. Devuelve cuántas columnas
+    /// reescribió (0 = nada cambió → la GPU no recibe upload alguno). No hace
+    /// `clear_all`: el dirty del grid queda acotado a lo tocado.
+    pub fn apply(
+        &mut self,
+        grid: &mut VoxelGrid,
+        world: &World,
+        zw: &ZWeights,
+        cfg: &VoxelConfig,
+    ) -> usize {
+        let g = &world.grid;
+        let dim = grid.dim();
+        let gw = (dim[0] as usize).min(self.width).min(g.width);
+        let gh = (dim[2] as usize).min(self.height).min(g.height);
+        let max_y = dim[1].saturating_sub(1).max(1);
+        let mut changed = 0usize;
+        for cy in 0..gh {
+            for cx in 0..gw {
+                let idx = g.idx(cx, cy);
+                let top = column_height(world, zw, cfg, idx).min(max_y);
+                let base = cell_color(world, idx, &cfg.palette);
+                let slot = &mut self.cols[cy * self.width + cx];
+                // Comparación exacta de lo cuantizado (top u32 + color, que se
+                // redondea a u8 al pintar — comparamos el base f32, equivalente
+                // mientras `cell_color`/`to_u8` sean deterministas).
+                if let Some((old_top, old_base)) = *slot {
+                    if old_top == top && old_base == base {
+                        continue;
+                    }
+                    fill_column(grid, cx as u32, cy as u32, old_top, top, base);
                 } else {
-                    1.0
-                };
-                let k = 0.55 + 0.45 * t;
-                let rgb = [
-                    to_u8(base[0] * k),
-                    to_u8(base[1] * k),
-                    to_u8(base[2] * k),
-                ];
-                grid.set(cx as u32, y, cy as u32, rgb);
+                    fill_column(grid, cx as u32, cy as u32, 0, top, base);
+                }
+                *slot = Some((top, base));
+                changed += 1;
             }
         }
+        changed
     }
 }
 
@@ -186,7 +268,7 @@ fn to_u8(v: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dominium_core::World;
+    use dominium_core::{worldgen, World};
 
     fn cfg() -> VoxelConfig {
         VoxelConfig::default()
@@ -245,6 +327,63 @@ mod tests {
         let h_tierra = column_height(&w, &zw, &c, tierra);
         assert_eq!(h_mar, c.base_floor.max(1), "el mar queda al ras del lecho");
         assert!(h_tierra > h_mar, "la tierra sobresale del agua");
+    }
+
+    #[test]
+    fn cache_incremental_solo_reescribe_lo_que_cambia() {
+        let mut w = World::new(8, 8);
+        for cy in 0..8 {
+            for cx in 0..8 {
+                let idx = w.grid.idx(cx, cy);
+                w.grid.materia[idx] = 30.0;
+            }
+        }
+        let zw = ZWeights::default();
+        let c = cfg();
+        let mut grid = VoxelGrid::new([8, c.max_height, 8]);
+        let mut cache = ColumnCache::new(8, 8);
+
+        // Primer apply: todas las columnas (64) se pintan.
+        let n0 = cache.apply(&mut grid, &w, &zw, &c);
+        assert_eq!(n0, 64, "el primer apply pinta todo");
+
+        // Apply sin cambios: cero reescrituras (la GPU no recibiría nada).
+        let n1 = cache.apply(&mut grid, &w, &zw, &c);
+        assert_eq!(n1, 0, "sin cambios → nada que reescribir");
+
+        // Cambiar una sola celda lo suficiente para mover su `top`: sólo esa
+        // columna se reescribe.
+        let idx = w.grid.idx(3, 5);
+        w.grid.materia[idx] = 90.0;
+        let n2 = cache.apply(&mut grid, &w, &zw, &c);
+        assert_eq!(n2, 1, "un cambio de altura → 1 columna reescrita");
+        // Y la grilla refleja la columna más alta.
+        let top = column_height(&w, &zw, &c, idx);
+        assert_eq!(grid.height_at(3, 5).map(|h| h + 1), Some(top));
+    }
+
+    #[test]
+    fn cache_incremental_iguala_a_voxelize_completo() {
+        // El resultado del camino incremental debe ser idéntico, voxel a voxel,
+        // al de `voxelize` completo sobre el mismo mundo.
+        let w = worldgen::seed(0xCA5E, 24, 24 * 3, dominium_core::Conceptos::default());
+        let zw = ZWeights::default();
+        let c = cfg();
+        let full = voxelize(&w, &zw, &c);
+        let mut inc = VoxelGrid::new(full.dim());
+        let mut cache = ColumnCache::new(24, 24);
+        cache.apply(&mut inc, &w, &zw, &c);
+        for z in 0..full.dim()[2] {
+            for y in 0..full.dim()[1] {
+                for x in 0..full.dim()[0] {
+                    assert_eq!(
+                        full.get(x, y, z),
+                        inc.get(x, y, z),
+                        "voxel ({x},{y},{z}) difiere"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
