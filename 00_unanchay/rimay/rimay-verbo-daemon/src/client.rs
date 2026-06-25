@@ -8,9 +8,9 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use tokio::net::UnixStream;
 use rimay_verbo_core::{EmbedError, EmbeddingVector, ModelId, Provider};
 
+use crate::transport;
 use crate::wire::{read_frame, write_frame, Request, Response};
 
 /// Cliente de un [`crate::Daemon`]. Se comporta como un `Provider`
@@ -56,7 +56,7 @@ fn unexpected(r: Response) -> EmbedError {
 /// cerró antes de mandar nada (transitorio — el caller decide reintentar)
 /// y `Err` cuando algo falló sin ambigüedad.
 async fn intentar(path: &Path, req: &Request) -> Result<Option<Response>, EmbedError> {
-    let mut stream = match UnixStream::connect(path).await {
+    let mut stream = match transport::connect(path).await {
         Ok(s) => s,
         Err(e) if es_transitorio(&e) => return Ok(None),
         Err(e) => {

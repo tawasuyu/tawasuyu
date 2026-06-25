@@ -8,24 +8,24 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::net::{UnixListener, UnixStream};
 use rimay_verbo_core::Provider;
 
+use crate::transport::{Listener, Stream};
 use crate::wire::{read_frame, write_frame, Request, Response};
 
-/// Daemon de embeddings ligado a un socket Unix.
+/// Daemon de embeddings ligado al transporte de la plataforma (socket
+/// Unix en Unix, TCP de loopback en el resto — ver [`crate::transport`]).
 pub struct Daemon {
-    listener: UnixListener,
+    listener: Listener,
     path: PathBuf,
 }
 
 impl Daemon {
-    /// Bindea el socket Unix en `path`. Si quedó un socket huérfano de
-    /// una corrida anterior, se remueve antes de bindear.
+    /// Bindea el daemon en `path`. Si quedó un recurso huérfano de una
+    /// corrida anterior (socket o sidecar de puerto), se remueve antes.
     pub fn bind(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let _ = std::fs::remove_file(&path);
-        let listener = UnixListener::bind(&path)?;
+        let listener = Listener::bind(&path)?;
         Ok(Self { listener, path })
     }
 
@@ -58,7 +58,7 @@ impl Daemon {
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
-                    let (stream, _) = accepted?;
+                    let stream = accepted?;
                     let provider = provider.clone();
                     tokio::spawn(async move {
                         // Una conexión muerta no debe tumbar el daemon.
@@ -73,14 +73,15 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        // Sin esto el socket Unix queda como archivo huérfano.
-        let _ = std::fs::remove_file(&self.path);
+        // Sin esto el recurso de nombre (socket Unix o sidecar de puerto)
+        // queda huérfano.
+        self.listener.cleanup();
     }
 }
 
 /// Bucle de una conexión: lee requests hasta EOF, responde cada uno.
 async fn handle_conn<P: Provider>(
-    mut stream: UnixStream,
+    mut stream: Stream,
     provider: Arc<P>,
 ) -> std::io::Result<()> {
     while let Some(req) = read_frame::<_, Request>(&mut stream).await? {

@@ -27,6 +27,7 @@
 
 mod client;
 mod server;
+mod transport;
 mod wire;
 
 pub use client::DaemonClient;
