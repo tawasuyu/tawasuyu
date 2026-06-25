@@ -124,6 +124,17 @@ pub enum Icon {
     Table,
     /// Dos paneles verticales lado a lado (modo dual).
     Columns,
+    // --- Dominio: creador de mundos (llimphi-voxel-studio) ---
+    /// Globo terráqueo (Mundos).
+    Globe,
+    /// Cadena montañosa (Biomas).
+    Mountain,
+    /// Hoja con nervadura (Materiales).
+    Leaf,
+    /// Silueta de persona (Seres).
+    User,
+    /// Gota de agua (Leyes / físicas).
+    Droplet,
 }
 
 impl Icon {
@@ -182,6 +193,11 @@ impl Icon {
             Icon::Rows => "rows",
             Icon::Table => "table",
             Icon::Columns => "columns",
+            Icon::Globe => "globe",
+            Icon::Mountain => "mountain",
+            Icon::Leaf => "leaf",
+            Icon::User => "user",
+            Icon::Droplet => "droplet",
         }
     }
 
@@ -240,6 +256,11 @@ impl Icon {
             Icon::Rows => path_rows(),
             Icon::Table => path_table(),
             Icon::Columns => path_columns(),
+            Icon::Globe => path_globe(),
+            Icon::Mountain => path_mountain(),
+            Icon::Leaf => path_leaf(),
+            Icon::User => path_user(),
+            Icon::Droplet => path_droplet(),
         }
     }
 }
@@ -632,6 +653,72 @@ fn path_circle(cx: f64, cy: f64, r: f64, segments: usize) -> BezPath {
             p.line_to((x, y));
         }
     }
+    p
+}
+
+// ---------------------------------------------------------------------
+// Dominio — creador de mundos (llimphi-voxel-studio)
+// ---------------------------------------------------------------------
+
+fn path_globe() -> BezPath {
+    // Esfera + un meridiano (elipse angosta) + dos paralelos.
+    let mut p = path_circle(12.0, 12.0, 9.0, 32);
+    p.move_to((12.0, 3.0));
+    p.curve_to((6.5, 7.0), (6.5, 17.0), (12.0, 21.0));
+    p.move_to((12.0, 3.0));
+    p.curve_to((17.5, 7.0), (17.5, 17.0), (12.0, 21.0));
+    p.move_to((3.6, 9.3));
+    p.line_to((20.4, 9.3));
+    p.move_to((3.6, 14.7));
+    p.line_to((20.4, 14.7));
+    p
+}
+
+fn path_mountain() -> BezPath {
+    // Cordillera de dos picos + nieve en el mayor.
+    let mut p = BezPath::new();
+    p.move_to((2.0, 20.0));
+    p.line_to((8.5, 8.0));
+    p.line_to((13.0, 15.0));
+    p.line_to((16.0, 11.0));
+    p.line_to((22.0, 20.0));
+    p.close_path();
+    // Nieve del pico mayor.
+    p.move_to((6.6, 11.5));
+    p.line_to((8.5, 8.0));
+    p.line_to((10.3, 11.0));
+    p
+}
+
+fn path_leaf() -> BezPath {
+    // Hoja: contorno por dos curvas + nervadura central.
+    let mut p = BezPath::new();
+    p.move_to((5.0, 19.0));
+    p.curve_to((5.0, 9.0), (12.0, 4.0), (19.0, 5.0));
+    p.curve_to((20.0, 12.0), (15.0, 19.0), (5.0, 19.0));
+    p.close_path();
+    p.move_to((7.5, 16.5));
+    p.line_to((16.5, 7.5));
+    p
+}
+
+fn path_user() -> BezPath {
+    // Persona: cabeza (círculo) + hombros (arco).
+    let mut p = path_circle(12.0, 8.0, 4.0, 24);
+    p.move_to((4.5, 20.0));
+    p.curve_to((4.5, 14.5), (19.5, 14.5), (19.5, 20.0));
+    p
+}
+
+fn path_droplet() -> BezPath {
+    // Gota: punta arriba, panza redonda abajo.
+    let mut p = BezPath::new();
+    p.move_to((12.0, 3.0));
+    p.curve_to((12.0, 3.0), (18.5, 11.0), (18.5, 15.5));
+    p.curve_to((18.5, 19.5), (15.5, 21.5), (12.0, 21.5));
+    p.curve_to((8.5, 21.5), (5.5, 19.5), (5.5, 15.5));
+    p.curve_to((5.5, 11.0), (12.0, 3.0), (12.0, 3.0));
+    p.close_path();
     p
 }
 
