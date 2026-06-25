@@ -1,0 +1,16 @@
+[package]
+name = "willay-emit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "willay — cliente fino del centro de eventos: emite Eventos al daemon por socket Unix ($XDG_RUNTIME_DIR/willay.sock), con framing length-prefixed (postcard). emitir_silencioso no-opea si el daemon no corre — un productor nunca falla porque willay esté caído. Expone el códec de marcos que reusa el daemon."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+willay-core = { workspace = true }
+postcard = { workspace = true }
+anyhow = { workspace = true }

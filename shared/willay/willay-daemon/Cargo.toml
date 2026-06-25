@@ -1,0 +1,22 @@
+[package]
+name = "willay-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "willay — daemon escritor único del centro de eventos: escucha el socket Unix, es el dueño del índice sled (willay-store) y atiende emisiones (append) y consultas (recientes/por_clase/buscar). Un hilo por conexión; sled es el único proceso escritor, así los lectores no pelean por su lock."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "willay-daemon"
+path = "src/main.rs"
+
+[dependencies]
+willay-core = { workspace = true }
+willay-store = { workspace = true }
+willay-emit = { workspace = true }
+postcard = { workspace = true }
+anyhow = { workspace = true }

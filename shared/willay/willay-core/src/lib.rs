@@ -23,6 +23,8 @@ use core::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
+pub mod proto;
+
 /// Identidad de un evento: BLAKE3 (32 bytes) sobre su contenido canónico. El
 /// mismo contenido produce el mismo id — re-emitir un evento idéntico no lo
 /// duplica en el índice (dedup natural).
