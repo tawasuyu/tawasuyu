@@ -15,6 +15,15 @@ use llimphi_voxel::{WorldRecipe, SCENE_SUN};
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+/// **Densidad de bruma de una escena** (numerador; la densidad real es
+/// `SCENE_FOG / dim[0]`). Más alta que la del preview de un mundo: la ventana
+/// voxel sigue siendo una caja finita de `dim`, así que sin bruma su **borde** se
+/// ve como una isla cuadrada flotando en el cielo. Con esto el borde (a ~`dim/2`
+/// del reparto centrado) se funde con el horizonte → la escena se lee infinita,
+/// mientras el reparto (cerca de la cámara) queda nítido. Es el mismo truco del
+/// `--flythrough`.
+pub const SCENE_FOG: f32 = 2.6;
+
 /// El mundo de preview: terreno de la receta + atmósfera + actores posados.
 pub struct WorldPreview {
     scene: Scene3d,
@@ -113,6 +122,10 @@ impl WorldPreview {
             self.built_gen = gen;
             self.origin = origin;
         }
+        // Bruma de escena (cada cuadro, sólo setea un campo): disuelve el BORDE de la
+        // ventana finita en el horizonte → la escena se ve infinita, no una isla
+        // cuadrada. El preview de Mundos (rebuild_if) queda nítido, sin esto.
+        self.voxel.atmosphere.fog_density = SCENE_FOG / self.dim[0] as f32;
     }
 
     /// Regenera la ventana del mundo en un **origen** de grilla `[wx, wz]` (para
