@@ -1,6 +1,7 @@
 //! Modelo de la app y mensajes del bucle Elm. La conducta vive en
 //! `update`/`view` (en `main.rs`); acá sólo los datos y los enums de edición.
 
+use dominium_control::StabilityController;
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_sim::Sim;
 use dominium_render_plan::PlanConfig;
@@ -16,6 +17,14 @@ pub(crate) struct Model {
     /// clusters. El ciclo de vida (`advance`/`reseed`/…) vive en `Sim`
     /// (`dominium-sim`); el `Model` sólo guarda estado de vista.
     pub(crate) sim: Sim,
+    /// Controlador de estabilidad (lazo cerrado). `Some` = activo: cada tick
+    /// mide la población y ajusta una palanca blanda (regrowth) para sostener
+    /// `setpoint`. `None` = lazo abierto (la sim corre con los params tal cual
+    /// los dejaste). Lo togglea `Msg::ToggleController`.
+    pub(crate) controller: Option<StabilityController>,
+    /// Setpoint de población recordado (sobrevive al toggle del controlador).
+    /// El slider del panel lo edita; al activar el lazo se siembra desde acá.
+    pub(crate) setpoint: f32,
     pub(crate) iso: IsoProjector,
     /// Desplazamiento de cámara en píxeles de PANTALLA, sumado al centrado
     /// automático del canvas. `(0.0, 0.0)` = maqueta centrada. Lo mueve el
@@ -242,6 +251,12 @@ pub(crate) enum Msg {
     Tick,
     TogglePlay,
     Reseed,
+    /// Activa/desactiva el controlador de estabilidad (lazo cerrado). Al
+    /// activar, crea un `StabilityController` con el `setpoint` recordado.
+    ToggleController,
+    /// Delta sobre el `setpoint` de población (lo emite el slider del panel).
+    /// Si el controlador está activo, lo sincroniza al instante.
+    EditSetpoint(f32),
     LimpiarConceptos,
     SembrarConceptos,
     SelectConcepto(usize),

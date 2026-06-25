@@ -28,6 +28,7 @@ mod worldgen;
 
 use std::time::Duration;
 
+use dominium_control::{Lever as ControlLever, StabilityController};
 use dominium_core::{BehaviorHack, Conceptos, PsiMetrics, SimParams, Trigger, WorldStats};
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_render_plan::{build_plan_with_overrides, PlanConfig, RenderLayer, RenderMode};
@@ -213,6 +214,11 @@ impl App for Dominium {
         }
         Model {
             sim,
+            // Lazo cerrado apagado por default: la sim arranca igual que
+            // siempre (lazo abierto). El usuario lo activa en el tab Mundo.
+            controller: None,
+            // Setpoint inicial razonable para la grilla 240² con estos params.
+            setpoint: 1200.0,
             // Scale 3.0 para que la grilla 240×240 entre en pantalla. z_factor
             // 0.55 levanta el relieve a algo perceptible sin que los picos
             // exploten: mares ~−25 px, llanura plana, colinas ~+10 px,
@@ -268,10 +274,36 @@ impl App for Dominium {
                 if m.sim.running && m.sim.rewind_offset == 0 {
                     m.sim
                         .advance(matches!(m.cfg.render_mode, RenderMode::PsiCluster));
+                    // Lazo cerrado: tras avanzar, el controlador mide N y
+                    // ajusta la palanca (regrowth) para sostener el setpoint.
+                    // Escribe en `m.sim.params`, que el próximo tick consume.
+                    if let Some(ctrl) = m.controller.as_mut() {
+                        ctrl.observe(&m.sim.world, &mut m.sim.params, m.sim.tick);
+                    }
                 }
             }
             Msg::TogglePlay => {
                 m.sim.running = !m.sim.running;
+            }
+            Msg::ToggleController => {
+                if m.controller.is_some() {
+                    m.controller = None;
+                } else {
+                    // Rango de palanca ancho: con el default 0..0.25 el caudal
+                    // de materia satura antes de poblaciones altas (ver
+                    // dominium-control). 0..0.6 le da autoridad para alcanzar
+                    // setpoints grandes en la grilla 240².
+                    m.controller = Some(
+                        StabilityController::new(m.setpoint, ControlLever::Regrowth)
+                            .with_bounds(0.0, 0.6),
+                    );
+                }
+            }
+            Msg::EditSetpoint(dv) => {
+                m.setpoint = (m.setpoint + dv).clamp(0.0, 8000.0);
+                if let Some(ctrl) = m.controller.as_mut() {
+                    ctrl.setpoint = m.setpoint;
+                }
             }
             Msg::Reseed => {
                 m.sim.reseed();
@@ -1092,7 +1124,8 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(MenuItem::new("Limpiar conceptos", "sim.limpiar"))
                 .item(MenuItem::new("Crear concepto", "sim.crear").separated())
                 .item(MenuItem::new("Big Five ψ", "sim.bigfive"))
-                .item(MenuItem::new("Política de acción ψ", "sim.psipolicy").separated())
+                .item(MenuItem::new("Política de acción ψ", "sim.psipolicy"))
+                .item(MenuItem::new("Estabilidad (lazo cerrado)", "sim.stability").separated())
                 .item(rewind),
         )
         .menu(
@@ -1125,6 +1158,7 @@ fn handle_menu_command(model: Model, command: String, h: &Handle<Msg>) -> Model 
         "concepto.rename" => Some(Msg::FocusIdInput),
         "concepto.delete" => Some(Msg::DeleteSelected),
         "sim.toggleplay" => Some(Msg::TogglePlay),
+        "sim.stability" => Some(Msg::ToggleController),
         "sim.reseed" => Some(Msg::Reseed),
         "sim.sembrar" => Some(Msg::SembrarConceptos),
         "sim.limpiar" => Some(Msg::LimpiarConceptos),

@@ -254,6 +254,8 @@ mod tests {
         );
         Model {
             sim,
+            controller: None,
+            setpoint: 600.0,
             iso: IsoProjector::new(3.0, 0.55),
             pan: (0.0, 0.0),
             weights: ZWeights::default(),

@@ -136,6 +136,8 @@ fn modelo_demo() -> Model {
 
     Model {
         sim,
+        controller: None,
+        setpoint: 1200.0,
         // Misma cámara que la app: scale 3.0 px/celda, z_factor 0.55. En el
         // lienzo de 1600×1000 la maqueta iso 240×240 entra completa.
         iso: IsoProjector::new(3.0, 0.55),

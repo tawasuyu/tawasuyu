@@ -371,6 +371,49 @@ fn append_mundo_tab(
     }
 
     children.push(separator(theme));
+    children.push(label_view("[ ESTABILIDAD ]", 11.0, theme.fg_muted));
+    // Lazo cerrado: cuando está ON, el controlador mueve `regrowth` solo para
+    // sostener el setpoint — encontrar el equilibrio en vez de calibrar a mano.
+    // Va alto en el panel (junto a las métricas de población) y también está en
+    // el menú Simulación → "Estabilidad (lazo cerrado)".
+    let ctrl_on = model.controller.is_some();
+    let ctrl_label = if ctrl_on {
+        "✓  Lazo: ON (sostiene N)"
+    } else {
+        "○  Lazo: OFF (manual)"
+    };
+    children.push(sized_button(ctrl_label, btn_palette, Msg::ToggleController));
+    // Slider del setpoint (objetivo de población). El delta se acumula en
+    // model.setpoint; rango holgado para la grilla 240².
+    children.push(slider_view(
+        "objetivo N",
+        model.setpoint,
+        0.0,
+        4000.0,
+        slider_palette,
+        move |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::EditSetpoint(dv)),
+            DragPhase::End => None,
+        },
+    ));
+    // Lectura en vivo: N actual → objetivo, y la palanca que el lazo encontró.
+    if ctrl_on {
+        let lever = model
+            .controller
+            .as_ref()
+            .map(|c| c.lever_value())
+            .unwrap_or(0.0);
+        children.push(stat_row(
+            "N → objetivo",
+            &format!("{} → {}", stats.n, model.setpoint as u32),
+            theme,
+        ));
+        children.push(stat_row("regrowth (auto)", &format!("{lever:.4}"), theme));
+    } else {
+        children.push(stat_row("objetivo", &format!("{}", model.setpoint as u32), theme));
+    }
+
+    children.push(separator(theme));
     children.push(label_view("[ MOTOR ]", 11.0, theme.fg_muted));
     children.push(param_slider("climb", model.sim.params.climb_cost, ParamSlot::ClimbCost, slider_palette));
     children.push(param_slider("move", model.sim.params.move_cost, ParamSlot::MoveCost, slider_palette));
