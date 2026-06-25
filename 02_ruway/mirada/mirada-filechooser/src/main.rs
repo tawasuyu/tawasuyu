@@ -10,12 +10,14 @@
 //! se adueña del hilo principal con su propio event loop (winit/wgpu) —
 //! dos dueños del main no conviven en un proceso.
 //!
-//! La navegación de carpetas **no se reimplementa**: reusa
-//! [`nahual_file_explorer_llimphi::FileExplorerState`] + `file_explorer_view`
-//! — el mismo explorador que monta `nahual-shell-llimphi` (listado,
-//! ordenado dirs-primero, selección, scroll por rueda). Encima ponemos lo
-//! propio de un diálogo: panel de **lugares** + **mónadas** de `chasqui`,
-//! campo de nombre para guardar y los botones Aceptar/Cancelar.
+//! La navegación **no se reimplementa**: reusa
+//! [`nahual_source_core::Navigator`] sobre `PosixSource` — el mismo núcleo
+//! que monta `nahual-shell-llimphi` (listado, ordenado, **filtro vivo**,
+//! breadcrumb, scroll por rueda). Para POSIX el `NodeId` de cada nodo es su
+//! ruta absoluta, así que el **marcado múltiple** es un `BTreeSet<NodeId>` y
+//! los URIs salen directo del id. Encima va lo propio de un diálogo: panel
+//! de **lugares** + **mónadas** de `chasqui`, campo de nombre para guardar,
+//! cuadro de filtro y los botones Aceptar/Cancelar.
 //!
 //! Probarlo suelto, sin D-Bus:
 //! ```text
@@ -24,6 +26,7 @@
 //! cat /tmp/fc.json
 //! ```
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -40,28 +43,30 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 
 use llimphi_widget_button::{button_styled, ButtonPalette};
-use llimphi_widget_list::ListPalette;
+use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_scroll::{scroll_y, ScrollPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-use nahual_file_explorer_llimphi::{file_explorer_view, FileExplorerState, DEFAULT_ROW_HEIGHT};
+use nahual_source_core::{Navigator, Node, NodeId, NodeKind, PosixSource, SortKey};
 
 // ============================================================================
 // Geometría
 // ============================================================================
 
 const HEADER_H: f32 = 40.0;
-const TOOLBAR_H: f32 = 34.0;
+const TOOLBAR_H: f32 = 38.0;
 const FOOTER_H: f32 = 56.0;
 const SIDEBAR_W: f32 = 210.0;
 const ROW_H: f32 = 24.0;
+/// Alto de fila del listado (coincide con el del shell de nahual).
+const LIST_ROW_H: f32 = 22.0;
 /// Timeout corto al daemon de chasqui: si no contesta, seguimos sin mónadas.
 const MONAD_TIMEOUT: Duration = Duration::from_millis(700);
 
-/// Cuántas filas del explorador caben en el alto de ventana dado.
+/// Cuántas filas del listado caben en el alto de ventana dado.
 fn rows_for_height(win_h: f32) -> usize {
-    let body = (win_h - HEADER_H - TOOLBAR_H - FOOTER_H - 8.0).max(DEFAULT_ROW_HEIGHT);
-    (body / DEFAULT_ROW_HEIGHT).floor().max(1.0) as usize
+    let body = (win_h - HEADER_H - TOOLBAR_H - FOOTER_H - 8.0).max(LIST_ROW_H);
+    (body / LIST_ROW_H).floor().max(1.0) as usize
 }
 
 // ============================================================================
@@ -70,7 +75,7 @@ fn rows_for_height(win_h: f32) -> usize {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
-    /// Abrir: elegir un archivo existente.
+    /// Abrir: elegir uno o varios archivos existentes.
     Open,
     /// Guardar como: tipear un nombre nuevo en una carpeta.
     Save,
@@ -105,8 +110,8 @@ fn parse_args() -> Config {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--mode" => mode_save = it.next().as_deref() == Some("save"),
-            // `--multiple` se acepta por compatibilidad pero hoy colapsa a
-            // selección simple (el explorador reusado es de selección única).
+            // `--multiple` ya no cambia nada: Abrir siempre permite marcar
+            // varios (Espacio / click). Se acepta por compatibilidad.
             "--multiple" => {}
             "--title" => title = it.next().unwrap_or_default(),
             "--accept-label" => accept_label = it.next().unwrap_or_default(),
@@ -149,6 +154,32 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// Construye el navegador POSIX anclado en `/` (para poder subir hasta la
+/// raíz del filesystem) y parado en `cwd`, sembrando la pila de ancestros
+/// para que el breadcrumb tenga la ruta completa. Réplica del `posix_nav`
+/// de `nahual-shell-llimphi` (que es `pub(crate)` y no se puede importar).
+fn posix_nav(cwd: &Path) -> Navigator {
+    use std::path::Component;
+    let mut stack = vec![Node::new("/", "/", true).with_kind(NodeKind::Dir)];
+    let mut acc = PathBuf::from("/");
+    for comp in cwd.components() {
+        if let Component::Normal(c) = comp {
+            acc.push(c);
+            stack.push(
+                Node::new(
+                    acc.to_string_lossy().into_owned(),
+                    c.to_string_lossy().into_owned(),
+                    true,
+                )
+                .with_kind(NodeKind::Dir),
+            );
+        }
+    }
+    Navigator::open_at(Box::new(PosixSource::new("/")), stack)
+        .or_else(|_| Navigator::open(Box::new(PosixSource::new("/"))))
+        .expect("la raíz / siempre se puede listar")
+}
+
 // ============================================================================
 // URIs y resultado
 // ============================================================================
@@ -186,24 +217,37 @@ fn finish(model: &Model, response: u32, uris: Vec<String>, handle: &Handle<Msg>)
 // Modelo
 // ============================================================================
 
+/// Qué tiene el foco de teclado (para rutear las pulsaciones).
+#[derive(Clone, Copy, PartialEq)]
+enum Focus {
+    /// La lista de archivos (navegación con flechas/Enter/Espacio).
+    None,
+    /// El cuadro de filtro vivo.
+    Filter,
+    /// El campo de nombre (modo Guardar).
+    Filename,
+}
+
 /// Qué muestra el panel central.
 enum Pane {
-    /// El contenido de una carpeta — delegado a `FileExplorerState`.
+    /// El contenido de una carpeta — delegado a `Navigator`.
     Folder,
     /// Los archivos miembros de una mónada de chasqui.
     Monad(MonadId),
 }
 
 struct Model {
-    /// Explorador de carpetas reutilizado de nahual.
-    explorer: FileExplorerState,
+    /// Núcleo de navegación reutilizado de nahual.
+    nav: Navigator,
+    /// Archivos marcados (selección múltiple). Para POSIX el id es la ruta.
+    marked: BTreeSet<NodeId>,
+    filter_input: TextInputState,
+    filename: TextInputState,
+    focus: Focus,
     pane: Pane,
     monads: Vec<MonadView>,
     monad_files: Vec<FileView>,
     monad_sel: Option<usize>,
-    filename: TextInputState,
-    /// `true` cuando el campo de nombre tiene el foco (rutea el teclado).
-    name_focused: bool,
     side_scroll: f32,
     win_h: f32,
     status: String,
@@ -221,13 +265,17 @@ enum Msg {
     Nav(i32),
     Parent,
     Wheel(f32),
+    ToggleMark,
+    CycleSort,
+    FilterFocus,
+    FilenameFocus,
+    ClearFilter,
+    Key(KeyEvent),
     ShowMonad(MonadId),
     BackToFolder,
     SelectMonadFile(usize),
     MonadsLoaded(Vec<MonadView>),
     MonadFilesLoaded(MonadId, Vec<FileView>),
-    NameFocus,
-    Key(KeyEvent),
     SideScroll(f32),
     Resize(f32),
     Accept,
@@ -253,13 +301,13 @@ impl App for FileChooser {
     }
 
     fn initial_size() -> (u32, u32) {
-        (860, 580)
+        (880, 600)
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
         let c = cfg();
-        let mut explorer = FileExplorerState::new(c.folder.clone());
-        explorer.visible_rows = rows_for_height(580.0);
+        let mut nav = posix_nav(&c.folder);
+        nav.visible_rows = rows_for_height(600.0);
         let mut filename = TextInputState::new();
         filename.set_text(c.current_name.clone());
 
@@ -274,15 +322,21 @@ impl App for FileChooser {
         });
 
         Model {
-            explorer,
+            nav,
+            marked: BTreeSet::new(),
+            filter_input: TextInputState::new(),
+            filename,
+            focus: if matches!(c.mode, Mode::Save) {
+                Focus::Filename
+            } else {
+                Focus::None
+            },
             pane: Pane::Folder,
             monads: Vec::new(),
             monad_files: Vec::new(),
             monad_sel: None,
-            filename,
-            name_focused: matches!(c.mode, Mode::Save),
             side_scroll: 0.0,
-            win_h: 580.0,
+            win_h: 600.0,
             status: String::new(),
         }
     }
@@ -290,55 +344,107 @@ impl App for FileChooser {
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Go(path) => {
-                let mut ex = FileExplorerState::new(path);
-                ex.visible_rows = rows_for_height(model.win_h);
-                model.explorer = ex;
+                let mut nav = posix_nav(&path);
+                nav.visible_rows = rows_for_height(model.win_h);
+                model.nav = nav;
                 model.pane = Pane::Folder;
                 model.status.clear();
             }
             Msg::Select(idx) => {
-                if matches!(model.pane, Pane::Folder) {
-                    model.explorer.select(idx);
-                    if let Some(e) = model.explorer.selected_entry() {
-                        if e.is_dir {
-                            // Click en carpeta = entrar (el explorador relee).
-                            model.explorer.open_selected();
-                        } else if matches!(cfg().mode, Mode::Save) {
-                            // Click en archivo, guardando = precargar su nombre.
-                            model.filename.set_text(e.name);
+                if matches!(model.pane, Pane::Folder) && model.nav.select(idx) {
+                    let info = model
+                        .nav
+                        .selected_node()
+                        .map(|n| (n.is_container, n.id.clone(), n.name.clone()));
+                    if let Some((is_dir, id, name)) = info {
+                        if is_dir {
+                            // Click en carpeta = entrar (el navegador relee).
+                            let _ = model.nav.open_selected();
+                        } else {
+                            match cfg().mode {
+                                // Abrir = marcar/desmarcar (multi-selección).
+                                Mode::Open => {
+                                    if !model.marked.insert(id.clone()) {
+                                        model.marked.remove(&id);
+                                    }
+                                }
+                                // Guardar = precargar el nombre.
+                                Mode::Save => model.filename.set_text(name),
+                            }
                         }
                     }
                     model.status.clear();
                 }
             }
             Msg::OpenSelected => {
-                if matches!(model.pane, Pane::Folder) {
-                    // Sólo entra si es carpeta; si es archivo no hace nada (lo
-                    // resuelve Aceptar).
-                    if model.explorer.selected_entry().map(|e| e.is_dir) == Some(true) {
-                        model.explorer.open_selected();
-                    }
+                if matches!(model.pane, Pane::Folder)
+                    && model.nav.selected_node().map(|n| n.is_container) == Some(true)
+                {
+                    let _ = model.nav.open_selected();
                 }
             }
             Msg::Nav(d) => {
                 if matches!(model.pane, Pane::Folder) {
                     if d < 0 {
-                        model.explorer.up();
+                        model.nav.up();
                     } else {
-                        model.explorer.down();
+                        model.nav.down();
                     }
                 }
             }
             Msg::Parent => {
                 if matches!(model.pane, Pane::Folder) {
-                    model.explorer.parent();
+                    let _ = model.nav.parent();
                 }
             }
             Msg::Wheel(delta) => {
                 if matches!(model.pane, Pane::Folder) {
-                    model.explorer.apply_wheel(delta);
+                    model.nav.apply_wheel(delta);
                 }
             }
+            Msg::ToggleMark => {
+                if matches!(cfg().mode, Mode::Open) && matches!(model.pane, Pane::Folder) {
+                    if let Some(id) = model
+                        .nav
+                        .selected_node()
+                        .filter(|n| !n.is_container)
+                        .map(|n| n.id.clone())
+                    {
+                        if !model.marked.insert(id.clone()) {
+                            model.marked.remove(&id);
+                        }
+                    }
+                }
+            }
+            Msg::CycleSort => {
+                let (k, _) = model.nav.sort();
+                let next = match k {
+                    SortKey::Name => SortKey::Mtime,
+                    SortKey::Mtime => SortKey::Size,
+                    SortKey::Size => SortKey::Kind,
+                    SortKey::Kind => SortKey::Name,
+                };
+                model.nav.set_sort_to(next, true);
+            }
+            Msg::FilterFocus => model.focus = Focus::Filter,
+            Msg::FilenameFocus => model.focus = Focus::Filename,
+            Msg::ClearFilter => {
+                model.filter_input.clear();
+                model.nav.set_filter(String::new());
+                model.nav.selected = 0;
+            }
+            Msg::Key(e) => match model.focus {
+                Focus::Filename => {
+                    model.filename.apply_key(&e);
+                }
+                Focus::Filter => {
+                    model.filter_input.apply_key(&e);
+                    model.nav.set_filter(model.filter_input.text());
+                    model.nav.selected = 0;
+                    model.nav.visible_offset = 0;
+                }
+                Focus::None => {}
+            },
             Msg::ShowMonad(id) => {
                 model.pane = Pane::Monad(id);
                 model.monad_files.clear();
@@ -369,18 +475,12 @@ impl App for FileChooser {
                     model.status.clear();
                 }
             }
-            Msg::NameFocus => model.name_focused = true,
-            Msg::Key(e) => {
-                if model.name_focused {
-                    model.filename.apply_key(&e);
-                }
-            }
             Msg::SideScroll(delta) => {
                 model.side_scroll = (model.side_scroll + delta).max(0.0);
             }
             Msg::Resize(h) => {
                 model.win_h = h;
-                model.explorer.visible_rows = rows_for_height(h);
+                model.nav.visible_rows = rows_for_height(h);
             }
             Msg::Accept => return accept(model, handle),
             Msg::Cancel => finish(&model, 1, Vec::new(), handle),
@@ -389,29 +489,40 @@ impl App for FileChooser {
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        let text_focus = model.focus != Focus::None;
         if event.state != KeyState::Pressed {
-            if model.name_focused {
-                return Some(Msg::Key(event.clone()));
-            }
-            return None;
+            return if text_focus {
+                Some(Msg::Key(event.clone()))
+            } else {
+                None
+            };
         }
         match &event.key {
-            Key::Named(NamedKey::Escape) => Some(Msg::Cancel),
-            Key::Named(NamedKey::Enter) => {
-                if model.name_focused {
-                    Some(Msg::Accept)
-                } else if matches!(model.pane, Pane::Folder)
-                    && model.explorer.selected_entry().map(|e| e.is_dir) == Some(true)
-                {
-                    Some(Msg::OpenSelected)
+            Key::Named(NamedKey::Escape) => {
+                if model.focus == Focus::Filter && !model.filter_input.is_empty() {
+                    Some(Msg::ClearFilter)
                 } else {
-                    Some(Msg::Accept)
+                    Some(Msg::Cancel)
                 }
             }
-            Key::Named(NamedKey::Backspace) if !model.name_focused => Some(Msg::Parent),
-            Key::Named(NamedKey::ArrowUp) if !model.name_focused => Some(Msg::Nav(-1)),
-            Key::Named(NamedKey::ArrowDown) if !model.name_focused => Some(Msg::Nav(1)),
-            _ if model.name_focused => Some(Msg::Key(event.clone())),
+            Key::Named(NamedKey::Enter) => match model.focus {
+                Focus::Filename => Some(Msg::Accept),
+                Focus::Filter => None,
+                Focus::None => {
+                    if matches!(model.pane, Pane::Folder)
+                        && model.nav.selected_node().map(|n| n.is_container) == Some(true)
+                    {
+                        Some(Msg::OpenSelected)
+                    } else {
+                        Some(Msg::Accept)
+                    }
+                }
+            },
+            Key::Named(NamedKey::Backspace) if model.focus == Focus::None => Some(Msg::Parent),
+            Key::Named(NamedKey::ArrowUp) if model.focus == Focus::None => Some(Msg::Nav(-1)),
+            Key::Named(NamedKey::ArrowDown) if model.focus == Focus::None => Some(Msg::Nav(1)),
+            Key::Named(NamedKey::Space) if model.focus == Focus::None => Some(Msg::ToggleMark),
+            _ if text_focus => Some(Msg::Key(event.clone())),
             _ => None,
         }
     }
@@ -425,7 +536,7 @@ impl App for FileChooser {
         if delta.y == 0.0 {
             None
         } else {
-            // El acumulador fraccional vive en FileExplorerState::apply_wheel.
+            // El acumulador fraccional vive en Navigator::apply_wheel.
             Some(Msg::Wheel(delta.y * 3.0))
         }
     }
@@ -473,7 +584,7 @@ fn accept(mut model: Model, handle: &Handle<Msg>) -> Model {
             let path = if candidate.is_absolute() {
                 candidate.to_path_buf()
             } else {
-                model.explorer.cwd.join(name)
+                PathBuf::from(model.nav.current_id()).join(name)
             };
             finish(&model, 0, vec![path_to_uri(&path)], handle);
             model
@@ -481,7 +592,7 @@ fn accept(mut model: Model, handle: &Handle<Msg>) -> Model {
         Mode::Open => {
             let uris = selected_uris(&model);
             if uris.is_empty() {
-                model.status = "Seleccioná un archivo".to_string();
+                model.status = "Seleccioná un archivo (Espacio o click)".to_string();
                 return model;
             }
             finish(&model, 0, uris, handle);
@@ -490,15 +601,26 @@ fn accept(mut model: Model, handle: &Handle<Msg>) -> Model {
     }
 }
 
+/// Los URIs a devolver en modo Abrir: los marcados, o como fallback el
+/// archivo actualmente resaltado.
 fn selected_uris(model: &Model) -> Vec<String> {
     match model.pane {
-        Pane::Folder => model
-            .explorer
-            .selected_entry()
-            .filter(|e| !e.is_dir)
-            .and_then(|_| model.explorer.selected_path())
-            .map(|p| vec![path_to_uri(&p)])
-            .unwrap_or_default(),
+        Pane::Folder => {
+            if !model.marked.is_empty() {
+                model
+                    .marked
+                    .iter()
+                    .map(|id| path_to_uri(Path::new(id)))
+                    .collect()
+            } else {
+                model
+                    .nav
+                    .selected_node()
+                    .filter(|n| !n.is_container)
+                    .map(|n| vec![path_to_uri(Path::new(&n.id))])
+                    .unwrap_or_default()
+            }
+        }
         Pane::Monad(_) => model
             .monad_sel
             .and_then(|i| model.monad_files.get(i))
@@ -538,7 +660,7 @@ fn toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         Style {
             size: Size {
                 width: length(30.0_f32),
-                height: length(24.0_f32),
+                height: length(26.0_f32),
             },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
@@ -561,11 +683,45 @@ fn toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        model.explorer.cwd.display().to_string(),
+        model.nav.current_id().to_string(),
         11.5,
         theme.fg_muted,
         Alignment::Start,
     );
+
+    // Botón de ordenamiento — cicla Nombre → Fecha → Tamaño → Tipo.
+    let (key, _) = model.nav.sort();
+    let klabel = match key {
+        SortKey::Name => "Nombre",
+        SortKey::Mtime => "Fecha",
+        SortKey::Size => "Tamaño",
+        SortKey::Kind => "Tipo",
+    };
+    let sort_btn = button_styled(
+        format!("⇅ {klabel}"),
+        btn_style(108.0),
+        Alignment::Center,
+        &ButtonPalette::from_theme(theme),
+        Msg::CycleSort,
+    );
+
+    // Cuadro de filtro vivo.
+    let filter = View::new(Style {
+        size: Size {
+            width: length(200.0_f32),
+            height: length(26.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        &model.filter_input,
+        "🔍 filtrar…",
+        model.focus == Focus::Filter,
+        &TextInputPalette::from_theme(theme),
+        Msg::FilterFocus,
+    )]);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -573,13 +729,13 @@ fn toolbar(model: &Model, theme: &Theme) -> View<Msg> {
             width: percent(1.0_f32),
             height: length(TOOLBAR_H),
         },
-        padding: pad(10.0, 5.0),
+        padding: pad(10.0, 6.0),
         align_items: Some(AlignItems::Center),
         flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![up, crumb])
+    .children(vec![up, crumb, sort_btn, spacer_w(8.0), filter])
 }
 
 fn body(model: &Model, theme: &Theme) -> View<Msg> {
@@ -596,14 +752,14 @@ fn body(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn sidebar(model: &Model, theme: &Theme) -> View<Msg> {
-    let cwd = &model.explorer.cwd;
+    let cwd = PathBuf::from(model.nav.current_id());
     let mut rows: Vec<View<Msg>> = Vec::new();
     rows.push(section_header("LUGARES", theme));
     if let Some(home) = dirs_home() {
-        rows.push(place_row("🏠 Inicio", &home, cwd, theme));
+        rows.push(place_row("🏠 Inicio", &home, &cwd, theme));
     }
-    rows.push(place_row("⌂ Raíz", Path::new("/"), cwd, theme));
-    rows.push(place_row("◇ Carpeta inicial", &cfg().folder, cwd, theme));
+    rows.push(place_row("⌂ Raíz", Path::new("/"), &cwd, theme));
+    rows.push(place_row("◇ Carpeta inicial", &cfg().folder, &cwd, theme));
 
     if !model.monads.is_empty() {
         rows.push(spacer(8.0));
@@ -651,8 +807,7 @@ fn sidebar(model: &Model, theme: &Theme) -> View<Msg> {
 
 fn main_pane(model: &Model, theme: &Theme) -> View<Msg> {
     let content = match model.pane {
-        // Aquí está el reuso: el explorador de nahual pinta el listado.
-        Pane::Folder => file_explorer_view(&model.explorer, ListPalette::from_theme(theme), Msg::Select),
+        Pane::Folder => folder_list_view(model, ListPalette::from_theme(theme)),
         Pane::Monad(_) => {
             let mut rows: Vec<View<Msg>> = Vec::new();
             rows.push(row_button("‹ Volver a carpetas", false, theme, Msg::BackToFolder));
@@ -703,6 +858,69 @@ fn main_pane(model: &Model, theme: &Theme) -> View<Msg> {
     .children(vec![content])
 }
 
+/// Pinta los hijos visibles (ya filtrados/ordenados por el Navigator) como
+/// `llimphi-widget-list`. Calcado del `navigator_list_view` del shell, con un
+/// check `✓` al frente de cada archivo marcado.
+fn folder_list_view(model: &Model, palette: ListPalette) -> View<Msg> {
+    use std::cmp::min;
+    let nav = &model.nav;
+    let multi = matches!(cfg().mode, Mode::Open);
+    let visibles = nav.visible();
+    let start = nav.visible_offset.min(visibles.len());
+    let end = min(visibles.len(), start + nav.visible_rows);
+
+    let rows: Vec<ListRow<Msg>> = visibles[start..end]
+        .iter()
+        .map(|(idx, n)| {
+            let mark = if !multi {
+                ""
+            } else if model.marked.contains(&n.id) {
+                "✓ "
+            } else {
+                "  "
+            };
+            let icon = if n.is_container { "▸ " } else { "  " };
+            let label = if n.is_container {
+                format!("{mark}{icon}{}/", n.name)
+            } else {
+                format!("{mark}{icon}{}", n.name)
+            };
+            ListRow {
+                label,
+                selected: *idx == nav.selected,
+                on_click: Msg::Select(*idx),
+            }
+        })
+        .collect();
+
+    let truncated_hint = if visibles.len() > end {
+        Some(format!("… y {} más (rueda o ↓ para ver más)", visibles.len() - end))
+    } else {
+        None
+    };
+
+    let total = visibles.len();
+    let caption = if !nav.filter().is_empty() {
+        format!("{total} coinciden con «{}» · Esc limpia", nav.filter())
+    } else if multi && !model.marked.is_empty() {
+        format!(
+            "{total} entradas · {} marcados · Espacio marca · Enter entra",
+            model.marked.len()
+        )
+    } else {
+        format!("{total} entradas · ↑↓ navega · Enter entra · ⌫ sube · Espacio marca")
+    };
+
+    list_view(ListSpec {
+        rows,
+        total,
+        caption: Some(caption),
+        truncated_hint,
+        row_height: LIST_ROW_H,
+        palette,
+    })
+}
+
 fn footer(model: &Model, theme: &Theme) -> View<Msg> {
     let mut left: Vec<View<Msg>> = Vec::new();
 
@@ -732,9 +950,9 @@ fn footer(model: &Model, theme: &Theme) -> View<Msg> {
             .children(vec![text_input_view(
                 &model.filename,
                 "nombre del archivo",
-                model.name_focused,
+                model.focus == Focus::Filename,
                 &TextInputPalette::from_theme(theme),
-                Msg::NameFocus,
+                Msg::FilenameFocus,
             )]),
         );
     } else {
@@ -787,15 +1005,25 @@ fn footer(model: &Model, theme: &Theme) -> View<Msg> {
     .children(children)
 }
 
-/// Texto del footer en modo Abrir: el archivo actualmente elegido, o vacío.
+/// Texto del footer en modo Abrir: el conteo de marcados, el archivo
+/// resaltado, o vacío.
 fn selection_label(model: &Model) -> String {
     match model.pane {
-        Pane::Folder => model
-            .explorer
-            .selected_entry()
-            .filter(|e| !e.is_dir)
-            .map(|e| e.name)
-            .unwrap_or_default(),
+        Pane::Folder => {
+            let m = model.marked.len();
+            if m == 1 {
+                "1 archivo seleccionado".to_string()
+            } else if m > 1 {
+                format!("{m} archivos seleccionados")
+            } else {
+                model
+                    .nav
+                    .selected_node()
+                    .filter(|n| !n.is_container)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default()
+            }
+        }
         Pane::Monad(_) => model
             .monad_sel
             .and_then(|i| model.monad_files.get(i))
@@ -963,8 +1191,21 @@ mod tests {
 
     #[test]
     fn rows_scale_with_height() {
-        // Una ventana más alta muestra más filas del explorador.
         assert!(rows_for_height(900.0) > rows_for_height(400.0));
         assert!(rows_for_height(100.0) >= 1);
+    }
+
+    #[test]
+    fn nav_anchors_at_cwd_with_breadcrumb() {
+        // Anclado en `/`, el id actual es la raíz y el breadcrumb arranca ahí.
+        let nav = posix_nav(Path::new("/"));
+        assert_eq!(nav.current_id().as_str(), "/");
+        assert_eq!(nav.ancestors().len(), 1);
+
+        // Para un subdirectorio, la pila de ancestros tiene un nivel por
+        // componente (/ + tmp = 2) y el id actual es esa ruta.
+        let nav = posix_nav(Path::new("/tmp"));
+        assert_eq!(nav.current_id().as_str(), "/tmp");
+        assert_eq!(nav.ancestors().len(), 2);
     }
 }

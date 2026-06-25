@@ -19,8 +19,9 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
 llimphi-widget-list = { workspace = true }
-# El explorador de archivos reutilizable (el mismo que usa nahual-shell):
-# FileExplorerState + file_explorer_view. No reimplementamos navegación.
-nahual-file-explorer-llimphi = { workspace = true }
+# El núcleo de navegación reutilizable (el mismo que usa nahual-shell):
+# Navigator sobre PosixSource — listado, ordenado, filtro vivo, breadcrumb.
+# No reimplementamos navegación; sólo pintamos sus filas con llimphi-widget-list.
+nahual-source-core = { path = "../../nahual/nahual-source-core" }
 chasqui-card = { path = "../../chasqui/chasqui-card" }
 serde_json = { workspace = true }
