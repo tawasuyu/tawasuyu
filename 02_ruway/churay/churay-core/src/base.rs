@@ -132,6 +132,14 @@ pub fn base_system() -> Vec<Component> {
             programs: &["pata-notify", "pata-notify-panel", "pata-notify-triage"],
             extras: &[Extra::Autostart("pata-notify")],
         },
+        Component {
+            id: "willay",
+            label: "Centro de eventos (willay)",
+            description: "Daemon del timeline unificado: notificaciones, capturas y clipboard; \
+                          con su feed lateral.",
+            programs: &["willay-daemon", "willay-panel"],
+            extras: &[Extra::Autostart("willay-daemon")],
+        },
     ]
 }
 
