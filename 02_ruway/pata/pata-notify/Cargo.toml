@@ -27,3 +27,8 @@ sled = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 postcard = { workspace = true }
+# Espejo al centro de eventos: el esquema (willay-core) para construir el Evento
+# y el cliente (willay-emit) para emitirlo. La Notificacion entera sigue en el
+# store propio; willay sólo recibe la entrada liviana del índice.
+willay-core = { workspace = true }
+willay-emit = { workspace = true }

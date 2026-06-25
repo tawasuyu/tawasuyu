@@ -46,6 +46,28 @@ pub struct Notificacion {
     pub created_usec: u64,
 }
 
+impl Notificacion {
+    /// El [`willay_core::Evento`] **espejo** de esta notificación, para el centro
+    /// de eventos. pata-notify sigue guardando la `Notificacion` entera en su
+    /// store propio; esto es sólo la entrada liviana del índice federado (summary
+    /// → título, body → cuerpo, app_name → origen). Sin payload pesado.
+    pub fn a_evento_willay(&self) -> willay_core::Evento {
+        let origen = if self.app_name.is_empty() {
+            "notificación"
+        } else {
+            self.app_name.as_str()
+        };
+        willay_core::Evento::nuevo(
+            willay_core::Clase::Notificacion,
+            self.created_usec,
+            origen,
+            self.summary.as_str(),
+            self.body.as_str(),
+            willay_core::Payload::Nada,
+        )
+    }
+}
+
 /// Mensajes del loop Elm del daemon. `Clone + Send + 'static` para poder cruzar
 /// la frontera de hilo desde el handler D-Bus.
 #[derive(Clone)]
@@ -60,6 +82,34 @@ pub enum Msg {
     CerrarPorCliente(u32),
     /// El usuario clickeó un botón de acción.
     Accion { id: u32, clave: String },
+}
+
+#[cfg(test)]
+mod tests_willay {
+    use super::*;
+
+    #[test]
+    fn espejo_willay_mapea_los_campos() {
+        let n = Notificacion {
+            id: 7,
+            app_name: "Firefox".into(),
+            summary: "Descarga lista".into(),
+            body: "archivo.zip".into(),
+            urgency: 1,
+            actions: vec![],
+            timeout_ms: -1,
+            created_usec: 12345,
+        };
+        let e = n.a_evento_willay();
+        assert_eq!(e.clase, willay_core::Clase::Notificacion);
+        assert_eq!(e.ts_usec, 12345);
+        assert_eq!(e.origen, "Firefox");
+        assert_eq!(e.titulo, "Descarga lista");
+        assert_eq!(e.cuerpo, "archivo.zip");
+        // app_name vacío cae a un origen genérico legible.
+        let anon = Notificacion { app_name: String::new(), ..n };
+        assert_eq!(anon.a_evento_willay().origen, "notificación");
+    }
 }
 
 /// Evento del loop de render hacia el hilo D-Bus, para emitir señales del

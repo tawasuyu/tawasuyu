@@ -74,6 +74,9 @@ impl Servicio {
         if let Err(e) = self.store.append(&n) {
             warn!(?e, "no se pudo persistir la notificación al historial");
         }
+        // Espejo al centro de eventos (no-op si el daemon willay no corre): la
+        // notificación también es un evento del timeline unificado.
+        willay_emit::emitir_silencioso(&n.a_evento_willay());
         info!(id, app = %n.app_name, urgency = n.urgency, "Notify");
         self.handle.dispatch(Msg::Entrante(n));
 
