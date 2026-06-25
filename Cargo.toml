@@ -145,6 +145,7 @@ members = [
     "01_yachay/dominium/dominium-app-llimphi",
     "01_yachay/dominium/dominium-canvas-llimphi",
     "01_yachay/dominium/dominium-cli",
+    "01_yachay/dominium/dominium-control",
     "01_yachay/dominium/dominium-core",
     "01_yachay/dominium/dominium-sim",
     "01_yachay/dominium/dominium-iso",

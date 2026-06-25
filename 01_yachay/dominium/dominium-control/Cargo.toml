@@ -1,0 +1,12 @@
+[package]
+name = "dominium-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium — control de estabilidad: lazo cerrado homeostático que sostiene la población en un setpoint ajustando una palanca blanda (regrowth/metabolismo/capacidad), + lectura analítica del techo ecológico. Determinista, sin gráficos. Cierra el salto de calibrar-a-mano a encontrar-el-equilibrio."
+
+[dependencies]
+dominium-core = { path = "../dominium-core" }
+dominium-physics = { path = "../dominium-physics" }
