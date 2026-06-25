@@ -599,6 +599,10 @@ struct DrmState {
     /// Identidad estable del cursor de software — el seguimiento de daño
     /// la usa para no recomponer todo cuando el cursor sólo se mueve.
     cursor_id: Id,
+    /// Tema de cursor XCursor configurado (`Soberania`, etc.). Resuelve y
+    /// memoiza el búfer del puntero por nombre. Si está inactivo o el ícono no
+    /// resuelve, se pinta el cuadrado por defecto.
+    cursor_theme: crate::cursor_theme::CursorTheme,
     /// Ventana sobre la que estaba el puntero — para el foco-sigue-ratón.
     last_pointer_window: Option<u64>,
     /// Tamaño de la salida, en píxeles — los topes del puntero.
@@ -1148,6 +1152,10 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     }
 
     let font_path = app.config_font_path();
+    let (cursor_theme_name, cursor_size) = app.config_cursor_theme();
+    if !cursor_theme_name.is_empty() {
+        println!("mirada-compositor · tema de cursor «{cursor_theme_name}» ({cursor_size}px).");
+    }
     let menu_entries = app.config_menu();
     let zones = app.config_zones();
     // Drag-to-zone estilo KDE: el snap se calcula por proximidad al borde
@@ -1191,6 +1199,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         wp_next_switch_ms: 0,
         wp_dir: String::new(),
         cursor_id: Id::new(),
+        cursor_theme: crate::cursor_theme::CursorTheme::new(cursor_theme_name, cursor_size),
         last_pointer_window: None,
         output_size: (total_w as f64, total_h as f64),
         text: {

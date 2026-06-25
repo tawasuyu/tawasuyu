@@ -298,11 +298,32 @@ pub struct Config {
     /// Hyprland). `0` = salto seco. Lo lee el compositor para el ease-out.
     #[serde(default = "default_slide_ms")]
     pub slide_ms: u32,
+    /// Nombre del **tema de cursor** XCursor que pinta el puntero (los "sets":
+    /// `"Soberania"`, `"Soberania-Light"`, o cualquier tema instalado en los
+    /// directorios de íconos XDG — `~/.local/share/icons`, `/usr/share/icons`…).
+    /// mirada trae embebidos los sets `Soberania*`; cambiar este campo cambia el
+    /// set. Vacío = el cuadrado de software por defecto (sin tema).
+    #[serde(default = "default_cursor_theme")]
+    pub cursor_theme: String,
+    /// Tamaño nominal del cursor en px (se elige la imagen del tema más cercana).
+    /// Default 24.
+    #[serde(default = "default_cursor_size")]
+    pub cursor_size: u32,
 }
 
 /// Default de [`Config::slide_ms`]: un slide ágil.
 fn default_slide_ms() -> u32 {
     220
+}
+
+/// Default de [`Config::cursor_theme`]: el set propio de mirada.
+fn default_cursor_theme() -> String {
+    "Soberania".to_string()
+}
+
+/// Default de [`Config::cursor_size`]: un puntero cómodo.
+fn default_cursor_size() -> u32 {
+    24
 }
 
 /// Modo de transición de Win+Tab entre escritorios. Ver
@@ -563,6 +584,8 @@ impl Default for Config {
             tap_to_click: true,
             pointer_speed: 0.0,
             slide_ms: default_slide_ms(),
+            cursor_theme: default_cursor_theme(),
+            cursor_size: default_cursor_size(),
         }
     }
 }

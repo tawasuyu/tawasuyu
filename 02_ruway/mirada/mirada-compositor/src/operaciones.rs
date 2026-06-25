@@ -715,6 +715,19 @@ impl App {
     /// `HDMI-A-1`, `DP-1`, …) — el override de [`mirada_brain::OutputOverride`]
     /// si existe, o el global. `None` con Cerebro enlazado o si todo queda
     /// vacío (fondo de color sólido).
+    /// `(tema, tamaño)` del cursor configurado — el set XCursor que pinta el
+    /// puntero. Tema vacío con Cerebro enlazado o sin config → el cuadrado de
+    /// software por defecto.
+    pub(crate) fn config_cursor_theme(&self) -> (String, u32) {
+        match &self.brain {
+            Brain::Embedded(d) => {
+                let c = d.config();
+                (c.cursor_theme.clone(), c.cursor_size)
+            }
+            Brain::Linked(_) => (String::new(), 24),
+        }
+    }
+
     /// `(carpeta, segundos)` del fondo automático (slideshow). Carpeta vacía o
     /// intervalo 0 = sin rotar.
     pub(crate) fn config_wallpaper_slideshow(&self) -> (String, u32) {

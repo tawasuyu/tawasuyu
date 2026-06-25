@@ -23,6 +23,10 @@ auth-core = { path = "../../../shared/auth/auth-core" }
 drop-bridge = { workspace = true }
 nix = { workspace = true }
 smithay = "0.7"
+# Carga de temas de cursor XCursor (los sets tipo `Soberania`): localiza el tema
+# en los directorios de íconos XDG y parsea los archivos a imágenes RGBA. Misma
+# versión que ya arrastra smithay; la pedimos directa para usar el parser.
+xcursor = "0.3"
 # Rasterizado de texto sobre CPU (etiquetas: barra de título, menú). Es un
 # rasterizador puro-Rust ligero; smithay sube el búfer RGBA como textura.
 ab_glyph = "0.2"

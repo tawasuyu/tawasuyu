@@ -35,8 +35,12 @@ impl DrmState {
         if cxi < rect.x || cyi < rect.y || cxi >= rect.x + rect.w || cyi >= rect.y + rect.h {
             return;
         }
-        match &self.app.cursor_status {
-            CursorImageStatus::Hidden => {}
+        // Si el cliente publicó una superficie de cursor sana, esa manda
+        // (el cursor de la app). Si no, el puntero del escritorio es "con
+        // nombre" (`Named`): lo resolvemos contra el tema de cursor configurado
+        // (`Soberania`, etc.); y si el tema no aplica, cae al cuadrado.
+        let named = match &self.app.cursor_status {
+            CursorImageStatus::Hidden => return,
             CursorImageStatus::Surface(surface)
                 if surface.alive() && crate::buffer_render_sano(surface) =>
             {
@@ -52,21 +56,51 @@ impl DrmState {
                 ) {
                     into.push(Frame::Window(el));
                 }
+                return;
             }
-            _ => {
-                let cursor_rect = Rectangle::new(
-                    Point::<i32, Physical>::from((cxi - rect.x, cyi - rect.y)),
-                    Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
-                );
-                into.push(Frame::Solid(SolidColorRenderElement::new(
-                    self.cursor_id.clone(),
-                    cursor_rect,
-                    CommitCounter::default(),
-                    CURSOR_COLOR,
+            CursorImageStatus::Named(icon) => Some(*icon),
+            // Superficie no sana u otro estado: tratamos como el puntero por
+            // defecto del tema.
+            _ => None,
+        };
+
+        // Cursor temático: lo subimos como textura (igual que las etiquetas),
+        // anclado al hotspot del cursor.
+        if self.cursor_theme.is_active() {
+            let names = match named {
+                Some(icon) => crate::cursor_theme::icon_names(icon),
+                None => vec!["default"],
+            };
+            if let Some(loaded) = self.cursor_theme.get(&names) {
+                let (hx, hy) = loaded.hotspot;
+                let loc = ((cxi - rect.x - hx) as f64, (cyi - rect.y - hy) as f64);
+                if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                    &mut self.renderer,
+                    loc,
+                    &loaded.buffer,
+                    None,
+                    None,
+                    None,
                     Kind::Cursor,
-                )));
+                ) {
+                    into.push(Frame::Text(el));
+                    return;
+                }
             }
         }
+
+        // Sin tema (o no resolvió): el cuadrado de software de siempre.
+        let cursor_rect = Rectangle::new(
+            Point::<i32, Physical>::from((cxi - rect.x, cyi - rect.y)),
+            Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
+        );
+        into.push(Frame::Solid(SolidColorRenderElement::new(
+            self.cursor_id.clone(),
+            cursor_rect,
+            CommitCounter::default(),
+            CURSOR_COLOR,
+            Kind::Cursor,
+        )));
     }
 
     /// Emite todas las ventanas visibles cuya posición global intersecta `rect`,
