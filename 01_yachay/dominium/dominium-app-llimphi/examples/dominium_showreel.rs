@@ -48,6 +48,8 @@ mod packs;
 mod sim;
 #[path = "../src/view.rs"]
 mod view;
+#[path = "../src/view3d.rs"]
+mod view3d;
 #[path = "../src/worldgen.rs"]
 mod worldgen;
 

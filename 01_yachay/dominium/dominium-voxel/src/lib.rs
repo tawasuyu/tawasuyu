@@ -81,11 +81,29 @@ pub fn voxelize(world: &World, zw: &ZWeights, cfg: &VoxelConfig) -> VoxelGrid {
     let g = &world.grid;
     let (gw, gh) = (g.width as u32, g.height as u32);
     let mut grid = VoxelGrid::new([gw, cfg.max_height.max(2), gh]);
+    voxelize_into(&mut grid, world, zw, cfg);
+    // El upload completo de `VoxelRenderer::new` cubre este estado inicial —
+    // no es "mutación", así que limpiamos el dirty (igual que `demo_scene`).
+    grid.reset_dirty();
+    grid
+}
 
-    for cy in 0..g.height {
-        for cx in 0..g.width {
+/// Re-voxeliza el terreno de `world` **dentro de una grilla existente**, sin
+/// reconstruir el renderer. Vacía la grilla (que la marca entera dirty) y la
+/// rellena; el caller hace `VoxelRenderer::sync(queue, &mut grid)` para subir
+/// sólo el delta a la GPU. Es el camino de actualización en vivo (la sim corre,
+/// el terreno cambia) — pensado para el patrón de streaming `clear_all` del
+/// motor. La grilla debe tener `dim = [world.width, _, world.height]`; las
+/// celdas fuera de su `dim[1]` (altura) se clampean por [`column_height`].
+pub fn voxelize_into(grid: &mut VoxelGrid, world: &World, zw: &ZWeights, cfg: &VoxelConfig) {
+    grid.clear_all();
+    let g = &world.grid;
+    let dim = grid.dim();
+    let (gw, gh) = (dim[0] as usize, dim[2] as usize);
+    for cy in 0..g.height.min(gh) {
+        for cx in 0..g.width.min(gw) {
             let idx = g.idx(cx, cy);
-            let top = column_height(world, zw, cfg, idx);
+            let top = column_height(world, zw, cfg, idx).min(dim[1].saturating_sub(1).max(1));
             let base = cell_color(world, idx, &cfg.palette);
             for y in 0..top {
                 // Sombreado vertical: el lecho va más oscuro y aclara hacia la
@@ -106,10 +124,6 @@ pub fn voxelize(world: &World, zw: &ZWeights, cfg: &VoxelConfig) -> VoxelGrid {
             }
         }
     }
-    // El upload completo de `VoxelRenderer::new` cubre este estado inicial —
-    // no es "mutación", así que limpiamos el dirty (igual que `demo_scene`).
-    grid.reset_dirty();
-    grid
 }
 
 /// Convierte los lemmings vivos en entidades para el pase voxel. Cada agente es

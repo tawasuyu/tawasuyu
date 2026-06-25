@@ -97,6 +97,18 @@ pub(crate) struct Model {
     pub(crate) plan_cache: std::cell::RefCell<
         Option<(u64, std::sync::Arc<dominium_render_plan::RenderPlan>)>,
     >,
+    /// Si el lienzo muestra la **vista voxel 3D** (`true`) o la maqueta iso 2D
+    /// (`false`, default). Lo togglea `Msg::Toggle3D` / el menú Ver / el panel.
+    pub(crate) mode3d: bool,
+    /// Cámara orbital de la vista 3D: yaw/pitch (radianes) + distancia (voxels).
+    /// El drag sobre el lienzo 3D la orbita; la rueda hace zoom.
+    pub(crate) cam3d_yaw: f32,
+    pub(crate) cam3d_pitch: f32,
+    pub(crate) cam3d_dist: f32,
+    /// Estado GPU persistente de la vista 3D (renderer ray-march + grilla voxel).
+    /// Vive en `Arc<Mutex<_>>` porque el `VoxelRenderer` no es clonable y el
+    /// `Model` sí se mueve/clona; la closure `gpu_paint_with` captura este Arc.
+    pub(crate) view3d: std::sync::Arc<std::sync::Mutex<crate::view3d::View3d>>,
 }
 
 /// Pestañas del panel lateral. El orden es el orden visual en el tab bar.
@@ -350,6 +362,13 @@ pub(crate) enum Msg {
     /// Rueda sobre el panel lateral → desliza su contenido. `dy > 0` baja
     /// (contenido sube). Se acumula y clampa en `Model::panel_scroll`.
     PanelScroll(f32),
+    /// Alterna entre la maqueta iso 2D y la vista voxel 3D del mundo. Al
+    /// activar el 3D, re-voxeliza el mundo actual.
+    Toggle3D,
+    /// Drag sobre el lienzo 3D → orbita la cámara (dx, dy en píxeles).
+    Orbit3D(f32, f32),
+    /// Rueda sobre el lienzo 3D → zoom de la cámara orbital.
+    Zoom3D(f32),
     /// Cierra el hint flotante de onboarding (se cierra solo en el primer
     /// click sobre el canvas, pero también hay una X visible).
     DismissOnboarding,

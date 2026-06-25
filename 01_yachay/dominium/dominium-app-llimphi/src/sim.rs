@@ -279,6 +279,11 @@ mod tests {
             edit_anim: llimphi_motion::Tween::idle(1.0),
             clipboard: llimphi_clipboard::SystemClipboard::new(),
             plan_cache: std::cell::RefCell::new(None),
+            mode3d: false,
+            cam3d_yaw: 0.7,
+            cam3d_pitch: 0.55,
+            cam3d_dist: 64.0,
+            view3d: std::sync::Arc::new(std::sync::Mutex::new(crate::view3d::View3d::new(8, 8, 16))),
         }
     }
 

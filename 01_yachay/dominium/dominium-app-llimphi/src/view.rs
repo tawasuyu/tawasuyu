@@ -165,6 +165,52 @@ pub(crate) fn canvas_pane(
     .children(vec![canvas])
 }
 
+/// Lienzo de la **vista voxel 3D**: monta el `VoxelRenderer` (vía `View3d`) con
+/// `gpu_paint_with`, orbitando con el drag y zoomeando con la rueda. El estado
+/// GPU vive en `model.view3d` (Arc<Mutex>), que la closure captura; la cámara se
+/// arma de los parámetros orbitales del `Model`.
+pub(crate) fn canvas_pane_3d(model: &Model) -> View<Msg> {
+    let view3d = model.view3d.clone();
+    let camera = llimphi_3d::Camera3d::orbit(
+        llimphi_3d::glam::Vec3::ZERO,
+        model.cam3d_yaw,
+        model.cam3d_pitch,
+        model.cam3d_dist,
+    );
+    let canvas = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .gpu_paint_with(move |device, queue, encoder, target, _rect, vp| {
+        if let Ok(mut v) = view3d.lock() {
+            v.render(device, queue, encoder, target, vp, &camera);
+        }
+    })
+    .draggable(|phase, dx, dy| match phase {
+        DragPhase::Move => Some(Msg::Orbit3D(dx, dy)),
+        DragPhase::End => None,
+    })
+    .on_scroll(|_dx, dy| if dy == 0.0 { None } else { Some(Msg::Zoom3D(dy)) });
+    View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .clip(true)
+    .children(vec![canvas])
+}
+
 pub(crate) fn side_panel(
     model: &Model,
     stats: &WorldStats,
@@ -819,6 +865,18 @@ fn append_vista_tab(
     btn_palette: &ButtonPalette,
     slider_palette: &SliderPalette,
 ) {
+    children.push(label_view("[ DIMENSIÓN ]", 11.0, theme.fg_muted));
+    // Toggle 2D iso ↔ 3D voxel. En 3D el lienzo monta el ray-marcher de
+    // llimphi-3d sobre el mundo voxelizado (mismo color de bioma, relieve por
+    // materia); el drag orbita y la rueda hace zoom.
+    let mode3d_label = if model.mode3d {
+        "✓  Vista: 3D voxel (drag orbita)"
+    } else {
+        "○  Vista: 2D isométrica"
+    };
+    children.push(sized_button(mode3d_label, btn_palette, Msg::Toggle3D));
+    children.push(separator(theme));
+
     children.push(label_view("[ CÁMARA ]", 11.0, theme.fg_muted));
     children.push(sized_button(
         &format!("Recentrar (R)  ·  zoom {:.1}×", model.iso.scale),

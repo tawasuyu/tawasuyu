@@ -19,6 +19,8 @@ dominium-core = { path = "../dominium-core" }
 dominium-iso = { path = "../dominium-iso" }
 dominium-render-plan = { path = "../dominium-render-plan" }
 dominium-sim = { path = "../dominium-sim" }
+dominium-voxel = { path = "../dominium-voxel" }
+llimphi-3d = { path = "../../../02_ruway/llimphi/llimphi-3d" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }

@@ -24,6 +24,7 @@ mod model;
 mod packs;
 mod sim;
 mod view;
+mod view3d;
 mod worldgen;
 
 use std::time::Duration;
@@ -60,7 +61,7 @@ use crate::sim::{
     lemming_color_for, mirror_zweights_to_relieve, overlay_trails, render_fingerprint, selected_mut,
     spawn_concepto_at,
 };
-use crate::view::{canvas_pane, onboarding_bar, side_panel, status_bar};
+use crate::view::{canvas_pane, canvas_pane_3d, onboarding_bar, side_panel, status_bar};
 use crate::worldgen::{bioma_palette, seed};
 
 struct Dominium;
@@ -263,6 +264,15 @@ impl App for Dominium {
             edit_anim: Tween::idle(1.0),
             clipboard: llimphi_clipboard::SystemClipboard::new(),
             plan_cache: std::cell::RefCell::new(None),
+            mode3d: false,
+            cam3d_yaw: 40_f32.to_radians(),
+            cam3d_pitch: 32_f32.to_radians(),
+            cam3d_dist: GRID as f32 * 1.4,
+            view3d: std::sync::Arc::new(std::sync::Mutex::new(view3d::View3d::new(
+                GRID as u32,
+                GRID as u32,
+                48,
+            ))),
         }
     }
 
@@ -280,6 +290,13 @@ impl App for Dominium {
                     // Escribe en `m.sim.params`, que el próximo tick consume.
                     if let Some(ctrl) = m.controller.as_mut() {
                         ctrl.observe(&m.sim.world, &mut m.sim.params, m.sim.tick);
+                    }
+                    // Vista 3D: re-voxelizar con throttle (el terreno cambia
+                    // poco entre ticks; subir 240² cada frame sería caro). Cada
+                    // REVOX_TICKS la grilla se re-rellena y el próximo paint la
+                    // sincroniza incremental.
+                    if m.mode3d && m.sim.tick % REVOX_TICKS == 0 {
+                        revoxelize_world(&m);
                     }
                 }
             }
@@ -720,6 +737,23 @@ impl App for Dominium {
                 m.panel_scroll =
                     (m.panel_scroll + dy * PANEL_SCROLL_SPEED).clamp(0.0, m.panel_tab.max_scroll());
             }
+            Msg::Toggle3D => {
+                m.mode3d = !m.mode3d;
+                // Al entrar al 3D, voxelizar el mundo actual una vez (después se
+                // refresca con throttle mientras corre la sim).
+                if m.mode3d {
+                    revoxelize_world(&m);
+                }
+            }
+            Msg::Orbit3D(dx, dy) => {
+                m.cam3d_yaw -= dx * 0.008;
+                m.cam3d_pitch = (m.cam3d_pitch + dy * 0.008).clamp(-1.45, 1.45);
+            }
+            Msg::Zoom3D(dy) => {
+                let f = (1.0 + dy * 0.1).clamp(0.5, 1.5);
+                let span = GRID as f32;
+                m.cam3d_dist = (m.cam3d_dist * f).clamp(span * 0.4, span * 3.0);
+            }
             Msg::DismissOnboarding => {
                 m.onboarding_done = true;
             }
@@ -960,6 +994,13 @@ impl App for Dominium {
                     Some(Msg::CanvasZoom(dy))
                 }
             });
+        // En modo 3D el lienzo iso se reemplaza por la vista voxel (el plan iso
+        // de arriba queda sin usar, pero su caché lo abarata).
+        let canvas = if model.mode3d {
+            canvas_pane_3d(model)
+        } else {
+            canvas
+        };
         let side = side_panel(model, &stats, &psi_metrics, &theme);
 
         let body = View::new(Style {
@@ -1141,6 +1182,7 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
         )
         .menu(
             Menu::new("Ver")
+                .item(MenuItem::new("Vista voxel 3D", "view.mode3d").separated())
                 .item(MenuItem::new("Ciclar modo de render", "view.rendermode"))
                 .item(MenuItem::new("Trayectorias", "view.trails"))
                 .item(MenuItem::new("Textura procedural", "view.texture"))
@@ -1154,6 +1196,25 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
 }
 
 /// Traduce el `command` del menú principal al `Msg` real y lo despacha.
+/// Cada cuántos ticks se re-voxeliza el mundo para la vista 3D (throttle: el
+/// terreno cambia poco entre ticks y subir 240² es caro).
+const REVOX_TICKS: u64 = 8;
+
+/// Re-voxeliza el mundo actual en la vista 3D persistente. Usa relieve por
+/// `materia` (ZWeights default — terreno legible) y la paleta de bioma de la app
+/// (mismos colores que la maqueta 2D). No toca la GPU; el próximo paint sube el
+/// delta.
+fn revoxelize_world(m: &Model) {
+    let zw = ZWeights::default();
+    let cfg = dominium_voxel::VoxelConfig {
+        palette: m.cfg.palette,
+        ..Default::default()
+    };
+    if let Ok(mut v) = m.view3d.lock() {
+        v.revoxelize(&m.sim.world, &zw, &cfg);
+    }
+}
+
 fn handle_menu_command(model: Model, command: String, h: &Handle<Msg>) -> Model {
     let target = match command.as_str() {
         "file.loadpack" => Some(Msg::CargarPack),
@@ -1177,6 +1238,7 @@ fn handle_menu_command(model: Model, command: String, h: &Handle<Msg>) -> Model 
         "sim.bigfive" => Some(Msg::ToggleBigFive),
         "sim.psipolicy" => Some(Msg::CyclePsiPolicy),
         "sim.rewindhome" => Some(Msg::RewindHome),
+        "view.mode3d" => Some(Msg::Toggle3D),
         "view.rendermode" => Some(Msg::CycleRenderMode),
         "view.trails" => Some(Msg::ToggleTrails),
         "view.texture" => Some(Msg::ToggleTexture),

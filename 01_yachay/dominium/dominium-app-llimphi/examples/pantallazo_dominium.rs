@@ -27,6 +27,8 @@ mod packs;
 mod sim;
 #[path = "../src/view.rs"]
 mod view;
+#[path = "../src/view3d.rs"]
+mod view3d;
 #[path = "../src/worldgen.rs"]
 mod worldgen;
 
@@ -48,7 +50,7 @@ use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
-use llimphi_ui::{measure_text_node, mount, paint, View};
+use llimphi_ui::{measure_text_node, mount, paint, paint_gpu, View};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_text_input::TextInputState;
 
@@ -176,6 +178,15 @@ fn modelo_demo() -> Model {
         edit_anim: Tween::idle(1.0),
         clipboard: llimphi_clipboard::SystemClipboard::new(),
         plan_cache: std::cell::RefCell::new(None),
+        mode3d: false,
+        cam3d_yaw: 0.7,
+        cam3d_pitch: 0.55,
+        cam3d_dist: GRID as f32 * 1.4,
+        view3d: std::sync::Arc::new(std::sync::Mutex::new(view3d::View3d::new(
+            GRID as u32,
+            GRID as u32,
+            48,
+        ))),
     }
 }
 
@@ -259,7 +270,22 @@ fn main() {
     }
 
     let theme = Theme::dark();
-    let model = modelo_demo();
+    let mode3d = std::env::args().any(|a| a == "--mode3d");
+    let mut model = modelo_demo();
+    if mode3d {
+        // Activa la vista voxel 3D y voxeliza el mundo (mismo camino que
+        // `Msg::Toggle3D` en la app: ZWeights por materia + paleta de bioma).
+        model.mode3d = true;
+        let cfg = dominium_voxel::VoxelConfig {
+            palette: model.cfg.palette,
+            ..Default::default()
+        };
+        model
+            .view3d
+            .lock()
+            .unwrap()
+            .revoxelize(&model.sim.world, &ZWeights::default(), &cfg);
+    }
     eprintln!(
         "pantallazo_dominium: mundo {GRID}×{GRID} · pob {} · tick {} (cada tick = {TICK_MS} ms en la app)",
         model.sim.world.lemmings.len(),
@@ -310,6 +336,19 @@ fn main() {
     renderer
         .render_to_view(&hal, &scene, &view, W, H, bg)
         .expect("render_to_view");
+
+    // En 3D, el lienzo es un nodo `gpu_paint_with` — corremos el pase GPU
+    // directo (lo mismo que el eventloop real hace tras el vello) para que el
+    // ray-marcher voxel pinte sobre la intermedia.
+    if mode3d {
+        let mut enc = hal
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gpu3d") });
+        let any = paint_gpu(&mounted, &computed, &hal.device, &hal.queue, &mut enc, &view, (W, H));
+        hal.queue.submit(std::iter::once(enc.finish()));
+        let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+        eprintln!("pantallazo_dominium: pase GPU 3D corrió: {any}");
+    }
 
     write_png(&hal, &target, &out);
     eprintln!("pantallazo_dominium: escrito {out} ({W}x{H})");
