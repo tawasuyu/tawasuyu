@@ -158,7 +158,12 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    `#[serde(default)]` (compat back/forward con snapshots v1, sin bump de `SNAPSHOT_VERSION`);
    `EnteGraph::snapshot` los puebla desde `self.seed` y `load_from_snapshot` los restaura. (Las Cards
    de `entes` ya llevaban su `attest` por ser `EntityCard` completas; sólo faltaba el de la raíz.)
-   +3 tests: round-trip preserva, v1 sin attest carga con defaults, y restore e2e en `arje-zero`.
+   El gate corre **incondicionalmente** sobre el seed restaurado (`primordial_loop` no distingue
+   restore de boot fresco), así que el manifiesto recuperado se enforza igual. +4 tests:
+   `arje-snapshot` round-trip preserva + v1 sin attest carga con defaults; `arje-zero`
+   `restore_preserva_la_atestacion_del_seed` (load_from_snapshot devuelve el manifiesto) y
+   `gate_enforza_el_manifiesto_de_un_seed_restaurado` (lazo completo: restore → gate da `Ok` con el
+   binario intacto y **aborta bajo `Halt`** si se adultera tras el restore).
 4. **A3** — Card de escritorio (`arje-card-llimphi`): mostrar el veredicto de atestación por
    unidad (verde/comprometido) en el panel del brain que ya existe. ✅ (2026-06-14) `formatear_entrada`
    renderiza las entradas `AuditAction::AttestationCheck` del audit log en el panel "Audit log" por

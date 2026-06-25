@@ -383,4 +383,53 @@ mod tests {
         let k = rootkey_desde_hex(&"ab".repeat(32)).expect("64 hex chars");
         assert_eq!(k, [0xabu8; 32]);
     }
+
+    /// Lazo completo snapshot→restore→gate: un seed restaurado de un
+    /// `FractalSnapshot` conserva su manifiesto (fix de arje-snapshot) y el gate
+    /// lo **enforza** igual que en un boot fresco — un binario adulterado tras el
+    /// restore aborta bajo `Halt`. Cierra el agujero de "restore = sin gate".
+    #[test]
+    fn gate_enforza_el_manifiesto_de_un_seed_restaurado() {
+        use arje_attest::firmar_arbol;
+
+        let contenido = b"binario tras restore".to_vec();
+        let (dir, path) = fake_bin("restore", &contenido);
+        let mut bins = std::collections::BTreeMap::new();
+        bins.insert(path.clone(), contenido.clone());
+        let (pubkey, concesiones) = firmar_arbol([21u8; 32], &bins);
+
+        // Snapshot con el manifiesto firmado + política Halt.
+        let snap_path = std::env::temp_dir()
+            .join(format!("arje-gate-restore-{}.json", std::process::id()));
+        let snap = arje_snapshot::FractalSnapshot {
+            version: arje_snapshot::SNAPSHOT_VERSION,
+            timestamp_ms: 1,
+            seed_id: ulid::Ulid::from_string("00000000000000000000000000").unwrap(),
+            seed_label: "restaurado".into(),
+            entes: vec![],
+            attest: concesiones,
+            attest_rootkey: Some(pubkey),
+            attest_policy: AttestPolicy::Halt,
+        };
+        snap.write(&snap_path).unwrap();
+
+        // Restaurar por la MISMA ruta que el boot (`--restore` → seed::load).
+        let restored = crate::seed::load(false, Some(&snap_path)).unwrap();
+        assert_eq!(restored.attest.len(), 1, "el manifiesto debe sobrevivir el restore");
+        assert_eq!(restored.attest_policy, AttestPolicy::Halt);
+
+        // El gate sobre el seed restaurado: binario intacto → Ok, no aborta.
+        let v = run_inner(&restored, vec![path.clone()], None).expect("intacto no aborta");
+        assert_eq!(v[0].verdict, Veredicto::Ok);
+
+        // Binario adulterado en disco → bajo Halt el gate ABORTA el arranque.
+        std::fs::write(&path, b"binario + backdoor").unwrap();
+        assert!(
+            run_inner(&restored, vec![path.clone()], None).is_err(),
+            "un binario adulterado tras restore debe abortar bajo Halt",
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&snap_path);
+    }
 }
