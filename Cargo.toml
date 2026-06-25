@@ -541,7 +541,9 @@ members = [
     "shared/willay/willay-daemon",
     "shared/willay/willay-emit",
     "shared/willay/willay-panel-llimphi",
+    "shared/willay/willay-rag",
     "shared/willay/willay-store",
+    "shared/rag-motor",
     "web/tawasuyu-canvas-web",
     "web/tawasuyu-geom",
     "web/tawasuyu-graph-web",
@@ -576,6 +578,7 @@ app-bus = { path = "shared/app-bus" }
 willay-core = { path = "shared/willay/willay-core" }
 willay-store = { path = "shared/willay/willay-store" }
 willay-emit = { path = "shared/willay/willay-emit" }
+rag-motor = { path = "shared/rag-motor" }
 churay-core = { path = "02_ruway/churay/churay-core" }
 # === Puente de drag-and-drop compositor → app (suple winit en Wayland) ===
 drop-bridge = { path = "shared/drop-bridge" }
