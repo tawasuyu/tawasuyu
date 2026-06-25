@@ -165,6 +165,14 @@ mod tests {
         assert_eq!(resolve(&hashes[0]).unwrap(), b"alfa");
         assert!(list_all_shas().unwrap().contains(&hashes[1]));
 
+        // gc: con sólo `h` (= data) alcanzable, alfa y beta se borran; h queda.
+        let reachable: std::collections::HashSet<[u8; 32]> = [h].into_iter().collect();
+        let (deleted, _freed) = gc(&reachable).unwrap();
+        assert_eq!(deleted, 2, "alfa y beta no alcanzables → borrados");
+        assert!(resolve(&h).is_ok(), "h alcanzable → preservado");
+        assert!(resolve(&hashes[0]).is_err(), "alfa no alcanzable → borrado");
+        assert!(resolve(&hashes[1]).is_err(), "beta no alcanzable → borrado");
+
         std::env::remove_var("ENTE_CAS_ROOT");
         let _ = std::fs::remove_dir_all(&tmp);
     }

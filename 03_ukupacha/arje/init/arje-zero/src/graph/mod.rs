@@ -17,9 +17,9 @@ mod shutdown;
 mod topology;
 
 use arje_bus::{BusMessage, BusResponse};
-use arje_card::{Capability, EntityCard};
+use arje_card::{Capability, EntityCard, Payload};
 use nix::unistd::Pid;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use ulid::Ulid;
@@ -196,6 +196,43 @@ impl EnteGraph {
         self.incarnated.get(id).map(|i| &i.card)
     }
 
+    /// Raíces REALES del CAS para el GC: todo objeto del CAS al que el fractal
+    /// vivo todavía apunta. Camina la Semilla (con su árbol genesis) y cada Card
+    /// encarnada, recolectando:
+    ///   - **Wasm**: `module_sha256` de cada `Payload::Wasm` (el bytecode que el
+    ///     Ente ejecuta — borrarlo rompería un respawn).
+    ///   - **Atestación**: cada `attest[].bytecode` (los binarios cosechados al
+    ///     CAS por `--harvest-cas`; borrarlos rompería la distribución por AoE y
+    ///     la reproducción remota del sistema).
+    /// El GC une esto con la cadena de audit (desde el head) — ver
+    /// `arje_brain::IntrospectRequest::GcCas`. Sin esto, un `gc-cas` con
+    /// `extra_roots` vacío barrería Wasm y binarios todavía en uso.
+    pub fn cas_roots(&self) -> HashSet<[u8; 32]> {
+        fn walk(card: &EntityCard, roots: &mut HashSet<[u8; 32]>) {
+            if let Payload::Wasm { module_sha256, .. } = &card.payload {
+                roots.insert(*module_sha256);
+            }
+            for c in &card.attest {
+                roots.insert(c.bytecode);
+            }
+            for hija in &card.genesis {
+                walk(hija, roots);
+            }
+        }
+        let mut roots = HashSet::new();
+        walk(&self.seed, &mut roots);
+        // `EnteGraph::new` mueve el genesis de la Semilla a `pending_genesis`
+        // (queda fuera de `seed.genesis`), así que hay que caminarlo aparte: sus
+        // Wasm/bytecodes son raíces aunque el Ente no haya encarnado todavía.
+        for card in &self.pending_genesis {
+            walk(card, &mut roots);
+        }
+        for inc in self.incarnated.values() {
+            walk(&inc.card, &mut roots);
+        }
+        roots
+    }
+
     /// Captura el estado live como snapshot serializable. Excluye la Semilla
     /// (será re-sintetizada al restore con su seed_id preservado).
     pub fn snapshot(&self) -> arje_snapshot::FractalSnapshot {
@@ -262,5 +299,47 @@ impl EnteGraph {
             if inc.card.provides.contains(cap) { return true; }
         }
         self.grants.values().any(|g| g.holder == holder && &g.cap == cap)
+    }
+}
+
+#[cfg(test)]
+mod cas_roots_tests {
+    use super::*;
+
+    fn concesion(bytecode: [u8; 32]) -> arje_attest::ConcesionCapacidad {
+        arje_attest::ConcesionCapacidad {
+            bytecode,
+            permisos: 0,
+            autor: [0u8; 32],
+            firma: [0u8; 64],
+        }
+    }
+
+    #[test]
+    fn cas_roots_recoge_wasm_y_bytecodes_del_attest() {
+        let mut seed = EntityCard::new("seed");
+        // Binarios cosechados → bytecodes en el attest del seed.
+        seed.attest = vec![concesion([1u8; 32]), concesion([2u8; 32])];
+        // Un Ente Wasm en el genesis → su module_sha256 es raíz.
+        let mut wasm_ente = EntityCard::new("wasm-ente");
+        wasm_ente.payload = Payload::Wasm { module_sha256: [3u8; 32], entry: "_start".into() };
+        seed.genesis.push(wasm_ente);
+
+        let mut graph = EnteGraph::new(seed);
+        // Un Ente Wasm encarrnado dinámicamente (p. ej. RunCard) también cuenta.
+        let mut dyn_card = EntityCard::new("dyn-wasm");
+        dyn_card.payload = Payload::Wasm { module_sha256: [4u8; 32], entry: "_start".into() };
+        let id = dyn_card.id;
+        graph.incarnated.insert(id, Incarnated {
+            card: dyn_card,
+            pid: None,
+            dynamic_provides: Default::default(),
+        });
+
+        let roots = graph.cas_roots();
+        for r in [[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32]] {
+            assert!(roots.contains(&r), "falta la raíz {r:?}");
+        }
+        assert_eq!(roots.len(), 4, "exactamente las 4 raíces vivas, sin basura");
     }
 }

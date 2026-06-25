@@ -33,6 +33,11 @@ pub struct BrainState {
     pub rules_out: Option<Arc<PathBuf>>,
     /// Audit log en memoria. Cada promote/remove deja huella aquí.
     pub audit: Arc<RwLock<arje_brain_audit::audit::AuditLog>>,
+    /// Raíces vivas del CAS más allá de la cadena de audit: `module_sha256` de
+    /// los Wasm y `attest[].bytecode` (binarios cosechados) de las Cards vivas.
+    /// Lo refresca PID 1 desde su grafo (`EnteGraph::cas_roots`); el handler de
+    /// `GcCas` lo une al reachable para no barrer objetos todavía en uso.
+    pub cas_roots: Arc<RwLock<std::collections::HashSet<[u8; 32]>>>,
 }
 
 impl BrainState {
@@ -47,6 +52,7 @@ impl BrainState {
             params,
             rules_out: None,
             audit: Arc::new(RwLock::new(arje_brain_audit::audit::AuditLog::new())),
+            cas_roots: Arc::new(RwLock::new(std::collections::HashSet::new())),
         }
     }
 
@@ -122,9 +128,11 @@ pub enum IntrospectRequest {
         #[serde(default)]
         filter: arje_brain_audit::audit::AuditFilter,
     },
-    /// Garbage-collect el CAS. Considera reachable: todo lo alcanzable desde
-    /// el head del audit log. Cualquier blob extra (Wasm modules referenciados
-    /// por Cards) debe haberse pasado en `extra_roots` por el caller.
+    /// Garbage-collect el CAS. Reachable = cadena de audit (desde el head) ∪
+    /// las raíces vivas del grafo (`BrainState::cas_roots`: Wasm + binarios
+    /// cosechados, que PID 1 refresca desde `EnteGraph::cas_roots`) ∪
+    /// `extra_roots` del caller. Así un `gc-cas` con `extra_roots` vacío (p. ej.
+    /// `brainctl gc-cas`) ya NO barre Wasm ni binarios todavía en uso.
     GcCas { extra_roots: Vec<[u8; 32]> },
     /// Detecta cristales de patrones temporales (Burst, Silence).
     PatternCrystals,
@@ -407,11 +415,15 @@ impl IntrospectServer {
                 IntrospectResponse::Patterns(patterns)
             }
             IntrospectRequest::GcCas { extra_roots } => {
-                // Reachable = audit chain desde head + extra_roots provistos.
+                // Reachable = cadena de audit (desde head) + raíces vivas del
+                // grafo (Wasm + binarios cosechados, refrescadas por PID 1) +
+                // extra_roots del caller. Sin las raíces del grafo, el GC barría
+                // los Wasm y binarios todavía en uso.
                 let mut reachable = std::collections::HashSet::new();
                 if let Some(head) = self.state.audit.read().await.last_flushed_sha() {
                     reachable.extend(arje_brain_audit::audit::reachable_from_head(head));
                 }
+                reachable.extend(self.state.cas_roots.read().await.iter().copied());
                 reachable.extend(extra_roots);
                 match arje_cas::gc(&reachable) {
                     Ok((deleted, freed_bytes)) => IntrospectResponse::GcResult { deleted, freed_bytes },

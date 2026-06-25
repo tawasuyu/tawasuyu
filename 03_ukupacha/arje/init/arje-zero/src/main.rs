@@ -630,6 +630,10 @@ async fn primordial_loop(
         }
     }
     spawn_brain_introspect(brain.clone());
+    // Sembrar las raíces vivas del CAS para el GC ANTES de servir introspect:
+    // así un `gc-cas` temprano ya respeta los Wasm y binarios cosechados del
+    // seed. Luego se refresca en el tick periódico (cubre spawns dinámicos).
+    *brain.cas_roots.write().await = graph.cas_roots();
     let brain_sink = brain_glue::GraphSink {
         graph_tx: graph_tx.clone(),
     };
@@ -709,6 +713,10 @@ async fn primordial_loop(
                 if n > 0 {
                     info!(purged = n, active = graph.active_grants_count(), "GC capability grants");
                 }
+                // Refrescar las raíces vivas del CAS (Wasm + binarios cosechados)
+                // para que un `gc-cas` no barra lo que entró/salió desde el último
+                // tick. Barato: recorre las Cards vivas.
+                *brain.cas_roots.write().await = graph.cas_roots();
             }
 
             _ = wd_tick.tick() => {

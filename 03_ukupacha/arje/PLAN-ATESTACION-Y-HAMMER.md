@@ -284,6 +284,16 @@ gana `firma_valida` + el re-export de `ConcesionCapacidad`; un init vivo NO hace
   baja por su hash (`traer_al_cas`), los verifica contra el manifiesto, y **reproduce el sistema
   exacto** por la red. Verificado e2e por cada binario: installer cosecha 3 stubs, packager 2,
   absorb 1 — cada uno aparece como blob en un CAS aislado.
+  **GC cableado a las raíces reales → ✅ HECHO (2026-06-25).** El GC del CAS (`brainctl gc-cas`)
+  pasaba `extra_roots` vacío → sólo la cadena de audit era reachable, así que habría **barrido los
+  Wasm modules y los binarios recién cosechados** (sus hashes no están en la cadena de audit).
+  `EnteGraph::cas_roots()` recolecta las raíces vivas — `module_sha256` de cada `Payload::Wasm` y
+  `attest[].bytecode` de la Semilla (con su `pending_genesis`) e incarnados. PID 1 las refresca en
+  un `Arc<RwLock<HashSet>>` compartido (`BrainState::cas_roots`): al sembrar antes de servir
+  introspect y en cada tick de mantenimiento. El handler de `GcCas` une ese set → el GC ya no toca
+  lo que está en uso. Tests: `cas_roots` recolecta Wasm+bytecodes (de seed/pending/incarnado, sin
+  basura — atrapó que `new` mueve el genesis a `pending_genesis`) y `arje-cas::gc` borra sólo lo no
+  alcanzable.
 - Bus unificado (B.2) antes de que hammerd corra bajo arje — vocabulario de eventos ✅; falta
   el cable de transporte arje-bus ↔ hammerd.
 
