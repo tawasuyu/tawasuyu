@@ -79,6 +79,21 @@ pub struct DockRailItem {
     pub active: bool,
 }
 
+/// A qué borde se pega el rail — decide hacia dónde **sobresalen** los dientes.
+/// `InnerLeft` (default) es para un sidebar a la **izquierda**: la barra de acento
+/// queda a la izquierda y el diente abre hacia la derecha (hacia el centro).
+/// `InnerRight` espeja todo para un sidebar a la **derecha**: barra a la derecha,
+/// el diente abre hacia la izquierda (también hacia el centro). El uso canónico de
+/// cosmos usa el default; las apps con dientes a ambos lados pasan el lado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DockRailSide {
+    /// Sidebar izquierdo: dientes sobresalen hacia la derecha.
+    #[default]
+    InnerLeft,
+    /// Sidebar derecho: dientes sobresalen hacia la izquierda (espejado).
+    InnerRight,
+}
+
 /// Construye el rail de dientes.
 ///
 /// - `items`: en el orden en que se quieren mostrar (el widget no
@@ -103,6 +118,37 @@ where
     FAct: Fn(u64) -> Msg,
     FDrop: Fn(u64) -> Option<Msg> + Send + Sync + 'static,
 {
+    dock_rail_view_side(
+        items,
+        width,
+        DockRailSide::InnerLeft,
+        palette,
+        make_icon,
+        on_activate,
+        on_drop,
+    )
+}
+
+/// Como [`dock_rail_view`] pero eligiendo el [`DockRailSide`]: en `InnerRight` el
+/// diente se **espeja** (barra de acento a la derecha, esquinas redondeadas a la
+/// izquierda) para un sidebar a la derecha. `dock_rail_view` es el atajo a
+/// `InnerLeft`.
+pub fn dock_rail_view_side<Msg, FIcon, FAct, FDrop>(
+    items: &[DockRailItem],
+    width: f32,
+    side: DockRailSide,
+    palette: &DockRailPalette,
+    make_icon: FIcon,
+    on_activate: FAct,
+    on_drop: FDrop,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    FIcon: Fn(u64, f32, Color) -> View<Msg>,
+    FAct: Fn(u64) -> Msg,
+    FDrop: Fn(u64) -> Option<Msg> + Send + Sync + 'static,
+{
+    let mirror = side == DockRailSide::InnerRight;
     let mut teeth: Vec<View<Msg>> = Vec::with_capacity(items.len());
     for item in items {
         let fg = if item.active {
@@ -140,6 +186,13 @@ where
 
         let id = item.id;
         let msg = on_activate(id);
+        // En un sidebar derecho (mirror) la barra de acento va a la DERECHA y el
+        // icono a la izquierda → el diente sobresale hacia el centro (a la izq.).
+        let row_children = if mirror {
+            vec![icon_box, accent_bar]
+        } else {
+            vec![accent_bar, icon_box]
+        };
         let mut tooth = View::new(Style {
             flex_direction: FlexDirection::Row,
             size: Size {
@@ -157,15 +210,20 @@ where
             DragPhase::Move | DragPhase::End => None,
         })
         .drag_payload(id)
-        .children(vec![accent_bar, icon_box]);
+        .children(row_children);
         if item.active {
-            // Pestaña activa: además del fill, redondea el lado que sobresale
-            // hacia el contenido (la barra de acento marca el borde interno a
-            // la izquierda, así que el diente abre a la derecha). Le da el look
-            // de pestaña que sale del rail en vez de un rectángulo plano.
+            // Pestaña activa: además del fill, redondea el lado que sobresale hacia
+            // el contenido. La barra de acento marca el borde interno; el diente abre
+            // hacia el lado opuesto (derecha en InnerLeft, izquierda en InnerRight) →
+            // look de pestaña que sale del rail, no un rectángulo plano.
+            let corners = if mirror {
+                (8.0, 0.0, 0.0, 8.0)
+            } else {
+                (0.0, 8.0, 8.0, 0.0)
+            };
             tooth = tooth
                 .fill(palette.bg_active)
-                .radius_corners(0.0, 8.0, 8.0, 0.0);
+                .radius_corners(corners.0, corners.1, corners.2, corners.3);
         }
         teeth.push(tooth);
     }
