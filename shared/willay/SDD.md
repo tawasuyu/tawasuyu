@@ -127,8 +127,30 @@ accionar notif, fijar, borrar).
    con timeline reciente→viejo, separadores de fecha y facetas por clase (chips
    Todo/Notif/Capturas/Clips). Cliente del daemon por socket (pollea
    `Recientes`/`PorClase`/`Limpiar`). Generaliza `pata-notify-panel`.
-4. semántica — willay como `source` del widget `rag` (búsqueda en lenguaje
-   natural) + generalizar el triage; y autostart del daemon.
+4. **✅ semántica + autostart** —
+   - **✅ autostart**: componente `willay` en churay → `willay-daemon` en
+     `~/.config/mirada/autostart`.
+   - **✅ búsqueda semántica**: `rag-motor` (abstracción agnóstica: trait
+     `RagMotor` + tipos de cita) + `willay-rag` (motor sobre los eventos: embebe
+     con rimay-verbo, recupera por coseno, redacta con pluma-llm citando
+     eventos). `paloma-rag` también implementa `RagMotor`; el widget `rag` de
+     pata elige fuente por el prop `source` (`willay`/`paloma`), tras un
+     `Box<dyn RagMotor>`. Preset con diente «Eventos IA».
+   - pendiente menor: generalizar el triage (clustering de ráfagas) para el
+     feed; hoy el feed lista sin agrupar.
+
+## 7. Estado: v1 funcional de punta a punta
+
+```
+hapiy ─┐                                    ┌─ willay-panel  (feed: timeline + facetas)
+notify─┼─emit→ willay.sock → willay-daemon ─┤
+clip  ─┘   (no-op si caído)   (escritor único, sled)
+                                            └─ willay-rag → widget rag «Eventos IA»
+                                               (embed → coseno → LLM, citando eventos)
+```
+El daemon autostartea con la sesión. Productores emiten sin acoplarse. Lectura
+por feed (literal/facetas) y por rag (semántico). Todo lo pesado se queda en su
+productor (federación).
 
 ### Pendientes conocidos del v1
 
