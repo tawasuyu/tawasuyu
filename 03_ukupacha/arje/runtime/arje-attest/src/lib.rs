@@ -28,11 +28,15 @@
 
 use agora_channel::{firmar_capacidad, verificar_capacidad};
 use agora_core::Keypair;
-use format::{hash as blake3, ConcesionCapacidad, Permisos};
+use format::{hash as blake3, Permisos};
 
 /// Identidad pública Ed25519 (`[u8; 32]`), reexportada para que los callers del
 /// gate (arje-zero) tipen la rootkey soberana sin depender de `format`.
 pub use format::AgoraId;
+/// Concesión firmada `(bytecode, permisos, autor, firma)` — el ítem del
+/// manifiesto `Card::attest`. Reexportada para que los callers integren
+/// concesiones pre-firmadas (p. ej. de hammer) sin depender de `format`.
+pub use format::ConcesionCapacidad;
 
 /// BLAKE3 de unos bytes — el mismo hash que `format`/agora/wawa usan como
 /// identidad de contenido. Reexportado para que los callers registren el hash
@@ -104,6 +108,15 @@ pub fn firmar_arbol(
 ) -> (AgoraId, Vec<ConcesionCapacidad>) {
     let items: Vec<(Vec<u8>, Permisos)> = bins.values().map(|b| (b.clone(), 0)).collect();
     firmar_binarios(rootkey_seed, &items)
+}
+
+/// `true` si la firma de una concesión verifica sobre su propio `(bytecode,
+/// permisos)` bajo su `autor`. Sirve para integrar concesiones **pre-firmadas**
+/// (p. ej. emitidas por un `hammer commit`) sin confiar a ciegas: rechazá las
+/// que no validen. NO chequea autor confiable ni el binario vivo — eso lo hace
+/// el gate al boot (`verificar_binario`).
+pub fn firma_valida(c: &ConcesionCapacidad) -> bool {
+    verificar_capacidad(c).is_ok()
 }
 
 /// Carga la rootkey (32 bytes raw) desde `path`, o la genera si no existe y

@@ -234,6 +234,18 @@ Flujo conjunto: un `hammer commit` promovido emite una `ConcesionCapacidad` firm
 Así el ciclo "IA propone → humano commitea (hammer)" se cierra con "init atesta (arje)" sin
 que ninguno de los dos sepa de criptografía del otro.
 
+**Integración de concesiones pre-firmadas → ✅ HECHO (2026-06-25).** `arje-absorb --attest-from
+<json>` lee un bundle de `ConcesionCapacidad` ya firmadas (objeto o array — lo que hammer emite),
+**verifica la firma de cada una** (`arje_attest::firma_valida`, descarta las inválidas: no confía
+a ciegas), deduplica por `bytecode`, y las mergea en `seed.attest`. Reporta cuántas cubren un
+binario de servicio del seed vs. «huérfanas» (p. ej. una concesión de `arje-zero`, legítima: el
+gate la usa por hash). Combinable con `--rootkey` (firma propia). `reconciliar_anclaje` cierra el
+hueco de seguridad de mezclar autores: si no hay `attest_rootkey` y todas comparten autor, lo
+ancla (seed auto-consistente); si los autores son mixtos, avisa que bajo `Halt` sólo pasaría el
+anclado. Verificado e2e: hammer firma una concesión sobre un binario absorbido → `--attest-from`
+la integra → el seed queda anclado al autor de hammer y el binario atesta `Ok`. (`arje-attest`
+gana `firma_valida` + el re-export de `ConcesionCapacidad`; un init vivo NO hace falta para esto.)
+
 ### B.4 Roadmap conjunto
 
 - hammer *Track posterior → init propio* = **adoptar arje**. arje entrega el `CRASHED` real

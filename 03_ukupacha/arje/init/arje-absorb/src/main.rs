@@ -35,6 +35,11 @@ OPCIONES:
                      binario de servicio (leído de <root>) bajo su BLAKE3,
                      anclada en el seed. Sin esto el seed va sin attest.
     --gen-rootkey    si --rootkey no existe, generarla (/dev/urandom, 0600)
+    --attest-from <f>  integra concesiones YA firmadas (JSON: objeto o array),
+                     p. ej. emitidas por un `hammer commit`. Verifica la firma
+                     de cada una y descarta inválidas; deduplica por bytecode.
+                     Combinable con --rootkey. Si todas comparten autor, lo
+                     ancla. (B.3: el binario que la IA mutó queda atestado.)
     -h, --help       esta ayuda
 
 Emite una Tarjeta Semilla con cada servicio del init ajeno como hija
@@ -56,6 +61,7 @@ fn run() -> anyhow::Result<()> {
     let mut with_carmen = false;
     let mut rootkey: Option<PathBuf> = None;
     let mut gen_rootkey = false;
+    let mut attest_from: Option<PathBuf> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -87,6 +93,11 @@ fn run() -> anyhow::Result<()> {
                 ))
             }
             "--gen-rootkey" => gen_rootkey = true,
+            "--attest-from" => {
+                attest_from = Some(PathBuf::from(
+                    args.next().ok_or_else(|| anyhow::anyhow!("--attest-from necesita un valor"))?,
+                ))
+            }
             other => anyhow::bail!("opción desconocida «{other}» (usá --help)"),
         }
     }
@@ -129,38 +140,9 @@ fn run() -> anyhow::Result<()> {
         eprintln!("arje-absorb: agregado carmen-dm (gestor de login gráfico).");
     }
 
-    // Atestación al arranque (A1): si hay --rootkey, firmamos el manifiesto
-    // sobre los binarios de cada servicio LEÍDOS del sistema fuente (`root`).
-    // Captura el estado confiable de los binarios al absorber; el operador
-    // ancla la pubkey fuera del seed para endurecer a Halt. Reusa el mismo
-    // firmador (`arje_attest::firmar_arbol`) que packager/installer → manifiesto
-    // idéntico por cualquier ruta. arje-zero NO se firma acá (no es un servicio
-    // del init absorbido; lo agrega el packager/installer al armar la imagen).
-    if let Some(rootkey_path) = &rootkey {
-        let nueva = !rootkey_path.exists();
-        let seed_key = arje_attest::load_or_gen_rootkey(rootkey_path, gen_rootkey)?;
-        if nueva {
-            eprintln!("arje-absorb: rootkey nueva generada en {}", rootkey_path.display());
-        }
-        let (bins, skipped) = collect_exec_bins(&seed, &root);
-        for s in &skipped {
-            eprintln!(
-                "arje-absorb: aviso: no pude leer «{s}» bajo {} — queda SIN atestar",
-                root.display()
-            );
-        }
-        if bins.is_empty() {
-            eprintln!("arje-absorb: aviso: 0 binarios legibles — no se firma manifiesto.");
-        } else {
-            let (pubkey, concesiones) = arje_attest::firmar_arbol(seed_key, &bins);
-            let n = concesiones.len();
-            seed.attest = concesiones;
-            seed.attest_rootkey = Some(pubkey);
-            let pubhex = arje_attest::rootkey_a_hex(&pubkey);
-            eprintln!("arje-absorb: atestación: {n} binario(s) firmado(s) bajo rootkey {pubhex}");
-            eprintln!("arje-absorb: {}", arje_attest::guia_anclado_soberano(&pubhex));
-        }
-    }
+    // Atestación al arranque (A1): firma propia (--rootkey) y/o integración de
+    // concesiones pre-firmadas (--attest-from, p. ej. de hammer).
+    aplicar_atestacion(&mut seed, &root, &rootkey, gen_rootkey, &attest_from)?;
 
     seed.validate()
         .map_err(|e| anyhow::anyhow!("la Semilla generada no valida: {e}"))?;
@@ -217,6 +199,151 @@ fn collect_exec_bins(
     skipped.sort();
     skipped.dedup();
     (bins, skipped)
+}
+
+/// Aplica atestación al seed: firma propia con `--rootkey` (sobre los binarios
+/// leídos de `root`) y/o integra concesiones pre-firmadas con `--attest-from`,
+/// y reconcilia el ancla soberana del manifiesto resultante. No-op si no se
+/// pidió ninguna.
+fn aplicar_atestacion(
+    seed: &mut card_core::Card,
+    root: &Path,
+    rootkey: &Option<PathBuf>,
+    gen_rootkey: bool,
+    attest_from: &Option<PathBuf>,
+) -> anyhow::Result<()> {
+    if rootkey.is_none() && attest_from.is_none() {
+        return Ok(());
+    }
+    // Binarios de los servicios — para firmar y/o cross-checkear concesiones.
+    let (bins, skipped) = collect_exec_bins(seed, root);
+    for s in &skipped {
+        eprintln!(
+            "arje-absorb: aviso: no pude leer «{s}» bajo {} — queda SIN atestar",
+            root.display()
+        );
+    }
+
+    // (1) Firma propia con la rootkey del operador (mismo firmador que
+    //     packager/installer → manifiesto idéntico por cualquier ruta).
+    if let Some(rootkey_path) = rootkey {
+        let nueva = !rootkey_path.exists();
+        let seed_key = arje_attest::load_or_gen_rootkey(rootkey_path, gen_rootkey)?;
+        if nueva {
+            eprintln!("arje-absorb: rootkey nueva generada en {}", rootkey_path.display());
+        }
+        if bins.is_empty() {
+            eprintln!("arje-absorb: aviso: 0 binarios legibles — no se firma manifiesto propio.");
+        } else {
+            let (pubkey, concesiones) = arje_attest::firmar_arbol(seed_key, &bins);
+            seed.attest = concesiones;
+            seed.attest_rootkey = Some(pubkey);
+            eprintln!(
+                "arje-absorb: atestación: {} binario(s) firmado(s) por rootkey propia.",
+                seed.attest.len()
+            );
+        }
+    }
+
+    // (2) Integración de concesiones pre-firmadas (p. ej. de un hammer commit).
+    if let Some(af) = attest_from {
+        integrar_concesiones_hammer(seed, &bins, af)?;
+    }
+
+    // (3) Reconciliar el ancla soberana del manifiesto resultante.
+    reconciliar_anclaje(seed);
+    Ok(())
+}
+
+/// Integra concesiones **pre-firmadas** (un objeto JSON o un array) en
+/// `seed.attest`. Verifica la firma de cada una y descarta las inválidas; no
+/// confía a ciegas. Deduplica por `bytecode`. Reporta cuántas cubren un binario
+/// de servicio de este seed vs. cuántas son «huérfanas» (p. ej. una concesión
+/// de `arje-zero`, que no es un servicio absorbido — es legítima: el gate la usa
+/// igual por hash al boot).
+fn integrar_concesiones_hammer(
+    seed: &mut card_core::Card,
+    bins: &std::collections::BTreeMap<String, Vec<u8>>,
+    path: &Path,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let txt = std::fs::read_to_string(path)
+        .with_context(|| format!("leyendo concesiones {}", path.display()))?;
+    // Acepta un objeto único o un array de concesiones.
+    let entrantes: Vec<arje_attest::ConcesionCapacidad> =
+        match serde_json::from_str::<Vec<_>>(&txt) {
+            Ok(v) => v,
+            Err(_) => vec![serde_json::from_str(&txt)
+                .with_context(|| format!("parseando concesiones {}", path.display()))?],
+        };
+
+    let hashes_bin: std::collections::BTreeSet<[u8; 32]> =
+        bins.values().map(|b| arje_attest::hash_de(b)).collect();
+    let mut vistos: std::collections::BTreeSet<[u8; 32]> =
+        seed.attest.iter().map(|c| c.bytecode).collect();
+
+    let (mut integradas, mut rechazadas, mut dup, mut huerfanas) = (0u32, 0u32, 0u32, 0u32);
+    for c in entrantes {
+        if !arje_attest::firma_valida(&c) {
+            rechazadas += 1;
+            eprintln!("arje-absorb: aviso: concesión con firma inválida — descartada.");
+            continue;
+        }
+        if !vistos.insert(c.bytecode) {
+            dup += 1;
+            continue;
+        }
+        if !hashes_bin.contains(&c.bytecode) {
+            huerfanas += 1;
+        }
+        seed.attest.push(c);
+        integradas += 1;
+    }
+    eprintln!(
+        "arje-absorb: concesiones pre-firmadas: {integradas} integrada(s), \
+         {rechazadas} rechazada(s), {dup} duplicada(s), {huerfanas} sin binario en este seed."
+    );
+    Ok(())
+}
+
+/// Reconcilia `attest_rootkey` con los autores del manifiesto. Si no hay ancla
+/// y todas las concesiones comparten un autor, lo ancla (seed auto-consistente);
+/// si hay autores mixtos, avisa. Si ya hay ancla (de `--rootkey`), avisa de las
+/// concesiones con autor distinto (fallarían el pin de autor bajo `Halt`).
+fn reconciliar_anclaje(seed: &mut card_core::Card) {
+    if seed.attest.is_empty() {
+        return;
+    }
+    let autores: std::collections::BTreeSet<[u8; 32]> =
+        seed.attest.iter().map(|c| c.autor).collect();
+    match seed.attest_rootkey {
+        None => {
+            if autores.len() == 1 {
+                let a = *autores.iter().next().unwrap();
+                seed.attest_rootkey = Some(a);
+                let pubhex = arje_attest::rootkey_a_hex(&a);
+                eprintln!("arje-absorb: ancla = único autor del manifiesto ({pubhex}).");
+                eprintln!("arje-absorb: {}", arje_attest::guia_anclado_soberano(&pubhex));
+            } else {
+                eprintln!(
+                    "arje-absorb: aviso: manifiesto con {} autores distintos — sin ancla. \
+                     Bajo política Halt sólo pasaría el autor anclado; usá Warn o re-firmá \
+                     con una raíz única.",
+                    autores.len()
+                );
+            }
+        }
+        Some(rk) => {
+            let ajenos = autores.iter().filter(|a| **a != rk).count();
+            if ajenos > 0 {
+                eprintln!(
+                    "arje-absorb: aviso: {ajenos} concesión(es) con autor ≠ rootkey anclada — \
+                     bajo Halt fallarían el pin de autor (usá Warn o anclá la raíz que las firmó)."
+                );
+            }
+            eprintln!("arje-absorb: {}", arje_attest::guia_anclado_soberano(&arje_attest::rootkey_a_hex(&rk)));
+        }
+    }
 }
 
 /// Autodetecta el init presente en `root`. El orden importa: lo más
@@ -294,5 +421,48 @@ mod tests {
         assert!(v.es_ok(), "el binario absorbido debería atestar Ok, fue {}", v.motivo());
         // Un impostor no atesta.
         assert!(!arje_attest::atestar_bytes(&conc, b"otra cosa", Some(pubkey)).es_ok());
+    }
+
+    #[test]
+    fn integra_concesiones_prefirmadas_y_rechaza_invalidas() {
+        use card_core::{Card, Payload};
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Binario del servicio (lo que el manifiesto de hammer cubre).
+        let mut bins = std::collections::BTreeMap::new();
+        bins.insert("/usr/bin/svc".to_string(), b"service binary v2".to_vec());
+
+        // "hammer" firma una concesión sobre ese binario y la emite como JSON.
+        let (hammer_pub, conc) = arje_attest::firmar_arbol([42u8; 32], &bins);
+        let json = tmp.path().join("hammer.attest.json");
+        std::fs::write(&json, serde_json::to_vec(&conc).unwrap()).unwrap();
+
+        // Seed con el servicio, sin attest.
+        let mut seed = Card::new("seed");
+        let mut svc = Card::new("svc");
+        svc.payload = Payload::Native { exec: "/usr/bin/svc".into(), argv: vec![], envp: vec![] };
+        seed.genesis.push(svc);
+
+        // Integrar: la concesión válida entra y, sin rootkey y autor único, se ancla.
+        integrar_concesiones_hammer(&mut seed, &bins, &json).unwrap();
+        assert_eq!(seed.attest.len(), 1);
+        assert_eq!(seed.attest[0].autor, hammer_pub);
+        reconciliar_anclaje(&mut seed);
+        assert_eq!(seed.attest_rootkey, Some(hammer_pub), "autor único → se ancla");
+
+        // El binario vivo atesta Ok bajo la rootkey anclada (lo que hará el gate).
+        let v = arje_attest::atestar_bytes(&seed.attest, b"service binary v2", Some(hammer_pub));
+        assert!(v.es_ok(), "{}", v.motivo());
+
+        // Una concesión (de OTRO binario) con firma corrupta se rechaza.
+        let mut otro = std::collections::BTreeMap::new();
+        otro.insert("/usr/bin/otro".to_string(), b"otro binary".to_vec());
+        let (_p, mut mala) = arje_attest::firmar_arbol([7u8; 32], &otro);
+        mala[0].firma[0] ^= 0xFF; // corromper la firma
+        let json_mala = tmp.path().join("mala.json");
+        std::fs::write(&json_mala, serde_json::to_vec(&mala).unwrap()).unwrap();
+        let antes = seed.attest.len();
+        integrar_concesiones_hammer(&mut seed, &bins, &json_mala).unwrap();
+        assert_eq!(seed.attest.len(), antes, "una firma corrupta no debe integrarse");
     }
 }
