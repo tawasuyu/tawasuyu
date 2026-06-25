@@ -1,3 +1,6 @@
+// En release sobre Windows: subsistema GUI (sin consola negra detrás).
+// No-op en Linux/otros targets — preserva `cargo check --workspace`.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! `nakui-sheet-llimphi` — UI mínima estilo Excel sobre Llimphi.
 //!
 //! Capas:

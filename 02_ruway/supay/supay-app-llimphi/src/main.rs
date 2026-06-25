@@ -1,3 +1,6 @@
+// En release sobre Windows: subsistema GUI (sin consola negra detrás).
+// No-op en Linux/otros targets — preserva `cargo check --workspace`.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! `supay-app-llimphi` — Fase 0.5 del proyecto supay (frontend Llimphi).
 //!
 //! Raycaster estilo Wolfenstein/Doom-early. **El mundo y la simulación
