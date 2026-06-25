@@ -202,9 +202,11 @@ pub struct SimParams {
     /// distancia euclidiana ≤ `social_radius`. `0.0` (default) deshabilita
     /// el contagio — el motor histórico no paga nada.
     ///
-    /// **Costo**: O(N²) determinista, aceptable hasta ~10k agentes por la
-    /// grilla típica. Sin índice espacial: para poblaciones masivas habría
-    /// que indexar celdas por agente — pendiente para Fase B.2.
+    /// **Costo**: O(N) amortizado. `dominium-physics::apply_social_contagion`
+    /// indexa los agentes por celda (`CellIndex`) cuando la población supera
+    /// `SPATIAL_CONTAGION_THRESHOLD`, así cada agente sólo mira las 9 celdas de
+    /// su vecindario — bit-exacto al barrido all-pairs, pero lineal. Debajo del
+    /// umbral usa el O(N²) ingenuo (más barato para poblaciones chicas).
     #[serde(default)]
     pub social_radius: f32,
     /// Tasa de convergencia del contagio social (Fase B). Cada tick, los
