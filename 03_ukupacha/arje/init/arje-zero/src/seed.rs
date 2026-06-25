@@ -59,6 +59,11 @@ fn load_from_snapshot(path: &Path) -> anyhow::Result<EntityCard> {
         payload: Payload::Virtual,
         supervision: Supervision::OneShot,
         genesis: snap.entes,
+        // Restaurar el manifiesto de atestación de la Semilla — sin esto el
+        // seed restaurado quedaría sin gate (attest vacío + policy default).
+        attest: snap.attest,
+        attest_rootkey: snap.attest_rootkey,
+        attest_policy: snap.attest_policy,
         ..Default::default()
     })
 }
@@ -362,4 +367,43 @@ fn mirada_session_card() -> Option<EntityCard> {
         genesis: vec![],
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arje_card::AttestPolicy;
+
+    #[test]
+    fn restore_preserva_la_atestacion_del_seed() {
+        // Un checkpoint→restore NO debe perder el manifiesto de atestación del
+        // seed: si lo perdiera, un sistema bajo Halt quedaría sin gate al boot.
+        let tmp = std::env::temp_dir()
+            .join(format!("arje-zero-restore-attest-{}.json", std::process::id()));
+        let conc = arje_attest::ConcesionCapacidad {
+            bytecode: [1u8; 32],
+            permisos: 0,
+            autor: [2u8; 32],
+            firma: [3u8; 64],
+        };
+        let snap = arje_snapshot::FractalSnapshot {
+            version: arje_snapshot::SNAPSHOT_VERSION,
+            timestamp_ms: 1,
+            seed_id: Ulid::from_string("00000000000000000000000000").unwrap(),
+            seed_label: "restored".into(),
+            entes: vec![],
+            attest: vec![conc],
+            attest_rootkey: Some([2u8; 32]),
+            attest_policy: AttestPolicy::Halt,
+        };
+        snap.write(&tmp).unwrap();
+
+        let card = load_from_snapshot(&tmp).unwrap();
+        assert_eq!(card.label, "restored");
+        assert_eq!(card.attest.len(), 1, "el manifiesto debe sobrevivir el restore");
+        assert_eq!(card.attest[0].autor, [2u8; 32]);
+        assert_eq!(card.attest_rootkey, Some([2u8; 32]));
+        assert_eq!(card.attest_policy, AttestPolicy::Halt);
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

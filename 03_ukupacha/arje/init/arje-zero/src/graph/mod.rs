@@ -209,6 +209,11 @@ impl EnteGraph {
             seed_id: self.seed.id,
             seed_label: self.seed.label.clone(),
             entes,
+            // Preservar la atestación de la Semilla: sin esto el restore
+            // dejaría el seed sin gate (ver doctrina en arje-snapshot).
+            attest: self.seed.attest.clone(),
+            attest_rootkey: self.seed.attest_rootkey,
+            attest_policy: self.seed.attest_policy,
         }
     }
 

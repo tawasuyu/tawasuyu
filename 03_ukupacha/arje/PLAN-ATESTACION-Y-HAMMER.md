@@ -149,6 +149,16 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    `run_inner` se partió en `gather_verdicts` (junta veredictos) + aplicación de política, sin tocar
    la semántica de boot; +1 test (`gather_verdicts_junta_sin_abortar_aun_con_halt`). Así el operador
    valida `2 ✓ / 0 ✗` ANTES de endurecer. Verificado end-to-end con un seed firmado por el packager.
+
+   **Persistencia del manifiesto en checkpoint/restore → ✅ HECHO (2026-06-25).** `arje-snapshot`
+   guardaba `seed_id`/`seed_label`/`entes` pero NO el `attest`/`attest_rootkey`/`attest_policy` de la
+   Semilla raíz, y `seed::load_from_snapshot` los reseteaba con `..Default::default()` → un
+   `--checkpoint` seguido de `--restore` dejaba el seed **sin gate** (un sistema bajo `Halt` quedaba
+   silenciosamente sin verificar al próximo boot). `FractalSnapshot` gana los tres campos con
+   `#[serde(default)]` (compat back/forward con snapshots v1, sin bump de `SNAPSHOT_VERSION`);
+   `EnteGraph::snapshot` los puebla desde `self.seed` y `load_from_snapshot` los restaura. (Las Cards
+   de `entes` ya llevaban su `attest` por ser `EntityCard` completas; sólo faltaba el de la raíz.)
+   +3 tests: round-trip preserva, v1 sin attest carga con defaults, y restore e2e en `arje-zero`.
 4. **A3** — Card de escritorio (`arje-card-llimphi`): mostrar el veredicto de atestación por
    unidad (verde/comprometido) en el panel del brain que ya existe. ✅ (2026-06-14) `formatear_entrada`
    renderiza las entradas `AuditAction::AttestationCheck` del audit log en el panel "Audit log" por
