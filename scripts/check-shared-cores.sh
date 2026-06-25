@@ -35,6 +35,7 @@ NUCLEOS=(
     "forth-emisor|shared/forth-emisor"
     "pluma-notebook-core|00_unanchay/pluma/pluma-notebook-core"
     "foreign-fs|shared/foreign-fs"
+    "willay-core|shared/willay/willay-core"
 )
 
 # Colores del informe — silenciados si la salida no es una TTY.

@@ -37,10 +37,25 @@ tiempo y buscar cross-tipo es trivial; los payloads no se duplican.
 
 `sled` **no es multi-proceso** (lockea la DB a un proceso). Igual que
 `pata-notify`, las escrituras se embudan por un **daemon willay** de escritor
-único; los productores *emiten* un `Evento` al daemon (D-Bus o socket Unix) y el
-daemon hace el `append`. Los lectores (panel, rag) consultan al daemon o leen la
-DB en modo read-only. **El daemon es un bloque posterior**; v1 arranca por el
-backbone in-proceso (`willay-core` + `willay-store`), ejercitado por tests.
+único; los productores *emiten* un `Evento` al daemon y el daemon hace el
+`append`. Los lectores (panel, rag) consultan al daemon o leen la DB en modo
+read-only. **El daemon es un bloque posterior**; v1 arranca por el backbone
+in-proceso (`willay-core` + `willay-store`), ejercitado por tests.
+
+**Transporte: socket Unix propio** (decidido 2026-06-25, por desacople). El
+daemon escucha en `$XDG_RUNTIME_DIR/willay.sock`; `willay-emit` es un cliente
+fino (postcard sobre el socket). Independiente de D-Bus — mismo patrón que
+`rimay-verbo-daemon`. `pata-notify` emite un espejo al socket *además* de su
+propio store (no se absorbe ni se reescribe pata-notify).
+
+### 1.2 Compatibilidad con Wawa (no_std)
+
+El `Evento` es direccionado por contenido, así que por la ley de Wawa (todo lo
+que vive en disco por hash o cruza al kernel compila sin std) **`willay-core` es
+`#![no_std]` sobre `alloc`** y está en el guardián `scripts/check-shared-cores.sh`
+(compila a `wasm32-unknown-unknown`, BLAKE3 escalar puro como `format`). El
+índice `willay-store` (sled) sí es std, pero no cruza la frontera. Esto deja la
+puerta abierta a eventos del lado wawa sin reescribir el esquema.
 
 ## 2. Crates (federado = pocas piezas compartidas + emisión por productor)
 

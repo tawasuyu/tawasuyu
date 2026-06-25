@@ -11,8 +11,16 @@ description = "willay — núcleo agnóstico del centro de eventos: el esquema E
 path = "src/lib.rs"
 
 [dependencies]
-serde = { workspace = true }
-blake3 = { workspace = true }
+# `no_std` sobre `alloc` — el esquema `Evento` es direccionado por contenido
+# (BLAKE3), justo lo que la ley de Wawa manda mantener sin std por si cruza al
+# kernel bare-metal. Versiones explícitas (como `format`), no herencia del
+# workspace, para fijar las features no_std. blake3 con la implementación
+# ESCALAR pura: el target del kernel corre sin SSE y un camino SIMD por
+# detección en runtime ejecutaría instrucciones que la CPU rechazaría (#UD).
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+blake3 = { version = "1", default-features = false, features = [
+    "pure", "no_sse2", "no_sse41", "no_avx2", "no_avx512",
+] }
 
 [dev-dependencies]
 postcard = { workspace = true }

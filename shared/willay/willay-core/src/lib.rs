@@ -6,8 +6,20 @@
 //! dato pesado — que se queda en su productor (el PNG en hapiy, la notificación
 //! completa en el sled de `pata-notify`). willay no centraliza payloads grandes.
 //!
-//! Es deliberadamente chico y sin dependencias de runtime: lo consume tanto el
-//! índice (`willay-store`) como cada productor que emite. Ver `shared/willay/SDD.md`.
+//! Es `#![no_std]` sobre `alloc`: el `Evento` es direccionado por contenido, así
+//! que por la ley de Wawa (todo lo que vive en disco por hash o cruza a el
+//! kernel compila sin std) este esquema se mantiene wawa-compatible. El índice
+//! `willay-store` (sled) sí es std, pero no cruza la frontera. Ver
+//! `shared/willay/SDD.md`.
+
+#![no_std]
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+use alloc::string::String;
+use core::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
@@ -151,7 +163,6 @@ impl Evento {
     pub fn id_hex(&self) -> String {
         let mut s = String::with_capacity(64);
         for b in self.id {
-            use std::fmt::Write;
             let _ = write!(s, "{b:02x}");
         }
         s
