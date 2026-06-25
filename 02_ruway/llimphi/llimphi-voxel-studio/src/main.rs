@@ -1,26 +1,22 @@
 //! # llimphi-voxel-studio — el creador de mundos, con interfaz
 //!
-//! La **interfaz propia** para crear/editar los artefactos de `llimphi-voxel`.
-//! Fase 1: el **editor de mundos** — lista de mundos del [`Project`], sliders
-//! in-situ de la [`WorldRecipe`] seleccionada, **preview 3D en vivo** que
-//! regenera el terreno al mover cualquier parámetro, y persistencia RON.
-//!
-//! Próximas fases (ver el plan): asistencia por IA ("describí un mundo" → receta),
-//! editor de escenas (director) y de personajes.
+//! Editor por **niveles de composición**: Leyes → Materiales → Seres → Biomas →
+//! Mundos → Escenas. Cada nivel tiene su lista de items **creables, editables,
+//! renombrables, borrables y duplicables**, su editor a la derecha y (donde aplica)
+//! preview 3D en vivo. La jerarquía vive en el [`Project`] agnóstico de
+//! `llimphi-voxel`; esta app sólo la pinta.
 //!
 //! ```bash
 //! cargo run -p llimphi-voxel-studio --release            # ventana interactiva
 //! cargo run -p llimphi-voxel-studio --release -- --shot  # PNG headless a /tmp
 //! ```
-//! - Lista izquierda: elegí un mundo / creá uno nuevo / guardá / cargá.
-//! - Centro: **arrastrar** orbita, **rueda** hace zoom.
-//! - Derecha: sliders de relieve/montañas/ríos/agua + ciclo de materiales y flora.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use llimphi_3d::glam::Vec3;
 use llimphi_3d::Camera3d;
+use llimphi_icons::{icon_view, Icon};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     length, percent, AlignItems, Dimension, FlexDirection, Position, Size, Style,
@@ -30,11 +26,12 @@ use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_voxel::{
-    window_origin_for_cast, world_dim, ActorScript, Age, CharSpec, Project, SceneSpec, ShotKind,
-    ShotSpec, WorldRecipe, PREVIEW_DIM_XZ,
+    window_origin_for_cast, world_dim, ActorScript, Age, Bioma, BiomaPalette, CharSpec, Clip,
+    Forma, LeyKind, LeyUso, MatRole, Material, MaterialDef, Mundo, MundoRender, Project, SceneSpec,
+    ShotKind, ShotSpec, PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
-use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_dock_rail::{dock_rail_view_side, DockRailItem, DockRailPalette, DockRailSide};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
@@ -43,26 +40,99 @@ mod preview;
 mod render;
 mod shot;
 mod soundtrack;
+use ai::MatRefs;
 use preview::WorldPreview;
 
 /// Dónde se guarda/carga el proyecto (relativo al cwd).
 const PROJECT_PATH: &str = "voxel-studio.ron";
-
 /// Paso de tiempo de la reproducción de escenas (~30 fps).
 const DT: f32 = 1.0 / 30.0;
 
-/// Qué artefacto edita la UI ahora.
+// =============================================================================
+//  Niveles de composición (rail izquierdo)
+// =============================================================================
+
+/// Los niveles de composición, de lo más básico a lo más compuesto.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    /// Editor de mundos (receta + preview).
-    Worlds,
-    /// Editor/reproductor de escenas (director).
-    Scenes,
-    /// Editor de personajes (constitución + colores).
-    Characters,
+enum Level {
+    Leyes,
+    Materiales,
+    Seres,
+    Biomas,
+    Mundos,
+    Escenas,
 }
 
-/// Parte coloreable de un personaje.
+impl Level {
+    const ALL: [Level; 6] = [
+        Level::Leyes,
+        Level::Materiales,
+        Level::Seres,
+        Level::Biomas,
+        Level::Mundos,
+        Level::Escenas,
+    ];
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|&l| l == self).unwrap_or(0)
+    }
+    fn from_index(i: usize) -> Level {
+        Self::ALL[i.min(Self::ALL.len() - 1)]
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Level::Leyes => "Leyes",
+            Level::Materiales => "Materiales",
+            Level::Seres => "Seres",
+            Level::Biomas => "Biomas",
+            Level::Mundos => "Mundos",
+            Level::Escenas => "Escenas",
+        }
+    }
+    fn icon(self) -> Icon {
+        match self {
+            Level::Leyes => Icon::Droplet,
+            Level::Materiales => Icon::Leaf,
+            Level::Seres => Icon::User,
+            Level::Biomas => Icon::Mountain,
+            Level::Mundos => Icon::Globe,
+            Level::Escenas => Icon::Film,
+        }
+    }
+    /// Color de acento del nivel (íconos coloridos).
+    fn color(self) -> Color {
+        match self {
+            Level::Leyes => Color::from_rgba8(150, 130, 230, 255),
+            Level::Materiales => Color::from_rgba8(220, 170, 80, 255),
+            Level::Seres => Color::from_rgba8(110, 200, 130, 255),
+            Level::Biomas => Color::from_rgba8(90, 200, 200, 255),
+            Level::Mundos => Color::from_rgba8(90, 150, 230, 255),
+            Level::Escenas => Color::from_rgba8(230, 120, 110, 255),
+        }
+    }
+    /// Sets de herramientas (pestañas del rail derecho): rótulo + ícono.
+    fn tools(self) -> Vec<(&'static str, Icon)> {
+        match self {
+            Level::Leyes => vec![("Parámetros", Icon::Gauge)],
+            Level::Materiales => vec![("Aspecto", Icon::Image), ("Leyes", Icon::Droplet)],
+            Level::Seres => vec![
+                ("Cuerpo", Icon::User),
+                ("Piel", Icon::Image),
+                ("Camiseta", Icon::Image),
+                ("Pantalón", Icon::Image),
+            ],
+            Level::Biomas => vec![
+                ("Relieve", Icon::Mountain),
+                ("Materiales", Icon::Leaf),
+                ("Objetos", Icon::Grid),
+            ],
+            Level::Mundos => vec![("Semilla", Icon::Globe), ("Biomas", Icon::Mountain)],
+            Level::Escenas => vec![("Escena", Icon::Film), ("Cámara", Icon::Camera), ("Video", Icon::Play)],
+        }
+    }
+}
+
+/// Parte coloreable de un ser.
 #[derive(Clone, Copy)]
 enum Part {
     Skin,
@@ -70,10 +140,9 @@ enum Part {
     Pants,
 }
 
-/// Los parámetros `f32` de la receta que un slider edita.
+/// Parámetro `f32` del relieve de un bioma.
 #[derive(Clone, Copy)]
-enum Field {
-    Seed,
+enum BiomaField {
     Base,
     Dune,
     Relief,
@@ -81,134 +150,191 @@ enum Field {
     Water,
     Rivers,
     PeakAt,
-    Flora,
 }
 
 #[derive(Clone)]
 enum Msg {
-    /// Elegir el mundo `i` de la lista.
-    Select(usize),
-    /// Fijar un parámetro de la receta del mundo actual.
-    Set(Field, f32),
-    /// Ciclar el material del suelo / acantilado / cumbre, o la flora.
-    CycleGround,
-    CycleCliff,
-    CyclePeak,
-    CycleFlora,
-    /// Crear un mundo nuevo (pradera por defecto).
-    NewWorld,
-    /// Guardar / cargar el proyecto en RON.
-    Save,
-    Load,
-    /// Cámara de órbita.
-    Orbit(f32, f32),
-    Zoom(f32),
-    /// IA "poor": foco/tecla del campo de descripción, disparo y resultado.
-    AiFocus,
-    AiKey(KeyEvent),
-    AiGenerate,
-    AiResult(WorldRecipe, String),
-    /// Escenas (director).
-    SwitchMode(Mode),
-    SelectScene(usize),
-    CycleSceneWorld,
+    // Navegación de niveles + items.
+    SelectLevel(Level),
+    SelectItem(u64),
+    SelectTool(usize),
+    NewItem,
+    DupItem,
+    DelItem,
+    // Renombrar (campo de texto).
+    RenameFocus,
+    RenameKey(KeyEvent),
+    // Leyes.
+    CycleLeyKind,
+    SetLeyParam(usize, f32),
+    // Materiales.
+    CycleMatRole,
+    SetMatColor(usize, f32),
+    SetMatGrain(f32),
+    CycleMatParent,
+    AddMatLey,
+    RemoveMatLey,
+    // Seres.
+    CycleSereAge,
+    SetSereColor(Part, usize, f32),
+    // Biomas.
+    SetBiomaField(BiomaField, f32),
+    CycleBiomaGround,
+    CycleBiomaCliff,
+    CycleBiomaPeak,
+    AddBiomaObjeto,
+    RemoveBiomaObjeto,
+    SetObjetoDensidad(usize, f32),
+    // Mundos.
+    SeedFocus,
+    SeedKey(KeyEvent),
+    SeedRandom,
+    CycleMundoBioma,
+    // Escenas.
+    CycleSceneMundo,
     SetSceneDur(f32),
     TogglePlay,
     Scrub(f32),
-    AiSceneGenerate,
-    AiSceneResult(SceneSpec),
-    /// Cámara de escena: alterna órbita libre ↔ guion (planos); agrega/quita plano
-    /// en el instante actual.
     ToggleSceneCam,
     AddShot,
     RemoveShot,
-    /// Exportar la escena a video (headless, en un worker).
     ExportVideo,
     ExportDone(Result<String, String>),
-    /// Elegir el diente (set de herramientas) del sidebar derecho.
-    SelectTool(usize),
-    /// Personajes (constitución + colores).
-    SelectChar(usize),
-    CycleCharAge,
-    SetColor(Part, usize, f32),
-    NewChar,
-    AiCharGenerate,
-    AiCharResult(CharSpec),
-    /// Tick periódico de reproducción.
+    // Cámara.
+    Orbit(f32, f32),
+    Zoom(f32),
+    // IA.
+    AiFocus,
+    AiKey(KeyEvent),
+    AiGenerate,
+    AiBioma(Bioma),
+    AiSere(CharSpec),
+    AiScene(SceneSpec),
+    // Persistencia.
+    Save,
+    Load,
+    // Reloj.
     Tick,
 }
 
 struct Model {
     theme: Theme,
     project: Project,
-    /// Índice del mundo seleccionado.
-    sel: usize,
-    /// Generación de la receta: se incrementa en cada edición para que el preview
-    /// sepa que tiene que regenerar el grid.
+    /// Nivel activo.
+    level: Level,
+    /// Item seleccionado (id) por nivel.
+    sel: [u64; 6],
+    /// Pestaña de herramientas activa (rail derecho).
+    tool_tab: usize,
+    /// Generación: se incrementa en cada edición para regenerar el preview.
     gen: u64,
     /// Cámara de órbita.
     yaw: f32,
     pitch: f32,
     dist: f32,
-    /// Preview perezoso: se construye en la 1ª pintada GPU (ahí hay device/queue).
+    /// Preview perezoso (se construye en la 1ª pintada GPU).
     preview: Arc<Mutex<Option<WorldPreview>>>,
-    /// Mensaje de estado (guardado/cargado/errores).
+    /// Mensaje de estado.
     status: String,
-    /// Campo de descripción para la IA + foco + flag "generando".
+    /// Campo de renombrado + foco.
+    name_input: TextInputState,
+    name_focused: bool,
+    /// Campo de semilla (mundos) + foco.
+    seed_input: TextInputState,
+    seed_focused: bool,
+    /// Campo de la IA + foco + "generando".
     ai_input: TextInputState,
     ai_focused: bool,
     ai_busy: bool,
-    /// Modo de edición + estado de escenas/personajes.
-    mode: Mode,
-    scene_sel: usize,
-    char_sel: usize,
-    /// Tiempo de reproducción (seg) y si está corriendo.
+    /// Reproducción de escenas.
     time: f32,
     playing: bool,
-    /// Cámara de escena guionada (planos) vs órbita libre.
     script_cam: bool,
-    /// Exportación de video en curso.
     exporting: bool,
-    /// Diente activo del sidebar derecho (qué set de herramientas se muestra).
-    tool_tab: usize,
+    /// Semilla del random de mundos (LCG; no hay `Math.random`).
+    rng: u32,
+    /// Decisión global: dientes DENTRO (overlay) o FUERA (franja reservada).
+    dientes_outside: bool,
 }
 
 impl Model {
-    /// Receta del mundo seleccionado (si hay).
-    fn recipe(&self) -> Option<WorldRecipe> {
-        self.project.worlds.get(self.sel).map(|w| w.recipe)
+    /// Id del item seleccionado en el nivel activo (0 = ninguno).
+    fn selected(&self) -> u64 {
+        self.sel[self.level.index()]
+    }
+    fn set_selected(&mut self, id: u64) {
+        let i = self.level.index();
+        self.sel[i] = id;
     }
 
-    /// La escena seleccionada (si hay).
-    fn scene(&self) -> Option<&SceneSpec> {
-        self.project.scenes.get(self.scene_sel)
+    /// Los items `(id, nombre)` del nivel activo, en orden.
+    fn items(&self) -> Vec<(u64, String)> {
+        match self.level {
+            Level::Leyes => self.project.leyes.iter().map(|x| (x.id, x.name.clone())).collect(),
+            Level::Materiales => self.project.materiales.iter().map(|x| (x.id, x.name.clone())).collect(),
+            Level::Seres => self.project.seres.iter().map(|x| (x.id, x.name.clone())).collect(),
+            Level::Biomas => self.project.biomas.iter().map(|x| (x.id, x.name.clone())).collect(),
+            Level::Mundos => self.project.mundos.iter().map(|x| (x.id, x.name.clone())).collect(),
+            Level::Escenas => self.project.escenas.iter().map(|x| (x.id, x.name.clone())).collect(),
+        }
     }
 
-    /// La receta del mundo de fondo de la escena seleccionada.
-    fn scene_recipe(&self) -> Option<WorldRecipe> {
-        let s = self.scene()?;
-        self.project.worlds.get(s.world).map(|w| w.recipe)
+    /// Nombre del item seleccionado (para cargar el campo de renombrar).
+    fn selected_name(&self) -> String {
+        let id = self.selected();
+        self.items()
+            .into_iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, n)| n)
+            .unwrap_or_default()
     }
 
-    /// El personaje seleccionado (si hay).
-    fn char_spec(&self) -> Option<&CharSpec> {
-        self.project.characters.get(self.char_sel)
+    /// MundoRender que el centro previsualiza (según nivel/selección), con un
+    /// fallback verde si no hay artefacto válido.
+    fn preview_render(&self) -> MundoRender {
+        let pick = match self.level {
+            Level::Mundos | Level::Escenas => {
+                let mundo = if self.level == Level::Mundos {
+                    self.selected()
+                } else {
+                    self.project.escenas.iter().find(|e| e.id == self.selected()).map(|e| e.mundo).unwrap_or(0)
+                };
+                self.project.render_mundo(mundo)
+            }
+            Level::Biomas => self.project.render_bioma(self.selected()),
+            // Seres: parados sobre el primer bioma disponible.
+            Level::Seres => self.project.biomas.first().and_then(|b| self.project.render_bioma(b.id)),
+            _ => None,
+        };
+        pick.unwrap_or_else(fallback_render)
     }
+}
+
+/// MundoRender por defecto (pradera neutra) cuando no hay artefacto que mostrar.
+fn fallback_render() -> MundoRender {
+    let bioma = Bioma {
+        id: 0,
+        name: String::new(),
+        base: 0.22,
+        dune: 0.10,
+        relief: 0.5,
+        mountains: 0.4,
+        water_level: 0.30,
+        rivers: 0.20,
+        peak_at: 0.80,
+        ground: 0,
+        cliff: 0,
+        peak: None,
+        objetos: vec![],
+        seres: vec![],
+    };
+    let palette = BiomaPalette::flat(Material::Grass.color(), Material::Grass.grain());
+    MundoRender { bioma, seed: 1, palette }
 }
 
 /// Distancia de órbita inicial/clamp en función del lado del mundo.
 fn default_dist() -> f32 {
     PREVIEW_DIM_XZ as f32 * 1.6
-}
-
-/// Nombre de mundo a partir de la descripción de la IA: las primeras ~3 palabras.
-fn world_name_from(prompt: &str) -> String {
-    let s: String = prompt.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
-    if s.is_empty() {
-        "mundo IA".into()
-    } else {
-        format!("IA: {s}")
-    }
 }
 
 struct Studio;
@@ -225,7 +351,6 @@ impl App for Studio {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
-        // Reloj de reproducción de escenas (avanza `time` cuando `playing`).
         handle.spawn_periodic(Duration::from_millis(33), || Msg::Tick);
         demo_model()
     }
@@ -235,8 +360,13 @@ impl App for Studio {
     }
 
     fn on_key(model: &Model, ev: &KeyEvent) -> Option<Msg> {
-        // Con el campo de la IA enfocado, el teclado lo alimenta: Enter genera,
-        // Escape lo suelta, el resto va al buffer de texto.
+        // El teclado alimenta el campo enfocado (renombrar / semilla / IA).
+        if model.name_focused {
+            return Some(Msg::RenameKey(ev.clone()));
+        }
+        if model.seed_focused {
+            return Some(Msg::SeedKey(ev.clone()));
+        }
         if model.ai_focused {
             if ev.state == KeyState::Pressed && matches!(&ev.key, Key::Named(NamedKey::Enter)) {
                 return Some(Msg::AiGenerate);
@@ -248,183 +378,250 @@ impl App for Studio {
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
-            Msg::Select(i) => {
-                if i < model.project.worlds.len() {
-                    model.sel = i;
-                    model.gen += 1; // forzar regeneración del preview
+            Msg::SelectLevel(l) => {
+                model.level = l;
+                model.tool_tab = 0;
+                model.name_focused = false;
+                model.seed_focused = false;
+                model.gen += 1;
+                sync_inputs(&mut model);
+            }
+            Msg::SelectItem(id) => {
+                model.set_selected(id);
+                model.time = 0.0;
+                model.gen += 1;
+                sync_inputs(&mut model);
+            }
+            Msg::SelectTool(i) => model.tool_tab = i,
+            Msg::NewItem => {
+                let id = new_item(&mut model);
+                model.set_selected(id);
+                model.gen += 1;
+                model.status = format!("nuevo en {}", model.level.label());
+                sync_inputs(&mut model);
+            }
+            Msg::DupItem => {
+                if let Some(id) = duplicate_item(&mut model) {
+                    model.set_selected(id);
+                    model.gen += 1;
+                    model.status = "duplicado".into();
+                    sync_inputs(&mut model);
                 }
             }
-            Msg::Set(field, v) => {
-                if let Some(w) = model.project.worlds.get_mut(model.sel) {
-                    let r = &mut w.recipe;
-                    match field {
-                        Field::Seed => r.seed = v.max(0.0) as u32,
-                        Field::Base => r.base = v.clamp(0.0, 0.9),
-                        Field::Dune => r.dune = v.clamp(0.0, 0.4),
-                        Field::Relief => r.relief = v.clamp(0.0, 1.0),
-                        Field::Mountains => r.mountains = v.clamp(0.0, 1.0),
-                        Field::Water => r.water_level = v.clamp(0.0, 0.9),
-                        Field::Rivers => r.rivers = v.clamp(0.0, 1.0),
-                        Field::PeakAt => r.peak_at = v.clamp(0.0, 1.0),
-                        Field::Flora => r.flora_density = v.clamp(0.0, 0.05),
+            Msg::DelItem => {
+                delete_selected(&mut model);
+                // Reseleccionar el primero que quede.
+                let first = model.items().first().map(|(i, _)| *i).unwrap_or(0);
+                model.set_selected(first);
+                model.gen += 1;
+                model.status = "borrado".into();
+                sync_inputs(&mut model);
+            }
+            Msg::RenameFocus => {
+                model.name_focused = true;
+                model.seed_focused = false;
+                model.ai_focused = false;
+            }
+            Msg::RenameKey(ev) => {
+                model.name_input.apply_key(&ev);
+                let txt = model.name_input.text();
+                set_selected_name(&mut model, txt);
+            }
+            Msg::CycleLeyKind => {
+                if let Some(l) = model.project.leyes.iter_mut().find(|x| x.id == model.sel[0]) {
+                    l.kind = l.kind.next();
+                }
+            }
+            Msg::SetLeyParam(i, v) => {
+                if let Some(l) = model.project.leyes.iter_mut().find(|x| x.id == model.sel[0]) {
+                    l.kind.set_param(i, v);
+                }
+            }
+            Msg::CycleMatRole => {
+                if let Some(m) = sel_material_mut(&mut model) {
+                    m.role = match m.role {
+                        MatRole::Terreno => MatRole::Objeto(Forma::Columnar),
+                        MatRole::Objeto(_) => MatRole::Terreno,
+                    };
+                    model.gen += 1;
+                }
+            }
+            Msg::SetMatColor(ch, v) => {
+                if let Some(m) = sel_material_mut(&mut model) {
+                    let mut c = m.color.unwrap_or([0.6, 0.6, 0.6]);
+                    if ch < 3 {
+                        c[ch] = v.clamp(0.0, 1.0);
+                    }
+                    m.color = Some(c);
+                    model.gen += 1;
+                }
+            }
+            Msg::SetMatGrain(v) => {
+                if let Some(m) = sel_material_mut(&mut model) {
+                    m.grain = Some(v.clamp(0.0, 1.0));
+                    model.gen += 1;
+                }
+            }
+            Msg::CycleMatParent => {
+                let id = model.sel[1];
+                // Lista de candidatos a padre (todos menos sí mismo).
+                let cands: Vec<u64> = model.project.materiales.iter().map(|m| m.id).filter(|&i| i != id).collect();
+                if let Some(m) = sel_material_mut(&mut model) {
+                    m.parent = next_option(m.parent, &cands);
+                    model.gen += 1;
+                }
+            }
+            Msg::AddMatLey => {
+                let first_ley = model.project.leyes.first().map(|l| l.id);
+                if let (Some(ley), Some(m)) = (first_ley, sel_material_mut(&mut model)) {
+                    m.leyes.push(LeyUso { ley, params: vec![] });
+                }
+            }
+            Msg::RemoveMatLey => {
+                if let Some(m) = sel_material_mut(&mut model) {
+                    m.leyes.pop();
+                }
+            }
+            Msg::CycleSereAge => {
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    c.age = c.age.next();
+                }
+            }
+            Msg::SetSereColor(part, ch, v) => {
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    let rgb = match part {
+                        Part::Skin => &mut c.skin,
+                        Part::Shirt => &mut c.shirt,
+                        Part::Pants => &mut c.pants,
+                    };
+                    if ch < 3 {
+                        rgb[ch] = v.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            Msg::SetBiomaField(f, v) => {
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    match f {
+                        BiomaField::Base => b.base = v.clamp(0.0, 0.9),
+                        BiomaField::Dune => b.dune = v.clamp(0.0, 0.4),
+                        BiomaField::Relief => b.relief = v.clamp(0.0, 1.0),
+                        BiomaField::Mountains => b.mountains = v.clamp(0.0, 1.0),
+                        BiomaField::Water => b.water_level = v.clamp(0.0, 0.9),
+                        BiomaField::Rivers => b.rivers = v.clamp(0.0, 1.0),
+                        BiomaField::PeakAt => b.peak_at = v.clamp(0.0, 1.0),
                     }
                     model.gen += 1;
                 }
             }
-            Msg::CycleGround => {
-                if let Some(w) = model.project.worlds.get_mut(model.sel) {
-                    w.recipe.ground = w.recipe.ground.next();
+            Msg::CycleBiomaGround => {
+                let mats = terreno_ids(&model);
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    b.ground = next_in(&mats, b.ground);
                     model.gen += 1;
                 }
             }
-            Msg::CycleCliff => {
-                if let Some(w) = model.project.worlds.get_mut(model.sel) {
-                    w.recipe.cliff = w.recipe.cliff.next();
+            Msg::CycleBiomaCliff => {
+                let mats = terreno_ids(&model);
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    b.cliff = next_in(&mats, b.cliff);
                     model.gen += 1;
                 }
             }
-            Msg::CyclePeak => {
-                if let Some(w) = model.project.worlds.get_mut(model.sel) {
-                    w.recipe.peak = w.recipe.peak.next();
+            Msg::CycleBiomaPeak => {
+                let mats = terreno_ids(&model);
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    b.peak = next_option(b.peak, &mats);
                     model.gen += 1;
                 }
             }
-            Msg::CycleFlora => {
-                if let Some(w) = model.project.worlds.get_mut(model.sel) {
-                    w.recipe.flora = w.recipe.flora.next();
+            Msg::AddBiomaObjeto => {
+                let obj = objeto_ids(&model);
+                if let (Some(&mat), Some(b)) = (obj.first(), sel_bioma_mut(&mut model)) {
+                    b.objetos.push(llimphi_voxel::ObjetoUso { material: mat, densidad: 0.01, forma: Forma::Columnar });
                     model.gen += 1;
                 }
             }
-            Msg::NewWorld => {
-                let n = model.project.worlds.len() + 1;
-                let idx = model
-                    .project
-                    .add_world(llimphi_voxel::NamedWorld::new(
-                        format!("mundo {n}"),
-                        WorldRecipe::grassland(1337 + n as u32),
-                    ));
-                model.sel = idx;
+            Msg::RemoveBiomaObjeto => {
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    b.objetos.pop();
+                    model.gen += 1;
+                }
+            }
+            Msg::SetObjetoDensidad(i, v) => {
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    if let Some(o) = b.objetos.get_mut(i) {
+                        o.densidad = v.clamp(0.0, 0.05);
+                    }
+                    model.gen += 1;
+                }
+            }
+            Msg::SeedFocus => {
+                model.seed_focused = true;
+                model.name_focused = false;
+                model.ai_focused = false;
+            }
+            Msg::SeedKey(ev) => {
+                model.seed_input.apply_key(&ev);
+                if let Ok(s) = model.seed_input.text().trim().parse::<u32>() {
+                    if let Some(m) = sel_mundo_mut(&mut model) {
+                        m.seed = s;
+                        model.gen += 1;
+                    }
+                }
+            }
+            Msg::SeedRandom => {
+                model.rng = model.rng.wrapping_mul(1664525).wrapping_add(1013904223);
+                let s = model.rng % 100_000;
+                if let Some(m) = sel_mundo_mut(&mut model) {
+                    m.seed = s;
+                }
+                model.seed_input.set_text(&s.to_string());
                 model.gen += 1;
-                model.status = format!("mundo nuevo: «{}»", model.project.worlds[idx].name);
             }
-            Msg::Save => match save_project(&model.project) {
-                Ok(_) => model.status = format!("guardado en {PROJECT_PATH}"),
-                Err(e) => model.status = format!("error al guardar: {e}"),
-            },
-            Msg::Load => match load_project() {
-                Ok(p) => {
-                    let n = p.worlds.len();
-                    model.project = p;
-                    model.sel = model.sel.min(n.saturating_sub(1));
-                    model.gen += 1;
-                    model.status = format!("cargado de {PROJECT_PATH} ({n} mundos)");
-                }
-                Err(e) => model.status = format!("error al cargar: {e}"),
-            },
-            Msg::Orbit(dx, dy) => {
-                model.yaw -= dx * 0.008;
-                let lim = std::f32::consts::FRAC_PI_2 - 0.05;
-                model.pitch = (model.pitch + dy * 0.008).clamp(-lim, lim);
-            }
-            Msg::Zoom(dy) => {
-                let f = (1.0 + dy * 0.1).clamp(0.5, 1.5);
-                let xz = PREVIEW_DIM_XZ as f32;
-                model.dist = (model.dist * f).clamp(xz * 0.6, xz * 3.0);
-            }
-            Msg::AiFocus => model.ai_focused = true,
-            Msg::AiKey(ev) => {
-                model.ai_input.apply_key(&ev);
-            }
-            Msg::AiGenerate => {
-                let prompt = model.ai_input.text();
-                if !prompt.trim().is_empty() && !model.ai_busy {
-                    model.ai_busy = true;
-                    model.status = "generando mundo con IA…".into();
-                    let name = world_name_from(&prompt);
-                    handle.spawn(move || Msg::AiResult(ai::generate(&prompt), name));
-                }
-            }
-            Msg::AiResult(recipe, name) => {
-                let idx = model
-                    .project
-                    .add_world(llimphi_voxel::NamedWorld::new(name, recipe));
-                model.sel = idx;
-                model.gen += 1;
-                model.ai_busy = false;
-                model.ai_input.set_text("");
-                model.status = format!("mundo generado: «{}»", model.project.worlds[idx].name);
-            }
-            Msg::SwitchMode(m) => {
-                model.mode = m;
-                model.tool_tab = 0; // cada modo tiene su propio juego de dientes
-                model.gen += 1; // el preview pasa a mostrar otro artefacto
-            }
-            Msg::SelectTool(i) => model.tool_tab = i,
-            Msg::SelectScene(i) => {
-                if i < model.project.scenes.len() {
-                    model.scene_sel = i;
-                    model.time = 0.0;
+            Msg::CycleMundoBioma => {
+                let bids = bioma_ids(&model);
+                if let Some(m) = sel_mundo_mut(&mut model) {
+                    let cur = m.biomas.first().copied().unwrap_or(0);
+                    m.biomas = vec![next_in(&bids, cur)];
                     model.gen += 1;
                 }
             }
-            Msg::CycleSceneWorld => {
-                let nw = model.project.worlds.len().max(1);
-                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
-                    s.world = (s.world + 1) % nw;
+            Msg::CycleSceneMundo => {
+                let mids = mundo_ids(&model);
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    s.mundo = next_in(&mids, s.mundo);
                     model.gen += 1;
                 }
             }
             Msg::SetSceneDur(v) => {
-                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
+                if let Some(s) = sel_scene_mut(&mut model) {
                     s.duration = v.clamp(1.0, 20.0);
                 }
             }
             Msg::TogglePlay => model.playing = !model.playing,
             Msg::Scrub(v) => {
                 model.playing = false;
-                let dur = model.scene().map(|s| s.duration).unwrap_or(1.0);
+                let dur = sel_scene(&model).map(|s| s.duration).unwrap_or(1.0);
                 model.time = v.clamp(0.0, dur);
-            }
-            Msg::AiSceneGenerate => {
-                let prompt = model.ai_input.text();
-                if !prompt.trim().is_empty() && !model.ai_busy {
-                    model.ai_busy = true;
-                    model.status = "generando escena con IA…".into();
-                    let world = model.scene().map(|s| s.world).unwrap_or(model.sel);
-                    let dim = world_dim(PREVIEW_DIM_XZ);
-                    handle.spawn(move || Msg::AiSceneResult(ai::generate_scene(&prompt, world, dim)));
-                }
-            }
-            Msg::AiSceneResult(scene) => {
-                let idx = model.project.add_scene(scene);
-                model.scene_sel = idx;
-                model.time = 0.0;
-                model.playing = true;
-                model.gen += 1;
-                model.ai_busy = false;
-                model.ai_input.set_text("");
-                model.status = format!("escena generada: «{}»", model.project.scenes[idx].name);
             }
             Msg::ToggleSceneCam => model.script_cam = !model.script_cam,
             Msg::AddShot => {
                 let t = model.time;
-                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
-                    // El tipo del plano nuevo cicla por la cantidad ya puesta.
+                if let Some(s) = sel_scene_mut(&mut model) {
                     let kind = ShotKind::ALL[s.shots.len() % ShotKind::ALL.len()];
                     s.shots.push(ShotSpec { start: t, kind });
                     s.shots.sort_by(|a, b| a.start.total_cmp(&b.start));
-                    model.status = format!("plano agregado: {} @ {t:.1}s", kind.label());
+                    model.status = format!("plano: {} @ {t:.1}s", kind.label());
                 }
             }
             Msg::RemoveShot => {
-                if let Some(s) = model.project.scenes.get_mut(model.scene_sel) {
+                if let Some(s) = sel_scene_mut(&mut model) {
                     s.shots.pop();
-                    model.status = "último plano quitado".into();
                 }
             }
             Msg::ExportVideo => {
                 if !model.exporting {
-                    if let Some(scene) = model.scene().cloned() {
+                    if let Some(scene) = sel_scene(&model).cloned() {
                         model.exporting = true;
                         model.status = "exportando video… (puede tardar)".into();
                         let project = model.project.clone();
@@ -439,61 +636,120 @@ impl App for Studio {
                     Err(e) => format!("export falló: {e}"),
                 };
             }
-            Msg::SelectChar(i) => {
-                if i < model.project.characters.len() {
-                    model.char_sel = i;
-                }
+            Msg::Orbit(dx, dy) => {
+                model.yaw -= dx * 0.008;
+                let lim = std::f32::consts::FRAC_PI_2 - 0.05;
+                model.pitch = (model.pitch + dy * 0.008).clamp(-lim, lim);
             }
-            Msg::CycleCharAge => {
-                if let Some(c) = model.project.characters.get_mut(model.char_sel) {
-                    c.age = c.age.next();
-                }
+            Msg::Zoom(dy) => {
+                let f = (1.0 + dy * 0.1).clamp(0.5, 1.5);
+                let xz = PREVIEW_DIM_XZ as f32;
+                model.dist = (model.dist * f).clamp(xz * 0.6, xz * 3.0);
             }
-            Msg::SetColor(part, ch, v) => {
-                if let Some(c) = model.project.characters.get_mut(model.char_sel) {
-                    let rgb = match part {
-                        Part::Skin => &mut c.skin,
-                        Part::Shirt => &mut c.shirt,
-                        Part::Pants => &mut c.pants,
-                    };
-                    if ch < 3 {
-                        rgb[ch] = v.clamp(0.0, 1.0);
+            Msg::AiFocus => {
+                model.ai_focused = true;
+                model.name_focused = false;
+                model.seed_focused = false;
+            }
+            Msg::AiKey(ev) => {
+                model.ai_input.apply_key(&ev);
+            }
+            Msg::AiGenerate => {
+                let prompt = model.ai_input.text();
+                if prompt.trim().is_empty() || model.ai_busy {
+                    return model;
+                }
+                model.ai_busy = true;
+                model.status = "generando con IA…".into();
+                match model.level {
+                    Level::Biomas | Level::Mundos => {
+                        let refs = MatRefs::from_project(&model.project);
+                        handle.spawn(move || Msg::AiBioma(ai::generate_bioma(&prompt, &refs)));
+                    }
+                    Level::Seres => {
+                        handle.spawn(move || Msg::AiSere(ai::generate_character(&prompt)));
+                    }
+                    Level::Escenas => {
+                        let mundo = model.project.mundos.first().map(|m| m.id).unwrap_or(0);
+                        let dim = world_dim(PREVIEW_DIM_XZ);
+                        handle.spawn(move || Msg::AiScene(ai::generate_scene(&prompt, mundo, dim)));
+                    }
+                    _ => {
+                        model.ai_busy = false;
+                        model.status = "la IA genera biomas, mundos, seres o escenas".into();
                     }
                 }
             }
-            Msg::NewChar => {
-                let n = model.project.characters.len() + 1;
-                model.project.characters.push(CharSpec::new(format!("personaje {n}"), Age::Adult));
-                model.char_sel = model.project.characters.len() - 1;
-                model.status = "personaje nuevo".into();
-            }
-            Msg::AiCharGenerate => {
-                let prompt = model.ai_input.text();
-                if !prompt.trim().is_empty() && !model.ai_busy {
-                    model.ai_busy = true;
-                    model.status = "generando personaje con IA…".into();
-                    handle.spawn(move || Msg::AiCharResult(ai::generate_character(&prompt)));
+            Msg::AiBioma(mut b) => {
+                b.id = model.project.alloc_id();
+                let bid = b.id;
+                let name = b.name.clone();
+                model.project.biomas.push(b);
+                // En modo Mundos, envolver el bioma en un mundo nuevo.
+                if model.level == Level::Mundos {
+                    let id = model.project.alloc_id();
+                    model.project.mundos.push(Mundo { id, name: name.clone(), seed: 1337, biomas: vec![bid] });
+                    model.set_selected(id);
+                } else {
+                    model.level = Level::Biomas;
+                    model.set_selected(bid);
                 }
-            }
-            Msg::AiCharResult(cs) => {
-                model.project.characters.push(cs);
-                model.char_sel = model.project.characters.len() - 1;
                 model.ai_busy = false;
                 model.ai_input.set_text("");
-                model.status =
-                    format!("personaje generado: «{}»", model.project.characters[model.char_sel].name);
+                model.gen += 1;
+                model.status = format!("generado: «{name}»");
+                sync_inputs(&mut model);
             }
+            Msg::AiSere(mut c) => {
+                c.id = model.project.alloc_id();
+                let id = c.id;
+                let name = c.name.clone();
+                model.project.seres.push(c);
+                model.level = Level::Seres;
+                model.set_selected(id);
+                model.ai_busy = false;
+                model.ai_input.set_text("");
+                model.status = format!("ser generado: «{name}»");
+                sync_inputs(&mut model);
+            }
+            Msg::AiScene(mut s) => {
+                s.id = model.project.alloc_id();
+                let id = s.id;
+                model.project.escenas.push(s);
+                model.level = Level::Escenas;
+                model.set_selected(id);
+                model.time = 0.0;
+                model.playing = true;
+                model.ai_busy = false;
+                model.ai_input.set_text("");
+                model.gen += 1;
+                model.status = "escena generada".into();
+                sync_inputs(&mut model);
+            }
+            Msg::Save => match save_project(&model.project) {
+                Ok(_) => model.status = format!("guardado en {PROJECT_PATH}"),
+                Err(e) => model.status = format!("error al guardar: {e}"),
+            },
+            Msg::Load => match load_project() {
+                Ok(p) => {
+                    model.project = p;
+                    model.gen += 1;
+                    reselect_all(&mut model);
+                    model.status = format!("cargado de {PROJECT_PATH}");
+                    sync_inputs(&mut model);
+                }
+                Err(e) => model.status = format!("error al cargar: {e}"),
+            },
             Msg::Tick => {
-                if model.mode == Mode::Scenes && model.playing {
-                    if let Some(dur) = model.scene().map(|s| s.duration) {
+                if model.level == Level::Escenas && model.playing {
+                    if let Some(dur) = sel_scene(&model).map(|s| s.duration) {
                         model.time += DT;
                         if model.time >= dur {
-                            model.time = 0.0; // loop
+                            model.time = 0.0;
                         }
                     }
-                } else if model.mode == Mode::Characters {
-                    // Turntable + respiración del personaje en exhibición.
-                    model.time += DT;
+                } else if model.level == Level::Seres {
+                    model.time += DT; // turntable + respiración
                 }
             }
         }
@@ -501,93 +757,98 @@ impl App for Studio {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = &model.theme;
+        // Los sidebars reservan su franja a los lados (el centro lleva un canvas GPU
+        // que, a pantalla completa, taparía el chrome — overlay no es viable acá). La
+        // **orientación** de los dientes sí sigue la convención global: sobresalen
+        // hacia el centro (izq InnerLeft, der InnerRight). `dientes_outside` decide si
+        // las franjas van al ras (FUERA) o flotando con margen (DENTRO).
         View::new(Style {
             flex_direction: FlexDirection::Row,
             size: Size { width: percent(1.0), height: percent(1.0) },
             ..Default::default()
         })
-        .fill(theme.bg_app)
-        .children(vec![
-            left_panel(model),
-            center_canvas(model),
-            right_panel(model),
-        ])
+        .fill(model.theme.bg_app)
+        .children(vec![left_sidebar(model), center(model), right_sidebar(model)])
     }
 }
 
 // =============================================================================
-//  Paneles
+//  Sidebars
 // =============================================================================
 
-/// Panel izquierdo: **rail de modos** (dientes Mundos·Escenas·Gente) al borde +
-/// el contenido del modo (navegación + IA + estado) al costado. Mismo widget de
-/// dientes que el sidebar derecho (`dock_rail_view`).
-fn left_panel(model: &Model) -> View<Msg> {
+/// Sidebar izquierdo: rail de **niveles** (dientes coloridos) + lista del nivel con
+/// CRUD + renombrar + IA + estado.
+fn left_sidebar(model: &Model) -> View<Msg> {
     let theme = &model.theme;
     let btn = ButtonPalette::from_theme(theme);
 
-    // Rail de modos: un diente por modo, el activo sobresale.
-    let active = mode_index(model.mode);
-    let mode_items: Vec<DockRailItem> = (0..3)
+    // Rail de niveles. El diente abre hacia el centro (a la derecha) → InnerLeft.
+    let active = model.level.index();
+    let items: Vec<DockRailItem> = (0..Level::ALL.len())
         .map(|i| DockRailItem { id: i as u64, active: i == active })
         .collect();
-    let rail = dock_rail_view(
-        &mode_items,
+    let rail = dock_rail_view_side(
+        &items,
         46.0,
+        DockRailSide::InnerLeft,
         &DockRailPalette::from_theme(theme),
-        |id, size, color| {
-            View::new(Style::default())
-                .text(["Mu", "Es", "Ge"][id as usize].to_string(), size * 0.7, color)
+        |id, _size, _color| {
+            let lvl = Level::from_index(id as usize);
+            icon_view(lvl.icon(), lvl.color(), 1.8)
         },
-        |id| Msg::SwitchMode(mode_from_index(id as usize)),
+        |id| Msg::SelectLevel(Level::from_index(id as usize)),
         |_| None,
     );
 
-    // Contenido del modo: navegación propia…
+    // Contenido: título + lista + CRUD + renombrar.
     let mut rows: Vec<View<Msg>> = Vec::new();
-    match model.mode {
-        Mode::Worlds => worlds_left(model, &btn, &mut rows),
-        Mode::Scenes => scenes_left(model, &btn, &mut rows),
-        Mode::Characters => chars_left(model, &btn, &mut rows),
+    rows.push(section_title(model.level.label(), theme));
+    for (id, name) in model.items() {
+        rows.push(selectable_row(name, id == model.selected(), Msg::SelectItem(id), theme));
+    }
+    rows.push(spacer(8.0));
+    // Botonera CRUD en fila.
+    rows.push(crud_row(&btn));
+    rows.push(spacer(8.0));
+    rows.push(section_title("NOMBRE", theme));
+    rows.push(text_input_view(
+        &model.name_input,
+        "nombre…",
+        model.name_focused,
+        &TextInputPalette::from_theme(theme),
+        Msg::RenameFocus,
+    ));
+
+    // IA (según nivel).
+    if matches!(model.level, Level::Biomas | Level::Mundos | Level::Seres | Level::Escenas) {
+        let hint = match model.level {
+            Level::Biomas | Level::Mundos => "p.ej. islas con ríos y nieve",
+            Level::Seres => "p.ej. una niña de remera verde",
+            _ => "p.ej. tres personajes que festejan",
+        };
+        rows.push(spacer(12.0));
+        rows.push(section_title("IA — DESCRIBÍ", theme));
+        rows.push(text_input_view(
+            &model.ai_input,
+            hint,
+            model.ai_focused,
+            &TextInputPalette::from_theme(theme),
+            Msg::AiFocus,
+        ));
+        rows.push(spacer(6.0));
+        rows.push(button_view(
+            if model.ai_busy { "generando…" } else { "generar (IA)" },
+            &btn,
+            Msg::AiGenerate,
+        ));
     }
 
-    // …IA compartida (rótulo/acción según modo)…
-    let (ai_title, ai_hint, ai_msg): (&str, &str, Msg) = match model.mode {
-        Mode::Worlds => (
-            "IA — DESCRIBÍ UN MUNDO",
-            "p.ej. islas con ríos y nieve",
-            Msg::AiGenerate,
-        ),
-        Mode::Scenes => (
-            "IA — DESCRIBÍ UNA ESCENA",
-            "p.ej. tres personajes que festejan",
-            Msg::AiSceneGenerate,
-        ),
-        Mode::Characters => (
-            "IA — DESCRIBÍ UN PERSONAJE",
-            "p.ej. una niña de remera verde",
-            Msg::AiCharGenerate,
-        ),
-    };
-    rows.push(spacer(14.0));
-    rows.push(section_title(ai_title, theme));
-    rows.push(text_input_view(
-        &model.ai_input,
-        ai_hint,
-        model.ai_focused,
-        &TextInputPalette::from_theme(theme),
-        Msg::AiFocus,
-    ));
-    rows.push(spacer(6.0));
-    rows.push(button_view(
-        if model.ai_busy { "generando…" } else { "generar (IA)" },
-        &btn,
-        ai_msg,
-    ));
-
-    // …y el estado al pie.
+    // Guardar/cargar + estado.
     rows.push(spacer(12.0));
+    rows.push(button_view("guardar", &btn, Msg::Save));
+    rows.push(spacer(4.0));
+    rows.push(button_view("cargar", &btn, Msg::Load));
+    rows.push(spacer(10.0));
     rows.push(
         View::new(Style {
             size: Size { width: percent(1.0), height: Dimension::auto() },
@@ -607,176 +868,187 @@ fn left_panel(model: &Model) -> View<Msg> {
     })
     .children(rows);
 
-    View::new(Style {
+    // Contenido a la izquierda (borde exterior), rail a la derecha (borde interno).
+    sidebar_frame(theme, 256.0, !model.dientes_outside, vec![content, rail])
+}
+
+/// Sidebar derecho: rail de **herramientas** del nivel (dientes coloridos, espejados
+/// hacia el centro) + el editor del set activo.
+fn right_sidebar(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let tools = model.level.tools();
+    let tab = model.tool_tab.min(tools.len().saturating_sub(1));
+    let lvl_color = model.level.color();
+
+    let items: Vec<DockRailItem> = (0..tools.len())
+        .map(|i| DockRailItem { id: i as u64, active: i == tab })
+        .collect();
+    let icons: Vec<Icon> = tools.iter().map(|(_, ic)| *ic).collect();
+    let rail = dock_rail_view_side(
+        &items,
+        46.0,
+        DockRailSide::InnerRight,
+        &DockRailPalette::from_theme(theme),
+        move |id, _size, _color| icon_view(icons[id as usize], lvl_color, 1.8),
+        |id| Msg::SelectTool(id as usize),
+        |_| None,
+    );
+
+    let panel = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0), height: percent(1.0) },
+        padding: pad(14.0, 14.0),
+        gap: gap_y(8.0),
+        ..Default::default()
+    })
+    .children(editor(model, tab));
+
+    // Rail a la izquierda (borde interno hacia el centro), editor a la derecha.
+    sidebar_frame(theme, 300.0, !model.dientes_outside, vec![rail, panel])
+}
+
+/// Marco común de un sidebar (fondo de panel + ancho fijo + fila rail/contenido).
+/// `floating` (dientes DENTRO) le da margen y esquinas redondeadas para que la franja
+/// "flote"; al ras (FUERA) va pegada al borde.
+fn sidebar_frame(theme: &Theme, width: f32, floating: bool, children: Vec<View<Msg>>) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::prelude::Rect;
+    let m = if floating { 6.0 } else { 0.0 };
+    let mut v = View::new(Style {
         flex_direction: FlexDirection::Row,
-        size: Size { width: length(256.0), height: percent(1.0) },
+        size: Size { width: length(width), height: percent(1.0) },
+        margin: Rect { left: length(m), right: length(m), top: length(m), bottom: length(m) },
         padding: pad(0.0, 6.0),
         gap: Size { width: length(4.0), height: length(0.0) },
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![rail, content])
+    .children(children);
+    if floating {
+        v = v.radius(10.0);
+    }
+    v
 }
 
-/// Índice del modo (para mapearlo a un diente del rail) y su inversa.
-fn mode_index(m: Mode) -> usize {
-    match m {
-        Mode::Worlds => 0,
-        Mode::Scenes => 1,
-        Mode::Characters => 2,
-    }
-}
-fn mode_from_index(i: usize) -> Mode {
-    match i {
-        0 => Mode::Worlds,
-        1 => Mode::Scenes,
-        _ => Mode::Characters,
-    }
-}
-
-/// Fila seleccionable (mundo o escena) de la lista izquierda.
-fn selectable_row(label: String, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
+/// Fila de botones CRUD: nuevo · duplicar · borrar.
+fn crud_row(btn: &ButtonPalette) -> View<Msg> {
     View::new(Style {
-        size: Size { width: percent(1.0), height: length(30.0) },
-        align_items: Some(AlignItems::Center),
-        padding: pad(10.0, 0.0),
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0), height: Dimension::auto() },
+        gap: Size { width: length(4.0), height: length(0.0) },
         ..Default::default()
     })
-    .fill(if selected { theme.bg_selected } else { theme.bg_panel })
-    .radius(6.0)
-    .text(label, 15.0, if selected { theme.fg_text } else { theme.fg_muted })
-    .on_click(msg)
+    .children(vec![
+        cell(button_view("+ nuevo", btn, Msg::NewItem)),
+        cell(button_view("duplicar", btn, Msg::DupItem)),
+        cell(button_view("borrar", btn, Msg::DelItem)),
+    ])
 }
 
-/// Contenido izquierdo del modo Mundos.
-fn worlds_left(model: &Model, btn: &ButtonPalette, rows: &mut Vec<View<Msg>>) {
+/// Celda que crece para repartir el ancho de una fila.
+fn cell(child: View<Msg>) -> View<Msg> {
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .children(vec![child])
+}
+
+// =============================================================================
+//  Centro (preview)
+// =============================================================================
+
+fn center(model: &Model) -> View<Msg> {
     let theme = &model.theme;
-    rows.push(section_title("MUNDOS", theme));
-    for (i, w) in model.project.worlds.iter().enumerate() {
-        rows.push(selectable_row(w.name.clone(), i == model.sel, Msg::Select(i), theme));
-    }
-    rows.push(spacer(10.0));
-    rows.push(button_view("nuevo mundo", btn, Msg::NewWorld));
-    rows.push(spacer(6.0));
-    rows.push(button_view("guardar", btn, Msg::Save));
-    rows.push(spacer(6.0));
-    rows.push(button_view("cargar", btn, Msg::Load));
+    let inner = match model.level {
+        Level::Leyes => placeholder_2d(
+            "Las Leyes son comportamientos (sin simular aún). Editá sus parámetros a la derecha.",
+            theme,
+        ),
+        Level::Materiales => material_swatch(model),
+        _ => canvas_3d(model),
+    };
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: Dimension::auto(), height: percent(1.0) },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(12, 14, 18, 255))
+    .children(vec![inner])
 }
 
-/// Contenido izquierdo del modo Escenas: lista + reproducción.
-fn scenes_left(model: &Model, btn: &ButtonPalette, rows: &mut Vec<View<Msg>>) {
-    let theme = &model.theme;
-    rows.push(section_title("ESCENAS", theme));
-    for (i, s) in model.project.scenes.iter().enumerate() {
-        rows.push(selectable_row(s.name.clone(), i == model.scene_sel, Msg::SelectScene(i), theme));
-    }
-    rows.push(spacer(10.0));
-    rows.push(button_view("guardar", btn, Msg::Save));
-    rows.push(spacer(6.0));
-    rows.push(button_view("cargar", btn, Msg::Load));
-
-    rows.push(spacer(12.0));
-    rows.push(section_title("REPRODUCCIÓN", theme));
-    rows.push(button_view(
-        if model.playing { "❚❚ pausa" } else { "▶ reproducir" },
-        btn,
-        Msg::TogglePlay,
-    ));
-    rows.push(spacer(6.0));
-    let dur = model.scene().map(|s| s.duration).unwrap_or(1.0);
-    let t = model.time;
-    rows.push(slider_view(
-        "tiempo",
-        t.min(dur),
-        0.0,
-        dur,
-        &SliderPalette::from_theme(theme),
-        move |_phase, dv| Some(Msg::Scrub(t + dv)),
-    ));
+/// Mensaje centrado para niveles sin preview 3D.
+fn placeholder_2d(text: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        size: Size { width: percent(1.0), height: percent(1.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(llimphi_ui::llimphi_layout::taffy::prelude::JustifyContent::Center),
+        padding: pad(40.0, 40.0),
+        ..Default::default()
+    })
+    .children(vec![View::new(Style {
+        size: Size { width: percent(0.7), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .text(text.to_string(), 16.0, theme.fg_muted)
+    .max_lines(4)])
 }
 
-/// Contenido izquierdo del modo Personajes: lista + nuevo.
-fn chars_left(model: &Model, btn: &ButtonPalette, rows: &mut Vec<View<Msg>>) {
-    let theme = &model.theme;
-    rows.push(section_title("GENTE", theme));
-    for (i, c) in model.project.characters.iter().enumerate() {
-        let label = format!("{} · {}", c.name, c.age.label());
-        rows.push(selectable_row(label, i == model.char_sel, Msg::SelectChar(i), theme));
-    }
-    rows.push(spacer(10.0));
-    rows.push(button_view("nuevo personaje", btn, Msg::NewChar));
-    rows.push(spacer(6.0));
-    rows.push(button_view("guardar", btn, Msg::Save));
-    rows.push(spacer(6.0));
-    rows.push(button_view("cargar", btn, Msg::Load));
+/// Swatch grande del color resuelto del material seleccionado.
+fn material_swatch(model: &Model) -> View<Msg> {
+    let c = model.project.resolve_material(model.sel[1]).color;
+    let col = Color::from_rgba8(c[0], c[1], c[2], 255);
+    View::new(Style {
+        position: Position::Absolute,
+        size: Size { width: percent(1.0), height: percent(1.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(llimphi_ui::llimphi_layout::taffy::prelude::JustifyContent::Center),
+        padding: pad(60.0, 60.0),
+        ..Default::default()
+    })
+    .children(vec![View::new(Style {
+        size: Size { width: percent(0.6), height: percent(0.6) },
+        ..Default::default()
+    })
+    .fill(col)
+    .radius(16.0)])
 }
 
-/// Centro: el canvas 3D del preview en vivo, draggable para orbitar. En modo
-/// Escenas, además posa y anima los actores del guion en el instante `time`; en
-/// modo Personajes, exhibe al personaje seleccionado en turntable.
-fn center_canvas(model: &Model) -> View<Msg> {
+/// Canvas 3D: terreno del artefacto + (en escenas) los actores posados.
+fn canvas_3d(model: &Model) -> View<Msg> {
     let (yaw, pitch, dist, gen) = (model.yaw, model.pitch, model.dist, model.gen);
     let preview = model.preview.clone();
-
+    let mr = model.preview_render();
     let absolute = Style {
         position: Position::Absolute,
         size: Size { width: percent(1.0), height: percent(1.0) },
         ..Default::default()
     };
 
-    let canvas = match model.mode {
-        Mode::Worlds => {
-            let recipe = model.recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
-            View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
-                let dim = world_dim(PREVIEW_DIM_XZ);
-                let mut guard = preview.lock().unwrap();
-                let p =
-                    guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
-                p.rebuild_if(device, queue, &recipe, dim, gen);
-                let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
-                p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
-            })
-        }
-        Mode::Scenes => {
-            let recipe = model.scene_recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
-            let scene = model.scene().cloned();
+    let canvas = match model.level {
+        Level::Escenas => {
+            let scene = sel_scene(model).cloned();
             let script_cam = model.script_cam;
-            let scripts: Vec<ActorScript> =
-                scene.as_ref().map(|s| s.scripts()).unwrap_or_default();
+            let scripts: Vec<ActorScript> = scene.as_ref().map(|s| s.scripts()).unwrap_or_default();
             let chars: Vec<CharSpec> = scene
                 .as_ref()
-                .map(|s| {
-                    s.actors
-                        .iter()
-                        .map(|a| model.project.character_or_default(a.character))
-                        .collect()
-                })
+                .map(|s| s.actors.iter().map(|a| model.project.character_or_default(a.character)).collect())
                 .unwrap_or_default();
             let time = model.time;
             View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
                 let dim = world_dim(PREVIEW_DIM_XZ);
                 let mut guard = preview.lock().unwrap();
-                let p =
-                    guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
-                // Mundo infinito: la ventana voxel SIGUE al reparto (no es una caja
-                // fija). El origen se snappea al centroide → la cámara (que mira al
-                // centroide en espacio de ventana), el terreno y los actores se
-                // trasladan juntos: sin pop, pero sin borde. Sin reparto → centrado.
+                let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
                 let origin = window_origin_for_cast(&scripts, time, dim);
-                p.ensure_window(device, queue, &recipe, gen, origin);
-                // Primero ubicar a los actores sobre el relieve para encuadrar al
-                // reparto (su centroide), no el mundo entero — si no, salen diminutos.
-                // El shader voxel espera coords CENTRADAS (grilla centrada en el
-                // origen: world = grilla − dim/2). Sin esto el reparto del guion
-                // "flota" en cielo vacío (el terreno queda corrido fuera de cuadro).
+                p.ensure_window(device, queue, &mr, gen, origin);
                 let half = Vec3::new(dim[0] as f32, dim[1] as f32, dim[2] as f32) * 0.5;
                 let mut poses = Vec::with_capacity(scripts.len());
                 let mut centroid = Vec3::ZERO;
                 for (script, ch) in scripts.iter().zip(&chars) {
-                    // Cuantización por actor (Héroe en doses) — igual que el export.
                     let at = script.quantize(time);
                     let s = script.sample(at);
-                    // Coords de MUNDO → la ventana que sigue al reparto las mapea.
                     let pos = p.ground_at_world(s.gx as i32, s.gz as i32) - half;
                     centroid += pos;
                     poses.push((pos, s, ch, at));
@@ -786,15 +1058,12 @@ fn center_canvas(model: &Model) -> View<Msg> {
                 } else {
                     centroid / poses.len() as f32 + Vec3::new(0.0, 1.0, 0.0)
                 };
-                // Cámara: en modo guion, el plano vigente; si no, órbita libre
-                // (la rueda, que mueve `dist`, acerca/aleja).
                 let cast_d = 6.0 + poses.len() as f32 * 1.2;
                 let scene_dist = (dist * 0.18).clamp(10.0, 70.0);
                 let camera = match (script_cam, &scene) {
                     (true, Some(sc)) => sc.camera_at(look, cast_d, time),
                     _ => Camera3d::orbit(look, yaw, pitch, scene_dist),
                 };
-                // Posar cada actor (mirando a la cámara) y mallar.
                 let mut metas = Vec::with_capacity(poses.len());
                 for (pos, s, ch, at) in &poses {
                     let mut a = ch.to_actor(*pos, s.facing);
@@ -804,206 +1073,271 @@ fn center_canvas(model: &Model) -> View<Msg> {
                     let (v, i) = a.mesh();
                     metas.push((a.model(), v, i));
                 }
-                p.render_scene(
-                    device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera,
-                    &metas,
-                );
+                p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
             })
         }
-        Mode::Characters => {
-            let recipe = model.recipe().unwrap_or_else(|| WorldRecipe::grassland(1));
-            let charspec = model.char_spec().cloned();
+        Level::Seres => {
+            let sere = sel_sere(model).cloned();
             let time = model.time;
             View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
                 let dim = world_dim(PREVIEW_DIM_XZ);
                 let mut guard = preview.lock().unwrap();
-                let p =
-                    guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
-                p.rebuild_if(device, queue, &recipe, dim, gen);
-                // El personaje en el centro del mundo, en turntable; cámara cerca.
+                let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
+                p.rebuild_if(device, queue, &mr, dim, gen);
                 let pos = p.ground_at(dim[0] / 2, dim[2] / 2);
                 let look = pos + Vec3::new(0.0, 1.0, 0.0);
                 let cam_dist = (dist * 0.06).clamp(3.5, 14.0);
                 let camera = Camera3d::orbit(look, yaw, pitch, cam_dist);
-                let metas = match &charspec {
+                let metas = match &sere {
                     Some(cs) => {
-                        let mut a = cs.to_actor(pos, time * 0.6); // gira despacio
-                        a.advance(time); // respira (Idle)
+                        let mut a = cs.to_actor(pos, time * 0.6);
+                        a.advance(time);
                         let (v, i) = a.mesh();
                         vec![(a.model(), v, i)]
                     }
                     None => Vec::new(),
                 };
-                p.render_scene(
-                    device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera,
-                    &metas,
-                );
+                p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
             })
         }
+        // Mundos / Biomas: sólo el terreno, en órbita.
+        _ => View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
+            let dim = world_dim(PREVIEW_DIM_XZ);
+            let mut guard = preview.lock().unwrap();
+            let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
+            p.rebuild_if(device, queue, &mr, dim, gen);
+            let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
+            p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
+        }),
     }
     .draggable(|phase, dx, dy| match phase {
         DragPhase::Move => Some(Msg::Orbit(dx, dy)),
         DragPhase::End => None,
     });
 
-    View::new(Style {
-        flex_grow: 1.0,
-        size: Size { width: Dimension::auto(), height: percent(1.0) },
-        ..Default::default()
-    })
-    .fill(Color::from_rgba8(12, 14, 18, 255))
-    .children(vec![canvas])
+    canvas
 }
 
-/// Centro de órbita: el medio del mundo (grilla `[0,dim]`), algo por debajo del
-/// tope para encuadrar el relieve.
+/// Centro de órbita: el medio del mundo, algo por debajo del tope.
 fn orbit_center(dim: [u32; 3]) -> Vec3 {
     Vec3::new(dim[0] as f32 * 0.5, dim[1] as f32 * 0.32, dim[2] as f32 * 0.5)
 }
 
-/// Panel derecho: **rail de dientes** (un set de herramientas por diente) pegado al
-/// borde interno + el panel del set activo al costado. Sigue el patrón canónico de
-/// `llimphi-widget-dock-rail` (items→ids, `make_icon`, `on_activate`), como cosmos.
-fn right_panel(model: &Model) -> View<Msg> {
-    let theme = &model.theme;
-    let icons = tool_icons(model.mode);
-    let tab = model.tool_tab.min(icons.len().saturating_sub(1));
+// =============================================================================
+//  Editores por nivel (rail derecho)
+// =============================================================================
 
-    // Dientes: uno por set de herramientas del modo. El diente activo "sobresale".
-    let rail_items: Vec<DockRailItem> = (0..icons.len())
-        .map(|i| DockRailItem { id: i as u64, active: i == tab })
-        .collect();
-    let labels = icons.clone();
-    let rail = dock_rail_view(
-        &rail_items,
-        46.0,
-        &DockRailPalette::from_theme(theme),
-        move |id, size, color| {
-            View::new(Style::default()).text(labels[id as usize].to_string(), size * 0.7, color)
-        },
-        |id| Msg::SelectTool(id as usize),
-        |_payload| None,
-    );
-
-    // Panel del set activo.
-    let panel = View::new(Style {
-        flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
-        size: Size { width: percent(0.0), height: percent(1.0) },
-        padding: pad(14.0, 14.0),
-        gap: gap_y(8.0),
-        ..Default::default()
-    })
-    .children(tool_content(model, tab));
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: length(300.0), height: percent(1.0) },
-        padding: pad(0.0, 6.0),
-        gap: Size { width: length(4.0), height: length(0.0) },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .children(vec![rail, panel])
-}
-
-/// Etiqueta corta de cada diente (set de herramientas) por modo.
-fn tool_icons(mode: Mode) -> Vec<&'static str> {
-    match mode {
-        Mode::Worlds => vec!["Re", "Ag", "Mt", "Fl"],
-        Mode::Scenes => vec!["Es", "Cá", "Vi"],
-        Mode::Characters => vec!["Cu", "Pi", "Cm", "Pa"],
+fn editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
+    match model.level {
+        Level::Leyes => ley_editor(model),
+        Level::Materiales => material_editor(model, tab),
+        Level::Seres => sere_editor(model, tab),
+        Level::Biomas => bioma_editor(model, tab),
+        Level::Mundos => mundo_editor(model, tab),
+        Level::Escenas => scene_editor(model, tab),
     }
 }
 
-/// Contenido del set de herramientas activo (`tab`) según el modo.
-fn tool_content(model: &Model, tab: usize) -> Vec<View<Msg>> {
-    match model.mode {
-        Mode::Worlds => world_tools(model, tab),
-        Mode::Scenes => scene_tools(model, tab),
-        Mode::Characters => char_tools(model, tab),
-    }
-}
-
-/// Slider de un campo de la receta (helper de los sets de mundo).
-fn wslider(
-    sp: &SliderPalette,
-    label: &str,
-    value: f32,
-    min: f32,
-    max: f32,
-    field: Field,
-) -> View<Msg> {
-    slider_view(label, value, min, max, sp, move |_phase, dv| Some(Msg::Set(field, value + dv)))
-}
-
-/// Sets de herramientas del modo Mundos: Relieve · Agua · Materiales · Flora.
-fn world_tools(model: &Model, tab: usize) -> Vec<View<Msg>> {
+fn ley_editor(model: &Model) -> Vec<View<Msg>> {
     let theme = &model.theme;
     let sp = SliderPalette::from_theme(theme);
     let btn = ButtonPalette::from_theme(theme);
-    let Some(r) = model.recipe() else {
-        return vec![section_title("sin mundo seleccionado", theme)];
+    let Some(l) = model.project.ley(model.sel[0]) else {
+        return vec![section_title("sin ley — creá una", theme)];
+    };
+    let mut v = vec![
+        section_title("LEY", theme),
+        button_view(format!("tipo: {}", l.kind.label()), &btn, Msg::CycleLeyKind),
+        spacer(6.0),
+        section_title("PARÁMETROS", theme),
+    ];
+    if l.kind.params().is_empty() {
+        v.push(body_text("este tipo no tiene parámetros".into(), theme.fg_placeholder, theme));
+    }
+    for (i, (name, value, min, max)) in l.kind.params().into_iter().enumerate() {
+        v.push(slider_view(name, value, min, max, &sp, move |_p, dv| Some(Msg::SetLeyParam(i, value + dv))));
+    }
+    v
+}
+
+fn material_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+    let Some(m) = model.project.material(model.sel[1]) else {
+        return vec![section_title("sin material — creá uno", theme)];
+    };
+    if tab == 0 {
+        let resolved = model.project.resolve_material(m.id);
+        let parent_name = m
+            .parent
+            .and_then(|pid| model.project.material(pid))
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "— ninguno".into());
+        let rgb = m.color.unwrap_or([
+            resolved.color[0] as f32 / 255.0,
+            resolved.color[1] as f32 / 255.0,
+            resolved.color[2] as f32 / 255.0,
+        ]);
+        let grain = m.grain.unwrap_or(resolved.grain);
+        let mut v = vec![
+            section_title("ASPECTO", theme),
+            button_view(format!("rol: {}", m.role.label()), &btn, Msg::CycleMatRole),
+            spacer(4.0),
+            button_view(format!("padre: {parent_name}"), &btn, Msg::CycleMatParent),
+            spacer(6.0),
+            section_title("COLOR", theme),
+        ];
+        for (ch, label) in [(0usize, "rojo"), (1, "verde"), (2, "azul")] {
+            let val = rgb[ch];
+            v.push(slider_view(label, val, 0.0, 1.0, &sp, move |_p, dv| Some(Msg::SetMatColor(ch, val + dv))));
+        }
+        v.push(slider_view("grano", grain, 0.0, 1.0, &sp, move |_p, dv| Some(Msg::SetMatGrain(grain + dv))));
+        v
+    } else {
+        let mut v = vec![section_title("LEYES DEL MATERIAL", theme)];
+        for u in &m.leyes {
+            let name = model.project.ley(u.ley).map(|l| l.name.clone()).unwrap_or_else(|| "?".into());
+            v.push(body_text(format!("· {name}"), theme.fg_text, theme));
+        }
+        if m.leyes.is_empty() {
+            v.push(body_text("sin leyes aplicadas".into(), theme.fg_placeholder, theme));
+        }
+        v.push(spacer(6.0));
+        v.push(button_view("+ agregar ley", &btn, Msg::AddMatLey));
+        v.push(spacer(4.0));
+        v.push(button_view("− quitar última", &btn, Msg::RemoveMatLey));
+        v
+    }
+}
+
+fn sere_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+    let Some(c) = sel_sere(model) else {
+        return vec![section_title("sin ser — creá o generá uno", theme)];
     };
     match tab {
         0 => vec![
-            section_title("RELIEVE", theme),
-            wslider(&sp, "semilla", r.seed as f32, 0.0, 64.0, Field::Seed),
-            wslider(&sp, "base (llanura)", r.base, 0.0, 0.9, Field::Base),
-            wslider(&sp, "dunas", r.dune, 0.0, 0.4, Field::Dune),
-            wslider(&sp, "relieve (alto)", r.relief, 0.0, 1.0, Field::Relief),
-            wslider(&sp, "densidad montañas", r.mountains, 0.0, 1.0, Field::Mountains),
+            section_title("CUERPO", theme),
+            button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleSereAge),
         ],
-        1 => vec![
-            section_title("AGUA", theme),
-            wslider(&sp, "nivel del agua", r.water_level, 0.0, 0.9, Field::Water),
-            wslider(&sp, "densidad ríos", r.rivers, 0.0, 1.0, Field::Rivers),
-        ],
-        2 => vec![
-            section_title("MATERIALES", theme),
-            button_view(format!("suelo: {}", r.ground.label()), &btn, Msg::CycleGround),
-            spacer(4.0),
-            button_view(format!("acantilado: {}", r.cliff.label()), &btn, Msg::CycleCliff),
-            spacer(4.0),
-            button_view(format!("cumbre: {}", r.peak.label()), &btn, Msg::CyclePeak),
-            wslider(&sp, "altura cumbre", r.peak_at, 0.0, 1.0, Field::PeakAt),
-        ],
-        _ => vec![
-            section_title("FLORA", theme),
-            button_view(format!("tipo: {}", r.flora.label()), &btn, Msg::CycleFlora),
-            wslider(&sp, "densidad flora", r.flora_density, 0.0, 0.05, Field::Flora),
-        ],
+        1 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),
+        2 => color_tools("CAMISETA", Part::Shirt, c.shirt, &sp, theme),
+        _ => color_tools("PANTALÓN", Part::Pants, c.pants, &sp, theme),
     }
 }
 
-/// Sets de herramientas del modo Escenas: Escena · Cámara · Video.
-fn scene_tools(model: &Model, tab: usize) -> Vec<View<Msg>> {
+fn bioma_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
     let theme = &model.theme;
     let sp = SliderPalette::from_theme(theme);
     let btn = ButtonPalette::from_theme(theme);
-    let Some(s) = model.scene() else {
+    let Some(b) = model.project.bioma(model.sel[3]) else {
+        return vec![section_title("sin bioma — creá uno", theme)];
+    };
+    let mat_name = |id: u64| model.project.material(id).map(|m| m.name.clone()).unwrap_or_else(|| "—".into());
+    match tab {
+        0 => vec![
+            section_title("RELIEVE", theme),
+            bslider(&sp, "base (llanura)", b.base, 0.0, 0.9, BiomaField::Base),
+            bslider(&sp, "dunas", b.dune, 0.0, 0.4, BiomaField::Dune),
+            bslider(&sp, "relieve (alto)", b.relief, 0.0, 1.0, BiomaField::Relief),
+            bslider(&sp, "densidad montañas", b.mountains, 0.0, 1.0, BiomaField::Mountains),
+            bslider(&sp, "nivel del agua", b.water_level, 0.0, 0.9, BiomaField::Water),
+            bslider(&sp, "densidad ríos", b.rivers, 0.0, 1.0, BiomaField::Rivers),
+            bslider(&sp, "altura cumbre", b.peak_at, 0.0, 1.0, BiomaField::PeakAt),
+        ],
+        1 => vec![
+            section_title("MATERIALES", theme),
+            button_view(format!("suelo: {}", mat_name(b.ground)), &btn, Msg::CycleBiomaGround),
+            spacer(4.0),
+            button_view(format!("acantilado: {}", mat_name(b.cliff)), &btn, Msg::CycleBiomaCliff),
+            spacer(4.0),
+            button_view(
+                format!("cumbre: {}", b.peak.map(mat_name).unwrap_or_else(|| "ninguna".into())),
+                &btn,
+                Msg::CycleBiomaPeak,
+            ),
+        ],
+        _ => {
+            let mut v = vec![section_title("OBJETOS", theme)];
+            for (i, o) in b.objetos.iter().enumerate() {
+                let name = mat_name(o.material);
+                v.push(body_text(format!("· {name}"), theme.fg_text, theme));
+                let d = o.densidad;
+                v.push(slider_view("densidad", d, 0.0, 0.05, &sp, move |_p, dv| Some(Msg::SetObjetoDensidad(i, d + dv))));
+            }
+            if b.objetos.is_empty() {
+                v.push(body_text("sin objetos".into(), theme.fg_placeholder, theme));
+            }
+            v.push(spacer(6.0));
+            v.push(button_view("+ objeto", &btn, Msg::AddBiomaObjeto));
+            v.push(spacer(4.0));
+            v.push(button_view("− quitar", &btn, Msg::RemoveBiomaObjeto));
+            v
+        }
+    }
+}
+
+fn mundo_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
+    let theme = &model.theme;
+    let btn = ButtonPalette::from_theme(theme);
+    let Some(m) = model.project.mundo(model.sel[4]) else {
+        return vec![section_title("sin mundo — creá uno", theme)];
+    };
+    if tab == 0 {
+        vec![
+            section_title("SEMILLA", theme),
+            text_input_view(
+                &model.seed_input,
+                "número…",
+                model.seed_focused,
+                &TextInputPalette::from_theme(theme),
+                Msg::SeedFocus,
+            ),
+            spacer(6.0),
+            button_view("🎲 random", &btn, Msg::SeedRandom),
+            spacer(8.0),
+            body_text(format!("semilla actual: {}", m.seed), theme.fg_muted, theme),
+        ]
+    } else {
+        let bname = m
+            .biomas
+            .first()
+            .and_then(|&id| model.project.bioma(id))
+            .map(|b| b.name.clone())
+            .unwrap_or_else(|| "—".into());
+        vec![
+            section_title("BIOMAS", theme),
+            button_view(format!("bioma: {bname}"), &btn, Msg::CycleMundoBioma),
+            spacer(8.0),
+            body_text("un mundo se compone de uno o más biomas".into(), theme.fg_placeholder, theme),
+        ]
+    }
+}
+
+fn scene_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+    let Some(s) = sel_scene(model) else {
         return vec![section_title("sin escena — generá una con IA", theme)];
     };
     match tab {
         0 => {
             let dur = s.duration;
-            let world_name = model
-                .project
-                .worlds
-                .get(s.world)
-                .map(|w| w.name.clone())
-                .unwrap_or_else(|| "—".into());
+            let mundo_name = model.project.mundo(s.mundo).map(|m| m.name.clone()).unwrap_or_else(|| "—".into());
+            let t = model.time;
             vec![
                 section_title("ESCENA", theme),
-                body_text(format!("«{}»", s.name), theme.fg_text, theme),
+                button_view(format!("mundo: {mundo_name}"), &btn, Msg::CycleSceneMundo),
                 spacer(6.0),
-                section_title("MUNDO DE FONDO", theme),
-                button_view(format!("mundo: {world_name}"), &btn, Msg::CycleSceneWorld),
+                slider_view("duración (s)", dur, 1.0, 20.0, &sp, move |_p, dv| Some(Msg::SetSceneDur(dur + dv))),
                 spacer(6.0),
-                section_title("TIEMPO", theme),
-                slider_view("duración (s)", dur, 1.0, 20.0, &sp, move |_p, dv| {
-                    Some(Msg::SetSceneDur(dur + dv))
-                }),
+                button_view(if model.playing { "❚❚ pausa" } else { "▶ reproducir" }, &btn, Msg::TogglePlay),
+                spacer(4.0),
+                slider_view("tiempo", t.min(dur), 0.0, dur, &sp, move |_p, dv| Some(Msg::Scrub(t + dv))),
                 spacer(6.0),
                 body_text(format!("{} actores", s.actors.len()), theme.fg_muted, theme),
             ]
@@ -1019,83 +1353,307 @@ fn scene_tools(model: &Model, tab: usize) -> Vec<View<Msg>> {
                 button_view("+ plano acá", &btn, Msg::AddShot),
                 spacer(4.0),
                 button_view("− quitar plano", &btn, Msg::RemoveShot),
-                spacer(8.0),
-                body_text(
-                    "agregá cortes mientras scrubeás el tiempo".into(),
-                    theme.fg_placeholder,
-                    theme,
-                ),
             ]
         }
         _ => vec![
             section_title("VIDEO", theme),
-            button_view(
-                if model.exporting { "exportando…" } else { "🎬 exportar video" },
-                &btn,
-                Msg::ExportVideo,
-            ),
+            button_view(if model.exporting { "exportando…" } else { "🎬 exportar video" }, &btn, Msg::ExportVideo),
             spacer(8.0),
-            body_text(
-                "renderiza el guion a un .mkv (puede tardar)".into(),
-                theme.fg_placeholder,
-                theme,
-            ),
+            body_text("renderiza el guion a un .mkv (puede tardar)".into(), theme.fg_placeholder, theme),
         ],
     }
 }
 
-/// Sets de herramientas del modo Gente: Cuerpo · Piel · Camiseta · Pantalón.
-fn char_tools(model: &Model, tab: usize) -> Vec<View<Msg>> {
-    let theme = &model.theme;
-    let sp = SliderPalette::from_theme(theme);
-    let btn = ButtonPalette::from_theme(theme);
-    let Some(c) = model.char_spec() else {
-        return vec![section_title("sin personaje — creá o generá uno", theme)];
-    };
-    match tab {
-        0 => vec![
-            section_title("CUERPO", theme),
-            body_text(format!("«{}»", c.name), theme.fg_text, theme),
-            spacer(6.0),
-            button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleCharAge),
-        ],
-        1 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),
-        2 => color_tools("CAMISETA", Part::Shirt, c.shirt, &sp, theme),
-        _ => color_tools("PANTALÓN", Part::Pants, c.pants, &sp, theme),
-    }
+/// Slider de un campo de relieve del bioma.
+fn bslider(sp: &SliderPalette, label: &str, value: f32, min: f32, max: f32, field: BiomaField) -> View<Msg> {
+    slider_view(label, value, min, max, sp, move |_p, dv| Some(Msg::SetBiomaField(field, value + dv)))
 }
 
-/// Set de sliders R/G/B de una parte coloreable del personaje.
-fn color_tools(
-    title: &str,
-    part: Part,
-    rgb: [f32; 3],
-    sp: &SliderPalette,
-    theme: &Theme,
-) -> Vec<View<Msg>> {
+/// Set de sliders R/G/B de una parte coloreable de un ser.
+fn color_tools(title: &str, part: Part, rgb: [f32; 3], sp: &SliderPalette, theme: &Theme) -> Vec<View<Msg>> {
     let mut v = vec![section_title(title, theme)];
     for (ch, label) in [(0usize, "rojo"), (1, "verde"), (2, "azul")] {
         let value = rgb[ch];
-        v.push(slider_view(label, value, 0.0, 1.0, sp, move |_p, dv| {
-            Some(Msg::SetColor(part, ch, value + dv))
-        }));
+        v.push(slider_view(label, value, 0.0, 1.0, sp, move |_p, dv| Some(Msg::SetSereColor(part, ch, value + dv))));
     }
     v
 }
 
-/// Línea de texto de cuerpo (multi-línea) para los paneles.
-fn body_text(s: String, color: Color, _theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size { width: percent(1.0), height: Dimension::auto() },
-        ..Default::default()
-    })
-    .text(s, 13.0, color)
-    .max_lines(2)
+// =============================================================================
+//  CRUD: crear / duplicar / borrar / renombrar / reseleccionar
+// =============================================================================
+
+/// Crea un item nuevo en el nivel activo y devuelve su id.
+fn new_item(model: &mut Model) -> u64 {
+    let id = model.project.alloc_id();
+    match model.level {
+        Level::Leyes => model.project.leyes.push(llimphi_voxel::Ley {
+            id,
+            name: format!("ley {id}"),
+            kind: LeyKind::Fluir { gravedad: 1.0, horizontal: 0.6 },
+        }),
+        Level::Materiales => model.project.materiales.push(MaterialDef {
+            id,
+            name: format!("material {id}"),
+            parent: None,
+            role: MatRole::Terreno,
+            color: Some([0.6, 0.6, 0.6]),
+            grain: Some(0.4),
+            leyes: vec![],
+            builtin: None,
+        }),
+        Level::Seres => {
+            let mut c = CharSpec::new(format!("ser {id}"), Age::Adult);
+            c.id = id;
+            model.project.seres.push(c);
+        }
+        Level::Biomas => model.project.biomas.push(default_bioma(model, id)),
+        Level::Mundos => {
+            let bioma = model.project.biomas.first().map(|b| b.id).unwrap_or(0);
+            model.project.mundos.push(Mundo { id, name: format!("mundo {id}"), seed: 1, biomas: vec![bioma] });
+        }
+        Level::Escenas => {
+            let mundo = model.project.mundos.first().map(|m| m.id).unwrap_or(0);
+            let dim = world_dim(PREVIEW_DIM_XZ);
+            let mut s = SceneSpec::walk_and_emote(format!("escena {id}"), mundo, 3, Clip::Wave, dim);
+            s.id = id;
+            model.project.escenas.push(s);
+        }
+    }
+    id
+}
+
+/// Un bioma por defecto que referencia los materiales del proyecto (o 0).
+fn default_bioma(model: &Model, id: u64) -> Bioma {
+    let ground = model.project.material_id_for(Material::Grass).unwrap_or(0);
+    let cliff = model.project.material_id_for(Material::Rock).unwrap_or(0);
+    Bioma {
+        id,
+        name: format!("bioma {id}"),
+        base: 0.22,
+        dune: 0.10,
+        relief: 0.6,
+        mountains: 0.4,
+        water_level: 0.30,
+        rivers: 0.2,
+        peak_at: 0.8,
+        ground,
+        cliff,
+        peak: None,
+        objetos: vec![],
+        seres: vec![],
+    }
+}
+
+/// Duplica el item seleccionado (copia con id nuevo) y devuelve su id.
+fn duplicate_item(model: &mut Model) -> Option<u64> {
+    let sel = model.selected();
+    let id = model.project.alloc_id();
+    match model.level {
+        Level::Leyes => {
+            let mut x = model.project.ley(sel)?.clone();
+            x.id = id;
+            x.name = format!("{} copia", x.name);
+            model.project.leyes.push(x);
+        }
+        Level::Materiales => {
+            let mut x = model.project.material(sel)?.clone();
+            x.id = id;
+            x.name = format!("{} copia", x.name);
+            x.builtin = None; // una copia editable, no la de fábrica
+            model.project.materiales.push(x);
+        }
+        Level::Seres => {
+            let mut x = sel_sere(model)?.clone();
+            x.id = id;
+            x.name = format!("{} copia", x.name);
+            model.project.seres.push(x);
+        }
+        Level::Biomas => {
+            let mut x = model.project.bioma(sel)?.clone();
+            x.id = id;
+            x.name = format!("{} copia", x.name);
+            model.project.biomas.push(x);
+        }
+        Level::Mundos => {
+            let mut x = model.project.mundo(sel)?.clone();
+            x.id = id;
+            x.name = format!("{} copia", x.name);
+            model.project.mundos.push(x);
+        }
+        Level::Escenas => {
+            let mut x = sel_scene(model)?.clone();
+            x.id = id;
+            x.name = format!("{} copia", x.name);
+            model.project.escenas.push(x);
+        }
+    }
+    Some(id)
+}
+
+/// Borra el item seleccionado del nivel activo.
+fn delete_selected(model: &mut Model) {
+    let sel = model.selected();
+    match model.level {
+        Level::Leyes => model.project.leyes.retain(|x| x.id != sel),
+        Level::Materiales => model.project.materiales.retain(|x| x.id != sel),
+        Level::Seres => model.project.seres.retain(|x| x.id != sel),
+        Level::Biomas => model.project.biomas.retain(|x| x.id != sel),
+        Level::Mundos => model.project.mundos.retain(|x| x.id != sel),
+        Level::Escenas => model.project.escenas.retain(|x| x.id != sel),
+    }
+}
+
+/// Fija el nombre del item seleccionado.
+fn set_selected_name(model: &mut Model, name: String) {
+    let sel = model.selected();
+    match model.level {
+        Level::Leyes => {
+            if let Some(x) = model.project.leyes.iter_mut().find(|x| x.id == sel) {
+                x.name = name;
+            }
+        }
+        Level::Materiales => {
+            if let Some(x) = model.project.materiales.iter_mut().find(|x| x.id == sel) {
+                x.name = name;
+            }
+        }
+        Level::Seres => {
+            if let Some(x) = model.project.seres.iter_mut().find(|x| x.id == sel) {
+                x.name = name;
+            }
+        }
+        Level::Biomas => {
+            if let Some(x) = model.project.biomas.iter_mut().find(|x| x.id == sel) {
+                x.name = name;
+            }
+        }
+        Level::Mundos => {
+            if let Some(x) = model.project.mundos.iter_mut().find(|x| x.id == sel) {
+                x.name = name;
+            }
+        }
+        Level::Escenas => {
+            if let Some(x) = model.project.escenas.iter_mut().find(|x| x.id == sel) {
+                x.name = name;
+            }
+        }
+    }
+}
+
+/// Recarga `name_input`/`seed_input` desde el item seleccionado.
+fn sync_inputs(model: &mut Model) {
+    model.name_input.set_text(&model.selected_name());
+    if model.level == Level::Mundos {
+        let s = model.project.mundo(model.selected()).map(|m| m.seed).unwrap_or(0);
+        model.seed_input.set_text(&s.to_string());
+    }
+}
+
+/// Reselecciona el primer item de cada nivel (tras cargar un proyecto).
+fn reselect_all(model: &mut Model) {
+    model.sel[0] = model.project.leyes.first().map(|x| x.id).unwrap_or(0);
+    model.sel[1] = model.project.materiales.first().map(|x| x.id).unwrap_or(0);
+    model.sel[2] = model.project.seres.first().map(|x| x.id).unwrap_or(0);
+    model.sel[3] = model.project.biomas.first().map(|x| x.id).unwrap_or(0);
+    model.sel[4] = model.project.mundos.first().map(|x| x.id).unwrap_or(0);
+    model.sel[5] = model.project.escenas.first().map(|x| x.id).unwrap_or(0);
+}
+
+// --- Accesores al item seleccionado (mut e inmut) ---
+fn sel_material_mut(model: &mut Model) -> Option<&mut MaterialDef> {
+    let id = model.sel[1];
+    model.project.materiales.iter_mut().find(|x| x.id == id)
+}
+fn sel_sere<'a>(model: &'a Model) -> Option<&'a CharSpec> {
+    let id = model.sel[2];
+    model.project.seres.iter().find(|x| x.id == id)
+}
+fn sel_sere_mut(model: &mut Model) -> Option<&mut CharSpec> {
+    let id = model.sel[2];
+    model.project.seres.iter_mut().find(|x| x.id == id)
+}
+fn sel_bioma_mut(model: &mut Model) -> Option<&mut Bioma> {
+    let id = model.sel[3];
+    model.project.biomas.iter_mut().find(|x| x.id == id)
+}
+fn sel_mundo_mut(model: &mut Model) -> Option<&mut Mundo> {
+    let id = model.sel[4];
+    model.project.mundos.iter_mut().find(|x| x.id == id)
+}
+fn sel_scene<'a>(model: &'a Model) -> Option<&'a SceneSpec> {
+    let id = model.sel[5];
+    model.project.escenas.iter().find(|x| x.id == id)
+}
+fn sel_scene_mut(model: &mut Model) -> Option<&mut SceneSpec> {
+    let id = model.sel[5];
+    model.project.escenas.iter_mut().find(|x| x.id == id)
+}
+
+// --- Listas de ids para los botones de ciclo ---
+fn terreno_ids(model: &Model) -> Vec<u64> {
+    model.project.materiales.iter().map(|m| m.id).collect()
+}
+fn objeto_ids(model: &Model) -> Vec<u64> {
+    let objs: Vec<u64> = model
+        .project
+        .materiales
+        .iter()
+        .filter(|m| matches!(m.role, MatRole::Objeto(_)))
+        .map(|m| m.id)
+        .collect();
+    if objs.is_empty() {
+        terreno_ids(model)
+    } else {
+        objs
+    }
+}
+fn bioma_ids(model: &Model) -> Vec<u64> {
+    model.project.biomas.iter().map(|b| b.id).collect()
+}
+fn mundo_ids(model: &Model) -> Vec<u64> {
+    model.project.mundos.iter().map(|m| m.id).collect()
+}
+
+/// El siguiente id de `ids` después de `cur` (cicla); `cur` si la lista está vacía.
+fn next_in(ids: &[u64], cur: u64) -> u64 {
+    if ids.is_empty() {
+        return cur;
+    }
+    let i = ids.iter().position(|&x| x == cur).unwrap_or(usize::MAX);
+    ids[(i.wrapping_add(1)) % ids.len()]
+}
+
+/// Cicla un `Option<u64>` por `None → ids[0] → … → None`.
+fn next_option(cur: Option<u64>, ids: &[u64]) -> Option<u64> {
+    match cur {
+        None => ids.first().copied(),
+        Some(c) => {
+            let i = ids.iter().position(|&x| x == c);
+            match i {
+                Some(i) if i + 1 < ids.len() => Some(ids[i + 1]),
+                _ => None,
+            }
+        }
+    }
 }
 
 // =============================================================================
 //  Helpers de layout
 // =============================================================================
+
+fn selectable_row(label: String, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0), height: length(30.0) },
+        align_items: Some(AlignItems::Center),
+        padding: pad(10.0, 0.0),
+        ..Default::default()
+    })
+    .fill(if selected { theme.bg_selected } else { theme.bg_panel })
+    .radius(6.0)
+    .text(label, 15.0, if selected { theme.fg_text } else { theme.fg_muted })
+    .on_click(msg)
+}
 
 fn section_title(text: &str, theme: &Theme) -> View<Msg> {
     View::new(Style {
@@ -1106,6 +1664,15 @@ fn section_title(text: &str, theme: &Theme) -> View<Msg> {
     .bold()
 }
 
+fn body_text(s: String, color: Color, _theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .text(s, 13.0, color)
+    .max_lines(2)
+}
+
 fn spacer(h: f32) -> View<Msg> {
     View::new(Style {
         size: Size { width: percent(1.0), height: length(h) },
@@ -1113,9 +1680,10 @@ fn spacer(h: f32) -> View<Msg> {
     })
 }
 
-fn pad(x: f32, y: f32) -> llimphi_ui::llimphi_layout::taffy::prelude::Rect<
-    llimphi_ui::llimphi_layout::taffy::prelude::LengthPercentage,
-> {
+fn pad(
+    x: f32,
+    y: f32,
+) -> llimphi_ui::llimphi_layout::taffy::prelude::Rect<llimphi_ui::llimphi_layout::taffy::prelude::LengthPercentage> {
     use llimphi_ui::llimphi_layout::taffy::prelude::Rect;
     Rect { left: length(x), right: length(x), top: length(y), bottom: length(y) }
 }
@@ -1129,8 +1697,7 @@ fn gap_y(h: f32) -> Size<llimphi_ui::llimphi_layout::taffy::prelude::LengthPerce
 // =============================================================================
 
 fn save_project(project: &Project) -> Result<(), String> {
-    let s = ron::ser::to_string_pretty(project, ron::ser::PrettyConfig::default())
-        .map_err(|e| e.to_string())?;
+    let s = ron::ser::to_string_pretty(project, ron::ser::PrettyConfig::default()).map_err(|e| e.to_string())?;
     std::fs::write(PROJECT_PATH, s).map_err(|e| e.to_string())
 }
 
@@ -1141,28 +1708,36 @@ fn load_project() -> Result<Project, String> {
 
 /// Estado de arranque (sin `Handle`) — reusado por `init` y por el pantallazo.
 pub(crate) fn demo_model() -> Model {
-    Model {
+    let project = Project::starter();
+    let mut model = Model {
         theme: Theme::dark(),
-        project: Project::starter(),
-        sel: 0,
+        level: Level::Mundos,
+        sel: [0; 6],
+        tool_tab: 0,
         gen: 1,
         yaw: 35_f32.to_radians(),
         pitch: 26_f32.to_radians(),
         dist: default_dist(),
         preview: Arc::new(Mutex::new(None)),
-        status: "proyecto de arranque · desierto + pradera".into(),
+        status: "creador de mundos por niveles".into(),
+        name_input: TextInputState::new(),
+        name_focused: false,
+        seed_input: TextInputState::new(),
+        seed_focused: false,
         ai_input: TextInputState::new(),
         ai_focused: false,
         ai_busy: false,
-        mode: Mode::Worlds,
-        scene_sel: 0,
-        char_sel: 0,
         time: 0.0,
         playing: false,
         script_cam: true,
         exporting: false,
-        tool_tab: 0,
-    }
+        rng: 0x1234_5678,
+        dientes_outside: wawa_config::WawaConfig::load().dientes_outside,
+        project,
+    };
+    reselect_all(&mut model);
+    sync_inputs(&mut model);
+    model
 }
 
 fn main() {
@@ -1170,42 +1745,35 @@ fn main() {
         shot::shot();
         return;
     }
-    if std::env::args().any(|a| a == "--flythrough") {
-        // Vuelo sobre un mundo infinito (para el GIF del README): relieve dramático
-        // (montañas + cumbres nevadas) para que el vuelo tenga de qué — no el
-        // desierto llano.
-        // Dunas grandes en TODO el ancho (sin gating de montañas que deja valles
-        // planos que se ven cielo) → relieve uniforme que llena el cuadro al volar.
-        let recipe = WorldRecipe {
-            base: 0.40,
-            dune: 0.30,
-            relief: 0.35,
-            mountains: 0.3,
-            water_level: 0.05,
-            rivers: 0.1,
-            peak_at: 0.92, // poca nieve
-            ..WorldRecipe::grassland(11)
-        };
-        match render::flythrough(&recipe) {
-            Ok(out) => eprintln!("flythrough ok: {out}"),
-            Err(e) => eprintln!("flythrough error: {e}"),
-        }
-        return;
-    }
     if std::env::args().any(|a| a == "--turntable") {
-        // Vitrina del motor voxel: orbita un mundo (para el GIF del README).
         let p = Project::starter();
-        let recipe = p.worlds.first().map(|w| w.recipe).unwrap_or_else(|| WorldRecipe::desert(1));
-        match render::turntable(&recipe) {
+        let mr = p
+            .mundos
+            .first()
+            .and_then(|m| p.render_mundo(m.id))
+            .unwrap_or_else(fallback_render);
+        match render::turntable(&mr) {
             Ok(out) => eprintln!("turntable ok: {out}"),
             Err(e) => eprintln!("turntable error: {e}"),
         }
         return;
     }
-    if std::env::args().any(|a| a == "--export") {
-        // Certificación headless del pipeline de video: exporta la escena demo.
+    if std::env::args().any(|a| a == "--flythrough") {
         let p = Project::starter();
-        match p.scenes.first() {
+        let mr = p
+            .mundos
+            .first()
+            .and_then(|m| p.render_mundo(m.id))
+            .unwrap_or_else(fallback_render);
+        match render::flythrough(&mr) {
+            Ok(out) => eprintln!("flythrough ok: {out}"),
+            Err(e) => eprintln!("flythrough error: {e}"),
+        }
+        return;
+    }
+    if std::env::args().any(|a| a == "--export") {
+        let p = Project::starter();
+        match p.escenas.first() {
             Some(s) => match render::export_scene(&p, s) {
                 Ok(out) => eprintln!("export ok: {out}"),
                 Err(e) => eprintln!("export error: {e}"),

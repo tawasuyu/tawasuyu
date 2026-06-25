@@ -26,6 +26,10 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 # Dientes (pestañas que sobresalen) para fraccionar los sets de herramientas del sidebar.
 llimphi-widget-dock-rail = { workspace = true }
+# Íconos vectoriales (coloridos) para los dientes de cada nivel/herramienta.
+llimphi-icons = { path = "../llimphi-icons" }
+# Config global del SO: decide la orientación de los dientes (dientes_outside).
+wawa-config = { path = "../../../shared/wawa-config" }
 # Asistencia IA "poor": prosa → WorldRecipe (from_env, cae a Mock/heurística).
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 # Runtime para bloquear la vuelta async del LLM dentro del worker (Handle::spawn).

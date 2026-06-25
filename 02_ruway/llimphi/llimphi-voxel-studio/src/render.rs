@@ -11,7 +11,7 @@ use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_voxel::{
-    window_origin_for_cast, world_dim, CharSpec, Project, SceneSpec, WorldRecipe, PREVIEW_DIM_XZ,
+    window_origin_for_cast, world_dim, CharSpec, MundoRender, Project, SceneSpec, PREVIEW_DIM_XZ,
 };
 
 use crate::preview::{WorldPreview, FMT};
@@ -29,11 +29,11 @@ const TURN_OUT: &str = "/tmp/voxel_studio_turn.mkv";
 
 /// **Turntable de un mundo**: orbita el relieve 360° (sin actores) y muxea a un
 /// `.mkv` — la vitrina del motor voxel para el README. Headless.
-pub fn turntable(recipe: &WorldRecipe) -> Result<String, String> {
+pub fn turntable(mr: &MundoRender) -> Result<String, String> {
     let hal = pollster::block_on(Hal::new(None)).map_err(|e| format!("gpu: {e:?}"))?;
     let mut renderer = Renderer::new(&hal).map_err(|e| format!("renderer: {e:?}"))?;
     let dim = world_dim(PREVIEW_DIM_XZ);
-    let mut preview = WorldPreview::build(&hal.device, &hal.queue, recipe, dim, 1);
+    let mut preview = WorldPreview::build(&hal.device, &hal.queue, mr, dim, 1);
     let center = Vec3::new(dim[0] as f32 * 0.5, dim[1] as f32 * 0.32, dim[2] as f32 * 0.5);
 
     let target = make_target(&hal);
@@ -82,11 +82,11 @@ const FLY_OUT: &str = "/tmp/voxel_studio_fly.mkv";
 /// regenera la ventana en un origen que avanza cada frame (el terreno scrollea sin
 /// fin) mientras la cámara vuela hacia adelante, baja, mirando un poco abajo. La
 /// niebla densa funde el horizonte y los bordes de la ventana. Headless → `.mkv`.
-pub fn flythrough(recipe: &WorldRecipe) -> Result<String, String> {
+pub fn flythrough(mr: &MundoRender) -> Result<String, String> {
     let hal = pollster::block_on(Hal::new(None)).map_err(|e| format!("gpu: {e:?}"))?;
     let mut renderer = Renderer::new(&hal).map_err(|e| format!("renderer: {e:?}"))?;
     let dim = [128u32, 56, 128]; // TODO eje ≤128 (tope del VoxelRenderer); la ventana scrollea en Z
-    let mut preview = WorldPreview::build(&hal.device, &hal.queue, recipe, dim, 1);
+    let mut preview = WorldPreview::build(&hal.device, &hal.queue, mr, dim, 1);
     let target = make_target(&hal);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -110,7 +110,7 @@ pub fn flythrough(recipe: &WorldRecipe) -> Result<String, String> {
         let cam_z = f as f32 * speed;
         // La ventana scrollea (origen avanza en Z) → el mundo fluye hacia el ojo.
         let oz = cam_z as i32;
-        preview.set_window(&hal.device, &hal.queue, recipe, [0, oz], fog);
+        preview.set_window(&hal.device, &hal.queue, mr, [0, oz], fog);
 
         // Vuelo bajo hacia adelante, ¡EN COORDENADAS CENTRADAS! El shader hace
         // `ro = cam_eye + dim/2` → espera el volumen centrado en el origen.
@@ -161,16 +161,14 @@ fn make_target(hal: &Hal) -> wgpu::Texture {
 /// Exporta `scene` (de `project`) a un video. Devuelve la ruta del `.mkv` o un
 /// mensaje de error. Bloqueante.
 pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, String> {
-    let recipe = project
-        .worlds
-        .get(scene.world)
-        .map(|w| w.recipe)
+    let mr = project
+        .render_mundo(scene.mundo)
         .ok_or("la escena no tiene un mundo de fondo válido")?;
 
     let hal = pollster::block_on(Hal::new(None)).map_err(|e| format!("gpu: {e:?}"))?;
     let mut renderer = Renderer::new(&hal).map_err(|e| format!("renderer: {e:?}"))?;
     let dim = world_dim(PREVIEW_DIM_XZ);
-    let mut preview = WorldPreview::build(&hal.device, &hal.queue, &recipe, dim, 1);
+    let mut preview = WorldPreview::build(&hal.device, &hal.queue, &mr, dim, 1);
 
     let scripts = scene.scripts();
     let chars: Vec<CharSpec> = scene
@@ -210,7 +208,7 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
         // Mundo infinito: la ventana voxel sigue al reparto (mismo criterio que el
         // preview en vivo) → la escena no vive en una caja fija de 128³.
         let origin = window_origin_for_cast(&scripts, t, dim);
-        preview.ensure_window(&hal.device, &hal.queue, &recipe, 1, origin);
+        preview.ensure_window(&hal.device, &hal.queue, &mr, 1, origin);
 
         // Posar a los actores sobre el relieve y encuadrar al reparto.
         // El shader voxel espera la cámara/posiciones en COORDS CENTRADAS (la grilla

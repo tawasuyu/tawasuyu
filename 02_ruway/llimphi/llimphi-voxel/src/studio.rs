@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actor::{Actor, Age, Clip};
 use crate::director::{ActorKey, ActorScript};
-use crate::worldgen::WorldRecipe;
+use crate::worldgen::{Bioma, BiomaPalette, Forma, Material, ResolvedMaterial};
 use llimphi_3d::glam::Vec3;
 use llimphi_3d::Camera3d;
 
@@ -72,17 +72,192 @@ pub fn window_origin_for_cast(scripts: &[ActorScript], t: f32, dim: [u32; 3]) ->
     ]
 }
 
-/// Un **mundo nombrado** del proyecto: nombre + su [`WorldRecipe`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NamedWorld {
-    pub name: String,
-    pub recipe: WorldRecipe,
+// =============================================================================
+//  Nivel 1 — Leyes (físicas / comportamientos)
+// =============================================================================
+
+/// **Tipo de ley** (comportamiento matemático). Enum extensible: hoy `Fluir`
+/// (líquidos), `Crecer` (flora) y `Custom` (placeholder, para abrir a hechizos sin
+/// codear su runtime todavía). **No se simula aún** — es un spec declarativo que un
+/// material adopta y parametriza. Cada variante expone sus parámetros editables vía
+/// [`params`](Self::params) para que la UI arme sliders sin conocer cada caso.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum LeyKind {
+    /// Líquido: se esparce a vecinos en horizontal y cae con gravedad (cascadas).
+    Fluir { gravedad: f32, horizontal: f32 },
+    /// Crece a una velocidad VARIABLE (flora).
+    Crecer { velocidad: f32 },
+    /// Comportamiento a definir (arquitectura abierta; sin parámetros aún).
+    Custom,
 }
 
-impl NamedWorld {
-    pub fn new(name: impl Into<String>, recipe: WorldRecipe) -> Self {
-        Self { name: name.into(), recipe }
+impl LeyKind {
+    /// Un ejemplar de cada tipo, con valores por defecto (para crear/ciclar).
+    pub fn all_defaults() -> Vec<LeyKind> {
+        vec![
+            LeyKind::Fluir { gravedad: 1.0, horizontal: 0.6 },
+            LeyKind::Crecer { velocidad: 1.0 },
+            LeyKind::Custom,
+        ]
     }
+
+    /// Nombre legible (español).
+    pub fn label(&self) -> &'static str {
+        match self {
+            LeyKind::Fluir { .. } => "fluir",
+            LeyKind::Crecer { .. } => "crecer",
+            LeyKind::Custom => "custom",
+        }
+    }
+
+    /// El tipo siguiente (cicla por los defaults), preservando nada (resetea params).
+    pub fn next(&self) -> LeyKind {
+        let all = Self::all_defaults();
+        let i = all.iter().position(|k| k.label() == self.label()).unwrap_or(0);
+        all[(i + 1) % all.len()].clone()
+    }
+
+    /// Parámetros editables: `(nombre, valor, min, max)`. La UI arma un slider por cada.
+    pub fn params(&self) -> Vec<(&'static str, f32, f32, f32)> {
+        match self {
+            LeyKind::Fluir { gravedad, horizontal } => vec![
+                ("gravedad", *gravedad, 0.0, 1.0),
+                ("horizontal", *horizontal, 0.0, 1.0),
+            ],
+            LeyKind::Crecer { velocidad } => vec![("velocidad", *velocidad, 0.0, 5.0)],
+            LeyKind::Custom => vec![],
+        }
+    }
+
+    /// Fija el parámetro `i` (en el orden de [`params`](Self::params)) a `v`.
+    pub fn set_param(&mut self, i: usize, v: f32) {
+        match self {
+            LeyKind::Fluir { gravedad, horizontal } => match i {
+                0 => *gravedad = v,
+                1 => *horizontal = v,
+                _ => {}
+            },
+            LeyKind::Crecer { velocidad } => {
+                if i == 0 {
+                    *velocidad = v;
+                }
+            }
+            LeyKind::Custom => {}
+        }
+    }
+}
+
+/// Una **Ley**: nombre + tipo (con sus parámetros). El nivel más básico de la
+/// composición; los materiales la adoptan vía [`LeyUso`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ley {
+    pub id: u64,
+    pub name: String,
+    pub kind: LeyKind,
+}
+
+// =============================================================================
+//  Nivel 2 — Materiales
+// =============================================================================
+
+/// **Rol de un material**: relleno de terreno o un objeto colocable (con su forma).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MatRole {
+    /// Relleno del terreno (suelo, acantilado, cumbre…).
+    Terreno,
+    /// Objeto colocado sobre el suelo (cactus, árbol, roca suelta…).
+    Objeto(Forma),
+}
+
+impl MatRole {
+    pub fn label(&self) -> &'static str {
+        match self {
+            MatRole::Terreno => "terreno",
+            MatRole::Objeto(_) => "objeto",
+        }
+    }
+}
+
+/// **Uso de una ley por un material**: a qué ley refiere y con qué parámetros
+/// concretos (overridean los defaults de la ley — «espesor del líquido», etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeyUso {
+    pub ley: u64,
+    pub params: Vec<f32>,
+}
+
+/// Un **material autorable**: color/grano (texturas a futuro) + rol + leyes
+/// aplicadas, con **herencia viva por padre**. Los campos visuales son `Option`:
+/// `None` = heredar del padre (o del builtin). [`Project::resolve_material`] aplana
+/// la cadena. Así «cactus amarillo» = hijo de «cactus verde» que sólo redefine el
+/// color.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterialDef {
+    pub id: u64,
+    pub name: String,
+    /// Material del que hereda lo no redefinido (`None` = raíz).
+    #[serde(default)]
+    pub parent: Option<u64>,
+    pub role: MatRole,
+    /// Color `[r,g,b]` en `[0,1]`; `None` = heredar.
+    #[serde(default)]
+    pub color: Option<[f32; 3]>,
+    /// Grano de materia `[0,1]`; `None` = heredar.
+    #[serde(default)]
+    pub grain: Option<f32>,
+    /// Leyes que adopta, con sus parámetros.
+    #[serde(default)]
+    pub leyes: Vec<LeyUso>,
+    /// Tag de paleta semilla (de fábrica): deja que la IA/preset encuentre «la
+    /// arena» sin clavar un id. `None` en materiales hechos por el usuario.
+    #[serde(default)]
+    pub builtin: Option<Material>,
+}
+
+impl MaterialDef {
+    /// Material de fábrica a partir de una variante semilla (color/grano/rol).
+    pub fn from_builtin(id: u64, m: Material) -> Self {
+        let role = match m {
+            Material::Cactus => MatRole::Objeto(Forma::Columnar),
+            _ => MatRole::Terreno,
+        };
+        let c = m.color();
+        Self {
+            id,
+            name: m.label().to_string(),
+            parent: None,
+            role,
+            color: Some([c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]),
+            grain: Some(m.grain()),
+            leyes: Vec::new(),
+            builtin: Some(m),
+        }
+    }
+}
+
+// =============================================================================
+//  Nivel 5 — Mundos
+// =============================================================================
+
+/// Un **Mundo**: semilla + uno o más biomas. La semilla es lo único «numérico» que
+/// el usuario teclea (con botón de random en la UI). El stage 1 genera con el primer
+/// bioma; la distribución multi-bioma queda como refinamiento.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mundo {
+    pub id: u64,
+    pub name: String,
+    pub seed: u32,
+    #[serde(default)]
+    pub biomas: Vec<u64>,
+}
+
+/// Lo que el render necesita de un mundo: el bioma (relieve), la semilla y la paleta
+/// **ya resuelta** (colores concretos). Lo arma [`Project::render_mundo`].
+#[derive(Debug, Clone)]
+pub struct MundoRender {
+    pub bioma: Bioma,
+    pub seed: u32,
+    pub palette: BiomaPalette,
 }
 
 /// **Especificación serializable de un personaje**: lo que un editor/IA fija (edad
@@ -90,6 +265,9 @@ impl NamedWorld {
 /// posable. Los colores son `[r, g, b]` en `[0,1]` (como [`Actor`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CharSpec {
+    /// Id estable (asignado por el [`Project`]); `0` hasta que se agrega.
+    #[serde(default)]
+    pub id: u64,
     pub name: String,
     pub age: Age,
     pub skin: [f32; 3],
@@ -99,9 +277,10 @@ pub struct CharSpec {
 
 impl CharSpec {
     /// Un personaje con la paleta por defecto de [`Actor::new`] a la edad dada.
+    /// `id = 0` hasta que el [`Project`] se lo asigna al agregarlo.
     pub fn new(name: impl Into<String>, age: Age) -> Self {
         let a = Actor::new(Vec3::ZERO, 0.0);
-        Self { name: name.into(), age, skin: a.skin, shirt: a.shirt, pants: a.pants }
+        Self { id: 0, name: name.into(), age, skin: a.skin, shirt: a.shirt, pants: a.pants }
     }
 
     /// Materializa el spec en un [`Actor`] parado en `pos` mirando a `facing`.
@@ -260,8 +439,12 @@ pub struct ShotSpec {
 /// cada actor en `sample(t)` con la cámara del plano vigente.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneSpec {
+    /// Id estable (asignado por el [`Project`]).
+    #[serde(default)]
+    pub id: u64,
     pub name: String,
-    pub world: usize,
+    /// El **mundo** de fondo (id en [`Project::mundos`]).
+    pub mundo: u64,
     pub duration: f32,
     pub actors: Vec<ActorSpec>,
     #[serde(default)]
@@ -361,7 +544,7 @@ impl SceneSpec {
     /// arranque como de la generación por IA.
     pub fn walk_and_emote(
         name: impl Into<String>,
-        world: usize,
+        mundo: u64,
         n: usize,
         gesture: Clip,
         dim: [u32; 3],
@@ -400,57 +583,256 @@ impl SceneSpec {
             ShotSpec { start: t_turn, kind: ShotKind::CloseUp },
         ];
         // Cámara en mano suave por defecto: el sello se ve sin tener que pedirlo.
-        Self { name: name.into(), world, duration: dur, actors, shots, handheld: 0.7 }
+        Self { id: 0, name: name.into(), mundo, duration: dur, actors, shots, handheld: 0.7 }
     }
 }
 
-/// El **proyecto**: la bolsa de artefactos del creador (mundos, personajes,
-/// escenas). Vacío por defecto; [`starter`](Self::starter) trae algo que tocar.
+/// El **proyecto**: la bolsa de artefactos del creador, por niveles de composición
+/// (leyes → materiales → seres → biomas → mundos → escenas). Cada item lleva un `id`
+/// estable (separado del nombre) para referenciarse, renombrarse y duplicarse.
+/// Vacío por defecto; [`starter`](Self::starter) trae algo que tocar.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Project {
-    pub worlds: Vec<NamedWorld>,
+    /// Contador de ids; `0` queda reservado como «ninguno».
     #[serde(default)]
-    pub characters: Vec<CharSpec>,
+    pub next_id: u64,
     #[serde(default)]
-    pub scenes: Vec<SceneSpec>,
+    pub leyes: Vec<Ley>,
+    #[serde(default)]
+    pub materiales: Vec<MaterialDef>,
+    /// Los **seres** (personajes); el tipo se llama `CharSpec` por historia.
+    #[serde(default)]
+    pub seres: Vec<CharSpec>,
+    #[serde(default)]
+    pub biomas: Vec<Bioma>,
+    #[serde(default)]
+    pub mundos: Vec<Mundo>,
+    #[serde(default)]
+    pub escenas: Vec<SceneSpec>,
 }
 
 impl Project {
-    /// Proyecto de arranque: el desierto y la pradera, un trío de personajes
-    /// distinguibles y una escena demo (entran y saludan en el desierto).
+    /// Reserva el próximo id estable.
+    pub fn alloc_id(&mut self) -> u64 {
+        if self.next_id == 0 {
+            self.next_id = 1;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// Proyecto de arranque: leyes base, los 6 materiales semilla, un trío de seres,
+    /// los biomas desierto/pradera y dos mundos que los envuelven, más la escena demo.
     pub fn starter() -> Self {
-        let characters = vec![
-            CharSpec { name: "rojo".into(), age: Age::Adult, skin: [0.90, 0.72, 0.58], shirt: [0.82, 0.28, 0.26], pants: [0.20, 0.20, 0.28] },
-            CharSpec { name: "azul".into(), age: Age::Adult, skin: [0.86, 0.68, 0.54], shirt: [0.22, 0.55, 0.78], pants: [0.18, 0.20, 0.24] },
-            CharSpec { name: "amarillo".into(), age: Age::Adult, skin: [0.92, 0.78, 0.62], shirt: [0.92, 0.80, 0.30], pants: [0.26, 0.22, 0.20] },
-        ];
+        let mut p = Project { next_id: 1, ..Default::default() };
+
+        // --- Leyes base ---
+        let ley_fluir = p.alloc_id();
+        p.leyes.push(Ley {
+            id: ley_fluir,
+            name: "fluir".into(),
+            kind: LeyKind::Fluir { gravedad: 1.0, horizontal: 0.6 },
+        });
+        let ley_crecer = p.alloc_id();
+        p.leyes.push(Ley {
+            id: ley_crecer,
+            name: "crecer".into(),
+            kind: LeyKind::Crecer { velocidad: 1.0 },
+        });
+
+        // --- Materiales semilla (arena/pasto/roca/nieve/agua/cactus) ---
+        let mut mat_ids = std::collections::HashMap::new();
+        for m in Material::ALL {
+            let id = p.alloc_id();
+            let mut def = MaterialDef::from_builtin(id, m);
+            // El agua fluye; el cactus crece — leyes de muestra (sin simular aún).
+            match m {
+                Material::Water => def.leyes.push(LeyUso { ley: ley_fluir, params: vec![1.0, 0.6] }),
+                Material::Cactus => def.leyes.push(LeyUso { ley: ley_crecer, params: vec![1.0] }),
+                _ => {}
+            }
+            mat_ids.insert(m, id);
+            p.materiales.push(def);
+        }
+        let mid = |m: Material| mat_ids[&m];
+
+        // --- Seres ---
+        for (name, skin, shirt, pants) in [
+            ("rojo", [0.90, 0.72, 0.58], [0.82, 0.28, 0.26], [0.20, 0.20, 0.28]),
+            ("azul", [0.86, 0.68, 0.54], [0.22, 0.55, 0.78], [0.18, 0.20, 0.24]),
+            ("amarillo", [0.92, 0.78, 0.62], [0.92, 0.80, 0.30], [0.26, 0.22, 0.20]),
+        ] {
+            let id = p.alloc_id();
+            p.seres.push(CharSpec { id, name: name.into(), age: Age::Adult, skin, shirt, pants });
+        }
+
+        // --- Biomas ---
+        let bioma_desierto = p.alloc_id();
+        p.biomas.push(Bioma {
+            id: bioma_desierto,
+            name: "desierto".into(),
+            base: 0.30,
+            dune: 0.05,
+            relief: 0.45,
+            mountains: 0.12,
+            water_level: 0.26,
+            rivers: 0.18,
+            peak_at: 1.0,
+            ground: mid(Material::Sand),
+            cliff: mid(Material::Rock),
+            peak: None,
+            objetos: vec![crate::worldgen::ObjetoUso {
+                material: mid(Material::Cactus),
+                densidad: 0.010,
+                forma: Forma::Columnar,
+            }],
+            seres: vec![],
+        });
+        let bioma_pradera = p.alloc_id();
+        p.biomas.push(Bioma {
+            id: bioma_pradera,
+            name: "pradera".into(),
+            base: 0.22,
+            dune: 0.10,
+            relief: 0.7,
+            mountains: 0.5,
+            water_level: 0.30,
+            rivers: 0.25,
+            peak_at: 0.80,
+            ground: mid(Material::Grass),
+            cliff: mid(Material::Rock),
+            peak: Some(mid(Material::Snow)),
+            objetos: vec![],
+            seres: vec![],
+        });
+
+        // --- Mundos ---
+        let mundo_desierto = p.alloc_id();
+        p.mundos.push(Mundo {
+            id: mundo_desierto,
+            name: "desierto".into(),
+            seed: 1337,
+            biomas: vec![bioma_desierto],
+        });
+        let mundo_pradera = p.alloc_id();
+        p.mundos.push(Mundo {
+            id: mundo_pradera,
+            name: "pradera".into(),
+            seed: 1337,
+            biomas: vec![bioma_pradera],
+        });
+
+        // --- Escena demo ---
         let dim = world_dim(PREVIEW_DIM_XZ);
-        Self {
-            worlds: vec![
-                NamedWorld::new("desierto", WorldRecipe::desert(1337)),
-                NamedWorld::new("pradera", WorldRecipe::grassland(1337)),
-            ],
-            characters,
-            scenes: vec![SceneSpec::walk_and_emote("saludo en el desierto", 0, 3, Clip::Wave, dim)],
+        let mut escena = SceneSpec::walk_and_emote("saludo en el desierto", mundo_desierto, 3, Clip::Wave, dim);
+        escena.id = p.alloc_id();
+        p.escenas.push(escena);
+
+        p
+    }
+
+    // --- Búsquedas por id ---
+    pub fn ley(&self, id: u64) -> Option<&Ley> {
+        self.leyes.iter().find(|x| x.id == id)
+    }
+    pub fn material(&self, id: u64) -> Option<&MaterialDef> {
+        self.materiales.iter().find(|x| x.id == id)
+    }
+    pub fn bioma(&self, id: u64) -> Option<&Bioma> {
+        self.biomas.iter().find(|x| x.id == id)
+    }
+    pub fn mundo(&self, id: u64) -> Option<&Mundo> {
+        self.mundos.iter().find(|x| x.id == id)
+    }
+
+    /// Id del material de fábrica de la variante `m`, si está sembrado (para que la
+    /// IA/presets encuentren «la arena» sin clavar números).
+    pub fn material_id_for(&self, m: Material) -> Option<u64> {
+        self.materiales.iter().find(|d| d.builtin == Some(m)).map(|d| d.id)
+    }
+
+    /// **Resuelve un material** aplanando la cadena de herencia: el primer `Some`
+    /// hacia arriba gana; si nada lo define, cae al color/grano del `builtin`, y por
+    /// último a un gris neutro. Corta a profundidad 32 (anti-ciclo).
+    pub fn resolve_material(&self, id: u64) -> ResolvedMaterial {
+        let mut color: Option<[f32; 3]> = None;
+        let mut grain: Option<f32> = None;
+        let mut builtin: Option<Material> = None;
+        let mut cur = Some(id);
+        let mut depth = 0;
+        while let Some(cid) = cur {
+            if depth > 32 {
+                break;
+            }
+            let Some(m) = self.material(cid) else { break };
+            if color.is_none() {
+                color = m.color;
+            }
+            if grain.is_none() {
+                grain = m.grain;
+            }
+            if builtin.is_none() {
+                builtin = m.builtin;
+            }
+            cur = m.parent;
+            depth += 1;
+        }
+        let color_u8 = color
+            .map(|c| {
+                [
+                    (c[0].clamp(0.0, 1.0) * 255.0) as u8,
+                    (c[1].clamp(0.0, 1.0) * 255.0) as u8,
+                    (c[2].clamp(0.0, 1.0) * 255.0) as u8,
+                ]
+            })
+            .or_else(|| builtin.map(|b| b.color()))
+            .unwrap_or([150, 150, 150]);
+        let grain = grain.or_else(|| builtin.map(|b| b.grain())).unwrap_or(0.0);
+        ResolvedMaterial::new(color_u8, grain)
+    }
+
+    /// Arma la [`BiomaPalette`] resuelta de un bioma (colores concretos para el render).
+    pub fn bioma_palette(&self, b: &Bioma) -> BiomaPalette {
+        let agua = self
+            .material_id_for(Material::Water)
+            .map(|id| self.resolve_material(id).color)
+            .unwrap_or_else(|| Material::Water.color());
+        BiomaPalette {
+            ground: self.resolve_material(b.ground),
+            cliff: self.resolve_material(b.cliff),
+            peak: b.peak.map(|id| self.resolve_material(id)),
+            agua,
+            objetos: b
+                .objetos
+                .iter()
+                .map(|o| (self.resolve_material(o.material), o.densidad, o.forma))
+                .collect(),
         }
     }
 
-    /// Agrega un mundo y devuelve su índice.
-    pub fn add_world(&mut self, w: NamedWorld) -> usize {
-        self.worlds.push(w);
-        self.worlds.len() - 1
+    /// Todo lo que el render necesita de un mundo: su primer bioma (relieve), la
+    /// semilla y la paleta resuelta. `None` si el mundo o su bioma no existen.
+    pub fn render_mundo(&self, mundo_id: u64) -> Option<MundoRender> {
+        let m = self.mundo(mundo_id)?;
+        let bid = *m.biomas.first()?;
+        let bioma = self.bioma(bid)?.clone();
+        let palette = self.bioma_palette(&bioma);
+        Some(MundoRender { bioma, seed: m.seed, palette })
     }
 
-    /// Agrega una escena y devuelve su índice.
-    pub fn add_scene(&mut self, s: SceneSpec) -> usize {
-        self.scenes.push(s);
-        self.scenes.len() - 1
+    /// El render de un **bioma** suelto (modo Biomas), con una semilla fija de
+    /// previsualización. `None` si el bioma no existe.
+    pub fn render_bioma(&self, bioma_id: u64) -> Option<MundoRender> {
+        let bioma = self.bioma(bioma_id)?.clone();
+        let palette = self.bioma_palette(&bioma);
+        Some(MundoRender { bioma, seed: 1337, palette })
     }
 
-    /// Personaje `i`, o uno por defecto si el índice se sale (escenas que piden
-    /// más actores que personajes hay).
+    /// Ser `i` (por índice, como referencian los actores de una escena), o uno por
+    /// defecto si el índice se sale.
     pub fn character_or_default(&self, i: usize) -> CharSpec {
-        self.characters
+        self.seres
             .get(i)
             .cloned()
             .unwrap_or_else(|| CharSpec::new("actor", Age::Adult))
@@ -466,10 +848,47 @@ mod tests {
         let p = Project::starter();
         let s = ron::ser::to_string(&p).expect("serializa a ron");
         let back: Project = ron::from_str(&s).expect("deserializa de ron");
-        assert_eq!(back.worlds.len(), p.worlds.len());
-        assert_eq!(back.worlds[0].name, "desierto");
-        // La receta sobrevive el viaje (un parámetro de muestra).
-        assert!((back.worlds[0].recipe.base - p.worlds[0].recipe.base).abs() < 1e-6);
+        assert_eq!(back.biomas.len(), p.biomas.len());
+        assert_eq!(back.mundos.len(), p.mundos.len());
+        assert_eq!(back.biomas[0].name, "desierto");
+        // El relieve del bioma sobrevive el viaje (un parámetro de muestra).
+        assert!((back.biomas[0].base - p.biomas[0].base).abs() < 1e-6);
+        // Y los ids siguen apuntando: la escena referencia un mundo que existe.
+        assert!(back.mundo(back.escenas[0].mundo).is_some());
+    }
+
+    #[test]
+    fn herencia_de_material_overridea_solo_lo_redefinido() {
+        let mut p = Project::starter();
+        // «cactus amarillo» hijo de «cactus»: sólo redefine el color.
+        let cactus = p.material_id_for(Material::Cactus).unwrap();
+        let verde = p.resolve_material(cactus);
+        let hijo_id = p.alloc_id();
+        p.materiales.push(MaterialDef {
+            id: hijo_id,
+            name: "cactus amarillo".into(),
+            parent: Some(cactus),
+            role: MatRole::Objeto(Forma::Columnar),
+            color: Some([0.9, 0.85, 0.2]),
+            grain: None, // hereda
+            leyes: vec![],
+            builtin: None,
+        });
+        let hijo = p.resolve_material(hijo_id);
+        assert_ne!(hijo.color, verde.color, "el color se redefinió");
+        assert_eq!(hijo.grain, verde.grain, "el grano se heredó del padre");
+    }
+
+    #[test]
+    fn herencia_con_ciclo_no_cuelga() {
+        let mut p = Project::starter();
+        let a = p.alloc_id();
+        let b = p.alloc_id();
+        p.materiales.push(MaterialDef { id: a, name: "a".into(), parent: Some(b), role: MatRole::Terreno, color: None, grain: None, leyes: vec![], builtin: None });
+        p.materiales.push(MaterialDef { id: b, name: "b".into(), parent: Some(a), role: MatRole::Terreno, color: None, grain: None, leyes: vec![], builtin: None });
+        // No debe colgarse; cae al gris neutro.
+        let r = p.resolve_material(a);
+        assert_eq!(r.color, [150, 150, 150]);
     }
 
     #[test]
@@ -562,8 +981,9 @@ mod tests {
         // Un actor que camina lejos del origen (más allá de la caja finita vieja):
         // un keyframe en grilla 18, otro en 600 → coords de MUNDO, no acotadas.
         let s = SceneSpec {
+            id: 0,
             name: "caminata larga".into(),
-            world: 0,
+            mundo: 0,
             duration: 10.0,
             actors: vec![ActorSpec {
                 character: 0,
@@ -602,8 +1022,12 @@ mod tests {
     #[test]
     fn starter_trae_escena_y_personajes() {
         let p = Project::starter();
-        assert_eq!(p.characters.len(), 3);
-        assert_eq!(p.scenes.len(), 1);
-        assert_eq!(p.scenes[0].world, 0);
+        assert_eq!(p.seres.len(), 3);
+        assert_eq!(p.escenas.len(), 1);
+        // La escena referencia un mundo válido por id.
+        assert!(p.mundo(p.escenas[0].mundo).is_some());
+        // Los 6 materiales semilla están sembrados.
+        assert_eq!(p.materiales.len(), 6);
+        assert!(p.material_id_for(Material::Sand).is_some());
     }
 }

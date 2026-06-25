@@ -16,7 +16,7 @@ use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint, paint_gpu, App};
 
-use crate::{demo_model, Mode, Model, Studio};
+use crate::{demo_model, Level, Model, Studio};
 
 const W: u32 = 1180;
 const H: u32 = 760;
@@ -38,16 +38,15 @@ pub fn shot() {
 
     // Toma 2: editor/reproductor de escenas, en el instante del gesto.
     let mut scene = demo_model();
-    scene.mode = Mode::Scenes;
+    scene.level = Level::Escenas;
     scene.time = 3.1;
     let scene_out = out.replace(".png", "_scene.png");
     let scene_out = if scene_out == out { "/tmp/voxel_studio_scene.png".to_string() } else { scene_out };
     render_model(scene, &scene_out);
 
-    // Toma 3: editor de personajes (turntable del muñeco).
+    // Toma 3: editor de seres (turntable del muñeco).
     let mut chars = demo_model();
-    chars.mode = Mode::Characters;
-    chars.char_sel = 0;
+    chars.level = Level::Seres;
     chars.time = 0.6;
     let chars_out = out.replace(".png", "_chars.png");
     let chars_out = if chars_out == out { "/tmp/voxel_studio_chars.png".to_string() } else { chars_out };

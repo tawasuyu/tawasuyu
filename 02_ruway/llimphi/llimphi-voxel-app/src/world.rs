@@ -122,12 +122,21 @@ impl World {
         // sólo una ondulación de dunas mínima. Así el huevo siempre tiene despeje y
         // el plano de seguimiento (que retrocede detrás del sujeto) ve arena abierta
         // en vez de meterse dentro de una columna de terreno.
-        let mut recipe = llimphi_voxel::WorldRecipe::desert(seed);
-        recipe.mountains = 0.0;
-        recipe.relief = 0.0;
-        recipe.dune = 0.035;
-        recipe.rivers = 0.0;
-        let grid = recipe.generate(dim);
+        // El bioma de desierto del proyecto de arranque, resuelto a su paleta y
+        // aplanado (sin mesas/relieve ni ríos) — la semilla del CLI manda.
+        let project = llimphi_voxel::Project::starter();
+        let mut bioma = project
+            .biomas
+            .iter()
+            .find(|b| b.name == "desierto")
+            .cloned()
+            .expect("bioma desierto");
+        bioma.mountains = 0.0;
+        bioma.relief = 0.0;
+        bioma.dune = 0.035;
+        bioma.rivers = 0.0;
+        let palette = project.bioma_palette(&bioma);
+        let grid = bioma.generate_window(seed, &palette, dim, [0, 0]);
         let mut voxel = VoxelRenderer::new(device, queue, FMT, &grid);
         voxel.sun_dir = [0.5, 0.62, 0.30]; // sol alto y cálido
         voxel.atmosphere = Atmosphere {

@@ -1,27 +1,28 @@
-//! **Creador de mundos**: en vez de un terreno hardcodeado (como [`terrain`]
-//! (crate::terrain), que es un mundo de pasto fijo), un [`WorldRecipe`]
-//! *parametriza* el relieve y los materiales — y produce el [`VoxelGrid`]. Un
-//! mundo concreto (desierto, pradera, …) es una **receta**, no una función nueva.
+//! **Bioma**: el relieve + qué materiales lo pintan. Antes esto era `WorldRecipe`
+//! con los materiales clavados en un `enum`; ahora un [`Bioma`] referencia
+//! **materiales autorables por id** (los define el [`Project`](crate::Project)) y la
+//! semilla vive en el [`Mundo`](crate::Mundo) que lo envuelve. El render no consume
+//! ids: la app **resuelve** el bioma a una [`BiomaPalette`] (colores concretos) y la
+//! pasa a [`Bioma::generate_window`].
 //!
-//! Dos cosas que pidió el corto del desierto salen de acá:
-//! - **Materiales** ([`Material`]): arena, agua, roca, cactus… cada uno con su
-//!   color. El terreno se pinta por material, no por banda de altura cruda.
-//! - **Receta del desierto** ([`WorldRecipe::desert`]): llano de arena, **pocas
-//!   montañas**, **pocos ríos**, **cactus** ralos.
+//! La altura sigue siendo **función pura de mundo** ([`Bioma::column_height`]):
+//! mismo `(seed, wx, wz)` → misma columna, así un bioma también streamea
+//! (continuidad de [`WorldStream`](crate::WorldStream)).
 //!
-//! La altura sigue siendo **función pura de mundo** ([`WorldRecipe::column_height`]):
-//! mismo `(wx, wz)` → misma columna, así un mundo-receta también podrá streamear
-//! (cuando se cablee a [`WorldStream`](crate::WorldStream)).
+//! El `enum` [`Material`] sobrevive **sólo como paleta semilla**: da los colores
+//! de fábrica (arena, pasto, roca…) con los que el `Project` siembra sus
+//! `MaterialDef` iniciales. No es el material autorable — ese es
+//! [`MaterialDef`](crate::MaterialDef).
 
 use llimphi_3d::VoxelGrid;
 use serde::{Deserialize, Serialize};
 
 use crate::terrain::{fbm, hash2, smooth, world_scale};
 
-/// Un **material** del mundo: la unidad semántica con la que el creador pinta los
-/// voxels (en vez de un color suelto). Da color y solidez; más adelante puede
-/// llevar propiedades físicas (flotabilidad del agua, daño del cactus, etc.).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// **Paleta semilla**: los materiales de fábrica con su color canónico. El
+/// `Project` siembra un `MaterialDef` por variante (salvo `Air`) al arrancar, y la
+/// UI puede ofrecerlos como punto de partida. No es el material autorable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Material {
     /// Vacío (aire) — no se dibuja.
     Air,
@@ -40,7 +41,7 @@ pub enum Material {
 }
 
 impl Material {
-    /// Color RGB del material.
+    /// Color RGB de fábrica del material.
     pub fn color(self) -> [u8; 3] {
         match self {
             Material::Air => [0, 0, 0],
@@ -53,15 +54,23 @@ impl Material {
         }
     }
 
+    /// **Grano de materia** de fábrica `[0,1]` (textura por vóxel; ver [`grained`]).
+    pub fn grain(self) -> f32 {
+        match self {
+            Material::Sand => 0.55,
+            Material::Grass | Material::Rock => 0.45,
+            Material::Snow => 0.25,
+            Material::Air | Material::Water | Material::Cactus => 0.0,
+        }
+    }
+
     /// `true` salvo para [`Material::Air`].
     pub fn is_solid(self) -> bool {
         !matches!(self, Material::Air)
     }
 
-    /// Todos los materiales, en orden de catálogo (para que un editor cicle entre
-    /// ellos).
-    pub const ALL: [Material; 7] = [
-        Material::Air,
+    /// Las variantes sembrables (sin `Air`), en orden de catálogo.
+    pub const ALL: [Material; 6] = [
         Material::Sand,
         Material::Grass,
         Material::Rock,
@@ -70,7 +79,7 @@ impl Material {
         Material::Cactus,
     ];
 
-    /// Nombre legible (español) para la UI.
+    /// Nombre legible (español).
     pub fn label(self) -> &'static str {
         match self {
             Material::Air => "aire",
@@ -82,94 +91,138 @@ impl Material {
             Material::Cactus => "cactus",
         }
     }
-
-    /// El material siguiente en el catálogo (cicla) — para botones de ciclo.
-    pub fn next(self) -> Material {
-        let i = Material::ALL.iter().position(|&m| m == self).unwrap_or(0);
-        Material::ALL[(i + 1) % Material::ALL.len()]
-    }
 }
 
-/// Qué planta esparce un mundo y con qué forma.
+/// **Forma de un objeto** colocable (un material con rol objeto). Hoy sólo el
+/// cactus columnar; abierto a árboles, rocas sueltas, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Flora {
-    /// Sin vegetación.
-    None,
-    /// Cactus columnar (tronco + algún brazo) — el desierto.
-    Cactus,
+pub enum Forma {
+    /// Columna vertical con brazos (cactus).
+    Columnar,
 }
 
-impl Flora {
-    /// Todas las opciones de flora (para ciclar en un editor).
-    pub const ALL: [Flora; 2] = [Flora::None, Flora::Cactus];
+impl Forma {
+    /// Todas las formas (para ciclar en un editor).
+    pub const ALL: [Forma; 1] = [Forma::Columnar];
 
-    /// Nombre legible (español) para la UI.
+    /// Nombre legible (español).
     pub fn label(self) -> &'static str {
         match self {
-            Flora::None => "ninguna",
-            Flora::Cactus => "cactus",
+            Forma::Columnar => "columnar",
         }
     }
 
-    /// La flora siguiente (cicla).
-    pub fn next(self) -> Flora {
-        let i = Flora::ALL.iter().position(|&f| f == self).unwrap_or(0);
-        Flora::ALL[(i + 1) % Flora::ALL.len()]
+    /// La forma siguiente (cicla).
+    pub fn next(self) -> Forma {
+        let i = Forma::ALL.iter().position(|&f| f == self).unwrap_or(0);
+        Forma::ALL[(i + 1) % Forma::ALL.len()]
     }
 }
 
-/// La **receta de un mundo**: parámetros del relieve + materiales + flora. Producí
-/// el `VoxelGrid` con [`generate`](Self::generate). Presets: [`desert`](Self::desert),
-/// [`grassland`](Self::grassland).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct WorldRecipe {
-    /// Semilla del ruido (mismo seed → mismo mundo).
-    pub seed: u32,
-    /// Nivel base del suelo, fracción del alto del mundo `[0,1]` (la llanura).
-    pub base: f32,
-    /// Amplitud de las ondulaciones suaves del suelo (dunas), fracción del alto.
-    pub dune: f32,
-    /// Amplitud de las montañas, fracción del alto.
-    pub relief: f32,
-    /// **Densidad de montañas** `[0,1]`: 0 = casi todo llano (sólo pocos picos
-    /// asoman), 1 = relieve por todos lados.
-    pub mountains: f32,
-    /// Nivel del agua, fracción del alto `[0,1]`: las depresiones por debajo se
-    /// llenan de [`Material::Water`].
-    pub water_level: f32,
-    /// **Densidad de ríos** `[0,1]`: 0 = sin ríos; mayor = canales más anchos/
-    /// frecuentes tallados hacia el agua.
-    pub rivers: f32,
-    /// Material de la superficie sólida (arena en el desierto, pasto en pradera).
-    pub ground: Material,
-    /// Material de acantilados/altura (roca).
-    pub cliff: Material,
-    /// Material de cumbre por encima de `peak_at` (nieve); `Air` = sin cumbre.
-    pub peak: Material,
-    /// Altura normalizada `[0,1]` a partir de la cual aparece `peak`.
-    pub peak_at: f32,
-    /// Flora y su densidad `[0,1]`.
-    pub flora: Flora,
-    pub flora_density: f32,
-    /// **Grano de materia** `[0,1]`: jitter de brillo *por vóxel* sobre el color del
-    /// material. `0` = caras planas de un color liso (el look "textura de Minecraft
-    /// estirada"); `~1` = superficie granular, densa, que parece materia y no bloque.
-    /// Es el **sello del motor**: lo que distancia del cubo plano sin tocar el shader
-    /// (la textura es el propio vóxel). Determinista por `(wx, y, wz, seed)`.
-    #[serde(default)]
+/// **Material resuelto** para el render: color + grano concretos (ya aplicada la
+/// herencia de [`MaterialDef`](crate::MaterialDef)). Es lo que entra a la paleta.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedMaterial {
+    pub color: [u8; 3],
     pub grain: f32,
 }
 
+impl ResolvedMaterial {
+    pub fn new(color: [u8; 3], grain: f32) -> Self {
+        Self { color, grain }
+    }
+}
+
+/// **Uso de un material como objeto** en un bioma: qué material, con qué densidad
+/// `[0,1]` brota, y con qué [`Forma`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ObjetoUso {
+    pub material: u64,
+    pub densidad: f32,
+    pub forma: Forma,
+}
+
+/// **Uso de un ser** en un bioma: qué ser y con qué probabilidad `[0,1]` puebla.
+/// (Por ahora sólo dato del modelo; el spawn real vendrá con el motor.)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SereUso {
+    pub sere: u64,
+    pub probabilidad: f32,
+}
+
+/// **Paleta resuelta de un bioma**: los colores concretos con los que pintar. La
+/// app la arma resolviendo los ids del bioma contra los materiales del `Project`,
+/// y se la pasa a [`Bioma::generate_window`]. Así worldgen no conoce ids ni herencia.
+#[derive(Debug, Clone)]
+pub struct BiomaPalette {
+    pub ground: ResolvedMaterial,
+    pub cliff: ResolvedMaterial,
+    pub peak: Option<ResolvedMaterial>,
+    /// Color del agua (superficie de ríos/lagos).
+    pub agua: [u8; 3],
+    /// Objetos a esparcir: `(material resuelto, densidad, forma)`.
+    pub objetos: Vec<(ResolvedMaterial, f32, Forma)>,
+}
+
+impl BiomaPalette {
+    /// Paleta de prueba/arranque rápida con un solo material de terreno (sin agua
+    /// teñida especial ni objetos). Útil en tests y fallbacks.
+    pub fn flat(color: [u8; 3], grain: f32) -> Self {
+        let m = ResolvedMaterial::new(color, grain);
+        Self {
+            ground: m,
+            cliff: ResolvedMaterial::new(Material::Rock.color(), Material::Rock.grain()),
+            peak: None,
+            agua: Material::Water.color(),
+            objetos: Vec::new(),
+        }
+    }
+
+    /// Material resuelto de la superficie de la columna en `(wx, wz, y)`: decide
+    /// arena/roca/nieve por altura+pendiente (misma lógica que antes, pero sobre la
+    /// paleta resuelta). `peak_at` viene del bioma.
+    #[allow(clippy::too_many_arguments)]
+    fn surface(
+        &self,
+        peak_at: f32,
+        wx: i32,
+        wz: i32,
+        y: u32,
+        h: u32,
+        slope: f32,
+        dim: [u32; 3],
+        seed: u32,
+    ) -> ResolvedMaterial {
+        let dy = dim[1] as f32;
+        let fh = y as f32 / dy;
+        // Acantilado: la cara superior en pendiente fuerte es roca.
+        if y == h && slope > 2.5 {
+            return self.cliff;
+        }
+        // Cumbre (si la hay).
+        if let Some(pk) = self.peak {
+            if fh > peak_at {
+                return pk;
+            }
+        }
+        // Jitter para que la transición a roca no sea una línea perfecta.
+        let jitter = hash2(wx, wz.wrapping_mul(31).wrapping_add(y as i32), seed ^ 0xABCD) * 0.06 - 0.03;
+        if fh + jitter > 0.72 {
+            return self.cliff;
+        }
+        self.ground
+    }
+}
+
 /// Aplica el **grano de materia** al color base de un vóxel: perturba el brillo
-/// (±`grain`·18%) y mete una pizca de variación por canal, deterministamente por
-/// la posición de mundo. `grain = 0` → color intacto. Función pura → seamless entre
+/// (±`grain`·18%) y mete una pizca de variación por canal, deterministamente por la
+/// posición de mundo. `grain = 0` → color intacto. Función pura → seamless entre
 /// ventanas de streaming.
 fn grained(base: [u8; 3], grain: f32, wx: i32, y: u32, wz: i32, seed: u32) -> [u8; 3] {
     if grain <= 0.0 {
         return base;
     }
     let g = grain.clamp(0.0, 1.0);
-    // Hash por vóxel (mete `y` en la coordenada para que la columna no sea uniforme).
     let h = hash2(wx, wz.wrapping_mul(31).wrapping_add(y as i32 * 7), seed ^ 0x6817);
     let bright = 1.0 + (h - 0.5) * 2.0 * g * 0.18; // ±18% a grano pleno
     let speck = hash2(wx.wrapping_mul(13).wrapping_add(y as i32), wz, seed ^ 0x51A3);
@@ -178,78 +231,67 @@ fn grained(base: [u8; 3], grain: f32, wx: i32, y: u32, wz: i32, seed: u32) -> [u
     [ch(base[0], tilt), ch(base[1], tilt * 0.7), ch(base[2], -tilt * 0.5)]
 }
 
-impl WorldRecipe {
-    /// **Desierto llano**: arena, pocas montañas, pocos ríos, cactus ralos. El
-    /// mundo de apertura del corto.
-    pub fn desert(seed: u32) -> Self {
-        Self {
-            seed,
-            base: 0.30,
-            dune: 0.05,    // ondulación suave (dunas bajas)
-            relief: 0.45,  // las pocas montañas que hay, altas
-            mountains: 0.12, // pero MUY ralas
-            water_level: 0.26, // por debajo del suelo base → casi sin agua salvo ríos
-            rivers: 0.18,  // pocos ríos
-            ground: Material::Sand,
-            cliff: Material::Rock,
-            peak: Material::Air, // sin nieve en el desierto
-            peak_at: 1.0,
-            flora: Flora::Cactus,
-            flora_density: 0.010,
-            grain: 0.55, // arena granular, no slab plano
-        }
-    }
+/// La **receta de relieve de un bioma**: parámetros del terreno + referencias a los
+/// materiales (por id) que lo pintan. La **semilla NO vive acá** — la aporta el
+/// [`Mundo`](crate::Mundo) al generar (un mismo bioma con semillas distintas da
+/// mundos distintos). Producí el `VoxelGrid` con [`generate_window`](Self::generate_window),
+/// pasándole la [`BiomaPalette`] resuelta.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bioma {
+    /// Id estable (asignado por el [`Project`](crate::Project)).
+    pub id: u64,
+    /// Nombre editable.
+    pub name: String,
+    /// Nivel base del suelo, fracción del alto del mundo `[0,1]` (la llanura).
+    pub base: f32,
+    /// Amplitud de las ondulaciones suaves del suelo (dunas), fracción del alto.
+    pub dune: f32,
+    /// Amplitud de las montañas, fracción del alto.
+    pub relief: f32,
+    /// **Densidad de montañas** `[0,1]`: 0 = casi todo llano, 1 = relieve por todos lados.
+    pub mountains: f32,
+    /// Nivel del agua, fracción del alto `[0,1]`.
+    pub water_level: f32,
+    /// **Densidad de ríos** `[0,1]`.
+    pub rivers: f32,
+    /// Altura normalizada `[0,1]` a partir de la cual aparece la cumbre (`peak`).
+    pub peak_at: f32,
+    /// Material del suelo (id en [`Project::materiales`](crate::Project)).
+    pub ground: u64,
+    /// Material de acantilados/altura (id).
+    pub cliff: u64,
+    /// Material de cumbre por encima de `peak_at` (id); `None` = sin cumbre.
+    pub peak: Option<u64>,
+    /// Objetos a esparcir (flora/props), cada uno con su densidad y forma.
+    #[serde(default)]
+    pub objetos: Vec<ObjetoUso>,
+    /// Seres que pueblan el bioma (sólo dato por ahora).
+    #[serde(default)]
+    pub seres: Vec<SereUso>,
+}
 
-    /// **Pradera**: el mundo verde clásico (equivalente conceptual a [`terrain`]
-    /// (crate::terrain)), expresado como receta para mostrar que el creador es
-    /// general.
-    pub fn grassland(seed: u32) -> Self {
-        Self {
-            seed,
-            base: 0.22,
-            dune: 0.10,
-            relief: 0.7,
-            mountains: 0.5,
-            water_level: 0.30,
-            rivers: 0.25,
-            ground: Material::Grass,
-            cliff: Material::Rock,
-            peak: Material::Snow,
-            peak_at: 0.80,
-            flora: Flora::None,
-            flora_density: 0.0,
-            grain: 0.45, // pasto/roca con textura, no color liso
-        }
-    }
-
+impl Bioma {
     /// **Altura del terreno** (índice `y` del voxel sólido superior) en la columna
-    /// de **mundo** `(wx, wz)`. Función pura: mismo punto → misma altura en
-    /// cualquier ventana (continuidad para el streaming). Combina llanura base +
-    /// dunas suaves + montañas *gated* (sólo asoman donde el fbm supera un umbral,
-    /// así `mountains` bajo deja casi todo plano) + ríos tallados hacia el agua.
-    pub fn column_height(&self, wx: i32, wz: i32, dim: [u32; 3]) -> u32 {
+    /// de **mundo** `(wx, wz)` para la semilla `seed`. Función pura: mismo punto →
+    /// misma altura en cualquier ventana. Llanura base + dunas + montañas *gated* +
+    /// ríos tallados hacia el agua.
+    pub fn column_height(&self, seed: u32, wx: i32, wz: i32, dim: [u32; 3]) -> u32 {
         let dy = dim[1] as f32;
         let scale = world_scale(dim);
-        let s = self.seed;
         let (fx, fz) = (wx as f32 * scale, wz as f32 * scale);
 
         let base = self.base * dy;
-        // Dunas: ondulación suave centrada en cero.
-        let dunes = (fbm(fx * 1.7, fz * 1.7, 4, s ^ 0x11) - 0.5) * 2.0;
+        let dunes = (fbm(fx * 1.7, fz * 1.7, 4, seed ^ 0x11) - 0.5) * 2.0;
         let dune_h = dunes * self.dune * dy;
-        // Montañas gated: sólo la parte alta del fbm sobresale. `mountains` baja el
-        // umbral → más raras y aisladas.
-        let c = fbm(fx, fz, 6, s);
+        let c = fbm(fx, fz, 6, seed);
         let thr = 1.0 - self.mountains.clamp(0.0, 1.0);
         let m = ((c - thr).max(0.0) / (1.0 - thr).max(1e-3)).clamp(0.0, 1.0);
         let mtn_h = smooth(m) * self.relief * dy;
 
         let mut h = base + dune_h + mtn_h;
 
-        // Ríos: una "cresta" de ruido (ridged) marca líneas; cerca de la línea el
-        // terreno se hunde hasta un lecho bajo el nivel del agua.
         if self.rivers > 0.0 {
-            let r = 1.0 - (fbm(fx * 0.8, fz * 0.8, 4, s ^ 0x77) - 0.5).abs() * 2.0;
+            let r = 1.0 - (fbm(fx * 0.8, fz * 0.8, 4, seed ^ 0x77) - 0.5).abs() * 2.0;
             let width = 0.03 + 0.10 * self.rivers.clamp(0.0, 1.0);
             if r > 1.0 - width {
                 let t = ((r - (1.0 - width)) / width).clamp(0.0, 1.0);
@@ -267,51 +309,41 @@ impl WorldRecipe {
         (self.water_level * dim[1] as f32) as u32
     }
 
-    /// Material del voxel sólido `(wx, y, wz)` de una columna de altura `h` con
-    /// `slope` (desnivel con vecinos). Decide arena/roca/nieve por altura+pendiente.
-    fn ground_material(&self, wx: i32, wz: i32, y: u32, h: u32, slope: f32, dim: [u32; 3]) -> Material {
-        let dy = dim[1] as f32;
-        let fh = y as f32 / dy;
-        // Acantilado: la cara superior en pendiente fuerte es roca.
-        if y == h && slope > 2.5 {
-            return self.cliff;
-        }
-        // Cumbre nevada (si la receta la tiene).
-        if self.peak.is_solid() && fh > self.peak_at {
-            return self.peak;
-        }
-        // Jitter para que la transición a roca no sea una línea perfecta.
-        let jitter = hash2(wx, wz.wrapping_mul(31).wrapping_add(y as i32), self.seed ^ 0xABCD) * 0.06 - 0.03;
-        // Roca alta general (debajo de la cumbre): más arriba de 0.72 del alto.
-        if fh + jitter > 0.72 {
-            return self.cliff;
-        }
-        self.ground
-    }
-
-    /// `true` si en la columna `(wx, wz)` brota una planta (gate de densidad por
-    /// hash de mundo → determinista y seamless). Sólo en suelo seco y llano.
-    fn has_flora(&self, wx: i32, wz: i32, h: u32, slope: f32, dim: [u32; 3]) -> bool {
-        if self.flora == Flora::None || self.flora_density <= 0.0 {
+    /// `true` si en la columna `(wx, wz)` brota un objeto de densidad `densidad`
+    /// (gate por hash de mundo, sembrado por `salt` para que objetos distintos no se
+    /// pisen). Sólo en suelo seco y llano.
+    fn has_objeto(&self, wx: i32, wz: i32, h: u32, slope: f32, densidad: f32, salt: u32, dim: [u32; 3]) -> bool {
+        if densidad <= 0.0 {
             return false;
         }
         if h <= self.water_y(dim) + 1 || slope > 1.5 {
-            return false; // ni en el agua/orilla ni en pendiente
+            return false;
         }
-        hash2(wx.wrapping_mul(7), wz.wrapping_mul(13), self.seed ^ 0xC4C7) < self.flora_density
+        hash2(wx.wrapping_mul(7), wz.wrapping_mul(13), self.seed_salt(salt)) < densidad
     }
 
-    /// **Construye el mundo**: rellena un `VoxelGrid` de tamaño `dim` con la esquina
-    /// en la columna de mundo `origin = [wx, wz]` (usá `[0,0]` para el mundo
-    /// centrado). Terreno + agua + flora, todo por material. Deja el grid limpio
-    /// de *dirty* (se sube entero).
-    pub fn generate_window(&self, dim: [u32; 3], origin: [i32; 2]) -> VoxelGrid {
+    /// Mezcla un `salt` con una constante estable para sembrar el gate de objetos.
+    #[inline]
+    fn seed_salt(&self, salt: u32) -> u32 {
+        (0xC4C7u32).wrapping_add(salt.wrapping_mul(0x9E37_79B9))
+    }
+
+    /// **Construye una ventana del bioma** con la esquina en la columna de mundo
+    /// `origin = [wx, wz]`, semilla `seed` y la [`BiomaPalette`] ya resuelta. Terreno
+    /// + agua + objetos, todo por material. Deja el grid limpio de *dirty*.
+    pub fn generate_window(
+        &self,
+        seed: u32,
+        palette: &BiomaPalette,
+        dim: [u32; 3],
+        origin: [i32; 2],
+    ) -> VoxelGrid {
         let [dx, dy, dz] = dim;
         let mut g = VoxelGrid::new(dim);
         let (ox, oz) = (origin[0], origin[1]);
         let water_y = self.water_y(dim);
 
-        let h_at = |lx: i32, lz: i32| self.column_height(ox + lx, oz + lz, dim);
+        let h_at = |lx: i32, lz: i32| self.column_height(seed, ox + lx, oz + lz, dim);
 
         for lz in 0..dz as i32 {
             for lx in 0..dx as i32 {
@@ -321,20 +353,23 @@ impl WorldRecipe {
                     .abs()
                     .max((h as i32 - h_at(lx, lz - 1) as i32).abs()) as f32;
 
-                // Columna sólida (con grano de materia por vóxel — sello del motor).
+                // Columna sólida (con grano por material).
                 for y in 0..=h.min(dy - 1) {
-                    let m = self.ground_material(wx, wz, y, h, slope, dim);
-                    g.set(lx as u32, y, lz as u32, grained(m.color(), self.grain, wx, y, wz, self.seed));
+                    let m = palette.surface(self.peak_at, wx, wz, y, h, slope, dim, seed);
+                    g.set(lx as u32, y, lz as u32, grained(m.color, m.grain, wx, y, wz, seed));
                 }
-                // Agua: llena por encima del terreno hasta el nivel del agua.
+                // Agua.
                 if h < water_y {
                     for y in (h + 1)..=water_y.min(dy - 1) {
-                        g.set(lx as u32, y, lz as u32, Material::Water.color());
+                        g.set(lx as u32, y, lz as u32, palette.agua);
                     }
                 }
-                // Flora.
-                if self.has_flora(wx, wz, h, slope, dim) {
-                    self.place_flora(&mut g, lx as u32, h + 1, lz as u32, wx, wz, dim);
+                // Objetos (flora/props): cada uso, con su densidad y forma.
+                for (i, (mat, densidad, forma)) in palette.objetos.iter().enumerate() {
+                    if self.has_objeto(wx, wz, h, slope, *densidad, i as u32, dim) {
+                        self.place_objeto(&mut g, *forma, mat.color, lx as u32, h + 1, lz as u32, wx, wz, dim);
+                        break; // un objeto por columna
+                    }
                 }
             }
         }
@@ -343,45 +378,48 @@ impl WorldRecipe {
         g
     }
 
-    /// Mundo centrado en el origen (`origin = [0,0]`).
-    pub fn generate(&self, dim: [u32; 3]) -> VoxelGrid {
-        self.generate_window(dim, [0, 0])
-    }
-
-    /// Coloca una planta con la base en `(x, base_y, z)` (local al grid). Hoy sólo
-    /// el **cactus** columnar: tronco de 3–6 de alto + 0–2 brazos en L.
-    fn place_flora(&self, g: &mut VoxelGrid, x: u32, base_y: u32, z: u32, wx: i32, wz: i32, dim: [u32; 3]) {
-        if self.flora != Flora::Cactus {
-            return;
-        }
-        let dy = dim[1];
-        let col = Material::Cactus.color();
-        // Altura del tronco: 3..6 determinista por la columna.
-        let th = 3 + (hash2(wx, wz, self.seed ^ 0x1357) * 4.0) as u32;
-        for k in 0..th {
-            let y = base_y + k;
-            if y >= dy {
-                break;
-            }
-            g.set(x, y, z, col);
-        }
-        // Brazos: un par de salientes laterales a media altura (forma de candelabro).
-        let arm_seed = hash2(wx.wrapping_add(1), wz, self.seed ^ 0x2468);
-        if th >= 4 && arm_seed > 0.45 {
-            let ay = base_y + th / 2;
-            // Brazo a +x: un voxel al costado y dos hacia arriba.
-            let arm = [(x.wrapping_add(1), ay, z), (x.wrapping_add(1), ay + 1, z)];
-            for &(ax, ya, az) in &arm {
-                if ax < dim[0] && ya < dy {
-                    g.set(ax, ya, az, col);
+    /// Coloca un objeto con la base en `(x, base_y, z)` (local). Hoy sólo
+    /// [`Forma::Columnar`]: tronco de 3–6 de alto + 0–2 brazos en L (cactus).
+    #[allow(clippy::too_many_arguments)]
+    fn place_objeto(
+        &self,
+        g: &mut VoxelGrid,
+        forma: Forma,
+        col: [u8; 3],
+        x: u32,
+        base_y: u32,
+        z: u32,
+        wx: i32,
+        wz: i32,
+        dim: [u32; 3],
+    ) {
+        match forma {
+            Forma::Columnar => {
+                let dy = dim[1];
+                let th = 3 + (hash2(wx, wz, 0x1357) * 4.0) as u32;
+                for k in 0..th {
+                    let y = base_y + k;
+                    if y >= dy {
+                        break;
+                    }
+                    g.set(x, y, z, col);
                 }
-            }
-            if arm_seed > 0.7 && x > 0 {
-                // Brazo opuesto a -x.
-                let arm2 = [(x - 1, ay + 1, z), (x - 1, ay + 2, z)];
-                for &(ax, ya, az) in &arm2 {
-                    if ya < dy {
-                        g.set(ax, ya, az, col);
+                let arm_seed = hash2(wx.wrapping_add(1), wz, 0x2468);
+                if th >= 4 && arm_seed > 0.45 {
+                    let ay = base_y + th / 2;
+                    let arm = [(x.wrapping_add(1), ay, z), (x.wrapping_add(1), ay + 1, z)];
+                    for &(ax, ya, az) in &arm {
+                        if ax < dim[0] && ya < dy {
+                            g.set(ax, ya, az, col);
+                        }
+                    }
+                    if arm_seed > 0.7 && x > 0 {
+                        let arm2 = [(x - 1, ay + 1, z), (x - 1, ay + 2, z)];
+                        for &(ax, ya, az) in &arm2 {
+                            if ya < dy {
+                                g.set(ax, ya, az, col);
+                            }
+                        }
                     }
                 }
             }
@@ -393,40 +431,93 @@ impl WorldRecipe {
 mod tests {
     use super::*;
 
+    /// Un bioma de desierto de prueba (ids ficticios; la generación no los usa, usa
+    /// la paleta) + su paleta de arena/roca.
+    fn desierto() -> (Bioma, BiomaPalette) {
+        let b = Bioma {
+            id: 1,
+            name: "desierto".into(),
+            base: 0.30,
+            dune: 0.05,
+            relief: 0.45,
+            mountains: 0.12,
+            water_level: 0.26,
+            rivers: 0.18,
+            peak_at: 1.0,
+            ground: 1,
+            cliff: 2,
+            peak: None,
+            objetos: vec![ObjetoUso { material: 3, densidad: 0.010, forma: Forma::Columnar }],
+            seres: vec![],
+        };
+        let pal = BiomaPalette {
+            ground: ResolvedMaterial::new(Material::Sand.color(), Material::Sand.grain()),
+            cliff: ResolvedMaterial::new(Material::Rock.color(), Material::Rock.grain()),
+            peak: None,
+            agua: Material::Water.color(),
+            objetos: vec![(ResolvedMaterial::new(Material::Cactus.color(), 0.0), 0.010, Forma::Columnar)],
+        };
+        (b, pal)
+    }
+
+    fn pradera() -> (Bioma, BiomaPalette) {
+        let b = Bioma {
+            id: 2,
+            name: "pradera".into(),
+            base: 0.22,
+            dune: 0.10,
+            relief: 0.7,
+            mountains: 0.5,
+            water_level: 0.30,
+            rivers: 0.25,
+            peak_at: 0.80,
+            ground: 4,
+            cliff: 2,
+            peak: Some(5),
+            objetos: vec![],
+            seres: vec![],
+        };
+        let pal = BiomaPalette {
+            ground: ResolvedMaterial::new(Material::Grass.color(), Material::Grass.grain()),
+            cliff: ResolvedMaterial::new(Material::Rock.color(), Material::Rock.grain()),
+            peak: Some(ResolvedMaterial::new(Material::Snow.color(), Material::Snow.grain())),
+            agua: Material::Water.color(),
+            objetos: vec![],
+        };
+        (b, pal)
+    }
+
     #[test]
     fn altura_es_funcion_pura_de_mundo() {
-        let r = WorldRecipe::desert(7);
+        let (b, _) = desierto();
         let dim = [96, 48, 96];
-        // El mismo punto de mundo da la misma altura, lo pidas desde donde lo pidas.
-        assert_eq!(r.column_height(1234, -567, dim), r.column_height(1234, -567, dim));
+        assert_eq!(b.column_height(7, 1234, -567, dim), b.column_height(7, 1234, -567, dim));
     }
 
     #[test]
     fn desierto_es_mas_llano_que_pradera() {
         let dim = [128, 56, 128];
-        let var = |r: &WorldRecipe| {
+        let var = |b: &Bioma| {
             let mut hs = Vec::new();
             for z in (0..400).step_by(7) {
                 for x in (0..400).step_by(7) {
-                    hs.push(r.column_height(x, z, dim) as f32);
+                    hs.push(b.column_height(42, x, z, dim) as f32);
                 }
             }
             let mean = hs.iter().sum::<f32>() / hs.len() as f32;
             hs.iter().map(|h| (h - mean).powi(2)).sum::<f32>() / hs.len() as f32
         };
-        let desert = var(&WorldRecipe::desert(42));
-        let grass = var(&WorldRecipe::grassland(42));
-        assert!(desert < grass, "el desierto es más llano: var {desert:.1} vs {grass:.1}");
+        let d = var(&desierto().0);
+        let g = var(&pradera().0);
+        assert!(d < g, "el desierto es más llano: var {d:.1} vs {g:.1}");
     }
 
     #[test]
     fn el_desierto_pinta_arena_agua_y_cactus() {
         let dim = [128, 48, 128];
-        let r = WorldRecipe::desert(3);
-        let g = r.generate(dim);
+        let (b, pal) = desierto();
+        let grid = b.generate_window(3, &pal, dim, [0, 0]);
         let mut seen = [false; 3]; // [arena, agua, cactus]
-        // La arena lleva grano (perturbación por vóxel) → se detecta por cercanía,
-        // no por igualdad exacta. Agua y cactus van sin grano (color exacto).
         let near = |a: [u8; 3], b: [u8; 3]| {
             (a[0] as i32 - b[0] as i32).abs() <= 60
                 && (a[1] as i32 - b[1] as i32).abs() <= 60
@@ -435,7 +526,7 @@ mod tests {
         for z in 0..dim[2] {
             for x in 0..dim[0] {
                 for y in 0..dim[1] {
-                    if let Some(c) = g.get(x, y, z) {
+                    if let Some(c) = grid.get(x, y, z) {
                         if c[3] == 0 {
                             continue;
                         }
@@ -459,29 +550,24 @@ mod tests {
     #[test]
     fn grano_de_materia_perturba_pero_es_determinista() {
         let base = Material::Sand.color();
-        // grain=0 → color intacto (slab plano).
         assert_eq!(grained(base, 0.0, 5, 3, 9, 1337), base);
-        // grain>0 → el mismo vóxel no es exactamente el color base (tiene grano)…
         let g1 = grained(base, 0.6, 5, 3, 9, 1337);
-        assert_ne!(g1, base, "con grano el vóxel se aparta del color liso");
-        // …pero es función pura: mismo (pos, seed) → mismo color (seamless/streaming).
+        assert_ne!(g1, base);
         let g2 = grained(base, 0.6, 5, 3, 9, 1337);
         assert_eq!(g1, g2);
-        // Vóxeles vecinos difieren → la superficie no es un color uniforme.
         let gn = grained(base, 0.6, 6, 3, 9, 1337);
-        assert_ne!(g1, gn, "vóxeles contiguos varían → materia granular, no bloque liso");
-        // El desierto trae grano por defecto.
-        assert!(WorldRecipe::desert(1).grain > 0.0);
+        assert_ne!(g1, gn);
+        assert!(Material::Sand.grain() > 0.0);
     }
 
     #[test]
     fn mismo_seed_mismo_mundo() {
         let dim = [64, 40, 64];
-        let a = WorldRecipe::desert(99).generate(dim);
-        let b = WorldRecipe::desert(99).generate(dim);
-        // Un muestreo basta: deterministas.
+        let (b, pal) = desierto();
+        let a = b.generate_window(99, &pal, dim, [0, 0]);
+        let c = b.generate_window(99, &pal, dim, [0, 0]);
         for (x, y, z) in [(10, 12, 10), (30, 8, 44), (60, 20, 5)] {
-            assert_eq!(a.get(x, y, z), b.get(x, y, z), "({x},{y},{z}) difiere");
+            assert_eq!(a.get(x, y, z), c.get(x, y, z), "({x},{y},{z}) difiere");
         }
     }
 }

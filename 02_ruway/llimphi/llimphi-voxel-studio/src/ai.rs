@@ -1,63 +1,48 @@
-//! Conexión IA **"poor"** del studio: convierte una descripción en prosa en una
-//! [`WorldRecipe`]. Dos caminos, en cascada:
+//! Conexión IA **"poor"** del studio. Convierte prosa en artefactos del modelo:
+//! un [`Bioma`] (relieve + materiales), una [`SceneSpec`] o un [`CharSpec`]. Dos
+//! caminos en cascada donde aplica: LLM real (`pluma-llm`, autodetecta backend) y,
+//! si no hay modelo o falla el parseo, una **heurística local** offline — así el
+//! botón siempre produce algo.
 //!
-//! 1. **LLM** vía `pluma-llm` (`from_env`, autodetecta backend por env). Se le pide
-//!    que emita la receta como literal RON; se parsea contra el struct real.
-//! 2. **Heurística local** por palabras clave — instantánea y offline. Es el
-//!    fallback cuando no hay modelo real (Mock) o la salida del LLM no parsea, así
-//!    el botón **siempre** produce un mundo (de ahí lo "poor": sirve sin nube).
+//! Tras el rediseño por niveles, los materiales son **autorables** (ids en el
+//! `Project`), así que la generación de un bioma referencia los materiales semilla
+//! vía [`MatRefs`] en vez de un `enum` cerrado.
 
-use llimphi_voxel::{Age, CharSpec, Clip, Flora, Material, SceneSpec, WorldRecipe};
+use llimphi_voxel::{Bioma, CharSpec, Clip, Forma, ObjetoUso, Project, SceneSpec};
 use pluma_llm::pluma_llm_core::ChatRequest;
 use serde::Deserialize;
 
-/// Instrucción del sistema: enseña el formato RON exacto y el significado de cada
-/// parámetro, y exige responder **sólo** con el literal.
-const SYSTEM: &str = "\
-Sos un generador de mundos voxel. Dada una descripción en lenguaje natural, \
-respondé EXCLUSIVAMENTE con un literal RON de la estructura WorldRecipe, sin \
-markdown, sin ``` y sin texto extra.
-
-Campos (todos obligatorios):
-- seed: u32 (semilla; elegí uno cualquiera)
-- base: f32 0..0.9 (nivel del suelo, fracción del alto)
-- dune: f32 0..0.4 (amplitud de ondulaciones suaves)
-- relief: f32 0..1 (alto de las montañas)
-- mountains: f32 0..1 (densidad de montañas; 0 = casi llano)
-- water_level: f32 0..0.9 (nivel del agua)
-- rivers: f32 0..1 (densidad de ríos)
-- ground: material del suelo
-- cliff: material de acantilado/altura
-- peak: material de cumbre (Air = sin cumbre)
-- peak_at: f32 0..1 (altura desde la que aparece la cumbre)
-- flora: tipo de planta
-- flora_density: f32 0..0.05
-
-Materiales válidos: Air, Sand, Grass, Rock, Snow, Water, Cactus.
-Flora válida: None, Cactus.
-
-Ejemplo (desierto llano con cactus):
-(seed: 7, base: 0.3, dune: 0.05, relief: 0.45, mountains: 0.12, water_level: 0.26, rivers: 0.18, ground: Sand, cliff: Rock, peak: Air, peak_at: 1.0, flora: Cactus, flora_density: 0.01)
-
-Ejemplo (cordillera nevada):
-(seed: 42, base: 0.25, dune: 0.08, relief: 0.85, mountains: 0.7, water_level: 0.3, rivers: 0.3, ground: Grass, cliff: Rock, peak: Snow, peak_at: 0.65, flora: None, flora_density: 0.0)";
-
-/// El RON del ejemplo del prompt — también sirve de aserción de que enseñamos un
-/// literal parseable (lo usa el test).
-#[cfg(test)]
-const SAMPLE: &str = "(seed: 7, base: 0.3, dune: 0.05, relief: 0.45, mountains: 0.12, water_level: 0.26, rivers: 0.18, ground: Sand, cliff: Rock, peak: Air, peak_at: 1.0, flora: Cactus, flora_density: 0.01)";
-
-/// Genera una receta desde una descripción. **Siempre** devuelve algo: intenta el
-/// LLM y, si no hay modelo real o falla el parseo, cae a la heurística local.
-/// Bloqueante (red): llamar desde un worker (`Handle::spawn`), no en el hilo UI.
-pub fn generate(prompt: &str) -> WorldRecipe {
-    via_llm(prompt).unwrap_or_else(|| local_recipe(prompt))
+/// Ids de los materiales **semilla** del proyecto que un bioma puede referenciar.
+/// Se resuelven una vez (con [`from_project`](Self::from_project)) y se capturan en
+/// el worker de IA — así la generación no necesita el `Project` entero.
+#[derive(Debug, Clone, Copy)]
+pub struct MatRefs {
+    pub sand: u64,
+    pub grass: u64,
+    pub rock: u64,
+    pub snow: u64,
+    pub cactus: u64,
 }
 
-/// Pregunta al LLM real (de `pluma-llm`, `from_env`) y devuelve el texto de la
-/// respuesta. `None` si el backend es **Mock** (sin credenciales → ni gastamos la
-/// vuelta) o si la red falla. Es el motor compartido de la asistencia para mundos,
-/// escenas y personajes; cada caller parsea la salida a su artefacto.
+impl MatRefs {
+    /// Resuelve los ids semilla del proyecto (0 si falta alguno — no debería con el
+    /// proyecto de arranque).
+    pub fn from_project(p: &Project) -> Self {
+        use llimphi_voxel::Material::*;
+        let id = |m| p.material_id_for(m).unwrap_or(0);
+        Self {
+            sand: id(Sand),
+            grass: id(Grass),
+            rock: id(Rock),
+            snow: id(Snow),
+            cactus: id(Cactus),
+        }
+    }
+}
+
+/// Pregunta al LLM real (de `pluma-llm`, `from_env`) y devuelve el texto. `None` si
+/// el backend es **Mock** (sin credenciales) o si la red falla. Motor compartido de
+/// la asistencia; cada caller parsea la salida a su artefacto.
 fn ask_llm(system: &str, prompt: &str, max_tokens: u32) -> Option<String> {
     let client = pluma_llm::from_env().ok()?;
     if client.model_id().to_lowercase().contains("mock") {
@@ -80,105 +65,117 @@ fn ron_slice(text: &str) -> Option<&str> {
     (end > start).then(|| &text[start..=end])
 }
 
-/// Intenta el LLM real para un mundo. `None` si Mock/red/parseo falla.
-fn via_llm(prompt: &str) -> Option<WorldRecipe> {
-    parse_recipe(&ask_llm(SYSTEM, prompt, 400)?)
-}
+// =============================================================================
+//  Biomas
+// =============================================================================
 
-/// Parsea una [`WorldRecipe`] de un texto que puede traer ``` fences o ruido
-/// alrededor: recorta al literal RON `( … )` y deserializa.
-pub fn parse_recipe(text: &str) -> Option<WorldRecipe> {
-    ron::from_str::<WorldRecipe>(ron_slice(text)?).ok()
-}
-
-/// Semilla determinista por la descripción (mismo texto → mismo mundo).
-fn seed_of(prompt: &str) -> u32 {
-    prompt
-        .bytes()
-        .fold(2166136261u32, |a, b| (a ^ b as u32).wrapping_mul(16777619))
-        % 100_000
-}
-
-/// **Heurística local** por palabras clave: arranca de un preset (desierto o
-/// pradera) y lo ajusta según términos del prompt (nieve, agua, ríos, llano…).
-/// Offline e instantánea — el alma "poor" de la asistencia.
-pub fn local_recipe(prompt: &str) -> WorldRecipe {
+/// **Bioma desde prosa** (heurística local por palabras clave). Arranca de un preset
+/// (desierto o pradera) referenciando los materiales semilla `m` y lo ajusta según
+/// términos del prompt. Offline e instantánea — el alma "poor". El id queda en 0; lo
+/// asigna el `Project` al agregarlo.
+pub fn generate_bioma(prompt: &str, m: &MatRefs) -> Bioma {
     let p = prompt.to_lowercase();
     let has = |k: &str| p.contains(k);
-    let seed = seed_of(prompt);
 
-    let mut r = if has("desierto") || has("arena") || has("seco") || has("duna") {
-        WorldRecipe::desert(seed)
+    let desierto = has("desierto") || has("arena") || has("seco") || has("duna");
+    let mut b = if desierto {
+        Bioma {
+            id: 0,
+            name: name_from(prompt, "bioma"),
+            base: 0.30,
+            dune: 0.05,
+            relief: 0.45,
+            mountains: 0.12,
+            water_level: 0.26,
+            rivers: 0.18,
+            peak_at: 1.0,
+            ground: m.sand,
+            cliff: m.rock,
+            peak: None,
+            objetos: vec![ObjetoUso { material: m.cactus, densidad: 0.010, forma: Forma::Columnar }],
+            seres: vec![],
+        }
     } else {
-        WorldRecipe::grassland(seed)
+        Bioma {
+            id: 0,
+            name: name_from(prompt, "bioma"),
+            base: 0.22,
+            dune: 0.10,
+            relief: 0.7,
+            mountains: 0.5,
+            water_level: 0.30,
+            rivers: 0.25,
+            peak_at: 0.80,
+            ground: m.grass,
+            cliff: m.rock,
+            peak: Some(m.snow),
+            objetos: vec![],
+            seres: vec![],
+        }
     };
 
-    if has("nieve") || has("monta") || has("montañ") || has("cumbre") || has("alpin") || has("pico")
-    {
-        r.relief = r.relief.max(0.8);
-        r.mountains = r.mountains.max(0.65);
-        r.peak = Material::Snow;
-        r.peak_at = 0.62;
+    if has("nieve") || has("monta") || has("montañ") || has("cumbre") || has("alpin") || has("pico") {
+        b.relief = b.relief.max(0.8);
+        b.mountains = b.mountains.max(0.65);
+        b.peak = Some(m.snow);
+        b.peak_at = 0.62;
     }
     if has("llano") || has("plano") || has("pradera") || has("planicie") || has("estepa") {
-        r.relief = r.relief.min(0.35);
-        r.mountains = r.mountains.min(0.2);
+        b.relief = b.relief.min(0.35);
+        b.mountains = b.mountains.min(0.2);
     }
-    if has("agua") || has("lago") || has("mar") || has("océano") || has("oceano") || has("isla")
-        || has("inund")
-    {
-        r.water_level = r.water_level.max(0.5);
+    if has("agua") || has("lago") || has("mar") || has("océano") || has("oceano") || has("isla") || has("inund") {
+        b.water_level = b.water_level.max(0.5);
     }
     if has("río") || has("rio") || has("cauce") || has("arroyo") {
-        r.rivers = r.rivers.max(0.6);
+        b.rivers = b.rivers.max(0.6);
     }
     if has("bosque") || has("selva") || has("verde") || has("pasto") {
-        r.ground = Material::Grass;
+        b.ground = m.grass;
     }
-    if has("cactus") || has("desierto") {
-        r.flora = Flora::Cactus;
-        r.flora_density = r.flora_density.max(0.012);
+    if has("cactus") || desierto {
+        if !b.objetos.iter().any(|o| o.material == m.cactus) {
+            b.objetos.push(ObjetoUso { material: m.cactus, densidad: 0.012, forma: Forma::Columnar });
+        }
     }
-    r
+    b
 }
 
+// =============================================================================
+//  Escenas
+// =============================================================================
+
 /// "Brief" mínimo que el LLM emite para una escena: cuántos actores y qué gesto.
-/// El resto (caminata, planos) lo arma [`SceneSpec::walk_and_emote`].
 #[derive(Deserialize)]
 struct SceneBrief {
     actors: usize,
     gesture: Clip,
 }
 
-/// System del LLM para escenas: pide sólo el brief (no toda la SceneSpec, que es
-/// frágil de generar). El gesto es un `Clip`.
 const SCENE_SYSTEM: &str = "\
 Dirigís una escena voxel corta. Respondé SÓLO con un literal RON de la forma
 (actors: N, gesture: G), sin markdown ni texto extra. N = cantidad de personajes
 (1..5). G = el gesto final: uno de Idle, Walk, Run, Wave, Point, Cheer.
 Ejemplo: (actors: 3, gesture: Cheer)";
 
-/// **Escena desde prosa**: LLM real (un brief `actors`+`gesture`) → escena patrón;
-/// si no hay LLM o falla, la heurística local. Siempre devuelve algo.
-pub fn generate_scene(prompt: &str, world: usize, dim: [u32; 3]) -> SceneSpec {
-    llm_scene(prompt, world, dim).unwrap_or_else(|| local_scene(prompt, world, dim))
+/// **Escena desde prosa** en el mundo `mundo` (id): LLM real (brief) → escena patrón;
+/// si no hay LLM o falla, heurística local. Siempre devuelve algo.
+pub fn generate_scene(prompt: &str, mundo: u64, dim: [u32; 3]) -> SceneSpec {
+    llm_scene(prompt, mundo, dim).unwrap_or_else(|| local_scene(prompt, mundo, dim))
 }
 
-/// Intenta el LLM real: parsea el brief y construye la escena con él.
-fn llm_scene(prompt: &str, world: usize, dim: [u32; 3]) -> Option<SceneSpec> {
+fn llm_scene(prompt: &str, mundo: u64, dim: [u32; 3]) -> Option<SceneSpec> {
     let brief: SceneBrief = ron::from_str(ron_slice(&ask_llm(SCENE_SYSTEM, prompt, 80)?)?).ok()?;
     Some(SceneSpec::walk_and_emote(
         scene_name(prompt),
-        world,
+        mundo,
         brief.actors.clamp(1, 5),
         brief.gesture,
         dim,
     ))
 }
 
-/// Escena por heurística local: deduce cuántos actores y qué gesto del texto y arma
-/// la escena patrón "entran y saludan" en el mundo `world`.
-fn local_scene(prompt: &str, world: usize, dim: [u32; 3]) -> SceneSpec {
+fn local_scene(prompt: &str, mundo: u64, dim: [u32; 3]) -> SceneSpec {
     let p = prompt.to_lowercase();
     let n = parse_count(&p);
     let gesture = if p.contains("salud") {
@@ -190,8 +187,7 @@ fn local_scene(prompt: &str, world: usize, dim: [u32; 3]) -> SceneSpec {
     } else {
         Clip::Wave
     };
-    let name = scene_name(prompt);
-    SceneSpec::walk_and_emote(name, world, n, gesture, dim)
+    SceneSpec::walk_and_emote(scene_name(prompt), mundo, n, gesture, dim)
 }
 
 /// Cuántos actores pide el texto (palabra o dígito); 3 por defecto.
@@ -207,27 +203,28 @@ fn parse_count(p: &str) -> usize {
     3
 }
 
-/// System del LLM para personajes: enseña el RON exacto de `CharSpec`.
+// =============================================================================
+//  Personajes (seres)
+// =============================================================================
+
 const CHAR_SYSTEM: &str = "\
 Generás un personaje voxel. Respondé SÓLO con un literal RON de CharSpec, sin
 markdown ni texto extra. Campos: name (texto), age (Baby|Child|Teen|Adult|Elder),
 skin/shirt/pants (cada uno [r, g, b] en 0..1).
 Ejemplo: (name: \"rojo\", age: Adult, skin: [0.9, 0.72, 0.58], shirt: [0.82, 0.28, 0.26], pants: [0.2, 0.2, 0.28])";
 
-/// **Personaje desde prosa**: LLM real (`CharSpec` en RON) y, si no hay o falla,
-/// la heurística local. Siempre devuelve algo.
+/// **Personaje desde prosa**: LLM real (`CharSpec` en RON) y, si no hay o falla, la
+/// heurística local. Siempre devuelve algo (id 0; lo asigna el `Project`).
 pub fn generate_character(prompt: &str) -> CharSpec {
     llm_character(prompt).unwrap_or_else(|| local_character(prompt))
 }
 
-/// Intenta el LLM real para un personaje.
 fn llm_character(prompt: &str) -> Option<CharSpec> {
     ron::from_str::<CharSpec>(ron_slice(&ask_llm(CHAR_SYSTEM, prompt, 200)?)?).ok()
 }
 
-/// Personaje por heurística local: deduce la edad y el color de la remera de las
-/// palabras del texto; piel/pantalón quedan por defecto.
 fn local_character(prompt: &str) -> CharSpec {
+    use llimphi_voxel::Age;
     let p = prompt.to_lowercase();
     let age = if p.contains("bebé") || p.contains("bebe") || p.contains("recién") || p.contains("recien") {
         Age::Baby
@@ -249,7 +246,6 @@ fn local_character(prompt: &str) -> CharSpec {
 
 /// Color (`[r,g,b]` en `[0,1]`) nombrado en el texto, si lo hay.
 fn parse_color(p: &str) -> Option<[f32; 3]> {
-    // Raíces (sin terminación de género/número) para casar "rojo/roja/rojas".
     let table: [(&str, [f32; 3]); 12] = [
         ("roj", [0.82, 0.28, 0.26]),
         ("celest", [0.50, 0.75, 0.92]),
@@ -269,9 +265,14 @@ fn parse_color(p: &str) -> Option<[f32; 3]> {
 
 /// Nombre de escena = primeras ~4 palabras de la descripción.
 fn scene_name(prompt: &str) -> String {
+    name_from(prompt, "escena IA")
+}
+
+/// Nombre a partir de las primeras ~4 palabras del prompt, con un default.
+fn name_from(prompt: &str, default: &str) -> String {
     let s: String = prompt.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
     if s.is_empty() {
-        "escena IA".into()
+        default.into()
     } else {
         s
     }
@@ -281,44 +282,39 @@ fn scene_name(prompt: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn el_ejemplo_del_prompt_es_ron_valido() {
-        assert!(parse_recipe(SAMPLE).is_some(), "el ejemplo que enseñamos debe parsear");
-    }
-
-    #[test]
-    fn parse_tolera_fences_y_ruido() {
-        let txt = "Claro, acá va:\n```ron\n(seed: 1, base: 0.2, dune: 0.1, relief: 0.7, \
-mountains: 0.5, water_level: 0.3, rivers: 0.25, ground: Grass, cliff: Rock, peak: Snow, \
-peak_at: 0.8, flora: None, flora_density: 0.0)\n```\nlisto.";
-        assert!(parse_recipe(txt).is_some());
+    fn refs() -> MatRefs {
+        MatRefs::from_project(&Project::starter())
     }
 
     #[test]
     fn heuristica_detecta_desierto_con_cactus() {
-        let r = local_recipe("un desierto enorme con cactus");
-        assert_eq!(r.ground, Material::Sand);
-        assert_eq!(r.flora, Flora::Cactus);
+        let m = refs();
+        let b = generate_bioma("un desierto enorme con cactus", &m);
+        assert_eq!(b.ground, m.sand);
+        assert!(b.objetos.iter().any(|o| o.material == m.cactus));
     }
 
     #[test]
     fn heuristica_detecta_montañas_nevadas() {
-        let r = local_recipe("cordillera con picos de nieve");
-        assert_eq!(r.peak, Material::Snow);
-        assert!(r.mountains >= 0.65);
+        let m = refs();
+        let b = generate_bioma("cordillera con picos de nieve", &m);
+        assert_eq!(b.peak, Some(m.snow));
+        assert!(b.mountains >= 0.65);
     }
 
     #[test]
-    fn misma_descripcion_mismo_mundo() {
-        let a = local_recipe("islas tropicales con ríos");
-        let b = local_recipe("islas tropicales con ríos");
-        assert_eq!(a.seed, b.seed);
-        assert!(a.water_level >= 0.5 && a.rivers >= 0.6);
+    fn bioma_referencia_materiales_del_proyecto() {
+        let p = Project::starter();
+        let m = MatRefs::from_project(&p);
+        let b = generate_bioma("pradera verde con ríos", &m);
+        // Los ids referenciados existen como materiales del proyecto.
+        assert!(p.material(b.ground).is_some());
+        assert!(p.material(b.cliff).is_some());
     }
 
     #[test]
     fn personaje_lee_edad_y_color() {
-        // La heurística local directamente (sin tocar red aunque haya API key).
+        use llimphi_voxel::Age;
         let c = local_character("un niño de remera roja");
         assert_eq!(c.age, Age::Child);
         assert_eq!(c.shirt, [0.82, 0.28, 0.26]);
@@ -326,10 +322,9 @@ peak_at: 0.8, flora: None, flora_density: 0.0)\n```\nlisto.";
 
     #[test]
     fn escena_lee_cantidad_y_gesto() {
-        let s = local_scene("dos personajes que festejan", 1, [128, 56, 128]);
+        let s = local_scene("dos personajes que festejan", 7, [128, 56, 128]);
         assert_eq!(s.actors.len(), 2);
-        assert_eq!(s.world, 1);
-        // El gesto festejar entra como Cheer en la key del giro.
+        assert_eq!(s.mundo, 7);
         let tiene_cheer = s.actors[0].keys.iter().any(|k| k.clip == Some(Clip::Cheer));
         assert!(tiene_cheer, "festejar → Cheer");
     }

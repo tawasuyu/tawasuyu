@@ -10,7 +10,7 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
-use llimphi_voxel::{WorldRecipe, SCENE_SUN};
+use llimphi_voxel::{MundoRender, SCENE_SUN};
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -44,15 +44,16 @@ pub struct WorldPreview {
 }
 
 impl WorldPreview {
-    /// Construye el preview generando el grid de `recipe` a tamaño `dim`.
+    /// Construye el preview generando el grid de `mr` (bioma+semilla+paleta) a `dim`,
+    /// centrado en el origen.
     pub fn build(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        recipe: &WorldRecipe,
+        mr: &MundoRender,
         dim: [u32; 3],
         gen: u64,
     ) -> Self {
-        let grid = recipe.generate(dim);
+        let grid = mr.bioma.generate_window(mr.seed, &mr.palette, dim, [0, 0]);
         let voxel = Self::make_voxel(device, queue, &grid, dim);
         Self {
             scene: Scene3d::new(),
@@ -88,16 +89,16 @@ impl WorldPreview {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        recipe: &WorldRecipe,
+        mr: &MundoRender,
         dim: [u32; 3],
         gen: u64,
     ) {
         if gen != self.built_gen || dim != self.dim {
-            self.grid = recipe.generate(dim);
+            self.grid = mr.bioma.generate_window(mr.seed, &mr.palette, dim, [0, 0]);
             self.voxel = Self::make_voxel(device, queue, &self.grid, dim);
             self.dim = dim;
             self.built_gen = gen;
-            self.origin = [0, 0]; // `generate` es centrado en el origen
+            self.origin = [0, 0]; // centrado en el origen
         }
     }
 
@@ -112,12 +113,12 @@ impl WorldPreview {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        recipe: &WorldRecipe,
+        mr: &MundoRender,
         gen: u64,
         origin: [i32; 2],
     ) {
         if gen != self.built_gen || origin != self.origin {
-            self.grid = recipe.generate_window(self.dim, origin);
+            self.grid = mr.bioma.generate_window(mr.seed, &mr.palette, self.dim, origin);
             self.voxel = Self::make_voxel(device, queue, &self.grid, self.dim);
             self.built_gen = gen;
             self.origin = origin;
@@ -136,11 +137,11 @@ impl WorldPreview {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        recipe: &WorldRecipe,
+        mr: &MundoRender,
         origin: [i32; 2],
         fog: f32,
     ) {
-        self.grid = recipe.generate_window(self.dim, origin);
+        self.grid = mr.bioma.generate_window(mr.seed, &mr.palette, self.dim, origin);
         self.voxel = Self::make_voxel(device, queue, &self.grid, self.dim);
         self.voxel.atmosphere.fog_density = fog;
         self.origin = origin;

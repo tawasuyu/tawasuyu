@@ -13,7 +13,7 @@ use llimphi_3d::{Atmosphere, Camera3d, Scene3d, VoxelRenderer};
 use llimphi_hal::{wgpu, Hal};
 use llimphi_raster::peniko::Color;
 use llimphi_raster::{vello, Renderer};
-use llimphi_voxel::WorldRecipe;
+use llimphi_voxel::Project;
 
 const W: u32 = 960;
 const H: u32 = 540;
@@ -28,8 +28,12 @@ fn main() {
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
 
-    let recipe = WorldRecipe::desert(seed);
-    let grid = recipe.generate(dim);
+    // El bioma de desierto del proyecto de arranque, resuelto a su paleta; la
+    // semilla del CLI manda (en vez de la del mundo).
+    let project = Project::starter();
+    let bioma = project.biomas.iter().find(|b| b.name == "desierto").expect("bioma desierto");
+    let palette = project.bioma_palette(bioma);
+    let grid = bioma.generate_window(seed, &palette, dim, [0, 0]);
 
     let mut vr = VoxelRenderer::new(&hal.device, &hal.queue, FMT, &grid);
     vr.sun_dir = [0.62, 0.42, 0.28]; // sol más bajo → relieve/sombras de las dunas y cactus
