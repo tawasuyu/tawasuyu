@@ -7,7 +7,7 @@ publish.workspace = true
 
 [dependencies]
 arje-card = { path = "../../arje-card" }
-nix = { workspace = true }
+nix = { workspace = true, features = ["ioctl"] }
 libc = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

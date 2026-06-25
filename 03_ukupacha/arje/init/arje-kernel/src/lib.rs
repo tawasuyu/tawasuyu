@@ -5,7 +5,9 @@
 pub mod sigchld;
 pub mod surface;
 pub mod uevent;
+pub mod watchdog;
 
 pub use sigchld::spawn_sigchld_stream;
 pub use surface::{become_child_subreaper, bootstrap_kernel_surface};
 pub use uevent::{spawn_uevent_stream, UAction, UEvent};
+pub use watchdog::Watchdog;

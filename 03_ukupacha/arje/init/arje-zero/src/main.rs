@@ -26,7 +26,7 @@ mod seed;
 use anyhow::Context;
 use arje_brain::{audit::AuditAction, BrainState, IntrospectServer};
 use arje_bus::{BusRequest, PeerCreds};
-use arje_kernel::{become_child_subreaper, bootstrap_kernel_surface, spawn_sigchld_stream, spawn_uevent_stream};
+use arje_kernel::{become_child_subreaper, bootstrap_kernel_surface, spawn_sigchld_stream, spawn_uevent_stream, Watchdog};
 use events::{ExitStatus, GraphEvent, ShutdownReason};
 use graph::EnteGraph;
 use nix::errno::Errno;
@@ -532,6 +532,33 @@ async fn primordial_loop(
     };
     tokio::pin!(dev_exit);
 
+    // Watchdog de hardware: si este bucle se cuelga y deja de acariciar,
+    // el kernel reinicia la máquina en vez de dejarla muerta para siempre.
+    // Sólo en PID 1 real (no dev). `ARJE_WATCHDOG_SECS=0` lo desactiva;
+    // sin la var, default 30 s. Si no hay `/dev/watchdog`, sigue sin él.
+    let mut watchdog = if dev_mode {
+        None
+    } else {
+        let secs = std::env::var("ARJE_WATCHDOG_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(30);
+        if secs == 0 {
+            info!("watchdog deshabilitado (ARJE_WATCHDOG_SECS=0)");
+            None
+        } else {
+            Watchdog::arm(secs)
+        }
+    };
+    let pet_interval = watchdog
+        .as_ref()
+        .map(|w| w.pet_interval())
+        .unwrap_or_else(|| Duration::from_secs(3600));
+    // Tick que despierta el bucle a tiempo para acariciar cuando está ocioso.
+    let mut wd_tick = tokio::time::interval(pet_interval);
+    wd_tick.tick().await; // descartar primer tick inmediato
+    let mut last_pet = std::time::Instant::now();
+
     // GC de capability grants expirados — corre cada 10 segundos.
     let mut grant_purge = tokio::time::interval(Duration::from_secs(10));
     grant_purge.tick().await; // descartar primer tick inmediato
@@ -553,6 +580,11 @@ async fn primordial_loop(
                 // SubjectInfo se hace contra el estado pre-mutación.
                 feed_brain(&brain, &brain_sink, &graph, &evt).await;
                 if dispatch_graph_event(&mut graph, evt, &graph_tx, &checkpoint_path, &brain).await {
+                    // Shutdown limpio: desarmar el watchdog para que soltar el
+                    // device no reinicie la máquina.
+                    if let Some(wd) = watchdog.take() {
+                        wd.disarm();
+                    }
                     return Ok(());
                 }
             }
@@ -564,12 +596,36 @@ async fn primordial_loop(
                 }
             }
 
+            _ = wd_tick.tick() => {
+                // Sólo despierta el bucle; el acariciado real va abajo.
+            }
+
             _ = async { dev_exit.as_mut().as_pin_mut().unwrap().await }, if dev_mode => {
                 info!("dev mode: timer expirado, cerrando bucle primordial");
                 let _ = graph_tx.send(GraphEvent::Shutdown {
                     reason: ShutdownReason::SeedRequested,
                 }).await;
             }
+        }
+
+        // Latido del watchdog tras CADA iteración del bucle. Si un handler de
+        // arriba se cuelga, no se llega acá → no se acaricia → el kernel
+        // reinicia. El chequeo "due" evita falsos reboots por starvation bajo
+        // ráfaga de eventos: cada vuelta que procesa algo también late si toca.
+        let mut wd_dead = false;
+        if let Some(wd) = watchdog.as_mut() {
+            if last_pet.elapsed() >= pet_interval {
+                match wd.pet() {
+                    Ok(()) => last_pet = std::time::Instant::now(),
+                    Err(e) => {
+                        warn!(?e, "watchdog murió al acariciar — desarmando supervisión");
+                        wd_dead = true;
+                    }
+                }
+            }
+        }
+        if wd_dead {
+            watchdog = None;
         }
     }
 }
