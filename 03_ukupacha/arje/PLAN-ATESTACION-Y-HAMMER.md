@@ -267,6 +267,13 @@ gana `firma_valida` + el re-export de `ConcesionCapacidad`; un init vivo NO hace
   (supervisión) que la Fase 5 de hammer dejó diferido — **fuente, sink y adaptador de transporte
   cableados y validados e2e (B.2)**; el `CRASHED` de hammer ya nace de un Ente que muere bajo arje.
 - `arje-cas` → BLAKE3 (A0) desbloquea el CAS compartido (hammer ya usa prefijo `b3:`).
+  **Bridge sobre el cable → ✅ HECHO (2026-06-25).** `arje-cas-aoe` pone el CAS compartido sobre
+  **Akasha Over Ether**: `servir_cas`/`traer_al_cas`/`anunciar` sobre `wawa_explorer_aoe::ClienteAoE`
+  (raw socket, sin reimplementar nada). Funciona porque el invariante `blake3(bytes)==id` es el mismo
+  en arje-cas, en AoE y en el kernel wawa → un blob (`.swm`, manifiesto de seed firmado, bytecode)
+  viaja content-agnostic y se verifica de punta a punta. Núcleo testeable sin socket
+  (`objetos_del_cas` + `absorber` con chequeo de hash); ejemplo `servir_cas` para el operador. Es la
+  vía nativa para que un nodo arje/hammer y una wawa intercambien objetos del CAS sin TCP/IP.
 - Bus unificado (B.2) antes de que hammerd corra bajo arje — vocabulario de eventos ✅; falta
   el cable de transporte arje-bus ↔ hammerd.
 

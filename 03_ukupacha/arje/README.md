@@ -34,6 +34,7 @@ cargo run --release -p arje-absorb -- --from auto --root / --output seed.card.js
 | [`arje-bus`](runtime/arje-bus/README.md) | Internal bus (arje IPC, Unix socket + postcard): the init's control wire. |
 | [`arje-soma`](init/arje-soma/README.md) | The system's "body" at runtime. |
 | [`arje-cas`](runtime/arje-cas/README.md) | Content-addressed store. |
+| [`arje-cas-aoe`](runtime/arje-cas-aoe/) | Bridge CAS ↔ Akasha Over Ether: serves/fetches content-addressed blobs (BLAKE3) over raw Ethernet, reusing `wawa-explorer-aoe`. |
 | [`arje-snapshot`](init/arje-snapshot/README.md) | System snapshot. |
 | [`arje-echo`](runtime/arje-echo/README.md) | Early logging. |
 | [`arje-net-bring-up`](init/arje-net-bring-up/README.md) | Minimal network bring-up. |

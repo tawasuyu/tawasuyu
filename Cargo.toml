@@ -490,6 +490,7 @@ members = [
     "03_ukupacha/arje/runtime/arje-brain-rules",
     "03_ukupacha/arje/runtime/arje-bus",
     "03_ukupacha/arje/runtime/arje-cas",
+    "03_ukupacha/arje/runtime/arje-cas-aoe",
     "03_ukupacha/arje/runtime/arje-echo",
     "03_ukupacha/arje/runtime/arje-wasm",
     "03_ukupacha/minga/card-discovery",
