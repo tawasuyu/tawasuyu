@@ -71,6 +71,10 @@ const VIEWPORT_H: f32 = 500.0;
 /// campos, así editor y campos reparten el alto en lugar de aplastarse.
 const PREZI_EDITOR_H: f32 = 280.0;
 
+/// Alto reservado para el editor visual de disposición de monitores en la
+/// sección «Monitores» (mismo criterio que [`PREZI_EDITOR_H`]).
+const MONITOR_EDITOR_H: f32 = 280.0;
+
 /// Variantes del theme. El id casa con `Theme::by_name`; el label es key i18n.
 const THEME_VARIANTS: &[(&str, &str)] = &[
     ("dark", "wawa-panel-variant-dark"),
@@ -334,6 +338,11 @@ struct Model {
     /// con un marco por escritorio (mover/zoom/rotar). Se sincroniza a
     /// `mirada.overview_places` en cada edición.
     prezi: PreziEdit,
+    /// Editor visual de **disposición de monitores** de la sección «Monitores»:
+    /// cajas (una por salida conectada) arrastrables en un lienzo libre — como
+    /// el Prezi pero SIN giro y con tamaños propios (la resolución de cada
+    /// pantalla). Vuelca el orden/disposición a `mirada.outputs`.
+    monitor: MonitorEdit,
 }
 
 /// Px de mundo por celda de la grilla del Prezi dentro del editor de recorrido.
@@ -463,6 +472,165 @@ fn prezi_sync(m: &mut Model) {
     m.save_in = SAVE_DELAY_TICKS;
 }
 
+/// Px de mundo por píxel **lógico** de monitor en el lienzo del editor de
+/// disposición. 2560 px lógicos → 640 de mundo: cajas del orden de un marco
+/// Prezi, que la cámara encuadra sola.
+const MON_SCALE: f64 = 0.25;
+/// Separación (px de mundo) entre cajas de monitor al disponerlas en línea.
+const MON_GAP: f64 = 80.0;
+
+/// Estado del editor visual de **disposición de monitores** embebido en la
+/// sección «Monitores». Cada salida conectada es un marco (caja) arrastrable en
+/// un lienzo libre — como el Prezi pero SIN giro y con tamaños propios (la
+/// resolución lógica de cada pantalla). El orden/forma se vuelca a
+/// `mirada.outputs` (campo `order`) + `output_direction`.
+struct MonitorEdit {
+    rec: Recorrido,
+    state: RecorridoState,
+    /// Marco (monitor) seleccionado. `None` = nada elegido.
+    sel: Option<u64>,
+    /// Presa fijada en el primer Move: `None` sin arrastre, `Some(None)` paneo,
+    /// `Some(Some(id))` moviendo ese marco.
+    grip: Option<Option<u64>>,
+    /// Nombre de conector DRM por marco (índice = `id - 1`).
+    nombres: Vec<String>,
+}
+
+/// Parsea un modo DRM (`"2560x1440"`, `"1920x1080@60"`) a `(ancho, alto)` en px.
+fn parse_modo(modo: &str) -> Option<(f64, f64)> {
+    let core = modo.split(['@', ' ']).next()?;
+    let (w, h) = core.split_once('x')?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
+impl MonitorEdit {
+    /// Construye el editor desde los monitores DRM conectados + los overrides de
+    /// mirada (orden, escala, disposición). Los dispone en línea según
+    /// `output_direction`, cada caja con su tamaño **lógico** (resolución / escala).
+    fn from_config(cfg: &mirada_brain::Config) -> Self {
+        // (nombre, modo nativo, ancho lógico, alto lógico).
+        let mut mons: Vec<(String, String, f64, f64)> = read_monitors()
+            .into_iter()
+            .map(|(name, modo)| {
+                let (pw, ph) = parse_modo(&modo).unwrap_or((1920.0, 1080.0));
+                let escala = (cfg.output_scale_120_for(&name) as f64 / 120.0).max(0.1);
+                (name, modo, pw / escala, ph / escala)
+            })
+            .collect();
+        // Orden = el configurado en mirada `(order, name)`, estable y reproducible.
+        mons.sort_by(|a, b| {
+            cfg.output_order_for(&a.0)
+                .cmp(&cfg.output_order_for(&b.0))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+
+        let horizontal = cfg.output_direction != "vertical";
+        let mut rec = Recorrido::new();
+        let mut nombres = Vec::new();
+        let mut avance = 0.0;
+        for (i, (name, modo, lw, lh)) in mons.iter().enumerate() {
+            let (w, h) = (lw * MON_SCALE, lh * MON_SCALE);
+            let rect = if horizontal {
+                DeckRect::new(avance, 0.0, w, h)
+            } else {
+                DeckRect::new(0.0, avance, w, h)
+            };
+            avance += if horizontal { w } else { h } + MON_GAP;
+            let id = (i + 1) as u64;
+            // Sin giro (default rot=0): los monitores no rotan en este editor.
+            rec.agregar_marco(Marco::new(
+                id,
+                rect,
+                ContenidoMarco::Texto {
+                    titulo: Some(name.clone()),
+                    parrafos: vec![modo.clone()],
+                },
+            ));
+            // Sin `pasos`: sin ruta narrativa ni HUD «paso X/N» en el lienzo.
+            nombres.push(name.clone());
+        }
+
+        let (centro, span) = rec
+            .bbox()
+            .map(|b| (b.centro(), b.w.max(b.h).max(1.0)))
+            .unwrap_or(((0.0, 0.0), 480.0));
+        let mut state = RecorridoState::new();
+        state.camara = Camara::new(centro, (520.0 / span).clamp(0.05, 2.0), 0.0);
+        Self { rec, state, sel: None, grip: None, nombres }
+    }
+
+    /// Vuelca la disposición del editor a `(outputs, output_direction)`:
+    /// - la **dirección** sale de la forma de la nube de cajas (más ancha que
+    ///   alta → horizontal; si no, vertical);
+    /// - el **orden** sale de la posición de cada caja sobre el eje dominante.
+    /// Preserva los demás campos del override (wallpaper/escala/transform) y los
+    /// overrides de monitores ahora desconectados (no presentes en el editor).
+    fn to_outputs(
+        &self,
+        prev: &[mirada_brain::OutputOverride],
+    ) -> (Vec<mirada_brain::OutputOverride>, String) {
+        let horizontal = self.rec.bbox().map(|b| b.w >= b.h).unwrap_or(true);
+        let mut marcos: Vec<&Marco> = self.rec.marcos.iter().collect();
+        marcos.sort_by(|a, b| {
+            let (ka, kb) = if horizontal {
+                (a.rect.x, b.rect.x)
+            } else {
+                (a.rect.y, b.rect.y)
+            };
+            ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut outs: Vec<mirada_brain::OutputOverride> = Vec::new();
+        for (order, m) in marcos.iter().enumerate() {
+            let Some(name) = self.nombres.get((m.id - 1) as usize).cloned() else {
+                continue;
+            };
+            let base = prev.iter().find(|o| o.name == name);
+            outs.push(mirada_brain::OutputOverride {
+                name: name.clone(),
+                wallpaper_path: base.map(|b| b.wallpaper_path.clone()).unwrap_or_default(),
+                wallpaper_fit: base.map(|b| b.wallpaper_fit.clone()).unwrap_or_default(),
+                order: order as i32,
+                scale_120: base.map(|b| b.scale_120).unwrap_or(0),
+                transform: base.map(|b| b.transform.clone()).unwrap_or_default(),
+            });
+        }
+        // Conservamos overrides de salidas desconectadas (no las pisamos al guardar).
+        for o in prev {
+            if !outs.iter().any(|x| x.name == o.name) {
+                outs.push(o.clone());
+            }
+        }
+        let dir = if horizontal { "horizontal" } else { "vertical" }.to_string();
+        (outs, dir)
+    }
+}
+
+/// Sincroniza la disposición del editor → `mirada.outputs` + `output_direction`
+/// del perfil activo y arma el guardado diferido.
+fn monitor_sync(m: &mut Model) {
+    let (outs, dir) = m.monitor.to_outputs(&m.mirada.outputs);
+    m.mirada.outputs = outs;
+    m.mirada.output_direction = dir;
+    m.dirty.mirada = true;
+    sync_active_profile(m);
+    m.save_in = SAVE_DELAY_TICKS;
+}
+
+/// `true` si la sección abierta en el canvas es «Monitores» de mirada (donde
+/// vive el editor de disposición) — gatea el ruteo de rueda a su lienzo.
+fn monitor_section_active(m: &Model) -> bool {
+    let pestanas = pestanas(m);
+    let pest = m.selected_pest.min(pestanas.len().saturating_sub(1));
+    let Some(secs) = pestanas.get(pest).map(|p| p.schema.sections.as_slice()) else {
+        return false;
+    };
+    m.selected_item
+        .filter(|&i| i < secs.len())
+        .and_then(|i| secs.get(i))
+        .is_some_and(|s| s.id.contains("mirada::monitores"))
+}
+
 /// `true` si la sección abierta en el canvas es «Vista espacial» (donde vive el
 /// editor de recorrido) — gatea el ruteo de rueda/teclado a su lienzo.
 fn prezi_section_active(m: &Model) -> bool {
@@ -531,6 +699,14 @@ enum Msg {
     PreziRotate(f64),
     /// Rota el marco seleccionado arrastrando la manija: `dx` px de pantalla.
     PreziRotateHandle(f32),
+    /// Editor de disposición de monitores: arrastre sobre el lienzo — `(dx,dy)`
+    /// delta + `(lx,ly)` posición del press (decide en el 1er Move si agarra una
+    /// caja-monitor o el vacío).
+    MonitorDrag { dx: f32, dy: f32, lx: f32, ly: f32 },
+    /// Fin del arrastre del lienzo de monitores (suelta la presa).
+    MonitorDragEnd,
+    /// Zoom-a-cursor del lienzo de monitores (rueda).
+    MonitorZoom { mult: f64, cursor: (f32, f32) },
     /// Cambió la config del SO desde afuera (otro panel, edición manual).
     ConfigChanged(Box<WawaConfig>),
     MenuOpen(Option<usize>),
@@ -769,6 +945,47 @@ impl App for Panel {
                     m.status = format!("escritorio {id} · giro {deg:.0}°");
                 }
             }
+            Msg::MonitorDrag { dx, dy, lx, ly } => {
+                let panel = panel_actual().unwrap_or(DeckRect::new(0.0, 0.0, 1.0, 1.0));
+                // En el 1er Move fijamos la presa (caja-monitor o vacío) hasta soltar.
+                let grip = match m.monitor.grip {
+                    Some(g) => g,
+                    None => {
+                        // `lx,ly` son LOCALES al lienzo; `screen_to_world` espera
+                        // coords ABSOLUTAS de ventana (igual que el Prezi).
+                        let abs = (lx as f64 + panel.x, ly as f64 + panel.y);
+                        let world = m.monitor.state.camara.screen_to_world(abs, panel);
+                        let hit = m.monitor.rec.marco_en_punto(world);
+                        m.monitor.grip = Some(hit);
+                        if hit.is_some() {
+                            m.monitor.sel = hit; // agarrar una caja la selecciona
+                        }
+                        hit
+                    }
+                };
+                match grip {
+                    Some(id) => {
+                        let (wdx, wdy) =
+                            m.monitor.state.camara.delta_pantalla_a_mundo(dx as f64, dy as f64);
+                        m.monitor.rec.mover_marco(id, wdx, wdy);
+                        monitor_sync(&mut m);
+                        let nombre = m
+                            .monitor
+                            .nombres
+                            .get((id - 1) as usize)
+                            .cloned()
+                            .unwrap_or_default();
+                        m.status = format!("monitor {nombre} reubicado");
+                    }
+                    None => m.monitor.state.arrastrar_delta(dx as f64, dy as f64),
+                }
+            }
+            Msg::MonitorDragEnd => m.monitor.grip = None,
+            Msg::MonitorZoom { mult, cursor } => {
+                if let Some(panel) = panel_actual() {
+                    m.monitor.state.wheel(mult, (cursor.0 as f64, cursor.1 as f64), panel);
+                }
+            }
             Msg::AllichayKey(event) => {
                 if let Some((path, value)) = m.allichay.apply_key(&event) {
                     route_change(&mut m, &path, value);
@@ -868,10 +1085,13 @@ impl App for Panel {
         cursor: (f32, f32),
         _modifiers: Modifiers,
     ) -> Option<Msg> {
-        // Sólo capturamos la rueda cuando el lienzo del Prezi está abierto y el
-        // cursor cae dentro de su rect (registrado por el último paint); fuera de
-        // ahí devolvemos `None` para no robarle el scroll a los campos de config.
-        if !prezi_section_active(model) {
+        // Sólo capturamos la rueda cuando un lienzo (Prezi o monitores) está
+        // abierto y el cursor cae dentro de su rect (registrado por el último
+        // paint); fuera de ahí devolvemos `None` para no robarle el scroll a los
+        // campos de config. Ambos editores comparten el side-channel del rect.
+        let prezi = prezi_section_active(model);
+        let monitor = monitor_section_active(model);
+        if !prezi && !monitor {
             return None;
         }
         let panel = panel_actual()?;
@@ -879,7 +1099,11 @@ impl App for Panel {
             return None;
         }
         let mult = pluma_deck_recorrido_llimphi::ZOOM_BASE.powf(-delta.y as f64);
-        Some(Msg::PreziZoom { mult, cursor })
+        if monitor {
+            Some(Msg::MonitorZoom { mult, cursor })
+        } else {
+            Some(Msg::PreziZoom { mult, cursor })
+        }
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -993,6 +1217,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
     let splash_cfg = splash::SplashCfg::load();
 
     let prezi = PreziEdit::from_config(&mirada);
+    let monitor = MonitorEdit::from_config(&mirada);
 
     Model {
         selected_pest: 0,
@@ -1018,6 +1243,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         animaciones,
         greeter: greeter_cfg,
         splash: splash_cfg,
+        monitor,
         allichay: AllichayState::new(),
         host,
         status: String::new(),
@@ -3810,6 +4036,58 @@ fn prezi_rotate_handle(model: &Model, theme: &Theme, side: f32) -> Option<View<M
     )
 }
 
+/// Editor visual de **disposición de monitores**: el lienzo del recorrido
+/// (mismo look que el Prezi) con las cajas-monitor arrastrables, SIN manija de
+/// giro ni rotación. Se inyecta arriba de los campos de la sección «Monitores».
+fn monitor_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
+    /// Alto del lienzo del editor, px. Mismo criterio que el Prezi.
+    const CANVAS_H: f32 = MONITOR_EDITOR_H - 60.0;
+
+    // Lienzo: el render del recorrido (free canvas, sin giro porque ningún marco
+    // tiene `rot_rad` ni hay manija) con el arrastre cableado al `update`.
+    let lienzo =
+        recorrido_view_editor(&model.monitor.rec, &model.monitor.state, model.monitor.sel)
+            .draggable_at(|phase, dx, dy, lx, ly| match phase {
+                DragPhase::Move => Some(Msg::MonitorDrag { dx, dy, lx, ly }),
+                DragPhase::End => Some(Msg::MonitorDragEnd),
+            });
+
+    let canvas = View::new(Style {
+        position: Position::Relative,
+        size: Size { width: percent(1.0_f32), height: length(CANVAS_H) },
+        ..Default::default()
+    })
+    .radius(8.0)
+    .children(vec![lienzo]);
+
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        "Disposición · arrastrá un monitor para reubicarlo · rueda: zoom · el orden y la dirección se derivan de la posición"
+            .to_string(),
+        12.5,
+        theme.fg_text,
+        Alignment::Start,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(12.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![titulo, canvas])
+}
+
 /// Vista custom de la **lista de barras**: una fila por barra con [nombre]
 /// [select de posición segmentado] [⧉ duplicar] [✕ borrar], y «＋ Agregar» al
 /// final. Inyectada en el canvas (allichay no compone varios controles por
@@ -4349,6 +4627,19 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
                     ..Default::default()
                 })
                 .children(vec![prezi_editor_view(model, theme), fields])
+            } else if sec.id.contains("mirada::monitores") {
+                // La sección «Monitores» suma arriba el editor visual de
+                // disposición (cajas-monitor arrastrables, sin giro); los campos
+                // (dirección, overrides por salida) van debajo con su propio
+                // viewport, igual que «Vista espacial».
+                let fields_vp = (VIEWPORT_H - MONITOR_EDITOR_H).max(180.0);
+                let fields = schema_panel(&one, &model.allichay, theme, fields_vp, Msg::Allichay);
+                View::new(Style {
+                    flex_direction: FlexDirection::Column,
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![monitor_editor_view(model, theme), fields])
             } else if sec.id == "barras::lista" {
                 // Lista de barras: vista custom (fila = nombre + posición +
                 // iconitos duplicar/borrar), que allichay no puede componer.
@@ -4949,5 +5240,96 @@ mod prezi_tests {
         for (a, b) in places.iter().zip(cfg.overview_places.iter()) {
             assert!((a.x - b.x).abs() < 1e-4 && (a.rot - b.rot).abs() < 1e-4, "{a:?} vs {b:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod monitor_tests {
+    use super::*;
+
+    #[test]
+    fn parse_modo_acepta_modos_drm() {
+        assert_eq!(parse_modo("2560x1440"), Some((2560.0, 1440.0)));
+        assert_eq!(parse_modo("1920x1080@60"), Some((1920.0, 1080.0)));
+        assert_eq!(parse_modo("1366x768 60.0"), Some((1366.0, 768.0)));
+        assert_eq!(parse_modo("basura"), None);
+    }
+
+    /// Arma un editor con dos cajas-monitor sintéticas (sin tocar el disco) para
+    /// ejercitar `to_outputs` sin depender de `read_monitors`.
+    fn editor_con(cajas: &[(&str, f64, f64, f64, f64)]) -> MonitorEdit {
+        let mut rec = Recorrido::new();
+        let mut nombres = Vec::new();
+        for (i, (name, x, y, w, h)) in cajas.iter().enumerate() {
+            rec.agregar_marco(Marco::new(
+                (i + 1) as u64,
+                DeckRect::new(*x, *y, *w, *h),
+                ContenidoMarco::Texto { titulo: Some((*name).into()), parrafos: vec![] },
+            ));
+            nombres.push((*name).to_string());
+        }
+        MonitorEdit { rec, state: RecorridoState::new(), sel: None, grip: None, nombres }
+    }
+
+    /// Dos monitores lado a lado → dirección horizontal y `order` por la X.
+    #[test]
+    fn orden_horizontal_por_posicion_x() {
+        // DP-1 a la derecha (x grande), HDMI-1 a la izquierda (x chico).
+        let ed = editor_con(&[
+            ("DP-1", 700.0, 0.0, 640.0, 360.0),
+            ("HDMI-1", 0.0, 0.0, 480.0, 270.0),
+        ]);
+        let (outs, dir) = ed.to_outputs(&[]);
+        assert_eq!(dir, "horizontal");
+        // El de menor X queda primario (order 0).
+        let hdmi = outs.iter().find(|o| o.name == "HDMI-1").unwrap();
+        let dp = outs.iter().find(|o| o.name == "DP-1").unwrap();
+        assert_eq!(hdmi.order, 0);
+        assert_eq!(dp.order, 1);
+    }
+
+    /// Monitores apilados (más altos que anchos en conjunto) → dirección vertical.
+    #[test]
+    fn dos_apilados_dan_direccion_vertical() {
+        let ed = editor_con(&[
+            ("DP-1", 0.0, 0.0, 300.0, 400.0),
+            ("HDMI-1", 0.0, 500.0, 300.0, 400.0),
+        ]);
+        let (_outs, dir) = ed.to_outputs(&[]);
+        assert_eq!(dir, "vertical");
+    }
+
+    /// Los campos previos (wallpaper/escala/transform) se preservan y un override
+    /// de salida desconectada (ausente del editor) sobrevive al volcado.
+    #[test]
+    fn preserva_campos_y_overrides_desconectados() {
+        let prev = vec![
+            mirada_brain::OutputOverride {
+                name: "DP-1".into(),
+                wallpaper_path: "/fondo.png".into(),
+                wallpaper_fit: "fill".into(),
+                order: 9,
+                scale_120: 180,
+                transform: "90".into(),
+            },
+            mirada_brain::OutputOverride {
+                name: "VGA-1".into(), // desconectado: no está en el editor
+                wallpaper_path: String::new(),
+                wallpaper_fit: String::new(),
+                order: 3,
+                scale_120: 0,
+                transform: String::new(),
+            },
+        ];
+        let ed = editor_con(&[("DP-1", 0.0, 0.0, 640.0, 360.0)]);
+        let (outs, _dir) = ed.to_outputs(&prev);
+        let dp = outs.iter().find(|o| o.name == "DP-1").unwrap();
+        // order recalculado, pero escala/wallpaper/transform intactos.
+        assert_eq!(dp.order, 0);
+        assert_eq!(dp.scale_120, 180);
+        assert_eq!(dp.wallpaper_path, "/fondo.png");
+        assert_eq!(dp.transform, "90");
+        // El override de la salida desconectada sigue presente.
+        assert!(outs.iter().any(|o| o.name == "VGA-1" && o.scale_120 == 0));
     }
 }
