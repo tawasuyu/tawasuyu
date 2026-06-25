@@ -116,6 +116,10 @@ enum Msg {
     Redimensionado(u32),
     Filtrar(Option<Clase>),
     Limpiar,
+    /// Clic en un clip: copiarlo de vuelta al portapapeles.
+    CopiarClip(String),
+    /// Clic en una captura: abrirla en tullpu (anotar/recortar).
+    AbrirCaptura(String),
 }
 
 struct Panel;
@@ -161,6 +165,8 @@ impl App for Panel {
                 model.eventos.clear();
                 model.offset = 0.0;
             }
+            Msg::CopiarClip(t) => copiar_clipboard(&t),
+            Msg::AbrirCaptura(ruta) => abrir_en_tullpu(&ruta),
         }
         model
     }
@@ -206,42 +212,75 @@ impl App for Panel {
     }
 }
 
-/// Alto del contenido scrolleable: una fila por evento + un separador por cada
-/// cambio de bucket de fecha. Debe coincidir con [`construir_filas`].
-fn contenido_h(eventos: &[Evento]) -> f32 {
-    let now = ahora_usec();
-    let mut h = 0.0;
+/// Una fila del plan del feed: un separador de fecha, o un **grupo** de eventos
+/// consecutivos idénticos (misma clase, origen y título — una ráfaga, p. ej. la
+/// misma notificación repetida) que se colapsan en una sola fila con `×N`.
+enum Fila<'a> {
+    Sep(String),
+    Grupo(&'a [Evento]),
+}
+
+/// Plan de filas: recorre los eventos (ya recientes→viejos), mete un separador
+/// al cambiar de día local y colapsa cada **run** de eventos idénticos dentro del
+/// mismo día. Clips y capturas tienen títulos únicos, así que en la práctica sólo
+/// se colapsan notificaciones repetidas — la ráfaga ruidosa.
+fn plan_filas(eventos: &[Evento], now: u64) -> Vec<Fila<'_>> {
+    let mut out = Vec::new();
     let mut bucket = String::new();
-    for e in eventos {
+    let mut i = 0;
+    while i < eventos.len() {
+        let e = &eventos[i];
         let b = bucket_fecha(e.ts_usec, now);
         if b != bucket {
-            h += SEP_H;
-            bucket = b;
+            out.push(Fila::Sep(b.clone()));
+            bucket = b.clone();
         }
-        h += ITEM_H;
+        let mut j = i + 1;
+        while j < eventos.len()
+            && eventos[j].clase == e.clase
+            && eventos[j].origen == e.origen
+            && eventos[j].titulo == e.titulo
+            && bucket_fecha(eventos[j].ts_usec, now) == bucket
+        {
+            j += 1;
+        }
+        out.push(Fila::Grupo(&eventos[i..j]));
+        i = j;
     }
-    h
+    out
+}
+
+/// Alto del contenido scrolleable, derivado del mismo plan que [`construir_filas`].
+fn contenido_h(eventos: &[Evento]) -> f32 {
+    plan_filas(eventos, ahora_usec())
+        .iter()
+        .map(|f| match f {
+            Fila::Sep(_) => SEP_H,
+            Fila::Grupo(_) => ITEM_H,
+        })
+        .sum()
 }
 
 fn lista_h(m: &Model) -> f32 {
     (m.viewport_h - HEADER_H).max(0.0)
 }
 
-/// Construye las filas del feed: separador de fecha cada vez que cambia el día,
-/// y una fila por evento. Devuelve `(filas, alto_total)`.
+/// Construye las filas del feed desde el plan: separadores de fecha y una fila
+/// por grupo (ráfaga colapsada). Devuelve `(filas, alto_total)`.
 fn construir_filas(eventos: &[Evento], now: u64) -> (Vec<View<Msg>>, f32) {
     let mut filas = Vec::new();
     let mut alto = 0.0;
-    let mut bucket = String::new();
-    for e in eventos {
-        let b = bucket_fecha(e.ts_usec, now);
-        if b != bucket {
-            filas.push(separador(&b));
-            alto += SEP_H;
-            bucket = b;
+    for f in plan_filas(eventos, now) {
+        match f {
+            Fila::Sep(b) => {
+                filas.push(separador(&b));
+                alto += SEP_H;
+            }
+            Fila::Grupo(g) => {
+                filas.push(grupo_row(g));
+                alto += ITEM_H;
+            }
         }
-        filas.push(item_row(e));
-        alto += ITEM_H;
     }
     (filas, alto)
 }
@@ -332,8 +371,26 @@ fn separador(rotulo: &str) -> View<Msg> {
     .text_aligned(rotulo.to_string(), 11.0, DIM, Alignment::Start)
 }
 
-fn item_row(e: &Evento) -> View<Msg> {
-    // Línea superior: ícono + origen + hora a la derecha.
+/// La acción de un evento al clickear su fila: copiar el clip al portapapeles, o
+/// abrir la captura en tullpu. Las notificaciones no tienen acción. `None` si la
+/// clase/payload no acciona.
+fn accion_de(e: &Evento) -> Option<Msg> {
+    use willay_core::{Clase, Payload};
+    match (e.clase, &e.payload) {
+        (Clase::Clip, Payload::Texto(t)) => Some(Msg::CopiarClip(t.clone())),
+        (Clase::Clip, _) => Some(Msg::CopiarClip(e.cuerpo.clone())),
+        (Clase::Captura, Payload::Archivo { ruta, .. }) => Some(Msg::AbrirCaptura(ruta.clone())),
+        _ => None,
+    }
+}
+
+/// Una fila del feed para un **grupo** (ráfaga colapsada): el evento más reciente
+/// del run + un badge `×N` si N > 1. Clickearla dispara la acción del evento
+/// (copiar clip / abrir captura).
+fn grupo_row(g: &[Evento]) -> View<Msg> {
+    let e = &g[0]; // el más reciente del run
+    let n = g.len();
+
     let ico = View::new(Style {
         size: Size { width: length(20.0_f32), height: length(15.0_f32) },
         flex_shrink: 0.0,
@@ -341,12 +398,13 @@ fn item_row(e: &Evento) -> View<Msg> {
     })
     .text_aligned(icono_clase(e.clase).to_string(), 11.0, DIM, Alignment::Start);
 
+    let origen_txt = if n > 1 { format!("{} ×{n}", e.origen) } else { e.origen.clone() };
     let origen = View::new(Style {
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: length(15.0_f32) },
         ..Default::default()
     })
-    .text_aligned(e.origen.clone(), 10.0, DIM, Alignment::Start);
+    .text_aligned(origen_txt, 10.0, DIM, Alignment::Start);
 
     let cuando = View::new(Style {
         size: Size { width: length(40.0_f32), height: length(15.0_f32) },
@@ -370,7 +428,7 @@ fn item_row(e: &Evento) -> View<Msg> {
     })
     .text_aligned(e.titulo.clone(), 12.0, FG, Alignment::Start);
 
-    View::new(Style {
+    let fila = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: length(ITEM_H) },
         flex_shrink: 0.0,
@@ -378,7 +436,12 @@ fn item_row(e: &Evento) -> View<Msg> {
         gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
         ..Default::default()
     })
-    .children(vec![linea_meta, titulo])
+    .children(vec![linea_meta, titulo]);
+
+    match accion_de(e) {
+        Some(msg) => fila.on_click(msg),
+        None => fila,
+    }
 }
 
 /// Hilo de red: pollea el daemon por socket y reacciona a los comandos del panel
@@ -420,6 +483,24 @@ fn spawn_red(handle: Handle<Msg>) -> Sender<Cmd> {
         })
         .expect("hilo de red del panel willay");
     tx
+}
+
+/// Copia `text` al portapapeles vía `wl-copy` (wl-clipboard), como pata. No
+/// espera: `wl-copy` se daemoniza para mantener la selección.
+fn copiar_clipboard(text: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    if let Ok(mut child) = Command::new("wl-copy").stdin(Stdio::piped()).spawn() {
+        if let Some(mut si) = child.stdin.take() {
+            let _ = si.write_all(text.as_bytes());
+        }
+    }
+}
+
+/// Abre una captura (ruta del PNG) en tullpu para anotar/recortar — el mismo
+/// handoff que hace hapiy.
+fn abrir_en_tullpu(ruta: &str) {
+    let _ = std::process::Command::new("tullpu-app-llimphi").arg(ruta).spawn();
 }
 
 fn main() {
@@ -487,5 +568,49 @@ mod tests {
         let (filas, alto) = construir_filas(&[], 100 * USEC_DIA);
         assert!(filas.is_empty());
         assert_eq!(alto, 0.0);
+    }
+
+    #[test]
+    fn rafaga_de_notifs_identicas_colapsa() {
+        let now = 100 * USEC_DIA + MEDIODIA;
+        let notif = |ts| {
+            Evento::nuevo(Clase::Notificacion, ts, "Firefox", "Descarga lista", "", Payload::Nada)
+        };
+        // 3 notifs idénticas + 1 clip distinto, mismo día.
+        let eventos = vec![notif(now + 3), notif(now + 2), notif(now + 1), ev(Clase::Clip, now)];
+        let plan = plan_filas(&eventos, now);
+        // Sep("Hoy") + Grupo(3 notifs) + Grupo(1 clip).
+        let tams: Vec<usize> = plan
+            .iter()
+            .filter_map(|f| match f {
+                Fila::Grupo(g) => Some(g.len()),
+                Fila::Sep(_) => None,
+            })
+            .collect();
+        assert_eq!(tams, vec![3, 1]);
+    }
+
+    #[test]
+    fn accion_por_clase() {
+        let clip = Evento::nuevo(
+            Clase::Clip,
+            1,
+            "o",
+            "git push",
+            "git push origin main",
+            Payload::Texto("git push origin main".into()),
+        );
+        assert!(matches!(accion_de(&clip), Some(Msg::CopiarClip(t)) if t == "git push origin main"));
+        let cap = Evento::nuevo(
+            Clase::Captura,
+            1,
+            "hapiy",
+            "Captura",
+            "/p/x.png",
+            Payload::Archivo { ruta: "/p/x.png".into(), mime: "image/png".into() },
+        );
+        assert!(matches!(accion_de(&cap), Some(Msg::AbrirCaptura(r)) if r == "/p/x.png"));
+        let notif = Evento::nuevo(Clase::Notificacion, 1, "x", "y", "z", Payload::Nada);
+        assert!(accion_de(&notif).is_none());
     }
 }
