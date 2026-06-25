@@ -10,7 +10,7 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
-use llimphi_voxel::{MundoRender, SCENE_SUN};
+use llimphi_voxel::{MundoRender, WaterSim, CELL_WATER, SCENE_SUN};
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -39,6 +39,9 @@ pub struct WorldPreview {
     /// personaje); distinto cuando la ventana **sigue al reparto** de una escena
     /// (mundo infinito). Ver [`Self::ensure_window`] / [`Self::ground_at_world`].
     origin: [i32; 2],
+    /// Simulación de agua en curso (ley Fluir), si está activa. `None` = terreno
+    /// estático. Ver [`Self::ensure_sim`] / [`Self::sim_step`].
+    sim: Option<WaterSim>,
     /// Pool de renderers de actor (uno por actor; la malla se re-sube por frame).
     actor_r: Vec<Renderer3d>,
 }
@@ -62,8 +65,37 @@ impl WorldPreview {
             dim,
             built_gen: gen,
             origin: [0, 0],
+            sim: None,
             actor_r: Vec::new(),
         }
+    }
+
+    /// Arranca la **simulación de agua** (ley Fluir) desde el grid actual, si no hay
+    /// una ya corriendo. `agua` es el color con que se identifican/pintan las celdas.
+    pub fn ensure_sim(&mut self, agua: [u8; 3]) {
+        if self.sim.is_none() {
+            self.sim = Some(WaterSim::from_grid(&self.grid, agua));
+        }
+    }
+
+    /// Detiene la simulación (el próximo `rebuild_if` repone el terreno estático).
+    pub fn clear_sim(&mut self) {
+        self.sim = None;
+    }
+
+    /// Avanza un paso de la simulación de agua y **sube sólo lo cambiado** a la GPU
+    /// (`VoxelRenderer::sync` sobre la caja dirty). No-op si no hay simulación.
+    pub fn sim_step(&mut self, queue: &wgpu::Queue, agua: [u8; 3]) {
+        let Self { sim, grid, voxel, .. } = self;
+        let Some(sim) = sim else { return };
+        for (pos, state) in sim.step() {
+            if state == CELL_WATER {
+                grid.set(pos[0], pos[1], pos[2], agua);
+            } else {
+                grid.clear(pos[0], pos[1], pos[2]);
+            }
+        }
+        voxel.sync(queue, grid);
     }
 
     /// Arma el `VoxelRenderer` de un grid con la atmósfera diurna del editor.
@@ -99,6 +131,7 @@ impl WorldPreview {
             self.dim = dim;
             self.built_gen = gen;
             self.origin = [0, 0]; // centrado en el origen
+            self.sim = None; // el grid se rehízo: cualquier simulación queda obsoleta
         }
     }
 

@@ -19,6 +19,7 @@ mod lod;
 mod player;
 mod potential;
 mod raycast;
+mod sim;
 mod studio;
 mod terrain;
 mod vox;
@@ -34,6 +35,7 @@ pub use lod::{lod_skirt, lod_skirt_pyramid, LodParams, LodRing};
 pub use player::{forward_h, look_dir, right_h, Player};
 pub use potential::{Egg, Hatchling};
 pub use raycast::{raycast, VoxelHit};
+pub use sim::{CellChange, WaterSim, CELL_AIR, CELL_WATER};
 pub use studio::{
     window_origin_for_cast, world_dim, ActorKeySpec, ActorSpec, CharSpec, Ley, LeyKind, LeyUso,
     MatRole, MaterialDef, Mundo, MundoRender, Project, SceneSpec, ShotKind, ShotSpec,

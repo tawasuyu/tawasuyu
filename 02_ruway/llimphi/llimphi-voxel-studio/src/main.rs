@@ -200,6 +200,8 @@ enum Msg {
     RemoveShot,
     ExportVideo,
     ExportDone(Result<String, String>),
+    // Simulación de la ley Fluir (agua).
+    ToggleSim,
     // Cámara.
     Orbit(f32, f32),
     Zoom(f32),
@@ -251,6 +253,8 @@ struct Model {
     playing: bool,
     script_cam: bool,
     exporting: bool,
+    /// Simulación de agua (ley Fluir) corriendo en el preview de mundo/bioma.
+    simulating: bool,
     /// Semilla del random de mundos (LCG; no hay `Math.random`).
     rng: u32,
     /// Decisión global: dientes DENTRO (overlay) o FUERA (franja reservada).
@@ -635,6 +639,11 @@ impl App for Studio {
                     Ok(p) => format!("video listo: {p}"),
                     Err(e) => format!("export falló: {e}"),
                 };
+            }
+            Msg::ToggleSim => {
+                model.simulating = !model.simulating;
+                model.gen += 1; // repone terreno fresco y reinicia la sim limpia
+                model.status = if model.simulating { "simulando agua…".into() } else { "agua estática".into() };
             }
             Msg::Orbit(dx, dy) => {
                 model.yaw -= dx * 0.008;
@@ -1021,6 +1030,8 @@ fn canvas_3d(model: &Model) -> View<Msg> {
     let (yaw, pitch, dist, gen) = (model.yaw, model.pitch, model.dist, model.gen);
     let preview = model.preview.clone();
     let mr = model.preview_render();
+    let simulating = model.simulating;
+    let agua = mr.palette.agua;
     let absolute = Style {
         position: Position::Absolute,
         size: Size { width: percent(1.0), height: percent(1.0) },
@@ -1100,12 +1111,19 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
             })
         }
-        // Mundos / Biomas: sólo el terreno, en órbita.
+        // Mundos / Biomas: sólo el terreno, en órbita. Con «simular», corre la ley
+        // Fluir: el agua cae/esparce/cae por cornisas, paso por cuadro.
         _ => View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
             let dim = world_dim(PREVIEW_DIM_XZ);
             let mut guard = preview.lock().unwrap();
             let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
             p.rebuild_if(device, queue, &mr, dim, gen);
+            if simulating {
+                p.ensure_sim(agua);
+                p.sim_step(queue, agua);
+            } else {
+                p.clear_sim();
+            }
             let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
             p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
         }),
@@ -1247,6 +1265,9 @@ fn bioma_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             bslider(&sp, "nivel del agua", b.water_level, 0.0, 0.9, BiomaField::Water),
             bslider(&sp, "densidad ríos", b.rivers, 0.0, 1.0, BiomaField::Rivers),
             bslider(&sp, "altura cumbre", b.peak_at, 0.0, 1.0, BiomaField::PeakAt),
+            spacer(8.0),
+            section_title("LEY FLUIR (AGUA)", theme),
+            button_view(if model.simulating { "⏸ detener agua" } else { "💧 simular agua" }, &btn, Msg::ToggleSim),
         ],
         1 => vec![
             section_title("MATERIALES", theme),
@@ -1300,6 +1321,9 @@ fn mundo_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             button_view("🎲 random", &btn, Msg::SeedRandom),
             spacer(8.0),
             body_text(format!("semilla actual: {}", m.seed), theme.fg_muted, theme),
+            spacer(10.0),
+            section_title("LEY FLUIR (AGUA)", theme),
+            button_view(if model.simulating { "⏸ detener agua" } else { "💧 simular agua" }, &btn, Msg::ToggleSim),
         ]
     } else {
         let bname = m
@@ -1731,6 +1755,7 @@ pub(crate) fn demo_model() -> Model {
         playing: false,
         script_cam: true,
         exporting: false,
+        simulating: false,
         rng: 0x1234_5678,
         dientes_outside: wawa_config::WawaConfig::load().dientes_outside,
         project,
