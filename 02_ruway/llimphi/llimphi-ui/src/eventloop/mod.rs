@@ -20,6 +20,28 @@ mod secondary;
 
 use super::*;
 
+/// Traza un hito de arranque con su epoch-ms si `LLIMPHI_TIMING` está puesto.
+/// Sirve para perfilar el camino frío hasta el primer frame (init de wgpu/Hal,
+/// surface, renderer) sin afectar a nadie en condiciones normales. Off por
+/// defecto: una sola lectura de env, cero costo si no está.
+pub(crate) fn timing_hito(hito: &str) {
+    if std::env::var_os("LLIMPHI_TIMING").is_some() {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        eprintln!("[llimphi-timing] {hito} epoch_ms={ms}");
+    }
+}
+
+/// Marca el PRIMER present (cualquiera de los dos caminos) — el frame que de
+/// verdad llega a la pantalla. `Once` para que sólo dispare una vez.
+pub(crate) fn timing_primer_present() {
+    use std::sync::Once;
+    static UNA_VEZ: Once = Once::new();
+    UNA_VEZ.call_once(|| timing_hito("primer-present"));
+}
+
 pub(crate) fn build_window_attributes<A: App>() -> WindowAttributes {
     let (w, h) = A::initial_size();
     let attrs = WindowAttributes::default()
@@ -68,6 +90,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
         if self.state.is_some() {
             return;
         }
+        timing_hito("resumed:entrada");
         let window = event_loop
             .create_window(build_window_attributes::<A>())
             .expect("create window");
@@ -91,9 +114,12 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
         let a11y_adapter =
             accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, a11y_proxy);
         let a11y_tree_id = accesskit::TreeId(uuid::Uuid::new_v4());
+        timing_hito("resumed:antes-de-Hal");
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
+        timing_hito("resumed:Hal-listo");
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = Renderer::new(&hal).expect("renderer");
+        timing_hito("resumed:renderer-listo");
         let overlay_compositor = llimphi_hal::OverlayCompositor::new(&hal.device);
         let blur_compositor = llimphi_hal::BlurCompositor::new(&hal.device);
         let color_filter_compositor = llimphi_hal::ColorFilterCompositor::new(&hal.device);

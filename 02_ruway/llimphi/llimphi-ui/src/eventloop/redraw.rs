@@ -51,6 +51,7 @@ pub(super) fn handle_redraw<A: App>(
                     .render(&state.hal, &state.scene, &frame, palette::css::BLACK)
                     .is_ok()
                 {
+                    super::timing_primer_present();
                     state.surface.present(frame, &state.hal);
                     return;
                 }
@@ -541,6 +542,7 @@ pub(super) fn handle_redraw<A: App>(
             .queue
             .submit(std::iter::once(gpu_encoder.finish()));
     }
+    super::timing_primer_present();
     state.surface.present(frame, &state.hal);
     // Ticker de animaciones implícitas: si quedó alguna en curso,
     // pedí el próximo frame. Cuando todas se asientan, `animating`

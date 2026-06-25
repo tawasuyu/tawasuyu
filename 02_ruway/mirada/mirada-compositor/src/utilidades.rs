@@ -537,6 +537,13 @@ where
     let stdout = child.stdout.take().expect("stdout pedido con Stdio::piped");
     let stdin = child.stdin.take().expect("stdin pedido con Stdio::piped");
     println!("mirada-compositor · greeter lanzado (pid {}).", child.id());
+    if std::env::var_os("LLIMPHI_TIMING").is_some() {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        eprintln!("[llimphi-timing] mirada:greeter-spawn epoch_ms={ms}");
+    }
 
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {

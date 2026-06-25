@@ -883,6 +883,7 @@ fn compute_drag_velocity(
 /// Punto de entrada: corre el bucle Elm hasta que el usuario cierre la
 /// ventana (o la app llame [`Handle::quit`]).
 pub fn run<A: App>() {
+    eventloop::timing_hito("run:entrada");
     let event_loop = EventLoop::<UserEvent<A::Msg>>::with_user_event()
         .build()
         .expect("event loop");

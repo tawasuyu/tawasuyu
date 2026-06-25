@@ -59,6 +59,13 @@ const GREETER_APP_ID: &str = "mirada.greeter";
 type DynAuth = Arc<dyn Authenticator + Send + Sync>;
 
 fn main() {
+    if std::env::var_os("LLIMPHI_TIMING").is_some() {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        eprintln!("[llimphi-timing] greeter:main epoch_ms={ms}");
+    }
     rimay_localize::init();
     // Carga el idioma persistido en wawa-config (sobrescribe el default "es-PE").
     let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);

@@ -84,8 +84,10 @@ fi
 #     master y compone el greeter. Foreground: observá el crossfade en pantalla.
 echo "[2] arrancando mirada-compositor --drm --greeter (mirá la pantalla)…"
 echo "    (salí con Ctrl+C o cambiá de VT cuando hayas visto el greeter)"
+# LLIMPHI_TIMING: perfila el arranque del greeter (spawn → main → wgpu → present).
 MIRADA_GREETER_BIN="$GREETER" \
 ARJE_SPLASH_SOCK="$SOCK" \
+LLIMPHI_TIMING=1 \
   "$MIRADA" --drm --greeter 2>&1 | tee "$MIRADA_LOG"
 
 # 3 · Veredicto por texto: gap RELEASED → primer frame de mirada.
@@ -101,5 +103,45 @@ else
   echo "  GAP: no calculable — revisá los logs en $LOGDIR"
   echo "  --- splash.log (cola) ---"; tail -n 15 "$SPLASH_LOG" | sed 's/^/    /'
 fi
+
+# 4 · Desglose del arranque del greeter (LLIMPHI_TIMING) — en qué se va el gap.
+echo
+echo "== desglose del arranque del greeter (epoch_ms) =="
+ms() { grep -oE "$1"' epoch_ms=[0-9]+' "$MIRADA_LOG" | grep -oE '[0-9]+' | head -1; }
+SPAWN=$(ms 'mirada:greeter-spawn'); MAIN=$(ms 'greeter:main'); RUN=$(ms 'run:entrada')
+RES=$(ms 'resumed:entrada'); HAL0=$(ms 'resumed:antes-de-Hal'); HAL1=$(ms 'resumed:Hal-listo')
+REND=$(ms 'resumed:renderer-listo'); PRES=$(ms 'primer-present')
+DEV=$(ms 'mirada:device-listo'); GLES=$(ms 'mirada:gles-listo')
+SURF=$(ms 'mirada:surface-lista'); BAPP=$(ms 'mirada:build_app-listo')
+DMA=$(ms 'mirada:dmabuf-listo'); SOCK0=$(ms 'mirada:antes-de-socket'); SOCK1=$(ms 'mirada:socket-listo')
+d() { [ -n "$1" ] && [ -n "$2" ] && echo "$(($2 - $1))" || echo "?"; }
+echo "  -- init de mirada (lo que domina el gap) --"
+printf "  %-36s %s\n" "RELEASED → device-listo (master+open)"   "$(d "$REL" "$DEV") ms"
+printf "  %-36s %s\n" "device → GLES (GBM+EGL+GlesRenderer)"     "$(d "$DEV" "$GLES") ms"
+printf "  %-36s %s\n" "GLES → surface (DrmCompositor+present)"   "$(d "$GLES" "$SURF") ms"
+printf "  %-36s %s\n" "build_app (Wayland+Cerebro+fuentes)"      "$(d "$SURF" "$BAPP") ms"
+printf "  %-36s %s\n" "announce_dmabuf (236 fmts)"              "$(d "$BAPP" "$DMA") ms"
+L0=$(ms 'mirada:loop-inicio'); CS=$(ms 'mirada:create_surface-listo')
+DC=$(ms 'mirada:drmcomp-new-listo'); PI=$(ms 'mirada:present-inicial-listo')
+printf "  %-36s %s\n" "  pre-loop (sort+disponer)"              "$(d "$DMA" "$L0") ms"
+printf "  %-36s %s\n" "  create_surface (modeset)"              "$(d "$L0" "$CS") ms"
+printf "  %-36s %s\n" "  DrmCompositor::new (planes/fmts) ⭐"    "$(d "$CS" "$DC") ms"
+printf "  %-36s %s\n" "  present inicial (Inc.1: render+flip) ⭐" "$(d "$DC" "$PI") ms"
+PR0=$(ms 'mirada:present-antes-render'); PR1=$(ms 'mirada:present-render-listo'); PF=$(ms 'mirada:present-flip-listo')
+printf "  %-36s %s\n" "    └ render_frame (shaders GL) ⭐"        "$(d "$PR0" "$PR1") ms"
+printf "  %-36s %s\n" "    └ queue_frame (flip scanout DRM) ⭐"   "$(d "$PR1" "$PF") ms"
+printf "  %-36s %s\n" "armado global → socket"                  "$(d "$PI" "$SOCK0") ms"
+printf "  %-36s %s\n" "bind del socket Wayland"                  "$(d "$SOCK0" "$SOCK1") ms"
+printf "  %-36s %s\n" "socket → greeter-spawn (resto)"           "$(d "$SOCK1" "$SPAWN") ms"
+echo "  -- arranque del greeter --"
+printf "  %-34s %s\n" "RELEASED → greeter-spawn (TOTAL init)"  "$(d "$REL" "$SPAWN") ms"
+printf "  %-34s %s\n" "spawn → main (exec+link)"               "$(d "$SPAWN" "$MAIN") ms"
+printf "  %-34s %s\n" "main → run (loc+config)"                "$(d "$MAIN" "$RUN") ms"
+printf "  %-34s %s\n" "run → resumed (winit/wayland)"          "$(d "$RUN" "$RES") ms"
+printf "  %-34s %s\n" "resumed → antes-de-Hal (ventana+a11y)"  "$(d "$RES" "$HAL0") ms"
+printf "  %-34s %s\n" "Hal::new (init wgpu) ⭐"                 "$(d "$HAL0" "$HAL1") ms"
+printf "  %-34s %s\n" "Hal → renderer (surface+pipelines)"     "$(d "$HAL1" "$REND") ms"
+printf "  %-34s %s\n" "renderer → primer-present (1er paint)"  "$(d "$REND" "$PRES") ms"
+printf "  %-34s %s\n" "primer-present → mirada frame (commit)" "$(d "$PRES" "$FRM") ms"
 echo
 echo "logs completos en: $LOGDIR"

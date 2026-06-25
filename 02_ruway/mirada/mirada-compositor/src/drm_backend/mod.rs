@@ -145,6 +145,19 @@ render_elements! {
 /// fondo común y no como un pseudonegro. Ver `SDD-ARRANQUE-SIN-PARPADEO.md`.
 const CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0];
 
+/// Traza un hito del arranque de mirada con su epoch-ms si `LLIMPHI_TIMING`
+/// está puesto — para perfilar los ~1.2 s de init (device → GLES → surface →
+/// Wayland) que dominan el gap del handoff. Off por defecto.
+fn timing_hito(hito: &str) {
+    if std::env::var_os("LLIMPHI_TIMING").is_some() {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        eprintln!("[llimphi-timing] {hito} epoch_ms={ms}");
+    }
+}
+
 /// Lado del cursor de software, en píxeles.
 const CURSOR_SIZE: i32 = 12;
 
@@ -713,6 +726,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         }
     };
     println!("      dispositivo DRM listo.");
+    timing_hito("mirada:device-listo");
 
     // 4 · Enumerar TODAS las salidas conectadas: conector + CRTC + modo.
     println!("[4/8] enumerando salidas …");
@@ -795,6 +809,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let mut renderer =
         unsafe { GlesRenderer::new(egl_context) }.map_err(|e| format!("GlesRenderer falló: {e}"))?;
     println!("      renderer GLES listo.");
+    timing_hito("mirada:gles-listo");
 
     // 6 · Superficie DRM + DrmCompositor por cada salida descubierta.
     // El renderer GLES se comparte (un solo EGLContext sobre la GPU); cada
@@ -807,11 +822,14 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
 
     // 7 · El estado Wayland (Cerebro, teclado, keymap, control).
     println!("[7/8] armando el estado Wayland …");
+    timing_hito("mirada:surface-lista");
     let Setup { mut display, mut app, watches, ctl } =
         crate::build_app(greeter)?;
+    timing_hito("mirada:build_app-listo");
     // Con el renderer ya creado, anuncia dmabuf — sin esto las apps que
     // pintan por GPU (GPUI, navegadores acelerados) no pueden conectarse.
     crate::announce_dmabuf(&mut app, &display.handle(), &renderer);
+    timing_hito("mirada:dmabuf-listo");
 
     // Ordenar las salidas según la config: `(order, name)` ascendente. La de
     // menor `order` queda **primaria** (origen `(0,0)` y todas las features
@@ -844,9 +862,11 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let mut output_ctxs: Vec<OutputCtx> = Vec::with_capacity(chosen.len());
     for (i, (conn_handle, crtc_h, mode, name)) in chosen.iter().cloned().enumerate() {
         let (w, h) = mode.size();
+        timing_hito("mirada:loop-inicio");
         let surface = drm
             .create_surface(crtc_h, mode, &[conn_handle])
             .map_err(|e| format!("create_surface[{name}] falló: {e}"))?;
+        timing_hito("mirada:create_surface-listo");
         // Scale/transform por salida — overrides de la config o defaults.
         // Para `OutputModeSource::Static` (geometría DRM) hace falta el
         // factor decimal; el announce al protocolo usa el enum de smithay
@@ -871,6 +891,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             Some(gbm.clone()),
         )
         .map_err(|e| format!("DrmCompositor::new[{name}] falló: {e}"))?;
+        timing_hito("mirada:drmcomp-new-listo");
 
         // Incremento 1 del crossfade limpio (SDD §Fase 2): present inmediato del
         // fondo común apenas existe el compositor —ANTES de armar Wayland y
@@ -884,9 +905,15 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         // bucle no encole otro flip antes del VBlank de este.
         let presento_inicial = {
             let vacio: Vec<Frame<GlesRenderer>> = Vec::new();
-            match comp.render_frame::<_, _>(&mut renderer, &vacio, CLEAR_COLOR, FrameFlags::DEFAULT) {
+            timing_hito("mirada:present-antes-render");
+            let rf = comp.render_frame::<_, _>(&mut renderer, &vacio, CLEAR_COLOR, FrameFlags::DEFAULT);
+            timing_hito("mirada:present-render-listo");
+            match rf {
                 Ok(res) if !res.is_empty => match comp.queue_frame(()) {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        timing_hito("mirada:present-flip-listo");
+                        true
+                    }
                     Err(e) => {
                         eprintln!("      present inicial[{name}]: {e}");
                         false
@@ -899,6 +926,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
                 }
             }
         };
+        timing_hito("mirada:present-inicial-listo");
         let refresh_mhz = mode.vrefresh() as i32 * 1000;
         let smithay_out = crate::announce_output(
             &display.handle(),
@@ -961,7 +989,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     app.output_ids = output_ctxs.iter().map(|c| c.id).collect();
 
     // El socket Wayland por el que se conectan los clientes.
+    timing_hito("mirada:antes-de-socket");
     let listener = ListeningSocket::bind_auto("wayland", 1..32)?;
+    timing_hito("mirada:socket-listo");
     let socket_name = listener
         .socket_name()
         .and_then(|s| s.to_str())
