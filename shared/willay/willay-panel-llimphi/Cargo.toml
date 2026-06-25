@@ -17,5 +17,8 @@ willay-emit = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-layer = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+# Decodificación de PNG a peniko::Image (con guardia de tamaño) para los
+# thumbnails de captura en el feed.
+llimphi-image = { workspace = true }
 # Hora/fecha en la zona local del sistema (no UTC) — la convención de fecha del repo.
 chrono = { workspace = true }

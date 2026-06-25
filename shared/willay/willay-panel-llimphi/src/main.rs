@@ -12,9 +12,14 @@ use std::time::Duration;
 use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, FlexDirection, Size, Style};
 use llimphi_ui::llimphi_layout::taffy::{AlignItems, Rect};
 use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_compositor::ImageFit;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
+
+use llimphi_image::Image;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use willay_core::proto::{Respuesta, Solicitud};
 use willay_core::{Clase, Evento};
@@ -371,6 +376,38 @@ fn separador(rotulo: &str) -> View<Msg> {
     .text_aligned(rotulo.to_string(), 11.0, DIM, Alignment::Start)
 }
 
+/// Lado del thumbnail de captura en la fila (px).
+const THUMB_PX: f32 = 34.0;
+/// Tope de tamaño del PNG a decodificar para el thumbnail: capturas más grandes
+/// no se previsualizan (memoria/CPU acotadas), sólo el ícono.
+const THUMB_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// El thumbnail decodificado de una captura, cacheado por ruta. Cachea también el
+/// fallo (`None`) para no reintentar decodificar cada frame. `peniko::Image` es
+/// barato de clonar (su blob es `Arc`).
+fn thumbnail(ruta: &str) -> Option<Image> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<Image>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(slot) = cache.lock().ok().and_then(|g| g.get(ruta).cloned()) {
+        return slot; // ya intentado
+    }
+    let img = llimphi_image::load_path(std::path::Path::new(ruta), THUMB_MAX_BYTES).ok();
+    if let Ok(mut g) = cache.lock() {
+        g.insert(ruta.to_string(), img.clone());
+    }
+    img
+}
+
+/// El thumbnail a mostrar en la fila de un evento, si lo tiene (capturas con
+/// archivo en disco). El resto de las clases no muestra miniatura.
+fn thumb_para(e: &Evento) -> Option<Image> {
+    use willay_core::{Clase, Payload};
+    match (e.clase, &e.payload) {
+        (Clase::Captura, Payload::Archivo { ruta, .. }) => thumbnail(ruta),
+        _ => None,
+    }
+}
+
 /// La acción de un evento al clickear su fila: copiar el clip al portapapeles, o
 /// abrir la captura en tullpu. Las notificaciones no tienen acción. `None` si la
 /// clase/payload no acciona.
@@ -428,15 +465,42 @@ fn grupo_row(g: &[Evento]) -> View<Msg> {
     })
     .text_aligned(e.titulo.clone(), 12.0, FG, Alignment::Start);
 
-    let fila = View::new(Style {
+    // Columna de texto (meta + título), que crece; opcionalmente con un thumbnail
+    // de captura a la izquierda.
+    let texto = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: length(ITEM_H) },
-        flex_shrink: 0.0,
-        padding: Rect { left: length(12.0_f32), right: length(12.0_f32), top: length(5.0_f32), bottom: length(5.0_f32) },
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
         ..Default::default()
     })
     .children(vec![linea_meta, titulo]);
+
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    if let Some(img) = thumb_para(e) {
+        kids.push(
+            View::new(Style {
+                size: Size { width: length(THUMB_PX), height: length(THUMB_PX) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .radius(4.0_f64)
+            .image(img)
+            .image_fit(ImageFit::Cover),
+        );
+    }
+    kids.push(texto);
+
+    let fila = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(ITEM_H) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        padding: Rect { left: length(12.0_f32), right: length(12.0_f32), top: length(5.0_f32), bottom: length(5.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(kids);
 
     match accion_de(e) {
         Some(msg) => fila.on_click(msg),
