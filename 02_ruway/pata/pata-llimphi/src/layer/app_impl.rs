@@ -1238,7 +1238,7 @@ impl LayerApp {
                     if let Ok(guard) = self.rag.engine.lock() {
                         if let Some(engine) = guard.as_ref() {
                             let tx = self.rag_tx.clone();
-                            engine.ask(q, move |res| {
+                            engine.ask(q, Box::new(move |res| {
                                 let m = match res {
                                     Ok(a) => Msg::RagResult {
                                         answer: a.answer,
@@ -1247,7 +1247,7 @@ impl LayerApp {
                                     Err(e) => Msg::RagError(e.to_string()),
                                 };
                                 let _ = tx.send(m);
-                            });
+                            }));
                         } else {
                             self.rag.status = crate::rag::RagStatus::Unavailable;
                         }

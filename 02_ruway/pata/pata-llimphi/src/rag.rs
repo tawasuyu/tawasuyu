@@ -23,7 +23,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
-use paloma_rag::{RagEngine, RagSource};
+use rag_motor::{RagMotor, RagSource};
 
 use crate::Msg;
 
@@ -55,8 +55,10 @@ pub enum RagStatus {
 pub struct RagState {
     /// `true` si la config declara algún diente RAG (si no, ni se arma el motor).
     pub present: bool,
-    /// El motor, una vez armado. `None` mientras se arma o si no se pudo.
-    pub engine: Arc<Mutex<Option<RagEngine>>>,
+    /// El motor, una vez armado. `None` mientras se arma o si no se pudo. Es un
+    /// `Box<dyn RagMotor>`: la fuente (paloma sobre el correo, willay sobre los
+    /// eventos) se elige por el prop `source` del diente — el panel es agnóstico.
+    pub engine: Arc<Mutex<Option<Box<dyn RagMotor>>>>,
     /// Punto del ciclo (gobierna qué pinta el panel).
     pub status: RagStatus,
     /// Texto de la consulta que se está tipeando.

@@ -332,6 +332,52 @@ pub fn assemble(
     (system, user, sources)
 }
 
+/// Mapea una [`RagSource`] de paloma (correo) a la cita genérica de `rag-motor`:
+/// el `MessageId` opaco se vuelve `String`, el resto pasa tal cual.
+fn a_cita(s: RagSource) -> rag_motor::RagSource {
+    rag_motor::RagSource {
+        id: s.id.0,
+        subject: s.subject,
+        from: s.from,
+        date: s.date,
+        mailbox: s.mailbox,
+        score: s.score,
+    }
+}
+
+/// Mapea el error de paloma al genérico del widget.
+fn a_error_generico(e: RagError) -> rag_motor::RagError {
+    match e {
+        RagError::EmptyIndex => rag_motor::RagError::SinDatos,
+        RagError::NoHits => rag_motor::RagError::SinResultados,
+        RagError::Embed(m) => rag_motor::RagError::Embed(m),
+        RagError::Llm(m) => rag_motor::RagError::Llm(m),
+    }
+}
+
+/// paloma como **fuente intercambiable** del widget `rag`: reusa el `ask`
+/// inherente y traduce su `RagAnswer`/`RagError` a los tipos genéricos de
+/// `rag-motor`, para convivir con willay tras el mismo `Box<dyn RagMotor>`.
+impl rag_motor::RagMotor for RagEngine {
+    fn corpus_len(&self) -> usize {
+        self.corpus_len
+    }
+
+    fn ask(
+        &self,
+        query: String,
+        done: Box<dyn FnOnce(Result<rag_motor::RagAnswer, rag_motor::RagError>) + Send>,
+    ) {
+        RagEngine::ask(self, query, move |res| {
+            let r = res.map(|a| rag_motor::RagAnswer {
+                answer: a.answer,
+                sources: a.sources.into_iter().map(a_cita).collect(),
+            });
+            done(r.map_err(a_error_generico));
+        });
+    }
+}
+
 /// Raíz de la caché de paloma (`~/.cache/paloma` en Linux), la misma que usa
 /// `paloma-app`. `None` si la plataforma no expone `ProjectDirs`.
 fn cache_root() -> Option<PathBuf> {

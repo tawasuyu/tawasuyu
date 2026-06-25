@@ -11,6 +11,9 @@ description = "paloma-rag — asistente RAG sobre el correo: recupera del índic
 [dependencies]
 paloma-core = { path = "../paloma-core" }
 paloma-semantic = { path = "../paloma-semantic" }
+# La abstracción de motor RAG: paloma la implementa para ser una fuente
+# intercambiable del widget `rag` (junto a willay sobre el centro de eventos).
+rag-motor = { path = "../../../shared/rag-motor" }
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 # Config global del SO: el backend LLM + el daemon de embeddings se eligen una

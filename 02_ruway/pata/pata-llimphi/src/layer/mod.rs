@@ -460,8 +460,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     if rag_present {
         let slot = rag.engine.clone();
         let tx = rag_tx.clone();
+        let source = crate::rag_source(&cfg);
         std::thread::spawn(move || {
-            let engine = paloma_rag::RagEngine::try_build();
+            // willay (eventos) o paloma (correo, default), ambos `dyn RagMotor`.
+            let engine: Option<Box<dyn rag_motor::RagMotor>> = match source.as_str() {
+                "willay" | "eventos" => willay_rag::Engine::try_build()
+                    .map(|e| Box::new(e) as Box<dyn rag_motor::RagMotor>),
+                _ => paloma_rag::RagEngine::try_build()
+                    .map(|e| Box::new(e) as Box<dyn rag_motor::RagMotor>),
+            };
             let (ok, corpus) = match &engine {
                 Some(e) => (true, e.corpus_len()),
                 None => (false, 0),

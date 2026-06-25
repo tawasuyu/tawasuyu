@@ -630,6 +630,13 @@ impl Config {
             "Correo IA",
             WidgetSpec::new("rag").with("source", Prop::Str("paloma".to_string())),
         ));
+        // Búsqueda en lenguaje natural sobre el centro de eventos (willay):
+        // notificaciones, capturas y clipboard. Mismo widget `rag`, otro corpus.
+        rail.tabs.push(SidebarTab::new(
+            "eventos",
+            "Eventos IA",
+            WidgetSpec::new("rag").with("source", Prop::Str("willay".to_string())),
+        ));
 
         // Sidebar DERECHO «supeditado al desktop»: reserva su franja (las
         // ventanas no lo tapan) gracias a `reserve = Some(true)`, sin tocar la

@@ -265,7 +265,7 @@ pub enum Msg {
     /// El motor devolvió una respuesta redactada + sus fuentes citadas.
     RagResult {
         answer: String,
-        sources: Vec<paloma_rag::RagSource>,
+        sources: Vec<rag_motor::RagSource>,
     },
     /// La consulta falló (sin hits, embeddings o IA caídos).
     RagError(String),
@@ -618,6 +618,19 @@ pub fn config_tiene_rag(cfg: &Config) -> bool {
         .filter(|s| s.kind == SurfaceKind::Sidebar)
         .flat_map(|s| s.tabs.iter())
         .any(|t| rag::is_rag_kind(&t.content.kind))
+}
+
+/// El corpus que monta el primer diente RAG: el prop `source` de su contenido
+/// (`"willay"` = centro de eventos, default `"paloma"` = correo). Vacío si no hay
+/// diente RAG.
+pub fn rag_source(cfg: &Config) -> String {
+    cfg.surfaces
+        .iter()
+        .filter(|s| s.kind == SurfaceKind::Sidebar)
+        .flat_map(|s| s.tabs.iter())
+        .find(|t| rag::is_rag_kind(&t.content.kind))
+        .map(|t| t.content.str_prop("source", "paloma").to_string())
+        .unwrap_or_default()
 }
 
 /// `true` si el diente abierto del sidebar es un panel RAG (su contenido es
@@ -985,6 +998,9 @@ impl App for PataApp {
     fn init(handle: &Handle<Msg>) -> Model {
         let cfg = pata_config::load();
         let rag_present = config_tiene_rag(&cfg);
+        // Qué corpus monta el diente RAG (`source` del prop): "willay" = el centro
+        // de eventos, cualquier otro (default "paloma") = el correo.
+        let rag_src = rag_present.then(|| rag_source(&cfg)).unwrap_or_default();
         let screen = PANTALLA;
         let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
         let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1), dientes_outside);
@@ -1094,8 +1110,16 @@ impl App for PataApp {
         if rag_present {
             let slot = model.rag.engine.clone();
             let h = handle.clone();
+            let source = rag_src;
             std::thread::spawn(move || {
-                let engine = paloma_rag::RagEngine::try_build();
+                // La fuente se elige por el prop `source`: willay (eventos) o
+                // paloma (correo, default). Ambos motores son `dyn RagMotor`.
+                let engine: Option<Box<dyn rag_motor::RagMotor>> = match source.as_str() {
+                    "willay" | "eventos" => willay_rag::Engine::try_build()
+                        .map(|e| Box::new(e) as Box<dyn rag_motor::RagMotor>),
+                    _ => paloma_rag::RagEngine::try_build()
+                        .map(|e| Box::new(e) as Box<dyn rag_motor::RagMotor>),
+                };
                 let (ok, corpus) = match &engine {
                     Some(e) => (true, e.corpus_len()),
                     None => (false, 0),
@@ -1535,13 +1559,13 @@ impl App for PataApp {
                     if let Ok(guard) = model.rag.engine.lock() {
                         if let Some(engine) = guard.as_ref() {
                             let h = handle.clone();
-                            engine.ask(q, move |res| match res {
+                            engine.ask(q, Box::new(move |res| match res {
                                 Ok(a) => h.dispatch(Msg::RagResult {
                                     answer: a.answer,
                                     sources: a.sources,
                                 }),
                                 Err(e) => h.dispatch(Msg::RagError(e.to_string())),
-                            });
+                            }));
                         } else {
                             model.rag.status = RagStatus::Unavailable;
                         }

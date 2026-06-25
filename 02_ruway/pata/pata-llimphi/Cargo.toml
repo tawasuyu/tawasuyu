@@ -50,6 +50,10 @@ app-bus = { path = "../../../shared/app-bus" }
 # por el daemon de rimay-verbo, recupera los mails relevantes y redacta una
 # respuesta citada con pluma-llm. pata sólo le rutea el input y pinta el panel.
 paloma-rag = { path = "../../paloma/paloma-rag" }
+# El widget `rag` es agnóstico de la fuente: el trait + tipos de cita (rag-motor)
+# y el motor sobre el centro de eventos (willay-rag), junto a paloma (correo).
+rag-motor = { workspace = true }
+willay-rag = { path = "../../../shared/willay/willay-rag" }
 llimphi-ui = { workspace = true }
 # Área de scroll del historial del drawer (clip + offset + barra arrastrable).
 llimphi-widget-scroll = { workspace = true }
