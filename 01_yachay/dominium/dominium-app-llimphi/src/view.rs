@@ -213,16 +213,25 @@ pub(crate) fn side_panel(
         PanelTab::Vista => append_vista_tab(&mut children, model, theme, &btn_palette, &slider_palette),
     }
 
-    View::new(Style {
+    // Contenido del panel: una columna alta (suma de todas las secciones).
+    // Se desplaza hacia arriba con `margin_top: -panel_scroll` para revelar lo
+    // que cae bajo el fold; el contenedor externo la recorta y captura la rueda.
+    let content = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(SIDE_WIDTH),
-            height: percent(1.0_f32),
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
         },
         flex_shrink: 0.0,
         gap: Size {
             width: length(0.0_f32),
             height: length(10.0_f32),
+        },
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(-model.panel_scroll),
+            bottom: length(0.0_f32),
         },
         padding: Rect {
             left: length(14.0_f32),
@@ -232,8 +241,24 @@ pub(crate) fn side_panel(
         },
         ..Default::default()
     })
+    .children(children);
+
+    // Contenedor externo: alto fijo (toda la ventana), recorta el contenido que
+    // sobresale y captura la rueda → `Msg::PanelScroll`. Sin esto el panel
+    // desbordaba y sus secciones de abajo eran inalcanzables.
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(SIDE_WIDTH),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
     .fill(theme.bg_panel)
-    .children(children)
+    .clip(true)
+    .on_scroll(|_dx, dy| Some(Msg::PanelScroll(dy)))
+    .children(vec![content])
 }
 
 /// Línea horizontal de 1 px usada como separator entre secciones del panel.

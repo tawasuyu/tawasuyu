@@ -33,6 +33,11 @@ pub(crate) struct Model {
     /// render lo incluye (si no, panear no invalidaría la caché del plan).
     pub(crate) pan: (f32, f32),
     pub(crate) weights: ZWeights,
+    /// Desplazamiento vertical del contenido del panel lateral, en píxeles
+    /// (`0.0` = arriba). El panel tiene más secciones de las que entran en la
+    /// ventana; la rueda sobre el panel lo desliza. Se clampa por tab (cada
+    /// uno tiene distinto alto de contenido) y se resetea al cambiar de tab.
+    pub(crate) panel_scroll: f32,
     pub(crate) cfg: PlanConfig,
     /// Índice del Concepto seleccionado, si alguno. `None` cuando no hay
     /// selección. Si se "Limpia" la lista se resetea a `None`.
@@ -120,6 +125,19 @@ impl PanelTab {
             PanelTab::Psique,
             PanelTab::Vista,
         ]
+    }
+
+    /// Tope de scroll del panel para este tab, en píxeles. Aproxima
+    /// `alto_de_contenido − alto_visible`; generoso a propósito (mejor un
+    /// pelín de vacío al final que no poder llegar al fondo). Mundo es el más
+    /// largo (todas las secciones de params); Vista el más corto.
+    pub(crate) fn max_scroll(self) -> f32 {
+        match self {
+            PanelTab::Mundo => 1700.0,
+            PanelTab::Conceptos => 1000.0,
+            PanelTab::Psique => 900.0,
+            PanelTab::Vista => 500.0,
+        }
     }
 }
 
@@ -329,6 +347,9 @@ pub(crate) enum Msg {
     CyclePsiPolicy,
     /// Cambia el tab activo del panel lateral.
     SelectTab(PanelTab),
+    /// Rueda sobre el panel lateral → desliza su contenido. `dy > 0` baja
+    /// (contenido sube). Se acumula y clampa en `Model::panel_scroll`.
+    PanelScroll(f32),
     /// Cierra el hint flotante de onboarding (se cierra solo en el primer
     /// click sobre el canvas, pero también hay una X visible).
     DismissOnboarding,

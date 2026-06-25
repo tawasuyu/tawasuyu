@@ -259,6 +259,7 @@ mod tests {
             iso: IsoProjector::new(3.0, 0.55),
             pan: (0.0, 0.0),
             weights: ZWeights::default(),
+            panel_scroll: 0.0,
             cfg: PlanConfig { render_mode: RenderMode::Composite, ..PlanConfig::default() },
             selected: None,
             sync_relieve: false,

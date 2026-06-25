@@ -143,6 +143,7 @@ fn modelo_demo() -> Model {
         iso: IsoProjector::new(3.0, 0.55),
         pan: (0.0, 0.0),
         weights,
+        panel_scroll: 0.0,
         cfg: PlanConfig {
             tile: 3.0,
             lemming_size: 2.6,

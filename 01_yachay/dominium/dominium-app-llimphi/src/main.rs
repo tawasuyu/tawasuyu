@@ -227,6 +227,7 @@ impl App for Dominium {
             iso: IsoProjector::new(CAM_SCALE_DEFAULT, CAM_ZFACTOR_DEFAULT),
             pan: (0.0, 0.0),
             weights,
+            panel_scroll: 0.0,
             cfg: PlanConfig {
                 tile: 3.0,
                 lemming_size: 2.6,
@@ -708,6 +709,16 @@ impl App for Dominium {
             }
             Msg::SelectTab(tab) => {
                 m.panel_tab = tab;
+                // Cada tab tiene distinto alto; volver al tope evita quedar
+                // "scrolleado al vacío" de un tab largo al entrar a uno corto.
+                m.panel_scroll = 0.0;
+            }
+            Msg::PanelScroll(dy) => {
+                // `dy > 0` (scroll hacia abajo) revela las secciones de más
+                // abajo. Velocidad modesta; clamp por tab (distinto largo).
+                const PANEL_SCROLL_SPEED: f32 = 28.0;
+                m.panel_scroll =
+                    (m.panel_scroll + dy * PANEL_SCROLL_SPEED).clamp(0.0, m.panel_tab.max_scroll());
             }
             Msg::DismissOnboarding => {
                 m.onboarding_done = true;
