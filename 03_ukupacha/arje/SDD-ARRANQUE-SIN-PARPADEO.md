@@ -203,6 +203,24 @@ líneas random y empalma slate→slate sin costura. `CLEAR_COLOR` se unificó al
 bucle. Limitación: el wallpaper y la tarjeta siguen apareciendo como pasos
 posteriores (no en el frame 1).
 
+### Incremento 2 — sin re-modeset: `disable_connectors=false` (hecho, GAP 1500→389 ms)
+
+Perfilando el gap con `LLIMPHI_TIMING` se vio que el `queue_frame` del primer
+frame de mirada tomaba **~734 ms** y `DrmDevice::new` otros **~329 ms** — juntos,
+**~1063 ms del gap eran apagar y re-encender el panel eDP**. Causa: mirada abría
+el device con `DrmDevice::new(fd, disable_connectors=true)`, que **deshabilita
+los conectores** (apaga el panel) en el init; el panel quedaba en **negro
+profundo** hasta que el primer commit hacía el modeset de power-on (link-training
+del eDP). Es el re-modeset que este SDD pide evitar.
+
+**Fix:** `disable_connectors=false`. El splash dejó el panel **encendido** con su
+último frame (`BG`) y el modo vigente; heredarlo deja la pantalla viva y hace que
+el primer commit de mirada sea un **page-flip dentro del modo vigente**, no un
+modeset con power-cycle. Verificado en metal (Iris Xe): el negro profundo
+desaparece, `queue_frame` cae a **0 ms**, `device-listo` a **3 ms**, y el GAP
+total baja de ~1500 ms a **389 ms**. Queda un parpadeo de un cuadro (page-flip
+entre el framebuffer del splash y el de mirada) apenas perceptible.
+
 ### Fase 2-bis — crossfade limpio: render-node / card-node (pendiente)
 
 El cero-artefactos del SDD pide que el **primer scanout de mirada ya sea la

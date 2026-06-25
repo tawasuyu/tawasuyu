@@ -709,10 +709,17 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // kernel todavía está finalizando la liberación del master del splash, el
     // primer `DrmDevice::new` puede ver `EACCES`. Reintentamos con backoff
     // corto; sin splash (arranque a mano) entra al primer intento.
+    // `disable_connectors=false`: NO apagamos los conectores al abrir el device.
+    // El splash dejó el panel encendido con su último frame (el `BG` común) y el
+    // modo vigente; heredarlo deja la pantalla viva y hace que el primer commit
+    // de mirada sea un page-flip dentro de ese modo, no un modeset que apague y
+    // re-encienda el eDP. Con `true` (apagar conectores) el panel quedaba en
+    // negro profundo ~734 ms hasta el power-on del primer commit — el re-modeset
+    // que el SDD-ARRANQUE-SIN-PARPADEO pide evitar. Ver §Fase 2.
     let (mut drm, drm_notifier) = {
         let mut intento = 0u32;
         loop {
-            match DrmDevice::new(drm_fd.clone(), true) {
+            match DrmDevice::new(drm_fd.clone(), false) {
                 Ok(par) => break par,
                 Err(_) if intento < 20 => {
                     if intento == 0 {
