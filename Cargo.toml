@@ -535,6 +535,8 @@ members = [
     "shared/ssh",
     "shared/wawa-config",
     "shared/wawa-config-llimphi",
+    "shared/willay/willay-core",
+    "shared/willay/willay-store",
     "web/tawasuyu-canvas-web",
     "web/tawasuyu-geom",
     "web/tawasuyu-graph-web",
@@ -565,6 +567,9 @@ allichay = { path = "shared/allichay" }
 marca = { path = "shared/marca" }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
+# === Centro de eventos (notificaciones + capturas + clipboard + …) ===
+willay-core = { path = "shared/willay/willay-core" }
+willay-store = { path = "shared/willay/willay-store" }
 churay-core = { path = "02_ruway/churay/churay-core" }
 # === Puente de drag-and-drop compositor → app (suple winit en Wayland) ===
 drop-bridge = { path = "shared/drop-bridge" }

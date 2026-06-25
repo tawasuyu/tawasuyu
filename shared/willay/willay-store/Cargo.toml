@@ -1,0 +1,17 @@
+[package]
+name = "willay-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "willay — índice compartido del centro de eventos sobre sled: append-only, ordenado por tiempo, con consultas para el timeline (recientes, por clase, rango, búsqueda literal). Guarda Eventos livianos (willay-core) que referencian el dato pesado en su productor; no centraliza payloads. Escritor único (lo envuelve el daemon)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+willay-core = { workspace = true }
+sled = { workspace = true }
+postcard = { workspace = true }
+anyhow = { workspace = true }

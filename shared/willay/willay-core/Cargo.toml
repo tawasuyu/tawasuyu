@@ -1,0 +1,18 @@
+[package]
+name = "willay-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "willay — núcleo agnóstico del centro de eventos: el esquema Evento (Clase/Payload) y su id BLAKE3 direccionado por contenido. El sustrato compartido que cada productor (notificaciones, capturas de hapiy, clipboard…) emite y que el índice/panel/triage leen. Sin sled, sin UI."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+postcard = { workspace = true }
