@@ -10,7 +10,9 @@ use llimphi_3d::glam::Vec3;
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
-use llimphi_voxel::{world_dim, CharSpec, Project, SceneSpec, WorldRecipe, PREVIEW_DIM_XZ};
+use llimphi_voxel::{
+    window_origin_for_cast, world_dim, CharSpec, Project, SceneSpec, WorldRecipe, PREVIEW_DIM_XZ,
+};
 
 use crate::preview::{WorldPreview, FMT};
 
@@ -205,11 +207,16 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
             .render_to_view(&hal, &empty, &view, W, H, sky)
             .map_err(|e| format!("clear: {e:?}"))?;
 
+        // Mundo infinito: la ventana voxel sigue al reparto (mismo criterio que el
+        // preview en vivo) → la escena no vive en una caja fija de 128³.
+        let origin = window_origin_for_cast(&scripts, t, dim);
+        preview.ensure_window(&hal.device, &hal.queue, &recipe, 1, origin);
+
         // Posar a los actores sobre el relieve y encuadrar al reparto.
         // El shader voxel espera la cámara/posiciones en COORDS CENTRADAS (la grilla
-        // está centrada en el origen: world = grilla − dim/2). `ground_at` devuelve
-        // coords de grilla → hay que restar `half`, o el terreno queda corrido fuera
-        // de cuadro en los planos cercanos del guion (el reparto "flota" en el cielo).
+        // está centrada en el origen: world = grilla − dim/2). `ground_at_world`
+        // devuelve coords de ventana → hay que restar `half`, o el terreno queda
+        // corrido fuera de cuadro en los planos cercanos (el reparto "flota").
         let half = Vec3::new(dim[0] as f32, dim[1] as f32, dim[2] as f32) * 0.5;
         let mut poses = Vec::with_capacity(scripts.len());
         let mut centroid = Vec3::ZERO;
@@ -218,7 +225,8 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
             // mueve y posa en doses; los demás, fluidos. Sello de animación.
             let at = script.quantize(t);
             let s = script.sample(at);
-            let pos = preview.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32) - half;
+            // Coords de MUNDO → la ventana que sigue al reparto las mapea.
+            let pos = preview.ground_at_world(s.gx as i32, s.gz as i32) - half;
             centroid += pos;
             poses.push((pos, s, ch, at));
         }

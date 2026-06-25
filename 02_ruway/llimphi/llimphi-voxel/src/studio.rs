@@ -32,6 +32,46 @@ pub fn world_dim(xz: u32) -> [u32; 3] {
     [xz, dy, xz]
 }
 
+/// **Paso de reubicación** de la ventana de una escena (voxels). El origen sólo
+/// salta a múltiplos de este valor: así la ventana no se regenera cada cuadro al
+/// caminar el reparto, sólo al cruzar un paso. Como la cámara mira al centroide del
+/// reparto (en espacio de ventana), el salto traslada terreno + cámara + actores
+/// **juntos** → sin pop visible (la imagen es continua), pero el mundo no tiene
+/// borde: el reparto puede caminar indefinidamente. Ver [`window_origin_for_cast`].
+pub const SCENE_WINDOW_STEP: i32 = 16;
+
+/// Redondea `v` al múltiplo de `step` hacia abajo (floor con signo) — espeja el
+/// `snap` del [`WorldStream`](crate::WorldStream).
+#[inline]
+fn snap(v: i32, step: i32) -> i32 {
+    v.div_euclid(step) * step
+}
+
+/// **Origen de ventana (esquina, coords de mundo) que centra al reparto** de una
+/// escena en el instante `t`: promedia las columnas `(gx, gz)` de los guiones
+/// (tomadas en su tiempo cuantizado, igual que al posar) y resta medio `dim`,
+/// snappeado a [`SCENE_WINDOW_STEP`]. Es lo que hace que **toda escena viva en un
+/// mundo infinito**: la ventana voxel sigue al reparto en vez de ser una caja fija
+/// centrada en el origen. Sin reparto, devuelve `[0, 0]` (mundo centrado, como
+/// antes).
+pub fn window_origin_for_cast(scripts: &[ActorScript], t: f32, dim: [u32; 3]) -> [i32; 2] {
+    if scripts.is_empty() {
+        return [0, 0];
+    }
+    let (mut cwx, mut cwz) = (0.0_f32, 0.0_f32);
+    for s in scripts {
+        let smp = s.sample(s.quantize(t));
+        cwx += smp.gx;
+        cwz += smp.gz;
+    }
+    let n = scripts.len() as f32;
+    let (cwx, cwz) = (cwx / n, cwz / n);
+    [
+        snap(cwx as i32 - dim[0] as i32 / 2, SCENE_WINDOW_STEP),
+        snap(cwz as i32 - dim[2] as i32 / 2, SCENE_WINDOW_STEP),
+    ]
+}
+
 /// Un **mundo nombrado** del proyecto: nombre + su [`WorldRecipe`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedWorld {
@@ -514,6 +554,49 @@ mod tests {
         assert_eq!(s.scripts()[0].frame_rate(), Some(12));
         // Cámara en mano por defecto encendida.
         assert!(s.handheld > 0.0);
+    }
+
+    #[test]
+    fn ventana_de_escena_sigue_al_reparto() {
+        let dim = world_dim(128); // [128, 51, 128] → medio = 64
+        // Un actor que camina lejos del origen (más allá de la caja finita vieja):
+        // un keyframe en grilla 18, otro en 600 → coords de MUNDO, no acotadas.
+        let s = SceneSpec {
+            name: "caminata larga".into(),
+            world: 0,
+            duration: 10.0,
+            actors: vec![ActorSpec {
+                character: 0,
+                keys: vec![
+                    ActorKeySpec { t: 0.0, gx: 18.0, gz: 64.0, clip: None, face: None },
+                    ActorKeySpec { t: 10.0, gx: 600.0, gz: 64.0, clip: None, face: None },
+                ],
+                frame_rate: None,
+            }],
+            shots: vec![],
+            handheld: 0.0,
+        };
+        let scripts = s.scripts();
+
+        // Al final el reparto está cerca de wx=600: la ventana lo centra (su columna
+        // local cae cerca de dim/2), cosa imposible en una caja fija centrada en 0.
+        let o_fin = window_origin_for_cast(&scripts, 10.0, dim);
+        let local_x = 600 - o_fin[0];
+        assert!(
+            (local_x - dim[0] as i32 / 2).abs() <= SCENE_WINDOW_STEP,
+            "el reparto queda centrado en la ventana (local_x={local_x})"
+        );
+
+        // El origen se snappea al paso (sólo salta a múltiplos) → no regenera por cuadro.
+        assert_eq!(o_fin[0] % SCENE_WINDOW_STEP, 0);
+        assert_eq!(o_fin[1] % SCENE_WINDOW_STEP, 0);
+
+        // Y la ventana se MUEVE entre el principio y el final (mundo infinito, no caja).
+        let o_ini = window_origin_for_cast(&scripts, 0.0, dim);
+        assert_ne!(o_ini[0], o_fin[0], "la ventana siguió al reparto en X");
+
+        // Sin reparto: mundo centrado en el origen (compatibilidad con el preview fijo).
+        assert_eq!(window_origin_for_cast(&[], 0.0, dim), [0, 0]);
     }
 
     #[test]

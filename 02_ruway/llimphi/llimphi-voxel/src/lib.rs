@@ -35,8 +35,8 @@ pub use player::{forward_h, look_dir, right_h, Player};
 pub use potential::{Egg, Hatchling};
 pub use raycast::{raycast, VoxelHit};
 pub use studio::{
-    world_dim, ActorKeySpec, ActorSpec, CharSpec, NamedWorld, Project, SceneSpec, ShotKind,
-    ShotSpec, PREVIEW_DIM_XZ, SCENE_SUN,
+    window_origin_for_cast, world_dim, ActorKeySpec, ActorSpec, CharSpec, NamedWorld, Project,
+    SceneSpec, ShotKind, ShotSpec, PREVIEW_DIM_XZ, SCENE_SUN, SCENE_WINDOW_STEP,
 };
 pub use terrain::{column_height, fill_terrain_window, terrain};
 pub use world_stream::WorldStream;

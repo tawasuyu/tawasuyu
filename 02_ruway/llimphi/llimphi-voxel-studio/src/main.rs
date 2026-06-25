@@ -30,8 +30,8 @@ use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_voxel::{
-    world_dim, ActorScript, Age, CharSpec, Project, SceneSpec, ShotKind, ShotSpec, WorldRecipe,
-    PREVIEW_DIM_XZ,
+    window_origin_for_cast, world_dim, ActorScript, Age, CharSpec, Project, SceneSpec, ShotKind,
+    ShotSpec, WorldRecipe, PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
@@ -758,7 +758,12 @@ fn center_canvas(model: &Model) -> View<Msg> {
                 let mut guard = preview.lock().unwrap();
                 let p =
                     guard.get_or_insert_with(|| WorldPreview::build(device, queue, &recipe, dim, gen));
-                p.rebuild_if(device, queue, &recipe, dim, gen);
+                // Mundo infinito: la ventana voxel SIGUE al reparto (no es una caja
+                // fija). El origen se snappea al centroide → la cámara (que mira al
+                // centroide en espacio de ventana), el terreno y los actores se
+                // trasladan juntos: sin pop, pero sin borde. Sin reparto → centrado.
+                let origin = window_origin_for_cast(&scripts, time, dim);
+                p.ensure_window(device, queue, &recipe, gen, origin);
                 // Primero ubicar a los actores sobre el relieve para encuadrar al
                 // reparto (su centroide), no el mundo entero — si no, salen diminutos.
                 // El shader voxel espera coords CENTRADAS (grilla centrada en el
@@ -771,7 +776,8 @@ fn center_canvas(model: &Model) -> View<Msg> {
                     // Cuantización por actor (Héroe en doses) — igual que el export.
                     let at = script.quantize(time);
                     let s = script.sample(at);
-                    let pos = p.ground_at(s.gx.max(0.0) as u32, s.gz.max(0.0) as u32) - half;
+                    // Coords de MUNDO → la ventana que sigue al reparto las mapea.
+                    let pos = p.ground_at_world(s.gx as i32, s.gz as i32) - half;
                     centroid += pos;
                     poses.push((pos, s, ch, at));
                 }
