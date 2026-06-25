@@ -154,8 +154,23 @@ pub fn build_initramfs_with_assets(
     bins: &[(String, PathBuf)],
     assets: &[(String, PathBuf)],
 ) -> anyhow::Result<(Vec<u8>, EntityCard)> {
+    build_initramfs_with_assets_signed(seed_path, bins, assets, None)
+}
+
+/// Como [`build_initramfs_with_assets`], pero si `rootkey_seed` es `Some`,
+/// **firma el manifiesto de atestación** (A1) sobre los binarios críticos antes
+/// de serializar la seed — usa el MISMO `arje_packager::sign_seed_attest` que el
+/// packager, así el manifiesto es idéntico por cualquier ruta de instalación. La
+/// Card devuelta ya trae `attest`/`attest_rootkey`, de modo que el seed que el
+/// caller escribe a la ESP queda firmado igual que el embebido en el initramfs.
+pub fn build_initramfs_with_assets_signed(
+    seed_path: &Path,
+    bins: &[(String, PathBuf)],
+    assets: &[(String, PathBuf)],
+    rootkey_seed: Option<[u8; 32]>,
+) -> anyhow::Result<(Vec<u8>, EntityCard)> {
     use anyhow::Context;
-    let card = EntityCard::from_path(seed_path)
+    let mut card = EntityCard::from_path(seed_path)
         .with_context(|| format!("cargando seed {}", seed_path.display()))?;
 
     // Recolectamos exec paths declarados — debe haber un binario por cada
@@ -190,6 +205,14 @@ pub fn build_initramfs_with_assets(
         EntryKind::CharDev { major: 5, minor: 1, perm: 0o600 },
     )?;
     w.append("init", EntryKind::Symlink { target: "sbin/arje-zero" })?;
+
+    // Atestación (A1): firmamos el manifiesto sobre `tree` (los binarios ya
+    // leídos, en orden de BTreeMap) ANTES de serializar la seed, para que tanto
+    // el seed embebido en el initramfs como el que el caller escribe a la ESP
+    // lleven el manifiesto. Reusa el firmador del packager → manifiesto idéntico.
+    if let Some(seed) = rootkey_seed {
+        arje_packager::sign_seed_attest(&mut card, &tree, seed);
+    }
 
     let seed_bytes = serde_json::to_vec_pretty(&card)?;
     w.append(
@@ -287,6 +310,58 @@ pub fn efibootmgr_create_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installer_firma_seed_y_los_binarios_atestan() {
+        use arje_card::{EntityCard, Payload};
+
+        let dir = tempfile::tempdir().unwrap();
+        // Binarios fake del fractal (arje-zero + un Ente Native).
+        let zero = dir.path().join("arje-zero");
+        let app = dir.path().join("miapp");
+        std::fs::write(&zero, b"fake arje-zero bytes").unwrap();
+        std::fs::write(&app, b"fake miapp bytes").unwrap();
+
+        // Seed con un genesis Native que apunta a /usr/bin/miapp.
+        let mut seed = EntityCard::new("seed-installer-test");
+        let mut hijo = EntityCard::new("miapp");
+        hijo.payload = Payload::Native {
+            exec: "/usr/bin/miapp".into(),
+            argv: vec![],
+            envp: vec![],
+        };
+        seed.genesis.push(hijo);
+        let seed_path = dir.path().join("seed.card.json");
+        std::fs::write(&seed_path, serde_json::to_vec_pretty(&seed).unwrap()).unwrap();
+
+        let bins = vec![
+            ("arje-zero".to_string(), zero.clone()),
+            ("miapp".to_string(), app.clone()),
+        ];
+        let rootkey = [9u8; 32];
+
+        // Sin rootkey: el seed sale SIN attest (compat).
+        let (_gz, plano) =
+            build_initramfs_with_assets_signed(&seed_path, &bins, &[], None).unwrap();
+        assert!(plano.attest.is_empty());
+        assert!(plano.attest_rootkey.is_none());
+
+        // Con rootkey: firma arje-zero + miapp y ancla el manifiesto.
+        let (_gz, card) =
+            build_initramfs_with_assets_signed(&seed_path, &bins, &[], Some(rootkey)).unwrap();
+        assert_eq!(card.attest.len(), 2, "debe firmar arje-zero + miapp");
+        let pubkey = card.attest_rootkey.expect("attest_rootkey poblada");
+
+        // Los binarios vivos atestan Ok contra el manifiesto firmado (lo mismo
+        // que hará `arje-zero` al boot / `--attest-check`).
+        for bytes in [b"fake arje-zero bytes".as_slice(), b"fake miapp bytes".as_slice()] {
+            let v = arje_attest::atestar_bytes(&card.attest, bytes, Some(pubkey));
+            assert!(v.es_ok(), "debería atestar Ok, fue {}", v.motivo());
+        }
+        // Un binario no firmado cae en NoAtestada.
+        let impostor = arje_attest::atestar_bytes(&card.attest, b"impostor", Some(pubkey));
+        assert!(!impostor.es_ok());
+    }
 
     #[test]
     fn cmdline_canonico_sin_extra() {

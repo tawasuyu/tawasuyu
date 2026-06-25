@@ -96,6 +96,19 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    crítico sobre su BLAKE3 y la ancla en la seed. La firma vive en el crate nuevo
    **`arje-attest`** (`firmar_binarios`), que reusa `agora_channel::firmar_capacidad` — cero
    criptografía nueva.
+
+   **Paridad del installer → ✅ HECHO (2026-06-25).** Hasta ahora sólo el `arje-packager`
+   (initramfs) sabía firmar; el `arje-installer` (instalación real a ESP/USB) dejaba el seed
+   SIN `attest` — un hueco: instalar a disco no daba boot atestable. La firma se extrajo a
+   `arje-packager` lib (`sign_seed_attest` + `load_or_gen_rootkey` + `hex32` +
+   `guia_anclado_soberano`), **una sola implementación** que ahora usan ambas rutas → el
+   manifiesto es **idéntico** por initramfs o por ESP (un binario firmado por una verifica bajo
+   la otra). `arje-installer` gana `--rootkey`/`--gen-rootkey`: firma el seed embebido en el
+   initramfs Y el que escribe a la ESP. Tests: `arje-installer` lib verifica que los binarios
+   atestan Ok contra el manifiesto firmado, e integración (`to_partition_firma_attest_con_rootkey`)
+   corre el binario end-to-end y confirma que el seed instalado en la ESP trae concesiones +
+   `attest_rootkey`. (De paso se arregló `to_partition_arma_layout_completo`, roto desde que el
+   seed qemu ganó `arje-splash` el 2026-06-23 y el test no le pasaba el `--bin`.)
 3. **A2** — Gate en `arje-zero`: verificar antes del target gráfico, emitir `AuditEntry`,
    aplicar política `halt`/`degraded`. ✅ (2026-06-14) `attest_gate::run` corre tras `spawn_bus` y
    **antes** de `instantiate_seed_dependencies` (el genesis/target): por cada binario crítico

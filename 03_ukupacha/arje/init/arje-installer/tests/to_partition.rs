@@ -35,8 +35,12 @@ fn to_partition_arma_layout_completo() {
     // de verdad, sólo bytes que el packager copie al initramfs.
     let arje_zero = bins_dir.path().join("arje-zero");
     let agetty = bins_dir.path().join("agetty");
+    // El seed qemu declara arje-splash como genesis Native (desde 2026-06-23):
+    // el packager exige un binario por cada Ente Native, así que lo stubeamos.
+    let splash = bins_dir.path().join("arje-splash");
     std::fs::write(&arje_zero, b"#!/bin/sh\necho arje-zero stub\n").unwrap();
     std::fs::write(&agetty, b"#!/bin/sh\necho agetty stub\n").unwrap();
+    std::fs::write(&splash, b"#!/bin/sh\necho arje-splash stub\n").unwrap();
 
     // "Kernel" stub — bytes arbitrarios que el installer copia tal cual a
     // <esp>/EFI/arje/vmlinuz.
@@ -60,6 +64,8 @@ fn to_partition_arma_layout_completo() {
             &format!("arje-zero={}", arje_zero.to_str().unwrap()),
             "--bin",
             &format!("agetty-ttyS0={}", agetty.to_str().unwrap()),
+            "--bin",
+            &format!("arje-splash={}", splash.to_str().unwrap()),
             "--cmdline",
             "console=ttyS0 panic=10",
             "--label",
@@ -120,6 +126,58 @@ fn to_partition_arma_layout_completo() {
     let loader = std::fs::read_to_string(esp.path().join("loader/loader.conf")).unwrap();
     assert!(loader.contains("default arje"));
     assert!(loader.contains("timeout 3"));
+}
+
+#[test]
+fn to_partition_firma_attest_con_rootkey() {
+    let esp = tempfile::tempdir().expect("tempdir ESP");
+    let bins_dir = tempfile::tempdir().expect("tempdir bins");
+
+    let arje_zero = bins_dir.path().join("arje-zero");
+    let agetty = bins_dir.path().join("agetty");
+    let splash = bins_dir.path().join("arje-splash");
+    let kernel_path = bins_dir.path().join("vmlinuz-test");
+    std::fs::write(&arje_zero, b"arje-zero stub bytes").unwrap();
+    std::fs::write(&agetty, b"agetty stub bytes").unwrap();
+    std::fs::write(&splash, b"arje-splash stub bytes").unwrap();
+    std::fs::write(&kernel_path, b"KERNEL\n").unwrap();
+
+    let seed_path = workspace_root().join("03_ukupacha/arje/seeds/arje-qemu.card.json");
+    let rootkey = bins_dir.path().join("rootkey");
+
+    let st = Command::new(installer_bin())
+        .arg("to-partition")
+        .args([
+            "--esp", esp.path().to_str().unwrap(),
+            "--kernel", kernel_path.to_str().unwrap(),
+            "--seed", seed_path.to_str().unwrap(),
+            "--bin", &format!("arje-zero={}", arje_zero.to_str().unwrap()),
+            "--bin", &format!("agetty-ttyS0={}", agetty.to_str().unwrap()),
+            "--bin", &format!("arje-splash={}", splash.to_str().unwrap()),
+            "--rootkey", rootkey.to_str().unwrap(),
+            "--gen-rootkey",
+        ])
+        .status()
+        .expect("spawn arje-installer");
+    assert!(st.success(), "installer con --rootkey falló con {st}");
+
+    // La rootkey se generó (32 bytes raw).
+    let key = std::fs::read(&rootkey).expect("rootkey no generada");
+    assert_eq!(key.len(), 32, "la rootkey debe ser 32 bytes");
+
+    // El seed instalado en la ESP trae el manifiesto firmado: concesiones
+    // (campo `bytecode`) + `attest_rootkey` con valor (no null).
+    let seed_str = std::fs::read_to_string(esp.path().join("EFI/arje/seed.card.json"))
+        .expect("falta seed en la ESP");
+    assert!(seed_str.contains("\"bytecode\""), "el seed instalado no tiene concesiones firmadas");
+    assert!(
+        seed_str.contains("\"attest_rootkey\""),
+        "el seed instalado no ancla la rootkey",
+    );
+    assert!(
+        !seed_str.contains("\"attest_rootkey\": null"),
+        "attest_rootkey quedó null pese a --rootkey",
+    );
 }
 
 #[test]

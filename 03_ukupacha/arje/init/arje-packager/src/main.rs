@@ -193,23 +193,18 @@ fn run() -> anyhow::Result<()> {
     // de integridad, no concesión de capacidades (mapear card.permissions →
     // format::Permisos queda como follow-up).
     if let Some(rootkey_path) = &args.rootkey {
-        let seed = load_or_gen_rootkey(rootkey_path, args.gen_rootkey)?;
-        let items: Vec<(Vec<u8>, u32)> =
-            tree.values().map(|bytes| (bytes.clone(), 0u32)).collect();
-        let (pubkey, concesiones) = arje_attest::firmar_binarios(seed, &items);
-        let n = concesiones.len();
-        card.attest = concesiones;
-        card.attest_rootkey = Some(pubkey);
-        let pubhex = hex32(&pubkey);
-        eprintln!("arje-packager :: atestación: {n} binarios firmados bajo rootkey {pubhex}");
-        // Guía soberana: la rootkey en la propia Card es el modelo débil (un
-        // seed reescrito la reemplaza). Para endurecer a Halt hay que ANCLARLA
-        // fuera de la Card — compilada en arje-zero o en disco confiable.
+        let nueva = !rootkey_path.exists();
+        let seed = arje_packager::load_or_gen_rootkey(rootkey_path, args.gen_rootkey)?;
+        if nueva {
+            eprintln!("arje-packager :: rootkey nueva generada en {}", rootkey_path.display());
+        }
+        let pubkey = arje_packager::sign_seed_attest(&mut card, &tree, seed);
+        let pubhex = arje_packager::hex32(&pubkey);
         eprintln!(
-            "arje-packager :: para endurecer (política Halt) anclá esta pubkey FUERA del seed:\n  \
-             · compilá arje-zero con  ARJE_ATTEST_ROOTKEY={pubhex}\n  \
-             · o escribila en  /etc/arje/rootkey.pub  (o ARJE_ATTEST_ROOTKEY_FILE), 32 bytes raw o el hex de arriba"
+            "arje-packager :: atestación: {n} binarios firmados bajo rootkey {pubhex}",
+            n = card.attest.len(),
         );
+        eprintln!("arje-packager :: {}", arje_packager::guia_anclado_soberano(&pubhex));
     }
 
     // Seed firmado standalone (--seed-out): el JSON canónico de la Card ya con
@@ -312,54 +307,6 @@ fn run() -> anyhow::Result<()> {
         out_size,
     );
     Ok(())
-}
-
-/// Carga la rootkey (32 bytes raw) desde `path`, o la genera si no existe y
-/// `gen` es `true` (32 bytes de `/dev/urandom`, permisos 0600). La rootkey es
-/// el secreto soberano del seed; el packager nunca la embebe en el archive,
-/// sólo deriva su pubkey para `attest_rootkey`.
-fn load_or_gen_rootkey(path: &std::path::Path, gen: bool) -> anyhow::Result<[u8; 32]> {
-    if path.exists() {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("leyendo rootkey {}", path.display()))?;
-        bytes.as_slice().try_into().map_err(|_| {
-            anyhow!(
-                "rootkey {} debe ser exactamente 32 bytes (son {})",
-                path.display(),
-                bytes.len()
-            )
-        })
-    } else if gen {
-        use std::io::Read;
-        let mut seed = [0u8; 32];
-        std::fs::File::open("/dev/urandom")
-            .context("abriendo /dev/urandom")?
-            .read_exact(&mut seed)
-            .context("leyendo 32 bytes de /dev/urandom")?;
-        std::fs::write(path, seed)
-            .with_context(|| format!("escribiendo rootkey {}", path.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
-        eprintln!("arje-packager :: rootkey nueva generada en {}", path.display());
-        Ok(seed)
-    } else {
-        bail!(
-            "rootkey {} no existe (pasá --gen-rootkey para crearla)",
-            path.display()
-        )
-    }
-}
-
-/// Hex de una clave/hash de 32 bytes, para logs legibles.
-fn hex32(bytes: &[u8; 32]) -> String {
-    let mut s = String::with_capacity(64);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 /// Recorre `genesis` en DFS y registra cada exec declarado por un

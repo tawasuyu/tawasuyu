@@ -243,6 +243,97 @@ pub fn gzip(data: &[u8]) -> io::Result<Vec<u8>> {
     enc.finish()
 }
 
+// ── Atestación al arranque (A1): firma del manifiesto ──────────────────────
+//
+// Lógica compartida entre `arje-packager` (initramfs) y `arje-installer` (ESP/
+// USB), para que el manifiesto firmado sea **idéntico** por cualquiera de las
+// dos rutas de instalación — un binario firmado por una verifica bajo la otra.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// Identidad pública Ed25519 de la rootkey del seed. Reexportada para que los
+/// callers tipen `attest_rootkey` sin depender de `arje-attest` directamente.
+pub use arje_attest::AgoraId;
+
+/// Firma una `ConcesionCapacidad` por cada binario crítico (los *valores* de
+/// `bins`, en orden de `BTreeMap` = reproducible) sobre su BLAKE3, y ancla el
+/// manifiesto en la Card (`attest` + `attest_rootkey`). Devuelve la pubkey de
+/// la rootkey.
+///
+/// `permisos = 0`: esto es atestación de **integridad**, no concesión de
+/// capacidades (mapear `card.permissions` → `format::Permisos` queda como
+/// follow-up). El `rootkey_seed` es el secreto soberano; nunca se embebe en el
+/// archive, sólo se deriva su pubkey.
+pub fn sign_seed_attest(
+    card: &mut arje_card::EntityCard,
+    bins: &BTreeMap<String, Vec<u8>>,
+    rootkey_seed: [u8; 32],
+) -> AgoraId {
+    let items: Vec<(Vec<u8>, u32)> = bins.values().map(|b| (b.clone(), 0u32)).collect();
+    let (pubkey, concesiones) = arje_attest::firmar_binarios(rootkey_seed, &items);
+    card.attest = concesiones;
+    card.attest_rootkey = Some(pubkey);
+    pubkey
+}
+
+/// Carga la rootkey (32 bytes raw) desde `path`, o la genera si no existe y
+/// `gen` es `true` (32 bytes de `/dev/urandom`, permisos 0600). La rootkey es
+/// el secreto soberano del seed; nunca se embebe en el archive — sólo deriva su
+/// pubkey para `attest_rootkey`.
+pub fn load_or_gen_rootkey(path: &Path, gen: bool) -> anyhow::Result<[u8; 32]> {
+    use anyhow::{bail, Context};
+    if path.exists() {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("leyendo rootkey {}", path.display()))?;
+        bytes.as_slice().try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "rootkey {} debe ser exactamente 32 bytes (son {})",
+                path.display(),
+                bytes.len()
+            )
+        })
+    } else if gen {
+        use std::io::Read;
+        let mut seed = [0u8; 32];
+        std::fs::File::open("/dev/urandom")
+            .context("abriendo /dev/urandom")?
+            .read_exact(&mut seed)
+            .context("leyendo 32 bytes de /dev/urandom")?;
+        std::fs::write(path, seed)
+            .with_context(|| format!("escribiendo rootkey {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(seed)
+    } else {
+        bail!("rootkey {} no existe (pasá --gen-rootkey para crearla)", path.display())
+    }
+}
+
+/// Hex de una clave/hash de 32 bytes, para logs legibles.
+pub fn hex32(bytes: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Texto de guía soberana para el operador tras firmar: la rootkey en la propia
+/// Card es el modelo **débil** (un seed reescrito la reemplaza); para endurecer
+/// a `Halt` hay que anclar la pubkey FUERA de la Card. Compartido entre packager
+/// e installer para que el mensaje sea uno solo.
+pub fn guia_anclado_soberano(pubhex: &str) -> String {
+    format!(
+        "para endurecer (política Halt) anclá esta pubkey FUERA del seed:\n  \
+         · compilá arje-zero con  ARJE_ATTEST_ROOTKEY={pubhex}\n  \
+         · o escribila en  /etc/arje/rootkey.pub  (o ARJE_ATTEST_ROOTKEY_FILE), 32 bytes raw o el hex de arriba"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

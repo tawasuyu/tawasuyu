@@ -55,6 +55,14 @@ COMUNES:
     --cmdline   Args extra del kernel cmdline (sin el `initrd=` — lo agrega el
                 installer). Ej.: \"console=ttyS0 panic=10\".
     --label     Nombre para la entrada de boot / .conf. Default: \"arje\".
+    --rootkey   Path de la rootkey (32 bytes raw) para FIRMAR el manifiesto de
+                atestación al arranque (A1). Firma una concesión por binario
+                crítico sobre su BLAKE3 y la ancla en el seed instalado. Sin
+                esta opción el seed se instala SIN attest (boot sin gate).
+    --gen-rootkey  Si --rootkey no existe, generarla (/dev/urandom, 0600).
+                Para endurecer a Halt: anclá la pubkey fuera del seed
+                (ARJE_ATTEST_ROOTKEY o /etc/arje/rootkey.pub) — el installer
+                imprime la receta. Validá con `arje-zero --attest-check` antes.
 
 to-partition:
     --esp       Ruta donde está montada la ESP (p. ej. /boot o /mnt/esp).
@@ -76,6 +84,11 @@ struct CommonArgs {
     assets: Vec<(String, PathBuf)>,
     cmdline_extra: String,
     label: String,
+    /// Rootkey (32 bytes raw) para FIRMAR el manifiesto de atestación (A1). Sin
+    /// ella, el seed se instala sin `attest` (boot sin gate). Igual que el packager.
+    rootkey: Option<PathBuf>,
+    /// Si la rootkey no existe, generarla (`/dev/urandom`, 0600).
+    gen_rootkey: bool,
 }
 
 enum Mode {
@@ -115,6 +128,8 @@ struct CommonAcc {
     assets: Vec<(String, PathBuf)>,
     cmdline_extra: String,
     label: Option<String>,
+    rootkey: Option<PathBuf>,
+    gen_rootkey: bool,
 }
 
 impl CommonAcc {
@@ -143,12 +158,17 @@ impl CommonAcc {
             }
             "--cmdline" => self.cmdline_extra = args.next().context("--cmdline requiere string")?,
             "--label" => self.label = Some(args.next().context("--label requiere nombre")?),
+            "--rootkey" => self.rootkey = Some(args.next().context("--rootkey requiere path")?.into()),
+            "--gen-rootkey" => self.gen_rootkey = true,
             _ => return Ok(false),
         }
         Ok(true)
     }
 
     fn finalize(self) -> anyhow::Result<CommonArgs> {
+        if self.gen_rootkey && self.rootkey.is_none() {
+            bail!("--gen-rootkey requiere --rootkey <path> (dónde crear/leer la rootkey)");
+        }
         Ok(CommonArgs {
             kernel: self.kernel.ok_or_else(|| anyhow!("falta --kernel"))?,
             seed: self.seed.ok_or_else(|| anyhow!("falta --seed"))?,
@@ -156,6 +176,8 @@ impl CommonAcc {
             assets: self.assets,
             cmdline_extra: self.cmdline_extra,
             label: self.label.unwrap_or_else(|| "arje".to_string()),
+            rootkey: self.rootkey,
+            gen_rootkey: self.gen_rootkey,
         })
     }
 }
@@ -294,8 +316,24 @@ fn ensure_dir_exists(p: &Path) -> anyhow::Result<()> {
 }
 
 fn stage_files(common: &CommonArgs, layout: &EspLayout) -> anyhow::Result<()> {
-    let (initramfs, card) =
-        arje_installer::build_initramfs_with_assets(&common.seed, &common.bins, &common.assets)?;
+    // Atestación (A1): si hay --rootkey, cargamos/generamos el secreto soberano
+    // y el builder firma el manifiesto sobre los binarios críticos. El seed que
+    // se escribe a la ESP queda firmado igual que el embebido en el initramfs.
+    let rootkey_seed = match &common.rootkey {
+        Some(path) => {
+            let nueva = !path.exists();
+            let seed = arje_packager::load_or_gen_rootkey(path, common.gen_rootkey)?;
+            if nueva {
+                eprintln!("arje-installer :: rootkey nueva generada en {}", path.display());
+            }
+            Some(seed)
+        }
+        None => None,
+    };
+
+    let (initramfs, card) = arje_installer::build_initramfs_with_assets_signed(
+        &common.seed, &common.bins, &common.assets, rootkey_seed,
+    )?;
     std::fs::create_dir_all(layout.arje_dir())
         .with_context(|| format!("mkdir {}", layout.arje_dir().display()))?;
     std::fs::copy(&common.kernel, layout.kernel())
@@ -313,6 +351,14 @@ fn stage_files(common: &CommonArgs, layout: &EspLayout) -> anyhow::Result<()> {
         initramfs.len(),
         seed_bytes.len(),
     );
+    if let Some(pubkey) = card.attest_rootkey {
+        let pubhex = arje_packager::hex32(&pubkey);
+        eprintln!(
+            "arje-installer :: atestación: {n} binarios firmados bajo rootkey {pubhex}",
+            n = card.attest.len(),
+        );
+        eprintln!("arje-installer :: {}", arje_packager::guia_anclado_soberano(&pubhex));
+    }
     Ok(())
 }
 
