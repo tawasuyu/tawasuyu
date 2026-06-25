@@ -13,12 +13,13 @@
 //! `{response, uris, current_name}`. Lo leemos y lo devolvemos por D-Bus
 //! como `(u response, a{sv} results)` con la clave `uris`.
 //!
-//! Limitación conocida: la opción `current_folder` (tipo `ay`) todavía no
-//! se honra — el diálogo arranca en `$HOME`. El resto de opciones usuales
-//! (`multiple`, `accept_label`, `current_name`) sí.
+//! Opciones honradas: `multiple`, `accept_label`, `current_name`,
+//! `current_folder` (tipo `ay`, ruta NUL-terminada → arranca ahí) y, al
+//! guardar, `current_file` (`ay` del archivo existente → su carpeta y su
+//! nombre precargan el diálogo).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::{info, warn};
@@ -49,8 +50,9 @@ impl FileChooserPortal {
     ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         let multiple = opt_bool(&options, "multiple").unwrap_or(false);
         let accept = opt_string(&options, "accept_label").unwrap_or_default();
-        info!(%app_id, multiple, "FileChooser.OpenFile");
-        run_dialog(false, multiple, &title, &accept, "").await
+        let folder = opt_path_ay(&options, "current_folder");
+        info!(%app_id, multiple, ?folder, "FileChooser.OpenFile");
+        run_dialog(false, multiple, &title, &accept, "", folder.as_deref()).await
     }
 
     /// `SaveFile(...) -> (u response, a{sv} results)`. Tipear un nombre nuevo
@@ -64,9 +66,23 @@ impl FileChooserPortal {
         options: HashMap<String, OwnedValue>,
     ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
         let accept = opt_string(&options, "accept_label").unwrap_or_default();
-        let current_name = opt_string(&options, "current_name").unwrap_or_default();
-        info!(%app_id, %current_name, "FileChooser.SaveFile");
-        run_dialog(true, false, &title, &accept, &current_name).await
+        // `current_file` (ay) tiene prioridad: trae carpeta + nombre del
+        // archivo existente. Si no está, caemos a `current_folder` (ay) +
+        // `current_name` (s).
+        let (folder, current_name) = match opt_path_ay(&options, "current_file") {
+            Some(f) => (
+                f.parent().map(Path::to_path_buf),
+                f.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+            None => (
+                opt_path_ay(&options, "current_folder"),
+                opt_string(&options, "current_name").unwrap_or_default(),
+            ),
+        };
+        info!(%app_id, %current_name, ?folder, "FileChooser.SaveFile");
+        run_dialog(true, false, &title, &accept, &current_name, folder.as_deref()).await
     }
 }
 
@@ -83,6 +99,7 @@ async fn run_dialog(
     title: &str,
     accept_label: &str,
     current_name: &str,
+    folder: Option<&Path>,
 ) -> fdo::Result<(u32, HashMap<String, OwnedValue>)> {
     let out = unique_out_path();
     let bin = filechooser_bin();
@@ -100,6 +117,9 @@ async fn run_dialog(
     }
     if !current_name.is_empty() {
         cmd.arg("--current-name").arg(current_name);
+    }
+    if let Some(dir) = folder {
+        cmd.arg("--current-folder").arg(dir);
     }
     cmd.arg("--out").arg(&out);
 
@@ -187,6 +207,34 @@ fn opt_string(opts: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
     })
 }
 
+/// Extrae una ruta de una opción tipo `ay` (array de bytes, como manda el
+/// portal para `current_folder` / `current_file`: la ruta cruda, casi
+/// siempre NUL-terminada). Devuelve `None` si la opción falta, no es un
+/// array de bytes, o queda vacía tras quitar el NUL.
+fn opt_path_ay(opts: &HashMap<String, OwnedValue>, key: &str) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut bytes: Vec<u8> = match &**opts.get(key)? {
+        Value::Array(a) => a
+            .inner()
+            .iter()
+            .filter_map(|v| match v {
+                Value::U8(b) => Some(*b),
+                _ => None,
+            })
+            .collect(),
+        _ => return None,
+    };
+    while bytes.last() == Some(&0) {
+        bytes.pop();
+    }
+    if bytes.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(OsString::from_vec(bytes)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +286,26 @@ mod tests {
         assert_eq!(opt_bool(&opts, "multiple"), Some(true));
         assert_eq!(opt_string(&opts, "accept_label").as_deref(), Some("Elegir"));
         assert_eq!(opt_bool(&opts, "ausente"), None);
+    }
+
+    #[test]
+    fn path_ay_strips_nul_and_ignores_non_arrays() {
+        use zbus::zvariant::{Array, Value};
+        let mut opts: HashMap<String, OwnedValue> = HashMap::new();
+        // `current_folder` como ay NUL-terminado, igual que lo manda el portal.
+        let ay = Value::Array(Array::from(b"/home/u/docs\0".to_vec()));
+        opts.insert("current_folder".into(), OwnedValue::try_from(ay).unwrap());
+        assert_eq!(
+            opt_path_ay(&opts, "current_folder"),
+            Some(PathBuf::from("/home/u/docs"))
+        );
+        assert_eq!(opt_path_ay(&opts, "ausente"), None);
+
+        // Un string no se interpreta como ruta ay.
+        opts.insert(
+            "current_name".into(),
+            OwnedValue::try_from(Value::from("nota.txt")).unwrap(),
+        );
+        assert_eq!(opt_path_ay(&opts, "current_name"), None);
     }
 }
