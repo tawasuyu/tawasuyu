@@ -29,34 +29,47 @@ use crate::sessions::Session;
 /// init lento o muerto.
 const BUS_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Perfiles de sesión con backends de sistema gestionados por arje. Se
-/// reconcilian en cada login: el elegido se levanta, los demás se bajan.
-/// Hoy sólo GNOME; sumar uno = un fragmento `session-<X>.card.json` + su
-/// entrada acá + el matcher en [`profile_for`].
-const OPTIONAL_PROFILES: &[&str] = &["gnome"];
+/// Descriptor de un perfil de sesión con backends de sistema gestionados por
+/// arje. Es la **fuente única**: agregar un perfil = una fila acá + el
+/// fragmento `session-<name>.card.json` + sus shims instalados. El matcher se
+/// aplica sobre el `.desktop` elegido en el greeter.
+struct Profile {
+    /// Nombre del perfil = sufijo de la card (`session-<name>`).
+    name: &'static str,
+    /// Prefijo del basename del `Exec` que delata el perfil (p. ej.
+    /// `gnome-session`).
+    exec_prefix: &'static str,
+    /// Substring (lowercase) del `Name` del `.desktop` que también lo delata.
+    name_substr: &'static str,
+}
+
+/// Tabla de perfiles conocidos. Hoy sólo GNOME.
+const PROFILES: &[Profile] = &[Profile {
+    name: "gnome",
+    exec_prefix: "gnome-session",
+    name_substr: "gnome",
+}];
 
 /// Perfil de arje que una sesión necesita, si alguno. `None` = sesión
 /// autosuficiente (mirada nativo, o un compositor ajeno que no depende de
-/// los shims systemd de arje).
-///
-/// Heurística por `exec`/`name`: hoy sólo GNOME. Ampliable a una tabla o a
-/// un campo del `.desktop` cuando aparezca otra sesión con backends arje.
+/// los shims systemd de arje). Casa por `exec`/`name` contra [`PROFILES`].
 pub fn profile_for(session: &Session) -> Option<&'static str> {
     let exec = session.exec.to_lowercase();
     let first = exec.split_whitespace().next().unwrap_or("");
     let base = first.rsplit('/').next().unwrap_or(first);
-    if base.starts_with("gnome-session") || session.name.to_lowercase().contains("gnome") {
-        return Some("gnome");
-    }
-    None
+    let name = session.name.to_lowercase();
+    PROFILES
+        .iter()
+        .find(|p| base.starts_with(p.exec_prefix) || name.contains(p.name_substr))
+        .map(|p| p.name)
 }
 
-/// Perfiles opcionales a bajar dado el seleccionado: todos los conocidos
-/// menos el elegido. Pura y testeable.
+/// Perfiles a bajar dado el seleccionado: todos los conocidos menos el
+/// elegido. Pura y testeable.
 pub fn profiles_to_deactivate(selected: Option<&str>) -> Vec<&'static str> {
-    OPTIONAL_PROFILES
+    PROFILES
         .iter()
-        .copied()
+        .map(|p| p.name)
         .filter(|p| Some(*p) != selected)
         .collect()
 }
