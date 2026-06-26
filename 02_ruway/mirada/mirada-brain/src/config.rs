@@ -349,6 +349,13 @@ pub struct Config {
     /// `RescaleRenderElement` (el mismo recurso que las miniaturas del Prezi).
     #[serde(default = "default_window_open_scale_pct")]
     pub window_open_scale_pct: u8,
+    /// **Glow de foco — ms del fundido del marco al ganar/perder foco.** Al
+    /// enfocar una ventana, su marco y barra de título transicionan del color
+    /// «sin foco» al «con foco» (y al revés al desenfocar) en esta duración, en
+    /// vez de cambiar de golpe. `0` = cambio seco. Lo aplica el render
+    /// interpolando el color (no es un shader de bloom: es el crossfade barato).
+    #[serde(default = "default_focus_glow_ms")]
+    pub focus_glow_ms: u32,
     /// **Reducir movimiento** (accesibilidad): cuando está activo, el
     /// compositor pone en cero todas las duraciones de animación (apertura de
     /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
@@ -447,6 +454,11 @@ fn default_window_open_ms() -> u32 {
 /// Default de [`Config::window_open_scale_pct`]: un pop sutil (nace al 92 %).
 fn default_window_open_scale_pct() -> u8 {
     92
+}
+
+/// Default de [`Config::focus_glow_ms`]: un fundido de foco breve.
+fn default_focus_glow_ms() -> u32 {
+    140
 }
 
 /// Curva de interpolación para las animaciones del compositor (hoy el fade-in
@@ -894,6 +906,7 @@ impl Default for Config {
             window_open_ms: default_window_open_ms(),
             window_open_easing: Easing::default(),
             window_open_scale_pct: default_window_open_scale_pct(),
+            focus_glow_ms: default_focus_glow_ms(),
             reduce_motion: false,
         }
     }

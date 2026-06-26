@@ -293,10 +293,10 @@ impl DrmState {
             self.wp_images.clear();
         }
 
-        // Fade-in de apertura en curso: forzá repintar cada tick para que la
-        // rampa de alfa FLUYA aunque el cliente recién mapeado ya no mande
-        // frames nuevos (el damage de `DrmCompositor` no ve el cambio de alfa).
-        if self.open_anim_active() {
+        // Fade-in de apertura o glow de foco en curso: forzá repintar cada tick
+        // para que las rampas FLUYAN aunque el cliente ya no mande frames nuevos
+        // (el damage de `DrmCompositor` no ve el cambio de alfa/color por sí solo).
+        if self.open_anim_active() || self.focus_anim_active() {
             crate::screencopy::danar_todo(&mut self.app);
         }
 

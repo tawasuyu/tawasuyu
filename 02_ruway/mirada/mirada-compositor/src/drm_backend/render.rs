@@ -6,6 +6,41 @@ use super::*;
 /// de proceso para no engordar `DrmState` ni su constructor.
 static PRIMER_FRAME: std::sync::Once = std::sync::Once::new();
 
+/// Mezcla del *glow* de foco para una ventana: `0.0` = color sin foco, `1.0` =
+/// color con foco. Al ganar foco sube `0→1`; al perderlo baja `1→0`; ambos por
+/// `glow_ms` con desaceleración cúbica. Sin transición estampada (`since=None`)
+/// o con `glow_ms=0` devuelve el extremo seco según `focused`. Pura y testeada.
+fn focus_mix(focused: bool, glow_ms: u32, since: Option<u32>, now: u32) -> f32 {
+    if glow_ms == 0 {
+        return if focused { 1.0 } else { 0.0 };
+    }
+    match since {
+        Some(s) => {
+            let t = (now.saturating_sub(s) as f32 / glow_ms as f32).clamp(0.0, 1.0);
+            let e = mirada_brain::Easing::EaseOutCubic.apply(t);
+            if focused {
+                e
+            } else {
+                1.0 - e
+            }
+        }
+        None => {
+            if focused {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
+/// Interpola dos colores RGBA `[u8;4]` por `m∈[0,1]` (`0`=a, `1`=b), por canal.
+fn lerp_rgba(a: [u8; 4], b: [u8; 4], m: f32) -> [u8; 4] {
+    let m = m.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * m).round().clamp(0.0, 255.0) as u8;
+    [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2]), mix(a[3], b[3])]
+}
+
 impl DrmState {
     /// Compone un cuadro por cada salida y avisa a los clientes una sola vez.
     /// Si una salida tiene su `pending_flip` puesto, se saltea hasta el
@@ -15,6 +50,7 @@ impl DrmState {
             return; // la sesión está en otra VT — no tocamos la GPU
         }
         self.stamp_open_animations();
+        self.stamp_focus_animations();
         self.refresh_window_borders();
         // Modo DM: si el ratón cruzó a otro monitor, avisale al greeter para
         // que la tarjeta de login viaje allí (no-op fuera de greeter o si el
@@ -120,6 +156,50 @@ impl DrmState {
                 w.mapped_ms = Some(now);
             }
         }
+    }
+
+    /// Estampa el instante de cada cambio de foco — origen del *glow* del marco.
+    /// Detecta el flanco (`focused != was_focused`) y sella `focus_ms`. Con el
+    /// glow apagado sólo sincroniza `was_focused` (para no disparar un crossfade
+    /// retroactivo al prenderlo). Se llama antes de `refresh_window_borders`, que
+    /// ya consume el color interpolado.
+    fn stamp_focus_animations(&mut self) {
+        let glow_ms = self.app.config_focus_glow_ms();
+        if glow_ms == 0 {
+            for w in &mut self.app.windows {
+                w.was_focused = w.focused;
+            }
+            return;
+        }
+        let now = self.start.elapsed().as_millis() as u32;
+        for w in &mut self.app.windows {
+            if w.focused != w.was_focused {
+                w.focus_ms = Some(now);
+                w.was_focused = w.focused;
+            }
+        }
+    }
+
+    /// Color base del marco/barra de `w` con el *glow* aplicado: interpola entre
+    /// `border_normal` y `border_focus` según la mezcla de foco en `now`. En
+    /// reposo (sin transición viva) devuelve exactamente el color seco de antes.
+    fn focus_base(&self, w: &crate::ManagedWindow, now: u32, glow_ms: u32) -> [u8; 4] {
+        let dec = self.app.decorations;
+        let m = focus_mix(w.focused, glow_ms, w.focus_ms, now);
+        lerp_rgba(dec.border_normal, dec.border_focus, m)
+    }
+
+    /// `true` si alguna ventana está dentro de su crossfade de glow de foco. El
+    /// `tick` lo usa para forzar repintado mientras dura (igual que el fade-in).
+    pub(super) fn focus_anim_active(&self) -> bool {
+        let glow_ms = self.app.config_focus_glow_ms();
+        if glow_ms == 0 {
+            return false;
+        }
+        let now = self.start.elapsed().as_millis() as u32;
+        self.app.windows.iter().any(|w| {
+            !w.is_shell && matches!(w.focus_ms, Some(s) if now.saturating_sub(s) < glow_ms)
+        })
     }
 
     /// `true` si alguna ventana de usuario está dentro de su ventana de fade-in
@@ -236,6 +316,7 @@ impl DrmState {
         let open_ms = self.app.config_window_open_ms();
         let open_easing = self.app.config_window_open_easing();
         let open_scale_start = self.app.config_window_open_scale();
+        let glow_ms = self.app.config_focus_glow_ms();
         let anim_now = self.start.elapsed().as_millis() as u32;
 
         // Popups (menú de aplicación y contextuales de apps GTK/Qt) PRIMERO: el
@@ -369,11 +450,8 @@ impl DrmState {
                         }
                     }
                 }
-                let base = if w.focused {
-                    self.app.decorations.border_focus
-                } else {
-                    self.app.decorations.border_normal
-                };
+                // Glow de foco: el color de la barra crossfadea como el marco.
+                let base = self.focus_base(w, anim_now, glow_ms);
                 if self.app.decorations.titlebar_gradient && tb >= 4 {
                     // Degradé vertical (claro arriba → base abajo) por franjas
                     // sólidas: el compositor no tiene primitivo de gradiente, así
@@ -1480,6 +1558,10 @@ impl DrmState {
         if self.outputs.get(Self::PRIMARY).is_none() {
             return; // sin monitores: no hay bordes que recalcular
         }
+        // Glow de foco: el color del marco crossfadea sin-foco↔con-foco. En
+        // reposo (`glow_ms=0` o sin transición viva) da el color seco de antes.
+        let glow_ms = self.app.config_focus_glow_ms();
+        let now = self.start.elapsed().as_millis() as u32;
         for w in &mut self.app.windows {
             if !w.visible || w.is_shell {
                 continue;
@@ -1489,11 +1571,11 @@ impl DrmState {
             // pintar). Se dimensionan sobre el CONTENIDO (sin sombra CSD), igual
             // que el marco que se dibuja en el loop principal.
             let (cw, ch) = crate::content_px_size(w).unwrap_or((w.size.0, w.size.1 - tb));
-            let color = rgba_f32(if w.focused {
-                dec.border_focus
-            } else {
-                dec.border_normal
-            });
+            let color = rgba_f32(lerp_rgba(
+                dec.border_normal,
+                dec.border_focus,
+                focus_mix(w.focused, glow_ms, w.focus_ms, now),
+            ));
             let rects = border_rects(0, 0, cw, ch + tb, dec.border_width);
             for (buf, (_, _, bw, bh)) in w.borders.iter_mut().zip(rects) {
                 buf.update((bw, bh), color);
@@ -1692,5 +1774,48 @@ fn emit_popups(
             into.push(Frame::Window(el));
         }
         emit_popups(renderer, &psurf, geo_origin, rect, into);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{focus_mix, lerp_rgba};
+
+    #[test]
+    fn focus_mix_extremos_secos_sin_transicion() {
+        // Sin glow (glow_ms=0): salto seco según el foco.
+        assert_eq!(focus_mix(true, 0, Some(100), 200), 1.0);
+        assert_eq!(focus_mix(false, 0, Some(100), 200), 0.0);
+        // Sin transición estampada: también seco.
+        assert_eq!(focus_mix(true, 140, None, 200), 1.0);
+        assert_eq!(focus_mix(false, 140, None, 200), 0.0);
+    }
+
+    #[test]
+    fn focus_mix_rampa_en_ambos_sentidos() {
+        let glow = 100;
+        // Ganando foco: arranca en 0, termina en 1, monótona creciente.
+        assert!(focus_mix(true, glow, Some(0), 0).abs() < 1e-6);
+        assert!((focus_mix(true, glow, Some(0), 100) - 1.0).abs() < 1e-6);
+        assert!(focus_mix(true, glow, Some(0), 50) > 0.0);
+        assert!(focus_mix(true, glow, Some(0), 50) < 1.0);
+        // Pasado el final se mantiene en 1 (clamp).
+        assert!((focus_mix(true, glow, Some(0), 9999) - 1.0).abs() < 1e-6);
+        // Perdiendo foco: arranca en 1 y baja a 0.
+        assert!((focus_mix(false, glow, Some(0), 0) - 1.0).abs() < 1e-6);
+        assert!(focus_mix(false, glow, Some(0), 100).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lerp_rgba_interpola_por_canal() {
+        let a = [0, 0, 0, 0];
+        let b = [255, 100, 50, 200];
+        assert_eq!(lerp_rgba(a, b, 0.0), a);
+        assert_eq!(lerp_rgba(a, b, 1.0), b);
+        // Punto medio (redondeo al más cercano).
+        assert_eq!(lerp_rgba(a, b, 0.5), [128, 50, 25, 100]);
+        // Fuera de rango se recorta.
+        assert_eq!(lerp_rgba(a, b, 2.0), b);
+        assert_eq!(lerp_rgba(a, b, -1.0), a);
     }
 }

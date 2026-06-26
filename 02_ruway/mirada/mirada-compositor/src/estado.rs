@@ -345,6 +345,13 @@ pub(crate) struct ManagedWindow {
     /// `window_open_ms`. Se sella una sola vez (re-mostrar no re-anima — el
     /// slide entre escritorios ya cubre eso).
     pub(crate) mapped_ms: Option<u32>,
+    /// Instante (ms desde `start`) del último cambio de foco — origen del *glow*
+    /// del marco (crossfade del color sin-foco↔con-foco). `None` hasta el primer
+    /// cambio (color estático). Lo estampa el render comparando contra
+    /// [`was_focused`](Self::was_focused).
+    pub(crate) focus_ms: Option<u32>,
+    /// Estado de foco con que se estampó `focus_ms` — para detectar el flanco.
+    pub(crate) was_focused: bool,
 }
 
 /// Un arrastre de ratón en curso: mueve o redimensiona una ventana.

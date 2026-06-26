@@ -348,6 +348,19 @@ ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir f
 > **Pendiente de esta idea:** el *fade al cerrar* (necesita mantener un
 > «fantasma» de la ventana tras destruirse la superficie → captura-a-textura,
 > ver §«Animaciones de transición») y el *glow* del marco al recibir foco.
+>
+> **✅ HECHO — 3ª rebanada (2026-06-26): el *glow* de foco.** Config
+> `focus_glow_ms` (default 140, `0`=seco) en «Movimiento». Al ganar/perder foco,
+> el color del **marco y la barra de título** crossfadea entre `border_normal` y
+> `border_focus` (no es un shader de bloom: es el crossfade barato, honesto al
+> nombre). `ManagedWindow` lleva `focus_ms`/`was_focused`; el render estampa el
+> flanco (`stamp_focus_animations`), interpola con `focus_mix` + `lerp_rgba`
+> (puras, **testeadas**: extremos secos, rampa en ambos sentidos, lerp por
+> canal) y fuerza repintado mientras dura (`focus_anim_active`). Byte-idéntico en
+> reposo. **Pendiente, último de esta idea:** el *fade al cerrar* — requiere el
+> motor captura-a-textura (la superficie ya no existe al destruirse), descrito en
+> §«Animaciones de transición»; es un salto de complejidad respecto de estas tres
+> rebanadas (que sólo tocaron alfa, escala y color del path normal).
 
 **B) `WindowEffects` ampliado — el aspecto, por-ventana.** Campos nuevos (additivos):
 `blur: u8` (intensidad del desenfoque de fondo), `corner_radius: u8` (esquinas

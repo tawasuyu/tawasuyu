@@ -394,6 +394,19 @@ impl App {
         (pct as f32 / 100.0).clamp(0.5, 1.0)
     }
 
+    /// Duración (ms) del *glow* de foco (crossfade del marco al ganar/perder
+    /// foco). `0` = cambio seco. Con Cerebro enlazado cae al default (140); cero
+    /// si «reducir movimiento».
+    pub(crate) fn config_focus_glow_ms(&self) -> u32 {
+        if self.config_reduce_motion() {
+            return 0;
+        }
+        match &self.brain {
+            Brain::Embedded(d) => d.config().focus_glow_ms,
+            Brain::Linked(_) => 140,
+        }
+    }
+
     /// Win+Tab estilo switcher sobre la vista espacial: abre la vista (si hacía
     /// falta) y mueve el resaltado al escritorio siguiente/anterior. La primera
     /// pulsación ya avanza uno (un Win+Tab suelto = saltar al siguiente al
@@ -1310,6 +1323,9 @@ impl App {
             // Aún sin pintar: el render lo sella en el primer frame sano y ahí
             // arranca el fade-in de apertura.
             mapped_ms: None,
+            // Nace sin foco y sin transición de glow estampada.
+            focus_ms: None,
+            was_focused: false,
         });
 
         // Alta en el servidor wlr-foreign-toplevel (taskbar de pata): crea un

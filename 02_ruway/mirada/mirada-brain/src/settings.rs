@@ -391,6 +391,13 @@ impl Configurable for Config {
                         100,
                     ))
                     .field(Field::slider_int(
+                        "focus_glow_ms",
+                        "Glow de foco — fundido del marco (ms)",
+                        self.focus_glow_ms as i64,
+                        0,
+                        600,
+                    ))
+                    .field(Field::slider_int(
                         "slide_ms",
                         "Deslizar entre escritorios (ms)",
                         self.slide_ms as i64,
@@ -689,6 +696,11 @@ impl Configurable for Config {
                     self.window_open_scale_pct = v.clamp(50, 100) as u8;
                 }
             }
+            "focus_glow_ms" => {
+                if let Some(v) = value.as_int() {
+                    self.focus_glow_ms = v.clamp(0, 600) as u32;
+                }
+            }
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
@@ -756,6 +768,10 @@ mod tests {
         c.apply(&"movimiento.slide_ms".into(), FieldValue::Int(120))
             .unwrap();
         assert_eq!(c.slide_ms, 120);
+        // El glow de foco.
+        c.apply(&"movimiento.focus_glow_ms".into(), FieldValue::Int(200))
+            .unwrap();
+        assert_eq!(c.focus_glow_ms, 200);
     }
 
     #[test]
