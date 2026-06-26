@@ -99,7 +99,28 @@ pub fn init_modelo() -> Model {
         }
     }
 
-    Model {
+    // Reabre los proyectos que estaban abiertos (rutas .pluma persistidas). Si
+    // ninguno abre, arranca con un proyecto vacío "Proyecto 1".
+    let mut proyectos: Vec<crate::model::ProyectoAbierto> = Vec::new();
+    for ruta in crate::util::cargar_abiertos() {
+        if let Ok(p) = pluma_proyecto::Proyecto::abrir(&ruta) {
+            let doc_activo = p
+                .documentos()
+                .first()
+                .map(|(id, _)| *id)
+                .unwrap_or_else(Uuid::new_v4);
+            proyectos.push(crate::model::ProyectoAbierto {
+                proyecto: p,
+                ruta: Some(ruta),
+                doc_activo,
+            });
+        }
+    }
+    if proyectos.is_empty() {
+        proyectos.push(crate::model::ProyectoAbierto::vacio("Proyecto 1"));
+    }
+
+    let mut m = Model {
         store,
         cuerpos,
         atoms,
@@ -162,13 +183,18 @@ pub fn init_modelo() -> Model {
         objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
         estilo_expand: None,
         wizard: None,
-        proyectos: vec![crate::model::ProyectoAbierto::vacio("Proyecto 1")],
+        proyectos,
         proyecto_activo: 0,
         proyecto_tab: crate::model::ProyectoTab::Historia,
         commit_preview: None,
         push_abierto: false,
         proyectos_recientes: crate::util::cargar_recientes(),
-    }
+    };
+
+    // Si reabrimos un proyecto con contenido, su documento activo manda sobre el
+    // estado sembrado desde el sled.
+    crate::update::cargar_doc_activo_inicial(&mut m);
+    m
 }
 
 /// Intenta el primer backend con env key configurada; si ninguno

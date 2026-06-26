@@ -800,43 +800,63 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
 
     let input = text_input_view::<Msg>(
         &model.path_input,
-        "ruta .pluma — abrir proyecto (Esc sale)",
+        "ruta .pluma (Esc sale)",
         model.path_focused,
         &palette_input,
         Msg::FocusPath,
     );
-    let abrir_proy = button_view::<Msg>("abrir .pluma", &palette_btn, Msg::AbrirProyecto);
+    let acciones_ruta = fila_botones(vec![
+        button_view::<Msg>("abrir .pluma", &palette_btn, Msg::AbrirProyecto),
+        button_view::<Msg>("guardar como…", &palette_btn, Msg::GuardarProyectoComo),
+    ]);
 
     let mut hijos: Vec<View<Msg>> = vec![
         nuevo_proy,
         divider(theme),
-        encabezado("abrir proyecto", theme),
+        encabezado("abrir / guardar proyecto", theme),
         input,
-        abrir_proy,
+        acciones_ruta,
     ];
 
-    // Proyectos abiertos.
+    // Proyectos abiertos (con ✕ para cerrar y aviso si no tiene ruta).
     hijos.push(divider(theme));
     hijos.push(encabezado(&format!("abiertos ({})", model.proyectos.len()), theme));
     for (i, pa) in model.proyectos.iter().enumerate() {
         let activo = i == model.proyecto_activo;
+        let sin_ruta = pa.ruta.is_none();
         let etiqueta = format!(
-            "{}  {}",
+            "{}  {}{}",
             if activo { "●" } else { "○" },
-            recortar(&pa.proyecto.nombre, 24)
+            recortar(&pa.proyecto.nombre, 20),
+            if sin_ruta { "  (sin guardar)" } else { "" }
         );
+        let nombre_view = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .text_aligned(
+            etiqueta,
+            12.0,
+            if activo { theme.fg_text } else { theme.fg_muted },
+            Alignment::Start,
+        )
+        .on_click(Msg::ActivarProyecto(i));
+        let cerrar = View::new(Style {
+            size: Size { width: length(20.0_f32), height: length(22.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned("✕".to_string(), 11.0, theme.fg_muted, Alignment::Center)
+        .on_click(Msg::CerrarProyecto(i));
         hijos.push(
             View::new(Style {
+                flex_direction: FlexDirection::Row,
                 size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
-            .text_aligned(
-                etiqueta,
-                12.0,
-                if activo { theme.fg_text } else { theme.fg_muted },
-                Alignment::Start,
-            )
-            .on_click(Msg::ActivarProyecto(i)),
+            .children(vec![nombre_view, cerrar]),
         );
     }
 

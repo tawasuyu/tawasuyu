@@ -427,6 +427,10 @@ pub enum Msg {
     NuevoProyecto,
     /// Abre un proyecto `.pluma` desde la ruta del `path_input`.
     AbrirProyecto,
+    /// Asigna la ruta del `path_input` al proyecto activo y lo guarda (.pluma).
+    GuardarProyectoComo,
+    /// Cierra (saca del rail) el proyecto `idx`.
+    CerrarProyecto(usize),
     /// Activa el proyecto `idx` (carga su documento activo en la superficie).
     ActivarProyecto(usize),
     /// Cambia la sub-pestaña del panel de proyecto.

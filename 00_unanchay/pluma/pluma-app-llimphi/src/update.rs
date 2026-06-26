@@ -565,6 +565,12 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::AbrirProyecto => {
             abrir_proyecto(&mut model);
         }
+        Msg::GuardarProyectoComo => {
+            guardar_proyecto_como(&mut model);
+        }
+        Msg::CerrarProyecto(idx) => {
+            cerrar_proyecto(&mut model, idx);
+        }
         Msg::ActivarProyecto(idx) => {
             activar_proyecto(&mut model, idx);
         }
@@ -1151,10 +1157,92 @@ fn abrir_proyecto(model: &mut Model) {
                 Some(d) => aplicar_doc(model, d),
                 None => nuevo_haz_vacio(model),
             }
+            persistir_abiertos(model);
             model.ultimo_status = format!("proyecto abierto: {}", ruta.display());
         }
         Err(e) => {
             model.ultimo_error = Some(format!("abrir proyecto: {e}"));
+        }
+    }
+}
+
+/// Persiste las rutas de los proyectos abiertos (los que tienen ruta) para
+/// reabrirlos al iniciar.
+fn persistir_abiertos(model: &Model) {
+    let rutas: Vec<std::path::PathBuf> = model
+        .proyectos
+        .iter()
+        .filter_map(|pa| pa.ruta.clone())
+        .collect();
+    crate::util::guardar_abiertos(&rutas);
+}
+
+/// Asigna la ruta del `path_input` al proyecto activo y lo guarda como `.pluma`.
+fn guardar_proyecto_como(model: &mut Model) {
+    let texto = model.path_input.text();
+    let mut ruta = expandir_ruta(texto.trim());
+    if ruta.as_os_str().is_empty() {
+        model.ultimo_status = "escribí una ruta para guardar el .pluma".into();
+        return;
+    }
+    if ruta.extension().is_none() {
+        ruta.set_extension("pluma");
+    }
+    sincronizar_doc_activo(model);
+    let idx = model.proyecto_activo;
+    model.proyectos[idx].ruta = Some(ruta.clone());
+    match model.proyectos[idx].proyecto.guardar(&ruta) {
+        Ok(()) => {
+            model.path_focused = false;
+            if !model.proyectos_recientes.contains(&ruta) {
+                model.proyectos_recientes.push(ruta.clone());
+                crate::util::guardar_recientes(&model.proyectos_recientes);
+            }
+            persistir_abiertos(model);
+            model.ultimo_status = format!("guardado: {}", ruta.display());
+        }
+        Err(e) => {
+            model.ultimo_error = Some(format!("guardar proyecto: {e}"));
+        }
+    }
+}
+
+/// Cierra (saca del rail) el proyecto `idx`. Nunca deja la lista vacía: si era
+/// el último, crea uno nuevo en blanco. Vuelca antes la working copy.
+fn cerrar_proyecto(model: &mut Model, idx: usize) {
+    if idx >= model.proyectos.len() {
+        return;
+    }
+    sincronizar_doc_activo(model);
+    model.proyectos.remove(idx);
+    if model.proyectos.is_empty() {
+        model.proyectos.push(ProyectoAbierto::vacio("Proyecto 1"));
+    }
+    model.proyecto_activo = model.proyecto_activo.min(model.proyectos.len() - 1);
+    model.diente_activo = 0; // volver a Archivo
+    persistir_abiertos(model);
+    // Cargar el documento del proyecto que quedó activo.
+    let pidx = model.proyecto_activo;
+    let doc_id = model.proyectos[pidx].doc_activo;
+    match model.proyectos[pidx].proyecto.documento(doc_id).cloned() {
+        Some(d) => aplicar_doc(model, d),
+        None => nuevo_haz_vacio(model),
+    }
+    model.ultimo_status = "proyecto cerrado".into();
+}
+
+/// Carga el documento activo del proyecto activo en las colecciones vivas —
+/// usado en `init` tras reabrir proyectos. No-op si el doc está vacío (deja el
+/// estado sembrado que ya tenía el `Model`).
+pub(crate) fn cargar_doc_activo_inicial(model: &mut Model) {
+    let idx = model.proyecto_activo;
+    if idx >= model.proyectos.len() {
+        return;
+    }
+    let doc_id = model.proyectos[idx].doc_activo;
+    if let Some(d) = model.proyectos[idx].proyecto.documento(doc_id).cloned() {
+        if !d.cuerpos.is_empty() {
+            aplicar_doc(model, d);
         }
     }
 }

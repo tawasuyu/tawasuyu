@@ -143,6 +143,34 @@ pub(crate) fn guardar_recientes(rutas: &[PathBuf]) {
     let _ = std::fs::write(ruta_recientes(), texto);
 }
 
+/// Ruta del listado de proyectos ABIERTOS (para reabrirlos al iniciar).
+pub(crate) fn ruta_abiertos() -> PathBuf {
+    ruta_sled().with_file_name("proyectos_abiertos.txt")
+}
+
+/// Carga las rutas de proyectos que estaban abiertos.
+pub(crate) fn cargar_abiertos() -> Vec<PathBuf> {
+    std::fs::read_to_string(ruta_abiertos())
+        .map(|s| {
+            s.lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Persiste las rutas de proyectos abiertos (best-effort).
+pub(crate) fn guardar_abiertos(rutas: &[PathBuf]) {
+    let texto = rutas
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(ruta_abiertos(), texto);
+}
+
 pub(crate) fn ahora_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
