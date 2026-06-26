@@ -34,6 +34,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod skel;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 

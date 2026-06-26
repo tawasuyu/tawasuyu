@@ -8,3 +8,7 @@ publish.workspace = true
 description = "llimphi-anim — máquina de estados de animación (estilo Rive) clip-agnóstica: estados, inputs (bool/number/trigger), transiciones con condiciones y blend. El núcleo no sabe de Lottie ni de vello — opera sobre ClipId + duración; el render lo cablea el consumidor (llimphi-lottie hoy; rigs nativos mañana)."
 
 [dependencies]
+# Álgebra afín 2D (Affine/Point/Vec2) para la jerarquía de huesos y el skinning.
+# Misma versión que expone vello 0.7 → los Point deformados tipan directo con el
+# renderer (llimphi-lottie/mesh) sin conversiones.
+kurbo = "0.13"
