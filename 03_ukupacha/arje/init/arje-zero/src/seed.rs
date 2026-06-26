@@ -406,4 +406,45 @@ mod tests {
         assert_eq!(card.attest_policy, AttestPolicy::Halt);
         let _ = std::fs::remove_file(&tmp);
     }
+
+    /// Lazo restore → GC: un sistema restaurado de un snapshot conserva sus
+    /// raíces vivas del CAS, así que un `gc-cas` posterior NO barre los binarios
+    /// cosechados (en `attest`) ni los Wasm de los entes restaurados. Cierra el
+    /// hueco de "restauro y el GC me borra los bytecodes".
+    #[test]
+    fn gc_roots_sobreviven_al_restore() {
+        let tmp = std::env::temp_dir()
+            .join(format!("arje-zero-restore-gcroots-{}.json", std::process::id()));
+
+        // Ente Wasm que estaba vivo al checkpoint (su module_sha256 es raíz).
+        let mut wasm_ente = EntityCard::new("wasm-ente");
+        wasm_ente.payload = Payload::Wasm { module_sha256: [22u8; 32], entry: "_start".into() };
+        // Binario cosechado → bytecode en el attest del seed (otra raíz).
+        let conc = arje_attest::ConcesionCapacidad {
+            bytecode: [11u8; 32],
+            permisos: 0,
+            autor: [2u8; 32],
+            firma: [3u8; 64],
+        };
+        let snap = arje_snapshot::FractalSnapshot {
+            version: arje_snapshot::SNAPSHOT_VERSION,
+            timestamp_ms: 1,
+            seed_id: Ulid::from_string("00000000000000000000000000").unwrap(),
+            seed_label: "restored".into(),
+            entes: vec![wasm_ente],
+            attest: vec![conc],
+            attest_rootkey: Some([2u8; 32]),
+            attest_policy: AttestPolicy::Halt,
+        };
+        snap.write(&tmp).unwrap();
+
+        // Restaurar por la misma ruta que el boot y montar el grafo.
+        let card = load_from_snapshot(&tmp).unwrap();
+        let graph = crate::graph::EnteGraph::new(card);
+        let roots = graph.cas_roots();
+
+        assert!(roots.contains(&[11u8; 32]), "el bytecode del attest debe sobrevivir el restore");
+        assert!(roots.contains(&[22u8; 32]), "el Wasm del ente restaurado debe sobrevivir el restore");
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

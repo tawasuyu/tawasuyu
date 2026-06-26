@@ -293,7 +293,11 @@ gana `firma_valida` + el re-export de `ConcesionCapacidad`; un init vivo NO hace
   introspect y en cada tick de mantenimiento. El handler de `GcCas` une ese set → el GC ya no toca
   lo que está en uso. Tests: `cas_roots` recolecta Wasm+bytecodes (de seed/pending/incarnado, sin
   basura — atrapó que `new` mueve el genesis a `pending_genesis`) y `arje-cas::gc` borra sólo lo no
-  alcanzable.
+  alcanzable. **GC sobrevive el restore → ✅ verificado (2026-06-26):** `gc_roots_sobreviven_al_restore`
+  restaura un snapshot con `attest` + un ente Wasm, monta el grafo, y confirma que `cas_roots()`
+  incluye el bytecode cosechado y el `module_sha256` restaurados — así un `gc-cas` tras un
+  checkpoint/restore NO barre los binarios del gate ni los Wasm vivos. Cierra el lazo
+  snapshot→restore→GC.
 - Bus unificado (B.2) antes de que hammerd corra bajo arje — vocabulario de eventos ✅; falta
   el cable de transporte arje-bus ↔ hammerd.
 
