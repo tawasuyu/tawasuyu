@@ -118,6 +118,7 @@ impl Level {
             Level::Seres => vec![
                 ("Cuerpo", Icon::User),
                 ("Andar", Icon::Gauge),
+                ("Conducta", Icon::Settings),
                 ("Piel", Icon::Image),
                 ("Camiseta", Icon::Image),
                 ("Pantalón", Icon::Image),
@@ -183,6 +184,9 @@ enum Msg {
     CycleAndarEstado,
     SetAndarCadencia(f32),
     SetAndarAmplitud(usize, f32),
+    // Conducta (capa 3).
+    SetConducta(usize, f32),
+    ToggleManada,
     // Biomas.
     SetBiomaField(BiomaField, f32),
     CycleBiomaGround,
@@ -263,6 +267,8 @@ struct Model {
     simulating: bool,
     /// Estado del andar que se edita/previsualiza en Seres (0=quieto,1=caminar,2=correr).
     andar_estado: usize,
+    /// Manada viva (conducta) corriendo en el preview de Seres.
+    manada: bool,
     /// Semilla del random de mundos (LCG; no hay `Math.random`).
     rng: u32,
     /// Decisión global: dientes DENTRO (overlay) o FUERA (franja reservada).
@@ -537,6 +543,16 @@ impl App for Studio {
                         }
                     }
                 }
+            }
+            Msg::SetConducta(i, v) => {
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    c.conducta.set(i, v);
+                }
+            }
+            Msg::ToggleManada => {
+                model.manada = !model.manada;
+                model.gen += 1; // repone el terreno y (re)inicia/limpia la manada
+                model.status = if model.manada { "manada viva".into() } else { "manada quieta".into() };
             }
             Msg::SetBiomaField(f, v) => {
                 if let Some(b) = sel_bioma_mut(&mut model) {
@@ -1130,6 +1146,7 @@ fn canvas_3d(model: &Model) -> View<Msg> {
         Level::Seres => {
             let sere = sel_sere(model).cloned();
             let time = model.time;
+            let manada = model.manada;
             // Previsualizar el estado de andar que se está editando.
             let estado_clip = match model.andar_estado {
                 0 => Clip::Idle,
@@ -1141,16 +1158,34 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 let mut guard = preview.lock().unwrap();
                 let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
                 p.rebuild_if(device, queue, &mr, dim, gen);
-                let pos = p.ground_at(dim[0] / 2, dim[2] / 2);
-                let look = pos + Vec3::new(0.0, 1.0, 0.0);
-                let cam_dist = (dist * 0.06).clamp(3.5, 14.0);
-                let camera = Camera3d::orbit(look, yaw, pitch, cam_dist);
-                // Turntable: gira el cuerpo (facing = time·0.6) animando el estado en edición.
-                let metas = match &sere {
-                    Some(cs) => vec![cs.to_meta(pos, time * 0.6, estado_clip, time, None)],
-                    None => Vec::new(),
-                };
-                p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
+                let half = Vec3::new(dim[0] as f32, dim[1] as f32, dim[2] as f32) * 0.5;
+                match (&sere, manada) {
+                    // Manada viva: una bandada del ser deambula/se junta por su conducta.
+                    (Some(cs), true) => {
+                        p.ensure_manada(cs.conducta, 9);
+                        let agentes = p.manada_step(1.0 / 30.0, None);
+                        let metas: Vec<_> = agentes
+                            .iter()
+                            .map(|(gpos, heading, fase)| cs.to_meta(*gpos - half, *heading, Clip::Walk, *fase, None))
+                            .collect();
+                        let look = p.ground_at(dim[0] / 2, dim[2] / 2) - half + Vec3::new(0.0, 1.0, 0.0);
+                        let camera = Camera3d::orbit(look, yaw, pitch, 32.0);
+                        p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
+                    }
+                    // Turntable de un solo ser, animando el estado en edición.
+                    other => {
+                        p.clear_manada();
+                        let pos = p.ground_at(dim[0] / 2, dim[2] / 2);
+                        let look = pos + Vec3::new(0.0, 1.0, 0.0);
+                        let cam_dist = (dist * 0.06).clamp(3.5, 14.0);
+                        let camera = Camera3d::orbit(look, yaw, pitch, cam_dist);
+                        let metas = match other.0 {
+                            Some(cs) => vec![cs.to_meta(pos, time * 0.6, estado_clip, time, None)],
+                            None => Vec::new(),
+                        };
+                        p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
+                    }
+                }
             })
         }
         // Mundos / Biomas: sólo el terreno, en órbita. Con «simular», corre la ley
@@ -1293,10 +1328,33 @@ fn sere_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleSereAge),
         ],
         1 => andar_tools(model, c),
-        2 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),
-        3 => color_tools("CAMISETA", Part::Shirt, c.shirt, &sp, theme),
+        2 => conducta_tools(model, c),
+        3 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),
+        4 => color_tools("CAMISETA", Part::Shirt, c.shirt, &sp, theme),
         _ => color_tools("PANTALÓN", Part::Pants, c.pants, &sp, theme),
     }
+}
+
+/// Editor de la **conducta** (capa 3) de un ser: sliders de locomoción + toggle para
+/// soltar una manada viva en el preview.
+fn conducta_tools(model: &Model, c: &llimphi_voxel::CharSpec) -> Vec<View<Msg>> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+    let mut v = vec![section_title("CONDUCTA", theme)];
+    for (i, (name, value, min, max)) in c.conducta.params().into_iter().enumerate() {
+        v.push(slider_view(name, value, min, max, &sp, move |_p, dv| Some(Msg::SetConducta(i, value + dv))));
+    }
+    v.push(spacer(8.0));
+    v.push(section_title("PREVIEW", theme));
+    v.push(button_view(
+        if model.manada { "⏸ detener manada" } else { "▶ soltar manada" },
+        &btn,
+        Msg::ToggleManada,
+    ));
+    v.push(spacer(4.0));
+    v.push(body_text("una manada del ser deambula y se junta según su conducta".into(), theme.fg_placeholder, theme));
+    v
 }
 
 /// Editor del **andar** (capa 2) de un ser-rig: estado a editar/previsualizar +
@@ -1851,6 +1909,7 @@ pub(crate) fn demo_model() -> Model {
         exporting: false,
         simulating: false,
         andar_estado: 1, // caminar
+        manada: false,
         rng: 0x1234_5678,
         dientes_outside: wawa_config::WawaConfig::load().dientes_outside,
         project,

@@ -10,7 +10,7 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
-use llimphi_voxel::{GrowthSim, MundoRender, WaterSim, CELL_WATER, SCENE_SUN};
+use llimphi_voxel::{Conducta, GrowthSim, Habitante, MundoRender, WaterSim, CELL_WATER, SCENE_SUN};
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -44,6 +44,8 @@ pub struct WorldPreview {
     sim: Option<WaterSim>,
     /// Crecimiento de plantas en curso (ley Crecer), si está activo.
     growth: Option<GrowthSim>,
+    /// Manada de habitantes (conducta) deambulando sobre el grid, si está activa.
+    manada: Vec<Habitante>,
     /// Pool de renderers de actor (uno por actor; la malla se re-sube por frame).
     actor_r: Vec<Renderer3d>,
 }
@@ -69,8 +71,47 @@ impl WorldPreview {
             origin: [0, 0],
             sim: None,
             growth: None,
+            manada: Vec::new(),
             actor_r: Vec::new(),
         }
+    }
+
+    /// Asegura una **manada** de `n` habitantes con la `conducta` dada, posados en un
+    /// racimo cerca del centro del grid. Si ya hay `n`, sólo refresca su conducta (para
+    /// que editar los parámetros se note en vivo).
+    pub fn ensure_manada(&mut self, conducta: Conducta, n: usize) {
+        if self.manada.len() != n {
+            self.manada.clear();
+            let [dx, _, dz] = self.dim;
+            let (cx, cz) = (dx / 2, dz / 2);
+            for k in 0..n as u32 {
+                // Racimo determinista alrededor del centro (±~10 voxels).
+                let ox = (k.wrapping_mul(7) % 21) as i32 - 10;
+                let oz = (k.wrapping_mul(13) % 21) as i32 - 10;
+                let x = (cx as i32 + ox).clamp(1, dx as i32 - 2) as u32;
+                let z = (cz as i32 + oz).clamp(1, dz as i32 - 2) as u32;
+                self.manada.push(Habitante::spawn(&self.grid, x, z, conducta, 1 + k));
+            }
+        } else {
+            for h in &mut self.manada {
+                h.set_conducta(conducta);
+            }
+        }
+    }
+
+    /// Detiene la manada.
+    pub fn clear_manada(&mut self) {
+        self.manada.clear();
+    }
+
+    /// Avanza la manada `dt` (cada uno ve a los demás y a la `amenaza`) y devuelve
+    /// `(pos en grilla, rumbo, fase)` de cada habitante para que la app los pinte.
+    pub fn manada_step(&mut self, dt: f32, amenaza: Option<Vec3>) -> Vec<(Vec3, f32, f32)> {
+        let posiciones: Vec<Vec3> = self.manada.iter().map(|h| h.pos()).collect();
+        for h in &mut self.manada {
+            h.step(&self.grid, &posiciones, amenaza, dt);
+        }
+        self.manada.iter().map(|h| (h.pos(), h.heading(), h.fase)).collect()
     }
 
     /// Arranca el **crecimiento** (ley Crecer) del material `planta`: esconde sus
@@ -170,6 +211,7 @@ impl WorldPreview {
             self.origin = [0, 0]; // centrado en el origen
             self.sim = None; // el grid se rehízo: cualquier simulación queda obsoleta
             self.growth = None;
+            self.manada.clear();
         }
     }
 

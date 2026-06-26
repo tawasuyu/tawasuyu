@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actor::{Actor, Age, Clip};
 use crate::director::{ActorKey, ActorScript};
+use crate::conducta::Conducta;
 use crate::rig::{Movimiento, Rig};
 use crate::worldgen::{Bioma, BiomaPalette, Forma, Material, ResolvedMaterial};
 use llimphi_3d::glam::{Mat4, Vec3};
@@ -279,6 +280,10 @@ pub struct CharSpec {
     /// andares por estado) — cuadrúpedo, ave, serpiente… Default `None` (compat).
     #[serde(default)]
     pub cuerpo: Option<Movimiento>,
+    /// **Conducta** (capa 3): cómo se mueve por el mundo (deambular/gregario/miedo).
+    /// Aplica a cualquier cuerpo (humanoide o rig).
+    #[serde(default)]
+    pub conducta: Conducta,
 }
 
 impl CharSpec {
@@ -286,7 +291,16 @@ impl CharSpec {
     /// `id = 0` hasta que el [`Project`] se lo asigna al agregarlo.
     pub fn new(name: impl Into<String>, age: Age) -> Self {
         let a = Actor::new(Vec3::ZERO, 0.0);
-        Self { id: 0, name: name.into(), age, skin: a.skin, shirt: a.shirt, pants: a.pants, cuerpo: None }
+        Self {
+            id: 0,
+            name: name.into(),
+            age,
+            skin: a.skin,
+            shirt: a.shirt,
+            pants: a.pants,
+            cuerpo: None,
+            conducta: Conducta::default(),
+        }
     }
 
     /// Nombre legible del cuerpo (para la UI).
@@ -731,7 +745,16 @@ impl Project {
             ("amarillo", [0.92, 0.78, 0.62], [0.92, 0.80, 0.30], [0.26, 0.22, 0.20]),
         ] {
             let id = p.alloc_id();
-            p.seres.push(CharSpec { id, name: name.into(), age: Age::Adult, skin, shirt, pants, cuerpo: None });
+            p.seres.push(CharSpec {
+                id,
+                name: name.into(),
+                age: Age::Adult,
+                skin,
+                shirt,
+                pants,
+                cuerpo: None,
+                conducta: Conducta::default(),
+            });
         }
 
         // --- Biomas ---
