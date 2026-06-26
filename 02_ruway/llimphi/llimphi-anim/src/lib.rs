@@ -108,6 +108,75 @@ impl Condition {
     }
 }
 
+/// Región sensible al puntero, en coordenadas **normalizadas** `0..1` sobre el
+/// rect donde se pinta la animación (origen arriba-izquierda). Resolución- e
+/// independiente del tamaño del clip: el consumidor mapea el puntero de pantalla
+/// a este espacio.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Area {
+    /// Toda la superficie de la animación.
+    All,
+    /// Un rectángulo normalizado.
+    Rect { x: f64, y: f64, w: f64, h: f64 },
+}
+
+impl Area {
+    fn contains(&self, px: f64, py: f64) -> bool {
+        match self {
+            Area::All => (0.0..=1.0).contains(&px) && (0.0..=1.0).contains(&py),
+            Area::Rect { x, y, w, h } => {
+                px >= *x && px <= x + w && py >= *y && py <= y + h
+            }
+        }
+    }
+}
+
+/// Qué evento de puntero dispara un [`Listener`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerTrigger {
+    /// El puntero entró al área.
+    Enter,
+    /// El puntero salió del área.
+    Exit,
+    /// Se presionó el botón con el puntero dentro del área.
+    Down,
+    /// Se soltó el botón con el puntero dentro del área.
+    Up,
+    /// El puntero se movió dentro del área (cada movimiento).
+    Move,
+}
+
+/// Qué le hace un [`Listener`] a los inputs cuando dispara.
+#[derive(Debug, Clone)]
+pub enum Action {
+    /// Setea un input booleano.
+    SetBool { name: String, value: bool },
+    /// Dispara un trigger.
+    Fire { name: String },
+}
+
+impl Action {
+    pub fn set_bool(name: impl Into<String>, value: bool) -> Self {
+        Action::SetBool {
+            name: name.into(),
+            value,
+        }
+    }
+    pub fn fire(name: impl Into<String>) -> Self {
+        Action::Fire { name: name.into() }
+    }
+}
+
+/// Un *listener* estilo Rive: cuando el puntero hace `trigger` sobre `area`,
+/// aplica `action` a los inputs. Es el puente puntero → máquina de estados
+/// (hover/click → bool/trigger → transición).
+#[derive(Debug, Clone)]
+pub struct Listener {
+    pub area: Area,
+    pub trigger: PointerTrigger,
+    pub action: Action,
+}
+
 /// Una transición saliente: a qué estado, bajo qué condiciones, con cuánto blend.
 #[derive(Debug, Clone)]
 pub struct Transition {
@@ -138,6 +207,8 @@ pub struct StateMachine {
     clip_durations: HashMap<ClipId, f64>,
     /// Transiciones evaluadas desde *cualquier* estado.
     any: Vec<Transition>,
+    /// Listeners de puntero (hover/click → inputs).
+    listeners: Vec<Listener>,
     entry: StateId,
 }
 
@@ -208,6 +279,16 @@ impl StateMachine {
         });
     }
 
+    /// Agrega un listener de puntero: cuando el puntero hace `trigger` sobre
+    /// `area`, aplica `action` a los inputs (que luego rigen transiciones).
+    pub fn listener(&mut self, area: Area, trigger: PointerTrigger, action: Action) {
+        self.listeners.push(Listener {
+            area,
+            trigger,
+            action,
+        });
+    }
+
     /// Crea una instancia ejecutable de esta máquina.
     pub fn instance(self) -> Instance {
         let entry = self.entry;
@@ -217,6 +298,7 @@ impl StateMachine {
             current: entry,
             state_time: 0.0,
             active: None,
+            last_pointer: None,
         }
     }
 
@@ -258,6 +340,10 @@ pub struct Instance {
     current: StateId,
     state_time: f64,
     active: Option<Active>,
+    /// Última posición del puntero en coords normalizadas `0..1` (`None` =
+    /// fuera de la animación). La usan los listeners de `Down`/`Up` y la
+    /// detección de `Enter`/`Exit`.
+    last_pointer: Option<(f64, f64)>,
 }
 
 /// Una muestra de clip a renderizar: qué clip y en qué instante (segundos).
@@ -375,6 +461,63 @@ impl Instance {
             self.current = to;
             self.state_time = to_time;
             self.active = None;
+        }
+    }
+
+    fn apply_action(&mut self, action: &Action) {
+        match action {
+            Action::SetBool { name, value } => {
+                self.inputs.bools.insert(name.clone(), *value);
+            }
+            Action::Fire { name } => {
+                self.inputs.triggers.insert(name.clone());
+            }
+        }
+    }
+
+    /// Reporta la posición del puntero en coords **normalizadas** `0..1` sobre
+    /// el rect de la animación, o `None` si el puntero salió. Dispara los
+    /// listeners `Enter`/`Exit`/`Move` correspondientes y deja la posición
+    /// guardada para los de `Down`/`Up`.
+    pub fn pointer_move(&mut self, pos: Option<(f64, f64)>) {
+        let machine = self.machine.clone();
+        let was = self.last_pointer;
+        for l in &machine.listeners {
+            let was_in = was.map_or(false, |(x, y)| l.area.contains(x, y));
+            let now_in = pos.map_or(false, |(x, y)| l.area.contains(x, y));
+            let fire = match l.trigger {
+                PointerTrigger::Enter => !was_in && now_in,
+                PointerTrigger::Exit => was_in && !now_in,
+                PointerTrigger::Move => now_in,
+                _ => false,
+            };
+            if fire {
+                self.apply_action(&l.action);
+            }
+        }
+        self.last_pointer = pos;
+    }
+
+    /// Botón presionado: dispara los listeners `Down` cuya área contiene la
+    /// última posición conocida del puntero.
+    pub fn pointer_down(&mut self) {
+        self.pointer_button(PointerTrigger::Down);
+    }
+
+    /// Botón soltado: dispara los listeners `Up`.
+    pub fn pointer_up(&mut self) {
+        self.pointer_button(PointerTrigger::Up);
+    }
+
+    fn pointer_button(&mut self, which: PointerTrigger) {
+        let Some((px, py)) = self.last_pointer else {
+            return;
+        };
+        let machine = self.machine.clone();
+        for l in &machine.listeners {
+            if l.trigger == which && l.area.contains(px, py) {
+                self.apply_action(&l.action);
+            }
         }
     }
 
@@ -534,6 +677,68 @@ mod tests {
         inst.advance(0.016);
         assert!(!inst.is_transitioning());
         assert_eq!(inst.current_state(), "b");
+    }
+
+    #[test]
+    fn hover_enter_exit_maneja_un_bool() {
+        // idle ⇄ walk por "moving"; hover sobre toda la animación setea moving.
+        let mut sm = idle_walk();
+        sm.listener(Area::All, PointerTrigger::Enter, Action::set_bool("moving", true));
+        sm.listener(Area::All, PointerTrigger::Exit, Action::set_bool("moving", false));
+        let mut inst = sm.instance();
+
+        // Puntero entra al centro → moving=true → transiciona a walk.
+        inst.pointer_move(Some((0.5, 0.5)));
+        inst.advance(0.3);
+        assert_eq!(inst.current_state(), "walk");
+
+        // Puntero sale → moving=false → vuelve a idle.
+        inst.pointer_move(None);
+        inst.advance(0.3);
+        assert_eq!(inst.current_state(), "idle");
+    }
+
+    #[test]
+    fn click_dispara_trigger_en_su_area() {
+        let mut sm = idle_walk();
+        let jump = sm.add_state("jump", JUMP, 1.0, false);
+        sm.set_clip_duration(JUMP, 0.5);
+        sm.transition_any(jump, vec![Condition::trigger("tap")], 0.0);
+        sm.transition(jump, 0, vec![Condition::clip_done()], 0.0);
+        // Sólo la mitad derecha responde al click.
+        sm.listener(
+            Area::Rect { x: 0.5, y: 0.0, w: 0.5, h: 1.0 },
+            PointerTrigger::Down,
+            Action::fire("tap"),
+        );
+        let mut inst = sm.instance();
+
+        // Click en la mitad IZQUIERDA: fuera del área, no dispara.
+        inst.pointer_move(Some((0.2, 0.5)));
+        inst.pointer_down();
+        inst.advance(0.016);
+        assert_eq!(inst.current_state(), "idle");
+
+        // Click en la mitad DERECHA: dispara "tap" → jump.
+        inst.pointer_move(Some((0.8, 0.5)));
+        inst.pointer_down();
+        inst.advance(0.016);
+        assert_eq!(inst.current_state(), "jump");
+    }
+
+    #[test]
+    fn move_fuera_del_area_no_dispara() {
+        let mut sm = idle_walk();
+        sm.listener(
+            Area::Rect { x: 0.0, y: 0.0, w: 0.4, h: 0.4 },
+            PointerTrigger::Enter,
+            Action::set_bool("moving", true),
+        );
+        let mut inst = sm.instance();
+        // Entra pero a una zona fuera del rect del listener.
+        inst.pointer_move(Some((0.9, 0.9)));
+        inst.advance(0.3);
+        assert_eq!(inst.current_state(), "idle", "fuera del área no debe disparar");
     }
 
     #[test]
