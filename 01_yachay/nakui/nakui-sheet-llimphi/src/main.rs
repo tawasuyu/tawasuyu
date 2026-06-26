@@ -47,7 +47,9 @@ use llimphi_widget_menubar::{
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use nakui_sheet::{csv_io, CellFormat, CellRange, CellRef, ExportMode, SheetValue, Workbook};
+use std::time::{Duration, Instant};
 // Motor de tabla dinámica (regla #2): `Agg`/`PivotState` y el cómputo viven
 // en el core; acá sólo se construyen, rotan y pintan.
 use nakui_sheet::pivot::{compute_pivot, pivot_col_label, Agg, PivotState};
@@ -69,6 +71,8 @@ const WHEEL_LINES: f32 = 3.0;
 /// una celda de "respiración" alrededor.
 const SCROLL_MARGIN_ROWS: u32 = 1;
 const SCROLL_MARGIN_COLS: u32 = 1;
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 /// Paleta dark-sheet — fondo casi negro con cuadrícula sutil. Los
 /// colores se eligen para que la grilla se vea NÍTIDA pero no
@@ -194,6 +198,8 @@ enum Msg {
     EditNav(i32),
     /// Ejecuta la fila activa del menú de edición (Enter).
     EditActivate,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 #[derive(Clone, Copy)]
@@ -270,6 +276,36 @@ struct Model {
     /// copy/cut/paste de CELDAS sigue usando `arboard` aparte porque
     /// shifta fórmulas.
     clipboard: SystemClipboard,
+    /// Toasts efímeros vivos (confirmaciones/errores de import/export).
+    /// Flotan bottom-right y se auto-descartan a los `TOAST_TTL`.
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
+}
+
+/// Empuja un toast al stack y programa su expiración vía worker.
+fn push_toast(model: &mut Model, h: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    h.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Refleja el último `model.status` (import/export) también como un toast
+/// efímero — error → rojo, info → verde de confirmación. La barra de estado
+/// persiste; el toast es el aviso que aparece y se va.
+fn toast_from_status(model: &mut Model, h: &Handle<Msg>) {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    let text = model.status.text.trim().to_string();
+    let toast = if model.status.kind == StatusKind::Error {
+        Toast::error(id, text, TOAST_TTL)
+    } else {
+        Toast::success(id, text, TOAST_TTL)
+    };
+    push_toast(model, h, toast);
 }
 
 /// Estado del menú contextual mientras está abierto.
@@ -337,6 +373,8 @@ impl App for NakuiSheetApp {
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -424,6 +462,7 @@ impl App for NakuiSheetApp {
                         kind: StatusKind::Error,
                     },
                 };
+                toast_from_status(&mut model, h);
             }
             Msg::ImportCsv => {
                 let path = std::path::Path::new("./nakui-import.csv");
@@ -446,6 +485,7 @@ impl App for NakuiSheetApp {
                         kind: StatusKind::Error,
                     },
                 };
+                toast_from_status(&mut model, h);
             }
             Msg::ApplyFormat(fmt) => match model.wb.set_format(model.selected, fmt.clone()) {
                 Ok(_) => {
@@ -784,6 +824,9 @@ impl App for NakuiSheetApp {
                 model.edit_menu = None;
                 model.edit_active = usize::MAX;
             }
+            Msg::ToastExpire(id) => {
+                model.toasts.retain(|t| t.id != id);
+            }
         }
         model
     }
@@ -902,7 +945,7 @@ impl App for NakuiSheetApp {
         );
         let status = status_bar_view(&model.status);
 
-        View::new(Style {
+        let root = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
                 height: percent(1.0_f32),
@@ -911,7 +954,35 @@ impl App for NakuiSheetApp {
             ..Default::default()
         })
         .fill(palette::BG_APP)
-        .children(vec![menubar, title_bar, formula_bar, grid, status])
+        .children(vec![menubar, title_bar, formula_bar, grid, status]);
+
+        // Overlay de toasts (bottom-right): confirmaciones/errores de
+        // import/export que aparecen y se van solos. Los menús de
+        // `view_overlay` se compositan por encima — no chocan con la
+        // esquina de los toasts.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model
+            .toasts
+            .iter()
+            .filter(|t| t.is_alive(now))
+            .cloned()
+            .collect();
+        if alive.is_empty() {
+            root
+        } else {
+            let (w, h) = Self::initial_size();
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![
+                root,
+                toast_stack_view(&alive, (w as f32, h as f32), Msg::ToastExpire),
+            ])
+        }
     }
 
     fn on_key(model: &Self::Model, ev: &KeyEvent) -> Option<Self::Msg> {
