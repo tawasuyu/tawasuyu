@@ -20,6 +20,8 @@ llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
+# Toasts efímeros: confirmaciones de guardado y errores de persistencia.
+llimphi-widget-toast = { workspace = true }
 llimphi-module-allichay = { workspace = true }
 # Diálogo de abrir archivo (elegir wallpaper, etc.).
 llimphi-module-file-picker = { workspace = true }

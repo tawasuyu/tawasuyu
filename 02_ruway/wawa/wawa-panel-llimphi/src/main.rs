@@ -25,6 +25,7 @@ mod themes;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use perfiles::{DesktopProfile, DesktopProfiles};
 
@@ -43,7 +44,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 // Editor de recorrido (Prezi) de la vista espacial — lienzo libre + rotación.
 use pluma_deck_core::{Camara, ContenidoMarco, Marco, Recorrido, RecorridoState, Rect as DeckRect};
 use pluma_deck_recorrido_llimphi::{panel_actual, recorrido_view_editor};
@@ -60,6 +63,17 @@ use wawa_config::{ConfigWatcher, WawaConfig};
 
 /// Refresco del monitor (Información).
 const TICK_MS: u64 = 1_000;
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la misma
+/// escena/item produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 /// Ancho del rail de pestañas (la tira que sobresale).
 const RAIL_W: f32 = 46.0;
 /// Ancho del sidebar de items (a la izquierda).
@@ -360,6 +374,11 @@ struct Model {
     plugin_edit: Option<plugins::PluginEdit>,
     /// Estado allichay propio del overlay de plugins (buffers de texto y foco).
     plugin_allichay: AllichayState,
+    /// Toasts vivos (confirmaciones de guardado, errores de persistencia). Se
+    /// purgan por TTL en cada [`Msg::Tick`] y al clickearlos ([`Msg::ToastExpire`]).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ dismiss.
+    next_toast: u64,
 }
 
 /// Px de mundo por celda de la grilla del Prezi dentro del editor de recorrido.
@@ -754,6 +773,8 @@ enum Msg {
     PluginEditKey(KeyEvent),
     /// Cerrar la subventana de plugin sin guardar (click en el scrim).
     PluginEditCancel,
+    /// Un toast fue descartado a mano (click): se quita del stack.
+    ToastExpire(u64),
 }
 
 // =====================================================================
@@ -799,6 +820,11 @@ impl App for Panel {
                     if m.save_in == 0 {
                         flush_saves(&mut m);
                     }
+                }
+                // Purga de toasts expirados (TTL).
+                if !m.toasts.is_empty() {
+                    let now = Instant::now();
+                    m.toasts.retain(|t| t.is_alive(now));
                 }
             }
             Msg::SelectPestana(id) => {
@@ -1104,6 +1130,7 @@ impl App for Panel {
                 }
             }
             Msg::PluginEditCancel => plugin_edit_close(&mut m),
+            Msg::ToastExpire(id) => m.toasts.retain(|t| t.id != id),
             Msg::ConfigChanged(new_cfg) => {
                 if *new_cfg != m.cfg {
                     let lang_changed = new_cfg.lang != m.cfg.lang;
@@ -1380,11 +1407,36 @@ impl App for Panel {
             return Some(scrim);
         }
         let menu = app_menu();
-        menubar_overlay_animated(
+        let menu_overlay = menubar_overlay_animated(
             &menubar_spec(&menu, model, &theme),
             model.menu_active,
             model.menu_anim.value(),
-        )
+        );
+        // Toasts efímeros (confirmaciones de guardado / errores de persistencia),
+        // apilados abajo-derecha. Se componen por encima del overlay de menú.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        let toasts = (!alive.is_empty())
+            .then(|| toast_stack_view(&alive, viewport_of(), Msg::ToastExpire));
+        match (menu_overlay, toasts) {
+            (None, None) => None,
+            (Some(o), None) => Some(o),
+            (None, Some(t)) => Some(t),
+            (Some(o), Some(t)) => Some(
+                View::new(Style {
+                    position: Position::Absolute,
+                    inset: Rect {
+                        left: length(0.0_f32),
+                        top: length(0.0_f32),
+                        right: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![o, t]),
+            ),
+        }
     }
 }
 
@@ -1483,6 +1535,8 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         mirada_plugins: plugins::list_plugins(),
         plugin_edit: None,
         plugin_allichay: AllichayState::new(),
+        toasts: Vec::new(),
+        next_toast: 0,
     }
 }
 
@@ -4068,9 +4122,16 @@ fn flush_saves(m: &mut Model) {
         m.dirty.splash = false;
     }
     if let Some(e) = err {
-        m.status = e;
+        m.status = e.clone();
+        let id = m.next_toast;
+        m.next_toast += 1;
+        m.toasts.push(Toast::error(id, format!("No se pudo guardar {e}"), TOAST_TTL));
     } else if ok {
-        m.status = rimay_localize::t("wawa-panel-autosave-ok");
+        let msg = rimay_localize::t("wawa-panel-autosave-ok");
+        m.status = msg.clone();
+        let id = m.next_toast;
+        m.next_toast += 1;
+        m.toasts.push(Toast::success(id, msg, TOAST_TTL));
     }
 }
 
@@ -5024,6 +5085,14 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
         }
         None => resumen_view(title, sections, theme),
     };
+    // Transición de escena: al cambiar de diente/item el contenido entra
+    // deslizando suave desde abajo. La key es estable dentro de una misma
+    // sección (no re-anima durante la edición/arrastre del lienzo).
+    let canvas_content = canvas_content.animated_enter_from(
+        key_of(&format!("canvas:{pest}:{sel_item:?}")),
+        motion::SLOW,
+        Affine::translate((0.0, 24.0)),
+    );
     let canvas = View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
@@ -5260,6 +5329,9 @@ fn item_row(i: usize, icon: &str, label: &str, active: bool, theme: &Theme) -> V
     .radius(4.0)
     .on_click(Msg::SelectItem(i as u64))
     .children(cells)
+    // Pop-in al montar la lista de items (cambio de diente): cada fila entra
+    // con un fade keyed por su rótulo, estable mientras el diente no cambie.
+    .animated_enter(key_of(&format!("item:{i}:{label}")), motion::NORMAL)
 }
 
 /// El rail de **pestañas** como overlay absoluto pegado al borde izquierdo del
