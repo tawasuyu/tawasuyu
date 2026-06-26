@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::actor::{Actor, Age, Clip};
 use crate::director::{ActorKey, ActorScript};
+use crate::rig::{Andar, Rig, RigPose};
 use crate::worldgen::{Bioma, BiomaPalette, Forma, Material, ResolvedMaterial};
-use llimphi_3d::glam::Vec3;
-use llimphi_3d::Camera3d;
+use llimphi_3d::glam::{Mat4, Vec3};
+use llimphi_3d::{Camera3d, Vertex3d};
 
 /// Dimensión por defecto de la grilla con la que el editor previsualiza un mundo
 /// (cúbica en XZ, alto = 0.4·lado, mínimo 48) — el mismo criterio que la app.
@@ -273,6 +274,11 @@ pub struct CharSpec {
     pub skin: [f32; 3],
     pub shirt: [f32; 3],
     pub pants: [f32; 3],
+    /// **Cuerpo**: `None` = humanoide (muñeco [`Actor`] rico: cara, gestos, cross-fade,
+    /// look-at); `Some(rig)` = una morfología arbitraria ([`Rig`]: cuadrúpedo, ave,
+    /// serpiente…) animada por su [`Andar`]. Default `None` (compatibilidad).
+    #[serde(default)]
+    pub rig: Option<Rig>,
 }
 
 impl CharSpec {
@@ -280,7 +286,66 @@ impl CharSpec {
     /// `id = 0` hasta que el [`Project`] se lo asigna al agregarlo.
     pub fn new(name: impl Into<String>, age: Age) -> Self {
         let a = Actor::new(Vec3::ZERO, 0.0);
-        Self { id: 0, name: name.into(), age, skin: a.skin, shirt: a.shirt, pants: a.pants }
+        Self { id: 0, name: name.into(), age, skin: a.skin, shirt: a.shirt, pants: a.pants, rig: None }
+    }
+
+    /// Nombre legible del cuerpo (para la UI).
+    pub fn cuerpo_label(&self) -> &str {
+        match &self.rig {
+            None => "humanoide",
+            Some(r) => r.nombre.as_str(),
+        }
+    }
+
+    /// Cicla el cuerpo: humanoide → cuadrúpedo → ave → serpiente → humanoide.
+    pub fn cycle_cuerpo(&mut self) {
+        let presets = Rig::presets();
+        self.rig = match &self.rig {
+            None => Some(presets[1].clone()), // humanoide(None) → cuadrúpedo
+            Some(r) => {
+                let i = presets.iter().position(|p| p.nombre == r.nombre).unwrap_or(0);
+                if i + 1 < presets.len() {
+                    Some(presets[i + 1].clone())
+                } else {
+                    None // serpiente → humanoide
+                }
+            }
+        };
+    }
+
+    /// **Meta de render** del ser en `pos`/`facing` para una animación: la matriz de
+    /// modelo + la malla. Humanoide (`rig = None`) usa el [`Actor`] rico (clip, fase,
+    /// look-at); un rig usa su [`Andar::caminar`] al andar (Walk/Run) o pose neutra si
+    /// no. Centraliza el branch para el preview y las escenas.
+    pub fn to_meta(
+        &self,
+        pos: Vec3,
+        facing: f32,
+        clip: Clip,
+        phase: f32,
+        look: Option<Vec3>,
+    ) -> (Mat4, Vec<Vertex3d>, Vec<u16>) {
+        match &self.rig {
+            None => {
+                let mut a = self.to_actor(pos, facing);
+                a.set_clip(clip);
+                a.advance(phase);
+                a.look_at(look);
+                let (v, i) = a.mesh();
+                (a.model(), v, i)
+            }
+            Some(rig) => {
+                let moving = matches!(clip, Clip::Walk | Clip::Run);
+                let pose = if moving {
+                    Andar::caminar(rig).pose(phase)
+                } else {
+                    RigPose::neutra(rig.len())
+                };
+                let (v, i) = rig.mesh(&pose, self.skin, self.shirt, self.pants);
+                let model = Mat4::from_translation(pos) * Mat4::from_rotation_y(facing);
+                (model, v, i)
+            }
+        }
     }
 
     /// Materializa el spec en un [`Actor`] parado en `pos` mirando a `facing`.
@@ -664,7 +729,7 @@ impl Project {
             ("amarillo", [0.92, 0.78, 0.62], [0.92, 0.80, 0.30], [0.26, 0.22, 0.20]),
         ] {
             let id = p.alloc_id();
-            p.seres.push(CharSpec { id, name: name.into(), age: Age::Adult, skin, shirt, pants });
+            p.seres.push(CharSpec { id, name: name.into(), age: Age::Adult, skin, shirt, pants, rig: None });
         }
 
         // --- Biomas ---

@@ -176,6 +176,7 @@ enum Msg {
     RemoveMatLey,
     // Seres.
     CycleSereAge,
+    CycleSereCuerpo,
     SetSereColor(Part, usize, f32),
     // Biomas.
     SetBiomaField(BiomaField, f32),
@@ -489,6 +490,12 @@ impl App for Studio {
             Msg::CycleSereAge => {
                 if let Some(c) = sel_sere_mut(&mut model) {
                     c.age = c.age.next();
+                }
+            }
+            Msg::CycleSereCuerpo => {
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    c.cycle_cuerpo();
+                    model.gen += 1;
                 }
             }
             Msg::SetSereColor(part, ch, v) => {
@@ -1086,12 +1093,8 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 };
                 let mut metas = Vec::with_capacity(poses.len());
                 for (pos, s, ch, at) in &poses {
-                    let mut a = ch.to_actor(*pos, s.facing);
-                    a.set_clip(s.clip);
-                    a.advance(*at);
-                    a.look_at(Some(camera.eye));
-                    let (v, i) = a.mesh();
-                    metas.push((a.model(), v, i));
+                    // Humanoide → Actor rico; rig → su andar (lo decide CharSpec).
+                    metas.push(ch.to_meta(*pos, s.facing, s.clip, *at, Some(camera.eye)));
                 }
                 p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
             })
@@ -1108,13 +1111,9 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 let look = pos + Vec3::new(0.0, 1.0, 0.0);
                 let cam_dist = (dist * 0.06).clamp(3.5, 14.0);
                 let camera = Camera3d::orbit(look, yaw, pitch, cam_dist);
+                // Turntable: gira el cuerpo (facing = time·0.6) en pose de reposo.
                 let metas = match &sere {
-                    Some(cs) => {
-                        let mut a = cs.to_actor(pos, time * 0.6);
-                        a.advance(time);
-                        let (v, i) = a.mesh();
-                        vec![(a.model(), v, i)]
-                    }
+                    Some(cs) => vec![cs.to_meta(pos, time * 0.6, Clip::Idle, time, None)],
                     None => Vec::new(),
                 };
                 p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
@@ -1255,6 +1254,8 @@ fn sere_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
     match tab {
         0 => vec![
             section_title("CUERPO", theme),
+            button_view(format!("forma: {}", c.cuerpo_label()), &btn, Msg::CycleSereCuerpo),
+            spacer(4.0),
             button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleSereAge),
         ],
         1 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),

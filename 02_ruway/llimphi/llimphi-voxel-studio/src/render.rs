@@ -238,12 +238,8 @@ pub fn export_scene(project: &Project, scene: &SceneSpec) -> Result<String, Stri
 
         let mut metas = Vec::with_capacity(poses.len());
         for (pos, s, ch, at) in &poses {
-            let mut a = ch.to_actor(*pos, s.facing);
-            a.set_clip(s.clip);
-            a.advance(*at);
-            a.look_at(Some(camera.eye));
-            let (v, i) = a.mesh();
-            metas.push((a.model(), v, i));
+            // Humanoide → Actor rico; rig → su andar (lo decide CharSpec::to_meta).
+            metas.push(ch.to_meta(*pos, s.facing, s.clip, *at, Some(camera.eye)));
         }
 
         let mut enc = hal
