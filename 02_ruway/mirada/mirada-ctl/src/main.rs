@@ -81,6 +81,11 @@ fn run(args: &[String]) -> Result<(), String> {
         // en caliente. Es lo que hace alcanzable el «panel de control» (las
         // vistas) desde la sesión real, sin la app de simulación.
         Some("vista" | "vistas") => run_vista(&args[1..]),
+        // App remota vía waypipe: `mirada-ctl remote [user@]host <app> [args…]`
+        // envuelve la app en `waypipe ssh …` y la lanza como un Spawn normal —
+        // para el compositor es un cliente Wayland más (sin protocolo nuevo). No
+        // pasa por el join-con-`:` de abajo porque el comando lleva espacios.
+        Some("remote") => run_remote(&args[1..]),
         // Todo lo demás es una acción. `focus-window 5` y `workspace 3`
         // se unen con `:` a la forma canónica (`focus-window:5`).
         Some(_) => {
@@ -305,6 +310,37 @@ fn print_workspaces(st: &WorkspacesState) {
     );
 }
 
+/// Lanza una app remota envolviéndola en waypipe sobre ssh. `args` es
+/// `[user@]host <app> [args…]`. Construye el comando con [`waypipe_remote_cmd`]
+/// y lo manda como `DesktopAction::Spawn` — el Cuerpo lo corre con `sh -c` y la
+/// ventana remota llega como un cliente Wayland normal (waypipe reenvía el
+/// protocolo por el túnel ssh). No se inventa nada del lado del compositor.
+fn run_remote(args: &[String]) -> Result<(), String> {
+    let (host, app) = args
+        .split_first()
+        .filter(|(_, app)| !app.is_empty())
+        .ok_or("uso: mirada-ctl remote [user@]host <app> [args…]")?;
+    let cmd = waypipe_remote_cmd(host, app);
+    match request(CtlRequest::Do(DesktopAction::Spawn(cmd)))? {
+        CtlReply::Ok => Ok(()),
+        CtlReply::Error(e) => Err(e),
+        _ => Err("respuesta inesperada del Cerebro".into()),
+    }
+}
+
+/// Arma el comando `waypipe ssh <host> <app…>`. `host` puede traer `user@`. Los
+/// términos se unen con espacios, igual que cualquier `Spawn` (que es un string
+/// para `sh -c`); waypipe entrega el resto a ssh, que lo re-parsea en el host
+/// remoto. Pura y testeable.
+fn waypipe_remote_cmd(host: &str, app: &[String]) -> String {
+    let mut parts = Vec::with_capacity(app.len() + 3);
+    parts.push("waypipe");
+    parts.push("ssh");
+    parts.push(host);
+    parts.extend(app.iter().map(String::as_str));
+    parts.join(" ")
+}
+
 fn print_help() {
     println!(
         "mirada-ctl — control del compositor mirada\n\
@@ -316,6 +352,7 @@ fn print_help() {
            mirada-ctl cycle-zones   cicla el preset de zonas de arrastre\n  \
            mirada-ctl profile …     biblioteca de perfiles de atajos (ver abajo)\n  \
            mirada-ctl vista …       vistas de escritorio completo (ver abajo)\n  \
+           mirada-ctl remote …      lanza una app remota vía waypipe (ver abajo)\n  \
            mirada-ctl actions       lista las acciones disponibles\n\
          \n\
          VISTAS (look + decoraciones + layout + teclas + barra):\n  \
@@ -331,6 +368,10 @@ fn print_help() {
            mirada-ctl profile rename <origen> <nombre>       renombra uno propio\n  \
            mirada-ctl profile rm <nombre>       borra un perfil propio\n  \
            presets de fábrica: dwm · i3 · hyprland\n\
+         \n\
+         REMOTE (app de otra máquina, túnel waypipe+ssh):\n  \
+           mirada-ctl remote [user@]host <app> [args…]\n  \
+           ej: mirada-ctl remote sergio@servidor foot   (la ventana llega como cliente local)\n\
          \n\
          EJEMPLOS:\n  \
            mirada-ctl focus-next\n  \
@@ -371,4 +412,28 @@ Acciones de mirada-ctl:
   quit                       apaga el compositor
 "
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::waypipe_remote_cmd;
+
+    #[test]
+    fn waypipe_envuelve_app_simple() {
+        assert_eq!(
+            waypipe_remote_cmd("user@host", &["foot".to_string()]),
+            "waypipe ssh user@host foot"
+        );
+    }
+
+    #[test]
+    fn waypipe_sin_usuario_y_con_args() {
+        assert_eq!(
+            waypipe_remote_cmd(
+                "servidor",
+                &["env".to_string(), "FOO=1".to_string(), "app".to_string()]
+            ),
+            "waypipe ssh servidor env FOO=1 app"
+        );
+    }
 }

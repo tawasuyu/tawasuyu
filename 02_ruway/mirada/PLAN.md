@@ -151,7 +151,7 @@ ventanas sueltas.
 | **Clipboard por zona** | BUILD | Somos el broker del clipboard: lo que se copia en "código" no lo lee el browser de "comunicación". Historial en `pata`. |
 | **Alt-Tab por grafo de actividad** | BUILD | Terminal lanzada desde el editor = "hija" (conocemos el linaje vía `Spawn`). Saltar entre constelaciones, no ventanas. Las constelaciones alimentan la agrupación del zoom-Z. |
 | **Workspaces por rama de Git** | BUILD | `inotify` sobre `.git/HEAD` → swap de sesión guardada. SIGSTOP, **no** CRIU. Caso especial de Fase 1. |
-| **Remote vía waypipe** | BUILD | `Spawn` que envuelve `waypipe ssh host app`. Para el compositor es un cliente más. **No** inventar protocolo. |
+| **Remote vía waypipe** | ✅ HECHO (2026-06-26) | `mirada-ctl remote [user@]host <app> [args…]` arma `waypipe ssh <host> <app…>` (helper puro `waypipe_remote_cmd`, testeado) y lo manda como `DesktopAction::Spawn` — el Cuerpo lo corre con `sh -c` y la ventana remota llega como un cliente Wayland más. **No** se inventó protocolo. Requiere `waypipe` en ambos extremos; el túnel real se prueba en sesión gráfica. |
 
 ---
 
