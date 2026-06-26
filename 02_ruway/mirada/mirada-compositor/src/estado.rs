@@ -525,4 +525,14 @@ pub(crate) struct App {
     /// (la del ratón). `usize::MAX` ⇒ aún no se empujó nada — fuerza el
     /// primer envío.
     pub(crate) greeter_active_output: usize,
+
+    /// **Clipboard por zona** (`MIRADA_CLIPBOARD_POR_ZONA=1`): cada escritorio
+    /// tiene su propio portapapeles de texto. `false` = comportamiento normal
+    /// (un solo clipboard global). Ver [`crate::zone_clipboard`].
+    pub(crate) clipboard_por_zona: bool,
+    /// Almacén del portapapeles por zona (compartido con el hilo lector que
+    /// captura la selección de un cliente al copiar). Inerte si
+    /// [`clipboard_por_zona`](Self::clipboard_por_zona) es `false`.
+    pub(crate) zone_clipboard:
+        std::sync::Arc<std::sync::Mutex<crate::zone_clipboard::ZoneClipboard>>,
 }

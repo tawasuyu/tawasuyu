@@ -103,6 +103,7 @@ mod screencopy;
 mod foreign_toplevel;
 mod switcher;
 mod text;
+mod zone_clipboard;
 
 mod estado;
 mod operaciones;

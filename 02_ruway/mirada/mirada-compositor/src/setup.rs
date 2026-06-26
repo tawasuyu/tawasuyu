@@ -398,6 +398,13 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         cursor_status: CursorImageStatus::default_named(),
         drag: None,
         dnd_paths: None,
+        clipboard_por_zona: matches!(
+            std::env::var("MIRADA_CLIPBOARD_POR_ZONA").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        ),
+        zone_clipboard: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::zone_clipboard::ZoneClipboard::new(),
+        )),
         output_size: (0, 0),
         // Con autohide, el dock arranca oculto (se revela al tocar el borde).
         shell_hidden: shell_dock().autohide,

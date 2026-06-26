@@ -13,11 +13,11 @@ use smithay::wayland::shell::xdg::{PopupSurface, PositionerState, ToplevelSurfac
 use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::wayland::selection::data_device::{set_data_device_focus, with_source_metadata, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler};
+use smithay::wayland::selection::data_device::{request_data_device_client_selection, set_data_device_focus, with_source_metadata, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler};
 use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
 use smithay::wayland::selection::primary_selection::{set_primary_focus, PrimarySelectionHandler, PrimarySelectionState};
-use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
 use smithay::input::pointer::PointerHandle;
 use smithay::input::keyboard::LedState;
@@ -523,7 +523,96 @@ impl XdgDecorationHandler for App {
 }
 
 impl SelectionHandler for App {
-    type SelectionUserData = ();
+    /// Para una selección **server-side** (la que re-ofrecemos al entrar a una
+    /// zona), guardamos la zona cuyo contenido sirve [`send_selection`].
+    type SelectionUserData = usize;
+
+    /// Un cliente fijó el portapapeles: si el clipboard por zona está activo,
+    /// **capturamos** ese texto bajo la zona actual (leyéndolo del cliente por un
+    /// pipe en un hilo, como el DnD). Si la selección actual es server-side —
+    /// nuestra propia restauración—, `request_*_client_selection` devuelve
+    /// `ServerSideSelection` y no capturamos (evita el bucle). Sólo texto.
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        seat: Seat<Self>,
+    ) {
+        if !self.clipboard_por_zona || ty != SelectionTarget::Clipboard {
+            return;
+        }
+        let zone = self.active_zone();
+        let store = self.zone_clipboard.clone();
+        let Some(source) = source else {
+            // Un cliente vació la selección → vaciamos el portapapeles de la zona.
+            store
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .record(zone, None);
+            return;
+        };
+        let mimes = source.mime_types();
+        let Some(mime) = crate::zone_clipboard::pick_text_mime(&mimes) else {
+            return; // selección binaria (imagen…): no se particiona
+        };
+        let (read_fd, write_fd) = match nix::unistd::pipe() {
+            Ok(p) => p,
+            Err(e) => {
+                dlog!("mirada: clipboard-zona pipe falló: {e}");
+                return;
+            }
+        };
+        // Pide al cliente que escriba el contenido en la punta de escritura. Si la
+        // selección es server-side (restauración nuestra), error → no capturamos.
+        if request_data_device_client_selection(&seat, mime, write_fd).is_err() {
+            return;
+        }
+        let text_mimes: Vec<String> = mimes
+            .into_iter()
+            .filter(|m| crate::zone_clipboard::is_text_mime(m))
+            .collect();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let mut f = std::fs::File::from(read_fd);
+            let _ = f.read_to_end(&mut buf);
+            store.lock().unwrap_or_else(|e| e.into_inner()).record(
+                zone,
+                Some(crate::zone_clipboard::ClipContent {
+                    mime_types: text_mimes,
+                    bytes: buf,
+                }),
+            );
+        });
+    }
+
+    /// Un cliente pega de una selección **server-side** nuestra (la que pusimos
+    /// al entrar a una zona): escribimos los bytes guardados de esa zona en el fd
+    /// (en un hilo, para no bloquear el bucle si el cliente lee lento).
+    fn send_selection(
+        &mut self,
+        ty: SelectionTarget,
+        _mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: Seat<Self>,
+        user_data: &usize,
+    ) {
+        if ty != SelectionTarget::Clipboard {
+            return;
+        }
+        let bytes = self
+            .zone_clipboard
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .for_zone(*user_data)
+            .map(|c| c.bytes.clone());
+        let Some(bytes) = bytes else { return };
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let mut f = std::fs::File::from(fd);
+            let _ = f.write_all(&bytes);
+        });
+    }
 }
 
 impl DataDeviceHandler for App {

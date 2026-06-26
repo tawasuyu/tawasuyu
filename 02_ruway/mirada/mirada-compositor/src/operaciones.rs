@@ -577,17 +577,53 @@ impl App {
 
     /// Cambia al escritorio `idx` (0-based) — confirmación del switcher de
     /// Win+Tab. Por el Cerebro embebido.
+    /// El escritorio ("zona") activo, para el clipboard por zona. `0` si no se
+    /// conoce el estado (un solo escritorio efectivo: sin particionar).
+    pub(crate) fn active_zone(&self) -> usize {
+        self.workspace_overview().map(|(a, _)| a).unwrap_or(0)
+    }
+
+    /// Al entrar a una `zone`, re-ofrece su portapapeles de texto guardado como
+    /// una selección **server-side** (o limpia la selección si esa zona no copió
+    /// nada todavía), de modo que cada escritorio tenga su propio clipboard.
+    /// No-op si el clipboard por zona está apagado. Ver [`crate::zone_clipboard`].
+    pub(crate) fn restore_zone_clipboard(&mut self, zone: usize) {
+        if !self.clipboard_por_zona {
+            return;
+        }
+        use smithay::wayland::selection::data_device::{
+            clear_data_device_selection, set_data_device_selection,
+        };
+        let mimes = self
+            .zone_clipboard
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .for_zone(zone)
+            .map(|c| c.mime_types.clone());
+        let dh = self.dh.clone();
+        match mimes {
+            Some(mimes) if !mimes.is_empty() => {
+                set_data_device_selection(&dh, &self.seat, mimes, zone)
+            }
+            _ => clear_data_device_selection(&dh, &self.seat),
+        }
+    }
+
     pub(crate) fn cambiar_workspace(&mut self, idx: usize) {
         let cmds = match &mut self.brain {
             Brain::Embedded(d) => d.apply(mirada_brain::DesktopAction::SwitchWorkspace(idx)),
             // Enlazado: el dueño externo cambia el escritorio; le mandamos el
-            // salto y él reenvía el `SetWorkspaces` actualizado.
+            // salto y él reenvía el `SetWorkspaces` actualizado. El clipboard por
+            // zona del path enlazado se restauraría al recibir ese `SetWorkspaces`
+            // (no cableado aún: el escenario de metal corre el Cerebro embebido).
             Brain::Linked(link) => {
                 let _ = link.send(&BodyEvent::SwitchWorkspace(idx as u32));
                 return;
             }
         };
         self.apply_commands(cmds);
+        // Recién ahora la zona activa es `idx`: re-ofrece su portapapeles.
+        self.restore_zone_clipboard(idx);
     }
 
     /// Atiende una petición del API de control (`mirada-ctl`).
