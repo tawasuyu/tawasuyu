@@ -240,6 +240,7 @@ members = [
     "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-icons",
     "02_ruway/llimphi/llimphi-svg",
+    "02_ruway/llimphi/llimphi-lottie",
     "02_ruway/llimphi/llimphi-gallery",
     "02_ruway/llimphi/llimphi-gpu-bench",
     "02_ruway/llimphi/android/clear-screen-android",
@@ -731,6 +732,9 @@ vello = "0.7"
 # Renderer hybrid CPU+GPU sin compute shaders (mejor compat WebGL2/Adreno viejas).
 # Opt-in; el renderer "wgpu" sigue siendo el default.
 vello_hybrid = "0.0.9"
+# velato 0.9 = reproductor de Lottie de Linebender; emite a la MISMA vello::Scene
+# que vello 0.7 (verificado: velato 0.9 clava vello 0.7). Lo consume llimphi-lottie.
+velato = "0.9"
 # Árbol de accesibilidad para lectores de pantalla (NVDA/VoiceOver/Orca/TalkBack).
 # Lo consume el runtime de Llimphi (iter 2/3 del plan AccessKit); el modelo
 # `SemanticsSpec` del compositor es independiente de estas crates.
@@ -753,6 +757,8 @@ llimphi-motion = { path = "02_ruway/llimphi/llimphi-motion" }
 llimphi-icons = { path = "02_ruway/llimphi/llimphi-icons" }
 # Puente fino vello_svg → Llimphi para SVG arbitrario (íconos .desktop, logos).
 llimphi-svg = { path = "02_ruway/llimphi/llimphi-svg" }
+# Puente fino velato (Lottie) → Llimphi para animación vectorial autorada (.json).
+llimphi-lottie = { path = "02_ruway/llimphi/llimphi-lottie" }
 llimphi-image = { path = "02_ruway/llimphi/llimphi-image" }
 # Widgets reusables sobre llimphi-ui — uno por crate.
 llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }

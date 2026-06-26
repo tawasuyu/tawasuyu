@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-lottie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-lottie — puente fino velato (Lottie) → Llimphi. Carga un .json de Lottie una vez (LottieAsset) y lo stampea en cualquier View vía paint_with a un frame/instante dado, escalado al rect. Gemelo de llimphi-svg + eje de tiempo."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+velato = { workspace = true }
