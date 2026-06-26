@@ -434,26 +434,47 @@ impl DrmState {
     pub(super) fn zone_at(&self, x: f64, y: f64) -> Option<Rect> {
         let (xi, yi) = (x.round() as i32, y.round() as i32);
         let wr = self.output_work_rect(self.output_at_point(xi, yi));
-        snap_target(wr, xi, yi, ZONE_EDGE_MARGIN)
+        let (mx, my) = zone_margins(wr, self.tiledad);
+        snap_target(wr, xi, yi, mx, my)
     }
 }
 
-/// Ancho de la banda de borde que activa el snap (estilo «aero/KDE snap»).
-pub(super) const ZONE_EDGE_MARGIN: i32 = 64;
+/// Banda de snap mínima (px) con tiledad 0: sólo el borde mismo captura — el
+/// resto del área deja caer la ventana libre (z-order, estilo Windows).
+pub(super) const ZONE_BAND_MIN: i32 = 16;
+
+/// Las **medias-bandas** de snap `(horizontal, vertical)` en px, derivadas de
+/// la *tiledad* `t∈[0,1]` y el work-rect del monitor. La banda crece como `t²`
+/// (poco snap a tiledad baja, mucho arriba) desde [`ZONE_BAND_MIN`] hasta la
+/// media-extensión del monitor: con `t=1` cualquier punto cae dentro de alguna
+/// banda → soltar tesela siempre (Hyprland); con `t≈0` sólo el borde fino hace
+/// snap y el centro queda flotante (Windows). Es la traducción del valor difuso
+/// de [`mirada_brain::Config::tiledad`] al **tamaño del área que pre-pinta** el
+/// drag-to-zone.
+pub(super) fn zone_margins(wr: Rect, t: f32) -> (i32, i32) {
+    let curve = t.clamp(0.0, 1.0).powi(2);
+    let band = |half: i32| -> i32 {
+        let half = half.max(1);
+        let m = ZONE_BAND_MIN as f32 + (half as f32 - ZONE_BAND_MIN as f32) * curve;
+        (m.round() as i32).clamp(ZONE_BAND_MIN.min(half), half)
+    };
+    (band(wr.w / 2), band(wr.h / 2))
+}
 
 /// Decisión PURA del drag-to-zone, estilo KDE6. Dado el work-rect del monitor
-/// (coords globales), el punto del puntero y el margen de borde, devuelve el
-/// **rect destino** donde aterrizará la ventana, o `None` si el puntero está en
-/// el centro (sin snap → cae libre). Prioridad: esquinas (cuartos) antes que
-/// bordes. En el borde superior: muy arriba (< margin/3) = maximizar; un poco
-/// más abajo = mitad superior.
-pub(super) fn snap_target(wr: Rect, xi: i32, yi: i32, margin: i32) -> Option<Rect> {
+/// (coords globales), el punto del puntero y las medias-bandas de borde
+/// `(mx, my)` (horizontal/vertical — ver [`zone_margins`]), devuelve el **rect
+/// destino** donde aterrizará la ventana, o `None` si el puntero está en el
+/// centro fuera de toda banda (sin snap → cae libre). Prioridad: esquinas
+/// (cuartos) antes que bordes. En el borde superior: muy arriba = maximizar; un
+/// poco más abajo = mitad superior.
+pub(super) fn snap_target(wr: Rect, xi: i32, yi: i32, mx: i32, my: i32) -> Option<Rect> {
     let dl = xi - wr.x;
     let dr = wr.x + wr.w - xi;
     let dt = yi - wr.y;
     let db = wr.y + wr.h - yi;
-    let (near_l, near_r) = (dl < margin, dr < margin);
-    let (near_t, near_b) = (dt < margin, db < margin);
+    let (near_l, near_r) = (dl < mx, dr < mx);
+    let (near_t, near_b) = (dt < my, db < my);
 
     let hw = wr.w / 2;
     let hh = wr.h / 2;
@@ -481,7 +502,11 @@ pub(super) fn snap_target(wr: Rect, xi: i32, yi: i32, margin: i32) -> Option<Rec
     }
     // Bordes.
     if near_t {
-        return Some(if dt < margin / 3 { wr } else { top }); // maximizar / mitad sup
+        // Tira fina al tope = maximizar; el resto de la banda = mitad superior.
+        // El umbral sigue a la banda vertical pero se acota para que maximizar
+        // sea un gesto deliberado del borde, no media pantalla a tiledad alta.
+        let max_strip = (my / 3).clamp(6, 48);
+        return Some(if dt < max_strip { wr } else { top });
     }
     if near_b {
         return Some(bottom);
@@ -497,49 +522,98 @@ pub(super) fn snap_target(wr: Rect, xi: i32, yi: i32, margin: i32) -> Option<Rec
 
 #[cfg(test)]
 mod zone_tests {
-    use super::{snap_target, Rect};
+    use super::{snap_target, zone_margins, Rect, ZONE_BAND_MIN};
 
     const WR: Rect = Rect { x: 0, y: 0, w: 1920, h: 1080 };
     const M: i32 = 64;
 
     #[test]
     fn esquina_superior_izquierda_es_un_cuarto() {
-        assert_eq!(snap_target(WR, 10, 10, M), Some(Rect::new(0, 0, 960, 540)));
+        assert_eq!(snap_target(WR, 10, 10, M, M), Some(Rect::new(0, 0, 960, 540)));
     }
 
     #[test]
     fn borde_superior_muy_arriba_maximiza() {
         // y=5 (< margin/3=21) en el medio horizontal → pantalla completa.
-        assert_eq!(snap_target(WR, 960, 5, M), Some(WR));
+        assert_eq!(snap_target(WR, 960, 5, M, M), Some(WR));
     }
 
     #[test]
     fn borde_superior_un_poco_mas_abajo_es_mitad_superior() {
         // y=40 (> 21, < 64) → mitad superior.
-        assert_eq!(snap_target(WR, 960, 40, M), Some(Rect::new(0, 0, 1920, 540)));
+        assert_eq!(snap_target(WR, 960, 40, M, M), Some(Rect::new(0, 0, 1920, 540)));
     }
 
     #[test]
     fn borde_inferior_es_mitad_inferior() {
-        assert_eq!(snap_target(WR, 960, 1075, M), Some(Rect::new(0, 540, 1920, 540)));
+        assert_eq!(snap_target(WR, 960, 1075, M, M), Some(Rect::new(0, 540, 1920, 540)));
     }
 
     #[test]
     fn bordes_laterales_son_mitades() {
-        assert_eq!(snap_target(WR, 10, 540, M), Some(Rect::new(0, 0, 960, 1080)));
-        assert_eq!(snap_target(WR, 1915, 540, M), Some(Rect::new(960, 0, 960, 1080)));
+        assert_eq!(snap_target(WR, 10, 540, M, M), Some(Rect::new(0, 0, 960, 1080)));
+        assert_eq!(snap_target(WR, 1915, 540, M, M), Some(Rect::new(960, 0, 960, 1080)));
     }
 
     #[test]
     fn el_centro_no_hace_snap() {
-        assert_eq!(snap_target(WR, 960, 540, M), None);
+        assert_eq!(snap_target(WR, 960, 540, M, M), None);
     }
 
     #[test]
     fn respeta_el_origen_del_monitor() {
         // Monitor secundario con origen (1920,0): borde izq = x=1920.
         let wr = Rect::new(1920, 0, 1920, 1080);
-        assert_eq!(snap_target(wr, 1930, 540, M), Some(Rect::new(1920, 0, 960, 1080)));
-        assert_eq!(snap_target(wr, 2880, 540, M), None); // centro
+        assert_eq!(snap_target(wr, 1930, 540, M, M), Some(Rect::new(1920, 0, 960, 1080)));
+        assert_eq!(snap_target(wr, 2880, 540, M, M), None); // centro
+    }
+
+    // --- Tiledad → tamaño de la banda de drag-to-zone --------------------
+
+    #[test]
+    fn tiledad_cero_es_banda_minima() {
+        // Flotante puro: sólo el borde fino captura.
+        let (mx, my) = zone_margins(WR, 0.0);
+        assert_eq!(mx, ZONE_BAND_MIN);
+        assert_eq!(my, ZONE_BAND_MIN);
+    }
+
+    #[test]
+    fn tiledad_uno_cubre_media_extension() {
+        // Teselado puro: la banda llega a la media-extensión → casi todo punto
+        // cae en alguna banda y tesela al soltar.
+        let (mx, my) = zone_margins(WR, 1.0);
+        assert_eq!(mx, WR.w / 2);
+        assert_eq!(my, WR.h / 2);
+    }
+
+    #[test]
+    fn tiledad_crece_monotona_y_la_banda_la_sigue() {
+        // Más tiledad ⇒ banda no menor (y estrictamente mayor entre extremos).
+        let bandas: Vec<i32> = [0.0_f32, 0.2, 0.5, 0.8, 1.0]
+            .iter()
+            .map(|&t| zone_margins(WR, t).0)
+            .collect();
+        for w in bandas.windows(2) {
+            assert!(w[1] >= w[0]);
+        }
+        assert!(bandas[0] < bandas[4]);
+    }
+
+    #[test]
+    fn tiledad_baja_deja_libre_el_centro_pero_alta_lo_tesela() {
+        // Mismo punto (centro-ish, lejos de bordes): a tiledad baja cae libre,
+        // a tiledad alta hace snap. Esa es la diferencia Windows↔Hyprland.
+        let p = (700, 400); // dentro pero lejos del borde
+        let (lo_x, lo_y) = zone_margins(WR, 0.15);
+        assert_eq!(snap_target(WR, p.0, p.1, lo_x, lo_y), None);
+        let (hi_x, hi_y) = zone_margins(WR, 0.95);
+        assert!(snap_target(WR, p.0, p.1, hi_x, hi_y).is_some());
+    }
+
+    #[test]
+    fn tiledad_se_clampa_fuera_de_rango() {
+        assert_eq!(zone_margins(WR, -3.0), zone_margins(WR, 0.0));
+        assert_eq!(zone_margins(WR, 9.0), zone_margins(WR, 1.0));
     }
 }

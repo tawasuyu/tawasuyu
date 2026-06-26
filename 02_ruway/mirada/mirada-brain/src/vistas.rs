@@ -85,6 +85,7 @@ impl Vista {
 
 /// Config base de una vista: arranca del default y se le pisan los campos de
 /// aspecto. Así hereda menú raíz, dropterm, overview, etc. sin repetirlos.
+#[allow(clippy::too_many_arguments)]
 fn skin(
     theme: &str,
     layout: LayoutMode,
@@ -93,6 +94,7 @@ fn skin(
     titlebar_height: i32,
     border_focus: [u8; 4],
     border_normal: [u8; 4],
+    tiledad: f32,
 ) -> Config {
     Config {
         theme: theme.to_string(),
@@ -102,6 +104,7 @@ fn skin(
         titlebar_height,
         border_focus,
         border_normal,
+        tiledad,
         ..Config::default()
     }
 }
@@ -117,7 +120,8 @@ fn vista_mirada() -> Vista {
 }
 
 /// **Windows XP "Luna"** — barras de título altas azules, marco grueso, tema
-/// celeste, teclas estilo Windows (Alt+Tab / Alt+F4 / Win+E).
+/// celeste, teclas estilo Windows (Alt+Tab / Alt+F4 / Win+E). Tiledad baja:
+/// ventanas flotantes con z-order y un snap discreto en bordes/esquinas (aero).
 fn vista_windows_xp() -> Vista {
     Vista {
         name: "windows-xp",
@@ -131,11 +135,13 @@ fn vista_windows_xp() -> Vista {
             28,
             [36, 94, 220, 255],  // azul Luna con foco
             [122, 152, 206, 255], // celeste sin foco
+            0.2,
         ),
     }
 }
 
 /// **macOS** — barra de título fina, marco de 1px, tema claro, teclas ⌘.
+/// Tiledad muy baja: ventanas flotantes; el snap es mínimo (sólo el borde).
 fn vista_mac() -> Vista {
     Vista {
         name: "mac",
@@ -149,6 +155,7 @@ fn vista_mac() -> Vista {
             24,
             [10, 132, 255, 255],
             [208, 208, 215, 255],
+            0.15,
         ),
     }
 }
@@ -168,12 +175,15 @@ fn vista_kde() -> Vista {
             26,
             [61, 174, 233, 255],
             [188, 192, 196, 255],
+            0.55,
         ),
     }
 }
 
 /// **Hyprland** — sin barra de título, marco fino con acento, margen amplio
 /// (aire de gaps redondeados), teselado en espiral (dwindle), tema oscuro.
+/// Tiledad casi máxima: soltar en casi cualquier lado tesela a la región más
+/// cercana — flotar es la excepción, no la regla.
 fn vista_hyprland() -> Vista {
     Vista {
         name: "hyprland",
@@ -187,12 +197,13 @@ fn vista_hyprland() -> Vista {
             0,
             [110, 140, 220, 255],
             [46, 54, 70, 255],
+            0.95,
         ),
     }
 }
 
 /// **dwm** — minimalismo puro: sin barra de título, marco de 1px, sin margen,
-/// maestra+pila, tema oscuro.
+/// maestra+pila, tema oscuro. Tiledad casi máxima: teselado de cuerpo entero.
 fn vista_dwm() -> Vista {
     Vista {
         name: "dwm",
@@ -206,6 +217,7 @@ fn vista_dwm() -> Vista {
             0,
             [110, 140, 220, 255],
             [46, 54, 70, 255],
+            0.95,
         ),
     }
 }
@@ -225,6 +237,7 @@ fn vista_windows_31() -> Vista {
             20,
             [0, 0, 128, 255],       // azul marino con foco
             [128, 128, 128, 255],   // gris Motif sin foco
+            0.1,
         ),
     }
 }
@@ -244,6 +257,7 @@ fn vista_solaris() -> Vista {
             22,
             [64, 132, 132, 255],    // teal CDE con foco
             [108, 116, 134, 255],   // gris Motif sin foco
+            0.25,
         ),
     }
 }
@@ -302,5 +316,20 @@ mod tests {
         let hypr = Vista::by_name("hyprland").unwrap().config;
         assert_eq!(hypr.titlebar_height, 0);
         assert_eq!(hypr.layout, LayoutMode::Spiral);
+    }
+
+    #[test]
+    fn la_tiledad_ordena_de_flotante_a_teselado() {
+        // Las vistas «de ventanas» teselan poco; las tiling, casi todo. El
+        // nativo queda en el medio (KDE6 equilibrado).
+        let t = |n: &str| Vista::by_name(n).unwrap().config.tiledad;
+        assert!(t("mac") < t("windows-xp"), "mac flota más que XP");
+        assert!(t("windows-xp") < t("mirada"), "XP flota más que el nativo");
+        assert!(t("mirada") < t("hyprland"), "el nativo tesela menos que hyprland");
+        assert_eq!(t("dwm"), t("hyprland")); // ambos teselado puro
+        // Todo el rango es difuso y válido.
+        for v in Vista::all() {
+            assert!((0.0..=1.0).contains(&v.config.tiledad), "{} fuera de rango", v.name);
+        }
     }
 }

@@ -143,6 +143,8 @@ impl DrmState {
                 self.active_preset = 0;
             }
             self.zones = self.zone_presets.get(self.active_preset).cloned().unwrap_or_default();
+            // Tiledad del perfil nuevo: cambia el tamaño de la banda de snap.
+            self.tiledad = self.app.config_tiledad();
             self.root_menu = None; // un menú abierto puede quedar obsoleto
             self.menu_output_idx = None;
             // Config nueva (wallpaper, fuente, menú): todo puede repintarse.

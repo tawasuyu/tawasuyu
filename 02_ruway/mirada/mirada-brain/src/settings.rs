@@ -137,6 +137,14 @@ impl Configurable for Config {
                         "focus_follows_mouse",
                         "El foco sigue al puntero",
                         self.focus_follows_mouse,
+                    ))
+                    .field(Field::slider(
+                        "tiledad",
+                        "Tiledad (flotante ↔ teselado)",
+                        self.tiledad as f64,
+                        0.0,
+                        1.0,
+                        0.05,
                     )),
             )
             .section(
@@ -443,6 +451,11 @@ impl Configurable for Config {
             "focus_follows_mouse" => {
                 if let Some(b) = value.as_bool() {
                     self.focus_follows_mouse = b;
+                }
+            }
+            "tiledad" => {
+                if let Some(v) = value.as_float() {
+                    self.tiledad = (v as f32).clamp(0.0, 1.0);
                 }
             }
             "border_width" => {
@@ -877,6 +890,18 @@ mod tests {
         assert_eq!(c.gap, 16);
         assert!((c.master_ratio - 0.7).abs() < 1e-6);
         assert_eq!(c.border_focus, [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn apply_tiledad_se_acota_a_la_unidad() {
+        let mut c = Config::default();
+        c.apply(&"teselado.tiledad".into(), FieldValue::Float(0.85))
+            .unwrap();
+        assert!((c.tiledad - 0.85).abs() < 1e-6);
+        // Fuera de [0,1] se recorta, no rompe.
+        c.apply(&"teselado.tiledad".into(), FieldValue::Float(3.0))
+            .unwrap();
+        assert_eq!(c.tiledad, 1.0);
     }
 
     #[test]

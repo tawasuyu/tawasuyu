@@ -208,6 +208,16 @@ pub struct Config {
     /// atajo) cicla `zones → preset 0 → preset 1 → … → zones`. Cada preset es
     /// una lista de zonas como [`Self::zones`].
     pub zone_presets: Vec<Vec<ZoneCfg>>,
+    /// **Tiledad** — afinidad *difusa* al teselado al arrastrar, `0.0..=1.0`.
+    /// Gradúa el tamaño del **área de drag-to-zone**: la banda de borde que el
+    /// compositor pre-pinta y dentro de la cual, al soltar, la ventana se ancla
+    /// a una región (mitad/cuarto/maximizar). `0.0` ≈ flotante puro estilo
+    /// Windows — sólo bordes/esquinas finos hacen snap y el resto cae libre por
+    /// z-order; `1.0` ≈ teselado puro estilo Hyprland — soltar en casi cualquier
+    /// lado tesela a la región más cercana. La banda crece como `t²` (poco snap
+    /// abajo, todo arriba). El nativo (`0.5`) es un KDE6 equilibrado; cada vista
+    /// de [`crate::vistas`] fija el suyo.
+    pub tiledad: f32,
     /// Cómo se reparten los monitores en el escritorio global cuando hay más
     /// de uno: `"horizontal"` (uno al lado del otro, default) o `"vertical"`
     /// (uno encima del otro). El orden lo dicta [`OutputOverride::order`].
@@ -378,6 +388,12 @@ impl Config {
 /// Default de [`Config::slide_ms`]: un slide ágil.
 fn default_slide_ms() -> u32 {
     220
+}
+
+/// Default de [`Config::tiledad`]: un KDE6 equilibrado — drag-to-zone con
+/// bandas moderadas, ni flotante puro ni teselado puro.
+fn default_tiledad() -> f32 {
+    0.5
 }
 
 /// Default de [`Config::cursor_theme`]: el set propio de mirada.
@@ -880,6 +896,7 @@ impl Default for Config {
             menu: default_root_menu(),
             zones: default_zones(),
             zone_presets: default_zone_presets(),
+            tiledad: default_tiledad(),
             output_direction: "horizontal".to_string(),
             outputs: Vec::new(),
             startup: Vec::new(),

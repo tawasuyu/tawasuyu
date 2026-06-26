@@ -655,6 +655,12 @@ struct DrmState {
     zone_presets: Vec<Vec<ZoneFrac>>,
     /// Índice del preset activo dentro de [`Self::zone_presets`].
     active_preset: usize,
+    /// **Tiledad** difusa del perfil activo (`0.0..=1.0`): gradúa el tamaño de
+    /// la banda de drag-to-zone. `0.0` ≈ flotante puro (sólo bordes finos hacen
+    /// snap); `1.0` ≈ teselado puro (soltar en casi cualquier lado tesela). La
+    /// usa [`Self::zone_at`] vía [`super::outputs::zone_margins`]. Se recarga
+    /// en caliente con la config.
+    tiledad: f32,
     /// Rect destino (global) del drag-to-zone resaltado bajo el puntero durante
     /// un arrastre. `None` = sin snap (la ventana cae libre). Lo calcula
     /// [`Self::zone_at`] (snap por borde estilo KDE).
@@ -1206,6 +1212,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     }
     let menu_entries = app.config_menu();
     let zones = app.config_zones();
+    let tiledad = app.config_tiledad();
     // Drag-to-zone estilo KDE: el snap se calcula por proximidad al borde
     // (esquinas→cuartos, arriba→maximizar/mitad-sup, abajo→mitad-inf,
     // izq/der→mitades). Siempre activo, no depende de la lista de zonas.
@@ -1269,6 +1276,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         zones,
         zone_presets,
         active_preset: 0,
+        tiledad,
         drag_zone: None,
         preset_hud_until: None,
         preset_hud_label: String::new(),

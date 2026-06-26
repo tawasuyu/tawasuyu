@@ -1009,6 +1009,17 @@ impl App {
         }
     }
 
+    /// La **tiledad** difusa de la config (`0.0..=1.0`): cuán grande es el área
+    /// de drag-to-zone (la banda de borde que pre-pinta y captura la ventana al
+    /// soltar). Cerebro enlazado → el equilibrado `0.5`. Ver
+    /// [`mirada_brain::Config::tiledad`].
+    pub(crate) fn config_tiledad(&self) -> f32 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().tiledad.clamp(0.0, 1.0),
+            Brain::Linked(_) => 0.5,
+        }
+    }
+
     /// Lanza `cmd` como el usuario de la sesión (igual que [`BodyOp::Spawn`]),
     /// salvo con un shell de credenciales arriba (greeter o lock), donde no se
     /// lanza nada. Lo usa el menú raíz.
