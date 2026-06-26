@@ -21,6 +21,7 @@ llimphi-widget-app-header = { workspace = true }
 llimphi-widget-banner = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }

@@ -47,6 +47,7 @@ use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
@@ -57,6 +58,16 @@ use llimphi_widget_menubar::{
 use app_bus::{AppMenu, Menu, MenuItem};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la misma
+/// etiqueta produce siempre la misma key entre rebuilds, así un nodo sólo
+/// anima la PRIMERA vez que aparece).
+fn key_of(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 /// Los 7 namespaces que `CapabilitySet::can_create_ns` sabe evaluar, en
 /// el orden en que se muestran. (NsKind no expone un `all()`.)
@@ -438,6 +449,9 @@ struct Model {
     context_menu: Option<(f32, f32)>,
     /// Mantiene vivo el watcher de wawa-config (su thread muere al dropear).
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    /// Hay una cadena de repaints a ~50ms en vuelo para animar el shimmer del
+    /// skeleton del brain mientras se lo consulta (evita rearmar dos).
+    shimmering: bool,
 }
 
 #[derive(Clone)]
@@ -471,6 +485,70 @@ enum Msg {
     /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
     /// de ventana sobre la unidad seleccionada. Sin selección es no-op.
     ContextMenuOpen(f32, f32),
+    /// Repaint del shimmer del skeleton del brain. Se auto-rearma sólo mientras
+    /// el brain sigue en consulta inicial (ver `ensure_shimmer`).
+    Shimmer,
+}
+
+/// Arranca/mantiene una cadena de repaints a ~50ms mientras el brain está en
+/// su consulta inicial (`Consultando`), para que el shimmer del skeleton
+/// corra. Se auto-detiene al llegar la respuesta (Live/Offline) — no queda un
+/// loop de repaint ocioso.
+fn ensure_shimmer(m: &mut Model, handle: &Handle<Msg>) {
+    if m.shimmering || !matches!(m.brain, BrainStatus::Consultando) {
+        return;
+    }
+    m.shimmering = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        Msg::Shimmer
+    });
+}
+
+/// Placeholder con shimmer para la sección brain mientras se la consulta: el
+/// usuario ve la silueta de una stat-card llegando, no un hueco. Requiere los
+/// repaints de `ensure_shimmer` para animarse.
+fn skeleton_card(theme: &Theme) -> View<Msg> {
+    let pal = SkeletonPalette::from_theme(theme);
+    let block = |w: Dimension, h: f32| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: w,
+                height: length(h),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .radius(4.0)
+        .clip(true)
+        .children(vec![skeleton_view(&pal)])
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(108.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(8.0_f32),
+        },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(8.0)
+    .children(vec![
+        block(length(120.0_f32), 14.0),
+        block(length(64.0_f32), 24.0),
+        block(percent(0.9_f32), 11.0),
+        block(percent(0.8_f32), 11.0),
+    ])
 }
 
 struct ArjeCard;
@@ -504,7 +582,7 @@ impl App for ArjeCard {
         // Consulta inicial al brain en background (no esperar al primer tick).
         handle.spawn(move || Msg::BrainRefresh(query_brain(&brain_path())));
 
-        Model {
+        let mut m = Model {
             theme,
             snapshot: CapsSnapshot::detect(),
             units: detect_units(),
@@ -518,7 +596,12 @@ impl App for ArjeCard {
             selected_unit: None,
             context_menu: None,
             _wawa_watcher: watcher,
-        }
+            shimmering: false,
+        };
+        // Arranca el shimmer del skeleton mientras llega la primera respuesta
+        // del brain.
+        ensure_shimmer(&mut m, handle);
+        m
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -614,7 +697,14 @@ impl App for ArjeCard {
                     m.context_menu = Some((x, y));
                 }
             }
+            Msg::Shimmer => {
+                // El thread durmió 50ms; `ensure_shimmer` (abajo) rearma sólo
+                // si el brain sigue en consulta.
+                m.shimmering = false;
+            }
         }
+        // Si el brain sigue consultándose, mantené el shimmer animado.
+        ensure_shimmer(&mut m, handle);
         m
     }
 
@@ -845,7 +935,10 @@ impl App for ArjeCard {
                     theme.fg_text,
                     llimphi_ui::llimphi_text::Alignment::Start,
                 )
-                .on_click(Msg::SelectUnit(i));
+                .on_click(Msg::SelectUnit(i))
+                // Cada fila entra con un pop-in la primera vez que su unidad
+                // aparece (key estable por etiqueta) — las nuevas se anuncian.
+                .animated_enter(key_of(label), motion::NORMAL);
                 body_children.push(row);
             }
         }
@@ -853,7 +946,11 @@ impl App for ArjeCard {
         // Sección brain — opcional. El brain corre como daemon aparte; si no
         // está, la card de aislamiento sirve igual.
         match &model.brain {
-            BrainStatus::Consultando => {}
+            // Mientras llega la primera respuesta del brain mostramos la
+            // silueta de su stat-card con shimmer, en vez de un hueco.
+            BrainStatus::Consultando => {
+                body_children.push(skeleton_card(theme));
+            }
             BrainStatus::Offline(e) => {
                 body_children.push(banner_view::<Msg>(
                     BannerKind::Info,
@@ -869,14 +966,19 @@ impl App for ArjeCard {
                     format!("muestras  {}", b.sample_size),
                     format!("tipos de evento  {}", b.distinct_kinds),
                 ];
-                body_children.push(stat_card_view::<Msg>(
-                    "Brain",
-                    b.rules.to_string(),
-                    "reglas vivas en el motor",
-                    accent_brain,
-                    &brain_items,
-                    &stat_palette,
-                ));
+                body_children.push(
+                    stat_card_view::<Msg>(
+                        "Brain",
+                        b.rules.to_string(),
+                        "reglas vivas en el motor",
+                        accent_brain,
+                        &brain_items,
+                        &stat_palette,
+                    )
+                    // El resultado del brain entra con fade una vez, al
+                    // reemplazar al skeleton — no salta de golpe.
+                    .animated_enter(key_of("brain-card"), motion::NORMAL),
+                );
 
                 // Vista dedicada de atestación al arranque (A3): resumen N✓/M✗
                 // + veredicto por unidad. Sólo aparece si el boot atestó algo.
