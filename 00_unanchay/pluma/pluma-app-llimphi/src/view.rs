@@ -360,9 +360,50 @@ fn efectivo_objetivo(model: &Model, id: Uuid) -> EstiloTexto {
     let e = model.estilos.get(&id);
     let base = e.map(|e| e.base.clone()).unwrap_or_default();
     match model.objetivo_estilo {
+        ObjetivoEstilo::Lienzo => base,
         ObjetivoEstilo::Zona(z) => e.map(|e| e.estilo_de_zona(z)).unwrap_or(base),
-        _ => base,
+        ObjetivoEstilo::Seleccion => {
+            // Estilo efectivo en el inicio de la selección (o caret) del editor
+            // activo: base ⊕ zona ⊕ spans que cubren ese offset. Así los
+            // switches/combos reflejan el estado real de lo seleccionado.
+            if model.activo != Some(id) {
+                return base;
+            }
+            let Some(e) = e else { return base };
+            let ide = &model.ide;
+            let buffer = &ide.state.buffer;
+            let (s, _) = ide.state.cursor.selection_range(buffer);
+            let (line, col) = buffer.offset_to_pos(s);
+            let mut ef = base;
+            if let Some(z) = ide.zona_de_linea(line) {
+                if let Some(zo) = e.por_zona.get(&z) {
+                    ef = ef.merge(zo);
+                }
+            }
+            if let Some(atom) = ide.atom_id_en_linea(line) {
+                let off = offset_en_atomo(ide, atom, line, col);
+                for sp in e.spans_de(atom) {
+                    if sp.ini <= off && off < sp.fin {
+                        ef = ef.merge(&sp.estilo);
+                    }
+                }
+            }
+            ef
+        }
     }
+}
+
+/// Offset de char (relativo al contenido del átomo) de la posición `(line,col)`
+/// del buffer — espejo del cálculo de `seleccion_spans` en update.rs.
+fn offset_en_atomo(ide: &CuerpoIde, atom: Uuid, line: usize, col: usize) -> usize {
+    let Some((atom_start, _)) = ide.posicion_de_atom(atom) else {
+        return col;
+    };
+    let mut base = 0usize;
+    for k in atom_start..line {
+        base += ide.state.buffer.line_len_chars(k) + 1;
+    }
+    base + col
 }
 
 /// Panel de estilo del lienzo `id` (pane derecho), estilo Office: objetivo

@@ -942,13 +942,28 @@ fn estilo_reset(model: &mut Model) {
         return;
     };
     let objetivo = model.objetivo_estilo;
+    // Para Selección, limpiar sólo los átomos involucrados (no todo el lienzo).
+    let atomos_sel: Vec<Uuid> = match objetivo {
+        ObjetivoEstilo::Seleccion if model.activo == Some(id) => {
+            seleccion_spans(&model.ide).into_iter().map(|(a, _, _)| a).collect()
+        }
+        _ => Vec::new(),
+    };
     let e = model.estilos.entry(id).or_default();
     match objetivo {
         ObjetivoEstilo::Lienzo => e.base = EstiloTexto::default(),
         ObjetivoEstilo::Zona(z) => {
             e.por_zona.remove(&z);
         }
-        ObjetivoEstilo::Seleccion => e.por_span.clear(),
+        ObjetivoEstilo::Seleccion => {
+            if atomos_sel.is_empty() {
+                e.por_span.clear(); // sin selección: limpia todos (como antes)
+            } else {
+                for a in &atomos_sel {
+                    e.limpiar_spans(*a);
+                }
+            }
+        }
     }
     let estilo = e.clone();
     let _ = model.store.put_estilo(id, &estilo);
