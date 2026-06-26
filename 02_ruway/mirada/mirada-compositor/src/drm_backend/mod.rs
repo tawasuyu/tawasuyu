@@ -133,6 +133,11 @@ struct OutputCtx {
     /// `true` el render en que llegó un frame nuevo para esta salida: gatea el
     /// re-subir el buffer. Se limpia al componer en `emit_wallpaper`.
     video_dirty: bool,
+    /// **Fondo desenfocado** (frosted/glass) de esta salida + su tamaño. Copia
+    /// del wallpaper pasada por blur de caja, recalculada cuando el wallpaper se
+    /// rearma. La usa el chrome glass (menú raíz) como backdrop. `None` con glass
+    /// apagado (`glass_blur = 0`) o fuente sin bytes (video).
+    wallpaper_blur: Option<(MemoryRenderBuffer, (i32, i32))>,
     /// `true` entre que esta salida encola un page-flip y llega su VBlank.
     pending_flip: bool,
 }
@@ -300,12 +305,71 @@ fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32, bw: i32) -> [(i32, i32, i32,
     ]
 }
 
+/// **Blur de caja separable** (3 pasadas ≈ gaussiana) sobre BGRA `w×h`,
+/// ventana-deslizante O(n) por fila/columna. Devuelve un buffer nuevo. Para el
+/// fondo *frosted* (glassmorphism): se calcula **una vez** cuando el wallpaper se
+/// rearma (no por frame). Ignora alfa (el fondo es opaco). Pura.
+fn box_blur_bgra(src: &[u8], w: i32, h: i32, radius: i32) -> Vec<u8> {
+    let (wu, hu) = (w.max(0) as usize, h.max(0) as usize);
+    if radius <= 0 || wu == 0 || hu == 0 || src.len() < wu * hu * 4 {
+        return src.to_vec();
+    }
+    let r = radius as usize;
+    let mut a = src.to_vec();
+    let mut b = vec![0u8; a.len()];
+    // Promedio deslizante de una línea de `n` píxeles con `stride` bytes entre
+    // ellos (4 para filas, w*4 para columnas), 3 canales (BGR), saltando alfa.
+    let blur_line = |inp: &[u8], out: &mut [u8], start: usize, n: usize, stride: usize| {
+        let win = (2 * r + 1) as i64;
+        for c in 0..3 {
+            let mut sum: i64 = 0;
+            for k in 0..=r.min(n - 1) {
+                sum += inp[start + k * stride + c] as i64;
+            }
+            // El borde se repite (clamp): cuenta `r+1` muestras al inicio.
+            let mut count: i64 = (r + 1) as i64;
+            for i in 0..n {
+                out[start + i * stride + c] = (sum / count.max(1)) as u8;
+                let add = i + r + 1;
+                let sub = i as i64 - r as i64;
+                if add < n {
+                    sum += inp[start + add * stride + c] as i64;
+                    if count < win {
+                        count += 1;
+                    }
+                }
+                if sub >= 0 {
+                    sum -= inp[start + sub as usize * stride + c] as i64;
+                    if add >= n {
+                        count -= 1;
+                    }
+                }
+            }
+        }
+    };
+    for _ in 0..3 {
+        for y in 0..hu {
+            blur_line(&a, &mut b, y * wu * 4, wu, 4);
+        }
+        for x in 0..wu {
+            blur_line(&b, &mut a, x * 4, hu, wu * 4);
+        }
+    }
+    // El alfa: el fondo es opaco.
+    for px in a.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    a
+}
+
 /// Gradiente vertical sobrio (noche profunda → púrpura → azul-medianoche),
 /// generado runtime. Es el **fallback** cuando el wallpaper de marca no
-/// decodifica; el default real sin config es [`make_marca_wallpaper`].
-fn make_default_wallpaper(w: i32, h: i32) -> MemoryRenderBuffer {
-    let w_u = w as usize;
-    let h_u = h as usize;
+/// decodifica; el default real sin config es [`make_marca_wallpaper`]. Devuelve
+/// bytes BGRA (el llamante los envuelve con [`bgra_membuffer`]; el glass los
+/// reusa para el blur).
+fn make_default_wallpaper(w: i32, h: i32) -> Vec<u8> {
+    let w_u = w.max(1) as usize;
+    let h_u = h.max(1) as usize;
     let mut bgra = vec![0u8; w_u * h_u * 4];
     let stops: [(f32, [u8; 3]); 3] = [
         (0.0, [0x0a, 0x0e, 0x22]),
@@ -325,18 +389,11 @@ fn make_default_wallpaper(w: i32, h: i32) -> MemoryRenderBuffer {
             row[i + 3] = 255;
         }
     }
-    MemoryRenderBuffer::from_slice(
-        &bgra,
-        Fourcc::Argb8888,
-        (w, h),
-        1,
-        Transform::Normal,
-        None,
-    )
+    bgra
 }
 
-/// Buffer de color sólido `w×h` (BGRA opaco).
-fn make_solid_wallpaper(rgb: [u8; 3], w: i32, h: i32) -> MemoryRenderBuffer {
+/// Bytes BGRA de color sólido `w×h` (opaco).
+fn make_solid_wallpaper(rgb: [u8; 3], w: i32, h: i32) -> Vec<u8> {
     let (w_u, h_u) = (w.max(1) as usize, h.max(1) as usize);
     let mut bgra = vec![0u8; w_u * h_u * 4];
     for px in bgra.chunks_exact_mut(4) {
@@ -345,12 +402,12 @@ fn make_solid_wallpaper(rgb: [u8; 3], w: i32, h: i32) -> MemoryRenderBuffer {
         px[2] = rgb[0];
         px[3] = 255;
     }
-    MemoryRenderBuffer::from_slice(&bgra, Fourcc::Argb8888, (w, h), 1, Transform::Normal, None)
+    bgra
 }
 
-/// Gradiente vertical `w×h` (BGRA opaco) a partir de stops RGB equiespaciados.
-/// Con menos de 2 stops cae al gradiente sobrio por defecto.
-fn make_gradient_wallpaper(stops_rgb: &[[u8; 3]], w: i32, h: i32) -> MemoryRenderBuffer {
+/// Bytes BGRA de un gradiente vertical `w×h` (opaco) a partir de stops RGB
+/// equiespaciados. Con menos de 2 stops cae al gradiente sobrio por defecto.
+fn make_gradient_wallpaper(stops_rgb: &[[u8; 3]], w: i32, h: i32) -> Vec<u8> {
     if stops_rgb.len() < 2 {
         return make_default_wallpaper(w, h);
     }
@@ -374,19 +431,18 @@ fn make_gradient_wallpaper(stops_rgb: &[[u8; 3]], w: i32, h: i32) -> MemoryRende
             row[i + 3] = 255;
         }
     }
-    MemoryRenderBuffer::from_slice(&bgra, Fourcc::Argb8888, (w, h), 1, Transform::Normal, None)
+    bgra
 }
 
-/// Fondo **procedural** `w×h` (BGRA opaco): delega en `mirada-procedural`. Seed
-/// fijo → determinista por tamaño (mismo patrón en cada arranque/monitor).
+/// Bytes BGRA de un fondo **procedural** `w×h` (opaco): delega en
+/// `mirada-procedural`. Seed fijo → determinista por tamaño.
 fn make_procedural_wallpaper(
     pattern: mirada_procedural::Pattern,
     palette: &[[u8; 3]],
     w: i32,
     h: i32,
-) -> MemoryRenderBuffer {
-    let bgra = mirada_procedural::generate_bgra(pattern, palette, w.max(1) as u32, h.max(1) as u32, 1);
-    MemoryRenderBuffer::from_slice(&bgra, Fourcc::Argb8888, (w, h), 1, Transform::Normal, None)
+) -> Vec<u8> {
+    mirada_procedural::generate_bgra(pattern, palette, w.max(1) as u32, h.max(1) as u32, 1)
 }
 
 /// Interpola entre stops `(t, rgb)` para `t in 0..1`. Lineal por tramo.
@@ -488,7 +544,7 @@ fn load_wallpaper(
     fit: mirada_brain::WallpaperFit,
     w: i32,
     h: i32,
-) -> Option<MemoryRenderBuffer> {
+) -> Option<Vec<u8>> {
     if w <= 0 || h <= 0 {
         return None;
     }
@@ -509,7 +565,7 @@ fn make_marca_wallpaper(
     fit: mirada_brain::WallpaperFit,
     w: i32,
     h: i32,
-) -> Option<MemoryRenderBuffer> {
+) -> Option<Vec<u8>> {
     if w <= 0 || h <= 0 {
         return None;
     }
@@ -532,7 +588,7 @@ fn compose_wallpaper(
     fit: mirada_brain::WallpaperFit,
     w: i32,
     h: i32,
-) -> Option<MemoryRenderBuffer> {
+) -> Option<Vec<u8>> {
     use mirada_brain::WallpaperFit;
     let rgba = img.to_rgba8();
     let sw = rgba.width() as i32;
@@ -591,14 +647,7 @@ fn compose_wallpaper(
         }
     }
 
-    Some(MemoryRenderBuffer::from_slice(
-        &bgra,
-        Fourcc::Argb8888,
-        (w, h),
-        1,
-        Transform::Normal,
-        None,
-    ))
+    Some(bgra)
 }
 
 /// Pega un bloque RGBA de `(iw, ih)` en un lienzo BGRA `(dw, dh)` con esquina
@@ -1166,6 +1215,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             video_wp: None,
             video_frame: None,
             video_dirty: false,
+            wallpaper_blur: None,
             pending_flip: presento_inicial,
         });
     }

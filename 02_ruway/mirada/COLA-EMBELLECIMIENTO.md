@@ -30,12 +30,21 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       `render_elements!{ Frame<=GlesRenderer>; … }` (el path DRM sólo usa ese; el
       winit no usa este enum). Habilita `Frame::Rounded` (`TextureShaderElement`)
       y, a futuro, cualquier elemento por-shader GPU **incluido el glass**.
-- [ ] **Glassmorphism** (parte C, el «wow» caro) — **ya desbloqueado**. Multi-pase:
-      capturar el backdrop detrás de la superficie → downsample → N blur separables
-      → upsample → componer con tinte + filo. Reusa `Offscreen<GlesTexture>` +
-      `compile_custom_pixel_shader`/`PixelShaderElement` (o más
-      `TextureShaderElement`). Opt-in con control de calidad (off / 1 / N). Pausar
-      en apps de video/juego (idle-inhibitor). **Es la próxima rebanada.**
+- [x] **✅ Glassmorphism — 1ª rebanada: menú raíz *frosted* (`glass_blur`).** El
+      fondo (wallpaper) se pasa por un **blur de caja** (`box_blur_bgra`, pura +
+      testeada) **una vez** al rearmarse, cacheado en `OutputCtx.wallpaper_blur`;
+      el menú raíz dibuja esa rebanada desenfocada (con `src` recortado, escalando
+      si el blur está acotado) + un tinte translúcido. Opt-in (`glass_blur`,
+      sección «Efectos»). **Limitación:** el backdrop barato es **sólo el
+      wallpaper** (no captura ventanas detrás), así que el glass es correcto en
+      elementos **sobre el wallpaper** (el menú lo está). El video no lleva glass.
+      Falta verificar en metal.
+- [ ] **Glassmorphism sobre VENTANAS/paneles** (el «wow» pleno) — necesita el
+      **backdrop real** detrás de cada superficie, no el wallpaper. Eso pide un
+      **pase de render por capas** (componer lo de atrás a un offscreen → blur →
+      dibujar la ventana encima), o capturar el frame previo y reusarlo. Multi-pase
+      GPU (downsample → N blur separables → upsample → tinte + filo), opt-in con
+      calidad (off / 1 / N). Es la rebanada grande que sigue.
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).

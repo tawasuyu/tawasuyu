@@ -440,6 +440,15 @@ impl App {
         }
     }
 
+    /// Radio (px) del **blur del fondo glass** (frosted) detrás del chrome. `0`
+    /// (default) = sin glass. Con Cerebro enlazado: `0`.
+    pub(crate) fn config_glass_blur(&self) -> u8 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().glass_blur,
+            Brain::Linked(_) => 0,
+        }
+    }
+
     /// `true` si el fondo por defecto debe ser el **wallpaper de marca animado**
     /// (chakana + plano cartesiano vivo). Aplica cuando la fuente cae al fondo
     /// por defecto (familia `auto`/`local`/`directory`/`remote` **sin** imagen) y

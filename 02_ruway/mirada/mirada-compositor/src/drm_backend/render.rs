@@ -1671,8 +1671,11 @@ impl DrmState {
     /// Emite el menú raíz en `rect` si esta salida es la dueña del menú.
     /// El menú vive en **coords locales** de su salida (se abrió ahí), así
     /// que las posiciones de las columnas no necesitan traducción.
-    fn emit_menu(&mut self, rect: Rect, into: &mut Vec<Frame>) {
+    fn emit_menu(&mut self, idx: usize, rect: Rect, into: &mut Vec<Frame>) {
         let Some(m) = self.root_menu.as_ref() else { return };
+        // Glass: con blur activo y un backdrop *frosted* disponible, el fondo del
+        // menú deja ver el wallpaper desenfocado + un tinte; si no, sólido.
+        let glass = self.app.config_glass_blur() > 0;
         // El menú se rasteriza con el puntero **local** a su salida — así
         // resaltado y hover apuntan a la fila correcta.
         let (px, py) = self.app.pointer_loc;
@@ -1741,16 +1744,53 @@ impl DrmState {
                     )));
                 }
             }
-            // Fondo.
-            let mut bg = SolidColorBuffer::default();
-            bg.update((col.w, col.h), MENU_BG);
-            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                &bg,
-                (col.x, col.y),
-                1.0,
-                1.0,
-                Kind::Unspecified,
-            )));
+            // Fondo: glass (frosted) si hay backdrop desenfocado; si no, sólido.
+            let frosted = glass
+                && self.outputs.get(idx).and_then(|o| o.wallpaper_blur.as_ref()).is_some();
+            if frosted {
+                // Rebanada del wallpaper desenfocado bajo el menú (coords del
+                // buffer del blur, que puede estar acotado → ratio salida↔blur).
+                let (blur, (bw, bh)) = self.outputs[idx].wallpaper_blur.as_ref().unwrap();
+                let (bw, bh) = (*bw as f64, *bh as f64);
+                let (ow, oh) = (rect.w.max(1) as f64, rect.h.max(1) as f64);
+                let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new(
+                    (col.x as f64 * bw / ow, col.y as f64 * bh / oh).into(),
+                    (col.w as f64 * bw / ow, col.h as f64 * bh / oh).into(),
+                );
+                let dst: smithay::utils::Size<i32, smithay::utils::Logical> =
+                    (col.w, col.h).into();
+                if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                    &mut self.renderer,
+                    (col.x as f64, col.y as f64),
+                    blur,
+                    None,
+                    Some(src),
+                    Some(dst),
+                    Kind::Unspecified,
+                ) {
+                    into.push(Frame::Text(el));
+                }
+                // Tinte translúcido encima (da el color y el contraste del texto).
+                let mut tint = SolidColorBuffer::default();
+                tint.update((col.w, col.h), [MENU_BG[0], MENU_BG[1], MENU_BG[2], 0.55]);
+                into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                    &tint,
+                    (col.x, col.y),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )));
+            } else {
+                let mut bg = SolidColorBuffer::default();
+                bg.update((col.w, col.h), MENU_BG);
+                into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                    &bg,
+                    (col.x, col.y),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )));
+            }
         }
     }
 
@@ -1870,6 +1910,8 @@ impl DrmState {
             .unwrap_or(true);
         use crate::estado::WallpaperSpec;
         let spec = self.app.config_wallpaper_spec_for(&name, cur_path.as_deref());
+        // Glass: radio del blur del backdrop frosted (0 = apagado).
+        let glass_blur = self.app.config_glass_blur() as i32;
         if let WallpaperSpec::Video(_) = spec {
             // Fondo en VIDEO: subimos el último frame a **tamaño nativo** (sólo
             // swizzle, sin resize) cuando llegó uno nuevo (`video_dirty`); la GPU
@@ -1883,12 +1925,15 @@ impl DrmState {
                 if let Some((buf, src)) = native {
                     self.outputs[idx].wallpaper = Some((buf, src));
                 } else if no_buf {
-                    let buf = make_marca_wallpaper(mirada_brain::WallpaperFit::Fill, size.0, size.1)
-                        .or_else(|| Some(make_default_wallpaper(size.0, size.1)));
-                    self.outputs[idx].wallpaper = buf.map(|b| (b, size));
+                    let bytes = make_marca_wallpaper(mirada_brain::WallpaperFit::Fill, size.0, size.1)
+                        .unwrap_or_else(|| make_default_wallpaper(size.0, size.1));
+                    self.outputs[idx].wallpaper =
+                        bgra_membuffer(&bytes, size.0, size.1).map(|m| (m, size));
                 }
                 self.outputs[idx].video_dirty = false;
             }
+            // El video no lleva glass (blurear por frame es absurdo).
+            self.outputs[idx].wallpaper_blur = None;
         } else if matches!(spec, WallpaperSpec::Default) && self.app.config_animated_default() {
             // Fondo por defecto VIVO: la chakana + plano cartesiano de marca,
             // generado a tamaño **acotado** (~720p) y escalado por GPU al pintar —
@@ -1896,15 +1941,23 @@ impl DrmState {
             // estrangulado a ~20 fps (`tick_animated_default` → `anim_default_dirty`).
             if self.anim_default_dirty || self.outputs[idx].wallpaper.is_none() {
                 let (iw, ih) = capped_anim_size(size.0, size.1);
+                let (iwi, ihi) = (iw as i32, ih as i32);
                 let t = self.start.elapsed().as_secs_f32();
                 let bytes = marca::animated_frame(t, iw, ih);
-                if let Some(buf) = bgra_membuffer(&bytes, iw as i32, ih as i32) {
-                    self.outputs[idx].wallpaper = Some((buf, (iw as i32, ih as i32)));
+                if let Some(buf) = bgra_membuffer(&bytes, iwi, ihi) {
+                    self.outputs[idx].wallpaper = Some((buf, (iwi, ihi)));
                 }
+                // Glass: blur del frame acotado (su tamaño; el menú escala el src).
+                self.outputs[idx].wallpaper_blur = (glass_blur > 0)
+                    .then(|| {
+                        let bl = box_blur_bgra(&bytes, iwi, ihi, glass_blur);
+                        bgra_membuffer(&bl, iwi, ihi).map(|m| (m, (iwi, ihi)))
+                    })
+                    .flatten();
             }
         } else if stale {
             // Despacho por la FUENTE elegida (color/gradiente/procedural/imagen).
-            let buf = match spec {
+            let bytes: Option<Vec<u8>> = match spec {
                 WallpaperSpec::Image(p, fit) => load_wallpaper(&p, fit, size.0, size.1),
                 WallpaperSpec::Solid(c) => Some(make_solid_wallpaper(c, size.0, size.1)),
                 WallpaperSpec::Gradient(stops) => {
@@ -1917,12 +1970,23 @@ impl DrmState {
                 WallpaperSpec::Video(_) => None,
                 // Sin imagen configurada: el wallpaper de marca (chakana + 4
                 // cuadrantes) es el fondo por defecto; si no decodifica, gradiente.
-                WallpaperSpec::Default => {
+                WallpaperSpec::Default => Some(
                     make_marca_wallpaper(mirada_brain::WallpaperFit::Fill, size.0, size.1)
-                        .or_else(|| Some(make_default_wallpaper(size.0, size.1)))
-                }
+                        .unwrap_or_else(|| make_default_wallpaper(size.0, size.1)),
+                ),
             };
-            self.outputs[idx].wallpaper = buf.map(|b| (b, size));
+            self.outputs[idx].wallpaper =
+                bytes.as_ref().and_then(|b| bgra_membuffer(b, size.0, size.1)).map(|m| (m, size));
+            // Glass: backdrop frosted a tamaño de salida (1:1 para el menú).
+            self.outputs[idx].wallpaper_blur = if glass_blur > 0 {
+                bytes
+                    .as_ref()
+                    .map(|b| box_blur_bgra(b, size.0, size.1, glass_blur))
+                    .and_then(|bl| bgra_membuffer(&bl, size.0, size.1))
+                    .map(|m| (m, size))
+            } else {
+                None
+            };
         }
         let ctx = &self.outputs[idx];
         let Some((buf, (sw, sh))) = &ctx.wallpaper else {
@@ -2069,7 +2133,7 @@ impl DrmState {
 
             // 4. Menú raíz — sólo en la salida donde se abrió.
             if owns_menu {
-                self.emit_menu(rect, &mut out);
+                self.emit_menu(idx, rect, &mut out);
             }
 
             // 5. Pista de revelado del dock autoescondido — primaria, el
@@ -2277,7 +2341,25 @@ fn emit_popups(
 
 #[cfg(test)]
 mod tests {
+    use super::super::box_blur_bgra;
     use super::{cover_transform, focus_mix, lerp_rgba, round_mask_bgra};
+
+    #[test]
+    fn box_blur_preserva_campo_uniforme_y_radio_0() {
+        let (w, h) = (16i32, 16i32);
+        // Campo uniforme (BGR=40,50,60, A=255): el blur no lo cambia.
+        let mut src = Vec::new();
+        for _ in 0..(w * h) {
+            src.extend_from_slice(&[40, 50, 60, 255]);
+        }
+        let out = box_blur_bgra(&src, w, h, 4);
+        assert!(
+            out.chunks_exact(4).all(|p| p[0] == 40 && p[1] == 50 && p[2] == 60 && p[3] == 255),
+            "el blur de un campo uniforme es el mismo campo"
+        );
+        // Radio 0 = copia exacta.
+        assert_eq!(box_blur_bgra(&src, w, h, 0), src);
+    }
 
     #[test]
     fn round_mask_recorta_esquinas_y_deja_el_centro() {

@@ -402,6 +402,12 @@ pub struct Config {
     /// `COLA-EMBELLECIMIENTO.md`.
     #[serde(default)]
     pub corner_radius: u8,
+    /// **Glass — radio del desenfoque del fondo** detrás del chrome translúcido
+    /// (hoy el menú raíz), en px (0–40). `0` (default) = sin glass. El compositor
+    /// pasa el wallpaper por un blur de caja (una vez, al rearmarlo) y lo usa
+    /// como backdrop *frosted*. Opt-in. Ver `COLA-EMBELLECIMIENTO.md`.
+    #[serde(default)]
+    pub glass_blur: u8,
     /// **Reducir movimiento** (accesibilidad): cuando está activo, el
     /// compositor pone en cero todas las duraciones de animación (apertura de
     /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
@@ -972,6 +978,7 @@ impl Default for Config {
             window_close_ms: 0,
             unfocused_dim_pct: 0,
             corner_radius: 0,
+            glass_blur: 0,
             reduce_motion: false,
         }
     }

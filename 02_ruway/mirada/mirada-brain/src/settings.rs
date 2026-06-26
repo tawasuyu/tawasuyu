@@ -470,6 +470,13 @@ impl Configurable for Config {
                         self.corner_radius as i64,
                         0,
                         40,
+                    ))
+                    .field(Field::slider_int(
+                        "glass_blur",
+                        "Glass — desenfoque del fondo (px, 0 = no)",
+                        self.glass_blur as i64,
+                        0,
+                        40,
                     )),
             )
     }
@@ -803,6 +810,11 @@ impl Configurable for Config {
                     self.corner_radius = v.clamp(0, 40) as u8;
                 }
             }
+            "glass_blur" => {
+                if let Some(v) = value.as_int() {
+                    self.glass_blur = v.clamp(0, 40) as u8;
+                }
+            }
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
@@ -849,6 +861,12 @@ mod tests {
         c.apply(&"efectos.corner_radius".into(), FieldValue::Int(999))
             .unwrap();
         assert_eq!(c.corner_radius, 40, "se acota a 40");
+        c.apply(&"efectos.glass_blur".into(), FieldValue::Int(18))
+            .unwrap();
+        assert_eq!(c.glass_blur, 18);
+        c.apply(&"efectos.glass_blur".into(), FieldValue::Int(999))
+            .unwrap();
+        assert_eq!(c.glass_blur, 40);
     }
 
     #[test]

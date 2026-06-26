@@ -330,6 +330,7 @@ impl DrmState {
             video_wp: None,
             video_frame: None,
             video_dirty: false,
+            wallpaper_blur: None,
             pending_flip: false,
         })
     }
