@@ -30,3 +30,9 @@ chrono = { workspace = true }
 # Sólo para el modo `--shot` (captura headless de la UI a PNG, sin bootear el DM).
 png = { workspace = true }
 pollster = { workspace = true }
+# Activación de backends de sistema por sesión: el greeter (DM) le pide a su
+# init (arje-zero) encarnar el bundle de la sesión elegida (p. ej. los shims
+# arje-compat que GNOME consulta). Best-effort, con tope de espera.
+arje-bus = { path = "../../../03_ukupacha/arje/runtime/arje-bus" }
+anyhow = { workspace = true }
+tokio = { workspace = true }

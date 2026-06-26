@@ -72,7 +72,10 @@ El mismo fichero de fragmento sirve a dos momentos:
 
    Esta es la vía que cierra el acople boot↔login: los backends de GNOME
    se levantan **cuando el usuario elige esa sesión**, no eagermente al
-   arranque. (Falta el hook en el greeter — ver "Pendiente" abajo.)
+   arranque. El hook vive en `mirada-greeter`
+   (`src/arje_session.rs`): al elegir una sesión con `profile_for(...) =
+   Some("gnome")`, manda ese request antes de emitir el `SessionTicket`
+   (best-effort, con tope de espera).
 
 ## v0 eager → activación perezosa (futuro)
 
@@ -85,13 +88,14 @@ cuesta 12 procesos que quizá nadie consulte.
 
 ## Pendiente
 
-- **Hook en el greeter.** `mirada-greeter` hoy emite un `SessionTicket`
-  a stdout que el compositor parsea (`mirada-greeter/src/main.rs`); no
-  habla con `arje-bus`. Falta que, al elegir una sesión con backends
-  arje (p. ej. gnome), el greeter o el compositor manden el
-  `SpawnCardFromDisk { name: "session-<X>" }` de arriba antes del
-  traspaso. Implica un mapeo sesión→perfil y `arje-bus` como dep de
-  mirada — cruza el dominio mirada↔arje.
+- **Instalar el fragmento al card store.** El packager/installer de arje
+  debe copiar `session-gnome.card.json` a `/etc/arje/cards.d/session-gnome.json`
+  para que la vía login-time lo encuentre. (La vía boot-time lo lee de
+  `seeds/fragments/`.)
+- **Mapeo sesión→perfil** en `mirada-greeter::arje_session::profile_for`
+  hoy es heurístico (detecta GNOME por `exec`/`name`). Cuando aparezca
+  otra sesión con backends arje, conviene una tabla o un campo del
+  `.desktop` en vez de la heurística.
 
 ## Cómo añadir una sesión
 

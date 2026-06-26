@@ -15,6 +15,7 @@
 //! - `MIRADA_GREETER_MOCK="usuario:secreto"` usa el mock, para iterar la UI
 //!   en cajas sin PAM o con el greeter anidado en otro escritorio.
 
+mod arje_session;
 mod aurora;
 mod bg;
 mod fire;
@@ -671,6 +672,13 @@ impl App for Greeter {
                 let chosen = m.sessions.get(m.session_idx);
                 let exec = chosen.map(|s| s.exec.clone()).unwrap_or_default();
                 let foreign = chosen.map(|s| s.foreign).unwrap_or(false);
+                // Si la sesión elegida necesita backends de sistema de arje
+                // (p. ej. los shims systemd que GNOME consulta al arrancar),
+                // pedírselos al init antes del traspaso. Best-effort: si no
+                // hay bus o el perfil no existe, el login sigue igual.
+                if let Some(profile) = chosen.and_then(arje_session::profile_for) {
+                    arje_session::activate(profile);
+                }
                 // Recuerda usuario + escritorio (y la config del fondo) para
                 // el próximo login.
                 state::GreeterState {
