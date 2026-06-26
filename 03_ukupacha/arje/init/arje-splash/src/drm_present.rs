@@ -373,23 +373,29 @@ fn try_run(opts: &Opts) -> Result<(), String> {
                     loaded.scene_at(t, opts.fps), bg, None, &mut can_flip, frame_dt)?;
     }
 
-    // Salida: NO destruimos el framebuffer en scanout ni reponemos el modo —
-    // dejamos el último frame en pantalla con el mismo timing. Al cerrar el fd
-    // soltamos el DRM master; mirada tomará master y presentará su frame ya
-    // compuesto sobre el mismo modo (el crossfade percibido de Fase 2).
-    drop(a);
-    drop(b);
-    drop(card); // ← suelta el DRM master
-
-    // Recién con el master ya soltado le avisamos a mirada que puede tomarlo.
+    // Salida. En el handoff (Fase 2) NO cerramos el fd todavía: soltamos sólo el
+    // DRM master (`release_master_lock`) y mantenemos el framebuffer del splash
+    // VIVO en scanout. Así, mientras mirada toma master y flipea su primer frame,
+    // el panel sigue mostrando el slate (mismo `BG`) — sin un cuadro de hueco con
+    // un FB ya destruido, que se veía como parpadeo. Recién tras una ventana
+    // corta soltamos todo. Cerrar el fd de una (como antes) mataba el FB antes de
+    // que mirada presentara → el CRTC quedaba un cuadro sin imagen válida.
     if do_handoff {
+        let _ = card.release_master_lock(); // suelta master, deja el fd/FB vivos
         handoff.send_released();
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
         log!("RELEASED enviado · epoch_ms={ms} — mirada toma la pantalla");
+        // Ventana para que mirada agarre master y flipee su FB antes de que
+        // soltemos el nuestro. mirada presenta en ~40-100 ms; 300 ms es margen.
+        std::thread::sleep(std::time::Duration::from_millis(300));
     }
+    // Sin handoff (tope de tiempo / señal): cerrar el fd suelta el master.
+    drop(a);
+    drop(b);
+    drop(card);
     Ok(())
 }
 

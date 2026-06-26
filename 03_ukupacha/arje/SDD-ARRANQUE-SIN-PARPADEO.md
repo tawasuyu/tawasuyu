@@ -221,7 +221,29 @@ desaparece, `queue_frame` cae a **0 ms**, `device-listo` a **3 ms**, y el GAP
 total baja de ~1500 ms a **389 ms**. Queda un parpadeo de un cuadro (page-flip
 entre el framebuffer del splash y el de mirada) apenas perceptible.
 
-### Fase 2-bis — crossfade limpio: render-node / card-node (pendiente)
+### Incremento 3 — splash keep-alive: sin hueco de framebuffer (hecho)
+
+El parpadeo residual del Incremento 2 era un **hueco de framebuffer**: el splash
+cerraba su fd (destruyendo su FB) *antes* de que mirada presentara, así que el
+CRTC quedaba un cuadro sin imagen válida. **Fix (lado splash):** en el handoff,
+soltar sólo el master con `release_master_lock()` —no cerrar el fd— y mantener el
+framebuffer del slate **vivo en scanout** una ventana corta (300 ms) mientras
+mirada toma master y flipea su primer frame (mismo `BG`). Recién después el
+splash suelta todo. Verificado en metal: el parpadeo desaparece, el slate es
+continuo splash→mirada hasta que entra la tarjeta del greeter. Con esto el
+crossfade percibido es **limpio** sin necesidad del cross-node.
+
+### Fase 2-bis — crossfade limpio: render-node / card-node (pendiente, baja prioridad)
+
+Con los Incrementos 1–3 el gap quedó en ~389 ms de slate continuo, sin negro ni
+parpadeo, así que esta fase pasó a **baja prioridad**: sólo agregaría meter la
+tarjeta del greeter en el frame 1 (hoy aparece ~unos cientos de ms después, sobre
+el fondo común). Se deja documentada por completitud.
+
+El cero-artefactos del SDD pide que el **primer scanout de mirada ya sea la
+tarjeta del greeter compuesta sobre su fondo**. Pero hay un huevo-y-gallina:
+componer con GL necesita el device, y el master lo tiene el splash hasta el
+`RELEASED`. La única salida es **separar nodos**:
 
 El cero-artefactos del SDD pide que el **primer scanout de mirada ya sea la
 tarjeta del greeter compuesta sobre su fondo**. Pero hay un huevo-y-gallina:
