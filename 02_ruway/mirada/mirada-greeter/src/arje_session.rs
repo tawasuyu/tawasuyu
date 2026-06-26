@@ -86,7 +86,21 @@ pub fn reconcile(selected: Option<&str>) {
         .iter()
         .map(|p| card_name(p))
         .collect();
-    let to_start = selected.map(card_name);
+    // En modo lazy (marcador presente), el dbus-daemon del host activa los
+    // shims on-demand vía `arje-activate`: el greeter NO los levanta eager.
+    // El teardown (to_stop) se mantiene igual: bajar al salir sigue siendo del
+    // greeter, y `StopCardFromDisk` baja los miembros vivos por label sin
+    // importar cómo se encarnaron.
+    let to_start = selected
+        .filter(|p| {
+            if is_lazy(p) {
+                eprintln!("arje_session: «{p}» es lazy — dbus lo activa on-demand, no levanto eager");
+                false
+            } else {
+                true
+            }
+        })
+        .map(card_name);
 
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -112,6 +126,17 @@ pub fn reconcile(selected: Option<&str>) {
 
 fn card_name(profile: &str) -> String {
     format!("session-{profile}")
+}
+
+/// Ruta del marcador que el instalador deja en modo lazy: si existe, ese
+/// perfil lo activa el dbus-daemon del host on-demand (vía `arje-activate`),
+/// así el greeter no lo levanta eager.
+fn lazy_marker(profile: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/etc/arje/session-{profile}.lazy"))
+}
+
+fn is_lazy(profile: &str) -> bool {
+    lazy_marker(profile).exists()
 }
 
 /// Una llamada al bus, con tope de espera, best-effort (loguea y sigue).
@@ -167,6 +192,14 @@ mod tests {
         assert_eq!(profile_for(&sess("mirada", "")), None);
         assert_eq!(profile_for(&sess("Sway", "sway")), None);
         assert_eq!(profile_for(&sess("Plasma", "startplasma-wayland")), None);
+    }
+
+    #[test]
+    fn marcador_lazy_por_perfil() {
+        assert_eq!(
+            lazy_marker("gnome"),
+            std::path::PathBuf::from("/etc/arje/session-gnome.lazy")
+        );
     }
 
     #[test]

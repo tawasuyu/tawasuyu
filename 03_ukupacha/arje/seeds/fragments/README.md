@@ -89,14 +89,42 @@ El mismo fichero de fragmento sirve a dos momentos:
    reiniciarlos** (su supervisor `Restart` no los revive — `graph::stopping`
    + `on_death`). Idempotente: miembros ya muertos se ignoran.
 
-## v0 eager → activación perezosa (futuro)
+## Activación perezosa (lazy) — `arje-activate`
 
-Hoy los shims se declaran como entes del `genesis` y se **encarnan al
-boot** (eager). El upgrade natural es **activación perezosa** al estilo
-D-Bus: registrar los nombres `org.freedesktop.*` como activables y
-spawnear el shim al primer request. Cuando exista esa capa, el fragmento
-declara *disponibilidad* en vez de *spawn*, y arrancar la sesión GNOME no
-cuesta 12 procesos que quizá nadie consulte.
+Las vías 1–3 son **eager**: al elegir gnome arrancan los 12 shims juntos,
+aunque la app sólo consulte 2 o 3. La vía **lazy** los arranca on-demand,
+sin que arje deje de ser la única autoridad de spawn/supervisión.
+
+Cómo encaja (es una *excepción calculada*, no un choque con el modelo):
+arje **no** corre un dbus-daemon — los shims hablan al *system bus del
+host*. Así que la activación la dispara el **dbus-daemon del host**:
+
+1. Una app pide `org.freedesktop.login1`. El host lee el `.service` de
+   activación → `Exec=/usr/lib/arje/arje-activate compat-logind`.
+2. `arje-activate` (un cliente mínimo del bus de arje) manda
+   `SpawnCardFromDisk { name: "compat-logind" }` y **sale** — no reclama el
+   nombre.
+3. `arje-zero` encarna el shim (con su `Restart`/telemetría, en el grafo);
+   el shim, al vivir, reclama el nombre y el host entrega el mensaje.
+
+El dbus-daemon queda como **sensor de borde** (traduce "pidieron X" en un
+evento del bus de arje); arje sigue encarnando y supervisando. Es el patrón
+`SystemdService=` de D-Bus, con arje en lugar de systemd. El único estado
+cedido al puente es *qué nombres existen y quién los reclama* (vive en el
+dbus-daemon, no en la frontera de capacidades de arje) — concesión acotada
+al puente compat, que ya es la zona de excepción para protocolos ajenos.
+
+Instalación (`--lazy`): instala `arje-activate`, una card por shim en el
+store, un `.service` de activación por nombre, y el marcador
+`/etc/arje/session-gnome.lazy`. El greeter ve el marcador y **no** levanta
+gnome eager (`arje_session::is_lazy`), pero **sí** lo baja al salir
+(teardown por label, vía 3). Contrato de deploy: `arje-zero` debe correr con
+`ENTE_BUS_SOCK=/run/arje/bus.sock` (el path que `arje-activate` usa cuando
+el dbus-daemon del host lo invoca sin heredar el env del fractal).
+
+```sh
+scripts/install-arje-session-gnome.sh --lazy   # requiere jq + dbus-daemon de sistema
+```
 
 ## Instalación
 
@@ -109,13 +137,6 @@ cuesta 12 procesos que quizá nadie consulte.
   `--asset`/`--bin` para sumar a un `arje-installer` de host (arranque
   nativo). El installer recoge los execs de las cards de
   `/etc/arje/cards.d/` y hornea sus binarios (`lib.rs::collect_card_execs`).
-
-## Pendiente
-
-- **Mapeo sesión→perfil** en `mirada-greeter::arje_session::profile_for`
-  hoy es heurístico (detecta GNOME por `exec`/`name`). Cuando aparezca
-  otra sesión con backends arje, conviene una tabla o un campo del
-  `.desktop` en vez de la heurística.
 
 ## Cómo añadir una sesión
 
