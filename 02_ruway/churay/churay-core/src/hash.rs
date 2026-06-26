@@ -7,9 +7,19 @@
 //! con length-prefijado) para que un día converjan bajo el CAS unificado
 //! (ADR 0007). Si cambia el algoritmo allá, hay que espejarlo acá.
 
+use std::path::Path;
+
+// `of_tree` codifica bit de ejecución + symlinks (semántica POSIX) en el hash,
+// para ser compatible con `hammer::of_tree`. Eso lo hace Linux-only: en Windows
+// no hay bit exec ni `OsStr::as_bytes`, y recalcularlo daría un hash divergente
+// del firmado en Linux. El cliente Windows no lo necesita — verifica binarios
+// con `of_bytes` (BLAKE3 de bytes, neutral). `of_tree` es operación de publisher.
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +68,12 @@ impl ArtifactHash {
     /// Hash de **contenido** de un árbol de archivos: BLAKE3 determinista sobre
     /// los bytes reales (rutas relativas ordenadas + tipo + bit de ejecución +
     /// contenido / target de symlink). Compatible con `hammer::of_tree`.
+    ///
+    /// **Linux-only**: el bit de ejecución y los symlinks son parte de la
+    /// identidad (semántica POSIX), así que el resultado no es reproducible en
+    /// Windows. Es operación de publisher (creación de bundles, en Linux); el
+    /// cliente verifica con [`of_bytes`](Self::of_bytes), que sí es neutral.
+    #[cfg(unix)]
     pub fn of_tree(root: &Path) -> std::io::Result<ArtifactHash> {
         let mut rels: Vec<PathBuf> = Vec::new();
         collect_rel(root, Path::new(""), &mut rels)?;
@@ -93,6 +109,7 @@ impl ArtifactHash {
     }
 }
 
+#[cfg(unix)]
 fn collect_rel(root: &Path, rel: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(root.join(rel))? {
         let entry = entry?;

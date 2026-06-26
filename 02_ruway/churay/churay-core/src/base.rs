@@ -206,7 +206,6 @@ fn prog_unit(program: &str, manifest: Option<&Manifest>) -> Unit {
 }
 
 fn apply_extra(sysroot: &Path, real: bool, extra: &Extra) -> Result<(), InstallError> {
-    use std::os::unix::fs::PermissionsExt;
     match extra {
         Extra::File { rel, contents, mode } => {
             let path = sysroot.join(rel);
@@ -214,9 +213,17 @@ fn apply_extra(sysroot: &Path, real: bool, extra: &Extra) -> Result<(), InstallE
                 std::fs::create_dir_all(dir)?;
             }
             std::fs::write(&path, contents)?;
-            let mut perms = std::fs::metadata(&path)?.permissions();
-            perms.set_mode(*mode);
-            std::fs::set_permissions(&path, perms)?;
+            // El modo POSIX (`0o755`/`0o644`) solo aplica en Unix; la capa base
+            // (PAM, sesiones Wayland, scripts) es Linux-only de todos modos.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&path)?.permissions();
+                perms.set_mode(*mode);
+                std::fs::set_permissions(&path, perms)?;
+            }
+            #[cfg(not(unix))]
+            let _ = mode;
         }
         Extra::Group(g) => {
             if real {

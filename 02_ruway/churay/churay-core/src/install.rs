@@ -371,12 +371,17 @@ pub fn uninstall_unit(
 /// Copia `src` a `dest` de forma atómica (`dest.tmp` + rename) y le pone el bit
 /// de ejecución. Devuelve el hash del binario instalado.
 pub(crate) fn atomic_install_bin(src: &Path, dest: &Path) -> Result<ArtifactHash, InstallError> {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = dest.with_extension("tmp-install");
     std::fs::copy(src, &tmp)?;
-    let mut perms = std::fs::metadata(&tmp)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&tmp, perms)?;
+    // En Unix el binario debe quedar ejecutable (bit 0o755). En Windows la
+    // ejecutabilidad viene de la extensión `.exe`, así que no hay nada que poner.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&tmp)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&tmp, perms)?;
+    }
     std::fs::rename(&tmp, dest)?; // atómico dentro del mismo filesystem
     ArtifactHash::of_file(dest).map_err(InstallError::Io)
 }
