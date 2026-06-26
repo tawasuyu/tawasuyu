@@ -386,6 +386,7 @@ impl Desktop {
             DesktopAction::ResizeFloatDir(dir) => self.resize_float(dir),
             DesktopAction::Spawn(cmd) => vec![BrainCommand::Spawn(cmd)],
             DesktopAction::Quit => vec![BrainCommand::Shutdown],
+            DesktopAction::Lock => vec![BrainCommand::Lock],
         }
     }
 

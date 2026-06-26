@@ -39,6 +39,24 @@ impl DrmState {
     pub(super) fn tick(&mut self) {
         self.app.brain_poll();
 
+        // Pedido de bloqueo (Super+Escape → `BrainCommand::Lock` → `request_lock`):
+        // lanza el shell de credenciales en modo lock, compuesto encima de la
+        // sesión. Se resuelve acá —no en `apply_commands`— porque hace falta el
+        // emisor del canal del shell (`shell_tx`), que vive en `DrmState`.
+        if let Some(user) = self.app.pending_lock.take() {
+            let tx = self.shell_tx.clone();
+            match crate::spawn_greeter(Some(&user), move |a| {
+                let _ = tx.send(a);
+            }) {
+                Ok(stdin) => {
+                    self.app.greeter_stdin = Some(stdin);
+                    self.app.mode = crate::estado::BodyMode::Locked;
+                    dlog!("mirada-compositor · sesión bloqueada (lock de «{user}»).");
+                }
+                Err(e) => dlog!("mirada-compositor · no pude lanzar el lock: {e}"),
+            }
+        }
+
         let n = self.app.windows.len();
         if n != self.last_windows {
             dlog!("mirada-compositor · ventanas en pantalla: {n}");

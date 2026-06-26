@@ -31,8 +31,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use auth_core::{
-    AuthError, Authenticator, MockAuthenticator, PamAuthenticator, SessionTicket, UserInfo,
-    DEFAULT_SERVICE,
+    AuthError, Authenticator, MockAuthenticator, PamAuthenticator, SessionTicket, ShellAction,
+    UserInfo, DEFAULT_SERVICE,
 };
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, Dimension, FlexDirection, Size, Style},
@@ -52,11 +52,49 @@ use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 
-/// `app_id` con el que el compositor reconoce y compone el greeter.
+/// `app_id` con el que el compositor reconoce y compone el greeter. El mismo
+/// en modo login y en modo lock: el compositor lo compone a pantalla completa
+/// y le rutea el input en ambos casos (lo distingue por `app_id`, no por modo).
 const GREETER_APP_ID: &str = "mirada.greeter";
 
 /// Autenticador compartible entre el hilo de UI y el de fondo.
 type DynAuth = Arc<dyn Authenticator + Send + Sync>;
+
+/// En qué papel corre esta instancia del shell de credenciales.
+///
+/// La misma pantalla (tarjeta, fondos, reloj) sirve para las dos: el modo sólo
+/// cambia qué se pide y qué se emite al compositor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GreeterMode {
+    /// Greeter de arranque: pide usuario + contraseña, elige sesión y emite un
+    /// [`ShellAction::StartSession`].
+    Login,
+    /// Lock de la sesión activa: el usuario está fijo (el dueño de la sesión),
+    /// no se elige sesión, y al validar emite [`ShellAction::Unlock`].
+    Lock,
+}
+
+/// Lee el modo de los argumentos: `--lock` ⇒ [`GreeterMode::Lock`], si no
+/// [`GreeterMode::Login`]. Se relee en `init` (la fábrica del bucle Elm no
+/// recibe args), barato y sin estado global.
+fn mode_from_args() -> GreeterMode {
+    if std::env::args().any(|a| a == "--lock") {
+        GreeterMode::Lock
+    } else {
+        GreeterMode::Login
+    }
+}
+
+/// Usuario al que pertenece la sesión bloqueada. El compositor lo pasa por
+/// `MIRADA_LOCK_USER`; en pruebas a mano cae a `$USER`. Vacío si no hay ninguno
+/// (el lock entonces deja teclear el nombre, como el login).
+fn lock_user() -> String {
+    std::env::var("MIRADA_LOCK_USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_default()
+}
 
 fn main() {
     if std::env::var_os("LLIMPHI_TIMING").is_some() {
@@ -70,12 +108,14 @@ fn main() {
     // Carga el idioma persistido en wawa-config (sobrescribe el default "es-PE").
     let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     // Captura headless de la UI a PNG (sin bootear el DM): `--shot <png> [W] [H]`.
+    // `--lock` lo hace en modo lock (usuario fijo, botón Desbloquear).
     let args: Vec<String> = std::env::args().collect();
+    let mode = mode_from_args();
     if let Some(i) = args.iter().position(|a| a == "--shot") {
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "greeter.png".to_string());
         let w: u32 = args.get(i + 2).and_then(|v| v.parse().ok()).unwrap_or(1600);
         let h: u32 = args.get(i + 3).and_then(|v| v.parse().ok()).unwrap_or(900);
-        shot_greeter(&out, w, h);
+        shot_greeter(&out, w, h, mode);
         return;
     }
     llimphi_ui::run::<Greeter>();
@@ -93,7 +133,7 @@ fn shot_monitors() -> (Vec<MonRect>, usize) {
 
 /// Construye un modelo de muestra (usuario+contraseña tecleados) y vuelca
 /// `Greeter::view` a un PNG, para revisar el layout del login sin loguearse.
-fn shot_greeter(out: &str, w: u32, h: u32) {
+fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
     use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
     use llimphi_ui::llimphi_hal::{wgpu, Hal};
     use llimphi_ui::llimphi_layout::{taffy, LayoutTree};
@@ -104,7 +144,16 @@ fn shot_greeter(out: &str, w: u32, h: u32) {
     let saved = state::GreeterState::load();
     let sessions = sessions::discover();
     let mut user = TextInputState::new();
-    user.set_text(if saved.last_user.is_empty() { "usuario".to_string() } else { saved.last_user });
+    let user_text = match mode {
+        // En lock el usuario está fijo (dueño de la sesión); el shot lo muestra.
+        GreeterMode::Lock => {
+            let u = lock_user();
+            if u.is_empty() { "sergio".to_string() } else { u }
+        }
+        GreeterMode::Login if saved.last_user.is_empty() => "usuario".to_string(),
+        GreeterMode::Login => saved.last_user,
+    };
+    user.set_text(user_text);
     let mut pass = TextInputState::masked();
     pass.set_text("secreto".to_string());
     let model = Model {
@@ -112,6 +161,7 @@ fn shot_greeter(out: &str, w: u32, h: u32) {
         user,
         pass,
         focus: Field::Pass,
+        mode,
         status: Status::Idle,
         sessions,
         session_idx: 0,
@@ -266,9 +316,10 @@ fn pick_authenticator() -> DynAuth {
     Arc::new(PamAuthenticator::new(service))
 }
 
-/// Imprime el tiquet a stdout y fuerza el flush antes de terminar.
-fn emit_ticket(ticket: &SessionTicket) {
-    println!("{}", ticket.to_line());
+/// Imprime la acción del shell a stdout (la línea que el compositor escanea) y
+/// fuerza el flush antes de terminar.
+fn emit_action(action: &ShellAction) {
+    println!("{}", action.to_line());
     let _ = std::io::stdout().flush();
 }
 
@@ -332,6 +383,8 @@ struct Model {
     /// Progreso 0→1 de la animación de viaje de la tarjeta entre monitores.
     /// `1.0` = asentada en `active_mon`.
     card_anim: f32,
+    /// Papel de esta instancia: login de arranque o lock de la sesión activa.
+    mode: GreeterMode,
 }
 
 /// Rect de un monitor en coordenadas de la ventana del greeter (px):
@@ -402,17 +455,25 @@ impl App for Greeter {
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         let saved = state::GreeterState::load();
         let sessions = sessions::discover();
+        let mode = mode_from_args();
 
-        // Prerellena el último usuario y arranca el foco directo en la
-        // contraseña si ya hay un nombre recordado.
+        // Prerellena el usuario y arranca el foco en la contraseña:
+        //  · lock  → usuario fijo (dueño de la sesión), siempre foco en pass.
+        //  · login → último usuario recordado; foco en pass si lo hay.
         let mut user = TextInputState::new();
-        if !saved.last_user.is_empty() {
-            user.set_text(saved.last_user.clone());
-        }
-        let focus = if saved.last_user.is_empty() {
-            Field::User
-        } else {
-            Field::Pass
+        let focus = match mode {
+            GreeterMode::Lock => {
+                user.set_text(lock_user());
+                Field::Pass
+            }
+            GreeterMode::Login => {
+                if !saved.last_user.is_empty() {
+                    user.set_text(saved.last_user.clone());
+                    Field::Pass
+                } else {
+                    Field::User
+                }
+            }
         };
 
         // Restaura el último escritorio elegido buscándolo por nombre (los
@@ -469,6 +530,7 @@ impl App for Greeter {
             active_mon: 0,
             prev_mon: 0,
             card_anim: 1.0,
+            mode,
         }
     }
 
@@ -509,12 +571,15 @@ impl App for Greeter {
                 _ => return None,
             }
         }
+        // En lock no hay campo usuario ni selector de sesión: Tab y ↑/↓ no
+        // tienen a dónde ir, todo el teclado va a la contraseña.
+        let lock = model.mode == GreeterMode::Lock;
         match &e.key {
-            Key::Named(NamedKey::Tab) => Some(Msg::Focus(toggle(model.focus))),
+            Key::Named(NamedKey::Tab) if !lock => Some(Msg::Focus(toggle(model.focus))),
             // ↑/↓ cambian de escritorio sin tocar el ratón (los campos de una
             // línea no usan las flechas verticales, así que quedan libres).
-            Key::Named(NamedKey::ArrowUp) => Some(Msg::CycleSession(-1)),
-            Key::Named(NamedKey::ArrowDown) => Some(Msg::CycleSession(1)),
+            Key::Named(NamedKey::ArrowUp) if !lock => Some(Msg::CycleSession(-1)),
+            Key::Named(NamedKey::ArrowDown) if !lock => Some(Msg::CycleSession(1)),
             Key::Named(NamedKey::Enter) => {
                 if model.focus == Field::User {
                     Some(Msg::Focus(Field::Pass))
@@ -563,6 +628,13 @@ impl App for Greeter {
                 handle.spawn(move || Msg::AuthDone(auth.authenticate(&user, &secret)));
             }
             Msg::AuthDone(Ok(user)) => {
+                // Modo lock: la contraseña validó al dueño de la sesión ⇒ basta
+                // con desbloquear. No hay tiquet ni sesión nueva que arrancar.
+                if m.mode == GreeterMode::Lock {
+                    emit_action(&ShellAction::Unlock);
+                    handle.quit();
+                    return m;
+                }
                 // El comando de la sesión elegida viaja en el tiquet. Vacío
                 // (sesión nativa mirada) ⇒ el compositor usa su autostart.
                 let chosen = m.sessions.get(m.session_idx);
@@ -584,7 +656,7 @@ impl App for Greeter {
                 } else {
                     ticket.with_session(exec).foreign(foreign)
                 };
-                emit_ticket(&ticket);
+                emit_action(&ShellAction::StartSession(ticket));
                 handle.quit();
             }
             Msg::CycleSession(dir) => {
@@ -702,6 +774,7 @@ impl App for Greeter {
         let menu = app_menu(model);
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let input_palette = TextInputPalette::from_theme(&theme);
+        let lock = model.mode == GreeterMode::Lock;
 
         // Barrita de acento sobre el título — el toque de color del DM.
         let accent_bar = View::new(Style {
@@ -715,26 +788,35 @@ impl App for Greeter {
         .radius(2.0);
 
         let title = row(30.0, "mirada", 23.0, theme.fg_text);
-        let subtitle = row(
-            16.0,
-            &rimay_localize::t("greeter-subtitle"),
-            12.0,
-            theme.fg_muted,
-        );
+        // Subtítulo: en lock anuncia el bloqueo; en login, el lema del DM.
+        let subtitle_key = if lock { "mirada-lock-subtitle" } else { "greeter-subtitle" };
+        let subtitle = row(16.0, &rimay_localize::t(subtitle_key), 12.0, theme.fg_muted);
 
-        let user_cap = row(
-            14.0,
-            &rimay_localize::t("greeter-label-user"),
-            10.0,
-            theme.fg_muted,
-        );
-        let user_box = text_input_view(
-            &model.user,
-            &rimay_localize::t("greeter-placeholder-user"),
-            model.focus == Field::User,
-            &input_palette,
-            Msg::Focus(Field::User),
-        );
+        // Sección del usuario. En login es un campo editable; en lock el usuario
+        // está fijo (dueño de la sesión), así que se muestra como rótulo.
+        let user_section: Vec<View<Msg>> = if lock {
+            let cap = row(14.0, &rimay_localize::t("mirada-lock-label-user"), 10.0, theme.fg_muted);
+            let name = View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+                align_items: Some(AlignItems::Center),
+                padding: Rect { left: length(12.0_f32), right: length(12.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                ..Default::default()
+            })
+            .fill(theme.bg_input)
+            .radius(7.0)
+            .text_aligned(model.user.text().to_string(), 13.0, theme.fg_text, Alignment::Start);
+            vec![cap, name]
+        } else {
+            let user_cap = row(14.0, &rimay_localize::t("greeter-label-user"), 10.0, theme.fg_muted);
+            let user_box = text_input_view(
+                &model.user,
+                &rimay_localize::t("greeter-placeholder-user"),
+                model.focus == Field::User,
+                &input_palette,
+                Msg::Focus(Field::User),
+            );
+            vec![user_cap, user_box]
+        };
 
         let pass_cap = row(
             14.0,
@@ -821,10 +903,11 @@ impl App for Greeter {
         // Botón de entrar: la acción primaria, en color de acento. Mientras
         // autentica se atenúa y cambia de rótulo.
         let busy = matches!(model.status, Status::Authenticating);
-        let (btn_label, btn_fill) = if busy {
-            (rimay_localize::t("mirada-greeter-btn-submitting"), theme.bg_button)
-        } else {
-            (rimay_localize::t("mirada-greeter-btn-submit"), theme.accent)
+        let (btn_label, btn_fill) = match (busy, lock) {
+            (true, true) => (rimay_localize::t("mirada-lock-btn-busy"), theme.bg_button),
+            (true, false) => (rimay_localize::t("mirada-greeter-btn-submitting"), theme.bg_button),
+            (false, true) => (rimay_localize::t("mirada-lock-btn"), theme.accent),
+            (false, false) => (rimay_localize::t("mirada-greeter-btn-submit"), theme.accent),
         };
         let enter_btn = View::new(Style {
             size: Size {
@@ -865,27 +948,44 @@ impl App for Greeter {
         })
         .fill(theme.bg_panel)
         .radius(14.0)
-        .children(vec![
-            accent_bar,
-            title,
-            subtitle,
-            spacer(6.0),
-            user_cap,
-            user_box,
-            pass_cap,
-            pass_box,
-            status_line,
-            spacer(2.0),
-            sess_cap,
-            session_selector,
-            spacer(6.0),
-            enter_btn,
-            spacer(2.0),
-            row(13.0, &rimay_localize::t("mirada-greeter-hint-nav"), 9.0, theme.fg_muted),
-            row(13.0, &rimay_localize::t("mirada-greeter-hint-console"), 9.0, theme.fg_muted),
-        ]);
+        .children({
+            let mut items = vec![accent_bar, title, subtitle, spacer(6.0)];
+            items.extend(user_section);
+            items.push(pass_cap);
+            items.push(pass_box);
+            items.push(status_line);
+            // El selector de sesión sólo en login: en lock ya estás en una.
+            if !lock {
+                items.push(spacer(2.0));
+                items.push(sess_cap);
+                items.push(session_selector);
+            }
+            items.push(spacer(6.0));
+            items.push(enter_btn);
+            items.push(spacer(2.0));
+            // Pistas: en lock una sola línea; en login navegación + consola.
+            if lock {
+                items.push(row(13.0, &rimay_localize::t("mirada-lock-hint"), 9.0, theme.fg_muted));
+            } else {
+                items.push(row(13.0, &rimay_localize::t("mirada-greeter-hint-nav"), 9.0, theme.fg_muted));
+                items.push(row(13.0, &rimay_localize::t("mirada-greeter-hint-console"), 9.0, theme.fg_muted));
+            }
+            items
+        });
 
-        // Zona central que aloja la tarjeta de login, centrada. Transparente:
+        // Reloj grande sobre la tarjeta — hora local de pared. Avanza con el
+        // tick del fondo (`Msg::RainTick`, ~30 fps, siempre encendido), así que
+        // no necesita estado propio: se lee del sistema en cada repintado.
+        let stack = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: Dimension::auto(), height: Dimension::auto() },
+            gap: Size { width: length(0.0_f32), height: length(20.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![clock_view(&theme), card]);
+
+        // Zona central que aloja el reloj + la tarjeta, centrados. Transparente:
         // el fondo animado (pintado en la raíz) se ve por detrás, también en el
         // monitor activo.
         let body = View::new(Style {
@@ -898,7 +998,7 @@ impl App for Greeter {
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .children(vec![card]);
+        .children(vec![stack]);
 
         // Panel de contenido (barra de menú + tarjeta). En multi-monitor (modo
         // DM) se posiciona —absoluto— sobre el monitor con el ratón y viaja
@@ -1316,6 +1416,72 @@ fn row(height: f32, text: &str, size: f32, color: Color) -> View<Msg> {
     .text_aligned(text.to_string(), size, color, Alignment::Start)
 }
 
+/// Hora (`HH:MM`) y fecha localizada del reloj, leídas de la hora local del
+/// sistema (con conciencia de zona horaria, vía `chrono::Local`). Quechua y
+/// cualquier locale no inglés caen al español (el default del repo).
+fn now_strings() -> (String, String) {
+    use chrono::{Datelike, Timelike};
+    const DIAS_ES: [&str; 7] =
+        ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+    const DIAS_EN: [&str; 7] =
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    const MESES_ES: [&str; 12] = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
+        "octubre", "noviembre", "diciembre",
+    ];
+    const MESES_EN: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September",
+        "October", "November", "December",
+    ];
+
+    let now = chrono::Local::now();
+    let time = format!("{:02}:{:02}", now.hour(), now.minute());
+    let en = rimay_localize::current_locale().starts_with("en");
+    let dow = now.weekday().num_days_from_monday() as usize;
+    let mon = (now.month() as usize).saturating_sub(1).min(11);
+    let (dia, mes) = if en {
+        (DIAS_EN[dow], MESES_EN[mon])
+    } else {
+        (DIAS_ES[dow], MESES_ES[mon])
+    };
+    let mut date = if en {
+        format!("{dia}, {} {mes} {}", now.day(), now.year())
+    } else {
+        format!("{dia}, {} de {mes} de {}", now.day(), now.year())
+    };
+    // Mayúscula inicial (en español el día va en minúscula, pero como rótulo
+    // suelto luce mejor capitalizado; en inglés ya viene así).
+    if let Some(first) = date.get(0..1) {
+        date = format!("{}{}", first.to_uppercase(), &date[1..]);
+    }
+    (time, date)
+}
+
+/// Reloj grande (hora + fecha) centrado, del ancho de la tarjeta. Sin estado
+/// propio: se relee la hora del sistema en cada repintado (el tick del fondo
+/// repinta ~30 fps).
+fn clock_view(theme: &Theme) -> View<Msg> {
+    let (time, date) = now_strings();
+    let time_v = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(74.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(time, 64.0, theme.fg_text, Alignment::Center);
+    let date_v = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(date, 14.0, theme.fg_muted, Alignment::Center);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(360.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![time_v, date_v])
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1362,6 +1528,7 @@ mod tests {
             active_mon: active,
             prev_mon: prev,
             card_anim: t,
+            mode: GreeterMode::Login,
         }
     }
 

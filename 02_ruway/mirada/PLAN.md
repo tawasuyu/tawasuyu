@@ -158,6 +158,51 @@ ventanas sueltas.
 
 ---
 
+## Bloqueo de sesión (lock) — el shell de credenciales reentrante  ✅ HECHO (2026-06-26)
+
+**Idea rectora:** el **greeter y el lock son el mismo artefacto** — un *shell de
+credenciales* que se compone *encima* de cero-o-más sesiones. Boot con 0 sesiones
+⇒ greeter (login). Sobre una sesión viva, por atajo (`Super+Escape`) ⇒ lock. No es
+un congelamiento global: la sesión sigue **residente** debajo, el shell es un
+overlay reentrante (a diferencia del flip `Greeter→Session`, de una sola vía).
+
+**Reuso total de pantalla:** el lock es el **mismo binario `mirada-greeter`** con
+`--lock` (usuario fijo = dueño de la sesión vía `MIRADA_LOCK_USER`, sin selector
+de sesión, botón «Desbloquear», emite `ShellAction::Unlock` en vez de un ticket).
+Misma tarjeta, mismos fondos animados, mismo **reloj grande** (agregado a la `view`,
+aparece en login y lock). El compositor lo compone igual que el greeter de boot —lo
+detecta por `app_id == "mirada.greeter"`— con `is_greeter` al **frente del z-order**
+(tapa la sesión, incluida la pata) y le **rutea todo el input**.
+
+**Seguridad del candado:** mientras `shell_activo()` (greeter o lock), el filtro de
+teclado **no dispara ningún atajo de sesión** (switchers, overview, grabs) — sólo
+quedan VT-switch y la salida de emergencia; todo lo demás va al shell. Sin esto,
+`Super+q` cerraría una ventana detrás del lock.
+
+**Arquitectura preparada para multisesión (FUS), sin construirla aún.** Se
+generalizaron los tres chokepoints single-session a forma de N, arrancando con N=1:
+1. `BodyMode::{Greeter,Session}` (one-way) → se le sumó `Locked` (overlay
+   reentrante) + el helper `App::shell_activo()`.
+2. `session_user: Option<UserInfo>` + `session_env` → `App::sessions: Vec<Session>`
+   + `active_session: Option<usize>` (hoy 0..1), con accesores `active_user`/`active_env`.
+3. El canal greeter→compositor pasó de un `SessionTicket` pelado a
+   `auth_core::ShellAction { StartSession | Unlock | Cancel }` — el seam que deja
+   crecer a «saltar entre sesiones» sin reescribir el contrato. El emisor del canal
+   se crea **siempre** (no sólo en modo DM) para que el lock pida el shell en runtime.
+
+El compositor **no hace `setuid` de sí mismo** (se queda con sus privilegios y
+lanza los clientes de cada sesión rebajados a su usuario) — la precondición que
+habilita hostear varias sesiones.
+
+**Diferido a FUS (anotado, no hecho):** arrancar/multiplexar >1 sesión concurrente;
+el selector «cambiar usuario» en el lock (`ShellAction` ganaría `SwitchTo(SessionId)`
+y `Unlock` un destino); y si la orquestación multi-seat termina en `sandokan`.
+**Auto-lock por inactividad** (`ext_idle_notify_v1`) sigue pendiente — requiere
+unificar el tipo de estado del bucle DRM (TODO en `setup.rs`), un refactor aparte.
+**Caveat N=1:** si una app de la sesión abriera una ventana justo mientras está
+bloqueada, se la marcaría `is_greeter` por error (glitch transitorio, se resuelve al
+desbloquear).
+
 ## Diferido (implementable, caro/nicho — no ahora)
 
 - **Compositor anidado real** (mirada dentro de mirada). Smithay lo soporta;

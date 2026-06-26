@@ -947,13 +947,14 @@ impl App {
     }
 
     /// Lanza `cmd` como el usuario de la sesión (igual que [`BodyOp::Spawn`]),
-    /// salvo en modo greeter, donde no se lanza nada. Lo usa el menú raíz.
+    /// salvo con un shell de credenciales arriba (greeter o lock), donde no se
+    /// lanza nada. Lo usa el menú raíz.
     pub(crate) fn spawn_user(&self, cmd: &str) {
-        if self.mode == BodyMode::Greeter {
-            dlog!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
+        if self.shell_activo() {
+            dlog!("mirada-compositor · «{cmd}» rechazado — shell de credenciales activo.");
             return;
         }
-        spawn_command(cmd, self.session_user.as_ref(), &self.session_env);
+        spawn_command(cmd, self.active_user().as_ref(), &self.active_env());
     }
 
     /// Traduce los comandos del Cerebro a operaciones y las ejecuta.
@@ -1152,14 +1153,16 @@ impl App {
             BodyOp::SetDecorations(d) => self.decorations = d,
             BodyOp::SetCapabilities(p) => *escribir_tolerante(&self.caps) = p,
             BodyOp::Spawn(cmd) => {
-                // En modo greeter no se lanza nada: la pantalla de login
-                // no es un sitio desde donde abrir programas.
-                if self.mode == BodyMode::Greeter {
-                    dlog!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
+                // Con un shell de credenciales arriba (greeter o lock) no se
+                // lanza nada: ni la pantalla de login ni el lock son un sitio
+                // desde donde abrir programas.
+                if self.shell_activo() {
+                    dlog!("mirada-compositor · «{cmd}» rechazado — shell de credenciales activo.");
                 } else {
-                    spawn_command(&cmd, self.session_user.as_ref(), &self.session_env);
+                    spawn_command(&cmd, self.active_user().as_ref(), &self.active_env());
                 }
             }
+            BodyOp::Lock => self.request_lock(),
             BodyOp::Shutdown => self.running = false,
         }
     }
@@ -1190,14 +1193,17 @@ impl App {
         });
         // La ventana del shell (el marco pata) no se tesela: se acopla a un borde.
         let is_shell = is_shell_app_id(&app_id);
-        // La ventana del greeter (DM): sin barra de título, y el backend la
-        // expande a la unión de salidas. Se detecta por MODO, no por `app_id`:
-        // al registrar el toplevel el cliente todavía no presentó su `app_id`
-        // (lo setea en el primer commit), así que comparar la cadena daba
-        // siempre falso — de ahí que volviera el titlebar y se quedara en un
-        // solo monitor. En modo greeter el único cliente no-shell ES el greeter.
+        // La ventana del shell de credenciales (greeter de login o lock): sin
+        // barra de título, y el backend la expande a la unión de salidas. Se
+        // detecta por MODO, no por `app_id`: al registrar el toplevel el cliente
+        // todavía no presentó su `app_id` (lo setea en el primer commit), así
+        // que comparar la cadena daba siempre falso. Con un shell arriba el
+        // próximo cliente no-shell ES el shell. Caveat N=1: si una app de la
+        // sesión abriera una ventana justo mientras está bloqueada, se la
+        // marcaría is_greeter por error (glitch transitorio); es raro y se
+        // resuelve al desbloquear. El `app_id` la cubre una vez presentado.
         let is_greeter =
-            (self.mode == BodyMode::Greeter && !is_shell) || app_id == "mirada.greeter";
+            (self.shell_activo() && !is_shell) || app_id == "mirada.greeter";
 
         // PID del cliente (lo guardó el accept-loop en `ClientState`) para el
         // linaje de las constelaciones — se lee ANTES de mover `surface` abajo.
@@ -1455,14 +1461,87 @@ impl App {
         }
     }
 
-    /// El traspaso del DM — la «mutación atómica». Llega el tiquet de un
-    /// login válido y el compositor pasa de la pantalla de greeter a la
-    /// sesión del usuario **sin reiniciar el servidor Wayland**: el mismo
-    /// proceso, la misma GPU, las mismas ventanas. Idempotente — un
-    /// segundo tiquet (no debería llegar) se ignora.
-    pub(crate) fn complete_greeter_handoff(&mut self, ticket: SessionTicket) {
-        if self.mode == BodyMode::Session {
-            return; // ya en sesión — un tiquet de más, se ignora
+    /// Usuario de la sesión activa — a quien rebajar privilegios al lanzar sus
+    /// procesos. `None` sin sesión (modo greeter) o si la sesión corre con los
+    /// privilegios del compositor (modo dev / sin root).
+    pub(crate) fn active_user(&self) -> Option<UserInfo> {
+        self.active_session
+            .and_then(|i| self.sessions.get(i))
+            .and_then(|s| s.user.clone())
+    }
+
+    /// Entorno de la sesión activa (runtime dir, WAYLAND_DISPLAY, D-Bus, ctl).
+    /// Vacío sin sesión.
+    pub(crate) fn active_env(&self) -> Vec<(String, String)> {
+        self.active_session
+            .and_then(|i| self.sessions.get(i))
+            .map(|s| s.env.clone())
+            .unwrap_or_default()
+    }
+
+    /// ¿Hay un shell de credenciales (greeter de login o lock) compuesto encima?
+    /// En ese estado el input va al shell y se suspenden las interacciones
+    /// normales de la sesión (menús, drag, spawn). Ver [`BodyMode::Locked`].
+    pub(crate) fn shell_activo(&self) -> bool {
+        matches!(self.mode, BodyMode::Greeter | BodyMode::Locked)
+    }
+
+    /// Despacha la acción que el shell de credenciales emitió por su stdout
+    /// (canal [`auth_core::ShellAction`]).
+    pub(crate) fn handle_shell_action(&mut self, action: auth_core::ShellAction) {
+        use auth_core::ShellAction;
+        match action {
+            ShellAction::StartSession(ticket) => self.start_session(ticket),
+            ShellAction::Unlock => self.unlock(),
+            // El lock no ofrece cancelar sin desbloquear; reservado para FUS.
+            ShellAction::Cancel => {}
+        }
+    }
+
+    /// Pide bloquear la sesión activa. No cambia el modo todavía: deja un
+    /// [`pending_lock`](Self::pending_lock) que el bucle del backend consume
+    /// para lanzar el shell de credenciales en modo lock (necesita el emisor
+    /// del canal, que no vive en `App`). No-op si ya hay un shell en pantalla
+    /// (greeter o lock) — no se apila otro.
+    pub(crate) fn request_lock(&mut self) {
+        if self.shell_activo() || self.pending_lock.is_some() {
+            return;
+        }
+        // A quién pedirle la contraseña: el dueño de la sesión activa, o —en
+        // modo dev, corriendo ya como el usuario— el `$USER` del entorno. El
+        // shell-lock valida contra PAM ese nombre.
+        let user = self
+            .active_user()
+            .map(|u| u.name)
+            .or_else(|| std::env::var("USER").ok())
+            .unwrap_or_default();
+        self.pending_lock = Some(user);
+    }
+
+    /// Desbloquea: el shell-lock validó la contraseña del dueño. Vuelve a
+    /// [`BodyMode::Session`]; el proceso del shell-lock se cierra solo (emitió
+    /// `Unlock` y llamó a `quit`), y al destruirse su superficie la sesión de
+    /// abajo recupera foco y composición normales. No-op si no estaba bloqueada.
+    pub(crate) fn unlock(&mut self) {
+        if self.mode != BodyMode::Locked {
+            return;
+        }
+        self.mode = BodyMode::Session;
+        // Dejamos de empujarle la disposición de monitores al shell que se va.
+        self.greeter_stdin = None;
+        dlog!("mirada-compositor · sesión desbloqueada.");
+    }
+
+    /// Arranca una sesión nueva tras un login válido — la «mutación atómica»
+    /// del DM: el compositor pasa de la pantalla de greeter a la sesión del
+    /// usuario **sin reiniciar el servidor Wayland** (el mismo proceso, la
+    /// misma GPU). Sólo desde el login de arranque ([`BodyMode::Greeter`]); un
+    /// tiquet de más se ignora. El compositor **no** hace `setuid` de sí mismo:
+    /// queda con sus privilegios y lanza los clientes de la sesión rebajados al
+    /// usuario — la forma que deja crecer a multisesión.
+    fn start_session(&mut self, ticket: SessionTicket) {
+        if self.mode != BodyMode::Greeter {
+            return; // sólo desde el login de arranque
         }
         println!(
             "mirada-compositor · traspaso a la sesión de «{}» (uid {}).",
@@ -1475,7 +1554,13 @@ impl App {
             );
         }
         self.mode = BodyMode::Session;
-        self.session_user = Some(ticket.user.clone());
+        // Alta de la sesión (hoy la única) y activación. El entorno se completa
+        // abajo con `setup_user_session_env`.
+        self.sessions.push(crate::estado::Session {
+            user: Some(ticket.user.clone()),
+            env: Vec::new(),
+        });
+        self.active_session = Some(self.sessions.len() - 1);
 
         // Ya en sesión: registra los atajos del escritorio y la decoración
         // (en modo greeter se omitieron a propósito — ver `build_app`).
@@ -1490,14 +1575,14 @@ impl App {
         //  · ajeno         → soltar el DRM y `exec` (otro compositor toma la
         //                    GPU). Se difiere al cierre del bucle: marcamos la
         //                    sesión pendiente y pedimos salir.
-        let user = self.session_user.clone();
+        let user = Some(ticket.user.clone());
         // Prepara el entorno de sesión del usuario (runtime dir propio,
         // WAYLAND_DISPLAY absoluto, bus D-Bus) para que las apps nativas
         // —waybar, GTK/Qt— funcionen como en una sesión de verdad.
         if let Some(u) = &user {
             self.setup_user_session_env(u);
         }
-        let env = self.session_env.clone();
+        let env = self.active_env();
         let cmd = ticket.session.trim();
         if cmd.is_empty() {
             spawn_autostart(user.as_ref(), &env);
@@ -1547,18 +1632,21 @@ impl App {
         // y `mirada-ctl` de la sesión hablen con el Cerebro (sin esto, el
         // switcher de workspaces y el task-manager quedaban mudos).
         let ctl_sock = mirada_brain::ctl::default_socket_path().display().to_string();
-        self.session_env = vec![
+        let env = vec![
             ("XDG_RUNTIME_DIR".to_string(), xrd),
             ("WAYLAND_DISPLAY".to_string(), wl),
             ("DBUS_SESSION_BUS_ADDRESS".to_string(), dbus_addr.clone()),
             ("MIRADA_CTL_SOCK".to_string(), ctl_sock),
         ];
+        // Guarda el entorno en la sesión activa (la que se acaba de crear).
+        if let Some(i) = self.active_session {
+            self.sessions[i].env = env.clone();
+        }
         // Levanta el bus de sesión D-Bus como el usuario, si no hay uno, y
         // espera (acotado) a que el socket exista: si lanzáramos waybar/GTK
         // antes, fallarían con «cannot autolaunch D-Bus». Es un bloqueo de
         // una sola vez al iniciar la sesión, no en el bucle de render.
         if !std::path::Path::new(&bus_path).exists() {
-            let env = self.session_env.clone();
             spawn_command(
                 &format!("dbus-daemon --session --address={dbus_addr} --nofork --nopidfile"),
                 Some(user),

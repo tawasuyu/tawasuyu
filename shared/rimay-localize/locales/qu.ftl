@@ -603,6 +603,12 @@ mirada-greeter-btn-submit = Yaykuy
 mirada-greeter-btn-submitting = Yaykuchkaspa…
 mirada-greeter-hint-nav = ↑/↓: llamk'ana · Enter: yaykuy
 mirada-greeter-hint-console = Ctrl+Alt+F1…F12: consola · Ctrl+Alt+⌫: lluqsiy
+# Qispichiy pantalla (greeter-pa kikin tarjetantam servichikun).
+mirada-lock-subtitle = Pantalla wisq'asqa
+mirada-lock-label-user = Wisq'asqa sesión
+mirada-lock-btn = Kichay
+mirada-lock-btn-busy = Kichachkan…
+mirada-lock-hint = Kichanapaq Enter ñit'iy
 
 # === nakui-explorer-llimphi ===
 nakui-explorer-menu-refresh-log = Quillqa musuqyachiy

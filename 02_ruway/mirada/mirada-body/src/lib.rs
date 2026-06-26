@@ -100,6 +100,9 @@ pub enum BodyOp {
     Spawn(String),
     /// Apaga el compositor y libera el hardware.
     Shutdown,
+    /// Bloquea la sesión activa: el compositor compone el shell de credenciales
+    /// (greeter en modo lock) encima y le rutea el input hasta el desbloqueo.
+    Lock,
 }
 
 /// La contabilidad del Cuerpo: salidas y superficies.
@@ -209,6 +212,7 @@ impl BodyState {
             BrainCommand::SetCapabilities(p) => vec![BodyOp::SetCapabilities(p)],
             BrainCommand::Spawn(cmd) => vec![BodyOp::Spawn(cmd)],
             BrainCommand::Shutdown => vec![BodyOp::Shutdown],
+            BrainCommand::Lock => vec![BodyOp::Lock],
         }
     }
 

@@ -182,6 +182,10 @@ pub enum DesktopAction {
     Spawn(String),
     /// Apaga el compositor.
     Quit,
+    /// Bloquea la sesión activa: el Cuerpo compone el shell de credenciales
+    /// (mirada-greeter en modo lock) encima y le rutea el input hasta que el
+    /// usuario desbloquee.
+    Lock,
 }
 
 /// El nombre RON-seguro de un modo de teselado (sin guiones problemáticos
@@ -262,6 +266,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::ResizeFloatDir(d) => write!(f, "resize-float-{}", d.slug()),
             DesktopAction::Spawn(cmd) => write!(f, "spawn:{cmd}"),
             DesktopAction::Quit => f.write_str("quit"),
+            DesktopAction::Lock => f.write_str("lock"),
         }
     }
 }
@@ -303,6 +308,7 @@ impl FromStr for DesktopAction {
             "workspace-prev" => Self::WorkspacePrev,
             "focus-output-next" => Self::FocusOutputNext,
             "quit" => Self::Quit,
+            "lock" => Self::Lock,
             _ => {
                 if let Some(slug) = s.strip_prefix("layout:") {
                     Self::SetLayout(
@@ -438,6 +444,8 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+Shift+p".into(), DesktopAction::Spawn("wawa-panel".into())),
         ("Super+,".into(), DesktopAction::IncMaster),
         ("Super+.".into(), DesktopAction::DecMaster),
+        // Bloquear la sesión: Super+Escape (Super+l ya es GrowMaster).
+        ("Super+Escape".into(), DesktopAction::Lock),
         ("Super+Shift+e".into(), DesktopAction::Quit),
     ];
     // Un escritorio por dígito: `Super+1`..`Super+9` lo activan,

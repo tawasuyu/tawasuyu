@@ -357,12 +357,13 @@ impl DrmState {
     /// ratón, por su `stdin`. El greeter usa esto para que la tarjeta de login
     /// viaje al monitor activo mientras el fondo animado sigue en todos. Los
     /// rects van en coordenadas **locales a la superficie** (el greeter cubre la
-    /// unión de las salidas anclada en su origen). No-op fuera de modo greeter o
-    /// sin tubería. Con `force`, reenvía aunque el monitor activo no haya
-    /// cambiado (arranque / hotplug, donde cambian los rects pero no el índice).
+    /// unión de las salidas anclada en su origen). No-op sin un shell de
+    /// credenciales arriba (login o lock) o sin tubería. Con `force`, reenvía
+    /// aunque el monitor activo no haya cambiado (arranque / hotplug, donde
+    /// cambian los rects pero no el índice).
     pub(super) fn sync_greeter_layout(&mut self, force: bool) {
         use std::io::Write;
-        if self.app.mode != crate::estado::BodyMode::Greeter || self.outputs.is_empty() {
+        if !self.app.shell_activo() || self.outputs.is_empty() {
             return;
         }
         // Origen de la superficie = esquina superior-izquierda de la unión.

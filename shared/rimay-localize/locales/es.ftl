@@ -602,6 +602,12 @@ mirada-greeter-btn-submit = Entrar
 mirada-greeter-btn-submitting = Entrando…
 mirada-greeter-hint-nav = ↑/↓: escritorio · Enter: entrar
 mirada-greeter-hint-console = Ctrl+Alt+F1…F12: consola · Ctrl+Alt+⌫: salir
+# Lock de pantalla (reusa la misma tarjeta que el greeter).
+mirada-lock-subtitle = Pantalla bloqueada
+mirada-lock-label-user = Sesión bloqueada
+mirada-lock-btn = Desbloquear
+mirada-lock-btn-busy = Desbloqueando…
+mirada-lock-hint = Enter para desbloquear
 
 # === nakui-explorer-llimphi ===
 nakui-explorer-menu-refresh-log = Refrescar log

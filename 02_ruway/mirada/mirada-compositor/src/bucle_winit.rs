@@ -11,7 +11,7 @@ use smithay::backend::input::{InputEvent, KeyState, KeyboardKeyEvent};
 use smithay::utils::{Rectangle, Transform, SERIAL_COUNTER};
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::desktop::layer_map_for_output;
-use auth_core::SessionTicket;
+use auth_core::ShellAction;
 
 /// El backend `winit`: corre anidado dentro de una sesión gráfica.
 pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -86,18 +86,17 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
         state.output_size = (win_size.w, win_size.h);
     }
 
-    // Modo greeter (DM anidado — útil para iterar la UI del login):
-    // lanza el greeter y recibe su tiquet por un canal que el bucle sondea.
-    let greeter_rx = if state.mode == BodyMode::Greeter {
-        let (tx, rx) = std::sync::mpsc::channel::<SessionTicket>();
-        let stdin = spawn_greeter(move |ticket| {
-            let _ = tx.send(ticket);
+    // Canal del shell de credenciales (greeter de login y, en runtime, el
+    // lock). Se crea siempre: el lock pide el shell desde una sesión normal.
+    // `shell_tx` se clona para cablear cada greeter que se lance.
+    let (shell_tx, shell_rx) = std::sync::mpsc::channel::<ShellAction>();
+    if state.mode == BodyMode::Greeter {
+        let tx = shell_tx.clone();
+        let stdin = spawn_greeter(None, move |a| {
+            let _ = tx.send(a);
         })?;
         state.greeter_stdin = Some(stdin);
-        Some(rx)
-    } else {
-        None
-    };
+    }
 
     while state.running {
         // 1 · Eventos del backend (teclado, redimensión, cierre).
@@ -127,6 +126,11 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                                 st.running = false;
                                 return FilterResult::Intercept(());
                             }
+                            // Con un shell de credenciales arriba (login/lock) los
+                            // atajos de sesión no disparan: todo va al shell.
+                            if st.shell_activo() {
+                                return FilterResult::Forward;
+                            }
                             if st.grabs.contains(&combo) {
                                 st.pending_keybind = Some(combo);
                                 return FilterResult::Intercept(());
@@ -149,10 +153,23 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
         // 2 · Comandos de un Cerebro enlazado.
         state.brain_poll();
 
-        // 2 bis · El tiquet del greeter (modo DM): dispara el traspaso.
-        if let Some(rx) = &greeter_rx {
-            while let Ok(ticket) = rx.try_recv() {
-                state.complete_greeter_handoff(ticket);
+        // 2 bis · Acción del shell de credenciales: arrancar sesión (login) o
+        // desbloquear (lock).
+        while let Ok(action) = shell_rx.try_recv() {
+            state.handle_shell_action(action);
+        }
+        // 2 bis bis · Pedido de bloqueo (Super+Escape): lanza el shell-lock
+        // encima de la sesión, con su stdout cableado al mismo canal.
+        if let Some(user) = state.pending_lock.take() {
+            let tx = shell_tx.clone();
+            match spawn_greeter(Some(&user), move |a| {
+                let _ = tx.send(a);
+            }) {
+                Ok(stdin) => {
+                    state.greeter_stdin = Some(stdin);
+                    state.mode = BodyMode::Locked;
+                }
+                Err(e) => dlog!("mirada-compositor · no pude lanzar el lock: {e}"),
             }
         }
 
@@ -197,7 +214,9 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                 layer_render_elements(state.output.as_ref(), renderer);
             let mut shown: Vec<&ManagedWindow> =
                 state.windows.iter().filter(|w| w.visible).collect();
-            shown.sort_by_key(|w| (!w.is_shell, !w.floating));
+            // `is_greeter` al frente: el shell de credenciales (login/lock) tapa
+            // la sesión —incluido el shell— mientras está arriba.
+            shown.sort_by_key(|w| (!w.is_greeter, !w.is_shell, !w.floating));
             // El backend winit anidado no pinta decoración; pasa el alto de
             // barra para que la superficie quede donde el DRM la pondría.
             let tbh = state.decorations.titlebar_height;

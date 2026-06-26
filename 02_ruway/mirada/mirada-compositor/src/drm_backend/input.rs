@@ -40,6 +40,15 @@ impl DrmState {
                                 st.running = false;
                                 return FilterResult::Intercept(());
                             }
+                            // Con un shell de credenciales arriba (login o lock)
+                            // ninguna tecla manipula la sesión: switchers, overview
+                            // y atajos quedan inertes y todo va al shell. En login
+                            // los grabs ni se registran; en lock sí —de ahí el
+                            // guard, o `Super+q` cerraría una ventana detrás del
+                            // candado—. VT y salida de emergencia ya se atendieron.
+                            if st.shell_activo() {
+                                return FilterResult::Forward;
+                            }
                             // Switchers visuales: Alt-Tab (ventanas) y Win-Tab
                             // (escritorios). Se manejan acá, NO por sus keybinds,
                             // para mostrar el overlay y confirmar al soltar el
@@ -374,7 +383,7 @@ impl DrmState {
                 // Click DERECHO sobre la BARRA DE TÍTULO de una ventana: abre el
                 // menú **contextual de ventana** (minimizar/maximizar/flotar/
                 // enviar-a/cerrar). Va ANTES del menú del fondo. No en greeter.
-                if pressed && button == BTN_RIGHT && self.app.mode != BodyMode::Greeter {
+                if pressed && button == BTN_RIGHT && !self.app.shell_activo() {
                     let (x, y) = self.app.pointer_loc;
                     if let Some(i) = self.titlebar_at(x, y) {
                         let id = self.app.windows[i].id;
@@ -404,7 +413,7 @@ impl DrmState {
                 if pressed
                     && button == BTN_RIGHT
                     && !self.menu_entries.is_empty()
-                    && self.app.mode != BodyMode::Greeter
+                    && !self.app.shell_activo()
                 {
                     let super_held = self
                         .app
@@ -440,7 +449,7 @@ impl DrmState {
                 // ¿Empieza un arrastre? `Super`+botón sobre una ventana:
                 // izquierdo mueve, derecho redimensiona. En modo greeter no
                 // hay arrastre: el login está clavado a pantalla completa.
-                if pressed && self.app.drag.is_none() && self.app.mode != BodyMode::Greeter {
+                if pressed && self.app.drag.is_none() && !self.app.shell_activo() {
                     let super_held = self
                         .app
                         .keyboard
@@ -474,7 +483,7 @@ impl DrmState {
 
                 // Click izquierdo sobre un BOTÓN del titlebar (✕ cerrar / □
                 // maximizar): actúa y no arranca arrastre. Va ANTES del drag.
-                if pressed && button == BTN_LEFT && self.app.mode != BodyMode::Greeter {
+                if pressed && button == BTN_LEFT && !self.app.shell_activo() {
                     let (x, y) = self.app.pointer_loc;
                     if let Some((id, slot)) = self.titlebar_button_at(x, y) {
                         match slot {
@@ -497,7 +506,7 @@ impl DrmState {
                 if pressed
                     && button == BTN_LEFT
                     && self.app.drag.is_none()
-                    && self.app.mode != BodyMode::Greeter
+                    && !self.app.shell_activo()
                 {
                     let (x, y) = self.app.pointer_loc;
                     if let Some(i) = self.titlebar_at(x, y) {

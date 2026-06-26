@@ -63,7 +63,7 @@ use smithay::utils::{
     DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
 };
 
-use auth_core::SessionTicket;
+use auth_core::ShellAction;
 use mirada_brain::{BodyEvent, CtlReply, CtlRequest, Rect, ZoneFrac};
 
 use crate::{
@@ -566,6 +566,9 @@ struct DrmState {
     shadows_on: bool,
     /// Contexto `libinput` — se suspende y reanuda al conmutar de VT.
     libinput: Libinput,
+    /// Emisor del canal del shell de credenciales: `tick` lo clona para
+    /// cablear el stdout del greeter-lock cuando la sesión pide bloquearse.
+    shell_tx: smithay::reexports::calloop::channel::Sender<ShellAction>,
     /// `false` mientras la sesión está cedida a otra VT — no se compone.
     active: bool,
     /// Vigías de los archivos de config recargables en caliente.
@@ -1009,15 +1012,18 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     println!("      escuchando en WAYLAND_DISPLAY={socket_name}");
 
-    // Modo DM: lanza el greeter y recibe su tiquet por un canal de
-    // `calloop`. Modo normal: autoarranque + `MIRADA_STARTUP`.
-    let greeter_rx = if app.mode == BodyMode::Greeter {
-        let (tx, rx) = ticket_channel::<SessionTicket>();
-        let stdin = crate::spawn_greeter(move |ticket| {
-            let _ = tx.send(ticket);
+    // Canal del shell de credenciales (greeter de login y, en runtime, el
+    // lock). El hilo lector del shell despierta el bucle por acá con una
+    // `ShellAction`. Se crea **siempre** —no sólo en modo DM— porque el lock
+    // pide el shell en runtime desde una sesión normal; `shell_tx` viaja a
+    // `DrmState` para que `tick` pueda lanzar el lock.
+    let (shell_tx, shell_rx) = ticket_channel::<ShellAction>();
+    if app.mode == BodyMode::Greeter {
+        let tx = shell_tx.clone();
+        let stdin = crate::spawn_greeter(None, move |a| {
+            let _ = tx.send(a);
         })?;
         app.greeter_stdin = Some(stdin);
-        Some(rx)
     } else {
         // Autoarranque: los programas de `~/.config/mirada/autostart`.
         // Modo no-greeter: ya corremos con la identidad del usuario, sin
@@ -1030,8 +1036,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         if let Ok(cmd) = std::env::var("MIRADA_STARTUP") {
             crate::spawn_command(&cmd, None, &[]);
         }
-        None
-    };
+    }
 
     // 8 · El bucle `calloop`: VBlank, teclado, clientes y un timer.
     println!("[8/8] montando el bucle de eventos …");
@@ -1163,17 +1168,15 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         })
         .map_err(|e| format!("insert timer: {e}"))?;
 
-    // Tiquet del greeter (modo DM): al llegar, el traspaso a la sesión.
-    // El hilo lector del greeter despierta el bucle por este canal.
-    if let Some(rx) = greeter_rx {
-        handle
-            .insert_source(rx, |event, _, state: &mut DrmState| {
-                if let TicketEvent::Msg(ticket) = event {
-                    state.app.complete_greeter_handoff(ticket);
-                }
-            })
-            .map_err(|e| format!("insert greeter: {e}"))?;
-    }
+    // Acción del shell de credenciales: arrancar la sesión (login) o
+    // desbloquear (lock). El hilo lector del shell despierta el bucle por acá.
+    handle
+        .insert_source(shell_rx, |event, _, state: &mut DrmState| {
+            if let TicketEvent::Msg(action) = event {
+                state.app.handle_shell_action(action);
+            }
+        })
+        .map_err(|e| format!("insert shell: {e}"))?;
 
     // Tope de tiempo opcional: `MIRADA_DRM_TIMEOUT=<segundos>` cierra el
     // compositor solo (0 o sin definir = sin tope). El teclado ya
@@ -1221,6 +1224,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         outputs: output_ctxs,
         renderer,
         libinput: libinput_handle,
+        shell_tx,
         active: true,
         watches,
         ctl,

@@ -5,7 +5,7 @@ use smithay::input::pointer::CursorImageSurfaceData;
 use smithay::wayland::compositor::{with_states, with_surface_tree_downward, SurfaceAttributes, TraversalAction};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
-use auth_core::{SessionTicket, UserInfo};
+use auth_core::{ShellAction, UserInfo};
 
 /// Construye la cadena de un atajo (`"Super+Shift+j"`) desde el estado de
 /// modificadores y el keysym, con el mismo format que el mapa de teclas
@@ -547,30 +547,44 @@ pub(crate) fn greeter_bin() -> String {
     std::env::var("MIRADA_GREETER_BIN").unwrap_or_else(|_| "mirada-greeter".to_string())
 }
 
-/// Lanza `mirada-greeter` como proceso hijo, en modo DM, con el stdout
-/// capturado. Un hilo lee sus líneas: la que sea un [`SessionTicket`] se
-/// entrega por `send` (el bucle de eventos hará el traspaso); el resto
-/// del stdout se reenvía a la consola con el prefijo `greeter ·`. El
-/// hilo es dueño del `Child` y lo cosecha cuando el greeter termina.
+/// Lanza `mirada-greeter` como proceso hijo (shell de credenciales) con el
+/// stdout capturado. Un hilo lee sus líneas: la que sea una [`ShellAction`] se
+/// entrega por `send` (el bucle de eventos la aplica — arrancar sesión o
+/// desbloquear); el resto del stdout se reenvía a la consola con el prefijo
+/// `greeter ·`. El hilo es dueño del `Child` y lo cosecha cuando el greeter
+/// termina.
+///
+/// `lock_for`: `None` ⇒ greeter de login (modo DM). `Some(usuario)` ⇒ greeter
+/// en modo **lock** (`--lock`), con el usuario fijo (dueño de la sesión) pasado
+/// por `MIRADA_LOCK_USER` — pide su contraseña para desbloquear.
 ///
 /// Devuelve el `stdin` del greeter: el compositor le empuja por ahí la
 /// disposición de monitores (qué monitor tiene el ratón) para que la tarjeta
-/// de login viaje al monitor activo. Ver [`crate::estado::App::greeter_stdin`].
-pub(crate) fn spawn_greeter<S>(send: S) -> std::io::Result<std::process::ChildStdin>
+/// viaje al monitor activo. Ver [`crate::estado::App::greeter_stdin`].
+pub(crate) fn spawn_greeter<S>(
+    lock_for: Option<&str>,
+    send: S,
+) -> std::io::Result<std::process::ChildStdin>
 where
-    S: Fn(SessionTicket) + Send + 'static,
+    S: Fn(ShellAction) + Send + 'static,
 {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new(greeter_bin())
+    let mut command = Command::new(greeter_bin());
+    command
         .envs(THEME_ENV.iter().copied())
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+        .stdout(Stdio::piped());
+    // Modo lock: bandera + usuario fijo (el shell-lock no deja teclear el nombre).
+    if let Some(user) = lock_for {
+        command.arg("--lock").env("MIRADA_LOCK_USER", user);
+    }
+    let mut child = command.spawn()?;
     let stdout = child.stdout.take().expect("stdout pedido con Stdio::piped");
     let stdin = child.stdin.take().expect("stdin pedido con Stdio::piped");
-    println!("mirada-compositor · greeter lanzado (pid {}).", child.id());
+    let papel = if lock_for.is_some() { "lock" } else { "login" };
+    println!("mirada-compositor · greeter ({papel}) lanzado (pid {}).", child.id());
     if std::env::var_os("LLIMPHI_TIMING").is_some() {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -581,10 +595,10 @@ where
 
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            match SessionTicket::from_line(&line) {
-                Some(ticket) => {
-                    println!("mirada-compositor · tiquet de sesión recibido del greeter.");
-                    send(ticket);
+            match ShellAction::from_line(&line) {
+                Some(action) => {
+                    println!("mirada-compositor · acción del shell recibida del greeter.");
+                    send(action);
                 }
                 None => println!("greeter · {line}"),
             }

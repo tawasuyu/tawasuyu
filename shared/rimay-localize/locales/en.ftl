@@ -599,6 +599,12 @@ mirada-greeter-btn-submit = Log in
 mirada-greeter-btn-submitting = Logging in…
 mirada-greeter-hint-nav = ↑/↓: desktop · Enter: log in
 mirada-greeter-hint-console = Ctrl+Alt+F1…F12: console · Ctrl+Alt+⌫: exit
+# Screen lock (reuses the same card as the greeter).
+mirada-lock-subtitle = Screen locked
+mirada-lock-label-user = Locked session
+mirada-lock-btn = Unlock
+mirada-lock-btn-busy = Unlocking…
+mirada-lock-hint = Press Enter to unlock
 
 # === nakui-explorer-llimphi ===
 nakui-explorer-menu-refresh-log = Refresh log

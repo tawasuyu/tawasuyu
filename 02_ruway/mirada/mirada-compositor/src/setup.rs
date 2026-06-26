@@ -419,8 +419,8 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         body: BodyState::new(),
         brain,
         mode: if greeter { BodyMode::Greeter } else { BodyMode::Session },
-        session_user: None,
-        session_env: Vec::new(),
+        sessions: Vec::new(),
+        active_session: None,
         grabs: Vec::new(),
         debug_keys: std::env::var_os("MIRADA_DEBUG_KEYS").is_some(),
         switcher: None,
@@ -441,6 +441,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         running: true,
         greeter_stdin: None,
         greeter_active_output: usize::MAX,
+        pending_lock: None,
     };
 
     // Distribución de teclado de la config del usuario (vacío = la del

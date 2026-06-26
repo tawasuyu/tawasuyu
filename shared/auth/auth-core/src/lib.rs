@@ -16,10 +16,12 @@
 //! éxito recibe un [`UserInfo`] con uid/gid/home/shell — lo que el
 //! compositor necesita para arrancar la sesión.
 
+mod accion;
 mod pam_backend;
 mod ticket;
 mod user;
 
+pub use accion::{ShellAction, CANCEL_TAG, UNLOCK_TAG};
 pub use pam_backend::{PamAuthenticator, DEFAULT_SERVICE};
 pub use ticket::{SessionTicket, TICKET_TAG};
 pub use user::{resolve_user, UserInfo};

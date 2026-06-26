@@ -255,6 +255,10 @@ pub enum BrainCommand {
     Spawn(String),
     /// Apaga el Cuerpo y libera el hardware.
     Shutdown,
+    /// Bloquea la sesión activa: el Cuerpo compone el shell de credenciales
+    /// (greeter en modo lock) encima de todo y le rutea el input hasta el
+    /// desbloqueo. No-op si ya hay un shell de credenciales en pantalla.
+    Lock,
     /// Estado de escritorios que el Cerebro **enlazado** empuja al Cuerpo para
     /// que su switcher Win+Tab (HUD + slide de transición) funcione en modo DE:
     /// el escritorio activo, las cargas (nº de ventanas por escritorio) y la

@@ -110,7 +110,9 @@ impl DrmState {
     /// caen sobre `rect` para no malgastar trabajo del compositor.
     fn emit_windows(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
         let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
-        shown.sort_by_key(|w| (!w.is_shell, !w.floating, !w.focused));
+        // `is_greeter` al frente del todo: el shell de credenciales (login o
+        // lock) tapa la sesión —incluido el shell/pata— mientras está arriba.
+        shown.sort_by_key(|w| (!w.is_greeter, !w.is_shell, !w.floating, !w.focused));
         let tbh = self.app.decorations.titlebar_height;
         // `render_loc` necesita el alto de la "salida lógica" sólo para anclar
         // el shell al borde inferior. En multi-monitor esa salida es la

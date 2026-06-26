@@ -43,10 +43,35 @@ pub(crate) enum Brain {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BodyMode {
     /// Pantalla de login: el único cliente es el greeter, no se
-    /// registran atajos, se rechaza `Spawn` y no hay autoarranque.
+    /// registran atajos, se rechaza `Spawn` y no hay autoarranque. Aún no
+    /// hay ninguna sesión hosteada.
     Greeter,
     /// Sesión de usuario: el compositor funciona con normalidad.
     Session,
+    /// Sesión activa pero **bloqueada**: el shell de credenciales (greeter en
+    /// modo lock) se compone encima y se traga el input hasta que el usuario
+    /// desbloquee. La sesión de abajo sigue residente — el lock es un overlay,
+    /// no un congelamiento; por eso es reentrante (a diferencia del flip
+    /// Greeter→Session, de una sola vía). Comparte con [`Greeter`](BodyMode::Greeter)
+    /// el comportamiento de «hay un shell arriba»: ver [`App::shell_activo`].
+    Locked,
+}
+
+/// Una sesión de usuario hosteada por el compositor.
+///
+/// Hoy el compositor hostea 0 o 1; el vector [`App::sessions`] le da forma de
+/// N para que el *fast user switching* (varias sesiones concurrentes, saltar
+/// entre ellas desde el lock) sea un incremento y no una reescritura. El
+/// compositor **no** hace `setuid` de sí mismo: se queda con sus privilegios y
+/// lanza los clientes de cada sesión rebajados a su [`user`](Session::user) —
+/// la forma que habilita multisesión.
+pub(crate) struct Session {
+    /// Dueño de la sesión. `None` = los procesos heredan los privilegios del
+    /// compositor (modo dev / sin root): no hay a quién rebajar.
+    pub(crate) user: Option<UserInfo>,
+    /// Entorno inyectado a las apps nativas de la sesión: su `XDG_RUNTIME_DIR`,
+    /// el `WAYLAND_DISPLAY` absoluto, el bus D-Bus y el socket de control.
+    pub(crate) env: Vec<(String, String)>,
 }
 
 /// Grosor por defecto de la franja del shell (px), si el entorno no lo fija.
@@ -452,16 +477,16 @@ pub(crate) struct App {
     pub(crate) body: BodyState,
     /// El Cerebro: embebido o enlazado.
     pub(crate) brain: Brain,
-    /// Fase del ciclo de vida — login o sesión (ver [`BodyMode`]).
+    /// Fase del ciclo de vida — login, sesión o sesión bloqueada (ver [`BodyMode`]).
     pub(crate) mode: BodyMode,
-    /// Entorno de sesión (XDG_RUNTIME_DIR del usuario, WAYLAND_DISPLAY
-    /// absoluto, bus D-Bus) inyectado a las apps nativas tras el traspaso.
-    /// Vacío en modo greeter.
-    pub(crate) session_env: Vec<(String, String)>,
-    /// Identidad a la que rebajar privilegios al lanzar procesos de
-    /// sesión. `None` salvo tras el traspaso del DM — entonces cada
-    /// `spawn` hace `setuid`/`setgid` a este usuario (si somos root).
-    pub(crate) session_user: Option<UserInfo>,
+    /// Sesiones hosteadas. Hoy 0 (greeter) o 1 (tras el traspaso del DM); el
+    /// vector deja crecer a multisesión sin reescribir. Ver [`Session`].
+    pub(crate) sessions: Vec<Session>,
+    /// Índice en [`sessions`](Self::sessions) de la sesión **activa** (la que se
+    /// pinta y recibe input). `None` mientras no hay ninguna (modo greeter).
+    /// Los procesos de sesión se rebajan a su usuario y heredan su entorno —
+    /// ver [`App::active_user`] y [`App::active_env`].
+    pub(crate) active_session: Option<usize>,
     /// Atajos globales a interceptar (los registra el Cerebro).
     pub(crate) grabs: Vec<String>,
     /// Diagnóstico opt-in (`MIRADA_DEBUG_KEYS=1`): loguea cada combo con
@@ -525,6 +550,11 @@ pub(crate) struct App {
     /// (la del ratón). `usize::MAX` ⇒ aún no se empujó nada — fuerza el
     /// primer envío.
     pub(crate) greeter_active_output: usize,
+    /// Pedido de bloqueo pendiente: el nombre de usuario a quien pedirle la
+    /// contraseña. Lo pone [`App::request_lock`] (desde `BrainCommand::Lock`) y
+    /// lo consume el bucle del backend, que lanza el shell de credenciales en
+    /// modo lock (necesita el emisor del canal, que no vive en `App`).
+    pub(crate) pending_lock: Option<String>,
 
     /// **Clipboard por zona** (`MIRADA_CLIPBOARD_POR_ZONA=1`): cada escritorio
     /// tiene su propio portapapeles de texto. `false` = comportamiento normal
