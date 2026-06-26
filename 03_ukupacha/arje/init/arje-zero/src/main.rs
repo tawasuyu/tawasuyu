@@ -21,6 +21,7 @@ mod bus;
 mod events;
 mod graph;
 mod keypair_store;
+mod profile;
 mod seed;
 
 use anyhow::Context;

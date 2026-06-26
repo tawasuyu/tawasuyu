@@ -60,6 +60,28 @@ fn host_seed_provee_spawn_y_journal() {
 }
 
 #[test]
+fn session_gnome_fragment_es_valido_y_trae_compat() {
+    // El fragmento de sesión `gnome` se anexa a la base por `overlay_session`
+    // cuando el cmdline trae `arje.session=gnome`. Debe parsear/validar igual
+    // que una seed y aportar los shims D-Bus que GNOME consulta al boot.
+    let path = seeds_dir()
+        .join("fragments")
+        .join("session-gnome.card.json");
+    let card = EntityCard::from_path(&path)
+        .unwrap_or_else(|e| panic!("fragmento session-gnome no parseó/validó: {e}"));
+    assert!(
+        !card.genesis.is_empty(),
+        "session-gnome sin entes — no aportaría ningún backend a la sesión",
+    );
+    for clave in ["logind", "hostnamed", "polkit", "systemd1"] {
+        assert!(
+            card.genesis.iter().any(|c| c.label.contains(clave)),
+            "session-gnome debe traer el shim '{clave}' (GNOME lo consulta al arrancar)",
+        );
+    }
+}
+
+#[test]
 fn host_seed_lleva_un_getty_en_tty1() {
     // Sin un getty arrancable el host no acepta login interactivo.
     let path = seeds_dir().join("arje-host.card.json");

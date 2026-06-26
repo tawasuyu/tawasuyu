@@ -12,6 +12,27 @@ seed describes, supervising them according to their `Supervision`.
 | `arje-host.card.json` | Artix laptop with a physical GPU | agetty@tty1, network-up oneshot, display-manager (mirada-greeter-llimphi) with Mesa |
 | `arje-qemu.card.json` | QEMU testing without a GPU | agetty@ttyS0 (serial console) |
 
+## Session profiles (`fragments/`)
+
+A **boot profile** is the base Seed Card **plus**, optionally, the entes
+of a *session*. The base already is the **mirada** profile: basic inits
+(agetty, network-up, splash) and the **greeter** (`mirada-greeter-llimphi`),
+which is the DM. Mirada is native — it needs no extra system services.
+
+Pass `arje.session=<name>` on the kernel cmdline (or `ARJE_SESSION` in
+dev) to overlay a session fragment from [`fragments/`](fragments/):
+
+- `arje.session=mirada` (or nothing): the base alone.
+- `arje.session=gnome`: base + `session-gnome`, which adds the
+  `arje-compat` D-Bus shims (logind, hostnamed, timedated, …) so a GNOME
+  session launched from the greeter finds the `org.freedesktop.*` names
+  it queries at startup.
+
+`arje-zero` composes them with `profile::overlay_session` (dedup by
+`label`). A missing/invalid fragment falls back to the base — a
+mistyped profile never leaves the host without a boot. See
+[`fragments/README.md`](fragments/README.md).
+
 ## How they are used
 
 ```sh

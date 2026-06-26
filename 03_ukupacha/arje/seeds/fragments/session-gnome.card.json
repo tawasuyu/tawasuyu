@@ -1,0 +1,270 @@
+{
+    "schema_version": 1,
+    "id": "01HQAR53D4M2NBV8KZTYXGN000",
+    "lineage": null,
+    "label": "session-gnome",
+    "provides": [],
+    "requires": [],
+    "permissions": {
+        "networking": "none",
+        "filesystem": "read-only",
+        "ipc": { "allow": [] },
+        "processes": false
+    },
+    "soma": {
+        "namespaces": {
+            "mount": false, "pid": false, "net": false,
+            "uts": false, "ipc": false, "user": false, "cgroup": false
+        },
+        "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+        "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+        "cpu_affinity": null
+    },
+    "payload": "Virtual",
+    "supervision": "OneShot",
+    "lifecycle": "oneshot",
+    "priority": "normal",
+    "flow": { "input": [], "output": [] },
+    "genesis": [
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN001",
+            "label": "compat-logind",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-logind-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN002",
+            "label": "compat-hostnamed",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-hostnamed-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN003",
+            "label": "compat-timedated",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-timedated-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN004",
+            "label": "compat-localed",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-localed-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN005",
+            "label": "compat-polkit",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-polkit-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN006",
+            "label": "compat-systemd1",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-systemd1-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN007",
+            "label": "compat-journald",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "none", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-journald-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN008",
+            "label": "compat-resolved",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "outbound", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-resolved-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN009",
+            "label": "compat-machined",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-machined-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN010",
+            "label": "policy-provider",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "none", "filesystem": "read-only", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-policy-provider", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN011",
+            "label": "compat-notify",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "loopback", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-notify-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXGN012",
+            "label": "compat-timer",
+            "provides": [],
+            "requires": [],
+            "permissions": { "networking": "none", "filesystem": "read-write", "ipc": { "allow": [] }, "processes": false },
+            "soma": {
+                "namespaces": { "mount": false, "pid": false, "net": false, "uts": false, "ipc": false, "user": false, "cgroup": false },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/compat", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": { "Native": { "exec": "/usr/lib/arje/arje-timer-compat", "argv": [], "envp": [] } },
+            "supervision": { "Restart": { "initial": 300, "max": 30000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        }
+    ]
+}

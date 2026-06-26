@@ -23,9 +23,14 @@ const SEED_PATH_DEV: &str = "seed.card";
 
 pub fn load(dev_mode: bool, restore: Option<&Path>) -> anyhow::Result<EntityCard> {
     let card = if let Some(path) = restore {
+        // Un restore reconstruye un estado vivo autoritativo: no se le
+        // aplica overlay de sesión (los entes ya estaban materializados).
         load_from_snapshot(path)?
     } else {
-        load_or_synthesize(dev_mode)?
+        // Base = perfil "mirada" (inits + greeter). `arje.session=<X>`
+        // anexa el fragmento de esa sesión (p. ej. los shims de gnome).
+        let base = load_or_synthesize(dev_mode)?;
+        crate::profile::apply_selected_session(base, dev_mode)
     };
     card.validate()
         .map_err(|e: CardError| anyhow::anyhow!("semilla inválida: {e}"))?;
