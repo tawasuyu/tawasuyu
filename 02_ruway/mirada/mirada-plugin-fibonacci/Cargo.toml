@@ -1,0 +1,19 @@
+[package]
+name = "mirada-plugin-fibonacci"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin de layout «fibonacci»: dwindle con corte áureo (φ) en vez de mitad (CAP_LAYOUT, sin importaciones del host)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

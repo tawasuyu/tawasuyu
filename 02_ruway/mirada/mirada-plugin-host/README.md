@@ -155,19 +155,28 @@ escribís el plugin en otro lenguaje:
 ## Catálogo base
 
 Plugins que vienen con el repo, en `mirada-plugin-host/assets/` (los `.wasm` se
-commitean; el código fuente, en `../mirada-plugin-{example-*,dwindle}`). El
-instalador siembra los **de ejemplo** en `~/.config/mirada/plugins`; los demás
-se copian a mano.
+commitean; el código fuente, en `../mirada-plugin-*`). El instalador siembra los
+**de uso seguro** (`example-*`, `asignador`, `scratchpads` — todos no-op hasta
+que los configures) en `~/.config/mirada/plugins`; los demás se copian a mano.
 
 | Plugin | Tipo | Capacidades | Qué hace |
 |--------|------|-------------|----------|
 | **example-layout** (right-master) | Layout | `layout` | Master-stack reflejado: maestra a la derecha. Honra `master_ratio`/`master_count`/`gap`. |
-| **example-reactor** | Reactor | `keys` `spawn` `effects` `actions` | `Super+a` → terminal · atenúa las ventanas sin foco · auto-monocle al llenarse. |
-| **dwindle** | Layout | `layout` | BSP recursivo estilo Hyprland: cada ventana parte el eje más largo. `priority` 20 (gana al right-master si conviven). |
-| **asignador** | Reactor | `actions` | Enruta cada ventana por su `app_id` a un escritorio fijo y/o la flota, según reglas de su `config:`. El enrutador de apps clásico. |
+| **example-reactor** | Reactor | `keys` `spawn` `effects` `actions` | `Super+a` → terminal · atenúa las ventanas sin foco (el *spotlight de foco*) · auto-monocle al llenarse. |
+| **dwindle** | Layout | `layout` | BSP recursivo estilo Hyprland: cada ventana parte el eje más largo. `priority` 20. |
+| **three-column** | Layout | `layout` | Centered-master con **dos pilas**: maestra(s) al centro, resto a los lados. Ultrawide. `priority` 12. |
+| **fibonacci** | Layout | `layout` | Dwindle con **corte áureo** (φ⁻¹≈0.618): espiral de Fibonacci. `priority` 14. |
+| **grid** | Layout | `layout` | **Grilla adaptativa** cols×rows ≈ √n; la última fila estira. `priority` 16. |
+| **asignador** | Reactor | `actions` | Enruta cada ventana por su `app_id` a un escritorio fijo y/o la flota. El enrutador de apps clásico. |
+| **scratchpads** | Reactor | `keys` `actions` | **Cajones con nombre**: atajos → `toggle-special`/`move-to-special`. Config: `<tecla> [send] <nombre>`. |
+| **orientacion** | Reactor | `actions` | Monitor vertical → `layout:rows`, apaisado → `layout:columns`. Sin config. |
+| **nueva-al-maestro** | Reactor | `actions` | `promote-to-master` al abrir (el *new-window-on-top* de dwm). Sin config. |
+| **media-keys** | Reactor | `keys` `spawn` | Teclas `XF86` → `wpctl`/`brightnessctl`/`playerctl`/`grim`. Defaults + overrides por config. |
+| **efecto-por-app** | Reactor | `effects` | Opacidad/sombra por `app_id`. Config: `<app_id> <0-100> [noshadow]`. |
 
 Sólo **un** plugin de layout queda activo (el de mayor `priority`); los
-reactores se acumulan.
+reactores se acumulan. Los cuatro layouts conviven en `assets/` pero al copiar
+varios gana el de mayor `priority` — elegí uno.
 
 ### Config por plugin
 
@@ -180,34 +189,25 @@ usuario, no código), así que se edita libre —a mano o desde wawa-panel— y 
 
 ### Buenas piezas para sumar al catálogo
 
-Lo más valioso a construir, ordenado por relación valor/esfuerzo. Con la **config
-por plugin** ya disponible (ver arriba), tanto las **universales** como las
-**por-usuario** son shippeables — el `asignador` es la primera por-usuario.
+La lista original de candidatos ya está **casi toda construida** (ver la tabla
+de arriba):
 
-**Layouts (universales):**
-- **three-column / centered-master con dos pilas** — maestra al centro, pilas a
-  ambos lados; ideal para monitores anchos/ultrawide.
-- **fibonacci / golden-ratio** — variante de dwindle con corte áureo en vez de
-  mitad.
-- **grid adaptativo** — filas×columnas según la cantidad de ventanas (√n).
+- **Layouts:** ✅ `three-column`, ✅ `fibonacci`, ✅ `grid`.
+- **Reactores universales:** ✅ `orientacion`, ✅ `nueva-al-maestro`,
+  ✅ `media-keys`; el **spotlight de foco** ya vive en `example-reactor`
+  (atenúa todo salvo la enfocada).
+- **Reactores por-usuario:** ✅ `asignador` (enrutador de apps),
+  ✅ `efecto-por-app` (opacidad/sombra por `app_id`).
 
-**Reactores universales (sin config):**
-- **orientación adaptativa** — monitor vertical → `layout:rows`, apaisado →
-  `layout:columns`, según las dimensiones de `OutputAdded`/`OutputResized`
-  (`actions`).
-- **nueva-al-maestro** — `promote-to-master` al abrir una ventana (el clásico
-  "new window on top" de dwm) (`actions`).
-- **spotlight de foco** — atenuar/sombrear todo salvo la enfocada, con curva por
-  profundidad (extiende el ejemplo) (`effects`).
-- **teclas de medios / OSD** — `keys` + `spawn` para volumen/brillo/captura
-  (`wpctl`, `brightnessctl`, `grim`).
-- **scratchpads con nombre** — atajos que invocan/ocultan dropdowns
-  (`keys` + `actions`/`spawn`).
-
-**Reactores por-usuario (config por plugin):**
-- **enrutador de apps** — ✅ es el `asignador` (ya en el catálogo).
-- **reglas de efecto/decoración por app** — mismo patrón que el asignador, pero
-  emitiendo `effects`/`decor` en vez de `actions`.
+Lo que queda como refinamiento, no como hueco:
+- **spotlight con curva por profundidad** — el de hoy es binario (enfocada vs.
+  resto); falta una rampa de opacidad por orden en la pila.
+- **reglas de *decoración* por app** — `efecto-por-app` cubre `effects`
+  (opacidad/sombra) por ventana, pero `set_decorations` (`decor`) es **global**
+  en la API actual, no por-ventana: una decoración por `app_id` necesitaría
+  primero un `host_emit_decor` con destino de ventana.
+- **OSD visual** de las `media-keys` — hoy sólo ejecuta el comando; un overlay
+  de barra (volumen/brillo) pediría una superficie propia.
 
 ## Firmar e instalar
 

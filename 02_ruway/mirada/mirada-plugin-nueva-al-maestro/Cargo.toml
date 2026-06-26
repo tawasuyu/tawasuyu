@@ -1,0 +1,19 @@
+[package]
+name = "mirada-plugin-nueva-al-maestro"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin reactor «nueva al maestro»: cada ventana nueva se promueve al área maestra (el clásico new-window-on-top de dwm) (CAP_ACTIONS, sin config)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk", features = ["reactor"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

@@ -64,6 +64,16 @@ forjar "mirada-plugin-example-reactor" "mirada_plugin_example_reactor" "example-
 # Catálogo base.
 forjar "mirada-plugin-dwindle"         "mirada_plugin_dwindle"         "dwindle"
 forjar "mirada-plugin-asignador"       "mirada_plugin_asignador"       "asignador"
+# Layouts del catálogo (sin firma — no importan nada del host; su .ron es estático).
+forjar "mirada-plugin-three-column"    "mirada_plugin_three_column"    "three-column"
+forjar "mirada-plugin-fibonacci"       "mirada_plugin_fibonacci"       "fibonacci"
+forjar "mirada-plugin-grid"            "mirada_plugin_grid"            "grid"
+# Reactores del catálogo (piden caps peligrosas → se firman abajo).
+forjar "mirada-plugin-scratchpads"      "mirada_plugin_scratchpads"      "scratchpads"
+forjar "mirada-plugin-orientacion"      "mirada_plugin_orientacion"      "orientacion"
+forjar "mirada-plugin-nueva-al-maestro" "mirada_plugin_nueva_al_maestro" "nueva-al-maestro"
+forjar "mirada-plugin-media-keys"       "mirada_plugin_media_keys"       "media-keys"
+forjar "mirada-plugin-efecto-por-app"   "mirada_plugin_efecto_por_app"   "efecto-por-app"
 
 # --- Firma DEMO de los reactores (piden caps peligrosas → requieren firma) ----
 # La semilla es FIJA y PÚBLICA: sólo para que el ejemplo corra de fábrica. NO es
@@ -92,6 +102,16 @@ firma_de example-reactor keys,spawn,effects,actions
 SIG_REACTOR="$SIG"
 firma_de asignador actions
 SIG_ASIGNADOR="$SIG"
+firma_de scratchpads keys,actions
+SIG_SCRATCHPADS="$SIG"
+firma_de orientacion actions
+SIG_ORIENTACION="$SIG"
+firma_de nueva-al-maestro actions
+SIG_NUEVA="$SIG"
+firma_de media-keys keys,spawn
+SIG_MEDIA="$SIG"
+firma_de efecto-por-app effects
+SIG_EFECTO="$SIG"
 rm -f "$SEED_FILE"
 
 cat > "$ASSETS/example-reactor.ron" <<EOF
@@ -121,6 +141,77 @@ cat > "$ASSETS/asignador.ron" <<EOF
     signer: "$SIGNER",
     signature: "$SIG_ASIGNADOR",
     config: "# Reglas: <app_id-substring>  <escritorio 1-9 y/o «float»>\n# Descomenta y ajusta a tus apps:\n# firefox      2\n# Alacritty    1\n# pavucontrol  float\n",
+)
+EOF
+
+cat > "$ASSETS/scratchpads.ron" <<EOF
+// Manifest del plugin «scratchpads con nombre»: atajos → escritorios especiales
+// (CAP_KEYS + CAP_ACTIONS → requiere firma). El campo 'config' (NO firmado) trae
+// los binds; editalo a mano o desde wawa-panel. Sin binds no registra atajos.
+(
+    wasm: "scratchpads.wasm",
+    kind: Reactor,
+    caps: ["keys", "actions"],
+    priority: 0,
+    signer: "$SIGNER",
+    signature: "$SIG_SCRATCHPADS",
+    config: "# <tecla>  [verbo]  <nombre>   ·   verbo: toggle (default) | send\n# Descomenta y ajusta a tu gusto:\n# Super+grave        dev\n# Super+Shift+grave  send  dev\n# Super+n            notas\n# Super+Shift+n      send  notas\n",
+)
+EOF
+
+cat > "$ASSETS/orientacion.ron" <<EOF
+// Manifest del plugin «orientación adaptativa»: vertical→rows, apaisado→columns
+// (CAP_ACTIONS → requiere firma). Sin config.
+(
+    wasm: "orientacion.wasm",
+    kind: Reactor,
+    caps: ["actions"],
+    priority: 0,
+    signer: "$SIGNER",
+    signature: "$SIG_ORIENTACION",
+)
+EOF
+
+cat > "$ASSETS/nueva-al-maestro.ron" <<EOF
+// Manifest del plugin «nueva al maestro»: promueve cada ventana nueva al área
+// maestra (CAP_ACTIONS → requiere firma). Sin config.
+(
+    wasm: "nueva-al-maestro.wasm",
+    kind: Reactor,
+    caps: ["actions"],
+    priority: 0,
+    signer: "$SIGNER",
+    signature: "$SIG_NUEVA",
+)
+EOF
+
+cat > "$ASSETS/media-keys.ron" <<EOF
+// Manifest del plugin «teclas de medios»: teclas XF86 → wpctl/brightnessctl/
+// playerctl/grim (CAP_KEYS + CAP_SPAWN → requiere firma). Trae defaults; el
+// campo 'config' (NO firmado) los ajusta — línea con sólo la tecla la borra.
+(
+    wasm: "media-keys.wasm",
+    kind: Reactor,
+    caps: ["keys", "spawn"],
+    priority: 0,
+    signer: "$SIGNER",
+    signature: "$SIG_MEDIA",
+    config: "# <tecla XF86>  <comando…>   (línea con sólo la tecla = borrar ese default)\n# Ejemplos:\n# XF86AudioRaiseVolume  wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%+\n# Print  grim -g \"\$(slurp)\" ~/Pictures/recorte.png\n",
+)
+EOF
+
+cat > "$ASSETS/efecto-por-app.ron" <<EOF
+// Manifest del plugin «efecto por app»: opacidad/sombra por app_id (CAP_EFFECTS
+// → requiere firma). El campo 'config' (NO firmado) trae las reglas; editalo a
+// mano o desde wawa-panel. Sin reglas no hace nada.
+(
+    wasm: "efecto-por-app.wasm",
+    kind: Reactor,
+    caps: ["effects"],
+    priority: 0,
+    signer: "$SIGNER",
+    signature: "$SIG_EFECTO",
+    config: "# <app_id-substring>  <opacidad 0-100>  [shadow|noshadow]\n# Descomenta y ajusta a tus apps:\n# Alacritty   88\n# foot        85  noshadow\n# mpv         100 noshadow\n",
 )
 EOF
 

@@ -1,0 +1,10 @@
+// Manifest del plugin de layout «tres columnas» (centered-master con dos pilas).
+// Layout puro: no importa nada del host → no necesita firma. Sólo un layout
+// gana a la vez (el de mayor priority); copialo a ~/.config/mirada/plugins para
+// activarlo en vez del que tengas.
+(
+    wasm: "three-column.wasm",
+    kind: Layout,
+    caps: ["layout"],
+    priority: 12,
+)

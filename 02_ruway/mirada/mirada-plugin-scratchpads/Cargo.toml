@@ -1,0 +1,19 @@
+[package]
+name = "mirada-plugin-scratchpads"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin reactor «scratchpads con nombre»: atajos que muestran/ocultan escritorios especiales y mandan la ventana enfocada a ellos (CAP_KEYS + CAP_ACTIONS)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk", features = ["reactor"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

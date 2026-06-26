@@ -1,0 +1,12 @@
+// Manifest del plugin «teclas de medios»: teclas XF86 → wpctl/brightnessctl/
+// playerctl/grim (CAP_KEYS + CAP_SPAWN → requiere firma). Trae defaults; el
+// campo 'config' (NO firmado) los ajusta — línea con sólo la tecla la borra.
+(
+    wasm: "media-keys.wasm",
+    kind: Reactor,
+    caps: ["keys", "spawn"],
+    priority: 0,
+    signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
+    signature: "bf1f6b1df6a07c685e6b65aa78dd0294a712cf40c250450d48fc2fda3fab63e9b8c49b84cb75de470a48c7d6109ba7f51108c1c6c5b59f246d00c53c06075601",
+    config: "# <tecla XF86>  <comando…>   (línea con sólo la tecla = borrar ese default)\n# Ejemplos:\n# XF86AudioRaiseVolume  wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%+\n# Print  grim -g \"$(slurp)\" ~/Pictures/recorte.png\n",
+)

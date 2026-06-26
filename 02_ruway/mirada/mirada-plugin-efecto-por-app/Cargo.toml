@@ -1,0 +1,19 @@
+[package]
+name = "mirada-plugin-efecto-por-app"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin reactor «efecto por app»: opacidad y sombra por app_id, según reglas de su config (CAP_EFFECTS)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk", features = ["reactor"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

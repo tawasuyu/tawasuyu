@@ -1,0 +1,10 @@
+// Manifest del plugin «nueva al maestro»: promueve cada ventana nueva al área
+// maestra (CAP_ACTIONS → requiere firma). Sin config.
+(
+    wasm: "nueva-al-maestro.wasm",
+    kind: Reactor,
+    caps: ["actions"],
+    priority: 0,
+    signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
+    signature: "dcadc8f170fc86069a08595e045f091833c82957726a74609273cc9425f11aab501cd8a8e8fddb4b2c07436594fdf9862dd7a47300fba2d2916e00b272e26c08",
+)

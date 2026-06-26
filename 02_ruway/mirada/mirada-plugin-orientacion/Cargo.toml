@@ -1,0 +1,19 @@
+[package]
+name = "mirada-plugin-orientacion"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin reactor «orientación adaptativa»: monitor vertical → layout:rows, apaisado → layout:columns (CAP_ACTIONS, sin config)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk", features = ["reactor"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

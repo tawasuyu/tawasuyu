@@ -157,7 +157,8 @@ PLUG_DST="${HOME}/.config/mirada/plugins"
 mkdir -p "$PLUG_DST"
 for f in example-layout.wasm example-layout.ron \
          example-reactor.wasm example-reactor.ron \
-         asignador.wasm asignador.ron trust.ron; do
+         asignador.wasm asignador.ron \
+         scratchpads.wasm scratchpads.ron trust.ron; do
     if [ ! -e "$PLUG_DST/$f" ]; then
         cp "$PLUG_SRC/$f" "$PLUG_DST/$f" && echo "    + plugins/$f"
     fi
@@ -165,7 +166,10 @@ done
 echo "==> plugins de ejemplo sembrados en $PLUG_DST (editá o borrá a gusto)"
 echo "    · asignador: enrutador de apps — sin reglas hasta que las pongas (config"
 echo "      del manifest, o visualmente en wawa-panel → Inicio → Plugins)."
-echo "    (catálogo extra en $PLUG_SRC: dwindle.{wasm,ron} — copialo si lo querés)"
+echo "    · scratchpads: cajones con nombre — sin atajos hasta que los pongas."
+echo "    Catálogo extra en $PLUG_SRC (copialos si los querés):"
+echo "      layouts: dwindle · three-column · fibonacci · grid  (gana 1 a la vez)"
+echo "      reactores: orientacion · nueva-al-maestro · media-keys · efecto-por-app"
 
 cat <<'FIN'
 

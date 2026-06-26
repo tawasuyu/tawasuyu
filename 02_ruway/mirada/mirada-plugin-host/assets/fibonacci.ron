@@ -1,0 +1,10 @@
+// Manifest del plugin de layout «fibonacci» (dwindle con corte áureo).
+// Layout puro: no importa nada del host → no necesita firma. Sólo un layout
+// gana a la vez (el de mayor priority); copialo a ~/.config/mirada/plugins para
+// activarlo en vez del que tengas.
+(
+    wasm: "fibonacci.wasm",
+    kind: Layout,
+    caps: ["layout"],
+    priority: 14,
+)

@@ -1,0 +1,12 @@
+// Manifest del plugin «scratchpads con nombre»: atajos → escritorios especiales
+// (CAP_KEYS + CAP_ACTIONS → requiere firma). El campo 'config' (NO firmado) trae
+// los binds; editalo a mano o desde wawa-panel. Sin binds no registra atajos.
+(
+    wasm: "scratchpads.wasm",
+    kind: Reactor,
+    caps: ["keys", "actions"],
+    priority: 0,
+    signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
+    signature: "ed034905a353a22e2b1a4822bd614d7892271039ff2cac434998948b79d43ce671e780b0543e81a1d9270edeb08a233b239948c654cc60a925293e15b3ff2a09",
+    config: "# <tecla>  [verbo]  <nombre>   ·   verbo: toggle (default) | send\n# Descomenta y ajusta a tu gusto:\n# Super+grave        dev\n# Super+Shift+grave  send  dev\n# Super+n            notas\n# Super+Shift+n      send  notas\n",
+)

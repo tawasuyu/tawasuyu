@@ -1,0 +1,10 @@
+// Manifest del plugin de layout «grilla adaptativa» (cols×rows ≈ √n).
+// Layout puro: no importa nada del host → no necesita firma. Sólo un layout
+// gana a la vez (el de mayor priority); copialo a ~/.config/mirada/plugins para
+// activarlo en vez del que tengas.
+(
+    wasm: "grid.wasm",
+    kind: Layout,
+    caps: ["layout"],
+    priority: 16,
+)

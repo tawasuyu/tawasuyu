@@ -1,0 +1,12 @@
+// Manifest del plugin «efecto por app»: opacidad/sombra por app_id (CAP_EFFECTS
+// → requiere firma). El campo 'config' (NO firmado) trae las reglas; editalo a
+// mano o desde wawa-panel. Sin reglas no hace nada.
+(
+    wasm: "efecto-por-app.wasm",
+    kind: Reactor,
+    caps: ["effects"],
+    priority: 0,
+    signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
+    signature: "5706fc0e19b3e175f842aa1d95fc52cfaa9489d0c76c306f6981f213fc378fdaa5526fa37e1c35a97d7c825148919c1a179f850624f0dd43e72cfaba16d9110c",
+    config: "# <app_id-substring>  <opacidad 0-100>  [shadow|noshadow]\n# Descomenta y ajusta a tus apps:\n# Alacritty   88\n# foot        85  noshadow\n# mpv         100 noshadow\n",
+)

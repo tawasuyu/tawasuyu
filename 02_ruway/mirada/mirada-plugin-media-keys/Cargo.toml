@@ -1,0 +1,19 @@
+[package]
+name = "mirada-plugin-media-keys"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin reactor «teclas de medios»: volumen/brillo/multimedia/captura por las teclas XF86, vía wpctl/brightnessctl/playerctl/grim (CAP_KEYS + CAP_SPAWN)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk", features = ["reactor"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

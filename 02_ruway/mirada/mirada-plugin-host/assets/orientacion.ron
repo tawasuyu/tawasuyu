@@ -1,0 +1,10 @@
+// Manifest del plugin «orientación adaptativa»: vertical→rows, apaisado→columns
+// (CAP_ACTIONS → requiere firma). Sin config.
+(
+    wasm: "orientacion.wasm",
+    kind: Reactor,
+    caps: ["actions"],
+    priority: 0,
+    signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
+    signature: "0ed3858f89d74fef7450978058c5bb99ee71486ca0e59ed0baff8bad2f0251c9db077f82734465f037ef8963a1ab7ec7a0202025668f056d5888626afac58908",
+)
