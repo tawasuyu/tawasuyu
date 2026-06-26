@@ -44,6 +44,7 @@ chrono = { workspace = true }
 llimphi-widget-switch = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
 llimphi-motion = { workspace = true }
 llimphi-lottie = { workspace = true }
 notify = { workspace = true }

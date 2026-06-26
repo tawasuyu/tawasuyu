@@ -20,7 +20,9 @@ use cosmos_tides::{tide_reading, TideReading};
 use cosmos_time::{utc_from_calendar, JulianDate, UTC, TDB};
 
 use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, Dimension, Size, Style};
 use llimphi_ui::View;
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
 
 use crate::format::simbolo_cuerpo;
 use crate::model::Msg;
@@ -139,11 +141,34 @@ pub(crate) fn compute_astro(chart: &Chart, use_now: bool) -> AstroState {
 /// parte cara: 144 muestras × 10 cuerpos) corre en un worker. La UI nunca se
 /// bloquea esperándolo; se reemplaza por las lecturas reales al reentrar el
 /// `Msg::AstroComputed`.
+///
+/// En vez de un escueto «calculando…», pintamos un skeleton con la **forma**
+/// de la tabla que viene (cabecera + filas) y shimmer — así el usuario ve lo
+/// que se está cargando. El brillo lo anima el mismo loop de repaint que
+/// alimenta el cargador Lottie del estado-vacío (`Msg::AnimTick`, ~80 ms), no
+/// hace falta un tick propio.
 pub(crate) fn calculando(theme: &Theme) -> View<Msg> {
-    tile_container(
-        vec![line("calculando…".to_string(), 12.0, theme.fg_muted)],
-        theme,
-    )
+    let pal = SkeletonPalette::from_theme(theme);
+    // Una barra-skeleton de ancho `w` y alto `h`, recortada con esquinas
+    // suaves (el shimmer corre dentro del clip).
+    let barra = |w: Dimension, h: f32| -> View<Msg> {
+        View::new(Style {
+            size: Size { width: w, height: length(h) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .radius(4.0)
+        .clip(true)
+        .children(vec![skeleton_view(&pal)])
+    };
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    // Cabecera (instante · lugar): más angosta que las filas de datos.
+    rows.push(barra(percent(0.6_f32), 10.0_f32));
+    // ~8 filas de tabla a ancho completo.
+    for _ in 0..8 {
+        rows.push(barra(percent(1.0_f32), 12.0_f32));
+    }
+    tile_container(rows, theme)
 }
 
 /// Cabecera común: instante + lugar.
