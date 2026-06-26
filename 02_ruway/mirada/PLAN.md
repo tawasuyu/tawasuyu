@@ -386,6 +386,14 @@ ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir f
 > §«Animaciones de transición»; es un salto de complejidad respecto de estas tres
 > rebanadas (que sólo tocaron alfa, escala y color del path normal).
 >
+> **✅ VERIFICADO EN METAL (2026-06-26 · Intel Iris Xe, DRM real).** Dos `foot`
+> tiladas, `focus_glow_ms=2000`, `border_width=10`; conmutando foco con ydotool
+> (`Super+j`) y midiendo píxeles del azul `border_focus` por mitad: el marco azul
+> **sigue al foco** — mitad enfocada ~43 k px de azul, no-enfocada ~0; tras el
+> flip, la otra mitad gana el azul. El crossfade `border_normal→border_focus` se
+> compone en GLES, no sólo en la unidad. (Análisis: `examples/png_two_window_fx.rs`
+> + `examples/png_find_color.rs`.)
+>
 > **✅ HECHO — 4ª rebanada (2026-06-26): el *fade al cerrar* + el motor de
 > transición (forma CPU mínima).** Config `window_close_ms` (**default 0 = off**;
 > opt-in porque cuesta GPU) en «Movimiento». Cómo resuelve el problema de «la
@@ -432,6 +440,13 @@ sombra; falta el rounded — un mask en el shader del quad).
 > Byte-idéntico en off o sobre la enfocada. Falta de (B): `corner_radius` (mask en
 > shader — «Medio»), `blur`, `border_tint`/`border_alpha`, y mudar esto a
 > `WindowEffects` por-`app_id` si se quiere por-regla.
+>
+> **✅ VERIFICADO EN METAL (2026-06-26 · Intel Iris Xe, DRM real).** Con
+> `unfocused_dim_pct=60` y dos `foot` blancas: la mitad no-enfocada mide luma
+> central **102**, la enfocada **255** (102 = 255·0.4 = el velo al 60 %, exacto).
+> Al conmutar foco (ydotool `Super+j`), las lumas **se cruzan** suavemente
+> (102→255 / 255→102 en ~1.5 s, la curva `focus_mix`): el velo se compone en GLES
+> y anima con el foco. Mismo run que el glow (`examples/png_two_window_fx.rs`).
 
 **C) Glassmorphism — el efecto caro, el que da el «wow».** Desenfoque gaussiano en
 tiempo real **detrás** de las superficies translúcidas (barras, marcos, menús, el
