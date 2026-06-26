@@ -563,9 +563,15 @@ remote`. Faltan dos fuentes:
 > (`Frame::ScaledText`, el recurso del Prezi). Las fuentes estáticas (imagen/color/
 > gradiente/procedural) siguen a tamaño de salida → camino 1:1 **byte-idéntico**.
 > Nota: el video ahora es *cover* fijo (el `wallpaper_fit` ya no aplica al video).
-> **Sigue pendiente:** video **por-salida** (hoy un solo archivo global en todas)
-> y **loop de video sin costura** (corte al rebobinar; un crossfade en el límite o
-> un clip pensado para enganchar).
+
+> **✅ HECHO — loop de video sin costura (2026-06-26).** El worker cachea el
+> **primer frame** y, en los últimos `0.6 s` del clip, **funde** hacia él
+> (`blend_into`, puro + testeado) usando `duration()`/`position()` de la fuente;
+> así el `seek_to(0)` cae sobre una imagen ya idéntica al arranque → el rebobinado
+> es invisible. Sólo si se conoce la duración y el clip dura > 2·xfade; si no, cae
+> al corte de antes (degradación elegante). **Sigue pendiente (último):** video
+> **por-salida** — hoy un solo archivo global en todas las salidas; requeriría que
+> `OutputOverride` lleve fuente/ruta y N workers indexados por salida.
 
 ### 2) Sesión Wayland remota persistente — «tmux/mosh para Wayland»  — esfuerzo ALTO
 Hoy ya hay **apps** remotas: `mirada-ctl remote` (una app vía waypipe ssh) y sesiones

@@ -134,6 +134,13 @@ fn spawn_worker(
         // Cadencia: el fps configurado, o el nativo del archivo.
         let eff_fps = if fps > 0 { fps as f32 } else { source.fps() };
         let interval = Duration::from_secs_f32(1.0 / eff_fps.max(1.0));
+        // Loop **sin costura**: en los últimos `XFADE` s fundimos hacia el PRIMER
+        // frame, así el `seek_to(0)` (corte duro) cae sobre una imagen ya igual al
+        // arranque. Sólo si conocemos la duración y el clip dura > 2·XFADE.
+        const XFADE: f32 = 0.6;
+        let dur = source.duration().map(|d| d.as_secs_f32());
+        let xfade_ok = dur.map_or(false, |d| d > 2.0 * XFADE);
+        let mut first: Option<(Vec<u8>, u32, u32)> = None;
         let mut buf: Vec<u8> = Vec::new();
         loop {
             if ctrl.stop.load(Relaxed) {
@@ -146,6 +153,20 @@ fn spawn_worker(
             std::thread::sleep(interval);
             match source.step_frame(&mut buf) {
                 Some((w, h)) => {
+                    // Cacheá el primer frame (destino del fundido de loop).
+                    if first.is_none() {
+                        first = Some((buf.clone(), w, h));
+                    }
+                    // Fundido hacia el primer frame en la cola del clip.
+                    if xfade_ok {
+                        if let (Some(d), Some((f, fw, fh))) = (dur, first.as_ref()) {
+                            let remaining = d - source.position().as_secs_f32();
+                            if remaining < XFADE && (*fw, *fh) == (w, h) {
+                                let a = (1.0 - remaining / XFADE).clamp(0.0, 1.0);
+                                blend_into(&mut buf, f, a);
+                            }
+                        }
+                    }
                     if let Ok(mut s) = shared.lock() {
                         s.rgba.clear();
                         s.rgba.extend_from_slice(&buf);
@@ -162,10 +183,33 @@ fn spawn_worker(
     })
 }
 
+/// Funde `dst` hacia `src` por `a∈[0,1]` (`0`=dst, `1`=src), byte a byte. Para el
+/// crossfade de loop del wallpaper en video. Pura.
+fn blend_into(dst: &mut [u8], src: &[u8], a: f32) {
+    let a = a.clamp(0.0, 1.0);
+    let n = dst.len().min(src.len());
+    for i in 0..n {
+        dst[i] = (dst[i] as f32 * (1.0 - a) + src[i] as f32 * a).round() as u8;
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::VideoWallpaper;
+    use super::{blend_into, VideoWallpaper};
     use std::time::Duration;
+
+    #[test]
+    fn blend_into_funde_byte_a_byte() {
+        let mut dst = [0u8, 0, 0, 255];
+        let src = [255u8, 100, 50, 255];
+        blend_into(&mut dst, &src, 0.0);
+        assert_eq!(dst, [0, 0, 0, 255], "a=0 deja dst");
+        blend_into(&mut dst, &src, 1.0);
+        assert_eq!(dst, src, "a=1 copia src");
+        let mut dst = [0u8, 0, 0, 0];
+        blend_into(&mut dst, &[255, 200, 100, 0], 0.5);
+        assert_eq!(dst, [128, 100, 50, 0], "punto medio redondeado");
+    }
 
     #[test]
     fn ruta_invalida_degrada_sin_panico() {
