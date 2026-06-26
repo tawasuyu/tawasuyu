@@ -286,6 +286,7 @@ fn modelo_sintetico(diente: usize) -> Model {
                         color_fg: Some([225, 84, 75, 255]),
                         weight: Some(700.0),
                         underline: Some(true),
+                        size_px: Some(28.0), // título grande: el alto de línea se adapta
                         ..Default::default()
                     },
                 );

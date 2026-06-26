@@ -31,6 +31,32 @@ pub(crate) const ANCHO_COL: f32 = 360.0;
 /// Ancho del carril entre columnas (= `ConfigMultilienzoEditor::ancho_carril`).
 pub(crate) const ANCHO_CARRIL: f32 = 56.0;
 
+/// Métricas del editor con el **alto de línea adaptado** al mayor `size_px` en
+/// uso entre los lienzos visibles. Uniforme (todas las columnas comparten el
+/// mismo alto, así las hebras del multilienzo siguen alineadas y el
+/// hit-testing por `screen_to_pos` queda consistente), pero crece lo suficiente
+/// para que las fuentes grandes no se solapen con la línea siguiente. Debe
+/// usarse TANTO al renderizar como al convertir clicks → posición.
+pub(crate) fn metrics_efectivas(model: &Model) -> EditorMetrics {
+    let mut m = METRICS;
+    let ratio = METRICS.line_height / METRICS.font_size;
+    let mut max_size = METRICS.font_size;
+    let ids: Vec<Uuid> = if model.solo_activo {
+        model.activo.into_iter().collect()
+    } else {
+        model.seleccionados.clone()
+    };
+    for id in ids {
+        if let Some(e) = model.estilos.get(&id) {
+            if let Some(s) = e.max_size_px() {
+                max_size = max_size.max(s);
+            }
+        }
+    }
+    m.line_height = (max_size * ratio).max(METRICS.line_height);
+    m
+}
+
 /// Ancho total del contenido del multilienzo para `n` columnas fijas, o `0`
 /// si `n < 2` (con una sola columna es elástica, sin scroll).
 pub(crate) fn ancho_contenido(n: usize) -> f32 {

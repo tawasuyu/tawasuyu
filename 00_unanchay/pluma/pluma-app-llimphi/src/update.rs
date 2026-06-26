@@ -59,10 +59,13 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             if model.activo != Some(id) {
                 cambiar_activo(&mut model, id);
             }
+            // Mismo alto de línea adaptado que usa el render — si no, el click
+            // caería en la línea equivocada cuando hay fuentes grandes.
+            let metrics = crate::model::metrics_efectivas(&model);
             let scroll = model.ide.state.scroll_offset;
             match ev {
                 PointerEvent::Click { x, y } => {
-                    let (line, col) = METRICS.screen_to_pos(x, y, scroll);
+                    let (line, col) = metrics.screen_to_pos(x, y, scroll);
                     // Click simple = caret; doble = palabra; triple = párrafo.
                     model.ide.state.register_click(line, col);
                 }
@@ -76,7 +79,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                     model
                         .ide
                         .state
-                        .pointer_drag(METRICS, (initial_x, initial_y), dx, dy);
+                        .pointer_drag(metrics, (initial_x, initial_y), dx, dy);
                 }
             }
         }

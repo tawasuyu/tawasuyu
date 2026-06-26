@@ -2372,7 +2372,7 @@ fn centro_plano(model: &Model, theme: &Theme) -> View<Msg> {
         &paleta_hebras,
         &palette_lienzo,
         &cfg,
-        METRICS,
+        crate::model::metrics_efectivas(model),
         VISIBLE_LINES,
         Language::Plain,
         move |i, ev| {

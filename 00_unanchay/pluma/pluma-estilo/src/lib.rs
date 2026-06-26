@@ -198,6 +198,27 @@ impl EstiloLienzo {
     pub fn limpiar_spans(&mut self, atom: Uuid) {
         self.por_span.remove(&atom);
     }
+
+    /// El mayor `size_px` usado en cualquier nivel (base, zonas, spans), si
+    /// alguno define tamaño. Sirve para que el editor agrande su alto de línea
+    /// y las fuentes grandes no se solapen con la línea siguiente.
+    pub fn max_size_px(&self) -> Option<f32> {
+        let mut m: Option<f32> = self.base.size_px;
+        let upd = |m: &mut Option<f32>, s: Option<f32>| {
+            if let Some(s) = s {
+                *m = Some(m.map_or(s, |x| x.max(s)));
+            }
+        };
+        for e in self.por_zona.values() {
+            upd(&mut m, e.size_px);
+        }
+        for v in self.por_span.values() {
+            for sp in v {
+                upd(&mut m, sp.estilo.size_px);
+            }
+        }
+        m
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +325,17 @@ mod pruebas {
         assert!(!e.spans_de(atom).is_empty());
         e.limpiar_spans(atom);
         assert!(e.spans_de(atom).is_empty());
+    }
+
+    #[test]
+    fn max_size_px_toma_el_mayor_de_todos_los_niveles() {
+        let mut e = EstiloLienzo::nuevo();
+        assert_eq!(e.max_size_px(), None);
+        e.set_base(&EstiloTexto { size_px: Some(13.0), ..Default::default() });
+        e.set_zona(0, &EstiloTexto { size_px: Some(20.0), ..Default::default() });
+        let atom = Uuid::new_v4();
+        e.set_span(atom, 0, 3, EstiloTexto { size_px: Some(48.0), ..Default::default() });
+        assert_eq!(e.max_size_px(), Some(48.0));
     }
 
     #[test]
