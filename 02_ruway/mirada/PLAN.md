@@ -360,6 +360,59 @@ campo `theme` actual.
 - **Certificar con stats, no con PNG de rutina** (regla 8): conteos de pasadas,
   ms/frame, diffs de píxeles. El render-y-mirar, sólo para el «wow» final.
 
+## Wallpaper dinámico/video, sesión remota persistente, screensaver Alley Cat  💡 IDEA (sin construir)
+
+Brainstorm 2026-06-26 (tanda nocturna). Tres ideas, todas con base ya en el repo.
+
+### 1) Wallpaper dinámico / video  — esfuerzo BAJO (animado) a MEDIO (video)
+El compositor ya compone el wallpaper como un `MemoryRenderBuffer` por salida y la
+config ya tiene `wallpaper_source = color | gradient | pattern | image | slideshow |
+remote`. Faltan dos fuentes:
+- **Animado procedural (casi gratis):** los fondos del **greeter** (`rain/stars/fire/
+  plasma/aurora/waves/lightning`) **ya son procedurales animados y enchufables**
+  (`BgAnim`). Moverlos a un crate compartido (o re-pintarlos en el compositor) y
+  exponer `wallpaper_source = "animated"` + reusar el `BgAnim` da fondos animados de
+  escritorio sin motor nuevo. El buffer por salida se repinta por frame en vez de
+  cachearse.
+- **Video (medio):** decodificar con `shared/foreign-av` (ffmpeg, **ya en disco**),
+  subir cada frame a textura y componerlo en loop como fondo. Costo = decode+upload por
+  frame; mitigar: fps/resolución del wallpaper menores, **pausar si una ventana
+  fullscreen lo tapa** (no se ve) y **respetar el idle** (no decodificar con la
+  pantalla apagada — se cruza con `mirada_brain::idle`). Config nueva: `video` source +
+  ruta + fps/calidad, en el schema → wawa-panel.
+
+### 2) Sesión Wayland remota persistente — «tmux/mosh para Wayland»  — esfuerzo ALTO
+Hoy ya hay **apps** remotas: `mirada-ctl remote` (una app vía waypipe ssh) y sesiones
+waypipe **declaradas** en `config.ron` (`StartupApp.remote`). La idea nueva: una
+**sesión gráfica completa** en otra máquina, **persistente y reconectable** — te
+desconectás, las apps siguen vivas allá, reconectás y la recuperás.
+- **El transporte ya está** (waypipe); **el trabajo real es la persistencia.** waypipe
+  por defecto **no** sobrevive a la desconexión (mata los clientes). La vía sólida:
+  correr un **mirada anidado/headless en el host remoto** que mantenga las apps vivas y
+  sirva su salida por waypipe — el remoto *es* un compositor que persiste; reconectar =
+  re-adjuntar su display. Eso **se apoya en el «compositor anidado real»** que este
+  PLAN ya tiene como diferido (sección «Diferido»).
+- **Encaje con FUS:** la sesión remota aparece como una `Session` más en el roster (y
+  en el selector del lock): saltás entre tu sesión local y la remota como entre
+  usuarios. El `akasha` propio (EtherType/red de la suite) podría ser el transporte en
+  vez de ssh+waypipe, a futuro.
+- **Veredicto:** base lista, pero ata tres piezas grandes (anidado persistente +
+  waypipe + roster FUS). Rebanada 1 realista: re-adjuntar a un mirada-nested remoto que
+  ya corre, sin reconexión-tras-caída (eso es la parte mosh, aparte).
+
+### 3) Screensaver «Alley Cat» en el greeter  — esfuerzo BAJO/MEDIO (infra lista, el arte es el laburo)
+El greeter tiene fondos procedurales **enchufables**: `enum BgAnim` + un módulo por
+animación (`fire.rs`, `stars.rs`, …) + `parse`. Agregar uno es el patrón establecido.
+- **Qué:** una escena pixel-art animada **inspirada en el intro de Alley Cat** (1984,
+  Bill Williams) — un gato callejero que camina por la cerca/tejado, salta, persigue;
+  el espíritu del título, recreado proceduralmente.
+- **Cómo:** `BgAnim::AlleyCat` + `alleycat.rs` siguiendo `fire.rs`/`waves.rs` (animar
+  por tiempo, pintar sprites/escena). Se configura como los demás fondos (la sección
+  greeter de wawa-panel ya elige `BgAnim`). Sirve de fondo de login **y** de lock (mismo
+  binario), así que es screensaver de bloqueo gratis.
+- **Nota:** *inspiración*, no copiar assets — recrear el gesto procedural, no portar
+  sprites originales. El laburo es la animación, no la infraestructura.
+
 ## Fast user switching (FUS) — multiplexar >1 sesión  🔨 EN CURSO (1ª rebanada, 2026-06-26)
 
 **Idea rectora:** el compositor ya se quedaba con sus privilegios y rebajaba los
