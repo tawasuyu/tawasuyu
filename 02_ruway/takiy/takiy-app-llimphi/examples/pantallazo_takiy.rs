@@ -33,6 +33,8 @@ mod audio;
 mod overview;
 #[path = "../src/waveedit.rs"]
 mod waveedit;
+#[path = "../src/record.rs"]
+mod record;
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -290,6 +292,7 @@ fn model_demo(theme: Theme) -> Model {
         screen: appmodel::Screen::Track,
         onda_peaks: std::collections::HashMap::new(),
         wave_sel: None,
+        recording: None,
     }
 }
 
@@ -462,6 +465,30 @@ fn waveedit_view(model: &Model, theme: Theme) -> View<Msg> {
     .children(vec![menubar, toolbar, body])
 }
 
+/// Modo grabación montado con `record::body` real: HUD + teclado de
+/// piano con un acorde (C E G) "apretado" para mostrar el realce.
+fn record_view(model: &Model, theme: Theme) -> View<Msg> {
+    let menu = app_menu();
+    let menubar = menubar_view(&MenuBarSpec {
+        menu: &menu,
+        open: None,
+        theme: &theme,
+        viewport: (W as f32, H as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    });
+    let toolbar = chrome::toolbar_bar(model, &theme);
+    let body = record::body(model, &theme);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![menubar, toolbar, body])
+}
+
 fn main() {
     let out = std::env::args()
         .nth(1)
@@ -472,8 +499,25 @@ fn main() {
 
     let theme = Theme::dark(); // el theme canónico de la app (src/main.rs)
     let mut model = model_demo(theme);
-    // `TAKIY_WAVE=1` rinde el editor de onda (pista 0 en onda con ediciones).
-    let root = if std::env::var_os("TAKIY_WAVE").is_some() {
+    // `TAKIY_RECORD=1` rinde el modo grabación (teclado-piano con acorde).
+    let root = if std::env::var_os("TAKIY_RECORD").is_some() {
+        model.screen = appmodel::Screen::Track;
+        let mut held = std::collections::HashMap::new();
+        held.insert(60u8, 0.0_f32); // C4
+        held.insert(64u8, 0.0_f32); // E4
+        held.insert(67u8, 0.0_f32); // G4
+        model.recording = Some(appmodel::RecState {
+            track: 0,
+            started_at: std::time::Instant::now(),
+            bpm: 112.0,
+            backing: true,
+            base_octave: 4,
+            held,
+            count: 7,
+            last_beat: 3.5,
+        });
+        record_view(&model, theme)
+    } else if std::env::var_os("TAKIY_WAVE").is_some() {
         model.screen = appmodel::Screen::Track;
         model.editor.active_track = 0;
         if let Some(t) = model.editor.score.track_mut(0) {

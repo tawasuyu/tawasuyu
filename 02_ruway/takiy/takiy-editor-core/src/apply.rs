@@ -131,7 +131,27 @@ impl EditorState {
             EditMsg::ToggleSnapToKey => self.toggle_snap_to_key(),
             EditMsg::WaveOp { track, op } => self.add_wave_op(track, op),
             EditMsg::WaveClear { track } => self.clear_wave(track),
+            EditMsg::AddRecordedNote { track, midi, start, duration, velocity } => {
+                self.add_recorded_note(track, midi, start, duration, velocity)
+            }
         }
+    }
+
+    /// Agrega una nota grabada cruda a `track`. Sin snap ni cuantización:
+    /// el inicio y la duración son los del momento real de la tecla.
+    fn add_recorded_note(
+        &mut self,
+        track: usize,
+        midi: u8,
+        start: f32,
+        duration: f32,
+        velocity: u8,
+    ) -> ApplyOutcome {
+        let pitch = Pitch::from_midi(midi)?;
+        let note = ScoreNote::new(pitch, start.max(0.0), duration.max(0.02), velocity);
+        let t = self.score.track_mut(track)?;
+        t.add(note);
+        Some(format!("grabada · pista {track} · midi {midi} @ {start:.2}"))
     }
 
     /// Agrega una op de onda a la pista, creando la capa si hace falta.

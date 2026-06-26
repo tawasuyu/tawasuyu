@@ -157,6 +157,18 @@ pub(crate) enum Msg {
     /// Drag horizontal sobre la onda: extiende la selección de tiempo
     /// entre el beat del press (`lx0`) y el del cursor (`lx0 + dx`).
     WaveDrag { phase: DragPhase, dx: f32, lx0: f32 },
+    /// Entra/sale del modo grabación sobre la pista activa. Al salir
+    /// confirma la toma (cierra notas colgadas + un solo undo).
+    ToggleRecord,
+    /// Tecla de piano apretada (note on) en grabación: ancla el inicio
+    /// de la nota `midi` al beat actual y la audiciona.
+    RecordKeyDown(u8),
+    /// Tecla de piano soltada (note off): cierra la nota `midi` y la graba.
+    RecordKeyUp(u8),
+    /// Prende/apaga las pistas de fondo durante la grabación.
+    RecordToggleBacking,
+    /// Desplaza la octava base del mapeo de teclado en `delta`.
+    RecordOctave(i32),
     Quit,
 }
 

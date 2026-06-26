@@ -361,4 +361,15 @@ pub enum EditMsg {
     WaveOp { track: usize, op: takiy_core::WaveOp },
     /// Borra todas las ops de onda de una pista (`wave = None`).
     WaveClear { track: usize },
+    /// Agrega una nota **grabada en vivo** a una pista, con tiempo y
+    /// duración crudos (en beats) y velocity — sin cuantizar el pitch ni
+    /// el inicio (lo que se tocó es lo que queda). La usa el modo
+    /// grabación al soltar cada tecla.
+    AddRecordedNote {
+        track: usize,
+        midi: u8,
+        start: f32,
+        duration: f32,
+        velocity: u8,
+    },
 }

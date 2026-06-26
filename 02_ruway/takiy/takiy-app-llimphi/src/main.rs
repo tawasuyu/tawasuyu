@@ -41,6 +41,7 @@ mod chrome;
 mod msg;
 mod overview;
 mod paint;
+mod record;
 mod update;
 mod waveedit;
 
@@ -149,6 +150,7 @@ impl App for Takiy {
             screen: Screen::Overview,
             onda_peaks: std::collections::HashMap::new(),
             wave_sel: None,
+            recording: None,
         }
     }
 
@@ -177,6 +179,11 @@ impl App for Takiy {
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        // Modo grabación: el teclado es un piano. Intercepta TODO (incluido
+        // key-up, que el resto de la app ignora) antes de los atajos.
+        if model.recording.is_some() {
+            return record_key(model, event);
+        }
         if event.state != KeyState::Pressed {
             return None;
         }
@@ -381,6 +388,19 @@ impl App for Takiy {
         // abre el proyecto. El piano roll queda detrás de un click.
         if matches!(model.screen, Screen::Overview) {
             let body = overview::body(model, &theme);
+            return View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .fill(theme.bg_app)
+            .children(vec![menubar, toolbar, body]);
+        }
+
+        // Modo grabación: teclado-piano que graba MIDI (tiene prioridad
+        // sobre el editor de la pista).
+        if model.recording.is_some() {
+            let body = record::body(model, &theme);
             return View::new(Style {
                 flex_direction: FlexDirection::Column,
                 size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -667,6 +687,31 @@ fn context_menu_for_selection(model: &Model, x: f32, y: f32) -> View<Msg> {
         on_dismiss: Msg::CloseMenus,
         palette: ContextMenuPalette::from_theme(&model.theme),
     })
+}
+
+/// Ruteo de teclado en modo grabación: las teclas mapeadas tocan/graban
+/// notas (key-down → note on, key-up → note off), `←/→` corren la octava,
+/// `Espacio` alterna el fondo y `Esc` detiene.
+fn record_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+    let base = model.recording.as_ref().map(|r| r.base_octave).unwrap_or(4);
+    match event.state {
+        KeyState::Pressed => match &event.key {
+            Key::Named(NamedKey::Escape) => Some(Msg::ToggleRecord),
+            Key::Named(NamedKey::ArrowUp) => Some(Msg::RecordOctave(1)),
+            Key::Named(NamedKey::ArrowDown) => Some(Msg::RecordOctave(-1)),
+            Key::Named(NamedKey::Space) => Some(Msg::RecordToggleBacking),
+            Key::Character(s)
+                if !event.repeat && !event.modifiers.ctrl && !event.modifiers.alt =>
+            {
+                record::key_to_midi(s, base).map(Msg::RecordKeyDown)
+            }
+            _ => None,
+        },
+        KeyState::Released => match &event.key {
+            Key::Character(s) => record::key_to_midi(s, base).map(Msg::RecordKeyUp),
+            _ => None,
+        },
+    }
 }
 
 fn main() {

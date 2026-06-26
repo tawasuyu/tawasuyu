@@ -32,6 +32,48 @@ fn add_invalid_midi_is_noop() {
 }
 
 #[test]
+fn recorded_note_keeps_raw_timing_and_velocity() {
+    let mut st = EditorState::new(120.0);
+    // El inicio NO se cuantiza al snap (lo que se tocó es lo que queda).
+    st.apply(EditMsg::SetSnap { snap: Snap::Beat });
+    assert!(st
+        .apply(EditMsg::AddRecordedNote {
+            track: 0,
+            midi: 64,
+            start: 1.37,
+            duration: 0.42,
+            velocity: 100,
+        })
+        .is_some());
+    let n = st.score.track(0).unwrap().notes()[0];
+    assert_eq!(n.pitch.midi(), 64);
+    assert!((n.start - 1.37).abs() < 1e-6, "inicio crudo, sin snap");
+    assert!((n.duration - 0.42).abs() < 1e-6);
+    assert_eq!(n.velocity, 100);
+}
+
+#[test]
+fn recording_take_is_a_single_undo() {
+    let mut st = EditorState::new(120.0);
+    // begin_drag/end_drag agrupan la toma entera: 3 notas → 1 undo.
+    st.begin_drag();
+    for (i, midi) in [60u8, 62, 64].into_iter().enumerate() {
+        st.apply(EditMsg::AddRecordedNote {
+            track: 0,
+            midi,
+            start: i as f32,
+            duration: 0.5,
+            velocity: 90,
+        });
+    }
+    st.end_drag();
+    assert_eq!(st.score.track(0).unwrap().notes().len(), 3);
+    // Un solo undo borra las tres.
+    assert!(st.undo().is_some());
+    assert_eq!(st.score.track(0).unwrap().notes().len(), 0);
+}
+
+#[test]
 fn move_selected_keeps_selection_after_reinsert() {
     let mut st = EditorState::new(120.0);
     st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });

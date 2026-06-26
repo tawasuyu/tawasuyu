@@ -21,6 +21,29 @@ pub(crate) enum Screen {
     Track,
 }
 
+/// Estado del **modo grabación**: el teclado alfabético toca y graba MIDI
+/// en una pista, opcionalmente con las demás pistas sonando de fondo.
+pub(crate) struct RecState {
+    /// Pista destino de la grabación.
+    pub(crate) track: usize,
+    /// Origen de tiempo (beat 0 de la toma). El beat actual se deriva del
+    /// reloj real: `(now - started_at) * bpm / 60`.
+    pub(crate) started_at: std::time::Instant,
+    /// BPM congelado al arrancar la toma (define el mapeo tiempo→beat).
+    pub(crate) bpm: f32,
+    /// Si las demás pistas suenan de fondo mientras se graba.
+    pub(crate) backing: bool,
+    /// Octava base del mapeo de teclado (fila inferior = esta octava).
+    pub(crate) base_octave: i32,
+    /// Notas con tecla apretada ahora: `midi → beat de inicio`. Se cierran
+    /// (se graban) al soltar la tecla.
+    pub(crate) held: std::collections::HashMap<u8, f32>,
+    /// Cantidad de notas grabadas en la toma (para la UI).
+    pub(crate) count: usize,
+    /// Último beat conocido (lo refresca `Tick` para el cabezal/HUD).
+    pub(crate) last_beat: f32,
+}
+
 pub(crate) struct Model {
     pub(crate) editor: EditorState,
     pub(crate) source: String,
@@ -81,6 +104,9 @@ pub(crate) struct Model {
     /// abierta (editor de onda). `None` = sin selección → las ops aplican
     /// a toda la pista. La fija el drag horizontal sobre la forma de onda.
     pub(crate) wave_sel: Option<(f32, f32)>,
+    /// Modo grabación activo (`Some`) o no. Mientras está activo, el
+    /// teclado alfabético toca y graba MIDI en `RecState.track`.
+    pub(crate) recording: Option<RecState>,
     /// Caché de picos de onda por índice de pista, para el carril en
     /// modo `Onda`. Cada `Vec<f32>` es un perfil normalizado `[0, 1]`
     /// de resolución fija (`ONDA_PEAK_BUCKETS`) que el painter remapea

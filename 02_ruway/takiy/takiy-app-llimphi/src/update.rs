@@ -10,10 +10,10 @@ use takiy_app::{
     hit_test_note, pitch_range_with_offset, write_score, EditMsg, EditorState, HEADER_H, KEYBOARD_W,
 };
 use takiy_core::{Pitch, Score, ScoreNote, Track};
-use takiy_playback::PlayOpts;
+use takiy_playback::{PlayOpts, Player};
 use takiy_synth::write_wav;
 
-use crate::appmodel::{Model, Screen};
+use crate::appmodel::{Model, RecState, Screen};
 use crate::audio::{
     build_play, play_status_extras, render_score, render_with_wave, WAV_EXPORT_SAMPLE_RATE,
 };
@@ -35,6 +35,106 @@ const AUDITION_BEATS: f32 = 0.5;
 
 pub(crate) fn build_editor(score: Score) -> EditorState {
     EditorState::with_score(score)
+}
+
+/// Si no hay `Player`, intenta reabrir el dispositivo de audio (puede no
+/// haber estado listo al arrancar). Deja un status claro en cualquier
+/// caso, para que "play no hace nada" tenga explicación visible.
+fn ensure_player(model: &mut Model) {
+    if model.player.is_some() {
+        return;
+    }
+    match Player::open() {
+        Ok(p) => {
+            model.status = format!("audio listo · {} Hz / {} ch", p.sample_rate(), p.channels());
+            model.player = Some(p);
+        }
+        Err(e) => {
+            model.status = format!("sin audio: {e} — revisá el dispositivo de salida");
+        }
+    }
+}
+
+/// Beat actual de una toma de grabación según el reloj real.
+fn rec_beat(rec: &RecState) -> f32 {
+    rec.started_at.elapsed().as_secs_f32() * rec.bpm / 60.0
+}
+
+/// Arranca el modo grabación sobre la pista activa.
+fn start_recording(model: &mut Model) {
+    ensure_player(model);
+    let track = model.editor.active_track;
+    // Agrupa la toma entera en un solo undo.
+    model.editor.begin_drag();
+    model.editor.selected = None;
+    model.recording = Some(RecState {
+        track,
+        started_at: std::time::Instant::now(),
+        bpm: model.editor.score.tempo_bpm.max(1.0),
+        backing: true,
+        base_octave: 4,
+        held: std::collections::HashMap::new(),
+        count: 0,
+        last_beat: 0.0,
+    });
+    model.status = "● grabando — tocá con el teclado (z s x d c v…)".into();
+    // Fondo desde beat 0 y re-ancla el reloj al instante del play.
+    start_recording_backing(model, 0.0);
+    if let Some(rec) = model.recording.as_mut() {
+        rec.started_at = std::time::Instant::now();
+    }
+}
+
+/// Detiene la grabación: cierra notas colgadas, confirma la toma como un
+/// solo undo, para el fondo y persiste.
+fn stop_recording(model: &mut Model) {
+    if let Some(mut rec) = model.recording.take() {
+        let end = rec_beat(&rec);
+        let held: Vec<(u8, f32)> = rec.held.drain().collect();
+        for (midi, start) in held {
+            let dur = (end - start).max(0.05);
+            model.editor.apply(EditMsg::AddRecordedNote {
+                track: rec.track,
+                midi,
+                start,
+                duration: dur,
+                velocity: 100,
+            });
+            rec.count += 1;
+        }
+        model.editor.end_drag();
+        model.status = format!("grabación detenida · {} notas", rec.count);
+    }
+    if let Some(p) = model.player.as_ref() {
+        p.stop();
+    }
+    model.playing = false;
+    if let Some(path) = model.editor.save_path.as_deref() {
+        if let Err(e) = write_score(&model.editor.score, path) {
+            eprintln!("takiy · auto-save error en {}: {e}", path.display());
+        }
+    }
+}
+
+/// Reproduce las **demás** pistas de fondo durante la grabación (la pista
+/// destino va muteada) desde `beat`. No-op si no hay audio.
+fn start_recording_backing(model: &mut Model, beat: f32) {
+    let Some(rec_track) = model.recording.as_ref().map(|r| r.track) else {
+        return;
+    };
+    let Some(sr) = model.player.as_ref().map(Player::sample_rate) else {
+        return;
+    };
+    let mut ed = model.editor.clone();
+    if let Some(t) = ed.score.track_mut(rec_track) {
+        t.mute = true;
+    }
+    let (buf, opts) = build_play(&ed, model.sf2.as_ref(), sr, beat, false);
+    model.playback_bpm = model.editor.score.tempo_bpm;
+    if let Some(p) = model.player.as_ref() {
+        p.play_with(buf, opts);
+    }
+    model.playing = true;
 }
 
 /// Beats totales del eje de tiempo del editor de onda (igual que el
@@ -77,6 +177,7 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             handle.quit();
         }
         Msg::TogglePlay => {
+            ensure_player(&mut model);
             let Some(player) = model.player.as_ref() else {
                 return model;
             };
@@ -187,8 +288,15 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 let still = model.player.as_ref().is_some_and(|p| p.is_playing());
                 if !still {
                     model.playing = false;
-                    model.status = "stopped".into();
+                    // Durante la grabación, el fin del fondo no es "stop".
+                    if model.recording.is_none() {
+                        model.status = "stopped".into();
+                    }
                 }
+            }
+            // HUD de grabación: refresca el beat actual del reloj.
+            if let Some(rec) = model.recording.as_mut() {
+                rec.last_beat = rec.started_at.elapsed().as_secs_f32() * rec.bpm / 60.0;
             }
         }
         Msg::Edit(edit_msg) => {
@@ -761,6 +869,74 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             if matches!(phase, DragPhase::End) && (hi - lo) < 0.05 {
                 // Click sin arrastre real → deselecciona (ops a toda la pista).
                 model.wave_sel = None;
+            }
+        }
+        Msg::ToggleRecord => {
+            if model.recording.is_some() {
+                stop_recording(&mut model);
+            } else {
+                start_recording(&mut model);
+            }
+        }
+        Msg::RecordKeyDown(midi) => {
+            // Extraemos primero (suelta el borrow de `recording`) y recién
+            // entonces audicionamos (necesita `&mut model`).
+            let fresh = if let Some(rec) = model.recording.as_mut() {
+                let beat = rec_beat(rec);
+                rec.last_beat = beat;
+                if rec.held.contains_key(&midi) {
+                    false
+                } else {
+                    rec.held.insert(midi, beat);
+                    true
+                }
+            } else {
+                false
+            };
+            if fresh {
+                audition_pitch(&mut model, midi);
+            }
+        }
+        Msg::RecordKeyUp(midi) => {
+            let recorded = if let Some(rec) = model.recording.as_mut() {
+                rec.held.remove(&midi).map(|start| {
+                    let end = rec_beat(rec);
+                    rec.last_beat = end;
+                    rec.count += 1;
+                    (rec.track, start, (end - start).max(0.05))
+                })
+            } else {
+                None
+            };
+            if let Some((track, start, duration)) = recorded {
+                if let Some(s) = model.editor.apply(EditMsg::AddRecordedNote {
+                    track,
+                    midi,
+                    start,
+                    duration,
+                    velocity: 100,
+                }) {
+                    model.status = s;
+                }
+            }
+        }
+        Msg::RecordToggleBacking => {
+            let action = model.recording.as_mut().map(|rec| {
+                rec.backing = !rec.backing;
+                (rec.backing, rec_beat(rec))
+            });
+            if let Some((on, beat)) = action {
+                if on {
+                    start_recording_backing(&mut model, beat);
+                } else if let Some(p) = model.player.as_ref() {
+                    p.stop();
+                    model.playing = false;
+                }
+            }
+        }
+        Msg::RecordOctave(delta) => {
+            if let Some(rec) = model.recording.as_mut() {
+                rec.base_octave = (rec.base_octave + delta).clamp(0, 8);
             }
         }
         Msg::SetTrackView { track, view } => {
