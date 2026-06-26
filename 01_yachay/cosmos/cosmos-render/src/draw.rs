@@ -387,7 +387,7 @@ pub fn compose_wheel_with_hits(
         let from = i as f32 * 30.0;
         let to = from + 30.0;
         let pts = house_sector_points(
-            cx, cy, from, to, asc, rot, radii.bodies, radii.sign_outer,
+            cx, cy, from, to, asc, rot, radii.houses_inner, radii.sign_outer,
         );
         out.push(DrawCommand::Polygon {
             points: pts,
@@ -652,8 +652,8 @@ pub fn compose_wheel_with_hits(
                 // disco; el factor 1.3 lo deja ligeramente más grande
                 // que el círculo para que se lea bien.
                 let (glyph_size, glyph_sw) = if is_natal {
-                    // Sin círculo → glifo grande y remarcado (trazo grueso).
-                    ((font * 1.7).max(disk * 2.2), (font * 0.14).max(1.6))
+                    // Sin círculo → glifo GRANDE y remarcado (trazo grueso).
+                    ((font * 2.3).max(disk * 2.8), (font * 0.16).max(1.8))
                 } else {
                     ((font * 1.05).min(disk * 2.4), (font * 0.085).max(1.0))
                 };
@@ -682,7 +682,9 @@ pub fn compose_wheel_with_hits(
                         disp_deg,
                         is_planet: true,
                         body_ring: ring,
-                        disk_r: disk,
+                        // Despeje del label = extensión real del glifo (no el
+                        // disco chico), para que la coord no pise al planeta.
+                        disk_r: glyph_size * 0.55,
                     });
                 }
             }
@@ -790,15 +792,7 @@ pub fn compose_wheel_with_hits(
         );
     }
 
-    // === Anillo de aspectos + líneas ===
-    out.push(DrawCommand::Circle {
-        cx,
-        cy,
-        r: radii.aspects,
-        stroke: Some(pal.fg_muted.with_alpha(0.35)),
-        fill: None,
-        stroke_w: 0.6,
-    });
+    // === Líneas de aspectos (sin aro interior: arrancan del borde de casas) ===
     for layer in &model.layers {
         if !matches!(layer.kind, crate::LayerKind::Aspects) {
             continue;

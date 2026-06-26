@@ -111,7 +111,9 @@ impl Radii {
             "progression" => (self.bodies, self.progression),
             "solar_arc" => (self.bodies, self.solar_arc),
             "composite" => (self.bodies, self.composite),
-            _ => (self.aspects, self.aspects),
+            // Natal-natal: las cuerdas arrancan en el borde interno de la banda
+            // de casas (cerca de los planetas), no en un aro interior aparte.
+            _ => (self.houses_inner, self.houses_inner),
         }
     }
 }
