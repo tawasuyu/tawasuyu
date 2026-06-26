@@ -249,6 +249,11 @@ pub(super) struct LayerApp {
     pub(super) mpris: Option<crate::mpris::MprisHandle>,
     /// Último estado del reproductor.
     pub(super) media_now: Option<crate::mpris::MediaState>,
+    /// Índice del panel de la surface dedicada del OSD (volumen/brillo), o `None`.
+    pub(super) osd_pi: Option<usize>,
+    /// Cartel OSD vigente, o `None`. Se dispara desde la rueda/slider y se oculta
+    /// al cumplir su tiempo.
+    pub(super) osd: Option<crate::render::Osd>,
     /// Visualizador de audio (cava) en su propio hilo.
     pub(super) cava: Option<crate::cava::CavaHandle>,
     /// Último cuadro del visualizador.
@@ -562,6 +567,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         session_confirm: None,
         mpris,
         media_now: None,
+        osd_pi: None,
+        osd: None,
         cava,
         cava_frame: Vec::new(),
         theme,
@@ -885,6 +892,41 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
         layer.set_size(1, 1);
         layer.set_margin(0, 0, 0, 0);
+        layer.set_exclusive_zone(0);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.commit();
+        app.panels.push(Panel {
+            idx: 0,
+            card: None,
+            layer,
+            cache: None,
+            width: 1,
+            height: 1,
+            dirty: false,
+            hover_idx: None,
+            cursor_x: None,
+            gpu: None,
+        });
+        Some(app.panels.len() - 1)
+    };
+
+    // La surface del OSD (cartel de volumen/brillo): Overlay anclado abajo,
+    // centrada horizontalmente. Arranca 1×1 y crece al dispararse.
+    app.osd_pi = {
+        let wl_surface = compositor.create_surface(&qh);
+        if let Ok(region) = Region::new(&compositor) {
+            wl_surface.set_input_region(Some(region.wl_region()));
+        }
+        let layer = layer_shell.create_layer_surface(
+            &qh,
+            wl_surface,
+            Layer::Overlay,
+            Some("pata-osd".to_string()),
+            None,
+        );
+        layer.set_anchor(LayerAnchor::BOTTOM);
+        layer.set_size(1, 1);
+        layer.set_margin(0, 0, 80, 0);
         layer.set_exclusive_zone(0);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();

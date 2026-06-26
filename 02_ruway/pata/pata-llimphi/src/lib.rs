@@ -876,6 +876,8 @@ pub struct Model {
     pub session_open: bool,
     /// Acción de sesión pendiente de confirmación, o `None`.
     pub session_confirm: Option<SessionAction>,
+    /// Cartel OSD vigente (volumen/brillo), o `None`. Se desvanece solo.
+    pub osd: Option<render::Osd>,
     /// Visualizador de audio (cava) en su propio hilo. `None` si la config no
     /// declara `cava`.
     pub cava: Option<cava::CavaHandle>,
@@ -1200,6 +1202,7 @@ impl App for PataApp {
             network_open: false,
             session_open: false,
             session_confirm: None,
+            osd: None,
             cava,
             cava_frame: Vec::new(),
             nav: NavState::default(),
@@ -1319,6 +1322,10 @@ impl App for PataApp {
                 // abierto (los sliders siguen al sistema en vivo).
                 if model.volume_open {
                     model.sink_inputs = sampler::sample_sink_inputs();
+                }
+                // El OSD se desvanece al cumplir su tiempo.
+                if model.osd.map(|o| o.expired()).unwrap_or(false) {
+                    model.osd = None;
                 }
                 // Lista de ventanas para el task manager: sólo si la config la
                 // declara (no molestar al WM con un subproceso por tick de balde).
@@ -1478,9 +1485,19 @@ impl App for PataApp {
                 // Rueda arriba (dy<0) = subir; el stack da dy>0 al rodar abajo.
                 if dy != 0.0 {
                     sampler::nudge_volume(dy < 0.0);
+                    let nuevo = (model.last_ctx.volume + if dy < 0.0 { 0.05 } else { -0.05 })
+                        .clamp(0.0, 1.0);
+                    model.osd = Some(render::Osd::flash(render::OsdKind::Volume, nuevo, false));
                 }
             }
-            Msg::VolumeMute => sampler::toggle_mute(),
+            Msg::VolumeMute => {
+                sampler::toggle_mute();
+                model.osd = Some(render::Osd::flash(
+                    render::OsdKind::Volume,
+                    model.last_ctx.volume,
+                    !model.last_ctx.muted,
+                ));
+            }
             Msg::ClipboardMenu => {
                 model.clip_open = !model.clip_open;
                 if model.clip_open {
@@ -1572,6 +1589,10 @@ impl App for PataApp {
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     sampler::nudge_brightness(dy < 0.0);
+                    let nuevo = (model.last_ctx.brightness + if dy < 0.0 { 0.05 } else { -0.05 })
+                        .clamp(0.0, 1.0);
+                    model.osd =
+                        Some(render::Osd::flash(render::OsdKind::Brightness, nuevo, false));
                 }
             }
             Msg::CpuPanel => {
@@ -1617,8 +1638,14 @@ impl App for PataApp {
                     model.clock_open = false;
                 }
             }
-            Msg::VolumeSet(frac) => sampler::set_volume(frac),
-            Msg::BrightnessSet(frac) => sampler::set_brightness(frac),
+            Msg::VolumeSet(frac) => {
+                sampler::set_volume(frac);
+                model.osd = Some(render::Osd::flash(render::OsdKind::Volume, frac, false));
+            }
+            Msg::BrightnessSet(frac) => {
+                sampler::set_brightness(frac);
+                model.osd = Some(render::Osd::flash(render::OsdKind::Brightness, frac, false));
+            }
             Msg::StartToggle => {
                 model.menu_open = !model.menu_open;
                 if !model.menu_open {
@@ -1925,6 +1952,12 @@ impl App for PataApp {
         if model.brightness_open {
             let bar_h = bar_thickness_for(&model.cfg, "brightness");
             return Some(render::brightness_overlay(&model.last_ctx, bar_h, &model.theme));
+        }
+        // El OSD es la prioridad más baja: feedback transitorio cuando no hay
+        // ningún menú/drawer abierto.
+        if let Some(osd) = model.osd.filter(|o| !o.expired()) {
+            let screen = (model.screen.0 as f32, model.screen.1 as f32);
+            return Some(render::osd_overlay(&osd, screen, &model.theme));
         }
         None
     }

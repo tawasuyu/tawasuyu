@@ -70,6 +70,14 @@ impl LayerApp {
         self.marcar_todo_dirty();
     }
 
+    /// Dispara el cartel OSD (volumen/brillo) y marca su surface para repintar.
+    pub(super) fn flash_osd(&mut self, kind: crate::render::OsdKind, level: f32, muted: bool) {
+        self.osd = Some(crate::render::Osd::flash(kind, level, muted));
+        if let Some(pi) = self.osd_pi {
+            self.panels[pi].dirty = true;
+        }
+    }
+
     /// La lista de ventanas para el render del `window_list`, en el orden propio
     /// definido por el drag-to-reorder (`task_order`). Las ventanas que no
     /// figuran en ese orden (recién abiertas) quedan al final en orden natural.
@@ -766,6 +774,18 @@ impl LayerApp {
 
     /// Avanza el frame de un panel.
     pub(super) fn draw(&mut self, pi: usize, qh: &QueueHandle<Self>) {
+        // Empuje del OSD: su surface arranca 1×1 y podría no recibir frames
+        // propios; las barras (que laten en continuo) sirven su draw cuando hay
+        // un cartel que mostrar o que encoger. (`pi != osd_pi` evita recursión.)
+        if self.osd_pi.is_some() && self.osd_pi != Some(pi) {
+            let opi = self.osd_pi.unwrap();
+            let needs = self.panels[opi].dirty
+                || self.osd.is_some()
+                || self.panels[opi].width > 1;
+            if needs {
+                self.draw(opi, qh);
+            }
+        }
         self.maybe_sample();
         self.maybe_cava();
         self.poll_nav();
@@ -795,6 +815,35 @@ impl LayerApp {
                     shuma_module_shell::Msg::Tick,
                 );
                 self.panels[pi].dirty = true;
+            }
+        }
+
+        // El panel del OSD crece al dispararse (volumen/brillo) y se encoge al
+        // expirar; mantiene su latido para reaparecer sin recrear la surface.
+        if self.osd_pi == Some(pi) {
+            let visible = self.osd.map(|o| !o.expired()).unwrap_or(false);
+            let target = if visible {
+                (render::OSD_W, render::OSD_H)
+            } else {
+                (1u32, 1u32)
+            };
+            if (self.panels[pi].width, self.panels[pi].height) != target {
+                {
+                    let layer = &self.panels[pi].layer;
+                    layer.set_size(target.0, target.1);
+                    layer.commit();
+                }
+                self.panels[pi].width = target.0;
+                self.panels[pi].height = target.1;
+                self.panels[pi].cache = None;
+                self.panels[pi].dirty = true;
+            }
+            if !visible {
+                // Expiró (o nunca se mostró): nada que pintar; suelta el cartel.
+                self.osd = None;
+                self.panels[pi].dirty = false;
+                self.latido(pi, qh);
+                return;
             }
         }
 
@@ -828,7 +877,20 @@ impl LayerApp {
             ws_anim,
         };
 
-        let view = if self.tooltip_pi == Some(pi) {
+        let view = if self.osd_pi == Some(pi) {
+            // Si llegamos acá el cartel está vigente (el bloque de arriba retorna
+            // cuando expiró); de todos modos caemos a vacío si fuese `None`.
+            match self.osd {
+                Some(osd) => render::osd_surface_view(&osd, &self.theme),
+                None => render::bar_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                ),
+            }
+        } else if self.tooltip_pi == Some(pi) {
             render::tooltip_view(self.tooltip_text.as_deref().unwrap_or(""), &self.theme)
         } else if let Some(c) = self.panels[pi].card.as_ref() {
             render::card_view(&c.spec, &c.widgets, &self.theme)
@@ -1103,10 +1165,17 @@ impl LayerApp {
                 if dy != 0.0 {
                     crate::sampler::nudge_volume(dy < 0.0);
                     self.refresh_volume_now();
+                    self.flash_osd(crate::render::OsdKind::Volume, self.ctx.volume, self.ctx.muted);
                 }
             }
-            Msg::VolumeMute => crate::sampler::toggle_mute(),
-            Msg::VolumeSet(f) => crate::sampler::set_volume(f),
+            Msg::VolumeMute => {
+                crate::sampler::toggle_mute();
+                self.flash_osd(crate::render::OsdKind::Volume, self.ctx.volume, !self.ctx.muted);
+            }
+            Msg::VolumeSet(f) => {
+                crate::sampler::set_volume(f);
+                self.flash_osd(crate::render::OsdKind::Volume, f, false);
+            }
             Msg::VolumePanel => {
                 // Antes lanzaba pavucontrol externo; ahora el mezclador nativo.
                 if !(self.menu_open && self.menu_kind == MenuKind::Volume) {
@@ -1142,9 +1211,13 @@ impl LayerApp {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy < 0.0);
                     self.refresh_brightness_now();
+                    self.flash_osd(crate::render::OsdKind::Brightness, self.ctx.brightness, false);
                 }
             }
-            Msg::BrightnessSet(f) => crate::sampler::set_brightness(f),
+            Msg::BrightnessSet(f) => {
+                crate::sampler::set_brightness(f);
+                self.flash_osd(crate::render::OsdKind::Brightness, f, false);
+            }
             Msg::BrightnessPanel => {}
             Msg::ControlToggle => {
                 // Antes el engranaje ⚙ no hacía nada en el DM. Ahora abre el

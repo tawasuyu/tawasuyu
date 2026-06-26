@@ -737,3 +737,15 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     ~1.5 s; se **oculta** si no hay reproductor (como el workspace switcher con
     count 0). Sin popup: los clics mandan los comandos de transporte directo en
     ambos backends. `parse_status` pura y testeada. `render/media.rs`.
+  - **OSD (cartel de volumen/brillo) ✅** — al ajustar volumen o brillo aparece
+    un cartel transitorio (ícono + barra de nivel) que se desvanece solo (~1.3 s).
+    `render/osd.rs`: `Osd::flash`/`expired` (temporizado con `Instant`) + dibujo
+    a mano del altavoz/sol. **Disparo** desde las interacciones que pata conoce
+    (rueda/slider/mute), con el valor optimista (las teclas multimedia globales
+    las maneja el compositor, no pata — Regla 2; quedan fuera). En **winit** es un
+    overlay de prioridad baja (sólo cuando no hay menú abierto). En **layer-shell**
+    es una **surface `Overlay` dedicada** anclada abajo (como el tooltip): arranca
+    1×1 y crece al dispararse. Como una surface 1×1 ociosa podría no recibir frames
+    propios, las barras —que laten en continuo— **empujan** su draw. Runtime sin
+    verificar headless (norma de pata). De paso se reparó un example stale
+    (`rail_dientes_shot`, firma de `sidebar_surface_view` desactualizada).

@@ -45,6 +45,7 @@ mod cde;
 mod control;
 mod media;
 mod network;
+mod osd;
 mod panels;
 mod session;
 mod sidebar;
@@ -61,6 +62,7 @@ pub use panels::{
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
 pub use media::media_view;
 pub use network::{network_overlay, network_view};
+pub use osd::{osd_overlay, osd_surface_view, Osd, OsdKind, OSD_H, OSD_W};
 pub use session::{session_overlay, session_view};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};

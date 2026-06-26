@@ -34,9 +34,10 @@ fn main() {
     let surface = cfg.surfaces[1].clone();
     let nav = pata_llimphi::nouser::NavState::default();
     let shuma = pata_llimphi::shuma::ShumaState::default();
+    let rag = pata_llimphi::rag::RagState::default();
 
     let rail = render::sidebar_surface_view(
-        &surface, 1, W as f32, H as f32, &nav, &[], "", &shuma, &theme,
+        &surface, 1, W as f32, H as f32, &nav, &[], "", None, &shuma, &rag, &theme,
     );
     let root: View<Msg> = View::new(Style {
         flex_direction: FlexDirection::Column,
