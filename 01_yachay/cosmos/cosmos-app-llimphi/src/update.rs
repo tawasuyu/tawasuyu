@@ -249,6 +249,28 @@ fn sync_host_active(m: &mut Model) {
     }
 }
 
+/// Re-publica los dientes al rail de pata cuando el dock se reordenó. Los dientes
+/// de cosmos SON sus `DockItem`s (izquierda+derecha); al moverlos (`dock_move`)
+/// la lista/orden cambia y el `Register` inicial queda viejo. Sólo manda
+/// `HostClient::update` cuando la firma del dock cambió respecto de lo último
+/// publicado (`host_teeth_synced`). No-op sin `_host` (no delegado).
+fn sync_host_teeth(m: &mut Model) {
+    let teeth: Vec<pata_host::HostedTooth> = m
+        .dock_left
+        .iter()
+        .chain(&m.dock_right)
+        .map(|i| crate::dock_item_tooth(*i))
+        .collect();
+    let sig: Vec<u32> = teeth.iter().map(|t| t.id).collect();
+    if sig == m.host_teeth_synced {
+        return;
+    }
+    m.host_teeth_synced = sig;
+    if let Some(h) = m._host.as_mut() {
+        h.update(teeth);
+    }
+}
+
 pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
     let mut m = model;
     let mut persist = false;
@@ -659,7 +681,9 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let (c, use_now) = (m.chart.clone(), m.cfg.use_now);
         handle.spawn(move || Msg::AstroComputed(gen, Arc::new(compute_astro(&c, use_now))));
     }
-    // Refleja en el rail de pata qué panel quedó desplegado (si delegamos).
+    // Refleja en el rail de pata el estado del dock (si delegamos): primero la
+    // lista de dientes (si se reordenó), luego cuál quedó desplegado.
+    sync_host_teeth(&mut m);
     sync_host_active(&mut m);
     m
 }

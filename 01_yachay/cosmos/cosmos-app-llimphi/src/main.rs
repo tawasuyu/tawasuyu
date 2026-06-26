@@ -164,6 +164,14 @@ impl App for Cosmos {
         } else {
             None
         };
+        // Firma del dock ya publicado (= el orden que viajó en el Register), para
+        // que `sync_host_teeth` no re-publique de balde hasta que se reordene.
+        let host_teeth_synced: Vec<u32> = ui
+            .dock_left
+            .iter()
+            .chain(&ui.dock_right)
+            .map(|i| i.to_u64() as u32)
+            .collect();
 
         Model {
             chart,
@@ -232,6 +240,7 @@ impl App for Cosmos {
             delegated,
             _host: host,
             host_active_synced: None,
+            host_teeth_synced,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }
@@ -489,7 +498,7 @@ fn main() {
 /// Proyecta un `DockItem` a un diente hospedado `(id, icono, etiqueta)` para
 /// publicarlo en el rail de pata. El `id` codifica el `DockItem` (`to_u64`) y
 /// vuelve tal cual en [`Msg::HostActivate`].
-fn dock_item_tooth(item: model::DockItem) -> pata_host::HostedTooth {
+pub(crate) fn dock_item_tooth(item: model::DockItem) -> pata_host::HostedTooth {
     use model::{DockItem, ToolCat};
     let (icon, label): (&str, String) = match item {
         DockItem::Arbol => ("folder", "Biblioteca".to_string()),

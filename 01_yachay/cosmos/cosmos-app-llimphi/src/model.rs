@@ -867,6 +867,11 @@ pub(crate) struct Model {
     /// del lado expandido, o `None`). Evita reenviar el mismo estado en cada
     /// `update`: sólo se manda `SetActive` cuando cambia. Inerte sin `_host`.
     pub(crate) host_active_synced: Option<u32>,
+    /// Firma (ids en orden, izquierda+derecha) de los dientes ya publicados al
+    /// rail de pata. Al reordenar el dock (`dock_move`) la lista cambia y hay que
+    /// re-publicarla con `HostClient::update`; este campo evita reenviarla en
+    /// cada `update` cuando no cambió.
+    pub(crate) host_teeth_synced: Vec<u32>,
     // watchers
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     pub(crate) _chart_watcher: Option<notify::RecommendedWatcher>,
