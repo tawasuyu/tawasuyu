@@ -14,6 +14,8 @@ path = "src/main.rs"
 [dependencies]
 # El runtime estilo Rive — el core agnóstico que esta UI autora.
 llimphi-anim = { workspace = true }
+# Render de la malla deformada (solid/wireframe + fit/bounds) para el preview del rig.
+llimphi-mesh = { workspace = true }
 # Bucle Elm + ventana + re-exports (raster/layout/text).
 llimphi-ui = { workspace = true }
 # Paletas semánticas de color.

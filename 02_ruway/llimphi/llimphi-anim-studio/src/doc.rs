@@ -221,17 +221,6 @@ impl Doc {
         sm
     }
 
-    /// Serializa a RON legible (para guardar a disco).
-    pub fn to_ron(&self) -> Result<String, ron::Error> {
-        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
-            .map_err(Into::into)
-    }
-
-    /// Carga desde RON.
-    pub fn from_ron(s: &str) -> Result<Self, ron::error::SpannedError> {
-        ron::from_str(s)
-    }
-
     /// Documento de arranque: el clásico `idle ⇄ walk` por un bool `moving`, más
     /// un `jump` any-state por trigger. Da algo vivo que tocar al abrir.
     pub fn starter() -> Self {
@@ -363,8 +352,9 @@ mod tests {
     #[test]
     fn round_trip_ron() {
         let doc = Doc::starter();
-        let ron = doc.to_ron().expect("serializa");
-        let back = Doc::from_ron(&ron).expect("deserializa");
+        let ron = ron::ser::to_string_pretty(&doc, ron::ser::PrettyConfig::default())
+            .expect("serializa");
+        let back: Doc = ron::from_str(&ron).expect("deserializa");
         assert_eq!(doc, back);
     }
 }

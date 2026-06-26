@@ -35,7 +35,9 @@ use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 mod doc;
+mod rig;
 use doc::{CmpOp, CondDef, Doc, InputDef, InputKind, StateDef, TransDef};
+use rig::{BoneDef, RigDoc};
 
 /// Dónde se guarda/carga el grafo (relativo al cwd).
 const PROJECT_PATH: &str = "anim-studio.ron";
@@ -54,6 +56,25 @@ enum Sel {
     Trans(usize),
 }
 
+/// Las dos superficies del studio: el grafo de estados (F1) y el rig
+/// esqueletal (F2). Comparten ventana y persistencia; se conmutan en la barra
+/// superior.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Editor de la máquina de estados.
+    Estados,
+    /// Editor del rig esqueletal (cadena de huesos + malla + IK).
+    Rig,
+}
+
+/// El proyecto persistido: ambas superficies juntas en un solo `.ron`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Project {
+    doc: Doc,
+    #[serde(default = "RigDoc::starter")]
+    rig: RigDoc,
+}
+
 // =============================================================================
 //  Modelo
 // =============================================================================
@@ -61,7 +82,13 @@ enum Sel {
 struct Model {
     doc: Doc,
     theme: Theme,
+    mode: Mode,
     sel: Sel,
+
+    /// El rig esqueletal (modo Rig).
+    rig: RigDoc,
+    /// Hueso seleccionado en el modo Rig.
+    rig_sel: Option<usize>,
 
     /// Instancia ejecutable (recompilada del `doc` en cada edición estructural).
     instance: Instance,
@@ -156,6 +183,20 @@ impl Model {
 #[derive(Clone)]
 enum Msg {
     Tick,
+    SetMode(Mode),
+    // --- rig (modo Rig) ---
+    RigAddBone,
+    RigDelBone,
+    RigSelectBone(usize),
+    RigSetAngle(usize, f64),
+    RigSetLen(usize, f64),
+    RigSetThickness(f64),
+    RigSetCols(f64),
+    RigToggleIk,
+    RigToggleFlip,
+    RigSetTargetX(f64),
+    RigSetTargetY(f64),
+    RigResetPose,
     // --- grafo ---
     DragNode(NodeId, DragPhase, f32, f32),
     Connect(NodeId, NodeId),
@@ -219,7 +260,10 @@ impl App for Studio {
             instance: doc.compile().instance(),
             doc,
             theme: Theme::dark(),
+            mode: Mode::Estados,
             sel: Sel::None,
+            rig: RigDoc::starter(),
+            rig_sel: Some(1),
             current_idx: Some(0),
             live_bools: HashMap::new(),
             live_numbers: HashMap::new(),
@@ -251,6 +295,43 @@ impl App for Studio {
                     model.apply_live_inputs();
                     model.instance.advance(DT);
                     model.current_idx = model.find_current();
+                }
+            }
+            Msg::SetMode(m) => model.mode = m,
+
+            // ---------------- rig ----------------
+            Msg::RigAddBone => {
+                model.rig.bones.push(BoneDef::new(100.0));
+                model.rig_sel = Some(model.rig.bones.len() - 1);
+            }
+            Msg::RigDelBone => {
+                if let Some(i) = model.rig_sel {
+                    if i < model.rig.bones.len() && model.rig.bones.len() > 1 {
+                        model.rig.bones.remove(i);
+                        model.rig_sel = Some(i.min(model.rig.bones.len() - 1));
+                    }
+                }
+            }
+            Msg::RigSelectBone(i) => model.rig_sel = Some(i),
+            Msg::RigSetAngle(i, v) => {
+                if let Some(b) = model.rig.bones.get_mut(i) {
+                    b.angle = v.clamp(-3.1, 3.1);
+                }
+            }
+            Msg::RigSetLen(i, v) => {
+                if let Some(b) = model.rig.bones.get_mut(i) {
+                    b.len = v.clamp(10.0, 400.0);
+                }
+            }
+            Msg::RigSetThickness(v) => model.rig.thickness = v.clamp(2.0, 120.0),
+            Msg::RigSetCols(v) => model.rig.cols = (v as usize).clamp(2, 64),
+            Msg::RigToggleIk => model.rig.ik_enabled = !model.rig.ik_enabled,
+            Msg::RigToggleFlip => model.rig.ik_flip = !model.rig.ik_flip,
+            Msg::RigSetTargetX(v) => model.rig.ik_target.0 = v,
+            Msg::RigSetTargetY(v) => model.rig.ik_target.1 = v,
+            Msg::RigResetPose => {
+                for b in &mut model.rig.bones {
+                    b.angle = 0.0;
                 }
             }
 
@@ -489,7 +570,12 @@ impl App for Studio {
 
             // ---------------- persistencia ----------------
             Msg::Save => {
-                model.status = match model.doc.to_ron() {
+                let project = Project {
+                    doc: model.doc.clone(),
+                    rig: model.rig.clone(),
+                };
+                let ron = ron::ser::to_string_pretty(&project, ron::ser::PrettyConfig::default());
+                model.status = match ron {
                     Ok(s) => match std::fs::write(PROJECT_PATH, s) {
                         Ok(_) => format!("guardado en {PROJECT_PATH}"),
                         Err(e) => format!("error al escribir: {e}"),
@@ -498,10 +584,12 @@ impl App for Studio {
                 };
             }
             Msg::Load => match std::fs::read_to_string(PROJECT_PATH) {
-                Ok(s) => match Doc::from_ron(&s) {
-                    Ok(d) => {
-                        model.doc = d;
+                Ok(s) => match ron::from_str::<Project>(&s) {
+                    Ok(p) => {
+                        model.doc = p.doc;
+                        model.rig = p.rig;
                         model.sel = Sel::None;
+                        model.rig_sel = model.rig.bones.len().checked_sub(1);
                         model.rebuild();
                         model.status = format!("cargado de {PROJECT_PATH}");
                     }
@@ -514,8 +602,17 @@ impl App for Studio {
     }
 
     fn view(model: &Model) -> View<Msg> {
+        let body = match model.mode {
+            Mode::Estados => View::new(row_full())
+                .children(vec![left_panel(model), graph_panel(model), right_panel(model)]),
+            Mode::Rig => View::new(row_full()).children(vec![
+                rig_left_panel(model),
+                rig_canvas_panel(model),
+                rig_right_panel(model),
+            ]),
+        };
         View::new(Style {
-            flex_direction: FlexDirection::Row,
+            flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0),
                 height: percent(1.0),
@@ -523,8 +620,63 @@ impl App for Studio {
             ..Default::default()
         })
         .fill(model.theme.bg_app)
-        .children(vec![left_panel(model), graph_panel(model), right_panel(model)])
+        .children(vec![top_bar(model), body])
     }
+}
+
+/// Estilo de una fila que ocupa todo el ancho y el alto restante.
+fn row_full() -> Style {
+    Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0),
+            height: Dimension::auto(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Barra superior: conmutador de modo Estados / Rig.
+fn top_bar(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let tab = |label: &str, active: bool, msg: Msg| -> View<Msg> {
+        let (bg, fg) = if active {
+            (theme.accent, Color::from_rgba8(20, 20, 24, 255))
+        } else {
+            (theme.bg_panel_alt, theme.fg_muted)
+        };
+        View::new(Style {
+            size: Size {
+                width: length(120.0),
+                height: length(28.0),
+            },
+            align_items: Some(AlignItems::Center),
+            padding: pad(12.0, 0.0),
+            ..Default::default()
+        })
+        .fill(bg)
+        .radius(5.0)
+        .text(label.to_string(), 13.0, fg)
+        .on_click(msg)
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0),
+            height: length(44.0),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        padding: pad(12.0, 0.0),
+        gap: gap(8.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![
+        tab("◆ Estados", model.mode == Mode::Estados, Msg::SetMode(Mode::Estados)),
+        tab("⦿ Rig", model.mode == Mode::Rig, Msg::SetMode(Mode::Rig)),
+    ])
 }
 
 // =============================================================================
@@ -1022,6 +1174,278 @@ fn state_color(i: usize) -> Color {
     ];
     let (r, g, b) = PAL[i % PAL.len()];
     Color::from_rgba8(r, g, b, 255)
+}
+
+// =============================================================================
+//  Modo Rig — paneles
+// =============================================================================
+
+fn rig_left_panel(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let btn = ButtonPalette::from_theme(theme);
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    rows.push(section_title("HUESOS (cadena)", theme));
+    for (i, b) in model.rig.bones.iter().enumerate() {
+        let sel = model.rig_sel == Some(i);
+        let label = format!("hueso {i} · {:.0}", b.len);
+        rows.push(selectable_row(&label, sel, Msg::RigSelectBone(i), theme));
+    }
+    rows.push(spacer(8.0));
+    rows.push(row(vec![
+        button_view("+ hueso", &btn, Msg::RigAddBone),
+        button_view("− hueso", &btn, Msg::RigDelBone),
+    ]));
+    rows.push(spacer(10.0));
+    rows.push(muted(
+        "la cadena sale del origen hacia +x; cada hueso lleva su hijo y arrastra la malla por skinning (LBS).",
+        theme,
+    ));
+    panel_column(rows, 230.0, theme.bg_panel)
+}
+
+fn rig_right_panel(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    let btn = ButtonPalette::from_theme(theme);
+    let sp = SliderPalette::from_theme(theme);
+    let mut rows: Vec<View<Msg>> = Vec::new();
+
+    // --- Hueso seleccionado ---
+    rows.push(section_title("HUESO", theme));
+    if let Some(i) = model.rig_sel.filter(|i| *i < model.rig.bones.len()) {
+        let b = &model.rig.bones[i];
+        let ang = b.angle as f32;
+        rows.push(slider_view(
+            format!("ángulo {:.2} rad", b.angle),
+            ang,
+            -3.1,
+            3.1,
+            &sp,
+            move |_p, nv| Some(Msg::RigSetAngle(i, nv as f64)),
+        ));
+        let len = b.len as f32;
+        rows.push(slider_view(
+            format!("largo {:.0}", b.len),
+            len,
+            10.0,
+            400.0,
+            &sp,
+            move |_p, nv| Some(Msg::RigSetLen(i, nv as f64)),
+        ));
+    } else {
+        rows.push(muted("seleccioná un hueso", theme));
+    }
+    rows.push(spacer(6.0));
+    rows.push(button_view("⟲ pose neutra", &btn, Msg::RigResetPose));
+
+    // --- Malla ---
+    rows.push(spacer(12.0));
+    rows.push(section_title("MALLA", theme));
+    let th = model.rig.thickness as f32;
+    rows.push(slider_view(
+        format!("grosor {:.0}", model.rig.thickness),
+        th,
+        2.0,
+        120.0,
+        &sp,
+        move |_p, nv| Some(Msg::RigSetThickness(nv as f64)),
+    ));
+    let cols = model.rig.cols as f32;
+    rows.push(slider_view(
+        format!("columnas {}", model.rig.cols),
+        cols,
+        2.0,
+        64.0,
+        &sp,
+        move |_p, nv| Some(Msg::RigSetCols(nv as f64)),
+    ));
+
+    // --- IK ---
+    rows.push(spacer(12.0));
+    rows.push(section_title("IK (2 huesos)", theme));
+    if model.rig.bones.len() < 2 {
+        rows.push(muted("necesitás ≥2 huesos para el IK", theme));
+    } else {
+        rows.push(row(vec![
+            button_view(
+                if model.rig.ik_enabled { "IK: on" } else { "IK: off" },
+                &btn,
+                Msg::RigToggleIk,
+            ),
+            button_view(
+                if model.rig.ik_flip { "codo ↑" } else { "codo ↓" },
+                &btn,
+                Msg::RigToggleFlip,
+            ),
+        ]));
+        if model.rig.ik_enabled {
+            let reach = (model.rig.total_len() + 120.0) as f32;
+            let tx = model.rig.ik_target.0 as f32;
+            rows.push(slider_view(
+                format!("objetivo x {:.0}", model.rig.ik_target.0),
+                tx,
+                -reach,
+                reach,
+                &sp,
+                move |_p, nv| Some(Msg::RigSetTargetX(nv as f64)),
+            ));
+            let ty = model.rig.ik_target.1 as f32;
+            rows.push(slider_view(
+                format!("objetivo y {:.0}", model.rig.ik_target.1),
+                ty,
+                -reach,
+                reach,
+                &sp,
+                move |_p, nv| Some(Msg::RigSetTargetY(nv as f64)),
+            ));
+        }
+    }
+
+    // --- Persistencia ---
+    rows.push(spacer(14.0));
+    rows.push(row(vec![
+        button_view("guardar", &btn, Msg::Save),
+        button_view("cargar", &btn, Msg::Load),
+    ]));
+    rows.push(spacer(8.0));
+    rows.push(
+        View::new(auto_h(0.0))
+            .text(model.status.clone(), 11.0, theme.fg_placeholder)
+            .max_lines(3),
+    );
+
+    panel_column(rows, 300.0, theme.bg_panel)
+}
+
+/// Panel central del modo Rig: el lienzo con la malla deformada en vivo.
+fn rig_canvas_panel(model: &Model) -> View<Msg> {
+    let theme = &model.theme;
+    View::new(Style {
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: Dimension::auto(),
+            height: percent(1.0),
+        },
+        padding: pad(14.0, 14.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![rig_canvas(model)])
+}
+
+/// El lienzo: malla deformada (relleno + wireframe) + huesos + objetivo IK.
+fn rig_canvas(model: &Model) -> View<Msg> {
+    use llimphi_ui::llimphi_raster::kurbo::Rect as KRect;
+
+    let skel = model.rig.skeleton();
+    let mesh = model.rig.mesh();
+    let positions = mesh.deform(&skel);
+
+    // Segmentos de hueso en espacio de modelo (para dibujarlos encima).
+    let mut bones_world: Vec<(
+        llimphi_ui::llimphi_raster::kurbo::Point,
+        llimphi_ui::llimphi_raster::kurbo::Point,
+    )> = Vec::new();
+    for (i, b) in model.rig.bones.iter().enumerate() {
+        let w = skel.world(i);
+        let a = w * llimphi_ui::llimphi_raster::kurbo::Point::ZERO;
+        let e = w * llimphi_ui::llimphi_raster::kurbo::Point::new(b.len, 0.0);
+        bones_world.push((a, e));
+    }
+
+    // Encuadre estable: bbox del bind + objetivo IK, inflado para que las
+    // poses dobladas no se salgan.
+    let total = model.rig.total_len();
+    let half = model.rig.thickness;
+    let mut x0: f64 = -20.0;
+    let mut y0: f64 = -half - 20.0;
+    let mut x1: f64 = total + 20.0;
+    let mut y1: f64 = half + 20.0;
+    if model.rig.ik_enabled {
+        x0 = x0.min(model.rig.ik_target.0);
+        y0 = y0.min(model.rig.ik_target.1);
+        x1 = x1.max(model.rig.ik_target.0);
+        y1 = y1.max(model.rig.ik_target.1);
+    }
+    let pad_m = (total * 0.18).max(24.0);
+    let bounds = KRect::new(x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m);
+
+    let target = if model.rig.ik_enabled {
+        Some(llimphi_ui::llimphi_raster::kurbo::Point::new(
+            model.rig.ik_target.0,
+            model.rig.ik_target.1,
+        ))
+    } else {
+        None
+    };
+
+    let fill = theme_with_alpha(model.theme.accent, 90);
+    let wire = model.theme.fg_text;
+    let bone_col = Color::from_rgba8(255, 196, 92, 255); // ámbar, contrasta con la malla
+    let bg = self_color(model.theme.bg_app, model.theme.bg_panel);
+
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0),
+            height: percent(1.0),
+        },
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(8.0)
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle, Line, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        use llimphi_mesh::{fit_transform, paint_solid, paint_wireframe};
+
+        if mesh.vertices.is_empty() {
+            return;
+        }
+        let xform = fit_transform(bounds, rect);
+        // Malla deformada: relleno semitransparente + wireframe.
+        paint_solid(scene, &mesh, &positions, xform, fill);
+        paint_wireframe(scene, &mesh, &positions, xform, wire, 1.0);
+
+        // Huesos: líneas gruesas + nudos en las articulaciones.
+        for (a, e) in &bones_world {
+            let pa = xform * *a;
+            let pe = xform * *e;
+            scene.stroke(
+                &Stroke::new(3.0),
+                Affine::IDENTITY,
+                &bone_col,
+                None,
+                &Line::new(pa, pe),
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                &bone_col,
+                None,
+                &Circle::new(pa, 4.0),
+            );
+        }
+
+        // Objetivo IK: anillo blanco.
+        if let Some(t) = target {
+            let pt = xform * t;
+            let ring = Color::from_rgba8(255, 255, 255, 235);
+            scene.stroke(
+                &Stroke::new(2.0),
+                Affine::IDENTITY,
+                &ring,
+                None,
+                &Circle::new(pt, 9.0),
+            );
+        }
+    })
+}
+
+/// Color con alpha explícito.
+fn theme_with_alpha(c: Color, a: u8) -> Color {
+    let r = c.to_rgba8();
+    Color::from_rgba8(r.r, r.g, r.b, a)
 }
 
 // =============================================================================
