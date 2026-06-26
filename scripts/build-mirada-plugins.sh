@@ -62,4 +62,49 @@ mkdir -p "$ASSETS"
 forjar "mirada-plugin-example-layout"  "mirada_plugin_example_layout"  "example-layout"
 forjar "mirada-plugin-example-reactor" "mirada_plugin_example_reactor" "example-reactor"
 
+# --- Firma DEMO del reactor (pide CAP_KEYS+CAP_SPAWN → requiere firma) --------
+# La semilla es FIJA y PÚBLICA: sólo para que el ejemplo corra de fábrica. NO es
+# un secreto real; en tu instalación generás la tuya con `mirada-plugin-sign
+# keygen` y reemplazás trust.ron con tu pubkey.
+DEMO_SEED="1100110011001100110011001100110011001100110011001100110011001100"
+SEED_FILE="$(mktemp)"
+printf '%s' "$DEMO_SEED" > "$SEED_FILE"
+
+echo -e "${AZUL}[mirada-plugins]${RESET} firmando example-reactor (demo)…"
+SIGN_OUT="$(cd "$RAIZ" && cargo run -q -p mirada-plugin-host --bin mirada-plugin-sign -- \
+    sign --seed "$SEED_FILE" --wasm "$ASSETS/example-reactor.wasm" --caps keys,spawn)"
+rm -f "$SEED_FILE"
+
+SIGNER="$(printf '%s\n' "$SIGN_OUT" | grep -oE 'ed25519:[0-9a-f]+' | head -1)"
+SIGNATURE="$(printf '%s\n' "$SIGN_OUT" | grep -oE 'signature: "[0-9a-f]+"' | grep -oE '[0-9a-f]{128}')"
+if [ -z "$SIGNER" ] || [ -z "$SIGNATURE" ]; then
+    echo "FALLO: no se pudo firmar el reactor (salida:)"; printf '%s\n' "$SIGN_OUT"; exit 1
+fi
+
+cat > "$ASSETS/example-reactor.ron" <<EOF
+// Manifest del plugin reactor de ejemplo (Super+a → terminal).
+// Pide CAP_KEYS y CAP_SPAWN → requiere firma de una clave de confianza.
+// La firma de abajo la regenera build-mirada-plugins.sh con una semilla DEMO
+// pública (NO un secreto). En tu instalación: firmá con TU clave.
+(
+    wasm: "example-reactor.wasm",
+    kind: Reactor,
+    caps: ["keys", "spawn"],
+    priority: 0,
+    signer: "$SIGNER",
+    signature: "$SIGNATURE",
+)
+EOF
+
+cat > "$ASSETS/trust.ron" <<EOF
+// Anillo de confianza de EJEMPLO: la clave DEMO que firma example-reactor.
+// En tu instalación, reemplazá esto por TU pubkey (mirada-plugin-sign keygen).
+(
+    trusted: [
+        "$SIGNER",
+    ],
+)
+EOF
+
+echo -e "${VERDE}[mirada-plugins]${RESET} reactor firmado por $SIGNER"
 echo -e "${VERDE}[mirada-plugins]${RESET} listo → $ASSETS"

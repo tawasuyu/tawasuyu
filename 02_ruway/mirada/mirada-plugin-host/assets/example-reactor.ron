@@ -1,8 +1,12 @@
 // Manifest del plugin reactor de ejemplo (Super+a → terminal).
-// Pide CAP_KEYS y CAP_SPAWN; si faltara alguna, el .wasm ni instancia.
+// Pide CAP_KEYS y CAP_SPAWN → requiere firma de una clave de confianza.
+// La firma de abajo la regenera build-mirada-plugins.sh con una semilla DEMO
+// pública (NO un secreto). En tu instalación: firmá con TU clave.
 (
     wasm: "example-reactor.wasm",
     kind: Reactor,
     caps: ["keys", "spawn"],
     priority: 0,
+    signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
+    signature: "f5d053ae48073b5a5825d0920b329d7b3757c0c0166bf0e83701cd41ac72d13f7f608e887dd207bf426ecc4c53037b0d583e1cdba6ed2d39b9697d8e0f72c40f",
 )

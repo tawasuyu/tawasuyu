@@ -14,11 +14,13 @@
 pub mod caps;
 pub mod conductor;
 pub mod manifest;
+pub mod trust;
 pub mod wasm;
 
 pub use caps::CapsPlugin;
 pub use conductor::Conductor;
 pub use manifest::{PluginKind, PluginManifest, ResolvedManifest};
+pub use trust::{Grant, TrustSet};
 pub use wasm::{HostCtx, LoadedPlugin};
 
 use std::path::Path;
@@ -73,10 +75,15 @@ pub fn load_caps() -> Permisos {
 }
 
 /// Carga todos los plugins declarados por archivos `*.ron` de un directorio.
-/// Los manifests inválidos o los `.wasm` que no pasan el gateo de capacidades se
-/// saltan con un aviso por `stderr` — un plugin roto nunca tumba al host.
+///
+/// El anillo de confianza sale de `<dir>/trust.ron`; los plugins que pidan
+/// capacidades peligrosas sin una firma de una clave de confianza se rechazan.
+/// Manifests inválidos, `.wasm` que no pasan el gateo de capacidades o sin firma
+/// válida se saltan con un aviso — un plugin roto o no confiable nunca tumba al
+/// host. (`trust.ron` se excluye de la pasada de manifests.)
 pub fn load_plugins_dir(dir: &Path) -> Vec<LoadedPlugin> {
     let mut out = Vec::new();
+    let trust = TrustSet::load(&dir.join("trust.ron"));
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
@@ -89,7 +96,10 @@ pub fn load_plugins_dir(dir: &Path) -> Vec<LoadedPlugin> {
         if path.extension().and_then(|s| s.to_str()) != Some("ron") {
             continue;
         }
-        match manifest::PluginManifest::load(&path).and_then(|m| LoadedPlugin::load(&m)) {
+        if path.file_name().and_then(|s| s.to_str()) == Some("trust.ron") {
+            continue;
+        }
+        match manifest::PluginManifest::load(&path).and_then(|m| LoadedPlugin::load(&m, &trust)) {
             Ok(p) => {
                 eprintln!("[host] plugin cargado: {} ({:?})", p.name, p.kind);
                 out.push(p);

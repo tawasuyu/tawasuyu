@@ -4,9 +4,11 @@
 //! (right-master) y **honra los `LayoutParams` del Desktop**, y el gateo de
 //! capacidades rechaza en carga lo no concedido.
 
+use std::path::Path;
+
 use mirada_brain::Desktop;
 use mirada_plugin_host::caps::{CAP_KEYS, CAP_LAYOUT, CAP_SPAWN};
-use mirada_plugin_host::{Conductor, LoadedPlugin, PluginKind};
+use mirada_plugin_host::{Conductor, LoadedPlugin, PluginKind, PluginManifest, TrustSet};
 use mirada_protocol::{BodyEvent, BrainCommand, LayoutMode, LayoutParams, Rect, TileInput};
 
 const LAYOUT_WASM: &[u8] = include_bytes!("../assets/example-layout.wasm");
@@ -100,6 +102,29 @@ fn reactor_con_caps_completas_carga() {
     let p =
         LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term");
     assert!(p.is_ok(), "con KEYS+SPAWN debería cargar: {:?}", p.err());
+}
+
+// --- Grants firmados: el camino real (manifest + trust + verificación). -----
+
+#[test]
+fn reactor_firmado_carga_con_su_trust_y_se_rechaza_sin_el() {
+    // Usa los assets commiteados, que el build script mantiene consistentes
+    // (wasm + firma + trust.ron de la clave demo).
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let m = PluginManifest::load(&assets.join("example-reactor.ron")).unwrap();
+    let trust = TrustSet::load(&assets.join("trust.ron"));
+    assert!(!trust.is_empty(), "trust.ron debería traer la clave demo");
+
+    // Con el anillo correcto, el reactor firmado carga.
+    assert!(
+        LoadedPlugin::load(&m, &trust).is_ok(),
+        "el reactor firmado por una clave de confianza debería cargar"
+    );
+    // Sin confianza declarada, se rechaza (fail-closed).
+    assert!(
+        LoadedPlugin::load(&m, &TrustSet::empty()).is_err(),
+        "sin trust, un reactor con caps peligrosas no debe cargar"
+    );
 }
 
 // --- Reactor e2e. -----------------------------------------------------------

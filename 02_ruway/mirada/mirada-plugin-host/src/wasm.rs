@@ -10,6 +10,7 @@ use mirada_protocol::{BodyEvent, BrainCommand, Decorations, Rect, TileInput, Win
 
 use crate::caps::{cap_for_import, cap_name, caps_list, CapsPlugin, CAP_DECOR, CAP_KEYS, CAP_SPAWN, CAP_WINDOW_CONTROL};
 use crate::manifest::{PluginKind, ResolvedManifest};
+use crate::trust::{authorize, TrustSet};
 
 /// Presupuesto de combustible por llamada. Un `tile()`/`on_event()` desbocado
 /// se queda sin fuel y trampa en vez de congelar el escritorio.
@@ -35,16 +36,19 @@ pub struct LoadedPlugin {
 }
 
 impl LoadedPlugin {
-    /// Carga el `.wasm` del manifest, verifica sus importaciones contra las
-    /// capacidades concedidas (fail-closed) e instancia.
-    pub fn load(m: &ResolvedManifest) -> Result<LoadedPlugin, String> {
+    /// Carga el `.wasm` del manifest: primero **autoriza** las capacidades
+    /// peligrosas contra el anillo de confianza (firma sobre `blake3(wasm) ‖
+    /// caps`), luego verifica las importaciones (fail-closed) e instancia.
+    pub fn load(m: &ResolvedManifest, trust: &TrustSet) -> Result<LoadedPlugin, String> {
         let bytes = std::fs::read(&m.wasm_path)
             .map_err(|e| format!("no se pudo leer {}: {e}", m.wasm_path.display()))?;
+        authorize(&bytes, m.granted, m.grant.as_ref(), trust)?;
         Self::load_bytes(&bytes, m.kind, m.granted, m.priority, &m.name)
     }
 
-    /// Como [`load`](LoadedPlugin::load) pero desde bytes ya en memoria — el
-    /// camino de los tests (`include_bytes!`) y del despliegue empotrado.
+    /// Como [`load`](LoadedPlugin::load) pero desde bytes ya en memoria y **sin**
+    /// verificación de firma — el camino de los tests (`include_bytes!`) y del
+    /// despliegue empotrado, donde la confianza se establece por otra vía.
     pub fn load_bytes(
         bytes: &[u8],
         kind: PluginKind,

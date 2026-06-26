@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "mirada-plugin-host"
 path = "src/main.rs"
 
+[[bin]]
+name = "mirada-plugin-sign"
+path = "src/bin/sign.rs"
+
 [dependencies]
 mirada-protocol = { path = "../mirada-protocol" }
 mirada-link = { path = "../mirada-link" }
@@ -23,6 +27,9 @@ wasmi = { workspace = true }
 postcard = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }
+blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 mirada-protocol = { path = "../mirada-protocol" }

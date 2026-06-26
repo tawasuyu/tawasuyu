@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::caps::{parse_cap, CapsPlugin};
+use crate::trust::{parse_pubkey, Grant};
 
 /// El tipo de plugin determina qué export busca el host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -31,6 +32,15 @@ pub struct PluginManifest {
     /// Prioridad de arbitraje (mayor gana el rol singleton de layout).
     #[serde(default)]
     pub priority: i32,
+    /// Clave pública del firmante (`"ed25519:hex64"`). Requerida si el plugin
+    /// pide capacidades peligrosas (cualquiera más allá de `layout`). Vacía =
+    /// sin firma. (String y no Option: RON pide bare-strings, no `Some(...)`.)
+    #[serde(default)]
+    pub signer: String,
+    /// Firma Ed25519 (hex de 64 bytes) sobre `blake3(wasm) ‖ caps`. Vacía = sin
+    /// firma.
+    #[serde(default)]
+    pub signature: String,
 }
 
 /// Un manifest ya resuelto: ruta absoluta del `.wasm` + bitfield de capacidades.
@@ -42,6 +52,8 @@ pub struct ResolvedManifest {
     pub priority: i32,
     /// Nombre legible (el del archivo del manifest), para logs/errores.
     pub name: String,
+    /// La firma del grant, si el manifest la trae.
+    pub grant: Option<Grant>,
 }
 
 impl PluginManifest {
@@ -75,6 +87,33 @@ impl PluginManifest {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "plugin".to_string());
 
-        Ok(ResolvedManifest { wasm_path, kind: m.kind, granted, priority: m.priority, name })
+        let grant = parse_grant(&m)?;
+
+        Ok(ResolvedManifest {
+            wasm_path,
+            kind: m.kind,
+            granted,
+            priority: m.priority,
+            name,
+            grant,
+        })
+    }
+}
+
+/// Resuelve los campos `signer`/`signature` del manifest a un [`Grant`].
+/// Ambos o ninguno; presencia parcial es un error.
+fn parse_grant(m: &PluginManifest) -> Result<Option<Grant>, String> {
+    let (s, sig) = (m.signer.trim(), m.signature.trim());
+    match (s.is_empty(), sig.is_empty()) {
+        (true, true) => Ok(None),
+        (false, false) => {
+            let signer = parse_pubkey(s).ok_or_else(|| format!("`signer` ilegible: {s:?}"))?;
+            let bytes = hex::decode(sig).map_err(|e| format!("`signature` no es hex: {e}"))?;
+            let signature: [u8; 64] = bytes
+                .try_into()
+                .map_err(|_| "`signature` no mide 64 bytes".to_string())?;
+            Ok(Some(Grant { signer, signature }))
+        }
+        _ => Err("el manifest trae `signer` o `signature` pero no ambos".to_string()),
     }
 }
