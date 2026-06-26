@@ -327,6 +327,9 @@ impl DrmState {
             wallpaper: None,
             wallpaper_path: wp_path,
             wallpaper_fit: wp_fit,
+            video_wp: None,
+            video_frame: None,
+            video_dirty: false,
             pending_flip: false,
         })
     }

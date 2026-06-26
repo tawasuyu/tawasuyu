@@ -86,8 +86,8 @@ impl DrmState {
             self.render_output(i);
         }
         self.send_frames_to_clients();
-        // Los frames animados ya se compusieron en todas las salidas este cuadro.
-        self.video_dirty = false;
+        // La marca animada ya se compuso este cuadro (el video resetea su
+        // `video_dirty` por-salida en `emit_wallpaper`).
         self.anim_default_dirty = false;
     }
 
@@ -1689,49 +1689,54 @@ impl DrmState {
         )));
     }
 
-    /// Emite el wallpaper de la salida `idx` al fondo (rearmándolo si quedó
-    /// stale). Cada salida tiene su propio búfer escalado, su propia ruta y
-    /// su propio modo de ajuste — un override por nombre puede pintarle un
-    /// fondo distinto a cada monitor.
-    /// Gestiona el worker del wallpaper en **video**: ciclo de vida (arranca/
-    /// reemplaza/suelta según la config), pausa cuando no se ve, y consume el
-    /// último frame a `self.video_frame`. Corre en `tick` (antes de `render`),
-    /// así puede pausar aunque la sesión esté en otra VT (donde `render` ni
-    /// entra). Con fuente no-video es un no-op tras soltar el worker.
+    /// Gestiona los workers del wallpaper en **video** — uno **por salida**. Por
+    /// cada salida: arranca/reemplaza/suelta su worker según su config (la fuente
+    /// es global pero la **ruta se resuelve por salida**, así cada monitor puede
+    /// correr su propio archivo), lo pausa cuando no se ve (otra VT, DPMS, o una
+    /// ventana a pantalla completa **sobre esa salida**), y consume su último
+    /// frame a `ctx.video_frame`. Corre en `tick` (antes de `render`) para poder
+    /// pausar aun con la sesión en otra VT. Con fuente no-video suelta el worker.
     pub(super) fn manage_video_wallpaper(&mut self) {
-        match self.app.config_video_wallpaper() {
-            Some((path, fps)) => {
-                let need_restart =
-                    self.video_wp.as_ref().map_or(true, |vw| !vw.matches(&path, fps));
-                if need_restart {
-                    self.video_wp = Some(super::video_wallpaper::VideoWallpaper::start(&path, fps));
-                    self.video_frame = None;
-                }
-                // Pausá si el fondo no se ve: otra VT, pantalla apagada (DPMS), o
-                // una ventana a pantalla completa tapándolo. Decodificar ahí es
-                // puro desperdicio.
-                let covered = self.app.windows.iter().any(|w| w.fullscreen && w.visible);
-                let paused = !self.active || self.dpms_off || covered;
-                if let Some(vw) = self.video_wp.as_ref() {
-                    vw.set_paused(paused);
-                }
-                if !paused {
-                    if let Some(vw) = self.video_wp.as_mut() {
-                        if let Some(frame) = vw.take_new_frame() {
-                            self.video_frame = Some(frame);
-                            self.video_dirty = true;
+        let inactive = !self.active || self.dpms_off;
+        for i in 0..self.outputs.len() {
+            let name = self.outputs[i].name.clone();
+            match self.app.config_video_wallpaper_for(&name) {
+                Some((path, fps)) => {
+                    let need_restart = self.outputs[i]
+                        .video_wp
+                        .as_ref()
+                        .map_or(true, |vw| !vw.matches(&path, fps));
+                    if need_restart {
+                        self.outputs[i].video_wp =
+                            Some(super::video_wallpaper::VideoWallpaper::start(&path, fps));
+                        self.outputs[i].video_frame = None;
+                    }
+                    // ¿Tapado por una ventana a pantalla completa SOBRE esta salida?
+                    let rect = self.outputs[i].rect;
+                    let covered = self.app.windows.iter().any(|w| {
+                        w.fullscreen && w.visible && w.loc.0 >= rect.x && w.loc.0 < rect.x + rect.w
+                    });
+                    let paused = inactive || covered;
+                    if let Some(vw) = self.outputs[i].video_wp.as_ref() {
+                        vw.set_paused(paused);
+                    }
+                    if !paused {
+                        let frame =
+                            self.outputs[i].video_wp.as_mut().and_then(|vw| vw.take_new_frame());
+                        if let Some(frame) = frame {
+                            self.outputs[i].video_frame = Some(frame);
+                            self.outputs[i].video_dirty = true;
                             crate::screencopy::danar_todo(&mut self.app);
                         }
                     }
                 }
-            }
-            None => {
-                // Fuente no-video: soltá el worker (su `Drop` para el hilo) e
-                // invalidá los buffers de fondo para que la nueva fuente se pinte.
-                if self.video_wp.take().is_some() {
-                    self.video_frame = None;
-                    for ctx in &mut self.outputs {
-                        ctx.wallpaper = None;
+                None => {
+                    // Fuente no-video en esta salida: soltá su worker (su `Drop`
+                    // para el hilo) e invalidá su buffer para que la nueva fuente
+                    // se pinte.
+                    if self.outputs[i].video_wp.take().is_some() {
+                        self.outputs[i].video_frame = None;
+                        self.outputs[i].wallpaper = None;
                     }
                 }
             }
@@ -1778,8 +1783,8 @@ impl DrmState {
             // lo escala (cover) al pintar. Si aún no hay frame (worker calentando)
             // dejamos un fondo de marca a tamaño de salida para no parpadear.
             let no_buf = self.outputs[idx].wallpaper.is_none();
-            if self.video_dirty || no_buf {
-                let native = self.video_frame.as_ref().and_then(|(rgba, fw, fh)| {
+            if self.outputs[idx].video_dirty || no_buf {
+                let native = self.outputs[idx].video_frame.as_ref().and_then(|(rgba, fw, fh)| {
                     rgba_native_membuffer(rgba, *fw, *fh).map(|b| (b, (*fw as i32, *fh as i32)))
                 });
                 if let Some((buf, src)) = native {
@@ -1789,6 +1794,7 @@ impl DrmState {
                         .or_else(|| Some(make_default_wallpaper(size.0, size.1)));
                     self.outputs[idx].wallpaper = buf.map(|b| (b, size));
                 }
+                self.outputs[idx].video_dirty = false;
             }
         } else if matches!(spec, WallpaperSpec::Default) && self.app.config_animated_default() {
             // Fondo por defecto VIVO: la chakana + plano cartesiano de marca,

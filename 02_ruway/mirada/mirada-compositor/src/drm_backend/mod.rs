@@ -122,6 +122,16 @@ struct OutputCtx {
     /// Modo de ajuste del wallpaper en esta salida — análogo a
     /// [`Self::wallpaper_path`]: por-salida si hay override, global si no.
     wallpaper_fit: mirada_brain::WallpaperFit,
+    /// **Wallpaper en video — POR SALIDA.** El worker decodificador de *esta*
+    /// salida (cada monitor puede correr su propio archivo, vía el override de
+    /// ruta). `None` salvo con `wallpaper_source = "video"` y una ruta resuelta.
+    /// Su `Drop` (al desenchufar la salida o cambiar de fuente) para el hilo.
+    video_wp: Option<video_wallpaper::VideoWallpaper>,
+    /// Último frame de video consumido del worker de esta salida `(rgba, w, h)`.
+    video_frame: Option<(Vec<u8>, u32, u32)>,
+    /// `true` el render en que llegó un frame nuevo para esta salida: gatea el
+    /// re-subir el buffer. Se limpia al componer en `emit_wallpaper`.
+    video_dirty: bool,
     /// `true` entre que esta salida encola un page-flip y llega su VBlank.
     pending_flip: bool,
 }
@@ -661,18 +671,8 @@ struct DrmState {
     /// `None` = sin transición. El signo: +1 desliza desde la derecha (fuiste a
     /// un escritorio mayor), -1 desde la izquierda.
     ws_slide: Option<(u32, f32)>,
-    /// **Wallpaper en video**: el worker decodificador, vivo sólo con
-    /// `wallpaper_source = "video"`. `None` con cualquier otra fuente (y se
-    /// suelta —para el hilo— al cambiar). Ver [`video_wallpaper`].
-    video_wp: Option<video_wallpaper::VideoWallpaper>,
-    /// Último frame de video consumido del worker `(rgba, w, h)`, compartido por
-    /// todas las salidas. Lo refresca `manage_video_wallpaper` una vez por
-    /// render; `emit_wallpaper` lo compone al tamaño de cada salida.
-    video_frame: Option<(Vec<u8>, u32, u32)>,
-    /// `true` el render en que llegó un frame de video nuevo: gatea el
-    /// recomponer por salida (no recomponemos el mismo frame a 60 Hz). Se limpia
-    /// al final de `render`.
-    video_dirty: bool,
+    // El wallpaper en video es POR SALIDA: su worker/frame viven en cada
+    // `OutputCtx` (ver `video_wp`/`video_frame`/`video_dirty` allí).
     /// **Wallpaper de marca animado** (el fondo por defecto vivo): último ms en
     /// que se regeneró el frame, para estrangular a ~20 fps. `0` = nunca.
     anim_default_ms: u32,
@@ -1081,6 +1081,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             wallpaper: None,
             wallpaper_path: wp_path,
             wallpaper_fit: wp_fit,
+            video_wp: None,
+            video_frame: None,
+            video_dirty: false,
             pending_flip: presento_inicial,
         });
     }
@@ -1341,9 +1344,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         last_focused_output: 0,
         shadows_on: std::env::var_os("MIRADA_SHADOW").is_some(),
         ws_slide: None,
-        video_wp: None,
-        video_frame: None,
-        video_dirty: false,
         anim_default_ms: 0,
         anim_default_dirty: false,
         dpms_off: false,

@@ -569,9 +569,18 @@ remote`. Faltan dos fuentes:
 > (`blend_into`, puro + testeado) usando `duration()`/`position()` de la fuente;
 > así el `seek_to(0)` cae sobre una imagen ya idéntica al arranque → el rebobinado
 > es invisible. Sólo si se conoce la duración y el clip dura > 2·xfade; si no, cae
-> al corte de antes (degradación elegante). **Sigue pendiente (último):** video
-> **por-salida** — hoy un solo archivo global en todas las salidas; requeriría que
-> `OutputOverride` lleve fuente/ruta y N workers indexados por salida.
+> al corte de antes (degradación elegante).
+
+> **✅ HECHO — video POR SALIDA (2026-06-26).** El worker/frame/dirty del video se
+> movieron de `DrmState` (global) a cada `OutputCtx`: ahora hay **un worker por
+> salida**. La fuente sigue global, pero la **ruta se resuelve por salida**
+> (`config_video_wallpaper_for(name)` → `config_wallpaper_path_for`, que ya
+> respeta el override de `OutputOverride`), así cada monitor corre **su propio
+> archivo** (o el global si no hay override). La pausa es por-salida (la cobertura
+> fullscreen se chequea contra el rect de **esa** salida). El ciclo de vida del
+> hilo lo lleva el `OutputCtx` (hotplug = arranque/`Drop` natural). **Con esto se
+> cierra la lista de pendientes del wallpaper animado.** Todo el path GLES/DRM
+> sigue **por verificar en metal** (multi-monitor real, decode+readback).
 
 ### 2) Sesión Wayland remota persistente — «tmux/mosh para Wayland»  — esfuerzo ALTO
 Hoy ya hay **apps** remotas: `mirada-ctl remote` (una app vía waypipe ssh) y sesiones

@@ -930,19 +930,22 @@ impl App {
         }
     }
 
-    /// Si el fondo configurado es **video**, devuelve `(ruta, fps)` para el
-    /// worker de decodificación (`fps = 0` ⇒ el nativo del archivo). `None` con
-    /// cualquier otra fuente, sin ruta, o con Cerebro enlazado. Es global (no
-    /// por-salida): el v1 del wallpaper-video corre un solo archivo en todas.
-    pub(crate) fn config_video_wallpaper(&self) -> Option<(String, u32)> {
+    /// Si el fondo de la salida `name` es **video**, devuelve `(ruta, fps)` para
+    /// su worker (`fps = 0` ⇒ nativo). **Por salida:** la fuente es global pero la
+    /// ruta se resuelve por salida ([`Self::config_wallpaper_path_for`] — el
+    /// override de [`mirada_brain::OutputOverride`] gana, si no el global), así
+    /// cada monitor puede correr su propio archivo. `None` con otra fuente, sin
+    /// ruta, o con Cerebro enlazado.
+    pub(crate) fn config_video_wallpaper_for(&self, name: &str) -> Option<(String, u32)> {
         let Brain::Embedded(d) = &self.brain else {
             return None;
         };
-        let c = d.config();
-        if c.wallpaper_source != "video" || c.wallpaper_path.is_empty() {
+        if d.config().wallpaper_source != "video" {
             return None;
         }
-        Some((c.wallpaper_path.clone(), c.wallpaper_video_fps))
+        let fps = d.config().wallpaper_video_fps;
+        let path = self.config_wallpaper_path_for(name).filter(|p| !p.is_empty())?;
+        Some((path, fps))
     }
 
     /// Cómo se ajusta el wallpaper a la salida `name` (stretch/fit/fill/…) —
