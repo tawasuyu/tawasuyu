@@ -34,28 +34,42 @@ use mirada_brain::{Config, Desktop, Keymap, Permisos, Rules};
 /// Carga inicial; el hot-reload de estos archivos en caliente queda como
 /// seguimiento (requiere sondear con `FileWatch` en el bucle).
 pub fn configured_desktop() -> Desktop {
-    let keymap = match Keymap::default_path() {
+    let mut desktop = Desktop::with_keymap(load_keymap());
+    desktop.set_rules(load_rules());
+    if let Some(cfg) = load_config() {
+        desktop.set_config(cfg);
+    }
+    let _ = desktop.set_caps(load_caps());
+    desktop
+}
+
+/// Carga el keymap del usuario (creando el de arranque si falta), o el default.
+pub fn load_keymap() -> Keymap {
+    match Keymap::default_path() {
         Some(p) => Keymap::load_or_init(&p),
         None => Keymap::default(),
-    };
-    let mut desktop = Desktop::with_keymap(keymap);
+    }
+}
 
-    desktop.set_rules(match Rules::default_path() {
+/// Carga las reglas de ventana del usuario, o las default.
+pub fn load_rules() -> Rules {
+    match Rules::default_path() {
         Some(p) => Rules::load_or_default(&p),
         None => Rules::default(),
-    });
-
-    if let Some(p) = Config::default_path() {
-        desktop.set_config(Config::load_or_default(&p));
     }
+}
 
-    let caps = match mirada_brain::permisos::default_path() {
+/// Carga la config general del usuario, o `None` si no hay ruta.
+pub fn load_config() -> Option<Config> {
+    Config::default_path().map(|p| Config::load_or_default(&p))
+}
+
+/// Carga los permisos de capacidad del usuario, o los default (permitir todo).
+pub fn load_caps() -> Permisos {
+    match mirada_brain::permisos::default_path() {
         Some(p) => mirada_brain::permisos::load_or_default(&p),
         None => Permisos::default(),
-    };
-    let _ = desktop.set_caps(caps);
-
-    desktop
+    }
 }
 
 /// Carga todos los plugins declarados por archivos `*.ron` de un directorio.

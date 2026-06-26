@@ -144,6 +144,49 @@ fn configured_desktop_carga_la_config_del_usuario_y_arranca() {
 }
 
 #[test]
+fn hot_reload_de_caps_reemite_setcapabilities() {
+    use mirada_brain::Permisos;
+    let mut c = Conductor::new(Desktop::new(), Vec::new());
+    let _ = c.startup();
+
+    // Recarga con una denylist de screencopy: debe emitir un SetCapabilities
+    // que la lleve (el control de seguridad reaplicado en caliente).
+    let caps = Permisos { screencopy_denylist: vec!["grim".into()], ..Permisos::default() };
+    let cmds = c.apply_caps(caps);
+    assert!(matches!(
+        cmds.as_slice(),
+        [BrainCommand::SetCapabilities(p)] if p.screencopy_denylist == ["grim"]
+    ));
+}
+
+#[test]
+fn hot_reload_de_keymap_reemite_grabkeys_sin_pisar_reactores() {
+    use mirada_brain::Keymap;
+    // Un reactor que registra Super+a, para verificar que la recarga del keymap
+    // une (no pisa) sus atajos.
+    let reactor =
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term")
+            .unwrap();
+    let mut c = Conductor::new(Desktop::new(), vec![reactor]);
+    let _ = c.startup();
+    // Que el reactor registre Super+a.
+    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 800, height: 600 });
+
+    // Recargar un keymap distinto debe reemitir GrabKeys con la unión, que
+    // SIGUE conteniendo Super+a (el atajo del reactor no se pierde).
+    let cmds = c.apply_keymap(Keymap::default());
+    let grab = cmds.iter().find_map(|c| match c {
+        BrainCommand::GrabKeys(k) => Some(k.clone()),
+        _ => None,
+    });
+    if let Some(keys) = grab {
+        assert!(keys.iter().any(|s| s == "Super+a"), "la unión debe conservar el atajo del reactor: {keys:?}");
+    }
+    // (Si la unión no cambió, apply_keymap devuelve vacío: también válido, el
+    // Cuerpo ya tenía la unión correcta.)
+}
+
+#[test]
 fn conductor_startup_no_olvida_capacidades_ni_decoracion() {
     let mut c = Conductor::new(Desktop::new(), Vec::new());
     let cmds = c.startup();

@@ -24,8 +24,9 @@ use std::marker::PhantomData;
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -104,6 +105,14 @@ where
     pub fn recv(&self) -> Option<In> {
         self.incoming.recv().ok()
     }
+
+    /// Bloquea hasta recibir un mensaje o agotar `timeout`. Distingue el
+    /// agotamiento del cierre del canal vía [`RecvTimeoutError`], para un bucle
+    /// que intercale sondeo de eventos con otras tareas (p. ej. vigilar archivos
+    /// de config) y aun así detecte la desconexión del otro extremo.
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<In, RecvTimeoutError> {
+        self.incoming.recv_timeout(timeout)
+    }
 }
 
 impl<Out, In> Drop for Link<Out, In> {
@@ -138,6 +147,7 @@ mod tests {
             floating: false,
             fullscreen: false,
             suspended: false,
+            frame_divisor: 1,
         }])
     }
 

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use mirada_brain::{Desktop, DesktopAction};
+use mirada_brain::{Config, Desktop, DesktopAction, Keymap, Permisos, Rules};
 use mirada_protocol::{
     BodyEvent, BrainCommand, LayoutParams, OutputId, Rect, TileInput, WindowPlacement,
 };
@@ -84,6 +84,34 @@ impl Conductor {
             reactor_keys: HashMap::new(),
             last_grab: None,
         }
+    }
+
+    /// Recarga en caliente: aplica un keymap nuevo y devuelve la `GrabKeys`
+    /// actualizada (ruteada por la unión con los atajos de los reactores, para
+    /// no pisarlos). Vacío si la unión no cambió.
+    pub fn apply_keymap(&mut self, keymap: Keymap) -> Vec<BrainCommand> {
+        let cmd = self.desktop.set_keymap(keymap);
+        self.desktop_keys = grab_payload(&cmd);
+        self.maybe_grab().into_iter().collect()
+    }
+
+    /// Recarga en caliente: aplica permisos nuevos y devuelve el
+    /// `SetCapabilities` (el control de seguridad — denylists Wayland).
+    pub fn apply_caps(&mut self, caps: Permisos) -> Vec<BrainCommand> {
+        vec![self.desktop.set_caps(caps)]
+    }
+
+    /// Recarga en caliente: aplica la config general y devuelve el
+    /// `SetDecorations` que de ella se deriva.
+    pub fn apply_config(&mut self, config: Config) -> Vec<BrainCommand> {
+        self.desktop.set_config(config);
+        vec![self.desktop.decorations()]
+    }
+
+    /// Recarga en caliente: aplica reglas nuevas. No emite comando — las reglas
+    /// sólo afectan a las ventanas que se abran a partir de ahora.
+    pub fn apply_rules(&mut self, rules: Rules) {
+        self.desktop.set_rules(rules);
     }
 
     /// Comandos a enviar al conectar: la unión de atajos, decoración y permisos.
