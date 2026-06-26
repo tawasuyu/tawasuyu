@@ -93,6 +93,7 @@ use mirada_brain::{
 };
 use mirada_link::BodyLink;
 
+mod cube;
 mod cursor_theme;
 #[macro_use]
 mod diag;

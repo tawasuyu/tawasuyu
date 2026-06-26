@@ -448,15 +448,21 @@ pub enum WorkspaceSwitchMode {
     Hyprland,
     /// Zoom-out a la vista espacial «Prezi» (hoy cae al mismo slide).
     Prezi,
+    /// **Cubo 3D**: los dos escritorios son caras de un cubo que gira sobre el
+    /// eje vertical (estilo Compiz). Lo compone el backend DRM a una textura
+    /// offscreen (perspectiva por franjas) y la muestra a pantalla completa
+    /// durante la transición.
+    Cube,
 }
 
 impl WorkspaceSwitchMode {
-    /// Slug estable para RON/UI (`"direct"`/`"hyprland"`/`"prezi"`).
+    /// Slug estable para RON/UI (`"direct"`/`"hyprland"`/`"prezi"`/`"cube"`).
     pub fn slug(self) -> &'static str {
         match self {
             WorkspaceSwitchMode::Direct => "direct",
             WorkspaceSwitchMode::Hyprland => "hyprland",
             WorkspaceSwitchMode::Prezi => "prezi",
+            WorkspaceSwitchMode::Cube => "cube",
         }
     }
 
@@ -466,6 +472,7 @@ impl WorkspaceSwitchMode {
             "direct" => Some(WorkspaceSwitchMode::Direct),
             "hyprland" => Some(WorkspaceSwitchMode::Hyprland),
             "prezi" => Some(WorkspaceSwitchMode::Prezi),
+            "cube" => Some(WorkspaceSwitchMode::Cube),
             _ => None,
         }
     }

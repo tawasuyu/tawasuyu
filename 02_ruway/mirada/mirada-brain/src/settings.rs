@@ -47,6 +47,7 @@ fn switch_mode_options() -> Vec<EnumOption> {
         EnumOption::new("direct", "Directo (salto seco)"),
         EnumOption::new("hyprland", "Deslizar (estilo Hyprland)"),
         EnumOption::new("prezi", "Prezi (zoom-out)"),
+        EnumOption::new("cube", "Cubo 3D (estilo Compiz)"),
     ]
 }
 
@@ -56,6 +57,7 @@ fn switch_mode_slug(m: crate::config::WorkspaceSwitchMode) -> &'static str {
         Direct => "direct",
         Hyprland => "hyprland",
         Prezi => "prezi",
+        Cube => "cube",
     }
 }
 
@@ -65,6 +67,7 @@ fn switch_mode_from_slug(s: &str) -> Option<crate::config::WorkspaceSwitchMode> 
         "direct" => Some(Direct),
         "hyprland" => Some(Hyprland),
         "prezi" => Some(Prezi),
+        "cube" => Some(Cube),
         _ => None,
     }
 }
