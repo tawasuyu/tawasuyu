@@ -276,61 +276,138 @@ impl Rig {
     }
 }
 
-/// **Andar** (capa 2, esbozo): una pose procedural por articulación a partir de una
-/// fase global. Cada segmento oscila `amplitud · sin(fase + desfase)`. La amplitud y
-/// el desfase salen del **rol** del segmento (por su nombre y su posición), así un
-/// mismo `Andar::caminar` sirve para cualquier rig.
-#[derive(Debug, Clone)]
+/// Oscilador de **una articulación** en un andar: balancea `amplitud · sin(t·cadencia
+/// + desfase)`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Osc {
+    pub amplitud: f32,
+    pub desfase: f32,
+}
+
+/// **Andar** (capa 2): animación procedural por articulación a partir del tiempo.
+/// Cada segmento oscila según su [`Osc`] a una `cadencia` común (rad/seg). La amplitud
+/// y el desfase iniciales salen del **rol** del segmento (nombre+posición), así un
+/// `Andar::caminar` arranca razonable para cualquier rig; después se editan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Andar {
-    amplitud: Vec<f32>,
-    desfase: Vec<f32>,
+    /// Ritmo del ciclo (rad/seg): mayor = pasos más rápidos.
+    pub cadencia: f32,
+    /// Oscilador por segmento (paralelo a [`Rig::segmentos`]).
+    pub osc: Vec<Osc>,
 }
 
 impl Andar {
-    /// Caminata heurística para `rig`: las patas/piernas baten en oposición (izq/der
-    /// y delante/atrás), los brazos contra su pierna, las alas aletean, la serpiente y
-    /// la cola ondulan con desfase creciente a lo largo de la cadena.
+    /// Caminata heurística para `rig`: patas/piernas en oposición (izq/der y
+    /// delante/atrás), brazos contra su pierna, alas aleteando, serpiente/cola con
+    /// desfase creciente a lo largo de la cadena. `cadencia` de caminata.
     pub fn caminar(rig: &Rig) -> Andar {
         use std::f32::consts::PI;
-        let n = rig.len();
-        let mut amplitud = vec![0.0; n];
-        let mut desfase = vec![0.0; n];
-        for (i, s) in rig.segmentos.iter().enumerate() {
-            let nom = s.nombre.as_str();
-            // Lado: derecha en fase 0, izquierda en fase π (por el signo de pivote.x).
-            let lado = if s.pivote[0] < -1e-3 { PI } else { 0.0 };
-            // Delante/atrás: en un cuadrúpedo, el tren delantero contra el trasero.
-            let tren = if s.pivote[2] < -1e-3 { PI } else { 0.0 };
-            if nom.contains("pierna") || nom.contains("pata") {
-                amplitud[i] = 0.6;
-                desfase[i] = lado + tren;
-            } else if nom.contains("brazo") {
-                amplitud[i] = 0.5;
-                desfase[i] = lado + PI; // contra la pierna del mismo lado
-            } else if nom.contains("ala") {
-                amplitud[i] = 1.0; // aletear amplio
-                desfase[i] = lado;
-            } else if nom.contains("cola") {
-                amplitud[i] = 0.4;
-                desfase[i] = 0.0;
-            } else if nom.contains("cuerpo") && s.eje == Eje::Y {
-                // Serpenteo: onda que viaja por la cadena (desfase por profundidad).
-                amplitud[i] = 0.5;
-                desfase[i] = i as f32 * 0.9;
-            }
-        }
-        Andar { amplitud, desfase }
+        let osc = rig
+            .segmentos
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let nom = s.nombre.as_str();
+                let lado = if s.pivote[0] < -1e-3 { PI } else { 0.0 };
+                let tren = if s.pivote[2] < -1e-3 { PI } else { 0.0 };
+                let (amplitud, desfase) = if nom.contains("pierna") || nom.contains("pata") {
+                    (0.6, lado + tren)
+                } else if nom.contains("brazo") {
+                    (0.5, lado + PI)
+                } else if nom.contains("ala") {
+                    (1.0, lado)
+                } else if nom.contains("cola") {
+                    (0.4, 0.0)
+                } else if nom.contains("cuerpo") && s.eje == Eje::Y {
+                    (0.5, i as f32 * 0.9) // serpenteo: onda que viaja
+                } else {
+                    (0.0, 0.0)
+                };
+                Osc { amplitud, desfase }
+            })
+            .collect();
+        Andar { cadencia: 8.0, osc }
     }
 
-    /// La pose del andar en la `fase` dada.
-    pub fn pose(&self, fase: f32) -> RigPose {
+    /// Reposo: el andar de caminata muy atenuado y lento (un balanceo apenas vivo).
+    pub fn quieto(rig: &Rig) -> Andar {
+        let mut a = Andar::caminar(rig);
+        a.cadencia = 2.2;
+        for o in &mut a.osc {
+            o.amplitud *= 0.12;
+        }
+        a
+    }
+
+    /// Trote: la caminata más amplia y rápida.
+    pub fn correr(rig: &Rig) -> Andar {
+        let mut a = Andar::caminar(rig);
+        a.cadencia = 13.0;
+        for o in &mut a.osc {
+            o.amplitud = (o.amplitud * 1.4).min(1.4);
+        }
+        a
+    }
+
+    /// La pose del andar en el instante `t` (seg).
+    pub fn pose(&self, t: f32) -> RigPose {
         let angulos = self
-            .amplitud
+            .osc
             .iter()
-            .zip(&self.desfase)
-            .map(|(a, d)| a * (fase + d).sin())
+            .map(|o| o.amplitud * (t * self.cadencia + o.desfase).sin())
             .collect();
         RigPose { angulos }
+    }
+}
+
+/// Los **andares por estado** de una criatura (capa 2): reposo, caminar, correr.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Andares {
+    pub quieto: Andar,
+    pub caminar: Andar,
+    pub correr: Andar,
+}
+
+impl Andares {
+    /// Andares por defecto (heurísticos) para un rig.
+    pub fn default_for(rig: &Rig) -> Self {
+        Self { quieto: Andar::quieto(rig), caminar: Andar::caminar(rig), correr: Andar::correr(rig) }
+    }
+
+    /// Rótulos de los estados, en orden de índice.
+    pub const LABELS: [&'static str; 3] = ["quieto", "caminar", "correr"];
+
+    /// El andar del estado `i` (0=quieto,1=caminar,2=correr).
+    pub fn estado(&self, i: usize) -> &Andar {
+        match i {
+            0 => &self.quieto,
+            1 => &self.caminar,
+            _ => &self.correr,
+        }
+    }
+    pub fn estado_mut(&mut self, i: usize) -> &mut Andar {
+        match i {
+            0 => &mut self.quieto,
+            1 => &mut self.caminar,
+            _ => &mut self.correr,
+        }
+    }
+}
+
+/// El **movimiento** de un cuerpo: su [`Rig`] (morfología) + sus [`Andares`]
+/// (animación). Es lo que distingue a una criatura no-humanoide; los andares quedan
+/// siempre en sincronía con el rig (misma cantidad de segmentos).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Movimiento {
+    pub rig: Rig,
+    pub andares: Andares,
+}
+
+impl Movimiento {
+    /// Un movimiento a partir de un rig, con andares por defecto.
+    pub fn preset(rig: Rig) -> Self {
+        let andares = Andares::default_for(&rig);
+        Self { rig, andares }
     }
 }
 

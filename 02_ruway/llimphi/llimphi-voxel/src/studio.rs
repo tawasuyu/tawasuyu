@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actor::{Actor, Age, Clip};
 use crate::director::{ActorKey, ActorScript};
-use crate::rig::{Andar, Rig, RigPose};
+use crate::rig::{Movimiento, Rig};
 use crate::worldgen::{Bioma, BiomaPalette, Forma, Material, ResolvedMaterial};
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Camera3d, Vertex3d};
@@ -275,10 +275,10 @@ pub struct CharSpec {
     pub shirt: [f32; 3],
     pub pants: [f32; 3],
     /// **Cuerpo**: `None` = humanoide (muñeco [`Actor`] rico: cara, gestos, cross-fade,
-    /// look-at); `Some(rig)` = una morfología arbitraria ([`Rig`]: cuadrúpedo, ave,
-    /// serpiente…) animada por su [`Andar`]. Default `None` (compatibilidad).
+    /// look-at); `Some(mov)` = una morfología arbitraria ([`Movimiento`]: rig +
+    /// andares por estado) — cuadrúpedo, ave, serpiente… Default `None` (compat).
     #[serde(default)]
-    pub rig: Option<Rig>,
+    pub cuerpo: Option<Movimiento>,
 }
 
 impl CharSpec {
@@ -286,26 +286,27 @@ impl CharSpec {
     /// `id = 0` hasta que el [`Project`] se lo asigna al agregarlo.
     pub fn new(name: impl Into<String>, age: Age) -> Self {
         let a = Actor::new(Vec3::ZERO, 0.0);
-        Self { id: 0, name: name.into(), age, skin: a.skin, shirt: a.shirt, pants: a.pants, rig: None }
+        Self { id: 0, name: name.into(), age, skin: a.skin, shirt: a.shirt, pants: a.pants, cuerpo: None }
     }
 
     /// Nombre legible del cuerpo (para la UI).
     pub fn cuerpo_label(&self) -> &str {
-        match &self.rig {
+        match &self.cuerpo {
             None => "humanoide",
-            Some(r) => r.nombre.as_str(),
+            Some(m) => m.rig.nombre.as_str(),
         }
     }
 
-    /// Cicla el cuerpo: humanoide → cuadrúpedo → ave → serpiente → humanoide.
+    /// Cicla el cuerpo: humanoide → cuadrúpedo → ave → serpiente → humanoide. Al
+    /// cambiar de rig, regenera andares por defecto (siempre en sync con la morfología).
     pub fn cycle_cuerpo(&mut self) {
         let presets = Rig::presets();
-        self.rig = match &self.rig {
-            None => Some(presets[1].clone()), // humanoide(None) → cuadrúpedo
-            Some(r) => {
-                let i = presets.iter().position(|p| p.nombre == r.nombre).unwrap_or(0);
+        self.cuerpo = match &self.cuerpo {
+            None => Some(Movimiento::preset(presets[1].clone())), // humanoide → cuadrúpedo
+            Some(m) => {
+                let i = presets.iter().position(|p| p.nombre == m.rig.nombre).unwrap_or(0);
                 if i + 1 < presets.len() {
-                    Some(presets[i + 1].clone())
+                    Some(Movimiento::preset(presets[i + 1].clone()))
                 } else {
                     None // serpiente → humanoide
                 }
@@ -325,7 +326,7 @@ impl CharSpec {
         phase: f32,
         look: Option<Vec3>,
     ) -> (Mat4, Vec<Vertex3d>, Vec<u16>) {
-        match &self.rig {
+        match &self.cuerpo {
             None => {
                 let mut a = self.to_actor(pos, facing);
                 a.set_clip(clip);
@@ -334,14 +335,15 @@ impl CharSpec {
                 let (v, i) = a.mesh();
                 (a.model(), v, i)
             }
-            Some(rig) => {
-                let moving = matches!(clip, Clip::Walk | Clip::Run);
-                let pose = if moving {
-                    Andar::caminar(rig).pose(phase)
-                } else {
-                    RigPose::neutra(rig.len())
+            Some(mov) => {
+                // El estado (andar) según el clip: correr / caminar / reposo.
+                let estado = match clip {
+                    Clip::Run => 2,
+                    Clip::Walk => 1,
+                    _ => 0,
                 };
-                let (v, i) = rig.mesh(&pose, self.skin, self.shirt, self.pants);
+                let pose = mov.andares.estado(estado).pose(phase);
+                let (v, i) = mov.rig.mesh(&pose, self.skin, self.shirt, self.pants);
                 let model = Mat4::from_translation(pos) * Mat4::from_rotation_y(facing);
                 (model, v, i)
             }
@@ -729,7 +731,7 @@ impl Project {
             ("amarillo", [0.92, 0.78, 0.62], [0.92, 0.80, 0.30], [0.26, 0.22, 0.20]),
         ] {
             let id = p.alloc_id();
-            p.seres.push(CharSpec { id, name: name.into(), age: Age::Adult, skin, shirt, pants, rig: None });
+            p.seres.push(CharSpec { id, name: name.into(), age: Age::Adult, skin, shirt, pants, cuerpo: None });
         }
 
         // --- Biomas ---

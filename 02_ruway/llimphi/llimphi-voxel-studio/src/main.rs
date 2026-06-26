@@ -117,6 +117,7 @@ impl Level {
             Level::Materiales => vec![("Aspecto", Icon::Image), ("Leyes", Icon::Droplet)],
             Level::Seres => vec![
                 ("Cuerpo", Icon::User),
+                ("Andar", Icon::Gauge),
                 ("Piel", Icon::Image),
                 ("Camiseta", Icon::Image),
                 ("Pantalón", Icon::Image),
@@ -178,6 +179,10 @@ enum Msg {
     CycleSereAge,
     CycleSereCuerpo,
     SetSereColor(Part, usize, f32),
+    // Andares (capa 2) del ser-rig.
+    CycleAndarEstado,
+    SetAndarCadencia(f32),
+    SetAndarAmplitud(usize, f32),
     // Biomas.
     SetBiomaField(BiomaField, f32),
     CycleBiomaGround,
@@ -256,6 +261,8 @@ struct Model {
     exporting: bool,
     /// Simulación de agua (ley Fluir) corriendo en el preview de mundo/bioma.
     simulating: bool,
+    /// Estado del andar que se edita/previsualiza en Seres (0=quieto,1=caminar,2=correr).
+    andar_estado: usize,
     /// Semilla del random de mundos (LCG; no hay `Math.random`).
     rng: u32,
     /// Decisión global: dientes DENTRO (overlay) o FUERA (franja reservada).
@@ -507,6 +514,27 @@ impl App for Studio {
                     };
                     if ch < 3 {
                         rgb[ch] = v.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            Msg::CycleAndarEstado => {
+                model.andar_estado = (model.andar_estado + 1) % 3;
+            }
+            Msg::SetAndarCadencia(v) => {
+                let est = model.andar_estado;
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    if let Some(m) = &mut c.cuerpo {
+                        m.andares.estado_mut(est).cadencia = v.clamp(0.0, 18.0);
+                    }
+                }
+            }
+            Msg::SetAndarAmplitud(seg, v) => {
+                let est = model.andar_estado;
+                if let Some(c) = sel_sere_mut(&mut model) {
+                    if let Some(m) = &mut c.cuerpo {
+                        if let Some(o) = m.andares.estado_mut(est).osc.get_mut(seg) {
+                            o.amplitud = v.clamp(0.0, 1.5);
+                        }
                     }
                 }
             }
@@ -1102,6 +1130,12 @@ fn canvas_3d(model: &Model) -> View<Msg> {
         Level::Seres => {
             let sere = sel_sere(model).cloned();
             let time = model.time;
+            // Previsualizar el estado de andar que se está editando.
+            let estado_clip = match model.andar_estado {
+                0 => Clip::Idle,
+                1 => Clip::Walk,
+                _ => Clip::Run,
+            };
             View::new(absolute).gpu_paint_with(move |device, queue, encoder, target, rect, vp| {
                 let dim = world_dim(PREVIEW_DIM_XZ);
                 let mut guard = preview.lock().unwrap();
@@ -1111,9 +1145,9 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 let look = pos + Vec3::new(0.0, 1.0, 0.0);
                 let cam_dist = (dist * 0.06).clamp(3.5, 14.0);
                 let camera = Camera3d::orbit(look, yaw, pitch, cam_dist);
-                // Turntable: gira el cuerpo (facing = time·0.6) en pose de reposo.
+                // Turntable: gira el cuerpo (facing = time·0.6) animando el estado en edición.
                 let metas = match &sere {
-                    Some(cs) => vec![cs.to_meta(pos, time * 0.6, Clip::Idle, time, None)],
+                    Some(cs) => vec![cs.to_meta(pos, time * 0.6, estado_clip, time, None)],
                     None => Vec::new(),
                 };
                 p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
@@ -1258,10 +1292,53 @@ fn sere_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             spacer(4.0),
             button_view(format!("edad: {}", c.age.label()), &btn, Msg::CycleSereAge),
         ],
-        1 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),
-        2 => color_tools("CAMISETA", Part::Shirt, c.shirt, &sp, theme),
+        1 => andar_tools(model, c),
+        2 => color_tools("PIEL", Part::Skin, c.skin, &sp, theme),
+        3 => color_tools("CAMISETA", Part::Shirt, c.shirt, &sp, theme),
         _ => color_tools("PANTALÓN", Part::Pants, c.pants, &sp, theme),
     }
+}
+
+/// Editor del **andar** (capa 2) de un ser-rig: estado a editar/previsualizar +
+/// cadencia + cuánto balancea cada articulación. El humanoide usa animaciones fijas.
+fn andar_tools<'a>(model: &Model, c: &'a llimphi_voxel::CharSpec) -> Vec<View<Msg>> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+    let Some(mov) = &c.cuerpo else {
+        return vec![
+            section_title("ANDAR", theme),
+            body_text(
+                "el humanoide usa animaciones fijas — cambiá la «forma» a un rig (cuadrúpedo, ave…) para editar su andar".into(),
+                theme.fg_placeholder,
+                theme,
+            ),
+        ];
+    };
+    let est = model.andar_estado.min(2);
+    let andar = mov.andares.estado(est);
+    let mut v = vec![
+        section_title("ANDAR", theme),
+        button_view(
+            format!("estado: {}", llimphi_voxel::Andares::LABELS[est]),
+            &btn,
+            Msg::CycleAndarEstado,
+        ),
+        spacer(4.0),
+        slider_view("cadencia (ritmo)", andar.cadencia, 0.0, 18.0, &sp, {
+            let cad = andar.cadencia;
+            move |_p, dv| Some(Msg::SetAndarCadencia(cad + dv))
+        }),
+        spacer(6.0),
+        section_title("BALANCEO POR PARTE", theme),
+    ];
+    for (i, seg) in mov.rig.segmentos.iter().enumerate() {
+        let amp = andar.osc.get(i).map(|o| o.amplitud).unwrap_or(0.0);
+        v.push(slider_view(&seg.nombre, amp, 0.0, 1.5, &sp, move |_p, dv| {
+            Some(Msg::SetAndarAmplitud(i, amp + dv))
+        }));
+    }
+    v
 }
 
 fn bioma_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
@@ -1773,6 +1850,7 @@ pub(crate) fn demo_model() -> Model {
         script_cam: true,
         exporting: false,
         simulating: false,
+        andar_estado: 1, // caminar
         rng: 0x1234_5678,
         dientes_outside: wawa_config::WawaConfig::load().dientes_outside,
         project,
