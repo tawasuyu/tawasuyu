@@ -455,6 +455,19 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         // Cerrar la sesión (FUS logout): Super+Shift+Escape.
         ("Super+Shift+Escape".into(), DesktopAction::Logout),
         ("Super+Shift+e".into(), DesktopAction::Quit),
+        // Captura de pantalla (usa el `zwlr_screencopy` del compositor vía grim),
+        // convención GNOME: `Print` saca la pantalla entera a un archivo;
+        // `Shift+Print` selecciona una región (slurp) y la copia al portapapeles.
+        (
+            "Print".into(),
+            DesktopAction::Spawn(
+                "grim \"$HOME/$(date +%Y-%m-%d-%H%M%S)-captura.png\"".into(),
+            ),
+        ),
+        (
+            "Shift+Print".into(),
+            DesktopAction::Spawn("grim -g \"$(slurp)\" - | wl-copy".into()),
+        ),
     ];
     // Un escritorio por dígito: `Super+1`..`Super+9` lo activan,
     // `Super+Shift+1`.. mandan la ventana enfocada allí.
@@ -558,6 +571,16 @@ pub fn mac_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+m".into(), SendToScratchpad), // ⌘M : minimizar ≈ esconder
         ("Super+h".into(), SendToScratchpad), // ⌘H : ocultar
         ("Super+n".into(), Spawn("foot".into())), // ⌘N : nueva ventana ≈ terminal
+        // Captura: `Print` pantalla entera → archivo, `Shift+Print` región →
+        // portapapeles (⌘⇧3/4 chocan con los escritorios Super+Shift+N de abajo).
+        (
+            "Print".into(),
+            Spawn("grim \"$HOME/$(date +%Y-%m-%d-%H%M%S)-captura.png\"".into()),
+        ),
+        (
+            "Shift+Print".into(),
+            Spawn("grim -g \"$(slurp)\" - | wl-copy".into()),
+        ),
     ];
     for n in 0..WORKSPACE_COUNT {
         map.push((format!("Super+{}", n + 1), SwitchWorkspace(n)));
