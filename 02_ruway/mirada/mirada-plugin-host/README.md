@@ -187,13 +187,14 @@ usuario, no código), así que se edita libre —a mano o desde wawa-panel— y 
 **recarga en caliente** sin re-firmar. El `asignador` la usa para sus reglas
 `app_id → escritorio/float`; un plugin sin parámetros simplemente la ignora.
 
-**Edición visual (wawa-panel → Inicio → Plugins):** el `asignador` trae un editor
-**estructurado** de reglas; los demás plugins con config línea-a-línea
-(`scratchpads`, `media-keys`, `efecto-por-app`) traen un editor **genérico de
-líneas** (un campo por línea + agregar/quitar + vista previa). Ambos reescriben
-sólo el `config:` del `.ron` (firma intacta) y el host recarga en caliente. Los
-plugins sin config (`orientacion`, `nueva-al-maestro`, layouts) se muestran
-informativos.
+**Edición visual (wawa-panel → Inicio → Plugins):** cada plugin con config trae
+un editor **estructurado** de campos tipados — `asignador` (app + escritorio +
+flotar), `scratchpads` (atajo + nombre + send), `media-keys` (tecla + comando),
+`efecto-por-app` (app + opacidad + sombra) — con agregar/quitar fila y vista
+previa. Un plugin de config sin editor propio cae a un editor **genérico de
+líneas** (un campo por línea). Todos reescriben sólo el `config:` del `.ron`
+(firma intacta) y el host recarga en caliente. Los plugins sin config
+(`orientacion`, `nueva-al-maestro`, layouts) se muestran informativos.
 
 ### Buenas piezas para sumar al catálogo
 

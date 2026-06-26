@@ -160,8 +160,15 @@ pub fn plugins_section(plugins: &[PluginInfo]) -> Section {
                 let n = parse_rules(&p.config).len();
                 format!("✎  {}   ·   {} regla(s)   ·   [{}]", p.name, n, caps)
             } else {
-                let n = p.config.lines().filter(|l| !l.trim().is_empty()).count();
-                format!("✎  {}   ·   {} línea(s)   ·   [{}]", p.name, n, caps)
+                let n = p
+                    .config
+                    .lines()
+                    .filter(|l| {
+                        let t = l.trim();
+                        !t.is_empty() && !t.starts_with('#')
+                    })
+                    .count();
+                format!("✎  {}   ·   {} entrada(s)   ·   [{}]", p.name, n, caps)
             };
             sec = sec.field(Field::button(format!("plugin:{i}"), label));
         } else {
@@ -186,13 +193,55 @@ pub struct AppRule {
     pub float: bool,
 }
 
-/// El cuerpo editable: el asignador tiene un editor **estructurado** de reglas;
-/// los demás plugins con config línea-a-línea, un editor **genérico de líneas**.
+/// Un atajo de **scratchpads**: tecla → cajón con nombre (mostrar/ocultar o
+/// mandar la enfocada).
+#[derive(Debug, Clone, Default)]
+pub struct ScratchBind {
+    /// La combinación (`"Super+grave"`).
+    pub key: String,
+    /// `true` = mandar la enfocada (`send`); `false` = mostrar/ocultar (toggle).
+    pub send: bool,
+    /// Nombre del cajón.
+    pub name: String,
+}
+
+/// Un bind de **media-keys**: tecla XF86 → comando. `cmd` vacío = desactivar ese
+/// default (línea con sólo la tecla en el DSL).
+#[derive(Debug, Clone, Default)]
+pub struct MediaBind {
+    pub key: String,
+    pub cmd: String,
+}
+
+/// Una regla de **efecto-por-app**: opacidad/sombra por substring del `app_id`.
+#[derive(Debug, Clone)]
+pub struct EfectoRule {
+    pub app: String,
+    /// Opacidad en porcentaje (0-100).
+    pub opacity: u8,
+    pub shadow: bool,
+}
+
+impl Default for EfectoRule {
+    fn default() -> Self {
+        Self { app: String::new(), opacity: 100, shadow: true }
+    }
+}
+
+/// El cuerpo editable. Cada plugin con config trae su editor **estructurado**
+/// (campos tipados); `Lines` es el genérico de respaldo (un campo por línea)
+/// para plugins de config aún sin editor propio.
 #[derive(Debug, Clone)]
 pub enum EditBody {
     /// Reglas `app_id → escritorio/float` del asignador.
     Rules(Vec<AppRule>),
-    /// Una línea de config por entrada (incluye comentarios `#`, editables).
+    /// Atajos del plugin `scratchpads`.
+    Scratchpads(Vec<ScratchBind>),
+    /// Binds del plugin `media-keys`.
+    MediaKeys(Vec<MediaBind>),
+    /// Reglas del plugin `efecto-por-app`.
+    Efectos(Vec<EfectoRule>),
+    /// Una línea de config por entrada (fallback genérico, comentarios incluidos).
     Lines(Vec<String>),
 }
 
@@ -206,35 +255,43 @@ pub struct PluginEdit {
 }
 
 impl PluginEdit {
-    /// Abre el editor para `info`. El asignador → editor de reglas; el resto →
-    /// editor de líneas con su config actual (cada línea, comentarios incluidos).
+    /// Abre el editor para `info`, eligiendo el editor estructurado por nombre;
+    /// un plugin de config sin editor propio cae al genérico de líneas.
     pub fn open(info: &PluginInfo) -> Self {
-        let body = if info.name == "asignador" {
-            EditBody::Rules(parse_rules(&info.config))
-        } else {
-            EditBody::Lines(info.config.lines().map(|l| l.to_string()).collect())
+        let body = match info.name.as_str() {
+            "asignador" => EditBody::Rules(parse_rules(&info.config)),
+            "scratchpads" => EditBody::Scratchpads(parse_scratch(&info.config)),
+            "media-keys" => EditBody::MediaKeys(parse_media(&info.config)),
+            "efecto-por-app" => EditBody::Efectos(parse_efecto(&info.config)),
+            _ => EditBody::Lines(info.config.lines().map(|l| l.to_string()).collect()),
         };
         Self { path: info.path.clone(), name: info.name.clone(), body }
     }
 
-    /// Agrega una entrada vacía (regla o línea, según el modo).
+    /// Agrega una entrada vacía (del tipo del editor activo).
     pub fn add_rule(&mut self) {
         match &mut self.body {
-            EditBody::Rules(rules) => rules.push(AppRule::default()),
-            EditBody::Lines(lines) => lines.push(String::new()),
+            EditBody::Rules(v) => v.push(AppRule::default()),
+            EditBody::Scratchpads(v) => v.push(ScratchBind::default()),
+            EditBody::MediaKeys(v) => v.push(MediaBind::default()),
+            EditBody::Efectos(v) => v.push(EfectoRule::default()),
+            EditBody::Lines(v) => v.push(String::new()),
         }
     }
 
-    /// Quita la entrada `i` (regla o línea, según el modo).
+    /// Quita la entrada `i` (del tipo del editor activo).
     pub fn del_rule(&mut self, i: usize) {
+        fn del<T>(v: &mut Vec<T>, i: usize) {
+            if i < v.len() {
+                v.remove(i);
+            }
+        }
         match &mut self.body {
-            EditBody::Rules(rules) if i < rules.len() => {
-                rules.remove(i);
-            }
-            EditBody::Lines(lines) if i < lines.len() => {
-                lines.remove(i);
-            }
-            _ => {}
+            EditBody::Rules(v) => del(v, i),
+            EditBody::Scratchpads(v) => del(v, i),
+            EditBody::MediaKeys(v) => del(v, i),
+            EditBody::Efectos(v) => del(v, i),
+            EditBody::Lines(v) => del(v, i),
         }
     }
 
@@ -257,6 +314,59 @@ impl PluginEdit {
                     }
                     if r.float {
                         out.push_str(" float");
+                    }
+                    out.push('\n');
+                }
+                out
+            }
+            EditBody::Scratchpads(binds) => {
+                let mut out = String::new();
+                for b in binds {
+                    let key = b.key.trim();
+                    let name = b.name.trim();
+                    if key.is_empty() || name.is_empty() {
+                        continue;
+                    }
+                    out.push_str(key);
+                    if b.send {
+                        out.push_str(" send");
+                    }
+                    out.push(' ');
+                    out.push_str(name);
+                    out.push('\n');
+                }
+                out
+            }
+            EditBody::MediaKeys(binds) => {
+                let mut out = String::new();
+                for b in binds {
+                    let key = b.key.trim();
+                    if key.is_empty() {
+                        continue;
+                    }
+                    out.push_str(key);
+                    let cmd = b.cmd.trim();
+                    if !cmd.is_empty() {
+                        out.push(' ');
+                        out.push_str(cmd);
+                    }
+                    // Línea con sólo la tecla = desactivar ese default.
+                    out.push('\n');
+                }
+                out
+            }
+            EditBody::Efectos(rules) => {
+                let mut out = String::new();
+                for r in rules {
+                    let app = r.app.trim();
+                    if app.is_empty() {
+                        continue;
+                    }
+                    out.push_str(app);
+                    out.push(' ');
+                    out.push_str(&r.opacity.min(100).to_string());
+                    if !r.shadow {
+                        out.push_str(" noshadow");
                     }
                     out.push('\n');
                 }
@@ -309,6 +419,67 @@ impl PluginEdit {
                 }
                 sec.field(Field::button("add", "＋  agregar regla"))
             }
+            EditBody::Scratchpads(binds) => {
+                let mut sec = Section::new("plugin::form", format!("Cajones — {}", self.name))
+                    .help(config_hint(&self.name));
+                for (i, b) in binds.iter().enumerate() {
+                    sec = sec
+                        .field(Field::text(
+                            format!("sc:{i}:key"),
+                            format!("Cajón {} · atajo", i + 1),
+                            b.key.clone(),
+                        ))
+                        .field(Field::text(format!("sc:{i}:name"), "    nombre del cajón", b.name.clone()))
+                        .field(Field::toggle(
+                            format!("sc:{i}:send"),
+                            "    mandar la enfocada (en vez de mostrar/ocultar)",
+                            b.send,
+                        ))
+                        .field(Field::button(format!("sc:{i}:del"), "    ✕  quitar"));
+                }
+                sec.field(Field::button("add", "＋  agregar cajón"))
+            }
+            EditBody::MediaKeys(binds) => {
+                let mut sec = Section::new("plugin::form", format!("Teclas — {}", self.name))
+                    .help(config_hint(&self.name));
+                for (i, b) in binds.iter().enumerate() {
+                    sec = sec
+                        .field(Field::text(
+                            format!("mk:{i}:key"),
+                            format!("Tecla {} (XF86…)", i + 1),
+                            b.key.clone(),
+                        ))
+                        .field(Field::text(
+                            format!("mk:{i}:cmd"),
+                            "    comando (vacío = desactivar ese default)",
+                            b.cmd.clone(),
+                        ))
+                        .field(Field::button(format!("mk:{i}:del"), "    ✕  quitar"));
+                }
+                sec.field(Field::button("add", "＋  agregar tecla"))
+            }
+            EditBody::Efectos(rules) => {
+                let mut sec = Section::new("plugin::form", format!("Efectos — {}", self.name))
+                    .help(config_hint(&self.name));
+                for (i, r) in rules.iter().enumerate() {
+                    sec = sec
+                        .field(Field::text(
+                            format!("ef:{i}:app"),
+                            format!("Regla {} · app_id contiene", i + 1),
+                            r.app.clone(),
+                        ))
+                        .field(Field::slider_int(
+                            format!("ef:{i}:op"),
+                            "    opacidad (0-100)",
+                            r.opacity as i64,
+                            0,
+                            100,
+                        ))
+                        .field(Field::toggle(format!("ef:{i}:shadow"), "    sombra", r.shadow))
+                        .field(Field::button(format!("ef:{i}:del"), "    ✕  quitar"));
+                }
+                sec.field(Field::button("add", "＋  agregar regla"))
+            }
             EditBody::Lines(lines) => {
                 let mut sec =
                     Section::new("plugin::form", format!("Config — {}", self.name)).help(config_hint(&self.name));
@@ -358,6 +529,67 @@ impl PluginEdit {
                     _ => {}
                 }
             }
+            EditBody::Scratchpads(binds) => {
+                let Some((i, field)) = leaf_index(leaf, "sc") else { return };
+                let Some(b) = binds.get_mut(i) else { return };
+                match field {
+                    "key" => {
+                        if let Some(s) = value.as_str() {
+                            b.key = s.to_string();
+                        }
+                    }
+                    "name" => {
+                        if let Some(s) = value.as_str() {
+                            b.name = s.to_string();
+                        }
+                    }
+                    "send" => {
+                        if let Some(v) = value.as_bool() {
+                            b.send = v;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            EditBody::MediaKeys(binds) => {
+                let Some((i, field)) = leaf_index(leaf, "mk") else { return };
+                let Some(b) = binds.get_mut(i) else { return };
+                match field {
+                    "key" => {
+                        if let Some(s) = value.as_str() {
+                            b.key = s.to_string();
+                        }
+                    }
+                    "cmd" => {
+                        if let Some(s) = value.as_str() {
+                            b.cmd = s.to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            EditBody::Efectos(rules) => {
+                let Some((i, field)) = leaf_index(leaf, "ef") else { return };
+                let Some(r) = rules.get_mut(i) else { return };
+                match field {
+                    "app" => {
+                        if let Some(s) = value.as_str() {
+                            r.app = s.to_string();
+                        }
+                    }
+                    "op" => {
+                        if let Some(n) = value.as_int() {
+                            r.opacity = n.clamp(0, 100) as u8;
+                        }
+                    }
+                    "shadow" => {
+                        if let Some(v) = value.as_bool() {
+                            r.shadow = v;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             EditBody::Lines(lines) => {
                 let Some(i) = leaf.strip_prefix("line:").and_then(|s| s.parse::<usize>().ok()) else {
                     return;
@@ -382,6 +614,20 @@ impl PluginEdit {
                 }
                 String::new()
             }
+            EditBody::Scratchpads(binds) => match leaf_index(leaf, "sc") {
+                Some((i, "key")) => binds.get(i).map(|b| b.key.clone()).unwrap_or_default(),
+                Some((i, "name")) => binds.get(i).map(|b| b.name.clone()).unwrap_or_default(),
+                _ => String::new(),
+            },
+            EditBody::MediaKeys(binds) => match leaf_index(leaf, "mk") {
+                Some((i, "key")) => binds.get(i).map(|b| b.key.clone()).unwrap_or_default(),
+                Some((i, "cmd")) => binds.get(i).map(|b| b.cmd.clone()).unwrap_or_default(),
+                _ => String::new(),
+            },
+            EditBody::Efectos(rules) => match leaf_index(leaf, "ef") {
+                Some((i, "app")) => rules.get(i).map(|r| r.app.clone()).unwrap_or_default(),
+                _ => String::new(),
+            },
             EditBody::Lines(lines) => leaf
                 .strip_prefix("line:")
                 .and_then(|s| s.parse::<usize>().ok())
@@ -424,6 +670,87 @@ fn parse_rules(config: &str) -> Vec<AppRule> {
         rules.push(AppRule { app: app.to_string(), ws, float });
     }
     rules
+}
+
+/// Parsea un leaf `<prefix>:{i}:{field}` → `(i, field)`. `None` si no calza el
+/// prefijo o el índice no es número.
+fn leaf_index<'a>(leaf: &'a str, prefix: &str) -> Option<(usize, &'a str)> {
+    let rest = leaf.strip_prefix(prefix)?.strip_prefix(':')?;
+    let (idx, field) = rest.split_once(':')?;
+    Some((idx.parse().ok()?, field))
+}
+
+/// Parsea la config de **scratchpads** (`<tecla> [send|+|toggle] <nombre>`) a
+/// binds. Espejo del parser del plugin. Líneas vacías o `#…` se ignoran.
+fn parse_scratch(config: &str) -> Vec<ScratchBind> {
+    let mut out = Vec::new();
+    for line in config.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut toks = line.split_whitespace();
+        let Some(key) = toks.next() else { continue };
+        let mut send = false;
+        let mut name: Option<&str> = None;
+        for t in toks {
+            if t.eq_ignore_ascii_case("send") || t == "+" {
+                send = true;
+            } else if t.eq_ignore_ascii_case("toggle") {
+                send = false;
+            } else if name.is_none() {
+                name = Some(t);
+            }
+        }
+        if let Some(name) = name {
+            out.push(ScratchBind { key: key.to_string(), send, name: name.to_string() });
+        }
+    }
+    out
+}
+
+/// Parsea la config de **media-keys** (`<tecla> [comando…]`) a binds; una línea
+/// con sólo la tecla deja `cmd` vacío (= desactivar ese default). `#…` se ignora.
+fn parse_media(config: &str) -> Vec<MediaBind> {
+    let mut out = Vec::new();
+    for line in config.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut it = line.splitn(2, char::is_whitespace);
+        let Some(key) = it.next() else { continue };
+        let cmd = it.next().map(str::trim).unwrap_or("").to_string();
+        out.push(MediaBind { key: key.to_string(), cmd });
+    }
+    out
+}
+
+/// Parsea la config de **efecto-por-app** (`<app> <opacidad 0-100> [shadow|
+/// noshadow]`) a reglas. Espejo del parser del plugin. `#…` se ignora.
+fn parse_efecto(config: &str) -> Vec<EfectoRule> {
+    let mut out = Vec::new();
+    for line in config.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut toks = line.split_whitespace();
+        let Some(app) = toks.next() else { continue };
+        let mut opacity = 100u8;
+        let mut shadow = true;
+        for t in toks {
+            if t.eq_ignore_ascii_case("noshadow") {
+                shadow = false;
+            } else if t.eq_ignore_ascii_case("shadow") {
+                shadow = true;
+            } else if let Ok(n) = t.parse::<u32>() {
+                opacity = n.min(100) as u8;
+            }
+        }
+        out.push(EfectoRule { app: app.to_string(), opacity, shadow });
+    }
+    out
 }
 
 /// Escapa una cadena para un string RON (`"..."`): backslash, comilla, salto y tab.
@@ -516,33 +843,78 @@ mod tests {
         assert_eq!(edit.serialize(), "firefox 4 float\n");
     }
 
-    /// El editor de líneas (scratchpads/media-keys/efecto-por-app): editar una
-    /// línea, agregar/quitar y sembrar el buffer de edición.
-    #[test]
-    fn editor_de_lineas_edita_y_redondea() {
-        let info = PluginInfo {
+    /// Helper: un `PluginInfo` mínimo de reactor con la config dada.
+    fn info(name: &str, config: &str) -> PluginInfo {
+        PluginInfo {
             path: PathBuf::new(),
-            name: "scratchpads".into(),
+            name: name.into(),
             kind: Kind::Reactor,
-            caps: vec!["keys".into(), "actions".into()],
+            caps: vec![],
             priority: 0,
-            config: "Super+grave  dev\n# un comentario\n".into(),
-        };
-        let mut edit = PluginEdit::open(&info);
-        assert!(matches!(edit.body, EditBody::Lines(_)));
-        // Sembrar el buffer al enfocar = el texto de esa línea.
-        assert_eq!(edit.text_value("line:0"), "Super+grave  dev");
-        // Editar la línea 0 y agregar una nueva.
-        edit.apply("line:0", FieldValue::Text("Super+grave  send  dev".into()));
+            config: config.into(),
+        }
+    }
+
+    #[test]
+    fn editor_scratchpads_estructurado() {
+        let mut edit = PluginEdit::open(&info("scratchpads", "Super+grave  dev\n"));
+        assert!(matches!(edit.body, EditBody::Scratchpads(_)));
+        assert_eq!(edit.text_value("sc:0:key"), "Super+grave");
+        assert_eq!(edit.text_value("sc:0:name"), "dev");
+        // Marcar «send» y agregar otro cajón.
+        edit.apply("sc:0:send", FieldValue::Bool(true));
         edit.add_rule();
-        edit.apply("line:2", FieldValue::Text("Super+n  notas".into()));
+        edit.apply("sc:1:key", FieldValue::Text("Super+n".into()));
+        edit.apply("sc:1:name", FieldValue::Text("notas".into()));
+        assert_eq!(edit.serialize(), "Super+grave send dev\nSuper+n notas\n");
+        // Una fila sin nombre se descarta.
+        edit.del_rule(1);
+        edit.add_rule();
+        edit.apply("sc:1:key", FieldValue::Text("Super+x".into()));
+        assert_eq!(edit.serialize(), "Super+grave send dev\n");
+    }
+
+    #[test]
+    fn editor_media_keys_estructurado() {
+        let mut edit = PluginEdit::open(&info(
+            "media-keys",
+            "XF86AudioRaiseVolume  wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%+\nXF86AudioMicMute\n",
+        ));
+        assert!(matches!(edit.body, EditBody::MediaKeys(_)));
+        assert_eq!(edit.text_value("mk:0:key"), "XF86AudioRaiseVolume");
+        assert_eq!(edit.text_value("mk:0:cmd"), "wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%+");
+        // La línea sin comando (desactivar el default) se preserva.
+        assert_eq!(edit.text_value("mk:1:cmd"), "");
+        edit.apply("mk:0:cmd", FieldValue::Text("wpctl set-volume @DEFAULT_AUDIO_SINK@ 3%+".into()));
         assert_eq!(
             edit.serialize(),
-            "Super+grave  send  dev\n# un comentario\nSuper+n  notas\n"
+            "XF86AudioRaiseVolume wpctl set-volume @DEFAULT_AUDIO_SINK@ 3%+\nXF86AudioMicMute\n"
         );
-        // Quitar el comentario (línea 1).
+    }
+
+    #[test]
+    fn editor_efecto_estructurado() {
+        let mut edit = PluginEdit::open(&info("efecto-por-app", "Alacritty 88\nmpv 100 noshadow\n"));
+        assert!(matches!(edit.body, EditBody::Efectos(_)));
+        assert_eq!(edit.text_value("ef:0:app"), "Alacritty");
+        // Editar opacidad y sombra de la regla 0.
+        edit.apply("ef:0:op", FieldValue::Int(75));
+        edit.apply("ef:0:shadow", FieldValue::Bool(false));
+        assert_eq!(edit.serialize(), "Alacritty 75 noshadow\nmpv 100 noshadow\n");
+    }
+
+    #[test]
+    fn editor_de_lineas_fallback() {
+        // Un plugin de config sin editor propio cae al genérico de líneas.
+        let mut edit = PluginEdit::open(&info("otro-plugin", "a\n# c\n"));
+        assert!(matches!(edit.body, EditBody::Lines(_)));
+        assert_eq!(edit.text_value("line:0"), "a");
+        edit.apply("line:0", FieldValue::Text("z".into()));
+        edit.add_rule();
+        edit.apply("line:2", FieldValue::Text("b".into()));
+        assert_eq!(edit.serialize(), "z\n# c\nb\n");
         edit.del_rule(1);
-        assert_eq!(edit.serialize(), "Super+grave  send  dev\nSuper+n  notas\n");
+        assert_eq!(edit.serialize(), "z\nb\n");
     }
 
     #[test]
