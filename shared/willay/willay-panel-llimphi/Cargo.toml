@@ -17,6 +17,12 @@ willay-emit = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-layer = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+# Kit de modernización visual: skeleton de carga, empty-state, toasts, íconos.
+llimphi-theme = { workspace = true }
+llimphi-icons = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
 # Decodificación de PNG a peniko::Image (con guardia de tamaño) para los
 # thumbnails de captura en el feed.
 llimphi-image = { workspace = true }
