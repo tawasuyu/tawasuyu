@@ -239,22 +239,22 @@ splash suelta todo. Verificado en metal: el parpadeo desaparece, el slate es
 continuo splash→mirada hasta que entra la tarjeta del greeter. Con esto el
 crossfade percibido es **limpio** sin necesidad del cross-node.
 
-### Fase 2-bis — crossfade limpio: render-node / card-node (pendiente, baja prioridad)
+### Fase 2-bis — crossfade limpio: render-node / card-node (ARCHIVADA, 2026-06-25)
 
-Con los Incrementos 1–3 el gap quedó en ~389 ms de slate continuo, sin negro ni
-parpadeo, así que esta fase pasó a **baja prioridad**: sólo agregaría meter la
-tarjeta del greeter en el frame 1 (hoy aparece ~unos cientos de ms después, sobre
-el fondo común). Se deja documentada por completitud.
+**Decisión (2026-06-25): archivada, no se implementa.** Los Incrementos 1–3
+lograron el crossfade limpio (sin negro, sin parpadeo, sin re-modeset, empalme
+slate continuo, GAP ~389 ms) **por un camino mucho más barato**, así que esta
+fase quedó **superada** para la meta original. Su único beneficio adicional sería
+meter la tarjeta del greeter en el **frame 1** (hoy aparece ~unos cientos de ms
+después, sobre el fondo común ya pintado) — un pulido de gusto, no tapar un
+defecto. El costo (doble nodo + composición offscreen + dmabuf cross-node
+modifier-sensible, depurable sólo en hardware) **no se justifica**. Se reabre
+sólo si en uso real el ratito de fondo común antes de la tarjeta molesta.
 
-El cero-artefactos del SDD pide que el **primer scanout de mirada ya sea la
-tarjeta del greeter compuesta sobre su fondo**. Pero hay un huevo-y-gallina:
-componer con GL necesita el device, y el master lo tiene el splash hasta el
-`RELEASED`. La única salida es **separar nodos**:
-
-El cero-artefactos del SDD pide que el **primer scanout de mirada ya sea la
-tarjeta del greeter compuesta sobre su fondo**. Pero hay un huevo-y-gallina:
-componer con GL necesita el device, y el master lo tiene el splash hasta el
-`RELEASED`. La única salida es **separar nodos**:
+Diseño (referencia, por si se reabre): el cero-artefactos pide que el **primer
+scanout de mirada ya sea la tarjeta del greeter compuesta sobre su fondo**. Pero
+hay un huevo-y-gallina: componer con GL necesita el device, y el master lo tiene
+el splash hasta el `RELEASED`. La única salida es **separar nodos**:
 
 - Abrir el **render-node** (`/dev/dri/renderD128`, **no** necesita DRM master) y
   montar EGL/GLES ahí. Componer el primer frame del greeter **offscreen**
