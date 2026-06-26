@@ -1072,13 +1072,12 @@ impl App for Panel {
                                 edit.add_rule();
                             }
                         }
-                        _ if leaf.starts_with("rule:") && leaf.ends_with(":del")
-                            && value.as_bool() == Some(true) =>
-                        {
-                            if let Some(i) = leaf
-                                .strip_prefix("rule:")
-                                .and_then(|s| s.strip_suffix(":del"))
-                                .and_then(|s| s.parse::<usize>().ok())
+                        // Quitar entrada: `rule:{i}:del` (asignador) o
+                        // `line:{i}:del` (editor de líneas). El índice es el token
+                        // antes de «del».
+                        _ if leaf.ends_with(":del") && value.as_bool() == Some(true) => {
+                            if let Some(i) =
+                                leaf.rsplit(':').nth(1).and_then(|s| s.parse::<usize>().ok())
                             {
                                 if let Some(edit) = m.plugin_edit.as_mut() {
                                     edit.del_rule(i);

@@ -65,10 +65,36 @@ impl PluginInfo {
         }
     }
 
-    /// `true` si el panel sabe editar visualmente la config de este plugin. Hoy,
-    /// sólo el **asignador** (el formato de reglas `app_id → escritorio/float`).
+    /// `true` si el panel sabe editar visualmente la config de este plugin: el
+    /// **asignador** (editor de reglas estructurado) y los demás plugins con
+    /// config línea-a-línea (editor genérico de líneas — ver [`line_editable`]).
     pub fn editable(&self) -> bool {
-        self.name == "asignador"
+        self.name == "asignador" || line_editable(&self.name)
+    }
+}
+
+/// Plugins de catálogo cuya config es **línea-a-línea** y el panel edita con el
+/// editor genérico de líneas (un campo por línea + agregar/quitar). El asignador
+/// queda aparte (editor estructurado de reglas). Sumá acá los plugins nuevos que
+/// traigan config de texto.
+pub fn line_editable(name: &str) -> bool {
+    matches!(name, "scratchpads" | "media-keys" | "efecto-por-app")
+}
+
+/// Pista de formato para el editor de líneas de cada plugin (su sintaxis de
+/// config), mostrada como ayuda de la subventana.
+fn config_hint(name: &str) -> &'static str {
+    match name {
+        "scratchpads" => "Cajones con nombre. Una línea por atajo: «<tecla>  [send]  <nombre>». \
+             Sin «send» muestra/oculta el cajón; con «send» manda la enfocada. Ej.: \
+             «Super+grave  dev» y «Super+Shift+grave  send  dev». «#» comenta.",
+        "media-keys" => "Teclas de medios. Una línea «<tecla XF86>  <comando…>» agrega o reemplaza \
+             un bind; una línea con sólo la tecla lo borra. Trae defaults (volumen/brillo/\
+             multimedia/captura). «#» comenta.",
+        "efecto-por-app" => "Opacidad y sombra por app. Una línea «<app_id-substring>  <opacidad \
+             0-100>  [shadow|noshadow]». Ej.: «Alacritty  88» · «mpv  100 noshadow». Gana la \
+             primera que case. «#» comenta.",
+        _ => "Una línea por entrada. «#» comenta.",
     }
 }
 
@@ -130,8 +156,13 @@ pub fn plugins_section(plugins: &[PluginInfo]) -> Section {
     for (i, p) in plugins.iter().enumerate() {
         let caps = if p.caps.is_empty() { "—".to_string() } else { p.caps.join(", ") };
         if p.editable() {
-            let n = parse_rules(&p.config).len();
-            let label = format!("✎  {}   ·   {} regla(s)   ·   [{}]", p.name, n, caps);
+            let label = if p.name == "asignador" {
+                let n = parse_rules(&p.config).len();
+                format!("✎  {}   ·   {} regla(s)   ·   [{}]", p.name, n, caps)
+            } else {
+                let n = p.config.lines().filter(|l| !l.trim().is_empty()).count();
+                format!("✎  {}   ·   {} línea(s)   ·   [{}]", p.name, n, caps)
+            };
             sec = sec.field(Field::button(format!("plugin:{i}"), label));
         } else {
             sec = sec.field(Field::display(
@@ -155,130 +186,208 @@ pub struct AppRule {
     pub float: bool,
 }
 
-/// El editor de reglas de **un** plugin (lo que vive en la subventana).
+/// El cuerpo editable: el asignador tiene un editor **estructurado** de reglas;
+/// los demás plugins con config línea-a-línea, un editor **genérico de líneas**.
+#[derive(Debug, Clone)]
+pub enum EditBody {
+    /// Reglas `app_id → escritorio/float` del asignador.
+    Rules(Vec<AppRule>),
+    /// Una línea de config por entrada (incluye comentarios `#`, editables).
+    Lines(Vec<String>),
+}
+
+/// El editor de config de **un** plugin (lo que vive en la subventana).
 #[derive(Debug, Clone)]
 pub struct PluginEdit {
     /// El `.ron` que se reescribe al guardar.
     pub path: PathBuf,
     pub name: String,
-    pub rules: Vec<AppRule>,
+    pub body: EditBody,
 }
 
 impl PluginEdit {
-    /// Abre el editor para `info`, parseando sus reglas actuales.
+    /// Abre el editor para `info`. El asignador → editor de reglas; el resto →
+    /// editor de líneas con su config actual (cada línea, comentarios incluidos).
     pub fn open(info: &PluginInfo) -> Self {
-        Self { path: info.path.clone(), name: info.name.clone(), rules: parse_rules(&info.config) }
+        let body = if info.name == "asignador" {
+            EditBody::Rules(parse_rules(&info.config))
+        } else {
+            EditBody::Lines(info.config.lines().map(|l| l.to_string()).collect())
+        };
+        Self { path: info.path.clone(), name: info.name.clone(), body }
     }
 
+    /// Agrega una entrada vacía (regla o línea, según el modo).
     pub fn add_rule(&mut self) {
-        self.rules.push(AppRule::default());
+        match &mut self.body {
+            EditBody::Rules(rules) => rules.push(AppRule::default()),
+            EditBody::Lines(lines) => lines.push(String::new()),
+        }
     }
 
+    /// Quita la entrada `i` (regla o línea, según el modo).
     pub fn del_rule(&mut self, i: usize) {
-        if i < self.rules.len() {
-            self.rules.remove(i);
+        match &mut self.body {
+            EditBody::Rules(rules) if i < rules.len() => {
+                rules.remove(i);
+            }
+            EditBody::Lines(lines) if i < lines.len() => {
+                lines.remove(i);
+            }
+            _ => {}
         }
     }
 
-    /// El texto de config que producen las reglas actuales (el formato del
-    /// asignador). Reglas con app vacía se descartan.
+    /// El texto de config resultante. Reglas (asignador): el DSL `app ws float`,
+    /// descartando reglas sin app. Líneas: las líneas tal cual, unidas por salto
+    /// (las vacías al final se podan).
     pub fn serialize(&self) -> String {
-        let mut out = String::new();
-        for r in &self.rules {
-            let app = r.app.trim();
-            if app.is_empty() {
-                continue;
+        match &self.body {
+            EditBody::Rules(rules) => {
+                let mut out = String::new();
+                for r in rules {
+                    let app = r.app.trim();
+                    if app.is_empty() {
+                        continue;
+                    }
+                    out.push_str(app);
+                    if (1..=9).contains(&r.ws) {
+                        out.push(' ');
+                        out.push_str(&r.ws.to_string());
+                    }
+                    if r.float {
+                        out.push_str(" float");
+                    }
+                    out.push('\n');
+                }
+                out
             }
-            out.push_str(app);
-            if (1..=9).contains(&r.ws) {
-                out.push(' ');
-                out.push_str(&r.ws.to_string());
+            EditBody::Lines(lines) => {
+                // Poda las líneas vacías del final, pero conserva las internas y
+                // los comentarios.
+                let mut end = lines.len();
+                while end > 0 && lines[end - 1].trim().is_empty() {
+                    end -= 1;
+                }
+                let mut out = String::new();
+                for l in &lines[..end] {
+                    out.push_str(l);
+                    out.push('\n');
+                }
+                out
             }
-            if r.float {
-                out.push_str(" float");
-            }
-            out.push('\n');
         }
-        out
     }
 
-    /// El `Schema` de allichay de la subventana: una fila por regla (app +
-    /// escritorio + flotar + quitar), un botón «agregar», la vista previa de la
-    /// config resultante y guardar / cancelar.
+    /// El `Schema` de allichay de la subventana. Asignador: una fila por regla
+    /// (app + escritorio + flotar + quitar). Líneas: un campo de texto por línea
+    /// + quitar. Ambos cierran con agregar, vista previa y guardar / cancelar.
     pub fn schema(&self) -> Schema {
-        let mut sec = Section::new("plugin::form", format!("Reglas — {}", self.name)).help(
-            "Una regla por app: si el app_id CONTIENE el texto, la ventana va al escritorio \
-             elegido (0 = ninguno) y/o flota. Se aplica al abrir cada ventana; gana la primera \
-             que case.",
-        );
-        for (i, r) in self.rules.iter().enumerate() {
-            sec = sec
-                .field(Field::text(
-                    format!("rule:{i}:app"),
-                    format!("Regla {} · app_id contiene", i + 1),
-                    r.app.clone(),
-                ))
-                .field(Field::slider_int(
-                    format!("rule:{i}:ws"),
-                    "    → escritorio (0 = ninguno)",
-                    r.ws as i64,
-                    0,
-                    9,
-                ))
-                .field(Field::toggle(format!("rule:{i}:float"), "    flotar", r.float))
-                .field(Field::button(format!("rule:{i}:del"), "    ✕  quitar regla"));
-        }
+        let mut sec = match &self.body {
+            EditBody::Rules(rules) => {
+                let mut sec = Section::new("plugin::form", format!("Reglas — {}", self.name)).help(
+                    "Una regla por app: si el app_id CONTIENE el texto, la ventana va al \
+                     escritorio elegido (0 = ninguno) y/o flota. Se aplica al abrir cada ventana; \
+                     gana la primera que case.",
+                );
+                for (i, r) in rules.iter().enumerate() {
+                    sec = sec
+                        .field(Field::text(
+                            format!("rule:{i}:app"),
+                            format!("Regla {} · app_id contiene", i + 1),
+                            r.app.clone(),
+                        ))
+                        .field(Field::slider_int(
+                            format!("rule:{i}:ws"),
+                            "    → escritorio (0 = ninguno)",
+                            r.ws as i64,
+                            0,
+                            9,
+                        ))
+                        .field(Field::toggle(format!("rule:{i}:float"), "    flotar", r.float))
+                        .field(Field::button(format!("rule:{i}:del"), "    ✕  quitar regla"));
+                }
+                sec.field(Field::button("add", "＋  agregar regla"))
+            }
+            EditBody::Lines(lines) => {
+                let mut sec =
+                    Section::new("plugin::form", format!("Config — {}", self.name)).help(config_hint(&self.name));
+                for (i, l) in lines.iter().enumerate() {
+                    sec = sec
+                        .field(Field::text(format!("line:{i}"), format!("Línea {}", i + 1), l.clone()))
+                        .field(Field::button(format!("line:{i}:del"), "    ✕  quitar línea"));
+                }
+                sec.field(Field::button("add", "＋  agregar línea"))
+            }
+        };
         sec = sec
-            .field(Field::button("add", "＋  agregar regla"))
             .field(Field::display("preview", "config resultante", self.serialize()))
             .field(Field::button("guardar", "✔  Guardar (recarga en caliente)"))
             .field(Field::button("cancelar", "Cancelar"));
         Schema { sections: vec![sec] }
     }
 
-    /// Aplica el cambio de un campo (`rule:{i}:{app|ws|float}`) al borrador. Los
-    /// botones (add/del/guardar/cancelar) los intercepta `main.rs`.
+    /// Aplica el cambio de un campo al borrador. Reglas: `rule:{i}:{app|ws|float}`.
+    /// Líneas: `line:{i}`. Los botones (add/del/guardar/cancelar) los intercepta
+    /// `main.rs`.
     pub fn apply(&mut self, leaf: &str, value: FieldValue) {
-        let parts: Vec<&str> = leaf.split(':').collect();
-        if parts.len() != 3 || parts[0] != "rule" {
-            return;
-        }
-        let Ok(i) = parts[1].parse::<usize>() else {
-            return;
-        };
-        let Some(r) = self.rules.get_mut(i) else {
-            return;
-        };
-        match parts[2] {
-            "app" => {
-                if let Some(s) = value.as_str() {
-                    r.app = s.to_string();
+        match &mut self.body {
+            EditBody::Rules(rules) => {
+                let parts: Vec<&str> = leaf.split(':').collect();
+                if parts.len() != 3 || parts[0] != "rule" {
+                    return;
+                }
+                let Ok(i) = parts[1].parse::<usize>() else { return };
+                let Some(r) = rules.get_mut(i) else { return };
+                match parts[2] {
+                    "app" => {
+                        if let Some(s) = value.as_str() {
+                            r.app = s.to_string();
+                        }
+                    }
+                    "ws" => {
+                        if let Some(n) = value.as_int() {
+                            r.ws = n.clamp(0, 9) as u8;
+                        }
+                    }
+                    "float" => {
+                        if let Some(b) = value.as_bool() {
+                            r.float = b;
+                        }
+                    }
+                    _ => {}
                 }
             }
-            "ws" => {
-                if let Some(n) = value.as_int() {
-                    r.ws = n.clamp(0, 9) as u8;
+            EditBody::Lines(lines) => {
+                let Some(i) = leaf.strip_prefix("line:").and_then(|s| s.parse::<usize>().ok()) else {
+                    return;
+                };
+                if let (Some(s), Some(l)) = (value.as_str(), lines.get_mut(i)) {
+                    *l = s.to_string();
                 }
             }
-            "float" => {
-                if let Some(b) = value.as_bool() {
-                    r.float = b;
-                }
-            }
-            _ => {}
         }
     }
 
     /// El texto actual de un campo de texto (para sembrar el buffer de edición al
-    /// enfocarlo). Sólo los `rule:{i}:app` son de texto.
+    /// enfocarlo): los `rule:{i}:app` (asignador) y los `line:{i}` (resto).
     pub fn text_value(&self, leaf: &str) -> String {
-        let parts: Vec<&str> = leaf.split(':').collect();
-        if parts.len() == 3 && parts[0] == "rule" && parts[2] == "app" {
-            if let Ok(i) = parts[1].parse::<usize>() {
-                return self.rules.get(i).map(|r| r.app.clone()).unwrap_or_default();
+        match &self.body {
+            EditBody::Rules(rules) => {
+                let parts: Vec<&str> = leaf.split(':').collect();
+                if parts.len() == 3 && parts[0] == "rule" && parts[2] == "app" {
+                    if let Ok(i) = parts[1].parse::<usize>() {
+                        return rules.get(i).map(|r| r.app.clone()).unwrap_or_default();
+                    }
+                }
+                String::new()
             }
+            EditBody::Lines(lines) => leaf
+                .strip_prefix("line:")
+                .and_then(|s| s.parse::<usize>().ok())
+                .and_then(|i| lines.get(i).cloned())
+                .unwrap_or_default(),
         }
-        String::new()
     }
 
     /// Reescribe el `config:` del `.ron` con las reglas actuales, dejando el
@@ -375,7 +484,8 @@ mod tests {
         assert!(rules[1].float && rules[1].ws == 0);
         assert!(rules[2].ws == 5 && rules[2].float);
 
-        let edit = PluginEdit { path: PathBuf::new(), name: "asignador".into(), rules };
+        let edit =
+            PluginEdit { path: PathBuf::new(), name: "asignador".into(), body: EditBody::Rules(rules) };
         // Round-trip sin los comentarios (el editor maneja las reglas).
         assert_eq!(edit.serialize(), "firefox 2\npavucontrol float\ncalc 5 float\n");
     }
@@ -385,10 +495,10 @@ mod tests {
         let edit = PluginEdit {
             path: PathBuf::new(),
             name: "asignador".into(),
-            rules: vec![
+            body: EditBody::Rules(vec![
                 AppRule { app: "  ".into(), ws: 3, float: false },
                 AppRule { app: "foot".into(), ws: 1, float: false },
-            ],
+            ]),
         };
         assert_eq!(edit.serialize(), "foot 1\n");
     }
@@ -398,28 +508,56 @@ mod tests {
         let mut edit = PluginEdit {
             path: PathBuf::new(),
             name: "asignador".into(),
-            rules: vec![AppRule::default()],
+            body: EditBody::Rules(vec![AppRule::default()]),
         };
         edit.apply("rule:0:app", FieldValue::Text("firefox".into()));
         edit.apply("rule:0:ws", FieldValue::Int(4));
         edit.apply("rule:0:float", FieldValue::Bool(true));
-        assert_eq!(edit.rules[0].app, "firefox");
-        assert_eq!(edit.rules[0].ws, 4);
-        assert!(edit.rules[0].float);
         assert_eq!(edit.serialize(), "firefox 4 float\n");
+    }
+
+    /// El editor de líneas (scratchpads/media-keys/efecto-por-app): editar una
+    /// línea, agregar/quitar y sembrar el buffer de edición.
+    #[test]
+    fn editor_de_lineas_edita_y_redondea() {
+        let info = PluginInfo {
+            path: PathBuf::new(),
+            name: "scratchpads".into(),
+            kind: Kind::Reactor,
+            caps: vec!["keys".into(), "actions".into()],
+            priority: 0,
+            config: "Super+grave  dev\n# un comentario\n".into(),
+        };
+        let mut edit = PluginEdit::open(&info);
+        assert!(matches!(edit.body, EditBody::Lines(_)));
+        // Sembrar el buffer al enfocar = el texto de esa línea.
+        assert_eq!(edit.text_value("line:0"), "Super+grave  dev");
+        // Editar la línea 0 y agregar una nueva.
+        edit.apply("line:0", FieldValue::Text("Super+grave  send  dev".into()));
+        edit.add_rule();
+        edit.apply("line:2", FieldValue::Text("Super+n  notas".into()));
+        assert_eq!(
+            edit.serialize(),
+            "Super+grave  send  dev\n# un comentario\nSuper+n  notas\n"
+        );
+        // Quitar el comentario (línea 1).
+        edit.del_rule(1);
+        assert_eq!(edit.serialize(), "Super+grave  send  dev\nSuper+n  notas\n");
     }
 
     #[test]
     fn add_y_del_regla() {
-        let mut edit =
-            PluginEdit { path: PathBuf::new(), name: "asignador".into(), rules: vec![] };
+        let mut edit = PluginEdit {
+            path: PathBuf::new(),
+            name: "asignador".into(),
+            body: EditBody::Rules(vec![]),
+        };
         edit.add_rule();
         edit.add_rule();
-        assert_eq!(edit.rules.len(), 2);
         edit.del_rule(0);
-        assert_eq!(edit.rules.len(), 1);
         edit.del_rule(9); // fuera de rango = no-op
-        assert_eq!(edit.rules.len(), 1);
+        let EditBody::Rules(rules) = &edit.body else { panic!("modo reglas") };
+        assert_eq!(rules.len(), 1);
     }
 
     #[test]
@@ -444,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn editable_solo_el_asignador() {
+    fn editable_asignador_y_los_de_config_de_lineas() {
         let asg = PluginInfo {
             path: PathBuf::new(),
             name: "asignador".into(),
@@ -454,8 +592,16 @@ mod tests {
             config: String::new(),
         };
         assert!(asg.editable());
+        // Los plugins con config línea-a-línea también se editan (editor genérico).
+        for n in ["scratchpads", "media-keys", "efecto-por-app"] {
+            let p = PluginInfo { name: n.into(), ..asg.clone() };
+            assert!(p.editable(), "{n} debería ser editable");
+        }
+        // Un layout y un reactor sin config no se editan.
         let dw = PluginInfo { name: "dwindle".into(), kind: Kind::Layout, ..asg.clone() };
         assert!(!dw.editable());
+        let ori = PluginInfo { name: "orientacion".into(), ..asg.clone() };
+        assert!(!ori.editable());
     }
 
     #[test]
