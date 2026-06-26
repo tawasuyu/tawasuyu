@@ -235,6 +235,8 @@ pub(crate) fn inicializar() -> Model {
         edit_active: usize::MAX,
         edit_anim: llimphi_motion::Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
+        toasts: Vec::new(),
+        next_toast: 0,
     };
     sincronizar_thumbs(&mut model);
     // Cómputo inicial del histograma desde el composite recién armado.

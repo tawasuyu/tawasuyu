@@ -14,7 +14,10 @@ use llimphi_ui::llimphi_raster::kurbo::{
 use llimphi_ui::llimphi_raster::peniko::{BlendMode, Color, Fill, ImageBrush as Image};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, View};
+use llimphi_theme::motion;
+use llimphi_icons::Icon;
 use llimphi_widget_button::{button_styled, button_view, ButtonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
@@ -700,7 +703,14 @@ pub(crate) fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<M
             .as_ref()
             .filter(|(id, _)| *id == capa.id)
             .map(|(_, input)| input);
-        hijos.push(fila_capa(theme, capa, sel, thumb, thumb_mascara, renombrando));
+        // Pop-in: una capa nueva entra con un fade suave la primera vez que
+        // aparece su key estable (derivada del Uuid). Reordenar/seleccionar
+        // no la re-anima — la key no cambia.
+        let key = capa.id.as_u128() as u64;
+        hijos.push(
+            fila_capa(theme, capa, sel, thumb, thumb_mascara, renombrando)
+                .animated_enter(key, motion::NORMAL),
+        );
     }
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -1528,19 +1538,13 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                     }),
             }
         }
-        None => View::new(Style {
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
-            },
-            ..Default::default()
-        })
-        .text_aligned(
-            "(sin composición)".to_string(),
-            12.0,
-            theme.fg_muted,
-            Alignment::Center,
+        // Sin composición vigente (todas las capas ocultas/eliminadas o un
+        // recompose vacío): empty-state con orientación en vez de un hueco.
+        None => empty_view(
+            Icon::Image,
+            "Sin composición",
+            Some("Abrí una imagen (Ctrl+P) o agregá una capa para empezar a pintar."),
+            &EmptyPalette::from_theme(theme),
         ),
     };
     View::new(Style {

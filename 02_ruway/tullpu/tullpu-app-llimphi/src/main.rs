@@ -85,6 +85,7 @@ mod viewport;
 use std::path::PathBuf;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_module_file_picker::{self as picker, PickerMsg, PickerPalette};
@@ -106,6 +107,7 @@ use llimphi_widget_menubar::{
 };
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_toast::{toast_stack_view, Toast};
 
 use tullpu_core::{Capa, TransformacionPixel};
 use tullpu_ops::transformacion_ia;
@@ -123,6 +125,21 @@ use crate::viewport::*;
 // =============================================================================
 //  App
 // =============================================================================
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Empuja un toast al stack y programa su expiración (worker que duerme
+/// `TOAST_TTL` y reentra con `Msg::ToastExpire`). El propio widget anima su
+/// entrada/salida — no hace falta un tick de repaint.
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
 
 struct Tullpu;
 
@@ -291,8 +308,23 @@ impl App for Tullpu {
                 // al decodificar y deja el lienzo intacto con un estado
                 // descriptivo — no preflight check para mantener una sola
                 // rama de error.
+                let id = model.next_toast;
+                model.next_toast += 1;
                 if agregar_capa_desde_archivo(&mut model, &path) {
                     pushear_snapshot(&mut model, None);
+                    let nombre = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("imagen")
+                        .to_string();
+                    push_toast(
+                        &mut model,
+                        handle,
+                        Toast::success(id, format!("📥 importada · {nombre}"), TOAST_TTL),
+                    );
+                } else {
+                    let motivo = model.estado.clone();
+                    push_toast(&mut model, handle, Toast::error(id, motivo, TOAST_TTL));
                 }
             }
             Msg::Undo => {
@@ -911,15 +943,31 @@ impl App for Tullpu {
                     .unwrap_or(0);
                 let ext = extension_export(formato);
                 let ruta = std::path::PathBuf::from(format!("tullpu-export-{ts}.{ext}"));
-                model.estado = match tullpu_render::exportar(
+                let id = model.next_toast;
+                model.next_toast += 1;
+                match tullpu_render::exportar(
                     &model.lienzo,
                     &model.almacen,
                     &ruta,
                     formato,
                 ) {
-                    Ok(_) => format!("exportado → {}", ruta.display()),
-                    Err(e) => format!("export falló: {e}"),
-                };
+                    Ok(_) => {
+                        model.estado = format!("exportado → {}", ruta.display());
+                        push_toast(
+                            &mut model,
+                            handle,
+                            Toast::success(id, format!("💾 exportado → {}", ruta.display()), TOAST_TTL),
+                        );
+                    }
+                    Err(e) => {
+                        model.estado = format!("export falló: {e}");
+                        push_toast(
+                            &mut model,
+                            handle,
+                            Toast::error(id, format!("export falló: {e}"), TOAST_TTL),
+                        );
+                    }
+                }
             }
             Msg::MenuOpen(idx) => {
                 model.menu_open = idx;
@@ -1005,6 +1053,9 @@ impl App for Tullpu {
                     );
                 }
             }
+            Msg::ToastExpire(id) => {
+                model.toasts.retain(|t| t.id != id);
+            }
         }
         model
     }
@@ -1041,7 +1092,7 @@ impl App for Tullpu {
             lienzo,
             panel_ops(&theme, model),
         ]);
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -1050,7 +1101,29 @@ impl App for Tullpu {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![menubar, cabecera, centro])
+        .children(vec![menubar, cabecera, centro]);
+
+        // Overlay de toasts (bottom-right): confirmaciones/errores de
+        // export e import. La app filtra los vivos; el widget anima su
+        // entrada/salida por su cuenta.
+        let now = Instant::now();
+        let alive: Vec<Toast> =
+            model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![
+                root,
+                toast_stack_view(&alive, viewport_of(), Msg::ToastExpire),
+            ])
+        }
     }
 
     fn on_wheel(

@@ -14,6 +14,7 @@ use llimphi_ui::llimphi_raster::peniko::ImageBrush as Image;
 use llimphi_ui::{KeyEvent, PaintRect};
 use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_toast::Toast;
 
 use pixel_verbo_core::{OpPixel, Proveedor};
 use tullpu_core::{Hash, Historial, Lienzo, OpLocal};
@@ -159,6 +160,11 @@ pub(crate) struct Model {
     /// Portapapeles del sistema para el menú de edición de texto del
     /// renombrado de capas. Independiente del `portapapeles` de píxeles.
     pub(crate) clipboard: SystemClipboard,
+    /// Toasts efímeros vivos (confirmaciones/errores de export e import).
+    /// Cada uno se auto-descarta a los `TOAST_TTL` vía `Msg::ToastExpire`.
+    pub(crate) toasts: Vec<Toast>,
+    /// Id incremental para correlacionar un toast con su `Msg::ToastExpire`.
+    pub(crate) next_toast: u64,
 }
 
 /// Punto activo de un drag en el editor de curvas tonales. `rw`/`rh` son
@@ -635,6 +641,8 @@ pub(crate) enum Msg {
     EditNav(i32),
     /// Ejecuta la fila activa del menú de edición (Enter).
     EditActivate,
+    /// Un toast cumplió su `TOAST_TTL`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ
