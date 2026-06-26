@@ -39,7 +39,13 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       wallpaper** (no captura ventanas detrás), así que el glass es correcto en
       elementos **sobre el wallpaper** (el menú lo está). El video no lleva glass.
       Falta verificar en metal.
-- [ ] **Glassmorphism sobre VENTANAS/paneles** (el «wow» pleno) — necesita el
+- [x] **✅ Glass — barra de título *frosted* en ventanas flotantes.** Reusa el
+      mismo `OutputCtx.wallpaper_blur`: la barra de una ventana **flotante** deja
+      ver el wallpaper desenfocado (rebanada `src` bajo la barra) + un tinte del
+      color base (con el glow de foco). Sólo flotantes (sobre el escritorio, donde
+      el wallpaper ES el backdrop correcto); las teseladas siguen sólidas. Mismo
+      límite: muestra el wallpaper, no ventanas detrás.
+- [ ] **Glassmorphism sobre VENTANAS/paneles con backdrop REAL** (el «wow» pleno) — necesita el
       **backdrop real** detrás de cada superficie, no el wallpaper. Eso pide un
       **pase de render por capas** (componer lo de atrás a un offscreen → blur →
       dibujar la ventana encima), o capturar el frame previo y reusarlo. Multi-pase

@@ -449,7 +449,10 @@ impl DrmState {
     /// título y el árbol de superficie del cliente, en orden front-to-back
     /// (`shell` arriba > flotantes > teseladas). Se saltea ventanas que no
     /// caen sobre `rect` para no malgastar trabajo del compositor.
-    fn emit_windows(&mut self, rect: Rect, into: &mut Vec<Frame>) {
+    fn emit_windows(&mut self, idx: usize, rect: Rect, into: &mut Vec<Frame>) {
+        // Glass: barra de título *frosted* en ventanas flotantes (backdrop =
+        // wallpaper desenfocado de esta salida; correcto sobre el escritorio).
+        let glass = self.app.config_glass_blur() > 0;
         // FUS: con ≥2 sesiones, sólo se pintan las ventanas de la activa
         // (`session_visible`); con ≤1 el filtro es transparente.
         let mut shown: Vec<_> = self
@@ -657,7 +660,42 @@ impl DrmState {
                 }
                 // Glow de foco: el color de la barra crossfadea como el marco.
                 let base = self.focus_base(w, anim_now, glow_ms);
-                if self.app.decorations.titlebar_gradient && tb >= 4 {
+                // Glass: barra *frosted* en ventanas flotantes (sobre el wallpaper).
+                let frosted_bar = glass
+                    && w.floating
+                    && self.outputs.get(idx).and_then(|o| o.wallpaper_blur.as_ref()).is_some();
+                if frosted_bar {
+                    // Rebanada del wallpaper desenfocado bajo la barra (coords del
+                    // buffer del blur; escala si está acotado) + tinte del color base.
+                    let (blur, (bw, bh)) = self.outputs[idx].wallpaper_blur.as_ref().unwrap();
+                    let (bw, bh) = (*bw as f64, *bh as f64);
+                    let (ow, oh) = (rect.w.max(1) as f64, rect.h.max(1) as f64);
+                    let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new(
+                        (cx as f64 * bw / ow, dec_y as f64 * bh / oh).into(),
+                        (cw as f64 * bw / ow, tb as f64 * bh / oh).into(),
+                    );
+                    let dst: smithay::utils::Size<i32, smithay::utils::Logical> = (cw, tb).into();
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut self.renderer,
+                        (cx as f64, dec_y as f64),
+                        blur,
+                        Some(anim_alpha),
+                        Some(src),
+                        Some(dst),
+                        Kind::Unspecified,
+                    ) {
+                        into.push(Frame::Text(el));
+                    }
+                    let mut tint = SolidColorBuffer::default();
+                    tint.update((cw, tb), rgba_f32([base[0], base[1], base[2], 150]));
+                    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &tint,
+                        (cx, dec_y),
+                        1.0,
+                        anim_alpha,
+                        Kind::Unspecified,
+                    )));
+                } else if self.app.decorations.titlebar_gradient && tb >= 4 {
                     // Degradé vertical (claro arriba → base abajo) por franjas
                     // sólidas: el compositor no tiene primitivo de gradiente, así
                     // que apilamos ~8 bandas de luminancia decreciente.
@@ -2287,7 +2325,7 @@ impl DrmState {
                 out.push(Frame::Window(el));
             }
             // 7. Ventanas entre layers Overlay/Top y Bottom/Background.
-            self.emit_windows(rect, &mut out);
+            self.emit_windows(idx, rect, &mut out);
             // 7.bis Fantasmas de cierre (fade-out), a la altura de las ventanas.
             self.emit_ghosts(rect, &mut out);
             for el in under_layers {
