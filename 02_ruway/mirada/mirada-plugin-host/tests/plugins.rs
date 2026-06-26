@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use mirada_brain::Desktop;
-use mirada_plugin_host::caps::{CAP_EFFECTS, CAP_KEYS, CAP_LAYOUT, CAP_SPAWN};
+use mirada_plugin_host::caps::{CAP_ACTIONS, CAP_EFFECTS, CAP_KEYS, CAP_LAYOUT, CAP_SPAWN};
 use mirada_plugin_host::{Conductor, LoadedPlugin, PluginKind, PluginManifest, TrustSet};
 use mirada_protocol::{BodyEvent, BrainCommand, LayoutMode, LayoutParams, Rect, TileInput};
 
@@ -100,7 +100,7 @@ fn reactor_con_cap_parcial_es_rechazado() {
 #[test]
 fn reactor_con_caps_completas_carga() {
     let p =
-        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS, 0, "term");
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS | CAP_ACTIONS, 0, "term");
     assert!(p.is_ok(), "con KEYS+SPAWN debería cargar: {:?}", p.err());
 }
 
@@ -132,7 +132,7 @@ fn reactor_firmado_carga_con_su_trust_y_se_rechaza_sin_el() {
 #[test]
 fn reactor_registra_atajo_y_lanza() {
     let mut p =
-        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS, 0, "term")
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS | CAP_ACTIONS, 0, "term")
             .unwrap();
     let cmds = p.call_on_event(&BodyEvent::OutputAdded { id: 0, width: 800, height: 600 }).unwrap();
     assert!(
@@ -166,7 +166,7 @@ fn reactor_atenua_las_ventanas_sin_foco() {
     let mut p = LoadedPlugin::load_bytes(
         REACTOR_WASM,
         PluginKind::Reactor,
-        CAP_KEYS | CAP_SPAWN | CAP_EFFECTS,
+        CAP_KEYS | CAP_SPAWN | CAP_EFFECTS | CAP_ACTIONS,
         0,
         "term",
     )
@@ -191,6 +191,88 @@ fn reactor_atenua_las_ventanas_sin_foco() {
     assert_eq!(fx.get(&2).map(|e| e.shadow), Some(true), "enfocada con sombra: {fx:?}");
     assert_eq!(fx.get(&1).map(|e| e.opacity), Some(180), "fondo atenuado: {fx:?}");
     assert_eq!(fx.get(&1).map(|e| e.shadow), Some(false), "fondo sin sombra: {fx:?}");
+}
+
+// --- Acciones de escritorio (CAP_ACTIONS): el reactor maneja ventanas. ------
+
+#[test]
+fn reactor_sin_cap_actions_es_rechazado() {
+    // El reactor importa host_emit_action (auto-teselado): sin CAP_ACTIONS ni
+    // instancia — la frontera de capacidad es física, igual que con effects.
+    let err =
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS, 0, "term")
+            .err()
+            .expect("falta CAP_ACTIONS → rechazo");
+    assert!(
+        err.contains("actions") || err.contains("capacidad"),
+        "esperaba mención a actions: {err}"
+    );
+}
+
+#[test]
+fn reactor_pide_monocle_cuando_se_llena() {
+    let mut p = LoadedPlugin::load_bytes(
+        REACTOR_WASM,
+        PluginKind::Reactor,
+        CAP_KEYS | CAP_SPAWN | CAP_EFFECTS | CAP_ACTIONS,
+        0,
+        "term",
+    )
+    .unwrap();
+    // Con pocas ventanas, pide master-stack; al cruzar el umbral (3), monocle.
+    for id in 1..=2u64 {
+        p.call_on_event(&BodyEvent::WindowOpened { id, app_id: "a".into(), title: "w".into() })
+            .unwrap();
+        assert_eq!(
+            p.take_actions(),
+            vec!["layout:master-stack".to_string()],
+            "con {id} ventana(s) debería pedir master-stack"
+        );
+    }
+    p.call_on_event(&BodyEvent::WindowOpened { id: 3, app_id: "a".into(), title: "w".into() })
+        .unwrap();
+    assert_eq!(
+        p.take_actions(),
+        vec!["layout:monocle".to_string()],
+        "al llegar a 3 ventanas debería despejar a monocle"
+    );
+    // Al cerrar una, vuelve a master-stack.
+    p.call_on_event(&BodyEvent::WindowClosed { id: 3 }).unwrap();
+    assert_eq!(p.take_actions(), vec!["layout:master-stack".to_string()]);
+}
+
+#[test]
+fn conductor_aplica_la_accion_del_reactor_al_desktop() {
+    // El reactor pide monocle al llenarse; el conductor lo aplica al Desktop
+    // autoritativo, que en monocle deja visible SÓLO la enfocada. Oráculo
+    // crudo: con 3 ventanas abiertas, el Place final lista 1 visible (no 3).
+    let reactor = LoadedPlugin::load_bytes(
+        REACTOR_WASM,
+        PluginKind::Reactor,
+        CAP_KEYS | CAP_SPAWN | CAP_EFFECTS | CAP_ACTIONS,
+        0,
+        "term",
+    )
+    .unwrap();
+    let mut c = Conductor::new(Desktop::new(), vec![reactor]);
+    let _ = c.startup();
+    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 1000, height: 1000 });
+
+    let mut visibles = Vec::new();
+    for id in 1..=3u64 {
+        let cmds =
+            c.on_body_event(BodyEvent::WindowOpened { id, app_id: "t".into(), title: "w".into() });
+        for cmd in cmds {
+            if let BrainCommand::Place(ps) = cmd {
+                visibles = ps.iter().filter(|p| p.visible).map(|p| p.id).collect();
+            }
+        }
+    }
+    assert_eq!(
+        visibles.len(),
+        1,
+        "tras la 3ª ventana el reactor pidió monocle y el Desktop dejó 1 visible: {visibles:?}"
+    );
 }
 
 // --- Conductor: Desktop autoritativo + plugins que lo aumentan. -------------
@@ -237,7 +319,7 @@ fn hot_reload_de_keymap_reemite_grabkeys_sin_pisar_reactores() {
     // Un reactor que registra Super+a, para verificar que la recarga del keymap
     // une (no pisa) sus atajos.
     let reactor =
-        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS, 0, "term")
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS | CAP_ACTIONS, 0, "term")
             .unwrap();
     let mut c = Conductor::new(Desktop::new(), vec![reactor]);
     let _ = c.startup();

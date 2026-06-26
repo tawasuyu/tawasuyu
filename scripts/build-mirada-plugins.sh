@@ -72,7 +72,7 @@ printf '%s' "$DEMO_SEED" > "$SEED_FILE"
 
 echo -e "${AZUL}[mirada-plugins]${RESET} firmando example-reactor (demo)…"
 SIGN_OUT="$(cd "$RAIZ" && cargo run -q -p mirada-plugin-host --bin mirada-plugin-sign -- \
-    sign --seed "$SEED_FILE" --wasm "$ASSETS/example-reactor.wasm" --caps keys,spawn,effects)"
+    sign --seed "$SEED_FILE" --wasm "$ASSETS/example-reactor.wasm" --caps keys,spawn,effects,actions)"
 rm -f "$SEED_FILE"
 
 SIGNER="$(printf '%s\n' "$SIGN_OUT" | grep -oE 'ed25519:[0-9a-f]+' | head -1)"
@@ -82,14 +82,14 @@ if [ -z "$SIGNER" ] || [ -z "$SIGNATURE" ]; then
 fi
 
 cat > "$ASSETS/example-reactor.ron" <<EOF
-// Manifest del plugin reactor de ejemplo (Super+a → terminal).
-// Pide CAP_KEYS y CAP_SPAWN → requiere firma de una clave de confianza.
+// Manifest del plugin reactor de ejemplo (terminal + dimming + auto-teselado).
+// Pide capacidades peligrosas → requiere firma de una clave de confianza.
 // La firma de abajo la regenera build-mirada-plugins.sh con una semilla DEMO
 // pública (NO un secreto). En tu instalación: firmá con TU clave.
 (
     wasm: "example-reactor.wasm",
     kind: Reactor,
-    caps: ["keys", "spawn", "effects"],
+    caps: ["keys", "spawn", "effects", "actions"],
     priority: 0,
     signer: "$SIGNER",
     signature: "$SIGNATURE",

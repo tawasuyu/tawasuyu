@@ -18,6 +18,10 @@ pub const CAP_KEYS: CapsPlugin = 1 << 3;
 pub const CAP_DECOR: CapsPlugin = 1 << 4;
 /// Fijar efectos visuales por ventana (`SetOpacity` — atenuar, etc.).
 pub const CAP_EFFECTS: CapsPlugin = 1 << 5;
+/// Pedir **acciones de escritorio** al `Desktop` autoritativo (foco, teselado,
+/// escritorios, …) por su forma textual estable. Es la capacidad que convierte
+/// a un reactor en gestor de ventanas, no sólo observador.
+pub const CAP_ACTIONS: CapsPlugin = 1 << 6;
 
 /// Traduce un nombre de capacidad del manifest a su bit.
 pub fn parse_cap(name: &str) -> Option<CapsPlugin> {
@@ -28,6 +32,7 @@ pub fn parse_cap(name: &str) -> Option<CapsPlugin> {
         "keys" => CAP_KEYS,
         "decor" => CAP_DECOR,
         "effects" => CAP_EFFECTS,
+        "actions" => CAP_ACTIONS,
         _ => return None,
     })
 }
@@ -41,6 +46,7 @@ pub fn cap_name(bit: CapsPlugin) -> &'static str {
         CAP_KEYS => "keys",
         CAP_DECOR => "decor",
         CAP_EFFECTS => "effects",
+        CAP_ACTIONS => "actions",
         _ => "?",
     }
 }
@@ -48,7 +54,7 @@ pub fn cap_name(bit: CapsPlugin) -> &'static str {
 /// Lista legible de las capacidades de un bitfield (para errores).
 pub fn caps_list(caps: CapsPlugin) -> String {
     let mut out = Vec::new();
-    for bit in [CAP_LAYOUT, CAP_SPAWN, CAP_WINDOW_CONTROL, CAP_KEYS, CAP_DECOR, CAP_EFFECTS] {
+    for bit in [CAP_LAYOUT, CAP_SPAWN, CAP_WINDOW_CONTROL, CAP_KEYS, CAP_DECOR, CAP_EFFECTS, CAP_ACTIONS] {
         if caps & bit != 0 {
             out.push(cap_name(bit));
         }
@@ -73,6 +79,7 @@ pub fn cap_for_import(name: &str) -> Option<CapsPlugin> {
         "host_emit_keys" => CAP_KEYS,
         "host_emit_decor" | "host_emit_cursor" => CAP_DECOR,
         "host_emit_effects" => CAP_EFFECTS,
+        "host_emit_action" => CAP_ACTIONS,
         _ => return None,
     })
 }

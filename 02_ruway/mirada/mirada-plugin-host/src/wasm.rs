@@ -9,8 +9,8 @@ use wasmi::{
 use mirada_protocol::{BodyEvent, BrainCommand, Decorations, Rect, TileInput, WindowEffects, WindowId};
 
 use crate::caps::{
-    cap_for_import, cap_name, caps_list, CapsPlugin, CAP_DECOR, CAP_EFFECTS, CAP_KEYS, CAP_SPAWN,
-    CAP_WINDOW_CONTROL,
+    cap_for_import, cap_name, caps_list, CapsPlugin, CAP_ACTIONS, CAP_DECOR, CAP_EFFECTS, CAP_KEYS,
+    CAP_SPAWN, CAP_WINDOW_CONTROL,
 };
 use crate::manifest::{PluginKind, ResolvedManifest};
 use crate::trust::{authorize, TrustSet};
@@ -19,11 +19,15 @@ use crate::trust::{authorize, TrustSet};
 /// se queda sin fuel y trampa en vez de congelar el escritorio.
 const FUEL: u64 = 200_000_000;
 
-/// El contexto host que viaja en el `Store`: acumula los comandos que el plugin
-/// emite durante una llamada.
+/// El contexto host que viaja en el `Store`: acumula lo que el plugin emite
+/// durante una llamada. Dos canales: comandos directos al Cuerpo (`out`) y
+/// **acciones de escritorio** (`actions`, forma textual de `DesktopAction`) que
+/// el [`Conductor`](crate::Conductor) aplica al `Desktop` autoritativo — así un
+/// reactor maneja ventanas sin poder romper la consistencia del estado.
 #[derive(Default)]
 pub struct HostCtx {
     pub out: Vec<BrainCommand>,
+    pub actions: Vec<String>,
 }
 
 /// Un plugin cargado e instanciado, con sus puntos de ABI cacheados.
@@ -178,11 +182,19 @@ impl LoadedPlugin {
         let bytes = postcard::to_stdvec(event).map_err(|e| e.to_string())?;
         let ptr = self.write_input(&bytes)?;
         self.store.data_mut().out.clear();
+        self.store.data_mut().actions.clear();
         self.store.set_fuel(FUEL).map_err(|e| e.to_string())?;
         on_event
             .call(&mut self.store, (ptr, bytes.len() as u32))
             .map_err(|e| format!("mirada_on_event de {}: {e}", self.name))?;
         Ok(std::mem::take(&mut self.store.data_mut().out))
+    }
+
+    /// Las **acciones de escritorio** (forma textual de `DesktopAction`) que el
+    /// reactor pidió en la última llamada a [`call_on_event`](Self::call_on_event).
+    /// El [`Conductor`](crate::Conductor) las parsea y aplica al `Desktop`.
+    pub fn take_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.store.data_mut().actions)
     }
 }
 
@@ -269,6 +281,19 @@ fn register_host_fns(linker: &mut Linker<HostCtx>, granted: CapsPlugin) -> Resul
                 let bytes = read_guest(&mut caller, ptr, len)?;
                 let name = String::from_utf8_lossy(&bytes).into_owned();
                 caller.data_mut().out.push(BrainCommand::SetCursor(name));
+                Ok(())
+            },
+        )?;
+    }
+
+    if granted & CAP_ACTIONS != 0 {
+        linker.func_wrap(
+            "mirada_host",
+            "host_emit_action",
+            |mut caller: Caller<'_, HostCtx>, ptr: u32, len: u32| -> Result<(), Error> {
+                let bytes = read_guest(&mut caller, ptr, len)?;
+                let action = String::from_utf8_lossy(&bytes).into_owned();
+                caller.data_mut().actions.push(action);
                 Ok(())
             },
         )?;

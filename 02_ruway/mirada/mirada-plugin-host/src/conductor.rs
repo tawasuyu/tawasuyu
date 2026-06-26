@@ -138,7 +138,11 @@ impl Conductor {
             _ => self.desktop.on_event(ev.clone()),
         };
 
-        // 2. Los reactores aumentan; sus GrabKeys se desvían a la unión.
+        // 2. Los reactores aumentan; sus GrabKeys se desvían a la unión, y sus
+        //    acciones de escritorio se recogen para aplicarlas al Desktop tras
+        //    el bucle (no se puede tomar prestado `self.desktop` mientras se
+        //    itera `self.reactors`).
+        let mut pending_actions: Vec<String> = Vec::new();
         for r in &mut self.reactors {
             match r.call_on_event(&ev) {
                 Ok(extra) => {
@@ -149,8 +153,20 @@ impl Conductor {
                             cmds.push(c);
                         }
                     }
+                    pending_actions.extend(r.take_actions());
                 }
                 Err(e) => eprintln!("[conductor] reactor {} falló: {e}", r.name),
+            }
+        }
+
+        // 2b. Las acciones pedidas por los reactores las aplica el Desktop
+        //     autoritativo (igual que un atajo del usuario), manteniendo el
+        //     estado consistente; los comandos resultantes (Place, …) siguen el
+        //     mismo camino de arbitraje que el resto.
+        for action in pending_actions {
+            match action.parse::<DesktopAction>() {
+                Ok(a) => cmds.extend(self.desktop.apply(a)),
+                Err(e) => eprintln!("[conductor] acción de reactor inválida: {e}"),
             }
         }
 

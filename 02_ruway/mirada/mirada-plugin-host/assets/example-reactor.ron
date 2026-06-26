@@ -1,12 +1,12 @@
-// Manifest del plugin reactor de ejemplo (Super+a → terminal).
-// Pide CAP_KEYS y CAP_SPAWN → requiere firma de una clave de confianza.
+// Manifest del plugin reactor de ejemplo (terminal + dimming + auto-teselado).
+// Pide capacidades peligrosas → requiere firma de una clave de confianza.
 // La firma de abajo la regenera build-mirada-plugins.sh con una semilla DEMO
 // pública (NO un secreto). En tu instalación: firmá con TU clave.
 (
     wasm: "example-reactor.wasm",
     kind: Reactor,
-    caps: ["keys", "spawn", "effects"],
+    caps: ["keys", "spawn", "effects", "actions"],
     priority: 0,
     signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
-    signature: "68bfffe2cd7df2ae417fe687e679571c59daf86515a174dfbdd9c045eaff9ab64d5d3e9a811fe00a7889bda3097ba1da1066be4f17b7e4997ee2fe73f07c4c0c",
+    signature: "d05a4a349b61451e691e108ce40314a669f15c94e476b334fa7a132ac7cde44c1f062c9ab17cd7d3c6db4e9281a2d4159da381119135522bc5f0d80d253f650e",
 )

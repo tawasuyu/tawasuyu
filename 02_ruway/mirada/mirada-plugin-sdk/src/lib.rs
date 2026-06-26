@@ -167,6 +167,7 @@ extern "C" {
     fn host_emit_decor(ptr: u32, len: u32);
     fn host_emit_cursor(ptr: u32, len: u32);
     fn host_emit_effects(id: u64, opacity: u32, flags: u32);
+    fn host_emit_action(ptr: u32, len: u32);
 }
 
 // Stubs en host: el crate compila para el smoke test; nunca se llaman ahí.
@@ -181,6 +182,7 @@ mod host_imports {
     pub unsafe fn host_emit_decor(_: u32, _: u32) {}
     pub unsafe fn host_emit_cursor(_: u32, _: u32) {}
     pub unsafe fn host_emit_effects(_: u64, _: u32, _: u32) {}
+    pub unsafe fn host_emit_action(_: u32, _: u32) {}
 }
 #[cfg(all(feature = "reactor", not(target_arch = "wasm32")))]
 use host_imports::*;
@@ -247,6 +249,21 @@ impl Ctx {
     pub fn set_effects(&mut self, id: WindowId, effects: WindowEffects) {
         let flags = if effects.shadow { 1 } else { 0 };
         unsafe { host_emit_effects(id, effects.opacity as u32, flags) }
+    }
+
+    /// Pide una **acción de escritorio** al `Desktop` autoritativo (`CAP_ACTIONS`)
+    /// por su forma textual estable: `"focus-next"`, `"workspace:3"`,
+    /// `"layout:monocle"`, `"toggle-float"`, `"swap-master"`, … — el mismo
+    /// vocabulario del keymap y `mirada-ctl`. El host la parsea y la aplica como
+    /// si fuera un atajo del usuario; una cadena inválida se ignora con un aviso.
+    ///
+    /// Es lo que deja a un reactor **manejar ventanas**, no sólo observarlas:
+    /// autotiling por cantidad de ventanas, foco inteligente, automatización de
+    /// escritorios. El `Desktop` arbitra y queda consistente; el reactor nunca
+    /// pinta ni mueve píxeles por su cuenta.
+    pub fn act(&mut self, action: &str) {
+        let b = action.as_bytes();
+        unsafe { host_emit_action(b.as_ptr() as u32, b.len() as u32) }
     }
 }
 
