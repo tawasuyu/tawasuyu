@@ -15,7 +15,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use uya_app::{hex_corto, iniciar_camara, Enlace, EventoUya, ParticipanteId, Sala};
 
@@ -31,8 +33,24 @@ use llimphi_ui::{
 };
 
 use llimphi_clipboard::SystemClipboard;
+use llimphi_icons::Icon;
+use llimphi_theme::{motion, Theme};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+
+/// Cuánto vive un aviso (toast) antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas: la misma
+/// identidad produce siempre la misma key entre rebuilds, así un tile sólo
+/// hace su pop-in la primera vez que aparece.
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 // --- Paleta (sobria, oscura). Hardcoded a propósito: MVP feo. ----------------
 const FONDO: Color = Color::from_rgba8(16, 18, 24, 255);
@@ -103,6 +121,12 @@ struct Modelo {
     foco: Foco,
     /// Clipboard del sistema, para pegar la dirección con Ctrl/Cmd+V.
     clipboard: SystemClipboard,
+    /// Avisos efímeros (alguien entra/sale, conexión, colgar).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar un toast con su Msg de expiración.
+    next_toast: u64,
+    /// Tamaño actual de la ventana, para anclar la pila de toasts.
+    viewport: (f32, f32),
     /// Salida de audio: hay que conservarla viva (al soltarla, el stream
     /// de reproducción se cierra). `None` si no hay dispositivo de salida.
     _audio: Option<uya_app::AudioSink>,
@@ -129,6 +153,21 @@ enum Msg {
     /// Silenciar / reactivar a un par localmente (clic en su tile).
     ToggleSilencio(ParticipanteId),
     Colgar,
+    /// La ventana cambió de tamaño (para anclar los toasts).
+    Resize(u32, u32),
+    /// Un toast cumplió su tiempo: se descarta de la pila.
+    ToastExpire(u64),
+}
+
+/// Empuja un aviso a la pila y programa su expiración en `TOAST_TTL`.
+fn notar(model: &mut Modelo, handle: &Handle<Msg>, make: impl FnOnce(u64) -> Toast) {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    model.toasts.push(make(id));
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
 }
 
 struct Uya;
@@ -211,8 +250,15 @@ impl App for Uya {
             charla_scroll: 0,
             foco: Foco::Charla,
             clipboard: SystemClipboard::new(),
+            toasts: Vec::new(),
+            next_toast: 0,
+            viewport: (960.0, 720.0),
             _audio: audio,
         }
+    }
+
+    fn on_resize(_model: &Self::Model, w: u32, h: u32) -> Option<Self::Msg> {
+        Some(Msg::Resize(w, h))
     }
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
@@ -243,7 +289,7 @@ impl App for Uya {
         Some(Msg::ScrollCharla(if delta.y > 0.0 { 3 } else { -3 }))
     }
 
-    fn update(mut model: Self::Model, msg: Self::Msg, _handle: &Handle<Self::Msg>) -> Self::Model {
+    fn update(mut model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         match msg {
             Msg::Red(EventoUya::Entra {
                 id,
@@ -251,14 +297,33 @@ impl App for Uya {
                 verificado,
             }) => {
                 if id != model.sala.yo {
-                    model.sala.entrar(id, nombre, verificado);
+                    model.sala.entrar(id, nombre.clone(), verificado);
+                    if verificado {
+                        notar(&mut model, handle, |tid| {
+                            Toast::info(tid, format!("{nombre} se unió"), TOAST_TTL)
+                        });
+                    } else {
+                        notar(&mut model, handle, |tid| {
+                            Toast::warning(tid, format!("{nombre} se unió sin verificar"), TOAST_TTL)
+                        });
+                    }
                 }
             }
             Msg::Red(EventoUya::Sale { id }) => {
+                let nombre = model
+                    .sala
+                    .participantes
+                    .get(&id)
+                    .map(|p| p.nombre.clone());
                 model.sala.salir(&id);
                 model.cuadros.remove(&id);
                 model.hablando.remove(&id);
                 model.silenciados.remove(&id);
+                if let Some(nombre) = nombre {
+                    notar(&mut model, handle, |tid| {
+                        Toast::info(tid, format!("{nombre} salió"), TOAST_TTL)
+                    });
+                }
             }
             Msg::Red(EventoUya::Voz { id, hablando }) => {
                 if hablando {
@@ -344,6 +409,9 @@ impl App for Uya {
                 if !dir.is_empty() {
                     model.enlace.conectar(&dir);
                     model.conectar_input.clear();
+                    notar(&mut model, handle, |tid| {
+                        Toast::info(tid, "Conectando al par…", TOAST_TTL)
+                    });
                 }
             }
             Msg::EnviarCharla => {
@@ -370,6 +438,15 @@ impl App for Uya {
                 model.sala.participantes.clear();
                 let yo = model.sala.yo;
                 model.cuadros.retain(|id, _| *id == yo);
+                notar(&mut model, handle, |tid| {
+                    Toast::info(tid, "Llamada colgada", TOAST_TTL)
+                });
+            }
+            Msg::Resize(w, h) => {
+                model.viewport = (w as f32, h as f32);
+            }
+            Msg::ToastExpire(id) => {
+                model.toasts.retain(|t| t.id != id);
             }
         }
         model
@@ -379,31 +456,38 @@ impl App for Uya {
         let mut tiles: Vec<View<Msg>> = Vec::new();
 
         // Mi propia cara primero (yo siempre soy de confianza para mí mismo; mi
-        // propio audio no se silencia ni hace clic).
-        tiles.push(tile(
-            &format!("{} (yo)", model.sala.mi_nombre),
-            model.cuadros.get(&model.sala.yo),
-            model.cam_on,
-            model.mic_on,
-            true,
-            model.hablando.contains(&model.sala.yo),
-            true,
-            false,
-            None,
-        ));
+        // propio audio no se silencia ni hace clic). Cada tile entra con un
+        // pop-in la primera vez que aparece su `key` (estable por identidad).
+        tiles.push(
+            tile(
+                &format!("{} (yo)", model.sala.mi_nombre),
+                model.cuadros.get(&model.sala.yo),
+                model.cam_on,
+                model.mic_on,
+                true,
+                model.hablando.contains(&model.sala.yo),
+                true,
+                false,
+                None,
+            )
+            .animated_enter(key_of("yo"), motion::NORMAL),
+        );
         // Los demás, en orden estable por id (BTreeMap). Clic = silenciarlos.
         for p in model.sala.participantes.values() {
-            tiles.push(tile(
-                &p.nombre,
-                model.cuadros.get(&p.id),
-                p.camara,
-                p.microfono,
-                false,
-                model.hablando.contains(&p.id),
-                p.verificado,
-                model.silenciados.contains(&p.id),
-                Some(Msg::ToggleSilencio(p.id)),
-            ));
+            tiles.push(
+                tile(
+                    &p.nombre,
+                    model.cuadros.get(&p.id),
+                    p.camara,
+                    p.microfono,
+                    false,
+                    model.hablando.contains(&p.id),
+                    p.verificado,
+                    model.silenciados.contains(&p.id),
+                    Some(Msg::ToggleSilencio(p.id)),
+                )
+                .animated_enter(key_of(&hex_corto(&p.id)), motion::NORMAL),
+            );
         }
 
         let rejilla = View::new(Style {
@@ -436,7 +520,7 @@ impl App for Uya {
         })
         .children(vec![rejilla, panel_charla(model)]);
 
-        View::new(Style {
+        let raiz = View::new(Style {
             size: Size {
                 width: percent(1.0),
                 height: percent(1.0),
@@ -445,7 +529,31 @@ impl App for Uya {
             ..Default::default()
         })
         .fill(FONDO)
-        .children(vec![superior, barra_conectar(model), barra_controles(model)])
+        .children(vec![superior, barra_conectar(model), barra_controles(model)]);
+
+        // Capa de avisos efímeros (bottom-right). Clic en uno = descartarlo.
+        let now = Instant::now();
+        let vivos: Vec<Toast> = model
+            .toasts
+            .iter()
+            .filter(|t| t.is_alive(now))
+            .cloned()
+            .collect();
+        if vivos.is_empty() {
+            raiz
+        } else {
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0),
+                    height: percent(1.0),
+                },
+                ..Default::default()
+            })
+            .children(vec![
+                raiz,
+                toast_stack_view(&vivos, model.viewport, Msg::ToastExpire),
+            ])
+        }
     }
 }
 
@@ -467,7 +575,11 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
     let ini = fin.saturating_sub(VENTANA_CHARLA);
     let mut lineas: Vec<View<Msg>> = Vec::new();
     if total == 0 {
-        lineas.push(linea_charla_view("— sin mensajes todavía —", TENUE));
+        // Estado vacío con orientación, en vez de un renglón tenue suelto.
+        // Sin descripción: el panel es angosto (~256px) y la caja de texto de
+        // `empty_view` es fija (360px); con sólo icono + título encaja limpio.
+        let pal = EmptyPalette::from_theme(&Theme::dark());
+        lineas.push(empty_view::<Msg>(Icon::FileText, "Sin mensajes", None, &pal));
     } else {
         for l in &model.charla[ini..fin] {
             let color = if l.yo { ACENTO } else { TEXTO };

@@ -42,3 +42,9 @@ llimphi-ui = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
 llimphi-clipboard = { workspace = true }
+# Embellecimiento: paleta de movimiento (animaciones de entrada de tiles),
+# estado vacío de la charla, avisos efímeros (toasts) e iconos.
+llimphi-theme = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
+llimphi-icons = { workspace = true }
