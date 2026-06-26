@@ -10,6 +10,9 @@ use llimphi_ui::llimphi_layout::taffy::{AlignItems, FlexDirection, JustifyConten
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 use llimphi_theme::Theme;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_icons::Icon;
 
 /// Ancho de la columna de historial a la izquierda (px).
 const HISTORY_W: f32 = 220.0;
@@ -182,24 +185,20 @@ pub(super) fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
 
     let mut children = vec![header];
     if grupos.is_empty() {
+        // Empty-state con icono en vez de una línea tenue: el panel de historial
+        // vacío comunica de qué se trata y se siente intencional.
         children.push(
             View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
-                padding: Rect {
-                    left: length(12.0_f32),
-                    right: length(8.0_f32),
-                    top: length(0.0_f32),
-                    bottom: length(0.0_f32),
-                },
-                align_items: Some(AlignItems::Center),
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                flex_grow: 1.0,
                 ..Default::default()
             })
-            .text_aligned(
-                "(sin comandos aún)".to_string(),
-                11.0,
-                theme.fg_muted,
-                Alignment::Start,
-            ),
+            .children(vec![empty_view::<Msg>(
+                Icon::Code,
+                "Sin comandos aún",
+                Some("Lo que ejecutes aparece acá."),
+                &EmptyPalette::from_theme(theme),
+            )]),
         );
     } else {
         for (cmd, count) in grupos {
@@ -368,12 +367,42 @@ fn explorer_panel_remote(model: &Model, cwd: &str, theme: &Theme) -> View<Msg> {
                 }
             }
             ExplorerState::Error(err) => filas.push(explorer_note(&format!("✘ {err}"), theme)),
-            _ => filas.push(explorer_note("cargando…", theme)),
+            _ => filas.push(explorer_skeleton(theme)),
         }
     } else {
-        filas.push(explorer_note("cargando…", theme));
+        filas.push(explorer_skeleton(theme));
     }
     explorer_column(filas)
+}
+
+/// Placeholders con shimmer mientras el Explorer remoto trae el listado por
+/// SSH: el usuario ve la forma de la lista que viene, no un hueco con texto.
+fn explorer_skeleton(theme: &Theme) -> View<Msg> {
+    let pal = SkeletonPalette::from_theme(theme);
+    let rows: Vec<View<Msg>> = (0..8)
+        .map(|_| {
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                padding: Rect {
+                    left: length(12.0_f32),
+                    right: length(12.0_f32),
+                    top: length(6.0_f32),
+                    bottom: length(6.0_f32),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .radius(4.0)
+            .clip(true)
+            .children(vec![skeleton_view(&pal)])
+        })
+        .collect();
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .children(rows)
 }
 
 /// Header del Explorer remoto: título + botón ↻ para re-listar.

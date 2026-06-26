@@ -39,6 +39,11 @@ llimphi-widget-splitter = { workspace = true }
 # Árbol de paneles BSP (tiling tipo zellij) del canvas de cada sesión.
 llimphi-widget-panes = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
+# Modernización visual: skeleton shimmer mientras el Explorer remoto lista,
+# empty-state del historial vacío, e iconos vectoriales para ese empty-state.
+llimphi-widget-skeleton = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-icons = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 # Dropdown/select para la config de la sesión (aislamiento + distro).

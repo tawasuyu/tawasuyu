@@ -6,6 +6,7 @@ use super::tools::*;
 use super::widgets::*;
 use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, Style};
 use llimphi_ui::llimphi_layout::taffy::{FlexDirection, Size};
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::{DragPhase, View};
 use llimphi_theme::Theme;
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
@@ -136,11 +137,19 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
     // Panel de herramienta a la derecha del rail-tool, resizable.
     let mut core = inner;
     if let Some(tool) = model.active_tool {
+        // Transición de escena: al cambiar de herramienta (tab) la `scene_key`
+        // cambia y el panel entra con fade + slide-up suave, en vez de saltar.
+        let scene = Tool::ALL.iter().position(|x| *x == tool).unwrap_or(0) as u64;
+        let panel = tool_panel(model, tool, theme).animated_enter_from(
+            scene,
+            motion::SLOW,
+            Affine::translate((0.0, 24.0)),
+        );
         core = splitter_two(
             Direction::Row,
             core,
             PaneSize::Flex,
-            tool_panel(model, tool, theme),
+            panel,
             PaneSize::Fixed(model.monitors_width),
             |phase, dx| match phase {
                 DragPhase::Move => Some(Msg::SetToolWidth(dx)),
