@@ -39,6 +39,7 @@
 //! recompilar, así que un botón no alcanza.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -62,6 +63,7 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use llimphi_motion::{animate, motion, Tween};
 
 use app_bus::{AppMenu, Menu, MenuItem};
@@ -401,6 +403,10 @@ struct Model {
     /// el panel de descarga (campo de directorio + botón Descargar) en
     /// lugar del juego; `None` ⇒ el motor ya booteó con un WAD válido.
     acquire: Option<AcquireState>,
+    /// Toasts efímeros (≈4 s) — feedback de acciones reales como el boot
+    /// del motor tras descargar el WAD. Se renderizan como overlay sobre
+    /// todo lo demás.
+    toasts: Vec<Toast>,
 }
 
 /// Fase 3.46: tipo de marca de impacto.
@@ -507,6 +513,28 @@ const PITCH_STEP: f32 = 0.105;
 /// real: esto mueve el horizonte (y-shear cosmético del renderer).
 const MOUSE_LOOK_SENS: f32 = 0.0035;
 
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la
+/// misma escena produce siempre la misma key entre rebuilds, así sólo la
+/// primera aparición anima).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Empuja un toast al stack y programa su expiración a los `TOAST_TTL`.
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
 #[derive(Clone)]
 enum Msg {
     /// Tick del motor Doom (35 Hz). Avanza la simulación + captura
@@ -582,6 +610,8 @@ enum Msg {
     /// Botón **Jugar**: bootea con un WAD ya presente en el directorio
     /// (sin descargar). Útil si el usuario lo copió a mano.
     PlayExisting,
+    /// Un toast cumplió su `TOAST_TTL`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 struct Supay;
@@ -667,6 +697,7 @@ impl App for Supay {
             wgpu_renderer: Arc::new(Mutex::new(None)),
             faces: load_faces(),
             acquire,
+            toasts: Vec::new(),
         }
     }
 
@@ -1124,11 +1155,21 @@ impl App for Supay {
                 m.audio = audio;
                 m.last_tick_at = Instant::now();
                 m.acquire = None;
+                // El panel de descarga desaparece de golpe; un toast confirma
+                // que el WAD entró y el motor arrancó.
+                let id = key_of(&format!("boot:{}", path.display()));
+                push_toast(&mut m, handle, Toast::success(id, "WAD cargado — iniciando DOOM", TOAST_TTL));
             }
             Msg::DownloadErr(e) => {
                 if let Some(acq) = m.acquire.as_mut() {
-                    acq.status = DownloadStatus::Failed(e);
+                    acq.status = DownloadStatus::Failed(e.clone());
                 }
+                // Además del estado inline en el panel, un toast efímero para
+                // que el error no pase desapercibido.
+                push_toast(&mut m, handle, Toast::error(key_of("dlerr"), format!("Descarga fallida: {e}"), TOAST_TTL));
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
             }
         }
         m
@@ -1239,7 +1280,7 @@ impl App for Supay {
         // que recibe el handler ya son coords de ventana, justo lo que el
         // menú contextual espera como ancla. Por eso lo anclamos acá y no
         // en el `body` (que está desplazado por menubar + header).
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -1249,7 +1290,24 @@ impl App for Supay {
         })
         .fill(COLOR_BG_ABYSS)
         .children(vec![menubar, header, body, footer])
-        .on_right_click_at(|x, y, _, _| Some(Msg::ContextMenuOpen(x, y)))
+        .on_right_click_at(|x, y, _, _| Some(Msg::ContextMenuOpen(x, y)));
+
+        // Overlay de toasts (bottom-right) por encima del juego. Sólo se
+        // monta cuando hay alguno vivo; al expirar `is_alive` los filtra.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, viewport_of(model), Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -1944,7 +2002,11 @@ fn hud_overlay(model: &Model) -> Option<View<Msg>> {
             (0.95, 0.85, 0.30),
         ),
         stat("ARMA", weapon.to_string(), (0.82, 0.80, 0.74)),
-    ]);
+    ])
+    // Pop-in del HUD al entrar a un nivel: la barra aparece con un
+    // fade-in en vez de saltar. Key estable ⇒ reanima cada vez que se
+    // entra a un mapa nuevo (entremedio el HUD desaparece y la key se va).
+    .animated_enter(key_of("hud"), motion::NORMAL);
 
     // Contenedor full-window que empuja la barra al fondo.
     Some(
@@ -2174,6 +2236,10 @@ fn acquire_pane(acq: &AcquireState, theme: &Theme) -> View<Msg> {
     })
     .fill(COLOR_BG_PANEL)
     .children(vec![banner, body, foot])
+    // La pantalla de adquisición es el empty-state de arranque: entra con
+    // un fade-in suave en vez de aparecer de golpe. Key estable ⇒ sólo la
+    // primera aparición anima.
+    .animated_enter(key_of("acquire"), motion::NORMAL)
 }
 
 // =====================================================================

@@ -18,6 +18,9 @@ llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+# Toasts efímeros: feedback de acciones reales (WAD descargado y motor
+# booteado en caliente desde la pantalla de adquisición).
+llimphi-widget-toast = { workspace = true }
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 # Descarga in-app del WAD shareware: HTTP síncrono minimalista que corre en
