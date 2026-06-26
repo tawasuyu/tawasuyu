@@ -202,6 +202,8 @@ pub(super) enum MenuKind {
     Volume,
     /// El menú de sesión/energía (bloquear/suspender/reiniciar/apagar/logout).
     Session,
+    /// El applet de Bluetooth (switch + dispositivos emparejados).
+    Bluetooth,
 }
 
 /// El cliente Wayland del backend layer-shell.
@@ -251,6 +253,10 @@ pub(super) struct LayerApp {
     pub(super) mpris: Option<crate::mpris::MprisHandle>,
     /// Último estado del reproductor.
     pub(super) media_now: Option<crate::mpris::MediaState>,
+    /// Feed de Bluetooth en su propio hilo.
+    pub(super) bluetooth: Option<crate::bluetooth::BluetoothHandle>,
+    /// Última lectura de Bluetooth.
+    pub(super) bluetooth_now: Option<crate::bluetooth::BtState>,
     /// Índice del panel de la surface dedicada del OSD (volumen/brillo), o `None`.
     pub(super) osd_pi: Option<usize>,
     /// Cartel OSD vigente, o `None`. Se dispara desde la rueda/slider y se oculta
@@ -460,6 +466,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let mpris = (crate::config_tiene_widget(&cfg, "mpris")
         || crate::config_tiene_widget(&cfg, "media_player"))
     .then(crate::mpris::MprisHandle::spawn);
+    let bluetooth = (crate::config_tiene_widget(&cfg, "bluetooth")
+        || crate::config_tiene_widget(&cfg, "bt"))
+    .then(crate::bluetooth::BluetoothHandle::spawn);
     let cava = crate::config_tiene_widget(&cfg, "cava")
         .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
 
@@ -570,6 +579,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         session_confirm: None,
         mpris,
         media_now: None,
+        bluetooth,
+        bluetooth_now: None,
         osd_pi: None,
         osd: None,
         cava,

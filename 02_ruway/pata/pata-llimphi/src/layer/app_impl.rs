@@ -627,6 +627,11 @@ impl LayerApp {
                 self.media_now = Some(m);
             }
         }
+        if let Some(h) = &self.bluetooth {
+            if let Some(b) = h.latest() {
+                self.bluetooth_now = Some(b);
+            }
+        }
         // Mezclador: refresca mientras su popup está abierto (sliders en vivo).
         if self.menu_open && self.menu_kind == MenuKind::Volume {
             self.sink_inputs = crate::sampler::sample_sink_inputs();
@@ -878,6 +883,7 @@ impl LayerApp {
             weather: self.weather_now.as_ref(),
             network: self.network_now.as_ref(),
             media: self.media_now.as_ref(),
+            bluetooth: self.bluetooth_now.as_ref(),
             cava: &self.cava_frame,
             apps: self.registry.all(),
             shuma_full: self.shuma_full.as_ref(),
@@ -996,6 +1002,17 @@ impl LayerApp {
                     &self.theme,
                     self.menu_bar_px as f32,
                     self.session_confirm,
+                    self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
+                ),
+                MenuKind::Bluetooth => render::bluetooth_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    self.bluetooth_now.as_ref(),
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
                     self.panels[idx].width as f32,
                 ),
@@ -1223,6 +1240,16 @@ impl LayerApp {
             Msg::MediaPlayPause => crate::mpris::play_pause(),
             Msg::MediaNext => crate::mpris::next(),
             Msg::MediaPrev => crate::mpris::previous(),
+            Msg::BluetoothToggle => self.toggle_menu(MenuKind::Bluetooth),
+            Msg::BluetoothPower(on) => {
+                crate::bluetooth::set_power(on);
+                if let Some(b) = &mut self.bluetooth_now {
+                    b.powered = on;
+                }
+                self.marcar_menu_dirty();
+            }
+            Msg::BluetoothConnect(mac) => crate::bluetooth::connect(&mac),
+            Msg::BluetoothDisconnect(mac) => crate::bluetooth::disconnect(&mac),
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy < 0.0);

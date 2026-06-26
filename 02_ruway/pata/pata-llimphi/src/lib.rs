@@ -34,6 +34,7 @@ pub mod shuma;
 pub mod shuma_app;
 pub mod toplevel;
 pub mod tray;
+pub mod bluetooth;
 pub mod mpris;
 pub mod network;
 pub mod weather;
@@ -204,6 +205,14 @@ pub enum Msg {
     NetworkPasswordSubmit,
     /// Cancelar la entrada de contraseña (vuelve a la lista de redes).
     NetworkPasswordCancel,
+    /// Desplegar/replegar el applet de Bluetooth.
+    BluetoothToggle,
+    /// Encender/apagar el controlador Bluetooth.
+    BluetoothPower(bool),
+    /// Conectar el dispositivo `mac`.
+    BluetoothConnect(String),
+    /// Desconectar el dispositivo `mac`.
+    BluetoothDisconnect(String),
     /// Desplegar/replegar el menú de sesión/energía.
     SessionToggle,
     /// Pedir confirmación de una acción disruptiva (reiniciar/apagar/logout).
@@ -385,6 +394,10 @@ pub enum SlotWidget {
     /// Controles de reproducción (MPRIS): prev/play-pause/next + título. Dato del
     /// host (vía `playerctl`, ver [`mpris`]). Se oculta si no hay reproductor.
     Media,
+    /// El applet de Bluetooth: un icono que abre un popup con el switch del
+    /// controlador + la lista de dispositivos ([`Msg::BluetoothToggle`]). Dato del
+    /// host (vía `bluetoothctl`, ver [`bluetooth`]).
+    Bluetooth,
 }
 
 /// Las acciones del menú de sesión/energía. El logout pasa por el WM (mirada hace
@@ -792,7 +805,8 @@ impl SurfaceWidgets {
                 | SlotWidget::Control
                 | SlotWidget::Network
                 | SlotWidget::Session
-                | SlotWidget::Media => None,
+                | SlotWidget::Media
+                | SlotWidget::Bluetooth => None,
             })
     }
 }
@@ -880,6 +894,12 @@ pub struct Model {
     pub mpris: Option<mpris::MprisHandle>,
     /// Último estado del reproductor (se refresca cada tick).
     pub media_now: Option<mpris::MediaState>,
+    /// Feed de Bluetooth en su propio hilo. `None` si no hay `bluetooth`.
+    pub bluetooth: Option<bluetooth::BluetoothHandle>,
+    /// Última lectura de Bluetooth (se refresca cada tick).
+    pub bluetooth_now: Option<bluetooth::BtState>,
+    /// `true` cuando el popup de Bluetooth está desplegado (path winit).
+    pub bluetooth_open: bool,
     /// `true` cuando el popup del applet de red está desplegado (path winit).
     pub network_open: bool,
     /// Entrada de contraseña Wi-Fi en curso: `(ssid, tecleado)`. `None` = lista.
@@ -1006,6 +1026,8 @@ impl Model {
                         SlotWidget::Session
                     } else if spec.kind == "mpris" || spec.kind == "media_player" {
                         SlotWidget::Media
+                    } else if spec.kind == "bluetooth" || spec.kind == "bt" {
+                        SlotWidget::Bluetooth
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -1167,6 +1189,8 @@ impl App for PataApp {
             .then(network::NetworkHandle::spawn);
         let mpris = (config_tiene_widget(&cfg, "mpris") || config_tiene_widget(&cfg, "media_player"))
             .then(mpris::MprisHandle::spawn);
+        let bluetooth = (config_tiene_widget(&cfg, "bluetooth") || config_tiene_widget(&cfg, "bt"))
+            .then(bluetooth::BluetoothHandle::spawn);
         let cava = config_tiene_widget(&cfg, "cava").then(|| cava::CavaHandle::spawn(cava_bars(&cfg)));
 
         let mut theme = Theme::dark();
@@ -1211,6 +1235,9 @@ impl App for PataApp {
             network_now: None,
             mpris,
             media_now: None,
+            bluetooth,
+            bluetooth_now: None,
+            bluetooth_open: false,
             network_open: false,
             net_password: None,
             session_open: false,
@@ -1329,6 +1356,11 @@ impl App for PataApp {
                 if let Some(h) = &model.mpris {
                     if let Some(m) = h.latest() {
                         model.media_now = Some(m);
+                    }
+                }
+                if let Some(h) = &model.bluetooth {
+                    if let Some(b) = h.latest() {
+                        model.bluetooth_now = Some(b);
                     }
                 }
                 // Mezclador por app: refresca mientras el popup de volumen está
@@ -1599,6 +1631,23 @@ impl App for PataApp {
             Msg::MediaPlayPause => mpris::play_pause(),
             Msg::MediaNext => mpris::next(),
             Msg::MediaPrev => mpris::previous(),
+            Msg::BluetoothToggle => {
+                model.bluetooth_open = !model.bluetooth_open;
+                if model.bluetooth_open {
+                    model.menu_open = false;
+                    model.clip_open = false;
+                    model.control_open = false;
+                    model.network_open = false;
+                }
+            }
+            Msg::BluetoothPower(on) => {
+                bluetooth::set_power(on);
+                if let Some(b) = &mut model.bluetooth_now {
+                    b.powered = on;
+                }
+            }
+            Msg::BluetoothConnect(mac) => bluetooth::connect(&mac),
+            Msg::BluetoothDisconnect(mac) => bluetooth::disconnect(&mac),
             Msg::ClipboardPick(text) => {
                 sampler::copiar_clipboard(&text);
                 model.clip_open = false;
@@ -1966,6 +2015,14 @@ impl App for PataApp {
         if model.session_open {
             let bar_h = bar_thickness_for(&model.cfg, "session");
             return Some(render::session_overlay(model.session_confirm, bar_h, &model.theme));
+        }
+        if model.bluetooth_open {
+            let bar_h = bar_thickness_for(&model.cfg, "bluetooth");
+            return Some(render::bluetooth_overlay(
+                model.bluetooth_now.as_ref(),
+                bar_h,
+                &model.theme,
+            ));
         }
         if model.clock_open {
             let bar_h = bar_thickness_for(&model.cfg, "clock");

@@ -759,3 +759,13 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     como el buscador del menú de inicio) y `press_key` rutea al buffer; en winit lo
     hace `on_key`. Cierra el último pendiente de la Fase 15. Con esto el **applet de
     red queda completo** (conectar a redes nuevas seguras sin depender del agente).
+  - **Applet de Bluetooth ✅** — el gemelo del de red: widget `bluetooth`/`bt`
+    (runa de BT pintada a mano; acento si hay conexión, tenue/tachada si apagado)
+    que abre un popup con el **switch del controlador** + la lista de **dispositivos
+    emparejados** (la conectada con ✓), click → conectar/desconectar. Dato del host
+    en su hilo vía `bluetoothctl` (`bluetooth.rs`, patrón red). Parsers puros
+    (`parse_powered`/`parse_devices`/`parse_connected`/`build_devices`): 2 tests.
+    winit por overlay, layer-shell por `MenuKind::Bluetooth`. Complementa el toggle
+    rfkill del Control panel (aquel es el switch rápido, este el applet con lista).
+    El **emparejamiento** de un dispositivo nuevo (scan + PIN) queda fuera (flujo
+    de una sola vez con `bluetoothctl`).

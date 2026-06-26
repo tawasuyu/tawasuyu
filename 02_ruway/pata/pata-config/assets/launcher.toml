@@ -83,6 +83,9 @@ kind = "brightness"
 kind = "network"        # applet Wi-Fi/Ethernet: icono de señal + popup de redes (nmcli)
 
 [[surfaces.end]]
+kind = "bluetooth"      # applet Bluetooth: switch + dispositivos emparejados (bluetoothctl)
+
+[[surfaces.end]]
 kind = "tray"
 
 [[surfaces.end]]

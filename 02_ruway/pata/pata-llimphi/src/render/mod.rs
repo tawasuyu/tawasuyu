@@ -41,6 +41,7 @@ use crate::tray::TrayItem;
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 
 // Submódulos internos
+mod bluetooth;
 mod cde;
 mod control;
 mod media;
@@ -59,6 +60,7 @@ pub use panels::{
     brightness_overlay, brightness_panel, clock_menu_view, clock_overlay, clock_panel,
     cpu_overlay, cpu_panel, ram_overlay, ram_panel, volume_overlay, volume_panel,
 };
+pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
 pub use media::media_view;
 pub use network::{network_overlay, network_view};
@@ -92,6 +94,8 @@ pub struct BarData<'a> {
     pub network: Option<&'a crate::network::NetState>,
     /// El último estado del reproductor, para el `mpris`.
     pub media: Option<&'a crate::mpris::MediaState>,
+    /// La última lectura de Bluetooth, para el `bluetooth`.
+    pub bluetooth: Option<&'a crate::bluetooth::BtState>,
     /// El último cuadro del visualizador de audio, para el `cava`.
     pub cava: &'a [f32],
     /// Las apps del registro, para el `program_manager` (grilla estilo Win3.1).
@@ -308,6 +312,7 @@ pub fn root(model: &Model) -> View<Msg> {
         weather: model.weather_now.as_ref(),
         network: model.network_now.as_ref(),
         media: model.media_now.as_ref(),
+        bluetooth: model.bluetooth_now.as_ref(),
         cava: &model.cava_frame,
         apps: model.registry.all(),
         shuma_full: model.shuma_full.as_ref(),
@@ -618,6 +623,7 @@ fn slots_de(
                 SlotWidget::Network => network::network_view(data.network, theme),
                 SlotWidget::Session => session::session_view(theme),
                 SlotWidget::Media => media::media_view(data.media, theme),
+                SlotWidget::Bluetooth => bluetooth::bluetooth_view(data.bluetooth, theme),
             })
             .collect();
         let mut style = Style {
@@ -1455,6 +1461,58 @@ pub fn network_menu_view(
     body_style.flex_grow = 1.0;
     let body = View::new(body_style)
         .on_click(Msg::NetworkToggle)
+        .children(vec![panel_abs]);
+
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// El **applet de Bluetooth** para el **layer-shell**, anclado bajo el icono.
+/// Espejo de [`network_menu_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn bluetooth_menu_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    state: Option<&crate::bluetooth::BtState>,
+    anchor_x: f32,
+    avail_w: f32,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(bar_px) },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
+
+    let left = (anchor_x - bluetooth::PANEL_W * 0.5)
+        .clamp(8.0, (avail_w - bluetooth::PANEL_W - 8.0).max(8.0));
+    let panel_abs = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect { left: length(left), top: length(0.0_f32), right: auto(), bottom: auto() },
+        size: Size { width: length(bluetooth::PANEL_W), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![bluetooth::bluetooth_panel(state, theme)]);
+
+    let mut body_style = Style {
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::BluetoothToggle)
         .children(vec![panel_abs]);
 
     let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
