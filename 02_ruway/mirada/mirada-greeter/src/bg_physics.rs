@@ -36,7 +36,11 @@ fn make_rope(anchor: Point, color: Color) -> Rope {
     let mut phys = Physics::new();
     phys.floor_y = Some(VH - 30.0);
     let mut prev = phys.particle(anchor, true);
-    for i in 1..=SEGS {
+    // SEGS+1 huesos necesitan SEGS+2 puntos: `pose_chain_from_points` pide
+    // `points.len() >= bones.len()+1` (el último hueso toma su ángulo del segmento
+    // hacia el punto siguiente). Sin esa partícula-cola extra el guard cortaba y
+    // el esqueleto nunca seguía a la física → el mesh quedaba en bind pose.
+    for i in 1..=SEGS + 1 {
         let p = phys.particle(Point::new(anchor.x, anchor.y + i as f64 * SEG_LEN), false);
         phys.link(prev, p);
         prev = p;
@@ -135,5 +139,52 @@ pub fn paint_snapshot(snap: &[RopeDraw], scene: &mut Scene, rect: PaintRect) {
         * Affine::scale_non_uniform(rect.w as f64 / VW, rect.h as f64 / VH);
     for (mesh, pos, color) in snap {
         paint_solid(scene, mesh, pos, xform, *color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn produce_geometria_viva_y_finita() {
+        let mut bg = PhysicsBg::new((180, 200, 255));
+        // Snapshot inicial: 8 tentáculos, mallas con triángulos, posiciones finitas.
+        let snap0 = bg.snapshot();
+        assert_eq!(snap0.len(), 8, "deben ser 8 tentáculos");
+        for (mesh, pos, _) in &snap0 {
+            assert!(!mesh.triangles.is_empty(), "la malla debe tener triángulos");
+            assert_eq!(pos.len(), mesh.vertices.len(), "una posición por vértice");
+            assert!(
+                pos.iter().all(|p| p.x.is_finite() && p.y.is_finite()),
+                "posiciones finitas"
+            );
+        }
+        // Tras stepear con viento (~4 s), la física mueve los tentáculos (vivo) y
+        // NO explota a infinito/NaN.
+        for _ in 0..120 {
+            bg.step(1.0 / 30.0);
+        }
+        let snap1 = bg.snapshot();
+        let (a, b) = (snap0[0].1[snap0[0].1.len() - 1], snap1[0].1[snap1[0].1.len() - 1]);
+        assert!(
+            (a.x - b.x).abs() + (a.y - b.y).abs() > 1.0,
+            "la física debe mover los tentáculos (vivo)"
+        );
+        for (_, pos, _) in &snap1 {
+            assert!(
+                pos.iter().all(|p| p.x.is_finite() && p.y.is_finite() && p.x.abs() < 1e5 && p.y.abs() < 1e5),
+                "la física no debe explotar a infinito/NaN"
+            );
+        }
+        // No es la astilla degenerada en (0,0): los tentáculos se reparten a lo
+        // ancho y cuelgan en alto → caja envolvente grande sobre el lienzo virtual.
+        let all: Vec<Point> = snap1.iter().flat_map(|(_, p, _)| p.iter().copied()).collect();
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in &all {
+            x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
+        }
+        assert!(x1 - x0 > VW * 0.5, "los tentáculos deben repartirse a lo ancho (no apilados en 0,0)");
+        assert!(y1 - y0 > VH * 0.3, "los tentáculos deben colgar en alto");
     }
 }

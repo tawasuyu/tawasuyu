@@ -292,6 +292,7 @@ mod tests {
             rain_enabled: true,
             rain_color: RainColor::Amber,
             anim: BgAnim::Stars,
+            lottie_path: None,
         };
         let mut back = GreeterState::default();
         back.merge_text(&st.to_text());

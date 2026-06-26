@@ -201,6 +201,15 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         hosted: shot_hosted,
         hosted_active: shot_hosted_active,
     };
+    // El fondo físico tiene estado: en vivo se stepea en `RainTick`. Para el shot
+    // headless lo avanzamos a `MIRADA_SHOT_T` segundos, si no queda en bind pose.
+    let mut model = model;
+    if let Some(pb) = &mut model.physics_bg {
+        let steps = (model.rain_t.max(0.0) * 120.0) as usize;
+        for _ in 0..steps.min(4000) {
+            pb.step(1.0 / 120.0);
+        }
+    }
     let view = <Greeter as App>::view(&model);
 
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
@@ -1708,6 +1717,9 @@ mod tests {
             rain_enabled: true,
             rain_color: saved.rain_color,
             anim: saved.anim,
+            lottie_bg: None,
+            lottie_path: None,
+            physics_bg: None,
             rain_t: 0.0,
             monitors: mons,
             active_mon: active,
