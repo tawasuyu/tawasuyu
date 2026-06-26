@@ -611,6 +611,8 @@ pub(crate) enum Msg {
     SphereRotate(f32, f32),
     /// Resetea la orientación de la esfera 3D.
     SphereReset,
+    /// Fija una orientación de la esfera 3D (p.ej. el botón "Norte").
+    SphereSetOrient(Quat),
     /// Paneo del lienzo de la rueda (Δx, Δy en píxeles de pantalla) —
     /// emitido por el drag y por la rueda del ratón.
     WheelPan(f32, f32),

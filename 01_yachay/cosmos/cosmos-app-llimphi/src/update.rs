@@ -313,6 +313,10 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             m.sphere_orient = crate::model::default_orient();
             persist = true;
         }
+        Msg::SphereSetOrient(q) => {
+            m.sphere_orient = q.normalize();
+            persist = true;
+        }
         Msg::WheelPan(dx, dy) => {
             m.wheel_pan.0 += dx;
             m.wheel_pan.1 += dy;

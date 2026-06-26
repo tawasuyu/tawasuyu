@@ -23,7 +23,7 @@
 use std::sync::{Arc, Mutex};
 
 use cosmos_render::{LayerKind, Palette, RenderModel, Rgba};
-use llimphi_3d::glam::{Mat4, Quat, Vec3, Vec4};
+use llimphi_3d::glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use llimphi_3d::{
     Billboard, Billboards, Camera3d, Glows, LineVertex, Lines3d, PostFx, PostFxConfig, Renderer3d,
     SkyBackdrop, SkyMapping, SkyParams, Vertex3d,
@@ -247,6 +247,34 @@ pub(crate) fn paint(
 // =====================================================================
 // Geometría (CPU)
 // =====================================================================
+
+/// Orientación "Norte": el polo norte eclíptico (+Y) queda arriba en pantalla y
+/// la dirección del observador (su cénit) mira de frente a la cámara.
+pub(crate) fn north_orient(model: &RenderModel) -> Quat {
+    let eps = Mat4::from_rotation_x(OBLIQUITY_DEG.to_radians());
+    let ramc = ramc_deg(model.midheaven_deg, OBLIQUITY_DEG.to_radians());
+    let mut f = geo_to_gpu(
+        model.geo_latitude_deg,
+        model.geo_longitude_deg,
+        model.geo_longitude_deg,
+        ramc,
+        &eps,
+    )
+    .normalize_or_zero();
+    if f.length_squared() < 1e-6 {
+        f = Vec3::Z;
+    }
+    let mut right = Vec3::Y.cross(f);
+    if right.length_squared() < 1e-6 {
+        right = Vec3::X;
+    }
+    let right = right.normalize();
+    let up = f.cross(right).normalize();
+    // r lleva la base de cámara a mundo (col2 = forward = dir del observador);
+    // orient = r⁻¹ para que camera_from_orient reproduzca exactamente esa base.
+    let r = Mat3::from_cols(right, up, f);
+    Quat::from_mat3(&r).inverse()
+}
 
 /// Cámara del arcball: geometría fija, ojo y "arriba" rotados por `orient⁻¹`.
 /// Equivale a rotar el contenido por `orient` con la cámara fija en +Z.

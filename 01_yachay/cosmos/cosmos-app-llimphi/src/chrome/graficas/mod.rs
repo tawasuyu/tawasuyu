@@ -418,11 +418,11 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
         DragPhase::Move => Some(Msg::SphereRotate(dx, dy)),
         DragPhase::End => None,
     });
-    canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
+    canvas_column(Some(sphere_controls(crate::sphere_gpu::north_orient(render), theme)), canvas, size, fill)
 }
 
 /// Botonera de rotación de la esfera 3D.
-fn sphere_controls(theme: &Theme) -> View<Msg> {
+fn sphere_controls(north: llimphi_3d::glam::Quat, theme: &Theme) -> View<Msg> {
     let step = 15.0_f32;
     let btn = |icon: Icon, msg: Msg| -> View<Msg> {
         View::new(Style {
@@ -461,6 +461,19 @@ fn sphere_controls(theme: &Theme) -> View<Msg> {
         btn(Icon::ArrowUp, Msg::SphereRotate(0.0, -step)),
         btn(Icon::ArrowDown, Msg::SphereRotate(0.0, step)),
         btn(Icon::Refresh, Msg::SphereReset),
+        // "Norte": polo norte arriba + observador de frente a la cámara.
+        View::new(Style {
+            size: Size { width: length(30.0_f32), height: length(24.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .radius(4.0)
+        .fill(theme.bg_panel)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(Msg::SphereSetOrient(north))
+        .text_aligned("N".to_string(), 13.0, theme.fg_text, Alignment::Center),
     ])
 }
 
@@ -491,7 +504,7 @@ fn sphere25_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32
             DragPhase::Move => Some(Msg::SphereRotate(dx, dy)),
             DragPhase::End => None,
         });
-    canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
+    canvas_column(Some(sphere_controls(crate::sphere_gpu::north_orient(render), theme)), canvas, size, fill)
 }
 
 // =====================================================================
