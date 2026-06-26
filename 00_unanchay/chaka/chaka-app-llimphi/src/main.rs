@@ -23,6 +23,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use chaka_codegen::Target;
 use chaka_ir::{Ir, PerformTarget, Stmt};
@@ -35,6 +36,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
@@ -54,6 +56,9 @@ use llimphi_widget_menubar::{
 };
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use llimphi_icons::Icon;
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 
@@ -70,6 +75,8 @@ const EDITOR_VISIBLE_LINES: usize = 60;
 /// accidente. El corpus chaka real no supera ~30 KB; cualquier cosa más
 /// grande probablemente no es un programa COBOL legítimo.
 const MAX_SOURCE_BYTES: usize = 256 * 1024;
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 // Colores de status — verde/ámbar para los chips de status cuando no
 // hay banner canónico (`banner_view` cubre success/error/info).
@@ -119,6 +126,8 @@ pub(crate) enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -220,6 +229,10 @@ pub(crate) struct Model {
     edit_active: usize,
     /// Animación de aparición del menú de edición.
     edit_anim: Tween<f32>,
+    /// Toasts vivos (confirmaciones de transpilar/guardar, errores).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
 }
 
 pub(crate) struct ChakaApp;
@@ -267,6 +280,8 @@ impl App for ChakaApp {
             menu_anim: Tween::idle(1.0),
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
+            toasts: Vec::new(),
+            next_toast: 0,
         };
         // Cargamos el idioma persistido en wawa-config.
         let wawa_cfg = wawa_config::WawaConfig::load();
@@ -294,8 +309,26 @@ impl App for ChakaApp {
                 active_tab: t,
                 ..model
             },
-            Msg::Run => recompute(model),
-            Msg::Save => save_open(model),
+            Msg::Run => {
+                let mut m = recompute(model);
+                if let Some(toast) = run_toast(&mut m) {
+                    push_toast(&mut m, handle, toast);
+                }
+                m
+            }
+            Msg::Save => {
+                let had_open = model.open.is_some();
+                let mut m = save_open(model);
+                let toast = if !had_open {
+                    Toast::warning(toast_id(&mut m), m.status.clone(), TOAST_TTL)
+                } else if m.dirty {
+                    Toast::error(toast_id(&mut m), m.status.clone(), TOAST_TTL)
+                } else {
+                    Toast::success(toast_id(&mut m), m.status.clone(), TOAST_TTL)
+                };
+                push_toast(&mut m, handle, toast);
+                m
+            }
             Msg::CycleTheme(t) => {
                 let mut m = model;
                 m.theme = t;
@@ -361,6 +394,11 @@ impl App for ChakaApp {
                 m.edit_menu = None;
                 m.menu_active = usize::MAX;
                 m.edit_active = usize::MAX;
+                m
+            }
+            Msg::ToastExpire(id) => {
+                let mut m = model;
+                m.toasts.retain(|t| t.id != id);
                 m
             }
         }
@@ -446,7 +484,7 @@ impl App for ChakaApp {
         // El right-click se engancha en la raíz (origen 0,0 → las coords
         // locales que llegan ya son de ventana) y abre el menú de edición
         // sobre el editor del .cob.
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -456,7 +494,24 @@ impl App for ChakaApp {
         })
         .fill(theme.bg_app)
         .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-        .children(vec![menubar, header, body, status])
+        .children(vec![menubar, header, body, status]);
+
+        // Overlay de toasts (bottom-right). Sólo si hay alguno vivo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            let (w, h) = Self::initial_size();
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, (w as f32, h as f32), Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
@@ -741,25 +796,11 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
 
     let t = rimay_localize::t;
     let tree = if rows.is_empty() {
-        View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
-            },
-            padding: Rect {
-                left: length(12.0_f32),
-                right: length(12.0_f32),
-                top: length(12.0_f32),
-                bottom: length(12.0_f32),
-            },
-            ..Default::default()
-        })
-        .fill(theme.bg_panel)
-        .text_aligned(
+        empty_view::<Msg>(
+            Icon::Code,
             t("chaka-corpus-empty"),
-            12.0,
-            theme.fg_muted,
-            Alignment::Start,
+            None,
+            &EmptyPalette::from_theme(theme),
         )
     } else {
         tree_view::<Msg>(TreeSpec {
@@ -866,12 +907,29 @@ fn output_tabs(model: &Model, theme: &Theme) -> View<Msg> {
     let active = model.active_tab.index();
     let palette = TabsPalette::from_theme(theme);
 
-    let content = match model.active_tab {
+    let pane = match model.active_tab {
         OutputTab::Salida => salida_pane(model, theme),
         OutputTab::Rust => viewer_pane(&model.view_rust, theme, Language::Rust),
         OutputTab::Ir => viewer_pane(&model.view_ir, theme, Language::Plain),
         OutputTab::Diag => viewer_pane(&model.view_diag, theme, Language::Plain),
     };
+    // Transición de escena: al cambiar de tab la `scene_key` cambia y el
+    // panel entra con fade + slide-up suave en vez de saltar de golpe.
+    let content = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![pane])
+    .animated_enter_from(
+        model.active_tab.index() as u64,
+        motion::SLOW,
+        Affine::translate((0.0, 24.0)),
+    );
 
     let tabs = tabs_view::<Msg, _>(TabsSpec {
         labels,
@@ -1021,6 +1079,52 @@ fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
         theme.fg_muted,
         Alignment::Start,
     )
+}
+
+// ── Toasts ────────────────────────────────────────────────────────────────
+
+/// Reserva un id incremental para un toast nuevo.
+fn toast_id(model: &mut Model) -> u64 {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    id
+}
+
+/// Empuja un toast al stack y programa su expiración tras `TOAST_TTL`.
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Toast resumen del último pipeline corrido por `Run` (no en cada tecla).
+/// `None` cuando no hay archivo cargado todavía (nada que reportar).
+fn run_toast(model: &mut Model) -> Option<Toast> {
+    let t = rimay_localize::t;
+    Some(match model.pipe.summary {
+        PipelineSummary::Idle => return None,
+        PipelineSummary::Ok { lines, match_ok } => {
+            let text = match match_ok {
+                Some(true) => format!("✓ shadow OK · {lines} líneas · coincide con .expected"),
+                Some(false) => format!("✗ shadow ≠ .expected · {lines} líneas"),
+                None => format!("✓ shadow ▸ {lines} líneas"),
+            };
+            if match_ok == Some(false) {
+                Toast::error(toast_id(model), text, TOAST_TTL)
+            } else {
+                Toast::success(toast_id(model), text, TOAST_TTL)
+            }
+        }
+        PipelineSummary::StepLimit => {
+            Toast::warning(toast_id(model), t("chaka-banner-step-limit"), TOAST_TTL)
+        }
+        PipelineSummary::PipelineError => {
+            Toast::error(toast_id(model), t("chaka-banner-pipeline-error"), TOAST_TTL)
+        }
+    })
 }
 
 // ── Mutaciones de estado ──────────────────────────────────────────────────
