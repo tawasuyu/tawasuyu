@@ -34,15 +34,20 @@ fn sock_path() -> PathBuf {
 /// Coordina el traspaso de la pantalla con `arje-splash` si está presente.
 /// Bloquea hasta recibir `RELEASED` o agotar el timeout. No falla nunca: ante
 /// cualquier problema, vuelve y mirada sigue su arranque normal.
-pub fn esperar_release_del_splash() {
+///
+/// Devuelve `true` **sólo** si hubo un splash que soltó la pantalla con
+/// `RELEASED`. Ese booleano decide si mirada hereda el panel encendido del
+/// splash (`disable_connectors=false`, sin re-modeset) o hace un takeover limpio
+/// desde cero (`true`) — el caso del cold boot / arranque a mano sin splash.
+pub fn esperar_release_del_splash() -> bool {
     let path = sock_path();
     let Ok(mut stream) = UnixStream::connect(&path) else {
         // Sin splash escuchando — caso normal si arrancás mirada a mano.
-        return;
+        return false;
     };
     println!("[handoff] arje-splash presente — pido la pantalla y espero RELEASED");
     if stream.write_all(format!("{MSG_READY}\n").as_bytes()).is_err() {
-        return;
+        return false;
     }
     let _ = stream.flush();
     let _ = stream.set_read_timeout(Some(WAIT));
@@ -50,9 +55,11 @@ pub fn esperar_release_del_splash() {
     match stream.read(&mut tmp) {
         Ok(n) if n > 0 && String::from_utf8_lossy(&tmp[..n]).contains(MSG_RELEASED) => {
             println!("[handoff] RELEASED — el splash soltó el DRM, tomo la pantalla");
+            true
         }
         _ => {
             println!("[handoff] sin RELEASED a tiempo — sigo igual (degradación elegante)");
+            false
         }
     }
 }

@@ -221,6 +221,12 @@ desaparece, `queue_frame` cae a **0 ms**, `device-listo` a **3 ms**, y el GAP
 total baja de ~1500 ms a **389 ms**. Queda un parpadeo de un cuadro (page-flip
 entre el framebuffer del splash y el de mirada) apenas perceptible.
 
+`disable_connectors=false` se aplica **sólo cuando hubo handoff** del splash
+(`esperar_release_del_splash()` devuelve `true` al recibir `RELEASED`). Sin
+splash —cold boot o `mirada --drm` a mano— se mantiene `true`: takeover limpio
+desde cero, el comportamiento de siempre del escritorio normal. Así heredar el
+panel encendido es una optimización del camino con splash, sin tocar el resto.
+
 ### Incremento 3 — splash keep-alive: sin hueco de framebuffer (hecho)
 
 El parpadeo residual del Incremento 2 era un **hueco de framebuffer**: el splash

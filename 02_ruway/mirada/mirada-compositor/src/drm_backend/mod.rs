@@ -696,7 +696,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // siempre** → el modeset de `DrmDevice::new` cae con `EACCES`. Abriendo
     // después del `RELEASED`, el master ya está libre y seatd lo concede limpio.
     // Best-effort: sin splash, `esperar_release` vuelve enseguida y seguimos.
-    crate::handoff::esperar_release_del_splash();
+    let hubo_handoff = crate::handoff::esperar_release_del_splash();
 
     // 3 · Dispositivo DRM (con el master ya libre tras el handoff).
     println!("[3/8] abriendo el dispositivo DRM …");
@@ -709,17 +709,19 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // kernel todavía está finalizando la liberación del master del splash, el
     // primer `DrmDevice::new` puede ver `EACCES`. Reintentamos con backoff
     // corto; sin splash (arranque a mano) entra al primer intento.
-    // `disable_connectors=false`: NO apagamos los conectores al abrir el device.
-    // El splash dejó el panel encendido con su último frame (el `BG` común) y el
-    // modo vigente; heredarlo deja la pantalla viva y hace que el primer commit
-    // de mirada sea un page-flip dentro de ese modo, no un modeset que apague y
-    // re-encienda el eDP. Con `true` (apagar conectores) el panel quedaba en
-    // negro profundo ~734 ms hasta el power-on del primer commit — el re-modeset
-    // que el SDD-ARRANQUE-SIN-PARPADEO pide evitar. Ver §Fase 2.
+    // `disable_connectors`: sólo lo desactivamos (=false) cuando **hubo handoff**
+    // del splash. En ese caso el splash dejó el panel encendido con su último
+    // frame (el `BG` común) y el modo vigente; heredarlo deja la pantalla viva y
+    // hace que el primer commit de mirada sea un page-flip dentro de ese modo,
+    // no un modeset que apague y re-encienda el eDP (negro profundo ~734 ms — el
+    // re-modeset que el SDD-ARRANQUE-SIN-PARPADEO pide evitar). Sin splash (cold
+    // boot / arranque a mano) mantenemos `true`: takeover limpio desde cero, que
+    // es el comportamiento de siempre del escritorio normal. Ver §Fase 2.
+    let disable_connectors = !hubo_handoff;
     let (mut drm, drm_notifier) = {
         let mut intento = 0u32;
         loop {
-            match DrmDevice::new(drm_fd.clone(), false) {
+            match DrmDevice::new(drm_fd.clone(), disable_connectors) {
                 Ok(par) => break par,
                 Err(_) if intento < 20 => {
                     if intento == 0 {
