@@ -566,11 +566,17 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     un único `sync_host_active` al cierre de su `update` empuja el índice de
     `active_tool` en `Tool::ALL` (con guarda anti-redundancia, sin escribir el
     socket en cada tick). Round-trip server↔client testeado (`tests/roundtrip.rs`)
-    + wire de `SetActive`. media/pluma/cosmos pueden adoptarlo igual cuando se
-    quiera (llamar `set_active` al togglear su panel).
-  - **Pendiente opcional**: re-registro de dientes al reordenar el dock (hoy se
-    registran una vez al init; el lado de activación se computa en vivo, así que el
-    drop entre lados sigue funcionando).
+    + wire de `SetActive`. **media/pluma/cosmos también lo adoptan ✅**
+    (2026-06-26): cada una mapea su panel desplegado a un diente — cosmos el
+    `DockItem` del lado expandido, pluma su `diente_activo`, media el primero
+    abierto entre Config/Cola/Visualizadores/Ayuda (su modelo tiene varios toggles
+    independientes y el protocolo resalta uno solo).
+  - **Re-registro de dientes al reordenar el dock ✅** (2026-06-26): los dientes
+    de cosmos SON sus `DockItem`s; al moverlos (`dock_move`) la lista cambia y el
+    `Register` inicial quedaba viejo. `sync_host_teeth` (en cosmos) compara la
+    firma del dock con lo último publicado (`host_teeth_synced`) y re-emite con
+    `HostClient::update` sólo al cambiar. Las demás apps tienen dientes fijos
+    (shuma=`Tool::ALL`, pluma/media listas constantes), así que no lo necesitan.
 
 - **Fase 13 — barras embellecidas + widgets interactivos** (2026-06-05):
   - **Apariencia configurable** (`pata-core`): `Surface` gana `opacity`
