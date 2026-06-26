@@ -292,6 +292,74 @@ construir ese «motor de transición fullscreen» una vez (un `Transition { kind
 dur, texture }` que el render consume) y colgar de él tanto el CRT como el hero. Todo
 **por verificar en metal** (shaders GLES sobre DRM).
 
+## Capa de embellecimiento — efectos + movimiento configurables (glassmorphism)  💡 IDEA (sin construir)
+
+Brainstorm 2026-06-26. La idea grande: **una capa de motion+efectos transversal**, no
+efectos sueltos; todo prendible/calibrable desde wawa-panel, con un **preset
+«glassmorphism»** que los agrupa. **No se parte de cero** — ya hay dos cimientos:
+
+1. **`WindowEffects` (Tier-2 declarativo, ya existe):** `BrainCommand::SetEffects` →
+   `BodyOp::SetEffects` → `ManagedWindow.effects`. Hoy lleva `opacity: u8` + `shadow:
+   bool` y el render ya los aplica por-ventana. **Es additivo:** efectos nuevos =
+   campos nuevos de `WindowEffects`, sin tocar el enum del protocolo (ese fue el
+   diseño). Acá cuelgan los efectos **por-ventana**.
+2. **Animación por tiempo en el `render` (ya existe):** el slide de Win+Tab
+   (ease-out cúbico), el vuelo de cámara del Prezi, los menús del greeter (`Tween`).
+   El patrón —`t = (now - t0)/dur`, curva, aplicar— ya está; falta **unificarlo y
+   exponer su calibración**.
+
+### Plan en tres piezas
+
+**A) `MotionConfig` — el movimiento, calibrable.** Un struct en `Config` (sección
+«Movimiento» del `Schema` → aparece solo en wawa-panel, como «Inactividad») con
+duración + curva por tipo de transición: apertura/cierre de ventana, foco, cambio de
+escritorio, lock, dpms (CRT, arriba), menús. Una enum `Easing` (`Linear`,
+`EaseOutCubic`, `Spring`, …) compartida. Un toggle maestro «reducir movimiento»
+(a11y) que pone todo en 0 ms. Lo que hoy está hardcodeado (slide_ms ya es config;
+el resto no) pasa a leerse de acá. **Movimientos nuevos** que faltan: *pop* al abrir
+ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir foco.
+
+**B) `WindowEffects` ampliado — el aspecto, por-ventana.** Campos nuevos (additivos):
+`blur: u8` (intensidad del desenfoque de fondo), `corner_radius: u8` (esquinas
+redondeadas), `border_tint`/`border_alpha` (filo sutil), `dim_unfocused` (atenuar las
+no-enfocadas). El Cerebro los fija por regla (`Rules` por `app_id`) o globalmente; el
+render los aplica. **Esquinas redondeadas** y **opacidad/sombra** son baratas (ya hay
+sombra; falta el rounded — un mask en el shader del quad). 
+
+**C) Glassmorphism — el efecto caro, el que da el «wow».** Desenfoque gaussiano en
+tiempo real **detrás** de las superficies translúcidas (barras, marcos, menús, el
+dock `pata`, las tarjetas del greeter). El compositor **puede**: ya captura su frame a
+`Offscreen<GlesTexture>` (screencopy). Técnica estándar (KDE/Hyprland): downsample →
+2–N pasadas de blur separable → upsample → componer con tinte + filo. **Es el costo
+GPU real** (varias pasadas por frame, por región blureada). Mitigaciones: blur sólo de
+la franja detrás de cada panel (no fullscreen), cachear si el fondo no cambió, y un
+toggle de calidad (off / 1 pasada / N). **Hay tanteos previos** (un `backdrop_blur.png`
+suelto en la raíz del repo). El «tema glassmorphism» de wawa-panel sería un **preset**
+que enciende de una: translucidez + blur + rounded + sombra suave + filo — encima del
+campo `theme` actual.
+
+### Factibilidad por costo
+- **Barato (casi gratis, mayormente ya está):** opacidad, sombra, duraciones+curvas
+  configurables, dim de no-enfocadas, *fade* abrir/cerrar. Reusa `WindowEffects` +
+  `MotionConfig`.
+- **Medio:** esquinas redondeadas (mask en shader), *pop*/*spring* de apertura, glow
+  de foco, el motor de transición fullscreen (CRT) de la sección anterior.
+- **Caro (verificar bien en metal):** glassmorphism (blur en vivo) — vale el «wow»
+  pero cuesta GPU; debe ser opt-in y con control de calidad. Apps de vídeo/juegos
+  deberían poder pedir «sin blur» (se cruza con el idle-inhibitor: si inhibe idle,
+  probablemente quiere cero efectos encima).
+
+### Reglas de oro (para no romper lo bueno)
+- **Todo apagable y byte-idéntico en off:** el camino sin efectos no debe cambiar (como
+  el throttle de frames o el gate de FUS). Defaults conservadores.
+- **El compositor compone en GLES, no en Llimphi** — estos efectos son shaders del
+  path DRM. Lo que SÍ es Llimphi: las tarjetas del greeter, el dock `pata`, los HUD
+  (ahí el glassmorphism se pinta del lado cliente con `wgpu/vello`).
+- **Una sola fuente de config:** `Config` (schema → wawa-panel) para lo global +
+  `Rules`/`WindowEffects` para lo por-app. Nada de envs sueltas nuevas.
+- **Certificar con stats, no con PNG de rutina** (regla 8): conteos de pasadas,
+  ms/frame, diffs de píxeles. El render-y-mirar, sólo para el «wow» final.
+
 ## Fast user switching (FUS) — multiplexar >1 sesión  🔨 EN CURSO (1ª rebanada, 2026-06-26)
 
 **Idea rectora:** el compositor ya se quedaba con sus privilegios y rebajaba los
