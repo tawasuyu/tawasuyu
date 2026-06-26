@@ -460,6 +460,7 @@ members = [
     "02_ruway/shuma/shuma-gateway",
     "02_ruway/takiy/takiy-core",
     "02_ruway/takiy/takiy-editor-core",
+    "02_ruway/takiy/takiy-proyecto",
     "02_ruway/takiy/takiy-synth",
     "02_ruway/takiy/takiy-midi",
     "02_ruway/takiy/takiy-playback",
