@@ -235,6 +235,8 @@ fn modelo_demo() -> Model {
         sphere_yaw: 26.0,
         sphere_pitch: -64.0,
         sphere_gpu: sphere_gpu::slot(),
+        host_active_synced: None,
+        host_teeth_synced: Vec::new(),
         sky_nadir: false,
         wheel_zoom: 1.0,
         wheel_pan: (0.0, 0.0),

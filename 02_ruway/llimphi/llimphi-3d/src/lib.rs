@@ -48,7 +48,7 @@ mod voxel_renderer;
 pub use billboard::{Billboard, Billboards};
 pub use camera::Camera3d;
 pub use cinema::{CamKey, CameraTrack};
-pub use sky::{SkyBackdrop, SkyParams};
+pub use sky::{SkyBackdrop, SkyMapping, SkyParams};
 pub use dimensions::{Dimension, Multiverse};
 pub use hud::{Hud, HudQuad};
 pub use mesh::{cube, push_cube, Vertex3d, CUBE_INDICES};

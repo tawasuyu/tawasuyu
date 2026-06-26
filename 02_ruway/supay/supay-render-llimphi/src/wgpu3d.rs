@@ -770,6 +770,8 @@ impl DoomGpuRenderer {
                 v_scale: 1.8,
                 pitch_scale: 0.6,
                 v_offset: 0.0,
+                // Doom casi no cabecea: el mapeo cilíndrico es exacto y barato.
+                mapping: llimphi_3d::SkyMapping::Cylindrical,
             },
         );
 

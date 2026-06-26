@@ -19,6 +19,24 @@
 
 use crate::scene::DEPTH_FORMAT;
 
+/// Cómo se proyecta el panorama sobre la pantalla.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SkyMapping {
+    /// **Cilíndrico** (estilo Doom): la columna muestrea por el azimut y la fila
+    /// se desplaza linealmente con el `pitch`. Barato y exacto para una cámara
+    /// que casi no cabecea (FPS), pero **degenera** si la cámara mira muy
+    /// arriba/abajo (la textura se sale de pantalla y el borde se estira en
+    /// rayas verticales). Usa `wraps`/`v_scale`/`pitch_scale`/`v_offset`.
+    #[default]
+    Cylindrical,
+    /// **Esférico** (equirectangular): por cada píxel se reconstruye el rayo de
+    /// cámara desde `yaw`/`pitch`/`fov_x`/`aspect` y se mapea a la textura por
+    /// (azimut, elevación). Correcto a cualquier cabeceo y bloqueado al mundo
+    /// como la geometría — el cielo es una esfera de fondo, no una franja. Los
+    /// campos `wraps`/`v_scale`/`pitch_scale`/`v_offset` se ignoran.
+    Spherical,
+}
+
 /// Parámetros del cielo por frame. `yaw`/`pitch`/`fov_x` salen de la cámara;
 /// el resto modela cómo se mapea la textura.
 #[derive(Clone, Copy, Debug)]
@@ -41,6 +59,8 @@ pub struct SkyParams {
     pub pitch_scale: f32,
     /// Offset vertical fijo añadido a la coordenada de textura.
     pub v_offset: f32,
+    /// Proyección del panorama. Ver [`SkyMapping`].
+    pub mapping: SkyMapping,
 }
 
 impl Default for SkyParams {
@@ -54,6 +74,7 @@ impl Default for SkyParams {
             v_scale: 1.0,
             pitch_scale: 1.0,
             v_offset: 0.0,
+            mapping: SkyMapping::Cylindrical,
         }
     }
 }
@@ -159,7 +180,7 @@ impl SkyBackdrop {
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("llimphi-3d-sky-uniform"),
-            size: 32, // 8 × f32
+            size: 48, // 9 × f32 redondeado a múltiplo de 16
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -255,7 +276,11 @@ impl SkyBackdrop {
 
     /// Sube los parámetros del frame. Llamar antes de [`Self::draw`].
     pub fn upload(&self, queue: &wgpu::Queue, p: &SkyParams) {
-        let mut b = Vec::with_capacity(32);
+        let mode = match p.mapping {
+            SkyMapping::Cylindrical => 0.0,
+            SkyMapping::Spherical => 1.0,
+        };
+        let mut b = Vec::with_capacity(48);
         for v in [
             p.yaw,
             p.pitch,
@@ -265,6 +290,10 @@ impl SkyBackdrop {
             p.v_scale,
             p.pitch_scale,
             p.v_offset,
+            mode,
+            0.0, // pad a múltiplo de 16
+            0.0,
+            0.0,
         ] {
             b.extend_from_slice(&v.to_ne_bytes());
         }
@@ -289,6 +318,7 @@ const SKY_WGSL: &str = r#"
 struct SkyU {
     yaw: f32, pitch: f32, fov_x: f32, aspect: f32,
     wraps: f32, v_scale: f32, pitch_scale: f32, v_offset: f32,
+    mode: f32, _pad0: f32, _pad1: f32, _pad2: f32,
 };
 @group(0) @binding(0) var<uniform> s: SkyU;
 @group(1) @binding(0) var sky: texture_2d<f32>;
@@ -317,7 +347,34 @@ fn vs(@builtin(vertex_index) vi: u32) -> SOut {
 
 @fragment
 fn fs(in: SOut) -> @location(0) vec4<f32> {
-    // Azimut de la columna: centro = yaw, bordes ± fov/2.
+    if (s.mode > 0.5) {
+        // ---- Esférico (equirectangular): reconstruir el rayo de cámara ----
+        // Base de cámara igual a Camera3d::orbit(target=0): el ojo está en
+        // (cp·sy, sp, cp·cy)·dist y mira al origen, up=+Y.
+        let sy = sin(s.yaw);  let cy = cos(s.yaw);
+        let sp = sin(s.pitch); let cp = cos(s.pitch);
+        let zaxis = normalize(vec3<f32>(cp * sy, sp, cp * cy)); // ojo→origen invertido
+        let xaxis = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), zaxis));
+        let yaxis = cross(zaxis, xaxis);
+        let tan_x = tan(s.fov_x * 0.5);
+        let tan_y = tan_x / s.aspect;
+        let ndc_x = in.scr.x * 2.0 - 1.0;
+        let ndc_y = 1.0 - in.scr.y * 2.0; // arriba = +1
+        // La cámara mira hacia -zaxis (look_at_rh).
+        let dir = normalize(ndc_x * tan_x * xaxis + ndc_y * tan_y * yaxis - zaxis);
+        let az = atan2(dir.x, dir.z);                 // -PI..PI
+        let el = asin(clamp(dir.y, -1.0, 1.0));       // -PI/2..PI/2
+        let u = az / (2.0 * PI) + 0.5;
+        let v = 0.5 - el / PI;                        // arriba(+el) → v=0
+        let col = textureSample(sky, samp, vec2<f32>(u, v));
+        // El equirectangular tiene una singularidad en los polos (cenit/nadir):
+        // todas las columnas colapsan a una fila y la textura se abre en abanico
+        // ("starburst"). Atenuamos el muestreo a oscuro cerca del polo para que
+        // se disuelva en cielo profundo en vez de reventar en rayas radiales.
+        let pole = smoothstep(0.9, 0.998, abs(dir.y));
+        return col * (1.0 - pole);
+    }
+    // ---- Cilíndrico (Doom): azimut por columna, fila por pitch lineal ----
     let colang = s.yaw - (in.scr.x - 0.5) * s.fov_x;
     let su = fract(colang / (2.0 * PI) * s.wraps);
     let sv = clamp(in.scr.y * s.v_scale - s.pitch * s.pitch_scale + s.v_offset, 0.0, 1.0);

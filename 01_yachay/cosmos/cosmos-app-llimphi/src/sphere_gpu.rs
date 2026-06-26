@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use cosmos_render::{LayerKind, Palette, RenderModel, Rgba};
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{
-    Billboard, Billboards, Camera3d, PostFx, PostFxConfig, SkyBackdrop, SkyParams,
+    Billboard, Billboards, Camera3d, PostFx, PostFxConfig, SkyBackdrop, SkyMapping, SkyParams,
 };
 use llimphi_ui::llimphi_hal::wgpu;
 
@@ -111,15 +111,17 @@ impl SphereGpu {
         self.sky.upload(
             queue,
             &SkyParams {
-                // La cámara orbita mirando al origen: azimut = yaw + π.
-                yaw: yaw + std::f32::consts::PI,
-                pitch: -pitch,
+                // Esfera de fondo bloqueada al mundo: mismos yaw/pitch crudos que
+                // alimentan `Camera3d::orbit`, así las estrellas giran solidarias
+                // con los aros y cubren la pantalla a cualquier cabeceo (el mapeo
+                // cilíndrico viejo degeneraba con el pitch -64° por defecto:
+                // bóveda recortada a media pantalla + rayas verticales del borde).
+                yaw,
+                pitch,
                 fov_x,
                 aspect,
-                wraps: 1.0,
-                v_scale: 1.0,
-                pitch_scale: 0.6,
-                v_offset: 0.0,
+                mapping: SkyMapping::Spherical,
+                ..Default::default()
             },
         );
 
@@ -317,9 +319,23 @@ fn starfield_panorama() -> (u32, u32, Vec<u8>) {
         (seed >> 33) as u32
     };
     // Muchas estrellas tenues (luminancia < umbral de bloom → no se inflan).
+    // Cada una es un pequeño blob suave (núcleo + halo a 1px) en vez de un solo
+    // píxel: bajo el muestreo esférico equirectangular la textura se magnifica y
+    // estira mucho cerca del polo (cenit), y un píxel suelto se vería como una
+    // raya dura. Un blob suave se lee como estrella aunque quede estirado.
+    let plot = |data: &mut [u8], x: i64, y: i64, r: u8, g: u8, bl: u8, k: f32| {
+        if y < 0 || y >= H as i64 {
+            return; // v clampea en el borde; no envolver verticalmente
+        }
+        let xx = x.rem_euclid(W as i64) as u32; // u envuelve (panorama 360°)
+        let idx = ((y as u32 * W + xx) * 4) as usize;
+        data[idx] = data[idx].max((r as f32 * k) as u8);
+        data[idx + 1] = data[idx + 1].max((g as f32 * k) as u8);
+        data[idx + 2] = data[idx + 2].max((bl as f32 * k) as u8);
+    };
     for _ in 0..4200 {
-        let x = next() % W;
-        let y = next() % H;
+        let x = (next() % W) as i64;
+        let y = (next() % H) as i64;
         // Brillo bajo-medio: 36..=132 (nunca llega al umbral de bloom 0.8).
         let b = 36 + (next() % 96) as u8;
         let pick = next() % 10;
@@ -330,10 +346,12 @@ fn starfield_panorama() -> (u32, u32, Vec<u8>) {
         } else {
             (b, b.saturating_sub(10), b.saturating_sub(28))
         };
-        let idx = ((y * W + x) * 4) as usize;
-        data[idx] = data[idx].max(r);
-        data[idx + 1] = data[idx + 1].max(g);
-        data[idx + 2] = data[idx + 2].max(bl);
+        // Núcleo pleno + 4 vecinos a media intensidad → estrella redonda y suave.
+        plot(&mut data, x, y, r, g, bl, 1.0);
+        plot(&mut data, x - 1, y, r, g, bl, 0.45);
+        plot(&mut data, x + 1, y, r, g, bl, 0.45);
+        plot(&mut data, x, y - 1, r, g, bl, 0.45);
+        plot(&mut data, x, y + 1, r, g, bl, 0.45);
     }
     (W, H, data)
 }
