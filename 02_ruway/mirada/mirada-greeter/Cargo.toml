@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+# Fondo Lottie configurable (lottie = /ruta.json en greeter.conf).
+llimphi-lottie = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }

@@ -106,6 +106,10 @@ pub struct GreeterState {
     pub rain_color: RainColor,
     /// Qué animación de fondo pintar.
     pub anim: BgAnim,
+    /// Ruta a un `.json` de Lottie a usar como fondo vivo (toma precedencia
+    /// sobre `anim`). `None` = usar la animación procedural. Configurable con
+    /// `lottie = /ruta` en el archivo o `MIRADA_GREETER_LOTTIE`.
+    pub lottie_path: Option<String>,
 }
 
 impl Default for GreeterState {
@@ -118,6 +122,7 @@ impl Default for GreeterState {
             rain_enabled: true,
             rain_color: RainColor::Green,
             anim: BgAnim::Matrix,
+            lottie_path: None,
         }
     }
 }
@@ -170,6 +175,9 @@ impl GreeterState {
                         self.anim = a;
                     }
                 }
+                "lottie" => {
+                    self.lottie_path = if v.is_empty() { None } else { Some(v.to_string()) };
+                }
                 _ => {}
             }
         }
@@ -191,11 +199,14 @@ impl GreeterState {
                 self.anim = a;
             }
         }
+        if let Ok(v) = std::env::var("MIRADA_GREETER_LOTTIE") {
+            self.lottie_path = if v.is_empty() { None } else { Some(v) };
+        }
     }
 
     /// Serializa a `clave = valor`.
     fn to_text(&self) -> String {
-        format!(
+        let mut s = format!(
             "# mirada-greeter — estado recordado\n\
              last_user = {}\n\
              last_session = {}\n\
@@ -207,7 +218,13 @@ impl GreeterState {
             self.rain_enabled,
             self.rain_color.tag(),
             self.anim.tag(),
-        )
+        );
+        // Preservá la ruta del Lottie de fondo si está configurada, para no
+        // borrarla al re-guardar el estado tras un login.
+        if let Some(p) = &self.lottie_path {
+            s.push_str(&format!("lottie = {p}\n"));
+        }
+        s
     }
 
     /// Persiste el estado en el primer candidato escribible. Silencioso: si

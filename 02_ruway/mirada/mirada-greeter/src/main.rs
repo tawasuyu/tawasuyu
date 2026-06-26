@@ -188,6 +188,8 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         rain_enabled: saved.rain_enabled,
         rain_color: saved.rain_color,
         anim: saved.anim,
+        lottie_bg: lottie_bg_from(saved.lottie_path.as_deref()),
+        lottie_path: saved.lottie_path.clone(),
         rain_t: std::env::var("MIRADA_SHOT_T").ok().and_then(|v| v.parse().ok()).unwrap_or(3.2),
         monitors: shot_monitors().0,
         active_mon: shot_monitors().1,
@@ -348,6 +350,18 @@ enum Status {
     Failed(String),
 }
 
+/// Carga el `.json` de Lottie configurado como fondo (si hay y parsea). Falla
+/// con gracia: loguea y devuelve `None` para caer al fondo procedural.
+fn lottie_bg_from(path: Option<&str>) -> Option<llimphi_lottie::LottieAsset> {
+    let path = path?;
+    let txt = std::fs::read_to_string(path)
+        .map_err(|e| eprintln!("greeter · lottie bg «{path}»: {e}"))
+        .ok()?;
+    llimphi_lottie::LottieAsset::from_str(&txt)
+        .map_err(|e| eprintln!("greeter · lottie bg «{path}»: {e}"))
+        .ok()
+}
+
 struct Model {
     auth: DynAuth,
     user: TextInputState,
@@ -378,6 +392,12 @@ struct Model {
     rain_color: state::RainColor,
     /// Qué animación de fondo pintar (enchufable, ver [`bg`]).
     anim: state::BgAnim,
+    /// Fondo Lottie cargado (de `lottie = …` en la config). Si está, toma
+    /// precedencia sobre `anim`/`rain`. `None` si no se configuró o falló.
+    lottie_bg: Option<llimphi_lottie::LottieAsset>,
+    /// Ruta del Lottie de fondo (preservada para re-guardar el estado sin
+    /// borrar la config del usuario).
+    lottie_path: Option<String>,
     /// Reloj del fondo (segundos), avanzado por `Msg::RainTick`.
     rain_t: f32,
     /// Disposición de monitores (rects locales a la ventana, que cubre la unión
@@ -553,6 +573,8 @@ impl App for Greeter {
             rain_enabled: saved.rain_enabled,
             rain_color: saved.rain_color,
             anim: saved.anim,
+            lottie_bg: lottie_bg_from(saved.lottie_path.as_deref()),
+            lottie_path: saved.lottie_path.clone(),
             rain_t: 0.0,
             monitors: Vec::new(),
             active_mon: 0,
@@ -685,6 +707,7 @@ impl App for Greeter {
                     rain_enabled: m.rain_enabled,
                     rain_color: m.rain_color,
                     anim: m.anim,
+                    lottie_path: m.lottie_path.clone(),
                 }
                 .save();
                 let ticket = SessionTicket::new(user);
@@ -1117,7 +1140,15 @@ impl App for Greeter {
             ..Default::default()
         })
         .fill(theme.bg_app);
-        if model.rain_enabled {
+        if let Some(asset) = &model.lottie_bg {
+            // Fondo Lottie vivo: toma precedencia sobre la animación procedural.
+            // Usa el mismo reloj `rain_t` (en loop) que el resto de los fondos.
+            let asset = asset.clone();
+            let t = model.rain_t as f64;
+            root = root.paint_with(move |scene, _ts, rect| {
+                asset.paint_at_time(scene, rect, t);
+            });
+        } else if model.rain_enabled {
             let t = model.rain_t;
             let anim = model.anim;
             let bright = rain_bright(model.rain_color, &theme);
