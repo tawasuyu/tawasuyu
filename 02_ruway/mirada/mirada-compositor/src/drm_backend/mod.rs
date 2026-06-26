@@ -353,23 +353,65 @@ fn mezcla_stops(stops: &[(f32, [u8; 3])], t: f32) -> (u8, u8, u8) {
 /// tamaño es degenerado. El formato es `Argb8888` (little-endian → bytes
 /// `[B, G, R, A]` en memoria); el wallpaper es opaco, así que la
 /// premultiplicación por alfa es identidad.
-/// Compone un frame de **video** (bytes RGBA `fw×fh` del worker) en un buffer
-/// del tamaño de la salida según `fit`, reusando todo el camino de imagen
-/// (`compose_wallpaper`). `None` si las dimensiones no cuadran. Es la única vía
-/// por la que un frame decodificado llega al fondo.
-fn compose_video_frame(
-    rgba: &[u8],
-    fw: u32,
-    fh: u32,
-    fit: mirada_brain::WallpaperFit,
-    w: i32,
-    h: i32,
-) -> Option<MemoryRenderBuffer> {
-    if w <= 0 || h <= 0 || fw == 0 || fh == 0 || rgba.len() < (fw * fh * 4) as usize {
+/// Sube un frame **RGBA** `w×h` (del worker de video) a un `MemoryRenderBuffer`
+/// **a tamaño nativo** — sólo swizzle RGBA→BGRA, **sin reescalar** (el escalado a
+/// la salida lo hace la GPU vía `cover_transform` en el render). Opaco. `None` si
+/// las dimensiones no cuadran.
+fn rgba_native_membuffer(rgba: &[u8], w: u32, h: u32) -> Option<MemoryRenderBuffer> {
+    let (wu, hu) = (w as usize, h as usize);
+    if wu == 0 || hu == 0 || rgba.len() < wu * hu * 4 {
         return None;
     }
-    let img = image::RgbaImage::from_raw(fw, fh, rgba.to_vec())?;
-    compose_wallpaper(&image::DynamicImage::ImageRgba8(img), fit, w, h)
+    let mut bgra = vec![0u8; wu * hu * 4];
+    for (d, s) in bgra.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+        d[0] = s[2]; // B
+        d[1] = s[1]; // G
+        d[2] = s[0]; // R
+        d[3] = 255; // opaco (el fondo no es translúcido)
+    }
+    Some(MemoryRenderBuffer::from_slice(
+        &bgra,
+        Fourcc::Argb8888,
+        (w as i32, h as i32),
+        1,
+        Transform::Normal,
+        None,
+    ))
+}
+
+/// Construye un `MemoryRenderBuffer` desde bytes BGRA ya a su tamaño (el fondo
+/// animado de marca se genera acotado y la GPU lo escala).
+fn bgra_membuffer(bgra: &[u8], w: i32, h: i32) -> Option<MemoryRenderBuffer> {
+    if w <= 0 || h <= 0 || bgra.len() < (w as usize) * (h as usize) * 4 {
+        return None;
+    }
+    Some(MemoryRenderBuffer::from_slice(
+        bgra,
+        Fourcc::Argb8888,
+        (w, h),
+        1,
+        Transform::Normal,
+        None,
+    ))
+}
+
+/// Tamaño interno **acotado** para el fondo animado de marca: preserva el aspecto
+/// de la salida con el lado mayor ≤ `CAP`. Abarata la generación a 4K (se genera
+/// a ~720p y la GPU lo escala). Salidas ≤ `CAP` se generan a tamaño nativo.
+fn capped_anim_size(ow: i32, oh: i32) -> (u32, u32) {
+    const CAP: i32 = 1366;
+    let ow = ow.max(1);
+    let oh = oh.max(1);
+    if ow <= CAP && oh <= CAP {
+        return (ow as u32, oh as u32);
+    }
+    if ow >= oh {
+        let ih = (oh as f32 * CAP as f32 / ow as f32).round().max(1.0) as i32;
+        (CAP as u32, ih as u32)
+    } else {
+        let iw = (ow as f32 * CAP as f32 / oh as f32).round().max(1.0) as i32;
+        (iw as u32, CAP as u32)
+    }
 }
 
 fn load_wallpaper(

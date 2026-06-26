@@ -41,6 +41,21 @@ fn lerp_rgba(a: [u8; 4], b: [u8; 4], m: f32) -> [u8; 4] {
     [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2]), mix(a[3], b[3])]
 }
 
+/// Transformación **cover** para escalar por GPU un buffer `sw×sh` a una salida
+/// `ow×oh`: devuelve `(offset_x, offset_y, escala)` — escala uniforme = máximo de
+/// las dos razones (llena la salida, recorta el sobrante), con el sobrante
+/// centrado (offsets ≤ 0). El render pinta el buffer en `(ox,oy)` y lo envuelve en
+/// un `RescaleRenderElement` (escala alrededor de ese origen). Pura y testeada —
+/// el escalado real lo hace la GPU (no hay resize en CPU por frame).
+fn cover_transform(sw: i32, sh: i32, ow: i32, oh: i32) -> (f64, f64, f64) {
+    let sw = sw.max(1) as f64;
+    let sh = sh.max(1) as f64;
+    let ow = ow.max(1) as f64;
+    let oh = oh.max(1) as f64;
+    let k = (ow / sw).max(oh / sh);
+    ((ow - sw * k) / 2.0, (oh - sh * k) / 2.0, k)
+}
+
 impl DrmState {
     /// Compone un cuadro por cada salida y avisa a los clientes una sola vez.
     /// Si una salida tiene su `pending_flip` puesto, se saltea hasta el
@@ -1758,19 +1773,18 @@ impl DrmState {
         use crate::estado::WallpaperSpec;
         let spec = self.app.config_wallpaper_spec_for(&name, cur_path.as_deref());
         if let WallpaperSpec::Video(_) = spec {
-            // Fondo en VIDEO: recomponemos el último frame al tamaño de la salida
-            // sólo cuando llegó uno nuevo (`video_dirty`) o cambió el tamaño;
-            // entre frames reusamos el buffer ya compuesto. El frame lo dejó
-            // `manage_video_wallpaper` en `self.video_frame`. Si aún no hay frame
-            // (worker calentando), caemos al fondo de marca para no parpadear.
-            if self.video_dirty || stale {
-                let fit = self.app.config_wallpaper_fit_for(&name);
-                let composed = self.video_frame.as_ref().and_then(|(rgba, fw, fh)| {
-                    compose_video_frame(rgba, *fw, *fh, fit, size.0, size.1)
+            // Fondo en VIDEO: subimos el último frame a **tamaño nativo** (sólo
+            // swizzle, sin resize) cuando llegó uno nuevo (`video_dirty`); la GPU
+            // lo escala (cover) al pintar. Si aún no hay frame (worker calentando)
+            // dejamos un fondo de marca a tamaño de salida para no parpadear.
+            let no_buf = self.outputs[idx].wallpaper.is_none();
+            if self.video_dirty || no_buf {
+                let native = self.video_frame.as_ref().and_then(|(rgba, fw, fh)| {
+                    rgba_native_membuffer(rgba, *fw, *fh).map(|b| (b, (*fw as i32, *fh as i32)))
                 });
-                if let Some(buf) = composed {
-                    self.outputs[idx].wallpaper = Some((buf, size));
-                } else if stale {
+                if let Some((buf, src)) = native {
+                    self.outputs[idx].wallpaper = Some((buf, src));
+                } else if no_buf {
                     let buf = make_marca_wallpaper(mirada_brain::WallpaperFit::Fill, size.0, size.1)
                         .or_else(|| Some(make_default_wallpaper(size.0, size.1)));
                     self.outputs[idx].wallpaper = buf.map(|b| (b, size));
@@ -1778,20 +1792,16 @@ impl DrmState {
             }
         } else if matches!(spec, WallpaperSpec::Default) && self.app.config_animated_default() {
             // Fondo por defecto VIVO: la chakana + plano cartesiano de marca,
-            // regenerado por frame (estrangulado a ~20 fps por `tick_animated_default`,
-            // que pone `anim_default_dirty`). Reusa el camino del buffer estático.
-            if self.anim_default_dirty || stale {
+            // generado a tamaño **acotado** (~720p) y escalado por GPU al pintar —
+            // así no cuesta resolución de salida (importa en 4K). Regenerado
+            // estrangulado a ~20 fps (`tick_animated_default` → `anim_default_dirty`).
+            if self.anim_default_dirty || self.outputs[idx].wallpaper.is_none() {
+                let (iw, ih) = capped_anim_size(size.0, size.1);
                 let t = self.start.elapsed().as_secs_f32();
-                let bytes = marca::animated_frame(t, size.0 as u32, size.1 as u32);
-                let buf = MemoryRenderBuffer::from_slice(
-                    &bytes,
-                    Fourcc::Argb8888,
-                    (size.0, size.1),
-                    1,
-                    Transform::Normal,
-                    None,
-                );
-                self.outputs[idx].wallpaper = Some((buf, size));
+                let bytes = marca::animated_frame(t, iw, ih);
+                if let Some(buf) = bgra_membuffer(&bytes, iw as i32, ih as i32) {
+                    self.outputs[idx].wallpaper = Some((buf, (iw as i32, ih as i32)));
+                }
             }
         } else if stale {
             // Despacho por la FUENTE elegida (color/gradiente/procedural/imagen).
@@ -1816,19 +1826,39 @@ impl DrmState {
             self.outputs[idx].wallpaper = buf.map(|b| (b, size));
         }
         let ctx = &self.outputs[idx];
-        let Some((buf, _)) = &ctx.wallpaper else {
+        let Some((buf, (sw, sh))) = &ctx.wallpaper else {
             return;
         };
-        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-            &mut self.renderer,
-            (0.0, 0.0),
-            buf,
-            None,
-            None,
-            None,
-            Kind::Unspecified,
-        ) {
-            into.push(Frame::Text(el));
+        let (sw, sh) = (*sw, *sh);
+        if sw == size.0 && sh == size.1 {
+            // Buffer ya a tamaño de salida (fuentes estáticas) → 1:1, sin escalar.
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                (0.0, 0.0),
+                buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                into.push(Frame::Text(el));
+            }
+        } else {
+            // Buffer a otra resolución (video nativo / marca acotada) → la GPU lo
+            // escala **cover** alrededor del origen calculado.
+            let (ox, oy, k) = cover_transform(sw, sh, size.0, size.1);
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                (ox, oy),
+                buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                let origin = Point::<i32, Physical>::from((ox.round() as i32, oy.round() as i32));
+                into.push(Frame::ScaledText(RescaleRenderElement::from_element(el, origin, k)));
+            }
         }
     }
 
@@ -2063,7 +2093,23 @@ fn emit_popups(
 
 #[cfg(test)]
 mod tests {
-    use super::{focus_mix, lerp_rgba};
+    use super::{cover_transform, focus_mix, lerp_rgba};
+
+    #[test]
+    fn cover_transform_llena_y_centra() {
+        // Mismo aspecto: escala exacta, sin offset.
+        let (ox, oy, k) = cover_transform(1280, 720, 2560, 1440);
+        assert!((k - 2.0).abs() < 1e-9);
+        assert!(ox.abs() < 1e-9 && oy.abs() < 1e-9);
+        // Fuente más "cuadrada" que la salida (16:9): cover por el ancho, recorta
+        // arriba/abajo → offset_y negativo, offset_x 0.
+        let (ox, oy, k) = cover_transform(1000, 1000, 1920, 1080);
+        assert!((k - 1.92).abs() < 1e-6, "k={k}");
+        assert!(ox.abs() < 1e-6, "ox={ox}");
+        assert!(oy < 0.0, "oy={oy} debe recortar verticalmente");
+        // El recorte es simétrico: el centro del buffer cae en el centro de salida.
+        assert!((oy + 1000.0 * k / 2.0 - 540.0).abs() < 1e-6);
+    }
 
     #[test]
     fn focus_mix_extremos_secos_sin_transicion() {

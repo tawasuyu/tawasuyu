@@ -537,9 +537,20 @@ remote`. Faltan dos fuentes:
 > pantalla apagada (DPMS), otra VT, o ventana fullscreen — esto **cierra el
 > pendiente de pausa-DPMS también para el video** (`DrmState.dpms_off`, sellado en
 > `set_dpms`). Verificado headless una vez (render puro a PNG, regla 8): la chakana
-> lee bien, ejes+flechas+fluido OK. **Sigue pendiente:** video por-salida, escalar
-> por GPU (hoy el frame animado se genera a resolución de salida en CPU — caro en
-> 4K), y loop de video sin costura.
+> lee bien, ejes+flechas+fluido OK.
+
+> **✅ HECHO — escalado por GPU del fondo animado (2026-06-26).** Antes el video se
+> recomponía (resize CPU) y la marca animada se generaba a resolución de salida
+> por frame — caro en 4K. Ahora: el **video** sube su frame a tamaño **nativo**
+> (sólo swizzle RGBA→BGRA, sin resize) y la **marca animada** se genera a tamaño
+> **acotado** (~720p, aspecto de salida); en ambos la **GPU** los escala *cover*
+> al pintar, vía `cover_transform` (puro, testeado) + `RescaleRenderElement`
+> (`Frame::ScaledText`, el recurso del Prezi). Las fuentes estáticas (imagen/color/
+> gradiente/procedural) siguen a tamaño de salida → camino 1:1 **byte-idéntico**.
+> Nota: el video ahora es *cover* fijo (el `wallpaper_fit` ya no aplica al video).
+> **Sigue pendiente:** video **por-salida** (hoy un solo archivo global en todas)
+> y **loop de video sin costura** (corte al rebobinar; un crossfade en el límite o
+> un clip pensado para enganchar).
 
 ### 2) Sesión Wayland remota persistente — «tmux/mosh para Wayland»  — esfuerzo ALTO
 Hoy ya hay **apps** remotas: `mirada-ctl remote` (una app vía waypipe ssh) y sesiones
