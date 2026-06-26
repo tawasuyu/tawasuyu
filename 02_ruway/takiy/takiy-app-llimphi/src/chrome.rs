@@ -172,7 +172,15 @@ pub(crate) fn toolbar_bar(model: &Model, theme: &Theme) -> View<Msg> {
         tb(Icon::Music, Msg::ExportWav).with_label("wav"),
     ]);
 
-    toolbar_view(vec![transport, edit, tracks, file], TOOLBAR_H, &pal)
+    let mut groups = Vec::new();
+    // En el editor de una pista, un botón «‹ pistas» vuelve al panorama.
+    if model.screen == crate::appmodel::Screen::Track {
+        groups.push(ToolbarGroup::new(vec![
+            tb(Icon::ChevronLeft, Msg::OpenOverview).with_label("pistas"),
+        ]));
+    }
+    groups.extend([transport, edit, tracks, file]);
+    toolbar_view(groups, TOOLBAR_H, &pal)
 }
 
 fn active_track_muted(model: &Model) -> bool {

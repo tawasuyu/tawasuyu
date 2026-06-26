@@ -27,6 +27,10 @@ mod paint;
 mod appmodel;
 #[path = "../src/chrome.rs"]
 mod chrome;
+#[path = "../src/audio.rs"]
+mod audio;
+#[path = "../src/overview.rs"]
+mod overview;
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -280,6 +284,8 @@ fn model_demo(theme: Theme) -> Model {
         right_active: Some(DockItem::Efectos),
         left_w: chrome::DEFAULT_PANEL_W,
         right_w: chrome::DEFAULT_PANEL_W,
+        screen: appmodel::Screen::Track,
+        onda_peaks: std::collections::HashMap::new(),
     }
 }
 
@@ -402,6 +408,31 @@ fn view_demo(model: &Model, theme: Theme) -> View<Msg> {
     .children(vec![menubar, toolbar, body])
 }
 
+/// Panorama de pistas (tipo Audacity) montado con el `overview::body`
+/// real: menubar + toolbar + carriles. Pone dos pistas en modo onda
+/// (con sus picos calculados) y dos en midi para mostrar ambos carriles.
+fn overview_view(model: &Model, theme: Theme) -> View<Msg> {
+    let menu = app_menu();
+    let menubar = menubar_view(&MenuBarSpec {
+        menu: &menu,
+        open: None,
+        theme: &theme,
+        viewport: (W as f32, H as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    });
+    let toolbar = chrome::toolbar_bar(model, &theme);
+    let body = overview::body(model, &theme);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![menubar, toolbar, body])
+}
+
 fn main() {
     let out = std::env::args()
         .nth(1)
@@ -411,8 +442,25 @@ fn main() {
     }
 
     let theme = Theme::dark(); // el theme canónico de la app (src/main.rs)
-    let model = model_demo(theme);
-    let root = view_demo(&model, theme);
+    let mut model = model_demo(theme);
+    // `TAKIY_OVERVIEW=1` rinde el panorama de pistas; si no, el piano roll.
+    let root = if std::env::var_os("TAKIY_OVERVIEW").is_some() {
+        model.screen = appmodel::Screen::Overview;
+        // Pistas pares en onda (con picos), impares en midi.
+        let n = model.editor.score.tracks().len();
+        for i in 0..n {
+            if i % 2 == 0 {
+                if let Some(t) = model.editor.score.track_mut(i) {
+                    t.view = takiy_core::TrackView::Onda;
+                }
+                let peaks = overview::compute_onda_peaks(&model.editor.score, i);
+                model.onda_peaks.insert(i, peaks);
+            }
+        }
+        overview_view(&model, theme)
+    } else {
+        view_demo(&model, theme)
+    };
 
     // view → layout → scene (misma secuencia que el eventloop real).
     let mut layout = LayoutTree::new();

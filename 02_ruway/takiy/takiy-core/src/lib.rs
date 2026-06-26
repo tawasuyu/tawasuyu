@@ -24,5 +24,5 @@ pub use chord::{Chord, ChordQuality};
 pub use pitch::{Pitch, PitchClass};
 pub use scale::Scale;
 pub use score::{
-    AutomationLane, AutomationPoint, DelayParams, ReverbParams, Score, ScoreNote, Track,
+    AutomationLane, AutomationPoint, DelayParams, ReverbParams, Score, ScoreNote, Track, TrackView,
 };

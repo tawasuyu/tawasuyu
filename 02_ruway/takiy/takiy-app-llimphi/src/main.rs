@@ -39,6 +39,7 @@ mod appmodel;
 mod audio;
 mod chrome;
 mod msg;
+mod overview;
 mod paint;
 mod update;
 
@@ -62,7 +63,7 @@ use llimphi_motion::Tween;
 use takiy_app::{describe_key, load_score_or_demo, pitch_range_with_offset, EditMsg};
 use takiy_playback::Player;
 
-use crate::appmodel::Model;
+use crate::appmodel::{Model, Screen};
 use crate::audio::load_sf2;
 use crate::msg::Msg;
 use crate::paint::paint_piano_roll;
@@ -142,6 +143,10 @@ impl App for Takiy {
             right_active: None,
             left_w: crate::chrome::DEFAULT_PANEL_W,
             right_w: crate::chrome::DEFAULT_PANEL_W,
+            // El proyecto se abre en el panorama de pistas (tipo Audacity);
+            // clickear un carril entra al piano roll de esa pista.
+            screen: Screen::Overview,
+            onda_peaks: std::collections::HashMap::new(),
         }
     }
 
@@ -211,6 +216,11 @@ impl App for Takiy {
                 if model.menu_open.is_some() || model.context_menu.is_some() =>
             {
                 Some(Msg::CloseMenus)
+            }
+            // Esc: en el editor de una pista vuelve al panorama; en el
+            // panorama sale de la app.
+            Key::Named(NamedKey::Escape) if model.screen == Screen::Track => {
+                Some(Msg::OpenOverview)
             }
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
             Key::Named(NamedKey::ArrowLeft) => {
@@ -361,6 +371,22 @@ impl App for Takiy {
         // Barra de menú principal arriba; el piano roll ocupa el resto.
         let menu = app_menu();
         let menubar = menubar_view(&menubar_spec(&menu, model));
+        // Barra de herramientas bajo el menú (compartida por panorama y
+        // editor; en el editor lleva además el botón «‹ pistas»).
+        let toolbar = chrome::toolbar_bar(model, &theme);
+
+        // Panorama de pistas (tipo Audacity): la pantalla con la que se
+        // abre el proyecto. El piano roll queda detrás de un click.
+        if matches!(model.screen, Screen::Overview) {
+            let body = overview::body(model, &theme);
+            return View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .fill(theme.bg_app)
+            .children(vec![menubar, toolbar, body]);
+        }
 
         let canvas = View::new(Style {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -389,9 +415,6 @@ impl App for Takiy {
                 min_midi, max_midi, total_beats, theme,
             );
         });
-
-        // Barra de herramientas bajo el menú.
-        let toolbar = chrome::toolbar_bar(model, &theme);
 
         // Centro = canvas con los paneles de los sidebars en panes
         // resizables (mismo patrón que cosmos: panel del item activo como

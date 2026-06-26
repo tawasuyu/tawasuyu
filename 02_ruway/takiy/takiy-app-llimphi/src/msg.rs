@@ -142,6 +142,15 @@ pub(crate) enum Msg {
     /// Arrastre del divisor de un panel: suma `delta` px al ancho del
     /// sidebar indicado (clamp en el handler).
     SetDockWidth(DockSide, f32),
+    /// Abre el editor (piano roll) de una pista desde el panorama. La
+    /// marca como pista activa y cambia a `Screen::Track`.
+    OpenTrack(usize),
+    /// Vuelve al panorama de pistas (tipo Audacity). Recalcula los picos
+    /// de onda de las pistas que estén en modo `Onda`.
+    OpenOverview,
+    /// Cambia el modo de visualización de una pista en el panorama
+    /// (midi ↔ onda). Si pasa a onda, dispara el cálculo de sus picos.
+    SetTrackView { track: usize, view: takiy_core::TrackView },
     Quit,
 }
 

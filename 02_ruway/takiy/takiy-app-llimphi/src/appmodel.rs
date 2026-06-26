@@ -8,6 +8,19 @@ use takiy_synth::MultiProgramRenderer;
 
 use crate::msg::{AutoHit, DockItem, DragState};
 
+/// Pantalla activa de la app. El proyecto se abre en el **panorama** de
+/// pistas (tipo Audacity: una lista vertical de carriles horizontales);
+/// clickear un carril entra al **editor** de esa pista —el piano roll de
+/// siempre— y `Esc` vuelve al panorama.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Screen {
+    /// Lista de pistas como carriles (cada uno en midi u onda).
+    Overview,
+    /// Editor de una pista (piano roll). El índice es la pista abierta;
+    /// coincide con `editor.active_track`.
+    Track,
+}
+
 pub(crate) struct Model {
     pub(crate) editor: EditorState,
     pub(crate) source: String,
@@ -62,4 +75,13 @@ pub(crate) struct Model {
     pub(crate) left_w: f32,
     /// Ancho del panel del sidebar derecho (px).
     pub(crate) right_w: f32,
+    /// Pantalla activa: panorama de pistas o editor de una pista.
+    pub(crate) screen: Screen,
+    /// Caché de picos de onda por índice de pista, para el carril en
+    /// modo `Onda`. Cada `Vec<f32>` es un perfil normalizado `[0, 1]`
+    /// de resolución fija (`ONDA_PEAK_BUCKETS`) que el painter remapea
+    /// al ancho real del carril. Se recalcula al entrar al panorama y
+    /// al pasar una pista a onda — no en cada frame (el render de audio
+    /// es caro). Ver `crate::overview::compute_onda_peaks`.
+    pub(crate) onda_peaks: std::collections::HashMap<usize, Vec<f32>>,
 }

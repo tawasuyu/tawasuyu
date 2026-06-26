@@ -13,7 +13,7 @@ use takiy_core::{Pitch, Score, ScoreNote, Track};
 use takiy_playback::PlayOpts;
 use takiy_synth::write_wav;
 
-use crate::appmodel::Model;
+use crate::appmodel::{Model, Screen};
 use crate::audio::{build_play, play_status_extras, render_score, WAV_EXPORT_SAMPLE_RATE};
 use crate::chrome::{DockSide, PANEL_W_MAX, PANEL_W_MIN, RAIL_W, TOOLBAR_H};
 use crate::msg::{
@@ -33,6 +33,26 @@ const AUDITION_BEATS: f32 = 0.5;
 
 pub(crate) fn build_editor(score: Score) -> EditorState {
     EditorState::with_score(score)
+}
+
+/// Recalcula el perfil de picos de onda de todas las pistas en modo
+/// `Onda` y descarta los de las que ya no lo están. Se llama al entrar
+/// al panorama para que la onda refleje las ediciones del piano roll.
+pub(crate) fn refresh_onda_peaks(model: &mut Model) {
+    let onda: Vec<usize> = model
+        .editor
+        .score
+        .tracks()
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.view == takiy_core::TrackView::Onda)
+        .map(|(i, _)| i)
+        .collect();
+    model.onda_peaks.retain(|k, _| onda.contains(k));
+    for i in onda {
+        let peaks = crate::overview::compute_onda_peaks(&model.editor.score, i);
+        model.onda_peaks.insert(i, peaks);
+    }
 }
 
 pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -685,6 +705,40 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 model.right_w = (model.right_w - dx).clamp(PANEL_W_MIN, PANEL_W_MAX);
             }
         },
+        Msg::OpenTrack(i) => {
+            // Abre el piano roll de la pista clickeada en el panorama.
+            if i < model.editor.score.tracks().len() {
+                model.editor.active_track = i;
+                model.editor.selected = None;
+                model.screen = Screen::Track;
+            }
+        }
+        Msg::OpenOverview => {
+            model.screen = Screen::Overview;
+            // Refresca los picos de las pistas en modo onda — pudieron
+            // editarse en el piano roll desde la última vez.
+            refresh_onda_peaks(&mut model);
+        }
+        Msg::SetTrackView { track, view } => {
+            if let Some(t) = model.editor.score.track_mut(track) {
+                t.view = view;
+            }
+            match view {
+                takiy_core::TrackView::Onda => {
+                    let peaks = crate::overview::compute_onda_peaks(&model.editor.score, track);
+                    model.onda_peaks.insert(track, peaks);
+                }
+                takiy_core::TrackView::Midi => {
+                    model.onda_peaks.remove(&track);
+                }
+            }
+            // El modo de vista vive en el `.takiy.json`: persistilo.
+            if let Some(path) = model.editor.save_path.as_deref() {
+                if let Err(e) = write_score(&model.editor.score, path) {
+                    eprintln!("takiy · auto-save error en {}: {e}", path.display());
+                }
+            }
+        }
     }
     if is_edit_msg {
         if let Some(path) = model.editor.save_path.as_deref() {

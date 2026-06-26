@@ -105,6 +105,38 @@ impl AutomationLane {
     }
 }
 
+/// Cómo se muestra una pista en el panorama de pistas (la vista tipo
+/// Audacity): como tira de notas MIDI o como forma de onda del audio
+/// que la pista sintetiza. Es una preferencia de **presentación** —
+/// la pista siempre guarda notas MIDI; `Onda` sólo cambia cómo se
+/// dibuja su carril y, al abrirla, qué editor se le ofrece.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TrackView {
+    /// Tira de notas (piano roll en miniatura). Default.
+    #[default]
+    Midi,
+    /// Forma de onda del audio renderizado de la pista.
+    Onda,
+}
+
+impl TrackView {
+    /// Alterna entre los dos modos.
+    pub fn toggled(self) -> Self {
+        match self {
+            TrackView::Midi => TrackView::Onda,
+            TrackView::Onda => TrackView::Midi,
+        }
+    }
+
+    /// Etiqueta corta para la UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            TrackView::Midi => "midi",
+            TrackView::Onda => "onda",
+        }
+    }
+}
+
 /// Una pista monofónica o polifónica: notas ordenadas por inicio.
 ///
 /// Los campos del mixer (`volume`, `mute`, `solo`) usan `serde(default)`
@@ -114,6 +146,10 @@ impl AutomationLane {
 pub struct Track {
     pub name: String,
     notes: Vec<ScoreNote>,
+    /// Modo de visualización en el panorama de pistas (midi / onda).
+    /// `serde(default)` → los `.takiy.json` previos cargan como `Midi`.
+    #[serde(default)]
+    pub view: TrackView,
     /// Ganancia lineal `[0, 1.5]`. `1.0` = unidad. Default `1.0`.
     #[serde(default = "default_volume")]
     pub volume: f32,
@@ -148,6 +184,7 @@ impl Default for Track {
         Self {
             name: String::new(),
             notes: Vec::new(),
+            view: TrackView::Midi,
             volume: 1.0,
             mute: false,
             solo: false,
@@ -163,6 +200,7 @@ impl Track {
         Self {
             name: name.into(),
             notes: Vec::new(),
+            view: TrackView::Midi,
             volume: 1.0,
             mute: false,
             solo: false,
@@ -572,6 +610,22 @@ mod tests {
         assert_eq!(t.volume, 1.0);
         assert!(!t.mute);
         assert!(!t.solo);
+    }
+
+    #[test]
+    fn track_view_defaults_to_midi_and_survives_old_json() {
+        // JSON pre-onda (sin `view`) carga como Midi.
+        let json = r#"{"name":"old","notes":[]}"#;
+        let t: Track = serde_json::from_str(json).unwrap();
+        assert_eq!(t.view, TrackView::Midi);
+        // Toggle es involutivo.
+        assert_eq!(t.view.toggled(), TrackView::Onda);
+        assert_eq!(t.view.toggled().toggled(), TrackView::Midi);
+        // Round-trip de una pista en modo onda.
+        let mut o = Track::new("audio");
+        o.view = TrackView::Onda;
+        let back: Track = serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+        assert_eq!(back.view, TrackView::Onda);
     }
 
     #[test]
