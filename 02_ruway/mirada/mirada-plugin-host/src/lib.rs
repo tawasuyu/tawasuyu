@@ -23,6 +23,41 @@ pub use wasm::{HostCtx, LoadedPlugin};
 
 use std::path::Path;
 
+use mirada_brain::{Config, Desktop, Keymap, Permisos, Rules};
+
+/// Construye un `Desktop` con la config del usuario (keymap, reglas, ajustes
+/// generales y **permisos de capacidad**), cayendo a los valores por defecto si
+/// falta cada archivo. Espeja el arranque de `mirada-app-llimphi` para que el
+/// host honre el teclado, el tema y —clave— las denylists de seguridad
+/// (portapapeles/screencopy) del usuario, en vez de partir de `Desktop::new()`.
+///
+/// Carga inicial; el hot-reload de estos archivos en caliente queda como
+/// seguimiento (requiere sondear con `FileWatch` en el bucle).
+pub fn configured_desktop() -> Desktop {
+    let keymap = match Keymap::default_path() {
+        Some(p) => Keymap::load_or_init(&p),
+        None => Keymap::default(),
+    };
+    let mut desktop = Desktop::with_keymap(keymap);
+
+    desktop.set_rules(match Rules::default_path() {
+        Some(p) => Rules::load_or_default(&p),
+        None => Rules::default(),
+    });
+
+    if let Some(p) = Config::default_path() {
+        desktop.set_config(Config::load_or_default(&p));
+    }
+
+    let caps = match mirada_brain::permisos::default_path() {
+        Some(p) => mirada_brain::permisos::load_or_default(&p),
+        None => Permisos::default(),
+    };
+    let _ = desktop.set_caps(caps);
+
+    desktop
+}
+
 /// Carga todos los plugins declarados por archivos `*.ron` de un directorio.
 /// Los manifests inválidos o los `.wasm` que no pasan el gateo de capacidades se
 /// saltan con un aviso por `stderr` — un plugin roto nunca tumba al host.

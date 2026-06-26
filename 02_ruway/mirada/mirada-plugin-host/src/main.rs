@@ -4,14 +4,14 @@
 //! Directorio de plugins: `$MIRADA_PLUGINS` o, por defecto,
 //! `$XDG_CONFIG_HOME/mirada/plugins` (`~/.config/mirada/plugins`).
 //!
-//! v1 usa un `Desktop` con la config por defecto. Cargar el keymap/reglas/caps
-//! del usuario (como hace mirada-app-llimphi) es un seguimiento directo.
+//! El `Desktop` se construye con la config del usuario (keymap/reglas/ajustes/
+//! permisos) vía [`configured_desktop`]; el hot-reload de esos archivos queda
+//! como seguimiento.
 
 use std::path::PathBuf;
 
-use mirada_brain::Desktop;
 use mirada_link::BrainLink;
-use mirada_plugin_host::{load_plugins_dir, Conductor};
+use mirada_plugin_host::{configured_desktop, load_plugins_dir, Conductor};
 
 fn plugins_dir() -> PathBuf {
     if let Ok(p) = std::env::var("MIRADA_PLUGINS") {
@@ -43,7 +43,7 @@ fn main() {
     };
 
     let plugins = load_plugins_dir(&plugins_dir());
-    let mut conductor = Conductor::new(Desktop::new(), plugins);
+    let mut conductor = Conductor::new(configured_desktop(), plugins);
 
     // Handshake de arranque (atajos + decoración + permisos).
     for cmd in conductor.startup() {

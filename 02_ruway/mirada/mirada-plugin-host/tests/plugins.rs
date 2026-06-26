@@ -124,6 +124,26 @@ fn reactor_registra_atajo_y_lanza() {
 // --- Conductor: Desktop autoritativo + plugins que lo aumentan. -------------
 
 #[test]
+fn configured_desktop_carga_la_config_del_usuario_y_arranca() {
+    // Redirige XDG_CONFIG_HOME a un tempdir: hermético, no toca el ~/.config
+    // real (Keymap::load_or_init escribiría un keymap.ron de arranque ahí).
+    let tmp = std::env::temp_dir().join(format!("mirada-host-cfg-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    std::env::set_var("XDG_CONFIG_HOME", &tmp);
+
+    let mut c = Conductor::new(mirada_plugin_host::configured_desktop(), Vec::new());
+    let cmds = c.startup();
+    // El control de seguridad y los atajos del usuario llegan igual.
+    assert!(cmds.iter().any(|c| matches!(c, BrainCommand::SetCapabilities(_))));
+    assert!(
+        cmds.iter().any(|c| matches!(c, BrainCommand::GrabKeys(k) if !k.is_empty())),
+        "el keymap (default o del usuario) debería producir atajos: {cmds:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn conductor_startup_no_olvida_capacidades_ni_decoracion() {
     let mut c = Conductor::new(Desktop::new(), Vec::new());
     let cmds = c.startup();
