@@ -71,10 +71,11 @@ impl WorldPreview {
     }
 
     /// Arranca la **simulación de agua** (ley Fluir) desde el grid actual, si no hay
-    /// una ya corriendo. `agua` es el color con que se identifican/pintan las celdas.
-    pub fn ensure_sim(&mut self, agua: [u8; 3]) {
+    /// una ya corriendo. `agua` es el color con que se identifican/pintan las celdas;
+    /// `(gravedad, horizontal)` son los parámetros de la ley del material líquido.
+    pub fn ensure_sim(&mut self, agua: [u8; 3], gravedad: f32, horizontal: f32) {
         if self.sim.is_none() {
-            self.sim = Some(WaterSim::from_grid(&self.grid, agua));
+            self.sim = Some(WaterSim::with_params(&self.grid, agua, gravedad, horizontal));
         }
     }
 

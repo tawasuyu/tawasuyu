@@ -39,6 +39,16 @@ pub struct WaterSim {
     top: u32,
     /// Alterna el orden de los vecinos cada paso (simetría).
     parity: u32,
+    /// Parámetros de la ley Fluir. `gravedad` `[0,1]` = ritmo de caída (1 = cae cada
+    /// paso; menor = más viscoso, cae a tirones). `horizontal` `[0,1]` = ritmo de
+    /// esparcido lateral (0 = no se esparce → líquido espeso que se apila; 1 = se
+    /// esparce cada paso → líquido fino que se nivela).
+    gravedad: f32,
+    horizontal: f32,
+    /// Acumuladores deterministas que convierten los ritmos `[0,1]` en "actúa este
+    /// paso sí/no" sin azar (no hay `Math.random`).
+    g_acc: f32,
+    h_acc: f32,
 }
 
 impl WaterSim {
@@ -46,6 +56,12 @@ impl WaterSim {
     /// resto de las sólidas, terreno. El agua del worldgen se pinta con el color de
     /// paleta sin grano, así el match exacto la identifica.
     pub fn from_grid(grid: &VoxelGrid, agua: [u8; 3]) -> Self {
+        Self::with_params(grid, agua, 1.0, 1.0)
+    }
+
+    /// Como [`from_grid`](Self::from_grid) pero con los parámetros de la ley Fluir
+    /// (`gravedad`, `horizontal`) que dicta el material líquido.
+    pub fn with_params(grid: &VoxelGrid, agua: [u8; 3], gravedad: f32, horizontal: f32) -> Self {
         let dim = grid.dim();
         let n = (dim[0] * dim[1] * dim[2]) as usize;
         let mut occ = vec![AIR; n];
@@ -67,7 +83,18 @@ impl WaterSim {
                 }
             }
         }
-        Self { dim, occ, moved: vec![false; n], touched: Vec::new(), top, parity: 0 }
+        Self {
+            dim,
+            occ,
+            moved: vec![false; n],
+            touched: Vec::new(),
+            top,
+            parity: 0,
+            gravedad: gravedad.clamp(0.05, 1.0),
+            horizontal: horizontal.clamp(0.0, 1.0),
+            g_acc: 0.0,
+            h_acc: 0.0,
+        }
     }
 
     /// Cantidad de celdas de agua (conservada por `step`).
@@ -116,6 +143,20 @@ impl WaterSim {
         self.touched.clear();
         let mut changes: Vec<CellChange> = Vec::new();
 
+        // Ritmos → "actúa este paso" deterministas (acumulador, sin azar). Con
+        // gravedad/horizontal = 1 actúan siempre (comportamiento base); más bajos,
+        // a tirones → líquido más viscoso/espeso.
+        self.g_acc += self.gravedad;
+        let fall = self.g_acc >= 1.0;
+        if fall {
+            self.g_acc -= 1.0;
+        }
+        self.h_acc += self.horizontal;
+        let spread = self.h_acc >= 1.0;
+        if spread {
+            self.h_acc -= 1.0;
+        }
+
         // Orden de vecinos horizontales, rotado por paridad (simetría).
         let dirs0: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
         let rot = (self.parity % 4) as usize;
@@ -132,9 +173,13 @@ impl WaterSim {
                     if self.occ[i] != WATER || self.moved[i] {
                         continue;
                     }
-                    // 1) Caer: si abajo hay aire libre.
-                    if self.is_free(x, y - 1, z) {
+                    // 1) Caer: si abajo hay aire libre (gatea la gravedad).
+                    if fall && self.is_free(x, y - 1, z) {
                         self.relocate(i, (x, y - 1, z), &mut changes);
+                        continue;
+                    }
+                    // El componente horizontal (diagonal y lateral) gatea por `spread`.
+                    if !spread {
                         continue;
                     }
                     // 2) Caer en diagonal (flujo / cornisa → cascada): vecino libre
@@ -257,6 +302,25 @@ mod tests {
             }
         }
         assert!(ancho > 1, "el agua se esparció horizontalmente (ancho={ancho})");
+    }
+
+    #[test]
+    fn horizontal_cero_no_se_esparce_espeso() {
+        // Líquido espeso (horizontal=0): cae pero NO se esparce → se apila en columna.
+        let agua = Material::Water.color();
+        let dim = [16, 20, 16];
+        let g = grid_con_columna(dim, agua, 8, 8, 10);
+        let mut sim = WaterSim::with_params(&g, agua, 1.0, 0.0);
+        for _ in 0..200 {
+            sim.step();
+        }
+        let mut ancho = 0;
+        for x in 0..dim[0] as i32 {
+            if sim.at(x, 1, 8) == CELL_WATER {
+                ancho += 1;
+            }
+        }
+        assert_eq!(ancho, 1, "sin componente horizontal el líquido no se esparce");
     }
 
     #[test]

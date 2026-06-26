@@ -792,6 +792,58 @@ impl Project {
         ResolvedMaterial::new(color_u8, grain)
     }
 
+    /// **Leyes efectivas** de un material: las propias + las heredadas de sus padres,
+    /// cada una con sus parámetros aplicados (la `LeyUso.params` overridea los
+    /// defaults de la ley). Es lo que dispara la simulación: un material *fluye*
+    /// porque tiene una [`LeyKind::Fluir`], *crece* porque tiene [`LeyKind::Crecer`].
+    pub fn resolve_laws(&self, material_id: u64) -> Vec<LeyKind> {
+        let mut out = Vec::new();
+        let mut cur = Some(material_id);
+        let mut depth = 0;
+        while let Some(cid) = cur {
+            if depth > 32 {
+                break;
+            }
+            let Some(m) = self.material(cid) else { break };
+            for u in &m.leyes {
+                if let Some(ley) = self.ley(u.ley) {
+                    let mut kind = ley.kind.clone();
+                    for (i, &v) in u.params.iter().enumerate() {
+                        kind.set_param(i, v);
+                    }
+                    out.push(kind);
+                }
+            }
+            cur = m.parent;
+            depth += 1;
+        }
+        out
+    }
+
+    /// Si el material tiene una ley [`Fluir`](LeyKind::Fluir), sus parámetros
+    /// `(gravedad, horizontal)` — lo que vuelve líquido a un material. `None` = no fluye.
+    pub fn fluir_params(&self, material_id: u64) -> Option<(f32, f32)> {
+        self.resolve_laws(material_id).into_iter().find_map(|k| match k {
+            LeyKind::Fluir { gravedad, horizontal } => Some((gravedad, horizontal)),
+            _ => None,
+        })
+    }
+
+    /// Si el material tiene una ley [`Crecer`](LeyKind::Crecer), su `velocidad`.
+    /// `None` = no crece.
+    pub fn crecer_velocidad(&self, material_id: u64) -> Option<f32> {
+        self.resolve_laws(material_id).into_iter().find_map(|k| match k {
+            LeyKind::Crecer { velocidad } => Some(velocidad),
+            _ => None,
+        })
+    }
+
+    /// Parámetros de Fluir del **agua** (el material semilla `Water`), si los tiene.
+    /// El studio lo usa para que el agua del bioma fluya según su ley.
+    pub fn water_fluir(&self) -> Option<(f32, f32)> {
+        self.fluir_params(self.material_id_for(Material::Water)?)
+    }
+
     /// Arma la [`BiomaPalette`] resuelta de un bioma (colores concretos para el render).
     pub fn bioma_palette(&self, b: &Bioma) -> BiomaPalette {
         let agua = self
@@ -877,6 +929,36 @@ mod tests {
         let hijo = p.resolve_material(hijo_id);
         assert_ne!(hijo.color, verde.color, "el color se redefinió");
         assert_eq!(hijo.grain, verde.grain, "el grano se heredó del padre");
+    }
+
+    #[test]
+    fn agua_fluye_por_su_ley_y_hereda_leyes() {
+        let p = Project::starter();
+        // El agua semilla tiene la ley Fluir con sus params.
+        let (g, h) = p.water_fluir().expect("el agua tiene ley Fluir");
+        assert!(g > 0.0 && h >= 0.0);
+        // Un material sin leyes no fluye.
+        let roca = p.material_id_for(Material::Rock).unwrap();
+        assert!(p.fluir_params(roca).is_none());
+        // El cactus crece (ley Crecer en el starter).
+        let cactus = p.material_id_for(Material::Cactus).unwrap();
+        assert!(p.crecer_velocidad(cactus).is_some());
+
+        // Herencia de leyes: un hijo del agua hereda Fluir aunque no la redefina.
+        let mut p2 = p.clone();
+        let agua = p2.material_id_for(Material::Water).unwrap();
+        let hijo = p2.alloc_id();
+        p2.materiales.push(MaterialDef {
+            id: hijo,
+            name: "agua turbia".into(),
+            parent: Some(agua),
+            role: MatRole::Terreno,
+            color: Some([0.2, 0.4, 0.5]),
+            grain: None,
+            leyes: vec![],
+            builtin: None,
+        });
+        assert!(p2.fluir_params(hijo).is_some(), "el hijo hereda Fluir del padre");
     }
 
     #[test]

@@ -1032,6 +1032,8 @@ fn canvas_3d(model: &Model) -> View<Msg> {
     let mr = model.preview_render();
     let simulating = model.simulating;
     let agua = mr.palette.agua;
+    // El agua fluye SÓLO si su material tiene la ley Fluir (con sus params).
+    let fluir = model.project.water_fluir();
     let absolute = Style {
         position: Position::Absolute,
         size: Size { width: percent(1.0), height: percent(1.0) },
@@ -1118,11 +1120,12 @@ fn canvas_3d(model: &Model) -> View<Msg> {
             let mut guard = preview.lock().unwrap();
             let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
             p.rebuild_if(device, queue, &mr, dim, gen);
-            if simulating {
-                p.ensure_sim(agua);
-                p.sim_step(queue, agua);
-            } else {
-                p.clear_sim();
+            match (simulating, fluir) {
+                (true, Some((g, h))) => {
+                    p.ensure_sim(agua, g, h);
+                    p.sim_step(queue, agua);
+                }
+                _ => p.clear_sim(),
             }
             let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
             p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
