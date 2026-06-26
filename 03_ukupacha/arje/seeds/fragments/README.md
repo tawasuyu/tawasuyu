@@ -64,10 +64,11 @@ El mismo fichero de fragmento sirve a dos momentos:
    `arje-zero` reconoce el fragmento `Virtual` con `genesis` como un
    **bundle** y encarna sus miembros (los shims), no el envoltorio
    (`graph::bus_mediator::expand_disk_bundle`). Para esta vía el
-   fragmento debe estar instalado en el card store:
+   fragmento y los binarios de los shims se instalan con:
 
    ```sh
-   install -m 0644 session-gnome.card.json /etc/arje/cards.d/session-gnome.json
+   scripts/install-arje-session-gnome.sh --system
+   # → /usr/local/lib/arje/arje-*-compat  +  /etc/arje/cards.d/session-gnome.json
    ```
 
    Esta es la vía que cierra el acople boot↔login: los backends de GNOME
@@ -86,12 +87,20 @@ spawnear el shim al primer request. Cuando exista esa capa, el fragmento
 declara *disponibilidad* en vez de *spawn*, y arrancar la sesión GNOME no
 cuesta 12 procesos que quizá nadie consulte.
 
+## Instalación
+
+`scripts/install-arje-session-gnome.sh`:
+
+- `--system` instala los shims (`<prefix>/lib/arje/arje-*-compat`, 0755) y
+  el bundle (`/etc/arje/cards.d/session-gnome.json`) en el sistema actual
+  — la vía login-time del greeter.
+- `--emit-flags` compila los shims estáticos (musl) y emite los flags
+  `--asset`/`--bin` para sumar a un `arje-installer` de host (arranque
+  nativo). El installer recoge los execs de las cards de
+  `/etc/arje/cards.d/` y hornea sus binarios (`lib.rs::collect_card_execs`).
+
 ## Pendiente
 
-- **Instalar el fragmento al card store.** El packager/installer de arje
-  debe copiar `session-gnome.card.json` a `/etc/arje/cards.d/session-gnome.json`
-  para que la vía login-time lo encuentre. (La vía boot-time lo lee de
-  `seeds/fragments/`.)
 - **Mapeo sesión→perfil** en `mirada-greeter::arje_session::profile_for`
   hoy es heurístico (detecta GNOME por `exec`/`name`). Cuando aparezca
   otra sesión con backends arje, conviene una tabla o un campo del

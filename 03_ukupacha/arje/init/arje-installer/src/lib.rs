@@ -180,6 +180,21 @@ pub fn build_initramfs_with_assets_signed(
     required.insert("arje-zero".into(), "sbin/arje-zero".into());
     collect_native(&card, &mut required);
 
+    // Binarios referenciados por cards del card-store (`/etc/arje/cards.d/*.json`,
+    // horneadas como assets): sus execs también deben instalarse (0o755), porque
+    // el runtime las encarna por `SpawnCardFromDisk` y NO están en el genesis de
+    // la seed. Sin esto, un bundle de sesión (p. ej. `session-gnome`) quedaría con
+    // sus shims declarados pero sin binario en el arranque nativo.
+    for (dest, src) in assets {
+        let dest_norm = dest.trim_start_matches('/');
+        if !(dest_norm.starts_with("etc/arje/cards.d/") && dest_norm.ends_with(".json")) {
+            continue;
+        }
+        let store_card = EntityCard::from_path(src)
+            .with_context(|| format!("parseando card del store {}", src.display()))?;
+        collect_card_execs(&store_card, &mut required);
+    }
+
     let bin_map: std::collections::BTreeMap<String, PathBuf> =
         bins.iter().cloned().collect();
 
@@ -273,6 +288,22 @@ fn collect_native(
     }
 }
 
+/// Como [`collect_native`] pero incluye el exec de la **propia** card, no
+/// sólo su genesis. Para cards del card-store, que pueden ser un único Ente
+/// Native (su exec está en la raíz) o un bundle `Virtual` con los Entes en
+/// `genesis` (p. ej. `session-gnome`).
+fn collect_card_execs(
+    card: &EntityCard,
+    out: &mut std::collections::BTreeMap<String, String>,
+) {
+    use arje_card::Payload;
+    if let Payload::Native { exec, .. } | Payload::Legacy { exec, .. } = &card.payload {
+        let rel = exec.strip_prefix('/').unwrap_or(exec).to_string();
+        out.insert(card.label.clone(), rel);
+    }
+    collect_native(card, out);
+}
+
 /// Args del comando `efibootmgr` para crear una entrada NVRAM directa al
 /// kernel (EFISTUB), sin bootloader intermedio. La firmware UEFI le pasa
 /// `options` como UEFI LoadOption args, que el stub del kernel interpreta
@@ -361,6 +392,57 @@ mod tests {
         // Un binario no firmado cae en NoAtestada.
         let impostor = arje_attest::atestar_bytes(&card.attest, b"impostor", Some(pubkey));
         assert!(!impostor.es_ok());
+    }
+
+    #[test]
+    fn card_store_bundle_exige_binarios_de_sus_shims() {
+        use arje_card::{EntityCard, Payload};
+
+        let dir = tempfile::tempdir().unwrap();
+        let zero = dir.path().join("arje-zero");
+        let shim = dir.path().join("arje-logind-compat");
+        std::fs::write(&zero, b"fake arje-zero").unwrap();
+        std::fs::write(&shim, b"fake logind shim").unwrap();
+
+        // Seed mínima (sin el shim en su genesis).
+        let seed = EntityCard::new("seed-min");
+        let seed_path = dir.path().join("seed.card.json");
+        std::fs::write(&seed_path, serde_json::to_vec_pretty(&seed).unwrap()).unwrap();
+
+        // Fragmento bundle: Virtual con un shim Native en genesis.
+        let mut bundle = EntityCard::new("session-gnome");
+        let mut logind = EntityCard::new("compat-logind");
+        logind.payload = Payload::Native {
+            exec: "/usr/lib/arje/arje-logind-compat".into(),
+            argv: vec![],
+            envp: vec![],
+        };
+        bundle.genesis.push(logind);
+        let frag_path = dir.path().join("session-gnome.card.json");
+        std::fs::write(&frag_path, serde_json::to_vec_pretty(&bundle).unwrap()).unwrap();
+
+        let assets = vec![(
+            "etc/arje/cards.d/session-gnome.json".to_string(),
+            frag_path.clone(),
+        )];
+
+        // Sin el --bin del shim: el bundle del store lo exige → falla claro.
+        let bins_sin = vec![("arje-zero".to_string(), zero.clone())];
+        let err = build_initramfs_with_assets_signed(&seed_path, &bins_sin, &assets, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("compat-logind"),
+            "debe exigir el binario del shim del bundle: {err}"
+        );
+
+        // Con el --bin (por label del fragmento): hornea OK.
+        let bins = vec![
+            ("arje-zero".to_string(), zero),
+            ("compat-logind".to_string(), shim),
+        ];
+        let (gz, _card) =
+            build_initramfs_with_assets_signed(&seed_path, &bins, &assets, None).unwrap();
+        assert!(!gz.is_empty(), "el initramfs debe armarse con el shim instalado");
     }
 
     #[test]
