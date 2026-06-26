@@ -854,6 +854,12 @@ impl App for Greeter {
             Msg::SetAnim(a) => {
                 m.anim = a;
                 m.rain_enabled = true;
+                // Elegir un fondo del menú es elegir UNO. El render tiene
+                // precedencia lottie > physics > procedural, así que sin esto, con
+                // un Lottie o el fondo Physics activos, el menú "no cambiaba nada".
+                // Desactivamos el Lottie y reconstruimos/limpiamos el físico.
+                m.lottie_bg = None;
+                m.lottie_path = None;
                 // Paleta por defecto para los fondos que piden un tono propio
                 // (el fuego en verde parece pasto; el plasma luce en cian).
                 match a {
@@ -863,6 +869,8 @@ impl App for Greeter {
                     state::BgAnim::Lightning => m.rain_color = state::RainColor::Cyan,
                     _ => {}
                 }
+                m.physics_bg = matches!(a, state::BgAnim::Physics)
+                    .then(|| bg_physics::PhysicsBg::new(bright_base(m.rain_color)));
                 persist(&m);
             }
         }
@@ -1453,6 +1461,10 @@ fn persist(m: &Model) {
     st.rain_enabled = m.rain_enabled;
     st.rain_color = m.rain_color;
     st.anim = m.anim;
+    // Reflejá el Lottie en vivo: si el menú eligió un fondo procedural,
+    // `lottie_path` quedó en `None` y hay que BORRARLO del disco también (si no,
+    // `load()` lo relee y el Lottie volvería a tapar la elección al reiniciar).
+    st.lottie_path = m.lottie_path.clone();
     st.save();
 }
 
