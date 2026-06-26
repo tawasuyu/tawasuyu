@@ -151,6 +151,13 @@ struct Model {
     /// Última sesión guardada en disco — para escribir sólo cuando la forma
     /// del escritorio cambia, no en cada tick.
     last_session: Option<mirada_brain::DesktopState>,
+    /// Vigía de `.git/HEAD` del repo en `MIRADA_GIT_WORKSPACE` (si se configuró):
+    /// al cambiar de rama, mirada intercambia la sesión (guarda la actual bajo la
+    /// rama vieja, restaura la de la nueva). `None` = feature apagada.
+    git_branch: Option<mirada_brain::GitBranchWatch>,
+    /// Directorio de sesiones por rama (`…/mirada/sessions/`). `None` si no se
+    /// pudo determinar el directorio de datos.
+    sessions_dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -266,6 +273,23 @@ impl App for Mirada {
             }
         }
 
+        // Workspaces por rama de Git: si `MIRADA_GIT_WORKSPACE` apunta a un repo,
+        // vigila su `.git/HEAD` para intercambiar la sesión al cambiar de rama.
+        // Las sesiones por rama viven junto a la sesión global (`…/sessions/`).
+        let sessions_dir = session_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.join("sessions"));
+        let git_branch = std::env::var_os("MIRADA_GIT_WORKSPACE")
+            .map(PathBuf::from)
+            .and_then(|repo| mirada_brain::GitBranchWatch::new(&repo));
+        if let Some(w) = &git_branch {
+            println!(
+                "mirada · workspaces por rama de Git activos (rama actual: {})",
+                w.current().unwrap_or("—")
+            );
+        }
+
         let mut model = Model {
             theme: chrome_theme,
             desktop,
@@ -291,6 +315,8 @@ impl App for Mirada {
             context_menu: None,
             session_path,
             last_session: None,
+            git_branch,
+            sessions_dir,
         };
         if let Some(link) = model.link.as_mut() {
             let _ = link.send(&with_overview_grab(model.desktop.grab_keys()));
@@ -652,8 +678,54 @@ fn tick(m: &mut Model) {
     for ev in events {
         feed(m, ev);
     }
+    swap_session_on_branch_change(m);
     push_workspaces_if_changed(m);
     save_session_if_changed(m);
+}
+
+/// Workspaces por rama de Git: si la rama del repo vigilado cambió, guarda la
+/// sesión actual bajo la rama que se deja y restaura la de la rama nueva (cada
+/// rama es un escritorio guardado: modos/ratio por workspace + `home` por
+/// `app_id`). Sólo con Cuerpo conectado (no pisar la sesión real desde una
+/// simulación). El respawn de las ventanas concretas de cada rama es Fase 1.bis;
+/// aquí se intercambia la **forma** del escritorio, no los procesos.
+fn swap_session_on_branch_change(m: &mut Model) {
+    if m.link.is_none() {
+        return;
+    }
+    let Some(dir) = m.sessions_dir.clone() else {
+        return;
+    };
+    // Acota el préstamo del vigía a la consulta; después se opera sobre `desktop`.
+    let switch = {
+        let Some(watch) = m.git_branch.as_mut() else {
+            return;
+        };
+        match watch.poll() {
+            Some(s) => s,
+            None => return,
+        }
+    };
+    // Guarda la sesión actual bajo la rama que se deja.
+    if let Some(from) = &switch.from {
+        let _ = std::fs::create_dir_all(&dir);
+        let p = mirada_brain::git_branch::branch_session_path(&dir, from);
+        if let Err(e) = m.desktop.snapshot().save(&p) {
+            eprintln!("mirada · no pude guardar la sesión de «{from}»: {e}");
+        }
+    }
+    // Restaura la sesión de la rama nueva (si existe; si no, el escritorio queda
+    // como está y se guardará al primer cambio bajo esa rama).
+    let p = mirada_brain::git_branch::branch_session_path(&dir, &switch.to);
+    if let Some(state) = mirada_brain::DesktopState::load_if_present(&p) {
+        m.desktop.restore(&state);
+        // No dejar que `save_session_if_changed` pise lo recién restaurado.
+        m.last_session = Some(m.desktop.snapshot());
+    }
+    println!(
+        "mirada · rama {:?} → «{}»: sesión intercambiada",
+        switch.from, switch.to
+    );
 }
 
 /// Empuja al Cuerpo el estado de escritorios (`SetWorkspaces`) para que su
