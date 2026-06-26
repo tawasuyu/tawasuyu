@@ -137,7 +137,23 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             crear_doc_nuevo(&mut model);
         }
         Msg::Guardar => {
+            // Guardar = volcar la working copy al proyecto activo y escribir el
+            // .pluma (la fuente de verdad). `guardar_activo` materializa el
+            // buffer en átomos; `sincronizar_doc_activo` lo lleva al proyecto.
             guardar_activo(&mut model);
+            sincronizar_doc_activo(&mut model);
+            let idx = model.proyecto_activo;
+            let tiene_ruta = model
+                .proyectos
+                .get(idx)
+                .map(|p| p.ruta.is_some())
+                .unwrap_or(false);
+            if tiene_ruta {
+                guardar_proyecto_activo(&mut model);
+                model.ultimo_status = "guardado en el proyecto".into();
+            } else {
+                model.ultimo_status = "guardá el proyecto a disco con «guardar como…»".into();
+            }
         }
         Msg::PathInputKey(ev) => {
             model.path_input.apply_key(&ev);
