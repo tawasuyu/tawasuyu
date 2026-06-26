@@ -22,3 +22,5 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-switch = { workspace = true }
 llimphi-widget-progress = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-icons = { workspace = true }

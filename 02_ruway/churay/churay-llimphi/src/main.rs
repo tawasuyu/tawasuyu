@@ -20,17 +20,46 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_image::Image;
+use llimphi_theme::motion;
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use marca::Brand;
+use llimphi_icons::Icon;
 use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_progress::linear_progress_view;
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
 
+use std::hash::{Hash, Hasher};
+
 const ROW_H: f32 = 58.0;
 const VIEWPORT: f32 = 392.0;
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la misma
+/// escena/ítem produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// `key` estable de la escena actual (pantalla + pestaña). Cambia sólo al pasar
+/// de una vista a otra → dispara la transición de entrada del contenido.
+fn scene_key(model: &Model) -> u64 {
+    let s = match model.screen {
+        Screen::Bienvenida => "bienvenida",
+        Screen::Resultado => "resultado",
+        Screen::SistemaBase => "sistema-base",
+        Screen::Catalogo => match model.tab {
+            Tab::Catalogo => "catalogo",
+            Tab::Actualizaciones => "actualizaciones",
+        },
+    };
+    key_of(s)
+}
 
 /// Estado de instalación de una unidad concreta.
 #[derive(Clone, PartialEq)]
@@ -547,19 +576,28 @@ impl App for Churay {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let t = &model.theme;
-        match model.screen {
-            Screen::Bienvenida => return bienvenida(model),
-            Screen::Resultado => return resultado(model),
-            Screen::SistemaBase => return sistema_base(model),
-            Screen::Catalogo => {}
-        }
-        let body = match model.tab {
-            Tab::Catalogo => catalogo(model),
-            Tab::Actualizaciones => actualizaciones(model),
+        let contenido = match model.screen {
+            Screen::Bienvenida => bienvenida(model),
+            Screen::Resultado => resultado(model),
+            Screen::SistemaBase => sistema_base(model),
+            Screen::Catalogo => {
+                let body = match model.tab {
+                    Tab::Catalogo => catalogo(model),
+                    Tab::Actualizaciones => actualizaciones(model),
+                };
+                col(percent(1.0), percent(1.0))
+                    .fill(t.bg_app)
+                    .children(vec![header(model), body, footer(model)])
+            }
         };
-        col(percent(1.0), percent(1.0))
-            .fill(t.bg_app)
-            .children(vec![header(model), body, footer(model)])
+        // Transición de escena: al cambiar de pantalla o de pestaña el contenido
+        // entra con un fade + leve slide-up en vez de saltar de golpe.
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![contenido])
+        .animated_enter_from(scene_key(model), motion::SLOW, Affine::translate((0.0, 24.0)))
     }
 }
 
@@ -1131,10 +1169,13 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
 
     let estado = estado_view(model, i, instalada, t);
 
+    // Pop-in: cada fila entra con un fade la primera vez que aparece su key
+    // (estable por id de unidad).
     row(percent(1.0), length(ROW_H))
         .gap(8.0)
         .pad_x(6.0)
         .children(vec![sw_wrap, icono, medio, estado])
+        .animated_enter(key_of(&u.id), motion::NORMAL)
 }
 
 fn estado_view(model: &Model, i: usize, instalada: bool, t: &Theme) -> View<Msg> {
@@ -1205,7 +1246,19 @@ fn actualizaciones(model: &Model) -> View<Msg> {
     hijos.push(linea(&format!("Comparando contra: {fuente}"), t.fg_placeholder, t));
 
     if model.state.units.is_empty() {
-        hijos.push(linea("Todavía no instalaste nada.", t.fg_muted, t));
+        hijos.push(
+            View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: percent(1.0_f32), height: length(220.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![empty_view(
+                Icon::Archive,
+                "Todavía no instalaste nada",
+                Some("Elegí apps en el catálogo e instalalas; sus actualizaciones aparecen acá."),
+                &EmptyPalette::from_theme(t),
+            )]),
+        );
     } else {
         for (id, inst) in model.state.units.iter() {
             let label = model
