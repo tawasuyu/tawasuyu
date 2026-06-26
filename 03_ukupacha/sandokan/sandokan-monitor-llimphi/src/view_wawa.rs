@@ -4,6 +4,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems,
 };
+use llimphi_theme::motion;
 use llimphi_ui::View;
 
 use super::modelo::{Model, Msg, WawaApp};
@@ -90,4 +91,6 @@ fn wawa_card(t: &llimphi_theme::Theme, a: &WawaApp) -> View<Msg> {
         ]),
         metric(t, &format!("{} · wasm", fmt_mem(a.bytes))),
     ])
+    // Pop-in: cada app del censo entra con fade la primera vez que aparece.
+    .animated_enter(crate::key_of(&a.name), motion::NORMAL)
 }

@@ -9,6 +9,7 @@ use ulid::Ulid;
 
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
+use llimphi_widget_toast::Toast;
 
 use super::engine::EngineCtx;
 
@@ -118,6 +119,8 @@ pub(crate) enum Msg {
     MenuOpen(Option<usize>),
     /// Command id elegido en un dropdown de la barra.
     MenuCmd(String),
+    /// Un toast cumplió su vida (`TOAST_TTL`): se descarta del stack.
+    ToastExpire(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +171,9 @@ pub(crate) struct Model {
     pub(crate) menu: AppMenu,
     pub(crate) menu_open: Option<usize>,
     pub(crate) ctx: Arc<EngineCtx>,
+    // --- toasts efímeros (feedback de acción / errores de señal) ---
+    pub(crate) toasts: Vec<Toast>,
+    pub(crate) next_toast: u64,
 }
 
 // ---------------------------------------------------------------------------

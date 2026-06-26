@@ -5,6 +5,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, Size, Style},
     AlignItems, FlexDirection,
 };
+use llimphi_theme::motion;
 use llimphi_ui::View;
 
 use sandokan_monitor_core::UnitObservation;
@@ -138,6 +139,8 @@ fn unit_card(model: &Model, u: &UnitObservation) -> View<Msg> {
     } else {
         Some(u.card_id)
     }))
+    // Pop-in: cada unidad nueva entra con fade la primera vez que aparece su key.
+    .animated_enter(crate::key_of(&u.card_id.to_string()), motion::NORMAL)
 }
 
 fn actions_row(t: &llimphi_theme::Theme, id: Ulid) -> View<Msg> {

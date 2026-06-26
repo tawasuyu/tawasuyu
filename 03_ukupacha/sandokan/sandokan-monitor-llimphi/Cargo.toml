@@ -23,6 +23,7 @@ tokio = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
+llimphi-widget-toast = { workspace = true }
 app-bus = { path = "../../../shared/app-bus" }
 
 [dev-dependencies]

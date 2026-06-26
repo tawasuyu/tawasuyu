@@ -24,13 +24,16 @@
 //! sólo-lectura del plano de control (SDD §6).
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use llimphi_theme::motion;
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{percent, FlexDirection, Size, Style},
 };
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 
 // `pub(crate)`: el example `pantallazo_sandokan` incluye este archivo por
 // `#[path]` y necesita nombrar `Sig`/`Scan` (variantes de `Msg`).
@@ -60,6 +63,43 @@ pub(crate) use view_sistema::system_body;
 pub(crate) use view_unidades::units_body;
 pub(crate) use view_wawa::wawa_body;
 use widgets::{chip, chip_warn, fmt_mem, pad, tab as tab_btn};
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+/// Viewport de referencia para apilar overlays (igual que `menu_spec`).
+const VIEWPORT: (f32, f32) = (900.0, 600.0);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la misma
+/// id/escena produce siempre la misma key entre rebuilds, así la entrada anima
+/// una sola vez).
+pub(crate) fn key_of(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// `key` estable de la pestaña activa — cambia sólo al conmutar de vista, lo
+/// que dispara la transición de entrada del cuerpo.
+fn tab_key(tab: Tab) -> u64 {
+    match tab {
+        Tab::System => 1,
+        Tab::Map => 2,
+        Tab::Units => 3,
+        Tab::Wawa => 4,
+    }
+}
+
+/// Empuja un toast al stack y programa su expiración (`TOAST_TTL`).
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, make: impl FnOnce(u64) -> Toast) {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    model.toasts.push(make(id));
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
 
 struct Monitor;
 
@@ -246,6 +286,8 @@ impl App for Monitor {
             menu: build_menu(),
             menu_open: None,
             ctx,
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -342,9 +384,14 @@ impl App for Monitor {
             }
             Msg::Signal(pid, sig) => {
                 if let Err(e) = procfs::signal(pid, sig) {
-                    model.error = Some(format!("señal a {pid}: {e}"));
+                    let msg = format!("señal a {pid}: {e}");
+                    model.error = Some(msg.clone());
+                    push_toast(&mut model, handle, |id| Toast::error(id, msg, TOAST_TTL));
                 } else {
                     model.error = None;
+                    push_toast(&mut model, handle, |id| {
+                        Toast::info(id, format!("señal enviada a {pid}"), TOAST_TTL)
+                    });
                     handle.spawn(|| Msg::System(procfs::scan()));
                 }
             }
@@ -356,6 +403,9 @@ impl App for Monitor {
                     let _ = ctx.rt.block_on(ctx.engine.stop(id, Duration::from_secs(3)));
                     Msg::Snapshot(ctx.poll())
                 });
+                push_toast(&mut model, handle, |tid| {
+                    Toast::info(tid, "Deteniendo unidad (SIGTERM → grace)…", TOAST_TTL)
+                });
                 model.selected = None;
             }
             Msg::Kill(id) => {
@@ -363,6 +413,9 @@ impl App for Monitor {
                 handle.spawn(move || {
                     let _ = ctx.rt.block_on(ctx.engine.stop(id, Duration::ZERO));
                     Msg::Snapshot(ctx.poll())
+                });
+                push_toast(&mut model, handle, |tid| {
+                    Toast::warning(tid, "Matando unidad (grace 0)…", TOAST_TTL)
                 });
                 model.selected = None;
             }
@@ -391,20 +444,34 @@ impl App for Monitor {
                     _ => {}
                 }
             }
+            Msg::ToastExpire(id) => model.toasts.retain(|t| t.id != id),
         }
         model
     }
 
     fn view(model: &Model) -> View<Msg> {
         let t = &model.theme;
-        let body = match model.tab {
+        let inner = match model.tab {
             Tab::System => system_body(model),
             Tab::Map => map_body(model),
             Tab::Units => units_body(model),
             Tab::Wawa => wawa_body(model),
         };
 
-        View::new(Style {
+        // Transición de escena: al conmutar de pestaña la `tab_key` cambia y el
+        // cuerpo entra con fade + slide-up suave en vez de saltar de golpe.
+        let body = View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![inner])
+        .animated_enter_from(tab_key(model.tab), motion::SLOW, Affine::translate((0.0, 24.0)));
+
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0),
@@ -418,7 +485,23 @@ impl App for Monitor {
             header(model),
             tabs(model),
             body,
-        ])
+        ]);
+
+        // Overlay de toasts (bottom-right). Sólo los que aún viven.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, VIEWPORT, Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
