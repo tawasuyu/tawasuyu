@@ -24,7 +24,11 @@
 //! que lo influyen, de aplicarle a su posición de reposo la matriz de skinning
 //! de cada hueso: `v' = Σ_b w_b · (skin_b · v_rest)`.
 
+use std::collections::HashMap;
+
 use kurbo::{Affine, Point, Vec2};
+
+use crate::RenderFrame;
 
 /// Índice de un hueso dentro del esqueleto.
 pub type BoneId = usize;
@@ -259,6 +263,132 @@ impl Mesh {
     }
 }
 
+/// Interpola linealmente dos poses (translación/escala lerp, rotación lerp del
+/// ángulo). Es el blend de poses que usa el crossfade esqueletal — mezclar
+/// *poses* da una deformación correcta, a diferencia del crossfade de píxeles.
+pub fn lerp_pose(a: Pose, b: Pose, f: f64) -> Pose {
+    let lerp = |x: f64, y: f64| x + (y - x) * f;
+    Pose {
+        translation: Vec2::new(
+            lerp(a.translation.x, b.translation.x),
+            lerp(a.translation.y, b.translation.y),
+        ),
+        rotation: lerp(a.rotation, b.rotation),
+        scale: Vec2::new(lerp(a.scale.x, b.scale.x), lerp(a.scale.y, b.scale.y)),
+    }
+}
+
+/// Keyframe de pose de un hueso en un instante.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PoseKey {
+    pub t: f64,
+    pub pose: Pose,
+}
+
+/// Pista de animación de un hueso: keyframes de pose ordenados por tiempo.
+#[derive(Debug, Clone, Default)]
+pub struct BoneTrack {
+    pub bone: BoneId,
+    pub keys: Vec<PoseKey>,
+}
+
+impl BoneTrack {
+    /// Pose en el instante `t` (lineal entre keyframes, clamp en los extremos).
+    pub fn sample(&self, t: f64) -> Pose {
+        match self.keys.as_slice() {
+            [] => Pose::identity(),
+            [only] => only.pose,
+            keys => {
+                if t <= keys[0].t {
+                    return keys[0].pose;
+                }
+                let last = keys[keys.len() - 1];
+                if t >= last.t {
+                    return last.pose;
+                }
+                for w in keys.windows(2) {
+                    let (a, b) = (w[0], w[1]);
+                    if t >= a.t && t <= b.t {
+                        let span = b.t - a.t;
+                        let f = if span > 1e-12 { (t - a.t) / span } else { 0.0 };
+                        return lerp_pose(a.pose, b.pose, f);
+                    }
+                }
+                last.pose
+            }
+        }
+    }
+}
+
+/// Una animación esqueletal: pistas de pose por hueso, con duración y loop. Es
+/// lo que un *estado* de la máquina reproduce (un clip = una `BoneAnimation`).
+/// Los huesos no incluidos en ninguna pista conservan su pose actual.
+#[derive(Debug, Clone, Default)]
+pub struct BoneAnimation {
+    pub duration: f64,
+    pub looping: bool,
+    pub tracks: Vec<BoneTrack>,
+}
+
+impl BoneAnimation {
+    /// Samplea todas las pistas en `t` (envuelto por la duración si es loop) a
+    /// pares `(hueso, pose)`, reusando el buffer `out`.
+    pub fn sample_into(&self, t: f64, out: &mut Vec<(BoneId, Pose)>) {
+        let tt = if self.looping && self.duration > 0.0 {
+            t.rem_euclid(self.duration)
+        } else {
+            t
+        };
+        out.clear();
+        out.extend(self.tracks.iter().map(|tr| (tr.bone, tr.sample(tt))));
+    }
+
+    /// Posa el esqueleto con esta animación en el instante `t` y llama `update`.
+    pub fn apply(&self, skel: &mut Skeleton, t: f64) {
+        let mut buf = Vec::new();
+        self.sample_into(t, &mut buf);
+        for (b, p) in buf {
+            skel.set_pose(b, p);
+        }
+        skel.update();
+    }
+}
+
+/// Posa el esqueleto según el [`RenderFrame`] de una máquina de estados, usando
+/// las `clips` ([`BoneAnimation`]) indexadas por `ClipId`. Durante una
+/// transición blendea **poses** (no píxeles) por la mezcla del frame. Llama
+/// `skel.update()` al final. Es el puente que une máquina-de-estados →
+/// esqueleto: estado/transición deciden la pose, el skinning la convierte en
+/// deformación.
+///
+/// [`RenderFrame`]: crate::RenderFrame
+pub fn pose_from_render_frame(skel: &mut Skeleton, frame: &RenderFrame, clips: &[BoneAnimation]) {
+    let mut poses: HashMap<BoneId, Pose> = HashMap::new();
+    let mut buf = Vec::new();
+    if let Some(a) = clips.get(frame.primary.clip as usize) {
+        a.sample_into(frame.primary.time_secs, &mut buf);
+        for (b, p) in buf.drain(..) {
+            poses.insert(b, p);
+        }
+    }
+    if let Some((inc, mix)) = frame.blend {
+        if let Some(a) = clips.get(inc.clip as usize) {
+            a.sample_into(inc.time_secs, &mut buf);
+            let mix = mix as f64;
+            for (b, p) in buf.drain(..) {
+                poses
+                    .entry(b)
+                    .and_modify(|cur| *cur = lerp_pose(*cur, p, mix))
+                    .or_insert(p);
+            }
+        }
+    }
+    for (b, p) in poses {
+        skel.set_pose(b, p);
+    }
+    skel.update();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +501,110 @@ mod tests {
         });
         let d = m.deform(&s);
         assert!(approx(d[0], 7.0, 7.0), "fue {:?}", d[0]);
+    }
+
+    #[test]
+    fn track_samplea_lineal_entre_keyframes() {
+        let tr = BoneTrack {
+            bone: 0,
+            keys: vec![
+                PoseKey { t: 0.0, pose: Pose::rotate(0.0) },
+                PoseKey { t: 2.0, pose: Pose::rotate(2.0) },
+            ],
+        };
+        assert!((tr.sample(0.0).rotation - 0.0).abs() < 1e-9);
+        assert!((tr.sample(2.0).rotation - 2.0).abs() < 1e-9);
+        assert!((tr.sample(1.0).rotation - 1.0).abs() < 1e-9, "punto medio");
+        // Clamp fuera de rango.
+        assert!((tr.sample(-5.0).rotation - 0.0).abs() < 1e-9);
+        assert!((tr.sample(99.0).rotation - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn animacion_en_loop_envuelve_el_tiempo() {
+        let anim = BoneAnimation {
+            duration: 2.0,
+            looping: true,
+            tracks: vec![BoneTrack {
+                bone: 0,
+                keys: vec![
+                    PoseKey { t: 0.0, pose: Pose::rotate(0.0) },
+                    PoseKey { t: 2.0, pose: Pose::rotate(2.0) },
+                ],
+            }],
+        };
+        let mut buf = Vec::new();
+        anim.sample_into(3.0, &mut buf); // 3 % 2 = 1 → rotación ~1.0
+        assert!((buf[0].1.rotation - 1.0).abs() < 1e-9, "fue {}", buf[0].1.rotation);
+    }
+
+    #[test]
+    fn render_frame_simple_posa_el_esqueleto() {
+        let mut s = Skeleton::new();
+        let b = s.add_bone(None, Pose::identity());
+        s.bind();
+        let anim = BoneAnimation {
+            duration: 2.0,
+            looping: true,
+            tracks: vec![BoneTrack {
+                bone: b,
+                keys: vec![
+                    PoseKey { t: 0.0, pose: Pose::identity() },
+                    PoseKey {
+                        t: 1.0,
+                        pose: Pose::rotate(std::f64::consts::FRAC_PI_2),
+                    },
+                ],
+            }],
+        };
+        let clips = vec![anim];
+        let frame = crate::RenderFrame {
+            primary: crate::ClipSample { clip: 0, time_secs: 1.0 },
+            blend: None,
+        };
+        pose_from_render_frame(&mut s, &frame, &clips);
+        let mut m = Mesh::new();
+        m.vertices.push(Vertex::rigid(Point::new(10.0, 0.0), (0.0, 0.0), b));
+        let d = m.deform(&s);
+        assert!(approx(d[0], 0.0, 10.0), "fue {:?}", d[0]);
+    }
+
+    #[test]
+    fn render_frame_con_blend_mezcla_poses() {
+        let mut s = Skeleton::new();
+        let b = s.add_bone(None, Pose::identity());
+        s.bind();
+        // clip0: identidad; clip1: 90°. Blend 0.5 → 45°.
+        let rest = BoneAnimation {
+            duration: 1.0,
+            looping: true,
+            tracks: vec![BoneTrack {
+                bone: b,
+                keys: vec![PoseKey { t: 0.0, pose: Pose::identity() }],
+            }],
+        };
+        let turn = BoneAnimation {
+            duration: 1.0,
+            looping: true,
+            tracks: vec![BoneTrack {
+                bone: b,
+                keys: vec![PoseKey {
+                    t: 0.0,
+                    pose: Pose::rotate(std::f64::consts::FRAC_PI_2),
+                }],
+            }],
+        };
+        let clips = vec![rest, turn];
+        let frame = crate::RenderFrame {
+            primary: crate::ClipSample { clip: 0, time_secs: 0.0 },
+            blend: Some((crate::ClipSample { clip: 1, time_secs: 0.0 }, 0.5)),
+        };
+        pose_from_render_frame(&mut s, &frame, &clips);
+        let mut m = Mesh::new();
+        m.vertices.push(Vertex::rigid(Point::new(10.0, 0.0), (0.0, 0.0), b));
+        let d = m.deform(&s);
+        // 10·(cos45, sin45) ≈ (7.071, 7.071).
+        let c = 10.0 * std::f64::consts::FRAC_1_SQRT_2;
+        assert!((d[0].x - c).abs() < 1e-9 && (d[0].y - c).abs() < 1e-9, "fue {:?}", d[0]);
     }
 }
