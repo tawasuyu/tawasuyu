@@ -6,7 +6,7 @@ use wasmi::{
     CompilationMode, Config, Engine, Error, Extern, Linker, Memory, Module, Store, TypedFunc,
 };
 
-use mirada_protocol::{BodyEvent, BrainCommand, Decorations, Rect, TileInput, WindowId};
+use mirada_protocol::{BodyEvent, BrainCommand, Decorations, Rect, TileInput, WindowEffects, WindowId};
 
 use crate::caps::{
     cap_for_import, cap_name, caps_list, CapsPlugin, CAP_DECOR, CAP_EFFECTS, CAP_KEYS, CAP_SPAWN,
@@ -277,10 +277,13 @@ fn register_host_fns(linker: &mut Linker<HostCtx>, granted: CapsPlugin) -> Resul
     if granted & CAP_EFFECTS != 0 {
         linker.func_wrap(
             "mirada_host",
-            "host_emit_opacity",
-            |mut caller: Caller<'_, HostCtx>, id: u64, opacity: u32| {
-                let op = opacity.min(255) as u8;
-                caller.data_mut().out.push(BrainCommand::SetOpacity(vec![(id, op)]));
+            "host_emit_effects",
+            |mut caller: Caller<'_, HostCtx>, id: u64, opacity: u32, flags: u32| {
+                let effects = WindowEffects {
+                    opacity: opacity.min(255) as u8,
+                    shadow: flags & 1 != 0,
+                };
+                caller.data_mut().out.push(BrainCommand::SetEffects(vec![(id, effects)]));
             },
         )?;
     }

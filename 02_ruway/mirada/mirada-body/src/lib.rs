@@ -18,7 +18,9 @@
 
 use std::collections::BTreeMap;
 
-use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, Permisos, Rect, WindowId};
+use mirada_protocol::{
+    BodyEvent, BrainCommand, Decorations, OutputId, Permisos, Rect, WindowEffects, WindowId,
+};
 
 /// Una superficie Wayland desde la óptica del Cuerpo.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,9 +105,9 @@ pub enum BodyOp {
     /// Bloquea la sesión activa: el compositor compone el shell de credenciales
     /// (greeter en modo lock) encima y le rutea el input hasta el desbloqueo.
     Lock,
-    /// Fija la opacidad (`0..=255`) de ciertas ventanas; el backend la usa como
-    /// alfa al componer cada superficie.
-    SetOpacity(Vec<(WindowId, u8)>),
+    /// Fija los efectos visuales (opacidad, sombra…) de ciertas ventanas; el
+    /// backend los aplica al componer cada superficie.
+    SetEffects(Vec<(WindowId, WindowEffects)>),
 }
 
 /// La contabilidad del Cuerpo: salidas y superficies.
@@ -216,9 +218,9 @@ impl BodyState {
             BrainCommand::Spawn(cmd) => vec![BodyOp::Spawn(cmd)],
             BrainCommand::Shutdown => vec![BodyOp::Shutdown],
             BrainCommand::Lock => vec![BodyOp::Lock],
-            // La opacidad es estado de superficie puro; el backend la aplica
-            // directo (no afecta la contabilidad de geometría/foco del Cuerpo).
-            BrainCommand::SetOpacity(v) => vec![BodyOp::SetOpacity(v)],
+            // Los efectos son estado de superficie puro; el backend los aplica
+            // directo (no afectan la contabilidad de geometría/foco del Cuerpo).
+            BrainCommand::SetEffects(v) => vec![BodyOp::SetEffects(v)],
         }
     }
 

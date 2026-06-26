@@ -1164,10 +1164,10 @@ impl App {
             }
             BodyOp::Lock => self.request_lock(),
             BodyOp::Shutdown => self.running = false,
-            BodyOp::SetOpacity(v) => {
-                for (id, opacity) in v {
+            BodyOp::SetEffects(v) => {
+                for (id, effects) in v {
                     if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
-                        w.opacity = opacity;
+                        w.effects = effects;
                     }
                 }
             }
@@ -1252,7 +1252,7 @@ impl App {
             wlr_handles: Vec::new(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
             ssd,
-            opacity: 255,
+            effects: mirada_brain::WindowEffects::default(),
         });
 
         // Alta en el servidor wlr-foreign-toplevel (taskbar de pata): crea un

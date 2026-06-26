@@ -249,7 +249,7 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                     &w.surface,
                     render_loc(w, output_h, tbh),
                     1.0,
-                    w.opacity as f32 / 255.0,
+                    w.effects.opacity as f32 / 255.0,
                     Kind::Unspecified,
                 )
             });

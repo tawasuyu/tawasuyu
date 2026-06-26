@@ -64,4 +64,6 @@ pub use mirada_layout::{
     disponer, envolvente, wallpaper_dst_rect, Disposicion, LayoutMode, LayoutParams, Rect,
     WallpaperFit, WindowId, Workspace, ZoneFrac,
 };
-pub use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, WindowPlacement};
+pub use mirada_protocol::{
+    BodyEvent, BrainCommand, Decorations, OutputId, WindowEffects, WindowPlacement,
+};

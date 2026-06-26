@@ -363,7 +363,7 @@ impl DrmState {
                 &w.surface,
                 (x, y),
                 1.0,
-                w.opacity as f32 / 255.0,
+                w.effects.opacity as f32 / 255.0,
                 Kind::Unspecified,
             ) {
                 into.push(Frame::Window(el));
@@ -371,8 +371,9 @@ impl DrmState {
             // Sombra: capas negras translúcidas DETRÁS de la ventana (se empujan
             // después del contenido = quedan al fondo). Sin shader — rects que se
             // expanden y se desplazan hacia abajo fingen un degradé suave. Gateada
-            // por MIRADA_SHADOW mientras se verifica en pantalla.
-            if shadows_on && !w.is_shell {
+            // por MIRADA_SHADOW (global) o por el efecto de ventana que fija el
+            // Cerebro vía SetEffects (p. ej. sombrear sólo la enfocada).
+            if (shadows_on || w.effects.shadow) && !w.is_shell {
                 // (expansión, desplazamiento-y, alfa): de afuera-tenue a cerca-fuerte.
                 for &(exp, dy, a) in &[(12i32, 10i32, 0.06f32), (6, 5, 0.10), (2, 2, 0.16)] {
                     let mut sh = SolidColorBuffer::default();

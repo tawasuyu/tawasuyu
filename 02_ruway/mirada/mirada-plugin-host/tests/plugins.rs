@@ -178,16 +178,19 @@ fn reactor_atenua_las_ventanas_sin_foco() {
         .call_on_event(&BodyEvent::WindowOpened { id: 2, app_id: "b".into(), title: "w".into() })
         .unwrap();
 
-    let mut opac = std::collections::HashMap::new();
+    let mut fx = std::collections::HashMap::new();
     for c in &cmds {
-        if let BrainCommand::SetOpacity(v) = c {
-            for (id, op) in v {
-                opac.insert(*id, *op);
+        if let BrainCommand::SetEffects(v) = c {
+            for (id, e) in v {
+                fx.insert(*id, *e);
             }
         }
     }
-    assert_eq!(opac.get(&2), Some(&255), "la enfocada queda opaca: {opac:?}");
-    assert_eq!(opac.get(&1), Some(&180), "la de fondo se atenúa: {opac:?}");
+    // La enfocada (2): opaca + sombra. La de fondo (1): atenuada, sin sombra.
+    assert_eq!(fx.get(&2).map(|e| e.opacity), Some(255), "enfocada opaca: {fx:?}");
+    assert_eq!(fx.get(&2).map(|e| e.shadow), Some(true), "enfocada con sombra: {fx:?}");
+    assert_eq!(fx.get(&1).map(|e| e.opacity), Some(180), "fondo atenuado: {fx:?}");
+    assert_eq!(fx.get(&1).map(|e| e.shadow), Some(false), "fondo sin sombra: {fx:?}");
 }
 
 // --- Conductor: Desktop autoritativo + plugins que lo aumentan. -------------

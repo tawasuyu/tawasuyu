@@ -72,7 +72,7 @@ pub fn cap_for_import(name: &str) -> Option<CapsPlugin> {
         "host_emit_close" | "host_emit_kill" => CAP_WINDOW_CONTROL,
         "host_emit_keys" => CAP_KEYS,
         "host_emit_decor" | "host_emit_cursor" => CAP_DECOR,
-        "host_emit_opacity" => CAP_EFFECTS,
+        "host_emit_effects" => CAP_EFFECTS,
         _ => return None,
     })
 }

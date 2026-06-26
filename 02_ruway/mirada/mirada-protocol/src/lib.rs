@@ -224,6 +224,27 @@ fn permitido(denylist: &[String], exe: &str) -> bool {
     !denylist.iter().any(|d| exe.contains(&d.to_lowercase()))
 }
 
+/// Los efectos visuales que el Cerebro fija por ventana ([`BrainCommand::SetEffects`]).
+///
+/// Declarativo y extensible: un efecto nuevo (esquinas redondeadas, blur…) se
+/// agrega como un campo aquí, sin tocar [`BrainCommand`]. Todos los campos son
+/// `Eq`-safe (sin `f32`): la opacidad va en `u8`, como los colores de
+/// [`Decorations`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowEffects {
+    /// Opacidad de composición: `0` = transparente, `255` = opaca.
+    pub opacity: u8,
+    /// Pintar una sombra difusa detrás de la ventana.
+    pub shadow: bool,
+}
+
+impl Default for WindowEffects {
+    /// Sin efectos: opaca y sin sombra.
+    fn default() -> Self {
+        Self { opacity: 255, shadow: false }
+    }
+}
+
 /// Una orden del Cerebro al Cuerpo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BrainCommand {
@@ -265,13 +286,10 @@ pub enum BrainCommand {
     /// duración del slide en ms (`0` = salto seco). En modo embebido el Cuerpo
     /// ya tiene estos datos y no recibe esto.
     SetWorkspaces { active: u32, loads: Vec<u32>, slide_ms: u32 },
-    /// Fija la **opacidad** de ciertas ventanas (`0` = transparente, `255` =
-    /// opaca). El Cuerpo la usa como alfa al componer cada superficie; las
-    /// ventanas no listadas conservan la suya. Es la base de los efectos Tier-2
-    /// (p. ej. atenuar las ventanas sin foco). Opacidad en `u8` —no `f32`— para
-    /// conservar `Eq` en [`BrainCommand`], igual que los colores de
-    /// [`Decorations`].
-    SetOpacity(Vec<(WindowId, u8)>),
+    /// Fija los **efectos visuales** ([`WindowEffects`]) de ciertas ventanas; las
+    /// no listadas conservan los suyos. Es el canal Tier-2 declarativo: efectos
+    /// nuevos se agregan como campos de [`WindowEffects`], sin tocar este enum.
+    SetEffects(Vec<(WindowId, WindowEffects)>),
 }
 
 /// Un hecho del Cuerpo que el Cerebro debe conocer.
@@ -561,8 +579,11 @@ mod tests {
     }
 
     #[test]
-    fn frame_round_trips_set_opacity() {
-        let cmd = BrainCommand::SetOpacity(vec![(7, 180), (9, 255)]);
+    fn frame_round_trips_set_effects() {
+        let cmd = BrainCommand::SetEffects(vec![
+            (7, WindowEffects { opacity: 180, shadow: false }),
+            (9, WindowEffects { opacity: 255, shadow: true }),
+        ]);
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
         let back: BrainCommand = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();

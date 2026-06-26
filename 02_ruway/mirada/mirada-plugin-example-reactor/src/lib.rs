@@ -3,9 +3,9 @@
 //!
 //! - **Terminal** (`CAP_KEYS` + `CAP_SPAWN`): registra `Super+a` y, al pulsarlo,
 //!   lanza una terminal.
-//! - **Atenuado por foco** (`CAP_EFFECTS`): mantiene la ventana enfocada opaca y
-//!   las demás a media luz — el efecto Tier-2 clásico de "inactive window
-//!   dimming". Sigue el foco por click / entrada del puntero.
+//! - **Realce por foco** (`CAP_EFFECTS`): la ventana enfocada queda opaca y con
+//!   sombra; las demás, a media luz y sin sombra — el efecto Tier-2 clásico de
+//!   "inactive window dimming". Sigue el foco por click / entrada del puntero.
 //!
 //! Si el manifest no concediera alguna capacidad, el símbolo del host no se
 //! registra y el módulo ni instancia — la frontera es física.
@@ -16,7 +16,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use mirada_plugin_sdk::{export_reactor_plugin, BodyEvent, Ctx, ReactorPlugin, WindowId};
+use mirada_plugin_sdk::{export_reactor_plugin, BodyEvent, Ctx, ReactorPlugin, WindowEffects, WindowId};
 
 /// Opacidad de las ventanas sin foco (≈ 70 %).
 const DIM: u8 = 180;
@@ -29,10 +29,14 @@ struct Reactor {
 }
 
 impl Reactor {
-    /// Reaplica la opacidad: la enfocada plena, el resto atenuado.
+    /// Reaplica los efectos: la enfocada plena + sombra, el resto atenuado.
     fn redim(&self, ctx: &mut Ctx) {
         for &w in &self.windows {
-            ctx.set_opacity(w, if Some(w) == self.focused { FULL } else { DIM });
+            let foco = Some(w) == self.focused;
+            ctx.set_effects(
+                w,
+                WindowEffects { opacity: if foco { FULL } else { DIM }, shadow: foco },
+            );
         }
     }
 }

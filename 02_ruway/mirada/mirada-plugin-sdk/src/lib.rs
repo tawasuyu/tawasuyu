@@ -32,7 +32,8 @@ use alloc::vec::Vec;
 
 pub use mirada_layout;
 pub use mirada_protocol::{
-    self, BodyEvent, BrainCommand, Decorations, LayoutMode, LayoutParams, Rect, TileInput, WindowId,
+    self, BodyEvent, BrainCommand, Decorations, LayoutMode, LayoutParams, Rect, TileInput,
+    WindowEffects, WindowId,
 };
 
 // Re-exports para que los macros funcionen en crates que no traen `alloc`.
@@ -165,7 +166,7 @@ extern "C" {
     fn host_emit_keys(ptr: u32, len: u32);
     fn host_emit_decor(ptr: u32, len: u32);
     fn host_emit_cursor(ptr: u32, len: u32);
-    fn host_emit_opacity(id: u64, opacity: u32);
+    fn host_emit_effects(id: u64, opacity: u32, flags: u32);
 }
 
 // Stubs en host: el crate compila para el smoke test; nunca se llaman ahí.
@@ -179,7 +180,7 @@ mod host_imports {
     pub unsafe fn host_emit_keys(_: u32, _: u32) {}
     pub unsafe fn host_emit_decor(_: u32, _: u32) {}
     pub unsafe fn host_emit_cursor(_: u32, _: u32) {}
-    pub unsafe fn host_emit_opacity(_: u64, _: u32) {}
+    pub unsafe fn host_emit_effects(_: u64, _: u32, _: u32) {}
 }
 #[cfg(all(feature = "reactor", not(target_arch = "wasm32")))]
 use host_imports::*;
@@ -241,10 +242,11 @@ impl Ctx {
         unsafe { host_emit_cursor(b.as_ptr() as u32, b.len() as u32) }
     }
 
-    /// Fija la opacidad de una ventana (`0` = transparente, `255` = opaca)
-    /// (`CAP_EFFECTS`). Base de los efectos: atenuar las ventanas sin foco, etc.
-    pub fn set_opacity(&mut self, id: WindowId, opacity: u8) {
-        unsafe { host_emit_opacity(id, opacity as u32) }
+    /// Fija los efectos visuales de una ventana (`CAP_EFFECTS`): opacidad
+    /// (`0`=transparente, `255`=opaca) y sombra. Atenuar/sombrear según foco, etc.
+    pub fn set_effects(&mut self, id: WindowId, effects: WindowEffects) {
+        let flags = if effects.shadow { 1 } else { 0 };
+        unsafe { host_emit_effects(id, effects.opacity as u32, flags) }
     }
 }
 

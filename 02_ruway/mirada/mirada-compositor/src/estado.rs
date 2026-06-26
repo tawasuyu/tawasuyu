@@ -22,7 +22,7 @@ use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shm::ShmState;
 use auth_core::UserInfo;
 use mirada_body::BodyState;
-use mirada_brain::{BrainCommand, Desktop, Decorations, Permisos};
+use mirada_brain::{BrainCommand, Desktop, Decorations, Permisos, WindowEffects};
 use mirada_link::BodyLink;
 use crate::screencopy;
 
@@ -322,10 +322,10 @@ pub(crate) struct ManagedWindow {
     /// negociación `xdg-decoration` ([`App::ssd_surfaces`]); las apps que ni
     /// hablan el protocolo quedan en CSD (no las decoramos).
     pub(crate) ssd: bool,
-    /// Opacidad de composición (`0` = transparente, `255` = opaca). El Cerebro
-    /// la fija con `BrainCommand::SetOpacity` (efectos Tier-2: atenuar las
-    /// ventanas sin foco, etc.); el render la usa como alfa. Por defecto `255`.
-    pub(crate) opacity: u8,
+    /// Efectos visuales (opacidad, sombra…) que el Cerebro fija con
+    /// `BrainCommand::SetEffects` (Tier-2: atenuar/sombrear según foco, etc.).
+    /// El render los aplica. Por defecto: opaca y sin sombra.
+    pub(crate) effects: WindowEffects,
 }
 
 /// Un arrastre de ratón en curso: mueve o redimensiona una ventana.
