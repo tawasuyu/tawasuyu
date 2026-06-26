@@ -35,6 +35,8 @@ mod overview;
 mod waveedit;
 #[path = "../src/record.rs"]
 mod record;
+#[path = "../src/proyecto.rs"]
+mod proyecto;
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -265,6 +267,21 @@ fn app_menu() -> AppMenu {
 /// Construye el `Model` real de la app (sin Player ni SF2 — el pantallazo
 /// no abre device de audio) con el mixer abierto a la izquierda y los
 /// efectos a la derecha, para que se vean los dos sidebars de dientes.
+/// Proyecto demo con 3 versiones selladas, para que el grafo se vea.
+fn proyecto_demo() -> takiy_proyecto::Proyecto {
+    let mut p = takiy_proyecto::Proyecto::nuevo("demo", editor_demo().score);
+    p.push("takiy", "primer boceto", 1);
+    if let Some(t) = p.score_mut().track_mut(0) {
+        t.add(ScoreNote::new(Pitch::A4, 0.0, 1.0, 90));
+    }
+    p.push("takiy", "melodía base", 2);
+    if let Some(t) = p.score_mut().track_mut(1) {
+        t.mute = true;
+    }
+    p.push("takiy", "mute arpegio", 3);
+    p
+}
+
 fn model_demo(theme: Theme) -> Model {
     Model {
         editor: editor_demo(),
@@ -293,6 +310,11 @@ fn model_demo(theme: Theme) -> Model {
         onda_peaks: std::collections::HashMap::new(),
         wave_sel: None,
         recording: None,
+        proyectos: vec![proyecto_demo(), takiy_proyecto::Proyecto::nuevo("bajo", editor_demo().score)],
+        proy_activo: 0,
+        proy_dir: std::env::temp_dir().join("takiy-proyectos"),
+        ver_versiones: true,
+        ver_pistas: true,
     }
 }
 
@@ -369,20 +391,18 @@ fn view_demo(model: &Model, theme: Theme) -> View<Msg> {
             &sp,
         );
     }
-    if let Some(lp) = chrome::panel(chrome::DockSide::Left, model, &theme) {
-        core = splitter_two(
-            Direction::Row,
-            lp,
-            PaneSize::Fixed(model.left_w),
-            core,
-            PaneSize::Flex,
-            |phase, dx| match phase {
-                DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Left, dx)),
-                DragPhase::End => None,
-            },
-            &sp,
-        );
-    }
+    core = splitter_two(
+        Direction::Row,
+        proyecto::panel(model, &theme),
+        PaneSize::Fixed(model.left_w),
+        core,
+        PaneSize::Flex,
+        |phase, dx| match phase {
+            DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Left, dx)),
+            DragPhase::End => None,
+        },
+        &sp,
+    );
 
     let center = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -401,7 +421,7 @@ fn view_demo(model: &Model, theme: Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![
-        chrome::rail(chrome::DockSide::Left, model, &theme),
+        proyecto::rail(model, &theme),
         center,
         chrome::rail(chrome::DockSide::Right, model, &theme),
     ]);

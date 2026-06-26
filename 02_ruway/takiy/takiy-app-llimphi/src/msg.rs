@@ -169,6 +169,20 @@ pub(crate) enum Msg {
     RecordToggleBacking,
     /// Desplaza la octava base del mapeo de teclado en `delta`.
     RecordOctave(i32),
+    /// Cambia el proyecto activo (sincroniza el editor del actual a su
+    /// working copy y carga el otro).
+    ProyectoSwitch(usize),
+    /// «Abrir»: crea un proyecto nuevo y lo activa.
+    ProyectoNuevo,
+    /// Sella una versión (commit) del proyecto activo en su DAG y guarda
+    /// el `.takiyproj`.
+    GuardarVersion,
+    /// Restaura una versión: trae ese commit a la working copy del editor.
+    CheckoutVersion(takiy_proyecto::Hash),
+    /// Despliega/colapsa la sección «Versiones» del sidebar.
+    ToggleVersiones,
+    /// Despliega/colapsa la sección «Pistas» del sidebar.
+    TogglePistas,
     Quit,
 }
 

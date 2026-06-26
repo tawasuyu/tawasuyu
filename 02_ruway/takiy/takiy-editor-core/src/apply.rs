@@ -82,6 +82,7 @@ impl EditorState {
             EditMsg::NudgeTrackVolume { track, delta } => self.nudge_track_volume(track, delta),
             EditMsg::NudgeTrackPan { track, delta } => self.nudge_track_pan(track, delta),
             EditMsg::ToggleMuteTrack { track } => self.toggle_mute_track(track),
+            EditMsg::ToggleVisibleTrack { track } => self.toggle_visible_track(track),
             EditMsg::ToggleSoloTrack { track } => self.toggle_solo_track(track),
             EditMsg::SetSnap { snap } => self.set_snap(snap),
             EditMsg::SetMasterDelayTime { idx } => self.set_master_delay_time(idx),
@@ -315,6 +316,13 @@ impl EditorState {
         t.mute = !t.mute;
         let state = if t.mute { "on" } else { "off" };
         Some(format!("pista {track} · mute {state}"))
+    }
+
+    fn toggle_visible_track(&mut self, track: usize) -> ApplyOutcome {
+        let t = self.score.track_mut(track)?;
+        t.visible = !t.visible;
+        let state = if t.visible { "visible" } else { "oculta" };
+        Some(format!("pista {track} · {state} en lienzo"))
     }
 
     fn toggle_solo_track(&mut self, track: usize) -> ApplyOutcome {

@@ -230,6 +230,12 @@ pub(crate) fn paint_piano_roll(
     let active_outline = Color::from_rgba8(255, 255, 255, 230);
     let selected_outline = Color::from_rgba8(255, 230, 90, 255);
     for (track_idx, track) in score.tracks().iter().enumerate() {
+        // Pista oculta del lienzo: no se dibujan sus notas (sigue sonando
+        // salvo que esté muteada — visible y mute son independientes). La
+        // activa se dibuja siempre, para no editar a ciegas.
+        if !track.visible && track_idx != active_track {
+            continue;
+        }
         let color = palette[track_idx % palette.len()];
         let is_active = track_idx == active_track;
         for (note_idx, note) in track.notes().iter().enumerate() {

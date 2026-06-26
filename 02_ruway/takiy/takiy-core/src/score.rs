@@ -211,6 +211,12 @@ pub struct Track {
     /// `serde(default)` → los `.takiy.json` previos cargan como `Midi`.
     #[serde(default)]
     pub view: TrackView,
+    /// Si la pista se dibuja en el lienzo (piano roll). `true` por
+    /// default; apagarla la oculta del canvas sin silenciarla (eso es
+    /// `mute`, independiente). `serde(default = "default_visible")` →
+    /// los archivos previos cargan visibles.
+    #[serde(default = "default_visible")]
+    pub visible: bool,
     /// Ediciones de onda no destructivas (silenciar/ganancia/fades por
     /// rango). `None` o vacía ⇒ sin efecto (render byte-exact). `serde
     /// (default)` mantiene compat con `.takiy.json` previos.
@@ -245,12 +251,17 @@ fn default_volume() -> f32 {
     1.0
 }
 
+fn default_visible() -> bool {
+    true
+}
+
 impl Default for Track {
     fn default() -> Self {
         Self {
             name: String::new(),
             notes: Vec::new(),
             view: TrackView::Midi,
+            visible: true,
             wave: None,
             volume: 1.0,
             mute: false,
@@ -268,6 +279,7 @@ impl Track {
             name: name.into(),
             notes: Vec::new(),
             view: TrackView::Midi,
+            visible: true,
             wave: None,
             volume: 1.0,
             mute: false,
@@ -732,6 +744,19 @@ mod tests {
         assert_eq!(layer.gain_at(9.0), 1.0); // fuera de todo
         // Capa vacía = identidad.
         assert_eq!(WaveLayer::default().gain_at(5.0), 1.0);
+    }
+
+    #[test]
+    fn track_visible_defaults_true_and_survives_old_json() {
+        // JSON sin `visible` (formato previo) carga como visible.
+        let json = r#"{"name":"old","notes":[]}"#;
+        let t: Track = serde_json::from_str(json).unwrap();
+        assert!(t.visible);
+        // Round-trip de una pista oculta.
+        let mut h = Track::new("oculta");
+        h.visible = false;
+        let back: Track = serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap();
+        assert!(!back.visible);
     }
 
     #[test]

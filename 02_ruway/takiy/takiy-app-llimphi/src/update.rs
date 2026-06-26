@@ -11,6 +11,7 @@ use takiy_app::{
 };
 use takiy_core::{Pitch, Score, ScoreNote, Track};
 use takiy_playback::{PlayOpts, Player};
+use takiy_proyecto::Proyecto;
 use takiy_synth::write_wav;
 
 use crate::appmodel::{Model, RecState, Screen};
@@ -167,6 +168,46 @@ pub(crate) fn refresh_onda_peaks(model: &mut Model) {
     for i in onda {
         let peaks = crate::overview::compute_onda_peaks(&model.editor.score, i);
         model.onda_peaks.insert(i, peaks);
+    }
+}
+
+/// Segundos Unix actuales (para los timestamps de los commits).
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Vuelca el `Score` del editor en la working copy del proyecto activo.
+fn sync_active_proyecto(model: &mut Model) {
+    if let Some(p) = model.proyectos.get_mut(model.proy_activo) {
+        p.set_score(model.editor.score.clone());
+    }
+}
+
+/// Ruta `.takiyproj` de un proyecto (nombre saneado dentro de `proy_dir`).
+fn proyecto_path(model: &Model, idx: usize) -> std::path::PathBuf {
+    let nombre = model
+        .proyectos
+        .get(idx)
+        .map(|p| p.nombre.clone())
+        .unwrap_or_else(|| format!("proyecto{idx}"));
+    let safe: String = nombre
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    model.proy_dir.join(format!("{safe}.takiyproj"))
+}
+
+/// Persiste el proyecto activo a disco (best-effort, status en error).
+fn guardar_proyecto_activo(model: &mut Model) {
+    let path = proyecto_path(model, model.proy_activo);
+    std::fs::create_dir_all(&model.proy_dir).ok();
+    if let Some(p) = model.proyectos.get(model.proy_activo) {
+        if let Err(e) = p.guardar(&path) {
+            model.status = format!("error guardando proyecto: {e}");
+        }
     }
 }
 
@@ -939,6 +980,66 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 rec.base_octave = (rec.base_octave + delta).clamp(0, 8);
             }
         }
+        Msg::ProyectoSwitch(i) => {
+            if i != model.proy_activo && i < model.proyectos.len() {
+                // Guarda la working copy del actual antes de cambiar.
+                sync_active_proyecto(&mut model);
+                guardar_proyecto_activo(&mut model);
+                model.proy_activo = i;
+                let score = model.proyectos[i].score().clone();
+                model.editor = build_editor(score);
+                model.recording = None;
+                model.wave_sel = None;
+                model.status = format!("proyecto «{}»", model.proyectos[i].nombre);
+            }
+        }
+        Msg::ProyectoNuevo => {
+            sync_active_proyecto(&mut model);
+            guardar_proyecto_activo(&mut model);
+            let n = model.proyectos.len() + 1;
+            let mut score = takiy_core::Score::new(120.0);
+            score.add_track(takiy_core::Track::new("pista 1"));
+            let proy = Proyecto::nuevo(format!("proyecto {n}"), score.clone());
+            model.proyectos.push(proy);
+            model.proy_activo = model.proyectos.len() - 1;
+            model.editor = build_editor(score);
+            model.recording = None;
+            model.status = format!("proyecto «{}» nuevo", model.proyectos[model.proy_activo].nombre);
+        }
+        Msg::GuardarVersion => {
+            sync_active_proyecto(&mut model);
+            let ts = unix_now();
+            let activo = model.proy_activo;
+            let sellado = model.proyectos.get_mut(activo).and_then(|p| {
+                let n = p.num_versiones() + 1;
+                p.push("takiy", format!("versión {n}"), ts)
+            });
+            match sellado {
+                Some(_) => {
+                    guardar_proyecto_activo(&mut model);
+                    let n = model.proyectos[activo].num_versiones();
+                    model.status = format!("versión {n} sellada");
+                }
+                None => model.status = "sin cambios desde la última versión".into(),
+            }
+        }
+        Msg::CheckoutVersion(hash) => {
+            let activo = model.proy_activo;
+            let ok = model
+                .proyectos
+                .get_mut(activo)
+                .map(|p| p.checkout(hash))
+                .unwrap_or(false);
+            if ok {
+                let score = model.proyectos[activo].score().clone();
+                model.editor = build_editor(score);
+                model.recording = None;
+                guardar_proyecto_activo(&mut model);
+                model.status = "versión restaurada".into();
+            }
+        }
+        Msg::ToggleVersiones => model.ver_versiones = !model.ver_versiones,
+        Msg::TogglePistas => model.ver_pistas = !model.ver_pistas,
         Msg::SetTrackView { track, view } => {
             if let Some(t) = model.editor.score.track_mut(track) {
                 t.view = view;
@@ -976,12 +1077,8 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
 /// 6 px). Lo usa el menú contextual para anclarse donde cayó el click.
 fn canvas_origin(model: &Model) -> (f32, f32) {
     const SPLITTER_W: f32 = 6.0;
-    let x = RAIL_W
-        + if model.left_active.is_some() {
-            model.left_w + SPLITTER_W
-        } else {
-            0.0
-        };
+    // Rail de proyectos + sidebar (siempre presente en el piano roll).
+    let x = RAIL_W + model.left_w + SPLITTER_W;
     let y = MENU_H + TOOLBAR_H;
     (x, y)
 }

@@ -107,6 +107,19 @@ pub(crate) struct Model {
     /// Modo grabación activo (`Some`) o no. Mientras está activo, el
     /// teclado alfabético toca y graba MIDI en `RecState.track`.
     pub(crate) recording: Option<RecState>,
+    /// Proyectos abiertos (como en pluma): cada uno es un DAG de versiones
+    /// de un `Score`. La working copy del proyecto activo se sincroniza
+    /// con `editor.score`. El rail izquierdo lista un diente por proyecto
+    /// + uno para «abrir».
+    pub(crate) proyectos: Vec<takiy_proyecto::Proyecto>,
+    /// Índice del proyecto activo (el que se está editando).
+    pub(crate) proy_activo: usize,
+    /// Directorio donde se guardan los `.takiyproj`.
+    pub(crate) proy_dir: std::path::PathBuf,
+    /// Sección «Versiones» del sidebar desplegada.
+    pub(crate) ver_versiones: bool,
+    /// Sección «Pistas» del sidebar desplegada.
+    pub(crate) ver_pistas: bool,
     /// Caché de picos de onda por índice de pista, para el carril en
     /// modo `Onda`. Cada `Vec<f32>` es un perfil normalizado `[0, 1]`
     /// de resolución fija (`ONDA_PEAK_BUCKETS`) que el painter remapea

@@ -242,6 +242,9 @@ pub enum EditMsg {
     NudgeTrackPan { track: usize, delta: f32 },
     /// Toggle mute de la pista `track` (versión por-índice).
     ToggleMuteTrack { track: usize },
+    /// Muestra/oculta una pista en el lienzo (piano roll). Independiente
+    /// de `mute` (que es de audio): ocultarla no la silencia.
+    ToggleVisibleTrack { track: usize },
     /// Toggle solo de la pista `track` (versión por-índice).
     ToggleSoloTrack { track: usize },
     /// Fija la granularidad de snap (segmented del panel de tonalidad).

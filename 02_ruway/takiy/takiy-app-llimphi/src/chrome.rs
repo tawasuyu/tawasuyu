@@ -67,10 +67,13 @@ const SNAP_LABELS: [&str; 6] = ["free", "1/1", "1/2", "1/4", "1/8", "1/8t"];
 // Dock: lados y dientes (tipos en `msg.rs`, impls de presentación acá)
 // =====================================================================
 
-/// Dientes del rail izquierdo, en orden.
-const LEFT_ITEMS: [DockItem; 2] = [DockItem::Pistas, DockItem::Instrumento];
-/// Dientes del rail derecho, en orden.
-const RIGHT_ITEMS: [DockItem; 3] = [DockItem::Efectos, DockItem::Tonalidad, DockItem::Automacion];
+/// Dientes del rail izquierdo (legacy — el rail izquierdo lo reemplaza
+/// ahora `proyecto::rail`; se conserva para no romper `chrome::rail`).
+const LEFT_ITEMS: [DockItem; 1] = [DockItem::Pistas];
+/// Dientes del rail derecho, en orden. Instrumento se mudó acá al pasar
+/// el rail izquierdo a proyectos.
+const RIGHT_ITEMS: [DockItem; 4] =
+    [DockItem::Instrumento, DockItem::Efectos, DockItem::Tonalidad, DockItem::Automacion];
 
 impl DockItem {
     pub(crate) fn to_u64(self) -> u64 {

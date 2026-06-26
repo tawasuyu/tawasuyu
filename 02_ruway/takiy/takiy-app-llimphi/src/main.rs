@@ -41,6 +41,7 @@ mod chrome;
 mod msg;
 mod overview;
 mod paint;
+mod proyecto;
 mod record;
 mod update;
 mod waveedit;
@@ -120,6 +121,13 @@ impl App for Takiy {
         let mut editor = editor;
         editor.save_path = std::env::var_os("TAKIY_SCORE_JSON").map(std::path::PathBuf::from);
 
+        // Proyecto inicial: envuelve el score cargado en un proyecto
+        // versionado (DAG). Más proyectos se abren con «＋» del rail.
+        let proy_dir = std::env::var_os("TAKIY_PROJ_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("takiy-proyectos"));
+        let proyecto0 = takiy_proyecto::Proyecto::nuevo(source.clone(), editor.score.clone());
+
         Model {
             editor,
             source,
@@ -151,6 +159,11 @@ impl App for Takiy {
             onda_peaks: std::collections::HashMap::new(),
             wave_sel: None,
             recording: None,
+            proyectos: vec![proyecto0],
+            proy_activo: 0,
+            proy_dir,
+            ver_versiones: true,
+            ver_pistas: true,
         }
     }
 
@@ -477,20 +490,20 @@ impl App for Takiy {
                 &sp,
             );
         }
-        if let Some(lp) = chrome::panel(chrome::DockSide::Left, model, &theme) {
-            core = splitter_two(
-                Direction::Row,
-                lp,
-                PaneSize::Fixed(model.left_w),
-                core,
-                PaneSize::Flex,
-                |phase, dx| match phase {
-                    DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Left, dx)),
-                    DragPhase::End => None,
-                },
-                &sp,
-            );
-        }
+        // Sidebar de proyecto (siempre presente en el piano roll):
+        // Versiones + Pistas, con su divisor arrastrable.
+        core = splitter_two(
+            Direction::Row,
+            proyecto::panel(model, &theme),
+            PaneSize::Fixed(model.left_w),
+            core,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Left, dx)),
+                DragPhase::End => None,
+            },
+            &sp,
+        );
 
         // El core crece para ocupar el espacio entre los dos rails.
         let center = View::new(Style {
@@ -510,7 +523,7 @@ impl App for Takiy {
             ..Default::default()
         })
         .children(vec![
-            chrome::rail(chrome::DockSide::Left, model, &theme),
+            proyecto::rail(model, &theme),
             center,
             chrome::rail(chrome::DockSide::Right, model, &theme),
         ]);
@@ -549,9 +562,8 @@ fn viewport_of(model: &Model) -> (f32, f32) {
         Some((w, h)) => {
             const SPLITTER_W: f32 = 6.0;
             let mut extra_w = RAIL_W * 2.0;
-            if chrome::active_of(model, DockSide::Left).is_some() {
-                extra_w += model.left_w + SPLITTER_W;
-            }
+            // El sidebar de proyecto (izquierda) está siempre presente.
+            extra_w += model.left_w + SPLITTER_W;
             if chrome::active_of(model, DockSide::Right).is_some() {
                 extra_w += model.right_w + SPLITTER_W;
             }
