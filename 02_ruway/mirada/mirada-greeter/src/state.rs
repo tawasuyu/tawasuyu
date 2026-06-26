@@ -64,6 +64,9 @@ pub enum BgAnim {
     Aurora,
     /// Rayos ramificados (`lightning`).
     Lightning,
+    /// Tentáculos esqueletales con física Verlet (`physics`). Tiene estado: lo
+    /// maneja el greeter, no el dispatcher stateless de [`crate::bg`].
+    Physics,
 }
 
 impl BgAnim {
@@ -76,6 +79,7 @@ impl BgAnim {
             "plasma" => Some(Self::Plasma),
             "aurora" => Some(Self::Aurora),
             "lightning" | "rayos" | "rayo" => Some(Self::Lightning),
+            "physics" | "fisica" | "física" | "tentaculos" | "tentáculos" => Some(Self::Physics),
             _ => None,
         }
     }
@@ -89,6 +93,7 @@ impl BgAnim {
             Self::Plasma => "plasma",
             Self::Aurora => "aurora",
             Self::Lightning => "lightning",
+            Self::Physics => "physics",
         }
     }
 }

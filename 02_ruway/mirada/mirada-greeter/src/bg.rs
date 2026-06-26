@@ -29,5 +29,8 @@ pub fn paint(
         BgAnim::Plasma => plasma::paint(scene, ts, rect, t, bright),
         BgAnim::Aurora => aurora::paint(scene, ts, rect, t, bright),
         BgAnim::Lightning => lightning::paint(scene, ts, rect, t, bright),
+        // El fondo físico tiene estado y lo pinta el greeter directamente
+        // (ver `bg_physics`); acá es no-op.
+        BgAnim::Physics => {}
     }
 }

@@ -18,6 +18,7 @@
 mod arje_session;
 mod aurora;
 mod bg;
+mod bg_physics;
 mod fire;
 mod lightning;
 mod plasma;
@@ -190,6 +191,8 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         anim: saved.anim,
         lottie_bg: lottie_bg_from(saved.lottie_path.as_deref()),
         lottie_path: saved.lottie_path.clone(),
+        physics_bg: matches!(saved.anim, state::BgAnim::Physics)
+            .then(|| bg_physics::PhysicsBg::new(bright_base(saved.rain_color))),
         rain_t: std::env::var("MIRADA_SHOT_T").ok().and_then(|v| v.parse().ok()).unwrap_or(3.2),
         monitors: shot_monitors().0,
         active_mon: shot_monitors().1,
@@ -398,6 +401,9 @@ struct Model {
     /// Ruta del Lottie de fondo (preservada para re-guardar el estado sin
     /// borrar la config del usuario).
     lottie_path: Option<String>,
+    /// Fondo físico vivo (`bg = physics`): tentáculos esqueletales que se
+    /// stepean en `RainTick`. `None` salvo que se haya elegido.
+    physics_bg: Option<bg_physics::PhysicsBg>,
     /// Reloj del fondo (segundos), avanzado por `Msg::RainTick`.
     rain_t: f32,
     /// Disposición de monitores (rects locales a la ventana, que cubre la unión
@@ -575,6 +581,8 @@ impl App for Greeter {
             anim: saved.anim,
             lottie_bg: lottie_bg_from(saved.lottie_path.as_deref()),
             lottie_path: saved.lottie_path.clone(),
+            physics_bg: matches!(saved.anim, state::BgAnim::Physics)
+                .then(|| bg_physics::PhysicsBg::new(bright_base(saved.rain_color))),
             rain_t: 0.0,
             monitors: Vec::new(),
             active_mon: 0,
@@ -811,6 +819,10 @@ impl App for Greeter {
                 // Avanza el reloj del fondo. Se envuelve para no perder
                 // precisión `f32` en sesiones largas del greeter.
                 m.rain_t = (m.rain_t + 0.033) % 100_000.0;
+                // Stepea el fondo físico (si está activo).
+                if let Some(pb) = &mut m.physics_bg {
+                    pb.step(0.033);
+                }
                 // Avanza el viaje de la tarjeta entre monitores (~280 ms).
                 if m.card_anim < 1.0 {
                     m.card_anim = (m.card_anim + 0.033 / 0.28).min(1.0);
@@ -1147,6 +1159,13 @@ impl App for Greeter {
             let t = model.rain_t as f64;
             root = root.paint_with(move |scene, _ts, rect| {
                 asset.paint_at_time(scene, rect, t);
+            });
+        } else if let Some(pb) = &model.physics_bg {
+            // Fondo físico: deformamos acá (read-only) y movemos el snapshot al
+            // closure de pintura.
+            let snap = pb.snapshot();
+            root = root.paint_with(move |scene, _ts, rect| {
+                bg_physics::paint_snapshot(&snap, scene, rect);
             });
         } else if model.rain_enabled {
             let t = model.rain_t;
@@ -1486,6 +1505,18 @@ fn parse_sessions(line: &str) -> Option<(Vec<(u32, String)>, u32)> {
 
 /// Resuelve el color base (RGB brillante) del fondo de lluvia. `Accent` toma
 /// el acento del tema; el resto son paletas fijas.
+/// Color base sin depender del tema (para construir el fondo físico en `init`,
+/// donde no hay `Theme` a mano). `Accent` cae a un cian agradable.
+fn bright_base(color: state::RainColor) -> (u8, u8, u8) {
+    match color {
+        state::RainColor::Green => (120, 255, 140),
+        state::RainColor::Red => (255, 90, 80),
+        state::RainColor::Amber => (255, 200, 90),
+        state::RainColor::Cyan => (110, 235, 255),
+        state::RainColor::Accent => (130, 200, 255),
+    }
+}
+
 fn rain_bright(color: state::RainColor, theme: &Theme) -> (u8, u8, u8) {
     match color {
         state::RainColor::Green => (120, 255, 140),
