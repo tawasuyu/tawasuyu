@@ -1,0 +1,12 @@
+[package]
+name = "pluma-estilo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — estilo persistible por lienzo: color/fuente/tamaño/peso a nivel de lienzo entero, por zona o por span de texto. Sin deps de UI; la conversión a TextSpan vive en pluma-editor-llimphi."
+
+[dependencies]
+uuid = { workspace = true, features = ["serde"] }
+serde = { workspace = true }

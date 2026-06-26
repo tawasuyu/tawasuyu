@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use pluma_align::CartaHebras;
 use pluma_cuerpo::Cuerpo;
+use pluma_estilo::EstiloLienzo;
 use pluma_transform::Transformacion;
 
 use crate::StoreError;
@@ -29,6 +30,7 @@ const TREE_ATOMS: &str = "atoms";
 const TREE_CUERPOS: &str = "cuerpos";
 const TREE_TRANSFORMACIONES: &str = "transformaciones";
 const TREE_CARTAS: &str = "cartas";
+const TREE_ESTILOS: &str = "estilos";
 const TREE_UI: &str = "ui";
 const KEY_ESTADO_UI: &[u8] = b"default";
 
@@ -69,11 +71,12 @@ pub struct PlumaStore {
     cuerpos: Tree,
     transformaciones: Tree,
     cartas: Tree,
+    estilos: Tree,
     ui: Tree,
 }
 
 impl PlumaStore {
-    /// Abre (o crea) el store en `path`. Crea los cuatro trees nominales.
+    /// Abre (o crea) el store en `path`. Crea los trees nominales.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, MultilienzoError> {
         let db = sled::open(path).map_err(StoreError::from)?;
         let atoms = db.open_tree(TREE_ATOMS).map_err(StoreError::from)?;
@@ -82,6 +85,7 @@ impl PlumaStore {
             .open_tree(TREE_TRANSFORMACIONES)
             .map_err(StoreError::from)?;
         let cartas = db.open_tree(TREE_CARTAS).map_err(StoreError::from)?;
+        let estilos = db.open_tree(TREE_ESTILOS).map_err(StoreError::from)?;
         let ui = db.open_tree(TREE_UI).map_err(StoreError::from)?;
         Ok(Self {
             db,
@@ -89,6 +93,7 @@ impl PlumaStore {
             cuerpos,
             transformaciones,
             cartas,
+            estilos,
             ui,
         })
     }
@@ -286,6 +291,48 @@ impl PlumaStore {
         self.cartas.len()
     }
 
+    // ----- Estilos --------------------------------------------------------
+
+    /// Guarda el estilo de un lienzo. Clave = id del cuerpo. Sobrescribe.
+    pub fn put_estilo(&self, cuerpo: Uuid, estilo: &EstiloLienzo) -> Result<(), MultilienzoError> {
+        let bytes = bincode::serialize(estilo).map_err(StoreError::from)?;
+        self.estilos
+            .insert(cuerpo.as_bytes(), bytes)
+            .map_err(StoreError::from)?;
+        Ok(())
+    }
+
+    /// Lee el estilo de un lienzo. `None` si nunca se guardó — el caller cae
+    /// a `EstiloLienzo::default()` (lienzo sin estilo, render por defecto).
+    pub fn get_estilo(&self, cuerpo: Uuid) -> Result<Option<EstiloLienzo>, MultilienzoError> {
+        match self.estilos.get(cuerpo.as_bytes()).map_err(StoreError::from)? {
+            Some(b) => Ok(Some(bincode::deserialize(&b).map_err(StoreError::from)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Itera todos los estilos junto al id del cuerpo al que pertenecen.
+    pub fn iter_estilos(
+        &self,
+    ) -> impl Iterator<Item = Result<(Uuid, EstiloLienzo), MultilienzoError>> + '_ {
+        self.estilos.iter().map(|entry| {
+            let (k, bytes) = entry.map_err(StoreError::from)?;
+            let id = Uuid::from_slice(&k)
+                .map_err(|_| MultilienzoError::Store(StoreError::ClaveInvalida))?;
+            let estilo = bincode::deserialize::<EstiloLienzo>(&bytes)
+                .map_err(|e| MultilienzoError::Store(StoreError::from(e)))?;
+            Ok((id, estilo))
+        })
+    }
+
+    /// Borra el estilo de un lienzo (al eliminar el cuerpo).
+    pub fn remove_estilo(&self, cuerpo: Uuid) -> Result<(), MultilienzoError> {
+        self.estilos
+            .remove(cuerpo.as_bytes())
+            .map_err(StoreError::from)?;
+        Ok(())
+    }
+
     // ----- Estado UI ------------------------------------------------------
 
     /// Guarda el estado de UI del documento. Sobrescribe el anterior; el
@@ -457,6 +504,38 @@ mod pruebas {
         }
         let todos: Vec<Cuerpo> = s.iter_cuerpos().collect::<Result<_, _>>().unwrap();
         assert_eq!(todos.len(), 5);
+    }
+
+    #[test]
+    fn estilo_roundtrip_y_none_si_vacio() {
+        use pluma_estilo::{EstiloLienzo, EstiloTexto};
+        let (s, _d) = store_temp();
+        let cuerpo = Uuid::new_v4();
+        // Sin nada guardado: None.
+        assert!(s.get_estilo(cuerpo).unwrap().is_none());
+
+        let mut e = EstiloLienzo::nuevo();
+        e.set_base(&EstiloTexto {
+            color_fg: Some([10, 20, 30, 255]),
+            size_px: Some(15.0),
+            ..Default::default()
+        });
+        e.set_zona(1, &EstiloTexto { weight: Some(700.0), ..Default::default() });
+        let atom = Uuid::new_v4();
+        e.set_span(atom, 0, 4, EstiloTexto { italic: Some(true), ..Default::default() });
+
+        s.put_estilo(cuerpo, &e).unwrap();
+        let r = s.get_estilo(cuerpo).unwrap().unwrap();
+        assert_eq!(r, e);
+
+        // iter_estilos recupera el par (id, estilo).
+        let todos: Vec<_> = s.iter_estilos().collect::<Result<_, _>>().unwrap();
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].0, cuerpo);
+
+        // remove deja el get en None.
+        s.remove_estilo(cuerpo).unwrap();
+        assert!(s.get_estilo(cuerpo).unwrap().is_none());
     }
 
     #[test]

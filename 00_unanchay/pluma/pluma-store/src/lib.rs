@@ -21,6 +21,8 @@ pub enum StoreError {
     Db(#[from] sled::Error),
     #[error("serialización: {0}")]
     Serde(#[from] bincode::Error),
+    #[error("clave inválida en el store (no es un UUID de 16 bytes)")]
+    ClaveInvalida,
 }
 
 /// Store del grafo narrativo sobre sled.
