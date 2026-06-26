@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 
 use mirada_brain::{Desktop, DesktopAction};
-use mirada_protocol::{BodyEvent, BrainCommand, OutputId, Rect, TileInput, WindowPlacement};
+use mirada_protocol::{
+    BodyEvent, BrainCommand, LayoutParams, OutputId, Rect, TileInput, WindowPlacement,
+};
 
 use crate::manifest::PluginKind;
 use crate::wasm::LoadedPlugin;
@@ -171,26 +173,38 @@ impl Conductor {
     }
 
     /// Si hay layout activo, reescribe los `rect` de las ventanas teseladas de
-    /// cada comando `Place`, bucketizadas por monitor.
+    /// cada comando `Place`, bucketizadas por monitor. A cada monitor le pasa
+    /// los `LayoutParams` que el `Desktop` usaría ahí — así los atajos del
+    /// usuario (crecer maestra, etc.) siguen gobernando el teselado.
     fn apply_layout(&mut self, cmds: &mut [BrainCommand]) {
         if self.layout.is_none() {
             return;
         }
-        let works: Vec<Rect> = self.outputs.values().map(|o| o.work()).collect();
-        if works.is_empty() {
+        // (área útil, params) por salida — recogido ANTES de tomar prestado
+        // `self.layout`, para no chocar con el préstamo de `self.desktop`.
+        let jobs: Vec<(Rect, LayoutParams)> = self
+            .outputs
+            .iter()
+            .map(|(id, o)| {
+                let params = self.desktop.params_for_output(*id).unwrap_or_default();
+                (o.work(), params)
+            })
+            .collect();
+        if jobs.is_empty() {
             return;
         }
         let layout = self.layout.as_mut().unwrap();
         for cmd in cmds.iter_mut() {
             if let BrainCommand::Place(ps) = cmd {
-                Self::retile(layout, ps, &works);
+                Self::retile(layout, ps, &jobs);
             }
         }
     }
 
-    /// Reparte, por cada área útil, las ventanas teseladas que caen en ella.
-    fn retile(layout: &mut LoadedPlugin, ps: &mut [WindowPlacement], works: &[Rect]) {
-        for work in works {
+    /// Reparte, por cada área útil, las ventanas teseladas que caen en ella,
+    /// honrando los `LayoutParams` de esa salida.
+    fn retile(layout: &mut LoadedPlugin, ps: &mut [WindowPlacement], jobs: &[(Rect, LayoutParams)]) {
+        for (work, params) in jobs {
             let ids: Vec<_> = ps
                 .iter()
                 .filter(|p| {
@@ -205,7 +219,7 @@ impl Conductor {
             if ids.is_empty() {
                 continue;
             }
-            match layout.call_tile(&TileInput { ids, work: *work }) {
+            match layout.call_tile(&TileInput { ids, work: *work, params: *params }) {
                 Ok(rects) => {
                     for (id, rect) in rects {
                         if let Some(p) = ps.iter_mut().find(|p| p.id == id) {

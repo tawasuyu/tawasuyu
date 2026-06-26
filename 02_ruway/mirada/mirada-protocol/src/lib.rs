@@ -30,7 +30,8 @@ use serde::{Deserialize, Serialize};
 
 pub use mirada_layout::geometry::Rect;
 pub use mirada_layout::workspace::WindowId;
-use mirada_layout::{LayoutMode, Workspace};
+pub use mirada_layout::{LayoutMode, LayoutParams};
+use mirada_layout::Workspace;
 
 /// Identificador de una salida física (un monitor).
 pub type OutputId = u32;
@@ -74,12 +75,18 @@ pub struct WindowPlacement {
 ///
 /// Vive aquí, en el vocabulario común, para que host y guest lo compartan sin
 /// que ninguno dependa del crate del otro.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// No deriva `Eq` porque `LayoutParams::master_ratio` es `f32`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TileInput {
     /// Ventanas teseladas, en el orden en que el `Desktop` las dispondría.
     pub ids: Vec<WindowId>,
     /// Área útil donde repartirlas (ya descontadas las franjas reservadas).
     pub work: Rect,
+    /// Los parámetros de teselado vigentes del `Desktop` para esta salida
+    /// (modo, fracción maestra, nº de maestras, gap). El plugin los honra para
+    /// que los atajos del usuario (crecer maestra, etc.) sigan teniendo efecto.
+    pub params: LayoutParams,
 }
 
 /// Parámetros de decoración de ventana que el Cerebro fija en el Cuerpo.

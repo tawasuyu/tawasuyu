@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use mirada_layout::{LayoutParams, Rect, WindowId, Workspace};
-use mirada_protocol::{BrainCommand, WindowPlacement};
+use mirada_protocol::{BrainCommand, OutputId, WindowPlacement};
 
 use crate::action::WORKSPACE_COUNT;
 use crate::activity::ActivityGraph;
@@ -168,6 +168,17 @@ impl Desktop {
     /// El keymap vigente — para un HUD o un editor visual de atajos.
     pub fn keymap(&self) -> &Keymap {
         &self.keymap
+    }
+
+    /// Los parámetros de teselado vigentes de la salida `id` (los del escritorio
+    /// que muestra). Para un host de plugins que quiere pasarle al plugin de
+    /// layout los mismos `LayoutParams` que el `Desktop` usaría, de modo que los
+    /// atajos del usuario (crecer/encoger maestra, nº de maestras, gap) sigan
+    /// gobernando el teselado aunque lo dibuje un plugin. `None` si no hay tal
+    /// salida.
+    pub fn params_for_output(&self, id: OutputId) -> Option<LayoutParams> {
+        let out = self.outputs.iter().find(|o| o.id == id)?;
+        self.workspaces.get(out.workspace).map(|ws| *ws.params())
     }
 
     /// Recarga la config en caliente: re-siembra los parámetros de teselado

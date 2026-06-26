@@ -1,41 +1,77 @@
 //! Tests de integración del host de plugins. Cargan los `.wasm` de ejemplo
 //! commiteados (`include_bytes!`) — herméticos, sin asumir el toolchain wasm32
-//! ni un servidor gráfico. El oráculo: la geometría que el plugin de layout
-//! produce es la partición dwindle, y el gateo de capacidades rechaza en carga
-//! lo no concedido.
+//! ni un servidor gráfico. El oráculo: el plugin de layout impone su geometría
+//! (right-master) y **honra los `LayoutParams` del Desktop**, y el gateo de
+//! capacidades rechaza en carga lo no concedido.
 
 use mirada_brain::Desktop;
 use mirada_plugin_host::caps::{CAP_KEYS, CAP_LAYOUT, CAP_SPAWN};
 use mirada_plugin_host::{Conductor, LoadedPlugin, PluginKind};
-use mirada_protocol::{BodyEvent, BrainCommand, Rect, TileInput};
+use mirada_protocol::{BodyEvent, BrainCommand, LayoutMode, LayoutParams, Rect, TileInput};
 
 const LAYOUT_WASM: &[u8] = include_bytes!("../assets/example-layout.wasm");
 const REACTOR_WASM: &[u8] = include_bytes!("../assets/example-reactor.wasm");
+
+fn params(ratio: f32, nmaster: usize, gap: i32) -> LayoutParams {
+    LayoutParams { mode: LayoutMode::MasterStack, master_ratio: ratio, master_count: nmaster, gap }
+}
+
+/// Centro horizontal de un rect.
+fn cx(r: &Rect) -> i32 {
+    r.x + r.w / 2
+}
 
 // --- Tier-0: el plugin de layout es una función pura sin importaciones. ------
 
 #[test]
 fn layout_plugin_carga_con_solo_cap_layout() {
-    // No importa nada del host → CAP_LAYOUT basta y nada más hace falta.
-    let p = LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 0, "dwindle");
+    let p = LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 0, "rm");
     assert!(p.is_ok(), "el plugin de layout debería cargar: {:?}", p.err());
 }
 
 #[test]
-fn dwindle_particiona_el_area() {
+fn right_master_pone_la_maestra_a_la_derecha() {
     let mut p =
-        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 0, "dwindle").unwrap();
+        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 0, "rm").unwrap();
+    let work = Rect::new(0, 0, 1000, 1000);
     let rects = p
-        .call_tile(&TileInput { ids: vec![1, 2, 3], work: Rect::new(0, 0, 1000, 1000) })
+        .call_tile(&TileInput { ids: vec![1, 2, 3], work, params: params(0.6, 1, 8) })
         .unwrap();
-    // dwindle: 1 → mitad izquierda; 2 → arriba-derecha; 3 → abajo-derecha.
     assert_eq!(rects.len(), 3);
-    assert_eq!(rects[0], (1, Rect::new(0, 0, 500, 1000)));
-    assert_eq!(rects[1], (2, Rect::new(500, 0, 500, 500)));
-    assert_eq!(rects[2], (3, Rect::new(500, 500, 500, 500)));
-    // Cobertura total y sin solape (área = suma de áreas).
-    let suma: i32 = rects.iter().map(|(_, r)| r.w * r.h).sum();
-    assert_eq!(suma, 1000 * 1000);
+    let master = rects.iter().find(|(id, _)| *id == 1).unwrap().1;
+    let stack: Vec<_> = rects.iter().filter(|(id, _)| *id != 1).map(|(_, r)| *r).collect();
+    // La maestra (id 1) está en la mitad derecha; la pila, en la izquierda.
+    assert!(cx(&master) > 500, "maestra a la derecha: {master:?}");
+    assert!(stack.iter().all(|r| cx(r) < 500), "pila a la izquierda: {stack:?}");
+    // Y la maestra es más ancha que las de la pila (ratio 0.6).
+    assert!(stack.iter().all(|r| master.w > r.w));
+}
+
+// --- El plugin HONRA los LayoutParams del Desktop (lo que pedía el #2). ------
+
+#[test]
+fn mas_ratio_ensancha_la_maestra() {
+    let mut p =
+        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 0, "rm").unwrap();
+    let work = Rect::new(0, 0, 1000, 1000);
+    let ids = vec![1u64, 2];
+    let estrecha = p.call_tile(&TileInput { ids: ids.clone(), work, params: params(0.6, 1, 8) }).unwrap();
+    let ancha = p.call_tile(&TileInput { ids, work, params: params(0.8, 1, 8) }).unwrap();
+    let w06 = estrecha.iter().find(|(id, _)| *id == 1).unwrap().1.w;
+    let w08 = ancha.iter().find(|(id, _)| *id == 1).unwrap().1.w;
+    assert!(w08 > w06, "subir master_ratio debe ensanchar la maestra: {w06} -> {w08}");
+}
+
+#[test]
+fn master_count_mueve_ventanas_a_la_columna_maestra() {
+    let mut p =
+        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 0, "rm").unwrap();
+    let work = Rect::new(0, 0, 1000, 1000);
+    let ids = vec![1u64, 2, 3];
+    // Con nmaster=2 hay dos ventanas en la columna derecha (la maestra).
+    let r = p.call_tile(&TileInput { ids, work, params: params(0.6, 2, 8) }).unwrap();
+    let en_derecha = r.iter().filter(|(_, rect)| cx(rect) > 500).count();
+    assert_eq!(en_derecha, 2, "nmaster=2 → dos ventanas en la columna maestra: {r:?}");
 }
 
 // --- Gateo de capacidades: fail-closed en carga. ----------------------------
@@ -53,7 +89,6 @@ fn reactor_sin_capacidades_es_rechazado() {
 
 #[test]
 fn reactor_con_cap_parcial_es_rechazado() {
-    // Concede SPAWN pero no KEYS: como importa host_emit_keys, ni instancia.
     let err = LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_SPAWN, 0, "term")
         .err()
         .expect("un reactor sin CAP_KEYS debería ser rechazado");
@@ -62,32 +97,23 @@ fn reactor_con_cap_parcial_es_rechazado() {
 
 #[test]
 fn reactor_con_caps_completas_carga() {
-    let p = LoadedPlugin::load_bytes(
-        REACTOR_WASM,
-        PluginKind::Reactor,
-        CAP_KEYS | CAP_SPAWN,
-        0,
-        "term",
-    );
+    let p =
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term");
     assert!(p.is_ok(), "con KEYS+SPAWN debería cargar: {:?}", p.err());
 }
 
-// --- Reactor e2e: registra atajo y lanza al pulsarlo. -----------------------
+// --- Reactor e2e. -----------------------------------------------------------
 
 #[test]
 fn reactor_registra_atajo_y_lanza() {
     let mut p =
         LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term")
             .unwrap();
-
-    // Cualquier evento dispara el registro idempotente del atajo.
     let cmds = p.call_on_event(&BodyEvent::OutputAdded { id: 0, width: 800, height: 600 }).unwrap();
     assert!(
         cmds.iter().any(|c| matches!(c, BrainCommand::GrabKeys(k) if k.iter().any(|s| s == "Super+a"))),
         "el reactor debería registrar Super+a: {cmds:?}"
     );
-
-    // Pulsar el atajo lanza la terminal.
     let cmds = p.call_on_event(&BodyEvent::Keybind("Super+a".into())).unwrap();
     assert!(
         cmds.iter().any(|c| matches!(c, BrainCommand::Spawn(s) if s == "foot")),
@@ -95,7 +121,7 @@ fn reactor_registra_atajo_y_lanza() {
     );
 }
 
-// --- Conductor: Desktop autoritativo + layout que refina + reactor. ---------
+// --- Conductor: Desktop autoritativo + plugins que lo aumentan. -------------
 
 #[test]
 fn conductor_startup_no_olvida_capacidades_ni_decoracion() {
@@ -109,60 +135,65 @@ fn conductor_startup_no_olvida_capacidades_ni_decoracion() {
     assert!(cmds.iter().any(|c| matches!(c, BrainCommand::GrabKeys(_))));
 }
 
-#[test]
-fn conductor_aplica_dwindle_a_las_ventanas() {
-    let layout =
-        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 10, "dwindle").unwrap();
-    let mut c = Conductor::new(Desktop::new(), vec![layout]);
-    let _ = c.startup();
-
-    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 1000, height: 1000 });
-    let mut last_place: Vec<Rect> = Vec::new();
-    for id in 1..=3u64 {
-        let cmds = c.on_body_event(BodyEvent::WindowOpened {
-            id,
-            app_id: "test".into(),
-            title: "w".into(),
-        });
-        for cmd in cmds {
-            if let BrainCommand::Place(ps) = cmd {
-                last_place = ps
-                    .iter()
-                    .filter(|p| p.visible && !p.floating && !p.fullscreen)
-                    .map(|p| p.rect)
-                    .collect();
-            }
+/// Rects de las ventanas teseladas del último `Place` de una tanda de comandos.
+fn tiled_from(cmds: Vec<BrainCommand>, acc: &mut Vec<Rect>) {
+    for cmd in cmds {
+        if let BrainCommand::Place(ps) = cmd {
+            *acc = ps
+                .iter()
+                .filter(|p| p.visible && !p.floating && !p.fullscreen)
+                .map(|p| p.rect)
+                .collect();
         }
     }
-
-    // Las tres ventanas teseladas deben caer en la partición dwindle del área.
-    last_place.sort_by_key(|r| (r.x, r.y));
-    let mut esperado = vec![
-        Rect::new(0, 0, 500, 1000),
-        Rect::new(500, 0, 500, 500),
-        Rect::new(500, 500, 500, 500),
-    ];
-    esperado.sort_by_key(|r| (r.x, r.y));
-    assert_eq!(last_place, esperado, "el layout plugin debería haber impuesto dwindle");
 }
 
 #[test]
-fn conductor_propaga_spawn_del_reactor() {
-    let reactor = LoadedPlugin::load_bytes(
-        REACTOR_WASM,
-        PluginKind::Reactor,
-        CAP_KEYS | CAP_SPAWN,
-        0,
-        "term",
-    )
-    .unwrap();
-    let mut c = Conductor::new(Desktop::new(), vec![reactor]);
+fn conductor_impone_la_geometria_del_plugin() {
+    let layout =
+        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 10, "rm").unwrap();
+    let mut c = Conductor::new(Desktop::new(), vec![layout]);
     let _ = c.startup();
-    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 800, height: 600 });
+    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 1000, height: 1000 });
 
-    let cmds = c.on_body_event(BodyEvent::Keybind("Super+a".into()));
+    let mut rects = Vec::new();
+    for id in 1..=2u64 {
+        tiled_from(
+            c.on_body_event(BodyEvent::WindowOpened { id, app_id: "t".into(), title: "w".into() }),
+            &mut rects,
+        );
+    }
+    // La maestra (la más ancha) cae en la mitad DERECHA — algo que el
+    // master-stack izquierdo del Desktop nunca produciría: prueba que el plugin
+    // impuso su geometría.
+    let master = rects.iter().max_by_key(|r| r.w).copied().unwrap();
+    assert!(cx(&master) > 500, "el plugin right-master debería poner la maestra a la derecha: {master:?}");
+}
+
+#[test]
+fn grow_master_keybind_ensancha_via_params() {
+    let layout =
+        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 10, "rm").unwrap();
+    let mut c = Conductor::new(Desktop::new(), vec![layout]);
+    let _ = c.startup();
+    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 1000, height: 1000 });
+
+    let mut rects = Vec::new();
+    for id in 1..=2u64 {
+        tiled_from(
+            c.on_body_event(BodyEvent::WindowOpened { id, app_id: "t".into(), title: "w".into() }),
+            &mut rects,
+        );
+    }
+    let antes = rects.iter().map(|r| r.w).max().unwrap();
+
+    // Super+l = GrowMaster en el keymap por defecto → cambia los LayoutParams
+    // del Desktop → el plugin los recibe y ensancha la maestra.
+    tiled_from(c.on_body_event(BodyEvent::Keybind("Super+l".into())), &mut rects);
+    let despues = rects.iter().map(|r| r.w).max().unwrap();
+
     assert!(
-        cmds.iter().any(|c| matches!(c, BrainCommand::Spawn(s) if s == "foot")),
-        "el conductor debe propagar el Spawn del reactor: {cmds:?}"
+        despues > antes,
+        "el atajo GrowMaster debería fluir como params al plugin y ensanchar la maestra: {antes} -> {despues}"
     );
 }

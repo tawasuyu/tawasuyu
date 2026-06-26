@@ -31,7 +31,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub use mirada_layout;
-pub use mirada_protocol::{self, BodyEvent, BrainCommand, Decorations, Rect, TileInput, WindowId};
+pub use mirada_protocol::{
+    self, BodyEvent, BrainCommand, Decorations, LayoutMode, LayoutParams, Rect, TileInput, WindowId,
+};
 
 // Re-exports para que los macros funcionen en crates que no traen `alloc`.
 pub use alloc::boxed::Box as SdkBox;
