@@ -37,6 +37,7 @@ pub mod tray;
 pub mod bluetooth;
 pub mod mpris;
 pub mod network;
+pub mod notifications;
 pub mod polkit;
 pub mod weather;
 
@@ -222,6 +223,12 @@ pub enum Msg {
     PolkitSubmit,
     /// Cancelar la autenticación de polkit.
     PolkitCancel,
+    /// Desplegar/replegar el popup de notificaciones.
+    NotificationsToggle,
+    /// Conmutar «no molestar».
+    NotificationsDnd(bool),
+    /// Vaciar el historial de notificaciones.
+    NotificationsClear,
     /// Desplegar/replegar el menú de sesión/energía.
     SessionToggle,
     /// Pedir confirmación de una acción disruptiva (reiniciar/apagar/logout).
@@ -407,6 +414,10 @@ pub enum SlotWidget {
     /// controlador + la lista de dispositivos ([`Msg::BluetoothToggle`]). Dato del
     /// host (vía `bluetoothctl`, ver [`bluetooth`]).
     Bluetooth,
+    /// La campanita de notificaciones: icono + popup con no-molestar, las últimas
+    /// notificaciones y limpiar ([`Msg::NotificationsToggle`]). Habla con el daemon
+    /// `pata-notify` por D-Bus (ver [`notifications`]).
+    Notifications,
 }
 
 /// Las acciones del menú de sesión/energía. El logout pasa por el WM (mirada hace
@@ -815,7 +826,8 @@ impl SurfaceWidgets {
                 | SlotWidget::Network
                 | SlotWidget::Session
                 | SlotWidget::Media
-                | SlotWidget::Bluetooth => None,
+                | SlotWidget::Bluetooth
+                | SlotWidget::Notifications => None,
             })
     }
 }
@@ -909,6 +921,11 @@ pub struct Model {
     pub bluetooth_now: Option<bluetooth::BtState>,
     /// `true` cuando el popup de Bluetooth está desplegado (path winit).
     pub bluetooth_open: bool,
+    /// Campanita de notificaciones: cliente del daemon `pata-notify` en su hilo.
+    /// `None` si la config no declara `notifications`.
+    pub notifications: Option<notifications::NotificationsHandle>,
+    /// `true` cuando el popup de notificaciones está desplegado (path winit).
+    pub notifications_open: bool,
     /// Agente de autenticación polkit en su propio hilo.
     pub polkit: Option<polkit::PolkitHandle>,
     /// Solicitud de autenticación polkit en curso (con el canal de respuesta).
@@ -1043,6 +1060,8 @@ impl Model {
                         SlotWidget::Media
                     } else if spec.kind == "bluetooth" || spec.kind == "bt" {
                         SlotWidget::Bluetooth
+                    } else if spec.kind == "notifications" || spec.kind == "notify" {
+                        SlotWidget::Notifications
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -1206,6 +1225,10 @@ impl App for PataApp {
             .then(mpris::MprisHandle::spawn);
         let bluetooth = (config_tiene_widget(&cfg, "bluetooth") || config_tiene_widget(&cfg, "bt"))
             .then(bluetooth::BluetoothHandle::spawn);
+        let notifications = (config_tiene_widget(&cfg, "notifications")
+            || config_tiene_widget(&cfg, "notify"))
+        .then(notifications::NotificationsHandle::spawn)
+        .flatten();
         let cava = config_tiene_widget(&cfg, "cava").then(|| cava::CavaHandle::spawn(cava_bars(&cfg)));
 
         let mut theme = Theme::dark();
@@ -1253,6 +1276,8 @@ impl App for PataApp {
             bluetooth,
             bluetooth_now: None,
             bluetooth_open: false,
+            notifications,
+            notifications_open: false,
             polkit: polkit::PolkitHandle::spawn(),
             polkit_prompt: None,
             polkit_input: String::new(),
@@ -1678,6 +1703,26 @@ impl App for PataApp {
             }
             Msg::BluetoothConnect(mac) => bluetooth::connect(&mac),
             Msg::BluetoothDisconnect(mac) => bluetooth::disconnect(&mac),
+            Msg::NotificationsToggle => {
+                model.notifications_open = !model.notifications_open;
+                if model.notifications_open {
+                    model.menu_open = false;
+                    model.clip_open = false;
+                    model.control_open = false;
+                    model.network_open = false;
+                    model.bluetooth_open = false;
+                }
+            }
+            Msg::NotificationsDnd(on) => {
+                if let Some(h) = &model.notifications {
+                    h.set_dnd(on);
+                }
+            }
+            Msg::NotificationsClear => {
+                if let Some(h) = &model.notifications {
+                    h.clear();
+                }
+            }
             Msg::PolkitChar(c) => model.polkit_input.push(c),
             Msg::PolkitBackspace => {
                 model.polkit_input.pop();
@@ -2078,6 +2123,11 @@ impl App for PataApp {
                 bar_h,
                 &model.theme,
             ));
+        }
+        if model.notifications_open {
+            let bar_h = bar_thickness_for(&model.cfg, "notifications");
+            let snap = model.notifications.as_ref().map(|n| n.snapshot());
+            return Some(render::notifications_overlay(snap.as_ref(), bar_h, &model.theme));
         }
         if model.clock_open {
             let bar_h = bar_thickness_for(&model.cfg, "clock");

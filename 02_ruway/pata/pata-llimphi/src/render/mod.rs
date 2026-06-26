@@ -46,6 +46,7 @@ mod cde;
 mod control;
 mod media;
 mod network;
+mod notifications;
 mod osd;
 mod panels;
 mod polkit;
@@ -65,6 +66,7 @@ pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
 pub use media::media_view;
 pub use network::{network_overlay, network_view};
+pub use notifications::{notifications_overlay, notifications_view};
 pub use osd::{osd_overlay, osd_surface_view, Osd, OsdKind, OSD_H, OSD_W};
 pub use polkit::polkit_overlay;
 pub use session::{session_overlay, session_view};
@@ -98,6 +100,8 @@ pub struct BarData<'a> {
     pub media: Option<&'a crate::mpris::MediaState>,
     /// La última lectura de Bluetooth, para el `bluetooth`.
     pub bluetooth: Option<&'a crate::bluetooth::BtState>,
+    /// El estado de notificaciones, para el `notifications`.
+    pub notifications: Option<&'a crate::notifications::NotifState>,
     /// El último cuadro del visualizador de audio, para el `cava`.
     pub cava: &'a [f32],
     /// Las apps del registro, para el `program_manager` (grilla estilo Win3.1).
@@ -307,6 +311,7 @@ pub fn root(model: &Model) -> View<Msg> {
     let mut superficies: Vec<View<Msg>> = Vec::new();
 
     let tray_items = model.tray.as_ref().map(|t| t.items()).unwrap_or_default();
+    let notif = model.notifications.as_ref().map(|n| n.snapshot());
     let data = BarData {
         windows: &model.windows,
         clipboard: model.clipboard.as_deref(),
@@ -315,6 +320,7 @@ pub fn root(model: &Model) -> View<Msg> {
         network: model.network_now.as_ref(),
         media: model.media_now.as_ref(),
         bluetooth: model.bluetooth_now.as_ref(),
+        notifications: notif.as_ref(),
         cava: &model.cava_frame,
         apps: model.registry.all(),
         shuma_full: model.shuma_full.as_ref(),
@@ -626,6 +632,9 @@ fn slots_de(
                 SlotWidget::Session => session::session_view(theme),
                 SlotWidget::Media => media::media_view(data.media, theme),
                 SlotWidget::Bluetooth => bluetooth::bluetooth_view(data.bluetooth, theme),
+                SlotWidget::Notifications => {
+                    notifications::notifications_view(data.notifications, theme)
+                }
             })
             .collect();
         let mut style = Style {
@@ -1463,6 +1472,58 @@ pub fn network_menu_view(
     body_style.flex_grow = 1.0;
     let body = View::new(body_style)
         .on_click(Msg::NetworkToggle)
+        .children(vec![panel_abs]);
+
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// El **popup de notificaciones** (la campanita) para el **layer-shell**, anclado
+/// bajo el icono. Espejo de [`network_menu_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn notifications_menu_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    state: Option<&crate::notifications::NotifState>,
+    anchor_x: f32,
+    avail_w: f32,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(bar_px) },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
+
+    let left = (anchor_x - notifications::PANEL_W * 0.5)
+        .clamp(8.0, (avail_w - notifications::PANEL_W - 8.0).max(8.0));
+    let panel_abs = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect { left: length(left), top: length(0.0_f32), right: auto(), bottom: auto() },
+        size: Size { width: length(notifications::PANEL_W), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![notifications::notifications_panel(state, theme)]);
+
+    let mut body_style = Style {
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::NotificationsToggle)
         .children(vec![panel_abs]);
 
     let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {

@@ -204,6 +204,8 @@ pub(super) enum MenuKind {
     Session,
     /// El applet de Bluetooth (switch + dispositivos emparejados).
     Bluetooth,
+    /// La campanita de notificaciones (no-molestar + historial reciente).
+    Notifications,
     /// El diálogo de autenticación de polkit (lo abre una solicitud entrante).
     Polkit,
 }
@@ -259,6 +261,8 @@ pub(super) struct LayerApp {
     pub(super) bluetooth: Option<crate::bluetooth::BluetoothHandle>,
     /// Última lectura de Bluetooth.
     pub(super) bluetooth_now: Option<crate::bluetooth::BtState>,
+    /// Cliente del daemon de notificaciones (la campanita), en su propio hilo.
+    pub(super) notifications: Option<crate::notifications::NotificationsHandle>,
     /// Agente de autenticación polkit en su propio hilo.
     pub(super) polkit: Option<crate::polkit::PolkitHandle>,
     /// Solicitud de autenticación polkit en curso (con el canal de respuesta).
@@ -477,6 +481,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let bluetooth = (crate::config_tiene_widget(&cfg, "bluetooth")
         || crate::config_tiene_widget(&cfg, "bt"))
     .then(crate::bluetooth::BluetoothHandle::spawn);
+    let notifications = (crate::config_tiene_widget(&cfg, "notifications")
+        || crate::config_tiene_widget(&cfg, "notify"))
+    .then(crate::notifications::NotificationsHandle::spawn)
+    .flatten();
     // El agente polkit no es un widget: pata es el shell de la sesión, así que
     // registra el agente siempre (si ya hay otro, el registro falla y se loguea).
     let polkit = crate::polkit::PolkitHandle::spawn();
@@ -592,6 +600,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         media_now: None,
         bluetooth,
         bluetooth_now: None,
+        notifications,
         polkit,
         polkit_prompt: None,
         polkit_input: String::new(),

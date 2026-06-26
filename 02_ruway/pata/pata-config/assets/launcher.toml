@@ -86,6 +86,9 @@ kind = "network"        # applet Wi-Fi/Ethernet: icono de señal + popup de rede
 kind = "bluetooth"      # applet Bluetooth: switch + dispositivos emparejados (bluetoothctl)
 
 [[surfaces.end]]
+kind = "notifications"  # campanita: no-molestar + historial reciente (daemon pata-notify)
+
+[[surfaces.end]]
 kind = "tray"
 
 [[surfaces.end]]

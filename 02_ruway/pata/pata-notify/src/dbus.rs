@@ -7,7 +7,8 @@
 //! de historial usa para refrescar sin polling.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 
 use llimphi_ui::Handle;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -35,6 +36,10 @@ pub struct Servicio {
     next_id: AtomicU32,
     handle: Handle<Msg>,
     store: Store,
+    /// «No molestar»: con esto puesto, las notificaciones se persisten igual al
+    /// historial pero **no** se muestran como toast. Compartido con el
+    /// [`Historiador`], que lo conmuta desde la barra.
+    dnd: Arc<AtomicBool>,
 }
 
 #[interface(name = "org.freedesktop.Notifications")]
@@ -78,7 +83,11 @@ impl Servicio {
         // notificación también es un evento del timeline unificado.
         willay_emit::emitir_silencioso(&n.a_evento_willay());
         info!(id, app = %n.app_name, urgency = n.urgency, "Notify");
-        self.handle.dispatch(Msg::Entrante(n));
+        // En «no molestar» la notificación queda en el historial pero no salta
+        // como toast (no la mandamos al loop de render).
+        if !self.dnd.load(Ordering::Relaxed) {
+            self.handle.dispatch(Msg::Entrante(n));
+        }
 
         // Avisar al panel que el historial cambió (señal en la otra interfaz).
         if let Ok(ctxt) = SignalContext::new(conn, HIST_PATH) {
@@ -146,6 +155,8 @@ fn parsear_acciones(planas: &[String]) -> Vec<(String, String)> {
 /// para no modelar un struct D-Bus a mano — el cliente deserializa con serde.
 pub struct Historiador {
     pub store: Store,
+    /// «No molestar», compartido con el [`Servicio`] (ver su campo `dnd`).
+    pub dnd: Arc<AtomicBool>,
 }
 
 #[interface(name = "net.tawasuyu.Notificaciones1")]
@@ -168,6 +179,17 @@ impl Historiador {
         }
     }
 
+    /// `true` si «no molestar» está activo (las notificaciones no saltan como
+    /// toast, sólo van al historial).
+    async fn dnd(&self) -> bool {
+        self.dnd.load(Ordering::Relaxed)
+    }
+
+    /// Activa/desactiva «no molestar». Lo conmuta la barra (`pata`).
+    async fn set_dnd(&self, on: bool) {
+        self.dnd.store(on, Ordering::Relaxed);
+    }
+
     /// Señal: el historial cambió (llegó una notificación). El panel refresca.
     #[zbus(signal)]
     async fn cambio(ctxt: &SignalContext<'_>) -> zbus::Result<()>;
@@ -185,6 +207,8 @@ impl Historiador {
 pub trait Historial {
     fn historial(&self) -> zbus::Result<String>;
     fn limpiar(&self) -> zbus::Result<()>;
+    fn dnd(&self) -> zbus::Result<bool>;
+    fn set_dnd(&self, on: bool) -> zbus::Result<()>;
     #[zbus(signal)]
     fn cambio(&self) -> zbus::Result<()>;
 }
@@ -214,11 +238,16 @@ pub async fn limpiar_historial() -> anyhow::Result<()> {
 /// hilo, drena `rx` para emitir `NotificationClosed`/`ActionInvoked` cuando el
 /// loop de render cierra un toast o se invoca una acción.
 pub async fn serve(handle: Handle<Msg>, store: Store, mut rx: UnboundedReceiver<Cierre>) {
-    let historiador = Historiador { store: store.clone() };
+    let dnd = Arc::new(AtomicBool::new(false));
+    let historiador = Historiador {
+        store: store.clone(),
+        dnd: dnd.clone(),
+    };
     let svc = Servicio {
         next_id: AtomicU32::new(1),
         handle,
         store,
+        dnd,
     };
     let built = zbus::connection::Builder::session()
         .and_then(|b| b.name(BUS_NAME))

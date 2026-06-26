@@ -906,6 +906,7 @@ impl LayerApp {
         let (w, h) = (self.panels[pi].width, self.panels[pi].height);
         let windows = self.window_entries();
         let tray_items = self.tray.as_ref().map(|t| t.items()).unwrap_or_default();
+        let notif = self.notifications.as_ref().map(|n| n.snapshot());
         let data = render::BarData {
             windows: &windows,
             clipboard: self.clipboard.as_deref(),
@@ -914,6 +915,7 @@ impl LayerApp {
             network: self.network_now.as_ref(),
             media: self.media_now.as_ref(),
             bluetooth: self.bluetooth_now.as_ref(),
+            notifications: notif.as_ref(),
             cava: &self.cava_frame,
             apps: self.registry.all(),
             shuma_full: self.shuma_full.as_ref(),
@@ -1043,6 +1045,17 @@ impl LayerApp {
                     &self.theme,
                     self.menu_bar_px as f32,
                     self.bluetooth_now.as_ref(),
+                    self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
+                ),
+                MenuKind::Notifications => render::notifications_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    notif.as_ref(),
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
                     self.panels[idx].width as f32,
                 ),
@@ -1291,6 +1304,19 @@ impl LayerApp {
             }
             Msg::BluetoothConnect(mac) => crate::bluetooth::connect(&mac),
             Msg::BluetoothDisconnect(mac) => crate::bluetooth::disconnect(&mac),
+            Msg::NotificationsToggle => self.toggle_menu(MenuKind::Notifications),
+            Msg::NotificationsDnd(on) => {
+                if let Some(h) = &self.notifications {
+                    h.set_dnd(on);
+                }
+                self.marcar_menu_dirty();
+            }
+            Msg::NotificationsClear => {
+                if let Some(h) = &self.notifications {
+                    h.clear();
+                }
+                self.marcar_menu_dirty();
+            }
             Msg::PolkitChar(c) => {
                 self.polkit_input.push(c);
                 self.marcar_menu_dirty();

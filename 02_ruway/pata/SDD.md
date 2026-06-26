@@ -786,6 +786,20 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     sesión); si ya hay otro agente, el registro falla y se loguea. Una
     autenticación a la vez; `CancelAuthentication` deja caer el `oneshot`. Runtime
     sin verificar headless (norma de pata).
+  - **Campanita de notificaciones + No-molestar ✅** — el daemon `pata-notify`
+    (toast + historial sled + triage) ya existía pero **la barra no lo exponía**.
+    Ahora el widget `notifications`/`notify`: una campana (con un punto de acento
+    si hay historial, tachada en «no molestar») que abre un popup con el switch de
+    **no-molestar**, las últimas notificaciones (app + título) y acciones
+    (**Limpiar** / **Abrir panel** → lanza `pata-notify-panel`). Habla con el
+    daemon por **D-Bus** (`net.tawasuyu.Notificaciones1`), no por su crate —igual
+    que con nmcli/bluetoothctl por CLI—: `notifications.rs` corre en su hilo con
+    tokio/zbus (patrón `tray.rs`), proxy inline, foto por `Arc<Mutex>` + comandos
+    por canal; parsea el historial JSON con `serde_json::Value` (sin derive).
+    **No-molestar** se sumó al daemon: un `Arc<AtomicBool>` compartido entre el
+    `Servicio` (la `Notify` lo persiste igual pero no dispara el toast) y el
+    `Historiador` (`Dnd`/`SetDnd` nuevos en la interfaz + el proxy). `construir`
+    puro y testeado. winit por overlay, layer-shell por `MenuKind::Notifications`.
     - **Con esto cierran los huecos de DE que faltaban en pata.** Quedan en órbita
       de **mirada** (compositor, no pata): lock screen + gestión de idle (en curso
       ahí), screenshot/grabación y configuración de displays.
