@@ -32,6 +32,18 @@ TARGET="x86_64-unknown-linux-musl"
 die() { echo "✗ $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Detecta el init del sistema: systemd | openrc | runit | s6 | unknown.
+detect_init() {
+    if have systemctl && [ -d /run/systemd/system ]; then echo systemd; return; fi
+    if have rc-update || [ -d /run/openrc ]; then echo openrc; return; fi
+    if have sv && [ -d /etc/runit ]; then echo runit; return; fi
+    if have s6-rc || [ -d /etc/s6 ]; then echo s6; return; fi
+    case "$(cat /proc/1/comm 2>/dev/null)" in
+        systemd) echo systemd ;;
+        *)       echo unknown ;;
+    esac
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --system)         MODE="system" ;;
@@ -95,10 +107,17 @@ if [ "$MODE" = "system" ]; then
     [ -n "$IMAGE" ]  && { [ -f "$IMAGE" ] || die "no existe $IMAGE"; $SUDO install -Dm644 "$IMAGE" /etc/arje/splash.png; echo "   imagen → /etc/arje/splash.png"; }
     [ -n "$FRAMES" ] && { [ -d "$FRAMES" ] || die "no existe $FRAMES"; $SUDO mkdir -p /etc/arje/frames; $SUDO cp "$FRAMES"/*.png /etc/arje/frames/; echo "   frames → /etc/arje/frames/"; }
 
-    # systemd unit (Plymouth-like): corre el splash antes del display-manager.
-    UNIT=/etc/systemd/system/arje-splash.service
-    echo "==> instalando systemd unit en $UNIT (no se habilita sola)"
-    $SUDO tee "$UNIT" >/dev/null <<UNITEOF
+    # Servicio de arranque (Plymouth-like): corre el splash antes del
+    # display-manager. Se adapta al init del sistema.
+    INIT="$(detect_init)"
+    echo "==> init detectado: $INIT"
+    ENABLE_HINT=""
+
+    case "$INIT" in
+    systemd)
+        UNIT=/etc/systemd/system/arje-splash.service
+        echo "==> instalando systemd unit en $UNIT (no se habilita sola)"
+        $SUDO tee "$UNIT" >/dev/null <<UNITEOF
 [Unit]
 Description=arje splash — arranque sin parpadeo
 DefaultDependencies=no
@@ -114,21 +133,72 @@ TimeoutStartSec=15
 [Install]
 WantedBy=graphical.target
 UNITEOF
+        ENABLE_HINT="sudo systemctl enable arje-splash.service"
+        if [ "$ENABLE_SERVICE" = 1 ]; then
+            echo "==> habilitando arje-splash.service"
+            $SUDO systemctl daemon-reload
+            $SUDO systemctl enable arje-splash.service
+            echo "✓ servicio habilitado. Reiniciá para verlo."
+        fi
+        ;;
 
-    if [ "$ENABLE_SERVICE" = 1 ] && have systemctl; then
-        echo "==> habilitando arje-splash.service"
-        $SUDO systemctl daemon-reload
-        $SUDO systemctl enable arje-splash.service
-        echo "✓ servicio habilitado. Reiniciá para verlo."
-    else
+    openrc)
+        UNIT=/etc/init.d/arje-splash
+        echo "==> instalando OpenRC service en $UNIT (no se habilita solo)"
+        $SUDO tee "$UNIT" >/dev/null <<UNITEOF
+#!/sbin/openrc-run
+description="arje splash — arranque sin parpadeo"
+
+depend() {
+    before display-manager xdm
+    after udev
+}
+
+command="$LIBDIR/arje-splash"
+command_background=false
+: "\${command_user:=root}"
+UNITEOF
+        $SUDO chmod 755 "$UNIT"
+        ENABLE_HINT="sudo rc-update add arje-splash boot"
+        if [ "$ENABLE_SERVICE" = 1 ] && have rc-update; then
+            echo "==> habilitando arje-splash (runlevel boot)"
+            $SUDO rc-update add arje-splash boot
+            echo "✓ servicio habilitado. Reiniciá para verlo."
+        fi
+        ;;
+
+    runit)
+        SVDIR=/etc/sv/arje-splash
+        echo "==> instalando runit service en $SVDIR (no se habilita solo)"
+        $SUDO mkdir -p "$SVDIR"
+        $SUDO tee "$SVDIR/run" >/dev/null <<UNITEOF
+#!/bin/sh
+exec $LIBDIR/arje-splash
+UNITEOF
+        $SUDO chmod 755 "$SVDIR/run"
+        ENABLE_HINT="sudo ln -s $SVDIR /var/service/   # o /run/runit/service según tu setup"
+        if [ "$ENABLE_SERVICE" = 1 ]; then
+            for sd in /var/service /run/runit/service /etc/runit/runsvdir/current; do
+                [ -d "$sd" ] && { $SUDO ln -sf "$SVDIR" "$sd/" && echo "✓ enlazado en $sd"; break; }
+            done
+        fi
+        ;;
+
+    *)
+        echo "⚠ init '$INIT' no reconocido: instalé el binario y la config, pero NO un servicio."
+        echo "  Corré $LIBDIR/arje-splash desde tu mecanismo de arranque antes del display-manager."
+        ;;
+    esac
+
+    if [ "$ENABLE_SERVICE" != 1 ] && [ -n "$ENABLE_HINT" ]; then
         echo
         echo "✓ instalado. Para activarlo como splash del arranque:"
-        echo "    sudo systemctl enable arje-splash.service"
+        echo "    $ENABLE_HINT"
         echo "  (o re-corré con --enable-service). La config la editás desde wawa-panel,"
         echo "  sección «Arranque», o a mano en /etc/arje/splash.conf."
         echo "  Nota: el camino SIN parpadeo de punta a punta es el arranque NATIVO de arje"
         echo "  (--esp); como servicio del host el splash aparece, pero el firmware→kernel"
-        echo "  previo depende de tu initramfs/Plymouth."
+        echo "  previo depende de tu initramfs/bootsplash."
     fi
 fi
 

@@ -1,0 +1,98 @@
+{
+    "schema_version": 1,
+    "id": "01HQAR53D4M2NBV8KZTYXFQL01",
+    "lineage": null,
+    "label": "arje-laptop",
+    "provides": ["Spawn", "Journal"],
+    "requires": [],
+    "permissions": {
+        "networking": "full",
+        "filesystem": "read-write",
+        "ipc": { "allow": [] },
+        "processes": true
+    },
+    "soma": {
+        "namespaces": {
+            "mount": false, "pid": false, "net": false,
+            "uts": false, "ipc": false, "user": false, "cgroup": false
+        },
+        "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+        "cgroup": { "path": "arje.slice/laptop", "cpu_weight": null, "io_weight": null },
+        "cpu_affinity": null
+    },
+    "payload": "Virtual",
+    "supervision": "OneShot",
+    "lifecycle": "daemon",
+    "priority": "normal",
+    "flow": { "input": [], "output": [] },
+    "genesis": [
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFQL03",
+            "label": "arje-splash",
+            "provides": [],
+            "requires": [],
+            "permissions": {
+                "networking": "none",
+                "filesystem": "read-only",
+                "ipc": { "allow": [] },
+                "processes": true
+            },
+            "soma": {
+                "namespaces": {
+                    "mount": false, "pid": false, "net": false,
+                    "uts": false, "ipc": false, "user": false, "cgroup": false
+                },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/splash", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": {
+                "Native": {
+                    "exec": "/usr/lib/arje/arje-splash",
+                    "argv": [],
+                    "envp": []
+                }
+            },
+            "supervision": "OneShot",
+            "lifecycle": "oneshot",
+            "priority": "high",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        },
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFQL02",
+            "label": "console-tty1",
+            "provides": [],
+            "requires": [],
+            "permissions": {
+                "networking": "none",
+                "filesystem": "read-write",
+                "ipc": { "allow": [] },
+                "processes": true
+            },
+            "soma": {
+                "namespaces": {
+                    "mount": false, "pid": false, "net": false,
+                    "uts": false, "ipc": false, "user": false, "cgroup": false
+                },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/getty", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": {
+                "Native": {
+                    "exec": "/usr/lib/arje/arje-getty-stub",
+                    "argv": ["--noclear", "tty1", "linux"],
+                    "envp": []
+                }
+            },
+            "supervision": { "Restart": { "initial": 200, "max": 10000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        }
+    ]
+}
