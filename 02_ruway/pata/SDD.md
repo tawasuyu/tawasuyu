@@ -1,9 +1,9 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 14** (workspace switcher: escritorios virtuales clickeables en
-> la barra, vía mirada-ctl; sobre la Fase 13 — barras embellecidas + widgets
-> interactivos: volumen/brillo por rueda, clipboard con historial, clima, cava,
-> reloj que fija la hora). Este documento es la fuente autoritativa de qué es
+> Estado: **Fase 15** (applet de red: icono de señal Wi-Fi/Ethernet + popup de
+> redes vía nmcli; sobre la Fase 14 — workspace switcher: escritorios virtuales
+> clickeables en la barra, vía mirada-ctl, y la Fase 13 — barras embellecidas +
+> widgets interactivos). Este documento es la fuente autoritativa de qué es
 > `pata` y dónde termina, por encima de README.
 
 ## 0. El problema que resuelve
@@ -73,7 +73,8 @@ en wawa el config llega por akasha.
 
 `start_button` · `window_list` (ventanas abiertas, vía mirada-ctl/-link) ·
 `workspaces` (selector de escritorios virtuales, vía mirada-ctl) · `clipboard` ·
-`volume` · `brightness` · `tray` · `clock` · medidores (`ram_meter`/`cpu_meter`) ·
+`volume` · `brightness` · `network` (applet Wi-Fi/Ethernet) · `tray` · `clock` ·
+medidores (`ram_meter`/`cpu_meter`) ·
 **`astro`** (posición zodiacal del sol + ciclo lunar, reusando `cosmos-ephemeris`)
 · `shuma_input` (el cabezal del shell).
 
@@ -148,7 +149,8 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     protocolo `wlr-foreign-toplevel-management` (el que usan waybar/eww), no por
     IPC de mirada. Ver el detalle en la Fase 8b. Bajo el compositor `mirada` (el
     path winit) sigue vacío hasta que mirada exponga sus toplevels.
-  - `tray` ⏳ — StatusNotifierItem; diferido. Placeholder por ahora.
+  - `tray` ✅ — StatusNotifierItem (watcher + host, ícono real). Detalle completo
+    en la Fase 8b (`tray.rs`).
 - **Fase 7 ✅** — despliegue Quake de shuma desde `shuma_input`. El frontend
   intercepta el kind `shuma_input` (es interacción, no pasa por el `build`
   agnóstico de core, igual que mirada con su shuma_bar): un cabezal clicable en
@@ -670,3 +672,32 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     cámara de `pluma-deck` Recorrido) y, más adelante, vista **grafo** (escritorios
     como nodos de un DAG, `llimphi-widget-nodegraph`). Ambas leen el mismo estado
     que este widget plano.
+
+- **Fase 15 — applet de red (`network`)** (2026-06-26):
+  - **El widget** (`network`/`wifi`): un icono de **nivel de señal** dibujado a
+    mano (cuatro barras ascendentes estilo celular, las encendidas en acento) que
+    refleja el estado: Wi-Fi (con SSID corto al lado), Ethernet (icono de cable),
+    radio apagada o sin conexión (barras tenues + tachado). Click → popup.
+  - **Dato del host** (`network.rs`): como el clima/tray, corre en su **propio
+    hilo** y publica la última lectura por un canal; el frontend la drena por tick
+    y la pasa al render en `BarData` (no es view-model de core). La fuente es
+    **`nmcli`** (NetworkManager) en modo terse, invocado con tope de tiempo (la red
+    puede colgar), sin sumar un cliente D-Bus al árbol — mismo patrón defensivo que
+    `weather` con `curl`. Si nmcli no está, el estado cae a `Sin` (icono tenue) sin
+    romper la barra. Refresco cada ~5 s (15 s si nmcli no responde).
+  - **Popup**: switch de la radio Wi-Fi + lista de las redes visibles (señal +
+    SSID + candado si es segura, la activa resaltada con ✓). Click en una red →
+    `nmcli device wifi connect`; click en la activa → `nmcli connection down`.
+    En winit es un `network_overlay` (scrim + panel, como el control panel); en
+    layer-shell es un `MenuKind::Network` (la barra crece hacia abajo, anclado bajo
+    el icono, como el clipboard/control). Complementa el toggle Wi-Fi del Control
+    panel (Fase 13): aquel es el switch rápido, este es el applet con selector.
+  - **Parsers puros y testeados** (`parse_wifi_list`/`parse_radio`/
+    `parse_ethernet_connected`/`derive_status`, con un splitter que respeta el
+    escape `\:` de nmcli para SSID con dos puntos): 5 tests verdes. El render bajo
+    Wayland no se verifica headless (norma de pata) — validar en el compositor.
+  - **Pendiente**: **entrada de contraseña** para una red segura nueva (necesita
+    un campo de texto con foco de teclado, como el menú de inicio); hoy una red sin
+    perfil guardado depende del agente de secretos del sistema (nm-applet/polkit).
+    Bluetooth con selector de dispositivos sigue siendo el gemelo natural (hoy sólo
+    el toggle rfkill del Control panel).

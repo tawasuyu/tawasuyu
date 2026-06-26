@@ -594,6 +594,11 @@ impl LayerApp {
                 self.weather_now = Some(w);
             }
         }
+        if let Some(h) = &self.network {
+            if let Some(n) = h.latest() {
+                self.network_now = Some(n);
+            }
+        }
         // `WidgetCtx` ya no es `Copy` (lleva el título de la ventana enfocada),
         // así que los widgets tickean contra `&self.ctx` (recién asignado).
         for sw in &mut self.surfaces {
@@ -798,6 +803,7 @@ impl LayerApp {
             clipboard: self.clipboard.as_deref(),
             tray: &tray_items,
             weather: self.weather_now.as_ref(),
+            network: self.network_now.as_ref(),
             cava: &self.cava_frame,
             apps: self.registry.all(),
             shuma_full: self.shuma_full.as_ref(),
@@ -868,6 +874,17 @@ impl LayerApp {
                     self.ctx.muted,
                     self.ctx.brightness,
                     &self.control_extras,
+                    self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
+                ),
+                MenuKind::Network => render::network_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    self.network_now.as_ref(),
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
                     self.panels[idx].width as f32,
                 ),
@@ -1074,6 +1091,23 @@ impl LayerApp {
                     self.control_extras = crate::render::ControlExtras::read();
                 }
                 self.toggle_menu(MenuKind::Control);
+            }
+            Msg::NetworkToggle => self.toggle_menu(MenuKind::Network),
+            Msg::NetworkConnect(ssid) => {
+                crate::network::connect(&ssid);
+                self.set_menu_open(false);
+            }
+            Msg::NetworkDisconnect(ssid) => {
+                crate::network::disconnect(&ssid);
+                self.set_menu_open(false);
+            }
+            Msg::NetworkRadio(on) => {
+                crate::network::set_wifi_radio(on);
+                // Reflejo optimista: el próximo muestreo confirma. Repinta el popup.
+                if let Some(n) = &mut self.network_now {
+                    n.wifi_enabled = on;
+                }
+                self.marcar_menu_dirty();
             }
             Msg::ClipboardMenu => self.toggle_menu(MenuKind::Clipboard),
             Msg::ClipboardPick(text) => {

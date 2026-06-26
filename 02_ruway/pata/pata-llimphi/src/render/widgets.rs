@@ -101,6 +101,7 @@ pub(super) fn default_cells(kind: &str) -> u32 {
         "astro" => 1,
         "moon" => 1,
         "weather" => 3,
+        "network" => 3,
         "cava" => 3,
         _ => 1,
     }

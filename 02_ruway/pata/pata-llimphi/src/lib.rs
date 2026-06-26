@@ -34,6 +34,7 @@ pub mod shuma;
 pub mod shuma_app;
 pub mod toplevel;
 pub mod tray;
+pub mod network;
 pub mod weather;
 
 use std::time::Duration;
@@ -179,6 +180,14 @@ pub enum Msg {
     ControlWifi(bool),
     /// Conmutar la radio Bluetooth (`rfkill`). El `bool` es el estado deseado.
     ControlBt(bool),
+    /// Desplegar/replegar el applet de red (lista de redes Wi-Fi).
+    NetworkToggle,
+    /// Conectar a la red Wi-Fi `ssid` (`nmcli device wifi connect`).
+    NetworkConnect(String),
+    /// Desconectar la red Wi-Fi activa `ssid` (`nmcli connection down`).
+    NetworkDisconnect(String),
+    /// Encender/apagar la radio Wi-Fi. El `bool` es el estado deseado.
+    NetworkRadio(bool),
     /// Desplegar/replegar el menú del botón de inicio.
     StartToggle,
     /// Cicla al próximo estilo de menú (Classic → XP → GNOME → Classic).
@@ -336,6 +345,10 @@ pub enum SlotWidget {
     /// El botón del control panel (quick settings): un engranaje que abre el
     /// flyout de volumen/brillo/batería/radios ([`Msg::ControlToggle`]).
     Control,
+    /// El applet de red (Wi-Fi/Ethernet): un icono de señal que abre un popup
+    /// con la lista de redes ([`Msg::NetworkToggle`]). Dato del host (vía
+    /// `nmcli`, ver [`network`]), no del view-model de core.
+    Network,
 }
 
 /// `true` si la config pide el reloj en **UTC** (`general.timezone = "UTC"`).
@@ -676,7 +689,8 @@ impl SurfaceWidgets {
                 | SlotWidget::Cava
                 | SlotWidget::ProgramManager
                 | SlotWidget::FrontPanel
-                | SlotWidget::Control => None,
+                | SlotWidget::Control
+                | SlotWidget::Network => None,
             })
     }
 }
@@ -753,6 +767,12 @@ pub struct Model {
     pub weather: Option<weather::WeatherHandle>,
     /// Última lectura del clima (se refresca con `latest()` cada tick).
     pub weather_now: Option<weather::Weather>,
+    /// Feed de red en su propio hilo. `None` si la config no declara `network`.
+    pub network: Option<network::NetworkHandle>,
+    /// Última lectura de la red (se refresca con `latest()` cada tick).
+    pub network_now: Option<network::NetState>,
+    /// `true` cuando el popup del applet de red está desplegado (path winit).
+    pub network_open: bool,
     /// Visualizador de audio (cava) en su propio hilo. `None` si la config no
     /// declara `cava`.
     pub cava: Option<cava::CavaHandle>,
@@ -863,6 +883,8 @@ impl Model {
                         SlotWidget::FrontPanel
                     } else if spec.kind == "control" {
                         SlotWidget::Control
+                    } else if spec.kind == "network" || spec.kind == "wifi" {
+                        SlotWidget::Network
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -1020,6 +1042,8 @@ impl App for PataApp {
             .flatten();
         let weather = config_tiene_widget(&cfg, "weather")
             .then(|| weather::WeatherHandle::spawn(weather_place(&cfg)));
+        let network = (config_tiene_widget(&cfg, "network") || config_tiene_widget(&cfg, "wifi"))
+            .then(network::NetworkHandle::spawn);
         let cava = config_tiene_widget(&cfg, "cava").then(|| cava::CavaHandle::spawn(cava_bars(&cfg)));
 
         let mut theme = Theme::dark();
@@ -1059,6 +1083,9 @@ impl App for PataApp {
             tray,
             weather,
             weather_now: None,
+            network,
+            network_now: None,
+            network_open: false,
             cava,
             cava_frame: Vec::new(),
             nav: NavState::default(),
@@ -1162,6 +1189,11 @@ impl App for PataApp {
                 if let Some(h) = &model.weather {
                     if let Some(w) = h.latest() {
                         model.weather_now = Some(w);
+                    }
+                }
+                if let Some(h) = &model.network {
+                    if let Some(n) = h.latest() {
+                        model.network_now = Some(n);
                     }
                 }
                 // Lista de ventanas para el task manager: sólo si la config la
@@ -1348,6 +1380,29 @@ impl App for PataApp {
             Msg::ControlBt(on) => {
                 render::set_radio("bluetooth", on);
                 model.control_extras.bt = on;
+            }
+            Msg::NetworkToggle => {
+                model.network_open = !model.network_open;
+                if model.network_open {
+                    model.menu_open = false;
+                    model.clip_open = false;
+                    model.control_open = false;
+                }
+            }
+            Msg::NetworkConnect(ssid) => {
+                network::connect(&ssid);
+                model.network_open = false;
+            }
+            Msg::NetworkDisconnect(ssid) => {
+                network::disconnect(&ssid);
+                model.network_open = false;
+            }
+            Msg::NetworkRadio(on) => {
+                network::set_wifi_radio(on);
+                // Reflejo optimista: el próximo muestreo confirma.
+                if let Some(n) = &mut model.network_now {
+                    n.wifi_enabled = on;
+                }
             }
             Msg::ClipboardPick(text) => {
                 sampler::copiar_clipboard(&text);
@@ -1684,6 +1739,14 @@ impl App for PataApp {
                 &model.control_extras,
                 bar_h,
                 screen,
+                &model.theme,
+            ));
+        }
+        if model.network_open {
+            let bar_h = bar_thickness_for(&model.cfg, "network");
+            return Some(render::network_overlay(
+                model.network_now.as_ref(),
+                bar_h,
                 &model.theme,
             ));
         }

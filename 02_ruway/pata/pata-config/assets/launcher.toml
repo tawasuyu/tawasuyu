@@ -78,6 +78,9 @@ exec = "pavucontrol"   # click en el medidor → mezclador de audio
 kind = "brightness"
 
 [[surfaces.end]]
+kind = "network"        # applet Wi-Fi/Ethernet: icono de señal + popup de redes (nmcli)
+
+[[surfaces.end]]
 kind = "tray"
 
 [[surfaces.end]]

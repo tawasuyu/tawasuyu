@@ -43,6 +43,7 @@ use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 // Submódulos internos
 mod cde;
 mod control;
+mod network;
 mod panels;
 mod sidebar;
 mod start_menus;
@@ -56,6 +57,7 @@ pub use panels::{
     cpu_overlay, cpu_panel, ram_overlay, ram_panel, volume_overlay, volume_panel,
 };
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
+pub use network::{network_overlay, network_view};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};
 pub use task_manager::{clipboard_overlay, clipboard_panel, start_button_view, tray_view, workspaces_view, WsComet};
@@ -80,6 +82,8 @@ pub struct BarData<'a> {
     pub tray: &'a [TrayItem],
     /// La última lectura del clima, para el `weather`.
     pub weather: Option<&'a crate::weather::Weather>,
+    /// La última lectura de la red, para el `network`.
+    pub network: Option<&'a crate::network::NetState>,
     /// El último cuadro del visualizador de audio, para el `cava`.
     pub cava: &'a [f32],
     /// Las apps del registro, para el `program_manager` (grilla estilo Win3.1).
@@ -294,6 +298,7 @@ pub fn root(model: &Model) -> View<Msg> {
         clipboard: model.clipboard.as_deref(),
         tray: &tray_items,
         weather: model.weather_now.as_ref(),
+        network: model.network_now.as_ref(),
         cava: &model.cava_frame,
         apps: model.registry.all(),
         shuma_full: model.shuma_full.as_ref(),
@@ -601,6 +606,7 @@ fn slots_de(
                 // `bar_view`); acá no debería llegar — placeholder vacío.
                 SlotWidget::FrontPanel => View::new(Style::default()),
                 SlotWidget::Control => control::control_button_view(theme),
+                SlotWidget::Network => network::network_view(data.network, theme),
             })
             .collect();
         let mut style = Style {
@@ -1385,6 +1391,58 @@ pub fn control_menu_view(
     body_style.flex_grow = 1.0;
     let body = View::new(body_style)
         .on_click(Msg::ControlToggle)
+        .children(vec![panel_abs]);
+
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// El **applet de red** (lista de redes Wi-Fi) para el **layer-shell**, anclado
+/// justo debajo del icono que lo abrió. Espejo de [`control_menu_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn network_menu_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    state: Option<&crate::network::NetState>,
+    anchor_x: f32,
+    avail_w: f32,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(bar_px) },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
+
+    let left =
+        (anchor_x - network::PANEL_W * 0.5).clamp(8.0, (avail_w - network::PANEL_W - 8.0).max(8.0));
+    let panel_abs = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect { left: length(left), top: length(0.0_f32), right: auto(), bottom: auto() },
+        size: Size { width: length(network::PANEL_W), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![network::network_panel(state, theme)]);
+
+    let mut body_style = Style {
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::NetworkToggle)
         .children(vec![panel_abs]);
 
     let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {

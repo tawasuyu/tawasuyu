@@ -196,6 +196,8 @@ pub(super) enum MenuKind {
     Clock,
     /// El control panel (ajustes rápidos: volumen/brillo/batería/radios).
     Control,
+    /// El applet de red (lista de redes Wi-Fi para conectarse).
+    Network,
 }
 
 /// El cliente Wayland del backend layer-shell.
@@ -231,6 +233,10 @@ pub(super) struct LayerApp {
     pub(super) weather: Option<crate::weather::WeatherHandle>,
     /// Última lectura del clima.
     pub(super) weather_now: Option<crate::weather::Weather>,
+    /// Feed de red (Wi-Fi/Ethernet) en su propio hilo.
+    pub(super) network: Option<crate::network::NetworkHandle>,
+    /// Última lectura de la red.
+    pub(super) network_now: Option<crate::network::NetState>,
     /// Visualizador de audio (cava) en su propio hilo.
     pub(super) cava: Option<crate::cava::CavaHandle>,
     /// Último cuadro del visualizador.
@@ -429,6 +435,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .flatten();
     let weather = crate::config_tiene_widget(&cfg, "weather")
         .then(|| crate::weather::WeatherHandle::spawn(crate::weather_place(&cfg)));
+    let network = (crate::config_tiene_widget(&cfg, "network")
+        || crate::config_tiene_widget(&cfg, "wifi"))
+    .then(crate::network::NetworkHandle::spawn);
     let cava = crate::config_tiene_widget(&cfg, "cava")
         .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
 
@@ -532,6 +541,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         tray,
         weather,
         weather_now: None,
+        network,
+        network_now: None,
         cava,
         cava_frame: Vec::new(),
         theme,
