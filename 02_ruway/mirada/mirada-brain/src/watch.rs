@@ -48,6 +48,39 @@ impl FileWatch {
     }
 }
 
+/// Vigía de un **directorio entero**: reporta si cambió cualquier entrada
+/// dentro (alta, baja o reescritura de un archivo). A diferencia de
+/// [`FileWatch`], no filtra a un archivo concreto — sirve para recargar un
+/// directorio de plugins cuando el usuario agrega, edita o quita uno, sin
+/// reiniciar. Vigilancia **no recursiva**: sólo el primer nivel.
+pub struct DirWatch {
+    _watcher: notify::RecommendedWatcher,
+    rx: mpsc::Receiver<()>,
+}
+
+impl DirWatch {
+    /// Empieza a vigilar el directorio `dir` (que debe existir). Cualquier
+    /// evento en su primer nivel se reporta como un cambio.
+    pub fn new(dir: &Path) -> notify::Result<DirWatch> {
+        use notify::{RecursiveMode, Watcher};
+
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if res.is_ok() {
+                let _ = tx.send(());
+            }
+        })?;
+        watcher.watch(dir, RecursiveMode::NonRecursive)?;
+        Ok(DirWatch { _watcher: watcher, rx })
+    }
+
+    /// `true` si algo en el directorio cambió desde la última consulta.
+    /// Coalesce la ráfaga de un solo guardado en un único `true`.
+    pub fn changed(&self) -> bool {
+        self.rx.try_iter().count() > 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

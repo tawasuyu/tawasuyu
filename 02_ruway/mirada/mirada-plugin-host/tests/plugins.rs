@@ -414,3 +414,65 @@ fn grow_master_keybind_ensancha_via_params() {
         "el atajo GrowMaster debería fluir como params al plugin y ensanchar la maestra: {antes} -> {despues}"
     );
 }
+
+// --- Hot-reload del directorio de plugins. ----------------------------------
+
+#[test]
+fn reload_plugins_aplica_el_nuevo_layout_al_instante() {
+    // Arranca SIN plugins: el master-stack del Desktop pone la maestra a la
+    // IZQUIERDA. El estado de ventanas vive en el Desktop, que reload preserva.
+    let mut c = Conductor::new(Desktop::new(), Vec::new());
+    let _ = c.startup();
+    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 1000, height: 1000 });
+    let mut rects = Vec::new();
+    for id in 1..=2u64 {
+        tiled_from(
+            c.on_body_event(BodyEvent::WindowOpened { id, app_id: "t".into(), title: "w".into() }),
+            &mut rects,
+        );
+    }
+    let master_antes = rects.iter().max_by_key(|r| r.w).copied().unwrap();
+    assert!(cx(&master_antes) < 500, "sin plugin la maestra va a la izquierda: {master_antes:?}");
+
+    // Cargar el plugin right-master en caliente debe re-teselar YA (sin esperar
+    // un evento nuevo): la maestra salta a la DERECHA en los comandos del reload.
+    let layout =
+        LoadedPlugin::load_bytes(LAYOUT_WASM, PluginKind::Layout, CAP_LAYOUT, 10, "rm").unwrap();
+    let cmds = c.reload_plugins(vec![layout]);
+    let mut rects2 = Vec::new();
+    tiled_from(cmds, &mut rects2);
+    assert!(!rects2.is_empty(), "el reload debería re-emitir un Place");
+    let master_despues = rects2.iter().max_by_key(|r| r.w).copied().unwrap();
+    assert!(
+        cx(&master_despues) > 500,
+        "tras recargar el plugin, el right-master pone la maestra a la derecha: {master_despues:?}"
+    );
+}
+
+#[test]
+fn reload_plugins_deja_operativo_al_reactor_nuevo() {
+    // Arranca sin plugins; recarga con el reactor; el reactor recién instalado
+    // debe atenuar las ventanas sin foco al abrirlas — prueba que reload lo dejó
+    // vivo (instanciado, con sus capacidades enlazadas), no sólo registrado.
+    let mut c = Conductor::new(Desktop::new(), Vec::new());
+    let _ = c.startup();
+    c.on_body_event(BodyEvent::OutputAdded { id: 0, width: 1000, height: 1000 });
+
+    let reactor = LoadedPlugin::load_bytes(
+        REACTOR_WASM,
+        PluginKind::Reactor,
+        CAP_KEYS | CAP_SPAWN | CAP_EFFECTS | CAP_ACTIONS,
+        0,
+        "term",
+    )
+    .unwrap();
+    let _ = c.reload_plugins(vec![reactor]);
+
+    c.on_body_event(BodyEvent::WindowOpened { id: 1, app_id: "a".into(), title: "w".into() });
+    let cmds =
+        c.on_body_event(BodyEvent::WindowOpened { id: 2, app_id: "b".into(), title: "w".into() });
+    assert!(
+        cmds.iter().any(|c| matches!(c, BrainCommand::SetEffects(_))),
+        "el reactor recargado en caliente debería emitir efectos: {cmds:?}"
+    );
+}

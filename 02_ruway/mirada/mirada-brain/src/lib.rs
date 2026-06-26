@@ -58,7 +58,7 @@ pub use profiles::{KeymapProfiles, ProfileError};
 pub use rules::{Rule, RuleOutcome, Rules};
 pub use vistas::{Vista, VISTA_NAMES};
 pub use session::{DesktopState, SESSION_VERSION};
-pub use watch::FileWatch;
+pub use watch::{DirWatch, FileWatch};
 
 pub use mirada_layout::{
     disponer, envolvente, wallpaper_dst_rect, Disposicion, LayoutMode, LayoutParams, Rect,

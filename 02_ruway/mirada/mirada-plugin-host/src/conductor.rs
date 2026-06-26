@@ -55,26 +55,7 @@ impl Conductor {
     /// tipo `Layout`, gana el de mayor `priority`; el resto queda inactivo.
     pub fn new(desktop: Desktop, plugins: Vec<LoadedPlugin>) -> Self {
         let desktop_keys = grab_payload(&desktop.grab_keys());
-        let mut layout: Option<LoadedPlugin> = None;
-        let mut reactors = Vec::new();
-        for p in plugins {
-            match p.kind {
-                PluginKind::Layout => match &layout {
-                    Some(cur) if cur.priority >= p.priority => {
-                        eprintln!(
-                            "[conductor] layout {} ignorado (gana {} por prioridad)",
-                            p.name, cur.name
-                        );
-                    }
-                    _ => {
-                        if let Some(prev) = layout.replace(p) {
-                            eprintln!("[conductor] layout {} desplazado", prev.name);
-                        }
-                    }
-                },
-                PluginKind::Reactor => reactors.push(p),
-            }
-        }
+        let (layout, reactors) = partition_plugins(plugins);
         Self {
             desktop,
             layout,
@@ -84,6 +65,33 @@ impl Conductor {
             reactor_keys: HashMap::new(),
             last_grab: None,
         }
+    }
+
+    /// Recarga en caliente el conjunto de plugins, preservando el `Desktop` (el
+    /// estado real de ventanas/foco/escritorios). Re-reparte roles, descarta los
+    /// atajos de los reactores viejos (los nuevos se re-registran en su próximo
+    /// evento) y devuelve los comandos para que el cambio se vea al instante: la
+    /// unión de atajos al día + una re-colocación que pasa por el **nuevo**
+    /// plugin de layout. Es el espejo, para plugins, de los hot-reload de
+    /// keymap/config/caps.
+    pub fn reload_plugins(&mut self, plugins: Vec<LoadedPlugin>) -> Vec<BrainCommand> {
+        let (layout, reactors) = partition_plugins(plugins);
+        self.layout = layout;
+        self.reactors = reactors;
+        // Los reactores cambiaron: olvidá sus atajos viejos y forzá re-emitir la
+        // unión (que ahora puede haber perdido/ganado teclas).
+        self.reactor_keys.clear();
+        self.last_grab = None;
+
+        // Re-tesela con el nuevo layout: `refresh()` re-emite el Place actual
+        // (idempotente) y `apply_layout` lo reescribe con el plugin nuevo.
+        let mut cmds = self.desktop.refresh();
+        self.intercept_desktop_keys(&mut cmds);
+        self.apply_layout(&mut cmds);
+        if let Some(g) = self.maybe_grab() {
+            cmds.insert(0, g);
+        }
+        cmds
     }
 
     /// Recarga en caliente: aplica un keymap nuevo y devuelve la `GrabKeys`
@@ -308,6 +316,34 @@ impl Conductor {
             _ => {}
         }
     }
+}
+
+/// Reparte una tanda de plugins en sus roles: el de layout activo (el de mayor
+/// `priority` entre los `Layout`; el resto se ignora con un aviso) y los
+/// reactores. Compartido por [`Conductor::new`] y
+/// [`Conductor::reload_plugins`](Conductor::reload_plugins).
+fn partition_plugins(plugins: Vec<LoadedPlugin>) -> (Option<LoadedPlugin>, Vec<LoadedPlugin>) {
+    let mut layout: Option<LoadedPlugin> = None;
+    let mut reactors = Vec::new();
+    for p in plugins {
+        match p.kind {
+            PluginKind::Layout => match &layout {
+                Some(cur) if cur.priority >= p.priority => {
+                    eprintln!(
+                        "[conductor] layout {} ignorado (gana {} por prioridad)",
+                        p.name, cur.name
+                    );
+                }
+                _ => {
+                    if let Some(prev) = layout.replace(p) {
+                        eprintln!("[conductor] layout {} desplazado", prev.name);
+                    }
+                }
+            },
+            PluginKind::Reactor => reactors.push(p),
+        }
+    }
+    (layout, reactors)
 }
 
 /// Extrae la lista de atajos de un `BrainCommand::GrabKeys` (vacía si no lo es).

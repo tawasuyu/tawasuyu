@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
-use mirada_brain::{Config, FileWatch, Keymap, Rules};
+use mirada_brain::{Config, DirWatch, FileWatch, Keymap, Rules};
 use mirada_link::BrainLink;
 use mirada_plugin_host::{
     configured_desktop, load_caps, load_config, load_keymap, load_plugins_dir, load_rules, Conductor,
@@ -75,7 +75,8 @@ fn main() {
         }
     };
 
-    let plugins = load_plugins_dir(&plugins_dir());
+    let dir = plugins_dir();
+    let plugins = load_plugins_dir(&dir);
     let mut conductor = Conductor::new(configured_desktop(), plugins);
 
     // Handshake de arranque (atajos + decoración + permisos).
@@ -88,6 +89,16 @@ fn main() {
     let cfg_w = watch_of(Config::default_path());
     let rules_w = watch_of(Rules::default_path());
     let caps_w = watch_of(mirada_brain::permisos::default_path());
+
+    // Vigía del directorio de plugins: agregar/editar/quitar un .wasm/.ron lo
+    // recarga sin reiniciar el host (espejo del hot-reload de la config).
+    let plugins_w = match DirWatch::new(&dir) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!("[host] sin vigilancia de plugins {}: {e}", dir.display());
+            None
+        }
+    };
 
     // Bucle: intercala el sondeo del Cuerpo (con timeout) con la recarga en
     // caliente de la config. `Disconnected` (el Cuerpo cerró) sale; `Timeout`
@@ -106,6 +117,10 @@ fn main() {
         }
         if changed(&rules_w) {
             conductor.apply_rules(load_rules());
+        }
+        if plugins_w.as_ref().is_some_and(|w| w.changed()) {
+            eprintln!("[host] cambió el directorio de plugins; recargando…");
+            send_all(&mut link, conductor.reload_plugins(load_plugins_dir(&dir)));
         }
 
         match link.recv_timeout(POLL) {
