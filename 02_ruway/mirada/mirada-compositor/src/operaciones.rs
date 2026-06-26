@@ -1567,15 +1567,25 @@ impl App {
 
     /// Tras un salto de sesión, pone el foco en una ventana visible de la sesión
     /// activa (la última en orden de aparición), o lo limpia si no hay ninguna.
+    /// Mueve tanto el flag visual `focused` como el foco de teclado real de
+    /// smithay — si no, el teclado seguiría yendo a una ventana de la sesión que
+    /// acaba de ocultarse.
     fn refocus_active_session(&mut self) {
-        let nuevo = self
+        let target = self
             .windows
             .iter()
             .rev()
             .find(|w| !w.is_shell && !w.is_greeter && self.session_visible(w))
-            .map(|w| w.id);
+            .map(|w| (w.id, w.surface.clone()));
+        let nuevo_id = target.as_ref().map(|(id, _)| *id);
         for w in &mut self.windows {
-            w.focused = Some(w.id) == nuevo;
+            w.focused = Some(w.id) == nuevo_id;
+        }
+        // Foco de teclado real: a la superficie de la ventana elegida (o a None
+        // si la sesión recién activada no tiene ventanas todavía).
+        if let Some(kb) = self.keyboard.clone() {
+            let surf = target.map(|(_, s)| s);
+            kb.set_focus(self, surf, SERIAL_COUNTER.next_serial());
         }
     }
 
@@ -1611,6 +1621,42 @@ impl App {
         // Dejamos de empujarle la disposición de monitores al shell que se va.
         self.greeter_stdin = None;
         dlog!("mirada-compositor · sesión desbloqueada.");
+    }
+
+    /// Línea `SESSIONS` para el lock: el roster de sesiones hosteadas como
+    /// `id:nombre`, con el id de la activa al frente, para que el shell de
+    /// credenciales pinte el selector «cambiar usuario». `None` si no hay
+    /// ninguna (nada que listar). El nombre se sanea (sin espacios ni `:`, que
+    /// romperían el parseo del otro lado).
+    pub(crate) fn sessions_line(&self) -> Option<String> {
+        if self.roster.is_empty() {
+            return None;
+        }
+        let active = self.roster.active_id().map(|i| i.0).unwrap_or(0);
+        let mut line = format!("SESSIONS {active}");
+        for (id, s) in self.roster.iter() {
+            let name = s
+                .user
+                .as_ref()
+                .map(|u| u.name.clone())
+                .or_else(|| std::env::var("USER").ok())
+                .unwrap_or_else(|| "sesión".into());
+            let name = name.replace([' ', ':'], "_");
+            line.push_str(&format!(" {}:{name}", id.0));
+        }
+        Some(line)
+    }
+
+    /// Empuja el roster al shell de credenciales por su stdin (si hay tubería),
+    /// para que el lock liste las sesiones hosteadas. Se llama al lanzar el lock.
+    pub(crate) fn push_sessions_to_greeter(&mut self) {
+        use std::io::Write;
+        let Some(line) = self.sessions_line() else {
+            return;
+        };
+        if let Some(stdin) = self.greeter_stdin.as_mut() {
+            let _ = writeln!(stdin, "{line}").and_then(|_| stdin.flush());
+        }
     }
 
     /// Arranca una sesión nueva tras un login válido — la «mutación atómica»

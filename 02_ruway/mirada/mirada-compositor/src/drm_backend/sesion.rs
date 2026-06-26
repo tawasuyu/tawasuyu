@@ -51,6 +51,8 @@ impl DrmState {
                 Ok(stdin) => {
                     self.app.greeter_stdin = Some(stdin);
                     self.app.mode = crate::estado::BodyMode::Locked;
+                    // Empuja el roster: el lock ofrece «cambiar usuario» a otra.
+                    self.app.push_sessions_to_greeter();
                     dlog!("mirada-compositor · sesión bloqueada (lock de «{user}»).");
                 }
                 Err(e) => dlog!("mirada-compositor · no pude lanzar el lock: {e}"),

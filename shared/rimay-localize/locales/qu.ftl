@@ -610,6 +610,7 @@ mirada-lock-btn = Kichay
 mirada-lock-btn-busy = Kichachkan…
 mirada-lock-hint = Kichanapaq Enter ñit'iy
 mirada-lock-hint-switch = F2 ruraqta tikrachinapaq
+mirada-lock-switch-cap = Tikray
 
 # === nakui-explorer-llimphi ===
 nakui-explorer-menu-refresh-log = Quillqa musuqyachiy

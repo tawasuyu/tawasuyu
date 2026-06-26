@@ -156,6 +156,12 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
     user.set_text(user_text);
     let mut pass = TextInputState::masked();
     pass.set_text("secreto".to_string());
+    // `--shot` puede simular el roster FUS para certificar el selector del lock
+    // sin bootear: MIRADA_SHOT_HOSTED="1 0:ana 1:beto" (activo + id:nombre…).
+    let (shot_hosted, shot_hosted_active) = std::env::var("MIRADA_SHOT_HOSTED")
+        .ok()
+        .and_then(|v| parse_sessions(&format!("SESSIONS {v}")))
+        .unwrap_or_default();
     let model = Model {
         auth: pick_authenticator(),
         user,
@@ -186,6 +192,8 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         active_mon: shot_monitors().1,
         prev_mon: shot_monitors().1,
         card_anim: 1.0,
+        hosted: shot_hosted,
+        hosted_active: shot_hosted_active,
     };
     let view = <Greeter as App>::view(&model);
 
@@ -385,6 +393,13 @@ struct Model {
     card_anim: f32,
     /// Papel de esta instancia: login de arranque o lock de la sesión activa.
     mode: GreeterMode,
+    /// FUS: sesiones hosteadas por el compositor `(id, nombre)`, empujadas por
+    /// stdin (`SESSIONS …`) sólo al lock. Si hay más de una, el lock pinta un
+    /// selector «cambiar a» que emite [`ShellAction::SwitchTo`]. Vacío en login.
+    hosted: Vec<(u32, String)>,
+    /// Id de la sesión hosteada activa (la que está bloqueada) — no se ofrece
+    /// como destino de salto a sí misma.
+    hosted_active: u32,
 }
 
 /// Rect de un monitor en coordenadas de la ventana del greeter (px):
@@ -405,6 +420,12 @@ enum Msg {
     /// y cierra — el compositor abre un login nuevo para hostear otra sesión
     /// junto a la bloqueada.
     SwitchUser,
+    /// FUS: roster de sesiones hosteadas `(id, nombre)` + id de la activa,
+    /// empujado por el compositor (`SESSIONS …`). Alimenta el selector del lock.
+    SetHosted(Vec<(u32, String)>, u32),
+    /// FUS: saltar a la sesión hosteada `id` (clic en el selector del lock).
+    /// Emite [`ShellAction::SwitchTo`] y cierra.
+    SwitchTo(u32),
     /// Fija la sesión elegida por índice — elección desde el menú.
     PickSession(usize),
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
@@ -506,6 +527,8 @@ impl App for Greeter {
                 for line in stdin.lock().lines().map_while(Result::ok) {
                     if let Some((mons, active)) = parse_layout(&line) {
                         h.dispatch(Msg::SetLayout(mons, active));
+                    } else if let Some((hosted, active)) = parse_sessions(&line) {
+                        h.dispatch(Msg::SetHosted(hosted, active));
                     }
                 }
             });
@@ -535,6 +558,8 @@ impl App for Greeter {
             prev_mon: 0,
             card_anim: 1.0,
             mode,
+            hosted: Vec::new(),
+            hosted_active: 0,
         }
     }
 
@@ -675,6 +700,17 @@ impl App for Greeter {
                 // el camino de «otra sesión». Pide al compositor abrir un login.
                 if m.mode == GreeterMode::Lock {
                     emit_action(&ShellAction::NewSession);
+                    handle.quit();
+                }
+            }
+            Msg::SetHosted(hosted, active) => {
+                m.hosted = hosted;
+                m.hosted_active = active;
+            }
+            Msg::SwitchTo(id) => {
+                // Saltar directo a otra sesión hosteada (no se ofrece la activa).
+                if m.mode == GreeterMode::Lock && id != m.hosted_active {
+                    emit_action(&ShellAction::SwitchTo(id));
                     handle.quit();
                 }
             }
@@ -976,6 +1012,20 @@ impl App for Greeter {
             }
             items.push(spacer(6.0));
             items.push(enter_btn);
+            // FUS: selector «cambiar a» — sólo en lock y si hay OTRA sesión
+            // hosteada además de ésta. Una fila clicable por destino.
+            let otras: Vec<&(u32, String)> = if lock {
+                model.hosted.iter().filter(|(id, _)| *id != model.hosted_active).collect()
+            } else {
+                Vec::new()
+            };
+            if !otras.is_empty() {
+                items.push(spacer(4.0));
+                items.push(row(13.0, &rimay_localize::t("mirada-lock-switch-cap"), 9.0, theme.fg_muted));
+                for (id, name) in otras {
+                    items.push(switch_row(*id, name, &theme));
+                }
+            }
             items.push(spacer(2.0));
             // Pistas: en lock desbloquear + cambiar usuario; en login navegación + consola.
             if lock {
@@ -1382,6 +1432,21 @@ fn parse_layout(line: &str) -> Option<(Vec<MonRect>, usize)> {
     Some((mons, active))
 }
 
+/// Parsea una línea `SESSIONS <id_activo> <id>:<nombre> …` empujada por el
+/// compositor al lock (FUS). Devuelve `(roster, id_activo)`. `None` si la línea
+/// no es un roster bien formado.
+fn parse_sessions(line: &str) -> Option<(Vec<(u32, String)>, u32)> {
+    let rest = line.trim().strip_prefix("SESSIONS ")?;
+    let mut it = rest.split_whitespace();
+    let active: u32 = it.next()?.parse().ok()?;
+    let mut hosted = Vec::new();
+    for tok in it {
+        let (id, name) = tok.split_once(':')?;
+        hosted.push((id.parse().ok()?, name.to_string()));
+    }
+    Some((hosted, active))
+}
+
 /// Resuelve el color base (RGB brillante) del fondo de lluvia. `Accent` toma
 /// el acento del tema; el resto son paletas fijas.
 fn rain_bright(color: state::RainColor, theme: &Theme) -> (u8, u8, u8) {
@@ -1429,6 +1494,24 @@ fn row(height: f32, text: &str, size: f32, color: Color) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(text.to_string(), size, color, Alignment::Start)
+}
+
+/// FUS: fila clicable del selector «cambiar a» — salta a la sesión `id` del
+/// roster. Sutil (relleno de panel-botón), con el nombre y un chevron.
+fn switch_row(id: u32, name: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .radius(7.0)
+    .text_aligned(format!("→  {name}"), 12.5, theme.fg_text, Alignment::Center)
+    .on_click(Msg::SwitchTo(id))
 }
 
 /// Hora (`HH:MM`) y fecha localizada del reloj, leídas de la hora local del
@@ -1516,6 +1599,25 @@ mod tests {
         assert!(parse_layout("LAYOUT x 0,0,1,1").is_none());
     }
 
+    #[test]
+    fn parse_sessions_roster() {
+        let (hosted, active) = parse_sessions("SESSIONS 1 0:ana 1:beto").unwrap();
+        assert_eq!(active, 1);
+        assert_eq!(hosted, vec![(0, "ana".to_string()), (1, "beto".to_string())]);
+        // Sin sesiones más allá del activo (caso N=1): lista vacía, válido.
+        let (hosted, active) = parse_sessions("SESSIONS 3").unwrap();
+        assert_eq!(active, 3);
+        assert!(hosted.is_empty());
+    }
+
+    #[test]
+    fn parse_sessions_rechaza_basura() {
+        assert!(parse_sessions("LAYOUT 0 0,0,1,1").is_none());
+        assert!(parse_sessions("SESSIONS").is_none());
+        assert!(parse_sessions("SESSIONS x 0:ana").is_none());
+        assert!(parse_sessions("SESSIONS 0 nocolon").is_none());
+    }
+
     /// Construye un modelo mínimo para ejercitar `content_rect` (los campos no
     /// usados van por defecto vía un modelo de `--shot`).
     fn model_con_monitores(mons: Vec<MonRect>, active: usize, prev: usize, t: f32) -> Model {
@@ -1544,6 +1646,8 @@ mod tests {
             prev_mon: prev,
             card_anim: t,
             mode: GreeterMode::Login,
+            hosted: Vec::new(),
+            hosted_active: 0,
         }
     }
 

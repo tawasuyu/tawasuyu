@@ -609,6 +609,7 @@ mirada-lock-btn = Desbloquear
 mirada-lock-btn-busy = Desbloqueando…
 mirada-lock-hint = Enter para desbloquear
 mirada-lock-hint-switch = F2 para cambiar de usuario
+mirada-lock-switch-cap = Cambiar a
 
 # === nakui-explorer-llimphi ===
 nakui-explorer-menu-refresh-log = Refrescar log

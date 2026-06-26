@@ -230,17 +230,26 @@ camino «cambiar usuario» desde el lock, **sin verificar en sesión gráfica to
   el `start_session` siguiente da de alta una sesión más (`pending_new_session`) en
   vez de ignorarse. La sesión vieja se oculta sola al haber ≥2.
 
+**2ª rebanada — selector de sesiones en el lock + foco de teclado real (2026-06-26).**
+- **El lock lista las sesiones hosteadas y salta directo.** El compositor empuja el
+  roster por `greeter_stdin` (línea `SESSIONS <id_activo> <id>:<nombre>…`, junto a
+  `LAYOUT …`) al lanzar el lock (`push_sessions_to_greeter`). El greeter parsea
+  (`parse_sessions`, +2 tests) y, si hay **otra** sesión además de la bloqueada,
+  pinta un selector «Cambiar a» con una fila clicable por destino → emite
+  `ShellAction::SwitchTo(id)` y cierra; el compositor hace `switch_session(id)` +
+  desbloqueo dirigido. Certificado headless con `--shot … --lock` +
+  `MIRADA_SHOT_HOSTED="1 0:ana 1:beto"` (el render difiere del lock sin roster).
+- **Foco de teclado real al saltar:** `switch_session` ahora mueve el `set_focus` de
+  smithay a una ventana visible de la sesión recién activada (o `None` si no tiene),
+  no sólo el flag visual `focused`.
+
 **Diferido (anotado, no hecho):**
-- **Selector de sesiones en el lock** (listar las hosteadas y `SwitchTo` directo):
-  `switch_session`/`SwitchTo` están cableados en el compositor, pero el lock aún no
-  pinta el roster ni emite `SwitchTo` — falta empujarle la lista por `greeter_stdin`.
-- **Retarget del foco de teclado real** al saltar de sesión (hoy `switch_session`
-  mueve sólo el flag visual `focused`; el `set_focus` de smithay queda pendiente).
 - **Desktop por sesión:** hoy el `Brain::Embedded(Desktop)` es compartido (las
   ventanas de todas las sesiones se teselan en los mismos 9 escritorios; el gate las
-  oculta). Aislar el layout por usuario = un `Desktop` por sesión, rebanada aparte.
+  oculta). Aislar el layout por usuario = un `Desktop` por sesión, rebanada aparte —
+  el bloqueo arquitectónico real que queda.
 - **Logout** (`remove` + respawn) y la orquestación multi-seat (si termina en
-  `sandokan`). **Verificar todo en sesión gráfica.**
+  `sandokan`). **Verificar el multiplexado real en sesión gráfica.**
 
 ## Diferido (implementable, caro/nicho — no ahora)
 

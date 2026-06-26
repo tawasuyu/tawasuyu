@@ -168,6 +168,8 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                 Ok(stdin) => {
                     state.greeter_stdin = Some(stdin);
                     state.mode = BodyMode::Locked;
+                    // Empuja el roster: el lock ofrece «cambiar usuario» a otra.
+                    state.push_sessions_to_greeter();
                 }
                 Err(e) => dlog!("mirada-compositor · no pude lanzar el lock: {e}"),
             }
