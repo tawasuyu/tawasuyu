@@ -15,13 +15,15 @@
 //! que habla PAM y le dice el resultado a polkitd por el `cookie`. La contraseña
 //! **no** se loguea ni pasa por la shell — va por el stdin del helper.
 //!
-//! Alcance: una autenticación a la vez (la típica). `CancelAuthentication` deja
-//! caer el `oneshot` pendiente. Runtime no verificable headless (norma de pata).
+//! Alcance: una autenticación a la vez (la típica). `CancelAuthentication` es
+//! best-effort —hoy un no-op: el diálogo abierto sigue hasta que el usuario
+//! responde o cancela, y un helper tardío simplemente falla—. Runtime no
+//! verificable headless (norma de pata).
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::{interface, proxy};
 

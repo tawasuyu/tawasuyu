@@ -897,11 +897,12 @@ impl LayerApp {
                 self.panels[pi].dirty = true;
             }
             if !visible {
-                // Expiró (o nunca se mostró): nada que pintar; suelta el cartel.
+                // Expiró (o nunca se mostró): suelta el cartel. NO retornamos sin
+                // pintar —eso dejaría el último buffer 240×60 pegado a la surface
+                // (bug)—: caemos al render con la vista vacía de abajo para
+                // presentar un frame 1×1 limpio (como `hide_tooltip`). Si ya estaba
+                // en 1×1 y no quedó sucio, el chequeo de `dirty` corta sin re-pintar.
                 self.osd = None;
-                self.panels[pi].dirty = false;
-                self.latido(pi, qh);
-                return;
             }
         }
 
@@ -939,17 +940,12 @@ impl LayerApp {
         };
 
         let view = if self.osd_pi == Some(pi) {
-            // Si llegamos acá el cartel está vigente (el bloque de arriba retorna
-            // cuando expiró); de todos modos caemos a vacío si fuese `None`.
+            // Con cartel vigente, lo pintamos; al expirar, una vista vacía limpia
+            // el frame 1×1 (NO un `bar_view`, que metería la barra en la surface
+            // del OSD).
             match self.osd {
                 Some(osd) => render::osd_surface_view(&osd, &self.theme),
-                None => render::bar_view(
-                    &self.cfg.surfaces[idx],
-                    &self.surfaces[idx],
-                    &self.shuma,
-                    &data,
-                    &self.theme,
-                ),
+                None => llimphi_ui::View::new(Default::default()),
             }
         } else if self.tooltip_pi == Some(pi) {
             render::tooltip_view(self.tooltip_text.as_deref().unwrap_or(""), &self.theme)

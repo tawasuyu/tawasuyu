@@ -100,17 +100,42 @@ pub fn previous() {
     spawn(&["previous"]);
 }
 
-/// Corre `playerctl <args>` y devuelve su stdout, o `None` si no está / falla.
+/// Corre `playerctl <args>` con tope de tiempo y devuelve su stdout, o `None` si
+/// no está / falla / se pasa del plazo (un `playerctl` colgado no debe trabar el
+/// hilo de mpris). Mismo patrón defensivo que `network`/`bluetooth`.
 fn run(args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("playerctl")
+    use std::io::Read;
+    use std::time::Instant;
+    const PLAZO: Duration = Duration::from_secs(3);
+    let mut child = std::process::Command::new("playerctl")
         .args(args)
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let inicio = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut buf = String::new();
+                child.stdout.take()?.read_to_string(&mut buf).ok()?;
+                return Some(buf);
+            }
+            Ok(None) => {
+                if inicio.elapsed() >= PLAZO {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Lanza `playerctl <args>` sin esperar (transporte: play/pausa/siguiente).

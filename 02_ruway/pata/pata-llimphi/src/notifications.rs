@@ -52,8 +52,11 @@ pub struct NotificationsHandle {
 }
 
 impl NotificationsHandle {
-    /// Arranca el hilo. `None` sólo si no se pudo lanzar (la conexión D-Bus se
-    /// intenta dentro; si falla, el hilo reintenta y la foto queda vacía).
+    /// Arranca el hilo. `None` sólo si no se pudo lanzar el hilo. La conexión
+    /// D-Bus se intenta dentro: si **al arranque** no hay bus de sesión, el hilo
+    /// termina y la foto queda en su default (la campana muestra 0). No reintenta
+    /// —el caso normal es que el bus ya esté—; un fallo posterior de una lectura
+    /// puntual sí se tolera (la foto queda como estaba).
     pub fn spawn() -> Option<Self> {
         let state: Arc<Mutex<NotifState>> = Arc::new(Mutex::new(NotifState::default()));
         let (tx, rx) = mpsc::unbounded_channel::<NotifCmd>();

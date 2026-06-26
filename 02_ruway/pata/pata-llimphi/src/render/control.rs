@@ -231,13 +231,8 @@ pub(super) fn control_panel(
         hijos.push(kv_row("Batería", &valor, theme));
     }
 
-    hijos.push(switch_row("Wi-Fi", extras.wifi, theme, |on| Msg::ControlWifi(on)));
-    hijos.push(switch_row(
-        "Bluetooth",
-        extras.bt,
-        theme,
-        |on| Msg::ControlBt(on),
-    ));
+    hijos.push(switch_row("Wi-Fi", extras.wifi, theme, Msg::ControlWifi));
+    hijos.push(switch_row("Bluetooth", extras.bt, theme, Msg::ControlBt));
 
     // Perfil de energía (sólo si hay power-profiles-daemon).
     if let Some(actual) = &extras.power_profile {

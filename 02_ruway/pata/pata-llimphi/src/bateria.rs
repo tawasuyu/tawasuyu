@@ -28,15 +28,23 @@ pub fn read() -> Option<(u8, bool)> {
         if !e.file_name().to_string_lossy().starts_with("BAT") {
             continue;
         }
-        let p = e.path();
-        let pct: u8 = std::fs::read_to_string(p.join("capacity")).ok()?.trim().parse().ok()?;
-        let status = std::fs::read_to_string(p.join("status")).unwrap_or_default();
-        // «Charging» o «Full» = no descargando.
-        let s = status.trim();
-        let charging = s.eq_ignore_ascii_case("Charging") || s.eq_ignore_ascii_case("Full");
-        return Some((pct.min(100), charging));
+        // Si esta batería no se deja leer, seguimos con la próxima (no abortamos
+        // por una `BAT*` malformada cuando puede haber otra válida).
+        if let Some(r) = leer_bateria(&e.path()) {
+            return Some(r);
+        }
     }
     None
+}
+
+/// Lee `(porcentaje, cargando)` de un directorio `BAT*`, o `None` si no se puede.
+fn leer_bateria(p: &std::path::Path) -> Option<(u8, bool)> {
+    let pct: u8 = std::fs::read_to_string(p.join("capacity")).ok()?.trim().parse().ok()?;
+    let status = std::fs::read_to_string(p.join("status")).unwrap_or_default();
+    // «Charging» o «Full» = no descargando.
+    let s = status.trim();
+    let charging = s.eq_ignore_ascii_case("Charging") || s.eq_ignore_ascii_case("Full");
+    Some((pct.min(100), charging))
 }
 
 /// Decide si avisar. `avisado` es el peor nivel ya avisado (0 = ninguno, 1 =

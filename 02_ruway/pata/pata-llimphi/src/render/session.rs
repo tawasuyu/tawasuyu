@@ -23,7 +23,7 @@ const ROW_H: f32 = 32.0;
 /// El widget `session`: el botón de power. Click → menú.
 pub fn session_view(theme: &Theme) -> View<Msg> {
     let color = theme.fg_text;
-    let icono = View::new(Style {
+    View::new(Style {
         size: Size {
             width: length(BTN_W),
             height: percent(1.0_f32),
@@ -43,8 +43,7 @@ pub fn session_view(theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .paint_with(move |scene, _ts, rect| dibujar_power(scene, rect, color))]);
-    icono
+    .paint_with(move |scene, _ts, rect| dibujar_power(scene, rect, color))])
 }
 
 /// Pinta el símbolo de power (arco con hueco arriba + línea vertical) en `rect`.
