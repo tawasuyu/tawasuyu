@@ -800,6 +800,13 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     `Servicio` (la `Notify` lo persiste igual pero no dispara el toast) y el
     `Historiador` (`Dnd`/`SetDnd` nuevos en la interfaz + el proxy). `construir`
     puro y testeado. winit por overlay, layer-shell por `MenuKind::Notifications`.
+  - **Calendario en el reloj ✅** — el popup del reloj (que ya fijaba fecha/hora)
+    ahora abre con un **calendario del mes** arriba: grilla de 7 columnas
+    (lunes-primero) con el día de hoy resaltado en acento, sobre el setter de
+    fecha/hora. Sólo muestra (el setter de abajo edita el reloj del sistema).
+    Aritmética pura y testeada: `dias_del_mes` (con bisiesto) y `columna_lunes`
+    (Sakamoto reordenado a lunes-primero), 2 tests. Es el clásico «click en el
+    reloj → calendario» de cualquier panel.
     - **Con esto cierran los huecos de DE que faltaban en pata.** Quedan en órbita
       de **mirada** (compositor, no pata): lock screen + gestión de idle (en curso
       ahí), screenshot/grabación y configuración de displays.

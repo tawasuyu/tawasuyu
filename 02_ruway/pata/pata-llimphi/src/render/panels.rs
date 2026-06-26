@@ -28,8 +28,28 @@ const SLIDER_H: f32 = 140.0;
 /// Ancho de la pista del slider (px).
 const SLIDER_W: f32 = 18.0;
 
-/// Ancho del panel del reloj (px).
-const CLOCK_PANEL_W: f32 = 260.0;
+/// Ancho del panel del reloj (px). Da para una grilla de calendario de 7 columnas.
+const CLOCK_PANEL_W: f32 = 280.0;
+
+/// Días del mes `m` (1..=12) del año `y`, contemplando el bisiesto de febrero.
+pub(crate) fn dias_del_mes(y: i32, m: i32) -> i32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
+/// Columna (0 = lunes … 6 = domingo) en la que cae el día `d` del mes `m`/`y`.
+/// Algoritmo de Sakamoto (devuelve 0 = domingo) reordenado a lunes-primero.
+pub(crate) fn columna_lunes(y: i32, m: i32, d: i32) -> i32 {
+    const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let yy = if m < 3 { y - 1 } else { y };
+    let dow = (yy + yy / 4 - yy / 100 + yy / 400 + T[(m - 1) as usize] + d).rem_euclid(7); // 0=dom
+    (dow + 6).rem_euclid(7) // 0=lun
+}
 
 /// Los cinco campos editables del reloj: índice + rótulo.
 const CLOCK_FIELDS: [(u8, &str); 5] = [
@@ -598,7 +618,89 @@ pub fn clock_panel(draft: &crate::ClockDraft, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .radius(10.0)
-    .children(vec![header, fila, botones])
+    .children(vec![calendario(draft.year, draft.month, draft.day, theme), header, fila, botones])
+}
+
+/// Nombres de los meses (para el rótulo del calendario).
+const MESES: [&str; 12] = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto",
+    "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+
+/// El calendario del mes `m`/`y`, con el día `hoy` resaltado en acento. Sólo
+/// muestra (no cambia la fecha); el setter de abajo edita el reloj del sistema.
+fn calendario(y: i32, m: i32, hoy: i32, theme: &Theme) -> View<Msg> {
+    let mes = MESES.get((m - 1).clamp(0, 11) as usize).copied().unwrap_or("");
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(format!("{mes} {y}"), 13.0, theme.fg_text);
+
+    // Encabezado de días (lunes primero).
+    let cab = fila_cal(
+        ["L", "M", "X", "J", "V", "S", "D"]
+            .iter()
+            .map(|d| celda_cal(d, theme.fg_muted, false, theme))
+            .collect(),
+    );
+
+    let inicio = columna_lunes(y, m, 1);
+    let total = dias_del_mes(y, m);
+    let mut filas = vec![titulo, cab];
+    let mut celdas: Vec<View<Msg>> = Vec::new();
+    // Huecos previos al día 1.
+    for _ in 0..inicio {
+        celdas.push(celda_cal("", theme.fg_muted, false, theme));
+    }
+    for d in 1..=total {
+        let hoy_cell = d == hoy;
+        let color = if hoy_cell { theme.bg_panel } else { theme.fg_text };
+        celdas.push(celda_cal(&d.to_string(), color, hoy_cell, theme));
+    }
+    // Repartir en filas de 7 (drain mueve, sin clonar: View no es Clone).
+    while !celdas.is_empty() {
+        let n = celdas.len().min(7);
+        let semana: Vec<View<Msg>> = celdas.drain(0..n).collect();
+        filas.push(fila_cal(semana));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .children(filas)
+}
+
+/// Una fila de 7 celdas del calendario.
+fn fila_cal(celdas: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .children(celdas)
+}
+
+/// Una celda del calendario; `hoy` la pinta con fondo de acento.
+fn celda_cal(txt: &str, color: Color, hoy: bool, theme: &Theme) -> View<Msg> {
+    let v = View::new(Style {
+        size: Size { width: length(34.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(txt.to_string(), 12.0, color);
+    if hoy {
+        v.fill(theme.accent).radius(12.0)
+    } else {
+        v
+    }
 }
 
 /// El panel del reloj como **overlay** para winit.
@@ -676,4 +778,26 @@ pub fn clock_menu_view(
         ..Default::default()
     })
     .children(vec![bar, body])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{columna_lunes, dias_del_mes};
+
+    #[test]
+    fn dias_del_mes_y_bisiesto() {
+        assert_eq!(dias_del_mes(2026, 1), 31);
+        assert_eq!(dias_del_mes(2026, 4), 30);
+        assert_eq!(dias_del_mes(2026, 2), 28); // 2026 no bisiesto
+        assert_eq!(dias_del_mes(2024, 2), 29); // div 4
+        assert_eq!(dias_del_mes(2000, 2), 29); // div 400
+        assert_eq!(dias_del_mes(1900, 2), 28); // div 100 no 400
+    }
+
+    #[test]
+    fn columna_lunes_primero() {
+        // Junio 2026 arranca un lunes; el 26 cae viernes (columna 4).
+        assert_eq!(columna_lunes(2026, 6, 1), 0);
+        assert_eq!(columna_lunes(2026, 6, 26), 4);
+    }
 }
