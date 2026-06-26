@@ -65,6 +65,8 @@ impl DrmState {
             self.render_output(i);
         }
         self.send_frames_to_clients();
+        // El frame de video ya se compuso en todas las salidas este cuadro.
+        self.video_dirty = false;
     }
 
     /// Si el puntero global cae sobre `rect`, emite el cursor en coordenadas
@@ -1669,6 +1671,50 @@ impl DrmState {
     /// stale). Cada salida tiene su propio búfer escalado, su propia ruta y
     /// su propio modo de ajuste — un override por nombre puede pintarle un
     /// fondo distinto a cada monitor.
+    /// Gestiona el worker del wallpaper en **video**: ciclo de vida (arranca/
+    /// reemplaza/suelta según la config), pausa cuando no se ve, y consume el
+    /// último frame a `self.video_frame`. Corre en `tick` (antes de `render`),
+    /// así puede pausar aunque la sesión esté en otra VT (donde `render` ni
+    /// entra). Con fuente no-video es un no-op tras soltar el worker.
+    pub(super) fn manage_video_wallpaper(&mut self) {
+        match self.app.config_video_wallpaper() {
+            Some((path, fps)) => {
+                let need_restart =
+                    self.video_wp.as_ref().map_or(true, |vw| !vw.matches(&path, fps));
+                if need_restart {
+                    self.video_wp = Some(super::video_wallpaper::VideoWallpaper::start(&path, fps));
+                    self.video_frame = None;
+                }
+                // Pausá si el fondo no se ve: otra VT, o una ventana a pantalla
+                // completa tapándolo. Ahí decodificar es puro desperdicio.
+                let covered = self.app.windows.iter().any(|w| w.fullscreen && w.visible);
+                let paused = !self.active || covered;
+                if let Some(vw) = self.video_wp.as_ref() {
+                    vw.set_paused(paused);
+                }
+                if !paused {
+                    if let Some(vw) = self.video_wp.as_mut() {
+                        if let Some(frame) = vw.take_new_frame() {
+                            self.video_frame = Some(frame);
+                            self.video_dirty = true;
+                            crate::screencopy::danar_todo(&mut self.app);
+                        }
+                    }
+                }
+            }
+            None => {
+                // Fuente no-video: soltá el worker (su `Drop` para el hilo) e
+                // invalidá los buffers de fondo para que la nueva fuente se pinte.
+                if self.video_wp.take().is_some() {
+                    self.video_frame = None;
+                    for ctx in &mut self.outputs {
+                        ctx.wallpaper = None;
+                    }
+                }
+            }
+        }
+    }
+
     fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame<GlesRenderer>>) {
         let name = self.outputs[idx].name.clone();
         let cur_path = self.outputs[idx].wallpaper_path.clone();
@@ -1681,10 +1727,29 @@ impl DrmState {
             .as_ref()
             .map(|(_, s)| *s != size)
             .unwrap_or(true);
-        if stale {
+        use crate::estado::WallpaperSpec;
+        let spec = self.app.config_wallpaper_spec_for(&name, cur_path.as_deref());
+        if let WallpaperSpec::Video(_) = spec {
+            // Fondo en VIDEO: recomponemos el último frame al tamaño de la salida
+            // sólo cuando llegó uno nuevo (`video_dirty`) o cambió el tamaño;
+            // entre frames reusamos el buffer ya compuesto. El frame lo dejó
+            // `manage_video_wallpaper` en `self.video_frame`. Si aún no hay frame
+            // (worker calentando), caemos al fondo de marca para no parpadear.
+            if self.video_dirty || stale {
+                let fit = self.app.config_wallpaper_fit_for(&name);
+                let composed = self.video_frame.as_ref().and_then(|(rgba, fw, fh)| {
+                    compose_video_frame(rgba, *fw, *fh, fit, size.0, size.1)
+                });
+                if let Some(buf) = composed {
+                    self.outputs[idx].wallpaper = Some((buf, size));
+                } else if stale {
+                    let buf = make_marca_wallpaper(mirada_brain::WallpaperFit::Fill, size.0, size.1)
+                        .or_else(|| Some(make_default_wallpaper(size.0, size.1)));
+                    self.outputs[idx].wallpaper = buf.map(|b| (b, size));
+                }
+            }
+        } else if stale {
             // Despacho por la FUENTE elegida (color/gradiente/procedural/imagen).
-            use crate::estado::WallpaperSpec;
-            let spec = self.app.config_wallpaper_spec_for(&name, cur_path.as_deref());
             let buf = match spec {
                 WallpaperSpec::Image(p, fit) => load_wallpaper(&p, fit, size.0, size.1),
                 WallpaperSpec::Solid(c) => Some(make_solid_wallpaper(c, size.0, size.1)),
@@ -1694,6 +1759,8 @@ impl DrmState {
                 WallpaperSpec::Procedural(pat, pal) => {
                     Some(make_procedural_wallpaper(pat, &pal, size.0, size.1))
                 }
+                // Inalcanzable: la rama de arriba ya cubrió el video.
+                WallpaperSpec::Video(_) => None,
                 // Sin imagen configurada: el wallpaper de marca (chakana + 4
                 // cuadrantes) es el fondo por defecto; si no decodifica, gradiente.
                 WallpaperSpec::Default => {

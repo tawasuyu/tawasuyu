@@ -302,6 +302,10 @@ impl DrmState {
             crate::screencopy::danar_todo(&mut self.app);
         }
 
+        // Wallpaper en video: gestioná el worker y tomá su último frame ANTES de
+        // render (corre aunque la sesión esté en otra VT, para poder pausar).
+        self.manage_video_wallpaper();
+
         self.render();
         let _ = self.display.flush_clients();
     }

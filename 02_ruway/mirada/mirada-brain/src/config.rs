@@ -198,6 +198,12 @@ pub struct Config {
     /// motor.
     #[serde(default)]
     pub wallpaper_palette: Vec<[u8; 3]>,
+    /// **FPS del wallpaper en video** (`wallpaper_source = "video"`). `0`
+    /// (default) = el ritmo nativo del archivo. Bajarlo (p. ej. 24, 15) abarata
+    /// el costo de decodificar+componer por frame — para un fondo, 15–24 sobra.
+    /// Lo lee el worker de decodificación.
+    #[serde(default)]
+    pub wallpaper_video_fps: u32,
     /// Entradas del menú raíz (estilo openbox) que aparece al click derecho
     /// sobre el fondo. Vacío = sin menú (el click derecho en el fondo no hace
     /// nada). Cada entrada lanza su `command` con `sh -c`. Si la config no trae
@@ -917,6 +923,7 @@ impl Default for Config {
             wallpaper_gradient: Vec::new(),
             wallpaper_pattern: default_wallpaper_pattern(),
             wallpaper_palette: Vec::new(),
+            wallpaper_video_fps: 0,
             menu: default_root_menu(),
             zones: default_zones(),
             zone_presets: default_zone_presets(),

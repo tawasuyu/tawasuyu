@@ -270,6 +270,10 @@ pub(crate) enum WallpaperSpec {
     Gradient(Vec<[u8; 3]>),
     /// Patrón procedural + paleta.
     Procedural(mirada_procedural::Pattern, Vec<[u8; 3]>),
+    /// **Video** por su ruta (`wallpaper_source = "video"`): el frame lo entrega
+    /// el worker [`crate::drm_backend`] y el render lo compone por salida. La
+    /// cadencia/loop viven en el worker; acá sólo viaja la ruta.
+    Video(String),
     /// Gradiente sobrio por defecto (auto sin imagen).
     Default,
 }

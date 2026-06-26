@@ -78,6 +78,18 @@ fn easing_options() -> Vec<EnumOption> {
     ]
 }
 
+/// Fuentes del wallpaper (slug serde de `wallpaper_source` + rótulo). `auto`
+/// es la imagen/marca de siempre; `video` enciende el wallpaper animado.
+fn wallpaper_source_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("auto", "Imagen / marca"),
+        EnumOption::new("color", "Color sólido"),
+        EnumOption::new("gradient", "Gradiente"),
+        EnumOption::new("procedural", "Procedural"),
+        EnumOption::new("video", "Video (animado)"),
+    ]
+}
+
 /// Las opciones de ajuste del wallpaper (slug + rótulo).
 fn wallpaper_fit_options() -> Vec<EnumOption> {
     vec![
@@ -186,9 +198,15 @@ impl Configurable for Config {
                 Section::new("fondo", "Fondo")
                     .icon("")
                     .help("Wallpaper y fuente del escritorio")
+                    .field(Field::dropdown(
+                        "wallpaper_source",
+                        "Fuente",
+                        self.wallpaper_source.as_str(),
+                        wallpaper_source_options(),
+                    ))
                     .field(Field::text(
                         "wallpaper_path",
-                        "Imagen de fondo",
+                        "Imagen / video de fondo",
                         self.wallpaper_path.clone(),
                     ))
                     .field(Field::dropdown(
@@ -196,6 +214,13 @@ impl Configurable for Config {
                         "Ajuste",
                         self.wallpaper_fit.slug(),
                         wallpaper_fit_options(),
+                    ))
+                    .field(Field::slider_int(
+                        "wallpaper_video_fps",
+                        "Video — FPS (0 = nativo; bajalo para abaratar)",
+                        self.wallpaper_video_fps as i64,
+                        0,
+                        60,
                     ))
                     .field(Field::text(
                         "wallpaper_dir",
@@ -507,6 +532,11 @@ impl Configurable for Config {
                     self.border_normal = c;
                 }
             }
+            "wallpaper_source" => {
+                if let Some(s) = value.as_str() {
+                    self.wallpaper_source = s.to_string();
+                }
+            }
             "wallpaper_path" => {
                 if let Some(s) = value.as_str() {
                     self.wallpaper_path = s.to_string();
@@ -515,6 +545,11 @@ impl Configurable for Config {
             "wallpaper_fit" => {
                 if let Some(f) = value.as_str().and_then(WallpaperFit::from_slug) {
                     self.wallpaper_fit = f;
+                }
+            }
+            "wallpaper_video_fps" => {
+                if let Some(v) = value.as_int() {
+                    self.wallpaper_video_fps = v.clamp(0, 60) as u32;
                 }
             }
             "wallpaper_dir" => {
@@ -958,6 +993,21 @@ mod tests {
             .unwrap();
         assert_eq!(c.wallpaper_fit, WallpaperFit::Fill);
         assert_eq!(c.wallpaper_path, "/w.png");
+    }
+
+    #[test]
+    fn apply_wallpaper_video_fuente_y_fps() {
+        let mut c = Config::default();
+        c.apply(&"fondo.wallpaper_source".into(), FieldValue::Enum("video".into()))
+            .unwrap();
+        c.apply(&"fondo.wallpaper_video_fps".into(), FieldValue::Int(24))
+            .unwrap();
+        assert_eq!(c.wallpaper_source, "video");
+        assert_eq!(c.wallpaper_video_fps, 24);
+        // FPS se acota a [0, 60].
+        c.apply(&"fondo.wallpaper_video_fps".into(), FieldValue::Int(999))
+            .unwrap();
+        assert_eq!(c.wallpaper_video_fps, 60);
     }
 
     #[test]

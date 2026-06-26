@@ -457,6 +457,25 @@ remote`. Faltan dos fuentes:
   pantalla apagada — se cruza con `mirada_brain::idle`). Config nueva: `video` source +
   ruta + fps/calidad, en el schema → wawa-panel.
 
+> **✅ HECHO — wallpaper en VIDEO (2026-06-26).** Config `wallpaper_source =
+> "video"` + `wallpaper_path` (el archivo) + `wallpaper_video_fps` (`0` = nativo),
+> expuestos en wawa-panel §Fondo (la «Fuente» ahora es un dropdown:
+> imagen/color/gradiente/procedural/**video**). Cómo: `mirada-compositor` depende
+> de `foreign-av`+`media-core`; un **worker** (`drm_backend/video_wallpaper.rs`)
+> es dueño de un `FfmpegVideoSource` en un hilo, decodifica a frames RGBA a su
+> fps, en **loop** (`seek_to(0)` al EOF), y publica el último frame. El render
+> (`manage_video_wallpaper` en el `tick`) lo consume a `DrmState.video_frame`, y
+> `emit_wallpaper` lo compone por salida reusando `compose_wallpaper`
+> (`WallpaperSpec::Video`). **Pausa** la decodificación si una ventana fullscreen
+> tapa el fondo o la sesión está en otra VT. **Costo cero y byte-idéntico con otra
+> fuente** (el worker ni existe). Degradación elegante: ruta inválida → cae al
+> fondo de marca (testeado). Ejemplo corrible: `assets/wallpaper-ejemplo-animado.mp4`
+> (gradiente que deriva lento, 94 KB) + `assets/LEEME.md`. **Pendiente:** pausar
+> también con DPMS-off (idle), loop sin costura, y por-salida (hoy un video global
+> en todas). Compose es CPU (resize por frame) — un escalón futuro es escalar por
+> GPU. **Verificación en metal pendiente** (decode+readback sólo se prueba en
+> hardware; los tests cubren la fuente CFR de foreign-av y la degradación).
+
 ### 2) Sesión Wayland remota persistente — «tmux/mosh para Wayland»  — esfuerzo ALTO
 Hoy ya hay **apps** remotas: `mirada-ctl remote` (una app vía waypipe ssh) y sesiones
 waypipe **declaradas** en `config.ron` (`StartupApp.remote`). La idea nueva: una

@@ -75,6 +75,7 @@ mod outputs;
 mod render;
 mod sesion;
 mod input;
+mod video_wallpaper;
 
 /// El `DrmCompositor` concreto para una salida (un solo GPU). Hay uno por
 /// cada conector activo en multi-monitor.
@@ -352,6 +353,25 @@ fn mezcla_stops(stops: &[(f32, [u8; 3])], t: f32) -> (u8, u8, u8) {
 /// tamaño es degenerado. El formato es `Argb8888` (little-endian → bytes
 /// `[B, G, R, A]` en memoria); el wallpaper es opaco, así que la
 /// premultiplicación por alfa es identidad.
+/// Compone un frame de **video** (bytes RGBA `fw×fh` del worker) en un buffer
+/// del tamaño de la salida según `fit`, reusando todo el camino de imagen
+/// (`compose_wallpaper`). `None` si las dimensiones no cuadran. Es la única vía
+/// por la que un frame decodificado llega al fondo.
+fn compose_video_frame(
+    rgba: &[u8],
+    fw: u32,
+    fh: u32,
+    fit: mirada_brain::WallpaperFit,
+    w: i32,
+    h: i32,
+) -> Option<MemoryRenderBuffer> {
+    if w <= 0 || h <= 0 || fw == 0 || fh == 0 || rgba.len() < (fw * fh * 4) as usize {
+        return None;
+    }
+    let img = image::RgbaImage::from_raw(fw, fh, rgba.to_vec())?;
+    compose_wallpaper(&image::DynamicImage::ImageRgba8(img), fit, w, h)
+}
+
 fn load_wallpaper(
     path: &str,
     fit: mirada_brain::WallpaperFit,
@@ -599,6 +619,18 @@ struct DrmState {
     /// `None` = sin transición. El signo: +1 desliza desde la derecha (fuiste a
     /// un escritorio mayor), -1 desde la izquierda.
     ws_slide: Option<(u32, f32)>,
+    /// **Wallpaper en video**: el worker decodificador, vivo sólo con
+    /// `wallpaper_source = "video"`. `None` con cualquier otra fuente (y se
+    /// suelta —para el hilo— al cambiar). Ver [`video_wallpaper`].
+    video_wp: Option<video_wallpaper::VideoWallpaper>,
+    /// Último frame de video consumido del worker `(rgba, w, h)`, compartido por
+    /// todas las salidas. Lo refresca `manage_video_wallpaper` una vez por
+    /// render; `emit_wallpaper` lo compone al tamaño de cada salida.
+    video_frame: Option<(Vec<u8>, u32, u32)>,
+    /// `true` el render en que llegó un frame de video nuevo: gatea el
+    /// recomponer por salida (no recomponemos el mismo frame a 60 Hz). Se limpia
+    /// al final de `render`.
+    video_dirty: bool,
     /// Animación de zoom de la vista espacial (Prezi): `(ms de inicio, abriendo)`.
     /// `abriendo=true` = zoom-OUT (del escritorio activo al mosaico); `false` =
     /// zoom-IN de cierre. `None` = sin animación (abierta-quieta o cerrada).
@@ -1258,6 +1290,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         last_focused_output: 0,
         shadows_on: std::env::var_os("MIRADA_SHADOW").is_some(),
         ws_slide: None,
+        video_wp: None,
+        video_frame: None,
+        video_dirty: false,
         overview_anim: None,
         prev_overview_open: false,
         overview_tiles: Vec::new(),

@@ -901,9 +901,29 @@ impl App {
                 mirada_procedural::Pattern::from_slug(&c.wallpaper_pattern).unwrap_or_default(),
                 c.wallpaper_palette.clone(),
             ),
+            // Video: la ruta resuelta es el archivo; si está vacía cae al default.
+            "video" => match ctx_path {
+                Some(p) if !p.is_empty() => WallpaperSpec::Video(p.to_string()),
+                _ => WallpaperSpec::Default,
+            },
             // auto / local / directory / remote → imagen por la ruta resuelta.
             _ => img_or_default(fit),
         }
+    }
+
+    /// Si el fondo configurado es **video**, devuelve `(ruta, fps)` para el
+    /// worker de decodificación (`fps = 0` ⇒ el nativo del archivo). `None` con
+    /// cualquier otra fuente, sin ruta, o con Cerebro enlazado. Es global (no
+    /// por-salida): el v1 del wallpaper-video corre un solo archivo en todas.
+    pub(crate) fn config_video_wallpaper(&self) -> Option<(String, u32)> {
+        let Brain::Embedded(d) = &self.brain else {
+            return None;
+        };
+        let c = d.config();
+        if c.wallpaper_source != "video" || c.wallpaper_path.is_empty() {
+            return None;
+        }
+        Some((c.wallpaper_path.clone(), c.wallpaper_video_fps))
     }
 
     /// Cómo se ajusta el wallpaper a la salida `name` (stretch/fit/fill/…) —
