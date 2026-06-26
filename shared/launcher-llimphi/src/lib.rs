@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use app_bus::{AppMenu, AppRegistry};
 use launcher_core::{Bar, Dock, Edge, Module, Surface};
+use llimphi_theme::motion;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
@@ -45,6 +46,17 @@ type MsgFromMenu<Msg> = Arc<dyn Fn(Option<usize>) -> Msg + Send + Sync>;
 type MsgFromUsize<Msg> = Arc<dyn Fn(usize) -> Msg + Send + Sync>;
 /// Hook del host para módulos dinámicos: `clock`, `cpu`, widgets propios…
 type ModuleRenderer<Msg> = Arc<dyn Fn(&Module) -> Option<View<Msg>> + Send + Sync>;
+
+/// Hash estable de una cadena → `key` para las animaciones implícitas de
+/// Llimphi. La misma app/tarjeta produce siempre la misma key entre rebuilds,
+/// así el pop-in/fade anima sólo en la primera aparición del nodo y no en cada
+/// frame (semántica de `View::animated_*`).
+fn key_of(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 /// Todo lo que el render necesita. El host arma esto en cada `view()`.
 pub struct LauncherSpec<'a, Msg: Clone + 'static> {
@@ -142,6 +154,9 @@ pub fn launcher_view<Msg: Clone + 'static>(spec: &LauncherSpec<Msg>) -> View<Msg
     })
     .fill(theme.bg_app)
     .children(root_children)
+    // El launcher entra con un fade suave al montarse (key constante ⇒ anima
+    // sólo en la primera aparición, no en cada rebuild de la `view`).
+    .animated_enter(key_of("launcher:root"), motion::SLOW)
 }
 
 /// Las barras de un borde horizontal (top/bottom), incluida la barra de
@@ -276,7 +291,7 @@ fn app_chip<Msg: Clone + 'static>(
     theme: &Theme,
     msg: Msg,
 ) -> View<Msg> {
-    match AppIcon::from_app_id(app_id) {
+    let chip = match AppIcon::from_app_id(app_id) {
         Some(icon) => {
             let icon_box = View::new(Style {
                 size: Size {
@@ -314,7 +329,10 @@ fn app_chip<Msg: Clone + 'static>(
                 msg,
             )
         }
-    }
+    };
+    // Pop-in del item: la primera vez que aparece este app_id en el árbol
+    // entra con un fade en lugar de saltar de golpe.
+    chip.animated_enter(key_of(app_id), motion::NORMAL)
 }
 
 // =====================================================================
@@ -576,6 +594,15 @@ fn floating_view<Msg: Clone + 'static>(
     .fill(spec.theme.bg_panel)
     .radius(10.0)
     .children(children)
+    // Tarjeta de tear-off / conky: aparece con un "pop" (scale-in + fade) al
+    // arrancarla. Keyed por título (o índice) para que anime sólo al montarse.
+    .animated_pop_in(
+        key_of(&format!(
+            "float:{}",
+            card.title.clone().unwrap_or_else(|| index.to_string())
+        )),
+        motion::NORMAL,
+    )
 }
 
 // =====================================================================
