@@ -1124,7 +1124,7 @@ fn mean_angle<I: IntoIterator<Item = f32>>(iter: I) -> f32 {
 /// porque tampoco hay font de símbolos instalada. Las letras renderan
 /// en cualquier fuente sans-serif y mantienen el grado de
 /// identificación (`ARI` lee igual que ♈ para un astrólogo).
-pub(crate) fn sign_unicode(name: &str) -> &'static str {
+pub fn sign_unicode(name: &str) -> &'static str {
     match name {
         "aries" => "ARI",
         "taurus" => "TAU",
@@ -1169,7 +1169,7 @@ fn planet_unicode(name: &str) -> &'static str {
 
 /// Glyph del cuerpo con sufijo "R" si está retrógrado — concatenación
 /// directa en el text para no agregar más comandos por planeta.
-pub(crate) fn planet_unicode_with_retro(name: &str, retrograde: bool) -> String {
+pub fn planet_unicode_with_retro(name: &str, retrograde: bool) -> String {
     if retrograde {
         format!("{}R", planet_unicode(name))
     } else {

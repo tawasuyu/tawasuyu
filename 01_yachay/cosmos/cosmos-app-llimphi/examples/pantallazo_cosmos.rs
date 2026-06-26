@@ -63,7 +63,7 @@ use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
-use llimphi_ui::{measure_text_node, mount, paint, paint_gpu, DragPhase, View};
+use llimphi_ui::{measure_text_node, mount, paint, paint_gpu, paint_over, DragPhase, View};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 
 use crate::astroview::compute_astro;
@@ -513,6 +513,46 @@ fn main() {
         hal.queue.submit(std::iter::once(enc.finish()));
         let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
         assert!(any, "el gpu_painter de la esfera no corrió");
+
+        // Pasada "over": las etiquetas vello (signos/ASC-MC/glifos) van ENCIMA
+        // del pase GPU. El runtime real la compone con scratch+composite; acá la
+        // rasterizamos a una textura transparente y la fundimos en CPU sobre el
+        // target para certificar el resultado final que verá el usuario.
+        let mut over = vello::Scene::new();
+        if paint_over(&mut over, &mounted, &computed, &mut ts) {
+            let over_tex = hal.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("pantallazo-cosmos-over"),
+                size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FMT,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let over_view = over_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            renderer
+                .render_to_view(&hal, &over, &over_view, W, H, Color::TRANSPARENT)
+                .expect("render over");
+            let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+            // Composite alpha-over en CPU: target = over OVER target.
+            let base = read_rgba(&hal, &target);
+            let ov = read_rgba(&hal, &over_tex);
+            let mut out_px = base.clone();
+            for i in (0..out_px.len()).step_by(4) {
+                let a = ov[i + 3] as f32 / 255.0;
+                for k in 0..3 {
+                    out_px[i + k] =
+                        (ov[i + k] as f32 * a + base[i + k] as f32 * (1.0 - a)) as u8;
+                }
+            }
+            write_png_pixels(&out, &out_px);
+            eprintln!("pantallazo_cosmos: escrito {out} ({W}x{H}) [con etiquetas]");
+            return;
+        }
     }
 
     write_png(&hal, &target, &out);
@@ -570,10 +610,65 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
     }
     drop(data);
     buf.unmap();
+    write_png_pixels(path, &pixels);
+}
+
+/// Lee una textura RGBA8 `W×H` a un buffer CPU contiguo (sin padding de fila).
+fn read_rgba(hal: &Hal, target: &wgpu::Texture) -> Vec<u8> {
+    let unpadded = (W * 4) as usize;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let padded = unpadded.div_ceil(align) * align;
+    let buf = hal.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (padded * H as usize) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = hal
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(H),
+            },
+        },
+        wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+    );
+    hal.queue.submit(std::iter::once(enc.finish()));
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+    rx.recv().unwrap().unwrap();
+    let data = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((W * H * 4) as usize);
+    for row in 0..H as usize {
+        let s = row * padded;
+        pixels.extend_from_slice(&data[s..s + unpadded]);
+    }
+    drop(data);
+    buf.unmap();
+    pixels
+}
+
+/// Escribe un buffer RGBA8 `W×H` como PNG.
+fn write_png_pixels(path: &str, pixels: &[u8]) {
     let file = File::create(path).expect("png");
     let mut enc = png::Encoder::new(BufWriter::new(file), W, H);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     let mut w = enc.write_header().unwrap();
-    w.write_image_data(&pixels).unwrap();
+    w.write_image_data(pixels).unwrap();
 }

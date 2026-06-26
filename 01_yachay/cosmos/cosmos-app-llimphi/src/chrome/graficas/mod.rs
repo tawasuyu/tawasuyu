@@ -333,6 +333,7 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
 fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
     let pal = graphics_palette(model);
     let geom = crate::sphere_gpu::sphere_geometry(render, &pal);
+    let labels = crate::sphere_gpu::sphere_labels(render, &pal);
     let bg = graphics_bg(model);
     let yaw = model.sphere_yaw;
     let pitch = model.sphere_pitch;
@@ -366,6 +367,34 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
             pitch,
             dist,
         );
+    })
+    // Etiquetas (signos, ASC/MC, glifos de cuerpos) en vello ENCIMA del pase GPU:
+    // se proyecta cada ancla 3D a pantalla con la misma cámara y se pinta el texto.
+    .paint_over(move |scene, ts, rect: PaintRect| {
+        use llimphi_ui::llimphi_raster::peniko::Color as PColor;
+        use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
+        let r = (rect.x, rect.y, rect.w, rect.h);
+        for lab in &labels {
+            let Some((sx, sy)) = crate::sphere_gpu::project_label(lab.world, r, yaw, pitch, dist)
+            else {
+                continue;
+            };
+            let c = PColor::new([lab.color[0], lab.color[1], lab.color[2], lab.color[3]]);
+            let approx = lab.size as f64 * lab.text.chars().count() as f64 * 0.5;
+            let block = TextBlock {
+                text: &lab.text,
+                size_px: lab.size,
+                color: c,
+                origin: (sx as f64 - approx, sy as f64 - lab.size as f64 * 0.5),
+                max_width: Some(approx as f32 * 2.0),
+                alignment: Alignment::Center,
+                line_height: 1.0,
+                italic: false,
+                font_family: None,
+            };
+            let layout = layout_block(ts, &block);
+            draw_layout(scene, &layout, c, block.origin);
+        }
     })
     .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
         DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),

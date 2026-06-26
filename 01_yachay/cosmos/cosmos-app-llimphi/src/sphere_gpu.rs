@@ -23,7 +23,7 @@
 use std::sync::{Arc, Mutex};
 
 use cosmos_render::{LayerKind, Palette, RenderModel, Rgba};
-use llimphi_3d::glam::{Mat4, Vec3};
+use llimphi_3d::glam::{Mat4, Vec3, Vec4};
 use llimphi_3d::{
     Billboard, Billboards, Camera3d, Glows, LineVertex, Lines3d, PostFx, PostFxConfig, Renderer3d,
     SkyBackdrop, SkyMapping, SkyParams, Vertex3d,
@@ -37,7 +37,49 @@ pub(crate) const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const OBLIQUITY_DEG: f32 = 23.439_29;
 
 /// Radio del globo terrestre al centro (la esfera celeste tiene radio 1).
-const EARTH_R: f32 = 0.16;
+const EARTH_R: f32 = 0.23;
+
+/// Contornos continentales esquemáticos (lat, lon en grados). Copiados de
+/// `cosmos_render::sphere3d::earth` — referenciales, no un mapa de precisión.
+const CONTINENTES: &[&[(f32, f32)]] = &[
+    // África
+    &[
+        (35.0, -6.0), (37.0, 10.0), (33.0, 22.0), (31.0, 32.0), (12.0, 43.0),
+        (11.0, 51.0), (-4.0, 40.0), (-26.0, 33.0), (-34.0, 26.0), (-34.0, 19.0),
+        (-18.0, 12.0), (0.0, 9.0), (5.0, -4.0), (11.0, -15.0), (21.0, -17.0),
+        (28.0, -13.0),
+    ],
+    // Sudamérica
+    &[
+        (12.0, -72.0), (11.0, -61.0), (5.0, -52.0), (-5.0, -35.0), (-23.0, -43.0),
+        (-34.0, -54.0), (-52.0, -69.0), (-55.0, -67.0), (-42.0, -74.0),
+        (-18.0, -70.0), (-5.0, -81.0), (2.0, -79.0), (8.0, -77.0),
+    ],
+    // Norteamérica
+    &[
+        (70.0, -160.0), (71.0, -125.0), (68.0, -95.0), (63.0, -78.0),
+        (47.0, -53.0), (45.0, -67.0), (30.0, -81.0), (25.0, -81.0),
+        (20.0, -97.0), (23.0, -110.0), (34.0, -120.0), (48.0, -125.0),
+        (60.0, -148.0),
+    ],
+    // Eurasia
+    &[
+        (36.0, -9.0), (43.0, -9.0), (58.0, 5.0), (71.0, 26.0), (73.0, 80.0),
+        (73.0, 140.0), (66.0, 180.0), (53.0, 141.0), (40.0, 130.0), (30.0, 122.0),
+        (22.0, 110.0), (9.0, 105.0), (8.0, 77.0), (21.0, 72.0), (25.0, 57.0),
+        (13.0, 45.0), (30.0, 33.0), (41.0, 28.0), (38.0, 15.0), (40.0, 0.0),
+    ],
+    // Australia
+    &[
+        (-11.0, 131.0), (-12.0, 142.0), (-25.0, 153.0), (-38.0, 147.0),
+        (-35.0, 138.0), (-32.0, 116.0), (-22.0, 114.0), (-14.0, 127.0),
+    ],
+    // Antártida (casquete polar aproximado)
+    &[
+        (-72.0, -180.0), (-70.0, -120.0), (-73.0, -60.0), (-70.0, 0.0),
+        (-73.0, 60.0), (-70.0, 120.0), (-72.0, 170.0),
+    ],
+];
 
 /// Geometría dinámica de un frame: líneas + sprites opacos + glows aditivos.
 pub(crate) struct SphereGeom {
@@ -219,6 +261,34 @@ fn eq_to_gpu(ra_deg: f32, dec_deg: f32, eps: &Mat4) -> Vec3 {
     eps.transform_point3(Vec3::new(cd * cr, sd, cd * sr))
 }
 
+/// Ascensión recta del Medio Cielo (RAMC) desde la longitud eclíptica del MC.
+/// Réplica de `cosmos_render::sphere3d::ramc_deg`.
+fn ramc_deg(mc_deg: f32, eps_rad: f32) -> f32 {
+    let lmc = mc_deg.to_radians();
+    (lmc.sin() * eps_rad.cos()).atan2(lmc.cos()).to_degrees()
+}
+
+/// Dirección (marco GPU) de un punto geográfico (lat, lon). La longitud del
+/// observador y el RAMC fijan la fase de rotación de la Tierra: el observador
+/// está en AR = RAMC, así cualquier otra longitud `lon` está en
+/// AR = RAMC + (lon − lon_obs). Réplica de `earth::geo_to_ecliptic` en marco GPU.
+fn geo_to_gpu(lat: f32, lon: f32, lon_obs: f32, ramc: f32, eps: &Mat4) -> Vec3 {
+    eq_to_gpu(ramc + lon - lon_obs, lat, eps)
+}
+
+/// Puntos de un círculo máximo perpendicular a `s` (unitario), radio `radius`.
+fn great_circle_perp(s: Vec3, n: usize, radius: f32) -> Vec<Vec3> {
+    let a = if s.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let u = s.cross(a).normalize();
+    let v = s.cross(u).normalize();
+    (0..=n)
+        .map(|k| {
+            let t = k as f32 / n as f32 * std::f32::consts::TAU;
+            (u * t.cos() + v * t.sin()) * radius
+        })
+        .collect()
+}
+
 /// Un sprite redondo de tamaño `size` con `tint` y alpha `a`.
 fn sprite(center: Vec3, size: f32, c: [f32; 3], a: f32) -> Billboard {
     Billboard {
@@ -249,6 +319,102 @@ fn push_circle(
 ) {
     let pts: Vec<Vec3> = (0..=n).map(|k| f(k as f32 / n as f32 * 360.0)).collect();
     push_polyline(out, &pts, color, alpha);
+}
+
+/// Nombres de signos (orden zodiacal desde Aries).
+const SIGN_NAMES: [&str; 12] = [
+    "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius",
+    "capricorn", "aquarius", "pisces",
+];
+
+/// Una etiqueta de texto anclada a un punto 3D del cielo (se proyecta a pantalla
+/// y se pinta con vello ENCIMA del pase GPU vía `paint_over`).
+pub(crate) struct SphereLabel {
+    pub world: Vec3,
+    pub text: String,
+    pub color: [f32; 4],
+    pub size: f32,
+}
+
+/// Etiquetas de la esfera: signos (mitad de cada sector), ángulos ASC/MC/DSC/IC
+/// y los cuerpos natales (abreviatura). Coords de mundo (radio 1 = cielo).
+pub(crate) fn sphere_labels(model: &RenderModel, pal: &Palette) -> Vec<SphereLabel> {
+    let r = 1.0_f32;
+    let ecl = rgb(pal.dial_ring);
+    let ang = rgb(pal.angle_highlight);
+    let mut out = Vec::new();
+    // Signos.
+    for (i, name) in SIGN_NAMES.iter().enumerate() {
+        let lon = i as f32 * 30.0 + 15.0;
+        out.push(SphereLabel {
+            world: eclip(lon) * r * 1.18,
+            text: cosmos_render::sign_unicode(name).to_string(),
+            color: [ecl[0], ecl[1], ecl[2], 0.95],
+            size: 13.0,
+        });
+    }
+    // Ángulos.
+    for (deg, txt) in [
+        (model.ascendant_deg, "Asc"),
+        (model.midheaven_deg, "MC"),
+        (model.descendant_deg, "Dsc"),
+        (model.imum_coeli_deg, "IC"),
+    ] {
+        out.push(SphereLabel {
+            world: eclip(deg) * r * 1.22,
+            text: txt.to_string(),
+            color: [ang[0], ang[1], ang[2], 1.0],
+            size: 12.0,
+        });
+    }
+    // Cuerpos natales (abreviatura del glifo).
+    for layer in &model.layers {
+        if matches!(layer.kind, LayerKind::Bodies) && layer.module_id == "natal" {
+            for g in &layer.glyphs {
+                out.push(SphereLabel {
+                    world: eclip(g.deg) * r * 1.11,
+                    text: cosmos_render::planet_unicode_with_retro(&g.symbol, g.retrograde),
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    size: 12.0,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Proyecta un punto de mundo a pixeles de pantalla dentro de `rect`, con la
+/// misma cámara que el pase GPU. Devuelve `None` si cae detrás de la esfera
+/// (hemisferio lejano) o fuera del frustum. Para el overlay de etiquetas.
+pub(crate) fn project_label(
+    world: Vec3,
+    rect: (f32, f32, f32, f32),
+    yaw_deg: f32,
+    pitch_deg: f32,
+    dist: f32,
+) -> Option<(f32, f32)> {
+    let (rx, ry, rw, rh) = rect;
+    if rw < 1.0 || rh < 1.0 {
+        return None;
+    }
+    let cam = Camera3d::orbit(Vec3::ZERO, yaw_deg.to_radians(), pitch_deg.to_radians(), dist);
+    // Cull del hemisferio lejano (el punto mira hacia el lado opuesto al ojo).
+    if world.normalize_or_zero().dot(cam.eye.normalize_or_zero()) < -0.05 {
+        return None;
+    }
+    let clip = cam.view_proj(rw / rh) * Vec4::new(world.x, world.y, world.z, 1.0);
+    if clip.w <= 0.001 {
+        return None;
+    }
+    let ndc_x = clip.x / clip.w;
+    let ndc_y = clip.y / clip.w;
+    if !(-1.3..=1.3).contains(&ndc_x) || !(-1.3..=1.3).contains(&ndc_y) {
+        return None;
+    }
+    Some((
+        rx + (ndc_x * 0.5 + 0.5) * rw,
+        ry + (1.0 - (ndc_y * 0.5 + 0.5)) * rh,
+    ))
 }
 
 /// Construye la geometría dinámica de la esfera celeste desde el modelo.
@@ -292,6 +458,15 @@ pub(crate) fn sphere_geometry(model: &RenderModel, pal: &Palette) -> SphereGeom 
         }
     }
 
+    // --- Vía Láctea: bruma dentro de la bóveda. Banda de glows grandes y muy
+    // tenues sobre el ecuador galáctico (más densa hacia el centro galáctico) ---
+    for s in cosmos_render::sky_data::galactic_equator(160) {
+        let p = eq_to_gpu(s.ra_deg, s.dec_deg, &eps) * r * 0.999;
+        let a = 0.05 + 0.10 * s.toward_center;
+        let sz = 0.22 + 0.12 * s.toward_center;
+        glows.push(sprite(p, sz, [0.62, 0.66, 0.85], a));
+    }
+
     // --- Estrellas brillantes con nombre (catálogo real, por magnitud) ---
     for s in cosmos_render::sky_data::BRIGHT_STARS {
         let p = eq_to_gpu(s.ra_deg, s.dec_deg, &eps) * r;
@@ -312,10 +487,30 @@ pub(crate) fn sphere_geometry(model: &RenderModel, pal: &Palette) -> SphereGeom 
         push_circle(&mut lines, 200, equ, 0.8, |t| eps.transform_point3(eclip(t)) * r * rr);
     }
 
-    // --- Espolones del zodíaco (cada 30°) ---
-    for s in 0..12 {
-        let d = s as f32 * 30.0;
-        push_polyline(&mut lines, &[eclip(d) * r, eclip(d) * r * 1.07], ecl, 0.85);
+    // --- Marcas de grados (ticks cruzando la eclíptica) + divisiones de signos.
+    // Cada 5° un tick chico; cada 10° mediano; cada 30° (borde de signo) un
+    // arco de latitud que parte el zodíaco, más un espolón hacia afuera. ---
+    let mut d = 0;
+    while d < 360 {
+        let lon = d as f32;
+        let (lat_span, alpha, col) = if d % 30 == 0 {
+            (10.0, 0.7, ecl) // división de signo
+        } else if d % 10 == 0 {
+            (4.0, 0.5, ecl)
+        } else {
+            (2.2, 0.32, ecl)
+        };
+        push_polyline(
+            &mut lines,
+            &[eclip_latlon(lon, -lat_span) * r, eclip_latlon(lon, lat_span) * r],
+            col,
+            alpha,
+        );
+        if d % 30 == 0 {
+            // Espolón hacia afuera en el borde de signo.
+            push_polyline(&mut lines, &[eclip(lon) * r, eclip(lon) * r * 1.07], ecl, 0.8);
+        }
+        d += 5;
     }
 
     // --- Polos eclípticos ---
@@ -367,57 +562,86 @@ pub(crate) fn sphere_geometry(model: &RenderModel, pal: &Palette) -> SphereGeom 
         }
     }
 
-    // --- Halo de atmósfera de la mini-Tierra (glow azul, ocluido por el globo
-    // → sólo brilla el limbo) ---
-    glows.push(sprite(Vec3::ZERO, EARTH_R * 2.8, [0.35, 0.62, 1.0], 0.9));
+    // --- Mini-Tierra: continentes reales (en posición correcta por el RAMC) +
+    // observador + día/noche + atmósfera ---
+    let eps_rad = OBLIQUITY_DEG.to_radians();
+    let ramc = ramc_deg(model.midheaven_deg, eps_rad);
+    let lon_obs = model.geo_longitude_deg;
+    let er = EARTH_R;
+    // Sol de la carta (si está) → punto subsolar y terminador día/noche.
+    let sun_dir: Option<Vec3> = model
+        .layers
+        .iter()
+        .filter(|l| matches!(l.kind, LayerKind::Bodies) && l.module_id == "natal")
+        .flat_map(|l| l.glyphs.iter())
+        .find(|g| g.symbol == "sun")
+        .map(|g| eclip(g.deg));
+
+    // Continentes como contornos verdes (cerrados), apenas sobre la superficie.
+    // Línea doble (dos radios próximos) para que se lean con grosor.
+    let land = [0.42, 0.86, 0.46];
+    for outline in CONTINENTES {
+        let close = |scale: f32| -> Vec<Vec3> {
+            let mut pts: Vec<Vec3> = outline
+                .iter()
+                .map(|&(lat, lon)| geo_to_gpu(lat, lon, lon_obs, ramc, &eps) * er * scale)
+                .collect();
+            if let Some(first) = pts.first().copied() {
+                pts.push(first);
+            }
+            pts
+        };
+        push_polyline(&mut lines, &close(1.008), land, 0.95);
+        push_polyline(&mut lines, &close(1.016), land, 0.55);
+    }
+
+    // Terminador (línea día/noche) + resplandor diurno subsolar (sutil, cálido).
+    if let Some(s) = sun_dir {
+        let term = great_circle_perp(s, 72, er * 1.012);
+        push_polyline(&mut lines, &term, [1.0, 0.82, 0.45], 0.6);
+        glows.push(sprite(s * er, er * 1.2, [1.0, 0.86, 0.55], 0.3)); // día, suave
+    }
+
+    // Observador, en su lugar real sobre la Tierra (marca + aura que destaca).
+    let obs = geo_to_gpu(model.geo_latitude_deg, lon_obs, lon_obs, ramc, &eps) * er * 1.03;
+    glows.push(sprite(obs, 0.075, [1.0, 0.45, 0.2], 1.0));
+    cores.push(sprite(obs, 0.022, [1.0, 0.95, 0.7], 1.0));
+
+    // Halo de atmósfera (glow azul, ocluido por el globo → brilla el limbo).
+    glows.push(sprite(Vec3::ZERO, er * 2.7, [0.35, 0.62, 1.0], 0.9));
 
     SphereGeom { lines, cores, glows }
 }
 
 // =====================================================================
-// Mini-Tierra — malla con continentes + terminador horneados
+// Mini-Tierra — globo océano (los continentes y el día/noche se dibujan
+// encima en coords de mundo, chart-correctos; ver sphere_geometry)
 // =====================================================================
 
-/// Valor de "tierra" pseudo-continental en una dirección de la esfera. Suma de
-/// senos en longitud/latitud → manchas orgánicas. Determinista.
-fn land_value(lon: f32, lat: f32) -> f32 {
-    (3.0 * lon).sin() * (2.0 * lat).cos()
-        + 0.55 * (7.0 * lon + 1.3).sin() * (5.0 * lat + 0.7).cos()
-        + 0.40 * (5.0 * lon + 2.1).cos() * (3.0 * lat).sin()
-        + 0.30 * (11.0 * lon).sin() * (7.0 * lat).cos()
-}
-
-/// Genera la malla de la Tierra: una esfera UV con color por vértice = albedo
-/// (océano/continente/hielo) × sombreado Lambert contra un sol fijo.
+/// Genera la malla de la Tierra: una esfera UV océano con casquetes de hielo y
+/// un sombreado fijo horneado para dar volumen (redondez). El día/noche real y
+/// los continentes van encima como overlays en coords de mundo.
 fn earth_mesh() -> (Vec<Vertex3d>, Vec<u16>) {
     let (pos, idx) = llimphi_3d::uv_sphere(28, 56);
-    let sun = Vec3::new(0.55, 0.35, 0.75).normalize();
+    let light = Vec3::new(0.5, 0.45, 0.74).normalize();
     let verts = pos
         .into_iter()
         .map(|p| {
             let n = Vec3::from_array(p); // unitaria = normal
             let lat = n.y.clamp(-1.0, 1.0).asin();
-            let lon = n.z.atan2(n.x);
-            let v = land_value(lon, lat);
-            let ice = lat.abs() > 1.30 || (lat.abs() > 1.12 && v > -0.2);
+            let ice = lat.abs() > 1.28; // casquetes polares
             let albedo = if ice {
-                [0.90, 0.94, 0.98]
-            } else if v > 0.35 {
-                // Continente: verde con vetas marrones según el valor.
-                let t = ((v - 0.35) * 0.8).clamp(0.0, 1.0);
-                [0.20 + 0.35 * t, 0.42 - 0.10 * t, 0.16 + 0.04 * t]
+                [0.86, 0.91, 0.97]
             } else {
-                // Océano: azul profundo a turquesa hacia la costa.
-                let t = ((0.35 - v) * 0.5).clamp(0.0, 1.0);
-                [0.03 + 0.02 * t, 0.10 + 0.18 * (1.0 - t), 0.30 + 0.25 * (1.0 - t)]
+                [0.05, 0.16, 0.34] // océano azul
             };
-            let lambert = n.dot(sun).max(0.0);
-            // Noche: un azul muy tenue (no negro puro) para leer el volumen.
-            let day = 0.12 + 1.05 * lambert;
+            // Redondez: Lambert contra una luz fija (no es el Sol de la carta;
+            // sólo da volumen). Piso alto para que la cara oscura no sea negra.
+            let lit = 0.40 + 0.70 * n.dot(light).max(0.0);
             let color = [
-                (albedo[0] * day).min(1.0),
-                (albedo[1] * day + 0.015).min(1.0),
-                (albedo[2] * day + 0.03).min(1.0),
+                (albedo[0] * lit).min(1.0),
+                (albedo[1] * lit).min(1.0),
+                (albedo[2] * lit + 0.02).min(1.0),
             ];
             Vertex3d { pos: p, color }
         })
