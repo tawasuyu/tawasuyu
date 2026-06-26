@@ -1,3 +1,6 @@
+// En release sobre Windows: subsistema GUI (sin consola negra detrás).
+// No-op en Linux/otros targets — preserva `cargo check --workspace`.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! churay — el instalador/actualizador gráfico de la suite tawasuyu, estilo
 //! Office: elegís apps de un catálogo por cuadrante, modo **sistema** (root) o
 //! **local** (`~/.local`), clic en Instalar y barra de progreso por app.

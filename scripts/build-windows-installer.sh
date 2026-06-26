@@ -52,6 +52,9 @@ declare -A APPS=(
   # (autenticación SO_PEERCRED del init brahman, sin equivalente Windows) y
   # surrealdb. Portarlo es un proyecto aparte, no un anzuelo.
   [nakui]="nakui-sheet-llimphi|Nakui|nakui-sheet|2d7dcde5-0a4e-4506-b063-5a885cf947d5|76d3fc48-e128-4ccd-afaf-95097db0de0f|01f2ba2c-ebf8-41b6-a339-2ddd15df0372|hoja de cálculo soberana estilo Excel"
+  # churay = el instalador/actualizador soberano: la puerta a toda la suite con
+  # updates firmados ed25519. El mejor anzuelo — instala y mantiene el resto.
+  [churay]="churay-llimphi|Churay|churay|117e120e-1251-43d0-8011-9cee91edb864|bd0c0a4b-cf20-4400-a723-6dbf94812849|ddcb19ee-30a0-4016-997b-224a42bbf8f7|instalador y actualizador soberano de la suite"
 )
 
 # ── Parse de argumentos ──────────────────────────────────────────────────
@@ -130,8 +133,16 @@ build_one() {
   echo "  · cargo xwin build --release"
   ( cd "$REPO_ROOT" && cargo xwin build --release --target "$TARGET" -p "$crate" )
 
+  # El binario producido se llama como el `[[bin]]` del crate, que normalmente
+  # es el nombre del paquete pero puede estar overrideado (p.ej. churay-llimphi
+  # produce `churay.exe`). Probamos <crate>.exe y, si no, <exe>.exe.
+  local reldir="$REPO_ROOT/target/$TARGET/release"
+  local built="$reldir/$crate.exe"
+  [[ -f "$built" ]] || built="$reldir/$exe.exe"
+  [[ -f "$built" ]] || { echo "✗ $key: no encuentro el .exe ($crate.exe ni $exe.exe en $reldir)"; return 1; }
+
   local stage; stage="$(mktemp -d)"
-  cp "$REPO_ROOT/target/$TARGET/release/$crate.exe" "$stage/$exe.exe"
+  cp "$built" "$stage/$exe.exe"
   printf '%s — %s (tawasuyu)\r\n\r\nDoble-click en %s.exe para ejecutar.\r\nWindows x64. Sin instalacion necesaria para el .zip.\r\n' \
     "$product" "$desc" "$exe" > "$stage/LEEME.txt"
   emit_wxs "$product" "$exe" "$upgrade" "$comp" "$short" "$desc" "$stage/app.wxs"
