@@ -21,21 +21,27 @@
 
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use app_bus::{AppMenu, Menu, MenuItem};
 use format::{Hash, Objeto};
 use llimphi_theme::Theme;
+use llimphi_icons::Icon;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, Rect,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_skeleton::{skeleton_line_view, SkeletonPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
@@ -50,6 +56,12 @@ use wawa_explorer_core::{short_hex, Disco};
 /// Timeout del fetch AoE: la red local responde en milisegundos; 3 s deja
 /// margen para una retransmisión perdida sin colgar la UI.
 const TIMEOUT_FETCH: Duration = Duration::from_secs(3);
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+/// Cadencia del repaint que anima el shimmer del skeleton mientras hay un
+/// fetch AoE en vuelo.
+const FETCH_TICK_MS: u64 = 60;
 
 // `Model`/`Msg`/`Explorer` son `pub(crate)`: el example `pantallazo_wawa`
 // incluye este archivo por `#[path]` para montar la view real headless.
@@ -79,6 +91,11 @@ pub(crate) enum Msg {
     /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
     /// de ventana sobre el nodo seleccionado. Sin selección es no-op.
     ContextMenuOpen(f32, f32),
+    /// Tick de animación: fuerza repaint para el shimmer del skeleton mientras
+    /// hay un fetch AoE en vuelo. Se auto-rearma sólo si sigue cargando.
+    FetchTick,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 pub(crate) struct Model {
@@ -108,6 +125,12 @@ pub(crate) struct Model {
     /// Menú contextual sobre un nodo: `(hash, x, y)` ancla en ventana.
     /// `None` cerrado.
     pub(crate) context_menu: Option<(Hash, f32, f32)>,
+    /// Toasts vivos (resultado del fetch AoE: éxito / fallo).
+    pub(crate) toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    pub(crate) next_toast: u64,
+    /// Hay una cadena de `Msg::FetchTick` en vuelo (evita rearmar dos).
+    pub(crate) ticking: bool,
 }
 
 pub(crate) struct Explorer;
@@ -148,6 +171,9 @@ impl App for Explorer {
                 menu_active: usize::MAX,
                 menu_anim: Tween::idle(1.0),
                 context_menu: None,
+                toasts: Vec::new(),
+                next_toast: 0,
+                ticking: false,
             };
         }
         match Disco::abrir(&source) {
@@ -170,6 +196,9 @@ impl App for Explorer {
                     menu_active: usize::MAX,
                     menu_anim: Tween::idle(1.0),
                     context_menu: None,
+                    toasts: Vec::new(),
+                    next_toast: 0,
+                    ticking: false,
                 }
             }
             Err(e) => Model {
@@ -188,6 +217,9 @@ impl App for Explorer {
                 menu_active: usize::MAX,
                 menu_anim: Tween::idle(1.0),
                 context_menu: None,
+                toasts: Vec::new(),
+                next_toast: 0,
+                ticking: false,
             },
         }
     }
@@ -235,10 +267,23 @@ impl App for Explorer {
             Msg::FetchOk(h, obj) => {
                 model.fetching.remove(&h);
                 model.fetched.insert(h, obj);
+                let id = model.next_toast;
+                model.next_toast += 1;
+                let texto =
+                    format!("{}{}", short_hex(&h), rimay_localize::t("wawa-marker-via-aoe"));
+                push_toast(&mut model, handle, Toast::success(id, texto, TOAST_TTL));
             }
             Msg::FetchFailed(h, e) => {
                 model.fetching.remove(&h);
                 model.fetch_errors.insert(h, e);
+                let id = model.next_toast;
+                model.next_toast += 1;
+                let texto = format!(
+                    "{}{}",
+                    short_hex(&h),
+                    rimay_localize::t("wawa-marker-fetch-failed")
+                );
+                push_toast(&mut model, handle, Toast::error(id, texto, TOAST_TTL));
             }
             Msg::MenuOpen(which) => {
                 model.menu_open = which;
@@ -311,7 +356,17 @@ impl App for Explorer {
                     model.context_menu = Some((h, x, y));
                 }
             }
+            Msg::FetchTick => {
+                // El thread durmió; sólo se rearma si sigue habiendo fetch
+                // en vuelo (lo hace `ensure_fetch_tick` más abajo).
+                model.ticking = false;
+            }
+            Msg::ToastExpire(id) => {
+                model.toasts.retain(|t| t.id != id);
+            }
         }
+        // Si quedó un fetch en vuelo, mantené el shimmer del skeleton animado.
+        ensure_fetch_tick(&mut model, handle);
         model
     }
 
@@ -324,7 +379,7 @@ impl App for Explorer {
         let header = header_view(model, &palette);
         let main = main_view(model, &theme, &palette);
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
@@ -333,7 +388,21 @@ impl App for Explorer {
         // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
         // menú contextual sobre el nodo seleccionado.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, header, main])
+        .children(vec![menubar, header, main]);
+
+        // Overlay de toasts (bottom-right). El `view_overlay` lo reservan los
+        // menús, así que los toasts viven en el árbol principal.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, viewport_of(model), Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -397,6 +466,46 @@ impl App for Explorer {
 fn viewport_of(_model: &Model) -> (f32, f32) {
     let (w, h) = Explorer::initial_size();
     (w as f32, h as f32)
+}
+
+/// Empuja un toast al stack y programa su expiración tras `TOAST_TTL`.
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Arranca la cadena de ticks de repaint si hay un fetch AoE en vuelo y no
+/// hay ya una corriendo. Se auto-detiene cuando `fetching` queda vacío, así
+/// no deja un loop de repaint ocioso.
+fn ensure_fetch_tick(model: &mut Model, handle: &Handle<Msg>) {
+    if model.ticking || model.fetching.is_empty() {
+        return;
+    }
+    model.ticking = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(FETCH_TICK_MS));
+        Msg::FetchTick
+    });
+}
+
+/// `key` estable de la escena del panel de detalle = el nodo seleccionado.
+/// Cambia al seleccionar otro objeto (dispara la transición de entrada);
+/// estable mientras se trae el mismo (skeleton → contenido no re-anima).
+fn scene_key(model: &Model) -> u64 {
+    match model.selected {
+        Some(h) => {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for b in h.iter() {
+                hasher.write_u8(*b);
+            }
+            hasher.finish()
+        }
+        None => 0,
+    }
 }
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
@@ -684,7 +793,13 @@ fn main_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
     .clip(true)
     .children(vec![tree]);
 
-    let detail = detail_view(model, theme, palette);
+    // El panel de detalle entra con un fade + slide-up suave al cambiar de
+    // nodo seleccionado (la `scene_key` cambia → re-anima la entrada).
+    let detail = detail_view(model, theme, palette).animated_enter_from(
+        scene_key(model),
+        motion::SLOW,
+        Affine::translate((0.0, 24.0)),
+    );
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -697,12 +812,21 @@ fn main_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
 
 fn detail_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
     let Some(hash) = model.selected else {
-        return detail_chrome(
-            &rimay_localize::t("wawa-detail-empty"),
-            String::new(),
+        // Sin selección: empty-state con orientación en vez de panel en blanco.
+        let cuerpo = View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .fill(palette.bg)
+        .clip(true)
+        .children(vec![empty_view(
+            Icon::Image,
+            rimay_localize::t("wawa-detail-empty"),
             None,
-            palette,
-        );
+            &EmptyPalette::from_theme(theme),
+        )]);
+        return cuerpo;
     };
     let Some(_) = &model.disco else {
         return detail_chrome("", String::new(), None, palette);
@@ -744,16 +868,14 @@ fn detail_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
         "wawa-detail-title-missing",
         &[("hash", hex_completo(&hash).into())],
     );
-    let estado_action = if model.fetching.contains(&hash) {
-        (
-            format!(
-                "{}\n\n{}",
-                rimay_localize::t("wawa-detail-searching-aoe-1"),
-                rimay_localize::t("wawa-detail-searching-aoe-2"),
-            ),
-            None,
-        )
-    } else if let Some(err) = model.fetch_errors.get(&hash) {
+
+    // Fetch AoE en vuelo: skeleton con shimmer mientras llega el payload,
+    // así el panel muestra la forma de lo que viene en vez de texto plano.
+    if model.fetching.contains(&hash) {
+        return detail_loading(&titulo, theme, palette);
+    }
+
+    let estado_action = if let Some(err) = model.fetch_errors.get(&hash) {
         let cuerpo = format!(
             "{}\n  {err}\n\n{}",
             rimay_localize::t("wawa-detail-fetch-error-1"),
@@ -852,6 +974,71 @@ fn detail_chrome(
     .fill(palette.bg)
     .clip(true)
     .children(children)
+}
+
+/// Panel de detalle en estado de carga: header + líneas skeleton con shimmer
+/// + leyenda "buscando en la red". Requiere el tick de `ensure_fetch_tick`
+/// para que el destello corra.
+fn detail_loading(titulo: &str, theme: &Theme, palette: &Palette) -> View<Msg> {
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(titulo.to_string(), 11.0, palette.fg_text, Alignment::Start);
+
+    let sk = SkeletonPalette::from_theme(theme);
+    let lineas: Vec<View<Msg>> = [320.0_f32, 280.0, 300.0, 240.0, 200.0]
+        .iter()
+        .map(|w| skeleton_line_view(*w, &sk))
+        .collect();
+    let body = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(12.0_f32) },
+        ..Default::default()
+    })
+    .children(lineas);
+
+    let caption = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(0.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        rimay_localize::t("wawa-detail-searching-aoe-1"),
+        11.0,
+        palette.fg_muted,
+        Alignment::Start,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(palette.bg)
+    .clip(true)
+    .children(vec![header, body, caption])
 }
 
 fn hex_completo(h: &Hash) -> String {

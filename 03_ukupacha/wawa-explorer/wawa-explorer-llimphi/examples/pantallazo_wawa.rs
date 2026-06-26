@@ -236,6 +236,9 @@ fn main() {
         menu_active: usize::MAX,
         menu_anim: Tween::idle(1.0),
         context_menu: None,
+        toasts: Vec::new(),
+        next_toast: 0,
+        ticking: false,
     };
 
     let root: View<Msg> = Explorer::view(&model);
