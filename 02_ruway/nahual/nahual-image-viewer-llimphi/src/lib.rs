@@ -24,6 +24,10 @@ use llimphi_ui::llimphi_raster::peniko::{BlendMode, Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, GesturePhase, View};
 
+use llimphi_icons::Icon;
+use llimphi_theme::{alpha, motion};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+
 /// Tope por defecto de bytes a leer (8 MB). Las imágenes RGBA8
 /// decodificadas pueden ocupar mucho más en memoria (un PNG 4K son
 /// ~64 MB descomprimidos), pero el cap aplica al archivo en disco.
@@ -158,8 +162,12 @@ where
     Msg: Clone + 'static,
 {
     let body = match state {
-        ImagePreviewState::Empty => placeholder_body("—", palette.fg_muted),
-        ImagePreviewState::Image { image, .. } => image_body(image.clone()),
+        ImagePreviewState::Empty => empty_body(palette),
+        ImagePreviewState::Image { image, .. } => {
+            // Pop-in suave al cargar: la `key` (hash del path) es estable
+            // mientras se mire la misma imagen, así el fade corre una sola vez.
+            image_body(image.clone()).animated_enter(key_of(path), motion::NORMAL)
+        }
         ImagePreviewState::TooBig(n) => placeholder_body(
             &format!("(archivo muy grande: {n} bytes — sin preview)"),
             palette.fg_muted,
@@ -195,8 +203,9 @@ where
     let body = match state {
         ImagePreviewState::Image { image, .. } => {
             zoom_body(image.clone(), viewport, on_zoom, on_pan, on_reset)
+                .animated_enter(key_of(path), motion::NORMAL)
         }
-        ImagePreviewState::Empty => placeholder_body("—", palette.fg_muted),
+        ImagePreviewState::Empty => empty_body(palette),
         ImagePreviewState::TooBig(n) => placeholder_body(
             &format!("(archivo muy grande: {n} bytes — sin preview)"),
             palette.fg_muted,
@@ -267,6 +276,58 @@ where
     .fill(palette.bg)
     .clip(true)
     .children(vec![header, body])
+}
+
+/// Hash estable del path → `key` para el pop-in implícito de Llimphi. La
+/// misma imagen produce siempre la misma key entre repintados (zoom/pan),
+/// así el fade-in corre sólo al cambiar de imagen.
+fn key_of(path: Option<&Path>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    match path {
+        Some(p) => p.to_string_lossy().hash(&mut h),
+        None => 0u8.hash(&mut h),
+    }
+    h.finish()
+}
+
+/// Deriva una [`EmptyPalette`] desde la [`ImageViewerPalette`] (que no
+/// acarrea un `Theme`). Mismo criterio que `EmptyPalette::from_theme`:
+/// ícono y descripción apagados sobre `fg_muted`.
+fn empty_palette(p: &ImageViewerPalette) -> EmptyPalette {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let dim = |a: u8| {
+        let [r, g, b, _] = p.fg_muted.components;
+        AlphaColor::new([r, g, b, a as f32 / 255.0])
+    };
+    EmptyPalette {
+        fg_icon: dim(alpha::HINT),
+        fg_title: p.fg_muted,
+        fg_desc: dim(alpha::DISABLED),
+    }
+}
+
+/// Empty-state con orientación (en vez de un guión solo) cuando todavía no
+/// hay imagen seleccionada.
+fn empty_body<Msg>(palette: &ImageViewerPalette) -> View<Msg>
+where
+    Msg: Clone + 'static,
+{
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![empty_view(
+        Icon::Image,
+        "Sin imagen",
+        Some("Seleccioná una imagen para previsualizarla."),
+        &empty_palette(palette),
+    )])
 }
 
 fn placeholder_body<Msg>(text: &str, color: Color) -> View<Msg>
