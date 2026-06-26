@@ -250,6 +250,58 @@ fn modelo_sintetico(diente: usize) -> Model {
         }
         _ => {}
     }
+
+    // Códigos especiales para fotografiar las features nuevas:
+    //   10 → panel de estilo abierto, con estilo de ejemplo aplicado al activo.
+    //   11 → wizard de transformación abierto (modal).
+    if diente == 10 || diente == 11 {
+        m.diente_activo = 1; // panel izquierdo: Lienzos
+        if let Some(id) = m.activo {
+            let mut e = pluma_estilo::EstiloLienzo::nuevo();
+            e.set_base(&pluma_estilo::EstiloTexto {
+                color_fg: Some([238, 178, 53, 255]),
+                size_px: Some(15.0),
+                ..Default::default()
+            });
+            // Título (primer átomo) en negrita roja subrayada.
+            if let Some(a0) = m
+                .cuerpos
+                .iter()
+                .find(|c| c.id == id)
+                .and_then(|c| c.orden.first().copied())
+            {
+                e.set_span(
+                    a0,
+                    0,
+                    40,
+                    pluma_estilo::EstiloTexto {
+                        color_fg: Some([225, 84, 75, 255]),
+                        weight: Some(700.0),
+                        underline: Some(true),
+                        ..Default::default()
+                    },
+                );
+            }
+            // Zona 2 con fondo verde translúcido + itálica.
+            e.set_zona(
+                2,
+                &pluma_estilo::EstiloTexto {
+                    color_bg: Some([94, 184, 124, 80]),
+                    italic: Some(true),
+                    ..Default::default()
+                },
+            );
+            m.estilos.insert(id, e);
+            m.diente_estilo_activo = Some(id);
+            m.objetivo_estilo = crate::model::ObjetivoEstilo::Seleccion;
+        }
+    }
+    if diente == 11 {
+        let mut w = crate::model::WizardEstado::default();
+        w.madre = m.activo;
+        w.tipo = crate::model::WizardTipo::Traducir;
+        m.wizard = Some(w);
+    }
     m
 }
 
@@ -273,6 +325,22 @@ fn render_png(model: &Model, out: &str) {
     };
     let mut scene = vello::Scene::new();
     paint(&mut scene, &mounted, &computed, &mut ts, None, None);
+
+    // Overlay (modal del wizard, menús…) compuesto encima, si lo hay.
+    if let Some(ov) = crate::view::vista_overlay(model) {
+        let mut olayout = LayoutTree::new();
+        let omount = mount(&mut olayout, ov);
+        let otmap = &omount.text_measures;
+        let ocomputed = olayout
+            .compute_with_measure(omount.root, (W as f32, H as f32), |nid, known, avail| {
+                match otmap.get(&nid) {
+                    Some(tm) => measure_text_node(&mut ts, tm, known, avail),
+                    None => taffy::Size::ZERO,
+                }
+            })
+            .expect("layout overlay");
+        paint(&mut scene, &omount, &ocomputed, &mut ts, None, None);
+    }
 
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
