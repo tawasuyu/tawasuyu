@@ -47,6 +47,7 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use wawa_config_llimphi::theme_from_wawa;
 
 use crate::consts::{
@@ -63,6 +64,21 @@ use crate::sim::{
 };
 use crate::view::{canvas_pane, canvas_pane_3d, onboarding_bar, side_panel, status_bar};
 use crate::worldgen::{bioma_palette, seed};
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Empuja un toast al stack y programa su expiración en un hilo aparte
+/// (mismo patrón que media-tube). El loop de tick ya fuerza repaint, así
+/// que el fade del toast corre sin un timer extra.
+fn push_toast(m: &mut Model, h: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    h.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
 
 struct Dominium;
 
@@ -273,6 +289,8 @@ impl App for Dominium {
                 GRID as u32,
                 48,
             ))),
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -484,7 +502,10 @@ impl App for Dominium {
                 }
             }
             Msg::GuardarPack => {
-                save_user_escenario(&m.sim.params, &m.weights, &m.sim.world.conceptos)
+                save_user_escenario(&m.sim.params, &m.weights, &m.sim.world.conceptos);
+                let id = m.next_toast;
+                m.next_toast += 1;
+                push_toast(&mut m, h, Toast::success(id, "Pack de usuario guardado", TOAST_TTL));
             }
             Msg::CargarPack => {
                 if let Some(esc) = load_user_escenario() {
@@ -510,6 +531,13 @@ impl App for Dominium {
                         *lock = 0;
                     }
                     m.selected = None;
+                    let id = m.next_toast;
+                    m.next_toast += 1;
+                    push_toast(&mut m, h, Toast::success(id, "Pack de usuario cargado", TOAST_TTL));
+                } else {
+                    let id = m.next_toast;
+                    m.next_toast += 1;
+                    push_toast(&mut m, h, Toast::error(id, "No hay pack de usuario guardado", TOAST_TTL));
                 }
             }
             Msg::CrearConcepto => {
@@ -657,13 +685,16 @@ impl App for Dominium {
             }
             Msg::LoadScenario => {
                 let packs = scenario_packs();
-                let (_, json) = packs[m.scenario_idx];
+                let (name, json) = packs[m.scenario_idx];
                 if let Ok(cs) = serde_json::from_str::<Conceptos>(json) {
                     m.sim.world.conceptos = cs;
                     for lock in m.sim.world.lemmings.hack_lock.iter_mut() {
                         *lock = 0;
                     }
                     m.selected = None;
+                    let id = m.next_toast;
+                    m.next_toast += 1;
+                    push_toast(&mut m, h, Toast::info(id, format!("Scenario «{name}» cargado"), TOAST_TTL));
                 }
             }
             Msg::CycleRenderMode => {
@@ -823,6 +854,9 @@ impl App for Dominium {
                 m.menu_active = usize::MAX;
                 m.edit_menu = None;
                 m.edit_active = usize::MAX;
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
             }
         }
         m
@@ -1031,7 +1065,7 @@ impl App for Dominium {
         // de edición sobre el campo focuseado. El canvas tiene su propio
         // click/drag, pero no captura right-click, así que la raíz es el
         // catch-all.
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -1041,7 +1075,30 @@ impl App for Dominium {
         })
         .fill(theme.bg_app)
         .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-        .children(frame)
+        .children(frame);
+
+        // Overlay de toasts (bottom-right). Se monta como hermano de la raíz
+        // para que sea visible incluso con un menú abierto (los menús usan
+        // `view_overlay`, que se pinta por encima). Viewport fijo, igual que
+        // el menubar.
+        let now = std::time::Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            let (vw, vh) = Self::initial_size();
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![
+                root,
+                toast_stack_view(&alive, (vw as f32, vh as f32), Msg::ToastExpire),
+            ])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {

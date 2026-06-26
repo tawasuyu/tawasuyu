@@ -1,9 +1,13 @@
 //! Todas las vistas de la app: status bar, onboarding, canvas pane, panel
 //! lateral con sus cuatro tabs y los widgets de fila/slider reutilizados.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use dominium_core::{Epoch, PsiMetrics, Trigger, WorldStats};
 use dominium_render_plan::{Color, RenderMode};
-use llimphi_theme::Theme;
+use llimphi_theme::{motion, Theme};
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
@@ -18,6 +22,15 @@ use crate::consts::{GRID, SIDE_WIDTH};
 use crate::model::{Layer, Model, Msg, PanelTab, ParamSlot, ZSlot};
 use crate::packs::scenario_packs;
 use crate::sim::CLUSTER_COLORS;
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la misma
+/// id de Concepto produce siempre la misma key entre rebuilds, así sólo
+/// anima en su primera aparición).
+fn key_of(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 /// Nombre humano de la acción atómica `0..5`.
 fn action_name(b: u8) -> &'static str {
@@ -251,13 +264,37 @@ pub(crate) fn side_panel(
         separator(theme),
     ];
 
-    // Contenido específico del tab actual.
+    // Contenido específico del tab actual, agrupado en su propio contenedor
+    // para que la transición de escena (slide-up + fade) anime sólo el cuerpo
+    // del tab al conmutar — el header y el tab bar quedan quietos.
+    let mut tab_children: Vec<View<Msg>> = Vec::new();
     match model.panel_tab {
-        PanelTab::Mundo => append_mundo_tab(&mut children, model, stats, theme, &btn_palette, &slider_palette),
-        PanelTab::Conceptos => append_conceptos_tab(&mut children, model, theme, &btn_palette, &slider_palette),
-        PanelTab::Psique => append_psique_tab(&mut children, model, stats, psi_metrics, theme, &btn_palette, &slider_palette),
-        PanelTab::Vista => append_vista_tab(&mut children, model, theme, &btn_palette, &slider_palette),
+        PanelTab::Mundo => append_mundo_tab(&mut tab_children, model, stats, theme, &btn_palette, &slider_palette),
+        PanelTab::Conceptos => append_conceptos_tab(&mut tab_children, model, theme, &btn_palette, &slider_palette),
+        PanelTab::Psique => append_psique_tab(&mut tab_children, model, stats, psi_metrics, theme, &btn_palette, &slider_palette),
+        PanelTab::Vista => append_vista_tab(&mut tab_children, model, theme, &btn_palette, &slider_palette),
     }
+    children.push(
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: Dimension::auto(),
+            },
+            flex_shrink: 0.0,
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(10.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(tab_children)
+        .animated_enter_from(
+            key_of(model.panel_tab.label()),
+            motion::SLOW,
+            Affine::translate((0.0, 24.0)),
+        ),
+    );
 
     // Contenido del panel: una columna alta (suma de todas las secciones).
     // Se desplaza hacia arriba con `margin_top: -panel_scroll` para revelar lo
@@ -1071,6 +1108,10 @@ fn concepto_row(i: usize, id: &str, selected: bool, theme: &Theme) -> View<Msg> 
         Alignment::Start,
     )
     .on_click(Msg::SelectConcepto(i))
+    // Pop-in al aparecer: la fila se funde la primera vez que su id entra
+    // a la lista (al crear/sembrar un Concepto). Key estable por id ⇒ no
+    // refadea al seleccionar o editar.
+    .animated_enter(key_of(id), motion::NORMAL)
 }
 
 /// Slider para una capa de `LayerMods`. Rango fijo `[-1, 1]` — encaja con

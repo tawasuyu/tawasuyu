@@ -10,6 +10,7 @@ use llimphi_clipboard::SystemClipboard;
 use llimphi_ui::KeyEvent;
 use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_toast::Toast;
 
 pub(crate) struct Model {
     /// Sesión de simulación (estado de dominio + reloj + historia): `world`,
@@ -109,6 +110,11 @@ pub(crate) struct Model {
     /// Vive en `Arc<Mutex<_>>` porque el `VoxelRenderer` no es clonable y el
     /// `Model` sí se mueve/clona; la closure `gpu_paint_with` captura este Arc.
     pub(crate) view3d: std::sync::Arc<std::sync::Mutex<crate::view3d::View3d>>,
+    /// Toasts efímeros vivos (confirmaciones de guardar/cargar pack/scenario).
+    /// Cada uno se auto-descarta con `Msg::ToastExpire` tras su `duration`.
+    pub(crate) toasts: Vec<Toast>,
+    /// Id incremental para correlacionar un toast con su `Msg::ToastExpire`.
+    pub(crate) next_toast: u64,
 }
 
 /// Pestañas del panel lateral. El orden es el orden visual en el tab bar.
@@ -393,4 +399,6 @@ pub(crate) enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
