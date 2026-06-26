@@ -175,10 +175,18 @@ impl LottieAsset {
     /// el caller compone varios assets en un `paint_with` propio sin pasar por
     /// `view()`.
     pub fn paint(&self, scene: &mut Scene, rect: PaintRect, frame: f64) {
+        self.paint_alpha(scene, rect, frame, 1.0);
+    }
+
+    /// Como `paint`, pero con una opacidad global `alpha` (0..1) aplicada a toda
+    /// la composición. Es lo que habilita el **crossfade** entre clips de una
+    /// máquina de estados (pintar el saliente a `1-mix` y el entrante a `mix`).
+    /// `velato` lo soporta nativo: el `alpha` va al `append`.
+    pub fn paint_alpha(&self, scene: &mut Scene, rect: PaintRect, frame: f64, alpha: f64) {
         let (vb_w, vb_h) = self.size();
         let side_w = rect.w as f64;
         let side_h = rect.h as f64;
-        if side_w <= 0.0 || side_h <= 0.0 || vb_w <= 0.0 || vb_h <= 0.0 {
+        if side_w <= 0.0 || side_h <= 0.0 || vb_w <= 0.0 || vb_h <= 0.0 || alpha <= 0.0 {
             return;
         }
         let s = (side_w / vb_w).min(side_h / vb_h);
@@ -191,7 +199,7 @@ impl LottieAsset {
         let frame = frame.clamp(self.inner.frames.start, self.inner.frames.end);
         // Renderer nuevo por paint: es `Default`, sólo scratch Vecs, sin GPU.
         let mut renderer = velato::Renderer::new();
-        renderer.append(&self.inner, frame, xform, 1.0, scene);
+        renderer.append(&self.inner, frame, xform, alpha.clamp(0.0, 1.0), scene);
     }
 
     /// Como `paint`, pero recibe el instante en **segundos** y lo mapea a frame
@@ -220,6 +228,53 @@ impl LottieAsset {
         View::new(absolute_fill())
             .paint_with(move |scene, _ts, rect| asset.paint_at_time(scene, rect, t_secs))
     }
+}
+
+/// Pinta un [`RenderFrame`] de una máquina de estados [`llimphi_anim`] usando
+/// `clips` indexados por `ClipId` (= índice en el slice). Pinta el clip primario
+/// y, si hay una transición en curso, hace **crossfade**: saliente a `1-mix`,
+/// entrante a `mix`. Los `ClipId` fuera de rango se omiten (no rompe).
+///
+/// `ClipSample::time_secs` se mapea a frame con loop vía `frame_at_time`, así
+/// que cada clip respeta su propio fps y duración.
+///
+/// [`RenderFrame`]: llimphi_anim::RenderFrame
+pub fn paint_render_frame(
+    scene: &mut Scene,
+    rect: PaintRect,
+    frame: &llimphi_anim::RenderFrame,
+    clips: &[LottieAsset],
+) {
+    let sample = |s: llimphi_anim::ClipSample, alpha: f64, scene: &mut Scene| {
+        if let Some(asset) = clips.get(s.clip as usize) {
+            let f = asset.frame_at_time(s.time_secs);
+            asset.paint_alpha(scene, rect, f, alpha);
+        }
+    };
+    match frame.blend {
+        None => sample(frame.primary, 1.0, scene),
+        Some((incoming, mix)) => {
+            let mix = mix as f64;
+            // Dissolve: el saliente se desvanece mientras el entrante aparece.
+            sample(frame.primary, 1.0 - mix, scene);
+            sample(incoming, mix, scene);
+        }
+    }
+}
+
+/// Construye un `View` absoluto que ocupa el rect del padre y pinta el
+/// [`RenderFrame`] actual de una máquina de estados (con crossfade). El caller
+/// llama `instance.render_frame()` cada frame y le pasa el resultado + sus clips
+/// (cloneados; baratos por `Arc`). Es el gemelo de [`LottieAsset::view`] para
+/// animación dirigida por estado en vez de por un solo clip.
+///
+/// [`RenderFrame`]: llimphi_anim::RenderFrame
+pub fn state_machine_view<Msg>(
+    frame: llimphi_anim::RenderFrame,
+    clips: Vec<LottieAsset>,
+) -> View<Msg> {
+    View::new(absolute_fill())
+        .paint_with(move |scene, _ts, rect| paint_render_frame(scene, rect, &frame, &clips))
 }
 
 /// Estilo "ocupa todo el rect del padre, en absoluto" — compartido por las dos
@@ -350,5 +405,57 @@ mod tests {
         let a = LottieAsset::from_str(LOTTIE_SIN_ROTACION)
             .expect("el fork parsea un transform sin rotación");
         assert_eq!(a.size(), (100.0, 100.0));
+    }
+
+    /// Segundo clip distinto al rect: un círculo, para tener dos animaciones que
+    /// mezclar en la máquina de estados.
+    const LOTTIE_CIRC: &str = r#"{
+      "v":"5.5.2","fr":30,"ip":0,"op":60,"w":100,"h":100,
+      "layers":[{
+        "ty":4,"ip":0,"op":60,"st":0,"sr":1,
+        "ks":{"p":{"a":0,"k":[50,50]},"r":{"a":0,"k":0}},
+        "shapes":[
+          {"ty":"el","p":{"a":0,"k":[0,0]},"s":{"a":0,"k":[70,70]}},
+          {"ty":"fl","c":{"a":0,"k":[0,0.4,0.9,1]},"o":{"a":0,"k":100}}
+        ]
+      }]
+    }"#;
+
+    /// E2E del Tier 1: máquina de estados (llimphi-anim) + dos clips Lottie +
+    /// `paint_render_frame`. Verifica que tanto el estado simple como el
+    /// crossfade emiten geometría a la `Scene` (evidencia textual, sin PNG).
+    #[test]
+    fn state_machine_pinta_clips_y_crossfade() {
+        use llimphi_anim::{Condition, StateMachine};
+
+        let rect = LottieAsset::from_str(LOTTIE_RECT).expect("rect");
+        let circ = LottieAsset::from_str(LOTTIE_CIRC).expect("circ");
+        let clips = vec![rect, circ]; // ClipId 0 = rect, 1 = circ
+
+        let mut sm = StateMachine::new();
+        let idle = sm.add_state("idle", 0, 1.0, true);
+        let walk = sm.add_state("walk", 1, 1.0, true);
+        sm.set_entry(idle);
+        sm.transition(idle, walk, vec![Condition::bool("moving", true)], 0.4);
+        let mut inst = sm.instance();
+
+        let big = PaintRect { x: 0.0, y: 0.0, w: 200.0, h: 200.0 };
+
+        // Estado simple: pinta sólo el clip primario (rect).
+        let mut s0 = Scene::new();
+        paint_render_frame(&mut s0, big, &inst.render_frame(), &clips);
+        assert!(!s0.encoding().is_empty(), "estado simple debe pintar geometría");
+
+        // Arranca la transición y caé a mitad del blend.
+        inst.set_bool("moving", true);
+        inst.advance(0.2); // 0.2/0.4 = mix 0.5
+        let rf = inst.render_frame();
+        assert!(rf.blend.is_some(), "debería estar en crossfade");
+        let mut s1 = Scene::new();
+        paint_render_frame(&mut s1, big, &rf, &clips);
+        assert!(!s1.encoding().is_empty(), "el crossfade debe pintar geometría");
+
+        // El view helper compila y produce un View sin panic.
+        let _v = state_machine_view::<()>(rf, clips);
     }
 }

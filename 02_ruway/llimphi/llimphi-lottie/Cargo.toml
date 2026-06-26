@@ -11,3 +11,5 @@ description = "llimphi-lottie — puente fino velato (Lottie) → Llimphi. Carga
 llimphi-ui = { workspace = true }
 # Fork vendorizado de velato (no paniquea ante features no soportadas).
 foreign-lottie = { workspace = true }
+# Máquina de estados de animación (clip-agnóstica) que este crate renderiza.
+llimphi-anim = { workspace = true }

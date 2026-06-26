@@ -1,0 +1,10 @@
+[package]
+name = "llimphi-anim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-anim — máquina de estados de animación (estilo Rive) clip-agnóstica: estados, inputs (bool/number/trigger), transiciones con condiciones y blend. El núcleo no sabe de Lottie ni de vello — opera sobre ClipId + duración; el render lo cablea el consumidor (llimphi-lottie hoy; rigs nativos mañana)."
+
+[dependencies]

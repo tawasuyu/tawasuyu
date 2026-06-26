@@ -238,6 +238,7 @@ members = [
     "02_ruway/llimphi/llimphi-ui",
     "02_ruway/llimphi/llimphi-layer",
     "02_ruway/llimphi/llimphi-motion",
+    "02_ruway/llimphi/llimphi-anim",
     "02_ruway/llimphi/llimphi-icons",
     "02_ruway/llimphi/llimphi-svg",
     "02_ruway/llimphi/llimphi-lottie",
@@ -755,6 +756,9 @@ llimphi-layer = { path = "02_ruway/llimphi/llimphi-layer" }
 llimphi-theme = { path = "02_ruway/llimphi/llimphi-theme" }
 # Tweens y helpers de animación sobre el bucle Elm.
 llimphi-motion = { path = "02_ruway/llimphi/llimphi-motion" }
+# Máquina de estados de animación (estilo Rive) clip-agnóstica. Núcleo puro;
+# el render lo cablea el consumidor (llimphi-lottie). Escalón sobre el playback.
+llimphi-anim = { path = "02_ruway/llimphi/llimphi-anim" }
 # Iconos vectoriales (BezPath en grid 24×24) compartidos por todas las apps.
 llimphi-icons = { path = "02_ruway/llimphi/llimphi-icons" }
 # Puente fino vello_svg → Llimphi para SVG arbitrario (íconos .desktop, logos).
