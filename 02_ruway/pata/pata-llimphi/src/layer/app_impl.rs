@@ -665,6 +665,14 @@ impl LayerApp {
         if self.menu_open && self.menu_kind == MenuKind::Volume {
             self.sink_inputs = crate::sampler::sample_sink_inputs();
         }
+        // Aviso de batería baja (una vez por escalón al descargar).
+        if let Some((pct, charging)) = crate::bateria::read() {
+            let (nuevo, aviso) = crate::bateria::decidir(pct, charging, self.bat_avisado);
+            self.bat_avisado = nuevo;
+            if let Some(a) = aviso {
+                crate::bateria::avisar(a, pct);
+            }
+        }
         // `WidgetCtx` ya no es `Copy` (lleva el título de la ventana enfocada),
         // así que los widgets tickean contra `&self.ctx` (recién asignado).
         for sw in &mut self.surfaces {

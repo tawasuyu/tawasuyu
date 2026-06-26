@@ -816,6 +816,12 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     caían al `_ => {}` del backend de producción (sólo andaban en winit). Los cuatro
     (`ControlWifi`/`ControlBt`/`ControlPowerProfile`/`ControlNight`) cableados en
     ambos backends.
+  - **Aviso de batería baja ✅** — pata lee `/sys/class/power_supply` cada tick y,
+    al **cruzar** un umbral descargando (15% bajo, 5% crítico), emite una
+    notificación (`notify-send`, que recibe el propio daemon). No repite hasta
+    recuperarse o enchufar. La decisión es pura y testeada (`bateria::decidir`,
+    3 tests); ambos backends la corren en su muestreo. Clásico de portátil (pata es
+    el lugar natural: lee la batería y siempre corre).
     - **Con esto cierran los huecos de DE que faltaban en pata.** Quedan en órbita
       de **mirada** (compositor, no pata): lock screen + gestión de idle (en curso
       ahí), screenshot/grabación y configuración de displays.

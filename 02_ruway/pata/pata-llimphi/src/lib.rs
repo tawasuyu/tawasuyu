@@ -34,6 +34,7 @@ pub mod shuma;
 pub mod shuma_app;
 pub mod toplevel;
 pub mod tray;
+pub mod bateria;
 pub mod bluetooth;
 pub mod mpris;
 pub mod network;
@@ -936,6 +937,9 @@ pub struct Model {
     pub polkit_prompt: Option<polkit::PolkitRequest>,
     /// Contraseña tecleada en el diálogo de polkit.
     pub polkit_input: String,
+    /// Peor nivel de batería ya avisado (0 ninguno, 1 bajo, 2 crítico). Ver
+    /// [`bateria::decidir`].
+    pub bat_avisado: u8,
     /// `true` cuando el popup del applet de red está desplegado (path winit).
     pub network_open: bool,
     /// Entrada de contraseña Wi-Fi en curso: `(ssid, tecleado)`. `None` = lista.
@@ -1285,6 +1289,7 @@ impl App for PataApp {
             polkit: polkit::PolkitHandle::spawn(),
             polkit_prompt: None,
             polkit_input: String::new(),
+            bat_avisado: 0,
             network_open: false,
             net_password: None,
             session_open: false,
@@ -1408,6 +1413,15 @@ impl App for PataApp {
                 if let Some(h) = &model.bluetooth {
                     if let Some(b) = h.latest() {
                         model.bluetooth_now = Some(b);
+                    }
+                }
+                // Aviso de batería baja: lee /sys cada tick y avisa al cruzar
+                // un umbral descargando (una sola vez por escalón).
+                if let Some((pct, charging)) = bateria::read() {
+                    let (nuevo, aviso) = bateria::decidir(pct, charging, model.bat_avisado);
+                    model.bat_avisado = nuevo;
+                    if let Some(a) = aviso {
+                        bateria::avisar(a, pct);
                     }
                 }
                 // Agente polkit: si llega una autenticación y no hay otra en

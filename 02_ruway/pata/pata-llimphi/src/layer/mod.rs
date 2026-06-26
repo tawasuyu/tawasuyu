@@ -263,6 +263,8 @@ pub(super) struct LayerApp {
     pub(super) bluetooth_now: Option<crate::bluetooth::BtState>,
     /// Cliente del daemon de notificaciones (la campanita), en su propio hilo.
     pub(super) notifications: Option<crate::notifications::NotificationsHandle>,
+    /// Peor nivel de batería ya avisado (0/1/2). Ver [`crate::bateria`].
+    pub(super) bat_avisado: u8,
     /// Agente de autenticación polkit en su propio hilo.
     pub(super) polkit: Option<crate::polkit::PolkitHandle>,
     /// Solicitud de autenticación polkit en curso (con el canal de respuesta).
@@ -601,6 +603,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         bluetooth,
         bluetooth_now: None,
         notifications,
+        bat_avisado: 0,
         polkit,
         polkit_prompt: None,
         polkit_input: String::new(),
