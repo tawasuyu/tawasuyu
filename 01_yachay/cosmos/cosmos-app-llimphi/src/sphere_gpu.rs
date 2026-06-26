@@ -23,7 +23,7 @@
 use std::sync::{Arc, Mutex};
 
 use cosmos_render::{LayerKind, Palette, RenderModel, Rgba};
-use llimphi_3d::glam::{Mat4, Vec3, Vec4};
+use llimphi_3d::glam::{Mat4, Quat, Vec3, Vec4};
 use llimphi_3d::{
     Billboard, Billboards, Camera3d, Glows, LineVertex, Lines3d, PostFx, PostFxConfig, Renderer3d,
     SkyBackdrop, SkyMapping, SkyParams, Vertex3d,
@@ -163,8 +163,7 @@ impl SphereGpu {
         (w, h): (u32, u32),
         rect: (f32, f32, f32, f32),
         geom: &SphereGeom,
-        yaw_deg: f32,
-        pitch_deg: f32,
+        orient: Quat,
         dist: f32,
     ) {
         let (_rx, _ry, rw, rh) = rect;
@@ -172,10 +171,15 @@ impl SphereGpu {
             return;
         }
         let aspect = rw / rh;
-        let yaw = yaw_deg.to_radians();
-        let pitch = pitch_deg.to_radians();
-        let cam = Camera3d::orbit(Vec3::ZERO, yaw, pitch, dist);
+        let cam = camera_from_orient(orient, dist);
         let view_proj = cam.view_proj(aspect);
+        // Para el fondo estelar (mapeo esférico, convención yaw/pitch con up=+Y):
+        // derivamos los ángulos de la dirección del ojo. El rolido del arcball
+        // no se traslada al telón (es tenue; las constelaciones sí rolan, son
+        // geometría con la cámara real).
+        let eye_dir = cam.eye.normalize_or_zero();
+        let yaw = eye_dir.x.atan2(eye_dir.z);
+        let pitch = eye_dir.y.clamp(-1.0, 1.0).asin();
 
         // Subir geometría del frame.
         self.lines.set_lines(device, &geom.lines);
@@ -229,8 +233,7 @@ pub(crate) fn paint(
     viewport: (u32, u32),
     rect: (f32, f32, f32, f32),
     geom: &SphereGeom,
-    yaw_deg: f32,
-    pitch_deg: f32,
+    orient: Quat,
     dist: f32,
 ) {
     let mut guard = match slot.lock() {
@@ -238,12 +241,24 @@ pub(crate) fn paint(
         Err(_) => return,
     };
     let gpu = guard.get_or_insert_with(|| SphereGpu::new(device, queue));
-    gpu.draw(device, queue, encoder, target, viewport, rect, geom, yaw_deg, pitch_deg, dist);
+    gpu.draw(device, queue, encoder, target, viewport, rect, geom, orient, dist);
 }
 
 // =====================================================================
 // Geometría (CPU)
 // =====================================================================
+
+/// Cámara del arcball: geometría fija, ojo y "arriba" rotados por `orient⁻¹`.
+/// Equivale a rotar el contenido por `orient` con la cámara fija en +Z.
+fn camera_from_orient(orient: Quat, dist: f32) -> Camera3d {
+    let inv = orient.inverse();
+    Camera3d {
+        eye: inv * (Vec3::Z * dist),
+        target: Vec3::ZERO,
+        up: inv * Vec3::Y,
+        ..Camera3d::default()
+    }
+}
 
 fn rgb(c: Rgba) -> [f32; 3] {
     [c.r, c.g, c.b]
@@ -396,15 +411,14 @@ pub(crate) fn sphere_labels(model: &RenderModel, pal: &Palette) -> Vec<SphereLab
 pub(crate) fn project_label(
     world: Vec3,
     rect: (f32, f32, f32, f32),
-    yaw_deg: f32,
-    pitch_deg: f32,
+    orient: Quat,
     dist: f32,
 ) -> Option<(f32, f32)> {
     let (rx, ry, rw, rh) = rect;
     if rw < 1.0 || rh < 1.0 {
         return None;
     }
-    let cam = Camera3d::orbit(Vec3::ZERO, yaw_deg.to_radians(), pitch_deg.to_radians(), dist);
+    let cam = camera_from_orient(orient, dist);
     // Cull del hemisferio lejano (el punto mira hacia el lado opuesto al ojo).
     if world.normalize_or_zero().dot(cam.eye.normalize_or_zero()) < -0.05 {
         return None;

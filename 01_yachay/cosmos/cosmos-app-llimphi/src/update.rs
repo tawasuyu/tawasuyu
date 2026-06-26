@@ -92,8 +92,8 @@ pub(crate) fn save_ui(m: &Model) {
         tile_mode: m.tile_mode,
         dock_left: m.dock_left.clone(),
         dock_right: m.dock_right.clone(),
-        sphere_yaw: m.sphere_yaw,
-        sphere_pitch: m.sphere_pitch,
+        sphere_yaw: crate::model::orient_to_yaw_pitch(m.sphere_orient).0,
+        sphere_pitch: crate::model::orient_to_yaw_pitch(m.sphere_orient).1,
         sky_nadir: m.sky_nadir,
     });
 }
@@ -298,15 +298,19 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             m.tile_mode = !m.tile_mode;
             persist = true;
         }
-        Msg::SphereRotate(dyaw, dpitch) => {
-            // Sin persistir: el drag dispara muchos por segundo; evita
-            // escribir el UI-state a disco en cada movimiento.
-            m.sphere_yaw = (m.sphere_yaw + dyaw).rem_euclid(360.0);
-            m.sphere_pitch = (m.sphere_pitch + dpitch).clamp(-89.0, 89.0);
+        Msg::SphereRotate(dx, dy) => {
+            // Arcball: el delta de arrastre rota la orientación sobre los ejes
+            // FIJOS de cámara (X derecha, Y arriba) → sin gimbal, sin topes, sin
+            // cambio de eje. `dx`/`dy` son píxeles; ~0.005 rad/px. Agarre tipo
+            // globo: la esfera sigue al cursor. Sin persistir (el drag es denso).
+            let k = 0.005_f32;
+            use llimphi_3d::glam::{Quat, Vec3};
+            let dq = Quat::from_axis_angle(Vec3::Y, dx * k)
+                * Quat::from_axis_angle(Vec3::X, dy * k);
+            m.sphere_orient = (dq * m.sphere_orient).normalize();
         }
         Msg::SphereReset => {
-            m.sphere_yaw = 26.0;
-            m.sphere_pitch = -64.0;
+            m.sphere_orient = crate::model::default_orient();
             persist = true;
         }
         Msg::WheelPan(dx, dy) => {

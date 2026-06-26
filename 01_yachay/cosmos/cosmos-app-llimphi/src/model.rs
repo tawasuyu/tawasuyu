@@ -14,12 +14,37 @@ use cosmos_engine::{Corpus, PipelineRequest};
 use cosmos_model::Chart;
 use cosmos_render::RenderModel;
 use cosmos_store::Store;
+use llimphi_3d::glam::{Quat, Vec3};
 use llimphi_motion::Tween;
 use llimphi_theme::Theme;
 use llimphi_widget_text_input::TextInputState;
 use serde::{Deserialize, Serialize};
 
 use crate::astroview::AstroState;
+
+/// Orientación arcball ⇄ (yaw, pitch) en grados. Se persiste y se compara con la
+/// vista 2.5D como ángulos; en vivo es un cuaternión (sin gimbal). El cuaternión
+/// `q` se define para que la cámara `eye = q⁻¹·(+Z·dist)` coincida con la órbita
+/// clásica `(cp·sy, sp, cp·cy)`.
+pub(crate) fn orient_from_yaw_pitch(yaw_deg: f32, pitch_deg: f32) -> Quat {
+    (Quat::from_rotation_y(yaw_deg.to_radians())
+        * Quat::from_rotation_x(-pitch_deg.to_radians()))
+    .inverse()
+}
+
+/// (yaw, pitch) en grados equivalentes a la orientación (para la 2.5D vello y
+/// la persistencia). Extrae la dirección del ojo y la lee como esféricas.
+pub(crate) fn orient_to_yaw_pitch(q: Quat) -> (f32, f32) {
+    let dir = (q.inverse() * Vec3::Z).normalize_or_zero();
+    let pitch = dir.y.clamp(-1.0, 1.0).asin().to_degrees();
+    let yaw = dir.x.atan2(dir.z).to_degrees();
+    (yaw, pitch)
+}
+
+/// Orientación inicial de la esfera 3D: vista picada del zodíaco, sin rolido.
+pub(crate) fn default_orient() -> Quat {
+    orient_from_yaw_pitch(0.0, -55.0)
+}
 use crate::library::NavNode;
 
 pub(crate) const WHEEL_SIZE: f32 = 720.0;
@@ -782,9 +807,8 @@ pub(crate) struct Model {
     pub(crate) rename_input: TextInputState,
     /// Clave del nodo cortado, pendiente de pegar (mover).
     pub(crate) nav_cut: Option<String>,
-    // esfera 3D (orientación)
-    pub(crate) sphere_yaw: f32,
-    pub(crate) sphere_pitch: f32,
+    // esfera 3D (orientación) — arcball: un cuaternión, sin gimbal.
+    pub(crate) sphere_orient: Quat,
     /// Estado GPU persistente de la esfera 3D (`llimphi-3d`): se crea perezoso
     /// en el primer `gpu_paint_with`. No se persiste ni se clona por frame.
     pub(crate) sphere_gpu: crate::sphere_gpu::SphereGpuSlot,

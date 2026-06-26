@@ -335,8 +335,7 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
     let geom = crate::sphere_gpu::sphere_geometry(render, &pal);
     let labels = crate::sphere_gpu::sphere_labels(render, &pal);
     let bg = graphics_bg(model);
-    let yaw = model.sphere_yaw;
-    let pitch = model.sphere_pitch;
+    let orient = model.sphere_orient;
     // Zoom de la rueda → distancia de cámara (acercar = menor distancia).
     let dist = (3.0 / model.wheel_zoom.max(0.25)).clamp(1.7, 9.0);
     let slot = model.sphere_gpu.clone();
@@ -363,8 +362,7 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
             vp,
             (rect.x, rect.y, rect.w, rect.h),
             &geom,
-            yaw,
-            pitch,
+            orient,
             dist,
         );
     })
@@ -379,7 +377,7 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
         use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
         let r = (rect.x, rect.y, rect.w, rect.h);
         for lab in &labels {
-            let Some((sx, sy)) = crate::sphere_gpu::project_label(lab.world, r, yaw, pitch, dist)
+            let Some((sx, sy)) = crate::sphere_gpu::project_label(lab.world, r, orient, dist)
             else {
                 continue;
             };
@@ -414,9 +412,10 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
             }
         }
     })
-    // Agarre tipo "globo": la esfera sigue al cursor (horizontal invertido).
+    // Arcball: el delta crudo de arrastre va a SphereRotate (la rotación
+    // gimbal-free se arma en update).
     .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
-        DragPhase::Move => Some(Msg::SphereRotate(-dx * 0.3, dy * 0.3)),
+        DragPhase::Move => Some(Msg::SphereRotate(dx, dy)),
         DragPhase::End => None,
     });
     canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
@@ -478,10 +477,10 @@ fn sphere25_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32
         palette: graphics_palette(model),
         ..SphereOpts::default()
     };
-    let view = SphereView {
-        yaw_deg: model.sphere_yaw,
-        pitch_deg: model.sphere_pitch,
-    };
+    // La 2.5D vello se parametriza con (yaw, pitch); los derivamos de la
+    // orientación arcball para que ambas vistas sigan la misma rotación.
+    let (yaw_deg, pitch_deg) = crate::model::orient_to_yaw_pitch(model.sphere_orient);
+    let view = SphereView { yaw_deg, pitch_deg };
     let cmds = compose_sphere(render, &view, &opts);
     let t = ViewTransform {
         zoom: model.wheel_zoom,
@@ -489,7 +488,7 @@ fn sphere25_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32
     };
     let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(cmds, size, Some(graphics_bg(model)), t)
         .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
-            DragPhase::Move => Some(Msg::SphereRotate(-dx * 0.3, dy * 0.3)),
+            DragPhase::Move => Some(Msg::SphereRotate(dx, dy)),
             DragPhase::End => None,
         });
     canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
