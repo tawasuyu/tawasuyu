@@ -1031,10 +1031,64 @@ fn nombre_doc_activo(model: &Model) -> String {
 
 /// Vuelca el estado de edición vivo (colecciones planas) al documento activo
 /// del proyecto activo — la *working copy* del proyecto.
+/// Vuelca los edits VIVOS del editor (buffer ropey) a las colecciones
+/// `cuerpos`/`atoms` en memoria — el mismo diff que `guardar_activo`, sin tocar
+/// el sled. Sin esto, el último tipeo no entraría al snapshot del push.
+fn flush_editor_a_colecciones(model: &mut Model) {
+    let Some(activo_id) = model.activo else {
+        return;
+    };
+    let idx: HashMap<Uuid, &NarrativeAtom> = model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+    let cambios = model.ide.diff(&idx);
+    drop(idx);
+    if cambios.is_empty() {
+        return;
+    }
+    let branch_id = model
+        .cuerpos
+        .iter()
+        .find(|c| c.id == activo_id)
+        .map(|c| c.branch_id.clone())
+        .unwrap_or_else(|| "es".to_string());
+    let mut creados: Vec<Uuid> = Vec::new();
+    for c in &cambios {
+        match c {
+            CambioAtom::Mutar { id, texto_nuevo } => {
+                if let Some(a) = model.atoms.get_mut(id) {
+                    a.set_content(texto_nuevo.as_str());
+                }
+            }
+            CambioAtom::Crear { texto, posicion: _ } => {
+                let atom = NarrativeAtom::new(texto.as_str(), &branch_id);
+                let id = atom.id;
+                model.atoms.insert(id, atom);
+                creados.push(id);
+            }
+            CambioAtom::Eliminar { id } => {
+                model.atoms.remove(id);
+            }
+        }
+    }
+    model.ide.aplicar_cambios(&cambios, &creados);
+    let nuevo_orden: Vec<Uuid> = model.ide.editor_cuerpo.atom_ids.clone();
+    if let Some(c) = model.cuerpos.iter_mut().find(|c| c.id == activo_id) {
+        let ahora = c.metadatos.modificado_en.saturating_add(1);
+        let viejo: Vec<Uuid> = c.orden.clone();
+        for id in &viejo {
+            let _ = c.remover(*id, ahora);
+        }
+        for id in &nuevo_orden {
+            c.agregar(*id, ahora);
+        }
+    }
+}
+
 fn sincronizar_doc_activo(model: &mut Model) {
     if model.proyectos.is_empty() {
         return;
     }
+    // Captura el tipeo vivo antes de snapshotear.
+    flush_editor_a_colecciones(model);
     let nombre = nombre_doc_activo(model);
     let doc = DocEstado::desde_colecciones(
         nombre,

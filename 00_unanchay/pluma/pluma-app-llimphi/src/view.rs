@@ -1026,8 +1026,26 @@ fn ramas_acciones(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
 /// columna por orden topológico (más reciente arriba), aristas a cada padre
 /// (los merges tienen 2), y etiquetas clickeables (hash corto + mensaje). El
 /// nodo HEAD va en acento. Clic = previsualizar (`Msg::VerCommit`).
+/// Color de un carril de rama: acento para el 0 (principal), paleta cíclica
+/// para el resto.
+fn color_de_carril(i: usize, theme: &Theme) -> Color {
+    const PALETA: [(u8, u8, u8); 5] = [
+        (94, 184, 124),
+        (120, 150, 220),
+        (225, 84, 75),
+        (170, 130, 220),
+        (238, 178, 53),
+    ];
+    if i == 0 {
+        theme.accent
+    } else {
+        let (r, g, b) = PALETA[(i - 1) % PALETA.len()];
+        Color::from_rgba8(r, g, b, 255)
+    }
+}
+
 fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
-    use std::collections::HashMap as Map;
+    use std::collections::{BTreeSet, HashMap as Map};
     let pa = &model.proyectos[idx];
     let mut commits = pa.proyecto.historia(); // (Hash, Commit), padres primero
     commits.reverse(); // más reciente arriba
@@ -1035,16 +1053,54 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
         return pista_texto("sin versiones — hacé un push (Ctrl+K) para sellar la primera", theme);
     }
     const ROW: f32 = 44.0;
+    const LANE_W: f32 = 15.0;
     let head = pa.proyecto.head_commit();
     let total_h = commits.len() as f32 * ROW + 8.0;
 
     let pos: Map<pluma_proyecto::Hash, usize> =
         commits.iter().enumerate().map(|(i, (h, _))| (*h, i)).collect();
 
-    // Capa de pintado: aristas + círculos.
+    // Carriles por rama: cada rama es una columna. El carril de un commit es la
+    // rama de menor índice que lo alcanza (así `principal` queda en el carril 0
+    // y los commits exclusivos de una rama se desvían a su columna).
+    let ramas = pa.proyecto.ramas(); // (nombre, tip), ordenado por nombre
+    let alcanzables: Vec<BTreeSet<pluma_proyecto::Hash>> = ramas
+        .iter()
+        .map(|(_, tip)| {
+            let mut set = BTreeSet::new();
+            let mut pila = vec![*tip];
+            while let Some(x) = pila.pop() {
+                if !set.insert(x) {
+                    continue;
+                }
+                if let Ok(c) = pa.proyecto.commit(&x) {
+                    pila.extend(c.padres.iter().copied());
+                }
+            }
+            set
+        })
+        .collect();
+    let n_lanes = ramas.len().max(1);
+    let lane_de = |h: &pluma_proyecto::Hash| -> usize {
+        alcanzables
+            .iter()
+            .position(|s| s.contains(h))
+            .unwrap_or(0)
+    };
+    let lanes: Vec<usize> = commits.iter().map(|(h, _)| lane_de(h)).collect();
+    let gutter = 12.0 + n_lanes as f32 * LANE_W; // ancho de la zona de carriles
+    let label_left = gutter + 8.0;
+
+    // Colores por carril (acento para el 0; el resto, paleta cíclica).
+    let lane_cols: Vec<llimphi_ui::llimphi_raster::peniko::Color> = (0..n_lanes)
+        .map(|i| color_de_carril(i, theme))
+        .collect();
+
+    // Capa de pintado: aristas + círculos por carril.
     let commits_paint = commits.clone();
     let pos_paint = pos.clone();
-    let accent = theme.accent;
+    let lanes_paint = lanes.clone();
+    let lane_cols_paint = lane_cols.clone();
     let muted = theme.fg_muted;
     let canvas = View::new(Style {
         position: Position::Absolute,
@@ -1060,32 +1116,82 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
     .paint_with(move |scene, _ts, rect| {
         use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Stroke};
         use llimphi_ui::llimphi_raster::peniko::Fill;
-        let x = rect.x as f64 + 14.0;
         let row = ROW as f64;
+        let lane_x = |lane: usize| rect.x as f64 + 12.0 + lane as f64 * LANE_W as f64;
+        // Aristas commit → padres (cruzan carriles en los merges/ramas).
         for (i, (_h, c)) in commits_paint.iter().enumerate() {
+            let cx = lane_x(lanes_paint[i]);
             let cy = rect.y as f64 + i as f64 * row + row / 2.0;
             for p in &c.padres {
                 if let Some(pj) = pos_paint.get(p) {
+                    let px = lane_x(lanes_paint[*pj]);
                     let py = rect.y as f64 + *pj as f64 * row + row / 2.0;
                     let mut path = BezPath::new();
-                    path.move_to((x, cy));
-                    let mid = (cy + py) / 2.0;
-                    path.curve_to((x + 16.0, mid), (x + 16.0, mid), (x, py));
+                    path.move_to((cx, cy));
+                    let my = (cy + py) / 2.0;
+                    path.curve_to((cx, my), (px, my), (px, py));
                     scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, muted, None, &path);
                 }
             }
         }
+        // Nodos.
         for (i, (h, _)) in commits_paint.iter().enumerate() {
+            let cx = lane_x(lanes_paint[i]);
             let cy = rect.y as f64 + i as f64 * row + row / 2.0;
             let es_head = head == Some(*h);
-            let col = if es_head { accent } else { muted };
+            let col = lane_cols_paint
+                .get(lanes_paint[i])
+                .copied()
+                .unwrap_or(muted);
             let r = if es_head { 6.0 } else { 4.5 };
-            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &Circle::new((x, cy), r));
+            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &Circle::new((cx, cy), r));
+            if es_head {
+                // anillo de HEAD
+                scene.stroke(
+                    &Stroke::new(1.6),
+                    Affine::IDENTITY,
+                    col,
+                    None,
+                    &Circle::new((cx, cy), r + 2.5),
+                );
+            }
         }
     });
 
-    // Capa de etiquetas clickeables.
+    // Leyenda de ramas (qué color es cada rama).
     let mut hijos: Vec<View<Msg>> = vec![canvas];
+
+    // Leyenda de ramas (fila aparte, fuera del lienzo absoluto).
+    let mut leyenda: Vec<View<Msg>> = Vec::new();
+    for (i, (nombre, _)) in ramas.iter().enumerate() {
+        leyenda.push(
+            View::new(Style {
+                size: Size { width: auto(), height: length(16.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(
+                format!("▮ {}", recortar(nombre, 10)),
+                10.0,
+                lane_cols.get(i).copied().unwrap_or(theme.fg_muted),
+                Alignment::Start,
+            ),
+        );
+    }
+    let leyenda_row = if leyenda.is_empty() {
+        None
+    } else {
+        Some(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+                gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+                ..Default::default()
+            })
+            .children(leyenda),
+        )
+    };
+
+    // Capa de etiquetas clickeables (desplazadas tras la zona de carriles).
     for (i, (h, c)) in commits.iter().enumerate() {
         let y = i as f32 * ROW;
         let sel = model.commit_preview == Some(*h);
@@ -1094,7 +1200,7 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
             "{}{}  {}",
             if head_aqui { "● " } else { "" },
             hash_corto(h),
-            recortar(&c.mensaje, 30)
+            recortar(&c.mensaje, 26)
         );
         let color = if sel {
             theme.accent
@@ -1108,7 +1214,7 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
             View::new(Style {
                 position: Position::Absolute,
                 inset: Rect {
-                    left: length(30.0_f32),
+                    left: length(label_left),
                     top: length(y),
                     right: length(4.0_f32),
                     bottom: auto(),
@@ -1124,12 +1230,18 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
     }
 
     // Acciones de previsualización (cuando hay un commit seleccionado).
-    let mut capas: Vec<View<Msg>> = vec![View::new(Style {
-        position: Position::Relative,
-        size: Size { width: percent(1.0_f32), height: length(total_h) },
-        ..Default::default()
-    })
-    .children(hijos)];
+    let mut capas: Vec<View<Msg>> = Vec::new();
+    if let Some(ly) = leyenda_row {
+        capas.push(ly);
+    }
+    capas.push(
+        View::new(Style {
+            position: Position::Relative,
+            size: Size { width: percent(1.0_f32), height: length(total_h) },
+            ..Default::default()
+        })
+        .children(hijos),
+    );
     if let Some(h) = model.commit_preview {
         let palette_btn = ButtonPalette::from_theme(theme);
         capas.push(fila_botones(vec![
