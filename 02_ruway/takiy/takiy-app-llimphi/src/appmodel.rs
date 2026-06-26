@@ -2,6 +2,7 @@
 //! de runtime del binario (player, sf2, drag, view rect cacheado…).
 
 use llimphi_theme::Theme;
+use llimphi_widget_toast::Toast;
 use takiy_app::EditorState;
 use takiy_playback::Player;
 use takiy_synth::MultiProgramRenderer;
@@ -127,4 +128,9 @@ pub(crate) struct Model {
     /// al pasar una pista a onda — no en cada frame (el render de audio
     /// es caro). Ver `crate::overview::compute_onda_peaks`.
     pub(crate) onda_peaks: std::collections::HashMap<usize, Vec<f32>>,
+    /// Toasts efímeros vivos (confirmaciones de export/guardado, errores).
+    /// La `view_overlay` filtra los expirados; `Msg::ToastExpire` los retira.
+    pub(crate) toasts: Vec<Toast>,
+    /// Id incremental para correlacionar un toast con su `Msg::ToastExpire`.
+    pub(crate) next_toast: u64,
 }

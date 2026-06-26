@@ -315,6 +315,8 @@ fn model_demo(theme: Theme) -> Model {
         proy_dir: std::env::temp_dir().join("takiy-proyectos"),
         ver_versiones: true,
         ver_pistas: true,
+        toasts: Vec::new(),
+        next_toast: 0,
     }
 }
 

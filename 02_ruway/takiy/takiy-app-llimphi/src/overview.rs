@@ -13,16 +13,17 @@
 //! pista —el piano roll de siempre— vía `Msg::OpenTrack`. El header de
 //! cada carril trae además M/S y el conmutador midi↔onda.
 
-use llimphi_theme::Theme;
+use llimphi_theme::{motion, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
-    AlignItems, Rect,
+    AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::{PaintRect, View};
+use llimphi_icons::Icon;
 use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 
 use takiy_core::{Score, TrackView};
 use takiy_app::EditMsg;
@@ -133,18 +134,29 @@ pub(crate) fn body(model: &Model, theme: &Theme) -> View<Msg> {
             model.onda_peaks.get(&i).cloned(),
             theme,
         );
-        lanes.push(lane_row(header, strip, is_active, theme));
+        // Pop-in: una pista recién agregada entra con fade en vez de
+        // saltar. Key estable por índice → sólo anima la primera vez.
+        lanes.push(lane_row(header, strip, is_active, theme).animated_enter(0xA10_0000 + i as u64, motion::NORMAL));
     }
 
     if lanes.is_empty() {
-        lanes.push(
-            row_box(LANE_MIN_H, theme.bg_panel).text_aligned(
-                "proyecto sin pistas — usá «+ pista» en la barra".to_string(),
-                13.0,
-                theme.fg_muted,
-                Alignment::Center,
-            ),
-        );
+        // Empty-state: proyecto sin pistas todavía. Tarjeta centrada con
+        // orientación, en vez de un renglón de texto suelto.
+        let card = View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: percent(1.0_f32), height: percent(0.0_f32) },
+            min_size: Size { width: length(0.0_f32), height: length(LANE_MIN_H) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .children(vec![empty_view::<Msg>(
+            Icon::Music,
+            "Proyecto sin pistas",
+            Some("Agregá la primera con «+ pista nueva» abajo."),
+            &EmptyPalette::from_theme(theme),
+        )]);
+        lanes.push(card);
     }
 
     // Una pista más abajo: botón para agregar pista al proyecto.
@@ -458,17 +470,6 @@ fn grow_box(h: f32) -> View<Msg> {
         size: Size { width: percent(0.0_f32), height: length(h) },
         ..Default::default()
     })
-}
-
-/// Caja full-width de alto fijo con fondo.
-fn row_box(h: f32, fill: Color) -> View<Msg> {
-    View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(h) },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .fill(fill)
 }
 
 /// Fila horizontal de hijos, alto fijo, con gap.

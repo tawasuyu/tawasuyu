@@ -4,6 +4,7 @@
 
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_ui::{DragPhase, Handle};
+use llimphi_widget_toast::Toast;
 use llimphi_widget_menubar::{menubar_command_at, menubar_nav, DEFAULT_HEIGHT as MENU_H};
 use takiy_app::{
     cell_at, default_save_path_for_save, gm_program_name, grid_geometry, header_beat_at,
@@ -33,6 +34,20 @@ const AUDITION_THROTTLE: std::time::Duration = std::time::Duration::from_millis(
 /// el ataque + algo de sustain sin tapar la siguiente nota que el
 /// usuario quiera tocar.
 const AUDITION_BEATS: f32 = 0.5;
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Empuja un toast al stack y programa su expiración (`Msg::ToastExpire`).
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, make: impl FnOnce(u64) -> Toast) {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    model.toasts.push(make(id));
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
 
 pub(crate) fn build_editor(score: Score) -> EditorState {
     EditorState::with_score(score)
@@ -169,6 +184,13 @@ pub(crate) fn refresh_onda_peaks(model: &mut Model) {
         let peaks = crate::overview::compute_onda_peaks(&model.editor.score, i);
         model.onda_peaks.insert(i, peaks);
     }
+}
+
+/// Nombre de archivo (sin directorio) para el texto compacto de un toast.
+fn file_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Segundos Unix actuales (para los timestamps de los commits).
@@ -433,10 +455,17 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 Ok(()) => {
                     eprintln!("takiy · midi → {}", path.display());
                     model.status = format!("midi → {}", path.display());
+                    let nombre = file_label(&path);
+                    push_toast(&mut model, handle, |id| {
+                        Toast::success(id, format!("MIDI exportado · {nombre}"), TOAST_TTL)
+                    });
                 }
                 Err(e) => {
                     eprintln!("takiy · midi error en {}: {e}", path.display());
                     model.status = format!("midi error: {e}");
+                    push_toast(&mut model, handle, |id| {
+                        Toast::error(id, format!("No se pudo exportar MIDI: {e}"), TOAST_TTL)
+                    });
                 }
             }
         }
@@ -468,10 +497,17 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                         secs,
                     );
                     model.status = format!("wav → {} · {secs:.1}s", path.display());
+                    let nombre = file_label(&path);
+                    push_toast(&mut model, handle, |id| {
+                        Toast::success(id, format!("WAV exportado · {nombre} ({secs:.1}s)"), TOAST_TTL)
+                    });
                 }
                 Err(e) => {
                     eprintln!("takiy · wav error en {}: {e}", path.display());
                     model.status = format!("wav error: {e}");
+                    push_toast(&mut model, handle, |id| {
+                        Toast::error(id, format!("No se pudo exportar WAV: {e}"), TOAST_TTL)
+                    });
                 }
             }
         }
@@ -805,10 +841,17 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 Ok(()) => {
                     eprintln!("takiy · saved → {}", path.display());
                     model.status = format!("saved → {}", path.display());
+                    let nombre = file_label(&path);
+                    push_toast(&mut model, handle, |id| {
+                        Toast::success(id, format!("Guardado · {nombre}"), TOAST_TTL)
+                    });
                 }
                 Err(e) => {
                     eprintln!("takiy · save error en {}: {e}", path.display());
                     model.status = format!("save error: {e}");
+                    push_toast(&mut model, handle, |id| {
+                        Toast::error(id, format!("No se pudo guardar: {e}"), TOAST_TTL)
+                    });
                 }
             }
         }
@@ -1037,6 +1080,9 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 guardar_proyecto_activo(&mut model);
                 model.status = "versión restaurada".into();
             }
+        }
+        Msg::ToastExpire(id) => {
+            model.toasts.retain(|t| t.id != id);
         }
         Msg::ToggleVersiones => model.ver_versiones = !model.ver_versiones,
         Msg::TogglePistas => model.ver_pistas = !model.ver_pistas,

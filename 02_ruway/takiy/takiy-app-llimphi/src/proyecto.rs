@@ -4,7 +4,7 @@
 //! `takiy-proyecto`) y la **lista de pistas** con checks de ver-en-lienzo
 //! / silenciar / abrir.
 
-use llimphi_theme::Theme;
+use llimphi_theme::{motion, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, Rect,
@@ -48,7 +48,12 @@ pub(crate) fn rail(model: &Model, theme: &Theme) -> View<Msg> {
             .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| format!("{}", i + 1));
-        kids.push(rail_cell(button_view(label, &pal, Msg::ProyectoSwitch(i))));
+        // Pop-in: un proyecto recién abierto entra con fade. Key estable
+        // por índice → sólo anima al aparecer.
+        kids.push(
+            rail_cell(button_view(label, &pal, Msg::ProyectoSwitch(i)))
+                .animated_enter(0xB20_0000 + i as u64, motion::NORMAL),
+        );
     }
     let mut abrir_pal = ButtonPalette::from_theme(theme);
     abrir_pal.fg = theme.fg_muted;
@@ -105,7 +110,11 @@ pub(crate) fn panel(model: &Model, theme: &Theme) -> View<Msg> {
     if model.ver_pistas {
         kids.push(legend("ver · mute · nombre = abrir", theme));
         for (i, track) in model.editor.score.tracks().iter().enumerate() {
-            kids.push(track_row(i, track, i == model.editor.active_track, theme));
+            // Pop-in: una pista nueva entra con fade en la lista del sidebar.
+            kids.push(
+                track_row(i, track, i == model.editor.active_track, theme)
+                    .animated_enter(0xC30_0000 + i as u64, motion::NORMAL),
+            );
         }
         kids.push(full_button("+ pista nueva", theme, Msg::Edit(EditMsg::NewTrack)));
     }

@@ -183,6 +183,8 @@ pub(crate) enum Msg {
     ToggleVersiones,
     /// Despliega/colapsa la sección «Pistas» del sidebar.
     TogglePistas,
+    /// Un toast cumplió su tiempo de vida: se retira del stack.
+    ToastExpire(u64),
     Quit,
 }
 

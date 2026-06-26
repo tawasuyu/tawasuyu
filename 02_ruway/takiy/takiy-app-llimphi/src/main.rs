@@ -63,6 +63,9 @@ use llimphi_widget_menubar::{
     menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_motion::Tween;
+use llimphi_theme::motion;
+use llimphi_ui::llimphi_raster::kurbo::Affine;
+use llimphi_widget_toast::toast_stack_view;
 use takiy_app::{describe_key, load_score_or_demo, pitch_range_with_offset, EditMsg};
 use takiy_playback::Player;
 
@@ -164,6 +167,8 @@ impl App for Takiy {
             proy_dir,
             ver_versiones: true,
             ver_pistas: true,
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -362,6 +367,7 @@ impl App for Takiy {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = model.theme;
+        let sk = scene_key(model);
         let score = model.editor.score.clone();
         let source = model.source.clone();
         let engine = model.engine.clone();
@@ -400,7 +406,7 @@ impl App for Takiy {
         // Panorama de pistas (tipo Audacity): la pantalla con la que se
         // abre el proyecto. El piano roll queda detrás de un click.
         if matches!(model.screen, Screen::Overview) {
-            let body = overview::body(model, &theme);
+            let body = scene_body(overview::body(model, &theme), sk);
             return View::new(Style {
                 flex_direction: FlexDirection::Column,
                 size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -413,7 +419,7 @@ impl App for Takiy {
         // Modo grabación: teclado-piano que graba MIDI (tiene prioridad
         // sobre el editor de la pista).
         if model.recording.is_some() {
-            let body = record::body(model, &theme);
+            let body = scene_body(record::body(model, &theme), sk);
             return View::new(Style {
                 flex_direction: FlexDirection::Column,
                 size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -432,7 +438,7 @@ impl App for Takiy {
             .map(|t| matches!(t.view, takiy_core::TrackView::Onda))
             .unwrap_or(false);
         if active_is_onda {
-            let body = waveedit::body(model, &theme);
+            let body = scene_body(waveedit::body(model, &theme), sk);
             return View::new(Style {
                 flex_direction: FlexDirection::Column,
                 size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -534,22 +540,73 @@ impl App for Takiy {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![menubar, toolbar, body])
+        .children(vec![menubar, toolbar, scene_body(body, sk)])
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
-        // Prioridad: menú contextual de la nota seleccionada.
-        if let Some((x, y)) = model.context_menu {
-            return Some(context_menu_for_selection(model, x, y));
+        // Capa de menús: prioridad al contextual de la nota seleccionada;
+        // si no, el dropdown del menú principal.
+        let menu_layer = if let Some((x, y)) = model.context_menu {
+            Some(context_menu_for_selection(model, x, y))
+        } else {
+            let menu = app_menu();
+            menubar_overlay_animated(
+                &menubar_spec(&menu, model),
+                model.menu_active,
+                model.menu_anim.value(),
+            )
+        };
+
+        // Capa de toasts (export/guardado/errores): vive sobre cualquier
+        // pantalla, filtrando los expirados.
+        let now = std::time::Instant::now();
+        let alive: Vec<_> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        let toast_layer = (!alive.is_empty())
+            .then(|| toast_stack_view(&alive, viewport_of(model), Msg::ToastExpire));
+
+        match (menu_layer, toast_layer) {
+            (None, None) => None,
+            (Some(m), None) => Some(m),
+            (None, Some(t)) => Some(t),
+            (Some(m), Some(t)) => Some(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![m, t]),
+            ),
         }
-        // Si no, el dropdown del menú principal.
-        let menu = app_menu();
-        menubar_overlay_animated(
-            &menubar_spec(&menu, model),
-            model.menu_active,
-            model.menu_anim.value(),
-        )
     }
+}
+
+/// `key` estable de la escena actual: grabación / panorama / editor de
+/// onda / piano roll, por proyecto. Cambia sólo al pasar de una escena a
+/// otra (incluido cambiar de proyecto) → dispara la transición de entrada
+/// del cuerpo. Deliberadamente NO incluye la pista activa: ciclar pistas
+/// con Tab dentro del piano roll no es un cambio de escena (sería un
+/// slide en cada Tab), pero pasar de una pista midi a una onda sí lo es
+/// porque cambia el editor —y eso ya lo capta el discriminante.
+fn scene_key(model: &Model) -> u64 {
+    let disc: u64 = if model.recording.is_some() {
+        0
+    } else if matches!(model.screen, Screen::Overview) {
+        1
+    } else {
+        let onda = model
+            .editor
+            .score
+            .track(model.editor.active_track)
+            .map(|t| matches!(t.view, takiy_core::TrackView::Onda))
+            .unwrap_or(false);
+        if onda { 2 } else { 3 }
+    };
+    disc * 1_000_000 + model.proy_activo as u64
+}
+
+/// Envuelve el cuerpo de una pantalla con la transición de entrada de
+/// escena (fade + leve slide-up) anclada a `scene_key`.
+fn scene_body(body: View<Msg>, key: u64) -> View<Msg> {
+    body.animated_enter_from(key, motion::SLOW, Affine::translate((0.0, 24.0)))
 }
 
 /// Viewport para clampear overlays: reconstruye el tamaño de ventana a
