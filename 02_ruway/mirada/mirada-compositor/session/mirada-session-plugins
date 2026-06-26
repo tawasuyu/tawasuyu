@@ -1,0 +1,48 @@
+#!/bin/sh
+# mirada-session-plugins — sesión «mirada · plugins»: el Cerebro es el host de
+# plugins WASM (`mirada-plugin-host`) en vez de `mirada-app-llimphi`.
+#
+# A diferencia de «mirada» y «mirada · pata» —donde el Cerebro va EMBEBIDO en el
+# compositor y el marco (pata) corre como un cliente más—, aquí el compositor
+# arranca en modo ENLAZADO (`MIRADA_SOCKET` puesto): escucha en el socket y el
+# host se conecta como Cerebro externo. El host embebe el mismo `Desktop`
+# autoritativo, así que un escritorio SIN plugins se comporta como mirada normal;
+# con plugins en `~/.config/mirada/plugins`, los aumenta (layout/reactores).
+#
+# Para gestores de login EXTERNOS (greetd, ly, sddm) o arranque manual desde una
+# TTY. Instálalo en /usr/local/bin junto a `mirada-compositor` y
+# `mirada-plugin-host`.
+set -eu
+
+# Como en mirada-session(-pata): sin XDG_RUNTIME_DIR (PAM sin pam_systemd) el
+# socket de mirada-ctl cae a otra ruta y el switcher de la barra queda mudo.
+[ -z "${XDG_RUNTIME_DIR:-}" ] && export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=mirada
+export XDG_SESSION_DESKTOP=mirada
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export SDL_VIDEODRIVER=wayland
+
+# El Cuerpo escucha aquí (modo enlazado) y el host se conecta como Cerebro.
+# Distinto del socket de control (`mirada-ctl.sock`). Lo limpiamos por si quedó
+# de una sesión anterior (un socket Unix no se borra solo al morir el proceso).
+export MIRADA_SOCKET="${XDG_RUNTIME_DIR}/mirada-brain.sock"
+rm -f "$MIRADA_SOCKET"
+
+# Volcá el perfil ACTIVO a la config viva (best-effort), igual que las otras.
+command -v wawa-panel >/dev/null 2>&1 && wawa-panel --apply-active || true
+
+# El Cerebro de plugins: espera a que el Cuerpo bindee el socket (lo crea al
+# llegar a su `listen`) y arranca. Su vida va atada a esta sesión: si el
+# compositor termina, el `trap` lo baja. No usamos `mirada-supervise` aquí —el
+# re-bind del socket tras un reinicio chocaría con el archivo viejo—; si el
+# compositor cae, la sesión termina y volvés al DM, como una sesión sin supervisar.
+( while [ ! -S "$MIRADA_SOCKET" ]; do sleep 0.1; done; exec mirada-plugin-host ) &
+BRAIN=$!
+trap 'kill "$BRAIN" 2>/dev/null || true' EXIT INT TERM
+
+# El backend DRM toma la TTY entera. Los programas de arranque van en
+# ~/.config/mirada/autostart (uno por línea). En primer plano (sin `exec`) para
+# que el `trap` baje al Cerebro cuando el compositor termine.
+mirada-compositor --drm

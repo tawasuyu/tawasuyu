@@ -220,6 +220,18 @@ Requiere `rustup target add wasm32-unknown-unknown`.
 
 ## Correr el host
 
+### Como sesión de escritorio — «mirada · plugins»
+
+La forma normal: elegila en el login. `install-mirada-dm.sh` instala el binario,
+el script `mirada-session-plugins` y `mirada-plugins.desktop`; aparece como
+**«mirada · plugins»** en el greeter de mirada (`sudo mirada-dm`) y en cualquier
+DM externo (greetd/ly/sddm). Esa sesión arranca el compositor en **modo enlazado**
+(`MIRADA_SOCKET` puesto) y conecta el host como Cerebro. Sin plugins en
+`~/.config/mirada/plugins` se comporta como mirada normal; con plugins, los
+aumenta.
+
+### A mano (dev / headless)
+
 ```bash
 # El Cuerpo arranca con MIRADA_SOCKET puesto; el host se conecta como cerebro.
 MIRADA_SOCKET=$XDG_RUNTIME_DIR/mirada.sock cargo run -p mirada-plugin-host

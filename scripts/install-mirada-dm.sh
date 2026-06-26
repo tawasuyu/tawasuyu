@@ -10,9 +10,10 @@
 #   /usr/local/bin/{mirada-compositor,mirada-greeter,pata-llimphi}
 #   /usr/local/bin/{shuma-shell-llimphi,mirada-launcher}
 #   /usr/local/bin/{pata-notify,pata-notify-panel,pata-notify-triage}
-#   /usr/local/bin/{mirada-session,mirada-session-pata,mirada-dm}
+#   /usr/local/bin/{mirada-session,mirada-session-pata,mirada-session-plugins,mirada-dm}
+#   /usr/local/bin/{mirada-plugin-host,mirada-plugin-sign}
 #   /etc/pam.d/mirada                              (login del greeter)
-#   /usr/share/wayland-sessions/{mirada,mirada-pata}.desktop
+#   /usr/share/wayland-sessions/{mirada,mirada-pata,mirada-plugins}.desktop
 #   ~/.config/mirada/autostart                     (siembra el daemon pata-notify)
 #
 # Para desinstalar: borrá esos archivos.
@@ -33,7 +34,8 @@ cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \
     -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi \
     -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi \
-    -p pata-notify -p pata-notify-panel -p pata-notify-triage
+    -p pata-notify -p pata-notify-panel -p pata-notify-triage \
+    -p mirada-plugin-host
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -75,6 +77,12 @@ sudo install -Dm755 "$BIN/wawa-panel"              /usr/local/bin/wawa-panel
 sudo install -Dm755 "$BIN/pata-notify"             /usr/local/bin/pata-notify
 sudo install -Dm755 "$BIN/pata-notify-panel"       /usr/local/bin/pata-notify-panel
 sudo install -Dm755 "$BIN/pata-notify-triage"      /usr/local/bin/pata-notify-triage
+# El Cerebro de plugins WASM: un compositor con la lógica de escritorio hecha de
+# módulos sandboxeados (layout/reactores) en ~/.config/mirada/plugins. Habilita
+# la sesión «mirada · plugins». `mirada-plugin-sign` genera claves y firma los
+# plugins que piden capacidades peligrosas (ver mirada-plugin-host/README.md).
+sudo install -Dm755 "$BIN/mirada-plugin-host"      /usr/local/bin/mirada-plugin-host
+sudo install -Dm755 "$BIN/mirada-plugin-sign"      /usr/local/bin/mirada-plugin-sign
 
 # Apps de la suite: los binarios que LANZAN los lanzadores de la barra (botón
 # Inicio, dock de mac, front panel de CDE, menú de apps). Sin esto, click en un
@@ -95,9 +103,10 @@ do
 done
 
 # Scripts de sesión + lanzador del DM.
-sudo install -Dm755 "$MC/session/mirada-session"      /usr/local/bin/mirada-session
-sudo install -Dm755 "$MC/session/mirada-session-pata" /usr/local/bin/mirada-session-pata
-sudo install -Dm755 "$REPO/scripts/mirada-dm"         /usr/local/bin/mirada-dm
+sudo install -Dm755 "$MC/session/mirada-session"         /usr/local/bin/mirada-session
+sudo install -Dm755 "$MC/session/mirada-session-pata"    /usr/local/bin/mirada-session-pata
+sudo install -Dm755 "$MC/session/mirada-session-plugins" /usr/local/bin/mirada-session-plugins
+sudo install -Dm755 "$REPO/scripts/mirada-dm"            /usr/local/bin/mirada-dm
 # Supervisor de fallback: reinicia el compositor con backoff y restaura la
 # sesión si cae (los scripts de arriba lo usan si está presente; el camino
 # canónico arje-zero da esta supervisión por el fractal). Registra cada caída
@@ -109,8 +118,9 @@ sudo install -Dm644 "$REPO/shared/auth/auth-core/data/mirada" /etc/pam.d/mirada
 
 # Sesiones para gestores de login EXTERNOS (el propio mirada las ofrece
 # por sus built-ins y las filtra de esta lista, así que no duplican).
-sudo install -Dm644 "$MC/session/mirada.desktop"      /usr/share/wayland-sessions/mirada.desktop
-sudo install -Dm644 "$MC/session/mirada-pata.desktop" /usr/share/wayland-sessions/mirada-pata.desktop
+sudo install -Dm644 "$MC/session/mirada.desktop"         /usr/share/wayland-sessions/mirada.desktop
+sudo install -Dm644 "$MC/session/mirada-pata.desktop"    /usr/share/wayland-sessions/mirada-pata.desktop
+sudo install -Dm644 "$MC/session/mirada-plugins.desktop" /usr/share/wayland-sessions/mirada-plugins.desktop
 
 # Las sesiones AJENAS (KDE, sway…) corren como tu usuario y necesitan tomar
 # el asiento por su cuenta: te metemos en seat/video/input. Las nativas
@@ -138,7 +148,11 @@ cat <<'FIN'
   Como DM (igual que lo arrancaría un init), desde una TTY física:
       sudo mirada-dm
     · login por PAM (usuario del sistema)
-    · elegí escritorio con  ‹  ›  (mirada · pata, mirada, o cualquiera instalado)
+    · elegí escritorio con  ‹  ›  (mirada · pata, mirada, mirada · plugins, o cualquiera instalado)
+    · «mirada · plugins»: el Cerebro es el host de plugins WASM. Sin plugins en
+      ~/.config/mirada/plugins se comporta como mirada normal; para sembrar los
+      de ejemplo corré  ./scripts/build-mirada-plugins.sh  y copiá los assets
+      (ver 02_ruway/mirada/mirada-plugin-host/README.md).
     · salir:  Ctrl+Alt+Backspace      cambiar de consola:  Ctrl+Alt+F1…F12
 
   Para probar sin configurar PAM:

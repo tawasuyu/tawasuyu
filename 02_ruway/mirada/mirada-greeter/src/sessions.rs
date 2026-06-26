@@ -98,15 +98,31 @@ pub fn discover() -> Vec<Session> {
             kind: Kind::Wayland,
             foreign: false,
         },
+        Session {
+            // El Cerebro es el host de plugins WASM (`mirada-plugin-host`): el
+            // compositor arranca ENLAZADO y el host se conecta como Cerebro
+            // externo. `foreign` porque el handoff lo lanza por `exec`
+            // (`mirada-session-plugins` relanza un compositor en modo enlazado),
+            // no como cliente del compositor del greeter — que ya eligió su
+            // Cerebro embebido al arrancar.
+            name: "mirada · plugins".to_string(),
+            exec: "mirada-session-plugins".to_string(),
+            kind: Kind::Wayland,
+            foreign: true,
+        },
     ];
+    // Las sesiones de disco van aparte para no filtrar los built-ins de mirada
+    // (que también arrancan por `mirada-session*`).
+    let mut disk = Vec::new();
     for root in xdg_data_roots() {
-        collect_dir(&Path::new(&root).join("wayland-sessions"), Kind::Wayland, &mut out);
-        collect_dir(&Path::new(&root).join("xsessions"), Kind::X11, &mut out);
+        collect_dir(&Path::new(&root).join("wayland-sessions"), Kind::Wayland, &mut disk);
+        collect_dir(&Path::new(&root).join("xsessions"), Kind::X11, &mut disk);
     }
-    // Las sesiones del propio mirada (mirada.desktop, mirada-pata.desktop)
-    // existen para DMs externos; aquí ya están cubiertas por los built-ins,
-    // así que las filtramos para no duplicar.
-    out.retain(|s| !is_mirada_session(&s.exec));
+    // Las sesiones del propio mirada en disco (mirada{,-pata,-plugins}.desktop)
+    // existen para DMs externos; aquí ya están cubiertas por los built-ins, así
+    // que las filtramos para no duplicar.
+    disk.retain(|s| !is_mirada_session(&s.exec));
+    out.extend(disk);
     // Dedup global por (name, exec): la misma sesión puede repetirse en
     // varias raíces XDG y no quedar contigua. `dedup_by` no basta.
     let mut seen = std::collections::HashSet::new();
@@ -264,5 +280,18 @@ mod tests {
         let v = discover();
         assert_eq!(v[0].name, "mirada");
         assert!(v[0].exec.is_empty());
+    }
+
+    #[test]
+    fn discover_ofrece_la_sesion_de_plugins() {
+        // El Cerebro de plugins es un built-in `foreign` (lo lanza por exec:
+        // relanza un compositor enlazado). Debe aparecer una sola vez aunque
+        // el .desktop de disco también exista (dedup por la misma exec).
+        let v = discover();
+        let plugins: Vec<_> =
+            v.iter().filter(|s| s.exec == "mirada-session-plugins").collect();
+        assert_eq!(plugins.len(), 1, "una sola entrada de plugins: {v:?}");
+        assert_eq!(plugins[0].name, "mirada · plugins");
+        assert!(plugins[0].foreign, "se lanza por exec, no como cliente");
     }
 }

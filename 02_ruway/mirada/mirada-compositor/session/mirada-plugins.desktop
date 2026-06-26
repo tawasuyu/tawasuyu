@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=mirada · plugins
+Comment=Compositor Wayland teselante (mirada) con el Cerebro de plugins WASM
+Exec=mirada-session-plugins
+Type=Application
+DesktopNames=mirada
