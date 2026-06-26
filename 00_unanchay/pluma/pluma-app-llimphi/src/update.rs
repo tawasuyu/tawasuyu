@@ -640,6 +640,12 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::MergeRama(nombre) => {
             merge_rama_proyecto(&mut model, &nombre);
         }
+        Msg::CompactarProyecto => {
+            let idx = model.proyecto_activo;
+            let n = model.proyectos[idx].proyecto.compactar();
+            guardar_proyecto_activo(&mut model);
+            model.ultimo_status = format!("compactado: {n} objeto(s) liberado(s)");
+        }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
     // tamaño, panel…). Idempotente y barato.

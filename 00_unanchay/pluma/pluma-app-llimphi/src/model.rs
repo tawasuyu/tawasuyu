@@ -474,6 +474,8 @@ pub enum Msg {
     CambiarRama(String),
     /// Mergea la rama `String` en la rama actual.
     MergeRama(String),
+    /// Compacta (GC) el store del proyecto activo: descarta objetos inalcanzables.
+    CompactarProyecto,
 }
 
 pub struct Model {

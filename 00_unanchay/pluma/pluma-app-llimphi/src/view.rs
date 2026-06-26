@@ -1084,7 +1084,10 @@ fn ramas_acciones(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
     let palette_btn = ButtonPalette::from_theme(theme);
     let pa = &model.proyectos[idx];
     let actual = pa.proyecto.rama_actual().unwrap_or("");
-    let mut hijos: Vec<View<Msg>> = vec![button_view::<Msg>("+ rama", &palette_btn, Msg::NuevaRama)];
+    let mut hijos: Vec<View<Msg>> = vec![
+        button_view::<Msg>("+ rama", &palette_btn, Msg::NuevaRama),
+        button_view::<Msg>("compactar", &palette_btn, Msg::CompactarProyecto),
+    ];
     for (nombre, _) in pa.proyecto.ramas() {
         if nombre == actual {
             continue;

@@ -586,21 +586,24 @@ impl Proyecto {
             let o = arbol_ours.docs.get(&id).copied();
             let t = arbol_theirs.docs.get(&id).copied();
             let b = arbol_base.docs.get(&id).copied();
-            let elegido = match (o, t) {
-                (Some(o), Some(t)) if o == t => Some(o),
+            let (elegido, conf) = match (o, t) {
+                (Some(o), Some(t)) if o == t => (Some(o), false),
                 (Some(o), Some(t)) => {
                     if Some(o) == b {
-                        Some(t) // sólo cambió theirs
+                        (Some(t), false) // sólo cambió theirs
                     } else if Some(t) == b {
-                        Some(o) // sólo cambió ours
+                        (Some(o), false) // sólo cambió ours
                     } else {
-                        conflictos.push(id);
-                        Some(o) // ours en conflicto
+                        // Ambos cambiaron este documento → merge 3-way POR
+                        // PÁRRAFO (átomo): auto-merge de párrafos que sólo cambió
+                        // un lado; conflicto sólo donde ambos editaron el mismo.
+                        let (h, c) = self.merge_doc_atomos(b, o, t)?;
+                        (Some(h), c)
                     }
                 }
-                (Some(o), None) => Some(o),
-                (None, Some(t)) => Some(t),
-                (None, None) => None,
+                (Some(o), None) => (Some(o), false),
+                (None, Some(t)) => (Some(t), false),
+                (None, None) => (None, false),
             };
             if let Some(h) = elegido {
                 merged.docs.insert(id, h);
@@ -611,6 +614,9 @@ impl Proyecto {
                     .cloned()
                     .unwrap_or_default();
                 merged.nombres.insert(id, nombre);
+                if conf {
+                    conflictos.push(id);
+                }
             }
         }
 
@@ -646,6 +652,96 @@ impl Proyecto {
             }
         }
         None
+    }
+
+    /// Merge 3-way de un documento a nivel de **átomo** (párrafo). Parte de la
+    /// estructura de `ours` y, para cada átomo compartido por id: si sólo theirs
+    /// lo cambió respecto de la base, toma la versión de theirs (auto-merge); si
+    /// ambos lo cambiaron distinto, conserva ours y marca conflicto. Devuelve el
+    /// hash del `DocEstado` resultante y si hubo algún conflicto. Limitación v1:
+    /// los átomos nuevos sólo-de-theirs y los cambios de estructura (orden) no se
+    /// integran (gana la estructura de ours).
+    fn merge_doc_atomos(
+        &mut self,
+        base: Option<Hash>,
+        ours: Hash,
+        theirs: Hash,
+    ) -> Result<(Hash, bool), ProyectoError> {
+        let do_ours: DocEstado = self.get_obj(&ours)?;
+        let do_theirs: DocEstado = self.get_obj(&theirs)?;
+        let base_hashes: BTreeMap<Uuid, [u8; 32]> = match base {
+            Some(b) => {
+                let d: DocEstado = self.get_obj(&b)?;
+                d.atoms.iter().map(|a| (a.id, a.content_hash)).collect()
+            }
+            None => BTreeMap::new(),
+        };
+        let theirs_atoms: BTreeMap<Uuid, NarrativeAtom> =
+            do_theirs.atoms.iter().map(|a| (a.id, a.clone())).collect();
+
+        let mut merged = do_ours; // estructura/orden/cartas/estilos de ours
+        let mut conflicto = false;
+        for a in merged.atoms.iter_mut() {
+            let Some(ta) = theirs_atoms.get(&a.id) else {
+                continue; // átomo no presente en theirs → queda ours
+            };
+            if a.content_hash == ta.content_hash {
+                continue; // idénticos
+            }
+            let bh = base_hashes.get(&a.id);
+            let ours_cambio = bh != Some(&a.content_hash);
+            let theirs_cambio = bh != Some(&ta.content_hash);
+            if theirs_cambio && !ours_cambio {
+                *a = ta.clone(); // sólo theirs editó este párrafo → tomarlo
+            } else if ours_cambio && theirs_cambio {
+                conflicto = true; // ambos editaron el mismo párrafo → ours + marca
+            }
+            // ours_cambio && !theirs_cambio → ya está ours
+        }
+        // Si theirs introdujo párrafos (ids) que ours no tiene y que tampoco
+        // estaban en la base, es una divergencia estructural que v1 no integra
+        // (gana la estructura de ours): se marca conflicto para no perderlo en
+        // silencio.
+        let ours_ids: BTreeSet<Uuid> = merged.atoms.iter().map(|a| a.id).collect();
+        for tid in theirs_atoms.keys() {
+            if !ours_ids.contains(tid) && !base_hashes.contains_key(tid) {
+                conflicto = true;
+                break;
+            }
+        }
+        let h = self.put_obj(&merged);
+        Ok((h, conflicto))
+    }
+
+    // ----- GC / compactación ---------------------------------------------
+
+    /// Compacta el store: descarta los objetos no alcanzables desde ninguna rama
+    /// ni el HEAD (commits abandonados, sus árboles y DocEstados). Devuelve
+    /// cuántos objetos se liberaron. La working copy no referencia objetos
+    /// (se snapshotea al pushear), así que no retiene nada.
+    pub fn compactar(&mut self) -> usize {
+        let mut vivos: BTreeSet<Hash> = BTreeSet::new();
+        let mut pila: Vec<Hash> = self.ramas.values().copied().collect();
+        if let Some(h) = self.head_commit() {
+            pila.push(h);
+        }
+        while let Some(c) = pila.pop() {
+            if !vivos.insert(c) {
+                continue;
+            }
+            if let Ok(commit) = self.commit(&c) {
+                vivos.insert(commit.arbol);
+                if let Ok(arbol) = self.arbol_de(&commit) {
+                    for h in arbol.docs.values() {
+                        vivos.insert(*h);
+                    }
+                }
+                pila.extend(commit.padres.iter().copied());
+            }
+        }
+        let antes = self.objetos.len();
+        self.objetos.retain(|h, _| vivos.contains(h));
+        antes - self.objetos.len()
     }
 
     // ----- Diff ----------------------------------------------------------
@@ -963,6 +1059,105 @@ mod pruebas {
         // Renombrar documento.
         p.renombrar_documento(id, "nuevo nombre");
         assert_eq!(p.documento(id).unwrap().nombre, "nuevo nombre");
+    }
+
+    #[test]
+    fn merge_por_parrafo_automerge_y_conflicto() {
+        // Helper: doc con dos átomos de id estable.
+        let doc2 = |a: &NarrativeAtom, b: &NarrativeAtom| -> DocEstado {
+            let mut d = DocEstado::vacio("d");
+            let mut c = Cuerpo::nuevo("es", "d", Intencion::Original, 0);
+            c.agregar(a.id, 0);
+            c.agregar(b.id, 0);
+            d.cuerpos.push(c);
+            d.atoms.push(a.clone());
+            d.atoms.push(b.clone());
+            d
+        };
+        // Auto-merge: cada rama edita un párrafo distinto.
+        let mut p = Proyecto::nuevo("demo");
+        let id = p.nuevo_documento("d");
+        let a = NarrativeAtom::new("A0", "es");
+        let b = NarrativeAtom::new("B0", "es");
+        p.set_documento(id, doc2(&a, &b));
+        let base = p.push("ana", "base", 100).unwrap();
+        p.rama_nueva("feat", Some(base));
+        p.cambiar_rama("feat").unwrap();
+        let mut a_feat = a.clone();
+        a_feat.set_content("A-feat");
+        p.set_documento(id, doc2(&a_feat, &b));
+        p.push("ana", "feat edita A", 101).unwrap();
+        p.cambiar_rama(RAMA_DEFECTO).unwrap();
+        let mut b_main = b.clone();
+        b_main.set_content("B-main");
+        p.set_documento(id, doc2(&a, &b_main));
+        p.push("ana", "main edita B", 102).unwrap();
+        let r = p.merge("feat", "ana", 103).unwrap();
+        match r {
+            ResultadoMerge::Merge { conflictos, .. } => {
+                assert!(conflictos.is_empty(), "ediciones de párrafos distintos no chocan");
+            }
+            o => panic!("esperaba Merge, fue {o:?}"),
+        }
+        let cont: Vec<String> = p
+            .documento(id)
+            .unwrap()
+            .atoms
+            .iter()
+            .map(|x| x.content.to_string())
+            .collect();
+        assert!(cont.contains(&"A-feat".to_string()), "tomó la edición de feat en A");
+        assert!(cont.contains(&"B-main".to_string()), "conservó la edición de main en B");
+
+        // Conflicto: ambas ramas editan el MISMO párrafo distinto.
+        let mut p2 = Proyecto::nuevo("demo");
+        let id2 = p2.nuevo_documento("d");
+        let a2 = NarrativeAtom::new("X0", "es");
+        let b2 = NarrativeAtom::new("Y0", "es");
+        p2.set_documento(id2, doc2(&a2, &b2));
+        let base2 = p2.push("ana", "base", 100).unwrap();
+        p2.rama_nueva("feat", Some(base2));
+        p2.cambiar_rama("feat").unwrap();
+        let mut a_f = a2.clone();
+        a_f.set_content("X-feat");
+        p2.set_documento(id2, doc2(&a_f, &b2));
+        p2.push("ana", "feat", 101).unwrap();
+        p2.cambiar_rama(RAMA_DEFECTO).unwrap();
+        let mut a_m = a2.clone();
+        a_m.set_content("X-main");
+        p2.set_documento(id2, doc2(&a_m, &b2));
+        p2.push("ana", "main", 102).unwrap();
+        match p2.merge("feat", "ana", 103).unwrap() {
+            ResultadoMerge::Merge { conflictos, .. } => {
+                assert_eq!(conflictos, vec![id2], "mismo párrafo editado por ambos = conflicto");
+            }
+            o => panic!("esperaba Merge, fue {o:?}"),
+        }
+        // Gana ours (main) en el conflicto.
+        assert!(p2
+            .documento(id2)
+            .unwrap()
+            .atoms
+            .iter()
+            .any(|x| x.content.as_str() == "X-main"));
+    }
+
+    #[test]
+    fn compactar_libera_objetos_de_ramas_borradas() {
+        let mut p = Proyecto::nuevo("demo");
+        let id = p.nuevo_documento("d");
+        p.set_documento(id, doc_con("d", &["v1"]));
+        let h1 = p.push("ana", "c1", 100).unwrap();
+        p.rama_nueva("tmp", Some(h1));
+        p.cambiar_rama("tmp").unwrap();
+        p.set_documento(id, doc_con("d", &["v2-tmp"]));
+        p.push("ana", "c2", 101).unwrap();
+        p.cambiar_rama(RAMA_DEFECTO).unwrap();
+        assert!(p.borrar_rama("tmp"));
+        let liberados = p.compactar();
+        assert!(liberados >= 1, "debería liberar el commit abandonado y sus objetos");
+        // El commit de principal sigue accesible.
+        assert!(p.commit(&h1).is_ok());
     }
 
     #[test]
