@@ -2044,6 +2044,17 @@ impl App for PataApp {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // Cada popup anclado a la barra (quick settings, menú de inicio, panel
+        // del reloj…) entra una sola vez con un fade + leve descenso desde la
+        // barra, en vez de aparecer de golpe. La `key` por overlay dispara la
+        // animación al aparecer y queda estable mientras sigue abierto (los
+        // re-render del tick a 1 Hz no la rearman). Los drawers Quake
+        // (shuma/nahual) traen su propio `Tween`, el polkit es modal y el OSD se
+        // desvanece solo: esos no se envuelven.
+        use llimphi_ui::llimphi_raster::kurbo::Affine;
+        fn entra(v: View<Msg>, key: u64) -> View<Msg> {
+            v.animated_enter_from(key, motion::FAST, Affine::translate((0.0, -10.0_f64)))
+        }
         // El diálogo de polkit es modal: tapa todo lo demás mientras está activo.
         if let Some(req) = &model.polkit_prompt {
             let screen = (model.screen.0 as f32, model.screen.1 as f32);
@@ -2073,7 +2084,7 @@ impl App for PataApp {
         if model.menu_open {
             let bar_h = bar_thickness_for(&model.cfg, "start_button");
             let screen_size = (model.screen.0 as f32, model.screen.1 as f32);
-            return Some(match model.menu_style {
+            return Some(entra(match model.menu_style {
                 MenuStyle::Classic => render::start_menu_overlay(
                     model.registry.all(),
                     &model.menu_query,
@@ -2097,11 +2108,11 @@ impl App for PataApp {
                     screen_size,
                     &model.theme,
                 ),
-            });
+            }, 1));
         }
         if model.clip_open {
             let bar_h = bar_thickness_for(&model.cfg, "clipboard");
-            return Some(render::clipboard_overlay(
+            return Some(entra(render::clipboard_overlay(
                 &model.clip_history,
                 bar_h,
                 // Path winit (app suelta de prueba): sin ancho/cursor rastreado,
@@ -2110,12 +2121,12 @@ impl App for PataApp {
                 0.0,
                 f32::MAX,
                 &model.theme,
-            ));
+            ), 2));
         }
         if model.control_open {
             let bar_h = bar_thickness_for(&model.cfg, "control");
             let screen = (model.screen.0 as f32, model.screen.1 as f32);
-            return Some(render::control_overlay(
+            return Some(entra(render::control_overlay(
                 model.last_ctx.volume,
                 model.last_ctx.muted,
                 model.last_ctx.brightness,
@@ -2123,7 +2134,7 @@ impl App for PataApp {
                 bar_h,
                 screen,
                 &model.theme,
-            ));
+            ), 3));
         }
         if model.network_open {
             let bar_h = bar_thickness_for(&model.cfg, "network");
@@ -2131,54 +2142,72 @@ impl App for PataApp {
                 .net_password
                 .as_ref()
                 .map(|(s, p)| (s.as_str(), p.as_str()));
-            return Some(render::network_overlay(
+            return Some(entra(render::network_overlay(
                 model.network_now.as_ref(),
                 pw,
                 bar_h,
                 &model.theme,
-            ));
+            ), 4));
         }
         if model.session_open {
             let bar_h = bar_thickness_for(&model.cfg, "session");
-            return Some(render::session_overlay(model.session_confirm, bar_h, &model.theme));
+            return Some(entra(
+                render::session_overlay(model.session_confirm, bar_h, &model.theme),
+                5,
+            ));
         }
         if model.bluetooth_open {
             let bar_h = bar_thickness_for(&model.cfg, "bluetooth");
-            return Some(render::bluetooth_overlay(
+            return Some(entra(render::bluetooth_overlay(
                 model.bluetooth_now.as_ref(),
                 bar_h,
                 &model.theme,
-            ));
+            ), 6));
         }
         if model.notifications_open {
             let bar_h = bar_thickness_for(&model.cfg, "notifications");
             let snap = model.notifications.as_ref().map(|n| n.snapshot());
-            return Some(render::notifications_overlay(snap.as_ref(), bar_h, &model.theme));
+            return Some(entra(
+                render::notifications_overlay(snap.as_ref(), bar_h, &model.theme),
+                7,
+            ));
         }
         if model.clock_open {
             let bar_h = bar_thickness_for(&model.cfg, "clock");
-            return Some(render::clock_overlay(&model.clock_draft, bar_h, &model.theme));
+            return Some(entra(
+                render::clock_overlay(&model.clock_draft, bar_h, &model.theme),
+                8,
+            ));
         }
         if model.cpu_open {
             let bar_h = bar_thickness_for(&model.cfg, "cpu_meter");
-            return Some(render::cpu_overlay(&model.last_ctx, bar_h, &model.theme));
+            return Some(entra(
+                render::cpu_overlay(&model.last_ctx, bar_h, &model.theme),
+                9,
+            ));
         }
         if model.ram_open {
             let bar_h = bar_thickness_for(&model.cfg, "ram_meter");
-            return Some(render::ram_overlay(&model.last_ctx, bar_h, &model.theme));
+            return Some(entra(
+                render::ram_overlay(&model.last_ctx, bar_h, &model.theme),
+                10,
+            ));
         }
         if model.volume_open {
             let bar_h = bar_thickness_for(&model.cfg, "volume");
-            return Some(render::volume_overlay(
+            return Some(entra(render::volume_overlay(
                 &model.last_ctx,
                 &model.sink_inputs,
                 bar_h,
                 &model.theme,
-            ));
+            ), 11));
         }
         if model.brightness_open {
             let bar_h = bar_thickness_for(&model.cfg, "brightness");
-            return Some(render::brightness_overlay(&model.last_ctx, bar_h, &model.theme));
+            return Some(entra(
+                render::brightness_overlay(&model.last_ctx, bar_h, &model.theme),
+                12,
+            ));
         }
         // El OSD es la prioridad más baja: feedback transitorio cuando no hay
         // ningún menú/drawer abierto.
