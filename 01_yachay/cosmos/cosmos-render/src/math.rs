@@ -59,17 +59,22 @@ pub struct Radii {
 
 impl Radii {
     pub fn from_outer(r: f32) -> Self {
+        // Rediseño 2026-06: la coloración la dan los SIGNOS (cuñas desde el
+        // borde hasta los planetas). Dos filas de casas del MISMO espesor
+        // (topo afuera, geo adentro). Una sola fila de planetas, dentro de la
+        // banda de casas geocéntricas. Los topocéntricos no se repiten: su
+        // coordenada va del lado topo, con bolita + línea punteada si difieren.
         Self {
-            sign_outer: r,
-            sign_inner: r * 0.92,
-            topo_houses_outer: r * 0.92,
-            topocentric: r * 0.85,
-            topo_houses_inner: r * 0.78,
-            houses_outer: r * 0.78,
-            houses_inner: r * 0.62,
-            bodies: r * 0.57,
-            pd_direct: r * 0.545,
-            pd_converse: r * 0.515,
+            sign_outer: r,            // borde / glifos de signo
+            sign_inner: r * 0.90,     // inner del strip de glifos de signo
+            topo_houses_outer: r * 0.88,
+            topocentric: r * 0.82,    // bolitas de coords topocéntricas
+            topo_houses_inner: r * 0.76,
+            houses_outer: r * 0.76,
+            houses_inner: r * 0.64,   // banda geo: 0.76→0.64 (espesor 0.12 = topo)
+            bodies: r * 0.70,         // fila única de planetas (centro banda geo)
+            pd_direct: r * 0.665,
+            pd_converse: r * 0.635,
             aspects: r * 0.49,
             transits: r * 0.43,
             midpoints: r * 0.39,

@@ -376,6 +376,27 @@ pub fn compose_wheel_with_hits(
         stroke_w: 1.0,
     });
 
+    // === Coloración por SIGNO: cuñas desde el borde hasta los planetas ===
+    // Es la coloración general de la rueda; las casas (bordes) y los planetas
+    // van encima. Alpha bajo para no tapar lo de adentro.
+    const SIGN_NAMES_ORD: [&str; 12] = [
+        "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio",
+        "sagittarius", "capricorn", "aquarius", "pisces",
+    ];
+    for (i, name) in SIGN_NAMES_ORD.iter().enumerate() {
+        let from = i as f32 * 30.0;
+        let to = from + 30.0;
+        let pts = house_sector_points(
+            cx, cy, from, to, asc, rot, radii.bodies, radii.sign_outer,
+        );
+        out.push(DrawCommand::Polygon {
+            points: pts,
+            fill: Some(pal.sign(name).with_alpha(0.16)),
+            stroke: None,
+            stroke_w: 0.0,
+        });
+    }
+
     // === Cusps zodiacales cada 30°, sub-divisiones cada 10° (más sutiles) ===
     for i in 0..36 {
         let lon = (i as f32) * 10.0;
@@ -433,14 +454,16 @@ pub fn compose_wheel_with_hits(
         .iter()
         .any(|l| matches!(l.kind, crate::LayerKind::Houses) && l.module_id == "topocentric");
     if has_topo {
-        out.push(DrawCommand::Circle {
-            cx,
-            cy,
-            r: topo_inner,
-            stroke: Some(topo_ring_color.with_alpha(0.55)),
-            fill: None,
-            stroke_w: 0.8,
-        });
+        for rr in [topo_outer, topo_inner] {
+            out.push(DrawCommand::Circle {
+                cx,
+                cy,
+                r: rr,
+                stroke: Some(topo_ring_color.with_alpha(0.6)),
+                fill: None,
+                stroke_w: 0.9,
+            });
+        }
     }
 
     // === Casas geocéntricas (ring C→D) ===
@@ -463,32 +486,8 @@ pub fn compose_wheel_with_hits(
         stroke_w: 1.0,
     });
 
-    // === Tinte translúcido de las casas geocéntricas ===
-    // Cada sector se colorea por el color del lore de SU casa (Casa I =
-    // color de Aries, II = Tauro, …), con opacidad baja — da a cada casa
-    // su identidad de dominio sin tapar lo que va encima.
-    for layer in &model.layers {
-        if !matches!(layer.kind, crate::LayerKind::Houses) || layer.module_id == "topocentric" {
-            continue;
-        }
-        if let crate::Geometry::Ring { cusps_deg } = &layer.geometry {
-            let n = cusps_deg.len();
-            for i in 0..n {
-                let from = cusps_deg[i];
-                let to = cusps_deg[(i + 1) % n];
-                let casa = pal.house(i);
-                let pts = house_sector_points(
-                    cx, cy, from, to, asc, rot, house_inner_r, house_outer_r,
-                );
-                out.push(DrawCommand::Polygon {
-                    points: pts,
-                    fill: Some(casa.with_alpha(0.12)),
-                    stroke: None,
-                    stroke_w: 0.0,
-                });
-            }
-        }
-    }
+    // (La coloración general la dan las cuñas de signo, arriba; las casas van
+    // sólo como bordes + cusps + coords, sin tinte propio, para no enturbiar.)
 
     // Draws cusps + numbers for both house systems (topo + geo) in their respective rings.
     // Para el sistema geocéntrico además emitimos la coordenada DD°MM'<Sg>
@@ -563,9 +562,17 @@ pub fn compose_wheel_with_hits(
     // Cada body-layer se renderea en su ring canónico.
     let mut natal_display_by_body: std::collections::HashMap<String, f32> =
         std::collections::HashMap::new();
+    // Posición natal CRUDA por cuerpo (para medir el paralaje vs topocéntrico).
+    let mut natal_raw_by_body: std::collections::HashMap<String, f32> =
+        std::collections::HashMap::new();
     if opts.include_bodies {
         for layer in &model.layers {
             if !matches!(layer.kind, crate::LayerKind::Bodies) {
+                continue;
+            }
+            // Los topocéntricos NO se repiten como glifos: su coordenada va del
+            // lado topo (bolita + línea punteada si difiere), más abajo.
+            if layer.module_id == "topocentric" {
                 continue;
             }
             let ring = radii.body_ring(&layer.module_id);
@@ -591,6 +598,7 @@ pub fn compose_wheel_with_hits(
                 let disp_deg = display_degs[i];
                 if is_natal {
                     natal_display_by_body.insert(g.symbol.clone(), disp_deg);
+                    natal_raw_by_body.insert(g.symbol.clone(), g.deg);
                 }
                 // Encoge un poco si el cluster es denso o quedó presión residual
                 let dense_factor = if cluster_size[i] >= 3 {
@@ -610,19 +618,24 @@ pub fn compose_wheel_with_hits(
                 let body_is_related = is_natal
                     && (opts.selected_body.is_none() || related.contains(&g.symbol));
                 let body_color = dim(pal.planet(&g.symbol), body_is_related);
-                let halo_fill = if pal.is_dark {
-                    pal.bg_panel.with_alpha(0.92)
-                } else {
-                    Rgba::opaque(1.0, 1.0, 1.0).with_alpha(0.92)
-                };
-                out.push(DrawCommand::Circle {
-                    cx: cx + gx,
-                    cy: cy + gy,
-                    r: disk,
-                    stroke: Some(body_color),
-                    fill: Some(halo_fill),
-                    stroke_w: 1.2,
-                });
+                // Sin circunferencia para la fila de planetas natales: sólo un
+                // halo de fondo MUY tenue para legibilidad sobre la cuña de
+                // signo; el protagonista es el glifo (más grande y remarcado).
+                if !is_natal {
+                    let halo_fill = if pal.is_dark {
+                        pal.bg_panel.with_alpha(0.92)
+                    } else {
+                        Rgba::opaque(1.0, 1.0, 1.0).with_alpha(0.92)
+                    };
+                    out.push(DrawCommand::Circle {
+                        cx: cx + gx,
+                        cy: cy + gy,
+                        r: disk,
+                        stroke: Some(body_color),
+                        fill: Some(halo_fill),
+                        stroke_w: 1.2,
+                    });
+                }
                 // Hit region: disco visual con un margen para que el
                 // usuario no tenga que apuntar al pixel exacto. Sólo
                 // natal — los overlays se ignoran en el hit-test.
@@ -638,8 +651,12 @@ pub fn compose_wheel_with_hits(
                 // El tamaño visual del glyph queda inscripto en el
                 // disco; el factor 1.3 lo deja ligeramente más grande
                 // que el círculo para que se lea bien.
-                let glyph_size = (font * 1.05).min(disk * 2.4);
-                let glyph_sw = (font * 0.085).max(1.0);
+                let (glyph_size, glyph_sw) = if is_natal {
+                    // Sin círculo → glifo grande y remarcado (trazo grueso).
+                    ((font * 1.7).max(disk * 2.2), (font * 0.14).max(1.6))
+                } else {
+                    ((font * 1.05).min(disk * 2.4), (font * 0.085).max(1.0))
+                };
                 out.extend(crate::glyphs::planet_commands(
                     &g.symbol,
                     cx + gx,
@@ -668,6 +685,85 @@ pub fn compose_wheel_with_hits(
                         disk_r: disk,
                     });
                 }
+            }
+        }
+    }
+
+    // === Topocéntricos: coordenada del lado topo + bolita + línea punteada ===
+    // No se repiten como glifos. Su coordenada va junto al aro topo; si difiere
+    // del natal por paralaje apreciable (la Luna, sobre todo), una bolita del
+    // color del cuerpo marca su posición topo y una línea punteada la une al
+    // glifo natal.
+    if opts.include_bodies && has_topo {
+        use crate::math::{format_coord_compact, polar_to_screen};
+        for layer in &model.layers {
+            if !matches!(layer.kind, crate::LayerKind::Bodies)
+                || layer.module_id != "topocentric"
+            {
+                continue;
+            }
+            for g in &layer.glyphs {
+                let color = pal.planet(&g.symbol);
+                let natal_raw = natal_raw_by_body.get(&g.symbol).copied();
+                let natal_disp = natal_display_by_body.get(&g.symbol).copied();
+                let diff = natal_raw
+                    .map(|n| {
+                        let d = (g.deg - n).rem_euclid(360.0);
+                        d.min(360.0 - d)
+                    })
+                    .unwrap_or(0.0);
+                let far = diff > 0.25; // ≳15' de paralaje
+                let (dx, dy) = polar_to_screen(g.deg, asc, rot, topo_inner);
+                if far {
+                    if let Some(nd) = natal_disp {
+                        let (px, py) = polar_to_screen(nd, asc, rot, radii.bodies);
+                        out.push(DrawCommand::Line {
+                            x1: cx + px,
+                            y1: cy + py,
+                            x2: cx + dx,
+                            y2: cy + dy,
+                            color: color.with_alpha(0.65),
+                            width: 0.9,
+                            dash: Some((3.0, 3.0)),
+                        });
+                    }
+                    out.push(DrawCommand::Circle {
+                        cx: cx + dx,
+                        cy: cy + dy,
+                        r: opts.size * 0.008,
+                        stroke: None,
+                        fill: Some(color),
+                        stroke_w: 0.0,
+                    });
+                }
+                // Coordenada topo, junto al aro topo (centro de la banda).
+                let lr = (topo_outer + topo_inner) * 0.5;
+                let (lx, ly) = polar_to_screen(g.deg, asc, rot, lr);
+                let coord = format_coord_compact(g.deg);
+                let fsize = opts.size * 0.016 * opts.detail.max(0.1).powf(0.35);
+                let lcx = cx + lx;
+                let lcy = cy + ly;
+                let half_w = coord.chars().count() as f32 * fsize * 0.32 + fsize * 0.3;
+                let half_h = fsize * 0.62;
+                out.push(DrawCommand::Polygon {
+                    points: vec![
+                        (lcx - half_w, lcy - half_h),
+                        (lcx + half_w, lcy - half_h),
+                        (lcx + half_w, lcy + half_h),
+                        (lcx - half_w, lcy + half_h),
+                    ],
+                    fill: Some(pal.bg_panel.with_alpha(0.72)),
+                    stroke: None,
+                    stroke_w: 0.0,
+                });
+                out.push(DrawCommand::Text {
+                    x: lcx,
+                    y: lcy,
+                    content: coord,
+                    color,
+                    size: fsize,
+                    anchor: TextAnchor::Middle,
+                });
             }
         }
     }
