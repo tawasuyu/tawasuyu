@@ -50,6 +50,10 @@ pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 tullpu-module = { workspace = true }
 media-module = { workspace = true }
 llimphi-icons = { workspace = true }
+# Modernización visual: skeleton shimmer en miniaturas que decodifican y
+# empty-state cuando una carpeta no tiene entradas (en vez de un hueco).
+llimphi-widget-skeleton = { workspace = true }
+llimphi-widget-empty = { workspace = true }
 # Clipboard del sistema para el editor integrado del canvas (como nada).
 arboard = { workspace = true }
 llimphi-motion = { workspace = true }

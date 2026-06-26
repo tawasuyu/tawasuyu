@@ -11,14 +11,20 @@ use crate::helpers::*;
 use crate::overlays::*;
 use crate::state::{Label, ShellState};
 use crate::ops::OpStatus;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use llimphi_ui::{DragPhase, View};
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Size, Style},
     style::Position,
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_theme::Theme;
+use llimphi_theme::{motion, Theme};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, GridPalette, GridSpec};
 use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
@@ -46,6 +52,15 @@ use nahual_markdown_viewer_llimphi::{markdown_viewer_view, MarkdownViewerPalette
 use nahual_archive_viewer_llimphi::{archive_viewer_view, ArchiveViewerPalette};
 use nahual_font_viewer_llimphi::{font_viewer_view, FontViewerPalette};
 use nahual_map_viewer_llimphi::{map_viewer_view, MapViewerPalette};
+
+/// Hash estable de una cadena → `key` para animaciones implícitas: la misma
+/// escena (misma carpeta enfocada) produce siempre la misma key entre
+/// rebuilds, así la transición sólo corre cuando de verdad cambia la escena.
+fn key_of(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 /// Cuerpo de `App::view`: arma la composición completa del shell.
 pub(crate) fn shell_view(model: &Model) -> View<Msg> {
@@ -149,6 +164,13 @@ pub(crate) fn shell_view(model: &Model) -> View<Msg> {
     } else {
         pane_column(model, model.focus, true, &theme)
     };
+    // Transición de escena: al navegar de carpeta (o alternar dual), la
+    // `scene_key` cambia y la vista de carpeta entra con un fade + slide-up
+    // suave en vez de saltar. Estable mientras se mira la misma carpeta, así
+    // no refadea por cada selección o miniatura que llega.
+    let scene_key = key_of(&format!("{}|{}", cur_dir(model).display(), model.dual));
+    let folder_view =
+        folder_view.animated_enter_from(scene_key, motion::SLOW, Affine::translate((0.0, 24.0)));
     // Centro: la app integrada del canvas si hay una abierta (editor /
     // imagen / media); si no, la vista de carpeta.
     let centro = match &model.canvas {
@@ -1012,9 +1034,24 @@ pub(crate) fn pane_column(model: &Model, pane: usize, focused: bool, theme: &The
     let crumb = pane_breadcrumb(&model.panes[pane], pane, focused, theme);
     // El filtro vivo sólo aplica al panel enfocado.
     let filtering = focused && model.nav_filtering;
-    // La vista iconos necesita el cache de miniaturas y las dimensiones del
-    // panel: se arma aparte (las otras dos sólo dependen del navegador).
-    let content = if model.panes[pane].nav().view.is_grid() {
+    // Carpeta sin entradas (y sin filtro activo): empty-state con orientación
+    // en vez de un panel hueco. Cuando hay filtro, la lista ya rotula "0 de N",
+    // que es la información útil — no la pisamos.
+    let content = if model.panes[pane].nav().children().is_empty() && !filtering {
+        let pal = EmptyPalette::from_theme(theme);
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .children(vec![empty_view(
+            Icon::Folder,
+            "Carpeta vacía",
+            Some("No hay archivos ni subcarpetas acá."),
+            &pal,
+        )])
+    } else if model.panes[pane].nav().view.is_grid() {
         navigator_icons_view(model, pane, theme)
     } else {
         nav_pane_view(
@@ -1248,7 +1285,17 @@ pub(crate) fn icon_tile_content(model: &Model, node: &Node, theme: &Theme, lado:
         };
         return centered(icon, theme.fg_muted);
     }
-    // Aún decodificando (o sin thumb posible) → glifo por naturaleza.
+    // Miniatura en vuelo (encolada/decodificando): skeleton shimmer con la
+    // forma del tile, no un glifo muerto — el tick de transporte (FRAME_TICK)
+    // ya fuerza los repaints que animan el destello.
+    if model.thumbs_pending.contains(&path) {
+        let pal = SkeletonPalette::from_theme(theme);
+        return View::new(base())
+            .radius(6.0)
+            .clip(true)
+            .children(vec![skeleton_view(&pal)]);
+    }
+    // Sin thumb posible (tipo sin miniatura) → glifo por naturaleza.
     let icon = if es_imagen(&path) {
         Icon::Image
     } else if es_video(&path) {
