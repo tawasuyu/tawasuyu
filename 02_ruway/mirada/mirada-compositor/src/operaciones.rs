@@ -420,6 +420,17 @@ impl App {
         }
     }
 
+    /// Intensidad (fracción 0.0–0.8) del velo que atenúa las ventanas sin foco.
+    /// `0.0` (default) = sin atenuar. No depende de «reducir movimiento» (es un
+    /// aspecto, no un movimiento); su crossfade sí, vía `focus_glow_ms`.
+    pub(crate) fn config_unfocused_dim(&self) -> f32 {
+        let pct = match &self.brain {
+            Brain::Embedded(d) => d.config().unfocused_dim_pct,
+            Brain::Linked(_) => 0,
+        };
+        (pct as f32 / 100.0).clamp(0.0, 0.8)
+    }
+
     /// Win+Tab estilo switcher sobre la vista espacial: abre la vista (si hacía
     /// falta) y mueve el resaltado al escritorio siguiente/anterior. La primera
     /// pulsación ya avanza uno (un Win+Tab suelto = saltar al siguiente al

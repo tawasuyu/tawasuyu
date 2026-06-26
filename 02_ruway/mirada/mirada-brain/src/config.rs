@@ -382,6 +382,13 @@ pub struct Config {
     /// GPU): por eso nace apagado. Ver `PLAN.md` §«Animaciones de transición».
     #[serde(default)]
     pub window_close_ms: u32,
+    /// **Atenuar ventanas sin foco**, en porcentaje (0–80). Las ventanas que no
+    /// tienen el foco se cubren con un velo oscuro de esta intensidad, dando
+    /// profundidad y guiando la vista a la activa. `0` (default) = sin atenuar.
+    /// El velo **anima con el foco** (usa la misma curva que el glow): al cambiar
+    /// de ventana, una se aclara y la otra se oscurece en `focus_glow_ms`.
+    #[serde(default)]
+    pub unfocused_dim_pct: u8,
     /// **Reducir movimiento** (accesibilidad): cuando está activo, el
     /// compositor pone en cero todas las duraciones de animación (apertura de
     /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
@@ -942,6 +949,7 @@ impl Default for Config {
             window_open_scale_pct: default_window_open_scale_pct(),
             focus_glow_ms: default_focus_glow_ms(),
             window_close_ms: 0,
+            unfocused_dim_pct: 0,
             reduce_motion: false,
         }
     }

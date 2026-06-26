@@ -418,6 +418,13 @@ impl Configurable for Config {
                         600,
                     ))
                     .field(Field::slider_int(
+                        "unfocused_dim_pct",
+                        "Atenuar ventanas sin foco (%, 0 = no)",
+                        self.unfocused_dim_pct as i64,
+                        0,
+                        80,
+                    ))
+                    .field(Field::slider_int(
                         "slide_ms",
                         "Deslizar entre escritorios (ms)",
                         self.slide_ms as i64,
@@ -736,6 +743,11 @@ impl Configurable for Config {
                     self.window_close_ms = v.clamp(0, 600) as u32;
                 }
             }
+            "unfocused_dim_pct" => {
+                if let Some(v) = value.as_int() {
+                    self.unfocused_dim_pct = v.clamp(0, 80) as u8;
+                }
+            }
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
@@ -811,6 +823,13 @@ mod tests {
         c.apply(&"movimiento.window_close_ms".into(), FieldValue::Int(180))
             .unwrap();
         assert_eq!(c.window_close_ms, 180);
+        // Atenuar sin foco, acotado a [0, 80].
+        c.apply(&"movimiento.unfocused_dim_pct".into(), FieldValue::Int(40))
+            .unwrap();
+        assert_eq!(c.unfocused_dim_pct, 40);
+        c.apply(&"movimiento.unfocused_dim_pct".into(), FieldValue::Int(99))
+            .unwrap();
+        assert_eq!(c.unfocused_dim_pct, 80);
     }
 
     #[test]

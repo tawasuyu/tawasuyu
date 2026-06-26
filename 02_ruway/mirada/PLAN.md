@@ -390,6 +390,18 @@ no-enfocadas). El Cerebro los fija por regla (`Rules` por `app_id`) o globalment
 render los aplica. **Esquinas redondeadas** y **opacidad/sombra** son baratas (ya hay
 sombra; falta el rounded — un mask en el shader del quad). 
 
+> **✅ HECHO — `dim_unfocused` (2026-06-26).** Primera tajada de (B), la barata.
+> Config `unfocused_dim_pct` (0–80, **default 0 = off**) en «Movimiento» (global,
+> no por-`WindowEffects` todavía — el camino global era el cambio mínimo). El
+> render cubre cada ventana sin foco con un velo negro translúcido (un
+> `SolidColorRenderElement` que va como **primer elemento del grupo de la
+> ventana** → queda arriba, dentro del `win_start..` así escala con el pop). El
+> alfa del velo **anima con el foco**: reusa `focus_mix` (la curva del glow), así
+> al saltar de ventana una se aclara y la otra se oscurece en `focus_glow_ms`.
+> Byte-idéntico en off o sobre la enfocada. Falta de (B): `corner_radius` (mask en
+> shader — «Medio»), `blur`, `border_tint`/`border_alpha`, y mudar esto a
+> `WindowEffects` por-`app_id` si se quiere por-regla.
+
 **C) Glassmorphism — el efecto caro, el que da el «wow».** Desenfoque gaussiano en
 tiempo real **detrás** de las superficies translúcidas (barras, marcos, menús, el
 dock `pata`, las tarjetas del greeter). El compositor **puede**: ya captura su frame a

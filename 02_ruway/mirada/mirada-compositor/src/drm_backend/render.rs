@@ -464,6 +464,7 @@ impl DrmState {
         let open_easing = self.app.config_window_open_easing();
         let open_scale_start = self.app.config_window_open_scale();
         let glow_ms = self.app.config_focus_glow_ms();
+        let dim_frac = self.app.config_unfocused_dim();
         let anim_now = self.start.elapsed().as_millis() as u32;
 
         // Popups (menú de aplicación y contextuales de apps GTK/Qt) PRIMERO: el
@@ -532,6 +533,28 @@ impl DrmState {
             let cy = y + off_y;
             let dec_y = cy - tb;
             let dec_h = ch + tb;
+
+            // Velo de atenuación de las ventanas SIN foco — el primer elemento
+            // del grupo de esta ventana = queda ARRIBA (tapa barra+contenido). Su
+            // alfa anima con el foco (misma curva que el glow): `focus_mix=1`
+            // (enfocada) → sin velo; `0` (sin foco) → velo pleno. Va dentro del
+            // grupo `win_start..` para que escale con el pop. Sin el efecto
+            // (`dim_frac=0`) o enfocada no se empuja nada → byte-idéntico.
+            if dim_frac > 0.0 && !w.is_shell && !w.is_greeter {
+                let m = focus_mix(w.focused, glow_ms, w.focus_ms, anim_now);
+                let veil = dim_frac * (1.0 - m);
+                if veil > 0.001 {
+                    let mut scrim = SolidColorBuffer::default();
+                    scrim.update((cw, dec_h), [0.0, 0.0, 0.0, veil]);
+                    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &scrim,
+                        (cx, dec_y),
+                        1.0,
+                        anim_alpha,
+                        Kind::Unspecified,
+                    )));
+                }
+            }
 
             if tb > 0 {
                 if let Some(tr) = &self.text {
