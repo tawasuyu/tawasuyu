@@ -39,7 +39,8 @@ use smithay::backend::renderer::element::surface::{
 };
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{render_elements, Id, Kind};
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::gles::element::TextureShaderElement;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram};
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{ImportAll, ImportDma, ImportMem};
 use smithay::backend::session::libseat::LibSeatSession;
@@ -143,15 +144,73 @@ render_elements! {
     /// superficie de cliente **reescalada** (miniatura viva de la vista
     /// espacial): el `scale` de `render_elements_from_surface_tree` es la escala
     /// de salida, no un resize, así que para achicar de verdad la envolvemos en
-    /// un `RescaleRenderElement`.
-    Frame<R> where R: ImportAll + ImportMem;
-    Window = WaylandSurfaceRenderElement<R>,
+    /// un `RescaleRenderElement`. **Concreto a `GlesRenderer`** (el path DRM sólo
+    /// usa ese; el winit no usa este enum) — así caben variantes específicas de
+    /// GLES como `Rounded` (`TextureShaderElement`), imposibles en un `Frame<R>`
+    /// genérico (no implementan `RenderElement<R>` para todo `R`).
+    Frame<=GlesRenderer>;
+    Window = WaylandSurfaceRenderElement<GlesRenderer>,
     Solid = SolidColorRenderElement,
-    Text = MemoryRenderBufferRenderElement<R>,
-    ScaledWindow = RescaleRenderElement<WaylandSurfaceRenderElement<R>>,
-    ScaledText = RescaleRenderElement<MemoryRenderBufferRenderElement<R>>,
+    Text = MemoryRenderBufferRenderElement<GlesRenderer>,
+    ScaledWindow = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    ScaledText = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
     ScaledSolid = RescaleRenderElement<SolidColorRenderElement>,
+    /// Contenido de una ventana rendido a textura y dibujado con el shader de
+    /// esquinas redondeadas (SDF). Ver `corner_radius` y `render_surface_to_texture`.
+    Rounded = TextureShaderElement,
 }
+
+/// Fragment shader (GLES) de **esquinas redondeadas**: clon del shader de
+/// textura por defecto de smithay (maneja `EXTERNAL`/`NO_ALPHA`/`DEBUG_FLAGS` y
+/// alfa premultiplicada) + una máscara SDF de rounded-rect con ~1 px de
+/// antialias. Uniforms extra: `size` (px del elemento) y `radius` (px). La línea
+/// `//_DEFINES_` la reemplaza el renderer por los `#define` correspondientes.
+const ROUNDED_FRAG: &str = r#"#version 100
+
+//_DEFINES_
+
+#if defined(EXTERNAL)
+#extension GL_OES_EGL_image_external : require
+#endif
+
+precision mediump float;
+#if defined(EXTERNAL)
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+uniform float alpha;
+varying vec2 v_coords;
+uniform vec2 size;
+uniform float radius;
+
+#if defined(DEBUG_FLAGS)
+uniform float tint;
+#endif
+
+float sd_round_box(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
+}
+
+void main() {
+    vec4 color = texture2D(tex, v_coords);
+#if defined(NO_ALPHA)
+    color = vec4(color.rgb, 1.0) * alpha;
+#else
+    color = color * alpha;
+#endif
+#if defined(DEBUG_FLAGS)
+    if (tint == 1.0)
+        color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
+#endif
+    vec2 p = v_coords * size;
+    float d = sd_round_box(p - size * 0.5, size * 0.5, radius);
+    float m = 1.0 - smoothstep(-1.0, 1.0, d);
+    gl_FragColor = color * m;
+}
+"#;
 
 /// Color de fondo del escritorio cuando no hay nada que lo tape. **Debe ser
 /// idéntico al `BG` de `arje-splash` (18,18,24)** para que el handoff de Fase 2
@@ -636,6 +695,10 @@ struct DrmState {
     /// primaria — soporta layer-shell, tiling, menú, zonas, HUD.
     outputs: Vec<OutputCtx>,
     renderer: GlesRenderer,
+    /// Shader de esquinas redondeadas (SDF), compilado una vez al arrancar.
+    /// `None` si la compilación falló → el render cae a la máscara CPU (o a
+    /// esquinas rectas). Sólo se usa con `corner_radius > 0`.
+    rounded_shader: Option<GlesTexProgram>,
     /// Sombra bajo cada ventana (capas translúcidas, sin shader). Gateada por
     /// la env `MIRADA_SHADOW` mientras se verifica en pantalla — así no toca el
     /// default de nadie hasta confirmarla.
@@ -916,6 +979,25 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     println!("      renderer GLES listo.");
     timing_hito("mirada:gles-listo");
 
+    // Shader de esquinas redondeadas — se compila una vez. Si falla, seguimos sin
+    // él (el render cae a la máscara CPU): no rompe el arranque.
+    let rounded_shader = {
+        use smithay::backend::renderer::gles::{UniformName, UniformType};
+        match renderer.compile_custom_texture_shader(
+            ROUNDED_FRAG,
+            &[
+                UniformName::new("size", UniformType::_2f),
+                UniformName::new("radius", UniformType::_1f),
+            ],
+        ) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("mirada-compositor · shader de esquinas redondeadas no compiló ({e}); máscara CPU.");
+                None
+            }
+        }
+    };
+
     // 6 · Superficie DRM + DrmCompositor por cada salida descubierta.
     // El renderer GLES se comparte (un solo EGLContext sobre la GPU); cada
     // salida tiene su propio DrmSurface + DrmCompositor.
@@ -1009,7 +1091,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         // §Fase 2-bis.) Marcamos `pending_flip` para que el primer render del
         // bucle no encole otro flip antes del VBlank de este.
         let presento_inicial = {
-            let vacio: Vec<Frame<GlesRenderer>> = Vec::new();
+            let vacio: Vec<Frame> = Vec::new();
             timing_hito("mirada:present-antes-render");
             let rf = comp.render_frame::<_, _>(&mut renderer, &vacio, CLEAR_COLOR, FrameFlags::DEFAULT);
             timing_hito("mirada:present-render-listo");
@@ -1332,6 +1414,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         dh,
         outputs: output_ctxs,
         renderer,
+        rounded_shader,
         libinput: libinput_handle,
         shell_tx,
         active: true,

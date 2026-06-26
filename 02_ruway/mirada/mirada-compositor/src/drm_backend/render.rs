@@ -1,5 +1,11 @@
 use super::*;
 
+use smithay::backend::renderer::element::texture::TextureRenderElement;
+use smithay::backend::renderer::gles::element::TextureShaderElement;
+use smithay::backend::renderer::gles::{GlesTexture, Uniform};
+use smithay::backend::renderer::Renderer;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+
 /// One-shot: marca el instante (epoch ms) en que mirada presenta su PRIMER
 /// frame sobre el DRM. Sirve para medir el gap del handoff contra el `RELEASED`
 /// del splash (ver `SDD-ARRANQUE-SIN-PARPADEO.md` §Verificación). Es un `Once`
@@ -95,7 +101,7 @@ impl DrmState {
     /// **locales** a `rect`. Si el cliente publicó una superficie de cursor,
     /// usa esa; si no, el cuadrado por defecto. `Hidden` o puntero fuera del
     /// rect no emiten nada.
-    fn emit_cursor(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_cursor(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         let (cx, cy) = self.app.pointer_loc;
         let (cxi, cyi) = (cx.round() as i32, cy.round() as i32);
         if cxi < rect.x || cyi < rect.y || cxi >= rect.x + rect.w || cyi >= rect.y + rect.h {
@@ -268,7 +274,7 @@ impl DrmState {
     /// Pinta los fantasmas de cierre que intersectan `rect`: la instantánea
     /// desvaneciéndose (alfa `1→0`, ease-out) y encogiéndose apenas. Coords
     /// globales → locales a la salida, igual que las ventanas.
-    fn emit_ghosts(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_ghosts(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         if self.app.closing_ghosts.is_empty() {
             return;
         }
@@ -443,7 +449,7 @@ impl DrmState {
     /// título y el árbol de superficie del cliente, en orden front-to-back
     /// (`shell` arriba > flotantes > teseladas). Se saltea ventanas que no
     /// caen sobre `rect` para no malgastar trabajo del compositor.
-    fn emit_windows(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_windows(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         // FUS: con ≥2 sesiones, sólo se pintan las ventanas de la activa
         // (`session_visible`); con ≤1 el filtro es transparente.
         let mut shown: Vec<_> = self
@@ -489,10 +495,11 @@ impl DrmState {
         let open_scale_start = self.app.config_window_open_scale();
         let glow_ms = self.app.config_focus_glow_ms();
         let dim_frac = self.app.config_unfocused_dim();
-        // Esquinas redondeadas (radio px). `0` → camino normal (rectas). Caro:
-        // cada ventana redondeada se rinde a un offscreen y se lee a CPU, por eso
-        // es opt-in (default 0).
+        // Esquinas redondeadas (radio px). `0` → camino normal (rectas). Con
+        // shader GLES la ventana se rinde a una textura y se enmascara en la GPU;
+        // sin shader, fallback a la máscara CPU (lee de GPU). Opt-in (default 0).
         let corner_radius = self.app.config_corner_radius();
+        let rshader = self.rounded_shader.clone();
         let anim_now = self.start.elapsed().as_millis() as u32;
 
         // Popups (menú de aplicación y contextuales de apps GTK/Qt) PRIMERO: el
@@ -747,41 +754,69 @@ impl DrmState {
             };
             let mut rounded = false;
             if radius > 0.5 {
-                let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                    render_elements_from_surface_tree(
-                        &mut self.renderer,
-                        &w.surface,
-                        (0, 0),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    );
-                if !elems.is_empty() {
-                    if let Some(mut bytes) = crate::screencopy::render_elements_offscreen(
-                        &mut self.renderer,
-                        (sw, sh),
-                        &elems,
-                    ) {
-                        round_mask_bgra(&mut bytes, sw, sh, radius);
-                        let buf = MemoryRenderBuffer::from_slice(
-                            &bytes,
-                            Fourcc::Argb8888,
-                            (sw, sh),
+                if let Some(tex) = render_surface_to_texture(&mut self.renderer, &w.surface, sw, sh) {
+                    if let Some(prog) = rshader.clone() {
+                        // Camino GPU: dibujamos la textura con el shader SDF.
+                        let ctxid = self.renderer.context_id();
+                        let el = TextureRenderElement::from_static_texture(
+                            Id::new(),
+                            ctxid,
+                            (x as f64, y as f64),
+                            tex,
                             1,
                             Transform::Normal,
-                            None,
-                        );
-                        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                            &mut self.renderer,
-                            (x as f64, y as f64),
-                            &buf,
                             Some(surf_alpha),
                             None,
                             None,
+                            None,
                             Kind::Unspecified,
+                        );
+                        let uniforms = vec![
+                            Uniform::new("size", [sw as f32, sh as f32]),
+                            Uniform::new("radius", radius),
+                        ];
+                        into.push(Frame::Rounded(TextureShaderElement::new(el, prog, uniforms)));
+                        rounded = true;
+                    }
+                }
+                if !rounded {
+                    // Fallback CPU: leemos el contenido y enmascaramos las esquinas.
+                    let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                        render_elements_from_surface_tree(
+                            &mut self.renderer,
+                            &w.surface,
+                            (0, 0),
+                            1.0,
+                            1.0,
+                            Kind::Unspecified,
+                        );
+                    if !elems.is_empty() {
+                        if let Some(mut bytes) = crate::screencopy::render_elements_offscreen(
+                            &mut self.renderer,
+                            (sw, sh),
+                            &elems,
                         ) {
-                            into.push(Frame::Text(el));
-                            rounded = true;
+                            round_mask_bgra(&mut bytes, sw, sh, radius);
+                            let buf = MemoryRenderBuffer::from_slice(
+                                &bytes,
+                                Fourcc::Argb8888,
+                                (sw, sh),
+                                1,
+                                Transform::Normal,
+                                None,
+                            );
+                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                                &mut self.renderer,
+                                (x as f64, y as f64),
+                                &buf,
+                                Some(surf_alpha),
+                                None,
+                                None,
+                                Kind::Unspecified,
+                            ) {
+                                into.push(Frame::Text(el));
+                                rounded = true;
+                            }
                         }
                     }
                 }
@@ -823,7 +858,7 @@ impl DrmState {
             // (`anim_scale≈1`) no se toca nada → composición byte-idéntica.
             if (anim_scale - 1.0).abs() > 1e-3 {
                 let origin = Point::<i32, Physical>::from((cx + cw / 2, dec_y + dec_h / 2));
-                let tail: Vec<Frame<GlesRenderer>> = into.split_off(win_start);
+                let tail: Vec<Frame> = into.split_off(win_start);
                 for f in tail {
                     let s = anim_scale as f64;
                     into.push(match f {
@@ -849,7 +884,7 @@ impl DrmState {
     /// arriba al centro de la salida (no del escritorio global) mientras dure
     /// la ventana de feedback. Si el deadline pasó, limpia el estado. Llamar
     /// sólo en la salida dueña del HUD (hoy la primaria).
-    fn emit_hud(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_hud(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         let Some(deadline) = self.preset_hud_until else {
             return;
         };
@@ -907,7 +942,7 @@ impl DrmState {
     /// Emite el overlay del **switcher de ventanas** (Alt-Tab): un panel
     /// centrado con la lista de ventanas, la seleccionada resaltada. Sólo
     /// mientras hay una sesión de switcher viva. Mismo text rendering que el HUD.
-    fn emit_switcher(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_switcher(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         const SW_PX: f32 = 18.0;
         const SW_ROW_H: i32 = 36;
         const SW_PAD: i32 = 18;
@@ -1160,7 +1195,7 @@ impl DrmState {
     /// por escritorio ocupado, arreglado según la geometría 2D, con las ventanas
     /// a escala y el activo resaltado. Pobla `overview_tiles` para el hit-test
     /// del click. Esquemática (rects + número), no miniaturas en vivo.
-    fn emit_overview(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_overview(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         self.overview_tiles.clear();
         if !self.app.overview_open {
             return;
@@ -1576,7 +1611,7 @@ impl DrmState {
     /// durante un arrastre Move/Tile. Las zonas se escalan al monitor bajo
     /// el puntero y se emiten traducidas a coords locales de `rect`. Si las
     /// zonas no caen sobre `rect` (drag en otro monitor), no emite nada.
-    fn emit_zone_overlay(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_zone_overlay(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         let drag_mode = self.app.drag.as_ref().map(|d| d.mode);
         if !matches!(drag_mode, Some(DragMode::Move) | Some(DragMode::Tile)) {
             return;
@@ -1609,7 +1644,7 @@ impl DrmState {
         // el borde antes que el relleno para que el contorno quede prominente.
         let bw = 4;
         let bcol = fill(0.85);
-        let mut push_band = |x: i32, y: i32, w: i32, h: i32, into: &mut Vec<Frame<GlesRenderer>>| {
+        let mut push_band = |x: i32, y: i32, w: i32, h: i32, into: &mut Vec<Frame>| {
             if w <= 0 || h <= 0 {
                 return;
             }
@@ -1636,7 +1671,7 @@ impl DrmState {
     /// Emite el menú raíz en `rect` si esta salida es la dueña del menú.
     /// El menú vive en **coords locales** de su salida (se abrió ahí), así
     /// que las posiciones de las columnas no necesitan traducción.
-    fn emit_menu(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_menu(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         let Some(m) = self.root_menu.as_ref() else { return };
         // El menú se rasteriza con el puntero **local** a su salida — así
         // resaltado y hover apuntan a la fila correcta.
@@ -1722,7 +1757,7 @@ impl DrmState {
     /// Emite la pista de revelado del dock autoescondido — una franja fina en
     /// el borde anclado mientras está oculto. Sólo en la salida donde vive
     /// el shell (primaria).
-    fn emit_reveal_band(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_reveal_band(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         if !(crate::shell_dock().autohide && self.app.shell_hidden) {
             return;
         }
@@ -1821,7 +1856,7 @@ impl DrmState {
         crate::screencopy::danar_todo(&mut self.app);
     }
 
-    fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame<GlesRenderer>>) {
+    fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame>) {
         let name = self.outputs[idx].name.clone();
         let cur_path = self.outputs[idx].wallpaper_path.clone();
         let size = (self.outputs[idx].rect.w, self.outputs[idx].rect.h);
@@ -2014,8 +2049,8 @@ impl DrmState {
         let is_primary = idx == Self::PRIMARY;
         let owns_menu = self.menu_output_idx == Some(idx);
 
-        let elements: Vec<Frame<GlesRenderer>> = {
-            let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
+        let elements: Vec<Frame> = {
+            let mut out: Vec<Frame> = Vec::new();
 
             // 1. Cursor (si el puntero cae sobre esta salida).
             self.emit_cursor(rect, &mut out);
@@ -2122,11 +2157,50 @@ impl DrmState {
     }
 }
 
+/// Renderiza el árbol de superficie de una ventana a una **textura offscreen**
+/// `w×h` y la devuelve (queda en GPU, sin readback). El llamante la dibuja con el
+/// shader de esquinas redondeadas (`TextureShaderElement`). Función libre para
+/// tomar `&mut renderer` sin chocar con el préstamo de `windows`. `None` si la
+/// ventana no tiene contenido o algún paso de GPU falla (cae a la máscara CPU).
+fn render_surface_to_texture(
+    renderer: &mut GlesRenderer,
+    surface: &WlSurface,
+    w: i32,
+    h: i32,
+) -> Option<GlesTexture> {
+    use smithay::backend::renderer::{Bind, Color32F, Frame as _, Offscreen};
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+        render_elements_from_surface_tree(renderer, surface, (0, 0), 1.0, 1.0, Kind::Unspecified);
+    if elems.is_empty() {
+        return None;
+    }
+    let buffer_size: smithay::utils::Size<i32, smithay::utils::Buffer> = (w, h).into();
+    let mut tex =
+        Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buffer_size).ok()?;
+    let fisico: smithay::utils::Size<i32, Physical> = (w, h).into();
+    let damage = [Rectangle::from_size(fisico)];
+    {
+        // `target` toma prestado `tex`; lo encerramos en este bloque para que se
+        // suelte antes de devolver `tex` (si no, no se podría mover).
+        let mut target = renderer.bind(&mut tex).ok()?;
+        let mut frame = renderer.render(&mut target, fisico, Transform::Normal).ok()?;
+        frame.clear(Color32F::TRANSPARENT, &damage).ok()?;
+        smithay::backend::renderer::utils::draw_render_elements(&mut frame, 1.0, &elems, &damage)
+            .ok()?;
+        frame.finish().ok()?;
+    }
+    Some(tex)
+}
+
 /// Aplica una **máscara de esquinas redondeadas** (SDF rounded-rect, ~1px de
 /// antialias) a un buffer **BGRA premultiplicado** `w×h`, in situ. Multiplica los
 /// 4 canales por la cobertura `m∈[0,1]` — premultiplicado se mantiene
 /// premultiplicado. Sólo toca las 4 esquinas (el centro queda intacto), así que
-/// es barato relativo a la lectura de GPU que lo precede. Pura.
+/// es barato relativo a la lectura de GPU que lo precede. Pura. Es el **fallback**
+/// CPU cuando el shader GLES no compiló.
 fn round_mask_bgra(px: &mut [u8], w: i32, h: i32, radius: f32) {
     if w <= 0 || h <= 0 || radius <= 0.5 {
         return;
@@ -2179,7 +2253,7 @@ fn emit_popups(
     parent: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     base: (i32, i32),
     rect: Rect,
-    into: &mut Vec<Frame<GlesRenderer>>,
+    into: &mut Vec<Frame>,
 ) {
     for (popup, ploc) in smithay::desktop::PopupManager::popups_for_surface(parent) {
         let psurf = popup.wl_surface().clone();
