@@ -11,7 +11,7 @@ use super::{EnteGraph, INHIBIT_TTL, SERVER_SEQ_FLAG};
 use arje_bus::{
     BusMessage, BusPayload, BusRequest, BusResponse, EnteInfo, Liveness, PeerCreds, ResourceSample,
 };
-use arje_card::{Capability, EntityCard, WireCard};
+use arje_card::{Capability, EntityCard, Payload, WireCard};
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
@@ -41,6 +41,26 @@ fn cards_dir() -> std::path::PathBuf {
     std::env::var("ARJE_CARDS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/etc/arje/cards.d"))
+}
+
+/// Expande una Card cargada del store a la lista de Entes a encarnar.
+///
+/// Regla del **bundle de sesión**: una Card `Virtual` con `genesis` no
+/// vacío representa un *conjunto*, no un proceso (p. ej. `session-gnome`
+/// = los shims de `arje-compat`). El boot la materializa anexando sus
+/// hijos al genesis de la Semilla (`profile::overlay_session`); en
+/// runtime, spawnearla = encarnar **sus miembros**, no el envoltorio
+/// `Virtual` (que no tiene proceso y dejaría los shims sin arrancar — el
+/// grafo sólo encarna un nivel, no recurre `genesis`). Cualquier otra
+/// Card (un único Ente, `Virtual` aislado, o con payload real) se
+/// spawnea tal cual. Esto da al greeter una activación de sesión al login
+/// con un solo `SpawnCardFromDisk { name: "session-gnome" }`.
+fn expand_disk_bundle(card: EntityCard) -> Vec<EntityCard> {
+    if matches!(card.payload, Payload::Virtual) && !card.genesis.is_empty() {
+        card.genesis
+    } else {
+        vec![card]
+    }
 }
 
 /// Lee `(memoria residente, nº de hilos)` de `/proc/<pid>`. `None` si el
@@ -258,9 +278,27 @@ impl EnteGraph {
         };
         info!(%caller, %name, label = %card.label, "SpawnCardFromDisk");
         let seed_id = self.seed.id;
-        match self.authorize_and_spawn(card, seed_id).await {
-            Ok(()) => BusResponse::Ok,
-            Err(e) => BusResponse::Error(format!("spawn: {e}")),
+        // Una Card `Virtual` con genesis = bundle de sesión: encarnamos sus
+        // miembros (los shims), no el envoltorio. Best-effort por miembro:
+        // un shim que no encarna no debe tumbar el resto de la sesión.
+        let miembros = expand_disk_bundle(card);
+        let total = miembros.len();
+        let mut errores = Vec::new();
+        for ente in miembros {
+            let label = ente.label.clone();
+            if let Err(e) = self.authorize_and_spawn(ente, seed_id).await {
+                warn!(%caller, %name, %label, ?e, "miembro del bundle no encarnó");
+                errores.push(format!("{label}: {e}"));
+            }
+        }
+        if errores.is_empty() {
+            BusResponse::Ok
+        } else {
+            BusResponse::Error(format!(
+                "spawn {name}: {}/{total} miembros fallaron: {}",
+                errores.len(),
+                errores.join("; ")
+            ))
         }
     }
 
@@ -563,5 +601,41 @@ mod tests {
     fn read_proc_resources_pid_inexistente_es_none() {
         // PID imposible (fuera de rango) → None, sin panic.
         assert!(read_proc_resources(i32::MAX).is_none());
+    }
+
+    use arje_card::{EntityCard, Payload};
+
+    fn native(label: &str) -> EntityCard {
+        let mut c = EntityCard::new(label);
+        c.payload = Payload::Native { exec: "/x".into(), argv: vec![], envp: vec![] };
+        c
+    }
+
+    #[test]
+    fn bundle_virtual_con_genesis_devuelve_los_miembros() {
+        // session-gnome: Virtual con shims en genesis → spawnear los shims.
+        let mut bundle = EntityCard::new("session-gnome");
+        bundle.payload = Payload::Virtual;
+        bundle.genesis = vec![native("compat-logind"), native("compat-hostnamed")];
+        let out = super::expand_disk_bundle(bundle);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|c| matches!(c.payload, Payload::Native { .. })));
+    }
+
+    #[test]
+    fn bundle_card_simple_se_mantiene() {
+        let out = super::expand_disk_bundle(native("un-ente"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "un-ente");
+    }
+
+    #[test]
+    fn bundle_virtual_sin_genesis_se_respeta() {
+        // Un Virtual aislado es un nodo lógico legítimo: no se descompone.
+        let mut c = EntityCard::new("aggregator");
+        c.payload = Payload::Virtual;
+        let out = super::expand_disk_bundle(c);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "aggregator");
     }
 }

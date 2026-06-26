@@ -44,6 +44,36 @@ La elección *fina* de qué sesión iniciar tras autenticar es del greeter
 (que ya es el DM). Este overlay sólo decide qué backends de sistema
 están presentes para esa sesión.
 
+## Dos vías de activación
+
+El mismo fichero de fragmento sirve a dos momentos:
+
+1. **Boot-time (overlay).** `arje.session=gnome` en el cmdline → la
+   Semilla nace con los shims ya en su `genesis`
+   (`profile::overlay_session`). Para esto el fragmento vive en
+   `seeds/fragments/` y se compone al construir la seed.
+
+2. **Login-time (bundle).** El greeter (el DM), al elegir una sesión que
+   necesita backends de sistema, manda **un** request al bus de arje:
+
+   ```rust
+   // mirada-greeter / mirada-compositor, tras elegir la sesión gnome:
+   arje_bus::BusRequest::SpawnCardFromDisk { name: "session-gnome".into() }
+   ```
+
+   `arje-zero` reconoce el fragmento `Virtual` con `genesis` como un
+   **bundle** y encarna sus miembros (los shims), no el envoltorio
+   (`graph::bus_mediator::expand_disk_bundle`). Para esta vía el
+   fragmento debe estar instalado en el card store:
+
+   ```sh
+   install -m 0644 session-gnome.card.json /etc/arje/cards.d/session-gnome.json
+   ```
+
+   Esta es la vía que cierra el acople boot↔login: los backends de GNOME
+   se levantan **cuando el usuario elige esa sesión**, no eagermente al
+   arranque. (Falta el hook en el greeter — ver "Pendiente" abajo.)
+
 ## v0 eager → activación perezosa (futuro)
 
 Hoy los shims se declaran como entes del `genesis` y se **encarnan al
@@ -52,6 +82,16 @@ D-Bus: registrar los nombres `org.freedesktop.*` como activables y
 spawnear el shim al primer request. Cuando exista esa capa, el fragmento
 declara *disponibilidad* en vez de *spawn*, y arrancar la sesión GNOME no
 cuesta 12 procesos que quizá nadie consulte.
+
+## Pendiente
+
+- **Hook en el greeter.** `mirada-greeter` hoy emite un `SessionTicket`
+  a stdout que el compositor parsea (`mirada-greeter/src/main.rs`); no
+  habla con `arje-bus`. Falta que, al elegir una sesión con backends
+  arje (p. ej. gnome), el greeter o el compositor manden el
+  `SpawnCardFromDisk { name: "session-<X>" }` de arriba antes del
+  traspaso. Implica un mapeo sesión→perfil y `arje-bus` como dep de
+  mirada — cruza el dominio mirada↔arje.
 
 ## Cómo añadir una sesión
 
