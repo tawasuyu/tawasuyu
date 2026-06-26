@@ -90,6 +90,34 @@ pub enum Clip {
 }
 
 impl Clip {
+    /// Todos los clips, en orden de catálogo (para ciclar en un editor).
+    pub const ALL: [Clip; 6] = [
+        Clip::Idle,
+        Clip::Walk,
+        Clip::Run,
+        Clip::Wave,
+        Clip::Point,
+        Clip::Cheer,
+    ];
+
+    /// Nombre legible (español).
+    pub fn label(self) -> &'static str {
+        match self {
+            Clip::Idle => "quieto",
+            Clip::Walk => "caminar",
+            Clip::Run => "correr",
+            Clip::Wave => "saludar",
+            Clip::Point => "señalar",
+            Clip::Cheer => "festejar",
+        }
+    }
+
+    /// El clip siguiente (cicla).
+    pub fn next(self) -> Clip {
+        let i = Clip::ALL.iter().position(|&c| c == self).unwrap_or(0);
+        Clip::ALL[(i + 1) % Clip::ALL.len()]
+    }
+
     /// `true` si el clip es un **gesto** (no locomoción) — un momento expresivo que
     /// merece un acento musical. Lo usa el director para derivar los "beats del guion".
     pub fn is_emote(self) -> bool {

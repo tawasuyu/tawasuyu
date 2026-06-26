@@ -26,9 +26,9 @@ use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 use llimphi_voxel::{
-    window_origin_for_cast, world_dim, ActorScript, Age, Bioma, BiomaPalette, CharSpec, Clip,
-    Forma, LeyKind, LeyUso, MatRole, Material, MaterialDef, Mundo, MundoRender, Project, SceneSpec,
-    ShotKind, ShotSpec, PREVIEW_DIM_XZ,
+    window_origin_for_cast, world_dim, ActorKeySpec, ActorScript, ActorSpec, Age, Bioma,
+    BiomaPalette, CharSpec, Clip, Forma, LeyKind, LeyUso, MatRole, Material, MaterialDef, Mundo,
+    MundoRender, Project, SceneSpec, ShotKind, ShotSpec, PREVIEW_DIM_XZ,
 };
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_dock_rail::{dock_rail_view_side, DockRailItem, DockRailPalette, DockRailSide};
@@ -130,7 +130,12 @@ impl Level {
                 ("Seres", Icon::User),
             ],
             Level::Mundos => vec![("Semilla", Icon::Globe), ("Biomas", Icon::Mountain)],
-            Level::Escenas => vec![("Escena", Icon::Film), ("Cámara", Icon::Camera), ("Video", Icon::Play)],
+            Level::Escenas => vec![
+                ("Escena", Icon::Film),
+                ("Reparto", Icon::User),
+                ("Cámara", Icon::Camera),
+                ("Video", Icon::Play),
+            ],
         }
     }
 }
@@ -205,6 +210,16 @@ enum Msg {
     SeedKey(KeyEvent),
     SeedRandom,
     CycleMundoBioma,
+    // Escenas — reparto y recorrido (filmografía).
+    SelectActor(usize),
+    AddActor,
+    RemoveActor,
+    CycleActorSere,
+    SelectKey(usize),
+    AddKey,
+    RemoveKey,
+    SetKeyPos(bool, f32), // true=gx, false=gz
+    CycleKeyClip,
     // Escenas.
     CycleSceneMundo,
     SetSceneDur(f32),
@@ -274,6 +289,9 @@ struct Model {
     andar_estado: usize,
     /// Manada viva (conducta) corriendo en el preview de Seres.
     manada: bool,
+    /// Reparto: actor y clave (waypoint) seleccionados al dirigir una escena.
+    actor_sel: usize,
+    key_sel: usize,
     /// Semilla del random de mundos (LCG; no hay `Math.random`).
     rng: u32,
     /// Decisión global: dientes DENTRO (overlay) o FUERA (franja reservada).
@@ -673,6 +691,108 @@ impl App for Studio {
                 if let Some(m) = sel_mundo_mut(&mut model) {
                     let cur = m.biomas.first().copied().unwrap_or(0);
                     m.biomas = vec![next_in(&bids, cur)];
+                    model.gen += 1;
+                }
+            }
+            Msg::SelectActor(i) => {
+                model.actor_sel = i;
+                model.key_sel = 0;
+            }
+            Msg::AddActor => {
+                let dim = world_dim(PREVIEW_DIM_XZ);
+                let (cz, gx0, gx1) = (dim[2] as f32 * 0.5, dim[0] as f32 * 0.35, dim[0] as f32 * 0.65);
+                let dur = sel_scene(&model).map(|s| s.duration).unwrap_or(5.0);
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    s.actors.push(ActorSpec {
+                        character: 0,
+                        keys: vec![
+                            ActorKeySpec { t: 0.0, gx: gx0, gz: cz, clip: Some(Clip::Walk), face: None },
+                            ActorKeySpec { t: dur, gx: gx1, gz: cz, clip: Some(Clip::Walk), face: None },
+                        ],
+                        frame_rate: None,
+                    });
+                    model.actor_sel = s.actors.len() - 1;
+                    model.key_sel = 0;
+                    model.gen += 1;
+                }
+            }
+            Msg::RemoveActor => {
+                let a = model.actor_sel;
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if s.actors.len() > 1 && a < s.actors.len() {
+                        s.actors.remove(a);
+                    }
+                }
+                model.actor_sel = model.actor_sel.saturating_sub(1);
+                model.key_sel = 0;
+                model.gen += 1;
+            }
+            Msg::CycleActorSere => {
+                let a = model.actor_sel;
+                let n = model.project.seres.len().max(1);
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if let Some(act) = s.actors.get_mut(a) {
+                        act.character = (act.character + 1) % n;
+                    }
+                    model.gen += 1;
+                }
+            }
+            Msg::SelectKey(i) => model.key_sel = i,
+            Msg::AddKey => {
+                let a = model.actor_sel;
+                let dur = sel_scene(&model).map(|s| s.duration).unwrap_or(5.0);
+                let dimx = world_dim(PREVIEW_DIM_XZ)[0] as f32;
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if let Some(act) = s.actors.get_mut(a) {
+                        let mut k = act.keys.last().cloned().unwrap_or(ActorKeySpec {
+                            t: 0.0,
+                            gx: dimx * 0.5,
+                            gz: dimx * 0.5,
+                            clip: Some(Clip::Walk),
+                            face: None,
+                        });
+                        k.gx = (k.gx + 12.0).min(dimx - 2.0); // nuevo waypoint adelante
+                        act.keys.push(k);
+                        respread(act, dur);
+                        model.key_sel = act.keys.len() - 1;
+                    }
+                    model.gen += 1;
+                }
+            }
+            Msg::RemoveKey => {
+                let (a, k) = (model.actor_sel, model.key_sel);
+                let dur = sel_scene(&model).map(|s| s.duration).unwrap_or(5.0);
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if let Some(act) = s.actors.get_mut(a) {
+                        if act.keys.len() > 2 && k < act.keys.len() {
+                            act.keys.remove(k);
+                            respread(act, dur);
+                        }
+                    }
+                    model.key_sel = model.key_sel.saturating_sub(1);
+                    model.gen += 1;
+                }
+            }
+            Msg::SetKeyPos(is_gx, v) => {
+                let (a, k) = (model.actor_sel, model.key_sel);
+                let lim = world_dim(PREVIEW_DIM_XZ)[0] as f32 - 1.0;
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if let Some(key) = s.actors.get_mut(a).and_then(|act| act.keys.get_mut(k)) {
+                        if is_gx {
+                            key.gx = v.clamp(1.0, lim);
+                        } else {
+                            key.gz = v.clamp(1.0, lim);
+                        }
+                    }
+                    model.gen += 1;
+                }
+            }
+            Msg::CycleKeyClip => {
+                let (a, k) = (model.actor_sel, model.key_sel);
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if let Some(key) = s.actors.get_mut(a).and_then(|act| act.keys.get_mut(k)) {
+                        key.clip = Some(key.clip.unwrap_or(Clip::Idle).next());
+                    }
                     model.gen += 1;
                 }
             }
@@ -1593,7 +1713,8 @@ fn scene_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
                 body_text(format!("{} actores", s.actors.len()), theme.fg_muted, theme),
             ]
         }
-        1 => {
+        1 => reparto_tools(model, s),
+        2 => {
             let cam_label = if model.script_cam { "cámara: guion" } else { "cámara: órbita" };
             vec![
                 section_title("CÁMARA", theme),
@@ -1613,6 +1734,64 @@ fn scene_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             body_text("renderiza el guion a un .mkv (puede tardar)".into(), theme.fg_placeholder, theme),
         ],
     }
+}
+
+/// **Reparto** (filmografía): dirigir quién actúa y su recorrido (waypoints).
+fn reparto_tools(model: &Model, s: &SceneSpec) -> Vec<View<Msg>> {
+    let theme = &model.theme;
+    let sp = SliderPalette::from_theme(theme);
+    let btn = ButtonPalette::from_theme(theme);
+    let dimx = world_dim(PREVIEW_DIM_XZ)[0] as f32;
+    let a = model.actor_sel.min(s.actors.len().saturating_sub(1));
+
+    let mut v = vec![section_title("REPARTO", theme)];
+    for (i, act) in s.actors.iter().enumerate() {
+        let nombre = model.project.seres.get(act.character).map(|c| c.name.clone()).unwrap_or_else(|| "—".into());
+        let label = format!("{nombre} · {} claves", act.keys.len());
+        v.push(selectable_row(label, i == a, Msg::SelectActor(i), theme));
+    }
+    v.push(spacer(6.0));
+    v.push(crud_pair("+ actor", Msg::AddActor, "− actor", Msg::RemoveActor, &btn));
+
+    let Some(act) = s.actors.get(a) else { return v };
+    let nombre = model.project.seres.get(act.character).map(|c| c.name.clone()).unwrap_or_else(|| "—".into());
+    v.push(spacer(8.0));
+    v.push(button_view(format!("actúa: {nombre}"), &btn, Msg::CycleActorSere));
+
+    // Recorrido: las claves (waypoints) del actor seleccionado.
+    v.push(spacer(8.0));
+    v.push(section_title("RECORRIDO", theme));
+    let k = model.key_sel.min(act.keys.len().saturating_sub(1));
+    for (i, key) in act.keys.iter().enumerate() {
+        let clip = key.clip.unwrap_or(Clip::Idle).label();
+        v.push(selectable_row(format!("t={:.1}s · {clip}", key.t), i == k, Msg::SelectKey(i), theme));
+    }
+    v.push(spacer(4.0));
+    v.push(crud_pair("+ clave", Msg::AddKey, "− clave", Msg::RemoveKey, &btn));
+
+    if let Some(key) = act.keys.get(k) {
+        v.push(spacer(8.0));
+        v.push(section_title("CLAVE", theme));
+        let (gx, gz) = (key.gx, key.gz);
+        v.push(slider_view("posición X", gx, 0.0, dimx, &sp, move |_p, dv| Some(Msg::SetKeyPos(true, gx + dv))));
+        v.push(slider_view("posición Z", gz, 0.0, dimx, &sp, move |_p, dv| Some(Msg::SetKeyPos(false, gz + dv))));
+        v.push(spacer(4.0));
+        v.push(button_view(format!("acción: {}", key.clip.unwrap_or(Clip::Idle).label()), &btn, Msg::CycleKeyClip));
+    }
+    v.push(spacer(8.0));
+    v.push(body_text("dale ▶ reproducir en «Escena» para ver el recorrido".into(), theme.fg_placeholder, theme));
+    v
+}
+
+/// Par de botones en una fila (p.ej. agregar/quitar).
+fn crud_pair(a: &str, ma: Msg, b: &str, mb: Msg, btn: &ButtonPalette) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0), height: Dimension::auto() },
+        gap: Size { width: length(4.0), height: length(0.0) },
+        ..Default::default()
+    })
+    .children(vec![cell(button_view(a, btn, ma)), cell(button_view(b, btn, mb))])
 }
 
 /// Slider de un campo de relieve del bioma.
@@ -1865,6 +2044,15 @@ fn bioma_ids(model: &Model) -> Vec<u64> {
 fn sere_ids(model: &Model) -> Vec<u64> {
     model.project.seres.iter().map(|s| s.id).collect()
 }
+
+/// Reparte los tiempos de las claves de un actor uniformemente en `[0, dur]`, así el
+/// recorrido se recorre a lo largo de toda la escena (el director interpola entre ellas).
+fn respread(actor: &mut ActorSpec, dur: f32) {
+    let n = actor.keys.len();
+    for (i, k) in actor.keys.iter_mut().enumerate() {
+        k.t = if n <= 1 { 0.0 } else { i as f32 / (n - 1) as f32 * dur };
+    }
+}
 fn mundo_ids(model: &Model) -> Vec<u64> {
     model.project.mundos.iter().map(|m| m.id).collect()
 }
@@ -1988,6 +2176,8 @@ pub(crate) fn demo_model() -> Model {
         simulating: false,
         andar_estado: 1, // caminar
         manada: false,
+        actor_sel: 0,
+        key_sel: 0,
         rng: 0x1234_5678,
         dientes_outside: wawa_config::WawaConfig::load().dientes_outside,
         project,
