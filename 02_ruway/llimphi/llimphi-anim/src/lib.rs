@@ -34,6 +34,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod constraint;
 pub mod skel;
 
 use std::collections::{HashMap, HashSet};

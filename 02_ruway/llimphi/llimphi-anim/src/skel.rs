@@ -174,6 +174,12 @@ impl Skeleton {
         self.world[bone]
     }
 
+    /// Padre de un hueso (`None` si es raíz). Lo usan los constraints para
+    /// convertir una rotación deseada en mundo a la pose local.
+    pub fn parent(&self, bone: BoneId) -> Option<BoneId> {
+        self.bones[bone].parent
+    }
+
     pub fn len(&self) -> usize {
         self.bones.len()
     }

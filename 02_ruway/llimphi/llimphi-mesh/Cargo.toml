@@ -10,3 +10,7 @@ description = "llimphi-mesh — render de mallas deformables (llimphi-anim::skel
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-anim = { workspace = true }
+
+[dev-dependencies]
+# Sólo para el ejemplo combinado lottie+rive (Lottie + esqueleto/IK en una app).
+llimphi-lottie = { workspace = true }
