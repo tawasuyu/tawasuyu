@@ -250,6 +250,7 @@ fn escena_base() -> Escena {
         proyecto_tab: crate::model::ProyectoTab::Historia,
         commit_preview: None,
         push_abierto: false,
+        renombrar: None,
         proyectos_recientes: Vec::new(),
     };
 
@@ -607,6 +608,7 @@ fn clonar_para_frame(base: &Model) -> Model {
         proyecto_tab: crate::model::ProyectoTab::Historia,
         commit_preview: None,
         push_abierto: false,
+        renombrar: None,
         proyectos_recientes: Vec::new(),
     }
 }

@@ -206,6 +206,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         proyecto_tab: crate::model::ProyectoTab::Historia,
         commit_preview: None,
         push_abierto: false,
+        renombrar: None,
         proyectos_recientes: Vec::new(),
     };
     // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo

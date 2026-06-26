@@ -295,6 +295,21 @@ impl Proyecto {
         self.trabajo.remove(&id);
     }
 
+    /// Renombra un documento de la working copy.
+    pub fn renombrar_documento(&mut self, id: DocId, nombre: impl Into<String>) {
+        if let Some(d) = self.trabajo.get_mut(&id) {
+            d.nombre = nombre.into();
+        }
+    }
+
+    /// Borra una rama. No borra la rama actual (devuelve `false`).
+    pub fn borrar_rama(&mut self, nombre: &str) -> bool {
+        if self.rama_actual() == Some(nombre) {
+            return false;
+        }
+        self.ramas.remove(nombre).is_some()
+    }
+
     // ----- Refs ----------------------------------------------------------
 
     /// Nombre de la rama actual, si HEAD está sobre una rama.
@@ -931,6 +946,23 @@ mod pruebas {
         assert_eq!(modif[0].id, b.id);
         assert_eq!(agreg.len(), 1);
         assert_eq!(agreg[0].id, cc.id);
+    }
+
+    #[test]
+    fn borrar_rama_y_renombrar_documento() {
+        let mut p = Proyecto::nuevo("demo");
+        let id = p.nuevo_documento("viejo");
+        p.set_documento(id, doc_con("viejo", &["x"]));
+        let h1 = p.push("ana", "c1", 100).unwrap();
+        p.rama_nueva("feat", Some(h1));
+        // No se puede borrar la rama actual (principal).
+        assert!(!p.borrar_rama(RAMA_DEFECTO));
+        // Sí se puede borrar otra.
+        assert!(p.borrar_rama("feat"));
+        assert!(p.ramas().iter().all(|(n, _)| n != "feat"));
+        // Renombrar documento.
+        p.renombrar_documento(id, "nuevo nombre");
+        assert_eq!(p.documento(id).unwrap().nombre, "nuevo nombre");
     }
 
     #[test]

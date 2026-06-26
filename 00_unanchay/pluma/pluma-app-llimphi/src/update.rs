@@ -583,6 +583,33 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::NuevoDocProyecto => {
             nuevo_doc_proyecto(&mut model);
         }
+        Msg::EliminarDoc(doc) => {
+            eliminar_doc(&mut model, doc);
+        }
+        Msg::BorrarRama(nombre) => {
+            let idx = model.proyecto_activo;
+            if model.proyectos[idx].proyecto.borrar_rama(&nombre) {
+                guardar_proyecto_activo(&mut model);
+                model.ultimo_status = format!("rama borrada: {nombre}");
+            } else {
+                model.ultimo_status = "no se puede borrar la rama actual".into();
+            }
+        }
+        Msg::AbrirRenombrar(obj) => {
+            let actual = nombre_de_objetivo(&model, obj);
+            let mut ti = TextInputState::new();
+            ti.set_text(actual);
+            model.preset_input = ti;
+            model.preset_focused = true;
+            model.renombrar = Some(obj);
+        }
+        Msg::ConfirmarRenombrar => {
+            confirmar_renombrar(&mut model);
+        }
+        Msg::CerrarRenombrar => {
+            model.renombrar = None;
+            model.preset_focused = false;
+        }
         Msg::AbrirPush => {
             model.push_abierto = true;
             model.preset_input = TextInputState::new();
@@ -1339,6 +1366,65 @@ fn nuevo_doc_proyecto(model: &mut Model) {
     nuevo_haz_vacio(model);
     sincronizar_doc_activo(model);
     model.ultimo_status = format!("documento {n} agregado al proyecto");
+}
+
+/// Elimina un documento del proyecto activo. Nunca deja el proyecto con 0
+/// documentos. Si era el activo, pasa al primero que quede.
+fn eliminar_doc(model: &mut Model, doc: Uuid) {
+    let idx = model.proyecto_activo;
+    if model.proyectos[idx].proyecto.documentos().len() <= 1 {
+        model.ultimo_status = "no se puede eliminar el único documento".into();
+        return;
+    }
+    model.proyectos[idx].proyecto.eliminar_documento(doc);
+    if model.proyectos[idx].doc_activo == doc {
+        if let Some((nuevo, _)) = model.proyectos[idx].proyecto.documentos().first().cloned() {
+            model.proyectos[idx].doc_activo = nuevo;
+            if let Some(d) = model.proyectos[idx].proyecto.documento(nuevo).cloned() {
+                aplicar_doc(model, d);
+            }
+        }
+    }
+    model.ultimo_status = "documento eliminado".into();
+}
+
+/// Nombre actual del objetivo a renombrar (para prellenar el input).
+fn nombre_de_objetivo(model: &Model, obj: crate::model::RenombrarObjetivo) -> String {
+    use crate::model::RenombrarObjetivo;
+    let pa = &model.proyectos[model.proyecto_activo];
+    match obj {
+        RenombrarObjetivo::Proyecto => pa.proyecto.nombre.clone(),
+        RenombrarObjetivo::Documento(id) => pa
+            .proyecto
+            .documento(id)
+            .map(|d| d.nombre.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// Aplica el renombre tecleado al proyecto o documento, y persiste.
+fn confirmar_renombrar(model: &mut Model) {
+    use crate::model::RenombrarObjetivo;
+    let Some(obj) = model.renombrar.take() else {
+        return;
+    };
+    model.preset_focused = false;
+    let nombre = model.preset_input.text().trim().to_string();
+    if nombre.is_empty() {
+        model.ultimo_status = "el nombre no puede estar vacío".into();
+        return;
+    }
+    let idx = model.proyecto_activo;
+    match obj {
+        RenombrarObjetivo::Proyecto => {
+            model.proyectos[idx].proyecto.nombre = nombre.clone();
+        }
+        RenombrarObjetivo::Documento(id) => {
+            model.proyectos[idx].proyecto.renombrar_documento(id, nombre.clone());
+        }
+    }
+    guardar_proyecto_activo(model);
+    model.ultimo_status = format!("renombrado: {nombre}");
 }
 
 fn guardar_proyecto_activo(model: &mut Model) {

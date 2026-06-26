@@ -893,29 +893,76 @@ fn panel_proyecto(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
     let pa = &model.proyectos[idx];
     let rama = pa.proyecto.rama_actual().unwrap_or("(detached)").to_string();
 
-    let titulo = encabezado(
-        &format!("{}  ·  rama {}", recortar(&pa.proyecto.nombre, 16), rama),
-        theme,
-    );
+    // Título del proyecto con ✎ para renombrarlo.
+    let titulo = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .text_aligned(
+            format!("{}  ·  rama {}", recortar(&pa.proyecto.nombre, 14), rama).to_uppercase(),
+            10.0,
+            theme.fg_muted,
+            Alignment::Start,
+        ),
+        View::new(Style {
+            size: Size { width: length(18.0_f32), height: length(18.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned("✎".to_string(), 11.0, theme.fg_muted, Alignment::Center)
+        .on_click(Msg::AbrirRenombrar(crate::model::RenombrarObjetivo::Proyecto)),
+    ]);
     let push_btn = button_view::<Msg>("push  ·  sellar versión  (Ctrl+K)", &palette_btn, Msg::AbrirPush);
 
-    // Selector de documento del proyecto.
+    // Selector de documento del proyecto: [nombre] [✎ renombrar] [✕ eliminar].
     let docs = pa.proyecto.documentos();
     let mut filas_doc: Vec<View<Msg>> = vec![encabezado(&format!("documentos ({})", docs.len()), theme)];
     for (doc_id, nombre) in &docs {
         let activo = *doc_id == pa.doc_activo;
+        let id = *doc_id;
+        let nombre_v = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .text_aligned(
+            format!("{}  {}", if activo { "▸" } else { " " }, recortar(nombre, 18)),
+            11.5,
+            if activo { theme.fg_text } else { theme.fg_muted },
+            Alignment::Start,
+        )
+        .ellipsis(1)
+        .on_click(Msg::SelDocProyecto(id));
+        let renombrar = View::new(Style {
+            size: Size { width: length(18.0_f32), height: length(20.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned("✎".to_string(), 10.5, theme.fg_muted, Alignment::Center)
+        .on_click(Msg::AbrirRenombrar(crate::model::RenombrarObjetivo::Documento(id)));
+        let eliminar = View::new(Style {
+            size: Size { width: length(18.0_f32), height: length(20.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned("✕".to_string(), 10.5, theme.fg_muted, Alignment::Center)
+        .on_click(Msg::EliminarDoc(id));
         filas_doc.push(
             View::new(Style {
+                flex_direction: FlexDirection::Row,
                 size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+                align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
-            .text_aligned(
-                format!("{}  {}", if activo { "▸" } else { " " }, recortar(nombre, 24)),
-                11.5,
-                if activo { theme.fg_text } else { theme.fg_muted },
-                Alignment::Start,
-            )
-            .on_click(Msg::SelDocProyecto(*doc_id)),
+            .children(vec![nombre_v, renombrar, eliminar]),
         );
     }
     let lista_doc = View::new(Style {
@@ -1012,6 +1059,7 @@ fn ramas_acciones(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
             &palette_btn,
             Msg::MergeRama(nombre.clone()),
         ));
+        hijos.push(button_view::<Msg>("✕", &palette_btn, Msg::BorrarRama(nombre.clone())));
     }
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -2586,6 +2634,42 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
             size: (460.0, 220.0),
             viewport: model.viewport,
             on_dismiss: Msg::CerrarPush,
+            palette: ModalPalette::from_theme(&theme),
+        }));
+    }
+    // Modal de renombrar (proyecto o documento).
+    if let Some(obj) = model.renombrar {
+        let palette_input = TextInputPalette::from_theme(&theme);
+        let que = match obj {
+            crate::model::RenombrarObjetivo::Proyecto => "proyecto",
+            crate::model::RenombrarObjetivo::Documento(_) => "documento",
+        };
+        let body = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![
+            encabezado(&format!("nuevo nombre del {que}"), &theme),
+            text_input_view::<Msg>(
+                &model.preset_input,
+                "nombre…",
+                model.preset_focused,
+                &palette_input,
+                Msg::FocusPreset,
+            ),
+        ]);
+        return Some(modal_view(ModalSpec {
+            title: format!("Renombrar {que}"),
+            body,
+            buttons: vec![
+                ModalButton::cancel("Cancelar", Msg::CerrarRenombrar),
+                ModalButton::primary("Renombrar", Msg::ConfirmarRenombrar),
+            ],
+            size: (440.0, 200.0),
+            viewport: model.viewport,
+            on_dismiss: Msg::CerrarRenombrar,
             palette: ModalPalette::from_theme(&theme),
         }));
     }

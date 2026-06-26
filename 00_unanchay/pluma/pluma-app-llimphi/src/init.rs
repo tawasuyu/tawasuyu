@@ -188,6 +188,7 @@ pub fn init_modelo() -> Model {
         proyecto_tab: crate::model::ProyectoTab::Historia,
         commit_preview: None,
         push_abierto: false,
+        renombrar: None,
         proyectos_recientes: crate::util::cargar_recientes(),
     };
 

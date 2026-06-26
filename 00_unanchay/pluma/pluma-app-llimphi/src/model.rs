@@ -200,6 +200,13 @@ impl ProyectoTab {
     }
 }
 
+/// Qué se está renombrando en el modal de renombrar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenombrarObjetivo {
+    Proyecto,
+    Documento(DocId),
+}
+
 /// Un proyecto abierto: el `Proyecto` (con su DAG de versiones), su ruta en
 /// disco (`None` = nunca guardado), y qué documento del proyecto está activo.
 pub struct ProyectoAbierto {
@@ -439,6 +446,16 @@ pub enum Msg {
     SelDocProyecto(DocId),
     /// Agrega un documento nuevo al proyecto activo.
     NuevoDocProyecto,
+    /// Elimina un documento del proyecto activo (nunca deja 0).
+    EliminarDoc(DocId),
+    /// Borra una rama del proyecto activo.
+    BorrarRama(String),
+    /// Abre el modal de renombrar (proyecto o documento).
+    AbrirRenombrar(RenombrarObjetivo),
+    /// Confirma el renombre con el texto tecleado.
+    ConfirmarRenombrar,
+    /// Cierra el modal de renombrar.
+    CerrarRenombrar,
     /// Abre el modal de push (mensaje del snapshot).
     AbrirPush,
     /// Confirma el push con el mensaje tecleado.
@@ -608,6 +625,8 @@ pub struct Model {
     pub(crate) commit_preview: Option<ProyHash>,
     /// Modal de push abierto (mensaje en `path_input`).
     pub(crate) push_abierto: bool,
+    /// Modal de renombrar abierto (texto nuevo en `preset_input`).
+    pub(crate) renombrar: Option<RenombrarObjetivo>,
     /// Rutas de proyectos recientes (persistidas junto al sled).
     pub(crate) proyectos_recientes: Vec<PathBuf>,
 }

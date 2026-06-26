@@ -178,6 +178,14 @@ impl App for Pluma {
                 _ => Some(Msg::PresetInputKey(event.clone())),
             };
         }
+        // Modal de renombrar: Esc cancela, Enter confirma, lo demás teclea.
+        if model.renombrar.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CerrarRenombrar),
+                Key::Named(NamedKey::Enter) => Some(Msg::ConfirmarRenombrar),
+                _ => Some(Msg::PresetInputKey(event.clone())),
+            };
+        }
         // Si el input de ruta tiene foco, las teclas van ahí — incluso
         // Ctrl/Shift combos. Esc lo apaga; cualquier otra cosa edita.
         if model.path_focused {
