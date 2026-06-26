@@ -12,11 +12,12 @@
 //! puente CalDAV/CardDAV. Igual que `paloma`, el crate no implementa `App`: expone
 //! `Model` + `Msg` + funciones libres que un binario delega desde su `impl App`.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use llimphi_theme::Theme;
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_toast::Toast;
 
 use raymi_core::time::{self, CivilDate};
 use raymi_core::{CalStore, DavBackend};
@@ -30,6 +31,9 @@ pub use editor::{
     ContactDraft, ContactField, EditScope, Editor, EventDraft, EventField, Repeat, RepeatEnd,
 };
 use raymi_core::CalError;
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 /// Modo activo de la app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +79,13 @@ pub struct Model {
     db: Option<CalDb>,
     /// Id de cuenta — clave de la caché en disco.
     account_id: String,
+    /// Toasts vivos (confirmaciones de guardado/borrado, errores). El widget
+    /// los apila en bottom-right; cada uno expira por su cuenta vía `spawn`.
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ `Msg::ToastExpire`.
+    next_toast: u64,
+    /// Tamaño del viewport (para posicionar el stack de toasts).
+    viewport: (f32, f32),
     pub status: String,
     pub theme: Theme,
 }
@@ -129,11 +140,28 @@ impl Model {
             edit_scope: EditScope::Series,
             db,
             account_id,
+            toasts: Vec::new(),
+            next_toast: 0,
+            viewport: (1180.0, 720.0),
             status: String::from("raymi"),
             theme,
         };
         model.resync();
         model
+    }
+
+    /// Empuja un toast al stack. La expiración la programa `update` tras la
+    /// transición (un `spawn` que duerme `TOAST_TTL` y emite `ToastExpire`).
+    fn toast_success(&mut self, text: impl Into<String>) {
+        let id = self.next_toast;
+        self.next_toast += 1;
+        self.toasts.push(Toast::success(id, text, TOAST_TTL));
+    }
+
+    fn toast_error(&mut self, text: impl Into<String>) {
+        let id = self.next_toast;
+        self.next_toast += 1;
+        self.toasts.push(Toast::error(id, text, TOAST_TTL));
     }
 
     /// (Re)sincroniza todo desde el backend: calendarios + eventos + libretas +
@@ -246,15 +274,18 @@ impl Model {
                 Ok(()) => {
                     self.persist();
                     self.recount();
+                    self.toast_success("Evento guardado");
                 }
                 Err(e) => {
                     self.status = format!("no se pudo guardar: {e}");
+                    self.toast_error(format!("No se pudo guardar el evento: {e}"));
                     self.editor = Editor::Event(d);
                 }
             }
             return;
         }
 
+        let creating = d.uid.is_none();
         let uid = d.uid.clone().unwrap_or_else(|| new_uid("evt"));
         match d.build(uid) {
             Some(ev) => match self.backend.put_event(&ev) {
@@ -262,14 +293,17 @@ impl Model {
                     self.store.upsert_event(ev);
                     self.persist();
                     self.recount();
+                    self.toast_success(if creating { "Evento creado" } else { "Evento guardado" });
                 }
                 Err(e) => {
                     self.status = format!("no se pudo guardar el evento: {e}");
+                    self.toast_error(format!("No se pudo guardar el evento: {e}"));
                     self.editor = Editor::Event(d);
                 }
             },
             None => {
                 self.status = rimay_localize::t("raymi-status-invalid-datetime");
+                self.toast_error(rimay_localize::t("raymi-status-invalid-datetime"));
                 self.editor = Editor::Event(d);
             }
         }
@@ -330,9 +364,11 @@ impl Model {
             Ok(()) => {
                 self.persist();
                 self.recount();
+                self.toast_success("Evento eliminado");
             }
             Err(e) => {
                 self.status = format!("no se pudo borrar el evento: {e}");
+                self.toast_error(format!("No se pudo borrar el evento: {e}"));
                 self.editor = Editor::Event(d);
             }
         }
@@ -367,14 +403,17 @@ impl Model {
                     self.selected_contact = Some(uid);
                     self.persist();
                     self.recount();
+                    self.toast_success("Contacto guardado");
                 }
                 Err(e) => {
                     self.status = format!("no se pudo guardar el contacto: {e}");
+                    self.toast_error(format!("No se pudo guardar el contacto: {e}"));
                     self.editor = Editor::Contact(d);
                 }
             },
             None => {
                 self.status = rimay_localize::t("raymi-status-contact-needs-name");
+                self.toast_error(rimay_localize::t("raymi-status-contact-needs-name"));
                 self.editor = Editor::Contact(d);
             }
         }
@@ -391,9 +430,11 @@ impl Model {
                 }
                 self.persist();
                 self.recount();
+                self.toast_success("Contacto eliminado");
             }
             Err(e) => {
                 self.status = format!("no se pudo borrar el contacto: {e}");
+                self.toast_error(format!("No se pudo borrar el contacto: {e}"));
                 self.editor = Editor::Contact(d);
             }
         }
@@ -522,12 +563,19 @@ pub enum Msg {
     DeleteContact,
     /// Cerrar cualquier editor sin guardar.
     CloseEditor,
+    /// El viewport cambió de tamaño (para posicionar el stack de toasts).
+    Resize(u32, u32),
+    /// Un toast cumplió su `TOAST_TTL`: se descarta del stack.
+    ToastExpire(u64),
     /// No hace nada (absorbe clicks dentro de la tarjeta del editor).
     Noop,
 }
 
 /// La transición Elm.
-pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> Model {
+pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> Model {
+    // Cuántos toasts había antes de procesar el mensaje: los que se agreguen
+    // durante este `update` necesitan que les programemos su expiración.
+    let toasts_before = model.toasts.len();
     match msg {
         Msg::SetMode(m) => {
             model.mode = m;
@@ -627,7 +675,18 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
         Msg::SaveContact => model.save_contact(),
         Msg::DeleteContact => model.delete_contact(),
         Msg::CloseEditor => model.editor = Editor::None,
+        Msg::Resize(w, h) => model.viewport = (w as f32, h as f32),
+        Msg::ToastExpire(id) => model.toasts.retain(|t| t.id != id),
         Msg::Noop => {}
+    }
+    // Programá la expiración de los toasts recién empujados: un worker duerme
+    // `TOAST_TTL` y reentra con `ToastExpire`, que los descarta del stack.
+    for t in model.toasts.iter().skip(toasts_before) {
+        let id = t.id;
+        handle.spawn(move || {
+            std::thread::sleep(TOAST_TTL);
+            Msg::ToastExpire(id)
+        });
     }
     model
 }
@@ -720,6 +779,11 @@ pub fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         }
         _ => None,
     }
+}
+
+/// El viewport cambió de tamaño: lo registramos para posicionar los toasts.
+pub fn on_resize(_model: &Model, w: u32, h: u32) -> Option<Msg> {
+    Some(Msg::Resize(w, h))
 }
 
 /// Rueda del mouse en el calendario → cambia de mes.

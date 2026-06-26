@@ -3,16 +3,21 @@
 
 use std::collections::HashMap;
 
-use llimphi_theme::{stable_color, Theme};
+use llimphi_theme::{motion, stable_color, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, LengthPercentage, Position, Rect, Size, Style},
     style::LengthPercentageAuto,
     AlignItems, JustifyContent,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+use llimphi_icons::Icon;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use std::time::Instant;
 
 use raymi_core::time::{self, CivilDate, DAY};
 use raymi_core::{Address, CalStore, Contact, Occurrence};
@@ -38,20 +43,67 @@ fn pad_xy(x: f32, y: f32) -> Rect<LengthPercentage> {
     Rect { left: length(x), right: length(x), top: length(y), bottom: length(y) }
 }
 
+/// Hash estable de una cadena → `key` para las animaciones implícitas (la misma
+/// escena/ítem produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// `key` estable de la escena actual: modo + vista + período mostrado. Cambia al
+/// conmutar calendario/contactos, la vista (mes/semana/día) o navegar de mes —
+/// dispara la transición de entrada del cuerpo; estable al seleccionar un día.
+fn scene_key(model: &Model) -> u64 {
+    match model.mode {
+        Mode::Calendar => key_of(&format!(
+            "cal:{:?}:{}:{}",
+            model.cal_view(),
+            model.view_year,
+            model.view_month
+        )),
+        Mode::Contacts => key_of("contacts"),
+    }
+}
+
 /// La raíz: barra superior, cuerpo según modo, barra de estado.
 pub fn root(model: &Model) -> View<Msg> {
     let theme = &model.theme;
-    let body = match model.mode {
+    let inner = match model.mode {
         Mode::Calendar => calendar_body(model),
         Mode::Contacts => contacts_body(model),
     };
-    View::new(Style {
+    // El cuerpo entra con un fade + slide-up suave al cambiar de escena (modo /
+    // vista / mes) en vez de saltar de golpe.
+    let body = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![inner])
+    .animated_enter_from(scene_key(model), motion::SLOW, Affine::translate((0.0, 24.0)));
+    let frame = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![toolbar(model), body, status_bar(model)])
+    .children(vec![toolbar(model), body, status_bar(model)]);
+
+    // Overlay de toasts (bottom-right): notificaciones efímeras de acciones y
+    // errores. La app filtra los vivos; el widget los apila y los anima.
+    let now = Instant::now();
+    let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+    if alive.is_empty() {
+        frame
+    } else {
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![frame, toast_stack_view(&alive, model.viewport, Msg::ToastExpire)])
+    }
 }
 
 /// Barra superior: marca + tabs de modo + (en calendario) navegación de mes.
@@ -419,15 +471,7 @@ fn day_agenda(model: &Model) -> View<Msg> {
         rows.push(agenda_row(theme, o, color));
     }
     if rows.is_empty() {
-        rows.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(60.0_f32) },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
-                ..Default::default()
-            })
-            .text_aligned(rimay_localize::t("raymi-no-events"), 13.0, theme.fg_placeholder, Alignment::Center),
-        );
+        rows.push(empty_panel(theme, Icon::Bell, rimay_localize::t("raymi-no-events"), None));
     }
     let list = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -501,6 +545,9 @@ fn agenda_row(theme: &Theme, o: &Occurrence, color: Color) -> View<Msg> {
         uid: o.event.uid.clone(),
         occ_start: Some(o.start),
     })
+    // Pop-in al aparecer: la fila entra con un fade suave (key estable por
+    // instancia → sólo anima la primera vez que se pinta esa ocurrencia).
+    .animated_enter(key_of(&format!("ag:{}:{}", o.event.uid, o.start)), motion::NORMAL)
     .children(vec![bar, texts])
 }
 
@@ -863,15 +910,7 @@ fn contacts_list(model: &Model) -> View<Msg> {
         rows.push(contact_row(theme, c, selected));
     }
     if rows.is_empty() {
-        rows.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(50.0_f32) },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
-                ..Default::default()
-            })
-            .text_aligned(rimay_localize::t("raymi-no-contacts"), 13.0, theme.fg_placeholder, Alignment::Center),
-        );
+        rows.push(empty_panel(theme, Icon::User, rimay_localize::t("raymi-no-contacts"), None));
     }
     let list = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -924,6 +963,9 @@ fn contact_row(theme: &Theme, c: &Contact, selected: bool) -> View<Msg> {
     .fill(bg)
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::SelectContact(c.uid.clone()))
+    // Pop-in al aparecer/filtrar: cada contacto entra con un fade suave (key
+    // estable por uid → sólo anima cuando ese contacto aparece en la lista).
+    .animated_enter(key_of(&format!("ct:{}", c.uid)), motion::NORMAL)
     .children(vec![avatar(&c.initials(), &c.full_name), texts])
 }
 
@@ -934,21 +976,13 @@ fn contact_detail(model: &Model) -> View<Msg> {
         .and_then(|uid| model.store_ref().search_contacts("").into_iter().find(|c| c.uid == uid));
 
     let Some(c) = contact else {
-        let ph = View::new(Style {
-            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            flex_grow: 1.0,
-            ..Default::default()
-        })
-        .text_aligned(rimay_localize::t("raymi-select-contact-hint"), 14.0, theme.fg_placeholder, Alignment::Center);
         return View::new(Style {
             size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
             flex_grow: 1.0,
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![ph]);
+        .children(vec![empty_panel(theme, Icon::User, rimay_localize::t("raymi-select-contact-hint"), None)]);
     };
 
     let head = View::new(Style {
@@ -1500,6 +1534,17 @@ fn checkbox(theme: &Theme, label: &str, on: bool, msg: Msg) -> View<Msg> {
 }
 
 // ── primitivas ──────────────────────────────────────────────────────────────
+
+/// Empty-state que llena su panel: icono apagado + título centrado, en vez de
+/// un hueco con texto plano.
+fn empty_panel(theme: &Theme, icon: Icon, title: String, desc: Option<&str>) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![empty_view(icon, title, desc, &EmptyPalette::from_theme(theme))])
+}
 
 fn status_bar(model: &Model) -> View<Msg> {
     let theme = &model.theme;

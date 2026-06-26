@@ -14,6 +14,9 @@ raymi-store = { path = "../raymi-store" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
+llimphi-icons = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 
