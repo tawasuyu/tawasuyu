@@ -34,6 +34,7 @@ pub mod visor;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -54,6 +55,9 @@ use llimphi_widget_menubar::{
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_nodegraph::{nodegraph_view, NodegraphMetrics, NodegraphPalette};
 use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use llimphi_icons::Icon;
 
 use app_bus::{AppMenu, Menu, MenuItem};
 
@@ -92,6 +96,9 @@ const TICK_MS: u64 = 33;
 
 /// Profundidad del ring buffer de snapshots mostrado en el tile correspondiente.
 const SNAPSHOTS_K: usize = 12;
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 // ─── Modelo y mensajes ────────────────────────────────────────────────────────
 
@@ -159,6 +166,8 @@ pub enum Msg {
     /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
     /// de ventana sobre el tile seleccionado. Sin selección es no-op.
     ContextMenuOpen(f32, f32),
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 pub struct Model {
@@ -204,6 +213,10 @@ pub struct Model {
     /// Menú contextual sobre el tile seleccionado: `(tile, x, y)` ancla en
     /// coords de ventana. `None` cerrado.
     context_menu: Option<(TileId, f32, f32)>,
+    /// Toasts vivos (recompilación de fuerzas, rebobinado de snapshots).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -326,6 +339,8 @@ impl App for TinkuyApp {
             menu_anim: Tween::idle(1.0),
             selected_tile: None,
             context_menu: None,
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -409,7 +424,19 @@ impl App for TinkuyApp {
                     .rewire_input(from_node, from_output, to_node, to_input);
                 let (force, status) = recompile_force(&model.force_graph);
                 model.force = force;
+                // Feedback efímero del resultado de recompilar: el label del
+                // tile ya lo refleja, pero un toast lo hace imposible de
+                // perder justo después de recablear.
+                let id = model.next_toast;
+                model.next_toast += 1;
+                let toast = match &status {
+                    ForceStatus::Ok => Toast::success(id, "Fuerza recompilada", TOAST_TTL),
+                    ForceStatus::Error(msg) => {
+                        Toast::error(id, format!("Grafo inválido: {msg}"), TOAST_TTL)
+                    }
+                };
                 model.force_status = status;
+                push_toast(&mut model, handle, toast);
             }
             Msg::LoadSnapshot { idx } => {
                 if let Some(entry) = model.snapshots.get(idx).cloned() {
@@ -429,6 +456,13 @@ impl App for TinkuyApp {
                         // Pausa: el usuario pidió ver este estado; respetar
                         // su mirada antes de reanudar (Space para retomar).
                         model.paused = true;
+                        let id = model.next_toast;
+                        model.next_toast += 1;
+                        push_toast(
+                            &mut model,
+                            handle,
+                            Toast::info(id, format!("Rebobinado al step {}", entry.step), TOAST_TTL),
+                        );
                     }
                 }
             }
@@ -481,6 +515,9 @@ impl App for TinkuyApp {
                     model.menu_open = None;
                     model.context_menu = Some((t, x, y));
                 }
+            }
+            Msg::ToastExpire(id) => {
+                model.toasts.retain(|t| t.id != id);
             }
         }
         model
@@ -557,7 +594,7 @@ impl App for TinkuyApp {
         // Raíz: column con la barra de menú arriba y la grilla debajo. El
         // right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
         // menú contextual sobre el tile seleccionado.
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -567,7 +604,31 @@ impl App for TinkuyApp {
         })
         .fill(theme.bg_app)
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, grid])
+        .children(vec![menubar, grid]);
+
+        // Overlay de toasts (bottom-right). Se filtran los vivos acá; el
+        // tick periódico ya re-renderiza, así que se desvanecen solos.
+        let alive: Vec<Toast> = model
+            .toasts
+            .iter()
+            .filter(|t| t.is_alive(Instant::now()))
+            .cloned()
+            .collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![
+                root,
+                toast_stack_view(&alive, viewport_of(model), Msg::ToastExpire),
+            ])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -620,6 +681,17 @@ fn selectable_tile(body: View<Msg>, id: TileId) -> View<Msg> {
     })
     .on_click(Msg::SelectTile(id))
     .children(vec![body])
+}
+
+/// Empuja un toast al stack y programa su expiración con un `spawn` que
+/// duerme `TOAST_TTL` y reentra al `update` con `Msg::ToastExpire(id)`.
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
 }
 
 /// Viewport para clampear overlays: tamaño de ventana. El modelo no lo
@@ -935,6 +1007,16 @@ fn observables_body(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn snapshots_body(model: &Model, theme: &Theme) -> View<Msg> {
+    // Sin snapshots todavía (arranque o tras un Reset): empty-state canónico
+    // en vez de un hueco con texto suelto.
+    if model.snapshots.is_empty() {
+        return empty_view(
+            Icon::Camera,
+            "Sin snapshots",
+            Some("La simulación va capturando CIDs en vivo; aparecerán acá para rebobinar."),
+            &EmptyPalette::from_theme(theme),
+        );
+    }
     // Más reciente arriba — más legible que el orden natural del VecDeque.
     let mut rows: Vec<View<Msg>> = Vec::with_capacity(SNAPSHOTS_K + 2);
     rows.push(text_row(
@@ -942,23 +1024,19 @@ fn snapshots_body(model: &Model, theme: &Theme) -> View<Msg> {
         11.0,
         theme.fg_muted,
     ));
-    if model.snapshots.is_empty() {
-        rows.push(text_row("(esperando primer tick…)".into(), 12.0, theme.fg_muted));
-    } else {
-        // El ring guarda `step` ascendente; iteramos en reverso para que el
-        // más reciente quede arriba, manteniendo el `idx` original — el Msg
-        // ::LoadSnapshot lo usa para indexar la VecDeque sin reverse.
-        let total = model.snapshots.len();
-        for (i, entry) in model.snapshots.iter().enumerate().rev() {
-            let marker = if entry.step == model.step { "▶ " } else { "  " };
-            let txt = format!(
-                "{}step {:>6}   {}",
-                marker,
-                entry.step,
-                cid_to_hex(&entry.cid_short)
-            );
-            rows.push(snapshot_row(txt, i, total, theme));
-        }
+    // El ring guarda `step` ascendente; iteramos en reverso para que el
+    // más reciente quede arriba, manteniendo el `idx` original — el Msg
+    // ::LoadSnapshot lo usa para indexar la VecDeque sin reverse.
+    let total = model.snapshots.len();
+    for (i, entry) in model.snapshots.iter().enumerate().rev() {
+        let marker = if entry.step == model.step { "▶ " } else { "  " };
+        let txt = format!(
+            "{}step {:>6}   {}",
+            marker,
+            entry.step,
+            cid_to_hex(&entry.cid_short)
+        );
+        rows.push(snapshot_row(txt, i, total, theme));
     }
     padded_col(rows, None)
 }
