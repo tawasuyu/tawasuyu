@@ -1243,13 +1243,11 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
         .children(hijos),
     );
     if let Some(h) = model.commit_preview {
+        capas.push(divider(theme));
+        capas.push(preview_diff(model, idx, h, theme));
         let palette_btn = ButtonPalette::from_theme(theme);
         capas.push(fila_botones(vec![
-            button_view::<Msg>(
-                &format!("restaurar {}", hash_corto(&h)),
-                &palette_btn,
-                Msg::RestaurarCommit(h),
-            ),
+            button_view::<Msg>("restaurar esta versión", &palette_btn, Msg::RestaurarCommit(h)),
             button_view::<Msg>("cerrar", &palette_btn, Msg::CerrarPreview),
         ]));
     }
@@ -1261,6 +1259,83 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(capas)
+}
+
+/// Previsualización de un commit: metadatos + diff contra su primer padre
+/// (qué documentos/átomos se agregaron `+` / eliminaron `−` / modificaron `~`).
+fn preview_diff(model: &Model, idx: usize, h: pluma_proyecto::Hash, theme: &Theme) -> View<Msg> {
+    let pa = &model.proyectos[idx];
+    let commit = match pa.proyecto.commit(&h) {
+        Ok(c) => c,
+        Err(_) => return pista_texto("commit no encontrado", theme),
+    };
+    let mut hijos: Vec<View<Msg>> = vec![
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(
+            format!("versión {} · {}", hash_corto(&h), recortar(&commit.mensaje, 28)),
+            12.0,
+            theme.fg_text,
+            Alignment::Start,
+        ),
+        pista_texto(
+            &format!("autor {} · {} padre(s)", commit.autor, commit.padres.len()),
+            theme,
+        ),
+    ];
+
+    let padre = commit.padres.first().copied();
+    match pa.proyecto.diff(padre, h) {
+        Ok(diff) if !diff.docs.is_empty() => {
+            let verde = Color::from_rgba8(94, 184, 124, 255);
+            let rojo = Color::from_rgba8(225, 84, 75, 255);
+            let ambar = Color::from_rgba8(238, 178, 53, 255);
+            for dd in &diff.docs {
+                let marca = match dd.doc_clase {
+                    Some(pluma_proyecto::ClaseDiff::Agregado) => "＋ doc",
+                    Some(pluma_proyecto::ClaseDiff::Eliminado) => "− doc",
+                    _ => "doc",
+                };
+                hijos.push(pista_texto(&format!("{} {}", marca, recortar(&dd.nombre, 22)), theme));
+                for a in dd.atomos.iter().take(12) {
+                    let (glifo, color) = match a.clase {
+                        pluma_proyecto::ClaseDiff::Agregado => ("＋", verde),
+                        pluma_proyecto::ClaseDiff::Eliminado => ("−", rojo),
+                        pluma_proyecto::ClaseDiff::Modificado => ("~", ambar),
+                    };
+                    let texto = a.texto.replace('\n', " ");
+                    hijos.push(
+                        View::new(Style {
+                            size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+                            ..Default::default()
+                        })
+                        .text_aligned(
+                            format!("  {}  {}", glifo, recortar(texto.trim(), 30)),
+                            11.0,
+                            color,
+                            Alignment::Start,
+                        )
+                        .ellipsis(1),
+                    );
+                }
+                if dd.atomos.len() > 12 {
+                    hijos.push(pista_texto(&format!("  … +{} más", dd.atomos.len() - 12), theme));
+                }
+            }
+        }
+        Ok(_) => hijos.push(pista_texto("sin cambios respecto del padre", theme)),
+        Err(_) => hijos.push(pista_texto("no se pudo calcular el diff", theme)),
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
 }
 
 /// Tree de lienzos: originales y sus derivadas, con toggle de selección

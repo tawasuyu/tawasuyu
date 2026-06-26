@@ -180,6 +180,39 @@ pub enum Head {
     Suelto(Hash),
 }
 
+/// Cómo cambió un átomo (o documento) entre dos versiones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaseDiff {
+    Agregado,
+    Eliminado,
+    Modificado,
+}
+
+/// Un cambio de átomo en un diff: su id, la clase, y el texto relevante (el
+/// nuevo para Agregado/Modificado, el viejo para Eliminado).
+#[derive(Debug, Clone)]
+pub struct CambioAtomDiff {
+    pub id: Uuid,
+    pub clase: ClaseDiff,
+    pub texto: String,
+}
+
+/// Diff de un documento entre dos versiones. `doc_clase` = `Some` si el doc
+/// entero se agregó/eliminó; `None` si se modificó (existe en ambas).
+#[derive(Debug, Clone)]
+pub struct DocDiff {
+    pub doc: DocId,
+    pub nombre: String,
+    pub doc_clase: Option<ClaseDiff>,
+    pub atomos: Vec<CambioAtomDiff>,
+}
+
+/// Diff entre dos commits: los documentos que cambiaron.
+#[derive(Debug, Clone, Default)]
+pub struct Diff {
+    pub docs: Vec<DocDiff>,
+}
+
 /// Resultado de un merge.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResultadoMerge {
@@ -600,6 +633,107 @@ impl Proyecto {
         None
     }
 
+    // ----- Diff ----------------------------------------------------------
+
+    /// Diff entre dos commits (`viejo` = `None` ⇒ contra el vacío). Devuelve, por
+    /// documento que cambió, los átomos agregados/eliminados/modificados. Los
+    /// documentos sin cambios (mismo hash de árbol) se omiten.
+    pub fn diff(&self, viejo: Option<Hash>, nuevo: Hash) -> Result<Diff, ProyectoError> {
+        let arbol_n = self.arbol_de(&self.commit(&nuevo)?)?;
+        let arbol_v = match viejo {
+            Some(v) => self.arbol_de(&self.commit(&v)?)?,
+            None => Arbol::default(),
+        };
+        let ids: BTreeSet<DocId> = arbol_n
+            .docs
+            .keys()
+            .chain(arbol_v.docs.keys())
+            .copied()
+            .collect();
+        let mut docs: Vec<DocDiff> = Vec::new();
+        for id in ids {
+            let hn = arbol_n.docs.get(&id).copied();
+            let hv = arbol_v.docs.get(&id).copied();
+            if hn == hv {
+                continue; // sin cambios
+            }
+            let nombre = arbol_n
+                .nombres
+                .get(&id)
+                .or_else(|| arbol_v.nombres.get(&id))
+                .cloned()
+                .unwrap_or_default();
+            match (hn, hv) {
+                (Some(hn), None) => {
+                    let de: DocEstado = self.get_obj(&hn)?;
+                    let atomos = de
+                        .atoms
+                        .iter()
+                        .map(|a| CambioAtomDiff {
+                            id: a.id,
+                            clase: ClaseDiff::Agregado,
+                            texto: a.content.to_string(),
+                        })
+                        .collect();
+                    docs.push(DocDiff { doc: id, nombre, doc_clase: Some(ClaseDiff::Agregado), atomos });
+                }
+                (None, Some(hv)) => {
+                    let de: DocEstado = self.get_obj(&hv)?;
+                    let atomos = de
+                        .atoms
+                        .iter()
+                        .map(|a| CambioAtomDiff {
+                            id: a.id,
+                            clase: ClaseDiff::Eliminado,
+                            texto: a.content.to_string(),
+                        })
+                        .collect();
+                    docs.push(DocDiff { doc: id, nombre, doc_clase: Some(ClaseDiff::Eliminado), atomos });
+                }
+                (Some(hn), Some(hv)) => {
+                    let den: DocEstado = self.get_obj(&hn)?;
+                    let dev: DocEstado = self.get_obj(&hv)?;
+                    let mapn: BTreeMap<Uuid, &NarrativeAtom> =
+                        den.atoms.iter().map(|a| (a.id, a)).collect();
+                    let mapv: BTreeMap<Uuid, &NarrativeAtom> =
+                        dev.atoms.iter().map(|a| (a.id, a)).collect();
+                    let aids: BTreeSet<Uuid> =
+                        mapn.keys().chain(mapv.keys()).copied().collect();
+                    let mut atomos = Vec::new();
+                    for aid in aids {
+                        match (mapn.get(&aid), mapv.get(&aid)) {
+                            (Some(an), None) => atomos.push(CambioAtomDiff {
+                                id: aid,
+                                clase: ClaseDiff::Agregado,
+                                texto: an.content.to_string(),
+                            }),
+                            (None, Some(av)) => atomos.push(CambioAtomDiff {
+                                id: aid,
+                                clase: ClaseDiff::Eliminado,
+                                texto: av.content.to_string(),
+                            }),
+                            (Some(an), Some(av)) => {
+                                if an.content_hash != av.content_hash {
+                                    atomos.push(CambioAtomDiff {
+                                        id: aid,
+                                        clase: ClaseDiff::Modificado,
+                                        texto: an.content.to_string(),
+                                    });
+                                }
+                            }
+                            (None, None) => {}
+                        }
+                    }
+                    if !atomos.is_empty() {
+                        docs.push(DocDiff { doc: id, nombre, doc_clase: None, atomos });
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+        Ok(Diff { docs })
+    }
+
     // ----- Archivo .pluma ------------------------------------------------
 
     /// Guarda el proyecto entero (objetos + refs + working copy) a un `.pluma`.
@@ -752,6 +886,51 @@ mod pruebas {
         // El commit de merge tiene 2 padres.
         let hm = p.head_commit().unwrap();
         assert_eq!(p.commit(&hm).unwrap().padres.len(), 2);
+    }
+
+    #[test]
+    fn diff_detecta_modificado_y_agregado() {
+        let mut p = Proyecto::nuevo("demo");
+        // Átomos con id estable a través de versiones (como hace el editor real).
+        let mut a = NarrativeAtom::new("uno", "es");
+        let mut b = NarrativeAtom::new("dos", "es");
+        let id = p.nuevo_documento("d");
+        let mut d1 = DocEstado::vacio("d");
+        let mut c = Cuerpo::nuevo("es", "d", Intencion::Original, 0);
+        c.agregar(a.id, 0);
+        c.agregar(b.id, 0);
+        d1.cuerpos.push(c.clone());
+        d1.atoms.push(a.clone());
+        d1.atoms.push(b.clone());
+        p.set_documento(id, d1);
+        let _v1 = p.push("ana", "v1", 100).unwrap();
+
+        // v2: modifica b (mismo id) y agrega c (id nuevo).
+        b.set_content("DOS!");
+        let cc = NarrativeAtom::new("tres", "es");
+        let mut d2 = DocEstado::vacio("d");
+        let mut cuerpo2 = Cuerpo::nuevo("es", "d", Intencion::Original, 0);
+        cuerpo2.agregar(a.id, 0);
+        cuerpo2.agregar(b.id, 0);
+        cuerpo2.agregar(cc.id, 0);
+        d2.cuerpos.push(cuerpo2);
+        d2.atoms.push(a.clone());
+        d2.atoms.push(b.clone());
+        d2.atoms.push(cc.clone());
+        p.set_documento(id, d2);
+        let v2 = p.push("ana", "v2", 200).unwrap();
+
+        let padre = p.commit(&v2).unwrap().padres[0];
+        let diff = p.diff(Some(padre), v2).unwrap();
+        assert_eq!(diff.docs.len(), 1);
+        let dd = &diff.docs[0];
+        assert!(dd.doc_clase.is_none(), "doc modificado, no agregado");
+        let modif: Vec<_> = dd.atomos.iter().filter(|x| x.clase == ClaseDiff::Modificado).collect();
+        let agreg: Vec<_> = dd.atomos.iter().filter(|x| x.clase == ClaseDiff::Agregado).collect();
+        assert_eq!(modif.len(), 1);
+        assert_eq!(modif[0].id, b.id);
+        assert_eq!(agreg.len(), 1);
+        assert_eq!(agreg[0].id, cc.id);
     }
 
     #[test]

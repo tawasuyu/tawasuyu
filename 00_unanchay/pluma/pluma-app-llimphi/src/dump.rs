@@ -347,6 +347,8 @@ fn modelo_sintetico(diente: usize) -> Model {
         m.proyecto_activo = 0;
         m.diente_activo = 1; // muestra el panel del proyecto
         m.proyecto_tab = crate::model::ProyectoTab::Historia;
+        // Previsualiza el commit HEAD para mostrar el diff.
+        m.commit_preview = m.proyectos[0].proyecto.head_commit();
     }
     m
 }
