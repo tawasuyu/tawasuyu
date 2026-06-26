@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -56,6 +57,10 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use llimphi_icons::Icon;
 #[cfg(test)]
 use ulid::Ulid;
 
@@ -67,6 +72,18 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Cap del buffer del timeline. Mantenemos las últimas N entries —
 /// más viejo se descarta. 50 cubre ~4 minutos de actividad densa.
 const TIMELINE_CAP: usize = 50;
+
+/// Cuánto vive un toast efímero antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas
+/// (la misma entry produce siempre la misma key entre rebuilds, así el
+/// pop-in sólo anima la primera aparición).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 #[derive(Clone, Debug)]
 enum ProbeState {
@@ -105,6 +122,14 @@ struct Model {
     /// Menú contextual sobre una entry: `(idx, x, y)` ancla en ventana.
     /// `None` cerrado.
     context_menu: Option<(usize, f32, f32)>,
+    /// Toasts efímeros vivos (errores del probe, confirmaciones de
+    /// acciones del usuario).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ `Msg` de expiración.
+    next_toast: u64,
+    /// Hay una cadena de `Msg::Shimmer` en vuelo (evita rearmar dos);
+    /// sólo corre mientras el probe está en estado `Pending`.
+    shimmering: bool,
 }
 
 #[derive(Clone)]
@@ -138,6 +163,12 @@ enum Msg {
     ContextMenuOpen(f32, f32),
     /// Limpia el timeline acumulado.
     ClearTimeline,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
+    /// Tick de animación del shimmer del skeleton — fuerza repaint
+    /// mientras el probe está `Pending`. Se auto-rearma sólo si sigue
+    /// cargando, así no queda un loop de repaint ocioso.
+    Shimmer,
 }
 
 struct Explorer;
@@ -163,7 +194,7 @@ impl App for Explorer {
         handle.dispatch(Msg::Tick);
         handle.spawn_periodic(POLL_INTERVAL, || Msg::Tick);
 
-        Model {
+        let mut m = Model {
             theme: Theme::dark(),
             socket_path: transport::default_socket_path(),
             flow,
@@ -178,7 +209,14 @@ impl App for Explorer {
             menu_anim: Tween::idle(1.0),
             selected: None,
             context_menu: None,
-        }
+            toasts: Vec::new(),
+            next_toast: 0,
+            shimmering: false,
+        };
+        // Mientras esperamos el primer probe (estado `Pending`) corre el
+        // shimmer del skeleton del timeline.
+        ensure_shimmer(&mut m, handle);
+        m
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
@@ -209,7 +247,30 @@ impl App for Explorer {
                 handle.spawn(move || run_probe(flow, type_name));
             }
             Msg::ProbeResult { state, sessions, matches, elapsed_ms } => {
+                // Toast sólo en la transición de estado (no en cada tick de
+                // 5 s con el mismo estado), para no spamear.
+                let changed =
+                    std::mem::discriminant(&m.state) != std::mem::discriminant(&state);
                 m.state = state;
+                if changed {
+                    let toast = match &m.state {
+                        ProbeState::Down { reason } => Some(Toast::error(
+                            m.next_toast,
+                            format!("Broker DOWN — {reason}"),
+                            TOAST_TTL,
+                        )),
+                        ProbeState::UpWithProvider { .. } => Some(Toast::success(
+                            m.next_toast,
+                            "Broker UP — provider matcheado",
+                            TOAST_TTL,
+                        )),
+                        _ => None,
+                    };
+                    if let Some(toast) = toast {
+                        m.next_toast += 1;
+                        push_toast(&mut m, handle, toast);
+                    }
+                }
                 m.sessions = sessions;
                 if let Some(list) = matches {
                     m.diff_matches_into_timeline(&list);
@@ -260,6 +321,10 @@ impl App for Explorer {
             }
             Msg::CycleTheme => {
                 m.theme = Theme::next_after(m.theme.name);
+                let id = m.next_toast;
+                m.next_toast += 1;
+                let toast = Toast::info(id, format!("Tema: {}", m.theme.name), TOAST_TTL);
+                push_toast(&mut m, handle, toast);
             }
             Msg::SelectEntry(i) => {
                 m.selected = Some(i);
@@ -276,8 +341,20 @@ impl App for Explorer {
                 m.timeline.clear();
                 m.selected = None;
                 m.context_menu = None;
+                let id = m.next_toast;
+                m.next_toast += 1;
+                push_toast(&mut m, handle, Toast::info(id, "Timeline limpiado", TOAST_TTL));
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
+            }
+            Msg::Shimmer => {
+                // El thread durmió 50 ms; `ensure_shimmer` reabre la cadena
+                // sólo si seguimos en `Pending`.
+                m.shimmering = false;
             }
         }
+        ensure_shimmer(&mut m, handle);
         m
     }
 
@@ -400,32 +477,77 @@ impl App for Explorer {
             &stat_palette,
         ));
 
-        for (i, e) in model.timeline.iter().take(20).enumerate() {
-            let selected = model.selected == Some(i);
-            let mut row = View::new(Style {
-                size: Size {
-                    width: percent(1.0_f32),
-                    height: length(18.0_f32),
-                },
-                padding: Rect {
-                    left: length(8.0_f32),
-                    right: length(8.0_f32),
-                    top: length(0.0_f32),
-                    bottom: length(0.0_f32),
-                },
-                ..Default::default()
-            })
-            .text_aligned(
-                format_timeline_entry(e),
-                11.0,
-                theme.fg_text,
-                Alignment::Start,
-            )
-            .on_click(Msg::SelectEntry(i));
-            if selected {
-                row = row.fill(theme.bg_selected);
+        // Timeline tri-estado:
+        //  1) Pending y vacío → filas skeleton con shimmer (esperando 1er probe).
+        //  2) vacío pero ya sondeado → empty-state con orientación.
+        //  3) con entries → filas reales, cada una entra con pop-in la
+        //     primera vez que aparece su key.
+        if model.timeline.is_empty() {
+            if matches!(model.state, ProbeState::Pending) {
+                let skel = SkeletonPalette::from_theme(theme);
+                for _ in 0..5 {
+                    body_children.push(
+                        View::new(Style {
+                            size: Size {
+                                width: percent(1.0_f32),
+                                height: length(18.0_f32),
+                            },
+                            flex_shrink: 0.0,
+                            ..Default::default()
+                        })
+                        .radius(4.0)
+                        .clip(true)
+                        .children(vec![skeleton_view::<Msg>(&skel)]),
+                    );
+                }
+            } else {
+                let empty_pal = EmptyPalette::from_theme(theme);
+                body_children.push(
+                    View::new(Style {
+                        size: Size {
+                            width: percent(1.0_f32),
+                            height: length(160.0_f32),
+                        },
+                        flex_shrink: 0.0,
+                        ..Default::default()
+                    })
+                    .children(vec![empty_view::<Msg>(
+                        Icon::Bell,
+                        "Sin matches todavía",
+                        Some("El broker está alcanzable; aún no hubo matches para el flow sondeado."),
+                        &empty_pal,
+                    )]),
+                );
             }
-            body_children.push(row);
+        } else {
+            for (i, e) in model.timeline.iter().take(20).enumerate() {
+                let selected = model.selected == Some(i);
+                let mut row = View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(18.0_f32),
+                    },
+                    padding: Rect {
+                        left: length(8.0_f32),
+                        right: length(8.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(
+                    format_timeline_entry(e),
+                    11.0,
+                    theme.fg_text,
+                    Alignment::Start,
+                )
+                .on_click(Msg::SelectEntry(i))
+                .animated_pop_in(key_of(&format_timeline_entry(e)), motion::NORMAL);
+                if selected {
+                    row = row.fill(theme.bg_selected);
+                }
+                body_children.push(row);
+            }
         }
 
         let body = View::new(Style {
@@ -450,7 +572,7 @@ impl App for Explorer {
         .fill(theme.bg_app)
         .children(body_children);
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -462,7 +584,26 @@ impl App for Explorer {
         // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
         // menú contextual sobre la entry seleccionada.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, header, body])
+        .children(vec![menubar, header, body]);
+
+        // Overlay de toasts efímeros (bottom-right). Click en uno = descartarlo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![
+                root,
+                toast_stack_view(&alive, viewport_of(model), Msg::ToastExpire),
+            ])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -550,13 +691,40 @@ fn app_menu() -> AppMenu {
         .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
 }
 
+/// Empuja un toast al stack y programa su expiración (acción real del
+/// usuario o evento del probe, no ruido de cada tick).
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Arranca la cadena de ticks del shimmer si el probe sigue `Pending` y no
+/// hay ya una corriendo. Se auto-detiene cuando el primer probe responde.
+fn ensure_shimmer(m: &mut Model, handle: &Handle<Msg>) {
+    if m.shimmering || !matches!(m.state, ProbeState::Pending) {
+        return;
+    }
+    m.shimmering = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        Msg::Shimmer
+    });
+}
+
 /// Traduce un command id del menú principal al `Msg`/efecto real.
-fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
     match cmd {
         // Reconectar == re-disparar el probe; el ProbeResult refresca
         // estado/sesiones/matches.
         "file.refresh" | "view.reconnect" => {
             handle.dispatch(Msg::Tick);
+            let id = model.next_toast;
+            model.next_toast += 1;
+            push_toast(&mut model, handle, Toast::info(id, "Refrescando probe…", TOAST_TTL));
             model
         }
         "file.clear" => {
