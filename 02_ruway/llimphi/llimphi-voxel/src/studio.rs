@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::actor::{Actor, Age, Clip};
 use crate::director::{ActorKey, ActorScript};
 use crate::conducta::Conducta;
-use crate::rig::{Movimiento, Rig};
+use crate::rig::{Andar, Movimiento, Rig};
 use crate::worldgen::{Bioma, BiomaPalette, Forma, Material, ResolvedMaterial};
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Camera3d, Vertex3d};
@@ -350,13 +350,15 @@ impl CharSpec {
                 (a.model(), v, i)
             }
             Some(mov) => {
-                // El estado (andar) según el clip: correr / caminar / reposo.
-                let estado = match clip {
-                    Clip::Run => 2,
-                    Clip::Walk => 1,
-                    _ => 0,
+                // El andar según el clip: locomoción (editable) o gesto (procedural).
+                let pose = match clip {
+                    Clip::Walk => mov.andares.caminar.pose(phase),
+                    Clip::Run => mov.andares.correr.pose(phase),
+                    Clip::Wave => Andar::saludar(&mov.rig).pose(phase),
+                    Clip::Point => Andar::senalar(&mov.rig).pose(phase),
+                    Clip::Cheer => Andar::festejar(&mov.rig).pose(phase),
+                    Clip::Idle => mov.andares.quieto.pose(phase),
                 };
-                let pose = mov.andares.estado(estado).pose(phase);
                 let (v, i) = mov.rig.mesh(&pose, self.skin, self.shirt, self.pants);
                 let model = Mat4::from_translation(pos) * Mat4::from_rotation_y(facing);
                 (model, v, i)

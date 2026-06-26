@@ -349,6 +349,42 @@ impl Andar {
         a
     }
 
+    /// **Saludar**: un miembro delantero (o la cabeza si no hay) oscila amplio; el
+    /// resto quieto. Gesto genérico para cualquier rig.
+    pub fn saludar(rig: &Rig) -> Andar {
+        let mut osc = vec![Osc { amplitud: 0.0, desfase: 0.0 }; rig.len()];
+        if let Some(i) = miembro_expresivo(rig) {
+            osc[i] = Osc { amplitud: 1.0, desfase: 0.0 };
+        }
+        Andar { cadencia: 9.0, osc }
+    }
+
+    /// **Señalar**: un miembro delantero extendido y *sostenido* (cadencia 0 → pose
+    /// fija; `sin(π/2)=1` lo deja en su máxima extensión).
+    pub fn senalar(rig: &Rig) -> Andar {
+        let mut osc = vec![Osc { amplitud: 0.0, desfase: 0.0 }; rig.len()];
+        if let Some(i) = miembro_expresivo(rig) {
+            osc[i] = Osc { amplitud: 0.9, desfase: std::f32::consts::FRAC_PI_2 };
+        }
+        Andar { cadencia: 0.0, osc }
+    }
+
+    /// **Festejar**: todos los miembros (o el cuerpo, si no hay) rebotan en fase.
+    pub fn festejar(rig: &Rig) -> Andar {
+        let osc = rig
+            .segmentos
+            .iter()
+            .map(|s| {
+                let nom = s.nombre.as_str();
+                let activo = es_miembro(nom)
+                    || nom.contains("cabeza")
+                    || (nom.contains("cuerpo") && s.eje == Eje::Y);
+                Osc { amplitud: if activo { 0.7 } else { 0.0 }, desfase: 0.0 }
+            })
+            .collect();
+        Andar { cadencia: 8.0, osc }
+    }
+
     /// La pose del andar en el instante `t` (seg).
     pub fn pose(&self, t: f32) -> RigPose {
         let angulos = self
@@ -358,6 +394,23 @@ impl Andar {
             .collect();
         RigPose { angulos }
     }
+}
+
+/// `true` si el segmento es un miembro (brazo/pata/ala).
+fn es_miembro(nom: &str) -> bool {
+    nom.contains("brazo") || nom.contains("pata") || nom.contains("ala")
+}
+
+/// Índice del miembro **delantero-derecho** para los gestos (brazo/pata/ala del
+/// frente y a la derecha); si no hay miembros, la cabeza; si tampoco, `None`.
+fn miembro_expresivo(rig: &Rig) -> Option<usize> {
+    let miembros: Vec<usize> = (0..rig.len()).filter(|&i| es_miembro(&rig.segmentos[i].nombre)).collect();
+    miembros
+        .iter()
+        .copied()
+        .find(|&i| rig.segmentos[i].pivote[2] >= -1e-3 && rig.segmentos[i].pivote[0] > 1e-3)
+        .or_else(|| miembros.first().copied())
+        .or_else(|| rig.segmentos.iter().position(|s| s.nombre.contains("cabeza")))
 }
 
 /// Los **andares por estado** de una criatura (capa 2): reposo, caminar, correr.
@@ -450,6 +503,25 @@ mod tests {
         let p0 = world0[1].transform_point3(Vec3::ZERO);
         let p1 = world1[1].transform_point3(Vec3::ZERO);
         assert!((p0 - p1).length() > 0.05, "el hijo siguió a la rotación del padre");
+    }
+
+    #[test]
+    fn los_gestos_mueven_lo_esperado() {
+        // Saludar: exactamente un miembro con amplitud (el delantero-derecho).
+        let rig = Rig::cuadrupedo();
+        let s = Andar::saludar(&rig);
+        let activos = s.osc.iter().filter(|o| o.amplitud > 0.0).count();
+        assert_eq!(activos, 1, "saludar mueve un solo miembro");
+        // Señalar: sostenido (cadencia 0) y la pose no es nula.
+        let n = Andar::senalar(&rig);
+        assert_eq!(n.cadencia, 0.0);
+        assert!(n.pose(3.7).angulos.iter().any(|a| a.abs() > 0.1), "señalar deja una pose fija no nula");
+        // Festejar: varios miembros activos (las 4 patas + cola).
+        let f = Andar::festejar(&rig);
+        assert!(f.osc.iter().filter(|o| o.amplitud > 0.0).count() >= 4, "festejar mueve varias partes");
+        // Una serpiente (sin miembros) igual saluda con la cabeza.
+        let serp = Rig::serpiente();
+        assert!(Andar::saludar(&serp).osc.iter().any(|o| o.amplitud > 0.0), "la serpiente saluda con la cabeza");
     }
 
     #[test]
