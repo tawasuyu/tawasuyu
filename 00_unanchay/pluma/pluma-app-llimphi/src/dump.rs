@@ -199,6 +199,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         diente_estilo_activo: None,
         panel_estilo_w: 280.0,
         objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
+        estilo_expand: None,
         wizard: None,
         proyectos: vec![crate::model::ProyectoAbierto::vacio("Proyecto demo")],
         proyecto_activo: 0,
@@ -300,6 +301,8 @@ fn modelo_sintetico(diente: usize) -> Model {
             m.estilos.insert(id, e);
             m.diente_estilo_activo = Some(id);
             m.objetivo_estilo = crate::model::ObjetivoEstilo::Seleccion;
+            // Combo de tamaño abierto para el pantallazo.
+            m.estilo_expand = Some(crate::model::EstiloExpand::Tamano);
         }
     }
     if diente == 11 {

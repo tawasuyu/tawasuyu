@@ -56,6 +56,10 @@ llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-widget-modal = { workspace = true }
+llimphi-widget-segmented = { workspace = true }
+llimphi-widget-switch = { workspace = true }
+llimphi-widget-select = { workspace = true }
+llimphi-widget-color-picker = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
 pluma-estilo = { path = "../pluma-estilo" }
 pluma-proyecto = { path = "../pluma-proyecto" }

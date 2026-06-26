@@ -160,6 +160,7 @@ pub fn init_modelo() -> Model {
         diente_estilo_activo: None,
         panel_estilo_w: 280.0,
         objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
+        estilo_expand: None,
         wizard: None,
         proyectos: vec![crate::model::ProyectoAbierto::vacio("Proyecto 1")],
         proyecto_activo: 0,

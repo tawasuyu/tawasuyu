@@ -18,6 +18,10 @@ use llimphi_widget_dock_rail::{
 };
 use llimphi_widget_edit_menu::{self as editmenu, EditFlags};
 use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
+use llimphi_widget_color_picker::{color_picker_view, ColorPickerPalette, DEFAULT_SWATCHES};
+use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
+use llimphi_widget_select::{select_trigger_view, SelectItem, SelectPalette};
+use llimphi_widget_switch::{switch_view, SwitchPalette};
 use llimphi_widget_menubar::{
     menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
@@ -47,8 +51,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::model::{
-    ancho_contenido, Filtro, Modo, Model, Msg, ObjetivoEstilo, ProyectoTab, WizardTipo, ANCHO_COL,
-    BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
+    ancho_contenido, EstiloExpand, Filtro, Modo, Model, Msg, ObjetivoEstilo, ProyectoTab,
+    WizardTipo, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
 };
 use pluma_estilo::EstiloTexto;
 use pluma_proyecto::hash_corto;
@@ -337,9 +341,34 @@ fn ide_de<'a>(model: &'a Model, id: Uuid) -> Option<&'a CuerpoIde> {
     }
 }
 
-/// Panel de estilo del lienzo `id` (pane derecho). Selector de objetivo
-/// (Lienzo / Zona / Selección) + controles de color, fuente, tamaño y formato.
-/// Cada control emite un delta `EstiloTexto` (`Msg::AplicarEstilo`).
+/// Tamaños de fuente del combo (estilo Office).
+const TAMANOS: [f32; 16] = [
+    8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 36.0, 48.0, 72.0,
+];
+/// Familias tipográficas del combo: `(etiqueta, valor CSS)`.
+const FUENTES: [(&str, &str); 4] = [
+    ("Sans", "sans-serif"),
+    ("Serif", "serif"),
+    ("Mono", "monospace"),
+    ("Cursiva", "cursive"),
+];
+
+/// Estilo efectivo del objetivo actual (base, o base⊕zona) — para reflejar el
+/// estado de los toggles/combos. Para Selección usa el heredado (base) como
+/// referencia visual.
+fn efectivo_objetivo(model: &Model, id: Uuid) -> EstiloTexto {
+    let e = model.estilos.get(&id);
+    let base = e.map(|e| e.base.clone()).unwrap_or_default();
+    match model.objetivo_estilo {
+        ObjetivoEstilo::Zona(z) => e.map(|e| e.estilo_de_zona(z)).unwrap_or(base),
+        _ => base,
+    }
+}
+
+/// Panel de estilo del lienzo `id` (pane derecho), estilo Office: objetivo
+/// (segmented) + fuente/tamaño (combos), formato (peso segmentado + switches
+/// itálica/subrayado/tachado), y color de texto/resaltado (swatches +
+/// color-picker). Cada control emite un delta `EstiloTexto` (`Msg::AplicarEstilo`).
 fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
     let palette_btn = ButtonPalette::from_theme(theme);
     let nombre = model
@@ -349,39 +378,34 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
         .map(|c| c.metadatos.nombre_legible.clone())
         .unwrap_or_else(|| "(lienzo)".to_string());
     let objetivo = model.objetivo_estilo;
+    let efectivo = efectivo_objetivo(model, id);
 
-    // Selector de objetivo.
-    let obj_btn = |label: &str, sel: bool, o: ObjetivoEstilo| {
-        let pal = if sel {
-            ButtonPalette::from_theme(theme)
-        } else {
-            ButtonPalette {
-                bg: theme.bg_panel_alt,
-                bg_hover: theme.bg_button_hover,
-                fg: theme.fg_muted,
-                radius: palette_btn.radius,
-            }
-        };
-        button_view::<Msg>(label, &pal, Msg::SetObjetivoEstilo(o))
+    // Objetivo: segmented (Lienzo / Zona / Selección).
+    let obj_idx = match objetivo {
+        ObjetivoEstilo::Lienzo => 0,
+        ObjetivoEstilo::Zona(_) => 1,
+        ObjetivoEstilo::Seleccion => 2,
     };
-    let fila_obj = fila_botones(vec![
-        obj_btn("Lienzo", matches!(objetivo, ObjetivoEstilo::Lienzo), ObjetivoEstilo::Lienzo),
-        obj_btn(
-            "Zona",
-            matches!(objetivo, ObjetivoEstilo::Zona(_)),
-            ObjetivoEstilo::Zona(0),
-        ),
-        obj_btn(
-            "Selección",
-            matches!(objetivo, ObjetivoEstilo::Seleccion),
-            ObjetivoEstilo::Seleccion,
-        ),
-    ]);
+    let seg_obj = segmented_view::<Msg, _>(
+        &["Lienzo", "Zona", "Selección"],
+        obj_idx,
+        |i| {
+            Msg::SetObjetivoEstilo(match i {
+                0 => ObjetivoEstilo::Lienzo,
+                1 => ObjetivoEstilo::Zona(0),
+                _ => ObjetivoEstilo::Seleccion,
+            })
+        },
+        &SegmentedPalette::from_theme(theme),
+    );
 
     let mut hijos: Vec<View<Msg>> = vec![
         encabezado(&format!("estilo · {}", recortar(&nombre, 22)), theme),
-        fila_obj,
+        seg_obj,
     ];
+    if matches!(objetivo, ObjetivoEstilo::Seleccion) {
+        hijos.push(pista_texto("seleccioná texto en el editor y aplicá", theme));
+    }
 
     // Sub-selector de zona cuando el objetivo es Zona.
     if let ObjetivoEstilo::Zona(z_sel) = objetivo {
@@ -414,69 +438,137 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
 
     hijos.push(divider(theme));
 
-    // Color de texto.
-    hijos.push(encabezado("color de texto", theme));
-    hijos.push(fila_swatches(false));
-    // Color de fondo (resaltado).
-    hijos.push(encabezado("resaltado", theme));
-    hijos.push(fila_swatches(true));
-    hijos.push(divider(theme));
+    // Fuente (combo).
+    hijos.push(encabezado("fuente", theme));
+    let fam_label = efectivo
+        .font_family
+        .as_deref()
+        .and_then(|v| FUENTES.iter().find(|(_, css)| *css == v).map(|(l, _)| *l))
+        .unwrap_or("(heredar)");
+    let fam_item = SelectItem::new(fam_label.to_string());
+    hijos.push(select_trigger_view::<Msg>(
+        Some(&fam_item),
+        "fuente…",
+        model.estilo_expand == Some(EstiloExpand::Fuente),
+        None,
+        &SelectPalette::from_theme(theme),
+        Msg::ToggleEstiloExpand(EstiloExpand::Fuente),
+    ));
+    if model.estilo_expand == Some(EstiloExpand::Fuente) {
+        let mut opciones: Vec<View<Msg>> = Vec::new();
+        for &(label, css) in FUENTES.iter() {
+            opciones.push(button_view::<Msg>(
+                label,
+                &palette_btn,
+                Msg::AplicarEstilo(EstiloTexto {
+                    font_family: Some(css.to_string()),
+                    ..Default::default()
+                }),
+            ));
+        }
+        while !opciones.is_empty() {
+            let n = opciones.len().min(2);
+            hijos.push(fila_botones(opciones.drain(0..n).collect()));
+        }
+    }
 
-    // Tamaño.
+    // Tamaño (combo).
     hijos.push(encabezado("tamaño", theme));
-    hijos.push(fila_botones(
-        [11.0_f32, 13.0, 16.0, 20.0, 28.0]
+    let size_label = efectivo
+        .size_px
+        .map(|s| format!("{}", s as i32))
+        .unwrap_or_else(|| "(auto)".to_string());
+    let size_item = SelectItem::new(size_label);
+    hijos.push(select_trigger_view::<Msg>(
+        Some(&size_item),
+        "tamaño…",
+        model.estilo_expand == Some(EstiloExpand::Tamano),
+        None,
+        &SelectPalette::from_theme(theme),
+        Msg::ToggleEstiloExpand(EstiloExpand::Tamano),
+    ));
+    if model.estilo_expand == Some(EstiloExpand::Tamano) {
+        let mut botones: Vec<View<Msg>> = TAMANOS
             .iter()
             .map(|&px| {
                 button_view::<Msg>(
                     &format!("{}", px as i32),
                     &palette_btn,
-                    Msg::AplicarEstilo(EstiloTexto {
-                        size_px: Some(px),
-                        ..Default::default()
-                    }),
+                    Msg::AplicarEstilo(EstiloTexto { size_px: Some(px), ..Default::default() }),
                 )
             })
-            .collect(),
-    ));
+            .collect();
+        while !botones.is_empty() {
+            let n = botones.len().min(4);
+            hijos.push(fila_botones(botones.drain(0..n).collect()));
+        }
+    }
 
-    // Fuente.
-    hijos.push(encabezado("fuente", theme));
-    let mk_fuente = |label: &str, fam: Option<&str>| {
-        button_view::<Msg>(
-            label,
-            &palette_btn,
-            Msg::AplicarEstilo(EstiloTexto {
-                font_family: fam.map(|s| s.to_string()),
-                ..Default::default()
-            }),
-        )
-    };
-    hijos.push(fila_botones(vec![
-        mk_fuente("Sans", Some("sans-serif")),
-        mk_fuente("Serif", Some("serif")),
-        mk_fuente("Mono", Some("monospace")),
-    ]));
+    hijos.push(divider(theme));
 
-    // Peso + formato.
+    // Formato: peso (segmented) + switches itálica/subrayado/tachado.
     hijos.push(encabezado("formato", theme));
-    let peso = |label: &str, w: f32| {
-        button_view::<Msg>(
-            label,
-            &palette_btn,
-            Msg::AplicarEstilo(EstiloTexto {
-                weight: Some(w),
-                ..Default::default()
-            }),
-        )
-    };
-    hijos.push(fila_botones(vec![peso("Normal", 400.0), peso("Negrita", 700.0)]));
-    let flag = |label: &str, e: EstiloTexto| button_view::<Msg>(label, &palette_btn, Msg::AplicarEstilo(e));
-    hijos.push(fila_botones(vec![
-        flag("Itálica", EstiloTexto { italic: Some(true), ..Default::default() }),
-        flag("Subrayado", EstiloTexto { underline: Some(true), ..Default::default() }),
-        flag("Tachado", EstiloTexto { strikethrough: Some(true), ..Default::default() }),
-    ]));
+    let peso_idx = if efectivo.weight == Some(700.0) { 1 } else { 0 };
+    hijos.push(segmented_view::<Msg, _>(
+        &["Normal", "Negrita"],
+        peso_idx,
+        |i| Msg::AplicarEstilo(EstiloTexto {
+            weight: Some(if i == 1 { 700.0 } else { 400.0 }),
+            ..Default::default()
+        }),
+        &SegmentedPalette::from_theme(theme),
+    ));
+    let sw_pal = SwitchPalette::from_theme(theme);
+    hijos.push(fila_switch("Itálica", efectivo.italic.unwrap_or(false), &sw_pal, theme, |v| {
+        Msg::AplicarEstilo(EstiloTexto { italic: Some(v), ..Default::default() })
+    }));
+    hijos.push(fila_switch("Subrayado", efectivo.underline.unwrap_or(false), &sw_pal, theme, |v| {
+        Msg::AplicarEstilo(EstiloTexto { underline: Some(v), ..Default::default() })
+    }));
+    hijos.push(fila_switch("Tachado", efectivo.strikethrough.unwrap_or(false), &sw_pal, theme, |v| {
+        Msg::AplicarEstilo(EstiloTexto { strikethrough: Some(v), ..Default::default() })
+    }));
+
+    hijos.push(divider(theme));
+
+    // Color de texto: swatches + "más colores" (color-picker).
+    hijos.push(encabezado("color de texto", theme));
+    hijos.push(fila_swatches(false));
+    hijos.push(button_view::<Msg>(
+        "más colores…",
+        &palette_btn,
+        Msg::ToggleEstiloExpand(EstiloExpand::ColorFg),
+    ));
+    if model.estilo_expand == Some(EstiloExpand::ColorFg) {
+        let cur = efectivo.color_fg.unwrap_or([235, 235, 235, 255]);
+        hijos.push(color_picker_view::<Msg, _>(
+            cur,
+            DEFAULT_SWATCHES,
+            &ColorPickerPalette::from_theme(theme),
+            None,
+            |rgba| Msg::AplicarEstilo(EstiloTexto { color_fg: Some(rgba), ..Default::default() }),
+        ));
+    }
+
+    // Resaltado (fondo).
+    hijos.push(encabezado("resaltado", theme));
+    hijos.push(fila_swatches(true));
+    hijos.push(button_view::<Msg>(
+        "más colores…",
+        &palette_btn,
+        Msg::ToggleEstiloExpand(EstiloExpand::ColorBg),
+    ));
+    if model.estilo_expand == Some(EstiloExpand::ColorBg) {
+        let cur = efectivo.color_bg.unwrap_or([238, 178, 53, 90]);
+        hijos.push(color_picker_view::<Msg, _>(
+            cur,
+            DEFAULT_SWATCHES,
+            &ColorPickerPalette::from_theme(theme),
+            None,
+            |rgba| Msg::AplicarEstilo(EstiloTexto { color_bg: Some(rgba), ..Default::default() }),
+        ));
+    }
+
     hijos.push(divider(theme));
     hijos.push(fila_botones(vec![
         button_view::<Msg>("quitar formato", &palette_btn, Msg::EstiloReset),
@@ -519,6 +611,32 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
     .fill(theme.bg_panel)
     .clip(true)
     .children(vec![header, cuerpo])
+}
+
+/// Fila etiqueta + switch (toggle on/off). `make(nuevo_valor)` produce el Msg.
+fn fila_switch<F: Fn(bool) -> Msg>(
+    label: &str,
+    valor: bool,
+    pal: &SwitchPalette,
+    theme: &Theme,
+    make: F,
+) -> View<Msg> {
+    let lbl = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(label.to_string(), 12.0, theme.fg_text, Alignment::Start);
+    let sw = switch_view::<Msg>(if valor { 1.0 } else { 0.0 }, make(!valor), pal);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![lbl, sw])
 }
 
 /// Una fila de swatches de color: aplica `color_fg` (o `color_bg` si `bg`).

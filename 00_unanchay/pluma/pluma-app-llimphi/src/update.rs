@@ -495,7 +495,13 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 model.diente_estilo_activo = None; // re-click = cerrar (toggle)
             } else {
                 model.diente_estilo_activo = Some(id);
-                model.objetivo_estilo = ObjetivoEstilo::Lienzo;
+                // Foco al lienzo (su selección queda viva en `model.ide`) y, como
+                // en Office, el formato apunta por defecto a la SELECCIÓN.
+                if model.activo != Some(id) && model.cuerpos.iter().any(|c| c.id == id) {
+                    cambiar_activo(&mut model, id);
+                }
+                model.objetivo_estilo = ObjetivoEstilo::Seleccion;
+                model.estilo_expand = None;
             }
         }
         Msg::CerrarPanelEstilo => {
@@ -503,12 +509,22 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::SetObjetivoEstilo(o) => {
             model.objetivo_estilo = o;
+            model.estilo_expand = None;
         }
         Msg::AplicarEstilo(delta) => {
             aplicar_estilo_delta(&mut model, delta);
+            // Elegir un valor de combo cierra el combo abierto.
+            model.estilo_expand = None;
         }
         Msg::EstiloReset => {
             estilo_reset(&mut model);
+        }
+        Msg::ToggleEstiloExpand(e) => {
+            model.estilo_expand = if model.estilo_expand == Some(e) {
+                None
+            } else {
+                Some(e)
+            };
         }
         Msg::ResizePanelEstilo(dx) => {
             // El panel es el pane fijo de la derecha: arrastrar el divisor hacia

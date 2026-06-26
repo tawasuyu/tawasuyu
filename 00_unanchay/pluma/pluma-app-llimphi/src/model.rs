@@ -117,6 +117,17 @@ impl ObjetivoEstilo {
     }
 }
 
+/// Qué control expandible del panel de estilo está abierto (combos de fuente y
+/// tamaño = trigger + lista inline; selectores de color = color-picker inline).
+/// Sólo uno a la vez.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EstiloExpand {
+    Fuente,
+    Tamano,
+    ColorFg,
+    ColorBg,
+}
+
 /// Tipo de transformación que define el wizard de "+": qué inteligencia se
 /// aplica sobre el lienzo madre elegido.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -394,6 +405,8 @@ pub enum Msg {
     AplicarEstilo(EstiloTexto),
     /// Limpia el estilo del objetivo actual (vuelve al default).
     EstiloReset,
+    /// Abre/cierra un control expandible del panel de estilo (combo o picker).
+    ToggleEstiloExpand(EstiloExpand),
     /// Arrastra el divisor del panel de estilo (derecha).
     ResizePanelEstilo(f32),
 
@@ -573,6 +586,8 @@ pub struct Model {
     pub(crate) panel_estilo_w: f32,
     /// Objetivo del panel de estilo: lienzo entero / zona / selección.
     pub(crate) objetivo_estilo: ObjetivoEstilo,
+    /// Control expandible abierto del panel de estilo (combo/picker), si hay.
+    pub(crate) estilo_expand: Option<EstiloExpand>,
 
     // --- Wizard de transformación ("+") ---
     /// Estado del wizard modal de nueva transformación (`None` = cerrado).
