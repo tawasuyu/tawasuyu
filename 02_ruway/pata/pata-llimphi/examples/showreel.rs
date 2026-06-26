@@ -166,7 +166,9 @@ fn workspaces(t: f32, s: &Skin) -> View<Msg> {
     let active = ((seg(t, 0.0, 1.0) * 4.0).floor() as u8).clamp(0, 3) + 1;
     // ocupados: todos menos uno, para que se vea el realce tenue.
     let occupied = 0b0000_1011u16;
-    workspaces_view(active, count, occupied, 4.0, FlexDirection::Row, &s.theme)
+    // `others` (ocupados en otro monitor) = 0 y sin animación de cometa: el
+    // showreel sólo muestra el realce plano del switcher.
+    workspaces_view(active, count, occupied, 0, None, 4.0, FlexDirection::Row, &s.theme)
 }
 
 // ───────────────────────── la barra real ─────────────────────────
