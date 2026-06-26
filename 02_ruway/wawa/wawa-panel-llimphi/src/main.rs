@@ -1817,6 +1817,13 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         vista.sections.push(s); // Vistas: monitores/workspaces
     }
     vista.sections.push(interfaz_section(&m.cfg)); // Animaciones/interfaz/dientes
+    if let Some(s) = take("movimiento") {
+        vista.sections.push(s); // Movimiento: fade/pop al abrir, glow de foco,
+                                // fade al cerrar, slide, atenuar sin foco, reduce-motion
+    }
+    if let Some(s) = take("efectos") {
+        vista.sections.push(s); // Efectos: esquinas redondeadas + glass (blur)
+    }
     if let Some(s) = take("terminal") {
         vista.sections.push(s); // Terminal dropdown
     }
