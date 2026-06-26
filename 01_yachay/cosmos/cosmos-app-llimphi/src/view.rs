@@ -72,6 +72,51 @@ where
     .children(children)
 }
 
+/// Estado-vacío reusable de los tiles. Si el asset Lottie cargó (`empty_anim`),
+/// pinta el cargador cósmico animado (loop, alimentado por `anim_t`) centrado
+/// sobre el texto; si no, cae al texto solo. El asset es absolute-fill, así que
+/// va dentro de una caja cuadrada de tamaño fijo.
+pub(crate) fn empty_state(model: &Model, theme: &Theme) -> View<Msg> {
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    if let Some(anim) = &model.empty_anim {
+        kids.push(
+            View::new(Style {
+                size: Size {
+                    width: length(92.0_f32),
+                    height: length(92.0_f32),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .children(vec![anim.view_at_time::<Msg>(model.anim_t as f64)]),
+        );
+    }
+    kids.push(line(rimay_localize::t("cosmos-empty"), 12.0, theme.fg_muted));
+
+    let column = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(8.0_f32),
+        },
+        padding: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(kids);
+    tile_container(vec![column], theme)
+}
+
 pub(crate) fn line(text: String, size: f32, color: Color) -> View<Msg> {
     View::new(Style {
         size: Size {
@@ -391,14 +436,12 @@ fn asp_row_view(row: &AspRow, lons: &HashMap<String, f32>, theme: &Theme) -> Vie
 /// topocéntrico (módulo `topocentric`) en la misma grilla, con la
 /// diferencia de orbe entre ambos y los glyphs del aspecto, los cuerpos
 /// y sus signos.
-pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
+pub(crate) fn tile_aspectos(model: &Model, theme: &Theme) -> View<Msg> {
+    let render = &model.render;
     let lons = body_lons(render);
     let rows = asp_rows_sorted(render);
     if rows.is_empty() {
-        return tile_container(
-            vec![line(rimay_localize::t("cosmos-empty"), 12.0, theme.fg_muted)],
-            theme,
-        );
+        return empty_state(model, theme);
     }
     let mut out: Vec<View<Msg>> = Vec::with_capacity(rows.len() + 1);
     out.push(asp_header(theme));

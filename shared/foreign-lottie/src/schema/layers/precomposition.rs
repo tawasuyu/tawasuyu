@@ -1,0 +1,82 @@
+// Copyright 2024 the Velato Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+use serde::{Deserialize, Serialize};
+
+use crate::schema::animated_properties::value::FloatValue;
+
+use super::visual::VisualLayer;
+
+/// Renders a Precomposition
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct PrecompositionLayer {
+    /// Visual layer data
+    #[serde(flatten)]
+    pub visual_layer: VisualLayer,
+    /// ID of the precomp as specified in the assets
+    #[serde(rename = "refId")]
+    pub ref_id: String,
+    /// Width of the clipping rect
+    #[serde(rename = "w")]
+    pub width: f64,
+    /// Height of the clipping rect
+    #[serde(rename = "h")]
+    pub height: f64,
+    /// Start time
+    #[serde(rename = "st")]
+    pub start_time: f64,
+    /// Time Remapping
+    #[serde(rename = "tm")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_remap: Option<FloatValue>,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::schema::{
+        animation::composition::Composition,
+        assets::{asset::Asset, precomposition::Precomposition},
+        helpers::{int_boolean::BoolInt, visual_object::VisualObject},
+    };
+    use serde_json::json;
+    use std::sync::LazyLock;
+
+    static JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
+        json!(
+            {
+                "id": "precomp_0",
+                "fr": 60,
+                "nm": "Example",
+                "xt": 0,
+                "layers": []
+            }
+        )
+    });
+    static PRECOMP: LazyLock<Precomposition> = LazyLock::new(|| Precomposition {
+        asset: Asset {
+            visual_object: VisualObject {
+                name: Some("Example".to_string()),
+                ..Default::default()
+            },
+            id: "precomp_0".to_string(),
+        },
+        composition: Composition { layers: vec![] },
+        frame_rate: Some(60.0),
+        extra: Some(BoolInt::False),
+    });
+
+    #[test]
+    fn test_serde_deserialize() {
+        let actual = serde_json::from_value(JSON.to_owned());
+
+        match actual {
+            Ok(actual) => assert_eq!(*PRECOMP, actual),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    #[test]
+    fn test_can_serialize() {
+        serde_json::to_value(&*PRECOMP).unwrap();
+    }
+}

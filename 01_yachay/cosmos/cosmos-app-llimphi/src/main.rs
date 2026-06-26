@@ -138,6 +138,19 @@ impl App for Cosmos {
         // Refresco horario de las cartas «Hoy» al instante actual.
         handle.spawn_periodic(std::time::Duration::from_secs(3600), || Msg::HoyTick);
 
+        // Estado-vacío animado (cargador cósmico Lottie). Se parsea una vez; si
+        // falla, `empty_anim` queda en None y los tiles caen a texto. El reloj
+        // avanza a ~12 fps — suficiente para una animación de loader suave sin
+        // re-renderizar de más.
+        let empty_anim = llimphi_lottie::LottieAsset::from_str(include_str!(
+            "../assets/empty_cosmos.json"
+        ))
+        .map_err(|e| eprintln!("cosmos · lottie estado-vacío: {e}"))
+        .ok();
+        if empty_anim.is_some() {
+            handle.spawn_periodic(std::time::Duration::from_millis(80), || Msg::AnimTick);
+        }
+
         // Una pestaña inicial con la carta de trabajo (scratch, sin id).
         let open = vec![OpenTab {
             id: None,
@@ -223,6 +236,8 @@ impl App for Cosmos {
             menu_open: None,
             menu_active: usize::MAX,
             menu_anim: llimphi_motion::Tween::idle(1.0),
+            empty_anim,
+            anim_t: 0.0,
             ctx_open: None,
             nav_ctx: None,
             nav_scroll: 0.0,
@@ -513,4 +528,24 @@ pub(crate) fn dock_item_tooth(item: model::DockItem) -> pata_host::HostedTooth {
         }
     };
     pata_host::HostedTooth::new(item.to_u64() as u32, icon, label)
+}
+
+#[cfg(test)]
+mod tests {
+    /// El asset Lottie del estado-vacío (cargador cósmico) embebido por
+    /// `include_str!` debe parsear con el fork `foreign-lottie` y exponer una
+    /// animación real (2 capas, 3 s de loop a 30 fps). Si esto falla, `init`
+    /// caería silenciosamente a texto — el test evita esa regresión muda.
+    #[test]
+    fn empty_anim_asset_carga_y_anima() {
+        let asset = llimphi_lottie::LottieAsset::from_str(include_str!(
+            "../assets/empty_cosmos.json"
+        ))
+        .expect("el asset del estado-vacío parsea con foreign-lottie");
+        assert_eq!(asset.size(), (240.0, 240.0));
+        assert!((asset.duration_secs() - 3.0).abs() < 1e-6, "loop de 3 s");
+        // El frame del medio cae dentro del rango activo (anima, no es estático).
+        let mid = asset.frame_at_time((asset.duration_secs() / 2.0) as f32 as f64);
+        assert!(mid > 0.0 && mid < 90.0);
+    }
 }

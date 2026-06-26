@@ -61,6 +61,9 @@ use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
 
+// El motor es nuestro fork vendorizado de velato; lo aliasamos a `velato` para
+// que el resto del crate lea igual que la documentación upstream.
+use foreign_lottie as velato;
 use velato::Composition;
 
 /// Animación Lottie parseada y lista para stampear a cualquier `frame`.
@@ -98,14 +101,14 @@ impl LottieAsset {
     /// Parsea un Lottie desde sus bytes UTF-8 crudos (lo que devuelve
     /// `include_bytes!("…json")` o `std::fs::read`).
     ///
-    /// **Blindaje contra panics de `velato`.** El importador de `velato` 0.9
-    /// tiene caminos `todo!()`/`unimplemented!()` que **paniquean** ante
-    /// features que no soporta (split rotation/position, ciertos assets y
-    /// blends `Add`/`HardMix`, e incluso un transform sin campo de rotación).
-    /// Como el parse corre en el hilo de UI, dejamos esos panics convertidos en
-    /// un `LottieError` vía `catch_unwind` — un asset problemático cae al
-    /// fallback en vez de tumbar la app. El camino de render (`append`) sí es
-    /// seguro, así que no lo envolvemos por-frame.
+    /// **Blindaje contra panics.** Nuestro fork `foreign-lottie` ya eliminó los
+    /// `todo!()`/`unimplemented!()` del importador de velato 0.9 (split
+    /// rotation/position, blends `Add`/`HardMix`, assets desconocidos, transform
+    /// sin rotación) — degradan con gracia en vez de paniquear. El `catch_unwind`
+    /// queda como red de seguridad secundaria: por si un `.json` raro alcanza
+    /// algún `panic!`/`unwrap` residual del deserializador, el asset cae al
+    /// fallback en vez de tumbar el hilo de UI. El render (`append`) es seguro,
+    /// así que no lo envolvemos por-frame.
     pub fn from_bytes(json: &[u8]) -> Result<Self, LottieError> {
         let parsed = std::panic::catch_unwind(|| Composition::from_slice(json));
         let comp = match parsed {
@@ -328,11 +331,10 @@ mod tests {
         );
     }
 
-    /// Mismo layer pero con el transform SIN campo de rotación (`r`): `velato`
-    /// 0.9 paniquea (`todo!("split rotation")`) al importarlo. El blindaje de
-    /// `from_bytes` debe convertir ese panic en `Err`, no tumbar el proceso.
-    /// (El panic igual se loguea por stderr por el hook por defecto — es
-    /// esperado; lo que importa es que NO propaga.)
+    /// Mismo layer pero con el transform SIN campo de rotación (`r`). En velato
+    /// 0.9 upstream esto **paniquea** (`todo!("split rotation")`); nuestro fork
+    /// `foreign-lottie` lo trata como rotación 0 y **parsea bien**. Aquí
+    /// certificamos el resultado del fork: parse Ok, sin panic.
     const LOTTIE_SIN_ROTACION: &str = r#"{
       "v":"5.5.2","fr":30,"ip":0,"op":60,"w":100,"h":100,
       "layers":[{
@@ -343,11 +345,10 @@ mod tests {
     }"#;
 
     #[test]
-    fn feature_no_soportada_da_err_sin_paniquear() {
-        let r = LottieAsset::from_str(LOTTIE_SIN_ROTACION);
-        assert!(
-            r.is_err(),
-            "un Lottie que paniquea a velato debe volver como Err, no crashear"
-        );
+    fn lottie_sin_rotacion_parsea_con_el_fork() {
+        // En velato upstream esto era un panic; el fork lo importa como rot=0.
+        let a = LottieAsset::from_str(LOTTIE_SIN_ROTACION)
+            .expect("el fork parsea un transform sin rotación");
+        assert_eq!(a.size(), (100.0, 100.0));
     }
 }

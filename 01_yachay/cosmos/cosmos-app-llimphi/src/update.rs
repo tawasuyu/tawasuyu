@@ -519,6 +519,18 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::ImportGroup => do_import_group(&mut m),
         Msg::ExportGroup => do_export_group(&mut m),
         Msg::AddHoyChart => open_add_hoy(&mut m),
+        Msg::AnimTick => {
+            // ~80 ms por tick. Envolvemos por la duración del loop para que el
+            // acumulador no crezca sin techo (precisión f32 estable en sesiones
+            // largas). `frame_at_time` ya hace su propio módulo igual.
+            m.anim_t += 0.08;
+            if let Some(anim) = &m.empty_anim {
+                let dur = anim.duration_secs() as f32;
+                if dur > 0.0 && m.anim_t > dur {
+                    m.anim_t -= dur;
+                }
+            }
+        }
         Msg::HoyTick => {
             // Refresca la carta «Hoy» mostrada al instante actual.
             if let Some(key) = m.hoy_active.clone() {

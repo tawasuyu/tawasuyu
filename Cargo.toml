@@ -527,6 +527,7 @@ members = [
     "shared/drop-bridge",
     "shared/foreign-av",
     "shared/foreign-fs",
+    "shared/foreign-lottie",
     "shared/foreign-psd",
     "shared/foreign-xlsx",
     "shared/foreign-platform",
@@ -732,9 +733,10 @@ vello = "0.7"
 # Renderer hybrid CPU+GPU sin compute shaders (mejor compat WebGL2/Adreno viejas).
 # Opt-in; el renderer "wgpu" sigue siendo el default.
 vello_hybrid = "0.0.9"
-# velato 0.9 = reproductor de Lottie de Linebender; emite a la MISMA vello::Scene
-# que vello 0.7 (verificado: velato 0.9 clava vello 0.7). Lo consume llimphi-lottie.
-velato = "0.9"
+# foreign-lottie = fork vendorizado de velato 0.9 (Lottie → vello::Scene),
+# completado para no paniquear ante features no soportadas. Lo consume
+# llimphi-lottie. Ver shared/foreign-lottie.
+foreign-lottie = { path = "shared/foreign-lottie" }
 # Árbol de accesibilidad para lectores de pantalla (NVDA/VoiceOver/Orca/TalkBack).
 # Lo consume el runtime de Llimphi (iter 2/3 del plan AccessKit); el modelo
 # `SemanticsSpec` del compositor es independiente de estas crates.

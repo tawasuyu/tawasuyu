@@ -1,0 +1,967 @@
+// Copyright 2024 the Velato Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+use super::builders::{setup_layer_base, setup_precomp_layer, setup_shape_layer};
+use super::defaults::{FLOAT_VALUE_ONE_HUNDRED, FLOAT_VALUE_ZERO, MULTIDIM_ONE, POSITION_ZERO};
+use crate::import::builders::LayerSetupParams;
+use crate::runtime::model::Easing;
+use crate::runtime::model::animated::{self, Position};
+use crate::runtime::model::{
+    self, Content, Draw, EasingHandle, GroupTransform, Layer, SplineToPath, Time, Tween, Value,
+};
+use crate::runtime::{self};
+use crate::schema::animated_properties::keyframe_bezier_handle::{
+    KeyframeBezierHandle, KeyframeComponent,
+};
+use crate::schema::animated_properties::multi_dimensional::MultiDimensional;
+use crate::schema::animated_properties::split_vector::SplitVector;
+use crate::schema::constants::gradient_type::GradientType;
+use crate::schema::helpers::int_boolean::BoolInt;
+use crate::{Composition, schema};
+use kurbo::{Cap, Join, Point, Size, Vec2};
+use peniko::{BlendMode, Color, Mix};
+use std::collections::HashMap;
+
+fn process_layers(
+    source_layers: &[schema::layers::AnyLayer],
+    idmap: &mut HashMap<usize, usize>,
+) -> Vec<Layer> {
+    idmap.clear();
+
+    let mut converted: Vec<(Layer, usize, Option<BlendMode>, Option<usize>)> = vec![];
+
+    for layer in source_layers {
+        if let Some((layer, id, matte_mode, matte_layer_index)) = conv_layer(layer) {
+            let index = converted.len();
+            idmap.insert(id, index);
+            converted.push((layer, id, matte_mode, matte_layer_index));
+        }
+    }
+
+    let matte_targets: HashMap<usize, usize> = converted
+        .iter()
+        .enumerate()
+        .filter(|(_, (layer, _, _, _))| layer.is_mask)
+        .map(|(idx, (_, id, _, _))| (*id, idx))
+        .collect();
+
+    let mut layers: Vec<Layer> = Vec::with_capacity(converted.len());
+    let mut prev_matte_layer: Option<usize> = None;
+
+    for (idx, (mut layer, _id, matte_mode, explicit_matte_index)) in
+        converted.into_iter().enumerate()
+    {
+        if let Some(parent) = layer.parent {
+            layer.parent = idmap.get(&parent).copied();
+        }
+
+        if let Some(matte_mode) = matte_mode {
+            let matte_layer_idx = if let Some(explicit_idx) = explicit_matte_index {
+                idmap.get(&explicit_idx).copied()
+            } else {
+                prev_matte_layer
+            };
+
+            if let Some(matte_idx) = matte_layer_idx {
+                layer.mask_layer = Some((matte_mode, matte_idx));
+            }
+        }
+
+        if layer.is_mask {
+            prev_matte_layer = Some(idx);
+        } else if matte_mode.is_some() {
+            prev_matte_layer = None;
+        }
+
+        layers.push(layer);
+    }
+
+    layers
+}
+
+pub fn conv_animation(source: schema::Animation) -> Composition {
+    let mut target = Composition {
+        frames: source.in_point..source.out_point,
+        frame_rate: source.frame_rate,
+        width: source.width,
+        height: source.height,
+        assets: Default::default(),
+        layers: Default::default(),
+    };
+
+    // Collect assets and layers
+    let mut idmap: HashMap<usize, usize> = HashMap::default();
+
+    if let Some(assets) = source.assets {
+        for asset in assets {
+            match asset {
+                schema::assets::AnyAsset::Precomposition(precomp) => {
+                    let layers = process_layers(&precomp.composition.layers, &mut idmap);
+                    target.assets.insert(precomp.asset.id.clone(), layers);
+                }
+                // FORK tawasuyu: un asset no soportado (imagen embebida, etc.)
+                // se omite en vez de tumbar la importación. La animación se
+                // renderiza sin ese asset — degradación con gracia.
+                _asset => {}
+            }
+        }
+    }
+
+    // <<<<<<< HEAD
+    //     idmap.clear();
+    //     let mut layers = vec![];
+    //     let mut mask_layer = None;
+    //     for layer in &source.composition.layers {
+    //         let index = layers.len();
+    //         if let Some((mut layer, id, mask_blend)) = conv_layer(layer) {
+    //             if let (Some(mask_blend), Some(mask_layer)) = (mask_blend, mask_layer.take()) {
+    //                 layer.mask_layer = Some((mask_blend, mask_layer));
+    //             }
+    //             if layer.is_mask {
+    //                 mask_layer = Some(index);
+    //             }
+    //             idmap.insert(id, index);
+    //             layers.push(layer);
+    //         }
+    //     }
+    //     for layer in &mut layers {
+    //         if let Some(parent) = layer.parent {
+    //             layer.parent = idmap.get(&parent).copied();
+    //         }
+    //     }
+    //     target.layers = layers;
+    // =======
+    target.layers = process_layers(&source.composition.layers, &mut idmap);
+    // >>>>>>> main
+
+    target
+}
+
+pub fn conv_layer(
+    source: &schema::layers::AnyLayer,
+) -> Option<(Layer, usize, Option<BlendMode>, Option<usize>)> {
+    let mut layer = Layer::default();
+
+    let params = match source {
+        schema::layers::AnyLayer::Null(null_layer) => {
+            if let Some(true) = null_layer.visual_layer.layer.hidden {
+                return None;
+            }
+
+            setup_layer_base(&null_layer.visual_layer, &mut layer)
+        }
+        schema::layers::AnyLayer::Precomposition(precomp_layer) => {
+            if let Some(true) = precomp_layer.visual_layer.layer.hidden {
+                return None;
+            }
+
+            let params = setup_precomp_layer(precomp_layer, &mut layer);
+            let name = precomp_layer.ref_id.clone();
+            let time_remap = precomp_layer.time_remap.as_ref().map(conv_scalar);
+            layer.content = Content::Instance { name, time_remap };
+
+            params
+        }
+        schema::layers::AnyLayer::Shape(shape_layer) => {
+            if let Some(true) = shape_layer.visual_layer.layer.hidden {
+                return None;
+            }
+
+            let params = setup_shape_layer(shape_layer, &mut layer);
+            let mut shapes = vec![];
+            for shape in &shape_layer.shapes {
+                if let Some(shape) = conv_shape(shape) {
+                    shapes.push(shape);
+                }
+            }
+            layer.content = Content::Shape(shapes);
+
+            params
+        }
+        schema::layers::AnyLayer::Solid(solid_color_layer) => {
+            if let Some(true) = solid_color_layer.visual_layer.layer.hidden {
+                return None;
+            }
+
+            setup_layer_base(&solid_color_layer.visual_layer, &mut layer)
+        }
+        schema::layers::AnyLayer::Image(image_layer) => {
+            if let Some(true) = image_layer.visual_layer.layer.hidden {
+                return None;
+            }
+
+            setup_layer_base(&image_layer.visual_layer, &mut layer)
+        }
+    };
+
+    let LayerSetupParams {
+        layer_index: id,
+        matte_mode,
+        matte_layer_index,
+    } = params;
+
+    Some((layer, id, matte_mode, matte_layer_index))
+}
+
+pub fn conv_transform(
+    value: &schema::helpers::transform::Transform,
+) -> (runtime::model::Transform, Value<f64>) {
+    let rotation_in = match &value.rotation {
+        Some(any_trans) => match any_trans {
+            schema::helpers::transform::AnyTransformR::Rotation(float_value) => float_value,
+            // FORK tawasuyu: en 2D sólo la componente z es la rotación visible
+            // (x/y/orientación son 3D, que vello no compone). En vez de
+            // paniquear usamos z_rotation — equivalente a `r` cuando no está
+            // splitteada (lo dice el propio schema).
+            schema::helpers::transform::AnyTransformR::SplitRotation { z_rotation, .. } => {
+                z_rotation
+            }
+        },
+        // FORK tawasuyu: un transform sin campo de rotación es rotación 0, no un
+        // panic. (Bug original: `None => todo!("split rotation")` tumbaba la UI
+        // ante Lotties válidos sin `r`.)
+        None => &FLOAT_VALUE_ZERO,
+    };
+
+    let position = match &value.position {
+        schema::helpers::transform::AnyTransformP::Position(position) => {
+            Position::Value(conv_pos_point(position))
+        }
+        schema::helpers::transform::AnyTransformP::SplitPosition(SplitVector { x, y, .. }) => {
+            Position::SplitValues((conv_scalar(x), conv_scalar(y)))
+        }
+    };
+
+    let transform = animated::Transform {
+        anchor: conv_pos_point(value.anchor_point.as_ref().unwrap_or(&POSITION_ZERO)),
+        position,
+        scale: conv_vec2(value.scale.as_ref().unwrap_or(&MULTIDIM_ONE)),
+        rotation: conv_scalar(rotation_in),
+        skew: conv_scalar(value.skew.as_ref().unwrap_or(&FLOAT_VALUE_ZERO)),
+        skew_angle: conv_scalar(value.skew_axis.as_ref().unwrap_or(&FLOAT_VALUE_ZERO)),
+    };
+    let opacity = conv_scalar(value.opacity.as_ref().unwrap_or(&FLOAT_VALUE_ONE_HUNDRED));
+    (transform.into_model(), opacity)
+}
+
+pub fn conv_shape_transform(value: &schema::shapes::transform::TransformShape) -> GroupTransform {
+    let rotation_in = match &value.transform.rotation {
+        Some(any_trans) => match any_trans {
+            schema::helpers::transform::AnyTransformR::Rotation(float_value) => float_value,
+            // FORK tawasuyu: igual que conv_transform — z_rotation en vez de panic.
+            schema::helpers::transform::AnyTransformR::SplitRotation { z_rotation, .. } => {
+                z_rotation
+            }
+        },
+        None => &FLOAT_VALUE_ZERO,
+    };
+    // FORK tawasuyu: soportamos posición splitteada (x/y por separado) en lugar
+    // de paniquear, igual que ya lo hace conv_transform.
+    let position = match &value.transform.position {
+        schema::helpers::transform::AnyTransformP::Position(position) => {
+            Position::Value(conv_pos_point(position))
+        }
+        schema::helpers::transform::AnyTransformP::SplitPosition(SplitVector { x, y, .. }) => {
+            Position::SplitValues((conv_scalar(x), conv_scalar(y)))
+        }
+    };
+
+    let transform = animated::Transform {
+        anchor: conv_pos_point(
+            value
+                .transform
+                .anchor_point
+                .as_ref()
+                .unwrap_or(&POSITION_ZERO),
+        ),
+        position,
+        scale: conv_vec2(value.transform.scale.as_ref().unwrap_or(&MULTIDIM_ONE)),
+        rotation: conv_scalar(rotation_in),
+        skew: conv_scalar(value.transform.skew.as_ref().unwrap_or(&FLOAT_VALUE_ZERO)),
+        skew_angle: conv_scalar(
+            value
+                .transform
+                .skew_axis
+                .as_ref()
+                .unwrap_or(&FLOAT_VALUE_ZERO),
+        ),
+    };
+
+    let opacity = conv_scalar(
+        value
+            .transform
+            .opacity
+            .as_ref()
+            .unwrap_or(&FLOAT_VALUE_ONE_HUNDRED),
+    );
+
+    GroupTransform {
+        transform: transform.into_model(),
+        opacity,
+    }
+}
+
+pub fn conv_keyframes<'a, T: Tween>(
+    keyframes: impl Iterator<Item = &'a schema::animated_properties::keyframe::Keyframe>,
+    f: impl Fn(&schema::animated_properties::keyframe::Keyframe) -> T,
+) -> Value<T> {
+    let mut frames = vec![];
+    let mut values = vec![];
+
+    let collect_tangents = |handle: &Option<KeyframeBezierHandle>| {
+        let mut handles = vec![];
+        let Some(handle) = handle else { return handles };
+
+        match (&handle.x_coordinate, &handle.y_coordinate) {
+            (KeyframeComponent::ArrayOfValues(xarr), KeyframeComponent::ArrayOfValues(yarr)) => {
+                handles.extend(
+                    xarr.iter()
+                        .take(2)
+                        .zip(yarr.iter().take(2))
+                        .map(|(x, y)| EasingHandle { x: *x, y: *y }),
+                );
+            }
+            (KeyframeComponent::ArrayOfValues(xarr), KeyframeComponent::SingleValue(y)) => {
+                handles.extend(xarr.iter().take(2).map(|x| EasingHandle { x: *x, y: *y }));
+            }
+            (KeyframeComponent::SingleValue(x), KeyframeComponent::ArrayOfValues(yarr)) => {
+                handles.extend(yarr.iter().take(2).map(|y| EasingHandle { x: *x, y: *y }));
+            }
+            (KeyframeComponent::SingleValue(x), KeyframeComponent::SingleValue(y)) => {
+                handles.push(EasingHandle { x: *x, y: *y });
+            }
+        }
+        handles
+    };
+
+    for keyframe in keyframes {
+        let hold = keyframe
+            .base
+            .hold
+            .as_ref()
+            .map(|b| b.eq(&BoolInt::True))
+            .unwrap_or(false);
+        let in_tangents = collect_tangents(&keyframe.base.in_tangent);
+        let out_tangents = collect_tangents(&keyframe.base.out_tangent);
+        let tangents: Vec<_> = in_tangents.into_iter().zip(out_tangents).collect();
+        if tangents.is_empty() {
+            frames.push(Time {
+                frame: keyframe.base.time,
+                in_tangent: None,
+                out_tangent: None,
+                hold,
+            });
+            values.push(f(keyframe));
+        } else {
+            for (in_tangent, out_tangent) in tangents {
+                frames.push(Time {
+                    frame: keyframe.base.time,
+                    in_tangent: Some(in_tangent),
+                    out_tangent: Some(out_tangent),
+                    hold,
+                });
+                values.push(f(keyframe));
+            }
+        }
+    }
+    Value::Animated(runtime::model::Animated {
+        times: frames,
+        values,
+    })
+}
+
+fn conv_keyframe_handle(handle: &KeyframeBezierHandle) -> EasingHandle {
+    let KeyframeBezierHandle {
+        x_coordinate,
+        y_coordinate,
+    } = handle;
+    let x = match x_coordinate {
+        KeyframeComponent::ArrayOfValues(arr) => {
+            assert!(arr.len() == 1, "{arr:?}");
+            arr[0]
+        }
+        KeyframeComponent::SingleValue(v) => *v,
+    };
+    let y = match y_coordinate {
+        KeyframeComponent::ArrayOfValues(arr) => {
+            assert!(arr.len() == 1);
+            arr[0]
+        }
+        KeyframeComponent::SingleValue(v) => *v,
+    };
+    EasingHandle { x, y }
+}
+
+fn conv_gradient_colors(
+    value: &schema::animated_properties::gradient_colors::GradientColors,
+) -> runtime::model::ColorStops {
+    use schema::animated_properties::animated_property::AnimatedPropertyK::*;
+
+    let count = value.count;
+    match &value.colors.animated_property.value {
+        Static(value) => runtime::model::ColorStops::Fixed({
+            let mut stops = runtime::model::fixed::ColorStops::new();
+            let raw = conv_stops(value, count);
+            for values in raw {
+                stops.push(
+                    (
+                        values[0] as f32,
+                        runtime::model::fixed::Color::new([
+                            values[1] as f32,
+                            values[2] as f32,
+                            values[3] as f32,
+                            values[4] as f32,
+                        ]),
+                    )
+                        .into(),
+                );
+            }
+            stops
+        }),
+        AnimatedValue(animated) => {
+            let mut frames = vec![];
+            let mut values: Vec<Vec<f64>> = vec![];
+            for value in animated {
+                let hold = value
+                    .base
+                    .hold
+                    .as_ref()
+                    .map(|b| b.eq(&BoolInt::True))
+                    .unwrap_or(false);
+                frames.push(Time {
+                    frame: value.base.time,
+                    in_tangent: value.base.in_tangent.as_ref().map(conv_keyframe_handle),
+                    out_tangent: value.base.out_tangent.as_ref().map(conv_keyframe_handle),
+                    hold,
+                });
+
+                let stops = conv_stops(&value.value, count)
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+
+                values.push(stops);
+            }
+            runtime::model::ColorStops::Animated(animated::ColorStops {
+                frames,
+                values,
+                count,
+            })
+        }
+    }
+}
+
+fn conv_draw(value: &schema::shapes::AnyShape) -> Option<runtime::model::Draw> {
+    use schema::constants::line_cap::LineCap;
+    use schema::constants::line_join::LineJoin;
+    use schema::shapes::AnyShape;
+
+    match value {
+        AnyShape::Fill(value) => {
+            let color = conv_color(&value.color);
+            let brush = animated::Brush::Solid(color).into_model();
+            let opacity = conv_scalar(&value.shape_style.opacity);
+            Some(runtime::model::Draw {
+                stroke: None,
+                brush,
+                opacity,
+            })
+        }
+        AnyShape::Stroke(value) => {
+            let stroke = animated::Stroke {
+                width: conv_scalar(&value.base_stroke.width),
+                join: match value
+                    .base_stroke
+                    .line_join
+                    .as_ref()
+                    .unwrap_or(&LineJoin::Bevel)
+                {
+                    LineJoin::Bevel => Join::Bevel,
+                    LineJoin::Round => Join::Round,
+                    LineJoin::Miter => Join::Miter,
+                },
+                miter_limit: value.base_stroke.miter_limit,
+                cap: match value
+                    .base_stroke
+                    .line_cap
+                    .as_ref()
+                    .unwrap_or(&LineCap::Butt)
+                {
+                    LineCap::Butt => Cap::Butt,
+                    LineCap::Round => Cap::Round,
+                    LineCap::Square => Cap::Square,
+                },
+            };
+            let color = conv_color(&value.stroke_color);
+            let brush = animated::Brush::Solid(color).into_model();
+            let opacity = conv_scalar(&value.shape_style.opacity);
+            Some(runtime::model::Draw {
+                stroke: Some(stroke.into_model()),
+                brush,
+                opacity,
+            })
+        }
+        AnyShape::GradientFill(value) => {
+            let is_radial = matches!(value.gradient.gradient_type, Some(GradientType::Radial));
+            let start_point = conv_multi_point(&value.gradient.start_point);
+            let end_point = conv_multi_point(&value.gradient.end_point);
+            let gradient = animated::Gradient {
+                is_radial,
+                start_point,
+                end_point,
+                stops: conv_gradient_colors(&value.gradient.colors),
+            };
+            let brush = animated::Brush::Gradient(gradient).into_model();
+            Some(Draw {
+                stroke: None,
+                brush,
+                opacity: Value::Fixed(100.0),
+            })
+        }
+        AnyShape::GradientStroke(value) => {
+            let stroke = animated::Stroke {
+                width: conv_scalar(&value.base_stroke.width),
+                join: match value
+                    .base_stroke
+                    .line_join
+                    .as_ref()
+                    .unwrap_or(&LineJoin::Round)
+                {
+                    LineJoin::Bevel => Join::Bevel,
+                    LineJoin::Round => Join::Round,
+                    LineJoin::Miter => Join::Miter,
+                },
+                miter_limit: value.base_stroke.miter_limit,
+                cap: match value
+                    .base_stroke
+                    .line_cap
+                    .as_ref()
+                    .unwrap_or(&LineCap::Round)
+                {
+                    LineCap::Butt => Cap::Butt,
+                    LineCap::Round => Cap::Round,
+                    LineCap::Square => Cap::Square,
+                },
+            };
+            let is_radial = matches!(
+                value
+                    .gradient
+                    .gradient_type
+                    .as_ref()
+                    .unwrap_or(&GradientType::Linear),
+                GradientType::Radial
+            );
+            let start_point = conv_multi_point(&value.gradient.start_point);
+            let end_point = conv_multi_point(&value.gradient.end_point);
+            let gradient = animated::Gradient {
+                is_radial,
+                start_point,
+                end_point,
+                stops: conv_gradient_colors(&value.gradient.colors),
+            };
+            let brush = animated::Brush::Gradient(gradient).into_model();
+            Some(Draw {
+                stroke: Some(stroke.into_model()),
+                brush,
+                opacity: Value::Fixed(100.0),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn conv_shape(value: &schema::shapes::AnyShape) -> Option<crate::runtime::model::Shape> {
+    match conv_draw(value) {
+        Some(draw) => {
+            return Some(crate::runtime::model::Shape::Draw(draw));
+        }
+        _ => {
+            if let Some(geometry) = conv_geometry(value) {
+                return Some(crate::runtime::model::Shape::Geometry(geometry));
+            }
+        }
+    }
+
+    match value {
+        schema::shapes::AnyShape::Group(value) => {
+            let mut shapes = vec![];
+            let mut group_transform = None;
+            for item in &value.shapes {
+                match item {
+                    schema::shapes::AnyShape::Transform(transform) => {
+                        group_transform = Some(conv_shape_transform(transform));
+                    }
+                    _ => {
+                        if let Some(shape) = conv_shape(item) {
+                            shapes.push(shape);
+                        }
+                    }
+                }
+            }
+            if !shapes.is_empty() {
+                Some(crate::runtime::model::Shape::Group(shapes, group_transform))
+            } else {
+                None
+            }
+        }
+        // todo: implement repeater shape
+        // shapes::Shape::Repeater(value) => {
+        //     let repeater = animated::Repeater {
+        //         copies: conv_scalar(&value.copies),
+        //         offset: conv_scalar(&value.offset),
+        //         anchor_point: conv_point(&value.transform.anchor_point),
+        //         position: conv_point(&value.transform.position),
+        //         rotation: conv_scalar(&value.transform.rotation),
+        //         scale: conv_vec2(&value.transform.scale),
+        //         start_opacity: conv_scalar(&value.transform.start_opacity),
+        //         end_opacity: conv_scalar(&value.transform.end_opacity),
+        //     };
+        //     Some(Shape::Repeater(repeater.to_model()))
+        // }
+        schema::shapes::AnyShape::Trim(value) => {
+            let trim = animated::Trim {
+                start: conv_scalar(&value.start),
+                end: conv_scalar(&value.end),
+                offset: conv_scalar(&value.offset),
+            };
+            Some(crate::runtime::model::Shape::Trim(trim.into_model()))
+        }
+        _ => None,
+    }
+}
+
+fn conv_geometry(value: &schema::shapes::AnyShape) -> Option<crate::runtime::model::Geometry> {
+    use schema::shapes::AnyShape;
+    match value {
+        AnyShape::Ellipse(value) => {
+            let ellipse = animated::Ellipse {
+                is_ccw: false, /* todo: lottie schema does not have a field
+                                * for this (anymore?) */
+                position: conv_pos_point(&value.position),
+                size: conv_size(&value.size),
+            };
+            Some(crate::runtime::model::Geometry::Ellipse(ellipse))
+        }
+        AnyShape::Rectangle(value) => {
+            let rect = animated::Rect {
+                is_ccw: false, /* todo: lottie schema does not have a field
+                                * for this (anymore?) */
+                position: conv_pos_point(&value.position),
+                size: conv_size(&value.size),
+                corner_radius: conv_scalar(&value.rounded_corner_radius),
+            };
+            Some(crate::runtime::model::Geometry::Rect(rect))
+        }
+        AnyShape::Path(value) => conv_shape_geometry(&value.shape_property),
+        // todo: generic shape
+        _ => None,
+    }
+}
+
+pub fn conv_shape_geometry(
+    value: &schema::animated_properties::shape_property::ShapeProperty,
+) -> Option<runtime::model::Geometry> {
+    use schema::animated_properties::shape_property::ShapePropertyK::*;
+    let mut is_closed = false;
+    match &value.value {
+        Static(value) => {
+            let (points, is_closed) = conv_spline(value);
+            let mut path = vec![];
+            points.as_slice().to_path(is_closed, &mut path);
+            Some(runtime::model::Geometry::Fixed(path))
+        }
+        Animated(animated) => {
+            // Build frames & values for the animated spline
+            let mut frames = vec![];
+            let mut values = vec![];
+
+            for (idx, value) in animated.iter().enumerate() {
+                // Extract hold from base key properties
+                let hold = value
+                    .base
+                    .hold
+                    .as_ref()
+                    .map(|b| b.eq(&BoolInt::True))
+                    .unwrap_or(false);
+                // Add frame time and easing
+                frames.push(Time {
+                    frame: value.base.time,
+                    in_tangent: value.base.in_tangent.as_ref().map(conv_keyframe_handle),
+                    out_tangent: value.base.out_tangent.as_ref().map(conv_keyframe_handle),
+                    hold,
+                });
+                // Get converted spline points for keyframe bezier at the start
+                let start_bezier = {
+                    if let Some(start) = &value.start {
+                        start.first()?.clone()
+                    } else {
+                        // No keyframe was present - we look for the previous end/start
+                        let prev = animated.get(idx - 1)?;
+                        // Take the previous end if present, otherwise the previous start.
+                        if let Some(prev_end) = prev.end.as_ref() {
+                            if let Some(prev_end_bezier) = prev_end.first() {
+                                prev_end_bezier.clone()
+                            } else {
+                                prev.start.as_ref()?.first()?.clone()
+                            }
+                        } else {
+                            prev.start.as_ref()?.first()?.clone()
+                        }
+                    }
+                };
+                let (points, is_frame_closed) = conv_spline(&start_bezier);
+                // Get converted spline points for keyframe bezier at the end
+                let end_points = value.end.as_ref().and_then(|end_beziers| {
+                    let end_bezier = end_beziers.first()?;
+                    let (end_points, is_end_frame_closed) = conv_spline(end_bezier);
+                    is_closed |= is_end_frame_closed;
+                    Some(end_points)
+                });
+                // Add the keyframe values
+                values.push(animated::SplineKeyframeValues {
+                    start: points,
+                    end: end_points,
+                });
+                is_closed |= is_frame_closed;
+            }
+            Some(runtime::model::Geometry::Spline(animated::Spline {
+                is_closed,
+                times: frames,
+                values,
+            }))
+        }
+    }
+}
+
+pub fn conv_spline(value: &schema::helpers::bezier::Bezier) -> (Vec<Point>, bool) {
+    use core::iter::repeat;
+    let mut points = Vec::with_capacity(value.vertices.len() * 3);
+    let is_closed = value.closed.unwrap_or(false);
+
+    for ((v, i), o) in value
+        .vertices
+        .iter()
+        .zip(value.in_tangents.iter().chain(repeat(&[0.0, 0.0])))
+        .zip(value.out_tangents.iter().chain(repeat(&[0.0, 0.0])))
+    {
+        points.push((v[0], v[1]).into());
+        points.push((i[0], i[1]).into());
+        points.push((o[0], o[1]).into());
+    }
+    (points, is_closed)
+}
+
+pub fn conv_blend_mode(
+    value: &crate::schema::constants::blend_mode::BlendMode,
+) -> Option<BlendMode> {
+    use crate::schema::constants::blend_mode::BlendMode::*;
+
+    Some(match value {
+        Normal => return None,
+        Multiply => BlendMode::from(Mix::Multiply),
+        Screen => BlendMode::from(Mix::Screen),
+        Overlay => BlendMode::from(Mix::Overlay),
+        Darken => BlendMode::from(Mix::Darken),
+        Lighten => BlendMode::from(Mix::Lighten),
+        ColorDodge => BlendMode::from(Mix::ColorDodge),
+        ColorBurn => BlendMode::from(Mix::ColorBurn),
+        HardLight => BlendMode::from(Mix::HardLight),
+        SoftLight => BlendMode::from(Mix::SoftLight),
+        Difference => BlendMode::from(Mix::Difference),
+        Exclusion => BlendMode::from(Mix::Exclusion),
+        Hue => BlendMode::from(Mix::Hue),
+        Saturation => BlendMode::from(Mix::Saturation),
+        Color => BlendMode::from(Mix::Color),
+        Luminosity => BlendMode::from(Mix::Luminosity),
+        // FORK tawasuyu: peniko::Mix no tiene Add ni HardMix. En vez de
+        // paniquear, aproximamos: Add → compositing aditivo real (Compose::Plus);
+        // HardMix → HardLight (el mix disponible más cercano). Degradación con
+        // gracia para Lotties que los usen.
+        Add => BlendMode::new(Mix::Normal, peniko::Compose::Plus),
+        HardMix => BlendMode::from(Mix::HardLight),
+    })
+}
+
+pub fn conv_scalar(float_value: &schema::animated_properties::value::FloatValue) -> Value<f64> {
+    use crate::schema::animated_properties::animated_property::AnimatedPropertyK::*;
+    match &float_value.animated_property.value {
+        Static(number) => Value::Fixed(*number),
+        AnimatedValue(keyframes) => {
+            let mut frames = vec![];
+            let mut values = vec![];
+            for keyframe in keyframes {
+                let start_time = keyframe.base.time;
+                let data = keyframe.value[0];
+                let hold = keyframe
+                    .base
+                    .hold
+                    .as_ref()
+                    .map(|b| b.eq(&BoolInt::True))
+                    .unwrap_or(false);
+                frames.push(crate::runtime::model::Time {
+                    frame: start_time,
+                    in_tangent: keyframe.base.in_tangent.as_ref().map(conv_keyframe_handle),
+                    out_tangent: keyframe.base.out_tangent.as_ref().map(conv_keyframe_handle),
+                    hold,
+                });
+                values.push(data);
+                // todo: end_value deprecated but should we still push it if it
+                // exists?
+            }
+            Value::Animated(model::Animated {
+                times: frames,
+                values,
+            })
+        }
+    }
+}
+
+pub fn conv_multi<T: Tween>(
+    multidimensional: &schema::animated_properties::multi_dimensional::MultiDimensional,
+    f: impl Fn(&Vec<f64>) -> T,
+) -> Value<T> {
+    use crate::schema::animated_properties::animated_property::AnimatedPropertyK::*;
+
+    match &multidimensional.animated_property.value {
+        Static(components) => Value::Fixed(f(components)),
+        AnimatedValue(keyframes) => conv_keyframes(keyframes.iter(), |k| f(&k.value)),
+    }
+}
+
+pub fn conv_multi_color<T: Tween>(
+    color: &schema::animated_properties::color_value::ColorValue,
+    f: impl Fn(&Vec<f64>) -> T,
+) -> Value<T> {
+    use crate::schema::animated_properties::animated_property::AnimatedPropertyK::*;
+
+    match &color.animated_property.value {
+        Static(components) => Value::Fixed(f(components)),
+        AnimatedValue(keyframes) => conv_keyframes(keyframes.iter(), |k| f(&k.value)),
+    }
+}
+
+pub fn conv_pos<T: Tween>(
+    position: &schema::animated_properties::position::Position,
+    f: impl Fn(&Vec<f64>) -> T,
+) -> Value<T> {
+    use crate::schema::animated_properties::position::PositionValueK::*;
+
+    match &position.value {
+        Static(components) => Value::Fixed(f(components)),
+        Animated(pos_keyframes) => {
+            // TODO: Are we using PositionKeyframes here how we're supposed to?
+            // there are in_tangents and out_tangents in addition to the keyframes.
+            conv_keyframes(pos_keyframes.iter().map(|pk| &pk.keyframe), |k| f(&k.value))
+        }
+    }
+}
+
+pub fn conv_pos_point(value: &schema::animated_properties::position::Position) -> Value<Point> {
+    conv_pos(value, |x| {
+        let (x0, x1) = match x.get(0..=1) {
+            Some([x0, x1]) => (*x0, *x1),
+            _ => (0.0, 0.0),
+        };
+        Point::new(x0, x1)
+    })
+}
+
+pub fn conv_multi_point(
+    value: &schema::animated_properties::multi_dimensional::MultiDimensional,
+) -> Value<Point> {
+    conv_multi(value, |x| {
+        let (x0, x1) = match x.get(0..=1) {
+            Some([x0, x1]) => (*x0, *x1),
+            _ => (0.0, 0.0),
+        };
+        Point::new(x0, x1)
+    })
+}
+
+pub fn conv_color(value: &schema::animated_properties::color_value::ColorValue) -> Value<Color> {
+    conv_multi_color(value, |x| {
+        let (x0, x1, x2) = match x.get(0..=2) {
+            Some([x0, x1, x2]) => (*x0, *x1, *x2),
+            _ => (0.0, 0.0, 0.0),
+        };
+        Color::new([x0 as f32, x1 as f32, x2 as f32, 1.0])
+    })
+}
+
+pub fn conv_vec2(value: &MultiDimensional) -> Value<Vec2> {
+    conv_multi(value, |x| {
+        let (x0, x1) = match x.get(0..=1) {
+            Some([x0, x1]) => (*x0, *x1),
+            _ => (0.0, 0.0),
+        };
+        Vec2::new(x0, x1)
+    })
+}
+
+pub fn conv_size(value: &MultiDimensional) -> Value<Size> {
+    conv_multi(value, |x| {
+        let (x0, x1) = match x.get(0..=1) {
+            Some([x0, x1]) => (*x0, *x1),
+            _ => (0.0, 0.0),
+        };
+        Size::new(x0, x1)
+    })
+}
+
+pub fn conv_stops(value: &[f64], count: usize) -> Vec<[f64; 5]> {
+    let mut stops: Vec<[f64; 5]> = Vec::new();
+    let mut alpha_stops: Vec<(f64, f64)> = Vec::new();
+    for chunk in value.chunks_exact(4) {
+        stops.push([chunk[0], chunk[1], chunk[2], chunk[3], 1.0]);
+        if stops.len() >= count {
+            // there is alpha data at the end of the list, which is a sequence
+            // of (offset, alpha) pairs
+            for chunk in value.chunks_exact(2).skip(count * 2) {
+                let offset = chunk[0];
+                let alpha = chunk[1];
+                alpha_stops.push((offset, alpha));
+            }
+
+            for stop in stops.iter_mut() {
+                let mut last: Option<(f64, f64)> = None;
+                for &(b, alpha_b) in alpha_stops.iter() {
+                    if let Some((a, alpha_a)) = last.take() {
+                        let x = stop[0];
+                        let t = normalize_to_range(a, b, x);
+
+                        let alpha_interp = alpha_a.tween(&alpha_b, t, &Easing::LERP);
+                        let alpha_interp = if (x >= a && x <= b) && (t <= 0.25) && (x <= 0.1) {
+                            alpha_a
+                        } else {
+                            alpha_interp
+                        }; // todo: this is a hack to get alpha rendering with a
+                        // falloff similar to lottiefiles'
+
+                        let alpha_interp = if (x >= a && x <= b) && (t >= 0.75) && (x >= 0.9) {
+                            alpha_b
+                        } else {
+                            alpha_interp
+                        }; // todo: this is a hack to get alpha rendering with a
+                        // falloff similar to lottiefiles'
+
+                        stop[4] = stop[4].min(alpha_interp);
+                    }
+                    last = Some((b, alpha_b));
+                }
+            }
+            break;
+        }
+    }
+
+    stops
+}
+
+pub fn normalize_to_range(a: f64, b: f64, x: f64) -> f64 {
+    if a == b {
+        // Avoid division by zero if a and b are the same
+        return 0.0;
+    }
+
+    // Calculate the normalized value
+    (x - a) / (b - a)
+}

@@ -309,7 +309,7 @@ fn body_for(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
     let r = &model.render;
     match panel {
         ToolPanel::Carta => view::tile_carta(model, theme),
-        ToolPanel::Aspectos | ToolPanel::AspectosTopo => view::tile_aspectos(r, theme),
+        ToolPanel::Aspectos | ToolPanel::AspectosTopo => view::tile_aspectos(model, theme),
         ToolPanel::Cuerpos => view::tile_cuerpos(r, theme),
         ToolPanel::Cualidades => view::tile_cualidades(r, theme),
         ToolPanel::Uraniano => view::tile_uraniano(&r.uranian_groups, theme),

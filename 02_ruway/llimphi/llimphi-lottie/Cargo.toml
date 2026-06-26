@@ -9,4 +9,5 @@ description = "llimphi-lottie — puente fino velato (Lottie) → Llimphi. Carga
 
 [dependencies]
 llimphi-ui = { workspace = true }
-velato = { workspace = true }
+# Fork vendorizado de velato (no paniquea ante features no soportadas).
+foreign-lottie = { workspace = true }

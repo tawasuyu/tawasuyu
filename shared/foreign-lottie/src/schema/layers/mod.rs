@@ -1,0 +1,336 @@
+// Copyright 2024 the Velato Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+pub mod image;
+pub mod layer;
+pub mod null;
+pub mod precomposition;
+pub mod shape;
+pub mod solid;
+pub mod visual;
+
+use self::solid::SolidLayer;
+use self::visual::VisualLayer;
+use image::ImageLayer;
+use null::NullLayer;
+use precomposition::PrecompositionLayer;
+use serde::{Deserialize, Deserializer, Serialize};
+use shape::ShapeLayer;
+
+/// There are several layer types, which is specified by the 'ty' attribute. All
+/// layers share the properties in `layers::common::Properties`.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum AnyLayer {
+    /// Renders a Precomposition
+    Precomposition(PrecompositionLayer),
+    /// Static rectangle filling the canvas with a single color
+    Solid(SolidLayer),
+    /// No contents, only used for parenting.
+    /// Has an array of shapes
+    Shape(ShapeLayer),
+    /// Null
+    Null(NullLayer),
+    // unimplemented - Text(TextLayer),
+    Image(ImageLayer),
+    // unimplemented - Audio(AudioLayer),
+    // unimplemented - VideoPlaceholder(VideoPlaceholderLayer)
+    // unimplemented - Video(VideoLayer)
+    // unimplemented - ImagePlaceholder(ImagePlaceholderLayer)
+    // unimplemented - Guide(GuideLayer)
+    // unimplemented - Adjustment(AdjustmentLayer)
+    // unimplemented - Camera(CameraLayer)
+    // unimplemented - Light(LightLayer)
+    // unimplemented - Data(DataLayer)
+}
+
+impl<'de> Deserialize<'de> for AnyLayer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+
+        let layer_type = value
+            .get("ty")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| D::Error::missing_field("ty"))?;
+
+        match layer_type {
+            0 => serde_json::from_value(value)
+                .map(AnyLayer::Precomposition)
+                .map_err(D::Error::custom),
+            1 => serde_json::from_value(value)
+                .map(AnyLayer::Solid)
+                .map_err(D::Error::custom),
+            2 => serde_json::from_value(value)
+                .map(AnyLayer::Image)
+                .map_err(D::Error::custom),
+            3 => serde_json::from_value(value)
+                .map(AnyLayer::Null)
+                .map_err(D::Error::custom),
+            4 => serde_json::from_value(value)
+                .map(AnyLayer::Shape)
+                .map_err(D::Error::custom),
+            _ => Err(D::Error::custom(format!(
+                "unknown layer type: {}",
+                layer_type
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::schema::{
+        animated_properties::{
+            animated_property::{AnimatedProperty, AnimatedPropertyK},
+            multi_dimensional::MultiDimensional,
+            position::{Position, PositionValueK},
+            value::FloatValue,
+        },
+        helpers::{
+            int_boolean::BoolInt,
+            transform::{AnyTransformP, AnyTransformR, Transform},
+            visual_object::VisualObject,
+        },
+        layers::layer::Layer,
+        shapes::{
+            AnyShape, ellipse::EllipseShape, graphic_element::GraphicElementShape,
+            group::GroupShape, shape::Shape,
+        },
+    };
+
+    use super::{AnyLayer, shape::ShapeLayer, visual::VisualLayer};
+    use serde_json::json;
+    use std::sync::LazyLock;
+
+    static JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
+        json!(
+            {
+                "ddd": 0,
+                "ty": 4,
+                "ind": 1,
+                "st": 0,
+                "ip": 0,
+                "op": 180,
+                "nm": "Ellipse",
+                "mn": "{0a36d01c-18e1-48d3-8e8f-cc093b3f24ba}",
+                "ks": {
+                    "a": {
+                        "a": 0,
+                        "k": [
+                            256,
+                            256
+                        ]
+                    },
+                    "p": {
+                        "a": 0,
+                        "k": [
+                            256,
+                            256
+                        ]
+                    },
+                    "s": {
+                        "a": 0,
+                        "k": [
+                            100,
+                            100
+                        ]
+                    },
+                    "r": {
+                        "a": 0,
+                        "k": 0
+                    },
+                    "o": {
+                        "a": 0,
+                        "k": 100
+                    }
+                },
+                "shapes": [
+                    {
+                        "ty": "gr",
+                        "nm": "Group",
+                        "mn": "{f1becc2a-49f0-4f0c-918f-bdffe4c6870f}",
+                        "it": [
+                            {
+                                "ty": "el",
+                                "nm": "Ellipse",
+                                "mn": "{2aabac6e-1dd8-41b0-b60b-baf75ccb6318}",
+                                "p": {
+                                    "a": 0,
+                                    "k": [
+                                        303.9044776119403,
+                                        324.9671641791045
+                                    ]
+                                },
+                                "s": {
+                                    "a": 0,
+                                    "k": [
+                                        205.46865671641788,
+                                        204.6089552238806
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+    });
+
+    #[expect(deprecated, reason = "Uses deprecated attributes")]
+    static LAYER: LazyLock<AnyLayer> = LazyLock::new(|| {
+        AnyLayer::Shape(ShapeLayer {
+            visual_layer: VisualLayer {
+                layer: Layer {
+                    visual_object: VisualObject {
+                        name: Some("Ellipse".to_string()),
+                        match_name: Some("{0a36d01c-18e1-48d3-8e8f-cc093b3f24ba}".to_string()),
+                    },
+                    layer_type: 4,
+                    three_dimensional: Some(BoolInt::False),
+                    index: Some(1),
+                    start_time: Some(0.0),
+                    in_point: 0.0,
+                    out_point: 180.0,
+                    hidden: None,
+                    parent_index: None,
+                    time_stretch: None,
+                },
+                transform: Transform {
+                    anchor_point: Some(Position {
+                        property_index: None,
+                        animated: Some(BoolInt::False),
+                        expression: None,
+                        length: None,
+                        value: PositionValueK::Static(vec![256.0, 256.0]),
+                    }),
+                    position: AnyTransformP::Position(Position {
+                        property_index: None,
+                        animated: Some(BoolInt::False),
+                        expression: None,
+                        length: None,
+                        value: PositionValueK::Static(vec![256.0, 256.0]),
+                    }),
+                    scale: Some(MultiDimensional {
+                        animated_property: AnimatedProperty {
+                            animated: Some(BoolInt::False),
+                            property_index: None,
+                            expression: None,
+                            slot_id: None,
+                            value: AnimatedPropertyK::Static(vec![100.0, 100.0]),
+                        },
+                        length: None,
+                    }),
+                    rotation: Some(AnyTransformR::Rotation(FloatValue {
+                        animated_property: AnimatedProperty {
+                            animated: Some(BoolInt::False),
+                            property_index: None,
+                            expression: None,
+                            slot_id: None,
+                            value: AnimatedPropertyK::Static(0.0),
+                        },
+                    })),
+                    opacity: Some(FloatValue {
+                        animated_property: AnimatedProperty {
+                            animated: Some(BoolInt::False),
+                            property_index: None,
+                            expression: None,
+                            slot_id: None,
+                            value: AnimatedPropertyK::Static(100.0),
+                        },
+                    }),
+                    skew: None,
+                    skew_axis: None,
+                },
+                matte_mode: None,
+                matte_target: None,
+                masks_properties: None,
+                rotate_to_match_anim_pos_path: None,
+                matte_layer_index: None,
+                has_mask: None,
+                motion_blur: None,
+                blend_mode: None,
+                css_class: None,
+                id: None,
+                tag_name: None,
+                tranform_before_mask_deprecated: None,
+                transform_before_mask: None,
+            },
+            shapes: vec![AnyShape::Group(GroupShape {
+                graphic_element: GraphicElementShape {
+                    visual_object: VisualObject {
+                        name: Some("Group".to_string()),
+                        match_name: Some("{f1becc2a-49f0-4f0c-918f-bdffe4c6870f}".to_string()),
+                    },
+                    index: None,
+                    hidden: None,
+                    blend_mode: None,
+                    property_index: None,
+                    css_class: None,
+                    xml_id: None,
+                },
+                num_properties: None,
+                property_index: None,
+                shapes: vec![AnyShape::Ellipse(EllipseShape {
+                    shape: Shape {
+                        graphic_element: GraphicElementShape {
+                            visual_object: VisualObject {
+                                name: Some("Ellipse".to_string()),
+                                match_name: Some(
+                                    "{2aabac6e-1dd8-41b0-b60b-baf75ccb6318}".to_string(),
+                                ),
+                            },
+                            index: None,
+                            hidden: None,
+                            blend_mode: None,
+                            property_index: None,
+                            css_class: None,
+                            xml_id: None,
+                        },
+                        direction: None,
+                    },
+                    position: Position {
+                        property_index: None,
+                        animated: Some(BoolInt::False),
+                        expression: None,
+                        length: None,
+                        value: PositionValueK::Static(vec![303.9044776119403, 324.9671641791045]),
+                    },
+                    size: MultiDimensional {
+                        animated_property: AnimatedProperty {
+                            animated: Some(BoolInt::False),
+                            property_index: None,
+                            expression: None,
+                            slot_id: None,
+                            value: AnimatedPropertyK::Static(vec![
+                                205.46865671641788,
+                                204.6089552238806,
+                            ]),
+                        },
+                        length: None,
+                    },
+                })],
+            })],
+        })
+    });
+
+    #[test]
+    fn test_deserialize() {
+        let actual = serde_json::from_value(JSON.to_owned());
+
+        match actual {
+            Ok(actual) => assert_eq!(*LAYER, actual),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    #[test]
+    fn test_can_serialize() {
+        serde_json::to_value(&*LAYER).unwrap();
+    }
+}

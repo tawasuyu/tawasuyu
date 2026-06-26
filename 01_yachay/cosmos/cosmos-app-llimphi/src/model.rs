@@ -664,6 +664,9 @@ pub(crate) enum Msg {
     ExportGroup,
     /// Tick horario: refresca la carta «Hoy» activa al instante actual.
     HoyTick,
+    /// Avance del reloj de animación (estados-vacíos animados). Acumula
+    /// `anim_t` en segundos; lo dispara un `spawn_periodic` a ~12 fps.
+    AnimTick,
     /// Abre el diálogo «agregar carta de hoy por coordenadas» bajo «Hoy».
     AddHoyChart,
     // rectificador de hora
@@ -828,6 +831,12 @@ pub(crate) struct Model {
     pub(crate) menu_active: usize,
     /// Animación de aparición/swap del dropdown del menú principal (0→1).
     pub(crate) menu_anim: Tween<f32>,
+    /// Animación Lottie de los estados-vacíos (cargador cósmico). `None` si el
+    /// asset embebido no parseó (cae a texto). Se carga una vez en `init`.
+    pub(crate) empty_anim: Option<llimphi_lottie::LottieAsset>,
+    /// Reloj de animación en segundos, acumulado por `Msg::AnimTick`. Alimenta
+    /// el `view_at_time` de los estados-vacíos animados (loop).
+    pub(crate) anim_t: f32,
     pub(crate) ctx_open: Option<(f32, f32)>,
     /// Menú contextual de una fila del árbol: clave del nodo (el ancla se
     /// calcula en `overlay_view` desde su índice visible).

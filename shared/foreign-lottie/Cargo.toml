@@ -1,0 +1,28 @@
+[package]
+name = "foreign-lottie"
+version.workspace = true
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0 OR MIT"
+authors.workspace = true
+publish.workspace = true
+description = "foreign-lottie — fork vendorizado de velato 0.9 (reproductor de Lottie de Linebender), completado para no paniquear ante features no soportadas (split rotation/position, blends Add/HardMix, assets desconocidos) y degradar con gracia. Emite a la misma vello::Scene que llimphi-raster. Puente de formato ajeno (Regla 4)."
+
+[lib]
+name = "foreign_lottie"
+path = "src/lib.rs"
+
+[features]
+default = ["vello"]
+vello = ["dep:vello"]
+wgpu = ["vello", "vello/wgpu"]
+
+[dependencies]
+# Tipos geométricos/de pintura — DEBEN coincidir con los que expone vello 0.7
+# (peniko 0.6 / kurbo 0.13), o los Scene/Brush/Color no tipan.
+kurbo = "0.13"
+peniko = "0.6"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_repr = "0.1"
+vello = { workspace = true, optional = true }
