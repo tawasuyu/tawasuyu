@@ -14,7 +14,7 @@
 //! (o reinicia en game over/victory), Esc cierra.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -34,6 +34,7 @@ use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
 };
+use llimphi_widget_toast::{toast_stack_view, Toast};
 
 use app_bus::{AppMenu, Menu, MenuItem};
 
@@ -213,6 +214,18 @@ fn rgb(r: f32, g: f32, b: f32) -> Color {
 const TICK_HZ: u64 = 35; // ticks/seg — la frecuencia canónica de Doom
 const TICK_MS: u64 = 1_000 / TICK_HZ;
 
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas
+/// (la misma etiqueta produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
 struct Model {
     /// El mundo simulado — toda la lógica de juego vive en el core.
     world: World,
@@ -226,6 +239,20 @@ struct Model {
     menu_anim: Tween<f32>,
     /// Menú contextual del escenario: ancla `(x, y)` en coords ventana.
     context_menu: Option<(f32, f32)>,
+    /// Toasts vivos (confirmaciones de reinicio / cambio de tema).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
+}
+
+/// Empuja un toast al stack y programa su expiración a `TOAST_TTL`.
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
 }
 
 #[derive(Clone)]
@@ -243,6 +270,8 @@ enum Msg {
     CloseMenus,
     ContextMenuOpen(f32, f32),
     CycleTheme,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 struct Supay;
@@ -271,6 +300,8 @@ impl App for Supay {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -322,6 +353,13 @@ impl App for Supay {
             }
             Msg::Reset => {
                 m.world.reset();
+                let id = m.next_toast;
+                m.next_toast += 1;
+                push_toast(
+                    &mut m,
+                    handle,
+                    Toast::success(id, rimay_localize::t("supay-action-reset"), TOAST_TTL),
+                );
             }
             Msg::Key(e) => {
                 let pressed = e.state == KeyState::Pressed;
@@ -384,6 +422,13 @@ impl App for Supay {
             }
             Msg::CycleTheme => {
                 m.theme = Theme::next_after(m.theme.name);
+                let id = m.next_toast;
+                m.next_toast += 1;
+                let texto = format!("{} · {}", rimay_localize::t("cycle-theme"), m.theme.name);
+                push_toast(&mut m, handle, Toast::info(id, texto, TOAST_TTL));
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
             }
             Msg::MenuCommand(cmd) => {
                 m.menu_open = None;
@@ -400,7 +445,7 @@ impl App for Supay {
         let scene = scene_pane(model);
         let hud = hud_panel(model);
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -409,7 +454,25 @@ impl App for Supay {
             ..Default::default()
         })
         .fill(rgb(0.02, 0.02, 0.03))
-        .children(vec![menubar, scene, hud])
+        .children(vec![menubar, scene, hud]);
+
+        // Overlay de toasts (bottom-right): confirma reinicios y cambios de
+        // tema sin robarle foco al juego. Entran/salen con su propia animación.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            let viewport = viewport_of(model);
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, viewport, Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -481,6 +544,10 @@ fn hud_panel(model: &Model) -> View<Msg> {
             ..Default::default()
         })
         .children(vec![label_v, value_v])
+        // Pop-in al montar el HUD: cada celda entra una vez (key estable por
+        // etiqueta). El tick continuo del raycaster reproduce la animación sin
+        // necesidad de un bombeo de repaint propio.
+        .animated_pop_in(key_of(label), motion::NORMAL)
     };
 
     let health = model.world.health;
