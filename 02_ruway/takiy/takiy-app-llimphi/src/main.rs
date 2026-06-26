@@ -42,6 +42,7 @@ mod msg;
 mod overview;
 mod paint;
 mod update;
+mod waveedit;
 
 use std::sync::Arc;
 
@@ -147,6 +148,7 @@ impl App for Takiy {
             // clickear un carril entra al piano roll de esa pista.
             screen: Screen::Overview,
             onda_peaks: std::collections::HashMap::new(),
+            wave_sel: None,
         }
     }
 
@@ -379,6 +381,25 @@ impl App for Takiy {
         // abre el proyecto. El piano roll queda detrás de un click.
         if matches!(model.screen, Screen::Overview) {
             let body = overview::body(model, &theme);
+            return View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .fill(theme.bg_app)
+            .children(vec![menubar, toolbar, body]);
+        }
+
+        // Editor de la pista abierta: si está en modo onda, el editor de
+        // forma de onda; si no, el piano roll de siempre.
+        let active_is_onda = model
+            .editor
+            .score
+            .track(active_track)
+            .map(|t| matches!(t.view, takiy_core::TrackView::Onda))
+            .unwrap_or(false);
+        if active_is_onda {
+            let body = waveedit::body(model, &theme);
             return View::new(Style {
                 flex_direction: FlexDirection::Column,
                 size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },

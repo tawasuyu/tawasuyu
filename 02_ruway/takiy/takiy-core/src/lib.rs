@@ -25,4 +25,5 @@ pub use pitch::{Pitch, PitchClass};
 pub use scale::Scale;
 pub use score::{
     AutomationLane, AutomationPoint, DelayParams, ReverbParams, Score, ScoreNote, Track, TrackView,
+    WaveLayer, WaveOp,
 };

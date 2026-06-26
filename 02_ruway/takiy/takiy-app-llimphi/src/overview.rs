@@ -43,7 +43,7 @@ const ONDA_RENDER_SR: u32 = 16_000;
 
 /// Paleta por pista — idéntica a la del piano roll (`paint.rs`) para que
 /// el color de una pista sea el mismo en el panorama y en su editor.
-const PALETTE: [(u8, u8, u8); 6] = [
+pub(crate) const PALETTE: [(u8, u8, u8); 6] = [
     (96, 174, 240),
     (240, 170, 90),
     (130, 220, 150),
@@ -80,11 +80,18 @@ pub(crate) fn compute_onda_peaks(score: &Score, track_idx: usize) -> Vec<f32> {
         return peaks;
     }
     let ch = buf.channels.max(1) as usize;
+    // La onda dibujada refleja las ediciones: multiplicamos cada muestra
+    // por la envolvente de ganancia de la pista (misma que aplica el
+    // render de audio) antes de reducir a picos.
+    let sec_per_beat = 60.0 / score.tempo_bpm.max(1.0);
+    let inv = 1.0 / (ONDA_RENDER_SR as f32 * sec_per_beat);
+    let has_wave = track.has_wave_edits();
     for f in 0..frames {
         let bucket = (f * ONDA_PEAK_BUCKETS / frames).min(ONDA_PEAK_BUCKETS - 1);
+        let g = if has_wave { track.wave_gain_at(f as f32 * inv) } else { 1.0 };
         let mut a = 0.0f32;
         for c in 0..ch {
-            a = a.max(buf.samples[f * ch + c].abs());
+            a = a.max((buf.samples[f * ch + c] * g).abs());
         }
         if a > peaks[bucket] {
             peaks[bucket] = a;

@@ -31,6 +31,8 @@ mod chrome;
 mod audio;
 #[path = "../src/overview.rs"]
 mod overview;
+#[path = "../src/waveedit.rs"]
+mod waveedit;
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -52,6 +54,7 @@ use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette
 use takiy_app::{describe_key, pitch_range_with_offset, EditorState, Snap};
 use takiy_core::{
     AutomationLane, DelayParams, Pitch, PitchClass, ReverbParams, Scale, Score, ScoreNote, Track,
+    WaveLayer, WaveOp,
 };
 
 use crate::appmodel::Model;
@@ -286,6 +289,7 @@ fn model_demo(theme: Theme) -> Model {
         right_w: chrome::DEFAULT_PANEL_W,
         screen: appmodel::Screen::Track,
         onda_peaks: std::collections::HashMap::new(),
+        wave_sel: None,
     }
 }
 
@@ -433,6 +437,31 @@ fn overview_view(model: &Model, theme: Theme) -> View<Msg> {
     .children(vec![menubar, toolbar, body])
 }
 
+/// Editor de onda montado con el `waveedit::body` real: menubar +
+/// toolbar (con «‹ pistas») + barra de ops + forma de onda con una
+/// selección y ediciones aplicadas (silencio + fade out).
+fn waveedit_view(model: &Model, theme: Theme) -> View<Msg> {
+    let menu = app_menu();
+    let menubar = menubar_view(&MenuBarSpec {
+        menu: &menu,
+        open: None,
+        theme: &theme,
+        viewport: (W as f32, H as f32),
+        height: MENU_H,
+        on_open: Arc::new(Msg::MenuOpen),
+        on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
+    });
+    let toolbar = chrome::toolbar_bar(model, &theme);
+    let body = waveedit::body(model, &theme);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![menubar, toolbar, body])
+}
+
 fn main() {
     let out = std::env::args()
         .nth(1)
@@ -443,8 +472,25 @@ fn main() {
 
     let theme = Theme::dark(); // el theme canónico de la app (src/main.rs)
     let mut model = model_demo(theme);
-    // `TAKIY_OVERVIEW=1` rinde el panorama de pistas; si no, el piano roll.
-    let root = if std::env::var_os("TAKIY_OVERVIEW").is_some() {
+    // `TAKIY_WAVE=1` rinde el editor de onda (pista 0 en onda con ediciones).
+    let root = if std::env::var_os("TAKIY_WAVE").is_some() {
+        model.screen = appmodel::Screen::Track;
+        model.editor.active_track = 0;
+        if let Some(t) = model.editor.score.track_mut(0) {
+            t.view = takiy_core::TrackView::Onda;
+            // Silenciar [4,6) + fade out al final, para que la edición se vea.
+            t.wave = Some(WaveLayer {
+                ops: vec![
+                    WaveOp::Silence { from: 4.0, to: 6.0 },
+                    WaveOp::FadeOut { from: 12.0, to: 16.0 },
+                ],
+            });
+        }
+        let peaks = overview::compute_onda_peaks(&model.editor.score, 0);
+        model.onda_peaks.insert(0, peaks);
+        model.wave_sel = Some((4.0, 6.0));
+        waveedit_view(&model, theme)
+    } else if std::env::var_os("TAKIY_OVERVIEW").is_some() {
         model.screen = appmodel::Screen::Overview;
         // Pistas pares en onda (con picos), impares en midi.
         let n = model.editor.score.tracks().len();

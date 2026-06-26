@@ -14,7 +14,9 @@ use takiy_playback::PlayOpts;
 use takiy_synth::write_wav;
 
 use crate::appmodel::{Model, Screen};
-use crate::audio::{build_play, play_status_extras, render_score, WAV_EXPORT_SAMPLE_RATE};
+use crate::audio::{
+    build_play, play_status_extras, render_score, render_with_wave, WAV_EXPORT_SAMPLE_RATE,
+};
 use crate::chrome::{DockSide, PANEL_W_MAX, PANEL_W_MIN, RAIL_W, TOOLBAR_H};
 use crate::msg::{
     hit_test_automation_dot, hit_test_automation_line, DragMode, DragState, Msg,
@@ -33,6 +35,19 @@ const AUDITION_BEATS: f32 = 0.5;
 
 pub(crate) fn build_editor(score: Score) -> EditorState {
     EditorState::with_score(score)
+}
+
+/// Beats totales del eje de tiempo del editor de onda (igual que el
+/// painter): la duración del score, con un piso de 8 beats.
+pub(crate) fn wave_total_beats(model: &Model) -> f32 {
+    model.editor.score.duration_beats().max(8.0)
+}
+
+/// Convierte una x local `[0, rw]` de la onda a un beat sobre el eje
+/// `[0, total_beats]`, clampeado a los extremos.
+fn px_to_beat(px: f32, rw: f32, model: &Model) -> f32 {
+    let total = wave_total_beats(model);
+    ((px / rw.max(1.0)).clamp(0.0, 1.0) * total).clamp(0.0, total)
 }
 
 /// Recalcula el perfil de picos de onda de todas las pistas en modo
@@ -196,8 +211,17 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 }
                 _ => AuditionAfter::None,
             };
+            // Una edición de onda invalida los picos cacheados de su pista.
+            let wave_track = match &edit_msg {
+                EditMsg::WaveOp { track, .. } | EditMsg::WaveClear { track } => Some(*track),
+                _ => None,
+            };
             if let Some(s) = model.editor.apply(edit_msg) {
                 model.status = s;
+            }
+            if let Some(tr) = wave_track {
+                let peaks = crate::overview::compute_onda_peaks(&model.editor.score, tr);
+                model.onda_peaks.insert(tr, peaks);
             }
             // Saltea audition durante drag (`SetSelectedAbsolute` emite
             // un torrente y saturaría el device).
@@ -281,7 +305,7 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                     std::path::PathBuf::from(format!("/tmp/takiy_{ts}.wav"))
                 }
             };
-            let buf = render_score(
+            let buf = render_with_wave(
                 &model.editor.score,
                 model.sf2.as_ref(),
                 WAV_EXPORT_SAMPLE_RATE,
@@ -706,18 +730,38 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             }
         },
         Msg::OpenTrack(i) => {
-            // Abre el piano roll de la pista clickeada en el panorama.
+            // Abre el editor de la pista clickeada en el panorama (piano
+            // roll si es midi, editor de onda si es onda — lo decide la
+            // view según `track.view`).
             if i < model.editor.score.tracks().len() {
                 model.editor.active_track = i;
                 model.editor.selected = None;
+                model.wave_sel = None;
                 model.screen = Screen::Track;
             }
         }
         Msg::OpenOverview => {
             model.screen = Screen::Overview;
+            model.wave_sel = None;
             // Refresca los picos de las pistas en modo onda — pudieron
             // editarse en el piano roll desde la última vez.
             refresh_onda_peaks(&mut model);
+        }
+        Msg::WavePress { lx, rw } => {
+            model.last_rect = Some((rw, 0.0));
+            let b = px_to_beat(lx, rw, &model);
+            model.wave_sel = Some((b, b));
+        }
+        Msg::WaveDrag { phase, dx, lx0 } => {
+            let rw = model.last_rect.map(|(w, _)| w).unwrap_or(1.0);
+            let a = px_to_beat(lx0, rw, &model);
+            let c = px_to_beat(lx0 + dx, rw, &model);
+            let (lo, hi) = if a <= c { (a, c) } else { (c, a) };
+            model.wave_sel = Some((lo, hi));
+            if matches!(phase, DragPhase::End) && (hi - lo) < 0.05 {
+                // Click sin arrastre real → deselecciona (ops a toda la pista).
+                model.wave_sel = None;
+            }
         }
         Msg::SetTrackView { track, view } => {
             if let Some(t) = model.editor.score.track_mut(track) {

@@ -355,4 +355,10 @@ pub enum EditMsg {
     /// toggle; sin `Score::key` declarada el flag queda igual setteado
     /// pero no tiene efecto hasta que se asigne una key.
     ToggleSnapToKey,
+    /// Agrega una op de edición de onda a una pista, sobre `[from, to)`
+    /// en beats. La capa `WaveLayer` se crea si no existía. Es no
+    /// destructiva (modula una envolvente de ganancia, no toca samples).
+    WaveOp { track: usize, op: takiy_core::WaveOp },
+    /// Borra todas las ops de onda de una pista (`wave = None`).
+    WaveClear { track: usize },
 }

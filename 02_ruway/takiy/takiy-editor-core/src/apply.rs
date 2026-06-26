@@ -129,7 +129,27 @@ impl EditorState {
                 self.delete_automation_point(track_idx, is_volume, idx)
             }
             EditMsg::ToggleSnapToKey => self.toggle_snap_to_key(),
+            EditMsg::WaveOp { track, op } => self.add_wave_op(track, op),
+            EditMsg::WaveClear { track } => self.clear_wave(track),
         }
+    }
+
+    /// Agrega una op de onda a la pista, creando la capa si hace falta.
+    fn add_wave_op(&mut self, track: usize, op: takiy_core::WaveOp) -> ApplyOutcome {
+        let t = self.score.track_mut(track)?;
+        t.wave.get_or_insert_with(Default::default).ops.push(op);
+        Some(format!("onda · op en pista {track}"))
+    }
+
+    /// Limpia todas las ediciones de onda de la pista. No-op si ya estaba
+    /// limpia (devuelve `None` → no entra al historial de undo).
+    fn clear_wave(&mut self, track: usize) -> ApplyOutcome {
+        let t = self.score.track_mut(track)?;
+        if t.wave.is_none() {
+            return None;
+        }
+        t.wave = None;
+        Some(format!("onda · limpia pista {track}"))
     }
 
     /// Si `snap_to_key` está prendido y hay key activa, redondea `midi`

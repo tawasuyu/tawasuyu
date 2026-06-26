@@ -77,6 +77,10 @@ pub(crate) struct Model {
     pub(crate) right_w: f32,
     /// Pantalla activa: panorama de pistas o editor de una pista.
     pub(crate) screen: Screen,
+    /// Selección de tiempo `[from, to)` en beats sobre la onda de la pista
+    /// abierta (editor de onda). `None` = sin selección → las ops aplican
+    /// a toda la pista. La fija el drag horizontal sobre la forma de onda.
+    pub(crate) wave_sel: Option<(f32, f32)>,
     /// Caché de picos de onda por índice de pista, para el carril en
     /// modo `Onda`. Cada `Vec<f32>` es un perfil normalizado `[0, 1]`
     /// de resolución fija (`ONDA_PEAK_BUCKETS`) que el painter remapea

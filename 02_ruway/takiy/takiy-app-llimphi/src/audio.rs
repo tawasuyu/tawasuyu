@@ -6,8 +6,8 @@ use takiy_app::{gm_program_for_track_name, EditorState};
 use takiy_core::Score;
 use takiy_playback::PlayOpts;
 use takiy_synth::{
-    mix_clicks, prepend_count_in, AudioBuffer, Metronome, MultiProgramRenderer, OscRenderer,
-    Renderer,
+    apply_master_delay, apply_master_reverb, mix_clicks, prepend_count_in, AudioBuffer, Metronome,
+    MultiProgramRenderer, OscRenderer, Renderer,
 };
 
 /// Sample-rate canónico para el export WAV offline. Coincide con el del
@@ -61,6 +61,82 @@ pub(crate) fn render_score(
     osc.render(score)
 }
 
+/// Render que honra las **ediciones de onda** por pista. Si ninguna
+/// pista tiene ops, delega en [`render_score`] (camino rápido y byte-exact
+/// — el test de determinismo no se entera). Si alguna las tiene, rinde
+/// cada pista audible por separado, le aplica su envolvente de ganancia
+/// muestra-a-muestra, suma, y aplica los efectos de master sobre la suma.
+pub(crate) fn render_with_wave(
+    score: &Score,
+    sf2: Option<&MultiProgramRenderer>,
+    sample_rate: u32,
+) -> AudioBuffer {
+    if !score.tracks().iter().any(|t| t.has_wave_edits()) {
+        return render_score(score, sf2, sample_rate);
+    }
+
+    let sec_per_beat = 60.0 / score.tempo_bpm.max(1.0);
+    let mut sum: Option<AudioBuffer> = None;
+    for (idx, track) in score.tracks().iter().enumerate() {
+        if !score.track_is_audible(idx) {
+            continue;
+        }
+        // Pista aislada, sin efectos de master (se aplican una vez sobre
+        // la suma). El timbre se preserva: con SF2 remapeamos el programa
+        // de la pista al índice 0 de la sub-partitura.
+        let mut one = Score::new(score.tempo_bpm);
+        let mut t = track.clone();
+        t.mute = false;
+        t.solo = false;
+        one.add_track(t);
+        let mut buf = match sf2 {
+            Some(sf2) => sf2
+                .clone()
+                .with_sample_rate(sample_rate)
+                .with_track_program(0, sf2.program_for_track(idx))
+                .render(&one),
+            None => OscRenderer { sample_rate, ..Default::default() }.render(&one),
+        };
+
+        // Envolvente de ganancia de onda, evaluada por frame.
+        if track.has_wave_edits() {
+            let ch = buf.channels.max(1) as usize;
+            let inv = 1.0 / (sample_rate as f32 * sec_per_beat);
+            let frames = buf.frames();
+            for f in 0..frames {
+                let g = track.wave_gain_at(f as f32 * inv);
+                if (g - 1.0).abs() > 1e-9 {
+                    for c in 0..ch {
+                        buf.samples[f * ch + c] *= g;
+                    }
+                }
+            }
+        }
+
+        match sum.as_mut() {
+            None => sum = Some(buf),
+            Some(acc) => {
+                if buf.samples.len() > acc.samples.len() {
+                    acc.samples.resize(buf.samples.len(), 0.0);
+                }
+                for (a, b) in acc.samples.iter_mut().zip(buf.samples.iter()) {
+                    *a += *b;
+                }
+            }
+        }
+    }
+
+    let mut out = sum.unwrap_or_else(|| render_score(score, sf2, sample_rate));
+    if let Some(delay) = score.master_delay.as_ref() {
+        apply_master_delay(&mut out, sec_per_beat, delay);
+    }
+    if let Some(reverb) = score.master_reverb.as_ref() {
+        apply_master_reverb(&mut out, reverb);
+    }
+    out.normalize_if_clipping();
+    out
+}
+
 /// Construye el `(AudioBuffer, PlayOpts)` para una orden de reproducción
 /// considerando metrónomo, loop region, count-in y la posición de
 /// arranque pedida en beats. Si `start_beat` cae dentro de una región
@@ -73,7 +149,7 @@ pub(crate) fn build_play(
     start_beat: f32,
     count_in: bool,
 ) -> (AudioBuffer, PlayOpts) {
-    let mut buf = render_score(&editor.score, sf2, sample_rate);
+    let mut buf = render_with_wave(&editor.score, sf2, sample_rate);
     let bpm = editor.score.tempo_bpm.max(1.0);
     let sec_per_beat = 60.0 / bpm;
 
@@ -142,4 +218,57 @@ pub(crate) fn play_status_extras(editor: &EditorState) -> String {
         s.push_str(&format!(" · click {bpb}/4"));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use takiy_core::{Pitch, ScoreNote, Track, WaveLayer, WaveOp};
+
+    /// Peak absoluto del buffer estéreo en el rango de beats `[from, to)`.
+    fn peak_in_beats(buf: &AudioBuffer, bpm: f32, sr: u32, from: f32, to: f32) -> f32 {
+        let spb = 60.0 / bpm;
+        let f0 = (from * spb * sr as f32) as usize;
+        let f1 = ((to * spb * sr as f32) as usize).min(buf.frames());
+        let ch = buf.channels.max(1) as usize;
+        buf.samples[f0 * ch..f1 * ch]
+            .iter()
+            .fold(0.0_f32, |a, &b| a.max(b.abs()))
+    }
+
+    #[test]
+    fn wave_silence_zeroes_that_region_in_the_render() {
+        let sr = 8_000;
+        let bpm = 120.0;
+        let mut score = Score::new(bpm);
+        let mut t = Track::new("nota larga");
+        // Una nota sostenida 0..8 beats → señal continua en todo el tramo.
+        t.add(ScoreNote::new(Pitch::A4, 0.0, 8.0, 120));
+        score.add_track(t);
+
+        // Sin ops: hay señal en [4,6).
+        let dry = render_with_wave(&score, None, sr);
+        assert!(peak_in_beats(&dry, bpm, sr, 4.5, 5.5) > 0.05, "el tramo suena sin editar");
+
+        // Con Silence[4,6): ese tramo queda ~0 y el resto sigue sonando.
+        score.track_mut(0).unwrap().wave =
+            Some(WaveLayer { ops: vec![WaveOp::Silence { from: 4.0, to: 6.0 }] });
+        let wet = render_with_wave(&score, None, sr);
+        let silenced = peak_in_beats(&wet, bpm, sr, 4.5, 5.5);
+        let audible = peak_in_beats(&wet, bpm, sr, 1.0, 2.0);
+        assert!(silenced < 1e-3, "tramo silenciado debe ser ~0, fue {silenced}");
+        assert!(audible > 0.05, "fuera de la selección sigue sonando, fue {audible}");
+    }
+
+    #[test]
+    fn no_wave_ops_takes_the_byte_exact_path() {
+        // Sin ops de onda, render_with_wave == render_score (mismo buffer).
+        let mut score = Score::new(100.0);
+        let mut t = Track::new("a");
+        t.add(ScoreNote::new(Pitch::MIDDLE_C, 0.0, 2.0, 100));
+        score.add_track(t);
+        let a = render_with_wave(&score, None, 16_000);
+        let b = render_score(&score, None, 16_000);
+        assert_eq!(a.samples, b.samples);
+    }
 }

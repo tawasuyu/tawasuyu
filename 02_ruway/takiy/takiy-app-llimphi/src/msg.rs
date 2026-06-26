@@ -151,6 +151,12 @@ pub(crate) enum Msg {
     /// Cambia el modo de visualización de una pista en el panorama
     /// (midi ↔ onda). Si pasa a onda, dispara el cálculo de sus picos.
     SetTrackView { track: usize, view: takiy_core::TrackView },
+    /// Press sobre la forma de onda del editor: ancla la selección de
+    /// tiempo en `lx` (local) y cachea el ancho `rw` para mapear px→beat.
+    WavePress { lx: f32, rw: f32 },
+    /// Drag horizontal sobre la onda: extiende la selección de tiempo
+    /// entre el beat del press (`lx0`) y el del cursor (`lx0 + dx`).
+    WaveDrag { phase: DragPhase, dx: f32, lx0: f32 },
     Quit,
 }
 

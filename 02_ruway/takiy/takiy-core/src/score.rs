@@ -137,6 +137,67 @@ impl TrackView {
     }
 }
 
+/// Una operación de edición de onda sobre un rango de tiempo `[from, to)`
+/// en beats. Son **no destructivas**: no tocan samples, sino que definen
+/// una envolvente de ganancia que se evalúa al renderizar y al dibujar la
+/// onda. Componen multiplicativamente (ver [`WaveLayer::gain_at`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum WaveOp {
+    /// Silencia el rango (ganancia 0).
+    Silence { from: f32, to: f32 },
+    /// Multiplica el rango por `factor` (`<1` atenúa, `>1` amplifica).
+    Gain { from: f32, to: f32, factor: f32 },
+    /// Rampa de 0→1 dentro del rango (silencio al entrar, pleno al salir).
+    FadeIn { from: f32, to: f32 },
+    /// Rampa de 1→0 dentro del rango (pleno al entrar, silencio al salir).
+    FadeOut { from: f32, to: f32 },
+}
+
+impl WaveOp {
+    /// Ganancia que aplica esta op en `beat`. Fuera de su rango es `1.0`
+    /// (identidad) — sólo modula su tramo, como una selección de Audacity.
+    pub fn gain_at(self, beat: f32) -> f32 {
+        let (from, to) = match self {
+            WaveOp::Silence { from, to }
+            | WaveOp::Gain { from, to, .. }
+            | WaveOp::FadeIn { from, to }
+            | WaveOp::FadeOut { from, to } => (from, to),
+        };
+        let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+        if beat < lo || beat >= hi {
+            return 1.0;
+        }
+        let span = (hi - lo).max(1e-6);
+        let t = ((beat - lo) / span).clamp(0.0, 1.0);
+        match self {
+            WaveOp::Silence { .. } => 0.0,
+            WaveOp::Gain { factor, .. } => factor.max(0.0),
+            WaveOp::FadeIn { .. } => t,
+            WaveOp::FadeOut { .. } => 1.0 - t,
+        }
+    }
+}
+
+/// Capa de edición de onda de una pista: la lista de [`WaveOp`] aplicadas
+/// sobre el audio que la pista sintetiza. Vacía ⇒ ganancia 1.0 en todo el
+/// tiempo (la pista suena y se ve igual que sin capa — byte-exact).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WaveLayer {
+    pub ops: Vec<WaveOp>,
+}
+
+impl WaveLayer {
+    /// Ganancia compuesta en `beat`: el producto de todas las ops. Sin
+    /// ops da `1.0` (producto vacío).
+    pub fn gain_at(&self, beat: f32) -> f32 {
+        self.ops.iter().map(|op| op.gain_at(beat)).product()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+}
+
 /// Una pista monofónica o polifónica: notas ordenadas por inicio.
 ///
 /// Los campos del mixer (`volume`, `mute`, `solo`) usan `serde(default)`
@@ -150,6 +211,11 @@ pub struct Track {
     /// `serde(default)` → los `.takiy.json` previos cargan como `Midi`.
     #[serde(default)]
     pub view: TrackView,
+    /// Ediciones de onda no destructivas (silenciar/ganancia/fades por
+    /// rango). `None` o vacía ⇒ sin efecto (render byte-exact). `serde
+    /// (default)` mantiene compat con `.takiy.json` previos.
+    #[serde(default)]
+    pub wave: Option<WaveLayer>,
     /// Ganancia lineal `[0, 1.5]`. `1.0` = unidad. Default `1.0`.
     #[serde(default = "default_volume")]
     pub volume: f32,
@@ -185,6 +251,7 @@ impl Default for Track {
             name: String::new(),
             notes: Vec::new(),
             view: TrackView::Midi,
+            wave: None,
             volume: 1.0,
             mute: false,
             solo: false,
@@ -201,6 +268,7 @@ impl Track {
             name: name.into(),
             notes: Vec::new(),
             view: TrackView::Midi,
+            wave: None,
             volume: 1.0,
             mute: false,
             solo: false,
@@ -208,6 +276,18 @@ impl Track {
             volume_automation: None,
             pan_automation: None,
         }
+    }
+
+    /// Ganancia de la capa de onda en `beat` (1.0 si no hay capa o está
+    /// vacía). El render y el dibujo de la onda la aplican en el dominio
+    /// de la muestra, multiplicándola sobre el audio sintetizado.
+    pub fn wave_gain_at(&self, beat: f32) -> f32 {
+        self.wave.as_ref().map(|w| w.gain_at(beat)).unwrap_or(1.0)
+    }
+
+    /// `true` si la pista tiene al menos una op de onda activa.
+    pub fn has_wave_edits(&self) -> bool {
+        self.wave.as_ref().is_some_and(|w| !w.is_empty())
     }
 
     /// Volumen efectivo en `beat`. Si hay automación con puntos,
@@ -626,6 +706,47 @@ mod tests {
         o.view = TrackView::Onda;
         let back: Track = serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
         assert_eq!(back.view, TrackView::Onda);
+    }
+
+    #[test]
+    fn wave_ops_compose_gain_envelope() {
+        // Silence en [2,4): 0 dentro, 1 fuera.
+        let s = WaveOp::Silence { from: 2.0, to: 4.0 };
+        assert_eq!(s.gain_at(1.0), 1.0);
+        assert_eq!(s.gain_at(3.0), 0.0);
+        assert_eq!(s.gain_at(4.0), 1.0); // exclusivo arriba
+        // FadeIn [0,4): 0→1 lineal.
+        let fi = WaveOp::FadeIn { from: 0.0, to: 4.0 };
+        assert!((fi.gain_at(0.0) - 0.0).abs() < 1e-6);
+        assert!((fi.gain_at(2.0) - 0.5).abs() < 1e-6);
+        // FadeOut [0,4): 1→0.
+        let fo = WaveOp::FadeOut { from: 0.0, to: 4.0 };
+        assert!((fo.gain_at(0.0) - 1.0).abs() < 1e-6);
+        assert!((fo.gain_at(2.0) - 0.5).abs() < 1e-6);
+        // Composición multiplicativa: gain 0.5 en [0,8) × silence en [2,4).
+        let mut layer = WaveLayer::default();
+        layer.ops.push(WaveOp::Gain { from: 0.0, to: 8.0, factor: 0.5 });
+        layer.ops.push(WaveOp::Silence { from: 2.0, to: 4.0 });
+        assert!((layer.gain_at(1.0) - 0.5).abs() < 1e-6); // sólo gain
+        assert_eq!(layer.gain_at(3.0), 0.0); // gain × silence = 0
+        assert_eq!(layer.gain_at(9.0), 1.0); // fuera de todo
+        // Capa vacía = identidad.
+        assert_eq!(WaveLayer::default().gain_at(5.0), 1.0);
+    }
+
+    #[test]
+    fn track_wave_defaults_to_none_and_survives_old_json() {
+        let json = r#"{"name":"old","notes":[]}"#;
+        let t: Track = serde_json::from_str(json).unwrap();
+        assert!(t.wave.is_none());
+        assert_eq!(t.wave_gain_at(3.0), 1.0);
+        assert!(!t.has_wave_edits());
+        // Round-trip de una pista con ops.
+        let mut w = Track::new("audio");
+        w.wave = Some(WaveLayer { ops: vec![WaveOp::Silence { from: 1.0, to: 2.0 }] });
+        let back: Track = serde_json::from_str(&serde_json::to_string(&w).unwrap()).unwrap();
+        assert!(back.has_wave_edits());
+        assert_eq!(back.wave_gain_at(1.5), 0.0);
     }
 
     #[test]
