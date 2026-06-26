@@ -771,6 +771,12 @@ pub struct Model {
     /// sale de `wlr-foreign-toplevel` directo, ver [`crate::layer`]). Vacío si no
     /// hay compositor que responda.
     pub windows: Vec<crate::toplevel::WindowEntry>,
+    /// Realce **optimista** del workspace switcher: `(target_1based, ticks)`.
+    /// Al clickear una celda el realce salta al instante a `target` sin esperar
+    /// el muestreo de ~1 s; se sostiene unos ticks por si un sample viejo aún
+    /// reporta el escritorio anterior, y se suelta al confirmarse (o agotarse).
+    /// Ver [`crate::sampler::reconcile_optimistic`]. `None` = sin salto en vuelo.
+    pub pending_ws: Option<(u8, u8)>,
     /// Vigía del `launcher.toml`: cada tick comprueba si cambió en disco para
     /// recargar el marco en caliente (reordenar el dock, cambiar acento, etc.).
     pub cfg_watch: crate::config_watch::ConfigWatch,
@@ -1063,6 +1069,7 @@ impl App for PataApp {
             },
             screen,
             windows: Vec::new(),
+            pending_ws: None,
             // Vigilamos el primer candidato (el que `save` escribe), exista o no:
             // así la PRIMERA aplicación de una vista —que crea launcher.toml— se
             // recarga en caliente igual (mtime None→Some dispara `changed`), no
@@ -1136,7 +1143,14 @@ impl App for PataApp {
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Tick => {
-                let ctx = model.sampler.sample();
+                let mut ctx = model.sampler.sample();
+                // Reconcilia el realce optimista del switcher: si hay un salto en
+                // vuelo, sostiene el destino hasta que el muestreo lo confirme
+                // (evita el parpadeo de un sample tomado antes de aplicarse).
+                let (pending, active) =
+                    sampler::reconcile_optimistic(model.pending_ws, ctx.active_workspace);
+                model.pending_ws = pending;
+                ctx.active_workspace = active;
                 model.tick_widgets(&ctx);
                 model.last_ctx = ctx;
                 model.clipboard = crate::sampler::leer_clipboard();
@@ -1292,7 +1306,18 @@ impl App for PataApp {
                 model.nahual.daemon = nahual::DaemonLoad::Failed(e);
             }
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
-            Msg::SwitchWorkspace(n) => sampler::switch_workspace(n),
+            Msg::SwitchWorkspace(n) => {
+                sampler::switch_workspace(n);
+                // Realce optimista: la celda clickeada se marca activa al
+                // instante (sin esperar el muestreo de ~1 s). Se sostiene unos
+                // ticks y se reconcilia en `Msg::Tick`. Repintamos ya con un ctx
+                // que refleja el salto.
+                model.pending_ws = Some((n, sampler::OPTIMISTIC_TICKS));
+                let mut ctx = model.last_ctx.clone();
+                ctx.active_workspace = n;
+                model.tick_widgets(&ctx);
+                model.last_ctx = ctx;
+            }
             Msg::VolumeWheel(dy) => {
                 // Rueda arriba (dy<0) = subir; el stack da dy>0 al rodar abajo.
                 if dy != 0.0 {

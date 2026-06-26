@@ -318,6 +318,29 @@ mod tests {
     }
 
     #[test]
+    fn optimista_sin_pendiente_muestra_lo_muestreado() {
+        assert_eq!(reconcile_optimistic(None, 2), (None, 2));
+    }
+
+    #[test]
+    fn optimista_sostiene_el_target_hasta_que_el_sample_lo_confirma() {
+        // Click a 4: el sample aún reporta el viejo (1). Se sostiene 4 y se
+        // descuenta el presupuesto.
+        let (p, shown) = reconcile_optimistic(Some((4, OPTIMISTIC_TICKS)), 1);
+        assert_eq!(shown, 4);
+        assert_eq!(p, Some((4, OPTIMISTIC_TICKS - 1)));
+        // El siguiente sample ya reporta 4: se suelta el override.
+        assert_eq!(reconcile_optimistic(p, 4), (None, 4));
+    }
+
+    #[test]
+    fn optimista_se_rinde_si_el_salto_no_prospera() {
+        // Presupuesto agotado y el sample sigue en otro escritorio (el salto a 9
+        // falló, p.ej. no existe): se vuelve a confiar en el muestreo.
+        assert_eq!(reconcile_optimistic(Some((9, 0)), 1), (None, 1));
+    }
+
+    #[test]
     fn parse_workspaces_deriva_activo_y_mascara_de_ocupados() {
         // Escritorios 1 y 3 con ventanas → bits 0 y 2 (0b101 = 5); activo el 2.
         let (active, count, mask, others) =
@@ -619,6 +642,34 @@ pub fn toggle_mute() {
 /// una celda. El switcher refleja el cambio en el próximo tick.
 pub fn switch_workspace(n: u8) {
     crate::spawn_cmd(&format!("mirada-ctl workspace {n}"));
+}
+
+/// Cuántos ticks (~1 s c/u) se sostiene el realce optimista de un escritorio
+/// recién clickeado antes de rendirse y volver a confiar en el muestreo. El
+/// cambio real es inmediato, así que el primer sample suele confirmar; este tope
+/// sólo cubre un WM lento o un salto que no prosperó (escritorio inexistente).
+pub const OPTIMISTIC_TICKS: u8 = 3;
+
+/// Reconcilia el realce **optimista** del switcher con lo que reporta el
+/// muestreo. Al clickear una celda el realce salta al instante (no se espera el
+/// `mirada-ctl workspaces` del próximo tick), pero un sample tomado *antes* de
+/// que el WM aplicara el salto reportaría el escritorio viejo y haría parpadear
+/// el realce. Esta función pura decide qué escritorio mostrar y si seguir
+/// sosteniendo el override:
+///
+/// - sin pendiente → se muestra lo muestreado, tal cual;
+/// - pendiente `target` ya confirmado por el sample → se suelta el override;
+/// - pendiente con presupuesto de ticks → se sostiene `target` y se descuenta;
+/// - pendiente agotado → se suelta y se confía en el sample (el salto no prosperó).
+///
+/// Devuelve `(nuevo_pendiente, escritorio_a_mostrar)`.
+pub fn reconcile_optimistic(pending: Option<(u8, u8)>, sampled_active: u8) -> (Option<(u8, u8)>, u8) {
+    match pending {
+        None => (None, sampled_active),
+        Some((target, _)) if sampled_active == target => (None, sampled_active),
+        Some((target, ticks)) if ticks > 0 => (Some((target, ticks - 1)), target),
+        Some(_) => (None, sampled_active),
+    }
 }
 
 /// Estado de los escritorios del WM: `(activo_1based, total, máscara_ocupados)`.

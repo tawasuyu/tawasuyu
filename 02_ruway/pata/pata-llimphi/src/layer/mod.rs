@@ -315,6 +315,11 @@ pub(super) struct LayerApp {
     /// Último escritorio activo visto (para detectar el cambio que dispara la
     /// animación). `0` = aún sin dato.
     pub(super) ws_last_active: u8,
+    /// Realce **optimista** del switcher: `(target_1based, ticks)`. Al clickear
+    /// una celda el activo salta ya; se sostiene unos samples por si uno viejo
+    /// (tomado antes de que el WM aplicara el salto) reportara el escritorio
+    /// anterior y parpadeara. Ver [`crate::sampler::reconcile_optimistic`].
+    pub(super) pending_ws: Option<(u8, u8)>,
     /// Arrastre en curso.
     pub(super) drag: Option<LayerDrag>,
     /// `on_click` plano armado en el press, pendiente de soltar (semántica de
@@ -564,6 +569,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         rag_rx,
         ws_anim: None,
         ws_last_active: 0,
+        pending_ws: None,
         drag: None,
         pending_click: None,
         host: (!sidebars.is_empty()).then(HostServer::spawn).flatten(),

@@ -564,9 +564,16 @@ impl LayerApp {
     }
 
     pub(super) fn maybe_sample(&mut self) {
-        let Some((ctx, clipboard)) = self.sampler.latest() else {
+        let Some((mut ctx, clipboard)) = self.sampler.latest() else {
             return;
         };
+        // Sostiene el realce optimista del switcher hasta que el muestreo
+        // confirme el salto (un sample viejo reportaría el escritorio anterior y
+        // parpadearía). Misma lógica pura que el backend winit.
+        let (pending, active) =
+            crate::sampler::reconcile_optimistic(self.pending_ws, ctx.active_workspace);
+        self.pending_ws = pending;
+        ctx.active_workspace = active;
         self.maybe_recargar_config();
         // El toggle GLOBAL «dientes fuera» (WawaConfig) cambia si los rails
         // reservan franja o flotan → hay que reanclar. Re-exec al detectarlo.
@@ -1117,8 +1124,11 @@ impl LayerApp {
                 crate::sampler::switch_workspace(n);
                 // Feedback INSTANTÁNEO: el sampler de fondo refresca cada ~1s (y
                 // cada tick corre varios subprocesos), así que el resalte tardaba
-                // segundos y parecía que el click no entraba. Movemos el activo ya.
+                // segundos y parecía que el click no entraba. Movemos el activo ya
+                // y lo sostenemos unos samples (`pending_ws`) para que un muestreo
+                // viejo no lo revierta antes de que el WM aplique el salto.
                 self.ctx.active_workspace = n;
+                self.pending_ws = Some((n, crate::sampler::OPTIMISTIC_TICKS));
                 self.marcar_todo_dirty();
             }
             Msg::ActivateWindow(id) => {

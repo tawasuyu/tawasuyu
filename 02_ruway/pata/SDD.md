@@ -279,10 +279,14 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
   - **Fase 6 cerrada**: todos los widgets previstos (§4) existen, con íconos
     reales en el tray. **`clipboard` y `tray` cableados también en el path winit**
     (el `Model` muestrea el portapapeles cada tick y arranca el `TrayHandle` si la
-    config lo pide; `render::root` arma el `BarData` desde el `Model`). El único
-    pendiente es **`window_list` bajo el path winit/mirada**: necesita el cliente
-    foreign-toplevel (que vive en el backend layer-shell) o el IPC de toplevels de
-    mirada; hasta entonces queda vacío en ese path. Helper `config_tiene_widget`
+    config lo pide; `render::root` arma el `BarData` desde el `Model`).
+    **`window_list` bajo el path winit/mirada ✅** (verificado 2026-06-26): en vez
+    del cliente foreign-toplevel (que sólo existe en el backend layer-shell), el
+    path winit le pide la lista al WM por su CLI —igual que el switcher de
+    escritorios—: `sampler::sample_windows` lee `mirada-ctl windows --porcelain`
+    (gateado por `config_tiene_widget(window_list)`, un subproceso por tick sólo
+    si la barra lo declara) y `activate_window`/`close_window` actúan con
+    `mirada-ctl focus-window N` / `close-window N`. Helper `config_tiene_widget`
     compartido por ambos backends para arrancar el tray sólo si hace falta.
 - **Fase 8c — pulido de escritorio** (en curso):
   - **Gradiente en los medidores** ✅ — la barra de relleno de cpu/ram/volumen/
@@ -635,9 +639,15 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     config y muestra su view-model (`workspaces 2/4 ocupados=0b101`). Tests puros
     verdes (transcripción del estado + parser de la línea de mirada-ctl). El
     render bajo Wayland no se verifica headless (norma de pata).
-  - **Latencia**: el switcher refleja el cambio en el próximo tick (≤1 s); el
-    salto en sí es inmediato. Optimistic-update y refresco sub-segundo quedan como
-    pulido si molesta.
+  - **Latencia — optimistic-update ✅** (2026-06-26): al clickear una celda, el
+    realce salta al destino **en el acto**, sin esperar el muestreo de ~1 s. Se
+    sostiene unos ticks (`OPTIMISTIC_TICKS = 3`) por si un sample tomado *antes*
+    de que el WM aplicara el salto reportara el escritorio viejo y parpadeara; se
+    suelta al confirmarse el destino (o al agotarse el presupuesto, si el salto no
+    prosperó). La lógica vive en `sampler::reconcile_optimistic` —función pura,
+    testeada ×3— y la consumen **ambos** backends (winit en `lib.rs`, layer-shell
+    en `layer/app_impl.rs::maybe_sample`), cada uno con su `pending_ws`. El
+    refresco sub-segundo queda como pulido adicional si molesta.
   - **Pendiente (capas siguientes, ya decididas con el usuario)**: overlay
     **espacial tipo Prezi** (zoom-out a todos los escritorios con miniaturas,
     cámara de `pluma-deck` Recorrido) y, más adelante, vista **grafo** (escritorios
