@@ -40,6 +40,9 @@ use llimphi_widget_card::{card_view, CardOptions, CardPalette};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use llimphi_icons::Icon;
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
@@ -54,6 +57,8 @@ use nahual_meta_runtime::format::{preview_value, short_hash, short_uuid};
 use nakui_core::event_log::{EventLog, LogEntry};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 const MAX_VISIBLE: usize = 80;
 const ROW_GAP: f32 = 6.0;
 const ACCENT_SEED: Color = Color::from_rgba8(0x88, 0xc0, 0xd0, 0xff);
@@ -88,6 +93,8 @@ enum Msg {
     ContextMenuOpen(f32, f32),
     /// Fuerza una relectura síncrona del log (Refrescar del menú).
     ForceReload,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 struct Model {
@@ -114,6 +121,10 @@ struct Model {
     /// Menú contextual sobre una entrada: `(idx_render, x, y)` ancla en
     /// ventana. `None` cerrado.
     context_menu: Option<(usize, f32, f32)>,
+    /// Toasts vivos (confirmaciones de refresco, errores de lectura).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
 }
 
 struct SharedState {
@@ -180,6 +191,8 @@ impl App for Explorer {
             menu_anim: Tween::idle(1.0),
             selected: None,
             context_menu: None,
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -246,7 +259,26 @@ impl App for Explorer {
             }
             Msg::ForceReload => {
                 reload_into(&m.log_path, &m.shared);
+                // Confirmación efímera del refresco manual (o el error de
+                // lectura como toast, además del banner persistente).
+                let id = m.next_toast;
+                m.next_toast += 1;
+                let toast = {
+                    let snap = m.shared.lock().unwrap();
+                    match &snap.error {
+                        Some(e) => Toast::error(id, format!("No pude leer el log: {e}"), TOAST_TTL),
+                        None => Toast::success(
+                            id,
+                            format!("Log refrescado · {} eventos", snap.entries.len()),
+                            TOAST_TTL,
+                        ),
+                    }
+                };
+                push_toast(&mut m, handle, toast);
                 handle.dispatch(Msg::Reload);
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
             }
             Msg::SelectEntry(i) => {
                 m.selected = Some(i);
@@ -339,14 +371,31 @@ impl App for Explorer {
             .enumerate()
             .map(|(i, e)| {
                 let card = entry_card(e, &theme, &card_palette).on_click(Msg::SelectEntry(i));
-                if model.selected == Some(i) {
+                let card = if model.selected == Some(i) {
                     // Resalte sutil de la entrada seleccionada.
                     card.fill(theme.bg_selected)
                 } else {
                     card
-                }
+                };
+                // Pop-in: cada entry entra con fade la primera vez que
+                // aparece su `seq` (estable por evento) — los nuevos
+                // appended se asientan en vez de saltar de golpe.
+                card.animated_enter(e.seq(), motion::NORMAL)
             })
             .collect();
+
+        // Sin eventos y sin error de lectura → empty-state con orientación
+        // en vez de un cuerpo vacío. El error tiene su propio banner arriba.
+        let body_children: Vec<View<Msg>> = if entries.is_empty() && snapshot.error.is_none() {
+            vec![empty_view(
+                Icon::Archive,
+                "Sin eventos",
+                Some("El event log está vacío. Apuntá NAKUI_EVENT_LOG a un .jsonl con actividad o esperá a que el ERP escriba."),
+                &EmptyPalette::from_theme(&theme),
+            )]
+        } else {
+            cards
+        };
 
         let body = View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -369,11 +418,11 @@ impl App for Explorer {
         })
         .fill(theme.bg_app)
         .clip(true)
-        .children(cards);
+        .children(body_children);
 
         chrome.push(body);
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -385,7 +434,30 @@ impl App for Explorer {
         // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
         // menú contextual sobre la entrada seleccionada.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(chrome)
+        .children(chrome);
+
+        // Overlay de toasts (bottom-right). Los menús viven en
+        // `view_overlay`, así que el stack de toasts va aquí, en el cuerpo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model
+            .toasts
+            .iter()
+            .filter(|t| t.is_alive(now))
+            .cloned()
+            .collect();
+        if alive.is_empty() {
+            root
+        } else {
+            let viewport = viewport_of(model);
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, viewport, Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -457,6 +529,16 @@ impl App for Explorer {
         }
         None
     }
+}
+
+/// Empuja un toast al stack y programa su expiración en un worker.
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
 }
 
 /// Viewport para clampear overlays: el explorer no trackea el tamaño de
