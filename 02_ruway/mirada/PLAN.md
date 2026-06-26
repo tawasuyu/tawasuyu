@@ -194,14 +194,53 @@ El compositor **no hace `setuid` de sí mismo** (se queda con sus privilegios y
 lanza los clientes de cada sesión rebajados a su usuario) — la precondición que
 habilita hostear varias sesiones.
 
-**Diferido a FUS (anotado, no hecho):** arrancar/multiplexar >1 sesión concurrente;
-el selector «cambiar usuario» en el lock (`ShellAction` ganaría `SwitchTo(SessionId)`
-y `Unlock` un destino); y si la orquestación multi-seat termina en `sandokan`.
 **Auto-lock por inactividad** (`ext_idle_notify_v1`) sigue pendiente — requiere
 unificar el tipo de estado del bucle DRM (TODO en `setup.rs`), un refactor aparte.
 **Caveat N=1:** si una app de la sesión abriera una ventana justo mientras está
 bloqueada, se la marcaría `is_greeter` por error (glitch transitorio, se resuelve al
 desbloquear).
+
+## Fast user switching (FUS) — multiplexar >1 sesión  🔨 EN CURSO (1ª rebanada, 2026-06-26)
+
+**Idea rectora:** el compositor ya se quedaba con sus privilegios y rebajaba los
+clientes al usuario de la sesión — la precondición para hostear **varias sesiones
+concurrentes** y mostrar una a la vez. Esta rebanada construye el roster y el
+camino «cambiar usuario» desde el lock, **sin verificar en sesión gráfica todavía**
+(certificado con `cargo test` + `cargo check --workspace`).
+
+**1ª rebanada — roster con ids estables + «nueva sesión» desde el lock.**
+- **Política pura y testeable** en `mirada_brain::fus::SessionRoster<S>` (8 tests):
+  N sesiones con `SessionId` **estable y monótono** (no se reusa al dar de baja),
+  `add` (activa la recién llegada), `switch_to`, `remove` (el foco cae en la última
+  restante), `is_active`. El compositor lo parametriza con `S = Session`
+  (`UserInfo` + entorno). Reemplaza el par `sessions: Vec<Session>` +
+  `active_session: Option<usize>` por índice frágil.
+- **Ownership de ventana:** `ManagedWindow.session: SessionId` etiqueta cada
+  ventana con la sesión activa al abrirse. El gate `App::session_visible` y los
+  bucles de frames (winit + DRM) **sólo pintan/animan la sesión activa** con ≥2
+  sesiones; con ≤1 es byte-idéntico al camino single-session (las residentes
+  quedan ocultas y sin frame callbacks, como las capas dormidas del zoom-Z).
+- **Contrato** (`auth_core::ShellAction`, +3 tests): `NewSession` (volver al login
+  para hostear otra sesión) y `SwitchTo(u32)` (saltar a una hosteada por id). El
+  arranque normal siembra una sesión «implícita» (`user: None`, privilegios del
+  compositor) con id estable, para que un FUS posterior no confunda sus ventanas.
+- **Camino end-to-end de «cambiar usuario»:** en el lock, **F2** emite `NewSession`;
+  el compositor (`request_new_session`) vuelve a modo greeter dejando la sesión
+  residente debajo y relanza el greeter en **login** (no lock) en ambos backends;
+  el `start_session` siguiente da de alta una sesión más (`pending_new_session`) en
+  vez de ignorarse. La sesión vieja se oculta sola al haber ≥2.
+
+**Diferido (anotado, no hecho):**
+- **Selector de sesiones en el lock** (listar las hosteadas y `SwitchTo` directo):
+  `switch_session`/`SwitchTo` están cableados en el compositor, pero el lock aún no
+  pinta el roster ni emite `SwitchTo` — falta empujarle la lista por `greeter_stdin`.
+- **Retarget del foco de teclado real** al saltar de sesión (hoy `switch_session`
+  mueve sólo el flag visual `focused`; el `set_focus` de smithay queda pendiente).
+- **Desktop por sesión:** hoy el `Brain::Embedded(Desktop)` es compartido (las
+  ventanas de todas las sesiones se teselan en los mismos 9 escritorios; el gate las
+  oculta). Aislar el layout por usuario = un `Desktop` por sesión, rebanada aparte.
+- **Logout** (`remove` + respawn) y la orquestación multi-seat (si termina en
+  `sandokan`). **Verificar todo en sesión gráfica.**
 
 ## Diferido (implementable, caro/nicho — no ahora)
 

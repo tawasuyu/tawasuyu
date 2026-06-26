@@ -19,23 +19,37 @@ use crate::SessionTicket;
 pub const UNLOCK_TAG: &str = "MIRADA-SHELL-UNLOCK-v1";
 /// Etiqueta de la acción «cancelar el shell sin hacer nada».
 pub const CANCEL_TAG: &str = "MIRADA-SHELL-CANCEL-v1";
+/// Prefijo de la acción «saltar a la sesión hosteada con este id». Lleva el id
+/// de sesión (un `u32`, el `SessionId` del roster del compositor) separado por
+/// un espacio.
+pub const SWITCH_TAG: &str = "MIRADA-SHELL-SWITCH-v1";
+/// Etiqueta de la acción «abrir el login para hostear una sesión nueva».
+pub const NEWSESSION_TAG: &str = "MIRADA-SHELL-NEWSESSION-v1";
 
 /// Lo que el shell de credenciales le pide al compositor.
 ///
-/// Hoy se cablean [`StartSession`](ShellAction::StartSession) (login del
-/// greeter) y [`Unlock`](ShellAction::Unlock) (lock resuelto). Cuando llegue el
-/// *fast user switching* este enum gana un `SwitchTo(SessionId)` y `Unlock`
-/// pasará a llevar a *qué* sesión volver — por eso el canal ya es un enum y no
-/// un `SessionTicket` pelado.
+/// El *fast user switching* (FUS) cableó dos acciones más sobre el mismo canal:
+/// [`SwitchTo`](ShellAction::SwitchTo) (saltar a otra sesión ya hosteada) y
+/// [`NewSession`](ShellAction::NewSession) (volver al login para hostear una
+/// sesión nueva sin tirar la actual). Por eso el canal es un enum y no un
+/// [`SessionTicket`] pelado: crece sin reescribir el contrato greeter↔compositor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellAction {
     /// Autenticación de login exitosa: arrancá/elegí la sesión del ticket.
-    /// Es el camino del greeter (0 sesiones → 1 sesión).
+    /// Es el camino del greeter (0 sesiones → 1 sesión, o una sesión más en FUS).
     StartSession(SessionTicket),
     /// El lock se resolvió con la contraseña correcta: volvé a la sesión
-    /// activa. Sin destino explícito porque hoy hay una sola sesión; FUS
-    /// agregará a *cuál* volver.
+    /// activa. Sin destino explícito (el compositor sabe cuál es la activa);
+    /// para volver a *otra* sesión existe [`SwitchTo`](ShellAction::SwitchTo).
     Unlock,
+    /// FUS: saltar a la sesión hosteada con este id (la elegida en el selector
+    /// «cambiar usuario» del lock). El id es el `SessionId` del roster del
+    /// compositor.
+    SwitchTo(u32),
+    /// FUS: «cambiar usuario» abriendo el login para hostear una sesión nueva.
+    /// La sesión actual queda residente (suspendida) debajo; el compositor
+    /// vuelve a modo greeter y, tras el login, le da de alta otra sesión.
+    NewSession,
     /// Cerrá el shell sin acción (reservado: salida del lock sin desbloquear).
     Cancel,
 }
@@ -49,6 +63,8 @@ impl ShellAction {
         match self {
             ShellAction::StartSession(t) => t.to_line(),
             ShellAction::Unlock => UNLOCK_TAG.to_string(),
+            ShellAction::SwitchTo(id) => format!("{SWITCH_TAG} {id}"),
+            ShellAction::NewSession => NEWSESSION_TAG.to_string(),
             ShellAction::Cancel => CANCEL_TAG.to_string(),
         }
     }
@@ -61,8 +77,14 @@ impl ShellAction {
         if let Some(ticket) = SessionTicket::from_line(line) {
             return Some(ShellAction::StartSession(ticket));
         }
-        match line.trim_end_matches(['\r', '\n']) {
+        let line = line.trim_end_matches(['\r', '\n']);
+        // `SWITCH_TAG <id>`: el destino del salto va tras un espacio.
+        if let Some(rest) = line.strip_prefix(SWITCH_TAG) {
+            return rest.trim().parse::<u32>().ok().map(ShellAction::SwitchTo);
+        }
+        match line {
             UNLOCK_TAG => Some(ShellAction::Unlock),
+            NEWSESSION_TAG => Some(ShellAction::NewSession),
             CANCEL_TAG => Some(ShellAction::Cancel),
             _ => None,
         }
@@ -95,6 +117,25 @@ mod tests {
     fn round_trip_unlock_y_cancel() {
         assert_eq!(ShellAction::from_line(&ShellAction::Unlock.to_line()), Some(ShellAction::Unlock));
         assert_eq!(ShellAction::from_line(&ShellAction::Cancel.to_line()), Some(ShellAction::Cancel));
+    }
+
+    #[test]
+    fn round_trip_switch_y_new_session() {
+        for id in [0u32, 1, 42, u32::MAX] {
+            let a = ShellAction::SwitchTo(id);
+            assert_eq!(ShellAction::from_line(&a.to_line()), Some(a));
+        }
+        assert_eq!(
+            ShellAction::from_line(&ShellAction::NewSession.to_line()),
+            Some(ShellAction::NewSession)
+        );
+    }
+
+    #[test]
+    fn switch_con_id_invalido_es_ruido() {
+        // Sin id, o con un id no numérico, la línea no es una acción válida.
+        assert!(ShellAction::from_line(SWITCH_TAG).is_none());
+        assert!(ShellAction::from_line(&format!("{SWITCH_TAG} abc")).is_none());
     }
 
     #[test]

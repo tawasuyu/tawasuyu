@@ -56,6 +56,25 @@ impl DrmState {
                 Err(e) => dlog!("mirada-compositor · no pude lanzar el lock: {e}"),
             }
         }
+        // FUS «cambiar usuario»: relanza el greeter en modo LOGIN (sin `--lock`)
+        // para hostear una sesión nueva encima de las residentes. El modo ya
+        // quedó en `Greeter` por `request_new_session`.
+        if self.app.pending_new_session && self.app.greeter_stdin.is_none() {
+            let tx = self.shell_tx.clone();
+            match crate::spawn_greeter(None::<&str>, move |a| {
+                let _ = tx.send(a);
+            }) {
+                Ok(stdin) => {
+                    self.app.greeter_stdin = Some(stdin);
+                    dlog!("mirada-compositor · FUS: login para una sesión nueva.");
+                }
+                Err(e) => {
+                    dlog!("mirada-compositor · no pude lanzar el login de FUS: {e}");
+                    self.app.pending_new_session = false;
+                    self.app.mode = crate::estado::BodyMode::Session;
+                }
+            }
+        }
 
         let n = self.app.windows.len();
         if n != self.last_windows {

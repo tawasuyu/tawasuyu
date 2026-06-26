@@ -605,6 +605,7 @@ mirada-lock-label-user = Locked session
 mirada-lock-btn = Unlock
 mirada-lock-btn-busy = Unlocking…
 mirada-lock-hint = Press Enter to unlock
+mirada-lock-hint-switch = F2 to switch user
 
 # === nakui-explorer-llimphi ===
 nakui-explorer-menu-refresh-log = Refresh log

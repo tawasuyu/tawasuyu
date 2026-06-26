@@ -316,6 +316,20 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     // implementa los handlers Wayland) — un refactor del bucle, no un parche
     // local. El punto de apagado físico de la pantalla (DPMS real sobre DRM)
     // iría en el handler del timer de inactividad, sobre `DrmState::outputs`.
+    // Roster de sesiones (FUS). En modo greeter nace vacío (el login dará de
+    // alta la primera). En un arranque normal sembramos una sesión «implícita»
+    // (dev / sin DM): sus procesos heredan los privilegios del compositor
+    // (`user: None`), igual que antes — pero ahora con un id estable, para que
+    // las ventanas se etiqueten y un FUS posterior no las confunda con una
+    // sesión nueva.
+    let mut roster = mirada_brain::SessionRoster::new();
+    if !greeter {
+        roster.add(crate::estado::Session {
+            user: None,
+            env: Vec::new(),
+        });
+    }
+
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
@@ -419,8 +433,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         body: BodyState::new(),
         brain,
         mode: if greeter { BodyMode::Greeter } else { BodyMode::Session },
-        sessions: Vec::new(),
-        active_session: None,
+        roster,
         grabs: Vec::new(),
         debug_keys: std::env::var_os("MIRADA_DEBUG_KEYS").is_some(),
         switcher: None,
@@ -442,6 +455,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         greeter_stdin: None,
         greeter_active_output: usize::MAX,
         pending_lock: None,
+        pending_new_session: false,
     };
 
     // Distribución de teclado de la config del usuario (vacío = la del

@@ -282,6 +282,10 @@ pub(crate) struct ManagedWindow {
     pub(crate) focused: bool,
     /// `true` si es la ventana del shell — acoplada al pie, sin teselar.
     pub(crate) is_shell: bool,
+    /// Sesión hosteada dueña de la ventana (FUS). Con ≥2 sesiones, sólo se
+    /// pintan/animan las ventanas de la sesión activa — ver [`App::session_visible`].
+    /// Las ventanas del shell/greeter no pertenecen a ninguna y se ignoran aquí.
+    pub(crate) session: mirada_brain::SessionId,
     /// `true` si es la ventana del greeter (DM): sin barra de título, y el
     /// backend la muda al monitor con el ratón en multi-monitor.
     pub(crate) is_greeter: bool,
@@ -483,14 +487,12 @@ pub(crate) struct App {
     pub(crate) brain: Brain,
     /// Fase del ciclo de vida — login, sesión o sesión bloqueada (ver [`BodyMode`]).
     pub(crate) mode: BodyMode,
-    /// Sesiones hosteadas. Hoy 0 (greeter) o 1 (tras el traspaso del DM); el
-    /// vector deja crecer a multisesión sin reescribir. Ver [`Session`].
-    pub(crate) sessions: Vec<Session>,
-    /// Índice en [`sessions`](Self::sessions) de la sesión **activa** (la que se
-    /// pinta y recibe input). `None` mientras no hay ninguna (modo greeter).
-    /// Los procesos de sesión se rebajan a su usuario y heredan su entorno —
-    /// ver [`App::active_user`] y [`App::active_env`].
-    pub(crate) active_session: Option<usize>,
+    /// Sesiones hosteadas (FUS) con id estable. 0 (greeter), 1 (tras el traspaso
+    /// del DM) o N (varias sesiones concurrentes, saltables desde el lock). La
+    /// activa es la que se pinta y recibe input; sus procesos se rebajan a su
+    /// usuario y heredan su entorno — ver [`App::active_user`]/[`App::active_env`].
+    /// Ver [`mirada_brain::SessionRoster`] y [`Session`].
+    pub(crate) roster: mirada_brain::SessionRoster<Session>,
     /// Atajos globales a interceptar (los registra el Cerebro).
     pub(crate) grabs: Vec<String>,
     /// Diagnóstico opt-in (`MIRADA_DEBUG_KEYS=1`): loguea cada combo con
@@ -559,6 +561,12 @@ pub(crate) struct App {
     /// lo consume el bucle del backend, que lanza el shell de credenciales en
     /// modo lock (necesita el emisor del canal, que no vive en `App`).
     pub(crate) pending_lock: Option<String>,
+    /// Pedido de **nueva sesión** pendiente (FUS «cambiar usuario»): lo pone
+    /// [`App::request_new_session`] y lo consume el bucle del backend, que
+    /// relanza el greeter en modo **login** (no lock) para hostear otra sesión
+    /// junto a la actual. El siguiente [`start_session`](App::start_session) que
+    /// llegue da de alta una sesión más en vez de ignorarse.
+    pub(crate) pending_new_session: bool,
 
     /// **Clipboard por zona** (`MIRADA_CLIPBOARD_POR_ZONA=1`): cada escritorio
     /// tiene su propio portapapeles de texto. `false` = comportamiento normal

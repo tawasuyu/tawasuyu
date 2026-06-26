@@ -172,6 +172,22 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                 Err(e) => dlog!("mirada-compositor · no pude lanzar el lock: {e}"),
             }
         }
+        // 2 bis ter · FUS «cambiar usuario»: relanza el greeter en modo LOGIN
+        // (sin `--lock`, usuario libre) para hostear una sesión nueva encima de
+        // las residentes. `request_new_session` ya dejó el modo en `Greeter`.
+        if state.pending_new_session && state.greeter_stdin.is_none() {
+            let tx = shell_tx.clone();
+            match spawn_greeter(None::<&str>, move |a| {
+                let _ = tx.send(a);
+            }) {
+                Ok(stdin) => state.greeter_stdin = Some(stdin),
+                Err(e) => {
+                    dlog!("mirada-compositor · no pude lanzar el login de FUS: {e}");
+                    state.pending_new_session = false;
+                    state.mode = BodyMode::Session;
+                }
+            }
+        }
 
         // 2 ter · Recarga en caliente de keymap/config/reglas si cambiaron.
         // (El backend winit anidado no cachea menú/wallpaper/fuente, así que
@@ -212,8 +228,12 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
             // las ventanas, bottom/background DEBAJO. La lista es front-to-back.
             let (over_layers, under_layers) =
                 layer_render_elements(state.output.as_ref(), renderer);
-            let mut shown: Vec<&ManagedWindow> =
-                state.windows.iter().filter(|w| w.visible).collect();
+            // FUS: con ≥2 sesiones, sólo se pinta la activa (`session_visible`).
+            let mut shown: Vec<&ManagedWindow> = state
+                .windows
+                .iter()
+                .filter(|w| w.visible && state.session_visible(w))
+                .collect();
             // `is_greeter` al frente: el shell de credenciales (login/lock) tapa
             // la sesión —incluido el shell— mientras está arriba.
             shown.sort_by_key(|w| (!w.is_greeter, !w.is_shell, !w.floating));
@@ -272,11 +292,18 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
 
         // 4 · Callbacks de frame + clientes nuevos + flush.
         let time = start.elapsed().as_millis() as u32;
+        // FUS: las sesiones residentes no reciben frames (como `suspended`).
+        let multiplex = state.roster.len() > 1;
+        let activa = state.roster.active_id();
         for w in &mut state.windows {
             w.frame_tick = w.frame_tick.wrapping_add(1);
             // Las capas dormidas (zoom-Z) no reciben frame callbacks: el
             // cliente bloquea su bucle y deja de pintar a ciegas.
             if w.suspended {
+                continue;
+            }
+            // Sesión residente bajo FUS: sin frames.
+            if multiplex && !w.is_shell && !w.is_greeter && Some(w.session) != activa {
                 continue;
             }
             // Throttle de fondo: 1 de cada `frame_divisor` vblanks.

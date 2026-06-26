@@ -25,6 +25,8 @@ pub mod activity;
 pub mod config;
 pub mod ctl;
 pub mod desktop;
+/// `fus` — *fast user switching*: el [`SessionRoster`] de sesiones hosteadas.
+pub mod fus;
 pub mod git_branch;
 pub mod keymap;
 pub mod permisos;
@@ -48,6 +50,7 @@ pub use config::{
 };
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesState};
 pub use desktop::{Desktop, Output, WindowInfo};
+pub use fus::{SessionId, SessionRoster};
 pub use git_branch::{BranchSwitch, GitBranchWatch};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
 pub use permisos::Permisos;

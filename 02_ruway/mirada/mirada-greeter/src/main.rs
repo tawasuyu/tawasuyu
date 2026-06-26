@@ -401,6 +401,10 @@ enum Msg {
     /// Avanza la sesión elegida (con wrap) — clic en el selector de la
     /// tarjeta.
     CycleSession(i32),
+    /// FUS «cambiar usuario» desde el lock (F2): emite [`ShellAction::NewSession`]
+    /// y cierra — el compositor abre un login nuevo para hostear otra sesión
+    /// junto a la bloqueada.
+    SwitchUser,
     /// Fija la sesión elegida por índice — elección desde el menú.
     PickSession(usize),
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` = cerrar).
@@ -580,6 +584,8 @@ impl App for Greeter {
             // línea no usan las flechas verticales, así que quedan libres).
             Key::Named(NamedKey::ArrowUp) if !lock => Some(Msg::CycleSession(-1)),
             Key::Named(NamedKey::ArrowDown) if !lock => Some(Msg::CycleSession(1)),
+            // FUS: en el lock, F2 = «cambiar usuario» (hostear otra sesión).
+            Key::Named(NamedKey::F2) if lock => Some(Msg::SwitchUser),
             Key::Named(NamedKey::Enter) => {
                 if model.focus == Field::User {
                     Some(Msg::Focus(Field::Pass))
@@ -663,6 +669,14 @@ impl App for Greeter {
                 let n = m.sessions.len().max(1) as i32;
                 let cur = m.session_idx as i32;
                 m.session_idx = (((cur + dir) % n + n) % n) as usize;
+            }
+            Msg::SwitchUser => {
+                // Sólo tiene sentido desde el lock; el login de arranque ya es
+                // el camino de «otra sesión». Pide al compositor abrir un login.
+                if m.mode == GreeterMode::Lock {
+                    emit_action(&ShellAction::NewSession);
+                    handle.quit();
+                }
             }
             Msg::PickSession(i) => {
                 if i < m.sessions.len() {
@@ -963,9 +977,10 @@ impl App for Greeter {
             items.push(spacer(6.0));
             items.push(enter_btn);
             items.push(spacer(2.0));
-            // Pistas: en lock una sola línea; en login navegación + consola.
+            // Pistas: en lock desbloquear + cambiar usuario; en login navegación + consola.
             if lock {
                 items.push(row(13.0, &rimay_localize::t("mirada-lock-hint"), 9.0, theme.fg_muted));
+                items.push(row(13.0, &rimay_localize::t("mirada-lock-hint-switch"), 9.0, theme.fg_muted));
             } else {
                 items.push(row(13.0, &rimay_localize::t("mirada-greeter-hint-nav"), 9.0, theme.fg_muted));
                 items.push(row(13.0, &rimay_localize::t("mirada-greeter-hint-console"), 9.0, theme.fg_muted));

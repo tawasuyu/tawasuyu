@@ -109,7 +109,14 @@ impl DrmState {
     /// (`shell` arriba > flotantes > teseladas). Se saltea ventanas que no
     /// caen sobre `rect` para no malgastar trabajo del compositor.
     fn emit_windows(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
-        let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
+        // FUS: con ≥2 sesiones, sólo se pintan las ventanas de la activa
+        // (`session_visible`); con ≤1 el filtro es transparente.
+        let mut shown: Vec<_> = self
+            .app
+            .windows
+            .iter()
+            .filter(|w| w.visible && self.app.session_visible(w))
+            .collect();
         // `is_greeter` al frente del todo: el shell de credenciales (login o
         // lock) tapa la sesión —incluido el shell/pata— mientras está arriba.
         shown.sort_by_key(|w| (!w.is_greeter, !w.is_shell, !w.floating, !w.focused));
@@ -1373,10 +1380,18 @@ impl DrmState {
     /// `render`, no por salida.
     fn send_frames_to_clients(&mut self) {
         let time = self.start.elapsed().as_millis() as u32;
+        // FUS: las ventanas de una sesión residente (no la activa) tampoco
+        // reciben frames — quedan inertes detrás, como las capas dormidas.
+        let multiplex = self.app.roster.len() > 1;
+        let activa = self.app.roster.active_id();
         for w in &mut self.app.windows {
             w.frame_tick = w.frame_tick.wrapping_add(1);
             // Las capas dormidas (zoom-Z) no reciben frame callbacks.
             if w.suspended {
+                continue;
+            }
+            // Sesión residente bajo FUS: sin frames (igual que `suspended`).
+            if multiplex && !w.is_shell && !w.is_greeter && Some(w.session) != activa {
                 continue;
             }
             // Throttle de fondo: 1 de cada `frame_divisor` vblanks.

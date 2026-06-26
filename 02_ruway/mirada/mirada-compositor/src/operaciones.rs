@@ -1236,6 +1236,13 @@ impl App {
             focused: false,
             is_shell,
             is_greeter,
+            // Dueña: la sesión activa al abrirse (FUS). Sin sesión (greeter de
+            // arranque) cae al id 0 — da igual: esas ventanas son el propio
+            // shell de credenciales, exento del gate por `is_greeter`.
+            session: self
+                .roster
+                .active_id()
+                .unwrap_or(mirada_brain::SessionId(0)),
             fullscreen: false,
             suspended: false,
             frame_divisor: 1,
@@ -1473,18 +1480,29 @@ impl App {
     /// procesos. `None` sin sesión (modo greeter) o si la sesión corre con los
     /// privilegios del compositor (modo dev / sin root).
     pub(crate) fn active_user(&self) -> Option<UserInfo> {
-        self.active_session
-            .and_then(|i| self.sessions.get(i))
-            .and_then(|s| s.user.clone())
+        self.roster.active().and_then(|s| s.user.clone())
     }
 
     /// Entorno de la sesión activa (runtime dir, WAYLAND_DISPLAY, D-Bus, ctl).
     /// Vacío sin sesión.
     pub(crate) fn active_env(&self) -> Vec<(String, String)> {
-        self.active_session
-            .and_then(|i| self.sessions.get(i))
+        self.roster
+            .active()
             .map(|s| s.env.clone())
             .unwrap_or_default()
+    }
+
+    /// ¿Se compone esta ventana? Con FUS (≥2 sesiones hosteadas) sólo se pintan
+    /// y animan las ventanas de la sesión **activa**; las de las sesiones
+    /// residentes quedan ocultas y sin frame callbacks (suspendidas de hecho).
+    /// El shell/greeter (overlay de credenciales) no pertenece a ninguna sesión
+    /// y siempre pasa. Con ≤1 sesión no hay multiplexado: byte-idéntico al
+    /// camino single-session de siempre.
+    pub(crate) fn session_visible(&self, w: &ManagedWindow) -> bool {
+        if self.roster.len() <= 1 {
+            return true;
+        }
+        w.is_shell || w.is_greeter || self.roster.is_active(w.session)
     }
 
     /// ¿Hay un shell de credenciales (greeter de login o lock) compuesto encima?
@@ -1501,8 +1519,63 @@ impl App {
         match action {
             ShellAction::StartSession(ticket) => self.start_session(ticket),
             ShellAction::Unlock => self.unlock(),
+            ShellAction::NewSession => self.request_new_session(),
+            ShellAction::SwitchTo(id) => self.switch_session(mirada_brain::SessionId(id)),
             // El lock no ofrece cancelar sin desbloquear; reservado para FUS.
             ShellAction::Cancel => {}
+        }
+    }
+
+    /// FUS «cambiar usuario»: pide volver al **login** para hostear una sesión
+    /// nueva junto a la actual (que queda residente debajo). No relanza el
+    /// greeter acá — necesita el emisor del canal, que vive en el bucle del
+    /// backend; deja [`pending_new_session`](Self::pending_new_session) y vuelve
+    /// a [`BodyMode::Greeter`]. El bucle lanza el greeter en modo login; el
+    /// próximo `start_session` da de alta la sesión extra. No-op si ya hay un
+    /// pedido en curso o estamos en el greeter de arranque (sin sesión que
+    /// suspender). Sirve desde el lock (`Locked`) o desde la sesión viva.
+    pub(crate) fn request_new_session(&mut self) {
+        if self.pending_new_session || self.mode == BodyMode::Greeter {
+            return;
+        }
+        self.pending_new_session = true;
+        self.mode = BodyMode::Greeter;
+        // Dejamos de empujarle la disposición de monitores al lock que se va (si
+        // veníamos de un lock); el login nuevo recibe la suya al relanzarse.
+        self.greeter_stdin = None;
+        dlog!("mirada-compositor · FUS: abro el login para una sesión nueva.");
+    }
+
+    /// FUS: salta el foco a la sesión `id` (la elegida en el selector del lock).
+    /// Cambia la sesión activa del roster — con ello el gate de
+    /// [`session_visible`](Self::session_visible) pasa a mostrar sus ventanas y
+    /// ocultar las de las demás — y sale de cualquier shell de credenciales
+    /// (desbloqueo dirigido). No-op si no existe tal sesión.
+    pub(crate) fn switch_session(&mut self, id: mirada_brain::SessionId) {
+        if !self.roster.switch_to(id) {
+            return;
+        }
+        if self.mode == BodyMode::Locked {
+            self.mode = BodyMode::Session;
+            self.greeter_stdin = None;
+        }
+        // El foco de teclado quedó en una ventana de la sesión anterior (ahora
+        // oculta): hay que reencaminarlo a la sesión recién activada.
+        self.refocus_active_session();
+        dlog!("mirada-compositor · FUS: sesión activa → id {}.", id.0);
+    }
+
+    /// Tras un salto de sesión, pone el foco en una ventana visible de la sesión
+    /// activa (la última en orden de aparición), o lo limpia si no hay ninguna.
+    fn refocus_active_session(&mut self) {
+        let nuevo = self
+            .windows
+            .iter()
+            .rev()
+            .find(|w| !w.is_shell && !w.is_greeter && self.session_visible(w))
+            .map(|w| w.id);
+        for w in &mut self.windows {
+            w.focused = Some(w.id) == nuevo;
         }
     }
 
@@ -1549,11 +1622,18 @@ impl App {
     /// usuario — la forma que deja crecer a multisesión.
     fn start_session(&mut self, ticket: SessionTicket) {
         if self.mode != BodyMode::Greeter {
-            return; // sólo desde el login de arranque
+            return; // sólo desde el login (de arranque o de «cambiar usuario»)
         }
+        // ¿Login de arranque (primera sesión) o «cambiar usuario» de FUS (una
+        // sesión más junto a las residentes)? Lo segundo lo marcó
+        // `request_new_session`; en cualquier caso el alta es la misma.
+        let nueva = self.pending_new_session;
+        self.pending_new_session = false;
         println!(
-            "mirada-compositor · traspaso a la sesión de «{}» (uid {}).",
-            ticket.user.name, ticket.user.uid
+            "mirada-compositor · {} la sesión de «{}» (uid {}).",
+            if nueva { "sumo" } else { "traspaso a" },
+            ticket.user.name,
+            ticket.user.uid
         );
         if !nix::unistd::geteuid().is_root() {
             dlog!(
@@ -1562,13 +1642,13 @@ impl App {
             );
         }
         self.mode = BodyMode::Session;
-        // Alta de la sesión (hoy la única) y activación. El entorno se completa
-        // abajo con `setup_user_session_env`.
-        self.sessions.push(crate::estado::Session {
+        // Alta de la sesión y activación (el recién llegado pasa al frente). El
+        // entorno se completa abajo con `setup_user_session_env`. El id estable
+        // que devuelve el roster es el que llevarán sus ventanas.
+        self.roster.add(crate::estado::Session {
             user: Some(ticket.user.clone()),
             env: Vec::new(),
         });
-        self.active_session = Some(self.sessions.len() - 1);
 
         // Ya en sesión: registra los atajos del escritorio y la decoración
         // (en modo greeter se omitieron a propósito — ver `build_app`).
@@ -1647,8 +1727,8 @@ impl App {
             ("MIRADA_CTL_SOCK".to_string(), ctl_sock),
         ];
         // Guarda el entorno en la sesión activa (la que se acaba de crear).
-        if let Some(i) = self.active_session {
-            self.sessions[i].env = env.clone();
+        if let Some(s) = self.roster.active_mut() {
+            s.env = env.clone();
         }
         // Levanta el bus de sesión D-Bus como el usuario, si no hay uno, y
         // espera (acotado) a que el socket exista: si lanzáramos waybar/GTK
