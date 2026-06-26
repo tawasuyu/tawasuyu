@@ -20,4 +20,7 @@ nahual-thumb-core = { workspace = true }
 nahual-image-viewer-llimphi = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-icons = { workspace = true }
 app-bus = { workspace = true }

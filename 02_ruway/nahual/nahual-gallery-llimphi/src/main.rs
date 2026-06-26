@@ -23,21 +23,27 @@
 //! mismo atajo que `nahual-file-explorer`. Al achicar/agrandar la ventana
 //! las columnas no se recalculan hasta que eso exista.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use llimphi_theme::Theme;
+use llimphi_theme::{motion, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::{
     Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_icons::Icon;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
 use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
 use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, GridPalette};
 use nahual_image_viewer_llimphi::{
@@ -100,6 +106,19 @@ fn humano(n: u64) -> String {
         format!("{v:.1} {}", U[i])
     }
 }
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la misma
+/// ruta/escena produce siempre la misma key entre rebuilds, así el fade-in
+/// corre sólo la primera vez que el nodo aparece).
+fn key_of(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Intervalo del tick de animación: fuerza repaint para que el shimmer del
+/// skeleton corra mientras haya miniaturas decodificándose.
+const TICK_MS: u64 = 50;
 
 /// Extensiones que tratamos como imagen (alineadas con las features del
 /// crate `image` en el workspace: png/jpeg/webp).
@@ -188,6 +207,9 @@ enum Msg {
     ContextMenuOpen(f32, f32),
     /// Cicla la paleta de tema.
     CiclarTema,
+    /// Tick de animación: fuerza repaint para el shimmer del skeleton mientras
+    /// haya miniaturas en vuelo. Se auto-rearma sólo si siguen faltando.
+    Tick,
 }
 
 struct Model {
@@ -220,6 +242,8 @@ struct Model {
     menu_open: Option<usize>,
     /// Menú contextual abierto en (x, y) de ventana, si lo hay.
     context_menu: Option<(f32, f32)>,
+    /// Hay una cadena de `Msg::Tick` en vuelo (evita rearmar dos).
+    ticking: bool,
 }
 
 struct Gallery;
@@ -270,8 +294,10 @@ impl App for Gallery {
             theme: Theme::dark(),
             menu_open: None,
             context_menu: None,
+            ticking: false,
         };
         bombear(&mut m, handle);
+        ensure_tick(&mut m, handle);
         m
     }
 
@@ -448,7 +474,14 @@ impl App for Gallery {
             Msg::CiclarTema => {
                 m.theme = Theme::next_after(m.theme.name);
             }
+            Msg::Tick => {
+                // El thread durmió TICK_MS; sólo rearmamos si siguen faltando
+                // miniaturas (lo hace `ensure_tick` más abajo).
+                m.ticking = false;
+            }
         }
+        // Si quedaron miniaturas decodificándose, mantené el shimmer animado.
+        ensure_tick(&mut m, handle);
         m
     }
 
@@ -552,21 +585,18 @@ impl App for Gallery {
         let ruta = barra_ruta(model);
 
         let cuerpo: View<Msg> = if model.entries.is_empty() {
+            // Carpeta vacía: empty-state con orientación en vez de un hueco.
+            let pal = EmptyPalette::from_theme(&theme);
+            let desc = format!("Sin imágenes ni subcarpetas en {}", model.dir.display());
             View::new(Style {
                 size: Size {
                     width: percent(1.0_f32),
                     height: percent(1.0_f32),
                 },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
                 ..Default::default()
             })
             .fill(theme.bg_panel)
-            .text(
-                format!("sin imágenes ni subcarpetas en {}", model.dir.display()),
-                14.0,
-                theme.fg_muted,
-            )
+            .children(vec![empty_view(Icon::Image, "Carpeta vacía", Some(&desc), &pal)])
         } else {
             let cells: Vec<GridCell<Msg>> = (v.first..v.first + v.count)
                 .map(|i| {
@@ -602,6 +632,13 @@ impl App for Gallery {
                 palette: GridPalette::from_theme(&theme),
             })
         };
+
+        // Transición de escena: al navegar de carpeta o cambiar el orden, la
+        // `scene_key` cambia y el cuerpo entra con un fade + slide-up suave en
+        // vez de saltar. Estable durante la carga de miniaturas de la misma
+        // escena, así no refadea por cada thumb que llega.
+        let scene_key = key_of(&format!("{}|{}", model.dir.display(), model.orden.etiqueta()));
+        let cuerpo = cuerpo.animated_enter_from(scene_key, motion::SLOW, Affine::translate((0.0, 24.0)));
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -641,15 +678,23 @@ fn celda_contenido(model: &Model, e: &Entrada) -> View<Msg> {
     }
     let path = e.path();
     if let Some(img) = model.thumbs.get(path) {
-        View::new(base()).image(img.clone())
+        // La miniatura entra con fade-in la primera vez que aparece su key —
+        // no salta de golpe sobre el skeleton.
+        View::new(base())
+            .image(img.clone())
+            .animated_enter(key_of(&path.to_string_lossy()), motion::NORMAL)
     } else if model.fallidos.contains(path) {
         View::new(base())
             .fill(theme.bg_panel_alt)
             .text("⚠".to_string(), 20.0, theme.fg_muted)
     } else {
-        // Placeholder: rectángulo tenue mientras decodifica (MVP — sin
-        // animación; el widget-skeleton se puede enchufar acá luego).
-        View::new(base()).fill(theme.bg_panel_alt)
+        // Placeholder con shimmer mientras decodifica: el usuario ve la forma
+        // de la miniatura que viene, no un rectángulo muerto.
+        let pal = SkeletonPalette::from_theme(theme);
+        View::new(base())
+            .radius(6.0)
+            .clip(true)
+            .children(vec![skeleton_view(&pal)])
     }
 }
 
@@ -853,6 +898,36 @@ fn ordenar_paths(paths: &mut [PathBuf], orden: Orden) {
             paths.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
         }
     }
+}
+
+/// ¿Hay miniaturas visibles aún sin decodificar (ni fallidas)? Es decir,
+/// celdas que ahora mismo pintan un skeleton — mientras sea cierto, el
+/// shimmer necesita repaints periódicos.
+fn hay_pendientes(m: &Model) -> bool {
+    if m.entries.is_empty() {
+        return false;
+    }
+    let v = ventana_visible(m.entries.len(), m.vw, m.vh, m.scroll_fila, &m.metrics);
+    (v.first..v.first + v.count).any(|i| match &m.entries[i] {
+        Entrada::Imagen { path, .. } => {
+            !m.thumbs.contains_key(path) && !m.fallidos.contains(path)
+        }
+        Entrada::Carpeta(_) => false,
+    })
+}
+
+/// Arranca la cadena de ticks de animación si hay miniaturas en vuelo y no
+/// hay ya una corriendo. La cadena se auto-detiene cuando todo lo visible
+/// quedó decodificado, así no queda un loop de repaint ocioso.
+fn ensure_tick(m: &mut Model, handle: &Handle<Msg>) {
+    if m.ticking || !hay_pendientes(m) {
+        return;
+    }
+    m.ticking = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(TICK_MS));
+        Msg::Tick
+    });
 }
 
 /// Recalcula la ventana visible, encola los thumbs que falten, olvida los
