@@ -31,6 +31,7 @@ fn requires_auth(req: &BusRequest) -> bool {
             | BusRequest::UpdateCapabilities { .. }
             | BusRequest::KillEnte { .. }
             | BusRequest::SpawnCardFromDisk { .. }
+            | BusRequest::StopCardFromDisk { .. }
             | BusRequest::RunCard { .. }
     )
 }
@@ -192,6 +193,11 @@ impl EnteGraph {
                 let resp = self.spawn_card_from_disk(caller, name).await;
                 let _ = reply.send(resp);
             }
+            BusRequest::StopCardFromDisk { name } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = self.stop_card_from_disk(caller, name);
+                let _ = reply.send(resp);
+            }
             BusRequest::RunCard { card } => {
                 let caller = from_authenticated.expect("auth-required guarantees Some");
                 let resp = self.run_card(caller, card).await;
@@ -319,6 +325,72 @@ impl EnteGraph {
     /// sesión).
     fn label_is_incarnated(&self, label: &str) -> bool {
         self.incarnated.values().any(|i| i.card.label == label)
+    }
+
+    /// Inverso de [`spawn_card_from_disk`](Self::spawn_card_from_disk): baja
+    /// los Entes vivos cuyos labels declara `{name}.json` (su raíz si es un
+    /// Ente simple, o los de su `genesis` si es un bundle `Virtual`). Los
+    /// marca en `stopping` y les manda SIGTERM, así su supervisor `Restart`
+    /// no los revive (ver `on_death`). Idempotente: labels sin Ente vivo se
+    /// ignoran. Es el teardown de una sesión (gnome → mirada).
+    fn stop_card_from_disk(&mut self, caller: Ulid, name: String) -> BusResponse {
+        if name.is_empty() || name.contains('/') || name.contains("..") {
+            warn!(%caller, %name, "StopCardFromDisk: nombre inválido");
+            return BusResponse::Error(format!("nombre inválido: {name:?}"));
+        }
+        let path = cards_dir().join(format!("{name}.json"));
+        let card: EntityCard = match std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
+            Some(c) => c,
+            None => {
+                warn!(%caller, %name, path = %path.display(), "StopCardFromDisk: card ausente o inválida");
+                return BusResponse::Error(format!("card {name}: ausente o inválida"));
+            }
+        };
+        let labels: std::collections::BTreeSet<String> = expand_disk_bundle(card)
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        // Snapshot de objetivos vivos antes de mutar el grafo.
+        let targets: Vec<(Ulid, Option<nix::unistd::Pid>, String)> = self
+            .incarnated
+            .values()
+            .filter(|i| labels.contains(&i.card.label))
+            .map(|i| (i.card.id, i.pid, i.card.label.clone()))
+            .collect();
+        let mut detenidos = 0usize;
+        for (id, pid, label) in targets {
+            match pid {
+                Some(pid) => {
+                    // Marcamos ANTES de matar: el SIGCHLD podría llegar antes
+                    // de volver acá, y `on_death` debe ver la marca.
+                    self.stopping.insert(id);
+                    match nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM) {
+                        Ok(()) => detenidos += 1,
+                        Err(e) => {
+                            warn!(%caller, %name, %label, ?e, "StopCardFromDisk: kill falló");
+                            self.stopping.remove(&id);
+                        }
+                    }
+                }
+                None => {
+                    // Virtual/Wasm sin proceso: lo sacamos del grafo a mano.
+                    if let Some(inc) = self.incarnated.remove(&id) {
+                        self.unregister_provider(&inc.card);
+                        if let Some(parent) = inc.card.lineage {
+                            if let Some(sib) = self.children.get_mut(&parent) {
+                                sib.retain(|c| c != &id);
+                            }
+                        }
+                        detenidos += 1;
+                    }
+                }
+            }
+        }
+        info!(%caller, %name, detenidos, "StopCardFromDisk");
+        BusResponse::Ok
     }
 
     /// Encarna una Card transmitida por el bus (no del store en disco). Es el
@@ -646,6 +718,41 @@ mod tests {
         let out = super::expand_disk_bundle(native("un-ente"));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].label, "un-ente");
+    }
+
+    #[tokio::test]
+    async fn stopping_salta_el_restart() {
+        use crate::events::ExitStatus;
+        use crate::graph::{EnteGraph, Incarnated};
+        use arje_card::Supervision;
+        use std::time::Duration;
+
+        let mut g = EnteGraph::new(EntityCard::new("seed"));
+        let mut shim = native("compat-logind");
+        shim.supervision = Supervision::Restart {
+            initial: Duration::from_millis(100),
+            max: Duration::from_secs(30),
+        };
+        let id = shim.id;
+        g.incarnated.insert(
+            id,
+            Incarnated {
+                card: shim,
+                pid: None,
+                dynamic_provides: Default::default(),
+            },
+        );
+        g.stopping.insert(id);
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        g.on_death(id, ExitStatus::Killed(nix::sys::signal::Signal::SIGTERM), &tx)
+            .await;
+
+        // El ente bajó del grafo y la marca se consumió: prueba que la rama de
+        // detención (early-return, sin restart) corrió. Si no se hubiera
+        // chequeado `stopping`, la marca seguiría puesta.
+        assert!(!g.incarnated.contains_key(&id), "el ente detenido se fue del grafo");
+        assert!(g.stopping.is_empty(), "la marca de detención se consumió");
     }
 
     #[test]

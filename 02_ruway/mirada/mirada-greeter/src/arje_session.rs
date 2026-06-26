@@ -1,29 +1,39 @@
-//! Activación de backends de sistema por sesión, vía el bus de arje.
+//! Reconciliación de backends de sistema por sesión, vía el bus de arje.
 //!
 //! Cuando el usuario elige en el login una sesión que necesita servicios
 //! que no son nativos de mirada (p. ej. GNOME, que consulta los
 //! `org.freedesktop.*` al arrancar), el greeter —que es el DM, un Ente del
-//! fractal— le pide a su init (`arje-zero`) que encarne el *bundle* de esa
-//! sesión: un solo `SpawnCardFromDisk { name: "session-<perfil>" }` que
-//! levanta los shims de `arje-compat` instalados en `/etc/arje/cards.d/`.
+//! fractal— reconcilia con su init (`arje-zero`):
+//!
+//! - **Levanta** el bundle de la sesión elegida: un `SpawnCardFromDisk
+//!   { name: "session-<perfil>" }` que encarna los shims de `arje-compat`
+//!   instalados en `/etc/arje/cards.d/`.
+//! - **Baja** los otros perfiles opcionales que hayan quedado vivos de una
+//!   sesión anterior: un `StopCardFromDisk { name: "session-<otro>" }` que
+//!   los detiene sin que su supervisor `Restart` los revive (teardown, p.
+//!   ej. al volver de gnome a mirada).
 //!
 //! Es la vía "login-time" del perfil de arranque (la otra es el overlay a
-//! boot por `arje.session=` en el cmdline). El acople boot↔login se cierra
-//! aquí: los backends de GNOME se levantan **cuando se elige esa sesión**,
-//! no eagermente al arranque.
-//!
-//! Best-effort y acotado: sin bus (greeter fuera de arje, dev), perfil
-//! inexistente, o bus lento → el login continúa igual. Nunca bloquea ni
-//! tumba el traspaso. Loguea a **stderr**: stdout es el canal de protocolo
-//! con el compositor (`emit_action`).
+//! boot por `arje.session=` en el cmdline). Best-effort y acotado: sin bus
+//! (greeter fuera de arje, dev), perfil inexistente, o bus lento → el login
+//! continúa igual. Nunca bloquea ni tumba el traspaso. Loguea a **stderr**:
+//! stdout es el canal de protocolo con el compositor (`emit_action`).
 
 use std::time::Duration;
 
+use arje_bus::{BusRequest, BusResponse};
+
 use crate::sessions::Session;
 
-/// Tope de espera de la llamada al bus: el login no puede colgarse por un
+/// Tope de espera de cada llamada al bus: el login no puede colgarse por un
 /// init lento o muerto.
 const BUS_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Perfiles de sesión con backends de sistema gestionados por arje. Se
+/// reconcilian en cada login: el elegido se levanta, los demás se bajan.
+/// Hoy sólo GNOME; sumar uno = un fragmento `session-<X>.card.json` + su
+/// entrada acá + el matcher en [`profile_for`].
+const OPTIONAL_PROFILES: &[&str] = &["gnome"];
 
 /// Perfil de arje que una sesión necesita, si alguno. `None` = sesión
 /// autosuficiente (mirada nativo, o un compositor ajeno que no depende de
@@ -41,42 +51,70 @@ pub fn profile_for(session: &Session) -> Option<&'static str> {
     None
 }
 
-/// Pide al bus de arje encarnar el bundle de la sesión `profile`. Bloquea
-/// hasta `BUS_TIMEOUT`; cualquier fallo se registra en stderr y se ignora.
+/// Perfiles opcionales a bajar dado el seleccionado: todos los conocidos
+/// menos el elegido. Pura y testeable.
+pub fn profiles_to_deactivate(selected: Option<&str>) -> Vec<&'static str> {
+    OPTIONAL_PROFILES
+        .iter()
+        .copied()
+        .filter(|p| Some(*p) != selected)
+        .collect()
+}
+
+/// Reconcilia los backends de sistema con la sesión elegida: levanta el
+/// bundle del perfil seleccionado (si tiene) y baja los otros perfiles
+/// opcionales que pudieran haber quedado vivos de una sesión anterior.
 ///
-/// Se llama **antes** de emitir el `SessionTicket`: deja el request
-/// entregado a `arje-zero` (que encarna los shims en paralelo) justo antes
-/// de soltar el DRM hacia la sesión ajena.
-pub fn activate(profile: &str) {
-    let card = format!("session-{profile}");
+/// Se llama **antes** de emitir el `SessionTicket`. Bloquea hasta
+/// `BUS_TIMEOUT` por llamada; cualquier fallo se registra en stderr y se
+/// ignora. En el caso de un solo perfil opcional hace a lo sumo una llamada.
+pub fn reconcile(selected: Option<&str>) {
+    let to_stop: Vec<String> = profiles_to_deactivate(selected)
+        .iter()
+        .map(|p| card_name(p))
+        .collect();
+    let to_start = selected.map(card_name);
+
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("arje_session: no se pudo crear runtime para «{card}»: {e}");
+            eprintln!("arje_session: no se pudo crear runtime: {e}");
             return;
         }
     };
-    rt.block_on(async {
-        match tokio::time::timeout(BUS_TIMEOUT, activate_inner(&card)).await {
-            Ok(Ok(())) => eprintln!("arje_session: bundle «{card}» activado en arje"),
-            Ok(Err(e)) => eprintln!("arje_session: activación de «{card}» falló — sigo: {e}"),
-            Err(_) => eprintln!("arje_session: activación de «{card}» expiró — sigo"),
+    rt.block_on(async move {
+        for card in to_stop {
+            let what = format!("bajar «{card}»");
+            do_call(BusRequest::StopCardFromDisk { name: card }, &what).await;
+        }
+        if let Some(card) = to_start {
+            let what = format!("levantar «{card}»");
+            do_call(BusRequest::SpawnCardFromDisk { name: card }, &what).await;
         }
     });
 }
 
-async fn activate_inner(card: &str) -> anyhow::Result<()> {
-    use arje_bus::{BusRequest, BusResponse};
+fn card_name(profile: &str) -> String {
+    format!("session-{profile}")
+}
+
+/// Una llamada al bus, con tope de espera, best-effort (loguea y sigue).
+async fn do_call(req: BusRequest, what: &str) {
+    match tokio::time::timeout(BUS_TIMEOUT, call_inner(req)).await {
+        Ok(Ok(())) => eprintln!("arje_session: {what} OK"),
+        Ok(Err(e)) => eprintln!("arje_session: {what} falló — sigo: {e}"),
+        Err(_) => eprintln!("arje_session: {what} expiró — sigo"),
+    }
+}
+
+async fn call_inner(req: BusRequest) -> anyhow::Result<()> {
     let mut client = arje_bus::BusClient::from_env().await?;
-    let req = BusRequest::SpawnCardFromDisk {
-        name: card.to_string(),
-    };
     match client.call(req).await? {
         BusResponse::Ok => Ok(()),
-        other => anyhow::bail!("bus rechazó SpawnCardFromDisk: {other:?}"),
+        other => anyhow::bail!("bus rechazó: {other:?}"),
     }
 }
 
@@ -116,5 +154,15 @@ mod tests {
         assert_eq!(profile_for(&sess("mirada", "")), None);
         assert_eq!(profile_for(&sess("Sway", "sway")), None);
         assert_eq!(profile_for(&sess("Plasma", "startplasma-wayland")), None);
+    }
+
+    #[test]
+    fn reconcilia_baja_los_otros_opcionales() {
+        // Elegir gnome: no se baja gnome (es el seleccionado).
+        assert!(profiles_to_deactivate(Some("gnome")).is_empty());
+        // Elegir mirada (None): se baja gnome.
+        assert_eq!(profiles_to_deactivate(None), vec!["gnome"]);
+        // Un perfil desconocido: igual baja los opcionales conocidos.
+        assert_eq!(profiles_to_deactivate(Some("kde")), vec!["gnome"]);
     }
 }

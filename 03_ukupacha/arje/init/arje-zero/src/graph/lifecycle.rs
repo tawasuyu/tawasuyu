@@ -120,6 +120,20 @@ impl EnteGraph {
         }
         info!(label = %inc.card.label, ?status, "Ente disuelto");
 
+        // Detención a pedido (teardown de bundle de sesión): la limpieza del
+        // grafo ya ocurrió arriba. Saltamos el restart —y el broadcast de
+        // crash— para que la sesión baje de verdad: un shim `Restart` matado
+        // por SIGTERM, si no, reviviría. Es la mitad de "desactivar" simétrica
+        // a `SpawnCardFromDisk`. Emite `EnteExited` (cierre limpio).
+        if self.stopping.remove(&id) {
+            info!(label = %inc.card.label, "Ente detenido a pedido — sin restart");
+            self.broadcast_lifecycle(BusEvent::EnteExited {
+                id,
+                label: inc.card.label.clone(),
+            });
+            return;
+        }
+
         // Vocabulario de ciclo de vida para los suscriptores del bus (la capa
         // de IA de hammer reacciona a `EnteCrashed` → su propio `CRASHED`).
         // Capturamos label/status antes de mover `inc.card` en el Restart.

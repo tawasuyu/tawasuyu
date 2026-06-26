@@ -672,13 +672,11 @@ impl App for Greeter {
                 let chosen = m.sessions.get(m.session_idx);
                 let exec = chosen.map(|s| s.exec.clone()).unwrap_or_default();
                 let foreign = chosen.map(|s| s.foreign).unwrap_or(false);
-                // Si la sesión elegida necesita backends de sistema de arje
-                // (p. ej. los shims systemd que GNOME consulta al arrancar),
-                // pedírselos al init antes del traspaso. Best-effort: si no
-                // hay bus o el perfil no existe, el login sigue igual.
-                if let Some(profile) = chosen.and_then(arje_session::profile_for) {
-                    arje_session::activate(profile);
-                }
+                // Reconciliar los backends de sistema con la sesión elegida:
+                // levantar el perfil que necesite (p. ej. los shims systemd que
+                // GNOME consulta) y bajar los que quedaron de una sesión previa
+                // (teardown gnome→mirada). Best-effort: sin bus o perfil, sigue.
+                arje_session::reconcile(chosen.and_then(arje_session::profile_for));
                 // Recuerda usuario + escritorio (y la config del fondo) para
                 // el próximo login.
                 state::GreeterState {

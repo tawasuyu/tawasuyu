@@ -146,6 +146,16 @@ pub enum BusRequest {
     /// distribuirla a cada shim de compat.
     SpawnCardFromDisk { name: String },
 
+    /// Inverso de `SpawnCardFromDisk`: baja los Entes vivos cuyos labels
+    /// declara la Card `{name}.json` del store (su raíz si es un único Ente,
+    /// o los de su `genesis` si es un bundle `Virtual`). A diferencia de
+    /// `KillEnte`, **no reinicia**: marca cada miembro para detención y le
+    /// manda SIGTERM, de modo que su supervisor `Restart` no lo revive. Es
+    /// el teardown de una sesión (p. ej. al volver de gnome a mirada).
+    /// Requiere identidad autenticada. Idempotente: miembros ya muertos se
+    /// ignoran.
+    StopCardFromDisk { name: String },
+
     /// Encarna una Card **transmitida por el wire** (no del store en disco).
     /// Es el transporte de `sandokan_core::Engine::run` con una Card arbitraria
     /// (ver `shared/sandokan/SDD.md` §5). Modelo de confianza (a diferencia de

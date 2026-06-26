@@ -66,6 +66,10 @@ pub struct EnteGraph {
     /// de expiración. Cualquier acción escalatoria (power-mgmt, BrainInvoke,
     /// BrainNotify, BrainSpawn) se descarta mientras el set no esté vacío.
     pub(in crate::graph) inhibits: BTreeMap<String, Instant>,
+    /// Entes marcados para detención a pedido (teardown de bundle): cuando su
+    /// muerte llegue por SIGCHLD, `on_death` salta el restart y los baja de
+    /// verdad en vez de revivirlos. Simétrico a `SpawnCardFromDisk`.
+    pub(in crate::graph) stopping: HashSet<Ulid>,
 }
 
 /// TTL fijo para inhibiciones del cerebro. Suficiente largo para cubrir un
@@ -175,6 +179,7 @@ impl EnteGraph {
             next_invoke_seq: 0,
             restart_state: HashMap::new(),
             inhibits: BTreeMap::new(),
+            stopping: HashSet::new(),
         };
         // El Ente #0 se inscribe a sí mismo como proveedor de las capacidades
         // que su Card declara — sólo así los hijos pueden requerirlas.

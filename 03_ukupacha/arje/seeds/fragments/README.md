@@ -74,9 +74,20 @@ El mismo fichero de fragmento sirve a dos momentos:
    Esta es la vía que cierra el acople boot↔login: los backends de GNOME
    se levantan **cuando el usuario elige esa sesión**, no eagermente al
    arranque. El hook vive en `mirada-greeter`
-   (`src/arje_session.rs`): al elegir una sesión con `profile_for(...) =
-   Some("gnome")`, manda ese request antes de emitir el `SessionTicket`
-   (best-effort, con tope de espera).
+   (`src/arje_session.rs::reconcile`): en cada login levanta el bundle de
+   la sesión elegida y **baja** los otros perfiles opcionales que hayan
+   quedado vivos. Best-effort, con tope de espera.
+
+3. **Teardown (login-time).** Inverso de (2): al volver de gnome a mirada,
+   el greeter manda
+
+   ```rust
+   arje_bus::BusRequest::StopCardFromDisk { name: "session-gnome".into() }
+   ```
+
+   `arje-zero` marca los miembros vivos del bundle y les manda SIGTERM **sin
+   reiniciarlos** (su supervisor `Restart` no los revive — `graph::stopping`
+   + `on_death`). Idempotente: miembros ya muertos se ignoran.
 
 ## v0 eager → activación perezosa (futuro)
 
