@@ -47,7 +47,9 @@ use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
 };
+use llimphi_icons::Icon;
 use llimphi_motion::{animate, motion, Tween};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, AlignItems, Dimension, FlexDirection, JustifyContent, Position, Size, Style},
     Rect,
@@ -1694,9 +1696,16 @@ fn canvas_view(
         );
     }
 
-    // Mensaje vacío.
+    // Estado vacío: sin ventanas visibles, un empty-state con ícono y
+    // orientación en vez de un renglón suelto. El hint localizado trae
+    // «título — descripción»; lo partimos para las dos líneas del widget.
     let visible = model.placements.iter().filter(|p| p.visible).count();
     if visible == 0 {
+        let hint = rimay_localize::t("mirada-canvas-empty-hint");
+        let (titulo, desc) = match hint.split_once(" — ") {
+            Some((t, d)) => (t.to_string(), Some(d.to_string())),
+            None => (hint.clone(), None),
+        };
         children.push(
             View::new(Style {
                 position: Position::Absolute,
@@ -1714,12 +1723,12 @@ fn canvas_view(
                 justify_content: Some(JustifyContent::Center),
                 ..Default::default()
             })
-            .text_aligned(
-                rimay_localize::t("mirada-canvas-empty-hint"),
-                13.0,
-                theme.fg_placeholder,
-                Alignment::Center,
-            ),
+            .children(vec![empty_view(
+                Icon::Grid,
+                titulo,
+                desc.as_deref(),
+                &EmptyPalette::from_theme(theme),
+            )]),
         );
     }
 
@@ -1817,6 +1826,10 @@ fn canvas_view(
             })
             .fill(border)
             .radius(5.0)
+            // Pop-in al aparecer la ventana (apertura o salto de escritorio):
+            // la baldosa entra con un suave fade+escala en vez de saltar. Key
+            // estable por id ⇒ no re-anima en cada relayout/foco.
+            .animated_enter(p.id as u64, motion::NORMAL)
             .on_click(Msg::FocusWindow(p.id))
             .children(vec![titlebar, interior]),
         );
