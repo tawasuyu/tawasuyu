@@ -7,6 +7,7 @@ use std::sync::Arc;
 use llimphi_ui::{DragPhase, KeyEvent};
 use llimphi_widget_text_editor::{EditorMetrics, PointerEvent};
 use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_toast::Toast;
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::Cuerpo;
@@ -505,6 +506,9 @@ pub enum Msg {
     MergeRama(String),
     /// Compacta (GC) el store del proyecto activo: descarta objetos inalcanzables.
     CompactarProyecto,
+    /// Descarta un toast del stack al clickearlo (los expirados se podan solos
+    /// en `FlujoTick`).
+    DescartarToast(u64),
 }
 
 pub struct Model {
@@ -659,4 +663,11 @@ pub struct Model {
     pub(crate) renombrar: Option<RenombrarObjetivo>,
     /// Rutas de proyectos recientes (persistidas junto al sled).
     pub(crate) proyectos_recientes: Vec<PathBuf>,
+
+    // --- Toasts efímeros ---
+    /// Notificaciones efímeras vivas (guardar / transformar / error LLM). Las
+    /// expiradas se podan en `Msg::FlujoTick`; el click las descarta.
+    pub(crate) toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ `Msg::DescartarToast`.
+    pub(crate) next_toast: u64,
 }

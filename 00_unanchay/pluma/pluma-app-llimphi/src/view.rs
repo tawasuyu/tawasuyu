@@ -31,6 +31,9 @@ use llimphi_widget_nodegraph::{
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_text_editor::{EditorPalette as TEPalette, Language};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use pluma_align::CartaHebras;
 use pluma_cuerpo::Cuerpo;
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
@@ -149,7 +152,7 @@ pub fn vista(model: &Model) -> View<Msg> {
         None => split,
     };
 
-    View::new(Style {
+    let root = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
@@ -159,7 +162,28 @@ pub fn vista(model: &Model) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-    .children(vec![menubar, status, core])
+    .children(vec![menubar, status, core]);
+
+    // Overlay de toasts (bottom-right). Los vivos se filtran acá; el click los
+    // descarta y los expirados se podan en `FlujoTick`. El `animated_inout` del
+    // widget les da el fade-in/out sin tween manual.
+    let ahora = std::time::Instant::now();
+    let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(ahora)).cloned().collect();
+    if alive.is_empty() {
+        root
+    } else {
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![
+            root,
+            toast_stack_view(&alive, model.viewport, Msg::DescartarToast),
+        ])
+    }
 }
 
 /// El rail izquierdo: **Archivo** (id 0, abre/crea proyectos) + un diente por
@@ -1444,6 +1468,30 @@ fn panel_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         }
     }
 
+    // Mientras el LLM deriva un cuerpo nuevo, un skeleton anticipa la fila de la
+    // hija que está por aparecer (el shimmer corre con el repaint de FlujoTick).
+    if model.en_curso {
+        let pal = SkeletonPalette::from_theme(theme);
+        filas.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(20.0_f32),
+                },
+                padding: Rect {
+                    left: length(14.0_f32),
+                    right: length(2.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .radius(4.0)
+            .clip(true)
+            .children(vec![skeleton_view::<Msg>(&pal)]),
+        );
+    }
+
     let lista = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -2175,6 +2223,8 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         .filter_map(|id| model.cuerpos.iter().find(|c| c.id == *id))
         .collect();
     if cuerpos_sel.is_empty() {
+        // Sin lienzos seleccionados: en vez de un fondo plano, orientamos al
+        // usuario sobre cómo poblar el multilienzo.
         return View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -2182,7 +2232,13 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
             },
             ..Default::default()
         })
-        .fill(palette_lienzo.bg_app);
+        .fill(palette_lienzo.bg_app)
+        .children(vec![empty_view::<Msg>(
+            Icon::FileText,
+            "Sin lienzos en el multilienzo",
+            Some("Marcá el cuadrito de un documento en el panel Lienzos para sumarlo."),
+            &EmptyPalette::from_theme(theme),
+        )]);
     }
     let activo_idx = model
         .activo

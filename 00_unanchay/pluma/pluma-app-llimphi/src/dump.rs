@@ -202,6 +202,8 @@ fn modelo_sintetico(diente: usize) -> Model {
         push_abierto: false,
         renombrar: None,
         proyectos_recientes: Vec::new(),
+        toasts: Vec::new(),
+        next_toast: 0,
     };
     // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo
     // (concepto → traducir → resumir) para que el nodegraph muestre nodos+cables.

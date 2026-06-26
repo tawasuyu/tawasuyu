@@ -170,6 +170,8 @@ pub fn init_modelo() -> Model {
         push_abierto: false,
         renombrar: None,
         proyectos_recientes: crate::util::cargar_recientes(),
+        toasts: Vec::new(),
+        next_toast: 0,
     };
 
     // Si reabrimos un proyecto con contenido, su documento activo manda sobre el

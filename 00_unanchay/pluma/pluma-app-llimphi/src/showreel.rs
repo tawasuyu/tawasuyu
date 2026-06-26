@@ -246,6 +246,8 @@ fn escena_base() -> Escena {
         push_abierto: false,
         renombrar: None,
         proyectos_recientes: Vec::new(),
+        toasts: Vec::new(),
+        next_toast: 0,
     };
 
     Escena { model, es: es_id, qu: qu_id, en: en_id }
@@ -603,6 +605,8 @@ fn clonar_para_frame(base: &Model) -> Model {
         push_abierto: false,
         renombrar: None,
         proyectos_recientes: Vec::new(),
+        toasts: Vec::new(),
+        next_toast: 0,
     }
 }
 

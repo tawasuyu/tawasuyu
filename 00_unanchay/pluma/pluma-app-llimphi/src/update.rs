@@ -4,8 +4,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use llimphi_motion::{animate, motion, Tween};
+use llimphi_widget_toast::Toast;
 use llimphi_ui::{DragPhase, Handle, Key, NamedKey};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_text_editor::{EditorState, PointerEvent};
@@ -35,6 +37,18 @@ use pluma_estilo::EstiloTexto;
 use pluma_proyecto::{DocEstado, Proyecto};
 use crate::util::{ahora_unix, etiqueta_backend, expandir_ruta, extension_lower};
 use crate::view::etiqueta_filtro;
+
+/// Cuánto vive un toast antes de auto-descartarse (~4 s). Las expiraciones se
+/// podan en `Msg::FlujoTick` (que ya corre a ~33 Hz), sin spawnear un tick aparte.
+pub(crate) const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Empuja un toast al stack con id incremental. `make(id)` arma el `Toast`
+/// (`Toast::success/error/info(id, texto, TOAST_TTL)`).
+pub(crate) fn push_toast(model: &mut Model, make: impl FnOnce(u64) -> Toast) {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    model.toasts.push(make(id));
+}
 
 pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
     match msg {
@@ -135,6 +149,11 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::FlujoTick => {
             // Avanza la fase del fluido (~2.4 s por vuelta a 33 Hz).
             model.fase_flujo = (model.fase_flujo + 0.0125).rem_euclid(1.0);
+            // Aprovechamos el tick continuo para podar los toasts expirados.
+            if !model.toasts.is_empty() {
+                let ahora = Instant::now();
+                model.toasts.retain(|t| t.is_alive(ahora));
+            }
         }
         Msg::NuevoDoc => {
             crear_doc_nuevo(&mut model);
@@ -154,8 +173,12 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             if tiene_ruta {
                 guardar_proyecto_activo(&mut model);
                 model.ultimo_status = "guardado en el proyecto".into();
+                push_toast(&mut model, |id| Toast::success(id, "Documento guardado", TOAST_TTL));
             } else {
                 model.ultimo_status = "guardá el proyecto a disco con «guardar como…»".into();
+                push_toast(&mut model, |id| {
+                    Toast::info(id, "Guardá el proyecto con «guardar como…»", TOAST_TTL)
+                });
             }
         }
         Msg::PathInputKey(ev) => {
@@ -274,6 +297,9 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::LlmError(s) => {
             eprintln!("pluma-app-llimphi :: error LLM: {s}");
+            push_toast(&mut model, |id| {
+                Toast::error(id, format!("Error LLM: {}", crate::util::recortar(&s, 40)), TOAST_TTL)
+            });
             model.ultimo_error = Some(s);
             model.en_curso = false;
         }
@@ -666,6 +692,9 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             let n = model.proyectos[idx].proyecto.compactar();
             guardar_proyecto_activo(&mut model);
             model.ultimo_status = format!("compactado: {n} objeto(s) liberado(s)");
+        }
+        Msg::DescartarToast(id) => {
+            model.toasts.retain(|t| t.id != id);
         }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
@@ -2441,6 +2470,9 @@ fn recibir_hija(
     model.transformaciones.push(transformacion);
     model.en_curso = false;
     model.ultimo_status = format!("hija «{nombre}» derivada");
+    push_toast(model, |id| {
+        Toast::success(id, format!("«{}» lista", crate::util::recortar(&nombre, 28)), TOAST_TTL)
+    });
     cambiar_activo(model, hija_id);
 }
 

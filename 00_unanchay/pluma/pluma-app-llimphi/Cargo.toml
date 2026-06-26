@@ -60,6 +60,10 @@ llimphi-widget-switch = { workspace = true }
 llimphi-widget-select = { workspace = true }
 llimphi-widget-color-picker = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
+# Embellecimiento: toasts efímeros, empty-state y skeleton de carga LLM.
+llimphi-widget-toast = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
 pluma-estilo = { path = "../pluma-estilo" }
 pluma-proyecto = { path = "../pluma-proyecto" }
 rhai = "1"
