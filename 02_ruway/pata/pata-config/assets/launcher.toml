@@ -53,6 +53,9 @@ kind = "window_list"
 
 # El racimo de indicadores a la derecha — orden libre.
 [[surfaces.end]]
+kind = "mpris"          # controles de reproducción (prev/play-pause/next + título, vía playerctl)
+
+[[surfaces.end]]
 kind = "astro"          # posición zodiacal del sol + ciclo lunar (aporte)
 moon = true
 

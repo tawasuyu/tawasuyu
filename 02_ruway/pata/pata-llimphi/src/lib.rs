@@ -34,6 +34,7 @@ pub mod shuma;
 pub mod shuma_app;
 pub mod toplevel;
 pub mod tray;
+pub mod mpris;
 pub mod network;
 pub mod weather;
 
@@ -201,6 +202,12 @@ pub enum Msg {
     SessionRun(SessionAction),
     /// Cancelar la confirmación pendiente (vuelve a la lista de acciones).
     SessionCancel,
+    /// Play/pausa del reproductor activo (MPRIS).
+    MediaPlayPause,
+    /// Pista siguiente.
+    MediaNext,
+    /// Pista anterior.
+    MediaPrev,
     /// Desplegar/replegar el menú del botón de inicio.
     StartToggle,
     /// Cicla al próximo estilo de menú (Classic → XP → GNOME → Classic).
@@ -365,6 +372,9 @@ pub enum SlotWidget {
     /// El botón de sesión/energía: un símbolo de power que abre un menú con
     /// bloquear/suspender/reiniciar/apagar/cerrar sesión ([`Msg::SessionToggle`]).
     Session,
+    /// Controles de reproducción (MPRIS): prev/play-pause/next + título. Dato del
+    /// host (vía `playerctl`, ver [`mpris`]). Se oculta si no hay reproductor.
+    Media,
 }
 
 /// Las acciones del menú de sesión/energía. El logout pasa por el WM (mirada hace
@@ -771,7 +781,8 @@ impl SurfaceWidgets {
                 | SlotWidget::FrontPanel
                 | SlotWidget::Control
                 | SlotWidget::Network
-                | SlotWidget::Session => None,
+                | SlotWidget::Session
+                | SlotWidget::Media => None,
             })
     }
 }
@@ -855,6 +866,10 @@ pub struct Model {
     pub network: Option<network::NetworkHandle>,
     /// Última lectura de la red (se refresca con `latest()` cada tick).
     pub network_now: Option<network::NetState>,
+    /// Feed MPRIS (reproductor) en su propio hilo. `None` si no hay `mpris`.
+    pub mpris: Option<mpris::MprisHandle>,
+    /// Último estado del reproductor (se refresca cada tick).
+    pub media_now: Option<mpris::MediaState>,
     /// `true` cuando el popup del applet de red está desplegado (path winit).
     pub network_open: bool,
     /// `true` cuando el menú de sesión/energía está desplegado (path winit).
@@ -975,6 +990,8 @@ impl Model {
                         SlotWidget::Network
                     } else if spec.kind == "session" || spec.kind == "power" {
                         SlotWidget::Session
+                    } else if spec.kind == "mpris" || spec.kind == "media_player" {
+                        SlotWidget::Media
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -1134,6 +1151,8 @@ impl App for PataApp {
             .then(|| weather::WeatherHandle::spawn(weather_place(&cfg)));
         let network = (config_tiene_widget(&cfg, "network") || config_tiene_widget(&cfg, "wifi"))
             .then(network::NetworkHandle::spawn);
+        let mpris = (config_tiene_widget(&cfg, "mpris") || config_tiene_widget(&cfg, "media_player"))
+            .then(mpris::MprisHandle::spawn);
         let cava = config_tiene_widget(&cfg, "cava").then(|| cava::CavaHandle::spawn(cava_bars(&cfg)));
 
         let mut theme = Theme::dark();
@@ -1176,6 +1195,8 @@ impl App for PataApp {
             weather_now: None,
             network,
             network_now: None,
+            mpris,
+            media_now: None,
             network_open: false,
             session_open: false,
             session_confirm: None,
@@ -1287,6 +1308,11 @@ impl App for PataApp {
                 if let Some(h) = &model.network {
                     if let Some(n) = h.latest() {
                         model.network_now = Some(n);
+                    }
+                }
+                if let Some(h) = &model.mpris {
+                    if let Some(m) = h.latest() {
+                        model.media_now = Some(m);
                     }
                 }
                 // Mezclador por app: refresca mientras el popup de volumen está
@@ -1519,6 +1545,9 @@ impl App for PataApp {
                 model.session_open = false;
                 model.session_confirm = None;
             }
+            Msg::MediaPlayPause => mpris::play_pause(),
+            Msg::MediaNext => mpris::next(),
+            Msg::MediaPrev => mpris::previous(),
             Msg::ClipboardPick(text) => {
                 sampler::copiar_clipboard(&text);
                 model.clip_open = false;

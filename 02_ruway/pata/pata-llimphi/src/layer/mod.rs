@@ -245,6 +245,10 @@ pub(super) struct LayerApp {
     pub(super) sink_inputs: Vec<crate::sampler::SinkInput>,
     /// Acción de sesión pendiente de confirmación en el menú de energía.
     pub(super) session_confirm: Option<crate::SessionAction>,
+    /// Feed MPRIS (reproductor) en su propio hilo.
+    pub(super) mpris: Option<crate::mpris::MprisHandle>,
+    /// Último estado del reproductor.
+    pub(super) media_now: Option<crate::mpris::MediaState>,
     /// Visualizador de audio (cava) en su propio hilo.
     pub(super) cava: Option<crate::cava::CavaHandle>,
     /// Último cuadro del visualizador.
@@ -446,6 +450,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let network = (crate::config_tiene_widget(&cfg, "network")
         || crate::config_tiene_widget(&cfg, "wifi"))
     .then(crate::network::NetworkHandle::spawn);
+    let mpris = (crate::config_tiene_widget(&cfg, "mpris")
+        || crate::config_tiene_widget(&cfg, "media_player"))
+    .then(crate::mpris::MprisHandle::spawn);
     let cava = crate::config_tiene_widget(&cfg, "cava")
         .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
 
@@ -553,6 +560,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         network_now: None,
         sink_inputs: Vec::new(),
         session_confirm: None,
+        mpris,
+        media_now: None,
         cava,
         cava_frame: Vec::new(),
         theme,

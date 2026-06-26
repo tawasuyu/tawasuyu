@@ -43,6 +43,7 @@ use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 // Submódulos internos
 mod cde;
 mod control;
+mod media;
 mod network;
 mod panels;
 mod session;
@@ -58,6 +59,7 @@ pub use panels::{
     cpu_overlay, cpu_panel, ram_overlay, ram_panel, volume_overlay, volume_panel,
 };
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
+pub use media::media_view;
 pub use network::{network_overlay, network_view};
 pub use session::{session_overlay, session_view};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
@@ -86,6 +88,8 @@ pub struct BarData<'a> {
     pub weather: Option<&'a crate::weather::Weather>,
     /// La última lectura de la red, para el `network`.
     pub network: Option<&'a crate::network::NetState>,
+    /// El último estado del reproductor, para el `mpris`.
+    pub media: Option<&'a crate::mpris::MediaState>,
     /// El último cuadro del visualizador de audio, para el `cava`.
     pub cava: &'a [f32],
     /// Las apps del registro, para el `program_manager` (grilla estilo Win3.1).
@@ -301,6 +305,7 @@ pub fn root(model: &Model) -> View<Msg> {
         tray: &tray_items,
         weather: model.weather_now.as_ref(),
         network: model.network_now.as_ref(),
+        media: model.media_now.as_ref(),
         cava: &model.cava_frame,
         apps: model.registry.all(),
         shuma_full: model.shuma_full.as_ref(),
@@ -610,6 +615,7 @@ fn slots_de(
                 SlotWidget::Control => control::control_button_view(theme),
                 SlotWidget::Network => network::network_view(data.network, theme),
                 SlotWidget::Session => session::session_view(theme),
+                SlotWidget::Media => media::media_view(data.media, theme),
             })
             .collect();
         let mut style = Style {

@@ -599,6 +599,11 @@ impl LayerApp {
                 self.network_now = Some(n);
             }
         }
+        if let Some(h) = &self.mpris {
+            if let Some(m) = h.latest() {
+                self.media_now = Some(m);
+            }
+        }
         // Mezclador: refresca mientras su popup está abierto (sliders en vivo).
         if self.menu_open && self.menu_kind == MenuKind::Volume {
             self.sink_inputs = crate::sampler::sample_sink_inputs();
@@ -808,6 +813,7 @@ impl LayerApp {
             tray: &tray_items,
             weather: self.weather_now.as_ref(),
             network: self.network_now.as_ref(),
+            media: self.media_now.as_ref(),
             cava: &self.cava_frame,
             apps: self.registry.all(),
             shuma_full: self.shuma_full.as_ref(),
@@ -1129,6 +1135,9 @@ impl LayerApp {
                 self.session_confirm = None;
                 self.set_menu_open(false);
             }
+            Msg::MediaPlayPause => crate::mpris::play_pause(),
+            Msg::MediaNext => crate::mpris::next(),
+            Msg::MediaPrev => crate::mpris::previous(),
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy < 0.0);

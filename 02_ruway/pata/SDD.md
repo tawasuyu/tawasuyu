@@ -730,3 +730,10 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     `render/session.rs` con `session_view`/`session_panel`/`session_overlay`;
     en layer-shell `MenuKind::Session` + `session_menu_view`. La lógica
     (etiquetas/comandos/confirmación) vive en `SessionAction` en `lib.rs`.
+  - **Controles de reproducción (MPRIS) ✅** — el widget `mpris`/`media_player`:
+    botones **prev / play-pause / next** (íconos de transporte pintados a mano —
+    DejaVu no trae los glifos a color) + el **título** de la pista. Dato del host
+    en su propio hilo vía `playerctl` (`mpris.rs`, patrón clima/red), refresco
+    ~1.5 s; se **oculta** si no hay reproductor (como el workspace switcher con
+    count 0). Sin popup: los clics mandan los comandos de transporte directo en
+    ambos backends. `parse_status` pura y testeada. `render/media.rs`.
