@@ -110,6 +110,14 @@ pub struct Decorations {
     /// color base abajo) en vez de un color plano. `false` = barra sólida.
     #[serde(default)]
     pub titlebar_gradient: bool,
+    /// Barra de título **sólo en las ventanas flotantes** (z-order). `true` =
+    /// las teseladas no llevan barra (estilo tiling: el cuerpo entero es
+    /// contenido), las flotantes sí (para agarrarlas/cerrarlas); `false` =
+    /// todas las SSD llevan barra por igual (comportamiento histórico). No
+    /// afecta a shell/fullscreen/greeter/CSD, que nunca llevan barra del
+    /// servidor.
+    #[serde(default)]
+    pub titlebar_floating_only: bool,
 }
 
 impl Default for Decorations {
@@ -122,6 +130,7 @@ impl Default for Decorations {
             border_normal: [56, 56, 69, 255],
             titlebar_height: 24,
             titlebar_gradient: false,
+            titlebar_floating_only: false,
         }
     }
 }

@@ -286,6 +286,12 @@ pub(crate) struct ManagedWindow {
     pub(crate) visible: bool,
     /// `true` si flota: se compone por encima de las teseladas.
     pub(crate) floating: bool,
+    /// Política «barra sólo en flotantes» vigente para esta ventana (espejo de
+    /// [`mirada_protocol::Decorations::titlebar_floating_only`]). Se re-estampa
+    /// en cada `Configure` —junto con `floating`— para que [`crate::titlebar_for`]
+    /// la consulte sin cambiar de firma. Con `true`, una ventana teselada no
+    /// reserva ni pinta barra de título.
+    pub(crate) titlebar_floating_only: bool,
     /// `true` si tiene el foco del teclado — pinta el marco resaltado.
     pub(crate) focused: bool,
     /// `true` si es la ventana del shell — acoplada al pie, sin teselar.

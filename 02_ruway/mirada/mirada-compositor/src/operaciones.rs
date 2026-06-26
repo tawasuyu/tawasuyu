@@ -1085,6 +1085,9 @@ impl App {
                 // fullscreen). `w.size` guarda la celda entera; `render_loc`
                 // baja la superficie por `tb`.
                 let tbh = self.decorations.titlebar_height.max(0);
+                // Política «barra sólo en flotantes» vigente: se estampa en la
+                // ventana antes de `titlebar_for`, para que el gate la respete.
+                let tb_float_only = self.decorations.titlebar_floating_only;
                 // En modo DM la ventana del greeter cubre TODO el espacio: la
                 // unión de las salidas, anclada en (0,0). Así el fondo animado se
                 // pinta en cada monitor y la tarjeta de login —que posiciona el
@@ -1113,6 +1116,7 @@ impl App {
                     w.size = (rw, rh);
                     w.visible = visible;
                     w.floating = floating;
+                    w.titlebar_floating_only = tb_float_only;
                     w.fullscreen = fullscreen;
                     w.suspended = suspended;
                     w.frame_divisor = frame_divisor.max(1);
@@ -1321,6 +1325,8 @@ impl App {
             size: (0, 0),
             visible: false,
             floating: false,
+            // Se re-estampa en el primer `Configure` desde la decoración vigente.
+            titlebar_floating_only: self.decorations.titlebar_floating_only,
             focused: false,
             is_shell,
             is_greeter,

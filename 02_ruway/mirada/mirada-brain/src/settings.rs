@@ -175,6 +175,11 @@ impl Configurable for Config {
                         "titlebar_gradient",
                         "Barra de título con degradé",
                         self.titlebar_gradient,
+                    ))
+                    .field(Field::toggle(
+                        "titlebar_floating_only",
+                        "Barra sólo en ventanas flotantes",
+                        self.titlebar_floating_only,
                     )),
             )
             .section(
@@ -478,6 +483,11 @@ impl Configurable for Config {
             "titlebar_gradient" => {
                 if let Some(b) = value.as_bool() {
                     self.titlebar_gradient = b;
+                }
+            }
+            "titlebar_floating_only" => {
+                if let Some(b) = value.as_bool() {
+                    self.titlebar_floating_only = b;
                 }
             }
             "border_focus" => {
