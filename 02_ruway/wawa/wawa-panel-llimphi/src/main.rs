@@ -16,6 +16,7 @@
 
 mod animaciones;
 mod greeter;
+mod remote;
 mod splash;
 mod perfiles;
 mod shuma_shortcuts;
@@ -343,6 +344,13 @@ struct Model {
     /// el Prezi pero SIN giro y con tamaños propios (la resolución de cada
     /// pantalla). Vuelca el orden/disposición a `mirada.outputs`.
     monitor: MonitorEdit,
+    /// Editor de **sesión remota** (waypipe) abierto en una subventana, o `None`
+    /// si está cerrado. Edita un borrador de `StartupApp`; al guardar se vuelca a
+    /// `mirada.startup` (ver [`remote`]).
+    remote_edit: Option<remote::RemoteEdit>,
+    /// Estado allichay propio del overlay de sesión remota (buffers de texto y
+    /// foco), separado del [`Model::allichay`] del panel de fondo.
+    remote_allichay: AllichayState,
 }
 
 /// Px de mundo por celda de la grilla del Prezi dentro del editor de recorrido.
@@ -725,6 +733,12 @@ enum Msg {
     SidebarTabAdd(usize, String),
     /// Quitar el diente `idx` de la superficie `surf`.
     SidebarTabRemove(usize, usize),
+    /// Subventana de sesión remota: cambio/foco/scroll del formulario (allichay).
+    RemoteEditMsg(AllichayMsg),
+    /// Tecla al campo de texto en edición de la subventana de sesión remota.
+    RemoteEditKey(KeyEvent),
+    /// Cerrar la subventana de sesión remota sin guardar (click en el scrim).
+    RemoteEditCancel,
 }
 
 // =====================================================================
@@ -991,6 +1005,40 @@ impl App for Panel {
                     route_change(&mut m, &path, value);
                 }
             }
+            // Subventana de sesión remota: su propio estado allichay y borrador.
+            Msg::RemoteEditMsg(am) => match am {
+                AllichayMsg::Focus(path) => {
+                    if let Some(edit) = &m.remote_edit {
+                        let seed = path.leaf().map(|l| edit.text_value(l)).unwrap_or_default();
+                        m.remote_allichay.focus(&path, &seed);
+                    }
+                }
+                AllichayMsg::Change(path, value) => {
+                    let leaf = path.leaf().unwrap_or("").to_string();
+                    match leaf.as_str() {
+                        "guardar" if value.as_bool() == Some(true) => remote_edit_save(&mut m),
+                        "borrar" if value.as_bool() == Some(true) => remote_edit_delete(&mut m),
+                        "cancelar" if value.as_bool() == Some(true) => remote_edit_close(&mut m),
+                        _ => {
+                            if let Some(edit) = m.remote_edit.as_mut() {
+                                edit.apply(&leaf, value);
+                            }
+                        }
+                    }
+                }
+                AllichayMsg::ScrollTo(off) => m.remote_allichay.set_scroll(off),
+                AllichayMsg::SelectSection(_)
+                | AllichayMsg::FocusCell(..)
+                | AllichayMsg::FocusHex(..) => {}
+            },
+            Msg::RemoteEditKey(event) => {
+                if let Some((path, value)) = m.remote_allichay.apply_key(&event) {
+                    if let Some(edit) = m.remote_edit.as_mut() {
+                        edit.apply(path.leaf().unwrap_or(""), value);
+                    }
+                }
+            }
+            Msg::RemoteEditCancel => remote_edit_close(&mut m),
             Msg::ConfigChanged(new_cfg) => {
                 if *new_cfg != m.cfg {
                     let lang_changed = new_cfg.lang != m.cfg.lang;
@@ -1039,6 +1087,17 @@ impl App for Panel {
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
+            return None;
+        }
+        // Subventana de sesión remota abierta → sus teclas van a su editor; Esc
+        // la cierra. Tiene prioridad (es el modal más arriba).
+        if model.remote_edit.is_some() {
+            if matches!(event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::RemoteEditCancel);
+            }
+            if model.remote_allichay.is_editing() {
+                return Some(Msg::RemoteEditKey(event.clone()));
+            }
             return None;
         }
         // Diálogo de archivos abierto → todas las teclas al picker.
@@ -1131,6 +1190,50 @@ impl App for Panel {
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
         let theme = theme_from_cfg(&model.cfg);
+        // La subventana de sesión remota es el modal más arriba: scrim + caja con
+        // el formulario (renderizado con el mismo schema_panel del panel de fondo).
+        if let Some(edit) = &model.remote_edit {
+            let schema = edit.schema();
+            let box_w = 520.0_f32;
+            let box_h = 600.0_f32;
+            let form = schema_panel(
+                &schema,
+                &model.remote_allichay,
+                &theme,
+                box_h - 24.0,
+                Msg::RemoteEditMsg,
+            );
+            let caja = View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: length(box_w), height: length(box_h) },
+                padding: Rect {
+                    left: length(16.0_f32),
+                    right: length(16.0_f32),
+                    top: length(12.0_f32),
+                    bottom: length(12.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.bg_panel)
+            .children(vec![form]);
+            let scrim = View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    top: length(0.0_f32),
+                    right: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .fill(llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(0, 0, 0, 150))
+            .on_click(Msg::RemoteEditCancel)
+            .children(vec![caja]);
+            return Some(scrim);
+        }
         // El diálogo de archivos tiene prioridad: modal centrado con scrim.
         if let Some(st) = &model.picker {
             let pal = llimphi_module_file_picker::PickerPalette::from_theme(&theme);
@@ -1257,6 +1360,8 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         picker_paths: Vec::new(),
         picker_root: PathBuf::from("/"),
         prezi,
+        remote_edit: None,
+        remote_allichay: AllichayState::new(),
     }
 }
 
@@ -1569,6 +1674,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     let mut inicio = Schema::new();
     inicio.sections.push(arranque_section());
     inicio.sections.push(autostart_section());
+    inicio.sections.push(remote::sessions_section(&m.mirada.startup));
 
     // ---- Panel SISTEMA ----
     let mut sistema = Schema::new();
@@ -3364,6 +3470,48 @@ fn split_app(path: &FieldPath) -> Option<(String, FieldPath)> {
 /// Aplica un cambio a la config destino **en memoria** y marca su bandera de
 /// sucio + arma el debounce; el `save()` a disco lo hace [`flush_saves`] cuando
 /// el contador llega a cero (ver [`SaveDirty`]).
+/// Cierra la subventana de sesión remota descartando el borrador.
+fn remote_edit_close(m: &mut Model) {
+    m.remote_edit = None;
+    m.remote_allichay = AllichayState::new();
+}
+
+/// Guarda el borrador de la subventana en `mirada.startup` (reemplaza la entrada
+/// editada o agrega la nueva) y marca la config sucia — `flush_saves` la persiste
+/// a `config.ron` y el compositor la recarga al próximo arranque.
+fn remote_edit_save(m: &mut Model) {
+    if let Some(edit) = m.remote_edit.take() {
+        let remote::RemoteEdit { idx, draft } = edit;
+        match idx {
+            Some(i) => {
+                if let Some(slot) = m.mirada.startup.get_mut(i) {
+                    *slot = draft;
+                }
+            }
+            None => m.mirada.startup.push(draft),
+        }
+        m.dirty.mirada = true;
+        m.save_in = SAVE_DELAY_TICKS;
+        m.status = "sesión remota guardada".into();
+    }
+    m.remote_allichay = AllichayState::new();
+}
+
+/// Borra del `startup` la sesión que la subventana estaba editando.
+fn remote_edit_delete(m: &mut Model) {
+    if let Some(edit) = m.remote_edit.take() {
+        if let Some(i) = edit.idx {
+            if i < m.mirada.startup.len() {
+                m.mirada.startup.remove(i);
+            }
+        }
+        m.dirty.mirada = true;
+        m.save_in = SAVE_DELAY_TICKS;
+        m.status = "sesión remota borrada".into();
+    }
+    m.remote_allichay = AllichayState::new();
+}
+
 fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
     let Some((key, rel)) = split_app(path) else {
         m.status = format!("· ruta inválida: {path}");
@@ -3600,6 +3748,29 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             if let Some(items) = value.as_list() {
                 let items = items.to_vec();
                 write_autostart(m, &items);
+            }
+            return;
+        }
+        // Sesiones remotas (waypipe): los botones abren la subventana de edición.
+        // `nueva` crea un borrador; `editar:N` carga la N-ésima sesión.
+        "remote" => {
+            if value.as_bool() != Some(true) {
+                return;
+            }
+            match rel.leaf() {
+                Some("nueva") => {
+                    m.remote_edit = Some(remote::RemoteEdit::nueva());
+                    m.remote_allichay = AllichayState::new();
+                }
+                Some(l) => {
+                    if let Some(n) = l.strip_prefix("editar:").and_then(|s| s.parse::<usize>().ok()) {
+                        if let Some(app) = m.mirada.startup.get(n) {
+                            m.remote_edit = Some(remote::RemoteEdit::editar(n, app));
+                            m.remote_allichay = AllichayState::new();
+                        }
+                    }
+                }
+                None => {}
             }
             return;
         }
