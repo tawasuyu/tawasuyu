@@ -319,6 +319,27 @@ escritorio, lock, dpms (CRT, arriba), menús. Una enum `Easing` (`Linear`,
 el resto no) pasa a leerse de acá. **Movimientos nuevos** que faltan: *pop* al abrir
 ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir foco.
 
+> **✅ HECHO — 1ª rebanada (2026-06-26): fade-in de apertura + cimientos.** Lo
+> construido (la rebanada *barata* de la tabla de costos): (1) **`Easing`** en
+> `mirada-brain` (`Linear`/`EaseOutCubic`/`EaseOutBack`), pura y testeada
+> (`apply(t)`, slugs round-trip); (2) **config** `window_open_ms` (default 160) +
+> `window_open_easing` + **`reduce_motion`** (maestro a11y), todo en el `Schema`
+> bajo la sección nueva **«Movimiento»** de wawa-panel (y ahí movimos `slide_ms`,
+> que antes no era editable); (3) `reduce_motion` pone en 0 las duraciones
+> efectivas de fade-in, slide y vuelo de cámara (getters `config_*` del
+> compositor); (4) el **render** sella `ManagedWindow::mapped_ms` en el primer
+> frame sano y aplica una rampa de alfa a TODO lo que pinta la ventana —
+> superficie, barra/gradiente, marco, sombra, título e íconos — vía
+> `open_anim_alpha`; el `tick` fuerza repintado mientras dura (el damage de
+> `DrmCompositor` no ve el cambio de alfa solo). **Byte-idéntico en off**
+> (`window_open_ms=0` o `reduce_motion` → alfa `1.0`). Sólo el chrome (shell
+> `pata`, greeter) queda exento. **Pendiente de esta misma idea:** el *pop*
+> (escala 0.9→1: hay que transformar también la geometría de las decoraciones,
+> no sólo la superficie) y el *fade al cerrar* (necesita mantener un «fantasma»
+> de la ventana tras destruirse la superficie → captura-a-textura, ver §arriba).
+> Verificación en metal pendiente (es path GLES sobre DRM); el motor de tiempo y
+> la curva sí están testeados como unidades.
+
 **B) `WindowEffects` ampliado — el aspecto, por-ventana.** Campos nuevos (additivos):
 `blur: u8` (intensidad del desenfoque de fondo), `corner_radius: u8` (esquinas
 redondeadas), `border_tint`/`border_alpha` (filo sutil), `dim_unfocused` (atenuar las

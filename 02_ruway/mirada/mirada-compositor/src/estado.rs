@@ -338,6 +338,13 @@ pub(crate) struct ManagedWindow {
     /// `BrainCommand::SetEffects` (Tier-2: atenuar/sombrear según foco, etc.).
     /// El render los aplica. Por defecto: opaca y sin sombra.
     pub(crate) effects: WindowEffects,
+    /// Instante (ms desde `DrmState::start`) en que la ventana pintó su PRIMER
+    /// frame sano — sella el fade-in de apertura («animaciones de Wayland»).
+    /// `None` hasta entonces: el render lo estampa la primera vez que la ventana
+    /// es visible con buffer sano, y a partir de ahí la rampa de alfa corre por
+    /// `window_open_ms`. Se sella una sola vez (re-mostrar no re-anima — el
+    /// slide entre escritorios ya cubre eso).
+    pub(crate) mapped_ms: Option<u32>,
 }
 
 /// Un arrastre de ratón en curso: mueve o redimensiona una ventana.

@@ -69,6 +69,15 @@ fn switch_mode_from_slug(s: &str) -> Option<crate::config::WorkspaceSwitchMode> 
     }
 }
 
+/// Opciones de curva de animación (slug serde de [`crate::Easing`] + rótulo).
+fn easing_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("linear", "Lineal"),
+        EnumOption::new("ease_out_cubic", "Desacelerar (cúbica)"),
+        EnumOption::new("ease_out_back", "Pop (sobre-impulso)"),
+    ]
+}
+
 /// Las opciones de ajuste del wallpaper (slug + rótulo).
 fn wallpaper_fit_options() -> Vec<EnumOption> {
     vec![
@@ -352,6 +361,36 @@ impl Configurable for Config {
                         self.idle_respect_inhibitors,
                     )),
             )
+            .section(
+                Section::new("movimiento", "Movimiento")
+                    .icon("✨")
+                    .help("Animaciones del escritorio (0 ms = sin animación)")
+                    .field(Field::toggle(
+                        "reduce_motion",
+                        "Reducir movimiento (apaga todas las animaciones)",
+                        self.reduce_motion,
+                    ))
+                    .field(Field::slider_int(
+                        "window_open_ms",
+                        "Apertura de ventana — fundido (ms)",
+                        self.window_open_ms as i64,
+                        0,
+                        600,
+                    ))
+                    .field(Field::dropdown(
+                        "window_open_easing",
+                        "Apertura de ventana — curva",
+                        self.window_open_easing.slug(),
+                        easing_options(),
+                    ))
+                    .field(Field::slider_int(
+                        "slide_ms",
+                        "Deslizar entre escritorios (ms)",
+                        self.slide_ms as i64,
+                        0,
+                        600,
+                    )),
+            )
     }
 
     fn apply(&mut self, path: &FieldPath, value: FieldValue) -> Result<(), AllichayError> {
@@ -623,6 +662,26 @@ impl Configurable for Config {
                     self.idle_respect_inhibitors = b;
                 }
             }
+            "reduce_motion" => {
+                if let Some(b) = value.as_bool() {
+                    self.reduce_motion = b;
+                }
+            }
+            "window_open_ms" => {
+                if let Some(v) = value.as_int() {
+                    self.window_open_ms = v.clamp(0, 600) as u32;
+                }
+            }
+            "window_open_easing" => {
+                if let Some(e) = value.as_str().and_then(crate::Easing::from_slug) {
+                    self.window_open_easing = e;
+                }
+            }
+            "slide_ms" => {
+                if let Some(v) = value.as_int() {
+                    self.slide_ms = v.clamp(0, 600) as u32;
+                }
+            }
             _ => return Err(unknown()),
         }
         Ok(())
@@ -648,9 +707,36 @@ mod tests {
                 "monitores",
                 "menu",
                 "vista_espacial",
-                "inactividad"
+                "inactividad",
+                "movimiento"
             ]
         );
+    }
+
+    #[test]
+    fn movimiento_aplica_animaciones() {
+        let mut c = Config::default();
+        c.apply(&"movimiento.window_open_ms".into(), FieldValue::Int(240))
+            .unwrap();
+        assert_eq!(c.window_open_ms, 240);
+        // Se acota al rango.
+        c.apply(&"movimiento.window_open_ms".into(), FieldValue::Int(99999))
+            .unwrap();
+        assert_eq!(c.window_open_ms, 600);
+        // La curva entra por slug.
+        c.apply(
+            &"movimiento.window_open_easing".into(),
+            FieldValue::Text("ease_out_back".into()),
+        )
+        .unwrap();
+        assert_eq!(c.window_open_easing, crate::Easing::EaseOutBack);
+        // El maestro de accesibilidad y el slide.
+        c.apply(&"movimiento.reduce_motion".into(), FieldValue::Bool(true))
+            .unwrap();
+        assert!(c.reduce_motion);
+        c.apply(&"movimiento.slide_ms".into(), FieldValue::Int(120))
+            .unwrap();
+        assert_eq!(c.slide_ms, 120);
     }
 
     #[test]

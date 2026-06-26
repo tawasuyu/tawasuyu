@@ -14,6 +14,7 @@ impl DrmState {
         if !self.active {
             return; // la sesión está en otra VT — no tocamos la GPU
         }
+        self.stamp_open_animations();
         self.refresh_window_borders();
         // Modo DM: si el ratón cruzó a otro monitor, avisale al greeter para
         // que la tarjeta de login viaje allí (no-op fuera de greeter o si el
@@ -103,6 +104,61 @@ impl DrmState {
         )));
     }
 
+    /// Sella el instante de apertura de cada ventana recién mapeada — el origen
+    /// del fade-in («animaciones de Wayland»). Se sella la primera vez que la
+    /// ventana es visible **con buffer sano** (no antes: si no, la rampa correría
+    /// sobre fotogramas vacíos y la apertura se vería ya empezada). Una sola vez:
+    /// re-mostrar una ventana (cambio de escritorio) no re-anima — de eso se
+    /// encarga el slide. Barato: sólo paga mientras quede alguna sin sellar.
+    fn stamp_open_animations(&mut self) {
+        if self.app.windows.iter().all(|w| w.mapped_ms.is_some()) {
+            return;
+        }
+        let now = self.start.elapsed().as_millis() as u32;
+        for w in &mut self.app.windows {
+            if w.mapped_ms.is_none() && w.visible && crate::buffer_render_sano(&w.surface) {
+                w.mapped_ms = Some(now);
+            }
+        }
+    }
+
+    /// `true` si alguna ventana de usuario está dentro de su ventana de fade-in
+    /// de apertura. El `tick` lo usa para forzar repintado: el damage tracker de
+    /// `DrmCompositor` no ve por sí solo el cambio de alfa (sólo geometría), así
+    /// que sin esto la rampa se congelaría apenas el cliente deja de mandar
+    /// frames. Mismo recurso que el zoom del Prezi.
+    pub(super) fn open_anim_active(&self) -> bool {
+        let open_ms = self.app.config_window_open_ms();
+        if open_ms == 0 {
+            return false;
+        }
+        let now = self.start.elapsed().as_millis() as u32;
+        self.app.windows.iter().any(|w| {
+            !w.is_shell
+                && !w.is_greeter
+                && matches!(w.mapped_ms, Some(m) if now.saturating_sub(m) < open_ms)
+        })
+    }
+
+    /// Factor de alfa del fade-in de apertura para `w` en `now` (ms desde
+    /// `start`): `1.0` salvo durante los primeros `open_ms` tras sellarse. El
+    /// chrome (shell `pata`, greeter) nunca se desvanece — su aparición la
+    /// gobiernan sus propias transiciones, no este fade de ventana de usuario.
+    fn open_anim_alpha(&self, w: &crate::ManagedWindow, now: u32, open_ms: u32, easing: mirada_brain::Easing) -> f32 {
+        if open_ms == 0 || w.is_shell || w.is_greeter {
+            return 1.0;
+        }
+        match w.mapped_ms {
+            Some(m) => {
+                let t = (now.saturating_sub(m) as f32 / open_ms as f32).clamp(0.0, 1.0);
+                easing.apply(t).clamp(0.0, 1.0)
+            }
+            // Aún sin sellar (buffer no sano todavía): invisible para no
+            // estampar un flash a alfa pleno antes de que arranque la rampa.
+            None => 0.0,
+        }
+    }
+
     /// Emite todas las ventanas visibles cuya posición global intersecta `rect`,
     /// traducidas a coordenadas locales a `rect`. Incluye marcos, barras de
     /// título y el árbol de superficie del cliente, en orden front-to-back
@@ -146,6 +202,12 @@ impl DrmState {
             .get(self.app.focused_output_index())
             .map(|o| o.rect);
         let shadows_on = self.shadows_on;
+        // Fade-in de apertura: duración + curva (config), y el reloj común. La
+        // rampa por-ventana se evalúa abajo (`open_anim_alpha`); con `open_ms=0`
+        // o «reducir movimiento» es `1.0` y la composición queda byte-idéntica.
+        let open_ms = self.app.config_window_open_ms();
+        let open_easing = self.app.config_window_open_easing();
+        let anim_now = self.start.elapsed().as_millis() as u32;
 
         // Popups (menú de aplicación y contextuales de apps GTK/Qt) PRIMERO: el
         // backend compone front-to-back (el primer elemento queda ARRIBA), así
@@ -195,6 +257,10 @@ impl DrmState {
             {
                 continue;
             }
+            // Alfa del fade-in de apertura (1.0 fuera de la rampa). Multiplica a
+            // TODO lo que pinta esta ventana —decoración, marco, sombra y la
+            // superficie— para que entre como un solo bloque que se materializa.
+            let anim_alpha = self.open_anim_alpha(w, anim_now, open_ms, open_easing);
             // `x,y` = origen del BUFFER (donde se pinta el árbol de superficie).
             // `cx,cy` = origen del CONTENIDO (buffer + offset de sombra): ahí
             // arrancan barra y marco para que abracen lo visible.
@@ -220,7 +286,7 @@ impl DrmState {
                             &mut self.renderer,
                             ((cx + 8) as f64, ty as f64),
                             buf,
-                            None,
+                            Some(anim_alpha),
                             None,
                             None,
                             Kind::Unspecified,
@@ -259,7 +325,7 @@ impl DrmState {
                                 &mut self.renderer,
                                 (bx as f64, by as f64),
                                 &bbuf,
-                                None,
+                                Some(anim_alpha),
                                 None,
                                 None,
                                 Kind::Unspecified,
@@ -301,7 +367,7 @@ impl DrmState {
                             &band,
                             (cx, by),
                             1.0,
-                            1.0,
+                            anim_alpha,
                             Kind::Unspecified,
                         )));
                     }
@@ -313,7 +379,7 @@ impl DrmState {
                         &bar,
                         (cx, dec_y),
                         1.0,
-                        1.0,
+                        anim_alpha,
                         Kind::Unspecified,
                     )));
                 }
@@ -333,7 +399,7 @@ impl DrmState {
                         &mut self.renderer,
                         ((cx + 6) as f64, (cy + 4) as f64),
                         buf,
-                        None,
+                        Some(anim_alpha),
                         None,
                         None,
                         Kind::Unspecified,
@@ -353,7 +419,7 @@ impl DrmState {
                         buf,
                         (bx, by),
                         1.0,
-                        1.0,
+                        anim_alpha,
                         Kind::Unspecified,
                     )));
                 }
@@ -363,7 +429,7 @@ impl DrmState {
                 &w.surface,
                 (x, y),
                 1.0,
-                w.effects.opacity as f32 / 255.0,
+                w.effects.opacity as f32 / 255.0 * anim_alpha,
                 Kind::Unspecified,
             ) {
                 into.push(Frame::Window(el));
@@ -382,7 +448,7 @@ impl DrmState {
                         &sh,
                         (cx - exp, dec_y - exp + dy),
                         1.0,
-                        1.0,
+                        anim_alpha,
                         Kind::Unspecified,
                     )));
                 }

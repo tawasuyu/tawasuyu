@@ -338,13 +338,48 @@ impl App {
         }
     }
 
+    /// `true` si «reducir movimiento» (a11y) está activo: el compositor pone en
+    /// cero todas las duraciones de animación. Sólo el Cerebro embebido lo
+    /// conoce; enlazado cae a `false` (el dueño externo ya empuja 0 si quiere).
+    pub(crate) fn config_reduce_motion(&self) -> bool {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().reduce_motion,
+            Brain::Linked(_) => false,
+        }
+    }
+
     /// Duración (ms) del slide entre escritorios, de la config (default 220).
-    /// `0` = salto seco. Con Cerebro enlazado: el default.
+    /// `0` = salto seco. Con Cerebro enlazado: el default. Cero si «reducir
+    /// movimiento».
     pub(crate) fn config_slide_ms(&self) -> u32 {
+        if self.config_reduce_motion() {
+            return 0;
+        }
         match &self.brain {
             Brain::Embedded(d) => d.config().slide_ms,
             // Enlazado: el `slide_ms` que empujó el Cerebro (0 hasta el 1er push).
             Brain::Linked(_) => self.linked_ws.as_ref().map_or(0, |w| w.slide_ms),
+        }
+    }
+
+    /// Duración (ms) del fade-in de apertura de ventana (default 160). `0` =
+    /// aparición seca. Con Cerebro enlazado cae al default; cero si «reducir
+    /// movimiento». Lo lee el render para sellar y correr la rampa de alfa.
+    pub(crate) fn config_window_open_ms(&self) -> u32 {
+        if self.config_reduce_motion() {
+            return 0;
+        }
+        match &self.brain {
+            Brain::Embedded(d) => d.config().window_open_ms,
+            Brain::Linked(_) => 160,
+        }
+    }
+
+    /// Curva del fade-in de apertura. Default `EaseOutCubic` (= slide y Prezi).
+    pub(crate) fn config_window_open_easing(&self) -> mirada_brain::Easing {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().window_open_easing,
+            Brain::Linked(_) => mirada_brain::Easing::default(),
         }
     }
 
@@ -391,7 +426,11 @@ impl App {
     }
 
     /// Duración (ms) del vuelo de cámara (zoom) de la vista espacial (Prezi).
+    /// Cero si «reducir movimiento».
     pub(crate) fn config_overview_anim_ms(&self) -> u32 {
+        if self.config_reduce_motion() {
+            return 0;
+        }
         match &self.brain {
             Brain::Embedded(d) => d.config().overview_anim_ms,
             Brain::Linked(_) => 260,
@@ -1257,6 +1296,9 @@ impl App {
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
             ssd,
             effects: mirada_brain::WindowEffects::default(),
+            // Aún sin pintar: el render lo sella en el primer frame sano y ahí
+            // arranca el fade-in de apertura.
+            mapped_ms: None,
         });
 
         // Alta en el servidor wlr-foreign-toplevel (taskbar de pata): crea un

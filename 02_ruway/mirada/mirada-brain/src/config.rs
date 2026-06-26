@@ -330,6 +330,23 @@ pub struct Config {
     /// multimedia): la pantalla no se apaga ni se bloquea mientras mirás algo.
     #[serde(default = "default_true")]
     pub idle_respect_inhibitors: bool,
+    /// **Movimiento — animación de apertura de ventana.** Duración en ms del
+    /// fundido de entrada (fade-in) con que aparece una ventana recién mapeada.
+    /// `0` = aparición seca (sin animación). Lo lee el compositor en su path
+    /// GLES (igual que el slide de Win+Tab). Ver `PLAN.md` §«Capa de
+    /// embellecimiento».
+    #[serde(default = "default_window_open_ms")]
+    pub window_open_ms: u32,
+    /// Curva del fade-in de apertura. Default desaceleración cúbica (la misma
+    /// que el slide y el zoom del Prezi).
+    #[serde(default)]
+    pub window_open_easing: Easing,
+    /// **Reducir movimiento** (accesibilidad): cuando está activo, el
+    /// compositor pone en cero todas las duraciones de animación (apertura de
+    /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
+    /// interruptor maestro para quien marea el movimiento.
+    #[serde(default)]
+    pub reduce_motion: bool,
 }
 
 impl Config {
@@ -412,6 +429,68 @@ fn default_one() -> u32 {
 /// Default de [`Config::overview_anim_ms`]: un vuelo de cámara ágil.
 fn default_overview_anim_ms() -> u32 {
     260
+}
+
+/// Default de [`Config::window_open_ms`]: un fade-in breve y ágil.
+fn default_window_open_ms() -> u32 {
+    160
+}
+
+/// Curva de interpolación para las animaciones del compositor (hoy el fade-in
+/// de apertura; a futuro foco/cierre/menús). Es **pura**: `apply(t)` mapea un
+/// progreso lineal `t∈[0,1]` a un progreso curvado. La comparten todos los
+/// puntos que hoy hardcodean su curva (el slide de Win+Tab y el zoom del Prezi
+/// usan `EaseOutCubic`), para que «calibrar el movimiento» sea un solo enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Easing {
+    /// Sin curva — progreso lineal.
+    Linear,
+    /// Desaceleración cúbica (arranca rápido y frena suave al final). El
+    /// default: la misma curva que ya usan el slide y el Prezi.
+    #[default]
+    EaseOutCubic,
+    /// Desaceleración con un leve sobre-impulso al final («pop» elástico). Para
+    /// el fade-in el rebase de 1.0 se recorta (alfa tope), así que su efecto se
+    /// nota recién cuando la apertura escale (pop) — ver `PLAN.md`.
+    EaseOutBack,
+}
+
+impl Easing {
+    /// Aplica la curva a `t∈[0,1]`. `EaseOutBack` puede devolver brevemente >1.
+    pub fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Easing::Linear => t,
+            Easing::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
+            Easing::EaseOutBack => {
+                // Constantes canónicas de easings.net para `easeOutBack`.
+                const C1: f32 = 1.70158;
+                const C3: f32 = C1 + 1.0;
+                let u = t - 1.0;
+                1.0 + C3 * u.powi(3) + C1 * u.powi(2)
+            }
+        }
+    }
+
+    /// Slug estable para RON/UI.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Easing::Linear => "linear",
+            Easing::EaseOutCubic => "ease_out_cubic",
+            Easing::EaseOutBack => "ease_out_back",
+        }
+    }
+
+    /// Inversa de [`slug`](Self::slug); `None` si no calza.
+    pub fn from_slug(s: &str) -> Option<Self> {
+        match s {
+            "linear" => Some(Easing::Linear),
+            "ease_out_cubic" => Some(Easing::EaseOutCubic),
+            "ease_out_back" => Some(Easing::EaseOutBack),
+            _ => None,
+        }
+    }
 }
 
 /// Ajustes específicos de una salida (monitor) — se aplican sólo a la salida
@@ -799,6 +878,9 @@ impl Default for Config {
             idle_screen_off_secs: 0,
             idle_lock_secs: 0,
             idle_respect_inhibitors: true,
+            window_open_ms: default_window_open_ms(),
+            window_open_easing: Easing::default(),
+            reduce_motion: false,
         }
     }
 }
@@ -1348,6 +1430,31 @@ mod tests {
     #[test]
     fn the_template_parses_to_the_defaults() {
         assert_eq!(Config::from_ron(CONFIG_TEMPLATE).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn easing_ancla_los_extremos_y_curva_el_medio() {
+        for e in [Easing::Linear, Easing::EaseOutCubic, Easing::EaseOutBack] {
+            assert!((e.apply(0.0) - 0.0).abs() < 1e-5, "{e:?} en 0");
+            assert!((e.apply(1.0) - 1.0).abs() < 1e-5, "{e:?} en 1");
+            // Fuera de rango se recorta a los extremos.
+            assert!((e.apply(-1.0) - 0.0).abs() < 1e-5);
+            assert!((e.apply(2.0) - 1.0).abs() < 1e-5);
+        }
+        // EaseOut adelanta el progreso a mitad de camino (frena al final).
+        assert!(Easing::EaseOutCubic.apply(0.5) > 0.5);
+        // EaseOutBack sobre-impulsa por encima de 1 antes de asentar.
+        assert!(Easing::EaseOutBack.apply(0.8) > 1.0);
+        // Linear es la identidad.
+        assert!((Easing::Linear.apply(0.37) - 0.37).abs() < 1e-5);
+    }
+
+    #[test]
+    fn easing_slug_round_trip() {
+        for e in [Easing::Linear, Easing::EaseOutCubic, Easing::EaseOutBack] {
+            assert_eq!(Easing::from_slug(e.slug()), Some(e));
+        }
+        assert_eq!(Easing::from_slug("nope"), None);
     }
 
     #[test]

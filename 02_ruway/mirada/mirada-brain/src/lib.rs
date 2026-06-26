@@ -46,9 +46,9 @@ pub use action::{
 };
 pub use activity::{ActivityGraph, Lineage};
 pub use config::{
-    default_root_menu, default_zones, waypipe_command, waypipe_ssh_command, Config, MenuEntry,
-    OutputOverride, OverviewPlace, StartupApp, WaypipeTuning, WorkspaceSwitchMode, ZoneCfg,
-    DROPTERM_APP_ID,
+    default_root_menu, default_zones, waypipe_command, waypipe_ssh_command, Config, Easing,
+    MenuEntry, OutputOverride, OverviewPlace, StartupApp, WaypipeTuning, WorkspaceSwitchMode,
+    ZoneCfg, DROPTERM_APP_ID,
 };
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesState};
 pub use desktop::{Desktop, Output, WindowInfo};
