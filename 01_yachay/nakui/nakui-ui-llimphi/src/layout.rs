@@ -83,6 +83,36 @@ pub(crate) fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
     .children(vec![modules_panel, menu_panel])
 }
 
+/// Hash estable de una cadena → `key` de animación: la misma escena
+/// produce siempre la misma key entre rebuilds, escenas distintas keys
+/// distintas.
+fn key_of(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// `key` estable de la escena ERP activa (form / ficha de detalle / vista
+/// del menú). Cambia sólo al conmutar de modo —dispara la transición de
+/// entrada del cuerpo— y permanece estable mientras se opera dentro de la
+/// misma escena (tipear, paginar, ordenar) para no re-animar en cada frame.
+fn erp_scene_key(model: &Model) -> u64 {
+    if let Some(form) = &model.form {
+        match form.editing {
+            Some(id) => key_of(&format!("form:edit:{}:{id}", form.entity)),
+            None => key_of(&format!("form:new:{}", form.entity)),
+        }
+    } else if let Some(d) = &model.detail {
+        key_of(&format!("detail:{}:{}", d.entity, d.id))
+    } else {
+        match (model.selected_module, model.selected_menu) {
+            (Some(mi), Some(mj)) => key_of(&format!("view:{mi}:{mj}")),
+            _ => key_of("empty"),
+        }
+    }
+}
+
 pub(crate) fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
     // Prioridad del área principal: form > ficha de detalle > vista
     // seleccionada en el menú.
@@ -107,6 +137,16 @@ pub(crate) fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
             _ => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-module")),
         }
     };
+
+    // Transición de escena: al conmutar entre List / Form / Detail /
+    // Dashboard la `scene_key` cambia y el cuerpo entra con fade + un
+    // breve slide-up en vez de saltar de golpe. Estable dentro de la misma
+    // escena → no se re-anima al editar/paginar.
+    let inner = inner.animated_enter_from(
+        erp_scene_key(model),
+        llimphi_theme::motion::SLOW,
+        Affine::translate((0.0, 24.0)),
+    );
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
