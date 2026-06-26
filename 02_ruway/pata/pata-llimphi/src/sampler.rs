@@ -302,6 +302,41 @@ mod tests {
     }
 
     #[test]
+    fn parse_sink_inputs_lee_indice_volumen_mute_y_app() {
+        let s = "\
+Sink Input #42
+\tDriver: PipeWire
+\tMute: no
+\tVolume: front-left: 30000 / 45% / -6.0 dB,   front-right: 30000 / 45% / -6.0 dB
+\tProperties:
+\t\tmedia.name = \"Playback\"
+\t\tapplication.name = \"Firefox\"
+Sink Input #57
+\tMute: yes
+\tVolume: front-left: 65536 / 100% / 0.0 dB
+\tProperties:
+\t\tapplication.process.binary = \"mpv\"";
+        let inputs = super::parse_sink_inputs(s);
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].index, 42);
+        assert_eq!(inputs[0].app, "Firefox"); // application.name gana a media.name
+        assert!((inputs[0].volume - 0.45).abs() < 1e-6);
+        assert!(!inputs[0].muted);
+        assert_eq!(inputs[1].index, 57);
+        assert_eq!(inputs[1].app, "mpv"); // respaldo al binario
+        assert!(inputs[1].muted);
+    }
+
+    #[test]
+    fn parse_sink_inputs_vacio_y_sin_app() {
+        assert!(super::parse_sink_inputs("").is_empty());
+        // Sin Properties: cae al nombre por índice.
+        let s = "Sink Input #3\n\tMute: no\n\tVolume: front-left: 0 / 50% / x";
+        let inputs = super::parse_sink_inputs(s);
+        assert_eq!(inputs[0].app, "App #3");
+    }
+
+    #[test]
     fn sol_en_equinoccio_de_marzo_esta_cerca_de_aries_0() {
         // 2025-03-20 ~09:01 UTC fue el equinoccio: el Sol cruza 0° (Aries).
         // timestamp del 2025-03-20 09:01:00 UTC = 1742461260.
@@ -626,6 +661,106 @@ pub fn toggle_mute() {
     crate::spawn_cmd(
         "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle || pactl set-sink-mute @DEFAULT_SINK@ toggle",
     );
+}
+
+// --- Mezclador por aplicación (sink-inputs) -----------------------------------
+//
+// El "vapucontrol" nativo: una corriente de audio por aplicación (sink-input en
+// jerga PulseAudio/PipeWire). Lo lee `pactl list sink-inputs` (lo provee también
+// pipewire-pulse), y se ajusta con `set-sink-input-volume`/`set-sink-input-mute`
+// por índice. wpctl no enumera por app con la misma comodidad, así que acá pactl
+// es la herramienta correcta.
+
+/// Una corriente de audio de una aplicación (sink-input), para el mezclador.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SinkInput {
+    /// Índice del sink-input (lo usa `set-sink-input-volume`).
+    pub index: u32,
+    /// Nombre legible de la app (`application.name`, o media/binario de respaldo).
+    pub app: String,
+    /// Volumen de la corriente `0..1`.
+    pub volume: f32,
+    /// `true` si la corriente está silenciada.
+    pub muted: bool,
+}
+
+/// Parsea la salida de `pactl list sink-inputs` en una lista de [`SinkInput`].
+/// Cada bloque arranca con `Sink Input #N`; dentro tomamos `Mute:`, el primer
+/// `Volume:` con porcentaje, y el nombre de app de las `Properties`
+/// (`application.name`, con respaldo a `media.name`/`application.process.binary`).
+pub fn parse_sink_inputs(out: &str) -> Vec<SinkInput> {
+    let mut inputs = Vec::new();
+    let mut cur: Option<(u32, Option<f32>, bool, Option<String>, Option<String>)> = None;
+    // (index, volume, muted, app_name, media_name)
+
+    fn flush(
+        inputs: &mut Vec<SinkInput>,
+        cur: Option<(u32, Option<f32>, bool, Option<String>, Option<String>)>,
+    ) {
+        if let Some((index, vol, muted, app, media)) = cur {
+            inputs.push(SinkInput {
+                index,
+                app: app
+                    .or(media)
+                    .unwrap_or_else(|| format!("App #{index}")),
+                volume: vol.unwrap_or(0.0),
+                muted,
+            });
+        }
+    }
+
+    for raw in out.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("Sink Input #") {
+            flush(&mut inputs, cur.take());
+            let index = rest.trim().parse::<u32>().unwrap_or(0);
+            cur = Some((index, None, false, None, None));
+            continue;
+        }
+        let Some(rec) = cur.as_mut() else { continue };
+        if let Some(m) = line.strip_prefix("Mute:") {
+            rec.2 = m.trim().eq_ignore_ascii_case("yes");
+        } else if line.starts_with("Volume:") && rec.1.is_none() {
+            rec.1 = parse_pactl_pct(line);
+        } else if let Some(v) = prop_value(line, "application.name") {
+            rec.3 = Some(v);
+        } else if rec.3.is_none() {
+            if let Some(v) = prop_value(line, "media.name")
+                .or_else(|| prop_value(line, "application.process.binary"))
+            {
+                rec.4 = Some(v);
+            }
+        }
+    }
+    flush(&mut inputs, cur.take());
+    inputs
+}
+
+/// Extrae el valor de una propiedad `clave = "valor"` de una línea de
+/// `Properties`. `None` si la línea no es esa propiedad.
+fn prop_value(line: &str, key: &str) -> Option<String> {
+    let rest = line.strip_prefix(key)?.trim_start();
+    let rest = rest.strip_prefix('=')?.trim();
+    Some(rest.trim_matches('"').to_string())
+}
+
+/// Lee las corrientes de audio por aplicación. Vacío si pactl no está.
+pub fn sample_sink_inputs() -> Vec<SinkInput> {
+    run("pactl", &["list", "sink-inputs"])
+        .map(|o| parse_sink_inputs(&o))
+        .unwrap_or_default()
+}
+
+/// Fija el volumen de un sink-input a `frac` (`0..1`). Desacoplado, como
+/// [`set_volume`].
+pub fn set_sink_input_volume(index: u32, frac: f32) {
+    let pct = (frac.clamp(0.0, 1.0) * 100.0 + 0.5) as u32;
+    crate::spawn_cmd(&format!("pactl set-sink-input-volume {index} {pct}%"));
+}
+
+/// Togglea el mute de un sink-input. Desacoplado.
+pub fn toggle_sink_input_mute(index: u32) {
+    crate::spawn_cmd(&format!("pactl set-sink-input-mute {index} toggle"));
 }
 
 // --- Escritorios virtuales (workspace switcher) -------------------------------

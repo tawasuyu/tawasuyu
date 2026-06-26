@@ -599,6 +599,10 @@ impl LayerApp {
                 self.network_now = Some(n);
             }
         }
+        // Mezclador: refresca mientras su popup está abierto (sliders en vivo).
+        if self.menu_open && self.menu_kind == MenuKind::Volume {
+            self.sink_inputs = crate::sampler::sample_sink_inputs();
+        }
         // `WidgetCtx` ya no es `Copy` (lleva el título de la ventana enfocada),
         // así que los widgets tickean contra `&self.ctx` (recién asignado).
         for sw in &mut self.surfaces {
@@ -888,6 +892,18 @@ impl LayerApp {
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
                     self.panels[idx].width as f32,
                 ),
+                MenuKind::Volume => render::volume_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    &self.ctx,
+                    &self.sink_inputs,
+                    self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
+                ),
             }
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
             render::shuma_open_view(
@@ -1074,7 +1090,17 @@ impl LayerApp {
             }
             Msg::VolumeMute => crate::sampler::toggle_mute(),
             Msg::VolumeSet(f) => crate::sampler::set_volume(f),
-            Msg::VolumePanel => crate::spawn_cmd("pavucontrol || pavucontrol-qt"),
+            Msg::VolumePanel => {
+                // Antes lanzaba pavucontrol externo; ahora el mezclador nativo.
+                if !(self.menu_open && self.menu_kind == MenuKind::Volume) {
+                    self.sink_inputs = crate::sampler::sample_sink_inputs();
+                }
+                self.toggle_menu(MenuKind::Volume);
+            }
+            Msg::SinkInputVolume(index, frac) => {
+                crate::sampler::set_sink_input_volume(index, frac);
+            }
+            Msg::SinkInputMute(index) => crate::sampler::toggle_sink_input_mute(index),
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy < 0.0);

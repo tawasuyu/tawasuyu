@@ -71,8 +71,7 @@ kind = "clipboard"          # preview del texto copiado (vía wl-paste)
 exec = "cliphist list | wofi --dmenu | cliphist decode | wl-copy"
 
 [[surfaces.end]]
-kind = "volume"
-exec = "pavucontrol"   # click en el medidor → mezclador de audio
+kind = "volume"        # click → mezclador nativo (sink + corrientes por app); rueda ajusta
 
 [[surfaces.end]]
 kind = "brightness"

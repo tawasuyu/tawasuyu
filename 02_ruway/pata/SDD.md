@@ -701,3 +701,20 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     perfil guardado depende del agente de secretos del sistema (nm-applet/polkit).
     Bluetooth con selector de dispositivos sigue siendo el gemelo natural (hoy sólo
     el toggle rfkill del Control panel).
+
+- **Fase 16 — cierre de escritorio** (2026-06-26): los huecos que faltaban para
+  que pata sea un DE completo, en bloques.
+  - **Mezclador de volumen por app (el "vapucontrol" nativo) ✅** — la ventanita
+    de volumen deja de ser sólo el slider del sink por defecto: debajo lista una
+    fila por **corriente de audio de aplicación** (sink-input) con su nombre,
+    slider horizontal y botón mute. La data la lee `sampler::sample_sink_inputs`
+    (`pactl list sink-inputs`, que también provee pipewire-pulse), parseada por
+    `parse_sink_inputs` (índice + `Mute:` + primer `Volume:` % + `application.name`
+    con respaldo a media/binario) —función pura, 2 tests—; se ajusta con
+    `set-sink-input-volume`/`-mute` por índice. Se muestrea al abrir el popup y
+    cada tick mientras está abierto (sliders en vivo). El **click izquierdo del
+    medidor de volumen** ahora abre este popup nativo en **ambos** backends (antes
+    el layer-shell lanzaba `pavucontrol` externo y el winit dependía del `exec`);
+    se quitó el `exec = "pavucontrol"` del asset. En layer-shell es un
+    `MenuKind::Volume` (la barra crece bajo el medidor); en winit, el
+    `volume_overlay` de siempre, ahora con la sección de apps.

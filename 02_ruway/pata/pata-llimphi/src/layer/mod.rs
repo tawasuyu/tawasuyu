@@ -198,6 +198,8 @@ pub(super) enum MenuKind {
     Control,
     /// El applet de red (lista de redes Wi-Fi para conectarse).
     Network,
+    /// El mezclador de volumen (sink por defecto + corrientes por app).
+    Volume,
 }
 
 /// El cliente Wayland del backend layer-shell.
@@ -237,6 +239,8 @@ pub(super) struct LayerApp {
     pub(super) network: Option<crate::network::NetworkHandle>,
     /// Última lectura de la red.
     pub(super) network_now: Option<crate::network::NetState>,
+    /// Corrientes de audio por app (sink-inputs) para el mezclador de volumen.
+    pub(super) sink_inputs: Vec<crate::sampler::SinkInput>,
     /// Visualizador de audio (cava) en su propio hilo.
     pub(super) cava: Option<crate::cava::CavaHandle>,
     /// Último cuadro del visualizador.
@@ -543,6 +547,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         weather_now: None,
         network,
         network_now: None,
+        sink_inputs: Vec::new(),
         cava,
         cava_frame: Vec::new(),
         theme,

@@ -1458,6 +1458,60 @@ pub fn network_menu_view(
     .children(hijos)
 }
 
+/// El **mezclador de volumen** (sink por defecto + corrientes por app) para el
+/// **layer-shell**, anclado bajo el medidor de volumen. Reemplaza el lanzamiento
+/// externo de `pavucontrol` por un popup nativo. Espejo de [`control_menu_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn volume_menu_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    ctx: &pata_core::widget::WidgetCtx,
+    sink_inputs: &[crate::sampler::SinkInput],
+    anchor_x: f32,
+    avail_w: f32,
+) -> View<Msg> {
+    const VOL_PANEL_W: f32 = 320.0;
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(bar_px) },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
+
+    let left = (anchor_x - VOL_PANEL_W * 0.5).clamp(8.0, (avail_w - VOL_PANEL_W - 8.0).max(8.0));
+    let panel_abs = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect { left: length(left), top: length(0.0_f32), right: auto(), bottom: auto() },
+        size: Size { width: length(VOL_PANEL_W), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![panels::volume_panel(ctx, sink_inputs, theme)]);
+
+    let mut body_style = Style {
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::VolumePanel)
+        .children(vec![panel_abs]);
+
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
 // ============================================================
 // Barra layer-shell
 // ============================================================

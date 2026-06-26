@@ -293,7 +293,11 @@ pub fn ram_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
 }
 
 /// La ventanita de volumen: slider vertical + botón mute + porcentaje.
-pub fn volume_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
+pub fn volume_panel(
+    ctx: &WidgetCtx,
+    sink_inputs: &[crate::sampler::SinkInput],
+    theme: &Theme,
+) -> View<Msg> {
     let header = header_panel("Volumen — sink por defecto", theme);
     let stops = meter_stops("volume");
     let slider = slider_vertical(ctx.volume, theme, stops, Msg::VolumeSet);
@@ -339,12 +343,98 @@ pub fn volume_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![slider, valor]);
-    panel_box(vec![header, row], theme)
+
+    // Mezclador por aplicación (el "vapucontrol" nativo): una fila por corriente.
+    let mut hijos = vec![header, row];
+    if !sink_inputs.is_empty() {
+        hijos.push(header_panel("Aplicaciones", theme));
+        for si in sink_inputs {
+            hijos.push(mixer_row(si, theme));
+        }
+    }
+    panel_box(hijos, theme)
 }
 
-/// Overlay (winit) de la ventanita de volumen.
-pub fn volume_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
-    overlay_con_scrim(volume_panel(ctx, theme), Msg::VolumePanel, bar_h, theme)
+/// Una fila del mezclador: nombre de la app + slider horizontal + botón mute.
+fn mixer_row(si: &crate::sampler::SinkInput, theme: &Theme) -> View<Msg> {
+    let index = si.index;
+    let nombre = View::new(Style {
+        size: Size { width: length(96.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(recortar(&si.app, 14), 12.0, theme.fg_text);
+
+    // Slider horizontal clickeable (x → fracción).
+    let frac = if si.muted { 0.0 } else { si.volume.clamp(0.0, 1.0) };
+    let relleno = View::new(Style {
+        size: Size { width: percent(frac), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.accent)
+    .radius(4.0);
+    let pista = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .radius(4.0)
+    .on_click_at(move |x, _y, w, _h| {
+        (w > 0.0).then(|| Msg::SinkInputVolume(index, (x / w).clamp(0.0, 1.0)))
+    })
+    .children(vec![relleno]);
+    let pista_wrap = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![pista]);
+
+    let mute = View::new(Style {
+        size: Size { width: length(26.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .radius(5.0)
+    .hover_fill(theme.bg_button_hover)
+    .on_click(Msg::SinkInputMute(index))
+    .text(
+        if si.muted { "✕".to_string() } else { "♪".to_string() },
+        13.0,
+        if si.muted { theme.fg_muted } else { theme.fg_text },
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![nombre, pista_wrap, mute])
+}
+
+/// Recorta `s` a `max` caracteres con elipsis.
+fn recortar(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+    t.push('…');
+    t
+}
+
+/// Overlay (winit) de la ventanita de volumen (con mezclador por app).
+pub fn volume_overlay(
+    ctx: &WidgetCtx,
+    sink_inputs: &[crate::sampler::SinkInput],
+    bar_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    overlay_con_scrim(volume_panel(ctx, sink_inputs, theme), Msg::VolumePanel, bar_h, theme)
 }
 
 /// La ventanita de brillo: slider vertical + porcentaje.

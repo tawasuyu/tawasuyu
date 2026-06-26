@@ -163,6 +163,11 @@ pub enum Msg {
     VolumeSet(f32),
     /// Ajustar el brillo a una fracción exacta `0..1` desde la ventanita.
     BrightnessSet(f32),
+    /// Ajustar el volumen del sink-input (corriente de una app) `index` a la
+    /// fracción `0..1` desde el mezclador. El medidor refleja en el próximo tick.
+    SinkInputVolume(u32, f32),
+    /// Togglear el mute del sink-input `index` desde el mezclador.
+    SinkInputMute(u32),
     /// Ajusta un campo del borrador de fecha/hora `(campo 0..=4, delta)`:
     /// 0=año 1=mes 2=día 3=hora 4=minuto.
     ClockAdjust(u8, i32),
@@ -755,6 +760,9 @@ pub struct Model {
     pub ram_open: bool,
     /// `true` cuando la ventanita de volumen está desplegada.
     pub volume_open: bool,
+    /// Corrientes de audio por app (sink-inputs) para el mezclador. Se muestrean
+    /// al abrir la ventanita de volumen y cada tick mientras está abierta.
+    pub sink_inputs: Vec<sampler::SinkInput>,
     /// `true` cuando la ventanita de brillo está desplegada.
     pub brightness_open: bool,
     /// Último snapshot del sistema — cacheado para alimentar las ventanitas
@@ -1078,6 +1086,7 @@ impl App for PataApp {
             cpu_open: false,
             ram_open: false,
             volume_open: false,
+            sink_inputs: Vec::new(),
             brightness_open: false,
             last_ctx: pata_core::widget::WidgetCtx::default(),
             tray,
@@ -1195,6 +1204,11 @@ impl App for PataApp {
                     if let Some(n) = h.latest() {
                         model.network_now = Some(n);
                     }
+                }
+                // Mezclador por app: refresca mientras el popup de volumen está
+                // abierto (los sliders siguen al sistema en vivo).
+                if model.volume_open {
+                    model.sink_inputs = sampler::sample_sink_inputs();
                 }
                 // Lista de ventanas para el task manager: sólo si la config la
                 // declara (no molestar al WM con un subproceso por tick de balde).
@@ -1453,6 +1467,7 @@ impl App for PataApp {
             Msg::VolumePanel => {
                 model.volume_open = !model.volume_open;
                 if model.volume_open {
+                    model.sink_inputs = sampler::sample_sink_inputs();
                     model.cpu_open = false;
                     model.ram_open = false;
                     model.brightness_open = false;
@@ -1460,6 +1475,8 @@ impl App for PataApp {
                     model.clock_open = false;
                 }
             }
+            Msg::SinkInputVolume(index, frac) => sampler::set_sink_input_volume(index, frac),
+            Msg::SinkInputMute(index) => sampler::toggle_sink_input_mute(index),
             Msg::BrightnessPanel => {
                 model.brightness_open = !model.brightness_open;
                 if model.brightness_open {
@@ -1764,7 +1781,12 @@ impl App for PataApp {
         }
         if model.volume_open {
             let bar_h = bar_thickness_for(&model.cfg, "volume");
-            return Some(render::volume_overlay(&model.last_ctx, bar_h, &model.theme));
+            return Some(render::volume_overlay(
+                &model.last_ctx,
+                &model.sink_inputs,
+                bar_h,
+                &model.theme,
+            ));
         }
         if model.brightness_open {
             let bar_h = bar_thickness_for(&model.cfg, "brightness");

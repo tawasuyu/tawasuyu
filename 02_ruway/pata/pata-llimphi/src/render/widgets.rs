@@ -150,14 +150,13 @@ pub(super) fn interaccion_widget(v: View<Msg>, kind: &str, exec: Option<&str>) -
 }
 
 /// Volumen interactivo: rueda sube/baja, click abre panel, derecho mutea.
-fn volume_interactivo(v: View<Msg>, exec: Option<&str>) -> View<Msg> {
-    let v = v
-        .on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::VolumeWheel(dy)))
-        .on_right_click(Msg::VolumeMute);
-    match exec {
-        Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
-        None => v.on_click(Msg::VolumePanel),
-    }
+fn volume_interactivo(v: View<Msg>, _exec: Option<&str>) -> View<Msg> {
+    // Click izquierdo → mezclador nativo (sink por defecto + corrientes por app);
+    // ya no delega a un `exec` externo (pavucontrol), que el popup nativo
+    // reemplaza. Rueda ajusta el volumen; click derecho togglea mute.
+    v.on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::VolumeWheel(dy)))
+        .on_right_click(Msg::VolumeMute)
+        .on_click(Msg::VolumePanel)
 }
 
 /// Brillo interactivo: rueda sube/baja, click abre panel.
