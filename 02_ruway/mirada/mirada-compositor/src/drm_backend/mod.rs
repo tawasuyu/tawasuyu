@@ -142,6 +142,22 @@ struct OutputCtx {
     pending_flip: bool,
 }
 
+/// Una transición de cubo de Win+Tab en curso. Las dos caras se capturan a
+/// textura **una vez** al arrancar (los escritorios saliente y entrante); cada
+/// cuadro sólo recompone el cubo girado desde ellas — ver [`crate::cube`].
+struct CubeAnim {
+    /// Milisegundos (relativos a `DrmState::start`) en que arrancó.
+    start_ms: u32,
+    /// Dirección del giro: `+1` vecino derecho, `-1` izquierdo.
+    dir: f32,
+    /// Índice de la salida donde corre (sólo esa pinta el cubo).
+    output_idx: usize,
+    /// El escritorio del que salís, como textura (cara frontal a `phi=0`).
+    current: smithay::backend::renderer::gles::GlesTexture,
+    /// El escritorio al que entrás (cara frontal a `phi=π/2`).
+    next: smithay::backend::renderer::gles::GlesTexture,
+}
+
 render_elements! {
     /// Lo que el backend DRM compone en un cuadro: superficies de cliente,
     /// rectángulos de color sólido (cursor, marcos) y etiquetas de texto
@@ -783,6 +799,11 @@ struct DrmState {
     /// `None` = sin transición. El signo: +1 desliza desde la derecha (fuiste a
     /// un escritorio mayor), -1 desde la izquierda.
     ws_slide: Option<(u32, f32)>,
+    /// Transición de **cubo** en curso (modo `Cube`): `None` = sin transición.
+    /// Guarda los dos escritorios ya capturados a textura (caras del cubo), la
+    /// dirección y la salida donde corre. Lo arranca [`Self::start_cube`] al
+    /// detectar el cambio de escritorio y lo pinta [`Self::emit_cube`].
+    cube: Option<CubeAnim>,
     // El wallpaper en video es POR SALIDA: su worker/frame viven en cada
     // `OutputCtx` (ver `video_wp`/`video_frame`/`video_dirty` allí).
     /// **Wallpaper de marca animado** (el fondo por defecto vivo): último ms en
@@ -1477,6 +1498,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         last_focused_output: 0,
         shadows_on: std::env::var_os("MIRADA_SHADOW").is_some(),
         ws_slide: None,
+        cube: None,
         anim_default_ms: 0,
         anim_default_dirty: false,
         dpms_off: false,

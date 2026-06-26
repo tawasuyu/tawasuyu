@@ -206,12 +206,19 @@ impl DrmState {
                 // Sólo el modo Hyprland usa el slide horizontal. En Prezi la
                 // transición es el vuelo de cámara de la vista espacial (no
                 // queremos las dos animaciones peleando); en Direct, salto seco.
-                if foc == self.last_focused_output
-                    && self.app.config_workspace_switch_mode()
-                        == mirada_brain::WorkspaceSwitchMode::Hyprland
-                {
+                let modo = self.app.config_workspace_switch_mode();
+                if foc == self.last_focused_output {
                     let dir = if active > self.last_active_ws { 1.0 } else { -1.0 };
-                    self.ws_slide = Some((self.start.elapsed().as_millis() as u32, dir));
+                    match modo {
+                        mirada_brain::WorkspaceSwitchMode::Hyprland => {
+                            self.ws_slide = Some((self.start.elapsed().as_millis() as u32, dir));
+                        }
+                        mirada_brain::WorkspaceSwitchMode::Cube => {
+                            // Captura los dos escritorios a textura y arranca el giro.
+                            self.start_cube(self.last_active_ws, active, dir, foc);
+                        }
+                        _ => {}
+                    }
                 }
                 self.last_active_ws = active;
             }
@@ -220,6 +227,13 @@ impl DrmState {
         if let Some((start_ms, _)) = self.ws_slide {
             if self.start.elapsed().as_millis() as u32 >= start_ms + self.app.config_slide_ms() {
                 self.ws_slide = None;
+            }
+        }
+        // El cubo termina como el slide: al cumplirse `slide_ms`, suelta las
+        // texturas de las caras y vuelve a la escena normal.
+        if let Some(c) = &self.cube {
+            if self.start.elapsed().as_millis() as u32 >= c.start_ms + self.app.config_slide_ms() {
+                self.cube = None;
             }
         }
 
@@ -302,6 +316,11 @@ impl DrmState {
         // para que las rampas FLUYAN aunque el cliente ya no mande frames nuevos
         // (el damage de `DrmCompositor` no ve el cambio de alfa/color por sí solo).
         if self.open_anim_active() || self.focus_anim_active() {
+            crate::screencopy::danar_todo(&mut self.app);
+        }
+        // El cubo gira por tiempo (las caras son texturas fijas): forzá repintar
+        // cada tick mientras dure, si no el damage no ve el giro y se congela.
+        if self.cube.is_some() {
             crate::screencopy::danar_todo(&mut self.app);
         }
 

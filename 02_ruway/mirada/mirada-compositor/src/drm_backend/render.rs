@@ -2101,6 +2101,131 @@ impl DrmState {
         }
     }
 
+    /// Captura las ventanas del escritorio `ws` a una **textura** `w×h` (una cara
+    /// del cubo). Reusa la extracción de texturas del Prezi: la geometría de cada
+    /// escritorio (incluido el NO activo) viene de [`overview_data`], y la
+    /// superficie viva de cada ventana se importa y se dibuja a su rect (escalado
+    /// del work-rect del Cerebro al tamaño de la cara). Fondo oscuro donde no hay
+    /// ventana (el wallpaper-en-cara queda como refinamiento). `None` si la GPU
+    /// falla o no hay datos (Cerebro enlazado).
+    fn capture_ws_texture(&mut self, ws: usize, w: i32, h: i32) -> Option<GlesTexture> {
+        use smithay::backend::renderer::utils::{import_surface_tree, with_renderer_surface_state};
+        use smithay::backend::renderer::{Bind, Color32F, Frame as _, Offscreen, Renderer, Texture};
+        use smithay::utils::{Buffer as Buf, Physical as Phys, Rectangle as SRect, Size as SSize};
+
+        if w <= 0 || h <= 0 {
+            return None;
+        }
+        let data = self.app.overview_data()?;
+        let layout = data.layouts.get(ws)?.clone();
+        let work = data.work;
+        let (ww, wh) = (work.w.max(1) as f32, work.h.max(1) as f32);
+        let (sx, sy) = (w as f32 / ww, h as f32 / wh);
+        let ctx = self.renderer.context_id();
+        // (textura, rect destino escalado a la cara).
+        let mut draws: Vec<(GlesTexture, (i32, i32, i32, i32))> = Vec::new();
+        for (id, wr) in &layout {
+            let surface = self
+                .app
+                .windows
+                .iter()
+                .find(|x| x.id == *id)
+                .filter(|x| crate::buffer_render_sano(&x.surface))
+                .map(|x| x.surface.clone());
+            let tex = surface.and_then(|s| {
+                let _ = import_surface_tree(&mut self.renderer, &s);
+                with_renderer_surface_state(&s, |st| st.texture(ctx.clone()).cloned()).flatten()
+            });
+            if let Some(t) = tex {
+                let dx = ((wr.x - work.x) as f32 * sx).round() as i32;
+                let dy = ((wr.y - work.y) as f32 * sy).round() as i32;
+                let dw = ((wr.w as f32 * sx).round() as i32).max(1);
+                let dh = ((wr.h as f32 * sy).round() as i32).max(1);
+                draws.push((t, (dx, dy, dw, dh)));
+            }
+        }
+        let mut off =
+            Offscreen::<GlesTexture>::create_buffer(&mut self.renderer, Fourcc::Abgr8888, SSize::<i32, Buf>::from((w, h)))
+                .ok()?;
+        {
+            let mut target = self.renderer.bind(&mut off).ok()?;
+            let fis = SSize::<i32, Phys>::from((w, h));
+            let dmg = [SRect::<i32, Phys>::from_size(fis)];
+            let mut frame = self.renderer.render(&mut target, fis, Transform::Normal).ok()?;
+            frame.clear(Color32F::from([0.05, 0.05, 0.07, 1.0]), &dmg).ok()?;
+            for (t, (dx, dy, dw, dh)) in &draws {
+                let src = SRect::from_size(t.size().to_f64());
+                let dst = SRect::<i32, Phys>::new((*dx, *dy).into(), (*dw, *dh).into());
+                frame
+                    .render_texture_from_to(t, src, dst, &dmg, &[], Transform::Normal, 1.0, None, &[])
+                    .ok()?;
+            }
+            let _ = frame.finish().ok()?;
+        }
+        Some(off)
+    }
+
+    /// Arranca la transición de cubo: captura los dos escritorios (`old`→`new`) a
+    /// textura y guarda el estado. `dir` = +1 vecino derecho, -1 izquierdo. Si la
+    /// captura falla, no arranca (el switch queda seco, sin romper nada).
+    pub(super) fn start_cube(&mut self, old: usize, new: usize, dir: f32, output_idx: usize) {
+        let rect = self.outputs.get(output_idx).map(|o| o.rect).unwrap_or(self.outputs[Self::PRIMARY].rect);
+        let (w, h) = (rect.w, rect.h);
+        let Some(current) = self.capture_ws_texture(old, w, h) else { return };
+        let Some(next) = self.capture_ws_texture(new, w, h) else { return };
+        self.cube = Some(CubeAnim {
+            start_ms: self.start.elapsed().as_millis() as u32,
+            dir,
+            output_idx,
+            current,
+            next,
+        });
+    }
+
+    /// Pinta el cubo del cuadro actual: recompone las dos caras giradas a un
+    /// offscreen y lo empuja como un elemento a pantalla completa. Devuelve `true`
+    /// si la transición sigue viva (el llamante omite la escena normal).
+    fn emit_cube(&mut self, rect: Rect, into: &mut Vec<Frame>) -> bool {
+        let Some(c) = self.cube.as_ref() else { return false };
+        let dur = self.app.config_slide_ms().max(1);
+        let now = self.start.elapsed().as_millis() as u32;
+        let t = (now.saturating_sub(c.start_ms) as f32 / dur as f32).clamp(0.0, 1.0);
+        // Ease-out cúbico, como el slide.
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let phi = crate::cube::angle(eased);
+        let (dir, cur, nxt) = (c.dir, c.current.clone(), c.next.clone());
+        let pix = crate::screencopy::render_offscreen_drawing(
+            &mut self.renderer,
+            (rect.w, rect.h),
+            smithay::backend::renderer::Color32F::from([0.0, 0.0, 0.0, 1.0]),
+            |frame| crate::cube::draw_cube(frame, rect.w, rect.h, &cur, &nxt, phi, dir, crate::cube::STRIPS),
+        );
+        if let Some(pix) = pix {
+            // `render_offscreen_drawing` lee de vuelta en Xrgb8888; el buffer de
+            // memoria se interpreta con el MISMO Fourcc para no permutar canales.
+            let buf = MemoryRenderBuffer::from_slice(
+                &pix,
+                Fourcc::Xrgb8888,
+                (rect.w, rect.h),
+                1,
+                Transform::Normal,
+                None,
+            );
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                (rect.x as f64, rect.y as f64),
+                &buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                into.push(Frame::Text(el));
+            }
+        }
+        true
+    }
+
     /// Render unificado de una salida. Cada feature decide si pertenece o
     /// no a esta salida (gates por dueño) — el cursor en la del puntero,
     /// HUD/layer-shell/reveal-band en primaria, menú y zonas en la salida
@@ -2113,11 +2238,21 @@ impl DrmState {
         let is_primary = idx == Self::PRIMARY;
         let owns_menu = self.menu_output_idx == Some(idx);
 
+        // ¿Esta salida tiene una transición de cubo en curso? Si sí, el cubo
+        // REEMPLAZA la escena (sólo cursor encima); las ventanas/wallpaper se
+        // omiten porque las dos caras YA las contienen.
+        let cube_here = self.cube.as_ref().map_or(false, |c| c.output_idx == idx);
+
         let elements: Vec<Frame> = {
             let mut out: Vec<Frame> = Vec::new();
 
             // 1. Cursor (si el puntero cae sobre esta salida).
             self.emit_cursor(rect, &mut out);
+
+            if cube_here {
+                self.emit_cube(rect, &mut out);
+                out
+            } else {
 
             // 2. HUD del preset + switcher de ventanas + vista espacial (Prezi),
             //    todos en la primaria, centrados.
@@ -2163,6 +2298,7 @@ impl DrmState {
             self.emit_wallpaper(idx, &mut out);
 
             out
+            }
         };
 
         let ctx = &mut self.outputs[idx];
