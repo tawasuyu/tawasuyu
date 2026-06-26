@@ -1,0 +1,23 @@
+# Plugin reactor de ejemplo: registra un atajo y lanza una terminal.
+# `[workspace]` propio → fuera del check raíz; se compila a wasm32 con
+# `scripts/build-mirada-plugins.sh`.
+[package]
+name = "mirada-plugin-example-reactor"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin reactor de ejemplo: Super+a lanza una terminal (CAP_KEYS + CAP_SPAWN)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Con `reactor`: expone las importaciones del host y el `Ctx`.
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk", features = ["reactor"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

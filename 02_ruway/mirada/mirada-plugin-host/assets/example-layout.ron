@@ -1,0 +1,9 @@
+// Manifest del plugin de layout de ejemplo (dwindle).
+// Las capacidades aquí son una DECLARACIÓN; el host las verifica contra las
+// importaciones reales del .wasm al cargar (fail-closed).
+(
+    wasm: "example-layout.wasm",
+    kind: Layout,
+    caps: ["layout"],
+    priority: 10,
+)

@@ -1,0 +1,8 @@
+// Manifest del plugin reactor de ejemplo (Super+a → terminal).
+// Pide CAP_KEYS y CAP_SPAWN; si faltara alguna, el .wasm ni instancia.
+(
+    wasm: "example-reactor.wasm",
+    kind: Reactor,
+    caps: ["keys", "spawn"],
+    priority: 0,
+)

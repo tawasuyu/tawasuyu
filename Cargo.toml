@@ -378,6 +378,8 @@ members = [
     "02_ruway/mirada/mirada-link",
     "02_ruway/mirada/mirada-portal",
     "02_ruway/mirada/mirada-protocol",
+    "02_ruway/mirada/mirada-plugin-host",
+    "02_ruway/mirada/mirada-plugin-sdk",
     "02_ruway/mirada/mirada-wallpaper",
     "02_ruway/pata/pata-core",
     "02_ruway/pata/pata-config",

@@ -1,0 +1,27 @@
+[package]
+name = "mirada-plugin-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — SDK guest para plugins WASM: ABI de memoria, traits LayoutPlugin/ReactorPlugin y un Ctx con capacidades gateadas. no_std al compilar a wasm32; en host compila como std (sin las importaciones del host) para entrar en el smoke test del workspace."
+
+[dependencies]
+# Sólo los enums del protocolo, no_std (sin el framing de cable, que es std).
+mirada-protocol = { path = "../mirada-protocol", default-features = false }
+mirada-layout = { path = "../mirada-layout", features = ["serde"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+# El heap del guest sólo existe en el binario WASM. En host usa el allocator de
+# std, así que esta dependencia no se arrastra fuera de wasm32.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+linked_list_allocator = "0.10"
+
+[features]
+default = []
+# Expone las importaciones del host (`mirada_host::host_emit_*`) y el `Ctx`.
+# Un plugin de LAYOUT NO la activa: así no enlaza ninguna importación y su
+# frontera es de cero superficie. Un plugin REACTOR sí la activa.
+reactor = []

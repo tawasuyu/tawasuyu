@@ -1,0 +1,30 @@
+[package]
+name = "mirada-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — host de plugins WASM: un Cerebro que embebe mirada-brain::Desktop y deja que módulos wasmi (sandboxeados, con capacidades gateadas por importación) refinen el layout y reaccionen a eventos."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mirada-plugin-host"
+path = "src/main.rs"
+
+[dependencies]
+mirada-protocol = { path = "../mirada-protocol" }
+mirada-link = { path = "../mirada-link" }
+mirada-brain = { path = "../mirada-brain" }
+mirada-layout = { path = "../mirada-layout", features = ["serde"] }
+wasmi = { workspace = true }
+postcard = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+mirada-protocol = { path = "../mirada-protocol" }
+mirada-brain = { path = "../mirada-brain" }
+mirada-link = { path = "../mirada-link" }

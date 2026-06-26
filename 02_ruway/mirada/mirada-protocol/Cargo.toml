@@ -11,5 +11,17 @@ description = "mirada — contrato Cerebro↔Cuerpo del compositor: comandos de 
 # `serde` activa los `derive` de los tipos de layout — este crate los
 # (de)serializa con postcard.
 mirada-layout = { path = "../mirada-layout", features = ["serde"] }
-serde = { workspace = true }
-postcard = { workspace = true }
+# Directo (no `workspace = true`) y `default-features = false` para que el crate
+# compile `no_std`: un plugin WASM (mirada-plugin-sdk) reusa estos enums sin
+# arrastrar `std`. Los consumidores Linux activan la feature `framing` (default).
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+# Sólo lo necesita el framing de cable (read_frame/write_frame), que es std.
+postcard = { workspace = true, optional = true }
+
+[features]
+default = ["framing"]
+# El marco de cable con prefijo de longitud usa `std::io`. Apagar la feature
+# (—`default-features = false`) deja el crate `no_std`: sólo los enums + serde,
+# que es lo que un plugin WASM guest necesita.
+framing = ["std", "dep:postcard"]
+std = []

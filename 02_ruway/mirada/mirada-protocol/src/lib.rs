@@ -20,10 +20,12 @@
 //! (ver [`write_frame`] / [`read_frame`]).
 
 #![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
-use std::io::{self, Read, Write};
+extern crate alloc;
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
 
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub use mirada_layout::geometry::Rect;
@@ -62,6 +64,22 @@ pub struct WindowPlacement {
     /// diferencia de `suspended` (corte total para una ventana oculta), aquí la
     /// ventana **sigue visible y pintando**, sólo que más lento.
     pub frame_divisor: u32,
+}
+
+/// Lo que el host le pasa a un **plugin de layout** WASM: la lista ordenada de
+/// ventanas teseladas (las que el `Desktop` dejó `visible && !floating &&
+/// !fullscreen && !suspended`) y el área útil de la salida en píxeles. El plugin
+/// devuelve un `Vec<(WindowId, Rect)>` que el host vuelca sobre los `rect` de
+/// esas ventanas — sin tocar foco, visibilidad ni las flotantes/fullscreen.
+///
+/// Vive aquí, en el vocabulario común, para que host y guest lo compartan sin
+/// que ninguno dependa del crate del otro.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TileInput {
+    /// Ventanas teseladas, en el orden en que el `Desktop` las dispondría.
+    pub ids: Vec<WindowId>,
+    /// Área útil donde repartirlas (ya descontadas las franjas reservadas).
+    pub work: Rect,
 }
 
 /// Parámetros de decoración de ventana que el Cerebro fija en el Cuerpo.
@@ -322,7 +340,9 @@ pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 
 /// Escribe `value` como un marco: prefijo `u32` LE con la longitud + el
 /// cuerpo serializado con `postcard`.
-pub fn write_frame<W: Write, T: Serialize>(w: &mut W, value: &T) -> io::Result<()> {
+#[cfg(feature = "framing")]
+pub fn write_frame<W: std::io::Write, T: Serialize>(w: &mut W, value: &T) -> std::io::Result<()> {
+    use std::io;
     let body = postcard::to_stdvec(value)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if body.len() > MAX_FRAME {
@@ -338,7 +358,11 @@ pub fn write_frame<W: Write, T: Serialize>(w: &mut W, value: &T) -> io::Result<(
 
 /// Lee un marco escrito por [`write_frame`]. Devuelve `Ok(None)` en un
 /// EOF limpio (el otro extremo cerró sin datos a medias).
-pub fn read_frame<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<Option<T>> {
+#[cfg(feature = "framing")]
+pub fn read_frame<R: std::io::Read, T: serde::de::DeserializeOwned>(
+    r: &mut R,
+) -> std::io::Result<Option<T>> {
+    use std::io;
     let mut len = [0u8; 4];
     match r.read_exact(&mut len) {
         Ok(()) => {}
