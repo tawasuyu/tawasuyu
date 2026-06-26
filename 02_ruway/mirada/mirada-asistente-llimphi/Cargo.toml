@@ -21,6 +21,10 @@ llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 llimphi-clipboard = { workspace = true }
+llimphi-icons = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
 app-bus = { workspace = true }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 pluma-llm-core = { path = "../../../00_unanchay/pluma/pluma-llm-core" }

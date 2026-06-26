@@ -25,15 +25,21 @@
 use std::borrow::Cow;
 use std::process::Command;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_icons::Icon;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
@@ -80,6 +86,9 @@ antes de ejecutar.";
 /// Cota de tokens de salida — el JSON resultante es chico (típicamente
 /// <100 tokens). Mantenemos margen para `explicacion` algo prolija.
 const MAX_TOKENS_RESPUESTA: u32 = 300;
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 /// Acciones que `mirada-ctl` reconoce — lista blanca contra alucinaciones
 /// del LLM. Si el modelo propone una acción fuera de esta lista, la
@@ -205,6 +214,15 @@ struct Model {
     edit_active: usize,
     /// Animación de aparición del menú de edición.
     edit_anim: Tween<f32>,
+    /// Toasts vivos (confirmaciones / errores de ejecución real).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ `Msg` de expiración.
+    next_toast: u64,
+    /// Hay una cadena de `Msg::Tick` en vuelo (evita rearmar dos). El tick
+    /// fuerza el repaint del shimmer del skeleton mientras se consulta.
+    ticking: bool,
+    /// Tamaño actual de la ventana — para posicionar el stack de toasts.
+    viewport: (f32, f32),
 }
 
 #[derive(Clone)]
@@ -246,6 +264,13 @@ enum Msg {
     EditActivate,
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Tick de animación — fuerza repaint para el shimmer del skeleton
+    /// mientras se consulta. Se auto-rearma sólo mientras `Consultando`.
+    Tick,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
+    /// La ventana cambió de tamaño — re-ubica el stack de toasts.
+    Resize(u32, u32),
 }
 
 // ---------------------------------------------------------------------
@@ -293,6 +318,13 @@ impl App for Asistente {
             menu_anim: Tween::idle(1.0),
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
+            toasts: Vec::new(),
+            next_toast: 0,
+            ticking: false,
+            viewport: {
+                let (w, h) = Self::initial_size();
+                (w as f32, h as f32)
+            },
         }
     }
 
@@ -417,6 +449,16 @@ impl App for Asistente {
                 });
             }
             Msg::EjecucionDone { accion, salida, ok } => {
+                // Una acción real sobre el compositor merece un toast efímero:
+                // feedback visible aunque el operador no esté mirando el panel.
+                let id = m.next_toast;
+                m.next_toast += 1;
+                let toast = if ok {
+                    Toast::success(id, format!("Ejecutado: {accion}"), TOAST_TTL)
+                } else {
+                    Toast::error(id, format!("Falló: {accion}"), TOAST_TTL)
+                };
+                push_toast(&mut m, handle, toast);
                 m.estado = Estado::Ejecutado { accion, salida, ok };
                 m.pregunta.clear();
             }
@@ -481,8 +523,24 @@ impl App for Asistente {
                 m.menu_active = usize::MAX;
                 m.edit_active = usize::MAX;
             }
+            Msg::Tick => {
+                // El thread durmió 50 ms; sólo rearmamos si seguimos consultando.
+                m.ticking = false;
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
+            }
+            Msg::Resize(w, h) => {
+                m.viewport = (w as f32, h as f32);
+            }
         }
+        // Mientras el LLM trabaja, mantené el shimmer del skeleton animado.
+        ensure_tick(&mut m, handle);
         m
+    }
+
+    fn on_resize(_model: &Self::Model, w: u32, h: u32) -> Option<Self::Msg> {
+        Some(Msg::Resize(w, h))
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
@@ -513,15 +571,12 @@ impl App for Asistente {
 
         // El cuerpo varía con el estado.
         let cuerpo: Vec<View<Msg>> = match &model.estado {
-            Estado::Idle => vec![],
-            Estado::Consultando => {
-                vec![row(
-                    20.0,
-                    &rimay_localize::t("asistente-status-pensando"),
-                    14.0,
-                    theme.fg_muted,
-                )]
-            }
+            // Sin pedido en curso: en vez de un hueco vacío, un empty-state
+            // con ejemplos de lo que el operador puede pedir.
+            Estado::Idle => vec![estado_vacio(&theme)],
+            // Mientras el LLM piensa: skeleton con la forma de la propuesta
+            // que viene (comando + explicación), no un spinner ciego.
+            Estado::Consultando => skeleton_pensando(&theme),
             Estado::Propuesta(p) => {
                 // Resumen del comando NO se traduce — es un literal de
                 // shell que el operador puede copiar/pegar tal cual al
@@ -558,8 +613,29 @@ impl App for Asistente {
             }
         };
 
-        let mut hijos = vec![title, sub, banner, input];
-        hijos.extend(cuerpo);
+        // El cuerpo entra con un fade + slide-up suave cada vez que cambia de
+        // estado (la `scene_key` cambia ⇒ se re-dispara la entrada); estable
+        // dentro del mismo estado (p. ej. los ticks del shimmer no reaniman).
+        let cuerpo_escena = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: Dimension::auto(),
+            },
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(10.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(cuerpo)
+        .animated_enter_from(
+            scene_key(&model.estado),
+            motion::SLOW,
+            Affine::translate((0.0, 24.0)),
+        );
+
+        let hijos = vec![title, sub, banner, input, cuerpo_escena];
 
         let panel = View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -603,7 +679,7 @@ impl App for Asistente {
         // El right-click se engancha en la raíz (origen 0,0 → las coords
         // locales que llegan al handler ya son de ventana) y abre el menú de
         // edición sobre el input de la pregunta.
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -613,7 +689,25 @@ impl App for Asistente {
         })
         .fill(theme.bg_app)
         .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-        .children(vec![menubar, centro])
+        .children(vec![menubar, centro]);
+
+        // Overlay de toasts (bottom-right). Click en uno = descartarlo. Los
+        // menús siguen en `view_overlay`; los toasts viven en la vista base
+        // para no competir con el dropdown abierto.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, model.viewport, Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
@@ -939,6 +1033,83 @@ fn ejecutar_mirada_ctl(accion: &str, args: &[String]) -> SalidaCmd {
 // ---------------------------------------------------------------------
 // Helpers de vista
 // ---------------------------------------------------------------------
+
+/// `key` estable de la escena actual (un valor por variante de `Estado`).
+/// Cambia sólo al cambiar de estado → dispara la transición de entrada del
+/// cuerpo; estable durante una misma escena (los ticks del shimmer no la mueven).
+fn scene_key(estado: &Estado) -> u64 {
+    match estado {
+        Estado::Idle => 0,
+        Estado::Consultando => 1,
+        Estado::Propuesta(_) => 2,
+        Estado::Error(_) => 3,
+        Estado::Ejecutado { .. } => 4,
+    }
+}
+
+/// Arranca la cadena de ticks de animación si se está consultando y no hay
+/// una corriendo. Se auto-detiene cuando el estado deja de ser `Consultando`
+/// (ver `Msg::Tick`), así no queda un loop de repaint ocioso.
+fn ensure_tick(m: &mut Model, handle: &Handle<Msg>) {
+    if m.ticking || !matches!(m.estado, Estado::Consultando) {
+        return;
+    }
+    m.ticking = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        Msg::Tick
+    });
+}
+
+/// Empuja un toast al stack y programa su expiración.
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Empty-state para `Idle`: icono apagado + título + ejemplos de pedidos.
+/// Va dentro de una caja de alto fijo porque `empty_view` ocupa el 100 % de
+/// su contenedor y el panel es de alto automático.
+fn estado_vacio(theme: &Theme) -> View<Msg> {
+    let pal = EmptyPalette::from_theme(theme);
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(180.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![empty_view(
+        Icon::Edit,
+        "Pediles algo al escritorio",
+        Some("Escribí en lenguaje natural: «focá la siguiente ventana», «mandá esta al workspace 3», «poné el layout en grid»."),
+        &pal,
+    )])
+}
+
+/// Skeleton con la forma de la propuesta que viene (línea de comando +
+/// explicación) mientras el LLM piensa. Necesita el tick para que el shimmer
+/// corra. Cada línea va en una caja de tamaño fijo con `clip(true)`.
+fn skeleton_pensando(theme: &Theme) -> Vec<View<Msg>> {
+    let pal = SkeletonPalette::from_theme(theme);
+    let linea = |w_frac: f32, h: f32| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: percent(w_frac),
+                height: length(h),
+            },
+            ..Default::default()
+        })
+        .radius(6.0)
+        .clip(true)
+        .children(vec![skeleton_view(&pal)])
+    };
+    vec![linea(1.0, 22.0), linea(0.7, 16.0), linea(0.45, 16.0)]
+}
 
 /// Fila de ancho completo con un texto a la izquierda.
 fn row(height: f32, text: &str, size: f32, color: Color) -> View<Msg> {
