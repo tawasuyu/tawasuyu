@@ -356,7 +356,7 @@ impl DrmState {
                 &w.surface,
                 (x, y),
                 1.0,
-                1.0,
+                w.opacity as f32 / 255.0,
                 Kind::Unspecified,
             ) {
                 into.push(Frame::Window(el));

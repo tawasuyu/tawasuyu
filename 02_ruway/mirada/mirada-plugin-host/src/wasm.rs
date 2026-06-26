@@ -8,7 +8,10 @@ use wasmi::{
 
 use mirada_protocol::{BodyEvent, BrainCommand, Decorations, Rect, TileInput, WindowId};
 
-use crate::caps::{cap_for_import, cap_name, caps_list, CapsPlugin, CAP_DECOR, CAP_KEYS, CAP_SPAWN, CAP_WINDOW_CONTROL};
+use crate::caps::{
+    cap_for_import, cap_name, caps_list, CapsPlugin, CAP_DECOR, CAP_EFFECTS, CAP_KEYS, CAP_SPAWN,
+    CAP_WINDOW_CONTROL,
+};
 use crate::manifest::{PluginKind, ResolvedManifest};
 use crate::trust::{authorize, TrustSet};
 
@@ -267,6 +270,17 @@ fn register_host_fns(linker: &mut Linker<HostCtx>, granted: CapsPlugin) -> Resul
                 let name = String::from_utf8_lossy(&bytes).into_owned();
                 caller.data_mut().out.push(BrainCommand::SetCursor(name));
                 Ok(())
+            },
+        )?;
+    }
+
+    if granted & CAP_EFFECTS != 0 {
+        linker.func_wrap(
+            "mirada_host",
+            "host_emit_opacity",
+            |mut caller: Caller<'_, HostCtx>, id: u64, opacity: u32| {
+                let op = opacity.min(255) as u8;
+                caller.data_mut().out.push(BrainCommand::SetOpacity(vec![(id, op)]));
             },
         )?;
     }

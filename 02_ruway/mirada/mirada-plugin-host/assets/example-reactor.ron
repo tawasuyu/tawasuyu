@@ -5,8 +5,8 @@
 (
     wasm: "example-reactor.wasm",
     kind: Reactor,
-    caps: ["keys", "spawn"],
+    caps: ["keys", "spawn", "effects"],
     priority: 0,
     signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
-    signature: "f5d053ae48073b5a5825d0920b329d7b3757c0c0166bf0e83701cd41ac72d13f7f608e887dd207bf426ecc4c53037b0d583e1cdba6ed2d39b9697d8e0f72c40f",
+    signature: "83b1eb0f2fe96713a92bd89066c20f7fc2e96153ac88b6e5077495fded074d2856d32a8ad7034953dd090a7ed5f4cfd5c72d6467f5c334bde9e3201034975906",
 )

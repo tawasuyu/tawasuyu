@@ -72,7 +72,7 @@ printf '%s' "$DEMO_SEED" > "$SEED_FILE"
 
 echo -e "${AZUL}[mirada-plugins]${RESET} firmando example-reactor (demo)…"
 SIGN_OUT="$(cd "$RAIZ" && cargo run -q -p mirada-plugin-host --bin mirada-plugin-sign -- \
-    sign --seed "$SEED_FILE" --wasm "$ASSETS/example-reactor.wasm" --caps keys,spawn)"
+    sign --seed "$SEED_FILE" --wasm "$ASSETS/example-reactor.wasm" --caps keys,spawn,effects)"
 rm -f "$SEED_FILE"
 
 SIGNER="$(printf '%s\n' "$SIGN_OUT" | grep -oE 'ed25519:[0-9a-f]+' | head -1)"
@@ -89,7 +89,7 @@ cat > "$ASSETS/example-reactor.ron" <<EOF
 (
     wasm: "example-reactor.wasm",
     kind: Reactor,
-    caps: ["keys", "spawn"],
+    caps: ["keys", "spawn", "effects"],
     priority: 0,
     signer: "$SIGNER",
     signature: "$SIGNATURE",

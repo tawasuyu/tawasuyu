@@ -1164,6 +1164,13 @@ impl App {
             }
             BodyOp::Lock => self.request_lock(),
             BodyOp::Shutdown => self.running = false,
+            BodyOp::SetOpacity(v) => {
+                for (id, opacity) in v {
+                    if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                        w.opacity = opacity;
+                    }
+                }
+            }
         }
     }
 
@@ -1238,6 +1245,7 @@ impl App {
             wlr_handles: Vec::new(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
             ssd,
+            opacity: 255,
         });
 
         // Alta en el servidor wlr-foreign-toplevel (taskbar de pata): crea un

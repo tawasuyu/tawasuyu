@@ -265,6 +265,13 @@ pub enum BrainCommand {
     /// duración del slide en ms (`0` = salto seco). En modo embebido el Cuerpo
     /// ya tiene estos datos y no recibe esto.
     SetWorkspaces { active: u32, loads: Vec<u32>, slide_ms: u32 },
+    /// Fija la **opacidad** de ciertas ventanas (`0` = transparente, `255` =
+    /// opaca). El Cuerpo la usa como alfa al componer cada superficie; las
+    /// ventanas no listadas conservan la suya. Es la base de los efectos Tier-2
+    /// (p. ej. atenuar las ventanas sin foco). Opacidad en `u8` —no `f32`— para
+    /// conservar `Eq` en [`BrainCommand`], igual que los colores de
+    /// [`Decorations`].
+    SetOpacity(Vec<(WindowId, u8)>),
 }
 
 /// Un hecho del Cuerpo que el Cerebro debe conocer.
@@ -551,6 +558,15 @@ mod tests {
         assert!(!p.dmabuf_permitido("/opt/spyware/bin/leak"));
         assert!(p.dmabuf_permitido("/usr/bin/firefox"));
         assert!(p.screencopy_permitido("/opt/spyware/bin/leak")); // no toca screencopy
+    }
+
+    #[test]
+    fn frame_round_trips_set_opacity() {
+        let cmd = BrainCommand::SetOpacity(vec![(7, 180), (9, 255)]);
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &cmd).unwrap();
+        let back: BrainCommand = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();
+        assert_eq!(back, cmd);
     }
 
     #[test]

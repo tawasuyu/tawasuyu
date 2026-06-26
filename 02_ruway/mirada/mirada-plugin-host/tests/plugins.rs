@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use mirada_brain::Desktop;
-use mirada_plugin_host::caps::{CAP_KEYS, CAP_LAYOUT, CAP_SPAWN};
+use mirada_plugin_host::caps::{CAP_EFFECTS, CAP_KEYS, CAP_LAYOUT, CAP_SPAWN};
 use mirada_plugin_host::{Conductor, LoadedPlugin, PluginKind, PluginManifest, TrustSet};
 use mirada_protocol::{BodyEvent, BrainCommand, LayoutMode, LayoutParams, Rect, TileInput};
 
@@ -100,7 +100,7 @@ fn reactor_con_cap_parcial_es_rechazado() {
 #[test]
 fn reactor_con_caps_completas_carga() {
     let p =
-        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term");
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS, 0, "term");
     assert!(p.is_ok(), "con KEYS+SPAWN debería cargar: {:?}", p.err());
 }
 
@@ -132,7 +132,7 @@ fn reactor_firmado_carga_con_su_trust_y_se_rechaza_sin_el() {
 #[test]
 fn reactor_registra_atajo_y_lanza() {
     let mut p =
-        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term")
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS, 0, "term")
             .unwrap();
     let cmds = p.call_on_event(&BodyEvent::OutputAdded { id: 0, width: 800, height: 600 }).unwrap();
     assert!(
@@ -144,6 +144,50 @@ fn reactor_registra_atajo_y_lanza() {
         cmds.iter().any(|c| matches!(c, BrainCommand::Spawn(s) if s == "foot")),
         "Super+a debería lanzar `foot`: {cmds:?}"
     );
+}
+
+// --- Efectos Tier-2 (opacidad) + su gateo. ----------------------------------
+
+#[test]
+fn reactor_sin_cap_effects_es_rechazado() {
+    // El reactor importa host_emit_opacity (atenuado): sin CAP_EFFECTS ni instancia.
+    let err =
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term")
+            .err()
+            .expect("falta CAP_EFFECTS → rechazo");
+    assert!(
+        err.contains("effects") || err.contains("capacidad"),
+        "esperaba mención a effects: {err}"
+    );
+}
+
+#[test]
+fn reactor_atenua_las_ventanas_sin_foco() {
+    let mut p = LoadedPlugin::load_bytes(
+        REACTOR_WASM,
+        PluginKind::Reactor,
+        CAP_KEYS | CAP_SPAWN | CAP_EFFECTS,
+        0,
+        "term",
+    )
+    .unwrap();
+    p.call_on_event(&BodyEvent::WindowOpened { id: 1, app_id: "a".into(), title: "w".into() })
+        .unwrap();
+    // Al abrir la 2, pasa a ser la enfocada: 2 plena, 1 atenuada.
+    let cmds = p
+        .call_on_event(&BodyEvent::WindowOpened { id: 2, app_id: "b".into(), title: "w".into() })
+        .unwrap();
+
+    let mut opac = std::collections::HashMap::new();
+    for c in &cmds {
+        if let BrainCommand::SetOpacity(v) = c {
+            for (id, op) in v {
+                opac.insert(*id, *op);
+            }
+        }
+    }
+    assert_eq!(opac.get(&2), Some(&255), "la enfocada queda opaca: {opac:?}");
+    assert_eq!(opac.get(&1), Some(&180), "la de fondo se atenúa: {opac:?}");
 }
 
 // --- Conductor: Desktop autoritativo + plugins que lo aumentan. -------------
@@ -190,7 +234,7 @@ fn hot_reload_de_keymap_reemite_grabkeys_sin_pisar_reactores() {
     // Un reactor que registra Super+a, para verificar que la recarga del keymap
     // une (no pisa) sus atajos.
     let reactor =
-        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN, 0, "term")
+        LoadedPlugin::load_bytes(REACTOR_WASM, PluginKind::Reactor, CAP_KEYS | CAP_SPAWN | CAP_EFFECTS, 0, "term")
             .unwrap();
     let mut c = Conductor::new(Desktop::new(), vec![reactor]);
     let _ = c.startup();

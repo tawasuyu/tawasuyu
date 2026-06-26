@@ -318,6 +318,10 @@ pub(crate) struct ManagedWindow {
     /// negociación `xdg-decoration` ([`App::ssd_surfaces`]); las apps que ni
     /// hablan el protocolo quedan en CSD (no las decoramos).
     pub(crate) ssd: bool,
+    /// Opacidad de composición (`0` = transparente, `255` = opaca). El Cerebro
+    /// la fija con `BrainCommand::SetOpacity` (efectos Tier-2: atenuar las
+    /// ventanas sin foco, etc.); el render la usa como alfa. Por defecto `255`.
+    pub(crate) opacity: u8,
 }
 
 /// Un arrastre de ratón en curso: mueve o redimensiona una ventana.
