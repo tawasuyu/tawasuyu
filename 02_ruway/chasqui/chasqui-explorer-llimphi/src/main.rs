@@ -20,8 +20,9 @@
 
 #![forbid(unsafe_code)]
 
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use card_sidecar::{await_provider_blocking, build_consumer_card, ConsumerError};
 use chasqui_card::query::client as query_client;
@@ -32,13 +33,18 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, AlignItems, Dimension, FlexDirection, Size, Style},
     Rect,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_motion::{animate, motion, Tween};
+use llimphi_icons::Icon;
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_card::{card_view, CardOptions, CardPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
@@ -53,6 +59,18 @@ use std::sync::Arc;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+/// Cadencia del repaint que anima el shimmer del skeleton mientras carga.
+const SHIMMER_MS: u64 = 50;
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (la misma
+/// Mónada produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 struct Model {
     theme: Theme,
@@ -76,6 +94,15 @@ struct Model {
     /// Menú contextual sobre una Mónada: `(idx, x, y)` ancla en ventana.
     /// `None` cerrado.
     context_menu: Option<(usize, f32, f32)>,
+    /// Esperando la primera respuesta del daemon (muestra skeleton en vez de
+    /// hueco vacío). Baja al primer `Refresh`, sea Ok o fallo.
+    loading: bool,
+    /// Toasts vivos (errores de conexión, acciones del usuario).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
+    /// Hay una cadena de `Msg::Anim` en vuelo (evita rearmar dos).
+    ticking: bool,
 }
 
 #[derive(Clone)]
@@ -105,6 +132,11 @@ enum Msg {
     /// `(x, y)` de ventana sobre la Mónada seleccionada. Sin selección
     /// es no-op.
     ContextMenuOpen(f32, f32),
+    /// Tick de animación — fuerza repaint para el shimmer del skeleton mientras
+    /// esperamos la primera respuesta. Se auto-rearma sólo si sigue cargando.
+    Anim,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 #[derive(Clone)]
@@ -143,7 +175,7 @@ impl App for Explorer {
         handle.dispatch(Msg::Tick);
         handle.spawn_periodic(REFRESH_INTERVAL, || Msg::Tick);
 
-        Model {
+        let mut m = Model {
             theme: Theme::dark(),
             socket: None,
             snapshot: None,
@@ -154,7 +186,14 @@ impl App for Explorer {
             menu_anim: Tween::idle(1.0),
             selected: None,
             context_menu: None,
-        }
+            loading: true,
+            toasts: Vec::new(),
+            next_toast: 0,
+            ticking: false,
+        };
+        // Shimmer del skeleton mientras llega la primera respuesta.
+        ensure_anim(&mut m, handle);
+        m
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
@@ -185,33 +224,47 @@ impl App for Explorer {
                 let prior_socket = m.socket.clone();
                 handle.spawn(move || Msg::Refresh(tick(prior_socket)));
             }
-            Msg::Refresh(outcome) => match outcome {
-                TickOutcome::Ok { socket, source, snapshot } => {
-                    m.socket = Some(socket);
-                    m.socket_source = Some(source);
-                    m.snapshot = Some(*snapshot);
-                    m.error = None;
-                    // Si la selección quedó fuera de rango tras el
-                    // refresh, la descartamos.
-                    let count = m.snapshot.as_ref().map(|s| s.monads.len()).unwrap_or(0);
-                    if m.selected.map(|i| i >= count).unwrap_or(false) {
-                        m.selected = None;
-                        m.context_menu = None;
+            Msg::Refresh(outcome) => {
+                // Primera respuesta recibida: apaga el skeleton.
+                m.loading = false;
+                // Toast de error sólo en la *transición* a fallo (None→Some);
+                // si el daemon sigue caído el error persiste y no spammeamos.
+                let tenia_error = m.error.is_some();
+                match outcome {
+                    TickOutcome::Ok { socket, source, snapshot } => {
+                        m.socket = Some(socket);
+                        m.socket_source = Some(source);
+                        m.snapshot = Some(*snapshot);
+                        m.error = None;
+                        // Si la selección quedó fuera de rango tras el
+                        // refresh, la descartamos.
+                        let count = m.snapshot.as_ref().map(|s| s.monads.len()).unwrap_or(0);
+                        if m.selected.map(|i| i >= count).unwrap_or(false) {
+                            m.selected = None;
+                            m.context_menu = None;
+                        }
+                    }
+                    TickOutcome::DiscoveryFailed(msg) => {
+                        m.socket = None;
+                        m.socket_source = None;
+                        m.error = Some(msg);
+                    }
+                    TickOutcome::QueryFailed(msg) => {
+                        // Invalida el socket cacheado: la próxima iteración
+                        // re-descubre.
+                        m.socket = None;
+                        m.socket_source = None;
+                        m.error = Some(msg);
                     }
                 }
-                TickOutcome::DiscoveryFailed(msg) => {
-                    m.socket = None;
-                    m.socket_source = None;
-                    m.error = Some(msg);
+                if !tenia_error {
+                    if let Some(e) = m.error.clone() {
+                        let id = m.next_toast;
+                        m.next_toast += 1;
+                        push_toast(&mut m, handle, Toast::error(id, e, TOAST_TTL));
+                    }
                 }
-                TickOutcome::QueryFailed(msg) => {
-                    // Invalida el socket cacheado: la próxima iteración
-                    // re-descubre.
-                    m.socket = None;
-                    m.socket_source = None;
-                    m.error = Some(msg);
-                }
-            },
+            }
             Msg::MenuOpen(which) => {
                 m.menu_open = which;
                 // Abrir un menú raíz cierra cualquier contextual.
@@ -256,6 +309,11 @@ impl App for Explorer {
                 m.socket = None;
                 m.socket_source = None;
                 m.error = None;
+                m.loading = true;
+                ensure_anim(&mut m, handle);
+                let id = m.next_toast;
+                m.next_toast += 1;
+                push_toast(&mut m, handle, Toast::info(id, "Reconectando…", TOAST_TTL));
                 handle.dispatch(Msg::Tick);
             }
             Msg::SelectMonad(i) => {
@@ -270,7 +328,16 @@ impl App for Explorer {
                     m.context_menu = Some((i, x, y));
                 }
             }
+            Msg::Anim => {
+                // El thread durmió; sólo rearmamos si seguimos cargando (abajo).
+                m.ticking = false;
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
+            }
         }
+        // Si quedó una carga en vuelo, mantené el shimmer animado.
+        ensure_anim(&mut m, handle);
         m
     }
 
@@ -321,8 +388,32 @@ impl App for Explorer {
             body_children.push(banner_view::<Msg>(BannerKind::Error, e.clone()));
         }
 
-        if let Some(snap) = &model.snapshot {
+        if model.loading && model.snapshot.is_none() {
+            // Esperando la primera respuesta: cards-placeholder con shimmer en
+            // vez de un hueco vacío. Requiere los ticks de `Msg::Anim`.
+            body_children.extend(skeleton_cards(theme));
+        } else if let Some(snap) = &model.snapshot {
             body_children.push(engine_card(snap, accent_engine, theme, &card_palette));
+            if snap.monads.is_empty() {
+                // Engine vivo pero sin Mónadas todavía: estado vacío con
+                // orientación, no un hueco.
+                body_children.push(
+                    View::new(Style {
+                        size: Size {
+                            width: percent(1.0_f32),
+                            height: length(220.0_f32),
+                        },
+                        flex_grow: 1.0,
+                        ..Default::default()
+                    })
+                    .children(vec![empty_view(
+                        Icon::Search,
+                        "Sin Mónadas",
+                        Some("El engine está vivo pero todavía no expone Mónadas. Aparecerán acá en cuanto el daemon las indexe."),
+                        &EmptyPalette::from_theme(theme),
+                    )]),
+                );
+            }
             for (i, m) in snap.monads.iter().enumerate() {
                 let selected = model.selected == Some(i);
                 let card = monad_card(m, accent_data, theme, &card_palette);
@@ -336,6 +427,9 @@ impl App for Explorer {
                 } else {
                     card
                 };
+                // Pop-in: cada Mónada entra con un fade la primera vez que
+                // aparece su key (estable por id).
+                let card = card.animated_enter(key_of(&m.id.to_string()), motion::NORMAL);
                 body_children.push(card);
             }
         }
@@ -360,9 +454,13 @@ impl App for Explorer {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(body_children);
+        .children(body_children)
+        // Transición de escena: al pasar entre cargando / error / conectado la
+        // `scene_key` cambia y el cuerpo entra con fade + slide-up en vez de
+        // saltar.
+        .animated_enter_from(scene_key(model), motion::SLOW, Affine::translate((0.0, 24.0)));
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -374,7 +472,24 @@ impl App for Explorer {
         // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
         // menú contextual sobre la Mónada seleccionada.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, header, body])
+        .children(vec![menubar, header, body]);
+
+        // Overlay de toasts (bottom-right). Click en uno = descartarlo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            let viewport = viewport_of(model);
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, viewport, Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -416,6 +531,43 @@ impl App for Explorer {
             model.menu_active,
             model.menu_anim.value(),
         )
+    }
+}
+
+/// Empuja un toast al stack y programa su expiración.
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Arranca la cadena de ticks de shimmer si seguimos esperando la primera
+/// respuesta y no hay ya una corriendo. La cadena se auto-detiene cuando
+/// `loading` baja (ver `Msg::Anim`), así no queda un repaint ocioso.
+fn ensure_anim(m: &mut Model, handle: &Handle<Msg>) {
+    if m.ticking || !m.loading {
+        return;
+    }
+    m.ticking = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(SHIMMER_MS));
+        Msg::Anim
+    });
+}
+
+/// `key` estable de la escena del cuerpo. Cambia al pasar entre cargando /
+/// error / conectado → dispara la transición de entrada del cuerpo; estable
+/// mientras la escena no cambia.
+fn scene_key(m: &Model) -> u64 {
+    if m.loading && m.snapshot.is_none() {
+        key_of("cargando")
+    } else if m.error.is_some() && m.snapshot.is_none() {
+        key_of("error")
+    } else {
+        key_of("conectado")
     }
 }
 
@@ -702,6 +854,51 @@ fn text_line(text: &str, color: Color, _theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(text.to_string(), 11.0, color, Alignment::Start)
+}
+
+/// Cards-placeholder con shimmer mientras llega la primera respuesta del
+/// daemon — el usuario ve la forma de lo que viene, no un hueco. Requiere los
+/// repaints periódicos de `Msg::Anim` mientras `loading`.
+fn skeleton_cards(theme: &Theme) -> Vec<View<Msg>> {
+    let pal = SkeletonPalette::from_theme(theme);
+    // Un bloque lleno y clipeado para que el `skeleton_view` (absolute) pinte
+    // dentro de su caja.
+    let bloque = move |w: Dimension, h: f32| -> View<Msg> {
+        View::new(Style {
+            size: Size { width: w, height: length(h) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .radius(4.0_f64)
+        .clip(true)
+        .children(vec![skeleton_view::<Msg>(&pal)])
+    };
+    (0..4)
+        .map(|_| {
+            let titulo = bloque(percent(0.45_f32), 16.0);
+            let l1 = bloque(percent(0.7_f32), 11.0);
+            let l2 = bloque(percent(0.55_f32), 11.0);
+            View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: Dimension::auto(),
+                },
+                padding: Rect {
+                    left: length(12.0_f32),
+                    right: length(12.0_f32),
+                    top: length(12.0_f32),
+                    bottom: length(12.0_f32),
+                },
+                gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .fill(theme.bg_panel)
+            .radius(8.0_f64)
+            .children(vec![titulo, l1, l2])
+        })
+        .collect()
 }
 
 fn tick(prior_socket: Option<PathBuf>) -> TickOutcome {
