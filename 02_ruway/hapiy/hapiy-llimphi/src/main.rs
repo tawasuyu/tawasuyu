@@ -11,15 +11,20 @@
 
 use hapiy_capture::{capturer, Backend};
 use hapiy_core::{default_dir, default_filename, tullpu_launch, Capturer, OutputInfo, Region, Shot};
+use llimphi_icons::Icon;
 use llimphi_image::from_rgba8;
+use llimphi_theme::{motion, Theme};
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style,
 };
 use llimphi_ui::llimphi_layout::taffy::Rect;
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::{Color, ImageBrush as Image};
 use llimphi_ui::{App, Handle, View};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BG: Color = Color::from_rgb8(0x0E, 0x10, 0x16);
 const PANEL: Color = Color::from_rgb8(0x16, 0x1A, 0x24);
@@ -27,6 +32,9 @@ const BTN: Color = Color::from_rgb8(0x24, 0x2A, 0x38);
 const ACCENT: Color = Color::from_rgb8(0x6E, 0x8C, 0xDC);
 const FG: Color = Color::from_rgb8(0xD6, 0xDE, 0xE8);
 const MUTED: Color = Color::from_rgb8(0x8C, 0x98, 0xAA);
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 enum Msg {
@@ -47,6 +55,10 @@ enum Msg {
     PointerAt(f32, f32),
     /// Qué capturar: `None` = todo el escritorio, `Some(i)` = ese monitor.
     SelectOutput(Option<usize>),
+    /// La ventana cambió de tamaño: actualiza el viewport (overlay de toasts).
+    Resize(u32, u32),
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 struct Model {
@@ -65,6 +77,32 @@ struct Model {
     /// rectángulo de selección en vivo.
     cursor_node: Option<(f32, f32)>,
     status: String,
+    /// Tamaño lógico de la ventana — ancla el overlay de toasts (bottom-right).
+    viewport: (f32, f32),
+    /// Toasts vivos (confirmaciones de guardado/copiado, errores).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
+    /// Contador de capturas/recortes: cambia la `key` de pop-in del preview, así
+    /// cada toma nueva entra con un fade en vez de saltar de golpe.
+    shot_gen: u64,
+}
+
+/// Empuja un toast al stack y programa su expiración.
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Toma el próximo id de toast del contador del modelo.
+fn next_toast_id(model: &mut Model) -> u64 {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    id
 }
 
 /// Segundos de retardo de **staging** (Capturar 3s) y de **ocultamiento** de la
@@ -85,6 +123,7 @@ impl App for Hapiy {
     fn init(_: &Handle<Self::Msg>) -> Self::Model {
         let cap = capturer(Backend::Auto).unwrap_or_else(|_| capturer(Backend::Grim).unwrap());
         let outputs = cap.outputs().unwrap_or_default();
+        let (w0, h0) = Self::initial_size();
         Model {
             cap,
             clip: arboard::Clipboard::new().ok(),
@@ -96,7 +135,15 @@ impl App for Hapiy {
             corner_node: None,
             cursor_node: None,
             status: "Pulsá Capturar.".into(),
+            viewport: (w0 as f32, h0 as f32),
+            toasts: Vec::new(),
+            next_toast: 0,
+            shot_gen: 0,
         }
+    }
+
+    fn on_resize(_model: &Self::Model, w: u32, h: u32) -> Option<Self::Msg> {
+        Some(Msg::Resize(w, h))
     }
 
     fn update(mut model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
@@ -122,48 +169,85 @@ impl App for Hapiy {
                 });
                 model.status = format!("Capturando en {STAGING_SECS} s…");
             }
-            Msg::Save => match &model.shot {
-                Some(s) => {
+            Msg::Save => {
+                if let Some(s) = &model.shot {
                     let p = default_dir().join(default_filename(&stamp()));
-                    model.status = match s.save_png(&p) {
+                    let res = s.save_png(&p);
+                    let (w, h) = (s.width, s.height);
+                    // Acá termina el préstamo de `s`: ya podemos mutar `model`.
+                    let id = next_toast_id(&mut model);
+                    let (status, toast) = match res {
                         Ok(()) => {
                             // Emitir al centro de eventos (no-op si willay no corre).
                             let ev = hapiy_core::evento_captura(
-                                &p, None, None, s.width, s.height, willay_emit::ahora_usec(),
+                                &p, None, None, w, h, willay_emit::ahora_usec(),
                             );
                             willay_emit::emitir_silencioso(&ev);
-                            format!("Guardado en {}", p.display())
+                            (
+                                format!("Guardado en {}", p.display()),
+                                Toast::success(id, "Captura guardada", TOAST_TTL),
+                            )
                         }
-                        Err(e) => e,
+                        Err(e) => (
+                            e.clone(),
+                            Toast::error(id, format!("No se pudo guardar: {e}"), TOAST_TTL),
+                        ),
                     };
+                    model.status = status;
+                    push_toast(&mut model, handle, toast);
+                } else {
+                    model.status = "Capturá primero.".into();
                 }
-                None => model.status = "Capturá primero.".into(),
-            },
-            Msg::Copy => match (&mut model.clip, &model.shot) {
-                (Some(clip), Some(s)) => {
-                    let img = arboard::ImageData {
-                        width: s.width as usize,
-                        height: s.height as usize,
-                        bytes: s.rgba.clone().into(),
+            }
+            Msg::Copy => {
+                if model.clip.is_none() {
+                    model.status = "Portapapeles no disponible.".into();
+                } else if model.shot.is_none() {
+                    model.status = "Capturá primero.".into();
+                } else {
+                    // Préstamos acotados a este bloque: al cerrarlo, `model`
+                    // vuelve a estar libre para mutar (toast).
+                    let res = {
+                        let s = model.shot.as_ref().unwrap();
+                        let img = arboard::ImageData {
+                            width: s.width as usize,
+                            height: s.height as usize,
+                            bytes: s.rgba.clone().into(),
+                        };
+                        model.clip.as_mut().unwrap().set_image(img)
                     };
-                    model.status = match clip.set_image(img) {
-                        Ok(()) => "Copiado al portapapeles.".into(),
-                        Err(e) => format!("No se pudo copiar: {e}"),
+                    let id = next_toast_id(&mut model);
+                    let (status, toast) = match res {
+                        Ok(()) => (
+                            "Copiado al portapapeles.".to_string(),
+                            Toast::success(id, "Copiado al portapapeles", TOAST_TTL),
+                        ),
+                        Err(e) => (
+                            format!("No se pudo copiar: {e}"),
+                            Toast::error(id, format!("No se pudo copiar: {e}"), TOAST_TTL),
+                        ),
                     };
+                    model.status = status;
+                    push_toast(&mut model, handle, toast);
                 }
-                (None, _) => model.status = "Portapapeles no disponible.".into(),
-                (_, None) => model.status = "Capturá primero.".into(),
-            },
-            Msg::Edit => match &model.shot {
-                Some(s) => {
+            }
+            Msg::Edit => {
+                if let Some(s) = &model.shot {
                     let p = std::env::temp_dir().join(default_filename(&stamp()));
-                    model.status = match s.save_png(&p).and_then(|()| launch_tullpu(&p)) {
-                        Ok(()) => format!("Abriendo en tullpu: {}", p.display()),
-                        Err(e) => e,
-                    };
+                    let res = s.save_png(&p).and_then(|()| launch_tullpu(&p));
+                    // Termina el préstamo de `s`.
+                    match res {
+                        Ok(()) => model.status = format!("Abriendo en tullpu: {}", p.display()),
+                        Err(e) => {
+                            let id = next_toast_id(&mut model);
+                            push_toast(&mut model, handle, Toast::error(id, e.clone(), TOAST_TTL));
+                            model.status = e;
+                        }
+                    }
+                } else {
+                    model.status = "Capturá primero.".into();
                 }
-                None => model.status = "Capturá primero.".into(),
-            },
+            }
             Msg::Clear => {
                 model.shot = None;
                 model.preview = None;
@@ -208,6 +292,7 @@ impl App for Hapiy {
                                         model.preview = Some(from_rgba8(c.rgba.clone(), c.width, c.height));
                                         model.status = format!("Recortado a {}×{}.", c.width, c.height);
                                         model.shot = Some(c);
+                                        model.shot_gen += 1;
                                     }
                                     None => model.status = "Región vacía; probá de nuevo.".into(),
                                 }
@@ -219,11 +304,15 @@ impl App for Hapiy {
                 }
             }
             Msg::SelectOutput(i) => model.sel = i,
+            Msg::Resize(w, h) => model.viewport = (w as f32, h as f32),
+            Msg::ToastExpire(id) => model.toasts.retain(|t| t.id != id),
         }
         model
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
+        let theme = Theme::dark();
+
         let mut toolbar = vec![
             boton("⛶ Capturar", BG, ACCENT, Msg::Capture),
             boton(&format!("⏱ Capturar {STAGING_SECS}s"), FG, BTN, Msg::CaptureDelayed),
@@ -270,12 +359,15 @@ impl App for Hapiy {
 
         let lienzo = match &model.preview {
             Some(img) => {
+                // El preview entra con pop-in (fade) cada vez que cambia la toma:
+                // `shot_gen` es la `key` estable de la captura/recorte actual.
                 let mut imagen = View::new(Style {
                     size: Size { width: percent(1.0), height: percent(1.0) },
                     flex_grow: 1.0,
                     ..Default::default()
                 })
-                .image(img.clone());
+                .image(img.clone())
+                .animated_enter(model.shot_gen, motion::NORMAL);
                 if model.select_mode {
                     imagen = imagen
                         .on_click_at(|lx, ly, rw, rh| Some(Msg::PreviewClick(lx, ly, rw, rh)))
@@ -297,15 +389,30 @@ impl App for Hapiy {
                 })
                 .children(hijos)
             }
-            None => View::new(Style {
-                size: Size { width: percent(1.0), height: percent(1.0) },
-                flex_grow: 1.0,
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
-                ..Default::default()
-            })
-            .text("Sin captura todavía", 20.0, MUTED),
+            None => {
+                // Sin captura todavía: empty-state con orientación en vez de un
+                // hueco con una sola línea de texto.
+                let pal = EmptyPalette::from_theme(&theme);
+                View::new(Style {
+                    size: Size { width: percent(1.0), height: percent(1.0) },
+                    flex_grow: 1.0,
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Center),
+                    ..Default::default()
+                })
+                .children(vec![empty_view(
+                    Icon::Camera,
+                    "Sin captura todavía",
+                    Some("Pulsá Capturar para tomar la pantalla; después podés recortar, guardar o copiar."),
+                    &pal,
+                )])
+            }
         };
+
+        // Transición de escena: al pasar de vacío a preview (o al revés) el
+        // cuerpo entra con un fade + slide-up suave en vez de saltar.
+        let scene_key: u64 = if model.shot.is_some() { 1 } else { 0 };
+        let lienzo = lienzo.animated_enter_from(scene_key, motion::SLOW, Affine::translate((0.0, 24.0)));
 
         let status = View::new(Style {
             size: Size { width: percent(1.0), height: length(36.0) },
@@ -316,13 +423,26 @@ impl App for Hapiy {
         .fill(PANEL)
         .text(model.status.clone(), 14.0, MUTED);
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0), height: percent(1.0) },
             ..Default::default()
         })
         .fill(BG)
-        .children(vec![toolbar, lienzo, status])
+        .children(vec![toolbar, lienzo, status]);
+
+        // Overlay de toasts (bottom-right). Click en uno = descartarlo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size { width: percent(1.0), height: percent(1.0) },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, model.viewport, Msg::ToastExpire)])
+        }
     }
 }
 
@@ -335,6 +455,7 @@ fn capture(model: &mut Model) {
             model.preview = Some(from_rgba8(s.rgba.clone(), s.width, s.height));
             model.status = format!("Captura {}×{} — guardá, copiá o editá.", s.width, s.height);
             model.shot = Some(s);
+            model.shot_gen += 1;
         }
         Err(e) => model.status = format!("Error al capturar: {e}"),
     }

@@ -20,4 +20,7 @@ willay-emit = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-image = { workspace = true }
+llimphi-icons = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
 arboard = "3"
