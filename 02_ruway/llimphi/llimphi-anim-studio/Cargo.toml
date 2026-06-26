@@ -1,0 +1,30 @@
+[package]
+name = "llimphi-anim-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Studio de máquinas de animación estilo Rive: una interfaz Llimphi para autorar el grafo de estados de llimphi-anim (estados, transiciones, condiciones, inputs) sobre un nodegraph, con preview en vivo dirigido por inputs y persistencia RON. Frontend intercambiable sobre el runtime agnóstico — el StateMachine no sabe quién lo edita."
+
+[[bin]]
+name = "llimphi-anim-studio"
+path = "src/main.rs"
+
+[dependencies]
+# El runtime estilo Rive — el core agnóstico que esta UI autora.
+llimphi-anim = { workspace = true }
+# Bucle Elm + ventana + re-exports (raster/layout/text).
+llimphi-ui = { workspace = true }
+# Paletas semánticas de color.
+llimphi-theme = { workspace = true }
+# El lienzo de nodos: estados = nodos, transiciones = cables (drag pin→pin).
+llimphi-widget-nodegraph = { workspace = true }
+# Botones y sliders del inspector + controles de inputs en vivo.
+llimphi-widget-button = { workspace = true }
+llimphi-widget-slider = { workspace = true }
+# Campo de texto para nombrar estados / inputs.
+llimphi-widget-text-input = { workspace = true }
+# Persistencia del documento (grafo) en texto editable a mano.
+serde = { workspace = true, features = ["derive"] }
+ron = { workspace = true }

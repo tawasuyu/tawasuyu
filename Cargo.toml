@@ -239,6 +239,7 @@ members = [
     "02_ruway/llimphi/llimphi-layer",
     "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-anim",
+    "02_ruway/llimphi/llimphi-anim-studio",
     "02_ruway/llimphi/llimphi-mesh",
     "02_ruway/llimphi/llimphi-icons",
     "02_ruway/llimphi/llimphi-svg",
