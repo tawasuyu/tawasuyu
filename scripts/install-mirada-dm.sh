@@ -30,6 +30,11 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 MC="$REPO/02_ruway/mirada/mirada-compositor"
 
+# Este script NO hace git pull: construye lo que esté CHECKED OUT. Mostramos el
+# HEAD para que se vea qué se está por instalar — si no incluye tus cambios,
+# corré `git pull` (o `./scripts/actualizar-mirada.sh`) ANTES.
+echo "==> repo en: $(git -C "$REPO" log -1 --format='%h %ci %s' 2>/dev/null || echo '¿no es un repo git?')"
+
 echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers, panel, ctl, portal, wallpaper y notificaciones"
 cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \

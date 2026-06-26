@@ -81,7 +81,22 @@ fi
 printf "  %sHEAD:%s %s\n" "$DIM" "$RST" "$(git log -1 --format='%h %ci %s')"
 
 # -----------------------------------------------------------------------------
-# 2. Recompilar los dos binarios en release
+# 1.bis  Si mirada está instalado como DM, la SESIÓN lanza los binarios de
+#        /usr/local/bin (ver `mirada-session`: hace `exec mirada-compositor` y
+#        `wawa-panel` por PATH) — NO los de target/release. Entonces recompilar
+#        local NO cambia nada de lo que ves (ni el panel, que tampoco se compila
+#        acá). Hay que REINSTALAR el set completo. Delegamos al instalador, que
+#        recompila TODO (incluido wawa-panel) y lo copia a /usr/local/bin.
+# -----------------------------------------------------------------------------
+if [ -x /usr/local/bin/mirada-compositor ]; then
+  paso "Instalación DM detectada (/usr/local/bin) — reinstalando el set completo"
+  warn "La sesión corre los binarios de /usr/local/bin; un build local no basta."
+  ok   "Delegando a install-mirada-dm.sh (recompila todo, incl. wawa-panel, + sudo install)."
+  exec "$REPO_ROOT/scripts/install-mirada-dm.sh"
+fi
+
+# -----------------------------------------------------------------------------
+# 2. Recompilar los dos binarios en release (modo dev, sin instalación DM)
 # -----------------------------------------------------------------------------
 paso "Recompilando mirada-compositor + pata-llimphi (release)"
 PKG_ARGS=()
