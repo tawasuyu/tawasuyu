@@ -164,18 +164,25 @@ se copian a mano.
 | **example-layout** (right-master) | Layout | `layout` | Master-stack reflejado: maestra a la derecha. Honra `master_ratio`/`master_count`/`gap`. |
 | **example-reactor** | Reactor | `keys` `spawn` `effects` `actions` | `Super+a` → terminal · atenúa las ventanas sin foco · auto-monocle al llenarse. |
 | **dwindle** | Layout | `layout` | BSP recursivo estilo Hyprland: cada ventana parte el eje más largo. `priority` 20 (gana al right-master si conviven). |
+| **asignador** | Reactor | `actions` | Enruta cada ventana por su `app_id` a un escritorio fijo y/o la flota, según reglas de su `config:`. El enrutador de apps clásico. |
 
 Sólo **un** plugin de layout queda activo (el de mayor `priority`); los
 reactores se acumulan.
 
+### Config por plugin
+
+Un plugin recibe parámetros por el campo **`config:`** del manifest — una cadena
+de formato libre que el host le pasa verbatim por `mirada_configure` y que el
+plugin lee en su `configure(&str)`. **No** entra en la firma (es política del
+usuario, no código), así que se edita libre —a mano o desde wawa-panel— y se
+**recarga en caliente** sin re-firmar. El `asignador` la usa para sus reglas
+`app_id → escritorio/float`; un plugin sin parámetros simplemente la ignora.
+
 ### Buenas piezas para sumar al catálogo
 
-Lo más valioso a construir, ordenado por relación valor/esfuerzo. Las
-**universales** (comportamiento igual para todos) son las que conviene shippear
-ya; las **por-usuario** (reglas app→escritorio, etc.) esperan a que los plugins
-puedan **leer config** —hoy un plugin no recibe parámetros, así que su política
-va hardcodeada o se forkea-y-recompila—. Habilitar config por plugin (un blob en
-el manifest pasado al guest) es la próxima capacidad que las desbloquea.
+Lo más valioso a construir, ordenado por relación valor/esfuerzo. Con la **config
+por plugin** ya disponible (ver arriba), tanto las **universales** como las
+**por-usuario** son shippeables — el `asignador` es la primera por-usuario.
 
 **Layouts (universales):**
 - **three-column / centered-master con dos pilas** — maestra al centro, pilas a
@@ -197,11 +204,10 @@ el manifest pasado al guest) es la próxima capacidad que las desbloquea.
 - **scratchpads con nombre** — atajos que invocan/ocultan dropdowns
   (`keys` + `actions`/`spawn`).
 
-**Reactores por-usuario (necesitan config por plugin):**
-- **enrutador de apps** — `app_id` → escritorio (`send-to-workspace:N`) y
-  auto-flotar diálogos; lo más pedido en WMs teselantes. Hoy sólo con el mapa
-  hardcodeado en el fuente.
-- **reglas de efecto/decoración por app**.
+**Reactores por-usuario (config por plugin):**
+- **enrutador de apps** — ✅ es el `asignador` (ya en el catálogo).
+- **reglas de efecto/decoración por app** — mismo patrón que el asignador, pero
+  emitiendo `effects`/`decor` en vez de `actions`.
 
 ## Firmar e instalar
 
@@ -217,6 +223,7 @@ Cada plugin se declara con un `.ron` junto a su `.wasm`:
     priority: 0,                   // mayor gana el rol singleton de layout
     signer: "ed25519:…",           // requerido si pide caps peligrosas
     signature: "…",                // hex de 64 bytes sobre blake3(wasm) ‖ caps
+    config: "firefox 2\nfoot 1",   // opcional: parámetros del plugin (fuera de la firma)
 )
 ```
 

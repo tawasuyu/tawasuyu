@@ -8,5 +8,5 @@
     caps: ["keys", "spawn", "effects", "actions"],
     priority: 0,
     signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
-    signature: "d05a4a349b61451e691e108ce40314a669f15c94e476b334fa7a132ac7cde44c1f062c9ab17cd7d3c6db4e9281a2d4159da381119135522bc5f0d80d253f650e",
+    signature: "0453d3fbd2258ae5b22ff062a80c08711c9a8faa25e93fabe84ffb449b5f73198850fce1e8b0f9fdac691d8019cf9c9972dbb1fd0df968858a4f7cddbb0f9305",
 )

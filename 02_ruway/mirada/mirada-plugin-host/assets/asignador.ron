@@ -1,0 +1,12 @@
+// Manifest del plugin «asignador»: enruta ventanas por app_id (CAP_ACTIONS →
+// requiere firma). El campo 'config' (NO entra en la firma) trae las reglas;
+// editalo a mano o desde wawa-panel. Por defecto, sólo ejemplos comentados (no-op).
+(
+    wasm: "asignador.wasm",
+    kind: Reactor,
+    caps: ["actions"],
+    priority: 0,
+    signer: "ed25519:4fc75cbd2c049b7c8a72c6249654bf9855c398f345e5a70c0ba7f9f853697f25",
+    signature: "ac5fe3c6cc1980b0c127c0e0e6a584d7a1e081db6cfd2e76fa99d220784d0641e90a702c20044aad87f0ea3b15c54b3d7293845bd5af24be8b1c0cfff109200e",
+    config: "# Reglas: <app_id-substring>  <escritorio 1-9 y/o «float»>\n# Descomenta y ajusta a tus apps:\n# firefox      2\n# Alacritty    1\n# pavucontrol  float\n",
+)

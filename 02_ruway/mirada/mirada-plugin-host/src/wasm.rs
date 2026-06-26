@@ -37,6 +37,8 @@ pub struct LoadedPlugin {
     alloc: TypedFunc<u32, u32>,
     tile: Option<TypedFunc<(u32, u32), u64>>,
     on_event: Option<TypedFunc<(u32, u32), ()>>,
+    /// Export opcional `mirada_configure`: presente si el plugin acepta config.
+    configure: Option<TypedFunc<(u32, u32), ()>>,
     pub kind: PluginKind,
     pub priority: i32,
     pub name: String,
@@ -50,7 +52,11 @@ impl LoadedPlugin {
         let bytes = std::fs::read(&m.wasm_path)
             .map_err(|e| format!("no se pudo leer {}: {e}", m.wasm_path.display()))?;
         authorize(&bytes, m.granted, m.grant.as_ref(), trust)?;
-        Self::load_bytes(&bytes, m.kind, m.granted, m.priority, &m.name)
+        let mut p = Self::load_bytes(&bytes, m.kind, m.granted, m.priority, &m.name)?;
+        if !m.config.is_empty() {
+            p.configure(&m.config)?;
+        }
+        Ok(p)
     }
 
     /// Como [`load`](LoadedPlugin::load) pero desde bytes ya en memoria y **sin**
@@ -126,12 +132,18 @@ impl LoadedPlugin {
             }
         };
 
+        // `mirada_configure` es opcional: presente si el plugin acepta config.
+        let configure = instance
+            .get_typed_func::<(u32, u32), ()>(&store, "mirada_configure")
+            .ok();
+
         Ok(LoadedPlugin {
             store,
             memory,
             alloc,
             tile,
             on_event,
+            configure,
             kind,
             priority,
             name: name.to_string(),
@@ -149,6 +161,22 @@ impl LoadedPlugin {
             .write(&mut self.store, ptr as usize, bytes)
             .map_err(|e| format!("escritura en {}: {e}", self.name))?;
         Ok(ptr)
+    }
+
+    /// Empuja la cadena de config al plugin (`mirada_configure`), una vez, antes
+    /// de cualquier `tile`/`on_event`. Falla si el plugin no exporta el punto de
+    /// entrada (el manifest declaró `config:` para un plugin que no la acepta).
+    pub fn configure(&mut self, config: &str) -> Result<(), String> {
+        let configure = self
+            .configure
+            .ok_or_else(|| format!("plugin {} no acepta config (sin `mirada_configure`)", self.name))?;
+        let bytes = config.as_bytes();
+        let ptr = self.write_input(bytes)?;
+        self.store.set_fuel(FUEL).map_err(|e| e.to_string())?;
+        configure
+            .call(&mut self.store, (ptr, bytes.len() as u32))
+            .map_err(|e| format!("mirada_configure de {}: {e}", self.name))?;
+        Ok(())
     }
 
     /// Despacha `mirada_tile` y devuelve la geometría que el plugin decidió.

@@ -86,6 +86,9 @@ fn ensure_heap() {}
 
 static mut IN_BUF: Vec<u8> = Vec::new();
 static mut OUT_BUF: Vec<u8> = Vec::new();
+/// La cadena de configuración del manifest (`config:`), si el host la empujó vía
+/// `mirada_configure`. El plugin la recibe en su [`configure`](LayoutPlugin::configure).
+static mut CONFIG: Vec<u8> = Vec::new();
 
 /// Reserva `len` bytes y devuelve el puntero donde el host escribe el input.
 /// Lo re-exportan los macros como `#[no_mangle] pub extern "C" fn alloc`.
@@ -104,6 +107,33 @@ pub fn abi_alloc(len: u32) -> u32 {
 /// Vista de sólo lectura del input recién escrito por el host.
 fn input_bytes() -> &'static [u8] {
     unsafe { &*core::ptr::addr_of!(IN_BUF) }
+}
+
+/// Punto de entrada que el macro cablea a `mirada_configure`: el host ya escribió
+/// la cadena de config (vía `alloc`) en `IN_BUF`; la copiamos a `CONFIG`. Si el
+/// plugin **aún no se construyó** (lo normal: el host configura justo tras
+/// instanciar), la leerá al construirse; si **ya estaba construido** (re-config
+/// en caliente sobre la misma instancia), se la re-aplicamos al toque.
+#[doc(hidden)]
+pub fn abi_configure(_ptr: u32, _len: u32) {
+    ensure_heap();
+    unsafe {
+        CONFIG = input_bytes().to_vec();
+        if let Some(p) = LAYOUT.as_mut() {
+            p.configure(config_str());
+        }
+    }
+    #[cfg(feature = "reactor")]
+    unsafe {
+        if let Some(p) = REACTOR.as_mut() {
+            p.configure(config_str());
+        }
+    }
+}
+
+/// La cadena de config vigente (UTF-8; vacía si el host no empujó ninguna).
+fn config_str() -> &'static str {
+    unsafe { core::str::from_utf8(&*core::ptr::addr_of!(CONFIG)).unwrap_or("") }
 }
 
 /// Guarda el output en el búfer estático y empaqueta `(ptr<<32 | len)`.
@@ -126,6 +156,11 @@ pub trait LayoutPlugin {
     /// `input.work`. Devolvé un rect por id; los ids que no devuelvas conservan
     /// la geometría que el `Desktop` ya les había dado.
     fn tile(&mut self, input: &TileInput) -> Vec<(WindowId, Rect)>;
+
+    /// Recibe la cadena de configuración del manifest (campo `config:`), una vez,
+    /// al construirse. El formato lo define cada plugin; el host la pasa verbatim.
+    /// Default no-op (un plugin sin parámetros la ignora).
+    fn configure(&mut self, _config: &str) {}
 }
 
 static mut LAYOUT: Option<Box<dyn LayoutPlugin>> = None;
@@ -141,7 +176,9 @@ pub fn layout_entry(ctor: fn() -> Box<dyn LayoutPlugin>, _ptr: u32, _len: u32) -
     };
     let plugin = unsafe {
         if LAYOUT.is_none() {
-            LAYOUT = Some(ctor());
+            let mut p = ctor();
+            p.configure(config_str());
+            LAYOUT = Some(p);
         }
         LAYOUT.as_mut().unwrap().as_mut()
     };
@@ -271,6 +308,10 @@ impl Ctx {
 #[cfg(feature = "reactor")]
 pub trait ReactorPlugin {
     fn on_event(&mut self, event: BodyEvent, ctx: &mut Ctx);
+
+    /// Recibe la cadena de configuración del manifest (campo `config:`), una vez,
+    /// al construirse. El formato lo define cada plugin. Default no-op.
+    fn configure(&mut self, _config: &str) {}
 }
 
 #[cfg(feature = "reactor")]
@@ -288,7 +329,9 @@ pub fn reactor_entry(ctor: fn() -> Box<dyn ReactorPlugin>, _ptr: u32, _len: u32)
     };
     let plugin = unsafe {
         if REACTOR.is_none() {
-            REACTOR = Some(ctor());
+            let mut p = ctor();
+            p.configure(config_str());
+            REACTOR = Some(p);
         }
         REACTOR.as_mut().unwrap().as_mut()
     };
@@ -311,6 +354,11 @@ macro_rules! export_layout_plugin {
         }
 
         #[no_mangle]
+        pub extern "C" fn mirada_configure(ptr: u32, len: u32) {
+            $crate::abi_configure(ptr, len)
+        }
+
+        #[no_mangle]
         pub extern "C" fn mirada_tile(ptr: u32, len: u32) -> u64 {
             fn __ctor() -> $crate::SdkBox<dyn $crate::LayoutPlugin> {
                 $crate::SdkBox::new($make)
@@ -327,6 +375,11 @@ macro_rules! export_reactor_plugin {
         #[no_mangle]
         pub extern "C" fn alloc(len: u32) -> u32 {
             $crate::abi_alloc(len)
+        }
+
+        #[no_mangle]
+        pub extern "C" fn mirada_configure(ptr: u32, len: u32) {
+            $crate::abi_configure(ptr, len)
         }
 
         #[no_mangle]

@@ -14,6 +14,7 @@ use mirada_protocol::{BodyEvent, BrainCommand, LayoutMode, LayoutParams, Rect, T
 const LAYOUT_WASM: &[u8] = include_bytes!("../assets/example-layout.wasm");
 const REACTOR_WASM: &[u8] = include_bytes!("../assets/example-reactor.wasm");
 const DWINDLE_WASM: &[u8] = include_bytes!("../assets/dwindle.wasm");
+const ASIGNADOR_WASM: &[u8] = include_bytes!("../assets/asignador.wasm");
 
 fn params(ratio: f32, nmaster: usize, gap: i32) -> LayoutParams {
     LayoutParams { mode: LayoutMode::MasterStack, master_ratio: ratio, master_count: nmaster, gap }
@@ -326,6 +327,75 @@ fn conductor_aplica_la_accion_del_reactor_al_desktop() {
         1,
         "tras la 3ª ventana el reactor pidió monocle y el Desktop dejó 1 visible: {visibles:?}"
     );
+}
+
+// --- Config por plugin + el enrutador de apps (asignador). ------------------
+
+#[test]
+fn asignador_enruta_por_app_id_segun_su_config() {
+    let mut p =
+        LoadedPlugin::load_bytes(ASIGNADOR_WASM, PluginKind::Reactor, CAP_ACTIONS, 0, "asg").unwrap();
+    // La config llega por el canal `mirada_configure` (lo que da config por plugin).
+    p.configure("firefox 2\npavucontrol float\ncalc 5 float\n# comentario\n")
+        .unwrap();
+
+    // Firefox → escritorio 2 (sin flotar).
+    p.call_on_event(&BodyEvent::WindowOpened { id: 1, app_id: "firefox".into(), title: "w".into() })
+        .unwrap();
+    assert_eq!(p.take_actions(), vec!["send-to-workspace:2".to_string()]);
+
+    // Substring case-insensitive: «org.PulseAudio.pavucontrol» casa «pavucontrol».
+    p.call_on_event(&BodyEvent::WindowOpened {
+        id: 2,
+        app_id: "org.PulseAudio.pavucontrol".into(),
+        title: "w".into(),
+    })
+    .unwrap();
+    assert_eq!(p.take_actions(), vec!["toggle-float".to_string()]);
+
+    // calc → flota PRIMERO (mientras tiene el foco) y luego va al 5.
+    p.call_on_event(&BodyEvent::WindowOpened { id: 3, app_id: "calc".into(), title: "w".into() })
+        .unwrap();
+    assert_eq!(
+        p.take_actions(),
+        vec!["toggle-float".to_string(), "send-to-workspace:5".to_string()]
+    );
+
+    // App sin regla → ninguna acción.
+    p.call_on_event(&BodyEvent::WindowOpened { id: 4, app_id: "mystery".into(), title: "w".into() })
+        .unwrap();
+    assert!(p.take_actions().is_empty(), "una app sin regla no debería enrutarse");
+}
+
+#[test]
+fn asignador_firmado_carga_y_su_config_comentada_es_inocua() {
+    // Camino real: lo carga desde su manifest (firmado + config por defecto, toda
+    // comentada). Certifica que (a) la firma es válida, (b) el campo `config` del
+    // .ron fluye al plugin, y (c) sin reglas no enruta nada.
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let m = PluginManifest::load(&assets.join("asignador.ron")).unwrap();
+    let trust = TrustSet::load(&assets.join("trust.ron"));
+    let mut p = LoadedPlugin::load(&m, &trust).expect("el asignador firmado debería cargar");
+    p.call_on_event(&BodyEvent::WindowOpened { id: 1, app_id: "firefox".into(), title: "w".into() })
+        .unwrap();
+    assert!(p.take_actions().is_empty(), "config comentada → sin reglas → no-op");
+}
+
+#[test]
+fn reconfigurar_reemplaza_las_reglas() {
+    // Re-`configure` (lo que hace el hot-reload al cambiar el .ron) reemplaza la
+    // política: la regla vieja deja de aplicar, la nueva sí.
+    let mut p =
+        LoadedPlugin::load_bytes(ASIGNADOR_WASM, PluginKind::Reactor, CAP_ACTIONS, 0, "asg").unwrap();
+    p.configure("firefox 2").unwrap();
+    p.call_on_event(&BodyEvent::WindowOpened { id: 1, app_id: "firefox".into(), title: "w".into() })
+        .unwrap();
+    assert_eq!(p.take_actions(), vec!["send-to-workspace:2".to_string()]);
+
+    p.configure("firefox 7").unwrap();
+    p.call_on_event(&BodyEvent::WindowOpened { id: 2, app_id: "firefox".into(), title: "w".into() })
+        .unwrap();
+    assert_eq!(p.take_actions(), vec!["send-to-workspace:7".to_string()]);
 }
 
 // --- Conductor: Desktop autoritativo + plugins que lo aumentan. -------------

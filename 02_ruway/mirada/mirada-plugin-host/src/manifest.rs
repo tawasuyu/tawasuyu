@@ -41,6 +41,12 @@ pub struct PluginManifest {
     /// firma.
     #[serde(default)]
     pub signature: String,
+    /// Configuración del plugin: una cadena de formato libre (la define cada
+    /// plugin) que el host le pasa verbatim por `mirada_configure`. **No** entra
+    /// en la firma —es política del usuario, no código— así que se edita libre
+    /// (a mano o desde wawa-panel) sin re-firmar. Vacía = sin config.
+    #[serde(default)]
+    pub config: String,
 }
 
 /// Un manifest ya resuelto: ruta absoluta del `.wasm` + bitfield de capacidades.
@@ -54,6 +60,8 @@ pub struct ResolvedManifest {
     pub name: String,
     /// La firma del grant, si el manifest la trae.
     pub grant: Option<Grant>,
+    /// La cadena de config a empujar al plugin (vacía = ninguna).
+    pub config: String,
 }
 
 impl PluginManifest {
@@ -96,6 +104,7 @@ impl PluginManifest {
             priority: m.priority,
             name,
             grant,
+            config: m.config,
         })
     }
 }

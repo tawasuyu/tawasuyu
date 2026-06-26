@@ -1,4 +1,4 @@
-// Anillo de confianza de EJEMPLO: la clave DEMO que firma example-reactor.
+// Anillo de confianza de EJEMPLO: la clave DEMO que firma los reactores.
 // En tu instalación, reemplazá esto por TU pubkey (mirada-plugin-sign keygen).
 (
     trusted: [

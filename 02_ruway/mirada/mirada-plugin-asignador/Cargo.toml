@@ -1,0 +1,23 @@
+# Plugin reactor «asignador»: enruta ventanas por app_id según su config.
+# `[workspace]` propio → fuera del check raíz; se compila a wasm32 con
+# `scripts/build-mirada-plugins.sh`.
+[package]
+name = "mirada-plugin-asignador"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin reactor «asignador»: enruta cada ventana por su app_id a un escritorio y/o la flota, según reglas de su config (CAP_ACTIONS)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Con `reactor`: expone las importaciones del host y el `Ctx`.
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk", features = ["reactor"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

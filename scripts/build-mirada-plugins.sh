@@ -63,8 +63,9 @@ forjar "mirada-plugin-example-layout"  "mirada_plugin_example_layout"  "example-
 forjar "mirada-plugin-example-reactor" "mirada_plugin_example_reactor" "example-reactor"
 # Catálogo base.
 forjar "mirada-plugin-dwindle"         "mirada_plugin_dwindle"         "dwindle"
+forjar "mirada-plugin-asignador"       "mirada_plugin_asignador"       "asignador"
 
-# --- Firma DEMO del reactor (pide CAP_KEYS+CAP_SPAWN → requiere firma) --------
+# --- Firma DEMO de los reactores (piden caps peligrosas → requieren firma) ----
 # La semilla es FIJA y PÚBLICA: sólo para que el ejemplo corra de fábrica. NO es
 # un secreto real; en tu instalación generás la tuya con `mirada-plugin-sign
 # keygen` y reemplazás trust.ron con tu pubkey.
@@ -72,16 +73,26 @@ DEMO_SEED="1100110011001100110011001100110011001100110011001100110011001100"
 SEED_FILE="$(mktemp)"
 printf '%s' "$DEMO_SEED" > "$SEED_FILE"
 
-echo -e "${AZUL}[mirada-plugins]${RESET} firmando example-reactor (demo)…"
-SIGN_OUT="$(cd "$RAIZ" && cargo run -q -p mirada-plugin-host --bin mirada-plugin-sign -- \
-    sign --seed "$SEED_FILE" --wasm "$ASSETS/example-reactor.wasm" --caps keys,spawn,effects,actions)"
-rm -f "$SEED_FILE"
+# Firma `blake3(wasm) ‖ caps`; setea las globales SIGNER (pubkey) y SIG (firma
+# hex). Se llama SIN `$(...)` para que las globales sobrevivan (la subshell de la
+# sustitución se las llevaría).
+firma_de() {  # $1 = salida, $2 = caps (csv)
+    local out
+    out="$(cd "$RAIZ" && cargo run -q -p mirada-plugin-host --bin mirada-plugin-sign -- \
+        sign --seed "$SEED_FILE" --wasm "$ASSETS/$1.wasm" --caps "$2")"
+    SIGNER="$(printf '%s\n' "$out" | grep -oE 'ed25519:[0-9a-f]+' | head -1)"
+    SIG="$(printf '%s\n' "$out" | grep -oE 'signature: "[0-9a-f]+"' | grep -oE '[0-9a-f]{128}')"
+    if [ -z "$SIGNER" ] || [ -z "$SIG" ]; then
+        echo "FALLO: no se pudo firmar $1 (salida:)"; printf '%s\n' "$out"; exit 1
+    fi
+}
 
-SIGNER="$(printf '%s\n' "$SIGN_OUT" | grep -oE 'ed25519:[0-9a-f]+' | head -1)"
-SIGNATURE="$(printf '%s\n' "$SIGN_OUT" | grep -oE 'signature: "[0-9a-f]+"' | grep -oE '[0-9a-f]{128}')"
-if [ -z "$SIGNER" ] || [ -z "$SIGNATURE" ]; then
-    echo "FALLO: no se pudo firmar el reactor (salida:)"; printf '%s\n' "$SIGN_OUT"; exit 1
-fi
+echo -e "${AZUL}[mirada-plugins]${RESET} firmando reactores (demo)…"
+firma_de example-reactor keys,spawn,effects,actions
+SIG_REACTOR="$SIG"
+firma_de asignador actions
+SIG_ASIGNADOR="$SIG"
+rm -f "$SEED_FILE"
 
 cat > "$ASSETS/example-reactor.ron" <<EOF
 // Manifest del plugin reactor de ejemplo (terminal + dimming + auto-teselado).
@@ -94,12 +105,27 @@ cat > "$ASSETS/example-reactor.ron" <<EOF
     caps: ["keys", "spawn", "effects", "actions"],
     priority: 0,
     signer: "$SIGNER",
-    signature: "$SIGNATURE",
+    signature: "$SIG_REACTOR",
+)
+EOF
+
+cat > "$ASSETS/asignador.ron" <<EOF
+// Manifest del plugin «asignador»: enruta ventanas por app_id (CAP_ACTIONS →
+// requiere firma). El campo 'config' (NO entra en la firma) trae las reglas;
+// editalo a mano o desde wawa-panel. Por defecto, sólo ejemplos comentados (no-op).
+(
+    wasm: "asignador.wasm",
+    kind: Reactor,
+    caps: ["actions"],
+    priority: 0,
+    signer: "$SIGNER",
+    signature: "$SIG_ASIGNADOR",
+    config: "# Reglas: <app_id-substring>  <escritorio 1-9 y/o «float»>\n# Descomenta y ajusta a tus apps:\n# firefox      2\n# Alacritty    1\n# pavucontrol  float\n",
 )
 EOF
 
 cat > "$ASSETS/trust.ron" <<EOF
-// Anillo de confianza de EJEMPLO: la clave DEMO que firma example-reactor.
+// Anillo de confianza de EJEMPLO: la clave DEMO que firma los reactores.
 // En tu instalación, reemplazá esto por TU pubkey (mirada-plugin-sign keygen).
 (
     trusted: [
@@ -108,5 +134,5 @@ cat > "$ASSETS/trust.ron" <<EOF
 )
 EOF
 
-echo -e "${VERDE}[mirada-plugins]${RESET} reactor firmado por $SIGNER"
+echo -e "${VERDE}[mirada-plugins]${RESET} reactores firmados por $SIGNER"
 echo -e "${VERDE}[mirada-plugins]${RESET} listo → $ASSETS"
