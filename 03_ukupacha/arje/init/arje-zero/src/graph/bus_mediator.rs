@@ -284,14 +284,26 @@ impl EnteGraph {
         let miembros = expand_disk_bundle(card);
         let total = miembros.len();
         let mut errores = Vec::new();
+        let mut ya_vivos = 0usize;
         for ente in miembros {
             let label = ente.label.clone();
+            // Idempotencia: re-activar un bundle (login gnome→mirada→gnome) no
+            // debe re-spawnear miembros ya vivos. Sus ULIDs son fijos en el
+            // fichero, así que un segundo spawn sobrescribiría la entrada del
+            // grafo y dejaría el proceso viejo huérfano. Saltamos por label —
+            // espeja el dedup del overlay de boot (`profile::overlay_session`).
+            if self.label_is_incarnated(&label) {
+                debug!(%caller, %name, %label, "miembro del bundle ya vivo — no se re-spawnea");
+                ya_vivos += 1;
+                continue;
+            }
             if let Err(e) = self.authorize_and_spawn(ente, seed_id).await {
                 warn!(%caller, %name, %label, ?e, "miembro del bundle no encarnó");
                 errores.push(format!("{label}: {e}"));
             }
         }
         if errores.is_empty() {
+            info!(%name, total, ya_vivos, "bundle activado");
             BusResponse::Ok
         } else {
             BusResponse::Error(format!(
@@ -300,6 +312,13 @@ impl EnteGraph {
                 errores.join("; ")
             ))
         }
+    }
+
+    /// ¿Hay algún Ente vivo con este `label`? Usado para no re-spawnear
+    /// miembros de un bundle ya activo (idempotencia de la activación de
+    /// sesión).
+    fn label_is_incarnated(&self, label: &str) -> bool {
+        self.incarnated.values().any(|i| i.card.label == label)
     }
 
     /// Encarna una Card transmitida por el bus (no del store en disco). Es el
@@ -627,6 +646,17 @@ mod tests {
         let out = super::expand_disk_bundle(native("un-ente"));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].label, "un-ente");
+    }
+
+    #[test]
+    fn label_is_incarnated_detecta_vivos() {
+        // La Semilla queda incarnada en EnteGraph::new → su label es "vivo";
+        // uno cualquiera, no. Es la guarda que hace idempotente re-activar un
+        // bundle de sesión.
+        let seed = EntityCard::new("seed-x");
+        let g = crate::graph::EnteGraph::new(seed);
+        assert!(g.label_is_incarnated("seed-x"));
+        assert!(!g.label_is_incarnated("compat-logind"));
     }
 
     #[test]
