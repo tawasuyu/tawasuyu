@@ -903,14 +903,17 @@ impl LayerApp {
             let hosted = {
                 let app = self.focused_app_id().map(|s| s.to_string());
                 match (app, self.host.as_ref()) {
-                    (Some(id), Some(h)) => h.snapshot(&id).map(|(_, teeth)| (id, teeth)),
+                    (Some(id), Some(h)) => {
+                        h.snapshot(&id).map(|(_, teeth, active)| (id, teeth, active))
+                    }
                     _ => None,
                 }
             };
-            let (hosted_app, hosted_teeth): (&str, &[pata_host::HostedTooth]) = match &hosted {
-                Some((id, teeth)) => (id.as_str(), teeth.as_slice()),
-                None => ("", &[]),
-            };
+            let (hosted_app, hosted_teeth, hosted_active): (&str, &[pata_host::HostedTooth], Option<u32>) =
+                match &hosted {
+                    Some((id, teeth, active)) => (id.as_str(), teeth.as_slice(), *active),
+                    None => ("", &[], None),
+                };
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],
                 idx,
@@ -919,6 +922,7 @@ impl LayerApp {
                 &self.nav,
                 hosted_teeth,
                 hosted_app,
+                hosted_active,
                 &self.shuma,
                 &self.rag,
                 &self.theme,

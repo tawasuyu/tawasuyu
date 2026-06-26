@@ -70,6 +70,11 @@ pub enum AppMsg {
     },
     /// Sus dientes cambiaron (mismo `app_id` implícito por la conexión).
     Update { teeth: Vec<HostedTooth> },
+    /// Cuál de sus dientes está **activo** ahora (su panel desplegado sobre el
+    /// canvas): `Some(id)` resalta ese diente en el rail de pata; `None` = nada
+    /// desplegado (puro lienzo). Sin este mensaje los dientes hospedados van
+    /// siempre inactivos (pata no conoce el estado interno de la app).
+    SetActive { tooth: Option<u32> },
     /// Baja explícita (también se infiere al cerrarse la conexión).
     Bye,
 }
@@ -183,6 +188,15 @@ mod tests {
         let bytes = postcard::to_stdvec(&m).unwrap();
         let back: AppMsg = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back, m);
+    }
+
+    #[test]
+    fn wire_roundtrip_setactive() {
+        for tooth in [Some(3u32), None] {
+            let m = AppMsg::SetActive { tooth };
+            let bytes = postcard::to_stdvec(&m).unwrap();
+            assert_eq!(postcard::from_bytes::<AppMsg>(&bytes).unwrap(), m);
+        }
     }
 
     #[test]

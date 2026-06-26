@@ -1013,6 +1013,11 @@ pub struct Model {
     pub hosted_bar: bool,
 
     pub _host: Option<pata_host::HostClient>,
+
+    /// Último diente activo reportado al rail hospedado de pata (índice de
+    /// `active_tool` en `Tool::ALL`, o `None`). Evita reenviar el mismo estado en
+    /// cada tick: sólo se manda `SetActive` cuando cambia. Inerte sin `_host`.
+    pub host_active_synced: Option<u32>,
 }
 
 impl Model {

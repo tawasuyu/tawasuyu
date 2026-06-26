@@ -92,6 +92,26 @@ fn shuma_host(handle: &Handle<Msg>) -> Option<pata_host::HostClient> {
     })
 }
 
+/// Sincroniza con el rail hospedado de pata **cuál diente está activo**: el
+/// índice de `active_tool` en `Tool::ALL` (o `None` si no hay herramienta
+/// abierta). Sólo manda `SetActive` cuando el valor cambió respecto del último
+/// reportado (`host_active_synced`), para no escribir el socket en cada tick.
+/// No-op si shuma no delega (sin `_host`). Se llama una vez al final de `update`,
+/// así cubre todos los caminos que tocan `active_tool` sin repetir la llamada.
+fn sync_host_active(m: &mut Model) {
+    let active = m
+        .active_tool
+        .and_then(|t| Tool::ALL.iter().position(|x| *x == t))
+        .map(|i| i as u32);
+    if active == m.host_active_synced {
+        return;
+    }
+    m.host_active_synced = active;
+    if let Some(h) = m._host.as_mut() {
+        h.set_active(active);
+    }
+}
+
 /// Dientes que shuma presta al rail de pata: uno por herramienta.
 fn host_tool_teeth() -> Vec<pata_host::HostedTooth> {
     Tool::ALL
@@ -363,6 +383,7 @@ pub fn new_model() -> Model {
         tick_count: 0,
         hosted_bar: false,
         _host: None,
+        host_active_synced: None,
     };
     // Aplicar la apariencia efectiva (global o de la sesión activa) sobre el
     // tema base: si la activa es «Sistema» queda el tema de wawa ya calculado.
@@ -2143,6 +2164,8 @@ impl App for Shell {
                 }
             }
         }
+        // Refleja en el rail de pata qué herramienta quedó abierta (si delegamos).
+        sync_host_active(&mut m);
         m
     }
 

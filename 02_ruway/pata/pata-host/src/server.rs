@@ -8,11 +8,14 @@ use std::sync::{Arc, Mutex};
 
 use crate::{read_frame, socket_path, write_frame, AppMsg, HostedTooth, ShellMsg};
 
-/// Una app registrada: su título, sus dientes y la mitad de escritura de su
-/// conexión (para mandarle `Activate`).
+/// Una app registrada: su título, sus dientes, el diente activo (su panel
+/// desplegado, si la app lo reporta) y la mitad de escritura de su conexión
+/// (para mandarle `Activate`).
 struct AppReg {
     title: String,
     teeth: Vec<HostedTooth>,
+    /// Diente activo según la app (`SetActive`); `None` = nada desplegado.
+    active: Option<u32>,
     write: UnixStream,
 }
 
@@ -65,11 +68,13 @@ impl HostServer {
         Some(HostServer { shared })
     }
 
-    /// Snapshot (clonado) del título + dientes de `app_id`, si está registrada.
-    /// Para que el host lo pinte sin retener el lock.
-    pub fn snapshot(&self, app_id: &str) -> Option<(String, Vec<HostedTooth>)> {
+    /// Snapshot (clonado) del título, dientes y diente activo de `app_id`, si
+    /// está registrada. Para que el host lo pinte sin retener el lock. `active`
+    /// es `None` mientras la app no reporte un panel desplegado (`SetActive`).
+    pub fn snapshot(&self, app_id: &str) -> Option<(String, Vec<HostedTooth>, Option<u32>)> {
         let apps = self.shared.apps.lock().ok()?;
-        apps.get(app_id).map(|r| (r.title.clone(), r.teeth.clone()))
+        apps.get(app_id)
+            .map(|r| (r.title.clone(), r.teeth.clone(), r.active))
     }
 
     /// `true` si alguna app tiene dientes registrados (para saber si vale la pena
@@ -123,7 +128,15 @@ fn handle_conn(stream: UnixStream, shared: Arc<Shared>) {
                     Err(_) => return,
                 };
                 if let Ok(mut apps) = shared.apps.lock() {
-                    apps.insert(app_id.clone(), AppReg { title, teeth, write });
+                    apps.insert(
+                        app_id.clone(),
+                        AppReg {
+                            title,
+                            teeth,
+                            active: None,
+                            write,
+                        },
+                    );
                 }
                 my_app_id = Some(app_id);
                 bump(&shared);
@@ -133,6 +146,16 @@ fn handle_conn(stream: UnixStream, shared: Arc<Shared>) {
                     if let Ok(mut apps) = shared.apps.lock() {
                         if let Some(reg) = apps.get_mut(id) {
                             reg.teeth = teeth;
+                        }
+                    }
+                    bump(&shared);
+                }
+            }
+            Ok(AppMsg::SetActive { tooth }) => {
+                if let Some(id) = &my_app_id {
+                    if let Ok(mut apps) = shared.apps.lock() {
+                        if let Some(reg) = apps.get_mut(id) {
+                            reg.active = tooth;
                         }
                     }
                     bump(&shared);

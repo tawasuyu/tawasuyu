@@ -39,7 +39,7 @@ fn registro_activacion_y_baja() {
 
     // --- Registro + activación ida y vuelta ---
     let (tx, rx) = mpsc::channel::<u32>();
-    let client = HostClient::connect("tawasuyu.test", "Test", teeth.clone(), move |t| {
+    let mut client = HostClient::connect("tawasuyu.test", "Test", teeth.clone(), move |t| {
         let _ = tx.send(t);
     })
     .expect("client conecta");
@@ -48,6 +48,7 @@ fn registro_activacion_y_baja() {
         .expect("el server registró la app");
     assert_eq!(snap.0, "Test");
     assert_eq!(snap.1, teeth);
+    assert_eq!(snap.2, None, "recién registrada, ningún diente activo");
     assert!(server.any_registered());
 
     assert!(server.activate("tawasuyu.test", 2));
@@ -56,6 +57,19 @@ fn registro_activacion_y_baja() {
 
     // Una app desconocida no recibe nada.
     assert!(!server.activate("otra.app", 1));
+
+    // --- Estado activo: la app reporta su diente desplegado y se refleja ---
+    client.set_active(Some(2));
+    let activo = esperar(Duration::from_secs(2), || {
+        server.snapshot("tawasuyu.test").filter(|s| s.2 == Some(2))
+    });
+    assert!(activo.is_some(), "el diente 2 debe figurar activo tras set_active");
+
+    client.set_active(None);
+    let inactivo = esperar(Duration::from_secs(2), || {
+        server.snapshot("tawasuyu.test").filter(|s| s.2.is_none())
+    });
+    assert!(inactivo.is_some(), "set_active(None) vuelve a puro lienzo");
 
     // --- Baja: soltar el cliente da de baja la app ---
     drop(client);

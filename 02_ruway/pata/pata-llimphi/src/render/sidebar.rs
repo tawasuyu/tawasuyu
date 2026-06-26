@@ -86,14 +86,21 @@ fn rail_widget(surface: &Surface, si: usize, width: f32, nav: &NavState, theme: 
 
 /// El rail de **dientes hospedados** de la app enfocada (`app_id`): un diente por
 /// [`HostedTooth`]. Al clickear, manda `HostToothActivate(app_id, id)` (la app lo
-/// resuelve sobre su propio canvas). No tienen estado "activo" en pata (lo lleva
-/// la app), así que van todos inactivos.
-fn hosted_rail(app_id: &str, teeth: &[HostedTooth], width: f32, theme: &Theme) -> View<Msg> {
+/// resuelve sobre su propio canvas). `active` es el diente que la app reporta
+/// desplegado (vía `AppMsg::SetActive`); se resalta. `None` = puro lienzo, todos
+/// inactivos (también el caso de una app que no reporta su estado).
+fn hosted_rail(
+    app_id: &str,
+    teeth: &[HostedTooth],
+    active: Option<u32>,
+    width: f32,
+    theme: &Theme,
+) -> View<Msg> {
     let items: Vec<DockRailItem> = teeth
         .iter()
         .map(|t| DockRailItem {
             id: t.id as u64,
-            active: false,
+            active: active == Some(t.id),
         })
         .collect();
     let icons: Vec<String> = teeth.iter().map(|t| t.icon.clone()).collect();
@@ -161,13 +168,14 @@ fn rail_strip(
     nav: &NavState,
     hosted: &[HostedTooth],
     hosted_app: &str,
+    hosted_active: Option<u32>,
     shuma: &ShumaState,
     theme: &Theme,
 ) -> View<Msg> {
     let mut hijos = vec![rail_widget(surface, si, thickness, nav, theme)];
     if !hosted.is_empty() {
         hijos.push(rail_separator(thickness, theme));
-        hijos.push(hosted_rail(hosted_app, hosted, thickness, theme));
+        hijos.push(hosted_rail(hosted_app, hosted, hosted_active, thickness, theme));
     }
     if shuma.present {
         hijos.push(rail_separator(thickness, theme));
@@ -368,7 +376,7 @@ pub fn sidebar_rail_view(
     })
     // El path winit no conoce el foco (no hay toplevels) → sin dientes hospedados,
     // pero el diente de shuma es in-process y sí aparece.
-    .children(vec![rail_strip(surface, si, rect.w as f32, nav, &[], "", shuma, theme)])
+    .children(vec![rail_strip(surface, si, rect.w as f32, nav, &[], "", None, shuma, theme)])
 }
 
 /// El panel flotante del diente `ti` desplegado (path winit): flota junto al
@@ -427,12 +435,23 @@ pub fn sidebar_surface_view(
     nav: &NavState,
     hosted: &[HostedTooth],
     hosted_app: &str,
+    hosted_active: Option<u32>,
     shuma: &ShumaState,
     rag: &RagState,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
-    let rail = rail_strip(surface, si, thickness, nav, hosted, hosted_app, shuma, theme);
+    let rail = rail_strip(
+        surface,
+        si,
+        thickness,
+        nav,
+        hosted,
+        hosted_app,
+        hosted_active,
+        shuma,
+        theme,
+    );
 
     let open_ti = match nav.open {
         Some((s, ti)) if s == si => Some(ti),

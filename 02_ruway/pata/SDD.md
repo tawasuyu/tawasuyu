@@ -556,10 +556,21 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     glifo Group. Esto es la contraparte in-process de la delegación por socket:
     cruzar la frontera de proceso (app aparte) usa `pata-host`; embebido se cablea
     directo leyendo el `Model`.
+  - **Estado "activo" del diente hospedado ✅** (2026-06-26): antes los dientes
+    hospedados iban siempre inactivos en pata (el estado vive en la app). Ahora el
+    protocolo `pata-host` gana `AppMsg::SetActive{tooth: Option<u32>}` (app→shell):
+    la app reporta qué diente tiene desplegado (`Some(id)`) o que está en puro
+    lienzo (`None`); `HostServer` lo guarda por `app_id` y lo expone en `snapshot`
+    (ahora `(title, teeth, active)`), y `hosted_rail` resalta el diente que
+    coincide. `HostClient::set_active` es la API de la app. **shuma** ya lo adopta:
+    un único `sync_host_active` al cierre de su `update` empuja el índice de
+    `active_tool` en `Tool::ALL` (con guarda anti-redundancia, sin escribir el
+    socket en cada tick). Round-trip server↔client testeado (`tests/roundtrip.rs`)
+    + wire de `SetActive`. media/pluma/cosmos pueden adoptarlo igual cuando se
+    quiera (llamar `set_active` al togglear su panel).
   - **Pendiente opcional**: re-registro de dientes al reordenar el dock (hoy se
     registran una vez al init; el lado de activación se computa en vivo, así que el
-    drop entre lados sigue funcionando); estado "activo" del diente hospedado (hoy
-    siempre inactivo en pata, lo lleva la app).
+    drop entre lados sigue funcionando).
 
 - **Fase 13 — barras embellecidas + widgets interactivos** (2026-06-05):
   - **Apariencia configurable** (`pata-core`): `Surface` gana `opacity`
