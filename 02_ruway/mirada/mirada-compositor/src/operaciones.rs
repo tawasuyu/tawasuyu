@@ -1501,6 +1501,7 @@ impl App {
         let cmd = ticket.session.trim();
         if cmd.is_empty() {
             spawn_autostart(user.as_ref(), &env);
+            spawn_config_startup(user.as_ref(), &env);
         } else if ticket.foreign {
             println!(
                 "mirada-compositor · sesión ajena «{cmd}» — cierro y cedo el DRM."

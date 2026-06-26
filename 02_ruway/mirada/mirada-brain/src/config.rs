@@ -219,6 +219,14 @@ pub struct Config {
     /// escritorio compuesto. Lo que no se indique cae al valor global.
     /// Vacío = orden de discovery, wallpaper global para todas.
     pub outputs: Vec<OutputOverride>,
+    /// Autoarranque **rico**: apps que mirada lanza al iniciar la sesión, con
+    /// la opción de **fijarles el escritorio** y de declararlas **remotas**
+    /// (se envuelven en `waypipe ssh`). Es el equivalente estructurado del
+    /// archivo `autostart` (una línea = un comando suelto, local y sin
+    /// escritorio): acá una sesión de otra máquina se integra al diseño de
+    /// escritorios igual que una app local. Ambos coexisten. Vacío = nada.
+    #[serde(default)]
+    pub startup: Vec<StartupApp>,
     /// **Vista espacial** (el "Prezi" de mirada): habilita el zoom-out que
     /// muestra todos los escritorios como mosaicos para saltar entre ellos.
     /// `false` la deshabilita (la tecla/menú no hace nada).
@@ -535,6 +543,79 @@ pub struct MenuEntry {
     pub submenu: Vec<MenuEntry>,
 }
 
+/// Una app de **autoarranque rico** (ver [`Config::startup`]). Lleva el comando,
+/// y opcionalmente: el host remoto (la envuelve en `waypipe ssh`) y la ubicación
+/// inicial (escritorio/flotante/fullscreen, igual que una [`crate::rules::Rule`]).
+/// Así una sesión remota se declara y se ubica en el diseño de escritorios
+/// exactamente como una app local.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct StartupApp {
+    /// Comando a lanzar (programa + argumentos), tal cual para `sh -c`. Si
+    /// [`Self::remote`] no está vacío, es el comando que corre EN el host remoto.
+    pub command: String,
+    /// Host remoto `[user@]host`. Vacío = app local. No vacío = el comando se
+    /// envuelve en `waypipe ssh <host> <command>` y la ventana llega por el
+    /// túnel ssh como un cliente Wayland más (sin protocolo nuevo).
+    #[serde(default)]
+    pub remote: String,
+    /// Escritorio de destino (1-based); `0` = donde caiga (el activo). Para que
+    /// el anclado funcione hay que declarar también [`Self::app_id`] — así la
+    /// ventana, al abrirse, se reconoce y se manda a este escritorio por la
+    /// misma vía que `rules.ron`.
+    #[serde(default)]
+    pub workspace: usize,
+    /// Subcadena del `app_id` de la ventana resultante, para ubicarla al abrir
+    /// (mismo criterio que `rules.ron`). Necesaria si se quiere `workspace`,
+    /// `floating` o `fullscreen`. Vacía = sólo se lanza, sin ubicación fija.
+    #[serde(default)]
+    pub app_id: String,
+    /// Abrir la ventana flotando.
+    #[serde(default)]
+    pub floating: bool,
+    /// Abrir la ventana en pantalla completa.
+    #[serde(default)]
+    pub fullscreen: bool,
+}
+
+impl StartupApp {
+    /// El comando de shell ya resuelto: el `command` tal cual si es local, o
+    /// envuelto en `waypipe ssh <host> …` si [`Self::remote`] está puesto.
+    pub fn shell_command(&self) -> String {
+        let host = self.remote.trim();
+        if host.is_empty() {
+            self.command.clone()
+        } else {
+            waypipe_ssh_command(host, &self.command)
+        }
+    }
+
+    /// La regla de ubicación equivalente (escritorio/flotante/fullscreen por
+    /// `app_id`), o `None` si la entrada no fija ubicación o no trae `app_id`
+    /// con el que reconocer la ventana al abrirse.
+    pub fn placement_rule(&self) -> Option<crate::rules::Rule> {
+        let pins = self.workspace > 0 || self.floating || self.fullscreen;
+        let app_id = self.app_id.trim();
+        if !pins || app_id.is_empty() {
+            return None;
+        }
+        Some(crate::rules::Rule {
+            app_id: app_id.to_string(),
+            title: String::new(),
+            workspace: self.workspace,
+            floating: self.floating,
+            fullscreen: self.fullscreen,
+            size: (0, 0),
+        })
+    }
+}
+
+/// Arma `waypipe ssh <host> <command>`: corre `command` en `host` y reenvía su
+/// protocolo Wayland por el túnel ssh. `host` puede traer `user@`. Pura y
+/// reutilizada por `mirada-ctl remote` y por el autoarranque de la config.
+pub fn waypipe_ssh_command(host: &str, command: &str) -> String {
+    format!("waypipe ssh {host} {command}")
+}
+
 impl Default for Config {
     fn default() -> Self {
         let lp = LayoutParams::default();
@@ -569,6 +650,7 @@ impl Default for Config {
             zone_presets: default_zone_presets(),
             output_direction: "horizontal".to_string(),
             outputs: Vec::new(),
+            startup: Vec::new(),
             overview_enabled: true,
             overview_columns: 0,
             overview_anim_ms: 260,
@@ -871,6 +953,20 @@ impl Config {
         }
     }
 
+    /// Las apps de **autoarranque rico** declaradas en la config. El archivo
+    /// `autostart` (una línea por comando) sigue siendo la vía simple; esto es
+    /// el complemento estructurado (remoto + escritorio). Ambos coexisten.
+    pub fn startup(&self) -> &[StartupApp] {
+        &self.startup
+    }
+
+    /// Las reglas de ubicación que derivan de las apps de autoarranque que
+    /// fijan escritorio/flotante/fullscreen — se agregan a las reglas del
+    /// usuario para que cada app de `startup` aterrice donde se declaró.
+    pub fn startup_rules(&self) -> Vec<crate::rules::Rule> {
+        self.startup.iter().filter_map(StartupApp::placement_rule).collect()
+    }
+
     /// Parsea la config desde el texto RON de un archivo. Valida también que
     /// los slugs de overrides sean conocidos —`wallpaper_fit` de cada
     /// [`OutputOverride`] y el [`Self::output_direction`] global— para que un
@@ -1089,6 +1185,23 @@ const CONFIG_TEMPLATE: &str = "\
     //                            wallpaper_path: \"/home/yo/fondos/sala.png\"),
     //   ],
     outputs: [],
+
+    // Autoarranque RICO: apps que mirada lanza al iniciar la sesión. Es el
+    // complemento estructurado del archivo `autostart` (una línea por comando,
+    // local y sin escritorio) — acá cada entrada puede, además del comando:
+    //   remote:    \"[user@]host\"  → la envuelve en `waypipe ssh` (app de OTRA
+    //                                máquina; la ventana llega como cliente local).
+    //   workspace: 1..9            → la fija a ese escritorio al abrir.
+    //   app_id:    \"foot\"          → con qué app_id reconocer la ventana para
+    //                                ubicarla (NECESARIO para workspace/floating).
+    //   floating / fullscreen      → cómo abrirla.
+    // Una sesión waypipe se integra al diseño de escritorios igual que una local.
+    // Ej:
+    //   startup: [
+    //       (command: \"foot\", remote: \"sergio@servidor\", app_id: \"foot\", workspace: 3),
+    //       (command: \"mpv\",  app_id: \"mpv\", fullscreen: true),
+    //   ],
+    startup: [],
 )
 ";
 
@@ -1437,5 +1550,67 @@ mod tests {
         assert_eq!(apps.submenu.len(), 2);
         assert_eq!(apps.submenu[0].command, "firefox");
         assert_eq!(apps.submenu[1].submenu[0].label, "nada");
+    }
+
+    #[test]
+    fn startup_local_se_lanza_tal_cual() {
+        let a = StartupApp { command: "foot".into(), ..Default::default() };
+        assert_eq!(a.shell_command(), "foot");
+    }
+
+    #[test]
+    fn startup_remoto_se_envuelve_en_waypipe() {
+        let a = StartupApp {
+            command: "foot --title diario".into(),
+            remote: "sergio@servidor".into(),
+            ..Default::default()
+        };
+        assert_eq!(a.shell_command(), "waypipe ssh sergio@servidor foot --title diario");
+    }
+
+    #[test]
+    fn startup_pin_a_escritorio_produce_una_regla() {
+        let a = StartupApp {
+            command: "foot".into(),
+            remote: "host".into(),
+            workspace: 3,
+            app_id: "foot".into(),
+            ..Default::default()
+        };
+        let r = a.placement_rule().expect("con app_id + workspace hay regla");
+        // 3 (1-based) se resuelve a índice 2 por el mismo camino que rules.ron.
+        assert_eq!(r.workspace, 3);
+        let outcome = crate::rules::Rules::new(vec![r]).resolve("foot", "");
+        assert_eq!(outcome.workspace, Some(2));
+    }
+
+    #[test]
+    fn startup_sin_app_id_no_produce_regla() {
+        // Pin sin app_id no se puede ubicar: nada de regla (sólo se lanza).
+        let a = StartupApp { command: "foot".into(), workspace: 3, ..Default::default() };
+        assert!(a.placement_rule().is_none());
+    }
+
+    #[test]
+    fn startup_sin_pin_no_produce_regla() {
+        let a = StartupApp { command: "foot".into(), app_id: "foot".into(), ..Default::default() };
+        assert!(a.placement_rule().is_none());
+    }
+
+    #[test]
+    fn startup_round_trip_por_ron() {
+        let c = Config::from_ron(
+            r#"( startup: [
+                (command: "foot", remote: "sergio@servidor", app_id: "foot", workspace: 3),
+                (command: "mpv", app_id: "mpv", fullscreen: true),
+            ] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.startup().len(), 2);
+        assert_eq!(c.startup()[0].shell_command(), "waypipe ssh sergio@servidor foot");
+        // Sólo la primera fija escritorio; ambas fijan ubicación → 2 reglas.
+        assert_eq!(c.startup_rules().len(), 2);
+        let text = c.to_ron().expect("serializa");
+        assert_eq!(Config::from_ron(&text).unwrap(), c);
     }
 }

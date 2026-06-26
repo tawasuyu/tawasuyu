@@ -329,16 +329,12 @@ fn run_remote(args: &[String]) -> Result<(), String> {
 }
 
 /// Arma el comando `waypipe ssh <host> <app…>`. `host` puede traer `user@`. Los
-/// términos se unen con espacios, igual que cualquier `Spawn` (que es un string
-/// para `sh -c`); waypipe entrega el resto a ssh, que lo re-parsea en el host
-/// remoto. Pura y testeable.
+/// términos de la app se unen con espacios y se delegan al helper compartido del
+/// brain ([`mirada_brain::waypipe_ssh_command`]), el mismo que usa el
+/// autoarranque `startup` de `config.ron` — así `remote` y `startup` arman el
+/// comando idéntico. Pura y testeable.
 fn waypipe_remote_cmd(host: &str, app: &[String]) -> String {
-    let mut parts = Vec::with_capacity(app.len() + 3);
-    parts.push("waypipe");
-    parts.push("ssh");
-    parts.push(host);
-    parts.extend(app.iter().map(String::as_str));
-    parts.join(" ")
+    mirada_brain::waypipe_ssh_command(host, &app.join(" "))
 }
 
 fn print_help() {
@@ -371,7 +367,8 @@ fn print_help() {
          \n\
          REMOTE (app de otra máquina, túnel waypipe+ssh):\n  \
            mirada-ctl remote [user@]host <app> [args…]\n  \
-           ej: mirada-ctl remote sergio@servidor foot   (la ventana llega como cliente local)\n\
+           ej: mirada-ctl remote sergio@servidor foot   (la ventana llega como cliente local)\n  \
+           persistente: declarala en `startup` de config.ron (remote+workspace)\n\
          \n\
          EJEMPLOS:\n  \
            mirada-ctl focus-next\n  \

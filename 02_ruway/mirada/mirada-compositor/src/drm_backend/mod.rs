@@ -1023,6 +1023,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         // Modo no-greeter: ya corremos con la identidad del usuario, sin
         // traspaso, así que no hay entorno de sesión que inyectar.
         crate::spawn_autostart(None, &[]);
+        crate::spawn_config_startup(None, &[]);
         // App de arranque: si `MIRADA_STARTUP` trae un comando, se lanza
         // como hijo (hereda `WAYLAND_DISPLAY`) — cómodo para probar sin
         // saltar de VT.

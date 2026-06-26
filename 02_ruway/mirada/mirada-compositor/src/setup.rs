@@ -60,8 +60,14 @@ pub(crate) fn embedded_brain(keymap_path: &Option<std::path::PathBuf>) -> Brain 
         None => Keymap::default(),
     };
     let mut desktop = Desktop::with_keymap(keymap);
-    desktop.set_config(load_user_config());
-    desktop.set_rules(load_user_rules());
+    let config = load_user_config();
+    // Las reglas del usuario primero (ganan por «primera que case»), y al final
+    // las derivadas del autoarranque de la config (`startup`), para que cada app
+    // declarada —local o remota vía waypipe— aterrice en su escritorio.
+    let mut rules = load_user_rules();
+    rules.extend(config.startup_rules());
+    desktop.set_config(config);
+    desktop.set_rules(rules);
     let _ = desktop.set_caps(load_user_caps());
     Brain::Embedded(desktop)
 }

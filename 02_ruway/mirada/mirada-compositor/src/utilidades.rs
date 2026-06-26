@@ -507,6 +507,40 @@ pub(crate) fn spawn_autostart(as_user: Option<&UserInfo>, session_env: &[(String
     }
 }
 
+/// La ruta del `config.ron` del usuario — junto al keymap y el autostart.
+/// Con un usuario (tras el traspaso del DM) se resuelve bajo su home; sin él,
+/// bajo la config del proceso actual.
+pub(crate) fn config_path(user: Option<&UserInfo>) -> Option<std::path::PathBuf> {
+    match user {
+        Some(u) => Some(u.home.join(".config/mirada/config.ron")),
+        None => mirada_brain::Config::default_path(),
+    }
+}
+
+/// Lanza las apps del **autoarranque rico** de `config.ron` ([`startup`]): cada
+/// entrada se resuelve a su comando de shell (envuelto en `waypipe ssh` si es
+/// remota) y se lanza con [`spawn_command`]. La ubicación por escritorio la
+/// resuelven las reglas derivadas de `startup` (ver `embedded_brain`). Es el
+/// complemento del archivo `autostart` ([`spawn_autostart`]); ambos corren.
+///
+/// [`startup`]: mirada_brain::Config::startup
+pub(crate) fn spawn_config_startup(as_user: Option<&UserInfo>, session_env: &[(String, String)]) {
+    let Some(path) = config_path(as_user) else {
+        return;
+    };
+    let Ok(cfg) = mirada_brain::Config::load(&path) else {
+        return; // sin config o corrupta: nada que autoarrancar (ya avisó el brain)
+    };
+    let mut n = 0;
+    for app in cfg.startup() {
+        spawn_command(&app.shell_command(), as_user, session_env);
+        n += 1;
+    }
+    if n > 0 {
+        println!("mirada-compositor · autoarranque (config.ron): {n} app(s).");
+    }
+}
+
 /// Nombre o ruta del binario del greeter. `MIRADA_GREETER_BIN` lo
 /// sobreescribe — cómodo en desarrollo para apuntar a `target/…`.
 pub(crate) fn greeter_bin() -> String {

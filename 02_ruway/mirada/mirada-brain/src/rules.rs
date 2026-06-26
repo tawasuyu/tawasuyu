@@ -75,6 +75,13 @@ impl Rules {
         Self { rules }
     }
 
+    /// Agrega reglas al final del conjunto (las del usuario, listadas antes,
+    /// siguen ganando por el «primera que case»). Lo usa el arranque para
+    /// sumar las reglas de ubicación derivadas del autoarranque de la config.
+    pub fn extend(&mut self, more: impl IntoIterator<Item = Rule>) {
+        self.rules.extend(more);
+    }
+
     /// Resuelve qué hacer con una ventana — gana la primera regla que case.
     pub fn resolve(&self, app_id: &str, title: &str) -> RuleOutcome {
         for r in &self.rules {
