@@ -22,11 +22,43 @@
 #![forbid(unsafe_code)]
 
 use std::cmp::min;
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use llimphi_icons::Icon;
+use llimphi_theme::{alpha, motion};
+use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::View;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
+
+/// Hash estable de una cadena → `key` para las animaciones implícitas de
+/// Llimphi. El mismo `cwd` produce siempre la misma key entre rebuilds,
+/// así el pop-in corre sólo al cambiar de carpeta (no en cada repintado
+/// por selección o scroll).
+fn key_of(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Deriva una [`EmptyPalette`] desde la [`ListPalette`] (que no acarrea un
+/// `Theme`). Mismo criterio que `EmptyPalette::from_theme`: ícono y
+/// descripción apagados sobre `fg_muted`.
+fn empty_palette(p: &ListPalette) -> EmptyPalette {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let dim = |a: u8| {
+        let [r, g, b, _] = p.fg_muted.components;
+        AlphaColor::new([r, g, b, a as f32 / 255.0])
+    };
+    EmptyPalette {
+        fg_icon: dim(alpha::HINT),
+        fg_title: p.fg_muted,
+        fg_desc: dim(alpha::DISABLED),
+    }
+}
 
 /// Una entrada del directorio actual.
 #[derive(Clone, Debug)]
@@ -244,6 +276,30 @@ where
     Msg: Clone + 'static,
     F: Fn(usize) -> Msg,
 {
+    let scene_key = key_of(&state.cwd.to_string_lossy());
+
+    // Carpeta vacía (o ilegible): empty-state con orientación en vez de un
+    // panel en blanco. Entra con el mismo pop-in que la lista.
+    if state.entries.is_empty() {
+        let pal = empty_palette(&palette);
+        let desc = format!("No hay entradas en {}", state.cwd.display());
+        return View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(palette.bg_panel)
+        .children(vec![empty_view(
+            Icon::Folder,
+            "Carpeta vacía",
+            Some(&desc),
+            &pal,
+        )])
+        .animated_enter(scene_key, motion::NORMAL);
+    }
+
     let start = state.visible_offset;
     let end = min(state.entries.len(), start + state.visible_rows);
     let rows: Vec<ListRow<Msg>> = (start..end)
@@ -276,6 +332,9 @@ where
         None
     };
 
+    // Pop-in de la lista al navegar: la `scene_key` cambia con el `cwd`, así
+    // la lista entra con un fade suave al entrar a una carpeta nueva y queda
+    // estable mientras sólo cambian selección o scroll dentro de la misma.
     list_view(ListSpec {
         rows,
         total: state.entries.len(),
@@ -284,4 +343,5 @@ where
         row_height: DEFAULT_ROW_HEIGHT,
         palette,
     })
+    .animated_enter(scene_key, motion::NORMAL)
 }
