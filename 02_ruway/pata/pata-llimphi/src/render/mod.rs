@@ -45,6 +45,7 @@ mod cde;
 mod control;
 mod network;
 mod panels;
+mod session;
 mod sidebar;
 mod start_menus;
 mod task_manager;
@@ -58,6 +59,7 @@ pub use panels::{
 };
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
 pub use network::{network_overlay, network_view};
+pub use session::{session_overlay, session_view};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};
 pub use task_manager::{clipboard_overlay, clipboard_panel, start_button_view, tray_view, workspaces_view, WsComet};
@@ -607,6 +609,7 @@ fn slots_de(
                 SlotWidget::FrontPanel => View::new(Style::default()),
                 SlotWidget::Control => control::control_button_view(theme),
                 SlotWidget::Network => network::network_view(data.network, theme),
+                SlotWidget::Session => session::session_view(theme),
             })
             .collect();
         let mut style = Style {
@@ -1497,6 +1500,58 @@ pub fn volume_menu_view(
     body_style.flex_grow = 1.0;
     let body = View::new(body_style)
         .on_click(Msg::VolumePanel)
+        .children(vec![panel_abs]);
+
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// El **menú de sesión/energía** para el **layer-shell**, anclado bajo el botón
+/// de power. Espejo de [`control_menu_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn session_menu_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    confirm: Option<crate::SessionAction>,
+    anchor_x: f32,
+    avail_w: f32,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(bar_px) },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
+
+    let left =
+        (anchor_x - session::PANEL_W * 0.5).clamp(8.0, (avail_w - session::PANEL_W - 8.0).max(8.0));
+    let panel_abs = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect { left: length(left), top: length(0.0_f32), right: auto(), bottom: auto() },
+        size: Size { width: length(session::PANEL_W), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![session::session_panel(confirm, theme)]);
+
+    let mut body_style = Style {
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::SessionToggle)
         .children(vec![panel_abs]);
 
     let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {

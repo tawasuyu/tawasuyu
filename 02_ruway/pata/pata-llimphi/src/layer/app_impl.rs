@@ -904,6 +904,17 @@ impl LayerApp {
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
                     self.panels[idx].width as f32,
                 ),
+                MenuKind::Session => render::session_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    self.session_confirm,
+                    self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
+                ),
             }
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
             render::shuma_open_view(
@@ -1101,6 +1112,23 @@ impl LayerApp {
                 crate::sampler::set_sink_input_volume(index, frac);
             }
             Msg::SinkInputMute(index) => crate::sampler::toggle_sink_input_mute(index),
+            Msg::SessionToggle => {
+                self.session_confirm = None;
+                self.toggle_menu(MenuKind::Session);
+            }
+            Msg::SessionConfirm(a) => {
+                self.session_confirm = Some(a);
+                self.marcar_menu_dirty();
+            }
+            Msg::SessionCancel => {
+                self.session_confirm = None;
+                self.marcar_menu_dirty();
+            }
+            Msg::SessionRun(a) => {
+                crate::run_session_action(a);
+                self.session_confirm = None;
+                self.set_menu_open(false);
+            }
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy < 0.0);

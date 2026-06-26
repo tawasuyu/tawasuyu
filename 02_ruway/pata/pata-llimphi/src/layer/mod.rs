@@ -200,6 +200,8 @@ pub(super) enum MenuKind {
     Network,
     /// El mezclador de volumen (sink por defecto + corrientes por app).
     Volume,
+    /// El menú de sesión/energía (bloquear/suspender/reiniciar/apagar/logout).
+    Session,
 }
 
 /// El cliente Wayland del backend layer-shell.
@@ -241,6 +243,8 @@ pub(super) struct LayerApp {
     pub(super) network_now: Option<crate::network::NetState>,
     /// Corrientes de audio por app (sink-inputs) para el mezclador de volumen.
     pub(super) sink_inputs: Vec<crate::sampler::SinkInput>,
+    /// Acción de sesión pendiente de confirmación en el menú de energía.
+    pub(super) session_confirm: Option<crate::SessionAction>,
     /// Visualizador de audio (cava) en su propio hilo.
     pub(super) cava: Option<crate::cava::CavaHandle>,
     /// Último cuadro del visualizador.
@@ -548,6 +552,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         network,
         network_now: None,
         sink_inputs: Vec::new(),
+        session_confirm: None,
         cava,
         cava_frame: Vec::new(),
         theme,

@@ -718,3 +718,15 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     se quitó el `exec = "pavucontrol"` del asset. En layer-shell es un
     `MenuKind::Volume` (la barra crece bajo el medidor); en winit, el
     `volume_overlay` de siempre, ahora con la sección de apps.
+  - **Menú de sesión/energía ✅** — el widget `session`/`power` (símbolo de power
+    pintado a mano) abre un menú con **Bloquear / Suspender / Reiniciar / Apagar /
+    Cerrar sesión**. Cierra el TODO que el propio SDD marcaba ("logout real
+    pendiente", Fase 7). Cada acción es un comando de sistema (Regla 2, como
+    nmcli/wpctl): lock=`loginctl lock-session`, suspend/reboot/poweroff=`systemctl`,
+    y **logout=`mirada-ctl logout`** (mirada hace su FUS logout: cierra ventanas +
+    relevo) con respaldo a `loginctl terminate-user`. Las acciones disruptivas
+    (reiniciar/apagar/logout) piden **confirmación inline** (`SessionAction::
+    needs_confirm`): la fila se reemplaza por «¿Apagar? / Confirmar / Cancelar».
+    `render/session.rs` con `session_view`/`session_panel`/`session_overlay`;
+    en layer-shell `MenuKind::Session` + `session_menu_view`. La lógica
+    (etiquetas/comandos/confirmación) vive en `SessionAction` en `lib.rs`.

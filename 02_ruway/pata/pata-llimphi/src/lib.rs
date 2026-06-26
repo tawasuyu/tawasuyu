@@ -193,6 +193,14 @@ pub enum Msg {
     NetworkDisconnect(String),
     /// Encender/apagar la radio Wi-Fi. El `bool` es el estado deseado.
     NetworkRadio(bool),
+    /// Desplegar/replegar el menú de sesión/energía.
+    SessionToggle,
+    /// Pedir confirmación de una acción disruptiva (reiniciar/apagar/logout).
+    SessionConfirm(SessionAction),
+    /// Ejecutar una acción de sesión (tras confirmar, o directa si es benigna).
+    SessionRun(SessionAction),
+    /// Cancelar la confirmación pendiente (vuelve a la lista de acciones).
+    SessionCancel,
     /// Desplegar/replegar el menú del botón de inicio.
     StartToggle,
     /// Cicla al próximo estilo de menú (Classic → XP → GNOME → Classic).
@@ -354,6 +362,73 @@ pub enum SlotWidget {
     /// con la lista de redes ([`Msg::NetworkToggle`]). Dato del host (vía
     /// `nmcli`, ver [`network`]), no del view-model de core.
     Network,
+    /// El botón de sesión/energía: un símbolo de power que abre un menú con
+    /// bloquear/suspender/reiniciar/apagar/cerrar sesión ([`Msg::SessionToggle`]).
+    Session,
+}
+
+/// Las acciones del menú de sesión/energía. El logout pasa por el WM (mirada hace
+/// su FUS logout: cierra ventanas + relevo), el resto por systemd/loginctl —
+/// pata habla con el sistema por su CLI, como con wpctl/nmcli (Regla 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionAction {
+    /// Bloquear la sesión (el locker del sistema vía `loginctl lock-session`).
+    Lock,
+    /// Suspender a RAM (`systemctl suspend`).
+    Suspend,
+    /// Reiniciar (`systemctl reboot`).
+    Reboot,
+    /// Apagar (`systemctl poweroff`).
+    Shutdown,
+    /// Cerrar sesión (`mirada-ctl logout`, fallback `loginctl terminate-user`).
+    Logout,
+}
+
+impl SessionAction {
+    /// Las acciones en orden de presentación en el menú.
+    pub const ALL: [SessionAction; 5] = [
+        SessionAction::Lock,
+        SessionAction::Suspend,
+        SessionAction::Reboot,
+        SessionAction::Shutdown,
+        SessionAction::Logout,
+    ];
+
+    /// La etiqueta visible.
+    pub fn label(self) -> &'static str {
+        match self {
+            SessionAction::Lock => "Bloquear",
+            SessionAction::Suspend => "Suspender",
+            SessionAction::Reboot => "Reiniciar",
+            SessionAction::Shutdown => "Apagar",
+            SessionAction::Logout => "Cerrar sesión",
+        }
+    }
+
+    /// El comando de shell que la ejecuta.
+    pub fn command(self) -> &'static str {
+        match self {
+            SessionAction::Lock => "loginctl lock-session",
+            SessionAction::Suspend => "systemctl suspend",
+            SessionAction::Reboot => "systemctl reboot",
+            SessionAction::Shutdown => "systemctl poweroff",
+            SessionAction::Logout => "mirada-ctl logout || loginctl terminate-user \"$USER\"",
+        }
+    }
+
+    /// `true` si la acción es disruptiva (reiniciar/apagar/cerrar sesión) y
+    /// merece una confirmación antes de ejecutarse.
+    pub fn needs_confirm(self) -> bool {
+        matches!(
+            self,
+            SessionAction::Reboot | SessionAction::Shutdown | SessionAction::Logout
+        )
+    }
+}
+
+/// Ejecuta una acción de sesión (desacoplado, como [`spawn_cmd`]).
+pub fn run_session_action(a: SessionAction) {
+    spawn_cmd(a.command());
 }
 
 /// `true` si la config pide el reloj en **UTC** (`general.timezone = "UTC"`).
@@ -695,7 +770,8 @@ impl SurfaceWidgets {
                 | SlotWidget::ProgramManager
                 | SlotWidget::FrontPanel
                 | SlotWidget::Control
-                | SlotWidget::Network => None,
+                | SlotWidget::Network
+                | SlotWidget::Session => None,
             })
     }
 }
@@ -781,6 +857,10 @@ pub struct Model {
     pub network_now: Option<network::NetState>,
     /// `true` cuando el popup del applet de red está desplegado (path winit).
     pub network_open: bool,
+    /// `true` cuando el menú de sesión/energía está desplegado (path winit).
+    pub session_open: bool,
+    /// Acción de sesión pendiente de confirmación, o `None`.
+    pub session_confirm: Option<SessionAction>,
     /// Visualizador de audio (cava) en su propio hilo. `None` si la config no
     /// declara `cava`.
     pub cava: Option<cava::CavaHandle>,
@@ -893,6 +973,8 @@ impl Model {
                         SlotWidget::Control
                     } else if spec.kind == "network" || spec.kind == "wifi" {
                         SlotWidget::Network
+                    } else if spec.kind == "session" || spec.kind == "power" {
+                        SlotWidget::Session
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -1095,6 +1177,8 @@ impl App for PataApp {
             network,
             network_now: None,
             network_open: false,
+            session_open: false,
+            session_confirm: None,
             cava,
             cava_frame: Vec::new(),
             nav: NavState::default(),
@@ -1417,6 +1501,23 @@ impl App for PataApp {
                 if let Some(n) = &mut model.network_now {
                     n.wifi_enabled = on;
                 }
+            }
+            Msg::SessionToggle => {
+                model.session_open = !model.session_open;
+                model.session_confirm = None;
+                if model.session_open {
+                    model.menu_open = false;
+                    model.clip_open = false;
+                    model.control_open = false;
+                    model.network_open = false;
+                }
+            }
+            Msg::SessionConfirm(a) => model.session_confirm = Some(a),
+            Msg::SessionCancel => model.session_confirm = None,
+            Msg::SessionRun(a) => {
+                run_session_action(a);
+                model.session_open = false;
+                model.session_confirm = None;
             }
             Msg::ClipboardPick(text) => {
                 sampler::copiar_clipboard(&text);
@@ -1766,6 +1867,10 @@ impl App for PataApp {
                 bar_h,
                 &model.theme,
             ));
+        }
+        if model.session_open {
+            let bar_h = bar_thickness_for(&model.cfg, "session");
+            return Some(render::session_overlay(model.session_confirm, bar_h, &model.theme));
         }
         if model.clock_open {
             let bar_h = bar_thickness_for(&model.cfg, "clock");

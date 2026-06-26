@@ -88,6 +88,9 @@ kind = "ram_meter"
 [[surfaces.end]]
 kind = "cpu_meter"
 
+[[surfaces.end]]
+kind = "session"       # botón de power: bloquear/suspender/reiniciar/apagar/logout
+
 # --- Panel: tarjetas flotantes estilo conky sobre el escritorio ---
 # Un panel no reserva franja: sus tarjetas flotan en (x, y) con tamaño (w, h).
 # En layer-shell cada tarjeta es su propia surface en la capa de fondo.
