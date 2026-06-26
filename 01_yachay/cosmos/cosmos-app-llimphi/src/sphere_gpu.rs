@@ -319,17 +319,26 @@ fn push_circle(
     push_polyline(out, &pts, color, alpha);
 }
 
-/// Nombres de signos (orden zodiacal desde Aries).
+/// Nombres de signos (orden zodiacal desde Aries) para `sign_commands`.
 const SIGN_NAMES: [&str; 12] = [
     "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius",
     "capricorn", "aquarius", "pisces",
 ];
 
-/// Una etiqueta de texto anclada a un punto 3D del cielo (se proyecta a pantalla
-/// y se pinta con vello ENCIMA del pase GPU vía `paint_over`).
+/// Qué dibuja una etiqueta: glifo vectorial de signo / de cuerpo, o texto plano.
+/// Los glifos van por `cosmos_render::glyphs::{sign,planet}_commands` (trazos,
+/// sin fuente → sin tofu); el texto por la tipografía.
+pub(crate) enum LabelKind {
+    Sign(&'static str),
+    Planet(String),
+    Text(String),
+}
+
+/// Una etiqueta anclada a un punto 3D del cielo (se proyecta a pantalla y se
+/// pinta con vello ENCIMA del pase GPU vía `paint_over`).
 pub(crate) struct SphereLabel {
     pub world: Vec3,
-    pub text: String,
+    pub kind: LabelKind,
     pub color: [f32; 4],
     pub size: f32,
 }
@@ -341,17 +350,17 @@ pub(crate) fn sphere_labels(model: &RenderModel, pal: &Palette) -> Vec<SphereLab
     let ecl = rgb(pal.dial_ring);
     let ang = rgb(pal.angle_highlight);
     let mut out = Vec::new();
-    // Signos.
+    // Signos (glifo vectorial ♈♉…).
     for (i, name) in SIGN_NAMES.iter().enumerate() {
         let lon = i as f32 * 30.0 + 15.0;
         out.push(SphereLabel {
             world: eclip(lon) * r * 1.18,
-            text: cosmos_render::sign_unicode(name).to_string(),
+            kind: LabelKind::Sign(name),
             color: [ecl[0], ecl[1], ecl[2], 0.95],
-            size: 13.0,
+            size: 22.0,
         });
     }
-    // Ángulos.
+    // Ángulos (texto plano — ASCII, sin tofu).
     for (deg, txt) in [
         (model.ascendant_deg, "Asc"),
         (model.midheaven_deg, "MC"),
@@ -359,21 +368,21 @@ pub(crate) fn sphere_labels(model: &RenderModel, pal: &Palette) -> Vec<SphereLab
         (model.imum_coeli_deg, "IC"),
     ] {
         out.push(SphereLabel {
-            world: eclip(deg) * r * 1.22,
-            text: txt.to_string(),
+            world: eclip(deg) * r * 1.23,
+            kind: LabelKind::Text(txt.to_string()),
             color: [ang[0], ang[1], ang[2], 1.0],
             size: 12.0,
         });
     }
-    // Cuerpos natales (abreviatura del glifo).
+    // Cuerpos natales (glifo vectorial ☉☽☿…).
     for layer in &model.layers {
         if matches!(layer.kind, LayerKind::Bodies) && layer.module_id == "natal" {
             for g in &layer.glyphs {
                 out.push(SphereLabel {
                     world: eclip(g.deg) * r * 1.11,
-                    text: cosmos_render::planet_unicode_with_retro(&g.symbol, g.retrograde),
+                    kind: LabelKind::Planet(g.symbol.clone()),
                     color: [1.0, 1.0, 1.0, 1.0],
-                    size: 12.0,
+                    size: 20.0,
                 });
             }
         }
@@ -649,9 +658,19 @@ fn earth_baked(ramc: f32, lon_obs: f32, sun_dir: Option<Vec3>) -> (Vec<Vertex3d>
                 [0.04, 0.15, 0.33] // océano azul profundo
             };
             // Día/noche real: Lambert contra el Sol de la carta (en mundo).
-            let lit = match sun_dir {
+            let day = match sun_dir {
                 Some(s) => 0.16 + 1.0 * n.dot(s).max(0.0),
                 None => 0.7,
+            };
+            // La tierra firme se "auto-ilumina" un poco: piso de brillo más alto
+            // (translúcida de noche) para que los continentes se vean siempre;
+            // el océano queda oscuro de noche y los hace resaltar.
+            let lit = if land {
+                day.max(0.55)
+            } else if ice {
+                day.max(0.45)
+            } else {
+                day
             };
             let color = [
                 (albedo[0] * lit).min(1.0),

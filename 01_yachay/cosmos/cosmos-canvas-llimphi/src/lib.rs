@@ -161,6 +161,20 @@ where
     })
 }
 
+/// Pinta una lista de [`DrawCommand`] ya en **coordenadas de pixel de pantalla**
+/// (sin fit ni transform) en `scene`. Para overlays que generan geometría en una
+/// posición ya calculada — p.ej. los glifos vectoriales de la esfera 3D de
+/// cosmos, ubicados donde cae cada cuerpo proyectado.
+pub fn paint_commands(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    ts: &mut Typesetter,
+    cmds: &[DrawCommand],
+) {
+    for cmd in cmds {
+        paint_command(scene, ts, cmd, Affine::IDENTITY, 0.0, 0.0, 1.0);
+    }
+}
+
 fn paint_command(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
     ts: &mut Typesetter,

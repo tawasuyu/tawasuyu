@@ -369,8 +369,12 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
         );
     })
     // Etiquetas (signos, ASC/MC, glifos de cuerpos) en vello ENCIMA del pase GPU:
-    // se proyecta cada ancla 3D a pantalla con la misma cámara y se pinta el texto.
+    // se proyecta cada ancla 3D a pantalla con la misma cámara. Los signos y
+    // cuerpos usan glifos VECTORIALES (trazos, sin fuente → sin tofu); los
+    // ángulos, texto plano ASCII.
     .paint_over(move |scene, ts, rect: PaintRect| {
+        use cosmos_render::glyphs::{planet_commands, sign_commands};
+        use crate::sphere_gpu::LabelKind;
         use llimphi_ui::llimphi_raster::peniko::Color as PColor;
         use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
         let r = (rect.x, rect.y, rect.w, rect.h);
@@ -379,25 +383,40 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
             else {
                 continue;
             };
-            let c = PColor::new([lab.color[0], lab.color[1], lab.color[2], lab.color[3]]);
-            let approx = lab.size as f64 * lab.text.chars().count() as f64 * 0.5;
-            let block = TextBlock {
-                text: &lab.text,
-                size_px: lab.size,
-                color: c,
-                origin: (sx as f64 - approx, sy as f64 - lab.size as f64 * 0.5),
-                max_width: Some(approx as f32 * 2.0),
-                alignment: Alignment::Center,
-                line_height: 1.0,
-                italic: false,
-                font_family: None,
-            };
-            let layout = layout_block(ts, &block);
-            draw_layout(scene, &layout, c, block.origin);
+            let col = Rgba { r: lab.color[0], g: lab.color[1], b: lab.color[2], a: lab.color[3] };
+            let sw = (lab.size * 0.09).max(1.0);
+            match &lab.kind {
+                LabelKind::Sign(name) => {
+                    let cmds = sign_commands(name, sx, sy, lab.size, col, sw);
+                    cosmos_canvas_llimphi::paint_commands(scene, ts, &cmds);
+                }
+                LabelKind::Planet(name) => {
+                    let cmds = planet_commands(name, sx, sy, lab.size, col, sw);
+                    cosmos_canvas_llimphi::paint_commands(scene, ts, &cmds);
+                }
+                LabelKind::Text(txt) => {
+                    let c = PColor::new([lab.color[0], lab.color[1], lab.color[2], lab.color[3]]);
+                    let approx = lab.size as f64 * txt.chars().count() as f64 * 0.5;
+                    let block = TextBlock {
+                        text: txt,
+                        size_px: lab.size,
+                        color: c,
+                        origin: (sx as f64 - approx, sy as f64 - lab.size as f64 * 0.5),
+                        max_width: Some(approx as f32 * 2.0),
+                        alignment: Alignment::Center,
+                        line_height: 1.0,
+                        italic: false,
+                        font_family: None,
+                    };
+                    let layout = layout_block(ts, &block);
+                    draw_layout(scene, &layout, c, block.origin);
+                }
+            }
         }
     })
+    // Agarre tipo "globo": la esfera sigue al cursor (horizontal invertido).
     .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
-        DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),
+        DragPhase::Move => Some(Msg::SphereRotate(-dx * 0.3, dy * 0.3)),
         DragPhase::End => None,
     });
     canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
@@ -470,7 +489,7 @@ fn sphere25_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32
     };
     let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(cmds, size, Some(graphics_bg(model)), t)
         .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
-            DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),
+            DragPhase::Move => Some(Msg::SphereRotate(-dx * 0.3, dy * 0.3)),
             DragPhase::End => None,
         });
     canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
