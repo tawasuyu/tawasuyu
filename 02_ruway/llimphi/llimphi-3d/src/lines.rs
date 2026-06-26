@@ -220,8 +220,9 @@ fn vs(in: VIn) -> VOut {
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
-    // ndc_z ~0 = cerca, ~1 = lejos. El fondo se apaga hasta 0.35.
-    let depth_fade = mix(1.0, 0.35, clamp(in.ndc_z, 0.0, 1.0));
+    // ndc_z ~0 = cerca, ~1 = lejos. El fondo se apaga hasta 0.55 (da volumen
+    // sin que el hemisferio trasero desaparezca).
+    let depth_fade = mix(1.0, 0.55, clamp(in.ndc_z, 0.0, 1.0));
     return vec4<f32>(in.color.rgb, in.color.a * depth_fade);
 }
 "#;

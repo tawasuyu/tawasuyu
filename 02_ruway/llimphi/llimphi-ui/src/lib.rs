@@ -705,6 +705,13 @@ struct RetainedScene {
     animating: bool,
     rippling: bool,
     has_overlay: bool,
+    /// El frame tenía painters GPU directos (`gpu_paint_with`) o post-pasadas
+    /// (backdrop blur / filter). Esas primitivas se dibujan en vivo sobre la
+    /// intermedia cada frame y **no** quedan en `state.scene` (la escena vello
+    /// retenida). Re-presentar la scene tal cual las perdería → no se retiene
+    /// (un expose del compositor debe re-correr el paint GPU). Sin esto, p.ej.
+    /// la esfera 3D de cosmos desaparecía al tapar/destapar la ventana.
+    has_gpu_paint: bool,
 }
 
 /// Selección de texto activa fuera del editor (ver [`crate::View::selectable`]).

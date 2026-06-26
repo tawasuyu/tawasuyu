@@ -10,7 +10,8 @@ pub(super) mod dial;
 
 use cosmos_canvas_llimphi::{canvas_view_clickable_ex, ViewTransform};
 use cosmos_render::{
-    compose_wheel_with_hits, CompositionOpts, DrawCommand, Palette, Rgba, TextAnchor,
+    compose_sphere, compose_wheel_with_hits, CompositionOpts, DrawCommand, Palette, Rgba,
+    SphereOpts, SphereView, TextAnchor,
 };
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -417,6 +418,36 @@ fn sphere_controls(theme: &Theme) -> View<Msg> {
 }
 
 // =====================================================================
+// Esfera 2.5D (la vista de alambre vello — referencia de paridad)
+// =====================================================================
+
+/// La esfera celeste "2.5D": `compose_sphere` (alambre vello proyectado a mano)
+/// pintado como `DrawCommand`s. Comparte el mismo `yaw`/`pitch` que la 3D GPU
+/// (drag rota, la rueda acerca) para comparar lado a lado qué falta parear.
+fn sphere25_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
+    let opts = SphereOpts {
+        size,
+        palette: graphics_palette(model),
+        ..SphereOpts::default()
+    };
+    let view = SphereView {
+        yaw_deg: model.sphere_yaw,
+        pitch_deg: model.sphere_pitch,
+    };
+    let cmds = compose_sphere(render, &view, &opts);
+    let t = ViewTransform {
+        zoom: model.wheel_zoom,
+        pan: model.wheel_pan,
+    };
+    let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(cmds, size, Some(graphics_bg(model)), t)
+        .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+            DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),
+            DragPhase::End => None,
+        });
+    canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
+}
+
+// =====================================================================
 // Cielo del observador (proyección azimutal)
 // =====================================================================
 
@@ -815,6 +846,7 @@ fn graphic_for(
             model.wheel_pan,
             model.carto_rect.clone(),
         ),
+        ChartView::Esfera25D => sphere25_canvas(model, render, size, theme, fill),
         ChartView::Esfera3d => sphere_canvas(model, render, size, theme, fill),
         ChartView::Cielo => sky_canvas(model, size, theme, fill),
         ChartView::Impresion => print_view(model, theme),

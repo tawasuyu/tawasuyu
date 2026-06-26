@@ -425,6 +425,11 @@ fn main() {
     if sphere_shot {
         model.chart_view = model::ChartView::Esfera3d;
     }
+    // Con COSMOS_SHOT_25D=1 muestra la esfera 2.5D (alambre vello): es vello
+    // puro, no necesita el pase GPU.
+    if std::env::var("COSMOS_SHOT_25D").is_ok() {
+        model.chart_view = model::ChartView::Esfera25D;
+    }
     let main_view = view_demo(&model);
     let root = if dialog_shot {
         let overlay = dialog::dialog_overlay(&model, &model.theme).expect("overlay");

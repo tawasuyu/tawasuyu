@@ -261,28 +261,33 @@ pub(crate) fn sphere_geometry(model: &RenderModel, pal: &Palette) -> SphereGeom 
 
     let ecl = rgb(pal.dial_ring);
     let equ = rgb(pal.uranus);
-    let faint = [0.55, 0.62, 0.85]; // azul tenue para rejilla/constelaciones
-    let starc = if pal.is_dark { [0.92, 0.95, 1.0] } else { [0.30, 0.36, 0.5] };
+    let grid = [0.42, 0.50, 0.72]; // azul tenue para la rejilla
+    let conl = [0.62, 0.72, 0.95]; // azul claro para las líneas de constelación
+    let starc = if pal.is_dark { [1.0, 1.0, 1.0] } else { [0.22, 0.28, 0.42] };
 
-    // --- Rejilla eclíptica (meridianos + paralelos), muy tenue: da volumen ---
+    // --- Rejilla eclíptica (meridianos + paralelos): da volumen, sutil ---
     for k in 0..12 {
         let lon = k as f32 * 30.0;
         let pts: Vec<Vec3> = (0..=48)
             .map(|i| eclip_latlon(lon, -90.0 + i as f32 / 48.0 * 180.0) * r)
             .collect();
-        push_polyline(&mut lines, &pts, faint, 0.10);
+        push_polyline(&mut lines, &pts, grid, 0.16);
     }
     for &lat in &[-60.0_f32, -30.0, 30.0, 60.0] {
-        push_circle(&mut lines, 96, faint, 0.10, |t| eclip_latlon(t, lat) * r);
+        push_circle(&mut lines, 96, grid, 0.16, |t| eclip_latlon(t, lat) * r);
     }
 
     // --- Constelaciones (figuras de líneas + estrellas en los vértices) ---
     for fig in cosmos_render::constellations_data::FIGURAS {
         for path in fig.paths {
             let pts: Vec<Vec3> = path.iter().map(|&(ra, dec)| eq_to_gpu(ra, dec, &eps) * r).collect();
-            push_polyline(&mut lines, &pts, faint, 0.32);
+            // Línea doble (dos radios próximos) para que se lea como trazo.
+            push_polyline(&mut lines, &pts, conl, 0.62);
+            let pts_out: Vec<Vec3> = pts.iter().map(|p| *p * 1.002).collect();
+            push_polyline(&mut lines, &pts_out, conl, 0.40);
             for p in &pts {
-                glows.push(sprite(*p, 0.012, starc, 0.28));
+                glows.push(sprite(*p, 0.022, starc, 0.6)); // estrella con aura
+                cores.push(sprite(*p, 0.008, [1.0, 1.0, 1.0], 1.0)); // punto nítido
             }
         }
     }
@@ -290,17 +295,22 @@ pub(crate) fn sphere_geometry(model: &RenderModel, pal: &Palette) -> SphereGeom 
     // --- Estrellas brillantes con nombre (catálogo real, por magnitud) ---
     for s in cosmos_render::sky_data::BRIGHT_STARS {
         let p = eq_to_gpu(s.ra_deg, s.dec_deg, &eps) * r;
-        let sz = (0.050 - (s.mag + 1.5) * 0.006).clamp(0.013, 0.050);
-        let a = (1.15 - s.mag * 0.13).clamp(0.35, 1.0);
+        let sz = (0.055 - (s.mag + 1.5) * 0.006).clamp(0.016, 0.055);
+        let a = (1.25 - s.mag * 0.13).clamp(0.45, 1.0);
         // Tinte levemente azulado para las calientes, cálido para las tibias.
         let tint = if s.mag < 0.5 { [0.85, 0.92, 1.0] } else { [1.0, 0.96, 0.88] };
-        glows.push(sprite(p, sz * 2.4, tint, a)); // aura
-        cores.push(sprite(p, sz * 0.7, [1.0, 1.0, 1.0], 1.0)); // núcleo nítido
+        glows.push(sprite(p, sz * 2.6, tint, a)); // aura
+        cores.push(sprite(p, sz * 0.8, [1.0, 1.0, 1.0], 1.0)); // núcleo nítido
     }
 
-    // --- Eclíptica (aro prominente) + ecuador celeste (inclinado, más tenue) ---
-    push_circle(&mut lines, 200, ecl, 0.95, |t| eclip(t) * r);
-    push_circle(&mut lines, 200, equ, 0.65, |t| eps.transform_point3(eclip(t)) * r);
+    // --- Eclíptica (aro prominente) + ecuador celeste (inclinado, más tenue),
+    // dibujados como banda de 3 líneas próximas para que tengan grosor ---
+    for rr in [0.996_f32, 1.0, 1.004] {
+        push_circle(&mut lines, 220, ecl, 0.98, |t| eclip(t) * r * rr);
+    }
+    for rr in [0.997_f32, 1.0, 1.003] {
+        push_circle(&mut lines, 200, equ, 0.8, |t| eps.transform_point3(eclip(t)) * r * rr);
+    }
 
     // --- Espolones del zodíaco (cada 30°) ---
     for s in 0..12 {
@@ -497,11 +507,12 @@ fn starfield_panorama() -> (u32, u32, Vec<u8>) {
         data[idx + 1] = data[idx + 1].max((g as f32 * k) as u8);
         data[idx + 2] = data[idx + 2].max((bl as f32 * k) as u8);
     };
-    for _ in 0..4200 {
+    for _ in 0..6500 {
         let x = (next() % W) as i64;
         let y = (next() % H) as i64;
-        // Brillo bajo-medio: 32..=124 (nunca llega al umbral de bloom).
-        let b = 32 + (next() % 92) as u8;
+        // Brillo bajo-medio-alto: 48..=180 (la bóveda se lee; las pocas más
+        // brillantes rozan el bloom y titilan, sin lavar el fondo).
+        let b = 48 + (next() % 132) as u8;
         let pick = next() % 10;
         let (r, g, bl) = if pick < 7 {
             (b, b, b)

@@ -55,7 +55,10 @@ pub(crate) enum ChartView {
     Armonica,
     /// Mapa equirectangular (Astrocartografía, Jim Lewis).
     Carto,
-    /// Esfera celeste 3D (wireframe).
+    /// Esfera celeste "2.5D": la vista de alambre vello (`compose_sphere`),
+    /// proyectada a primitivas 2D. Referencia de paridad junto a la 3D GPU.
+    Esfera25D,
+    /// Esfera celeste 3D (GPU: mini-Tierra + atmósfera + constelaciones).
     Esfera3d,
     /// Cielo como lo ve el observador (alt/az).
     Cielo,
@@ -71,6 +74,7 @@ impl ChartView {
             ChartView::Uraniano => "Dial 90°",
             ChartView::Armonica => "Armónica",
             ChartView::Carto => "Astrocarto",
+            ChartView::Esfera25D => "2.5D",
             ChartView::Esfera3d => "3D",
             ChartView::Cielo => "Cielo",
             ChartView::Impresion => "Hoja",
@@ -83,6 +87,7 @@ impl ChartView {
             ChartView::Uraniano,
             ChartView::Armonica,
             ChartView::Carto,
+            ChartView::Esfera25D,
             ChartView::Esfera3d,
             ChartView::Cielo,
             ChartView::Impresion,

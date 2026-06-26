@@ -41,6 +41,7 @@ pub(super) fn handle_redraw<A: App>(
             !r.animating
                 && !r.rippling
                 && !r.has_overlay
+                && !r.has_gpu_paint
                 && (r.w, r.h) == state.surface.size()
         });
     if cache_hit {
@@ -557,6 +558,7 @@ pub(super) fn handle_redraw<A: App>(
         animating,
         rippling,
         has_overlay: overlay_built.is_some(),
+        has_gpu_paint: any_gpu,
     });
     state.last_render = Some(RenderCache {
         mounted,
