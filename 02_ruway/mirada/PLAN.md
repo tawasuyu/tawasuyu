@@ -352,6 +352,14 @@ ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir f
 > `pata`, greeter) queda exento. Verificación en metal pendiente (es path GLES
 > sobre DRM); el motor de tiempo y la curva sí están testeados como unidades.
 >
+> **✅ VERIFICADO EN METAL (2026-06-26 · Intel Iris Xe, DRM real).** Con
+> `window_open_ms=4000` y una ventana blanca (`foot`) sobre wallpaper oscuro,
+> serie de capturas `grim` cada 0.5 s → la luma de la región central **sube**
+> 33→255 con deltas decrecientes (`+78,+65,+40,+25,+10,+4,…`): la rampa de alfa
+> (curva ease-out) **se compone en GLES**, no sólo en la unidad. El *pop* (escala)
+> corrió en el mismo path de apertura. (Análisis con el ejemplo nuevo
+> `examples/png_region_luma.rs`.)
+>
 > **✅ HECHO — 2ª rebanada (2026-06-26): el *pop* (escala 0.9→1).** Completa la
 > apertura: config `window_open_scale_pct` (default 92, `100`=sin pop) en la
 > sección «Movimiento». El render envuelve TODO lo que la ventana empuja
@@ -398,6 +406,13 @@ ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir f
 > §«Animaciones de transición» pide para el CRT y el hero: el mismo patrón
 > (captura → animar por tiempo → retirar) podría escalar a esos. Verificación en
 > metal pendiente (readback GPU); reloj/curva/lerp testeados como unidades.
+>
+> **✅ VERIFICADO EN METAL (2026-06-26 · Intel Iris Xe, DRM real).** Con
+> `window_close_ms=4000`, al matar la ventana blanca la luma central **baja**
+> gradual 255→33 (`-86,-64,-38,-22,-9,-2,…`), **no** un corte seco: el
+> close-ghost (instantánea CPU → `MemoryRenderBuffer`) **persiste y se desvanece**
+> en pantalla. Simetría exacta con la apertura (wallpaper-solo ≈ luma 33 en ambos
+> extremos). El readback GPU de la instantánea funciona en este hardware.
 
 **B) `WindowEffects` ampliado — el aspecto, por-ventana.** Campos nuevos (additivos):
 `blur: u8` (intensidad del desenfoque de fondo), `corner_radius: u8` (esquinas
