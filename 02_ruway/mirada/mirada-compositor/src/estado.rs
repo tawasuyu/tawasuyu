@@ -24,6 +24,7 @@ use auth_core::UserInfo;
 use mirada_body::BodyState;
 use mirada_brain::{BrainCommand, Desktop, Decorations, Permisos, WindowEffects};
 use mirada_link::BodyLink;
+use crate::gamma_control;
 use crate::screencopy;
 
 /// De dónde salen las decisiones de geometría.
@@ -482,6 +483,19 @@ pub(crate) struct App {
     /// Capturas screencopy aceptadas, esperando la próxima composición de su
     /// salida — el backend las drena con [`screencopy::tomar_capturas`].
     pub(crate) pending_screencopy: Vec<screencopy::PendingScreencopy>,
+    /// Global `wlr-gamma-control` (luz nocturna: wlsunset/gammastep). Vivo toda
+    /// la sesión.
+    pub(crate) _gamma_control_state: gamma_control::GammaControlState,
+    /// Controles de gamma activos `(salida, recurso)` — uno por salida; el
+    /// segundo intento recibe `failed`. Se purga al destruirse el control.
+    pub(crate) gamma_active: Vec<(
+        smithay::output::Output,
+        smithay::reexports::wayland_protocols_wlr::gamma_control::v1::server::zwlr_gamma_control_v1::ZwlrGammaControlV1,
+    )>,
+    /// Rampas de gamma pendientes de aplicar `(salida, rampa | None=reset)` — las
+    /// drena el backend DRM (set_gamma sobre el CRTC). El protocolo, que corre
+    /// sobre `App`, no toca el hardware: sólo deja el pedido (patrón DPMS/sesión).
+    pub(crate) pending_gamma: Vec<(smithay::output::Output, Option<gamma_control::GammaRamp>)>,
     pub(crate) seat: Seat<App>,
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).

@@ -5,6 +5,40 @@ impl DrmState {
     /// (la primera descubierta); a futuro será configurable.
     pub(super) const PRIMARY: usize = 0;
 
+    /// Aplica las rampas de gamma que dejó pendientes el protocolo
+    /// `wlr-gamma-control` (luz nocturna): por cada `(salida, rampa)` busca su
+    /// CRTC y llama `set_gamma`; con `None` (control soltado) restaura la
+    /// identidad. Se llama una vez por iteración del bucle, tras despachar a los
+    /// clientes. Errores del driver se loguean sin abortar el frame.
+    pub(super) fn aplicar_gamma_pendiente(&mut self) {
+        if self.app.pending_gamma.is_empty() {
+            return;
+        }
+        for (output, rampa) in std::mem::take(&mut self.app.pending_gamma) {
+            let Some(ctx) = self.outputs.iter().find(|c| c.output == output) else {
+                continue; // la salida se fue
+            };
+            let crtc = ctx.crtc;
+            let rampa = match rampa {
+                Some(r) => r,
+                None => {
+                    // Reset a identidad: tamaño = gamma_length del CRTC.
+                    let len = self.drm.get_crtc(crtc).map(|i| i.gamma_length()).unwrap_or(0);
+                    if len == 0 {
+                        continue;
+                    }
+                    crate::gamma_control::identidad(len)
+                }
+            };
+            if let Err(e) = self
+                .drm
+                .set_gamma(crtc, &rampa.red, &rampa.green, &rampa.blue)
+            {
+                eprintln!("mirada-compositor · set_gamma falló en CRTC {crtc:?}: {e}");
+            }
+        }
+    }
+
     /// Encuentra el índice de la salida cuyo CRTC es `crtc`, si existe.
     pub(super) fn output_index_by_crtc(
         &self,

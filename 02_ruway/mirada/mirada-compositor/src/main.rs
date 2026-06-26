@@ -97,6 +97,7 @@ mod cursor_theme;
 #[macro_use]
 mod diag;
 mod drm_backend;
+mod gamma_control;
 mod handoff;
 mod menu;
 mod screencopy;

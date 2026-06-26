@@ -975,6 +975,17 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         let wp_path = app.config_wallpaper_path_for(&name);
         let wp_fit = app.config_wallpaper_fit_for(&name);
         println!("      compositor de «{name}» listo · rect global {rect:?}");
+        // Tamaño del LUT de gamma del CRTC, para `wlr-gamma-control` (luz
+        // nocturna). Si el CRTC no reporta gamma (length 0), no se siembra → esa
+        // salida queda sin soporte de gamma (los clientes reciben `failed`).
+        if let Ok(info) = drm.get_crtc(crtc_h) {
+            let len = info.gamma_length();
+            if len > 0 {
+                smithay_out
+                    .user_data()
+                    .insert_if_missing(|| crate::gamma_control::GammaSize(len));
+            }
+        }
         output_ctxs.push(OutputCtx {
             id,
             name,
@@ -1285,6 +1296,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let signal = event_loop.get_signal();
     event_loop
         .run(None, &mut state, |state| {
+            // Aplica rampas de gamma pendientes (wlr-gamma-control / luz nocturna)
+            // que el protocolo dejó al procesar requests de clientes este ciclo.
+            state.aplicar_gamma_pendiente();
             let timed_out =
                 timeout_secs > 0 && state.start.elapsed() > Duration::from_secs(timeout_secs);
             if !state.app.running || timed_out {

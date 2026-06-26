@@ -416,6 +416,11 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
             }
         }),
         pending_screencopy: Vec::new(),
+        // Gamma control (wlsunset/gammastep): global sin gatear — no es una fuga
+        // de privacidad como screencopy; lo aplica el backend DRM.
+        _gamma_control_state: gamma_control::GammaControlState::new(&dh),
+        gamma_active: Vec::new(),
+        pending_gamma: Vec::new(),
         seat,
         keyboard: None,
         pending_kb_focus: None,
