@@ -1243,6 +1243,9 @@ impl App {
                 .roster
                 .active_id()
                 .unwrap_or(mirada_brain::SessionId(0)),
+            // Mismo `app_id` normalizado que se le pasa al Cerebro abajo, para
+            // re-inyectar idéntico al saltar de sesión (FUS).
+            app_id: if app_id.is_empty() { "cliente".into() } else { app_id.clone() },
             fullscreen: false,
             suspended: false,
             frame_divisor: 1,
@@ -1552,6 +1555,7 @@ impl App {
     /// ocultar las de las demás — y sale de cualquier shell de credenciales
     /// (desbloqueo dirigido). No-op si no existe tal sesión.
     pub(crate) fn switch_session(&mut self, id: mirada_brain::SessionId) {
+        let outgoing = self.roster.active_id();
         if !self.roster.switch_to(id) {
             return;
         }
@@ -1559,10 +1563,77 @@ impl App {
             self.mode = BodyMode::Session;
             self.greeter_stdin = None;
         }
+        // Reconstruye el escritorio embebido para la sesión entrante: guarda la
+        // forma de la saliente, retira sus ventanas y restaura+re-inyecta las de
+        // la entrante, para que cada usuario tesele en su propio escritorio.
+        self.rebuild_desktop_for_active(outgoing);
         // El foco de teclado quedó en una ventana de la sesión anterior (ahora
         // oculta): hay que reencaminarlo a la sesión recién activada.
         self.refocus_active_session();
         dlog!("mirada-compositor · FUS: sesión activa → id {}.", id.0);
+    }
+
+    /// Reconstruye el `Desktop` embebido tras un cambio de sesión activa (FUS),
+    /// para que cada usuario tesele en su **propio** escritorio en vez de
+    /// compartir slots con las ventanas (ocultas) de las demás. El `Desktop` es
+    /// uno solo y sigue a la sesión activa; aquí se hace el relevo:
+    ///   1. **Guarda** la forma de la sesión `outgoing` (`snapshot`) en su roster
+    ///      y **retira** sus ventanas vivas del escritorio (`WindowClosed` al
+    ///      Cerebro — la `ManagedWindow` sigue viva, sólo sale del teselado).
+    ///   2. **Restaura** la forma de la entrante y aplica su mapa salida→escritorio
+    ///      en vivo (las salidas no se reconectan en un salto de sesión).
+    ///   3. **Re-inyecta** las ventanas vivas de la entrante (`WindowOpened`), que
+    ///      vuelven a su escritorio por `app_id` (homes) y se teselan solas.
+    /// No-op con Cerebro enlazado o con ≤1 sesión (camino single-session intacto).
+    /// **Por verificar en sesión gráfica** — el relevo de ventanas vivas no se
+    /// puede certificar headless.
+    fn rebuild_desktop_for_active(&mut self, outgoing: Option<mirada_brain::SessionId>) {
+        if !matches!(self.brain, Brain::Embedded(_)) || self.roster.len() <= 1 {
+            return;
+        }
+        let active = self.roster.active_id();
+        if outgoing == active {
+            return; // saltar a la misma sesión: nada que reconstruir
+        }
+        // 1 · Guardar la forma de la saliente y retirar sus ventanas.
+        if let Some(out) = outgoing {
+            if let Brain::Embedded(d) = &self.brain {
+                let snap = d.snapshot();
+                if let Some(s) = self.roster.get_mut(out) {
+                    s.shape = Some(snap);
+                }
+            }
+            let salientes: Vec<u64> = self
+                .windows
+                .iter()
+                .filter(|w| !w.is_shell && !w.is_greeter && w.session == out)
+                .map(|w| w.id)
+                .collect();
+            for id in salientes {
+                self.brain_feed(BodyEvent::WindowClosed { id });
+            }
+        }
+        // 2 · Restaurar la forma de la entrante (+ mapa de salidas en vivo).
+        let Some(act) = active else { return };
+        if let Some(shape) = self.roster.get(act).and_then(|s| s.shape.clone()) {
+            let cmds = if let Brain::Embedded(d) = &mut self.brain {
+                d.restore(&shape);
+                d.apply_restored_output_workspaces()
+            } else {
+                Vec::new()
+            };
+            self.apply_commands(cmds);
+        }
+        // 3 · Re-inyectar las ventanas vivas de la entrante.
+        let entrantes: Vec<(u64, String, String)> = self
+            .windows
+            .iter()
+            .filter(|w| !w.is_shell && !w.is_greeter && w.session == act)
+            .map(|w| (w.id, w.app_id.clone(), w.title.clone()))
+            .collect();
+        for (id, app_id, title) in entrantes {
+            self.brain_feed(BodyEvent::WindowOpened { id, app_id, title });
+        }
     }
 
     /// Tras un salto de sesión, pone el foco en una ventana visible de la sesión
@@ -1688,13 +1759,22 @@ impl App {
             );
         }
         self.mode = BodyMode::Session;
+        // Quién era la activa antes del alta — para el relevo de escritorio (FUS):
+        // sus ventanas se retiran del `Desktop` al sumar la nueva. `None` en el
+        // login de arranque (roster vacío).
+        let outgoing = self.roster.active_id();
         // Alta de la sesión y activación (el recién llegado pasa al frente). El
         // entorno se completa abajo con `setup_user_session_env`. El id estable
         // que devuelve el roster es el que llevarán sus ventanas.
         self.roster.add(crate::estado::Session {
             user: Some(ticket.user.clone()),
             env: Vec::new(),
+            shape: None,
         });
+        // Relevo de escritorio: la sesión saliente guarda su forma y suelta sus
+        // ventanas del teselado; la nueva arranca con un escritorio propio
+        // (vacío). No-op en el arranque (una sola sesión).
+        self.rebuild_desktop_for_active(outgoing);
 
         // Ya en sesión: registra los atajos del escritorio y la decoración
         // (en modo greeter se omitieron a propósito — ver `build_app`).

@@ -327,6 +327,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         roster.add(crate::estado::Session {
             user: None,
             env: Vec::new(),
+            shape: None,
         });
     }
 

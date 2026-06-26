@@ -140,4 +140,36 @@ impl Desktop {
             .cloned()
             .collect();
     }
+
+    /// Aplica el mapa salida→escritorio restaurado a las salidas **ya
+    /// conectadas** y devuelve los comandos del re-teselado.
+    ///
+    /// [`restore`](Desktop::restore) deja el mapa *pendiente* porque al arrancar
+    /// aún no hay salidas (se aplica en cada [`OutputAdded`](mirada_protocol::BodyEvent::OutputAdded)).
+    /// En un **cambio de sesión en vivo** (FUS) las salidas no se reconectan, así
+    /// que el mapa quedaría colgado: este método lo consume contra las salidas
+    /// presentes —por orden de aparición, como `OutputAdded`— para que cada
+    /// monitor recupere el escritorio que mostraba esa sesión. No-op si no hay
+    /// mapa pendiente o no hay salidas.
+    pub fn apply_restored_output_workspaces(&mut self) -> Vec<crate::BrainCommand> {
+        if self.pending_output_workspaces.is_empty() || self.outputs.is_empty() {
+            return Vec::new();
+        }
+        let ws_count = self.workspaces.len();
+        let mut taken: Vec<usize> = Vec::new();
+        for (i, o) in self.outputs.iter_mut().enumerate() {
+            if let Some(ws) = self
+                .pending_output_workspaces
+                .get(i)
+                .copied()
+                .filter(|&n| n < ws_count && !taken.contains(&n))
+            {
+                o.workspace = ws;
+            }
+            taken.push(o.workspace);
+        }
+        self.pending_output_workspaces.clear();
+        self.reflow_outputs();
+        self.relayout()
+    }
 }

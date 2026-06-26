@@ -72,6 +72,14 @@ pub(crate) struct Session {
     /// Entorno inyectado a las apps nativas de la sesión: su `XDG_RUNTIME_DIR`,
     /// el `WAYLAND_DISPLAY` absoluto, el bus D-Bus y el socket de control.
     pub(crate) env: Vec<(String, String)>,
+    /// **Forma del escritorio de la sesión cuando está residente** (FUS). El
+    /// `Desktop` embebido es uno solo y sirve a la sesión activa; al saltar de
+    /// sesión se guarda acá la forma de la saliente (`snapshot`) y se restaura la
+    /// de la entrante, y sus ventanas vivas se re-inyectan — así cada usuario
+    /// tesela en su propio escritorio en vez de compartir slots. `None` mientras
+    /// la sesión es la activa (su forma vive en el `Desktop`) o si nunca se
+    /// guardó. Ver [`App::rebuild_desktop_for_active`].
+    pub(crate) shape: Option<mirada_brain::DesktopState>,
 }
 
 /// Grosor por defecto de la franja del shell (px), si el entorno no lo fija.
@@ -286,6 +294,10 @@ pub(crate) struct ManagedWindow {
     /// pintan/animan las ventanas de la sesión activa — ver [`App::session_visible`].
     /// Las ventanas del shell/greeter no pertenecen a ninguna y se ignoran aquí.
     pub(crate) session: mirada_brain::SessionId,
+    /// `app_id` del cliente (la misma cadena que se le pasó al Cerebro en
+    /// `WindowOpened`). Se guarda para poder **re-inyectar** la ventana en el
+    /// `Desktop` al saltar de sesión (FUS) sin re-leer la superficie.
+    pub(crate) app_id: String,
     /// `true` si es la ventana del greeter (DM): sin barra de título, y el
     /// backend la muda al monitor con el ratón en multi-monitor.
     pub(crate) is_greeter: bool,

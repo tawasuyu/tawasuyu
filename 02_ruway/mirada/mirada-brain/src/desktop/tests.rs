@@ -1313,6 +1313,33 @@ fn restore_with_a_conflicting_map_falls_back_to_a_free_workspace() {
 }
 
 #[test]
+fn apply_restored_output_workspaces_en_vivo_sin_reconectar() {
+    // Cambio de sesión en vivo (FUS): las salidas YA están conectadas y la
+    // forma entrante quiere que muestren los escritorios 5 y 1.
+    let mut d = Desktop::new();
+    d.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+    d.on_event(BodyEvent::OutputAdded { id: 1, width: 1920, height: 1080 });
+    let snap = DesktopState {
+        version: crate::session::SESSION_VERSION,
+        workspaces: vec![LayoutParams::default(); WORKSPACE_COUNT],
+        output_workspaces: vec![5, 1],
+        focused_output: 0,
+        window_homes: Vec::new(),
+        groupings: Vec::new(),
+    };
+    d.restore(&snap);
+    // `restore` por sí solo dejó el mapa pendiente (las salidas no se
+    // reconectan en vivo), así que aún no movió nada:
+    assert_ne!(d.outputs()[0].workspace, 5);
+    // El camino en vivo lo aplica contra las salidas presentes:
+    d.apply_restored_output_workspaces();
+    assert_eq!(d.outputs()[0].workspace, 5);
+    assert_eq!(d.outputs()[1].workspace, 1);
+    // Idempotente: ya no queda mapa pendiente.
+    assert!(d.apply_restored_output_workspaces().is_empty());
+}
+
+#[test]
 fn snapshot_remembers_which_workspace_each_app_lived_on() {
     let mut d = desktop_with_screen();
     open(&mut d, 1); // app1 nace en el escritorio 0…

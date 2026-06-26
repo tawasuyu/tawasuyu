@@ -243,13 +243,33 @@ camino «cambiar usuario» desde el lock, **sin verificar en sesión gráfica to
   smithay a una ventana visible de la sesión recién activada (o `None` si no tiene),
   no sólo el flag visual `focused`.
 
+**3ª rebanada — escritorio propio por sesión (relevo, 2026-06-26).** Antes el
+`Brain::Embedded(Desktop)` era compartido: las ventanas de todas las sesiones se
+teselaban juntas (el gate las ocultaba, pero la activa quedaba con slots vacíos
+donde estaban las ocultas). Ahora el `Desktop` —que sigue siendo **uno** y sirve a
+la activa— hace un **relevo** al saltar de sesión (`App::rebuild_desktop_for_active`):
+1. **Guarda** la forma de la saliente (`Desktop::snapshot` → `Session.shape`) y
+   **retira** sus ventanas del teselado (`WindowClosed` al Cerebro; la `ManagedWindow`
+   sigue viva, sólo sale del layout).
+2. **Restaura** la forma de la entrante y aplica su mapa salida→escritorio **en
+   vivo** — primitiva nueva y testeada `Desktop::apply_restored_output_workspaces`
+   (las salidas no se reconectan en un salto, así que el mapa que `restore` deja
+   pendiente se consume contra las salidas presentes).
+3. **Re-inyecta** las ventanas vivas de la entrante (`WindowOpened`), que vuelven a
+   su escritorio por `app_id` (homes) y se teselan solas.
+`ManagedWindow.app_id` se guarda para la re-inyección. Gated: con ≤1 sesión o Cerebro
+enlazado es inerte (camino single-session intacto). La fuente de verdad son las
+`App.windows` etiquetadas por sesión, así que no hay desync aunque una ventana muera
+mientras su sesión está residente. **El relevo de ventanas vivas no se certifica
+headless — verificar en sesión gráfica.**
+
 **Diferido (anotado, no hecho):**
-- **Desktop por sesión:** hoy el `Brain::Embedded(Desktop)` es compartido (las
-  ventanas de todas las sesiones se teselan en los mismos 9 escritorios; el gate las
-  oculta). Aislar el layout por usuario = un `Desktop` por sesión, rebanada aparte —
-  el bloqueo arquitectónico real que queda.
-- **Logout** (`remove` + respawn) y la orquestación multi-seat (si termina en
-  `sandokan`). **Verificar el multiplexado real en sesión gráfica.**
+- **Logout** (`remove` + respawn de la sesión) y la orquestación multi-seat (si
+  termina en `sandokan`).
+- Que un escritorio recién nacido (sesión nueva) parta de params por defecto en vez
+  de heredar los de la saliente (hoy hereda hasta que se retoca).
+- **Verificar el multiplexado real en sesión gráfica** (relevo de ventanas, foco,
+  mapa de salidas).
 
 ## Diferido (implementable, caro/nicho — no ahora)
 
