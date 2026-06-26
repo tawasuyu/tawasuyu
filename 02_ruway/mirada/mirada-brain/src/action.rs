@@ -186,6 +186,10 @@ pub enum DesktopAction {
     /// (mirada-greeter en modo lock) encima y le rutea el input hasta que el
     /// usuario desbloquee.
     Lock,
+    /// Cierra la sesión activa (FUS logout): el Cuerpo manda cerrar sus ventanas,
+    /// la da de baja del roster y pasa a otra sesión hosteada — o al login si no
+    /// queda ninguna.
+    Logout,
 }
 
 /// El nombre RON-seguro de un modo de teselado (sin guiones problemáticos
@@ -267,6 +271,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::Spawn(cmd) => write!(f, "spawn:{cmd}"),
             DesktopAction::Quit => f.write_str("quit"),
             DesktopAction::Lock => f.write_str("lock"),
+            DesktopAction::Logout => f.write_str("logout"),
         }
     }
 }
@@ -309,6 +314,7 @@ impl FromStr for DesktopAction {
             "focus-output-next" => Self::FocusOutputNext,
             "quit" => Self::Quit,
             "lock" => Self::Lock,
+            "logout" => Self::Logout,
             _ => {
                 if let Some(slug) = s.strip_prefix("layout:") {
                     Self::SetLayout(
@@ -446,6 +452,8 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+.".into(), DesktopAction::DecMaster),
         // Bloquear la sesión: Super+Escape (Super+l ya es GrowMaster).
         ("Super+Escape".into(), DesktopAction::Lock),
+        // Cerrar la sesión (FUS logout): Super+Shift+Escape.
+        ("Super+Shift+Escape".into(), DesktopAction::Logout),
         ("Super+Shift+e".into(), DesktopAction::Quit),
     ];
     // Un escritorio por dígito: `Super+1`..`Super+9` lo activan,

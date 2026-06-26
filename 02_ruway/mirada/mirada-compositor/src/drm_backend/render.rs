@@ -1381,9 +1381,8 @@ impl DrmState {
     /// `render`, no por salida.
     fn send_frames_to_clients(&mut self) {
         let time = self.start.elapsed().as_millis() as u32;
-        // FUS: las ventanas de una sesión residente (no la activa) tampoco
-        // reciben frames — quedan inertes detrás, como las capas dormidas.
-        let multiplex = self.app.roster.len() > 1;
+        // FUS: las ventanas de una sesión no activa tampoco reciben frames —
+        // quedan inertes detrás, como las capas dormidas.
         let activa = self.app.roster.active_id();
         for w in &mut self.app.windows {
             w.frame_tick = w.frame_tick.wrapping_add(1);
@@ -1391,9 +1390,11 @@ impl DrmState {
             if w.suspended {
                 continue;
             }
-            // Sesión residente bajo FUS: sin frames (igual que `suspended`).
-            if multiplex && !w.is_shell && !w.is_greeter && Some(w.session) != activa {
-                continue;
+            // Sesión no activa bajo FUS: sin frames (igual que `suspended`).
+            if let Some(a) = activa {
+                if !w.is_shell && !w.is_greeter && w.session != a {
+                    continue;
+                }
             }
             // Throttle de fondo: 1 de cada `frame_divisor` vblanks.
             let div = w.frame_divisor.max(1);

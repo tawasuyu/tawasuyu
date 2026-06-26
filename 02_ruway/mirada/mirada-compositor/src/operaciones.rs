@@ -1163,6 +1163,7 @@ impl App {
                 }
             }
             BodyOp::Lock => self.request_lock(),
+            BodyOp::Logout => self.logout(),
             BodyOp::Shutdown => self.running = false,
             BodyOp::SetEffects(v) => {
                 for (id, effects) in v {
@@ -1495,17 +1496,22 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// ¿Se compone esta ventana? Con FUS (≥2 sesiones hosteadas) sólo se pintan
-    /// y animan las ventanas de la sesión **activa**; las de las sesiones
-    /// residentes quedan ocultas y sin frame callbacks (suspendidas de hecho).
-    /// El shell/greeter (overlay de credenciales) no pertenece a ninguna sesión
-    /// y siempre pasa. Con ≤1 sesión no hay multiplexado: byte-idéntico al
-    /// camino single-session de siempre.
+    /// ¿Se compone esta ventana? Sólo se pintan y animan las ventanas de la
+    /// sesión **activa** (FUS); las de las sesiones residentes —o las huérfanas
+    /// de una sesión recién cerrada por logout— quedan ocultas y sin frame
+    /// callbacks (suspendidas de hecho). El shell/greeter (overlay de
+    /// credenciales) no pertenece a ninguna sesión y siempre pasa. Sin sesión
+    /// activa (greeter de arranque) no hay ventanas de usuario que ocultar.
+    /// Con una sola sesión todas sus ventanas la tienen por activa, así que es
+    /// byte-idéntico al camino single-session de siempre.
     pub(crate) fn session_visible(&self, w: &ManagedWindow) -> bool {
-        if self.roster.len() <= 1 {
+        if w.is_shell || w.is_greeter {
             return true;
         }
-        w.is_shell || w.is_greeter || self.roster.is_active(w.session)
+        match self.roster.active_id() {
+            Some(active) => w.session == active,
+            None => true,
+        }
     }
 
     /// ¿Hay un shell de credenciales (greeter de login o lock) compuesto encima?
@@ -1588,7 +1594,11 @@ impl App {
     /// **Por verificar en sesión gráfica** — el relevo de ventanas vivas no se
     /// puede certificar headless.
     fn rebuild_desktop_for_active(&mut self, outgoing: Option<mirada_brain::SessionId>) {
-        if !matches!(self.brain, Brain::Embedded(_)) || self.roster.len() <= 1 {
+        // Sólo con Cerebro embebido (el enlazado es DE single-session). No se
+        // condiciona al número de sesiones: el logout a la última sesión deja
+        // `len == 1` y *necesita* re-inyectar sus ventanas. En un mundo
+        // single-session puro este método no se llama nunca (no hay saltos).
+        if !matches!(self.brain, Brain::Embedded(_)) {
             return;
         }
         let active = self.roster.active_id();
@@ -1692,6 +1702,45 @@ impl App {
         // Dejamos de empujarle la disposición de monitores al shell que se va.
         self.greeter_stdin = None;
         dlog!("mirada-compositor · sesión desbloqueada.");
+    }
+
+    /// Cierra la sesión activa (FUS logout): manda cerrar (ordenadamente) sus
+    /// ventanas, la da de baja del roster y pasa el control a otra sesión
+    /// hosteada — o, si no queda ninguna, vuelve al login para hostear una nueva.
+    /// Disparado por `BodyOp::Logout` (atajo `Super+Shift+Escape`). No-op sin
+    /// sesión activa (greeter de arranque). No mata procesos por uid (la sesión
+    /// dev comparte el uid del compositor): el cierre `xdg_toplevel.close` es
+    /// suficiente y uniforme — al desconectarse el cliente, su superficie muere.
+    pub(crate) fn logout(&mut self) {
+        let Some(id) = self.roster.active_id() else {
+            return;
+        };
+        // 1 · Cerrar las ventanas de la sesión (pedido ordenado al cliente).
+        for w in &self.windows {
+            if !w.is_shell && !w.is_greeter && w.session == id {
+                w.toplevel.send_close();
+            }
+        }
+        // 2 · Baja del roster — el foco cae en la última sesión restante (o None).
+        self.roster.remove(id);
+        // 3 · Reconfigurar según lo que quede.
+        if let Some(act) = self.roster.active_id() {
+            // Otra sesión toma el control: restaurá su escritorio y re-inyectá
+            // sus ventanas. La saliente ya no está en el roster; sus ventanas se
+            // destruyen solas y el gate las oculta mientras tanto (`outgoing` =
+            // `None`: no hay forma que guardar de la que se fue).
+            self.rebuild_desktop_for_active(None);
+            self.refocus_active_session();
+            println!("mirada-compositor · FUS: logout — control a la sesión id {}.", act.0);
+        } else {
+            // No queda ninguna: volvé al login (como un arranque de DM). Reusa el
+            // camino de `pending_new_session`: el bucle del backend relanza el
+            // greeter en modo login y el próximo `start_session` da de alta otra.
+            self.mode = BodyMode::Greeter;
+            self.pending_new_session = true;
+            self.greeter_stdin = None;
+            println!("mirada-compositor · FUS: logout — sin sesiones, vuelvo al login.");
+        }
     }
 
     /// Línea `SESSIONS` para el lock: el roster de sesiones hosteadas como

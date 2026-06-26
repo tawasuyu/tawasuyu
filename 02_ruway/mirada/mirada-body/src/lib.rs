@@ -105,6 +105,10 @@ pub enum BodyOp {
     /// Bloquea la sesión activa: el compositor compone el shell de credenciales
     /// (greeter en modo lock) encima y le rutea el input hasta el desbloqueo.
     Lock,
+    /// Cierra la sesión activa (FUS logout): pide cerrar sus ventanas, la da de
+    /// baja del roster y pasa a otra sesión hosteada — o al login si no queda
+    /// ninguna.
+    Logout,
     /// Fija los efectos visuales (opacidad, sombra…) de ciertas ventanas; el
     /// backend los aplica al componer cada superficie.
     SetEffects(Vec<(WindowId, WindowEffects)>),
@@ -218,6 +222,7 @@ impl BodyState {
             BrainCommand::Spawn(cmd) => vec![BodyOp::Spawn(cmd)],
             BrainCommand::Shutdown => vec![BodyOp::Shutdown],
             BrainCommand::Lock => vec![BodyOp::Lock],
+            BrainCommand::Logout => vec![BodyOp::Logout],
             // Los efectos son estado de superficie puro; el backend los aplica
             // directo (no afectan la contabilidad de geometría/foco del Cuerpo).
             BrainCommand::SetEffects(v) => vec![BodyOp::SetEffects(v)],

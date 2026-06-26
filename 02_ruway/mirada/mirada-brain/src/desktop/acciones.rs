@@ -387,6 +387,7 @@ impl Desktop {
             DesktopAction::Spawn(cmd) => vec![BrainCommand::Spawn(cmd)],
             DesktopAction::Quit => vec![BrainCommand::Shutdown],
             DesktopAction::Lock => vec![BrainCommand::Lock],
+            DesktopAction::Logout => vec![BrainCommand::Logout],
         }
     }
 

@@ -264,13 +264,26 @@ enlazado es inerte (camino single-session intacto). La fuente de verdad son las
 mientras su sesión está residente. **El relevo de ventanas vivas no se certifica
 headless — verificar en sesión gráfica.**
 
+**4ª rebanada — logout (2026-06-26).** `Super+Shift+Escape` (`DesktopAction::Logout`
+→ `BrainCommand::Logout` → `BodyOp::Logout` → `App::logout`) cierra la sesión activa:
+manda `xdg_toplevel.close` a sus ventanas, la da de baja del roster
+(`SessionRoster::remove`) y pasa el control a la última sesión restante (relevo de
+escritorio + foco) — o, si no queda ninguna, vuelve al **login** (reusa
+`pending_new_session`: el bucle relanza el greeter). No mata por uid (la sesión dev
+comparte el uid del compositor); el cierre ordenado basta. Como parte de esto, el
+gate `session_visible` pasó de «`len ≤ 1` ⇒ mostrar todo» a «mostrar sólo la sesión
+activa» (sin sesión activa = greeter, se muestra): así las ventanas **huérfanas** de
+la sesión recién cerrada se ocultan aunque quede una sola sesión — y sigue siendo
+byte-idéntico al single-session (todas las ventanas tienen su sesión por activa).
+
 **Diferido (anotado, no hecho):**
-- **Logout** (`remove` + respawn de la sesión) y la orquestación multi-seat (si
-  termina en `sandokan`).
+- **Respawn de procesos por sesión** en logout (hoy sólo cierra ventanas; procesos
+  sin ventana de la sesión dev no se tocan) y la orquestación multi-seat (si termina
+  en `sandokan`).
 - Que un escritorio recién nacido (sesión nueva) parta de params por defecto en vez
   de heredar los de la saliente (hoy hereda hasta que se retoca).
 - **Verificar el multiplexado real en sesión gráfica** (relevo de ventanas, foco,
-  mapa de salidas).
+  mapa de salidas, logout).
 
 ## Diferido (implementable, caro/nicho — no ahora)
 

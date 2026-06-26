@@ -294,8 +294,7 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
 
         // 4 · Callbacks de frame + clientes nuevos + flush.
         let time = start.elapsed().as_millis() as u32;
-        // FUS: las sesiones residentes no reciben frames (como `suspended`).
-        let multiplex = state.roster.len() > 1;
+        // FUS: las sesiones no activas no reciben frames (como `suspended`).
         let activa = state.roster.active_id();
         for w in &mut state.windows {
             w.frame_tick = w.frame_tick.wrapping_add(1);
@@ -304,9 +303,11 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
             if w.suspended {
                 continue;
             }
-            // Sesión residente bajo FUS: sin frames.
-            if multiplex && !w.is_shell && !w.is_greeter && Some(w.session) != activa {
-                continue;
+            // Sesión no activa bajo FUS: sin frames.
+            if let Some(a) = activa {
+                if !w.is_shell && !w.is_greeter && w.session != a {
+                    continue;
+                }
             }
             // Throttle de fondo: 1 de cada `frame_divisor` vblanks.
             let div = w.frame_divisor.max(1);

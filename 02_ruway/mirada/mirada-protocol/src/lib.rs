@@ -280,6 +280,10 @@ pub enum BrainCommand {
     /// (greeter en modo lock) encima de todo y le rutea el input hasta el
     /// desbloqueo. No-op si ya hay un shell de credenciales en pantalla.
     Lock,
+    /// Cierra la sesión activa (FUS logout): el Cuerpo manda cerrar sus ventanas,
+    /// la da de baja del roster de sesiones y pasa el foco a otra hosteada — o
+    /// compone el login si no queda ninguna. No-op sin sesión activa.
+    Logout,
     /// Estado de escritorios que el Cerebro **enlazado** empuja al Cuerpo para
     /// que su switcher Win+Tab (HUD + slide de transición) funcione en modo DE:
     /// el escritorio activo, las cargas (nº de ventanas por escritorio) y la
