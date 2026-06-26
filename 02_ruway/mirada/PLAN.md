@@ -333,12 +333,21 @@ ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir f
 > `open_anim_alpha`; el `tick` fuerza repintado mientras dura (el damage de
 > `DrmCompositor` no ve el cambio de alfa solo). **Byte-idéntico en off**
 > (`window_open_ms=0` o `reduce_motion` → alfa `1.0`). Sólo el chrome (shell
-> `pata`, greeter) queda exento. **Pendiente de esta misma idea:** el *pop*
-> (escala 0.9→1: hay que transformar también la geometría de las decoraciones,
-> no sólo la superficie) y el *fade al cerrar* (necesita mantener un «fantasma»
-> de la ventana tras destruirse la superficie → captura-a-textura, ver §arriba).
-> Verificación en metal pendiente (es path GLES sobre DRM); el motor de tiempo y
-> la curva sí están testeados como unidades.
+> `pata`, greeter) queda exento. Verificación en metal pendiente (es path GLES
+> sobre DRM); el motor de tiempo y la curva sí están testeados como unidades.
+>
+> **✅ HECHO — 2ª rebanada (2026-06-26): el *pop* (escala 0.9→1).** Completa la
+> apertura: config `window_open_scale_pct` (default 92, `100`=sin pop) en la
+> sección «Movimiento». El render envuelve TODO lo que la ventana empuja
+> (superficie, decoración, sombra, texto) en un **`RescaleRenderElement`**
+> centrado en la ventana — el mismo recurso canónico que las miniaturas del
+> Prezi —, sólo durante la rampa; en reposo (`anim_scale≈1`) no se toca nada
+> (byte-idéntico). Con `EaseOutBack` el pop sobre-impulsa apenas por encima de
+> 100 % y asienta (rebote elástico). Para no reescribir a mano la geometría de
+> cada decoración, se bufferiza por ventana (`split_off`) y se reenvuelve.
+> **Pendiente de esta idea:** el *fade al cerrar* (necesita mantener un
+> «fantasma» de la ventana tras destruirse la superficie → captura-a-textura,
+> ver §«Animaciones de transición») y el *glow* del marco al recibir foco.
 
 **B) `WindowEffects` ampliado — el aspecto, por-ventana.** Campos nuevos (additivos):
 `blur: u8` (intensidad del desenfoque de fondo), `corner_radius: u8` (esquinas

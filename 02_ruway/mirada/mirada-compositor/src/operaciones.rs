@@ -383,6 +383,17 @@ impl App {
         }
     }
 
+    /// Escala inicial del «pop» de apertura como fracción (0.5–1.0). `1.0` = sin
+    /// pop. Con Cerebro enlazado cae al default (0.92). El render la aplica
+    /// envolviendo la ventana en un `RescaleRenderElement` durante el fade.
+    pub(crate) fn config_window_open_scale(&self) -> f32 {
+        let pct = match &self.brain {
+            Brain::Embedded(d) => d.config().window_open_scale_pct,
+            Brain::Linked(_) => 92,
+        };
+        (pct as f32 / 100.0).clamp(0.5, 1.0)
+    }
+
     /// Win+Tab estilo switcher sobre la vista espacial: abre la vista (si hacía
     /// falta) y mueve el resaltado al escritorio siguiente/anterior. La primera
     /// pulsación ya avanza uno (un Win+Tab suelto = saltar al siguiente al

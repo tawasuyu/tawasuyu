@@ -159,6 +159,34 @@ impl DrmState {
         }
     }
 
+    /// Factor de escala del «pop» de apertura para `w`: crece de `start` (p. ej.
+    /// 0.92) a `1.0` durante `open_ms`, siguiendo la misma curva que el alfa. Con
+    /// `EaseOutBack` el eased rebasa 1.0 → la escala sobre-impulsa y asienta (el
+    /// rebote). `1.0` (sin pop) cuando la animación está apagada, `start>=1`, o el
+    /// chrome (shell/greeter). El render lo aplica con un `RescaleRenderElement`
+    /// centrado en la ventana — el mismo recurso que las miniaturas del Prezi.
+    fn open_anim_scale(
+        &self,
+        w: &crate::ManagedWindow,
+        now: u32,
+        open_ms: u32,
+        easing: mirada_brain::Easing,
+        start: f32,
+    ) -> f32 {
+        if open_ms == 0 || start >= 0.999 || w.is_shell || w.is_greeter {
+            return 1.0;
+        }
+        match w.mapped_ms {
+            Some(m) => {
+                let t = (now.saturating_sub(m) as f32 / open_ms as f32).clamp(0.0, 1.0);
+                // El eased puede pasar de 1.0 (EaseOutBack) → overshoot del pop.
+                start + (1.0 - start) * easing.apply(t)
+            }
+            // Aún sin sellar: arranca chica (cuadra con alfa 0 → no se ve igual).
+            None => start,
+        }
+    }
+
     /// Emite todas las ventanas visibles cuya posición global intersecta `rect`,
     /// traducidas a coordenadas locales a `rect`. Incluye marcos, barras de
     /// título y el árbol de superficie del cliente, en orden front-to-back
@@ -207,6 +235,7 @@ impl DrmState {
         // o «reducir movimiento» es `1.0` y la composición queda byte-idéntica.
         let open_ms = self.app.config_window_open_ms();
         let open_easing = self.app.config_window_open_easing();
+        let open_scale_start = self.app.config_window_open_scale();
         let anim_now = self.start.elapsed().as_millis() as u32;
 
         // Popups (menú de aplicación y contextuales de apps GTK/Qt) PRIMERO: el
@@ -261,6 +290,11 @@ impl DrmState {
             // TODO lo que pinta esta ventana —decoración, marco, sombra y la
             // superficie— para que entre como un solo bloque que se materializa.
             let anim_alpha = self.open_anim_alpha(w, anim_now, open_ms, open_easing);
+            // Escala del pop de apertura (1.0 fuera de la rampa). Si ≠1.0,
+            // envolvemos TODO lo que esta ventana empuja en un rescale centrado
+            // (ver el flush al final del bloque). `win_start` marca dónde empieza.
+            let anim_scale = self.open_anim_scale(w, anim_now, open_ms, open_easing, open_scale_start);
+            let win_start = into.len();
             // `x,y` = origen del BUFFER (donde se pinta el árbol de superficie).
             // `cx,cy` = origen del CONTENIDO (buffer + offset de sombra): ahí
             // arrancan barra y marco para que abracen lo visible.
@@ -451,6 +485,31 @@ impl DrmState {
                         anim_alpha,
                         Kind::Unspecified,
                     )));
+                }
+            }
+            // Pop de apertura: si la escala no es neutra, re-empujamos todo lo
+            // que esta ventana metió (de `win_start` en adelante) envuelto en un
+            // `RescaleRenderElement` centrado en la ventana. En reposo
+            // (`anim_scale≈1`) no se toca nada → composición byte-idéntica.
+            if (anim_scale - 1.0).abs() > 1e-3 {
+                let origin = Point::<i32, Physical>::from((cx + cw / 2, dec_y + dec_h / 2));
+                let tail: Vec<Frame<GlesRenderer>> = into.split_off(win_start);
+                for f in tail {
+                    let s = anim_scale as f64;
+                    into.push(match f {
+                        Frame::Window(e) => {
+                            Frame::ScaledWindow(RescaleRenderElement::from_element(e, origin, s))
+                        }
+                        Frame::Text(e) => {
+                            Frame::ScaledText(RescaleRenderElement::from_element(e, origin, s))
+                        }
+                        Frame::Solid(e) => {
+                            Frame::ScaledSolid(RescaleRenderElement::from_element(e, origin, s))
+                        }
+                        // Las variantes ya escaladas no aparecen acá (esta ventana
+                        // sólo empuja Window/Text/Solid); pasan tal cual por prudencia.
+                        other => other,
+                    });
                 }
             }
         }

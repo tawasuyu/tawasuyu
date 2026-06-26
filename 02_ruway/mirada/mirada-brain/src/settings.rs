@@ -384,6 +384,13 @@ impl Configurable for Config {
                         easing_options(),
                     ))
                     .field(Field::slider_int(
+                        "window_open_scale_pct",
+                        "Apertura de ventana — pop (% inicial, 100 = sin pop)",
+                        self.window_open_scale_pct as i64,
+                        50,
+                        100,
+                    ))
+                    .field(Field::slider_int(
                         "slide_ms",
                         "Deslizar entre escritorios (ms)",
                         self.slide_ms as i64,
@@ -677,6 +684,11 @@ impl Configurable for Config {
                     self.window_open_easing = e;
                 }
             }
+            "window_open_scale_pct" => {
+                if let Some(v) = value.as_int() {
+                    self.window_open_scale_pct = v.clamp(50, 100) as u8;
+                }
+            }
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
@@ -730,6 +742,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.window_open_easing, crate::Easing::EaseOutBack);
+        // El pop se acota a [50, 100].
+        c.apply(&"movimiento.window_open_scale_pct".into(), FieldValue::Int(80))
+            .unwrap();
+        assert_eq!(c.window_open_scale_pct, 80);
+        c.apply(&"movimiento.window_open_scale_pct".into(), FieldValue::Int(10))
+            .unwrap();
+        assert_eq!(c.window_open_scale_pct, 50);
         // El maestro de accesibilidad y el slide.
         c.apply(&"movimiento.reduce_motion".into(), FieldValue::Bool(true))
             .unwrap();

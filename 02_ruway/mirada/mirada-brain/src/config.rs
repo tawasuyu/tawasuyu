@@ -341,6 +341,14 @@ pub struct Config {
     /// que el slide y el zoom del Prezi).
     #[serde(default)]
     pub window_open_easing: Easing,
+    /// **Escala inicial del «pop» de apertura**, en porcentaje (50–100). La
+    /// ventana nace a esta escala (centrada) y crece a 100 % mientras corre el
+    /// fade. `100` = sin pop (sólo el fundido). Con curva `EaseOutBack` el
+    /// crecimiento sobre-impulsa apenas por encima de 100 % y asienta — el
+    /// rebote elástico clásico. Lo aplica el render envolviendo la ventana en un
+    /// `RescaleRenderElement` (el mismo recurso que las miniaturas del Prezi).
+    #[serde(default = "default_window_open_scale_pct")]
+    pub window_open_scale_pct: u8,
     /// **Reducir movimiento** (accesibilidad): cuando está activo, el
     /// compositor pone en cero todas las duraciones de animación (apertura de
     /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
@@ -434,6 +442,11 @@ fn default_overview_anim_ms() -> u32 {
 /// Default de [`Config::window_open_ms`]: un fade-in breve y ágil.
 fn default_window_open_ms() -> u32 {
     160
+}
+
+/// Default de [`Config::window_open_scale_pct`]: un pop sutil (nace al 92 %).
+fn default_window_open_scale_pct() -> u8 {
+    92
 }
 
 /// Curva de interpolación para las animaciones del compositor (hoy el fade-in
@@ -880,6 +893,7 @@ impl Default for Config {
             idle_respect_inhibitors: true,
             window_open_ms: default_window_open_ms(),
             window_open_easing: Easing::default(),
+            window_open_scale_pct: default_window_open_scale_pct(),
             reduce_motion: false,
         }
     }
