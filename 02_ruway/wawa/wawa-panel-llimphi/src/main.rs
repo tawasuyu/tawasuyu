@@ -16,6 +16,7 @@
 
 mod animaciones;
 mod greeter;
+mod plugins;
 mod remote;
 mod splash;
 mod perfiles;
@@ -351,6 +352,14 @@ struct Model {
     /// Estado allichay propio del overlay de sesión remota (buffers de texto y
     /// foco), separado del [`Model::allichay`] del panel de fondo.
     remote_allichay: AllichayState,
+    /// Plugins de mirada leídos de `~/.config/mirada/plugins` (para la lista del
+    /// diente Inicio). Se relee al abrir/guardar el editor.
+    mirada_plugins: Vec<plugins::PluginInfo>,
+    /// Editor de **reglas de un plugin** (el asignador) en una subventana, o
+    /// `None` si está cerrado (ver [`plugins`]).
+    plugin_edit: Option<plugins::PluginEdit>,
+    /// Estado allichay propio del overlay de plugins (buffers de texto y foco).
+    plugin_allichay: AllichayState,
 }
 
 /// Px de mundo por celda de la grilla del Prezi dentro del editor de recorrido.
@@ -739,6 +748,12 @@ enum Msg {
     RemoteEditKey(KeyEvent),
     /// Cerrar la subventana de sesión remota sin guardar (click en el scrim).
     RemoteEditCancel,
+    /// Subventana de reglas de plugin: cambio/foco/scroll del formulario (allichay).
+    PluginEditMsg(AllichayMsg),
+    /// Tecla al campo de texto en edición de la subventana de plugin.
+    PluginEditKey(KeyEvent),
+    /// Cerrar la subventana de plugin sin guardar (click en el scrim).
+    PluginEditCancel,
 }
 
 // =====================================================================
@@ -1039,6 +1054,57 @@ impl App for Panel {
                 }
             }
             Msg::RemoteEditCancel => remote_edit_close(&mut m),
+            // Subventana de reglas de plugin (asignador): mismo patrón que la remota.
+            Msg::PluginEditMsg(am) => match am {
+                AllichayMsg::Focus(path) => {
+                    if let Some(edit) = &m.plugin_edit {
+                        let seed = path.leaf().map(|l| edit.text_value(l)).unwrap_or_default();
+                        m.plugin_allichay.focus(&path, &seed);
+                    }
+                }
+                AllichayMsg::Change(path, value) => {
+                    let leaf = path.leaf().unwrap_or("").to_string();
+                    match leaf.as_str() {
+                        "guardar" if value.as_bool() == Some(true) => plugin_edit_save(&mut m),
+                        "cancelar" if value.as_bool() == Some(true) => plugin_edit_close(&mut m),
+                        "add" if value.as_bool() == Some(true) => {
+                            if let Some(edit) = m.plugin_edit.as_mut() {
+                                edit.add_rule();
+                            }
+                        }
+                        _ if leaf.starts_with("rule:") && leaf.ends_with(":del")
+                            && value.as_bool() == Some(true) =>
+                        {
+                            if let Some(i) = leaf
+                                .strip_prefix("rule:")
+                                .and_then(|s| s.strip_suffix(":del"))
+                                .and_then(|s| s.parse::<usize>().ok())
+                            {
+                                if let Some(edit) = m.plugin_edit.as_mut() {
+                                    edit.del_rule(i);
+                                }
+                            }
+                        }
+                        _ => {
+                            if let Some(edit) = m.plugin_edit.as_mut() {
+                                edit.apply(&leaf, value);
+                            }
+                        }
+                    }
+                }
+                AllichayMsg::ScrollTo(off) => m.plugin_allichay.set_scroll(off),
+                AllichayMsg::SelectSection(_)
+                | AllichayMsg::FocusCell(..)
+                | AllichayMsg::FocusHex(..) => {}
+            },
+            Msg::PluginEditKey(event) => {
+                if let Some((path, value)) = m.plugin_allichay.apply_key(&event) {
+                    if let Some(edit) = m.plugin_edit.as_mut() {
+                        edit.apply(path.leaf().unwrap_or(""), value);
+                    }
+                }
+            }
+            Msg::PluginEditCancel => plugin_edit_close(&mut m),
             Msg::ConfigChanged(new_cfg) => {
                 if *new_cfg != m.cfg {
                     let lang_changed = new_cfg.lang != m.cfg.lang;
@@ -1097,6 +1163,16 @@ impl App for Panel {
             }
             if model.remote_allichay.is_editing() {
                 return Some(Msg::RemoteEditKey(event.clone()));
+            }
+            return None;
+        }
+        // Subventana de reglas de plugin: mismo trato que la remota.
+        if model.plugin_edit.is_some() {
+            if matches!(event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::PluginEditCancel);
+            }
+            if model.plugin_allichay.is_editing() {
+                return Some(Msg::PluginEditKey(event.clone()));
             }
             return None;
         }
@@ -1234,6 +1310,49 @@ impl App for Panel {
             .children(vec![caja]);
             return Some(scrim);
         }
+        // La subventana de reglas de plugin: mismo armado (scrim + caja).
+        if let Some(edit) = &model.plugin_edit {
+            let schema = edit.schema();
+            let box_w = 520.0_f32;
+            let box_h = 600.0_f32;
+            let form = schema_panel(
+                &schema,
+                &model.plugin_allichay,
+                &theme,
+                box_h - 24.0,
+                Msg::PluginEditMsg,
+            );
+            let caja = View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: length(box_w), height: length(box_h) },
+                padding: Rect {
+                    left: length(16.0_f32),
+                    right: length(16.0_f32),
+                    top: length(12.0_f32),
+                    bottom: length(12.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.bg_panel)
+            .children(vec![form]);
+            let scrim = View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    top: length(0.0_f32),
+                    right: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .fill(llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(0, 0, 0, 150))
+            .on_click(Msg::PluginEditCancel)
+            .children(vec![caja]);
+            return Some(scrim);
+        }
         // El diálogo de archivos tiene prioridad: modal centrado con scrim.
         if let Some(st) = &model.picker {
             let pal = llimphi_module_file_picker::PickerPalette::from_theme(&theme);
@@ -1362,6 +1481,9 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         prezi,
         remote_edit: None,
         remote_allichay: AllichayState::new(),
+        mirada_plugins: plugins::list_plugins(),
+        plugin_edit: None,
+        plugin_allichay: AllichayState::new(),
     }
 }
 
@@ -1675,6 +1797,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     inicio.sections.push(arranque_section());
     inicio.sections.push(autostart_section());
     inicio.sections.push(remote::sessions_section(&m.mirada.startup));
+    inicio.sections.push(plugins::plugins_section(&m.mirada_plugins));
 
     // ---- Panel SISTEMA ----
     let mut sistema = Schema::new();
@@ -3512,6 +3635,26 @@ fn remote_edit_delete(m: &mut Model) {
     m.remote_allichay = AllichayState::new();
 }
 
+/// Cierra la subventana de reglas de plugin descartando el borrador.
+fn plugin_edit_close(m: &mut Model) {
+    m.plugin_edit = None;
+    m.plugin_allichay = AllichayState::new();
+}
+
+/// Guarda las reglas del editor en el `.ron` del plugin (reescribe sólo su
+/// `config`, fuera de la firma) y relee la lista. El host de plugins lo recarga
+/// en caliente — no pasa por `flush_saves`/config.ron, es el archivo del plugin.
+fn plugin_edit_save(m: &mut Model) {
+    if let Some(edit) = m.plugin_edit.take() {
+        match edit.save() {
+            Ok(()) => m.status = format!("reglas de «{}» guardadas (recarga en caliente)", edit.name),
+            Err(e) => m.status = format!("no se pudo guardar {}: {e}", edit.name),
+        }
+        m.mirada_plugins = plugins::list_plugins();
+    }
+    m.plugin_allichay = AllichayState::new();
+}
+
 fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
     let Some((key, rel)) = split_app(path) else {
         m.status = format!("· ruta inválida: {path}");
@@ -3771,6 +3914,26 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                     }
                 }
                 None => {}
+            }
+            return;
+        }
+        // Plugins de mirada: `plugin:N` abre el editor de reglas del N-ésimo
+        // (sólo los editables — el asignador). Los `info:N` son display, no llegan.
+        "plugins" => {
+            if value.as_bool() != Some(true) {
+                return;
+            }
+            if let Some(n) = rel
+                .leaf()
+                .and_then(|l| l.strip_prefix("plugin:"))
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                if let Some(info) = m.mirada_plugins.get(n) {
+                    if info.editable() {
+                        m.plugin_edit = Some(plugins::PluginEdit::open(info));
+                        m.plugin_allichay = AllichayState::new();
+                    }
+                }
             }
             return;
         }
