@@ -31,7 +31,7 @@
 //! le decimos al usuario.
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{
-    auto, length, percent, FlexDirection, Rect, Size, Style,
+    length, percent, FlexDirection, Rect, Size, Style,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -42,9 +42,10 @@ use llimphi_widget_text_editor::{
 };
 use pluma_align::{CartaHebras, OrigenAlineamiento};
 use pluma_cuerpo::Cuerpo;
+use pluma_estilo::EstiloLienzo;
 use uuid::Uuid;
 
-use crate::cuerpo_ide::{cuerpo_ide_view, CuerpoIde};
+use crate::cuerpo_ide::{cuerpo_ide_view_estilado, CuerpoIde};
 use crate::multilienzo::{pintar_cauce_fluido, Cauce, PaletaHebras};
 use crate::Palette;
 
@@ -169,6 +170,50 @@ where
     FPtr: Fn(usize, PointerEvent) -> Msg + Send + Sync + Clone + 'static,
     FHover: Fn(usize) -> Option<Msg>,
 {
+    multilienzo_editor_view_estilado(
+        ides,
+        cuerpos,
+        cartas,
+        &[],
+        activo,
+        palette_editor,
+        paleta_hebras,
+        palette_lienzo,
+        cfg,
+        metrics,
+        visible_lines,
+        language,
+        on_pointer,
+        on_hover,
+    )
+}
+
+/// Como [`multilienzo_editor_view`] + estilo por columna: `estilos[i]` es el
+/// [`EstiloLienzo`] del cuerpo `i` (o `None` para render por defecto). Una
+/// slice más corta que `ides` (o vacía) trata las columnas faltantes como
+/// sin estilo.
+#[allow(clippy::too_many_arguments)]
+pub fn multilienzo_editor_view_estilado<Msg, FPtr, FHover>(
+    ides: &[&CuerpoIde],
+    cuerpos: &[&Cuerpo],
+    cartas: &[Option<&CartaHebras>],
+    estilos: &[Option<&EstiloLienzo>],
+    activo: usize,
+    palette_editor: &EditorPalette,
+    paleta_hebras: &PaletaHebras,
+    palette_lienzo: &Palette,
+    cfg: &ConfigMultilienzoEditor,
+    metrics: EditorMetrics,
+    visible_lines: usize,
+    language: Language,
+    on_pointer: FPtr,
+    on_hover: FHover,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    FPtr: Fn(usize, PointerEvent) -> Msg + Send + Sync + Clone + 'static,
+    FHover: Fn(usize) -> Option<Msg>,
+{
     assert_eq!(
         ides.len(),
         cuerpos.len(),
@@ -187,6 +232,7 @@ where
         hijos.push(columna_editor(
             ides[i],
             cuerpos[i],
+            estilos.get(i).copied().flatten(),
             i == activo,
             palette_editor,
             palette_lienzo,
@@ -237,9 +283,11 @@ where
 /// está activo, header con el nombre del cuerpo arriba, editor real
 /// abajo expandido a flex-grow.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn columna_editor<Msg, FPtr>(
     ide: &CuerpoIde,
     cuerpo: &Cuerpo,
+    estilo: Option<&EstiloLienzo>,
     activo: bool,
     palette_editor: &EditorPalette,
     palette_lienzo: &Palette,
@@ -280,8 +328,9 @@ where
     .fill(palette_lienzo.bg_panel)
     .text_aligned(header_text, 11.0, header_color, Alignment::Start);
 
-    let editor = cuerpo_ide_view::<Msg>(
+    let editor = cuerpo_ide_view_estilado::<Msg>(
         ide,
+        estilo,
         palette_editor,
         metrics,
         visible_lines,

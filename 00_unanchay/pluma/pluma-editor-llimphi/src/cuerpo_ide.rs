@@ -41,12 +41,13 @@ use std::collections::HashMap;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 use llimphi_widget_text_editor::{
-    text_editor_view_highlighted, ApplyResult, Clipboard, EditorMetrics, EditorOptions,
-    EditorPalette, EditorState, Language, PointerEvent,
+    text_editor_view_highlighted, text_editor_view_styled, ApplyResult, Clipboard, EditorMetrics,
+    EditorOptions, EditorPalette, EditorState, Language, PointerEvent, StyledSpan,
 };
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::Cuerpo;
 use pluma_editor_cuerpo::{CambioAtom, EditorCuerpo, SEPARADOR};
+use pluma_estilo::{EstiloLienzo, EstiloTexto};
 use uuid::Uuid;
 
 // Re-exports — el caller importa todo desde `cuerpo_ide` sin tener que
@@ -717,6 +718,158 @@ pub fn cuerpo_ide_view<Msg: Clone + 'static>(
     )
 }
 
+/// `Rgba` (`[u8;4]`) de `pluma-estilo` → `peniko::Color`.
+#[inline]
+fn rgba_a_color(c: [u8; 4]) -> Color {
+    Color::from_rgba8(c[0], c[1], c[2], c[3])
+}
+
+/// Construye un [`StyledSpan`] de columnas `[ini, fin)` a partir de un
+/// [`EstiloTexto`] efectivo (ya mergeado).
+fn styled_span_de(ini: usize, fin: usize, e: &EstiloTexto) -> StyledSpan {
+    StyledSpan {
+        start_col: ini,
+        end_col: fin,
+        fg: e.color_fg.map(rgba_a_color),
+        bg: e.color_bg.map(rgba_a_color),
+        font_family: e.font_family.clone(),
+        size_px: e.size_px,
+        weight: e.weight,
+        italic: e.italic,
+        underline: e.underline,
+        strikethrough: e.strikethrough,
+    }
+}
+
+/// Resuelve un [`EstiloLienzo`] contra el layout actual de un [`CuerpoIde`]
+/// y devuelve, por línea del buffer, los [`StyledSpan`] que el
+/// `text-editor` consume. Capa por capa:
+///
+/// 1. **base + zona** — por cada línea de contenido, un span de la línea
+///    entera con el estilo efectivo de su zona (`base` mergeado con el
+///    override de zona). Las guardas/separadores reciben sólo `base`.
+/// 2. **por span** — los overrides de selección guardados por átomo
+///    (rangos de char dentro del contenido del átomo) se mapean a
+///    sub-rangos por línea del buffer y se apilan ENCIMA de la capa de
+///    zona — parley aplica en orden de inserción, así el span gana.
+///
+/// Si el estilo está vacío devuelve un vector de líneas vacías — el
+/// caller puede entonces caer al render normal sin spans.
+pub fn spans_estilo_por_linea(ide: &CuerpoIde, estilo: &EstiloLienzo) -> Vec<Vec<StyledSpan>> {
+    let total = ide.state.line_count();
+    let mut out: Vec<Vec<StyledSpan>> = vec![Vec::new(); total];
+    if estilo.es_vacio() {
+        return out;
+    }
+
+    // 1) Capa base + zona: un span de línea completa por cada línea con
+    //    estilo efectivo no vacío.
+    for line in 0..total {
+        let efectivo = match ide.zona_de_linea(line) {
+            Some(z) => estilo.estilo_de_zona(z),
+            None => estilo.base.clone(),
+        };
+        if efectivo.es_vacio() {
+            continue;
+        }
+        let len = ide.state.buffer.line_len_chars(line);
+        if len == 0 {
+            continue;
+        }
+        out[line].push(styled_span_de(0, len, &efectivo));
+    }
+
+    // 2) Capa por span (selección estilada), mapeando char-en-átomo →
+    //    (línea, col) del buffer.
+    for (atom_id, spans) in &estilo.por_span {
+        let Some((start_line, _)) = ide.posicion_de_atom(*atom_id) else {
+            continue;
+        };
+        let Some(idx) = ide
+            .editor_cuerpo
+            .atom_ids
+            .iter()
+            .position(|x| x == atom_id)
+        else {
+            continue;
+        };
+        let Some(contenido) = ide.editor_cuerpo.texto.split(SEPARADOR).nth(idx) else {
+            continue;
+        };
+        // Mapa: posición de char (0..=nchars) → (línea, col) del buffer.
+        let mut posmap: Vec<(usize, usize)> = Vec::with_capacity(contenido.chars().count() + 1);
+        let mut ln = start_line;
+        let mut col = 0usize;
+        for ch in contenido.chars() {
+            posmap.push((ln, col));
+            if ch == '\n' {
+                ln += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        posmap.push((ln, col));
+        let nchars = posmap.len() - 1;
+
+        for s in spans {
+            let ini = s.ini.min(nchars);
+            let fin = s.fin.min(nchars);
+            if fin <= ini {
+                continue;
+            }
+            // Trocea el rango por línea (un átomo multi-línea cae en varias).
+            let mut i = ini;
+            while i < fin {
+                let (linea, c0) = posmap[i];
+                let mut j = i;
+                while j < fin && posmap[j].0 == linea {
+                    j += 1;
+                }
+                let c_end = posmap[j - 1].1 + 1;
+                if linea < out.len() {
+                    out[linea].push(styled_span_de(c0, c_end, &s.estilo));
+                }
+                i = j;
+            }
+        }
+    }
+
+    out
+}
+
+/// Como [`cuerpo_ide_view`] pero aplica un [`EstiloLienzo`]: resuelve los
+/// spans rich-text con [`spans_estilo_por_linea`] y los pinta vía
+/// `text_editor_view_styled`. Si el estilo es vacío, cae al render normal
+/// (highlight) — mismo resultado que `cuerpo_ide_view`.
+#[allow(clippy::too_many_arguments)]
+pub fn cuerpo_ide_view_estilado<Msg: Clone + 'static>(
+    ide: &CuerpoIde,
+    estilo: Option<&EstiloLienzo>,
+    palette: &EditorPalette,
+    metrics: EditorMetrics,
+    visible_lines: usize,
+    language: Language,
+    on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
+) -> View<Msg> {
+    let mut metrics = metrics;
+    metrics.phantom_guard_lines = true;
+    match estilo.filter(|e| !e.es_vacio()) {
+        Some(e) => {
+            let spans = spans_estilo_por_linea(ide, e);
+            text_editor_view_styled(&ide.state, palette, metrics, visible_lines, &spans, &[], on_pointer)
+        }
+        None => text_editor_view_highlighted(
+            &ide.state,
+            palette,
+            metrics,
+            visible_lines,
+            language,
+            on_pointer,
+        ),
+    }
+}
+
 /// Constructor para tests / herramientas: arma un `CuerpoIde` sin pasar
 /// por un `Cuerpo` — recibe el texto plano y la lista de `atom_ids` en
 /// orden. Útil cuando el caller quiere instrumentar un estado intermedio.
@@ -1330,5 +1483,82 @@ mod pruebas {
         // El cuerpo nuevo arranca todo como separador.
         assert_eq!(ide.fundido_junctions, vec![false, false]);
         assert_eq!(ide.state.guard_lines, vec![1, 3]);
+    }
+
+    // ----- Resolver de estilo --------------------------------------------
+
+    #[test]
+    fn spans_estilo_vacio_devuelve_lineas_vacias() {
+        let (c, atoms) = cuerpo_con_atoms(&["Hola", "Mundo"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        let spans = spans_estilo_por_linea(&ide, &EstiloLienzo::nuevo());
+        assert_eq!(spans.len(), ide.state.line_count());
+        assert!(spans.iter().all(|l| l.is_empty()));
+    }
+
+    #[test]
+    fn spans_estilo_base_pinta_linea_completa_por_zona() {
+        let (c, atoms) = cuerpo_con_atoms(&["Hola mundo", "Segundo"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Líneas: 0="Hola mundo", 1="" (guarda), 2="Segundo".
+        let mut estilo = EstiloLienzo::nuevo();
+        estilo.set_base(&EstiloTexto {
+            color_fg: Some([255, 0, 0, 255]),
+            ..Default::default()
+        });
+        let spans = spans_estilo_por_linea(&ide, &estilo);
+        // Línea de contenido: un span de la línea entera.
+        assert_eq!(spans[0].len(), 1);
+        assert_eq!(spans[0][0].start_col, 0);
+        assert_eq!(spans[0][0].end_col, 10);
+        assert!(spans[0][0].fg.is_some());
+        // Guarda (línea vacía): sin span (len 0 → skip).
+        assert!(spans[1].is_empty());
+        // Segunda zona: línea entera también.
+        assert_eq!(spans[2].len(), 1);
+        assert_eq!(spans[2][0].end_col, 7);
+    }
+
+    #[test]
+    fn spans_estilo_zona_override_aplica_solo_a_su_zona() {
+        let (c, atoms) = cuerpo_con_atoms(&["Hola mundo", "Segundo"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        let mut estilo = EstiloLienzo::nuevo();
+        // Sólo la zona 1 tiene estilo (negrita); la 0 queda sin estilo.
+        estilo.set_zona(1, &EstiloTexto { weight: Some(700.0), ..Default::default() });
+        let spans = spans_estilo_por_linea(&ide, &estilo);
+        // Zona 0 sin override y base vacía → sin span.
+        assert!(spans[0].is_empty());
+        // Zona 1 → span con weight.
+        assert_eq!(spans[2].len(), 1);
+        assert_eq!(spans[2][0].weight, Some(700.0));
+    }
+
+    #[test]
+    fn spans_estilo_por_span_se_apila_sobre_la_zona() {
+        let (c, atoms) = cuerpo_con_atoms(&["Hola mundo", "Segundo"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        let mut estilo = EstiloLienzo::nuevo();
+        estilo.set_base(&EstiloTexto {
+            color_fg: Some([10, 20, 30, 255]),
+            ..Default::default()
+        });
+        // Subrayar "Hola" (chars 0..4) del primer átomo.
+        estilo.set_span(
+            atoms[0].id,
+            0,
+            4,
+            EstiloTexto { underline: Some(true), ..Default::default() },
+        );
+        let spans = spans_estilo_por_linea(&ide, &estilo);
+        // Línea 0: span de zona (entero) + span de selección [0,4).
+        assert_eq!(spans[0].len(), 2);
+        let sel = &spans[0][1];
+        assert_eq!((sel.start_col, sel.end_col), (0, 4));
+        assert_eq!(sel.underline, Some(true));
     }
 }

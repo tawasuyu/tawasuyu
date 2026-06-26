@@ -14,6 +14,7 @@ pluma-cuerpo = { path = "../pluma-cuerpo" }
 pluma-outline = { path = "../pluma-outline" }
 pluma-align = { path = "../pluma-align" }
 pluma-editor-cuerpo = { path = "../pluma-editor-cuerpo" }
+pluma-estilo = { path = "../pluma-estilo" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }

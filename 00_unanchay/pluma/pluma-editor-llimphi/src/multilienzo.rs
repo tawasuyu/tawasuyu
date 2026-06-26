@@ -956,7 +956,7 @@ mod pruebas {
         );
         let cfg = MultilienzoConfig::default();
         let paleta = PaletaHebras::default();
-        let hebras_n = precomputar_hebras(&a, &b, &carta_natural, &cfg, &paleta);
+        let hebras_n = precomputar_hebras(&a, &b, &carta_natural, &cfg, &paleta, &std::collections::HashMap::new());
         assert_eq!(hebras_n.len(), 2);
 
         // Misma carta pero invertida (atom_a=qu, atom_b=es). Debe seguir resolviendo
@@ -973,7 +973,7 @@ mod pruebas {
             };
             carta_invertida.agregar(invertida);
         }
-        let hebras_i = precomputar_hebras(&a, &b, &carta_invertida, &cfg, &paleta);
+        let hebras_i = precomputar_hebras(&a, &b, &carta_invertida, &cfg, &paleta, &std::collections::HashMap::new());
         // Las posiciones y_izq/y_der deben ser las mismas, sin importar el orden
         // declarado en la carta. (Es robusto a la convención del caller.)
         assert_eq!(hebras_n.len(), hebras_i.len());
@@ -996,7 +996,7 @@ mod pruebas {
         carta.hebras[0].fresco = false;
 
         let paleta = PaletaHebras::default();
-        let hebras = precomputar_hebras(&a, &b, &carta, &MultilienzoConfig::default(), &paleta);
+        let hebras = precomputar_hebras(&a, &b, &carta, &MultilienzoConfig::default(), &paleta, &std::collections::HashMap::new());
         assert_eq!(hebras.len(), 1);
         assert!(hebras[0].punteada);
         // Color stale (alpha bajo).
@@ -1015,7 +1015,7 @@ mod pruebas {
         carta.hebras[0].fuerza = 0.4;
 
         let paleta = PaletaHebras::default();
-        let hebras = precomputar_hebras(&a, &b, &carta, &MultilienzoConfig::default(), &paleta);
+        let hebras = precomputar_hebras(&a, &b, &carta, &MultilienzoConfig::default(), &paleta, &std::collections::HashMap::new());
         // El alpha debe ser ~0.4 del alpha base de paleta.embeddings.
         let a_base = paleta.embeddings.components[3];
         assert!((hebras[0].color.components[3] - a_base * 0.4).abs() < 1e-3);

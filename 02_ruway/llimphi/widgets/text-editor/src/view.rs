@@ -244,6 +244,84 @@ pub enum PointerEvent {
     Drag { initial_x: f32, initial_y: f32, dx: f32, dy: f32 },
 }
 
+/// Override de estilo de texto sobre un rango de **columnas-char**
+/// `[start_col, end_col)` de una línea. A diferencia de [`Span`] (que sólo
+/// lleva una `TokenKind` → color), un `StyledSpan` lleva el set completo de
+/// propiedades rich-text que el caller quiera pisar: color de glifo, color de
+/// fondo (resaltado), familia, tamaño, peso, itálica, subrayado y tachado.
+/// Cada campo es opcional — `None` hereda del default del editor.
+///
+/// El widget traduce internamente las columnas-char a offsets de byte (que es
+/// lo que consume `text_spans`/parley) y pinta el `bg` como rect por debajo
+/// del texto (parley no lleva fondo por span). Pensado para editores de prosa
+/// que estilan zonas o la selección (pluma multilienzo); no se combina con el
+/// syntax highlight por `Language` — es una vía de pintado paralela.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StyledSpan {
+    pub start_col: usize,
+    pub end_col: usize,
+    pub fg: Option<Color>,
+    pub bg: Option<Color>,
+    pub font_family: Option<String>,
+    pub size_px: Option<f32>,
+    pub weight: Option<f32>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
+}
+
+/// Como [`text_editor_view_highlighted`] pero el caller provee, por línea, un
+/// conjunto de [`StyledSpan`] con estilo rich-text completo (color/fondo/
+/// fuente/tamaño/peso/itálica/subrayado/tachado). `styled_per_line[n]` son los
+/// spans de la línea `n` del buffer (índice absoluto). Las líneas sin spans se
+/// pintan planas en `palette.fg_text`. Va por encima del syntax highlight: si
+/// pasás spans, mandan ellos (el caso de pluma, que es prosa sin lenguaje).
+pub fn text_editor_view_styled<Msg: Clone + 'static>(
+    state: &EditorState,
+    palette: &EditorPalette,
+    metrics: EditorMetrics,
+    visible_lines: usize,
+    styled_per_line: &[Vec<StyledSpan>],
+    match_ranges: &[(usize, usize)],
+    on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
+) -> View<Msg> {
+    let caret = state.cursor.caret;
+    let syntax = crate::syntax_palette_dark(&llimphi_theme::Theme::dark());
+
+    let visible = visible_lines.max(1).min(200);
+    let line_count = state.line_count();
+    let scroll = state.scroll_offset.min(line_count.saturating_sub(1));
+    let end_line = (scroll + visible).min(line_count);
+    let height = (end_line - scroll) as f32 * metrics.line_height;
+
+    let gutter = build_gutter(state, scroll, end_line, caret.line, metrics, palette);
+    let content = build_content(
+        state,
+        palette,
+        metrics,
+        height,
+        scroll,
+        end_line,
+        Vec::new(),
+        &syntax,
+        match_ranges,
+        None,
+        Some(styled_per_line),
+        on_pointer,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        min_size: Size { width: auto(), height: length(height) },
+        ..Default::default()
+    })
+    .fill(palette.bg)
+    .clip(true)
+    .children(vec![gutter, content])
+}
+
 /// Render con syntax highlight + **viewport scrolling**: sólo se renderizan
 /// las líneas en `[state.scroll_offset, scroll_offset + visible_lines)`.
 ///
@@ -312,6 +390,7 @@ pub fn text_editor_view_full<Msg: Clone + 'static>(
         &syntax,
         match_ranges,
         None,
+        None,
         on_pointer,
     );
 
@@ -367,6 +446,7 @@ pub fn text_editor_view_colored<Msg: Clone + 'static>(
         &syntax,
         &[],
         Some(line_color_runs),
+        None,
         on_pointer,
     );
     View::new(Style {
@@ -504,6 +584,10 @@ fn build_content<Msg: Clone + 'static>(
     // gana sobre el syntax highlight — para callers que colorean por semántica
     // propia (un shell que tinta `ls`, paths, urls…). `None` = highlight normal.
     color_runs: Option<&[Vec<(usize, usize, Color)>]>,
+    // Spans rich-text por línea (color/fondo/fuente/tamaño/peso/itálica/…).
+    // Cuando es `Some`, ganan sobre el syntax highlight — la vía de pluma para
+    // estilar zonas y selección de prosa. `None` = comportamiento previo.
+    styled_per_line: Option<&[Vec<StyledSpan>]>,
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     let caret = state.cursor.caret;
@@ -528,6 +612,17 @@ fn build_content<Msg: Clone + 'static>(
     // 1b) Highlight de matches del find.
     for (s, e) in match_ranges {
         children.extend(match_rects(state, *s, *e, scroll, end_line, metrics, palette));
+    }
+
+    // 1c) Fondos de los spans estilados (resaltado). Por debajo de la
+    //     selección y del texto, igual que los tintes — un rect por span
+    //     con `bg`. Char-cols → x/w vía `char_width` (mono).
+    if let Some(styled) = styled_per_line {
+        for n in scroll..end_line {
+            if let Some(line_spans) = styled.get(n) {
+                children.extend(styled_bg_rects(n - scroll, line_spans, metrics));
+            }
+        }
     }
 
     // 2) Selección — por cada cursor que tenga selección.
@@ -561,7 +656,9 @@ fn build_content<Msg: Clone + 'static>(
             children.push(phantom_guard_divider(local_line, metrics, palette));
             continue;
         }
-        if let Some(runs) = color_runs.and_then(|cr| cr.get(n)) {
+        if let Some(line_spans) = styled_per_line.and_then(|s| s.get(n)).filter(|s| !s.is_empty()) {
+            children.push(line_text_styled(local_line, &text, line_spans, metrics, palette));
+        } else if let Some(runs) = color_runs.and_then(|cr| cr.get(n)) {
             children.push(line_text_color_runs(local_line, &text, runs, metrics, palette));
         } else if let Some(line_spans) = spans_per_line.get(n) {
             children.push(line_text_tokens(local_line, &text, line_spans, metrics, palette, syntax));
@@ -819,6 +916,108 @@ fn line_text_color_runs<Msg: Clone + 'static>(
         Alignment::Start,
     )
     .mono()
+}
+
+/// Renderiza una línea con spans rich-text ([`StyledSpan`]): construye los
+/// [`llimphi_text::TextSpan`] (offsets en byte, vía el mapa char→byte) y los
+/// pasa a `text_spans`. El fondo de cada span lo pinta [`styled_bg_rects`]
+/// aparte. El texto fuera de todo span va en `palette.fg_text` /
+/// `metrics.font_size`. Mantiene `.mono()` para que el posicionamiento por
+/// `char_width` (caret/selección) siga cuadrando.
+fn line_text_styled<Msg: Clone + 'static>(
+    line: usize,
+    text: &str,
+    spans: &[StyledSpan],
+    metrics: EditorMetrics,
+    palette: &EditorPalette,
+) -> View<Msg> {
+    // char-col → byte-offset (parley rangea por bytes; los spans, por chars).
+    let mut byte_at: Vec<usize> = Vec::with_capacity(text.len() + 1);
+    let mut acc = 0usize;
+    byte_at.push(0);
+    for ch in text.chars() {
+        acc += ch.len_utf8();
+        byte_at.push(acc);
+    }
+    let nchars = byte_at.len() - 1;
+
+    let mut ts: Vec<llimphi_ui::llimphi_text::TextSpan> = Vec::with_capacity(spans.len());
+    for s in spans {
+        if s.start_col >= nchars {
+            continue;
+        }
+        let end = s.end_col.min(nchars);
+        if end <= s.start_col {
+            continue;
+        }
+        let style = llimphi_ui::llimphi_text::TextSpanStyle {
+            size_px: s.size_px,
+            weight: s.weight,
+            italic: s.italic,
+            font_family: s.font_family.clone(),
+            color: s.fg,
+            underline: s.underline,
+            strikethrough: s.strikethrough,
+        };
+        ts.push(llimphi_ui::llimphi_text::TextSpan::new(
+            byte_at[s.start_col],
+            byte_at[end],
+            style,
+        ));
+    }
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(PAD_X),
+            top: length(text_y(line, metrics)),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(2000.0_f32), height: length(metrics.line_height) },
+        ..Default::default()
+    })
+    .text_spans(
+        text.to_string(),
+        metrics.font_size,
+        palette.fg_text,
+        ts,
+        Alignment::Start,
+    )
+    .mono()
+}
+
+/// Rects de fondo (resaltado) de los spans de una línea con `bg` definido.
+/// Char-cols → x/w por `char_width` (mono), mismo origen que el texto.
+fn styled_bg_rects<Msg: Clone + 'static>(
+    local_line: usize,
+    spans: &[StyledSpan],
+    metrics: EditorMetrics,
+) -> Vec<View<Msg>> {
+    let mut out: Vec<View<Msg>> = Vec::new();
+    for s in spans {
+        let Some(bg) = s.bg else { continue };
+        if s.end_col <= s.start_col {
+            continue;
+        }
+        let x = text_x(s.start_col, metrics);
+        let w = (s.end_col - s.start_col) as f32 * metrics.char_width;
+        out.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(x),
+                    top: length(text_y(local_line, metrics)),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size { width: length(w), height: length(metrics.line_height) },
+                ..Default::default()
+            })
+            .fill(bg),
+        );
+    }
+    out
 }
 
 fn caret_rect<Msg: Clone + 'static>(
