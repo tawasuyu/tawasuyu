@@ -475,6 +475,22 @@ remote`. Faltan dos fuentes:
 > en todas). Compose es CPU (resize por frame) — un escalón futuro es escalar por
 > GPU. **Verificación en metal pendiente** (decode+readback sólo se prueba en
 > hardware; los tests cubren la fuente CFR de foreign-av y la degradación).
+>
+> **✅ VERIFICADO EN METAL (2026-06-26 · Intel Iris Xe, Mesa, compositor DRM
+> real).** Se certificó la cadena entera sin mirar píxeles a ojo (regla 8). (1)
+> **Decode → RGBA**, headless con el ejemplo nuevo `examples/
+> video_wallpaper_decode_diag.rs` (espeja el `build_source` del worker): 6/6
+> frames a 1280×720, 100 % bytes no-cero, `seek_to(0)` reengancha el loop, y el
+> contenido **anima** (14.2 % de bytes difieren entre frame 0 y ~2 s). (2)
+> **Upload+compose+present** corriendo `mirada --drm` con `wallpaper_source =
+> "video"` y capturando dos frames a 1920×1080 con `grim` (su `zwlr_screencopy`),
+> separados ~2.5 s: **5.60 % de los píxeles cambian** (116 081/2 073 600, max-delta
+> 655), media-rgb (13,25,49) = el gradiente azul del ejemplo. El fondo **VIVO** en
+> pantalla descarta el fallback estático (diff 0 %). Nota operativa: `mirada --drm`
+> exige ser la **sesión activa** (master DRM) — no se puede verificar anidado en
+> otra sesión gráfica; hay que lanzarlo desde una TTY libre. **Sigue pendiente** lo
+> que ya estaba: pausar con DPMS-off, loop sin costura, por-salida, y escalar la
+> compose por GPU.
 
 > **✅ HECHO — wallpaper de marca ANIMADO por defecto + pausa DPMS (2026-06-26).**
 > El fondo por defecto (sin imagen configurada) ahora es **vivo**: la chakana
