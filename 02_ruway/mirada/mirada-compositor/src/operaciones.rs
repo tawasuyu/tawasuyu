@@ -431,6 +431,15 @@ impl App {
         (pct as f32 / 100.0).clamp(0.0, 0.8)
     }
 
+    /// Radio (px) de las **esquinas redondeadas** de ventana. `0` (default) =
+    /// rectas. Con Cerebro enlazado: `0`.
+    pub(crate) fn config_corner_radius(&self) -> u8 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().corner_radius,
+            Brain::Linked(_) => 0,
+        }
+    }
+
     /// `true` si el fondo por defecto debe ser el **wallpaper de marca animado**
     /// (chakana + plano cartesiano vivo). Aplica cuando la fuente cae al fondo
     /// por defecto (familia `auto`/`local`/`directory`/`remote` **sin** imagen) y

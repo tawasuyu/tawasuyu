@@ -460,6 +460,18 @@ impl Configurable for Config {
                         600,
                     )),
             )
+            .section(
+                Section::new("efectos", "Efectos")
+                    .icon("🪟")
+                    .help("Aspecto de las ventanas (0 = sin efecto; opt-in, cuestan GPU)")
+                    .field(Field::slider_int(
+                        "corner_radius",
+                        "Esquinas redondeadas — radio (px, 0 = rectas)",
+                        self.corner_radius as i64,
+                        0,
+                        40,
+                    )),
+            )
     }
 
     fn apply(&mut self, path: &FieldPath, value: FieldValue) -> Result<(), AllichayError> {
@@ -786,6 +798,11 @@ impl Configurable for Config {
                     self.unfocused_dim_pct = v.clamp(0, 80) as u8;
                 }
             }
+            "corner_radius" => {
+                if let Some(v) = value.as_int() {
+                    self.corner_radius = v.clamp(0, 40) as u8;
+                }
+            }
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
@@ -817,9 +834,21 @@ mod tests {
                 "menu",
                 "vista_espacial",
                 "inactividad",
-                "movimiento"
+                "movimiento",
+                "efectos"
             ]
         );
+    }
+
+    #[test]
+    fn efectos_aplica_corner_radius() {
+        let mut c = Config::default();
+        c.apply(&"efectos.corner_radius".into(), FieldValue::Int(16))
+            .unwrap();
+        assert_eq!(c.corner_radius, 16);
+        c.apply(&"efectos.corner_radius".into(), FieldValue::Int(999))
+            .unwrap();
+        assert_eq!(c.corner_radius, 40, "se acota a 40");
     }
 
     #[test]

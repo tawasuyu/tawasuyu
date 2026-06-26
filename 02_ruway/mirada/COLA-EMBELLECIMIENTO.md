@@ -16,18 +16,30 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       fluido a las flechas + iluminación que respira) — verificado headless 1 vez
 
 ## ⏳ En curso / siguiente — shaders GLES (sólo certificable en metal)
-- [ ] **Esquinas redondeadas** (`corner_radius`). Approach: shader de textura SDF
-      rounded-rect. Bloqueo arquitectónico hallado: `override_default_tex_program`
-      vive en `GlesFrame`, que `DrmCompositor::render_frame` crea adentro — no hay
-      hook. Las superficies son `WaylandSurfaceRenderElement` (no
-      `TextureRenderElement`), así que el shader por-elemento exige render
-      **offscreen por ventana** → `TextureShaderElement`. Opt-in, default 0, con
-      fallback si el shader no compila.
-- [ ] **Glassmorphism** (parte C, el «wow» caro). Multi-pase: capturar el backdrop
-      detrás de la superficie → downsample → N blur separables → upsample →
-      componer con tinte + filo. Reusa `Offscreen<GlesTexture>` (ya en screencopy).
-      Opt-in con control de calidad (off / 1 pasada / N). Pausar en apps de
-      video/juego (cruza con idle-inhibitor).
+- [x] **Esquinas redondeadas** (`corner_radius`, default 0, sección «Efectos» del
+      panel). **Vía CPU** (la GPU quedó bloqueada, ver abajo): se rinde el
+      contenido del cliente a un offscreen, se **lee a CPU**
+      (`render_elements_offscreen`), se aplica la máscara SDF en las 4 esquinas
+      (`round_mask_bgra`, pura + testeada) y se sube como `MemoryRenderBuffer`.
+      Caro (lectura de GPU por ventana/frame) → opt-in. Limitación: el readback es
+      `Xrgb8888` (opaco), así que una ventana **translúcida** redondeada pierde su
+      translucidez interior (raro). **Falta verificar en metal.**
+- [ ] **🚧 BLOQUEO para efectos por-shader GPU (rounded GPU + glass).** El enum
+      `Frame<R>` es **genérico** y su `RenderElement<R>` exige que cada variante lo
+      sea; `TextureShaderElement`/`TextureRenderElement<GlesTexture>` son
+      **sólo `GlesRenderer`** → no entran. Además `override_default_tex_program`
+      vive en `GlesFrame`, que `DrmCompositor::render_frame` crea adentro (sin
+      hook). **Para hacer rounded/glass en GPU hace falta primero** una de: (a) un
+      enum de elementos **específico de `GlesRenderer`** para el path DRM (el
+      winit usa otro), o (b) un **pase de render manual** del layer de ventanas
+      donde controlemos `GlesFrame` (y ahí `override_default_tex_program`). Es un
+      refactor del `Frame`/render_output, no una rebanada más.
+- [ ] **Glassmorphism** (parte C, el «wow» caro) — **depende del bloqueo de
+      arriba**. Multi-pase: capturar el backdrop detrás de la superficie →
+      downsample → N blur separables → upsample → componer con tinte + filo. Reusa
+      `Offscreen<GlesTexture>`. Opt-in con control de calidad (off / 1 / N).
+      Alternativa sin desbloquear: **blur en CPU** del readback (muy caro, sólo
+      para prototipar). Pausar en apps de video/juego (idle-inhibitor).
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).

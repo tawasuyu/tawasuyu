@@ -489,6 +489,10 @@ impl DrmState {
         let open_scale_start = self.app.config_window_open_scale();
         let glow_ms = self.app.config_focus_glow_ms();
         let dim_frac = self.app.config_unfocused_dim();
+        // Esquinas redondeadas (radio px). `0` → camino normal (rectas). Caro:
+        // cada ventana redondeada se rinde a un offscreen y se lee a CPU, por eso
+        // es opt-in (default 0).
+        let corner_radius = self.app.config_corner_radius();
         let anim_now = self.start.elapsed().as_millis() as u32;
 
         // Popups (menú de aplicación y contextuales de apps GTK/Qt) PRIMERO: el
@@ -730,15 +734,69 @@ impl DrmState {
                     )));
                 }
             }
-            for el in render_elements_from_surface_tree(
-                &mut self.renderer,
-                &w.surface,
-                (x, y),
-                1.0,
-                w.effects.opacity as f32 / 255.0 * anim_alpha,
-                Kind::Unspecified,
-            ) {
-                into.push(Frame::Window(el));
+            let surf_alpha = w.effects.opacity as f32 / 255.0 * anim_alpha;
+            // Esquinas redondeadas (opt-in): rendimos el contenido del cliente a un
+            // offscreen, lo leemos a CPU, le aplicamos la máscara SDF en las 4
+            // esquinas y lo subimos como un `MemoryRenderBuffer`. Si algo falla,
+            // caemos al camino normal (rectas). El chrome (shell/greeter) no se
+            // redondea. Caro (lectura de GPU por ventana/frame), por eso default 0.
+            let radius = if corner_radius > 0 && !w.is_shell && !w.is_greeter {
+                (corner_radius as f32).min(sw.min(sh) as f32 / 2.0)
+            } else {
+                0.0
+            };
+            let mut rounded = false;
+            if radius > 0.5 {
+                let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                    render_elements_from_surface_tree(
+                        &mut self.renderer,
+                        &w.surface,
+                        (0, 0),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    );
+                if !elems.is_empty() {
+                    if let Some(mut bytes) = crate::screencopy::render_elements_offscreen(
+                        &mut self.renderer,
+                        (sw, sh),
+                        &elems,
+                    ) {
+                        round_mask_bgra(&mut bytes, sw, sh, radius);
+                        let buf = MemoryRenderBuffer::from_slice(
+                            &bytes,
+                            Fourcc::Argb8888,
+                            (sw, sh),
+                            1,
+                            Transform::Normal,
+                            None,
+                        );
+                        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                            &mut self.renderer,
+                            (x as f64, y as f64),
+                            &buf,
+                            Some(surf_alpha),
+                            None,
+                            None,
+                            Kind::Unspecified,
+                        ) {
+                            into.push(Frame::Text(el));
+                            rounded = true;
+                        }
+                    }
+                }
+            }
+            if !rounded {
+                for el in render_elements_from_surface_tree(
+                    &mut self.renderer,
+                    &w.surface,
+                    (x, y),
+                    1.0,
+                    surf_alpha,
+                    Kind::Unspecified,
+                ) {
+                    into.push(Frame::Window(el));
+                }
             }
             // Sombra: capas negras translúcidas DETRÁS de la ventana (se empujan
             // después del contenido = quedan al fondo). Sin shader — rects que se
@@ -2064,6 +2122,52 @@ impl DrmState {
     }
 }
 
+/// Aplica una **máscara de esquinas redondeadas** (SDF rounded-rect, ~1px de
+/// antialias) a un buffer **BGRA premultiplicado** `w×h`, in situ. Multiplica los
+/// 4 canales por la cobertura `m∈[0,1]` — premultiplicado se mantiene
+/// premultiplicado. Sólo toca las 4 esquinas (el centro queda intacto), así que
+/// es barato relativo a la lectura de GPU que lo precede. Pura.
+fn round_mask_bgra(px: &mut [u8], w: i32, h: i32, radius: f32) {
+    if w <= 0 || h <= 0 || radius <= 0.5 {
+        return;
+    }
+    let (wf, hf) = (w as f32, h as f32);
+    let r = radius.min(wf / 2.0).min(hf / 2.0);
+    let bx = wf / 2.0;
+    let by = hf / 2.0;
+    let margin = r.ceil() as i32 + 1;
+    let sd = |px_: f32, py_: f32| -> f32 {
+        // Distancia firmada a un rounded-rect centrado.
+        let qx = (px_ - bx).abs() - bx + r;
+        let qy = (py_ - by).abs() - by + r;
+        qx.max(qy).min(0.0) + (qx.max(0.0).hypot(qy.max(0.0))) - r
+    };
+    for y in 0..h {
+        // Sólo las bandas superior/inferior tocan esquinas; el resto queda igual.
+        if y >= margin && y < h - margin {
+            continue;
+        }
+        let row = (y as usize) * (w as usize) * 4;
+        for x in 0..w {
+            if x >= margin && x < w - margin {
+                continue;
+            }
+            let d = sd(x as f32 + 0.5, y as f32 + 0.5);
+            // m = 1 - smoothstep(-1, 1, d): cobertura con ~1px de antialias.
+            let t = ((d + 1.0) / 2.0).clamp(0.0, 1.0);
+            let m = 1.0 - t * t * (3.0 - 2.0 * t);
+            if m >= 0.999 {
+                continue;
+            }
+            let i = row + (x as usize) * 4;
+            px[i] = (px[i] as f32 * m) as u8;
+            px[i + 1] = (px[i + 1] as f32 * m) as u8;
+            px[i + 2] = (px[i + 2] as f32 * m) as u8;
+            px[i + 3] = (px[i + 3] as f32 * m) as u8;
+        }
+    }
+}
+
 /// Dibuja recursivamente los `xdg_popup` colgados de `parent` (los menús de las
 /// apps). `base` es el origen de geometría (contenido) del parent en coords
 /// GLOBALES; `rect` es la salida que se está rindiendo (para pasar a locales).
@@ -2099,7 +2203,23 @@ fn emit_popups(
 
 #[cfg(test)]
 mod tests {
-    use super::{cover_transform, focus_mix, lerp_rgba};
+    use super::{cover_transform, focus_mix, lerp_rgba, round_mask_bgra};
+
+    #[test]
+    fn round_mask_recorta_esquinas_y_deja_el_centro() {
+        let (w, h) = (40i32, 40i32);
+        let mut px = vec![255u8; (w * h * 4) as usize]; // opaco blanco
+        round_mask_bgra(&mut px, w, h, 10.0);
+        // El centro queda intacto (opaco).
+        let c = ((h / 2 * w + w / 2) * 4) as usize;
+        assert_eq!(&px[c..c + 4], &[255, 255, 255, 255]);
+        // La esquina (0,0) queda fuera del rounded-rect → alfa 0 (transparente).
+        assert_eq!(px[3], 0, "la esquina superior-izquierda se recorta");
+        // Radio 0 / degenerado: no toca nada.
+        let mut q = vec![255u8; (w * h * 4) as usize];
+        round_mask_bgra(&mut q, w, h, 0.0);
+        assert!(q.iter().all(|&b| b == 255));
+    }
 
     #[test]
     fn cover_transform_llena_y_centra() {

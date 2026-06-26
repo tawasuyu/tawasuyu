@@ -395,6 +395,13 @@ pub struct Config {
     /// de ventana, una se aclara y la otra se oscurece en `focus_glow_ms`.
     #[serde(default)]
     pub unfocused_dim_pct: u8,
+    /// **Esquinas redondeadas** de las ventanas, en px de radio (0–40). `0`
+    /// (default) = esquinas rectas. Lo aplica el compositor con un shader de
+    /// textura (SDF) sobre el contenido del cliente — **opt-in y caro** (cada
+    /// ventana redondeada se rinde a un offscreen), por eso nace en 0. Ver
+    /// `COLA-EMBELLECIMIENTO.md`.
+    #[serde(default)]
+    pub corner_radius: u8,
     /// **Reducir movimiento** (accesibilidad): cuando está activo, el
     /// compositor pone en cero todas las duraciones de animación (apertura de
     /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
@@ -964,6 +971,7 @@ impl Default for Config {
             focus_glow_ms: default_focus_glow_ms(),
             window_close_ms: 0,
             unfocused_dim_pct: 0,
+            corner_radius: 0,
             reduce_motion: false,
         }
     }
