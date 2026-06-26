@@ -23,7 +23,9 @@
 // =============================================================================
 
 use std::env;
+use std::hash::Hasher;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ayni_app::{hex_corto, AgoraId, Enlace, EventoRed, Identidad, Nucleo, Tipo};
 
@@ -43,9 +45,41 @@ use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
+use llimphi_icons::Icon;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 
 /// Cuántos mensajes pinta la ventana visible del hilo (con scroll por rueda).
 const VISIBLES: usize = 16;
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Hash estable de algo hasheable → `key` para las animaciones implícitas de
+/// la `View` (la misma persona/mensaje produce siempre la misma key entre
+/// rebuilds, así el pop-in dispara una sola vez al aparecer).
+fn key_of<H: std::hash::Hash>(h: H) -> u64 {
+    let mut s = std::collections::hash_map::DefaultHasher::new();
+    h.hash(&mut s);
+    s.finish()
+}
+
+/// Empuja un toast al stack y programa su auto-descarte tras `TOAST_TTL`.
+fn push_toast(model: &mut Modelo, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Reserva el próximo id de toast del modelo.
+fn toast_id(model: &mut Modelo) -> u64 {
+    let id = model.next_toast;
+    model.next_toast += 1;
+    id
+}
 
 /// Cierre de cambio de idioma: aplica el locale en caliente y lo persiste.
 fn aplicar_idioma(code: &str) {
@@ -92,6 +126,8 @@ enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 struct Modelo {
@@ -123,6 +159,10 @@ struct Modelo {
     edit_anim: Tween<f32>,
     /// Clipboard del sistema para Cortar/Copiar/Pegar del menú de edición.
     clipboard: SystemClipboard,
+    /// Toasts vivos (confirmaciones efímeras de acciones de membresía/confianza).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ `Msg::ToastExpire`.
+    next_toast: u64,
 }
 
 struct Ayni;
@@ -190,6 +230,8 @@ impl App for Ayni {
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 
@@ -267,24 +309,35 @@ impl App for Ayni {
             Msg::Admitir => {
                 if let Some(s) = model.seleccionado {
                     model.nucleo.admitir(enlace.as_ref(), s);
-                    model.aviso = format!("admitiste a {}", hex_corto(&s));
+                    let aviso = format!("admitiste a {}", hex_corto(&s));
+                    model.aviso = aviso.clone();
+                    let id = toast_id(&mut model);
+                    push_toast(&mut model, handle, Toast::success(id, aviso, TOAST_TTL));
                 }
             }
             Msg::Expulsar => {
                 if let Some(s) = model.seleccionado {
                     model.nucleo.expulsar(enlace.as_ref(), s);
-                    model.aviso = format!("expulsaste a {}", hex_corto(&s));
+                    let aviso = format!("expulsaste a {}", hex_corto(&s));
+                    model.aviso = aviso.clone();
+                    let id = toast_id(&mut model);
+                    push_toast(&mut model, handle, Toast::error(id, aviso, TOAST_TTL));
                 }
             }
             Msg::Atestar => {
                 if let Some(s) = model.seleccionado {
                     model.nucleo.atestar(enlace.as_ref(), s, 5);
-                    model.aviso = format!("das fe de {} (nivel 5)", hex_corto(&s));
+                    let aviso = format!("das fe de {} (nivel 5)", hex_corto(&s));
+                    model.aviso = aviso.clone();
+                    let id = toast_id(&mut model);
+                    push_toast(&mut model, handle, Toast::success(id, aviso, TOAST_TTL));
                 }
             }
             Msg::AcusarRecibo => {
                 model.nucleo.acusar_cabezas(enlace.as_ref());
                 model.aviso = "acuse de recibo enviado".into();
+                let id = toast_id(&mut model);
+                push_toast(&mut model, handle, Toast::info(id, "acuse de recibo enviado", TOAST_TTL));
             }
             Msg::ToggleCifrar => {
                 model.nucleo.cifrar = !model.nucleo.cifrar;
@@ -359,6 +412,9 @@ impl App for Ayni {
                 model.edit_menu = None;
                 model.edit_active = usize::MAX;
             }
+            Msg::ToastExpire(id) => {
+                model.toasts.retain(|t| t.id != id);
+            }
         }
         model
     }
@@ -383,7 +439,7 @@ impl App for Ayni {
         // El right-click se engancha en la raíz (origen 0,0 → las coords
         // locales que llegan al handler ya son de ventana) y abre el menú
         // de edición sobre el input de mensaje.
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
@@ -393,7 +449,30 @@ impl App for Ayni {
         })
         .fill(fondo)
         .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-        .children(vec![menubar, barra, cuerpo, barra_estado(model)])
+        .children(vec![menubar, barra, cuerpo, barra_estado(model)]);
+
+        // Overlay de toasts (esquina, confirmaciones efímeras). Click = descartar.
+        let vivos: Vec<Toast> = model
+            .toasts
+            .iter()
+            .filter(|t| t.is_alive(Instant::now()))
+            .cloned()
+            .collect();
+        if vivos.is_empty() {
+            return root;
+        }
+        let (w, h) = Self::initial_size();
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![
+            root,
+            toast_stack_view(&vivos, (w as f32, h as f32), Msg::ToastExpire),
+        ])
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
@@ -834,6 +913,7 @@ fn fila_persona(model: &Modelo, id: &AgoraId, memb: &ayni_app::Membresia, yo: &A
     .radius(5.0)
     .text_aligned(etiqueta, 13.0, c(color), Alignment::Start)
     .on_click(Msg::Seleccionar(*id))
+    .animated_enter(key_of(id), motion::NORMAL)
 }
 
 // === Columna CHARLA (hilo + compose) =========================================
@@ -847,14 +927,13 @@ fn columna_charla(model: &Modelo) -> View<Msg> {
 
     let mut filas: Vec<View<Msg>> = Vec::new();
     if n == 0 {
-        filas.push(
-            View::new(estilo_fila_auto()).text_aligned(
-                rimay_localize::t("ayni-label-sin-mensajes"),
-                14.0,
-                c(TENUE),
-                Alignment::Start,
-            ),
-        );
+        // Estado vacío: el hilo aún no tiene mensajes — invita a empezar.
+        filas.push(empty_view(
+            Icon::User,
+            rimay_localize::t("ayni-label-sin-mensajes"),
+            Some(&rimay_localize::t("ayni-compose-placeholder")),
+            &EmptyPalette::from_theme(&model.theme),
+        ));
     }
     for nodo in &nodos[ini..fin] {
         let propio = *nodo.autor() == yo;
@@ -878,7 +957,9 @@ fn columna_charla(model: &Modelo) -> View<Msg> {
             sello
         );
         filas.push(
-            View::new(estilo_fila_auto()).text_aligned(linea, 15.0, c(color), Alignment::Start),
+            View::new(estilo_fila_auto())
+                .text_aligned(linea, 15.0, c(color), Alignment::Start)
+                .animated_enter(key_of(nodo.id()), motion::NORMAL),
         );
     }
 

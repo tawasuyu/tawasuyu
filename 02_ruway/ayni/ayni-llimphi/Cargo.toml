@@ -41,6 +41,10 @@ llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 llimphi-clipboard = { workspace = true }
+# Embellecimiento: pop-in/estado-vacío/toasts efímeros sobre la misma vista.
+llimphi-icons = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
 app-bus = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
