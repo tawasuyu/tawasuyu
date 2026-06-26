@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
-use std::sync::Arc;
 
 use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
@@ -20,7 +19,6 @@ use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
 use pluma_llm::{build_client, BackendKind, LlmConfig};
-use pluma_store::PlumaStore;
 use uuid::Uuid;
 
 use crate::clipboard::ArboardClipboard;
@@ -54,9 +52,6 @@ fn cuerpo_con_atomos(
 }
 
 fn modelo_sintetico(diente: usize) -> Model {
-    let dir = std::env::temp_dir().join("pluma-app-llimphi-dump.sled");
-    let _ = std::fs::remove_dir_all(&dir);
-    let store = Arc::new(PlumaStore::open(&dir).expect("abrir store temporal"));
 
     let mut atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
     let es = cuerpo_con_atomos(
@@ -140,7 +135,6 @@ fn modelo_sintetico(diente: usize) -> Model {
     .expect("mock");
 
     let mut m = Model {
-        store,
         cuerpos: vec![es, qu, en],
         atoms,
         cartas: vec![carta_es_qu, carta_qu_en],

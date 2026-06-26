@@ -15,7 +15,6 @@ use pluma_estilo::{EstiloLienzo, EstiloTexto};
 use pluma_llm::BackendKind;
 use pluma_llm_core::ChatClient;
 use pluma_proyecto::{DocId, Hash as ProyHash, Proyecto};
-use pluma_store::PlumaStore;
 use pluma_transform::Transformacion;
 use uuid::Uuid;
 
@@ -509,7 +508,6 @@ pub enum Msg {
 }
 
 pub struct Model {
-    pub(crate) store: Arc<PlumaStore>,
     pub(crate) cuerpos: Vec<Cuerpo>,
     pub(crate) atoms: HashMap<Uuid, NarrativeAtom>,
     pub(crate) cartas: Vec<CartaHebras>,

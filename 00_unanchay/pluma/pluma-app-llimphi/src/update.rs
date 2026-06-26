@@ -957,9 +957,7 @@ fn aplicar_estilo_delta(model: &mut Model, delta: EstiloTexto) {
             }
         }
     }
-    let estilo = e.clone();
-    let _ = model.store.put_estilo(id, &estilo);
-    let _ = model.store.flush();
+    let _ = e;
 }
 
 /// Limpia el estilo del objetivo actual del panel (lienzo/zona/selección) y
@@ -992,9 +990,7 @@ fn estilo_reset(model: &mut Model) {
             }
         }
     }
-    let estilo = e.clone();
-    let _ = model.store.put_estilo(id, &estilo);
-    let _ = model.store.flush();
+    let _ = e;
 }
 
 /// Traduce la selección viva de un `CuerpoIde` a `(atom_id, ini, fin)` con
@@ -1697,8 +1693,6 @@ fn cerrar_edicion_lienzo(model: &mut Model) {
     if let Some(a) = model.atoms.get_mut(&atom_id) {
         if a.content.as_str() != nuevo.as_str() {
             a.set_content(nuevo.as_str());
-            let _ = model.store.put_atom(a);
-            let _ = model.store.flush();
             cambio = true;
         }
     }
@@ -1884,9 +1878,6 @@ fn crear_doc_nuevo(model: &mut Model) {
         ahora,
     );
     cuerpo.agregar(atom.id, ahora);
-    let _ = model.store.put_atom(&atom);
-    let _ = model.store.put_cuerpo(&cuerpo);
-    let _ = model.store.flush();
     let id = cuerpo.id;
     model.atoms.insert(atom.id, atom);
     model.cuerpos.push(cuerpo);
@@ -1922,13 +1913,11 @@ fn guardar_activo(model: &mut Model) {
             CambioAtom::Mutar { id, texto_nuevo } => {
                 if let Some(a) = model.atoms.get_mut(id) {
                     a.set_content(texto_nuevo.as_str());
-                    let _ = model.store.put_atom(a);
                 }
             }
             CambioAtom::Crear { texto, posicion: _ } => {
                 let atom = NarrativeAtom::new(texto.as_str(), &branch_id);
                 let id = atom.id;
-                let _ = model.store.put_atom(&atom);
                 model.atoms.insert(id, atom);
                 creados.push(id);
             }
@@ -1954,9 +1943,7 @@ fn guardar_activo(model: &mut Model) {
         for id in &nuevo_orden {
             c.agregar(*id, ahora);
         }
-        let _ = model.store.put_cuerpo(c);
     }
-    let _ = model.store.flush();
 
     let n_mut = cambios
         .iter()
@@ -2024,9 +2011,7 @@ fn tocar_madre(model: &mut Model) {
     let ahora = ahora_unix();
     if let Some(c) = model.cuerpos.iter_mut().find(|c| c.id == activo_id) {
         c.metadatos.modificado_en = ahora;
-        let _ = model.store.put_cuerpo(c);
     }
-    let _ = model.store.flush();
     let n = contar_stale_del_activo(model);
     model.ultimo_status = format!("madre tocada — {n} hija(s) ahora stale");
     model.ultimo_error = None;
@@ -2266,8 +2251,6 @@ fn mover_atom_caret(model: &mut Model, delta: i32) {
     };
     cuerpo.orden.swap(i, j);
     cuerpo.metadatos.modificado_en = cuerpo.metadatos.modificado_en.saturating_add(1);
-    let _ = model.store.put_cuerpo(cuerpo);
-    let _ = model.store.flush();
 
     // Recargar el IDE con el orden nuevo. Snapshot la cuerpo data
     // primero para evitar el borrow simultáneo del index.
@@ -2349,11 +2332,8 @@ fn abrir_archivo(model: &mut Model) {
         return;
     }
     for a in &atoms_nuevos {
-        let _ = model.store.put_atom(a);
         model.atoms.insert(a.id, a.clone());
     }
-    let _ = model.store.put_cuerpo(&cuerpo);
-    let _ = model.store.flush();
     let id = cuerpo.id;
     let n = atoms_nuevos.len();
     model.cuerpos.push(cuerpo);
@@ -2452,13 +2432,8 @@ fn recibir_hija(
     transformacion: Transformacion,
 ) {
     for a in &atoms_nuevos {
-        let _ = model.store.put_atom(a);
         model.atoms.insert(a.id, a.clone());
     }
-    let _ = model.store.put_cuerpo(&hija);
-    let _ = model.store.put_carta(&carta);
-    let _ = model.store.put_transformacion(&transformacion);
-    let _ = model.store.flush();
     let hija_id = hija.id;
     let nombre = hija.metadatos.nombre_legible.clone();
     model.cuerpos.push(hija);
@@ -2495,13 +2470,6 @@ fn recibir_hija_en_lugar(
         carta.cuerpo_b = Some(vieja);
     }
 
-    for a in &atoms_nuevos {
-        let _ = model.store.put_atom(a);
-    }
-    let _ = model.store.put_cuerpo(&hija);
-    let _ = model.store.put_carta(&carta);
-    let _ = model.store.put_transformacion(&transformacion);
-    let _ = model.store.flush();
     let nombre = hija.metadatos.nombre_legible.clone();
     actualizar_hija_in_place(
         &mut model.cuerpos,

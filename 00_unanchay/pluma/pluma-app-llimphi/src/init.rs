@@ -1,6 +1,6 @@
-//! Inicialización del modelo: apertura del sled, carga de cuerpos/atoms/
-//! cartas/transformaciones, sembrado del primer documento y autodetección
-//! del backend LLM.
+//! Inicialización del modelo: reapertura de los proyectos `.pluma` (la única
+//! persistencia), sembrado del primer documento si se arranca en blanco, y
+//! autodetección del backend LLM.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,49 +11,30 @@ use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
 use pluma_llm::{build_client, BackendKind, LlmConfig};
 use pluma_llm_core::ChatClient;
-use pluma_store::PlumaStore;
 use pluma_transform::Transformacion;
 use llimphi_widget_text_input::TextInputState;
 use uuid::Uuid;
 
 use crate::clipboard::ArboardClipboard;
 use crate::model::{Model, BACKENDS};
-use crate::util::{ahora_unix, ruta_sled};
+use crate::util::ahora_unix;
 
 pub fn init_modelo() -> Model {
-    let path = ruta_sled();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let store = match PlumaStore::open(&path) {
-        Ok(s) => Arc::new(s),
-        Err(e) => panic!("pluma-app-llimphi :: PlumaStore::open({path:?}) falló: {e:?}"),
-    };
+    // El estado vive en los proyectos `.pluma`; el editor arranca en blanco y
+    // se llena con el documento activo del proyecto reabierto (más abajo).
+    let mut atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
+    let mut cuerpos: Vec<Cuerpo> = Vec::new();
+    let transformaciones: Vec<Transformacion> = Vec::new();
+    let cartas: Vec<CartaHebras> = Vec::new();
+    let estilos: HashMap<Uuid, pluma_estilo::EstiloLienzo> = HashMap::new();
 
-    let mut atoms: HashMap<Uuid, NarrativeAtom> = store
-        .iter_atoms()
-        .filter_map(|r| r.ok())
-        .map(|a| (a.id, a))
-        .collect();
-    let mut cuerpos: Vec<Cuerpo> = store.iter_cuerpos().filter_map(|r| r.ok()).collect();
-    let transformaciones: Vec<Transformacion> = store
-        .iter_transformaciones()
-        .filter_map(|r| r.ok())
-        .collect();
-    let cartas: Vec<CartaHebras> = store.iter_cartas().filter_map(|r| r.ok()).collect();
-    let estilos: HashMap<Uuid, pluma_estilo::EstiloLienzo> =
-        store.iter_estilos().filter_map(|r| r.ok()).collect();
-
-    // Si el sled está vacío, sembrar un documento Original para que la
-    // ventana no esté muerta al primer arranque.
+    // Si no hay nada (ningún proyecto con contenido), sembrar un documento
+    // Original para que la ventana no esté muerta al primer arranque.
     if cuerpos.is_empty() {
         let ahora = ahora_unix();
         let atom = NarrativeAtom::new("Empieza a escribir aquí…", "es");
         let mut cuerpo = Cuerpo::nuevo("es", "documento sin título", Intencion::Original, ahora);
         cuerpo.agregar(atom.id, ahora);
-        let _ = store.put_atom(&atom);
-        let _ = store.put_cuerpo(&cuerpo);
-        let _ = store.flush();
         atoms.insert(atom.id, atom);
         cuerpos.push(cuerpo);
     }
@@ -121,7 +102,6 @@ pub fn init_modelo() -> Model {
     }
 
     let mut m = Model {
-        store,
         cuerpos,
         atoms,
         cartas,

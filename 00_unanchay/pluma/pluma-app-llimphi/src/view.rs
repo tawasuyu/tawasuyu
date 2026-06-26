@@ -52,7 +52,7 @@ use uuid::Uuid;
 
 use crate::model::{
     ancho_contenido, EstiloExpand, Filtro, Modo, Model, Msg, ObjetivoEstilo, ProyectoTab,
-    WizardTipo, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
+    WizardTipo, ANCHO_COL, BACKENDS, RAIL_W, VISIBLE_LINES,
 };
 use pluma_estilo::EstiloTexto;
 use pluma_proyecto::hash_corto;

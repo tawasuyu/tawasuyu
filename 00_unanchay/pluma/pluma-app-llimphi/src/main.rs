@@ -14,10 +14,11 @@
 //!   └─────────────┴───────────────────────────┴───────────────┘
 //! ```
 //!
-//! Persistencia automática en `~/.cache/tawasuyu/pluma-app-llimphi/pluma.sled`
-//! vía [`PlumaStore`]. Al primer arranque siembra un documento vacío
-//! para que la ventana no esté muerta. Tras ese punto, todo doc/atom/
-//! transformación/carta vive en sled.
+//! Persistencia por **proyectos `.pluma`** (formato versionado, `pluma-proyecto`):
+//! el estado del documento vive en el archivo del proyecto, que se guarda con
+//! `Ctrl+S`/«guardar como…» y se sella por versión con `push` (Ctrl+K). Al
+//! primer arranque sin proyectos siembra un documento vacío para que la ventana
+//! no esté muerta.
 //!
 //! Atajos:
 //!   - `Ctrl+S` guarda el cuerpo activo (diff buffer → atoms → sled).

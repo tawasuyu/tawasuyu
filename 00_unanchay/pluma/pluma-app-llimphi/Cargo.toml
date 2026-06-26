@@ -31,7 +31,6 @@ pluma-notebook-exec = { path = "../pluma-notebook-exec" }
 pluma-notebook-kernel-python = { path = "../pluma-notebook-kernel-python" }
 pluma-notebook-kernel-wasm = { path = "../pluma-notebook-kernel-wasm" }
 pluma-reactor = { path = "../pluma-reactor" }
-pluma-store = { path = "../pluma-store" }
 pluma-transform = { path = "../pluma-transform" }
 pluma-transform-llm = { path = "../pluma-transform-llm" }
 pluma-llm = { path = "../pluma-llm" }
