@@ -61,6 +61,8 @@ forjar() {
 mkdir -p "$ASSETS"
 forjar "mirada-plugin-example-layout"  "mirada_plugin_example_layout"  "example-layout"
 forjar "mirada-plugin-example-reactor" "mirada_plugin_example_reactor" "example-reactor"
+# Catálogo base.
+forjar "mirada-plugin-dwindle"         "mirada_plugin_dwindle"         "dwindle"
 
 # --- Firma DEMO del reactor (pide CAP_KEYS+CAP_SPAWN → requiere firma) --------
 # La semilla es FIJA y PÚBLICA: sólo para que el ejemplo corra de fábrica. NO es

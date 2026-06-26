@@ -1,0 +1,10 @@
+// Plugin de layout dwindle (BSP recursivo: parte el eje más largo).
+// CAP_LAYOUT sólo → NO requiere firma (no importa nada del host).
+// `priority` 20 > 10 del right-master de ejemplo: si ambos están en el
+// directorio, gana dwindle (el conductor ignora el de menor prioridad).
+(
+    wasm: "dwindle.wasm",
+    kind: Layout,
+    caps: ["layout"],
+    priority: 20,
+)

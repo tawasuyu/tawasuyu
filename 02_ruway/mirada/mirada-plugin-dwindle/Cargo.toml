@@ -1,0 +1,22 @@
+# Plugin de layout dwindle (BSP recursivo). `[workspace]` propio → fuera del
+# check raíz; se compila a wasm32 con `scripts/build-mirada-plugins.sh`.
+[package]
+name = "mirada-plugin-dwindle"
+version = "0.1.0"
+edition = "2021"
+description = "mirada — plugin de layout dwindle: BSP recursivo que parte el eje más largo (CAP_LAYOUT, sin importaciones del host)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Sin la feature `reactor`: un plugin de layout no importa nada del host.
+mirada-plugin-sdk = { path = "../mirada-plugin-sdk" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

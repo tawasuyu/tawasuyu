@@ -152,6 +152,57 @@ escribís el plugin en otro lenguaje:
 - Cada llamada corre con fuel acotado: un plugin desbocado trampa en vez de
   congelar el escritorio.
 
+## Catálogo base
+
+Plugins que vienen con el repo, en `mirada-plugin-host/assets/` (los `.wasm` se
+commitean; el código fuente, en `../mirada-plugin-{example-*,dwindle}`). El
+instalador siembra los **de ejemplo** en `~/.config/mirada/plugins`; los demás
+se copian a mano.
+
+| Plugin | Tipo | Capacidades | Qué hace |
+|--------|------|-------------|----------|
+| **example-layout** (right-master) | Layout | `layout` | Master-stack reflejado: maestra a la derecha. Honra `master_ratio`/`master_count`/`gap`. |
+| **example-reactor** | Reactor | `keys` `spawn` `effects` `actions` | `Super+a` → terminal · atenúa las ventanas sin foco · auto-monocle al llenarse. |
+| **dwindle** | Layout | `layout` | BSP recursivo estilo Hyprland: cada ventana parte el eje más largo. `priority` 20 (gana al right-master si conviven). |
+
+Sólo **un** plugin de layout queda activo (el de mayor `priority`); los
+reactores se acumulan.
+
+### Buenas piezas para sumar al catálogo
+
+Lo más valioso a construir, ordenado por relación valor/esfuerzo. Las
+**universales** (comportamiento igual para todos) son las que conviene shippear
+ya; las **por-usuario** (reglas app→escritorio, etc.) esperan a que los plugins
+puedan **leer config** —hoy un plugin no recibe parámetros, así que su política
+va hardcodeada o se forkea-y-recompila—. Habilitar config por plugin (un blob en
+el manifest pasado al guest) es la próxima capacidad que las desbloquea.
+
+**Layouts (universales):**
+- **three-column / centered-master con dos pilas** — maestra al centro, pilas a
+  ambos lados; ideal para monitores anchos/ultrawide.
+- **fibonacci / golden-ratio** — variante de dwindle con corte áureo en vez de
+  mitad.
+- **grid adaptativo** — filas×columnas según la cantidad de ventanas (√n).
+
+**Reactores universales (sin config):**
+- **orientación adaptativa** — monitor vertical → `layout:rows`, apaisado →
+  `layout:columns`, según las dimensiones de `OutputAdded`/`OutputResized`
+  (`actions`).
+- **nueva-al-maestro** — `promote-to-master` al abrir una ventana (el clásico
+  "new window on top" de dwm) (`actions`).
+- **spotlight de foco** — atenuar/sombrear todo salvo la enfocada, con curva por
+  profundidad (extiende el ejemplo) (`effects`).
+- **teclas de medios / OSD** — `keys` + `spawn` para volumen/brillo/captura
+  (`wpctl`, `brightnessctl`, `grim`).
+- **scratchpads con nombre** — atajos que invocan/ocultan dropdowns
+  (`keys` + `actions`/`spawn`).
+
+**Reactores por-usuario (necesitan config por plugin):**
+- **enrutador de apps** — `app_id` → escritorio (`send-to-workspace:N`) y
+  auto-flotar diálogos; lo más pedido en WMs teselantes. Hoy sólo con el mapa
+  hardcodeado en el fuente.
+- **reglas de efecto/decoración por app**.
+
 ## Firmar e instalar
 
 ### Manifest `.ron`

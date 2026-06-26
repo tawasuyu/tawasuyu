@@ -13,6 +13,7 @@ use mirada_protocol::{BodyEvent, BrainCommand, LayoutMode, LayoutParams, Rect, T
 
 const LAYOUT_WASM: &[u8] = include_bytes!("../assets/example-layout.wasm");
 const REACTOR_WASM: &[u8] = include_bytes!("../assets/example-reactor.wasm");
+const DWINDLE_WASM: &[u8] = include_bytes!("../assets/dwindle.wasm");
 
 fn params(ratio: f32, nmaster: usize, gap: i32) -> LayoutParams {
     LayoutParams { mode: LayoutMode::MasterStack, master_ratio: ratio, master_count: nmaster, gap }
@@ -47,6 +48,58 @@ fn right_master_pone_la_maestra_a_la_derecha() {
     assert!(stack.iter().all(|r| cx(r) < 500), "pila a la izquierda: {stack:?}");
     // Y la maestra es más ancha que las de la pila (ratio 0.6).
     assert!(stack.iter().all(|r| master.w > r.w));
+}
+
+// --- Catálogo base: dwindle (BSP recursivo). --------------------------------
+
+#[test]
+fn dwindle_tesela_recursivo_sin_solaparse_ni_huecos() {
+    let mut p =
+        LoadedPlugin::load_bytes(DWINDLE_WASM, PluginKind::Layout, CAP_LAYOUT, 20, "dw").unwrap();
+    let work = Rect::new(0, 0, 1000, 800);
+    // gap 0 → las celdas teselan el área exactamente (sin márgenes).
+    let rects = p
+        .call_tile(&TileInput { ids: vec![1, 2, 3, 4], work, params: params(0.6, 1, 0) })
+        .unwrap();
+    assert_eq!(rects.len(), 4);
+
+    // Cada celda cae dentro del área de trabajo.
+    for (_, r) in &rects {
+        assert!(
+            r.x >= work.x && r.y >= work.y && r.x + r.w <= work.x + work.w && r.y + r.h <= work.y + work.h,
+            "{r:?} fuera de {work:?}"
+        );
+    }
+    // La maestra (id 1) toma master_ratio del eje largo (1000 ancho → 60 %).
+    let master = rects.iter().find(|(id, _)| *id == 1).unwrap().1;
+    assert!(
+        (master.w as f32 / work.w as f32 - 0.6).abs() < 0.02,
+        "la maestra debería medir ~60 % del ancho: {master:?}"
+    );
+    // Ningún par de celdas se solapa (BSP ⇒ partición disjunta).
+    for i in 0..rects.len() {
+        for j in i + 1..rects.len() {
+            let (a, b) = (rects[i].1, rects[j].1);
+            let disjuntos = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+            assert!(disjuntos, "se solapan {a:?} y {b:?}");
+        }
+    }
+    // La suma de áreas cubre todo el trabajo (sin huecos, con gap 0).
+    let cubierto: i64 = rects.iter().map(|(_, r)| r.w as i64 * r.h as i64).sum();
+    assert_eq!(cubierto, work.w as i64 * work.h as i64, "dwindle debería cubrir el área sin huecos");
+}
+
+#[test]
+fn dwindle_master_ratio_ensancha_la_primera() {
+    let mut p =
+        LoadedPlugin::load_bytes(DWINDLE_WASM, PluginKind::Layout, CAP_LAYOUT, 20, "dw").unwrap();
+    let work = Rect::new(0, 0, 1000, 800);
+    let ids = vec![1u64, 2, 3];
+    let estrecha = p.call_tile(&TileInput { ids: ids.clone(), work, params: params(0.5, 1, 0) }).unwrap();
+    let ancha = p.call_tile(&TileInput { ids, work, params: params(0.75, 1, 0) }).unwrap();
+    let w05 = estrecha.iter().find(|(id, _)| *id == 1).unwrap().1.w;
+    let w075 = ancha.iter().find(|(id, _)| *id == 1).unwrap().1.w;
+    assert!(w075 > w05, "subir master_ratio ensancha la primera celda: {w05} -> {w075}");
 }
 
 // --- El plugin HONRA los LayoutParams del Desktop (lo que pedía el #2). ------

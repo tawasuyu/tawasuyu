@@ -15,6 +15,7 @@
 #   /etc/pam.d/mirada                              (login del greeter)
 #   /usr/share/wayland-sessions/{mirada,mirada-pata,mirada-plugins}.desktop
 #   ~/.config/mirada/autostart                     (siembra el daemon pata-notify)
+#   ~/.config/mirada/plugins/*                      (siembra los plugins de ejemplo)
 #
 # Para desinstalar: borrá esos archivos.
 set -eu
@@ -141,6 +142,28 @@ AUTO="${HOME}/.config/mirada/autostart"
 grep -qxF 'pata-notify' "$AUTO" 2>/dev/null || echo 'pata-notify' >> "$AUTO"
 echo "==> pata-notify sembrado en $AUTO"
 
+# Siembra los plugins de ejemplo en ~/.config/mirada/plugins, para que la sesión
+# «mirada · plugins» arranque con algo que mostrar: el layout (right-master) y el
+# reactor (terminal Super+a + atenuado por foco + auto-monocle). Idempotente:
+# sólo copia los que falten, así NO pisa los que hayas editado. Los .wasm están
+# precompilados en el repo (no hace falta el toolchain wasm32).
+#
+# OJO: `trust.ron` trae la clave DEMO PÚBLICA que firma el reactor (no es un
+# secreto). Reemplazala por la tuya — `mirada-plugin-sign keygen` — para tu
+# propio anillo de confianza; mientras esté, confiás en plugins firmados con esa
+# clave demo. El layout no necesita firma (no importa nada del host).
+PLUG_SRC="$REPO/02_ruway/mirada/mirada-plugin-host/assets"
+PLUG_DST="${HOME}/.config/mirada/plugins"
+mkdir -p "$PLUG_DST"
+for f in example-layout.wasm example-layout.ron \
+         example-reactor.wasm example-reactor.ron trust.ron; do
+    if [ ! -e "$PLUG_DST/$f" ]; then
+        cp "$PLUG_SRC/$f" "$PLUG_DST/$f" && echo "    + plugins/$f"
+    fi
+done
+echo "==> plugins de ejemplo sembrados en $PLUG_DST (editá o borrá a gusto)"
+echo "    (catálogo extra en $PLUG_SRC: dwindle.{wasm,ron} — copialo si lo querés)"
+
 cat <<'FIN'
 
 ==> listo.
@@ -149,10 +172,10 @@ cat <<'FIN'
       sudo mirada-dm
     · login por PAM (usuario del sistema)
     · elegí escritorio con  ‹  ›  (mirada · pata, mirada, mirada · plugins, o cualquiera instalado)
-    · «mirada · plugins»: el Cerebro es el host de plugins WASM. Sin plugins en
-      ~/.config/mirada/plugins se comporta como mirada normal; para sembrar los
-      de ejemplo corré  ./scripts/build-mirada-plugins.sh  y copiá los assets
-      (ver 02_ruway/mirada/mirada-plugin-host/README.md).
+    · «mirada · plugins»: el Cerebro es el host de plugins WASM. Ya sembramos los
+      de ejemplo en ~/.config/mirada/plugins (layout right-master + reactor). Se
+      recargan en caliente: editá/agregá/quitá un .ron/.wasm y se aplica sin
+      reiniciar. Catálogo y firma en 02_ruway/mirada/mirada-plugin-host/README.md.
     · salir:  Ctrl+Alt+Backspace      cambiar de consola:  Ctrl+Alt+F1…F12
 
   Para probar sin configurar PAM:
