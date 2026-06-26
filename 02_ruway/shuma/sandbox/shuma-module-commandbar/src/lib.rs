@@ -397,7 +397,7 @@ mod tests {
             CommandEntry {
                 label: "Pluma editor".into(),
                 category: "app".into(),
-                kind: CommandKind::Exec("pluma-app".into()),
+                kind: CommandKind::Exec("pluma-app-llimphi".into()),
             },
             CommandEntry {
                 label: "Focus shell".into(),
@@ -462,7 +462,7 @@ mod tests {
         // selected = 0 → "Pluma editor"
         let enter = ev(Key::Named(NamedKey::Enter), None);
         let kind = activation_for(&s, &enter).expect("activación");
-        assert!(matches!(kind, CommandKind::Exec(ref l) if l == "pluma-app"));
+        assert!(matches!(kind, CommandKind::Exec(ref l) if l == "pluma-app-llimphi"));
     }
 
     #[test]

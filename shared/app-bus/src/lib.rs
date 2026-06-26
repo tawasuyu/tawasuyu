@@ -93,7 +93,7 @@ pub fn default_entries() -> Vec<AppEntry> {
     const D: &[(&str, &str, &str, &str, &str, &[&str])] = &[
         ("nada", "Nada", "≡", "nada", "ruway",
             &["text/", "application/json", "application/toml", "inode/x-empty"]),
-        ("pluma", "Pluma", "¶", "pluma-editor-llimphi", "unanchay",
+        ("pluma", "Pluma", "¶", "pluma-app-llimphi", "unanchay",
             &["text/markdown", "text/plain"]),
         ("pluma-notebook", "Pluma Notebook", "▣", "pluma-notebook-llimphi", "unanchay",
             &["application/x-pluma-notebook"]),
@@ -634,7 +634,7 @@ pub fn seed_default_apps() -> std::io::Result<usize> {
     const DEFAULTS: &[(&str, &str, &str, &str, &str)] = &[
         ("cosmos", "Cosmos", "✶", "cosmos-app-llimphi", "yachay"),
         ("nada", "Nada", "✎", "nada", "ruway"),
-        ("pluma", "Pluma", "✒", "pluma-editor-llimphi", "unanchay"),
+        ("pluma", "Pluma", "✒", "pluma-app-llimphi", "unanchay"),
         ("nahual", "Nahual", "❖", "nahual-shell-llimphi", "ruway"),
         ("dominium", "Dominium", "◉", "dominium-app-llimphi", "yachay"),
         ("tinkuy", "Tinkuy", "⚛", "tinkuy-llimphi", "yachay"),

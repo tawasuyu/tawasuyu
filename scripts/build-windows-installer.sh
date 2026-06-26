@@ -45,7 +45,7 @@ OUT="${WINPKG_OUT:-$REPO_ROOT/dist/windows}"
 declare -A APPS=(
   [cosmos]="cosmos-app-llimphi|Cosmos|cosmos|32c3162b-bb0a-428e-95dd-5f685615a423|9f2c185b-7b34-4247-a693-c5b5c4a2e4d7|20fd0dd1-bc6d-4df8-92da-f004183c663e|cartas astrales y astronomia"
   [takiy]="takiy-app-llimphi|Takiy|takiy|baa974ac-70f9-4ecb-af44-bf010094a3d5|2408a127-50ef-45ff-857c-72d6641e9571|5aeb8fab-1b9a-442f-8909-a58837ae7f03|piano roll y sintetizador"
-  [pluma]="pluma-app|Pluma|pluma|f8217a2a-cad4-4d7f-93c6-7ad0be9f4b57|89ea0314-34c5-4b85-a4cb-68fbbe8fd287|3287f99e-df79-451f-b4ec-17d8f533dec9|editor de escritura multilienzo"
+  [pluma]="pluma-app-llimphi|Pluma|pluma|f8217a2a-cad4-4d7f-93c6-7ad0be9f4b57|89ea0314-34c5-4b85-a4cb-68fbbe8fd287|3287f99e-df79-451f-b4ec-17d8f533dec9|editor de escritura multilienzo"
   [supay]="supay-app-llimphi|Supay|supay|e847d052-8ca5-497d-b00a-23873e6c66d2|d65f5b93-8e0d-40c5-9f70-204540ef1f92|723640b7-16ce-41fa-900d-af79e73b4a08|raycaster estilo Doom"
   # nakui = la hoja de cálculo (nakui-sheet): anzuelo limpio y autocontenido.
   # El shell completo (nakui-ui-llimphi) NO está acá: arrastra card-handshake

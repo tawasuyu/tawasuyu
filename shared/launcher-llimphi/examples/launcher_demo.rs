@@ -51,7 +51,7 @@ fn sample_registry() -> AppRegistry {
     AppRegistry::new(vec![
         mk("cosmos", "Cosmos", "✶", "cosmos-app-llimphi"),
         mk("nada", "Nada", "✎", "nada"),
-        mk("pluma", "Pluma", "✒", "pluma-editor-llimphi"),
+        mk("pluma", "Pluma", "✒", "pluma-app-llimphi"),
     ])
 }
 

@@ -1,15 +1,15 @@
 [package]
-name = "pluma-app"
+name = "pluma-app-llimphi"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "pluma-app — editor de escritura multilienzo: panel de documentos del sled, cuerpo_ide central editable, panel LLM con cycler de backends y derivación de hijas."
+description = "pluma-app-llimphi — editor de escritura multilienzo: panel de documentos del sled, cuerpo_ide central editable, panel LLM con cycler de backends y derivación de hijas."
 
 [[bin]]
-name = "pluma-app"
+name = "pluma-app-llimphi"
 path = "src/main.rs"
 
 [dependencies]

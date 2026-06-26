@@ -2,10 +2,10 @@
 //! real, para el README del repo standalone. Reusa la `vista()` de la app sobre
 //! un modelo sintético con tres cuerpos paralelos (es → qu → en) alineados por
 //! hebras; la lógica vive en `pluma_app::showreel` (compartida con el binario,
-//! que la expone también como `pluma-app --showreel`).
+//! que la expone también como `pluma-app-llimphi --showreel`).
 //!
 //! ```text
-//! cargo run -p pluma-app --example showreel --release -- [out_dir] [n] [W] [H]
+//! cargo run -p pluma-app-llimphi --example showreel --release -- [out_dir] [n] [W] [H]
 //! ```
 //! Defaults: `out_dir=showreel_frames_pluma`, `n=300`, `W=1600`, `H=900`.
 

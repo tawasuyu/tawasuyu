@@ -1,7 +1,7 @@
 // En release sobre Windows: subsistema GUI (sin consola negra detrás).
 // No-op en Linux/otros targets — preserva `cargo check --workspace`.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! `pluma-app` — editor de escritura multilienzo.
+//! `pluma-app-llimphi` — editor de escritura multilienzo.
 //!
 //! Layout en tres columnas (splitters draggables):
 //!
@@ -14,7 +14,7 @@
 //!   └─────────────┴───────────────────────────┴───────────────┘
 //! ```
 //!
-//! Persistencia automática en `~/.cache/tawasuyu/pluma-app/pluma.sled`
+//! Persistencia automática en `~/.cache/tawasuyu/pluma-app-llimphi/pluma.sled`
 //! vía [`PlumaStore`]. Al primer arranque siembra un documento vacío
 //! para que la ventana no esté muerta. Tras ese punto, todo doc/atom/
 //! transformación/carta vive en sled.
@@ -67,7 +67,7 @@ use crate::update::actualizar;
 use crate::view::{vista, vista_overlay};
 
 fn main() {
-    // Subcomando oculto de evidencia: `pluma-app --dump <out.png> [diente]`.
+    // Subcomando oculto de evidencia: `pluma-app-llimphi --dump <out.png> [diente]`.
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--dump") {
         let out = args.get(pos + 1).cloned().unwrap_or_else(|| "pluma.png".into());
@@ -75,7 +75,7 @@ fn main() {
         dump::run(&out, diente);
         return;
     }
-    // Subcomando del showreel headless: `pluma-app --showreel <dir> [n] [w] [h]`.
+    // Subcomando del showreel headless: `pluma-app-llimphi --showreel <dir> [n] [w] [h]`.
     if let Some(pos) = args.iter().position(|a| a == "--showreel") {
         let dir = args
             .get(pos + 1)

@@ -27,7 +27,7 @@ pub fn init_modelo() -> Model {
     }
     let store = match PlumaStore::open(&path) {
         Ok(s) => Arc::new(s),
-        Err(e) => panic!("pluma-app :: PlumaStore::open({path:?}) falló: {e:?}"),
+        Err(e) => panic!("pluma-app-llimphi :: PlumaStore::open({path:?}) falló: {e:?}"),
     };
 
     let mut atoms: HashMap<Uuid, NarrativeAtom> = store

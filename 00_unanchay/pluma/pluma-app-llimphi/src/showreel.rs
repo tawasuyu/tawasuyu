@@ -101,7 +101,7 @@ struct Escena {
 }
 
 fn escena_base() -> Escena {
-    let dir = std::env::temp_dir().join("pluma-app-showreel.sled");
+    let dir = std::env::temp_dir().join("pluma-app-llimphi-showreel.sled");
     let _ = std::fs::remove_dir_all(&dir);
     let store = Arc::new(PlumaStore::open(&dir).expect("abrir store temporal"));
 

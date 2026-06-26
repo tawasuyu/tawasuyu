@@ -11,7 +11,7 @@
 //!
 //! ```toml
 //! label = "Pluma"
-//! exec = "pluma-app"          # opcional; si está, click → spawn detached
+//! exec = "pluma-app-llimphi"  # opcional; si está, click → spawn detached
 //! action_id = "focus:pluma"   # opcional; si no hay exec, el chasis lo dispatchea
 //! ```
 //!
@@ -338,7 +338,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("01-pluma.toml"),
-            "label = \"Pluma\"\nexec = \"pluma-app\"\n",
+            "label = \"Pluma\"\nexec = \"pluma-app-llimphi\"\n",
         )
         .unwrap();
         std::fs::write(
@@ -350,7 +350,7 @@ mod tests {
         let entries = load_entries_from_dir(&dir);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].label, "Pluma");
-        assert_eq!(entries[0].exec.as_deref(), Some("pluma-app"));
+        assert_eq!(entries[0].exec.as_deref(), Some("pluma-app-llimphi"));
         assert_eq!(entries[1].action_id, "focus:shell");
         let _ = std::fs::remove_dir_all(&dir);
     }

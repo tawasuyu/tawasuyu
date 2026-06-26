@@ -28,7 +28,7 @@ mkdir -p "$OUT"
 # Si alguno no compila/está, churay-bundle lo omite con aviso — no aborta.
 PROGRAMS=(
   churay
-  nada pluma-editor-llimphi pluma-notebook-llimphi tullpu-app-llimphi
+  nada pluma-app-llimphi pluma-notebook-llimphi tullpu-app-llimphi
   takiy-app-llimphi media-app media-tube cosmos-app-llimphi
   dominium-app-llimphi tinkuy-llimphi chaka-app-llimphi nakui-sheet-llimphi
   puriy raymi-app supay-app-llimphi sandokan-monitor nahual-shell-llimphi

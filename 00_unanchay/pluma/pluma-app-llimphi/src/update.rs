@@ -247,7 +247,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             avanzar_reactivo(&mut model, handle);
         }
         Msg::LlmError(s) => {
-            eprintln!("pluma-app :: error LLM: {s}");
+            eprintln!("pluma-app-llimphi :: error LLM: {s}");
             model.ultimo_error = Some(s);
             model.en_curso = false;
         }

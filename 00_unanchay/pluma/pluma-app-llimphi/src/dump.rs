@@ -54,7 +54,7 @@ fn cuerpo_con_atomos(
 }
 
 fn modelo_sintetico(diente: usize) -> Model {
-    let dir = std::env::temp_dir().join("pluma-app-dump.sled");
+    let dir = std::env::temp_dir().join("pluma-app-llimphi-dump.sled");
     let _ = std::fs::remove_dir_all(&dir);
     let store = Arc::new(PlumaStore::open(&dir).expect("abrir store temporal"));
 

@@ -89,11 +89,11 @@ pub(crate) fn ruta_sled() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".cache"))
                 .unwrap_or_else(|_| PathBuf::from(".cache"))
         });
-    base.join("tawasuyu").join("pluma-app").join("pluma.sled")
+    base.join("tawasuyu").join("pluma-app-llimphi").join("pluma.sled")
 }
 
 /// Ruta del archivo de presets (prompts reutilizables del diente Derivar-IA),
-/// junto al sled: `<...>/pluma-app/presets.txt` — un prompt por línea.
+/// junto al sled: `<...>/pluma-app-llimphi/presets.txt` — un prompt por línea.
 pub(crate) fn ruta_presets() -> PathBuf {
     ruta_sled().with_file_name("presets.txt")
 }
