@@ -32,9 +32,7 @@ impl InstallMode {
     pub fn default_prefix(self) -> PathBuf {
         match self {
             InstallMode::System => PathBuf::from("/usr/local"),
-            InstallMode::Local => directories::BaseDirs::new()
-                .map(|b| b.home_dir().join(".local"))
-                .unwrap_or_else(|| PathBuf::from("/usr/local")),
+            InstallMode::Local => local_prefix(),
         }
     }
 
@@ -44,6 +42,36 @@ impl InstallMode {
             InstallMode::System => true,
             InstallMode::Local => scope == Scope::App,
         }
+    }
+}
+
+/// Prefix per-usuario del modo Local, idiomático por plataforma.
+/// Linux: `~/.local`. Windows: `%LOCALAPPDATA%\tawasuyu`.
+#[cfg(not(windows))]
+fn local_prefix() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|b| b.home_dir().join(".local"))
+        .unwrap_or_else(|| PathBuf::from("/usr/local"))
+}
+#[cfg(windows)]
+fn local_prefix() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|b| b.data_local_dir().join("tawasuyu"))
+        .unwrap_or_else(|| PathBuf::from("tawasuyu"))
+}
+
+/// Nombre del archivo del binario instalado. En Windows lleva `.exe` (la
+/// ejecutabilidad viene de la extensión); en Unix es el nombre pelado. El
+/// bundle guarda `bin/<program>` sin extensión en todo SO — el sufijo se
+/// agrega sólo en el destino, al instalar.
+pub(crate) fn program_file_name(program: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{program}.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        program.to_string()
     }
 }
 
@@ -340,14 +368,23 @@ pub fn install_unit(
     let source = resolve_source(cfg, unit)
         .ok_or_else(|| InstallError::SinFuente { program: unit.program.clone() })?;
 
-    let dest = cfg.prefix.join("bin").join(&unit.program);
+    let dest = cfg.prefix.join("bin").join(program_file_name(&unit.program));
     std::fs::create_dir_all(dest.parent().unwrap())?;
     let hash = source.provide(unit, &dest, on)?;
 
     on(Step::Desktop, 0.0);
-    write_desktop_entry(&cfg.prefix, unit, &dest)?;
-    register_mime_defaults(&cfg.prefix, unit)?;
-    copy_icon_if_present(cfg, unit)?;
+    // Integración con el escritorio del SO: en Linux, `.desktop` freedesktop +
+    // registro de mimes + ícono. En Windows, acceso directo en el menú inicio.
+    #[cfg(not(windows))]
+    {
+        write_desktop_entry(&cfg.prefix, unit, &dest)?;
+        register_mime_defaults(&cfg.prefix, unit)?;
+        copy_icon_if_present(cfg, unit)?;
+    }
+    #[cfg(windows)]
+    {
+        create_start_menu_shortcut(unit, &dest)?;
+    }
 
     state.upsert(unit.id.clone(), unit.version.clone(), hash);
     state.save(&cfg.prefix)?;
@@ -361,8 +398,11 @@ pub fn uninstall_unit(
     unit: &Unit,
     state: &mut InstalledState,
 ) -> Result<(), InstallError> {
-    let _ = std::fs::remove_file(cfg.prefix.join("bin").join(&unit.program));
+    let _ = std::fs::remove_file(cfg.prefix.join("bin").join(program_file_name(&unit.program)));
+    #[cfg(not(windows))]
     let _ = std::fs::remove_file(desktop_path(&cfg.prefix, unit));
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(start_menu_shortcut_path(unit));
     state.remove(&unit.id);
     state.save(&cfg.prefix)?;
     Ok(())
@@ -405,6 +445,53 @@ fn desktop_path(prefix: &Path, unit: &Unit) -> PathBuf {
         .join("share")
         .join("applications")
         .join(format!("tawasuyu-{}.desktop", unit.id))
+}
+
+/// Carpeta del menú inicio per-usuario para los accesos directos de la suite:
+/// `%APPDATA%\Microsoft\Windows\Start Menu\Programs\tawasuyu`.
+#[cfg(windows)]
+fn start_menu_dir() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|b| b.data_dir().join(r"Microsoft\Windows\Start Menu\Programs\tawasuyu"))
+        .unwrap_or_else(|| PathBuf::from("tawasuyu"))
+}
+
+/// Ruta del `.lnk` de una unidad en el menú inicio.
+#[cfg(windows)]
+fn start_menu_shortcut_path(unit: &Unit) -> PathBuf {
+    start_menu_dir().join(format!("{}.lnk", unit.label))
+}
+
+/// Crea un acceso directo en el menú inicio apuntando al binario instalado.
+/// Usa el COM `WScript.Shell` vía PowerShell — el camino estándar de Windows,
+/// sin dependencias nativas extra. Es el equivalente al `.desktop` de Linux.
+#[cfg(windows)]
+fn create_start_menu_shortcut(unit: &Unit, bin: &Path) -> Result<(), InstallError> {
+    let dir = start_menu_dir();
+    std::fs::create_dir_all(&dir)?;
+    let lnk = start_menu_shortcut_path(unit);
+    // Comillas simples de PowerShell se escapan duplicándolas.
+    let q = |s: &str| s.replace('\'', "''");
+    let wd = bin.parent().map(|p| p.display().to_string()).unwrap_or_default();
+    let ps = format!(
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');\
+         $s.TargetPath='{target}';$s.WorkingDirectory='{wd}';\
+         $s.Description='{desc}';$s.Save()",
+        lnk = q(&lnk.display().to_string()),
+        target = q(&bin.display().to_string()),
+        wd = q(&wd),
+        desc = q(&unit.description),
+    );
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .status()
+        .map_err(InstallError::Io)?;
+    if !status.success() {
+        return Err(InstallError::Io(std::io::Error::other(
+            "powershell no pudo crear el acceso directo del menú inicio",
+        )));
+    }
+    Ok(())
 }
 
 /// Escribe el `.desktop` freedesktop de la unidad apuntando al binario absoluto
@@ -515,6 +602,7 @@ fn freedesktop_categories(category: &str) -> &'static str {
 
 /// Si el bundle trae `share/icons/<program>.png`, lo copia al theme hicolor del
 /// prefix para que el `.desktop` lo encuentre. Silencioso si no hay ícono.
+#[cfg(not(windows))]
 fn copy_icon_if_present(cfg: &InstallConfig, unit: &Unit) -> Result<(), InstallError> {
     let Some(bundle) = &cfg.bundle_dir else {
         return Ok(());
