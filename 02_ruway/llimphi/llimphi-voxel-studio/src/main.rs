@@ -221,6 +221,7 @@ enum Msg {
     SetKeyPos(bool, f32), // true=gx, false=gz
     SetKeyTime(f32),
     CycleKeyClip,
+    PlaceKeyAt(f32, f32), // click en el terreno → mueve la clave seleccionada
     // Escenas.
     CycleSceneMundo,
     SetSceneDur(f32),
@@ -807,6 +808,16 @@ impl App for Studio {
                     model.gen += 1;
                 }
             }
+            Msg::PlaceKeyAt(gx, gz) => {
+                let (a, k) = (model.actor_sel, model.key_sel);
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if let Some(key) = s.actors.get_mut(a).and_then(|act| act.keys.get_mut(k)) {
+                        key.gx = gx;
+                        key.gz = gz;
+                    }
+                    model.gen += 1;
+                }
+            }
             Msg::CycleSceneMundo => {
                 let mids = mundo_ids(&model);
                 if let Some(s) = sel_scene_mut(&mut model) {
@@ -1246,6 +1257,9 @@ fn material_swatch(model: &Model) -> View<Msg> {
 fn canvas_3d(model: &Model) -> View<Msg> {
     let (yaw, pitch, dist, gen) = (model.yaw, model.pitch, model.dist, model.gen);
     let preview = model.preview.clone();
+    // Dirigiendo (Escenas + pestaña Reparto): el click coloca la clave seleccionada.
+    let directing = model.level == Level::Escenas && model.tool_tab == 1 && sel_scene(model).is_some();
+    let preview_click = model.preview.clone();
     let mr = model.preview_render();
     let simulating = model.simulating;
     let agua = mr.palette.agua;
@@ -1276,7 +1290,7 @@ fn canvas_3d(model: &Model) -> View<Msg> {
         ..Default::default()
     };
 
-    let canvas = match model.level {
+    let mut canvas = match model.level {
         Level::Escenas => {
             let scene = sel_scene(model).cloned();
             let script_cam = model.script_cam;
@@ -1300,7 +1314,9 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 let dim = world_dim(PREVIEW_DIM_XZ);
                 let mut guard = preview.lock().unwrap();
                 let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
-                let origin = window_origin_for_cast(&scripts, time, dim);
+                // Al dirigir, ventana fija en el origen → la columna de grilla coincide
+                // con la de mundo (el picking del click queda directo).
+                let origin = if directing { [0, 0] } else { window_origin_for_cast(&scripts, time, dim) };
                 p.ensure_window(device, queue, &mr, gen, origin);
                 let half = Vec3::new(dim[0] as f32, dim[1] as f32, dim[2] as f32) * 0.5;
                 let mut poses = Vec::with_capacity(scripts.len());
@@ -1323,6 +1339,11 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                     (true, Some(sc)) => sc.camera_at(look, cast_d, time),
                     _ => Camera3d::orbit(look, yaw, pitch, scene_dist),
                 };
+                // Guardar la cámara para resolver clicks → suelo (plano a la altura de pies).
+                if directing && rect.h > 0.0 {
+                    let inv_vp = camera.view_proj(rect.w / rect.h).inverse();
+                    p.set_pick(inv_vp, camera.eye, look.y - 1.0);
+                }
                 let mut metas = Vec::with_capacity(poses.len());
                 for (pos, s, ch, at) in &poses {
                     // Humanoide → Actor rico; rig → su andar (lo decide CharSpec).
@@ -1422,6 +1443,19 @@ fn canvas_3d(model: &Model) -> View<Msg> {
         DragPhase::End => None,
     });
 
+    // Al dirigir, un click (sin arrastrar) coloca la clave seleccionada sobre el suelo.
+    if directing {
+        canvas = canvas.on_click_at(move |lx, ly, rw, rh| {
+            if rw <= 0.0 || rh <= 0.0 {
+                return None;
+            }
+            let ndc_x = lx / rw * 2.0 - 1.0;
+            let ndc_y = 1.0 - ly / rh * 2.0;
+            let guard = preview_click.lock().ok()?;
+            let (gx, gz) = guard.as_ref()?.pick_world(ndc_x, ndc_y)?;
+            Some(Msg::PlaceKeyAt(gx, gz))
+        });
+    }
     canvas
 }
 

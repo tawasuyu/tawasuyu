@@ -7,7 +7,7 @@
 //! altura del suelo ([`ground_at`](WorldPreview::ground_at)) y mantiene un pool de
 //! [`Renderer3d`] para dibujar las mallas de los actores de una escena en vivo.
 
-use llimphi_3d::glam::{Mat4, Vec3};
+use llimphi_3d::glam::{Mat4, Vec3, Vec4};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
 use llimphi_voxel::{
@@ -49,6 +49,9 @@ pub struct WorldPreview {
     /// Bandada de habitantes (conducta) deambulando sobre el grid, cada uno con el
     /// cuerpo del Ser que representa. Vacía = sin vida.
     manada: Vec<(Habitante, CharSpec)>,
+    /// Contexto de *picking* (al dirigir): `(inv_view_proj, ojo, altura_del_plano)` en
+    /// espacio centrado, para resolver un click de pantalla a una columna de mundo.
+    pick: Option<(Mat4, Vec3, f32)>,
     /// Pool de renderers de actor (uno por actor; la malla se re-sube por frame).
     actor_r: Vec<Renderer3d>,
 }
@@ -75,8 +78,45 @@ impl WorldPreview {
             sim: None,
             growth: None,
             manada: Vec::new(),
+            pick: None,
             actor_r: Vec::new(),
         }
+    }
+
+    /// Registra la cámara para *picking* (al dirigir): `inv_vp` = inversa de la
+    /// `view_proj` con la que se renderiza, `eye` el ojo (centrado), `y0` la altura del
+    /// plano de suelo donde caen los waypoints. Lo setea el preview de escena cada cuadro.
+    pub fn set_pick(&mut self, inv_vp: Mat4, eye: Vec3, y0: f32) {
+        self.pick = Some((inv_vp, eye, y0));
+    }
+
+    /// Resuelve un click (en NDC `[-1,1]`) a una **columna de mundo** `(gx, gz)`,
+    /// intersectando el rayo de cámara con el plano de suelo `y0`. `None` si no hay
+    /// contexto, el rayo no baja, o cae fuera del mundo.
+    pub fn pick_world(&self, ndc_x: f32, ndc_y: f32) -> Option<(f32, f32)> {
+        let (inv_vp, eye, y0) = self.pick?;
+        // Punto en el plano lejano, desproyectado a espacio centrado.
+        let p = inv_vp * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+        if p.w.abs() < 1e-6 {
+            return None;
+        }
+        let far = p.truncate() / p.w;
+        let dir = (far - eye).normalize_or_zero();
+        if dir.y.abs() < 1e-4 {
+            return None; // rayo casi horizontal: no corta el plano
+        }
+        let t = (y0 - eye.y) / dir.y;
+        if t <= 0.0 {
+            return None; // el plano está detrás de la cámara
+        }
+        let hit = eye + dir * t; // espacio centrado
+        let half = Vec3::new(self.dim[0] as f32, self.dim[1] as f32, self.dim[2] as f32) * 0.5;
+        let gx = hit.x + half.x;
+        let gz = hit.z + half.z;
+        if gx < 0.0 || gz < 0.0 || gx >= self.dim[0] as f32 || gz >= self.dim[2] as f32 {
+            return None;
+        }
+        Some((gx, gz))
     }
 
     /// Asegura una **bandada** a partir de `pobladores` (`(ser, cuántos)`): spawnea
