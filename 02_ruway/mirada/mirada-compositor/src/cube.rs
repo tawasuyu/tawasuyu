@@ -34,6 +34,13 @@ pub const CAM_DIST: f32 = 3.0;
 /// pantalla), máximo a `phi=π/4`.
 pub const ZOOM_OUT: f32 = 0.42;
 
+/// Franjas verticales por cara. La silueta es exacta a cualquier `N` (las
+/// aristas son rectas), pero el muestreo de textura es afín por franja: con `96`
+/// el escalón residual del borde inferior queda sub-píxel (verificado headless,
+/// `cube_png`). 96×2 caras = 192 `render_texture` por cuadro — trivial para una
+/// transición de ~13 cuadros.
+pub const STRIPS: usize = 96;
+
 /// El factor de zoom (`≤ 1`) para el ángulo `phi`: `1` en los extremos (cara
 /// plena), `1 - ZOOM_OUT` a mitad de giro. Encoge la proyección hacia el centro.
 pub fn zoom(phi: f32) -> f32 {
@@ -148,6 +155,51 @@ pub fn strip_tex(i: usize, n: usize) -> Affine {
     Affine { a: u1 - u0, b: 0.0, c: u0, d: 0.0, e: 1.0, f: 0.0 }
 }
 
+/// Dibuja el cubo en el `frame` (un offscreen ya limpiado al color de fondo):
+/// las dos caras, cada una en `strips` franjas verticales, ordenadas painter
+/// (la más lejana primero). `tex_current`/`tex_next` son los dos escritorios
+/// como texturas. `(w,h)` el tamaño del target, `phi` el ángulo, `dir` ±1.
+///
+/// Usa `GlesFrame::render_texture` con una matriz afín por franja (la matemática
+/// pura de arriba): es 2D-afín, pero las franjas siguen el trapecio real, así
+/// que el resultado es un cubo en perspectiva sin GL crudo.
+pub fn draw_cube(
+    frame: &mut smithay::backend::renderer::gles::GlesFrame<'_, '_>,
+    w: i32,
+    h: i32,
+    tex_current: &smithay::backend::renderer::gles::GlesTexture,
+    tex_next: &smithay::backend::renderer::gles::GlesTexture,
+    phi: f32,
+    dir: f32,
+    strips: usize,
+) -> Result<(), smithay::backend::renderer::gles::GlesError> {
+    use cgmath::Matrix3;
+
+    fn mat3(af: &Affine) -> Matrix3<f32> {
+        let c = af.cols();
+        Matrix3::new(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8])
+    }
+
+    let (wf, hf) = (w as f32, h as f32);
+    // Painter: la cara con menor Z (más lejos) se pinta primero; la frontal la
+    // tapa donde se solapan (al inicio sólo la actual, al final sólo la destino).
+    let mut faces = [
+        (Face::Current, tex_current, center_depth(Face::Current, phi, dir)),
+        (Face::Next, tex_next, center_depth(Face::Next, phi, dir)),
+    ];
+    if faces[0].2 > faces[1].2 {
+        faces.swap(0, 1);
+    }
+    for (face, tex, _) in faces {
+        for i in 0..strips.max(1) {
+            let dst = mat3(&strip_dst(face, i, strips, phi, dir, wf, hf));
+            let texm = mat3(&strip_tex(i, strips));
+            frame.render_texture(tex, texm, dst, None::<[f32; 0]>, 1.0, None, &[])?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +275,102 @@ mod tests {
             let (xb0, _) = s0.apply(1.0, 1.0);
             let (xb1, _) = s1.apply(0.0, 1.0);
             assert!(close(xb0, xb1), "x de arista inferior no coincide en franja {i}");
+        }
+    }
+
+    /// Evidencia headless: compone el cubo con dos texturas-escritorio sintéticas
+    /// a varios ángulos y escribe PNGs (a `$CUBE_OUT` o el dir actual). Ignorado
+    /// por defecto (pide render node / GPU). Correr:
+    /// `cargo test -p mirada-compositor cube_png -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "headless GPU demo — escribe PNGs del cubo"]
+    fn cube_png() {
+        use smithay::backend::allocator::gbm::GbmDevice;
+        use smithay::backend::allocator::Fourcc;
+        use smithay::backend::egl::{EGLContext, EGLDisplay};
+        use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+        use smithay::backend::renderer::{Bind, Color32F, ExportMem, Frame as _, ImportMem, Offscreen, Renderer};
+        use smithay::utils::{Buffer as Buf, Physical, Rectangle, Size, Transform};
+
+        const FOURCC: Fourcc = Fourcc::Abgr8888;
+        // Una textura-escritorio sintética: fondo + grilla + marco grueso +
+        // esquinas de colores fijos (TL blanco, TR amarillo, BL cian, BR magenta)
+        // → permite leer orientación (¿hay flip?) y perspectiva en el PNG.
+        fn face(tw: i32, th: i32, base: [u8; 3], border: [u8; 3]) -> Vec<u8> {
+            let (tw, th) = (tw as usize, th as usize);
+            let mut px = vec![0u8; tw * th * 4];
+            let set = |px: &mut [u8], x: usize, y: usize, c: [u8; 3]| {
+                let i = (y * tw + x) * 4;
+                px[i] = c[0];
+                px[i + 1] = c[1];
+                px[i + 2] = c[2];
+                px[i + 3] = 255;
+            };
+            for y in 0..th {
+                for x in 0..tw {
+                    let grid = x % 48 == 0 || y % 48 == 0;
+                    let c = if grid { [base[0] + 30, base[1] + 30, base[2] + 30] } else { base };
+                    set(&mut px, x, y, c);
+                }
+            }
+            let bw = 10usize;
+            for y in 0..th {
+                for x in 0..tw {
+                    if x < bw || y < bw || x >= tw - bw || y >= th - bw {
+                        set(&mut px, x, y, border);
+                    }
+                }
+            }
+            let q = 48usize;
+            let corners = [
+                (0usize, 0usize, [255, 255, 255]),     // TL blanco
+                (tw - q, 0, [255, 255, 0]),            // TR amarillo
+                (0, th - q, [0, 255, 255]),            // BL cian
+                (tw - q, th - q, [255, 0, 255]),       // BR magenta
+            ];
+            for (cx, cy, c) in corners {
+                for y in cy..(cy + q).min(th) {
+                    for x in cx..(cx + q).min(tw) {
+                        set(&mut px, x, y, c);
+                    }
+                }
+            }
+            px
+        }
+
+        let node = std::env::var("MIRADA_RENDER_NODE").unwrap_or_else(|_| "/dev/dri/renderD128".into());
+        let file = std::fs::OpenOptions::new().read(true).write(true).open(&node).expect("render node");
+        let gbm = GbmDevice::new(file).expect("gbm");
+        let disp = unsafe { EGLDisplay::new(gbm) }.expect("egl display");
+        let ctx = EGLContext::new(&disp).expect("egl ctx");
+        let mut r = unsafe { GlesRenderer::new(ctx) }.expect("gles");
+
+        let (fw, fh) = (480, 270);
+        let ta: GlesTexture =
+            r.import_memory(&face(fw, fh, [70, 20, 20], [0, 230, 0]), FOURCC, Size::<i32, Buf>::from((fw, fh)), false).unwrap();
+        let tb: GlesTexture =
+            r.import_memory(&face(fw, fh, [20, 20, 80], [255, 140, 0]), FOURCC, Size::<i32, Buf>::from((fw, fh)), false).unwrap();
+
+        let (w, h) = (960i32, 540i32);
+        let out = std::env::var("CUBE_OUT").unwrap_or_else(|_| ".".into());
+        for (tag, t) in [("00", 0.0f32), ("30", 0.30), ("50", 0.50), ("70", 0.70), ("100", 1.0)] {
+            let phi = angle(t);
+            let mut off = Offscreen::<GlesTexture>::create_buffer(&mut r, FOURCC, Size::<i32, Buf>::from((w, h))).unwrap();
+            let mut target = r.bind(&mut off).unwrap();
+            let fis = Size::<i32, Physical>::from((w, h));
+            {
+                let mut frame = r.render(&mut target, fis, Transform::Normal).unwrap();
+                frame.clear(Color32F::from([0.05, 0.05, 0.07, 1.0]), &[Rectangle::from_size(fis)]).unwrap();
+                draw_cube(&mut frame, w, h, &ta, &tb, phi, 1.0, STRIPS).unwrap();
+                let _ = frame.finish().unwrap();
+            }
+            let rect = Rectangle::<i32, Buf>::from_size((w, h).into());
+            let map = r.copy_framebuffer(&target, rect, FOURCC).unwrap();
+            let bytes = r.map_texture(&map).unwrap();
+            let img = image::RgbaImage::from_raw(w as u32, h as u32, bytes[..(w * h * 4) as usize].to_vec()).unwrap();
+            let path = format!("{out}/cube_t{tag}.png");
+            img.save(&path).unwrap();
+            println!("cube_png · escrito {path}");
         }
     }
 
