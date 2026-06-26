@@ -371,7 +371,7 @@ fn fs(in: SOut) -> @location(0) vec4<f32> {
         // todas las columnas colapsan a una fila y la textura se abre en abanico
         // ("starburst"). Atenuamos el muestreo a oscuro cerca del polo para que
         // se disuelva en cielo profundo en vez de reventar en rayas radiales.
-        let pole = smoothstep(0.9, 0.998, abs(dir.y));
+        let pole = smoothstep(0.78, 0.995, abs(dir.y));
         return col * (1.0 - pole);
     }
     // ---- Cilíndrico (Doom): azimut por columna, fila por pitch lineal ----

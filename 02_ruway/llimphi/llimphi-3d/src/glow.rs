@@ -1,76 +1,32 @@
-//! `Billboards` — quads **siempre de cara a la cámara**, texturizados desde un
-//! atlas, con test de profundidad y alpha-discard (recorte, no blend). El
-//! ladrillo genérico para sprites, partículas, etiquetas flotantes, íconos en
-//! el mundo.
+//! `Glows` — billboards **aditivos**: como [`Billboards`](crate::Billboards)
+//! (quads de cara a la cámara desde un atlas) pero con **blend aditivo**, sin
+//! escribir profundidad y **sin recorte de alpha** — para halos suaves y
+//! luminosos: estrellas que brillan, atmósferas, auras de cuerpos, glows que el
+//! bloom de [`PostFx`](crate::PostFx) infla. El `Billboards` opaco recorta el
+//! borde (disco nítido); éste suma luz (sin borde, se funde).
 //!
-//! Cosechado de los sprites 2.5D de Doom (`supay-render-llimphi::wgpu3d`), donde
-//! los quads se armaban en CPU y estaban atados al `WadAtlas`/tabla de tintes.
-//! Acá la forma es agnóstica: un **atlas** (una textura) + una lista de
-//! [`Billboard`] con su sub-rect UV, tamaño en mundo y tinte. El quad de cara a
-//! la cámara lo arma el vertex shader con los ejes `right`/`up` de la cámara, así
-//! no hay reconstrucción por CPU cada frame.
+//! Comparte el tipo de instancia [`Billboard`](crate::Billboard). Se dibuja en
+//! un pase con depth attachment, **después** de la geometría opaca (así el mundo
+//! sólido ocluye los glows que quedan detrás; los de adelante suman luz):
 //!
 //! ```ignore
-//! let mut bb = Billboards::new(&device, fmt);
-//! bb.set_atlas(&device, &queue, w, h, &rgba);
-//! bb.set_billboards(&device, &[Billboard { center: [0.0,1.0,0.0], size: [1.0,2.0],
-//!     uv_min: [0.0,0.0], uv_max: [1.0,1.0], tint: [1.0,1.0,1.0,1.0] }]);
-//! // en el pase (con depth), después del mundo opaco:
-//! bb.upload(&queue, aspect, &camera);
-//! bb.draw(&mut pass);
+//! let mut g = Glows::new(&device, fmt);
+//! g.set_atlas(&device, &queue, w, h, &soft_radial_rgba);
+//! g.set_glows(&device, &[Billboard { .. }]);
+//! g.upload(&queue, aspect, &camera);
+//! g.draw(&mut pass);
 //! ```
 
-use glam::Vec3;
-
+use crate::billboard::Billboard;
 use crate::camera::Camera3d;
 use crate::scene::DEPTH_FORMAT;
 
-/// Un billboard: un quad centrado en `center` (mundo), de `size` (ancho, alto en
-/// unidades de mundo), texturizado con el sub-rect `[uv_min, uv_max]` del atlas y
-/// multiplicado por `tint` (RGBA premultiplica el color; `a` también escala el
-/// alpha del atlas para el discard).
-#[derive(Clone, Copy, Debug)]
-pub struct Billboard {
-    pub center: [f32; 3],
-    pub size: [f32; 2],
-    pub uv_min: [f32; 2],
-    pub uv_max: [f32; 2],
-    pub tint: [f32; 4],
-}
-
-impl Billboard {
-    /// Floats por instancia en el buffer (`center`3 + `size`2 + `uv_min`2 +
-    /// `uv_max`2 + `tint`4).
-    const FLOATS: usize = 3 + 2 + 2 + 2 + 4;
-    pub(crate) const STRIDE: usize = Self::FLOATS * 4;
-
-    pub(crate) fn write_to(&self, out: &mut Vec<u8>) {
-        for v in self.center {
-            out.extend_from_slice(&v.to_ne_bytes());
-        }
-        for v in self.size {
-            out.extend_from_slice(&v.to_ne_bytes());
-        }
-        for v in self.uv_min {
-            out.extend_from_slice(&v.to_ne_bytes());
-        }
-        for v in self.uv_max {
-            out.extend_from_slice(&v.to_ne_bytes());
-        }
-        for v in self.tint {
-            out.extend_from_slice(&v.to_ne_bytes());
-        }
-    }
-}
-
-/// Atlas subido + su bind group.
 struct Atlas {
     bind_group: wgpu::BindGroup,
 }
 
-/// Renderer de billboards reutilizable. Cachea pipeline/sampler/uniform; el
-/// buffer de instancias se recrea en [`Self::set_billboards`].
-pub struct Billboards {
+/// Renderer de glows aditivos. Misma plomería que `Billboards`, distinto blend.
+pub struct Glows {
     pipeline: wgpu::RenderPipeline,
     uniform_buf: wgpu::Buffer,
     uniform_bg: wgpu::BindGroup,
@@ -81,13 +37,10 @@ pub struct Billboards {
     count: u32,
 }
 
-impl Billboards {
-    /// Crea el renderer para el `color_format` del target. El pipeline declara
-    /// depth [`DEPTH_FORMAT`] (test `Less`, escribe) → se usa en un pase con
-    /// depth attachment, después de la geometría opaca.
+impl Glows {
     pub fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat) -> Self {
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("llimphi-3d-bb-uniform-layout"),
+            label: Some("llimphi-3d-glow-uniform-layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -100,7 +53,7 @@ impl Billboards {
             }],
         });
         let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("llimphi-3d-bb-tex-layout"),
+            label: Some("llimphi-3d-glow-tex-layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -121,16 +74,29 @@ impl Billboards {
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("llimphi-3d-bb-shader"),
-            source: wgpu::ShaderSource::Wgsl(BILLBOARD_WGSL.into()),
+            label: Some("llimphi-3d-glow-shader"),
+            source: wgpu::ShaderSource::Wgsl(GLOW_WGSL.into()),
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("llimphi-3d-bb-pl"),
+            label: Some("llimphi-3d-glow-pl"),
             bind_group_layouts: &[&uniform_layout, &tex_layout],
             push_constant_ranges: &[],
         });
+        // Blend aditivo: la luz se suma al fondo (src*1 + dst*1).
+        let additive = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("llimphi-3d-bb-pipeline"),
+            label: Some("llimphi-3d-glow-pipeline"),
             layout: Some(&pl),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -174,8 +140,8 @@ impl Billboards {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -186,22 +152,21 @@ impl Billboards {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    blend: None,
+                    blend: Some(additive),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
             multiview: None,
             cache: None,
         });
-
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("llimphi-3d-bb-uniform"),
+            label: Some("llimphi-3d-glow-uniform"),
             size: 96, // view_proj(64) + right(16) + up(16)
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let uniform_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("llimphi-3d-bb-uniform-bg"),
+            label: Some("llimphi-3d-glow-uniform-bg"),
             layout: &uniform_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -209,7 +174,7 @@ impl Billboards {
             }],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("llimphi-3d-bb-sampler"),
+            label: Some("llimphi-3d-glow-sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -218,7 +183,6 @@ impl Billboards {
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
-
         Self {
             pipeline,
             uniform_buf,
@@ -231,7 +195,8 @@ impl Billboards {
         }
     }
 
-    /// Sube/reemplaza el atlas (RGBA8, `w×h`, sin padding). `data.len()==w*h*4`.
+    /// Sube/reemplaza el atlas (RGBA8, `w×h`). Para glows conviene un degradé
+    /// radial suave (gaussiano), sin núcleo duro.
     pub fn set_atlas(
         &mut self,
         device: &wgpu::Device,
@@ -242,7 +207,7 @@ impl Billboards {
     ) {
         assert_eq!(data.len(), (w * h * 4) as usize, "RGBA8 w*h*4 esperado");
         let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("llimphi-3d-bb-atlas"),
+            label: Some("llimphi-3d-glow-atlas"),
             size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
@@ -268,7 +233,7 @@ impl Billboards {
         );
         let view = tex.create_view(&Default::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("llimphi-3d-bb-atlas-bg"),
+            label: Some("llimphi-3d-glow-atlas-bg"),
             layout: &self.tex_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -284,11 +249,9 @@ impl Billboards {
         self.atlas = Some(Atlas { bind_group });
     }
 
-    /// Reemplaza la lista de billboards (recrea el buffer de instancias). El
-    /// orden importa para el z-fight de alpha-discard: poná los más cercanos
-    /// primero si querés (con depth-write el primero gana). Idealmente el caller
-    /// los ordena back-to-front.
-    pub fn set_billboards(&mut self, device: &wgpu::Device, items: &[Billboard]) {
+    /// Reemplaza la lista de glows (recrea el buffer de instancias). Con blend
+    /// aditivo el orden no importa (la suma es conmutativa).
+    pub fn set_glows(&mut self, device: &wgpu::Device, items: &[Billboard]) {
         self.count = items.len() as u32;
         if items.is_empty() {
             self.instances = None;
@@ -299,7 +262,7 @@ impl Billboards {
             b.write_to(&mut bytes);
         }
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("llimphi-3d-bb-instances"),
+            label: Some("llimphi-3d-glow-instances"),
             size: bytes.len() as u64,
             usage: wgpu::BufferUsages::VERTEX,
             mapped_at_creation: true,
@@ -309,8 +272,7 @@ impl Billboards {
         self.instances = Some(buf);
     }
 
-    /// Sube el uniform del frame: `view_proj` + los ejes `right`/`up` de la
-    /// cámara (para orientar los quads). `aspect` = w/h.
+    /// Sube el uniform del frame: `view_proj` + ejes `right`/`up` de la cámara.
     pub fn upload(&self, queue: &wgpu::Queue, aspect: f32, camera: &Camera3d) {
         let view_proj = camera.view_proj(aspect);
         let forward = (camera.target - camera.eye).normalize_or_zero();
@@ -329,8 +291,7 @@ impl Billboards {
         queue.write_buffer(&self.uniform_buf, 0, &b);
     }
 
-    /// Dibuja los billboards en un pase **ya abierto** (con depth). Requiere
-    /// atlas + instancias + [`Self::upload`] previo. No-op si falta algo.
+    /// Dibuja los glows en un pase ya abierto (con depth). No-op si falta algo.
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         let (Some(atlas), Some(inst)) = (self.atlas.as_ref(), self.instances.as_ref()) else {
             return;
@@ -344,17 +305,11 @@ impl Billboards {
         pass.set_vertex_buffer(0, inst.slice(..));
         pass.draw(0..6, 0..self.count);
     }
-
-    /// Conveniencia para ubicar `up`/`right` desde una cámara sin subir nada (p.
-    /// ej. para ordenar los billboards back-to-front por distancia al ojo).
-    pub fn eye(camera: &Camera3d) -> Vec3 {
-        camera.eye
-    }
 }
 
-/// Quad de cara a la cámara por instancia: el vertex shader lo arma con los ejes
-/// `right`/`up`; el fragment muestrea el atlas y descarta el alpha bajo.
-const BILLBOARD_WGSL: &str = r#"
+/// Quad de cara a la cámara; el fragment SUMA luz (sin discard). La salida es
+/// premultiplicada (`rgb*a`) para que el blend aditivo dé un halo suave.
+const GLOW_WGSL: &str = r#"
 struct U {
     view_proj: mat4x4<f32>,
     right: vec4<f32>,
@@ -379,7 +334,6 @@ struct VOut {
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32, in: VIn) -> VOut {
-    // Dos triángulos: esquinas en {0,1}².
     var cs = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
@@ -391,7 +345,6 @@ fn vs(@builtin(vertex_index) vi: u32, in: VIn) -> VOut {
         + u.up.xyz * (off.y * in.size.y);
     var o: VOut;
     o.clip = u.view_proj * vec4<f32>(world, 1.0);
-    // v invertida: q.y=1 (arriba del quad) ↔ uv_min.y (arriba de la imagen).
     o.uv = vec2<f32>(
         mix(in.uv_min.x, in.uv_max.x, q.x),
         mix(in.uv_min.y, in.uv_max.y, 1.0 - q.y),
@@ -403,8 +356,8 @@ fn vs(@builtin(vertex_index) vi: u32, in: VIn) -> VOut {
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let c = textureSample(tex, samp, in.uv) * in.tint;
-    if (c.a < 0.5) { discard; }
-    return vec4<f32>(c.rgb, 1.0);
+    let a = c.a;
+    return vec4<f32>(c.rgb * a, a);
 }
 "#;
 
@@ -413,19 +366,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shader_wgsl_valida() {
-        let module =
-            naga::front::wgsl::parse_str(BILLBOARD_WGSL).expect("BILLBOARD_WGSL no parsea");
+    fn glow_wgsl_valida() {
+        let module = naga::front::wgsl::parse_str(GLOW_WGSL).expect("GLOW_WGSL no parsea");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
-        .expect("BILLBOARD_WGSL no valida");
-    }
-
-    #[test]
-    fn stride_es_13_floats() {
-        assert_eq!(Billboard::STRIDE, 13 * 4);
+        .expect("GLOW_WGSL no valida");
     }
 }

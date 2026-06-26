@@ -68,6 +68,44 @@ pub fn cube() -> (Vec<Vertex3d>, Vec<u16>) {
     (verts, CUBE_INDICES.to_vec())
 }
 
+/// Genera una **esfera UV** unitaria (radio 1, centro en el origen): posiciones
+/// (que también sirven de normales, por ser unitarias) + índices de triángulos
+/// (winding CCW visto desde afuera). `stacks` = anillos de latitud, `slices` =
+/// gajos de longitud. El caller arma los [`Vertex3d`] coloreando cada posición
+/// (p.ej. por latitud/longitud y un sombreado horneado): el `Vertex3d` sólo
+/// lleva color (no normal), así que para una esfera lisa conviene hornear el
+/// sombreado en el color (Gouraud) en vez de depender de la normal plana del
+/// shader de mallas.
+pub fn uv_sphere(stacks: u32, slices: u32) -> (Vec<[f32; 3]>, Vec<u16>) {
+    let stacks = stacks.max(2);
+    let slices = slices.max(3);
+    let mut pos: Vec<[f32; 3]> = Vec::with_capacity(((stacks + 1) * (slices + 1)) as usize);
+    for i in 0..=stacks {
+        let v = i as f32 / stacks as f32;
+        let phi = v * std::f32::consts::PI; // 0 = polo norte, π = polo sur
+        let (sp, cp) = phi.sin_cos();
+        for j in 0..=slices {
+            let u = j as f32 / slices as f32;
+            let theta = u * std::f32::consts::TAU;
+            let (st, ct) = theta.sin_cos();
+            // +Y arriba (polo norte); x,z en el plano ecuatorial.
+            pos.push([sp * ct, cp, sp * st]);
+        }
+    }
+    let mut idx: Vec<u16> = Vec::with_capacity((stacks * slices * 6) as usize);
+    let row = slices + 1;
+    for i in 0..stacks {
+        for j in 0..slices {
+            let a = (i * row + j) as u16;
+            let b = (i * row + j + 1) as u16;
+            let c = ((i + 1) * row + j) as u16;
+            let d = ((i + 1) * row + j + 1) as u16;
+            idx.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+    (pos, idx)
+}
+
 /// Apila un cubo transformado por `m` (mapea el cubo unitario `[-0.5,0.5]³` a su
 /// caja en mundo) con color plano `color`, en `verts`/`indices`. Es el ladrillo
 /// para componer mallas multi-caja en CPU: cada llamada agrega 8 vértices + 36
