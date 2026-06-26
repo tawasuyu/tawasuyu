@@ -127,6 +127,7 @@ impl Level {
                 ("Relieve", Icon::Mountain),
                 ("Materiales", Icon::Leaf),
                 ("Objetos", Icon::Grid),
+                ("Seres", Icon::User),
             ],
             Level::Mundos => vec![("Semilla", Icon::Globe), ("Biomas", Icon::Mountain)],
             Level::Escenas => vec![("Escena", Icon::Film), ("Cámara", Icon::Camera), ("Video", Icon::Play)],
@@ -195,6 +196,10 @@ enum Msg {
     AddBiomaObjeto,
     RemoveBiomaObjeto,
     SetObjetoDensidad(usize, f32),
+    AddBiomaSere,
+    RemoveBiomaSere,
+    CycleBiomaSere(usize),
+    SetBiomaSereProb(usize, f32),
     // Mundos.
     SeedFocus,
     SeedKey(KeyEvent),
@@ -606,6 +611,36 @@ impl App for Studio {
                 if let Some(b) = sel_bioma_mut(&mut model) {
                     if let Some(o) = b.objetos.get_mut(i) {
                         o.densidad = v.clamp(0.0, 0.05);
+                    }
+                    model.gen += 1;
+                }
+            }
+            Msg::AddBiomaSere => {
+                let sids = sere_ids(&model);
+                if let (Some(&sere), Some(b)) = (sids.first(), sel_bioma_mut(&mut model)) {
+                    b.seres.push(llimphi_voxel::SereUso { sere, probabilidad: 0.5 });
+                    model.gen += 1;
+                }
+            }
+            Msg::RemoveBiomaSere => {
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    b.seres.pop();
+                    model.gen += 1;
+                }
+            }
+            Msg::CycleBiomaSere(i) => {
+                let sids = sere_ids(&model);
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    if let Some(u) = b.seres.get_mut(i) {
+                        u.sere = next_in(&sids, u.sere);
+                    }
+                    model.gen += 1;
+                }
+            }
+            Msg::SetBiomaSereProb(i, v) => {
+                if let Some(b) = sel_bioma_mut(&mut model) {
+                    if let Some(u) = b.seres.get_mut(i) {
+                        u.probabilidad = v.clamp(0.0, 1.0);
                     }
                     model.gen += 1;
                 }
@@ -1092,6 +1127,18 @@ fn canvas_3d(model: &Model) -> View<Msg> {
             .crecer_velocidad(o.material)
             .map(|v| (model.project.resolve_material(o.material).color, v))
     });
+    // Pobladores del bioma: cada SereUso → unos cuantos habitantes (por probabilidad).
+    let pobladores: Vec<(CharSpec, usize)> = mr
+        .bioma
+        .seres
+        .iter()
+        .filter_map(|su| {
+            model
+                .project
+                .sere(su.sere)
+                .map(|cs| (cs.clone(), ((su.probabilidad.clamp(0.0, 1.0) * 6.0).round() as usize).max(1)))
+        })
+        .collect();
     let absolute = Style {
         position: Position::Absolute,
         size: Size { width: percent(1.0), height: percent(1.0) },
@@ -1162,12 +1209,8 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 match (&sere, manada) {
                     // Manada viva: una bandada del ser deambula/se junta por su conducta.
                     (Some(cs), true) => {
-                        p.ensure_manada(cs.conducta, 9);
-                        let agentes = p.manada_step(1.0 / 30.0, None);
-                        let metas: Vec<_> = agentes
-                            .iter()
-                            .map(|(gpos, heading, fase)| cs.to_meta(*gpos - half, *heading, Clip::Walk, *fase, None))
-                            .collect();
+                        p.ensure_manada(&[(cs.clone(), 9)]);
+                        let metas = p.manada_metas(1.0 / 30.0, None);
                         let look = p.ground_at(dim[0] / 2, dim[2] / 2) - half + Vec3::new(0.0, 1.0, 0.0);
                         let camera = Camera3d::orbit(look, yaw, pitch, 32.0);
                         p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
@@ -1204,12 +1247,22 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                     p.ensure_growth(queue, col, vel);
                     p.growth_step(queue);
                 }
+                if !pobladores.is_empty() {
+                    p.ensure_manada(&pobladores);
+                }
             } else {
                 p.clear_sim();
                 p.clear_growth();
+                p.clear_manada();
             }
             let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
-            p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
+            // Con bandada, el mundo se ve vivo: se componen los habitantes caminando.
+            if simulating && p.tiene_manada() {
+                let metas = p.manada_metas(1.0 / 30.0, None);
+                p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
+            } else {
+                p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
+            }
         }),
     }
     .draggable(|phase, dx, dy| match phase {
@@ -1433,7 +1486,7 @@ fn bioma_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
                 Msg::CycleBiomaPeak,
             ),
         ],
-        _ => {
+        2 => {
             let mut v = vec![section_title("OBJETOS", theme)];
             for (i, o) in b.objetos.iter().enumerate() {
                 let name = mat_name(o.material);
@@ -1448,6 +1501,28 @@ fn bioma_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             v.push(button_view("+ objeto", &btn, Msg::AddBiomaObjeto));
             v.push(spacer(4.0));
             v.push(button_view("− quitar", &btn, Msg::RemoveBiomaObjeto));
+            v
+        }
+        _ => {
+            let mut v = vec![section_title("SERES (POBLACIÓN)", theme)];
+            for (i, u) in b.seres.iter().enumerate() {
+                let name = model.project.sere(u.sere).map(|s| s.name.clone()).unwrap_or_else(|| "—".into());
+                v.push(button_view(format!("ser: {name}"), &btn, Msg::CycleBiomaSere(i)));
+                let prob = u.probabilidad;
+                v.push(slider_view("cantidad", prob, 0.0, 1.0, &sp, move |_p, dv| {
+                    Some(Msg::SetBiomaSereProb(i, prob + dv))
+                }));
+                v.push(spacer(4.0));
+            }
+            if b.seres.is_empty() {
+                v.push(body_text("sin seres — agregá para poblar el bioma".into(), theme.fg_placeholder, theme));
+            }
+            v.push(spacer(4.0));
+            v.push(button_view("+ ser", &btn, Msg::AddBiomaSere));
+            v.push(spacer(4.0));
+            v.push(button_view("− quitar", &btn, Msg::RemoveBiomaSere));
+            v.push(spacer(8.0));
+            v.push(body_text("se ven con «▶ simular» en Mundos/Biomas".into(), theme.fg_placeholder, theme));
             v
         }
     }
@@ -1786,6 +1861,9 @@ fn objeto_ids(model: &Model) -> Vec<u64> {
 }
 fn bioma_ids(model: &Model) -> Vec<u64> {
     model.project.biomas.iter().map(|b| b.id).collect()
+}
+fn sere_ids(model: &Model) -> Vec<u64> {
+    model.project.seres.iter().map(|s| s.id).collect()
 }
 fn mundo_ids(model: &Model) -> Vec<u64> {
     model.project.mundos.iter().map(|m| m.id).collect()

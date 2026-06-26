@@ -739,12 +739,14 @@ impl Project {
         let mid = |m: Material| mat_ids[&m];
 
         // --- Seres ---
+        let mut sere_ids = Vec::new();
         for (name, skin, shirt, pants) in [
             ("rojo", [0.90, 0.72, 0.58], [0.82, 0.28, 0.26], [0.20, 0.20, 0.28]),
             ("azul", [0.86, 0.68, 0.54], [0.22, 0.55, 0.78], [0.18, 0.20, 0.24]),
             ("amarillo", [0.92, 0.78, 0.62], [0.92, 0.80, 0.30], [0.26, 0.22, 0.20]),
         ] {
             let id = p.alloc_id();
+            sere_ids.push(id);
             p.seres.push(CharSpec {
                 id,
                 name: name.into(),
@@ -777,7 +779,7 @@ impl Project {
                 densidad: 0.010,
                 forma: Forma::Columnar,
             }],
-            seres: vec![],
+            seres: vec![crate::worldgen::SereUso { sere: sere_ids[0], probabilidad: 0.5 }],
         });
         let bioma_pradera = p.alloc_id();
         p.biomas.push(Bioma {
@@ -794,7 +796,10 @@ impl Project {
             cliff: mid(Material::Rock),
             peak: Some(mid(Material::Snow)),
             objetos: vec![],
-            seres: vec![],
+            seres: vec![
+                crate::worldgen::SereUso { sere: sere_ids[1], probabilidad: 0.5 },
+                crate::worldgen::SereUso { sere: sere_ids[2], probabilidad: 0.4 },
+            ],
         });
 
         // --- Mundos ---
@@ -828,6 +833,9 @@ impl Project {
     }
     pub fn material(&self, id: u64) -> Option<&MaterialDef> {
         self.materiales.iter().find(|x| x.id == id)
+    }
+    pub fn sere(&self, id: u64) -> Option<&CharSpec> {
+        self.seres.iter().find(|x| x.id == id)
     }
     pub fn bioma(&self, id: u64) -> Option<&Bioma> {
         self.biomas.iter().find(|x| x.id == id)

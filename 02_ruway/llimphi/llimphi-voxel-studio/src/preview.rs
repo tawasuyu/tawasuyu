@@ -10,7 +10,9 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
-use llimphi_voxel::{Conducta, GrowthSim, Habitante, MundoRender, WaterSim, CELL_WATER, SCENE_SUN};
+use llimphi_voxel::{
+    CharSpec, Clip, GrowthSim, Habitante, MundoRender, WaterSim, CELL_WATER, SCENE_SUN,
+};
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -44,8 +46,9 @@ pub struct WorldPreview {
     sim: Option<WaterSim>,
     /// Crecimiento de plantas en curso (ley Crecer), si está activo.
     growth: Option<GrowthSim>,
-    /// Manada de habitantes (conducta) deambulando sobre el grid, si está activa.
-    manada: Vec<Habitante>,
+    /// Bandada de habitantes (conducta) deambulando sobre el grid, cada uno con el
+    /// cuerpo del Ser que representa. Vacía = sin vida.
+    manada: Vec<(Habitante, CharSpec)>,
     /// Pool de renderers de actor (uno por actor; la malla se re-sube por frame).
     actor_r: Vec<Renderer3d>,
 }
@@ -76,42 +79,63 @@ impl WorldPreview {
         }
     }
 
-    /// Asegura una **manada** de `n` habitantes con la `conducta` dada, posados en un
-    /// racimo cerca del centro del grid. Si ya hay `n`, sólo refresca su conducta (para
-    /// que editar los parámetros se note en vivo).
-    pub fn ensure_manada(&mut self, conducta: Conducta, n: usize) {
-        if self.manada.len() != n {
+    /// Asegura una **bandada** a partir de `pobladores` (`(ser, cuántos)`): spawnea
+    /// `Σ cuántos` habitantes sobre el grid (esparcidos alrededor del centro), cada uno
+    /// con la conducta y el cuerpo de su Ser. Si ya hay esa cantidad, sólo refresca la
+    /// conducta de cada uno (para que editar los parámetros se note en vivo). Tope de
+    /// 16 para no recargar el preview.
+    pub fn ensure_manada(&mut self, pobladores: &[(CharSpec, usize)]) {
+        let total: usize = pobladores.iter().map(|(_, n)| n).sum::<usize>().min(16);
+        if self.manada.len() != total {
             self.manada.clear();
             let [dx, _, dz] = self.dim;
-            let (cx, cz) = (dx / 2, dz / 2);
-            for k in 0..n as u32 {
-                // Racimo determinista alrededor del centro (±~10 voxels).
-                let ox = (k.wrapping_mul(7) % 21) as i32 - 10;
-                let oz = (k.wrapping_mul(13) % 21) as i32 - 10;
-                let x = (cx as i32 + ox).clamp(1, dx as i32 - 2) as u32;
-                let z = (cz as i32 + oz).clamp(1, dz as i32 - 2) as u32;
-                self.manada.push(Habitante::spawn(&self.grid, x, z, conducta, 1 + k));
+            let (cx, cz) = (dx as i32 / 2, dz as i32 / 2);
+            let mut k = 0u32;
+            'fill: for (spec, n) in pobladores {
+                for _ in 0..*n {
+                    if self.manada.len() >= 16 {
+                        break 'fill;
+                    }
+                    // Esparcido determinista alrededor del centro (±~18 voxels).
+                    let ox = (k.wrapping_mul(7) % 37) as i32 - 18;
+                    let oz = (k.wrapping_mul(13) % 37) as i32 - 18;
+                    let x = (cx + ox).clamp(1, dx as i32 - 2) as u32;
+                    let z = (cz + oz).clamp(1, dz as i32 - 2) as u32;
+                    let h = Habitante::spawn(&self.grid, x, z, spec.conducta, 1 + k);
+                    self.manada.push((h, spec.clone()));
+                    k += 1;
+                }
             }
         } else {
-            for h in &mut self.manada {
-                h.set_conducta(conducta);
+            for (h, spec) in &mut self.manada {
+                h.set_conducta(spec.conducta);
             }
         }
     }
 
-    /// Detiene la manada.
+    /// Detiene la bandada.
     pub fn clear_manada(&mut self) {
         self.manada.clear();
     }
 
-    /// Avanza la manada `dt` (cada uno ve a los demás y a la `amenaza`) y devuelve
-    /// `(pos en grilla, rumbo, fase)` de cada habitante para que la app los pinte.
-    pub fn manada_step(&mut self, dt: f32, amenaza: Option<Vec3>) -> Vec<(Vec3, f32, f32)> {
-        let posiciones: Vec<Vec3> = self.manada.iter().map(|h| h.pos()).collect();
-        for h in &mut self.manada {
+    /// `true` si hay bandada activa.
+    pub fn tiene_manada(&self) -> bool {
+        !self.manada.is_empty()
+    }
+
+    /// Avanza la bandada `dt` (cada uno ve a los demás y a la `amenaza`) y arma las
+    /// **metas de render** (matriz + malla) de cada habitante con el cuerpo de su Ser,
+    /// en espacio centrado del shader (grilla − dim/2). Caminan según su andar.
+    pub fn manada_metas(&mut self, dt: f32, amenaza: Option<Vec3>) -> Vec<(Mat4, Vec<Vertex3d>, Vec<u16>)> {
+        let posiciones: Vec<Vec3> = self.manada.iter().map(|(h, _)| h.pos()).collect();
+        for (h, _) in &mut self.manada {
             h.step(&self.grid, &posiciones, amenaza, dt);
         }
-        self.manada.iter().map(|h| (h.pos(), h.heading(), h.fase)).collect()
+        let half = Vec3::new(self.dim[0] as f32, self.dim[1] as f32, self.dim[2] as f32) * 0.5;
+        self.manada
+            .iter()
+            .map(|(h, spec)| spec.to_meta(h.pos() - half, h.heading(), Clip::Walk, h.fase, None))
+            .collect()
     }
 
     /// Arranca el **crecimiento** (ley Crecer) del material `planta`: esconde sus

@@ -51,6 +51,16 @@ pub fn shot() {
     let chars_out = out.replace(".png", "_chars.png");
     let chars_out = if chars_out == out { "/tmp/voxel_studio_chars.png".to_string() } else { chars_out };
     render_model(chars, &chars_out);
+
+    // Toma 4: un mundo VIVO — simulando (agua + plantas + bandada de seres poblándolo).
+    let mut vivo = demo_model();
+    vivo.level = Level::Mundos;
+    vivo.simulating = true;
+    vivo.dist = 70.0; // más cerca, para ver a los habitantes
+    vivo.time = 0.4;
+    let vivo_out = out.replace(".png", "_vivo.png");
+    let vivo_out = if vivo_out == out { "/tmp/voxel_studio_vivo.png".to_string() } else { vivo_out };
+    render_model(vivo, &vivo_out);
 }
 
 /// Renderiza un `Model` concreto (su view real) a un PNG.
