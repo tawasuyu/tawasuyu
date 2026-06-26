@@ -231,6 +231,7 @@ impl App for Cosmos {
             dialog_input: llimphi_widget_text_input::TextInputState::new(),
             delegated,
             _host: host,
+            host_active_synced: None,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }

@@ -238,6 +238,7 @@ fn escena_base() -> Escena {
         edit_anim: llimphi_motion::Tween::idle(1.0),
         delegated: false,
         _host: None,
+        host_active_synced: None,
     };
 
     Escena { model, es: es_id, qu: qu_id, en: en_id }
@@ -582,6 +583,7 @@ fn clonar_para_frame(base: &Model) -> Model {
         edit_anim: llimphi_motion::Tween::idle(1.0),
         delegated: false,
         _host: None,
+        host_active_synced: None,
     }
 }
 

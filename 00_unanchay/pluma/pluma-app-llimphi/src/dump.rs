@@ -194,6 +194,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         edit_anim: llimphi_motion::Tween::idle(1.0),
         delegated: false,
         _host: None,
+        host_active_synced: None,
     };
     // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo
     // (concepto → traducir → resumir) para que el nodegraph muestre nodos+cables.

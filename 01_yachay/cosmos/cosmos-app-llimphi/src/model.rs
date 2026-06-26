@@ -863,6 +863,10 @@ pub(crate) struct Model {
     /// que recibe las activaciones). `None` si no se delega o pata no escucha.
     /// Sólo se retiene (las activaciones llegan por callback); `_` evita el lint.
     pub(crate) _host: Option<pata_host::HostClient>,
+    /// Último diente activo reportado al rail hospedado de pata (el `DockItem`
+    /// del lado expandido, o `None`). Evita reenviar el mismo estado en cada
+    /// `update`: sólo se manda `SetActive` cuando cambia. Inerte sin `_host`.
+    pub(crate) host_active_synced: Option<u32>,
     // watchers
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     pub(crate) _chart_watcher: Option<notify::RecommendedWatcher>,

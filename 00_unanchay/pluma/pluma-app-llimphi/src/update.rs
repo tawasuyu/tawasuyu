@@ -498,7 +498,24 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         .filter(|id| !model.orden_lienzos.contains(id))
         .collect();
     model.orden_lienzos.extend(faltan);
+    // Refleja en el rail de pata qué diente quedó seleccionado (si delegamos).
+    sync_host_active(&mut model);
     model
+}
+
+/// Refleja en el rail hospedado de pata qué diente tiene pluma seleccionado
+/// (`diente_activo`). Sólo manda `SetActive` cuando cambia respecto del último
+/// reportado (`host_active_synced`), para no escribir el socket en cada `update`.
+/// No-op si pluma no delega (sin `_host`).
+fn sync_host_active(model: &mut Model) {
+    let active = Some(model.diente_activo as u32);
+    if active == model.host_active_synced {
+        return;
+    }
+    model.host_active_synced = active;
+    if let Some(h) = model._host.as_mut() {
+        h.set_active(active);
+    }
 }
 
 /// Copia el `scroll_offset` vertical del lienzo con foco (`model.ide`) a todos

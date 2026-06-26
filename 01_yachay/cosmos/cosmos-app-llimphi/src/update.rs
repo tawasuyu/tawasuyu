@@ -230,6 +230,25 @@ pub(crate) fn apply_nav_act(m: &mut Model, act: chrome::NavAct) {
 // Función update del bucle Elm — llamada desde `impl App for Cosmos`
 // =====================================================================
 
+/// Refleja en el rail hospedado de pata qué diente tiene cosmos desplegado: el
+/// `DockItem` del lado expandido (`dock_expanded`), o `None` si está en puro
+/// lienzo. Sólo manda `SetActive` cuando cambia respecto del último reportado
+/// (`host_active_synced`), para no escribir el socket en cada `update`. No-op si
+/// cosmos no delega (sin `_host`).
+fn sync_host_active(m: &mut Model) {
+    let active = m
+        .dock_expanded
+        .and_then(|side| m.dock_active(side))
+        .map(|item| item.to_u64() as u32);
+    if active == m.host_active_synced {
+        return;
+    }
+    m.host_active_synced = active;
+    if let Some(h) = m._host.as_mut() {
+        h.set_active(active);
+    }
+}
+
 pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
     let mut m = model;
     let mut persist = false;
@@ -640,5 +659,7 @@ pub(crate) fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let (c, use_now) = (m.chart.clone(), m.cfg.use_now);
         handle.spawn(move || Msg::AstroComputed(gen, Arc::new(compute_astro(&c, use_now))));
     }
+    // Refleja en el rail de pata qué panel quedó desplegado (si delegamos).
+    sync_host_active(&mut m);
     m
 }

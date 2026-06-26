@@ -153,6 +153,7 @@ pub fn init_modelo() -> Model {
         // (opt-out con PLUMA_DELEGATE_SIDEBAR=0); el HostClient se conecta en `init`.
         delegated: pata_host::delegate_sidebar_default("PLUMA_DELEGATE_SIDEBAR"),
         _host: None,
+        host_active_synced: None,
     }
 }
 

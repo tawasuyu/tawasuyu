@@ -385,4 +385,8 @@ pub struct Model {
     /// Cliente del rail hospedado; sólo se retiene (las activaciones llegan por
     /// callback). `_` evita el lint de campo sin leer.
     pub(crate) _host: Option<pata_host::HostClient>,
+    /// Último diente activo reportado al rail hospedado de pata (`diente_activo`).
+    /// Evita reenviar el mismo estado en cada `update`: sólo se manda `SetActive`
+    /// cuando cambia. Inerte sin `_host` (no delegado).
+    pub(crate) host_active_synced: Option<u32>,
 }

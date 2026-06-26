@@ -67,6 +67,11 @@ pub(crate) struct Model {
     /// Línea de estado del panel de perfiles (errores / confirmaciones).
     pub(crate) prof_msg: Option<String>,
     pub(crate) _host: Option<pata_host::HostClient>,
+    /// Último diente activo reportado al rail hospedado de pata. media tiene
+    /// varios paneles independientes (Config/Cola/Visualizadores/Ayuda); como el
+    /// protocolo resalta uno solo, se reporta el primero abierto en orden de
+    /// diente. Evita reenviar el mismo estado en cada `update`. Inerte sin `_host`.
+    pub(crate) host_active_synced: Option<u32>,
     /// Oyente del puente de drag-and-drop (mirada → este proceso). Vivo
     /// mientras exista el modelo; al soltarse limpia su socket.
     pub(crate) _drop: Option<drop_bridge::DropListener>,
@@ -145,6 +150,33 @@ fn apply_profile_submit(m: &mut Model, target: InputTarget, text: String) {
 }
 
 pub(crate) struct MediaApp;
+
+/// Refleja en el rail hospedado de pata qué panel tiene media abierto. media
+/// tiene cuatro toggles independientes (Config/Cola/Visualizadores/Ayuda) y el
+/// protocolo resalta uno solo, así que se reporta el primero abierto en orden de
+/// diente (0=Config, 1=Cola, 2=Visualizadores, 3=Ayuda), o `None` si ninguno.
+/// Sólo manda `SetActive` cuando cambia respecto del último reportado, para no
+/// escribir el socket en cada `update`. No-op sin `_host` (no delegado).
+fn sync_host_active(m: &mut Model) {
+    let active = if m.settings_open {
+        Some(0)
+    } else if m.playlist_open {
+        Some(1)
+    } else if m.visualizers_open {
+        Some(2)
+    } else if m.help_open {
+        Some(3)
+    } else {
+        None
+    };
+    if active == m.host_active_synced {
+        return;
+    }
+    m.host_active_synced = active;
+    if let Some(h) = m._host.as_mut() {
+        h.set_active(active);
+    }
+}
 
 impl App for MediaApp {
     type Model = Model;
@@ -233,6 +265,7 @@ impl App for MediaApp {
             prof_focus: None,
             prof_msg: None,
             _host: media_host(handle),
+            host_active_synced: None,
             _drop: {
                 // Puente de drag-and-drop: mirada nos manda las rutas soltadas
                 // sobre nuestra ventana (winit no entrega DnD en Wayland).
@@ -249,7 +282,7 @@ impl App for MediaApp {
     }
 
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
-        match msg {
+        let mut m = match msg {
             Msg::Tick => {
                 // El resume/historial se namespacea por perfil activo.
                 crate::config_io::set_active_profile(model.profiles.active.as_deref());
@@ -575,7 +608,10 @@ impl App for MediaApp {
                 m.context_menu = Some((x, y));
                 m
             }
-        }
+        };
+        // Refleja en el rail de pata qué panel quedó abierto (si delegamos).
+        sync_host_active(&mut m);
+        m
     }
 
     fn on_wheel(
