@@ -17,6 +17,9 @@ paloma-trust = { path = "../paloma-trust" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+llimphi-icons = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 

@@ -5,19 +5,32 @@
 //! remitente, estrella por hilo, barra de acciones en lectura (responder ·
 //! reenviar · destacar · leído · papelera) y estados de selección/hover claros.
 
-use llimphi_theme::{stable_color as avatar_color, Theme};
+use std::hash::{Hash, Hasher};
+
+use llimphi_theme::{motion, stable_color as avatar_color, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, LengthPercentage, Rect, Size, Style},
     AlignItems, JustifyContent,
 };
+use llimphi_ui::llimphi_raster::kurbo::Affine;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+use llimphi_icons::Icon;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use paloma_core::{MailStore, MailboxRole, Message, SignatureStatus};
 
 use crate::{Compose, ComposeField, Model, Msg};
+
+/// Hash estable de una cadena → `key` para las animaciones implícitas de Llimphi
+/// (la misma fila/escena produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 const MAILBOX_W: f32 = 200.0;
 const THREADS_W: f32 = 360.0;
@@ -46,21 +59,23 @@ fn pad_xy(x: f32, y: f32) -> Rect<LengthPercentage> {
 /// La raíz: barra superior, cuerpo de tres columnas, barra de estado.
 pub fn root(model: &Model) -> View<Msg> {
     let theme = &model.theme;
+    // El panel central entra con un fade + slide-up suave cada vez que cambia la
+    // escena: otra carpeta, o alternar entre lista de hilos y resultados.
+    let searching = !model.search.text().trim().is_empty();
+    let central_key = key_of(&format!(
+        "{}|{}",
+        model.selected_mailbox.as_deref().unwrap_or("-"),
+        searching
+    ));
+    let central = if searching { search_results_panel(model) } else { threads_panel(model) }
+        .animated_enter_from(central_key, motion::SLOW, Affine::translate((0.0, 24.0)));
     let body = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: Dimension::auto() },
         flex_grow: 1.0,
         ..Default::default()
     })
-    .children(vec![
-        mailboxes_panel(model),
-        if model.search.text().trim().is_empty() {
-            threads_panel(model)
-        } else {
-            search_results_panel(model)
-        },
-        reading_panel(model),
-    ]);
+    .children(vec![mailboxes_panel(model), central, reading_panel(model)]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -236,8 +251,15 @@ fn threads_panel(model: &Model) -> View<Msg> {
         let selected = model.selected_thread == Some(idx);
         rows.push(thread_row(theme, thread, newest, selected, idx));
     }
+    // Bandeja sin hilos (o sin carpeta elegida): un estado vacío con orientación
+    // en vez de un hueco. La lista no carga async, así que no hay skeleton.
     if rows.is_empty() {
-        rows.push(empty_note(theme, &rimay_localize::t("paloma-empty-threads")));
+        rows.push(empty_view(
+            Icon::FileText,
+            rimay_localize::t("paloma-empty-threads"),
+            None,
+            &EmptyPalette::from_theme(theme),
+        ));
     }
 
     let list = View::new(Style {
@@ -272,6 +294,9 @@ fn thread_row(
     let date = newest.map(|m| fmt_date_short(m.date)).unwrap_or_default();
     let subject = if thread.subject.is_empty() { rimay_localize::t("paloma-no-subject") } else { thread.subject.clone() };
     let newest_id = newest.map(|m| m.id.clone());
+    // Pop-in por fila: la key es estable por hilo (id del último mensaje), así
+    // sólo animan las filas nuevas y no toda la lista al re-renderizar.
+    let row_key = key_of(newest_id.as_ref().map(|id| id.0.as_str()).unwrap_or(&thread.subject));
 
     // Línea 1: remitente (negrita si no leído) · estrella · fecha.
     let mut top: Vec<View<Msg>> = Vec::new();
@@ -340,6 +365,7 @@ fn thread_row(
     .fill(bg)
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::SelectThread(idx))
+    .animated_enter(row_key, motion::NORMAL)
     .children(vec![
         accent_bar(if selected { theme.accent } else { bg }),
         avatar(newest.map(|m| m.from.display_name()).unwrap_or("?"), &sender_email),
@@ -384,7 +410,12 @@ fn search_results_panel(model: &Model) -> View<Msg> {
             let mut rows: Vec<View<Msg>> =
                 hits.into_iter().skip(model.list_scroll).map(|m| result_row(theme, m)).collect();
             if rows.is_empty() {
-                rows.push(empty_note(theme, &rimay_localize::t("paloma-empty-search")));
+                rows.push(empty_view(
+                    Icon::Search,
+                    rimay_localize::t("paloma-empty-search"),
+                    None,
+                    &EmptyPalette::from_theme(theme),
+                ));
             }
             (format!("🧠  {n} · «{}»", query.trim()), rows)
         } else {
@@ -689,9 +720,17 @@ fn reading_panel(model: &Model) -> View<Msg> {
     .clip(true)
     .children(vec![content]);
 
+    // Abrir otro hilo es un cambio de vista: el panel entra con el mismo
+    // fade + slide-up que el central. La key es el hilo (carpeta + asunto).
+    let scene_key = key_of(&format!(
+        "{}|{}",
+        model.selected_mailbox.as_deref().unwrap_or("-"),
+        thread.subject
+    ));
     View::new(col(Dimension::auto()).grow())
         .fill(theme.bg_app)
         .children(vec![header, action_bar, viewport])
+        .animated_enter_from(scene_key, motion::SLOW, Affine::translate((0.0, 24.0)))
 }
 
 /// Alto aproximado de la tarjeta-cuerpo según sus líneas (sin tope chico: en

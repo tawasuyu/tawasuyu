@@ -54,6 +54,10 @@ impl App for Demo {
     fn on_wheel(model: &Model, delta: WheelDelta, cursor: (f32, f32), mods: Modifiers) -> Option<Msg> {
         paloma_llimphi::on_wheel(model, delta, cursor, mods)
     }
+
+    fn on_resize(model: &Model, w: u32, h: u32) -> Option<Msg> {
+        paloma_llimphi::on_resize(model, w, h)
+    }
 }
 
 fn main() {

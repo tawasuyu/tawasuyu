@@ -18,9 +18,15 @@
 //! un binario delga desde su propio `impl App`. Así cada anfitrión inyecta el
 //! backend que quiera en su `init` (el `App::init` de Llimphi no toma args).
 
+use std::time::{Duration, Instant};
+
 use llimphi_theme::Theme;
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::TextInputState;
+use llimphi_widget_toast::{toast_stack_view, Toast};
+
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 use paloma_core::{
     parse_address_list, Address, Flags, MailBackend, MailCuerpo, MailSignature, MailStore, Message,
@@ -250,6 +256,14 @@ pub struct Model {
     /// Última línea de estado (resultado de un sync/envío).
     pub status: String,
     pub theme: Theme,
+    /// Tamaño del viewport (px), para anclar el overlay de toasts abajo-derecha.
+    /// Arranca en el tamaño inicial de la ventana y se actualiza con `Resize`.
+    viewport: (f32, f32),
+    /// Toasts efímeros vivos (errores, envío, papelera). La app los descarta al
+    /// expirar (`ToastExpire`) o al hacer click.
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar un toast con su `Msg` de expiración.
+    next_toast: u64,
 }
 
 impl Model {
@@ -344,6 +358,9 @@ impl Model {
             account_id,
             status,
             theme,
+            viewport: (1180.0, 720.0),
+            toasts: Vec::new(),
+            next_toast: 0,
         };
         if let Some(name) = first {
             model.open_mailbox(&name);
@@ -754,6 +771,20 @@ pub enum Msg {
     /// Avalar (web-of-trust) al remitente del hilo abierto: firmás que su
     /// identidad es conocida, para que tus contactos la reconozcan por vos.
     VouchSender,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
+    /// La ventana cambió de tamaño: reubica el overlay de toasts.
+    Resize(u32, u32),
+}
+
+/// Empuja un toast al stack y programa su expiración fuera del hilo de UI.
+fn push_toast(model: &mut Model, handle: &llimphi_ui::Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
 }
 
 /// Dispara una búsqueda por significado: arma el corpus y se lo entrega al
@@ -840,7 +871,13 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
         }
         Msg::ToggleStar(id) => model.toggle_flag(&id, |f| Flags { flagged: !f.flagged, ..f }),
         Msg::ToggleSeen(id) => model.toggle_flag(&id, |f| Flags { seen: !f.seen, ..f }),
-        Msg::DeleteThread => model.delete_current_thread(),
+        Msg::DeleteThread => {
+            model.delete_current_thread();
+            let id = model.next_toast;
+            model.next_toast += 1;
+            let toast = Toast::info(id, model.status.clone(), TOAST_TTL);
+            push_toast(&mut model, handle, toast);
+        }
         Msg::ComposeFocus(field) => {
             if let Some(c) = model.compose.as_mut() {
                 c.focus = field;
@@ -859,7 +896,18 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
                 }
             }
         }
-        Msg::ComposeSend => model = send_compose(model),
+        Msg::ComposeSend => {
+            model = send_compose(model);
+            // El compositor se cierra sólo si el envío prosperó → toast acorde.
+            let id = model.next_toast;
+            model.next_toast += 1;
+            let toast = if model.compose.is_none() {
+                Toast::success(id, model.status.clone(), TOAST_TTL)
+            } else {
+                Toast::error(id, model.status.clone(), TOAST_TTL)
+            };
+            push_toast(&mut model, handle, toast);
+        }
         Msg::SearchFocus(on) => model.search_focused = on,
         Msg::SearchMode(semantic) => {
             model.search_semantic = semantic;
@@ -921,6 +969,9 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
         Msg::LlmError(e) => {
             model.summary_busy = false;
             model.draft_busy = false;
+            let id = model.next_toast;
+            model.next_toast += 1;
+            push_toast(&mut model, handle, Toast::error(id, e.clone(), TOAST_TTL));
             model.status = e;
         }
         Msg::RailReceived { mut msg, avales } => {
@@ -1052,6 +1103,8 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
                 }
             }
         }
+        Msg::ToastExpire(id) => model.toasts.retain(|t| t.id != id),
+        Msg::Resize(w, h) => model.viewport = (w as f32, h as f32),
     }
     model
 }
@@ -1199,9 +1252,31 @@ pub fn view(model: &Model) -> View<Msg> {
     view::root(model)
 }
 
-/// El overlay del compositor, si está abierto.
+/// Los overlays: el compositor (si está abierto) y los toasts efímeros vivos,
+/// apilados abajo-derecha. Si conviven, los toasts van por encima del modal.
 pub fn view_overlay(model: &Model) -> Option<View<Msg>> {
-    model.compose.as_ref().map(|c| view::compose_modal(model, c))
+    use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
+    let modal = model.compose.as_ref().map(|c| view::compose_modal(model, c));
+    let now = Instant::now();
+    let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+    let toasts = (!alive.is_empty()).then(|| toast_stack_view(&alive, model.viewport, Msg::ToastExpire));
+    match (modal, toasts) {
+        (Some(m), None) => Some(m),
+        (None, Some(t)) => Some(t),
+        (None, None) => None,
+        (Some(m), Some(t)) => Some(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![m, t]),
+        ),
+    }
+}
+
+/// La ventana cambió de tamaño: reubica el overlay de toasts.
+pub fn on_resize(_model: &Model, w: u32, h: u32) -> Option<Msg> {
+    Some(Msg::Resize(w, h))
 }
 
 /// Atajos globales. Con el compositor abierto, todas las teclas van a él
