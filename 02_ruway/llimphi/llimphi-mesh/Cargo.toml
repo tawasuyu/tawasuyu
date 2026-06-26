@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-mesh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-mesh — render de mallas deformables (llimphi-anim::skel::Mesh) a vello Scene. Ruta vectorial (fill por triángulo) y texturizada (clip + draw_image piecewise-affine), validadas contra vello 0.7. La matemática de huesos/skinning vive en llimphi-anim; este crate sólo pinta."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-anim = { workspace = true }
