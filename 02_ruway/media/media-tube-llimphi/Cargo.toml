@@ -28,5 +28,9 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-grid = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
+llimphi-icons = { workspace = true }
 llimphi-image = { path = "../../llimphi/llimphi-image", features = ["net"] }
 foreign-platform = { path = "../../../shared/foreign-platform" }

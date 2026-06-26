@@ -15,7 +15,9 @@
 //! virtualizada de resultados; click en una tarjeta = reproducir.
 
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use foreign_platform::descriptors;
 use foreign_platform::model::{SearchQuery, VideoCard};
@@ -28,9 +30,14 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_theme::motion;
 use llimphi_ui::{App, Handle, ImageFit, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_icons::Icon;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, GridPalette, GridSpec};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_toast::{toast_stack_view, Toast};
 
 /// Alto del header (px).
 const HEADER_H: f32 = 56.0;
@@ -41,6 +48,16 @@ const THUMB_W: f32 = 200.0;
 const THUMB_H: f32 = 112.0;
 /// Cap de descarga por miniatura.
 const THUMB_CAP: u64 = 4 * 1024 * 1024;
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas
+/// (la misma URL/escena produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 /// Qué backend de plataforma está activo.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -77,6 +94,11 @@ enum Msg {
     ThumbDone(String),
     Wheel(f32),
     Resize(u32, u32),
+    /// Tick de animación — fuerza repaint para el shimmer del skeleton
+    /// mientras hay una carga en vuelo. Se auto-rearma sólo si sigue cargando.
+    Tick,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 struct Model {
@@ -101,6 +123,12 @@ struct Model {
     thumbs: ImageCache,
     thumb_pending: HashSet<String>,
     viewport: (f32, f32),
+    /// Toasts vivos (errores, confirmaciones de reproducción).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
+    /// Hay una cadena de `Msg::Tick` en vuelo (evita rearmar dos).
+    ticking: bool,
 }
 
 /// Primera instancia por defecto del descriptor del backend.
@@ -215,6 +243,86 @@ fn maybe_load_more(m: &mut Model, handle: &Handle<Msg>) {
     });
 }
 
+/// Arranca la cadena de ticks de animación si hay una carga en vuelo y no
+/// hay ya una corriendo. La cadena se auto-detiene cuando `loading` baja
+/// (ver `Msg::Tick`), así no queda un loop de repaint ocioso.
+fn ensure_tick(m: &mut Model, handle: &Handle<Msg>) {
+    if m.ticking || !m.loading {
+        return;
+    }
+    m.ticking = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        Msg::Tick
+    });
+}
+
+/// Empuja un toast al stack y programa su expiración.
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// `key` estable de la escena actual (tendencias / búsqueda / canal, por
+/// backend). Cambia sólo al cambiar de escena → dispara la transición de
+/// entrada del cuerpo; estable durante la carga de la misma escena.
+fn scene_key(m: &Model) -> u64 {
+    match &m.channel {
+        Some((id, _)) => key_of(&format!("ch:{id}")),
+        None if !m.query.is_empty() => key_of(&format!("q:{}", m.query)),
+        None => key_of(&format!("trend:{}", m.backend.nombre())),
+    }
+}
+
+/// Grilla de placeholders con shimmer mientras llega la primera tanda de
+/// resultados — el usuario ve la forma de lo que viene, no un hueco negro.
+fn skeleton_grid(area_w: f32, area_h: f32, theme: &Theme) -> View<Msg> {
+    let pal = SkeletonPalette::from_theme(theme);
+    // Total holgado para que `ventana_visible` calcule cuántos tiles llenan
+    // el área; tomamos sólo los visibles.
+    let win = ventana_visible(60, area_w, area_h, 0, &METRICS);
+    let cells: Vec<GridCell<Msg>> = (0..win.count.clamp(1, 60))
+        .map(|_| {
+            let thumb = View::new(Style {
+                size: Size { width: length(THUMB_W), height: length(THUMB_H) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .radius(5.0)
+            .clip(true)
+            .children(vec![skeleton_view(&pal)]);
+            let line = View::new(Style {
+                size: Size { width: length(THUMB_W), height: length(12.0_f32) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .radius(4.0)
+            .clip(true)
+            .children(vec![skeleton_view(&pal)]);
+            let content = View::new(Style {
+                flex_direction: FlexDirection::Column,
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![thumb, line]);
+            GridCell { content, label: None, selected: false, on_click: Msg::Tick }
+        })
+        .collect();
+    grid_view(GridSpec {
+        cells,
+        cols: win.cols,
+        metrics: METRICS,
+        caption: None,
+        truncated_hint: None,
+        palette: GridPalette::from_theme(theme),
+    })
+}
+
 fn dur_fmt(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
     if h > 0 {
@@ -247,7 +355,7 @@ impl App for MediaTube {
             Ok(v) => Msg::Loaded { gen: 1, append: false, items: Arc::new(v) },
             Err(e) => Msg::LoadFailed(1, e.to_string()),
         });
-        Model {
+        let mut m = Model {
             backend,
             instance,
             search: TextInputState::new(),
@@ -264,7 +372,12 @@ impl App for MediaTube {
             thumbs: ImageCache::new(),
             thumb_pending: HashSet::new(),
             viewport: (1180.0, 760.0),
-        }
+            toasts: Vec::new(),
+            next_toast: 0,
+            ticking: false,
+        };
+        ensure_tick(&mut m, handle);
+        m
     }
 
     fn update(mut m: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -322,6 +435,9 @@ impl App for MediaTube {
                 if gen == m.gen {
                     m.loading = false;
                     m.status = format!("Error: {e}");
+                    let id = m.next_toast;
+                    m.next_toast += 1;
+                    push_toast(&mut m, handle, Toast::error(id, format!("No se pudo cargar: {e}"), TOAST_TTL));
                 }
             }
             Msg::SetBackend(b) => {
@@ -347,8 +463,12 @@ impl App for MediaTube {
             Msg::Play(i) => {
                 if let Some(card) = m.videos.get(i) {
                     let url = watch_url(m.backend, &m.instance, &card.id);
-                    m.status = format!("▶ {}", card.title);
+                    let titulo = card.title.clone();
+                    m.status = format!("▶ {titulo}");
                     lanzar_media_app(&url);
+                    let id = m.next_toast;
+                    m.next_toast += 1;
+                    push_toast(&mut m, handle, Toast::success(id, format!("▶ {titulo}"), TOAST_TTL));
                 }
             }
             Msg::OpenChannel { id, name } => {
@@ -403,7 +523,16 @@ impl App for MediaTube {
                 kick_thumbs(&mut m, handle);
                 maybe_load_more(&mut m, handle);
             }
+            Msg::Tick => {
+                // El thread durmió 50ms; sólo rearmamos si seguimos cargando.
+                m.ticking = false;
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
+            }
         }
+        // Si quedó una carga en vuelo, mantené el shimmer animado.
+        ensure_tick(&mut m, handle);
         m
     }
 
@@ -541,13 +670,16 @@ impl App for MediaTube {
                 let card = &m.videos[i];
                 let url = thumb_url(&m.instance, card);
                 let thumb = match m.thumbs.get(&url) {
+                    // La miniatura entra con fade-in (animated_enter) la primera
+                    // vez que aparece su key — el placeholder no salta de golpe.
                     Some(img) => View::new(Style {
                         size: Size { width: length(THUMB_W), height: length(THUMB_H) },
                         ..Default::default()
                     })
                     .image(img)
                     .image_fit(ImageFit::Cover)
-                    .radius(5.0),
+                    .radius(5.0)
+                    .animated_enter(key_of(&url), motion::NORMAL),
                     None => View::new(Style {
                         size: Size { width: length(THUMB_W), height: length(THUMB_H) },
                         align_items: Some(AlignItems::Center),
@@ -599,14 +731,42 @@ impl App for MediaTube {
             })
             .collect();
 
-        let grid = grid_view(GridSpec {
-            cells,
-            cols: win.cols,
-            metrics: METRICS,
-            caption: None,
-            truncated_hint: None,
-            palette: GridPalette::from_theme(&theme),
-        });
+        // ----- Contenido del cuerpo según el estado -----
+        // 1) cargando y sin nada que mostrar → grilla de skeletons (shimmer)
+        // 2) cargado y vacío → empty-state con orientación
+        // 3) datos → grilla virtualizada real
+        let scene_content: View<Msg> = if m.videos.is_empty() && m.loading {
+            skeleton_grid(area_w, area_h, &theme)
+        } else if m.videos.is_empty() {
+            let pal = EmptyPalette::from_theme(&theme);
+            let (titulo, desc) = if m.query.is_empty() {
+                ("Sin videos", "Probá buscar algo con la barra de arriba o cambiá de backend.")
+            } else {
+                ("Sin resultados", "No encontramos nada para esa búsqueda. Probá otros términos o backend.")
+            };
+            empty_view(Icon::Film, titulo, Some(desc), &pal)
+        } else {
+            grid_view(GridSpec {
+                cells,
+                cols: win.cols,
+                metrics: METRICS,
+                caption: None,
+                truncated_hint: None,
+                palette: GridPalette::from_theme(&theme),
+            })
+        };
+
+        // Transición de escena: al cambiar entre tendencias / búsqueda / canal
+        // (o de backend) la `scene_key` cambia y el contenido entra con un
+        // fade + slide-up suave en vez de saltar.
+        use llimphi_ui::llimphi_raster::kurbo::Affine;
+        let scene_key = scene_key(m);
+        let scene = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![scene_content])
+        .animated_enter_from(scene_key, motion::SLOW, Affine::translate((0.0, 24.0)));
 
         let body = View::new(Style {
             flex_grow: 1.0,
@@ -615,15 +775,28 @@ impl App for MediaTube {
             ..Default::default()
         })
         .fill(Color::from_rgba8(20, 23, 30, 255))
-        .children(vec![grid]);
+        .children(vec![scene]);
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(Color::from_rgba8(20, 23, 30, 255))
-        .children(vec![header, body])
+        .children(vec![header, body]);
+
+        // Overlay de toasts (bottom-right). Click en uno = descartarlo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = m.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, m.viewport, Msg::ToastExpire)])
+        }
     }
 }
 
