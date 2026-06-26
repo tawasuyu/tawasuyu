@@ -38,6 +38,15 @@ const Q_CONOCER: [f32; 3] = [232.0, 201.0, 122.0]; // arriba-der  #E8C97A
 const Q_RAIZ: [f32; 3] = [143.0, 181.0, 140.0]; // abajo-izq   #8FB58C
 const Q_HACER: [f32; 3] = [232.0, 155.0, 110.0]; // abajo-der   #E89B6E
 
+/// Período maestro del ciclo, en segundos. **Todo** cierra exactamente acá:
+/// `animated_frame(t) == animated_frame(t + LOOP_SECS)` byte a byte (probado).
+/// El fluido hace 2 viajes por loop; la respiración, 1.
+pub const LOOP_SECS: f32 = 7.2;
+
+/// Cuánto del semieje ocupa cada brazo del plano (deja `1-REACH` de margen a cada
+/// borde, así la cruz **no toca** los bordes y no se corta bajo barra/overscan).
+const REACH: f32 = 0.80;
+
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -81,8 +90,8 @@ pub fn animated_frame(t: f32, w: u32, h: u32) -> Vec<u8> {
             } else {
                 Q_HACER
             };
-            let qf = 0.10 * smoothstep(0.15, 1.0, d); // tinte sutil hacia afuera
-            let gf = 0.16 * (1.0 - d).clamp(0.0, 1.0).powf(1.6); // halo al centro
+            let qf = 0.07 * smoothstep(0.15, 1.0, d); // tinte sutil hacia afuera
+            let gf = 0.10 * (1.0 - d).clamp(0.0, 1.0).powf(1.6); // halo al centro
             let r = BG[0] + q[0] * qf + ACCENT[0] * gf;
             let g = BG[1] + q[1] * qf + ACCENT[1] * gf;
             let b = BG[2] + q[2] * qf + ACCENT[2] * gf;
@@ -97,10 +106,11 @@ pub fn animated_frame(t: f32, w: u32, h: u32) -> Vec<u8> {
     // ── Ejes + fluido + flechas ──────────────────────────────────────────────
     // Brazo: del centro a ~92% del semieje. El fluido es una gaussiana que viaja
     // de 0 a 1 (centro→punta) y se repite; dos pulsos desfasados dan continuidad.
-    let arm_x = cx * 0.92;
-    let arm_y = cy * 0.92;
-    const PERIOD: f32 = 3.6;
-    let phase = (t / PERIOD).fract();
+    let arm_x = cx * REACH;
+    let arm_y = cy * REACH;
+    // Fase del loop maestro (0..1). El fluido recorre el brazo 2 veces por loop.
+    let lt = (t / LOOP_SECS).fract();
+    let phase = (lt * 2.0).fract();
     // Posición(es) del pulso a lo largo del brazo (0..1).
     let pulses = [phase, (phase + 0.5).fract()];
     // Intensidad del fluido en distancia normalizada `u` (0 centro, 1 punta).
@@ -137,7 +147,7 @@ pub fn animated_frame(t: f32, w: u32, h: u32) -> Vec<u8> {
         if u > 1.0 {
             continue;
         }
-        let bright = 0.10 + 0.85 * fluid(u); // línea tenue + fluido
+        let bright = 0.07 + 0.45 * fluid(u); // línea tenue + fluido
         for dy in -(half as i32)..=(half as i32) {
             add(&mut px, x as i32, cy as i32 + dy, ACCENT, bright);
         }
@@ -148,22 +158,24 @@ pub fn animated_frame(t: f32, w: u32, h: u32) -> Vec<u8> {
         if u > 1.0 {
             continue;
         }
-        let bright = 0.10 + 0.85 * fluid(u);
+        let bright = 0.07 + 0.45 * fluid(u);
         for dx in -(half as i32)..=(half as i32) {
             add(&mut px, cx as i32 + dx, y as i32, ACCENT, bright);
         }
     }
     // Flechas en los cuatro extremos (triángulos), encendidas por el fluido.
     let ah = (arm_x.min(arm_y) * 0.035).max(8.0); // tamaño de la punta
-    let arrow_a = 0.35 + 0.65 * arrow_glow;
+    let arrow_a = 0.22 + 0.45 * arrow_glow;
     draw_arrow(&mut px, w, h, cx + arm_x, cy, 1.0, 0.0, ah, ACCENT, arrow_a);
     draw_arrow(&mut px, w, h, cx - arm_x, cy, -1.0, 0.0, ah, ACCENT, arrow_a);
     draw_arrow(&mut px, w, h, cx, cy + arm_y, 0.0, 1.0, ah, ACCENT, arrow_a);
     draw_arrow(&mut px, w, h, cx, cy - arm_y, 0.0, -1.0, ah, ACCENT, arrow_a);
 
     // ── Chakana centrada, iluminación variando levemente ─────────────────────
-    // Respiración: 0.86..1.0 lento.
-    let lum = 0.86 + 0.14 * (0.5 + 0.5 * (t * 0.6).sin());
+    // Respiración atada al loop maestro: 1 ciclo por `LOOP_SECS`, continua en el
+    // cierre (`breath(0)=breath(1)=0`). Amplitud baja → sutil.
+    let breath = 0.5 - 0.5 * (lt * core::f32::consts::TAU).cos();
+    let lum = 0.90 + 0.10 * breath;
     let scale = (w.min(h) as f32) * 0.11 / 2.5; // medio-extensión ≈ 11% del menor
     let ext = (2.5 * scale).ceil() as i32 + 2;
     let cxi = cx as i32;
@@ -190,7 +202,7 @@ pub fn animated_frame(t: f32, w: u32, h: u32) -> Vec<u8> {
                     || !in_poly(CHAKANA, ux, uy + swu)
                     || !in_poly(CHAKANA, ux, uy - swu);
                 if edge {
-                    let s = 0.72 + 0.28 * lum;
+                    let s = 0.66 + 0.24 * lum;
                     px[i] = (ACCENT[2] * s).min(255.0) as u8;
                     px[i + 1] = (ACCENT[1] * s).min(255.0) as u8;
                     px[i + 2] = (ACCENT[0] * s).min(255.0) as u8;
@@ -202,7 +214,7 @@ pub fn animated_frame(t: f32, w: u32, h: u32) -> Vec<u8> {
                 }
             } else {
                 // Fuera del cuerpo: halo difuso muy sutil alrededor de la chakana.
-                let halo = 0.30 * (1.0 - smoothstep(2.5, 3.4, r)) * smoothstep(2.4, 2.6, r);
+                let halo = 0.20 * (1.0 - smoothstep(2.5, 3.4, r)) * smoothstep(2.4, 2.6, r);
                 if halo > 0.001 {
                     add(&mut px, x, y, ACCENT, halo);
                 }
@@ -282,6 +294,43 @@ mod tests {
         let a = animated_frame(0.0, 160, 120);
         let b = animated_frame(1.3, 160, 120);
         assert!(a != b, "la animación debe variar con t");
+    }
+
+    #[test]
+    fn cierra_el_ciclo_byte_a_byte() {
+        // El reclamo del usuario: «debe cerrar donde empezó». Con todo atado al
+        // período maestro, el frame en `t` y en `t + LOOP_SECS` es IDÉNTICO.
+        let (w, h) = (200u32, 120u32);
+        assert_eq!(
+            animated_frame(0.0, w, h),
+            animated_frame(LOOP_SECS, w, h),
+            "el frame en t=0 y t=LOOP debe ser idéntico (loop sin costura)"
+        );
+        // Y en un instante arbitrario del medio, también.
+        assert_eq!(
+            animated_frame(2.5, w, h),
+            animated_frame(2.5 + LOOP_SECS, w, h),
+            "el frame debe repetirse cada LOOP_SECS en cualquier fase"
+        );
+    }
+
+    #[test]
+    fn deja_margen_sin_cortar_arriba_y_abajo() {
+        // A resolución real (768p) con `REACH=0.80`, la cruz y las puntas de
+        // flecha dejan margen: la banda superior e inferior (3%) del eje central
+        // es fondo puro — sin el accent brillante del eje/flecha. Cota: cualquier
+        // pixel pintado por eje/flecha supera con creces este umbral.
+        let (w, h) = (1366u32, 768u32);
+        let f = animated_frame(1.0, w, h);
+        let cx = (w / 2) as usize;
+        let band = (h as f32 * 0.03) as usize;
+        const ACCENT_R: u8 = 45; // fondo en la banda << esto; eje/flecha >> esto
+        for y in 0..band {
+            let top = f[(y * w as usize + cx) * 4 + 2];
+            let bot = f[(((h as usize - 1 - y) * w as usize) + cx) * 4 + 2];
+            assert!(top < ACCENT_R, "fila {y} (arriba) cortada: R={top}");
+            assert!(bot < ACCENT_R, "fila {} (abajo) cortada: R={bot}", h as usize - 1 - y);
+        }
     }
 
     #[test]
