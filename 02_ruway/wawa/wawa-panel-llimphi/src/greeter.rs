@@ -43,6 +43,11 @@ pub struct GreeterCfg {
     pub rain_enabled: bool,
     pub rain_color: String,
     pub anim: String,
+    /// Ruta a un `.json` de Lottie a usar como **fondo vivo** del greeter (toma
+    /// precedencia sobre la animación procedural). Vacío = sin Lottie. Se
+    /// preserva al reescribir — antes el panel reescribía sin esta clave y
+    /// **borraba** el Lottie que el usuario hubiera puesto a mano.
+    pub lottie: String,
 }
 
 impl Default for GreeterCfg {
@@ -53,6 +58,7 @@ impl Default for GreeterCfg {
             rain_enabled: true,
             rain_color: "green".into(),
             anim: "matrix".into(),
+            lottie: String::new(),
         }
     }
 }
@@ -88,13 +94,14 @@ impl GreeterCfg {
                 "rain" => self.rain_enabled = truthy(v),
                 "rain_color" => self.rain_color = v.to_string(),
                 "bg" | "anim" => self.anim = v.to_string(),
+                "lottie" => self.lottie = v.to_string(),
                 _ => {}
             }
         }
     }
 
     fn to_text(&self) -> String {
-        format!(
+        let mut s = format!(
             "# mirada-greeter — estado recordado\n\
              last_user = {}\n\
              last_session = {}\n\
@@ -102,7 +109,12 @@ impl GreeterCfg {
              rain_color = {}\n\
              bg = {}\n",
             self.last_user, self.last_session, self.rain_enabled, self.rain_color, self.anim,
-        )
+        );
+        // Preservá el Lottie de fondo si está configurado (no lo borres).
+        if !self.lottie.trim().is_empty() {
+            s.push_str(&format!("lottie = {}\n", self.lottie.trim()));
+        }
+        s
     }
 
     /// Persiste en el primer candidato escribible.

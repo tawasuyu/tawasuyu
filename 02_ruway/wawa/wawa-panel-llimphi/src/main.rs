@@ -1948,6 +1948,11 @@ fn greeter_section(g: &greeter::GreeterCfg) -> Section {
             g.rain_color.clone(),
             greeter::COLORS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
         ))
+        .field(Field::text(
+            "lottie",
+            "Animación Lottie de fondo (.json) — vacío = procedural",
+            g.lottie.clone(),
+        ))
 }
 
 /// Sección «Arranque»: el splash sin parpadeo (`arje-splash`). Escribe
@@ -3913,6 +3918,11 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                 Some("rain_color") => {
                     if let Some(v) = value.as_str() {
                         m.greeter.rain_color = v.to_string();
+                    }
+                }
+                Some("lottie") => {
+                    if let Some(v) = value.as_str() {
+                        m.greeter.lottie = v.to_string();
                     }
                 }
                 _ => {}
