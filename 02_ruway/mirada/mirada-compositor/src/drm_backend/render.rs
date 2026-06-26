@@ -52,6 +52,11 @@ impl DrmState {
         self.stamp_open_animations();
         self.stamp_focus_animations();
         self.refresh_window_borders();
+        // Motor de transición del fade al cerrar: refrescá las instantáneas y
+        // hacé avanzar (o retirar) los fantasmas. Ambos son no-op con el efecto
+        // apagado (default), así que el camino normal no paga nada.
+        self.capture_close_snapshots();
+        self.advance_ghosts();
         // Modo DM: si el ratón cruzó a otro monitor, avisale al greeter para
         // que la tarjeta de login viaje allí (no-op fuera de greeter o si el
         // monitor activo no cambió).
@@ -154,6 +159,148 @@ impl DrmState {
         for w in &mut self.app.windows {
             if w.mapped_ms.is_none() && w.visible && crate::buffer_render_sano(&w.surface) {
                 w.mapped_ms = Some(now);
+            }
+        }
+    }
+
+    /// **Motor de transición — captura de instantáneas para el fade al cerrar.**
+    /// Con el efecto activo (`window_close_ms>0`), cada ~150 ms saca una foto CPU
+    /// del contenido de cada ventana de usuario y la guarda en su
+    /// `close_snapshot`; al cerrarse, [`App::toplevel_destroyed`] la convierte en
+    /// un fantasma que se desvanece. Estrangulado porque la captura lee de la GPU
+    /// (caro). Con el efecto apagado (default) sale de una → costo cero.
+    fn capture_close_snapshots(&mut self) {
+        let close_ms = self.app.config_window_close_ms();
+        if close_ms == 0 || self.outputs.get(Self::PRIMARY).is_none() {
+            return;
+        }
+        const SNAP_INTERVAL_MS: u32 = 150;
+        let now = self.start.elapsed().as_millis() as u32;
+        let tbh = self.app.decorations.titlebar_height;
+        let primary_h = self.outputs[Self::PRIMARY].rect.h;
+        for i in 0..self.app.windows.len() {
+            // 1) Decidir y medir SIN tomar el renderer (préstamo inmutable corto).
+            let plan = {
+                let w = &self.app.windows[i];
+                let fresca = w.last_snapshot_ms != 0
+                    && now.saturating_sub(w.last_snapshot_ms) < SNAP_INTERVAL_MS;
+                if w.is_shell || w.is_greeter || !w.visible || fresca {
+                    None
+                } else if !crate::buffer_render_sano(&w.surface) {
+                    None
+                } else {
+                    let (gx, gy) = crate::render_loc(w, primary_h, tbh);
+                    let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, w.size.1));
+                    (sw > 0 && sh > 0).then(|| (w.surface.clone(), gx, gy, sw, sh))
+                }
+            };
+            let Some((surface, gx, gy, sw, sh)) = plan else {
+                continue;
+            };
+            // 2) Renderizar el árbol de superficie a un offscreen → bytes CPU.
+            let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(
+                    &mut self.renderer,
+                    &surface,
+                    (0, 0),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                );
+            if elems.is_empty() {
+                continue;
+            }
+            if let Some(rgba) =
+                crate::screencopy::render_elements_offscreen(&mut self.renderer, (sw, sh), &elems)
+            {
+                let w = &mut self.app.windows[i];
+                w.close_snapshot = Some(crate::CloseSnapshot { rgba, w: sw, h: sh, x: gx, y: gy });
+                w.last_snapshot_ms = now;
+            }
+        }
+    }
+
+    /// Sella el `t0` de los fantasmas nuevos, descarta los expirados y, mientras
+    /// queden, marca daño para que el fade-out FLUYA (igual que el fade-in).
+    fn advance_ghosts(&mut self) {
+        if self.app.closing_ghosts.is_empty() {
+            return;
+        }
+        let close_ms = self.app.config_window_close_ms().max(1);
+        let now = self.start.elapsed().as_millis() as u32;
+        for g in &mut self.app.closing_ghosts {
+            if g.t0.is_none() {
+                g.t0 = Some(now);
+            }
+        }
+        self.app
+            .closing_ghosts
+            .retain(|g| g.t0.map_or(true, |t0| now.saturating_sub(t0) < close_ms));
+        if !self.app.closing_ghosts.is_empty() {
+            crate::screencopy::danar_todo(&mut self.app);
+        }
+    }
+
+    /// Pinta los fantasmas de cierre que intersectan `rect`: la instantánea
+    /// desvaneciéndose (alfa `1→0`, ease-out) y encogiéndose apenas. Coords
+    /// globales → locales a la salida, igual que las ventanas.
+    fn emit_ghosts(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        if self.app.closing_ghosts.is_empty() {
+            return;
+        }
+        let close_ms = self.app.config_window_close_ms().max(1) as f32;
+        let now = self.start.elapsed().as_millis() as u32;
+        for idx in 0..self.app.closing_ghosts.len() {
+            let (lx, ly, gw, gh, alpha, scale) = {
+                let g = &self.app.closing_ghosts[idx];
+                let t0 = g.t0.unwrap_or(now);
+                let t = (now.saturating_sub(t0) as f32 / close_ms).clamp(0.0, 1.0);
+                let eased = mirada_brain::Easing::EaseOutCubic.apply(t);
+                let (gw, gh) = (g.snap.w, g.snap.h);
+                // Cull por intersección con la salida.
+                if g.snap.x + gw <= rect.x
+                    || g.snap.y + gh <= rect.y
+                    || g.snap.x >= rect.x + rect.w
+                    || g.snap.y >= rect.y + rect.h
+                {
+                    continue;
+                }
+                (
+                    g.snap.x - rect.x,
+                    g.snap.y - rect.y,
+                    gw,
+                    gh,
+                    (1.0 - eased).clamp(0.0, 1.0),
+                    1.0 - 0.06 * eased,
+                )
+            };
+            let buf = MemoryRenderBuffer::from_slice(
+                &self.app.closing_ghosts[idx].snap.rgba,
+                Fourcc::Argb8888,
+                (gw, gh),
+                1,
+                Transform::Normal,
+                None,
+            );
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                (lx as f64, ly as f64),
+                &buf,
+                Some(alpha),
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                if (scale - 1.0).abs() < 1e-3 {
+                    into.push(Frame::Text(el));
+                } else {
+                    let origin = Point::<i32, Physical>::from((lx + gw / 2, ly + gh / 2));
+                    into.push(Frame::ScaledText(RescaleRenderElement::from_element(
+                        el,
+                        origin,
+                        scale as f64,
+                    )));
+                }
             }
         }
     }
@@ -1678,6 +1825,8 @@ impl DrmState {
             }
             // 7. Ventanas entre layers Overlay/Top y Bottom/Background.
             self.emit_windows(rect, &mut out);
+            // 7.bis Fantasmas de cierre (fade-out), a la altura de las ventanas.
+            self.emit_ghosts(rect, &mut out);
             for el in under_layers {
                 out.push(Frame::Window(el));
             }

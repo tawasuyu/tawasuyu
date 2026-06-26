@@ -406,6 +406,13 @@ impl Configurable for Config {
                         600,
                     ))
                     .field(Field::slider_int(
+                        "window_close_ms",
+                        "Cierre de ventana — fade (ms, 0 = seco; opt-in, cuesta GPU)",
+                        self.window_close_ms as i64,
+                        0,
+                        600,
+                    ))
+                    .field(Field::slider_int(
                         "slide_ms",
                         "Deslizar entre escritorios (ms)",
                         self.slide_ms as i64,
@@ -714,6 +721,11 @@ impl Configurable for Config {
                     self.focus_glow_ms = v.clamp(0, 600) as u32;
                 }
             }
+            "window_close_ms" => {
+                if let Some(v) = value.as_int() {
+                    self.window_close_ms = v.clamp(0, 600) as u32;
+                }
+            }
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
@@ -785,6 +797,10 @@ mod tests {
         c.apply(&"movimiento.focus_glow_ms".into(), FieldValue::Int(200))
             .unwrap();
         assert_eq!(c.focus_glow_ms, 200);
+        // El fade al cerrar (opt-in).
+        c.apply(&"movimiento.window_close_ms".into(), FieldValue::Int(180))
+            .unwrap();
+        assert_eq!(c.window_close_ms, 180);
     }
 
     #[test]

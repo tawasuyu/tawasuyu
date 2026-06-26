@@ -366,6 +366,15 @@ pub struct Config {
     /// interpolando el color (no es un shader de bloom: es el crossfade barato).
     #[serde(default = "default_focus_glow_ms")]
     pub focus_glow_ms: u32,
+    /// **Fade al cerrar — ms del desvanecimiento de una ventana al cerrarse.**
+    /// `0` (default) = cierre seco y **sin costo**: la ventana desaparece de
+    /// una. Con `>0` el compositor activa el *motor de transición*: captura cada
+    /// tanto una instantánea CPU del contenido de cada ventana, y al cerrarse
+    /// pinta esa instantánea desvaneciéndose (y encogiéndose un poco) durante
+    /// estos ms. Es **opt-in** porque la captura periódica cuesta (lectura de
+    /// GPU): por eso nace apagado. Ver `PLAN.md` §«Animaciones de transición».
+    #[serde(default)]
+    pub window_close_ms: u32,
     /// **Reducir movimiento** (accesibilidad): cuando está activo, el
     /// compositor pone en cero todas las duraciones de animación (apertura de
     /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
@@ -924,6 +933,7 @@ impl Default for Config {
             window_open_easing: Easing::default(),
             window_open_scale_pct: default_window_open_scale_pct(),
             focus_glow_ms: default_focus_glow_ms(),
+            window_close_ms: 0,
             reduce_motion: false,
         }
     }

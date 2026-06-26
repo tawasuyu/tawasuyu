@@ -407,6 +407,19 @@ impl App {
         }
     }
 
+    /// Duración (ms) del fade al cerrar una ventana. `0` (default) = cierre seco
+    /// y sin costo (no se captura nada). Con Cerebro enlazado cae a `0` (el
+    /// dueño externo no participa de este motor). Cero si «reducir movimiento».
+    pub(crate) fn config_window_close_ms(&self) -> u32 {
+        if self.config_reduce_motion() {
+            return 0;
+        }
+        match &self.brain {
+            Brain::Embedded(d) => d.config().window_close_ms,
+            Brain::Linked(_) => 0,
+        }
+    }
+
     /// Win+Tab estilo switcher sobre la vista espacial: abre la vista (si hacía
     /// falta) y mueve el resaltado al escritorio siguiente/anterior. La primera
     /// pulsación ya avanza uno (un Win+Tab suelto = saltar al siguiente al
@@ -1337,6 +1350,9 @@ impl App {
             // Nace sin foco y sin transición de glow estampada.
             focus_ms: None,
             was_focused: false,
+            // Sin instantánea de cierre hasta que el render la capture.
+            close_snapshot: None,
+            last_snapshot_ms: 0,
         });
 
         // Alta en el servidor wlr-foreign-toplevel (taskbar de pata): crea un

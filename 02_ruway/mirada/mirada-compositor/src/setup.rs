@@ -437,6 +437,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         shell_hidden: shell_dock().autohide,
         reserved: (0, 0, 0, 0),
         windows: Vec::new(),
+        closing_ghosts: Vec::new(),
         body: BodyState::new(),
         brain,
         mode: if greeter { BodyMode::Greeter } else { BodyMode::Session },

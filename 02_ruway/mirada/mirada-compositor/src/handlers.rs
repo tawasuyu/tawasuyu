@@ -280,7 +280,16 @@ impl XdgShellHandler for App {
         // inhibidor colgado que congele la política de inactividad para siempre.
         self.idle_inhibitors.remove(surface.wl_surface());
         if let Some(pos) = pos {
-            let w = self.windows.remove(pos);
+            let mut w = self.windows.remove(pos);
+            // Fade al cerrar (motor de transición): si el efecto está activo y
+            // hay una instantánea reciente del contenido, la ventana deja un
+            // «fantasma» que se desvanece. El render lo pinta y lo retira. Sin el
+            // efecto (default) `close_snapshot` es `None` → cierre seco de siempre.
+            if self.config_window_close_ms() > 0 {
+                if let Some(snap) = w.close_snapshot.take() {
+                    self.closing_ghosts.push(crate::ClosingGhost { snap, t0: None });
+                }
+            }
             // La celda que ocupaba queda dañada (screencopy): se repinta
             // lo que hubiera debajo.
             screencopy::danar(self, Rectangle::new(w.loc.into(), w.size.into()));

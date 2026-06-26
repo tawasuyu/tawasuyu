@@ -352,6 +352,39 @@ pub(crate) struct ManagedWindow {
     pub(crate) focus_ms: Option<u32>,
     /// Estado de foco con que se estampó `focus_ms` — para detectar el flanco.
     pub(crate) was_focused: bool,
+    /// **Instantánea para el fade al cerrar** (motor de transición). Cuando el
+    /// fade de cierre está activo (`window_close_ms>0`), el render captura el
+    /// contenido del cliente a bytes CPU cada cierto rato; al destruirse la
+    /// ventana, [`App::toplevel_destroyed`] la mueve a un [`ClosingGhost`] que se
+    /// desvanece. `None` con el efecto apagado (default) → costo cero. Es CPU,
+    /// no una textura GPU: no arrastra vida de recursos GL.
+    pub(crate) close_snapshot: Option<CloseSnapshot>,
+    /// Último instante (ms desde `start`) en que se tomó la instantánea — para
+    /// estrangular la captura (no en cada frame). `0` = nunca.
+    pub(crate) last_snapshot_ms: u32,
+}
+
+/// Instantánea CPU del contenido de una ventana, en coords **globales**, para
+/// el fade al cerrar. `rgba` son bytes `Argb8888` listos para un
+/// `MemoryRenderBuffer` (ya corregidos de orientación por el offscreen).
+pub(crate) struct CloseSnapshot {
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) w: i32,
+    pub(crate) h: i32,
+    /// Origen global del contenido capturado (dónde estaba en pantalla).
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+}
+
+/// El «fantasma» de una ventana que se está cerrando: su última instantánea,
+/// desvaneciéndose (y encogiéndose un poco) durante `window_close_ms`. Vive en
+/// [`App::closing_ghosts`]; el render lo pinta y lo retira al expirar. El motor
+/// de transición captura-a-textura del PLAN, en su forma CPU mínima.
+pub(crate) struct ClosingGhost {
+    pub(crate) snap: CloseSnapshot,
+    /// Instante de arranque (ms desde `start`). `None` hasta que el render lo
+    /// sella en el primer frame que lo ve (App no tiene el reloj del backend).
+    pub(crate) t0: Option<u32>,
 }
 
 /// Un arrastre de ratón en curso: mueve o redimensiona una ventana.
@@ -507,6 +540,11 @@ pub(crate) struct App {
 
     /// Ventanas gestionadas, en orden de aparición.
     pub(crate) windows: Vec<ManagedWindow>,
+    /// Fantasmas de cierre en curso (fade-out de ventanas recién cerradas). Las
+    /// puebla [`App::toplevel_destroyed`] con la última instantánea de la ventana;
+    /// el render las pinta desvaneciéndose y las retira al expirar. Vacío con el
+    /// efecto apagado (default).
+    pub(crate) closing_ghosts: Vec<ClosingGhost>,
     /// La contabilidad del Cuerpo (mirada-body).
     pub(crate) body: BodyState,
     /// El Cerebro: embebido o enlazado.

@@ -361,6 +361,27 @@ ventana (escala 0.9→1 + fade), *fade* al cerrar, *glow* del marco al recibir f
 > motor captura-a-textura (la superficie ya no existe al destruirse), descrito en
 > §«Animaciones de transición»; es un salto de complejidad respecto de estas tres
 > rebanadas (que sólo tocaron alfa, escala y color del path normal).
+>
+> **✅ HECHO — 4ª rebanada (2026-06-26): el *fade al cerrar* + el motor de
+> transición (forma CPU mínima).** Config `window_close_ms` (**default 0 = off**;
+> opt-in porque cuesta GPU) en «Movimiento». Cómo resuelve el problema de «la
+> superficie ya no existe al cerrar»: el render (`DrmState`) saca cada ~150 ms una
+> **instantánea CPU** del contenido de cada ventana de usuario
+> (`render_elements_offscreen` → bytes Argb8888, el mismo offscreen que usa el
+> Prezi) y la guarda en `ManagedWindow::close_snapshot`. Al destruirse la ventana,
+> `App::toplevel_destroyed` mueve esa instantánea a un `ClosingGhost`
+> (`App::closing_ghosts`); el render lo pinta con un `MemoryRenderBuffer`
+> desvaneciéndose (alfa `1→0` ease-out) y encogiendo un 6 % (`ScaledText`), y lo
+> retira al expirar. **Decisión de diseño:** todo CPU y dueño de `App`/`DrmState`
+> — sin vida de texturas GPU, sin nuevo `Frame` variant (reusa `Text`/`ScaledText`),
+> y **decoplado** del path de cierre de `App` (el motor vive en `DrmState`). Con
+> `window_close_ms=0` no se captura nada → **costo cero, byte-idéntico**.
+> **Limitación honesta:** una ventana cerrada antes de su primera instantánea
+> (≤150 ms de vida, o el efecto recién prendido) cae a cierre seco (degradación
+> elegante). **Esta es la forma CPU del «motor de transición fullscreen»** que la
+> §«Animaciones de transición» pide para el CRT y el hero: el mismo patrón
+> (captura → animar por tiempo → retirar) podría escalar a esos. Verificación en
+> metal pendiente (readback GPU); reloj/curva/lerp testeados como unidades.
 
 **B) `WindowEffects` ampliado — el aspecto, por-ventana.** Campos nuevos (additivos):
 `blur: u8` (intensidad del desenfoque de fondo), `corner_radius: u8` (esquinas
