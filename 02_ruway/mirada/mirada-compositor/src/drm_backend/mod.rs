@@ -23,7 +23,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
-use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
+use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
@@ -891,6 +891,88 @@ struct DrmState {
     preset_hud_label: String,
 }
 
+/// Compila el shader GLES de **esquinas redondeadas** (SDF). Se compila una vez
+/// al arrancar; si falla, devuelve `None` y el render cae a la máscara CPU (no
+/// rompe el arranque). Compartido por el camino con render node (Fase 3) y el
+/// clásico sobre el card node.
+fn compilar_rounded_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
+    use smithay::backend::renderer::gles::{UniformName, UniformType};
+    match renderer.compile_custom_texture_shader(
+        ROUNDED_FRAG,
+        &[
+            UniformName::new("size", UniformType::_2f),
+            UniformName::new("radius", UniformType::_1f),
+        ],
+    ) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            eprintln!("mirada-compositor · shader de esquinas redondeadas no compiló ({e}); máscara CPU.");
+            None
+        }
+    }
+}
+
+/// Prep del renderer GLES en el **render node** (`/dev/dri/renderD*`), SIN DRM
+/// master — Fase A del SDD-ARRANQUE-SIN-PARPADEO §Fase 3 (split render-node /
+/// card-node). El render node no necesita master ni libseat, así que esta
+/// inicialización —la parte lenta del arranque: EGL + compilación de shaders,
+/// ~cientos de ms— corre **mientras el splash sigue vivo**, antes del handoff,
+/// recortando el gap entre el `RELEASED` del splash y el primer frame de mirada.
+/// Los buffers que aloje este renderer se importan al card node por dmabuf en el
+/// `GbmFramebufferExporter` (su `import_node` apunta a [`Self::nodo`]).
+///
+/// **Oportunista:** devuelve `None` si no hay render node o falla cualquier paso
+/// EGL/GBM; el llamador cae entonces al camino clásico (renderer sobre el card
+/// node, tras el handoff). En GPU única (Intel/AMD) el render node y el card node
+/// son el mismo dispositivo físico, así que el cruce dmabuf comparte modifiers
+/// (sin el riesgo de pantalla negra por mismatch que el SDD señala para multi-GPU).
+struct RenderNodePrep {
+    /// `GbmDevice` sobre el render node — base del `GbmAllocator` de scanout.
+    gbm: GbmDevice<DrmDeviceFd>,
+    /// El `DrmNode` del render node — `import_node` del exporter del card node.
+    nodo: DrmNode,
+    /// El renderer GLES ya inicializado (lo caro, solapado con el splash).
+    renderer: GlesRenderer,
+    /// Shader de esquinas redondeadas ya compilado (o `None` si no compiló).
+    rounded_shader: Option<GlesTexProgram>,
+    /// Formatos dmabuf del renderer — para `announce_dmabuf` y los compositors.
+    renderer_formats: smithay::backend::allocator::format::FormatSet,
+}
+
+fn preparar_render_node(gpu: &std::path::Path) -> Option<RenderNodePrep> {
+    // Derivar el render node del card node por su dev_t (mismo GPU físico).
+    let card = DrmNode::from_path(gpu).ok()?;
+    let render = card.node_with_type(NodeType::Render)?.ok()?;
+    let render_path = render.dev_path()?;
+    // Abrir el render node directo: no necesita master ni el seat manager
+    // (Rust abre con O_CLOEXEC por defecto).
+    let file = match std::fs::OpenOptions::new().read(true).write(true).open(&render_path) {
+        Ok(f) => f,
+        Err(e) => {
+            dlog!("mirada-compositor · render node «{}» no abre ({e}); camino clásico", render_path.display());
+            return None;
+        }
+    };
+    let fd = DrmDeviceFd::new(DeviceFd::from(std::os::fd::OwnedFd::from(file)));
+    let gbm = GbmDevice::new(fd)
+        .map_err(|e| dlog!("mirada-compositor · GbmDevice(render) falló ({e}); camino clásico"))
+        .ok()?;
+    let egl_display = unsafe { EGLDisplay::new(gbm.clone()) }
+        .map_err(|e| dlog!("mirada-compositor · EGLDisplay(render) falló ({e}); camino clásico"))
+        .ok()?;
+    let egl_context = EGLContext::new(&egl_display)
+        .map_err(|e| dlog!("mirada-compositor · EGLContext(render) falló ({e}); camino clásico"))
+        .ok()?;
+    let mut renderer = unsafe { GlesRenderer::new(egl_context) }
+        .map_err(|e| dlog!("mirada-compositor · GlesRenderer(render) falló ({e}); camino clásico"))
+        .ok()?;
+    let rounded_shader = compilar_rounded_shader(&mut renderer);
+    let renderer_formats = renderer.dmabuf_formats();
+    println!("      renderer GLES listo (render node {}, sin master).", render_path.display());
+    timing_hito("mirada:gles-listo");
+    Some(RenderNodePrep { gbm, nodo: render, renderer, rounded_shader, renderer_formats })
+}
+
 /// Arranca el Cuerpo sobre DRM/KMS — fases 1, 2a y 2b. Con `greeter`,
 /// el compositor nace en modo DM: ver [`BodyMode`].
 pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
@@ -914,6 +996,20 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         .map_err(|e| format!("error consultando udev: {e}"))?
         .ok_or("no encontré ninguna GPU — ¿existe algún /dev/dri/card*?")?;
     println!("      GPU primaria: {}", gpu.display());
+
+    // Fase A del split render-node/card-node (SDD-ARRANQUE-SIN-PARPADEO §Fase 3):
+    // preparar el renderer GLES en el RENDER node (`/dev/dri/renderD*`) SIN DRM
+    // master, **antes** del handoff, mientras el splash sigue vivo animando. El
+    // render node no usa master ni libseat, así que la parte lenta del init (EGL +
+    // compilación de shaders, ~cientos de ms — antes era lo que dominaba el gap
+    // entre el `RELEASED` del splash y el primer frame) se solapa con el splash.
+    // Oportunista: `None` si no hay render node o falla EGL → camino clásico
+    // (renderer sobre el card node, tras el handoff). Ver `preparar_render_node`.
+    println!("[2.5/8] preparando el renderer en el render node (sin master) …");
+    let prep = preparar_render_node(&gpu);
+    if prep.is_none() {
+        println!("      sin render node — el renderer se arma sobre el card node tras el handoff.");
+    }
 
     // Handoff sin parpadeo (Fase 2 del SDD-ARRANQUE-SIN-PARPADEO): si arje-splash
     // está mostrando el splash del arranque y tiene el DRM master, le pedimos la
@@ -1037,34 +1133,46 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // El nombre de la primaria se decide tras ordenar por (order, name) más
     // abajo — no por orden de discovery. Se captura justo después del sort.
 
-    // 5 · GBM + EGL + GlesRenderer.
-    println!("[5/8] inicializando GBM + EGL + GlesRenderer …");
+    // 5 · GBM del CARD node + renderer.
+    // El `GbmDevice` del card node sirve para el cursor plane y para el exporter
+    // (que importa al scanout los buffers que el renderer aloja en el render node).
+    println!("[5/8] inicializando GBM (card node) + renderer …");
     let gbm = GbmDevice::new(drm_fd.clone()).map_err(|e| format!("GbmDevice::new falló: {e}"))?;
-    let egl_display =
-        unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| format!("EGLDisplay::new falló: {e}"))?;
-    let egl_context =
-        EGLContext::new(&egl_display).map_err(|e| format!("EGLContext::new falló: {e}"))?;
-    let mut renderer =
-        unsafe { GlesRenderer::new(egl_context) }.map_err(|e| format!("GlesRenderer falló: {e}"))?;
-    println!("      renderer GLES listo.");
-    timing_hito("mirada:gles-listo");
 
-    // Shader de esquinas redondeadas — se compila una vez. Si falla, seguimos sin
-    // él (el render cae a la máscara CPU): no rompe el arranque.
-    let rounded_shader = {
-        use smithay::backend::renderer::gles::{UniformName, UniformType};
-        match renderer.compile_custom_texture_shader(
-            ROUNDED_FRAG,
-            &[
-                UniformName::new("size", UniformType::_2f),
-                UniformName::new("radius", UniformType::_1f),
-            ],
-        ) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                eprintln!("mirada-compositor · shader de esquinas redondeadas no compiló ({e}); máscara CPU.");
-                None
-            }
+    // Renderer/allocator/exporter según haya prosperado la prep del render node
+    // (Fase A). Con prep (split, SDD §Fase 3): el `GlesRenderer` ya está listo en
+    // el render node, el `GbmAllocator` aloja ahí los buffers de scanout, y el
+    // `GbmFramebufferExporter` del card node los importa por dmabuf (`import_node`
+    // = el render node). Sin prep (camino clásico): se arma todo sobre el card
+    // node ahora, tras el handoff — idéntico al comportamiento previo a la Fase 3.
+    let (mut renderer, rounded_shader, renderer_formats, allocator, exporter) = match prep {
+        Some(p) => {
+            println!("      split render/card: scanout importa los buffers del render node por dmabuf.");
+            let allocator = GbmAllocator::new(
+                p.gbm.clone(),
+                GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+            );
+            let exporter = GbmFramebufferExporter::new(gbm.clone(), Some(p.nodo));
+            (p.renderer, p.rounded_shader, p.renderer_formats, allocator, exporter)
+        }
+        None => {
+            println!("      renderer sobre el card node (sin render node) …");
+            let egl_display = unsafe { EGLDisplay::new(gbm.clone()) }
+                .map_err(|e| format!("EGLDisplay::new falló: {e}"))?;
+            let egl_context =
+                EGLContext::new(&egl_display).map_err(|e| format!("EGLContext::new falló: {e}"))?;
+            let mut renderer = unsafe { GlesRenderer::new(egl_context) }
+                .map_err(|e| format!("GlesRenderer falló: {e}"))?;
+            println!("      renderer GLES listo (card node).");
+            timing_hito("mirada:gles-listo");
+            let rounded_shader = compilar_rounded_shader(&mut renderer);
+            let renderer_formats = renderer.dmabuf_formats();
+            let allocator = GbmAllocator::new(
+                gbm.clone(),
+                GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+            );
+            let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
+            (renderer, rounded_shader, renderer_formats, allocator, exporter)
         }
     };
 
@@ -1072,10 +1180,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // El renderer GLES se comparte (un solo EGLContext sobre la GPU); cada
     // salida tiene su propio DrmSurface + DrmCompositor.
     println!("[6/8] creando la superficie DRM y compositors ({}) …", chosen.len());
-    let allocator =
-        GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-    let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
-    let renderer_formats = renderer.dmabuf_formats();
 
     // 7 · El estado Wayland (Cerebro, teclado, keymap, control).
     println!("[7/8] armando el estado Wayland …");

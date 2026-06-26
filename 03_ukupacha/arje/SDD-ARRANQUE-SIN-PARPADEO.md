@@ -304,14 +304,39 @@ duración del gap (`epoch_ms` del primer `queue_frame` de mirada menos el del
   sigue vivo durante libseat + GPU primaria + abrir el device, y solo suelta la
   pantalla en el punto irreversible; si esos pasos fallan, el splash (con su panel
   de logs) sigue visible. `mirada-compositor/src/drm_backend/mod.rs`.
-- [ ] **Fase 3 — greeter/renderer antes del handoff (split render-node/card-node).**
-  Diseñada (ver sección "Fase 3" abajo); sin implementar. Requiere verificación
-  en GPU real.
+- [x] **Fase 3 (variante mínima) — `GlesRenderer` en el render node antes del
+  handoff.** Implementado en `mirada-compositor/src/drm_backend/mod.rs`
+  (`preparar_render_node` + split renderer(render node)/scanout(card node) en
+  `run()`). El init lento del renderer (EGL + compilación de shaders) corre SIN
+  master mientras el splash sigue vivo; en Fase C el `GbmFramebufferExporter` del
+  card node importa por dmabuf los buffers que el `GbmAllocator` aloja en el render
+  node (`import_node` = render node). Oportunista: si no hay render node o falla
+  EGL/GBM, cae al camino clásico (renderer sobre el card node, tras el handoff) —
+  peor caso = comportamiento previo. `cargo check --workspace` verde.
+  **Pendiente: verificación en metal** del recorte del gap (timestamps `RELEASED`
+  del splash vs primer `queue_frame` de mirada, ya instrumentados con
+  `LLIMPHI_TIMING`); en GPU única el cruce dmabuf comparte modifiers, sin riesgo de
+  pantalla negra. La variante completa (tarjeta del greeter **compuesta** antes del
+  handoff, para meterla en el frame 1) sigue sin implementar.
 
 ## Fase 3 — Greeter compuesto antes del handoff (split render-node/card-node)
 
-Estado: **diseñado, sin implementar** (2026-06-24). Requiere verificación en GPU
-real (ver más abajo) — no reproducible en este entorno ni en QEMU sin virgl.
+Estado: **variante mínima implementada** (2026-06-26), variante completa
+diseñada/pendiente. Requiere verificación en GPU real (ver más abajo) — no
+reproducible en este entorno ni en QEMU sin virgl.
+
+> **Implementado (variante mínima, 2026-06-26).** `mirada-compositor` ahora
+> prepara el `GlesRenderer` en el **render node** (`/dev/dri/renderD*`, sin DRM
+> master) **antes** del handoff, mientras el splash sigue vivo — la "Variante
+> mínima recomendada" de la sub-sección "Detalle: el greeter es cliente aparte".
+> `preparar_render_node()` arma `GbmDevice` + EGL + `GlesRenderer` + shader sobre
+> el render node y devuelve `None` (→ camino clásico) si algo falla. En `run()`,
+> tras el handoff, el card node toma master y cada `DrmCompositor` se arma con
+> `allocator` = gbm del **render** node y `exporter` = gbm del **card** node con
+> `import_node` = render node (cruce dmabuf). Lo que **falta** de esta sección es
+> la variante completa: levantar el socket Wayland + greeter y **componer su
+> primer frame off-screen** antes del handoff (meter la tarjeta en el frame 1).
+> El reordenamiento de `run()` de abajo es la referencia para esa parte.
 
 ### El gap que falta cerrar
 
