@@ -234,6 +234,64 @@ sesión** — pero **no** mientras mirás un vídeo o estás en una llamada.
   siempre. Nuestra política interna no lo necesita; los clientes que quieran saber
   «idle» todavía no tienen el global.
 
+## Animaciones de transición — apagado CRT y «hero» lock→thumbnail  💡 IDEA (sin construir)
+
+Brainstorm 2026-06-26. **Veredicto: las dos son posibles**, y la pieza que las
+habilita ya existe — el compositor **compone con `GlesRenderer` directo** (no
+Llimphi; es la capa de DRM, por debajo del stack `wgpu/vello`) y
+`mirada-compositor/src/screencopy.rs` ya **captura su propio frame a un
+`Offscreen<GlesTexture>`** (`Bind` + `ExportMem`, re-componiendo elementos a un
+target offscreen). Es decir: capturar la pantalla actual a una textura y
+re-renderizarla con un shader/transform durante N frames es un camino ya transitado,
+no inventado. **El efecto vive en el path GLES del compositor**, no como widget
+Llimphi.
+
+### a) Apagado/encendido «TV antigua» (CRT collapse)  — esfuerzo MEDIO, autocontenido
+- **Qué:** al apagar por inactividad, la imagen colapsa a una línea horizontal → un
+  punto → negro (clásico CRT); al despertar, lo inverso. ~250–400 ms.
+- **Cómo:** la transición se dispara **antes** de emitir el DPMS-off (el DPMS real es
+  instantáneo). En el flanco `IdleAction::ScreenOff`, en vez de apagar de una:
+  capturar el frame compuesto a un `GlesTexture` (ya sabemos), y durante unos frames
+  renderizar un quad fullscreen texturizado con un **fragment shader CRT**
+  (escala-Y→0, brillo→flash, viñeta) animado por tiempo; al terminar, `set_dpms(off)`.
+  En `ScreenOn`: `set_dpms(on)` y reproducir el shader al revés sobre el primer frame.
+- **Dónde hookea:** `App::apply_idle_actions` → un estado de transición que el
+  `render` del backend DRM consume (como el slide de Win+Tab o el zoom del Prezi, que
+  ya animan por tiempo en `tick`). Autocontenido: no cruza procesos. `winit` lo
+  ignora (no hay DPMS ahí).
+- **Riesgo:** custom GLES shader sobre el `DrmCompositor` (que gestiona su propio
+  render) — habría que componer el efecto en un offscreen y blitearlo, como hace
+  screencopy. Verificable sólo en metal.
+
+### b) «Hero» al bloquear: la sesión se encoge al thumbnail del greeter  — esfuerzo ALTO, cross-proceso
+- **Qué:** al hacer `Super+Escape`, el contenido vivo de la pantalla se **encoge y vuela**
+  hasta volverse la miniatura de «esta sesión» en el selector del greeter (efecto
+  genie/hero), en vez del corte seco lock-encima.
+- **Cómo:** el compositor captura el frame de la sesión a textura (ya sabemos) y anima
+  un quad de esa textura encogiéndose hacia un **rect destino**; al aterrizar, compone
+  el greeter encima. La inversa al desbloquear (la miniatura crece a pantalla completa).
+- **Dependencias (por eso es ALTO):**
+  1. **El greeter aún no pinta miniaturas vivas de sesión** — hoy el selector FUS
+     muestra **filas de texto** (`id:nombre`), no thumbnails. Hay que: (i) que el
+     compositor capture un thumbnail por sesión (screencopy ya puede) y se lo pase al
+     greeter como buffer (¿`wl_shm`? ¿un protocolo nuevo sobre `greeter_stdin`?), y
+     (ii) que el greeter lo dibuje (Llimphi `View::image`, eso sí es Llimphi).
+  2. **Coordinar el rect destino:** el greeter tendría que reportar al compositor
+     **dónde** pinta la miniatura (otra línea por `greeter_stdin`, como `LAYOUT`/
+     `SESSIONS`), o el compositor elige un destino genérico (esquina/centro) y el
+     greeter alinea su thumbnail ahí.
+- **Versión barata (1ª rebanada si se hace):** sin coordinar con el greeter — la
+  sesión se encoge a un thumbnail **genérico** (centro, escala 0.2) mientras el lock
+  hace fade-in encima. Da el 80 % del efecto sin el protocolo de rects ni los
+  thumbnails vivos en el greeter. El «aterriza exactamente en su miniatura» queda para
+  cuando (1) esté hecho.
+
+**Común a ambas:** el motor es el mismo — *captura-a-textura + animación por tiempo en
+el `render` del backend, gateada por un estado de transición en `App`*. Conviene
+construir ese «motor de transición fullscreen» una vez (un `Transition { kind, t0,
+dur, texture }` que el render consume) y colgar de él tanto el CRT como el hero. Todo
+**por verificar en metal** (shaders GLES sobre DRM).
+
 ## Fast user switching (FUS) — multiplexar >1 sesión  🔨 EN CURSO (1ª rebanada, 2026-06-26)
 
 **Idea rectora:** el compositor ya se quedaba con sus privilegios y rebajaba los
