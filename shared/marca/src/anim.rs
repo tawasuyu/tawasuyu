@@ -40,8 +40,8 @@ const Q_HACER: [f32; 3] = [232.0, 155.0, 110.0]; // abajo-der   #E89B6E
 
 /// Período maestro del ciclo, en segundos. **Todo** cierra exactamente acá:
 /// `animated_frame(t) == animated_frame(t + LOOP_SECS)` byte a byte (probado).
-/// El fluido hace 2 viajes por loop; la respiración, 1.
-pub const LOOP_SECS: f32 = 7.2;
+/// El fluido hace 2 viajes por loop; la respiración, 1. Lento y calmo.
+pub const LOOP_SECS: f32 = 24.0;
 
 /// Cuánto del semieje ocupa cada brazo del plano (deja `1-REACH` de margen a cada
 /// borde, así la cruz **no toca** los bordes y no se corta bajo barra/overscan).
@@ -113,20 +113,29 @@ pub fn animated_frame(t: f32, w: u32, h: u32) -> Vec<u8> {
     let phase = (lt * 2.0).fract();
     // Posición(es) del pulso a lo largo del brazo (0..1).
     let pulses = [phase, (phase + 0.5).fract()];
-    // Intensidad del fluido en distancia normalizada `u` (0 centro, 1 punta).
+    // Intensidad del fluido en distancia normalizada `u` (0 centro, 1 punta). La
+    // distancia es **circular** (`d - d.round()`): la onda que llega a la punta
+    // reemerge en el centro en el MISMO instante, sin teletransporte → el barrido
+    // no salta al rebobinar el pulso.
     let fluid = |u: f32| -> f32 {
         let mut s = 0.0f32;
         for &p in &pulses {
-            let dd = (u - p) / 0.10;
+            let mut d = u - p;
+            d -= d.round();
+            let dd = d / 0.10;
             s += (-(dd * dd)).exp();
         }
         s.min(1.0)
     };
-    // Brillo de cada flecha: cuánto se acerca algún pulso a la punta (u≈1).
+    // Brillo de cada flecha: pico cuando un pulso pasa por la punta (u≈1), también
+    // con distancia **circular** → el encendido sube y baja suave y CIERRA sin
+    // salto (era esto lo que parpadeaba en el color de la punta).
     let arrow_glow = {
         let mut s = 0.0f32;
         for &p in &pulses {
-            let dd = (1.0 - p) / 0.12;
+            let mut d = 1.0 - p;
+            d -= d.round();
+            let dd = d / 0.14;
             s += (-(dd * dd)).exp();
         }
         s.min(1.0)
@@ -312,6 +321,30 @@ mod tests {
             animated_frame(2.5 + LOOP_SECS, w, h),
             "el frame debe repetirse cada LOOP_SECS en cualquier fase"
         );
+    }
+
+    #[test]
+    fn las_puntas_no_parpadean() {
+        // El reclamo: «salta el color de las flechas». Barremos t por TODO el loop
+        // y miramos el R de la base de la punta derecha: con la distancia circular
+        // el encendido es suave — sin saltos bruscos frame a frame.
+        let (w, h) = (320u32, 180u32);
+        let cx = (w / 2) as f32;
+        let cy = (h / 2) as usize;
+        let px_x = (cx + cx * REACH) as usize; // base de la flecha derecha
+        let idx = (cy * w as usize + px_x) * 4 + 2; // canal R (accent aditivo)
+        // Paso fino (dt=0.05 s): una pendiente suave se achica con el paso, pero
+        // una discontinuidad (el teletransporte que parpadeaba, ~50 niveles) no.
+        let steps = 480;
+        let mut prev = animated_frame(0.0, w, h)[idx] as i32;
+        let mut maxjump = 0i32;
+        for k in 1..=steps {
+            let t = LOOP_SECS * k as f32 / steps as f32;
+            let cur = animated_frame(t, w, h)[idx] as i32;
+            maxjump = maxjump.max((cur - prev).abs());
+            prev = cur;
+        }
+        assert!(maxjump <= 8, "la punta parpadea: salto máximo de {maxjump} niveles");
     }
 
     #[test]
