@@ -749,3 +749,13 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     propios, las barras —que laten en continuo— **empujan** su draw. Runtime sin
     verificar headless (norma de pata). De paso se reparó un example stale
     (`rail_dientes_shot`, firma de `sidebar_surface_view` desactualizada).
+  - **Contraseña Wi-Fi en el applet ✅** — clic en una red **segura** del popup ya
+    no intenta conectar a ciegas: abre un **campo de contraseña** dentro del mismo
+    popup (puntos enmascarados, Conectar/Cancelar). Conecta con
+    `nmcli device wifi connect <ssid> password <pw>` (la contraseña va por
+    argumentos al subproceso, sin quoting de shell); con el campo **vacío** cae al
+    perfil guardado / agente de secretos. El campo **captura el teclado**: en
+    layer-shell se concede foco `Exclusive` al panel del menú (`set_menu_keyboard`,
+    como el buscador del menú de inicio) y `press_key` rutea al buffer; en winit lo
+    hace `on_key`. Cierra el último pendiente de la Fase 15. Con esto el **applet de
+    red queda completo** (conectar a redes nuevas seguras sin depender del agente).

@@ -194,6 +194,16 @@ pub enum Msg {
     NetworkDisconnect(String),
     /// Encender/apagar la radio Wi-Fi. El `bool` es el estado deseado.
     NetworkRadio(bool),
+    /// Abrir el campo de contraseña para conectarse a la red segura `ssid`.
+    NetworkPasswordPrompt(String),
+    /// Carácter tecleado en el campo de contraseña.
+    NetworkPasswordChar(char),
+    /// Backspace en el campo de contraseña.
+    NetworkPasswordBackspace,
+    /// Conectar con la contraseña tecleada (vacía = perfil guardado / agente).
+    NetworkPasswordSubmit,
+    /// Cancelar la entrada de contraseña (vuelve a la lista de redes).
+    NetworkPasswordCancel,
     /// Desplegar/replegar el menú de sesión/energía.
     SessionToggle,
     /// Pedir confirmación de una acción disruptiva (reiniciar/apagar/logout).
@@ -872,6 +882,8 @@ pub struct Model {
     pub media_now: Option<mpris::MediaState>,
     /// `true` cuando el popup del applet de red está desplegado (path winit).
     pub network_open: bool,
+    /// Entrada de contraseña Wi-Fi en curso: `(ssid, tecleado)`. `None` = lista.
+    pub net_password: Option<(String, String)>,
     /// `true` cuando el menú de sesión/energía está desplegado (path winit).
     pub session_open: bool,
     /// Acción de sesión pendiente de confirmación, o `None`.
@@ -1200,6 +1212,7 @@ impl App for PataApp {
             mpris,
             media_now: None,
             network_open: false,
+            net_password: None,
             session_open: false,
             session_confirm: None,
             osd: None,
@@ -1524,12 +1537,33 @@ impl App for PataApp {
             }
             Msg::NetworkToggle => {
                 model.network_open = !model.network_open;
+                model.net_password = None;
                 if model.network_open {
                     model.menu_open = false;
                     model.clip_open = false;
                     model.control_open = false;
                 }
             }
+            Msg::NetworkPasswordPrompt(ssid) => {
+                model.net_password = Some((ssid, String::new()));
+            }
+            Msg::NetworkPasswordChar(c) => {
+                if let Some((_, pw)) = &mut model.net_password {
+                    pw.push(c);
+                }
+            }
+            Msg::NetworkPasswordBackspace => {
+                if let Some((_, pw)) = &mut model.net_password {
+                    pw.pop();
+                }
+            }
+            Msg::NetworkPasswordSubmit => {
+                if let Some((ssid, pw)) = model.net_password.take() {
+                    network::connect_with(&ssid, &pw);
+                    model.network_open = false;
+                }
+            }
+            Msg::NetworkPasswordCancel => model.net_password = None,
             Msg::NetworkConnect(ssid) => {
                 network::connect(&ssid);
                 model.network_open = false;
@@ -1918,8 +1952,13 @@ impl App for PataApp {
         }
         if model.network_open {
             let bar_h = bar_thickness_for(&model.cfg, "network");
+            let pw = model
+                .net_password
+                .as_ref()
+                .map(|(s, p)| (s.as_str(), p.as_str()));
             return Some(render::network_overlay(
                 model.network_now.as_ref(),
+                pw,
                 bar_h,
                 &model.theme,
             ));
@@ -2024,6 +2063,16 @@ impl App for PataApp {
                 return Some(Msg::ShumaToggle);
             }
             return Some(Msg::ShumaShell(shuma_module_shell::Msg::Key(event.clone())));
+        }
+        // 2.45) Con el campo de contraseña Wi-Fi abierto, el teclado va al campo.
+        if model.net_password.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::NetworkPasswordCancel),
+                Key::Named(NamedKey::Backspace) => Some(Msg::NetworkPasswordBackspace),
+                Key::Named(NamedKey::Enter) => Some(Msg::NetworkPasswordSubmit),
+                Key::Character(s) => s.chars().next().map(Msg::NetworkPasswordChar),
+                _ => None,
+            };
         }
         // 2.5) Con el menú de inicio abierto, el teclado va al buscador.
         if model.menu_open {

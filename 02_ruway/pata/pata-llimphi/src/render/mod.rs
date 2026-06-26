@@ -1428,6 +1428,7 @@ pub fn network_menu_view(
     theme: &Theme,
     bar_px: f32,
     state: Option<&crate::network::NetState>,
+    password: Option<(&str, &str)>,
     anchor_x: f32,
     avail_w: f32,
 ) -> View<Msg> {
@@ -1445,7 +1446,7 @@ pub fn network_menu_view(
         size: Size { width: length(network::PANEL_W), height: auto() },
         ..Default::default()
     })
-    .children(vec![network::network_panel(state, theme)]);
+    .children(vec![network::network_panel(state, password, theme)]);
 
     let mut body_style = Style {
         size: Size { width: percent(1.0_f32), height: length(0.0_f32) },

@@ -191,6 +191,22 @@ pub fn connect(ssid: &str) {
         .spawn();
 }
 
+/// Conecta a `ssid` con una contraseña explícita
+/// (`nmcli device wifi connect <ssid> password <pw>`). Con `pw` vacío cae a
+/// [`connect`] (perfil guardado / agente). No bloquea; la contraseña va por
+/// argumentos al subproceso nmcli (no por la shell), sin quoting frágil.
+pub fn connect_with(ssid: &str, pw: &str) {
+    if pw.is_empty() {
+        return connect(ssid);
+    }
+    let _ = std::process::Command::new("nmcli")
+        .args(["device", "wifi", "connect", ssid, "password", pw])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// Baja la conexión activa con ese `ssid` (`nmcli connection down`). No bloquea.
 pub fn disconnect(ssid: &str) {
     let _ = std::process::Command::new("nmcli")

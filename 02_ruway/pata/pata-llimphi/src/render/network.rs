@@ -213,11 +213,28 @@ fn tachar(scene: &mut Scene, rect: PaintRect, color: Color) {
 // Popup (lista de redes)
 // ============================================================
 
-/// El cuerpo del popup de red: switch de la radio + lista de redes. Lo enmarcan
-/// `network_overlay` (winit) y `network_menu_view` (layer-shell).
-pub(super) fn network_panel(state: Option<&NetState>, theme: &Theme) -> View<Msg> {
-    let mut hijos: Vec<View<Msg>> = vec![header_row(state, theme)];
+/// El cuerpo del popup de red: switch de la radio + lista de redes, o —si hay una
+/// entrada de contraseña en curso (`password = Some((ssid, tecleado))`)— el campo
+/// de contraseña. Lo enmarcan `network_overlay` (winit) y `network_menu_view`
+/// (layer-shell).
+pub(super) fn network_panel(
+    state: Option<&NetState>,
+    password: Option<(&str, &str)>,
+    theme: &Theme,
+) -> View<Msg> {
+    let hijos: Vec<View<Msg>> = match password {
+        Some((ssid, typed)) => password_rows(ssid, typed, theme),
+        None => {
+            let mut filas = vec![header_row(state, theme)];
+            llenar_lista(&mut filas, state, theme);
+            filas
+        }
+    };
+    enmarcar(hijos, theme)
+}
 
+/// Las filas de la lista de redes (o las notas de estado vacío).
+fn llenar_lista(hijos: &mut Vec<View<Msg>>, state: Option<&NetState>, theme: &Theme) {
     match state {
         Some(s) if matches!(s.status, NetStatus::Sin) => {
             hijos.push(nota("NetworkManager no disponible", theme));
@@ -235,7 +252,59 @@ pub(super) fn network_panel(state: Option<&NetState>, theme: &Theme) -> View<Msg
         }
         None => hijos.push(nota("Buscando redes…", theme)),
     }
+}
 
+/// Las filas del campo de contraseña para conectarse a `ssid`.
+fn password_rows(ssid: &str, typed: &str, theme: &Theme) -> Vec<View<Msg>> {
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(format!("Conectar a {}", recortar(ssid, 22)), 13.0, theme.fg_text);
+
+    // El campo: puntos por carácter (no mostramos la contraseña en claro).
+    let mostrado = if typed.is_empty() {
+        "contraseña…".to_string()
+    } else {
+        "•".repeat(typed.chars().count())
+    };
+    let color = if typed.is_empty() { theme.fg_muted } else { theme.fg_text };
+    let campo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .radius(6.0)
+    .text(mostrado, 13.0, color);
+
+    let conectar = fila_accion("Conectar", theme.accent, theme).on_click(Msg::NetworkPasswordSubmit);
+    let cancelar = fila_accion("Cancelar", theme.fg_muted, theme).on_click(Msg::NetworkPasswordCancel);
+    vec![titulo, campo, conectar, cancelar]
+}
+
+/// Una fila de acción centrada (Conectar/Cancelar del campo de contraseña).
+fn fila_accion(label: &str, color: Color, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .radius(6.0)
+    .hover_fill(theme.bg_button_hover)
+    .text(label.to_string(), 13.0, color)
+}
+
+/// Enmarca las filas en la caja del popup (fondo + sombra).
+fn enmarcar(hijos: Vec<View<Msg>>, theme: &Theme) -> View<Msg> {
     let (a, blur, dy) = elevation::E4;
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -358,6 +427,9 @@ fn ap_row(ap: &WifiAp, theme: &Theme) -> View<Msg> {
     let ssid = ap.ssid.clone();
     let msg = if ap.active {
         Msg::NetworkDisconnect(ssid)
+    } else if ap.secure {
+        // Red segura: pedir contraseña (vacía = perfil guardado / agente).
+        Msg::NetworkPasswordPrompt(ssid)
     } else {
         Msg::NetworkConnect(ssid)
     };
@@ -402,8 +474,14 @@ fn fila_base(hijos: Vec<View<Msg>>) -> View<Msg> {
 // ============================================================
 
 /// El overlay completo para **winit**: scrim (cierra al click) + panel anclado
-/// arriba a la derecha, bajo la barra.
-pub fn network_overlay(state: Option<&NetState>, bar_h: f32, theme: &Theme) -> View<Msg> {
+/// arriba a la derecha, bajo la barra. `password = Some((ssid, tecleado))` muestra
+/// el campo de contraseña en vez de la lista.
+pub fn network_overlay(
+    state: Option<&NetState>,
+    password: Option<(&str, &str)>,
+    bar_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
     let fila = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -419,7 +497,7 @@ pub fn network_overlay(state: Option<&NetState>, bar_h: f32, theme: &Theme) -> V
         },
         ..Default::default()
     })
-    .children(vec![network_panel(state, theme)]);
+    .children(vec![network_panel(state, password, theme)]);
 
     View::new(Style {
         position: Position::Absolute,

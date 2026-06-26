@@ -243,6 +243,8 @@ pub(super) struct LayerApp {
     pub(super) network_now: Option<crate::network::NetState>,
     /// Corrientes de audio por app (sink-inputs) para el mezclador de volumen.
     pub(super) sink_inputs: Vec<crate::sampler::SinkInput>,
+    /// Entrada de contraseña Wi-Fi en curso: `(ssid, tecleado)`. `None` = lista.
+    pub(super) net_password: Option<(String, String)>,
     /// Acción de sesión pendiente de confirmación en el menú de energía.
     pub(super) session_confirm: Option<crate::SessionAction>,
     /// Feed MPRIS (reproductor) en su propio hilo.
@@ -564,6 +566,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         network,
         network_now: None,
         sink_inputs: Vec::new(),
+        net_password: None,
         session_confirm: None,
         mpris,
         media_now: None,

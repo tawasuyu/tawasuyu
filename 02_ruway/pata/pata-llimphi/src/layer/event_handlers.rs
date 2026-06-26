@@ -234,6 +234,25 @@ impl KeyboardHandler for LayerApp {
         _: u32,
         event: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
+        // Entrada de contraseña Wi-Fi: el teclado va al campo (Enter conecta, Esc
+        // cancela, Backspace borra). Se evalúa antes que el buscador del menú.
+        if self.net_password.is_some() {
+            match event.keysym {
+                Keysym::Escape => self.handle_msg(crate::Msg::NetworkPasswordCancel),
+                Keysym::BackSpace => self.handle_msg(crate::Msg::NetworkPasswordBackspace),
+                Keysym::Return | Keysym::KP_Enter => {
+                    self.handle_msg(crate::Msg::NetworkPasswordSubmit)
+                }
+                _ => {
+                    if let Some(txt) = event.utf8 {
+                        for c in txt.chars().filter(|c| !c.is_control()) {
+                            self.handle_msg(crate::Msg::NetworkPasswordChar(c));
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // Menú de inicio abierto: el teclado va al buscador.
         if self.menu_open {
             match event.keysym {

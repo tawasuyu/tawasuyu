@@ -291,6 +291,21 @@ impl LayerApp {
         self.panels[pi].dirty = true;
     }
 
+    /// Concede o revoca el foco de teclado al panel del menú abierto (lo usa la
+    /// entrada de contraseña Wi-Fi, que necesita teclear dentro del popup como el
+    /// buscador del menú de inicio).
+    pub(super) fn set_menu_keyboard(&mut self, exclusive: bool) {
+        let Some(pi) = self.menu_panel else { return };
+        use smithay_client_toolkit::shell::wlr_layer::KeyboardInteractivity;
+        let layer = &self.panels[pi].layer;
+        layer.set_keyboard_interactivity(if exclusive {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::None
+        });
+        layer.commit();
+    }
+
     /// Abre/cierra el drawer de la barra del menú mostrando el cuerpo `kind`.
     pub(super) fn toggle_menu(&mut self, kind: MenuKind) {
         if self.menu_open && self.menu_kind == kind {
@@ -957,6 +972,7 @@ impl LayerApp {
                     &self.theme,
                     self.menu_bar_px as f32,
                     self.network_now.as_ref(),
+                    self.net_password.as_ref().map(|(s, p)| (s.as_str(), p.as_str())),
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
                     self.panels[idx].width as f32,
                 ),
@@ -1228,7 +1244,41 @@ impl LayerApp {
                 }
                 self.toggle_menu(MenuKind::Control);
             }
-            Msg::NetworkToggle => self.toggle_menu(MenuKind::Network),
+            Msg::NetworkToggle => {
+                self.net_password = None;
+                self.set_menu_keyboard(false);
+                self.toggle_menu(MenuKind::Network);
+            }
+            Msg::NetworkPasswordPrompt(ssid) => {
+                self.net_password = Some((ssid, String::new()));
+                // El campo necesita foco de teclado (como el menú de inicio).
+                self.set_menu_keyboard(true);
+                self.marcar_menu_dirty();
+            }
+            Msg::NetworkPasswordChar(c) => {
+                if let Some((_, pw)) = &mut self.net_password {
+                    pw.push(c);
+                    self.marcar_menu_dirty();
+                }
+            }
+            Msg::NetworkPasswordBackspace => {
+                if let Some((_, pw)) = &mut self.net_password {
+                    pw.pop();
+                    self.marcar_menu_dirty();
+                }
+            }
+            Msg::NetworkPasswordSubmit => {
+                if let Some((ssid, pw)) = self.net_password.take() {
+                    crate::network::connect_with(&ssid, &pw);
+                    self.set_menu_keyboard(false);
+                    self.set_menu_open(false);
+                }
+            }
+            Msg::NetworkPasswordCancel => {
+                self.net_password = None;
+                self.set_menu_keyboard(false);
+                self.marcar_menu_dirty();
+            }
             Msg::NetworkConnect(ssid) => {
                 crate::network::connect(&ssid);
                 self.set_menu_open(false);
