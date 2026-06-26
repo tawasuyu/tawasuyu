@@ -19,7 +19,9 @@
 //! Ejecución → cablear `pluma-notebook-exec::{run_all, run_from}`.
 
 use std::env;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use pluma_notebook_kernel_multi::MultiKernel;
 
@@ -41,6 +43,10 @@ use llimphi_widget_menubar::{
 };
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use llimphi_icons::Icon;
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 use std::sync::Arc;
@@ -103,6 +109,15 @@ enum Msg {
     EditMenuAction(EditAction),
     /// Cierra cualquier menú abierto.
     CloseMenus,
+    /// Tick de animación (~50ms) — fuerza repaint para el shimmer del
+    /// skeleton mientras hay una corrida en vuelo. Se auto-rearma sólo
+    /// mientras `running_from` siga `Some` (ver `arm_tick`).
+    Tick,
+    /// Un toast cumplió su vida: se descarta del stack.
+    ToastExpire(u64),
+    /// La ventana cambió de tamaño — actualiza el viewport usado para
+    /// posicionar el stack de toasts.
+    Resize(u32, u32),
 }
 
 /// Estado de una celda en edición. Editor completo: rope buffer + flechas
@@ -156,6 +171,14 @@ struct Model {
     edit_anim: Tween<f32>,
     /// Portapapeles del sistema para cortar/copiar/pegar en las celdas.
     clipboard: SystemClipboard,
+    /// Toasts vivos (resultado de una ejecución: OK o falla).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
+    /// Hay una cadena de `Msg::Tick` en vuelo (evita rearmar dos).
+    ticking: bool,
+    /// Tamaño actual de la ventana — ancla el stack de toasts (bottom-right).
+    win: (f32, f32),
 }
 
 struct Viewer;
@@ -202,6 +225,13 @@ impl App for Viewer {
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
+            toasts: Vec::new(),
+            next_toast: 0,
+            ticking: false,
+            win: {
+                let (w, h) = Self::initial_size();
+                (w as f32, h as f32)
+            },
         }
     }
 
@@ -246,13 +276,28 @@ impl App for Viewer {
                     let _ = rt.block_on(pluma_notebook_exec::run_from(&mut nb, &kernel, id));
                     Msg::RunCompleted(nb)
                 });
-                Model { running_from: Some(id), ..model }
+                let mut model = Model { running_from: Some(id), ..model };
+                arm_tick(&mut model, handle);
+                model
             }
-            Msg::RunCompleted(nb) => Model {
-                notebook: nb,
-                running_from: None,
-                ..model
-            },
+            Msg::RunCompleted(nb) => {
+                let mut model = model;
+                // ¿Aparecieron fallas nuevas respecto del estado previo? Eso
+                // distingue una corrida exitosa de una que rompió algo.
+                let before = model.notebook.cells().iter().filter(|c| c.state == CellState::Failed).count();
+                let after = nb.cells().iter().filter(|c| c.state == CellState::Failed).count();
+                model.notebook = nb;
+                model.running_from = None;
+                let id = model.next_toast;
+                model.next_toast += 1;
+                let toast = if after > before {
+                    Toast::error(id, "La ejecución falló", TOAST_TTL)
+                } else {
+                    Toast::success(id, "Celda ejecutada", TOAST_TTL)
+                };
+                push_toast(&mut model, handle, toast);
+                model
+            }
             Msg::StartEdit(id) => {
                 let Some(cell) = model.notebook.cell(id) else { return model };
                 let mut editor = EditorState::new();
@@ -378,6 +423,19 @@ impl App for Viewer {
                 model
             }
             Msg::CancelEdit => Model { editing: None, ..model },
+            Msg::Tick => {
+                // El thread durmió ~50ms; sólo rearmamos si seguimos corriendo.
+                let mut model = model;
+                model.ticking = false;
+                arm_tick(&mut model, handle);
+                model
+            }
+            Msg::ToastExpire(tid) => {
+                let mut model = model;
+                model.toasts.retain(|t| t.id != tid);
+                model
+            }
+            Msg::Resize(w, h) => Model { win: (w as f32, h as f32), ..model },
         }
     }
 
@@ -459,6 +517,10 @@ impl App for Viewer {
         }
     }
 
+    fn on_resize(_model: &Self::Model, w: u32, h: u32) -> Option<Self::Msg> {
+        Some(Msg::Resize(w, h))
+    }
+
     fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
         let palette = Palette::from_theme(&theme);
@@ -466,25 +528,51 @@ impl App for Viewer {
         let menu = app_menu(model);
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_bar(model, &palette);
-        let body = match model.mode {
-            Mode::Linear => linear_view(&model.notebook, &palette),
-            Mode::Canvas => canvas_view(
-                &model.notebook,
-                model.viewport,
-                model.zoom,
-                model.editing.as_ref(),
-                &palette,
-            ),
+        // Sin celdas (notebook vacío o load fallido) → empty-state con
+        // orientación en vez de un lienzo en negro.
+        let body = if model.notebook.len() == 0 {
+            let pal = EmptyPalette::from_theme(&theme);
+            let (titulo, desc): (&str, &str) = if model.load_error.is_some() {
+                ("No se pudo abrir", "El archivo no cargó. Revisá la ruta .pluma-nb del header.")
+            } else {
+                ("Notebook vacío", "No hay celdas para mostrar. Pasá una ruta .pluma-nb para abrir un cuaderno.")
+            };
+            empty_view(Icon::FileText, titulo, Some(desc), &pal)
+        } else {
+            match model.mode {
+                Mode::Linear => linear_view(&model.notebook, &palette),
+                Mode::Canvas => canvas_view(
+                    &model.notebook,
+                    model.viewport,
+                    model.zoom,
+                    model.editing.as_ref(),
+                    model.running_from,
+                    &palette,
+                ),
+            }
         };
 
-        View::new(Style {
+        let root = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(palette.bg)
         .on_right_click_at(|x, y, _, _| Some(Msg::EditMenuOpen(x, y)))
-        .children(vec![menubar, header, body])
+        .children(vec![menubar, header, body]);
+
+        // Overlay de toasts (bottom-right). Click en uno = descartarlo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        if alive.is_empty() {
+            root
+        } else {
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![root, toast_stack_view(&alive, model.win, Msg::ToastExpire)])
+        }
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -664,6 +752,40 @@ impl Palette {
     }
 }
 
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas (el mismo
+/// contenido produce siempre la misma key entre rebuilds).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Empuja un toast al stack y programa su expiración.
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Arranca la cadena de ticks (~50ms) si hay una corrida en vuelo y no hay ya
+/// una corriendo. Se auto-detiene cuando `running_from` vuelve a `None`.
+fn arm_tick(model: &mut Model, handle: &Handle<Msg>) {
+    if model.ticking || model.running_from.is_none() {
+        return;
+    }
+    model.ticking = true;
+    handle.spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        Msg::Tick
+    });
+}
+
 fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
     let origen = match (&model.source, &model.load_error) {
         (_, Some(err)) => format!("error de carga: {err}"),
@@ -789,6 +911,7 @@ fn canvas_view(
     viewport: (f32, f32),
     zoom: f32,
     editing: Option<&EditState>,
+    running_from: Option<CellId>,
     palette: &Palette,
 ) -> View<Msg> {
     let (vx, vy) = viewport;
@@ -817,9 +940,11 @@ fn canvas_view(
         let Some(pos) = cell.position else { continue };
         let edit = editing.filter(|e| e.id == cell.id);
         let scale = if edit.is_some() { 1.0 } else { zoom };
+        let running = running_from == Some(cell.id);
         children.push(canvas_card_scaled(
             cell,
             edit,
+            running,
             palette,
             vx + pos.x * zoom,
             vy + pos.y * zoom,
@@ -935,6 +1060,7 @@ fn vertical_bounds(nb: &Notebook) -> Option<(f32, f32)> {
 fn canvas_card_scaled(
     cell: &Cell,
     edit: Option<&EditState>,
+    running: bool,
     palette: &Palette,
     x: f32,
     y: f32,
@@ -946,7 +1072,17 @@ fn canvas_card_scaled(
     let total_h = if editing { CANVAS_CARD_H_EDITING } else { CANVAS_CARD_H * scale };
     let body_h = if editing { CANVAS_EDITOR_H } else { CANVAS_BODY_H * scale };
     let (header, body) = card_header_body(cell, palette, body_h);
-    let footer = output_footer(cell.last_output.as_ref(), palette);
+    // Mientras la celda se ejecuta, su footer es un shimmer (placeholder del
+    // resultado). Al volver, el output entra con un pop-in suave.
+    let footer = if running {
+        skeleton_footer()
+    } else {
+        let f = output_footer(cell.last_output.as_ref(), palette);
+        match cell.last_output.as_ref() {
+            Some(o) => f.animated_enter(key_of(&format!("{id}:{}", format_output(o))), motion::NORMAL),
+            None => f,
+        }
+    };
     let run_button = run_button_view(id, palette);
     let edit_button = edit_button_view(id, editing, palette);
 
@@ -998,6 +1134,19 @@ fn language_of(cell: &Cell) -> Language {
         CellKind::Code { language } => Language::from_cell_language(language),
         _ => Language::Plain,
     }
+}
+
+/// Footer en estado "ejecutando": una banda con shimmer que ocupa el lugar
+/// del output que está por llegar. Requiere el tick de `Msg::Tick` para animar.
+fn skeleton_footer() -> View<Msg> {
+    let theme = Theme::dark();
+    let sp = SkeletonPalette::from_theme(&theme);
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(CANVAS_FOOTER_H) },
+        ..Default::default()
+    })
+    .clip(true)
+    .children(vec![skeleton_view(&sp)])
 }
 
 fn output_footer(out: Option<&CellOutput>, palette: &Palette) -> View<Msg> {

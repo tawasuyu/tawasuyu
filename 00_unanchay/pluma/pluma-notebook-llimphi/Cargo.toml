@@ -25,6 +25,10 @@ llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 llimphi-clipboard = { workspace = true }
+llimphi-widget-skeleton = { workspace = true }
+llimphi-widget-empty = { workspace = true }
+llimphi-widget-toast = { workspace = true }
+llimphi-icons = { workspace = true }
 app-bus = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
