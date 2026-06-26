@@ -1034,6 +1034,13 @@ fn canvas_3d(model: &Model) -> View<Msg> {
     let agua = mr.palette.agua;
     // El agua fluye SÓLO si su material tiene la ley Fluir (con sus params).
     let fluir = model.project.water_fluir();
+    // Y las plantas (objetos) crecen si su material tiene la ley Crecer.
+    let crecer = mr.bioma.objetos.iter().find_map(|o| {
+        model
+            .project
+            .crecer_velocidad(o.material)
+            .map(|v| (model.project.resolve_material(o.material).color, v))
+    });
     let absolute = Style {
         position: Position::Absolute,
         size: Size { width: percent(1.0), height: percent(1.0) },
@@ -1120,12 +1127,18 @@ fn canvas_3d(model: &Model) -> View<Msg> {
             let mut guard = preview.lock().unwrap();
             let p = guard.get_or_insert_with(|| WorldPreview::build(device, queue, &mr, dim, gen));
             p.rebuild_if(device, queue, &mr, dim, gen);
-            match (simulating, fluir) {
-                (true, Some((g, h))) => {
+            if simulating {
+                if let Some((g, h)) = fluir {
                     p.ensure_sim(agua, g, h);
                     p.sim_step(queue, agua);
                 }
-                _ => p.clear_sim(),
+                if let Some((col, vel)) = crecer {
+                    p.ensure_growth(queue, col, vel);
+                    p.growth_step(queue);
+                }
+            } else {
+                p.clear_sim();
+                p.clear_growth();
             }
             let camera = Camera3d::orbit(orbit_center(dim), yaw, pitch, dist);
             p.render(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera);
@@ -1269,8 +1282,8 @@ fn bioma_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             bslider(&sp, "densidad ríos", b.rivers, 0.0, 1.0, BiomaField::Rivers),
             bslider(&sp, "altura cumbre", b.peak_at, 0.0, 1.0, BiomaField::PeakAt),
             spacer(8.0),
-            section_title("LEY FLUIR (AGUA)", theme),
-            button_view(if model.simulating { "⏸ detener agua" } else { "💧 simular agua" }, &btn, Msg::ToggleSim),
+            section_title("SIMULAR LEYES", theme),
+            button_view(if model.simulating { "⏸ detener" } else { "▶ simular (agua · plantas)" }, &btn, Msg::ToggleSim),
         ],
         1 => vec![
             section_title("MATERIALES", theme),
@@ -1325,8 +1338,8 @@ fn mundo_editor(model: &Model, tab: usize) -> Vec<View<Msg>> {
             spacer(8.0),
             body_text(format!("semilla actual: {}", m.seed), theme.fg_muted, theme),
             spacer(10.0),
-            section_title("LEY FLUIR (AGUA)", theme),
-            button_view(if model.simulating { "⏸ detener agua" } else { "💧 simular agua" }, &btn, Msg::ToggleSim),
+            section_title("SIMULAR LEYES", theme),
+            button_view(if model.simulating { "⏸ detener" } else { "▶ simular (agua · plantas)" }, &btn, Msg::ToggleSim),
         ]
     } else {
         let bname = m

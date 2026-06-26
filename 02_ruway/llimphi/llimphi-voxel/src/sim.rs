@@ -231,6 +231,79 @@ impl WaterSim {
     }
 }
 
+/// Simulación de la ley [`Crecer`](crate::LeyKind::Crecer): una planta (material con
+/// rol objeto) **crece de abajo hacia arriba** a su velocidad. Toma las celdas del
+/// objeto en el grid, las esconde, y las va revelando en orden de altura. La
+/// `velocidad` escala cuántas celdas se revelan por paso (a `1.0`, la planta entera
+/// brota en ~[`GROW_TICKS`] pasos sin importar su tamaño).
+pub struct GrowthSim {
+    /// Celdas de la planta `(pos, color)`, ordenadas por altura ascendente.
+    cells: Vec<([u32; 3], [u8; 3])>,
+    /// Cuántas reveladas hasta ahora.
+    idx: usize,
+    /// Acumulador de la tasa de revelado (determinista).
+    acc: f32,
+    /// Celdas reveladas por paso (derivada de la velocidad y el tamaño).
+    rate: f32,
+}
+
+/// Pasos en los que una planta crece del todo a velocidad `1.0` (~2 s a 30 fps).
+pub const GROW_TICKS: f32 = 60.0;
+
+impl GrowthSim {
+    /// Junta las celdas del color de la planta y las ordena por altura. `velocidad`
+    /// viene de la ley Crecer del material.
+    pub fn from_grid(grid: &VoxelGrid, planta: [u8; 3], velocidad: f32) -> Self {
+        let dim = grid.dim();
+        let mut cells = Vec::new();
+        for z in 0..dim[2] {
+            for y in 0..dim[1] {
+                for x in 0..dim[0] {
+                    if let Some(c) = grid.get(x, y, z) {
+                        if c[3] > 0 && [c[0], c[1], c[2]] == planta {
+                            cells.push(([x, y, z], planta));
+                        }
+                    }
+                }
+            }
+        }
+        // Orden por altura (y), luego x,z para determinismo.
+        cells.sort_by_key(|(p, _)| (p[1], p[0], p[2]));
+        let len = cells.len().max(1) as f32;
+        let rate = (velocidad.max(0.0) * len / GROW_TICKS).max(0.05);
+        Self { cells, idx: 0, acc: 0.0, rate }
+    }
+
+    /// Las celdas de la planta (para esconderlas al arrancar el crecimiento).
+    pub fn cells(&self) -> &[([u32; 3], [u8; 3])] {
+        &self.cells
+    }
+
+    /// `true` si la planta ya terminó de crecer.
+    pub fn done(&self) -> bool {
+        self.idx >= self.cells.len()
+    }
+
+    /// Revela el siguiente lote de celdas (según la velocidad). Devuelve las celdas a
+    /// dibujar este paso `(pos, color)`. Vacío cuando ya creció del todo.
+    pub fn step(&mut self) -> Vec<([u32; 3], [u8; 3])> {
+        if self.done() {
+            return Vec::new();
+        }
+        self.acc += self.rate;
+        let n = self.acc.floor() as usize;
+        self.acc -= n as f32;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            if self.idx < self.cells.len() {
+                out.push(self.cells[self.idx]);
+                self.idx += 1;
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +394,34 @@ mod tests {
             }
         }
         assert_eq!(ancho, 1, "sin componente horizontal el líquido no se esparce");
+    }
+
+    #[test]
+    fn la_planta_crece_de_abajo_hacia_arriba() {
+        // Una columna de "planta" (color cactus) de 6 de alto sobre un piso.
+        let planta = Material::Cactus.color();
+        let dim = [8, 16, 8];
+        let mut g = VoxelGrid::new(dim);
+        for k in 0..6 {
+            g.set(4, 1 + k, 4, planta);
+        }
+        g.reset_dirty();
+        let mut sim = GrowthSim::from_grid(&g, planta, 1.0);
+        assert_eq!(sim.cells().len(), 6);
+
+        // Revelar paso a paso: cada celda nueva está a una altura >= la anterior.
+        let mut revealed: Vec<u32> = Vec::new();
+        let mut steps = 0;
+        while !sim.done() && steps < 1000 {
+            for (pos, _) in sim.step() {
+                revealed.push(pos[1]);
+            }
+            steps += 1;
+        }
+        assert_eq!(revealed.len(), 6, "se revelaron todas las celdas");
+        // Monótono creciente en altura (crece hacia arriba).
+        assert!(revealed.windows(2).all(|w| w[0] <= w[1]), "crece de abajo hacia arriba: {revealed:?}");
+        assert_eq!(revealed[0], 1, "empieza por la base");
     }
 
     #[test]

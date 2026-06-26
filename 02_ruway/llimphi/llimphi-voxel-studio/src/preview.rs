@@ -10,7 +10,7 @@
 use llimphi_3d::glam::{Mat4, Vec3};
 use llimphi_3d::{Atmosphere, Camera3d, Renderer3d, Scene3d, Vertex3d, VoxelGrid, VoxelRenderer};
 use llimphi_ui::llimphi_hal::wgpu;
-use llimphi_voxel::{MundoRender, WaterSim, CELL_WATER, SCENE_SUN};
+use llimphi_voxel::{GrowthSim, MundoRender, WaterSim, CELL_WATER, SCENE_SUN};
 
 /// Formato de la textura intermedia de Llimphi (target de `gpu_paint_with`).
 pub const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -42,6 +42,8 @@ pub struct WorldPreview {
     /// Simulación de agua en curso (ley Fluir), si está activa. `None` = terreno
     /// estático. Ver [`Self::ensure_sim`] / [`Self::sim_step`].
     sim: Option<WaterSim>,
+    /// Crecimiento de plantas en curso (ley Crecer), si está activo.
+    growth: Option<GrowthSim>,
     /// Pool de renderers de actor (uno por actor; la malla se re-sube por frame).
     actor_r: Vec<Renderer3d>,
 }
@@ -66,8 +68,42 @@ impl WorldPreview {
             built_gen: gen,
             origin: [0, 0],
             sim: None,
+            growth: None,
             actor_r: Vec::new(),
         }
+    }
+
+    /// Arranca el **crecimiento** (ley Crecer) del material `planta`: esconde sus
+    /// celdas del grid y las irá revelando de abajo hacia arriba a `velocidad`.
+    pub fn ensure_growth(&mut self, queue: &wgpu::Queue, planta: [u8; 3], velocidad: f32) {
+        if self.growth.is_none() {
+            let g = GrowthSim::from_grid(&self.grid, planta, velocidad);
+            for (pos, _) in g.cells() {
+                self.grid.clear(pos[0], pos[1], pos[2]);
+            }
+            self.voxel.sync(queue, &mut self.grid);
+            self.growth = Some(g);
+        }
+    }
+
+    /// Detiene el crecimiento (el próximo `rebuild_if` repone las plantas completas).
+    pub fn clear_growth(&mut self) {
+        self.growth = None;
+    }
+
+    /// Revela el siguiente lote de celdas de planta y lo sube a la GPU. No-op sin
+    /// crecimiento activo.
+    pub fn growth_step(&mut self, queue: &wgpu::Queue) {
+        let Self { growth, grid, voxel, .. } = self;
+        let Some(g) = growth else { return };
+        let batch = g.step();
+        if batch.is_empty() {
+            return;
+        }
+        for (pos, color) in batch {
+            grid.set(pos[0], pos[1], pos[2], color);
+        }
+        voxel.sync(queue, grid);
     }
 
     /// Arranca la **simulación de agua** (ley Fluir) desde el grid actual, si no hay
@@ -133,6 +169,7 @@ impl WorldPreview {
             self.built_gen = gen;
             self.origin = [0, 0]; // centrado en el origen
             self.sim = None; // el grid se rehízo: cualquier simulación queda obsoleta
+            self.growth = None;
         }
     }
 
