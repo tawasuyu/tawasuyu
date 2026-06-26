@@ -36,10 +36,11 @@ pub fn shot() {
     // Toma 1: editor de mundos.
     render_model(demo_model(), &out);
 
-    // Toma 2: editor/reproductor de escenas, en el instante del gesto.
+    // Toma 2: dirección de escena (pestaña Reparto), con los marcadores del recorrido.
     let mut scene = demo_model();
     scene.level = Level::Escenas;
-    scene.time = 3.1;
+    scene.tool_tab = 1; // Reparto → dibuja los waypoints
+    scene.time = 1.6;
     let scene_out = out.replace(".png", "_scene.png");
     let scene_out = if scene_out == out { "/tmp/voxel_studio_scene.png".to_string() } else { scene_out };
     render_model(scene, &scene_out);

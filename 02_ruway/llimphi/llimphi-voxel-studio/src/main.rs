@@ -14,8 +14,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use llimphi_3d::glam::Vec3;
-use llimphi_3d::Camera3d;
+use llimphi_3d::glam::{Mat4, Vec3};
+use llimphi_3d::{push_cube, Camera3d};
 use llimphi_icons::{icon_view, Icon};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
@@ -219,6 +219,7 @@ enum Msg {
     AddKey,
     RemoveKey,
     SetKeyPos(bool, f32), // true=gx, false=gz
+    SetKeyTime(f32),
     CycleKeyClip,
     // Escenas.
     CycleSceneMundo,
@@ -787,6 +788,16 @@ impl App for Studio {
                     model.gen += 1;
                 }
             }
+            Msg::SetKeyTime(v) => {
+                let (a, k) = (model.actor_sel, model.key_sel);
+                let dur = sel_scene(&model).map(|s| s.duration).unwrap_or(5.0);
+                if let Some(s) = sel_scene_mut(&mut model) {
+                    if let Some(key) = s.actors.get_mut(a).and_then(|act| act.keys.get_mut(k)) {
+                        key.t = v.clamp(0.0, dur);
+                    }
+                    model.gen += 1;
+                }
+            }
             Msg::CycleKeyClip => {
                 let (a, k) = (model.actor_sel, model.key_sel);
                 if let Some(s) = sel_scene_mut(&mut model) {
@@ -1269,6 +1280,16 @@ fn canvas_3d(model: &Model) -> View<Msg> {
         Level::Escenas => {
             let scene = sel_scene(model).cloned();
             let script_cam = model.script_cam;
+            // Recorrido a dibujar en 3D mientras se dirige (pestaña Reparto): los
+            // waypoints del actor seleccionado + cuál está seleccionado.
+            let path: Option<(Vec<(f32, f32)>, usize)> = if model.tool_tab == 1 {
+                scene.as_ref().and_then(|s| s.actors.get(model.actor_sel)).map(|act| {
+                    (act.keys.iter().map(|k| (k.gx, k.gz)).collect(), model.key_sel)
+                })
+            } else {
+                None
+            };
+            let script_cam = if path.is_some() { false } else { script_cam }; // órbita para dirigir
             let scripts: Vec<ActorScript> = scene.as_ref().map(|s| s.scripts()).unwrap_or_default();
             let chars: Vec<CharSpec> = scene
                 .as_ref()
@@ -1306,6 +1327,17 @@ fn canvas_3d(model: &Model) -> View<Msg> {
                 for (pos, s, ch, at) in &poses {
                     // Humanoide → Actor rico; rig → su andar (lo decide CharSpec).
                     metas.push(ch.to_meta(*pos, s.facing, s.clip, *at, Some(camera.eye)));
+                }
+                // Recorrido: un marcador (cubo) por waypoint del actor dirigido; el
+                // seleccionado, más grande y dorado.
+                if let Some((keys, sel)) = &path {
+                    for (i, (gx, gz)) in keys.iter().enumerate() {
+                        let pos = p.ground_at_world(*gx as i32, *gz as i32) - half + Vec3::new(0.0, 1.4, 0.0);
+                        let (color, sz) = if i == *sel { ([0.96, 0.84, 0.20], 0.8) } else { ([0.55, 0.58, 0.66], 0.5) };
+                        let (mut mv, mut mi) = (Vec::new(), Vec::new());
+                        push_cube(&mut mv, &mut mi, Mat4::from_translation(pos) * Mat4::from_scale(Vec3::splat(sz)), color);
+                        metas.push((Mat4::IDENTITY, mv, mi));
+                    }
                 }
                 p.render_scene(device, queue, encoder, target, vp, (rect.x, rect.y, rect.w, rect.h), &camera, &metas);
             })
@@ -1772,9 +1804,10 @@ fn reparto_tools(model: &Model, s: &SceneSpec) -> Vec<View<Msg>> {
     if let Some(key) = act.keys.get(k) {
         v.push(spacer(8.0));
         v.push(section_title("CLAVE", theme));
-        let (gx, gz) = (key.gx, key.gz);
+        let (gx, gz, kt) = (key.gx, key.gz, key.t);
         v.push(slider_view("posición X", gx, 0.0, dimx, &sp, move |_p, dv| Some(Msg::SetKeyPos(true, gx + dv))));
         v.push(slider_view("posición Z", gz, 0.0, dimx, &sp, move |_p, dv| Some(Msg::SetKeyPos(false, gz + dv))));
+        v.push(slider_view("tiempo (s)", kt, 0.0, s.duration, &sp, move |_p, dv| Some(Msg::SetKeyTime(kt + dv))));
         v.push(spacer(4.0));
         v.push(button_view(format!("acción: {}", key.clip.unwrap_or(Clip::Idle).label()), &btn, Msg::CycleKeyClip));
     }
