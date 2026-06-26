@@ -28,6 +28,10 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
+use llimphi_icons::Icon;
+use llimphi_theme::{alpha, motion};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+
 /// Tope por defecto de bytes a leer (256 KB). El caller puede pasar
 /// otro a [`load_preview`] si el dominio lo justifica.
 pub const DEFAULT_PREVIEW_BYTES_MAX: u64 = 256 * 1024;
@@ -162,35 +166,25 @@ where
     })
     .text_aligned(header_text, 10.0, palette.fg_muted, Alignment::Start);
 
-    let (body_text, body_color) = match state {
-        PreviewState::Empty => ("—".to_string(), palette.fg_muted),
-        PreviewState::Text(s) => (s.clone(), palette.fg_text),
-        PreviewState::Binary => (
+    let body = match state {
+        // Empty-state con orientación (en vez de un guión solo) cuando
+        // todavía no hay archivo seleccionado.
+        PreviewState::Empty => empty_body(palette),
+        // Pop-in suave al cargar: la `key` (hash del path) es estable
+        // mientras se mire el mismo archivo, así el fade corre una sola vez.
+        PreviewState::Text(s) => {
+            text_body(s.clone(), palette.fg_text).animated_enter(key_of(path), motion::NORMAL)
+        }
+        PreviewState::Binary => text_body(
             "(archivo binario — sin preview)".to_string(),
             palette.fg_muted,
         ),
-        PreviewState::TooBig(n) => (
+        PreviewState::TooBig(n) => text_body(
             format!("(archivo muy grande: {} bytes — sin preview)", n),
             palette.fg_muted,
         ),
-        PreviewState::Error(e) => (format!("(error: {e})"), palette.fg_error),
+        PreviewState::Error(e) => text_body(format!("(error: {e})"), palette.fg_error),
     };
-
-    let body = View::new(Style {
-        flex_grow: 1.0,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        padding: Rect {
-            left: length(12.0_f32),
-            right: length(12.0_f32),
-            top: length(6.0_f32),
-            bottom: length(12.0_f32),
-        },
-        ..Default::default()
-    })
-    .text_aligned(body_text, 12.0, body_color, Alignment::Start);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -210,4 +204,77 @@ where
     .fill(palette.bg)
     .clip(true)
     .children(vec![header, body])
+}
+
+/// Body de texto: un pane con padding que pinta `text` alineado al inicio.
+fn text_body<Msg>(text: String, color: Color) -> View<Msg>
+where
+    Msg: Clone + 'static,
+{
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(6.0_f32),
+            bottom: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(text, 12.0, color, Alignment::Start)
+}
+
+/// Empty-state con orientación cuando todavía no hay archivo seleccionado.
+fn empty_body<Msg>(palette: &TextViewerPalette) -> View<Msg>
+where
+    Msg: Clone + 'static,
+{
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![empty_view(
+        Icon::FileText,
+        "Sin archivo",
+        Some("Seleccioná un archivo de texto para previsualizarlo."),
+        &empty_palette(palette),
+    )])
+}
+
+/// Deriva una [`EmptyPalette`] desde la [`TextViewerPalette`] (que no acarrea
+/// un `Theme`). Mismo criterio que en `nahual-image-viewer-llimphi`: ícono y
+/// descripción apagados sobre `fg_muted`.
+fn empty_palette(p: &TextViewerPalette) -> EmptyPalette {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let dim = |a: u8| {
+        let [r, g, b, _] = p.fg_muted.components;
+        AlphaColor::new([r, g, b, a as f32 / 255.0])
+    };
+    EmptyPalette {
+        fg_icon: dim(alpha::HINT),
+        fg_title: p.fg_muted,
+        fg_desc: dim(alpha::DISABLED),
+    }
+}
+
+/// Hash estable del path → `key` para el pop-in implícito de Llimphi. El mismo
+/// archivo produce siempre la misma key entre repintados, así el fade-in corre
+/// sólo al cambiar de archivo.
+fn key_of(path: Option<&Path>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    match path {
+        Some(p) => p.to_string_lossy().hash(&mut h),
+        None => 0u8.hash(&mut h),
+    }
+    h.finish()
 }

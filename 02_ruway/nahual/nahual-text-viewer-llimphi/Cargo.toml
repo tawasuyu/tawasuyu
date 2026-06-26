@@ -11,3 +11,5 @@ description = "nahual-text-viewer-llimphi — visor de texto plano sobre Llimphi
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-icons = { workspace = true }
+llimphi-widget-empty = { workspace = true }
