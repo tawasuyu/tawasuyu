@@ -136,6 +136,8 @@ pub enum WizardTipo {
     Tono,
     Resumir,
     Reescribir,
+    /// Script Rhai local: transforma cada párrafo (var `texto`).
+    Custom,
 }
 
 impl WizardTipo {
@@ -145,6 +147,7 @@ impl WizardTipo {
             WizardTipo::Tono => "Tono",
             WizardTipo::Resumir => "Resumir",
             WizardTipo::Reescribir => "Reescribir",
+            WizardTipo::Custom => "Rhai",
         }
     }
 
@@ -155,6 +158,7 @@ impl WizardTipo {
             WizardTipo::Tono => "etiqueta de tono (formal, infantil…)",
             WizardTipo::Resumir => "palabras objetivo (ej. 30) — vacío = libre",
             WizardTipo::Reescribir => "prompt de reescritura…",
+            WizardTipo::Custom => "script Rhai: usá `texto`, ej. texto.to_upper()",
         }
     }
 }

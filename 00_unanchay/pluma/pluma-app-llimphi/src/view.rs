@@ -1688,6 +1688,7 @@ fn wizard_body(model: &Model, theme: &Theme) -> View<Msg> {
         tipo_btn(WizardTipo::Tono),
         tipo_btn(WizardTipo::Resumir),
         tipo_btn(WizardTipo::Reescribir),
+        tipo_btn(WizardTipo::Custom),
     ]);
 
     // 3) Parámetro (significado según el tipo) — reusa preset_input.

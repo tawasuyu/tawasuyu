@@ -63,6 +63,7 @@ llimphi-widget-color-picker = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
 pluma-estilo = { path = "../pluma-estilo" }
 pluma-proyecto = { path = "../pluma-proyecto" }
+rhai = "1"
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 tokio = { workspace = true }

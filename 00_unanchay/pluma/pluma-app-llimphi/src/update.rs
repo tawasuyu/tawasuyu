@@ -10,14 +10,16 @@ use llimphi_ui::{DragPhase, Handle, Key, NamedKey};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_text_editor::{EditorState, PointerEvent};
 use llimphi_widget_text_input::TextInputState;
-use pluma_align::CartaHebras;
+use pluma_align::{alinear_explicito, CartaHebras, OrigenAlineamiento};
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_deck_core::{Recorrido, Rect as DeckRect};
 use pluma_deck_outline::recorrido_desde_cuerpo;
 use pluma_editor_cuerpo::CambioAtom;
 use pluma_llm::{build_client, LlmConfig};
-use pluma_transform::{TipoTransformacion, Transformacion};
+use pluma_transform::{
+    ErrorEjecutor, ProductoTransformacion, TipoTransformacion, Transformacion,
+};
 use pluma_transform_llm::{
     EjecutorReescribirLlm, EjecutorResumirLlm, EjecutorTonoLlm, EjecutorTraducirLlm,
 };
@@ -1048,6 +1050,13 @@ fn confirmar_wizard(model: &mut Model, handle: &Handle<Msg>) {
                 return;
             }
             TrabajoLlm::Reescribir(param)
+        }
+        WizardTipo::Custom => {
+            if param.is_empty() {
+                model.ultimo_status = "escribí un script Rhai (usá `texto`)".into();
+                return;
+            }
+            TrabajoLlm::CustomRhai(param)
         }
     };
     model.wizard = None;
@@ -2504,6 +2513,27 @@ pub(crate) enum TrabajoLlm {
     Resumir(Option<u32>),
     /// Reescritura libre dictada por un prompt humano (diente Derivar-IA).
     Reescribir(String),
+    /// Transformación local con un script Rhai (sin LLM): por párrafo, `texto`
+    /// se evalúa y el resultado es el párrafo de la hija.
+    CustomRhai(String),
+}
+
+/// Evalúa un script Rhai con `texto` (el párrafo) en scope y devuelve el
+/// resultado como String. Sandbox de Rhai (sin acceso a FS/sistema) + tope de
+/// operaciones para no colgarse con un script malicioso/infinito.
+fn aplicar_rhai(script: &str, texto: &str) -> Result<String, String> {
+    let mut engine = rhai::Engine::new();
+    engine.set_max_operations(2_000_000);
+    let mut scope = rhai::Scope::new();
+    scope.push("texto", texto.to_string());
+    let r: rhai::Dynamic = engine
+        .eval_with_scope(&mut scope, script)
+        .map_err(|e| e.to_string())?;
+    if r.is_string() {
+        r.into_string().map_err(|e| e.to_string())
+    } else {
+        Ok(r.to_string())
+    }
 }
 
 fn lanzar(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
@@ -2632,6 +2662,61 @@ fn lanzar_modo(
                     ej.aplicar_con_atoms(&t, &madre, &idx, ahora)
                         .await
                         .map(|p| (p, t))
+                }
+                TrabajoLlm::CustomRhai(script) => {
+                    // Transformación local sincrónica con Rhai — sin LLM. Por
+                    // párrafo evalúa el script con `texto` y materializa la hija.
+                    let t = Transformacion::nueva(
+                        madre.id,
+                        Uuid::new_v4(),
+                        TipoTransformacion::Custom {
+                            kind: "rhai".to_string(),
+                            rhai_script: script.clone(),
+                        },
+                        "ui",
+                        ahora,
+                    );
+                    let mut hija = Cuerpo::nuevo(
+                        format!("{}-rhai", madre.branch_id),
+                        format!("{} (rhai)", madre.metadatos.nombre_legible),
+                        Intencion::Custom { kind: "rhai".to_string() },
+                        ahora,
+                    )
+                    .deriva_de(madre.id, ahora);
+                    let mut atoms_nuevos: Vec<NarrativeAtom> = Vec::new();
+                    let mut pares: Vec<(Uuid, Uuid, f32)> = Vec::new();
+                    let mut error: Option<String> = None;
+                    for &id_madre in &madre.orden {
+                        let Some(am) = idx.get(&id_madre) else { continue };
+                        match aplicar_rhai(&script, am.content.as_str()) {
+                            Ok(texto) => {
+                                let a = NarrativeAtom::new(texto, &hija.branch_id);
+                                let id = a.id;
+                                atoms_nuevos.push(a);
+                                hija.agregar(id, ahora);
+                                pares.push((id_madre, id, 1.0));
+                            }
+                            Err(e) => {
+                                error = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    match error {
+                        Some(e) => Err(ErrorEjecutor::Backend(format!("rhai: {e}"))),
+                        None => {
+                            let carta = alinear_explicito(
+                                &madre,
+                                &hija,
+                                &pares,
+                                OrigenAlineamiento::Derivado {
+                                    transformacion: t.id,
+                                    timestamp: ahora,
+                                },
+                            );
+                            Ok((ProductoTransformacion { hija, atoms_nuevos, carta }, t))
+                        }
+                    }
                 }
             }
         });
@@ -2980,6 +3065,22 @@ fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
             Err(e) => Msg::LlmError(e),
         }
     });
+}
+
+#[cfg(test)]
+mod tests_rhai {
+    use super::aplicar_rhai;
+
+    #[test]
+    fn rhai_transforma_texto() {
+        assert_eq!(aplicar_rhai("texto.to_upper()", "hola").unwrap(), "HOLA");
+        assert_eq!(aplicar_rhai("\"» \" + texto", "x").unwrap(), "» x");
+    }
+
+    #[test]
+    fn rhai_script_invalido_es_error() {
+        assert!(aplicar_rhai("texto.no_existe(", "x").is_err());
+    }
 }
 
 #[cfg(test)]
