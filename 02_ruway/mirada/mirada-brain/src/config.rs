@@ -575,17 +575,50 @@ pub struct StartupApp {
     /// Abrir la ventana en pantalla completa.
     #[serde(default)]
     pub fullscreen: bool,
+    /// Puerto ssh del host remoto. `0` (o 22) = el de por defecto. Sólo aplica
+    /// si [`Self::remote`] está puesto.
+    #[serde(default)]
+    pub ssh_port: u16,
+    /// Ruta a la clave privada ssh (`-i`) para el host remoto. Vacía = la que
+    /// elija ssh por defecto (agente/`~/.ssh/id_*`). Sólo aplica si
+    /// [`Self::remote`] está puesto.
+    #[serde(default)]
+    pub ssh_key: String,
+    /// Compresión del túnel waypipe — baja la latencia/ancho de banda. Vacío =
+    /// el default de waypipe; `"none"`, `"lz4"` (rápido) o `"zstd"`/`"zstd=N"`
+    /// (comprime más, mejor para enlaces flacos). Sólo aplica a sesiones remotas.
+    #[serde(default)]
+    pub compress: String,
+    /// Codificar las superficies como vídeo (H.264/VP9 vía VAAPI): mucho menos
+    /// ancho de banda en ventanas grandes/vídeo, a costa de nitidez. Sólo aplica
+    /// a sesiones remotas.
+    #[serde(default)]
+    pub video: bool,
+    /// Hilos de (de)compresión de waypipe. `0` = el default de waypipe. Sólo
+    /// aplica a sesiones remotas.
+    #[serde(default)]
+    pub threads: u32,
 }
 
 impl StartupApp {
+    /// El afinado de waypipe que declara esta entrada (compresión/vídeo/hilos).
+    pub fn tuning(&self) -> WaypipeTuning {
+        WaypipeTuning {
+            compress: self.compress.clone(),
+            video: self.video,
+            threads: self.threads,
+        }
+    }
+
     /// El comando de shell ya resuelto: el `command` tal cual si es local, o
-    /// envuelto en `waypipe ssh <host> …` si [`Self::remote`] está puesto.
+    /// envuelto en `waypipe [afinado] ssh [-p][-i] <host> …` si [`Self::remote`]
+    /// está puesto.
     pub fn shell_command(&self) -> String {
         let host = self.remote.trim();
         if host.is_empty() {
             self.command.clone()
         } else {
-            waypipe_ssh_command(host, &self.command)
+            waypipe_command(&self.tuning(), self.ssh_port, &self.ssh_key, host, &self.command)
         }
     }
 
@@ -609,11 +642,82 @@ impl StartupApp {
     }
 }
 
-/// Arma `waypipe ssh <host> <command>`: corre `command` en `host` y reenvía su
-/// protocolo Wayland por el túnel ssh. `host` puede traer `user@`. Pura y
-/// reutilizada por `mirada-ctl remote` y por el autoarranque de la config.
+/// Afinado del túnel waypipe: baja latencia/ancho de banda comprimiendo o
+/// codificando como vídeo el stream Wayland. Son **opciones globales** de
+/// waypipe (van ANTES del subcomando `ssh`). El default no agrega banderas —
+/// deja el comportamiento de fábrica de waypipe intacto.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WaypipeTuning {
+    /// `--compress`: `""`/`"none"`/`"lz4"`/`"zstd"`/`"zstd=N"`. Vacío = default
+    /// de waypipe (no se pasa la bandera).
+    #[serde(default)]
+    pub compress: String,
+    /// `--video`: codifica las superficies como H.264/VP9 (VAAPI).
+    #[serde(default)]
+    pub video: bool,
+    /// `--threads=N`: hilos de (de)compresión. `0` = default (no se pasa).
+    #[serde(default)]
+    pub threads: u32,
+}
+
+impl WaypipeTuning {
+    /// Las banderas globales de waypipe que representa este afinado, en orden.
+    /// Vacío = sin afinado (comportamiento de fábrica).
+    pub fn flags(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        let c = self.compress.trim();
+        if !c.is_empty() {
+            v.push(format!("--compress={c}"));
+        }
+        if self.video {
+            v.push("--video".to_string());
+        }
+        if self.threads > 0 {
+            v.push(format!("--threads={}", self.threads));
+        }
+        v
+    }
+}
+
+/// Arma `waypipe [afinado] ssh [-p PORT] [-i KEY] <host> <command>`: corre
+/// `command` en `host` y reenvía su protocolo Wayland por el túnel ssh. `host`
+/// puede traer `user@`; `port == 0` o `22` y `key` vacía omiten esas banderas.
+/// El afinado ([`WaypipeTuning`]) baja la latencia. Pura y testeable; es el
+/// armador único que comparten `mirada-ctl remote` y el autoarranque `startup`.
+pub fn waypipe_command(
+    tuning: &WaypipeTuning,
+    port: u16,
+    key: &str,
+    host: &str,
+    command: &str,
+) -> String {
+    let mut s = String::from("waypipe");
+    for f in tuning.flags() {
+        s.push(' ');
+        s.push_str(&f);
+    }
+    s.push_str(" ssh");
+    if port != 0 && port != 22 {
+        s.push_str(&format!(" -p {port}"));
+    }
+    let key = key.trim();
+    if !key.is_empty() {
+        s.push_str(&format!(" -i {key}"));
+    }
+    s.push(' ');
+    s.push_str(host);
+    let command = command.trim();
+    if !command.is_empty() {
+        s.push(' ');
+        s.push_str(command);
+    }
+    s
+}
+
+/// Atajo de [`waypipe_command`] sin afinado ni opciones ssh: `waypipe ssh
+/// <host> <command>`. Lo usa `mirada-ctl remote` (el camino simple).
 pub fn waypipe_ssh_command(host: &str, command: &str) -> String {
-    format!("waypipe ssh {host} {command}")
+    waypipe_command(&WaypipeTuning::default(), 0, "", host, command)
 }
 
 impl Default for Config {
@@ -1195,10 +1299,15 @@ const CONFIG_TEMPLATE: &str = "\
     //   app_id:    \"foot\"          → con qué app_id reconocer la ventana para
     //                                ubicarla (NECESARIO para workspace/floating).
     //   floating / fullscreen      → cómo abrirla.
+    //   ssh_port / ssh_key         → puerto e identidad ssh del host remoto.
+    //   compress / video / threads → AFINADO de waypipe para bajar la latencia:
+    //                                compress \"lz4\"|\"zstd\", video (H.264/VP9),
+    //                                threads N. Sólo afectan a sesiones remotas.
     // Una sesión waypipe se integra al diseño de escritorios igual que una local.
     // Ej:
     //   startup: [
-    //       (command: \"foot\", remote: \"sergio@servidor\", app_id: \"foot\", workspace: 3),
+    //       (command: \"foot\", remote: \"sergio@servidor\", app_id: \"foot\",
+    //        workspace: 3, ssh_port: 2222, compress: \"zstd\", video: true),
     //       (command: \"mpv\",  app_id: \"mpv\", fullscreen: true),
     //   ],
     startup: [],
@@ -1566,6 +1675,39 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(a.shell_command(), "waypipe ssh sergio@servidor foot --title diario");
+    }
+
+    #[test]
+    fn startup_remoto_con_afinado_y_opciones_ssh() {
+        let a = StartupApp {
+            command: "foot".into(),
+            remote: "sergio@servidor".into(),
+            ssh_port: 2222,
+            ssh_key: "~/.ssh/id_ed25519".into(),
+            compress: "zstd".into(),
+            video: true,
+            threads: 4,
+            ..Default::default()
+        };
+        // Afinado (global) ANTES de `ssh`; opciones ssh entre `ssh` y el host.
+        assert_eq!(
+            a.shell_command(),
+            "waypipe --compress=zstd --video --threads=4 ssh -p 2222 -i ~/.ssh/id_ed25519 sergio@servidor foot"
+        );
+    }
+
+    #[test]
+    fn waypipe_puerto_22_y_clave_vacia_se_omiten() {
+        // El puerto por defecto (0 o 22) y la clave vacía no agregan banderas.
+        let cmd = waypipe_command(&WaypipeTuning::default(), 22, "  ", "host", "foot");
+        assert_eq!(cmd, "waypipe ssh host foot");
+    }
+
+    #[test]
+    fn waypipe_tuning_flags_respeta_orden_y_omite_vacios() {
+        assert!(WaypipeTuning::default().flags().is_empty());
+        let t = WaypipeTuning { compress: "lz4".into(), video: false, threads: 0 };
+        assert_eq!(t.flags(), vec!["--compress=lz4"]);
     }
 
     #[test]
