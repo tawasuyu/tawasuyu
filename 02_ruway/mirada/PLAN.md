@@ -228,6 +228,22 @@ sesión** — pero **no** mientras mirás un vídeo o estás en una llamada.
   atómica-correcta (togglear `ACTIVE` del CRTC en el commit del `DrmCompositor`)
   queda pendiente — **verificar en sesión gráfica real**. El backend `winit`
   (anidado) no tiene DPMS: sólo el auto-lock funciona ahí.
+
+  > **✅ VERIFICADO EN METAL (2026-06-26 · Intel Iris Xe, Mesa, DRM real).** La
+  > vía *legacy* **SÍ apaga** el panel bajo el `DrmCompositor` atómico: con
+  > `idle_screen_off_secs=5`, `/sys/class/drm/card1-eDP-1/dpms` pasa `On→Off` a
+  > los ~5 s (leído como texto, sin mirar la pantalla) y mirada loguea «DPMS off
+  > por inactividad». **No hace falta la vía atómica-ACTIVE.** Pero el primer run
+  > destapó un bug: el `render()` seguía componiendo y **encolando page-flips
+  > contra el conector ya en DPMS-off → flood de `Page flip commit failed
+  > (EINVAL, os error 22)`**, un cuadro tras otro. **Arreglado**: `render()` ahora
+  > hace early-return también con `dpms_off` (igual que con `!active`); al
+  > despertar, `set_dpms(false)` baja `dpms_off` *antes* de llamar a `render()`,
+  > así el scanout se reanuda. Segundo run en metal: mismo `On→Off`, **EINVAL
+  > count = 0**. El despertar por input (`handle_input → idle_activity →
+  > set_dpms(false)`) es correcto por construcción (corre en cada evento de
+  > libinput, indep. del loop de render) — falta una observación limpia del
+  > flanco `Off→On` (en los runs no se movió el ratón con la pantalla negra).
 - **`ext_idle_notify_v1`** (notificar a clientes externos del estado de ocio) sigue
   sin cablear: `IdleNotifierState<App>` exige un `LoopHandle<App>` y los bucles
   despachan `DrmState`/winit — el mismo refactor de unificación de tipo de estado de

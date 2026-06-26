@@ -46,8 +46,14 @@ impl DrmState {
     /// Si una salida tiene su `pending_flip` puesto, se saltea hasta el
     /// próximo VBlank. Refresca los búferes de marco una vez al principio.
     pub(super) fn render(&mut self) {
-        if !self.active {
-            return; // la sesión está en otra VT — no tocamos la GPU
+        if !self.active || self.dpms_off {
+            // Sesión en otra VT, o pantalla apagada por inactividad (DPMS off):
+            // no tocamos la GPU. Componer y encolar un page-flip contra un
+            // conector que el kernel tiene en DPMS-off rebota con EINVAL (os
+            // error 22) por cada cuadro — un busy-loop de commits fallidos. Al
+            // despertar, `set_dpms(false)` baja `dpms_off` *antes* de llamar a
+            // `render()`, así el scanout se reanuda en el mismo paso.
+            return;
         }
         self.stamp_open_animations();
         self.stamp_focus_animations();
