@@ -48,6 +48,7 @@ mod media;
 mod network;
 mod osd;
 mod panels;
+mod polkit;
 mod session;
 mod sidebar;
 mod start_menus;
@@ -65,6 +66,7 @@ pub use control::{control_button_view, control_overlay, set_radio, ControlExtras
 pub use media::media_view;
 pub use network::{network_overlay, network_view};
 pub use osd::{osd_overlay, osd_surface_view, Osd, OsdKind, OSD_H, OSD_W};
+pub use polkit::polkit_overlay;
 pub use session::{session_overlay, session_view};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};
@@ -1461,6 +1463,56 @@ pub fn network_menu_view(
     body_style.flex_grow = 1.0;
     let body = View::new(body_style)
         .on_click(Msg::NetworkToggle)
+        .children(vec![panel_abs]);
+
+    let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {
+        vec![body, bar]
+    } else {
+        vec![bar, body]
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// El **diálogo de polkit** para el **layer-shell**: lo abre una autenticación
+/// entrante (no un clic). Crece el panel del menú y captura el teclado.
+pub fn polkit_menu_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    message: &str,
+    typed: &str,
+    avail_w: f32,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(bar_px) },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, surface_widgets, shuma_state, data, theme)]);
+
+    let left = ((avail_w - polkit::PANEL_W) * 0.5).clamp(8.0, (avail_w - polkit::PANEL_W).max(8.0));
+    let panel_abs = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect { left: length(left), top: length(8.0_f32), right: auto(), bottom: auto() },
+        size: Size { width: length(polkit::PANEL_W), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![polkit::polkit_panel(message, typed, theme)]);
+
+    let mut body_style = Style {
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::PolkitCancel)
         .children(vec![panel_abs]);
 
     let hijos = if surface.anchor.crece_hacia_el_borde_inicial() {

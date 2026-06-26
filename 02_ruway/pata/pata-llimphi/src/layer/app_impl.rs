@@ -291,6 +291,35 @@ impl LayerApp {
         self.panels[pi].dirty = true;
     }
 
+    /// Drena las solicitudes del agente polkit. La primera abre el diálogo (crece
+    /// el panel del menú como `Polkit` y captura el teclado); si ya hay una en
+    /// curso, la nueva se rechaza.
+    pub(super) fn poll_polkit(&mut self) {
+        let Some(h) = &self.polkit else { return };
+        let mut nuevas = Vec::new();
+        while let Some(req) = h.try_recv() {
+            nuevas.push(req);
+        }
+        for req in nuevas {
+            if self.polkit_prompt.is_none() {
+                self.polkit_input.clear();
+                self.polkit_prompt = Some(req);
+                self.menu_kind = MenuKind::Polkit;
+                self.set_menu_open(true);
+                self.set_menu_keyboard(true);
+            } else {
+                let _ = req.reply.send(None);
+            }
+        }
+    }
+
+    /// Cierra el diálogo de polkit: revoca el teclado y repliega el menú.
+    pub(super) fn cerrar_polkit(&mut self) {
+        self.polkit_input.clear();
+        self.set_menu_keyboard(false);
+        self.set_menu_open(false);
+    }
+
     /// Concede o revoca el foco de teclado al panel del menú abierto (lo usa la
     /// entrada de contraseña Wi-Fi, que necesita teclear dentro del popup como el
     /// buscador del menú de inicio).
@@ -810,6 +839,7 @@ impl LayerApp {
         self.maybe_cava();
         self.poll_nav();
         self.poll_host();
+        self.poll_polkit();
         // Animación del switcher: si cambió el escritorio, el resaltado viaja.
         // Mientras dura, mantené el panel pintándose para animar suave.
         self.update_ws_anim();
@@ -1014,6 +1044,17 @@ impl LayerApp {
                     self.menu_bar_px as f32,
                     self.bluetooth_now.as_ref(),
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
+                    self.panels[idx].width as f32,
+                ),
+                MenuKind::Polkit => render::polkit_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    self.polkit_prompt.as_ref().map(|r| r.message.as_str()).unwrap_or(""),
+                    &self.polkit_input,
                     self.panels[idx].width as f32,
                 ),
             }
@@ -1250,6 +1291,26 @@ impl LayerApp {
             }
             Msg::BluetoothConnect(mac) => crate::bluetooth::connect(&mac),
             Msg::BluetoothDisconnect(mac) => crate::bluetooth::disconnect(&mac),
+            Msg::PolkitChar(c) => {
+                self.polkit_input.push(c);
+                self.marcar_menu_dirty();
+            }
+            Msg::PolkitBackspace => {
+                self.polkit_input.pop();
+                self.marcar_menu_dirty();
+            }
+            Msg::PolkitSubmit => {
+                if let Some(req) = self.polkit_prompt.take() {
+                    let _ = req.reply.send(Some(std::mem::take(&mut self.polkit_input)));
+                }
+                self.cerrar_polkit();
+            }
+            Msg::PolkitCancel => {
+                if let Some(req) = self.polkit_prompt.take() {
+                    let _ = req.reply.send(None);
+                }
+                self.cerrar_polkit();
+            }
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy < 0.0);

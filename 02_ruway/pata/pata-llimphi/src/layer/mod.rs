@@ -204,6 +204,8 @@ pub(super) enum MenuKind {
     Session,
     /// El applet de Bluetooth (switch + dispositivos emparejados).
     Bluetooth,
+    /// El diálogo de autenticación de polkit (lo abre una solicitud entrante).
+    Polkit,
 }
 
 /// El cliente Wayland del backend layer-shell.
@@ -257,6 +259,12 @@ pub(super) struct LayerApp {
     pub(super) bluetooth: Option<crate::bluetooth::BluetoothHandle>,
     /// Última lectura de Bluetooth.
     pub(super) bluetooth_now: Option<crate::bluetooth::BtState>,
+    /// Agente de autenticación polkit en su propio hilo.
+    pub(super) polkit: Option<crate::polkit::PolkitHandle>,
+    /// Solicitud de autenticación polkit en curso (con el canal de respuesta).
+    pub(super) polkit_prompt: Option<crate::polkit::PolkitRequest>,
+    /// Contraseña tecleada en el diálogo de polkit.
+    pub(super) polkit_input: String,
     /// Índice del panel de la surface dedicada del OSD (volumen/brillo), o `None`.
     pub(super) osd_pi: Option<usize>,
     /// Cartel OSD vigente, o `None`. Se dispara desde la rueda/slider y se oculta
@@ -469,6 +477,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let bluetooth = (crate::config_tiene_widget(&cfg, "bluetooth")
         || crate::config_tiene_widget(&cfg, "bt"))
     .then(crate::bluetooth::BluetoothHandle::spawn);
+    // El agente polkit no es un widget: pata es el shell de la sesión, así que
+    // registra el agente siempre (si ya hay otro, el registro falla y se loguea).
+    let polkit = crate::polkit::PolkitHandle::spawn();
     let cava = crate::config_tiene_widget(&cfg, "cava")
         .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
 
@@ -581,6 +592,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         media_now: None,
         bluetooth,
         bluetooth_now: None,
+        polkit,
+        polkit_prompt: None,
+        polkit_input: String::new(),
         osd_pi: None,
         osd: None,
         cava,

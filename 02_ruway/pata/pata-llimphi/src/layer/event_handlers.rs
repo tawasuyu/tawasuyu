@@ -234,6 +234,22 @@ impl KeyboardHandler for LayerApp {
         _: u32,
         event: smithay_client_toolkit::seat::keyboard::KeyEvent,
     ) {
+        // Diálogo de polkit (modal): el teclado va al campo de contraseña.
+        if self.polkit_prompt.is_some() {
+            match event.keysym {
+                Keysym::Escape => self.handle_msg(crate::Msg::PolkitCancel),
+                Keysym::BackSpace => self.handle_msg(crate::Msg::PolkitBackspace),
+                Keysym::Return | Keysym::KP_Enter => self.handle_msg(crate::Msg::PolkitSubmit),
+                _ => {
+                    if let Some(txt) = event.utf8 {
+                        for c in txt.chars().filter(|c| !c.is_control()) {
+                            self.handle_msg(crate::Msg::PolkitChar(c));
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // Entrada de contraseña Wi-Fi: el teclado va al campo (Enter conecta, Esc
         // cancela, Backspace borra). Se evalúa antes que el buscador del menú.
         if self.net_password.is_some() {

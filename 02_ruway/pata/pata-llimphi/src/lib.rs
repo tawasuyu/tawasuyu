@@ -37,6 +37,7 @@ pub mod tray;
 pub mod bluetooth;
 pub mod mpris;
 pub mod network;
+pub mod polkit;
 pub mod weather;
 
 use std::time::Duration;
@@ -213,6 +214,14 @@ pub enum Msg {
     BluetoothConnect(String),
     /// Desconectar el dispositivo `mac`.
     BluetoothDisconnect(String),
+    /// Carácter tecleado en el diálogo de contraseña de polkit.
+    PolkitChar(char),
+    /// Backspace en el diálogo de polkit.
+    PolkitBackspace,
+    /// Confirmar la autenticación con la contraseña tecleada.
+    PolkitSubmit,
+    /// Cancelar la autenticación de polkit.
+    PolkitCancel,
     /// Desplegar/replegar el menú de sesión/energía.
     SessionToggle,
     /// Pedir confirmación de una acción disruptiva (reiniciar/apagar/logout).
@@ -900,6 +909,12 @@ pub struct Model {
     pub bluetooth_now: Option<bluetooth::BtState>,
     /// `true` cuando el popup de Bluetooth está desplegado (path winit).
     pub bluetooth_open: bool,
+    /// Agente de autenticación polkit en su propio hilo.
+    pub polkit: Option<polkit::PolkitHandle>,
+    /// Solicitud de autenticación polkit en curso (con el canal de respuesta).
+    pub polkit_prompt: Option<polkit::PolkitRequest>,
+    /// Contraseña tecleada en el diálogo de polkit.
+    pub polkit_input: String,
     /// `true` cuando el popup del applet de red está desplegado (path winit).
     pub network_open: bool,
     /// Entrada de contraseña Wi-Fi en curso: `(ssid, tecleado)`. `None` = lista.
@@ -1238,6 +1253,9 @@ impl App for PataApp {
             bluetooth,
             bluetooth_now: None,
             bluetooth_open: false,
+            polkit: polkit::PolkitHandle::spawn(),
+            polkit_prompt: None,
+            polkit_input: String::new(),
             network_open: false,
             net_password: None,
             session_open: false,
@@ -1361,6 +1379,18 @@ impl App for PataApp {
                 if let Some(h) = &model.bluetooth {
                     if let Some(b) = h.latest() {
                         model.bluetooth_now = Some(b);
+                    }
+                }
+                // Agente polkit: si llega una autenticación y no hay otra en
+                // curso, abrimos el diálogo; si ya hay una, la nueva se rechaza.
+                if let Some(h) = &model.polkit {
+                    while let Some(req) = h.try_recv() {
+                        if model.polkit_prompt.is_none() {
+                            model.polkit_input.clear();
+                            model.polkit_prompt = Some(req);
+                        } else {
+                            let _ = req.reply.send(None);
+                        }
                     }
                 }
                 // Mezclador por app: refresca mientras el popup de volumen está
@@ -1648,6 +1678,21 @@ impl App for PataApp {
             }
             Msg::BluetoothConnect(mac) => bluetooth::connect(&mac),
             Msg::BluetoothDisconnect(mac) => bluetooth::disconnect(&mac),
+            Msg::PolkitChar(c) => model.polkit_input.push(c),
+            Msg::PolkitBackspace => {
+                model.polkit_input.pop();
+            }
+            Msg::PolkitSubmit => {
+                if let Some(req) = model.polkit_prompt.take() {
+                    let _ = req.reply.send(Some(std::mem::take(&mut model.polkit_input)));
+                }
+            }
+            Msg::PolkitCancel => {
+                if let Some(req) = model.polkit_prompt.take() {
+                    let _ = req.reply.send(None);
+                }
+                model.polkit_input.clear();
+            }
             Msg::ClipboardPick(text) => {
                 sampler::copiar_clipboard(&text);
                 model.clip_open = false;
@@ -1928,6 +1973,16 @@ impl App for PataApp {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El diálogo de polkit es modal: tapa todo lo demás mientras está activo.
+        if let Some(req) = &model.polkit_prompt {
+            let screen = (model.screen.0 as f32, model.screen.1 as f32);
+            return Some(render::polkit_overlay(
+                &req.message,
+                &model.polkit_input,
+                screen,
+                &model.theme,
+            ));
+        }
         // El drawer Quake tiene prioridad; luego el menú de inicio; luego los
         // popups de widgets (historial de portapapeles, panel del reloj).
         if let Some(d) = nahual::drawer_overlay(&model.nahual, model.screen, &model.theme) {
@@ -2061,6 +2116,16 @@ impl App for PataApp {
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // 0) El diálogo de polkit es modal: captura el teclado por encima de todo.
+        if model.polkit_prompt.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::PolkitCancel),
+                Key::Named(NamedKey::Backspace) => Some(Msg::PolkitBackspace),
+                Key::Named(NamedKey::Enter) => Some(Msg::PolkitSubmit),
+                Key::Character(s) => s.chars().next().map(Msg::PolkitChar),
+                _ => None,
+            };
         }
         // 0) Super+E abre/cierra el front universal de nahual (file manager).
         //    Con su drawer abierto, el teclado va al módulo (Esc / Super+E cierran).

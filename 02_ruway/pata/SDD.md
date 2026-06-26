@@ -769,3 +769,23 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     rfkill del Control panel (aquel es el switch rápido, este el applet con lista).
     El **emparejamiento** de un dispositivo nuevo (scan + PIN) queda fuera (flujo
     de una sola vez con `bluetoothctl`).
+  - **Agente polkit ✅** — pata registra un **agente de autenticación**
+    `org.freedesktop.PolicyKit1.AuthenticationAgent`: cuando una acción
+    privilegiada lo pide (el reloj ya usa `pkexec`; también red/energía), aparece
+    un diálogo modal con el mensaje de polkit y un campo de contraseña. `polkit.rs`
+    corre en su **propio hilo** con runtime tokio (zbus, como `tray.rs`): registra
+    el agente para la sesión (`unix-session` con `XDG_SESSION_ID`) en el **bus de
+    sistema**; en `BeginAuthentication` manda un `PolkitRequest` al bucle de UI por
+    un canal (con un `oneshot` para la respuesta) y espera. La UI muestra el
+    diálogo (reusa el campo con foco de teclado del applet de red; modal, prioridad
+    máxima en winit y `MenuKind::Polkit` en layer-shell). Con la contraseña, el
+    agente corre el helper setuid `polkit-agent-helper-1` (rutas por distro),
+    hablando su protocolo PAM por stdin/stdout —la contraseña va por el stdin del
+    helper, **nunca por la shell ni el log**—; `clasificar_linea` (pura, testeada)
+    distingue prompt/SUCCESS/FAILURE. Se registra siempre (pata es el shell de la
+    sesión); si ya hay otro agente, el registro falla y se loguea. Una
+    autenticación a la vez; `CancelAuthentication` deja caer el `oneshot`. Runtime
+    sin verificar headless (norma de pata).
+    - **Con esto cierran los huecos de DE que faltaban en pata.** Quedan en órbita
+      de **mirada** (compositor, no pata): lock screen + gestión de idle (en curso
+      ahí), screenshot/grabación y configuración de displays.
