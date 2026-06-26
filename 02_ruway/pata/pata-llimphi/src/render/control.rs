@@ -100,10 +100,16 @@ fn night_on() -> bool {
 }
 
 /// Enciende/apaga la luz nocturna. On = arranca `wlsunset` (matando una instancia
-/// previa); off = la mata. Desacoplado (no espera).
+/// previa); off = la mata. Desacoplado (no espera). `wlsunset` necesita
+/// argumentos —sin ellos aborta—: le damos horarios fijos de amanecer/atardecer
+/// y temperaturas (cálido 4000K de noche, neutro 6500K de día), que no dependen
+/// de geolocalización. Usa el `wlr-gamma-control` del compositor (mirada lo
+/// implementa) para aplicar la rampa.
 pub fn set_night(on: bool) {
     if on {
-        crate::spawn_cmd("pkill -x wlsunset 2>/dev/null; exec wlsunset");
+        crate::spawn_cmd(
+            "pkill -x wlsunset 2>/dev/null; exec wlsunset -S 07:00 -s 19:00 -t 4000 -T 6500",
+        );
     } else {
         crate::spawn_cmd("pkill -x wlsunset");
     }
