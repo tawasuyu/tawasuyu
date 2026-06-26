@@ -431,6 +431,25 @@ impl App {
         (pct as f32 / 100.0).clamp(0.0, 0.8)
     }
 
+    /// `true` si el fondo por defecto debe ser el **wallpaper de marca animado**
+    /// (chakana + plano cartesiano vivo). Aplica cuando la fuente cae al fondo
+    /// por defecto (familia `auto`/`local`/`directory`/`remote` **sin** imagen) y
+    /// «reducir movimiento» está apagado. Con `reduce_motion` el default vuelve a
+    /// la marca estática (byte-idéntico al de antes). Global, no por-salida.
+    pub(crate) fn config_animated_default(&self) -> bool {
+        let Brain::Embedded(d) = &self.brain else {
+            return false;
+        };
+        let c = d.config();
+        if c.reduce_motion || !c.wallpaper_path.is_empty() {
+            return false;
+        }
+        matches!(
+            c.wallpaper_source.as_str(),
+            "auto" | "local" | "directory" | "remote"
+        )
+    }
+
     /// Win+Tab estilo switcher sobre la vista espacial: abre la vista (si hacía
     /// falta) y mueve el resaltado al escritorio siguiente/anterior. La primera
     /// pulsación ya avanza uno (un Win+Tab suelto = saltar al siguiente al

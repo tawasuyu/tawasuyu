@@ -476,6 +476,24 @@ remote`. Faltan dos fuentes:
 > GPU. **Verificación en metal pendiente** (decode+readback sólo se prueba en
 > hardware; los tests cubren la fuente CFR de foreign-av y la degradación).
 
+> **✅ HECHO — wallpaper de marca ANIMADO por defecto + pausa DPMS (2026-06-26).**
+> El fondo por defecto (sin imagen configurada) ahora es **vivo**: la chakana
+> (geometría EXACTA de `docs/brand/chakana.svg`) en el cruce de un plano
+> cartesiano con sus 4 cuadrantes-fase, **un fluido que viaja de adentro hacia
+> afuera por cada eje y enciende la flecha del extremo**, y la **iluminación de la
+> chakana variando levemente** (respira). El render es **puro** y vive en
+> `shared/marca` (`animated_frame(t, w, h) -> BGRA`, sin deps, testeado +
+> `examples/preview.rs`). El compositor lo regenera estrangulado a **~20 fps**
+> (`tick_animated_default`) sólo cuando `config_animated_default()` (fuente
+> auto-familia sin imagen y **`reduce_motion` apagado**); con `reduce_motion`
+> vuelve a la marca **estática** (byte-idéntico al de antes). **Pausa** con
+> pantalla apagada (DPMS), otra VT, o ventana fullscreen — esto **cierra el
+> pendiente de pausa-DPMS también para el video** (`DrmState.dpms_off`, sellado en
+> `set_dpms`). Verificado headless una vez (render puro a PNG, regla 8): la chakana
+> lee bien, ejes+flechas+fluido OK. **Sigue pendiente:** video por-salida, escalar
+> por GPU (hoy el frame animado se genera a resolución de salida en CPU — caro en
+> 4K), y loop de video sin costura.
+
 ### 2) Sesión Wayland remota persistente — «tmux/mosh para Wayland»  — esfuerzo ALTO
 Hoy ya hay **apps** remotas: `mirada-ctl remote` (una app vía waypipe ssh) y sesiones
 waypipe **declaradas** en `config.ron` (`StartupApp.remote`). La idea nueva: una

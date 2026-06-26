@@ -65,8 +65,9 @@ impl DrmState {
             self.render_output(i);
         }
         self.send_frames_to_clients();
-        // El frame de video ya se compuso en todas las salidas este cuadro.
+        // Los frames animados ya se compusieron en todas las salidas este cuadro.
         self.video_dirty = false;
+        self.anim_default_dirty = false;
     }
 
     /// Si el puntero global cae sobre `rect`, emite el cursor en coordenadas
@@ -1685,10 +1686,11 @@ impl DrmState {
                     self.video_wp = Some(super::video_wallpaper::VideoWallpaper::start(&path, fps));
                     self.video_frame = None;
                 }
-                // Pausá si el fondo no se ve: otra VT, o una ventana a pantalla
-                // completa tapándolo. Ahí decodificar es puro desperdicio.
+                // Pausá si el fondo no se ve: otra VT, pantalla apagada (DPMS), o
+                // una ventana a pantalla completa tapándolo. Decodificar ahí es
+                // puro desperdicio.
                 let covered = self.app.windows.iter().any(|w| w.fullscreen && w.visible);
-                let paused = !self.active || covered;
+                let paused = !self.active || self.dpms_off || covered;
                 if let Some(vw) = self.video_wp.as_ref() {
                     vw.set_paused(paused);
                 }
@@ -1713,6 +1715,26 @@ impl DrmState {
                 }
             }
         }
+    }
+
+    /// Late del **wallpaper de marca animado**: cuando el fondo por defecto es el
+    /// vivo y se ve (sesión activa, pantalla encendida, no tapado), marca daño a
+    /// ~20 fps para que `emit_wallpaper` regenere el frame. Pausado en cualquier
+    /// otro caso → costo cero. Corre en `tick`, antes de `render`.
+    pub(super) fn tick_animated_default(&mut self) {
+        if !self.active || self.dpms_off || !self.app.config_animated_default() {
+            return;
+        }
+        if self.app.windows.iter().any(|w| w.fullscreen && w.visible) {
+            return; // tapado por una ventana a pantalla completa.
+        }
+        let now = self.start.elapsed().as_millis() as u32;
+        if self.anim_default_ms != 0 && now.saturating_sub(self.anim_default_ms) < 50 {
+            return; // ~20 fps
+        }
+        self.anim_default_ms = now;
+        self.anim_default_dirty = true;
+        crate::screencopy::danar_todo(&mut self.app);
     }
 
     fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame<GlesRenderer>>) {
@@ -1747,6 +1769,23 @@ impl DrmState {
                         .or_else(|| Some(make_default_wallpaper(size.0, size.1)));
                     self.outputs[idx].wallpaper = buf.map(|b| (b, size));
                 }
+            }
+        } else if matches!(spec, WallpaperSpec::Default) && self.app.config_animated_default() {
+            // Fondo por defecto VIVO: la chakana + plano cartesiano de marca,
+            // regenerado por frame (estrangulado a ~20 fps por `tick_animated_default`,
+            // que pone `anim_default_dirty`). Reusa el camino del buffer estático.
+            if self.anim_default_dirty || stale {
+                let t = self.start.elapsed().as_secs_f32();
+                let bytes = marca::animated_frame(t, size.0 as u32, size.1 as u32);
+                let buf = MemoryRenderBuffer::from_slice(
+                    &bytes,
+                    Fourcc::Argb8888,
+                    (size.0, size.1),
+                    1,
+                    Transform::Normal,
+                    None,
+                );
+                self.outputs[idx].wallpaper = Some((buf, size));
             }
         } else if stale {
             // Despacho por la FUENTE elegida (color/gradiente/procedural/imagen).

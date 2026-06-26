@@ -19,6 +19,9 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
+mod anim;
+pub use anim::animated_frame;
+
 /// Las tres marcas del ecosistema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Brand {

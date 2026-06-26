@@ -631,6 +631,15 @@ struct DrmState {
     /// recomponer por salida (no recomponemos el mismo frame a 60 Hz). Se limpia
     /// al final de `render`.
     video_dirty: bool,
+    /// **Wallpaper de marca animado** (el fondo por defecto vivo): último ms en
+    /// que se regeneró el frame, para estrangular a ~20 fps. `0` = nunca.
+    anim_default_ms: u32,
+    /// `true` el render en que toca regenerar el fondo de marca animado. Se
+    /// limpia al final de `render` (igual que `video_dirty`).
+    anim_default_dirty: bool,
+    /// `true` con la pantalla apagada por DPMS (inactividad). Pausa los fondos
+    /// animados (video y marca): apagada no se ve, no se gasta.
+    dpms_off: bool,
     /// Animación de zoom de la vista espacial (Prezi): `(ms de inicio, abriendo)`.
     /// `abriendo=true` = zoom-OUT (del escritorio activo al mosaico); `false` =
     /// zoom-IN de cierre. `None` = sin animación (abierta-quieta o cerrada).
@@ -1293,6 +1302,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         video_wp: None,
         video_frame: None,
         video_dirty: false,
+        anim_default_ms: 0,
+        anim_default_dirty: false,
+        dpms_off: false,
         overview_anim: None,
         prev_overview_open: false,
         overview_tiles: Vec::new(),

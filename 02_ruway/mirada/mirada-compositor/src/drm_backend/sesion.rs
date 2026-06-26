@@ -42,6 +42,9 @@ impl DrmState {
     /// metal**. Al encender, fuerza un repintado para recomponer lo que cambió.
     pub(super) fn set_dpms(&mut self, off: bool) {
         use smithay::reexports::drm::control::Device as _;
+        // Recordá el estado: el wallpaper animado (video o marca) pausa su
+        // decodificación/regeneración con la pantalla apagada (no se ve).
+        self.dpms_off = off;
         // Valor estándar del kernel: 0 = On, 3 = Off.
         let value: u64 = if off { 3 } else { 0 };
         for ctx in &self.outputs {
@@ -305,6 +308,8 @@ impl DrmState {
         // Wallpaper en video: gestioná el worker y tomá su último frame ANTES de
         // render (corre aunque la sesión esté en otra VT, para poder pausar).
         self.manage_video_wallpaper();
+        // Wallpaper de marca animado (fondo por defecto vivo): late a ~20 fps.
+        self.tick_animated_default();
 
         self.render();
         let _ = self.display.flush_clients();
