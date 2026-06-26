@@ -26,10 +26,11 @@ use rimay_verbo_daemon::DaemonClient;
 use uuid::Uuid;
 
 use crate::model::{
-    Filtro, Modo, Model, Msg, NodoFiltro, ObjetivoEstilo, WizardTipo, BACKENDS, METRICS,
-    VISIBLE_LINES,
+    Filtro, Modo, Model, Msg, NodoFiltro, ObjetivoEstilo, ProyectoAbierto, ProyectoTab, WizardTipo,
+    BACKENDS, METRICS, VISIBLE_LINES,
 };
 use pluma_estilo::EstiloTexto;
+use pluma_proyecto::{DocEstado, Proyecto};
 use crate::util::{ahora_unix, etiqueta_backend, expandir_ruta, extension_lower};
 use crate::view::etiqueta_filtro;
 
@@ -540,6 +541,56 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::WizardConfirm => {
             confirmar_wizard(&mut model, handle);
         }
+
+        // --- Proyectos versionados ---
+        Msg::NuevoProyecto => {
+            nuevo_proyecto(&mut model);
+        }
+        Msg::AbrirProyecto => {
+            abrir_proyecto(&mut model);
+        }
+        Msg::ActivarProyecto(idx) => {
+            activar_proyecto(&mut model, idx);
+        }
+        Msg::SetProyectoTab(t) => {
+            model.proyecto_tab = t;
+        }
+        Msg::SelDocProyecto(doc) => {
+            seleccionar_doc(&mut model, doc);
+        }
+        Msg::NuevoDocProyecto => {
+            nuevo_doc_proyecto(&mut model);
+        }
+        Msg::AbrirPush => {
+            model.push_abierto = true;
+            model.preset_input = TextInputState::new();
+            model.preset_focused = true;
+        }
+        Msg::CerrarPush => {
+            model.push_abierto = false;
+            model.preset_focused = false;
+        }
+        Msg::ConfirmarPush => {
+            confirmar_push(&mut model);
+        }
+        Msg::VerCommit(h) => {
+            model.commit_preview = Some(h);
+        }
+        Msg::CerrarPreview => {
+            model.commit_preview = None;
+        }
+        Msg::RestaurarCommit(h) => {
+            restaurar_commit(&mut model, h);
+        }
+        Msg::NuevaRama => {
+            nueva_rama(&mut model);
+        }
+        Msg::CambiarRama(nombre) => {
+            cambiar_rama_proyecto(&mut model, &nombre);
+        }
+        Msg::MergeRama(nombre) => {
+            merge_rama_proyecto(&mut model, &nombre);
+        }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
     // tamaño, panel…). Idempotente y barato.
@@ -935,6 +986,325 @@ fn confirmar_wizard(model: &mut Model, handle: &Handle<Msg>) {
         cambiar_activo(model, madre);
     }
     lanzar(model, handle, trabajo);
+}
+
+// ---------------------------------------------------------------------
+// Proyectos versionados: puente working-copy ↔ proyecto + handlers
+// ---------------------------------------------------------------------
+
+/// Nombre del documento activo (del proyecto, o del cuerpo activo como fallback).
+fn nombre_doc_activo(model: &Model) -> String {
+    let pa = &model.proyectos[model.proyecto_activo];
+    pa.proyecto
+        .documento(pa.doc_activo)
+        .map(|d| d.nombre.clone())
+        .or_else(|| {
+            model
+                .activo
+                .and_then(|id| model.cuerpos.iter().find(|c| c.id == id))
+                .map(|c| c.metadatos.nombre_legible.clone())
+        })
+        .unwrap_or_else(|| "documento".into())
+}
+
+/// Vuelca el estado de edición vivo (colecciones planas) al documento activo
+/// del proyecto activo — la *working copy* del proyecto.
+fn sincronizar_doc_activo(model: &mut Model) {
+    if model.proyectos.is_empty() {
+        return;
+    }
+    let nombre = nombre_doc_activo(model);
+    let doc = DocEstado::desde_colecciones(
+        nombre,
+        &model.cuerpos,
+        &model.atoms,
+        &model.cartas,
+        &model.transformaciones,
+        &model.estilos,
+    );
+    let idx = model.proyecto_activo.min(model.proyectos.len() - 1);
+    let pa = &mut model.proyectos[idx];
+    pa.proyecto.set_documento(pa.doc_activo, doc);
+}
+
+/// Reemplaza el estado de edición vivo por un haz nuevo y vacío (un Original con
+/// un átomo). Reconstruye el `ide`.
+fn nuevo_haz_vacio(model: &mut Model) {
+    let ahora = ahora_unix();
+    let atom = NarrativeAtom::new("Empieza a escribir aquí…", "es");
+    let mut cuerpo = Cuerpo::nuevo("es", "documento sin título", Intencion::Original, ahora);
+    cuerpo.agregar(atom.id, ahora);
+    let mut atoms = HashMap::new();
+    atoms.insert(atom.id, atom);
+    model.atoms = atoms;
+    model.cuerpos = vec![cuerpo.clone()];
+    model.cartas = Vec::new();
+    model.transformaciones = Vec::new();
+    model.estilos = HashMap::new();
+    model.orden_lienzos = vec![cuerpo.id];
+    model.seleccionados = vec![cuerpo.id];
+    model.activo = Some(cuerpo.id);
+    model.ides_ro = HashMap::new();
+    let idx: HashMap<Uuid, &NarrativeAtom> = model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+    model.ide.recargar(&cuerpo, &idx);
+    model.diente_estilo_activo = None;
+    model.commit_preview = None;
+}
+
+/// Carga un `DocEstado` en el estado de edición vivo (colecciones + ide). Si el
+/// documento está vacío, siembra un haz nuevo.
+fn aplicar_doc(model: &mut Model, doc: DocEstado) {
+    if doc.cuerpos.is_empty() {
+        nuevo_haz_vacio(model);
+        return;
+    }
+    model.atoms = doc.atoms_map();
+    model.estilos = doc.estilos_map();
+    model.cuerpos = doc.cuerpos;
+    model.cartas = doc.cartas;
+    model.transformaciones = doc.transformaciones;
+    model.orden_lienzos = model.cuerpos.iter().map(|c| c.id).collect();
+    model.activo = model
+        .cuerpos
+        .iter()
+        .find(|c| !c.metadatos.intencion.es_derivada())
+        .map(|c| c.id)
+        .or_else(|| model.cuerpos.first().map(|c| c.id));
+    model.seleccionados = model.activo.into_iter().collect();
+    model.ides_ro = HashMap::new();
+    if let Some(id) = model.activo {
+        if let Some(c) = model.cuerpos.iter().find(|c| c.id == id).cloned() {
+            let idx: HashMap<Uuid, &NarrativeAtom> =
+                model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+            model.ide.recargar(&c, &idx);
+        }
+    }
+    reconstruir_ides_ro(model);
+    model.diente_estilo_activo = None;
+    model.commit_preview = None;
+}
+
+fn nuevo_proyecto(model: &mut Model) {
+    sincronizar_doc_activo(model);
+    let n = model.proyectos.len() + 1;
+    model.proyectos.push(ProyectoAbierto::vacio(&format!("Proyecto {n}")));
+    model.proyecto_activo = model.proyectos.len() - 1;
+    model.diente_activo = model.proyecto_activo + 1;
+    model.proyecto_tab = ProyectoTab::Historia;
+    nuevo_haz_vacio(model);
+    sincronizar_doc_activo(model);
+    model.ultimo_status = format!(
+        "proyecto nuevo: {}",
+        model.proyectos[model.proyecto_activo].proyecto.nombre
+    );
+}
+
+fn abrir_proyecto(model: &mut Model) {
+    let texto = model.path_input.text();
+    let ruta = expandir_ruta(texto.trim());
+    if ruta.as_os_str().is_empty() {
+        model.ultimo_status = "escribí una ruta .pluma".into();
+        return;
+    }
+    match Proyecto::abrir(&ruta) {
+        Ok(p) => {
+            sincronizar_doc_activo(model);
+            let doc_activo = p
+                .documentos()
+                .first()
+                .map(|(id, _)| *id)
+                .unwrap_or_else(Uuid::new_v4);
+            model.proyectos.push(ProyectoAbierto {
+                proyecto: p,
+                ruta: Some(ruta.clone()),
+                doc_activo,
+            });
+            model.proyecto_activo = model.proyectos.len() - 1;
+            model.diente_activo = model.proyecto_activo + 1;
+            model.proyecto_tab = ProyectoTab::Historia;
+            model.path_focused = false;
+            if !model.proyectos_recientes.contains(&ruta) {
+                model.proyectos_recientes.push(ruta.clone());
+                crate::util::guardar_recientes(&model.proyectos_recientes);
+            }
+            let doc = model.proyectos[model.proyecto_activo]
+                .proyecto
+                .documento(doc_activo)
+                .cloned();
+            match doc {
+                Some(d) => aplicar_doc(model, d),
+                None => nuevo_haz_vacio(model),
+            }
+            model.ultimo_status = format!("proyecto abierto: {}", ruta.display());
+        }
+        Err(e) => {
+            model.ultimo_error = Some(format!("abrir proyecto: {e}"));
+        }
+    }
+}
+
+fn activar_proyecto(model: &mut Model, idx: usize) {
+    if idx >= model.proyectos.len() {
+        return;
+    }
+    sincronizar_doc_activo(model);
+    model.proyecto_activo = idx;
+    model.diente_activo = idx + 1;
+    model.proyecto_tab = ProyectoTab::Historia;
+    let doc_id = model.proyectos[idx].doc_activo;
+    let doc = model.proyectos[idx].proyecto.documento(doc_id).cloned();
+    match doc {
+        Some(d) => aplicar_doc(model, d),
+        None => nuevo_haz_vacio(model),
+    }
+}
+
+fn seleccionar_doc(model: &mut Model, doc: Uuid) {
+    sincronizar_doc_activo(model);
+    let idx = model.proyecto_activo;
+    model.proyectos[idx].doc_activo = doc;
+    let d = model.proyectos[idx].proyecto.documento(doc).cloned();
+    match d {
+        Some(d) => aplicar_doc(model, d),
+        None => nuevo_haz_vacio(model),
+    }
+}
+
+fn nuevo_doc_proyecto(model: &mut Model) {
+    sincronizar_doc_activo(model);
+    let idx = model.proyecto_activo;
+    let n = model.proyectos[idx].proyecto.documentos().len() + 1;
+    let id = model.proyectos[idx]
+        .proyecto
+        .nuevo_documento(format!("documento {n}"));
+    model.proyectos[idx].doc_activo = id;
+    nuevo_haz_vacio(model);
+    sincronizar_doc_activo(model);
+    model.ultimo_status = format!("documento {n} agregado al proyecto");
+}
+
+fn guardar_proyecto_activo(model: &mut Model) {
+    let idx = model.proyecto_activo;
+    let ruta = model.proyectos[idx].ruta.clone();
+    if let Some(ruta) = ruta {
+        if let Err(e) = model.proyectos[idx].proyecto.guardar(&ruta) {
+            model.ultimo_error = Some(format!("guardar proyecto: {e}"));
+        }
+    }
+}
+
+fn confirmar_push(model: &mut Model) {
+    sincronizar_doc_activo(model);
+    let mensaje = model.preset_input.text().trim().to_string();
+    let mensaje = if mensaje.is_empty() {
+        "(sin mensaje)".to_string()
+    } else {
+        mensaje
+    };
+    let ahora = ahora_unix();
+    let idx = model.proyecto_activo;
+    let res = model.proyectos[idx].proyecto.push("yo", &mensaje, ahora);
+    model.push_abierto = false;
+    model.preset_focused = false;
+    match res {
+        Some(h) => {
+            guardar_proyecto_activo(model);
+            let rama = model.proyectos[idx]
+                .proyecto
+                .rama_actual()
+                .unwrap_or("(detached)")
+                .to_string();
+            model.ultimo_status =
+                format!("push {} · rama {}", pluma_proyecto::hash_corto(&h), rama);
+        }
+        None => {
+            model.ultimo_status = "nada para pushear (sin cambios)".into();
+        }
+    }
+}
+
+fn restaurar_commit(model: &mut Model, h: pluma_proyecto::Hash) {
+    let idx = model.proyecto_activo;
+    if let Err(e) = model.proyectos[idx].proyecto.checkout(h) {
+        model.ultimo_error = Some(format!("restaurar: {e}"));
+        return;
+    }
+    let doc_id = model.proyectos[idx]
+        .proyecto
+        .documentos()
+        .first()
+        .map(|(id, _)| *id);
+    match doc_id {
+        Some(doc_id) => {
+            model.proyectos[idx].doc_activo = doc_id;
+            if let Some(d) = model.proyectos[idx].proyecto.documento(doc_id).cloned() {
+                aplicar_doc(model, d);
+            }
+        }
+        None => nuevo_haz_vacio(model),
+    }
+    model.ultimo_status = format!("restaurado {}", pluma_proyecto::hash_corto(&h));
+}
+
+fn nueva_rama(model: &mut Model) {
+    let idx = model.proyecto_activo;
+    let n = model.proyectos[idx].proyecto.ramas().len() + 1;
+    let nombre = format!("rama-{n}");
+    model.proyectos[idx].proyecto.rama_nueva(nombre.clone(), None);
+    guardar_proyecto_activo(model);
+    model.ultimo_status = format!("rama nueva: {nombre}");
+}
+
+fn cambiar_rama_proyecto(model: &mut Model, nombre: &str) {
+    let idx = model.proyecto_activo;
+    match model.proyectos[idx].proyecto.cambiar_rama(nombre) {
+        Ok(()) => {
+            if let Some((doc_id, _)) = model.proyectos[idx].proyecto.documentos().first().cloned() {
+                model.proyectos[idx].doc_activo = doc_id;
+                if let Some(d) = model.proyectos[idx].proyecto.documento(doc_id).cloned() {
+                    aplicar_doc(model, d);
+                }
+            }
+            model.ultimo_status = format!("rama: {nombre}");
+        }
+        Err(e) => {
+            model.ultimo_error = Some(format!("cambiar rama: {e}"));
+        }
+    }
+}
+
+fn merge_rama_proyecto(model: &mut Model, nombre: &str) {
+    sincronizar_doc_activo(model);
+    let idx = model.proyecto_activo;
+    let ahora = ahora_unix();
+    match model.proyectos[idx].proyecto.merge(nombre, "yo", ahora) {
+        Ok(res) => {
+            guardar_proyecto_activo(model);
+            if let Some((doc_id, _)) = model.proyectos[idx].proyecto.documentos().first().cloned() {
+                model.proyectos[idx].doc_activo = doc_id;
+                if let Some(d) = model.proyectos[idx].proyecto.documento(doc_id).cloned() {
+                    aplicar_doc(model, d);
+                }
+            }
+            model.ultimo_status = match res {
+                pluma_proyecto::ResultadoMerge::AlDia => "merge: ya al día".into(),
+                pluma_proyecto::ResultadoMerge::FastForward(_) => "merge: fast-forward".into(),
+                pluma_proyecto::ResultadoMerge::Merge { conflictos, .. } => {
+                    if conflictos.is_empty() {
+                        "merge ok".into()
+                    } else {
+                        format!(
+                            "merge con {} conflicto(s) de doc (gana la rama actual)",
+                            conflictos.len()
+                        )
+                    }
+                }
+            };
+        }
+        Err(e) => {
+            model.ultimo_error = Some(format!("merge: {e}"));
+        }
+    }
 }
 
 fn cambiar_activo(model: &mut Model, id: Uuid) {

@@ -115,6 +115,34 @@ pub(crate) fn guardar_presets(presets: &[String]) {
     let _ = std::fs::write(ruta_presets(), presets.join("\n"));
 }
 
+/// Ruta del listado de proyectos recientes (rutas `.pluma`, una por línea).
+pub(crate) fn ruta_recientes() -> PathBuf {
+    ruta_sled().with_file_name("proyectos.txt")
+}
+
+/// Carga las rutas de proyectos recientes (existan o no en disco).
+pub(crate) fn cargar_recientes() -> Vec<PathBuf> {
+    std::fs::read_to_string(ruta_recientes())
+        .map(|s| {
+            s.lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Persiste las rutas recientes (best-effort).
+pub(crate) fn guardar_recientes(rutas: &[PathBuf]) {
+    let texto = rutas
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(ruta_recientes(), texto);
+}
+
 pub(crate) fn ahora_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

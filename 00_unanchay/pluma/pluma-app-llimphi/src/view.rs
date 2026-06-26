@@ -47,28 +47,17 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::model::{
-    ancho_contenido, Filtro, Modo, Model, Msg, ObjetivoEstilo, WizardTipo, ANCHO_COL, BACKENDS,
-    METRICS, RAIL_W, VISIBLE_LINES,
+    ancho_contenido, Filtro, Modo, Model, Msg, ObjetivoEstilo, ProyectoTab, WizardTipo, ANCHO_COL,
+    BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
 };
 use pluma_estilo::EstiloTexto;
+use pluma_proyecto::hash_corto;
 use crate::update::{contar_stale_del_activo, menu_principal};
 use crate::util::{etiqueta_backend, etiqueta_intencion, etiqueta_tipo, recortar};
 
 /// Tamaño de ventana del init — usado como viewport para clampear los
 /// dropdowns del menú (la app no trackea el tamaño real hoy).
 const VIEWPORT: (f32, f32) = (1600.0, 900.0);
-
-/// Icono vectorial y nombre de los cuatro dientes del rail. El icono lo pinta
-/// `llimphi-icons` (mismo set canónico que cosmos — sin tofu); el nombre
-/// completo va en la cabecera del panel.
-/// Dientes del rail izquierdo (herramientas). "Derivar" fue reemplazado por el
-/// wizard modal del diente "+" del rail derecho.
-const DIENTES: [(Icon, &str); 4] = [
-    (Icon::File, "Archivo"),
-    (Icon::Folder, "Lienzos"),
-    (Icon::Settings, "Modelo"),
-    (Icon::Link, "Grafo"),
-];
 
 /// Arma el `MenuBarSpec` compartido entre `menubar_view` (barra) y
 /// `menubar_overlay` (dropdown).
@@ -169,25 +158,27 @@ pub fn vista(model: &Model) -> View<Msg> {
     .children(vec![menubar, status, core])
 }
 
-/// El rail de dientes como overlay absoluto en el borde interno izquierdo.
+/// El rail izquierdo: **Archivo** (id 0, abre/crea proyectos) + un diente por
+/// **proyecto abierto** (id i+1). Overlay absoluto en el borde interno izquierdo.
 fn rail_overlay(model: &Model, theme: &Theme) -> View<Msg> {
-    let items: Vec<DockRailItem> = DIENTES
-        .iter()
-        .enumerate()
-        .map(|(i, _)| DockRailItem {
-            id: i as u64,
-            active: i == model.diente_activo,
-        })
-        .collect();
+    let n = model.proyectos.len();
+    let mut items: Vec<DockRailItem> = Vec::with_capacity(n + 1);
+    items.push(DockRailItem {
+        id: 0,
+        active: model.diente_activo == 0,
+    });
+    for i in 0..n {
+        items.push(DockRailItem {
+            id: (i + 1) as u64,
+            active: model.diente_activo == i + 1,
+        });
+    }
     let rail = dock_rail_view::<Msg, _, _, _>(
         &items,
         RAIL_W,
         &DockRailPalette::from_theme(theme),
         |id, size, color| {
-            let icono = DIENTES.get(id as usize).map(|d| d.0).unwrap_or(Icon::File);
-            // Caja cuadrada centrada que contiene el icono vectorial (Absolute,
-            // llena su contenedor Relative) — proporción uniforme sin importar
-            // la forma del diente.
+            let icono = if id == 0 { Icon::File } else { Icon::Folder };
             View::<Msg>::new(Style {
                 size: Size {
                     width: percent(1.0_f32),
@@ -207,7 +198,13 @@ fn rail_overlay(model: &Model, theme: &Theme) -> View<Msg> {
             })
             .children(vec![icon_view::<Msg>(icono, color, 1.8)])])
         },
-        |id| Msg::SelectDiente(id as usize),
+        |id| {
+            if id == 0 {
+                Msg::SelectDiente(0)
+            } else {
+                Msg::ActivarProyecto((id - 1) as usize)
+            }
+        },
         |_| None,
     );
     View::new(Style {
@@ -622,17 +619,15 @@ fn barra_status(model: &Model, theme: &Theme) -> View<Msg> {
 /// Despacha al panel del diente seleccionado. Todos comparten un contenedor
 /// con padding izquierdo = `RAIL_W` para no quedar tapados por el rail.
 fn panel_diente(model: &Model, theme: &Theme) -> View<Msg> {
-    let interior = match model.diente_activo {
-        0 => panel_archivo(model, theme),
-        1 => panel_lienzos(model, theme),
-        2 => panel_modelo(model, theme),
-        _ => panel_grafo(model, theme),
-    };
-    let nombre = DIENTES
-        .get(model.diente_activo)
-        .map(|d| d.1)
-        .unwrap_or("");
-    let header = encabezado(nombre, theme);
+    // diente 0 = Archivo (gestor de proyectos); i≥1 = panel del proyecto i-1.
+    if model.diente_activo >= 1 {
+        let idx = model.diente_activo - 1;
+        if idx < model.proyectos.len() {
+            return panel_proyecto(model, idx, theme);
+        }
+    }
+    let interior = panel_archivo(model, theme);
+    let header = encabezado("Archivo · proyectos", theme);
 
     // El rail ya no se monta sobre el panel (vive en el centro), así que el
     // panel usa padding normal.
@@ -676,38 +671,346 @@ fn encabezado(texto: &str, theme: &Theme) -> View<Msg> {
     )
 }
 
+/// Diente Archivo = gestor de proyectos: crear/abrir `.pluma`, recientes, lista
+/// de proyectos abiertos, + las operaciones de archivo del documento activo
+/// (importar/exportar md/docx).
 fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
     let palette_btn = ButtonPalette::from_theme(theme);
     let palette_input = TextInputPalette::from_theme(theme);
 
-    let nuevo = button_view::<Msg>("+  nuevo doc  (Ctrl+N)", &palette_btn, Msg::NuevoDoc);
-    let guardar = button_view::<Msg>("guardar  (Ctrl+S)", &palette_btn, Msg::Guardar);
+    let nuevo_proy = button_view::<Msg>("+  nuevo proyecto", &palette_btn, Msg::NuevoProyecto);
 
     let input = text_input_view::<Msg>(
         &model.path_input,
-        "ruta .md o .docx (Esc para salir)",
+        "ruta .pluma — abrir proyecto (Esc sale)",
         model.path_focused,
         &palette_input,
         Msg::FocusPath,
     );
-    let fila = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(28.0_f32),
-        },
-        gap: Size {
-            width: length(6.0_f32),
-            height: length(0.0_f32),
-        },
+    let abrir_proy = button_view::<Msg>("abrir .pluma", &palette_btn, Msg::AbrirProyecto);
+
+    let mut hijos: Vec<View<Msg>> = vec![
+        nuevo_proy,
+        divider(theme),
+        encabezado("abrir proyecto", theme),
+        input,
+        abrir_proy,
+    ];
+
+    // Proyectos abiertos.
+    hijos.push(divider(theme));
+    hijos.push(encabezado(&format!("abiertos ({})", model.proyectos.len()), theme));
+    for (i, pa) in model.proyectos.iter().enumerate() {
+        let activo = i == model.proyecto_activo;
+        let etiqueta = format!(
+            "{}  {}",
+            if activo { "●" } else { "○" },
+            recortar(&pa.proyecto.nombre, 24)
+        );
+        hijos.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(
+                etiqueta,
+                12.0,
+                if activo { theme.fg_text } else { theme.fg_muted },
+                Alignment::Start,
+            )
+            .on_click(Msg::ActivarProyecto(i)),
+        );
+    }
+
+    // Recientes.
+    if !model.proyectos_recientes.is_empty() {
+        hijos.push(divider(theme));
+        hijos.push(encabezado("recientes", theme));
+        for ruta in model.proyectos_recientes.iter().rev().take(8) {
+            let nombre = ruta
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| ruta.to_string_lossy().to_string());
+            hijos.push(pista_texto(&format!("· {}", recortar(&nombre, 28)), theme));
+        }
+    }
+
+    // Operaciones de archivo del documento activo (import/export ajenos).
+    hijos.push(divider(theme));
+    hijos.push(encabezado("documento activo", theme));
+    hijos.push(button_view::<Msg>("+ nuevo documento", &palette_btn, Msg::NuevoDocProyecto));
+    hijos.push(fila_botones(vec![
+        button_view::<Msg>("importar md/docx", &palette_btn, Msg::AbrirArchivo),
+        button_view::<Msg>("exportar", &palette_btn, Msg::ExportarMd),
+    ]));
+
+    columna(hijos)
+}
+
+/// Panel del proyecto `idx`: cabecera (nombre · rama · push) + selector de
+/// documento + sub-pestañas (Historia/Lienzos/Modelo/Grafo) + contenido. La
+/// pestaña Historia dibuja el grafo de versiones.
+fn panel_proyecto(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
+    let palette_btn = ButtonPalette::from_theme(theme);
+    let pa = &model.proyectos[idx];
+    let rama = pa.proyecto.rama_actual().unwrap_or("(detached)").to_string();
+
+    let titulo = encabezado(
+        &format!("{}  ·  rama {}", recortar(&pa.proyecto.nombre, 16), rama),
+        theme,
+    );
+    let push_btn = button_view::<Msg>("push  ·  sellar versión  (Ctrl+K)", &palette_btn, Msg::AbrirPush);
+
+    // Selector de documento del proyecto.
+    let docs = pa.proyecto.documentos();
+    let mut filas_doc: Vec<View<Msg>> = vec![encabezado(&format!("documentos ({})", docs.len()), theme)];
+    for (doc_id, nombre) in &docs {
+        let activo = *doc_id == pa.doc_activo;
+        filas_doc.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(
+                format!("{}  {}", if activo { "▸" } else { " " }, recortar(nombre, 24)),
+                11.5,
+                if activo { theme.fg_text } else { theme.fg_muted },
+                Alignment::Start,
+            )
+            .on_click(Msg::SelDocProyecto(*doc_id)),
+        );
+    }
+    let lista_doc = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![
-        button_view::<Msg>("abrir", &palette_btn, Msg::AbrirArchivo),
-        button_view::<Msg>("exportar", &palette_btn, Msg::ExportarMd),
+    .children(filas_doc);
+
+    // Sub-pestañas.
+    let tab_btn = |t: ProyectoTab| {
+        let sel = model.proyecto_tab == t;
+        let pal = if sel {
+            ButtonPalette::from_theme(theme)
+        } else {
+            ButtonPalette {
+                bg: theme.bg_panel_alt,
+                bg_hover: theme.bg_button_hover,
+                fg: theme.fg_muted,
+                radius: palette_btn.radius,
+            }
+        };
+        button_view::<Msg>(t.etiqueta(), &pal, Msg::SetProyectoTab(t))
+    };
+    let tabs = fila_botones(vec![
+        tab_btn(ProyectoTab::Historia),
+        tab_btn(ProyectoTab::Lienzos),
+        tab_btn(ProyectoTab::Modelo),
+        tab_btn(ProyectoTab::Grafo),
     ]);
 
-    columna(vec![nuevo, guardar, divider(theme), encabezado("archivo", theme), input, fila])
+    let contenido = match model.proyecto_tab {
+        ProyectoTab::Historia => grafo_historico(model, idx, theme),
+        ProyectoTab::Lienzos => panel_lienzos(model, theme),
+        ProyectoTab::Modelo => panel_modelo(model, theme),
+        ProyectoTab::Grafo => panel_grafo(model, theme),
+    };
+
+    let mut hijos: Vec<View<Msg>> = vec![titulo, push_btn];
+    // Acciones de rama (Fase 5): nueva rama + merge de cada otra rama.
+    if model.proyecto_tab == ProyectoTab::Historia {
+        hijos.push(ramas_acciones(model, idx, theme));
+    }
+    hijos.push(lista_doc);
+    hijos.push(divider(theme));
+    hijos.push(tabs);
+    hijos.push(contenido);
+
+    let cuerpo = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        flex_grow: 1.0,
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .clip(true)
+    .children(vec![cuerpo])
+}
+
+/// Acciones de rama del proyecto: nueva rama + cambiar/mergear cada rama.
+fn ramas_acciones(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
+    let palette_btn = ButtonPalette::from_theme(theme);
+    let pa = &model.proyectos[idx];
+    let actual = pa.proyecto.rama_actual().unwrap_or("");
+    let mut hijos: Vec<View<Msg>> = vec![button_view::<Msg>("+ rama", &palette_btn, Msg::NuevaRama)];
+    for (nombre, _) in pa.proyecto.ramas() {
+        if nombre == actual {
+            continue;
+        }
+        // Cambiar a la rama (texto) + mergearla (botón ⤵).
+        hijos.push(button_view::<Msg>(
+            &format!("ir {}", recortar(&nombre, 8)),
+            &palette_btn,
+            Msg::CambiarRama(nombre.clone()),
+        ));
+        hijos.push(button_view::<Msg>(
+            &format!("merge {}", recortar(&nombre, 8)),
+            &palette_btn,
+            Msg::MergeRama(nombre.clone()),
+        ));
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        gap: Size { width: length(5.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// Dibuja el grafo histórico de commits del proyecto `idx`: nodos (círculos) en
+/// columna por orden topológico (más reciente arriba), aristas a cada padre
+/// (los merges tienen 2), y etiquetas clickeables (hash corto + mensaje). El
+/// nodo HEAD va en acento. Clic = previsualizar (`Msg::VerCommit`).
+fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
+    use std::collections::HashMap as Map;
+    let pa = &model.proyectos[idx];
+    let mut commits = pa.proyecto.historia(); // (Hash, Commit), padres primero
+    commits.reverse(); // más reciente arriba
+    if commits.is_empty() {
+        return pista_texto("sin versiones — hacé un push (Ctrl+K) para sellar la primera", theme);
+    }
+    const ROW: f32 = 44.0;
+    let head = pa.proyecto.head_commit();
+    let total_h = commits.len() as f32 * ROW + 8.0;
+
+    let pos: Map<pluma_proyecto::Hash, usize> =
+        commits.iter().enumerate().map(|(i, (h, _))| (*h, i)).collect();
+
+    // Capa de pintado: aristas + círculos.
+    let commits_paint = commits.clone();
+    let pos_paint = pos.clone();
+    let accent = theme.accent;
+    let muted = theme.fg_muted;
+    let canvas = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: auto(),
+        },
+        size: Size { width: percent(1.0_f32), height: length(total_h) },
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let x = rect.x as f64 + 14.0;
+        let row = ROW as f64;
+        for (i, (_h, c)) in commits_paint.iter().enumerate() {
+            let cy = rect.y as f64 + i as f64 * row + row / 2.0;
+            for p in &c.padres {
+                if let Some(pj) = pos_paint.get(p) {
+                    let py = rect.y as f64 + *pj as f64 * row + row / 2.0;
+                    let mut path = BezPath::new();
+                    path.move_to((x, cy));
+                    let mid = (cy + py) / 2.0;
+                    path.curve_to((x + 16.0, mid), (x + 16.0, mid), (x, py));
+                    scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, muted, None, &path);
+                }
+            }
+        }
+        for (i, (h, _)) in commits_paint.iter().enumerate() {
+            let cy = rect.y as f64 + i as f64 * row + row / 2.0;
+            let es_head = head == Some(*h);
+            let col = if es_head { accent } else { muted };
+            let r = if es_head { 6.0 } else { 4.5 };
+            scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &Circle::new((x, cy), r));
+        }
+    });
+
+    // Capa de etiquetas clickeables.
+    let mut hijos: Vec<View<Msg>> = vec![canvas];
+    for (i, (h, c)) in commits.iter().enumerate() {
+        let y = i as f32 * ROW;
+        let sel = model.commit_preview == Some(*h);
+        let head_aqui = head == Some(*h);
+        let etiqueta = format!(
+            "{}{}  {}",
+            if head_aqui { "● " } else { "" },
+            hash_corto(h),
+            recortar(&c.mensaje, 30)
+        );
+        let color = if sel {
+            theme.accent
+        } else if head_aqui {
+            theme.fg_text
+        } else {
+            theme.fg_muted
+        };
+        let h_copy = *h;
+        hijos.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(30.0_f32),
+                    top: length(y),
+                    right: length(4.0_f32),
+                    bottom: auto(),
+                },
+                size: Size { width: auto(), height: length(ROW) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(etiqueta, 11.5, color, Alignment::Start)
+            .ellipsis(1)
+            .on_click(Msg::VerCommit(h_copy)),
+        );
+    }
+
+    // Acciones de previsualización (cuando hay un commit seleccionado).
+    let mut capas: Vec<View<Msg>> = vec![View::new(Style {
+        position: Position::Relative,
+        size: Size { width: percent(1.0_f32), height: length(total_h) },
+        ..Default::default()
+    })
+    .children(hijos)];
+    if let Some(h) = model.commit_preview {
+        let palette_btn = ButtonPalette::from_theme(theme);
+        capas.push(fila_botones(vec![
+            button_view::<Msg>(
+                &format!("restaurar {}", hash_corto(&h)),
+                &palette_btn,
+                Msg::RestaurarCommit(h),
+            ),
+            button_view::<Msg>("cerrar", &palette_btn, Msg::CerrarPreview),
+        ]));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        ..Default::default()
+    })
+    .children(capas)
 }
 
 /// Tree de lienzos: originales y sus derivadas, con toggle de selección
@@ -1929,6 +2232,38 @@ fn divider(theme: &Theme) -> View<Msg> {
 /// Overlay flotante: menú de edición contextual o dropdown del menú principal.
 pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     let theme = Theme::dark();
+    // Modal de push (mensaje del snapshot).
+    if model.push_abierto {
+        let palette_input = TextInputPalette::from_theme(&theme);
+        let body = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![
+            encabezado("mensaje del push (versión)", &theme),
+            text_input_view::<Msg>(
+                &model.preset_input,
+                "qué cambió en esta versión…",
+                model.preset_focused,
+                &palette_input,
+                Msg::FocusPreset,
+            ),
+        ]);
+        return Some(modal_view(ModalSpec {
+            title: "Sellar versión (push)".to_string(),
+            body,
+            buttons: vec![
+                ModalButton::cancel("Cancelar", Msg::CerrarPush),
+                ModalButton::primary("Push", Msg::ConfirmarPush),
+            ],
+            size: (460.0, 220.0),
+            viewport: model.viewport,
+            on_dismiss: Msg::CerrarPush,
+            palette: ModalPalette::from_theme(&theme),
+        }));
+    }
     // El wizard de transformación tiene prioridad: modal bloqueante.
     if model.wizard.is_some() {
         return Some(modal_view(ModalSpec {

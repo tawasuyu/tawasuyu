@@ -1,6 +1,7 @@
 //! Modelo de la app y mensajes del bucle Elm.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use llimphi_ui::{DragPhase, KeyEvent};
@@ -13,6 +14,7 @@ use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
 use pluma_estilo::{EstiloLienzo, EstiloTexto};
 use pluma_llm::BackendKind;
 use pluma_llm_core::ChatClient;
+use pluma_proyecto::{DocId, Hash as ProyHash, Proyecto};
 use pluma_store::PlumaStore;
 use pluma_transform::Transformacion;
 use uuid::Uuid;
@@ -161,6 +163,46 @@ impl Default for WizardEstado {
             madre: None,
             tipo: WizardTipo::Traducir,
         }
+    }
+}
+
+/// Sub-pestaña del panel de un proyecto. `Historia` es el grafo de versiones;
+/// las otras son las herramientas (antes dientes del rail) que ahora son
+/// propiedades del proyecto activo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ProyectoTab {
+    #[default]
+    Historia,
+    Lienzos,
+    Modelo,
+    Grafo,
+}
+
+impl ProyectoTab {
+    pub(crate) fn etiqueta(self) -> &'static str {
+        match self {
+            ProyectoTab::Historia => "Historia",
+            ProyectoTab::Lienzos => "Lienzos",
+            ProyectoTab::Modelo => "Modelo",
+            ProyectoTab::Grafo => "Grafo",
+        }
+    }
+}
+
+/// Un proyecto abierto: el `Proyecto` (con su DAG de versiones), su ruta en
+/// disco (`None` = nunca guardado), y qué documento del proyecto está activo.
+pub struct ProyectoAbierto {
+    pub proyecto: Proyecto,
+    pub ruta: Option<PathBuf>,
+    pub doc_activo: DocId,
+}
+
+impl ProyectoAbierto {
+    /// Proyecto vacío con un documento (para arranque/headless).
+    pub(crate) fn vacio(nombre: &str) -> Self {
+        let mut proyecto = Proyecto::nuevo(nombre);
+        let doc_activo = proyecto.nuevo_documento("documento 1");
+        Self { proyecto, ruta: None, doc_activo }
     }
 }
 
@@ -366,6 +408,38 @@ pub enum Msg {
     WizardTipoSel(WizardTipo),
     /// Confirma el wizard: arma y lanza la transformación sobre la madre.
     WizardConfirm,
+
+    // --- Proyectos versionados (rail izquierdo) ---
+    /// Crea un proyecto nuevo (en memoria) y lo abre.
+    NuevoProyecto,
+    /// Abre un proyecto `.pluma` desde la ruta del `path_input`.
+    AbrirProyecto,
+    /// Activa el proyecto `idx` (carga su documento activo en la superficie).
+    ActivarProyecto(usize),
+    /// Cambia la sub-pestaña del panel de proyecto.
+    SetProyectoTab(ProyectoTab),
+    /// Selecciona/activa un documento dentro del proyecto activo.
+    SelDocProyecto(DocId),
+    /// Agrega un documento nuevo al proyecto activo.
+    NuevoDocProyecto,
+    /// Abre el modal de push (mensaje del snapshot).
+    AbrirPush,
+    /// Confirma el push con el mensaje tecleado.
+    ConfirmarPush,
+    /// Cierra el modal de push.
+    CerrarPush,
+    /// Previsualiza un commit (solo lectura) — fija `commit_preview`.
+    VerCommit(ProyHash),
+    /// Cierra la previsualización de commit.
+    CerrarPreview,
+    /// Restaura un commit como estado de trabajo (checkout).
+    RestaurarCommit(ProyHash),
+    /// Crea una rama nueva desde el HEAD del proyecto activo.
+    NuevaRama,
+    /// Cambia a la rama `String` del proyecto activo.
+    CambiarRama(String),
+    /// Mergea la rama `String` en la rama actual.
+    MergeRama(String),
 }
 
 pub struct Model {
@@ -503,4 +577,18 @@ pub struct Model {
     // --- Wizard de transformación ("+") ---
     /// Estado del wizard modal de nueva transformación (`None` = cerrado).
     pub(crate) wizard: Option<WizardEstado>,
+
+    // --- Proyectos versionados ---
+    /// Proyectos abiertos (uno por diente del rail izquierdo, además de Archivo).
+    pub(crate) proyectos: Vec<ProyectoAbierto>,
+    /// Índice del proyecto cuyo documento se está editando.
+    pub(crate) proyecto_activo: usize,
+    /// Sub-pestaña del panel del proyecto (Historia/Lienzos/Modelo/Grafo).
+    pub(crate) proyecto_tab: ProyectoTab,
+    /// Commit en previsualización (solo lectura), si lo hay.
+    pub(crate) commit_preview: Option<ProyHash>,
+    /// Modal de push abierto (mensaje en `path_input`).
+    pub(crate) push_abierto: bool,
+    /// Rutas de proyectos recientes (persistidas junto al sled).
+    pub(crate) proyectos_recientes: Vec<PathBuf>,
 }

@@ -118,12 +118,10 @@ impl App for Pluma {
         handle.spawn_periodic(std::time::Duration::from_millis(30), || Msg::FlujoTick);
         // Rail hospedado: si delega, publica sus secciones como dientes en pata.
         if m.delegated {
-            let teeth = vec![
-                pata_host::HostedTooth::new(0, "files", "Archivo"),
-                pata_host::HostedTooth::new(1, "folder", "Lienzos"),
-                pata_host::HostedTooth::new(2, "tools", "Modelo"),
-                pata_host::HostedTooth::new(3, "tools", "Grafo"),
-            ];
+            // El rail izquierdo ahora es Archivo + proyectos (dinámico). En modo
+            // delegado publicamos sólo Archivo; los proyectos se activan desde la
+            // ventana (el host no los conoce).
+            let teeth = vec![pata_host::HostedTooth::new(0, "files", "Archivo")];
             let h = handle.clone();
             m._host = pata_host::HostClient::connect("tawasuyu.pluma", "Pluma", teeth, move |id| {
                 h.dispatch(Msg::HostActivate(id))
@@ -168,6 +166,15 @@ impl App for Pluma {
             return match &event.key {
                 Key::Named(NamedKey::Escape) => Some(Msg::CerrarWizard),
                 Key::Named(NamedKey::Enter) => Some(Msg::WizardConfirm),
+                _ => Some(Msg::PresetInputKey(event.clone())),
+            };
+        }
+        // Modal de push abierto: Esc cancela, Enter pushea, lo demás teclea el
+        // mensaje (reusa `preset_input`).
+        if model.push_abierto {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CerrarPush),
+                Key::Named(NamedKey::Enter) => Some(Msg::ConfirmarPush),
                 _ => Some(Msg::PresetInputKey(event.clone())),
             };
         }
@@ -279,6 +286,9 @@ impl App for Pluma {
                 }
                 if s.eq_ignore_ascii_case("n") {
                     return Some(Msg::NuevoDoc);
+                }
+                if s.eq_ignore_ascii_case("k") {
+                    return Some(Msg::AbrirPush);
                 }
                 if s.eq_ignore_ascii_case("f") {
                     return Some(Msg::FindToggle);

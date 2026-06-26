@@ -200,6 +200,12 @@ fn modelo_sintetico(diente: usize) -> Model {
         panel_estilo_w: 280.0,
         objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
         wizard: None,
+        proyectos: vec![crate::model::ProyectoAbierto::vacio("Proyecto demo")],
+        proyecto_activo: 0,
+        proyecto_tab: crate::model::ProyectoTab::Historia,
+        commit_preview: None,
+        push_abierto: false,
+        proyectos_recientes: Vec::new(),
     };
     // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo
     // (concepto → traducir → resumir) para que el nodegraph muestre nodos+cables.
@@ -301,6 +307,43 @@ fn modelo_sintetico(diente: usize) -> Model {
         w.madre = m.activo;
         w.tipo = crate::model::WizardTipo::Traducir;
         m.wizard = Some(w);
+    }
+
+    // 12 → proyecto con historia (varios pushes + una rama) en pestaña Historia.
+    if diente == 12 {
+        use pluma_proyecto::{DocEstado, Proyecto};
+        let doc_demo = |nombre: &str, texto: &str| -> DocEstado {
+            let mut d = DocEstado::vacio(nombre);
+            let mut c = Cuerpo::nuevo("es", nombre, Intencion::Original, 0);
+            let a = NarrativeAtom::new(texto, "es");
+            c.agregar(a.id, 0);
+            d.atoms.push(a);
+            d.cuerpos.push(c);
+            d
+        };
+        let mut p = Proyecto::nuevo("Mi libro");
+        let id = p.nuevo_documento("capítulo 1");
+        p.set_documento(id, doc_demo("capítulo 1", "El cóndor cruzó el valle."));
+        p.push("ana", "esbozo inicial", 100);
+        p.set_documento(id, doc_demo("capítulo 1", "El cóndor cruzó el valle al amanecer."));
+        p.push("ana", "traducción al quechua", 200);
+        p.set_documento(id, doc_demo("capítulo 1", "Las llamas pastaban en el altiplano."));
+        p.push("ana", "agrega sección animales", 300);
+        // Rama experimental con un push propio.
+        p.rama_nueva("experimento", None);
+        p.cambiar_rama("experimento").ok();
+        p.set_documento(id, doc_demo("capítulo 1", "Tejía un telar bajo el alero, en tono poético."));
+        p.push("ana", "tono más poético", 400);
+        p.cambiar_rama("principal").ok();
+        let doc_activo = id;
+        m.proyectos = vec![crate::model::ProyectoAbierto {
+            proyecto: p,
+            ruta: None,
+            doc_activo,
+        }];
+        m.proyecto_activo = 0;
+        m.diente_activo = 1; // muestra el panel del proyecto
+        m.proyecto_tab = crate::model::ProyectoTab::Historia;
     }
     m
 }

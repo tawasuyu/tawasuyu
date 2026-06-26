@@ -244,6 +244,12 @@ fn escena_base() -> Escena {
         panel_estilo_w: 280.0,
         objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
         wizard: None,
+        proyectos: vec![crate::model::ProyectoAbierto::vacio("Proyecto")],
+        proyecto_activo: 0,
+        proyecto_tab: crate::model::ProyectoTab::Historia,
+        commit_preview: None,
+        push_abierto: false,
+        proyectos_recientes: Vec::new(),
     };
 
     Escena { model, es: es_id, qu: qu_id, en: en_id }
@@ -594,6 +600,12 @@ fn clonar_para_frame(base: &Model) -> Model {
         panel_estilo_w: 280.0,
         objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
         wizard: None,
+        proyectos: vec![crate::model::ProyectoAbierto::vacio("Proyecto")],
+        proyecto_activo: 0,
+        proyecto_tab: crate::model::ProyectoTab::Historia,
+        commit_preview: None,
+        push_abierto: false,
+        proyectos_recientes: Vec::new(),
     }
 }
 

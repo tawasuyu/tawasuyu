@@ -161,6 +161,12 @@ pub fn init_modelo() -> Model {
         panel_estilo_w: 280.0,
         objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
         wizard: None,
+        proyectos: vec![crate::model::ProyectoAbierto::vacio("Proyecto 1")],
+        proyecto_activo: 0,
+        proyecto_tab: crate::model::ProyectoTab::Historia,
+        commit_preview: None,
+        push_abierto: false,
+        proyectos_recientes: crate::util::cargar_recientes(),
     }
 }
 
