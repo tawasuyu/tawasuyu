@@ -4,6 +4,14 @@ impl DrmState {
     /// Procesa un evento de `libinput`: teclado y puntero.
     pub(super) fn handle_input(&mut self, event: InputEvent<LibinputInputBackend>) {
         let time = self.start.elapsed().as_millis() as u32;
+        // Cualquier evento de entrada cuenta como actividad: reinicia el reloj de
+        // inactividad y, si la pantalla estaba apagada por ocio, deja el pedido
+        // de encenderla (lo consume el `tick`). Los eventos de no-input
+        // (DeviceAdded, etc.) también — es inofensivo.
+        self.app.idle_activity();
+        if let Some(off) = self.app.pending_dpms.take() {
+            self.set_dpms(off);
+        }
         match event {
             // --- Teclado: intercepta los atajos del Cerebro --------------
             InputEvent::Keyboard { event } => {

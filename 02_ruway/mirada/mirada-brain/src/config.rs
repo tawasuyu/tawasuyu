@@ -317,6 +317,30 @@ pub struct Config {
     /// Default 24.
     #[serde(default = "default_cursor_size")]
     pub cursor_size: u32,
+    /// **Inactividad — apagar la pantalla** (DPMS) tras estos segundos sin
+    /// actividad. `0` = nunca. Ver [`crate::idle`].
+    #[serde(default)]
+    pub idle_screen_off_secs: u32,
+    /// **Inactividad — bloquear la sesión** tras estos segundos sin actividad.
+    /// `0` = nunca.
+    #[serde(default)]
+    pub idle_lock_secs: u32,
+    /// Si `true` (default), un reproductor de vídeo/llamada que pone un
+    /// *idle inhibitor* pausa los contadores de inactividad (consciencia de
+    /// multimedia): la pantalla no se apaga ni se bloquea mientras mirás algo.
+    #[serde(default = "default_true")]
+    pub idle_respect_inhibitors: bool,
+}
+
+impl Config {
+    /// Proyecta los campos de inactividad a la política pura [`crate::IdleConfig`].
+    pub fn idle_config(&self) -> crate::IdleConfig {
+        crate::IdleConfig {
+            screen_off_secs: self.idle_screen_off_secs,
+            lock_secs: self.idle_lock_secs,
+            respect_inhibitors: self.idle_respect_inhibitors,
+        }
+    }
 }
 
 /// Default de [`Config::slide_ms`]: un slide ágil.
@@ -772,6 +796,9 @@ impl Default for Config {
             slide_ms: default_slide_ms(),
             cursor_theme: default_cursor_theme(),
             cursor_size: default_cursor_size(),
+            idle_screen_off_secs: 0,
+            idle_lock_secs: 0,
+            idle_respect_inhibitors: true,
         }
     }
 }

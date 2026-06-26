@@ -99,6 +99,9 @@ struct OutputCtx {
     output: smithay::output::Output,
     /// El CRTC al que está atada esta salida — clave de routing del VBlank.
     crtc: smithay::reexports::drm::control::crtc::Handle,
+    /// El conector DRM de esta salida — para el DPMS por inactividad (apagar la
+    /// pantalla física se hace sobre la propiedad `DPMS` del conector).
+    connector: smithay::reexports::drm::control::connector::Handle,
     /// El `DrmCompositor` que pinta esta salida.
     compositor: Compositor,
     /// Rect en coordenadas del escritorio global. `(rect.x, rect.y)` es la
@@ -970,6 +973,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             name,
             output: smithay_out,
             crtc: crtc_h,
+            connector: conn_handle,
             compositor: comp,
             rect,
             refresh_mhz,

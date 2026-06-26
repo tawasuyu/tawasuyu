@@ -1670,6 +1670,55 @@ impl App {
         }
     }
 
+    /// Siembra la política de inactividad con la config del usuario (umbrales de
+    /// apagado/bloqueo + respeto a inhibidores). Sólo con Cerebro embebido (el
+    /// enlazado es DE: la inactividad la gestiona su propio entorno). Se llama al
+    /// arrancar y tras cada recarga de config.
+    pub(crate) fn sync_idle_config(&mut self) {
+        if let Brain::Embedded(d) = &self.brain {
+            let ic = d.config().idle_config();
+            self.idle.set_config(ic);
+        }
+    }
+
+    /// Avanza la política de inactividad un paso (lo llama el tick de cada
+    /// backend). Mide el `dt` desde el tick anterior, consulta si hay multimedia
+    /// inhibiendo (alguna superficie con idle-inhibitor) y ejecuta las acciones
+    /// resultantes (apagar/encender pantalla, bloquear).
+    pub(crate) fn idle_tick(&mut self) {
+        let now = std::time::Instant::now();
+        let dt_ms = match self.last_idle_tick.replace(now) {
+            Some(prev) => now.saturating_duration_since(prev).as_millis() as u64,
+            None => return, // primer tick: sólo fija la base temporal
+        };
+        let inhibited = !self.idle_inhibitors.is_empty();
+        let actions = self.idle.tick(dt_ms, inhibited);
+        self.apply_idle_actions(actions);
+    }
+
+    /// Hubo **input** del usuario: reinicia la inactividad y, si la pantalla
+    /// estaba apagada por ocio, pide encenderla. Lo llaman los handlers de
+    /// entrada de cada backend.
+    pub(crate) fn idle_activity(&mut self) {
+        let actions = self.idle.activity();
+        self.apply_idle_actions(actions);
+    }
+
+    /// Ejecuta las acciones de la política de inactividad. El apagado/encendido
+    /// se enruta por [`pending_dpms`](Self::pending_dpms) (lo consume el backend
+    /// DRM); el bloqueo reusa [`request_lock`](Self::request_lock) (no-op si ya
+    /// hay un shell de credenciales arriba).
+    fn apply_idle_actions(&mut self, actions: Vec<mirada_brain::IdleAction>) {
+        use mirada_brain::IdleAction;
+        for a in actions {
+            match a {
+                IdleAction::ScreenOff => self.pending_dpms = Some(true),
+                IdleAction::ScreenOn => self.pending_dpms = Some(false),
+                IdleAction::Lock => self.request_lock(),
+            }
+        }
+    }
+
     /// Pide bloquear la sesión activa. No cambia el modo todavía: deja un
     /// [`pending_lock`](Self::pending_lock) que el bucle del backend consume
     /// para lanzar el shell de credenciales en modo lock (necesita el emisor

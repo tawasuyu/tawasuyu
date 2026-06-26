@@ -195,11 +195,44 @@ El compositor **no hace `setuid` de sí mismo** (se queda con sus privilegios y
 lanza los clientes de cada sesión rebajados a su usuario) — la precondición que
 habilita hostear varias sesiones.
 
-**Auto-lock por inactividad** (`ext_idle_notify_v1`) sigue pendiente — requiere
-unificar el tipo de estado del bucle DRM (TODO en `setup.rs`), un refactor aparte.
 **Caveat N=1:** si una app de la sesión abriera una ventana justo mientras está
 bloqueada, se la marcaría `is_greeter` por error (glitch transitorio, se resuelve al
 desbloquear).
+
+## Inactividad — apagar pantalla + auto-lock, multimedia-aware  🔨 (2026-06-26)
+
+**Qué.** Tras un rato sin uso, **apagar la pantalla** (DPMS) y/o **bloquear la
+sesión** — pero **no** mientras mirás un vídeo o estás en una llamada.
+
+**Cómo.**
+- **Política pura y testeable** en `mirada_brain::idle::IdleManager` (7 tests): dos
+  umbrales independientes en segundos (`idle_screen_off_secs`, `idle_lock_secs`,
+  `0 = nunca`) + `respect_inhibitors`. `tick(dt, inhibited)` acumula ocio y dispara
+  `ScreenOff`/`Lock` al cruzar cada umbral (edge-triggered); `activity()` rearma y
+  emite `ScreenOn` si la pantalla estaba apagada. **Consciencia de multimedia:** con
+  un *idle inhibitor* activo, `tick` cuenta como actividad (no acumula).
+- **Config en wawa-panel:** los tres campos viven en `Config` (sección
+  «Inactividad» del `Schema`, así que aparecen **automáticamente** en wawa-panel) y
+  se recargan en caliente. Tests de `apply` + proyección a `IdleConfig`.
+- **Compositor:** `App::idle_tick` (lo llama el tick de cada backend) mide el `dt`,
+  lee si hay multimedia (`zwp_idle_inhibit` cableado: `IdleInhibitManagerState` +
+  handler → `App::idle_inhibitors`) y ejecuta las acciones; `App::idle_activity` lo
+  resetea desde el input (libinput en DRM, teclado en winit). El **bloqueo** reusa
+  `request_lock` (funciona en ambos backends). El **apagado** se enruta por
+  `pending_dpms`, que el backend DRM aplica en `set_dpms` (propiedad `DPMS` del
+  conector, guardado en `OutputCtx`).
+
+**Por verificar en metal / pendiente:**
+- El **DPMS** está implementado por la vía *legacy* (propiedad `DPMS` del conector),
+  tolerante a error. En algunos drivers con atomic puede no aplicar; la vía
+  atómica-correcta (togglear `ACTIVE` del CRTC en el commit del `DrmCompositor`)
+  queda pendiente — **verificar en sesión gráfica real**. El backend `winit`
+  (anidado) no tiene DPMS: sólo el auto-lock funciona ahí.
+- **`ext_idle_notify_v1`** (notificar a clientes externos del estado de ocio) sigue
+  sin cablear: `IdleNotifierState<App>` exige un `LoopHandle<App>` y los bucles
+  despachan `DrmState`/winit — el mismo refactor de unificación de tipo de estado de
+  siempre. Nuestra política interna no lo necesita; los clientes que quieran saber
+  «idle» todavía no tienen el global.
 
 ## Fast user switching (FUS) — multiplexar >1 sesión  🔨 EN CURSO (1ª rebanada, 2026-06-26)
 

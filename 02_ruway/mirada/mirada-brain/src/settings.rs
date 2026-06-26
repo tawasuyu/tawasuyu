@@ -328,6 +328,30 @@ impl Configurable for Config {
                             .collect(),
                     )),
             )
+            .section(
+                Section::new("inactividad", "Inactividad")
+                    .icon("🌙")
+                    .help("Apagar la pantalla y bloquear tras un rato sin uso (0 = nunca)")
+                    .field(Field::slider_int(
+                        "idle_screen_off_secs",
+                        "Apagar pantalla tras (segundos)",
+                        self.idle_screen_off_secs as i64,
+                        0,
+                        3600,
+                    ))
+                    .field(Field::slider_int(
+                        "idle_lock_secs",
+                        "Bloquear sesión tras (segundos)",
+                        self.idle_lock_secs as i64,
+                        0,
+                        3600,
+                    ))
+                    .field(Field::toggle(
+                        "idle_respect_inhibitors",
+                        "Respetar reproductores (no apagar viendo vídeo)",
+                        self.idle_respect_inhibitors,
+                    )),
+            )
     }
 
     fn apply(&mut self, path: &FieldPath, value: FieldValue) -> Result<(), AllichayError> {
@@ -584,6 +608,21 @@ impl Configurable for Config {
                         .collect();
                 }
             }
+            "idle_screen_off_secs" => {
+                if let Some(v) = value.as_int() {
+                    self.idle_screen_off_secs = v.clamp(0, 3600) as u32;
+                }
+            }
+            "idle_lock_secs" => {
+                if let Some(v) = value.as_int() {
+                    self.idle_lock_secs = v.clamp(0, 3600) as u32;
+                }
+            }
+            "idle_respect_inhibitors" => {
+                if let Some(b) = value.as_bool() {
+                    self.idle_respect_inhibitors = b;
+                }
+            }
             _ => return Err(unknown()),
         }
         Ok(())
@@ -608,9 +647,29 @@ mod tests {
                 "terminal",
                 "monitores",
                 "menu",
-                "vista_espacial"
+                "vista_espacial",
+                "inactividad"
             ]
         );
+    }
+
+    #[test]
+    fn inactividad_aplica_y_proyecta_idle_config() {
+        let mut c = Config::default();
+        c.apply(&"inactividad.idle_screen_off_secs".into(), FieldValue::Int(300))
+            .unwrap();
+        c.apply(&"inactividad.idle_lock_secs".into(), FieldValue::Int(600))
+            .unwrap();
+        c.apply(&"inactividad.idle_respect_inhibitors".into(), FieldValue::Bool(false))
+            .unwrap();
+        let ic = c.idle_config();
+        assert_eq!(ic.screen_off_secs, 300);
+        assert_eq!(ic.lock_secs, 600);
+        assert!(!ic.respect_inhibitors);
+        // Se acota al rango.
+        c.apply(&"inactividad.idle_lock_secs".into(), FieldValue::Int(99999))
+            .unwrap();
+        assert_eq!(c.idle_lock_secs, 3600);
     }
 
     #[test]

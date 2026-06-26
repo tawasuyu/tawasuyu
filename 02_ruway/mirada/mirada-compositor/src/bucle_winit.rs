@@ -143,6 +143,8 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                     let ev = state.body.keybind(combo);
                     state.brain_feed(ev);
                 }
+                // El teclado cuenta como actividad (reinicia el reloj de ocio).
+                state.idle_activity();
             }
             _ => {}
         });
@@ -152,6 +154,12 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
 
         // 2 · Comandos de un Cerebro enlazado.
         state.brain_poll();
+
+        // 2 bis pre · Política de inactividad: avanza el reloj de ocio. El
+        // backend `winit` (anidado) no tiene DPMS real, así que sólo consume el
+        // pedido (el auto-bloqueo sí funciona, vía `request_lock`).
+        state.idle_tick();
+        let _ = state.pending_dpms.take();
 
         // 2 bis · Acción del shell de credenciales: arrancar sesión (login) o
         // desbloquear (lock).
@@ -194,7 +202,9 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
         // 2 ter · Recarga en caliente de keymap/config/reglas si cambiaron.
         // (El backend winit anidado no cachea menú/wallpaper/fuente, así que
         // ignora si la config cambió — sólo importa en el backend DRM.)
-        let _ = watches.poll(&mut state);
+        if watches.poll(&mut state) {
+            state.sync_idle_config(); // umbrales de inactividad recargados
+        }
 
         // 2 quater · Peticiones del API de control (mirada-ctl).
         if let Some(ctl) = &ctl {

@@ -28,6 +28,8 @@ pub mod desktop;
 /// `fus` — *fast user switching*: el [`SessionRoster`] de sesiones hosteadas.
 pub mod fus;
 pub mod git_branch;
+/// `idle` — política de inactividad (apagado de pantalla + bloqueo, multimedia-aware).
+pub mod idle;
 pub mod keymap;
 pub mod permisos;
 pub mod profiles;
@@ -52,6 +54,7 @@ pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesSt
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use fus::{SessionId, SessionRoster};
 pub use git_branch::{BranchSwitch, GitBranchWatch};
+pub use idle::{IdleAction, IdleConfig, IdleManager};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
 pub use permisos::Permisos;
 pub use profiles::{KeymapProfiles, ProfileError};

@@ -285,6 +285,7 @@ impl DrmState {
             name,
             output: smithay_out,
             crtc: crtc_h,
+            connector: conn_handle,
             compositor,
             // rect lo fija `redisponer_outputs` después de añadir.
             rect: Rect::new(0, 0, w as i32, h as i32),

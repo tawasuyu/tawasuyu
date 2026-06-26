@@ -34,10 +34,53 @@ impl DrmState {
         println!("mirada-compositor · sesión recuperada.");
     }
 
+    /// Apaga (`off=true`) o enciende físicamente las pantallas vía la propiedad
+    /// `DPMS` de cada conector — el apagado por inactividad de la política de
+    /// idle. Best-effort y tolerante a error: en algunos drivers con atomic el
+    /// set legacy de `DPMS` puede no aplicar (la vía atómica correcta es togglear
+    /// `ACTIVE` del CRTC en el commit del `DrmCompositor`) — **por verificar en
+    /// metal**. Al encender, fuerza un repintado para recomponer lo que cambió.
+    pub(super) fn set_dpms(&mut self, off: bool) {
+        use smithay::reexports::drm::control::Device as _;
+        // Valor estándar del kernel: 0 = On, 3 = Off.
+        let value: u64 = if off { 3 } else { 0 };
+        for ctx in &self.outputs {
+            let Ok(props) = self.drm.get_properties(ctx.connector) else {
+                continue;
+            };
+            let (handles, _values) = props.as_props_and_values();
+            for &ph in handles {
+                if let Ok(info) = self.drm.get_property(ph) {
+                    if info.name().to_str() == Ok("DPMS") {
+                        if let Err(e) = self.drm.set_property(ctx.connector, ph, value) {
+                            dlog!("mirada-compositor · DPMS set falló ({}): {e}", ctx.name);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if !off {
+            self.render();
+        }
+        dlog!(
+            "mirada-compositor · DPMS {} por inactividad.",
+            if off { "off" } else { "on" }
+        );
+    }
+
     /// Tarea periódica: Cerebro enlazado, recarga del keymap, API de
     /// control, composición y vaciado hacia los clientes.
     pub(super) fn tick(&mut self) {
         self.app.brain_poll();
+
+        // Política de inactividad: avanza el reloj de ocio y, si cruzó un umbral,
+        // deja un pedido de DPMS / bloqueo. El apagado físico se aplica acá
+        // (sólo el backend DRM tiene los conectores).
+        self.app.idle_tick();
+        if let Some(off) = self.app.pending_dpms.take() {
+            self.set_dpms(off);
+        }
 
         // Pedido de bloqueo (Super+Escape → `BrainCommand::Lock` → `request_lock`):
         // lanza el shell de credenciales en modo lock, compuesto encima de la
@@ -90,6 +133,8 @@ impl DrmState {
         // aplicó teselado/decoración/foco.
         if self.watches.poll(&mut self.app) {
             self.menu_entries = self.app.config_menu();
+            // Re-siembra los umbrales de inactividad (pueden haber cambiado).
+            self.app.sync_idle_config();
             // Reconstruye los presets de zonas y reacota el activo.
             let mut presets = vec![self.app.config_zones()];
             presets.extend(self.app.config_zone_presets());

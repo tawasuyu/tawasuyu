@@ -270,6 +270,12 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     // retirar el global más tarde, cosa que nunca hacemos.
     let _ = XdgDecorationState::new::<App>(&dh);
 
+    // `zwp_idle_inhibit`: los reproductores de vídeo/llamadas crean un inhibidor
+    // sobre su superficie mientras reproducen; la política de inactividad lo lee
+    // para no apagar la pantalla ni bloquear mientras mirás algo. Sólo registra
+    // el global; el estado por-superficie lo lleva `App::idle_inhibitors`.
+    let _ = smithay::wayland::idle_inhibit::IdleInhibitManagerState::new::<App>(&dh);
+
     // El keymap del usuario (`~/.config/mirada/keymap.ron`). Sólo lo usa
     // el Cerebro embebido; con un Cerebro enlazado, el keymap es asunto suyo.
     let keymap_path = Keymap::default_path();
@@ -306,16 +312,16 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     let caps_ftm_filter = caps.clone();
     let caps_sc_filter = caps.clone();
 
-    // TODO idle-notify (ext_idle_notify_v1) + DPMS por inactividad.
-    // No se cablea acá porque `IdleNotifierState<App>` exige un
-    // `calloop::LoopHandle<'static, App>` en su constructor (lo usa para sus
-    // timers internos de idled/resumed), pero el bucle de eventos del backend
-    // DRM despacha `DrmState` (`EventLoop<DrmState>`), no `App`, y el backend
-    // `winit` no usa calloop en absoluto. Integrarlo requiere unificar el tipo
-    // de estado del bucle (que el `EventLoop` despache el mismo tipo que
-    // implementa los handlers Wayland) — un refactor del bucle, no un parche
-    // local. El punto de apagado físico de la pantalla (DPMS real sobre DRM)
-    // iría en el handler del timer de inactividad, sobre `DrmState::outputs`.
+    // El apagado por inactividad (DPMS) + auto-lock + consciencia de multimedia
+    // (`zwp_idle_inhibit`) YA está cableado: política pura en
+    // `mirada_brain::idle`, alimentada por el tick de cada backend
+    // (`App::idle_tick`) y reseteada por el input (`App::idle_activity`); el DPMS
+    // físico lo aplica `DrmState::set_dpms`. Lo que sigue pendiente es
+    // `ext_idle_notify_v1` (notificar a clientes externos del ocio): su
+    // `IdleNotifierState<App>` exige un `calloop::LoopHandle<'static, App>`, pero
+    // el bucle DRM despacha `DrmState` (`EventLoop<DrmState>`), no `App`, y el
+    // backend `winit` no usa calloop — integrarlo requiere unificar el tipo de
+    // estado del bucle, un refactor aparte.
     // Roster de sesiones (FUS). En modo greeter nace vacío (el login dará de
     // alta la primera). En un arranque normal sembramos una sesión «implícita»
     // (dev / sin DM): sus procesos heredan los privilegios del compositor
@@ -457,6 +463,12 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         greeter_active_output: usize::MAX,
         pending_lock: None,
         pending_new_session: false,
+        // Política de inactividad: arranca desactivada; `apply_commands`/el tick
+        // la siembran con la config del usuario (umbrales en segundos).
+        idle: mirada_brain::IdleManager::new(mirada_brain::IdleConfig::default()),
+        idle_inhibitors: std::collections::HashSet::new(),
+        last_idle_tick: None,
+        pending_dpms: None,
     };
 
     // Distribución de teclado de la config del usuario (vacío = la del
@@ -483,6 +495,9 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
             app.apply_commands(cmds);
         }
     }
+    // Siembra la política de inactividad con los umbrales de la config (apagar
+    // pantalla / bloquear). Se re-siembra en cada recarga de config en caliente.
+    app.sync_idle_config();
 
     // Vigilancia de los archivos de config (keymap, config, reglas) para
     // recargarlos en caliente — sólo con el Cerebro embebido y fuera del

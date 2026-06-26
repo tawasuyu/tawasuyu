@@ -276,6 +276,9 @@ impl XdgShellHandler for App {
             .iter()
             .position(|w| w.surface == *surface.wl_surface());
         self.ssd_surfaces.remove(surface.wl_surface());
+        // Por si el cliente murió sin destruir su idle-inhibitor: no dejar un
+        // inhibidor colgado que congele la política de inactividad para siempre.
+        self.idle_inhibitors.remove(surface.wl_surface());
         if let Some(pos) = pos {
             let w = self.windows.remove(pos);
             // La celda que ocupaba queda dañada (screencopy): se repinta
@@ -799,3 +802,16 @@ impl ForeignToplevelListHandler for App {
     }
 }
 delegate_output!(App);
+
+// `zwp_idle_inhibit`: un cliente (vídeo, llamada) inhibe la inactividad sobre su
+// superficie. Llevamos el set de superficies inhibidoras; la política de
+// inactividad lo consulta para no apagar/bloquear mientras hay multimedia.
+smithay::delegate_idle_inhibit!(App);
+impl smithay::wayland::idle_inhibit::IdleInhibitHandler for App {
+    fn inhibit(&mut self, surface: WlSurface) {
+        self.idle_inhibitors.insert(surface);
+    }
+    fn uninhibit(&mut self, surface: WlSurface) {
+        self.idle_inhibitors.remove(&surface);
+    }
+}

@@ -573,6 +573,22 @@ pub(crate) struct App {
     /// lo consume el bucle del backend, que lanza el shell de credenciales en
     /// modo lock (necesita el emisor del canal, que no vive en `App`).
     pub(crate) pending_lock: Option<String>,
+
+    /// **Política de inactividad** (apagar pantalla + bloquear, multimedia-aware).
+    /// La alimenta el tick de cada backend ([`App::idle_tick`]) y la resetea el
+    /// input ([`App::idle_activity`]). Ver [`mirada_brain::idle`].
+    pub(crate) idle: mirada_brain::IdleManager,
+    /// Superficies con un *idle inhibitor* activo (`zwp_idle_inhibit`): vídeo en
+    /// reproducción, llamadas… Si el set no está vacío, la inactividad se pausa.
+    pub(crate) idle_inhibitors: std::collections::HashSet<WlSurface>,
+    /// Instante del último tick de inactividad, para medir el `dt` del próximo.
+    /// `None` hasta el primer tick.
+    pub(crate) last_idle_tick: Option<std::time::Instant>,
+    /// Pedido de **DPMS** pendiente que el backend DRM consume: `Some(true)` =
+    /// apagar pantalla, `Some(false)` = encender. Lo pone la política de
+    /// inactividad; el backend `winit` (anidado) no tiene DPMS real y sólo lo
+    /// limpia. `None` = sin pedido.
+    pub(crate) pending_dpms: Option<bool>,
     /// Pedido de **nueva sesión** pendiente (FUS «cambiar usuario»): lo pone
     /// [`App::request_new_session`] y lo consume el bucle del backend, que
     /// relanza el greeter en modo **login** (no lock) para hostear otra sesión
