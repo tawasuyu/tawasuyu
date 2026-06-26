@@ -40,7 +40,19 @@ impl BoneDef {
     }
 }
 
-/// El documento del rig: la cadena + parámetros de malla + IK.
+/// Cómo se genera la malla deformable alrededor de la cadena.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MeshMode {
+    /// Tira-tubo a lo largo de la cadena (skinning rígido+blend en joints).
+    /// Ideal para un miembro (brazo, cola).
+    Tube,
+    /// Rejilla rectangular que cubre toda la silueta, con cada vértice
+    /// auto-skinneado a los huesos por distancia. Es la malla para **deformar
+    /// una imagen/arte arbitrario** (sus UV mapean la textura completa).
+    Grid,
+}
+
+/// El documento del rig: la cadena + parámetros de malla + IK + textura.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RigDoc {
     pub bones: Vec<BoneDef>,
@@ -48,6 +60,16 @@ pub struct RigDoc {
     pub thickness: f64,
     /// Columnas de la malla por unidad de largo (densidad del tubo).
     pub cols: usize,
+    /// Modo de generación de la malla.
+    pub mesh_mode: MeshMode,
+    /// Resolución de la rejilla (celdas a lo largo de la cadena, modo Grid).
+    pub grid_res: usize,
+    /// Relación alto/ancho de la rejilla (modo Grid); se ajusta al cargar una
+    /// imagen para respetar su aspecto.
+    pub mesh_aspect: f64,
+    /// Path de la textura a deformar (se recarga al abrir el proyecto). Los
+    /// píxeles NO se serializan — sólo la referencia al archivo.
+    pub texture_path: Option<String>,
     /// ¿IK de 2 huesos activo sobre los huesos 0 y 1?
     pub ik_enabled: bool,
     /// Objetivo del IK (espacio de modelo).
@@ -62,6 +84,10 @@ impl Default for RigDoc {
             bones: Vec::new(),
             thickness: 22.0,
             cols: 16,
+            mesh_mode: MeshMode::Tube,
+            grid_res: 10,
+            mesh_aspect: 0.6,
+            texture_path: None,
             ik_enabled: false,
             ik_target: (200.0, 40.0),
             ik_flip: false,
@@ -143,10 +169,18 @@ impl RigDoc {
         s
     }
 
+    /// La malla deformable según el modo activo.
+    pub fn mesh(&self) -> Mesh {
+        match self.mesh_mode {
+            MeshMode::Tube => self.tube_mesh(),
+            MeshMode::Grid => self.grid_mesh(),
+        }
+    }
+
     /// Malla-tubo skinneada alrededor de la cadena recta (bind space). Skinning
     /// suave en las articulaciones: lejos de un joint el vértice es rígido a su
     /// hueso; dentro de la ventana de blend mezcla con el hueso vecino.
-    pub fn mesh(&self) -> Mesh {
+    fn tube_mesh(&self) -> Mesh {
         let mut m = Mesh::new();
         let n = self.bones.len();
         if n == 0 {
@@ -218,6 +252,88 @@ impl RigDoc {
         }
         vec![Weight { bone: k, weight: 1.0 }]
     }
+
+    /// Malla-rejilla que cubre la silueta (`[0,total] × [-H/2,H/2]`, con
+    /// `H = total·aspect`), cada vértice **auto-skinneado** a los huesos por
+    /// distancia (inverse-distance, top-2). Sus UV mapean la textura completa
+    /// `0..1`, así que deforma una imagen arbitraria, no sólo un miembro.
+    fn grid_mesh(&self) -> Mesh {
+        let mut m = Mesh::new();
+        let n = self.bones.len();
+        if n == 0 {
+            return m;
+        }
+        let total = self.total_len();
+        let h = (total * self.mesh_aspect).max(1.0);
+        let y_top = -h * 0.5;
+        let starts = self.starts();
+        let gx = self.grid_res.max(2);
+        let gy = ((gx as f64 * self.mesh_aspect).round() as usize).max(2);
+
+        for j in 0..=gy {
+            for i in 0..=gx {
+                let x = total * i as f64 / gx as f64;
+                let y = y_top + h * j as f64 / gy as f64;
+                let weights = self.skin_weights_at(Point::new(x, y), &starts);
+                let uv = (i as f64 / gx as f64, j as f64 / gy as f64);
+                m.vertices.push(Vertex {
+                    rest: Point::new(x, y),
+                    uv,
+                    weights,
+                });
+            }
+        }
+        let stride = (gx + 1) as u32;
+        for j in 0..gy as u32 {
+            for i in 0..gx as u32 {
+                let a = j * stride + i;
+                let b = a + 1;
+                let c = a + stride;
+                let d = c + 1;
+                m.triangles.push([a, b, d]);
+                m.triangles.push([a, d, c]);
+            }
+        }
+        m
+    }
+
+    /// Pesos auto-skin de un punto: distancia a cada segmento-hueso (en bind,
+    /// recta sobre el eje x), inverse-distance², se queda con los 2 huesos más
+    /// cercanos y normaliza. Da una deformación suave de la rejilla.
+    fn skin_weights_at(&self, p: Point, starts: &[f64]) -> Vec<Weight> {
+        let n = self.bones.len();
+        // (bone, dist) por hueso.
+        let mut ds: Vec<(usize, f64)> = (0..n)
+            .map(|k| {
+                let x0 = starts[k];
+                let x1 = starts[k] + self.bones[k].len;
+                let dx = if p.x < x0 {
+                    x0 - p.x
+                } else if p.x > x1 {
+                    p.x - x1
+                } else {
+                    0.0
+                };
+                (k, dx.hypot(p.y))
+            })
+            .collect();
+        // Top-2 más cercanos.
+        ds.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        ds.truncate(2);
+        let eps = 1e-3;
+        let mut raw: Vec<(usize, f64)> =
+            ds.iter().map(|(k, d)| (*k, 1.0 / (d * d + eps))).collect();
+        let sum: f64 = raw.iter().map(|(_, w)| w).sum();
+        if sum <= 0.0 {
+            return vec![Weight { bone: 0, weight: 1.0 }];
+        }
+        for (_, w) in &mut raw {
+            *w /= sum;
+        }
+        raw.into_iter()
+            .map(|(bone, weight)| Weight { bone, weight })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +369,30 @@ mod tests {
             .zip(&bent)
             .any(|(a, b)| (a.x - b.x).hypot(a.y - b.y) > 1.0);
         assert!(moved, "doblar el codo debería mover la malla");
+    }
+
+    #[test]
+    fn grid_mesh_pesos_normalizados_y_deforma() {
+        let mut rig = RigDoc::starter();
+        rig.mesh_mode = MeshMode::Grid;
+        rig.grid_res = 8;
+        let m = rig.mesh();
+        assert!(!m.vertices.is_empty() && !m.triangles.is_empty());
+        // Cada vértice tiene pesos que suman ~1 (skinning bien normalizado).
+        for v in &m.vertices {
+            let s: f64 = v.weights.iter().map(|w| w.weight).sum();
+            assert!((s - 1.0).abs() < 1e-6, "pesos deben sumar 1, fue {s}");
+            assert!(v.weights.iter().all(|w| w.bone < rig.bones.len()));
+        }
+        // Posar el codo deforma la rejilla.
+        let rest = m.deform(&rig.skeleton());
+        rig.bones[1].angle = 0.9;
+        let bent = rig.mesh().deform(&rig.skeleton());
+        let moved = rest
+            .iter()
+            .zip(&bent)
+            .any(|(a, b)| (a.x - b.x).hypot(a.y - b.y) > 1.0);
+        assert!(moved, "doblar el codo debería deformar la rejilla");
     }
 
     #[test]

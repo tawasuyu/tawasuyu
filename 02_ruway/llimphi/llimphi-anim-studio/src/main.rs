@@ -37,7 +37,7 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputStat
 mod doc;
 mod rig;
 use doc::{CmpOp, CondDef, Doc, InputDef, InputKind, StateDef, TransDef};
-use rig::{BoneDef, RigDoc};
+use rig::{BoneDef, MeshMode, RigDoc};
 
 /// Dónde se guarda/carga el grafo (relativo al cwd).
 const PROJECT_PATH: &str = "anim-studio.ron";
@@ -89,6 +89,11 @@ struct Model {
     rig: RigDoc,
     /// Hueso seleccionado en el modo Rig.
     rig_sel: Option<usize>,
+    /// Textura cargada para deformar (no se serializa; se recarga del path).
+    texture: Option<llimphi_image::Image>,
+    /// Campo del path de la textura.
+    tex_input: TextInputState,
+    tex_focused: bool,
 
     /// Instancia ejecutable (recompilada del `doc` en cada edición estructural).
     instance: Instance,
@@ -192,6 +197,13 @@ enum Msg {
     RigSetLen(usize, f64),
     RigSetThickness(f64),
     RigSetCols(f64),
+    RigSetMeshMode(MeshMode),
+    RigSetGridRes(f64),
+    RigSetAspect(f64),
+    RigTexFocus,
+    RigTexKey(KeyEvent),
+    RigLoadTexture,
+    RigClearTexture,
     RigToggleIk,
     RigToggleFlip,
     RigSetTargetX(f64),
@@ -264,6 +276,9 @@ impl App for Studio {
             sel: Sel::None,
             rig: RigDoc::starter(),
             rig_sel: Some(1),
+            texture: None,
+            tex_input: TextInputState::new(),
+            tex_focused: false,
             current_idx: Some(0),
             live_bools: HashMap::new(),
             live_numbers: HashMap::new(),
@@ -284,6 +299,9 @@ impl App for Studio {
         }
         if model.new_input_focused {
             return Some(Msg::NewInputKey(ev.clone()));
+        }
+        if model.tex_focused {
+            return Some(Msg::RigTexKey(ev.clone()));
         }
         None
     }
@@ -325,6 +343,40 @@ impl App for Studio {
             }
             Msg::RigSetThickness(v) => model.rig.thickness = v.clamp(2.0, 120.0),
             Msg::RigSetCols(v) => model.rig.cols = (v as usize).clamp(2, 64),
+            Msg::RigSetMeshMode(m) => model.rig.mesh_mode = m,
+            Msg::RigSetGridRes(v) => model.rig.grid_res = (v as usize).clamp(2, 40),
+            Msg::RigSetAspect(v) => model.rig.mesh_aspect = (v as f64).clamp(0.1, 3.0),
+            Msg::RigTexFocus => {
+                model.tex_focused = true;
+                model.name_focused = false;
+                model.new_input_focused = false;
+            }
+            Msg::RigTexKey(ev) => {
+                model.tex_input.apply_key(&ev);
+            }
+            Msg::RigLoadTexture => {
+                let path = model.tex_input.text();
+                let path = path.trim().to_string();
+                if path.is_empty() {
+                    model.status = "escribí el path de una imagen".into();
+                } else {
+                    match load_texture(&path) {
+                        Ok((img, aspect)) => {
+                            model.rig.mesh_aspect = aspect;
+                            model.rig.mesh_mode = MeshMode::Grid; // textura ⇒ rejilla
+                            model.rig.texture_path = Some(path.clone());
+                            model.texture = Some(img);
+                            model.status = format!("textura cargada: {path}");
+                        }
+                        Err(e) => model.status = format!("no se pudo cargar: {e}"),
+                    }
+                }
+            }
+            Msg::RigClearTexture => {
+                model.texture = None;
+                model.rig.texture_path = None;
+                model.status = "textura quitada".into();
+            }
             Msg::RigToggleIk => model.rig.ik_enabled = !model.rig.ik_enabled,
             Msg::RigToggleFlip => model.rig.ik_flip = !model.rig.ik_flip,
             Msg::RigSetTargetX(v) => model.rig.ik_target.0 = v,
@@ -590,6 +642,15 @@ impl App for Studio {
                         model.rig = p.rig;
                         model.sel = Sel::None;
                         model.rig_sel = model.rig.bones.len().checked_sub(1);
+                        // Recargar la textura referenciada por path, si la hay.
+                        model.texture = model
+                            .rig
+                            .texture_path
+                            .as_ref()
+                            .and_then(|p| load_texture(p).ok().map(|(img, _)| img));
+                        if let Some(p) = &model.rig.texture_path {
+                            model.tex_input.set_text(p.clone());
+                        }
                         model.rebuild();
                         model.status = format!("cargado de {PROJECT_PATH}");
                     }
@@ -1240,24 +1301,72 @@ fn rig_right_panel(model: &Model) -> View<Msg> {
     // --- Malla ---
     rows.push(spacer(12.0));
     rows.push(section_title("MALLA", theme));
-    let th = model.rig.thickness as f32;
-    rows.push(slider_view(
-        format!("grosor {:.0}", model.rig.thickness),
-        th,
-        2.0,
-        120.0,
-        &sp,
-        move |_p, nv| Some(Msg::RigSetThickness(nv as f64)),
+    let is_grid = matches!(model.rig.mesh_mode, MeshMode::Grid);
+    rows.push(row(vec![
+        toggle_btn("tubo", !is_grid, Msg::RigSetMeshMode(MeshMode::Tube), theme),
+        toggle_btn("rejilla", is_grid, Msg::RigSetMeshMode(MeshMode::Grid), theme),
+    ]));
+    rows.push(spacer(4.0));
+    if is_grid {
+        let gr = model.rig.grid_res as f32;
+        rows.push(slider_view(
+            format!("resolución {}", model.rig.grid_res),
+            gr,
+            2.0,
+            40.0,
+            &sp,
+            move |_p, nv| Some(Msg::RigSetGridRes(nv as f64)),
+        ));
+        let asp = model.rig.mesh_aspect as f32;
+        rows.push(slider_view(
+            format!("aspecto {:.2}", model.rig.mesh_aspect),
+            asp,
+            0.1,
+            3.0,
+            &sp,
+            move |_p, nv| Some(Msg::RigSetAspect(nv as f64)),
+        ));
+    } else {
+        let th = model.rig.thickness as f32;
+        rows.push(slider_view(
+            format!("grosor {:.0}", model.rig.thickness),
+            th,
+            2.0,
+            120.0,
+            &sp,
+            move |_p, nv| Some(Msg::RigSetThickness(nv as f64)),
+        ));
+        let cols = model.rig.cols as f32;
+        rows.push(slider_view(
+            format!("columnas {}", model.rig.cols),
+            cols,
+            2.0,
+            64.0,
+            &sp,
+            move |_p, nv| Some(Msg::RigSetCols(nv as f64)),
+        ));
+    }
+
+    // --- Textura (deformar una imagen real) ---
+    rows.push(spacer(12.0));
+    rows.push(section_title("TEXTURA", theme));
+    rows.push(text_input_view(
+        &model.tex_input,
+        "/path/a/imagen.png…",
+        model.tex_focused,
+        &TextInputPalette::from_theme(theme),
+        Msg::RigTexFocus,
     ));
-    let cols = model.rig.cols as f32;
-    rows.push(slider_view(
-        format!("columnas {}", model.rig.cols),
-        cols,
-        2.0,
-        64.0,
-        &sp,
-        move |_p, nv| Some(Msg::RigSetCols(nv as f64)),
-    ));
+    rows.push(spacer(4.0));
+    rows.push(row(vec![
+        button_view("cargar textura", &btn, Msg::RigLoadTexture),
+        button_view("quitar", &btn, Msg::RigClearTexture),
+    ]));
+    if model.texture.is_some() {
+        rows.push(muted("textura activa → modo rejilla la deforma", theme));
+    } else {
+        rows.push(muted("cargá un PNG/JPG: se rige a la cadena y se dobla", theme));
+    }
 
     // --- IK ---
     rows.push(spacer(12.0));
@@ -1383,6 +1492,8 @@ fn rig_canvas(model: &Model) -> View<Msg> {
     let wire = model.theme.fg_text;
     let bone_col = Color::from_rgba8(255, 196, 92, 255); // ámbar, contrasta con la malla
     let bg = self_color(model.theme.bg_app, model.theme.bg_panel);
+    let tex = model.texture.clone();
+    let use_tex = matches!(model.rig.mesh_mode, MeshMode::Grid) && tex.is_some();
 
     View::new(Style {
         flex_grow: 1.0,
@@ -1397,15 +1508,23 @@ fn rig_canvas(model: &Model) -> View<Msg> {
     .paint_with(move |scene, _ts, rect| {
         use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle, Line, Stroke};
         use llimphi_ui::llimphi_raster::peniko::Fill;
-        use llimphi_mesh::{fit_transform, paint_solid, paint_wireframe};
+        use llimphi_mesh::{fit_transform, paint_solid, paint_textured, paint_wireframe};
 
         if mesh.vertices.is_empty() {
             return;
         }
         let xform = fit_transform(bounds, rect);
-        // Malla deformada: relleno semitransparente + wireframe.
-        paint_solid(scene, &mesh, &positions, xform, fill);
-        paint_wireframe(scene, &mesh, &positions, xform, wire, 1.0);
+        // Malla deformada: textura real (modo Grid) o relleno + wireframe.
+        if use_tex {
+            if let Some(t) = &tex {
+                paint_textured(scene, &mesh, &positions, xform, t);
+            }
+            // Wireframe tenue encima para leer la deformación.
+            paint_wireframe(scene, &mesh, &positions, xform, theme_with_alpha(wire, 55), 0.7);
+        } else {
+            paint_solid(scene, &mesh, &positions, xform, fill);
+            paint_wireframe(scene, &mesh, &positions, xform, wire, 1.0);
+        }
 
         // Huesos: líneas gruesas + nudos en las articulaciones.
         for (a, e) in &bones_world {
@@ -1507,6 +1626,29 @@ fn grow_text(text: String, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text(text, 12.0, theme.fg_text)
+}
+
+/// Botón de conmutación (segmented control): resaltado en accent si activo.
+fn toggle_btn(label: &str, active: bool, msg: Msg, theme: &Theme) -> View<Msg> {
+    let (bg, fg) = if active {
+        (theme.accent, Color::from_rgba8(20, 20, 24, 255))
+    } else {
+        (theme.bg_button, theme.fg_muted)
+    };
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: Dimension::auto(),
+            height: length(28.0),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: pad(10.0, 0.0),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(5.0)
+    .text(label.to_string(), 12.0, fg)
+    .on_click(msg)
 }
 
 fn fixed_btn(label: &str, msg: Msg, btn: &ButtonPalette, w: f32) -> View<Msg> {
@@ -1628,6 +1770,16 @@ fn self_color(a: Color, b: Color) -> Color {
 // =============================================================================
 //  Operaciones sobre el documento
 // =============================================================================
+
+/// Carga una imagen de disco y devuelve `(textura, aspecto alto/ancho)`.
+fn load_texture(path: &str) -> Result<(llimphi_image::Image, f64), String> {
+    use std::path::Path;
+    const MAX: u64 = 64 * 1024 * 1024;
+    let img = llimphi_image::load_path(Path::new(path), MAX).map_err(|e| format!("{e:?}"))?;
+    let w = (img.image.width.max(1)) as f64;
+    let h = (img.image.height.max(1)) as f64;
+    Ok((img, (h / w).clamp(0.1, 3.0)))
+}
 
 /// Borra el estado `idx` y reindexa transiciones/entry consistentemente.
 fn remove_state(doc: &mut Doc, idx: usize) {

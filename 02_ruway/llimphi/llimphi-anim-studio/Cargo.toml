@@ -16,6 +16,8 @@ path = "src/main.rs"
 llimphi-anim = { workspace = true }
 # Render de la malla deformada (solid/wireframe + fit/bounds) para el preview del rig.
 llimphi-mesh = { workspace = true }
+# Carga de imágenes de disco (PNG/JPEG/WEBP → ImageBrush) para texturizar la malla.
+llimphi-image = { workspace = true }
 # Bucle Elm + ventana + re-exports (raster/layout/text).
 llimphi-ui = { workspace = true }
 # Paletas semánticas de color.
