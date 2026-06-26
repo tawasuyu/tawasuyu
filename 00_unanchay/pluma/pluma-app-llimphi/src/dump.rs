@@ -195,10 +195,15 @@ fn modelo_sintetico(diente: usize) -> Model {
         delegated: false,
         _host: None,
         host_active_synced: None,
+        estilos: std::collections::HashMap::new(),
+        diente_estilo_activo: None,
+        panel_estilo_w: 280.0,
+        objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
+        wizard: None,
     };
     // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo
     // (concepto → traducir → resumir) para que el nodegraph muestre nodos+cables.
-    if diente == 4 {
+    if diente == 3 {
         use crate::model::{Filtro, NodoFiltro};
         m.grafo_src = (20.0, 16.0);
         m.grafo = vec![

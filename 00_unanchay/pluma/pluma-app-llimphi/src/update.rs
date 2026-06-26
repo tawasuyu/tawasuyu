@@ -25,7 +25,11 @@ use rimay_verbo_core::Provider;
 use rimay_verbo_daemon::DaemonClient;
 use uuid::Uuid;
 
-use crate::model::{Filtro, Modo, Model, Msg, NodoFiltro, BACKENDS, METRICS, VISIBLE_LINES};
+use crate::model::{
+    Filtro, Modo, Model, Msg, NodoFiltro, ObjetivoEstilo, WizardTipo, BACKENDS, METRICS,
+    VISIBLE_LINES,
+};
+use pluma_estilo::EstiloTexto;
 use crate::util::{ahora_unix, etiqueta_backend, expandir_ruta, extension_lower};
 use crate::view::etiqueta_filtro;
 
@@ -483,6 +487,59 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             model.en_curso = false;
             model.ultimo_status = "celda ejecutada".into();
         }
+
+        // --- Rail derecho de estilo ---
+        Msg::SelectDienteEstilo(id) => {
+            if model.diente_estilo_activo == Some(id) {
+                model.diente_estilo_activo = None; // re-click = cerrar (toggle)
+            } else {
+                model.diente_estilo_activo = Some(id);
+                model.objetivo_estilo = ObjetivoEstilo::Lienzo;
+            }
+        }
+        Msg::CerrarPanelEstilo => {
+            model.diente_estilo_activo = None;
+        }
+        Msg::SetObjetivoEstilo(o) => {
+            model.objetivo_estilo = o;
+        }
+        Msg::AplicarEstilo(delta) => {
+            aplicar_estilo_delta(&mut model, delta);
+        }
+        Msg::EstiloReset => {
+            estilo_reset(&mut model);
+        }
+        Msg::ResizePanelEstilo(dx) => {
+            // El panel es el pane fijo de la derecha: arrastrar el divisor hacia
+            // la derecha (dx>0) lo achica.
+            model.panel_estilo_w = (model.panel_estilo_w - dx).clamp(200.0, 460.0);
+        }
+
+        // --- Wizard de transformación ("+") ---
+        Msg::AbrirWizard => {
+            let mut w = crate::model::WizardEstado::default();
+            w.madre = model.activo;
+            model.wizard = Some(w);
+            model.preset_input = TextInputState::new();
+            model.preset_focused = true;
+        }
+        Msg::CerrarWizard => {
+            model.wizard = None;
+            model.preset_focused = false;
+        }
+        Msg::WizardMadre(id) => {
+            if let Some(w) = model.wizard.as_mut() {
+                w.madre = Some(id);
+            }
+        }
+        Msg::WizardTipoSel(t) => {
+            if let Some(w) = model.wizard.as_mut() {
+                w.tipo = t;
+            }
+        }
+        Msg::WizardConfirm => {
+            confirmar_wizard(&mut model, handle);
+        }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
     // tamaño, panel…). Idempotente y barato.
@@ -554,7 +611,14 @@ fn clamp_scroll(model: &mut Model) {
         model.seleccionados.len()
     };
     let contenido = crate::model::ancho_contenido(n);
-    let centro = (model.viewport.0 - model.panel_w - crate::model::RAIL_W).max(0.0);
+    let panel_estilo = if model.diente_estilo_activo.is_some() {
+        model.panel_estilo_w
+    } else {
+        0.0
+    };
+    // Dos rails (izq herramientas + der estilo) + panel izq + panel de estilo.
+    let centro =
+        (model.viewport.0 - model.panel_w - crate::model::RAIL_W * 2.0 - panel_estilo).max(0.0);
     let max = (contenido - centro).max(0.0);
     model.scroll_x = model.scroll_x.clamp(0.0, max);
 }
@@ -732,6 +796,145 @@ fn aplicar_edit_menu(mut model: Model, action: EditAction) -> Model {
     let _ = llimphi_widget_edit_menu::apply(&mut model.ide.state, action, &mut model.clipboard);
     model.ide.state.ensure_caret_visible(VISIBLE_LINES);
     model
+}
+
+/// Mergea `delta` (estilo parcial) sobre el objetivo actual del panel de
+/// estilo (lienzo entero / zona / selección) del lienzo cuyo diente está
+/// activo, y lo persiste. La selección sólo aplica si ese lienzo es el activo
+/// (es el único con un editor que trackea selección viva).
+fn aplicar_estilo_delta(model: &mut Model, delta: EstiloTexto) {
+    let Some(id) = model.diente_estilo_activo else {
+        return;
+    };
+    let objetivo = model.objetivo_estilo;
+    // La selección se calcula ANTES de tomar el borrow mutable de `estilos`.
+    let spans: Vec<(Uuid, usize, usize)> = match objetivo {
+        ObjetivoEstilo::Seleccion if model.activo == Some(id) => seleccion_spans(&model.ide),
+        ObjetivoEstilo::Seleccion => {
+            model.ultimo_status = "abrí el lienzo (click) para estilar su selección".into();
+            return;
+        }
+        _ => Vec::new(),
+    };
+    let e = model.estilos.entry(id).or_default();
+    match objetivo {
+        ObjetivoEstilo::Lienzo => e.set_base(&delta),
+        ObjetivoEstilo::Zona(z) => e.set_zona(z, &delta),
+        ObjetivoEstilo::Seleccion => {
+            if spans.is_empty() {
+                model.ultimo_status = "no hay texto seleccionado".into();
+                return;
+            }
+            for (atom, ini, fin) in spans {
+                e.set_span(atom, ini, fin, delta.clone());
+            }
+        }
+    }
+    let estilo = e.clone();
+    let _ = model.store.put_estilo(id, &estilo);
+    let _ = model.store.flush();
+}
+
+/// Limpia el estilo del objetivo actual del panel (lienzo/zona/selección) y
+/// persiste. Para selección, limpia todos los spans del lienzo (grano grueso).
+fn estilo_reset(model: &mut Model) {
+    let Some(id) = model.diente_estilo_activo else {
+        return;
+    };
+    let objetivo = model.objetivo_estilo;
+    let e = model.estilos.entry(id).or_default();
+    match objetivo {
+        ObjetivoEstilo::Lienzo => e.base = EstiloTexto::default(),
+        ObjetivoEstilo::Zona(z) => {
+            e.por_zona.remove(&z);
+        }
+        ObjetivoEstilo::Seleccion => e.por_span.clear(),
+    }
+    let estilo = e.clone();
+    let _ = model.store.put_estilo(id, &estilo);
+    let _ = model.store.flush();
+}
+
+/// Traduce la selección viva de un `CuerpoIde` a `(atom_id, ini, fin)` con
+/// offsets de char **relativos al contenido del átomo**, agrupando por átomo
+/// (una selección que cruza varios átomos produce un rango por cada uno).
+fn seleccion_spans(ide: &pluma_editor_llimphi::cuerpo_ide::CuerpoIde) -> Vec<(Uuid, usize, usize)> {
+    let buffer = &ide.state.buffer;
+    let (s, e) = ide.state.cursor.selection_range(buffer);
+    if s == e {
+        return Vec::new();
+    }
+    let (sl, sc) = buffer.offset_to_pos(s);
+    let (el, ec) = buffer.offset_to_pos(e);
+    let mut por_atom: HashMap<Uuid, (usize, usize)> = HashMap::new();
+    for line in sl..=el {
+        if ide.state.is_guard_line(line) {
+            continue;
+        }
+        let Some(atom) = ide.atom_id_en_linea(line) else {
+            continue;
+        };
+        let line_len = buffer.line_len_chars(line);
+        let c0 = if line == sl { sc } else { 0 };
+        let c1 = if line == el { ec } else { line_len };
+        if c1 <= c0 {
+            continue;
+        }
+        let Some((atom_start, _)) = ide.posicion_de_atom(atom) else {
+            continue;
+        };
+        // Chars desde el inicio del átomo hasta `line` (saltos internos = 1 `\n`).
+        let mut base = 0usize;
+        for k in atom_start..line {
+            base += buffer.line_len_chars(k) + 1;
+        }
+        let ini = base + c0;
+        let fin = base + c1;
+        let ent = por_atom.entry(atom).or_insert((ini, fin));
+        ent.0 = ent.0.min(ini);
+        ent.1 = ent.1.max(fin);
+    }
+    por_atom.into_iter().map(|(a, (i, f))| (a, i, f)).collect()
+}
+
+/// Confirma el wizard: arma el `TrabajoLlm` según el tipo + parámetro
+/// (tecleado en `preset_input`), cambia el foco a la madre elegida y lo lanza.
+/// Si falta el parámetro requerido, deja el wizard abierto y avisa.
+fn confirmar_wizard(model: &mut Model, handle: &Handle<Msg>) {
+    let Some(w) = model.wizard.clone() else {
+        return;
+    };
+    let param = model.preset_input.text().trim().to_string();
+    let trabajo = match w.tipo {
+        WizardTipo::Traducir => {
+            if param.is_empty() {
+                model.ultimo_status = "elegí una lengua destino".into();
+                return;
+            }
+            TrabajoLlm::Traducir(param)
+        }
+        WizardTipo::Tono => {
+            if param.is_empty() {
+                model.ultimo_status = "escribí una etiqueta de tono".into();
+                return;
+            }
+            TrabajoLlm::Tono(param)
+        }
+        WizardTipo::Resumir => TrabajoLlm::Resumir(param.parse::<u32>().ok()),
+        WizardTipo::Reescribir => {
+            if param.is_empty() {
+                model.ultimo_status = "escribí un prompt de reescritura".into();
+                return;
+            }
+            TrabajoLlm::Reescribir(param)
+        }
+    };
+    model.wizard = None;
+    model.preset_focused = false;
+    if let Some(madre) = w.madre {
+        cambiar_activo(model, madre);
+    }
+    lanzar(model, handle, trabajo);
 }
 
 fn cambiar_activo(model: &mut Model, id: Uuid) {

@@ -10,6 +10,7 @@ use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::Cuerpo;
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
+use pluma_estilo::{EstiloLienzo, EstiloTexto};
 use pluma_llm::BackendKind;
 use pluma_llm_core::ChatClient;
 use pluma_store::PlumaStore;
@@ -89,6 +90,76 @@ impl Modo {
             Modo::Lienzos => "Lienzos",
             Modo::Presentar => "Presentar",
             Modo::Plano => "Plano",
+        }
+    }
+}
+
+/// A qué porción del lienzo apunta el panel de estilo: el lienzo entero, una
+/// zona concreta (índice de zona de `CuerpoIde`), o la selección de texto
+/// actual del editor activo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ObjetivoEstilo {
+    #[default]
+    Lienzo,
+    Zona(usize),
+    Seleccion,
+}
+
+impl ObjetivoEstilo {
+    pub(crate) fn etiqueta(self) -> &'static str {
+        match self {
+            ObjetivoEstilo::Lienzo => "Lienzo",
+            ObjetivoEstilo::Zona(_) => "Zona",
+            ObjetivoEstilo::Seleccion => "Selección",
+        }
+    }
+}
+
+/// Tipo de transformación que define el wizard de "+": qué inteligencia se
+/// aplica sobre el lienzo madre elegido.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WizardTipo {
+    Traducir,
+    Tono,
+    Resumir,
+    Reescribir,
+}
+
+impl WizardTipo {
+    pub(crate) fn etiqueta(self) -> &'static str {
+        match self {
+            WizardTipo::Traducir => "Traducir",
+            WizardTipo::Tono => "Tono",
+            WizardTipo::Resumir => "Resumir",
+            WizardTipo::Reescribir => "Reescribir",
+        }
+    }
+
+    /// Placeholder del campo de parámetro según el tipo.
+    pub(crate) fn placeholder(self) -> &'static str {
+        match self {
+            WizardTipo::Traducir => "lengua destino (qu, en, fr…)",
+            WizardTipo::Tono => "etiqueta de tono (formal, infantil…)",
+            WizardTipo::Resumir => "palabras objetivo (ej. 30) — vacío = libre",
+            WizardTipo::Reescribir => "prompt de reescritura…",
+        }
+    }
+}
+
+/// Estado del wizard modal de transformación. La madre arranca en el lienzo
+/// activo; el parámetro se teclea en `preset_input` (reusado), cuyo significado
+/// depende de `tipo`.
+#[derive(Clone, Debug)]
+pub struct WizardEstado {
+    pub madre: Option<Uuid>,
+    pub tipo: WizardTipo,
+}
+
+impl Default for WizardEstado {
+    fn default() -> Self {
+        Self {
+            madre: None,
+            tipo: WizardTipo::Traducir,
         }
     }
 }
@@ -267,6 +338,34 @@ pub enum Msg {
     EjecutarLienzo(Uuid),
     /// Resultado de ejecutar una celda: `(átomo, texto de salida)`.
     LienzoSalida { atom: Uuid, texto: String },
+
+    // --- Rail derecho de estilo (un diente por lienzo) ---
+    /// Activa el diente de estilo del lienzo `Uuid` (toggle: re-click cierra el
+    /// panel). Despliega su panel de estilo a la derecha.
+    SelectDienteEstilo(Uuid),
+    /// Cierra el panel de estilo (sin diente activo).
+    CerrarPanelEstilo,
+    /// Cambia el objetivo del panel de estilo (Lienzo / Zona(i) / Selección).
+    SetObjetivoEstilo(ObjetivoEstilo),
+    /// Mergea un delta de estilo (parcial) sobre el objetivo actual del lienzo
+    /// del panel de estilo, y lo persiste.
+    AplicarEstilo(EstiloTexto),
+    /// Limpia el estilo del objetivo actual (vuelve al default).
+    EstiloReset,
+    /// Arrastra el divisor del panel de estilo (derecha).
+    ResizePanelEstilo(f32),
+
+    // --- Wizard "+" de transformación (reemplaza el diente Derivar) ---
+    /// Abre el wizard modal de nueva transformación (madre = activo).
+    AbrirWizard,
+    /// Cierra el wizard sin crear nada.
+    CerrarWizard,
+    /// Elige el lienzo madre sobre el que correr la transformación.
+    WizardMadre(Uuid),
+    /// Elige el tipo de transformación del wizard.
+    WizardTipoSel(WizardTipo),
+    /// Confirma el wizard: arma y lanza la transformación sobre la madre.
+    WizardConfirm,
 }
 
 pub struct Model {
@@ -389,4 +488,19 @@ pub struct Model {
     /// Evita reenviar el mismo estado en cada `update`: sólo se manda `SetActive`
     /// cuando cambia. Inerte sin `_host` (no delegado).
     pub(crate) host_active_synced: Option<u32>,
+
+    // --- Estilo por lienzo (rail derecho + panel) ---
+    /// Estilo persistido de cada lienzo (cache en memoria; fuente de verdad en
+    /// el store, árbol `estilos`). Ausente = lienzo sin estilo.
+    pub(crate) estilos: HashMap<Uuid, EstiloLienzo>,
+    /// Lienzo cuyo panel de estilo está abierto a la derecha (`None` = cerrado).
+    pub(crate) diente_estilo_activo: Option<Uuid>,
+    /// Ancho del panel de estilo, en px (resizable).
+    pub(crate) panel_estilo_w: f32,
+    /// Objetivo del panel de estilo: lienzo entero / zona / selección.
+    pub(crate) objetivo_estilo: ObjetivoEstilo,
+
+    // --- Wizard de transformación ("+") ---
+    /// Estado del wizard modal de nueva transformación (`None` = cerrado).
+    pub(crate) wizard: Option<WizardEstado>,
 }

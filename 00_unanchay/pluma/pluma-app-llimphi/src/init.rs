@@ -41,6 +41,8 @@ pub fn init_modelo() -> Model {
         .filter_map(|r| r.ok())
         .collect();
     let cartas: Vec<CartaHebras> = store.iter_cartas().filter_map(|r| r.ok()).collect();
+    let estilos: HashMap<Uuid, pluma_estilo::EstiloLienzo> =
+        store.iter_estilos().filter_map(|r| r.ok()).collect();
 
     // Si el sled está vacío, sembrar un documento Original para que la
     // ventana no esté muerta al primer arranque.
@@ -154,6 +156,11 @@ pub fn init_modelo() -> Model {
         delegated: pata_host::delegate_sidebar_default("PLUMA_DELEGATE_SIDEBAR"),
         _host: None,
         host_active_synced: None,
+        estilos,
+        diente_estilo_activo: None,
+        panel_estilo_w: 280.0,
+        objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
+        wizard: None,
     }
 }
 

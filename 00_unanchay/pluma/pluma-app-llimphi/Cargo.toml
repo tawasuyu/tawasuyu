@@ -55,7 +55,9 @@ llimphi-widget-text-input = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-widget-modal = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
+pluma-estilo = { path = "../pluma-estilo" }
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 tokio = { workspace = true }

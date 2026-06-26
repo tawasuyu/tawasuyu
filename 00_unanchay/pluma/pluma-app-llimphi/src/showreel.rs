@@ -239,6 +239,11 @@ fn escena_base() -> Escena {
         delegated: false,
         _host: None,
         host_active_synced: None,
+        estilos: std::collections::HashMap::new(),
+        diente_estilo_activo: None,
+        panel_estilo_w: 280.0,
+        objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
+        wizard: None,
     };
 
     Escena { model, es: es_id, qu: qu_id, en: en_id }
@@ -584,6 +589,11 @@ fn clonar_para_frame(base: &Model) -> Model {
         delegated: false,
         _host: None,
         host_active_synced: None,
+        estilos: std::collections::HashMap::new(),
+        diente_estilo_activo: None,
+        panel_estilo_w: 280.0,
+        objetivo_estilo: crate::model::ObjetivoEstilo::Lienzo,
+        wizard: None,
     }
 }
 

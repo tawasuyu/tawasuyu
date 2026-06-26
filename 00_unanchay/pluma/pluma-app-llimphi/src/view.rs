@@ -13,8 +13,11 @@ use llimphi_theme::Theme;
 use llimphi_ui::{DragPhase, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_context_menu::{context_menu_view_ex, ContextMenuExtras};
-use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_dock_rail::{
+    dock_rail_view, dock_rail_view_side, DockRailItem, DockRailPalette, DockRailSide,
+};
 use llimphi_widget_edit_menu::{self as editmenu, EditFlags};
+use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
 use llimphi_widget_menubar::{
     menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
@@ -32,7 +35,7 @@ use pluma_editor_llimphi::lienzos::{
     lienzos_multi_view, ConfigLienzos, EdicionLienzo, EjecucionLienzo,
 };
 use pluma_editor_llimphi::multilienzo_editor::{
-    multilienzo_editor_view, ConfigMultilienzoEditor,
+    multilienzo_editor_view_estilado, ConfigMultilienzoEditor,
 };
 use pluma_editor_llimphi::Palette as MultPalette;
 use pluma_deck_recorrido_llimphi::recorrido_view;
@@ -44,8 +47,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::model::{
-    ancho_contenido, Filtro, Modo, Model, Msg, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
+    ancho_contenido, Filtro, Modo, Model, Msg, ObjetivoEstilo, WizardTipo, ANCHO_COL, BACKENDS,
+    METRICS, RAIL_W, VISIBLE_LINES,
 };
+use pluma_estilo::EstiloTexto;
 use crate::update::{contar_stale_del_activo, menu_principal};
 use crate::util::{etiqueta_backend, etiqueta_intencion, etiqueta_tipo, recortar};
 
@@ -56,10 +61,11 @@ const VIEWPORT: (f32, f32) = (1600.0, 900.0);
 /// Icono vectorial y nombre de los cuatro dientes del rail. El icono lo pinta
 /// `llimphi-icons` (mismo set canónico que cosmos — sin tofu); el nombre
 /// completo va en la cabecera del panel.
-const DIENTES: [(Icon, &str); 5] = [
+/// Dientes del rail izquierdo (herramientas). "Derivar" fue reemplazado por el
+/// wizard modal del diente "+" del rail derecho.
+const DIENTES: [(Icon, &str); 4] = [
     (Icon::File, "Archivo"),
     (Icon::Folder, "Lienzos"),
-    (Icon::Edit, "Derivar"),
     (Icon::Settings, "Modelo"),
     (Icon::Link, "Grafo"),
 ];
@@ -101,6 +107,8 @@ pub fn vista(model: &Model) -> View<Msg> {
     let mut centro_hijos: Vec<View<Msg>> = vec![centro];
     if !model.delegated {
         centro_hijos.push(rail_overlay(model, &theme));
+        // Rail derecho: un diente por lienzo (estilo) + "+" (wizard).
+        centro_hijos.push(rail_estilo_overlay(model, &theme));
     }
     let centro_con_rail = View::new(Style {
         position: Position::Relative,
@@ -130,6 +138,24 @@ pub fn vista(model: &Model) -> View<Msg> {
         &splitter_palette,
     );
 
+    // Panel de estilo a la derecha como pane fijo, cuando hay un diente de
+    // estilo activo (patrón cosmos: rail overlay + panel al costado).
+    let core = match model.diente_estilo_activo {
+        Some(id) => splitter_two(
+            Direction::Row,
+            split,
+            PaneSize::Flex,
+            panel_estilo(model, id, &theme),
+            PaneSize::Fixed(model.panel_estilo_w),
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::ResizePanelEstilo(dx)),
+                DragPhase::End => None,
+            },
+            &splitter_palette,
+        ),
+        None => split,
+    };
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -140,7 +166,7 @@ pub fn vista(model: &Model) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-    .children(vec![menubar, status, split])
+    .children(vec![menubar, status, core])
 }
 
 /// El rail de dientes como overlay absoluto en el borde interno izquierdo.
@@ -201,6 +227,356 @@ fn rail_overlay(model: &Model, theme: &Theme) -> View<Msg> {
     .children(vec![rail])
 }
 
+/// Uuids de los lienzos visibles en el orden del tree — un diente por cada uno
+/// en el rail derecho de estilo.
+fn lienzos_visibles(model: &Model) -> Vec<Uuid> {
+    if model.solo_activo {
+        model.activo.into_iter().collect()
+    } else {
+        model
+            .orden_lienzos
+            .iter()
+            .copied()
+            .filter(|id| model.seleccionados.contains(id))
+            .collect()
+    }
+}
+
+/// Id reservado del diente "+" (wizard) en el rail derecho.
+const DIENTE_MAS: u64 = u64::MAX;
+
+/// Rail derecho: un diente por lienzo visible (abre su panel de estilo) + un
+/// diente "+" que abre el wizard de transformación. Overlay absoluto pegado al
+/// borde interno derecho del centro (espejo de `rail_overlay`).
+fn rail_estilo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
+    let uuids = lienzos_visibles(model);
+    let mut items: Vec<DockRailItem> = uuids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| DockRailItem {
+            id: i as u64,
+            active: model.diente_estilo_activo == Some(*id),
+        })
+        .collect();
+    items.push(DockRailItem {
+        id: DIENTE_MAS,
+        active: model.wizard.is_some(),
+    });
+
+    let uuids_act = uuids.clone();
+    let rail = dock_rail_view_side::<Msg, _, _, _>(
+        &items,
+        RAIL_W,
+        DockRailSide::InnerRight,
+        &DockRailPalette::from_theme(theme),
+        |id, size, color| {
+            let icono = if id == DIENTE_MAS { Icon::Plus } else { Icon::Font };
+            View::<Msg>::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .children(vec![View::<Msg>::new(Style {
+                position: Position::Relative,
+                size: Size {
+                    width: length(size),
+                    height: length(size),
+                },
+                ..Default::default()
+            })
+            .children(vec![icon_view::<Msg>(icono, color, 1.8)])])
+        },
+        move |id| {
+            if id == DIENTE_MAS {
+                Msg::AbrirWizard
+            } else {
+                match uuids_act.get(id as usize).copied() {
+                    Some(uuid) => Msg::SelectDienteEstilo(uuid),
+                    None => Msg::AbrirWizard,
+                }
+            }
+        },
+        |_| None,
+    );
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(6.0_f32),
+            right: length(0.0_f32),
+            left: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(RAIL_W),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![rail])
+}
+
+/// Paleta de swatches para los selectores de color del panel de estilo.
+const SWATCHES: [[u8; 4]; 8] = [
+    [235, 235, 235, 255], // claro
+    [25, 25, 28, 255],    // oscuro
+    [225, 84, 75, 255],   // rojo
+    [238, 178, 53, 255],  // ámbar
+    [94, 184, 124, 255],  // verde
+    [120, 150, 220, 255], // azul
+    [170, 130, 220, 255], // violeta
+    [80, 190, 200, 255],  // turquesa
+];
+
+/// El `CuerpoIde` del lienzo `id`: el activo (editable) o un read-only.
+fn ide_de<'a>(model: &'a Model, id: Uuid) -> Option<&'a CuerpoIde> {
+    if model.activo == Some(id) {
+        Some(&model.ide)
+    } else {
+        model.ides_ro.get(&id)
+    }
+}
+
+/// Panel de estilo del lienzo `id` (pane derecho). Selector de objetivo
+/// (Lienzo / Zona / Selección) + controles de color, fuente, tamaño y formato.
+/// Cada control emite un delta `EstiloTexto` (`Msg::AplicarEstilo`).
+fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
+    let palette_btn = ButtonPalette::from_theme(theme);
+    let nombre = model
+        .cuerpos
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| c.metadatos.nombre_legible.clone())
+        .unwrap_or_else(|| "(lienzo)".to_string());
+    let objetivo = model.objetivo_estilo;
+
+    // Selector de objetivo.
+    let obj_btn = |label: &str, sel: bool, o: ObjetivoEstilo| {
+        let pal = if sel {
+            ButtonPalette::from_theme(theme)
+        } else {
+            ButtonPalette {
+                bg: theme.bg_panel_alt,
+                bg_hover: theme.bg_button_hover,
+                fg: theme.fg_muted,
+                radius: palette_btn.radius,
+            }
+        };
+        button_view::<Msg>(label, &pal, Msg::SetObjetivoEstilo(o))
+    };
+    let fila_obj = fila_botones(vec![
+        obj_btn("Lienzo", matches!(objetivo, ObjetivoEstilo::Lienzo), ObjetivoEstilo::Lienzo),
+        obj_btn(
+            "Zona",
+            matches!(objetivo, ObjetivoEstilo::Zona(_)),
+            ObjetivoEstilo::Zona(0),
+        ),
+        obj_btn(
+            "Selección",
+            matches!(objetivo, ObjetivoEstilo::Seleccion),
+            ObjetivoEstilo::Seleccion,
+        ),
+    ]);
+
+    let mut hijos: Vec<View<Msg>> = vec![
+        encabezado(&format!("estilo · {}", recortar(&nombre, 22)), theme),
+        fila_obj,
+    ];
+
+    // Sub-selector de zona cuando el objetivo es Zona.
+    if let ObjetivoEstilo::Zona(z_sel) = objetivo {
+        let n = ide_de(model, id).map(|i| i.n_zonas()).unwrap_or(0);
+        if n == 0 {
+            hijos.push(pista_texto("este lienzo no tiene zonas", theme));
+        } else {
+            let mut botones: Vec<View<Msg>> = Vec::new();
+            for z in 0..n.min(8) {
+                let sel = z == z_sel;
+                let pal = if sel {
+                    ButtonPalette::from_theme(theme)
+                } else {
+                    ButtonPalette {
+                        bg: theme.bg_panel_alt,
+                        bg_hover: theme.bg_button_hover,
+                        fg: theme.fg_muted,
+                        radius: palette_btn.radius,
+                    }
+                };
+                botones.push(button_view::<Msg>(
+                    &format!("{}", z + 1),
+                    &pal,
+                    Msg::SetObjetivoEstilo(ObjetivoEstilo::Zona(z)),
+                ));
+            }
+            hijos.push(fila_botones(botones));
+        }
+    }
+
+    hijos.push(divider(theme));
+
+    // Color de texto.
+    hijos.push(encabezado("color de texto", theme));
+    hijos.push(fila_swatches(false));
+    // Color de fondo (resaltado).
+    hijos.push(encabezado("resaltado", theme));
+    hijos.push(fila_swatches(true));
+    hijos.push(divider(theme));
+
+    // Tamaño.
+    hijos.push(encabezado("tamaño", theme));
+    hijos.push(fila_botones(
+        [11.0_f32, 13.0, 16.0, 20.0, 28.0]
+            .iter()
+            .map(|&px| {
+                button_view::<Msg>(
+                    &format!("{}", px as i32),
+                    &palette_btn,
+                    Msg::AplicarEstilo(EstiloTexto {
+                        size_px: Some(px),
+                        ..Default::default()
+                    }),
+                )
+            })
+            .collect(),
+    ));
+
+    // Fuente.
+    hijos.push(encabezado("fuente", theme));
+    let mk_fuente = |label: &str, fam: Option<&str>| {
+        button_view::<Msg>(
+            label,
+            &palette_btn,
+            Msg::AplicarEstilo(EstiloTexto {
+                font_family: fam.map(|s| s.to_string()),
+                ..Default::default()
+            }),
+        )
+    };
+    hijos.push(fila_botones(vec![
+        mk_fuente("Sans", Some("sans-serif")),
+        mk_fuente("Serif", Some("serif")),
+        mk_fuente("Mono", Some("monospace")),
+    ]));
+
+    // Peso + formato.
+    hijos.push(encabezado("formato", theme));
+    let peso = |label: &str, w: f32| {
+        button_view::<Msg>(
+            label,
+            &palette_btn,
+            Msg::AplicarEstilo(EstiloTexto {
+                weight: Some(w),
+                ..Default::default()
+            }),
+        )
+    };
+    hijos.push(fila_botones(vec![peso("Normal", 400.0), peso("Negrita", 700.0)]));
+    let flag = |label: &str, e: EstiloTexto| button_view::<Msg>(label, &palette_btn, Msg::AplicarEstilo(e));
+    hijos.push(fila_botones(vec![
+        flag("Itálica", EstiloTexto { italic: Some(true), ..Default::default() }),
+        flag("Subrayado", EstiloTexto { underline: Some(true), ..Default::default() }),
+        flag("Tachado", EstiloTexto { strikethrough: Some(true), ..Default::default() }),
+    ]));
+    hijos.push(divider(theme));
+    hijos.push(fila_botones(vec![
+        button_view::<Msg>("quitar formato", &palette_btn, Msg::EstiloReset),
+        button_view::<Msg>("cerrar", &palette_btn, Msg::CerrarPanelEstilo),
+    ]));
+
+    let header = encabezado(&format!("· {} ·", objetivo.etiqueta()), theme);
+    let cuerpo = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(hijos);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .clip(true)
+    .children(vec![header, cuerpo])
+}
+
+/// Una fila de swatches de color: aplica `color_fg` (o `color_bg` si `bg`).
+fn fila_swatches(bg: bool) -> View<Msg> {
+    let mut botones: Vec<View<Msg>> = Vec::new();
+    for c in SWATCHES.iter() {
+        let mut rgba = *c;
+        if bg {
+            rgba[3] = 90; // resaltado translúcido
+        }
+        let delta = if bg {
+            EstiloTexto { color_bg: Some(rgba), ..Default::default() }
+        } else {
+            EstiloTexto { color_fg: Some(rgba), ..Default::default() }
+        };
+        botones.push(
+            View::new(Style {
+                size: Size {
+                    width: length(26.0_f32),
+                    height: length(22.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(Color::from_rgba8(c[0], c[1], c[2], 255))
+            .radius(4.0)
+            .on_click(Msg::AplicarEstilo(delta)),
+        );
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(24.0_f32),
+        },
+        gap: Size {
+            width: length(5.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(botones)
+}
+
+/// Texto de pista pequeño (gris).
+fn pista_texto(texto: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(16.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(texto.to_string(), 10.0, theme.fg_muted, Alignment::Start)
+}
+
 fn barra_status(model: &Model, theme: &Theme) -> View<Msg> {
     let nombre = model
         .activo
@@ -249,8 +625,7 @@ fn panel_diente(model: &Model, theme: &Theme) -> View<Msg> {
     let interior = match model.diente_activo {
         0 => panel_archivo(model, theme),
         1 => panel_lienzos(model, theme),
-        2 => panel_derivar(model, theme),
-        3 => panel_modelo(model, theme),
+        2 => panel_modelo(model, theme),
         _ => panel_grafo(model, theme),
     };
     let nombre = DIENTES
@@ -517,21 +892,133 @@ fn fila_lienzo(model: &Model, c: &Cuerpo, derivada: bool, idx: usize, theme: &Th
     .children(vec![grip, checkbox, nombre])
 }
 
-/// Diente Derivar-IA: input de prompt + botones (derivar/guardar preset) +
-/// lista de presets reutilizables.
-fn panel_derivar(model: &Model, theme: &Theme) -> View<Msg> {
+/// Cuerpo del wizard modal de nueva transformación (diente "+"): define la
+/// semántica — sobre QUÉ lienzo (madre) y QUÉ transformación (tipo + parámetro)
+/// se aplica. Reusa `preset_input` como campo de parámetro y los presets
+/// guardados (útiles para Reescribir).
+fn wizard_body(model: &Model, theme: &Theme) -> View<Msg> {
+    let w = match &model.wizard {
+        Some(w) => w,
+        None => return View::new(Style::default()),
+    };
     let palette_btn = ButtonPalette::from_theme(theme);
     let palette_input = TextInputPalette::from_theme(theme);
 
+    // 1) Sobre qué lienzo (madre). Botones de todos los cuerpos; el elegido
+    //    queda resaltado.
+    let mut filas_madre: Vec<View<Msg>> = Vec::new();
+    for id in &model.orden_lienzos {
+        if let Some(c) = model.cuerpos.iter().find(|c| c.id == *id) {
+            let elegido = w.madre == Some(c.id);
+            let etiqueta = format!(
+                "{}  {}  ·  {}",
+                if elegido { "●" } else { "○" },
+                recortar(&c.metadatos.nombre_legible, 22),
+                etiqueta_intencion(&c.metadatos.intencion),
+            );
+            filas_madre.push(
+                View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(22.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(
+                    etiqueta,
+                    12.0,
+                    if elegido { theme.fg_text } else { theme.fg_muted },
+                    Alignment::Start,
+                )
+                .on_click(Msg::WizardMadre(c.id)),
+            );
+        }
+    }
+    let lista_madre = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(filas_madre);
+
+    // 2) Qué transformación (tipo). Botones segmentados.
+    let tipo_btn = |t: WizardTipo| {
+        let activo = w.tipo == t;
+        let pal = if activo {
+            ButtonPalette::from_theme(theme)
+        } else {
+            ButtonPalette {
+                bg: theme.bg_panel_alt,
+                bg_hover: theme.bg_button_hover,
+                fg: theme.fg_muted,
+                radius: ButtonPalette::from_theme(theme).radius,
+            }
+        };
+        button_view::<Msg>(t.etiqueta(), &pal, Msg::WizardTipoSel(t))
+    };
+    let fila_tipo = fila_botones(vec![
+        tipo_btn(WizardTipo::Traducir),
+        tipo_btn(WizardTipo::Tono),
+        tipo_btn(WizardTipo::Resumir),
+        tipo_btn(WizardTipo::Reescribir),
+    ]);
+
+    // 3) Parámetro (significado según el tipo) — reusa preset_input.
     let input = text_input_view::<Msg>(
         &model.preset_input,
-        "prompt: reescribí el lienzo activo… (Esc sale)",
+        w.tipo.placeholder(),
         model.preset_focused,
         &palette_input,
         Msg::FocusPreset,
     );
 
-    let fila = View::new(Style {
+    let mut hijos: Vec<View<Msg>> = vec![
+        encabezado("sobre qué lienzo", theme),
+        lista_madre,
+        divider(theme),
+        encabezado("qué transformación", theme),
+        fila_tipo,
+        input,
+    ];
+
+    // Presets reutilizables (sobre todo para Reescribir): guardar + usar.
+    hijos.push(fila_botones(vec![button_view::<Msg>(
+        "+ guardar prompt como preset",
+        &palette_btn,
+        Msg::GuardarPreset,
+    )]));
+    if !model.presets.is_empty() {
+        hijos.push(encabezado("presets", theme));
+        for (i, preset) in model.presets.iter().enumerate() {
+            hijos.push(fila_preset(i, preset, theme));
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// Fila horizontal de botones con gap uniforme — helper de los paneles/wizard.
+fn fila_botones(hijos: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
@@ -543,35 +1030,7 @@ fn panel_derivar(model: &Model, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .children(vec![
-        button_view::<Msg>("derivar alterno", &palette_btn, Msg::CrearAlterno),
-        button_view::<Msg>("+ preset", &palette_btn, Msg::GuardarPreset),
-    ]);
-
-    let mut hijos: Vec<View<Msg>> = vec![input, fila, divider(theme), encabezado("presets", theme)];
-
-    if model.presets.is_empty() {
-        hijos.push(
-            View::new(Style {
-                size: Size {
-                    width: percent(1.0_f32),
-                    height: length(18.0_f32),
-                },
-                ..Default::default()
-            })
-            .text_aligned(
-                "guardá un prompt para reusarlo".to_string(),
-                10.0,
-                theme.fg_muted,
-                Alignment::Start,
-            ),
-        );
-    }
-    for (i, preset) in model.presets.iter().enumerate() {
-        hijos.push(fila_preset(i, preset, theme));
-    }
-
-    columna(hijos)
+    .children(hijos)
 }
 
 /// Una fila de preset: [usar ▸ prompt] [✗ borrar].
@@ -963,7 +1422,7 @@ fn envolver_centro(model: &Model, interior: View<Msg>) -> View<Msg> {
         },
         padding: Rect {
             left: length(pad_rail),
-            right: length(0.0_f32),
+            right: length(pad_rail),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -1177,13 +1636,16 @@ fn centro_plano(model: &Model, theme: &Theme) -> View<Msg> {
     // de esa columna — así el foco va al cuerpo correcto sin depender de que
     // el orden visible coincida con `seleccionados`.
     let ids_col: Vec<Uuid> = cuerpos_sel.iter().map(|c| c.id).collect();
+    let estilos_sel: Vec<Option<&pluma_estilo::EstiloLienzo>> =
+        ids_col.iter().map(|id| model.estilos.get(id)).collect();
     let ids_click = ids_col.clone();
     let ids_hover = ids_col;
     let hover_on = model.foco_por_hover;
-    let mult = multilienzo_editor_view::<Msg, _, _>(
+    let mult = multilienzo_editor_view_estilado::<Msg, _, _>(
         &ides_sel,
         &cuerpos_sel,
         &cartas_sel,
+        &estilos_sel,
         activo_idx,
         &editor_palette,
         &paleta_hebras,
@@ -1278,7 +1740,7 @@ fn centro_plano(model: &Model, theme: &Theme) -> View<Msg> {
         },
         padding: Rect {
             left: length(pad_rail),
-            right: length(0.0_f32),
+            right: length(pad_rail),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -1294,7 +1756,12 @@ fn centro_plano(model: &Model, theme: &Theme) -> View<Msg> {
 /// fracción visible y su posición; arrastrarlo desplaza el scroll.
 fn scrollbar_horizontal(model: &Model, theme: &Theme, n_cols: usize) -> Option<View<Msg>> {
     let contenido = ancho_contenido(n_cols);
-    let centro = (model.viewport.0 - model.panel_w - RAIL_W).max(1.0);
+    let panel_estilo = if model.diente_estilo_activo.is_some() {
+        model.panel_estilo_w
+    } else {
+        0.0
+    };
+    let centro = (model.viewport.0 - model.panel_w - RAIL_W * 2.0 - panel_estilo).max(1.0);
     if contenido <= centro + 1.0 {
         return None; // cabe entero, sin barra
     }
@@ -1462,6 +1929,21 @@ fn divider(theme: &Theme) -> View<Msg> {
 /// Overlay flotante: menú de edición contextual o dropdown del menú principal.
 pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     let theme = Theme::dark();
+    // El wizard de transformación tiene prioridad: modal bloqueante.
+    if model.wizard.is_some() {
+        return Some(modal_view(ModalSpec {
+            title: "Nueva transformación".to_string(),
+            body: wizard_body(model, &theme),
+            buttons: vec![
+                ModalButton::cancel("Cancelar", Msg::CerrarWizard),
+                ModalButton::primary("Crear", Msg::WizardConfirm),
+            ],
+            size: (520.0, 560.0),
+            viewport: model.viewport,
+            on_dismiss: Msg::CerrarWizard,
+            palette: ModalPalette::from_theme(&theme),
+        }));
+    }
     if let Some((x, y)) = model.edit_menu {
         let flags = EditFlags::from_editor(&model.ide.state, false);
         let mut spec = editmenu::edit_context_menu(

@@ -121,9 +121,8 @@ impl App for Pluma {
             let teeth = vec![
                 pata_host::HostedTooth::new(0, "files", "Archivo"),
                 pata_host::HostedTooth::new(1, "folder", "Lienzos"),
-                pata_host::HostedTooth::new(2, "tools", "Derivar"),
-                pata_host::HostedTooth::new(3, "tools", "Modelo"),
-                pata_host::HostedTooth::new(4, "tools", "Grafo"),
+                pata_host::HostedTooth::new(2, "tools", "Modelo"),
+                pata_host::HostedTooth::new(3, "tools", "Grafo"),
             ];
             let h = handle.clone();
             m._host = pata_host::HostClient::connect("tawasuyu.pluma", "Pluma", teeth, move |id| {
@@ -161,6 +160,15 @@ impl App for Pluma {
                 Key::Named(NamedKey::ArrowUp) => Some(Msg::EditNav(-1)),
                 Key::Named(NamedKey::Enter) => Some(Msg::EditActivate),
                 _ => None,
+            };
+        }
+        // Wizard modal abierto: Esc cancela, Enter crea, lo demás teclea el
+        // parámetro (campo `preset_input`).
+        if model.wizard.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CerrarWizard),
+                Key::Named(NamedKey::Enter) => Some(Msg::WizardConfirm),
+                _ => Some(Msg::PresetInputKey(event.clone())),
             };
         }
         // Si el input de ruta tiene foco, las teclas van ahí — incluso
