@@ -13,6 +13,7 @@
 // Path de la DB: env `INIY_DB` o `./iniy.db`.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -29,6 +30,9 @@ use llimphi_widget_card::{card_view, CardOptions, CardPalette};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use llimphi_icons::Icon;
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
@@ -44,6 +48,8 @@ use iniy_graph::GrafoCreencias;
 use iniy_store::{AsercionAtribuida, FuenteResumen, Store};
 
 const MAX_ASERCIONES_VISIBLES: usize = 60;
+/// Cuánto vive un toast antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 const ACCENT_CREENCIA: Color = Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xff);     // verde
 const ACCENT_DESCREENCIA: Color = Color::from_rgba8(0xbf, 0x61, 0x6a, 0xff);  // rojo
 const ACCENT_INCERTIDUMBRE: Color = Color::from_rgba8(0x88, 0x88, 0x99, 0xff); // gris
@@ -74,6 +80,8 @@ enum Msg {
     /// `(x, y)` de ventana sobre la aserción seleccionada. Sin selección
     /// es no-op.
     MenuContextual(f32, f32),
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
 }
 
 struct Model {
@@ -101,6 +109,10 @@ struct Model {
     /// Menú contextual sobre la aserción seleccionada: `(x, y)` ancla en
     /// ventana. `None` cerrado.
     menu_contextual: Option<(f32, f32)>,
+    /// Toasts vivos (confirmaciones/errores de recarga del corpus).
+    toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ Msg de expiración.
+    next_toast: u64,
 }
 
 struct Explorer;
@@ -151,6 +163,8 @@ impl App for Explorer {
                     menu_active: usize::MAX,
                     menu_anim: Tween::idle(1.0),
                     menu_contextual: None,
+                    toasts: Vec::new(),
+                    next_toast: 0,
                 }
             }
             Err(e) => Model {
@@ -168,6 +182,8 @@ impl App for Explorer {
                 menu_active: usize::MAX,
                 menu_anim: Tween::idle(1.0),
                 menu_contextual: None,
+                toasts: Vec::new(),
+                next_toast: 0,
             },
         }
     }
@@ -223,6 +239,21 @@ impl App for Explorer {
             }
             Msg::Recargar => {
                 model = recargar_corpus(model);
+                // Confirmá la acción real del usuario con un toast efímero.
+                let id = model.next_toast;
+                model.next_toast += 1;
+                let toast = match model.error.clone() {
+                    Some(e) => Toast::error(id, format!("No se pudo recargar: {e}"), TOAST_TTL),
+                    None => Toast::success(
+                        id,
+                        format!("Corpus recargado · {} aserciones", model.aserciones.len()),
+                        TOAST_TTL,
+                    ),
+                };
+                push_toast(&mut model, handle, toast);
+            }
+            Msg::ToastExpire(id) => {
+                model.toasts.retain(|t| t.id != id);
             }
             Msg::MenuContextual(x, y) => {
                 // Sólo si hay una aserción seleccionada.
@@ -253,14 +284,25 @@ impl App for Explorer {
 
         if let Some(err) = &model.error {
             chrome.push(banner_view::<Msg>(BannerKind::Error, err.clone()));
-            return rama_columna(theme, chrome);
+            return con_toasts(model, rama_columna(theme, chrome));
         }
         if model.aserciones.is_empty() {
-            chrome.push(banner_view::<Msg>(
-                BannerKind::Info,
-                "corpus vacío — corre `iniy ingest <ruta>` y `iniy extract <doc-id>` antes",
-            ));
-            return rama_columna(theme, chrome);
+            // Empty-state con orientación en vez de un cartel chato: ícono
+            // apagado + qué correr para poblar el corpus.
+            let cuerpo_vacio = View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![empty_view::<Msg>(
+                Icon::Archive,
+                "corpus vacío",
+                Some("Corré `iniy ingest <ruta>` y luego `iniy extract <doc-id>` para poblarlo."),
+                &EmptyPalette::from_theme(&theme),
+            )]);
+            chrome.push(cuerpo_vacio);
+            return con_toasts(model, rama_columna(theme, chrome));
         }
 
         let palette = CardPalette::from_theme(&theme);
@@ -311,7 +353,7 @@ impl App for Explorer {
         .children(vec![panel_fuentes, panel_grafo, panel_asercs]);
 
         chrome.push(body);
-        rama_columna(theme, chrome)
+        con_toasts(model, rama_columna(theme, chrome))
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -384,6 +426,34 @@ impl App for Explorer {
 fn viewport_of(_model: &Model) -> (f32, f32) {
     let (w, h) = Explorer::initial_size();
     (w as f32, h as f32)
+}
+
+/// Empuja un toast al stack y programa su expiración en un worker.
+fn push_toast(model: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    model.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
+}
+
+/// Superpone el stack de toasts vivos sobre `root` (esquina inferior
+/// derecha). Sin toasts vivos devuelve `root` tal cual.
+fn con_toasts(model: &Model, root: View<Msg>) -> View<Msg> {
+    let now = Instant::now();
+    let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+    if alive.is_empty() {
+        return root;
+    }
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        root,
+        toast_stack_view(&alive, viewport_of(model), Msg::ToastExpire),
+    ])
 }
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
@@ -689,7 +759,10 @@ fn asercion_card(att: &AsercionAtribuida, seleccionada: bool, theme: &Theme, pal
         card
     };
     let id = att.asercion.id;
+    // Pop-in en la primera aparición de cada aserción (key estable por id):
+    // al cargar/recargar el corpus las tarjetas entran con un leve escalado.
     card.on_click(Msg::Seleccionar(id))
+        .animated_pop_in(hash_id(&id), motion::NORMAL)
 }
 
 fn fuente_card(f: &FuenteResumen, reputacion: Option<f32>, theme: &Theme, palette: &CardPalette) -> View<Msg> {
@@ -726,6 +799,7 @@ fn fuente_card(f: &FuenteResumen, reputacion: Option<f32>, theme: &Theme, palett
         CardOptions { accent: Some(accent), ..Default::default() },
         palette,
     )
+    .animated_pop_in(hash_fuente(&f.fuente.id), motion::NORMAL)
 }
 
 fn truncar(s: &str, n: usize) -> String {
@@ -845,15 +919,23 @@ fn layout_fruchterman_reingold(
     aserciones.iter().enumerate().map(|(i, a)| (a.asercion.id, pos[i])).collect()
 }
 
-fn hash_id(id: &AsercionId) -> u64 {
+fn hash_bytes(bytes: [u8; 16]) -> u64 {
     // FNV-1a sobre los 16 bytes del Ulid.
-    let bytes = id.0.to_bytes();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
         h ^= b as u64;
         h = h.wrapping_mul(0x100_0000_01b3);
     }
     h
+}
+
+fn hash_id(id: &AsercionId) -> u64 {
+    hash_bytes(id.0.to_bytes())
+}
+
+fn hash_fuente(id: &FuenteId) -> u64 {
+    // Namespace distinto al de aserciones para que las keys no colisionen.
+    hash_bytes(id.0.to_bytes()) ^ 0xF0E1_D2C3_B4A5_9687
 }
 
 /// Cálculo de reputación duplicado del CLI (versión simplificada: solo el
