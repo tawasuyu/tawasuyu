@@ -1124,8 +1124,26 @@ fn emit_coord_labels(
         }
     }
 
-    // Emisión por cluster.
-    for group in &groups {
+    // Orden de emisión por ángulo de display + carriles radiales: las coords de
+    // planetas angularmente cercanas (stelliums) se apilan hacia adentro en
+    // "lanes" para no pisarse — más inteligente que una sola fila.
+    let mut order: Vec<usize> = (0..groups.len()).collect();
+    let group_disp: Vec<f32> = groups
+        .iter()
+        .map(|g| mean_angle(g.iter().map(|i| i.disp_deg)))
+        .collect();
+    order.sort_by(|&a, &b| {
+        group_disp[a]
+            .partial_cmp(&group_disp[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    // (disp_deg, lane) de labels de planeta ya emitidos, para asignar carril.
+    let mut placed: Vec<(f32, u32)> = Vec::new();
+    const LANE_MIN_DEG: f32 = 15.0; // bajo esta separación, mismo carril se pisa
+    let lane_step = opts.size * 0.034;
+
+    for &gi in &order {
+        let group = &groups[gi];
         // Coord string: usamos el grado del primer item del cluster
         // — todos están a ≤5 arcmin, el formato a precisión de minuto
         // es idéntico para todos.
@@ -1133,7 +1151,7 @@ fn emit_coord_labels(
 
         // Ángulo de display: promedio de los disp_deg (que ya
         // incorporan el spread anti-solape de los planetas).
-        let disp_deg = mean_angle(group.iter().map(|i| i.disp_deg));
+        let disp_deg = group_disp[gi];
 
         let has_planet = group.iter().any(|i| i.is_planet);
         let label_ring = if has_planet {
@@ -1153,8 +1171,25 @@ fn emit_coord_labels(
                 .filter(|i| i.is_planet)
                 .map(|i| i.disk_r)
                 .fold(0.0_f32, f32::max);
-            let target = body_ring - max_disk - opts.size * 0.015;
-            target.max(radii.aspects - opts.size * 0.005)
+            let base = body_ring - max_disk - opts.size * 0.015;
+            // Carril: el menor que no choque (≤LANE_MIN_DEG) con otro label de
+            // planeta ya puesto en ese carril.
+            let mut lane = 0u32;
+            loop {
+                let clash = placed.iter().any(|&(d, l)| {
+                    if l != lane {
+                        return false;
+                    }
+                    let diff = (d - disp_deg).rem_euclid(360.0);
+                    diff.min(360.0 - diff) < LANE_MIN_DEG
+                });
+                if !clash || lane >= 4 {
+                    break;
+                }
+                lane += 1;
+            }
+            placed.push((disp_deg, lane));
+            (base - lane as f32 * lane_step).max(radii.aspects - opts.size * 0.005)
         } else {
             // Cusp-only: zona libre entre house ring y dial zodiacal.
             (radii.houses_outer + radii.sign_inner) * 0.5
