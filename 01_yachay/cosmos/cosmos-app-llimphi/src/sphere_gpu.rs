@@ -81,11 +81,15 @@ const CONTINENTES: &[&[(f32, f32)]] = &[
     ],
 ];
 
-/// Geometría dinámica de un frame: líneas + sprites opacos + glows aditivos.
+/// Geometría dinámica de un frame: líneas + sprites opacos + glows aditivos +
+/// la malla de la mini-Tierra (rehorneada por frame: continentes reales en su
+/// posición + día/noche según el Sol de la carta).
 pub(crate) struct SphereGeom {
     lines: Vec<LineVertex>,
     cores: Vec<Billboard>,
     glows: Vec<Billboard>,
+    earth_verts: Vec<Vertex3d>,
+    earth_indices: Vec<u16>,
 }
 
 /// Estado GPU persistente. Vive en el `Model` tras `Arc<Mutex<…>>`.
@@ -108,8 +112,12 @@ pub(crate) fn slot() -> SphereGpuSlot {
 
 impl SphereGpu {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        // Mini-Tierra: malla estática con continentes + día/noche horneados.
-        let (everts, eindices) = earth_mesh();
+        // Mini-Tierra: la malla se rehornea cada frame en sphere_geometry (los
+        // colores dependen de la carta: continentes orientados + día/noche).
+        // Acá sólo una inicial; draw() la reemplaza con set_geometry.
+        let (pos, eindices) = llimphi_3d::uv_sphere(28, 56);
+        let everts: Vec<Vertex3d> =
+            pos.iter().map(|p| Vertex3d { pos: *p, color: [0.05, 0.16, 0.34] }).collect();
         let mut earth = Renderer3d::with_mesh(device, FMT, &everts, &eindices);
         earth.lights.clear();
         earth.ambient = [1.0, 1.0, 1.0]; // color del vértice tal cual (ya sombreado)
@@ -173,6 +181,9 @@ impl SphereGpu {
         self.lines.set_lines(device, &geom.lines);
         self.cores.set_billboards(device, &geom.cores);
         self.glows.set_glows(device, &geom.glows);
+        if !geom.earth_verts.is_empty() {
+            self.earth.set_geometry(device, &geom.earth_verts, &geom.earth_indices);
+        }
         self.earth.upload(queue, aspect, &cam);
         self.lines.upload(queue, view_proj);
         self.cores.upload(queue, aspect, &cam);
@@ -274,19 +285,6 @@ fn ramc_deg(mc_deg: f32, eps_rad: f32) -> f32 {
 /// AR = RAMC + (lon − lon_obs). Réplica de `earth::geo_to_ecliptic` en marco GPU.
 fn geo_to_gpu(lat: f32, lon: f32, lon_obs: f32, ramc: f32, eps: &Mat4) -> Vec3 {
     eq_to_gpu(ramc + lon - lon_obs, lat, eps)
-}
-
-/// Puntos de un círculo máximo perpendicular a `s` (unitario), radio `radius`.
-fn great_circle_perp(s: Vec3, n: usize, radius: f32) -> Vec<Vec3> {
-    let a = if s.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
-    let u = s.cross(a).normalize();
-    let v = s.cross(u).normalize();
-    (0..=n)
-        .map(|k| {
-            let t = k as f32 / n as f32 * std::f32::consts::TAU;
-            (u * t.cos() + v * t.sin()) * radius
-        })
-        .collect()
 }
 
 /// Un sprite redondo de tamaño `size` con `tint` y alpha `a`.
@@ -577,71 +575,88 @@ pub(crate) fn sphere_geometry(model: &RenderModel, pal: &Palette) -> SphereGeom 
         .find(|g| g.symbol == "sun")
         .map(|g| eclip(g.deg));
 
-    // Continentes como contornos verdes (cerrados), apenas sobre la superficie.
-    // Línea doble (dos radios próximos) para que se lean con grosor.
-    let land = [0.42, 0.86, 0.46];
-    for outline in CONTINENTES {
-        let close = |scale: f32| -> Vec<Vec3> {
-            let mut pts: Vec<Vec3> = outline
-                .iter()
-                .map(|&(lat, lon)| geo_to_gpu(lat, lon, lon_obs, ramc, &eps) * er * scale)
-                .collect();
-            if let Some(first) = pts.first().copied() {
-                pts.push(first);
-            }
-            pts
-        };
-        push_polyline(&mut lines, &close(1.008), land, 0.95);
-        push_polyline(&mut lines, &close(1.016), land, 0.55);
-    }
+    // Globo relleno y sombreado con continentes REALES horneados (geografía
+    // correcta por el RAMC) + día/noche real. Se sube como malla en draw().
+    let (earth_verts, earth_indices) = earth_baked(ramc, lon_obs, sun_dir);
 
-    // Terminador (línea día/noche) + resplandor diurno subsolar (sutil, cálido).
-    if let Some(s) = sun_dir {
-        let term = great_circle_perp(s, 72, er * 1.012);
-        push_polyline(&mut lines, &term, [1.0, 0.82, 0.45], 0.6);
-        glows.push(sprite(s * er, er * 1.2, [1.0, 0.86, 0.55], 0.3)); // día, suave
-    }
-
-    // Observador, en su lugar real sobre la Tierra (marca + aura que destaca).
-    let obs = geo_to_gpu(model.geo_latitude_deg, lon_obs, lon_obs, ramc, &eps) * er * 1.03;
-    glows.push(sprite(obs, 0.075, [1.0, 0.45, 0.2], 1.0));
-    cores.push(sprite(obs, 0.022, [1.0, 0.95, 0.7], 1.0));
+    // Observador, en su lugar real sobre la Tierra — marca grande que destaca:
+    // halo + núcleo + un anillo de puntos para que se lea aunque sea chico.
+    let obs = geo_to_gpu(model.geo_latitude_deg, lon_obs, lon_obs, ramc, &eps) * er * 1.04;
+    glows.push(sprite(obs, 0.12, [1.0, 0.35, 0.15], 1.0)); // aura naranja fuerte
+    glows.push(sprite(obs, 0.05, [1.0, 0.9, 0.6], 1.0)); // núcleo cálido brillante
+    cores.push(sprite(obs, 0.02, [1.0, 1.0, 1.0], 1.0)); // punto blanco nítido
 
     // Halo de atmósfera (glow azul, ocluido por el globo → brilla el limbo).
     glows.push(sprite(Vec3::ZERO, er * 2.7, [0.35, 0.62, 1.0], 0.9));
 
-    SphereGeom { lines, cores, glows }
+    SphereGeom { lines, cores, glows, earth_verts, earth_indices }
 }
 
 // =====================================================================
-// Mini-Tierra — globo océano (los continentes y el día/noche se dibujan
-// encima en coords de mundo, chart-correctos; ver sphere_geometry)
+// Mini-Tierra — globo relleno y sombreado, con continentes REALES horneados
+// en el color del vértice (geografía correcta por el RAMC) + día/noche real.
 // =====================================================================
 
-/// Genera la malla de la Tierra: una esfera UV océano con casquetes de hielo y
-/// un sombreado fijo horneado para dar volumen (redondez). El día/noche real y
-/// los continentes van encima como overlays en coords de mundo.
-fn earth_mesh() -> (Vec<Vertex3d>, Vec<u16>) {
-    let (pos, idx) = llimphi_3d::uv_sphere(28, 56);
-    let light = Vec3::new(0.5, 0.45, 0.74).normalize();
+/// ¿El punto geográfico (lat, lon en grados) cae dentro del polígono `poly`
+/// (lista de (lat, lon))? Ray-casting planar — suficiente para los contornos
+/// esquemáticos (no cruzan el antimeridiano salvo casquetes, que igual quedan).
+fn point_in_polygon(lat: f32, lon: f32, poly: &[(f32, f32)]) -> bool {
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (yi, xi) = poly[i];
+        let (yj, xj) = poly[j];
+        if (yi > lat) != (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Hornea la malla de la Tierra para esta carta: continentes reales (en su
+/// posición correcta por el RAMC y la longitud del observador) + océano + hielo
+/// polar, todo sombreado por el día/noche contra el Sol de la carta. Color por
+/// vértice (Gouraud) → globo liso y realista, sin depender de la normal del
+/// shader. La malla se orienta en coords de MUNDO (el `set_model` sólo escala).
+fn earth_baked(ramc: f32, lon_obs: f32, sun_dir: Option<Vec3>) -> (Vec<Vertex3d>, Vec<u16>) {
+    let (pos, idx) = llimphi_3d::uv_sphere(36, 72);
+    let inv_eps = Mat4::from_rotation_x(-OBLIQUITY_DEG.to_radians());
     let verts = pos
         .into_iter()
         .map(|p| {
-            let n = Vec3::from_array(p); // unitaria = normal
-            let lat = n.y.clamp(-1.0, 1.0).asin();
-            let ice = lat.abs() > 1.28; // casquetes polares
+            let n = Vec3::from_array(p); // dirección de mundo (unitaria)
+            // Mundo → geográfico: deshacer la oblicuidad y el RAMC.
+            let eq = inv_eps.transform_point3(n);
+            let dec = eq.y.clamp(-1.0, 1.0).asin().to_degrees();
+            let ra = eq.z.atan2(eq.x).to_degrees();
+            let lat = dec;
+            let mut lon = ra - ramc + lon_obs;
+            lon = (lon + 180.0).rem_euclid(360.0) - 180.0; // a -180..180
+            let land = CONTINENTES.iter().any(|poly| point_in_polygon(lat, lon, poly));
+            let ice = lat.abs() > 74.0;
             let albedo = if ice {
-                [0.86, 0.91, 0.97]
+                [0.88, 0.92, 0.97]
+            } else if land {
+                // Verde-tierra con leve variación por latitud (desierto cálido).
+                let warm = (1.0 - (lat.abs() / 60.0).min(1.0)) * 0.12;
+                [0.22 + warm, 0.46 - warm * 0.4, 0.20]
             } else {
-                [0.05, 0.16, 0.34] // océano azul
+                [0.04, 0.15, 0.33] // océano azul profundo
             };
-            // Redondez: Lambert contra una luz fija (no es el Sol de la carta;
-            // sólo da volumen). Piso alto para que la cara oscura no sea negra.
-            let lit = 0.40 + 0.70 * n.dot(light).max(0.0);
+            // Día/noche real: Lambert contra el Sol de la carta (en mundo).
+            let lit = match sun_dir {
+                Some(s) => 0.16 + 1.0 * n.dot(s).max(0.0),
+                None => 0.7,
+            };
             let color = [
                 (albedo[0] * lit).min(1.0),
-                (albedo[1] * lit).min(1.0),
-                (albedo[2] * lit + 0.02).min(1.0),
+                (albedo[1] * lit + 0.01).min(1.0),
+                (albedo[2] * lit + 0.03).min(1.0),
             ];
             Vertex3d { pos: p, color }
         })
