@@ -25,18 +25,18 @@
 
 #![forbid(unsafe_code)]
 
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, AlignItems, Dimension, FlexDirection, Size, Style},
+    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
@@ -49,10 +49,28 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
+use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
+use llimphi_widget_empty::{empty_view, EmptyPalette};
+use llimphi_widget_toast::{toast_stack_view, Toast};
+use llimphi_icons::Icon;
 use minga_store::PersistentRepo;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const REPO_DIRNAME: &str = "repo";
+/// Cuánto vive un toast efímero antes de auto-descartarse.
+const TOAST_TTL: Duration = Duration::from_secs(4);
+/// Cadencia del repaint que anima el shimmer del skeleton mientras se
+/// espera el primer snapshot. Sólo corre durante ese arranque.
+const SHIMMER_TICK: Duration = Duration::from_millis(50);
+
+/// Hash estable de una cadena → `key` para animaciones implícitas: la
+/// misma sección produce siempre la misma key entre rebuilds, así el
+/// pop-in de cada stat card dispara una sola vez (al aparecer).
+fn key_of(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
 
 /// Cuántos items recientes mostrar por sección. Los stores no tienen
 /// orden cronológico (sled ordena lexicográfico por hash); los
@@ -93,6 +111,12 @@ pub(crate) struct Model {
     /// `None` cerrado. El explorer es de sólo lectura — el contextual
     /// sólo ofrece acciones de observación (refrescar / tema).
     pub context_menu: Option<(f32, f32)>,
+    /// Toasts efímeros vivos (confirmaciones de acciones del usuario).
+    pub toasts: Vec<Toast>,
+    /// Id incremental para correlacionar toast ↔ `Msg::ToastExpire`.
+    pub next_toast: u64,
+    /// Hay una cadena de `Msg::Shimmer` en vuelo (evita rearmar dos).
+    pub ticking: bool,
 }
 
 #[derive(Clone)]
@@ -118,6 +142,15 @@ pub(crate) enum Msg {
     MenuActivate,
     /// No-op: sólo fuerza re-render durante la animación del dropdown.
     MenuTick,
+    /// Tick rápido del shimmer: fuerza repaint mientras se espera el
+    /// primer snapshot. Se auto-rearma sólo mientras sigue cargando.
+    Shimmer,
+    /// Refresco pedido por el usuario (menú / contextual): confirma con
+    /// un toast efímero y dispara el `Tick` real. Distinto del polling
+    /// automático, que es silencioso.
+    ManualRefresh,
+    /// Un toast cumplió su `duration`: se descarta del stack.
+    ToastExpire(u64),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
     /// Right-click en la raíz → abre el menú contextual anclado en
@@ -165,7 +198,7 @@ impl App for Explorer {
         })
         .ok();
 
-        Model {
+        let mut model = Model {
             theme,
             repo_path,
             snapshot: None,
@@ -176,7 +209,13 @@ impl App for Explorer {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
-        }
+            toasts: Vec::new(),
+            next_toast: 0,
+            ticking: false,
+        };
+        // Arranca el shimmer del skeleton hasta el primer snapshot.
+        ensure_shimmer(&mut model, handle);
+        model
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
@@ -258,6 +297,20 @@ impl App for Explorer {
                 }
             }
             Msg::MenuTick => {}
+            Msg::Shimmer => {
+                // El thread durmió; sólo rearmamos si seguimos cargando
+                // (ver `ensure_shimmer` al final del update).
+                m.ticking = false;
+            }
+            Msg::ManualRefresh => {
+                let id = m.next_toast;
+                m.next_toast += 1;
+                push_toast(&mut m, handle, Toast::info(id, "Refrescando repo…", TOAST_TTL));
+                handle.dispatch(Msg::Tick);
+            }
+            Msg::ToastExpire(id) => {
+                m.toasts.retain(|t| t.id != id);
+            }
             Msg::CloseMenus => {
                 m.menu_open = None;
                 m.menu_active = usize::MAX;
@@ -274,8 +327,14 @@ impl App for Explorer {
             }
             Msg::CycleTheme => {
                 m.theme = Theme::next_after(m.theme.name);
+                let id = m.next_toast;
+                m.next_toast += 1;
+                let texto = format!("Tema: {}", m.theme.name);
+                push_toast(&mut m, handle, Toast::info(id, texto, TOAST_TTL));
             }
         }
+        // Mantené el shimmer animado mientras se espera el primer snapshot.
+        ensure_shimmer(&mut m, handle);
         m
     }
 
@@ -315,8 +374,25 @@ impl App for Explorer {
         }
 
         match &model.snapshot {
+            // Sin snapshot todavía: si no hay error, mostramos skeletons con
+            // shimmer (la forma de las 3 cards que vienen). Con error, el
+            // banner de arriba ya explica; no apilamos skeletons encima.
             None => {
-                body_children.push(empty_message(theme));
+                if model.error.is_none() {
+                    body_children.push(skeleton_card(theme));
+                    body_children.push(skeleton_card(theme));
+                    body_children.push(skeleton_card(theme));
+                }
+            }
+            // Repo abierto pero vacío (sin nodos / atestaciones / claves):
+            // empty-state con orientación en vez de tres ceros mudos.
+            Some(snap) if snap.nodes == 0 && snap.attestations == 0 && snap.mst_keys == 0 => {
+                body_children.push(empty_view::<Msg>(
+                    Icon::Archive,
+                    "Repo vacío",
+                    Some("Todavía no hay nodos AST, atestaciones ni claves MST. Sembrá el repo con la CLI de minga."),
+                    &EmptyPalette::from_theme(theme),
+                ));
             }
             Some(snap) => {
                 let node_items: Vec<String> = snap
@@ -331,30 +407,41 @@ impl App for Explorer {
                     .collect();
                 let mst_items: Vec<String> = snap.recent_mst_keys.clone();
 
-                body_children.push(stat_card_view::<Msg>(
-                    &rimay_localize::t("minga-card-nodes-title"),
-                    &snap.nodes.to_string(),
-                    &rimay_localize::t("minga-card-nodes-desc"),
-                    accent_nodes,
-                    &node_items,
-                    &stat_palette,
-                ));
-                body_children.push(stat_card_view::<Msg>(
-                    &rimay_localize::t("minga-card-attestations-title"),
-                    &snap.attestations.to_string(),
-                    &rimay_localize::t("minga-card-attestations-desc"),
-                    accent_attestations,
-                    &attestation_items,
-                    &stat_palette,
-                ));
-                body_children.push(stat_card_view::<Msg>(
-                    &rimay_localize::t("minga-card-mst-title"),
-                    &snap.mst_keys.to_string(),
-                    &rimay_localize::t("minga-card-mst-desc"),
-                    accent_mst,
-                    &mst_items,
-                    &stat_palette,
-                ));
+                // Cada card entra con un pop-in la primera vez que aparece su
+                // key estable (al cargar el primer snapshot); luego queda fija.
+                body_children.push(
+                    stat_card_view::<Msg>(
+                        &rimay_localize::t("minga-card-nodes-title"),
+                        &snap.nodes.to_string(),
+                        &rimay_localize::t("minga-card-nodes-desc"),
+                        accent_nodes,
+                        &node_items,
+                        &stat_palette,
+                    )
+                    .animated_enter(key_of("minga-card-nodes"), motion::NORMAL),
+                );
+                body_children.push(
+                    stat_card_view::<Msg>(
+                        &rimay_localize::t("minga-card-attestations-title"),
+                        &snap.attestations.to_string(),
+                        &rimay_localize::t("minga-card-attestations-desc"),
+                        accent_attestations,
+                        &attestation_items,
+                        &stat_palette,
+                    )
+                    .animated_enter(key_of("minga-card-attestations"), motion::NORMAL),
+                );
+                body_children.push(
+                    stat_card_view::<Msg>(
+                        &rimay_localize::t("minga-card-mst-title"),
+                        &snap.mst_keys.to_string(),
+                        &rimay_localize::t("minga-card-mst-desc"),
+                        accent_mst,
+                        &mst_items,
+                        &stat_palette,
+                    )
+                    .animated_enter(key_of("minga-card-mst"), motion::NORMAL),
+                );
             }
         }
 
@@ -396,8 +483,9 @@ impl App for Explorer {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
-        // El menú contextual tiene prioridad si está abierto.
-        if let Some((x, y)) = model.context_menu {
+        // Capa de menú: el contextual tiene prioridad; si no, el dropdown
+        // del menú principal (cualquiera puede estar ausente).
+        let menu_layer: Option<View<Msg>> = if let Some((x, y)) = model.context_menu {
             let viewport = viewport_of(model);
             // Acciones reales del explorer: refrescar el snapshot y ciclar
             // el tema. El explorer es de sólo lectura — no inventamos
@@ -408,10 +496,10 @@ impl App for Explorer {
             ];
             let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
                 Arc::new(move |i: usize| match i {
-                    0 => Msg::Tick,
+                    0 => Msg::ManualRefresh,
                     _ => Msg::CycleTheme,
                 });
-            return Some(context_menu_view(ContextMenuSpec {
+            Some(context_menu_view(ContextMenuSpec {
                 anchor: (x, y),
                 viewport,
                 header: Some(rimay_localize::t("minga-menu-context-title")),
@@ -420,16 +508,71 @@ impl App for Explorer {
                 on_pick,
                 on_dismiss: Msg::CloseMenus,
                 palette: ContextMenuPalette::from_theme(&model.theme),
-            }));
+            }))
+        } else {
+            let menu = app_menu();
+            menubar_overlay_animated(
+                &menubar_spec(&menu, model, &model.theme),
+                model.menu_active,
+                model.menu_anim.value(),
+            )
+        };
+
+        // Capa de toasts (efímeros) por encima de todo.
+        let now = Instant::now();
+        let alive: Vec<Toast> = model.toasts.iter().filter(|t| t.is_alive(now)).cloned().collect();
+        let toast_layer = (!alive.is_empty())
+            .then(|| toast_stack_view(&alive, viewport_of(model), Msg::ToastExpire));
+
+        let mut layers: Vec<View<Msg>> = Vec::new();
+        layers.extend(menu_layer);
+        layers.extend(toast_layer);
+        match layers.len() {
+            0 => None,
+            1 => layers.into_iter().next(),
+            _ => Some(
+                View::new(Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: percent(1.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .children(layers),
+            ),
         }
-        // Si no, el dropdown del menú principal.
-        let menu = app_menu();
-        menubar_overlay_animated(
-            &menubar_spec(&menu, model, &model.theme),
-            model.menu_active,
-            model.menu_anim.value(),
-        )
     }
+}
+
+/// `true` mientras se espera el primer snapshot (sin error): es el único
+/// momento en que el dashboard está realmente vacío y vale el skeleton.
+fn esperando_primer_snapshot(m: &Model) -> bool {
+    m.snapshot.is_none() && m.error.is_none()
+}
+
+/// Arranca la cadena de ticks del shimmer si seguimos esperando el primer
+/// snapshot y no hay ya una corriendo. Se auto-detiene cuando llega el
+/// snapshot, así no queda un loop de repaint ocioso (el polling de 2s es
+/// suficiente una vez que hay datos).
+fn ensure_shimmer(m: &mut Model, handle: &Handle<Msg>) {
+    if m.ticking || !esperando_primer_snapshot(m) {
+        return;
+    }
+    m.ticking = true;
+    handle.spawn(move || {
+        std::thread::sleep(SHIMMER_TICK);
+        Msg::Shimmer
+    });
+}
+
+/// Empuja un toast al stack y programa su expiración.
+fn push_toast(m: &mut Model, handle: &Handle<Msg>, toast: Toast) {
+    let id = toast.id;
+    m.toasts.push(toast);
+    handle.spawn(move || {
+        std::thread::sleep(TOAST_TTL);
+        Msg::ToastExpire(id)
+    });
 }
 
 /// Viewport para clampear overlays: el explorer no trackea el tamaño de
@@ -487,7 +630,7 @@ fn app_menu() -> AppMenu {
 fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
     match cmd {
         "file.refresh" => {
-            handle.dispatch(Msg::Tick);
+            handle.dispatch(Msg::ManualRefresh);
             model
         }
         "file.quit" => std::process::exit(0),
@@ -500,21 +643,22 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
     }
 }
 
-fn empty_message(theme: &Theme) -> View<Msg> {
+/// Placeholder de una stat card con shimmer, mientras llega el primer
+/// snapshot. Reproduce la silueta (alto fijo, esquinas redondeadas) de
+/// `stat_card_view` para que el salto a los datos reales sea suave.
+fn skeleton_card(theme: &Theme) -> View<Msg> {
+    let pal = SkeletonPalette::from_theme(theme);
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(24.0_f32),
+            height: length(96.0_f32),
         },
-        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
         ..Default::default()
     })
-    .text_aligned(
-        rimay_localize::t("minga-empty"),
-        13.0,
-        theme.fg_muted,
-        Alignment::Start,
-    )
+    .radius(8.0)
+    .clip(true)
+    .children(vec![skeleton_view(&pal)])
 }
 
 /// Lee el repo sled `<repo_path>/repo` y devuelve los 3 counts.

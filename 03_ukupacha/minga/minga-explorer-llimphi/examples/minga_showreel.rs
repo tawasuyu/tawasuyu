@@ -286,6 +286,9 @@ fn modelo_frame(repo_path: PathBuf, full: &RepoSnapshot, t: f32) -> Model {
         menu_active: usize::MAX,
         menu_anim: Tween::idle(1.0),
         context_menu: None,
+        toasts: Vec::new(),
+        next_toast: 0,
+        ticking: false,
     }
 }
 

@@ -254,6 +254,9 @@ fn modelo_demo(repo_path: PathBuf) -> Model {
         // Ancla dentro del viewport lógico de la app (800×560): el
         // contextual clampea contra ese tamaño (ver `viewport_of`).
         context_menu: Some((540.0, 330.0)),
+        toasts: Vec::new(),
+        next_toast: 0,
+        ticking: false,
     }
 }
 
