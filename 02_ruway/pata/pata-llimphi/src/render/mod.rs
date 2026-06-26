@@ -63,7 +63,9 @@ pub use panels::{
     cpu_overlay, cpu_panel, ram_overlay, ram_panel, volume_overlay, volume_panel,
 };
 pub use bluetooth::{bluetooth_overlay, bluetooth_view};
-pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
+pub use control::{
+    control_button_view, control_overlay, set_night, set_power_profile, set_radio, ControlExtras,
+};
 pub use media::media_view;
 pub use network::{network_overlay, network_view};
 pub use notifications::{notifications_overlay, notifications_view};

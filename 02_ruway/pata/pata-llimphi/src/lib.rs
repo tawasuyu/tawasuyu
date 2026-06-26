@@ -189,6 +189,10 @@ pub enum Msg {
     ControlWifi(bool),
     /// Conmutar la radio Bluetooth (`rfkill`). El `bool` es el estado deseado.
     ControlBt(bool),
+    /// Fijar el perfil de energía (`powerprofilesctl set <id>`).
+    ControlPowerProfile(String),
+    /// Encender/apagar la luz nocturna (`wlsunset`).
+    ControlNight(bool),
     /// Desplegar/replegar el applet de red (lista de redes Wi-Fi).
     NetworkToggle,
     /// Conectar a la red Wi-Fi `ssid` (`nmcli device wifi connect`).
@@ -1621,6 +1625,14 @@ impl App for PataApp {
             Msg::ControlBt(on) => {
                 render::set_radio("bluetooth", on);
                 model.control_extras.bt = on;
+            }
+            Msg::ControlPowerProfile(id) => {
+                render::set_power_profile(&id);
+                model.control_extras.power_profile = Some(id);
+            }
+            Msg::ControlNight(on) => {
+                render::set_night(on);
+                model.control_extras.night = on;
             }
             Msg::NetworkToggle => {
                 model.network_open = !model.network_open;

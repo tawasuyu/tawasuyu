@@ -807,6 +807,15 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     Aritmética pura y testeada: `dias_del_mes` (con bisiesto) y `columna_lunes`
     (Sakamoto reordenado a lunes-primero), 2 tests. Es el clásico «click en el
     reloj → calendario» de cualquier panel.
+  - **Quick settings: perfiles de energía + luz nocturna ✅** — el Control panel
+    suma un selector segmentado de **perfil de energía** (Ahorro/Equilibrado/
+    Rendimiento, vía `powerprofilesctl`; sólo aparece si hay power-profiles-daemon)
+    y un switch de **luz nocturna** (arranca/mata `wlsunset`). `ControlExtras` lee
+    `powerprofilesctl get` + `pgrep wlsunset` al abrir. **Bonus/fix:** los toggles
+    Wi-Fi/Bluetooth del Control panel **ahora funcionan en el layer-shell** —antes
+    caían al `_ => {}` del backend de producción (sólo andaban en winit). Los cuatro
+    (`ControlWifi`/`ControlBt`/`ControlPowerProfile`/`ControlNight`) cableados en
+    ambos backends.
     - **Con esto cierran los huecos de DE que faltaban en pata.** Quedan en órbita
       de **mirada** (compositor, no pata): lock screen + gestión de idle (en curso
       ahí), screenshot/grabación y configuración de displays.

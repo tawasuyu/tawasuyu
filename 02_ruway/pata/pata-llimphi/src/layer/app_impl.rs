@@ -1358,6 +1358,28 @@ impl LayerApp {
                 }
                 self.toggle_menu(MenuKind::Control);
             }
+            // Antes el path layer-shell no atendía estos toggles del Control panel
+            // (caían al `_ => {}`): los switches de Wi-Fi/BT no hacían nada en el DM.
+            Msg::ControlWifi(on) => {
+                crate::render::set_radio("wlan", on);
+                self.control_extras.wifi = on;
+                self.marcar_menu_dirty();
+            }
+            Msg::ControlBt(on) => {
+                crate::render::set_radio("bluetooth", on);
+                self.control_extras.bt = on;
+                self.marcar_menu_dirty();
+            }
+            Msg::ControlPowerProfile(id) => {
+                crate::render::set_power_profile(&id);
+                self.control_extras.power_profile = Some(id);
+                self.marcar_menu_dirty();
+            }
+            Msg::ControlNight(on) => {
+                crate::render::set_night(on);
+                self.control_extras.night = on;
+                self.marcar_menu_dirty();
+            }
             Msg::NetworkToggle => {
                 self.net_password = None;
                 self.set_menu_keyboard(false);

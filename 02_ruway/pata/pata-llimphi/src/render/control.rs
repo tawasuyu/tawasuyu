@@ -37,17 +37,75 @@ pub struct ControlExtras {
     pub battery: Option<(u8, bool)>,
     pub wifi: bool,
     pub bt: bool,
+    /// Perfil de energía activo (`power-saver`/`balanced`/`performance`), o `None`
+    /// si no hay `powerprofilesctl` (power-profiles-daemon).
+    pub power_profile: Option<String>,
+    /// `true` si la luz nocturna (`wlsunset`) está corriendo.
+    pub night: bool,
 }
 
 impl ControlExtras {
-    /// Lee batería de `/sys/class/power_supply` y las radios de `rfkill`.
-    /// Tolerante: lo que no se puede leer queda en su default.
+    /// Lee batería de `/sys/class/power_supply`, las radios de `rfkill`, el perfil
+    /// de energía y la luz nocturna. Tolerante: lo que no se puede leer queda en
+    /// su default.
     pub fn read() -> Self {
         Self {
             battery: read_battery(),
             wifi: rfkill_on("wlan"),
             bt: rfkill_on("bluetooth"),
+            power_profile: read_power_profile(),
+            night: night_on(),
         }
+    }
+}
+
+/// El perfil de energía activo, vía `powerprofilesctl get`. `None` si el binario
+/// no está (no hay power-profiles-daemon).
+fn read_power_profile() -> Option<String> {
+    let out = std::process::Command::new("powerprofilesctl")
+        .arg("get")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!p.is_empty()).then_some(p)
+}
+
+/// Los perfiles que ofrecemos y su rótulo, en orden ahorro→rendimiento.
+pub(super) const PERFILES: [(&str, &str); 3] = [
+    ("power-saver", "Ahorro"),
+    ("balanced", "Equilibrado"),
+    ("performance", "Rendimiento"),
+];
+
+/// Fija el perfil de energía (`powerprofilesctl set`). No bloquea.
+pub fn set_power_profile(name: &str) {
+    let _ = std::process::Command::new("powerprofilesctl")
+        .args(["set", name])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// `true` si `wlsunset` está corriendo (luz nocturna activa).
+fn night_on() -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", "wlsunset"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Enciende/apaga la luz nocturna. On = arranca `wlsunset` (matando una instancia
+/// previa); off = la mata. Desacoplado (no espera).
+pub fn set_night(on: bool) {
+    if on {
+        crate::spawn_cmd("pkill -x wlsunset 2>/dev/null; exec wlsunset");
+    } else {
+        crate::spawn_cmd("pkill -x wlsunset");
     }
 }
 
@@ -180,6 +238,12 @@ pub(super) fn control_panel(
         theme,
         |on| Msg::ControlBt(on),
     ));
+
+    // Perfil de energía (sólo si hay power-profiles-daemon).
+    if let Some(actual) = &extras.power_profile {
+        hijos.push(perfil_row(actual, theme));
+    }
+    hijos.push(switch_row("Luz nocturna", extras.night, theme, Msg::ControlNight));
 
     let (a, blur, dy) = elevation::E4;
     View::new(Style {
@@ -321,4 +385,54 @@ fn fila_base(hijos: Vec<View<Msg>>) -> View<Msg> {
         ..Default::default()
     })
     .children(hijos)
+}
+
+/// Fila «Energía» + selector segmentado de perfiles (ahorro/equilibrado/
+/// rendimiento). El activo va en acento.
+fn perfil_row(actual: &str, theme: &Theme) -> View<Msg> {
+    let etiqueta = View::new(Style {
+        size: Size { width: length(60.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text("Energía".to_string(), 12.5, theme.fg_text);
+
+    let botones: Vec<View<Msg>> = PERFILES
+        .iter()
+        .map(|(id, rotulo)| {
+            let activo = *id == actual;
+            let v = View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: auto(), height: length(24.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .radius(5.0)
+            .hover_fill(theme.bg_button_hover)
+            .on_click(Msg::ControlPowerProfile(id.to_string()))
+            .text(
+                rotulo.to_string(),
+                11.0,
+                if activo { theme.bg_panel } else { theme.fg_muted },
+            );
+            if activo {
+                v.fill(theme.accent)
+            } else {
+                v.fill(theme.bg_button)
+            }
+        })
+        .collect();
+
+    let seg = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(botones);
+
+    fila_base(vec![etiqueta, seg])
 }
