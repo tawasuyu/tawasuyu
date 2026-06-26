@@ -244,11 +244,22 @@ sesión** — pero **no** mientras mirás un vídeo o estás en una llamada.
   > set_dpms(false)`) es correcto por construcción (corre en cada evento de
   > libinput, indep. del loop de render) — falta una observación limpia del
   > flanco `Off→On` (en los runs no se movió el ratón con la pantalla negra).
-- **`ext_idle_notify_v1`** (notificar a clientes externos del estado de ocio) sigue
-  sin cablear: `IdleNotifierState<App>` exige un `LoopHandle<App>` y los bucles
-  despachan `DrmState`/winit — el mismo refactor de unificación de tipo de estado de
-  siempre. Nuestra política interna no lo necesita; los clientes que quieran saber
-  «idle» todavía no tienen el global.
+- **`ext_idle_notify_v1`** (notificar a clientes externos del estado de ocio).
+
+  > **✅ HECHO (2026-06-26) — cableado, conducido por el tick.** El problema del
+  > tipo era real: `IdleNotifierState<App>` de smithay exige un
+  > `LoopHandle<'static, App>` (su timer dispara con `&mut App`) y `Dispatch` sobre
+  > `App`, pero los bucles despachan `DrmState`/winit. En vez del refactor de
+  > unificación, se **hand-rolleó** el protocolo (como `screencopy`/`gamma_control`)
+  > en `src/idle_notify.rs` y se **conduce desde `App::idle_tick`/`idle_activity`**
+  > —que ya corren la política de inactividad— con el mismo `dt` y la misma
+  > consciencia de inhibición (`zwp_idle_inhibit`). Cada notificación lleva su
+  > propio `timeout` (lo elige el cliente); las de `get_input_idle_notification`
+  > (v2) ignoran inhibidores. La lógica de flancos (`step`) es pura y **testeada**
+  > (idle al cruzar umbral, resumed por actividad, inhibidor reanima+rearma,
+  > timeout 0). **Verificado:** `wayland-info` contra mirada anidado lista
+  > `ext_idle_notifier_v1` v2 bindeable. Sin DPMS-de-clientes ni refactor; funciona
+  > en ambos backends (winit y DRM) porque cuelga del tick común.
 
 ## Animaciones de transición — apagado CRT y «hero» lock→thumbnail  💡 IDEA (sin construir)
 

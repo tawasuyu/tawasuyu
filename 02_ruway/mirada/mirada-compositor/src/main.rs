@@ -99,6 +99,7 @@ mod diag;
 mod drm_backend;
 mod gamma_control;
 mod handoff;
+mod idle_notify;
 mod menu;
 mod screencopy;
 mod foreign_toplevel;

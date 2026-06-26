@@ -421,6 +421,10 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         _gamma_control_state: gamma_control::GammaControlState::new(&dh),
         gamma_active: Vec::new(),
         pending_gamma: Vec::new(),
+        // ext-idle-notify: global sin gatear (saber «idle» no expone contenido);
+        // lo conduce el tick con el mismo reloj de ocio que la política interna.
+        _idle_notify_state: idle_notify::IdleNotifyState::new(&dh),
+        idle_notifs: Vec::new(),
         seat,
         keyboard: None,
         pending_kb_focus: None,

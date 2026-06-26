@@ -25,6 +25,7 @@ use mirada_body::BodyState;
 use mirada_brain::{BrainCommand, Desktop, Decorations, Permisos, WindowEffects};
 use mirada_link::BodyLink;
 use crate::gamma_control;
+use crate::idle_notify;
 use crate::screencopy;
 
 /// De dónde salen las decisiones de geometría.
@@ -500,6 +501,12 @@ pub(crate) struct App {
     /// drena el backend DRM (set_gamma sobre el CRTC). El protocolo, que corre
     /// sobre `App`, no toca el hardware: sólo deja el pedido (patrón DPMS/sesión).
     pub(crate) pending_gamma: Vec<(smithay::output::Output, Option<gamma_control::GammaRamp>)>,
+    /// Global `ext_idle_notify_v1` (notifica ocio a clientes externos). Vivo toda
+    /// la sesión. Conducido por el tick (`App::drive_idle_notifs`), ver
+    /// [`idle_notify`].
+    pub(crate) _idle_notify_state: idle_notify::IdleNotifyState,
+    /// Notificaciones de ocio vivas, cada una con su propio timeout.
+    pub(crate) idle_notifs: Vec<idle_notify::IdleNotif>,
     pub(crate) seat: Seat<App>,
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).

@@ -1849,6 +1849,9 @@ impl App {
         let inhibited = !self.idle_inhibitors.is_empty();
         let actions = self.idle.tick(dt_ms, inhibited);
         self.apply_idle_actions(actions);
+        // Clientes externos (ext-idle-notify) con su propio reloj: mismo dt, misma
+        // consciencia de inhibición.
+        self.drive_idle_notifs(dt_ms, inhibited);
     }
 
     /// Hubo **input** del usuario: reinicia la inactividad y, si la pantalla
@@ -1857,6 +1860,7 @@ impl App {
     pub(crate) fn idle_activity(&mut self) {
         let actions = self.idle.activity();
         self.apply_idle_actions(actions);
+        self.idle_notify_activity();
     }
 
     /// Ejecuta las acciones de la política de inactividad. El apagado/encendido
