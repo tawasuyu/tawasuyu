@@ -114,6 +114,12 @@ cedido al puente es *qué nombres existen y quién los reclama* (vive en el
 dbus-daemon, no en la frontera de capacidades de arje) — concesión acotada
 al puente compat, que ya es la zona de excepción para protocolos ajenos.
 
+**Auth**: `arje-activate` no es un ente del grafo (lo spawnea el dbus-daemon),
+así que no puede autenticar por SO_PEERCRED. Funciona porque el `.service` lo
+corre como **root** y `arje-zero` permite las operaciones de card-store a un
+peer root sin identidad (`graph::bus_mediator::is_store_op`): sólo puede
+nombrar cards que root instaló en `/etc/arje/cards.d/`, sin escalada.
+
 Instalación (`--lazy`): instala `arje-activate`, una card por shim en el
 store, un `.service` de activación por nombre, y el marcador
 `/etc/arje/session-gnome.lazy`. El greeter ve el marcador y **no** levanta

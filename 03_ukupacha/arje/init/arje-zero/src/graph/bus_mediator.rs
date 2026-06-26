@@ -36,6 +36,19 @@ fn requires_auth(req: &BusRequest) -> bool {
     )
 }
 
+/// Operaciones sobre el **card-store** (`/etc/arje/cards.d/`, root-controlado).
+/// Se permiten a un peer **root** sin identidad de ente: es el caso de
+/// `arje-activate`, spawneado por el dbus-daemon del host (no es un ente del
+/// grafo, no tiene `ENTE_ID`). Un root sólo puede nombrar cards que root mismo
+/// instaló en el store, así que no hay escalada. `RunCard` NO entra acá: lleva
+/// una Card arbitraria por el wire y exige `Capability::Spawn`.
+fn is_store_op(req: &BusRequest) -> bool {
+    matches!(
+        req,
+        BusRequest::SpawnCardFromDisk { .. } | BusRequest::StopCardFromDisk { .. }
+    )
+}
+
 /// Directorio del card store. Override con `ARJE_CARDS_DIR`. Default
 /// canónico `/etc/arje/cards.d`. Cada archivo es un `EntityCard` JSON.
 fn cards_dir() -> std::path::PathBuf {
@@ -113,7 +126,10 @@ impl EnteGraph {
                 }
             }
         };
-        if requires_auth(&request) && from_authenticated.is_none() {
+        if requires_auth(&request)
+            && from_authenticated.is_none()
+            && !(peer.uid == 0 && is_store_op(&request))
+        {
             let _ = reply.send(BusResponse::Error("auth required for this request".into()));
             return;
         }
@@ -189,12 +205,15 @@ impl EnteGraph {
                 let _ = reply.send(resp);
             }
             BusRequest::SpawnCardFromDisk { name } => {
-                let caller = from_authenticated.expect("auth-required guarantees Some");
+                // Op de card-store: si no hay identidad de ente, el gate ya
+                // garantizó que el peer es root. Atribuimos a la Semilla (el
+                // `caller` es sólo para logging; el spawn usa el seed_id igual).
+                let caller = from_authenticated.unwrap_or(self.seed.id);
                 let resp = self.spawn_card_from_disk(caller, name).await;
                 let _ = reply.send(resp);
             }
             BusRequest::StopCardFromDisk { name } => {
-                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let caller = from_authenticated.unwrap_or(self.seed.id);
                 let resp = self.stop_card_from_disk(caller, name);
                 let _ = reply.send(resp);
             }
@@ -753,6 +772,19 @@ mod tests {
         // chequeado `stopping`, la marca seguiría puesta.
         assert!(!g.incarnated.contains_key(&id), "el ente detenido se fue del grafo");
         assert!(g.stopping.is_empty(), "la marca de detención se consumió");
+    }
+
+    #[test]
+    fn store_ops_son_las_dos_de_disco() {
+        use arje_bus::BusRequest;
+        assert!(super::is_store_op(&BusRequest::SpawnCardFromDisk { name: "x".into() }));
+        assert!(super::is_store_op(&BusRequest::StopCardFromDisk { name: "x".into() }));
+        // RunCard NO es store-op: lleva card arbitraria, exige Capability::Spawn.
+        assert!(!super::is_store_op(&BusRequest::ListEntes));
+        assert!(!super::is_store_op(&BusRequest::KillEnte {
+            target: ulid::Ulid::nil(),
+            signal: 15
+        }));
     }
 
     #[test]

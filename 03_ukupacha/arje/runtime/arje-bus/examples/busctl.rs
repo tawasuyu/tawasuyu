@@ -29,6 +29,12 @@ async fn main() -> anyhow::Result<()> {
 
     let req = match cmd {
         "list-entes" => BusRequest::ListEntes,
+        "spawn-card" => BusRequest::SpawnCardFromDisk {
+            name: args.get(2).cloned().unwrap_or_default(),
+        },
+        "stop-card" => BusRequest::StopCardFromDisk {
+            name: args.get(2).cloned().unwrap_or_default(),
+        },
         "announce" => BusRequest::Announce { capabilities: vec![] },
         "power-off" => BusRequest::PowerOff { interactive: false },
         "reboot" => BusRequest::Reboot { interactive: false },
@@ -42,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         }
         other => {
             eprintln!("subcomando desconocido: {other}");
-            eprintln!("válidos: list-entes, announce, power-off, reboot, suspend, invoke-echo <text>");
+            eprintln!("válidos: list-entes, spawn-card <name>, stop-card <name>, announce, power-off, reboot, suspend, invoke-echo <text>");
             std::process::exit(2);
         }
     };

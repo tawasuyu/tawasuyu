@@ -18,6 +18,14 @@
 //! `ENTE_BUS_SOCK=/run/arje/bus.sock` (o el path que sea), y `arje-activate`
 //! toma ese mismo path de su env o cae al default `/run/arje/bus.sock` —el
 //! entorno de activación del dbus-daemon no hereda el del fractal.
+//!
+//! **Auth**: `SpawnCardFromDisk` exige identidad autenticada (SO_PEERCRED).
+//! `arje-activate` NO es un ente del grafo (lo spawnea el dbus-daemon), así
+//! que no puede reclamar identidad. Funciona porque el `.service` de
+//! activación lo corre como **root** (`User=root`) y `arje-zero` permite las
+//! operaciones de card-store a un peer root sin identidad: sólo puede nombrar
+//! cards que root instaló en `/etc/arje/cards.d/`, sin escalada (ver
+//! `graph::bus_mediator::is_store_op`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
