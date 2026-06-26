@@ -34,6 +34,9 @@ use llimphi_ui::llimphi_raster::peniko::{
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+use llimphi_icons::Icon;
+use llimphi_theme::motion;
+use llimphi_widget_empty::{empty_view, EmptyPalette};
 use media_core::FrameSource;
 use media_source_av1::Av1VideoSource;
 
@@ -358,7 +361,18 @@ where
 
     let body = match (&state.error, &state.frame) {
         (Some(e), _) => placeholder_body(&format!("(error: {e})"), palette.fg_error),
-        (None, Some(image)) => frame_body(image.clone()),
+        // El cuadro entra con un pop-in suave la primera vez que aparece
+        // (al cargar el video o al cambiar de fuente — entre videos hay un
+        // render sin frame que reinicia la entrada).
+        (None, Some(image)) => frame_body(image.clone()).animated_enter(1, motion::NORMAL),
+        // Sin video seleccionado: empty-state orientativo en vez de un guión.
+        (None, None) if state.name.is_empty() => empty_view(
+            Icon::Film,
+            "Sin video",
+            Some("Seleccioná un archivo de video para reproducirlo."),
+            &EmptyPalette::from_theme(&llimphi_theme::Theme::dark()),
+        ),
+        // Video elegido pero todavía sin primer frame decodificado.
         (None, None) => placeholder_body("—", palette.fg_muted),
     };
 
