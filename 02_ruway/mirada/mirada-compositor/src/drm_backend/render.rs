@@ -1756,6 +1756,42 @@ impl DrmState {
     /// Emite el menú raíz en `rect` si esta salida es la dueña del menú.
     /// El menú vive en **coords locales** de su salida (se abrió ahí), así
     /// que las posiciones de las columnas no necesitan traducción.
+    /// Arma el **backdrop *frosted* REAL** del menú raíz: re-rinde la escena que
+    /// queda **debajo** del menú (`below` = los `Frame` de esta salida sin los
+    /// overlays de arriba ni el menú) a un offscreen del tamaño de la salida, lo
+    /// pasa por blur de caja y lo cachea en [`OutputCtx::backdrop_blur`]. Es el
+    /// glass «pleno»: ve **las ventanas** detrás del menú, no sólo el wallpaper
+    /// (eso lo da `wallpaper_blur`).
+    ///
+    /// Coste: una pasada offscreen + readback + blur **por frame mientras el menú
+    /// está abierto** — por eso es estrictamente opt-in (`glass_blur > 0`) y sólo
+    /// vive lo que dura el menú. Si el render GPU falla, deja `backdrop_blur` en
+    /// `None` y el menú cae con gracia a `wallpaper_blur` (y de ahí a sólido).
+    ///
+    /// **Por verificar en metal:** el readback GPU de una escena real con
+    /// ventanas no se certifica headless (regla 8 de CLAUDE.md).
+    fn rebuild_menu_backdrop(&mut self, idx: usize, below: &[Frame]) {
+        let glass_blur = self.app.config_glass_blur() as i32;
+        if glass_blur == 0 {
+            self.outputs[idx].backdrop_blur = None;
+            return;
+        }
+        let rect = self.outputs[idx].rect;
+        let (ow, oh) = (rect.w.max(1), rect.h.max(1));
+        // La escena de debajo ya está en coords LOCALES a esta salida (igual que
+        // la compone `render_frame`), así que el offscreen al tamaño de salida la
+        // reproduce 1:1. Mismo patrón que `screencopy::servir_offscreen`.
+        let Some(bytes) =
+            crate::screencopy::render_elements_offscreen(&mut self.renderer, (ow, oh), below)
+        else {
+            self.outputs[idx].backdrop_blur = None;
+            return;
+        };
+        let blurred = box_blur_bgra(&bytes, ow, oh, glass_blur);
+        self.outputs[idx].backdrop_blur =
+            bgra_membuffer(&blurred, ow, oh).map(|m| (m, (ow, oh)));
+    }
+
     fn emit_menu(&mut self, idx: usize, rect: Rect, into: &mut Vec<Frame>) {
         let Some(m) = self.root_menu.as_ref() else { return };
         // Glass: con blur activo y un backdrop *frosted* disponible, el fondo del
@@ -1830,12 +1866,22 @@ impl DrmState {
                 }
             }
             // Fondo: glass (frosted) si hay backdrop desenfocado; si no, sólido.
+            // Preferimos el backdrop REAL (ve las ventanas detrás); si no se pudo
+            // armar (render falló), caemos al `wallpaper_blur` (sólo wallpaper).
             let frosted = glass
-                && self.outputs.get(idx).and_then(|o| o.wallpaper_blur.as_ref()).is_some();
+                && self
+                    .outputs
+                    .get(idx)
+                    .and_then(|o| o.backdrop_blur.as_ref().or(o.wallpaper_blur.as_ref()))
+                    .is_some();
             if frosted {
-                // Rebanada del wallpaper desenfocado bajo el menú (coords del
+                // Rebanada del backdrop desenfocado bajo el menú (coords del
                 // buffer del blur, que puede estar acotado → ratio salida↔blur).
-                let (blur, (bw, bh)) = self.outputs[idx].wallpaper_blur.as_ref().unwrap();
+                let (blur, (bw, bh)) = self.outputs[idx]
+                    .backdrop_blur
+                    .as_ref()
+                    .or(self.outputs[idx].wallpaper_blur.as_ref())
+                    .unwrap();
                 let (bw, bh) = (*bw as f64, *bh as f64);
                 let (ow, oh) = (rect.w.max(1) as f64, rect.h.max(1) as f64);
                 let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new(
@@ -2054,6 +2100,8 @@ impl DrmState {
                 let (bytes, fw, fh) = match baked {
                     Some(v) => v,
                     None => {
+                        // Sin cache (nadie corrió fondo-bake): chakana de relleno.
+                        // El bake lo dispara wawapanel al guardar el wallpaper.
                         let (iw, ih) = capped_anim_size(size.0, size.1);
                         (marca::animated_frame(t, iw, ih), iw as i32, ih as i32)
                     }
@@ -2380,10 +2428,12 @@ impl DrmState {
             //    un drag (helper filtra por intersección de work-rect).
             self.emit_zone_overlay(rect, &mut out);
 
-            // 4. Menú raíz — sólo en la salida donde se abrió.
-            if owns_menu {
-                self.emit_menu(idx, rect, &mut out);
-            }
+            // 4. Menú raíz — sólo en la salida donde se abrió. Se EMITE más
+            //    abajo (tras la escena), para poder armar su backdrop *frosted*
+            //    REAL con todo lo que queda debajo; acá sólo reservamos su sitio
+            //    en el z-order (por ENCIMA de la escena, DEBAJO de los overlays
+            //    ya emitidos arriba).
+            let menu_z = out.len();
 
             // 5. Pista de revelado del dock autoescondido — primaria, el
             //    shell vive ahí.
@@ -2413,6 +2463,19 @@ impl DrmState {
 
             // 8. Wallpaper al fondo (por salida).
             self.emit_wallpaper(idx, &mut out);
+
+            // 9. Menú raíz (reservado en `menu_z`): primero armamos su backdrop
+            //    *frosted* REAL con la escena de debajo (`out[menu_z..]`, ya
+            //    completa) y después emitimos el menú —que la muestrea— y lo
+            //    insertamos en su z. Sin menú aquí, `backdrop_blur` se descarta.
+            if owns_menu {
+                self.rebuild_menu_backdrop(idx, &out[menu_z..]);
+                let mut menu_frames: Vec<Frame> = Vec::new();
+                self.emit_menu(idx, rect, &mut menu_frames);
+                out.splice(menu_z..menu_z, menu_frames);
+            } else {
+                self.outputs[idx].backdrop_blur = None;
+            }
 
             out
             }

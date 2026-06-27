@@ -45,12 +45,25 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       color base (con el glow de foco). Sólo flotantes (sobre el escritorio, donde
       el wallpaper ES el backdrop correcto); las teseladas siguen sólidas. Mismo
       límite: muestra el wallpaper, no ventanas detrás.
-- [ ] **Glassmorphism sobre VENTANAS/paneles con backdrop REAL** (el «wow» pleno) — necesita el
-      **backdrop real** detrás de cada superficie, no el wallpaper. Eso pide un
-      **pase de render por capas** (componer lo de atrás a un offscreen → blur →
-      dibujar la ventana encima), o capturar el frame previo y reusarlo. Multi-pase
-      GPU (downsample → N blur separables → upsample → tinte + filo), opt-in con
-      calidad (off / 1 / N). Es la rebanada grande que sigue.
+- [x] **✅ Backdrop REAL — 1ª rebanada: el menú raíz ve las ventanas detrás.**
+      `OutputCtx.backdrop_blur` + `DrmState::rebuild_menu_backdrop`: la escena de
+      **debajo** del menú (`out[menu_z..]` en `render_output` — wallpaper + layers
+      + ventanas, ya en coords de salida) se re-rinde a un offscreen
+      (`render_elements_offscreen`), se pasa por `box_blur_bgra` y el menú la
+      muestrea en vez de `wallpaper_blur`. Reusa el propio element-list del frame
+      (cero replicación de posiciones). Opt-in (`glass_blur>0`), sólo mientras el
+      menú está abierto; si el render falla cae a `wallpaper_blur` → sólido.
+      Byte-idéntico en off (el menú vuelve a su z exacto vía `splice`). **Coste:**
+      una pasada offscreen + readback + blur por frame con el menú abierto.
+      **Falta verificar en metal** (readback GPU de escena con ventanas).
+- [ ] **Backdrop REAL — 2ª rebanada: barras de título flotantes + paneles, por
+      profundidad** (calidad N). Lo del menú es calidad «1» (un backdrop único de
+      toda la escena, correcto porque el menú está arriba de todo). Para una barra
+      flotante el backdrop correcto es lo que hay **debajo de ESA ventana**, no la
+      escena entera → armar el backdrop por-superficie (componer capas `0..N`),
+      multi-pase GPU (downsample → N blur separables → upsample → tinte + filo),
+      opt-in con calidad (off / 1 / N). Hoy las barras flotantes siguen con
+      `wallpaper_blur` (sólo wallpaper).
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).

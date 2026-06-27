@@ -331,6 +331,7 @@ impl DrmState {
             video_frame: None,
             video_dirty: false,
             wallpaper_blur: None,
+            backdrop_blur: None,
             pending_flip: false,
         })
     }

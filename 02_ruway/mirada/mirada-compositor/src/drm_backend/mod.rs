@@ -138,6 +138,15 @@ struct OutputCtx {
     /// rearma. La usa el chrome glass (menú raíz) como backdrop. `None` con glass
     /// apagado (`glass_blur = 0`) o fuente sin bytes (video).
     wallpaper_blur: Option<(MemoryRenderBuffer, (i32, i32))>,
+    /// **Backdrop *frosted* REAL** (glass pleno) de esta salida + su tamaño: la
+    /// escena de **abajo del menú** (wallpaper + ventanas + layers) re-rendida a
+    /// un offscreen y pasada por blur. A diferencia de `wallpaper_blur` —que sólo
+    /// ve el wallpaper— éste ve las ventanas detrás, que es el «wow» pleno. Se
+    /// rearma **cada frame** mientras el menú raíz está abierto sobre esta salida
+    /// (con glass), y se descarta al cerrarse. `None` sin glass, sin menú aquí, o
+    /// si el render offscreen falla (el menú cae a `wallpaper_blur`). Ver
+    /// [`DrmState::rebuild_menu_backdrop`].
+    backdrop_blur: Option<(MemoryRenderBuffer, (i32, i32))>,
     /// `true` entre que esta salida encola un page-flip y llega su VBlank.
     pending_flip: bool,
 }
@@ -1341,6 +1350,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             video_frame: None,
             video_dirty: false,
             wallpaper_blur: None,
+            backdrop_blur: None,
             pending_flip: presento_inicial,
         });
     }
