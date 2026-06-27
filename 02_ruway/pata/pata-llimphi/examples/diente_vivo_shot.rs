@@ -28,6 +28,10 @@ use pata_llimphi::bluetooth::{BtDevice, BtState};
 use pata_llimphi::mpris::MediaState;
 use pata_llimphi::network::{NetState, NetStatus, WifiAp};
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
+use llimphi_icons::{icon_view, Icon};
+use llimphi_widget_dock_rail::{
+    dock_rail_view_badged, BadgeKind, DockBadge, DockRailItem, DockRailPalette, DockRailSide,
+};
 use matilda_discover::{ContainerStatus, RunState};
 use pata_llimphi::flota_discover::HostObs;
 use pata_llimphi::render::{
@@ -39,7 +43,7 @@ use sandokan_core::TelemetryFrame;
 use sandokan_lifecycle::LifecycleState;
 use sandokan_monitor_core::{MonitorSnapshot, UnitObservation};
 
-const W: u32 = 1720;
+const W: u32 = 1800;
 const H: u32 = 820;
 const SZ: f32 = 56.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -239,13 +243,57 @@ fn main() {
     })
     .children(tiles);
 
+    // ---- Rail derecho ESPEJADO con badges (Sistema/Unidades/Flota) ----
+    let rail_items = vec![
+        DockRailItem { id: 0, active: false },
+        DockRailItem { id: 1, active: true },
+        DockRailItem { id: 2, active: false },
+    ];
+    let rail = dock_rail_view_badged(
+        &rail_items,
+        46.0,
+        DockRailSide::InnerRight,
+        &DockRailPalette::from_theme(&theme),
+        |id, size, _color| match id {
+            0 => monitor_vivo_view(&ctx, 0.55, size, &theme),
+            1 => unidades_vivo_view(Some(&unidades), 0.55, size, &theme),
+            _ => View::new(Style {
+                size: Size { width: length(size), height: length(size) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .children(vec![icon_view::<Msg>(Icon::Globe, theme.accent, 1.9)]),
+        },
+        |id| match id {
+            1 => Some(DockBadge::Count(1, BadgeKind::Error)),   // 1 unidad fallada
+            2 => Some(DockBadge::Count(1, BadgeKind::Warning)), // 1 host no alcanzable
+            _ => None,
+        },
+        |_| Msg::DienteTick,
+        |_| None,
+    );
+    let rail_col = View::new(Style {
+        size: Size { width: length(60.0_f32), height: length(H as f32) },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(6.0_f32),
+            bottom: length(0.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![rail]);
+
     let root = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![panel, monitor, unidades_col, flota_col, galeria]);
+    .children(vec![rail_col, panel, monitor, unidades_col, flota_col, galeria]);
 
     render_png(root, &out);
     eprintln!("diente_vivo_shot: {out} ({W}x{H})");
@@ -282,7 +330,7 @@ fn tile(label: &str, canvas: View<Msg>, theme: &llimphi_theme::Theme) -> View<Ms
 
 /// El canvas de una manifestación (no-reposo).
 fn manifest_view(m: Manifestacion, ctx: &WidgetCtx, theme: &llimphi_theme::Theme) -> View<Msg> {
-    let vivo = DienteVivo { manifest: m, cava_frame: &[], ctx, unidades: None, t: 0.55 };
+    let vivo = DienteVivo { manifest: m, cava_frame: &[], ctx, unidades: None, flota_remoto: None, t: 0.55 };
     diente_vivo_view(&vivo, SZ, theme).unwrap_or_else(|| View::new(Style::default()))
 }
 

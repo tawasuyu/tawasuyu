@@ -1205,6 +1205,7 @@ impl LayerApp {
                 cava_frame: &self.cava_frame,
                 ctx: &self.ctx,
                 unidades: self.unidades_now.as_ref(),
+                flota_remoto: self.flota_remoto.as_deref(),
                 t: self.diente_t0.elapsed().as_secs_f64(),
             };
             let extras = render::extras_vivos(

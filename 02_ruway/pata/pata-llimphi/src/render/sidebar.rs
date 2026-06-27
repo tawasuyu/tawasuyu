@@ -25,7 +25,11 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 
-use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_dock_rail::{
+    dock_rail_view, dock_rail_view_badged, BadgeKind, DockBadge, DockRailItem, DockRailPalette,
+    DockRailSide,
+};
+use sandokan_lifecycle::LifecycleState;
 use pata_host::HostedTooth;
 use llimphi_widget_navigator::{
     navigator_view, NavId, NavMode, NavNode, NavPalette, NavSpec,
@@ -82,9 +86,18 @@ fn rail_widget(
     // El `kind` del contenido de cada diente: si es un diente vivo, su icono es
     // el canvas del árbitro de atención en vez de un glifo fijo.
     let kinds: Vec<String> = surface.tabs.iter().map(|t| t.content.kind.clone()).collect();
-    dock_rail_view(
+    let kinds_badge = kinds.clone();
+    // En un sidebar a la derecha, los dientes se espejan (barra de acento a la
+    // derecha, abren hacia el centro).
+    let side = if surface.anchor == Anchor::Right {
+        DockRailSide::InnerRight
+    } else {
+        DockRailSide::InnerLeft
+    };
+    dock_rail_view_badged(
         &items,
         width,
+        side,
         &DockRailPalette::from_theme(theme),
         move |id, size, color| {
             let name = icons.get(id as usize).map(|s| s.as_str()).unwrap_or("");
@@ -114,6 +127,36 @@ fn rail_widget(
                 return super::unidades_vivo_view(vivo.unidades, vivo.t, size, theme);
             }
             tooth_icon(name, size, color)
+        },
+        // Badge ("bubble number") inteligente: nº de unidades falladas en el diente
+        // «Unidades» (rojo), nº de hosts no alcanzables en «Flota» (ámbar).
+        move |id| {
+            let kind = kinds_badge.get(id as usize).map(|s| s.as_str()).unwrap_or("");
+            if crate::es_unidades(kind) {
+                let n = vivo
+                    .unidades
+                    .map(|s| {
+                        s.units
+                            .iter()
+                            .filter(|u| {
+                                matches!(
+                                    u.state,
+                                    LifecycleState::Failed { .. } | LifecycleState::Killed
+                                )
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0);
+                return (n > 0).then(|| DockBadge::Count(n as u32, BadgeKind::Error));
+            }
+            if crate::es_flota(kind) {
+                let n = vivo
+                    .flota_remoto
+                    .map(|o| o.iter().filter(|h| !h.reachable).count())
+                    .unwrap_or(0);
+                return (n > 0).then(|| DockBadge::Count(n as u32, BadgeKind::Warning));
+            }
+            None
         },
         move |id| Msg::NavTabActivate(si, id as usize),
         // Mover un diente de un rail a otro: Fase futura (drop entre sidebars).

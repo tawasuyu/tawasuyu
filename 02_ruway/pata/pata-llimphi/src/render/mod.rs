@@ -356,6 +356,7 @@ pub fn root(model: &Model) -> View<Msg> {
                 cava_frame: &model.cava_frame,
                 ctx: &model.last_ctx,
                 unidades: model.unidades_now.as_ref(),
+                flota_remoto: model.flota_remoto.as_deref(),
                 t: model.diente_t,
             };
             superficies.push(sidebar_rail_view(
