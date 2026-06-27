@@ -494,6 +494,38 @@ mod refloor_tests {
     }
 
     #[tokio::test]
+    async fn readiness_dinamica_revive_al_aparcado() {
+        // El compositor arranca pero anuncia su piso DESPUÉS (cuando su socket
+        // ya escucha) vía capability dinámica — no estática. El cliente aparcado
+        // debe volverse re-floorable en cuanto se anuncia.
+        let mut g = EnteGraph::new(seed_con_spawn());
+        let seed_id = g.seed_id();
+
+        let mut client = EntityCard::new("cliente-gui");
+        client.requires = [piso()].into_iter().collect();
+        client.supervision = Supervision::Restart {
+            initial: Duration::from_millis(10),
+            max: Duration::from_secs(1),
+        };
+        g.authorize_and_spawn(client, seed_id).await.unwrap();
+        assert_eq!(g.parked.len(), 1);
+
+        // mirada vive pero todavía NO anunció el piso ⇒ nada re-floorea.
+        let mut compositor = EntityCard::new("mirada");
+        // (sin provides estáticos del piso)
+        let comp_id = compositor.id;
+        compositor.provides = [Capability::Journal].into_iter().collect();
+        g.authorize_and_spawn(compositor, seed_id).await.unwrap();
+        assert!(g.drain_refloorable().is_empty(), "aún no anunció readiness");
+
+        // mirada anuncia readiness (UpdateCapabilities) ⇒ el cliente revive.
+        g.register_dynamic_cap(comp_id, piso());
+        let ready = g.drain_refloorable();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].label, "cliente-gui");
+    }
+
+    #[tokio::test]
     async fn oneshot_sin_piso_no_se_aparca() {
         let mut g = EnteGraph::new(seed_con_spawn());
         let seed_id = g.seed_id();

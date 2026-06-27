@@ -755,6 +755,27 @@ async fn primordial_loop(
     }
 }
 
+/// Re-floor: drena los Entes aparcados que ya tienen piso (su capability volvió
+/// a tener proveedor) y los re-encola como `SpawnRequest` en orden topológico,
+/// por el canal (no reentrante; cada re-spawn vuelve a disparar el drenaje en
+/// cascada). Se llama tras los eventos que pueden AGREGAR proveedores: spawns y
+/// requests del bus (incluido `UpdateCapabilities`, la señal de readiness de un
+/// daemon). Barato cuando no hay nadie aparcado.
+async fn refloor(graph: &mut EnteGraph, tx: &mpsc::Sender<GraphEvent>) {
+    let seed = graph.seed_id();
+    for card in graph.drain_refloorable() {
+        let label = card.label.clone();
+        info!(%label, "re-floor: piso disponible — re-spawneando Ente aparcado");
+        if tx
+            .send(GraphEvent::SpawnRequest { card, requester: seed })
+            .await
+            .is_err()
+        {
+            warn!(%label, "re-floor: graph_tx cerrado");
+        }
+    }
+}
+
 /// Devuelve `true` si el bucle primordial debe terminar.
 async fn dispatch_graph_event(
     graph: &mut EnteGraph,
@@ -774,28 +795,19 @@ async fn dispatch_graph_event(
             if let Err(e) = graph.authorize_and_spawn(card, requester).await {
                 warn!(?e, "spawn request error");
             }
-            // Re-floor: si este spawn devolvió el piso (registró un proveedor que
-            // unidades aparcadas esperaban — p. ej. el compositor que reaparece),
-            // re-encolá esas unidades, en orden topológico, por el canal (no
-            // reentrante; cada re-spawn vuelve a disparar este drenaje en cascada).
-            let seed = graph.seed_id();
-            for card in graph.drain_refloorable() {
-                let label = card.label.clone();
-                info!(%label, "re-floor: el piso volvió — re-spawneando Ente aparcado");
-                if tx
-                    .send(GraphEvent::SpawnRequest { card, requester: seed })
-                    .await
-                    .is_err()
-                {
-                    warn!(%label, "re-floor: graph_tx cerrado");
-                }
-            }
+            // Si este spawn devolvió el piso (registró un proveedor que esperaban
+            // Entes aparcados — p. ej. el compositor que reaparece), re-erígelos.
+            refloor(graph, tx).await;
         }
         GraphEvent::BusRequest { peer, from, request, outbound, reply } => {
             if let Some(action) = bus_request_to_audit(&peer, &from, &request) {
                 brain.audit.write().await.append(action);
             }
             graph.on_bus_request(peer, from, request, outbound, reply).await;
+            // Un request del bus puede AGREGAR proveedores: `UpdateCapabilities`
+            // (un daemon anuncia su readiness — "ya escucho mi socket"), `RunCard`,
+            // `SpawnCardFromDisk`. Cada uno puede ser el piso que esperaba alguien.
+            refloor(graph, tx).await;
         }
         GraphEvent::BusResponse { seq, response } => {
             graph.on_bus_response(seq, response).await;
