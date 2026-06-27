@@ -376,6 +376,7 @@ members = [
     "02_ruway/mirada/mirada-compositor",
     "02_ruway/mirada/mirada-ctl",
     "02_ruway/mirada/mirada-filechooser",
+    "02_ruway/mirada/mirada-fondo",
     "02_ruway/mirada/mirada-procedural",
     "02_ruway/mirada/mirada-greeter",
     "02_ruway/mirada/mirada-launcher",
@@ -583,6 +584,7 @@ repository = "https://git.tawasuyu.net/tawasuyu/tawasuyu"
 # === Configuración declarativa (vocabulario de esquemas) ===
 allichay = { path = "shared/allichay" }
 marca = { path = "shared/marca" }
+mirada-fondo = { path = "02_ruway/mirada/mirada-fondo" }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
 # === Centro de eventos (notificaciones + capturas + clipboard + …) ===
