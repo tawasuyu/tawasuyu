@@ -24,7 +24,9 @@ use std::marker::PhantomData;
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -48,6 +50,10 @@ pub type BodyLink = Link<BodyEvent, BrainCommand>;
 pub struct Link<Out, In> {
     writer: UnixStream,
     incoming: Receiver<In>,
+    /// `true` mientras el hilo lector siga vivo; pasa a `false` cuando el otro
+    /// extremo cierra (EOF) o el socket falla. Permite al dueño detectar la
+    /// desconexión sin consumir el canal — clave para reconectar.
+    alive: Arc<AtomicBool>,
     _out: PhantomData<fn(Out)>,
 }
 
@@ -60,6 +66,8 @@ where
     pub fn from_stream(stream: UnixStream) -> io::Result<Self> {
         let reader = stream.try_clone()?;
         let (tx, rx) = mpsc::channel();
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_reader = alive.clone();
         thread::spawn(move || {
             let mut r = BufReader::new(reader);
             // Lee marcos hasta EOF limpio o error de socket.
@@ -68,8 +76,10 @@ where
                     break; // el dueño soltó el Link
                 }
             }
+            // EOF o error: el otro extremo se fue.
+            alive_reader.store(false, Ordering::Relaxed);
         });
-        Ok(Self { writer: stream, incoming: rx, _out: PhantomData })
+        Ok(Self { writer: stream, incoming: rx, alive, _out: PhantomData })
     }
 
     /// Conecta a un socket Unix en `path` (lado cliente).
@@ -88,6 +98,13 @@ where
     /// Envía un mensaje. Falla si el otro extremo cerró el canal.
     pub fn send(&mut self, msg: &Out) -> io::Result<()> {
         write_frame(&mut self.writer, msg)
+    }
+
+    /// `true` mientras el otro extremo siga conectado. Pasa a `false` cuando
+    /// cierra (EOF) o el socket falla — sin consumir mensajes pendientes, así el
+    /// dueño puede drenar lo que quedó y recién entonces reconectar.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
     }
 
     /// Recoge un mensaje si hay alguno pendiente, sin bloquear.
@@ -120,6 +137,54 @@ impl<Out, In> Drop for Link<Out, In> {
         // Cierra la conexión: el hilo lector propio recibe EOF y termina,
         // y el otro extremo ve EOF en su próxima lectura.
         let _ = self.writer.shutdown(Shutdown::Both);
+    }
+}
+
+/// El extremo servidor del Cuerpo que **acepta Cerebros sucesivos**: un listener
+/// Unix persistente que sigue vivo aunque el Cerebro conectado muera. Es la
+/// pieza que habilita reiniciar el Cerebro (a propósito o por crash) sin tirar
+/// el Cuerpo ni las conexiones Wayland de los clientes: el Cuerpo conserva este
+/// servidor, detecta la muerte del Cerebro ([`Link::is_alive`]) y re-acepta uno
+/// nuevo con [`LinkServer::try_accept`], re-sincronizando el estado.
+pub type BodyLinkServer = LinkServer<BodyEvent, BrainCommand>;
+
+/// Servidor que escucha en una ruta y produce un [`Link`] nuevo por cada
+/// conexión aceptada. A diferencia de [`Link::listen`] (de un solo tiro), el
+/// socket de escucha **persiste** entre conexiones.
+pub struct LinkServer<Out, In> {
+    listener: UnixListener,
+    _m: PhantomData<fn(Out, In)>,
+}
+
+impl<Out, In> LinkServer<Out, In>
+where
+    Out: Serialize,
+    In: DeserializeOwned + Send + 'static,
+{
+    /// Vincula el listener a `path` (borrando un socket viejo si quedó) y lo pone
+    /// en modo no bloqueante, para que [`try_accept`](Self::try_accept) integre
+    /// con un bucle de eventos sin colgarse.
+    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        let path = path.as_ref();
+        // Un socket huérfano de una corrida anterior impediría el bind.
+        let _ = std::fs::remove_file(path);
+        let listener = UnixListener::bind(path)?;
+        listener.set_nonblocking(true)?;
+        Ok(Self { listener, _m: PhantomData })
+    }
+
+    /// Acepta una conexión pendiente sin bloquear. `Ok(None)` = nadie esperando.
+    /// El [`Link`] devuelto usa lectura bloqueante en su hilo propio (el socket
+    /// aceptado se pone en modo bloqueante).
+    pub fn try_accept(&self) -> io::Result<Option<Link<Out, In>>> {
+        match self.listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false)?;
+                Ok(Some(Link::from_stream(stream)?))
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -225,6 +290,79 @@ mod tests {
             }
         }
         assert!(errored, "se esperaba un error de tubería rota");
+    }
+
+    #[test]
+    fn is_alive_se_cae_cuando_el_otro_extremo_muere() {
+        let (brain, body) = connected_pair().unwrap();
+        assert!(brain.is_alive());
+        drop(body);
+        // El hilo lector del Cerebro ve EOF y marca el Link como muerto.
+        let mut cayo = false;
+        for _ in 0..200 {
+            if !brain.is_alive() {
+                cayo = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(cayo, "is_alive debía caer a false al morir el otro extremo");
+    }
+
+    #[test]
+    fn el_servidor_acepta_cerebros_sucesivos() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mirada-link-reconnect-{}.sock", std::process::id()));
+        let server: BodyLinkServer = LinkServer::bind(&path).unwrap();
+
+        // Primer Cerebro: conecta, habla, se va.
+        {
+            let mut brain: BrainLink = Link::connect(&path).unwrap();
+            let mut body = aceptar(&server);
+            brain.send(&BrainCommand::Shutdown).unwrap();
+            assert_eq!(esperar(&mut body), Some(BrainCommand::Shutdown));
+            drop(brain);
+            // El Cuerpo nota que el Cerebro murió.
+            let mut murio = false;
+            for _ in 0..200 {
+                if !body.is_alive() {
+                    murio = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            assert!(murio);
+        }
+
+        // Segundo Cerebro: el MISMO servidor lo acepta — el listener sobrevivió.
+        {
+            let mut brain: BrainLink = Link::connect(&path).unwrap();
+            let mut body = aceptar(&server);
+            brain.send(&BrainCommand::Lock).unwrap();
+            assert_eq!(esperar(&mut body), Some(BrainCommand::Lock));
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn aceptar(server: &BodyLinkServer) -> BodyLink {
+        for _ in 0..200 {
+            if let Some(link) = server.try_accept().unwrap() {
+                return link;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        panic!("el servidor no aceptó la conexión");
+    }
+
+    fn esperar(body: &mut BodyLink) -> Option<BrainCommand> {
+        for _ in 0..200 {
+            if let Some(cmd) = body.try_recv() {
+                return Some(cmd);
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        None
     }
 
     #[test]
