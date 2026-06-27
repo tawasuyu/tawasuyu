@@ -524,6 +524,7 @@ members = [
     "03_ukupacha/wawa-explorer/wawa-explorer-llimphi",
     "shared/allichay",
     "shared/app-bus",
+    "shared/atipay",
     "shared/bitacora",
     "shared/marca",
     "shared/auth/auth-core",

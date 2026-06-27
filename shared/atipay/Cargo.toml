@@ -1,0 +1,21 @@
+[package]
+name = "atipay"
+description = "Catálogo de capacidades invocables de la suite: un registro determinista de lo que el sistema *puede hacer* (mirada, sandokan, shuma, sistema), que la IA consulta para descubrir acciones y traducir una intención en un plan ejecutable. Sin ejecutar nada: produce planes y definiciones tool-use."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+# Las fuentes concretas son opt-in para que el núcleo del catálogo no arrastre
+# dependencias de cada superficie. Por ahora se autoría el vocabulario como
+# datos estáticos (la fuente de verdad sigue siendo cada superficie); una
+# rebanada futura puede derivarlo del crate de origen tras un feature.
+default = ["mirada", "sandokan"]
+mirada = []
+sandokan = []
