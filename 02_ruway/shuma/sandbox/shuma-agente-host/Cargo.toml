@@ -1,0 +1,14 @@
+[package]
+name = "shuma-agente-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — el lado host del núcleo shuma-agente: corre un turno de conversación con pluma-llm (resuelve backend del agente o fallback global, arma el ChatRequest, interpreta la salida en bloques). Lo de red/tokio que el núcleo agnóstico no toca."
+
+[dependencies]
+shuma-agente = { path = "../shuma-agente" }
+pluma-llm = { path = "../../../../00_unanchay/pluma/pluma-llm" }
+wawa-config = { path = "../../../../shared/wawa-config" }
+tokio = { workspace = true }
