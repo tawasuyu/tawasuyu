@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rimay_voz_core::{Locutor, Transcriptor, VozError};
+use rimay_voz_daemon::DaemonClient;
 use rimay_voz_mock::{LocutorMock, TranscriptorMock};
 use rimay_voz_nube::{LocutorNube, TranscriptorNube};
 
@@ -87,15 +88,24 @@ impl VozConfig {
         }
     }
 
-    /// Construye el transcriptor (STT) según [`Self::stt`]. La rama **nube** ya
-    /// está aterrizada ([`rimay_voz_nube`]); la **local** (daemon) todavía erra
-    /// explícito hasta que `rimay-voz-daemon` llegue.
+    /// Ruta del socket del `voz-daemon`: el override de [`Self::socket`] o la
+    /// convención de la suite ([`crate::socket_por_defecto`]).
+    fn ruta_socket(&self) -> PathBuf {
+        self.socket
+            .clone()
+            .unwrap_or_else(crate::socket_por_defecto)
+    }
+
+    /// Construye el transcriptor (STT) según [`Self::stt`]. Ambas ramas reales
+    /// están aterrizadas: **local** → [`rimay_voz_daemon::DaemonClient`] (el
+    /// brazo local), **nube** → [`rimay_voz_nube`] (HTTP).
     pub async fn construir_stt(&self) -> Result<Arc<dyn Transcriptor>, VozError> {
         match &self.stt {
             Backend::Mock => Ok(Arc::new(TranscriptorMock::default())),
-            Backend::Local => Err(VozError::Stt(
-                "STT local: rimay-voz-daemon todavía no está en disco".into(),
-            )),
+            Backend::Local => {
+                let cli = DaemonClient::connect(self.ruta_socket()).await?;
+                Ok(Arc::new(cli))
+            }
             Backend::Nube { proveedor, modelo } => match proveedor.as_str() {
                 "openai" => {
                     let mut b = TranscriptorNube::openai_from_env()?;
@@ -123,9 +133,10 @@ impl VozConfig {
     pub async fn construir_tts(&self) -> Result<Arc<dyn Locutor>, VozError> {
         match &self.tts {
             Backend::Mock => Ok(Arc::new(LocutorMock)),
-            Backend::Local => Err(VozError::Tts(
-                "TTS local: rimay-voz-daemon todavía no está en disco".into(),
-            )),
+            Backend::Local => {
+                let cli = DaemonClient::connect(self.ruta_socket()).await?;
+                Ok(Arc::new(cli))
+            }
             Backend::Nube { proveedor, modelo } => match proveedor.as_str() {
                 "openai" => {
                     let mut b = LocutorNube::openai_from_env()?;
@@ -174,14 +185,22 @@ mod pruebas {
     }
 
     #[tokio::test]
-    async fn mock_construye_y_local_aun_erra() {
+    async fn mock_construye_siempre() {
         let cfg = VozConfig::default();
         assert!(cfg.construir_stt().await.is_ok());
         assert!(cfg.construir_tts().await.is_ok());
+    }
 
-        let local = VozConfig { stt: Backend::Local, tts: Backend::Local, socket: None };
+    #[tokio::test]
+    async fn local_sin_daemon_erra_pero_o_mock_no() {
+        // Socket inexistente → DaemonClient::connect falla tras el reintento.
+        let local = VozConfig {
+            stt: Backend::Local,
+            tts: Backend::Local,
+            socket: Some(std::env::temp_dir().join("voz-no-existe-jamas.sock")),
+        };
         assert!(local.construir_stt().await.is_err());
-        // pero el _o_mock nunca falla
+        // pero el _o_mock nunca falla: cae a mock cuando el daemon no está.
         let _ = local.construir_stt_o_mock().await;
     }
 

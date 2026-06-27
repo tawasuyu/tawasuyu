@@ -11,6 +11,7 @@ description = "rimay-voz — fachada one-line para consumir voz (STT/TTS) en la 
 rimay-voz-core = { path = "../rimay-voz-core" }
 rimay-voz-mock = { path = "../rimay-voz-mock" }
 rimay-voz-nube = { path = "../rimay-voz-nube" }
+rimay-voz-daemon = { path = "../rimay-voz-daemon" }
 
 [dev-dependencies]
 tokio = { workspace = true }

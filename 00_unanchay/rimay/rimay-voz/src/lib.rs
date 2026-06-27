@@ -44,6 +44,7 @@ pub use rimay_voz_core::{
     EstadoVoz, Evento, Intencion, Locutor, Maquina, Politica, Rasgos, Reaccion, TipoBloque,
     Transcripcion, Transcriptor, VozError,
 };
+pub use rimay_voz_daemon::{Daemon, DaemonClient};
 pub use rimay_voz_mock::{LocutorMock, TranscriptorMock};
 pub use rimay_voz_nube::{LocutorNube, TranscriptorNube};
 

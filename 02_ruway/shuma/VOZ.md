@@ -110,9 +110,22 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
   cualquier proxy OpenAI-compatible. `VozConfig` cablea la rama `Nube{openai}`;
   sin credencial erra explícito (ningún constructor hace red). Certificado por
   codec WAV↔PCM y manejo de error, sin tocar red (11 tests entre crate+fachada).
-- **`rimay-voz-{whisper,piper,…}` + `rimay-voz-daemon` (falta):** backends
-  **locales** reales + daemon que carga el modelo una vez por socket (copiar
-  `rimay-verbo-daemon`).
+- **`rimay-voz-daemon` + `rimay-voz-daemon-bin` (hecho, brazo local):** daemon
+  que carga el par STT+TTS una vez y lo sirve por socket Unix; el `DaemonClient`
+  lo consume desde otro proceso cumpliendo **ambos** traits (`Transcriptor` +
+  `Locutor`), indistinguible de un backend local. Calcado de
+  `rimay-verbo-daemon`: wire postcard con prefijo de largo, transporte
+  Unix-socket / TCP-loopback por `cfg`, reintento corto ante transitorios,
+  `serve_with_shutdown`. El daemon sirve dos traits a la vez (un proceso puede
+  cargar whisper + piper, o mock en el lado sin backend real). `VozConfig` cablea
+  `Backend::Local` → `DaemonClient::connect(socket)` (override `socket` o
+  `voz.sock` por convención); sin daemon, `_o_mock` cae a mock. Binario
+  `voz-daemon` (`--socket/--stt/--tts`, hoy sólo mock). Certificado por
+  round-trip sobre socket Unix real (10 tests: STT/TTS/handshake/2-clientes/
+  ping/shutdown/daemon-ausente).
+- **`rimay-voz-{whisper,piper,…}` (falta):** backends **locales** reales que
+  reemplazan el mock dentro del daemon — entran como variantes del `--stt`/
+  `--tts` del binario, sin tocar protocolo ni cliente.
 - **host de shuma (falta, en `shuma-agente-host`):** corre cpal + VAD; consume
   `rimay-voz` y dispatcha `Msg` al update Elm. Lo único «de shuma»: mapear
   `shuma_agente::BloqueSalida` → `rimay_voz::TipoBloque`.

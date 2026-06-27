@@ -111,6 +111,8 @@ members = [
     "00_unanchay/rimay/rimay-voz-core",
     "00_unanchay/rimay/rimay-voz-mock",
     "00_unanchay/rimay/rimay-voz-nube",
+    "00_unanchay/rimay/rimay-voz-daemon",
+    "00_unanchay/rimay/rimay-voz-daemon-bin",
     "00_unanchay/puriy/puriy-app",
     "00_unanchay/puriy/puriy-core",
     "00_unanchay/puriy/puriy-engine",

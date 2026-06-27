@@ -1,0 +1,20 @@
+[package]
+name = "rimay-voz-daemon-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "voz — binario del daemon de voz. Levanta un par STT+TTS en RAM y lo sirve a N procesos por socket Unix. Hoy: backends mock deterministas. Mañana: backends reales (whisper local, piper local)."
+
+[[bin]]
+name = "voz-daemon"
+path = "src/main.rs"
+
+[dependencies]
+rimay-voz-core = { path = "../rimay-voz-core" }
+rimay-voz-daemon = { path = "../rimay-voz-daemon" }
+rimay-voz-mock = { path = "../rimay-voz-mock" }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
