@@ -947,9 +947,37 @@ impl App {
                 Some(p) if !p.is_empty() => WallpaperSpec::Video(p.to_string()),
                 _ => WallpaperSpec::Default,
             },
+            // Lottie/rive: el asset es un único archivo global (no daemon por
+            // salida) → se toma de `wallpaper_path`. El render reproduce su cache
+            // bakeada (fondo-bake). Sin ruta cae al default.
+            "lottie" if !c.wallpaper_path.is_empty() => {
+                WallpaperSpec::Fondo(mirada_fondo::FondoSpec::Lottie {
+                    path: c.wallpaper_path.clone(),
+                })
+            }
+            "rive" if !c.wallpaper_path.is_empty() => {
+                WallpaperSpec::Fondo(mirada_fondo::FondoSpec::Rive {
+                    path: c.wallpaper_path.clone(),
+                })
+            }
+            "lottie" | "rive" => WallpaperSpec::Default,
             // auto / local / directory / remote → imagen por la ruta resuelta.
             _ => img_or_default(fit),
         }
+    }
+
+    /// `true` si el wallpaper es **animado** (regenera frames): la chakana viva
+    /// por defecto o un Lottie/rive bakeado. Lo usa el late de `tick` para marcar
+    /// daño a ~20 fps sólo cuando hace falta.
+    pub(crate) fn config_wallpaper_live(&self) -> bool {
+        if self.config_animated_default() {
+            return true;
+        }
+        let Brain::Embedded(d) = &self.brain else {
+            return false;
+        };
+        let c = d.config();
+        matches!(c.wallpaper_source.as_str(), "lottie" | "rive") && !c.wallpaper_path.is_empty()
     }
 
     /// Si el fondo de la salida `name` es **video**, devuelve `(ruta, fps)` para

@@ -1958,7 +1958,7 @@ impl DrmState {
     /// ~20 fps para que `emit_wallpaper` regenere el frame. Pausado en cualquier
     /// otro caso → costo cero. Corre en `tick`, antes de `render`.
     pub(super) fn tick_animated_default(&mut self) {
-        if !self.active || self.dpms_off || !self.app.config_animated_default() {
+        if !self.active || self.dpms_off || !self.app.config_wallpaper_live() {
             return;
         }
         if self.app.windows.iter().any(|w| w.fullscreen && w.visible) {
@@ -2032,6 +2032,34 @@ impl DrmState {
                     })
                     .flatten();
             }
+        } else if let WallpaperSpec::Fondo(fondo) = &spec {
+            // Lottie/rive bakeado: subimos el frame del instante actual (tamaño
+            // nativo del bake) y la GPU lo escala (cover). Throttle por
+            // `anim_default_dirty` (igual que la chakana viva). Sin cache —nadie
+            // corrió fondo-bake— caemos a la chakana animada, no a un fondo muerto.
+            if self.anim_default_dirty || self.outputs[idx].wallpaper.is_none() {
+                let t = self.start.elapsed().as_secs_f32();
+                let baked = mirada_fondo::cache::FrameCache::open_for(fondo).ok().and_then(|c| {
+                    let (fw, fh) = (c.meta().width as i32, c.meta().height as i32);
+                    c.frame_bgra_at(t).ok().map(|b| (b, fw, fh))
+                });
+                let (bytes, fw, fh) = match baked {
+                    Some(v) => v,
+                    None => {
+                        let (iw, ih) = capped_anim_size(size.0, size.1);
+                        (marca::animated_frame(t, iw, ih), iw as i32, ih as i32)
+                    }
+                };
+                if let Some(buf) = bgra_membuffer(&bytes, fw, fh) {
+                    self.outputs[idx].wallpaper = Some((buf, (fw, fh)));
+                }
+                self.outputs[idx].wallpaper_blur = (glass_blur > 0)
+                    .then(|| {
+                        let bl = box_blur_bgra(&bytes, fw, fh, glass_blur);
+                        bgra_membuffer(&bl, fw, fh).map(|m| (m, (fw, fh)))
+                    })
+                    .flatten();
+            }
         } else if stale {
             // Despacho por la FUENTE elegida (color/gradiente/procedural/imagen).
             let bytes: Option<Vec<u8>> = match spec {
@@ -2043,8 +2071,9 @@ impl DrmState {
                 WallpaperSpec::Procedural(pat, pal) => {
                     Some(make_procedural_wallpaper(pat, &pal, size.0, size.1))
                 }
-                // Inalcanzable: la rama de arriba ya cubrió el video.
+                // Inalcanzables: las ramas de arriba ya cubrieron video y fondo.
                 WallpaperSpec::Video(_) => None,
+                WallpaperSpec::Fondo(_) => None,
                 // Sin imagen configurada: el wallpaper de marca (chakana + 4
                 // cuadrantes) es el fondo por defecto; si no decodifica, gradiente.
                 WallpaperSpec::Default => Some(

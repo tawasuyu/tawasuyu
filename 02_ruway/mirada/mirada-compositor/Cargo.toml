@@ -39,6 +39,9 @@ cgmath = "0.18"
 # Identidad visual central: el wallpaper de marca es el fondo por defecto cuando
 # el usuario no configura ninguno (embebido; override por disco vía marca).
 marca = { workspace = true }
+# Lectura de la cache de frames bakeados (Lottie/rive) para el wallpaper. Sólo
+# el núcleo, sin vello: el compositor blitea/sube frames, no rasteriza.
+mirada-fondo = { workspace = true, default-features = false }
 # Wallpaper en VIDEO: foreign-av decodifica el archivo (mp4/webm/gif) a frames
 # RGBA vía ffmpeg, y media-core trae los traits FrameSource/Seekable que el
 # worker del fondo consume (tick/step_frame/seek_to). Sólo se usa con

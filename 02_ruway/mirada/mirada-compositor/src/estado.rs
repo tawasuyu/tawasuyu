@@ -275,6 +275,11 @@ pub(crate) enum WallpaperSpec {
     /// el worker [`crate::drm_backend`] y el render lo compone por salida. La
     /// cadencia/loop viven en el worker; acá sólo viaja la ruta.
     Video(String),
+    /// **Lottie/rive** (`wallpaper_source = "lottie"|"rive"`) reproducido desde
+    /// la cache de frames *bakeada* por `fondo-bake`: el render sube el frame del
+    /// instante actual (tamaño nativo del bake) y la GPU lo escala. Sin cache cae
+    /// a la chakana animada. El compositor no rasteriza vello en caliente.
+    Fondo(mirada_fondo::FondoSpec),
     /// Gradiente sobrio por defecto (auto sin imagen).
     Default,
 }
