@@ -32,6 +32,7 @@ pub mod render;
 pub mod sampler;
 pub mod shuma;
 pub mod shuma_app;
+pub mod flota_discover;
 pub mod toplevel;
 pub mod tray;
 pub mod unidades;
@@ -1073,6 +1074,11 @@ pub struct Model {
     /// Inventario de flota (matilda), read-only, para el diente «Flota». `None`
     /// si no hay inventario o la config no declara el diente.
     pub flota: Option<matilda_core::Inventory>,
+    /// Discover remoto de la flota (SSH read-only) en su hilo. `None` si no hay
+    /// inventario con hosts.
+    pub flota_discover: Option<flota_discover::FlotaDiscoverHandle>,
+    /// Último estado real observado por host (drift vs lo declarado).
+    pub flota_remoto: Option<Vec<flota_discover::HostObs>>,
     /// Feed de unidades del plano de control (sandokan) en su hilo. `None` si la
     /// config no declara un diente «Unidades».
     pub unidades: Option<unidades::UnidadesHandle>,
@@ -1383,6 +1389,18 @@ impl App for PataApp {
         .flatten();
         let cava = config_tiene_widget(&cfg, "cava").then(|| cava::CavaHandle::spawn(cava_bars(&cfg)));
         let flota = config_tiene_flota(&cfg).then(load_flota).flatten();
+        let flota_discover = flota.as_ref().and_then(|inv| {
+            let hosts: Vec<flota_discover::HostConn> = inv
+                .hosts()
+                .map(|h| flota_discover::HostConn {
+                    name: h.name.clone(),
+                    address: h.address.clone(),
+                    user: h.ssh_user().to_string(),
+                    port: h.ssh_port(),
+                })
+                .collect();
+            (!hosts.is_empty()).then(|| flota_discover::FlotaDiscoverHandle::spawn(hosts))
+        });
         let unidades = config_tiene_unidades(&cfg).then(unidades::UnidadesHandle::spawn);
 
         let mut theme = Theme::dark();
@@ -1449,6 +1467,8 @@ impl App for PataApp {
             cpu_temp: None,
             diente_manifest: pata_core::atencion::Manifestacion::Reposo,
             flota,
+            flota_discover,
+            flota_remoto: None,
             unidades,
             unidades_now: None,
             nav: NavState::default(),
@@ -1577,6 +1597,11 @@ impl App for PataApp {
                 if let Some(h) = &model.unidades {
                     if let Some(s) = h.latest() {
                         model.unidades_now = Some(s);
+                    }
+                }
+                if let Some(h) = &model.flota_discover {
+                    if let Some(v) = h.latest() {
+                        model.flota_remoto = Some(v);
                     }
                 }
                 // Aviso de batería baja: lee /sys cada tick y avisa al cruzar

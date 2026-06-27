@@ -267,7 +267,7 @@ fn panel_inner(
     }
     // Flota (matilda): inventario read-only de hosts/contenedores/vhosts.
     if crate::es_flota(kind) {
-        return super::flota_view(centro.flota, panel_h, theme);
+        return super::flota_view(centro.flota, centro.flota_remoto, panel_h, theme);
     }
     // Unidades (sandokan): estado + telemetría de las unidades del plano de control.
     if crate::es_unidades(kind) {

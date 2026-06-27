@@ -292,6 +292,10 @@ pub(super) struct LayerApp {
     pub(super) diente_manifest: pata_core::atencion::Manifestacion,
     /// Inventario de flota (matilda), read-only, para el diente «Flota».
     pub(super) flota: Option<matilda_core::Inventory>,
+    /// Discover remoto de la flota (SSH read-only) en su hilo.
+    pub(super) flota_discover: Option<crate::flota_discover::FlotaDiscoverHandle>,
+    /// Último estado real observado por host.
+    pub(super) flota_remoto: Option<Vec<crate::flota_discover::HostObs>>,
     /// Feed de unidades del plano de control (sandokan).
     pub(super) unidades: Option<crate::unidades::UnidadesHandle>,
     /// Último snapshot de unidades.
@@ -509,6 +513,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let cava = crate::config_tiene_widget(&cfg, "cava")
         .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
     let flota = crate::config_tiene_flota(&cfg).then(crate::load_flota).flatten();
+    let flota_discover = flota.as_ref().and_then(|inv| {
+        let hosts: Vec<crate::flota_discover::HostConn> = inv
+            .hosts()
+            .map(|h| crate::flota_discover::HostConn {
+                name: h.name.clone(),
+                address: h.address.clone(),
+                user: h.ssh_user().to_string(),
+                port: h.ssh_port(),
+            })
+            .collect();
+        (!hosts.is_empty()).then(|| crate::flota_discover::FlotaDiscoverHandle::spawn(hosts))
+    });
     let unidades = crate::config_tiene_unidades(&cfg).then(crate::unidades::UnidadesHandle::spawn);
 
     let nav_rx = crate::config_tiene_navigator(&cfg).then(|| {
@@ -635,6 +651,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         cpu_temp: None,
         diente_manifest: pata_core::atencion::Manifestacion::Reposo,
         flota,
+        flota_discover,
+        flota_remoto: None,
         unidades,
         unidades_now: None,
         theme,

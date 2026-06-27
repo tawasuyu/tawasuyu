@@ -14,14 +14,20 @@ use llimphi_ui::View;
 use matilda_core::{Inventory, Upstream};
 
 use super::panels::panel_box_flow;
+use crate::flota_discover::HostObs;
 use crate::Msg;
 
 /// Tope de pasos de plan a mostrar (el resto se resume con un "…").
 const MAX_PASOS: usize = 8;
 
-/// El panel de la flota, de alto completo. Lista hosts / contenedores / vhosts del
-/// inventario, o un aviso si no hay inventario cargado.
-pub fn flota_view(inv: Option<&Inventory>, panel_h: f32, theme: &Theme) -> View<Msg> {
+/// El panel de la flota: inventario declarado (hosts/contenedores/vhosts) + plan
+/// de despliegue (preview) + estado real observado por host (discover SSH).
+pub fn flota_view(
+    inv: Option<&Inventory>,
+    remoto: Option<&[HostObs]>,
+    panel_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
     let titulo = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -81,6 +87,12 @@ pub fn flota_view(inv: Option<&Inventory>, panel_h: f32, theme: &Theme) -> View<
             // toca SSH — aplicar en vivo es del CLI matilda, deliberado.
             if let Some(p) = plan_section(inv, theme) {
                 hijos.push(p);
+            }
+            // Estado real observado por host (discover SSH read-only).
+            if let Some(obs) = remoto {
+                for host in obs {
+                    hijos.push(estado_real_section(host, theme));
+                }
             }
         }
         _ => {
@@ -148,6 +160,26 @@ fn plan_section(inv: &Inventory, theme: &Theme) -> Option<View<Msg>> {
         filas.push(encabezado(&format!("… +{} pasos más", total - MAX_PASOS), theme));
     }
     Some(panel_box_flow(filas, theme))
+}
+
+/// La sección «Estado real · {host}»: lo que el discover SSH observó en vivo
+/// (contenedores con su status). Si el host no fue alcanzable, lo dice.
+fn estado_real_section(host: &HostObs, theme: &Theme) -> View<Msg> {
+    let mut filas = vec![encabezado(&format!("Estado real · {}", host.name), theme)];
+    if !host.reachable {
+        filas.push(fila("(no alcanzable)", "SSH", theme));
+        return panel_box_flow(filas, theme);
+    }
+    if host.containers.is_empty() && host.vhosts.is_empty() {
+        filas.push(fila("(sin contenedores)", "", theme));
+    }
+    for c in &host.containers {
+        // `status` de docker (p.ej. "Up 3 hours" / "Exited (0)") — verde si Up.
+        let corriendo = c.status.starts_with("Up");
+        let marca = if corriendo { "● " } else { "○ " };
+        filas.push(fila(&format!("{marca}{}", c.name), &c.status, theme));
+    }
+    panel_box_flow(filas, theme)
 }
 
 /// Encabezado tenue de una sección.

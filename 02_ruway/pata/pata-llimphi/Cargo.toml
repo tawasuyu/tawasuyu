@@ -25,6 +25,11 @@ pata-config = { path = "../pata-config" }
 matilda-core = { path = "../../shuma/baremetal/matilda-core" }
 matilda-plan = { path = "../../shuma/baremetal/matilda-plan" }
 matilda-apply = { path = "../../shuma/baremetal/matilda-apply" }
+# Discover REMOTO read-only: inspecciona un host por SSH (docker ps / ls nginx) y
+# parsea su estado real para el «drift» en el panel Flota. matilda-linker trae el
+# enlace SSH (russh); sólo se usan comandos de LECTURA (no apply en vivo).
+matilda-discover = { path = "../../shuma/baremetal/matilda-discover" }
+matilda-linker = { path = "../../shuma/baremetal/matilda-linker" }
 # Unidades del plano de control (sandokan): el diente «Unidades» lee el estado +
 # telemetría de las unidades vivas vía arje-bus (`$ENTE_BUS_SOCK`), read-only.
 sandokan-arje-engine = { path = "../../../03_ukupacha/sandokan/sandokan-arje-engine" }

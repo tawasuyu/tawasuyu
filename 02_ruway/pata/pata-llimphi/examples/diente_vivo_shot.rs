@@ -28,6 +28,8 @@ use pata_llimphi::bluetooth::{BtDevice, BtState};
 use pata_llimphi::mpris::MediaState;
 use pata_llimphi::network::{NetState, NetStatus, WifiAp};
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
+use matilda_discover::{ContainerStatus, RunState};
+use pata_llimphi::flota_discover::HostObs;
 use pata_llimphi::render::{
     control_center_view, diente_vivo_view, flota_view, monitor_vivo_view, paint_reposo_halo,
     sistema_monitor_view, unidades_view, unidades_vivo_view, CentroDatos, ControlExtras, DienteVivo,
@@ -106,6 +108,32 @@ fn main() {
     inv.add_container(Container::new("pg", "postgres:16").with_restart(RestartPolicy::Always));
     inv.add_vhost(VHost::to_container("jlsoltech.com", "web", 80).with_tls());
 
+    // Estado real observado (discover SSH) de muestra.
+    let cs = |name: &str, state: RunState, status: &str| ContainerStatus {
+        name: name.to_string(),
+        image: String::new(),
+        state,
+        status: status.to_string(),
+        ports: String::new(),
+    };
+    let flota_remoto = vec![
+        HostObs {
+            name: "edge-1".to_string(),
+            reachable: true,
+            containers: vec![
+                cs("web", RunState::Running, "Up 3 hours"),
+                cs("api", RunState::Exited, "Exited (1) 2 min ago"),
+            ],
+            vhosts: vec!["jlsoltech.com".to_string()],
+        },
+        HostObs {
+            name: "db-1".to_string(),
+            reachable: false,
+            containers: vec![],
+            vhosts: vec![],
+        },
+    ];
+
     // Snapshot de unidades de muestra (sandokan).
     let tf = |mib: u64, cpu: f64| TelemetryFrame {
         card_id: ulid::Ulid::nil(),
@@ -140,6 +168,7 @@ fn main() {
         net_password: None,
         bt: Some(&bt),
         flota: Some(&inv),
+        flota_remoto: Some(&flota_remoto),
         unidades: Some(&unidades),
     };
     let panel = View::new(Style {
@@ -171,7 +200,7 @@ fn main() {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![flota_view(Some(&inv), H as f32, &theme)]);
+    .children(vec![flota_view(Some(&inv), Some(&flota_remoto), H as f32, &theme)]);
 
     // ---- Manifestaciones del diente (derecha) ----
     let tiles = vec![

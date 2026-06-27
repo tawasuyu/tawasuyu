@@ -409,6 +409,7 @@ pub fn root(model: &Model) -> View<Msg> {
                             .map(|(s, p)| (s.as_str(), p.as_str())),
                         bt: model.bluetooth_now.as_ref(),
                         flota: model.flota.as_ref(),
+                        flota_remoto: model.flota_remoto.as_deref(),
                         unidades: model.unidades_now.as_ref(),
                     };
                     superficies.push(nav_panel_view(

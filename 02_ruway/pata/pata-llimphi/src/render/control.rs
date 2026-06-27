@@ -296,6 +296,8 @@ pub struct CentroDatos<'a> {
     pub bt: Option<&'a crate::bluetooth::BtState>,
     /// Inventario de flota (matilda) para el diente «Flota».
     pub flota: Option<&'a matilda_core::Inventory>,
+    /// Estado real observado de la flota por host (discover SSH read-only).
+    pub flota_remoto: Option<&'a [crate::flota_discover::HostObs]>,
     /// Snapshot de unidades (sandokan) para el diente «Unidades».
     pub unidades: Option<&'a sandokan_monitor_core::MonitorSnapshot>,
 }

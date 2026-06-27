@@ -596,6 +596,21 @@ pub fn discover_runtime() -> RuntimeState {
     RuntimeState { containers, services, vhosts }
 }
 
+/// Observa el estado **runtime** de un servidor **remoto** vía un `exec`
+/// transport-agnóstico (típicamente SSH): `docker ps -a` + los sitios de nginx.
+/// **Read-only**: sólo corre comandos de lectura. El caller provee `exec(cmd) ->
+/// Option<stdout>` (None si el comando falla / no hay conexión). No depende de
+/// SSH ni de ningún transporte: el enlace lo pone quien llama (p.ej. matilda-linker).
+pub fn discover_remote(exec: impl Fn(&str) -> Option<String>) -> RuntimeState {
+    let containers = exec(&format!("docker ps -a --format '{DOCKER_PS_FORMAT}'"))
+        .map(|t| parse_docker_ps(&t))
+        .unwrap_or_default();
+    let vhosts = exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null")
+        .map(|t| parse_nginx_sites(&t))
+        .unwrap_or_default();
+    RuntimeState { containers, services: Vec::new(), vhosts }
+}
+
 /// Observa los servicios systemd **operativamente interesantes**: los que
 /// están corriendo o fallaron (no las cientos de unidades inactivas). Es
 /// la base del monitoreo de servicios. Vacío si no hay systemctl.
