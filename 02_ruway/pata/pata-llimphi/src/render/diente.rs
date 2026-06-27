@@ -26,6 +26,8 @@ pub struct DienteVivo<'a> {
     pub cava_frame: &'a [f32],
     /// Snapshot del sistema (CPU/cores/RAM) — alimenta el diente monitor.
     pub ctx: &'a pata_core::widget::WidgetCtx,
+    /// Snapshot de unidades (sandokan) — alimenta el diente «Unidades».
+    pub unidades: Option<&'a sandokan_monitor_core::MonitorSnapshot>,
     /// Reloj monotónico (s) para las animaciones.
     pub t: f64,
 }
@@ -272,7 +274,7 @@ mod tests {
     fn reposo_es_none_el_resto_some() {
         let theme = Theme::dark();
         let ctx = pata_core::widget::WidgetCtx::default();
-        let vivo = |m| DienteVivo { manifest: m, cava_frame: &[], ctx: &ctx, t: 0.0 };
+        let vivo = |m| DienteVivo { manifest: m, cava_frame: &[], ctx: &ctx, unidades: None, t: 0.0 };
         assert!(diente_vivo_view(&vivo(Manifestacion::Reposo), 20.0, &theme).is_none());
         let activos = [
             Manifestacion::Volumen { frac: 0.5, muted: false },

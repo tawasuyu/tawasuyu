@@ -923,7 +923,9 @@ impl LayerApp {
                 .map(|s| {
                     s.kind == SurfaceKind::Sidebar
                         && s.tabs.iter().any(|t| {
-                            crate::es_diente_vivo(&t.content.kind) || crate::es_monitor(&t.content.kind)
+                            crate::es_diente_vivo(&t.content.kind)
+                                || crate::es_monitor(&t.content.kind)
+                                || crate::es_unidades(&t.content.kind)
                         })
                 })
                 .unwrap_or(false);
@@ -1197,6 +1199,7 @@ impl LayerApp {
                 manifest: self.diente_manifest,
                 cava_frame: &self.cava_frame,
                 ctx: &self.ctx,
+                unidades: self.unidades_now.as_ref(),
                 t: self.diente_t0.elapsed().as_secs_f64(),
             };
             let extras = render::extras_vivos(

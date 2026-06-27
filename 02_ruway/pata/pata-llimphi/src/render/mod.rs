@@ -70,7 +70,7 @@ pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use diente::{diente_vivo_view, paint_reposo_halo, DienteVivo};
 pub use flota::flota_view;
 pub use monitor::{monitor_vivo_view, sistema_monitor_view};
-pub use unidades::unidades_view;
+pub use unidades::{unidades_view, unidades_vivo_view};
 pub use control::{
     control_button_view, control_center_view, control_overlay, extras_vivos, read_power_night,
     set_night, set_power_profile, set_radio, CentroDatos, ControlExtras,
@@ -355,6 +355,7 @@ pub fn root(model: &Model) -> View<Msg> {
                 manifest: model.diente_manifest,
                 cava_frame: &model.cava_frame,
                 ctx: &model.last_ctx,
+                unidades: model.unidades_now.as_ref(),
                 t: model.diente_t,
             };
             superficies.push(sidebar_rail_view(

@@ -842,7 +842,11 @@ pub fn config_tiene_diente_animado(cfg: &Config) -> bool {
         .iter()
         .filter(|s| s.kind == SurfaceKind::Sidebar)
         .flat_map(|s| s.tabs.iter())
-        .any(|t| es_diente_vivo(&t.content.kind) || es_monitor(&t.content.kind))
+        .any(|t| {
+            es_diente_vivo(&t.content.kind)
+                || es_monitor(&t.content.kind)
+                || es_unidades(&t.content.kind)
+        })
 }
 
 /// Dispara el transitorio de volumen en el diente vivo y re-resuelve su

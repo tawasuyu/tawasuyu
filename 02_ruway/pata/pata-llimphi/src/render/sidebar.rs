@@ -109,6 +109,10 @@ fn rail_widget(
             if crate::es_monitor(kind) {
                 return super::monitor_vivo_view(vivo.ctx, vivo.t, size, theme);
             }
+            // Diente «Unidades»: grilla de puntos de estado, late rojo si algo falló.
+            if crate::es_unidades(kind) {
+                return super::unidades_vivo_view(vivo.unidades, vivo.t, size, theme);
+            }
             tooth_icon(name, size, color)
         },
         move |id| Msg::NavTabActivate(si, id as usize),

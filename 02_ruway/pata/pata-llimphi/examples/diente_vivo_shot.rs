@@ -30,7 +30,7 @@ use pata_llimphi::network::{NetState, NetStatus, WifiAp};
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
 use pata_llimphi::render::{
     control_center_view, diente_vivo_view, flota_view, monitor_vivo_view, paint_reposo_halo,
-    sistema_monitor_view, unidades_view, CentroDatos, ControlExtras, DienteVivo,
+    sistema_monitor_view, unidades_view, unidades_vivo_view, CentroDatos, ControlExtras, DienteVivo,
 };
 use pata_llimphi::Msg;
 use sandokan_core::TelemetryFrame;
@@ -38,7 +38,7 @@ use sandokan_lifecycle::LifecycleState;
 use sandokan_monitor_core::{MonitorSnapshot, UnitObservation};
 
 const W: u32 = 1720;
-const H: u32 = 680;
+const H: u32 = 820;
 const SZ: f32 = 56.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -192,6 +192,8 @@ fn main() {
         ),
         // El diente monitor (vivo): ecualizador de cores + RAM + énfasis inteligente.
         tile("Monitor (diente)", monitor_vivo_view(&ctx, 0.55, SZ, &theme), &theme),
+        // El diente unidades (vivo): grilla de puntos, late rojo porque «roto» falló.
+        tile("Unidades (diente)", unidades_vivo_view(Some(&unidades), 0.55, SZ, &theme), &theme),
     ];
     let galeria = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -251,7 +253,7 @@ fn tile(label: &str, canvas: View<Msg>, theme: &llimphi_theme::Theme) -> View<Ms
 
 /// El canvas de una manifestación (no-reposo).
 fn manifest_view(m: Manifestacion, ctx: &WidgetCtx, theme: &llimphi_theme::Theme) -> View<Msg> {
-    let vivo = DienteVivo { manifest: m, cava_frame: &[], ctx, t: 0.55 };
+    let vivo = DienteVivo { manifest: m, cava_frame: &[], ctx, unidades: None, t: 0.55 };
     diente_vivo_view(&vivo, SZ, theme).unwrap_or_else(|| View::new(Style::default()))
 }
 
