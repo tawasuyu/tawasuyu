@@ -470,12 +470,25 @@ pub(crate) fn fulfill_agente_requests(m: &mut Model, handle: &Handle<Msg>) {
     // Fallback global del SO (el `[ai.llm]` que se edita en el wawapanel).
     let fallback = wawa_config::WawaConfig::load().ai.llm;
     let conv_id = req.conv.id.clone();
+    let h = handle.clone();
     handle.spawn(move || {
-        let (ok, bloques, entrada, salida) =
-            match shuma_agente_host::responder(&req.conv, &req.agente, &fallback) {
-                Ok(r) => (true, r.bloques, r.input_tokens, r.output_tokens),
-                Err(e) => (false, vec![shuma_agente::BloqueSalida::Error(e)], 0, 0),
-            };
+        // Streaming: cada fragmento se despacha como Token; la UI lo va pintando.
+        let cid = conv_id.clone();
+        let res = shuma_agente_host::responder_streaming(
+            &req.conv,
+            &req.agente,
+            &fallback,
+            |delta| {
+                h.dispatch(Msg::Agente(shuma_module_agente::Msg::Token {
+                    conv_id: cid.clone(),
+                    delta: delta.to_string(),
+                }));
+            },
+        );
+        let (ok, bloques, entrada, salida) = match res {
+            Ok(r) => (true, r.bloques, r.input_tokens, r.output_tokens),
+            Err(e) => (false, vec![shuma_agente::BloqueSalida::Error(e)], 0, 0),
+        };
         Msg::Agente(shuma_module_agente::Msg::Respuesta { conv_id, bloques, ok, entrada, salida })
     });
 }

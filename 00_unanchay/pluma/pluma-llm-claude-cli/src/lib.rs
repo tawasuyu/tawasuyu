@@ -176,6 +176,138 @@ impl ChatClient for ClaudeCliClient {
             usage,
         })
     }
+
+    async fn stream(
+        &self,
+        req: &ChatRequest,
+        on_delta: &mut (dyn for<'s> FnMut(&'s str) + Send),
+    ) -> Result<ChatResponse, ChatError> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let prompt = Self::render_prompt(req);
+
+        let mut cmd = tokio::process::Command::new(&self.bin);
+        cmd.arg("-p")
+            .arg(&prompt)
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--verbose")
+            .arg("--include-partial-messages");
+        if let Some(m) = &self.model {
+            cmd.arg("--model").arg(m);
+        }
+        if let Some(sys) = &req.system {
+            if !sys.trim().is_empty() {
+                cmd.arg("--append-system-prompt").arg(sys);
+            }
+        }
+        cmd.current_dir(std::env::temp_dir())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ChatError::AuthMissing(format!(
+                    "no encontré el binario «{}» — instalá Claude Code y `claude login`",
+                    self.bin
+                ))
+            } else {
+                ChatError::Backend(format!("no pude ejecutar «{}»: {e}", self.bin))
+            }
+        })?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ChatError::Backend("sin stdout de claude".into()))?;
+        let mut lineas = BufReader::new(stdout).lines();
+
+        let mut acumulado = String::new();
+        let mut content: Option<String> = None;
+        let mut usage: Option<ChatUsage> = None;
+        let mut err_msg: Option<String> = None;
+
+        // NDJSON: cada línea es un evento. Los `content_block_delta` traen el
+        // texto incremental; el `result` final trae el texto completo + usage.
+        while let Ok(Some(linea)) = lineas.next_line().await {
+            let linea = linea.trim();
+            if linea.is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(linea) else {
+                continue;
+            };
+            match v.get("type").and_then(|t| t.as_str()) {
+                Some("stream_event") => {
+                    let ev = v.get("event");
+                    let es_delta = ev
+                        .and_then(|e| e.get("type"))
+                        .and_then(|t| t.as_str())
+                        == Some("content_block_delta");
+                    if es_delta {
+                        if let Some(txt) = ev
+                            .and_then(|e| e.get("delta"))
+                            .and_then(|d| d.get("text"))
+                            .and_then(|t| t.as_str())
+                        {
+                            acumulado.push_str(txt);
+                            on_delta(txt);
+                        }
+                    }
+                }
+                Some("result") => {
+                    if v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) {
+                        err_msg = Some(
+                            v.get("result")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("error de claude")
+                                .to_string(),
+                        );
+                    }
+                    content = v.get("result").and_then(|r| r.as_str()).map(|s| s.to_string());
+                    usage = v.get("usage").map(parse_usage);
+                }
+                _ => {}
+            }
+        }
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| ChatError::Backend(format!("claude no terminó bien: {e}")))?;
+
+        if let Some(e) = err_msg {
+            return Err(ChatError::Backend(e));
+        }
+        if !status.success() && content.is_none() {
+            let mut buf = String::new();
+            if let Some(mut se) = child.stderr.take() {
+                use tokio::io::AsyncReadExt;
+                let _ = se.read_to_string(&mut buf).await;
+            }
+            return Err(ChatError::Backend(format!(
+                "claude salió con error: {}",
+                buf.trim()
+            )));
+        }
+
+        Ok(ChatResponse {
+            content: content.unwrap_or(acumulado),
+            stop_reason: Some(StopReason("end_turn".to_string())),
+            usage,
+        })
+    }
+}
+
+/// Extrae el conteo de tokens de un objeto `usage` del CLI.
+fn parse_usage(u: &serde_json::Value) -> ChatUsage {
+    let g = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+    ChatUsage {
+        input_tokens: g("input_tokens"),
+        output_tokens: g("output_tokens"),
+        cache_read_input_tokens: g("cache_read_input_tokens"),
+        cache_creation_input_tokens: g("cache_creation_input_tokens"),
+    }
 }
 
 #[cfg(test)]

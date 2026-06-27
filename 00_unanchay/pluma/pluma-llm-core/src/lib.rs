@@ -230,6 +230,27 @@ pub trait ChatClient: Send + Sync {
 
     /// Ejecuta una request de chat y devuelve la respuesta.
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ChatError>;
+
+    /// Como [`Self::complete`] pero emitiendo la salida **a medida que llega**:
+    /// `on_delta` se invoca con cada fragmento de texto nuevo. Devuelve la
+    /// respuesta final completa (idéntica a `complete`).
+    ///
+    /// La implementación por defecto **no es incremental**: corre `complete` y
+    /// emite todo el contenido de una vez — así los backends que no soporten
+    /// streaming siguen funcionando sin cambios. Los que sí (p.ej. el CLI de
+    /// Claude Code) sobreescriben este método.
+    async fn stream(
+        &self,
+        req: &ChatRequest,
+        on_delta: &mut (dyn for<'s> FnMut(&'s str) + Send),
+    ) -> Result<ChatResponse, ChatError> {
+        let r = self.complete(req).await?;
+        if !r.content.is_empty() {
+            let c = r.content.clone();
+            on_delta(&c);
+        }
+        Ok(r)
+    }
 }
 
 #[cfg(test)]

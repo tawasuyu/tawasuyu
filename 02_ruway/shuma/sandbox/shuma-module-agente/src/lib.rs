@@ -179,6 +179,9 @@ pub struct State {
     pendiente: Option<Peticion>,
     /// Intent de ejecutar una acción aprobada; lo corre el chasis (shell).
     ejecucion: Option<shuma_agente::AccionPropuesta>,
+    /// Texto del turno del asistente que está llegando en streaming; `None`
+    /// salvo entre el envío y la respuesta final. Se pinta como una burbuja viva.
+    parcial: Option<String>,
     /// Editor de agente abierto; `None` = se muestra el hilo.
     editor: Option<EditorAgente>,
     /// Intent: agente a persistir (alta/edición); lo escribe el chasis al Almacen.
@@ -208,6 +211,7 @@ impl State {
             esperando: false,
             pendiente: None,
             ejecucion: None,
+            parcial: None,
             editor: None,
             persist_agente: None,
             borrar_agente_id: None,
@@ -321,6 +325,8 @@ pub enum Msg {
     Aprobar { turno: usize, bloque: usize },
     /// Rechazar esa acción.
     Rechazar { turno: usize, bloque: usize },
+    /// Fragmento de texto en streaming (lo dispatcha el chasis token a token).
+    Token { conv_id: String, delta: String },
     /// Resultado del turno (lo dispatcha el chasis tras correr pluma-llm).
     Respuesta {
         conv_id: String,
@@ -403,6 +409,7 @@ pub fn update(state: State, msg: Msg) -> State {
                 let snap = conv.clone();
                 s.pendiente = Some(Peticion { conv: snap, agente });
                 s.esperando = true;
+                s.parcial = Some(String::new()); // burbuja viva en streaming
             }
             s.input.set_text("");
             s.scroll = f32::MAX; // saltá al final
@@ -428,8 +435,16 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::Scroll(delta) => {
             s.scroll = (s.scroll + delta).max(0.0);
         }
+        Msg::Token { conv_id, delta } => {
+            // Sólo acumulá si es para la conversación en vuelo.
+            if s.esperando && s.conv_activa.as_deref() == Some(conv_id.as_str()) {
+                s.parcial.get_or_insert_with(String::new).push_str(&delta);
+                s.scroll = f32::MAX;
+            }
+        }
         Msg::Respuesta { conv_id, bloques, ok, entrada, salida } => {
             s.esperando = false;
+            s.parcial = None;
             let ms = s.reloj_ms;
             if let Some(conv) = s.conversaciones.iter_mut().find(|c| c.id == conv_id) {
                 let bloques = if ok {
@@ -656,11 +671,34 @@ fn panel_view<HostMsg: Clone + 'static>(
         alto_total = 60.0;
     }
     if state.esperando {
-        turnos.push(
-            View::new(Style { padding: rect_xy(16.0, 6.0), ..Default::default() })
-                .text("…pensando", 13.0, theme.fg_muted),
-        );
-        alto_total += 30.0;
+        // Burbuja viva: el texto que está llegando en streaming, o «…pensando»
+        // mientras no llegó el primer token.
+        let parcial = state.parcial.as_deref().unwrap_or("");
+        if parcial.is_empty() {
+            turnos.push(
+                View::new(Style { padding: rect_xy(16.0, 6.0), ..Default::default() })
+                    .text("…pensando", 13.0, theme.fg_muted),
+            );
+            alto_total += 30.0;
+        } else {
+            turnos.push(
+                View::new(Style {
+                    flex_direction: FlexDirection::Column,
+                    size: Size { width: percent(1.0), height: Dimension::auto() },
+                    gap: Size { width: length(0.0), height: length(4.0) },
+                    padding: rect_xy(12.0, 8.0),
+                    ..Default::default()
+                })
+                .fill(theme.bg_panel_alt)
+                .children(vec![
+                    View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+                        .text("IA", 11.0, theme.fg_muted),
+                    View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+                        .text(format!("{parcial}▌"), 13.0, theme.fg_text),
+                ]),
+            );
+            alto_total += estimar_alto_texto(parcial, 13.0) + 30.0;
+        }
     }
 
     let contenido = View::new(Style {

@@ -33,6 +33,21 @@ pub fn responder(
     agente: &Agente,
     fallback_global: &wawa_config::LlmSettings,
 ) -> Result<Respuesta, String> {
+    responder_streaming(conv, agente, fallback_global, |_| {})
+}
+
+/// Como [`responder`] pero **emitiendo la salida a medida que llega**: `on_delta`
+/// se llama con cada fragmento de texto. Útil para que la UI pinte la respuesta
+/// progresiva (paridad con Claude CLI). Devuelve la respuesta final interpretada.
+///
+/// Sólo es incremental si el backend soporta streaming (hoy `claude-cli`); el
+/// resto cae al default no-incremental del trait (emite todo al final).
+pub fn responder_streaming(
+    conv: &Conversacion,
+    agente: &Agente,
+    fallback_global: &wawa_config::LlmSettings,
+    mut on_delta: impl FnMut(&str) + Send,
+) -> Result<Respuesta, String> {
     use pluma_llm::pluma_llm_core::ChatClient;
 
     let req = motor::construir_request(conv, agente);
@@ -50,7 +65,7 @@ pub fn responder(
     let resp = rt.block_on(async {
         let client: std::sync::Arc<dyn ChatClient> =
             build_client(backend).map_err(|e| format!("sin backend LLM: {e}"))?;
-        client.complete(&req).await.map_err(|e| e.to_string())
+        client.stream(&req, &mut on_delta).await.map_err(|e| e.to_string())
     })?;
 
     let bloques = motor::interpretar_respuesta(&resp.content, agente);
