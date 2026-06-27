@@ -661,6 +661,18 @@ impl Config {
             WidgetSpec::new("shuma_input").with("hotkey", Prop::Str("F12".to_string()))
         ];
 
+        // **Glass**: el preset nativo nace con el chrome **translúcido** (la
+        // superficie ya clarea transparente y aplica `opacity` al fondo). Combinado
+        // con el frosted backdrop que el compositor pone DETRÁS de los paneles
+        // layer-shell (sólo con el glass del theme «mirada» encendido), da el
+        // efecto cristal. El resto de los presets (dwm/mac/…) quedan en `1.0`
+        // (opaco) — así el glass es sólo de «mirada», igual que en mirada-brain.
+        const GLASS_OPACITY: f32 = 0.62;
+        top.opacity = GLASS_OPACITY;
+        rail.opacity = GLASS_OPACITY;
+        rrail.opacity = GLASS_OPACITY;
+        shell.opacity = GLASS_OPACITY;
+
         Self {
             general: General::default(),
             surfaces: vec![top, rail, rrail, shell],

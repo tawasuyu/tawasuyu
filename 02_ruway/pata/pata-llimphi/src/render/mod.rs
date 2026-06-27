@@ -67,7 +67,7 @@ pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use diente::{diente_vivo_view, DienteVivo};
 pub use control::{
     control_button_view, control_center_view, control_overlay, extras_vivos, set_night,
-    set_power_profile, set_radio, ControlExtras,
+    set_power_profile, set_radio, CentroDatos, ControlExtras,
 };
 pub use media::media_view;
 pub use network::{network_overlay, network_view};
@@ -390,6 +390,20 @@ pub fn root(model: &Model) -> View<Msg> {
                             .unwrap_or(model.control_extras.bt),
                         &model.control_extras,
                     );
+                    let centro = control::CentroDatos {
+                        clock: &model.last_ctx.clock,
+                        volume: model.last_ctx.volume,
+                        muted: model.last_ctx.muted,
+                        brightness: model.last_ctx.brightness,
+                        extras: &extras,
+                        media: model.media_now.as_ref(),
+                        net: model.network_now.as_ref(),
+                        net_password: model
+                            .net_password
+                            .as_ref()
+                            .map(|(s, p)| (s.as_str(), p.as_str())),
+                        bt: model.bluetooth_now.as_ref(),
+                    };
                     superficies.push(nav_panel_view(
                         surface,
                         ti,
@@ -398,9 +412,7 @@ pub fn root(model: &Model) -> View<Msg> {
                         &model.nav,
                         &model.shuma,
                         &model.rag,
-                        &model.last_ctx,
-                        &extras,
-                        model.media_now.as_ref(),
+                        &centro,
                         &model.theme,
                     ));
                 }

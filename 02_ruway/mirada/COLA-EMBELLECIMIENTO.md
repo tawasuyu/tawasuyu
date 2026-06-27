@@ -112,8 +112,15 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       Un panel **translúcido** deja ver el blur (glassmorphism KDE/GNOME). Sin
       tinte ni filo: el panel cliente pone su color. Opt-in (`glass_blur>0`,
       calidad ≥1); vacío sin glass/paneles → sin splice → byte-idéntico.
-      **Falta verificar en metal** (necesita panel translúcido — p. ej. que
-      `pata` se rinda con alfa — para que el blur se vea).
+      **Falta verificar en metal** (necesita panel translúcido para que se vea).
+- [x] **✅ `pata` translúcida en el preset «mirada» (para que el frost se vea).**
+      La maquinaria de pata ya estaba toda (la superficie clarea TRANSPARENTE, sin
+      región opaca, `Surface::opacity` aplicada al fondo en `aplicar_apariencia`):
+      sólo faltaba **encenderla**. `PataConfig::preset()` (el nativo «mirada») nace
+      con `opacity = 0.62` en top/rails/shell; el resto de los presets (dwm/mac/…)
+      siguen opacos (1.0). Combinado con el frosted backdrop del compositor = barra
+      de cristal, **sólo en «mirada»** (igual que el glass del theme en
+      mirada-brain). **Falta verificar en metal** (el 0.62 es a ciegas).
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).

@@ -39,9 +39,7 @@ use pata_core::config::{Anchor, Surface};
 use pata_core::layout::Rect;
 
 use super::diente::{diente_vivo_view, DienteVivo};
-use super::{control_center_view, ControlExtras};
-use crate::mpris::MediaState;
-use pata_core::widget::WidgetCtx;
+use super::{control_center_view, CentroDatos};
 use crate::nouser::NavState;
 use crate::rag::RagState;
 use crate::shuma::ShumaState;
@@ -227,9 +225,7 @@ fn panel_inner(
     nav: &NavState,
     shuma: &ShumaState,
     rag: &RagState,
-    ctx: &WidgetCtx,
-    extras: &ControlExtras,
-    media: Option<&MediaState>,
+    centro: &CentroDatos,
     theme: &Theme,
 ) -> View<Msg> {
     let titulo = surface
@@ -240,19 +236,10 @@ fn panel_inner(
     // Despacho por el `kind` del CONTENIDO del diente. shuma se conecta como
     // diente: su contenido es el shell completo (drawer_body_view).
     let kind = surface.tabs.get(ti).map(|t| t.content.kind.as_str()).unwrap_or("");
-    // Control center: el diente vivo (`control`) despliega volumen/brillo/batería/
-    // Wi-Fi/Bluetooth/perfil/luz nocturna + reloj, reusando el quick-settings.
+    // Control center: el diente vivo (`control`) despliega reloj + «sonando ahora»
+    // + volumen/brillo/batería + redes Wi-Fi/Bluetooth + perfil/luz nocturna.
     if crate::es_diente_vivo(kind) {
-        return control_center_view(
-            panel_h,
-            &ctx.clock,
-            ctx.volume,
-            ctx.muted,
-            ctx.brightness,
-            extras,
-            media,
-            theme,
-        );
+        return control_center_view(panel_h, centro, theme);
     }
     // Panel RAG (preguntale a tu correo): su contenido es `rag`/`search`. Trae su
     // propio cabezal + buscador + respuesta + fuentes.
@@ -431,9 +418,7 @@ pub fn nav_panel_view(
     nav: &NavState,
     shuma: &ShumaState,
     rag: &RagState,
-    ctx: &WidgetCtx,
-    extras: &ControlExtras,
-    media: Option<&MediaState>,
+    centro: &CentroDatos,
     theme: &Theme,
 ) -> View<Msg> {
     let pw = surface.panel_width;
@@ -459,7 +444,7 @@ pub fn nav_panel_view(
         },
         ..Default::default()
     })
-    .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, ctx, extras, media, theme)])
+    .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, centro, theme)])
 }
 
 // =====================================================================
@@ -483,9 +468,7 @@ pub fn sidebar_surface_view(
     shuma: &ShumaState,
     rag: &RagState,
     vivo: &DienteVivo,
-    ctx: &WidgetCtx,
-    extras: &ControlExtras,
-    media: Option<&MediaState>,
+    centro: &CentroDatos,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
@@ -517,7 +500,7 @@ pub fn sidebar_surface_view(
             flex_shrink: 0.0,
             ..Default::default()
         })
-        .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, ctx, extras, media, theme)]);
+        .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, centro, theme)]);
         // El rail va pegado a su borde: a la izquierda del panel si el sidebar
         // está anclado a la izquierda; a la derecha si está a la derecha.
         match surface.anchor {

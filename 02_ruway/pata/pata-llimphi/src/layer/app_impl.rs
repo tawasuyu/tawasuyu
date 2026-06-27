@@ -1195,6 +1195,20 @@ impl LayerApp {
                     .unwrap_or(self.control_extras.bt),
                 &self.control_extras,
             );
+            let centro = render::CentroDatos {
+                clock: &self.ctx.clock,
+                volume: self.ctx.volume,
+                muted: self.ctx.muted,
+                brightness: self.ctx.brightness,
+                extras: &extras,
+                media: self.media_now.as_ref(),
+                net: self.network_now.as_ref(),
+                net_password: self
+                    .net_password
+                    .as_ref()
+                    .map(|(s, p)| (s.as_str(), p.as_str())),
+                bt: self.bluetooth_now.as_ref(),
+            };
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],
                 idx,
@@ -1207,9 +1221,7 @@ impl LayerApp {
                 &self.shuma,
                 &self.rag,
                 &vivo,
-                &self.ctx,
-                &extras,
-                self.media_now.as_ref(),
+                &centro,
                 &self.theme,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {

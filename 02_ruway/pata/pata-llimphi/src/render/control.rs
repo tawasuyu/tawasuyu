@@ -273,31 +273,60 @@ pub fn extras_vivos(
 /// El **control center** del sidebar: reloj grande + las filas de control, en un
 /// panel de alto completo (sin la tarjeta flotante del flyout). Reusa las mismas
 /// filas y los mismos `Msg` que el quick-settings de la barra.
-#[allow(clippy::too_many_arguments)]
-pub fn control_center_view(
-    panel_h: f32,
-    clock: &pata_core::widget::ClockReading,
-    volume: f32,
-    muted: bool,
-    brightness: f32,
-    extras: &ControlExtras,
-    media: Option<&crate::mpris::MediaState>,
-    theme: &Theme,
-) -> View<Msg> {
-    let mut hijos = vec![reloj_grande(clock, theme)];
+/// Los datos que alimentan el control center del sidebar. Se arma en el host
+/// (mismo paquete en winit y layer-shell) y se pasa por referencia, así el
+/// despacho del panel no acarrea media docena de parámetros sueltos.
+pub struct CentroDatos<'a> {
+    pub clock: &'a pata_core::widget::ClockReading,
+    pub volume: f32,
+    pub muted: bool,
+    pub brightness: f32,
+    pub extras: &'a ControlExtras,
+    pub media: Option<&'a crate::mpris::MediaState>,
+    pub net: Option<&'a crate::network::NetState>,
+    /// `(ssid, tecleado)` si hay una entrada de contraseña Wi-Fi en curso.
+    pub net_password: Option<(&'a str, &'a str)>,
+    pub bt: Option<&'a crate::bluetooth::BtState>,
+}
+
+pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View<Msg> {
+    let mut hijos = vec![reloj_grande(d.clock, theme)];
     // "Sonando ahora" + transporte, sólo si hay un reproductor MPRIS.
-    if let Some(m) = media.filter(|m| m.has_player) {
+    if let Some(m) = d.media.filter(|m| m.has_player) {
         hijos.push(media_row(m, theme));
     }
-    hijos.extend(control_sections(volume, muted, brightness, extras, theme));
+    // Volumen y brillo (sliders), batería (lectura).
+    let vol_glifo = if d.muted { "✕" } else { "♪" };
+    hijos.push(slider_row(vol_glifo, d.volume, theme, Msg::VolumeSet));
+    hijos.push(slider_row("☀", d.brightness, theme, Msg::BrightnessSet));
+    if let Some((pct, charging)) = d.extras.battery {
+        let valor = if charging {
+            format!("{pct}% ⚡")
+        } else {
+            format!("{pct}%")
+        };
+        hijos.push(kv_row("Batería", &valor, theme));
+    }
+    // Wi-Fi y Bluetooth CON su lista (no sólo toggle): reusa los panels de la
+    // barra, que ya traen switch + lista de redes/dispositivos clickeable.
+    hijos.push(super::network::network_panel(d.net, d.net_password, theme));
+    hijos.push(super::bluetooth::bluetooth_panel(d.bt, theme));
+    // Perfil de energía + luz nocturna.
+    if let Some(actual) = &d.extras.power_profile {
+        hijos.push(perfil_row(actual, theme));
+    }
+    hijos.push(switch_row("Luz nocturna", d.extras.night, theme, Msg::ControlNight));
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: length(panel_h) },
+        // Padding chico: los panels embebidos miden 280/260 px fijos y deben
+        // entrar en el ancho del sidebar (≈300) sin desbordar.
         padding: TaffyRect {
-            left: length(14.0_f32),
-            right: length(14.0_f32),
-            top: length(12.0_f32),
-            bottom: length(12.0_f32),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
         },
         gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
         ..Default::default()
