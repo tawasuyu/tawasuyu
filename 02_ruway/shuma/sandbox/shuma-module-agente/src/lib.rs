@@ -53,6 +53,107 @@ pub struct Peticion {
     pub agente: Agente,
 }
 
+/// Backends que el editor de agentes ofrece (se ciclan con un click). El
+/// primero, `claude-cli`, usa la suscripción de Claude Code sin API key.
+const BACKENDS: &[&str] = &[
+    "claude-cli",
+    "anthropic",
+    "gemini",
+    "deepseek",
+    "cohere",
+    "ollama",
+    "mock",
+    "", // vacío = heredar el backend global del SO
+];
+
+/// Qué campo de texto del editor tiene el foco del teclado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Campo {
+    Nombre,
+    Modelo,
+    Persona,
+}
+
+/// Formulario de alta/edición de un agente. Abierto = el panel muestra el
+/// editor en vez del hilo.
+#[derive(Debug, Clone)]
+struct EditorAgente {
+    /// Id del agente que se edita; `None` = uno nuevo.
+    id: Option<String>,
+    nombre: TextInputState,
+    modelo: TextInputState,
+    persona: TextInputState,
+    /// Índice en [`BACKENDS`].
+    backend_idx: usize,
+    control: bool,
+    foco: Campo,
+}
+
+impl EditorAgente {
+    fn nuevo() -> Self {
+        Self {
+            id: None,
+            nombre: TextInputState::new(),
+            modelo: TextInputState::new(),
+            persona: TextInputState::new(),
+            backend_idx: 0,
+            control: false,
+            foco: Campo::Nombre,
+        }
+    }
+
+    fn desde(a: &Agente) -> Self {
+        let backend_idx = BACKENDS
+            .iter()
+            .position(|b| *b == a.backend.backend)
+            .unwrap_or(BACKENDS.len() - 1);
+        let mut nombre = TextInputState::new();
+        nombre.set_text(&a.nombre);
+        let mut modelo = TextInputState::new();
+        modelo.set_text(&a.backend.model);
+        let mut persona = TextInputState::new();
+        persona.set_text(&a.system_prompt);
+        Self {
+            id: Some(a.id.clone()),
+            nombre,
+            modelo,
+            persona,
+            backend_idx,
+            control: a.capacidades.control,
+            foco: Campo::Nombre,
+        }
+    }
+
+    fn campo_mut(&mut self) -> &mut TextInputState {
+        match self.foco {
+            Campo::Nombre => &mut self.nombre,
+            Campo::Modelo => &mut self.modelo,
+            Campo::Persona => &mut self.persona,
+        }
+    }
+
+    /// Construye el `Agente` a guardar a partir del formulario. Conserva el `id`
+    /// si se edita; uno nuevo si no.
+    fn a_agente(&self) -> Agente {
+        let mut a = match &self.id {
+            Some(id) => {
+                let mut a = Agente::nuevo(self.nombre.text());
+                a.id = id.clone();
+                a
+            }
+            None => Agente::nuevo(self.nombre.text()),
+        };
+        a.system_prompt = self.persona.text();
+        a.backend = wawa_config::LlmSettings {
+            backend: BACKENDS[self.backend_idx].to_string(),
+            model: self.modelo.text(),
+            ..Default::default()
+        };
+        a.capacidades.control = self.control;
+        a
+    }
+}
+
 /// Estado del panel de chat. Las conversaciones y agentes los **provee el
 /// chasis** desde el [`shuma_agente::Almacen`]; el módulo los edita en memoria y
 /// el chasis persiste tras cada `update`.
@@ -78,6 +179,12 @@ pub struct State {
     pendiente: Option<Peticion>,
     /// Intent de ejecutar una acción aprobada; lo corre el chasis (shell).
     ejecucion: Option<shuma_agente::AccionPropuesta>,
+    /// Editor de agente abierto; `None` = se muestra el hilo.
+    editor: Option<EditorAgente>,
+    /// Intent: agente a persistir (alta/edición); lo escribe el chasis al Almacen.
+    persist_agente: Option<Agente>,
+    /// Intent: id de agente a borrar; lo borra el chasis del Almacen.
+    borrar_agente_id: Option<String>,
 }
 
 impl Default for State {
@@ -101,6 +208,9 @@ impl State {
             esperando: false,
             pendiente: None,
             ejecucion: None,
+            editor: None,
+            persist_agente: None,
+            borrar_agente_id: None,
         }
     }
 
@@ -158,6 +268,17 @@ impl State {
         self.ejecucion.take()
     }
 
+    /// El chasis toma un agente a persistir (alta/edición) para escribirlo al
+    /// Almacen y re-proveer la lista con [`State::set_agentes`].
+    pub fn take_persist_agente(&mut self) -> Option<Agente> {
+        self.persist_agente.take()
+    }
+
+    /// El chasis toma el id de un agente a borrar del Almacen.
+    pub fn take_borrar_agente(&mut self) -> Option<String> {
+        self.borrar_agente_id.take()
+    }
+
     /// Las conversaciones actuales (para que el chasis persista tras un update).
     pub fn conversaciones(&self) -> &[Conversacion] {
         &self.conversaciones
@@ -206,6 +327,22 @@ pub enum Msg {
         bloques: Vec<BloqueSalida>,
         ok: bool,
     },
+    /// Abrir el editor para crear un agente nuevo.
+    NuevoAgente,
+    /// Abrir el editor del agente seleccionado.
+    EditarAgente,
+    /// Enfocar un campo de texto del editor.
+    EditorFoco(Campo),
+    /// Ciclar el backend del editor (claude-cli → anthropic → …).
+    EditorCiclarBackend,
+    /// Alternar la capacidad de control del editor.
+    EditorToggleControl,
+    /// Guardar el agente del editor (alta/edición).
+    GuardarAgente,
+    /// Borrar el agente que se está editando.
+    BorrarAgente,
+    /// Cerrar el editor sin guardar.
+    CancelarEditor,
 }
 
 /// Transición pura del estado.
@@ -214,6 +351,24 @@ pub fn update(state: State, msg: Msg) -> State {
     match msg {
         Msg::Key(ev) => {
             if ev.state != KeyState::Pressed {
+                return s;
+            }
+            // Con el editor abierto, las teclas van al campo enfocado (Tab cicla;
+            // Escape cancela). No se envía mensaje.
+            if let Some(ed) = s.editor.as_mut() {
+                match &ev.key {
+                    Key::Named(NamedKey::Escape) => return update(s, Msg::CancelarEditor),
+                    Key::Named(NamedKey::Tab) => {
+                        ed.foco = match ed.foco {
+                            Campo::Nombre => Campo::Modelo,
+                            Campo::Modelo => Campo::Persona,
+                            Campo::Persona => Campo::Nombre,
+                        };
+                    }
+                    _ => {
+                        ed.campo_mut().apply_key(&ev);
+                    }
+                }
                 return s;
             }
             // Enter (sin Shift) envía; el resto lo consume el input.
@@ -300,6 +455,60 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::Rechazar { turno, bloque } => {
             marcar_accion(&mut s, turno, bloque, EstadoAccion::Rechazada);
         }
+        Msg::NuevoAgente => {
+            s.editor = Some(EditorAgente::nuevo());
+        }
+        Msg::EditarAgente => {
+            if let Some(a) = s.agentes.get(s.agente_sel) {
+                s.editor = Some(EditorAgente::desde(a));
+            }
+        }
+        Msg::EditorFoco(c) => {
+            if let Some(ed) = s.editor.as_mut() {
+                ed.foco = c;
+            }
+        }
+        Msg::EditorCiclarBackend => {
+            if let Some(ed) = s.editor.as_mut() {
+                ed.backend_idx = (ed.backend_idx + 1) % BACKENDS.len();
+            }
+        }
+        Msg::EditorToggleControl => {
+            if let Some(ed) = s.editor.as_mut() {
+                ed.control = !ed.control;
+            }
+        }
+        Msg::GuardarAgente => {
+            if let Some(ed) = s.editor.take() {
+                if ed.nombre.text().trim().is_empty() {
+                    // Sin nombre no se guarda; reabrí el editor para corregir.
+                    s.editor = Some(ed);
+                } else {
+                    let agente = ed.a_agente();
+                    // Reflejá el cambio en memoria (el chasis además lo persiste).
+                    if let Some(pos) = s.agentes.iter().position(|a| a.id == agente.id) {
+                        s.agentes[pos] = agente.clone();
+                    } else {
+                        s.agentes.push(agente.clone());
+                    }
+                    s.persist_agente = Some(agente);
+                }
+            }
+        }
+        Msg::BorrarAgente => {
+            if let Some(ed) = s.editor.take() {
+                if let Some(id) = ed.id {
+                    s.agentes.retain(|a| a.id != id);
+                    if s.agente_sel >= s.agentes.len() {
+                        s.agente_sel = s.agentes.len().saturating_sub(1);
+                    }
+                    s.borrar_agente_id = Some(id);
+                }
+            }
+        }
+        Msg::CancelarEditor => {
+            s.editor = None;
+        }
     }
     s
 }
@@ -362,9 +571,25 @@ fn sidebar_view<HostMsg: Clone + 'static>(
                 .on_click(lift(Msg::SeleccionarAgente(i))),
         );
     }
+    // Acciones de agentes: nuevo / editar el seleccionado.
+    let bp = ButtonPalette::from_theme(theme);
+    hijos.push(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0), height: length(30.0) },
+            gap: Size { width: length(6.0), height: length(0.0) },
+            padding: rect_xy(8.0, 2.0),
+            ..Default::default()
+        })
+        .children(vec![
+            View::new(Style { flex_grow: 1.0, ..Default::default() })
+                .children(vec![button_view("+ agente", &bp, lift(Msg::NuevoAgente))]),
+            View::new(Style { flex_grow: 1.0, ..Default::default() })
+                .children(vec![button_view("editar", &bp, lift(Msg::EditarAgente))]),
+        ]),
+    );
 
     // Botón nueva conversación.
-    let bp = ButtonPalette::from_theme(theme);
     hijos.push(
         View::new(Style {
             size: Size { width: percent(1.0), height: length(36.0) },
@@ -400,6 +625,10 @@ fn panel_view<HostMsg: Clone + 'static>(
     theme: &Theme,
     lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
 ) -> View<HostMsg> {
+    // Con el editor abierto ocupa todo el panel.
+    if let Some(ed) = &state.editor {
+        return editor_view(ed, theme, lift);
+    }
     // Hilo de turnos.
     let mut turnos: Vec<View<HostMsg>> = Vec::new();
     let mut alto_total = 0.0_f32;
@@ -497,6 +726,96 @@ fn panel_view<HostMsg: Clone + 'static>(
     })
     .fill(theme.bg_app)
     .children(vec![hilo_wrap, barra])
+}
+
+/// Formulario de alta/edición de un agente.
+fn editor_view<HostMsg: Clone + 'static>(
+    ed: &EditorAgente,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> View<HostMsg> {
+    let tp = TextInputPalette::from_theme(theme);
+    let bp = ButtonPalette::from_theme(theme);
+
+    let titulo = if ed.id.is_some() { "Editar agente" } else { "Nuevo agente" };
+
+    // Campo de texto etiquetado.
+    let campo = |etq: &str, st: &TextInputState, foco: bool, c: Campo| {
+        let lift = lift.clone();
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0), height: Dimension::auto() },
+            gap: Size { width: length(0.0), height: length(2.0) },
+            ..Default::default()
+        })
+        .children(vec![
+            View::new(Style { size: Size { width: percent(1.0), height: length(14.0) }, ..Default::default() })
+                .text(etq, 10.0, theme.fg_muted),
+            text_input_view(st, "", foco, &tp, lift(Msg::EditorFoco(c))),
+        ])
+    };
+
+    let backend_lbl = {
+        let b = BACKENDS[ed.backend_idx];
+        let nombre = if b.is_empty() { "(global del SO)" } else { b };
+        format!("backend: {nombre}")
+    };
+    let control_lbl = format!("control: {}", if ed.control { "sí" } else { "no" });
+
+    let mut hijos = vec![
+        View::new(Style { size: Size { width: percent(1.0), height: length(22.0) }, ..Default::default() })
+            .text(titulo, 14.0, theme.fg_text),
+        campo("Nombre", &ed.nombre, ed.foco == Campo::Nombre, Campo::Nombre),
+        campo("Modelo (vacío = default del backend)", &ed.modelo, ed.foco == Campo::Modelo, Campo::Modelo),
+        campo("Persona / system prompt", &ed.persona, ed.foco == Campo::Persona, Campo::Persona),
+        // Backend (cicla) + control (toggle).
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0), height: length(34.0) },
+            gap: Size { width: length(8.0), height: length(0.0) },
+            ..Default::default()
+        })
+        .children(vec![
+            View::new(Style { flex_grow: 2.0, ..Default::default() })
+                .children(vec![button_view(backend_lbl, &bp, lift(Msg::EditorCiclarBackend))]),
+            View::new(Style { flex_grow: 1.0, ..Default::default() })
+                .children(vec![button_view(control_lbl, &bp, lift(Msg::EditorToggleControl))]),
+        ]),
+    ];
+
+    // Botonera: guardar / cancelar (+ borrar si edita).
+    let mut botones = vec![
+        View::new(Style { flex_grow: 1.0, ..Default::default() })
+            .children(vec![button_view("guardar", &bp, lift(Msg::GuardarAgente))]),
+        View::new(Style { flex_grow: 1.0, ..Default::default() })
+            .children(vec![button_view("cancelar", &bp, lift(Msg::CancelarEditor))]),
+    ];
+    if ed.id.is_some() {
+        botones.push(
+            View::new(Style { flex_grow: 1.0, ..Default::default() })
+                .children(vec![button_view("borrar", &bp, lift(Msg::BorrarAgente))]),
+        );
+    }
+    hijos.push(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0), height: length(34.0) },
+            gap: Size { width: length(8.0), height: length(0.0) },
+            ..Default::default()
+        })
+        .children(botones),
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: Dimension::auto(), height: percent(1.0) },
+        gap: Size { width: length(0.0), height: length(10.0) },
+        padding: rect_xy(16.0, 14.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(hijos)
 }
 
 /// Pinta un turno; devuelve la vista y una estimación de su alto (px) para el
@@ -774,6 +1093,62 @@ mod tests {
             BloqueSalida::Accion(a) => assert_eq!(a.estado, EstadoAccion::Aprobada),
             _ => panic!("esperaba acción"),
         }
+    }
+
+    #[test]
+    fn alta_de_agente_persiste_y_aparece() {
+        let mut s = estado_con_agente();
+        let antes = s.agentes.len();
+        s = update(s, Msg::NuevoAgente);
+        assert!(s.editor.is_some());
+        // Escribí un nombre en el campo enfocado (Nombre).
+        if let Some(ed) = s.editor.as_mut() {
+            ed.nombre.set_text("Traductor");
+        }
+        s = update(s, Msg::EditorCiclarBackend); // claude-cli → anthropic
+        s = update(s, Msg::GuardarAgente);
+        assert!(s.editor.is_none());
+        assert_eq!(s.agentes.len(), antes + 1);
+        let ag = s.take_persist_agente().expect("debe pedir persistir");
+        assert_eq!(ag.nombre, "Traductor");
+        assert_eq!(ag.backend.backend, "anthropic");
+    }
+
+    #[test]
+    fn alta_sin_nombre_no_guarda() {
+        let mut s = estado_con_agente();
+        s = update(s, Msg::NuevoAgente);
+        s = update(s, Msg::GuardarAgente);
+        assert!(s.editor.is_some()); // reabre para corregir
+        assert!(s.persist_agente.is_none());
+    }
+
+    #[test]
+    fn editar_agente_conserva_id() {
+        let mut s = estado_con_agente();
+        let id0 = s.agentes[0].id.clone();
+        s = update(s, Msg::SeleccionarAgente(0));
+        s = update(s, Msg::EditarAgente);
+        if let Some(ed) = s.editor.as_mut() {
+            ed.nombre.set_text("Asistente Pro");
+        }
+        s = update(s, Msg::GuardarAgente);
+        let ag = s.take_persist_agente().unwrap();
+        assert_eq!(ag.id, id0); // mismo id (edición, no alta)
+        assert_eq!(ag.nombre, "Asistente Pro");
+        assert_eq!(s.agentes[0].nombre, "Asistente Pro");
+    }
+
+    #[test]
+    fn borrar_agente_lo_saca_y_pide_borrado() {
+        let mut s = estado_con_agente();
+        let id0 = s.agentes[0].id.clone();
+        let antes = s.agentes.len();
+        s = update(s, Msg::SeleccionarAgente(0));
+        s = update(s, Msg::EditarAgente);
+        s = update(s, Msg::BorrarAgente);
+        assert_eq!(s.agentes.len(), antes - 1);
+        assert_eq!(s.take_borrar_agente().as_deref(), Some(id0.as_str()));
     }
 
     #[test]

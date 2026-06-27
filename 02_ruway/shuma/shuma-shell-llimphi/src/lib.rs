@@ -772,6 +772,21 @@ impl App for Shell {
                     for c in m.agente.conversaciones() {
                         let _ = al.guardar_conversacion(c);
                     }
+                    // Alta/edición o borrado de un agente desde el editor.
+                    let mut refrescar = false;
+                    if let Some(ag) = m.agente.take_persist_agente() {
+                        let _ = al.guardar_agente(&ag);
+                        refrescar = true;
+                    }
+                    if let Some(id) = m.agente.take_borrar_agente() {
+                        let _ = al.borrar_agente(&id);
+                        refrescar = true;
+                    }
+                    if refrescar {
+                        if let Ok(agentes) = al.agentes() {
+                            m.agente.set_agentes(agentes);
+                        }
+                    }
                 }
                 // Una acción aprobada va al input del shell de la sesión activa
                 // (revisar y Enter — nunca se auto-ejecuta), reusando el canal
