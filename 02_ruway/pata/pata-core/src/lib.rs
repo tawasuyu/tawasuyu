@@ -32,6 +32,10 @@ extern crate alloc;
 /// Efemérides de baja precisión (Sol/Luna) para el widget astral. Matemática
 /// pura `no_std`; el host computa el día juliano y llama.
 pub mod astro;
+/// El árbitro del **diente vivo**: a partir de señales del sistema decide qué
+/// debe mostrar un diente multifuncional (música/volumen/CPU/batería/reposo).
+/// Puro: no pinta ni toca el SO. Lo pinta el frontend.
+pub mod atencion;
 pub mod config;
 pub mod layout;
 /// `impl allichay::Configurable for Config` — vuelve el marco editable por UI.
