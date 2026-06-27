@@ -400,6 +400,7 @@ pub fn root(model: &Model) -> View<Msg> {
                         &model.rag,
                         &model.last_ctx,
                         &extras,
+                        model.media_now.as_ref(),
                         &model.theme,
                     ));
                 }

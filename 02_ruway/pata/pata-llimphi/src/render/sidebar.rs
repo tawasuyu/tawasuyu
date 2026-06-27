@@ -40,6 +40,7 @@ use pata_core::layout::Rect;
 
 use super::diente::{diente_vivo_view, DienteVivo};
 use super::{control_center_view, ControlExtras};
+use crate::mpris::MediaState;
 use pata_core::widget::WidgetCtx;
 use crate::nouser::NavState;
 use crate::rag::RagState;
@@ -228,6 +229,7 @@ fn panel_inner(
     rag: &RagState,
     ctx: &WidgetCtx,
     extras: &ControlExtras,
+    media: Option<&MediaState>,
     theme: &Theme,
 ) -> View<Msg> {
     let titulo = surface
@@ -248,6 +250,7 @@ fn panel_inner(
             ctx.muted,
             ctx.brightness,
             extras,
+            media,
             theme,
         );
     }
@@ -430,6 +433,7 @@ pub fn nav_panel_view(
     rag: &RagState,
     ctx: &WidgetCtx,
     extras: &ControlExtras,
+    media: Option<&MediaState>,
     theme: &Theme,
 ) -> View<Msg> {
     let pw = surface.panel_width;
@@ -455,7 +459,7 @@ pub fn nav_panel_view(
         },
         ..Default::default()
     })
-    .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, ctx, extras, theme)])
+    .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, ctx, extras, media, theme)])
 }
 
 // =====================================================================
@@ -481,6 +485,7 @@ pub fn sidebar_surface_view(
     vivo: &DienteVivo,
     ctx: &WidgetCtx,
     extras: &ControlExtras,
+    media: Option<&MediaState>,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
@@ -512,7 +517,7 @@ pub fn sidebar_surface_view(
             flex_shrink: 0.0,
             ..Default::default()
         })
-        .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, ctx, extras, theme)]);
+        .children(vec![panel_inner(surface, ti, h, nav, shuma, rag, ctx, extras, media, theme)]);
         // El rail va pegado a su borde: a la izquierda del panel si el sidebar
         // está anclado a la izquierda; a la derecha si está a la derecha.
         match surface.anchor {

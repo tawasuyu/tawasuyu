@@ -273,6 +273,7 @@ pub fn extras_vivos(
 /// El **control center** del sidebar: reloj grande + las filas de control, en un
 /// panel de alto completo (sin la tarjeta flotante del flyout). Reusa las mismas
 /// filas y los mismos `Msg` que el quick-settings de la barra.
+#[allow(clippy::too_many_arguments)]
 pub fn control_center_view(
     panel_h: f32,
     clock: &pata_core::widget::ClockReading,
@@ -280,9 +281,14 @@ pub fn control_center_view(
     muted: bool,
     brightness: f32,
     extras: &ControlExtras,
+    media: Option<&crate::mpris::MediaState>,
     theme: &Theme,
 ) -> View<Msg> {
     let mut hijos = vec![reloj_grande(clock, theme)];
+    // "Sonando ahora" + transporte, sólo si hay un reproductor MPRIS.
+    if let Some(m) = media.filter(|m| m.has_player) {
+        hijos.push(media_row(m, theme));
+    }
     hijos.extend(control_sections(volume, muted, brightness, extras, theme));
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -298,6 +304,44 @@ pub fn control_center_view(
     })
     .fill(theme.bg_panel)
     .children(hijos)
+}
+
+/// "Sonando ahora": título de la pista + transporte (anterior / play-pausa /
+/// siguiente). Glifos DejaVu-safe (◀◀ ▶ ▮▮ ▶▶). Reusa los `Msg::Media*` de la
+/// barra.
+fn media_row(media: &crate::mpris::MediaState, theme: &Theme) -> View<Msg> {
+    let titulo = if media.title.trim().is_empty() {
+        "Reproduciendo…".to_string()
+    } else {
+        media.title.clone()
+    };
+    let titulo_v = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(titulo, 12.0, theme.fg_text);
+    let pp = if media.playing { "▮▮" } else { "▶" };
+    let botones = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        super::panels::boton_panel("◀◀", Msg::MediaPrev, theme, None),
+        super::panels::boton_panel(pp, Msg::MediaPlayPause, theme, Some(theme.accent)),
+        super::panels::boton_panel("▶▶", Msg::MediaNext, theme, None),
+    ]);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![titulo_v, botones])
 }
 
 /// Reloj grande (HH:MM) + fecha, como cabezal del control center.

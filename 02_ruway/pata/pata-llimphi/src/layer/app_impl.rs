@@ -1209,6 +1209,7 @@ impl LayerApp {
                 &vivo,
                 &self.ctx,
                 &extras,
+                self.media_now.as_ref(),
                 &self.theme,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {
