@@ -1824,8 +1824,11 @@ impl DrmState {
     /// **Por verificar en metal** (readback GPU de escena real con ventanas).
     fn rebuild_window_backdrops(&mut self, idx: usize) {
         let glass_blur = self.app.config_glass_blur() as i32;
-        if glass_blur == 0 {
-            return; // el cache global ya se vació una vez por frame en `render`
+        // Calidad N (2): backdrop REAL por barra flotante. Por debajo (0/1) las
+        // barras caen al `wallpaper_blur` de la salida (el cache global ya se
+        // vació una vez por frame en `render`).
+        if glass_blur == 0 || self.app.config_glass_quality() < 2 {
+            return;
         }
         let rect = self.outputs[idx].rect;
         let (ow, oh) = (rect.w.max(1), rect.h.max(1));
@@ -1919,7 +1922,10 @@ impl DrmState {
     /// ventanas no se certifica headless (regla 8 de CLAUDE.md).
     fn rebuild_menu_backdrop(&mut self, idx: usize, below: &[Frame]) {
         let glass_blur = self.app.config_glass_blur() as i32;
-        if glass_blur == 0 {
+        // Calidad ≥1: backdrop REAL bajo el menú. Calidad 0 = sólo wallpaper
+        // desenfocado → dejamos `backdrop_blur` en None y el menú cae a
+        // `wallpaper_blur` (más barato, no ve ventanas detrás).
+        if glass_blur == 0 || self.app.config_glass_quality() < 1 {
             self.outputs[idx].backdrop_blur = None;
             return;
         }

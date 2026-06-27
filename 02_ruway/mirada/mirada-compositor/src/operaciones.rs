@@ -455,6 +455,17 @@ impl App {
         }
     }
 
+    /// **Calidad del backdrop glass**: `0` sólo wallpaper desenfocado · `1`
+    /// backdrop REAL bajo el menú raíz · `2` además por barra flotante (calidad
+    /// N). Sólo importa con `glass_blur > 0`. Con Cerebro enlazado el glass está
+    /// apagado (`config_glass_blur` → 0), así que el valor es indiferente: `2`.
+    pub(crate) fn config_glass_quality(&self) -> u8 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().glass_quality,
+            Brain::Linked(_) => 2,
+        }
+    }
+
     /// `true` si el fondo por defecto debe ser el **wallpaper de marca animado**
     /// (chakana + plano cartesiano vivo). Aplica cuando la fuente cae al fondo
     /// por defecto (familia `auto`/`local`/`directory`/`remote` **sin** imagen) y

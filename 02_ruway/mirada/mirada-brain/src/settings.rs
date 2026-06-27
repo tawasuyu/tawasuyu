@@ -479,6 +479,13 @@ impl Configurable for Config {
                         self.glass_blur as i64,
                         0,
                         40,
+                    ))
+                    .field(Field::slider_int(
+                        "glass_quality",
+                        "Glass — calidad del fondo (0 wallpaper · 1 menú · 2 ventanas)",
+                        self.glass_quality as i64,
+                        0,
+                        2,
                     )),
             )
     }
@@ -817,6 +824,11 @@ impl Configurable for Config {
                     self.glass_blur = v.clamp(0, 40) as u8;
                 }
             }
+            "glass_quality" => {
+                if let Some(v) = value.as_int() {
+                    self.glass_quality = v.clamp(0, 2) as u8;
+                }
+            }
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
@@ -869,6 +881,14 @@ mod tests {
         c.apply(&"efectos.glass_blur".into(), FieldValue::Int(999))
             .unwrap();
         assert_eq!(c.glass_blur, 40);
+        // Calidad del glass: default 2 (calidad N), acotada a 0..2.
+        assert_eq!(Config::default().glass_quality, 2);
+        c.apply(&"efectos.glass_quality".into(), FieldValue::Int(1))
+            .unwrap();
+        assert_eq!(c.glass_quality, 1);
+        c.apply(&"efectos.glass_quality".into(), FieldValue::Int(9))
+            .unwrap();
+        assert_eq!(c.glass_quality, 2, "se acota a 2");
     }
 
     #[test]

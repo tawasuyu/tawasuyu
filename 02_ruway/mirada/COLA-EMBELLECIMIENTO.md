@@ -83,10 +83,18 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       veía; ahora el orden front-to-back es filo → tinte → blur, y el tinte
       tiñe/da contraste como dice su comentario. Opt-in, byte-idéntico en off.
       **Falta verificar en metal.**
-- [ ] **Backdrop REAL — afinar: paneles/layer-shell + calidad acotada (off/1/N).**
-      Pendiente: (a) extender el backdrop real a superficies layer-shell
-      (paneles), no sólo barras de ventana; (b) exponer el nivel de calidad en el
-      panel (hoy es «N» siempre que haya glass).
+- [x] **✅ Backdrop REAL — afinar (b): calidad del glass off/1/N en el panel.**
+      Nuevo `glass_quality` (config, sección «Efectos», 0–2, default 2 = N para
+      conservar lo previo). `0` = sólo wallpaper desenfocado (barato); `1` =
+      backdrop REAL bajo el menú raíz; `2` = además por barra flotante (calidad
+      N). El compositor gatea `rebuild_menu_backdrop` (≥1) y
+      `rebuild_window_backdrops` (≥2); por debajo se cae a `wallpaper_blur`.
+      Default por serde = 2 (`default_glass_quality`), así configs viejas no
+      cambian. Tests de apply/clamp. **Falta verificar en metal.**
+- [ ] **Backdrop REAL — afinar (a): paneles/layer-shell *frosted*.** Extender el
+      backdrop real a superficies layer-shell (paneles tipo waybar), no sólo
+      barras de ventana. Requiere que el panel cliente sea translúcido para que
+      el blur detrás se vea; geometría disponible vía `map.layer_geometry`.
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).

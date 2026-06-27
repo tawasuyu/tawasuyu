@@ -408,6 +408,15 @@ pub struct Config {
     /// como backdrop *frosted*. Opt-in. Ver `COLA-EMBELLECIMIENTO.md`.
     #[serde(default)]
     pub glass_blur: u8,
+    /// **Glass — calidad del backdrop** (sólo aplica con `glass_blur > 0`): cuán
+    /// real es el fondo *frosted*. `0` = sólo el wallpaper desenfocado (barato,
+    /// no ve ventanas detrás); `1` = backdrop REAL bajo el **menú raíz** (ve las
+    /// ventanas, una pasada offscreen por frame mientras el menú está abierto);
+    /// `2` (default) = además backdrop REAL por **barra de ventana flotante**
+    /// (calidad N, una pasada por flotante). Más calidad = más coste de GPU. El
+    /// default 2 conserva el comportamiento previo. Ver `COLA-EMBELLECIMIENTO.md`.
+    #[serde(default = "default_glass_quality")]
+    pub glass_quality: u8,
     /// **Reducir movimiento** (accesibilidad): cuando está activo, el
     /// compositor pone en cero todas las duraciones de animación (apertura de
     /// ventana, slide entre escritorios, vuelo de cámara del Prezi). Un único
@@ -504,6 +513,13 @@ fn default_true() -> bool {
 /// Default de los divisores que arrancan neutros (1 = sin efecto).
 fn default_one() -> u32 {
     1
+}
+
+/// Default de [`Config::glass_quality`]: `2` (calidad N — backdrop REAL bajo el
+/// menú **y** por barra flotante). Conserva el comportamiento previo a que el
+/// nivel fuera configurable (cuando el glass siempre era calidad N).
+fn default_glass_quality() -> u8 {
+    2
 }
 
 /// Default de [`Config::overview_anim_ms`]: un vuelo de cámara ágil.
@@ -979,6 +995,7 @@ impl Default for Config {
             unfocused_dim_pct: 0,
             corner_radius: 0,
             glass_blur: 0,
+            glass_quality: default_glass_quality(),
             reduce_motion: false,
         }
     }
