@@ -105,6 +105,10 @@ fn rail_widget(
                 .paint_with(move |scene, _ts, rect| paint_reposo_halo(scene, rect, t, accent))
                 .children(vec![tooth_icon(name, size, color)]);
             }
+            // Diente monitor: canvas vivo e inteligente con la carga del sistema.
+            if crate::es_monitor(kind) {
+                return super::monitor_vivo_view(vivo.ctx, vivo.t, size, theme);
+            }
             tooth_icon(name, size, color)
         },
         move |id| Msg::NavTabActivate(si, id as usize),

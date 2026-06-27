@@ -911,16 +911,18 @@ impl LayerApp {
         }
         {
             let idx = self.panels[pi].idx;
-            let es_sidebar_vivo = self
+            let es_sidebar_animado = self
                 .cfg
                 .surfaces
                 .get(idx)
                 .map(|s| {
                     s.kind == SurfaceKind::Sidebar
-                        && s.tabs.iter().any(|t| crate::es_diente_vivo(&t.content.kind))
+                        && s.tabs.iter().any(|t| {
+                            crate::es_diente_vivo(&t.content.kind) || crate::es_monitor(&t.content.kind)
+                        })
                 })
                 .unwrap_or(false);
-            if es_sidebar_vivo {
+            if es_sidebar_animado {
                 self.panels[pi].dirty = true;
             }
         }
@@ -1189,6 +1191,7 @@ impl LayerApp {
             let vivo = render::DienteVivo {
                 manifest: self.diente_manifest,
                 cava_frame: &self.cava_frame,
+                ctx: &self.ctx,
                 t: self.diente_t0.elapsed().as_secs_f64(),
             };
             let extras = render::extras_vivos(

@@ -28,8 +28,8 @@ use pata_llimphi::bluetooth::{BtDevice, BtState};
 use pata_llimphi::mpris::MediaState;
 use pata_llimphi::network::{NetState, NetStatus, WifiAp};
 use pata_llimphi::render::{
-    control_center_view, diente_vivo_view, paint_reposo_halo, sistema_monitor_view, CentroDatos,
-    ControlExtras, DienteVivo,
+    control_center_view, diente_vivo_view, monitor_vivo_view, paint_reposo_halo,
+    sistema_monitor_view, CentroDatos, ControlExtras, DienteVivo,
 };
 use pata_llimphi::Msg;
 
@@ -113,20 +113,22 @@ fn main() {
     // ---- Manifestaciones del diente (derecha) ----
     let tiles = vec![
         tile("Reposo (halo)", reposo_view(&theme), &theme),
-        tile("Volumen", manifest_view(Manifestacion::Volumen { frac: 0.6, muted: false }, &theme), &theme),
-        tile("Volumen mute", manifest_view(Manifestacion::Volumen { frac: 0.4, muted: true }, &theme), &theme),
-        tile("Música", manifest_view(Manifestacion::Musica, &theme), &theme),
-        tile("CPU caliente", manifest_view(Manifestacion::Cpu { carga: 0.92 }, &theme), &theme),
+        tile("Volumen", manifest_view(Manifestacion::Volumen { frac: 0.6, muted: false }, &ctx, &theme), &theme),
+        tile("Volumen mute", manifest_view(Manifestacion::Volumen { frac: 0.4, muted: true }, &ctx, &theme), &theme),
+        tile("Música", manifest_view(Manifestacion::Musica, &ctx, &theme), &theme),
+        tile("CPU caliente", manifest_view(Manifestacion::Cpu { carga: 0.92 }, &ctx, &theme), &theme),
         tile(
             "Batería baja",
-            manifest_view(Manifestacion::Bateria { frac: 0.12, cargando: false, estado: EstadoBat::Baja }, &theme),
+            manifest_view(Manifestacion::Bateria { frac: 0.12, cargando: false, estado: EstadoBat::Baja }, &ctx, &theme),
             &theme,
         ),
         tile(
             "Cargando",
-            manifest_view(Manifestacion::Bateria { frac: 0.85, cargando: true, estado: EstadoBat::Enchufada }, &theme),
+            manifest_view(Manifestacion::Bateria { frac: 0.85, cargando: true, estado: EstadoBat::Enchufada }, &ctx, &theme),
             &theme,
         ),
+        // El diente monitor (vivo): ecualizador de cores + RAM + énfasis inteligente.
+        tile("Monitor (diente)", monitor_vivo_view(&ctx, 0.55, SZ, &theme), &theme),
     ];
     let galeria = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -185,8 +187,8 @@ fn tile(label: &str, canvas: View<Msg>, theme: &llimphi_theme::Theme) -> View<Ms
 }
 
 /// El canvas de una manifestación (no-reposo).
-fn manifest_view(m: Manifestacion, theme: &llimphi_theme::Theme) -> View<Msg> {
-    let vivo = DienteVivo { manifest: m, cava_frame: &[], t: 0.55 };
+fn manifest_view(m: Manifestacion, ctx: &WidgetCtx, theme: &llimphi_theme::Theme) -> View<Msg> {
+    let vivo = DienteVivo { manifest: m, cava_frame: &[], ctx, t: 0.55 };
     diente_vivo_view(&vivo, SZ, theme).unwrap_or_else(|| View::new(Style::default()))
 }
 

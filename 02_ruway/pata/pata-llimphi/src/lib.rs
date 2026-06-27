@@ -788,6 +788,16 @@ pub fn es_monitor(kind: &str) -> bool {
     matches!(kind, "monitor" | "sistema" | "system" | "sysmon")
 }
 
+/// `true` si la config declara algún diente **animado** (vivo o monitor): ambos
+/// pintan un canvas vivo en el rail y necesitan el latido [`Msg::DienteTick`].
+pub fn config_tiene_diente_animado(cfg: &Config) -> bool {
+    cfg.surfaces
+        .iter()
+        .filter(|s| s.kind == SurfaceKind::Sidebar)
+        .flat_map(|s| s.tabs.iter())
+        .any(|t| es_diente_vivo(&t.content.kind) || es_monitor(&t.content.kind))
+}
+
 /// Dispara el transitorio de volumen en el diente vivo y re-resuelve su
 /// manifestación, para respuesta inmediata al subir/bajar/silenciar (sin esperar
 /// al muestreo de 1 Hz). Inocuo si la config no declara un diente vivo.
@@ -1420,10 +1430,9 @@ impl App for PataApp {
         if model.cava.is_some() {
             handle.spawn_periodic(Duration::from_millis(50), || Msg::CavaTick);
         }
-        // Latido del diente vivo: re-resuelve la manifestación a ~20 Hz para que
-        // los transitorios caduquen suaves y las animaciones corran. Sólo si la
-        // config declara un diente de contenido `control`.
-        if config_tiene_diente_vivo(&model.cfg) {
+        // Latido de los dientes animados (control vivo + monitor): re-resuelve y
+        // re-pinta a ~20 Hz. Sólo si la config declara alguno.
+        if config_tiene_diente_animado(&model.cfg) {
             handle.spawn_periodic(Duration::from_millis(50), || Msg::DienteTick);
         }
         // Plano de datos del sidebar: poll de Mónadas a nouser, sólo si la config

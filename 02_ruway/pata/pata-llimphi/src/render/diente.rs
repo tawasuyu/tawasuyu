@@ -17,12 +17,15 @@ use pata_core::atencion::{EstadoBat, Manifestacion};
 
 use crate::Msg;
 
-/// El estado que el rail necesita para pintar el diente vivo.
+/// El estado que el rail necesita para pintar los dientes animados: el control
+/// center (`manifest`/`cava_frame`) y el monitor de sistema (`ctx`).
 pub struct DienteVivo<'a> {
-    /// Qué mostrar ahora (lo decidió el árbitro).
+    /// Qué mostrar ahora en el diente de control (lo decidió el árbitro).
     pub manifest: Manifestacion,
     /// Último cuadro del visualizador de audio (vacío si no hay cava).
     pub cava_frame: &'a [f32],
+    /// Snapshot del sistema (CPU/cores/RAM) — alimenta el diente monitor.
+    pub ctx: &'a pata_core::widget::WidgetCtx,
     /// Reloj monotónico (s) para las animaciones.
     pub t: f64,
 }
@@ -264,18 +267,12 @@ mod tests {
     use super::*;
     use pata_core::atencion::EstadoBat;
 
-    fn vivo(m: Manifestacion) -> DienteVivo<'static> {
-        DienteVivo {
-            manifest: m,
-            cava_frame: &[],
-            t: 0.0,
-        }
-    }
-
     /// Reposo cede al icono normal (None); el resto produce un canvas (Some).
     #[test]
     fn reposo_es_none_el_resto_some() {
         let theme = Theme::dark();
+        let ctx = pata_core::widget::WidgetCtx::default();
+        let vivo = |m| DienteVivo { manifest: m, cava_frame: &[], ctx: &ctx, t: 0.0 };
         assert!(diente_vivo_view(&vivo(Manifestacion::Reposo), 20.0, &theme).is_none());
         let activos = [
             Manifestacion::Volumen { frac: 0.5, muted: false },
