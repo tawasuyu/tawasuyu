@@ -39,6 +39,11 @@ pub const VOL_EPS: f32 = 0.01;
 pub const CPU_ON: f32 = 0.85;
 /// Umbral de salida (histéresis) para no titilar en el borde.
 pub const CPU_OFF: f32 = 0.70;
+/// Temperatura (°C) para entrar en "caliente" por sensor térmico — además de la
+/// carga. La máquina puede estar caliente sin estar al 100% (y viceversa).
+pub const TEMP_ON: f32 = 82.0;
+/// Temperatura de salida (histéresis).
+pub const TEMP_OFF: f32 = 70.0;
 /// Batería baja (fracción `0..1`).
 pub const BAT_BAJA: f32 = 0.20;
 /// Batería crítica.
@@ -57,6 +62,8 @@ pub struct Senales {
     pub muted: bool,
     /// Uso de CPU `0..1`.
     pub cpu: f32,
+    /// Temperatura de CPU en °C, o `None` si no hay sensor térmico legible.
+    pub cpu_temp: Option<f32>,
     /// Carga de batería `0..1`, o `None` si no hay batería (desktop).
     pub bateria: Option<f32>,
     /// `true` si la batería está cargando (o llena enchufada).
@@ -71,6 +78,7 @@ impl Default for Senales {
             volume: 0.0,
             muted: false,
             cpu: 0.0,
+            cpu_temp: None,
             bateria: None,
             cargando: false,
             musica: false,
@@ -175,13 +183,20 @@ impl Atencion {
         }
         self.prev = Some(s);
 
-        // 2. Histéresis de CPU (estado sostenido, no transitorio).
+        // 2. Histéresis de CPU (estado sostenido, no transitorio): caliente por
+        // carga ALTA o por temperatura ALTA del sensor; se apaga sólo cuando AMBAS
+        // bajan (si no hay sensor, la temperatura no obliga ni impide nada).
         if self.cpu_caliente {
-            if s.cpu < CPU_OFF {
+            let carga_baja = s.cpu < CPU_OFF;
+            let temp_baja = s.cpu_temp.map(|t| t < TEMP_OFF).unwrap_or(true);
+            if carga_baja && temp_baja {
                 self.cpu_caliente = false;
             }
-        } else if s.cpu >= CPU_ON {
-            self.cpu_caliente = true;
+        } else {
+            let temp_alta = s.cpu_temp.map(|t| t >= TEMP_ON).unwrap_or(false);
+            if s.cpu >= CPU_ON || temp_alta {
+                self.cpu_caliente = true;
+            }
         }
 
         self.resolver(s, now)
@@ -328,6 +343,27 @@ mod tests {
         );
         // Bajo OFF se apaga.
         assert_eq!(a.update(Senales { cpu: 0.60, ..s() }, 4.0), Manifestacion::Reposo);
+    }
+
+    #[test]
+    fn cpu_caliente_por_temperatura_aunque_la_carga_sea_baja() {
+        let mut a = Atencion::new();
+        a.update(s(), 0.0);
+        // Carga baja pero el sensor marca caliente → entra igual.
+        assert_eq!(
+            a.update(Senales { cpu: 0.30, cpu_temp: Some(85.0), ..s() }, 1.0),
+            Manifestacion::Cpu { carga: 0.30 }
+        );
+        // Sigue caliente entre TEMP_OFF y TEMP_ON (histéresis).
+        assert_eq!(
+            a.update(Senales { cpu: 0.30, cpu_temp: Some(75.0), ..s() }, 2.0),
+            Manifestacion::Cpu { carga: 0.30 }
+        );
+        // Carga baja Y temperatura baja → reposo.
+        assert_eq!(
+            a.update(Senales { cpu: 0.30, cpu_temp: Some(60.0), ..s() }, 3.0),
+            Manifestacion::Reposo
+        );
     }
 
     #[test]

@@ -188,6 +188,32 @@ fn clock_de<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> ClockReading {
 
 /// `(fracción_usada, usada_mb, total_mb)` desde `/proc/meminfo`. Si no se puede
 /// leer (no-Linux), devuelve ceros.
+/// La temperatura de CPU en °C: el máximo de las zonas térmicas de
+/// `/sys/class/thermal/thermal_zone*/temp` (milligrados). `None` si no hay
+/// ninguna legible (VM/desktop sin sensores). Tomar el máximo es un proxy simple
+/// y robusto de "qué tan caliente está la máquina" sin casar nombres de zona.
+pub fn cpu_temp_celsius() -> Option<f32> {
+    let dir = std::fs::read_dir("/sys/class/thermal").ok()?;
+    let mut max_milli: Option<i64> = None;
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("thermal_zone") {
+            continue;
+        }
+        if let Ok(s) = std::fs::read_to_string(entry.path().join("temp")) {
+            if let Ok(milli) = s.trim().parse::<i64>() {
+                // Descarta lecturas absurdas (sensores apagados reportan 0 o
+                // valores negativos/enormes).
+                if (1_000..=150_000).contains(&milli) {
+                    max_milli = Some(max_milli.map_or(milli, |m| m.max(milli)));
+                }
+            }
+        }
+    }
+    max_milli.map(|m| m as f32 / 1000.0)
+}
+
 fn sample_ram() -> (f32, u32, u32) {
     let Some((total_kb, avail_kb)) = read_meminfo() else {
         return (0.0, 0, 0);

@@ -686,6 +686,7 @@ impl LayerApp {
                 crate::bateria::avisar(a, pct);
             }
         }
+        self.cpu_temp = crate::sampler::cpu_temp_celsius();
         // Diente vivo: refresca su manifestación con las señales nuevas.
         self.actualizar_diente();
         // `WidgetCtx` ya no es `Copy` (lleva el título de la ventana enfocada),
@@ -729,6 +730,7 @@ impl LayerApp {
             volume: self.ctx.volume,
             muted: self.ctx.muted,
             cpu: self.ctx.cpu,
+            cpu_temp: self.cpu_temp,
             bateria: self.bat_now.map(|(f, _)| f),
             cargando: self.bat_now.map(|(_, c)| c).unwrap_or(false),
             musica: self.media_now.as_ref().map(|m| m.playing).unwrap_or(false),

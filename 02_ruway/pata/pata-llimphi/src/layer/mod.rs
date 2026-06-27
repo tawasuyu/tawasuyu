@@ -286,6 +286,8 @@ pub(super) struct LayerApp {
     pub(super) diente_t0: std::time::Instant,
     /// Última lectura de batería `(fracción 0..1, cargando)`.
     pub(super) bat_now: Option<(f32, bool)>,
+    /// Última temperatura de CPU (°C), o `None` si no hay sensor.
+    pub(super) cpu_temp: Option<f32>,
     /// Manifestación actual del diente vivo.
     pub(super) diente_manifest: pata_core::atencion::Manifestacion,
     pub(super) theme: Theme,
@@ -622,6 +624,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         atencion: pata_core::atencion::Atencion::new(),
         diente_t0: std::time::Instant::now(),
         bat_now: None,
+        cpu_temp: None,
         diente_manifest: pata_core::atencion::Manifestacion::Reposo,
         theme,
         cfg,

@@ -996,6 +996,9 @@ pub struct Model {
     pub diente_t: f64,
     /// Última lectura de batería `(fracción 0..1, cargando)`, o `None` si no hay.
     pub bat_now: Option<(f32, bool)>,
+    /// Última temperatura de CPU (°C), o `None` si no hay sensor. Muestreada a
+    /// 1 Hz; el árbitro la usa para "CPU caliente" por sensor térmico.
+    pub cpu_temp: Option<f32>,
     /// Manifestación actual que el rail pinta en el diente vivo.
     pub diente_manifest: pata_core::atencion::Manifestacion,
     /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
@@ -1172,6 +1175,7 @@ impl Model {
             volume: self.last_ctx.volume,
             muted: self.last_ctx.muted,
             cpu: self.last_ctx.cpu,
+            cpu_temp: self.cpu_temp,
             bateria: self.bat_now.map(|(f, _)| f),
             cargando: self.bat_now.map(|(_, c)| c).unwrap_or(false),
             musica: self.media_now.as_ref().map(|m| m.playing).unwrap_or(false),
@@ -1363,6 +1367,7 @@ impl App for PataApp {
             atencion: pata_core::atencion::Atencion::new(),
             diente_t: 0.0,
             bat_now: None,
+            cpu_temp: None,
             diente_manifest: pata_core::atencion::Manifestacion::Reposo,
             nav: NavState::default(),
             rag: if rag_present {
@@ -1498,6 +1503,7 @@ impl App for PataApp {
                         bateria::avisar(a, pct);
                     }
                 }
+                model.cpu_temp = sampler::cpu_temp_celsius();
                 // Diente vivo: refresca su manifestación con las señales nuevas.
                 model.actualizar_diente();
                 // Agente polkit: si llega una autenticación y no hay otra en
