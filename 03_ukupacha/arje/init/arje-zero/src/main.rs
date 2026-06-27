@@ -774,6 +774,22 @@ async fn dispatch_graph_event(
             if let Err(e) = graph.authorize_and_spawn(card, requester).await {
                 warn!(?e, "spawn request error");
             }
+            // Re-floor: si este spawn devolvió el piso (registró un proveedor que
+            // unidades aparcadas esperaban — p. ej. el compositor que reaparece),
+            // re-encolá esas unidades, en orden topológico, por el canal (no
+            // reentrante; cada re-spawn vuelve a disparar este drenaje en cascada).
+            let seed = graph.seed_id();
+            for card in graph.drain_refloorable() {
+                let label = card.label.clone();
+                info!(%label, "re-floor: el piso volvió — re-spawneando Ente aparcado");
+                if tx
+                    .send(GraphEvent::SpawnRequest { card, requester: seed })
+                    .await
+                    .is_err()
+                {
+                    warn!(%label, "re-floor: graph_tx cerrado");
+                }
+            }
         }
         GraphEvent::BusRequest { peer, from, request, outbound, reply } => {
             if let Some(action) = bus_request_to_audit(&peer, &from, &request) {

@@ -71,6 +71,13 @@ pub struct EnteGraph {
     /// muerte llegue por SIGCHLD, `on_death` salta el restart y los baja de
     /// verdad en vez de revivirlos. Simétrico a `SpawnCardFromDisk`.
     pub(in crate::graph) stopping: HashSet<Ulid>,
+    /// Entes `Restart` que cayeron porque su "piso" desapareció (una capability
+    /// de la que dependen dejó de tener proveedor — p. ej. el compositor murió y
+    /// se llevó a sus clientes). En vez de descartarlos, quedan acá ESPERANDO; en
+    /// cuanto el proveedor reaparece (el piso vuelve), `drain_refloorable` los
+    /// re-spawnea en orden topológico. Uno por `label` (la última encarnación
+    /// gana). Ver SDD §re-floor.
+    pub(in crate::graph) parked: Vec<EntityCard>,
 }
 
 /// TTL fijo para inhibiciones del cerebro. Suficiente largo para cubrir un
@@ -181,6 +188,7 @@ impl EnteGraph {
             restart_state: HashMap::new(),
             inhibits: BTreeMap::new(),
             stopping: HashSet::new(),
+            parked: Vec::new(),
         };
         // El Ente #0 se inscribe a sí mismo como proveedor de las capacidades
         // que su Card declara — sólo así los hijos pueden requerirlas.
@@ -295,6 +303,54 @@ impl EnteGraph {
         self.providers.entry(cap).or_default().insert(ente_id);
     }
 
+    /// Id de la Semilla (Ente #0). Autorizada para `Capability::Spawn`, es el
+    /// requester de los re-spawns internos (restart, re-floor).
+    pub(crate) fn seed_id(&self) -> Ulid {
+        self.seed.id
+    }
+
+    /// Aparca un Ente que no pudo arrancar porque su piso (una capability de la
+    /// que depende) no está disponible. Dedup por `label`: la última encarnación
+    /// reemplaza a la previa aparcada (el "hilo" de identidad es el label, igual
+    /// que `restart_state`).
+    pub(in crate::graph) fn park_ente(&mut self, card: EntityCard) {
+        self.parked.retain(|c| c.label != card.label);
+        self.parked.push(card);
+    }
+
+    /// Saca de `parked` las Cards cuyos contratos YA se satisfacen con las
+    /// capacidades disponibles, ordenadas topológicamente (proveedor antes que
+    /// consumidor) por `resolve::plan_spawn`. Las que siguen sin piso quedan
+    /// aparcadas. El caller las re-encola como `SpawnRequest` por el canal (no
+    /// reentrante). Esto es "volver a poner el piso": cuando el compositor
+    /// reaparece, sus clientes caídos vuelven solos y en orden.
+    pub(crate) fn drain_refloorable(&mut self) -> Vec<EntityCard> {
+        if self.parked.is_empty() {
+            return Vec::new();
+        }
+        let available = self.available_caps();
+        let mut ready = Vec::new();
+        let mut still = Vec::new();
+        for card in std::mem::take(&mut self.parked) {
+            if card.deps_satisfied(&available).is_ok() {
+                ready.push(card);
+            } else {
+                still.push(card);
+            }
+        }
+        self.parked = still;
+        // Orden topológico entre los que vuelven (uno puede proveer el piso de
+        // otro). `external` = lo ya disponible.
+        let plan = resolve::plan_spawn(&ready, &available);
+        let ordered: Vec<EntityCard> = plan.order.iter().map(|&i| ready[i].clone()).collect();
+        // Cualquiera que el plan rechace (ciclo entre los que vuelven) se
+        // re-aparca para reintentar cuando cambie el piso.
+        for (i, _) in &plan.rejected {
+            self.parked.push(ready[*i].clone());
+        }
+        ordered
+    }
+
     /// Conjunto de capacidades actualmente DISPONIBLES en el fractal: las que
     /// tiene al menos un proveedor vivo. Filtra entradas con set vacío (un
     /// proveedor que murió deja la key con set vacío hasta el próximo barrido).
@@ -359,5 +415,92 @@ mod cas_roots_tests {
             assert!(roots.contains(&r), "falta la raíz {r:?}");
         }
         assert_eq!(roots.len(), 4, "exactamente las 4 raíces vivas, sin basura");
+    }
+}
+
+#[cfg(test)]
+mod refloor_tests {
+    //! "Volver a poner el piso": un cliente `Restart` que depende de una
+    //! capability-piso (la del compositor) se APARCA si el piso no está, y
+    //! revive en cuanto el proveedor reaparece.
+    use super::*;
+    use arje_card::{Capability, EntityCard, InterfaceId, Supervision};
+    use std::time::Duration;
+
+    fn seed_con_spawn() -> EntityCard {
+        let mut seed = EntityCard::new("seed");
+        seed.provides = [Capability::Spawn].into_iter().collect();
+        seed
+    }
+
+    fn piso() -> Capability {
+        Capability::Endpoint {
+            interface: InterfaceId([7u8; 16]),
+            version: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn cliente_sin_piso_se_aparca_y_revive_cuando_vuelve() {
+        let mut g = EnteGraph::new(seed_con_spawn());
+        let seed_id = g.seed_id();
+
+        // Cliente Restart que REQUIERE el piso (el endpoint del compositor).
+        let mut client = EntityCard::new("cliente-gui");
+        client.requires = [piso()].into_iter().collect();
+        client.supervision = Supervision::Restart {
+            initial: Duration::from_millis(10),
+            max: Duration::from_secs(1),
+        };
+        g.authorize_and_spawn(client, seed_id).await.unwrap();
+
+        // Sin piso ⇒ aparcado, NO encarnado.
+        assert_eq!(g.parked.len(), 1, "sin piso el cliente queda aparcado");
+        assert!(
+            !g.incarnated.values().any(|i| i.card.label == "cliente-gui"),
+            "el cliente no debe estar vivo todavía"
+        );
+        assert!(g.drain_refloorable().is_empty(), "sigue sin piso");
+
+        // Aparece el piso: el compositor lo provee.
+        let mut compositor = EntityCard::new("mirada");
+        compositor.provides = [piso()].into_iter().collect();
+        g.authorize_and_spawn(compositor, seed_id).await.unwrap();
+
+        // El cliente ya es re-floorable.
+        let ready = g.drain_refloorable();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].label, "cliente-gui");
+        assert!(g.parked.is_empty(), "ya no queda nadie esperando piso");
+    }
+
+    #[tokio::test]
+    async fn park_dedup_por_label() {
+        let mut g = EnteGraph::new(seed_con_spawn());
+        let seed_id = g.seed_id();
+        let mk = || {
+            let mut c = EntityCard::new("gui");
+            c.requires = [piso()].into_iter().collect();
+            c.supervision = Supervision::Restart {
+                initial: Duration::from_millis(10),
+                max: Duration::from_secs(1),
+            };
+            c
+        };
+        // Dos intentos del mismo label (dos ciclos de muerte/respawn sin piso).
+        g.authorize_and_spawn(mk(), seed_id).await.unwrap();
+        g.authorize_and_spawn(mk(), seed_id).await.unwrap();
+        assert_eq!(g.parked.len(), 1, "un solo aparcado por label");
+    }
+
+    #[tokio::test]
+    async fn oneshot_sin_piso_no_se_aparca() {
+        let mut g = EnteGraph::new(seed_con_spawn());
+        let seed_id = g.seed_id();
+        let mut once = EntityCard::new("tarea");
+        once.requires = [piso()].into_iter().collect();
+        once.supervision = Supervision::OneShot;
+        g.authorize_and_spawn(once, seed_id).await.unwrap();
+        assert!(g.parked.is_empty(), "OneShot no persiste: se descarta, no aparca");
     }
 }

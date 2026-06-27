@@ -71,7 +71,17 @@ impl EnteGraph {
         // del genesis), no gatea acá. Fuente única: `Card::deps_satisfied`.
         let available = self.available_caps();
         if let Err(unmet) = card.deps_satisfied(&available) {
-            warn!(?unmet, label = %card.label, "contrato de dependencia no satisfecho");
+            // Un daemon `Restart` que pierde su piso (p. ej. el compositor murió
+            // y se llevó a este cliente) NO se descarta: queda APARCADO. Cuando
+            // el proveedor reaparezca, `drain_refloorable` lo re-spawnea en orden
+            // — "volver a poner el piso" sin reconstruir la sesión a mano. Los
+            // OneShot/Delegate sí se descartan (no tienen por qué persistir).
+            if matches!(card.supervision, Supervision::Restart { .. }) {
+                info!(?unmet, label = %card.label, "sin piso — Ente aparcado, espera a su proveedor");
+                self.park_ente(card);
+            } else {
+                warn!(?unmet, label = %card.label, "contrato de dependencia no satisfecho");
+            }
             return Ok(());
         }
         // Lineage por defecto = quien pidió el spawn.
