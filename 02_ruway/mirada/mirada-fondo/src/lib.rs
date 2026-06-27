@@ -37,6 +37,10 @@
 
 pub mod cache;
 
+/// Render headless de Lottie/rive a la cache de frames (sólo con feature `bake`).
+#[cfg(feature = "bake")]
+pub mod bake;
+
 use serde::{Deserialize, Serialize};
 
 /// Qué fondo mostrar en una superficie. El **default** es la chakana de la marca.

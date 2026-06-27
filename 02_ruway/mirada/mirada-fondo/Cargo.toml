@@ -9,16 +9,17 @@ description = "mirada-fondo — sistema unificado de fondos animados para las tr
 
 [features]
 default = []
-# Render headless (vello + llimphi) de Lottie/rive a la cache de frames. Lo
-# necesitan el binario `fondo-bake` y wawapanel; NO el splash, que sólo blitea.
+# Render headless (vello GPU offline + llimphi) de Lottie/rive a la cache de
+# frames. Lo necesitan el bin `fondo-bake` y wawapanel; NO el splash/greeter/
+# compositor, que sólo leen la cache (núcleo) y bliteant.
 bake = [
-    "dep:vello",
-    "dep:wgpu",
     "dep:pollster",
+    "dep:llimphi-ui",
     "dep:llimphi-lottie",
     "dep:llimphi-anim",
     "dep:llimphi-mesh",
     "dep:llimphi-image",
+    "dep:llimphi-anim-studio",
 ]
 
 [dependencies]
@@ -31,11 +32,17 @@ directories = { workspace = true }
 marca = { workspace = true }
 
 # --- sólo con feature `bake` (deps pesadas de render) ---
-vello = { workspace = true, optional = true }
-wgpu = { workspace = true, optional = true }
+# llimphi-ui reexporta hal/raster/vello/wgpu → un solo gancho al stack gráfico.
+llimphi-ui = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 llimphi-lottie = { workspace = true, optional = true }
 llimphi-anim = { workspace = true, optional = true }
 llimphi-mesh = { workspace = true, optional = true }
 llimphi-image = { workspace = true, optional = true }
-# NOTA: el bin `fondo-bake` (gated por `bake`) se agrega al implementar el baker.
+# Tipos del proyecto «rive» (Doc + RigDoc) expuestos como lib por el studio.
+llimphi-anim-studio = { workspace = true, optional = true }
+
+[[bin]]
+name = "fondo-bake"
+path = "src/bin/fondo-bake.rs"
+required-features = ["bake"]

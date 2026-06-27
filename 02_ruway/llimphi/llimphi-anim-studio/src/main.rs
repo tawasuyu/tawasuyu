@@ -34,8 +34,7 @@ use llimphi_widget_nodegraph::{
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-mod doc;
-mod rig;
+use llimphi_anim_studio::{doc, rig, Project};
 use doc::{CmpOp, CondDef, Doc, InputDef, InputKind, StateDef, TransDef};
 use rig::{BoneDef, MeshMode, RigDoc};
 
@@ -67,13 +66,8 @@ enum Mode {
     Rig,
 }
 
-/// El proyecto persistido: ambas superficies juntas en un solo `.ron`.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Project {
-    doc: Doc,
-    #[serde(default = "RigDoc::starter")]
-    rig: RigDoc,
-}
+// `Project` (doc + rig) vive ahora en la lib (`llimphi_anim_studio::Project`),
+// para que `mirada-fondo` cargue el mismo formato sin duplicar los tipos.
 
 // =============================================================================
 //  Modelo

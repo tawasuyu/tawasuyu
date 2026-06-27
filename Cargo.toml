@@ -763,6 +763,9 @@ llimphi-motion = { path = "02_ruway/llimphi/llimphi-motion" }
 # Máquina de estados de animación (estilo Rive) clip-agnóstica. Núcleo puro;
 # el render lo cablea el consumidor (llimphi-lottie). Escalón sobre el playback.
 llimphi-anim = { path = "02_ruway/llimphi/llimphi-anim" }
+# Studio de animación «rive»: además del editor (bin), expone como lib los
+# documentos serializables (Doc + RigDoc + Project) que carga mirada-fondo.
+llimphi-anim-studio = { path = "02_ruway/llimphi/llimphi-anim-studio" }
 # Render de mallas deformables (skel::Mesh) a vello Scene: vectorial y texturizada.
 llimphi-mesh = { path = "02_ruway/llimphi/llimphi-mesh" }
 # Iconos vectoriales (BezPath en grid 24×24) compartidos por todas las apps.

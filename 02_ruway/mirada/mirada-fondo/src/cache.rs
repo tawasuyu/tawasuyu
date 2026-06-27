@@ -67,10 +67,13 @@ pub fn cache_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp/mirada/fondo"))
 }
 
-/// Carpeta-cache determinística para `spec` a tamaño `w×h` y `fps`. Incluye el
-/// `mtime` del asset en la clave para invalidar al editarlo. `Chakana` no usa
+/// Carpeta-cache determinística para `spec`. La clave deriva de
+/// `(kind, ruta, mtime del asset)` — **no** del tamaño ni del fps: hay **una**
+/// cache por asset, y el consumidor lee su `meta.ron` para saber a qué tamaño se
+/// bakeó y **escala** los frames al blitear (como la chakana). Editar el asset
+/// cambia el `mtime` → otra carpeta → la vieja queda obsoleta. `Chakana` no usa
 /// cache (devuelve igual una carpeta, pero nadie debería bakearla).
-pub fn cache_dir(spec: &FondoSpec, w: u32, h: u32, fps: f32) -> PathBuf {
+pub fn cache_dir(spec: &FondoSpec) -> PathBuf {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     spec.kind().hash(&mut hasher);
     if let Some(p) = spec.path() {
@@ -85,9 +88,6 @@ pub fn cache_dir(spec: &FondoSpec, w: u32, h: u32, fps: f32) -> PathBuf {
             }
         }
     }
-    w.hash(&mut hasher);
-    h.hash(&mut hasher);
-    fps.to_bits().hash(&mut hasher);
     let key = format!("{}-{:016x}", spec.kind(), hasher.finish());
     cache_root().join(key)
 }
@@ -119,14 +119,14 @@ impl FrameCache {
         Ok(FrameCache { dir, meta })
     }
 
-    /// Abre la cache correspondiente a `spec` a tamaño/fps dados, si existe.
-    pub fn open_for(spec: &FondoSpec, w: u32, h: u32, fps: f32) -> io::Result<Self> {
-        Self::open(cache_dir(spec, w, h, fps))
+    /// Abre la cache bakeada de `spec`, si existe.
+    pub fn open_for(spec: &FondoSpec) -> io::Result<Self> {
+        Self::open(cache_dir(spec))
     }
 
-    /// ¿Existe una cache bakeada para `spec` a este tamaño/fps?
-    pub fn is_baked(spec: &FondoSpec, w: u32, h: u32, fps: f32) -> bool {
-        meta_path(&cache_dir(spec, w, h, fps)).is_file()
+    /// ¿Existe una cache bakeada para `spec`?
+    pub fn is_baked(spec: &FondoSpec) -> bool {
+        meta_path(&cache_dir(spec)).is_file()
     }
 
     pub fn meta(&self) -> &CacheMeta {
@@ -185,8 +185,8 @@ impl FrameCache {
 
 /// Crea/vacía la carpeta-cache de `spec` y escribe `meta.ron`. Devuelve la
 /// carpeta lista para recibir frames con [`write_frame_rgba`].
-pub fn init_cache(spec: &FondoSpec, meta: &CacheMeta, fps: f32) -> io::Result<PathBuf> {
-    let dir = cache_dir(spec, meta.width, meta.height, fps);
+pub fn init_cache(spec: &FondoSpec, meta: &CacheMeta) -> io::Result<PathBuf> {
+    let dir = cache_dir(spec);
     // Empezar de cero: una cache a medio escribir es peor que ninguna.
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
@@ -233,13 +233,15 @@ mod tests {
     }
 
     #[test]
-    fn cache_dir_cambia_con_el_tamano() {
-        let s = FondoSpec::Lottie { path: "/no/existe.json".into() };
-        let a = cache_dir(&s, 100, 100, 30.0);
-        let b = cache_dir(&s, 200, 200, 30.0);
-        assert_ne!(a, b, "distinto tamaño → distinta carpeta");
-        // estable: misma entrada → misma carpeta.
-        assert_eq!(a, cache_dir(&s, 100, 100, 30.0));
+    fn cache_dir_por_asset_no_por_tamano() {
+        let a = FondoSpec::Lottie { path: "/no/existe-a.json".into() };
+        let b = FondoSpec::Lottie { path: "/no/existe-b.json".into() };
+        assert_ne!(cache_dir(&a), cache_dir(&b), "distinto asset → distinta carpeta");
+        // estable: mismo spec → misma carpeta (sin depender del tamaño).
+        assert_eq!(cache_dir(&a), cache_dir(&a));
+        // kind distinto con misma ruta → distinta carpeta.
+        let r = FondoSpec::Rive { path: "/no/existe-a.json".into() };
+        assert_ne!(cache_dir(&a), cache_dir(&r));
     }
 
     #[test]
