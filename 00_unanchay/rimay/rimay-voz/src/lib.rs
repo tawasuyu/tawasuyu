@@ -45,6 +45,7 @@ pub use rimay_voz_core::{
     Transcripcion, Transcriptor, VozError,
 };
 pub use rimay_voz_mock::{LocutorMock, TranscriptorMock};
+pub use rimay_voz_nube::{LocutorNube, TranscriptorNube};
 
 /// Un transcriptor mock determinista, listo para envolver en la `Maquina` sin
 /// daemon ni modelo. Por default reconoce el llamado `"shuma"`.

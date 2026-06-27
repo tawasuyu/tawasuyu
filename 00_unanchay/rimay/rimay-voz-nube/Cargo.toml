@@ -1,0 +1,18 @@
+[package]
+name = "rimay-voz-nube"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "voz — backend de nube para STT/TTS sobre HTTP (shape OpenAI: /audio/transcriptions Whisper + /audio/speech). Cumple los traits Transcriptor/Locutor de rimay-voz-core; es la rama «Nube» del híbrido de VozConfig, gemelo de los backends de nube de pluma-llm. Sin modelos en disco: sólo red + credencial por agente."
+
+[dependencies]
+async-trait = { workspace = true }
+rimay-voz-core = { path = "../rimay-voz-core" }
+reqwest = { workspace = true, features = ["json", "multipart", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

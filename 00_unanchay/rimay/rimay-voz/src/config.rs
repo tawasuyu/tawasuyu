@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use rimay_voz_core::{Locutor, Transcriptor, VozError};
 use rimay_voz_mock::{LocutorMock, TranscriptorMock};
+use rimay_voz_nube::{LocutorNube, TranscriptorNube};
 
 /// De dónde sale un motor de voz. Las tres variantes cumplen el mismo trait.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,18 +87,27 @@ impl VozConfig {
         }
     }
 
-    /// Construye el transcriptor (STT) según [`Self::stt`]. Los backends real
-    /// (local/nube) todavía no están en disco: devuelven error explícito hasta
-    /// que `rimay-voz-{daemon,whisper,nube}` aterricen.
+    /// Construye el transcriptor (STT) según [`Self::stt`]. La rama **nube** ya
+    /// está aterrizada ([`rimay_voz_nube`]); la **local** (daemon) todavía erra
+    /// explícito hasta que `rimay-voz-daemon` llegue.
     pub async fn construir_stt(&self) -> Result<Arc<dyn Transcriptor>, VozError> {
         match &self.stt {
             Backend::Mock => Ok(Arc::new(TranscriptorMock::default())),
             Backend::Local => Err(VozError::Stt(
                 "STT local: rimay-voz-daemon todavía no está en disco".into(),
             )),
-            Backend::Nube { proveedor, .. } => Err(VozError::Stt(format!(
-                "STT nube «{proveedor}»: backend todavía no está en disco"
-            ))),
+            Backend::Nube { proveedor, modelo } => match proveedor.as_str() {
+                "openai" => {
+                    let mut b = TranscriptorNube::openai_from_env()?;
+                    if let Some(m) = modelo {
+                        b = b.con_modelo(m);
+                    }
+                    Ok(Arc::new(b))
+                }
+                otro => Err(VozError::Stt(format!(
+                    "STT nube: proveedor «{otro}» no soportado (hoy: openai)"
+                ))),
+            },
         }
     }
 
@@ -116,9 +126,18 @@ impl VozConfig {
             Backend::Local => Err(VozError::Tts(
                 "TTS local: rimay-voz-daemon todavía no está en disco".into(),
             )),
-            Backend::Nube { proveedor, .. } => Err(VozError::Tts(format!(
-                "TTS nube «{proveedor}»: backend todavía no está en disco"
-            ))),
+            Backend::Nube { proveedor, modelo } => match proveedor.as_str() {
+                "openai" => {
+                    let mut b = LocutorNube::openai_from_env()?;
+                    if let Some(m) = modelo {
+                        b = b.con_modelo(m);
+                    }
+                    Ok(Arc::new(b))
+                }
+                otro => Err(VozError::Tts(format!(
+                    "TTS nube: proveedor «{otro}» no soportado (hoy: openai)"
+                ))),
+            },
         }
     }
 
@@ -155,7 +174,7 @@ mod pruebas {
     }
 
     #[tokio::test]
-    async fn mock_construye_y_los_reales_aun_erran() {
+    async fn mock_construye_y_local_aun_erra() {
         let cfg = VozConfig::default();
         assert!(cfg.construir_stt().await.is_ok());
         assert!(cfg.construir_tts().await.is_ok());
@@ -164,5 +183,33 @@ mod pruebas {
         assert!(local.construir_stt().await.is_err());
         // pero el _o_mock nunca falla
         let _ = local.construir_stt_o_mock().await;
+    }
+
+    #[tokio::test]
+    async fn nube_proveedor_desconocido_erra() {
+        let cfg = VozConfig {
+            stt: Backend::Nube { proveedor: "marciano".into(), modelo: None },
+            tts: Backend::Nube { proveedor: "marciano".into(), modelo: None },
+            socket: None,
+        };
+        assert!(cfg.construir_stt().await.is_err());
+        assert!(cfg.construir_tts().await.is_err());
+        // el _o_mock sigue cayendo a mock pase lo que pase
+        let _ = cfg.construir_tts_o_mock().await;
+    }
+
+    #[tokio::test]
+    async fn nube_openai_depende_de_la_credencial() {
+        let cfg = VozConfig {
+            stt: Backend::Nube { proveedor: "openai".into(), modelo: None },
+            tts: Backend::Mock,
+            socket: None,
+        };
+        // Con OPENAI_API_KEY presente, construye; sin ella, erra explícito.
+        // Ningún caso hace red (el constructor sólo arma el cliente HTTP).
+        match std::env::var("OPENAI_API_KEY") {
+            Ok(_) => assert!(cfg.construir_stt().await.is_ok()),
+            Err(_) => assert!(cfg.construir_stt().await.is_err()),
+        }
     }
 }

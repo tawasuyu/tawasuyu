@@ -100,10 +100,18 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
   `pluma-llm::from_env`. STT y TTS se eligen por separado (`Backend::{Mock,
   Local,Nube}`), vía `RIMAY_VOZ_STT`/`RIMAY_VOZ_TTS` (`"local"`,
   `"nube:openai:whisper-1"`…). `construir_stt`/`construir_tts` (+ `_o_mock` con
-  fallback). Local/Nube erran hasta que los backends aterricen. **El daemon es
-  el brazo local, no compite con la nube.**
+  fallback). **El daemon es el brazo local, no compite con la nube.**
+- **`rimay-voz-nube` (hecho, rama Nube del híbrido):** backend HTTP shape
+  OpenAI. STT → `POST /audio/transcriptions` (Whisper): el PCM se empaqueta como
+  WAV en memoria y sube por `multipart`. TTS → `POST /audio/speech` con
+  `response_format:"pcm"` (16-bit LE mono 24 kHz), decodificado directo a
+  `Audio`. `TranscriptorNube`/`LocutorNube` con `openai_from_env()` (lee
+  `OPENAI_API_KEY`) + `con_modelo`/`con_voz`; `base` configurable → sirve
+  cualquier proxy OpenAI-compatible. `VozConfig` cablea la rama `Nube{openai}`;
+  sin credencial erra explícito (ningún constructor hace red). Certificado por
+  codec WAV↔PCM y manejo de error, sin tocar red (11 tests entre crate+fachada).
 - **`rimay-voz-{whisper,piper,…}` + `rimay-voz-daemon` (falta):** backends
-  reales + daemon que carga el modelo una vez por socket (copiar
+  **locales** reales + daemon que carga el modelo una vez por socket (copiar
   `rimay-verbo-daemon`).
 - **host de shuma (falta, en `shuma-agente-host`):** corre cpal + VAD; consume
   `rimay-voz` y dispatcha `Msg` al update Elm. Lo único «de shuma»: mapear
@@ -112,15 +120,16 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
 ## Dependencias candidatas
 
 - **VAD:** `voice_activity_detector` (Silero ONNX) — robusto; alt. `webrtc-vad`.
-- **STT local:** `whisper-rs` (bindings whisper.cpp). **Nube:** backend nuevo —
-  hoy `pluma-llm` NO tiene STT; es un gap a abrir si se quiere nube.
+- **STT local:** `whisper-rs` (bindings whisper.cpp). **Nube:** ✅ aterrizado en
+  `rimay-voz-nube` (shape OpenAI sobre `reqwest`) — el gap de "pluma-llm no tiene
+  STT" se resolvió con fachada propia, no estirando `ChatClient`.
 - **TTS local:** piper / espeak-ng. **Nube:** API por agente.
 - **Captura:** reusar cpal vía los crates de `media/`.
 
 ## Gaps conocidos
 
-- `pluma-llm` no modela STT/TTS — la rama "nube" del híbrido necesita fachada
-  nueva (mismo espíritu que `ChatClient`).
+- ~~`pluma-llm` no modela STT/TTS~~ — resuelto: la rama "nube" tiene su propia
+  fachada (`rimay-voz-nube`), no se estiró `ChatClient`.
 - Always-on + privacidad: el indicador de escucha debe ser **visible siempre**
   en el chasis (diente/rail), no oculto.
 - Barge-in (hablar encima del TTS) queda para después de F0.
