@@ -86,6 +86,17 @@ pub(crate) fn capturar(app: &App, renderer: &mut GlesRenderer) -> Vec<(SessionId
     for id in ids {
         // Elementos de las ventanas de ESTA sesión (sin shell/greeter), en sus
         // posiciones globales — el offscreen cubre la salida entera.
+        //
+        // INVARIANTE (no romper): se filtra por `w.visible` —la visibilidad de
+        // *layout*, pegajosa y agnóstica de sesión— y a propósito **NO** por
+        // `session_visible(w)` (el gate FUS «¿es la activa?»). Son ejes
+        // ortogonales: el compose en vivo exige los dos (`w.visible &&
+        // session_visible(w)`), pero acá queremos justo las sesiones de fondo.
+        // Sus ventanas conservan `visible == true` (su último layout, congelado
+        // al saltar de sesión: nada pone `visible=false` al hostearlas) aunque
+        // `session_visible` sea `false`. Si alguien agrega `&& session_visible`
+        // «por prolijidad», sólo se capturaría la activa y el resto caería a
+        // tarjeta genérica — que es el bug que esto previene.
         let mut elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
         for w in app
             .windows
