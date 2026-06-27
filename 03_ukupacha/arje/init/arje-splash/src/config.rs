@@ -26,6 +26,12 @@ pub enum Source {
     /// Una carpeta con cuadros `*.png` (orden alfabético) reproducidos en loop.
     /// También el destino de un Lottie/rive *bakeado* por `fondo-bake`.
     Frames(PathBuf),
+    /// Un Lottie (`.json`) *bakeado* por `fondo-bake`: el splash reproduce los
+    /// frames de su cache (`~/.cache/mirada/fondo/…`). Cae a la chakana si no hay
+    /// cache (no puede rasterizar vello sin GPU al boot).
+    Lottie(String),
+    /// Un proyecto «rive» (`.ron`) *bakeado* por `fondo-bake`, igual que Lottie.
+    Rive(String),
 }
 
 /// Política del panel de logs de arranque.
@@ -91,12 +97,16 @@ impl SplashCfg {
                 "source" => match v.to_ascii_lowercase().as_str() {
                     "chakana" => self.source = Source::Chakana,
                     "builtin" => self.source = Source::Builtin,
-                    "image" => {} // la ruta llega en `image =`
-                    "frames" => {}
+                    "image" => {}  // la ruta llega en `image =`
+                    "frames" => {} // la ruta llega en `frames =`
+                    "lottie" => {} // la ruta llega en `lottie =`
+                    "rive" => {}   // la ruta llega en `rive =`
                     _ => {}
                 },
                 "image" if !v.is_empty() => self.source = Source::Image(PathBuf::from(v)),
                 "frames" if !v.is_empty() => self.source = Source::Frames(PathBuf::from(v)),
+                "lottie" if !v.is_empty() => self.source = Source::Lottie(v.to_string()),
+                "rive" if !v.is_empty() => self.source = Source::Rive(v.to_string()),
                 "fps" => if let Ok(n) = v.parse() { self.fps = n },
                 "max_ms" => if let Ok(n) = v.parse() { self.max_ms = n },
                 "bg" => if let Some(c) = parse_hex(v) { self.bg = c },
@@ -118,10 +128,14 @@ impl SplashCfg {
             Source::Builtin => ("builtin", String::new()),
             Source::Image(p) => ("image", p.display().to_string()),
             Source::Frames(p) => ("frames", p.display().to_string()),
+            Source::Lottie(p) => ("lottie", p.clone()),
+            Source::Rive(p) => ("rive", p.clone()),
         };
         let key = match &self.source {
             Source::Image(_) => format!("image = {path}\n"),
             Source::Frames(_) => format!("frames = {path}\n"),
+            Source::Lottie(_) => format!("lottie = {path}\n"),
+            Source::Rive(_) => format!("rive = {path}\n"),
             Source::Chakana | Source::Builtin => String::new(),
         };
         format!(

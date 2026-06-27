@@ -197,6 +197,31 @@ impl Loaded {
                     Loaded::Frames(frames)
                 }
             }
+            Source::Lottie(path) => Self::from_baked(
+                mirada_fondo::FondoSpec::Lottie { path: path.clone() },
+                "Lottie",
+                path,
+            ),
+            Source::Rive(path) => Self::from_baked(
+                mirada_fondo::FondoSpec::Rive { path: path.clone() },
+                "rive",
+                path,
+            ),
+        }
+    }
+
+    /// Carga los frames *bakeados* de un Lottie/rive desde su cache. Como el
+    /// splash no tiene GPU al boot, no puede rasterizar vello: si no hay cache
+    /// (nadie corrió `fondo-bake`) cae a la **chakana**, no a un cuadro vacío.
+    fn from_baked(spec: mirada_fondo::FondoSpec, label: &str, path: &str) -> Self {
+        let dir = mirada_fondo::cache::cache_dir(&spec);
+        let frames = load_frames(&dir);
+        if frames.is_empty() {
+            log!("splash: {label} «{path}» sin cache bakeada — uso la chakana");
+            Loaded::Chakana
+        } else {
+            log!("splash: {} frames {label} desde {}", frames.len(), dir.display());
+            Loaded::Frames(frames)
         }
     }
 
