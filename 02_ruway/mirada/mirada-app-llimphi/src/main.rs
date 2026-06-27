@@ -110,6 +110,17 @@ struct Model {
     /// (`Super+e`) que el Cuerpo nos reenvía como `BodyEvent::Keybind`. Se
     /// procesa en `Msg::Tick`, que tiene el `handle` para animar el zoom.
     pending_overview_toggle: bool,
+    /// Sesión de **Win+Tab en Prezi**: el escritorio destino que se resalta
+    /// mientras se mantiene Super. `Some(i)` ⇒ la vista espacial está en modo
+    /// switcher (abierta por Win+Tab); al soltar Super se salta a `i`. `None` ⇒
+    /// no es una sesión de Win+Tab (overview por `Super+e`, o cerrado).
+    overview_wintab: Option<usize>,
+    /// Win+Tab reenviado: avanzar (`Some(true)`) o retroceder (`Some(false)`) el
+    /// destino. Lo procesa `Msg::Tick` (necesita el `handle`).
+    pending_overview_step: Option<bool>,
+    /// Super se soltó durante un Win+Tab de Prezi (el Cuerpo nos lo avisa con el
+    /// keybind sentinela): confirmar el destino resaltado. Lo procesa `Msg::Tick`.
+    pending_overview_commit: bool,
     /// Último `(activo, cargas)` empujado al Cuerpo vía `SetWorkspaces` (para el
     /// switcher Win+Tab + slide en modo enlazado). Evita re-enviar sin cambios.
     last_ws_push: Option<(usize, Vec<usize>)>,
@@ -300,6 +311,9 @@ impl App for Mirada {
             overview_sel: 0,
             overview_drag: None,
             pending_overview_toggle: false,
+            overview_wintab: None,
+            pending_overview_step: None,
+            pending_overview_commit: false,
             last_ws_push: None,
             placements: Vec::new(),
             next_id: 1,
@@ -419,6 +433,15 @@ impl App for Mirada {
                 if m.pending_overview_toggle {
                     m.pending_overview_toggle = false;
                     toggle_overview(&mut m, handle);
+                }
+                // Win+Tab en Prezi: el Cuerpo reenvía el paso (al pulsar) y el
+                // commit (al soltar Super). Se procesan acá por el `handle`.
+                if let Some(forward) = m.pending_overview_step.take() {
+                    overview_step(&mut m, forward, handle);
+                }
+                if m.pending_overview_commit {
+                    m.pending_overview_commit = false;
+                    overview_commit(&mut m, handle);
                 }
             }
             Msg::Key(ev) => handle_key(&mut m, &ev),
@@ -553,6 +576,7 @@ impl App for Mirada {
                 (SCREEN_W, SCREEN_H),
                 Msg::OverviewPick,
                 model.overview_edit.then_some(model.overview_sel),
+                model.overview_wintab,
                 |i, phase, dcol, drow| Msg::OverviewDrag(i, phase, dcol, drow),
             ),
             None => canvas_view(model, theme, on_accent, win_bg, canvas_bg),
@@ -815,10 +839,11 @@ const OVERVIEW_KEYBIND: &str = "Super+e";
 /// (switcher de celdas + slide). Así Win+Tab hace Prezi cuando Prezi está puesto.
 const OVERVIEW_WINTAB: &[&str] = &["Super+Tab", "Super+Shift+Tab"];
 
-/// `true` si el combo reenviado debe abrir/cerrar la vista espacial.
-fn es_atajo_overview(combo: &str) -> bool {
-    combo == OVERVIEW_KEYBIND || OVERVIEW_WINTAB.contains(&combo)
-}
+/// Combo **sentinela** (no es una tecla real) que el Cuerpo nos reenvía cuando
+/// detecta que se soltó Super durante un Win+Tab de Prezi: confirma el destino
+/// resaltado. El Cuerpo lo ve el release (la app sólo recibe combos discretos),
+/// así que el compositor lo sintetiza. Ver `input.rs`/`sesion.rs` del compositor.
+pub const OVERVIEW_WINTAB_COMMIT: &str = "PreziWintabCommit";
 
 /// Aumenta un `BrainCommand::GrabKeys` con los atajos del overview (idempotente):
 /// `Super+e` (toggle directo) y `Super+Tab`/`Super+Shift+Tab` (Win+Tab en Prezi).
@@ -844,8 +869,20 @@ fn feed(m: &mut Model, event: BodyEvent) {
         // nos reenvía su atajo global como `Keybind` (grabeado en
         // `with_overview_grab`). Lo marcamos pendiente y lo procesa `Msg::Tick`
         // (que tiene el `handle` para animar el zoom).
-        BodyEvent::Keybind(ref combo) if es_atajo_overview(combo) => {
+        // `Super+e`: toggle directo de la vista espacial.
+        BodyEvent::Keybind(ref combo) if combo == OVERVIEW_KEYBIND => {
             m.pending_overview_toggle = true;
+        }
+        // Win+Tab en Prezi (reenviado sólo en ese modo): abre/cicla el destino.
+        BodyEvent::Keybind(ref combo) if combo == "Super+Tab" => {
+            m.pending_overview_step = Some(true);
+        }
+        BodyEvent::Keybind(ref combo) if combo == "Super+Shift+Tab" => {
+            m.pending_overview_step = Some(false);
+        }
+        // Super se soltó durante el Win+Tab: confirmar el destino.
+        BodyEvent::Keybind(ref combo) if combo == OVERVIEW_WINTAB_COMMIT => {
+            m.pending_overview_commit = true;
         }
         // Win+Tab confirmó un salto de escritorio en el Cuerpo (modo enlazado):
         // lo aplicamos como una acción de escritorio normal.
@@ -1105,9 +1142,16 @@ fn apply_geometry_move(m: &mut Model, desktop: usize, dx: i32, dy: i32) {
 fn toggle_overview(m: &mut Model, handle: &Handle<Msg>) {
     if m.overview.is_some() {
         m.overview = None;
+        m.overview_wintab = None; // cerrar cancela cualquier Win+Tab en curso
         return;
     }
-    if !m.desktop.config().overview_enabled {
+    open_overview(m, handle);
+}
+
+/// Abre la vista espacial (sin togglear): zoom-out desde el escritorio activo.
+/// No-op si ya está abierta o el overview está deshabilitado en la config.
+fn open_overview(m: &mut Model, handle: &Handle<Msg>) {
+    if m.overview.is_some() || !m.desktop.config().overview_enabled {
         return;
     }
     let dur = overview_anim(m);
@@ -1117,6 +1161,47 @@ fn toggle_overview(m: &mut Model, handle: &Handle<Msg>) {
         landing: None,
     });
     animate(handle, dur, || Msg::OverviewTick);
+}
+
+/// Win+Tab en Prezi: abre la vista espacial (si hace falta) y mueve el destino
+/// resaltado al siguiente escritorio OCUPADO (`forward`) o al anterior. El salto
+/// real ocurre al soltar Super ([`overview_commit`]). Como cualquier alt-tab, el
+/// primer paso ya apunta al SIGUIENTE escritorio (no al actual).
+fn overview_step(m: &mut Model, forward: bool, handle: &Handle<Msg>) {
+    let loads = m.desktop.workspace_loads();
+    let occ: Vec<usize> = (0..loads.len()).filter(|&i| loads[i] > 0).collect();
+    if occ.is_empty() {
+        return;
+    }
+    let just_opened = m.overview.is_none();
+    open_overview(m, handle);
+    if m.overview.is_none() {
+        return; // overview deshabilitado en config
+    }
+    // Desde dónde avanzar: el destino actual del Win+Tab, o el activo al abrir.
+    let from = match m.overview_wintab {
+        Some(t) if !just_opened => t,
+        _ => m.desktop.active_index(),
+    };
+    m.overview_wintab = Some(paso_ocupado(&occ, from, forward));
+}
+
+/// El siguiente escritorio **ocupado** a partir de `from`, ciclando en la
+/// dirección dada. `occ` = índices ocupados (no vacío, ascendente). Si `from`
+/// no está en `occ`, arranca del primero. Pura → testeable sin `Model`.
+fn paso_ocupado(occ: &[usize], from: usize, forward: bool) -> usize {
+    let pos = occ.iter().position(|&i| i == from).unwrap_or(0);
+    let n = occ.len();
+    let next = if forward { (pos + 1) % n } else { (pos + n - 1) % n };
+    occ[next]
+}
+
+/// Confirma el destino del Win+Tab: vuela y salta a él, cerrando la vista.
+/// No-op si no hay un Win+Tab en curso (`overview_wintab == None`).
+fn overview_commit(m: &mut Model, handle: &Handle<Msg>) {
+    if let Some(target) = m.overview_wintab.take() {
+        overview_pick(m, target, handle);
+    }
 }
 
 /// Elige un escritorio en la vista espacial: arranca el zoom-in hacia su celda.
@@ -1877,20 +1962,29 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        es_atajo_overview, profiles_menu, vistas_menu, with_overview_grab, KeymapProfiles, Vista,
+        paso_ocupado, profiles_menu, vistas_menu, with_overview_grab, KeymapProfiles, Vista,
         OVERVIEW_KEYBIND, OVERVIEW_WINTAB,
     };
     use mirada_brain::BrainCommand;
 
-    /// `Super+e` y el Win+Tab (en Prezi) cuentan como atajo de overview; las
-    /// demás teclas no.
+    /// El Win+Tab cicla sólo por escritorios ocupados, con wrap, en ambos
+    /// sentidos; arrancando del activo apunta al SIGUIENTE (como alt-tab).
     #[test]
-    fn reconoce_los_atajos_de_overview() {
-        assert!(es_atajo_overview(OVERVIEW_KEYBIND));
-        assert!(es_atajo_overview("Super+Tab"));
-        assert!(es_atajo_overview("Super+Shift+Tab"));
-        assert!(!es_atajo_overview("Alt+Tab"));
-        assert!(!es_atajo_overview("Super+q"));
+    fn paso_ocupado_cicla_con_wrap() {
+        let occ = [0usize, 2, 3]; // el 1 está vacío
+        // Adelante desde el activo (0) → 2 (saltea el vacío); luego 3; luego wrap a 0.
+        assert_eq!(paso_ocupado(&occ, 0, true), 2);
+        assert_eq!(paso_ocupado(&occ, 2, true), 3);
+        assert_eq!(paso_ocupado(&occ, 3, true), 0);
+        // Atrás: 0 → 3 (wrap), 3 → 2, 2 → 0.
+        assert_eq!(paso_ocupado(&occ, 0, false), 3);
+        assert_eq!(paso_ocupado(&occ, 3, false), 2);
+        // `from` en un escritorio vacío (no listado) arranca del primer ocupado.
+        assert_eq!(paso_ocupado(&occ, 1, true), 2);
+        // Dos escritorios: Win+Tab alterna entre ambos.
+        let dos = [0usize, 1];
+        assert_eq!(paso_ocupado(&dos, 0, true), 1);
+        assert_eq!(paso_ocupado(&dos, 1, true), 0);
     }
 
     /// `with_overview_grab` agrega Super+e + Win+Tab a los grabs (idempotente) y

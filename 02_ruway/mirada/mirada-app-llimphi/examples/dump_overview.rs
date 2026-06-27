@@ -120,6 +120,7 @@ fn main() {
         |_| (),
         // MIRADA_OVERVIEW_EDIT=1 → modo editor con `focus` seleccionado.
         std::env::var("MIRADA_OVERVIEW_EDIT").ok().map(|_| focus),
+        None, // sin destino de Win+Tab en el volcado headless
         |_, _, _, _| (), // on_drag no-op en el volcado headless
     );
 

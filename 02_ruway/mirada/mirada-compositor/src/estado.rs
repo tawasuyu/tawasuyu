@@ -622,6 +622,12 @@ pub(crate) struct App {
     /// Tab/Shift+Tab lo mueven mientras Super está sostenido; al soltar Super se
     /// salta a éste. El borde activo del mosaico lo marca.
     pub(crate) overview_selected: usize,
+    /// Win+Tab de Prezi en curso **en modo enlazado**: la vista espacial la pinta
+    /// la app (el Cuerpo no la tiene en linked), pero sólo el Cuerpo ve el release
+    /// de Super. Mientras esto sea `true`, al soltar Super el Cuerpo le reenvía a
+    /// la app el keybind sentinela de commit (`OVERVIEW_WINTAB_COMMIT`) para que
+    /// salte al destino resaltado. Embebido NO lo usa (ahí pinta el Cuerpo).
+    pub(crate) prezi_wintab_linked: bool,
     /// Estado de escritorios empujado por el Cerebro enlazado (`SetWorkspaces`),
     /// para el switcher Win+Tab + slide en modo DE. `None` con Cerebro embebido.
     pub(crate) linked_ws: Option<LinkedWorkspaces>,

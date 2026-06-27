@@ -91,6 +91,10 @@ impl DrmState {
                                         // dejamos que «Super+Tab» caiga a los grabs y se
                                         // reenvíe como Keybind. Sin esto, Win+Tab hacía
                                         // el slide «sencillo» aunque el modo fuera Prezi.
+                                        // Marcamos el Win+Tab en curso para, al soltar
+                                        // Super, reenviarle a la app el commit (el
+                                        // release sólo lo ve el Cuerpo).
+                                        st.prezi_wintab_linked = true;
                                     } else {
                                         st.switcher_step = Some((Workspaces, true));
                                         return FilterResult::Intercept(());
@@ -105,6 +109,7 @@ impl DrmState {
                                             return FilterResult::Intercept(());
                                         }
                                         // Enlazado + Prezi: reenvío a la app (ver arriba).
+                                        st.prezi_wintab_linked = true;
                                     } else {
                                         st.switcher_step = Some((Workspaces, false));
                                         return FilterResult::Intercept(());

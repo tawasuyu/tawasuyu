@@ -49,6 +49,10 @@ pub fn overview_view<M, F, D>(
     // sus celdas ARRASTRABLES (drag para reacomodar el plano 2D); `None` = vista
     // normal (clic para saltar).
     edit_sel: Option<usize>,
+    // Resalta el escritorio `Some(i)` como **destino** (ámbar), SIN habilitar el
+    // drag (a diferencia de `edit_sel`). Lo usa el Win+Tab de Prezi para mostrar
+    // a qué escritorio se saltará al soltar Super.
+    highlight: Option<usize>,
     // En modo editor, arrastrar la celda `i`: `(i, fase, dcol, dfila)` donde
     // dcol/dfila son el delta EN CELDAS (ya convertido del px por el pitch).
     on_drag: D,
@@ -134,9 +138,9 @@ where
         }
 
         let is_active = i == active;
-        // En modo editor, la celda seleccionada (la que mueven las flechas) va
-        // en ámbar para distinguirla del escritorio activo.
-        let border = if edit_sel == Some(i) {
+        // El destino del Win+Tab (`highlight`) y la celda seleccionada del editor
+        // (`edit_sel`) van en ámbar para distinguirse del escritorio activo.
+        let border = if highlight == Some(i) || edit_sel == Some(i) {
             Color::from_rgba8(245, 180, 50, 255)
         } else if is_active {
             theme.accent

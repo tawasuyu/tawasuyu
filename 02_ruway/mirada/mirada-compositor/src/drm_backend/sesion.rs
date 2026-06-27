@@ -256,6 +256,23 @@ impl DrmState {
                     self.app.overview_commit();
                 }
             }
+            // Win+Tab de Prezi en modo ENLAZADO: la vista espacial la pinta la
+            // app, pero sólo el Cuerpo ve el release de Super. Al soltarlo, le
+            // reenviamos el keybind sentinela de commit para que salte al destino
+            // resaltado (mismo «sondeo cada tick» que arriba, pero hacia la app).
+            if self.app.prezi_wintab_linked {
+                let super_held = self
+                    .app
+                    .keyboard
+                    .as_ref()
+                    .is_some_and(|kb| kb.modifier_state().logo);
+                if !super_held {
+                    self.app.prezi_wintab_linked = false;
+                    // DEBE coincidir con OVERVIEW_WINTAB_COMMIT en mirada-app-llimphi.
+                    let ev = self.app.body.keybind("PreziWintabCommit");
+                    self.app.brain_feed(ev);
+                }
+            }
             let now = self.start.elapsed().as_millis() as u32;
             let anim_ms = self.app.config_overview_anim_ms().max(1);
             if self.app.overview_open && !self.prev_overview_open {

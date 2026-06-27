@@ -459,6 +459,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         overview_open: false,
         overview_closing: false,
         overview_via_wintab: false,
+        prezi_wintab_linked: false,
         overview_selected: 0,
         linked_ws: None,
         decorations: mirada_brain::Decorations::default(),
