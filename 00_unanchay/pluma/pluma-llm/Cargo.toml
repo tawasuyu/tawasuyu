@@ -16,6 +16,7 @@ pluma-llm-anthropic = { path = "../pluma-llm-anthropic" }
 pluma-llm-cohere = { path = "../pluma-llm-cohere" }
 pluma-llm-gemini = { path = "../pluma-llm-gemini" }
 pluma-llm-openai-compatible = { path = "../pluma-llm-openai-compatible" }
+pluma-llm-claude-cli = { path = "../pluma-llm-claude-cli" }
 
 [dev-dependencies]
 tokio = { workspace = true }

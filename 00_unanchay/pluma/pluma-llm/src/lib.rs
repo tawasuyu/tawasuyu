@@ -63,6 +63,10 @@ pub enum BackendKind {
     DeepSeek,
     Cohere,
     Ollama,
+    /// El binario `claude` (Claude Code) como subproceso: usa la
+    /// autenticación de Claude Code, incluida la **suscripción Pro/Max**
+    /// (no API key, no pago por token). Ver `pluma-llm-claude-cli`.
+    ClaudeCli,
     Mock,
 }
 
@@ -76,6 +80,7 @@ impl BackendKind {
             "deepseek" => Some(BackendKind::DeepSeek),
             "cohere" => Some(BackendKind::Cohere),
             "ollama" => Some(BackendKind::Ollama),
+            "claude-cli" | "claude-code" | "claudecli" | "claudecode" => Some(BackendKind::ClaudeCli),
             "mock" => Some(BackendKind::Mock),
             _ => None,
         }
@@ -203,6 +208,17 @@ pub fn build_client(cfg: &LlmConfig) -> Result<Arc<dyn ChatClient>, BuildError> 
             } else {
                 pluma_llm_openai_compatible::OpenAiCompatibleClient::ollama_local(model)
             };
+            Ok(Arc::new(cli))
+        }
+        BackendKind::ClaudeCli => {
+            let mut cli = pluma_llm_claude_cli::ClaudeCliClient::new();
+            if let Some(m) = &cfg.model {
+                cli = cli.with_model(m.clone());
+            }
+            // `endpoint` reusado como override del binario (p.ej. ruta absoluta).
+            if let Some(ep) = &cfg.endpoint {
+                cli = cli.with_bin(ep.clone());
+            }
             Ok(Arc::new(cli))
         }
         BackendKind::Mock => Ok(Arc::new(pluma_llm_mock::MockChatClient::default())),

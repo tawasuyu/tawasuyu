@@ -78,14 +78,23 @@ impl Almacen {
         if !existentes.is_empty() {
             return Ok(existentes);
         }
+        // Por defecto pegan a Claude vía el CLI `claude` (Claude Code) — usa la
+        // suscripción Pro/Max del usuario sin API key. Si `claude` no está
+        // logueado, el host cae al `[ai.llm]` global o reporta el error.
+        let claude = || wawa_config::LlmSettings {
+            backend: "claude-cli".to_string(),
+            ..Default::default()
+        };
         let asistente = Agente::nuevo("Asistente")
-            .con_descripcion("Charla general; sin tocar el sistema.");
+            .con_descripcion("Charla general; sin tocar el sistema.")
+            .con_backend(claude());
         let control = Agente::nuevo("Control")
             .con_descripcion("Maneja el escritorio: propone acciones que vos aprobás.")
             .con_persona(
                 "Sos el controlador del escritorio tawasuyu. Ayudás al usuario a manejar la \
                  suite proponiendo acciones de control cuando hace falta.",
             )
+            .con_backend(claude())
             .con_control();
         self.guardar_agente(&asistente)?;
         self.guardar_agente(&control)?;

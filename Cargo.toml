@@ -75,6 +75,7 @@ members = [
     "00_unanchay/pluma/pluma-llm-cohere",
     "00_unanchay/pluma/pluma-llm-gemini",
     "00_unanchay/pluma/pluma-llm-core",
+    "00_unanchay/pluma/pluma-llm-claude-cli",
     "00_unanchay/pluma/pluma-llm-mock",
     "00_unanchay/pluma/pluma-llm-openai-compatible",
     "00_unanchay/pluma/pluma-md",

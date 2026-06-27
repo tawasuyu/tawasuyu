@@ -518,6 +518,7 @@ fn build_llm_client(
         "deepseek" => BackendKind::DeepSeek,
         "cohere" => BackendKind::Cohere,
         "ollama" => BackendKind::Ollama,
+        "claude-cli" | "claude-code" => BackendKind::ClaudeCli,
         "mock" => BackendKind::Mock,
         other => return Err(format!("backend LLM desconocido: «{other}»")),
     };
