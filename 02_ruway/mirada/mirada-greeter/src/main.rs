@@ -194,6 +194,8 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         lottie_path: saved.lottie_path.clone(),
         physics_bg: matches!(saved.anim, state::BgAnim::Physics)
             .then(|| bg_physics::PhysicsBg::new(bright_base(saved.rain_color))),
+        alleycat_bg: matches!(saved.anim, state::BgAnim::AlleyCat)
+            .then(|| alleycat::AlleyCatBg::new(bright_base(saved.rain_color))),
         rain_t: std::env::var("MIRADA_SHOT_T").ok().and_then(|v| v.parse().ok()).unwrap_or(3.2),
         monitors: shot_monitors().0,
         active_mon: shot_monitors().1,
@@ -209,6 +211,12 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         let steps = (model.rain_t.max(0.0) * 120.0) as usize;
         for _ in 0..steps.min(4000) {
             pb.step(1.0 / 120.0);
+        }
+    }
+    if let Some(cb) = &mut model.alleycat_bg {
+        let steps = (model.rain_t.max(0.0) * 120.0) as usize;
+        for _ in 0..steps.min(4000) {
+            cb.step(1.0 / 120.0);
         }
     }
     let view = <Greeter as App>::view(&model);
@@ -414,6 +422,9 @@ struct Model {
     /// Fondo físico vivo (`bg = physics`): tentáculos esqueletales que se
     /// stepean en `RainTick`. `None` salvo que se haya elegido.
     physics_bg: Option<bg_physics::PhysicsBg>,
+    /// Fondo «Alley Cat» vivo (`bg = alleycat`): rig de patas por IK + cola
+    /// Verlet, stepeado en `RainTick`. `None` salvo que se haya elegido.
+    alleycat_bg: Option<alleycat::AlleyCatBg>,
     /// Reloj del fondo (segundos), avanzado por `Msg::RainTick`.
     rain_t: f32,
     /// Disposición de monitores (rects locales a la ventana, que cubre la unión
@@ -593,6 +604,8 @@ impl App for Greeter {
             lottie_path: saved.lottie_path.clone(),
             physics_bg: matches!(saved.anim, state::BgAnim::Physics)
                 .then(|| bg_physics::PhysicsBg::new(bright_base(saved.rain_color))),
+            alleycat_bg: matches!(saved.anim, state::BgAnim::AlleyCat)
+                .then(|| alleycat::AlleyCatBg::new(bright_base(saved.rain_color))),
             rain_t: 0.0,
             monitors: Vec::new(),
             active_mon: 0,
@@ -833,6 +846,9 @@ impl App for Greeter {
                 if let Some(pb) = &mut m.physics_bg {
                     pb.step(0.033);
                 }
+                if let Some(cb) = &mut m.alleycat_bg {
+                    cb.step(0.033);
+                }
                 // Avanza el viaje de la tarjeta entre monitores (~280 ms).
                 if m.card_anim < 1.0 {
                     m.card_anim = (m.card_anim + 0.033 / 0.28).min(1.0);
@@ -873,6 +889,8 @@ impl App for Greeter {
                 }
                 m.physics_bg = matches!(a, state::BgAnim::Physics)
                     .then(|| bg_physics::PhysicsBg::new(bright_base(m.rain_color)));
+                m.alleycat_bg = matches!(a, state::BgAnim::AlleyCat)
+                    .then(|| alleycat::AlleyCatBg::new(bright_base(m.rain_color)));
                 persist(&m);
             }
         }
@@ -1185,6 +1203,14 @@ impl App for Greeter {
             let snap = pb.snapshot();
             root = root.paint_with(move |scene, _ts, rect| {
                 bg_physics::paint_snapshot(&snap, scene, rect);
+            });
+        } else if let Some(cb) = &model.alleycat_bg {
+            // Fondo «Alley Cat»: snapshot del rig (read-only) + telón, al closure.
+            let snap = cb.snapshot();
+            let t = model.rain_t;
+            let bright = rain_bright(model.rain_color, &theme);
+            root = root.paint_with(move |scene, ts, rect| {
+                alleycat::paint_rig(&snap, scene, ts, rect, t, bright);
             });
         } else if model.rain_enabled {
             let t = model.rain_t;
@@ -1736,6 +1762,7 @@ mod tests {
             lottie_bg: None,
             lottie_path: None,
             physics_bg: None,
+            alleycat_bg: None,
             rain_t: 0.0,
             monitors: mons,
             active_mon: active,
