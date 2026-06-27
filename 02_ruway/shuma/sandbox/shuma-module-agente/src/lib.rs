@@ -1,0 +1,777 @@
+//! `shuma-module-agente` — el panel de chat multi-agente de shuma.
+//!
+//! Frontend del núcleo [`shuma_agente`], al estilo de las apps web de IA:
+//! sidebar con la lista de conversaciones + selector de agente, un hilo central
+//! con los turnos (cada bloque del asistente pintado según su tipo) y un input
+//! abajo. Las acciones de control aparecen como tarjetas con **aprobar /
+//! rechazar** — nunca se ejecutan solas.
+//!
+//! Sigue el contrato estructural de los módulos shuma (como
+//! `shuma-module-commandbar`): `State` + `Msg` + `update` puro + `view` + las
+//! funciones de provisión que el chasis llama fuera del `update`
+//! ([`State::set_agentes`], [`State::set_conversaciones`], [`State::fijar_reloj`]).
+//!
+//! ## Trabajo async (mismo patrón intent que el shell)
+//!
+//! El módulo **no habla con la red**: cuando el usuario manda un mensaje, deja
+//! una [`Peticion`] en `pendiente`; el chasis la toma con [`State::take_request`],
+//! corre `shuma-agente-host::responder` en un thread, y devuelve el resultado
+//! como [`Msg::Respuesta`]. Igual con las acciones aprobadas
+//! ([`State::take_ejecucion`]).
+
+#![forbid(unsafe_code)]
+
+use llimphi_ui::llimphi_layout::taffy::{
+    prelude::{length, percent, AlignItems, Dimension, FlexDirection, LengthPercentage, Size, Style},
+    Rect,
+};
+use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_theme::Theme;
+use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_scroll::{scroll_y, ScrollPalette};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use shuma_agente::{Agente, BloqueSalida, Conversacion, EstadoAccion, Peligro};
+use shuma_module::{ModuleContributions, Placement};
+
+/// `id` canónico del módulo.
+pub const ID: &str = "agente";
+
+/// `Placement` por defecto: ocupa el área principal.
+pub const DEFAULT_PLACEMENT: Placement = Placement::Main;
+
+const SIDEBAR_W: f32 = 220.0;
+const VISTA_ALTO_DEFAULT: f32 = 600.0;
+
+/// Lo que el chasis debe cumplir: responder un turno con `pluma-llm`. El módulo
+/// la deja servida; el chasis le inyecta el backend de fallback global.
+#[derive(Debug, Clone)]
+pub struct Peticion {
+    /// La conversación con el último mensaje del usuario ya agregado.
+    pub conv: Conversacion,
+    /// El agente que la responde (con su backend propio).
+    pub agente: Agente,
+}
+
+/// Estado del panel de chat. Las conversaciones y agentes los **provee el
+/// chasis** desde el [`shuma_agente::Almacen`]; el módulo los edita en memoria y
+/// el chasis persiste tras cada `update`.
+#[derive(Debug, Clone)]
+pub struct State {
+    agentes: Vec<Agente>,
+    /// Índice del agente activo dentro de `agentes`.
+    agente_sel: usize,
+    /// Conversaciones, más recientes primero (orden del sidebar).
+    conversaciones: Vec<Conversacion>,
+    /// Id de la conversación abierta (estable ante reordenamientos).
+    conv_activa: Option<String>,
+    input: TextInputState,
+    focused: bool,
+    scroll: f32,
+    /// Reloj inyectado por el chasis (epoch ms) — el `update` no lee el reloj.
+    reloj_ms: u64,
+    /// Alto del viewport del hilo (px) — lo fija el chasis según el panel.
+    vista_alto: f32,
+    /// `true` mientras un turno está en vuelo (lo tomó el chasis).
+    esperando: bool,
+    /// Intent de responder un turno; `None` salvo entre el envío y su resultado.
+    pendiente: Option<Peticion>,
+    /// Intent de ejecutar una acción aprobada; lo corre el chasis (shell).
+    ejecucion: Option<shuma_agente::AccionPropuesta>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl State {
+    pub fn new() -> Self {
+        Self {
+            agentes: Vec::new(),
+            agente_sel: 0,
+            conversaciones: Vec::new(),
+            conv_activa: None,
+            input: TextInputState::new(),
+            focused: false,
+            scroll: 0.0,
+            reloj_ms: 0,
+            vista_alto: VISTA_ALTO_DEFAULT,
+            esperando: false,
+            pendiente: None,
+            ejecucion: None,
+        }
+    }
+
+    // ── Provisión por el chasis (fuera del update, como set_catalog) ────────
+
+    /// Inyecta los agentes disponibles (del Almacen). Mantiene la selección en
+    /// rango.
+    pub fn set_agentes(&mut self, agentes: Vec<Agente>) {
+        self.agentes = agentes;
+        if self.agente_sel >= self.agentes.len() {
+            self.agente_sel = 0;
+        }
+    }
+
+    /// Inyecta las conversaciones (más recientes primero). Si la activa ya no
+    /// existe, la deselecciona.
+    pub fn set_conversaciones(&mut self, convs: Vec<Conversacion>) {
+        if let Some(id) = &self.conv_activa {
+            if !convs.iter().any(|c| &c.id == id) {
+                self.conv_activa = None;
+            }
+        }
+        self.conversaciones = convs;
+    }
+
+    /// Fija el reloj (epoch ms) que usa el `update` para estampar turnos.
+    pub fn fijar_reloj(&mut self, ms: u64) {
+        self.reloj_ms = ms;
+    }
+
+    /// Fija el alto del viewport del hilo (px).
+    pub fn fijar_vista_alto(&mut self, h: f32) {
+        self.vista_alto = h.max(120.0);
+    }
+
+    /// El chasis toma la petición pendiente para correr `pluma-llm`. Marca el
+    /// turno en vuelo para no re-dispararlo.
+    pub fn take_request(&mut self) -> Option<Peticion> {
+        self.pendiente.take()
+    }
+
+    /// El chasis toma una acción aprobada para ejecutarla (en el shell).
+    pub fn take_ejecucion(&mut self) -> Option<shuma_agente::AccionPropuesta> {
+        self.ejecucion.take()
+    }
+
+    /// Las conversaciones actuales (para que el chasis persista tras un update).
+    pub fn conversaciones(&self) -> &[Conversacion] {
+        &self.conversaciones
+    }
+
+    /// La conversación abierta, si hay.
+    pub fn conversacion_activa(&self) -> Option<&Conversacion> {
+        let id = self.conv_activa.as_ref()?;
+        self.conversaciones.iter().find(|c| &c.id == id)
+    }
+
+    fn conversacion_activa_mut(&mut self) -> Option<&mut Conversacion> {
+        let id = self.conv_activa.clone()?;
+        self.conversaciones.iter_mut().find(|c| c.id == id)
+    }
+
+    fn agente_activo(&self) -> Option<&Agente> {
+        self.agentes.get(self.agente_sel)
+    }
+}
+
+/// Mensajes del panel.
+#[derive(Debug, Clone)]
+pub enum Msg {
+    /// Tecla desde el chasis (cuando el input tiene foco).
+    Key(KeyEvent),
+    /// Click en el input → toma foco.
+    FocusInput,
+    /// Enviar el texto del input como turno de usuario.
+    Enviar,
+    /// Empezar una conversación nueva con el agente activo.
+    NuevaConversacion,
+    /// Abrir la conversación en esa posición de la lista.
+    AbrirConversacion(usize),
+    /// Elegir el agente en esa posición.
+    SeleccionarAgente(usize),
+    /// Rueda/arrastre del hilo (delta en px).
+    Scroll(f32),
+    /// Aprobar la acción del bloque `bloque` del turno `turno`.
+    Aprobar { turno: usize, bloque: usize },
+    /// Rechazar esa acción.
+    Rechazar { turno: usize, bloque: usize },
+    /// Resultado del turno (lo dispatcha el chasis tras correr pluma-llm).
+    Respuesta {
+        conv_id: String,
+        bloques: Vec<BloqueSalida>,
+        ok: bool,
+    },
+}
+
+/// Transición pura del estado.
+pub fn update(state: State, msg: Msg) -> State {
+    let mut s = state;
+    match msg {
+        Msg::Key(ev) => {
+            if ev.state != KeyState::Pressed {
+                return s;
+            }
+            // Enter (sin Shift) envía; el resto lo consume el input.
+            if let Key::Named(NamedKey::Enter) = ev.key {
+                if !ev.modifiers.shift {
+                    return update(s, Msg::Enviar);
+                }
+            }
+            s.input.apply_key(&ev);
+        }
+        Msg::FocusInput => s.focused = true,
+        Msg::Enviar => {
+            let texto = s.input.text().trim().to_string();
+            if texto.is_empty() || s.esperando {
+                return s;
+            }
+            let Some(agente) = s.agente_activo().cloned() else {
+                return s; // sin agentes provistos no hay a quién preguntar
+            };
+            // Asegurá una conversación abierta (si no, abrí una nueva).
+            if s.conversacion_activa().is_none() {
+                let conv = Conversacion::nueva(&agente.id, s.reloj_ms);
+                s.conv_activa = Some(conv.id.clone());
+                s.conversaciones.insert(0, conv);
+            }
+            let ms = s.reloj_ms;
+            if let Some(conv) = s.conversacion_activa_mut() {
+                conv.agregar_usuario(texto, ms);
+                let snap = conv.clone();
+                s.pendiente = Some(Peticion { conv: snap, agente });
+                s.esperando = true;
+            }
+            s.input.set_text("");
+            s.scroll = f32::MAX; // saltá al final
+        }
+        Msg::NuevaConversacion => {
+            // Abrí un lienzo limpio: la Conversacion concreta nace al primer
+            // envío (así no se acumulan vacías).
+            s.conv_activa = None;
+            s.input.set_text("");
+            s.scroll = 0.0;
+        }
+        Msg::AbrirConversacion(i) => {
+            if let Some(c) = s.conversaciones.get(i) {
+                s.conv_activa = Some(c.id.clone());
+                s.scroll = f32::MAX;
+            }
+        }
+        Msg::SeleccionarAgente(i) => {
+            if i < s.agentes.len() {
+                s.agente_sel = i;
+            }
+        }
+        Msg::Scroll(delta) => {
+            s.scroll = (s.scroll + delta).max(0.0);
+        }
+        Msg::Respuesta { conv_id, bloques, ok } => {
+            s.esperando = false;
+            let ms = s.reloj_ms;
+            if let Some(conv) = s.conversaciones.iter_mut().find(|c| c.id == conv_id) {
+                let bloques = if ok {
+                    bloques
+                } else {
+                    vec![BloqueSalida::Error(
+                        bloques
+                            .into_iter()
+                            .find_map(|b| match b {
+                                BloqueSalida::Error(e) => Some(e),
+                                BloqueSalida::Texto(t) => Some(t),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| "el modelo no respondió".to_string()),
+                    )]
+                };
+                conv.agregar_asistente(bloques, ms);
+            }
+            s.scroll = f32::MAX;
+        }
+        Msg::Aprobar { turno, bloque } => {
+            if let Some(accion) = marcar_accion(&mut s, turno, bloque, EstadoAccion::Aprobada) {
+                s.ejecucion = Some(accion);
+            }
+        }
+        Msg::Rechazar { turno, bloque } => {
+            marcar_accion(&mut s, turno, bloque, EstadoAccion::Rechazada);
+        }
+    }
+    s
+}
+
+/// Cambia el estado de la acción en `(turno, bloque)` de la conversación activa.
+/// Devuelve la acción (clonada) si la encontró y era una acción.
+fn marcar_accion(
+    s: &mut State,
+    turno: usize,
+    bloque: usize,
+    nuevo: EstadoAccion,
+) -> Option<shuma_agente::AccionPropuesta> {
+    let conv = s.conversacion_activa_mut()?;
+    let b = conv.turnos.get_mut(turno)?.bloques.get_mut(bloque)?;
+    if let BloqueSalida::Accion(a) = b {
+        a.estado = nuevo;
+        Some(a.clone())
+    } else {
+        None
+    }
+}
+
+/// Aportes al chasis: el panel no contribuye monitores ni shortcuts.
+pub fn contributions(_state: &State) -> ModuleContributions {
+    ModuleContributions::empty()
+}
+
+// ─── Vista ──────────────────────────────────────────────────────────────────
+
+/// Pinta el panel. `lift` sube los `Msg` del módulo al `Msg` del chasis.
+pub fn view<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> View<HostMsg> {
+    let sidebar = sidebar_view(state, theme, lift.clone());
+    let main = panel_view(state, theme, lift);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0), height: percent(1.0) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![sidebar, main])
+}
+
+fn sidebar_view<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> View<HostMsg> {
+    let mut hijos: Vec<View<HostMsg>> = Vec::new();
+
+    // Selector de agentes.
+    hijos.push(rotulo("AGENTES", theme));
+    for (i, ag) in state.agentes.iter().enumerate() {
+        let sel = i == state.agente_sel;
+        hijos.push(
+            fila_seleccionable(&ag.nombre, sel, theme)
+                .on_click(lift(Msg::SeleccionarAgente(i))),
+        );
+    }
+
+    // Botón nueva conversación.
+    let bp = ButtonPalette::from_theme(theme);
+    hijos.push(
+        View::new(Style {
+            size: Size { width: percent(1.0), height: length(36.0) },
+            padding: rect_xy(8.0, 4.0),
+            ..Default::default()
+        })
+        .children(vec![button_view("+ nueva conversación", &bp, lift(Msg::NuevaConversacion))]),
+    );
+
+    // Lista de conversaciones.
+    hijos.push(rotulo("CONVERSACIONES", theme));
+    for (i, c) in state.conversaciones.iter().enumerate() {
+        let activa = state.conv_activa.as_deref() == Some(c.id.as_str());
+        let titulo = if c.titulo.trim().is_empty() { "(sin título)" } else { &c.titulo };
+        hijos.push(
+            fila_seleccionable(titulo, activa, theme).on_click(lift(Msg::AbrirConversacion(i))),
+        );
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(SIDEBAR_W), height: percent(1.0) },
+        padding: rect_xy(0.0, 8.0),
+        gap: Size { width: length(0.0), height: length(2.0) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(hijos)
+}
+
+fn panel_view<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> View<HostMsg> {
+    // Hilo de turnos.
+    let mut turnos: Vec<View<HostMsg>> = Vec::new();
+    let mut alto_total = 0.0_f32;
+    if let Some(conv) = state.conversacion_activa() {
+        for (ti, t) in conv.turnos.iter().enumerate() {
+            let (v, h) = turno_view(ti, t, theme, lift.clone());
+            alto_total += h + 10.0;
+            turnos.push(v);
+        }
+    } else {
+        turnos.push(
+            View::new(Style {
+                padding: rect_xy(16.0, 16.0),
+                ..Default::default()
+            })
+            .text(
+                "Elegí un agente y escribí abajo para empezar una conversación.",
+                13.0,
+                theme.fg_muted,
+            ),
+        );
+        alto_total = 60.0;
+    }
+    if state.esperando {
+        turnos.push(
+            View::new(Style { padding: rect_xy(16.0, 6.0), ..Default::default() })
+                .text("…pensando", 13.0, theme.fg_muted),
+        );
+        alto_total += 30.0;
+    }
+
+    let contenido = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0), height: Dimension::auto() },
+        gap: Size { width: length(0.0), height: length(10.0) },
+        padding: rect_xy(16.0, 12.0),
+        ..Default::default()
+    })
+    .children(turnos);
+
+    let sp = ScrollPalette::from_theme(theme);
+    let lift_scroll = lift.clone();
+    let hilo = scroll_y(
+        state.scroll.min(alto_total),
+        alto_total,
+        state.vista_alto,
+        contenido,
+        move |d| lift_scroll(Msg::Scroll(-d)),
+        &sp,
+    );
+
+    // Barra de input.
+    let tp = TextInputPalette::from_theme(theme);
+    let input = View::new(Style {
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        &state.input,
+        "Escribí tu mensaje…  (Enter envía)",
+        state.focused,
+        &tp,
+        lift(Msg::FocusInput),
+    )]);
+    let bp = ButtonPalette::from_theme(theme);
+    let enviar = View::new(Style {
+        size: Size { width: length(96.0), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .children(vec![button_view("Enviar", &bp, lift(Msg::Enviar))]);
+
+    let barra = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0), height: length(40.0) },
+        gap: Size { width: length(8.0), height: length(0.0) },
+        padding: rect_xy(12.0, 6.0),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![input, enviar]);
+
+    let hilo_wrap = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0), height: length(state.vista_alto) },
+        ..Default::default()
+    })
+    .children(vec![hilo]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: Dimension::auto(), height: percent(1.0) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![hilo_wrap, barra])
+}
+
+/// Pinta un turno; devuelve la vista y una estimación de su alto (px) para el
+/// scroll (no hay medición exacta de texto en tiempo de view).
+fn turno_view<HostMsg: Clone + 'static>(
+    turno_idx: usize,
+    turno: &shuma_agente::Turno,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> (View<HostMsg>, f32) {
+    use shuma_agente::Rol;
+    let es_usuario = turno.rol == Rol::Usuario;
+    let prefijo = if es_usuario { "Vos" } else { "IA" };
+    let color_pref = if es_usuario { theme.accent } else { theme.fg_muted };
+
+    let mut hijos: Vec<View<HostMsg>> = vec![View::new(Style {
+        size: Size { width: percent(1.0), height: length(16.0) },
+        ..Default::default()
+    })
+    .text(prefijo, 11.0, color_pref)];
+
+    let mut alto = 20.0_f32;
+    for (bi, b) in turno.bloques.iter().enumerate() {
+        let (v, h) = bloque_view(turno_idx, bi, b, theme, lift.clone());
+        alto += h;
+        hijos.push(v);
+    }
+
+    let v = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0), height: Dimension::auto() },
+        gap: Size { width: length(0.0), height: length(4.0) },
+        padding: rect_xy(12.0, 8.0),
+        ..Default::default()
+    })
+    .fill(if es_usuario { theme.bg_panel } else { theme.bg_panel_alt })
+    .children(hijos);
+    (v, alto)
+}
+
+fn bloque_view<HostMsg: Clone + 'static>(
+    turno: usize,
+    bloque: usize,
+    b: &BloqueSalida,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> (View<HostMsg>, f32) {
+    match b {
+        BloqueSalida::Texto(t) => {
+            let alto = estimar_alto_texto(t, 13.0);
+            (
+                View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+                    .text(t, 13.0, theme.fg_text),
+                alto,
+            )
+        }
+        BloqueSalida::Codigo { lenguaje, codigo } => {
+            let etiqueta = lenguaje.clone().unwrap_or_default();
+            let alto = estimar_alto_texto(codigo, 12.5) + 16.0;
+            let v = View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: percent(1.0), height: Dimension::auto() },
+                padding: rect_xy(10.0, 8.0),
+                ..Default::default()
+            })
+            .fill(theme.bg_app)
+            .children(vec![
+                View::new(Style { size: Size { width: percent(1.0), height: length(12.0) }, ..Default::default() })
+                    .text(etiqueta, 10.0, theme.fg_muted),
+                View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+                    .text(codigo, 12.5, theme.fg_text),
+            ]);
+            (v, alto)
+        }
+        BloqueSalida::Accion(a) => (accion_view(turno, bloque, a, theme, lift), 70.0),
+        BloqueSalida::Error(e) => (
+            View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+                .text(format!("⚠ {e}"), 12.5, theme.fg_destructive),
+            estimar_alto_texto(e, 12.5),
+        ),
+    }
+}
+
+/// Tarjeta de acción de control: línea de comando + peligro + aprobar/rechazar.
+fn accion_view<HostMsg: Clone + 'static>(
+    turno: usize,
+    bloque: usize,
+    a: &shuma_agente::AccionPropuesta,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> View<HostMsg> {
+    let acento = match a.peligro {
+        Peligro::Seguro => theme.accent,
+        Peligro::Reversible => theme.accent,
+        Peligro::Disruptivo => theme.fg_destructive,
+    };
+    let cabecera = format!("⚡ {} · [{}]", a.id, a.peligro.etiqueta());
+
+    let mut hijos = vec![
+        View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
+            .text(cabecera, 11.0, acento),
+        View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
+            .text(&a.linea_comando, 12.5, theme.fg_text),
+    ];
+
+    // Botonera según estado.
+    let bp = ButtonPalette::from_theme(theme);
+    let fila = match a.estado {
+        EstadoAccion::Propuesta => {
+            let aprobar = View::new(Style { size: Size { width: length(96.0), height: Dimension::auto() }, ..Default::default() })
+                .children(vec![button_view("aprobar", &bp, lift.clone()(Msg::Aprobar { turno, bloque }))]);
+            let rechazar = View::new(Style { size: Size { width: length(96.0), height: Dimension::auto() }, ..Default::default() })
+                .children(vec![button_view("rechazar", &bp, lift(Msg::Rechazar { turno, bloque }))]);
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                gap: Size { width: length(8.0), height: length(0.0) },
+                size: Size { width: percent(1.0), height: length(34.0) },
+                ..Default::default()
+            })
+            .children(vec![aprobar, rechazar])
+        }
+        estado => {
+            let (txt, col) = match estado {
+                EstadoAccion::Aprobada => ("✓ aprobada — ejecutando…", theme.accent),
+                EstadoAccion::Ejecutada => ("✓ ejecutada", theme.accent),
+                EstadoAccion::Rechazada => ("✗ rechazada", theme.fg_muted),
+                EstadoAccion::Fallida => ("⚠ falló", theme.fg_destructive),
+                EstadoAccion::Propuesta => ("", theme.fg_muted),
+            };
+            View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
+                .text(txt, 11.0, col)
+        }
+    };
+    hijos.push(fila);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0), height: Dimension::auto() },
+        gap: Size { width: length(0.0), height: length(6.0) },
+        padding: rect_xy(10.0, 8.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(hijos)
+}
+
+// ─── Helpers de vista ───────────────────────────────────────────────────────
+
+fn rotulo<HostMsg: Clone + 'static>(txt: &str, theme: &Theme) -> View<HostMsg> {
+    View::new(Style {
+        size: Size { width: percent(1.0), height: length(20.0) },
+        padding: rect_xy(10.0, 4.0),
+        ..Default::default()
+    })
+    .text_aligned(txt, 10.0, theme.fg_muted, Alignment::Start)
+}
+
+fn fila_seleccionable<HostMsg: Clone + 'static>(
+    texto: &str,
+    sel: bool,
+    theme: &Theme,
+) -> View<HostMsg> {
+    let bg = if sel { theme.bg_selected } else { theme.bg_panel_alt };
+    let fg = if sel { theme.fg_text } else { theme.fg_muted };
+    View::new(Style {
+        size: Size { width: percent(1.0), height: length(26.0) },
+        padding: rect_xy(10.0, 0.0),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .text_aligned(texto, 12.5, fg, Alignment::Start)
+}
+
+fn rect_xy(x: f32, y: f32) -> Rect<LengthPercentage> {
+    Rect { left: length(x), right: length(x), top: length(y), bottom: length(y) }
+}
+
+/// Estimación grosera del alto de un texto (px): cuenta líneas reales y suma un
+/// poco por wrap. No es exacto — sólo dimensiona el scroll.
+fn estimar_alto_texto(t: &str, size: f32) -> f32 {
+    let alto_linea = size * 1.4;
+    let lineas: f32 = t
+        .lines()
+        .map(|l| (l.chars().count() as f32 / 64.0).ceil().max(1.0))
+        .sum();
+    (lineas.max(1.0)) * alto_linea + 4.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn estado_con_agente() -> State {
+        let mut s = State::new();
+        s.set_agentes(vec![Agente::nuevo("Asistente"), Agente::nuevo("Control").con_control()]);
+        s.fijar_reloj(1000);
+        s
+    }
+
+    #[test]
+    fn enviar_crea_conversacion_y_pendiente() {
+        let mut s = estado_con_agente();
+        s.input.set_text("hola");
+        s = update(s, Msg::Enviar);
+        assert_eq!(s.conversaciones.len(), 1);
+        assert!(s.esperando);
+        let req = s.take_request().expect("debe haber petición");
+        assert_eq!(req.conv.turnos.len(), 1);
+        assert_eq!(req.agente.nombre, "Asistente");
+        assert_eq!(s.input.text(), ""); // input limpio
+    }
+
+    #[test]
+    fn enviar_vacio_no_hace_nada() {
+        let mut s = estado_con_agente();
+        s.input.set_text("   ");
+        s = update(s, Msg::Enviar);
+        assert!(s.conversaciones.is_empty());
+        assert!(!s.esperando);
+    }
+
+    #[test]
+    fn respuesta_agrega_turno_asistente() {
+        let mut s = estado_con_agente();
+        s.input.set_text("¿hora?");
+        s = update(s, Msg::Enviar);
+        let id = s.conversacion_activa().unwrap().id.clone();
+        s = update(
+            s,
+            Msg::Respuesta {
+                conv_id: id,
+                bloques: vec![BloqueSalida::Texto("son las 3".into())],
+                ok: true,
+            },
+        );
+        assert!(!s.esperando);
+        let conv = s.conversacion_activa().unwrap();
+        assert_eq!(conv.turnos.len(), 2);
+        assert_eq!(conv.turnos[1].rol, shuma_agente::Rol::Asistente);
+    }
+
+    #[test]
+    fn seleccionar_agente_de_control_y_responder_con_accion() {
+        let mut s = estado_con_agente();
+        s = update(s, Msg::SeleccionarAgente(1)); // Control
+        s.input.set_text("subí el brillo");
+        s = update(s, Msg::Enviar);
+        let req = s.take_request().unwrap();
+        assert!(req.agente.capacidades.control);
+    }
+
+    #[test]
+    fn aprobar_accion_deja_ejecucion_y_marca_estado() {
+        let mut s = estado_con_agente();
+        s.input.set_text("x");
+        s = update(s, Msg::Enviar);
+        let id = s.conversacion_activa().unwrap().id.clone();
+        let accion = shuma_agente::AccionPropuesta {
+            id: "sistema.brillo".into(),
+            linea_comando: "brightnessctl set 80".into(),
+            peligro: Peligro::Reversible,
+            estado: EstadoAccion::Propuesta,
+        };
+        s = update(
+            s,
+            Msg::Respuesta { conv_id: id, bloques: vec![BloqueSalida::Accion(accion)], ok: true },
+        );
+        // turno 1 = asistente, bloque 0 = acción.
+        s = update(s, Msg::Aprobar { turno: 1, bloque: 0 });
+        let ej = s.take_ejecucion().expect("acción aprobada se ejecuta");
+        assert_eq!(ej.id, "sistema.brillo");
+        let conv = s.conversacion_activa().unwrap();
+        match &conv.turnos[1].bloques[0] {
+            BloqueSalida::Accion(a) => assert_eq!(a.estado, EstadoAccion::Aprobada),
+            _ => panic!("esperaba acción"),
+        }
+    }
+
+    #[test]
+    fn nueva_conversacion_deselecciona() {
+        let mut s = estado_con_agente();
+        s.input.set_text("hola");
+        s = update(s, Msg::Enviar);
+        assert!(s.conv_activa.is_some());
+        s = update(s, Msg::NuevaConversacion);
+        assert!(s.conv_activa.is_none());
+    }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "shuma-module-agente"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma-module-agente — panel de chat multi-agente al estilo apps web de IA: sidebar de conversaciones + selector de agente + hilo con bloques ricos (texto/código/acción) y tarjetas aprobar/rechazar. Frontend del núcleo shuma-agente; el chasis corre pluma-llm (shuma-agente-host)."
+
+[dependencies]
+shuma-module = { path = "../shuma-module" }
+shuma-agente = { path = "../shuma-agente" }
+wawa-config = { path = "../../../../shared/wawa-config" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-button = { workspace = true }
+llimphi-widget-scroll = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
