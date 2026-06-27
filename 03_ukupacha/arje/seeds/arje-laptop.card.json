@@ -1,6 +1,6 @@
 {
     "schema_version": 1,
-    "id": "01HQAR53D4M2NBV8KZTYXFQL01",
+    "id": "01HQAR53D4M2NBV8KZTYXFQP01",
     "lineage": null,
     "label": "arje-laptop",
     "provides": ["Spawn", "Journal"],
@@ -28,7 +28,7 @@
     "genesis": [
         {
             "schema_version": 1,
-            "id": "01HQAR53D4M2NBV8KZTYXFQL03",
+            "id": "01HQAR53D4M2NBV8KZTYXFQP03",
             "label": "arje-splash",
             "provides": [],
             "requires": [],
@@ -62,7 +62,7 @@
         },
         {
             "schema_version": 1,
-            "id": "01HQAR53D4M2NBV8KZTYXFQL02",
+            "id": "01HQAR53D4M2NBV8KZTYXFQP02",
             "label": "console-tty1",
             "provides": [],
             "requires": [],
