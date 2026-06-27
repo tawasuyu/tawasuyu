@@ -1,6 +1,14 @@
-//! «alleycat» — un screensaver nocturno inspirado en el intro de *Alley Cat*
-//! (1984, Bill Williams): un gato callejero que **prowlea** por la cresta de una
-//! barda, bajo la luna y una silueta de ciudad, con su cola que ondea.
+//! «alleycat» — recrea la **pantalla del callejón** de *Alley Cat* (Bill
+//! Williams, Synapse 1983 / IBM 1984): la fachada de un edificio de
+//! departamentos con una **grilla de ventanas** (alguna se abre y tira basura al
+//! gato), **tendederos** que la cruzan con **ratones** corriendo (los bonus del
+//! juego), una **cerca de madera** con graffiti (donde el original pinta score y
+//! vidas), **tachos de basura** apoyados que el gato salta para trepar, y un
+//! **perro** que cruza el borde inferior cada tanto (la amenaza del callejón). El
+//! gato **prowlea** por la cresta de la cerca.
+//!
+//! No es el cielo/luna/skyline genérico que había antes: es la escena real del
+//! juego, con la **paleta del tema del greeter** (no CGA crudo).
 //!
 //! Dos formas, misma escena:
 //!
@@ -14,8 +22,8 @@
 //!   secundario real. Se stepea en `RainTick`, como el fondo físico. Da la marcha
 //!   «viva» que el seno no logra.
 //!
-//! *Inspiración*, no copia: se recrea el **gesto** procedural, no se portan los
-//! sprites originales.
+//! El telón (ratones, ropa, perro) se anima por `t` (determinista), así que el
+//! fallback y el rig comparten la misma escena viva.
 
 use llimphi_anim::constraint::solve_two_bone_ik;
 use llimphi_anim::physics::Physics;
@@ -56,12 +64,15 @@ fn col(r: f32, g: f32, b: f32, a: u8) -> Color {
     )
 }
 
-/// Fracción del telón donde está la cresta de la barda (el «piso» del gato).
+/// Fracción del telón donde está la **cresta de la cerca** (el «piso» del gato).
+/// Arriba: fachada con ventanas y tendederos. Abajo: los tablones de la cerca.
 const WALL_FRAC: f32 = 0.72;
 
-/// Pinta **sólo el telón** nocturno (cielo, estrellas, luna, ciudad, barda) sobre
-/// `rect`. `t` en segundos; `bright` el acento del tema. Lo comparten el fallback
-/// stateless [`paint`] y el rig [`paint_rig`].
+/// Pinta **sólo el telón** del callejón sobre `rect`: fachada + grilla de
+/// ventanas + tendederos con ropa y ratones + cerca de madera con graffiti +
+/// tachos + perro que cruza. `t` en segundos; `bright` el acento del tema.
+/// `WALL_FRAC` marca la cresta de la cerca (el «piso» del gato). Lo comparten el
+/// fallback stateless [`paint`] y el rig [`paint_rig`].
 pub fn paint_backdrop(
     scene: &mut vello::Scene,
     _ts: &mut Typesetter,
@@ -76,140 +87,295 @@ pub fn paint_backdrop(
     let acc = (bright.0 as f32, bright.1 as f32, bright.2 as f32);
     let wall_top = y0 + h * WALL_FRAC;
 
-    // ── Cielo nocturno en degradé (franjas horizontales, barato y puro). ──
-    let sky_top = (12.0, 14.0, 34.0);
-    let sky_horizon = lerp_rgb((40.0, 32.0, 58.0), (acc.0, acc.1, acc.2), 0.10);
-    const BANDS: i32 = 56;
-    let band_h = (wall_top - y0) / BANDS as f32;
-    for i in 0..BANDS {
-        let f = i as f32 / (BANDS - 1) as f32;
-        let (r, g, b) = lerp_rgb(sky_top, sky_horizon, f);
-        let by = y0 + i as f32 * band_h;
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            col(r, g, b, 255),
-            None,
-            &Rect::new(x0 as f64, by as f64, (x0 + w) as f64, (by + band_h + 1.0) as f64),
-        );
-    }
-
-    // ── Estrellas que titilan. ──
-    let star_n = ((w * (wall_top - y0)) / 9000.0).clamp(40.0, 220.0) as u64;
-    for i in 0..star_n {
-        let sx = x0 + hf(i ^ 0xA17) * w;
-        let sy = y0 + hf(i ^ 0xB29) * (wall_top - y0) * 0.92;
-        let phase = hf(i ^ 0xC3D) * 6.2832;
-        let tw = 0.45 + 0.55 * ((t * 1.6 + phase).sin() * 0.5 + 0.5);
-        let rad = 0.6 + 1.4 * hf(i ^ 0xD4E);
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            col(225.0, 228.0, 245.0, (tw * 215.0) as u8),
-            None,
-            &Circle::new(Point::new(sx as f64, sy as f64), rad as f64),
-        );
-    }
-
-    // ── Luna con halo (acento tenue del tema en el resplandor). ──
-    let moon_c = Point::new((x0 + w * 0.80) as f64, (y0 + h * 0.20) as f64);
-    let moon_r = (h * 0.07).clamp(22.0, 90.0) as f64;
-    for k in (1..=4).rev() {
-        let rr = moon_r * (1.0 + k as f64 * 0.55);
-        let a = (26 / k) as u8;
-        let (gr, gg, gb) = lerp_rgb((250.0, 245.0, 220.0), (acc.0, acc.1, acc.2), 0.35);
-        scene.fill(Fill::NonZero, Affine::IDENTITY, col(gr, gg, gb, a), None, &Circle::new(moon_c, rr));
-    }
+    // ── Fachada del edificio: pared cálida y plana sobre la cresta de la cerca. ──
+    let facade = lerp_rgb((60.0, 46.0, 52.0), acc, 0.06);
+    let facade_d = lerp_rgb((44.0, 33.0, 40.0), acc, 0.04);
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
-        col(252.0, 248.0, 226.0, 255),
+        col(facade.0, facade.1, facade.2, 255),
         None,
-        &Circle::new(moon_c, moon_r),
+        &Rect::new(x0 as f64, y0 as f64, (x0 + w) as f64, wall_top as f64),
     );
-    for (dx, dy, rr) in [(-0.30, -0.20, 0.22), (0.18, 0.10, 0.16), (-0.05, 0.30, 0.13)] {
+    // Hiladas de ladrillo apenas marcadas (textura sutil de la pared).
+    let course = (h * 0.03).clamp(12.0, 30.0);
+    let mut cyy = y0 + course;
+    while cyy < wall_top {
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
-            col(232.0, 228.0, 205.0, 255),
+            col(facade_d.0, facade_d.1, facade_d.2, 90),
             None,
-            &Circle::new(Point::new(moon_c.x + moon_r * dx, moon_c.y + moon_r * dy), moon_r * rr),
+            &Rect::new(x0 as f64, cyy as f64, (x0 + w) as f64, (cyy + 1.5) as f64),
         );
+        cyy += course;
     }
 
-    // ── Silueta de ciudad detrás de la barda, con ventanas encendidas. ──
-    let bldg_w = (w * 0.055).clamp(34.0, 120.0);
-    let n_b = (w / bldg_w).ceil() as i32 + 1;
-    let city_col = lerp_rgb(sky_horizon, (8.0, 9.0, 20.0), 0.7);
-    for i in 0..n_b {
-        let bx = x0 + i as f32 * bldg_w;
-        let bh = (h * 0.10) + hf(i as u64 ^ 0x5151) * (h * 0.20);
-        let top = wall_top - bh;
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            col(city_col.0, city_col.1, city_col.2, 255),
-            None,
-            &Rect::new(bx as f64, top as f64, (bx + bldg_w - 2.0) as f64, wall_top as f64),
-        );
-        let wm = 6.0_f32;
-        let cw = 8.0_f32;
-        let ch = 10.0_f32;
-        let cols = (((bldg_w - 2.0 * wm) / (cw + 4.0)).floor() as i32).max(0);
-        let rows = (((bh - 2.0 * wm) / (ch + 5.0)).floor() as i32).max(0);
-        for cy in 0..rows {
-            for cx in 0..cols {
-                let seed = hash(i as u64 ^ (cx as u64) << 8 ^ (cy as u64) << 16 ^ 0x9001);
-                if seed % 5 == 0 {
-                    let flick = 0.6 + 0.4 * ((t * 0.5 + hf(seed) * 6.2832).sin() * 0.5 + 0.5);
-                    let wx = bx + wm + cx as f32 * (cw + 4.0);
-                    let wy = top + wm + cy as f32 * (ch + 5.0);
-                    let (lr, lg, lb) = lerp_rgb((255.0, 220.0, 140.0), acc, 0.35);
-                    scene.fill(
-                        Fill::NonZero,
-                        Affine::IDENTITY,
-                        col(lr, lg, lb, (flick * 235.0) as u8),
-                        None,
-                        &Rect::new(wx as f64, wy as f64, (wx + cw) as f64, (wy + ch) as f64),
-                    );
-                }
+    // ── Grilla de ventanas: encendidas (cálidas), apagadas, y alguna «abierta»
+    //    (hueco oscuro) que cada tanto tira un objeto al gato — guiño al juego. ──
+    let cellw = (w * 0.085).clamp(46.0, 130.0);
+    let cellh = cellw * 1.2;
+    let ncols = ((w / cellw).floor() as i32).max(1);
+    let nrows = (((wall_top - y0) / cellh).floor() as i32).max(1);
+    let gx = x0 + (w - ncols as f32 * cellw) * 0.5;
+    let win_w = cellw * 0.55;
+    let win_h = cellh * 0.62;
+    for r in 0..nrows {
+        for c in 0..ncols {
+            let wx = gx + c as f32 * cellw + (cellw - win_w) * 0.5;
+            let wy = y0 + r as f32 * cellh + (cellh - win_h) * 0.5;
+            let seed = hash(c as u64 ^ (r as u64) << 16 ^ 0x515150);
+            // Marco oscuro (algo mayor que el vidrio).
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                col(24.0, 20.0, 26.0, 255),
+                None,
+                &Rect::new((wx - 3.0) as f64, (wy - 3.0) as f64, (wx + win_w + 3.0) as f64, (wy + win_h + 3.0) as f64),
+            );
+            // ¿Abierta? Oscila lento; sólo algunas ventanas se abren.
+            let open = seed % 5 == 0 && (t * 0.22 + hf(seed ^ 0x9) * 6.2832).sin() > 0.86;
+            let lit = !open && seed % 3 != 0;
+            let glass = if open {
+                col(8.0, 8.0, 12.0, 255)
+            } else if lit {
+                let fl = 0.7 + 0.3 * ((t * 0.5 + hf(seed) * 6.2832).sin() * 0.5 + 0.5);
+                let (lr, lg, lb) = lerp_rgb((255.0, 214.0, 140.0), acc, 0.30);
+                col(lr, lg, lb, (fl * 255.0) as u8)
+            } else {
+                col(34.0, 30.0, 40.0, 255)
+            };
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                glass,
+                None,
+                &Rect::new(wx as f64, wy as f64, (wx + win_w) as f64, (wy + win_h) as f64),
+            );
+            // Parteluces (cruceta del marco).
+            let mull = col(24.0, 20.0, 26.0, 235);
+            scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, mull, None, &line(wx + win_w * 0.5, wy, wx + win_w * 0.5, wy + win_h));
+            scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, mull, None, &line(wx, wy + win_h * 0.5, wx + win_w, wy + win_h * 0.5));
+            // Basura que cae de una ventana abierta.
+            if open {
+                let fallp = (t * 0.6 + hf(seed) * 9.0).fract();
+                let ox = wx + win_w * 0.5;
+                let oy = wy + win_h + fallp * (wall_top - (wy + win_h));
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    col(182.0, 172.0, 152.0, 230),
+                    None,
+                    &Rect::new((ox - 4.0) as f64, (oy - 4.0) as f64, (ox + 4.0) as f64, (oy + 4.0) as f64),
+                );
             }
         }
     }
 
-    // ── La barda de ladrillo sobre la que camina el gato. ──
-    let wall_bot = y0 + h;
-    let brick = (44.0, 36.0, 40.0);
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        col(brick.0, brick.1, brick.2, 255),
-        None,
-        &Rect::new(x0 as f64, wall_top as f64, (x0 + w) as f64, wall_bot as f64),
-    );
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        col(96.0, 86.0, 92.0, 255),
-        None,
-        &Rect::new(x0 as f64, wall_top as f64, (x0 + w) as f64, (wall_top + 3.0) as f64),
-    );
-    let bh = 22.0_f32;
-    let bw = 46.0_f32;
-    let mortar = col(28.0, 22.0, 26.0, 255);
-    let mut row = 0;
-    let mut yy = wall_top + bh;
-    while yy < wall_bot {
-        scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, mortar, None, &line(x0, yy, x0 + w, yy));
-        let off = if row % 2 == 0 { 0.0 } else { bw * 0.5 };
-        let mut xx = x0 + off;
-        while xx < x0 + w {
-            scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, mortar, None, &line(xx, yy - bh, xx, yy));
-            xx += bw;
+    // ── Tendederos: dos líneas con catenaria, ropa que oscila, y un ratón
+    //    corriendo por cada una (los bonus del juego). ──
+    for li in 0..2u64 {
+        let ly = y0 + (wall_top - y0) * (0.34 + 0.30 * li as f32);
+        let sag = (wall_top - y0) * 0.025;
+        let mut rope = BezPath::new();
+        rope.move_to(Point::new(x0 as f64, ly as f64));
+        rope.quad_to(
+            Point::new((x0 + w * 0.5) as f64, (ly + sag) as f64),
+            Point::new((x0 + w) as f64, ly as f64),
+        );
+        scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, col(184.0, 180.0, 172.0, 220), None, &rope);
+        // Catenaria aproximada: dip(fx) = sag · (1 − (2fx−1)²).
+        let dip = |fx: f32| sag * (1.0 - (2.0 * fx - 1.0) * (2.0 * fx - 1.0));
+        let n_cloth = ((w / 120.0) as i32).max(3);
+        for k in 0..n_cloth {
+            let fx = (k as f32 + 0.5) / n_cloth as f32;
+            let lx = x0 + fx * w;
+            let lyk = ly + dip(fx);
+            let cw = 16.0 + hf(li ^ k as u64 ^ 0x77) * 16.0;
+            let chh = 24.0 + hf(li ^ k as u64 ^ 0x88) * 28.0;
+            let hue = [(176.0, 96.0, 96.0), (96.0, 124.0, 170.0), (206.0, 186.0, 96.0), (120.0, 162.0, 124.0)]
+                [(hash(li ^ k as u64 ^ 0x3) % 4) as usize];
+            let (cr, cg, cb) = lerp_rgb(hue, acc, 0.12);
+            let sway = (t * 1.4 + fx * 8.0).sin() * 2.2;
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                col(cr, cg, cb, 235),
+                None,
+                &Rect::new((lx - cw * 0.5 + sway) as f64, lyk as f64, (lx + cw * 0.5 + sway) as f64, (lyk + chh) as f64),
+            );
         }
-        row += 1;
-        yy += bh;
+        // Ratón: corre de punta a punta (sentido alterna por línea).
+        let speed = 0.16 + 0.05 * li as f32;
+        let raw = (t * speed + li as f32 * 0.5).fract();
+        let mp = if li % 2 == 0 { raw } else { 1.0 - raw };
+        let mx = x0 + mp * w;
+        let my = ly + dip(mp) - 4.5;
+        paint_mouse(scene, mx, my, if li % 2 == 0 { 1.0 } else { -1.0 }, t);
     }
+
+    // ── Cerca de madera. Su cresta (`wall_top`) es el «piso» del gato. ──
+    let fence_bot = y0 + h;
+    let wood = lerp_rgb((104.0, 70.0, 42.0), acc, 0.04);
+    let wood_d = (80.0, 52.0, 30.0);
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        col(wood.0, wood.1, wood.2, 255),
+        None,
+        &Rect::new(x0 as f64, wall_top as f64, (x0 + w) as f64, fence_bot as f64),
+    );
+    // Riel superior más claro: la cresta donde se planta el gato.
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        col(142.0, 100.0, 62.0, 255),
+        None,
+        &Rect::new(x0 as f64, wall_top as f64, (x0 + w) as f64, (wall_top + 4.0) as f64),
+    );
+    // Tablones verticales (veta alterna + junta oscura).
+    let plankw = (w * 0.026).clamp(16.0, 44.0);
+    let mut px = x0;
+    let mut pi = 0u64;
+    while px < x0 + w {
+        if pi % 2 == 1 {
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                col(wood_d.0, wood_d.1, wood_d.2, 255),
+                None,
+                &Rect::new(px as f64, (wall_top + 4.0) as f64, (px + plankw) as f64, fence_bot as f64),
+            );
+        }
+        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, col(40.0, 26.0, 16.0, 200), None, &line(px, wall_top + 4.0, px, fence_bot));
+        px += plankw;
+        pi += 1;
+    }
+    // Graffiti acento sobre los tablones (en el original van score y vidas).
+    for gi in 0..4u64 {
+        let bx = x0 + (0.15 + 0.7 * hf(gi ^ 0x6171)) * w;
+        let by = wall_top + (0.2 + 0.55 * hf(gi ^ 0x7282)) * (fence_bot - wall_top);
+        let s = (fence_bot - wall_top) * 0.18;
+        let (gr, gg, gb) = lerp_rgb((acc.0, acc.1, acc.2), (240.0, 240.0, 240.0), 0.2);
+        let mut sq = BezPath::new();
+        sq.move_to(Point::new(bx as f64, by as f64));
+        sq.curve_to(
+            Point::new((bx + s) as f64, (by - s) as f64),
+            Point::new((bx + s * 1.6) as f64, (by + s) as f64),
+            Point::new((bx + s * 2.4) as f64, (by - s * 0.4) as f64),
+        );
+        scene.stroke(&Stroke::new(2.4), Affine::IDENTITY, col(gr, gg, gb, 150), None, &sq);
+    }
+
+    // ── Tachos de basura apoyados en la cerca (el gato los salta para trepar). ──
+    paint_trashcan(scene, x0 + w * 0.07, fence_bot, h * 0.16, acc);
+    paint_trashcan(scene, x0 + w * 0.135, fence_bot, h * 0.13, acc);
+
+    // ── Perro que cruza el borde inferior cada tanto (la amenaza del callejón). ──
+    let period = 17.0_f32;
+    let dp = (t % period) / period;
+    if dp < 0.26 {
+        let run = dp / 0.26;
+        let dir = if (t / period) as i64 % 2 == 0 { 1.0 } else { -1.0 };
+        let dx = if dir > 0.0 {
+            x0 - w * 0.12 + run * (w * 1.24)
+        } else {
+            x0 + w * 1.12 - run * (w * 1.24)
+        };
+        paint_dog(scene, dx, fence_bot - h * 0.02, h * 0.12, dir, t);
+    }
+}
+
+/// Un ratón corriendo por un tendedero. `dir` ±1 marca el sentido de avance.
+fn paint_mouse(scene: &mut vello::Scene, x: f32, y: f32, dir: f32, t: f32) {
+    let (x, y, d) = (x as f64, y as f64, dir as f64);
+    let body = col(150.0, 148.0, 156.0, 255);
+    let foot = col(120.0, 118.0, 126.0, 255);
+    // Patitas (un parpadeo de carrera).
+    let wig = ((t * 16.0).sin() * 1.6) as f64;
+    scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, foot, None, &line((x - 3.0) as f32, (y + 4.0) as f32, (x - 3.0 + wig) as f32, (y + 7.0) as f32));
+    scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, foot, None, &line((x + 3.0) as f32, (y + 4.0) as f32, (x + 3.0 - wig) as f32, (y + 7.0) as f32));
+    // Cuerpo.
+    scene.fill(Fill::NonZero, Affine::IDENTITY, body, None, &Ellipse::new(Point::new(x, y), (7.0, 4.2), 0.0));
+    // Cabeza + oreja + ojo, mirando hacia `dir`.
+    let hx = x + d * 7.0;
+    scene.fill(Fill::NonZero, Affine::IDENTITY, body, None, &Circle::new(Point::new(hx, y - 0.5), 3.4));
+    scene.fill(Fill::NonZero, Affine::IDENTITY, col(170.0, 150.0, 158.0, 255), None, &Circle::new(Point::new(hx + d, y - 3.6), 2.0));
+    scene.fill(Fill::NonZero, Affine::IDENTITY, col(20.0, 18.0, 22.0, 255), None, &Circle::new(Point::new(hx + d * 1.6, y - 1.0), 0.8));
+    // Cola hacia atrás.
+    let mut tail = BezPath::new();
+    tail.move_to(Point::new(x - d * 6.5, y));
+    tail.quad_to(Point::new(x - d * 13.0, y - 2.0), Point::new(x - d * 15.0, y + 3.0));
+    scene.stroke(&Stroke::new(1.2), Affine::IDENTITY, col(140.0, 138.0, 146.0, 255), None, &tail);
+}
+
+/// Un tacho de basura metálico: base en `bottom`, alto `ht`, centrado en `cx`.
+fn paint_trashcan(scene: &mut vello::Scene, cx: f32, bottom: f32, ht: f32, acc: (f32, f32, f32)) {
+    let bw = ht * 0.72;
+    let top = bottom - ht;
+    let (l, r) = (cx - bw * 0.5, cx + bw * 0.5);
+    let metal = lerp_rgb((104.0, 106.0, 114.0), acc, 0.04);
+    let metal_d = (70.0, 72.0, 80.0);
+    // Cuerpo.
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        col(metal.0, metal.1, metal.2, 255),
+        None,
+        &Rect::new(l as f64, (top + ht * 0.12) as f64, r as f64, bottom as f64),
+    );
+    // Acanaladuras verticales.
+    for j in 1..4 {
+        let rx = l + bw * (j as f32 / 4.0);
+        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, col(metal_d.0, metal_d.1, metal_d.2, 200), None, &line(rx, top + ht * 0.16, rx, bottom - 2.0));
+    }
+    // Tapa (algo más ancha) + perilla.
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        col(metal_d.0, metal_d.1, metal_d.2, 255),
+        None,
+        &Ellipse::new(Point::new(cx as f64, (top + ht * 0.10) as f64), ((bw * 0.58) as f64, (ht * 0.10) as f64), 0.0),
+    );
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        col(metal.0, metal.1, metal.2, 255),
+        None,
+        &Ellipse::new(Point::new(cx as f64, (top + ht * 0.02) as f64), ((bw * 0.12) as f64, (ht * 0.05) as f64), 0.0),
+    );
+}
+
+/// Silueta de un perro corriendo por el piso. `dir` ±1 = sentido, `foot` la línea
+/// del piso, `sz` la alzada.
+fn paint_dog(scene: &mut vello::Scene, x: f32, foot: f32, sz: f32, dir: f32, t: f32) {
+    let (x, foot, s, d) = (x as f64, foot as f64, sz as f64, dir as f64);
+    let body = col(36.0, 34.0, 42.0, 255);
+    let cy = foot - s * 0.55;
+    // Patas en carrera (fases opuestas).
+    let g = (t as f64) * 14.0;
+    for (px, ph) in [(-0.7, 0.0), (-0.5, std::f64::consts::PI), (0.7, std::f64::consts::PI), (0.5, 0.0)] {
+        let sw = (g + ph).sin() * s * 0.18;
+        let hipx = x + d * px * s;
+        scene.stroke(&Stroke::new(s * 0.12), Affine::IDENTITY, body, None, &line(hipx as f32, (cy + s * 0.2) as f32, (hipx + sw) as f32, foot as f32));
+    }
+    // Cuerpo + grupa.
+    scene.fill(Fill::NonZero, Affine::IDENTITY, body, None, &Ellipse::new(Point::new(x, cy), (s * 0.95, s * 0.5), 0.0));
+    // Cuello + cabeza hacia `dir`.
+    let hx = x + d * s * 1.05;
+    let hy = cy - s * 0.25;
+    scene.fill(Fill::NonZero, Affine::IDENTITY, body, None, &Circle::new(Point::new(hx, hy), s * 0.34));
+    // Hocico.
+    scene.fill(Fill::NonZero, Affine::IDENTITY, body, None, &Ellipse::new(Point::new(hx + d * s * 0.28, hy + s * 0.05), (s * 0.22, s * 0.15), 0.0));
+    // Oreja caída.
+    scene.fill(Fill::NonZero, Affine::IDENTITY, col(26.0, 24.0, 32.0, 255), None, &Ellipse::new(Point::new(hx - d * s * 0.12, hy - s * 0.1), (s * 0.12, s * 0.2), 0.0));
+    // Cola alzada.
+    let mut tail = BezPath::new();
+    tail.move_to(Point::new(x - d * s * 0.9, cy - s * 0.1));
+    tail.quad_to(Point::new(x - d * s * 1.3, cy - s * 0.6), Point::new(x - d * s * 1.1, cy - s * 0.9));
+    scene.stroke(&Stroke::new(s * 0.13), Affine::IDENTITY, body, None, &tail);
+    // Ojo.
+    scene.fill(Fill::NonZero, Affine::IDENTITY, col(220.0, 210.0, 180.0, 230), None, &Circle::new(Point::new(hx + d * s * 0.12, hy - s * 0.05), s * 0.045));
 }
 
 /// Fallback **stateless**: telón + un gato por senos que cruza en loop. Firma de
