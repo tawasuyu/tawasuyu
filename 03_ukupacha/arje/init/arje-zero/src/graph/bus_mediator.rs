@@ -145,7 +145,7 @@ impl EnteGraph {
                 let _ = reply.send(BusResponse::Ok);
             }
             BusRequest::ListEntes => {
-                let entes = self.incarnated.values()
+                let mut entes: Vec<EnteInfo> = self.incarnated.values()
                     .map(|i| EnteInfo {
                         id: i.card.id,
                         label: i.card.label.clone(),
@@ -153,6 +153,16 @@ impl EnteGraph {
                         pid: i.pid.map(|p| p.as_raw()),
                     })
                     .collect();
+                // Los APARCADOS también son unidades conocidas (esperando su piso),
+                // sólo que sin proceso. Se listan con `pid: None`; su estado real
+                // lo da `EnteStatus` (Parked). Así el monitor los muestra como
+                // "aparcado" en vez de desaparecerlos.
+                entes.extend(self.parked.iter().map(|c| EnteInfo {
+                    id: c.id,
+                    label: c.label.clone(),
+                    provides: c.provides.iter().cloned().collect(),
+                    pid: None,
+                }));
                 let _ = reply.send(BusResponse::Entes(entes));
             }
             BusRequest::PowerOff { interactive } => {
@@ -224,12 +234,25 @@ impl EnteGraph {
             }
             BusRequest::EnteStatus { target } => {
                 // Observabilidad anónima. Vivo = está en el grafo; arje-zero no
-                // guarda exit codes tras la muerte, así que sólo Running/Gone.
+                // guarda exit codes tras la muerte, así que sólo Running/Gone/Parked.
                 let liveness = match self.incarnated.get(&target) {
                     Some(inc) => Liveness::Running {
                         pid: inc.pid.map(|p| p.as_raw()),
                     },
-                    None => Liveness::Gone,
+                    None => {
+                        // ¿Aparcado esperando piso? Reportá Parked con el motivo
+                        // (el contrato insatisfecho), no Gone.
+                        let avail = self.available_caps();
+                        match self.parked.iter().find(|c| c.id == target) {
+                            Some(card) => Liveness::Parked {
+                                reason: match card.deps_satisfied(&avail) {
+                                    Err(unmet) => unmet.to_string(),
+                                    Ok(()) => "esperando re-floor".to_string(),
+                                },
+                            },
+                            None => Liveness::Gone,
+                        }
+                    }
                 };
                 let _ = reply.send(BusResponse::Status(liveness));
             }

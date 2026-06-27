@@ -121,6 +121,8 @@ pub(crate) fn state_visual(t: &Theme, s: &LifecycleState) -> (Color, &'static st
         LifecycleState::Exited { .. } => (t.fg_muted, "salió"),
         LifecycleState::Failed { .. } => (t.fg_destructive, "falló"),
         LifecycleState::Killed => (Color::from_rgba8(0x9a, 0x55, 0x55, 0xff), "matado"),
+        // Aparcado esperando su piso (re-floor pendiente): púrpura suave.
+        LifecycleState::Parked { .. } => (Color::from_rgba8(0xa0, 0x80, 0xd0, 0xff), "esperando piso"),
     }
 }
 

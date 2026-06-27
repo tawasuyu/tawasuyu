@@ -201,6 +201,9 @@ pub enum Liveness {
     Running { pid: Option<i32> },
     /// No está en el grafo: murió o nunca existió.
     Gone,
+    /// APARCADO: no corre porque su piso (una capability de la que depende) no
+    /// tiene proveedor; el Init lo re-erige cuando vuelva. `reason` = qué falta.
+    Parked { reason: String },
 }
 
 /// Muestra puntual de recursos de un Ente (leída de `/proc/<pid>`) + su

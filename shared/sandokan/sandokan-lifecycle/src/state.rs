@@ -15,6 +15,11 @@ pub enum LifecycleState {
     Failed { reason: String },
     /// Terminada por el supervisor (SIGKILL / quota / drain).
     Killed,
+    /// APARCADA: no corre porque su "piso" (una capability de la que depende) no
+    /// tiene proveedor — p. ej. el compositor cayó y se llevó a este cliente.
+    /// No es fallo ni terminal: espera a que el proveedor reaparezca y el Init
+    /// la re-erija (re-floor). `reason` describe qué espera.
+    Parked { reason: String },
 }
 
 impl LifecycleState {
@@ -27,6 +32,11 @@ impl LifecycleState {
                 | LifecycleState::Failed { .. }
                 | LifecycleState::Killed
         )
+    }
+
+    /// `true` si la entidad está aparcada esperando su piso (re-floor pendiente).
+    pub fn is_parked(&self) -> bool {
+        matches!(self, LifecycleState::Parked { .. })
     }
 
     /// `true` si el estado terminal cuenta como fallo (dispara restart

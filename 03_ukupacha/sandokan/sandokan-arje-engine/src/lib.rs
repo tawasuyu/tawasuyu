@@ -94,6 +94,7 @@ fn liveness_to_state(l: Liveness) -> Option<LifecycleState> {
     match l {
         Liveness::Running { .. } => Some(LifecycleState::Running),
         Liveness::Gone => None,
+        Liveness::Parked { reason } => Some(LifecycleState::Parked { reason }),
     }
 }
 
@@ -197,6 +198,11 @@ mod tests {
             Some(LifecycleState::Running)
         ));
         assert!(liveness_to_state(Liveness::Gone).is_none());
+        // Parked viaja con su motivo → LifecycleState::Parked (visible en el monitor).
+        assert!(matches!(
+            liveness_to_state(Liveness::Parked { reason: "falta el piso".into() }),
+            Some(LifecycleState::Parked { .. })
+        ));
     }
 
     #[test]
