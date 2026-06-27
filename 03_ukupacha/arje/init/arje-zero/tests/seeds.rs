@@ -81,11 +81,13 @@ fn tawasuyu_seed_arranca_el_dm_real_no_el_getty_stub() {
         }
         otro => panic!("payload del DM no es Native: {otro:?}"),
     }
-    // El compositor provee el "piso" gráfico ⇒ los clientes de sesión pueden
-    // `requires`-lo y el re-floor del Init los re-erige si el compositor cae.
+    // El piso (display Wayland) NO se declara estático: mirada-compositor lo
+    // ANUNCIA por readiness (UpdateCapabilities) cuando su socket ya escucha, así
+    // los clientes de sesión arrancan recién entonces (sin carrera) y el re-floor
+    // sólo dispara cuando el piso está de verdad listo. Ver `mirada::floor`.
     assert!(
-        dm.provides.contains(&wayland_floor()),
-        "el DM debe proveer el piso Wayland (WAYLAND_FLOOR_INTERFACE)",
+        !dm.provides.contains(&wayland_floor()),
+        "el piso debe anunciarse por readiness, no declararse estático en el seed",
     );
 
     let splash = card

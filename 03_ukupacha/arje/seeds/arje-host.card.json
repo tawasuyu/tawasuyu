@@ -216,31 +216,7 @@
       "schema_version": 1,
       "id": "01HQAR53D4M2NBV8KZTYXFHS04",
       "label": "display-manager-mesa",
-      "provides": [
-        {
-          "Endpoint": {
-            "interface": [
-              109,
-              105,
-              114,
-              97,
-              100,
-              97,
-              45,
-              119,
-              108,
-              45,
-              102,
-              108,
-              111,
-              111,
-              114,
-              48
-            ],
-            "version": 1
-          }
-        }
-      ],
+      "provides": [],
       "requires": [],
       "permissions": {
         "networking": "loopback",

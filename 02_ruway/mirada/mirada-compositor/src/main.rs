@@ -98,6 +98,7 @@ mod cursor_theme;
 #[macro_use]
 mod diag;
 mod drm_backend;
+mod floor;
 mod gamma_control;
 mod handoff;
 mod idle_notify;

@@ -1450,6 +1450,12 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     println!("      escuchando en WAYLAND_DISPLAY={socket_name}");
 
+    // Readiness: el socket ya escucha ⇒ los clientes PUEDEN conectar. Le
+    // anunciamos al Init que proveemos el piso (`wayland_floor()`), para que
+    // arranque/re-flooree a los clientes de sesión que dependen de él recién
+    // ahora (no antes). Best-effort, en segundo plano; no-op fuera del Init.
+    crate::floor::announce_floor_ready();
+
     // Canal del shell de credenciales (greeter de login y, en runtime, el
     // lock). El hilo lector del shell despierta el bucle por acá con una
     // `ShellAction`. Se crea **siempre** —no sólo en modo DM— porque el lock

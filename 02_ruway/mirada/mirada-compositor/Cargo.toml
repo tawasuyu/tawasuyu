@@ -19,6 +19,14 @@ mirada-body = { path = "../mirada-body" }
 mirada-link = { path = "../mirada-link" }
 mirada-procedural = { path = "../mirada-procedural" }
 auth-core = { path = "../../../shared/auth/auth-core" }
+# Anuncio de readiness del "piso" al Init: cuando el socket Wayland escucha,
+# mirada le dice a arje que provee `wayland_floor()` (UpdateCapabilities), para
+# que los clientes de sesión que lo `requires` arranquen/re-flooreen recién
+# entonces. Best-effort, en un hilo con runtime tokio mínimo (el bucle es calloop).
+arje-bus = { path = "../../../03_ukupacha/arje/runtime/arje-bus" }
+arje-card = { path = "../../../03_ukupacha/arje/arje-card" }
+anyhow = { workspace = true }
+tokio = { workspace = true }
 # Puente de drag-and-drop: reenvía a las apps tawasuyu las rutas soltadas
 # (winit no recibe DnD en Wayland). Ver `started`/`dropped` en handlers.rs.
 drop-bridge = { workspace = true }
