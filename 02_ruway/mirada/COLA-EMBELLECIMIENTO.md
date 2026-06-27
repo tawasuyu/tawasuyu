@@ -57,6 +57,22 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
 - [ ] **Preset «glassmorphism»** en wawa-panel: enciende de una translucidez +
       blur + rounded + sombra suave + filo, encima del `theme`.
 
+## Multisesión (FUS) — verificar en metal
+- [ ] **Miniaturas de sesiones en el lock** (`origin/main`, crate
+      `mirada-compositor/src/thumbs.rs` + tira en `mirada-greeter`). La lógica
+      de selección per-sesión quedó **verificada por lectura** (filtra por
+      `w.visible`, no por `session_visible`, así toma las sesiones de fondo); lo
+      que **falta certificar en metal** es el **readback GPU de una escena
+      multisesión real**. Receta:
+      1. Arrancar mirada en metal, abrir sesión A con alguna ventana con
+         contenido distintivo.
+      2. FUS «cambiar usuario» → sesión B con otra ventana distinta.
+      3. Enganchar el candado y mirar la tira: **cada** sesión (la activa **y**
+         la de fondo) debe mostrar **su preview real**, no la tarjeta genérica
+         (el «monitor» tenue). La activa va resaltada/más grande.
+      4. Clic en la tarjeta de la otra sesión → salta a ella (`SwitchTo`).
+      5. Probar privacidad: `MIRADA_LOCK_PREVIEW=hidden` → todas genéricas.
+
 ## Otras ideas diferidas (PLAN)
 - [ ] Transiciones fullscreen: **apagado CRT** y **hero lock→thumbnail** (mismo
       motor captura-a-textura que el fade-close).
