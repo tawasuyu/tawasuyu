@@ -18,7 +18,7 @@ sólo cuando es un visual nuevo no certificable de otra forma.
 ## 2. mirada — compositor/escritorio (122 commits, el grueso)
 > `scripts/actualizar-mirada.sh` rebuildea, luego login. Diag: `scripts/diag-mirada.sh`.
 - [ ] Glassmorphism (menú/barra frosted) — confirmar blur en metal
-- [ ] Cubo Win+Tab — verificado headless, falta verlo en metal
+- [~] Cubo Win+Tab — geometría OK (8 tests + PNG headless revisado: cubo Compiz correcto). **BUG ENCONTRADO Y CORREGIDO 2026-06-27:** era inalcanzable en sesión enlazada (DE) — el protocolo `SetWorkspaces` no llevaba el modo, el Cuerpo lo adivinaba de `slide_ms` y colapsaba Cube/Prezi→Hyprland. Ahora el slug del modo viaja en el protocolo (commit). Activar con `workspace_switch_mode: Cube` (wawa-panel «Cubo 3D»). Falta verlo en metal.
 - [ ] Prezi / vista espacial — rotación viva con handoff a metal; mapa Prezi editable en wawa-panel
 - [ ] FUS sesiones: login→lock→switch-user→logout completo en metal
 - [ ] Efectos nuevos: corner_radius GPU vía GlesRenderer
