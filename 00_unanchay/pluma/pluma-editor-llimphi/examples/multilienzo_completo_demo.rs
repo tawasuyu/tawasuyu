@@ -569,6 +569,7 @@ fn etiqueta_backend(b: BackendKind) -> &'static str {
         BackendKind::DeepSeek => "deepseek",
         BackendKind::Cohere => "cohere",
         BackendKind::Ollama => "ollama",
+        BackendKind::ClaudeCli => "claude-cli",
     }
 }
 

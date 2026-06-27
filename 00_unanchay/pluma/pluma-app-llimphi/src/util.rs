@@ -32,6 +32,7 @@ pub(crate) fn etiqueta_backend(k: BackendKind) -> &'static str {
         BackendKind::DeepSeek => "deepseek",
         BackendKind::Cohere => "cohere",
         BackendKind::Ollama => "ollama",
+        BackendKind::ClaudeCli => "claude-cli",
     }
 }
 
