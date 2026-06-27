@@ -386,28 +386,57 @@ fn print_actions() {
     print!(
         "\
 Acciones de mirada-ctl:
-  focus-next                 mueve el foco a la siguiente ventana
-  focus-prev                 mueve el foco a la anterior
+ Foco:
+  focus-next / focus-prev    mueve el foco a la siguiente / anterior ventana
+  focus-<dir>                enfoca en dirección: up · down · left · right
   focus-window <id>          enfoca la ventana <id>  (ver: mirada-ctl windows)
-  move-forward               adelanta la ventana enfocada en el teselado
-  move-backward              la atrasa
+ Mover / cerrar:
+  move-forward / move-backward   adelanta / atrasa la enfocada en el teselado
+  move-<dir>                 mueve la enfocada: up · down · left · right
+  resize-float-<dir>         redimensiona la flotante: up · down · left · right
   close-focused              cierra la ventana enfocada
   close-window <id>          cierra la ventana <id>  (ver: mirada-ctl windows)
+ Estado de ventana:
   toggle-float               alterna flotante / teselada la enfocada
+  toggle-tiling              alterna teselado en la enfocada
   toggle-fullscreen          alterna pantalla completa en la enfocada
+  toggle-maximize            alterna maximizada en la enfocada
+ Scratchpad / dropterm / especiales:
   send-to-scratchpad         guarda la ventana enfocada en el scratchpad
   toggle-scratchpad          invoca u oculta la ventana del scratchpad
+  toggle-dropterm            invoca u oculta el terminal Quake
+  move-to-special <nombre>   manda la enfocada al escritorio especial <nombre>
+  toggle-special <nombre>    invoca u oculta el escritorio especial <nombre>
+ Teselado:
   cycle-layout               pasa al siguiente modo de teselado
   layout <modo>              master-stack · centered-master · spiral
                              grid · columns · rows · monocle
-  grow-master                agranda el área de la ventana maestra
-  shrink-master              la encoge
+  grow-master / shrink-master    agranda / encoge el área de la maestra
   inc-master / dec-master    nº de ventanas en el área maestra (nmaster)
   promote-to-master          la ventana enfocada al puesto maestro
+  swap-master                intercambia la enfocada con la maestra
+ Grupos / constelaciones / zoom:
+  group-stack                agrupa en pila (tabs)
+  group-constellation        agrupa en constelación
+  ungroup                    deshace el grupo de la enfocada
+  zoom-in / zoom-out         acerca / aleja el zoom-Z
+  focus-constellation-next / -prev   recorre las constelaciones
+ Escritorios:
   workspace <n>              activa el escritorio n (1..9)
-  send-to-workspace <n>      manda la enfocada al escritorio n
+  workspace-next / -prev     escritorio siguiente / anterior
+  send-to-workspace <n>      manda la enfocada al escritorio n (sigue el foco)
+  move-to-workspace <n>      manda la enfocada al escritorio n (sin seguir)
+ Monitores:
   focus-output-next          pasa el foco al siguiente monitor
+  focus-output-<dir>         enfoca el monitor en dirección up/down/left/right
+  send-to-output-<dir>       manda la enfocada al monitor en esa dirección
+ Sesión:
+  lock                       bloquea la sesión
+  logout                     cierra la sesión (relevo del compositor)
   quit                       apaga el compositor
+ Lanzar:
+  spawn <comando>            lanza un comando como cliente Wayland (entrecomillá
+                             el comando si lleva espacios)
 "
     );
 }
