@@ -13,3 +13,4 @@ name = "mirada-launcher"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }

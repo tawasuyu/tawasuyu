@@ -30,9 +30,11 @@ impl InvokeHandler for EchoHandler {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    bitacora::abrir("arje");
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("arje_echo=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
+    // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_target(true).try_init();
 
     info!("ente-echo arrancando");
     let mut server = BusServer::from_env().await?;

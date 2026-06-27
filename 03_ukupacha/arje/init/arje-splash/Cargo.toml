@@ -11,6 +11,7 @@ name = "arje-splash"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 drm = { workspace = true }
 font8x8 = { workspace = true }
 libc = { workspace = true }

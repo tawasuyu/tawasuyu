@@ -11,6 +11,7 @@ name = "arje-absorb"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 card-core = { path = "../../../../shared/card/card-core" }
 arje-attest = { path = "../../runtime/arje-attest" }   # firmar el manifiesto de atestación (A1)
 arje-cas = { path = "../../runtime/arje-cas" }   # cosechar los binarios de servicios al CAS (--harvest-cas)

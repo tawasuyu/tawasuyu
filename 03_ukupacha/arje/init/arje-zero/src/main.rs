@@ -95,6 +95,7 @@ fn parse_args() -> CliArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    bitacora::abrir("arje");
     init_tracing();
     let cli = parse_args();
 
@@ -943,7 +944,8 @@ fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("arje_zero=debug,info"));
-    fmt().with_env_filter(filter).with_target(true).init();
+    // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
+    let _ = fmt().with_env_filter(filter).with_target(true).try_init();
 }
 
 fn brain_introspect_path() -> PathBuf {

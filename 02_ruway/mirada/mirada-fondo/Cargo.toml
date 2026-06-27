@@ -23,6 +23,7 @@ bake = [
 ]
 
 [dependencies]
+bitacora = { workspace = true }
 # Núcleo liviano: spec serializable + cache de frames + chakana CPU.
 serde = { workspace = true, features = ["derive"] }
 ron = { workspace = true }

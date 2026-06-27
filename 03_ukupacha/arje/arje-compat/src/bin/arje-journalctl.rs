@@ -126,6 +126,7 @@ fn parse_sha(hex: &str) -> Option<[u8; 32]> {
 }
 
 fn main() -> anyhow::Result<()> {
+    bitacora::abrir("arje");
     let args = parse_args();
     let path = index_path();
     if !path.exists() {

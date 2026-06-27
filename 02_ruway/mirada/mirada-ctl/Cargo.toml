@@ -13,6 +13,7 @@ name = "mirada-ctl"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 mirada-brain = { path = "../mirada-brain" }
 # Para `mirada-ctl vista use <x>`: escribe la barra de pata (launcher.toml) con
 # el preset de barra de la vista. Núcleos agnósticos sin GPU.

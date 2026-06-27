@@ -1216,6 +1216,7 @@ fn theme_from_wawa(cfg: &wawa_config::WawaConfig) -> Theme {
 }
 
 fn main() {
+    bitacora::abrir("arje");
     llimphi_ui::run::<ArjeCard>();
 }
 

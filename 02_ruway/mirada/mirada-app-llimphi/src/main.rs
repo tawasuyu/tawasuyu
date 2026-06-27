@@ -1954,6 +1954,7 @@ fn canvas_view(
 }
 
 fn main() {
+    bitacora::abrir("mirada");
     rimay_localize::init();
     let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     llimphi_ui::run::<Mirada>();

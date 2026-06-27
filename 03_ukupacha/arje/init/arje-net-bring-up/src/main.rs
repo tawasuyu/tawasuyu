@@ -32,6 +32,7 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context};
 
 fn main() -> ExitCode {
+    bitacora::abrir("arje");
     match run() {
         Ok(name) => {
             eprintln!("arje-net-bring-up :: {name} arriba");

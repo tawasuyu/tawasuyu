@@ -13,6 +13,7 @@ name = "mirada-filechooser"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }

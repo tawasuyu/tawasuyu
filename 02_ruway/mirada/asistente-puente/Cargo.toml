@@ -17,6 +17,7 @@ name = "asistente_puente"
 path = "src/lib.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 format = { path = "../../../shared/format" }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 pluma-llm-core = { path = "../../../00_unanchay/pluma/pluma-llm-core" }

@@ -30,6 +30,7 @@ use std::process::ExitCode;
 const DEFAULT_DEVICE: &str = "/dev/dri/card0";
 
 fn main() -> ExitCode {
+    bitacora::abrir("arje");
     // Modo cliente de prueba (`arje-splash --poke`): simula a mirada mandando
     // READY al socket de handoff y esperando RELEASED. Para verificar Fase 2
     // end-to-end en QEMU sin levantar el compositor.

@@ -13,6 +13,7 @@ name = "shuma-shell-llimphi"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 shuma-module = { path = "../sandbox/shuma-module" }
 shuma-module-commandbar = { path = "../sandbox/shuma-module-commandbar" }
 shuma-module-launcher = { path = "../sandbox/shuma-module-launcher" }

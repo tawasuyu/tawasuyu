@@ -397,6 +397,7 @@ async fn refrescar(
 }
 
 fn main() {
+    bitacora::abrir("pata");
     pata_notify::init_tracing();
     let cfg = llimphi_layer::LayerConfig {
         edge: llimphi_layer::Edge::Right,

@@ -13,6 +13,7 @@ name = "shuma-askpass"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }

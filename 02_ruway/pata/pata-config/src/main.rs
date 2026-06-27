@@ -22,6 +22,7 @@ use pata_core::widget::{self, ClockReading, WidgetCtx, WidgetView};
 use pata_core::{Config, Rect, Surface, SurfaceKind, WidgetSpec};
 
 fn main() -> ExitCode {
+    bitacora::abrir("pata");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut screen = (1920_i32, 1080_i32);
     let mut config_path: Option<String> = None;

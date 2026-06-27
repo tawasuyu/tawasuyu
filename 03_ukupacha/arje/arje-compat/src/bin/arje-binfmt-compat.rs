@@ -24,6 +24,7 @@ const SEARCH_DIRS: &[&str] = &[
 ];
 
 fn main() {
+    bitacora::abrir("arje");
     init_tracing();
     info!("ente-binfmt-compat: registrando handlers binfmt_misc");
 
@@ -105,5 +106,6 @@ fn register(line: &str) -> Result<String, RegError> {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("arje_binfmt_compat=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
+    // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_target(true).try_init();
 }

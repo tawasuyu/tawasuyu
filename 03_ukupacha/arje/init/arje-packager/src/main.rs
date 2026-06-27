@@ -163,6 +163,7 @@ OPCIONES:
 ";
 
 fn main() -> ExitCode {
+    bitacora::abrir("arje");
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

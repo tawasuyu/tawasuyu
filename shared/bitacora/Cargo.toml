@@ -1,0 +1,10 @@
+[package]
+name = "bitacora"
+version = "0.1.0"
+edition = "2021"
+description = "Telemetría local de desarrollo: redirige stderr+panics+tracing a un archivo por binario bajo $XDG_STATE_HOME/tawasuyu/."
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+libc = { workspace = true }

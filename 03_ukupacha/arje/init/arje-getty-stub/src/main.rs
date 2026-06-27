@@ -27,6 +27,7 @@ use std::os::unix::io::AsRawFd;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    bitacora::abrir("arje");
     let argv: Vec<String> = std::env::args().collect();
     // El seed canónico pasa `["--noclear", "ttyS0", "linux"]`. Encontramos
     // el primer arg que parezca un nombre de TTY — empieza con "tty".

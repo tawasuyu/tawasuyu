@@ -16,6 +16,7 @@ use std::time::Duration;
 use mirada_wallpaper::{run_once, Config, Outcome};
 
 fn main() -> ExitCode {
+    bitacora::abrir("mirada");
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,

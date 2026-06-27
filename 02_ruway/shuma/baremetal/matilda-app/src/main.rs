@@ -228,6 +228,7 @@ fn run() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
+    bitacora::abrir("shuma");
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

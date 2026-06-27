@@ -13,6 +13,7 @@
 //! ```
 
 fn main() {
+    bitacora::abrir("pata");
     let forzar_winit = std::env::var("PATA_BACKEND").as_deref() == Ok("winit");
     let hay_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
 

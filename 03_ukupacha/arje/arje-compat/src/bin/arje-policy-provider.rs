@@ -91,6 +91,7 @@ impl Default for PolicyConfig {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    bitacora::abrir("arje");
     init_tracing();
     info!("ente-policy-provider: arrancando");
 
@@ -217,5 +218,6 @@ fn load_policy() -> PolicyConfig {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("arje_policy_provider=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
+    // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_target(true).try_init();
 }

@@ -218,6 +218,7 @@ enum WsCmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    bitacora::abrir("shuma");
     let cli = Cli::parse();
     let socket = cli.socket.unwrap_or_else(default_socket_path);
     let mut stream = UnixStream::connect(&socket)

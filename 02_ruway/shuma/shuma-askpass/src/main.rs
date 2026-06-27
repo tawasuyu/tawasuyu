@@ -228,6 +228,7 @@ impl App for Askpass {
 }
 
 fn main() {
+    bitacora::abrir("shuma");
     llimphi_ui::run::<Askpass>();
     // Tras `run`, el bucle terminó. Si el usuario confirmó, escupimos la
     // pass a stdout (sin newline trailing — algunos askpass strict cortan

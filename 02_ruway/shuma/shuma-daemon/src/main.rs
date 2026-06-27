@@ -30,6 +30,7 @@ use pty_sessions::{PtyRegistry, SessionEvent};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    bitacora::abrir("shuma");
     init_tracing();
     let sock = default_socket_path();
     let pid_path = pid_path_for(&sock);
@@ -1662,7 +1663,8 @@ fn build_daemon_card(service_socket: &std::path::Path) -> Card {
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_env("SHIPOTE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
-    fmt().with_env_filter(filter).init();
+    // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
+    let _ = fmt().with_env_filter(filter).try_init();
 }
 
 /// Path del lockfile asociado al socket admin: mismo dir, extensión `.pid`.

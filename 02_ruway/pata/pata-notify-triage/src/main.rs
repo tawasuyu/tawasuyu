@@ -4,6 +4,7 @@
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    bitacora::abrir("pata");
     pata_notify::init_tracing();
 
     let historial = match pata_notify::dbus::fetch_historial().await {

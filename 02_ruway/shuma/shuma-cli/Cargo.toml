@@ -13,6 +13,7 @@ name = "shuma"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 shuma-card = { path = "../sandbox/shuma-card" }
 shuma-protocol = { path = "../sandbox/shuma-protocol" }
 anyhow = { workspace = true }

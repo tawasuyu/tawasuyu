@@ -259,6 +259,7 @@ fn parse_to_usb(mut args: impl Iterator<Item = String>) -> anyhow::Result<Mode> 
 }
 
 fn main() -> ExitCode {
+    bitacora::abrir("arje");
     let mode = match parse_args() {
         Ok(m) => m,
         Err(e) => {

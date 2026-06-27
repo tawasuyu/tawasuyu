@@ -126,6 +126,9 @@ fn main() {
     // Telemetría primero: el panic hook y la bitácora deben estar en pie
     // antes de tocar nada, para que cualquier fallo del arranque ya quede
     // en disco (en el directorio local persistente, no /tmp).
+    // `bitacora` captura el firehose crudo de stderr (los eprintln!) + panics;
+    // `diag` mantiene la bitácora estructurada (eventos.log + migas + crash-N).
+    bitacora::abrir("mirada");
     diag::init();
 
     // Banderas en cualquier orden: `--greeter` (modo DM) es ortogonal

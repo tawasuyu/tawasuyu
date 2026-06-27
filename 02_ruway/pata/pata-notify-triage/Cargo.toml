@@ -15,6 +15,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 pata-notify = { path = "../pata-notify" }
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 rimay-verbo-core = { path = "../../../00_unanchay/rimay/rimay-verbo-core" }

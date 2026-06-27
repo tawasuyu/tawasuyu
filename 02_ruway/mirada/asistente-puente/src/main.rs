@@ -43,6 +43,7 @@ const MAX_FRAME: usize = 64 * 1024;
 const MAX_TOKENS_RESPUESTA: u32 = 500;
 
 fn main() {
+    bitacora::abrir("mirada");
     if let Err(e) = correr() {
         eprintln!("asistente-puente: {e}");
         std::process::exit(1);

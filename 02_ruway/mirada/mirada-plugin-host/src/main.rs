@@ -60,6 +60,7 @@ fn plugins_dir() -> PathBuf {
 }
 
 fn main() {
+    bitacora::abrir("mirada");
     let path = match std::env::var("MIRADA_SOCKET") {
         Ok(p) => p,
         Err(_) => {

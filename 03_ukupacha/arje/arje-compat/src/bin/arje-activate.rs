@@ -52,6 +52,7 @@ fn valid_card_name(name: &str) -> bool {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    bitacora::abrir("arje");
     let name = match std::env::args().nth(1) {
         Some(n) if valid_card_name(&n) => n,
         Some(n) => {

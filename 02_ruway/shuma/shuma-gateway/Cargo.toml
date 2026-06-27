@@ -13,6 +13,7 @@ name = "shuma-gateway"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 shuma-protocol = { path = "../sandbox/shuma-protocol" }
 anyhow = { workspace = true }
 serde = { workspace = true }

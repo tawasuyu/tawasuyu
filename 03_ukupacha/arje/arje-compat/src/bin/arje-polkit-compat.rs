@@ -27,6 +27,7 @@ const OBJ_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    bitacora::abrir("arje");
     init_tracing();
     info!("ente-polkit-compat: arrancando");
     announce_to_fractal().await;
@@ -260,5 +261,6 @@ async fn wait_for_term() -> anyhow::Result<()> {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("arje_polkit_compat=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
+    // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_target(true).try_init();
 }

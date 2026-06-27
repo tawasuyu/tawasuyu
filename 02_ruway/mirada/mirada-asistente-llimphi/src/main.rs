@@ -165,6 +165,7 @@ enum ParseResult {
 type DynLlm = Arc<dyn ChatClient>;
 
 fn main() {
+    bitacora::abrir("mirada");
     rimay_localize::init();
     llimphi_ui::run::<Asistente>();
 }

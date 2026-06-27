@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 fn main() {
+    bitacora::abrir("shuma");
     // `--dock` arranca shuma como barra wlr-layer-shell (modo dock); sin flag,
     // como ventana normal.
     if std::env::args().skip(1).any(|a| a == "--dock") {

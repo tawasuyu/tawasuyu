@@ -9,3 +9,6 @@ description = "arje-getty-stub — agetty mínimo de validación. Abre la TTY qu
 [[bin]]
 name = "arje-getty-stub"
 path = "src/main.rs"
+
+[dependencies]
+bitacora = { workspace = true }

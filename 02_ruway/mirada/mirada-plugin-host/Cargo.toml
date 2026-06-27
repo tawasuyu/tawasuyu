@@ -19,6 +19,7 @@ name = "mirada-plugin-sign"
 path = "src/bin/sign.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 mirada-protocol = { path = "../mirada-protocol" }
 mirada-link = { path = "../mirada-link" }
 mirada-brain = { path = "../mirada-brain" }

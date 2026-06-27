@@ -15,6 +15,7 @@ name = "arje-installer"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 arje-card = { path = "../../arje-card" }
 arje-packager = { path = "../arje-packager" }
 arje-cas = { path = "../../runtime/arje-cas" }   # cosechar los binarios instalados al CAS (--harvest-cas)

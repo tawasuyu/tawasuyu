@@ -13,6 +13,7 @@ name = "mirada-wallpaper"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 # Lee/valida config.ron y conoce la ruta canónica de la config de mirada.
 mirada-brain = { path = "../mirada-brain" }
 # Astrometría pura para el provider solar (posición del Sol → fase del día).

@@ -122,6 +122,7 @@ impl UpStore {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    bitacora::abrir("shuma");
     init_tracing();
     let listen = std::env::var("SHIPOTE_GATEWAY_LISTEN").unwrap_or_else(|_| DEFAULT_LISTEN.into());
     let token = std::env::var("SHIPOTE_GATEWAY_TOKEN")
@@ -635,7 +636,8 @@ fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter =
         EnvFilter::try_from_env("SHIPOTE_GATEWAY_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
-    fmt().with_env_filter(filter).init();
+    // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
+    let _ = fmt().with_env_filter(filter).try_init();
 }
 
 #[cfg(test)]

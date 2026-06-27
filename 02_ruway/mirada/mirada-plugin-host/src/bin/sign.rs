@@ -17,6 +17,7 @@ use mirada_plugin_host::caps::parse_cap;
 use mirada_plugin_host::trust::grant_message;
 
 fn main() {
+    bitacora::abrir("mirada");
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("keygen") => keygen(&args[2..]),

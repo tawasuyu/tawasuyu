@@ -10,6 +10,7 @@ name = "arje-zero"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 # Lib crates del fractal — orden: contratos → infra → encarnación → orquestación
 arje-card = { path = "../../arje-card" }
 arje-bus = { path = "../../runtime/arje-bus" }

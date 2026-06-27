@@ -12,6 +12,7 @@ name = "pata-notify-panel"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 pata-notify = { path = "../pata-notify" }
 pata-notify-triage = { path = "../pata-notify-triage" }
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }

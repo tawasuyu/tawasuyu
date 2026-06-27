@@ -11,5 +11,6 @@ name = "arje-net-bring-up"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 libc = { workspace = true }
 anyhow = { workspace = true }

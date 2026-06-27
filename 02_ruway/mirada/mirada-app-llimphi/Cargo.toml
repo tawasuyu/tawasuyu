@@ -13,6 +13,7 @@ name = "mirada-llimphi"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 mirada-brain = { path = "../mirada-brain" }
 mirada-link = { path = "../mirada-link" }
 # La barra de las vistas: pata-core define los presets de barra por vista y

@@ -22,6 +22,7 @@ use mirada_brain::ctl::{self, CtlReply, CtlRequest, WindowLine, WorkspacesState}
 use mirada_brain::{DesktopAction, KeymapProfiles};
 
 fn main() -> ExitCode {
+    bitacora::abrir("mirada");
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,

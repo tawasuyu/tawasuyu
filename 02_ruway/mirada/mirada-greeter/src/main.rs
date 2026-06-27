@@ -104,6 +104,7 @@ fn lock_user() -> String {
 }
 
 fn main() {
+    bitacora::abrir("mirada");
     if std::env::var_os("LLIMPHI_TIMING").is_some() {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

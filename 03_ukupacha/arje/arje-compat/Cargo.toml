@@ -75,6 +75,7 @@ name = "arje-tmpfiles-compat"
 path = "src/bin/arje-tmpfiles-compat.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 arje-card = { path = "../arje-card" }
 arje-bus = { path = "../runtime/arje-bus" }
 arje-cas = { path = "../runtime/arje-cas" }

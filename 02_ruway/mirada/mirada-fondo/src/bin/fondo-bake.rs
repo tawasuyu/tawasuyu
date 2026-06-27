@@ -18,6 +18,7 @@ use mirada_fondo::bake::{bake, BakeOpts};
 use mirada_fondo::FondoSpec;
 
 fn main() -> ExitCode {
+    bitacora::abrir("mirada");
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 {
         eprintln!(

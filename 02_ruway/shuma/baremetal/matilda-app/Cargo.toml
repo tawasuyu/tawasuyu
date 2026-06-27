@@ -13,6 +13,7 @@ name = "matilda"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 matilda-core = { path = "../matilda-core" }
 matilda-plan = { path = "../matilda-plan" }
 matilda-apply = { path = "../matilda-apply" }

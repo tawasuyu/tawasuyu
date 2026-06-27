@@ -15,6 +15,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 pata-core = { path = "../pata-core" }
 pata-config = { path = "../pata-config" }
 # Emisión de cada clip nuevo al centro de eventos (no-op si willay no corre).

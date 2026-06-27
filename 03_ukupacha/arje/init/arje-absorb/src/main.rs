@@ -50,6 +50,7 @@ genesis de arje-zero. Revisala antes de instalarla como
 /ente/seed.card.json.";
 
 fn main() {
+    bitacora::abrir("arje");
     if let Err(e) = run() {
         eprintln!("arje-absorb: error: {e:#}");
         exit(1);

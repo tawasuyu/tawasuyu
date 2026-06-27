@@ -27,6 +27,7 @@ struct DesktopApp {
 }
 
 fn main() {
+    bitacora::abrir("mirada");
     let mut apps = scan_apps();
     apps.sort_by_key(|a| a.name.to_lowercase());
     if apps.is_empty() {

@@ -13,6 +13,7 @@ name = "mirada-greeter"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 # Fondo Lottie configurable (lottie = /ruta.json en greeter.conf).

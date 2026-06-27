@@ -13,6 +13,7 @@ name = "shuma-daemon"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 shuma-card = { path = "../sandbox/shuma-card" }
 shuma-protocol = { path = "../sandbox/shuma-protocol" }
 shuma-discern = { path = "../sandbox/shuma-discern" }

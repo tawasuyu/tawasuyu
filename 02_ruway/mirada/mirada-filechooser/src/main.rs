@@ -1170,6 +1170,7 @@ fn theme_config_path() -> Option<PathBuf> {
 // ============================================================================
 
 fn main() {
+    bitacora::abrir("mirada");
     let _ = CONFIG.set(parse_args());
     llimphi_ui::run::<FileChooser>();
 }

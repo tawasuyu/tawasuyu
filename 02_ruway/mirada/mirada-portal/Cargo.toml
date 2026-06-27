@@ -13,6 +13,7 @@ name = "mirada-portal"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 zbus = { workspace = true }
 notify = { workspace = true }
 tokio = { workspace = true }

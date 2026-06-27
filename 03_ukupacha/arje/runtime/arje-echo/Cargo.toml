@@ -14,6 +14,7 @@ name = "arje-echo"
 path = "src/main.rs"
 
 [dependencies]
+bitacora = { workspace = true }
 arje-card = { path = "../../arje-card" }
 arje-bus = { path = "../arje-bus" }
 anyhow = { workspace = true }
