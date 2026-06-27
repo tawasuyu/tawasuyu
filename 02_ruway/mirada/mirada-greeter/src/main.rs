@@ -30,6 +30,7 @@ mod rive;
 mod sessions;
 mod stars;
 mod state;
+mod thumbs;
 mod waves;
 
 use std::io::Write;
@@ -194,6 +195,15 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         .ok()
         .and_then(|v| parse_sessions(&format!("SESSIONS {v}")))
         .unwrap_or_default();
+    // Miniaturas sintéticas (un degradé por sesión) para certificar la tira del
+    // lock sin compositor; vacío salvo que `--shot` simule un roster.
+    let shot_thumbs: Vec<(u32, llimphi_image::Image, u32, u32)> = shot_hosted
+        .iter()
+        .map(|(id, _)| {
+            let (img, w, h) = shot_thumb(*id);
+            (*id, img, w, h)
+        })
+        .collect();
     let model = Model {
         auth: pick_authenticator(),
         user,
@@ -241,6 +251,9 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         cava_frame: shot_media().as_ref().map(|_| shot_cava_frame()).unwrap_or_default(),
         mpris: None,
         media: shot_media(),
+        // Miniaturas sintéticas para certificar la tira de sesiones del lock sin
+        // compositor: una imagen de degradé por cada sesión simulada del roster.
+        thumbs: shot_thumbs,
     };
     // El fondo físico tiene estado: en vivo se stepea en `RainTick`. Para el shot
     // headless lo avanzamos a `MIRADA_SHOT_T` segundos, si no queda en bind pose.
@@ -533,6 +546,11 @@ struct Model {
     mpris: Option<mpris::MprisHandle>,
     /// Último estado del reproductor — alimenta el cuadro «quién suena».
     media: Option<mpris::MediaState>,
+    /// Miniaturas de las sesiones FUS `(id, imagen)`, cargadas de las rutas que
+    /// el compositor empuja (`THUMBS …`). El lock pinta una tarjeta por sesión,
+    /// la activa («la última») resaltada. Vacío ⇒ tarjetas genéricas (preview en
+    /// `hidden` por privacidad, o compositor viejo). Ver [`thumbs`].
+    thumbs: Vec<(u32, llimphi_image::Image, u32, u32)>,
 }
 
 /// Rect de un monitor en coordenadas de la ventana del greeter (px):
@@ -556,6 +574,9 @@ enum Msg {
     /// FUS: roster de sesiones hosteadas `(id, nombre)` + id de la activa,
     /// empujado por el compositor (`SESSIONS …`). Alimenta el selector del lock.
     SetHosted(Vec<(u32, String)>, u32),
+    /// FUS: rutas de las miniaturas de las sesiones `(id, ruta)`, empujadas por
+    /// el compositor (`THUMBS …`). Se cargan a imágenes para las tarjetas.
+    SetThumbs(Vec<(u32, String)>),
     /// FUS: saltar a la sesión hosteada `id` (clic en el selector del lock).
     /// Emite [`ShellAction::SwitchTo`] y cierra.
     SwitchTo(u32),
@@ -666,6 +687,8 @@ impl App for Greeter {
                         h.dispatch(Msg::SetLayout(mons, active));
                     } else if let Some((hosted, active)) = parse_sessions(&line) {
                         h.dispatch(Msg::SetHosted(hosted, active));
+                    } else if let Some(paths) = thumbs::parse_thumbs(&line) {
+                        h.dispatch(Msg::SetThumbs(paths));
                     }
                 }
             });
@@ -711,6 +734,9 @@ impl App for Greeter {
             cava_frame: Vec::new(),
             mpris: matches!(mode, GreeterMode::Lock).then(mpris::MprisHandle::spawn),
             media: None,
+            // Las miniaturas llegan luego por stdin (`THUMBS …`) cuando el lock
+            // engancha; arrancan vacías.
+            thumbs: Vec::new(),
         }
     }
 
@@ -864,6 +890,14 @@ impl App for Greeter {
             Msg::SetHosted(hosted, active) => {
                 m.hosted = hosted;
                 m.hosted_active = active;
+            }
+            Msg::SetThumbs(paths) => {
+                // Carga cada miniatura cruda a una imagen (IO de una vez, al
+                // enganchar el lock). Las que fallen se omiten → tarjeta genérica.
+                m.thumbs = paths
+                    .into_iter()
+                    .filter_map(|(id, path)| thumbs::load(&path).map(|(img, w, h)| (id, img, w, h)))
+                    .collect();
             }
             Msg::SwitchTo(id) => {
                 // Saltar directo a otra sesión hosteada (no se ofrece la activa).
@@ -1212,7 +1246,10 @@ impl App for Greeter {
             } else {
                 Vec::new()
             };
-            if !otras.is_empty() {
+            // Filas de texto «cambiar a»: sólo como fallback cuando NO hay tira de
+            // miniaturas (preview en `hidden`, o compositor viejo). Con miniaturas,
+            // la tira de sesiones —arriba de la tarjeta— hace de selector.
+            if !otras.is_empty() && model.thumbs.is_empty() {
                 items.push(spacer(4.0));
                 items.push(row(13.0, &rimay_localize::t("mirada-lock-switch-cap"), 9.0, theme.fg_muted));
                 for (id, name) in otras {
@@ -1234,7 +1271,14 @@ impl App for Greeter {
         // Reloj grande sobre la tarjeta — hora local de pared. Avanza con el
         // tick del fondo (`Msg::RainTick`, ~30 fps, siempre encendido), así que
         // no necesita estado propio: se lee del sistema en cada repintado.
-        let mut stack_children = vec![clock_view(&theme), card];
+        let mut stack_children = vec![clock_view(&theme)];
+        // Tira de miniaturas de las sesiones FUS — sobre la tarjeta, la activa
+        // («la última») resaltada. Sólo en lock con sesiones hosteadas; sirve de
+        // selector «cambiar a». `None` fuera del lock o sin sesiones.
+        if let Some(strip) = session_thumbs_strip(model, &theme) {
+            stack_children.push(strip);
+        }
+        stack_children.push(card);
         // Cuadro de música del lock: «quién suena» + cava. Sólo en lock y si hay
         // un reproductor activo (si no, `now_playing_box` devuelve `None`).
         if let Some(np) = now_playing_box(model, &theme) {
@@ -1930,6 +1974,138 @@ fn media_btn(glyph: &str, msg: Msg, theme: &Theme) -> View<Msg> {
     .on_click(msg)
 }
 
+/// Tira de miniaturas de las sesiones FUS sobre la tarjeta del lock. `None` fuera
+/// del lock o sin sesiones hosteadas. Una tarjeta por sesión; la activa («la
+/// última») va resaltada y más grande; las otras saltan con `SwitchTo` al clic.
+fn session_thumbs_strip(model: &Model, theme: &Theme) -> Option<View<Msg>> {
+    if model.mode != GreeterMode::Lock || model.hosted.is_empty() {
+        return None;
+    }
+    let cards: Vec<View<Msg>> = model
+        .hosted
+        .iter()
+        .map(|(id, name)| {
+            let active = *id == model.hosted_active;
+            let img = model
+                .thumbs
+                .iter()
+                .find(|(tid, ..)| tid == id)
+                .map(|(_, im, w, h)| (im.clone(), *w, *h));
+            session_thumb_card(*id, name, active, img, theme)
+        })
+        .collect();
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: Dimension::auto(), height: Dimension::auto() },
+            gap: Size { width: length(14.0_f32), height: length(0.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .children(cards),
+    )
+}
+
+/// Una tarjeta de la tira: la preview (imagen o placeholder) enmarcada + el
+/// nombre debajo. La activa va más grande y con borde de acento; el resto,
+/// clicable (`SwitchTo`). `img` es `(imagen, w, h)` o `None` (placeholder).
+fn session_thumb_card(
+    id: u32,
+    name: &str,
+    active: bool,
+    img: Option<(llimphi_image::Image, u32, u32)>,
+    theme: &Theme,
+) -> View<Msg> {
+    let (cw, ch) = if active { (190.0_f32, 119.0_f32) } else { (150.0_f32, 94.0_f32) };
+    let accent = theme.accent;
+    let border = if active { theme.accent } else { theme.bg_button };
+    let panel = theme.bg_panel;
+    let preview = View::new(Style {
+        size: Size { width: length(cw), height: length(ch) },
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, RoundedRect, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let (x, y, w, h) = (rect.x as f64, rect.y as f64, rect.w as f64, rect.h as f64);
+        let rr = RoundedRect::new(x, y, x + w, y + h, 9.0);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, panel, None, &rr);
+        match &img {
+            Some((image, iw, ih)) if *iw > 0 && *ih > 0 => {
+                // Llena el rect (escala no uniforme: la captura ya es del aspecto
+                // de la salida, la distorsión es mínima); el borde redondea.
+                let xform = Affine::translate((x, y))
+                    * Affine::scale_non_uniform(w / *iw as f64, h / *ih as f64);
+                scene.draw_image(image, xform);
+            }
+            _ => {
+                // Placeholder: un «monitor» tenue (preview apagada o sin imagen).
+                let mx = x + w * 0.22;
+                let my = y + h * 0.26;
+                let mon = RoundedRect::new(mx, my, x + w * 0.78, y + h * 0.66, 3.0);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, border, None, &mon);
+            }
+        }
+        scene.stroke(
+            &Stroke::new(if active { 3.0 } else { 1.5 }),
+            Affine::IDENTITY,
+            if active { accent } else { border },
+            None,
+            &rr,
+        );
+    });
+    let label = View::new(Style {
+        size: Size { width: length(cw), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        name.to_string(),
+        11.5,
+        if active { theme.fg_text } else { theme.fg_muted },
+        Alignment::Center,
+    );
+    let mut card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(cw), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![preview, label]);
+    // La activa eres tú (ya estás): no salta. Las otras, clic = cambiar a ella.
+    if !active {
+        card = card.on_click(Msg::SwitchTo(id));
+    }
+    card
+}
+
+/// Miniatura sintética (degradé tintado por id) para certificar la tira del lock
+/// con `--shot`, sin compositor. Devuelve `(imagen, w, h)`.
+fn shot_thumb(id: u32) -> (llimphi_image::Image, u32, u32) {
+    let (w, h) = (320u32, 200u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    // Un tinte base por id, con degradé diagonal, para distinguir sesiones.
+    let (br, bg, bb) = match id % 4 {
+        0 => (40u32, 80, 130),
+        1 => (110, 60, 90),
+        2 => (50, 110, 90),
+        _ => (120, 100, 50),
+    };
+    for yy in 0..h {
+        for xx in 0..w {
+            let i = ((yy * w + xx) * 4) as usize;
+            let t = (xx as f32 / w as f32 + yy as f32 / h as f32) * 0.5;
+            let k = 0.45 + 0.55 * t;
+            rgba[i] = (br as f32 * k).min(255.0) as u8;
+            rgba[i + 1] = (bg as f32 * k).min(255.0) as u8;
+            rgba[i + 2] = (bb as f32 * k).min(255.0) as u8;
+            rgba[i + 3] = 255;
+        }
+    }
+    (llimphi_image::from_rgba8(rgba, w, h), w, h)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -2008,6 +2184,7 @@ mod tests {
             cava_frame: Vec::new(),
             mpris: None,
             media: None,
+            thumbs: Vec::new(),
         }
     }
 

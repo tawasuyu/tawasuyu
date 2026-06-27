@@ -88,6 +88,14 @@ impl DrmState {
         // que la tarjeta de login viaje allí (no-op fuera de greeter o si el
         // monitor activo no cambió).
         self.sync_greeter_layout(false);
+        // Miniaturas del lock: al enganchar el candado se pidió capturar las
+        // previews de las sesiones; se hace acá, con el renderer vivo, una sola
+        // vez (consume el flag) y se le pasan las rutas al lock por su stdin.
+        if self.app.pending_thumbs {
+            let caps = crate::thumbs::capturar(&self.app, &mut self.renderer);
+            self.app.send_thumbs(&caps);
+            self.app.pending_thumbs = false;
+        }
         for i in 0..self.outputs.len() {
             self.render_output(i);
         }

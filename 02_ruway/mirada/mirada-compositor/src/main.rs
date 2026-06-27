@@ -103,6 +103,7 @@ mod handoff;
 mod idle_notify;
 mod menu;
 mod screencopy;
+mod thumbs;
 mod foreign_toplevel;
 mod switcher;
 mod text;

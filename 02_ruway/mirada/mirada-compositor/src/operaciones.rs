@@ -2027,11 +2027,39 @@ impl App {
 
     /// Empuja el roster al shell de credenciales por su stdin (si hay tubería),
     /// para que el lock liste las sesiones hosteadas. Se llama al lanzar el lock.
+    /// Además marca [`pending_thumbs`](Self::pending_thumbs): el backend captura
+    /// las miniaturas de las sesiones en el próximo cuadro (necesita el renderer).
     pub(crate) fn push_sessions_to_greeter(&mut self) {
         use std::io::Write;
         let Some(line) = self.sessions_line() else {
             return;
         };
+        if let Some(stdin) = self.greeter_stdin.as_mut() {
+            let _ = writeln!(stdin, "{line}").and_then(|_| stdin.flush());
+        }
+        // El próximo frame del backend captura las previews (ver `thumbs`).
+        self.pending_thumbs = true;
+    }
+
+    /// Empuja al lock las rutas de las miniaturas capturadas (`THUMBS id=ruta …`).
+    /// Backward-compatible: un greeter viejo ignora la línea. Sin miniaturas
+    /// (preview apagada o nada que rendir) no manda nada — el lock cae a tarjetas
+    /// genéricas. La llama el backend tras [`crate::thumbs::capturar`].
+    pub(crate) fn send_thumbs(&mut self, thumbs: &[(mirada_brain::SessionId, std::path::PathBuf)]) {
+        use std::io::Write;
+        if thumbs.is_empty() {
+            return;
+        }
+        let mut line = String::from("THUMBS");
+        for (id, path) in thumbs {
+            // Las rutas del runtime dir no llevan espacios; aun así, saltamos
+            // cualquiera que los tenga para no romper el parseo del otro lado.
+            let p = path.to_string_lossy();
+            if p.contains(char::is_whitespace) {
+                continue;
+            }
+            line.push_str(&format!(" {}={p}", id.0));
+        }
         if let Some(stdin) = self.greeter_stdin.as_mut() {
             let _ = writeln!(stdin, "{line}").and_then(|_| stdin.flush());
         }

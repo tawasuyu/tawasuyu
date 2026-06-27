@@ -470,6 +470,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         next_id: 1,
         running: true,
         greeter_stdin: None,
+        pending_thumbs: false,
         greeter_active_output: usize::MAX,
         pending_lock: None,
         pending_new_session: false,

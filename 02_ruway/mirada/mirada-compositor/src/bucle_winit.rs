@@ -231,6 +231,14 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                     break 'frame;
                 }
             };
+            // Miniaturas del lock: al enganchar el candado se pidió capturar las
+            // previews de las sesiones; se hace acá, con el renderer vivo, una
+            // sola vez (consume el flag) y se le pasan las rutas al lock.
+            if state.pending_thumbs {
+                let caps = thumbs::capturar(&state, renderer);
+                state.send_thumbs(&caps);
+                state.pending_thumbs = false;
+            }
             // Orden de pintado: la lista de elementos va front-to-back
             // (índice 0 = encima): el shell primero —va sobre todo—, luego
             // las flotantes, luego las teseladas. `sort_by_key` es estable:

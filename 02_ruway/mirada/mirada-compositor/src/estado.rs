@@ -652,6 +652,11 @@ pub(crate) struct App {
     /// el ratón, para que la tarjeta de login viaje al monitor activo. `None`
     /// fuera de modo greeter o si la tubería se cerró.
     pub(crate) greeter_stdin: Option<std::process::ChildStdin>,
+    /// Pedido pendiente de capturar las miniaturas de las sesiones para el lock:
+    /// lo pone [`App::push_sessions_to_greeter`] al enganchar el candado y lo
+    /// consume el bucle del backend en el próximo cuadro (necesita el renderer,
+    /// que no vive en `App`). Ver [`crate::thumbs`].
+    pub(crate) pending_thumbs: bool,
     /// Último índice de salida que se le informó al greeter como «activo»
     /// (la del ratón). `usize::MAX` ⇒ aún no se empujó nada — fuerza el
     /// primer envío.
