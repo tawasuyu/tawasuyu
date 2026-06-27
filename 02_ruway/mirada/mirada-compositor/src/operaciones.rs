@@ -161,9 +161,13 @@ impl App {
         let mut idx: Vec<usize> = (0..self.windows.len())
             .filter(|&i| self.windows[i].visible)
             .collect();
+        // El shell de credenciales (login/lock) atrapa TODO el puntero: va
+        // primero en el hit-test, igual que en el pintado (`is_greeter` al
+        // frente). Sin esto el clic caía a la ventana de la sesión por debajo
+        // —el lock «no bloqueaba nada»— porque sólo se ordenaba por shell/foco.
         idx.sort_by_key(|&i| {
             let w = &self.windows[i];
-            (!w.is_shell, !w.floating, !w.focused)
+            (!w.is_greeter, !w.is_shell, !w.floating, !w.focused)
         });
         idx.into_iter().find_map(|i| {
             let w = &self.windows[i];

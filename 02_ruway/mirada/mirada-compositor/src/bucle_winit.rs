@@ -252,21 +252,42 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
             // El backend winit anidado no pinta decoración; pasa el alto de
             // barra para que la superficie quede donde el DRM la pondría.
             let tbh = state.decorations.titlebar_height;
-            let window_elems = shown
+            // El greeter/lock se separa para ir por ENCIMA de los layers
+            // overlay/top (pata): si fuera con las ventanas normales, el panel
+            // —un layer Top— lo taparía y no bloquearía nada. Las ventanas de la
+            // sesión siguen por debajo del panel, como siempre. Se colectan por
+            // separado (cada `flat_map` toma `&mut renderer` por su lado).
+            let greeter_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = shown
                 .iter()
-                .filter(|w| buffer_render_sano(&w.surface))
+                .filter(|w| w.is_greeter && buffer_render_sano(&w.surface))
                 .flat_map(|w| {
-                render_elements_from_surface_tree(
-                    renderer,
-                    &w.surface,
-                    render_loc(w, output_h, tbh),
-                    1.0,
-                    w.effects.opacity as f32 / 255.0,
-                    Kind::Unspecified,
-                )
-            });
-            let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = over_layers
+                    render_elements_from_surface_tree(
+                        renderer,
+                        &w.surface,
+                        render_loc(w, output_h, tbh),
+                        1.0,
+                        w.effects.opacity as f32 / 255.0,
+                        Kind::Unspecified,
+                    )
+                })
+                .collect();
+            let window_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = shown
+                .iter()
+                .filter(|w| !w.is_greeter && buffer_render_sano(&w.surface))
+                .flat_map(|w| {
+                    render_elements_from_surface_tree(
+                        renderer,
+                        &w.surface,
+                        render_loc(w, output_h, tbh),
+                        1.0,
+                        w.effects.opacity as f32 / 255.0,
+                        Kind::Unspecified,
+                    )
+                })
+                .collect();
+            let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = greeter_elems
                 .into_iter()
+                .chain(over_layers)
                 .chain(window_elems)
                 .chain(under_layers)
                 .collect();

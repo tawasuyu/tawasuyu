@@ -455,15 +455,16 @@ impl DrmState {
         let glass = self.app.config_glass_blur() > 0;
         // FUS: con ≥2 sesiones, sólo se pintan las ventanas de la activa
         // (`session_visible`); con ≤1 el filtro es transparente.
+        // El greeter/lock NO va acá: se emite en `emit_greeter`, por ENCIMA de
+        // los layers overlay/top (pata), porque si fuera entre las ventanas el
+        // panel —un layer Top— lo taparía y el lock no bloquearía nada.
         let mut shown: Vec<_> = self
             .app
             .windows
             .iter()
-            .filter(|w| w.visible && self.app.session_visible(w))
+            .filter(|w| w.visible && !w.is_greeter && self.app.session_visible(w))
             .collect();
-        // `is_greeter` al frente del todo: el shell de credenciales (login o
-        // lock) tapa la sesión —incluido el shell/pata— mientras está arriba.
-        shown.sort_by_key(|w| (!w.is_greeter, !w.is_shell, !w.floating, !w.focused));
+        shown.sort_by_key(|w| (!w.is_shell, !w.floating, !w.focused));
         let tbh = self.app.decorations.titlebar_height;
         // `render_loc` necesita el alto de la "salida lógica" sólo para anclar
         // el shell al borde inferior. En multi-monitor esa salida es la
@@ -914,6 +915,44 @@ impl DrmState {
                         other => other,
                     });
                 }
+            }
+        }
+    }
+
+    /// Emite el shell de credenciales (greeter de login o lock) por ENCIMA de
+    /// todo lo demás —incluidos los layers overlay/top (pata)—. Si fuera con las
+    /// ventanas normales (`emit_windows`), el panel, que es un layer Top, lo
+    /// taparía y el lock «no bloquearía nada». El chrome no lleva decoración ni
+    /// efectos (todos guardados por `is_greeter`): basta su árbol de superficie
+    /// a pantalla completa, en coords locales a `rect`. Front-to-back: el primer
+    /// elemento queda arriba.
+    fn emit_greeter(&mut self, rect: Rect, into: &mut Vec<Frame>) {
+        let primary_h = self.outputs[Self::PRIMARY].rect.h;
+        let tbh = self.app.decorations.titlebar_height;
+        // Colectamos (superficie, origen, opacidad) antes de tocar el renderer
+        // (que se toma `&mut`); `WlSurface` es un `Arc`, clonar es barato.
+        let greeters: Vec<(WlSurface, (i32, i32), u8)> = self
+            .app
+            .windows
+            .iter()
+            .filter(|w| w.visible && w.is_greeter)
+            .map(|w| (w.surface.clone(), crate::render_loc(w, primary_h, tbh), w.effects.opacity))
+            .collect();
+        for (surface, (gx, gy), opacity) in greeters {
+            if !crate::buffer_render_sano(&surface) {
+                continue;
+            }
+            let x = gx - rect.x;
+            let y = gy - rect.y;
+            for el in render_elements_from_surface_tree(
+                &mut self.renderer,
+                &surface,
+                (x, y),
+                1.0,
+                opacity as f32 / 255.0,
+                Kind::Unspecified,
+            ) {
+                into.push(Frame::Window(el));
             }
         }
     }
@@ -2321,6 +2360,9 @@ impl DrmState {
             let output_for_layers = self.outputs[idx].output.clone();
             let (over_layers, under_layers) =
                 crate::layer_render_elements(Some(&output_for_layers), &mut self.renderer);
+            // 5.bis Greeter/lock: por ENCIMA de los layers overlay/top (pata),
+            //    si no el panel lo taparía y el candado no bloquearía nada.
+            self.emit_greeter(rect, &mut out);
             for el in over_layers {
                 out.push(Frame::Window(el));
             }
