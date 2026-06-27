@@ -107,6 +107,9 @@ const GROUND_V: f64 = VH * GROUND_FRAC as f64;
 /// Altura a la que el gato **alcanza y falla** el tendedero (dentro de la fachada).
 const CLOTHES_V: f64 = VH * 0.40;
 
+/// Radio de la cabeza del gato. Lo comparten **alley** y los gatos que se asoman
+/// de los barriles, para que se lean del mismo tamaño.
+const CAT_HEAD: f64 = 0.78 * U;
 /// Cuánto está el centro del cuerpo por encima de las pezuñas.
 const BODY_ABOVE: f64 = 1.9 * U;
 const HIP_DY: f64 = 0.55 * U;
@@ -412,26 +415,27 @@ fn draw_barrel(scene: &mut vello::Scene, xf: Affine, b: &BarrelSnap, acc: (f32, 
         );
     }
 
-    // Gato que se asoma: dos orejas + cabeza + ojos brillando, subiendo con `peek`.
+    // Gato que se asoma: del **mismo tamaño** que alley (mismo `CAT_HEAD`), no
+    // escalado al barril. Sube con `peek` hasta sacar la cabeza por la boca.
     if b.peek > 0.02 {
         let pe = b.peek.clamp(0.0, 1.0) as f64;
-        let hy = top + h * 0.10 - pe * h * 0.42;
-        let hr = bw * 0.30;
-        let fur = col(40.0, 42.0, 52.0, 255);
+        let hr = CAT_HEAD;
+        let hy = top + h * 0.10 - pe * (h * 0.36 + hr);
+        let fur = col(54.0, 56.0, 66.0, 255);
         // Orejas.
-        for ear_dx in [-0.55, 0.55] {
+        for ear_dx in [-0.5, 0.5] {
             let ex = cx + ear_dx * hr;
             let mut ear = BezPath::new();
-            ear.move_to(Point::new(ex - 0.3 * hr, hy - hr * 0.5));
-            ear.line_to(Point::new(ex, hy - hr * 1.4));
-            ear.line_to(Point::new(ex + 0.4 * hr, hy - hr * 0.45));
+            ear.move_to(Point::new(ex - 0.32 * hr, hy - hr * 0.55));
+            ear.line_to(Point::new(ex, hy - hr * 1.5));
+            ear.line_to(Point::new(ex + 0.42 * hr, hy - hr * 0.5));
             ear.close_path();
             scene.fill(Fill::NonZero, xf, fur, None, &ear);
         }
         scene.fill(Fill::NonZero, xf, fur, None, &Circle::new(Point::new(cx, hy), hr));
         let (er, eg, eb) = (acc.0, acc.1, acc.2);
-        scene.fill(Fill::NonZero, xf, col(er, eg, eb, 230), None, &Circle::new(Point::new(cx - hr * 0.34, hy - hr * 0.05), hr * 0.16));
-        scene.fill(Fill::NonZero, xf, col(er, eg, eb, 230), None, &Circle::new(Point::new(cx + hr * 0.34, hy - hr * 0.05), hr * 0.16));
+        scene.fill(Fill::NonZero, xf, col(er, eg, eb, 235), None, &Circle::new(Point::new(cx - hr * 0.34, hy - hr * 0.05), hr * 0.2));
+        scene.fill(Fill::NonZero, xf, col(er, eg, eb, 235), None, &Circle::new(Point::new(cx + hr * 0.34, hy - hr * 0.05), hr * 0.2));
     }
 
     // Tapa: un disco que se levanta con `lid`, ladeado.
@@ -493,18 +497,69 @@ fn draw_shoe(scene: &mut vello::Scene, xf: Affine, sh: &ShoeSnap) {
     scene.fill(Fill::NonZero, m, sole, None, &Rect::new(-s * 0.9, s * 0.3, -s * 0.5, s * 0.9));
 }
 
-/// Una bola de humo: discos translúcidos que se expanden y suben mientras se
-/// desvanecen. `age` 0..1.
-fn draw_smoke(scene: &mut vello::Scene, xf: Affine, at: Point, age: f32) {
-    let a = age.clamp(0.0, 1.0);
-    let grow = 1.0 + a as f64 * 2.2;
-    let rise = a as f64 * 1.6 * U;
-    let alpha = ((1.0 - a) * 170.0) as u8;
-    for (dx, dy, rr) in [(0.0, 0.0, 1.1), (-0.7, -0.3, 0.8), (0.7, -0.2, 0.85), (0.0, -0.9, 0.95), (-0.4, -1.4, 0.7), (0.5, -1.5, 0.65)] {
-        let c = Point::new(at.x + dx * U * grow * 0.6, at.y - rise + dy * U * grow * 0.6);
-        let g = 150.0 + 60.0 * rr as f32;
-        scene.fill(Fill::NonZero, xf, col(g, g, g + 6.0, alpha), None, &Circle::new(c, rr * U * grow * 0.8));
+/// Nube de **pelea de caricatura**: bola de polvo que rueda y churnea, con
+/// estrellitas de impacto en el acento y una pata y una cola que se asoman
+/// (gato y perro forcejeando adentro).
+fn draw_brawl(scene: &mut vello::Scene, xf: Affine, at: Point, t: f32, acc: (f32, f32, f32)) {
+    let churn = t as f64;
+    // Bola de polvo: discos que giran y pulsan.
+    for i in 0..9 {
+        let ang = churn * 3.2 + i as f64 * TAU / 9.0;
+        let off = (0.85 + 0.25 * (churn * 2.3 + i as f64 * 1.7).sin()) * U;
+        let rad = (1.15 + 0.35 * (churn * 5.0 + i as f64).sin()) * U;
+        let c = Point::new(at.x + ang.cos() * off, at.y + ang.sin() * off * 0.7);
+        let g = 205.0 + 18.0 * (i as f64).sin() as f32;
+        scene.fill(Fill::NonZero, xf, col(g, g, g + 4.0, 210), None, &Circle::new(c, rad));
     }
+    scene.fill(Fill::NonZero, xf, col(228.0, 228.0, 232.0, 235), None, &Circle::new(at, 1.45 * U));
+
+    // Pata (gato) y cola (perro) que se asoman, alternando.
+    let fur = col(54.0, 56.0, 66.0, 255);
+    let dogc = col(36.0, 34.0, 42.0, 255);
+    if (churn * 7.0).sin() > 0.2 {
+        let px = at.x + 1.7 * U;
+        let py = at.y - 0.3 * U;
+        scene.stroke(&Stroke::new(0.28 * U), xf, fur, None, &line(at.x as f32, py as f32, px as f32, (py - 0.4 * U) as f32));
+        scene.fill(Fill::NonZero, xf, fur, None, &Circle::new(Point::new(px, py - 0.4 * U), 0.22 * U));
+    }
+    if (churn * 7.0 + 2.0).sin() > 0.2 {
+        let mut tl = BezPath::new();
+        tl.move_to(Point::new(at.x - 1.4 * U, at.y));
+        tl.quad_to(Point::new(at.x - 2.2 * U, at.y - 0.8 * U), Point::new(at.x - 2.0 * U, at.y - 1.5 * U));
+        scene.stroke(&Stroke::new(0.22 * U), xf, dogc, None, &tl);
+    }
+
+    // Estrellitas de impacto en el acento.
+    for k in 0..4 {
+        let ang = -churn * 2.0 + k as f64 * TAU / 4.0 + 0.6;
+        let d = (1.9 + 0.2 * (churn * 4.0 + k as f64).sin()) * U;
+        let s = Point::new(at.x + ang.cos() * d, at.y + ang.sin() * d * 0.8 - 0.4 * U);
+        draw_star(scene, xf, s, 0.34 * U, acc);
+    }
+}
+
+/// Una estrella de impacto de cuatro puntas, en el acento del tema.
+fn draw_star(scene: &mut vello::Scene, xf: Affine, c: Point, r: f64, acc: (f32, f32, f32)) {
+    let inner = r * 0.42;
+    let mut p = BezPath::new();
+    for i in 0..8 {
+        let ang = i as f64 * PI / 4.0;
+        let rr = if i % 2 == 0 { r } else { inner };
+        let pt = Point::new(c.x + ang.cos() * rr, c.y + ang.sin() * rr);
+        if i == 0 {
+            p.move_to(pt);
+        } else {
+            p.line_to(pt);
+        }
+    }
+    p.close_path();
+    scene.fill(
+        Fill::NonZero,
+        xf,
+        col((acc.0 + 60.0).min(255.0), (acc.1 + 60.0).min(255.0), (acc.2 + 60.0).min(255.0), 240),
+        None,
+        &p,
+    );
 }
 
 // ═══════════════════════════════ el gato (rig) ══════════════════════════════
@@ -661,6 +716,16 @@ struct Dog {
     phase: f64,
 }
 
+/// La **nube de pelea** (estilo caricatura) en la que se funden gato y perro:
+/// rueda hacia un borde con un poco de zigzag y se va de cuadro.
+struct Brawl {
+    x: f64,
+    base_y: f64,
+    y: f64,
+    vx: f64,
+    t: f64,
+}
+
 /// Un zapato en vuelo.
 struct Shoe {
     x: f64,
@@ -692,7 +757,7 @@ pub struct AlleyCatBg {
     barrels: Vec<Barrel>,
     dog: Option<Dog>,
     shoes: Vec<Shoe>,
-    smoke: Option<(f64, f64, f64, f64)>, // x, y, t, dur
+    brawl: Option<Brawl>,
     // Temporizadores de eventos.
     dog_timer: f64,
     shoe_timer: f64,
@@ -782,7 +847,7 @@ impl AlleyCatBg {
             barrels: Vec::new(),
             dog: None,
             shoes: Vec::new(),
-            smoke: None,
+            brawl: None,
             dog_timer: 6.0,
             shoe_timer: 3.0,
             peek_timer: 3.5,
@@ -903,9 +968,10 @@ impl AlleyCatBg {
     fn update_props(&mut self, dt: f64, tempo: f64) {
         // Perro.
         if let Some(d) = &mut self.dog {
-            let sp = 3.6 * U * tempo;
+            // Cazador: cruza el callejón a la carrera.
+            let sp = 5.4 * U * tempo;
             d.x += d.dir * sp * dt;
-            d.phase += 14.0 * dt;
+            d.phase += 18.0 * dt;
         }
         if let Some(d) = &self.dog {
             let off = d.x < -3.5 * U || d.x > VW + 3.5 * U;
@@ -915,9 +981,9 @@ impl AlleyCatBg {
                 && !matches!(self.mode, Mode::Caught { .. } | Mode::Gone { .. })
                 && (d.x - self.body_x).abs() < 1.5 * U;
             if catch {
-                let (bx, by) = (self.body_x, self.body_cy);
+                let (bx, by, dir) = (self.body_x, self.body_cy, d.dir);
                 self.dog = None;
-                self.caught(bx, by);
+                self.caught(bx, by, dir);
             } else if off {
                 self.dog = None;
             }
@@ -969,11 +1035,14 @@ impl AlleyCatBg {
             b.peek += (tgt - b.peek) * k;
         }
 
-        // Humo.
-        if let Some(sm) = &mut self.smoke {
-            sm.2 += dt;
-            if sm.2 >= sm.3 {
-                self.smoke = None;
+        // Nube de pelea: avanza hacia el borde con zigzag; se va de cuadro.
+        if let Some(br) = &mut self.brawl {
+            br.t += dt;
+            br.x += br.vx * dt;
+            // Zigzag: bamboleo vertical mientras rueda hacia el borde.
+            br.y = br.base_y + (br.t * 13.0).sin() * 0.5 * U - (br.t * 5.0).cos() * 0.28 * U;
+            if br.x < -3.0 * U || br.x > VW + 3.0 * U {
+                self.brawl = None;
             }
         }
     }
@@ -1125,20 +1194,20 @@ impl AlleyCatBg {
                 let r = self.rand();
                 if r < 0.16 {
                     self.jump_to_wall();
-                } else if r < 0.52 {
-                    self.mode = Mode::Pause { left: self.rand_range(0.6, 2.2) };
+                } else if r < 0.32 {
+                    self.mode = Mode::Pause { left: self.rand_range(0.25, 0.9) };
                 } else {
                     self.start_walk_floor(tempo);
                 }
             }
             Level::Wall => {
                 let r = self.rand();
-                if r < 0.20 {
+                if r < 0.22 {
                     self.start_leap_miss();
                 } else if r < 0.46 {
                     self.jump_down_to_floor();
-                } else if r < 0.70 {
-                    self.mode = Mode::Pause { left: self.rand_range(0.5, 1.8) };
+                } else if r < 0.60 {
+                    self.mode = Mode::Pause { left: self.rand_range(0.2, 0.7) };
                 } else {
                     self.start_walk_wall(tempo);
                 }
@@ -1190,14 +1259,25 @@ impl AlleyCatBg {
     }
 
     fn start_walk_floor(&mut self, tempo: f64) {
+        // Trechos largos a buena velocidad: a veces un trote, a veces una corrida.
         let to = self.rand_range(2.5 * U, VW - 2.5 * U);
-        let speed = self.rand_range(2.0, 3.2) * U * tempo;
+        let run = self.chance(0.45);
+        let speed = if run {
+            self.rand_range(5.0, 7.5)
+        } else {
+            self.rand_range(3.2, 4.6)
+        } * U * tempo;
         self.mode = Mode::Walk { to, speed };
     }
 
     fn start_walk_wall(&mut self, tempo: f64) {
         let to = self.rand_range(2.0 * U, VW - 2.0 * U);
-        let speed = self.rand_range(2.2, 3.6) * U * tempo;
+        let run = self.chance(0.5);
+        let speed = if run {
+            self.rand_range(5.5, 7.8)
+        } else {
+            self.rand_range(3.6, 5.0)
+        } * U * tempo;
         self.mode = Mode::Walk { to, speed };
     }
 
@@ -1268,10 +1348,22 @@ impl AlleyCatBg {
         self.mode = Mode::Behind { y0: self.body_cy, t: 0.0, dur: 0.75 };
     }
 
-    /// Atrapado por el perro → bola de humo y desaparece.
-    fn caught(&mut self, bx: f64, by: f64) {
-        self.smoke = Some((bx, by, 0.0, 0.95));
-        self.mode = Mode::Caught { left: 0.7 };
+    /// Atrapado por el perro → **nube de pelea** que rueda hacia un borde (siguiendo
+    /// el envión del perro) y se va de cuadro; recién entonces alley reaparece.
+    fn caught(&mut self, bx: f64, by: f64, dir: f64) {
+        let d = if dir != 0.0 {
+            dir
+        } else if self.chance(0.5) {
+            1.0
+        } else {
+            -1.0
+        };
+        let vx = d * self.rand_range(3.8, 5.2) * U;
+        self.brawl = Some(Brawl { x: bx, base_y: by, y: by, vx, t: 0.0 });
+        // La pelea dura hasta que la nube sale de pantalla.
+        let dist = if vx > 0.0 { VW + 3.0 * U - bx } else { bx + 3.0 * U };
+        let dur = (dist / vx.abs()).clamp(0.9, 3.0);
+        self.mode = Mode::Caught { left: dur };
     }
 
     /// Reaparece en el piso, en un punto al azar, listo para repetir la escena.
@@ -1354,7 +1446,7 @@ impl AlleyCatBg {
                 .collect(),
             dog: self.dog.as_ref().map(|d| DogSnap { x: d.x, dir: d.dir as f32, sz: d.sz, phase: d.phase }),
             shoes: self.shoes.iter().map(|s| ShoeSnap { p: Point::new(s.x, s.y), spin: s.spin as f32 }).collect(),
-            smoke: self.smoke.map(|sm| (Point::new(sm.0, sm.1), (sm.2 / sm.3) as f32)),
+            brawl: self.brawl.as_ref().map(|br| BrawlSnap { p: Point::new(br.x, br.y), t: br.t as f32 }),
         }
     }
 }
@@ -1383,6 +1475,12 @@ pub struct ShoeSnap {
     pub spin: f32,
 }
 
+/// La nube de pelea en el snapshot (`t` = fase de churn).
+pub struct BrawlSnap {
+    pub p: Point,
+    pub t: f32,
+}
+
 /// Datos de dibujo de un frame completo de la escena (todo en virtual `VW×VH`).
 pub struct CatSnapshot {
     /// Por pata: `(cadera, rodilla, pezuña, cercana)`.
@@ -1404,8 +1502,8 @@ pub struct CatSnapshot {
     pub barrels: Vec<BarrelSnap>,
     pub dog: Option<DogSnap>,
     pub shoes: Vec<ShoeSnap>,
-    /// `(posición, edad 0..1)` de la bola de humo.
-    pub smoke: Option<(Point, f32)>,
+    /// La nube de pelea de caricatura (gato + perro), si está activa.
+    pub brawl: Option<BrawlSnap>,
 }
 
 // ─────────────────────────────── pintado ────────────────────────────────────
@@ -1447,8 +1545,8 @@ pub fn paint_rig(
     for s in &snap.shoes {
         draw_shoe(scene, xf, s);
     }
-    if let Some((at, age)) = &snap.smoke {
-        draw_smoke(scene, xf, *at, *age);
+    if let Some(br) = &snap.brawl {
+        draw_brawl(scene, xf, br.p, br.t, acc);
     }
 }
 
