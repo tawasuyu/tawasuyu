@@ -169,6 +169,28 @@ impl RigDoc {
         s
     }
 
+    /// Una copia del rig con una **deriva idle** procedural aplicada en la fase
+    /// `phase` ∈ `[0,1)` del loop: un vaivén suave de cada hueso (desfasado por
+    /// índice) y, si el IK está activo, una pequeña órbita del objetivo. Le da
+    /// vida al rig —como «Alley Cat»— mientras el formato del studio todavía no
+    /// serializa pistas de animación por keyframe (Fase 1). Lo comparten el bake
+    /// de fondos (`mirada-fondo`) y la reproducción en vivo del greeter, para que
+    /// el mismo `.ron` se vea igual en las tres superficies.
+    pub fn idle_at(&self, phase: f64) -> RigDoc {
+        const SWAY: f64 = 0.18;
+        const ORBIT: f64 = 24.0;
+        let p = phase * std::f64::consts::TAU;
+        let mut rig = self.clone();
+        for (k, b) in rig.bones.iter_mut().enumerate() {
+            b.angle += SWAY * (p + k as f64 * 0.6).sin();
+        }
+        if rig.ik_enabled {
+            rig.ik_target.0 += ORBIT * p.cos();
+            rig.ik_target.1 += ORBIT * (p * 2.0).sin() * 0.5;
+        }
+        rig
+    }
+
     /// La malla deformable según el modo activo.
     pub fn mesh(&self) -> Mesh {
         match self.mesh_mode {

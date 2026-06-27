@@ -145,21 +145,10 @@ fn bake_rive(spec: &FondoSpec, path: &str, opts: &BakeOpts) -> Result<(PathBuf, 
     let bounds = pad_rect(llimphi_mesh::rest_bounds(&mesh), 0.35);
     let xform = llimphi_mesh::fit_transform(bounds, full_rect(opts.width, opts.height));
 
-    // Amplitud del vaivén idle (radianes) y de la órbita del IK (unidades modelo).
-    const SWAY: f64 = 0.18;
-    const ORBIT: f64 = 24.0;
-    let tau = std::f64::consts::TAU;
-
     render_frames(spec, opts, loop_secs, frames, |i, scene| {
-        let phase = (i as f64 / frames as f64) * tau;
-        let mut rig = base.clone();
-        for (k, b) in rig.bones.iter_mut().enumerate() {
-            b.angle += SWAY * (phase + k as f64 * 0.6).sin();
-        }
-        if rig.ik_enabled {
-            rig.ik_target.0 += ORBIT * phase.cos();
-            rig.ik_target.1 += ORBIT * (phase * 2.0).sin() * 0.5;
-        }
+        // Deriva idle compartida con la reproducción en vivo del greeter, para
+        // que el mismo `.ron` se vea igual en las tres superficies.
+        let rig = base.idle_at(i as f64 / frames as f64);
         let skel = rig.skeleton();
         let positions = mesh.deform(&skel);
         match &texture {
