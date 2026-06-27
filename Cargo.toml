@@ -432,6 +432,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-config",
     "02_ruway/shuma/sandbox/shuma-agente",
     "02_ruway/shuma/sandbox/shuma-agente-host",
+    "02_ruway/shuma/sandbox/shuma-voz",
     "02_ruway/shuma/sandbox/shuma-core",
     "02_ruway/shuma/sandbox/shuma-discern",
     "02_ruway/shuma/sandbox/shuma-exec",
