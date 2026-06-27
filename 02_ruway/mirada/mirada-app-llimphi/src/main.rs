@@ -808,14 +808,29 @@ fn open_window(m: &mut Model) {
 /// reenvíe como `BodyEvent::Keybind` y lo atendemos en [`feed`].
 const OVERVIEW_KEYBIND: &str = "Super+e";
 
-/// Aumenta un `BrainCommand::GrabKeys` con el atajo del overview (idempotente).
+/// En modo **Prezi** el Win+Tab (y su reverso) también abren la vista espacial,
+/// en vez del switcher+slide. El Cuerpo nos reenvía estos combos como `Keybind`
+/// SÓLO cuando el modo configurado es Prezi en sesión enlazada (ver el
+/// compositor, `input.rs` arm «Super+Tab»); en los demás modos los maneja él
+/// (switcher de celdas + slide). Así Win+Tab hace Prezi cuando Prezi está puesto.
+const OVERVIEW_WINTAB: &[&str] = &["Super+Tab", "Super+Shift+Tab"];
+
+/// `true` si el combo reenviado debe abrir/cerrar la vista espacial.
+fn es_atajo_overview(combo: &str) -> bool {
+    combo == OVERVIEW_KEYBIND || OVERVIEW_WINTAB.contains(&combo)
+}
+
+/// Aumenta un `BrainCommand::GrabKeys` con los atajos del overview (idempotente):
+/// `Super+e` (toggle directo) y `Super+Tab`/`Super+Shift+Tab` (Win+Tab en Prezi).
 /// Se aplica en cada envío de grabs al Cuerpo para que sobreviva a recargas de
 /// keymap y cambios de perfil.
 fn with_overview_grab(cmd: BrainCommand) -> BrainCommand {
     match cmd {
         BrainCommand::GrabKeys(mut keys) => {
-            if !keys.iter().any(|k| k == OVERVIEW_KEYBIND) {
-                keys.push(OVERVIEW_KEYBIND.to_string());
+            for k in std::iter::once(OVERVIEW_KEYBIND).chain(OVERVIEW_WINTAB.iter().copied()) {
+                if !keys.iter().any(|x| x == k) {
+                    keys.push(k.to_string());
+                }
             }
             BrainCommand::GrabKeys(keys)
         }
@@ -829,7 +844,7 @@ fn feed(m: &mut Model, event: BodyEvent) {
         // nos reenvía su atajo global como `Keybind` (grabeado en
         // `with_overview_grab`). Lo marcamos pendiente y lo procesa `Msg::Tick`
         // (que tiene el `handle` para animar el zoom).
-        BodyEvent::Keybind(ref combo) if combo == OVERVIEW_KEYBIND => {
+        BodyEvent::Keybind(ref combo) if es_atajo_overview(combo) => {
             m.pending_overview_toggle = true;
         }
         // Win+Tab confirmó un salto de escritorio en el Cuerpo (modo enlazado):
@@ -1861,7 +1876,40 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{profiles_menu, vistas_menu, KeymapProfiles, Vista};
+    use super::{
+        es_atajo_overview, profiles_menu, vistas_menu, with_overview_grab, KeymapProfiles, Vista,
+        OVERVIEW_KEYBIND, OVERVIEW_WINTAB,
+    };
+    use mirada_brain::BrainCommand;
+
+    /// `Super+e` y el Win+Tab (en Prezi) cuentan como atajo de overview; las
+    /// demás teclas no.
+    #[test]
+    fn reconoce_los_atajos_de_overview() {
+        assert!(es_atajo_overview(OVERVIEW_KEYBIND));
+        assert!(es_atajo_overview("Super+Tab"));
+        assert!(es_atajo_overview("Super+Shift+Tab"));
+        assert!(!es_atajo_overview("Alt+Tab"));
+        assert!(!es_atajo_overview("Super+q"));
+    }
+
+    /// `with_overview_grab` agrega Super+e + Win+Tab a los grabs (idempotente) y
+    /// preserva los que ya estaban — si no, el Cuerpo no reenviaría Win+Tab y la
+    /// vista espacial sería inalcanzable en sesión enlazada.
+    #[test]
+    fn with_overview_grab_agrega_wintab_idempotente() {
+        let base = BrainCommand::GrabKeys(vec!["Super+q".into(), "Super+Tab".into()]);
+        let BrainCommand::GrabKeys(keys) = with_overview_grab(base) else {
+            panic!("debe seguir siendo GrabKeys");
+        };
+        assert!(keys.iter().any(|k| k == "Super+q"), "preserva los previos");
+        assert!(keys.iter().any(|k| k == OVERVIEW_KEYBIND));
+        for k in OVERVIEW_WINTAB {
+            assert!(keys.iter().any(|x| x == k), "falta {k}");
+        }
+        // Idempotente: "Super+Tab" ya estaba, no se duplica.
+        assert_eq!(keys.iter().filter(|k| *k == "Super+Tab").count(), 1);
+    }
 
     /// El menú «Vista» lista las 6 vistas y marca con ✔ la que coincide EXACTO
     /// con el estado actual (config + keymap). Con el default nativo, es `mirada`.

@@ -78,26 +78,37 @@ impl DrmState {
                                     // ventanas reales a escala). En los demás modos
                                     // (Hyprland/Direct) usa el switcher de celdas +
                                     // slide de siempre.
-                                    if st.brain_is_embedded()
-                                        && st.config_workspace_switch_mode()
-                                            == mirada_brain::WorkspaceSwitchMode::Prezi
-                                    {
-                                        st.overview_step(true); // navega/abre
+                                    let prezi = st.config_workspace_switch_mode()
+                                        == mirada_brain::WorkspaceSwitchMode::Prezi;
+                                    if prezi {
+                                        if st.brain_is_embedded() {
+                                            st.overview_step(true); // el Cuerpo lo pinta
+                                            return FilterResult::Intercept(());
+                                        }
+                                        // Enlazado + Prezi: la vista espacial la pinta
+                                        // la APP (tiene los datos que el Cuerpo no ve en
+                                        // linked). NO interceptamos con el switcher:
+                                        // dejamos que «Super+Tab» caiga a los grabs y se
+                                        // reenvíe como Keybind. Sin esto, Win+Tab hacía
+                                        // el slide «sencillo» aunque el modo fuera Prezi.
                                     } else {
                                         st.switcher_step = Some((Workspaces, true));
+                                        return FilterResult::Intercept(());
                                     }
-                                    return FilterResult::Intercept(());
                                 }
                                 "Super+Shift+Tab" => {
-                                    if st.brain_is_embedded()
-                                        && st.config_workspace_switch_mode()
-                                            == mirada_brain::WorkspaceSwitchMode::Prezi
-                                    {
-                                        st.overview_step(false);
+                                    let prezi = st.config_workspace_switch_mode()
+                                        == mirada_brain::WorkspaceSwitchMode::Prezi;
+                                    if prezi {
+                                        if st.brain_is_embedded() {
+                                            st.overview_step(false);
+                                            return FilterResult::Intercept(());
+                                        }
+                                        // Enlazado + Prezi: reenvío a la app (ver arriba).
                                     } else {
                                         st.switcher_step = Some((Workspaces, false));
+                                        return FilterResult::Intercept(());
                                     }
-                                    return FilterResult::Intercept(());
                                 }
                                 // Vista espacial (Prezi): con Cerebro EMBEBIDO la
                                 // pinta el compositor (emit_overview), toggle
