@@ -188,6 +188,8 @@ pub struct State {
     persist_agente: Option<Agente>,
     /// Intent: id de agente a borrar; lo borra el chasis del Almacen.
     borrar_agente_id: Option<String>,
+    /// Intent: id de conversación a borrar del Almacen.
+    borrar_conv_id: Option<String>,
 }
 
 impl Default for State {
@@ -215,6 +217,7 @@ impl State {
             editor: None,
             persist_agente: None,
             borrar_agente_id: None,
+            borrar_conv_id: None,
         }
     }
 
@@ -283,6 +286,11 @@ impl State {
         self.borrar_agente_id.take()
     }
 
+    /// El chasis toma el id de una conversación a borrar del Almacen.
+    pub fn take_borrar_conversacion(&mut self) -> Option<String> {
+        self.borrar_conv_id.take()
+    }
+
     /// Las conversaciones actuales (para que el chasis persista tras un update).
     pub fn conversaciones(&self) -> &[Conversacion] {
         &self.conversaciones
@@ -317,6 +325,8 @@ pub enum Msg {
     NuevaConversacion,
     /// Abrir la conversación en esa posición de la lista.
     AbrirConversacion(usize),
+    /// Borrar la conversación en esa posición.
+    BorrarConversacion(usize),
     /// Elegir el agente en esa posición.
     SeleccionarAgente(usize),
     /// Rueda/arrastre del hilo (delta en px).
@@ -425,6 +435,15 @@ pub fn update(state: State, msg: Msg) -> State {
             if let Some(c) = s.conversaciones.get(i) {
                 s.conv_activa = Some(c.id.clone());
                 s.scroll = f32::MAX;
+            }
+        }
+        Msg::BorrarConversacion(i) => {
+            if i < s.conversaciones.len() {
+                let c = s.conversaciones.remove(i);
+                if s.conv_activa.as_deref() == Some(c.id.as_str()) {
+                    s.conv_activa = None;
+                }
+                s.borrar_conv_id = Some(c.id);
             }
         }
         Msg::SeleccionarAgente(i) => {
@@ -617,14 +636,41 @@ fn sidebar_view<HostMsg: Clone + 'static>(
         .children(vec![button_view("+ nueva conversación", &bp, lift(Msg::NuevaConversacion))]),
     );
 
-    // Lista de conversaciones.
+    // Lista de conversaciones: título clickeable + «×» para borrar.
     hijos.push(rotulo("CONVERSACIONES", theme));
     for (i, c) in state.conversaciones.iter().enumerate() {
         let activa = state.conv_activa.as_deref() == Some(c.id.as_str());
         let titulo = if c.titulo.trim().is_empty() { "(sin título)" } else { &c.titulo };
-        hijos.push(
-            fila_seleccionable(titulo, activa, theme).on_click(lift(Msg::AbrirConversacion(i))),
-        );
+        let bg = if activa { theme.bg_selected } else { theme.bg_panel_alt };
+        let fg = if activa { theme.fg_text } else { theme.fg_muted };
+        let fila = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0), height: length(26.0) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(bg)
+        .children(vec![
+            // Título: toma el ancho y abre la conversación.
+            View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: Dimension::auto(), height: percent(1.0) },
+                padding: rect_xy(10.0, 0.0),
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(titulo, 12.5, fg, Alignment::Start)
+            .on_click(lift(Msg::AbrirConversacion(i))),
+            // «×»: borra la conversación.
+            View::new(Style {
+                size: Size { width: length(22.0), height: percent(1.0) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned("×", 14.0, theme.fg_muted, Alignment::Center)
+            .on_click(lift(Msg::BorrarConversacion(i))),
+        ]);
+        hijos.push(fila);
     }
 
     View::new(Style {
@@ -1201,6 +1247,19 @@ mod tests {
         s = update(s, Msg::BorrarAgente);
         assert_eq!(s.agentes.len(), antes - 1);
         assert_eq!(s.take_borrar_agente().as_deref(), Some(id0.as_str()));
+    }
+
+    #[test]
+    fn borrar_conversacion_la_saca_y_pide_borrado() {
+        let mut s = estado_con_agente();
+        s.input.set_text("hola");
+        s = update(s, Msg::Enviar);
+        let id = s.conversacion_activa().unwrap().id.clone();
+        assert_eq!(s.conversaciones.len(), 1);
+        s = update(s, Msg::BorrarConversacion(0));
+        assert!(s.conversaciones.is_empty());
+        assert!(s.conv_activa.is_none()); // era la activa
+        assert_eq!(s.take_borrar_conversacion().as_deref(), Some(id.as_str()));
     }
 
     #[test]

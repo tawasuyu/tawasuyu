@@ -782,6 +782,9 @@ impl App for Shell {
                         let _ = al.borrar_agente(&id);
                         refrescar = true;
                     }
+                    if let Some(id) = m.agente.take_borrar_conversacion() {
+                        let _ = al.borrar_conversacion(&id);
+                    }
                     if refrescar {
                         if let Ok(agentes) = al.agentes() {
                             m.agente.set_agentes(agentes);
