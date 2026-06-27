@@ -96,6 +96,10 @@ impl DrmState {
             self.app.send_thumbs(&caps);
             self.app.pending_thumbs = false;
         }
+        // Backdrops *frosted* por ventana flotante (glass calidad N): se rearman
+        // por salida dentro de `render_output`; acá sólo vaciamos el cache del
+        // frame anterior (vacío sin glass → no cuesta nada).
+        self.window_backdrops.clear();
         for i in 0..self.outputs.len() {
             self.render_output(i);
         }
@@ -669,14 +673,22 @@ impl DrmState {
                 }
                 // Glow de foco: el color de la barra crossfadea como el marco.
                 let base = self.focus_base(w, anim_now, glow_ms);
-                // Glass: barra *frosted* en ventanas flotantes (sobre el wallpaper).
+                // Glass: barra *frosted* en ventanas flotantes. Preferimos el
+                // backdrop REAL de ESTA ventana (ve las ventanas debajo, armado en
+                // `rebuild_window_backdrops`); si no se pudo armar, caemos al
+                // `wallpaper_blur` de la salida (sólo wallpaper).
                 let frosted_bar = glass
                     && w.floating
-                    && self.outputs.get(idx).and_then(|o| o.wallpaper_blur.as_ref()).is_some();
+                    && (self.window_backdrops.contains_key(&w.id)
+                        || self.outputs.get(idx).and_then(|o| o.wallpaper_blur.as_ref()).is_some());
                 if frosted_bar {
-                    // Rebanada del wallpaper desenfocado bajo la barra (coords del
+                    // Rebanada del backdrop desenfocado bajo la barra (coords del
                     // buffer del blur; escala si está acotado) + tinte del color base.
-                    let (blur, (bw, bh)) = self.outputs[idx].wallpaper_blur.as_ref().unwrap();
+                    let (blur, (bw, bh)) = self
+                        .window_backdrops
+                        .get(&w.id)
+                        .or_else(|| self.outputs[idx].wallpaper_blur.as_ref())
+                        .unwrap();
                     let (bw, bh) = (*bw as f64, *bh as f64);
                     let (ow, oh) = (rect.w.max(1) as f64, rect.h.max(1) as f64);
                     let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new(
@@ -1756,6 +1768,97 @@ impl DrmState {
     /// Emite el menú raíz en `rect` si esta salida es la dueña del menú.
     /// El menú vive en **coords locales** de su salida (se abrió ahí), así
     /// que las posiciones de las columnas no necesitan traducción.
+    /// Arma los **backdrops *frosted* REALES por ventana flotante** (glass
+    /// calidad N): para cada ventana flotante visible de esta salida, re-rinde a
+    /// un offscreen la escena que tiene **debajo** —las ventanas inferiores en z
+    /// (las posteriores en el orden front-to-back) + el wallpaper al fondo—, la
+    /// pasa por blur de caja y la cachea en [`DrmState::window_backdrops`] por id.
+    /// Su barra de título glass la muestrea en `emit_windows` (en vez de
+    /// `wallpaper_blur`), así ve **las ventanas detrás**, no sólo el wallpaper.
+    ///
+    /// Corre ANTES de `emit_windows` (la barra necesita el backdrop ya armado) y
+    /// usa surfaces-only (sin decoración ni glass), así que no hay realimentación
+    /// («espejo infinito»). Opt-in (`glass_blur > 0`); coste = una pasada
+    /// offscreen + readback + blur **por ventana flotante** (normalmente 1). Si
+    /// una pasada falla, esa barra cae con gracia a `wallpaper_blur`.
+    ///
+    /// **Por verificar en metal** (readback GPU de escena real con ventanas).
+    fn rebuild_window_backdrops(&mut self, idx: usize) {
+        let glass_blur = self.app.config_glass_blur() as i32;
+        if glass_blur == 0 {
+            return; // el cache global ya se vació una vez por frame en `render`
+        }
+        let rect = self.outputs[idx].rect;
+        let (ow, oh) = (rect.w.max(1), rect.h.max(1));
+        let tbh = self.app.decorations.titlebar_height;
+        let primary_h = self.outputs[Self::PRIMARY].rect.h;
+        // Ventanas visibles de la sesión activa, front-to-back (MISMO orden que
+        // `emit_windows`: shell > flotantes > resto, enfocada primero).
+        let mut shown: Vec<_> = self
+            .app
+            .windows
+            .iter()
+            .filter(|w| w.visible && !w.is_greeter && self.app.session_visible(w))
+            .collect();
+        shown.sort_by_key(|w| (!w.is_shell, !w.floating, !w.focused));
+        // Sin ninguna flotante no hay barra glass que muestree → nada que armar.
+        if !shown.iter().any(|w| w.floating) {
+            return;
+        }
+        // Snapshot (id, flotante, superficie, origen LOCAL a la salida, alfa)
+        // para soltar el borrow de `self.app` y poder rendir con `&mut self`.
+        let snaps: Vec<(u64, bool, _, i32, i32, f32)> = shown
+            .iter()
+            .filter(|w| crate::buffer_render_sano(&w.surface))
+            .map(|w| {
+                let (gx, gy) = crate::render_loc(w, primary_h, tbh);
+                (
+                    w.id,
+                    w.floating,
+                    w.surface.clone(),
+                    gx - rect.x,
+                    gy - rect.y,
+                    w.effects.opacity as f32 / 255.0,
+                )
+            })
+            .collect();
+        drop(shown);
+        // Por cada flotante: componer las de DEBAJO (posteriores) + wallpaper.
+        for p in 0..snaps.len() {
+            if !snaps[p].1 {
+                continue; // sólo las flotantes llevan barra *frosted*
+            }
+            let mut elems: Vec<Frame> = Vec::new();
+            for below in &snaps[p + 1..] {
+                for el in render_elements_from_surface_tree(
+                    &mut self.renderer,
+                    &below.2,
+                    (below.3, below.4),
+                    1.0,
+                    below.5,
+                    Kind::Unspecified,
+                ) {
+                    elems.push(Frame::Window(el));
+                }
+            }
+            if let Some(wf) = self.wallpaper_frame(idx, (ow, oh)) {
+                elems.push(wf);
+            }
+            if elems.is_empty() {
+                continue;
+            }
+            let Some(bytes) =
+                crate::screencopy::render_elements_offscreen(&mut self.renderer, (ow, oh), &elems)
+            else {
+                continue;
+            };
+            let blurred = box_blur_bgra(&bytes, ow, oh, glass_blur);
+            if let Some(m) = bgra_membuffer(&blurred, ow, oh) {
+                self.window_backdrops.insert(snaps[p].0, (m, (ow, oh)));
+            }
+        }
+    }
+
     /// Arma el **backdrop *frosted* REAL** del menú raíz: re-rinde la escena que
     /// queda **debajo** del menú (`below` = los `Frame` de esta salida sin los
     /// overlays de arriba ni el menú) a un offscreen del tamaño de la salida, lo
@@ -2150,14 +2253,22 @@ impl DrmState {
                 None
             };
         }
-        let ctx = &self.outputs[idx];
-        let Some((buf, (sw, sh))) = &ctx.wallpaper else {
-            return;
-        };
-        let (sw, sh) = (*sw, *sh);
+        if let Some(f) = self.wallpaper_frame(idx, size) {
+            into.push(f);
+        }
+    }
+
+    /// Construye el `Frame` del wallpaper de la salida `idx` a tamaño `size`
+    /// (escala **cover** si el buffer está a otra resolución). `None` si la
+    /// salida aún no tiene wallpaper. Lo comparten [`Self::emit_wallpaper`] (la
+    /// composición normal) y [`Self::rebuild_window_backdrops`] (el fondo del
+    /// backdrop *frosted* por ventana).
+    fn wallpaper_frame(&mut self, idx: usize, size: (i32, i32)) -> Option<Frame> {
+        let (sw, sh) = self.outputs[idx].wallpaper.as_ref().map(|(_, s)| *s)?;
         if sw == size.0 && sh == size.1 {
             // Buffer ya a tamaño de salida (fuentes estáticas) → 1:1, sin escalar.
-            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+            let buf = &self.outputs[idx].wallpaper.as_ref()?.0;
+            let el = MemoryRenderBufferRenderElement::from_buffer(
                 &mut self.renderer,
                 (0.0, 0.0),
                 buf,
@@ -2165,14 +2276,15 @@ impl DrmState {
                 None,
                 None,
                 Kind::Unspecified,
-            ) {
-                into.push(Frame::Text(el));
-            }
+            )
+            .ok()?;
+            Some(Frame::Text(el))
         } else {
             // Buffer a otra resolución (video nativo / marca acotada) → la GPU lo
             // escala **cover** alrededor del origen calculado.
             let (ox, oy, k) = cover_transform(sw, sh, size.0, size.1);
-            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+            let buf = &self.outputs[idx].wallpaper.as_ref()?.0;
+            let el = MemoryRenderBufferRenderElement::from_buffer(
                 &mut self.renderer,
                 (ox, oy),
                 buf,
@@ -2180,10 +2292,10 @@ impl DrmState {
                 None,
                 None,
                 Kind::Unspecified,
-            ) {
-                let origin = Point::<i32, Physical>::from((ox.round() as i32, oy.round() as i32));
-                into.push(Frame::ScaledText(RescaleRenderElement::from_element(el, origin, k)));
-            }
+            )
+            .ok()?;
+            let origin = Point::<i32, Physical>::from((ox.round() as i32, oy.round() as i32));
+            Some(Frame::ScaledText(RescaleRenderElement::from_element(el, origin, k)))
         }
     }
 
@@ -2453,6 +2565,10 @@ impl DrmState {
             for el in over_layers {
                 out.push(Frame::Window(el));
             }
+            // 6.bis Backdrops *frosted* REALES por ventana flotante (glass
+            //    calidad N): se arman ANTES de emitir las ventanas, para que la
+            //    barra de cada flotante muestree lo que tiene **debajo**.
+            self.rebuild_window_backdrops(idx);
             // 7. Ventanas entre layers Overlay/Top y Bottom/Background.
             self.emit_windows(idx, rect, &mut out);
             // 7.bis Fantasmas de cierre (fade-out), a la altura de las ventanas.

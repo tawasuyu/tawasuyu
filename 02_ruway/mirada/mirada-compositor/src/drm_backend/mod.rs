@@ -773,6 +773,16 @@ struct DrmState {
     /// `None` si la compilación falló → el render cae a la máscara CPU (o a
     /// esquinas rectas). Sólo se usa con `corner_radius > 0`.
     rounded_shader: Option<GlesTexProgram>,
+    /// **Backdrops *frosted* REALES por ventana flotante** (id de ventana →
+    /// buffer desenfocado + su tamaño = tamaño de salida): la escena de **debajo
+    /// de ESA ventana** (las ventanas inferiores en z + wallpaper) re-rendida a un
+    /// offscreen y desenfocada, para que su barra de título glass vea lo que tiene
+    /// detrás —no sólo el wallpaper (eso lo da `OutputCtx::wallpaper_blur`)—. Es
+    /// la calidad «N» del glass: una pasada por ventana flotante con glass
+    /// (acotado: normalmente 1). Se **vacía y rearma cada frame** en
+    /// [`DrmState::rebuild_window_backdrops`] (antes de `emit_windows`); vacío con
+    /// glass apagado. Si una pasada falla, esa barra cae a `wallpaper_blur`.
+    window_backdrops: std::collections::HashMap<u64, (MemoryRenderBuffer, (i32, i32))>,
     /// Sombra bajo cada ventana (capas translúcidas, sin shader). Gateada por
     /// la env `MIRADA_SHADOW` mientras se verifica en pantalla — así no toca el
     /// default de nadie hasta confirmarla.
@@ -1637,6 +1647,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             t
         },
         text_cache: std::collections::HashMap::new(),
+        window_backdrops: std::collections::HashMap::new(),
         menu_entries,
         root_menu: None,
         menu_output_idx: None,

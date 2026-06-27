@@ -56,14 +56,21 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       Byte-idéntico en off (el menú vuelve a su z exacto vía `splice`). **Coste:**
       una pasada offscreen + readback + blur por frame con el menú abierto.
       **Falta verificar en metal** (readback GPU de escena con ventanas).
-- [ ] **Backdrop REAL — 2ª rebanada: barras de título flotantes + paneles, por
-      profundidad** (calidad N). Lo del menú es calidad «1» (un backdrop único de
-      toda la escena, correcto porque el menú está arriba de todo). Para una barra
-      flotante el backdrop correcto es lo que hay **debajo de ESA ventana**, no la
-      escena entera → armar el backdrop por-superficie (componer capas `0..N`),
-      multi-pase GPU (downsample → N blur separables → upsample → tinte + filo),
-      opt-in con calidad (off / 1 / N). Hoy las barras flotantes siguen con
-      `wallpaper_blur` (sólo wallpaper).
+- [x] **✅ Backdrop REAL — 2ª rebanada: barras de título flotantes por
+      profundidad (calidad N).** `DrmState::window_backdrops` (id→buffer) +
+      `rebuild_window_backdrops` (antes de `emit_windows`): por cada ventana
+      flotante visible se re-rinde a un offscreen la escena **debajo de ESA
+      ventana** (las inferiores en z, surfaces-only + wallpaper al fondo vía
+      `wallpaper_frame`), se desenfoca y la barra glass la muestrea en vez de
+      `wallpaper_blur`. Surfaces-only → sin realimentación («espejo infinito»).
+      Una pasada por flotante (normalmente 1); cae a `wallpaper_blur` si falla.
+      Opt-in, byte-idéntico en off. **Falta verificar en metal.**
+- [ ] **Backdrop REAL — afinar: paneles/layer-shell + calidad acotada (off/1/N) +
+      downsample.** Pendiente: (a) extender el backdrop real a superficies
+      layer-shell (paneles), no sólo barras de ventana; (b) exponer el nivel de
+      calidad en el panel (hoy es «N» siempre que haya glass); (c) bajar coste
+      rindiendo el offscreen del backdrop a **resolución reducida** (downsample →
+      blur → upsample) en vez de a tamaño de salida; (d) filo/borde del cristal.
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).
