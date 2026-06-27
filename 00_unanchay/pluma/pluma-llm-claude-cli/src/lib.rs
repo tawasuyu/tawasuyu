@@ -64,6 +64,39 @@ impl ClaudeCliClient {
         self
     }
 
+    /// El prompt final: el texto + (si hay imágenes adjuntas) las rutas de
+    /// archivos temporales que el modelo puede abrir con su herramienta Read. El
+    /// CLI no toma base64 inline, así que las imágenes van a `temp_dir` y se
+    /// referencian por ruta. Best-effort: si una falla, se omite.
+    fn preparar_prompt(req: &ChatRequest) -> String {
+        use base64::Engine as _;
+        let base = Self::render_prompt(req);
+        let mut rutas = Vec::new();
+        for (mi, m) in req.messages.iter().enumerate() {
+            for (ii, img) in m.images.iter().enumerate() {
+                let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&img.data_base64)
+                else {
+                    continue;
+                };
+                let ext = match img.media_type.as_str() {
+                    "image/jpeg" => "jpg",
+                    "image/webp" => "webp",
+                    "image/gif" => "gif",
+                    _ => "png",
+                };
+                let ruta = std::env::temp_dir().join(format!("shuma-claude-img-{mi}-{ii}.{ext}"));
+                if std::fs::write(&ruta, &bytes).is_ok() {
+                    rutas.push(ruta.display().to_string());
+                }
+            }
+        }
+        if rutas.is_empty() {
+            return base;
+        }
+        let lista = rutas.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n");
+        format!("Imágenes adjuntas (abrilas con tu herramienta Read):\n{lista}\n\n{base}")
+    }
+
     /// Renderiza la conversación a un único prompt de texto. Para una sola
     /// vuelta es el mensaje tal cual; para multi-turno, el transcripto con
     /// roles + `Asistente:` al final para que el modelo continúe.
@@ -98,7 +131,7 @@ impl ChatClient for ClaudeCliClient {
     }
 
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ChatError> {
-        let prompt = Self::render_prompt(req);
+        let prompt = Self::preparar_prompt(req);
 
         let mut cmd = tokio::process::Command::new(&self.bin);
         cmd.arg("-p")
@@ -183,7 +216,7 @@ impl ChatClient for ClaudeCliClient {
         on_delta: &mut (dyn for<'s> FnMut(&'s str) + Send),
     ) -> Result<ChatResponse, ChatError> {
         use tokio::io::{AsyncBufReadExt, BufReader};
-        let prompt = Self::render_prompt(req);
+        let prompt = Self::preparar_prompt(req);
 
         let mut cmd = tokio::process::Command::new(&self.bin);
         cmd.arg("-p")

@@ -39,8 +39,25 @@ pub fn construir_request(conv: &Conversacion, agente: &Agente) -> ChatRequest {
         .map(|t| {
             let content = t.texto_plano();
             match t.rol {
-                Rol::Usuario => ChatMessage::user(content),
                 Rol::Asistente => ChatMessage::assistant(content),
+                Rol::Usuario => {
+                    // Imágenes adjuntas → mensaje de usuario con visión.
+                    let imgs: Vec<pluma_llm_core::ChatImage> = t
+                        .bloques
+                        .iter()
+                        .filter_map(|b| match b {
+                            BloqueSalida::Imagen { media_type, data_base64 } => Some(
+                                pluma_llm_core::ChatImage::new(media_type.clone(), data_base64.clone()),
+                            ),
+                            _ => None,
+                        })
+                        .collect();
+                    if imgs.is_empty() {
+                        ChatMessage::user(content)
+                    } else {
+                        ChatMessage::user_con_imagenes(content, imgs)
+                    }
+                }
             }
         })
         .collect::<Vec<_>>();
@@ -217,6 +234,21 @@ mod tests {
         assert_eq!(req.messages[0].role, Role::User);
         assert_eq!(req.messages[1].role, Role::Assistant);
         assert_eq!(req.messages[2].content, "¿qué hora es?");
+    }
+
+    #[test]
+    fn imagen_en_turno_usuario_va_como_vision() {
+        let mut conv = Conversacion::nueva("a1", 0);
+        conv.agregar_usuario_con_imagenes(
+            "¿qué ves?",
+            vec![("image/png".into(), "QUJD".into())],
+            1,
+        );
+        let req = construir_request(&conv, &agente_charla());
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].images.len(), 1);
+        assert_eq!(req.messages[0].images[0].media_type, "image/png");
+        assert!(req.messages[0].content.contains("¿qué ves?"));
     }
 
     #[test]

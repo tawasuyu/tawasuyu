@@ -16,3 +16,5 @@ llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+llimphi-image = { workspace = true }
+base64 = { workspace = true }

@@ -411,8 +411,12 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::FocusInput => s.focused = true,
         Msg::Enviar => {
-            let texto = s.input.text().trim().to_string();
-            if texto.is_empty() || s.esperando {
+            if s.esperando {
+                return s;
+            }
+            // Líneas `img:<ruta>` se cargan como imágenes (visión); el resto es texto.
+            let (texto, imagenes) = cargar_imagenes(&s.input.text());
+            if texto.is_empty() && imagenes.is_empty() {
                 return s;
             }
             let Some(agente) = s.agente_activo().cloned() else {
@@ -426,7 +430,11 @@ pub fn update(state: State, msg: Msg) -> State {
             }
             let ms = s.reloj_ms;
             if let Some(conv) = s.conversacion_activa_mut() {
-                conv.agregar_usuario(texto, ms);
+                if imagenes.is_empty() {
+                    conv.agregar_usuario(texto, ms);
+                } else {
+                    conv.agregar_usuario_con_imagenes(texto, imagenes, ms);
+                }
                 let snap = conv.clone();
                 s.pendiente = Some(Peticion { conv: snap, agente });
                 s.esperando = true;
@@ -786,7 +794,7 @@ fn panel_view<HostMsg: Clone + 'static>(
     })
     .children(vec![text_input_view(
         &state.input,
-        "Escribí tu mensaje…  (Enter envía)",
+        "Escribí tu mensaje…  (Enter envía · img:/ruta para adjuntar)",
         state.focused,
         &tp,
         lift(Msg::FocusInput),
@@ -998,6 +1006,24 @@ fn bloque_view<HostMsg: Clone + 'static>(
             (v, alto)
         }
         BloqueSalida::Accion(a) => (accion_view(turno, bloque, a, theme, lift), 70.0),
+        BloqueSalida::Imagen { data_base64, .. } => {
+            let alto = 180.0;
+            match decodificar_imagen(data_base64) {
+                Some(img) => (
+                    View::new(Style {
+                        size: Size { width: length(240.0), height: length(alto) },
+                        ..Default::default()
+                    })
+                    .image(img),
+                    alto + 6.0,
+                ),
+                None => (
+                    View::new(Style { size: Size { width: percent(1.0), height: length(18.0) }, ..Default::default() })
+                        .text("🖼 imagen (no se pudo mostrar)", 12.0, theme.fg_muted),
+                    22.0,
+                ),
+            }
+        }
         BloqueSalida::Error(e) => (
             View::new(Style { size: Size { width: percent(1.0), height: Dimension::auto() }, ..Default::default() })
                 .text(format!("⚠ {e}"), 12.5, theme.fg_destructive),
@@ -1099,6 +1125,55 @@ fn fila_seleccionable<HostMsg: Clone + 'static>(
 
 fn rect_xy(x: f32, y: f32) -> Rect<LengthPercentage> {
     Rect { left: length(x), right: length(x), top: length(y), bottom: length(y) }
+}
+
+/// Tope de tamaño de imagen adjunta (5 MiB) — evita pegar archivos enormes.
+const IMG_MAX_BYTES: usize = 5 * 1024 * 1024;
+
+/// Separa el input en texto y adjuntos: las líneas `img:<ruta>` se leen del disco
+/// y se devuelven como `(media_type, base64)`; el resto es el texto del mensaje.
+/// Las que no se pueden leer se descartan en silencio (el mensaje igual sale).
+fn cargar_imagenes(crudo: &str) -> (String, Vec<(String, String)>) {
+    use base64::Engine as _;
+    let mut texto: Vec<&str> = Vec::new();
+    let mut imgs: Vec<(String, String)> = Vec::new();
+    for linea in crudo.lines() {
+        let t = linea.trim();
+        if let Some(ruta) = t.strip_prefix("img:") {
+            let ruta = ruta.trim();
+            if let Ok(bytes) = std::fs::read(ruta) {
+                if !bytes.is_empty() && bytes.len() <= IMG_MAX_BYTES {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    imgs.push((media_type_de(ruta), b64));
+                }
+            }
+        } else {
+            texto.push(linea);
+        }
+    }
+    (texto.join("\n").trim().to_string(), imgs)
+}
+
+/// Adivina el `media_type` por la extensión del archivo (default PNG).
+fn media_type_de(ruta: &str) -> String {
+    let l = ruta.to_lowercase();
+    if l.ends_with(".jpg") || l.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if l.ends_with(".webp") {
+        "image/webp"
+    } else if l.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "image/png"
+    }
+    .to_string()
+}
+
+/// Decodifica base64 → bytes → imagen lista para `View::image`. `None` si falla.
+fn decodificar_imagen(data_base64: &str) -> Option<llimphi_image::Image> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data_base64).ok()?;
+    llimphi_image::decode_bytes(&bytes).ok()
 }
 
 /// Estimación grosera del alto de un texto (px): cuenta líneas reales y suma un
@@ -1258,6 +1333,23 @@ mod tests {
         s = update(s, Msg::BorrarAgente);
         assert_eq!(s.agentes.len(), antes - 1);
         assert_eq!(s.take_borrar_agente().as_deref(), Some(id0.as_str()));
+    }
+
+    #[test]
+    fn cargar_imagenes_parsea_lineas_img() {
+        let ruta = std::env::temp_dir().join("shuma-agente-test-img.png");
+        std::fs::write(&ruta, b"\x89PNG fake bytes").unwrap();
+        let entrada = format!("mirá esto\nimg:{}\ny decime", ruta.display());
+        let (texto, imgs) = cargar_imagenes(&entrada);
+        assert_eq!(texto, "mirá esto\ny decime");
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].0, "image/png");
+        assert!(!imgs[0].1.is_empty()); // base64 no vacío
+        // Una ruta inexistente se descarta sin romper.
+        let (t2, i2) = cargar_imagenes("texto\nimg:/no/existe.png");
+        assert_eq!(t2, "texto");
+        assert!(i2.is_empty());
+        let _ = std::fs::remove_file(&ruta);
     }
 
     #[test]

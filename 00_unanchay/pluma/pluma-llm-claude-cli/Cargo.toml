@@ -11,4 +11,5 @@ description = "pluma — backend LLM que maneja el binario `claude` (Claude Code
 async-trait = { workspace = true }
 pluma-llm-core = { path = "../pluma-llm-core" }
 serde_json = { workspace = true }
+base64 = { workspace = true }
 tokio = { workspace = true }

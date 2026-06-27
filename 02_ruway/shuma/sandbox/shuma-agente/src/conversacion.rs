@@ -84,6 +84,9 @@ pub enum BloqueSalida {
     },
     /// Una acción de control propuesta (validada por atipay).
     Accion(AccionPropuesta),
+    /// Una imagen adjunta (visión). Va en el turno del usuario; el `motor` la
+    /// manda al modelo como bloque de imagen. `data_base64` = bytes en base64.
+    Imagen { media_type: String, data_base64: String },
     /// Algo no se pudo interpretar (JSON de acción inválido, id desconocido…).
     Error(String),
 }
@@ -100,6 +103,7 @@ impl BloqueSalida {
                 format!("```{l}\n{codigo}\n```")
             }
             BloqueSalida::Accion(a) => format!("[acción: {} → {}]", a.id, a.linea_comando),
+            BloqueSalida::Imagen { .. } => "[imagen adjunta]".to_string(),
             BloqueSalida::Error(e) => format!("[error: {e}]"),
         }
     }
@@ -217,6 +221,30 @@ impl Conversacion {
             self.titulo = derivar_titulo(&texto);
         }
         self.turnos.push(Turno::usuario(texto, ts));
+        self.actualizada = ts;
+        self.turnos.len() - 1
+    }
+
+    /// Como [`Self::agregar_usuario`] pero con imágenes adjuntas (visión): el
+    /// turno lleva los bloques `Imagen` antes del texto.
+    pub fn agregar_usuario_con_imagenes(
+        &mut self,
+        texto: impl Into<String>,
+        imagenes: Vec<(String, String)>,
+        ts: u64,
+    ) -> usize {
+        let texto = texto.into();
+        if self.titulo.trim().is_empty() {
+            self.titulo = derivar_titulo(if texto.trim().is_empty() { "(imagen)" } else { &texto });
+        }
+        let mut bloques: Vec<BloqueSalida> = imagenes
+            .into_iter()
+            .map(|(media_type, data_base64)| BloqueSalida::Imagen { media_type, data_base64 })
+            .collect();
+        if !texto.trim().is_empty() {
+            bloques.push(BloqueSalida::Texto(texto));
+        }
+        self.turnos.push(Turno { rol: Rol::Usuario, bloques, ts, uso: None });
         self.actualizada = ts;
         self.turnos.len() - 1
     }
