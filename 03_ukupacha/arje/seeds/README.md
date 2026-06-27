@@ -11,6 +11,37 @@ seed describes, supervising them according to their `Supervision`.
 |---|---|---|
 | `arje-host.card.json` | Artix laptop with a physical GPU | agetty@tty1, network-up oneshot, display-manager (mirada-greeter-llimphi) with Mesa |
 | `arje-qemu.card.json` | QEMU testing without a GPU | agetty@ttyS0 (serial console) |
+| `arje-laptop.card.json` | **DEMO** del boot-chain (lo que instala `install-arje.sh`) | splash + arje-getty-stub@tty1 (prueba de vida, **no** login) |
+| `arje-tawasuyu.card.json` | **PRODUCCIÓN** sobre rootfs hammer | hammerd (Restart), network-up, splash (high), display-manager (mirada-greeter-llimphi) con Mesa, console-getty@tty2 (rescate busybox) |
+
+> **`arje-laptop` (demo) vs `arje-tawasuyu` (producción).** El demo termina en
+> `arje-getty-stub` (banner en tty1, bloquea, **no es login**) y mete sólo
+> binarios estáticos musl — sirve para certificar el boot-chain sin rootfs con
+> Mesa. La de producción cambia ese último ente por el **greeter real**
+> (`mirada-greeter-llimphi`, que toma el DRM tras el handoff del splash) y suma
+> `hammerd`; exige un rootfs con Mesa. Ver «Contrato rootfs» abajo.
+
+## Contrato rootfs para `arje-tawasuyu` (producción)
+
+El sustrato es el rootfs reproducible de [hammer](https://gitea.gioser.net/sergio/hammer)
+(ver su `docs/12-init-real.md`), que **ya** bootea con `arje-zero` como PID 1.
+Para que `arje-tawasuyu.card.json` arranque al escritorio, ese rootfs debe proveer,
+además de lo del SDD 12 (mount points vacíos, `/sbin/init`→arje-zero, `/ente/seed.card.json`):
+
+| Necesidad | Path | Origen |
+|---|---|---|
+| Greeter real | `/usr/lib/arje/mirada-greeter-llimphi` (bin `mirada-greeter`) | receta/cargo tawasuyu |
+| Splash | `/usr/lib/arje/arje-splash` | receta/cargo tawasuyu |
+| Red mínima | `/usr/lib/arje/net-bring-up` | receta/cargo tawasuyu |
+| Lab daemon | `/usr/bin/hammerd` | hammer (ya en Stage 1) |
+| Shell rescate | `/bin/busybox` (getty + `/bin/sh`) | hammer (busybox) |
+| **Mesa** | `/usr/lib/dri/*` (`LIBGL_DRIVERS_PATH`), `libEGL`/`libgbm`/`libseat`/`wayland` | Alpine (validación) → receta propia |
+| Runtime dir | `/run/arje` (XDG_RUNTIME_DIR del DM) | tmpfs (arje monta `/run`) |
+| Nodo DRM | `/dev/dri/card*` + `renderD*` | kernel/devtmpfs |
+
+El handoff splash→greeter es por `/run/arje-splash.sock` (ya implementado). La
+dependencia dura nueva del salto demo→prod es **Mesa**: en la fase de validación
+sobre Alpine se reusa el Mesa de Alpine; recetizar Mesa propio es trabajo posterior.
 
 ## Session profiles (`fragments/`)
 

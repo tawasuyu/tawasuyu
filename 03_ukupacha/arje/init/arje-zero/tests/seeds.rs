@@ -45,6 +45,55 @@ fn arje_qemu_seed_es_valida() {
 }
 
 #[test]
+fn arje_tawasuyu_seed_es_valida() {
+    // La seed de producción tawasuyu-sobre-hammer: génesis splash →
+    // mirada-greeter (DM real con Mesa) + hammerd (lab) + getty de rescate.
+    validate_seed("arje-tawasuyu.card.json");
+}
+
+#[test]
+fn tawasuyu_seed_arranca_el_dm_real_no_el_getty_stub() {
+    // El salto demo→producción: el génesis debe lanzar el greeter REAL
+    // (mirada-greeter, que toma el DRM tras el handoff del splash), no el
+    // arje-getty-stub del demo. Y el splash debe ir ANTES, con prioridad alta.
+    let path = seeds_dir().join("arje-tawasuyu.card.json");
+    let card = EntityCard::from_path(&path).unwrap();
+    use arje_card::{Payload, Priority};
+
+    let dm = card
+        .genesis
+        .iter()
+        .find(|c| c.label == "display-manager-mesa")
+        .expect("la seed de producción debe traer el display-manager-mesa");
+    match &dm.payload {
+        Payload::Native { exec, .. } => assert!(
+            exec.ends_with("mirada-greeter-llimphi"),
+            "el DM no es el greeter real de mirada: {exec}",
+        ),
+        otro => panic!("payload del DM no es Native: {otro:?}"),
+    }
+
+    let splash = card
+        .genesis
+        .iter()
+        .find(|c| c.label == "arje-splash")
+        .expect("la seed de producción debe traer el splash sin parpadeo");
+    assert_eq!(
+        splash.priority,
+        Priority::High,
+        "el splash debe ir con prioridad alta (antes que el resto)",
+    );
+
+    assert!(
+        card.genesis.iter().all(|c| !matches!(
+            &c.payload,
+            Payload::Native { exec, .. } if exec.ends_with("arje-getty-stub")
+        )),
+        "la seed de PRODUCCIÓN no debe contener el arje-getty-stub del demo",
+    );
+}
+
+#[test]
 fn host_seed_provee_spawn_y_journal() {
     let path = seeds_dir().join("arje-host.card.json");
     let card = EntityCard::from_path(&path).unwrap();

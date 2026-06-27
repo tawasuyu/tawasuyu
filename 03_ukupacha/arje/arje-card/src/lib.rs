@@ -24,6 +24,7 @@ pub use card_core::{
     NamespaceSet,
     NetlinkFamily,
     Payload,
+    Priority,
     ResourceLimits,
     SomaSpec,
     Supervision,
