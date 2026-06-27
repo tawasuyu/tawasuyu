@@ -96,6 +96,10 @@ pub enum Msg {
     /// Refresh rápido del visualizador de audio (~20 Hz): drena el último cuadro
     /// de cava y re-pinta. Sólo se dispara si la config declara un `cava`.
     CavaTick,
+    /// Latido de animación del **diente vivo** (~20 Hz): avanza su reloj y
+    /// re-resuelve la manifestación. Sólo se dispara si la config declara un
+    /// diente de contenido `control`.
+    DienteTick,
     /// Desplegar/replegar el drawer de shuma.
     ShumaToggle,
     /// Repliega el drawer por **deshover**: el puntero entró al scrim (área
@@ -760,6 +764,34 @@ pub fn config_tiene_navigator(cfg: &Config) -> bool {
         .any(|t| t.content.kind == "navigator")
 }
 
+/// `true` si la config declara un diente **vivo** (contenido `control`): un
+/// diente multifuncional cuyo icono es el canvas del árbitro de atención. Sólo
+/// entonces se enciende el latido de animación [`Msg::DienteTick`].
+pub fn config_tiene_diente_vivo(cfg: &Config) -> bool {
+    cfg.surfaces
+        .iter()
+        .filter(|s| s.kind == SurfaceKind::Sidebar)
+        .flat_map(|s| s.tabs.iter())
+        .any(|t| es_diente_vivo(&t.content.kind))
+}
+
+/// Los nombres de contenido que marcan un diente vivo (es/en).
+pub fn es_diente_vivo(kind: &str) -> bool {
+    matches!(kind, "control" | "sistema" | "system" | "vivo")
+}
+
+/// Dispara el transitorio de volumen en el diente vivo y re-resuelve su
+/// manifestación, para respuesta inmediata al subir/bajar/silenciar (sin esperar
+/// al muestreo de 1 Hz). Inocuo si la config no declara un diente vivo.
+fn flash_volumen_diente(model: &mut Model, frac: f32, muted: bool) {
+    use pata_core::atencion::{Manifestacion, VOLUMEN_TTL};
+    model
+        .atencion
+        .flash(Manifestacion::Volumen { frac, muted }, VOLUMEN_TTL, model.diente_t);
+    let s = model.senales_diente();
+    model.diente_manifest = model.atencion.resolver(s, model.diente_t);
+}
+
 /// `true` si la config declara al menos un `SurfaceKind::Sidebar` con un diente
 /// cuyo contenido es el panel RAG (`kind = "rag"`/`"search"`). Sólo entonces se
 /// arma el motor RAG (lectura de la caché de paloma + daemon + LLM).
@@ -955,6 +987,17 @@ pub struct Model {
     pub cava: Option<cava::CavaHandle>,
     /// Último cuadro del visualizador (una fracción `0..1` por banda).
     pub cava_frame: Vec<f32>,
+    /// Árbitro del **diente vivo**: decide qué muestra un diente multifuncional
+    /// (música/volumen/CPU/batería/reposo). Inerte si la config no declara un
+    /// diente de contenido `control`.
+    pub atencion: pata_core::atencion::Atencion,
+    /// Reloj monotónico (segundos) que avanza con el latido de animación del
+    /// diente vivo — base temporal de los TTL del árbitro y de las animaciones.
+    pub diente_t: f64,
+    /// Última lectura de batería `(fracción 0..1, cargando)`, o `None` si no hay.
+    pub bat_now: Option<(f32, bool)>,
+    /// Manifestación actual que el rail pinta en el diente vivo.
+    pub diente_manifest: pata_core::atencion::Manifestacion,
     /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
     /// declara ningún `SurfaceKind::Sidebar` con un navegador.
     pub nav: NavState,
@@ -1119,6 +1162,26 @@ impl Model {
                 w.tick(ctx);
             }
         }
+    }
+
+    /// Arma las [`pata_core::atencion::Senales`] del diente vivo desde el estado
+    /// actual: volumen/mute/CPU del último `WidgetCtx`, batería de `bat_now` y
+    /// música de `media_now`.
+    fn senales_diente(&self) -> pata_core::atencion::Senales {
+        pata_core::atencion::Senales {
+            volume: self.last_ctx.volume,
+            muted: self.last_ctx.muted,
+            cpu: self.last_ctx.cpu,
+            bateria: self.bat_now.map(|(f, _)| f),
+            cargando: self.bat_now.map(|(_, c)| c).unwrap_or(false),
+            musica: self.media_now.as_ref().map(|m| m.playing).unwrap_or(false),
+        }
+    }
+
+    /// Refresca la manifestación del diente vivo con las señales actuales.
+    fn actualizar_diente(&mut self) {
+        let s = self.senales_diente();
+        self.diente_manifest = self.atencion.update(s, self.diente_t);
     }
 
     /// Arranca la animación del drawer hacia `destino` (0 = replegado, 1 =
@@ -1297,6 +1360,10 @@ impl App for PataApp {
             osd: None,
             cava,
             cava_frame: Vec::new(),
+            atencion: pata_core::atencion::Atencion::new(),
+            diente_t: 0.0,
+            bat_now: None,
+            diente_manifest: pata_core::atencion::Manifestacion::Reposo,
             nav: NavState::default(),
             rag: if rag_present {
                 rag::RagState::presente()
@@ -1339,6 +1406,12 @@ impl App for PataApp {
         // rápido), pero sólo si la config declara un `cava`.
         if model.cava.is_some() {
             handle.spawn_periodic(Duration::from_millis(50), || Msg::CavaTick);
+        }
+        // Latido del diente vivo: re-resuelve la manifestación a ~20 Hz para que
+        // los transitorios caduquen suaves y las animaciones corran. Sólo si la
+        // config declara un diente de contenido `control`.
+        if config_tiene_diente_vivo(&model.cfg) {
+            handle.spawn_periodic(Duration::from_millis(50), || Msg::DienteTick);
         }
         // Plano de datos del sidebar: poll de Mónadas a nouser, sólo si la config
         // declara un navegador (no molestar al broker si no hace falta).
@@ -1420,10 +1493,13 @@ impl App for PataApp {
                 if let Some((pct, charging)) = bateria::read() {
                     let (nuevo, aviso) = bateria::decidir(pct, charging, model.bat_avisado);
                     model.bat_avisado = nuevo;
+                    model.bat_now = Some((pct as f32 / 100.0, charging));
                     if let Some(a) = aviso {
                         bateria::avisar(a, pct);
                     }
                 }
+                // Diente vivo: refresca su manifestación con las señales nuevas.
+                model.actualizar_diente();
                 // Agente polkit: si llega una autenticación y no hay otra en
                 // curso, abrimos el diálogo; si ya hay una, la nueva se rechaza.
                 if let Some(h) = &model.polkit {
@@ -1462,6 +1538,19 @@ impl App for PataApp {
                         model.cava_frame = frame;
                     }
                 }
+            }
+            Msg::DienteTick => {
+                // Latido de animación del diente vivo (~20 Hz): avanza el reloj
+                // monotónico, drena el visualizador (si hay) y re-resuelve la
+                // manifestación para que los transitorios caduquen a tiempo.
+                model.diente_t += 0.05;
+                if let Some(h) = &model.cava {
+                    if let Some(frame) = h.latest() {
+                        model.cava_frame = frame;
+                    }
+                }
+                let s = model.senales_diente();
+                model.diente_manifest = model.atencion.resolver(s, model.diente_t);
             }
             Msg::Quit => handle.quit(),
             Msg::ShumaAutoClose => {
@@ -1606,15 +1695,16 @@ impl App for PataApp {
                     let nuevo = (model.last_ctx.volume + if dy < 0.0 { 0.05 } else { -0.05 })
                         .clamp(0.0, 1.0);
                     model.osd = Some(render::Osd::flash(render::OsdKind::Volume, nuevo, false));
+                    let muted = model.last_ctx.muted;
+                    flash_volumen_diente(&mut model, nuevo, muted);
                 }
             }
             Msg::VolumeMute => {
                 sampler::toggle_mute();
-                model.osd = Some(render::Osd::flash(
-                    render::OsdKind::Volume,
-                    model.last_ctx.volume,
-                    !model.last_ctx.muted,
-                ));
+                let muted = !model.last_ctx.muted;
+                let vol = model.last_ctx.volume;
+                model.osd = Some(render::Osd::flash(render::OsdKind::Volume, vol, muted));
+                flash_volumen_diente(&mut model, vol, muted);
             }
             Msg::ClipboardMenu => {
                 model.clip_open = !model.clip_open;

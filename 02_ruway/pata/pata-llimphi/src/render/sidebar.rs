@@ -38,6 +38,7 @@ use std::collections::HashSet;
 use pata_core::config::{Anchor, Surface};
 use pata_core::layout::Rect;
 
+use super::diente::{diente_vivo_view, DienteVivo};
 use crate::nouser::NavState;
 use crate::rag::RagState;
 use crate::shuma::ShumaState;
@@ -59,7 +60,14 @@ const GRAPH_ROW_H: f32 = 60.0;
 
 /// El rail de dientes (sin fondo de franja): un diente por `SidebarTab`. `si`
 /// identifica la superficie para el `Msg` del clic.
-fn rail_widget(surface: &Surface, si: usize, width: f32, nav: &NavState, theme: &Theme) -> View<Msg> {
+fn rail_widget(
+    surface: &Surface,
+    si: usize,
+    width: f32,
+    nav: &NavState,
+    vivo: &DienteVivo,
+    theme: &Theme,
+) -> View<Msg> {
     let items: Vec<DockRailItem> = surface
         .tabs
         .iter()
@@ -70,12 +78,21 @@ fn rail_widget(surface: &Surface, si: usize, width: f32, nav: &NavState, theme: 
         })
         .collect();
     let icons: Vec<String> = surface.tabs.iter().map(|t| t.icon.clone()).collect();
+    // El `kind` del contenido de cada diente: si es un diente vivo, su icono es
+    // el canvas del árbitro de atención en vez de un glifo fijo.
+    let kinds: Vec<String> = surface.tabs.iter().map(|t| t.content.kind.clone()).collect();
     dock_rail_view(
         &items,
         width,
         &DockRailPalette::from_theme(theme),
         move |id, size, color| {
             let name = icons.get(id as usize).map(|s| s.as_str()).unwrap_or("");
+            let kind = kinds.get(id as usize).map(|s| s.as_str()).unwrap_or("");
+            if crate::es_diente_vivo(kind) {
+                if let Some(v) = diente_vivo_view(vivo, size, theme) {
+                    return v;
+                }
+            }
             tooth_icon(name, size, color)
         },
         move |id| Msg::NavTabActivate(si, id as usize),
@@ -170,9 +187,10 @@ fn rail_strip(
     hosted_app: &str,
     hosted_active: Option<u32>,
     shuma: &ShumaState,
+    vivo: &DienteVivo,
     theme: &Theme,
 ) -> View<Msg> {
-    let mut hijos = vec![rail_widget(surface, si, thickness, nav, theme)];
+    let mut hijos = vec![rail_widget(surface, si, thickness, nav, vivo, theme)];
     if !hosted.is_empty() {
         hijos.push(rail_separator(thickness, theme));
         hijos.push(hosted_rail(hosted_app, hosted, hosted_active, thickness, theme));
@@ -358,6 +376,7 @@ pub fn sidebar_rail_view(
     rect: Rect,
     nav: &NavState,
     shuma: &ShumaState,
+    vivo: &DienteVivo,
     theme: &Theme,
 ) -> View<Msg> {
     View::new(Style {
@@ -376,7 +395,7 @@ pub fn sidebar_rail_view(
     })
     // El path winit no conoce el foco (no hay toplevels) → sin dientes hospedados,
     // pero el diente de shuma es in-process y sí aparece.
-    .children(vec![rail_strip(surface, si, rect.w as f32, nav, &[], "", None, shuma, theme)])
+    .children(vec![rail_strip(surface, si, rect.w as f32, nav, &[], "", None, shuma, vivo, theme)])
 }
 
 /// El panel flotante del diente `ti` desplegado (path winit): flota junto al
@@ -438,6 +457,7 @@ pub fn sidebar_surface_view(
     hosted_active: Option<u32>,
     shuma: &ShumaState,
     rag: &RagState,
+    vivo: &DienteVivo,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
@@ -450,6 +470,7 @@ pub fn sidebar_surface_view(
         hosted_app,
         hosted_active,
         shuma,
+        vivo,
         theme,
     );
 

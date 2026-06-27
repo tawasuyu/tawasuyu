@@ -46,6 +46,7 @@ mod cde;
 mod control;
 mod media;
 mod network;
+mod diente;
 mod notifications;
 mod osd;
 mod panels;
@@ -63,6 +64,7 @@ pub use panels::{
     cpu_overlay, cpu_panel, ram_overlay, ram_panel, volume_overlay, volume_panel,
 };
 pub use bluetooth::{bluetooth_overlay, bluetooth_view};
+pub use diente::{diente_vivo_view, DienteVivo};
 pub use control::{
     control_button_view, control_overlay, set_night, set_power_profile, set_radio, ControlExtras,
 };
@@ -342,12 +344,18 @@ pub fn root(model: &Model) -> View<Msg> {
             continue;
         }
         if surface.kind == SurfaceKind::Sidebar {
+            let vivo = diente::DienteVivo {
+                manifest: model.diente_manifest,
+                cava_frame: &model.cava_frame,
+                t: model.diente_t,
+            };
             superficies.push(sidebar_rail_view(
                 surface,
                 placed.index,
                 placed.rect,
                 &model.nav,
                 &model.shuma,
+                &vivo,
                 &model.theme,
             ));
             continue;

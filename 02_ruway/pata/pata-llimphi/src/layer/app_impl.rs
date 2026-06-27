@@ -76,6 +76,18 @@ impl LayerApp {
         if let Some(pi) = self.osd_pi {
             self.panels[pi].dirty = true;
         }
+        // El diente vivo también reacciona al volumen al instante (sin esperar al
+        // muestreo de 1 Hz): dispara su transitorio con la misma señal del OSD.
+        if kind == crate::render::OsdKind::Volume {
+            let now = self.diente_t0.elapsed().as_secs_f64();
+            self.atencion.flash(
+                pata_core::atencion::Manifestacion::Volumen { frac: level, muted },
+                pata_core::atencion::VOLUMEN_TTL,
+                now,
+            );
+            let s = self.senales_diente();
+            self.diente_manifest = self.atencion.resolver(s, now);
+        }
     }
 
     /// La lista de ventanas para el render del `window_list`, en el orden propio
@@ -669,10 +681,13 @@ impl LayerApp {
         if let Some((pct, charging)) = crate::bateria::read() {
             let (nuevo, aviso) = crate::bateria::decidir(pct, charging, self.bat_avisado);
             self.bat_avisado = nuevo;
+            self.bat_now = Some((pct as f32 / 100.0, charging));
             if let Some(a) = aviso {
                 crate::bateria::avisar(a, pct);
             }
         }
+        // Diente vivo: refresca su manifestación con las señales nuevas.
+        self.actualizar_diente();
         // `WidgetCtx` ya no es `Copy` (lleva el título de la ventana enfocada),
         // así que los widgets tickean contra `&self.ctx` (recién asignado).
         for sw in &mut self.surfaces {
@@ -704,6 +719,27 @@ impl LayerApp {
                 p.dirty = true;
             }
         }
+    }
+
+    /// Arma las [`pata_core::atencion::Senales`] del diente vivo desde el estado
+    /// actual: volumen/mute/CPU del `WidgetCtx`, batería de `bat_now`, música de
+    /// `media_now`.
+    fn senales_diente(&self) -> pata_core::atencion::Senales {
+        pata_core::atencion::Senales {
+            volume: self.ctx.volume,
+            muted: self.ctx.muted,
+            cpu: self.ctx.cpu,
+            bateria: self.bat_now.map(|(f, _)| f),
+            cargando: self.bat_now.map(|(_, c)| c).unwrap_or(false),
+            musica: self.media_now.as_ref().map(|m| m.playing).unwrap_or(false),
+        }
+    }
+
+    /// Refresca la manifestación del diente vivo (señales frescas → árbitro).
+    pub(super) fn actualizar_diente(&mut self) {
+        let s = self.senales_diente();
+        let now = self.diente_t0.elapsed().as_secs_f64();
+        self.diente_manifest = self.atencion.update(s, now);
     }
 
     /// Detecta el cambio de escritorio activo y arranca/expira la animación del
@@ -854,6 +890,29 @@ impl LayerApp {
         let ws_anim = self.ws_comet();
         if ws_anim.is_some() {
             self.panels[pi].dirty = true;
+        }
+        // Diente vivo: re-resolvé la manifestación cada frame (para que los
+        // transitorios caduquen suave) y, si hay algo que mostrar y este panel es
+        // un sidebar con un diente vivo, mantenelo latiendo para animar.
+        {
+            let s = self.senales_diente();
+            let now = self.diente_t0.elapsed().as_secs_f64();
+            self.diente_manifest = self.atencion.resolver(s, now);
+        }
+        if self.diente_manifest != pata_core::atencion::Manifestacion::Reposo {
+            let idx = self.panels[pi].idx;
+            let es_sidebar_vivo = self
+                .cfg
+                .surfaces
+                .get(idx)
+                .map(|s| {
+                    s.kind == SurfaceKind::Sidebar
+                        && s.tabs.iter().any(|t| crate::es_diente_vivo(&t.content.kind))
+                })
+                .unwrap_or(false);
+            if es_sidebar_vivo {
+                self.panels[pi].dirty = true;
+            }
         }
         // Mientras el menú de inicio entra (fade + slide), repintá su panel.
         if self.menu_open && self.menu_panel == Some(pi) && self.menu_open_t() < 1.0 {
@@ -1117,6 +1176,11 @@ impl LayerApp {
                     Some((id, teeth, active)) => (id.as_str(), teeth.as_slice(), *active),
                     None => ("", &[], None),
                 };
+            let vivo = render::DienteVivo {
+                manifest: self.diente_manifest,
+                cava_frame: &self.cava_frame,
+                t: self.diente_t0.elapsed().as_secs_f64(),
+            };
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],
                 idx,
@@ -1128,6 +1192,7 @@ impl LayerApp {
                 hosted_active,
                 &self.shuma,
                 &self.rag,
+                &vivo,
                 &self.theme,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {

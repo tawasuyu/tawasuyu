@@ -280,6 +280,14 @@ pub(super) struct LayerApp {
     pub(super) cava: Option<crate::cava::CavaHandle>,
     /// Último cuadro del visualizador.
     pub(super) cava_frame: Vec<f32>,
+    /// Árbitro del **diente vivo** (música/volumen/CPU/batería/reposo).
+    pub(super) atencion: pata_core::atencion::Atencion,
+    /// Reloj monotónico del diente vivo (origen para `elapsed()`).
+    pub(super) diente_t0: std::time::Instant,
+    /// Última lectura de batería `(fracción 0..1, cargando)`.
+    pub(super) bat_now: Option<(f32, bool)>,
+    /// Manifestación actual del diente vivo.
+    pub(super) diente_manifest: pata_core::atencion::Manifestacion,
     pub(super) theme: Theme,
     pub(super) cfg: Config,
     pub(super) surfaces: Vec<crate::SurfaceWidgets>,
@@ -611,6 +619,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         osd: None,
         cava,
         cava_frame: Vec::new(),
+        atencion: pata_core::atencion::Atencion::new(),
+        diente_t0: std::time::Instant::now(),
+        bat_now: None,
+        diente_manifest: pata_core::atencion::Manifestacion::Reposo,
         theme,
         cfg,
         surfaces,
