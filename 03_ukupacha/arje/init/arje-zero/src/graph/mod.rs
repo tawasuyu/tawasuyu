@@ -13,6 +13,7 @@ mod bus_mediator;
 mod capabilities;
 mod devices;
 mod lifecycle;
+pub(crate) mod resolve;
 mod shutdown;
 mod topology;
 
@@ -292,6 +293,18 @@ impl EnteGraph {
     /// Inserta una capacidad dinámica al índice de providers para un Ente.
     pub(in crate::graph) fn register_dynamic_cap(&mut self, ente_id: Ulid, cap: Capability) {
         self.providers.entry(cap).or_default().insert(ente_id);
+    }
+
+    /// Conjunto de capacidades actualmente DISPONIBLES en el fractal: las que
+    /// tiene al menos un proveedor vivo. Filtra entradas con set vacío (un
+    /// proveedor que murió deja la key con set vacío hasta el próximo barrido).
+    /// Es lo que se evalúa contra los contratos de una Card al spawnear.
+    pub(in crate::graph) fn available_caps(&self) -> BTreeSet<Capability> {
+        self.providers
+            .iter()
+            .filter(|(_, holders)| !holders.is_empty())
+            .map(|(cap, _)| cap.clone())
+            .collect()
     }
 
     /// El Ente #0 (semilla) tiene todas sus capacidades declaradas. Otros

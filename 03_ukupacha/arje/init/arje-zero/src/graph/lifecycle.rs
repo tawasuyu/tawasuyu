@@ -27,9 +27,23 @@ impl EnteGraph {
         }
         info!(seed = %self.seed.label, count = cards.len(), "instanciando genesis");
         let seed_id = self.seed.id;
-        for card in cards {
-            if let Err(e) = self.authorize_and_spawn(card, seed_id).await {
-                warn!(?e, "genesis card falló");
+
+        // Plan de arranque: ordena por contratos de dependencia (grafo
+        // topológico), detecta ciclos y descarta las insatisfacibles. Antes el
+        // genesis se spawneaba en orden de declaración con un gate de `requires`
+        // por presencia; ahora respeta `Any`/`Quorum`/`Conflicts`/`After` y
+        // arranca cada proveedor antes que sus consumidores.
+        let external = self.available_caps();
+        let plan = super::resolve::plan_spawn(&cards, &external);
+        for (idx, reason) in &plan.rejected {
+            warn!(
+                label = %cards[*idx].label, ?reason,
+                "genesis card descartada por contrato/ciclo"
+            );
+        }
+        for &idx in &plan.order {
+            if let Err(e) = self.authorize_and_spawn(cards[idx].clone(), seed_id).await {
+                warn!(?e, label = %cards[idx].label, "genesis card falló");
             }
         }
         Ok(())
@@ -51,12 +65,14 @@ impl EnteGraph {
             warn!(?e, label = %card.label, "card inválida, spawn rechazado");
             return Ok(());
         }
-        // Falla rápida sobre `requires` — mejor que daemons en bucle.
-        for req in &card.requires {
-            if !self.providers.contains_key(req) {
-                warn!(?req, label = %card.label, "requires no satisfecho");
-                return Ok(());
-            }
+        // Falla rápida sobre los contratos de dependencia (requires AND +
+        // Any/Quorum/Conflicts) contra las capacidades disponibles — mejor que
+        // daemons en bucle. `After` es sólo orden (lo respeta el planificador
+        // del genesis), no gatea acá. Fuente única: `Card::deps_satisfied`.
+        let available = self.available_caps();
+        if let Err(unmet) = card.deps_satisfied(&available) {
+            warn!(?unmet, label = %card.label, "contrato de dependencia no satisfecho");
+            return Ok(());
         }
         // Lineage por defecto = quien pidió el spawn.
         if card.lineage.is_none() {

@@ -48,6 +48,10 @@ pub enum CardError {
     LabelTooLong(usize),
     #[error("capacidad presente en provides Y requires: {0:?}")]
     SelfDependency(Capability),
+    #[error("contrato Quorum inválido: at_least={at_least} fuera de [1, {of}]")]
+    InvalidQuorum { at_least: u32, of: usize },
+    #[error("contrato Conflicts contradice provides: {0:?}")]
+    ConflictsSelf(Capability),
     #[error("payload Native/Legacy con exec vacío")]
     EmptyExec,
     #[error("payload Wasm con sha256 sentinela (todo ceros)")]
@@ -96,8 +100,18 @@ pub struct Card {
     pub provides: BTreeSet<Capability>,
 
     /// Capacidades que necesita resolver el Init antes de encarnarla.
+    /// Semántica AND: TODAS deben estar disponibles. Para contratos más
+    /// expresivos (A **o** B, quórum N-de-M, exclusión, orden) usá `contracts`.
     #[serde(default)]
     pub requires: BTreeSet<Capability>,
+
+    /// Contratos de dependencia relacionales — más expresivos que `requires`
+    /// (que es un AND plano). `Any` ("al menos una"), `Quorum` (N-de-M),
+    /// `Conflicts` (exclusión mutua), `After` (sólo orden). El Init los evalúa
+    /// contra las capacidades disponibles y los usa para ordenar el arranque
+    /// (grafo topológico). `#[serde(default)]` ⇒ compat con Cards previas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contracts: Vec<DepContract>,
 
     /// Permisos sandbox declarativos (más alto nivel que `Capability`).
     /// El Admin los compila a seccomp/namespaces/cgroups concretos.
@@ -225,6 +239,7 @@ impl Default for Card {
             label: String::new(),
             provides: BTreeSet::new(),
             requires: BTreeSet::new(),
+            contracts: Vec::new(),
             permissions: Permissions::default(),
             soma: SomaSpec::default(),
             payload: Payload::Virtual,
@@ -278,6 +293,56 @@ pub enum NetlinkFamily {
     Route,
     Generic,
     Audit,
+}
+
+// =====================================================================
+// Contratos de dependencia relacionales
+// =====================================================================
+
+/// Contrato de dependencia entre Cards, más expresivo que el `requires` plano
+/// (que es un AND de capacidades). Se evalúa contra el conjunto de capacidades
+/// **disponibles** (las que proveen los Entes ya vivos + la Semilla).
+///
+/// Wire: externally-tagged (compatible con JSON/TOML/postcard). Ejemplo JSON:
+/// ```json
+/// { "Any": ["Journal", "LegacyLogind"] }
+/// { "Quorum": { "of": ["Spawn", "Journal"], "at_least": 1 } }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DepContract {
+    /// Al menos UNA de estas capacidades debe estar disponible ("A o B"). Un
+    /// set vacío es trivialmente insatisfecho (se rechaza la Card).
+    Any(BTreeSet<Capability>),
+    /// Al menos `at_least` de las capacidades en `of` deben estar disponibles
+    /// (quórum N-de-M).
+    Quorum {
+        of: BTreeSet<Capability>,
+        at_least: u32,
+    },
+    /// NINGUNA de estas capacidades puede estar disponible (exclusión mutua).
+    Conflicts(BTreeSet<Capability>),
+    /// Sólo ORDEN: si hay proveedor, arrancar DESPUÉS; no es requisito (si nadie
+    /// la provee, no bloquea). Equivale al `After=` de systemd.
+    After(BTreeSet<Capability>),
+}
+
+/// Por qué un conjunto de capacidades NO satisface los contratos de una Card.
+/// Tipo de error de runtime (no viaja por wire): lo produce
+/// [`Card::deps_satisfied`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum UnmetContract {
+    /// Falta una capacidad del AND `requires`.
+    #[error("falta capacidad requerida: {0:?}")]
+    Missing(Capability),
+    /// Ninguna de las alternativas (`Any`) está disponible.
+    #[error("ninguna alternativa disponible: {0:?}")]
+    NoneOf(BTreeSet<Capability>),
+    /// Quórum no alcanzado.
+    #[error("quórum no alcanzado: hay {have}, se necesitan {need}")]
+    Quorum { need: u32, have: u32 },
+    /// Una capacidad excluida por `Conflicts` está presente.
+    #[error("conflicto: capacidad excluida presente: {0:?}")]
+    Conflict(Capability),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -693,6 +758,74 @@ impl Card {
         Ok(serde_json::to_string_pretty(self)?)
     }
 
+    /// ¿Satisface esta Card sus contratos de dependencia contra el conjunto de
+    /// capacidades `available`? Combina `requires` (AND) con cada `contract`.
+    /// `After` es sólo orden ⇒ NO afecta la satisfacción (siempre pasa).
+    ///
+    /// Fuente única de verdad para el gate de spawn del Init (tanto en el
+    /// arranque del genesis como en spawns dinámicos por el bus).
+    pub fn deps_satisfied(&self, available: &BTreeSet<Capability>) -> Result<(), UnmetContract> {
+        for cap in &self.requires {
+            if !available.contains(cap) {
+                return Err(UnmetContract::Missing(cap.clone()));
+            }
+        }
+        for c in &self.contracts {
+            match c {
+                DepContract::Any(set) => {
+                    if !set.iter().any(|cap| available.contains(cap)) {
+                        return Err(UnmetContract::NoneOf(set.clone()));
+                    }
+                }
+                DepContract::Quorum { of, at_least } => {
+                    let have = of.iter().filter(|cap| available.contains(cap)).count() as u32;
+                    if have < *at_least {
+                        return Err(UnmetContract::Quorum {
+                            need: *at_least,
+                            have,
+                        });
+                    }
+                }
+                DepContract::Conflicts(set) => {
+                    if let Some(cap) = set.iter().find(|cap| available.contains(cap)) {
+                        return Err(UnmetContract::Conflict(cap.clone()));
+                    }
+                }
+                DepContract::After(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Capacidades de las que esta Card depende para el ORDEN de arranque
+    /// (`requires` + `Any` + `Quorum.of` + `After`). El planificador topológico
+    /// del Init las usa para colocar a la Card DESPUÉS de sus proveedores.
+    /// `Conflicts` NO ordena (es exclusión, no dependencia).
+    pub fn ordering_deps(&self) -> BTreeSet<Capability> {
+        let mut s = self.requires.clone();
+        for c in &self.contracts {
+            match c {
+                DepContract::Any(set)
+                | DepContract::Quorum { of: set, .. }
+                | DepContract::After(set) => s.extend(set.iter().cloned()),
+                DepContract::Conflicts(_) => {}
+            }
+        }
+        s
+    }
+
+    /// Capacidades que esta Card declara como conflictivas (unión de todos los
+    /// `Conflicts`). Si alguna está disponible, la Card no puede coexistir.
+    pub fn conflict_caps(&self) -> BTreeSet<Capability> {
+        let mut s = BTreeSet::new();
+        for c in &self.contracts {
+            if let DepContract::Conflicts(set) = c {
+                s.extend(set.iter().cloned());
+            }
+        }
+        s
+    }
+
     /// Validación semántica exhaustiva, recursiva sobre `genesis`.
     pub fn validate(&self) -> Result<(), CardError> {
         if self.schema_version != CARD_SCHEMA_VERSION {
@@ -710,6 +843,27 @@ impl Card {
         for cap in &self.requires {
             if self.provides.contains(cap) {
                 return Err(CardError::SelfDependency(cap.clone()));
+            }
+        }
+        for c in &self.contracts {
+            match c {
+                DepContract::Quorum { of, at_least } => {
+                    if *at_least == 0 || *at_least as usize > of.len() {
+                        return Err(CardError::InvalidQuorum {
+                            at_least: *at_least,
+                            of: of.len(),
+                        });
+                    }
+                }
+                DepContract::Conflicts(set) => {
+                    // Una Card no puede excluir una capacidad que ella misma provee.
+                    for cap in set {
+                        if self.provides.contains(cap) {
+                            return Err(CardError::ConflictsSelf(cap.clone()));
+                        }
+                    }
+                }
+                DepContract::Any(_) | DepContract::After(_) => {}
             }
         }
         validate_payload(&self.payload)?;
@@ -910,6 +1064,9 @@ pub struct WireCard {
     pub provides: BTreeSet<Capability>,
     #[serde(default)]
     pub requires: BTreeSet<Capability>,
+    /// Sin `skip_serializing_if`: postcard exige layout fijo (ver ContextBias).
+    #[serde(default)]
+    pub contracts: Vec<DepContract>,
     #[serde(default)]
     pub permissions: Permissions,
     #[serde(default)]
@@ -951,6 +1108,7 @@ impl From<Card> for WireCard {
             label: c.label,
             provides: c.provides,
             requires: c.requires,
+            contracts: c.contracts,
             permissions: c.permissions,
             soma: c.soma,
             payload: c.payload,
@@ -980,6 +1138,7 @@ impl From<WireCard> for Card {
             label: w.label,
             provides: w.provides,
             requires: w.requires,
+            contracts: w.contracts,
             permissions: w.permissions,
             soma: w.soma,
             payload: w.payload,
@@ -1383,5 +1542,139 @@ mod tests {
         let d = Card::default();
         assert_eq!(d.id, Ulid::nil());
         assert!(d.label.is_empty());
+    }
+
+    // ----------------------------------------------------------------
+    // Contratos de dependencia (Any / Quorum / Conflicts / After)
+    // ----------------------------------------------------------------
+
+    fn caps(it: impl IntoIterator<Item = Capability>) -> BTreeSet<Capability> {
+        it.into_iter().collect()
+    }
+
+    #[test]
+    fn any_contract_a_o_b() {
+        let mut c = Card::new("greeter");
+        c.contracts = vec![DepContract::Any(caps([Capability::Spawn, Capability::Journal]))];
+        // Ninguna de las dos: no satisface.
+        assert_eq!(
+            c.deps_satisfied(&caps([])),
+            Err(UnmetContract::NoneOf(caps([Capability::Spawn, Capability::Journal])))
+        );
+        // Una sola alcanza ("A o B, al menos uno").
+        assert!(c.deps_satisfied(&caps([Capability::Journal])).is_ok());
+        assert!(c.deps_satisfied(&caps([Capability::Spawn])).is_ok());
+    }
+
+    #[test]
+    fn quorum_n_de_m() {
+        let mut c = Card::new("q");
+        c.contracts = vec![DepContract::Quorum {
+            of: caps([Capability::Spawn, Capability::Journal, Capability::LegacyLogind]),
+            at_least: 2,
+        }];
+        assert!(matches!(
+            c.deps_satisfied(&caps([Capability::Spawn])),
+            Err(UnmetContract::Quorum { need: 2, have: 1 })
+        ));
+        assert!(c
+            .deps_satisfied(&caps([Capability::Spawn, Capability::Journal]))
+            .is_ok());
+    }
+
+    #[test]
+    fn conflicts_exclusion_mutua() {
+        let mut c = Card::new("solo");
+        c.contracts = vec![DepContract::Conflicts(caps([Capability::LegacyLogind]))];
+        assert!(c.deps_satisfied(&caps([])).is_ok());
+        assert_eq!(
+            c.deps_satisfied(&caps([Capability::LegacyLogind])),
+            Err(UnmetContract::Conflict(Capability::LegacyLogind))
+        );
+    }
+
+    #[test]
+    fn after_es_solo_orden_no_requisito() {
+        let mut c = Card::new("late");
+        c.contracts = vec![DepContract::After(caps([Capability::Journal]))];
+        // After nunca falla la satisfacción (aunque nadie provea Journal)…
+        assert!(c.deps_satisfied(&caps([])).is_ok());
+        // …pero SÍ aparece en las deps de orden.
+        assert!(c.ordering_deps().contains(&Capability::Journal));
+    }
+
+    #[test]
+    fn ordering_deps_une_requires_any_quorum_after_sin_conflicts() {
+        let mut c = Card::new("x");
+        c.requires = caps([Capability::Spawn]);
+        c.contracts = vec![
+            DepContract::Any(caps([Capability::Journal])),
+            DepContract::After(caps([Capability::LegacyLogind])),
+            DepContract::Conflicts(caps([Capability::FilesystemRoot])),
+        ];
+        let d = c.ordering_deps();
+        assert!(d.contains(&Capability::Spawn));
+        assert!(d.contains(&Capability::Journal));
+        assert!(d.contains(&Capability::LegacyLogind));
+        // Conflicts NO ordena.
+        assert!(!d.contains(&Capability::FilesystemRoot));
+        assert_eq!(c.conflict_caps(), caps([Capability::FilesystemRoot]));
+    }
+
+    #[test]
+    fn quorum_invalido_se_rechaza_en_validate() {
+        let mut c = Card::new("bad");
+        c.payload = Payload::Virtual;
+        c.contracts = vec![DepContract::Quorum {
+            of: caps([Capability::Spawn]),
+            at_least: 2, // > of.len()
+        }];
+        assert!(matches!(c.validate(), Err(CardError::InvalidQuorum { .. })));
+    }
+
+    #[test]
+    fn conflicts_contra_propio_provides_se_rechaza() {
+        let mut c = Card::new("contradictoria");
+        c.provides = caps([Capability::Journal]);
+        c.contracts = vec![DepContract::Conflicts(caps([Capability::Journal]))];
+        assert!(matches!(c.validate(), Err(CardError::ConflictsSelf(_))));
+    }
+
+    #[test]
+    fn contracts_roundtrip_json_y_wire() {
+        let mut c = Card::new("con-contratos");
+        c.contracts = vec![
+            DepContract::Any(caps([Capability::Spawn, Capability::Journal])),
+            DepContract::Quorum {
+                of: caps([Capability::Spawn, Capability::Journal]),
+                at_least: 1,
+            },
+        ];
+        // JSON.
+        let json = serde_json::to_string(&c).unwrap();
+        let back: Card = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.contracts, c.contracts);
+        // Wire (postcard).
+        let wire: WireCard = c.clone().into();
+        let bytes = postcard::to_allocvec(&wire).unwrap();
+        let wire_back: WireCard = postcard::from_bytes(&bytes).unwrap();
+        let c_back: Card = wire_back.into();
+        assert_eq!(c_back.contracts, c.contracts);
+    }
+
+    #[test]
+    fn card_sin_contracts_compat() {
+        // Una Card vieja (sin el campo) deserializa con contracts vacío.
+        let src = r#"{
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFGS01",
+            "label": "vieja",
+            "payload": "Virtual",
+            "supervision": "OneShot"
+        }"#;
+        let c = Card::from_json(src).unwrap();
+        assert!(c.contracts.is_empty());
+        // Sin contratos y sin requires: satisface contra cualquier set.
+        assert!(c.deps_satisfied(&caps([])).is_ok());
     }
 }

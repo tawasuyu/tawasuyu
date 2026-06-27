@@ -18,6 +18,7 @@ pub use card_core::{
     CardError,
     Card as EntityCard,
     CgroupSpec,
+    DepContract,
     DeviceClass,
     InterfaceId,
     LegacyFacade,
@@ -28,6 +29,7 @@ pub use card_core::{
     ResourceLimits,
     SomaSpec,
     Supervision,
+    UnmetContract,
     WireCard,
     CARD_SCHEMA_VERSION,
 };
