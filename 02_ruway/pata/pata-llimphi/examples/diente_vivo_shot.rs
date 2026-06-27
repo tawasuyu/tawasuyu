@@ -23,16 +23,17 @@ use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::View;
 
 use pata_core::atencion::{EstadoBat, Manifestacion};
-use pata_core::widget::ClockReading;
+use pata_core::widget::{ClockReading, WidgetCtx};
 use pata_llimphi::bluetooth::{BtDevice, BtState};
 use pata_llimphi::mpris::MediaState;
 use pata_llimphi::network::{NetState, NetStatus, WifiAp};
 use pata_llimphi::render::{
-    control_center_view, diente_vivo_view, paint_reposo_halo, CentroDatos, ControlExtras, DienteVivo,
+    control_center_view, diente_vivo_view, paint_reposo_halo, sistema_monitor_view, CentroDatos,
+    ControlExtras, DienteVivo,
 };
 use pata_llimphi::Msg;
 
-const W: u32 = 780;
+const W: u32 = 1080;
 const H: u32 = 680;
 const SZ: f32 = 56.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -41,16 +42,22 @@ fn main() {
     let out = std::env::args().nth(1).unwrap_or_else(|| "diente_vivo.png".to_string());
     let theme = llimphi_theme::Theme::default();
 
-    // ---- Control center (izquierda) ----
-    let clock = ClockReading {
-        year: 2026,
-        month: 6,
-        day: 27,
-        weekday: 5,
-        hour: 14,
-        minute: 32,
-        second: 0,
-    };
+    // ---- Snapshot del sistema (alimenta control center + monitor) ----
+    let mut ctx = WidgetCtx::default();
+    ctx.clock = ClockReading { year: 2026, month: 6, day: 27, weekday: 5, hour: 14, minute: 32, second: 0 };
+    ctx.volume = 0.55;
+    ctx.muted = false;
+    ctx.brightness = 0.80;
+    ctx.cpu = 0.42;
+    ctx.cpu_cores_n = 8;
+    let cargas = [0.30_f32, 0.62, 0.18, 0.91, 0.44, 0.27, 0.55, 0.12];
+    for (i, c) in cargas.iter().enumerate() {
+        ctx.cpu_cores[i] = *c;
+    }
+    ctx.ram = 0.63;
+    ctx.ram_used_mb = 10_320;
+    ctx.ram_total_mb = 16_384;
+
     let extras = ControlExtras {
         battery: Some((72, false)),
         wifi: true,
@@ -81,10 +88,7 @@ fn main() {
         ],
     };
     let centro = CentroDatos {
-        clock: &clock,
-        volume: 0.55,
-        muted: false,
-        brightness: 0.80,
+        ctx: &ctx,
         extras: &extras,
         media: Some(&media),
         net: Some(&net),
@@ -97,6 +101,14 @@ fn main() {
         ..Default::default()
     })
     .children(vec![control_center_view(H as f32, &centro, &theme)]);
+
+    // ---- Monitor de sistema (centro) ----
+    let monitor = View::new(Style {
+        size: Size { width: length(340.0_f32), height: length(H as f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![sistema_monitor_view(&ctx, H as f32, &theme)]);
 
     // ---- Manifestaciones del diente (derecha) ----
     let tiles = vec![
@@ -137,7 +149,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![panel, galeria]);
+    .children(vec![panel, monitor, galeria]);
 
     render_png(root, &out);
     eprintln!("diente_vivo_shot: {out} ({W}x{H})");

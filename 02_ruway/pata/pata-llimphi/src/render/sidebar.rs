@@ -252,6 +252,11 @@ fn panel_inner(
     if crate::es_diente_vivo(kind) {
         return control_center_view(panel_h, centro, theme);
     }
+    // Monitor de sistema (`monitor`/`sistema`): CPU (promedio + cores) + RAM. A
+    // futuro suma unidades de sandokan y flota de matilda.
+    if crate::es_monitor(kind) {
+        return super::sistema_monitor_view(centro.ctx, panel_h, theme);
+    }
     // Panel RAG (preguntale a tu correo): su contenido es `rag`/`search`. Trae su
     // propio cabezal + buscador + respuesta + fuentes.
     if crate::rag::is_rag_kind(kind) {
@@ -675,7 +680,8 @@ fn tooth_icon_kind(name: &str) -> (llimphi_icons::Icon, Color) {
             (Icon::Search, Color::from_rgba8(167, 139, 250, 255)) // violeta: preguntale a tu correo
         }
         "home" | "inicio" => (Icon::Home, Color::from_rgba8(52, 211, 153, 255)),              // verde
-        "control" | "sistema" | "vivo" => (Icon::Gauge, Color::from_rgba8(45, 212, 191, 255)), // teal: diente vivo
+        "control" | "vivo" => (Icon::Gauge, Color::from_rgba8(45, 212, 191, 255)), // teal: diente vivo
+        "monitor" | "sistema" | "sysmon" => (Icon::Equalizer, Color::from_rgba8(96, 165, 250, 255)), // azul: monitor
         "tools" | "herramientas" | "settings" | "system" | "config" => {
             (Icon::Settings, Color::from_rgba8(45, 212, 191, 255)) // teal
         }

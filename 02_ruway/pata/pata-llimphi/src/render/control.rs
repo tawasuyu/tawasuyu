@@ -281,14 +281,13 @@ pub fn extras_vivos(
 /// El **control center** del sidebar: reloj grande + las filas de control, en un
 /// panel de alto completo (sin la tarjeta flotante del flyout). Reusa las mismas
 /// filas y los mismos `Msg` que el quick-settings de la barra.
-/// Los datos que alimentan el control center del sidebar. Se arma en el host
-/// (mismo paquete en winit y layer-shell) y se pasa por referencia, así el
-/// despacho del panel no acarrea media docena de parámetros sueltos.
+/// Los datos que alimentan los paneles del sidebar (control center y monitor de
+/// sistema). Se arma en el host (mismo paquete en winit y layer-shell) y se pasa
+/// por referencia, así el despacho del panel no acarrea media docena de
+/// parámetros sueltos. Lleva el `WidgetCtx` entero: el control center usa
+/// clock/volume/muted/brightness, el monitor usa cpu/cpu_cores/ram.
 pub struct CentroDatos<'a> {
-    pub clock: &'a pata_core::widget::ClockReading,
-    pub volume: f32,
-    pub muted: bool,
-    pub brightness: f32,
+    pub ctx: &'a pata_core::widget::WidgetCtx,
     pub extras: &'a ControlExtras,
     pub media: Option<&'a crate::mpris::MediaState>,
     pub net: Option<&'a crate::network::NetState>,
@@ -298,15 +297,15 @@ pub struct CentroDatos<'a> {
 }
 
 pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View<Msg> {
-    let mut hijos = vec![reloj_grande(d.clock, theme)];
+    let mut hijos = vec![reloj_grande(&d.ctx.clock, theme)];
     // "Sonando ahora" + transporte, sólo si hay un reproductor MPRIS.
     if let Some(m) = d.media.filter(|m| m.has_player) {
         hijos.push(media_row(m, theme));
     }
     // Volumen y brillo (sliders), batería (lectura).
-    let vol_glifo = if d.muted { "✕" } else { "♪" };
-    hijos.push(slider_row(vol_glifo, d.volume, theme, Msg::VolumeSet));
-    hijos.push(slider_row("☀", d.brightness, theme, Msg::BrightnessSet));
+    let vol_glifo = if d.ctx.muted { "✕" } else { "♪" };
+    hijos.push(slider_row(vol_glifo, d.ctx.volume, theme, Msg::VolumeSet));
+    hijos.push(slider_row("☀", d.ctx.brightness, theme, Msg::BrightnessSet));
     if let Some((pct, charging)) = d.extras.battery {
         let valor = if charging {
             format!("{pct}% ⚡")

@@ -1204,10 +1204,7 @@ impl LayerApp {
                 &self.control_extras,
             );
             let centro = render::CentroDatos {
-                clock: &self.ctx.clock,
-                volume: self.ctx.volume,
-                muted: self.ctx.muted,
-                brightness: self.ctx.brightness,
+                ctx: &self.ctx,
                 extras: &extras,
                 media: self.media_now.as_ref(),
                 net: self.network_now.as_ref(),

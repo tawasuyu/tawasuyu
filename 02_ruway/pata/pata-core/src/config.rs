@@ -592,6 +592,10 @@ impl Config {
                 .with("size", Prop::Str("medium".to_string()))
                 .with("orientation", Prop::Str("vertical".to_string()))
         };
+        // CPU/RAM ya no van en la barra: su lugar es el diente «Sistema» del
+        // sidebar derecho (monitor de sistema). Los widgets `cpu_meter`/`ram_meter`
+        // siguen en el catálogo —quien quiera puede ponerlos en su barra—; sólo
+        // salen del default de mirada.
         top.end = vec![
             WidgetSpec::new("astro"),
             WidgetSpec::new("moon"),
@@ -600,8 +604,6 @@ impl Config {
             meter_v("brightness"),
             WidgetSpec::new("control"),
             WidgetSpec::new("tray"),
-            meter_v("ram_meter"),
-            meter_v("cpu_meter"),
         ];
 
         // Sidebar izquierdo con dientes default (rail acoplable estilo
@@ -643,6 +645,15 @@ impl Config {
         // decisión global `dientes_outside`. Rail de herramientas a la derecha.
         let mut rrail = Surface::sidebar(Anchor::Right);
         rrail.reserve = Some(true);
+        // Ancho generoso: el monitor embebe los panels de CPU/RAM (≈320 px).
+        rrail.panel_width = 340.0;
+        // Monitor de sistema: CPU (promedio + cores) + RAM. Primer paso del control
+        // center de sistema + flota (a futuro: unidades sandokan + flota matilda).
+        rrail.tabs.push(SidebarTab::new(
+            "monitor",
+            "Sistema",
+            WidgetSpec::new("monitor"),
+        ));
         rrail.tabs.push(SidebarTab::new(
             "rag",
             "Correo IA",
@@ -979,10 +990,14 @@ mod tests {
         assert_eq!(top.kind, SurfaceKind::Bar);
         assert_eq!(top.start[0].kind, "start_button");
         assert!(top.end.iter().any(|w| w.kind == "astro"));
-        // Los medidores fijan size+orientation explícitos en el preset.
-        let cpu = top.end.iter().find(|w| w.kind == "cpu_meter").unwrap();
-        assert_eq!(cpu.str_prop("size", "?"), "medium");
-        assert_eq!(cpu.str_prop("orientation", "?"), "vertical");
+        // CPU/RAM salieron del bar del default (van al diente «Sistema» del
+        // sidebar derecho); el catálogo conserva los widgets.
+        assert!(!top.end.iter().any(|w| w.kind == "cpu_meter"));
+        assert!(!top.end.iter().any(|w| w.kind == "ram_meter"));
+        // Los medidores que quedan (volumen) fijan size+orientation explícitos.
+        let vol = top.end.iter().find(|w| w.kind == "volume").unwrap();
+        assert_eq!(vol.str_prop("size", "?"), "medium");
+        assert_eq!(vol.str_prop("orientation", "?"), "vertical");
 
         let rail = &cfg.surfaces[1];
         assert_eq!(rail.kind, SurfaceKind::Sidebar);
@@ -996,6 +1011,8 @@ mod tests {
         assert_eq!(rrail.anchor, Anchor::Right);
         assert_eq!(rrail.reserve, Some(true));
         assert!(!rrail.tabs.is_empty());
+        // El sidebar derecho trae el monitor de sistema.
+        assert!(rrail.tabs.iter().any(|t| t.content.kind == "monitor"));
 
         let shell = &cfg.surfaces[3];
         assert_eq!(shell.anchor, Anchor::Bottom);

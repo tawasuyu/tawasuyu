@@ -91,11 +91,9 @@ kind = "notifications"  # campanita: no-molestar + historial reciente (daemon pa
 [[surfaces.end]]
 kind = "tray"
 
-[[surfaces.end]]
-kind = "ram_meter"
-
-[[surfaces.end]]
-kind = "cpu_meter"
+# CPU/RAM ya no van en la barra del default: su lugar es el diente «Sistema» del
+# sidebar derecho (monitor de sistema). Los widgets `cpu_meter`/`ram_meter` siguen
+# disponibles en el catálogo — agregalos acá si los querés también en la barra.
 
 [[surfaces.end]]
 kind = "session"       # botón de power: bloquear/suspender/reiniciar/apagar/logout
@@ -150,6 +148,23 @@ content = { kind = "navigator", source = "nouser" }
 icon = "control"
 label = "Control"
 content = { kind = "control" }
+
+# --- Sidebar derecho: control center de SISTEMA + flota ---
+# El diente «Sistema» (monitor) muestra CPU (promedio + cores) y RAM, reusando
+# los panels del quick-settings. A futuro suma las unidades de sandokan (estado/
+# telemetría) y la flota de matilda (hosts/contenedores). panel_width generoso
+# porque embebe los panels de CPU/RAM (~320 px).
+[[surfaces]]
+kind = "sidebar"
+anchor = "right"
+thickness = 44
+panel_width = 340
+reserve = true
+
+[[surfaces.tabs]]
+icon = "monitor"
+label = "Sistema"
+content = { kind = "monitor" }
 
 # --- Shell: barra inferior autoescondible con el input de shuma ---
 # Al escribir, el frontend despliega el resto de shuma estilo Quake.

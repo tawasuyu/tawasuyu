@@ -101,6 +101,27 @@ fn panel_box(hijos: Vec<View<Msg>>, theme: &Theme) -> View<Msg> {
     .children(hijos)
 }
 
+/// Como [`panel_box`] pero **en flujo** (sin `Position::Absolute` ni ancho fijo):
+/// una tarjeta apilable para componer varios paneles en una columna (el monitor
+/// del sidebar). Fondo `bg_panel_alt` para que se lea como sección.
+pub(super) fn panel_box_flow(hijos: Vec<View<Msg>>, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: auto() },
+        flex_direction: FlexDirection::Column,
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(10.0)
+    .children(hijos)
+}
+
 /// Una fila "etiqueta · valor" en una ventanita (estilo "key: value").
 fn fila_kv(k: &str, v: &str, theme: &Theme) -> View<Msg> {
     let key = View::new(Style {
@@ -212,6 +233,12 @@ fn slider_vertical(
 
 /// La ventanita de CPU: agregado + una fila por core, cada una con su mini-barra.
 pub fn cpu_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
+    panel_box(cpu_panel_body(ctx, theme), theme)
+}
+
+/// El contenido del panel de CPU (sin la tarjeta flotante absoluta), para
+/// componerlo en flujo (p.ej. el monitor del sidebar).
+pub(super) fn cpu_panel_body(ctx: &WidgetCtx, theme: &Theme) -> Vec<View<Msg>> {
     let n = (ctx.cpu_cores_n as usize).min(pata_core::widget::MAX_CORES);
     let header = header_panel("CPU — uso por núcleo", theme);
     let total = fila_kv("Promedio", &format!("{:.0}%", ctx.cpu * 100.0), theme);
@@ -272,7 +299,7 @@ pub fn cpu_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
     })
     .children(filas);
 
-    panel_box(vec![header, total, lista], theme)
+    vec![header, total, lista]
 }
 
 /// Overlay (winit) de la ventanita de CPU.
@@ -282,6 +309,11 @@ pub fn cpu_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
 
 /// La ventanita de RAM: total + usado + libre.
 pub fn ram_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
+    panel_box(ram_panel_body(ctx, theme), theme)
+}
+
+/// El contenido del panel de RAM (sin la tarjeta flotante absoluta).
+pub(super) fn ram_panel_body(ctx: &WidgetCtx, theme: &Theme) -> Vec<View<Msg>> {
     let header = header_panel("Memoria — uso del sistema", theme);
     let stops = meter_stops("ram_meter");
     let barra_grande = View::new(Style {
@@ -304,7 +336,7 @@ pub fn ram_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
     ];
     let mut hijos = vec![header, barra_grande];
     hijos.extend(kv);
-    panel_box(hijos, theme)
+    hijos
 }
 
 /// Overlay (winit) de la ventanita de RAM.

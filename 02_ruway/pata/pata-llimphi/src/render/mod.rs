@@ -47,6 +47,7 @@ mod control;
 mod media;
 mod network;
 mod diente;
+mod monitor;
 mod notifications;
 mod osd;
 mod panels;
@@ -65,6 +66,7 @@ pub use panels::{
 };
 pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use diente::{diente_vivo_view, paint_reposo_halo, DienteVivo};
+pub use monitor::sistema_monitor_view;
 pub use control::{
     control_button_view, control_center_view, control_overlay, extras_vivos, read_power_night,
     set_night, set_power_profile, set_radio, CentroDatos, ControlExtras,
@@ -391,10 +393,7 @@ pub fn root(model: &Model) -> View<Msg> {
                         &model.control_extras,
                     );
                     let centro = control::CentroDatos {
-                        clock: &model.last_ctx.clock,
-                        volume: model.last_ctx.volume,
-                        muted: model.last_ctx.muted,
-                        brightness: model.last_ctx.brightness,
+                        ctx: &model.last_ctx,
                         extras: &extras,
                         media: model.media_now.as_ref(),
                         net: model.network_now.as_ref(),

@@ -776,9 +776,16 @@ pub fn config_tiene_diente_vivo(cfg: &Config) -> bool {
         .any(|t| es_diente_vivo(&t.content.kind))
 }
 
-/// Los nombres de contenido que marcan un diente vivo (es/en).
+/// Los nombres de contenido que marcan un diente **vivo** (el control center con
+/// árbitro de atención).
 pub fn es_diente_vivo(kind: &str) -> bool {
-    matches!(kind, "control" | "sistema" | "system" | "vivo")
+    matches!(kind, "control" | "vivo")
+}
+
+/// Los nombres de contenido que marcan el diente **monitor de sistema** (CPU/RAM/
+/// cores; a futuro: unidades sandokan + flota matilda).
+pub fn es_monitor(kind: &str) -> bool {
+    matches!(kind, "monitor" | "sistema" | "system" | "sysmon")
 }
 
 /// Dispara el transitorio de volumen en el diente vivo y re-resuelve su
