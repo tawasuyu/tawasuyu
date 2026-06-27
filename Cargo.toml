@@ -584,7 +584,10 @@ repository = "https://git.tawasuyu.net/tawasuyu/tawasuyu"
 # === Configuración declarativa (vocabulario de esquemas) ===
 allichay = { path = "shared/allichay" }
 marca = { path = "shared/marca" }
-mirada-fondo = { path = "02_ruway/mirada/mirada-fondo" }
+# default = [] (núcleo liviano sin vello); `bake` es opt-in. Declaramos
+# default-features = false acá para que el `default-features = false` de los
+# consumidores (splash/greeter/compositor) se honre y no quede el warning.
+mirada-fondo = { path = "02_ruway/mirada/mirada-fondo", default-features = false }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
 # === Centro de eventos (notificaciones + capturas + clipboard + …) ===
