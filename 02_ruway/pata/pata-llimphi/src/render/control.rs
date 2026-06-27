@@ -59,6 +59,14 @@ impl ControlExtras {
     }
 }
 
+/// Lee **sólo** perfil de energía + luz nocturna `(power_profile, night)`. Para
+/// refrescar el control center persistente sin re-leer batería/radios (que el
+/// host ya tiene en vivo): esos dos campos del flyout, en cambio, sólo se leían
+/// al abrirlo y quedaban viejos en el panel del diente.
+pub fn read_power_night() -> (Option<String>, bool) {
+    (read_power_profile(), night_on())
+}
+
 /// El perfil de energía activo, vía `powerprofilesctl get`. `None` si el binario
 /// no está (no hay power-profiles-daemon).
 fn read_power_profile() -> Option<String> {

@@ -1504,6 +1504,13 @@ impl App for PataApp {
                     }
                 }
                 model.cpu_temp = sampler::cpu_temp_celsius();
+                // El control center persistente necesita perfil de energía + luz
+                // nocturna frescos (el flyout los leía sólo al abrirse).
+                if config_tiene_diente_vivo(&model.cfg) {
+                    let (pp, night) = render::read_power_night();
+                    model.control_extras.power_profile = pp;
+                    model.control_extras.night = night;
+                }
                 // Diente vivo: refresca su manifestación con las señales nuevas.
                 model.actualizar_diente();
                 // Agente polkit: si llega una autenticación y no hay otra en

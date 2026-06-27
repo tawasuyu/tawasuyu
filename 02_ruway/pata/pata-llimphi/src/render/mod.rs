@@ -66,8 +66,8 @@ pub use panels::{
 pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use diente::{diente_vivo_view, DienteVivo};
 pub use control::{
-    control_button_view, control_center_view, control_overlay, extras_vivos, set_night,
-    set_power_profile, set_radio, CentroDatos, ControlExtras,
+    control_button_view, control_center_view, control_overlay, extras_vivos, read_power_night,
+    set_night, set_power_profile, set_radio, CentroDatos, ControlExtras,
 };
 pub use media::media_view;
 pub use network::{network_overlay, network_view};

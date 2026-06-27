@@ -687,6 +687,13 @@ impl LayerApp {
             }
         }
         self.cpu_temp = crate::sampler::cpu_temp_celsius();
+        // El control center persistente necesita perfil de energía + luz nocturna
+        // frescos (el flyout los leía sólo al abrirse).
+        if crate::config_tiene_diente_vivo(&self.cfg) {
+            let (pp, night) = crate::render::read_power_night();
+            self.control_extras.power_profile = pp;
+            self.control_extras.night = night;
+        }
         // Diente vivo: refresca su manifestación con las señales nuevas.
         self.actualizar_diente();
         // `WidgetCtx` ya no es `Copy` (lleva el título de la ventana enfocada),
