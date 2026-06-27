@@ -30,7 +30,7 @@ además de lo del SDD 12 (mount points vacíos, `/sbin/init`→arje-zero, `/ente
 
 | Necesidad | Path | Origen |
 |---|---|---|
-| Greeter real | `/usr/lib/arje/mirada-greeter-llimphi` (bin `mirada-greeter`) | receta/cargo tawasuyu |
+| DM real (compositor+greeter) | `/usr/lib/arje/mirada-compositor --drm --greeter` (bin `mirada-compositor`, hospeda al greeter) | receta/cargo tawasuyu |
 | Splash | `/usr/lib/arje/arje-splash` | receta/cargo tawasuyu |
 | Red mínima | `/usr/lib/arje/net-bring-up` | receta/cargo tawasuyu |
 | Lab daemon | `/usr/bin/hammerd` | hammer (ya en Stage 1) |

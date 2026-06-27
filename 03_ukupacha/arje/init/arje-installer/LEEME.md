@@ -84,7 +84,7 @@ sudo ./target/release/arje-installer to-usb \
     --bin arje-zero=./target/release/arje-zero \
     --bin agetty-tty1=/sbin/agetty \
     --bin network-up=./target/release/arje-net-bring-up \
-    --bin display-manager-mesa=./target/release/mirada-greeter-llimphi \
+    --bin display-manager-mesa=./target/release/mirada-compositor \
     --cmdline "console=tty0" \
     --yes-destroy
 ```

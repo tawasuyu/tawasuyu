@@ -360,6 +360,23 @@ pub enum DeviceClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct InterfaceId(pub [u8; 16]);
 
+/// InterfaceId canónico del **"piso" gráfico**: el display Wayland que provee el
+/// compositor (mirada) y del que dependen los clientes de la sesión. Modelar el
+/// piso como `Capability::Endpoint { interface: WAYLAND_FLOOR_INTERFACE, version }`
+/// hace el contrato uniforme: el compositor lo `provides`, los clientes lo
+/// `requires`, y el re-floor del Init los re-erige cuando el piso vuelve. Bytes =
+/// ASCII de `"mirada-wl-floor0"` (= `[109,105,114,97,100,97,45,119,108,45,102,108,111,111,114,48]`).
+pub const WAYLAND_FLOOR_INTERFACE: InterfaceId = InterfaceId(*b"mirada-wl-floor0");
+
+/// Capacidad-piso canónica: el display Wayland del compositor (versión 1).
+/// Helper para no repetir el `Endpoint { … }` en código.
+pub fn wayland_floor() -> Capability {
+    Capability::Endpoint {
+        interface: WAYLAND_FLOOR_INTERFACE,
+        version: 1,
+    }
+}
+
 // =====================================================================
 // Permisos sandbox — más alto nivel que Capability
 // =====================================================================

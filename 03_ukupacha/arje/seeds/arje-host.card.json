@@ -1,169 +1,311 @@
 {
-    "schema_version": 1,
-    "id": "01HQAR53D4M2NBV8KZTYXFHS01",
-    "lineage": null,
-    "label": "arje-host",
-    "provides": ["Spawn", "Journal"],
-    "requires": [],
-    "permissions": {
-        "networking": "full",
+  "schema_version": 1,
+  "id": "01HQAR53D4M2NBV8KZTYXFHS01",
+  "lineage": null,
+  "label": "arje-host",
+  "provides": [
+    "Spawn",
+    "Journal"
+  ],
+  "requires": [],
+  "permissions": {
+    "networking": "full",
+    "filesystem": "read-write",
+    "ipc": {
+      "allow": []
+    },
+    "processes": true
+  },
+  "soma": {
+    "namespaces": {
+      "mount": false,
+      "pid": false,
+      "net": false,
+      "uts": false,
+      "ipc": false,
+      "user": false,
+      "cgroup": false
+    },
+    "rlimits": {
+      "mem_bytes": null,
+      "nproc": null,
+      "nofile": null
+    },
+    "cgroup": {
+      "path": "arje.slice/host",
+      "cpu_weight": null,
+      "io_weight": null
+    },
+    "cpu_affinity": null
+  },
+  "payload": "Virtual",
+  "supervision": "OneShot",
+  "lifecycle": "daemon",
+  "priority": "normal",
+  "flow": {
+    "input": [],
+    "output": []
+  },
+  "genesis": [
+    {
+      "schema_version": 1,
+      "id": "01HQAR53D4M2NBV8KZTYXFHS02",
+      "label": "agetty-tty1",
+      "provides": [],
+      "requires": [],
+      "permissions": {
+        "networking": "none",
         "filesystem": "read-write",
-        "ipc": { "allow": [] },
+        "ipc": {
+          "allow": []
+        },
         "processes": true
-    },
-    "soma": {
+      },
+      "soma": {
         "namespaces": {
-            "mount": false, "pid": false, "net": false,
-            "uts": false, "ipc": false, "user": false, "cgroup": false
+          "mount": false,
+          "pid": false,
+          "net": false,
+          "uts": false,
+          "ipc": false,
+          "user": false,
+          "cgroup": false
         },
-        "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
-        "cgroup": { "path": "arje.slice/host", "cpu_weight": null, "io_weight": null },
+        "rlimits": {
+          "mem_bytes": null,
+          "nproc": null,
+          "nofile": null
+        },
+        "cgroup": {
+          "path": "arje.slice/getty",
+          "cpu_weight": null,
+          "io_weight": null
+        },
         "cpu_affinity": null
-    },
-    "payload": "Virtual",
-    "supervision": "OneShot",
-    "lifecycle": "daemon",
-    "priority": "normal",
-    "flow": { "input": [], "output": [] },
-    "genesis": [
-        {
-            "schema_version": 1,
-            "id": "01HQAR53D4M2NBV8KZTYXFHS02",
-            "label": "agetty-tty1",
-            "provides": [],
-            "requires": [],
-            "permissions": {
-                "networking": "none",
-                "filesystem": "read-write",
-                "ipc": { "allow": [] },
-                "processes": true
-            },
-            "soma": {
-                "namespaces": {
-                    "mount": false, "pid": false, "net": false,
-                    "uts": false, "ipc": false, "user": false, "cgroup": false
-                },
-                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
-                "cgroup": { "path": "arje.slice/getty", "cpu_weight": null, "io_weight": null },
-                "cpu_affinity": null
-            },
-            "payload": {
-                "Native": {
-                    "exec": "/sbin/agetty",
-                    "argv": ["--noclear", "tty1", "linux"],
-                    "envp": []
-                }
-            },
-            "supervision": { "Restart": { "initial": 200, "max": 10000 } },
-            "lifecycle": "daemon",
-            "priority": "normal",
-            "flow": { "input": [], "output": [] },
-            "genesis": []
-        },
-        {
-            "schema_version": 1,
-            "id": "01HQAR53D4M2NBV8KZTYXFHS03",
-            "label": "network-up",
-            "provides": [],
-            "requires": [],
-            "permissions": {
-                "networking": "full",
-                "filesystem": "read-only",
-                "ipc": { "allow": [] },
-                "processes": true
-            },
-            "soma": {
-                "namespaces": {
-                    "mount": false, "pid": false, "net": false,
-                    "uts": false, "ipc": false, "user": false, "cgroup": false
-                },
-                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
-                "cgroup": { "path": "arje.slice/net", "cpu_weight": null, "io_weight": null },
-                "cpu_affinity": null
-            },
-            "payload": {
-                "Native": {
-                    "exec": "/usr/lib/arje/net-bring-up",
-                    "argv": [],
-                    "envp": []
-                }
-            },
-            "supervision": "OneShot",
-            "lifecycle": "oneshot",
-            "priority": "normal",
-            "flow": { "input": [], "output": [] },
-            "genesis": []
-        },
-        {
-            "schema_version": 1,
-            "id": "01HQAR53D4M2NBV8KZTYXFHS05",
-            "label": "arje-splash",
-            "provides": [],
-            "requires": [],
-            "permissions": {
-                "networking": "none",
-                "filesystem": "read-only",
-                "ipc": { "allow": [] },
-                "processes": true
-            },
-            "soma": {
-                "namespaces": {
-                    "mount": false, "pid": false, "net": false,
-                    "uts": false, "ipc": false, "user": false, "cgroup": false
-                },
-                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
-                "cgroup": { "path": "arje.slice/splash", "cpu_weight": null, "io_weight": null },
-                "cpu_affinity": null
-            },
-            "payload": {
-                "Native": {
-                    "exec": "/usr/lib/arje/arje-splash",
-                    "argv": [],
-                    "envp": []
-                }
-            },
-            "supervision": "OneShot",
-            "lifecycle": "oneshot",
-            "priority": "high",
-            "flow": { "input": [], "output": [] },
-            "genesis": []
-        },
-        {
-            "schema_version": 1,
-            "id": "01HQAR53D4M2NBV8KZTYXFHS04",
-            "label": "display-manager-mesa",
-            "provides": [],
-            "requires": [],
-            "permissions": {
-                "networking": "loopback",
-                "filesystem": "read-write",
-                "ipc": { "allow": ["wayland"] },
-                "processes": true
-            },
-            "soma": {
-                "namespaces": {
-                    "mount": false, "pid": false, "net": false,
-                    "uts": false, "ipc": false, "user": false, "cgroup": false
-                },
-                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
-                "cgroup": { "path": "arje.slice/dm", "cpu_weight": null, "io_weight": null },
-                "cpu_affinity": null
-            },
-            "payload": {
-                "Native": {
-                    "exec": "/usr/lib/arje/mirada-greeter-llimphi",
-                    "argv": [],
-                    "envp": [
-                        ["LIBGL_DRIVERS_PATH", "/usr/lib/dri"],
-                        ["XDG_RUNTIME_DIR", "/run/arje"]
-                    ]
-                }
-            },
-            "supervision": { "Restart": { "initial": 500, "max": 30000 } },
-            "lifecycle": "daemon",
-            "priority": "high",
-            "flow": { "input": [], "output": [] },
-            "genesis": []
+      },
+      "payload": {
+        "Native": {
+          "exec": "/sbin/agetty",
+          "argv": [
+            "--noclear",
+            "tty1",
+            "linux"
+          ],
+          "envp": []
         }
-    ]
+      },
+      "supervision": {
+        "Restart": {
+          "initial": 200,
+          "max": 10000
+        }
+      },
+      "lifecycle": "daemon",
+      "priority": "normal",
+      "flow": {
+        "input": [],
+        "output": []
+      },
+      "genesis": []
+    },
+    {
+      "schema_version": 1,
+      "id": "01HQAR53D4M2NBV8KZTYXFHS03",
+      "label": "network-up",
+      "provides": [],
+      "requires": [],
+      "permissions": {
+        "networking": "full",
+        "filesystem": "read-only",
+        "ipc": {
+          "allow": []
+        },
+        "processes": true
+      },
+      "soma": {
+        "namespaces": {
+          "mount": false,
+          "pid": false,
+          "net": false,
+          "uts": false,
+          "ipc": false,
+          "user": false,
+          "cgroup": false
+        },
+        "rlimits": {
+          "mem_bytes": null,
+          "nproc": null,
+          "nofile": null
+        },
+        "cgroup": {
+          "path": "arje.slice/net",
+          "cpu_weight": null,
+          "io_weight": null
+        },
+        "cpu_affinity": null
+      },
+      "payload": {
+        "Native": {
+          "exec": "/usr/lib/arje/net-bring-up",
+          "argv": [],
+          "envp": []
+        }
+      },
+      "supervision": "OneShot",
+      "lifecycle": "oneshot",
+      "priority": "normal",
+      "flow": {
+        "input": [],
+        "output": []
+      },
+      "genesis": []
+    },
+    {
+      "schema_version": 1,
+      "id": "01HQAR53D4M2NBV8KZTYXFHS05",
+      "label": "arje-splash",
+      "provides": [],
+      "requires": [],
+      "permissions": {
+        "networking": "none",
+        "filesystem": "read-only",
+        "ipc": {
+          "allow": []
+        },
+        "processes": true
+      },
+      "soma": {
+        "namespaces": {
+          "mount": false,
+          "pid": false,
+          "net": false,
+          "uts": false,
+          "ipc": false,
+          "user": false,
+          "cgroup": false
+        },
+        "rlimits": {
+          "mem_bytes": null,
+          "nproc": null,
+          "nofile": null
+        },
+        "cgroup": {
+          "path": "arje.slice/splash",
+          "cpu_weight": null,
+          "io_weight": null
+        },
+        "cpu_affinity": null
+      },
+      "payload": {
+        "Native": {
+          "exec": "/usr/lib/arje/arje-splash",
+          "argv": [],
+          "envp": []
+        }
+      },
+      "supervision": "OneShot",
+      "lifecycle": "oneshot",
+      "priority": "high",
+      "flow": {
+        "input": [],
+        "output": []
+      },
+      "genesis": []
+    },
+    {
+      "schema_version": 1,
+      "id": "01HQAR53D4M2NBV8KZTYXFHS04",
+      "label": "display-manager-mesa",
+      "provides": [
+        {
+          "Endpoint": {
+            "interface": [
+              109,
+              105,
+              114,
+              97,
+              100,
+              97,
+              45,
+              119,
+              108,
+              45,
+              102,
+              108,
+              111,
+              111,
+              114,
+              48
+            ],
+            "version": 1
+          }
+        }
+      ],
+      "requires": [],
+      "permissions": {
+        "networking": "loopback",
+        "filesystem": "read-write",
+        "ipc": {
+          "allow": [
+            "wayland"
+          ]
+        },
+        "processes": true
+      },
+      "soma": {
+        "namespaces": {
+          "mount": false,
+          "pid": false,
+          "net": false,
+          "uts": false,
+          "ipc": false,
+          "user": false,
+          "cgroup": false
+        },
+        "rlimits": {
+          "mem_bytes": null,
+          "nproc": null,
+          "nofile": null
+        },
+        "cgroup": {
+          "path": "arje.slice/dm",
+          "cpu_weight": null,
+          "io_weight": null
+        },
+        "cpu_affinity": null
+      },
+      "payload": {
+        "Native": {
+          "exec": "/usr/lib/arje/mirada-compositor",
+          "argv": [
+            "--drm",
+            "--greeter"
+          ],
+          "envp": [
+            [
+              "LIBGL_DRIVERS_PATH",
+              "/usr/lib/dri"
+            ],
+            [
+              "XDG_RUNTIME_DIR",
+              "/run/arje"
+            ]
+          ]
+        }
+      },
+      "supervision": {
+        "Restart": {
+          "initial": 500,
+          "max": 30000
+        }
+      },
+      "lifecycle": "daemon",
+      "priority": "high",
+      "flow": {
+        "input": [],
+        "output": []
+      },
+      "genesis": []
+    }
+  ]
 }

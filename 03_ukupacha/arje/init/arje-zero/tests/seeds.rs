@@ -53,12 +53,15 @@ fn arje_tawasuyu_seed_es_valida() {
 
 #[test]
 fn tawasuyu_seed_arranca_el_dm_real_no_el_getty_stub() {
-    // El salto demo→producción: el génesis debe lanzar el greeter REAL
-    // (mirada-greeter, que toma el DRM tras el handoff del splash), no el
-    // arje-getty-stub del demo. Y el splash debe ir ANTES, con prioridad alta.
+    // El salto demo→producción: el génesis debe lanzar el DM REAL —
+    // `mirada-compositor --drm --greeter` (el camino verificado en metal del
+    // SDD-ARRANQUE-SIN-PARPADEO: el compositor toma el DRM tras el handoff del
+    // splash y hospeda al greeter como cliente) — no el arje-getty-stub del demo.
+    // El compositor PROVEE el piso (display Wayland) para los clientes de sesión.
+    // Y el splash debe ir ANTES, con prioridad alta.
     let path = seeds_dir().join("arje-tawasuyu.card.json");
     let card = EntityCard::from_path(&path).unwrap();
-    use arje_card::{Payload, Priority};
+    use arje_card::{wayland_floor, Payload, Priority};
 
     let dm = card
         .genesis
@@ -66,12 +69,24 @@ fn tawasuyu_seed_arranca_el_dm_real_no_el_getty_stub() {
         .find(|c| c.label == "display-manager-mesa")
         .expect("la seed de producción debe traer el display-manager-mesa");
     match &dm.payload {
-        Payload::Native { exec, .. } => assert!(
-            exec.ends_with("mirada-greeter-llimphi"),
-            "el DM no es el greeter real de mirada: {exec}",
-        ),
+        Payload::Native { exec, argv, .. } => {
+            assert!(
+                exec.ends_with("mirada-compositor"),
+                "el DM debe ser mirada-compositor (dueño del DRM, hospeda al greeter): {exec}",
+            );
+            assert!(
+                argv.iter().any(|a| a == "--drm") && argv.iter().any(|a| a == "--greeter"),
+                "el DM debe correr --drm --greeter (camino metal del SDD): {argv:?}",
+            );
+        }
         otro => panic!("payload del DM no es Native: {otro:?}"),
     }
+    // El compositor provee el "piso" gráfico ⇒ los clientes de sesión pueden
+    // `requires`-lo y el re-floor del Init los re-erige si el compositor cae.
+    assert!(
+        dm.provides.contains(&wayland_floor()),
+        "el DM debe proveer el piso Wayland (WAYLAND_FLOOR_INTERFACE)",
+    );
 
     let splash = card
         .genesis

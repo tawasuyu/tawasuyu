@@ -17,6 +17,8 @@ pub use card_core::{
     Capability,
     CardError,
     Card as EntityCard,
+    wayland_floor,
+    WAYLAND_FLOOR_INTERFACE,
     CgroupSpec,
     DepContract,
     DeviceClass,
