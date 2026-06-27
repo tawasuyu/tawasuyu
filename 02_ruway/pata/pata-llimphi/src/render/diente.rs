@@ -232,3 +232,33 @@ fn bateria(scene: &mut Scene, rect: PaintRect, frac: f32, cargando: bool, estado
         scene.fill(Fill::NonZero, Affine::IDENTITY, rgba(0xFF, 0xFF, 0xFF), None, &p);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pata_core::atencion::EstadoBat;
+
+    fn vivo(m: Manifestacion) -> DienteVivo<'static> {
+        DienteVivo {
+            manifest: m,
+            cava_frame: &[],
+            t: 0.0,
+        }
+    }
+
+    /// Reposo cede al icono normal (None); el resto produce un canvas (Some).
+    #[test]
+    fn reposo_es_none_el_resto_some() {
+        let theme = Theme::dark();
+        assert!(diente_vivo_view(&vivo(Manifestacion::Reposo), 20.0, &theme).is_none());
+        let activos = [
+            Manifestacion::Volumen { frac: 0.5, muted: false },
+            Manifestacion::Musica,
+            Manifestacion::Cpu { carga: 0.9 },
+            Manifestacion::Bateria { frac: 0.1, cargando: false, estado: EstadoBat::Baja },
+        ];
+        for m in activos {
+            assert!(diente_vivo_view(&vivo(m), 20.0, &theme).is_some(), "{m:?} debe pintar");
+        }
+    }
+}
