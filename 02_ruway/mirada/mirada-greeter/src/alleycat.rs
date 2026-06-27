@@ -107,18 +107,24 @@ const GROUND_V: f64 = VH * GROUND_FRAC as f64;
 /// Altura a la que el gato **alcanza y falla** el tendedero (dentro de la fachada).
 const CLOTHES_V: f64 = VH * 0.40;
 
-/// Radio de la cabeza del gato. Lo comparten **alley** y los gatos que se asoman
-/// de los barriles, para que se lean del mismo tamaño.
-const CAT_HEAD: f64 = 0.78 * U;
+/// **Unidad del gato.** El protagonista es bastante más chico que los props del
+/// callejón (barriles, perro): tiene su propia escala, menor que `U`. Achicarlo lo
+/// hace más tierno y lo iguala a los gatos que se asoman de los barriles.
+const CU: f64 = 0.6 * U;
+/// Radio de la cabeza. Lo comparten **alley** y los gatos asomados (mismo tamaño).
+const CAT_HEAD: f64 = 0.82 * CU;
 /// Cuánto está el centro del cuerpo por encima de las pezuñas.
-const BODY_ABOVE: f64 = 1.9 * U;
-const HIP_DY: f64 = 0.55 * U;
+const BODY_ABOVE: f64 = 1.65 * CU;
+const HIP_DY: f64 = 0.5 * CU;
 /// Largo de cada segmento de pata (fémur / tibia).
-const SEG: f64 = 0.85 * U;
-/// Parámetros de la marcha.
-const STRIDE: f64 = 1.15 * U;
-const LIFT: f64 = 0.6 * U;
-const DUTY: f64 = 0.62; // fracción del ciclo en apoyo
+const SEG: f64 = 0.82 * CU;
+/// Parámetros del **galope felino**: zancada larga, las patas levantan alto y hay
+/// poca fase de apoyo (mucho vuelo). El lomo se flexiona aparte (ver [`pose`]).
+const STRIDE: f64 = 1.6 * CU;
+const LIFT: f64 = 0.95 * CU;
+const DUTY: f64 = 0.40; // fracción del ciclo en apoyo
+/// Cuánto bota el cuerpo en la suspensión del galope.
+const BOUND: f64 = 0.75 * CU;
 
 fn frac(x: f64) -> f64 {
     x - x.floor()
@@ -127,9 +133,9 @@ fn frac(x: f64) -> f64 {
 /// Altura de un barril según tamaño.
 fn barrel_h(big: bool) -> f64 {
     if big {
-        2.4 * U
+        2.0 * U
     } else {
-        1.5 * U
+        1.3 * U
     }
 }
 
@@ -460,7 +466,8 @@ fn draw_barrel(scene: &mut vello::Scene, xf: Affine, b: &BarrelSnap, acc: (f32, 
 
 /// Silueta de un perro corriendo por el piso. Coordenadas virtuales vía `xf`.
 fn draw_dog(scene: &mut vello::Scene, xf: Affine, d: &DogSnap, _acc: (f32, f32, f32)) {
-    let (x, foot, s, dir) = (d.x, GROUND_V - 0.04 * VH, d.sz, d.dir as f64);
+    // Pisa el piso del callejón (mismo `GROUND_V` que el gato), no flotando.
+    let (x, foot, s, dir) = (d.x, GROUND_V, d.sz, d.dir as f64);
     let body = col(36.0, 34.0, 42.0, 255);
     let cy = foot - s * 0.55;
     let g = d.phase;
@@ -564,97 +571,160 @@ fn draw_star(scene: &mut vello::Scene, xf: Affine, c: Point, r: f64, acc: (f32, 
 
 // ═══════════════════════════════ el gato (rig) ══════════════════════════════
 
-/// Pinta el gato del snapshot, espejado según `facing`. Todo en virtual vía `xf`.
+/// Pinta el gato del snapshot: chico, **peludito** y con el **lomo flexionado** del
+/// galope. Espejado según `facing`. Todo en virtual vía `xf`.
 fn draw_cat(scene: &mut vello::Scene, xf: Affine, snap: &CatSnapshot) {
     let b = snap.body;
-    // Espejo horizontal alrededor del cuerpo cuando mira a la izquierda. Es sólo
-    // visual: el rig se resuelve siempre mirando a la derecha.
+    // Espejo horizontal alrededor del cuerpo cuando mira a la izquierda (visual).
     let cat_xf = if snap.facing < 0.0 {
         xf * Affine::translate((b.x, 0.0)) * Affine::scale_non_uniform(-1.0, 1.0) * Affine::translate((-b.x, 0.0))
     } else {
         xf
     };
 
-    let fur = col(54.0, 56.0, 66.0, 255);
-    let belly = col(78.0, 80.0, 92.0, 255);
-    let fur_dark = col(38.0, 40.0, 50.0, 255);
+    // Paleta apenas más cálida y clara que antes (más tierno).
+    let fur = col(66.0, 68.0, 82.0, 255);
+    let fur_l = col(92.0, 94.0, 110.0, 255);
+    let belly = col(120.0, 122.0, 138.0, 255);
+    let fur_dark = col(46.0, 48.0, 60.0, 255);
+    let chest = snap.chest;
+    let pelvis = snap.pelvis;
+    let head = snap.head;
 
-    // Sombra (sólo apoyado en el piso/cresta, no en el aire).
-    if snap.airborne < 0.4 && !snap.cat_behind_wall {
+    // Sombra (sólo apoyado, encoge con la suspensión).
+    if snap.airborne < 0.6 && !snap.cat_behind_wall {
         scene.fill(
             Fill::NonZero,
             xf,
-            col(0.0, 0.0, 0.0, 70),
+            col(0.0, 0.0, 0.0, 64),
             None,
-            &Ellipse::new(Point::new(b.x, snap.support_y + 0.05 * U), (2.4 * U * (1.0 - snap.airborne as f64), 0.36 * U), 0.0),
+            &Ellipse::new(Point::new(b.x, snap.support_y + 0.05 * CU), (2.1 * CU * (1.0 - snap.airborne as f64 * 0.7), 0.3 * CU), 0.0),
         );
     }
 
-    // Patas lejanas (detrás del cuerpo).
+    // Patas lejanas (detrás del cuerpo, más oscuras).
     for (hip, knee, foot, near) in &snap.legs {
         if !*near {
             draw_leg(scene, cat_xf, *hip, *knee, *foot, fur_dark);
         }
     }
 
-    // Cola (cadena Verlet) por detrás.
+    // Cola peluda (cadena Verlet) por detrás: trazo grueso + mechones a lo largo.
     if snap.tail.len() >= 2 {
         let mut path = BezPath::new();
         path.move_to(snap.tail[0]);
         for p in &snap.tail[1..] {
             path.line_to(*p);
         }
-        scene.stroke(&Stroke::new(0.42 * U), cat_xf, fur, None, &path);
-        if let Some(tip) = snap.tail.last() {
-            scene.fill(Fill::NonZero, cat_xf, belly, None, &Circle::new(*tip, 0.22 * U));
+        scene.stroke(&Stroke::new(0.5 * CU), cat_xf, fur, None, &path);
+        for (i, p) in snap.tail.iter().enumerate().skip(1) {
+            let r = (0.28 + 0.12 * (i as f64 / snap.tail.len() as f64)) * CU;
+            scene.fill(Fill::NonZero, cat_xf, if i % 2 == 0 { fur } else { fur_l }, None, &Circle::new(*p, r));
         }
     }
 
-    // Cuerpo + grupa + vientre.
-    scene.fill(Fill::NonZero, cat_xf, fur, None, &Ellipse::new(b, (2.0 * U, 0.9 * U), 0.0));
-    scene.fill(Fill::NonZero, cat_xf, fur, None, &Circle::new(Point::new(b.x - 1.5 * U, b.y - 0.05 * U), 0.95 * U));
-    scene.fill(Fill::NonZero, cat_xf, belly, None, &Ellipse::new(Point::new(b.x + 0.1 * U, b.y + 0.55 * U), (1.5 * U, 0.4 * U), 0.0));
+    // ── Torso flexionado: una silueta cerrada del lomo (arqueado) a la panza,
+    //    con el anca (grupa) y el pecho como volúmenes encima. ──
+    let arch_ctrl = Point::new((chest.x + pelvis.x) * 0.5, chest.y.min(pelvis.y) - 1.0 * CU);
+    let mut torso = BezPath::new();
+    torso.move_to(Point::new(chest.x + 0.4 * CU, chest.y - 0.55 * CU));
+    // Lomo: curva arqueada del pecho a la grupa.
+    torso.quad_to(arch_ctrl, Point::new(pelvis.x - 0.2 * CU, pelvis.y - 0.85 * CU));
+    // Vuelta por detrás del anca.
+    torso.quad_to(Point::new(pelvis.x - 1.0 * CU, pelvis.y), Point::new(pelvis.x - 0.4 * CU, pelvis.y + 0.7 * CU));
+    // Panza: leve hamaca del anca al pecho.
+    torso.quad_to(
+        Point::new((chest.x + pelvis.x) * 0.5, (chest.y + pelvis.y) * 0.5 + 1.0 * CU),
+        Point::new(chest.x + 0.5 * CU, chest.y + 0.6 * CU),
+    );
+    torso.close_path();
+    scene.fill(Fill::NonZero, cat_xf, fur, None, &torso);
 
-    // Cabeza, orejas, hocico, ojo.
-    let head = snap.head;
-    scene.fill(Fill::NonZero, cat_xf, fur, None, &Circle::new(head, 0.78 * U));
-    for ear_dx in [-0.45, 0.5] {
-        let ex = head.x + ear_dx * U;
+    // Anca y pecho como volúmenes (le dan cuerpo redondito).
+    scene.fill(Fill::NonZero, cat_xf, fur, None, &Ellipse::new(pelvis, (1.1 * CU, 0.95 * CU), 0.0));
+    scene.fill(Fill::NonZero, cat_xf, fur, None, &Ellipse::new(chest, (0.92 * CU, 0.82 * CU), 0.0));
+    scene.fill(Fill::NonZero, cat_xf, belly, None, &Ellipse::new(Point::new((chest.x + pelvis.x) * 0.5 + 0.3 * CU, (chest.y + pelvis.y) * 0.5 + 0.5 * CU), (1.1 * CU, 0.32 * CU), 0.0));
+
+    // Mechones de pelo a lo largo del lomo y el anca («peludito»).
+    fur_tufts(scene, cat_xf, chest, arch_ctrl, pelvis, fur_l);
+
+    // ── Cabeza: redondita, orejas grandes, cachetes peludos, ojos grandes. ──
+    scene.fill(Fill::NonZero, cat_xf, fur, None, &Circle::new(head, CAT_HEAD));
+    // Cachetes/ruff peludo.
+    for k in 0..7 {
+        let ang = PI * 0.35 + k as f64 / 6.0 * PI * 1.3;
+        let base = Point::new(head.x + ang.cos() * CAT_HEAD * 0.92, head.y + ang.sin() * CAT_HEAD * 0.92);
+        let tip = Point::new(head.x + ang.cos() * CAT_HEAD * 1.28, head.y + ang.sin() * CAT_HEAD * 1.2);
+        let mut t = BezPath::new();
+        let perp = Vec2::new(-ang.sin(), ang.cos()) * (CAT_HEAD * 0.16);
+        t.move_to(Point::new(base.x + perp.x, base.y + perp.y));
+        t.line_to(tip);
+        t.line_to(Point::new(base.x - perp.x, base.y - perp.y));
+        t.close_path();
+        scene.fill(Fill::NonZero, cat_xf, fur_l, None, &t);
+    }
+    // Orejas grandes (puntiagudas, con interior).
+    for (ex_f, sign) in [(-0.5, -1.0), (0.55, 1.0)] {
+        let ex = head.x + ex_f * CAT_HEAD;
         let mut ear = BezPath::new();
-        ear.move_to(Point::new(ex - 0.32 * U, head.y - 0.55 * U));
-        ear.line_to(Point::new(ex + 0.05 * U, head.y - 1.35 * U));
-        ear.line_to(Point::new(ex + 0.42 * U, head.y - 0.5 * U));
+        ear.move_to(Point::new(ex - 0.42 * CAT_HEAD, head.y - 0.5 * CAT_HEAD));
+        ear.line_to(Point::new(ex + sign * 0.12 * CAT_HEAD, head.y - 1.55 * CAT_HEAD));
+        ear.line_to(Point::new(ex + 0.5 * CAT_HEAD, head.y - 0.45 * CAT_HEAD));
         ear.close_path();
         scene.fill(Fill::NonZero, cat_xf, fur, None, &ear);
+        let mut inner = BezPath::new();
+        inner.move_to(Point::new(ex - 0.18 * CAT_HEAD, head.y - 0.55 * CAT_HEAD));
+        inner.line_to(Point::new(ex + sign * 0.1 * CAT_HEAD, head.y - 1.18 * CAT_HEAD));
+        inner.line_to(Point::new(ex + 0.28 * CAT_HEAD, head.y - 0.5 * CAT_HEAD));
+        inner.close_path();
+        scene.fill(Fill::NonZero, cat_xf, col(150.0, 120.0, 130.0, 220), None, &inner);
     }
-    scene.fill(Fill::NonZero, cat_xf, belly, None, &Circle::new(Point::new(head.x + 0.55 * U, head.y + 0.18 * U), 0.34 * U));
-    let eye = Point::new(head.x + 0.30 * U, head.y - 0.08 * U);
+    // Hocico + nariz.
+    let muzzle = Point::new(head.x + 0.62 * CAT_HEAD, head.y + 0.2 * CAT_HEAD);
+    scene.fill(Fill::NonZero, cat_xf, belly, None, &Circle::new(muzzle, 0.42 * CAT_HEAD));
+    scene.fill(Fill::NonZero, cat_xf, col(210.0, 140.0, 150.0, 255), None, &Circle::new(Point::new(muzzle.x + 0.18 * CAT_HEAD, muzzle.y - 0.05 * CAT_HEAD), 0.1 * CAT_HEAD));
+    // Ojo grande y tierno.
     let acc = snap.accent;
-    scene.fill(Fill::NonZero, cat_xf, col(acc.0, acc.1, acc.2, 70), None, &Circle::new(eye, 0.34 * U));
-    scene.fill(
-        Fill::NonZero,
-        cat_xf,
-        col((acc.0 + 180.0).min(255.0), (acc.1 + 180.0).min(255.0), (acc.2 + 180.0).min(255.0), 255),
-        None,
-        &Circle::new(eye, 0.16 * U),
-    );
+    let eye = Point::new(head.x + 0.3 * CAT_HEAD, head.y - 0.12 * CAT_HEAD);
+    scene.fill(Fill::NonZero, cat_xf, col(245.0, 245.0, 235.0, 255), None, &Ellipse::new(eye, (0.3 * CAT_HEAD, 0.36 * CAT_HEAD), 0.0));
+    scene.fill(Fill::NonZero, cat_xf, col(acc.0, acc.1, acc.2, 255), None, &Circle::new(eye, 0.2 * CAT_HEAD));
+    scene.fill(Fill::NonZero, cat_xf, col(16.0, 14.0, 18.0, 255), None, &Ellipse::new(eye, (0.07 * CAT_HEAD, 0.2 * CAT_HEAD), 0.0));
+    scene.fill(Fill::NonZero, cat_xf, col(255.0, 255.0, 255.0, 230), None, &Circle::new(Point::new(eye.x - 0.07 * CAT_HEAD, eye.y - 0.12 * CAT_HEAD), 0.06 * CAT_HEAD));
 
-    // Patas cercanas (encima del cuerpo).
+    // Patas cercanas (encima del cuerpo, más claras).
     for (hip, knee, foot, near) in &snap.legs {
         if *near {
-            draw_leg(scene, cat_xf, *hip, *knee, *foot, fur);
+            draw_leg(scene, cat_xf, *hip, *knee, *foot, fur_l);
         }
     }
 }
 
-/// Pinta una pata del rig: trazo cadera→rodilla→pezuña + pata redonda.
+/// Mechones triangulares a lo largo del lomo: dan la silueta «peludita».
+fn fur_tufts(scene: &mut vello::Scene, xf: Affine, chest: Point, ctrl: Point, pelvis: Point, color: Color) {
+    let n = 6;
+    for i in 0..n {
+        let u = (i as f64 + 0.5) / n as f64;
+        // Punto sobre la curva del lomo (Bézier cuadrática chest→ctrl→pelvis).
+        let mu = 1.0 - u;
+        let x = mu * mu * (chest.x + 0.4 * CU) + 2.0 * mu * u * ctrl.x + u * u * (pelvis.x - 0.2 * CU);
+        let y = mu * mu * (chest.y - 0.55 * CU) + 2.0 * mu * u * ctrl.y + u * u * (pelvis.y - 0.85 * CU);
+        let mut t = BezPath::new();
+        t.move_to(Point::new(x - 0.16 * CU, y + 0.05 * CU));
+        t.line_to(Point::new(x + 0.02 * CU, y - 0.4 * CU));
+        t.line_to(Point::new(x + 0.18 * CU, y + 0.05 * CU));
+        t.close_path();
+        scene.fill(Fill::NonZero, xf, color, None, &t);
+    }
+}
+
+/// Pinta una pata del rig: trazo cadera→rodilla→pezuña + patita redonda.
 fn draw_leg(scene: &mut vello::Scene, xf: Affine, hip: Point, knee: Point, foot: Point, color: Color) {
     let mut p = BezPath::new();
     p.move_to(hip);
     p.line_to(knee);
     p.line_to(foot);
-    scene.stroke(&Stroke::new(0.32 * U), xf, color, None, &p);
-    scene.fill(Fill::NonZero, xf, color, None, &Circle::new(foot, 0.2 * U));
+    scene.stroke(&Stroke::new(0.3 * CU), xf, color, None, &p);
+    scene.fill(Fill::NonZero, xf, color, None, &Circle::new(foot, 0.2 * CU));
 }
 
 // ═══════════════════════════ máquina de estados ═════════════════════════════
@@ -751,6 +821,10 @@ pub struct AlleyCatBg {
     facing: f64,
     airborne: f64,
     flail: f64,
+    /// Puntos de torso (hombro y grupa) en mundo canónico, derivados del lomo
+    /// flexionado en [`Self::pose`]. Definen dónde cuelgan patas, cabeza y cola.
+    chest: Point,
+    pelvis: Point,
     level: Level,
     mode: Mode,
     // Props.
@@ -768,27 +842,30 @@ pub struct AlleyCatBg {
     accent: (f32, f32, f32),
 }
 
-/// Una pata del rig: dos huesos resueltos por IK.
+/// Una pata del rig: dos huesos resueltos por IK. La cadera (`upper`) se reubica
+/// cada frame al hombro (`front`) o la grupa según el lomo flexionado.
 struct Leg {
     upper: BoneId,
     lower: BoneId,
-    hip_dx: f64,
+    front: bool,
+    near: bool,
     phase: f64,
     flip: bool,
-    near: bool,
 }
 
-const TAIL_N: usize = 8;
-const TAIL_SEG: f64 = 0.42 * U;
+const TAIL_N: usize = 9;
+const TAIL_SEG: f64 = 0.5 * CU;
 
 /// Posición del objetivo de la pezuña relativa a la cadera, fase `p` en `[0,1)`.
+/// Galope: apoyo corto que empuja de adelante hacia atrás, y un **vuelo largo**
+/// que la lanza bien adelante levantándola alto.
 fn gait_foot(p: f64) -> (f64, f64) {
     if p < DUTY {
         let ps = p / DUTY;
-        (STRIDE * (0.5 - ps), 0.0)
+        (STRIDE * (0.55 - 1.1 * ps), 0.0)
     } else {
         let pw = (p - DUTY) / (1.0 - DUTY);
-        (STRIDE * (pw - 0.5), -LIFT * (PI * pw).sin())
+        (STRIDE * (1.1 * pw - 0.55), -LIFT * (PI * pw).sin())
     }
 }
 
@@ -797,25 +874,30 @@ impl AlleyCatBg {
     pub fn new(bright: (u8, u8, u8)) -> Self {
         let mut skel = Skeleton::new();
         let root = skel.add_bone(None, Pose::identity());
+        // Galope: el **par trasero** empuja en fase, el **delantero** alcanza medio
+        // ciclo después; un micro-desfase near/far evita que cada par se mueva como
+        // un solo bloque. `flip` da el codo doblado al revés entre adelante y atrás
+        // (la muñeca del gato dobla hacia atrás; el corvejón, hacia adelante).
+        // (front, near, phase, flip)
         let defs = [
-            (1.30, 0.5, true, false),
-            (-1.45, 0.0, false, false),
-            (1.40, 0.0, true, true),
-            (-1.35, 0.5, false, true),
+            (true, false, 0.50 + 0.06, false),
+            (true, true, 0.50, false),
+            (false, false, 0.0 + 0.06, true),
+            (false, true, 0.0, true),
         ];
         let mut legs = Vec::with_capacity(4);
-        for (hip_dx, phase, flip, near) in defs {
+        for (front, near, phase, flip) in defs {
             let upper = skel.add_bone(
                 Some(root),
-                Pose::new(Vec2::new(hip_dx * U, HIP_DY), PI / 2.0, Vec2::new(1.0, 1.0)),
+                Pose::new(Vec2::new(0.0, HIP_DY), PI / 2.0, Vec2::new(1.0, 1.0)),
             );
             let lower = skel.add_bone(Some(upper), Pose::translate(Vec2::new(SEG, 0.0)));
-            legs.push(Leg { upper, lower, hip_dx: hip_dx * U, phase, flip, near });
+            legs.push(Leg { upper, lower, front, near, phase, flip });
         }
         skel.bind();
 
         let mut tail = Physics::new();
-        let base = Point::new(-2.0 * U, GROUND_V - BODY_ABOVE - 0.15 * U);
+        let base = Point::new(-1.2 * CU, GROUND_V - BODY_ABOVE - 0.1 * CU);
         let mut prev = tail.particle(base, true);
         for i in 1..TAIL_N {
             let p = tail.particle(Point::new(base.x - i as f64 * TAIL_SEG, base.y), false);
@@ -842,6 +924,8 @@ impl AlleyCatBg {
             facing: 1.0,
             airborne: 0.0,
             flail: 0.0,
+            chest: Point::new(0.0, 0.0),
+            pelvis: Point::new(0.0, 0.0),
             level: Level::Floor,
             mode: Mode::Pause { left: 0.6 },
             barrels: Vec::new(),
@@ -923,7 +1007,7 @@ impl AlleyCatBg {
             if self.dog.is_none() {
                 let dir = if self.chance(0.5) { 1.0 } else { -1.0 };
                 let x = if dir > 0.0 { -2.5 * U } else { VW + 2.5 * U };
-                let sz = self.rand_range(2.0, 2.5) * U;
+                let sz = self.rand_range(1.7, 2.1) * U;
                 self.dog = Some(Dog { x, dir, sz, phase: 0.0 });
             }
             self.dog_timer = self.rand_range(8.0, 16.0);
@@ -1060,7 +1144,7 @@ impl AlleyCatBg {
                 let adv = speed * dt;
                 self.body_x += dir * adv;
                 self.gait += (speed / STRIDE) * dt;
-                self.body_cy = self.support_y - BODY_ABOVE + self.bob();
+                self.body_cy = self.support_y - BODY_ABOVE - self.gait_bound();
                 if (self.body_x - to).abs() <= adv.max(2.0) {
                     self.body_x = to;
                     self.decide_grounded(tempo);
@@ -1174,9 +1258,10 @@ impl AlleyCatBg {
         }
     }
 
-    /// Dos rebotes verticales por zancada (el «bob» de la marcha).
-    fn bob(&self) -> f64 {
-        0.05 * U * (self.gait * TAU * 2.0).sin()
+    /// Suspensión del galope: el cuerpo bota hacia arriba cuando el gato se recoge
+    /// (la fase de vuelo en que las cuatro patas dejan el piso).
+    fn gait_bound(&self) -> f64 {
+        BOUND * (-(self.gait * TAU).sin()).max(0.0)
     }
 
     /// Decisión al terminar un trecho/pausa estando **apoyado** (piso o muro).
@@ -1378,37 +1463,74 @@ impl AlleyCatBg {
         self.mode = Mode::Pause { left: self.rand_range(0.4, 1.0) };
     }
 
-    /// Re-resuelve la pose del rig (cuerpo, IK de patas, cola) para el estado.
+    /// Re-resuelve la pose del rig para el estado actual. La firma del galope es el
+    /// **lomo que se flexiona**: el gato se recoge (hombro y grupa se juntan, el
+    /// lomo se arquea, sube) y se estira (se alargan, el cuerpo baja y se extiende).
+    /// Las caderas (huesos `upper`) se reubican al hombro/grupa cada frame; el IK
+    /// sólo ajusta rotaciones, así que mover su traslación mueve el origen real.
     fn pose(&mut self, dt: f64) {
         self.skel.set_pose(
             self.root,
             Pose::new(Vec2::new(self.body_x, self.body_cy), 0.0, Vec2::new(1.0, 1.0)),
         );
+
+        let s = (self.gait * TAU).sin();
+        let gather = (-s).max(0.0); // recogido (vuelo)
+        let reach = s.max(0.0); // extendido
+        let spread = 1.0 + 0.18 * (reach - gather);
+        let chest_dx = 0.95 * CU * spread;
+        let pelvis_dx = -1.2 * CU * spread;
+        let arch = gather * 0.55 * CU;
+        let chest_y = -arch * 0.35;
+        let pelvis_y = -arch * 0.55;
+        let attach = |front: bool| {
+            if front {
+                (chest_dx, chest_y)
+            } else {
+                (pelvis_dx, pelvis_y)
+            }
+        };
+        let lateral = |near: bool| if near { 0.08 } else { -0.08 } * CU;
+
+        // 1) Reubicar las caderas (hombro / grupa) y actualizar el mundo.
+        for leg in &self.legs {
+            let (ax, ay) = attach(leg.front);
+            self.skel.set_pose(
+                leg.upper,
+                Pose::new(Vec2::new(ax + lateral(leg.near), HIP_DY + ay), PI / 2.0, Vec2::new(1.0, 1.0)),
+            );
+        }
         self.skel.update();
 
+        // 2) Resolver IK de cada pata a su objetivo del galope.
         let a = self.airborne.clamp(0.0, 1.0);
         for leg in &self.legs {
+            let (ax, _) = attach(leg.front);
+            let lat = lateral(leg.near);
             let p = frac(self.gait + leg.phase);
             let (rx, ry) = gait_foot(p);
-            let grounded = Point::new(self.body_x + leg.hip_dx + rx, self.support_y + ry);
+            let grounded = Point::new(self.body_x + ax + lat + rx, self.support_y + ry);
             // En el aire las patas se recogen bajo el vientre; las delanteras se
-            // estiran hacia arriba con `flail` (manotean el tendedero / forcejean).
-            let front = leg.hip_dx > 0.0;
-            let tuck_lift = if front { self.flail * 1.6 * U } else { self.flail * 0.4 * U };
-            let tuck = Point::new(self.body_x + leg.hip_dx * 0.55, self.body_cy + 1.3 * U - tuck_lift);
+            // estiran con `flail` (manotean el tendedero / forcejean).
+            let tuck_lift = if leg.front { self.flail * 1.6 * CU } else { self.flail * 0.4 * CU };
+            let tuck = Point::new(self.body_x + ax * 0.6 + lat, self.body_cy + 1.05 * CU - tuck_lift);
             let target = Point::new(grounded.x * (1.0 - a) + tuck.x * a, grounded.y * (1.0 - a) + tuck.y * a);
             solve_two_bone_ik(&mut self.skel, leg.upper, leg.lower, Vec2::new(SEG, 0.0), target, leg.flip);
         }
 
+        // Puntos de torso en mundo canónico (para el dibujo del cuerpo flexionado).
+        self.chest = Point::new(self.body_x + chest_dx, self.body_cy + chest_y);
+        self.pelvis = Point::new(self.body_x + pelvis_dx, self.body_cy + pelvis_y);
+
         // Cola: ancla en la grupa; viento senoidal + gravedad → ondea por detrás.
-        let rump = Point::new(self.body_x - 2.0 * U, self.body_cy - 0.15 * U);
+        let rump = Point::new(self.pelvis.x - 0.35 * CU, self.pelvis.y - 0.05 * CU);
         if let Some(p0) = self.tail.particles.first_mut() {
             p0.pos = rump;
             p0.prev = rump;
         }
         if dt > 0.0 {
-            let wind = (self.t * 2.2).sin() * 420.0 + (self.t * 3.7).sin() * 150.0;
-            self.tail.gravity = Vec2::new(wind, 260.0);
+            let wind = (self.t * 2.2).sin() * 360.0 + (self.t * 3.7).sin() * 140.0;
+            self.tail.gravity = Vec2::new(wind, 230.0);
             self.tail.step(dt, 6);
         }
     }
@@ -1425,13 +1547,16 @@ impl AlleyCatBg {
                 (hip, knee, foot, l.near)
             })
             .collect();
-        let head_nod = 0.04 * U * (self.gait * TAU).sin();
+        let head_nod = 0.05 * CU * (self.gait * TAU).sin();
         let cat_hidden = matches!(self.mode, Mode::Gone { .. } | Mode::Caught { .. });
         let cat_behind_wall = matches!(self.mode, Mode::Behind { .. });
         CatSnapshot {
             legs,
             body: Point::new(self.body_x, self.body_cy),
-            head: Point::new(self.body_x + 2.1 * U, self.body_cy - 0.7 * U + head_nod),
+            chest: self.chest,
+            pelvis: self.pelvis,
+            // La cabeza cuelga del hombro, adelante y arriba.
+            head: Point::new(self.chest.x + 1.05 * CU, self.chest.y - 0.55 * CU + head_nod),
             tail: self.tail.positions(),
             accent: self.accent,
             facing: self.facing as f32,
@@ -1486,6 +1611,9 @@ pub struct CatSnapshot {
     /// Por pata: `(cadera, rodilla, pezuña, cercana)`.
     pub legs: Vec<(Point, Point, Point, bool)>,
     pub body: Point,
+    /// Hombro y grupa del torso flexionado.
+    pub chest: Point,
+    pub pelvis: Point,
     pub head: Point,
     pub tail: Vec<Point>,
     pub accent: (f32, f32, f32),
@@ -1580,64 +1708,62 @@ pub fn paint(
     paint_cat_idle(scene, xf, VW * 0.45, GROUND_V, step as f64, acc);
 }
 
-/// Gato simple por senos para el fallback (sin rig): cuerpo, cabeza, cola, patas.
+/// Gato chico parado para el fallback (sin rig): cuerpo redondito, cabeza grande,
+/// orejas y ojo tierno. Mismo `CU` y paleta que el gato vivo.
 fn paint_cat_idle(scene: &mut vello::Scene, xf: Affine, fx: f64, support: f64, step: f64, acc: (f32, f32, f32)) {
-    let fur = col(54.0, 56.0, 66.0, 255);
-    let belly = col(78.0, 80.0, 92.0, 255);
-    let fur_dark = col(38.0, 40.0, 50.0, 255);
+    let fur = col(66.0, 68.0, 82.0, 255);
+    let fur_l = col(92.0, 94.0, 110.0, 255);
+    let belly = col(120.0, 122.0, 138.0, 255);
+    let fur_dark = col(46.0, 48.0, 60.0, 255);
     let bx = fx;
     let by = support - BODY_ABOVE;
 
-    scene.fill(Fill::NonZero, xf, col(0.0, 0.0, 0.0, 70), None, &Ellipse::new(Point::new(bx, support + 0.05 * U), (2.4 * U, 0.36 * U), 0.0));
+    scene.fill(Fill::NonZero, xf, col(0.0, 0.0, 0.0, 64), None, &Ellipse::new(Point::new(bx, support + 0.05 * CU), (2.0 * CU, 0.3 * CU), 0.0));
 
     let s1 = step.sin();
     let s2 = (step + PI).sin();
-    for (dx, sw) in [(1.35, s2), (-1.45, s1)] {
-        let hip = Point::new(bx + dx * U, by + 0.55 * U);
-        let foot = Point::new(hip.x + sw * 0.3 * U, support);
-        let knee = Point::new((hip.x + foot.x) * 0.5 + 0.18 * U, (hip.y + foot.y) * 0.5);
+    for (dx, sw) in [(1.05, s2), (-1.1, s1)] {
+        let hip = Point::new(bx + dx * CU, by + 0.5 * CU);
+        let foot = Point::new(hip.x + sw * 0.2 * CU, support);
+        let knee = Point::new((hip.x + foot.x) * 0.5 + 0.15 * CU, (hip.y + foot.y) * 0.5);
         let mut p = BezPath::new();
         p.move_to(hip);
         p.line_to(knee);
         p.line_to(foot);
-        scene.stroke(&Stroke::new(0.32 * U), xf, fur_dark, None, &p);
+        scene.stroke(&Stroke::new(0.3 * CU), xf, fur_dark, None, &p);
     }
 
     let tail_sway = (step * 1.3).sin();
     let mut tail = BezPath::new();
-    tail.move_to(Point::new(bx - 2.0 * U, by - 0.1 * U));
+    tail.move_to(Point::new(bx - 1.3 * CU, by - 0.1 * CU));
     tail.quad_to(
-        Point::new(bx - 3.3 * U, by - (0.9 + 0.5 * tail_sway) * U),
-        Point::new(bx - 3.7 * U + 0.6 * U * tail_sway, by - (2.2 + 0.4 * tail_sway) * U),
+        Point::new(bx - 2.3 * CU, by - (0.7 + 0.5 * tail_sway) * CU),
+        Point::new(bx - 2.6 * CU + 0.6 * CU * tail_sway, by - (1.7 + 0.4 * tail_sway) * CU),
     );
-    scene.stroke(&Stroke::new(0.42 * U), xf, fur, None, &tail);
+    scene.stroke(&Stroke::new(0.5 * CU), xf, fur, None, &tail);
 
-    scene.fill(Fill::NonZero, xf, fur, None, &Ellipse::new(Point::new(bx, by), (2.0 * U, 0.9 * U), 0.0));
-    scene.fill(Fill::NonZero, xf, fur, None, &Circle::new(Point::new(bx - 1.5 * U, by - 0.05 * U), 0.95 * U));
-    scene.fill(Fill::NonZero, xf, belly, None, &Ellipse::new(Point::new(bx + 0.1 * U, by + 0.55 * U), (1.5 * U, 0.4 * U), 0.0));
+    scene.fill(Fill::NonZero, xf, fur, None, &Ellipse::new(Point::new(bx, by), (1.5 * CU, 0.85 * CU), 0.0));
+    scene.fill(Fill::NonZero, xf, fur, None, &Circle::new(Point::new(bx - 1.1 * CU, by - 0.05 * CU), 0.9 * CU));
+    scene.fill(Fill::NonZero, xf, belly, None, &Ellipse::new(Point::new(bx + 0.1 * CU, by + 0.5 * CU), (1.1 * CU, 0.32 * CU), 0.0));
 
-    let hx = bx + 2.1 * U;
-    let hy = by - 0.7 * U;
-    scene.fill(Fill::NonZero, xf, fur, None, &Circle::new(Point::new(hx, hy), 0.78 * U));
-    for ear_dx in [-0.45, 0.5] {
-        let ex = hx + ear_dx * U;
+    let hx = bx + 1.6 * CU;
+    let hy = by - 0.55 * CU;
+    scene.fill(Fill::NonZero, xf, fur, None, &Circle::new(Point::new(hx, hy), CAT_HEAD));
+    for (ex_f, sign) in [(-0.5, -1.0), (0.55, 1.0)] {
+        let ex = hx + ex_f * CAT_HEAD;
         let mut ear = BezPath::new();
-        ear.move_to(Point::new(ex - 0.32 * U, hy - 0.55 * U));
-        ear.line_to(Point::new(ex + 0.05 * U, hy - 1.35 * U));
-        ear.line_to(Point::new(ex + 0.42 * U, hy - 0.5 * U));
+        ear.move_to(Point::new(ex - 0.42 * CAT_HEAD, hy - 0.5 * CAT_HEAD));
+        ear.line_to(Point::new(ex + sign * 0.12 * CAT_HEAD, hy - 1.55 * CAT_HEAD));
+        ear.line_to(Point::new(ex + 0.5 * CAT_HEAD, hy - 0.45 * CAT_HEAD));
         ear.close_path();
         scene.fill(Fill::NonZero, xf, fur, None, &ear);
     }
-    scene.fill(Fill::NonZero, xf, belly, None, &Circle::new(Point::new(hx + 0.55 * U, hy + 0.18 * U), 0.34 * U));
-    let eye = Point::new(hx + 0.30 * U, hy - 0.08 * U);
-    scene.fill(Fill::NonZero, xf, col(acc.0, acc.1, acc.2, 70), None, &Circle::new(eye, 0.34 * U));
-    scene.fill(
-        Fill::NonZero,
-        xf,
-        col((acc.0 + 180.0).min(255.0), (acc.1 + 180.0).min(255.0), (acc.2 + 180.0).min(255.0), 255),
-        None,
-        &Circle::new(eye, 0.16 * U),
-    );
+    let _ = fur_l;
+    scene.fill(Fill::NonZero, xf, belly, None, &Circle::new(Point::new(hx + 0.62 * CAT_HEAD, hy + 0.2 * CAT_HEAD), 0.42 * CAT_HEAD));
+    let eye = Point::new(hx + 0.3 * CAT_HEAD, hy - 0.12 * CAT_HEAD);
+    scene.fill(Fill::NonZero, xf, col(245.0, 245.0, 235.0, 255), None, &Ellipse::new(eye, (0.3 * CAT_HEAD, 0.36 * CAT_HEAD), 0.0));
+    scene.fill(Fill::NonZero, xf, col(acc.0, acc.1, acc.2, 255), None, &Circle::new(eye, 0.2 * CAT_HEAD));
+    scene.fill(Fill::NonZero, xf, col(16.0, 14.0, 18.0, 255), None, &Ellipse::new(eye, (0.07 * CAT_HEAD, 0.2 * CAT_HEAD), 0.0));
 }
 
 #[cfg(test)]
@@ -1703,5 +1829,36 @@ mod tests {
         assert!(vio_oculto, "el gato desaparece y reaparece");
         assert!(vio_perro, "sale el perro");
         assert!(vio_zapato, "las ventanas tiran zapatos");
+    }
+
+    #[test]
+    fn galope_planta_pies_y_tiene_suspension() {
+        // Mientras corre por el piso, el rig de galope debe (a) plantar pezuñas
+        // cerca de la línea de apoyo y (b) botar el cuerpo (suspensión).
+        let mut bg = AlleyCatBg::new((200, 160, 255));
+        let mut min_cy = f64::INFINITY;
+        let mut max_cy = f64::NEG_INFINITY;
+        let mut planto = false;
+        let mut estuvo_corriendo = false;
+        for _ in 0..4000 {
+            bg.step(1.0 / 30.0);
+            // Sólo medir cuando corre por el piso, bien apoyado.
+            let corriendo = matches!(bg.mode, Mode::Walk { .. })
+                && (bg.support_y - GROUND_V).abs() < 1.0
+                && bg.airborne < 0.05;
+            if !corriendo {
+                continue;
+            }
+            estuvo_corriendo = true;
+            min_cy = min_cy.min(bg.body_cy);
+            max_cy = max_cy.max(bg.body_cy);
+            let s = bg.snapshot();
+            if s.legs.iter().any(|(_, _, foot, _)| (foot.y - GROUND_V).abs() < 0.35 * CU) {
+                planto = true;
+            }
+        }
+        assert!(estuvo_corriendo, "el gato debe correr por el piso en algún momento");
+        assert!(planto, "alguna pezuña se planta cerca del piso al galopar");
+        assert!(max_cy - min_cy > 0.15 * CU, "el cuerpo bota (suspensión del galope): rango {}", max_cy - min_cy);
     }
 }
