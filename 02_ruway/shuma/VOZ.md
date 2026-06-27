@@ -88,14 +88,22 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
     el contrato model-agnostic (gemelo del `Provider` de verbo).
   - máquina de estados `Dormido → Despierto → Dictando` (+ detección del
     llamado, + timeout de re-dormida).
+  - **VAD + segmentador** (`vad`): trait `DetectorVoz` (¿voz en este frame? →
+    prob) con default `DetectorEnergia` (RMS, sin modelo) — Silero entra como
+    otra impl del trait. `Segmentador` puro convierte el flujo de probs en
+    bordes de utterance (`PulsoVad::{Inicio,Sigue,Fin}`) con debounce de
+    arranque + colgado (hangover). `Vad` junta detector+segmentador+acumulación
+    y entrega el `Audio` completo al cerrar, listo para el STT.
   - **política de lectura** discriminada: el consumidor mapea su tipo de bloque
     → `TipoBloque` (sólo la prosa se vocaliza).
   - clasificador prosódico determinista sobre features de f0.
   - sin sockets, sin `tokio`, sin cpal.
 - **`rimay-voz-mock` (hecho):** STT/TTS deterministas sin modelo (CI/demos).
 - **`rimay-voz` (hecho, fachada):** re-exporta core+mock, constructores
-  `stt_mock`/`tts_mock`, convención del socket `voz.sock`. Demo canónico del
-  lazo completo: `cargo run -p rimay-voz --example escucha_mock`.
+  `stt_mock`/`tts_mock`, convención del socket `voz.sock`. Demos canónicos:
+  `cargo run -p rimay-voz --example escucha_mock` (lazo desde transcripts) y
+  `--example pipeline_vad` (upstream completo: frames → VAD → STT → máquina,
+  certificado por texto).
 - **`VozConfig` (hecho, selector híbrido):** el híbrido configurable, gemelo de
   `pluma-llm::from_env`. STT y TTS se eligen por separado (`Backend::{Mock,
   Local,Nube}`), vía `RIMAY_VOZ_STT`/`RIMAY_VOZ_TTS` (`"local"`,
@@ -126,13 +134,20 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
 - **`rimay-voz-{whisper,piper,…}` (falta):** backends **locales** reales que
   reemplazan el mock dentro del daemon — entran como variantes del `--stt`/
   `--tts` del binario, sin tocar protocolo ni cliente.
-- **host de shuma (falta, en `shuma-agente-host`):** corre cpal + VAD; consume
-  `rimay-voz` y dispatcha `Msg` al update Elm. Lo único «de shuma»: mapear
-  `shuma_agente::BloqueSalida` → `rimay_voz::TipoBloque`.
+- **host de shuma (falta, en `shuma-agente-host`):** corre cpal y empuja los
+  frames al `Vad` (la *lógica* de VAD/segmentación ya está en core; falta sólo
+  la captura y, si se quiere robustez, swap del `DetectorEnergia` por Silero).
+  Consume `rimay-voz` y dispatcha `Msg` al update Elm. Lo único «de shuma»:
+  mapear `shuma_agente::BloqueSalida` → `rimay_voz::TipoBloque`. El cableado
+  upstream (frames → VAD → STT → máquina) ya está demostrado en
+  `examples/pipeline_vad`.
 
 ## Dependencias candidatas
 
-- **VAD:** `voice_activity_detector` (Silero ONNX) — robusto; alt. `webrtc-vad`.
+- **VAD:** la *lógica* (segmentación + trait `DetectorVoz`) ya vive en
+  `rimay-voz-core::vad`, con default de energía. Para robustez, una impl Silero
+  (`voice_activity_detector`, ONNX) entra como otro `DetectorVoz`; alt.
+  `webrtc-vad`.
 - **STT local:** `whisper-rs` (bindings whisper.cpp). **Nube:** ✅ aterrizado en
   `rimay-voz-nube` (shape OpenAI sobre `reqwest`) — el gap de "pluma-llm no tiene
   STT" se resolvió con fachada propia, no estirando `ChatClient`.

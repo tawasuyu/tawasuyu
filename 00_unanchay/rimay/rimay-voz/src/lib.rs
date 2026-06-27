@@ -40,9 +40,10 @@ mod config;
 pub use config::{Backend, VozConfig};
 
 pub use rimay_voz_core::{
-    clasificar, debe_leer, detectar_llamado, lectura, maquina, prosodia, Audio, ConfigVoz,
-    EstadoVoz, Evento, Intencion, Locutor, Maquina, Politica, Rasgos, Reaccion, TipoBloque,
-    Transcripcion, Transcriptor, VozError,
+    clasificar, debe_leer, detectar_llamado, lectura, maquina, prosodia, vad, Audio, ConfigVad,
+    ConfigVoz, DetectorEnergia, DetectorVoz, EstadoVoz, Evento, Intencion, Locutor, Maquina,
+    Politica, PulsoVad, Rasgos, Reaccion, SalidaVad, Segmentador, TipoBloque, Transcripcion,
+    Transcriptor, Vad, VozError,
 };
 pub use rimay_voz_daemon::{Daemon, DaemonClient};
 pub use rimay_voz_mock::{LocutorMock, TranscriptorMock};

@@ -10,6 +10,9 @@
 //! manos-libres** — pura, sync y testeable, sin tocar audio ni red (el host
 //! corre cpal/VAD/STT/TTS y la alimenta):
 //!
+//! - [`vad`] — la primera compuerta: detector de voz por frame (trait +
+//!   default de energía, Silero después) + segmentador de utterances. Entrega
+//!   el fragmento de audio que va al STT. **Nada pesado corre hasta que hay voz.**
 //! - [`maquina`] — la escucha como autómata `Dormido → Despierto → Dictando`,
 //!   con detección del llamado. **Nada cruza al consumidor hasta el llamado.**
 //! - [`lectura`] — política de TTS *discriminado*: se vocaliza sólo la prosa,
@@ -23,8 +26,12 @@ pub mod lectura;
 pub mod maquina;
 pub mod prosodia;
 mod traits;
+pub mod vad;
 
 pub use lectura::{debe_leer, Politica, TipoBloque};
 pub use maquina::{detectar_llamado, ConfigVoz, EstadoVoz, Evento, Maquina, Reaccion};
 pub use prosodia::{clasificar, Intencion, Rasgos};
 pub use traits::{Audio, Locutor, Transcriptor, Transcripcion, VozError};
+pub use vad::{
+    ConfigVad, DetectorEnergia, DetectorVoz, PulsoVad, SalidaVad, Segmentador, Vad,
+};

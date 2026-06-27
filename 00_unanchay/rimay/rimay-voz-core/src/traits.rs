@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Audio PCM mono de 16 bits + su frecuencia de muestreo. Es el formato que
 /// cruza la frontera entre el host (cpal) y los backends de voz.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Audio {
     /// Muestras PCM mono, 16-bit con signo.
     pub muestras: Vec<i16>,
