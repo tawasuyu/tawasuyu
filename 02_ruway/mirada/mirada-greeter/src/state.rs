@@ -127,6 +127,10 @@ pub struct GreeterState {
     /// sobre `anim`). `None` = usar la animación procedural. Configurable con
     /// `lottie = /ruta` en el archivo o `MIRADA_GREETER_LOTTIE`.
     pub lottie_path: Option<String>,
+    /// Ruta a un proyecto «rive» (`.ron` de llimphi-anim-studio) a usar como
+    /// fondo vivo. Toma precedencia justo debajo del Lottie. Configurable con
+    /// `rive = /ruta.ron` o `MIRADA_GREETER_RIVE`.
+    pub rive_path: Option<String>,
 }
 
 impl Default for GreeterState {
@@ -141,6 +145,7 @@ impl Default for GreeterState {
             // El default unificado de las tres superficies: la chakana de marca.
             anim: BgAnim::Chakana,
             lottie_path: None,
+            rive_path: None,
         }
     }
 }
@@ -196,6 +201,9 @@ impl GreeterState {
                 "lottie" => {
                     self.lottie_path = if v.is_empty() { None } else { Some(v.to_string()) };
                 }
+                "rive" => {
+                    self.rive_path = if v.is_empty() { None } else { Some(v.to_string()) };
+                }
                 _ => {}
             }
         }
@@ -220,6 +228,9 @@ impl GreeterState {
         if let Ok(v) = std::env::var("MIRADA_GREETER_LOTTIE") {
             self.lottie_path = if v.is_empty() { None } else { Some(v) };
         }
+        if let Ok(v) = std::env::var("MIRADA_GREETER_RIVE") {
+            self.rive_path = if v.is_empty() { None } else { Some(v) };
+        }
     }
 
     /// Serializa a `clave = valor`.
@@ -241,6 +252,9 @@ impl GreeterState {
         // borrarla al re-guardar el estado tras un login.
         if let Some(p) = &self.lottie_path {
             s.push_str(&format!("lottie = {p}\n"));
+        }
+        if let Some(p) = &self.rive_path {
+            s.push_str(&format!("rive = {p}\n"));
         }
         s
     }
@@ -306,6 +320,7 @@ mod tests {
             rain_color: RainColor::Amber,
             anim: BgAnim::Stars,
             lottie_path: None,
+            rive_path: None,
         };
         let mut back = GreeterState::default();
         back.merge_text(&st.to_text());

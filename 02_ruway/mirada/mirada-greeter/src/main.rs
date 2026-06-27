@@ -20,10 +20,13 @@ mod arje_session;
 mod aurora;
 mod bg;
 mod bg_physics;
+mod cava;
 mod fire;
 mod lightning;
+mod mpris;
 mod plasma;
 mod rain;
+mod rive;
 mod sessions;
 mod stars;
 mod state;
@@ -134,6 +137,32 @@ fn shot_monitors() -> (Vec<MonRect>, usize) {
         .unwrap_or((Vec::new(), 0))
 }
 
+/// Estado de reproductor simulado para certificar el cuadro de música del lock
+/// sin `playerctl`. `MIRADA_SHOT_MEDIA="Player|artista — título"` (o `"1"` para
+/// un default). `None` desactiva el cuadro en el shot.
+fn shot_media() -> Option<mpris::MediaState> {
+    let v = std::env::var("MIRADA_SHOT_MEDIA").ok()?;
+    let (player, title) = v
+        .split_once('|')
+        .unwrap_or(("Spotify", "Aphex Twin — Avril 14th"));
+    Some(mpris::MediaState {
+        has_player: true,
+        playing: true,
+        player: mpris::nice_player(player),
+        title: title.trim().to_string(),
+    })
+}
+
+/// Un cuadro de cava de muestra (24 bandas, onda suave) para el shot del lock.
+fn shot_cava_frame() -> Vec<f32> {
+    (0..24)
+        .map(|i| {
+            let p = i as f32 / 24.0;
+            (0.25 + 0.7 * (p * std::f32::consts::PI * 2.4).sin().abs()).clamp(0.05, 1.0)
+        })
+        .collect()
+}
+
 /// Construye un modelo de muestra (usuario+contraseña tecleados) y vuelca
 /// `Greeter::view` a un PNG, para revisar el layout del login sin loguearse.
 fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
@@ -192,6 +221,8 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         anim: saved.anim,
         lottie_bg: lottie_bg_from(saved.lottie_path.as_deref()),
         lottie_path: saved.lottie_path.clone(),
+        rive_bg: rive_bg_from(saved.rive_path.as_deref()),
+        rive_path: saved.rive_path.clone(),
         physics_bg: matches!(saved.anim, state::BgAnim::Physics)
             .then(|| bg_physics::PhysicsBg::new(bright_base(saved.rain_color))),
         alleycat_bg: matches!(saved.anim, state::BgAnim::AlleyCat)
@@ -203,6 +234,13 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         card_anim: 1.0,
         hosted: shot_hosted,
         hosted_active: shot_hosted_active,
+        // `--shot` no arranca cava/playerctl (procesos del host); para certificar
+        // el cuadro de música sin reproductor real, MIRADA_SHOT_MEDIA="Player|pista"
+        // (o "1" para un default) simula un estado y un cuadro de cava.
+        cava: None,
+        cava_frame: shot_media().as_ref().map(|_| shot_cava_frame()).unwrap_or_default(),
+        mpris: None,
+        media: shot_media(),
     };
     // El fondo físico tiene estado: en vivo se stepea en `RainTick`. Para el shot
     // headless lo avanzamos a `MIRADA_SHOT_T` segundos, si no queda en bind pose.
@@ -411,6 +449,11 @@ fn lottie_bg_from(path: Option<&str>) -> Option<llimphi_lottie::LottieAsset> {
         .ok()
 }
 
+/// Carga el proyecto «rive» (`.ron`) configurado como fondo (si hay y parsea).
+fn rive_bg_from(path: Option<&str>) -> Option<rive::RiveBg> {
+    rive::RiveBg::load(path?)
+}
+
 struct Model {
     auth: DynAuth,
     user: TextInputState,
@@ -447,6 +490,11 @@ struct Model {
     /// Ruta del Lottie de fondo (preservada para re-guardar el estado sin
     /// borrar la config del usuario).
     lottie_path: Option<String>,
+    /// Fondo «rive» cargado (de `rive = …`): proyecto del studio reproducido en
+    /// vivo. Precedencia justo debajo del Lottie. `None` si no se configuró/falló.
+    rive_bg: Option<rive::RiveBg>,
+    /// Ruta del rive de fondo (preservada para re-guardar el estado).
+    rive_path: Option<String>,
     /// Fondo físico vivo (`bg = physics`): tentáculos esqueletales que se
     /// stepean en `RainTick`. `None` salvo que se haya elegido.
     physics_bg: Option<bg_physics::PhysicsBg>,
@@ -476,6 +524,15 @@ struct Model {
     /// Id de la sesión hosteada activa (la que está bloqueada) — no se ofrece
     /// como destino de salto a sí misma.
     hosted_active: u32,
+    /// Visualizador de audio (binario `cava`) en su propio hilo. `None` salvo
+    /// en lock (el cuadro de música sólo vive ahí).
+    cava: Option<cava::CavaHandle>,
+    /// Último cuadro del cava (una barra por banda, `0..1`).
+    cava_frame: Vec<f32>,
+    /// Feed MPRIS (reproductor activo) en su propio hilo. `None` salvo en lock.
+    mpris: Option<mpris::MprisHandle>,
+    /// Último estado del reproductor — alimenta el cuadro «quién suena».
+    media: Option<mpris::MediaState>,
 }
 
 /// Rect de un monitor en coordenadas de la ventana del greeter (px):
@@ -533,6 +590,10 @@ enum Msg {
     SetLayout(Vec<MonRect>, usize),
     /// Elegir la animación de fondo (desde el menú «Fondo»).
     SetAnim(state::BgAnim),
+    /// Transporte del cuadro de música del lock (vía `playerctl`).
+    MediaPrev,
+    MediaPlayPause,
+    MediaNext,
 }
 
 // ---------------------------------------------------------------------
@@ -630,6 +691,8 @@ impl App for Greeter {
             anim: saved.anim,
             lottie_bg: lottie_bg_from(saved.lottie_path.as_deref()),
             lottie_path: saved.lottie_path.clone(),
+            rive_bg: rive_bg_from(saved.rive_path.as_deref()),
+            rive_path: saved.rive_path.clone(),
             physics_bg: matches!(saved.anim, state::BgAnim::Physics)
                 .then(|| bg_physics::PhysicsBg::new(bright_base(saved.rain_color))),
             alleycat_bg: matches!(saved.anim, state::BgAnim::AlleyCat)
@@ -642,6 +705,12 @@ impl App for Greeter {
             mode,
             hosted: Vec::new(),
             hosted_active: 0,
+            // El cuadro de música (cava + mpris) sólo vive en el lock: arrancamos
+            // sus feeds de host únicamente ahí. En login no se gasta ni un hilo.
+            cava: matches!(mode, GreeterMode::Lock).then(|| cava::CavaHandle::spawn(24)),
+            cava_frame: Vec::new(),
+            mpris: matches!(mode, GreeterMode::Lock).then(mpris::MprisHandle::spawn),
+            media: None,
         }
     }
 
@@ -767,6 +836,7 @@ impl App for Greeter {
                     rain_color: m.rain_color,
                     anim: m.anim,
                     lottie_path: m.lottie_path.clone(),
+                    rive_path: m.rive_path.clone(),
                 }
                 .save();
                 let ticket = SessionTicket::new(user);
@@ -881,7 +951,22 @@ impl App for Greeter {
                 if m.card_anim < 1.0 {
                     m.card_anim = (m.card_anim + 0.033 / 0.28).min(1.0);
                 }
+                // Drena los feeds del cuadro de música del lock (cava ~30 fps,
+                // mpris ~1.5 s). `latest` no bloquea; sin novedad queda igual.
+                if let Some(cv) = &m.cava {
+                    if let Some(frame) = cv.latest() {
+                        m.cava_frame = frame;
+                    }
+                }
+                if let Some(mp) = &m.mpris {
+                    if let Some(st) = mp.latest() {
+                        m.media = Some(st);
+                    }
+                }
             }
+            Msg::MediaPrev => mpris::previous(),
+            Msg::MediaPlayPause => mpris::play_pause(),
+            Msg::MediaNext => mpris::next(),
             Msg::SetLayout(mons, active) => {
                 let active = if mons.is_empty() {
                     0
@@ -905,6 +990,8 @@ impl App for Greeter {
                 // Desactivamos el Lottie y reconstruimos/limpiamos el físico.
                 m.lottie_bg = None;
                 m.lottie_path = None;
+                m.rive_bg = None;
+                m.rive_path = None;
                 // Paleta por defecto para los fondos que piden un tono propio
                 // (el fuego en verde parece pasto; el plasma luce en cian).
                 match a {
@@ -1147,6 +1234,12 @@ impl App for Greeter {
         // Reloj grande sobre la tarjeta — hora local de pared. Avanza con el
         // tick del fondo (`Msg::RainTick`, ~30 fps, siempre encendido), así que
         // no necesita estado propio: se lee del sistema en cada repintado.
+        let mut stack_children = vec![clock_view(&theme), card];
+        // Cuadro de música del lock: «quién suena» + cava. Sólo en lock y si hay
+        // un reproductor activo (si no, `now_playing_box` devuelve `None`).
+        if let Some(np) = now_playing_box(model, &theme) {
+            stack_children.push(np);
+        }
         let stack = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: Dimension::auto(), height: Dimension::auto() },
@@ -1154,7 +1247,7 @@ impl App for Greeter {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .children(vec![clock_view(&theme), card]);
+        .children(stack_children);
 
         // Zona central que aloja el reloj + la tarjeta, centrados. Transparente:
         // el fondo animado (pintado en la raíz) se ve por detrás, también en el
@@ -1224,6 +1317,12 @@ impl App for Greeter {
             let t = model.rain_t as f64;
             root = root.paint_with(move |scene, _ts, rect| {
                 asset.paint_at_time(scene, rect, t);
+            });
+        } else if let Some(rb) = &model.rive_bg {
+            // Fondo «rive» vivo: foto del frame (deformación idle) al closure.
+            let snap = rb.snapshot(model.rain_t, rain_bright(model.rain_color, &theme));
+            root = root.paint_with(move |scene, _ts, rect| {
+                rive::paint_snapshot(&snap, scene, rect);
             });
         } else if let Some(pb) = &model.physics_bg {
             // Fondo físico: deformamos acá (read-only) y movemos el snapshot al
@@ -1533,6 +1632,7 @@ fn persist(m: &Model) {
     // `lottie_path` quedó en `None` y hay que BORRARLO del disco también (si no,
     // `load()` lo relee y el Lottie volvería a tapar la elección al reiniciar).
     st.lottie_path = m.lottie_path.clone();
+    st.rive_path = m.rive_path.clone();
     st.save();
 }
 
@@ -1737,6 +1837,99 @@ fn clock_view(theme: &Theme) -> View<Msg> {
     .children(vec![time_v, date_v])
 }
 
+/// Cuadro de música del lock: «quién suena» + la pista + transporte, y debajo el
+/// visualizador `cava`. Devuelve `None` fuera del lock o sin reproductor activo
+/// (igual que el widget `mpris` de pata, que se oculta sin player). Del ancho de
+/// la tarjeta (360 px), con el mismo fondo de panel.
+fn now_playing_box(model: &Model, theme: &Theme) -> Option<View<Msg>> {
+    if model.mode != GreeterMode::Lock {
+        return None;
+    }
+    let media = model.media.as_ref().filter(|m| m.has_player)?;
+
+    // Quién suena (acento) + la pista (tenue). El título crece y empuja el
+    // transporte al borde derecho.
+    let who = if media.player.is_empty() {
+        rimay_localize::t("mirada-lock-now-playing")
+    } else {
+        media.player.clone()
+    };
+    let who_v = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(who, 13.0, theme.accent, Alignment::Start);
+    let title_v = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(media.title.clone(), 12.0, theme.fg_muted, Alignment::Start);
+
+    let pp_glyph = if media.playing { "▮▮" } else { "▶" };
+    let transport = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: Dimension::auto(), height: length(24.0_f32) },
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![
+        media_btn("◀◀", Msg::MediaPrev, theme),
+        media_btn(pp_glyph, Msg::MediaPlayPause, theme),
+        media_btn("▶▶", Msg::MediaNext, theme),
+    ]);
+
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![who_v, title_v, transport]);
+
+    // Visualizador: barras pintadas a partir del último cuadro de cava.
+    let frame = model.cava_frame.clone();
+    let cava_v = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(38.0_f32) },
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| cava::paint(scene, rect, &frame));
+
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: length(360.0_f32), height: Dimension::auto() },
+            gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
+            padding: Rect {
+                left: length(18.0_f32),
+                right: length(18.0_f32),
+                top: length(14.0_f32),
+                bottom: length(14.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .radius(14.0)
+        .children(vec![header, cava_v]),
+    )
+}
+
+/// Un botón chico de transporte del cuadro de música (prev / play-pausa / next).
+fn media_btn(glyph: &str, msg: Msg, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(30.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .radius(6.0)
+    .text_aligned(glyph.to_string(), 11.0, theme.fg_text, Alignment::Center)
+    .on_click(msg)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1799,6 +1992,8 @@ mod tests {
             anim: saved.anim,
             lottie_bg: None,
             lottie_path: None,
+            rive_bg: None,
+            rive_path: None,
             physics_bg: None,
             alleycat_bg: None,
             rain_t: 0.0,
@@ -1809,6 +2004,10 @@ mod tests {
             mode: GreeterMode::Login,
             hosted: Vec::new(),
             hosted_active: 0,
+            cava: None,
+            cava_frame: Vec::new(),
+            mpris: None,
+            media: None,
         }
     }
 
