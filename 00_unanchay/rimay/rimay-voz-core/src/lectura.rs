@@ -1,15 +1,16 @@
 //! Política de lectura discriminada (TTS).
 //!
-//! Doctrina de `VOZ.md`: **la voz no lee todo.** Se vocaliza sólo la prosa del
-//! agente; nunca código ni acciones (un bloque de código leído en voz alta es
-//! ruido, y una acción de control no se «narra», se aprueba). El host mapea
-//! `shuma_agente::BloqueSalida` → [`TipoBloque`] y consulta acá.
+//! Doctrina general de voz: **el TTS no lee todo.** Se vocaliza la prosa de una
+//! IA conversacional; nunca código ni acciones (un bloque de código leído en
+//! voz alta es ruido, y una acción de control no se «narra», se aprueba).
+//! Cualquier consumidor mapea su tipo de bloque de salida → [`TipoBloque`] y
+//! consulta acá (ej. shuma mapea `shuma_agente::BloqueSalida`).
 
-/// Tipo de bloque de salida del agente, a efectos de TTS. Espejo mínimo de
-/// `shuma_agente::BloqueSalida` para no acoplar este núcleo al de conversación.
+/// Tipo de bloque de salida de una IA, a efectos de TTS. Taxonomía mínima y
+/// general: el consumidor mapea sus propios bloques a estas tres clases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TipoBloque {
-    /// Prosa del asistente.
+    /// Prosa (lenguaje natural del asistente).
     Texto,
     /// Bloque de código.
     Codigo,
@@ -22,10 +23,10 @@ pub fn debe_leer(tipo: TipoBloque) -> bool {
     matches!(tipo, TipoBloque::Texto)
 }
 
-/// Política de lectura por agente: la voz es opt-in.
+/// Política de lectura del consumidor: la voz es opt-in.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Politica {
-    /// Si el agente tiene la voz activada. Default `false` (opt-in).
+    /// Si la lectura en voz está activada. Default `false` (opt-in).
     pub voz_activa: bool,
 }
 

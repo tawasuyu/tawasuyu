@@ -1,0 +1,13 @@
+[package]
+name = "rimay-voz-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "voz — contrato agnóstico de habla para toda la suite: trait Transcriptor (STT) + Locutor (TTS) + Audio/Transcripcion, y la lógica general de escucha manos-libres (máquina Dormido→Despierto→Dictando, detección del llamado, prosodia determinista, política de lectura discriminada). Las impls concretas (whisper/piper/nube/mock) cumplen los traits. Gemelo de verbo-core."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }

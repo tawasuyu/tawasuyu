@@ -1,0 +1,15 @@
+[package]
+name = "rimay-voz-mock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "voz — backend mock determinista de STT/TTS: Transcriptor que devuelve un texto fijo (configurable) y Locutor que sintetiza silencio proporcional al largo. Sin modelos, sin descargas, sin GPU — para CI y demos. Gemelo de verbo-mock."
+
+[dependencies]
+async-trait = { workspace = true }
+rimay-voz-core = { path = "../rimay-voz-core" }
+
+[dev-dependencies]
+tokio = { workspace = true }

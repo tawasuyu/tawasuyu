@@ -29,17 +29,28 @@ Wake-word manos-libres es el **gate** de (1), no una cuarta capacidad.
 - **Manos libres directo** (no push-to-talk primero). Primer corte sin entrenar
   modelo: **VAD-gated STT + match del llamado** (ver §Wake-word).
 
+## STT/TTS son IA GENERAL → van en `rimay`, no en shuma
+
+Corrección de fondo (2026-06-27): el habla no es de shuma. `rimay` (quechua
+*hablar*) es el dominio de «lo que quiere decir algo»; ya hospeda
+`rimay-verbo` (embeddings) con el patrón canónico de la suite — **fachada +
+trait + mock fallback + daemon que carga el modelo una vez por socket**. La voz
+es el gemelo: vive en **`rimay-voz`** y *cualquier* app la consume (shuma,
+mirada, pluma). **shuma sólo cablea** — no aloja nada de IA general.
+
 ## Lo que ya está parido (cablear, no inventar)
 
 | Pieza | Dónde | Nota |
 |---|---|---|
+| Contrato STT/TTS + lógica de escucha | `00_unanchay/rimay/rimay-voz-core` | **hecho** — traits `Transcriptor`/`Locutor` + máquina/lectura/prosodia |
+| Backend mock determinista | `00_unanchay/rimay/rimay-voz-mock` | **hecho** — STT/TTS sin modelo, para CI/demos |
+| Patrón fachada+daemon a copiar | `rimay-verbo` (embeddings) | molde exacto para el daemon de voz |
 | Captura de micrófono (cpal + opus) | `02_ruway/media/media-recorder-wav`, `media-encode-opus`, `supay-audio` | la entrada de audio NO es código nuevo |
-| Reparto core sync / host corre red+threads | `shuma-agente` + `shuma-agente-host` | la voz respeta el mismo split |
 | Acciones se proponen, no se auto-ejecutan | `AccionPropuesta` + `atipay` | la voz no salta este gate |
 | Backend configurable por agente | `wawa-config::LlmSettings` | el STT/TTS por agente copia el patrón |
 
-Lo que **no** existe en el repo: STT, TTS, wake-word, VAD. Territorio nuevo,
-chico y delimitado.
+Lo que **falta**: los backends reales (whisper/piper/nube), el daemon, y el
+host que corre cpal+VAD.
 
 ## Pipeline
 
@@ -70,19 +81,24 @@ matchea el llamado.
 
 ## Forma del código (Regla: un dominio = un crate raíz + subcrates)
 
-Subcrate nuevo **`shuma-voz`**, molde de `shuma-agente`:
+Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
 
-- **`shuma-voz` (core, sync/puro/testeable):**
-  - máquina de estados `Dormido → Despierto → Dictando → Cerrado` (+ timeout de
-    re-dormida).
-  - **política de lectura** (qué `BloqueSalida` se vocaliza) — puro, con tests.
+- **`rimay-voz-core` (hecho, sync/puro/testeable):**
+  - traits `Transcriptor` (STT) + `Locutor` (TTS) + `Audio`/`Transcripcion` —
+    el contrato model-agnostic (gemelo del `Provider` de verbo).
+  - máquina de estados `Dormido → Despierto → Dictando` (+ detección del
+    llamado, + timeout de re-dormida).
+  - **política de lectura** discriminada: el consumidor mapea su tipo de bloque
+    → `TipoBloque` (sólo la prosa se vocaliza).
   - clasificador prosódico determinista sobre features de f0.
   - sin sockets, sin `tokio`, sin cpal.
-- **host (en `shuma-agente-host` o gemelo `shuma-voz-host`):** corre cpal + VAD
-  + engine STT/TTS en threads; dispatcha `Msg` al update Elm.
-
-NO va dentro de `shuma-agente` (no contaminar el núcleo conversacional), ni en
-`rimay` (eso es embeddings) ni `pineal` (charts).
+- **`rimay-voz-mock` (hecho):** STT/TTS deterministas sin modelo (CI/demos).
+- **`rimay-voz-{whisper,piper,…}` + `rimay-voz-daemon` (falta):** backends
+  reales + daemon que carga el modelo una vez por socket (copiar
+  `rimay-verbo-daemon`).
+- **host de shuma (falta, en `shuma-agente-host`):** corre cpal + VAD; consume
+  `rimay-voz` y dispatcha `Msg` al update Elm. Lo único «de shuma»: mapear
+  `shuma_agente::BloqueSalida` → `rimay_voz::TipoBloque`.
 
 ## Dependencias candidatas
 
