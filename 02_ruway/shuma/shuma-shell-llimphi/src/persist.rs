@@ -20,6 +20,11 @@ fn data_dir() -> Option<std::path::PathBuf> {
     crate::perfiles::sessions::active_data_dir()
 }
 
+/// `<perfil>/agente.sled` — base de datos de agentes y conversaciones del chat.
+pub(crate) fn agente_db_path() -> Option<std::path::PathBuf> {
+    data_dir().map(|d| d.join("agente.sled"))
+}
+
 /// `<perfil>/outputs/<sesión>.json`.
 pub(crate) fn session_output_path(name: &str) -> Option<std::path::PathBuf> {
     let sane: String = name

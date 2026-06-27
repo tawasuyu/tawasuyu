@@ -416,10 +416,13 @@ pub(crate) enum Tool {
     Monitor,
     Explorer,
     Matilda,
+    /// Panel de chat multi-agente (`shuma-module-agente`).
+    Agente,
 }
 
 impl Tool {
-    pub(crate) const ALL: [Tool; 4] = [Tool::History, Tool::Monitor, Tool::Explorer, Tool::Matilda];
+    pub(crate) const ALL: [Tool; 5] =
+        [Tool::History, Tool::Monitor, Tool::Explorer, Tool::Matilda, Tool::Agente];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -427,6 +430,7 @@ impl Tool {
             Tool::Monitor => "Monitor",
             Tool::Explorer => "Explorer",
             Tool::Matilda => "Matilda",
+            Tool::Agente => "Agente",
         }
     }
 }
@@ -1018,6 +1022,13 @@ pub struct Model {
     /// `active_tool` en `Tool::ALL`, o `None`). Evita reenviar el mismo estado en
     /// cada tick: sólo se manda `SetActive` cuando cambia. Inerte sin `_host`.
     pub host_active_synced: Option<u32>,
+
+    /// Estado del panel de chat multi-agente (diente `Tool::Agente`). Único para
+    /// el chasis (no por sesión). Lo alimenta `agente_almacen`.
+    pub agente: shuma_module_agente::State,
+    /// Almacén persistente de agentes y conversaciones; `None` si no se pudo
+    /// abrir (el panel sigue funcionando en memoria).
+    pub agente_almacen: Option<shuma_agente::Almacen>,
 }
 
 impl Model {
@@ -1057,6 +1068,8 @@ pub enum Msg {
     SelectSession(usize),
     HoverSession(Option<usize>),
     SelectTool(Tool),
+    /// Mensaje del panel de chat multi-agente (diente `Tool::Agente`).
+    Agente(shuma_module_agente::Msg),
     ToggleDropdown(DropKind),
     DismissDropdown,
     SetIsolation(Isolation),

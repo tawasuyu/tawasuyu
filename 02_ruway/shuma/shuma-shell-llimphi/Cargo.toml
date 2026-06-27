@@ -24,6 +24,9 @@ minga-core = { path = "../../../03_ukupacha/minga/minga-core" }
 shuma-module-shell = { path = "../sandbox/shuma-module-shell" }
 shuma-config = { path = "../sandbox/shuma-config" }
 shuma-module-canvas = { path = "../sandbox/shuma-module-canvas" }
+shuma-module-agente = { path = "../sandbox/shuma-module-agente" }
+shuma-agente = { path = "../sandbox/shuma-agente" }
+shuma-agente-host = { path = "../sandbox/shuma-agente-host" }
 shuma-intent = { path = "../sandbox/shuma-intent" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 pata-host = { path = "../../pata/pata-host" }

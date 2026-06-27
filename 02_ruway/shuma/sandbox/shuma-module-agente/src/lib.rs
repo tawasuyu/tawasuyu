@@ -40,7 +40,7 @@ pub const ID: &str = "agente";
 /// `Placement` por defecto: ocupa el área principal.
 pub const DEFAULT_PLACEMENT: Placement = Placement::Main;
 
-const SIDEBAR_W: f32 = 220.0;
+const SIDEBAR_W: f32 = 150.0;
 const VISTA_ALTO_DEFAULT: f32 = 600.0;
 
 /// Lo que el chasis debe cumplir: responder un turno con `pluma-llm`. El módulo
@@ -134,6 +134,17 @@ impl State {
     /// Fija el alto del viewport del hilo (px).
     pub fn fijar_vista_alto(&mut self, h: f32) {
         self.vista_alto = h.max(120.0);
+    }
+
+    /// Marca el input como (des)enfocado. El chasis lo enfoca cuando el diente
+    /// del chat está activo.
+    pub fn set_focus(&mut self, f: bool) {
+        self.focused = f;
+    }
+
+    /// `true` si hay una petición servida esperando que el chasis la corra.
+    pub fn tiene_pendiente(&self) -> bool {
+        self.pendiente.is_some()
     }
 
     /// El chasis toma la petición pendiente para correr `pluma-llm`. Marca el

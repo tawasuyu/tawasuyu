@@ -123,6 +123,17 @@ pub(super) fn tool_icon(tool: Tool, size: f32, color: Color) -> View<Msg> {
                     );
                 }
             }
+            // Agente: globo de diálogo con colita.
+            Tool::Agente => {
+                let body = RoundedRect::new(cx - r, cy - r * 0.85, cx + r, cy + r * 0.35, r * 0.4);
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &body);
+                let mut tail = BezPath::new();
+                tail.move_to(Point::new(cx - r * 0.35, cy + r * 0.35));
+                tail.line_to(Point::new(cx - r * 0.55, cy + r * 0.85));
+                tail.line_to(Point::new(cx - r * 0.02, cy + r * 0.35));
+                tail.close_path();
+                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &tail);
+            }
         }
     })
 }
@@ -136,8 +147,15 @@ pub(super) fn tool_panel(model: &Model, tool: Tool, theme: &Theme) -> View<Msg> 
         Tool::Monitor => monitor_stack(model, theme),
         Tool::Explorer => explorer_panel(model, theme),
         Tool::Matilda => matilda_panel(model, theme),
+        Tool::Agente => agente_panel(model, theme),
     };
     panel_frame(vec![inner], theme)
+}
+
+/// El panel de chat multi-agente: delega al `view` del módulo, lifteando sus
+/// mensajes a `Msg::Agente`.
+pub(super) fn agente_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    shuma_module_agente::view(&model.agente, theme, Msg::Agente)
 }
 
 // ─── Historial ──────────────────────────────────────────────────────

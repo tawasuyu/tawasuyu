@@ -128,6 +128,7 @@ fn tool_icon_name(t: Tool) -> &'static str {
         Tool::Monitor => "system",
         Tool::Explorer => "files",
         Tool::Matilda => "settings",
+        Tool::Agente => "chat",
     }
 }
 
@@ -384,11 +385,42 @@ pub fn new_model() -> Model {
         hosted_bar: false,
         _host: None,
         host_active_synced: None,
+        agente: shuma_module_agente::State::new(),
+        agente_almacen: None,
     };
     // Aplicar la apariencia efectiva (global o de la sesión activa) sobre el
     // tema base: si la activa es «Sistema» queda el tema de wawa ya calculado.
     perfiles::apply_active_appearance(&mut model);
+    // Abrir el almacén del chat y sembrar los agentes por defecto; si falla
+    // (disco, permisos), el panel sigue funcionando sólo en memoria.
+    init_agente(&mut model);
     model
+}
+
+/// Abre el [`shuma_agente::Almacen`], siembra los agentes por defecto y alimenta
+/// el panel de chat con agentes + conversaciones persistidas.
+fn init_agente(model: &mut Model) {
+    let Some(path) = persist::agente_db_path() else {
+        return;
+    };
+    match shuma_agente::Almacen::abrir(&path) {
+        Ok(almacen) => {
+            let agentes = almacen.sembrar_defaults().unwrap_or_default();
+            let convs = almacen.conversaciones().unwrap_or_default();
+            model.agente.set_agentes(agentes);
+            model.agente.set_conversaciones(convs);
+            model.agente_almacen = Some(almacen);
+        }
+        Err(e) => eprintln!("shuma: no se pudo abrir el almacén del chat: {e}"),
+    }
+}
+
+/// Epoch en milisegundos (el chasis sí puede leer el reloj; el módulo no).
+fn ahora_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Marca el Model como **hospedado en una barra externa** (pata): el input de la
@@ -607,6 +639,10 @@ impl App for Shell {
         if let Some(msg) = perfiles::shortcuts::resolve_key(model, e) {
             return Some(msg);
         }
+        // Con el diente del chat abierto, el teclado escribe en su input.
+        if model.active_tool == Some(Tool::Agente) {
+            return Some(Msg::Agente(shuma_module_agente::Msg::Key(e.clone())));
+        }
         forward_key_to_focused_shell(model, e)
     }
 
@@ -681,6 +717,9 @@ impl App for Shell {
                 // Búsqueda semántica (`:buscar`) pendiente → thread; el
                 // resultado vuelve por SemanticResult.
                 update::fulfill_semantic_requests(&mut m, handle);
+                // E6 — turno del panel de chat pendiente → thread (pluma-llm);
+                // el resultado vuelve por Msg::Agente(Respuesta).
+                update::fulfill_agente_requests(&mut m, handle);
                 // El cwd remoto pudo cambiar tras un `cd`: re-listar si hace falta.
                 reconcile_explorer(&mut m, handle);
             }
@@ -721,8 +760,29 @@ impl App for Shell {
             }
             Msg::SelectTool(t) => {
                 m.active_tool = if m.active_tool == Some(t) { None } else { Some(t) };
+                m.agente.set_focus(m.active_tool == Some(Tool::Agente));
                 save_chrome(&m);
                 reconcile_explorer(&mut m, handle);
+            }
+            Msg::Agente(am) => {
+                m.agente.fijar_reloj(ahora_ms());
+                m.agente = shuma_module_agente::update(m.agente.clone(), am);
+                // Persistí las conversaciones tras cada cambio (writes chicos).
+                if let Some(al) = &m.agente_almacen {
+                    for c in m.agente.conversaciones() {
+                        let _ = al.guardar_conversacion(c);
+                    }
+                }
+                // Una acción aprobada va al input del shell de la sesión activa
+                // (revisar y Enter — nunca se auto-ejecuta), reusando el canal
+                // `InsertAtCursor` del shell.
+                if let Some(accion) = m.agente.take_ejecucion() {
+                    let insert = ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(
+                        accion.linea_comando,
+                    ));
+                    let target = Slot::Session(m.active_session, Which::Shell);
+                    m = apply_module_msg(m, target, insert);
+                }
             }
             Msg::RunFromHistory(cmd) => {
                 let slot = Slot::Session(m.active_session, Which::Shell);

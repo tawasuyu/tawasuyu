@@ -458,6 +458,27 @@ pub(crate) fn fulfill_llm_requests(m: &mut Model, handle: &Handle<Msg>) {
     }
 }
 
+/// E6 — despacha la petición del panel de chat (un turno de conversación) a un
+/// thread: corre `shuma-agente-host::responder` (resuelve backend del agente o
+/// el `[ai.llm]` global de fallback) y devuelve el resultado por `Msg::Agente`.
+/// Mismo patrón que [`fulfill_llm_requests`]: el módulo expresó la intención
+/// (`State::take_request`), acá la cumplimos sin colgar el bucle Elm.
+pub(crate) fn fulfill_agente_requests(m: &mut Model, handle: &Handle<Msg>) {
+    let Some(req) = m.agente.take_request() else {
+        return;
+    };
+    // Fallback global del SO (el `[ai.llm]` que se edita en el wawapanel).
+    let fallback = wawa_config::WawaConfig::load().ai.llm;
+    let conv_id = req.conv.id.clone();
+    handle.spawn(move || {
+        let (ok, bloques) = match shuma_agente_host::responder(&req.conv, &req.agente, &fallback) {
+            Ok(r) => (true, r.bloques),
+            Err(e) => (false, vec![shuma_agente::BloqueSalida::Error(e)]),
+        };
+        Msg::Agente(shuma_module_agente::Msg::Respuesta { conv_id, bloques, ok })
+    });
+}
+
 /// Corre una petición LLM de forma **bloqueante** (en un thread del chasis):
 /// arma el `ChatRequest`, resuelve el backend por env (Mock si no hay
 /// credenciales) y devuelve el texto o un mensaje de error.
