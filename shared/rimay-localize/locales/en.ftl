@@ -590,6 +590,7 @@ mirada-greeter-bg-fire = Fire
 mirada-greeter-bg-plasma = Plasma
 mirada-greeter-bg-aurora = Aurora
 mirada-greeter-bg-lightning = Lightning
+mirada-greeter-bg-alleycat = Alley Cat
 mirada-greeter-bg-off = Turn off
 mirada-greeter-session-submit = Log in
 mirada-greeter-session-goto-user = Go to username

@@ -593,6 +593,7 @@ mirada-greeter-bg-fire = Fuego
 mirada-greeter-bg-plasma = Plasma
 mirada-greeter-bg-aurora = Aurora
 mirada-greeter-bg-lightning = Rayos
+mirada-greeter-bg-alleycat = Gato callejero
 mirada-greeter-bg-off = Apagar fondo
 mirada-greeter-session-submit = Iniciar sesión
 mirada-greeter-session-goto-user = Ir a usuario

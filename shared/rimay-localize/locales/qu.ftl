@@ -594,6 +594,7 @@ mirada-greeter-bg-fire = Nina
 mirada-greeter-bg-plasma = Plasma
 mirada-greeter-bg-aurora = Aurora
 mirada-greeter-bg-lightning = Illapa
+mirada-greeter-bg-alleycat = Kalli michi
 mirada-greeter-bg-off = Hawanta wañuchiy
 mirada-greeter-session-submit = Yaykuy qallariy
 mirada-greeter-session-goto-user = Sutiyman ri

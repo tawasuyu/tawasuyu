@@ -64,6 +64,9 @@ pub enum BgAnim {
     Aurora,
     /// Rayos ramificados (`lightning`).
     Lightning,
+    /// Screensaver nocturno «Alley Cat»: un gato callejero prowlea por una
+    /// barda bajo la luna (`alleycat`).
+    AlleyCat,
     /// Tentáculos esqueletales con física Verlet (`physics`). Tiene estado: lo
     /// maneja el greeter, no el dispatcher stateless de [`crate::bg`].
     Physics,
@@ -79,6 +82,7 @@ impl BgAnim {
             "plasma" => Some(Self::Plasma),
             "aurora" => Some(Self::Aurora),
             "lightning" | "rayos" | "rayo" => Some(Self::Lightning),
+            "alleycat" | "alley" | "gato" | "michi" => Some(Self::AlleyCat),
             "physics" | "fisica" | "física" | "tentaculos" | "tentáculos" => Some(Self::Physics),
             _ => None,
         }
@@ -93,6 +97,7 @@ impl BgAnim {
             Self::Plasma => "plasma",
             Self::Aurora => "aurora",
             Self::Lightning => "lightning",
+            Self::AlleyCat => "alleycat",
             Self::Physics => "physics",
         }
     }
@@ -301,5 +306,17 @@ mod tests {
         assert!(back.rain_enabled);
         assert_eq!(back.rain_color, RainColor::Amber);
         assert_eq!(back.anim, BgAnim::Stars);
+    }
+
+    #[test]
+    fn alleycat_parse_y_tag_round_trip() {
+        // El tag persiste y vuelve a parsear (protege el cableado del menú).
+        assert_eq!(BgAnim::AlleyCat.tag(), "alleycat");
+        assert_eq!(BgAnim::parse("alleycat"), Some(BgAnim::AlleyCat));
+        assert_eq!(BgAnim::parse(BgAnim::AlleyCat.tag()), Some(BgAnim::AlleyCat));
+        // Alias amistosos.
+        for a in ["alley", "gato", "michi", "GATO"] {
+            assert_eq!(BgAnim::parse(a), Some(BgAnim::AlleyCat), "alias {a}");
+        }
     }
 }

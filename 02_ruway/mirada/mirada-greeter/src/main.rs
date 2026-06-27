@@ -15,6 +15,7 @@
 //! - `MIRADA_GREETER_MOCK="usuario:secreto"` usa el mock, para iterar la UI
 //!   en cajas sin PAM o con el greeter anidado en otro escritorio.
 
+mod alleycat;
 mod arje_session;
 mod aurora;
 mod bg;
@@ -867,6 +868,7 @@ impl App for Greeter {
                     state::BgAnim::Plasma => m.rain_color = state::RainColor::Cyan,
                     state::BgAnim::Aurora => m.rain_color = state::RainColor::Green,
                     state::BgAnim::Lightning => m.rain_color = state::RainColor::Cyan,
+                    state::BgAnim::AlleyCat => m.rain_color = state::RainColor::Amber,
                     _ => {}
                 }
                 m.physics_bg = matches!(a, state::BgAnim::Physics)
@@ -1354,6 +1356,7 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
         .item(bg_item(&t("mirada-greeter-bg-plasma"), state::BgAnim::Plasma))
         .item(bg_item(&t("mirada-greeter-bg-aurora"), state::BgAnim::Aurora))
         .item(bg_item(&t("mirada-greeter-bg-lightning"), state::BgAnim::Lightning))
+        .item(bg_item(&t("mirada-greeter-bg-alleycat"), state::BgAnim::AlleyCat))
         .item(MenuItem::new(t("mirada-greeter-bg-off"), "bg.off").separated());
 
     AppMenu::new()
@@ -1403,6 +1406,7 @@ fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) 
             "plasma" => state::BgAnim::Plasma,
             "aurora" => state::BgAnim::Aurora,
             "lightning" => state::BgAnim::Lightning,
+            "alleycat" => state::BgAnim::AlleyCat,
             _ => return model,
         };
         return Greeter::update(model, Msg::SetAnim(anim), handle);
