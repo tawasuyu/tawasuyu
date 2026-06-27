@@ -16,6 +16,9 @@ use matilda_core::{Inventory, Upstream};
 use super::panels::panel_box_flow;
 use crate::Msg;
 
+/// Tope de pasos de plan a mostrar (el resto se resume con un "…").
+const MAX_PASOS: usize = 8;
+
 /// El panel de la flota, de alto completo. Lista hosts / contenedores / vhosts del
 /// inventario, o un aviso si no hay inventario cargado.
 pub fn flota_view(inv: Option<&Inventory>, panel_h: f32, theme: &Theme) -> View<Msg> {
@@ -72,6 +75,13 @@ pub fn flota_view(inv: Option<&Inventory>, panel_h: f32, theme: &Theme) -> View<
             if v_filas.len() > 1 {
                 hijos.push(panel_box_flow(v_filas, theme));
             }
+
+            // Plan de despliegue (PREVIEW read-only): qué pasos crearía desplegar
+            // este inventario desde cero. Puro (plan + steps); NO ejecuta nada ni
+            // toca SSH — aplicar en vivo es del CLI matilda, deliberado.
+            if let Some(p) = plan_section(inv, theme) {
+                hijos.push(p);
+            }
         }
         _ => {
             hijos.push(aviso(theme));
@@ -92,6 +102,52 @@ pub fn flota_view(inv: Option<&Inventory>, panel_h: f32, theme: &Theme) -> View<
     })
     .fill(theme.bg_panel)
     .children(hijos)
+}
+
+/// La sección «Plan de despliegue»: el diff puro `plan(vacío → inventario)`
+/// traducido a pasos concretos (docker run / nginx confs / systemctl), como
+/// **preview**. No ejecuta nada. `None` si no hay pasos.
+fn plan_section(inv: &Inventory, theme: &Theme) -> Option<View<Msg>> {
+    let plan = matilda_plan::plan(&Inventory::new(), inv);
+    let steps = matilda_apply::plan_to_steps(&plan, inv);
+    if steps.is_empty() {
+        return None;
+    }
+    let total = steps.len();
+    let mut filas = vec![encabezado(&format!("Plan de despliegue · {total} pasos"), theme)];
+    for step in steps.iter().take(MAX_PASOS) {
+        // Descripción del paso + su primer comando (tenue) como pista de qué corre.
+        let desc = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(step.describe.clone(), 11.0, theme.fg_text);
+        let mut col = vec![desc];
+        if let Some(cmd) = step.commands.first() {
+            let recortado: String = cmd.chars().take(60).collect();
+            col.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    ..Default::default()
+                })
+                .text(format!("$ {recortado}"), 10.0, theme.fg_muted),
+            );
+        }
+        filas.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: percent(1.0_f32), height: auto() },
+                ..Default::default()
+            })
+            .children(col),
+        );
+    }
+    if total > MAX_PASOS {
+        filas.push(encabezado(&format!("… +{} pasos más", total - MAX_PASOS), theme));
+    }
+    Some(panel_box_flow(filas, theme))
 }
 
 /// Encabezado tenue de una sección.

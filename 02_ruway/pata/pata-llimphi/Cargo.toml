@@ -19,8 +19,12 @@ bitacora = { workspace = true }
 pata-core = { path = "../pata-core" }
 pata-config = { path = "../pata-config" }
 # Flota baremetal (read-only): modelo de inventario de matilda (sólo serde, sin
-# tokio/SSH). El diente «Flota» del sidebar lista hosts/contenedores/vhosts.
+# tokio/SSH). El diente «Flota» del sidebar lista hosts/contenedores/vhosts y un
+# PREVIEW del plan de despliegue (plan + steps son puros; NO se trae apply/linker,
+# que ejecutan en vivo por SSH — destructivo).
 matilda-core = { path = "../../shuma/baremetal/matilda-core" }
+matilda-plan = { path = "../../shuma/baremetal/matilda-plan" }
+matilda-apply = { path = "../../shuma/baremetal/matilda-apply" }
 # Unidades del plano de control (sandokan): el diente «Unidades» lee el estado +
 # telemetría de las unidades vivas vía arje-bus (`$ENTE_BUS_SOCK`), read-only.
 sandokan-arje-engine = { path = "../../../03_ukupacha/sandokan/sandokan-arje-engine" }
