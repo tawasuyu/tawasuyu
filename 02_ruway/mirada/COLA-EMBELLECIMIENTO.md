@@ -74,11 +74,19 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       en la GPU. Coste del blur (y peso del cache) ya **no escala** con la
       resolución (una 4K se blurea a ~720p). Sin cambiar el camino de muestreo.
       Opt-in, byte-idéntico en off. **Falta verificar en metal.**
-- [ ] **Backdrop REAL — afinar: paneles/layer-shell + calidad acotada (off/1/N) +
-      filo.** Pendiente: (a) extender el backdrop real a superficies
-      layer-shell (paneles), no sólo barras de ventana; (b) exponer el nivel de
-      calidad en el panel (hoy es «N» siempre que haya glass); (d) filo/borde del
-      cristal (rim specular de 1px).
+- [x] **✅ Backdrop REAL — afinar (d): filo del cristal + tinte que SÍ se ve.**
+      `push_glass_rim` empuja un filo de 1px sobre cada panel glass (menú raíz y
+      barras flotantes): línea clara arriba (specular del canto) + oscura abajo
+      (sombra interna) — el detalle que distingue un cristal real de un blur. De
+      paso se corrigió un **orden latente**: el tinte translúcido se empujaba
+      DEBAJO del blur opaco (`box_blur_bgra` fuerza alfa 255), así que nunca se
+      veía; ahora el orden front-to-back es filo → tinte → blur, y el tinte
+      tiñe/da contraste como dice su comentario. Opt-in, byte-idéntico en off.
+      **Falta verificar en metal.**
+- [ ] **Backdrop REAL — afinar: paneles/layer-shell + calidad acotada (off/1/N).**
+      Pendiente: (a) extender el backdrop real a superficies layer-shell
+      (paneles), no sólo barras de ventana; (b) exponer el nivel de calidad en el
+      panel (hoy es «N» siempre que haya glass).
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).

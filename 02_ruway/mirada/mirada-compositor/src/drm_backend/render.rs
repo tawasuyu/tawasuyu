@@ -62,6 +62,40 @@ fn cover_transform(sw: i32, sh: i32, ow: i32, oh: i32) -> (f64, f64, f64) {
     ((ow - sw * k) / 2.0, (oh - sh * k) / 2.0, k)
 }
 
+/// Empuja el *filo* del cristal sobre un panel glass en `(x, y, w, h)`: una
+/// línea clara de 1px en el borde superior (el *specular highlight* del vidrio)
+/// y una oscura en el inferior (sombra interna). Es el detalle que distingue un
+/// cristal real de un simple desenfoque — le da volumen y un canto definido al
+/// panel *frosted*. Va ARRIBA del tinte (se empuja antes en front-to-back, donde
+/// el primero queda encima). `alpha` lo multiplica todo (1.0 para el menú; el
+/// `anim_alpha` del fade-in de apertura para la barra). No-op en paneles
+/// degenerados. Translúcido.
+fn push_glass_rim(into: &mut Vec<Frame>, x: i32, y: i32, w: i32, h: i32, alpha: f32) {
+    if w <= 0 || h < 2 || alpha <= 0.0 {
+        return;
+    }
+    // Filo superior: blanco a baja opacidad (brillo del canto del vidrio).
+    let mut top = SolidColorBuffer::default();
+    top.update((w, 1), [1.0, 1.0, 1.0, 0.22]);
+    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+        &top,
+        (x, y),
+        1.0,
+        alpha,
+        Kind::Unspecified,
+    )));
+    // Filo inferior: negro a baja opacidad (sombra interna, da profundidad).
+    let mut bot = SolidColorBuffer::default();
+    bot.update((w, 1), [0.0, 0.0, 0.0, 0.18]);
+    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+        &bot,
+        (x, y + h - 1),
+        1.0,
+        alpha,
+        Kind::Unspecified,
+    )));
+}
+
 impl DrmState {
     /// Compone un cuadro por cada salida y avisa a los clientes una sola vez.
     /// Si una salida tiene su `pending_flip` puesto, se saltea hasta el
@@ -696,7 +730,7 @@ impl DrmState {
                         (cw as f64 * bw / ow, tb as f64 * bh / oh).into(),
                     );
                     let dst: smithay::utils::Size<i32, smithay::utils::Logical> = (cw, tb).into();
-                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                    let blur_el = MemoryRenderBufferRenderElement::from_buffer(
                         &mut self.renderer,
                         (cx as f64, dec_y as f64),
                         blur,
@@ -704,9 +738,11 @@ impl DrmState {
                         Some(src),
                         Some(dst),
                         Kind::Unspecified,
-                    ) {
-                        into.push(Frame::Text(el));
-                    }
+                    );
+                    // Front-to-back (el primero queda ARRIBA): filo → tinte →
+                    // rebanada desenfocada. El tinte translúcido (color base) DEBE
+                    // ir encima del blur opaco para teñirlo y dar contraste.
+                    push_glass_rim(into, cx, dec_y, cw, tb, anim_alpha);
                     let mut tint = SolidColorBuffer::default();
                     tint.update((cw, tb), rgba_f32([base[0], base[1], base[2], 150]));
                     into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
@@ -716,6 +752,9 @@ impl DrmState {
                         anim_alpha,
                         Kind::Unspecified,
                     )));
+                    if let Ok(el) = blur_el {
+                        into.push(Frame::Text(el));
+                    }
                 } else if self.app.decorations.titlebar_gradient && tb >= 4 {
                     // Degradé vertical (claro arriba → base abajo) por franjas
                     // sólidas: el compositor no tiene primitivo de gradiente, así
@@ -2003,7 +2042,7 @@ impl DrmState {
                 );
                 let dst: smithay::utils::Size<i32, smithay::utils::Logical> =
                     (col.w, col.h).into();
-                if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                let blur_el = MemoryRenderBufferRenderElement::from_buffer(
                     &mut self.renderer,
                     (col.x as f64, col.y as f64),
                     blur,
@@ -2011,10 +2050,11 @@ impl DrmState {
                     Some(src),
                     Some(dst),
                     Kind::Unspecified,
-                ) {
-                    into.push(Frame::Text(el));
-                }
-                // Tinte translúcido encima (da el color y el contraste del texto).
+                );
+                // Front-to-back (el primero queda ARRIBA): filo → tinte → rebanada
+                // desenfocada. El tinte translúcido DEBE ir ENCIMA del blur opaco
+                // para teñirlo y dar el contraste del texto (si no, el blur lo tapa).
+                push_glass_rim(into, col.x, col.y, col.w, col.h, 1.0);
                 let mut tint = SolidColorBuffer::default();
                 tint.update((col.w, col.h), [MENU_BG[0], MENU_BG[1], MENU_BG[2], 0.55]);
                 into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
@@ -2024,6 +2064,9 @@ impl DrmState {
                     1.0,
                     Kind::Unspecified,
                 )));
+                if let Ok(el) = blur_el {
+                    into.push(Frame::Text(el));
+                }
             } else {
                 let mut bg = SolidColorBuffer::default();
                 bg.update((col.w, col.h), MENU_BG);
@@ -2784,7 +2827,21 @@ fn emit_popups(
 #[cfg(test)]
 mod tests {
     use super::super::{backdrop_downsample, box_blur_bgra, downsample_bgra};
-    use super::{cover_transform, focus_mix, lerp_rgba, round_mask_bgra};
+    use super::{cover_transform, focus_mix, lerp_rgba, push_glass_rim, round_mask_bgra};
+
+    #[test]
+    fn glass_rim_empuja_dos_filos_y_es_no_op_en_degenerados() {
+        // Panel sano: dos líneas (filo superior + inferior).
+        let mut v = Vec::new();
+        push_glass_rim(&mut v, 10, 20, 100, 30, 1.0);
+        assert_eq!(v.len(), 2, "filo superior + inferior");
+        // Degenerados / invisibles: no empuja nada (byte-idéntico).
+        for (w, h, a) in [(0, 30, 1.0), (100, 1, 1.0), (100, 30, 0.0)] {
+            let mut z = Vec::new();
+            push_glass_rim(&mut z, 0, 0, w, h, a);
+            assert!(z.is_empty(), "w={w} h={h} a={a} no debe empujar filo");
+        }
+    }
 
     #[test]
     fn box_blur_preserva_campo_uniforme_y_radio_0() {
