@@ -36,5 +36,5 @@ pub mod motor;
 pub use agente::{Agente, Capacidades};
 pub use almacen::{Almacen, AlmacenError};
 pub use conversacion::{
-    AccionPropuesta, BloqueSalida, Conversacion, EstadoAccion, Peligro, Rol, Turno,
+    AccionPropuesta, BloqueSalida, Conversacion, EstadoAccion, Peligro, Rol, Turno, Uso,
 };

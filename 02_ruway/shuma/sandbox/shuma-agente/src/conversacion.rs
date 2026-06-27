@@ -105,6 +105,21 @@ impl BloqueSalida {
     }
 }
 
+/// Conteo de tokens de un turno del asistente (lo reporta el backend). Se
+/// muestra en la UI como paridad con Claude CLI.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Uso {
+    pub entrada: u32,
+    pub salida: u32,
+}
+
+impl Uso {
+    /// `true` si hay algo que mostrar (algún backend reporta 0/0).
+    pub fn hay(&self) -> bool {
+        self.entrada > 0 || self.salida > 0
+    }
+}
+
 /// Un turno de la conversación.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Turno {
@@ -114,6 +129,10 @@ pub struct Turno {
     pub bloques: Vec<BloqueSalida>,
     /// Epoch en milisegundos. Lo fija el caller — el núcleo no lee el reloj.
     pub ts: u64,
+    /// Tokens del turno del asistente, si el backend los reportó. `serde(default)`
+    /// para retrocompat con conversaciones persistidas sin el campo.
+    #[serde(default)]
+    pub uso: Option<Uso>,
 }
 
 impl Turno {
@@ -123,6 +142,7 @@ impl Turno {
             rol: Rol::Usuario,
             bloques: vec![BloqueSalida::Texto(texto.into())],
             ts,
+            uso: None,
         }
     }
 
@@ -132,6 +152,7 @@ impl Turno {
             rol: Rol::Asistente,
             bloques,
             ts,
+            uso: None,
         }
     }
 
@@ -200,9 +221,12 @@ impl Conversacion {
         self.turnos.len() - 1
     }
 
-    /// Agrega un turno del asistente con sus bloques ya interpretados.
-    pub fn agregar_asistente(&mut self, bloques: Vec<BloqueSalida>, ts: u64) -> usize {
-        self.turnos.push(Turno::asistente(bloques, ts));
+    /// Agrega un turno del asistente con sus bloques ya interpretados y, si el
+    /// backend lo reportó, su conteo de tokens.
+    pub fn agregar_asistente(&mut self, bloques: Vec<BloqueSalida>, ts: u64, uso: Option<Uso>) -> usize {
+        let mut t = Turno::asistente(bloques, ts);
+        t.uso = uso.filter(|u| u.hay());
+        self.turnos.push(t);
         self.actualizada = ts;
         self.turnos.len() - 1
     }

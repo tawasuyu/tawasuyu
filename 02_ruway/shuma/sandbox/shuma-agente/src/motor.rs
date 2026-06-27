@@ -207,7 +207,7 @@ mod tests {
     fn request_lleva_persona_e_historial() {
         let mut conv = Conversacion::nueva("a1", 0);
         conv.agregar_usuario("hola", 1);
-        conv.agregar_asistente(vec![BloqueSalida::Texto("¡hola!".into())], 2);
+        conv.agregar_asistente(vec![BloqueSalida::Texto("¡hola!".into())], 2, None);
         conv.agregar_usuario("¿qué hora es?", 3);
 
         let ag = agente_charla().con_persona("Sos pirata.");

@@ -193,6 +193,7 @@ mod tests {
         c.agregar_asistente(
             vec![BloqueSalida::Codigo { lenguaje: Some("rs".into()), codigo: "fn main(){}".into() }],
             2,
+            None,
         );
         a.guardar_conversacion(&c).unwrap();
         assert_eq!(a.conversacion(&c.id).unwrap().unwrap(), c);

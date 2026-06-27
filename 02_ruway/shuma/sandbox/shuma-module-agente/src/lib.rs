@@ -326,6 +326,9 @@ pub enum Msg {
         conv_id: String,
         bloques: Vec<BloqueSalida>,
         ok: bool,
+        /// Tokens reportados por el backend (0 si no los expone).
+        entrada: u32,
+        salida: u32,
     },
     /// Abrir el editor para crear un agente nuevo.
     NuevoAgente,
@@ -425,7 +428,7 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::Scroll(delta) => {
             s.scroll = (s.scroll + delta).max(0.0);
         }
-        Msg::Respuesta { conv_id, bloques, ok } => {
+        Msg::Respuesta { conv_id, bloques, ok, entrada, salida } => {
             s.esperando = false;
             let ms = s.reloj_ms;
             if let Some(conv) = s.conversaciones.iter_mut().find(|c| c.id == conv_id) {
@@ -443,7 +446,7 @@ pub fn update(state: State, msg: Msg) -> State {
                             .unwrap_or_else(|| "el modelo no respondió".to_string()),
                     )]
                 };
-                conv.agregar_asistente(bloques, ms);
+                conv.agregar_asistente(bloques, ms, Some(shuma_agente::Uso { entrada, salida }));
             }
             s.scroll = f32::MAX;
         }
@@ -844,6 +847,15 @@ fn turno_view<HostMsg: Clone + 'static>(
         hijos.push(v);
     }
 
+    // Conteo de tokens del turno (paridad con Claude CLI), si lo hay.
+    if let Some(u) = turno.uso.filter(|u| u.hay()) {
+        hijos.push(
+            View::new(Style { size: Size { width: percent(1.0), height: length(14.0) }, ..Default::default() })
+                .text(format!("↑{} ↓{} tokens", u.entrada, u.salida), 10.0, theme.fg_muted),
+        );
+        alto += 16.0;
+    }
+
     let v = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0), height: Dimension::auto() },
@@ -1050,6 +1062,8 @@ mod tests {
                 conv_id: id,
                 bloques: vec![BloqueSalida::Texto("son las 3".into())],
                 ok: true,
+                entrada: 12,
+                salida: 5,
             },
         );
         assert!(!s.esperando);
@@ -1082,7 +1096,7 @@ mod tests {
         };
         s = update(
             s,
-            Msg::Respuesta { conv_id: id, bloques: vec![BloqueSalida::Accion(accion)], ok: true },
+            Msg::Respuesta { conv_id: id, bloques: vec![BloqueSalida::Accion(accion)], ok: true, entrada: 0, salida: 0 },
         );
         // turno 1 = asistente, bloque 0 = acción.
         s = update(s, Msg::Aprobar { turno: 1, bloque: 0 });

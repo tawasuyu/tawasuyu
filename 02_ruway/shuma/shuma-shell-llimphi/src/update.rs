@@ -471,11 +471,12 @@ pub(crate) fn fulfill_agente_requests(m: &mut Model, handle: &Handle<Msg>) {
     let fallback = wawa_config::WawaConfig::load().ai.llm;
     let conv_id = req.conv.id.clone();
     handle.spawn(move || {
-        let (ok, bloques) = match shuma_agente_host::responder(&req.conv, &req.agente, &fallback) {
-            Ok(r) => (true, r.bloques),
-            Err(e) => (false, vec![shuma_agente::BloqueSalida::Error(e)]),
-        };
-        Msg::Agente(shuma_module_agente::Msg::Respuesta { conv_id, bloques, ok })
+        let (ok, bloques, entrada, salida) =
+            match shuma_agente_host::responder(&req.conv, &req.agente, &fallback) {
+                Ok(r) => (true, r.bloques, r.input_tokens, r.output_tokens),
+                Err(e) => (false, vec![shuma_agente::BloqueSalida::Error(e)], 0, 0),
+            };
+        Msg::Agente(shuma_module_agente::Msg::Respuesta { conv_id, bloques, ok, entrada, salida })
     });
 }
 
