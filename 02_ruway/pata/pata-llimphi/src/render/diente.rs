@@ -27,7 +27,8 @@ pub struct DienteVivo<'a> {
     pub t: f64,
 }
 
-/// El icono del diente vivo, o `None` en reposo (el caller cae al icono normal).
+/// El icono del diente vivo, o `None` en reposo (el caller cae al icono normal
+/// + [`paint_reposo_halo`] de fondo).
 pub fn diente_vivo_view(vivo: &DienteVivo, size: f32, theme: &Theme) -> Option<View<Msg>> {
     let manifest = vivo.manifest;
     if manifest == Manifestacion::Reposo {
@@ -49,6 +50,31 @@ pub fn diente_vivo_view(vivo: &DienteVivo, size: f32, theme: &Theme) -> Option<V
             pintar(scene, rect, manifest, &bars, t, accent, muted);
         }),
     )
+}
+
+/// Animación ambiental de **reposo**: un halo de acento tenue que respira lento
+/// (≈0.25 Hz) detrás del icono del diente — lo hace sentir vivo sin tapar el
+/// glifo ni gritar. El caller lo pinta como fondo del `make_icon` cuando el
+/// diente vivo no tiene ninguna manifestación urgente. `t` es el reloj monotónico
+/// del diente (DienteTick en winit / `elapsed` en layer-shell).
+pub fn paint_reposo_halo(scene: &mut Scene, rect: PaintRect, t: f64, accent: llimphi_theme::Color) {
+    use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+    use llimphi_ui::llimphi_raster::peniko::Fill;
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    let breath = 0.5 + 0.5 * (t * 1.6).sin(); // periodo ≈ 3.9 s
+    let cx = (rect.x + rect.w * 0.5) as f64;
+    let cy = (rect.y + rect.h * 0.5) as f64;
+    let r = rect.w.min(rect.h) as f64 * (0.40 + 0.12 * breath);
+    let alpha = 0.05 + 0.11 * breath as f32;
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        accent.with_alpha(alpha),
+        None,
+        &Circle::new((cx, cy), r),
+    );
 }
 
 /// Atajo de color opaco.

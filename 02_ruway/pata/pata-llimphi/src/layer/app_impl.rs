@@ -902,14 +902,14 @@ impl LayerApp {
             self.panels[pi].dirty = true;
         }
         // Diente vivo: re-resolvé la manifestación cada frame (para que los
-        // transitorios caduquen suave) y, si hay algo que mostrar y este panel es
-        // un sidebar con un diente vivo, mantenelo latiendo para animar.
+        // transitorios caduquen suave) y mantené latiendo el panel del sidebar con
+        // un diente vivo —incluso en reposo, para la respiración ambiental del halo—.
         {
             let s = self.senales_diente();
             let now = self.diente_t0.elapsed().as_secs_f64();
             self.diente_manifest = self.atencion.resolver(s, now);
         }
-        if self.diente_manifest != pata_core::atencion::Manifestacion::Reposo {
+        {
             let idx = self.panels[pi].idx;
             let es_sidebar_vivo = self
                 .cfg

@@ -38,7 +38,7 @@ use std::collections::HashSet;
 use pata_core::config::{Anchor, Surface};
 use pata_core::layout::Rect;
 
-use super::diente::{diente_vivo_view, DienteVivo};
+use super::diente::{diente_vivo_view, paint_reposo_halo, DienteVivo};
 use super::{control_center_view, CentroDatos};
 use crate::nouser::NavState;
 use crate::rag::RagState;
@@ -93,6 +93,17 @@ fn rail_widget(
                 if let Some(v) = diente_vivo_view(vivo, size, theme) {
                     return v;
                 }
+                // Reposo: icono normal + halo de respiración ambiental detrás.
+                let t = vivo.t;
+                let accent = theme.accent;
+                return View::new(Style {
+                    size: Size { width: length(size), height: length(size) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Center),
+                    ..Default::default()
+                })
+                .paint_with(move |scene, _ts, rect| paint_reposo_halo(scene, rect, t, accent))
+                .children(vec![tooth_icon(name, size, color)]);
             }
             tooth_icon(name, size, color)
         },
