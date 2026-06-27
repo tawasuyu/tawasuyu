@@ -653,6 +653,7 @@ fn tooth_icon_kind(name: &str) -> (llimphi_icons::Icon, Color) {
             (Icon::Search, Color::from_rgba8(167, 139, 250, 255)) // violeta: preguntale a tu correo
         }
         "home" | "inicio" => (Icon::Home, Color::from_rgba8(52, 211, 153, 255)),              // verde
+        "control" | "sistema" | "vivo" => (Icon::Gauge, Color::from_rgba8(45, 212, 191, 255)), // teal: diente vivo
         "tools" | "herramientas" | "settings" | "system" | "config" => {
             (Icon::Settings, Color::from_rgba8(45, 212, 191, 255)) // teal
         }

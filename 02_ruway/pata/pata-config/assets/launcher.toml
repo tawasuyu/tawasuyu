@@ -141,6 +141,16 @@ icon = "monads"
 label = "Mónadas"
 content = { kind = "navigator", source = "nouser" }
 
+# --- Diente vivo: icono multifuncional manejado por el árbitro de atención.
+# En reposo muestra su glifo; cuando suena música → visualizador; al variar el
+# volumen → barra efímera; con la CPU caliente → su carga; con la batería
+# bajando/llena → su estado. (El panel desplegado es el navegador por ahora;
+# el control center va en una fase próxima.)
+[[surfaces.tabs]]
+icon = "control"
+label = "Control"
+content = { kind = "control" }
+
 # --- Shell: barra inferior autoescondible con el input de shuma ---
 # Al escribir, el frontend despliega el resto de shuma estilo Quake.
 [[surfaces]]
