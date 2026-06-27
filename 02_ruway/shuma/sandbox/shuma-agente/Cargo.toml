@@ -1,0 +1,22 @@
+[package]
+name = "shuma-agente"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — núcleo agnóstico de la IA conversacional: agentes configurables (backend+persona+capacidades), conversaciones multi-turno persistidas, y el motor que arma el ChatRequest e interpreta la salida en bloques (texto/código/acción de control). Sin UI, sin red: el host corre pluma-llm."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+sled = { workspace = true }
+thiserror = { workspace = true }
+
+# Tipos del contrato LLM (ChatRequest/ChatMessage) — liviano, sin red.
+pluma-llm-core = { path = "../../../../00_unanchay/pluma/pluma-llm-core" }
+# Catálogo seguro de acciones de control (el agente propone, no inventa flags).
+atipay = { path = "../../../../shared/atipay" }
+# Backend por agente (proveedor + modelo + API key + endpoint).
+wawa-config = { path = "../../../../shared/wawa-config" }
