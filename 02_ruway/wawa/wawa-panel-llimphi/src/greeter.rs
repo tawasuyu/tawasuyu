@@ -15,6 +15,7 @@ use std::path::PathBuf;
 /// Animaciones de fondo disponibles: `(tag, etiqueta)`. Espejo de
 /// `mirada-greeter::state::BgAnim`.
 pub const ANIMS: &[(&str, &str)] = &[
+    ("chakana", "Chakana animada (marca)"),
     ("matrix", "Matrix (lluvia de glifos)"),
     ("stars", "Estrellas (starfield)"),
     ("waves", "Ondas"),
@@ -48,6 +49,10 @@ pub struct GreeterCfg {
     /// preserva al reescribir — antes el panel reescribía sin esta clave y
     /// **borraba** el Lottie que el usuario hubiera puesto a mano.
     pub lottie: String,
+    /// Ruta a un proyecto «rive» (`.ron` del studio) como fondo vivo del greeter
+    /// (precedencia justo debajo del Lottie). Vacío = sin rive. El greeter lo
+    /// reproduce en vivo (tiene vello) — no necesita bakeo.
+    pub rive: String,
 }
 
 impl Default for GreeterCfg {
@@ -57,8 +62,10 @@ impl Default for GreeterCfg {
             last_session: String::new(),
             rain_enabled: true,
             rain_color: "green".into(),
-            anim: "matrix".into(),
+            // La chakana de marca es el default unificado de las tres superficies.
+            anim: "chakana".into(),
             lottie: String::new(),
+            rive: String::new(),
         }
     }
 }
@@ -95,6 +102,7 @@ impl GreeterCfg {
                 "rain_color" => self.rain_color = v.to_string(),
                 "bg" | "anim" => self.anim = v.to_string(),
                 "lottie" => self.lottie = v.to_string(),
+                "rive" => self.rive = v.to_string(),
                 _ => {}
             }
         }
@@ -113,6 +121,10 @@ impl GreeterCfg {
         // Preservá el Lottie de fondo si está configurado (no lo borres).
         if !self.lottie.trim().is_empty() {
             s.push_str(&format!("lottie = {}\n", self.lottie.trim()));
+        }
+        // Idem el rive de fondo.
+        if !self.rive.trim().is_empty() {
+            s.push_str(&format!("rive = {}\n", self.rive.trim()));
         }
         s
     }

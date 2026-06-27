@@ -12,9 +12,12 @@ use std::path::PathBuf;
 /// Fuentes posibles del splash: `(tag, etiqueta)`. Espejo de
 /// `arje-splash::config::Source`.
 pub const SOURCES: &[(&str, &str)] = &[
+    ("chakana", "Chakana animada (marca)"),
     ("builtin", "Logo nativo (respiración)"),
     ("image", "Imagen PNG"),
     ("frames", "Animación (carpeta de PNG)"),
+    ("lottie", "Lottie (.json, bakeado)"),
+    ("rive", "rive (.ron del studio, bakeado)"),
 ];
 
 /// Política del panel de logs de arranque: `(tag, etiqueta)`.
@@ -26,9 +29,11 @@ pub const LOG_MODES: &[(&str, &str)] = &[
 /// Config del splash editable desde el panel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplashCfg {
-    pub source: String, // builtin | image | frames
+    pub source: String, // chakana | builtin | image | frames | lottie | rive
     pub image: String,  // ruta del PNG (source = image)
     pub frames: String, // ruta de la carpeta (source = frames)
+    pub lottie: String, // ruta del .json (source = lottie)
+    pub rive: String,   // ruta del .ron (source = rive)
     pub fps: u32,
     pub bg: String,     // #rrggbb
     pub accent: String, // #rrggbb
@@ -38,9 +43,12 @@ pub struct SplashCfg {
 impl Default for SplashCfg {
     fn default() -> Self {
         Self {
-            source: "builtin".into(),
+            // La chakana de marca es el default unificado de las tres superficies.
+            source: "chakana".into(),
             image: String::new(),
             frames: String::new(),
+            lottie: String::new(),
+            rive: String::new(),
             fps: 30,
             bg: "#121218".into(),
             accent: "#7c83f7".into(),
@@ -84,6 +92,18 @@ impl SplashCfg {
                         self.source = "frames".into();
                     }
                 }
+                "lottie" => {
+                    self.lottie = v.to_string();
+                    if !v.is_empty() {
+                        self.source = "lottie".into();
+                    }
+                }
+                "rive" => {
+                    self.rive = v.to_string();
+                    if !v.is_empty() {
+                        self.source = "rive".into();
+                    }
+                }
                 "fps" => if let Ok(n) = v.parse() { self.fps = n },
                 "bg" => self.bg = v.to_string(),
                 "accent" => self.accent = v.to_string(),
@@ -97,6 +117,8 @@ impl SplashCfg {
         let path_line = match self.source.as_str() {
             "image" => format!("image = {}\n", self.image),
             "frames" => format!("frames = {}\n", self.frames),
+            "lottie" => format!("lottie = {}\n", self.lottie),
+            "rive" => format!("rive = {}\n", self.rive),
             _ => String::new(),
         };
         format!(

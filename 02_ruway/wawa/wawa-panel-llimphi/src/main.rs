@@ -1953,11 +1953,26 @@ fn greeter_section(g: &greeter::GreeterCfg) -> Section {
             "Animación Lottie de fondo (.json) — vacío = procedural",
             g.lottie.clone(),
         ))
+        .field(Field::text(
+            "rive",
+            "Proyecto rive de fondo (.ron del studio) — vacío = sin rive",
+            g.rive.clone(),
+        ))
 }
 
 /// Sección «Arranque»: el splash sin parpadeo (`arje-splash`). Escribe
 /// `arje/splash.conf`; el instalador lo hornea en el initramfs/ESP. El catálogo
 /// de fuentes/logs sale de [`splash::SOURCES`] / [`splash::LOG_MODES`].
+/// Dispara `fondo-bake <kind> <ruta>` en segundo plano para pre-renderizar un
+/// Lottie/rive a la cache de frames (la usan el splash y el wallpaper, que no
+/// rasterizan vello). Best-effort: si el binario no está, sólo loguea.
+fn spawn_fondo_bake(kind: &str, path: &str) {
+    match std::process::Command::new("fondo-bake").arg(kind).arg(path).spawn() {
+        Ok(_) => eprintln!("wawa-panel: fondo-bake {kind} «{path}» disparado"),
+        Err(e) => eprintln!("wawa-panel: no pude lanzar fondo-bake ({e})"),
+    }
+}
+
 fn splash_section(s: &splash::SplashCfg) -> Section {
     use allichay::{EnumOption, Field};
     let mut sec = Section::new("splash::arranque", "Arranque (splash)")
@@ -1980,6 +1995,10 @@ fn splash_section(s: &splash::SplashCfg) -> Section {
         sec = sec.field(Field::text("image", "Ruta del PNG", s.image.clone()));
     } else if s.source == "frames" {
         sec = sec.field(Field::text("frames", "Carpeta de PNG (animación)", s.frames.clone()));
+    } else if s.source == "lottie" {
+        sec = sec.field(Field::text("lottie", "Ruta del Lottie (.json)", s.lottie.clone()));
+    } else if s.source == "rive" {
+        sec = sec.field(Field::text("rive", "Ruta del rive (.ron del studio)", s.rive.clone()));
     }
     sec.field(Field::text("fps", "Cuadros por segundo", s.fps.to_string()))
         .field(Field::text("bg", "Color de fondo (#rrggbb)", s.bg.clone()))
@@ -3925,6 +3944,11 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                         m.greeter.lottie = v.to_string();
                     }
                 }
+                Some("rive") => {
+                    if let Some(v) = value.as_str() {
+                        m.greeter.rive = v.to_string();
+                    }
+                }
                 _ => {}
             }
             m.dirty.greeter = true;
@@ -3943,6 +3967,14 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                 Some("frames") => if let Some(v) = value.as_str() {
                     m.splash.frames = v.to_string();
                     if !v.is_empty() { m.splash.source = "frames".into(); }
+                },
+                Some("lottie") => if let Some(v) = value.as_str() {
+                    m.splash.lottie = v.to_string();
+                    if !v.is_empty() { m.splash.source = "lottie".into(); }
+                },
+                Some("rive") => if let Some(v) = value.as_str() {
+                    m.splash.rive = v.to_string();
+                    if !v.is_empty() { m.splash.source = "rive".into(); }
                 },
                 Some("fps") => if let Some(v) = value.as_str() {
                     if let Ok(n) = v.trim().parse() { m.splash.fps = n; }
@@ -4064,7 +4096,20 @@ fn flush_saves(m: &mut Model) {
     }
     if m.dirty.mirada {
         match m.mirada_path.as_deref().map(|p| m.mirada.save(p)) {
-            Some(Ok(())) => ok = true,
+            Some(Ok(())) => {
+                ok = true;
+                // Wallpaper Lottie/rive: pre-bakeamos el asset a frames (el
+                // compositor no rasteriza vello; reproduce la cache). El compositor
+                // igual cae a la chakana mientras el baker trabaja.
+                let wp = m.mirada.wallpaper_path.trim();
+                if !wp.is_empty() {
+                    match m.mirada.wallpaper_source.as_str() {
+                        "lottie" => spawn_fondo_bake("lottie", wp),
+                        "rive" => spawn_fondo_bake("rive", wp),
+                        _ => {}
+                    }
+                }
+            }
             Some(Err(e)) => err = Some(format!("· mirada save: {e}")),
             None => err = Some("· mirada: sin ruta de config".into()),
         }
@@ -4133,7 +4178,18 @@ fn flush_saves(m: &mut Model) {
     }
     if m.dirty.splash {
         match m.splash.save() {
-            Ok(()) => ok = true,
+            Ok(()) => {
+                ok = true;
+                // El splash no tiene GPU al boot: hay que pre-bakear el Lottie/rive
+                // a frames para que pueda blitearlos. Lo disparamos en segundo plano.
+                match m.splash.source.as_str() {
+                    "lottie" if !m.splash.lottie.is_empty() => {
+                        spawn_fondo_bake("lottie", &m.splash.lottie)
+                    }
+                    "rive" if !m.splash.rive.is_empty() => spawn_fondo_bake("rive", &m.splash.rive),
+                    _ => {}
+                }
+            }
             Err(e) => err = Some(format!("· splash save: {e}")),
         }
         m.dirty.splash = false;

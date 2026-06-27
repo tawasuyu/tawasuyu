@@ -90,6 +90,8 @@ fn wallpaper_source_options() -> Vec<EnumOption> {
         EnumOption::new("gradient", "Gradiente"),
         EnumOption::new("procedural", "Procedural"),
         EnumOption::new("video", "Video (animado)"),
+        EnumOption::new("lottie", "Lottie (.json, bakeado)"),
+        EnumOption::new("rive", "rive (.ron del studio, bakeado)"),
     ]
 }
 
@@ -209,7 +211,7 @@ impl Configurable for Config {
                     ))
                     .field(Field::text(
                         "wallpaper_path",
-                        "Imagen / video de fondo",
+                        "Imagen / video / Lottie(.json) / rive(.ron) de fondo",
                         self.wallpaper_path.clone(),
                     ))
                     .field(Field::dropdown(
