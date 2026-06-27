@@ -100,6 +100,14 @@ pub enum BusEvent {
     EnteRestarting { id: Ulid, label: String, delay_ms: u64 },
     /// Un Ente terminó de forma limpia (exit 0) y no será reiniciado.
     EnteExited { id: Ulid, label: String },
+    /// Un Ente `Restart` quedó APARCADO porque su "piso" (una capability de la
+    /// que depende) no tiene proveedor — p. ej. el compositor cayó y se llevó a
+    /// este cliente. Espera a que el proveedor reaparezca; no está vivo ni
+    /// muerto-definitivo. El monitor lo muestra como "esperando piso".
+    EnteParked { id: Ulid, label: String },
+    /// El piso volvió y arje re-spawnea al Ente aparcado (en orden topológico).
+    /// Cierra el ciclo de un `EnteParked` previo.
+    EnteRefloored { id: Ulid, label: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

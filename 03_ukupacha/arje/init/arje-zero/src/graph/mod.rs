@@ -17,7 +17,7 @@ pub(crate) mod resolve;
 mod shutdown;
 mod topology;
 
-use arje_bus::{BusMessage, BusResponse};
+use arje_bus::{BusEvent, BusMessage, BusResponse};
 use arje_card::{Capability, EntityCard, Payload};
 use nix::unistd::Pid;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -314,6 +314,10 @@ impl EnteGraph {
     /// reemplaza a la previa aparcada (el "hilo" de identidad es el label, igual
     /// que `restart_state`).
     pub(in crate::graph) fn park_ente(&mut self, card: EntityCard) {
+        self.broadcast_lifecycle(BusEvent::EnteParked {
+            id: card.id,
+            label: card.label.clone(),
+        });
         self.parked.retain(|c| c.label != card.label);
         self.parked.push(card);
     }
@@ -347,6 +351,13 @@ impl EnteGraph {
         // re-aparca para reintentar cuando cambie el piso.
         for (i, _) in &plan.rejected {
             self.parked.push(ready[*i].clone());
+        }
+        // Avisar a los suscriptores que el piso volvió para estos Entes.
+        for card in &ordered {
+            self.broadcast_lifecycle(BusEvent::EnteRefloored {
+                id: card.id,
+                label: card.label.clone(),
+            });
         }
         ordered
     }
@@ -523,6 +534,43 @@ mod refloor_tests {
         let ready = g.drain_refloorable();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].label, "cliente-gui");
+    }
+
+    #[tokio::test]
+    async fn park_y_refloor_difunden_eventos() {
+        use arje_bus::{BusEvent, BusMessage, BusPayload};
+        let mut g = EnteGraph::new(seed_con_spawn());
+        let seed_id = g.seed_id();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<BusMessage>(16);
+        g.lifecycle_subscribers.push(tx);
+
+        let mut client = EntityCard::new("cliente-gui");
+        client.requires = [piso()].into_iter().collect();
+        client.supervision = Supervision::Restart {
+            initial: Duration::from_millis(10),
+            max: Duration::from_secs(1),
+        };
+        g.authorize_and_spawn(client, seed_id).await.unwrap();
+
+        let ev = |m: BusMessage| match m.payload {
+            BusPayload::Event(e) => e,
+            other => panic!("esperaba Event, fue {other:?}"),
+        };
+        // Aparcado ⇒ EnteParked.
+        assert!(matches!(
+            ev(rx.try_recv().unwrap()),
+            BusEvent::EnteParked { label, .. } if label == "cliente-gui"
+        ));
+
+        // Llega el piso y se drena ⇒ EnteRefloored.
+        let mut compositor = EntityCard::new("mirada");
+        compositor.provides = [piso()].into_iter().collect();
+        g.authorize_and_spawn(compositor, seed_id).await.unwrap();
+        let _ = g.drain_refloorable();
+        assert!(matches!(
+            ev(rx.try_recv().unwrap()),
+            BusEvent::EnteRefloored { label, .. } if label == "cliente-gui"
+        ));
     }
 
     #[tokio::test]
