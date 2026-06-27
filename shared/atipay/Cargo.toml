@@ -16,7 +16,8 @@ serde_json = { workspace = true }
 # dependencias de cada superficie. Por ahora se autoría el vocabulario como
 # datos estáticos (la fuente de verdad sigue siendo cada superficie); una
 # rebanada futura puede derivarlo del crate de origen tras un feature.
-default = ["mirada", "sandokan", "sistema"]
+default = ["mirada", "sandokan", "sistema", "shuma"]
 mirada = []
 sandokan = []
 sistema = []
+shuma = []

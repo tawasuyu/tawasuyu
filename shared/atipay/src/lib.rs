@@ -302,6 +302,8 @@ impl Catalogo {
         c.registrar(Box::new(crate::sandokan::FuenteSandokan));
         #[cfg(feature = "sistema")]
         c.registrar(Box::new(crate::sistema::FuenteSistema));
+        #[cfg(feature = "shuma")]
+        c.registrar(Box::new(crate::shuma::FuenteShuma));
         c
     }
 
@@ -433,6 +435,8 @@ pub mod mirada;
 pub mod sandokan;
 #[cfg(feature = "sistema")]
 pub mod sistema;
+#[cfg(feature = "shuma")]
+pub mod shuma;
 
 #[cfg(test)]
 mod tests {
