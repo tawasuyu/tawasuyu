@@ -152,23 +152,13 @@ pub fn update(state: State, _msg: Msg) -> State {
     state
 }
 
-/// Spawnea el `exec` de una entry detached del shell. Parseo simple
-/// por whitespace; quoting avanzado no soportado (un launcher quiere
-/// invocar binarios, no scripts).
+/// Lanza el `exec` de una entry. Si el orquestador (arje) está levantado, la
+/// entrega como Ente OneShot supervisado (vía `arje-applaunch`); si no, cae al
+/// spawn crudo **detached** (nuevo grupo de proceso + stdio mudo) que tenía
+/// antes. Parseo simple por whitespace; quoting avanzado no soportado (un
+/// launcher quiere invocar binarios, no scripts).
 pub fn spawn_exec(exec_line: &str) {
-    use std::os::unix::process::CommandExt;
-    let mut parts = exec_line.split_whitespace();
-    let Some(program) = parts.next() else {
-        return;
-    };
-    let args: Vec<&str> = parts.collect();
-    let _ = std::process::Command::new(program)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn();
+    let _ = arje_applaunch::launch_exec_line(exec_line);
 }
 
 /// Mapea `action_id` a `Msg`. El launcher expone `launcher.toggle` como

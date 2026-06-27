@@ -13,3 +13,6 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
+# Puente de lanzamiento: si arje está levantado, la entry entra al grafo como
+# Ente OneShot supervisado (RunCard); si no, spawn crudo detached como antes.
+arje-applaunch = { path = "../../../../03_ukupacha/arje/arje-applaunch" }

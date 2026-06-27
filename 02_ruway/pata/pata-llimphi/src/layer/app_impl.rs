@@ -428,7 +428,8 @@ impl LayerApp {
     /// Lanza una app del menú por su `id` y cierra el menú.
     pub(super) fn lanzar_app(&mut self, id: String) {
         if let Some(app) = self.registry.get(&id) {
-            let _ = app.spawn();
+            // Vía arje si está levantado (Ente OneShot); si no, crudo.
+            arje_applaunch::launch_entry(app);
         }
         self.set_menu_open(false);
     }

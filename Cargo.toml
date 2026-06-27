@@ -479,6 +479,7 @@ members = [
     "03_ukupacha/agora/agora-keystore",
     "03_ukupacha/agora/agora-net-brahman",
     "03_ukupacha/agora/agora-store",
+    "03_ukupacha/arje/arje-applaunch",
     "03_ukupacha/arje/arje-card",
     "03_ukupacha/arje/arje-card-llimphi",
     "03_ukupacha/arje/arje-compat",

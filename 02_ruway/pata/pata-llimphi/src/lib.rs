@@ -561,7 +561,8 @@ fn ejecutar_efecto_nahual(
         }
         Effect::Launch { app_id, path } => {
             if let Some(entry) = registry.get(&app_id) {
-                let _ = entry.open(&path.to_string_lossy());
+                // Vía arje si está levantado (Ente OneShot); si no, open crudo.
+                let _ = arje_applaunch::open_entry(entry, &path.to_string_lossy());
             }
         }
     }
@@ -1978,7 +1979,8 @@ impl App for PataApp {
                     .map(|a| a.id.clone());
                 if let Some(id) = id {
                     if let Some(app) = model.registry.get(&id) {
-                        let _ = app.spawn();
+                        // Vía arje si está levantado (Ente OneShot); si no, crudo.
+                        arje_applaunch::launch_entry(app);
                     }
                     model.menu_open = false;
                     model.menu_query.clear();
@@ -1987,7 +1989,8 @@ impl App for PataApp {
             }
             Msg::LaunchApp(id) => {
                 if let Some(app) = model.registry.get(&id) {
-                    let _ = app.spawn();
+                    // Vía arje si está levantado (Ente OneShot); si no, crudo.
+                    arje_applaunch::launch_entry(app);
                 }
                 model.menu_open = false;
                 model.menu_query.clear();

@@ -114,9 +114,12 @@ pub fn handlers_for_path(registry: &AppRegistry, path: &str) -> Vec<(String, Str
 /// `xdg-open`. Para la elección explícita del menú "Abrir con…".
 pub fn open_with_id(registry: &AppRegistry, app_id: &str, path: &str) -> Opened {
     if let Some(app) = registry.get(app_id) {
-        match app.open(path) {
-            Ok(_) => return Opened::NativeApp(app.label.clone()),
-            Err(e) => eprintln!("pata · {} no pudo abrir {path}: {e}; uso xdg-open", app.label),
+        // Vía arje si está levantado (Ente OneShot); si no, open crudo del host.
+        match arje_applaunch::open_entry(app, path) {
+            arje_applaunch::Outcome::Failed(e) => {
+                eprintln!("pata · {} no pudo abrir {path}: {e}; uso xdg-open", app.label)
+            }
+            _ => return Opened::NativeApp(app.label.clone()),
         }
     }
     open_system(path)
