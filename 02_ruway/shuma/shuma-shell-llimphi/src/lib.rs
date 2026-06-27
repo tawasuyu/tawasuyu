@@ -409,6 +409,8 @@ fn init_agente(model: &mut Model) {
             let convs = almacen.conversaciones().unwrap_or_default();
             model.agente.set_agentes(agentes);
             model.agente.set_conversaciones(convs);
+            // Reanudá en la conversación más reciente (como las apps web de IA).
+            model.agente.abrir_mas_reciente();
             model.agente_almacen = Some(almacen);
         }
         Err(e) => eprintln!("shuma: no se pudo abrir el almacén del chat: {e}"),

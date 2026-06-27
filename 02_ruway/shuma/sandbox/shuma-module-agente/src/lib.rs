@@ -248,6 +248,17 @@ impl State {
         self.reloj_ms = ms;
     }
 
+    /// Abre la conversación más reciente si no hay ninguna activa (al arrancar,
+    /// para reanudar donde se dejó — como las apps web de IA). No-op si ya hay
+    /// una abierta o no hay conversaciones.
+    pub fn abrir_mas_reciente(&mut self) {
+        if self.conv_activa.is_none() {
+            if let Some(c) = self.conversaciones.first() {
+                self.conv_activa = Some(c.id.clone());
+            }
+        }
+    }
+
     /// Fija el alto del viewport del hilo (px).
     pub fn fijar_vista_alto(&mut self, h: f32) {
         self.vista_alto = h.max(120.0);
