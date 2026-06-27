@@ -583,6 +583,7 @@ mirada-win-kind-surface = · body surface ·
 # === mirada-greeter ===
 mirada-greeter-menu-session = Session
 mirada-greeter-menu-bg = Background
+mirada-greeter-bg-chakana = Chakana (brand)
 mirada-greeter-bg-matrix = Matrix rain
 mirada-greeter-bg-stars = Starfield
 mirada-greeter-bg-waves = Waves

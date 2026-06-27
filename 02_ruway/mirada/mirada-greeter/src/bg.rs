@@ -30,6 +30,9 @@ pub fn paint(
         BgAnim::Aurora => aurora::paint(scene, ts, rect, t, bright),
         BgAnim::Lightning => lightning::paint(scene, ts, rect, t, bright),
         BgAnim::AlleyCat => alleycat::paint(scene, ts, rect, t, bright),
+        // La chakana de marca no es procedural: se pinta como imagen, en el
+        // greeter (`paint_chakana`). Acá es no-op (como `Physics`).
+        BgAnim::Chakana => {}
         // El fondo físico tiene estado y lo pinta el greeter directamente
         // (ver `bg_physics`); acá es no-op.
         BgAnim::Physics => {}

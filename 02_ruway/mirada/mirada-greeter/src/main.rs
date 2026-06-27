@@ -371,6 +371,34 @@ enum Status {
     Failed(String),
 }
 
+/// Pinta la **chakana animada de la marca** como fondo, llenando `rect`. La
+/// genera a un tamaño **acotado** con el aspecto del rect (barato) y la dibuja
+/// escalada al `Scene`. Es el mismo glifo (`mirada_fondo::chakana_frame` →
+/// `marca::animated_frame`) que pintan el splash y el compositor — el default
+/// unificado de las tres superficies.
+fn paint_chakana(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    rect: llimphi_ui::PaintRect,
+    t: f32,
+) {
+    use llimphi_ui::llimphi_raster::kurbo::Affine;
+    const CAP: f32 = 1280.0;
+    let (rw, rh) = (rect.w.max(1.0), rect.h.max(1.0));
+    let big = rw.max(rh);
+    let s = if big > CAP { CAP / big } else { 1.0 };
+    let cw = (rw * s).round().max(1.0) as u32;
+    let ch = (rh * s).round().max(1.0) as u32;
+    // `chakana_frame` devuelve BGRA; `peniko::Image` quiere RGBA → swap B↔R.
+    let mut rgba = mirada_fondo::chakana_frame(t, cw, ch);
+    for px in rgba.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    let img = llimphi_image::from_rgba8(rgba, cw, ch);
+    let xform = Affine::translate((rect.x as f64, rect.y as f64))
+        * Affine::scale_non_uniform(rw as f64 / cw as f64, rh as f64 / ch as f64);
+    scene.draw_image(&img, xform);
+}
+
 /// Carga el `.json` de Lottie configurado como fondo (si hay y parsea). Falla
 /// con gracia: loguea y devuelve `None` para caer al fondo procedural.
 fn lottie_bg_from(path: Option<&str>) -> Option<llimphi_lottie::LottieAsset> {
@@ -1215,10 +1243,18 @@ impl App for Greeter {
         } else if model.rain_enabled {
             let t = model.rain_t;
             let anim = model.anim;
-            let bright = rain_bright(model.rain_color, &theme);
-            root = root.paint_with(move |scene, ts, rect| {
-                bg::paint(anim, scene, ts, rect, t, bright);
-            });
+            if anim == state::BgAnim::Chakana {
+                // El fondo por defecto unificado: la chakana de marca, dibujada
+                // como imagen (no es procedural como las demás).
+                root = root.paint_with(move |scene, _ts, rect| {
+                    paint_chakana(scene, rect, t);
+                });
+            } else {
+                let bright = rain_bright(model.rain_color, &theme);
+                root = root.paint_with(move |scene, ts, rect| {
+                    bg::paint(anim, scene, ts, rect, t, bright);
+                });
+            }
         }
         root.on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
             .children(vec![content])
@@ -1375,6 +1411,7 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
         it
     };
     let bg_menu = Menu::new(t("mirada-greeter-menu-bg"))
+        .item(bg_item(&t("mirada-greeter-bg-chakana"), state::BgAnim::Chakana).separated())
         .item(bg_item(&t("mirada-greeter-bg-matrix"), state::BgAnim::Matrix))
         .item(bg_item(&t("mirada-greeter-bg-stars"), state::BgAnim::Stars))
         .item(bg_item(&t("mirada-greeter-bg-waves"), state::BgAnim::Waves))
@@ -1425,6 +1462,7 @@ fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) 
             return model;
         }
         let anim = match tag {
+            "chakana" => state::BgAnim::Chakana,
             "matrix" => state::BgAnim::Matrix,
             "stars" => state::BgAnim::Stars,
             "waves" => state::BgAnim::Waves,

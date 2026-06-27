@@ -587,6 +587,7 @@ mirada-win-kind-surface = · Cuerpop sawanpi ·
 # === mirada-greeter ===
 mirada-greeter-menu-session = Yaykuy
 mirada-greeter-menu-bg = Hawan
+mirada-greeter-bg-chakana = Chakana (marca)
 mirada-greeter-bg-matrix = Matrix para
 mirada-greeter-bg-stars = Quyllurkuna
 mirada-greeter-bg-waves = Quchu quchu

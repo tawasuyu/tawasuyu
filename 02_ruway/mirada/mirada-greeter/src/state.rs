@@ -50,6 +50,11 @@ impl RainColor {
 /// interruptor maestro; `anim` elige cuál se pinta.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BgAnim {
+    /// La **chakana animada de la marca** (`mirada_fondo::chakana_frame`) — el
+    /// fondo por defecto **unificado** de las tres superficies. No es procedural
+    /// como las demás: se pinta como imagen (el greeter la genera por frame y la
+    /// dibuja al `Scene`), no por `crate::bg::paint`.
+    Chakana,
     /// Lluvia de glifos estilo Matrix (`rain`).
     Matrix,
     /// Campo de estrellas en warp (`stars`).
@@ -75,6 +80,7 @@ pub enum BgAnim {
 impl BgAnim {
     fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
+            "chakana" | "marca" | "default" => Some(Self::Chakana),
             "matrix" | "rain" | "lluvia" => Some(Self::Matrix),
             "stars" | "estrellas" | "starfield" => Some(Self::Stars),
             "waves" | "ondas" => Some(Self::Waves),
@@ -90,6 +96,7 @@ impl BgAnim {
 
     pub fn tag(self) -> &'static str {
         match self {
+            Self::Chakana => "chakana",
             Self::Matrix => "matrix",
             Self::Stars => "stars",
             Self::Waves => "waves",
@@ -131,7 +138,8 @@ impl Default for GreeterState {
             // por `MIRADA_GREETER_RAIN=0`.
             rain_enabled: true,
             rain_color: RainColor::Green,
-            anim: BgAnim::Matrix,
+            // El default unificado de las tres superficies: la chakana de marca.
+            anim: BgAnim::Chakana,
             lottie_path: None,
         }
     }
@@ -306,6 +314,18 @@ mod tests {
         assert!(back.rain_enabled);
         assert_eq!(back.rain_color, RainColor::Amber);
         assert_eq!(back.anim, BgAnim::Stars);
+    }
+
+    #[test]
+    fn chakana_es_default_y_round_trip() {
+        // El default unificado es la chakana.
+        assert_eq!(GreeterState::default().anim, BgAnim::Chakana);
+        assert_eq!(BgAnim::Chakana.tag(), "chakana");
+        assert_eq!(BgAnim::parse("chakana"), Some(BgAnim::Chakana));
+        assert_eq!(BgAnim::parse(BgAnim::Chakana.tag()), Some(BgAnim::Chakana));
+        for a in ["marca", "default", "CHAKANA"] {
+            assert_eq!(BgAnim::parse(a), Some(BgAnim::Chakana), "alias {a}");
+        }
     }
 
     #[test]

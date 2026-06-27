@@ -15,3 +15,6 @@ drm = { workspace = true }
 font8x8 = { workspace = true }
 libc = { workspace = true }
 png = { workspace = true }
+# Sólo el núcleo (sin vello): FondoSpec + la chakana animada de marca como bytes
+# CPU. El splash blitea esos bytes; el bake de Lottie/rive no se usa acá.
+mirada-fondo = { workspace = true, default-features = false }

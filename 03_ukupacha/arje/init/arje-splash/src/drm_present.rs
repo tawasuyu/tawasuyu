@@ -154,6 +154,8 @@ struct Surface {
 enum Scene<'a> {
     /// El splash nativo (logo respirando + barra). `blend` = fade-out a BG.
     Splash,
+    /// La chakana animada de la marca (default unificado). `blend` = fade-out.
+    Chakana,
     /// Una imagen (PNG estático o el cuadro N de una animación). `blend` = fade.
     Image(&'a crate::image::Image),
     /// El greeter simulado (tarjeta de login). `blend` = aparición desde BG.
@@ -162,6 +164,7 @@ enum Scene<'a> {
 
 /// La fuente del splash ya cargada en memoria (decodificada una sola vez).
 enum Loaded {
+    Chakana,
     Builtin,
     Image(crate::image::Image),
     Frames(Vec<crate::image::Image>),
@@ -172,6 +175,7 @@ impl Loaded {
     fn from_cfg(src: &crate::config::Source) -> Self {
         use crate::config::Source;
         match src {
+            Source::Chakana => Loaded::Chakana,
             Source::Builtin => Loaded::Builtin,
             Source::Image(p) => match crate::image::load_png(p) {
                 Some(img) => {
@@ -199,6 +203,7 @@ impl Loaded {
     /// Resuelve la escena del cuadro `t` (elige el frame de la animación).
     fn scene_at(&self, t: u64, fps: u64) -> Scene<'_> {
         match self {
+            Loaded::Chakana => Scene::Chakana,
             Loaded::Builtin => Scene::Splash,
             Loaded::Image(img) => Scene::Image(img),
             Loaded::Frames(v) => {
@@ -521,6 +526,7 @@ fn paint_into(
         .map_err(|e| format!("map_dumb_buffer: {e}"))?;
     match scene {
         Scene::Splash => render::paint_frame(map.as_mut(), w, h, pitch, t, blend),
+        Scene::Chakana => crate::image::blit_chakana(map.as_mut(), w, h, pitch, t, bg, blend),
         Scene::Image(img) => crate::image::blit_fit(map.as_mut(), w, h, pitch, img, bg, blend),
         Scene::Greeter => render::paint_greeter(map.as_mut(), w, h, pitch, blend),
     }

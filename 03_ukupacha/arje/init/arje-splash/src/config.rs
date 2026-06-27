@@ -15,11 +15,16 @@ use std::path::PathBuf;
 /// De dónde sale lo que se pinta.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
+    /// La **chakana animada de la marca** (`mirada_fondo::chakana_frame`) — el
+    /// fondo por defecto **unificado** de las tres superficies (splash, greeter,
+    /// wallpaper). Procedural en CPU, sin archivos: sirve en el initramfs.
+    Chakana,
     /// El splash nativo (logo de marca respirando + barra). Sin archivos.
     Builtin,
     /// Una imagen PNG estática, centrada y escalada a la pantalla.
     Image(PathBuf),
     /// Una carpeta con cuadros `*.png` (orden alfabético) reproducidos en loop.
+    /// También el destino de un Lottie/rive *bakeado* por `fondo-bake`.
     Frames(PathBuf),
 }
 
@@ -49,7 +54,7 @@ pub struct SplashCfg {
 impl Default for SplashCfg {
     fn default() -> Self {
         Self {
-            source: Source::Builtin,
+            source: Source::Chakana,
             fps: 30,
             max_ms: 8000,
             bg: crate::render::BG,
@@ -84,6 +89,7 @@ impl SplashCfg {
             let (k, v) = (k.trim(), v.trim());
             match k {
                 "source" => match v.to_ascii_lowercase().as_str() {
+                    "chakana" => self.source = Source::Chakana,
                     "builtin" => self.source = Source::Builtin,
                     "image" => {} // la ruta llega en `image =`
                     "frames" => {}
@@ -108,6 +114,7 @@ impl SplashCfg {
     /// Serializa a texto `clave = valor` (lo que escribe wawa-panel).
     pub fn to_text(&self) -> String {
         let (src, path) = match &self.source {
+            Source::Chakana => ("chakana", String::new()),
             Source::Builtin => ("builtin", String::new()),
             Source::Image(p) => ("image", p.display().to_string()),
             Source::Frames(p) => ("frames", p.display().to_string()),
@@ -115,7 +122,7 @@ impl SplashCfg {
         let key = match &self.source {
             Source::Image(_) => format!("image = {path}\n"),
             Source::Frames(_) => format!("frames = {path}\n"),
-            Source::Builtin => String::new(),
+            Source::Chakana | Source::Builtin => String::new(),
         };
         format!(
             "# arje-splash — config del arranque (la escribe wawa-panel)\n\
@@ -193,10 +200,24 @@ mod tests {
     }
 
     #[test]
-    fn frames_y_default_builtin() {
+    fn default_es_chakana_y_frames_pisan() {
         let mut c = SplashCfg::default();
-        assert_eq!(c.source, Source::Builtin);
+        assert_eq!(c.source, Source::Chakana, "el default unificado es la chakana");
         c.merge_text("frames = /etc/arje/boot-anim\n");
         assert_eq!(c.source, Source::Frames(PathBuf::from("/etc/arje/boot-anim")));
+        // volver a chakana explícito.
+        c.merge_text("source = chakana\n");
+        assert_eq!(c.source, Source::Chakana);
+    }
+
+    #[test]
+    fn round_trip_chakana_y_builtin() {
+        for src in [Source::Chakana, Source::Builtin] {
+            let mut a = SplashCfg::default();
+            a.source = src.clone();
+            let mut back = SplashCfg::default();
+            back.merge_text(&a.to_text());
+            assert_eq!(back.source, src);
+        }
     }
 }

@@ -124,6 +124,42 @@ pub fn blit_fit(
     }
 }
 
+/// Pinta la **chakana animada de la marca** (`mirada_fondo::chakana_frame`) para
+/// el instante `t_ms`, llenando la pantalla. La genera a un tamaño **acotado**
+/// con el mismo aspecto que la pantalla (así `blit_fit` la escala "contain" sin
+/// barras) — barato en el boot, donde la CPU es única. `fade` la funde a `bg`
+/// para el handoff, igual que las demás escenas.
+pub fn blit_chakana(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    pitch: usize,
+    t_ms: u64,
+    bg: (u8, u8, u8),
+    fade: f32,
+) {
+    let (cw, ch) = capped_aspect(w, h, 1280);
+    let t = t_ms as f32 / 1000.0;
+    // `chakana_frame` devuelve BGRA; `Image` es RGBA → intercambiamos B↔R.
+    let mut rgba = mirada_fondo::chakana_frame(t, cw as u32, ch as u32);
+    for px in rgba.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    let img = Image { w: cw, h: ch, rgba };
+    blit_fit(buf, w, h, pitch, &img, bg, fade);
+}
+
+/// Tamaño acotado que preserva el aspecto de `w×h`, con el lado mayor en `cap`
+/// (nunca agranda: si la pantalla ya es menor que `cap`, la deja igual).
+fn capped_aspect(w: usize, h: usize, cap: usize) -> (usize, usize) {
+    let big = w.max(h);
+    if big <= cap || big == 0 {
+        return (w.max(1), h.max(1));
+    }
+    let s = cap as f32 / big as f32;
+    (((w as f32 * s) as usize).max(1), ((h as f32 * s) as usize).max(1))
+}
+
 /// `src` sobre `dst` con alfa `a` (0..255).
 fn over(dst: (u8, u8, u8), src: (u8, u8, u8), a: u8) -> (u8, u8, u8) {
     let t = a as f32 / 255.0;
@@ -182,6 +218,49 @@ mod tests {
         assert_eq!(at(w / 2, h / 2), (200, 0, 0));
         // Esquina izquierda (fuera del cuadrado centrado) → bg.
         assert_eq!(at(0, h / 2), bg);
+    }
+
+    #[test]
+    fn chakana_llena_y_no_es_solo_bg() {
+        // La chakana debe pintar algo distinto al fondo en el centro y fundir a
+        // bg con fade=1 (continuidad con el handoff).
+        let (w, h, pitch) = (64usize, 36usize, 64 * 4);
+        let bg = (18, 18, 24);
+        let mut buf = vec![0u8; pitch * h];
+        blit_chakana(&mut buf, w, h, pitch, 1000, bg, 0.0);
+        let at = |x: usize, y: usize| {
+            let i = y * pitch + x * 4;
+            (buf[i + 2], buf[i + 1], buf[i])
+        };
+        // En algún punto del frame hay color de la chakana (no todo es bg).
+        let mut any_non_bg = false;
+        for y in (0..h).step_by(3) {
+            for x in (0..w).step_by(3) {
+                if at(x, y) != bg {
+                    any_non_bg = true;
+                }
+            }
+        }
+        assert!(any_non_bg, "la chakana debe pintar algo sobre el fondo");
+        // fade=1 → todo bg.
+        let mut faded = vec![0u8; pitch * h];
+        blit_chakana(&mut faded, w, h, pitch, 1000, bg, 1.0);
+        assert_eq!(at_buf(&faded, pitch, w / 2, h / 2), bg, "fade=1 funde a bg");
+    }
+
+    fn at_buf(buf: &[u8], pitch: usize, x: usize, y: usize) -> (u8, u8, u8) {
+        let i = y * pitch + x * 4;
+        (buf[i + 2], buf[i + 1], buf[i])
+    }
+
+    #[test]
+    fn capped_aspect_preserva_y_no_agranda() {
+        // Pantalla grande 16:9 → acotada a 1280 de lado mayor, mismo aspecto.
+        let (cw, ch) = capped_aspect(1920, 1080, 1280);
+        assert_eq!(cw, 1280);
+        assert!((ch as i64 - 720).abs() <= 1, "aspecto 16:9 → ~720, fue {ch}");
+        // Pantalla chica → no se agranda.
+        assert_eq!(capped_aspect(800, 600, 1280), (800, 600));
     }
 
     #[test]

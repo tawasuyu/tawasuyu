@@ -20,6 +20,10 @@ llimphi-lottie = { workspace = true }
 # Fondo físico (bg = physics): tentáculos esqueletales con física Verlet.
 llimphi-anim = { workspace = true }
 llimphi-mesh = { workspace = true }
+# Imagen cruda → peniko::Image para dibujar la chakana de marca al Scene.
+llimphi-image = { workspace = true }
+# Fondo por defecto unificado: la chakana animada de marca (núcleo sin vello).
+mirada-fondo = { workspace = true, default-features = false }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
