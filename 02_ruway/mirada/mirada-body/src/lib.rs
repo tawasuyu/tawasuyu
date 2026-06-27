@@ -346,6 +346,23 @@ impl BodyState {
         &self.outputs
     }
 
+    /// Re-emite el estado actual de **salidas** como eventos, para re-sincronizar
+    /// a un Cerebro que se (re)conecta tras un reinicio/crash: por cada salida su
+    /// alta ([`BodyEvent::OutputAdded`]) y, si no está en el origen, su posición
+    /// ([`BodyEvent::OutputMoved`]). Las ventanas las re-anuncia el compositor
+    /// desde su propio registro (es quien tiene `app_id`/`title`); las reservas no
+    /// se trackean acá — el shell las re-asienta al re-anclar su layer surface.
+    pub fn census_outputs(&self) -> Vec<BodyEvent> {
+        let mut out = Vec::with_capacity(self.outputs.len() * 2);
+        for (id, rect) in &self.outputs {
+            out.push(BodyEvent::OutputAdded { id: *id, width: rect.w, height: rect.h });
+            if rect.x != 0 || rect.y != 0 {
+                out.push(BodyEvent::OutputMoved { id: *id, x: rect.x, y: rect.y });
+            }
+        }
+        out
+    }
+
     /// Una superficie conocida.
     pub fn surface(&self, id: WindowId) -> Option<&Surface> {
         self.surfaces.get(&id)
@@ -542,6 +559,21 @@ mod tests {
         b.remove_output(0);
         assert_eq!(b.outputs().len(), 1);
         assert_eq!(b.outputs()[0].0, 1);
+    }
+
+    #[test]
+    fn census_reemite_las_salidas_para_reconexion() {
+        let mut b = BodyState::new();
+        b.add_output(0, 2560, 1440);
+        b.add_output(1, 1920, 1080);
+        b.move_output(1, 2560, 0); // segundo monitor a la derecha
+        let censo = b.census_outputs();
+        // OutputAdded por cada salida + OutputMoved por la desplazada.
+        assert!(censo.contains(&BodyEvent::OutputAdded { id: 0, width: 2560, height: 1440 }));
+        assert!(censo.contains(&BodyEvent::OutputAdded { id: 1, width: 1920, height: 1080 }));
+        assert!(censo.contains(&BodyEvent::OutputMoved { id: 1, x: 2560, y: 0 }));
+        // La salida en el origen no emite OutputMoved.
+        assert!(!censo.contains(&BodyEvent::OutputMoved { id: 0, x: 0, y: 0 }));
     }
 
     #[test]

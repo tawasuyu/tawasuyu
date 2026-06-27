@@ -22,7 +22,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::ImportDma;
 use mirada_brain::{Keymap, Rules, CtlServer};
 use mirada_body::BodyState;
-use mirada_link::BodyLink;
+use mirada_link::BodyLinkServer;
 
 /// Carga las reglas de ventana del usuario, o ninguna si no hay archivo.
 pub(crate) fn load_user_rules() -> Rules {
@@ -282,6 +282,9 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
 
     // Elige el Cerebro. El modo greeter (DM) fuerza Cerebro embebido;
     // si no, enlazado cuando `MIRADA_SOCKET` está puesto, autónomo si no.
+    // En modo enlazado guardamos el LISTENER persistente (`brain_server`) para
+    // re-aceptar un Cerebro nuevo si el actual muere — sin tirar el Cuerpo.
+    let mut brain_server: Option<BodyLinkServer> = None;
     let brain = if greeter {
         println!("mirada-compositor · modo greeter (DM) — Cerebro embebido.");
         embedded_brain(&keymap_path)
@@ -289,8 +292,17 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         match std::env::var("MIRADA_SOCKET") {
             Ok(path) => {
                 println!("mirada-compositor · esperando al Cerebro en {path} …");
-                let link = BodyLink::listen(&path)?;
+                let server = BodyLinkServer::bind(&path)?;
+                // Bloqueá el arranque hasta el primer Cerebro (luego el server
+                // queda vivo para reconexiones).
+                let link = loop {
+                    if let Some(l) = server.try_accept()? {
+                        break l;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                };
                 println!("mirada-compositor · Cerebro conectado.");
+                brain_server = Some(server);
                 Brain::Linked(link)
             }
             Err(_) => {
@@ -449,6 +461,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         closing_ghosts: Vec::new(),
         body: BodyState::new(),
         brain,
+        brain_server,
         mode: if greeter { BodyMode::Greeter } else { BodyMode::Session },
         roster,
         grabs: Vec::new(),

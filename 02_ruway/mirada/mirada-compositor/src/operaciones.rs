@@ -273,12 +273,62 @@ impl App {
 
     /// Drena los comandos de un Cerebro enlazado (no hace nada si es embebido).
     pub(crate) fn brain_poll(&mut self) {
+        // Antes de drenar: si el Cerebro murió, intentá reconectar uno nuevo.
+        self.reconcile_brain();
         let cmds = match &self.brain {
             Brain::Linked(link) => link.drain(),
             Brain::Embedded(_) => Vec::new(),
         };
         if !cmds.is_empty() {
             self.apply_commands(cmds);
+        }
+    }
+
+    /// Si el Cerebro **enlazado** murió (reinicio a propósito o crash), re-acepta
+    /// uno nuevo en el listener persistente y le re-sincroniza el mundo —sin
+    /// tocar las conexiones Wayland de los clientes, que siguen vivas en el
+    /// Cuerpo—. Mientras nadie reconecte, el Cuerpo **sigue componiendo el último
+    /// frame**: las apps no se inmutan. No-op en modo embebido.
+    ///
+    /// Esto es lo que convierte un panic del Cerebro (layout/UX/plugins) de
+    /// «perdés la sesión» a «un parpadeo»: un supervisor relanza el Cerebro y
+    /// acá lo re-enganchamos.
+    pub(crate) fn reconcile_brain(&mut self) {
+        let muerto = matches!(&self.brain, Brain::Linked(link) if !link.is_alive());
+        if !muerto {
+            return;
+        }
+        let Some(server) = self.brain_server.as_ref() else {
+            return;
+        };
+        let nuevo = match server.try_accept() {
+            Ok(Some(link)) => link,
+            Ok(None) => return, // nadie reconectó todavía; seguí componiendo
+            Err(e) => {
+                eprintln!("mirada-compositor · reconexión del Cerebro falló: {e}");
+                return;
+            }
+        };
+        println!("mirada-compositor · Cerebro reconectado — re-sincronizando estado.");
+        self.brain = Brain::Linked(nuevo);
+        // Re-anunciá el mundo: salidas (del Cuerpo) + ventanas (de nuestro
+        // registro, que tiene app_id/title). El Cerebro reconstruye su modelo y
+        // vuelve a emitir `Place`; el shell re-asienta sus reservas al re-anclar.
+        let mut censo = self.body.census_outputs();
+        for w in &self.windows {
+            if w.is_shell || w.is_greeter {
+                continue;
+            }
+            censo.push(BodyEvent::WindowOpened {
+                id: w.id,
+                app_id: w.app_id.clone(),
+                title: w.title.clone(),
+            });
+        }
+        if let Brain::Linked(link) = &mut self.brain {
+            for ev in censo {
+                let _ = link.send(&ev);
+            }
         }
     }
 

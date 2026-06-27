@@ -23,7 +23,7 @@ use smithay::wayland::shm::ShmState;
 use auth_core::UserInfo;
 use mirada_body::BodyState;
 use mirada_brain::{BrainCommand, Desktop, Decorations, Permisos, WindowEffects};
-use mirada_link::BodyLink;
+use mirada_link::{BodyLink, BodyLinkServer};
 use crate::gamma_control;
 use crate::idle_notify;
 use crate::screencopy;
@@ -588,6 +588,11 @@ pub(crate) struct App {
     pub(crate) body: BodyState,
     /// El Cerebro: embebido o enlazado.
     pub(crate) brain: Brain,
+    /// El listener persistente del Cerebro enlazado (`MIRADA_SOCKET`): sobrevive
+    /// a la muerte del Cerebro para **re-aceptar** uno nuevo (reinicio o crash)
+    /// sin tirar el Cuerpo ni las conexiones Wayland de los clientes. `None` en
+    /// modo embebido. Ver [`App::reconcile_brain`].
+    pub(crate) brain_server: Option<BodyLinkServer>,
     /// Fase del ciclo de vida — login, sesión o sesión bloqueada (ver [`BodyMode`]).
     pub(crate) mode: BodyMode,
     /// Sesiones hosteadas (FUS) con id estable. 0 (greeter), 1 (tras el traspaso
