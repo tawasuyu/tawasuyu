@@ -190,6 +190,9 @@ pub struct State {
     borrar_agente_id: Option<String>,
     /// Intent: id de conversación a borrar del Almacen.
     borrar_conv_id: Option<String>,
+    /// Renombre en curso: `(id de conversación, input con el título)`. `None` =
+    /// no se está renombrando.
+    renombrando: Option<(String, TextInputState)>,
 }
 
 impl Default for State {
@@ -218,6 +221,7 @@ impl State {
             persist_agente: None,
             borrar_agente_id: None,
             borrar_conv_id: None,
+            renombrando: None,
         }
     }
 
@@ -338,6 +342,10 @@ pub enum Msg {
     AbrirConversacion(usize),
     /// Borrar la conversación en esa posición.
     BorrarConversacion(usize),
+    /// Empezar a renombrar la conversación en esa posición.
+    RenombrarConversacion(usize),
+    /// Confirmar el renombre en curso.
+    ConfirmarRenombre,
     /// Elegir el agente en esa posición.
     SeleccionarAgente(usize),
     /// Rueda/arrastre del hilo (delta en px).
@@ -381,6 +389,18 @@ pub fn update(state: State, msg: Msg) -> State {
     match msg {
         Msg::Key(ev) => {
             if ev.state != KeyState::Pressed {
+                return s;
+            }
+            // Renombre en curso: teclas al input del título (Enter confirma,
+            // Escape cancela).
+            if let Some((_, input)) = s.renombrando.as_mut() {
+                match &ev.key {
+                    Key::Named(NamedKey::Escape) => s.renombrando = None,
+                    Key::Named(NamedKey::Enter) => return update(s, Msg::ConfirmarRenombre),
+                    _ => {
+                        input.apply_key(&ev);
+                    }
+                }
                 return s;
             }
             // Con el editor abierto, las teclas van al campo enfocado (Tab cicla;
@@ -463,6 +483,23 @@ pub fn update(state: State, msg: Msg) -> State {
                     s.conv_activa = None;
                 }
                 s.borrar_conv_id = Some(c.id);
+            }
+        }
+        Msg::RenombrarConversacion(i) => {
+            if let Some(c) = s.conversaciones.get(i) {
+                let mut input = TextInputState::new();
+                input.set_text(&c.titulo);
+                s.renombrando = Some((c.id.clone(), input));
+            }
+        }
+        Msg::ConfirmarRenombre => {
+            if let Some((id, input)) = s.renombrando.take() {
+                let nuevo = input.text().trim().to_string();
+                if !nuevo.is_empty() {
+                    if let Some(c) = s.conversaciones.iter_mut().find(|c| c.id == id) {
+                        c.titulo = nuevo;
+                    }
+                }
             }
         }
         Msg::SeleccionarAgente(i) => {
@@ -657,11 +694,35 @@ fn sidebar_view<HostMsg: Clone + 'static>(
 
     // Lista de conversaciones: título clickeable + «×» para borrar.
     hijos.push(rotulo("CONVERSACIONES", theme));
+    let renombrando_id = state.renombrando.as_ref().map(|(id, _)| id.as_str());
     for (i, c) in state.conversaciones.iter().enumerate() {
         let activa = state.conv_activa.as_deref() == Some(c.id.as_str());
         let titulo = if c.titulo.trim().is_empty() { "(sin título)" } else { &c.titulo };
         let bg = if activa { theme.bg_selected } else { theme.bg_panel_alt };
         let fg = if activa { theme.fg_text } else { theme.fg_muted };
+
+        // Renombrando esta conversación: input en vez del título.
+        if renombrando_id == Some(c.id.as_str()) {
+            if let Some((_, input)) = &state.renombrando {
+                let tp = TextInputPalette::from_theme(theme);
+                hijos.push(
+                    View::new(Style {
+                        size: Size { width: percent(1.0), height: length(26.0) },
+                        padding: rect_xy(6.0, 0.0),
+                        ..Default::default()
+                    })
+                    .children(vec![text_input_view(
+                        input,
+                        "nuevo título…",
+                        true,
+                        &tp,
+                        lift(Msg::ConfirmarRenombre),
+                    )]),
+                );
+                continue;
+            }
+        }
+
         let fila = View::new(Style {
             flex_direction: FlexDirection::Row,
             size: Size { width: percent(1.0), height: length(26.0) },
@@ -680,9 +741,17 @@ fn sidebar_view<HostMsg: Clone + 'static>(
             })
             .text_aligned(titulo, 12.5, fg, Alignment::Start)
             .on_click(lift(Msg::AbrirConversacion(i))),
+            // «✎»: renombrar.
+            View::new(Style {
+                size: Size { width: length(20.0), height: percent(1.0) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned("✎", 12.0, theme.fg_muted, Alignment::Center)
+            .on_click(lift(Msg::RenombrarConversacion(i))),
             // «×»: borra la conversación.
             View::new(Style {
-                size: Size { width: length(22.0), height: percent(1.0) },
+                size: Size { width: length(20.0), height: percent(1.0) },
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
@@ -1363,6 +1432,21 @@ mod tests {
         assert!(s.conversaciones.is_empty());
         assert!(s.conv_activa.is_none()); // era la activa
         assert_eq!(s.take_borrar_conversacion().as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
+    fn renombrar_conversacion_cambia_el_titulo() {
+        let mut s = estado_con_agente();
+        s.input.set_text("hola mundo");
+        s = update(s, Msg::Enviar);
+        s = update(s, Msg::RenombrarConversacion(0));
+        assert!(s.renombrando.is_some());
+        if let Some((_, input)) = s.renombrando.as_mut() {
+            input.set_text("Mi charla");
+        }
+        s = update(s, Msg::ConfirmarRenombre);
+        assert!(s.renombrando.is_none());
+        assert_eq!(s.conversaciones[0].titulo, "Mi charla");
     }
 
     #[test]

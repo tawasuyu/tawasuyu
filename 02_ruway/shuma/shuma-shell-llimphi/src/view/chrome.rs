@@ -145,12 +145,19 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
             motion::SLOW,
             Affine::translate((0.0, 24.0)),
         );
+        // El chat (diente Agente) necesita más ancho que los monitores: piso de
+        // 480px para que entren el sidebar + el hilo sin apretar.
+        let ancho_panel = if tool == Tool::Agente {
+            model.monitors_width.max(480.0)
+        } else {
+            model.monitors_width
+        };
         core = splitter_two(
             Direction::Row,
             core,
             PaneSize::Flex,
             panel,
-            PaneSize::Fixed(model.monitors_width),
+            PaneSize::Fixed(ancho_panel),
             |phase, dx| match phase {
                 DragPhase::Move => Some(Msg::SetToolWidth(dx)),
                 DragPhase::End => None,
