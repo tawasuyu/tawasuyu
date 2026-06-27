@@ -290,6 +290,8 @@ pub(super) struct LayerApp {
     pub(super) cpu_temp: Option<f32>,
     /// Manifestación actual del diente vivo.
     pub(super) diente_manifest: pata_core::atencion::Manifestacion,
+    /// Inventario de flota (matilda), read-only, para el diente «Flota».
+    pub(super) flota: Option<matilda_core::Inventory>,
     pub(super) theme: Theme,
     pub(super) cfg: Config,
     pub(super) surfaces: Vec<crate::SurfaceWidgets>,
@@ -502,6 +504,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let polkit = crate::polkit::PolkitHandle::spawn();
     let cava = crate::config_tiene_widget(&cfg, "cava")
         .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
+    let flota = crate::config_tiene_flota(&cfg).then(crate::load_flota).flatten();
 
     let nav_rx = crate::config_tiene_navigator(&cfg).then(|| {
         let (tx, rx) = std::sync::mpsc::channel::<PollOutcome>();
@@ -626,6 +629,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         bat_now: None,
         cpu_temp: None,
         diente_manifest: pata_core::atencion::Manifestacion::Reposo,
+        flota,
         theme,
         cfg,
         surfaces,

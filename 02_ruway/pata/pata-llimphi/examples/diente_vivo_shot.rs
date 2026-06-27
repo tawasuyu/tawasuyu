@@ -27,13 +27,14 @@ use pata_core::widget::{ClockReading, WidgetCtx};
 use pata_llimphi::bluetooth::{BtDevice, BtState};
 use pata_llimphi::mpris::MediaState;
 use pata_llimphi::network::{NetState, NetStatus, WifiAp};
+use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
 use pata_llimphi::render::{
-    control_center_view, diente_vivo_view, monitor_vivo_view, paint_reposo_halo,
+    control_center_view, diente_vivo_view, flota_view, monitor_vivo_view, paint_reposo_halo,
     sistema_monitor_view, CentroDatos, ControlExtras, DienteVivo,
 };
 use pata_llimphi::Msg;
 
-const W: u32 = 1080;
+const W: u32 = 1420;
 const H: u32 = 680;
 const SZ: f32 = 56.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -87,6 +88,21 @@ fn main() {
             BtDevice { mac: "CC:DD".to_string(), name: "Mouse".to_string(), connected: false },
         ],
     };
+    // Inventario de flota de muestra (matilda).
+    let mut inv = Inventory::new();
+    inv.add_host(Host::new("edge-1", "10.0.0.1").with_tag("prod").with_tag("edge"));
+    inv.add_host(Host::new("db-1", "10.0.0.2").with_tag("prod").with_tag("db"));
+    inv.add_container(
+        Container::new("web", "nginx:1.27").with_port(8080, 80).with_restart(RestartPolicy::Always),
+    );
+    inv.add_container(
+        Container::new("api", "ghcr.io/jl/api:1.0")
+            .with_port(9000, 9000)
+            .with_restart(RestartPolicy::UnlessStopped),
+    );
+    inv.add_container(Container::new("pg", "postgres:16").with_restart(RestartPolicy::Always));
+    inv.add_vhost(VHost::to_container("jlsoltech.com", "web", 80).with_tls());
+
     let centro = CentroDatos {
         ctx: &ctx,
         extras: &extras,
@@ -94,6 +110,7 @@ fn main() {
         net: Some(&net),
         net_password: None,
         bt: Some(&bt),
+        flota: Some(&inv),
     };
     let panel = View::new(Style {
         size: Size { width: length(300.0_f32), height: length(H as f32) },
@@ -109,6 +126,14 @@ fn main() {
         ..Default::default()
     })
     .children(vec![sistema_monitor_view(&ctx, H as f32, &theme)]);
+
+    // ---- Flota (matilda) ----
+    let flota_col = View::new(Style {
+        size: Size { width: length(300.0_f32), height: length(H as f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![flota_view(Some(&inv), H as f32, &theme)]);
 
     // ---- Manifestaciones del diente (derecha) ----
     let tiles = vec![
@@ -151,7 +176,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![panel, monitor, galeria]);
+    .children(vec![panel, monitor, flota_col, galeria]);
 
     render_png(root, &out);
     eprintln!("diente_vivo_shot: {out} ({W}x{H})");

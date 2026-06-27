@@ -166,6 +166,14 @@ icon = "monitor"
 label = "Sistema"
 content = { kind = "monitor" }
 
+# Flota baremetal (matilda): inventario read-only de hosts/contenedores/vhosts.
+# Lee ~/.config/tawasuyu/flota/inventory.json (JSON de matilda-core). Sin él,
+# muestra un aviso. SSH/discover/apply son fase posterior.
+[[surfaces.tabs]]
+icon = "flota"
+label = "Flota"
+content = { kind = "flota" }
+
 # --- Shell: barra inferior autoescondible con el input de shuma ---
 # Al escribir, el frontend despliega el resto de shuma estilo Quake.
 [[surfaces]]

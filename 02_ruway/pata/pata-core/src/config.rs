@@ -654,6 +654,12 @@ impl Config {
             "Sistema",
             WidgetSpec::new("monitor"),
         ));
+        // Flota baremetal (matilda): inventario read-only de hosts/contenedores.
+        rrail.tabs.push(SidebarTab::new(
+            "flota",
+            "Flota",
+            WidgetSpec::new("flota"),
+        ));
         rrail.tabs.push(SidebarTab::new(
             "rag",
             "Correo IA",

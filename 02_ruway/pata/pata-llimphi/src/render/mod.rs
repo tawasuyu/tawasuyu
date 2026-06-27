@@ -47,6 +47,7 @@ mod control;
 mod media;
 mod network;
 mod diente;
+mod flota;
 mod monitor;
 mod notifications;
 mod osd;
@@ -66,6 +67,7 @@ pub use panels::{
 };
 pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use diente::{diente_vivo_view, paint_reposo_halo, DienteVivo};
+pub use flota::flota_view;
 pub use monitor::{monitor_vivo_view, sistema_monitor_view};
 pub use control::{
     control_button_view, control_center_view, control_overlay, extras_vivos, read_power_night,
@@ -403,6 +405,7 @@ pub fn root(model: &Model) -> View<Msg> {
                             .as_ref()
                             .map(|(s, p)| (s.as_str(), p.as_str())),
                         bt: model.bluetooth_now.as_ref(),
+                        flota: model.flota.as_ref(),
                     };
                     superficies.push(nav_panel_view(
                         surface,

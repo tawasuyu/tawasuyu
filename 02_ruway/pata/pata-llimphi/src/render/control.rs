@@ -294,6 +294,8 @@ pub struct CentroDatos<'a> {
     /// `(ssid, tecleado)` si hay una entrada de contraseña Wi-Fi en curso.
     pub net_password: Option<(&'a str, &'a str)>,
     pub bt: Option<&'a crate::bluetooth::BtState>,
+    /// Inventario de flota (matilda) para el diente «Flota».
+    pub flota: Option<&'a matilda_core::Inventory>,
 }
 
 pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View<Msg> {

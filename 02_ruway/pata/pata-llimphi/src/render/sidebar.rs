@@ -261,6 +261,10 @@ fn panel_inner(
     if crate::es_monitor(kind) {
         return super::sistema_monitor_view(centro.ctx, panel_h, theme);
     }
+    // Flota (matilda): inventario read-only de hosts/contenedores/vhosts.
+    if crate::es_flota(kind) {
+        return super::flota_view(centro.flota, panel_h, theme);
+    }
     // Panel RAG (preguntale a tu correo): su contenido es `rag`/`search`. Trae su
     // propio cabezal + buscador + respuesta + fuentes.
     if crate::rag::is_rag_kind(kind) {
@@ -686,6 +690,9 @@ fn tooth_icon_kind(name: &str) -> (llimphi_icons::Icon, Color) {
         "home" | "inicio" => (Icon::Home, Color::from_rgba8(52, 211, 153, 255)),              // verde
         "control" | "vivo" => (Icon::Gauge, Color::from_rgba8(45, 212, 191, 255)), // teal: diente vivo
         "monitor" | "sistema" | "sysmon" => (Icon::Equalizer, Color::from_rgba8(96, 165, 250, 255)), // azul: monitor
+        "flota" | "fleet" | "matilda" | "server" | "servers" => {
+            (Icon::Globe, Color::from_rgba8(45, 212, 191, 255)) // teal: flota baremetal
+        }
         "tools" | "herramientas" | "settings" | "system" | "config" => {
             (Icon::Settings, Color::from_rgba8(45, 212, 191, 255)) // teal
         }

@@ -18,6 +18,9 @@ path = "src/lib.rs"
 bitacora = { workspace = true }
 pata-core = { path = "../pata-core" }
 pata-config = { path = "../pata-config" }
+# Flota baremetal (read-only): modelo de inventario de matilda (sólo serde, sin
+# tokio/SSH). El diente «Flota» del sidebar lista hosts/contenedores/vhosts.
+matilda-core = { path = "../../shuma/baremetal/matilda-core" }
 # Emisión de cada clip nuevo al centro de eventos (no-op si willay no corre).
 willay-core = { workspace = true }
 willay-emit = { workspace = true }

@@ -1216,6 +1216,7 @@ impl LayerApp {
                     .as_ref()
                     .map(|(s, p)| (s.as_str(), p.as_str())),
                 bt: self.bluetooth_now.as_ref(),
+                flota: self.flota.as_ref(),
             };
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],
