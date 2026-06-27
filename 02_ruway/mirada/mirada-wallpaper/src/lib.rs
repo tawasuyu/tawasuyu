@@ -31,8 +31,9 @@ pub struct Config {
     pub source: SourceCfg,
     /// Cadencia de refresco en modo daemon, en segundos. Default 6 h.
     pub interval_secs: u64,
-    /// Conector DRM destino. `""` = el wallpaper **global** de `config.ron`.
-    /// (v1 sólo soporta el global; ver [`run_once`].)
+    /// Conector DRM destino. `""` = el wallpaper **global** de `config.ron`;
+    /// un nombre (`"DP-1"`, `"HDMI-A-1"`) = el override **de esa salida** (ver
+    /// [`run_once`] y `OutputOverride` en `mirada-brain`).
     pub output: String,
     /// Cuántas imágenes descargadas conservar por fuente (poda el resto).
     pub keep: usize,
@@ -170,21 +171,22 @@ pub enum Outcome {
 /// recarga solo. Idempotente: si la imagen es la misma que ya está puesta, no
 /// reescribe nada (evita una recarga inútil del compositor).
 pub fn run_once(cfg: &Config) -> Result<Outcome> {
-    if !cfg.output.is_empty() {
-        return Err(anyhow!(
-            "v1 sólo cambia el wallpaper global; dejá `output: \"\"` en wallpaper.ron \
-             (los overrides por salida se editan a mano en config.ron)"
-        ));
-    }
     let cfg_path = mirada_brain::Config::default_path()
         .ok_or_else(|| anyhow!("no pude resolver la ruta de config.ron de mirada"))?;
     // Garantiza que config.ron exista (escribe la plantilla del compositor si no).
     let _ = mirada_brain::Config::load_or_default(&cfg_path);
     let text = std::fs::read_to_string(&cfg_path)
         .with_context(|| format!("leyendo {}", cfg_path.display()))?;
-    let current = mirada_brain::Config::from_ron(&text)
-        .map_err(|e| anyhow!("config.ron de mirada inválida: {e}"))?
-        .wallpaper_path;
+    let parsed = mirada_brain::Config::from_ron(&text)
+        .map_err(|e| anyhow!("config.ron de mirada inválida: {e}"))?;
+    // El wallpaper "actual" para esta política: el global, o el de la salida
+    // destino si se especificó una (`wallpaper_path_for` cae al global si la
+    // salida no tiene override propio). Sirve para que la fuente deduplique.
+    let current = if cfg.output.is_empty() {
+        parsed.wallpaper_path.clone()
+    } else {
+        parsed.wallpaper_path_for(&cfg.output).to_string()
+    };
 
     let src = cfg.build_source();
     let fetched = src
@@ -214,7 +216,11 @@ pub fn run_once(cfg: &Config) -> Result<Outcome> {
         return Ok(Outcome::Unchanged(final_path));
     }
 
-    let new_text = ron_edit::set_wallpaper_path(&text, final_str);
+    let new_text = if cfg.output.is_empty() {
+        ron_edit::set_wallpaper_path(&text, final_str)
+    } else {
+        ron_edit::set_output_wallpaper_path(&text, &cfg.output, final_str)
+    };
     // Red de seguridad: nunca escribir un config.ron que no reparsee.
     mirada_brain::Config::from_ron(&new_text)
         .map_err(|e| anyhow!("la edición dejó un config.ron inválido ({e}); no escribo"))?;
@@ -278,7 +284,8 @@ const CONFIG_TEMPLATE: &str = "\
     // Cada cuánto refresca el daemon (segundos). 21600 = 6 h.
     interval_secs: 21600,
 
-    // Salida destino: \"\" = wallpaper global. (v1 sólo soporta el global.)
+    // Salida destino: \"\" = wallpaper global; un conector DRM (\"DP-1\",
+    // \"HDMI-A-1\") cambia el fondo SÓLO de esa salida (override por monitor).
     output: \"\",
 
     // Cuántas imágenes descargadas conservar en cache (~/.cache/mirada/wallpaper).
