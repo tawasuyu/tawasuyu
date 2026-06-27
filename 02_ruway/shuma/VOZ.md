@@ -93,6 +93,9 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
   - clasificador prosódico determinista sobre features de f0.
   - sin sockets, sin `tokio`, sin cpal.
 - **`rimay-voz-mock` (hecho):** STT/TTS deterministas sin modelo (CI/demos).
+- **`rimay-voz` (hecho, fachada):** re-exporta core+mock, constructores
+  `stt_mock`/`tts_mock`, convención del socket `voz.sock`. Demo canónico del
+  lazo completo: `cargo run -p rimay-voz --example escucha_mock`.
 - **`rimay-voz-{whisper,piper,…}` + `rimay-voz-daemon` (falta):** backends
   reales + daemon que carga el modelo una vez por socket (copiar
   `rimay-verbo-daemon`).

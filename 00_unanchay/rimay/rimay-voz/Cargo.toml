@@ -1,0 +1,15 @@
+[package]
+name = "rimay-voz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "rimay-voz — fachada one-line para consumir voz (STT/TTS) en la suite. Re-exporta el core (traits + máquina de escucha + prosodia + lectura), da constructores mock, y fija la convención del socket del futuro voz-daemon. Gemelo de rimay-verbo."
+
+[dependencies]
+rimay-voz-core = { path = "../rimay-voz-core" }
+rimay-voz-mock = { path = "../rimay-voz-mock" }
+
+[dev-dependencies]
+tokio = { workspace = true }
