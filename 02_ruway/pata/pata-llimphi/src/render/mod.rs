@@ -64,7 +64,7 @@ pub use panels::{
     cpu_overlay, cpu_panel, ram_overlay, ram_panel, volume_overlay, volume_panel,
 };
 pub use bluetooth::{bluetooth_overlay, bluetooth_view};
-pub use diente::{diente_vivo_view, DienteVivo};
+pub use diente::{diente_vivo_view, paint_reposo_halo, DienteVivo};
 pub use control::{
     control_button_view, control_center_view, control_overlay, extras_vivos, read_power_night,
     set_night, set_power_profile, set_radio, CentroDatos, ControlExtras,

@@ -1,0 +1,285 @@
+//! Volcado headless del **diente vivo** + el **control center**, para verlos sin
+//! bootear el DM.
+//!
+//! - Izquierda: el panel del control center (reloj, «sonando ahora», volumen/
+//!   brillo/batería, listas Wi-Fi/Bluetooth, perfil de energía, luz nocturna).
+//! - Derecha: las manifestaciones del diente (reposo+halo, volumen, música, CPU
+//!   caliente, batería) rendereadas grandes para ver el canvas.
+//!
+//! `cargo run -p pata-llimphi --example diente_vivo_shot -- [out.png]`
+
+use std::fs::File;
+use std::io::BufWriter;
+
+use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
+use llimphi_ui::llimphi_hal::{wgpu, Hal};
+use llimphi_ui::llimphi_layout::taffy;
+use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, FlexDirection, Size, Style};
+use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent, Rect as TaffyRect};
+use llimphi_ui::llimphi_layout::LayoutTree;
+use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::{vello, Renderer};
+use llimphi_ui::llimphi_text::Typesetter;
+use llimphi_ui::View;
+
+use pata_core::atencion::{EstadoBat, Manifestacion};
+use pata_core::widget::ClockReading;
+use pata_llimphi::bluetooth::{BtDevice, BtState};
+use pata_llimphi::mpris::MediaState;
+use pata_llimphi::network::{NetState, NetStatus, WifiAp};
+use pata_llimphi::render::{
+    control_center_view, diente_vivo_view, paint_reposo_halo, CentroDatos, ControlExtras, DienteVivo,
+};
+use pata_llimphi::Msg;
+
+const W: u32 = 780;
+const H: u32 = 680;
+const SZ: f32 = 56.0;
+const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+fn main() {
+    let out = std::env::args().nth(1).unwrap_or_else(|| "diente_vivo.png".to_string());
+    let theme = llimphi_theme::Theme::default();
+
+    // ---- Control center (izquierda) ----
+    let clock = ClockReading {
+        year: 2026,
+        month: 6,
+        day: 27,
+        weekday: 5,
+        hour: 14,
+        minute: 32,
+        second: 0,
+    };
+    let extras = ControlExtras {
+        battery: Some((72, false)),
+        wifi: true,
+        bt: true,
+        power_profile: Some("balanced".to_string()),
+        night: false,
+    };
+    let media = MediaState {
+        has_player: true,
+        playing: true,
+        title: "Mac DeMarco — Chamber of Reflection".to_string(),
+    };
+    let net = NetState {
+        status: NetStatus::Wifi { ssid: "Hogar".to_string(), signal: 78 },
+        wifi_enabled: true,
+        networks: vec![
+            WifiAp { ssid: "Hogar".to_string(), signal: 78, secure: true, active: true },
+            WifiAp { ssid: "Vecino-5G".to_string(), signal: 47, secure: true, active: false },
+            WifiAp { ssid: "Cafe_Libre".to_string(), signal: 30, secure: false, active: false },
+        ],
+    };
+    let bt = BtState {
+        available: true,
+        powered: true,
+        devices: vec![
+            BtDevice { mac: "AA:BB".to_string(), name: "Auriculares".to_string(), connected: true },
+            BtDevice { mac: "CC:DD".to_string(), name: "Mouse".to_string(), connected: false },
+        ],
+    };
+    let centro = CentroDatos {
+        clock: &clock,
+        volume: 0.55,
+        muted: false,
+        brightness: 0.80,
+        extras: &extras,
+        media: Some(&media),
+        net: Some(&net),
+        net_password: None,
+        bt: Some(&bt),
+    };
+    let panel = View::new(Style {
+        size: Size { width: length(300.0_f32), height: length(H as f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![control_center_view(H as f32, &centro, &theme)]);
+
+    // ---- Manifestaciones del diente (derecha) ----
+    let tiles = vec![
+        tile("Reposo (halo)", reposo_view(&theme), &theme),
+        tile("Volumen", manifest_view(Manifestacion::Volumen { frac: 0.6, muted: false }, &theme), &theme),
+        tile("Volumen mute", manifest_view(Manifestacion::Volumen { frac: 0.4, muted: true }, &theme), &theme),
+        tile("Música", manifest_view(Manifestacion::Musica, &theme), &theme),
+        tile("CPU caliente", manifest_view(Manifestacion::Cpu { carga: 0.92 }, &theme), &theme),
+        tile(
+            "Batería baja",
+            manifest_view(Manifestacion::Bateria { frac: 0.12, cargando: false, estado: EstadoBat::Baja }, &theme),
+            &theme,
+        ),
+        tile(
+            "Cargando",
+            manifest_view(Manifestacion::Bateria { frac: 0.85, cargando: true, estado: EstadoBat::Enchufada }, &theme),
+            &theme,
+        ),
+    ];
+    let galeria = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+        padding: TaffyRect {
+            left: length(20.0_f32),
+            right: length(16.0_f32),
+            top: length(16.0_f32),
+            bottom: length(16.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(12.0_f32) },
+        ..Default::default()
+    })
+    .children(tiles);
+
+    let root = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![panel, galeria]);
+
+    render_png(root, &out);
+    eprintln!("diente_vivo_shot: {out} ({W}x{H})");
+}
+
+/// Una tarjeta: el canvas de la manifestación (en una caja) + su rótulo a la derecha.
+fn tile(label: &str, canvas: View<Msg>, theme: &llimphi_theme::Theme) -> View<Msg> {
+    let caja = View::new(Style {
+        size: Size { width: length(SZ + 16.0), height: length(SZ + 16.0) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(10.0)
+    .children(vec![canvas]);
+    let rotulo = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: length(SZ + 16.0) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(label.to_string(), 14.0, theme.fg_text);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(SZ + 16.0) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(14.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![caja, rotulo])
+}
+
+/// El canvas de una manifestación (no-reposo).
+fn manifest_view(m: Manifestacion, theme: &llimphi_theme::Theme) -> View<Msg> {
+    let vivo = DienteVivo { manifest: m, cava_frame: &[], t: 0.55 };
+    diente_vivo_view(&vivo, SZ, theme).unwrap_or_else(|| View::new(Style::default()))
+}
+
+/// El canvas de reposo: halo que respira detrás del icono Gauge.
+fn reposo_view(theme: &llimphi_theme::Theme) -> View<Msg> {
+    let accent = theme.accent;
+    View::new(Style {
+        size: Size { width: length(SZ), height: length(SZ) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| paint_reposo_halo(scene, rect, 1.0, accent))
+    .children(vec![llimphi_icons::icon_view::<Msg>(llimphi_icons::Icon::Gauge, accent, 2.6)])
+}
+
+fn render_png(root: View<Msg>, out: &str) {
+    let mut layout = LayoutTree::new();
+    let mounted = mount(&mut layout, root);
+    let mut ts = Typesetter::new();
+    let computed = {
+        let tmap = &mounted.text_measures;
+        layout
+            .compute_with_measure(mounted.root, (W as f32, H as f32), |nid, known, avail| {
+                match tmap.get(&nid) {
+                    Some(tm) => measure_text_node(&mut ts, tm, known, avail),
+                    None => taffy::Size::ZERO,
+                }
+            })
+            .expect("layout")
+    };
+    let mut scene = vello::Scene::new();
+    paint(&mut scene, &mounted, &computed, &mut ts, None, None);
+
+    let hal = pollster::block_on(Hal::new(None)).expect("hal");
+    let mut renderer = Renderer::new(&hal).expect("renderer");
+    let target = hal.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("diente-vivo-shot"),
+        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FMT,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    renderer
+        .render_to_view(&hal, &scene, &view, W, H, Color::from_rgba8(20, 20, 28, 255))
+        .expect("render_to_view");
+    write_png(&hal, &target, out);
+}
+
+fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
+    let unpadded = (W * 4) as usize;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let padded = unpadded.div_ceil(align) * align;
+    let buf = hal.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (padded * H as usize) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = hal
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(H),
+            },
+        },
+        wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+    );
+    hal.queue.submit(std::iter::once(enc.finish()));
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
+    rx.recv().unwrap().unwrap();
+    let data = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((W * H * 4) as usize);
+    for row in 0..H as usize {
+        let s = row * padded;
+        pixels.extend_from_slice(&data[s..s + unpadded]);
+    }
+    drop(data);
+    buf.unmap();
+    let file = File::create(path).expect("png");
+    let mut enc = png::Encoder::new(BufWriter::new(file), W, H);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut w = enc.write_header().unwrap();
+    w.write_image_data(&pixels).unwrap();
+}
