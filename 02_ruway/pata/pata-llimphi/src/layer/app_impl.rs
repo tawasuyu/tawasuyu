@@ -674,6 +674,11 @@ impl LayerApp {
                 self.bluetooth_now = Some(b);
             }
         }
+        if let Some(h) = &self.unidades {
+            if let Some(s) = h.latest() {
+                self.unidades_now = Some(s);
+            }
+        }
         // Mezclador: refresca mientras su popup está abierto (sliders en vivo).
         if self.menu_open && self.menu_kind == MenuKind::Volume {
             self.sink_inputs = crate::sampler::sample_sink_inputs();
@@ -1217,6 +1222,7 @@ impl LayerApp {
                     .map(|(s, p)| (s.as_str(), p.as_str())),
                 bt: self.bluetooth_now.as_ref(),
                 flota: self.flota.as_ref(),
+                unidades: self.unidades_now.as_ref(),
             };
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],

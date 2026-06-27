@@ -292,6 +292,10 @@ pub(super) struct LayerApp {
     pub(super) diente_manifest: pata_core::atencion::Manifestacion,
     /// Inventario de flota (matilda), read-only, para el diente «Flota».
     pub(super) flota: Option<matilda_core::Inventory>,
+    /// Feed de unidades del plano de control (sandokan).
+    pub(super) unidades: Option<crate::unidades::UnidadesHandle>,
+    /// Último snapshot de unidades.
+    pub(super) unidades_now: Option<sandokan_monitor_core::MonitorSnapshot>,
     pub(super) theme: Theme,
     pub(super) cfg: Config,
     pub(super) surfaces: Vec<crate::SurfaceWidgets>,
@@ -505,6 +509,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let cava = crate::config_tiene_widget(&cfg, "cava")
         .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
     let flota = crate::config_tiene_flota(&cfg).then(crate::load_flota).flatten();
+    let unidades = crate::config_tiene_unidades(&cfg).then(crate::unidades::UnidadesHandle::spawn);
 
     let nav_rx = crate::config_tiene_navigator(&cfg).then(|| {
         let (tx, rx) = std::sync::mpsc::channel::<PollOutcome>();
@@ -630,6 +635,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         cpu_temp: None,
         diente_manifest: pata_core::atencion::Manifestacion::Reposo,
         flota,
+        unidades,
+        unidades_now: None,
         theme,
         cfg,
         surfaces,

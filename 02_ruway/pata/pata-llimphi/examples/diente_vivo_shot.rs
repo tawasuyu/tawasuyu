@@ -30,11 +30,14 @@ use pata_llimphi::network::{NetState, NetStatus, WifiAp};
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
 use pata_llimphi::render::{
     control_center_view, diente_vivo_view, flota_view, monitor_vivo_view, paint_reposo_halo,
-    sistema_monitor_view, CentroDatos, ControlExtras, DienteVivo,
+    sistema_monitor_view, unidades_view, CentroDatos, ControlExtras, DienteVivo,
 };
 use pata_llimphi::Msg;
+use sandokan_core::TelemetryFrame;
+use sandokan_lifecycle::LifecycleState;
+use sandokan_monitor_core::{MonitorSnapshot, UnitObservation};
 
-const W: u32 = 1420;
+const W: u32 = 1720;
 const H: u32 = 680;
 const SZ: f32 = 56.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -103,6 +106,32 @@ fn main() {
     inv.add_container(Container::new("pg", "postgres:16").with_restart(RestartPolicy::Always));
     inv.add_vhost(VHost::to_container("jlsoltech.com", "web", 80).with_tls());
 
+    // Snapshot de unidades de muestra (sandokan).
+    let tf = |mib: u64, cpu: f64| TelemetryFrame {
+        card_id: ulid::Ulid::nil(),
+        at: std::time::SystemTime::UNIX_EPOCH,
+        mem_bytes: mib * 1024 * 1024,
+        nproc: 4,
+        cpu_pct: cpu,
+        restarts: 0,
+    };
+    let uo = |label: &str, state: LifecycleState, tel: Option<TelemetryFrame>| UnitObservation {
+        card_id: ulid::Ulid::nil(),
+        label: label.to_string(),
+        state,
+        telemetry: tel,
+        restarts: 0,
+    };
+    let unidades = MonitorSnapshot {
+        units: vec![
+            uo("mirada", LifecycleState::Running, Some(tf(248, 11.0))),
+            uo("pata", LifecycleState::Running, Some(tf(36, 2.0))),
+            uo("rimay-verbo", LifecycleState::Running, Some(tf(512, 0.4))),
+            uo("paloma", LifecycleState::Pending, None),
+            uo("roto", LifecycleState::Failed { reason: "exit 1".into() }, None),
+        ],
+    };
+
     let centro = CentroDatos {
         ctx: &ctx,
         extras: &extras,
@@ -111,6 +140,7 @@ fn main() {
         net_password: None,
         bt: Some(&bt),
         flota: Some(&inv),
+        unidades: Some(&unidades),
     };
     let panel = View::new(Style {
         size: Size { width: length(300.0_f32), height: length(H as f32) },
@@ -126,6 +156,14 @@ fn main() {
         ..Default::default()
     })
     .children(vec![sistema_monitor_view(&ctx, H as f32, &theme)]);
+
+    // ---- Unidades (sandokan) ----
+    let unidades_col = View::new(Style {
+        size: Size { width: length(300.0_f32), height: length(H as f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![unidades_view(Some(&unidades), H as f32, &theme)]);
 
     // ---- Flota (matilda) ----
     let flota_col = View::new(Style {
@@ -176,7 +214,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![panel, monitor, flota_col, galeria]);
+    .children(vec![panel, monitor, unidades_col, flota_col, galeria]);
 
     render_png(root, &out);
     eprintln!("diente_vivo_shot: {out} ({W}x{H})");

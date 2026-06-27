@@ -34,6 +34,7 @@ pub mod shuma;
 pub mod shuma_app;
 pub mod toplevel;
 pub mod tray;
+pub mod unidades;
 pub mod bateria;
 pub mod bluetooth;
 pub mod mpris;
@@ -793,6 +794,21 @@ pub fn es_flota(kind: &str) -> bool {
     matches!(kind, "flota" | "fleet" | "matilda")
 }
 
+/// Los nombres de contenido que marcan el diente **«Unidades»** (sandokan).
+pub fn es_unidades(kind: &str) -> bool {
+    matches!(kind, "unidades" | "units" | "sandokan")
+}
+
+/// `true` si la config declara un diente «Unidades» (sólo entonces se arranca el
+/// feed del plano de control).
+pub fn config_tiene_unidades(cfg: &Config) -> bool {
+    cfg.surfaces
+        .iter()
+        .filter(|s| s.kind == SurfaceKind::Sidebar)
+        .flat_map(|s| s.tabs.iter())
+        .any(|t| es_unidades(&t.content.kind))
+}
+
 /// El path del inventario de flota: `$XDG_CONFIG_HOME/tawasuyu/flota/inventory.json`
 /// (o `~/.config/...`). Read-only; matilda lo escribe del lado de shuma.
 pub fn flota_inventory_path() -> std::path::PathBuf {
@@ -1053,6 +1069,11 @@ pub struct Model {
     /// Inventario de flota (matilda), read-only, para el diente «Flota». `None`
     /// si no hay inventario o la config no declara el diente.
     pub flota: Option<matilda_core::Inventory>,
+    /// Feed de unidades del plano de control (sandokan) en su hilo. `None` si la
+    /// config no declara un diente «Unidades».
+    pub unidades: Option<unidades::UnidadesHandle>,
+    /// Último snapshot de unidades (se refresca cada tick desde `unidades`).
+    pub unidades_now: Option<sandokan_monitor_core::MonitorSnapshot>,
     /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
     /// declara ningún `SurfaceKind::Sidebar` con un navegador.
     pub nav: NavState,
@@ -1358,6 +1379,7 @@ impl App for PataApp {
         .flatten();
         let cava = config_tiene_widget(&cfg, "cava").then(|| cava::CavaHandle::spawn(cava_bars(&cfg)));
         let flota = config_tiene_flota(&cfg).then(load_flota).flatten();
+        let unidades = config_tiene_unidades(&cfg).then(unidades::UnidadesHandle::spawn);
 
         let mut theme = Theme::dark();
         if let Some(c) = render::parse_hex(&cfg.general.accent) {
@@ -1423,6 +1445,8 @@ impl App for PataApp {
             cpu_temp: None,
             diente_manifest: pata_core::atencion::Manifestacion::Reposo,
             flota,
+            unidades,
+            unidades_now: None,
             nav: NavState::default(),
             rag: if rag_present {
                 rag::RagState::presente()
@@ -1544,6 +1568,11 @@ impl App for PataApp {
                 if let Some(h) = &model.bluetooth {
                     if let Some(b) = h.latest() {
                         model.bluetooth_now = Some(b);
+                    }
+                }
+                if let Some(h) = &model.unidades {
+                    if let Some(s) = h.latest() {
+                        model.unidades_now = Some(s);
                     }
                 }
                 // Aviso de batería baja: lee /sys cada tick y avisa al cruzar

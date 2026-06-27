@@ -296,6 +296,8 @@ pub struct CentroDatos<'a> {
     pub bt: Option<&'a crate::bluetooth::BtState>,
     /// Inventario de flota (matilda) para el diente «Flota».
     pub flota: Option<&'a matilda_core::Inventory>,
+    /// Snapshot de unidades (sandokan) para el diente «Unidades».
+    pub unidades: Option<&'a sandokan_monitor_core::MonitorSnapshot>,
 }
 
 pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View<Msg> {

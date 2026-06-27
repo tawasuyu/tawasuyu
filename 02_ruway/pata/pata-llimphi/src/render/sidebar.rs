@@ -265,6 +265,10 @@ fn panel_inner(
     if crate::es_flota(kind) {
         return super::flota_view(centro.flota, panel_h, theme);
     }
+    // Unidades (sandokan): estado + telemetría de las unidades del plano de control.
+    if crate::es_unidades(kind) {
+        return super::unidades_view(centro.unidades, panel_h, theme);
+    }
     // Panel RAG (preguntale a tu correo): su contenido es `rag`/`search`. Trae su
     // propio cabezal + buscador + respuesta + fuentes.
     if crate::rag::is_rag_kind(kind) {
@@ -693,6 +697,7 @@ fn tooth_icon_kind(name: &str) -> (llimphi_icons::Icon, Color) {
         "flota" | "fleet" | "matilda" | "server" | "servers" => {
             (Icon::Globe, Color::from_rgba8(45, 212, 191, 255)) // teal: flota baremetal
         }
+        "unidades" | "units" | "sandokan" => (Icon::Grid, Color::from_rgba8(167, 139, 250, 255)), // violeta: plano de control
         "tools" | "herramientas" | "settings" | "system" | "config" => {
             (Icon::Settings, Color::from_rgba8(45, 212, 191, 255)) // teal
         }

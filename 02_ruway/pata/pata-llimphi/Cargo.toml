@@ -21,6 +21,11 @@ pata-config = { path = "../pata-config" }
 # Flota baremetal (read-only): modelo de inventario de matilda (sólo serde, sin
 # tokio/SSH). El diente «Flota» del sidebar lista hosts/contenedores/vhosts.
 matilda-core = { path = "../../shuma/baremetal/matilda-core" }
+# Unidades del plano de control (sandokan): el diente «Unidades» lee el estado +
+# telemetría de las unidades vivas vía arje-bus (`$ENTE_BUS_SOCK`), read-only.
+sandokan-arje-engine = { path = "../../../03_ukupacha/sandokan/sandokan-arje-engine" }
+sandokan-monitor-core = { path = "../../../shared/sandokan/sandokan-monitor-core" }
+sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
 # Emisión de cada clip nuevo al centro de eventos (no-op si willay no corre).
 willay-core = { workspace = true }
 willay-emit = { workspace = true }
@@ -122,3 +127,5 @@ pollster = { workspace = true }
 [dev-dependencies]
 # Verificación headless de widgets a PNG (ej. `examples/badge_largo`).
 png = { workspace = true }
+# Construir un MonitorSnapshot de muestra en el shot del diente «Unidades».
+sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }

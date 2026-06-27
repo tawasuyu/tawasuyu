@@ -654,6 +654,12 @@ impl Config {
             "Sistema",
             WidgetSpec::new("monitor"),
         ));
+        // Unidades del plano de control (sandokan): estado + telemetría en vivo.
+        rrail.tabs.push(SidebarTab::new(
+            "unidades",
+            "Unidades",
+            WidgetSpec::new("unidades"),
+        ));
         // Flota baremetal (matilda): inventario read-only de hosts/contenedores.
         rrail.tabs.push(SidebarTab::new(
             "flota",

@@ -166,6 +166,14 @@ icon = "monitor"
 label = "Sistema"
 content = { kind = "monitor" }
 
+# Unidades del plano de control (sandokan): estado + telemetría de las unidades
+# vivas, leídas por arje-bus ($ENTE_BUS_SOCK). Sin plano de control corriendo,
+# muestra un aviso.
+[[surfaces.tabs]]
+icon = "unidades"
+label = "Unidades"
+content = { kind = "unidades" }
+
 # Flota baremetal (matilda): inventario read-only de hosts/contenedores/vhosts.
 # Lee ~/.config/tawasuyu/flota/inventory.json (JSON de matilda-core). Sin él,
 # muestra un aviso. SSH/discover/apply son fase posterior.
