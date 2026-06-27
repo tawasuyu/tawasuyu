@@ -96,6 +96,12 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
 - **`rimay-voz` (hecho, fachada):** re-exporta core+mock, constructores
   `stt_mock`/`tts_mock`, convención del socket `voz.sock`. Demo canónico del
   lazo completo: `cargo run -p rimay-voz --example escucha_mock`.
+- **`VozConfig` (hecho, selector híbrido):** el híbrido configurable, gemelo de
+  `pluma-llm::from_env`. STT y TTS se eligen por separado (`Backend::{Mock,
+  Local,Nube}`), vía `RIMAY_VOZ_STT`/`RIMAY_VOZ_TTS` (`"local"`,
+  `"nube:openai:whisper-1"`…). `construir_stt`/`construir_tts` (+ `_o_mock` con
+  fallback). Local/Nube erran hasta que los backends aterricen. **El daemon es
+  el brazo local, no compite con la nube.**
 - **`rimay-voz-{whisper,piper,…}` + `rimay-voz-daemon` (falta):** backends
   reales + daemon que carga el modelo una vez por socket (copiar
   `rimay-verbo-daemon`).

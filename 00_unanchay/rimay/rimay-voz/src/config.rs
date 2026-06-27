@@ -1,0 +1,168 @@
+//! Selector de backend — el «híbrido configurable».
+//!
+//! El contrato ([`Transcriptor`]/[`Locutor`]) es el mismo para mock, local y
+//! nube; esto sólo **elige la implementación** según config, igual que
+//! `pluma-llm` elige `ChatClient` con `LlmConfig{kind}`. Por eso el híbrido no
+//! es código nuevo: es un factory sobre el trait.
+//!
+//! STT y TTS se eligen **por separado** (podés dictar con whisper local y leer
+//! con una voz de nube, o al revés). Y como en `pluma-llm`, lo no disponible
+//! cae a mock con [`construir_stt_o_mock`] para que los demos arranquen igual.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use rimay_voz_core::{Locutor, Transcriptor, VozError};
+use rimay_voz_mock::{LocutorMock, TranscriptorMock};
+
+/// De dónde sale un motor de voz. Las tres variantes cumplen el mismo trait.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Backend {
+    /// Determinista, sin modelo (CI/demos).
+    Mock,
+    /// Modelo local servido por el `voz-daemon` (carga una vez, socket).
+    Local,
+    /// Servicio en la nube por HTTP. `proveedor` ej. `"deepgram"`, `"openai"`.
+    Nube {
+        proveedor: String,
+        modelo: Option<String>,
+    },
+}
+
+impl Backend {
+    /// Parsea una cadena de config: `"mock"`, `"local"`, `"nube:deepgram"`,
+    /// `"nube:openai:whisper-1"`. Lo desconocido cae a [`Backend::Mock`].
+    pub fn parse(s: &str) -> Self {
+        let s = s.trim().to_lowercase();
+        match s.as_str() {
+            "" | "mock" => Backend::Mock,
+            "local" => Backend::Local,
+            otro => match otro.strip_prefix("nube:") {
+                Some(resto) => {
+                    let mut it = resto.splitn(2, ':');
+                    let proveedor = it.next().unwrap_or_default().to_string();
+                    let modelo = it.next().filter(|m| !m.is_empty()).map(str::to_string);
+                    Backend::Nube { proveedor, modelo }
+                }
+                None => Backend::Mock,
+            },
+        }
+    }
+}
+
+/// Config del híbrido: backend de STT y de TTS, elegibles por separado.
+#[derive(Debug, Clone)]
+pub struct VozConfig {
+    /// Backend de reconocimiento (dictado).
+    pub stt: Backend,
+    /// Backend de síntesis (lectura).
+    pub tts: Backend,
+    /// Override del socket del `voz-daemon` (default: [`socket_por_defecto`]).
+    pub socket: Option<PathBuf>,
+}
+
+impl Default for VozConfig {
+    fn default() -> Self {
+        Self {
+            stt: Backend::Mock,
+            tts: Backend::Mock,
+            socket: None,
+        }
+    }
+}
+
+impl VozConfig {
+    /// Lee la config del entorno (gemelo de `pluma-llm::from_env`):
+    /// `RIMAY_VOZ_STT` y `RIMAY_VOZ_TTS`. Ausentes → [`Backend::Mock`].
+    pub fn from_env() -> Self {
+        Self {
+            stt: std::env::var("RIMAY_VOZ_STT")
+                .map(|s| Backend::parse(&s))
+                .unwrap_or(Backend::Mock),
+            tts: std::env::var("RIMAY_VOZ_TTS")
+                .map(|s| Backend::parse(&s))
+                .unwrap_or(Backend::Mock),
+            socket: None,
+        }
+    }
+
+    /// Construye el transcriptor (STT) según [`Self::stt`]. Los backends real
+    /// (local/nube) todavía no están en disco: devuelven error explícito hasta
+    /// que `rimay-voz-{daemon,whisper,nube}` aterricen.
+    pub async fn construir_stt(&self) -> Result<Arc<dyn Transcriptor>, VozError> {
+        match &self.stt {
+            Backend::Mock => Ok(Arc::new(TranscriptorMock::default())),
+            Backend::Local => Err(VozError::Stt(
+                "STT local: rimay-voz-daemon todavía no está en disco".into(),
+            )),
+            Backend::Nube { proveedor, .. } => Err(VozError::Stt(format!(
+                "STT nube «{proveedor}»: backend todavía no está en disco"
+            ))),
+        }
+    }
+
+    /// Como [`Self::construir_stt`] pero cae a mock si el backend no está
+    /// disponible — para que demos y CI corran sin credenciales ni daemon.
+    pub async fn construir_stt_o_mock(&self) -> Arc<dyn Transcriptor> {
+        self.construir_stt()
+            .await
+            .unwrap_or_else(|_| Arc::new(TranscriptorMock::default()))
+    }
+
+    /// Construye el locutor (TTS) según [`Self::tts`]. Ver [`Self::construir_stt`].
+    pub async fn construir_tts(&self) -> Result<Arc<dyn Locutor>, VozError> {
+        match &self.tts {
+            Backend::Mock => Ok(Arc::new(LocutorMock)),
+            Backend::Local => Err(VozError::Tts(
+                "TTS local: rimay-voz-daemon todavía no está en disco".into(),
+            )),
+            Backend::Nube { proveedor, .. } => Err(VozError::Tts(format!(
+                "TTS nube «{proveedor}»: backend todavía no está en disco"
+            ))),
+        }
+    }
+
+    /// Como [`Self::construir_tts`] pero cae a mock si no está disponible.
+    pub async fn construir_tts_o_mock(&self) -> Arc<dyn Locutor> {
+        self.construir_tts()
+            .await
+            .unwrap_or_else(|_| Arc::new(LocutorMock))
+    }
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn parse_reconoce_las_tres_familias() {
+        assert_eq!(Backend::parse("mock"), Backend::Mock);
+        assert_eq!(Backend::parse(""), Backend::Mock);
+        assert_eq!(Backend::parse("LOCAL"), Backend::Local);
+        assert_eq!(
+            Backend::parse("nube:deepgram"),
+            Backend::Nube { proveedor: "deepgram".into(), modelo: None }
+        );
+        assert_eq!(
+            Backend::parse("nube:openai:whisper-1"),
+            Backend::Nube { proveedor: "openai".into(), modelo: Some("whisper-1".into()) }
+        );
+    }
+
+    #[test]
+    fn desconocido_cae_a_mock() {
+        assert_eq!(Backend::parse("cualquiera"), Backend::Mock);
+    }
+
+    #[tokio::test]
+    async fn mock_construye_y_los_reales_aun_erran() {
+        let cfg = VozConfig::default();
+        assert!(cfg.construir_stt().await.is_ok());
+        assert!(cfg.construir_tts().await.is_ok());
+
+        let local = VozConfig { stt: Backend::Local, tts: Backend::Local, socket: None };
+        assert!(local.construir_stt().await.is_err());
+        // pero el _o_mock nunca falla
+        let _ = local.construir_stt_o_mock().await;
+    }
+}

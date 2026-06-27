@@ -36,6 +36,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod config;
+pub use config::{Backend, VozConfig};
+
 pub use rimay_voz_core::{
     clasificar, debe_leer, detectar_llamado, lectura, maquina, prosodia, Audio, ConfigVoz,
     EstadoVoz, Evento, Intencion, Locutor, Maquina, Politica, Rasgos, Reaccion, TipoBloque,
