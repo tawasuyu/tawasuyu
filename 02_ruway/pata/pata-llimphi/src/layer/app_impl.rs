@@ -1181,6 +1181,18 @@ impl LayerApp {
                 cava_frame: &self.cava_frame,
                 t: self.diente_t0.elapsed().as_secs_f64(),
             };
+            let extras = render::extras_vivos(
+                self.bat_now,
+                self.network_now
+                    .as_ref()
+                    .map(|n| n.wifi_enabled)
+                    .unwrap_or(self.control_extras.wifi),
+                self.bluetooth_now
+                    .as_ref()
+                    .map(|b| b.powered)
+                    .unwrap_or(self.control_extras.bt),
+                &self.control_extras,
+            );
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],
                 idx,
@@ -1193,6 +1205,8 @@ impl LayerApp {
                 &self.shuma,
                 &self.rag,
                 &vivo,
+                &self.ctx,
+                &extras,
                 &self.theme,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {

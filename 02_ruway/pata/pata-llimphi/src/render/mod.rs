@@ -66,7 +66,8 @@ pub use panels::{
 pub use bluetooth::{bluetooth_overlay, bluetooth_view};
 pub use diente::{diente_vivo_view, DienteVivo};
 pub use control::{
-    control_button_view, control_overlay, set_night, set_power_profile, set_radio, ControlExtras,
+    control_button_view, control_center_view, control_overlay, extras_vivos, set_night,
+    set_power_profile, set_radio, ControlExtras,
 };
 pub use media::media_view;
 pub use network::{network_overlay, network_view};
@@ -375,6 +376,20 @@ pub fn root(model: &Model) -> View<Msg> {
         if let Some(placed) = model.frame.surfaces.iter().find(|p| p.index == si) {
             if let Some(surface) = model.cfg.surfaces.get(si) {
                 if surface.kind == SurfaceKind::Sidebar {
+                    let extras = control::extras_vivos(
+                        model.bat_now,
+                        model
+                            .network_now
+                            .as_ref()
+                            .map(|n| n.wifi_enabled)
+                            .unwrap_or(model.control_extras.wifi),
+                        model
+                            .bluetooth_now
+                            .as_ref()
+                            .map(|b| b.powered)
+                            .unwrap_or(model.control_extras.bt),
+                        &model.control_extras,
+                    );
                     superficies.push(nav_panel_view(
                         surface,
                         ti,
@@ -383,6 +398,8 @@ pub fn root(model: &Model) -> View<Msg> {
                         &model.nav,
                         &model.shuma,
                         &model.rag,
+                        &model.last_ctx,
+                        &extras,
                         &model.theme,
                     ));
                 }

@@ -213,15 +213,18 @@ pub fn control_overlay(
     .children(vec![fila])
 }
 
-pub(super) fn control_panel(
+/// Las filas del control (volumen, brillo, batería, Wi-Fi, Bluetooth, perfil de
+/// energía, luz nocturna), **sin** título ni chrome de tarjeta. Las comparten el
+/// flyout flotante ([`control_panel`]) y el control center del sidebar
+/// ([`control_center_view`]).
+pub(super) fn control_sections(
     volume: f32,
     muted: bool,
     brightness: f32,
     extras: &ControlExtras,
     theme: &Theme,
-) -> View<Msg> {
-    let mut hijos: Vec<View<Msg>> = vec![titulo("Control", theme)];
-
+) -> Vec<View<Msg>> {
+    let mut hijos: Vec<View<Msg>> = Vec::new();
     // Glifos DejaVu-safe (el sistema no trae emoji a color → tofu): ♪ volumen,
     // ☀ brillo. El mute se marca tachando con ✕.
     let vol_glifo = if muted { "✕" } else { "♪" };
@@ -245,6 +248,95 @@ pub(super) fn control_panel(
         hijos.push(perfil_row(actual, theme));
     }
     hijos.push(switch_row("Luz nocturna", extras.night, theme, Msg::ControlNight));
+    hijos
+}
+
+/// Construye un [`ControlExtras`] con los datos **vivos** del modelo (batería,
+/// radios) en vez de la lectura cacheada al abrir el flyout — para el control
+/// center del sidebar, que es persistente. `power_profile`/`night` salen de la
+/// base cacheada (se leen sólo al togglear; estar levemente atrás es tolerable).
+pub fn extras_vivos(
+    bat_now: Option<(f32, bool)>,
+    wifi: bool,
+    bt: bool,
+    base: &ControlExtras,
+) -> ControlExtras {
+    ControlExtras {
+        battery: bat_now.map(|(f, c)| ((f * 100.0).round() as u8, c)),
+        wifi,
+        bt,
+        power_profile: base.power_profile.clone(),
+        night: base.night,
+    }
+}
+
+/// El **control center** del sidebar: reloj grande + las filas de control, en un
+/// panel de alto completo (sin la tarjeta flotante del flyout). Reusa las mismas
+/// filas y los mismos `Msg` que el quick-settings de la barra.
+pub fn control_center_view(
+    panel_h: f32,
+    clock: &pata_core::widget::ClockReading,
+    volume: f32,
+    muted: bool,
+    brightness: f32,
+    extras: &ControlExtras,
+    theme: &Theme,
+) -> View<Msg> {
+    let mut hijos = vec![reloj_grande(clock, theme)];
+    hijos.extend(control_sections(volume, muted, brightness, extras, theme));
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(panel_h) },
+        padding: TaffyRect {
+            left: length(14.0_f32),
+            right: length(14.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(hijos)
+}
+
+/// Reloj grande (HH:MM) + fecha, como cabezal del control center.
+fn reloj_grande(clock: &pata_core::widget::ClockReading, theme: &Theme) -> View<Msg> {
+    let hora = format!("{:02}:{:02}", clock.hour, clock.minute);
+    const DIAS: [&str; 7] = [
+        "domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado",
+    ];
+    let dia = DIAS.get(clock.weekday as usize).copied().unwrap_or("");
+    let fecha = format!("{} {}/{:02}/{}", dia, clock.day, clock.month, clock.year);
+    let hora_v = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(hora, 26.0, theme.fg_text);
+    let fecha_v = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(fecha, 12.0, theme.fg_muted);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![hora_v, fecha_v])
+}
+
+pub(super) fn control_panel(
+    volume: f32,
+    muted: bool,
+    brightness: f32,
+    extras: &ControlExtras,
+    theme: &Theme,
+) -> View<Msg> {
+    let mut hijos: Vec<View<Msg>> = vec![titulo("Control", theme)];
+    hijos.extend(control_sections(volume, muted, brightness, extras, theme));
 
     let (a, blur, dy) = elevation::E4;
     View::new(Style {
