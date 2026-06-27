@@ -22,6 +22,7 @@ use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     length, percent, AlignItems, Dimension, FlexDirection, Size, Style,
 };
+use llimphi_ui::llimphi_raster::kurbo::Rect as KRect;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::vello;
 use llimphi_ui::{
@@ -88,6 +89,9 @@ struct Model {
     /// Campo del path de la textura.
     tex_input: TextInputState,
     tex_focused: bool,
+    /// Tamaño en px del lienzo del rig en el último press (para invertir
+    /// pantalla→modelo al arrastrar el objetivo IK).
+    rig_canvas_wh: (f32, f32),
 
     /// Instancia ejecutable (recompilada del `doc` en cada edición estructural).
     instance: Instance,
@@ -203,6 +207,10 @@ enum Msg {
     RigSetTargetX(f64),
     RigSetTargetY(f64),
     RigResetPose,
+    /// Click en el lienzo: coloca el objetivo IK ahí. `(local_x, local_y, w, h)`.
+    RigCanvasClick(f32, f32, f32, f32),
+    /// Arrastre en el lienzo: mueve el objetivo IK por delta de pantalla.
+    RigCanvasDrag(f32, f32),
     // --- grafo ---
     DragNode(NodeId, DragPhase, f32, f32),
     Connect(NodeId, NodeId),
@@ -273,6 +281,7 @@ impl App for Studio {
             texture: None,
             tex_input: TextInputState::new(),
             tex_focused: false,
+            rig_canvas_wh: (1.0, 1.0),
             current_idx: Some(0),
             live_bools: HashMap::new(),
             live_numbers: HashMap::new(),
@@ -378,6 +387,26 @@ impl App for Studio {
             Msg::RigResetPose => {
                 for b in &mut model.rig.bones {
                     b.angle = 0.0;
+                }
+            }
+            Msg::RigCanvasClick(lx, ly, rw, rh) => {
+                if model.rig.bones.len() >= 2 {
+                    model.rig_canvas_wh = (rw, rh);
+                    model.rig.ik_enabled = true; // colocar objetivo ⇒ querés IK
+                    let b = rig_view_bounds(&model.rig);
+                    let (mx, my) = canvas_local_to_model(lx, ly, rw, rh, b);
+                    model.rig.ik_target = (mx, my);
+                }
+            }
+            Msg::RigCanvasDrag(dx, dy) => {
+                if model.rig.ik_enabled && model.rig.bones.len() >= 2 {
+                    let (rw, rh) = model.rig_canvas_wh;
+                    let b = rig_view_bounds(&model.rig);
+                    let s = canvas_scale(rw, rh, b);
+                    if s > 0.0 {
+                        model.rig.ik_target.0 += dx as f64 / s;
+                        model.rig.ik_target.1 += dy as f64 / s;
+                    }
                 }
             }
 
@@ -1368,6 +1397,7 @@ fn rig_right_panel(model: &Model) -> View<Msg> {
     if model.rig.bones.len() < 2 {
         rows.push(muted("necesitás ≥2 huesos para el IK", theme));
     } else {
+        rows.push(muted("clic/arrastrá en el lienzo para mover el objetivo", theme));
         rows.push(row(vec![
             button_view(
                 if model.rig.ik_enabled { "IK: on" } else { "IK: off" },
@@ -1436,10 +1466,53 @@ fn rig_canvas_panel(model: &Model) -> View<Msg> {
     .children(vec![rig_canvas(model)])
 }
 
+/// Bbox de modelo que encuadra el rig (silueta + objetivo IK), inflado para
+/// que las poses dobladas no se salgan. Lo comparten el render del lienzo y la
+/// inversión pantalla→modelo del drag del objetivo IK.
+fn rig_view_bounds(rig: &RigDoc) -> KRect {
+    let total = rig.total_len();
+    let half = match rig.mesh_mode {
+        MeshMode::Tube => rig.thickness,
+        MeshMode::Grid => (total * rig.mesh_aspect * 0.5).max(rig.thickness),
+    };
+    let mut x0: f64 = -20.0;
+    let mut y0: f64 = -half - 20.0;
+    let mut x1: f64 = total + 20.0;
+    let mut y1: f64 = half + 20.0;
+    if rig.ik_enabled {
+        x0 = x0.min(rig.ik_target.0);
+        y0 = y0.min(rig.ik_target.1);
+        x1 = x1.max(rig.ik_target.0);
+        y1 = y1.max(rig.ik_target.1);
+    }
+    let pad_m = (total * 0.18).max(24.0);
+    KRect::new(x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m)
+}
+
+/// Invierte una posición local del lienzo (px, relativa al rect del nodo) a
+/// espacio de modelo, deshaciendo el `fit_transform(bounds, rect)`.
+fn canvas_local_to_model(lx: f32, ly: f32, rw: f32, rh: f32, b: KRect) -> (f64, f64) {
+    let (bw, bh) = (b.width(), b.height());
+    if bw <= 0.0 || bh <= 0.0 || rw <= 0.0 || rh <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let s = (rw as f64 / bw).min(rh as f64 / bh);
+    let mx = (lx as f64 - (rw as f64 - bw * s) * 0.5) / s + b.x0;
+    let my = (ly as f64 - (rh as f64 - bh * s) * 0.5) / s + b.y0;
+    (mx, my)
+}
+
+/// Escala modelo→pantalla del `fit_transform` (px por unidad de modelo).
+fn canvas_scale(rw: f32, rh: f32, b: KRect) -> f64 {
+    let (bw, bh) = (b.width(), b.height());
+    if bw <= 0.0 || bh <= 0.0 || rw <= 0.0 || rh <= 0.0 {
+        return 0.0;
+    }
+    (rw as f64 / bw).min(rh as f64 / bh)
+}
+
 /// El lienzo: malla deformada (relleno + wireframe) + huesos + objetivo IK.
 fn rig_canvas(model: &Model) -> View<Msg> {
-    use llimphi_ui::llimphi_raster::kurbo::Rect as KRect;
-
     let skel = model.rig.skeleton();
     let mesh = model.rig.mesh();
     let positions = mesh.deform(&skel);
@@ -1456,22 +1529,8 @@ fn rig_canvas(model: &Model) -> View<Msg> {
         bones_world.push((a, e));
     }
 
-    // Encuadre estable: bbox del bind + objetivo IK, inflado para que las
-    // poses dobladas no se salgan.
-    let total = model.rig.total_len();
-    let half = model.rig.thickness;
-    let mut x0: f64 = -20.0;
-    let mut y0: f64 = -half - 20.0;
-    let mut x1: f64 = total + 20.0;
-    let mut y1: f64 = half + 20.0;
-    if model.rig.ik_enabled {
-        x0 = x0.min(model.rig.ik_target.0);
-        y0 = y0.min(model.rig.ik_target.1);
-        x1 = x1.max(model.rig.ik_target.0);
-        y1 = y1.max(model.rig.ik_target.1);
-    }
-    let pad_m = (total * 0.18).max(24.0);
-    let bounds = KRect::new(x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m);
+    // Encuadre estable, compartido con la inversión del drag del objetivo IK.
+    let bounds = rig_view_bounds(&model.rig);
 
     let target = if model.rig.ik_enabled {
         Some(llimphi_ui::llimphi_raster::kurbo::Point::new(
@@ -1552,6 +1611,12 @@ fn rig_canvas(model: &Model) -> View<Msg> {
                 &Circle::new(pt, 9.0),
             );
         }
+    })
+    // Click coloca el objetivo IK; arrastrar lo mueve (el brazo lo persigue).
+    .on_click_at(|lx, ly, w, h| Some(Msg::RigCanvasClick(lx, ly, w, h)))
+    .draggable_at(|phase, dx, dy, _lx0, _ly0| match phase {
+        DragPhase::Move => Some(Msg::RigCanvasDrag(dx, dy)),
+        _ => None,
     })
 }
 
@@ -1802,4 +1867,45 @@ fn remove_state(doc: &mut Doc, idx: usize) {
 
 fn main() {
     llimphi_ui::run::<Studio>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// La inversión pantalla→modelo del drag debe deshacer exactamente el
+    /// `fit_transform(bounds, rect)` que usa el render — round-trip < 1e-6.
+    #[test]
+    fn canvas_local_to_model_invierte_fit_transform() {
+        let b = KRect::new(-30.0, -50.0, 260.0, 50.0);
+        let (rw, rh) = (640.0_f64, 360.0_f64);
+        let (bw, bh) = (b.width(), b.height());
+        let s = (rw / bw).min(rh / bh);
+        // Forward = misma fórmula de fit_transform, en coords LOCALES al rect.
+        let forward = |mx: f64, my: f64| {
+            let lx = (rw - bw * s) * 0.5 - b.x0 * s + s * mx;
+            let ly = (rh - bh * s) * 0.5 - b.y0 * s + s * my;
+            (lx, ly)
+        };
+        for (mx, my) in [(0.0, 0.0), (130.0, 10.0), (-20.0, 40.0), (255.0, -30.0)] {
+            let (lx, ly) = forward(mx, my);
+            let (rx, ry) = canvas_local_to_model(lx as f32, ly as f32, rw as f32, rh as f32, b);
+            assert!(
+                (rx - mx).abs() < 1e-3 && (ry - my).abs() < 1e-3,
+                "round-trip falló para ({mx},{my}): recuperó ({rx},{ry})"
+            );
+        }
+    }
+
+    /// El bbox de encuadre debe contener el objetivo IK cuando está activo
+    /// (si no, el objetivo se saldría del lienzo y el drag sería inconsistente).
+    #[test]
+    fn bounds_contiene_objetivo_ik() {
+        let mut rig = RigDoc::starter();
+        rig.ik_enabled = true;
+        rig.ik_target = (240.0, -130.0);
+        let b = rig_view_bounds(&rig);
+        assert!(b.x0 <= 240.0 && b.x1 >= 240.0);
+        assert!(b.y0 <= -130.0 && b.y1 >= -130.0);
+    }
 }
