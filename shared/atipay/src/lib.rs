@@ -48,17 +48,6 @@ impl Superficie {
             Superficie::Sistema => "sistema",
         }
     }
-
-    /// El programa CLI que materializa esta superficie, si lo hay. Las
-    /// superficies que no se invocan por un CLI único (p.ej. `Sistema` por
-    /// D-Bus, o builtins de `Shuma`) devuelven `None`.
-    pub fn programa(self) -> Option<&'static str> {
-        match self {
-            Superficie::Mirada => Some("mirada-ctl"),
-            Superficie::Sandokan => Some("sandokan-cli"),
-            Superficie::Shuma | Superficie::Sistema => None,
-        }
-    }
 }
 
 /// Cuánto cuesta equivocarse con una capacidad. La IA usa esto para decidir si
@@ -114,13 +103,21 @@ impl Param {
     }
 }
 
-/// Una cosa que el sistema *puede hacer*. La unidad del catálogo.
+/// Una cosa que el sistema *puede hacer*. La unidad del catálogo. Lleva todo lo
+/// necesario para armar el comando que la materializa: el `programa` (CLI) y los
+/// `args_base` fijos, sobre los que se apilan los valores de `params`. Así una
+/// superficie heterogénea (p.ej. `Sistema`, donde cada acción usa su propio CLI:
+/// `systemctl`, `nmcli`, `loginctl`…) modela cada capacidad sin un único programa.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capacidad {
     /// Identificador estable y único, prefijado por superficie: `"mirada.workspace"`,
     /// `"sandokan.run"`. Es lo que la IA devuelve en una [`Invocacion`].
     pub id: String,
     pub superficie: Superficie,
+    /// El programa CLI que la ejecuta (`"mirada-ctl"`, `"systemctl"`…).
+    pub programa: String,
+    /// Args fijos antes de los parámetros del usuario (`["radio","wifi","on"]`).
+    pub args_base: Vec<String>,
     /// Frase corta de qué hace, en lenguaje natural (la lee el modelo).
     pub resumen: String,
     pub params: Vec<Param>,
@@ -128,10 +125,56 @@ pub struct Capacidad {
 }
 
 impl Capacidad {
-    /// Constructor breve para fuentes que autorían capacidades como datos.
-    pub fn nueva(superficie: Superficie, sufijo: &str, resumen: &str, peligro: Peligro, params: Vec<Param>) -> Self {
-        Self { id: format!("{}.{}", superficie.prefijo(), sufijo), superficie, resumen: resumen.into(), params, peligro }
+    /// Capacidad cuyo verbo CLI coincide con el sufijo del id (el caso común de
+    /// `mirada-ctl <verbo>` / `sandokan-cli <verbo>`).
+    pub fn cli(superficie: Superficie, sufijo: &str, programa: &str, resumen: &str, peligro: Peligro, params: Vec<Param>) -> Self {
+        Self::cli_args(superficie, sufijo, programa, &[sufijo], resumen, peligro, params)
     }
+
+    /// Capacidad con args base explícitos (cuando el comando no es simplemente
+    /// `programa <sufijo>`: `loginctl lock-session`, `nmcli radio wifi on`…).
+    pub fn cli_args(superficie: Superficie, sufijo: &str, programa: &str, args_base: &[&str], resumen: &str, peligro: Peligro, params: Vec<Param>) -> Self {
+        Self {
+            id: format!("{}.{}", superficie.prefijo(), sufijo),
+            superficie,
+            programa: programa.into(),
+            args_base: args_base.iter().map(|a| a.to_string()).collect(),
+            resumen: resumen.into(),
+            params,
+            peligro,
+        }
+    }
+}
+
+/// Construye el [`Plan`] de una capacidad validando los argumentos de la
+/// invocación contra los `params` (enteros, enums, requeridos). El comando es
+/// `programa + args_base + valores de params` (en orden). No ejecuta nada.
+fn resolver_plan(cap: &Capacidad, inv: &Invocacion) -> Result<Plan, AtipayError> {
+    let mut args = cap.args_base.clone();
+    for p in &cap.params {
+        let valor = inv.arg(&p.nombre)?;
+        match &p.tipo {
+            TipoParam::Entero => {
+                valor.parse::<i64>().map_err(|_| AtipayError::ArgInvalido {
+                    id: cap.id.clone(),
+                    arg: p.nombre.clone(),
+                    motivo: format!("esperaba un entero, vino '{valor}'"),
+                })?;
+            }
+            TipoParam::Enum(opciones) => {
+                if !opciones.iter().any(|o| o == valor) {
+                    return Err(AtipayError::ArgInvalido {
+                        id: cap.id.clone(),
+                        arg: p.nombre.clone(),
+                        motivo: format!("'{valor}' no es una opción válida ({})", opciones.join("/")),
+                    });
+                }
+            }
+            _ => {}
+        }
+        args.push(valor.to_string());
+    }
+    Ok(Plan { id: cap.id.clone(), programa: cap.programa.clone(), args, peligro: cap.peligro })
 }
 
 /// La elección de la IA: qué capacidad invocar y con qué argumentos.
@@ -197,19 +240,19 @@ impl std::fmt::Display for AtipayError {
 
 impl std::error::Error for AtipayError {}
 
-/// Lo que cada superficie de control implementa: qué sabe hacer y cómo traducir
-/// una invocación a un plan ejecutable.
+/// Lo que cada superficie de control implementa: qué sabe hacer. Es puramente
+/// declarativo — la traducción de una invocación a un plan la hace el catálogo
+/// con los datos de la propia [`Capacidad`] (programa + args_base + params), así
+/// que una fuente no repite la lógica de armado.
 pub trait FuenteCapacidades: Send + Sync {
-    /// Qué superficie cubre esta fuente (para el ruteo por prefijo).
+    /// Qué superficie cubre esta fuente.
     fn superficie(&self) -> Superficie;
     /// El catálogo de capacidades de esta superficie.
     fn capacidades(&self) -> Vec<Capacidad>;
-    /// Traduce una invocación (ya sabida que es de esta superficie) a un plan.
-    fn plan(&self, inv: &Invocacion) -> Result<Plan, AtipayError>;
 }
 
-/// El catálogo agregado: junta varias fuentes y rutea invocaciones por el
-/// prefijo del `id`. Es el punto único que consulta la IA.
+/// El catálogo agregado: junta varias fuentes y resuelve invocaciones. Es el
+/// punto único que consulta la IA.
 #[derive(Default)]
 pub struct Catalogo {
     fuentes: Vec<Box<dyn FuenteCapacidades>>,
@@ -234,6 +277,8 @@ impl Catalogo {
         c.registrar(Box::new(crate::mirada::FuenteMirada));
         #[cfg(feature = "sandokan")]
         c.registrar(Box::new(crate::sandokan::FuenteSandokan));
+        #[cfg(feature = "sistema")]
+        c.registrar(Box::new(crate::sistema::FuenteSistema));
         c
     }
 
@@ -242,16 +287,15 @@ impl Catalogo {
         self.fuentes.iter().flat_map(|f| f.capacidades()).collect()
     }
 
-    /// Resuelve una invocación a un plan, ruteando por el prefijo del `id` a la
-    /// fuente cuya superficie lo reclama.
+    /// Resuelve una invocación a un plan: busca la capacidad por `id` y arma el
+    /// comando validando los argumentos. Error legible si el `id` no existe.
     pub fn plan(&self, inv: &Invocacion) -> Result<Plan, AtipayError> {
-        let prefijo = inv.id.split('.').next().unwrap_or("");
-        let fuente = self
-            .fuentes
+        let caps = self.capacidades();
+        let cap = caps
             .iter()
-            .find(|f| f.superficie().prefijo() == prefijo)
+            .find(|c| c.id == inv.id)
             .ok_or_else(|| AtipayError::Desconocida(inv.id.clone()))?;
-        fuente.plan(inv)
+        resolver_plan(cap, inv)
     }
 
     /// Renderiza el catálogo como un **menú compacto** para incrustar en el
@@ -262,8 +306,11 @@ impl Catalogo {
     pub fn prompt_menu(&self) -> String {
         let mut out = String::new();
         for c in self.capacidades() {
-            let programa = c.superficie.programa().unwrap_or_else(|| c.superficie.prefijo());
-            let verbo = c.id.split_once('.').map(|(_, v)| v).unwrap_or(&c.id);
+            let comando = if c.args_base.is_empty() {
+                c.programa.clone()
+            } else {
+                format!("{} {}", c.programa, c.args_base.join(" "))
+            };
             let params: String = c
                 .params
                 .iter()
@@ -272,7 +319,7 @@ impl Catalogo {
                     _ => format!(" <{}>", p.nombre),
                 })
                 .collect();
-            out.push_str(&format!("{programa} {verbo}{params}  — {}\n", c.resumen));
+            out.push_str(&format!("{comando}{params}  — {}\n", c.resumen));
         }
         out
     }
@@ -341,20 +388,24 @@ pub fn id_desde_tool(nombre: &str) -> String {
 pub mod mirada;
 #[cfg(feature = "sandokan")]
 pub mod sandokan;
+#[cfg(feature = "sistema")]
+pub mod sistema;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn ruteo_por_prefijo_a_la_fuente_correcta() {
+    fn plan_resuelve_a_la_capacidad_y_su_programa() {
         let cat = Catalogo::estandar();
-        // mirada
         let plan = cat.plan(&Invocacion::nueva("mirada.focus-next")).unwrap();
         assert_eq!(plan.programa, "mirada-ctl");
-        // sandokan
         let plan = cat.plan(&Invocacion::nueva("sandokan.list")).unwrap();
         assert_eq!(plan.programa, "sandokan-cli");
+        // Superficie heterogénea: cada capacidad lleva su propio CLI.
+        let plan = cat.plan(&Invocacion::nueva("sistema.apagar")).unwrap();
+        assert_eq!(plan.programa, "systemctl");
+        assert_eq!(plan.args, vec!["poweroff"]);
     }
 
     #[test]

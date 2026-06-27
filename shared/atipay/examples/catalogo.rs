@@ -16,6 +16,9 @@ fn main() {
         println!("  {:<28} [{:?}] {} {}", c.id, c.peligro, c.resumen, ps.join(" "));
     }
 
+    println!("\n== Menú para prompt (lo que shuma :hacé incrusta en el system prompt) ==\n");
+    print!("{}", cat.prompt_menu());
+
     println!("\n== Definiciones tool-use (lo que recibe el LLM vía pluma-llm) ==\n");
     println!("{}", serde_json::to_string_pretty(&cat.as_tools()).unwrap());
 

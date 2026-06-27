@@ -1,13 +1,13 @@
 //! Fuente de capacidades de **sandokan** (el plano de control de procesos).
 //!
 //! Espeja los subcomandos de `sandokan-cli` (`run`/`list`/`status`/`telemetry`/
-//! `stop`) — el contrato es `sandokan_core::Engine`. Traduce cada invocación a
-//! un plan `sandokan-cli <verbo> [valor]`.
+//! `stop`) — el contrato es `sandokan_core::Engine`. Declarativa: cada capacidad
+//! lleva su programa (`sandokan-cli`) y verbo; el catálogo arma el plan.
 //!
-//! Igual que la fuente de mirada, hoy el vocabulario se autoría como datos; la
-//! fuente de verdad sigue siendo `sandokan-core`.
+//! Igual que mirada, hoy el vocabulario se autoría como datos; la fuente de
+//! verdad sigue siendo `sandokan-core`.
 
-use crate::{AtipayError, Capacidad, FuenteCapacidades, Invocacion, Param, Peligro, Plan, Superficie, TipoParam};
+use crate::{Capacidad, FuenteCapacidades, Param, Peligro, Superficie, TipoParam};
 
 /// La fuente de sandokan. Sin estado.
 pub struct FuenteSandokan;
@@ -23,7 +23,7 @@ impl FuenteCapacidades for FuenteSandokan {
 
     fn capacidades(&self) -> Vec<Capacidad> {
         use Peligro::*;
-        let cap = |sufijo, resumen, peligro, params| Capacidad::nueva(Superficie::Sandokan, sufijo, resumen, peligro, params);
+        let cap = |sufijo, resumen, peligro, params| Capacidad::cli(Superficie::Sandokan, sufijo, "sandokan-cli", resumen, peligro, params);
         vec![
             cap("run", "Arranca un proceso/servicio supervisado (encarna una Card).", Reversible,
                 vec![Param::texto("comando", "Comando a ejecutar (ruta + args).")]),
@@ -36,32 +36,22 @@ impl FuenteCapacidades for FuenteSandokan {
                 vec![id_card("id", "Id (ULID) de la unidad a detener.")]),
         ]
     }
-
-    fn plan(&self, inv: &Invocacion) -> Result<Plan, AtipayError> {
-        let verbo = inv.id.strip_prefix("sandokan.").ok_or_else(|| AtipayError::Desconocida(inv.id.clone()))?;
-        let cap = self
-            .capacidades()
-            .into_iter()
-            .find(|c| c.id == inv.id)
-            .ok_or_else(|| AtipayError::Desconocida(inv.id.clone()))?;
-
-        let mut args = vec![verbo.to_string()];
-        for p in &cap.params {
-            args.push(inv.arg(&p.nombre)?.to_string());
-        }
-
-        let programa = Superficie::Sandokan.programa().expect("sandokan tiene CLI").to_string();
-        Ok(Plan { id: inv.id.clone(), programa, args, peligro: cap.peligro })
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AtipayError, Catalogo, Invocacion};
+
+    fn cat() -> Catalogo {
+        let mut c = Catalogo::new();
+        c.registrar(Box::new(FuenteSandokan));
+        c
+    }
 
     #[test]
     fn list_es_seguro_y_sin_args() {
-        let p = FuenteSandokan.plan(&Invocacion::nueva("sandokan.list")).unwrap();
+        let p = cat().plan(&Invocacion::nueva("sandokan.list")).unwrap();
         assert_eq!(p.programa, "sandokan-cli");
         assert_eq!(p.args, vec!["list"]);
         assert_eq!(p.peligro, Peligro::Seguro);
@@ -69,10 +59,10 @@ mod tests {
 
     #[test]
     fn stop_requiere_id_y_es_disruptivo() {
-        let p = FuenteSandokan.plan(&Invocacion::nueva("sandokan.stop").con("id", "01J9X")).unwrap();
+        let p = cat().plan(&Invocacion::nueva("sandokan.stop").con("id", "01J9X")).unwrap();
         assert_eq!(p.args, vec!["stop", "01J9X"]);
         assert_eq!(p.peligro, Peligro::Disruptivo);
-        let err = FuenteSandokan.plan(&Invocacion::nueva("sandokan.stop")).unwrap_err();
+        let err = cat().plan(&Invocacion::nueva("sandokan.stop")).unwrap_err();
         assert!(matches!(err, AtipayError::FaltaArg { .. }));
     }
 }
