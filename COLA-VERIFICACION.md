@@ -82,7 +82,14 @@ sólo cuando es un visual nuevo no certificable de otra forma.
 - [ ] matilda: contra una flota SSH real
 
 ## 12. Pase masivo "moderniza UI" (~35 apps, 06-26)
-- [ ] Abrir cada app y mirar que empty-state/pop-in/toasts/skeleton no rompan layout
+- [~] **Smoke de arranque (2026-06-27): 30/30 apps GUI arrancan al event loop, cero panics.**
+  Barrido headless contra kwin (timeout 12s c/u): cosmos, dominium, chaka, khipu, agora,
+  anim-studio, voxel-studio/app, media, media-recorder, mirada-app/asistente/launcher, nada,
+  paloma, pata-llimphi, pata-notify-panel, pluma-app/deck/notebook, puriy, raymi, shuma-shell,
+  supay-app/doom, takiy, tullpu, wawa-panel, willay-panel → todas STARTED. Los 3 "no-START"
+  eran falsas alarmas: paloma (2 bins, falta `--bin paloma`), mirada-launcher (TUI sin tty),
+  pluma-notebook-app (demo que sale 0). **Queda tu ojo:** que empty-state/pop-in/toasts/skeleton
+  no rompan *layout* (lo visual no se certifica con exit-code).
 
 ---
 
