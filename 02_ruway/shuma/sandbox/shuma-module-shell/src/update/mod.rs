@@ -587,6 +587,7 @@ pub fn update(state: State, msg: Msg) -> State {
                             s.push_output(OutputLine::notice(format!("🜲 {l}")));
                         }
                     }
+                    LlmKind::Atipay => s = resolver_atipay(s, &text),
                 }
             }
         }

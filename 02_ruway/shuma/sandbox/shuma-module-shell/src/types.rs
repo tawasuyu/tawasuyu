@@ -617,6 +617,11 @@ pub enum LlmKind {
     /// `:explica`/`:resume` — la respuesta es texto informativo: va al
     /// output del bloque.
     Text,
+    /// `:hacé` — la respuesta es una **invocación de control en JSON**
+    /// (`{"id":…,"args":{…}}` o `nada`): el módulo la resuelve con `atipay` a un
+    /// plan validado y pone la línea exacta en el input, etiquetada por peligro
+    /// (NUNCA se auto-ejecuta). Evita que el modelo invente flags inexistentes.
+    Atipay,
 }
 
 /// E5 — una invocación al LLM que el host debe cumplir. Campos públicos para

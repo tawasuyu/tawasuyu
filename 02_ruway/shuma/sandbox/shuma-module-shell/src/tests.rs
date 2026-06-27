@@ -168,11 +168,39 @@
         s.input.set_text(":hacé andá al escritorio 3");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         let req = s.llm_request.clone().expect("hay petición");
-        // Es Command (va al input) y el system prompt trae el catálogo de control.
-        assert!(matches!(req.kind, crate::LlmKind::Command));
+        // Es Atipay (responde JSON con el id) y el system prompt trae el catálogo
+        // por id, incluida la fuente Sistema.
+        assert!(matches!(req.kind, crate::LlmKind::Atipay));
         assert!(req.prompt.contains("escritorio 3"));
-        assert!(req.system.contains("mirada-ctl workspace"));
-        assert!(req.system.contains("sandokan-cli"));
+        assert!(req.system.contains("mirada.workspace"));
+        assert!(req.system.contains("sistema.apagar"));
+    }
+
+    #[test]
+    fn atipay_result_resuelve_json_a_la_linea_y_no_ejecuta() {
+        let mut s = State::new(Source::Local);
+        s.llm_inflight = true;
+        s = update(
+            s,
+            Msg::LlmResult {
+                kind: crate::LlmKind::Atipay,
+                ok: true,
+                text: "{\"id\":\"sistema.apagar\"}".into(),
+            },
+        );
+        // atipay armó el comando exacto; va al input, NO se ejecutó.
+        assert_eq!(s.input.text(), "systemctl poweroff");
+        assert!(!s.is_running());
+        // Avisó del peligro disruptivo.
+        assert!(s.output.iter().any(|l| l.text.contains("DISRUPTIVO")));
+    }
+
+    #[test]
+    fn atipay_result_nada_no_toca_el_input() {
+        let mut s = State::new(Source::Local);
+        s.llm_inflight = true;
+        s = update(s, Msg::LlmResult { kind: crate::LlmKind::Atipay, ok: true, text: "nada".into() });
+        assert_eq!(s.input.text(), "");
     }
 
     #[test]

@@ -215,6 +215,29 @@ pub struct Plan {
     pub peligro: Peligro,
 }
 
+impl Plan {
+    /// Renderiza el plan como una **línea de shell** lista para ejecutar, con
+    /// comillas simples alrededor de los args que las necesiten (espacios o
+    /// metacaracteres). Es lo que `shuma` pone en el input para revisar y correr.
+    pub fn linea_comando(&self) -> String {
+        let mut out = self.programa.clone();
+        for a in &self.args {
+            out.push(' ');
+            let necesita_comillas = a.is_empty() || a.chars().any(|c| c.is_whitespace() || "\"'$`\\*?~#&;|<>(){}[]!".contains(c));
+            if necesita_comillas {
+                // `'` no se puede escapar dentro de comillas simples: se cierra,
+                // se mete un `'\''` y se reabre — el truco POSIX clásico.
+                out.push('\'');
+                out.push_str(&a.replace('\'', "'\\''"));
+                out.push('\'');
+            } else {
+                out.push_str(a);
+            }
+        }
+        out
+    }
+}
+
 /// Errores de resolución del catálogo. Mensajes ya legibles para el usuario.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AtipayError {
@@ -324,6 +347,26 @@ impl Catalogo {
         out
     }
 
+    /// Menú por **id** para que el modelo elija una acción y devuelva su `id` +
+    /// args en JSON (la vía de `:hacé`, que luego resuelve a un [`Plan`] con
+    /// [`Catalogo::plan`]). Una línea por capacidad: `id — resumen (args: …)`.
+    pub fn prompt_menu_ids(&self) -> String {
+        let mut out = String::new();
+        for c in self.capacidades() {
+            let params: String = c
+                .params
+                .iter()
+                .map(|p| match &p.tipo {
+                    TipoParam::Enum(ops) => format!(" {}:{}", p.nombre, ops.join("|")),
+                    _ => format!(" {}", p.nombre),
+                })
+                .collect();
+            let ps = if params.is_empty() { String::new() } else { format!("  (args:{params})") };
+            out.push_str(&format!("{}  — {}{}\n", c.id, c.resumen, ps));
+        }
+        out
+    }
+
     /// Proyecta el catálogo a un array de definiciones **tool-use** (estilo
     /// Anthropic: `{name, description, input_schema}`), listo para pasarle al
     /// LLM vía `pluma-llm`. El modelo elige una tool y sus argumentos; eso se
@@ -428,6 +471,16 @@ mod tests {
     #[test]
     fn catalogo_no_esta_vacio() {
         assert!(!Catalogo::estandar().capacidades().is_empty());
+    }
+
+    #[test]
+    fn linea_comando_entrecomilla_args_con_espacios() {
+        let cat = Catalogo::estandar();
+        let plan = cat.plan(&Invocacion::nueva("mirada.spawn").con("comando", "foot -e htop")).unwrap();
+        assert_eq!(plan.linea_comando(), "mirada-ctl spawn 'foot -e htop'");
+        // Sin metacaracteres → sin comillas.
+        let plan = cat.plan(&Invocacion::nueva("mirada.workspace").con("n", "3")).unwrap();
+        assert_eq!(plan.linea_comando(), "mirada-ctl workspace 3");
     }
 
     #[test]

@@ -927,22 +927,71 @@ pub(crate) fn apply_hacer(mut s: State, rest: &str) -> State {
         ));
         return s;
     }
-    let menu = atipay::Catalogo::estandar().prompt_menu();
+    // El catálogo se identifica por `id`; el modelo elige UNO y sus args. Así
+    // no puede inventar flags: la línea de comando la arma `atipay` (validada).
+    let menu = atipay::Catalogo::estandar().prompt_menu_ids();
     let system = format!(
         "Sos el controlador del escritorio tawasuyu. El usuario describe lo que quiere lograr. \
-         Elegí EXACTAMENTE UNA acción del catálogo de abajo y respondé SÓLO con la línea de \
-         comando correspondiente (programa + args concretos), sin explicación, sin markdown, \
-         sin backticks. Una sola línea. Si nada del catálogo encaja, respondé la palabra: nada.\n\n\
-         Catálogo de acciones de control:\n{menu}"
+         Elegí EXACTAMENTE UNA acción del catálogo de abajo y respondé SÓLO con un objeto JSON \
+         {{\"id\":\"<id de la acción>\",\"args\":{{\"<param>\":\"<valor>\"}}}} — sin explicación, \
+         sin markdown, sin backticks. Si la acción no lleva parámetros, omití \"args\" o dejalo {{}}. \
+         Si nada del catálogo encaja, respondé exactamente: nada.\n\n\
+         Catálogo de acciones de control (id — qué hace — parámetros):\n{menu}"
     );
     s.llm_request = Some(LlmRequest {
-        kind: LlmKind::Command,
+        kind: LlmKind::Atipay,
         system,
         prompt: q.to_string(),
         max_tokens: 120,
         llm: wawa_config::WawaConfig::load().ai.llm,
     });
     s.push_output(OutputLine::notice(format!("🜲 llm · eligiendo una acción de control para: {q}")));
+    s
+}
+
+/// Resuelve la respuesta de `:hacé` (`LlmKind::Atipay`): el modelo eligió una
+/// acción y devolvió su `id` + args en JSON. Se parsea a una `atipay::Invocacion`,
+/// se valida con el catálogo a un `Plan`, y la **línea de comando exacta** va al
+/// input etiquetada por peligro — NUNCA se auto-ejecuta (revisar y Enter). Como
+/// la arma `atipay`, el modelo no puede colar flags inexistentes. Tolerante:
+/// «nada» / JSON inválido / id desconocido → aviso, sin romper.
+pub(crate) fn resolver_atipay(mut s: State, text: &str) -> State {
+    let raw = text.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("nada") {
+        s.push_output(OutputLine::notice("🜲 ninguna acción de control encaja"));
+        return s;
+    }
+    // El modelo puede colar markdown/backticks; quedate con el objeto JSON.
+    let json = match (raw.find('{'), raw.rfind('}')) {
+        (Some(i), Some(j)) if j > i => &raw[i..=j],
+        _ => {
+            s.push_output(OutputLine::notice("🜲 no entendí la elección del modelo"));
+            return s;
+        }
+    };
+    let inv: atipay::Invocacion = match serde_json::from_str(json) {
+        Ok(inv) => inv,
+        Err(_) => {
+            s.push_output(OutputLine::notice("🜲 no entendí la elección del modelo"));
+            return s;
+        }
+    };
+    match atipay::Catalogo::estandar().plan(&inv) {
+        Ok(plan) => {
+            let etiqueta = match plan.peligro {
+                atipay::Peligro::Seguro => "seguro",
+                atipay::Peligro::Reversible => "reversible",
+                atipay::Peligro::Disruptivo => "⚠ DISRUPTIVO",
+            };
+            s.input.set_text(&plan.linea_comando());
+            s.focused = true;
+            s.push_output(OutputLine::notice(format!(
+                "🜲 {} [{}] — en el input, revisá y Enter (no se ejecutó)",
+                plan.id, etiqueta
+            )));
+        }
+        Err(e) => s.push_output(OutputLine::notice(format!("🜲 {e}"))),
+    }
     s
 }
 
