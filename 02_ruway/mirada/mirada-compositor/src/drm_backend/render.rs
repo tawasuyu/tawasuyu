@@ -1852,9 +1852,14 @@ impl DrmState {
             else {
                 continue;
             };
-            let blurred = box_blur_bgra(&bytes, ow, oh, glass_blur);
-            if let Some(m) = bgra_membuffer(&blurred, ow, oh) {
-                self.window_backdrops.insert(snaps[p].0, (m, (ow, oh)));
+            // Submuestreo → blur del buffer reducido → cache a tamaño chico (el
+            // muestreo de la barra lo re-escala a la salida). El radio se divide
+            // por el factor para conservar la extensión visual del desenfoque.
+            let s = backdrop_downsample(ow, oh);
+            let (small, sw, sh) = downsample_bgra(&bytes, ow, oh, s);
+            let blurred = box_blur_bgra(&small, sw, sh, (glass_blur / s).max(1));
+            if let Some(m) = bgra_membuffer(&blurred, sw, sh) {
+                self.window_backdrops.insert(snaps[p].0, (m, (sw, sh)));
             }
         }
     }
@@ -1890,9 +1895,14 @@ impl DrmState {
             self.outputs[idx].backdrop_blur = None;
             return;
         };
-        let blurred = box_blur_bgra(&bytes, ow, oh, glass_blur);
+        // Submuestreo → blur reducido → cache chico (el muestreo del menú lo
+        // re-escala). Mismo factor/radio que las barras flotantes (un solo
+        // criterio de calidad↔coste para todo el glass de esta salida).
+        let s = backdrop_downsample(ow, oh);
+        let (small, sw, sh) = downsample_bgra(&bytes, ow, oh, s);
+        let blurred = box_blur_bgra(&small, sw, sh, (glass_blur / s).max(1));
         self.outputs[idx].backdrop_blur =
-            bgra_membuffer(&blurred, ow, oh).map(|m| (m, (ow, oh)));
+            bgra_membuffer(&blurred, sw, sh).map(|m| (m, (sw, sh)));
     }
 
     fn emit_menu(&mut self, idx: usize, rect: Rect, into: &mut Vec<Frame>) {
@@ -2773,7 +2783,7 @@ fn emit_popups(
 
 #[cfg(test)]
 mod tests {
-    use super::super::box_blur_bgra;
+    use super::super::{backdrop_downsample, box_blur_bgra, downsample_bgra};
     use super::{cover_transform, focus_mix, lerp_rgba, round_mask_bgra};
 
     #[test]
@@ -2791,6 +2801,55 @@ mod tests {
         );
         // Radio 0 = copia exacta.
         assert_eq!(box_blur_bgra(&src, w, h, 0), src);
+    }
+
+    #[test]
+    fn downsample_promedia_bloques_y_reduce_dimensiones() {
+        // 4×4 mitad izquierda B=100, mitad derecha B=200; factor 2 → 2×2.
+        let (w, h) = (4i32, 4i32);
+        let mut src = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                src[i] = if x < 2 { 100 } else { 200 };
+                src[i + 3] = 255;
+            }
+        }
+        let (out, nw, nh) = downsample_bgra(&src, w, h, 2);
+        assert_eq!((nw, nh), (2, 2));
+        // Cada bloque 2×2 es uniforme → el promedio es el mismo valor.
+        assert_eq!(out[0], 100); // bloque izquierdo
+        assert_eq!(out[4], 200); // bloque derecho
+        assert!(out.chunks_exact(4).all(|p| p[3] == 255), "opaco");
+        // Factor 1: copia a tamaño nativo.
+        let (copy, cw, ch) = downsample_bgra(&src, w, h, 1);
+        assert_eq!((cw, ch), (w, h));
+        assert_eq!(copy, src);
+    }
+
+    #[test]
+    fn downsample_dimensiones_impares_redondean_hacia_arriba() {
+        // 5×3 con factor 2 → ⌈5/2⌉×⌈3/2⌉ = 3×2 (bloques de borde parciales).
+        let (w, h) = (5i32, 3i32);
+        let src = vec![255u8; (w * h * 4) as usize];
+        let (out, nw, nh) = downsample_bgra(&src, w, h, 2);
+        assert_eq!((nw, nh), (3, 2));
+        assert_eq!(out.len(), (nw * nh * 4) as usize);
+        // Campo uniforme: el promedio (aun en bloques parciales) es el mismo.
+        assert!(out.chunks_exact(4).all(|p| p[0] == 255));
+    }
+
+    #[test]
+    fn backdrop_downsample_acota_el_lado_mayor() {
+        // ≤ CAP (720): sin reducir.
+        assert_eq!(backdrop_downsample(640, 480), 1);
+        assert_eq!(backdrop_downsample(720, 720), 1);
+        // 1080p: lado mayor 1920 → ⌈1920/720⌉ = 3.
+        assert_eq!(backdrop_downsample(1920, 1080), 3);
+        // 4K: 3840 → ⌈3840/720⌉ = 6.
+        assert_eq!(backdrop_downsample(3840, 2160), 6);
+        // Degenerado: nunca 0.
+        assert!(backdrop_downsample(0, 0) >= 1);
     }
 
     #[test]

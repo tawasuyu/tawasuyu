@@ -387,6 +387,59 @@ fn box_blur_bgra(src: &[u8], w: i32, h: i32, radius: i32) -> Vec<u8> {
     a
 }
 
+/// Submuestrea BGRA `w×h` por un factor entero `s` promediando cada bloque
+/// `s×s` (caja) → un buffer `⌈w/s⌉×⌈h/s⌉`. Devuelve `(bytes, nw, nh)`. Abarata
+/// el blur del backdrop *frosted*: blurear el buffer reducido cuesta ~`s²` veces
+/// menos y, al re-escalarlo a la salida en el muestreo (`src`/`dst`, ya
+/// ratio-aware en `emit_menu`/`emit_windows`), el resultado se ve igual o más
+/// suave (el upsample añade su propia interpolación). `s<=1` (o tamaño
+/// degenerado) devuelve una copia a tamaño nativo. Opaco. Pura y testeada.
+fn downsample_bgra(src: &[u8], w: i32, h: i32, s: i32) -> (Vec<u8>, i32, i32) {
+    let (wu, hu) = (w.max(0) as usize, h.max(0) as usize);
+    if s <= 1 || wu == 0 || hu == 0 || src.len() < wu * hu * 4 {
+        return (src.to_vec(), w, h);
+    }
+    let su = s as usize;
+    let nw = (wu + su - 1) / su;
+    let nh = (hu + su - 1) / su;
+    let mut out = vec![0u8; nw * nh * 4];
+    for oy in 0..nh {
+        let (y0, y1) = (oy * su, (oy * su + su).min(hu));
+        for ox in 0..nw {
+            let (x0, x1) = (ox * su, (ox * su + su).min(wu));
+            let (mut sb, mut sg, mut sr, mut n) = (0u32, 0u32, 0u32, 0u32);
+            for y in y0..y1 {
+                let row = y * wu * 4;
+                for x in x0..x1 {
+                    let i = row + x * 4;
+                    sb += src[i] as u32;
+                    sg += src[i + 1] as u32;
+                    sr += src[i + 2] as u32;
+                    n += 1;
+                }
+            }
+            let n = n.max(1);
+            let o = (oy * nw + ox) * 4;
+            out[o] = (sb / n) as u8;
+            out[o + 1] = (sg / n) as u8;
+            out[o + 2] = (sr / n) as u8;
+            out[o + 3] = 255;
+        }
+    }
+    (out, nw as i32, nh as i32)
+}
+
+/// Factor de submuestreo para el blur del backdrop *frosted*: el lado mayor del
+/// buffer reducido queda ≤ `CAP`, así el coste del blur (y el peso del buffer
+/// cacheado) **no escala** con la resolución de la salida — una 4K se blurea a
+/// ~720p y la GPU la re-escala al muestrearla. `1` en salidas ya ≤ `CAP`. Pura
+/// y testeada.
+fn backdrop_downsample(w: i32, h: i32) -> i32 {
+    const CAP: i32 = 720;
+    let long = w.max(h).max(1);
+    ((long + CAP - 1) / CAP).max(1)
+}
+
 /// Gradiente vertical sobrio (noche profunda → púrpura → azul-medianoche),
 /// generado runtime. Es el **fallback** cuando el wallpaper de marca no
 /// decodifica; el default real sin config es [`make_marca_wallpaper`]. Devuelve

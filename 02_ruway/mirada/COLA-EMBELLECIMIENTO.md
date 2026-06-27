@@ -65,12 +65,20 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       `wallpaper_blur`. Surfaces-only → sin realimentación («espejo infinito»).
       Una pasada por flotante (normalmente 1); cae a `wallpaper_blur` si falla.
       Opt-in, byte-idéntico en off. **Falta verificar en metal.**
+- [x] **✅ Backdrop REAL — afinar (c): downsample del blur.** El backdrop
+      *frosted* (menú raíz **y** barras flotantes) ya no se blurea a tamaño de
+      salida: se **submuestrea** (`downsample_bgra`, caja s×s, pura+testeada) por
+      un factor que acota el lado mayor a ≤720px (`backdrop_downsample`), se
+      blurea el buffer reducido (radio /s, conserva la extensión visual) y se
+      cachea chico. El muestreo (`src`/`dst` ratio-aware) lo re-escala a la salida
+      en la GPU. Coste del blur (y peso del cache) ya **no escala** con la
+      resolución (una 4K se blurea a ~720p). Sin cambiar el camino de muestreo.
+      Opt-in, byte-idéntico en off. **Falta verificar en metal.**
 - [ ] **Backdrop REAL — afinar: paneles/layer-shell + calidad acotada (off/1/N) +
-      downsample.** Pendiente: (a) extender el backdrop real a superficies
+      filo.** Pendiente: (a) extender el backdrop real a superficies
       layer-shell (paneles), no sólo barras de ventana; (b) exponer el nivel de
-      calidad en el panel (hoy es «N» siempre que haya glass); (c) bajar coste
-      rindiendo el offscreen del backdrop a **resolución reducida** (downsample →
-      blur → upsample) en vez de a tamaño de salida; (d) filo/borde del cristal.
+      calidad en el panel (hoy es «N» siempre que haya glass); (d) filo/borde del
+      cristal (rim specular de 1px).
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).
