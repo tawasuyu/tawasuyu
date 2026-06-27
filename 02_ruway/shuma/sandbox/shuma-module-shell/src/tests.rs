@@ -162,6 +162,20 @@
     }
 
     #[test]
+    fn hacer_builtin_arma_request_con_el_catalogo_atipay() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text(":hacé andá al escritorio 3");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let req = s.llm_request.clone().expect("hay petición");
+        // Es Command (va al input) y el system prompt trae el catálogo de control.
+        assert!(matches!(req.kind, crate::LlmKind::Command));
+        assert!(req.prompt.contains("escritorio 3"));
+        assert!(req.system.contains("mirada-ctl workspace"));
+        assert!(req.system.contains("sandokan-cli"));
+    }
+
+    #[test]
     fn llm_result_command_va_al_input_sin_ejecutar() {
         let mut s = State::new(Source::Local);
         s.llm_inflight = true;

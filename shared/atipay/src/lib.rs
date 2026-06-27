@@ -48,6 +48,17 @@ impl Superficie {
             Superficie::Sistema => "sistema",
         }
     }
+
+    /// El programa CLI que materializa esta superficie, si lo hay. Las
+    /// superficies que no se invocan por un CLI único (p.ej. `Sistema` por
+    /// D-Bus, o builtins de `Shuma`) devuelven `None`.
+    pub fn programa(self) -> Option<&'static str> {
+        match self {
+            Superficie::Mirada => Some("mirada-ctl"),
+            Superficie::Sandokan => Some("sandokan-cli"),
+            Superficie::Shuma | Superficie::Sistema => None,
+        }
+    }
 }
 
 /// Cuánto cuesta equivocarse con una capacidad. La IA usa esto para decidir si
@@ -243,6 +254,29 @@ impl Catalogo {
         fuente.plan(inv)
     }
 
+    /// Renderiza el catálogo como un **menú compacto** para incrustar en el
+    /// prompt de un LLM: una línea por capacidad con el comando-plantilla
+    /// (`programa verbo <params>`) y el resumen. Es lo que `shuma` le pasa al
+    /// modelo en `:hacé` para que elija UNA y devuelva la línea de comando
+    /// exacta — el camino sin tool-use, para backends que sólo chatean.
+    pub fn prompt_menu(&self) -> String {
+        let mut out = String::new();
+        for c in self.capacidades() {
+            let programa = c.superficie.programa().unwrap_or_else(|| c.superficie.prefijo());
+            let verbo = c.id.split_once('.').map(|(_, v)| v).unwrap_or(&c.id);
+            let params: String = c
+                .params
+                .iter()
+                .map(|p| match &p.tipo {
+                    TipoParam::Enum(ops) => format!(" <{}:{}>", p.nombre, ops.join("|")),
+                    _ => format!(" <{}>", p.nombre),
+                })
+                .collect();
+            out.push_str(&format!("{programa} {verbo}{params}  — {}\n", c.resumen));
+        }
+        out
+    }
+
     /// Proyecta el catálogo a un array de definiciones **tool-use** (estilo
     /// Anthropic: `{name, description, input_schema}`), listo para pasarle al
     /// LLM vía `pluma-llm`. El modelo elige una tool y sus argumentos; eso se
@@ -343,5 +377,15 @@ mod tests {
     #[test]
     fn catalogo_no_esta_vacio() {
         assert!(!Catalogo::estandar().capacidades().is_empty());
+    }
+
+    #[test]
+    fn prompt_menu_trae_comandos_y_opciones_de_enum() {
+        let menu = Catalogo::estandar().prompt_menu();
+        // Comando concreto (programa + verbo).
+        assert!(menu.contains("mirada-ctl workspace <n>"));
+        assert!(menu.contains("sandokan-cli stop <id>"));
+        // Las opciones de un enum se despliegan para guiar al modelo.
+        assert!(menu.contains("master-stack|"));
     }
 }

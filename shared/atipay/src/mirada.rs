@@ -101,7 +101,8 @@ impl FuenteCapacidades for FuenteMirada {
             args.push(valor.to_string());
         }
 
-        Ok(Plan { id: inv.id.clone(), programa: "mirada-ctl".into(), args, peligro: cap.peligro })
+        let programa = Superficie::Mirada.programa().expect("mirada tiene CLI").to_string();
+        Ok(Plan { id: inv.id.clone(), programa, args, peligro: cap.peligro })
     }
 }
 

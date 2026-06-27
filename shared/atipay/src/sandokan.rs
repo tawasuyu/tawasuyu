@@ -50,7 +50,8 @@ impl FuenteCapacidades for FuenteSandokan {
             args.push(inv.arg(&p.nombre)?.to_string());
         }
 
-        Ok(Plan { id: inv.id.clone(), programa: "sandokan-cli".into(), args, peligro: cap.peligro })
+        let programa = Superficie::Sandokan.programa().expect("sandokan tiene CLI").to_string();
+        Ok(Plan { id: inv.id.clone(), programa, args, peligro: cap.peligro })
     }
 }
 

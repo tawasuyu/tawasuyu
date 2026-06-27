@@ -912,6 +912,40 @@ pub(crate) fn apply_ask(mut s: State, rest: &str) -> State {
     s
 }
 
+/// `:hacé <intención>` (`:hace`/`:control`) — lenguaje natural → una acción de
+/// **control de la suite** (mirada/sandokan/…), elegida del catálogo `atipay`.
+/// A diferencia de `:?` (cualquier comando de shell), acá el LLM se ciñe al
+/// vocabulario real de control del sistema: el catálogo va en el system prompt
+/// como menú y el modelo devuelve la línea exacta (`mirada-ctl …`/`sandokan-cli
+/// …`). La propuesta va al **input** — NUNCA se auto-ejecuta. Mismo camino que
+/// `:?` (`LlmKind::Command`), sin tocar el chasis.
+pub(crate) fn apply_hacer(mut s: State, rest: &str) -> State {
+    let q = rest.trim();
+    if q.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :hacé <qué querés que haga el escritorio/sistema> — el LLM elige una acción de control (no la ejecuta)",
+        ));
+        return s;
+    }
+    let menu = atipay::Catalogo::estandar().prompt_menu();
+    let system = format!(
+        "Sos el controlador del escritorio tawasuyu. El usuario describe lo que quiere lograr. \
+         Elegí EXACTAMENTE UNA acción del catálogo de abajo y respondé SÓLO con la línea de \
+         comando correspondiente (programa + args concretos), sin explicación, sin markdown, \
+         sin backticks. Una sola línea. Si nada del catálogo encaja, respondé la palabra: nada.\n\n\
+         Catálogo de acciones de control:\n{menu}"
+    );
+    s.llm_request = Some(LlmRequest {
+        kind: LlmKind::Command,
+        system,
+        prompt: q.to_string(),
+        max_tokens: 120,
+        llm: wawa_config::WawaConfig::load().ai.llm,
+    });
+    s.push_output(OutputLine::notice(format!("🜲 llm · eligiendo una acción de control para: {q}")));
+    s
+}
+
 /// `:explica [%cN]` / `:resume [%cN]` — explica o resume la salida de un
 /// bloque (la del más reciente si no se da ref). El resultado va al output,
 /// rotulado `🜲`. `summarize=true` → `:resume`.
