@@ -30,6 +30,7 @@ pub use card_core::{
     NetworkingPolicy,
     Payload,
     Permissions,
+    RunAs,
     Priority,
     ResourceLimits,
     SomaSpec,

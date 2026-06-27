@@ -45,6 +45,11 @@ pub enum ChildPreExec {
         put_old: CString,
         old_root_after: CString,
     },
+    /// Baja privilegios al usuario antes de `execve`: `setgroups` (suplementarios)
+    /// → `setgid` → `setuid`, EN ESE ORDEN (tras `setuid` se pierde el privilegio
+    /// de cambiar gid/groups). Va al FINAL de la lista (después de mounts/pivot,
+    /// que necesitan privilegio). Los gids ya están allocados por el padre.
+    DropPrivileges { uid: u32, gid: u32, groups: Vec<u32> },
 }
 
 /// Setup completo del hijo. Default = sin ops.
@@ -224,6 +229,22 @@ pub unsafe fn apply_unchecked(ops: &[ChildPreExec]) -> i32 {
                 };
                 if r != 0 {
                     return 119;
+                }
+            }
+            ChildPreExec::DropPrivileges { uid, gid, groups } => {
+                // ORDEN: setgroups → setgid → setuid. Tras bajar el uid se pierde
+                // el privilegio de cambiar gid/groups, así que el uid va ÚLTIMO.
+                let r = unsafe {
+                    libc::setgroups(groups.len() as libc::size_t, groups.as_ptr() as *const libc::gid_t)
+                };
+                if r != 0 {
+                    return 130;
+                }
+                if unsafe { libc::setgid(*gid as libc::gid_t) } != 0 {
+                    return 131;
+                }
+                if unsafe { libc::setuid(*uid as libc::uid_t) } != 0 {
+                    return 132;
                 }
             }
         }

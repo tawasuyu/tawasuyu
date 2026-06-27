@@ -9,19 +9,23 @@
 //!     arje la APARCA y la re-erige (re-floor) cuando el compositor vuelve. El
 //!     usuario ve su sesión reconstruirse sola, en orden, sin relanzar nada.
 //!
-//! Estado: **arranque**. El coordinador (armar Card + `RunCard`) está hecho y
-//! testeado. Falta UN enabler en arje para volverlo el camino por defecto: arje
-//! corre los Entes como **root** (PID 1) y el modelo de Card todavía NO tiene
-//! drop de **uid/gid**, así que una app de usuario como Ente correría como root
-//! — regresión frente al `spawn_command` actual (que hace `setuid` al usuario).
-//! Por eso acá va **opt-in** (`MIRADA_SESSION_ENTES=1`); pasa a default cuando
-//! `Payload::Native`/`SomaSpec` ganen `run_as { uid, gid }` y arje-incarnate lo
-//! honre. Ver el seam en `utilidades::spawn_command`.
+//! El enabler de uid/gid YA ESTÁ en arje: `SomaSpec.run_as` (card-core) +
+//! `ChildPreExec::DropPrivileges` (arje-incarnate, setgroups→setgid→setuid). Así
+//! el Ente de sesión corre **como el usuario logueado**, no como root — paridad
+//! con el `setuid` del `spawn_command` crudo.
+//!
+//! Estado: **arranque, opt-in** (`MIRADA_SESSION_ENTES=1`). Sigue opt-in —y con
+//! fallback al spawn crudo— hasta verificar en HARDWARE la paridad fina de sesión
+//! (cwd al home, `setsid`, entorno completo) con apps reales; al confirmar, pasa
+//! a default. Seam: `utilidades::spawn_command` (chokepoint de todas las apps).
 
 use std::time::Duration;
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
-use arje_card::{wayland_floor, EntityCard, FsPolicy, NetworkingPolicy, Payload, Supervision, WireCard};
+use arje_card::{
+    wayland_floor, EntityCard, FsPolicy, NetworkingPolicy, Payload, RunAs, Supervision, WireCard,
+};
+use auth_core::UserInfo;
 
 /// ¿Está activado el modo "apps de sesión como Entes de arje"? Opt-in mientras
 /// arje no dropee uid/gid (ver doc del módulo).
@@ -30,9 +34,26 @@ pub(crate) fn ente_mode() -> bool {
         && std::env::var("MIRADA_SESSION_ENTES").map(|v| v == "1").unwrap_or(false)
 }
 
+/// Grupos suplementarios del usuario (NSS via `getgrouplist`; corre en el padre,
+/// async-signal-safe NO requerido acá). Cae al gid primario si falla.
+fn user_groups(user: &UserInfo) -> Vec<u32> {
+    use nix::unistd::Gid;
+    std::ffi::CString::new(user.name.as_bytes())
+        .ok()
+        .and_then(|name| nix::unistd::getgrouplist(&name, Gid::from_raw(user.gid)).ok())
+        .map(|gs| gs.into_iter().map(|g| g.as_raw()).collect())
+        .unwrap_or_else(|| vec![user.gid])
+}
+
 /// Construye la Card de un Ente de sesión: corre `cmd` vía `sh -c` con el
-/// entorno de la sesión, depende del piso y se reinicia si cae.
-pub(crate) fn session_app_card(label: &str, cmd: &str, session_env: &[(String, String)]) -> EntityCard {
+/// entorno de la sesión, depende del piso, se reinicia si cae y —si hay
+/// `user`— BAJA privilegios a ese usuario (`run_as`) para no correr como root.
+pub(crate) fn session_app_card(
+    label: &str,
+    cmd: &str,
+    user: Option<&UserInfo>,
+    session_env: &[(String, String)],
+) -> EntityCard {
     let mut card = EntityCard::new(format!("session.{label}"));
     card.requires = std::iter::once(wayland_floor()).collect();
     card.supervision = Supervision::Restart {
@@ -43,10 +64,30 @@ pub(crate) fn session_app_card(label: &str, cmd: &str, session_env: &[(String, S
     card.permissions.networking = NetworkingPolicy::Full;
     card.permissions.filesystem = FsPolicy::ReadWrite;
     card.permissions.processes = true;
+
+    // Entorno: tema + sesión + identidad del usuario (paridad con spawn_command).
+    let mut envp: Vec<(String, String)> = crate::utilidades::THEME_ENV
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    envp.extend(session_env.iter().cloned());
+    if let Some(u) = user {
+        envp.push(("HOME".into(), u.home.display().to_string()));
+        envp.push(("USER".into(), u.name.clone()));
+        envp.push(("LOGNAME".into(), u.name.clone()));
+        envp.push(("SHELL".into(), u.shell.display().to_string()));
+        // Drop de privilegios al usuario: el Ente corre como él, no como root.
+        card.soma.run_as = Some(RunAs {
+            uid: u.uid,
+            gid: u.gid,
+            groups: user_groups(u),
+        });
+    }
+
     card.payload = Payload::Native {
         exec: "/bin/sh".into(),
         argv: vec!["-c".into(), cmd.into()],
-        envp: session_env.to_vec(),
+        envp,
     };
     card
 }
@@ -54,8 +95,13 @@ pub(crate) fn session_app_card(label: &str, cmd: &str, session_env: &[(String, S
 /// Intenta lanzar `cmd` como Ente de sesión vía `RunCard` (best-effort,
 /// síncrono — el bucle es calloop). Devuelve `true` si arje lo aceptó (el caller
 /// se saltea el spawn crudo); `false` para caer al camino normal.
-pub(crate) fn try_spawn_as_ente(label: &str, cmd: &str, session_env: &[(String, String)]) -> bool {
-    let card = session_app_card(label, cmd, session_env);
+pub(crate) fn try_spawn_as_ente(
+    label: &str,
+    cmd: &str,
+    user: Option<&UserInfo>,
+    session_env: &[(String, String)],
+) -> bool {
+    let card = session_app_card(label, cmd, user, session_env);
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(_) => return false,
@@ -91,10 +137,20 @@ mod tests {
     use super::*;
     use arje_card::Capability;
 
+    fn user(uid: u32) -> UserInfo {
+        UserInfo {
+            name: "sergio".into(),
+            uid,
+            gid: uid,
+            home: "/home/sergio".into(),
+            shell: "/bin/sh".into(),
+        }
+    }
+
     #[test]
     fn la_card_depende_del_piso_y_se_reinicia() {
         let env = vec![("WAYLAND_DISPLAY".to_string(), "wayland-1".to_string())];
-        let card = session_app_card("foot", "foot --server", &env);
+        let card = session_app_card("foot", "foot --server", None, &env);
         // Depende del piso ⇒ park & re-floor.
         assert!(card.requires.contains(&wayland_floor()));
         // Se reinicia si cae.
@@ -104,18 +160,32 @@ mod tests {
             Payload::Native { exec, argv, envp } => {
                 assert_eq!(exec, "/bin/sh");
                 assert_eq!(argv, &vec!["-c".to_string(), "foot --server".to_string()]);
-                assert!(envp.iter().any(|(k, _)| k == "WAYLAND_DISPLAY"));
+                assert!(envp.iter().any(|(k, v)| k == "WAYLAND_DISPLAY" && v == "wayland-1"));
             }
             other => panic!("payload no es Native: {other:?}"),
         }
-        // La Card es válida.
+        // Sin user ⇒ corre con la identidad del Init (sin run_as).
+        assert!(card.soma.run_as.is_none());
         card.validate().unwrap();
         let _ = Capability::Spawn; // (sanity: el tipo está en scope)
     }
 
     #[test]
+    fn con_usuario_baja_privilegios() {
+        let card = session_app_card("foot", "foot", Some(&user(1000)), &[]);
+        let ra = card.soma.run_as.expect("debe bajar privilegios al usuario");
+        assert_eq!(ra.uid, 1000);
+        assert_eq!(ra.gid, 1000);
+        // Inyecta la identidad del usuario en el entorno.
+        if let Payload::Native { envp, .. } = &card.payload {
+            assert!(envp.iter().any(|(k, v)| k == "HOME" && v == "/home/sergio"));
+            assert!(envp.iter().any(|(k, v)| k == "USER" && v == "sergio"));
+        }
+    }
+
+    #[test]
     fn label_namespaced() {
-        let card = session_app_card("editor", "nada", &[]);
+        let card = session_app_card("editor", "nada", None, &[]);
         assert_eq!(card.label, "session.editor");
     }
 }

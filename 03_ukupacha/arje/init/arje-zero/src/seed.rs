@@ -215,6 +215,7 @@ fn synthesize_dev_seed() -> EntityCard {
                 io_weight: None,
             },
             cpu_affinity: None,
+            run_as: None,
         },
         payload: Payload::Virtual,
         supervision: Supervision::OneShot,

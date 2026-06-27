@@ -431,6 +431,25 @@ pub struct SomaSpec {
     pub rlimits: ResourceLimits,
     pub cgroup: CgroupSpec,
     pub cpu_affinity: Option<Vec<u32>>,
+    /// Si `Some`, el Ente BAJA privilegios a este usuario antes de `execve`
+    /// (setgroups + setgid + setuid). `None` = corre con la identidad del Init
+    /// (root). Lo usa el session-manager para correr las apps del usuario logueado
+    /// como ese usuario, no como root. `#[serde(default)]` ⇒ compat con Cards
+    /// previas (deserializan a `None`). SIN `skip_serializing_if`: SomaSpec viaja
+    /// en `WireCard` y postcard exige layout fijo (igual que `cpu_affinity`).
+    #[serde(default)]
+    pub run_as: Option<RunAs>,
+}
+
+/// Identidad de usuario a la que un Ente baja privilegios antes de `execve`.
+/// `groups` (suplementarios) los calcula el CALLER —`getgrouplist` consulta NSS
+/// y no es async-signal-safe entre fork y exec—; vacío = sólo el `gid` primario.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunAs {
+    pub uid: u32,
+    pub gid: u32,
+    #[serde(default)]
+    pub groups: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1677,6 +1696,30 @@ mod tests {
         let wire_back: WireCard = postcard::from_bytes(&bytes).unwrap();
         let c_back: Card = wire_back.into();
         assert_eq!(c_back.contracts, c.contracts);
+    }
+
+    #[test]
+    fn run_as_roundtrip_json_y_wire_y_compat() {
+        let mut c = Card::new("app-de-usuario");
+        c.soma.run_as = Some(RunAs { uid: 1000, gid: 1000, groups: vec![1000, 27, 100] });
+        // JSON.
+        let json = serde_json::to_string(&c).unwrap();
+        let back: Card = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.soma.run_as, c.soma.run_as);
+        // Wire (postcard): SomaSpec viaja en WireCard.
+        let wire: WireCard = c.clone().into();
+        let bytes = postcard::to_allocvec(&wire).unwrap();
+        let c_back: Card = postcard::from_bytes::<WireCard>(&bytes).unwrap().into();
+        assert_eq!(c_back.soma.run_as, c.soma.run_as);
+        // Card vieja (soma sin run_as) ⇒ None.
+        let viejo = r#"{
+            "schema_version": 1, "id": "01HQAR53D4M2NBV8KZTYXFGS01", "label": "v",
+            "soma": { "namespaces": {"mount":false,"pid":false,"net":false,"uts":false,"ipc":false,"user":false,"cgroup":false},
+                      "rlimits": {"mem_bytes":null,"nproc":null,"nofile":null},
+                      "cgroup": {"path":"x","cpu_weight":null,"io_weight":null}, "cpu_affinity": null },
+            "payload": "Virtual", "supervision": "OneShot"
+        }"#;
+        assert!(Card::from_json(viejo).unwrap().soma.run_as.is_none());
     }
 
     #[test]

@@ -212,8 +212,19 @@ impl Incarnator {
         &self,
         card: &Card,
         stdio: ChildStdio,
-        setup: ChildSetup,
+        mut setup: ChildSetup,
     ) -> Result<IncarnateOutcome, IncarnateError> {
+        // Drop de privilegios al usuario, si la Card lo pide. Va al FINAL del
+        // setup (después de mounts/pivot del caller, que necesitan privilegio) y
+        // antes de execve. Aplica a ambos paths (namespaced y plain). Lo usa el
+        // session-manager para correr las apps del usuario como ese usuario.
+        if let Some(ra) = &card.soma.run_as {
+            setup.push(ChildPreExec::DropPrivileges {
+                uid: ra.uid,
+                gid: ra.gid,
+                groups: ra.groups.clone(),
+            });
+        }
         if self.cfg.strict_caps {
             let v = self.dry_run(card);
             if !v.will_work {

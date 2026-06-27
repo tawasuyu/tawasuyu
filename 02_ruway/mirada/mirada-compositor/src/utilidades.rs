@@ -451,7 +451,7 @@ pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: 
     // `setuid` al usuario. Pasa a default cuando arje gane `run_as`. Ver `session`.
     if crate::session::ente_mode() {
         let label = cmd.split_whitespace().next().unwrap_or("app");
-        if crate::session::try_spawn_as_ente(label, cmd, session_env) {
+        if crate::session::try_spawn_as_ente(label, cmd, as_user, session_env) {
             return;
         }
     }
