@@ -294,11 +294,14 @@ pub enum BrainCommand {
     /// compone el login si no queda ninguna. No-op sin sesión activa.
     Logout,
     /// Estado de escritorios que el Cerebro **enlazado** empuja al Cuerpo para
-    /// que su switcher Win+Tab (HUD + slide de transición) funcione en modo DE:
-    /// el escritorio activo, las cargas (nº de ventanas por escritorio) y la
-    /// duración del slide en ms (`0` = salto seco). En modo embebido el Cuerpo
-    /// ya tiene estos datos y no recibe esto.
-    SetWorkspaces { active: u32, loads: Vec<u32>, slide_ms: u32 },
+    /// que su switcher Win+Tab (HUD + transición) funcione en modo DE: el
+    /// escritorio activo, las cargas (nº de ventanas por escritorio), la duración
+    /// del slide en ms (`0` = salto seco) y el **modo de transición** como slug
+    /// (`"direct"`/`"hyprland"`/`"prezi"`/`"cube"` — `WorkspaceSwitchMode::slug`).
+    /// Sin el slug, el Cuerpo no podría distinguir Cube/Prezi de Hyprland (sólo
+    /// veía `slide_ms`) y esos modos quedaban inalcanzables en modo enlazado. En
+    /// modo embebido el Cuerpo ya tiene estos datos y no recibe esto.
+    SetWorkspaces { active: u32, loads: Vec<u32>, slide_ms: u32, switch_mode: String },
     /// Fija los **efectos visuales** ([`WindowEffects`]) de ciertas ventanas; las
     /// no listadas conservan los suyos. Es el canal Tier-2 declarativo: efectos
     /// nuevos se agregan como campos de [`WindowEffects`], sin tocar este enum.

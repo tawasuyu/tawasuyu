@@ -744,18 +744,24 @@ fn push_workspaces_if_changed(m: &mut Model) {
     if m.last_ws_push.as_ref() == Some(&(active, loads.clone())) {
         return;
     }
-    let slide_ms = {
+    let (slide_ms, switch_mode) = {
         let cfg = m.desktop.config();
-        if cfg.workspace_switch_mode == mirada_brain::WorkspaceSwitchMode::Direct {
+        let mode = cfg.workspace_switch_mode;
+        // Direct = salto seco (sin duración); el resto anima con la duración
+        // configurada. El slug viaja para que el Cuerpo sepa el modo REAL
+        // (Cube/Prezi/Hyprland), no sólo si hay slide.
+        let ms = if mode == mirada_brain::WorkspaceSwitchMode::Direct {
             0
         } else {
             cfg.slide_ms
-        }
+        };
+        (ms, mode.slug().to_string())
     };
     let cmd = BrainCommand::SetWorkspaces {
         active: active as u32,
         loads: loads.iter().map(|&n| n as u32).collect(),
         slide_ms,
+        switch_mode,
     };
     if let Some(link) = m.link.as_mut() {
         let _ = link.send(&cmd);

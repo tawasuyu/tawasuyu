@@ -237,6 +237,9 @@ pub(crate) struct LinkedWorkspaces {
     pub(crate) loads: Vec<usize>,
     /// Duración del slide de transición en ms (`0` = salto seco, sin animación).
     pub(crate) slide_ms: u32,
+    /// Modo de transición que el Cerebro empujó (Direct/Hyprland/Prezi/Cube). Sin
+    /// esto el Cuerpo lo inferría de `slide_ms` y Cube/Prezi eran inalcanzables.
+    pub(crate) switch_mode: mirada_brain::WorkspaceSwitchMode,
 }
 
 /// Datos para pintar la vista espacial (Prezi) en vivo. Ver

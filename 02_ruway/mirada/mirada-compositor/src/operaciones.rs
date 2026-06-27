@@ -329,16 +329,18 @@ impl App {
     }
 
     /// El modo de transición de Win+Tab configurado (`direct`/`hyprland`/
-    /// `prezi`). `Direct` con Cerebro enlazado (no decide animaciones acá).
+    /// `prezi`/`cube`).
     pub(crate) fn config_workspace_switch_mode(&self) -> mirada_brain::WorkspaceSwitchMode {
         match &self.brain {
             Brain::Embedded(d) => d.config().workspace_switch_mode,
-            // Enlazado: el Cerebro nos manda `slide_ms` ya resuelto (`0` = sin
-            // animación). Lo traducimos a un modo que dispare (o no) el slide.
-            Brain::Linked(_) => match self.linked_ws.as_ref().map_or(0, |w| w.slide_ms) {
-                0 => mirada_brain::WorkspaceSwitchMode::Direct,
-                _ => mirada_brain::WorkspaceSwitchMode::Hyprland,
-            },
+            // Enlazado: el modo REAL que empujó el Cerebro (`SetWorkspaces`).
+            // Antes se inferría de `slide_ms` y colapsaba todo a Direct/Hyprland,
+            // dejando Cube y Prezi inalcanzables en modo DE. `Direct` hasta el
+            // primer push (no hay estado todavía).
+            Brain::Linked(_) => self
+                .linked_ws
+                .as_ref()
+                .map_or(mirada_brain::WorkspaceSwitchMode::Direct, |w| w.switch_mode),
         }
     }
 
@@ -1157,11 +1159,14 @@ impl App {
                     active,
                     loads,
                     slide_ms,
+                    switch_mode,
                 } => {
                     self.linked_ws = Some(crate::estado::LinkedWorkspaces {
                         active: active as usize,
                         loads: loads.into_iter().map(|n| n as usize).collect(),
                         slide_ms,
+                        switch_mode: mirada_brain::WorkspaceSwitchMode::from_slug(&switch_mode)
+                            .unwrap_or_default(),
                     });
                 }
                 other => {
