@@ -104,6 +104,7 @@ mod handoff;
 mod idle_notify;
 mod menu;
 mod screencopy;
+mod session;
 mod thumbs;
 mod foreign_toplevel;
 mod switcher;

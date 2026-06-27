@@ -444,6 +444,17 @@ pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: 
     if cmd.is_empty() {
         return;
     }
+    // Session-manager (opt-in, `MIRADA_SESSION_ENTES=1`): entregar la app a arje
+    // como Ente supervisado + re-floorable en vez de spawnearla cruda. Default OFF
+    // —y fallback al camino crudo si arje no la acepta— porque arje todavía corre
+    // los Entes como root (sin drop de uid/gid); el `spawn_command` crudo SÍ hace
+    // `setuid` al usuario. Pasa a default cuando arje gane `run_as`. Ver `session`.
+    if crate::session::ente_mode() {
+        let label = cmd.split_whitespace().next().unwrap_or("app");
+        if crate::session::try_spawn_as_ente(label, cmd, session_env) {
+            return;
+        }
+    }
     let mut command = std::process::Command::new("sh");
     command.arg("-c").arg(cmd).envs(THEME_ENV.iter().copied());
     // Entorno de sesión (runtime dir del usuario, WAYLAND_DISPLAY absoluto,
