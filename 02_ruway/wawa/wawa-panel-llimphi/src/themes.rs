@@ -45,6 +45,20 @@ pub struct Theme {
     pub titlebar_height: i32,
     #[serde(default)]
     pub titlebar_gradient: bool,
+    // --- Glass / cristal (mirada) ---
+    /// Radio del desenfoque del fondo *frosted* (px, 0 = sin glass). Es un
+    /// atributo del look: encendido en el theme «mirada», apagado en el resto.
+    #[serde(default)]
+    pub glass_blur: u8,
+    /// Calidad del backdrop glass (0 wallpaper · 1 menú · 2 ventanas). Default 2.
+    #[serde(default = "default_glass_quality")]
+    pub glass_quality: u8,
+}
+
+/// Default de [`Theme::glass_quality`] al cargar un `themes.ron` viejo sin el
+/// campo: `2` (calidad N), igual que el default de `mirada_brain::Config`.
+fn default_glass_quality() -> u8 {
+    2
 }
 
 impl Theme {
@@ -63,6 +77,8 @@ impl Theme {
             border_normal: m.border_normal,
             titlebar_height: m.titlebar_height,
             titlebar_gradient: m.titlebar_gradient,
+            glass_blur: m.glass_blur,
+            glass_quality: m.glass_quality,
         }
     }
 
@@ -79,6 +95,8 @@ impl Theme {
         m.border_normal = self.border_normal;
         m.titlebar_height = self.titlebar_height;
         m.titlebar_gradient = self.titlebar_gradient;
+        m.glass_blur = self.glass_blur;
+        m.glass_quality = self.glass_quality;
     }
 }
 

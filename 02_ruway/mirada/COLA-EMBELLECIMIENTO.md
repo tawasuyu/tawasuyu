@@ -91,6 +91,18 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       `rebuild_window_backdrops` (≥2); por debajo se cae a `wallpaper_blur`.
       Default por serde = 2 (`default_glass_quality`), así configs viejas no
       cambian. Tests de apply/clamp. **Falta verificar en metal.**
+- [x] **✅ Glass = atributo del THEME, encendido por default en «mirada».** El
+      glass dejó de ser un toggle global suelto: ahora es **del theme** (como
+      borde/titlebar). Sección propia `glass` en el schema de mirada (separada de
+      `efectos`); el panel la inyecta en la pestaña **Themes**, no en Vista, y
+      `Theme` (wawa-panel) absorbe `glass_blur`/`glass_quality` en
+      `from_config`/`apply_to`. `vista_mirada` nace con `glass_blur:16,
+      quality:2`; el resto de las vistas y `Config::default()` crudo siguen en 0
+      (doctrina opt-in intacta: el default sin theme = sin glass). Resultado:
+      **apagado en todos los themes/perfiles salvo «mirada»** (el default de
+      mirada), donde está activo; editable por-theme y persiste al theme. Tests:
+      vista nativa lleva glass, las demás no; apply/clamp de la sección `glass`.
+      **Falta verificar en metal** (el blur 16 es a ciegas — ajustable en el panel).
 - [ ] **Backdrop REAL — afinar (a): paneles/layer-shell *frosted*.** Extender el
       backdrop real a superficies layer-shell (paneles tipo waybar), no sólo
       barras de ventana. Requiere que el panel cliente sea translúcido para que

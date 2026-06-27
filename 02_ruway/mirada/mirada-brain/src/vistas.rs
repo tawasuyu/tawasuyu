@@ -109,13 +109,21 @@ fn skin(
     }
 }
 
-/// **mirada** — la vista nativa y default: `Config::default()` tal cual.
+/// **mirada** — la vista nativa y default: `Config::default()` + el **glass
+/// encendido** (es el único look de fábrica con cristal; el resto lo trae en 0).
+/// El `Config::default()` global sigue con `glass_blur: 0` (doctrina «lo caro
+/// nace opt-in»): el glass es un atributo del **theme mirada**, no del default
+/// crudo, así que sólo aparece cuando este perfil/theme está activo.
 fn vista_mirada() -> Vista {
     Vista {
         name: "mirada",
         label: "mirada (nativo)",
         keymap: "mirada",
-        config: Config::default(),
+        config: Config {
+            glass_blur: 16,
+            glass_quality: 2,
+            ..Config::default()
+        },
     }
 }
 
@@ -271,7 +279,16 @@ mod tests {
         assert_eq!(Vista::all().len(), VISTA_NAMES.len());
         let mirada = Vista::by_name("mirada").unwrap();
         assert_eq!(mirada.keymap, "mirada");
-        assert_eq!(mirada.config, Config::default()); // nativa = default exacto
+        // La nativa = default EXCEPTO el glass (es el único look de fábrica con
+        // cristal; el default crudo lo trae en 0 por la doctrina opt-in).
+        assert_eq!(mirada.config, Config { glass_blur: 16, glass_quality: 2, ..Config::default() });
+        assert_eq!(Config::default().glass_blur, 0, "el default crudo NO trae glass");
+        // El resto de las vistas tampoco (heredan `..Config::default()`).
+        for v in Vista::all() {
+            if v.name != "mirada" {
+                assert_eq!(v.config.glass_blur, 0, "vista {} no debe traer glass", v.name);
+            }
+        }
     }
 
     #[test]

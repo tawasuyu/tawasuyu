@@ -472,17 +472,28 @@ impl Configurable for Config {
                         self.corner_radius as i64,
                         0,
                         40,
-                    ))
+                    )),
+            )
+            // **Glass** va en su propia sección porque es **del theme** (no global):
+            // el panel la inyecta en la pestaña Themes, no en Vista. Encendido en
+            // el theme «mirada», apagado en el resto.
+            .section(
+                Section::new("glass", "Glass (cristal)")
+                    .icon("🧊")
+                    .help(
+                        "Fondo desenfocado tras el chrome translúcido (menú raíz, \
+                         barras de ventanas flotantes). Va con el theme. Opt-in, cuesta GPU.",
+                    )
                     .field(Field::slider_int(
                         "glass_blur",
-                        "Glass — desenfoque del fondo (px, 0 = no)",
+                        "Desenfoque del fondo (px, 0 = sin glass)",
                         self.glass_blur as i64,
                         0,
                         40,
                     ))
                     .field(Field::slider_int(
                         "glass_quality",
-                        "Glass — calidad del fondo (0 wallpaper · 1 menú · 2 ventanas)",
+                        "Calidad del fondo (0 wallpaper · 1 menú · 2 ventanas)",
                         self.glass_quality as i64,
                         0,
                         2,
@@ -861,7 +872,8 @@ mod tests {
                 "vista_espacial",
                 "inactividad",
                 "movimiento",
-                "efectos"
+                "efectos",
+                "glass"
             ]
         );
     }
@@ -875,19 +887,21 @@ mod tests {
         c.apply(&"efectos.corner_radius".into(), FieldValue::Int(999))
             .unwrap();
         assert_eq!(c.corner_radius, 40, "se acota a 40");
-        c.apply(&"efectos.glass_blur".into(), FieldValue::Int(18))
-            .unwrap();
+    }
+
+    #[test]
+    fn glass_aplica_blur_y_calidad() {
+        let mut c = Config::default();
+        // El glass vive en su propia sección «glass» (es atributo del theme).
+        c.apply(&"glass.glass_blur".into(), FieldValue::Int(18)).unwrap();
         assert_eq!(c.glass_blur, 18);
-        c.apply(&"efectos.glass_blur".into(), FieldValue::Int(999))
-            .unwrap();
-        assert_eq!(c.glass_blur, 40);
-        // Calidad del glass: default 2 (calidad N), acotada a 0..2.
+        c.apply(&"glass.glass_blur".into(), FieldValue::Int(999)).unwrap();
+        assert_eq!(c.glass_blur, 40, "se acota a 40");
+        // Calidad: default 2 (calidad N), acotada a 0..2.
         assert_eq!(Config::default().glass_quality, 2);
-        c.apply(&"efectos.glass_quality".into(), FieldValue::Int(1))
-            .unwrap();
+        c.apply(&"glass.glass_quality".into(), FieldValue::Int(1)).unwrap();
         assert_eq!(c.glass_quality, 1);
-        c.apply(&"efectos.glass_quality".into(), FieldValue::Int(9))
-            .unwrap();
+        c.apply(&"glass.glass_quality".into(), FieldValue::Int(9)).unwrap();
         assert_eq!(c.glass_quality, 2, "se acota a 2");
     }
 

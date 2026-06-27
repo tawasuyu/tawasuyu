@@ -2313,7 +2313,9 @@ fn themes_schema(m: &Model) -> Schema {
         let mut tmp = m.mirada.clone();
         theme.apply_to(&mut tmp);
         for sec in tmp.schema().sections {
-            if sec.id == "teselado" || sec.id == "decoracion" {
+            // `glass` también es del theme (cristal del look): se edita acá, no
+            // en Vista. Encendido en «mirada», apagado en el resto.
+            if sec.id == "teselado" || sec.id == "decoracion" || sec.id == "glass" {
                 let mut s = sec;
                 s.id = format!("theme::{}", s.id);
                 schema = schema.section(s);
@@ -2406,7 +2408,7 @@ fn apply_theme(m: &mut Model, rel: &FieldPath, value: FieldValue) {
                 apply_active_theme(m);
             }
         }
-        "teselado" | "decoracion" => {
+        "teselado" | "decoracion" | "glass" => {
             // Reusa el `apply` de mirada sobre una config temporal con el theme
             // aplicado, y re-extrae el theme — así no duplicamos la lógica.
             if let Some(cur) = m.themes.get(&name).cloned() {
