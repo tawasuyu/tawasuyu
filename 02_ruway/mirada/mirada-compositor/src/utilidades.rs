@@ -207,6 +207,32 @@ pub(crate) fn layer_render_elements(
     (over, under)
 }
 
+/// Geometrías (x, y, w, h en coords **locales** a la salida) de los paneles
+/// layer-shell de **arriba** (Overlay/Top) de `output` — los que el glass puede
+/// dejar *frosted* (un bar tipo waybar, o la propia `pata` de mirada, que es un
+/// layer Top). Mismas coords que [`layer_render_elements`] usa para pintarlos.
+/// Sólo los de buffer sano. Vacío sin salida o sin paneles.
+pub(crate) fn over_layer_rects(output: Option<&Output>) -> Vec<(i32, i32, i32, i32)> {
+    let mut v = Vec::new();
+    let Some(output) = output else {
+        return v;
+    };
+    let map = layer_map_for_output(output);
+    for layer in map.layers() {
+        if !matches!(layer.layer(), Layer::Overlay | Layer::Top) {
+            continue;
+        }
+        let Some(geo) = map.layer_geometry(layer) else {
+            continue;
+        };
+        if !buffer_render_sano(layer.wl_surface()) {
+            continue;
+        }
+        v.push((geo.loc.x, geo.loc.y, geo.size.w, geo.size.h));
+    }
+    v
+}
+
 /// Ancho (px) de cada botón del titlebar (maximizar/cerrar), pegados al borde
 /// derecho. Compartido entre el render y el hit-test del click.
 pub(crate) const TB_BTN_W: i32 = 28;

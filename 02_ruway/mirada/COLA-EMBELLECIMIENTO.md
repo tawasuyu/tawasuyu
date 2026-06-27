@@ -103,10 +103,17 @@ Detalle y decisiones por rebanada: `PLAN.md` §«Capa de embellecimiento» y
       mirada), donde está activo; editable por-theme y persiste al theme. Tests:
       vista nativa lleva glass, las demás no; apply/clamp de la sección `glass`.
       **Falta verificar en metal** (el blur 16 es a ciegas — ajustable en el panel).
-- [ ] **Backdrop REAL — afinar (a): paneles/layer-shell *frosted*.** Extender el
-      backdrop real a superficies layer-shell (paneles tipo waybar), no sólo
-      barras de ventana. Requiere que el panel cliente sea translúcido para que
-      el blur detrás se vea; geometría disponible vía `map.layer_geometry`.
+- [x] **✅ Backdrop REAL — afinar (a): paneles layer-shell *frosted*.**
+      `over_layer_rects` (geometrías de los paneles Top/Overlay — un waybar, o la
+      propia `pata`, que es un layer Top) + `build_layer_glass`: rinde la escena
+      DEBAJO de los paneles (ventanas + wallpaper) a un offscreen, la desenfoca
+      (downsample → blur, igual que el menú) e inserta una rebanada *frosted*
+      recortada **detrás** de cada panel (en `over_z + n_over`, antes del menú).
+      Un panel **translúcido** deja ver el blur (glassmorphism KDE/GNOME). Sin
+      tinte ni filo: el panel cliente pone su color. Opt-in (`glass_blur>0`,
+      calidad ≥1); vacío sin glass/paneles → sin splice → byte-idéntico.
+      **Falta verificar en metal** (necesita panel translúcido — p. ej. que
+      `pata` se rinda con alfa — para que el blur se vea).
 - [ ] **`WindowEffects` ampliado por-`app_id`**: `blur`, `corner_radius`,
       `border_tint`/`border_alpha`, mover el `dim_unfocused` global a regla
       por-app (`Rules`).

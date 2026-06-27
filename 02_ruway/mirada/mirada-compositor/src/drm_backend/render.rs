@@ -1950,6 +1950,72 @@ impl DrmState {
             bgra_membuffer(&blurred, sw, sh).map(|m| (m, (sw, sh)));
     }
 
+    /// Arma el glass de los **paneles layer-shell de arriba** (Top/Overlay — un
+    /// bar tipo waybar, o la propia `pata`): rinde la escena `below` (lo que los
+    /// paneles tienen **debajo**: ventanas + wallpaper) a un offscreen, la
+    /// desenfoca (downsample → blur, igual que el menú) y devuelve, **por cada
+    /// rect de panel** (`rects`, locales a la salida), una rebanada *frosted* del
+    /// fondo recortada a ese panel. El llamante la inserta **detrás** de las
+    /// superficies de panel, así un panel **translúcido** deja ver el blur
+    /// (glassmorphism al estilo KDE/GNOME). Sin tinte ni filo: el panel cliente
+    /// pone su propio color; acá sólo va el desenfoque del fondo.
+    ///
+    /// Opt-in (`glass_blur>0` y calidad ≥1, como el menú); vacío si no hay
+    /// paneles o el render offscreen falla (cae con gracia: el panel queda como
+    /// estaba). Coste: una pasada offscreen + readback + blur **por frame** con
+    /// glass y algún panel arriba. **Por verificar en metal** (requiere panel
+    /// translúcido para que el blur se vea).
+    fn build_layer_glass(
+        &mut self,
+        rect: Rect,
+        below: &[Frame],
+        rects: &[(i32, i32, i32, i32)],
+    ) -> Vec<Frame> {
+        let glass_blur = self.app.config_glass_blur() as i32;
+        if glass_blur == 0 || self.app.config_glass_quality() < 1 || rects.is_empty() {
+            return Vec::new();
+        }
+        let (ow, oh) = (rect.w.max(1), rect.h.max(1));
+        let Some(bytes) =
+            crate::screencopy::render_elements_offscreen(&mut self.renderer, (ow, oh), below)
+        else {
+            return Vec::new();
+        };
+        let s = backdrop_downsample(ow, oh);
+        let (small, sw, sh) = downsample_bgra(&bytes, ow, oh, s);
+        let blurred = box_blur_bgra(&small, sw, sh, (glass_blur / s).max(1));
+        let Some(buf) = bgra_membuffer(&blurred, sw, sh) else {
+            return Vec::new();
+        };
+        let (bw, bh) = (sw as f64, sh as f64);
+        let (owf, ohf) = (ow as f64, oh as f64);
+        let mut frames = Vec::new();
+        for &(lx, ly, lw, lh) in rects {
+            if lw <= 0 || lh <= 0 {
+                continue;
+            }
+            // Rebanada del backdrop desenfocado bajo ESTE panel (coords del buffer
+            // del blur, que está acotado → ratio salida↔blur, como el menú).
+            let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new(
+                (lx as f64 * bw / owf, ly as f64 * bh / ohf).into(),
+                (lw as f64 * bw / owf, lh as f64 * bh / ohf).into(),
+            );
+            let dst: smithay::utils::Size<i32, smithay::utils::Logical> = (lw, lh).into();
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                (lx as f64, ly as f64),
+                &buf,
+                None,
+                Some(src),
+                Some(dst),
+                Kind::Unspecified,
+            ) {
+                frames.push(Frame::Text(el));
+            }
+        }
+        frames
+    }
+
     fn emit_menu(&mut self, idx: usize, rect: Rect, into: &mut Vec<Frame>) {
         let Some(m) = self.root_menu.as_ref() else { return };
         // Glass: con blur activo y un backdrop *frosted* disponible, el fondo del
@@ -2621,9 +2687,15 @@ impl DrmState {
             // 5.bis Greeter/lock: por ENCIMA de los layers overlay/top (pata),
             //    si no el panel lo taparía y el candado no bloquearía nada.
             self.emit_greeter(rect, &mut out);
+            // Marcamos dónde arrancan los paneles de arriba y cuántos elementos
+            // ocupan: el glass de paneles (más abajo) inserta su backdrop
+            // *frosted* JUSTO detrás de ellos (en `over_z + n_over`), una vez
+            // compuesta la escena que tienen debajo.
+            let over_z = out.len();
             for el in over_layers {
                 out.push(Frame::Window(el));
             }
+            let n_over = out.len() - over_z;
             // 6.bis Backdrops *frosted* REALES por ventana flotante (glass
             //    calidad N): se arman ANTES de emitir las ventanas, para que la
             //    barra de cada flotante muestree lo que tiene **debajo**.
@@ -2638,6 +2710,21 @@ impl DrmState {
 
             // 8. Wallpaper al fondo (por salida).
             self.emit_wallpaper(idx, &mut out);
+
+            // 8.bis Glass de paneles layer-shell (Top/Overlay, p. ej. `pata`): la
+            //    escena que los paneles tienen DEBAJO ya está compuesta en
+            //    `out[over_z + n_over ..]` (ventanas + wallpaper). Armamos su
+            //    backdrop *frosted* y lo insertamos JUSTO detrás de las
+            //    superficies de panel (en `over_z + n_over`), así un panel
+            //    translúcido deja ver el blur. Opt-in; vacío sin glass/paneles →
+            //    sin splice → byte-idéntico. `over_z`/`menu_z` quedan ANTES del
+            //    punto de inserción, así que no se corren.
+            let below_layers_at = over_z + n_over;
+            let layer_rects = crate::over_layer_rects(Some(&output_for_layers));
+            let layer_glass = self.build_layer_glass(rect, &out[below_layers_at..], &layer_rects);
+            if !layer_glass.is_empty() {
+                out.splice(below_layers_at..below_layers_at, layer_glass);
+            }
 
             // 9. Menú raíz (reservado en `menu_z`): primero armamos su backdrop
             //    *frosted* REAL con la escena de debajo (`out[menu_z..]`, ya
