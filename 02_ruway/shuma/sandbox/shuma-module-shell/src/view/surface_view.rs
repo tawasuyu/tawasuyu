@@ -625,6 +625,36 @@ fn surface_header<HostMsg: Clone + 'static>(
             .mono(),
         );
     }
+    // Chip "⇄ comparar": cotejo de un clic. Marca este bloque como ancla; con
+    // otro ya marcado, dispara `:compara %cA %cB` entre ambos. Resalta (acento)
+    // cuando ESTE es el bloque marcado; muestra contra cuál cotejará si el
+    // ancla es otro. Sólo en bloques con cuerpo; oculto al colapsar.
+    if expandable && !collapsed {
+        let (label, color, fill) = match state.compare_anchor {
+            Some(a) if a == block => ("⇄ elegido".to_string(), theme.bg_panel, theme.accent),
+            Some(a) => (format!("⇄ vs %c{a}"), theme.accent, theme.bg_input),
+            None => ("⇄ comparar".to_string(), theme.fg_muted, theme.bg_input),
+        };
+        children.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                flex_shrink: 0.0,
+                padding: Rect {
+                    left: length(5.0_f32),
+                    right: length(5.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(fill)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::CompareWith(block)))
+            .text_aligned(label, 10.0, color, Alignment::Start)
+            .mono(),
+        );
+    }
     if let Some(st) = status {
         let (icon, color) = st.icon_color(theme);
         children.push(

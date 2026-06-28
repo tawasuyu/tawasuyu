@@ -64,8 +64,14 @@ fn main() {
     state.block_seq = 2;
     state.current_block = 2;
 
-    // Corré el cotejo de verdad.
-    state = shuma_module_shell::update(state, Msg::RunLine(":compara %c1 %c2".to_string()));
+    // SHOT_ANCHOR=1: mostrar el estado de "un clic" (bloque 1 marcado → su chip
+    // dice «⇄ elegido», el del bloque 2 «⇄ vs %c1»), sin disparar el cotejo.
+    // Por defecto: corré el cotejo de verdad y mostrá su bloque.
+    if std::env::var("SHOT_ANCHOR").is_ok() {
+        state = shuma_module_shell::update(state, Msg::CompareWith(1));
+    } else {
+        state = shuma_module_shell::update(state, Msg::RunLine(":compara %c1 %c2".to_string()));
+    }
     state.input.set_text("");
 
     if let Ok(mut g) = state.out_viewport_h.lock() {

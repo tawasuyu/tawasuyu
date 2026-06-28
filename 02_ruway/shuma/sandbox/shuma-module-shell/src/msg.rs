@@ -118,6 +118,9 @@ pub enum Msg {
     /// el botón ⧉ del header del bloque en la superficie; no depende de que
     /// haya selección.
     CopyCommandBlock(u64),
+    /// Marca un bloque para cotejar; con otro ya marcado, dispara `:compara`
+    /// entre ambos. La dispara el chip ⇄ del header de un bloque con salida.
+    CompareWith(u64),
     /// Click sobre el panel de un TUI bajo PTY (htop/less/btop/…). Si el
     /// programa habilitó mouse (`vt100::MouseProtocolMode != None`), encodea
     /// el click en xterm-mouse y lo escribe al stdin del PTY. `button` es 0

@@ -425,6 +425,17 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::CopyCommandBlock(block) => {
             copy_command_block(&s, block);
         }
+        Msg::CompareWith(block) => {
+            match s.compare_anchor {
+                None => s.compare_anchor = Some(block), // primer pick
+                Some(a) if a == block => s.compare_anchor = None, // toggle off
+                Some(a) => {
+                    s.compare_anchor = None;
+                    s.input.set_text(&format!(":compara %c{a} %c{block}"));
+                    s = run_submitted(s);
+                }
+            }
+        }
         Msg::Tick => {
             s = drain_run(s);
             // Scroll inercial: si quedó velocidad de la última entrada del

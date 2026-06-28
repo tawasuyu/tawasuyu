@@ -484,6 +484,10 @@ pub struct State {
     /// el `%pN` del lienzo). Lo arma el chip ↻ de una card y se consume en
     /// el siguiente submit. `None` = sin reprocess armado.
     pub reprocess_source: Option<u64>,
+    /// Primer bloque «marcado» para cotejar de un clic (el chip ⇄ del header).
+    /// Con otro bloque ya marcado, el segundo clic dispara `:compara %cA %cB`
+    /// entre ambos y vuelve a `None`. `None` = sin ancla de comparación.
+    pub compare_anchor: Option<u64>,
     /// Grupos de comandos guardados con `:save <nombre>` — ejecutables por
     /// F1..F8 (índice 0-based = número de F menos 1).
     pub groups: Vec<CommandGroup>,
@@ -844,6 +848,7 @@ impl State {
             capture_limit_bytes: config.capture.limit_mb.saturating_mul(1024 * 1024),
             spill: config.capture.spill,
             reprocess_source: None,
+            compare_anchor: None,
             groups: Vec::new(),
             group_anchor,
             completion: None,
@@ -961,6 +966,7 @@ impl State {
         self.collapsed.clear();
         self.expanded_stages.clear();
         self.reprocess_source = None;
+        self.compare_anchor = None;
         self.scroll_px = 0.0;
         self.surf_scroll_anchor = 0.0;
         self.surf_scroll_velocity = 0.0;

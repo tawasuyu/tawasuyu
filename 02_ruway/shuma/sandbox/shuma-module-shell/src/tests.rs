@@ -2673,3 +2673,36 @@
         assert!(snap.block_started.keys().all(|b| presentes.contains(b)));
     }
 
+    /// Cotejo de un clic: marcar el bloque 1 deja el ancla; marcar el 2 dispara
+    /// `:compara %c1 %c2` y deja una card de cotejo en el output.
+    #[test]
+    fn compare_anchor_un_clic_marca_y_otro_dispara() {
+        let mut s = State::new(Source::Local);
+        let mut l1 = OutputLine::stdout("uno");
+        l1.block = 1;
+        s.output.push(l1);
+        let mut l2 = OutputLine::stdout("dos");
+        l2.block = 2;
+        s.output.push(l2);
+
+        s = update(s, Msg::CompareWith(1));
+        assert_eq!(s.compare_anchor, Some(1));
+
+        s = update(s, Msg::CompareWith(2));
+        assert_eq!(s.compare_anchor, None);
+        assert!(
+            s.output.iter().any(|l| l.text.contains("≡ :compara %c1 ↔ %c2")),
+            "esperaba la card de cotejo entre %c1 y %c2"
+        );
+    }
+
+    /// Marcar dos veces el mismo bloque lo desmarca (toggle off).
+    #[test]
+    fn compare_anchor_toggle_desmarca() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::CompareWith(1));
+        assert_eq!(s.compare_anchor, Some(1));
+        s = update(s, Msg::CompareWith(1));
+        assert_eq!(s.compare_anchor, None);
+    }
+
