@@ -1,0 +1,15 @@
+[package]
+name = "pluma-cotejo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — cotejo de dos cuerpos como lienzos paralelos: alinea párrafos por similitud, clasifica cada sección (idéntica/similar/divergente/agregada/eliminada) y emite un lienzo de diferencias con resumen por sección. Verde = match, rojo = divergencia."
+
+[dependencies]
+pluma-core = { path = "../pluma-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
+uuid = { workspace = true, features = ["serde"] }
+serde = { workspace = true }

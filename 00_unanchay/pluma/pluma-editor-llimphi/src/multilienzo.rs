@@ -209,6 +209,42 @@ pub fn multilienzo_view_resaltado<Msg: Clone + 'static>(
         paleta_hebras,
         palette,
         resaltar,
+        None,
+        &|_, _| None,
+    )
+}
+
+/// Variante **cotejo**: pinta dos (o más) cuerpos como lienzos a comparar.
+/// En vez de la identidad de fila por arcoíris, cada sección se tiñe según su
+/// **divergencia** `∈ [0,1]` (mapa `divergencias`): **verde** = coincide,
+/// virando al **rojo** cuanto más fuerte es la diferencia. El tinte corre por
+/// el texto *y* por las cintas del carril, igual que la identidad de fila —
+/// así un match se ve como una banda verde gruesa y una reescritura como una
+/// cinta roja fina. Átomos sin entrada en `divergencias` caen a verde (0).
+///
+/// El mapa lo produce `pluma-cotejo::cotejar` (`Cotejo::divergencias`), unido
+/// con las divergencias del lienzo de diferencias si se monta la columna del
+/// medio. Las `cartas` se calculan con `cotejar` (origen `Manual`, sin
+/// atenuación por fuerza: las cintas rojas quedan opacas y visibles).
+pub fn multilienzo_cotejo_view<Msg: Clone + 'static>(
+    cuerpos: &[&Cuerpo],
+    atoms: &IndiceAtoms<'_>,
+    cartas: &[Option<&CartaHebras>],
+    divergencias: &HashMap<Uuid, f32>,
+    cfg: &MultilienzoConfig,
+    paleta_hebras: &PaletaHebras,
+    palette: &Palette,
+    resaltar: &str,
+) -> View<Msg> {
+    armar_multilienzo::<Msg>(
+        cuerpos,
+        atoms,
+        cartas,
+        cfg,
+        paleta_hebras,
+        palette,
+        resaltar,
+        Some(divergencias),
         &|_, _| None,
     )
 }
@@ -245,6 +281,7 @@ where
         paleta_hebras,
         palette,
         resaltar,
+        None,
         &|i, id| Some(on_atom_click(i, id)),
     )
 }
@@ -261,6 +298,7 @@ fn armar_multilienzo<Msg: Clone + 'static>(
     paleta_hebras: &PaletaHebras,
     palette: &Palette,
     resaltar: &str,
+    divergencias: Option<&HashMap<Uuid, f32>>,
     on_atom_click: &dyn Fn(usize, Uuid) -> Option<Msg>,
 ) -> View<Msg> {
     if cuerpos.is_empty() {
@@ -276,28 +314,45 @@ fn armar_multilienzo<Msg: Clone + 'static>(
         + cfg.alto_header
         + alto_max as f32 * (cfg.altura_atom + cfg.gap_atom);
 
-    // Identidad de fila: cada sección horizontal lleva un color propio que
-    // corre idéntico por toda la fila — texto y cintas. Se siembra en la
-    // primera columna por índice de fila y se PROPAGA hacia la derecha
-    // siguiendo los haces: el átomo derecho hereda la identidad del
-    // izquierdo con el que se alinea. Un átomo sin haz entrante cae a un
-    // color por su propia fila (orphan). Así el color es una continuidad
-    // horizontal, no una etiqueta por columna.
+    // El color de cada sección se decide según el modo:
+    //
+    //   - **Cotejo** (`divergencias` presente): cada átomo se tiñe por su
+    //     divergencia `∈ [0,1]` — verde si coincide, rojo si difiere fuerte.
+    //     El color no se propaga: lo dicta el mapa, átomo por átomo, igual a
+    //     izquierda y derecha porque `cotejar` asigna la misma divergencia a
+    //     ambas contrapartes de una sección.
+    //
+    //   - **Identidad de fila** (default): cada sección horizontal lleva un
+    //     color propio que corre idéntico por toda la fila — texto y cintas.
+    //     Se siembra en la primera columna por índice de fila y se PROPAGA
+    //     hacia la derecha siguiendo los haces: el átomo derecho hereda la
+    //     identidad del izquierdo con el que se alinea. Un átomo sin haz
+    //     entrante cae a un color por su propia fila (orphan). Así el color es
+    //     una continuidad horizontal, no una etiqueta por columna.
     let mut identidad: Vec<HashMap<Uuid, Color>> = vec![HashMap::new(); cuerpos.len()];
-    for (row, id) in cuerpos[0].orden.iter().enumerate() {
-        identidad[0].insert(*id, identidad_color(row));
-    }
-    for i in 0..cuerpos.len().saturating_sub(1) {
-        if let Some(carta) = cartas.get(i).copied().flatten() {
-            for (a_izq, a_der) in hebras_orientadas(carta, cuerpos[i], cuerpos[i + 1]) {
-                if let Some(&col) = identidad[i].get(&a_izq) {
-                    identidad[i + 1].entry(a_der).or_insert(col);
-                }
+    if let Some(div) = divergencias {
+        for (i, c) in cuerpos.iter().enumerate() {
+            for id in c.orden.iter() {
+                let d = div.get(id).copied().unwrap_or(0.0);
+                identidad[i].insert(*id, color_divergencia(d));
             }
         }
-        // Orphans de la columna i+1: identidad por su propia fila.
-        for (row, id) in cuerpos[i + 1].orden.iter().enumerate() {
-            identidad[i + 1].entry(*id).or_insert_with(|| identidad_color(row));
+    } else {
+        for (row, id) in cuerpos[0].orden.iter().enumerate() {
+            identidad[0].insert(*id, identidad_color(row));
+        }
+        for i in 0..cuerpos.len().saturating_sub(1) {
+            if let Some(carta) = cartas.get(i).copied().flatten() {
+                for (a_izq, a_der) in hebras_orientadas(carta, cuerpos[i], cuerpos[i + 1]) {
+                    if let Some(&col) = identidad[i].get(&a_izq) {
+                        identidad[i + 1].entry(a_der).or_insert(col);
+                    }
+                }
+            }
+            // Orphans de la columna i+1: identidad por su propia fila.
+            for (row, id) in cuerpos[i + 1].orden.iter().enumerate() {
+                identidad[i + 1].entry(*id).or_insert_with(|| identidad_color(row));
+            }
         }
     }
 
@@ -844,6 +899,24 @@ fn identidad_color(idx: usize) -> Color {
     hsv(h, 0.58, 0.80)
 }
 
+/// Color de **divergencia** para el modo cotejo: rampa de calor de verde
+/// (`d = 0`, coincide) a rojo (`d = 1`, diferencia máxima), pasando por ámbar
+/// en el medio para que el viraje sea legible y no un pardo plano. Saturación
+/// y valor en el mismo registro suave que [`identidad_color`] para que el
+/// tinte no compita con el texto. Alpha pleno; la cinta lo atenúa al pintar.
+fn color_divergencia(d: f32) -> Color {
+    let d = d.clamp(0.0, 1.0);
+    // Tres paradas: verde (94,184,124) → ámbar (224,176,72) → rojo (212,84,84).
+    let verde = Color::from_rgba8(94, 184, 124, 255);
+    let ambar = Color::from_rgba8(224, 176, 72, 255);
+    let rojo = Color::from_rgba8(212, 84, 84, 255);
+    if d <= 0.5 {
+        mezclar(verde, ambar, d / 0.5)
+    } else {
+        mezclar(ambar, rojo, (d - 0.5) / 0.5)
+    }
+}
+
 /// HSV→RGB (alpha 1.0). `h`, `s`, `v` en `[0,1]`.
 fn hsv(h: f32, s: f32, v: f32) -> Color {
     let h6 = (h.fract() * 6.0).max(0.0);
@@ -1058,6 +1131,41 @@ mod pruebas {
         assert_eq!(v[0].1, a.orden[0]);
         assert_eq!(v[2].1, a.orden[2]);
         assert_eq!(v[3].1, b.orden[0]);
+    }
+
+    #[test]
+    fn color_divergencia_verde_a_rojo() {
+        // d=0 → verde (G domina), d=1 → rojo (R domina), monótono en el medio.
+        let v = color_divergencia(0.0).components;
+        let r = color_divergencia(1.0).components;
+        assert!(v[1] > v[0], "en verde, G > R");
+        assert!(r[0] > r[1], "en rojo, R > G");
+        // El componente rojo crece monótonamente con la divergencia.
+        let r25 = color_divergencia(0.25).components[0];
+        let r75 = color_divergencia(0.75).components[0];
+        assert!(r25 < r75, "más divergencia ⇒ más rojo");
+    }
+
+    #[test]
+    fn cotejo_view_no_panica_y_tiñe_por_divergencia() {
+        let (a, _aa) = cuerpo_con_atomos("a", Intencion::Original, &["uno", "dos"]);
+        let (b, _ab) = cuerpo_con_atomos("b", Intencion::Original, &["uno", "DOS distinto"]);
+        // Divergencia 0 al primero, alta al segundo de cada lado.
+        let mut div: HashMap<Uuid, f32> = HashMap::new();
+        div.insert(a.orden[0], 0.0);
+        div.insert(b.orden[0], 0.0);
+        div.insert(a.orden[1], 0.8);
+        div.insert(b.orden[1], 0.8);
+
+        let cfg = MultilienzoConfig::default();
+        let paleta = PaletaHebras::default();
+        let palette = Palette::default();
+        let cuerpos: Vec<&Cuerpo> = vec![&a, &b];
+        let cartas: Vec<Option<&CartaHebras>> = vec![None];
+        let idx = IndiceAtoms::new();
+        let _v: View<()> = multilienzo_cotejo_view(
+            &cuerpos, &idx, &cartas, &div, &cfg, &paleta, &palette, "",
+        );
     }
 
     #[test]
