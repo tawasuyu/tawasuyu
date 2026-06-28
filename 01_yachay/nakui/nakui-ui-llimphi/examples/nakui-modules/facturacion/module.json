@@ -1,0 +1,123 @@
+{
+  "id": "facturacion",
+  "label": "Facturación",
+  "description": "Emisión de facturas de venta que ASIENTAN en el libro de contabilidad: el form liga las tres cuentas de control (Clientes/Ventas/IVA), calcula el IVA y postea el asiento balanceado. Comparte el plan de cuentas sembrado por Contabilidad. Importes en unidades enteras de moneda.",
+  "nakui_module_dir": "nakui",
+  "entities": [
+    { "name": "Cuenta", "label": "Cuenta", "fields": [] },
+    { "name": "Factura", "label": "Factura", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Tablero", "view": "tablero" },
+    { "label": "Facturas", "view": "facturas_list" },
+    { "label": "Emitir factura", "view": "emitir_form" },
+    { "label": "Libro de morfismos", "view": "libro" }
+  ],
+  "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Facturación",
+      "subtitle": "Cada factura emitida postea un asiento balanceado (debe Clientes / haber Ventas + IVA). El IVA por pagar se acumula como pasivo.",
+      "cards": [
+        { "label": "Facturas", "entity": "Factura", "metric": { "kind": "count" } },
+        {
+          "label": "Facturado (total)",
+          "entity": "Factura",
+          "metric": { "kind": "sum", "field": "total" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Neto gravado",
+          "entity": "Factura",
+          "metric": { "kind": "sum", "field": "neto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "IVA repercutido",
+          "entity": "Factura",
+          "metric": { "kind": "sum", "field": "impuesto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Ticket promedio",
+          "entity": "Factura",
+          "metric": { "kind": "avg", "field": "total" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Facturado por cliente",
+          "entity": "Factura",
+          "metric": { "kind": "sum_by", "group": "cliente", "value": "total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "pie",
+          "limit": 8
+        },
+        {
+          "label": "Facturado por mes",
+          "entity": "Factura",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "bucket": "month"
+        }
+      ]
+    },
+    "facturas_list": {
+      "kind": "list",
+      "title": "Facturas",
+      "entity": "Factura",
+      "row_detail": "factura_detail",
+      "search_in": ["cliente", "estado"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "cliente", "label": "Cliente" },
+        { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "impuesto", "label": "IVA", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "estado", "label": "Estado" },
+        { "field": "moneda", "label": "Moneda" }
+      ]
+    },
+    "factura_detail": {
+      "kind": "detail",
+      "title": "Factura",
+      "entity": "Factura",
+      "fields": [
+        { "field": "cliente", "label": "Cliente" },
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "estado", "label": "Estado" },
+        { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "impuesto", "label": "IVA", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ]
+    },
+    "emitir_form": {
+      "kind": "form",
+      "title": "Emitir factura",
+      "entity": "Factura",
+      "fields": [
+        { "name": "cliente", "label": "Cliente", "kind": "text", "required": true },
+        { "name": "neto", "label": "Neto (base imponible)", "kind": "number", "required": true, "help": "Importe gravado, sin IVA" },
+        { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
+        { "name": "clientes_cta", "label": "Cuenta Clientes (CxC)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Cuenta por cobrar — se debita por el total" },
+        { "name": "ventas_cta", "label": "Cuenta Ventas", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Ingreso — se acredita por el neto" },
+        { "name": "iva_cta", "label": "Cuenta IVA por pagar", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Pasivo — se acredita por el impuesto" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" },
+        { "name": "factura_id", "label": "Id de factura", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "emitir_factura",
+        "inputs": { "clientes_cta": "clientes_cta", "ventas_cta": "ventas_cta", "iva_cta": "iva_cta" },
+        "params": ["cliente", "neto", "tasa", "fecha", "factura_id"],
+        "next_view": "facturas_list"
+      }
+    },
+    "libro": {
+      "kind": "graph",
+      "title": "Libro de morfismos",
+      "subtitle": "El morfismo `emitir_factura` como nodo: lee/escribe el saldo de las tres cuentas de control y crea la Factura."
+    }
+  }
+}

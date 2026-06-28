@@ -1,0 +1,24 @@
+{
+  "module": "facturacion",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "emitir_factura",
+      "inputs": [
+        { "role": "clientes_cta", "entity": "Cuenta" },
+        { "role": "ventas_cta", "entity": "Cuenta" },
+        { "role": "iva_cta", "entity": "Cuenta" }
+      ],
+      "reads": [
+        "clientes_cta.saldo", "clientes_cta.moneda",
+        "ventas_cta.saldo", "ventas_cta.moneda",
+        "iva_cta.saldo", "iva_cta.moneda"
+      ],
+      "writes": ["clientes_cta.saldo", "ventas_cta.saldo", "iva_cta.saldo", "Factura"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/emitir_factura.rhai"
+    }
+  ]
+}

@@ -404,10 +404,27 @@
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        // Cuatro demos: 'ventas' (meta-form completo), 'tesoro' (vista grafo),
-        // 'punto_venta' (POS: meta-form + morfismos) y 'contabilidad'
-        // (partida doble: form que dispara el morfismo `asentar`).
-        assert_eq!(modules.len(), 4);
+        // Cinco demos: 'ventas' (meta-form completo), 'tesoro' (vista grafo),
+        // 'punto_venta' (POS: meta-form + morfismos), 'contabilidad'
+        // (partida doble: form que dispara el morfismo `asentar`) y
+        // 'facturacion' (la factura asienta vía `emitir_factura`).
+        assert_eq!(modules.len(), 5);
+        // Facturación expone tablero/lista/detalle + grafo, y su form de
+        // emisión dispara el morfismo `emitir_factura`.
+        let fact = modules
+            .iter()
+            .find(|m| m.id == "facturacion")
+            .expect("facturacion");
+        assert!(matches!(fact.views.get("tablero"), Some(ModuleView::Dashboard(_))));
+        assert!(matches!(fact.views.get("facturas_list"), Some(ModuleView::List(_))));
+        assert!(matches!(fact.views.get("factura_detail"), Some(ModuleView::Detail(_))));
+        match fact.views.get("emitir_form") {
+            Some(ModuleView::Form(fv)) => assert!(
+                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "emitir_factura"),
+                "el form de emisión debe disparar el morfismo `emitir_factura`"
+            ),
+            other => panic!("emitir_form debería ser un Form, fue {other:?}"),
+        }
         // Contabilidad expone las cuatro clases de vista + grafo, y su form
         // de asiento dispara un morfismo (no un seed directo).
         let cont = modules
@@ -563,6 +580,98 @@
 
         // Lo central: la balanza sigue cuadrada tras el asiento.
         assert_eq!(suma(&backend), 0, "el asiento conserva la balanza en cero");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// End-to-end UI→backend→kernel del módulo facturación: el form
+    /// `emitir_factura` corre por el backend con el executor real, sobre
+    /// el plan de cuentas que siembra `contabilidad` (store compartida).
+    /// Verifica que la factura calcula el IVA, persiste la Factura y
+    /// CONSERVA la balanza (debe Clientes = haber Ventas + IVA).
+    #[test]
+    fn emitir_factura_via_backend_asienta_balanceado() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+
+        // Executors de los dos módulos con nakui_module_dir que tocamos.
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for id in ["contabilidad", "facturacion"] {
+            let m = modules.iter().find(|m| m.id == id).unwrap();
+            let nakui_dir = dir.join(&m.id).join(m.nakui_module_dir.as_ref().unwrap());
+            let exec = Executor::load_module(&nakui_dir).expect("executor carga");
+            executors.insert(id.to_string(), Arc::new(exec));
+        }
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+
+        // Siembra el plan de cuentas (incluye IVA por pagar 2110).
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta")
+                .into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id)
+                .expect("cuenta existe")
+        };
+        let clientes = by_codigo(&backend, "1100");
+        let ventas = by_codigo(&backend, "4010");
+        let iva = by_codigo(&backend, "2110");
+        let saldo = |b: &NakuiBackend, id: Uuid| -> i64 {
+            b.load_record("Cuenta", id)
+                .and_then(|v| v.get("saldo").and_then(Value::as_i64))
+                .unwrap()
+        };
+        let suma_libro = |b: &NakuiBackend| -> i64 {
+            b.list_records("Cuenta")
+                .iter()
+                .map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0))
+                .sum()
+        };
+        assert_eq!(suma_libro(&backend), 0, "el plan de apertura cuadra");
+        let (c0, v0, i0) = (saldo(&backend, clientes), saldo(&backend, ventas), saldo(&backend, iva));
+
+        // Emitir: neto 1000, IVA 18% → impuesto 180, total 1180.
+        let mut inputs = BTreeMap::new();
+        inputs.insert("clientes_cta".to_string(), clientes);
+        inputs.insert("ventas_cta".to_string(), ventas);
+        inputs.insert("iva_cta".to_string(), iva);
+        let factura_id = Uuid::new_v4();
+        backend
+            .morphism(
+                "facturacion",
+                "emitir_factura",
+                inputs,
+                json!({
+                    "cliente": "ACME S.A.",
+                    "fecha": "2026-06-28",
+                    "factura_id": factura_id.to_string(),
+                    "neto": 1000_i64,
+                    "tasa": 18_i64,
+                }),
+            )
+            .expect("emitir factura debe pasar");
+
+        assert_eq!(saldo(&backend, clientes), c0 + 1180);
+        assert_eq!(saldo(&backend, ventas), v0 - 1000);
+        assert_eq!(saldo(&backend, iva), i0 - 180);
+
+        let f = backend.load_record("Factura", factura_id).expect("factura persistida");
+        assert_eq!(f.get("total").and_then(Value::as_i64), Some(1180));
+        assert_eq!(f.get("impuesto").and_then(Value::as_i64), Some(180));
+
+        // El libro entero sigue cuadrado tras la factura.
+        assert_eq!(suma_libro(&backend), 0, "la factura conserva la balanza");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
