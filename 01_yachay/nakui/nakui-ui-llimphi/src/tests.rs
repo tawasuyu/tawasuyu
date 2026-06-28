@@ -410,11 +410,28 @@
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        // Cinco demos: 'ventas' (meta-form completo), 'tesoro' (vista grafo),
-        // 'punto_venta' (POS: meta-form + morfismos), 'contabilidad'
-        // (partida doble: form que dispara el morfismo `asentar`) y
-        // 'facturacion' (la factura asienta vía `emitir_factura`).
-        assert_eq!(modules.len(), 5);
+        // Seis demos: 'ventas', 'tesoro', 'punto_venta', 'contabilidad'
+        // (partida doble), 'facturacion' (la factura asienta) y 'compras'
+        // (la compra/pago asienta — espejo de cuentas por pagar).
+        assert_eq!(modules.len(), 6);
+        // Compras expone tablero/lista/detalle + grafo, y sus forms de
+        // registro y pago disparan los morfismos correspondientes.
+        let compras = modules.iter().find(|m| m.id == "compras").expect("compras");
+        assert!(matches!(compras.views.get("tablero"), Some(ModuleView::Dashboard(_))));
+        assert!(matches!(compras.views.get("compras_list"), Some(ModuleView::List(_))));
+        assert!(matches!(compras.views.get("compra_detail"), Some(ModuleView::Detail(_))));
+        match compras.views.get("registrar_form") {
+            Some(ModuleView::Form(fv)) => assert!(
+                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "registrar_compra")
+            ),
+            other => panic!("registrar_form debería ser un Form, fue {other:?}"),
+        }
+        match compras.views.get("pagar_form") {
+            Some(ModuleView::Form(fv)) => assert!(
+                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "pagar")
+            ),
+            other => panic!("pagar_form debería ser un Form, fue {other:?}"),
+        }
         // Facturación expone tablero/lista/detalle + grafo, y su form de
         // emisión dispara el morfismo `emitir_factura`.
         let fact = modules
@@ -861,6 +878,86 @@
         assert_eq!(f.get("estado").and_then(Value::as_str), Some("cobrada"));
         assert_eq!(backend.list_records("Cobro").len(), 1);
         assert_eq!(suma(&backend), 0, "emitir + cobrar conserva la balanza");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// End-to-end del ciclo CxP: registrar una compra (Proveedores sube
+    /// como pasivo) y luego `pagar` por el backend (Banco baja, la deuda
+    /// vuelve a cero, compra «pagada»). El libro queda cuadrado.
+    #[test]
+    fn compra_y_pago_via_backend_saldan_cxp() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for id in ["contabilidad", "compras"] {
+            let m = modules.iter().find(|m| m.id == id).unwrap();
+            let nakui_dir = dir.join(&m.id).join(m.nakui_module_dir.as_ref().unwrap());
+            executors.insert(id.to_string(), Arc::new(Executor::load_module(&nakui_dir).unwrap()));
+        }
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta")
+                .into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id)
+                .unwrap()
+        };
+        let saldo = |b: &NakuiBackend, id: Uuid| -> i64 {
+            b.load_record("Cuenta", id).and_then(|v| v.get("saldo").and_then(Value::as_i64)).unwrap()
+        };
+        let suma = |b: &NakuiBackend| -> i64 {
+            b.list_records("Cuenta").iter().map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0)).sum()
+        };
+        let gasto = by_codigo(&backend, "5010");
+        let iva = by_codigo(&backend, "1190");
+        let proveedores = by_codigo(&backend, "2010");
+        let banco = by_codigo(&backend, "1020");
+        let (g0, p0, b0) = (saldo(&backend, gasto), saldo(&backend, proveedores), saldo(&backend, banco));
+
+        // Registrar compra neto 1000 + IVA 18% = 1180.
+        let compra_id = Uuid::new_v4();
+        let mut reg = BTreeMap::new();
+        reg.insert("compra_cta".to_string(), gasto);
+        reg.insert("iva_cta".to_string(), iva);
+        reg.insert("proveedores_cta".to_string(), proveedores);
+        backend
+            .morphism("compras", "registrar_compra", reg, json!({
+                "proveedor": "Insumos SRL", "fecha": "2026-06-28",
+                "compra_id": compra_id.to_string(), "neto": 1000_i64, "tasa": 18_i64,
+            }))
+            .expect("registrar");
+        assert_eq!(saldo(&backend, gasto), g0 + 1000);
+        assert_eq!(saldo(&backend, proveedores), p0 - 1180, "la deuda sube");
+
+        // Pagar la compra.
+        let mut pag = BTreeMap::new();
+        pag.insert("banco_cta".to_string(), banco);
+        pag.insert("proveedores_cta".to_string(), proveedores);
+        pag.insert("compra".to_string(), compra_id);
+        backend
+            .morphism("compras", "pagar", pag, json!({
+                "fecha": "2026-06-30", "pago_id": Uuid::new_v4().to_string(),
+            }))
+            .expect("pagar");
+
+        assert_eq!(saldo(&backend, proveedores), p0, "la deuda vuelve a su saldo previo");
+        assert_eq!(saldo(&backend, banco), b0 - 1180, "el banco pagó el total");
+        let c = backend.load_record("Compra", compra_id).expect("compra");
+        assert_eq!(c.get("estado").and_then(Value::as_str), Some("pagada"));
+        assert_eq!(backend.list_records("Pago").len(), 1);
+        assert_eq!(suma(&backend), 0, "registrar + pagar conserva la balanza");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));

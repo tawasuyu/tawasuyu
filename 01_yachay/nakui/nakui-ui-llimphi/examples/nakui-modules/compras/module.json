@@ -1,0 +1,150 @@
+{
+  "id": "compras",
+  "label": "Compras",
+  "description": "Facturas de compra (vendor bills) y pagos a proveedor que ASIENTAN en el libro de contabilidad: registrar una compra liga la cuenta de gasto/inventario, el IVA crédito fiscal y Proveedores; pagar mueve el total de Proveedores a Banco. El espejo de Facturación del lado de cuentas por pagar. Comparte el plan de cuentas de Contabilidad. Importes en unidades enteras de moneda.",
+  "nakui_module_dir": "nakui",
+  "entities": [
+    { "name": "Cuenta", "label": "Cuenta", "fields": [] },
+    { "name": "Compra", "label": "Compra", "fields": [] },
+    { "name": "Pago", "label": "Pago", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Tablero", "view": "tablero" },
+    { "label": "Compras", "view": "compras_list" },
+    { "label": "Registrar compra", "view": "registrar_form" },
+    { "label": "Pagar compra", "view": "pagar_form" },
+    { "label": "Pagos", "view": "pagos_list" },
+    { "label": "Libro de morfismos", "view": "libro" }
+  ],
+  "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Compras",
+      "subtitle": "Cada compra registrada postea un asiento balanceado (debe Gasto + IVA crédito / haber Proveedores). La deuda con proveedores se acumula como pasivo hasta el pago.",
+      "cards": [
+        { "label": "Compras", "entity": "Compra", "metric": { "kind": "count" } },
+        {
+          "label": "Comprado (total)",
+          "entity": "Compra",
+          "metric": { "kind": "sum", "field": "total" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Neto",
+          "entity": "Compra",
+          "metric": { "kind": "sum", "field": "neto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "IVA crédito fiscal",
+          "entity": "Compra",
+          "metric": { "kind": "sum", "field": "impuesto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Comprado por proveedor",
+          "entity": "Compra",
+          "metric": { "kind": "sum_by", "group": "proveedor", "value": "total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "pie",
+          "limit": 8
+        },
+        {
+          "label": "Comprado por mes",
+          "entity": "Compra",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "bucket": "month"
+        }
+      ]
+    },
+    "compras_list": {
+      "kind": "list",
+      "title": "Compras",
+      "entity": "Compra",
+      "row_detail": "compra_detail",
+      "search_in": ["proveedor", "estado"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "proveedor", "label": "Proveedor" },
+        { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "impuesto", "label": "IVA", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "estado", "label": "Estado" }
+      ]
+    },
+    "compra_detail": {
+      "kind": "detail",
+      "title": "Compra",
+      "entity": "Compra",
+      "fields": [
+        { "field": "proveedor", "label": "Proveedor" },
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "estado", "label": "Estado" },
+        { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "impuesto", "label": "IVA", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ]
+    },
+    "registrar_form": {
+      "kind": "form",
+      "title": "Registrar compra",
+      "entity": "Compra",
+      "fields": [
+        { "name": "proveedor", "label": "Proveedor", "kind": "text", "required": true },
+        { "name": "neto", "label": "Neto (base imponible)", "kind": "number", "required": true, "help": "Importe gravado, sin IVA" },
+        { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
+        { "name": "compra_cta", "label": "Cuenta de gasto/inventario", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Se debita por el neto" },
+        { "name": "iva_cta", "label": "Cuenta IVA crédito fiscal", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Activo — se debita por el impuesto" },
+        { "name": "proveedores_cta", "label": "Cuenta Proveedores", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Pasivo — se acredita por el total" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" },
+        { "name": "compra_id", "label": "Id de compra", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "registrar_compra",
+        "inputs": { "compra_cta": "compra_cta", "iva_cta": "iva_cta", "proveedores_cta": "proveedores_cta" },
+        "params": ["proveedor", "neto", "tasa", "fecha", "compra_id"],
+        "next_view": "compras_list"
+      }
+    },
+    "pagar_form": {
+      "kind": "form",
+      "title": "Pagar compra",
+      "entity": "Pago",
+      "fields": [
+        { "name": "compra", "label": "Compra a pagar", "kind": "entity_ref", "ref_entity": "Compra", "required": true, "help": "Se paga por su total y se marca «pagada»" },
+        { "name": "banco_cta", "label": "Cuenta Banco", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Activo — se acredita (sale la plata)" },
+        { "name": "proveedores_cta", "label": "Cuenta Proveedores", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Pasivo — se debita (baja la deuda)" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" },
+        { "name": "pago_id", "label": "Id de pago", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "pagar",
+        "inputs": { "banco_cta": "banco_cta", "proveedores_cta": "proveedores_cta", "compra": "compra" },
+        "params": ["fecha", "pago_id"],
+        "next_view": "pagos_list"
+      }
+    },
+    "pagos_list": {
+      "kind": "list",
+      "title": "Pagos",
+      "entity": "Pago",
+      "search_in": ["moneda"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "compra_id", "label": "Compra", "ref_entity": "Compra" },
+        { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ]
+    },
+    "libro": {
+      "kind": "graph",
+      "title": "Libro de morfismos",
+      "subtitle": "Los morfismos `registrar_compra` / `pagar` como nodos: leen/escriben el saldo de las cuentas de control y crean la Compra y el Pago."
+    }
+  }
+}

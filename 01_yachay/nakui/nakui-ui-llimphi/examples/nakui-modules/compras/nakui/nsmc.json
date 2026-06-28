@@ -1,0 +1,42 @@
+{
+  "module": "compras",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "registrar_compra",
+      "inputs": [
+        { "role": "compra_cta", "entity": "Cuenta" },
+        { "role": "iva_cta", "entity": "Cuenta" },
+        { "role": "proveedores_cta", "entity": "Cuenta" }
+      ],
+      "reads": [
+        "compra_cta.saldo", "compra_cta.moneda",
+        "iva_cta.saldo", "iva_cta.moneda",
+        "proveedores_cta.saldo", "proveedores_cta.moneda"
+      ],
+      "writes": ["compra_cta.saldo", "iva_cta.saldo", "proveedores_cta.saldo", "Compra"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/registrar_compra.rhai"
+    },
+    {
+      "name": "pagar",
+      "inputs": [
+        { "role": "banco_cta", "entity": "Cuenta" },
+        { "role": "proveedores_cta", "entity": "Cuenta" },
+        { "role": "compra", "entity": "Compra" }
+      ],
+      "reads": [
+        "banco_cta.saldo", "banco_cta.moneda",
+        "proveedores_cta.saldo", "proveedores_cta.moneda",
+        "compra.total", "compra.moneda", "compra.estado"
+      ],
+      "writes": ["banco_cta.saldo", "proveedores_cta.saldo", "compra.estado", "Pago"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/pagar.rhai"
+    }
+  ]
+}
