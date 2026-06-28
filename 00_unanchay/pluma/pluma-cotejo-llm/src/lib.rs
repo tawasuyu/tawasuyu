@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use futures::stream::StreamExt;
 use pluma_cotejo::{ClaseCambio, SeccionCotejo};
 use pluma_core::NarrativeAtom;
 use pluma_llm_core::{ChatClient, ChatRequest};
@@ -65,24 +66,31 @@ breve en español (máximo 14 palabras), describí QUÉ cambió en sentido, mati
 información — no enumeres el diff literal palabra por palabra. Respondé sólo la \
 frase: sin comillas, sin prefijos, sin punto final.";
 
+/// Tope de requests al modelo en vuelo a la vez. Acota la concurrencia para no
+/// reventar el rate-limit de un backend ante un documento con muchísimos
+/// cambios, sin serializar del todo: 6 es un punto medio cómodo.
+const CONCURRENCIA: usize = 6;
+
 /// Resume cada sección. Devuelve una línea por ítem, en el mismo orden. Las
 /// secciones cambiadas consultan al modelo; las demás llevan su línea
 /// determinista (mismo lenguaje de glifos que `pluma_cotejo::ResumidorTextual`).
 ///
-/// Las consultas a las secciones cambiadas se disparan **en paralelo** con
-/// `join_all` (las deterministas resuelven al instante). `join_all` conserva el
-/// orden de entrada, así las líneas siguen alineadas 1:1 con las secciones. Si
-/// alguna consulta falla, devuelve el primer `Err` — el caller conserva las
-/// líneas textuales que ya tenía y avisa, sin perder el cotejo.
-///
-/// La concurrencia no está acotada: dispara una request por sección cambiada a
-/// la vez. Para documentos con muchísimos cambios y un backend con rate-limit
-/// estricto convendría un `buffered(N)`; para tamaños normales, `join_all` va.
+/// Las consultas a las secciones cambiadas se disparan **en paralelo pero
+/// acotado** con `buffered(CONCURRENCIA)`: a lo sumo `CONCURRENCIA` requests en
+/// vuelo, el resto espera turno (las deterministas resuelven al instante).
+/// `buffered` conserva el orden de entrada, así las líneas siguen alineadas 1:1
+/// con las secciones. Si alguna consulta falla, devuelve el primer `Err` — el
+/// caller conserva las líneas textuales que ya tenía y avisa, sin perder el
+/// cotejo.
 pub async fn resumir_diferencias(
     items: &[ItemDiff],
     chat: &dyn ChatClient,
 ) -> Result<Vec<String>, String> {
-    let resultados = futures::future::join_all(items.iter().map(|it| resumir_item(it, chat))).await;
+    let resultados: Vec<Result<String, String>> =
+        futures::stream::iter(items.iter().map(|it| resumir_item(it, chat)))
+            .buffered(CONCURRENCIA)
+            .collect()
+            .await;
     // Colecta a `Result<Vec<_>, _>`: corta en el primer error, preserva orden.
     resultados.into_iter().collect()
 }
@@ -216,7 +224,7 @@ mod pruebas {
     }
 
     #[tokio::test]
-    async fn join_all_preserva_el_orden_con_varias_cambiadas() {
+    async fn preserva_el_orden_con_varias_cambiadas() {
         // Varias secciones cambiadas intercaladas con idénticas: el resultado
         // debe quedar 1:1 con la entrada pese a correr en paralelo.
         let items = vec![
@@ -235,6 +243,29 @@ mod pruebas {
         assert_eq!(lineas[1], "≡ sin cambios");
         assert_eq!(lineas[2], "≈ tercero");
         assert_eq!(lineas[3], "✗ cuarto");
+    }
+
+    #[tokio::test]
+    async fn buffered_preserva_orden_con_mas_items_que_el_tope() {
+        // Más secciones cambiadas que CONCURRENCIA: ejercita el orden de
+        // `buffered` cruzando varios lotes. Cada ítem lleva un marcador único.
+        let n = CONCURRENCIA * 2 + 3; // 15 con CONCURRENCIA=6
+        let textos: Vec<(String, String)> = (0..n)
+            .map(|i| (format!("viejo {i}"), format!("nuevo MARCA{i:02}")))
+            .collect();
+        let items: Vec<ItemDiff> = textos
+            .iter()
+            .map(|(v, nv)| item(ClaseCambio::Divergente, 0.1, Some(v), Some(nv)))
+            .collect();
+        let mut chat = MockChatClient::default();
+        for i in 0..n {
+            chat = chat.con_respuesta(format!("MARCA{i:02}"), format!("resumen-{i}"));
+        }
+        let lineas = resumir_diferencias(&items, &chat).await.unwrap();
+        assert_eq!(lineas.len(), n);
+        for (i, l) in lineas.iter().enumerate() {
+            assert_eq!(l, &format!("✗ resumen-{i}"), "desorden en la posición {i}");
+        }
     }
 
     #[test]
