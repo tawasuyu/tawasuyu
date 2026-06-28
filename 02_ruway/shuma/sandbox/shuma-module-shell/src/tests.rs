@@ -275,7 +275,7 @@
         let mut s = State::new(Source::Local);
         s.input.set_text(&format!(":write %c99 {}", file.display()));
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
-        assert!(s.output.iter().any(|l| l.text.contains("no tiene stdout")));
+        assert!(s.output.iter().any(|l| l.text.contains("no tiene salida")));
         assert!(!file.exists(), "no debe crear el archivo si no hay datos");
     }
 
@@ -381,6 +381,115 @@
         assert!(matches!(req.kind, crate::LlmKind::Text));
         assert!(req.prompt.contains("algo falló"));
         assert!(req.prompt.contains("%c7"));
+        // La respuesta abrirá su propio bloque referenciable.
+        assert!(s.llm_block_label.as_deref().unwrap_or("").contains("%c7"));
+    }
+
+    #[test]
+    fn explica_tambien_ve_stderr_y_salida_de_ia() {
+        // `gather_block_text` recoge stdout + stderr + IA, no sólo stdout: una
+        // explicación de un build fallido necesita los errores (que van a stderr).
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        let mut err = OutputLine::stderr("error[E0308]: mismatched types");
+        err.block = 7;
+        s.output.push(err);
+        s.input.set_text(":explica %c7");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let req = s.llm_request.clone().expect("hay petición pese a ser stderr");
+        assert!(req.prompt.contains("E0308"));
+    }
+
+    #[test]
+    fn filtra_arma_request_y_etiqueta_el_bloque() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        for t in ["info: ok", "ERROR: boom", "info: listo"] {
+            let mut l = OutputLine::stdout(t);
+            l.block = 4;
+            s.output.push(l);
+        }
+        s.input.set_text(":filtra %c4 sólo los errores");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let req = s.llm_request.clone().expect("hay petición de filtro");
+        assert!(matches!(req.kind, crate::LlmKind::Text));
+        // La instrucción y la salida viajan en el prompt.
+        assert!(req.prompt.contains("sólo los errores"));
+        assert!(req.prompt.contains("ERROR: boom"));
+        // El bloque de respuesta queda etiquetado con la instrucción + la fuente.
+        let label = s.llm_block_label.as_deref().unwrap_or("");
+        assert!(label.contains("filtra") && label.contains("%c4"), "{label}");
+    }
+
+    #[test]
+    fn filtra_sin_instruccion_avisa() {
+        let mut s = State::new(Source::Local);
+        let mut l = OutputLine::stdout("algo");
+        l.block = 2;
+        s.output.push(l);
+        s.input.set_text(":filtra %c2");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("falta la instrucción")));
+        assert!(s.llm_request.is_none());
+    }
+
+    #[test]
+    fn respuesta_de_ia_aterriza_en_su_bloque_y_es_redirigible() {
+        // Simulamos el ciclo: el builtin dejó un label pendiente; llega la
+        // respuesta del LLM → abre bloque propio con líneas `Ai`. Después esa
+        // salida de IA debe ser recogible por los redireccionadores (`:yank`).
+        let mut s = State::new(Source::Local);
+        s.llm_inflight = true;
+        s.llm_block_label = Some("🜲 :explica %c1".to_string());
+        s = update(
+            s,
+            Msg::LlmResult {
+                kind: crate::LlmKind::Text,
+                ok: true,
+                text: "Resumen: todo bien.\nNo hay errores.".into(),
+            },
+        );
+        // Abrió un bloque nuevo (Prompt) con dos líneas Ai.
+        let ai_block = s
+            .output
+            .iter()
+            .find(|l| l.kind == OutputKind::Prompt && l.text.contains("explica"))
+            .map(|l| l.block)
+            .expect("se abrió un bloque para la respuesta");
+        let ai_lines: Vec<&OutputLine> = s
+            .output
+            .iter()
+            .filter(|l| l.block == ai_block && l.kind == OutputKind::Ai)
+            .collect();
+        assert_eq!(ai_lines.len(), 2);
+        assert!(!s.llm_inflight);
+        assert!(s.llm_block_label.is_none(), "el label se consumió");
+        // La salida de IA es redirigible: `:yank` de ese bloque la recoge.
+        s.input.set_text(&format!(":yank %c{ai_block}"));
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.text.contains("2 líneas") && l.text.contains("clipboard")));
+    }
+
+    #[test]
+    fn filtra_encadena_sobre_salida_de_ia() {
+        // Una respuesta de IA en un bloque debe poder volver a filtrarse: el
+        // `:filtra` sobre ese bloque arma su prompt con el texto de IA.
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        let mut a = OutputLine::ai("línea de IA uno");
+        a.block = 9;
+        s.output.push(a);
+        let mut b = OutputLine::ai("línea de IA dos");
+        b.block = 9;
+        s.output.push(b);
+        s.input.set_text(":filtra %c9 dejá sólo la primera");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let req = s.llm_request.clone().expect("filtra encadena sobre IA");
+        assert!(req.prompt.contains("línea de IA uno"));
+        assert!(req.prompt.contains("dejá sólo la primera"));
     }
 
     #[test]

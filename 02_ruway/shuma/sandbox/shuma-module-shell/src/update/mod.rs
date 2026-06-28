@@ -560,6 +560,8 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::LlmResult { kind, ok, text } => {
             s.llm_inflight = false;
             if !ok {
+                // Una petición fallida descarta el header pendiente del bloque IA.
+                s.llm_block_label = None;
                 s.push_output(OutputLine::notice(format!("🜲 llm · {text}")));
             } else {
                 match kind {
@@ -583,8 +585,19 @@ pub fn update(state: State, msg: Msg) -> State {
                         }
                     }
                     LlmKind::Text => {
-                        for l in text.lines() {
-                            s.push_output(OutputLine::notice(format!("🜲 {l}")));
+                        // La respuesta es salida de primera clase: abre su propio
+                        // bloque referenciable (`%cM`) y aterriza como `Ai`, para
+                        // poder re-filtrarla, guardarla o encadenarla.
+                        if text.trim().is_empty() {
+                            s.llm_block_label = None;
+                            s.push_output(OutputLine::notice("🜲 llm · sin respuesta"));
+                        } else {
+                            if let Some(header) = s.llm_block_label.take() {
+                                s.push_output(OutputLine::prompt(header));
+                            }
+                            for l in text.lines() {
+                                s.push_output(OutputLine::ai(l));
+                            }
                         }
                     }
                     LlmKind::Atipay => s = resolver_atipay(s, &text),

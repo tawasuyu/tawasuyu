@@ -11,6 +11,12 @@ pub enum OutputKind {
     Stderr,
     /// Mensaje del shell mismo (cd, error de spawn, exit status, etc.).
     Notice,
+    /// Respuesta del LLM (`:explica`/`:resume`/`:filtra`/`:hacé` cuando produce
+    /// texto). Se trata como **salida de primera clase**: es parte del cuerpo
+    /// del bloque, se tiñe distinto y la recogen `gather_block_text` + los
+    /// redireccionadores (`%cN`, `:write`, `:yank`, `:filtra`) — así una
+    /// respuesta de IA se puede volver a filtrar, guardar o encadenar.
+    Ai,
 }
 
 /// Una línea del buffer de output con su tipo (para coloreado) y el
@@ -60,6 +66,16 @@ impl OutputLine {
     pub fn notice(text: impl Into<String>) -> Self {
         Self {
             kind: OutputKind::Notice,
+            text: text.into(),
+            block: 0,
+            stage: None,
+        }
+    }
+    /// Línea de respuesta del LLM (`OutputKind::Ai`) — cuerpo de primera clase,
+    /// redireccionable y re-filtrable como cualquier stdout.
+    pub fn ai(text: impl Into<String>) -> Self {
+        Self {
+            kind: OutputKind::Ai,
             text: text.into(),
             block: 0,
             stage: None,
@@ -600,6 +616,13 @@ pub struct State {
     /// `true` mientras una petición LLM está en vuelo (la tomó el host) —
     /// evita que el host la re-dispare en cada tick.
     pub llm_inflight: bool,
+    /// Header del bloque donde aterrizará la respuesta de un `LlmKind::Text`
+    /// (`:explica`/`:resume`/`:filtra`): la respuesta abre su **propio bloque**
+    /// referenciable (`%cM`) en vez de mezclarse con el bloque actual, para que
+    /// se pueda volver a filtrar/guardar/encadenar. `None` para `:?`/`:hacé`
+    /// (que van al input, sin abrir bloque). Lo arma el builtin y lo consume
+    /// `Msg::LlmResult`.
+    pub llm_block_label: Option<String>,
     /// Búsqueda semántica pendiente (`:buscar`). Mismo patrón que `llm_request`:
     /// el módulo expresa la intención, el chasis embebe y devuelve
     /// `Msg::SemanticResult`. `None` salvo entre la invocación y su resultado.
@@ -854,6 +877,7 @@ impl State {
             in_cwd_rule: false,
             llm_request: None,
             llm_inflight: false,
+            llm_block_label: None,
             semantic_request: None,
             semantic_inflight: false,
         }

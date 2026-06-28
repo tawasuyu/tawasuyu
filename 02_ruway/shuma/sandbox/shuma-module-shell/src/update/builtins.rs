@@ -1005,7 +1005,7 @@ pub(crate) fn apply_explain(mut s: State, rest: &str, summarize: bool) -> State 
         ));
         return s;
     };
-    let body = gather_block_stdout(&s, block);
+    let body = gather_block_text(&s, block);
     if body.trim().is_empty() {
         s.push_output(OutputLine::notice(format!(
             "el bloque %c{block} no tiene salida para {}",
@@ -1035,7 +1035,76 @@ pub(crate) fn apply_explain(mut s: State, rest: &str, summarize: bool) -> State 
         max_tokens: 600,
         llm: wawa_config::WawaConfig::load().ai.llm,
     });
+    // La respuesta abre su propio bloque referenciable (`%cM`) — re-filtrable.
+    let etiqueta = if summarize { "resume" } else { "explica" };
+    s.llm_block_label = Some(format!("🜲 :{etiqueta} %c{block}"));
     s.push_output(OutputLine::notice(format!("🜲 llm · {verbo} el bloque %c{block}…")));
+    s
+}
+
+/// `:filtra <instrucción> [%cN]` (`:filter`/`:fia`) — **filtro IA** sobre la
+/// salida de un bloque: el LLM aplica la instrucción en lenguaje natural a la
+/// salida (stdout + stderr + respuestas de IA previas) y devuelve SÓLO el texto
+/// resultante, que aterriza en su **propio bloque** (`OutputKind::Ai`, `%cM`).
+/// Como el resultado es salida de primera clase, se puede volver a filtrar, a
+/// `:write`/`:yank` o encadenar con `%cM`. Sin ref, opera sobre el último
+/// bloque con salida. Gramática: si el primer token es `%cN`/`%pN`, ese es el
+/// bloque y el resto la instrucción; si no, la instrucción es todo y el bloque
+/// es el último con salida.
+pub(crate) fn apply_filter(mut s: State, rest: &str) -> State {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :filtra [%cN] <instrucción> — el LLM transforma la salida del bloque \
+             (p. ej. «sólo los errores», «a JSON», «traducí al inglés»)",
+        ));
+        return s;
+    }
+    // ¿El primer token es una ref de bloque?
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or("");
+    let first_is_ref = first.starts_with("%c") || first.starts_with("%p");
+    let (block, instr) = if first_is_ref {
+        (parse_block_ref(&s, first), parts.next().unwrap_or("").trim().to_string())
+    } else {
+        (parse_block_ref(&s, ""), rest.to_string())
+    };
+    if instr.is_empty() {
+        s.push_output(OutputLine::notice(
+            "✘ :filtra — falta la instrucción (qué hacer con la salida)",
+        ));
+        return s;
+    }
+    let Some(block) = block else {
+        s.push_output(OutputLine::notice(
+            "✘ :filtra — no hay salida de un bloque previo para filtrar",
+        ));
+        return s;
+    };
+    let body = gather_block_text(&s, block);
+    if body.trim().is_empty() {
+        s.push_output(OutputLine::notice(format!(
+            "✘ :filtra — el bloque %c{block} no tiene salida"
+        )));
+        return s;
+    }
+    let body = cap_prompt_body(&body, 8000);
+    let system = "Sos un filtro de texto en una terminal. Recibís la SALIDA de un comando y una \
+        INSTRUCCIÓN de qué hacer con ella. Aplicá la instrucción y devolvé EXCLUSIVAMENTE el texto \
+        resultante — sin explicación, sin preámbulo, sin markdown, sin backticks. Si la instrucción \
+        pide un formato (JSON, CSV, tabla), devolvé sólo eso."
+        .to_string();
+    s.llm_request = Some(LlmRequest {
+        kind: LlmKind::Text,
+        system,
+        prompt: format!("INSTRUCCIÓN: {instr}\n\nSALIDA del bloque %c{block}:\n\n{body}"),
+        max_tokens: 1200,
+        llm: wawa_config::WawaConfig::load().ai.llm,
+    });
+    s.llm_block_label = Some(format!("🜲 :filtra «{instr}» ← %c{block}"));
+    s.push_output(OutputLine::notice(format!(
+        "🜲 llm · filtrando %c{block}: {instr}…"
+    )));
     s
 }
 
@@ -1449,10 +1518,10 @@ pub(crate) fn apply_write(mut s: State, rest: &str) -> State {
         s.push_output(OutputLine::notice("✘ :write — falta el archivo destino"));
         return s;
     }
-    let data = gather_block_stdout(&s, block);
+    let data = gather_block_text(&s, block);
     if data.is_empty() {
         s.push_output(OutputLine::notice(format!(
-            "✘ :write — el bloque %c{block} no tiene stdout"
+            "✘ :write — el bloque %c{block} no tiene salida"
         )));
         return s;
     }
@@ -1488,10 +1557,10 @@ pub(crate) fn apply_yank(mut s: State, rest: &str) -> State {
         ));
         return s;
     };
-    let data = gather_block_stdout(&s, block);
+    let data = gather_block_text(&s, block);
     if data.is_empty() {
         s.push_output(OutputLine::notice(format!(
-            "✘ :yank — el bloque %c{block} no tiene stdout"
+            "✘ :yank — el bloque %c{block} no tiene salida"
         )));
         return s;
     }
@@ -1593,6 +1662,26 @@ pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
     let mut out = String::new();
     for l in &s.output {
         if l.block == block && l.kind == OutputKind::Stdout && l.stage.is_none() {
+            out.push_str(&l.text);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Texto **completo** de un bloque para redirigir/analizar: stdout + stderr +
+/// respuestas de IA (`OutputKind::Ai`), en orden del buffer, sin Prompt/notice/
+/// etapas. Es lo que consumen `:write`/`:yank`/`:explica`/`:resume`/`:filtra` —
+/// así una respuesta de IA o un volcado de errores también se guardan y se
+/// vuelven a filtrar. El pipeline crudo (`%cN` inject, `:diff`) sigue usando
+/// [`gather_block_stdout`] (sólo stdout) para no contaminar los datos.
+pub(crate) fn gather_block_text(s: &State, block: u64) -> String {
+    let mut out = String::new();
+    for l in &s.output {
+        if l.block == block
+            && l.stage.is_none()
+            && matches!(l.kind, OutputKind::Stdout | OutputKind::Stderr | OutputKind::Ai)
+        {
             out.push_str(&l.text);
             out.push('\n');
         }

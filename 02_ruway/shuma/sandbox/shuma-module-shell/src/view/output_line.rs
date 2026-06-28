@@ -370,6 +370,11 @@ pub(crate) fn body_color_runs(
             if matches!(kinds.get(i), Some(OutputKind::Stderr)) {
                 return vec![(0usize, text.len(), theme.fg_destructive)];
             }
+            // IA: toda la línea en el acento, para distinguir la voz del LLM del
+            // stdout del comando de un vistazo.
+            if matches!(kinds.get(i), Some(OutputKind::Ai)) {
+                return vec![(0usize, text.len(), theme.accent)];
+            }
             shuma_line::decorate_line(text, &state.cwd)
                 .into_iter()
                 .filter(|d| d.start < d.end && d.end <= text.len())
