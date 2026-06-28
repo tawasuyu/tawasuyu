@@ -115,13 +115,32 @@ pub trait MetaBackend: 'static {
     ///
     /// `module_id` ubica al módulo (el trait no asume estructura del
     /// manifest — el backend lo resuelve internamente).
+    ///
+    /// Forma general: `inputs` es una lista ORDENADA `(rol, id)` que
+    /// admite el MISMO rol repetido — para morfismos con inputs
+    /// **variádicos** (p.ej. un asiento de N patas que liga N cuentas
+    /// bajo el rol `lineas`). El orden se preserva, así el script puede
+    /// alinear `ids.<rol>[i]` con un array paralelo de params.
+    fn morphism_n(
+        &mut self,
+        module_id: &str,
+        name: &str,
+        inputs: Vec<(String, Uuid)>,
+        params: Value,
+    ) -> Result<WriteOutcome, String>;
+
+    /// Conveniencia para el caso escalar (un id por rol). Delega en
+    /// [`morphism_n`]. Mantiene compat con los callers que arman un
+    /// `BTreeMap`.
     fn morphism(
         &mut self,
         module_id: &str,
         name: &str,
         inputs: BTreeMap<String, Uuid>,
         params: Value,
-    ) -> Result<WriteOutcome, String>;
+    ) -> Result<WriteOutcome, String> {
+        self.morphism_n(module_id, name, inputs.into_iter().collect(), params)
+    }
 }
 
 #[cfg(test)]

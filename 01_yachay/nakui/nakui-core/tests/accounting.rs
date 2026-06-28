@@ -246,13 +246,10 @@ fn asentar_n(
     comprobante_id: Uuid,
 ) -> Result<Vec<nakui_core::delta::FieldOp>, ExecError> {
     let inputs: Vec<(&str, Uuid)> = cuentas.iter().map(|&c| ("lineas", c)).collect();
+    // Un único array: cada fila lleva su id de renglón + debe/haber.
     let movimientos: Vec<Value> = movs
         .iter()
-        .map(|(d, h)| json!({ "debe": d, "haber": h }))
-        .collect();
-    let renglon_ids: Vec<Value> = movs
-        .iter()
-        .map(|_| json!(Uuid::new_v4().to_string()))
+        .map(|(d, h)| json!({ "id": Uuid::new_v4().to_string(), "debe": d, "haber": h }))
         .collect();
     exec.run(
         store,
@@ -260,7 +257,6 @@ fn asentar_n(
         &inputs,
         json!({
             "movimientos": movimientos,
-            "renglon_ids": renglon_ids,
             "glosa": "asiento de N patas",
             "fecha": "2026-06-28",
             "diario": "general",

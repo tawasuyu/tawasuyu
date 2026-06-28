@@ -5,7 +5,9 @@
   "nakui_module_dir": "nakui",
   "entities": [
     { "name": "Cuenta", "label": "Cuenta", "fields": [] },
-    { "name": "Asiento", "label": "Asiento", "fields": [] }
+    { "name": "Asiento", "label": "Asiento", "fields": [] },
+    { "name": "Comprobante", "label": "Comprobante", "fields": [] },
+    { "name": "Renglon", "label": "Renglón", "fields": [] }
   ],
   "menu": [
     { "label": "Tablero", "view": "tablero" },
@@ -13,6 +15,8 @@
     { "label": "+ Cuenta", "view": "cuentas_form" },
     { "label": "Asientos", "view": "asientos_list" },
     { "label": "Asentar", "view": "asentar_form" },
+    { "label": "Asentar N patas", "view": "asentar_n_form" },
+    { "label": "Comprobantes", "view": "comprobantes_list" },
     { "label": "Balanza", "view": "balanza" },
     { "label": "Estado de resultados", "view": "resultados" },
     { "label": "Balance general", "view": "balance" },
@@ -221,6 +225,61 @@
         "params": ["monto", "glosa", "fecha", "diario", "asiento_id"],
         "next_view": "asientos_list"
       }
+    },
+    "asentar_n_form": {
+      "kind": "form",
+      "title": "Asentar (N patas)",
+      "entity": "Comprobante",
+      "fields": [
+        {
+          "name": "movimientos",
+          "label": "Renglones (una pata por línea: código de cuenta | debe | haber)",
+          "kind": "array",
+          "required": true,
+          "help": "Una pata por fila. Ej: 1010 | 1000 | 0   (debita la cuenta 1010 por 1000). El debe total debe igualar el haber total o el kernel lo rebota.",
+          "item_fields": [
+            { "name": "id", "label": "Id", "kind": "auto_id" },
+            { "name": "cuenta", "label": "Código de cuenta", "kind": "text", "required": true },
+            { "name": "debe", "label": "Debe", "kind": "number", "required": true },
+            { "name": "haber", "label": "Haber", "kind": "number", "required": true }
+          ]
+        },
+        { "name": "glosa", "label": "Glosa", "kind": "text", "required": true },
+        {
+          "name": "diario", "label": "Diario", "kind": "select",
+          "options": [
+            { "value": "general", "label": "General" },
+            { "value": "ventas", "label": "Ventas" },
+            { "value": "compras", "label": "Compras" },
+            { "value": "banco", "label": "Banco" },
+            { "value": "caja", "label": "Caja" }
+          ]
+        },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" },
+        { "name": "comprobante_id", "label": "Id de comprobante", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "asentar_n",
+        "array_inputs": {
+          "lineas": { "field": "movimientos", "column": "cuenta", "lookup_entity": "Cuenta", "lookup_field": "codigo" }
+        },
+        "params": ["movimientos", "glosa", "fecha", "diario", "comprobante_id"],
+        "next_view": "comprobantes_list"
+      }
+    },
+    "comprobantes_list": {
+      "kind": "list",
+      "title": "Comprobantes (N patas)",
+      "entity": "Comprobante",
+      "search_in": ["glosa", "diario"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "diario", "label": "Diario" },
+        { "field": "glosa", "label": "Glosa" },
+        { "field": "monto", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ]
     },
     "balanza": {
       "kind": "report",

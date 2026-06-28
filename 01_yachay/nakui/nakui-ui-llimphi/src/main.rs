@@ -141,9 +141,9 @@ use nahual_meta_runtime::{
     sort_breakdown_by_key, to_csv, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, CardFilter, ChartKind, Column, DashboardCard, DashboardView, DetailMetric, FieldKind,
-    FieldSpec, FormView, GraphView, ListView, Module, RelatedList, ReportView, ValueFormat,
-    View as ModuleView,
+    Action, ArrayInputBind, CardFilter, ChartKind, Column, DashboardCard, DashboardView,
+    DetailMetric, FieldKind, FieldSpec, FormView, GraphView, ListView, Module, RelatedList,
+    ReportView, ValueFormat, View as ModuleView,
 };
 use nakui_core::executor::Executor;
 use serde_json::Value;

@@ -1160,6 +1160,82 @@
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
     }
 
+    /// End-to-end del input VARIÁDICO desde una columna de Array: el form
+    /// `asentar_n_form` define un campo array `movimientos` (código de
+    /// cuenta | debe | haber); `commit_morphism` resuelve la columna
+    /// `cuenta` (código → id de Cuenta) y liga cada fila al rol variádico
+    /// `lineas`, corriendo `asentar_n` por el backend. El asiento de N
+    /// patas cuadra y el kernel lo conserva.
+    #[test]
+    fn asentar_n_via_array_input_variadico() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+        let cont = modules.iter().find(|m| m.id == "contabilidad").unwrap();
+        let nakui_dir = dir.join(&cont.id).join(cont.nakui_module_dir.as_ref().unwrap());
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        executors.insert("contabilidad".to_string(), Arc::new(Executor::load_module(&nakui_dir).unwrap()));
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        // Specs + acción morfismo SALEN DEL module.json real.
+        let fv = match cont.views.get("asentar_n_form") {
+            Some(ModuleView::Form(fv)) => fv,
+            _ => panic!("falta asentar_n_form"),
+        };
+        let specs: BTreeMap<String, FieldSpec> =
+            fv.fields.iter().map(|f| (f.name.clone(), f.clone())).collect();
+        let (array_inputs, params) = match &fv.on_submit {
+            Action::Morphism { array_inputs, params, .. } => (array_inputs.clone(), params.clone()),
+            _ => panic!("asentar_n_form debe ser morfismo"),
+        };
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta").into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id).unwrap()
+        };
+        let saldo = |b: &NakuiBackend, id: Uuid| -> i64 {
+            b.load_record("Cuenta", id).and_then(|v| v.get("saldo").and_then(Value::as_i64)).unwrap()
+        };
+        let suma = |b: &NakuiBackend| -> i64 {
+            b.list_records("Cuenta").iter().map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0)).sum()
+        };
+        let caja = by_codigo(&backend, "1010");
+        let ventas = by_codigo(&backend, "4010");
+        let (caja0, ventas0) = (saldo(&backend, caja), saldo(&backend, ventas));
+
+        // El textarea: debita 1010 por 1000, acredita 4010 por 1000.
+        let comp = Uuid::new_v4();
+        let mut by_name: BTreeMap<String, String> = BTreeMap::new();
+        by_name.insert("movimientos".into(), "1010 | 1000 | 0\n4010 | 0 | 1000".into());
+        by_name.insert("glosa".into(), "venta al contado".into());
+        by_name.insert("fecha".into(), "2026-06-28".into());
+        by_name.insert("diario".into(), "ventas".into());
+        by_name.insert("comprobante_id".into(), comp.to_string());
+
+        let empty: BTreeMap<String, String> = BTreeMap::new();
+        commit_morphism(&mut backend, "contabilidad", "asentar_n", &empty, &array_inputs, &params, &by_name, &specs)
+            .expect("asentar_n vía array variádico debe pasar");
+
+        assert_eq!(saldo(&backend, caja), caja0 + 1000, "1010 debitada");
+        assert_eq!(saldo(&backend, ventas), ventas0 - 1000, "4010 acreditada");
+        let c = backend.load_record("Comprobante", comp).expect("comprobante creado");
+        assert_eq!(c.get("monto").and_then(Value::as_i64), Some(1000));
+        assert_eq!(backend.list_records("Renglon").len(), 2, "dos renglones");
+        assert_eq!(suma(&backend), 0, "el asiento de N patas conserva la balanza");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
     #[test]
     fn next_sort_cycles_asc_desc_off() {
         // Columna nueva → ascendente.

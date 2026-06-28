@@ -643,6 +643,13 @@ pub enum Action {
         /// morphism `vender` que toma roles `stock` y `caja`.
         #[serde(default)]
         inputs: BTreeMap<String, String>,
+        /// Inputs VARIÁDICOS alimentados desde una columna de un campo
+        /// `Array`: por cada rol, de qué campo-array y columna sale el
+        /// valor de cada fila, que se liga como un input (el mismo rol
+        /// repetido N veces, en orden de fila). Para asientos de N patas
+        /// y similares. Ver [`ArrayInputBind`].
+        #[serde(default)]
+        array_inputs: BTreeMap<String, ArrayInputBind>,
         /// Lista de fields del form cuyos values van al `params`
         /// JSON object pasado al morphism. Si está vacío, todos los
         /// fields que no estén en `inputs` van a params.
@@ -651,6 +658,25 @@ pub enum Action {
         #[serde(default)]
         next_view: Option<String>,
     },
+}
+
+/// Cómo un input variádico de un morfismo se alimenta desde una columna
+/// de un campo `Array` del form (ver [`Action::Morphism::array_inputs`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArrayInputBind {
+    /// Nombre del campo `Array` del form del que salen las filas.
+    pub field: String,
+    /// Columna (nombre de `item_field`) cuyo valor se liga por fila.
+    pub column: String,
+    /// Si está, el valor de la celda NO es un UUID directo: se resuelve
+    /// buscando el record de esta entity cuyo `lookup_field` lo iguala
+    /// (p.ej. el código de cuenta `"1010"` → el id de esa Cuenta). Hace
+    /// usable el textarea: el usuario tipea un código legible, no un UUID.
+    #[serde(default)]
+    pub lookup_entity: Option<String>,
+    /// Campo por el que se resuelve cuando hay `lookup_entity`.
+    #[serde(default)]
+    pub lookup_field: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -177,13 +177,15 @@ impl MetaBackend for MockBackend {
         })
     }
 
-    fn morphism(
+    fn morphism_n(
         &mut self,
         _module_id: &str,
         name: &str,
-        inputs: BTreeMap<String, Uuid>,
+        inputs: Vec<(String, Uuid)>,
         params: Value,
     ) -> Result<WriteOutcome, String> {
+        // El mock no ejercita variádico: colapsa a mapa para el handler.
+        let inputs: BTreeMap<String, Uuid> = inputs.into_iter().collect();
         match self.morphisms.get(name) {
             Some(handler) => {
                 let changed = handler(&inputs, &params)?;

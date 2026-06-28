@@ -499,11 +499,11 @@ impl MetaBackend for NakuiBackend {
         })
     }
 
-    fn morphism(
+    fn morphism_n(
         &mut self,
         module_id: &str,
         name: &str,
-        inputs: BTreeMap<String, Uuid>,
+        inputs: Vec<(String, Uuid)>,
         params: Value,
     ) -> Result<WriteOutcome, String> {
         let executor = self
@@ -521,7 +521,7 @@ impl MetaBackend for NakuiBackend {
             .ok_or_else(|| "morphism requiere event log activo".to_string())?
             .clone();
 
-        let inputs_owned: Vec<(String, Uuid)> = inputs.into_iter().collect();
+        let inputs_owned: Vec<(String, Uuid)> = inputs;
         let inputs_ref: Vec<(&str, Uuid)> = inputs_owned
             .iter()
             .map(|(r, id)| (r.as_str(), *id))

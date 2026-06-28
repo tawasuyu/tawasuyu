@@ -190,6 +190,7 @@ pub(crate) fn submit_form(m: &mut Model) {
                             Action::Morphism {
                                 name,
                                 inputs,
+                                array_inputs,
                                 params,
                                 ..
                             } => commit_morphism(
@@ -197,6 +198,7 @@ pub(crate) fn submit_form(m: &mut Model) {
                                 &module_id,
                                 name,
                                 inputs,
+                                array_inputs,
                                 params,
                                 &by_name,
                                 &specs,
@@ -244,12 +246,15 @@ pub(crate) fn commit_morphism(
     module_id: &str,
     name: &str,
     inputs_map: &BTreeMap<String, String>,
+    array_inputs: &BTreeMap<String, ArrayInputBind>,
     params_fields: &[String],
     by_name: &BTreeMap<String, String>,
     specs: &BTreeMap<String, FieldSpec>,
 ) -> Result<WriteOutcome, String> {
-    // Inputs: cada (role, field) → parsear el value del field como UUID.
-    let mut inputs: BTreeMap<String, Uuid> = BTreeMap::new();
+    // Inputs ESCALARES: cada (role, field) → UUID. Lista ORDENADA porque
+    // un rol variádico se liga N veces (orden de fila = alineación con el
+    // array de params del morfismo).
+    let mut inputs: Vec<(String, Uuid)> = Vec::new();
     for (role, field_name) in inputs_map {
         let raw = by_name
             .get(field_name)
@@ -257,7 +262,40 @@ pub(crate) fn commit_morphism(
         let id = Uuid::parse_str(raw.trim()).map_err(|_| {
             format!("input '{role}' (field '{field_name}'): '{raw}' no es UUID válido")
         })?;
-        inputs.insert(role.clone(), id);
+        inputs.push((role.clone(), id));
+    }
+
+    // Inputs VARIÁDICOS: por cada fila del campo array, la celda de la
+    // columna se liga al rol — resuelta por lookup (código → id) o como
+    // UUID directo. El orden de filas se preserva.
+    for (role, bind) in array_inputs {
+        let raw = by_name.get(&bind.field).ok_or_else(|| {
+            format!("input variádico '{role}': falta el campo array '{}'", bind.field)
+        })?;
+        let spec = specs
+            .get(&bind.field)
+            .ok_or_else(|| format!("input variádico '{role}': sin spec para '{}'", bind.field))?;
+        let delim = spec.delimiter.as_deref().unwrap_or("|");
+        let arr = parse_array_value(raw, &spec.item_fields, delim)
+            .map_err(|e| format!("input variádico '{role}': {e}"))?;
+        let rows = arr.as_array().cloned().unwrap_or_default();
+        for (i, row) in rows.iter().enumerate() {
+            let cell = row
+                .get(&bind.column)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("fila {}: columna '{}' ausente", i + 1, bind.column))?;
+            let id = match (&bind.lookup_entity, &bind.lookup_field) {
+                (Some(ent), Some(lf)) => backend
+                    .list_records(ent)
+                    .into_iter()
+                    .find(|(_, v)| v.get(lf).and_then(Value::as_str) == Some(cell))
+                    .map(|(id, _)| id)
+                    .ok_or_else(|| format!("fila {}: no hay {ent} con {lf} = '{cell}'", i + 1))?,
+                _ => Uuid::parse_str(cell.trim())
+                    .map_err(|_| format!("fila {}: '{cell}' no es UUID válido", i + 1))?,
+            };
+            inputs.push((role.clone(), id));
+        }
     }
 
     // Params: lista explícita, o todos los fields que no son inputs.
@@ -280,7 +318,7 @@ pub(crate) fn commit_morphism(
         params_obj.insert(field_name, value);
     }
 
-    backend.morphism(module_id, name, inputs, Value::Object(params_obj))
+    backend.morphism_n(module_id, name, inputs, Value::Object(params_obj))
 }
 
 /// Tras un submit exitoso, salta al `next_view` declarado en la acción
