@@ -13,8 +13,13 @@ TARGET=wasm32-unknown-unknown
 OUT="$ROOT/02_ruway/llimphi/llimphi-wasm-runner/assets"
 mkdir -p "$OUT"
 
-echo "→ compilando llimphi-wasm-demo-counter ($TARGET, release)"
-cargo build -p llimphi-wasm-demo-counter --target "$TARGET" --release
+build() {
+  local crate="$1" out="$2"
+  echo "→ compilando $crate ($TARGET, release)"
+  cargo build -p "$crate" --target "$TARGET" --release
+  cp "$ROOT/target/$TARGET/release/${crate//-/_}.wasm" "$OUT/$out"
+  echo "✓ $OUT/$out ($(wc -c <"$OUT/$out") bytes)"
+}
 
-cp "$ROOT/target/$TARGET/release/llimphi_wasm_demo_counter.wasm" "$OUT/counter.wasm"
-echo "✓ $OUT/counter.wasm ($(wc -c <"$OUT/counter.wasm") bytes)"
+build llimphi-wasm-demo-counter counter.wasm
+build llimphi-wasm-demo-form form.wasm

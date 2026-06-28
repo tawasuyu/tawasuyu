@@ -7,7 +7,8 @@ use app_bus::Launch;
 use format::{ConcesionCapacidad, Hash, Permisos, PERMISO_GRAFO_ESCRITURA, PERMISO_RED};
 use llimphi_wasm_dist::{
     bytecode_hash, grant_hash, hash_to_hex, resolve, resolve_launch, resolve_manifest, verify_grant,
-    verify_integrity, AppManifest, AppRef, BlobSource, DiskStore, DistError, MapSource, TrustRing,
+    verify_integrity, AppManifest, AppRef, BlobSource, DiskStore, DistError, EventPayload, MapSource,
+    TrustRing,
 };
 
 /// El mismo wasm que corre el runner Tier 3 — lo distribuimos por hash.
@@ -161,7 +162,7 @@ fn resolve_launch_y_corre_la_app() {
     let mut guest = verified.load().unwrap();
     let n0 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n0, "0");
-    guest.dispatch(&[0]).unwrap(); // Msg::Increment
+    guest.dispatch(0, EventPayload::Click).unwrap(); // botón +1 ⇒ Increment
     let n1 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n1, "1", "la app distribuida por hash incrementa de verdad");
 }

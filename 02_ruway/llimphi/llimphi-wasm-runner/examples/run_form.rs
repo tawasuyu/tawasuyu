@@ -1,16 +1,13 @@
-//! Corre una app WASM Tier 3 dentro de una ventana Llimphi real.
+//! Corre la app WASM Tier 3 `form` (campo de texto + checkbox + saludo) en una
+//! ventana Llimphi. Clickeá el campo para enfocarlo y tecleá: el host rutea las
+//! teclas como eventos `Text` al guest, que es la fuente de verdad del texto.
 //!
-//! El `.wasm` está embebido (compilado por `scripts/build-wasm-demo.sh`). El
-//! host no sabe nada de la app: pide `wasm_view`, materializa el `WireNode`,
-//! rebota clicks y rutea el teclado al input enfocado. Toda la lógica vive del
-//! lado guest.
-//!
-//! `cargo run -p llimphi-wasm-runner --example run_counter --release`
+//! `cargo run -p llimphi-wasm-runner --example run_form --release`
 
 use llimphi_ui::{App, Handle, KeyEvent, View};
 use llimphi_wasm_runner::{RunnerMsg, WasmGuest};
 
-const COUNTER_WASM: &[u8] = include_bytes!("../assets/counter.wasm");
+const FORM_WASM: &[u8] = include_bytes!("../assets/form.wasm");
 
 struct Host;
 
@@ -19,11 +16,11 @@ impl App for Host {
     type Msg = RunnerMsg;
 
     fn title() -> &'static str {
-        "llimphi · wasm runner — counter"
+        "llimphi · wasm runner — form"
     }
 
     fn init(_: &Handle<Self::Msg>) -> Self::Model {
-        WasmGuest::load(COUNTER_WASM, 0).expect("cargar counter.wasm")
+        WasmGuest::load(FORM_WASM, 0).expect("cargar form.wasm")
     }
 
     fn update(mut model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {

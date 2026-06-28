@@ -24,19 +24,22 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::View;
-use llimphi_wire_view::{Align, Dim, Dir, Justify, TextAlign, WireNode};
+use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_wire_view::{Align, Dim, Dir, Justify, TextAlign, WireInput, WireNode};
 use wasmi::{Caller, CompilationMode, Config, Engine, Linker, Memory, Module, Store, TypedFunc};
 
 pub use format::Permisos;
+pub use llimphi_wire_view::{EventId, EventPayload};
 
-/// Mensaje del host. La única variante lleva los bytes del `Msg` del guest, tal
-/// como vinieron en el `on_click` del `WireNode`. El host no los interpreta —
-/// los rebota a `wasm_dispatch`.
+/// Mensaje del host. Un evento lleva el `EventId` del control y su `EventPayload`
+/// (Click/Text/Toggle); el host los rebota a `wasm_dispatch` y el guest
+/// reconstruye su `Msg`. `Focus` cambia el input enfocado (no cruza la frontera).
 #[derive(Clone, Debug)]
 pub enum RunnerMsg {
-    /// Un click sobre un nodo: bytes postcard del `Msg` del guest.
-    Guest(Vec<u8>),
+    /// Evento de un control: id del handler + payload.
+    Event(EventId, EventPayload),
+    /// El foco de teclado pasó a este input (o a ninguno).
+    Focus(Option<EventId>),
 }
 
 /// Una app WASM guest cargada y viva. Mantené una por app: el `Model` del guest
@@ -46,11 +49,13 @@ pub struct WasmGuest {
     memory: Memory,
     f_view: TypedFunc<(), u64>,
     f_alloc: TypedFunc<u32, u32>,
-    f_dispatch: TypedFunc<(u32, u32), ()>,
+    f_dispatch: TypedFunc<(u32, u32, u32), ()>,
     f_free: TypedFunc<(u32, u32), ()>,
     /// Última vista decodificada — el host la materializa cada frame sin volver
     /// a cruzar la frontera salvo tras un `dispatch`.
     view: WireNode,
+    /// Input con el foco de teclado (su `on_input` EventId), si hay alguno.
+    focused: Option<EventId>,
 }
 
 impl WasmGuest {
@@ -89,7 +94,7 @@ impl WasmGuest {
             .get_typed_func::<u32, u32>(&store, "wasm_alloc")
             .map_err(|e| format!("export `wasm_alloc`: {e}"))?;
         let f_dispatch = instance
-            .get_typed_func::<(u32, u32), ()>(&store, "wasm_dispatch")
+            .get_typed_func::<(u32, u32, u32), ()>(&store, "wasm_dispatch")
             .map_err(|e| format!("export `wasm_dispatch`: {e}"))?;
         let f_free = instance
             .get_typed_func::<(u32, u32), ()>(&store, "wasm_free")
@@ -107,6 +112,7 @@ impl WasmGuest {
             f_dispatch,
             f_free,
             view: WireNode::default(),
+            focused: None,
         };
         guest.refresh()?;
         Ok(guest)
@@ -137,19 +143,20 @@ impl WasmGuest {
         Ok(())
     }
 
-    /// Rebota un evento al guest: escribe los bytes del `Msg`, corre
-    /// `wasm_dispatch` y refresca la vista.
-    pub fn dispatch(&mut self, msg_bytes: &[u8]) -> Result<(), String> {
-        let len = msg_bytes.len() as u32;
+    /// Rebota un evento al guest: serializa el `payload`, lo escribe y corre
+    /// `wasm_dispatch(event_id, ptr, len)`, luego refresca la vista.
+    pub fn dispatch(&mut self, event_id: EventId, payload: EventPayload) -> Result<(), String> {
+        let bytes = postcard::to_allocvec(&payload).map_err(|e| format!("encode payload: {e}"))?;
+        let len = bytes.len() as u32;
         let ptr = self
             .f_alloc
             .call(&mut self.store, len)
             .map_err(|e| format!("wasm_alloc trap: {e}"))?;
         self.memory
-            .write(&mut self.store, ptr as usize, msg_bytes)
+            .write(&mut self.store, ptr as usize, &bytes)
             .map_err(|e| format!("escribir payload: {e}"))?;
         self.f_dispatch
-            .call(&mut self.store, (ptr, len))
+            .call(&mut self.store, (event_id, ptr, len))
             .map_err(|e| format!("wasm_dispatch trap: {e}"))?;
         self.refresh()
     }
@@ -157,19 +164,84 @@ impl WasmGuest {
     /// Aplica un `RunnerMsg`. Conveniencia para el `update` del host.
     pub fn apply(&mut self, msg: &RunnerMsg) -> Result<(), String> {
         match msg {
-            RunnerMsg::Guest(bytes) => self.dispatch(bytes),
+            RunnerMsg::Event(id, payload) => self.dispatch(*id, payload.clone()),
+            RunnerMsg::Focus(f) => {
+                self.focused = *f;
+                Ok(())
+            }
         }
+    }
+
+    /// El input enfocado actualmente (su `on_input` EventId).
+    pub fn focused(&self) -> Option<EventId> {
+        self.focused
+    }
+
+    /// Traduce un evento de teclado a un `RunnerMsg` para el input enfocado:
+    /// computa "valor actual + tecla → texto nuevo" (Backspace borra el último
+    /// carácter; un carácter se anexa) y emite `Text`. Devuelve `None` si no hay
+    /// foco o la tecla no edita. Modelo value-driven: el guest es la fuente de
+    /// verdad del texto; el host no guarda buffer (cursor siempre al final, MVP).
+    pub fn key_to_msg(&self, event: &KeyEvent) -> Option<RunnerMsg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        let id = self.focused?;
+        let actual = self.input_value(id).unwrap_or("");
+        let nuevo = edit_value(actual, &event.key, event.text.as_deref())?;
+        Some(RunnerMsg::Event(id, EventPayload::Text(nuevo)))
+    }
+
+    /// `RunnerMsg` para fijar el foco (lo usa el `on_focus` del host).
+    pub fn focus_msg(id: Option<u64>) -> RunnerMsg {
+        RunnerMsg::Focus(id.map(|x| x as EventId))
+    }
+
+    /// Valor actual del input cuyo `on_input` es `id`, buscando en la vista.
+    fn input_value(&self, id: EventId) -> Option<&str> {
+        find_input(&self.view, id).map(|i| i.value.as_str())
     }
 
     /// Materializa la vista cacheada en un `View<RunnerMsg>` Llimphi real.
     pub fn render(&self) -> View<RunnerMsg> {
-        wire_to_view(&self.view)
+        wire_to_view(&self.view, self.focused)
     }
 }
 
+/// Computa el texto nuevo de un campo dado el actual y una tecla: Backspace borra
+/// el último carácter; un carácter se anexa; otras teclas no editan (`None`).
+/// Pura — el corazón del modelo value-driven, testeable sin un `KeyEvent`.
+pub fn edit_value(actual: &str, key: &Key, text: Option<&str>) -> Option<String> {
+    match key {
+        Key::Named(NamedKey::Backspace) => {
+            let mut s = actual.to_string();
+            s.pop();
+            Some(s)
+        }
+        Key::Character(_) => text.map(|t| format!("{actual}{t}")),
+        _ => None,
+    }
+}
+
+/// Busca el `WireInput` cuyo `on_input` es `id` en el árbol.
+fn find_input(node: &WireNode, id: EventId) -> Option<&WireInput> {
+    if node.on_input == Some(id) {
+        if let Some(inp) = &node.input {
+            return Some(inp);
+        }
+    }
+    node.children.iter().find_map(|c| find_input(c, id))
+}
+
+// Colores por defecto de los controles (el estilo de la caja viene del nodo).
+const INPUT_TEXT: [u8; 4] = [230, 235, 245, 255];
+const INPUT_PLACEHOLDER: [u8; 4] = [120, 130, 145, 255];
+const INPUT_BORDER: [u8; 4] = [80, 90, 110, 255];
+const INPUT_BORDER_FOCUS: [u8; 4] = [90, 160, 230, 255];
+
 /// Materializa un [`WireNode`] en un `View<RunnerMsg>` Llimphi real,
-/// recursivamente. Los `on_click` se convierten en `RunnerMsg::Guest(bytes)`.
-pub fn wire_to_view(node: &WireNode) -> View<RunnerMsg> {
+/// recursivamente. `focused` es el input con el foco (para pintar caret/borde).
+pub fn wire_to_view(node: &WireNode, focused: Option<EventId>) -> View<RunnerMsg> {
     let mut style = Style {
         flex_direction: match node.dir {
             Dir::Row => FlexDirection::Row,
@@ -209,16 +281,61 @@ pub fn wire_to_view(node: &WireNode) -> View<RunnerMsg> {
     if node.radius != 0.0 {
         view = view.radius(node.radius as f64);
     }
-    if let Some(t) = &node.text {
-        view = view.text_aligned(t.content.clone(), t.size, color(t.color), map_text_align(t.align));
+
+    if let Some(inp) = &node.input {
+        // Campo editable: caja focusable que muestra value/placeholder + caret.
+        let id = node.on_input.unwrap_or(0);
+        let is_focused = focused == Some(id);
+        let (shown, col) = display_input(inp, is_focused);
+        let border = if is_focused { INPUT_BORDER_FOCUS } else { INPUT_BORDER };
+        view = view
+            .text(shown, 20.0, color(col))
+            .border(1.5, color(border))
+            .focusable(id as u64)
+            .on_click(RunnerMsg::Focus(Some(id)));
+    } else if let Some(checked) = node.toggle {
+        // Checkbox: glifo clickable que alterna su estado.
+        let id = node.on_toggle.unwrap_or(0);
+        let glyph = if checked { "\u{2611}" } else { "\u{2610}" }; // ☑ / ☐
+        view = view
+            .text(glyph, 24.0, color(INPUT_TEXT))
+            .on_click(RunnerMsg::Event(id, EventPayload::Toggle(!checked)));
+    } else {
+        if let Some(t) = &node.text {
+            view = view.text_aligned(
+                t.content.clone(),
+                t.size,
+                color(t.color),
+                map_text_align(t.align),
+            );
+        }
+        if let Some(id) = node.on_click {
+            view = view.on_click(RunnerMsg::Event(id, EventPayload::Click));
+        }
     }
-    if let Some(bytes) = &node.on_click {
-        view = view.on_click(RunnerMsg::Guest(bytes.clone()));
-    }
+
     if !node.children.is_empty() {
-        view = view.children(node.children.iter().map(wire_to_view).collect());
+        view = view.children(node.children.iter().map(|c| wire_to_view(c, focused)).collect());
     }
     view
+}
+
+/// Texto a mostrar en un input y su color: value (o placeholder), enmascarado si
+/// es password, con un caret `│` cuando tiene el foco.
+fn display_input(inp: &WireInput, focused: bool) -> (String, [u8; 4]) {
+    let body = if inp.value.is_empty() {
+        if focused {
+            String::new()
+        } else {
+            return (inp.placeholder.clone(), INPUT_PLACEHOLDER);
+        }
+    } else if inp.password {
+        "\u{25cf}".repeat(inp.value.chars().count()) // ●
+    } else {
+        inp.value.clone()
+    };
+    let shown = if focused { format!("{body}\u{2502}") } else { body }; // │
+    (shown, INPUT_TEXT)
 }
 
 fn dim(d: Dim) -> Dimension {

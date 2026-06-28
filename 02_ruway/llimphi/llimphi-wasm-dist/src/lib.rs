@@ -30,7 +30,7 @@ use format::{ConcesionCapacidad, Objeto, Permisos};
 use serde::{Deserialize, Serialize};
 
 pub use format::{Hash, Permisos as PermisosBitfield};
-pub use llimphi_wasm_runner::WasmGuest;
+pub use llimphi_wasm_runner::{EventId, EventPayload, WasmGuest};
 
 /// Errores de la cadena resolver→verificar.
 #[derive(Debug, Clone, PartialEq, Eq)]

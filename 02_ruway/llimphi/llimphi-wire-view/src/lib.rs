@@ -95,8 +95,39 @@ pub struct WireText {
     pub italic: bool,
 }
 
+/// Identificador de un handler de evento. El guest lo asigna por frame (en su
+/// `view`); el host lo rebota en `dispatch(event_id, payload)` y el guest mira
+/// su tabla para reconstruir el `Msg`. Reemplaza el viejo modelo de "bytes del
+/// Msg en el nodo": ahora el nodo lleva sólo el id, así un evento puede acarrear
+/// un payload (texto tecleado, estado de un toggle) que el host inyecta.
+pub type EventId = u32;
+
+/// Lo que un evento acarrea de vuelta al guest. El host lo serializa (postcard)
+/// y lo pasa a `dispatch`; el guest lo entrega al handler del `event_id`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum EventPayload {
+    /// Click/tap — sin datos. Handler `Unit(Msg)`.
+    Click,
+    /// Texto nuevo de un campo editable. Handler `Text(Fn(String)->Msg)`.
+    Text(String),
+    /// Nuevo estado de un checkbox/switch. Handler `Toggle(Fn(bool)->Msg)`.
+    Toggle(bool),
+}
+
+/// Campo de texto editable. El `value` es la fuente de verdad del guest; el host
+/// lo pinta y, al teclear, emite `on_input` con el texto nuevo (modelo Elm: el
+/// host no guarda estado de edición, sólo notifica).
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct WireInput {
+    pub value: String,
+    pub placeholder: String,
+    /// Oculta el contenido (●●●) — para contraseñas.
+    pub password: bool,
+}
+
 /// Nodo del árbol. Recursivo, igual que `View<Msg>`. Construir con el builder
 /// encadenable o con los constructores libres (`col`, `row`, `text`, `leaf`).
+/// Los nodos interactivos los arma el `Ui` del SDK, que asigna los `EventId`.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct WireNode {
     pub dir: Dir,
@@ -112,9 +143,16 @@ pub struct WireNode {
     pub fill: Option<Rgba>,
     pub radius: f32,
     pub text: Option<WireText>,
-    /// Bytes postcard del `Msg` del guest a emitir al click. El host los rebota
-    /// a `dispatch`; el guest los decodifica.
-    pub on_click: Option<Vec<u8>>,
+    /// Campo editable, si este nodo es un input.
+    pub input: Option<WireInput>,
+    /// Estado de un checkbox, si este nodo es uno.
+    pub toggle: Option<bool>,
+    /// Handler de click (evento sin payload).
+    pub on_click: Option<EventId>,
+    /// Handler del texto tecleado en `input`.
+    pub on_input: Option<EventId>,
+    /// Handler del cambio de `toggle`.
+    pub on_toggle: Option<EventId>,
     pub children: Vec<WireNode>,
 }
 
@@ -206,10 +244,33 @@ impl WireNode {
         self
     }
 
-    /// Adjunta los bytes postcard del `Msg` a emitir al click. El SDK del guest
-    /// envuelve esto en un `button(label, .., msg)` que serializa por vos.
-    pub fn on_click_bytes(mut self, bytes: Vec<u8>) -> Self {
-        self.on_click = Some(bytes);
+    /// Asocia el `EventId` del handler de click (lo asigna el `Ui` del SDK).
+    pub fn on_click(mut self, id: EventId) -> Self {
+        self.on_click = Some(id);
+        self
+    }
+
+    /// Marca el nodo como campo editable.
+    pub fn with_input(mut self, input: WireInput) -> Self {
+        self.input = Some(input);
+        self
+    }
+
+    /// `EventId` del handler que recibe el texto tecleado.
+    pub fn on_input(mut self, id: EventId) -> Self {
+        self.on_input = Some(id);
+        self
+    }
+
+    /// Marca el nodo como checkbox con el estado dado.
+    pub fn with_toggle(mut self, checked: bool) -> Self {
+        self.toggle = Some(checked);
+        self
+    }
+
+    /// `EventId` del handler que recibe el nuevo estado del checkbox.
+    pub fn on_toggle(mut self, id: EventId) -> Self {
+        self.on_toggle = Some(id);
         self
     }
 
@@ -258,15 +319,22 @@ mod tests {
     fn round_trip_postcard() {
         let tree = col(vec![
             text("0", 160.0, [230, 240, 250, 255]).grow(1.0),
+            WireNode::new()
+                .with_input(WireInput {
+                    value: "hola".into(),
+                    placeholder: "nombre…".into(),
+                    password: false,
+                })
+                .on_input(7),
             row(vec![
                 text("+1", 28.0, [10, 30, 20, 255])
                     .fill([60, 200, 130, 255])
                     .radius(12.0)
-                    .on_click_bytes(vec![1, 2, 3]),
+                    .on_click(1),
                 text("reset", 22.0, [30, 10, 10, 255])
                     .fill([220, 80, 80, 255])
                     .radius(12.0)
-                    .on_click_bytes(vec![9]),
+                    .on_click(2),
             ])
             .gap(16.0)
             .justify(Justify::Center),
@@ -277,7 +345,14 @@ mod tests {
         let bytes = postcard::to_allocvec(&tree).unwrap();
         let back: WireNode = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(tree, back);
-        // El click del primer botón carga sus bytes de Msg.
-        assert_eq!(back.children[1].children[0].on_click.as_deref(), Some(&[1u8, 2, 3][..]));
+        assert_eq!(back.children[1].on_input, Some(7));
+        assert_eq!(back.children[2].children[0].on_click, Some(1));
+
+        // EventPayload también round-trippea.
+        let p = EventPayload::Text("hola".into());
+        assert_eq!(
+            postcard::from_bytes::<EventPayload>(&postcard::to_allocvec(&p).unwrap()).unwrap(),
+            p
+        );
     }
 }

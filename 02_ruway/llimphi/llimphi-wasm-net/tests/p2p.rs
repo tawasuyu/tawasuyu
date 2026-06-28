@@ -12,7 +12,7 @@ use card_net::BrahmanNet;
 use format::{ConcesionCapacidad, PERMISO_RED};
 use llimphi_wasm_dist::{
     bytecode_hash, resolve, resolve_manifest, verify_integrity, AppManifest, AppRef, BlobSource,
-    DiskStore, Hash, MapSource, TrustRing,
+    DiskStore, EventPayload, Hash, MapSource, TrustRing,
 };
 use llimphi_wasm_net::{fetch_blob, serve_blobs};
 
@@ -67,7 +67,7 @@ async fn dos_peers_distribuyen_y_corren_la_app() {
     let mut guest = verified.load().expect("carga el guest");
     let n0 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n0, "0");
-    guest.dispatch(&[0]).unwrap(); // Msg::Increment
+    guest.dispatch(0, EventPayload::Click).unwrap(); // Msg::Increment
     let n1 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n1, "1", "la app traída por la red P2P incrementa");
 }
@@ -124,7 +124,7 @@ async fn dos_peers_distribuyen_app_con_concesion() {
 
     // Y carga con ese permiso (que gatea host_net_request) y corre.
     let mut guest = verified.load().expect("carga con permisos");
-    guest.dispatch(&[0]).unwrap();
+    guest.dispatch(0, EventPayload::Click).unwrap();
     assert_eq!(
         guest.view().children[0].text.as_ref().unwrap().content,
         "1"

@@ -252,6 +252,7 @@ members = [
     "02_ruway/llimphi/llimphi-wasm-dist",
     "02_ruway/llimphi/llimphi-wasm-net",
     "02_ruway/llimphi/llimphi-wasm-demo-counter",
+    "02_ruway/llimphi/llimphi-wasm-demo-form",
     "02_ruway/llimphi/llimphi-layer",
     "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-anim",
