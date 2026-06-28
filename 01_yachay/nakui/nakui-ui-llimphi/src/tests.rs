@@ -171,6 +171,7 @@
             value: Some("true".into()),
             min: None,
             max: None,
+            values: Vec::new(),
         };
         assert_eq!(
             compute_detail_metric(

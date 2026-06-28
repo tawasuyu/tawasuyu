@@ -425,6 +425,10 @@ pub enum FilterOp {
     Between,
     /// El campo existe y no está vacío.
     NonEmpty,
+    /// El campo iguala (textualmente) a ALGUNO de `CardFilter.values`.
+    /// Para agregar sobre varias categorías a la vez — p.ej. el resultado
+    /// del ejercicio = saldo de las cuentas con tipo ∈ {ingreso, gasto}.
+    In,
 }
 
 /// Filtro de una [`DashboardCard`]: decide qué records entran al
@@ -449,6 +453,10 @@ pub struct CardFilter {
     /// Cota superior para `between` (inclusiva). `None` = sin techo.
     #[serde(default)]
     pub max: Option<String>,
+    /// Conjunto de valores para el operador `in`: el record pasa si el
+    /// campo iguala a alguno. Ignorado por los demás operadores.
+    #[serde(default)]
+    pub values: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

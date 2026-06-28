@@ -227,6 +227,9 @@ fn filter_passes(v: &Value, f: &CardFilter) -> bool {
     match f.op {
         FilterOp::Eq => cell.as_deref() == f.value.as_deref(),
         FilterOp::Ne => cell.as_deref() != f.value.as_deref(),
+        FilterOp::In => cell
+            .map(|c| f.values.iter().any(|x| x == &c))
+            .unwrap_or(false),
         FilterOp::NonEmpty => cell.map(|s| !s.is_empty()).unwrap_or(false),
         FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
             let (Some(cell), Some(bound)) = (cell, f.value.as_ref()) else {
@@ -612,6 +615,7 @@ mod tests {
             value: Some("ganada".into()),
             min: None,
             max: None,
+            values: Vec::new(),
         };
         assert_eq!(
             compute_metric(&Metric::Count, Some(&f), &rs),
@@ -639,6 +643,7 @@ mod tests {
             value: Some("acme".into()),
             min: None,
             max: None,
+            values: Vec::new(),
         };
         assert_eq!(
             compute_metric(&Metric::CountDistinct { field: "cliente".into() }, Some(&f), &rs),
@@ -653,6 +658,7 @@ mod tests {
             value: value.map(Into::into),
             min: None,
             max: None,
+            values: Vec::new(),
         }
     }
 
@@ -680,6 +686,7 @@ mod tests {
             value: None,
             min: Some("200".into()),
             max: Some("800".into()),
+            values: Vec::new(),
         };
         assert_eq!(
             compute_metric(&Metric::Count, Some(&between), &rs),
@@ -700,6 +707,7 @@ mod tests {
             value: None,
             min: Some("2026-01-01".into()),
             max: Some("2026-12-31".into()),
+            values: Vec::new(),
         };
         assert_eq!(
             compute_metric(&Metric::Count, Some(&q1_h1), &rs),
@@ -713,6 +721,34 @@ mod tests {
         assert_eq!(
             compute_metric(&Metric::Count, Some(&filt("nota", FilterOp::NonEmpty, None)), &rs),
             MetricResult::Scalar(1.0)
+        );
+    }
+
+    #[test]
+    fn in_filter_matches_any_of_values() {
+        let rs = recs(&[
+            json!({"tipo": "ingreso", "saldo": -700}),
+            json!({"tipo": "gasto", "saldo": 120}),
+            json!({"tipo": "activo", "saldo": 500}),
+        ]);
+        let f = CardFilter {
+            field: "tipo".into(),
+            op: FilterOp::In,
+            value: None,
+            min: None,
+            max: None,
+            values: vec!["ingreso".into(), "gasto".into()],
+        };
+        // Σ saldo de cuentas tipo ∈ {ingreso, gasto} = -700 + 120 = -580.
+        // (El «resultado neto» = -(-580) = 580 lo da el flag `negate`.)
+        assert_eq!(
+            compute_metric(&Metric::Sum { field: "saldo".into() }, Some(&f), &rs),
+            MetricResult::Scalar(-580.0)
+        );
+        // El record de tipo `activo` no entra en el conjunto.
+        assert_eq!(
+            compute_metric(&Metric::Count, Some(&f), &rs),
+            MetricResult::Scalar(2.0)
         );
     }
 

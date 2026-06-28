@@ -250,8 +250,16 @@
     "resultados": {
       "kind": "report",
       "title": "Estado de resultados",
-      "subtitle": "Ingresos y gastos del ejercicio (con su signo natural). El resultado es Ingresos − Gastos. (Un número de resultado consolidado necesita una métrica de diferencia, aún no en el motor.)",
+      "subtitle": "Ingresos − Gastos del ejercicio. El «Resultado neto» suma las cuentas de tipo ∈ {ingreso, gasto} con signo natural — positivo = ganancia.",
       "cards": [
+        {
+          "label": "Resultado neto del ejercicio",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum", "field": "saldo" },
+          "filter": { "field": "tipo", "op": "in", "values": ["ingreso", "gasto"] },
+          "negate": true,
+          "format": { "kind": "currency", "symbol": "$" }
+        },
         { "label": "Ingresos", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "ingreso" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
         { "label": "Gastos operativos", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "gasto" }, "format": { "kind": "currency", "symbol": "$" } },
         {
@@ -266,9 +274,17 @@
     "balance": {
       "kind": "report",
       "title": "Balance general",
-      "subtitle": "Activo, Pasivo y Patrimonio con su signo natural. La identidad contable: Activo = Pasivo + Patrimonio + Resultado del ejercicio.",
+      "subtitle": "Activo = Pasivo + Patrimonio + Resultado del ejercicio. Los tres sumandos de la derecha aparecen con su signo natural; deben totalizar el Activo.",
       "cards": [
         { "label": "Activo", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "activo" }, "format": { "kind": "currency", "symbol": "$" } },
+        {
+          "label": "Pasivo + Patrimonio + Resultado",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum", "field": "saldo" },
+          "filter": { "field": "tipo", "op": "in", "values": ["pasivo", "patrimonio", "ingreso", "gasto"] },
+          "negate": true,
+          "format": { "kind": "currency", "symbol": "$" }
+        },
         { "label": "Pasivo", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "pasivo" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
         { "label": "Patrimonio", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "patrimonio" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
         {
