@@ -284,3 +284,46 @@ rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 test
 **Roadmap COMPLETO (2026-06-13):** A1·A2·A3·A4·A5·A6 + E1·E2·E3·E4·E5·E6 ✅ —
 toda la lista de inteligencia, cerrada. El pulido de E4 (cliente móvil vía
 gateway) quedó cerrado el 2026-06-21 con `GET /term`. **Sin pendientes.**
+
+---
+
+## Extensión 2026-06-28 — redirección/análisis de salida + filtro IA + predicción consultable
+
+Más allá del roadmap A/E. Tres frentes pedidos por el usuario («analizar y
+redireccionar output, incluyendo los de IA + filtro IA; predecir comandos y
+grupos por frecuencia, cwd y contexto»):
+
+- **La salida de IA es de primera clase.** Nuevo `OutputKind::Ai`: las
+  respuestas del LLM (`:explica`/`:resume`/`:filtra`) dejan de ser *notices
+  muertas* y aterrizan en su **propio bloque referenciable** (`%cM`), teñidas
+  con el acento. `gather_block_text` (stdout + stderr + IA) reemplaza al
+  stdout-only en los redireccionadores: una respuesta de IA o un volcado de
+  errores se `:write`/`:yank`/se vuelve a `:filtra`/encadena con `%cM`. `:explica`
+  ahora ve stderr (explica builds fallidos). El pipeline crudo (`%cN` inject,
+  `:diff`) sigue en stdout-only para no contaminar datos.
+
+- **`:filtra` / `:filter` / `:fia` `<instrucción> [%cN]` — filtro IA.** El LLM
+  aplica una instrucción en lenguaje natural a la salida de un bloque y devuelve
+  SÓLO el texto resultante, en un bloque `Ai` nuevo. Encadenable (filtrar el
+  filtro). System prompt anti-preámbulo/markdown.
+
+- **Etapas del tee direccionables: `%cN.K`.** Las capturas intermedias del pipe
+  (antes sólo mirables — los «pipe muertos») ahora son objetivo de
+  `:filtra`/`:write`/`:yank`/`:explica` vía `%c5.1` (etapa 1 del bloque 5,
+  0-based como los chips). `parse_block_and_stage` + `gather_target_text`.
+
+- **`:predice` / `:sugiere` / `:next` — predicción consultable.**
+  `rank_command_predictions` (puro) pondera cada línea del historial por
+  **frecuencia** + **afinidad con el cwd** (×3 las corridas en el directorio
+  actual o hijos) + **recencia**. Lista: la continuación inmediata (motor de
+  patrones), los comandos probables aquí (marca ◆ de afinidad de cwd) y las
+  secuencias/grupos aplicables al contexto (`applicable_sequences`, filtradas por
+  marcadores de proyecto) + las F-keys guardadas. Hace consultable lo que ya
+  alimentaba el ghost (A3) y las coreografías (A1).
+
+Todo certificado por tests (223/223 verde): `:filtra`, redirección de IA,
+encadenado, etapas del tee, ranking por cwd. **Pendiente de pantalla** (no
+certificado a ojo): el tinte del acento de las líneas `Ai` y la legibilidad del
+listado de `:predice`. **Follow-up de UX**: acción de redirigir/filtrar desde el
+menú contextual y desde el chip de etapa del tee (hoy sólo por teclado con la
+ref `%cN.K`); rotular los chips con su índice `K` para que la ref sea obvia.
