@@ -32,6 +32,15 @@ pub struct MorphismSpec {
 pub struct MorphismInput {
     pub role: String,
     pub entity: String,
+    /// Rol variádico: liga **N** records (no uno) bajo el mismo `role`.
+    /// El caller repite el rol en `inputs` una vez por id. En el script
+    /// Rhai `input.states.<role>` e `input.ids.<role>` pasan a ser
+    /// **arrays** (en vez de objeto/string); el resto del contrato
+    /// —capability `<role>.<field>`, conserve, post-check— se aplica por
+    /// cada id ligado. Sirve para asientos de N patas: una sola regla
+    /// `conserve` sobre el conjunto exige que el lote cuadre.
+    #[serde(default)]
+    pub variadic: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

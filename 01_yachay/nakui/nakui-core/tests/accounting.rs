@@ -20,6 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
+use nakui_core::delta::FieldOp;
 use nakui_core::executor::{ExecError, Executor};
 use nakui_core::store::{MemoryStore, Store};
 use serde_json::{json, Value};
@@ -230,4 +231,165 @@ fn misma_cuenta_debito_y_credito_rechazada() {
         result
     );
     assert_eq!(saldo(&store, caja), 0);
+}
+
+// ── Asiento de N patas (rol variádico `lineas`) ────────────────────────
+
+/// Postea un asiento de N patas: `cuentas[i]` recibe `movs[i] = (debe, haber)`.
+/// El rol variádico `lineas` se liga repitiendo el rol una vez por cuenta.
+/// Genera un `renglon_id` por pata.
+fn asentar_n(
+    exec: &Executor,
+    store: &mut MemoryStore,
+    cuentas: &[Uuid],
+    movs: &[(i64, i64)],
+    comprobante_id: Uuid,
+) -> Result<Vec<nakui_core::delta::FieldOp>, ExecError> {
+    let inputs: Vec<(&str, Uuid)> = cuentas.iter().map(|&c| ("lineas", c)).collect();
+    let movimientos: Vec<Value> = movs
+        .iter()
+        .map(|(d, h)| json!({ "debe": d, "haber": h }))
+        .collect();
+    let renglon_ids: Vec<Value> = movs
+        .iter()
+        .map(|_| json!(Uuid::new_v4().to_string()))
+        .collect();
+    exec.run(
+        store,
+        "asentar_n",
+        &inputs,
+        json!({
+            "movimientos": movimientos,
+            "renglon_ids": renglon_ids,
+            "glosa": "asiento de N patas",
+            "fecha": "2026-06-28",
+            "diario": "general",
+            "comprobante_id": comprobante_id.to_string(),
+        }),
+    )
+}
+
+#[test]
+fn asiento_n_patas_balanceado_conserva_la_balanza() {
+    let exec = Executor::load_module(accounting_module()).expect("load module");
+    let mut store = MemoryStore::new();
+
+    // Una venta con IVA: debe Caja 1000 / haber Ventas 847 / haber IVA 153.
+    let caja = cuenta(&mut store, "1010", "Caja", "activo", 0, "USD");
+    let ventas = cuenta(&mut store, "4010", "Ventas", "ingreso", 0, "USD");
+    let iva = cuenta(&mut store, "2110", "IVA por pagar", "pasivo", 0, "USD");
+
+    let comp = Uuid::new_v4();
+    let ops = asentar_n(
+        &exec,
+        &mut store,
+        &[caja, ventas, iva],
+        &[(1000, 0), (0, 847), (0, 153)],
+        comp,
+    )
+    .expect("asiento de 3 patas balanceado debe pasar");
+
+    assert_eq!(ops.len(), 7, "3×(set saldo + create Renglon) + 1 create Comprobante");
+    assert_eq!(saldo(&store, caja), 1000); // activo debitado sube
+    assert_eq!(saldo(&store, ventas), -847); // ingreso acreditado baja
+    assert_eq!(saldo(&store, iva), -153); // pasivo acreditado baja
+
+    let c = store.load("Comprobante", comp).expect("comprobante persistido");
+    assert_eq!(c.get("monto").and_then(Value::as_i64), Some(1000), "monto = Σ debe");
+
+    // Se crearon 3 Renglones, todos ligados a este comprobante, y la suma
+    // de sus debe/haber cuadra (Σ debe = Σ haber = 1000).
+    let renglones: Vec<&FieldOp> = ops
+        .iter()
+        .filter(|op| matches!(op, FieldOp::Create { entity, .. } if entity == "Renglon"))
+        .collect();
+    assert_eq!(renglones.len(), 3, "una pata = un Renglon");
+    let (mut sum_debe, mut sum_haber) = (0i64, 0i64);
+    for op in &renglones {
+        if let FieldOp::Create { data, .. } = op {
+            assert_eq!(data.get("comprobante_id").and_then(Value::as_str), Some(comp.to_string().as_str()));
+            sum_debe += data.get("debe").and_then(Value::as_i64).unwrap();
+            sum_haber += data.get("haber").and_then(Value::as_i64).unwrap();
+        }
+    }
+    assert_eq!((sum_debe, sum_haber), (1000, 1000), "Σ debe = Σ haber");
+
+    // La identidad contable se mantiene tras un asiento de N patas.
+    let total: i64 = [caja, ventas, iva].iter().map(|&c| saldo(&store, c)).sum();
+    assert_eq!(total, 0, "la balanza cuadra en cero");
+}
+
+#[test]
+fn asiento_n_patas_desbalanceado_rechazado_por_conservacion() {
+    // Σ debe = 1000 pero Σ haber = 600 → el lote no cuadra. El kernel
+    // debe rebotar con ConservationViolation (no es trabajo del script).
+    let exec = Executor::load_module(accounting_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let caja = cuenta(&mut store, "1010", "Caja", "activo", 0, "USD");
+    let ventas = cuenta(&mut store, "4010", "Ventas", "ingreso", 0, "USD");
+    let iva = cuenta(&mut store, "2110", "IVA por pagar", "pasivo", 0, "USD");
+
+    let result = asentar_n(
+        &exec,
+        &mut store,
+        &[caja, ventas, iva],
+        &[(1000, 0), (0, 400), (0, 200)], // Σ haber = 600 ≠ 1000
+        Uuid::new_v4(),
+    );
+    assert!(
+        matches!(result, Err(ExecError::ConservationViolation { .. })),
+        "esperaba ConservationViolation, obtuve {:?}",
+        result
+    );
+    // Estado intacto: el executor rechazó antes de aplicar.
+    assert_eq!(saldo(&store, caja), 0);
+    assert_eq!(saldo(&store, ventas), 0);
+    assert_eq!(saldo(&store, iva), 0);
+}
+
+#[test]
+fn asiento_n_patas_distintas_monedas_no_cuadra() {
+    // Dos buckets de moneda: USD con Δ +1000 y EUR con Δ −1000. Cada
+    // bucket queda no-cero → ConservationViolation (el group_by por
+    // moneda mantiene libros independientes).
+    let exec = Executor::load_module(accounting_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let caja_usd = cuenta(&mut store, "1010", "Caja USD", "activo", 0, "USD");
+    let caja_eur = cuenta(&mut store, "1011", "Caja EUR", "activo", 0, "EUR");
+
+    let result = asentar_n(
+        &exec,
+        &mut store,
+        &[caja_usd, caja_eur],
+        &[(1000, 0), (0, 1000)],
+        Uuid::new_v4(),
+    );
+    assert!(
+        matches!(result, Err(ExecError::ConservationViolation { .. })),
+        "esperaba ConservationViolation por moneda, obtuve {:?}",
+        result
+    );
+}
+
+#[test]
+fn asiento_n_patas_misma_cuenta_repetida_rechazada() {
+    // Ligar la misma cuenta dos veces en el rol variádico → DuplicateInputId
+    // (conservación y post-check keyean por id; un record una sola vez).
+    let exec = Executor::load_module(accounting_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let caja = cuenta(&mut store, "1010", "Caja", "activo", 0, "USD");
+    let ventas = cuenta(&mut store, "4010", "Ventas", "ingreso", 0, "USD");
+
+    let result = asentar_n(
+        &exec,
+        &mut store,
+        &[caja, ventas, caja], // caja repetida
+        &[(1000, 0), (0, 1000), (500, 500)],
+        Uuid::new_v4(),
+    );
+    assert!(
+        matches!(result, Err(ExecError::DuplicateInputId { .. })),
+        "esperaba DuplicateInputId, obtuve {:?}",
+        result
+    );
 }

@@ -14,6 +14,18 @@
         "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
       },
       "script": "morphisms/asentar.rhai"
+    },
+    {
+      "name": "asentar_n",
+      "inputs": [
+        { "role": "lineas", "entity": "Cuenta", "variadic": true }
+      ],
+      "reads": ["lineas.saldo", "lineas.moneda"],
+      "writes": ["lineas.saldo", "Comprobante", "Renglon"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/asentar_n.rhai"
     }
   ]
 }

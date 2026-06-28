@@ -39,4 +39,27 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     moneda | String,
     ..
   },
+
+  # Cabecera append-only de un asiento de N patas. La crea `asentar_n`
+  # ligando N cuentas como rol variádico. `monto` = total debitado. El
+  # kernel exige Σ (debe − haber) = 0 por moneda vía la misma regla
+  # `conserve` sobre Cuenta.saldo — la partida doble de N patas,
+  # garantizada por el executor. Sus patas son records `Renglon` aparte
+  # (modelo cabecera + líneas, no array anidado).
+  Comprobante = {
+    monto | NoNegativo,
+    moneda | String,
+    ..
+  },
+
+  # Una pata (línea) de un Comprobante: la cuenta afectada y sus importes
+  # al debe/haber. Plana y append-only; `comprobante_id` la liga a su
+  # cabecera. La crea `asentar_n`, una por cuenta ligada.
+  Renglon = {
+    comprobante_id | String,
+    cuenta_id | String,
+    debe | NoNegativo,
+    haber | NoNegativo,
+    ..
+  },
 }

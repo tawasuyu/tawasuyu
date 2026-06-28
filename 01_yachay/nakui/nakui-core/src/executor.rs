@@ -18,6 +18,16 @@ pub enum ExecError {
     UnknownMorphism(String),
     #[error("missing input role `{role}` for morphism `{morphism}`")]
     MissingInput { morphism: String, role: String },
+    #[error(
+        "scalar input role `{role}` for morphism `{morphism}` bound to {got} ids (expected exactly 1; mark it `variadic` to bind many)"
+    )]
+    ScalarRoleArity {
+        morphism: String,
+        role: String,
+        got: usize,
+    },
+    #[error("input role `{role}` is not declared by morphism `{morphism}`")]
+    UnknownInputRole { morphism: String, role: String },
     #[error("duplicate input id {id} bound to roles `{role_a}` and `{role_b}`")]
     DuplicateInputId {
         id: Uuid,
@@ -217,63 +227,121 @@ impl Executor {
             .morphism(morphism_name)
             .ok_or_else(|| ExecError::UnknownMorphism(morphism_name.to_string()))?;
 
-        // 1. Bind inputs.
-        let inputs_map: BTreeMap<String, Uuid> = inputs
-            .iter()
-            .map(|(role, id)| (role.to_string(), *id))
-            .collect();
-        for spec_in in &spec.inputs {
-            if !inputs_map.contains_key(&spec_in.role) {
-                return Err(ExecError::MissingInput {
+        // 1. Bind inputs: group ids by role (a variadic role gets N, a
+        //    scalar role exactly 1). Order within a role = caller order.
+        let mut by_role: BTreeMap<String, Vec<Uuid>> = BTreeMap::new();
+        for (role, id) in inputs {
+            by_role.entry(role.to_string()).or_default().push(*id);
+        }
+        // Reject inputs naming a role the spec doesn't declare (typo guard).
+        let spec_roles: HashSet<&str> = spec.inputs.iter().map(|i| i.role.as_str()).collect();
+        for role in by_role.keys() {
+            if !spec_roles.contains(role.as_str()) {
+                return Err(ExecError::UnknownInputRole {
                     morphism: morphism_name.to_string(),
-                    role: spec_in.role.clone(),
+                    role: role.clone(),
                 });
             }
         }
+        // Arity per declared role: scalar = exactly 1, variadic = ≥1.
+        for spec_in in &spec.inputs {
+            match by_role.get(&spec_in.role) {
+                None => {
+                    return Err(ExecError::MissingInput {
+                        morphism: morphism_name.to_string(),
+                        role: spec_in.role.clone(),
+                    })
+                }
+                Some(ids) if ids.is_empty() => {
+                    return Err(ExecError::MissingInput {
+                        morphism: morphism_name.to_string(),
+                        role: spec_in.role.clone(),
+                    })
+                }
+                Some(ids) if !spec_in.variadic && ids.len() != 1 => {
+                    return Err(ExecError::ScalarRoleArity {
+                        morphism: morphism_name.to_string(),
+                        role: spec_in.role.clone(),
+                        got: ids.len(),
+                    })
+                }
+                Some(_) => {}
+            }
+        }
 
-        // 2. Build id -> binding (role + entity), rejecting duplicates.
+        // 2. Build id -> binding (role + entity), rejecting duplicate ids
+        //    across all roles (incl. within a variadic role): conservation
+        //    and post-checks key off id, so a record may appear once.
         let mut id_to_input: HashMap<Uuid, InputBinding> = HashMap::new();
         for spec_in in &spec.inputs {
-            let id = inputs_map[&spec_in.role];
-            if let Some(other) = id_to_input.get(&id) {
-                return Err(ExecError::DuplicateInputId {
+            for &id in &by_role[&spec_in.role] {
+                if let Some(other) = id_to_input.get(&id) {
+                    return Err(ExecError::DuplicateInputId {
+                        id,
+                        role_a: other.role.clone(),
+                        role_b: spec_in.role.clone(),
+                    });
+                }
+                id_to_input.insert(
                     id,
-                    role_a: other.role.clone(),
-                    role_b: spec_in.role.clone(),
-                });
+                    InputBinding {
+                        role: spec_in.role.clone(),
+                        entity: spec_in.entity.clone(),
+                    },
+                );
             }
-            id_to_input.insert(
-                id,
-                InputBinding {
-                    role: spec_in.role.clone(),
-                    entity: spec_in.entity.clone(),
-                },
-            );
         }
 
-        // 3. Load + pre-check every input.
-        let mut loaded: BTreeMap<String, Value> = BTreeMap::new();
-        let mut id_strings: BTreeMap<String, String> = BTreeMap::new();
+        // 3. Load + pre-check every bound input, keyed by id. Build the
+        //    Rhai `states`/`ids` shape: a scalar role maps to a single
+        //    value/string; a variadic role maps to an array (preserving
+        //    caller order) so the script can index/iterate the lines.
+        let mut loaded_by_id: HashMap<Uuid, Value> = HashMap::new();
+        let mut states_json = serde_json::Map::new();
+        let mut ids_json = serde_json::Map::new();
         for spec_in in &spec.inputs {
-            let id = inputs_map[&spec_in.role];
-            let state = store
-                .load(&spec_in.entity, id)
-                .ok_or_else(|| ExecError::EntityMissing(spec_in.entity.clone(), id))?;
-            self.validate_entity(&spec_in.entity, &state)
-                .map_err(|e| ExecError::SchemaPre {
-                    role: spec_in.role.clone(),
-                    entity: spec_in.entity.clone(),
-                    source: e,
-                })?;
-            loaded.insert(spec_in.role.clone(), state);
-            id_strings.insert(spec_in.role.clone(), id.to_string());
+            let ids = &by_role[&spec_in.role];
+            if spec_in.variadic {
+                let mut states_arr: Vec<Value> = Vec::with_capacity(ids.len());
+                let mut ids_arr: Vec<Value> = Vec::with_capacity(ids.len());
+                for &id in ids {
+                    let state = store
+                        .load(&spec_in.entity, id)
+                        .ok_or_else(|| ExecError::EntityMissing(spec_in.entity.clone(), id))?;
+                    self.validate_entity(&spec_in.entity, &state)
+                        .map_err(|e| ExecError::SchemaPre {
+                            role: spec_in.role.clone(),
+                            entity: spec_in.entity.clone(),
+                            source: e,
+                        })?;
+                    loaded_by_id.insert(id, state.clone());
+                    states_arr.push(state);
+                    ids_arr.push(Value::String(id.to_string()));
+                }
+                states_json.insert(spec_in.role.clone(), Value::Array(states_arr));
+                ids_json.insert(spec_in.role.clone(), Value::Array(ids_arr));
+            } else {
+                let id = by_role[&spec_in.role][0];
+                let state = store
+                    .load(&spec_in.entity, id)
+                    .ok_or_else(|| ExecError::EntityMissing(spec_in.entity.clone(), id))?;
+                self.validate_entity(&spec_in.entity, &state)
+                    .map_err(|e| ExecError::SchemaPre {
+                        role: spec_in.role.clone(),
+                        entity: spec_in.entity.clone(),
+                        source: e,
+                    })?;
+                loaded_by_id.insert(id, state.clone());
+                states_json.insert(spec_in.role.clone(), state);
+                ids_json.insert(spec_in.role.clone(), Value::String(id.to_string()));
+            }
         }
 
         // 4. Rhai.
         let script_path = self.module_dir.join(&spec.script);
         let input = json!({
-            "states": loaded,
-            "ids": id_strings,
+            "states": Value::Object(states_json),
+            "ids": Value::Object(ids_json),
             "params": params,
         });
         let ops = self.rhai.run(&script_path, input)?;
@@ -317,20 +385,21 @@ impl Executor {
             }
         }
 
-        // 6. Conservation invariants.
+        // 6. Conservation invariants (sum over every bound id, not per role —
+        //    so a single rule covers all N legs of a variadic input).
         for rule in &spec.invariants.conserve {
-            check_conservation(rule, &loaded, &id_to_input, &ops)?;
+            check_conservation(rule, &loaded_by_id, &id_to_input, &ops)?;
         }
 
-        // 7. Per-input KCL post-check; skip Deleted inputs.
-        for spec_in in &spec.inputs {
-            let id = inputs_map[&spec_in.role];
-            if let Some(new_state) = simulate_on(&loaded[&spec_in.role], &spec_in.entity, id, &ops)
+        // 7. Per-input KCL post-check, once per bound id; skip Deleted inputs.
+        for (id, binding) in &id_to_input {
+            if let Some(new_state) =
+                simulate_on(&loaded_by_id[id], &binding.entity, *id, &ops)
             {
-                self.validate_entity(&spec_in.entity, &new_state)
+                self.validate_entity(&binding.entity, &new_state)
                     .map_err(|e| ExecError::SchemaPost {
-                        role: spec_in.role.clone(),
-                        entity: spec_in.entity.clone(),
+                        role: binding.role.clone(),
+                        entity: binding.entity.clone(),
                         source: e,
                     })?;
             }
@@ -569,7 +638,7 @@ fn build_schema_bundle(
 
 fn check_conservation(
     rule: &ConserveRule,
-    loaded: &BTreeMap<String, Value>,
+    loaded_by_id: &HashMap<Uuid, Value>,
     id_to_input: &HashMap<Uuid, InputBinding>,
     ops: &[FieldOp],
 ) -> Result<(), ExecError> {
@@ -580,7 +649,9 @@ fn check_conservation(
             if path.entity != rule.entity || path.field != rule.field {
                 continue;
             }
-            let binding = id_to_input
+            // Validate the Set targets a tracked input of the right entity;
+            // its old value comes from the per-id loaded snapshot.
+            id_to_input
                 .get(&path.id)
                 .filter(|b| b.entity == path.entity)
                 .ok_or_else(|| ExecError::ConservationMalformed {
@@ -591,21 +662,21 @@ fn check_conservation(
                         path.id, path.entity
                     ),
                 })?;
-            let old_state = &loaded[&binding.role];
+            let old_state = &loaded_by_id[&path.id];
             let old_val = old_state
                 .get(&rule.field)
                 .and_then(Value::as_i64)
                 .ok_or_else(|| ExecError::ConservationMalformed {
                     entity: rule.entity.clone(),
                     field: rule.field.clone(),
-                    message: format!("old value at role `{}` is not i64", binding.role),
+                    message: format!("old value at id `{}` is not i64", path.id),
                 })?;
             let new_val = value
                 .as_i64()
                 .ok_or_else(|| ExecError::ConservationMalformed {
                     entity: rule.entity.clone(),
                     field: rule.field.clone(),
-                    message: format!("Set value at role `{}` is not i64", binding.role),
+                    message: format!("Set value at id `{}` is not i64", path.id),
                 })?;
             let group_key = match &rule.group_by {
                 Some(g) => old_state

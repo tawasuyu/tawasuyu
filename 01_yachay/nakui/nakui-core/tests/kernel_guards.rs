@@ -83,6 +83,7 @@ fn capability_violation_blocks_write_to_untracked_caja() {
         inputs: vec![MorphismInput {
             role: "caja".into(),
             entity: "Caja".into(),
+            variadic: false,
         }],
         reads: vec!["caja.saldo".into()],
         writes: vec!["caja.saldo".into()],
@@ -126,10 +127,12 @@ fn conservation_violation_blocks_unbalanced_transfer() {
             MorphismInput {
                 role: "source".into(),
                 entity: "Caja".into(),
+                variadic: false,
             },
             MorphismInput {
                 role: "dest".into(),
                 entity: "Caja".into(),
+                variadic: false,
             },
         ],
         reads: vec![
@@ -192,6 +195,7 @@ fn capability_rejects_entity_mismatch_on_tracked_id() {
         inputs: vec![MorphismInput {
             role: "caja".into(),
             entity: "Caja".into(),
+            variadic: false,
         }],
         reads: vec!["caja.saldo".into()],
         writes: vec!["caja.saldo".into()],
@@ -234,6 +238,7 @@ fn delete_primary_skips_post_check_and_removes_record() {
         inputs: vec![MorphismInput {
             role: "caja".into(),
             entity: "Caja".into(),
+            variadic: false,
         }],
         reads: vec![],
         writes: vec!["Caja".into()],
@@ -266,6 +271,7 @@ fn bad_created_record_blocks_negative_movimiento() {
         inputs: vec![MorphismInput {
             role: "caja".into(),
             entity: "Caja".into(),
+            variadic: false,
         }],
         reads: vec!["caja.saldo".into()],
         writes: vec!["Movimiento".into()],

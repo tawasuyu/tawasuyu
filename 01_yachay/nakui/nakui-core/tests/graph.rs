@@ -24,6 +24,7 @@ fn morphism(name: &str, depends_on: Vec<String>) -> MorphismSpec {
         inputs: vec![MorphismInput {
             role: "caja".into(),
             entity: "Caja".into(),
+            variadic: false,
         }],
         reads: vec!["caja.saldo".into()],
         writes: vec!["caja.saldo".into()],
@@ -161,6 +162,7 @@ fn affected_by_excludes_self_and_finds_overlap() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec![],
             writes: vec!["caja.saldo".into()],
@@ -173,6 +175,7 @@ fn affected_by_excludes_self_and_finds_overlap() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec!["caja.saldo".into()],
             writes: vec![],
@@ -185,6 +188,7 @@ fn affected_by_excludes_self_and_finds_overlap() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec!["caja.saldo".into()],
             writes: vec!["caja.saldo".into()],
@@ -312,6 +316,7 @@ fn dirty_tracker_accumulates_across_morphisms() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec![],
             writes: vec!["caja.saldo".into()],
@@ -324,6 +329,7 @@ fn dirty_tracker_accumulates_across_morphisms() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec![],
             writes: vec!["Movimiento".into()],
@@ -336,6 +342,7 @@ fn dirty_tracker_accumulates_across_morphisms() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec!["caja.saldo".into()],
             writes: vec![],
@@ -348,6 +355,7 @@ fn dirty_tracker_accumulates_across_morphisms() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec!["Movimiento".into()],
             writes: vec![],

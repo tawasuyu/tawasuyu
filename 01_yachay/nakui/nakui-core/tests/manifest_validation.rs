@@ -30,6 +30,7 @@ fn caja_input() -> MorphismInput {
     MorphismInput {
         role: "caja".into(),
         entity: "Caja".into(),
+        variadic: false,
     }
 }
 
@@ -214,6 +215,7 @@ fn rejects_duplicate_schema_across_files() {
             inputs: vec![MorphismInput {
                 role: "caja".into(),
                 entity: "Caja".into(),
+                variadic: false,
             }],
             reads: vec![],
             writes: vec![],
