@@ -433,6 +433,18 @@
             let cliente = fv.fields.iter().find(|f| f.name == "cliente").expect("campo cliente");
             assert_eq!(cliente.kind, FieldKind::EntityRef);
             assert_eq!(cliente.ref_entity.as_deref(), Some("Partner"));
+            // Campos fiscales cableados: País (Select de países) + Documento
+            // (Text), opcionales, que viajan al morfismo emitir_factura.
+            let pais = fv.fields.iter().find(|f| f.name == "pais").expect("campo pais fiscal");
+            assert_eq!(pais.kind, FieldKind::Select);
+            assert!(!pais.required, "el país fiscal es opcional");
+            assert!(pais.options.iter().any(|o| o.value == "VE"), "el Select incluye Venezuela");
+            let doc = fv.fields.iter().find(|f| f.name == "documento").expect("campo documento");
+            assert_eq!(doc.kind, FieldKind::Text);
+            if let Action::Morphism { params, .. } = &fv.on_submit {
+                assert!(params.contains(&"pais".to_string()) && params.contains(&"documento".to_string()),
+                    "los datos fiscales viajan como params del morfismo");
+            }
         } else {
             panic!("emitir_form debería ser un Form");
         }
@@ -460,9 +472,19 @@
         assert!(matches!(compras.views.get("compras_list"), Some(ModuleView::List(_))));
         assert!(matches!(compras.views.get("compra_detail"), Some(ModuleView::Detail(_))));
         match compras.views.get("registrar_form") {
-            Some(ModuleView::Form(fv)) => assert!(
-                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "registrar_compra")
-            ),
+            Some(ModuleView::Form(fv)) => {
+                assert!(
+                    matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "registrar_compra")
+                );
+                // Datos fiscales del proveedor cableados al morfismo.
+                let pais = fv.fields.iter().find(|f| f.name == "pais").expect("campo pais fiscal");
+                assert_eq!(pais.kind, FieldKind::Select);
+                assert!(fv.fields.iter().any(|f| f.name == "documento"), "campo documento");
+                if let Action::Morphism { params, .. } = &fv.on_submit {
+                    assert!(params.contains(&"documento".to_string()),
+                        "el documento del proveedor viaja al morfismo");
+                }
+            }
             other => panic!("registrar_form debería ser un Form, fue {other:?}"),
         }
         match compras.views.get("pagar_form") {

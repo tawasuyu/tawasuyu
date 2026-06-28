@@ -96,6 +96,8 @@
         { "name": "proveedor", "label": "Proveedor", "kind": "entity_ref", "ref_entity": "Partner", "required": true, "help": "Elegí un tercero (proveedor) registrado" },
         { "name": "neto", "label": "Neto (base imponible)", "kind": "number", "required": true, "help": "Importe gravado, sin IVA" },
         { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
+        { "name": "pais", "label": "País (fiscal)", "kind": "select", "required": false, "help": "País del documento tributario del proveedor (opcional)", "options": [{ "value": "VE", "label": "Venezuela" }, { "value": "BO", "label": "Bolivia" }, { "value": "PE", "label": "Perú" }, { "value": "EC", "label": "Ecuador" }, { "value": "CO", "label": "Colombia" }, { "value": "CL", "label": "Chile" }, { "value": "AR", "label": "Argentina" }, { "value": "MX", "label": "México" }] },
+        { "name": "documento", "label": "Documento (RIF/cédula/CUIT…)", "kind": "text", "required": false, "help": "Se valida formato + dígito verificador y se guarda normalizado" },
         { "name": "compra_cta", "label": "Cuenta de gasto/inventario", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Se debita por el neto" },
         { "name": "iva_cta", "label": "Cuenta IVA crédito fiscal", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Activo — se debita por el impuesto" },
         { "name": "proveedores_cta", "label": "Cuenta Proveedores", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Pasivo — se acredita por el total" },
@@ -106,7 +108,7 @@
         "kind": "morphism",
         "name": "registrar_compra",
         "inputs": { "compra_cta": "compra_cta", "iva_cta": "iva_cta", "proveedores_cta": "proveedores_cta" },
-        "params": ["proveedor", "neto", "tasa", "fecha", "compra_id"],
+        "params": ["proveedor", "neto", "tasa", "pais", "documento", "fecha", "compra_id"],
         "next_view": "compras_list"
       }
     },

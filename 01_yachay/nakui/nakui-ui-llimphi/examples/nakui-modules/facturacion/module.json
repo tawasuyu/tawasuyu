@@ -109,6 +109,8 @@
         { "name": "cliente", "label": "Cliente", "kind": "entity_ref", "ref_entity": "Partner", "required": true, "help": "Elegí un tercero (cliente) registrado" },
         { "name": "neto", "label": "Neto (base imponible)", "kind": "number", "required": true, "help": "Importe gravado, sin IVA" },
         { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
+        { "name": "pais", "label": "País (fiscal)", "kind": "select", "required": false, "help": "País del documento tributario del cliente (opcional)", "options": [{ "value": "VE", "label": "Venezuela" }, { "value": "BO", "label": "Bolivia" }, { "value": "PE", "label": "Perú" }, { "value": "EC", "label": "Ecuador" }, { "value": "CO", "label": "Colombia" }, { "value": "CL", "label": "Chile" }, { "value": "AR", "label": "Argentina" }, { "value": "MX", "label": "México" }] },
+        { "name": "documento", "label": "Documento (RIF/cédula/CUIT…)", "kind": "text", "required": false, "help": "Se valida formato + dígito verificador y se guarda normalizado" },
         { "name": "clientes_cta", "label": "Cuenta Clientes (CxC)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Cuenta por cobrar — se debita por el total" },
         { "name": "ventas_cta", "label": "Cuenta Ventas", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Ingreso — se acredita por el neto" },
         { "name": "iva_cta", "label": "Cuenta IVA por pagar", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Pasivo — se acredita por el impuesto" },
@@ -119,7 +121,7 @@
         "kind": "morphism",
         "name": "emitir_factura",
         "inputs": { "clientes_cta": "clientes_cta", "ventas_cta": "ventas_cta", "iva_cta": "iva_cta" },
-        "params": ["cliente", "neto", "tasa", "fecha", "factura_id"],
+        "params": ["cliente", "neto", "tasa", "pais", "documento", "fecha", "factura_id"],
         "next_view": "facturas_list"
       }
     },
@@ -143,6 +145,8 @@
           ]
         },
         { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
+        { "name": "pais", "label": "País (fiscal)", "kind": "select", "required": false, "help": "País del documento tributario del cliente (opcional)", "options": [{ "value": "VE", "label": "Venezuela" }, { "value": "BO", "label": "Bolivia" }, { "value": "PE", "label": "Perú" }, { "value": "EC", "label": "Ecuador" }, { "value": "CO", "label": "Colombia" }, { "value": "CL", "label": "Chile" }, { "value": "AR", "label": "Argentina" }, { "value": "MX", "label": "México" }] },
+        { "name": "documento", "label": "Documento (RIF/cédula/CUIT…)", "kind": "text", "required": false, "help": "Se valida formato + dígito verificador y se guarda normalizado" },
         { "name": "clientes_cta", "label": "Cuenta Clientes (CxC)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
         { "name": "ventas_cta", "label": "Cuenta Ventas", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
         { "name": "iva_cta", "label": "Cuenta IVA por pagar", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
@@ -154,7 +158,7 @@
         "kind": "morphism",
         "name": "facturar",
         "inputs": { "clientes_cta": "clientes_cta", "ventas_cta": "ventas_cta", "iva_cta": "iva_cta", "secuencia": "secuencia" },
-        "params": ["cliente", "lineas", "tasa", "fecha", "factura_id"],
+        "params": ["cliente", "lineas", "tasa", "pais", "documento", "fecha", "factura_id"],
         "next_view": "facturas_list"
       }
     },
