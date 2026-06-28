@@ -474,6 +474,49 @@
     }
 
     #[test]
+    fn compara_coteja_dos_bloques_estilo_pluma() {
+        // El cotejo de pluma empareja líneas parecidas (no diff exacto): ancla
+        // las idénticas, marca la editada como par (similar/divergente) y detecta
+        // agregada/eliminada.
+        let mut s = State::new(Source::Local);
+        for (b, lines) in [
+            (1u64, &["edita esto loco", "alfa beta", "gamma delta", "solo izquierda"][..]),
+            (2u64, &["edita esto", "alfa beta", "nuevo intermedio", "gamma delta"][..]),
+        ] {
+            for t in lines {
+                let mut l = OutputLine::stdout(*t);
+                l.block = b;
+                s.output.push(l);
+            }
+        }
+        s.input.set_text(":compara %c1 %c2");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let texts: Vec<String> = s.output.iter().map(|l| l.text.clone()).collect();
+        // Abrió bloque de cotejo + resumen con conteos.
+        assert!(texts.iter().any(|t| t.contains("≡ :compara %c1 ↔ %c2")), "{texts:?}");
+        assert!(texts.iter().any(|t| t.contains("idénticas") && t.contains("similares")), "{texts:?}");
+        // Las 4 clases: idéntica anclada (≡), similar (≈) por edición, agregada
+        // (+) y eliminada (-) — el ancla idéntica desplazada (`gamma delta`)
+        // hace que el cotejo prefiera abrir huecos a emparejar diagonalmente.
+        assert!(texts.iter().any(|t| t.starts_with("≡") && t.contains("alfa beta")), "{texts:?}");
+        assert!(texts.iter().any(|t| t.starts_with("≈") && t.contains("edita esto")), "{texts:?}");
+        assert!(texts.iter().any(|t| t.starts_with("+") && t.contains("nuevo intermedio")), "{texts:?}");
+        assert!(texts.iter().any(|t| t.starts_with("-") && t.contains("solo izquierda")), "{texts:?}");
+    }
+
+    #[test]
+    fn cotejo_rows_clasifica_identica_y_agregada() {
+        use crate::update::{cotejo_rows};
+        let izq = vec!["uno dos tres".to_string()];
+        let der = vec!["uno dos tres".to_string(), "cuatro cinco".to_string()];
+        let (conteos, rows) = cotejo_rows(&izq, &der);
+        assert_eq!(conteos.identicas, 1);
+        assert_eq!(conteos.agregadas, 1);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].clase, pluma_cotejo::ClaseCambio::Identica);
+    }
+
+    #[test]
     fn etapa_del_tee_es_redirigible_y_filtrable() {
         // Un pipe con captura por etapa: las líneas intermedias (stage=Some(k))
         // antes sólo se miraban. Ahora `%cN.K` las direcciona.

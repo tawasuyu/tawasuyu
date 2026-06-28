@@ -1766,6 +1766,146 @@ pub(crate) fn apply_diff(mut s: State, rest: &str) -> State {
     s
 }
 
+/// Una fila del cotejo con los textos ya resueltos — lo que `:compara` pinta.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CotejoRow {
+    pub clase: pluma_cotejo::ClaseCambio,
+    pub similitud: f32,
+    pub izq: Option<String>,
+    pub der: Option<String>,
+}
+
+/// Corre el **cotejo de pluma** sobre dos listas de líneas (un átomo por línea)
+/// y devuelve `(conteos, filas)` con los textos resueltos. Puro: construye dos
+/// `Cuerpo` efímeros, los alinea con `pluma_cotejo::cotejar` (Needleman–Wunsch
+/// sobre similitud léxica) y aplana las secciones. Testeable sin UI ni disco.
+pub(crate) fn cotejo_rows(izq: &[String], der: &[String]) -> (pluma_cotejo::Conteos, Vec<CotejoRow>) {
+    use pluma_core::NarrativeAtom;
+    use pluma_cuerpo::{Cuerpo, Intencion};
+    let mk = |textos: &[String], branch: &str| -> (Cuerpo, Vec<NarrativeAtom>) {
+        let mut c = Cuerpo::nuevo(branch, branch, Intencion::Original, 0);
+        let atoms: Vec<NarrativeAtom> =
+            textos.iter().map(|t| NarrativeAtom::new(t.clone(), branch)).collect();
+        for a in &atoms {
+            c.agregar(a.id, 0);
+        }
+        (c, atoms)
+    };
+    let (ci, ai) = mk(izq, "izq");
+    let (cd, ad) = mk(der, "der");
+    let mut idx: pluma_cotejo::IndiceAtoms = pluma_cotejo::IndiceAtoms::new();
+    for a in ai.iter().chain(ad.iter()) {
+        idx.insert(a.id, a);
+    }
+    let cot = pluma_cotejo::cotejar(&ci, &cd, &idx, &pluma_cotejo::ParamsCotejo::default(), 0);
+    let texto = |id: &uuid::Uuid| idx.get(id).map(|a| a.content.as_str().to_string());
+    let rows = cot
+        .secciones
+        .iter()
+        .map(|sec| CotejoRow {
+            clase: sec.clase,
+            similitud: sec.similitud,
+            izq: sec.izq.as_ref().and_then(|id| texto(id)),
+            der: sec.der.as_ref().and_then(|id| texto(id)),
+        })
+        .collect();
+    (cot.conteos(), rows)
+}
+
+/// Pad/trunca un texto a `w` columnas (asume monospace; cuenta chars). Trunca
+/// con `…`. Para la columna izquierda del side-by-side de `:compara`.
+fn pad_cell(text: &str, w: usize) -> String {
+    let one = text.replace('\t', " ");
+    let n = one.chars().count();
+    if n > w {
+        let mut t: String = one.chars().take(w.saturating_sub(1)).collect();
+        t.push('…');
+        t
+    } else {
+        format!("{one}{}", " ".repeat(w - n))
+    }
+}
+
+/// `:compara %cN %cM` (`:cotejar`/`:vs`) — compara la salida de dos bloques con
+/// el **cotejo de pluma**: alineación párrafo-a-párrafo por similitud léxica
+/// (Needleman–Wunsch), no un diff de líneas exacto. Empareja líneas parecidas
+/// aunque difieran en wording/orden y clasifica cada sección — idéntica (≡),
+/// similar (≈), divergente (✗), agregada (＋), eliminada (－). La respuesta abre
+/// su propio bloque con un side-by-side `izquierda │ derecha`. Acepta refs con
+/// etapa del tee (`%cN.K`).
+pub(crate) fn apply_compare(mut s: State, rest: &str) -> State {
+    let refs: Vec<&str> = rest.split_whitespace().collect();
+    if refs.len() < 2 {
+        s.push_output(OutputLine::notice(
+            "uso: :compara %cN %cM — coteja la salida de dos bloques (estilo pluma)",
+        ));
+        return s;
+    }
+    let (Some((ba, sa)), Some((bb, sb))) =
+        (parse_block_and_stage(&s, refs[0]), parse_block_and_stage(&s, refs[1]))
+    else {
+        s.push_output(OutputLine::notice(
+            "✘ :compara — refs inválidas (esperado `%cN %cM`)",
+        ));
+        return s;
+    };
+    let (la, lb) = (target_label(ba, sa), target_label(bb, sb));
+    let lineas = |t: String| -> Vec<String> {
+        t.lines().filter(|l| !l.trim().is_empty()).map(|l| l.to_string()).collect()
+    };
+    let li = lineas(gather_target_text(&s, ba, sa));
+    let ld = lineas(gather_target_text(&s, bb, sb));
+    if li.is_empty() && ld.is_empty() {
+        s.push_output(OutputLine::notice(
+            "✘ :compara — ninguno de los bloques tiene salida",
+        ));
+        return s;
+    }
+    let (conteos, rows) = cotejo_rows(&li, &ld);
+
+    // Bloque propio para el cotejo (referenciable, re-filtrable).
+    s.push_output(OutputLine::prompt(format!("≡ :compara {la} ↔ {lb}")));
+    s.push_output(OutputLine::notice(format!(
+        "{} idénticas · {} similares · {} divergentes · {} agregadas · {} eliminadas",
+        conteos.identicas,
+        conteos.similares,
+        conteos.divergentes,
+        conteos.agregadas,
+        conteos.eliminadas
+    )));
+    // Ancho de la columna izquierda: el de la línea izq más larga, capado.
+    const COL_CAP: usize = 56;
+    let wl = rows
+        .iter()
+        .filter_map(|r| r.izq.as_ref().map(|t| t.chars().count()))
+        .max()
+        .unwrap_or(0)
+        .min(COL_CAP);
+    // Glifos single-width (BMP) para no romper la alineación monospace de las
+    // columnas; el prefijo «glifo + %» ocupa 8 columnas fijas.
+    use pluma_cotejo::ClaseCambio as K;
+    for r in &rows {
+        let izq = r.izq.as_deref().unwrap_or("");
+        let der = r.der.as_deref().unwrap_or("");
+        let pct = (r.similitud * 100.0).round() as i32;
+        let line = match r.clase {
+            // Idéntica: una sola columna (el texto es igual a ambos lados).
+            K::Identica => format!("{:<8}{izq}", "≡"),
+            K::Similar => format!("≈ {pct:>3}%  {} │ {der}", pad_cell(izq, wl)),
+            K::Divergente => format!("✗ {pct:>3}%  {} │ {der}", pad_cell(izq, wl)),
+            K::Agregada => format!("{:<8}{} │ {der}", "+", pad_cell("", wl)),
+            K::Eliminada => format!("{:<8}{} │", "-", pad_cell(izq, wl)),
+        };
+        // Eliminadas en rojo (señal de "se fue"); el resto stdout (glifo+% guían).
+        if r.clase == K::Eliminada {
+            s.push_output(OutputLine::stderr(line));
+        } else {
+            s.push_output(OutputLine::stdout(line));
+        }
+    }
+    s
+}
+
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
     let mut out = String::new();
     for l in &s.output {

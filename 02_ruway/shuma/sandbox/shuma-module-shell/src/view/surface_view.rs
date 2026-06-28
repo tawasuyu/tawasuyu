@@ -865,10 +865,17 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
             let lines = body_lines_for_block(state, *id);
             let kinds = body_kinds_for_block(state, *id);
             let runs = body_color_runs(state, *id, theme);
-            // Bloque de respuesta de IA: es prosa/transformación, no salida de un
-            // comando — NO se desplaniza en secciones/tablas (eso comería el
-            // tinte de acento y partiría el texto). Se pinta plano, en acento.
+            // Bloques que NO se desplanizan en secciones/tablas: la respuesta de
+            // IA (prosa/transformación; el desplanizado comería el tinte de
+            // acento) y el cotejo de `:compara` (ya viene en columnas alineadas;
+            // el detector de tablas lo rompería). Se pintan planos.
             let is_ai_block = kinds.iter().any(|k| *k == OutputKind::Ai);
+            let is_compare_block = state
+                .block_command
+                .get(id)
+                .map(|c| c.starts_with("≡ :compara"))
+                .unwrap_or(false);
+            let skip_sections = is_ai_block || is_compare_block;
             let has_stages = g.iter().any(|l| l.stage.is_some());
             let has_stdout = g
                 .iter()
@@ -934,7 +941,7 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                     .get(id)
                     .cloned()
                     .unwrap_or_else(|| header_text.clone());
-                if let Some(sections) = (!is_ai_block)
+                if let Some(sections) = (!skip_sections)
                     .then(|| crate::sections::detect_sections(&cmd_for_sections, &lines))
                     .flatten()
                 {
