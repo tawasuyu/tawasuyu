@@ -20,7 +20,7 @@
 // Núcleo agnóstico re-exportado como módulos del crate: mantiene viva la
 // ruta `crate::<mod>::…` que usan `state`/`view` y los consumidores externos.
 pub use llimphi_widget_text_editor_core::{
-    bracket, buffer, clipboard, cursor, diagnostics, find, highlight, ops, undo,
+    bracket, buffer, clipboard, cursor, diagnostics, find, highlight, ops, tsedit, undo,
 };
 
 // Capa Llimphi propia de este widget.

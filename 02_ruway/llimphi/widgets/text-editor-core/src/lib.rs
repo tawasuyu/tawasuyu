@@ -28,9 +28,11 @@ pub mod diagnostics;
 pub mod find;
 pub mod highlight;
 pub mod ops;
+pub mod tsedit;
 pub mod undo;
 
 pub use buffer::Buffer;
+pub use tsedit::{InputEdit, Point};
 pub use clipboard::{Clipboard, MemClipboard, NullClipboard};
 pub use cursor::{Cursor, Pos, Selection};
 pub use diagnostics::{Diagnostic, DiagnosticRange, Severity};

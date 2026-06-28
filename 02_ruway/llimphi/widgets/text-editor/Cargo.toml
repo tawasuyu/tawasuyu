@@ -8,11 +8,22 @@ publish.workspace = true
 description = "llimphi-widget-text-editor — capa visual Llimphi del editor de código (gutter, caret, selección, scroll, integración de teclado al update Elm). El núcleo agnóstico (buffer/cursor/ops/undo/highlight/…) vive en llimphi-widget-text-editor-core y se re-exporta. LSP queda para una capa superior."
 
 [dependencies]
-llimphi-widget-text-editor-core = { workspace = true }
+# default-features = false para que el flag `treesitter` de este widget
+# gobierne si el núcleo arrastra el C de tree-sitter. state.rs construye
+# los InputEdit/Point vía el shim re-exportado del núcleo
+# (`crate::tsedit`), así que el widget ya no depende de tree-sitter directo.
+# Path directo (no `workspace = true`): heredar de [workspace.dependencies]
+# sólo permite *añadir* features, nunca apagar default-features — el flag
+# se ignoraría y el C de tree-sitter entraría igual. Con path directo sí
+# manda el `default-features = false`.
+llimphi-widget-text-editor-core = { path = "../text-editor-core", default-features = false }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-# state.rs construye tree_sitter::InputEdit/Point para alimentar el
-# parsing incremental del núcleo (el resto de tree-sitter vive en core).
-tree-sitter = { workspace = true }
+
+[features]
+default = ["treesitter"]
+# Propaga el highlight tree-sitter al núcleo. Off → editor sin resaltado
+# de Rust/Python (texto plano), compilable sin toolchain C de la plataforma.
+treesitter = ["llimphi-widget-text-editor-core/treesitter"]
 
 [dev-dependencies]

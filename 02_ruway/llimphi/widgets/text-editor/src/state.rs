@@ -103,7 +103,7 @@ pub struct EditorState {
     /// al `Tree` cached del highlighter. El highlight, antes de
     /// reparsear, los drena y los aplica al tree → parseo incremental
     /// real (tree-sitter sólo reconstruye los subtrees afectados).
-    pub pending_input_edits: RefCell<Vec<tree_sitter::InputEdit>>,
+    pub pending_input_edits: RefCell<Vec<crate::tsedit::InputEdit>>,
     /// Cache memoizado del syntax highlight. Interior mutability vía
     /// `RefCell` para que el view (que recibe `&EditorState`) lo
     /// actualice on-demand. Se invalida cuando cambian `edit_seq` o el
@@ -310,7 +310,7 @@ impl EditorState {
         }
         // Aplica los InputEdits pending al tree cached antes de parsear
         // — eso convierte el parseo de "full" a "incremental real".
-        let edits: Vec<tree_sitter::InputEdit> =
+        let edits: Vec<crate::tsedit::InputEdit> =
             self.pending_input_edits.borrow_mut().drain(..).collect();
         crate::highlight::apply_pending_edits(language, &edits);
 
@@ -897,7 +897,7 @@ impl EditorState {
     /// cursores. Procesa en orden de offset descendente para que las
     /// ediciones tempranas no desplacen las posiciones de las
     /// posteriores. Devuelve `true` si al menos uno produjo un delta.
-    /// Cada delta también genera un `tree_sitter::InputEdit` que va a
+    /// Cada delta también genera un `crate::tsedit::InputEdit` que va a
     /// `pending_input_edits` para alimentar el incremental parsing.
     fn apply_edit_all<F>(&mut self, f: F) -> bool
     where
@@ -939,7 +939,7 @@ impl EditorState {
             let start_byte = self.buffer.char_to_byte(start_char);
             let start_line = self.buffer.char_to_line(start_char);
             let start_col_byte = start_byte - self.buffer.line_to_byte(start_line);
-            let pre_pt = tree_sitter::Point { row: start_line, column: start_col_byte };
+            let pre_pt = crate::tsedit::Point { row: start_line, column: start_col_byte };
 
             if let Some(d) = f(&mut self.buffer, cursor, &opts) {
                 let edit = compute_input_edit(start_byte, pre_pt, &d);
@@ -1106,9 +1106,9 @@ fn snap_cursor_off_guard(
 /// ANTES del cambio (el caller las captura).
 fn compute_input_edit(
     start_byte: usize,
-    start_point: tree_sitter::Point,
+    start_point: crate::tsedit::Point,
     delta: &crate::ops::EditDelta,
-) -> tree_sitter::InputEdit {
+) -> crate::tsedit::InputEdit {
     let removed_bytes = delta.removed.len();
     let inserted_bytes = delta.inserted.len();
 
@@ -1118,7 +1118,7 @@ fn compute_input_edit(
     let old_end_point = advance_point(start_point, &delta.removed);
     let new_end_point = advance_point(start_point, &delta.inserted);
 
-    tree_sitter::InputEdit {
+    crate::tsedit::InputEdit {
         start_byte,
         old_end_byte,
         new_end_byte,
@@ -1130,16 +1130,16 @@ fn compute_input_edit(
 
 /// Avanza un Point por el contenido de `text`: cuenta `\n` para filas,
 /// bytes de la última línea para columna.
-fn advance_point(start: tree_sitter::Point, text: &str) -> tree_sitter::Point {
+fn advance_point(start: crate::tsedit::Point, text: &str) -> crate::tsedit::Point {
     let newlines = text.bytes().filter(|b| *b == b'\n').count();
     if newlines == 0 {
-        tree_sitter::Point {
+        crate::tsedit::Point {
             row: start.row,
             column: start.column + text.len(),
         }
     } else {
         let after_last_nl = text.rsplit('\n').next().unwrap_or("").len();
-        tree_sitter::Point {
+        crate::tsedit::Point {
             row: start.row + newlines,
             column: after_last_nl,
         }
@@ -1599,6 +1599,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "treesitter")]
     fn highlight_cache_invalida_con_cambio_de_lenguaje() {
         use crate::highlight::Language;
         let mut s = EditorState::new();

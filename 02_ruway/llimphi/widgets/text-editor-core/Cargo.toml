@@ -9,10 +9,23 @@ description = "llimphi-widget-text-editor-core — núcleo agnóstico del editor
 
 [dependencies]
 ropey = { workspace = true }
-tree-sitter = { workspace = true }
-tree-sitter-rust = { workspace = true }
-tree-sitter-python = { workspace = true }
+# tree-sitter + gramáticas: el runtime y los parsers son C (`lib.c`,
+# `parser.c`) compilados por cc-rs. Por eso viven tras la feature
+# `treesitter` (default-on): sin ella el highlight de Rust/Python degrada
+# a texto plano (WAT sigue, es tokenizer Rust puro) y el crate compila en
+# targets sin toolchain C de la plataforma (cross-compile Mac/Windows
+# desde Linux). En un host nativo (incl. el propio Mac/Windows) la feature
+# está activa por default y se compila todo.
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-rust = { workspace = true, optional = true }
+tree-sitter-python = { workspace = true, optional = true }
 # peniko sólo aporta el tipo de color (peniko::Color) para SyntaxPalette;
 # es un crate de tipos sin GPU — no arrastra wgpu/vello. Versión alineada
 # con la que expone vello 0.7 (ver workspace root).
 peniko = "0.6"
+
+[features]
+default = ["treesitter"]
+# Activa el syntax highlighting con tree-sitter (Rust/Python). Sin ella,
+# esos lenguajes caen a `Plain` y no se arrastra ningún C.
+treesitter = ["dep:tree-sitter", "dep:tree-sitter-rust", "dep:tree-sitter-python"]

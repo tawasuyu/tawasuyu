@@ -101,6 +101,7 @@ impl SyntaxPalette {
 // lenguaje es un ahorro grande. `tree_sitter::Parser` no es Send/
 // Sync ni Clone, así que vive en thread-local — un parser por
 // lenguaje por thread.
+#[cfg(feature = "treesitter")]
 thread_local! {
     static PARSER_POOL: std::cell::RefCell<std::collections::HashMap<Language, tree_sitter::Parser>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -118,19 +119,23 @@ thread_local! {
 /// hacer `set_text` o cambios masivos donde el hint puede confundir
 /// más que ayudar. No es estrictamente necesario, pero es defensivo.
 pub fn invalidate_tree_cache(language: Language) {
+    #[cfg(feature = "treesitter")]
     TREE_CACHE.with(|c| {
         c.borrow_mut().remove(&language);
     });
+    #[cfg(not(feature = "treesitter"))]
+    let _ = language;
 }
 
 /// Aplica una lista de `InputEdit` al tree cached del `language`.
 /// Llamarlo ANTES de `parse(source, Some(&old_tree))` activa el modo
 /// incremental real de tree-sitter — solo reconstruye los subtrees
 /// afectados por las edits.
-pub fn apply_pending_edits(language: Language, edits: &[tree_sitter::InputEdit]) {
+pub fn apply_pending_edits(language: Language, edits: &[crate::tsedit::InputEdit]) {
     if edits.is_empty() {
         return;
     }
+    #[cfg(feature = "treesitter")]
     TREE_CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if let Some(tree) = c.get_mut(&language) {
@@ -139,6 +144,9 @@ pub fn apply_pending_edits(language: Language, edits: &[tree_sitter::InputEdit])
             }
         }
     });
+    // Sin tree-sitter no hay árbol que editar: los edits son inertes.
+    #[cfg(not(feature = "treesitter"))]
+    let _ = language;
 }
 
 /// Highlighter — fina capa sin estado mutable propio. La parser real
@@ -166,11 +174,17 @@ impl Highlighter {
         match self.language {
             Language::Plain => plain_lines(source),
             Language::Wat => highlight_wat(source),
+            // Rust/Python: con tree-sitter, parsing real; sin él, texto plano.
+            #[cfg(feature = "treesitter")]
             Language::Rust => self.highlight_treesitter(source, rust_kind),
+            #[cfg(feature = "treesitter")]
             Language::Python => self.highlight_treesitter(source, python_kind),
+            #[cfg(not(feature = "treesitter"))]
+            Language::Rust | Language::Python => plain_lines(source),
         }
     }
 
+    #[cfg(feature = "treesitter")]
     fn highlight_treesitter(
         &mut self,
         source: &str,
@@ -254,6 +268,7 @@ impl Highlighter {
     }
 }
 
+#[cfg(feature = "treesitter")]
 fn make_ts_parser(language: Language) -> Option<tree_sitter::Parser> {
     let mut parser = tree_sitter::Parser::new();
     let lang: tree_sitter::Language = match language {
@@ -266,6 +281,7 @@ fn make_ts_parser(language: Language) -> Option<tree_sitter::Parser> {
 }
 
 /// Mapeo de tree-sitter node `kind` → TokenKind para Rust.
+#[cfg(feature = "treesitter")]
 fn rust_kind(kind: &str) -> Option<TokenKind> {
     // Lista deliberadamente acotada al subset común; nodos no listados
     // caen como Identifier/Other vía fill_gaps.
@@ -292,6 +308,7 @@ fn rust_kind(kind: &str) -> Option<TokenKind> {
 }
 
 /// Mapeo para Python.
+#[cfg(feature = "treesitter")]
 fn python_kind(kind: &str) -> Option<TokenKind> {
     match kind {
         "def" | "class" | "if" | "elif" | "else" | "for" | "while" | "return"
@@ -550,6 +567,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "treesitter")]
     fn rust_keyword_fn() {
         let mut h = Highlighter::new(Language::Rust);
         let r = h.highlight("fn main() {}");
@@ -558,6 +576,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "treesitter")]
     fn python_keyword_def() {
         let mut h = Highlighter::new(Language::Python);
         let r = h.highlight("def f():\n    return 1");
