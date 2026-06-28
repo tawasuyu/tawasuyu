@@ -345,6 +345,40 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[test]
+    fn soak_muchos_ciclos_de_reconexion() {
+        // Espeja el modo `watch` del dev-loop: el Cerebro muere y vuelve muchas
+        // veces. El listener debe sobrevivir todos los ciclos sin fugarse ni
+        // agotarse, y cada Cerebro nuevo debe poder hablar.
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mirada-link-soak-{}.sock", std::process::id()));
+        let server: BodyLinkServer = LinkServer::bind(&path).unwrap();
+
+        for ciclo in 0..12u64 {
+            let mut brain: BrainLink = Link::connect(&path).unwrap();
+            let mut body = aceptar(&server);
+            // El Cerebro habla; el Cuerpo lo recibe en orden.
+            brain.send(&BrainCommand::Close(ciclo)).unwrap();
+            assert_eq!(esperar(&mut body), Some(BrainCommand::Close(ciclo)));
+            // El Cuerpo responde; el Cerebro lo recibe.
+            body.send(&BodyEvent::WindowClosed { id: ciclo }).unwrap();
+            assert_eq!(brain.recv(), Some(BodyEvent::WindowClosed { id: ciclo }));
+            // El Cerebro muere; el Cuerpo lo nota.
+            drop(brain);
+            let mut murio = false;
+            for _ in 0..200 {
+                if !body.is_alive() {
+                    murio = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            assert!(murio, "ciclo {ciclo}: el Cuerpo no detectó la muerte del Cerebro");
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     fn aceptar(server: &BodyLinkServer) -> BodyLink {
         for _ in 0..200 {
             if let Some(link) = server.try_accept().unwrap() {
