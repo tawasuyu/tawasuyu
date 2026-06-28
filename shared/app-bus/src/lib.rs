@@ -263,6 +263,45 @@ impl LaunchFile {
 
 #[cfg(feature = "std")]
 impl AppFile {
+    /// Inverso de [`AppFile::resolve`]: arma la tabla `[launch]` desde un
+    /// [`Launch`] para serializar a disco.
+    fn from_entry(e: &AppEntry) -> Self {
+        let launch = match &e.launch {
+            Launch::Exec { program, args } => LaunchFile {
+                exec: Some(program.clone()),
+                args: args.clone(),
+                action: None,
+                wasm: None,
+                grant: None,
+            },
+            Launch::Action(a) => LaunchFile {
+                exec: None,
+                args: Vec::new(),
+                action: Some(a.clone()),
+                wasm: None,
+                grant: None,
+            },
+            Launch::Wasm {
+                bytecode_hex,
+                grant_hex,
+            } => LaunchFile {
+                exec: None,
+                args: Vec::new(),
+                action: None,
+                wasm: Some(bytecode_hex.clone()),
+                grant: grant_hex.clone(),
+            },
+        };
+        AppFile {
+            id: e.id.clone(),
+            label: e.label.clone(),
+            icon: e.icon.clone(),
+            category: e.category.clone(),
+            handles: e.handles.clone(),
+            launch,
+        }
+    }
+
     fn into_entry(self) -> Option<AppEntry> {
         Some(AppEntry {
             id: self.id,
@@ -273,6 +312,15 @@ impl AppFile {
             launch: self.launch.resolve()?,
         })
     }
+}
+
+/// Serializa una entrada a su forma TOML en disco (`<id>.toml`). Es el inverso
+/// de [`parse_entry`]: el productor (un instalador que publica una app) y el
+/// consumidor (el registro) comparten el mismo esquema, sin que el productor lo
+/// re-escriba a mano y se desincronice.
+#[cfg(feature = "std")]
+pub fn entry_to_toml(entry: &AppEntry) -> Result<String, toml::ser::Error> {
+    toml::to_string(&AppFile::from_entry(entry))
 }
 
 /// Parsea una entrada de app desde texto TOML. Devuelve `None` si no
@@ -1016,6 +1064,42 @@ mod tests {
                 grant_hex: Some("c0ffee".into()),
             }
         );
+    }
+
+    #[test]
+    fn entry_to_toml_roundtrip() {
+        // El instalador serializa; el registro re-parsea. Deben coincidir para
+        // los tres modos, incluido Wasm con concesión.
+        for launch in [
+            Launch::Exec {
+                program: "cosmos-app-llimphi".into(),
+                args: vec!["--release".into()],
+            },
+            Launch::Action("focus:shell".into()),
+            Launch::Wasm {
+                bytecode_hex: "deadbeef".into(),
+                grant_hex: Some("c0ffee".into()),
+            },
+            Launch::Wasm {
+                bytecode_hex: "feedface".into(),
+                grant_hex: None,
+            },
+        ] {
+            let entry = AppEntry {
+                id: "x".into(),
+                label: "X".into(),
+                icon: Some("◆".into()),
+                category: Some("ruway".into()),
+                launch: launch.clone(),
+                handles: vec!["text/plain".into()],
+            };
+            let toml = entry_to_toml(&entry).expect("serializa");
+            let back = parse_entry(&toml).expect("re-parsea");
+            assert_eq!(back.launch, launch);
+            assert_eq!(back.id, "x");
+            assert_eq!(back.icon.as_deref(), Some("◆"));
+            assert_eq!(back.handles, vec!["text/plain".to_string()]);
+        }
     }
 
     #[test]

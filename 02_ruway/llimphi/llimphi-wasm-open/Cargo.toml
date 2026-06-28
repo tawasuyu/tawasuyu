@@ -16,4 +16,7 @@ path = "src/main.rs"
 llimphi-wasm-dist = { workspace = true }
 # El runtime de ventana (bucle Elm + winit + wgpu) que hospeda al guest.
 llimphi-ui = { workspace = true }
+# Registro de apps: el modo --install escribe un manifiesto <id>.toml que el
+# dock/spotlight descubren (entry_to_toml + apps_dir, esquema compartido).
+app-bus = { workspace = true }
 format = { path = "../../../shared/format" }

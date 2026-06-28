@@ -29,10 +29,11 @@
 use std::process::ExitCode;
 use std::sync::OnceLock;
 
-use format::Permisos;
+use format::{ConcesionCapacidad, Permisos};
 use llimphi_ui::{App, Handle, KeyEvent, View};
 use llimphi_wasm_dist::{
-    hash_from_hex, AppManifest, DiskStore, RunnerMsg, TrustRing, VerifiedAppExt, WasmGuest,
+    hash_from_hex, hash_to_hex, AppManifest, DiskStore, RunnerMsg, TrustRing, VerifiedAppExt,
+    WasmGuest,
 };
 
 /// Lo resuelto en `main` y consumido por `Host::init` en el hilo de la UI.
@@ -98,7 +99,26 @@ impl App for Host {
 }
 
 fn main() -> ExitCode {
-    match resolver_spec(std::env::args().skip(1)) {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+
+    // Modo productor: publicar una app en el escritorio (mete el blob en el CAS
+    // y escribe el manifiesto). No abre ventana.
+    if argv.iter().any(|a| a == "--install") {
+        return match instalar(argv.into_iter()) {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("llimphi-wasm-open --install: {e}");
+                uso();
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    // Modo consumidor: abrir una app como ventana.
+    match resolver_spec(argv.into_iter()) {
         Ok(spec) => {
             let _ = SPEC.set(spec);
             llimphi_ui::run::<Host>();
@@ -106,14 +126,21 @@ fn main() -> ExitCode {
         }
         Err(e) => {
             eprintln!("llimphi-wasm-open: {e}");
-            eprintln!();
-            eprintln!("uso:");
-            eprintln!("  llimphi-wasm-open <app.wasm>");
-            eprintln!("  llimphi-wasm-open --hash <hex> --store <dir> \\");
-            eprintln!("      [--grant <hex>] [--ring <archivo>] [--name <título>]");
+            uso();
             ExitCode::FAILURE
         }
     }
+}
+
+fn uso() {
+    eprintln!();
+    eprintln!("uso:");
+    eprintln!("  llimphi-wasm-open <app.wasm>");
+    eprintln!("  llimphi-wasm-open --hash <hex> [--store <dir>] \\");
+    eprintln!("      [--grant <hex>] [--ring <archivo>] [--name <título>]");
+    eprintln!("  llimphi-wasm-open --install <app.wasm> --id <id> \\");
+    eprintln!("      [--name <label>] [--grant <archivo>] [--icon <glifo>] \\");
+    eprintln!("      [--category <cat>] [--store <dir>] [--apps-dir <dir>]");
 }
 
 /// Traduce los argumentos a un [`LaunchSpec`] resuelto y verificado. El modo se
@@ -209,6 +236,102 @@ fn next_val(
     flag: &str,
 ) -> Result<String, String> {
     args.next().ok_or_else(|| format!("{flag} requiere un valor"))
+}
+
+/// Publica una app WASM en el escritorio: mete el bytecode (y, si se da, la
+/// concesión) en el CAS local y escribe un manifiesto `<id>.toml` en el
+/// directorio de apps, para que el dock/spotlight la descubran y la lancen por
+/// la ruta de hash. Es el lado productor del lazo de distribución —
+/// el inverso de [`resolver_spec`] modo hash. Devuelve un resumen legible.
+fn instalar(args: impl Iterator<Item = String>) -> Result<String, String> {
+    let mut args = args.peekable();
+    let mut wasm_path: Option<String> = None;
+    let mut id: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut grant_file: Option<String> = None;
+    let mut icon: Option<String> = None;
+    let mut category: Option<String> = None;
+    let mut store_dir: Option<String> = None;
+    let mut apps_dir: Option<String> = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--install" => wasm_path = Some(next_val(&mut args, "--install")?),
+            "--id" => id = Some(next_val(&mut args, "--id")?),
+            "--name" => name = Some(next_val(&mut args, "--name")?),
+            "--grant" => grant_file = Some(next_val(&mut args, "--grant")?),
+            "--icon" => icon = Some(next_val(&mut args, "--icon")?),
+            "--category" => category = Some(next_val(&mut args, "--category")?),
+            "--store" => store_dir = Some(next_val(&mut args, "--store")?),
+            "--apps-dir" => apps_dir = Some(next_val(&mut args, "--apps-dir")?),
+            otro if otro.starts_with("--") => {
+                return Err(format!("opción desconocida: {otro}"))
+            }
+            otro => wasm_path = Some(otro.to_string()),
+        }
+    }
+
+    let wasm_path = wasm_path.ok_or("--install requiere la ruta del .wasm")?;
+    let id = id.ok_or("--install requiere --id <id> (nombre del manifiesto)")?;
+    let wasm = std::fs::read(&wasm_path).map_err(|e| format!("leer {wasm_path}: {e}"))?;
+
+    let store_dir = store_dir.unwrap_or_else(cas_por_defecto);
+    let store = DiskStore::open(&store_dir).map_err(|e| format!("abrir CAS {store_dir}: {e}"))?;
+
+    // El bytecode entra al CAS direccionado por su hash (idéntico al que el
+    // modo hash pedirá para correrlo).
+    let bytecode = store.put(&wasm).map_err(|e| format!("guardar bytecode: {e}"))?;
+    let bytecode_hex = hash_to_hex(&bytecode);
+
+    // Si hay concesión, su blob entra también; el manifiesto la referencia por
+    // hash (descubrimiento de concesiones, no inline).
+    let grant_hex = match &grant_file {
+        Some(path) => {
+            let blob = std::fs::read(path).map_err(|e| format!("leer concesión {path}: {e}"))?;
+            let grant = ConcesionCapacidad::deserializar(&blob)
+                .map_err(|_| format!("la concesión {path} no deserializa"))?;
+            if grant.bytecode != bytecode {
+                return Err("la concesión es para otro bytecode".into());
+            }
+            let h = store
+                .put_grant(&grant)
+                .map_err(|e| format!("guardar concesión: {e}"))?;
+            Some(hash_to_hex(&h))
+        }
+        None => None,
+    };
+
+    let entry = app_bus::AppEntry {
+        id: id.clone(),
+        label: name.unwrap_or_else(|| id.clone()),
+        icon,
+        category,
+        launch: app_bus::Launch::Wasm {
+            bytecode_hex: bytecode_hex.clone(),
+            grant_hex: grant_hex.clone(),
+        },
+        handles: Vec::new(),
+    };
+    let toml = app_bus::entry_to_toml(&entry).map_err(|e| format!("serializar manifiesto: {e}"))?;
+
+    let apps_dir = match apps_dir {
+        Some(d) => std::path::PathBuf::from(d),
+        None => app_bus::apps_dir()
+            .ok_or("no se pudo ubicar el directorio de apps (~/.config/tawasuyu/apps)")?,
+    };
+    std::fs::create_dir_all(&apps_dir)
+        .map_err(|e| format!("crear {}: {e}", apps_dir.display()))?;
+    let manifest_path = apps_dir.join(format!("{id}.toml"));
+    std::fs::write(&manifest_path, &toml)
+        .map_err(|e| format!("escribir {}: {e}", manifest_path.display()))?;
+
+    let grant_línea = grant_hex
+        .map(|h| format!("\n  concesión: {h}"))
+        .unwrap_or_default();
+    Ok(format!(
+        "instalada «{id}» en {}\n  bytecode: {bytecode_hex}{grant_línea}\n  CAS: {store_dir}",
+        manifest_path.display()
+    ))
 }
 
 /// El CAS de blobs por defecto del escritorio: `$XDG_CACHE_HOME/llimphi/blobs`
@@ -309,14 +432,71 @@ mod tests {
     }
 
     #[test]
-    fn hash_sin_store_es_error() {
-        let err = resolver_spec(args(&["--hash", &"ab".repeat(32)])).unwrap_err();
-        assert!(err.contains("--store"), "mensaje real: {err}");
+    fn cas_por_defecto_honra_xdg_cache_home() {
+        // Camino que el chasis asume al spawnearnos con sólo el hash.
+        let prev = std::env::var("XDG_CACHE_HOME").ok();
+        std::env::set_var("XDG_CACHE_HOME", "/tmp/xdgtest");
+        assert_eq!(cas_por_defecto(), "/tmp/xdgtest/llimphi/blobs");
+        match prev {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
     }
 
     #[test]
     fn opcion_desconocida_es_error() {
         let err = resolver_spec(args(&["--vuela"])).unwrap_err();
         assert!(err.contains("desconocida"), "mensaje real: {err}");
+    }
+
+    #[test]
+    fn install_publica_y_se_puede_lanzar() {
+        let dir = cas_temporal("install");
+        let cas = dir.join("blobs");
+        let apps = dir.join("apps");
+        let wasm_path = dir.join("counter.wasm");
+        std::fs::write(&wasm_path, COUNTER_WASM).unwrap();
+
+        // Lado productor: publica la app (blob al CAS + manifiesto).
+        let resumen = instalar(args(&[
+            "--install",
+            wasm_path.to_str().unwrap(),
+            "--id",
+            "counter",
+            "--name",
+            "Counter",
+            "--store",
+            cas.to_str().unwrap(),
+            "--apps-dir",
+            apps.to_str().unwrap(),
+        ]))
+        .expect("instalar");
+        assert!(resumen.contains("instalada «counter»"), "resumen: {resumen}");
+
+        // El manifiesto existe y el registro lo descubre como un Launch::Wasm.
+        let toml = std::fs::read_to_string(apps.join("counter.toml")).unwrap();
+        let parsed = app_bus::parse_entry(&toml).expect("re-parsea el manifiesto");
+        assert_eq!(parsed.id, "counter");
+        assert_eq!(parsed.label, "Counter");
+        let bytecode_hex = match &parsed.launch {
+            app_bus::Launch::Wasm { bytecode_hex, grant_hex } => {
+                assert!(grant_hex.is_none(), "sin concesión");
+                bytecode_hex.clone()
+            }
+            otro => panic!("se esperaba Launch::Wasm, vino {otro:?}"),
+        };
+
+        // Lado consumidor: el mismo hash resuelve desde el CAS y carga.
+        let spec = resolver_spec(args(&[
+            "--hash",
+            &bytecode_hex,
+            "--store",
+            cas.to_str().unwrap(),
+        ]))
+        .expect("lanzar lo instalado");
+        assert_eq!(spec.wasm, COUNTER_WASM);
+        WasmGuest::load(&spec.wasm, spec.permisos).expect("instanciar counter instalado");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
