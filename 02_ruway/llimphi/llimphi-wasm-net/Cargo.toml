@@ -17,3 +17,6 @@ futures = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Firmar/declarar la concesión que viaja por la red en el test end-to-end.
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+format = { path = "../../../shared/format" }

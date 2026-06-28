@@ -6,8 +6,8 @@ use agora_core::Keypair;
 use app_bus::Launch;
 use format::{ConcesionCapacidad, Hash, Permisos, PERMISO_GRAFO_ESCRITURA, PERMISO_RED};
 use llimphi_wasm_dist::{
-    bytecode_hash, hash_to_hex, resolve, resolve_launch, verify_grant, verify_integrity, AppRef,
-    BlobSource, DiskStore, DistError, TrustRing,
+    bytecode_hash, grant_hash, hash_to_hex, resolve, resolve_launch, resolve_manifest, verify_grant,
+    verify_integrity, AppManifest, AppRef, BlobSource, DiskStore, DistError, MapSource, TrustRing,
 };
 
 /// El mismo wasm que corre el runner Tier 3 — lo distribuimos por hash.
@@ -163,4 +163,86 @@ fn resolve_launch_y_corre_la_app() {
     guest.dispatch(&[0]).unwrap(); // Msg::Increment
     let n1 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n1, "1", "la app distribuida por hash incrementa de verdad");
+}
+
+#[test]
+fn manifiesto_con_concesion_da_permisos_reales() {
+    // El descubrimiento de concesiones: el manifiesto referencia bytecode Y
+    // concesión por hash; ambos viven en el store; resolve_manifest los trae,
+    // verifica la cadena y rinde permisos reales.
+    let store = DiskStore::open(tmpdir("manifest-grant")).unwrap();
+    let bc = store.put(COUNTER_WASM).unwrap();
+    let kp = Keypair::from_seed(SEED);
+    let grant = firmar(&kp, bc, PERMISO_RED);
+    let gh = store.put_grant(&grant).unwrap();
+    assert_eq!(gh, grant_hash(&grant), "put_grant direcciona por grant_hash");
+
+    let manifest = AppManifest {
+        bytecode: bc,
+        declarados: PERMISO_RED,
+        concesion: Some(gh),
+    };
+    let trust = TrustRing::new(vec![kp.public_key()]);
+
+    let verified = resolve_manifest(&store, &trust, &manifest).unwrap();
+    assert_eq!(verified.permisos, PERMISO_RED, "permisos reales, no 0");
+    assert_eq!(verified.wasm, COUNTER_WASM);
+    // Y carga en el runner con ese permiso (que gatea host_net_request).
+    assert!(verified.load().is_ok());
+}
+
+#[test]
+fn manifiesto_concesion_faltante() {
+    // El manifiesto declara una concesión que el source NO tiene.
+    let mut src = MapSource::new();
+    let bc = src.put(COUNTER_WASM);
+    let manifest = AppManifest {
+        bytecode: bc,
+        declarados: PERMISO_RED,
+        concesion: Some([0xab; 32]), // hash que nadie sirve
+    };
+    assert_eq!(
+        resolve_manifest(&src, &TrustRing::empty(), &manifest).unwrap_err(),
+        DistError::ConcesionNoEncontrada
+    );
+}
+
+#[test]
+fn manifiesto_concesion_para_otro_bytecode() {
+    // Concesión válida y servida, pero firmada para OTRO bytecode.
+    let mut src = MapSource::new();
+    let bc = src.put(COUNTER_WASM);
+    let kp = Keypair::from_seed(SEED);
+    let grant = firmar(&kp, bytecode_hash(b"otra app"), PERMISO_RED);
+    let gh = src.put_grant(&grant);
+    let manifest = AppManifest {
+        bytecode: bc,
+        declarados: PERMISO_RED,
+        concesion: Some(gh),
+    };
+    let trust = TrustRing::new(vec![kp.public_key()]);
+    assert_eq!(
+        resolve_manifest(&src, &trust, &manifest).unwrap_err(),
+        DistError::ConcesionParaOtroBytecode
+    );
+}
+
+#[test]
+fn manifiesto_pura_corre_sin_permisos() {
+    let mut src = MapSource::new();
+    let bc = src.put(COUNTER_WASM);
+    let verified =
+        resolve_manifest(&src, &TrustRing::empty(), &AppManifest::pure(bc)).unwrap();
+    assert_eq!(verified.permisos, 0);
+    assert!(verified.load().is_ok());
+}
+
+#[test]
+fn manifiesto_round_trip() {
+    let m = AppManifest {
+        bytecode: [3; 32],
+        declarados: PERMISO_RED,
+        concesion: Some([7; 32]),
+    };
+    assert_eq!(AppManifest::deserializar(&m.serializar()).unwrap(), m);
 }

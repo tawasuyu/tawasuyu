@@ -15,3 +15,6 @@ format = { path = "../../../shared/format" }
 agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
 app-bus = { workspace = true }
 hex = { workspace = true }
+# AppManifest serializable (postcard): el manifiesto es un objeto distribuible más.
+serde = { workspace = true }
+postcard = { workspace = true }

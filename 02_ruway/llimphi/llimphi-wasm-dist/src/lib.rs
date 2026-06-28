@@ -23,8 +23,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use std::collections::HashMap;
+
 use agora_core::verify_signature;
 use format::{ConcesionCapacidad, Objeto, Permisos};
+use serde::{Deserialize, Serialize};
 
 pub use format::{Hash, Permisos as PermisosBitfield};
 pub use llimphi_wasm_runner::WasmGuest;
@@ -48,6 +51,10 @@ pub enum DistError {
     HashLongitud,
     /// El `Launch` no es una variante `Wasm`.
     LaunchNoWasm,
+    /// El manifiesto referencia una concesión que el source no tiene.
+    ConcesionNoEncontrada,
+    /// El blob de la concesión no deserializa a una ConcesionCapacidad.
+    ConcesionCorrupta,
     /// No se pudo cargar el guest en el runner.
     Carga(String),
 }
@@ -63,6 +70,8 @@ impl std::fmt::Display for DistError {
             DistError::HexInvalido => write!(f, "hash hex inválido"),
             DistError::HashLongitud => write!(f, "el hash no mide 32 bytes"),
             DistError::LaunchNoWasm => write!(f, "el Launch no es Wasm"),
+            DistError::ConcesionNoEncontrada => write!(f, "concesión no encontrada en el source"),
+            DistError::ConcesionCorrupta => write!(f, "el blob de la concesión es inválido"),
             DistError::Carga(e) => write!(f, "cargar guest: {e}"),
         }
     }
@@ -74,15 +83,27 @@ impl std::error::Error for DistError {}
 // Hash canónico del bytecode
 // =====================================================================
 
-/// Hash BLAKE3 del **objeto** que envuelve al wasm — la identidad direccionada
-/// por contenido que usan la concesión y el kernel. NO es `blake3(wasm)` crudo.
-pub fn bytecode_hash(wasm: &[u8]) -> Hash {
+/// Hash BLAKE3 del **objeto** que envuelve `inner` (`Objeto{datos:inner,hijos:[]}`)
+/// — la identidad direccionada por contenido que usan el kernel y agora-cli. NO
+/// es `blake3(inner)` crudo. El bytecode y la concesión se direccionan así.
+pub fn object_hash(inner: &[u8]) -> Hash {
     let obj = Objeto {
-        datos: wasm.to_vec(),
+        datos: inner.to_vec(),
         hijos: Vec::new(),
     };
-    let payload = obj.serializar().expect("serializar objeto-bytecode");
+    let payload = obj.serializar().expect("serializar objeto");
     format::hash(&payload)
+}
+
+/// Hash canónico de un bytecode wasm (= [`object_hash`] del wasm).
+pub fn bytecode_hash(wasm: &[u8]) -> Hash {
+    object_hash(wasm)
+}
+
+/// Hash del objeto-concesión: su dirección en el CAS, idéntica a la que emite
+/// `agora-cli wawa concesion` y a la que `EntradaApp.concesion` referencia.
+pub fn grant_hash(grant: &ConcesionCapacidad) -> Hash {
+    object_hash(&grant.serializar().expect("serializar concesión"))
 }
 
 /// Hash → hex de 64 caracteres.
@@ -128,6 +149,17 @@ impl DiskStore {
         Ok(h)
     }
 
+    /// Inscribe una concesión como blob y devuelve su [`grant_hash`]. Así el
+    /// grant viaja por el mismo CAS/P2P que el bytecode — un blob más.
+    pub fn put_grant(&self, grant: &ConcesionCapacidad) -> std::io::Result<Hash> {
+        let bytes = grant
+            .serializar()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let h = object_hash(&bytes);
+        fs::write(self.path(&h), &bytes)?;
+        Ok(h)
+    }
+
     /// Recupera los bytes crudos por hash (sin verificar — eso lo hace `resolve`).
     pub fn get(&self, hash: &Hash) -> Option<Vec<u8>> {
         fs::read(self.path(hash)).ok()
@@ -159,6 +191,45 @@ impl LayeredSource {
 impl BlobSource for LayeredSource {
     fn fetch(&self, hash: &Hash) -> Option<Vec<u8>> {
         self.layers.iter().find_map(|l| l.fetch(hash))
+    }
+}
+
+/// CAS en memoria — útil para tests y para juntar blobs ya traídos de la red
+/// (bytecode + concesión) antes de pasarlos por [`resolve_manifest`].
+#[derive(Debug, Default, Clone)]
+pub struct MapSource {
+    blobs: HashMap<Hash, Vec<u8>>,
+}
+
+impl MapSource {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Inserta un blob bajo un hash arbitrario (p.ej. bytes ya traídos por P2P).
+    pub fn insert(&mut self, hash: Hash, bytes: Vec<u8>) {
+        self.blobs.insert(hash, bytes);
+    }
+
+    /// Inserta un wasm bajo su [`bytecode_hash`] y lo devuelve.
+    pub fn put(&mut self, wasm: &[u8]) -> Hash {
+        let h = bytecode_hash(wasm);
+        self.blobs.insert(h, wasm.to_vec());
+        h
+    }
+
+    /// Inserta una concesión bajo su [`grant_hash`] y lo devuelve.
+    pub fn put_grant(&mut self, grant: &ConcesionCapacidad) -> Hash {
+        let bytes = grant.serializar().expect("serializar concesión");
+        let h = object_hash(&bytes);
+        self.blobs.insert(h, bytes);
+        h
+    }
+}
+
+impl BlobSource for MapSource {
+    fn fetch(&self, hash: &Hash) -> Option<Vec<u8>> {
+        self.blobs.get(hash).cloned()
     }
 }
 
@@ -277,6 +348,82 @@ impl VerifiedApp {
     pub fn load(&self) -> Result<WasmGuest, DistError> {
         WasmGuest::load(&self.wasm, self.permisos).map_err(DistError::Carga)
     }
+}
+
+/// Manifiesto distribuible de una app: referencia **por hash** a su bytecode y,
+/// opcional, a la concesión que autoriza sus permisos. Es un objeto
+/// content-addressed más — un peer lo publica, otro lo resuelve trayendo ambos
+/// blobs por la malla. Espejo host de `format::EntradaApp{bytecode, permisos,
+/// concesion}`, sin los campos de runtime del kernel (techo de memoria, fuel).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppManifest {
+    pub bytecode: Hash,
+    /// Permisos que el manifiesto declara. Sin concesión que los respalde, 0.
+    pub declarados: Permisos,
+    /// Hash del objeto-concesión en el CAS. `None` ⇒ app de sólo-UI.
+    pub concesion: Option<Hash>,
+}
+
+impl AppManifest {
+    /// App de sólo-UI: bytecode, sin permisos ni concesión.
+    pub fn pure(bytecode: Hash) -> Self {
+        Self {
+            bytecode,
+            declarados: 0,
+            concesion: None,
+        }
+    }
+
+    pub fn serializar(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("serializar AppManifest")
+    }
+
+    pub fn deserializar(bytes: &[u8]) -> Result<Self, DistError> {
+        postcard::from_bytes(bytes).map_err(|_| DistError::ConcesionCorrupta)
+    }
+}
+
+/// Resuelve un [`AppManifest`] end-to-end: trae el bytecode **y** la concesión
+/// por hash del `source` (CAS local o P2P), verifica integridad de ambos, valida
+/// la concesión contra el anillo y devuelve la app con sus permisos efectivos.
+///
+/// Esto es el "descubrimiento de concesiones": el grant no viaja inline, se
+/// fetchea por su hash igual que el bytecode. Una app con capacidades llega así
+/// por la red y corre con permisos reales.
+pub fn resolve_manifest(
+    source: &impl BlobSource,
+    trust: &TrustRing,
+    manifest: &AppManifest,
+) -> Result<VerifiedApp, DistError> {
+    let wasm = source.fetch(&manifest.bytecode).ok_or(DistError::NoEncontrado)?;
+    if !verify_integrity(&wasm, &manifest.bytecode) {
+        return Err(DistError::IntegridadFallo);
+    }
+    let permisos = match &manifest.concesion {
+        Some(grant_hash) => {
+            let blob = source
+                .fetch(grant_hash)
+                .ok_or(DistError::ConcesionNoEncontrada)?;
+            // Integridad del objeto-concesión: su contenido debe direccionarse al
+            // hash pedido (la red no es de fiar).
+            if &object_hash(&blob) != grant_hash {
+                return Err(DistError::IntegridadFallo);
+            }
+            let grant =
+                ConcesionCapacidad::deserializar(&blob).map_err(|_| DistError::ConcesionCorrupta)?;
+            if grant.bytecode != manifest.bytecode {
+                return Err(DistError::ConcesionParaOtroBytecode);
+            }
+            let concedidos = verify_grant(&grant, trust)?;
+            format::permisos_efectivos(manifest.declarados, concedidos)
+        }
+        None => 0,
+    };
+    Ok(VerifiedApp {
+        wasm,
+        permisos,
+        bytecode: manifest.bytecode,
+    })
 }
 
 /// Resuelve y verifica una `AppRef` contra un source y un anillo de confianza.

@@ -7,9 +7,12 @@
 
 use std::sync::Arc;
 
+use agora_core::Keypair;
 use card_net::BrahmanNet;
+use format::{ConcesionCapacidad, PERMISO_RED};
 use llimphi_wasm_dist::{
-    bytecode_hash, resolve, verify_integrity, AppRef, BlobSource, DiskStore, Hash, TrustRing,
+    bytecode_hash, resolve, resolve_manifest, verify_integrity, AppManifest, AppRef, BlobSource,
+    DiskStore, Hash, MapSource, TrustRing,
 };
 use llimphi_wasm_net::{fetch_blob, serve_blobs};
 
@@ -67,4 +70,63 @@ async fn dos_peers_distribuyen_y_corren_la_app() {
     guest.dispatch(&[0]).unwrap(); // Msg::Increment
     let n1 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n1, "1", "la app traída por la red P2P incrementa");
+}
+
+/// Descubrimiento de concesiones end-to-end sobre la red: B sirve el bytecode
+/// **y** su concesión firmada; A los trae AMBOS por hash, resuelve el manifiesto
+/// y la app corre con permisos reales (no 0).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dos_peers_distribuyen_app_con_concesion() {
+    let node_a = BrahmanNet::new().expect("nodo A");
+    let node_b = BrahmanNet::new().expect("nodo B");
+    let peer_b = node_b.peer_id;
+
+    // B inscribe el wasm y una concesión firmada (PERMISO_RED) para ese bytecode.
+    let dir_b = std::env::temp_dir().join("llimphi-wasm-net-grant-srv");
+    let _ = std::fs::remove_dir_all(&dir_b);
+    let store_b = Arc::new(DiskStore::open(&dir_b).expect("store B"));
+    let bc = store_b.put(COUNTER_WASM).expect("put wasm");
+    let kp = Keypair::from_seed([7; 32]);
+    let mensaje = format::mensaje_capacidad(&bc, PERMISO_RED);
+    let grant = ConcesionCapacidad {
+        bytecode: bc,
+        permisos: PERMISO_RED,
+        autor: kp.public_key(),
+        firma: kp.sign(&mensaje),
+    };
+    let gh = store_b.put_grant(&grant).expect("put grant");
+    let _srv = serve_blobs(&node_b, Arc::clone(&store_b));
+
+    let addr_b = node_b
+        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .await;
+    node_a.dial(addr_b);
+
+    // A trae los DOS blobs por hash sobre la red real.
+    let wasm = fetch_blob(&node_a, peer_b, &bc).await.expect("fetch wasm");
+    let grant_blob = fetch_blob(&node_a, peer_b, &gh).await.expect("fetch grant");
+
+    // Los junta y resuelve el manifiesto: descubrimiento de concesión completo.
+    let mut src = MapSource::new();
+    src.insert(bc, wasm);
+    src.insert(gh, grant_blob);
+    let manifest = AppManifest {
+        bytecode: bc,
+        declarados: PERMISO_RED,
+        concesion: Some(gh),
+    };
+    let trust = TrustRing::new(vec![kp.public_key()]);
+    let verified = resolve_manifest(&src, &trust, &manifest).expect("resolve_manifest");
+    assert_eq!(
+        verified.permisos, PERMISO_RED,
+        "la app traída por la red corre con permisos REALES, no 0"
+    );
+
+    // Y carga con ese permiso (que gatea host_net_request) y corre.
+    let mut guest = verified.load().expect("carga con permisos");
+    guest.dispatch(&[0]).unwrap();
+    assert_eq!(
+        guest.view().children[0].text.as_ref().unwrap().content,
+        "1"
+    );
 }
