@@ -13,6 +13,9 @@
     { "label": "+ Cuenta", "view": "cuentas_form" },
     { "label": "Asientos", "view": "asientos_list" },
     { "label": "Asentar", "view": "asentar_form" },
+    { "label": "Balanza", "view": "balanza" },
+    { "label": "Estado de resultados", "view": "resultados" },
+    { "label": "Balance general", "view": "balance" },
     { "label": "Libro de morfismos", "view": "libro" }
   ],
   "views": {
@@ -218,6 +221,66 @@
         "params": ["monto", "glosa", "fecha", "diario", "asiento_id"],
         "next_view": "asientos_list"
       }
+    },
+    "balanza": {
+      "kind": "report",
+      "title": "Balanza de comprobación",
+      "subtitle": "Saldo de cada tipo de cuenta con su signo natural. El cuadre (Σ de TODOS los saldos deudor-normal) es CERO — la prueba de que el libro está balanceado, garantizada por el kernel en cada asiento.",
+      "cards": [
+        {
+          "label": "Cuadre (Σ saldos deudor-normal)",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum", "field": "saldo" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        { "label": "Activo", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "activo" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Pasivo", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "pasivo" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Patrimonio", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "patrimonio" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Ingresos", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "ingreso" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Gastos", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "gasto" }, "format": { "kind": "currency", "symbol": "$" } },
+        {
+          "label": "Saldo por tipo de cuenta",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum_by", "group": "tipo", "value": "saldo" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns"
+        }
+      ]
+    },
+    "resultados": {
+      "kind": "report",
+      "title": "Estado de resultados",
+      "subtitle": "Ingresos y gastos del ejercicio (con su signo natural). El resultado es Ingresos − Gastos. (Un número de resultado consolidado necesita una métrica de diferencia, aún no en el motor.)",
+      "cards": [
+        { "label": "Ingresos", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "ingreso" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Gastos operativos", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "gasto" }, "format": { "kind": "currency", "symbol": "$" } },
+        {
+          "label": "Ingresos vs Gastos por cuenta",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum_by", "group": "tipo", "value": "saldo" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns"
+        }
+      ]
+    },
+    "balance": {
+      "kind": "report",
+      "title": "Balance general",
+      "subtitle": "Activo, Pasivo y Patrimonio con su signo natural. La identidad contable: Activo = Pasivo + Patrimonio + Resultado del ejercicio.",
+      "cards": [
+        { "label": "Activo", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "activo" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Pasivo", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "pasivo" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Patrimonio", "entity": "Cuenta", "metric": { "kind": "sum", "field": "saldo" }, "filter": { "field": "tipo", "equals": "patrimonio" }, "negate": true, "format": { "kind": "currency", "symbol": "$" } },
+        {
+          "label": "Composición del activo",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum_by", "group": "nombre", "value": "saldo" },
+          "filter": { "field": "tipo", "equals": "activo" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "pie",
+          "limit": 8
+        }
+      ]
     },
     "libro": {
       "kind": "graph",

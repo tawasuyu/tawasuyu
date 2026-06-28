@@ -223,6 +223,7 @@
             limit: None,
             bucket,
             cumulative: false,
+            negate: false,
         };
 
         // GroupBy de tier: claves crudas → labels.
@@ -262,6 +263,7 @@
             limit: None,
             bucket: Some(nahual_meta_schema::DateBucket::Month),
             cumulative: false,
+            negate: false,
         };
         let mut r3 = MetricResult::MultiBreakdown {
             groups: vec!["2026-01".into()],
@@ -499,6 +501,21 @@
                 "el form de asiento debe disparar el morfismo `asentar`"
             ),
             other => panic!("asentar_form debería ser un Form, fue {other:?}"),
+        }
+        // Reportes financieros: balanza/resultados/balance son vistas Report,
+        // y el flag `negate` round-trippea (el balance muestra el pasivo con
+        // signo natural).
+        for v in ["balanza", "resultados", "balance"] {
+            assert!(
+                matches!(cont.views.get(v), Some(ModuleView::Report(_))),
+                "la vista '{v}' debería ser un Report"
+            );
+        }
+        if let Some(ModuleView::Report(rv)) = cont.views.get("balance") {
+            assert!(
+                rv.cards.iter().any(|c| c.negate),
+                "el balance debe tener alguna card con negate (pasivo/patrimonio)"
+            );
         }
         let tesoro = modules.iter().find(|m| m.id == "tesoro").expect("tesoro");
         assert!(

@@ -317,6 +317,13 @@ pub struct DashboardCard {
     /// período (default).
     #[serde(default)]
     pub cumulative: bool,
+    /// Invierte el signo del resultado ESCALAR (`Sum`/`Avg`/`Min`/`Max`)
+    /// al presentarlo. Útil en contabilidad deudor-normal: un pasivo,
+    /// patrimonio o ingreso tienen saldo negativo, y `negate` los muestra
+    /// con su signo natural (positivo) en un balance o estado de
+    /// resultados. Ignorado por desgloses. `false` = sin invertir.
+    #[serde(default)]
+    pub negate: bool,
 }
 
 /// Granularidad de truncado de una fecha ISO-8601 para series temporales.

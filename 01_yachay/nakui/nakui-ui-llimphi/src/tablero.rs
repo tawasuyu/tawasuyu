@@ -202,6 +202,13 @@ pub(crate) fn compute_card_full(
     // Labels legibles de las claves de campo (Select → su label,
     // booleano → Sí/No). No pisa lo resuelto por `group_ref`/`bucket`.
     humanize_breakdown_labels(&mut result, module, card);
+    // `negate`: invierte el signo del escalar (contabilidad deudor-normal —
+    // un pasivo/ingreso se muestra con su signo natural en el reporte).
+    if card.negate {
+        if let MetricResult::Scalar(s) = &mut result {
+            *s = -*s;
+        }
+    }
     (result, raw_keys)
 }
 
