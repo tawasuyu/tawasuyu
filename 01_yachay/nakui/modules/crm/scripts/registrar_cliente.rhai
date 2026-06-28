@@ -12,7 +12,10 @@
 import "fiscal" as f;
 
 let pais = input.params.pais;
-let doc = input.params.documento;
+// Normaliza a la forma canónica del país (RIF J-12345678-9, RUT
+// 12.345.678-5…) y valida el DV sobre lo normalizado. Se guarda la forma
+// canónica; la forma la sigue gateando el contrato Nickel.
+let doc = f::normalizar(pais, input.params.documento);
 
 if !f::dv_ok(pais, doc) {
     throw "documento inválido para " + pais + ": el dígito verificador no coincide (" + doc + ")";

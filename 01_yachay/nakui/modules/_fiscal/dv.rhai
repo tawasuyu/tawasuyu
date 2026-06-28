@@ -138,3 +138,92 @@ fn dv_ok(pais, doc) {
     if pais == "VE" { return dv_ok_ve(doc); }
     true
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// NORMALIZACIÓN — "que el documento salga con cierto formato". Devuelve la
+// forma canónica de presentación del documento (la que se guarda). Si no
+// reconoce el documento, lo devuelve TAL CUAL: así un valor mal formado no
+// se "arregla" silenciosamente y lo rebota el contrato Nickel.
+//
+// INVARIANTE: la salida canónica DEBE seguir matcheando el regex del país
+// en _fiscal/documentos.ncl (el kernel valida la entidad creada). Cada
+// formato de abajo se eligió para cumplirlo.
+
+// Substring de un array de dígitos como cadena: ds[desde..hasta].
+fn ds_str(ds, desde, hasta) {
+    let out = "";
+    let i = desde;
+    while i < hasta {
+        out += ds[i].to_string();
+        i += 1;
+    }
+    out
+}
+
+// Agrupa los primeros `n` dígitos de `ds` de a 3 desde la derecha con puntos
+// (separador de miles): [1,2,3,4,5,6,7,8],8 → "12.345.678".
+fn agrupa_miles(ds, n) {
+    let out = "";
+    let i = 0;
+    while i < n {
+        let desde_derecha = n - i;
+        if i > 0 && (desde_derecha % 3) == 0 { out += "."; }
+        out += ds[i].to_string();
+        i += 1;
+    }
+    out
+}
+
+// Venezuela: RIF "J-12345678-9" (8 cuerpo + DV) o cédula "V-12345678".
+fn norm_ve(doc) {
+    let letra = letra_tipo_ve(doc);
+    let ds = digitos(doc);
+    let n = ds.len();
+    if letra == "" || n < 6 { return doc; }
+    if n == 9 { return letra + "-" + ds_str(ds, 0, 8) + "-" + ds[8].to_string(); }
+    if n > 9 { return doc; }
+    letra + "-" + ds_str(ds, 0, n)
+}
+
+// Argentina: CUIT/CUIL "20-12345678-9".
+fn norm_ar(doc) {
+    let ds = digitos(doc);
+    if ds.len() != 11 { return doc; }
+    ds_str(ds, 0, 2) + "-" + ds_str(ds, 2, 10) + "-" + ds[10].to_string()
+}
+
+// Ecuador: sólo dígitos, sin separadores (cédula 10 / RUC 13).
+fn norm_ec(doc) {
+    let ds = digitos(doc);
+    let n = ds.len();
+    if n == 10 || n == 13 { return ds_str(ds, 0, n); }
+    doc
+}
+
+// Chile: RUT "12.345.678-5" (cuerpo con puntos, guion, DV; K en mayúscula).
+fn norm_cl(doc) {
+    let cuerpo = [];
+    let dv = "";
+    for c in doc.chars() {
+        if c >= '0' && c <= '9' { cuerpo.push(c.to_int() - 48); }
+        else if c == 'K' || c == 'k' { dv = "K"; }
+    }
+    let n = cuerpo.len();
+    if dv == "" {
+        if n < 2 { return doc; }
+        dv = cuerpo[n - 1].to_string();
+        n = n - 1; // el último dígito recolectado era el DV
+    }
+    if n < 7 || n > 8 { return doc; }
+    agrupa_miles(cuerpo, n) + "-" + dv
+}
+
+// Dispatch. Países sin forma canónica cargada → devuelven el documento igual.
+fn normalizar(pais, doc) {
+    if type_of(doc) != "string" { return doc; }
+    if pais == "VE" { return norm_ve(doc); }
+    if pais == "AR" { return norm_ar(doc); }
+    if pais == "EC" { return norm_ec(doc); }
+    if pais == "CL" { return norm_cl(doc); }
+    doc
+}

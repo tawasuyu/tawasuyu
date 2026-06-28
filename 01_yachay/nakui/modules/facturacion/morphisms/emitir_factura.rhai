@@ -32,10 +32,14 @@ let impuesto = neto * input.params.tasa / 100;
 let total = neto + impuesto;
 
 let fpais = input.params.pais;
-let fdoc = input.params.documento;
-let tiene_fiscal = (type_of(fdoc) == "string" && fdoc != "");
-if tiene_fiscal && !f::dv_ok(fpais, fdoc) {
-    throw "documento del cliente inválido (" + fpais + "): el dígito verificador no coincide (" + fdoc + ")";
+let fdoc_raw = input.params.documento;
+let tiene_fiscal = (type_of(fdoc_raw) == "string" && fdoc_raw != "");
+let fdoc = "";
+if tiene_fiscal {
+    fdoc = f::normalizar(fpais, fdoc_raw); // forma canónica del país
+    if !f::dv_ok(fpais, fdoc) {
+        throw "documento del cliente inválido (" + fpais + "): el dígito verificador no coincide (" + fdoc_raw + ")";
+    }
 }
 
 let factura = #{
