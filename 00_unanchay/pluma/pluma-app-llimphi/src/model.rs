@@ -532,6 +532,14 @@ pub enum Msg {
     /// Confirma el diálogo: carga ambos archivos (o cae a los documentos
     /// abiertos si las rutas están vacías) y abre el overlay de cotejo.
     ConfirmarCotejoArchivos,
+    /// Pide al modelo (pluma-llm) que redacte el resumen de cada diferencia del
+    /// cotejo abierto. Trabajo async; al volver despacha `CotejoResumenListo`.
+    CotejoResumirIA,
+    /// Resultado del resumidor IA: una línea por sección, en orden. Reemplaza
+    /// el contenido de los átomos del lienzo de diferencias.
+    CotejoResumenListo(Vec<String>),
+    /// El resumidor IA falló — se conserva el resumen textual y se avisa.
+    CotejoResumenError(String),
 }
 
 /// Estado del overlay de **cotejo**: dos documentos comparados como lienzos
@@ -554,6 +562,12 @@ pub(crate) struct EstadoCotejo {
     pub(crate) scroll_y: f32,
     /// Filas del cuerpo más alto — para acotar el scroll a su contenido.
     pub(crate) filas_max: usize,
+    /// Las secciones del cotejo (clase + textos por átomo) — necesarias para
+    /// armar los ítems del resumidor IA sin recalcular el cotejo.
+    pub(crate) secciones: Vec<pluma_cotejo::SeccionCotejo>,
+    /// `true` mientras el resumidor IA está en curso (bloquea doble disparo y
+    /// muestra el estado en la cabecera).
+    pub(crate) resumiendo: bool,
 }
 
 /// Qué campo del diálogo de cotejo tiene el foco de teclado.

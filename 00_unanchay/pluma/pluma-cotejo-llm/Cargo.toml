@@ -1,0 +1,18 @@
+[package]
+name = "pluma-cotejo-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — resumidor IA de diferencias de un cotejo: por cada sección cambiada, le pide a un ChatClient (pluma-llm) una frase breve de QUÉ cambió. Espejo de pluma-transform-llm para el cotejo."
+
+[dependencies]
+pluma-core = { path = "../pluma-core" }
+pluma-cotejo = { path = "../pluma-cotejo" }
+pluma-llm-core = { path = "../pluma-llm-core" }
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+pluma-llm-mock = { path = "../pluma-llm-mock" }

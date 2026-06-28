@@ -765,6 +765,33 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::ConfirmarCotejoArchivos => {
             confirmar_cotejo_archivos(&mut model);
         }
+        Msg::CotejoResumirIA => {
+            lanzar_resumen_ia(&mut model, handle);
+        }
+        Msg::CotejoResumenListo(lineas) => {
+            if let Some(cot) = model.cotejo.as_mut() {
+                cot.resumiendo = false;
+                // El lienzo de diferencias es la columna del medio (índice 1).
+                let ids: Vec<Uuid> = cot.cuerpos[1].orden.clone();
+                let mut aplicadas = 0usize;
+                for (atom_id, linea) in ids.iter().zip(lineas.iter()) {
+                    if let Some(a) = cot.atoms.get_mut(atom_id) {
+                        a.set_content(linea.clone());
+                        aplicadas += 1;
+                    }
+                }
+                model.ultimo_status = format!("resumen IA aplicado a {aplicadas} secciones");
+            }
+        }
+        Msg::CotejoResumenError(s) => {
+            if let Some(cot) = model.cotejo.as_mut() {
+                cot.resumiendo = false;
+            }
+            push_toast(&mut model, |id| {
+                Toast::error(id, format!("Resumen IA: {}", crate::util::recortar(&s, 40)), TOAST_TTL)
+            });
+            model.ultimo_error = Some(s);
+        }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
     // tamaño, panel…). Idempotente y barato.
@@ -2492,6 +2519,8 @@ fn construir_estado_cotejo(
         conteo,
         scroll_y: 0.0,
         filas_max,
+        secciones: cot.secciones,
+        resumiendo: false,
     })
 }
 
@@ -2544,6 +2573,51 @@ fn confirmar_cotejo_archivos(model: &mut Model) {
     }
     model.cotejo_dialog = None;
     model.cotejo = estado;
+}
+
+/// Lanza el resumidor IA sobre el cotejo abierto: por cada sección cambiada le
+/// pide al modelo (`pluma-llm`) una frase de qué cambió, y al volver vuelca las
+/// líneas sobre el lienzo de diferencias. Mismo patrón que las transformaciones
+/// LLM: clona `chat` + arma los ítems, spawnea un hilo con runtime tokio, y
+/// despacha `CotejoResumenListo`/`CotejoResumenError`.
+fn lanzar_resumen_ia(model: &mut Model, handle: &Handle<Msg>) {
+    let Some(cot) = model.cotejo.as_ref() else {
+        return;
+    };
+    if cot.resumiendo {
+        return;
+    }
+    // Ítems del resumidor (owned: se mueven al hilo). Sólo tiene sentido si hay
+    // alguna sección cambiada; si no, avisamos y no llamamos al modelo.
+    let items = pluma_cotejo_llm::items_desde_secciones(&cot.secciones, &cot.atoms);
+    let hay_cambios = items
+        .iter()
+        .any(|it| matches!(it.clase, pluma_cotejo::ClaseCambio::Similar | pluma_cotejo::ClaseCambio::Divergente));
+    if !hay_cambios {
+        push_toast(model, |id| {
+            Toast::info(id, "No hay diferencias que resumir", TOAST_TTL)
+        });
+        return;
+    }
+
+    let chat = model.chat.clone();
+    model.cotejo.as_mut().unwrap().resumiendo = true;
+    model.ultimo_error = None;
+    model.ultimo_status = format!(
+        "resumen IA en curso ({} backend)",
+        etiqueta_backend(BACKENDS[model.backend_idx])
+    );
+
+    handle.spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(e) => return Msg::CotejoResumenError(format!("runtime tokio: {e}")),
+        };
+        match rt.block_on(pluma_cotejo_llm::resumir_diferencias(&items, &*chat)) {
+            Ok(lineas) => Msg::CotejoResumenListo(lineas),
+            Err(e) => Msg::CotejoResumenError(e),
+        }
+    });
 }
 
 /// Carga un archivo `.md/.markdown/.txt/.docx` del disco a `(Cuerpo, atoms)`.

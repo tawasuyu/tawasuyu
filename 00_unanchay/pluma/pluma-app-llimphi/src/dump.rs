@@ -390,6 +390,66 @@ fn modelo_sintetico(diente: usize) -> Model {
         }
     }
 
+    // 16 → overlay de cotejo con RESÚMENES IA aplicados. Corre el pipeline real
+    // `resumir_diferencias` contra un Mock sembrado con frases legibles para las
+    // secciones cambiadas (la idéntica/agregada no consultan al modelo).
+    if diente == 16 {
+        let original = [
+            "Pluma es un editor de documentos como haz de cuerpos.",
+            "Cada cuerpo es un lienzo del mismo material bajo otra mirada.",
+            "Los párrafos se alinean uno a uno entre cuerpos.",
+            "El motor gráfico se llamaba GPUI en las primeras versiones.",
+            "La persistencia vive en una base sled embebida.",
+        ];
+        let editado = [
+            "Pluma es un editor de documentos como haz de cuerpos.",
+            "Cada cuerpo es un lienzo del mismo material visto desde otra intención.",
+            "Los párrafos quedan alineados uno a uno entre los cuerpos del haz.",
+            "Hoy todo lo gráfico corre sobre Llimphi con wgpu y vello.",
+            "La persistencia vive en una base sled embebida.",
+            "Un cotejo compara dos versiones sección por sección.",
+        ];
+        let izq = cuerpo_con_atomos(&mut m.atoms, "a", "original.md", Intencion::Original, &original);
+        let der = cuerpo_con_atomos(
+            &mut m.atoms,
+            "b",
+            "editado.md",
+            Intencion::Custom { kind: "versión".into() },
+            &editado,
+        );
+        let (iid, did) = (izq.id, der.id);
+        m.cuerpos.push(izq);
+        m.cuerpos.push(der);
+        m.orden_lienzos = vec![iid, did];
+        m.seleccionados = vec![iid, did];
+        crate::update::cotejar_seleccion(&mut m);
+
+        // Mock con respuestas legibles por sección cambiada (matchea el texto
+        // nuevo de cada párrafo). Las idénticas/agregadas no llaman al modelo.
+        let mock = pluma_llm_mock::MockChatClient::default()
+            .con_respuesta("intención", "cambia «mirada» por «intención»: mismo sentido, otra palabra")
+            .con_respuesta("del haz", "precisa que la alineación es entre los cuerpos del haz")
+            .con_respuesta("Llimphi", "reemplaza el motor: de GPUI a Llimphi con wgpu y vello");
+
+        let (items, ids) = {
+            let cot = m.cotejo.as_ref().unwrap();
+            (
+                pluma_cotejo_llm::items_desde_secciones(&cot.secciones, &cot.atoms),
+                cot.cuerpos[1].orden.clone(),
+            )
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        if let Ok(lineas) = rt.block_on(pluma_cotejo_llm::resumir_diferencias(&items, &mock)) {
+            if let Some(cot) = m.cotejo.as_mut() {
+                for (id, linea) in ids.iter().zip(lineas.iter()) {
+                    if let Some(a) = cot.atoms.get_mut(id) {
+                        a.set_content(linea.clone());
+                    }
+                }
+            }
+        }
+    }
+
     // 12 → proyecto con historia (varios pushes + una rama) en pestaña Historia.
     if diente == 12 {
         use pluma_proyecto::{DocEstado, Proyecto};

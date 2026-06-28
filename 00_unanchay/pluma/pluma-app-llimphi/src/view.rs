@@ -2729,7 +2729,7 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
     // Cabecera: título + conteo a la izquierda, botón cerrar a la derecha.
     // Ancho explícito: taffy mide el texto antes de aplicar `flex_grow`, así
     // que un `auto` se calcularía angosto y el título se envolvería.
-    let ancho_titulo = (vw - 240.0).max(300.0_f32);
+    let ancho_titulo = (vw - 500.0).max(440.0_f32);
     let titulo = View::new(Style {
         flex_grow: 1.0,
         flex_direction: FlexDirection::Column,
@@ -2753,6 +2753,12 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         })
         .text_aligned(cot.conteo.clone(), 11.0, theme.fg_muted, Alignment::Start),
     ]);
+    let resumen_label = if cot.resumiendo {
+        "✨  resumiendo…"
+    } else {
+        "✨  resumen IA"
+    };
+    let resumen_ia = button_view::<Msg>(resumen_label, &palette_btn, Msg::CotejoResumirIA);
     let invertir = button_view::<Msg>("⇄  invertir", &palette_btn, Msg::CotejoInvertir);
     let cerrar = button_view::<Msg>("✕  cerrar (Esc)", &palette_btn, Msg::CerrarCotejo);
     let header = View::new(Style {
@@ -2769,7 +2775,7 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![titulo, invertir, cerrar]);
+    .children(vec![titulo, resumen_ia, invertir, cerrar]);
 
     // Geometría: tres columnas que llenan el ancho disponible.
     let carril = 84.0_f32;
