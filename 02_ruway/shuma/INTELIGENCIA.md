@@ -322,8 +322,14 @@ grupos por frecuencia, cwd y contexto»):
   alimentaba el ghost (A3) y las coreografías (A1).
 
 Todo certificado por tests (223/223 verde): `:filtra`, redirección de IA,
-encadenado, etapas del tee, ranking por cwd. **Pendiente de pantalla** (no
-certificado a ojo): el tinte del acento de las líneas `Ai` y la legibilidad del
-listado de `:predice`. **Follow-up de UX**: acción de redirigir/filtrar desde el
-menú contextual y desde el chip de etapa del tee (hoy sólo por teclado con la
-ref `%cN.K`); rotular los chips con su índice `K` para que la ref sea obvia.
+encadenado, etapas del tee, ranking por cwd.
+
+**UI accionable HECHA y verificada en pantalla** (`examples/pantallazo_tee.rs`):
+chips del tee rotulados con su índice `K`; al desplegar una etapa, fila de
+acciones 🜲 filtrar / copiar / guardar / explicar que direcciona `%cN.K`
+(filtrar/guardar prellenan el input vía `Msg::PrefillInput`; copiar/explicar
+corren ya); chip «🜲 filtrar» en el header de cada bloque (prellena `:filtra
+%cN `). Las líneas `Ai` se pintan en acento y el bloque IA se saltea el
+desplanizador (`is_ai_block`). Las acciones viven en chips, no en menú
+contextual (más descubribles). **Pendiente de pantalla aún:** legibilidad del
+listado de `:predice` (sólo tests).
