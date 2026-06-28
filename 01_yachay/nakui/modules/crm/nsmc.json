@@ -3,6 +3,13 @@
   "schemas": ["schema.ncl"],
   "morphisms": [
     {
+      "name": "registrar_cliente",
+      "inputs": [],
+      "reads": [],
+      "writes": ["Cliente"],
+      "script": "scripts/registrar_cliente.rhai"
+    },
+    {
       "name": "abrir_oportunidad",
       "inputs": [{ "role": "cliente", "entity": "Cliente" }],
       "reads": [],
