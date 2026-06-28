@@ -150,6 +150,7 @@ fn resolve_launch_y_corre_la_app() {
     let h = store.put(COUNTER_WASM).unwrap();
     let launch = Launch::Wasm {
         bytecode_hex: hash_to_hex(&h),
+        grant_hex: None,
     };
 
     let verified = resolve_launch(&store, &TrustRing::empty(), &launch).unwrap();
@@ -163,6 +164,27 @@ fn resolve_launch_y_corre_la_app() {
     guest.dispatch(&[0]).unwrap(); // Msg::Increment
     let n1 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n1, "1", "la app distribuida por hash incrementa de verdad");
+}
+
+#[test]
+fn resolve_launch_con_concesion_da_permisos() {
+    // El Launch lleva bytecode_hex Y grant_hex: la app de la UI corre con
+    // permisos reales (descubrimiento de concesión desde el lanzamiento).
+    let store = DiskStore::open(tmpdir("launch-grant")).unwrap();
+    let bc = store.put(COUNTER_WASM).unwrap();
+    let kp = Keypair::from_seed(SEED);
+    let grant = firmar(&kp, bc, PERMISO_RED);
+    let gh = store.put_grant(&grant).unwrap();
+
+    let launch = Launch::Wasm {
+        bytecode_hex: hash_to_hex(&bc),
+        grant_hex: Some(hash_to_hex(&gh)),
+    };
+    let trust = TrustRing::new(vec![kp.public_key()]);
+    let verified = resolve_launch(&store, &trust, &launch).unwrap();
+    // declarados = MAX ⇒ efectivos = concedidos = RED.
+    assert_eq!(verified.permisos, PERMISO_RED);
+    assert!(verified.load().is_ok());
 }
 
 #[test]

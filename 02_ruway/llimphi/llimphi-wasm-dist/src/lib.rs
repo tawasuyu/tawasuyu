@@ -458,23 +458,50 @@ pub fn resolve(
 // Cableado de app_bus::Launch::Wasm
 // =====================================================================
 
-/// Extrae el hash de un `Launch::Wasm { bytecode_hex }`.
+/// Extrae el hash del bytecode de un `Launch::Wasm`.
 pub fn hash_from_launch(launch: &app_bus::Launch) -> Result<Hash, DistError> {
     match launch {
-        app_bus::Launch::Wasm { bytecode_hex } => hash_from_hex(bytecode_hex),
+        app_bus::Launch::Wasm { bytecode_hex, .. } => hash_from_hex(bytecode_hex),
         _ => Err(DistError::LaunchNoWasm),
     }
 }
 
-/// Resuelve un `Launch::Wasm` a una `VerifiedApp`. El `Launch` sólo lleva el
-/// hash (sin concesión), así que la app resuelve como UI pura (permisos 0); las
-/// concesiones, cuando existan, viajan aparte y se arman vía [`resolve`] con un
-/// [`AppRef`] completo.
+/// Traduce un `Launch::Wasm` a un [`AppManifest`]. Si el launch trae `grant_hex`,
+/// el manifiesto referencia esa concesión y declara `Permisos::MAX` (honrar el
+/// grant completo: efectivos = MAX & concedidos = concedidos). Sin grant, app de
+/// sólo-UI. Es la traducción "UI → distribución": app-bus transporta los hex,
+/// `dist` los vuelve un manifiesto resoluble.
+pub fn manifest_from_launch(launch: &app_bus::Launch) -> Result<AppManifest, DistError> {
+    match launch {
+        app_bus::Launch::Wasm {
+            bytecode_hex,
+            grant_hex,
+        } => {
+            let bytecode = hash_from_hex(bytecode_hex)?;
+            let concesion = match grant_hex {
+                Some(h) => Some(hash_from_hex(h)?),
+                None => None,
+            };
+            let declarados = if concesion.is_some() { Permisos::MAX } else { 0 };
+            Ok(AppManifest {
+                bytecode,
+                declarados,
+                concesion,
+            })
+        }
+        _ => Err(DistError::LaunchNoWasm),
+    }
+}
+
+/// Resuelve un `Launch::Wasm` a una `VerifiedApp`, end-to-end: trae el bytecode
+/// y —si el launch declara `grant_hex`— la concesión por hash del `source`, los
+/// verifica y corre la app con sus permisos efectivos. Cierra el lanzamiento de
+/// apps WASM con capacidades desde la UI.
 pub fn resolve_launch(
     source: &impl BlobSource,
     trust: &TrustRing,
     launch: &app_bus::Launch,
 ) -> Result<VerifiedApp, DistError> {
-    let bytecode = hash_from_launch(launch)?;
-    resolve(source, trust, &AppRef::pure(bytecode))
+    let manifest = manifest_from_launch(launch)?;
+    resolve_manifest(source, trust, &manifest)
 }

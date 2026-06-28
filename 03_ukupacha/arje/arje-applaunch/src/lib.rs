@@ -237,7 +237,10 @@ mod tests {
         assert_eq!(launch_entry(&a), Outcome::Unsupported);
 
         let mut w = exec_entry("hola", "x");
-        w.launch = Launch::Wasm { bytecode_hex: "deadbeef".into() };
+        w.launch = Launch::Wasm {
+            bytecode_hex: "deadbeef".into(),
+            grant_hex: None,
+        };
         assert_eq!(launch_entry(&w), Outcome::Unsupported);
     }
 

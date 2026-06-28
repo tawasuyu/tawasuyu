@@ -52,8 +52,15 @@ pub enum Launch {
     Exec { program: String, args: Vec<String> },
     /// Acción interna a despachar por el host (no spawnea proceso).
     Action(String),
-    /// App WASM de wawa, por hash de bytecode (hex) en el almacén.
-    Wasm { bytecode_hex: String },
+    /// App WASM por hash de bytecode (hex) en el almacén/CAS. `grant_hex`, si
+    /// está, es el hash (hex) del objeto-concesión que autoriza sus permisos —
+    /// el host (llimphi-wasm-dist) lo trae por hash, lo verifica y corre la app
+    /// con sus permisos efectivos. `None` ⇒ app de sólo-UI. app-bus sólo
+    /// transporta los hex; no los interpreta.
+    Wasm {
+        bytecode_hex: String,
+        grant_hex: Option<String>,
+    },
 }
 
 /// Una app registrada — la fila de la tabla que ven los launchers.
@@ -215,6 +222,9 @@ struct LaunchFile {
     action: Option<String>,
     #[serde(default)]
     wasm: Option<String>,
+    /// Hash hex del objeto-concesión que autoriza los permisos del wasm.
+    #[serde(default)]
+    grant: Option<String>,
 }
 
 #[cfg(feature = "std")]
@@ -228,7 +238,10 @@ impl LaunchFile {
         } else if let Some(action) = self.action {
             Some(Launch::Action(action))
         } else {
-            self.wasm.map(|bytecode_hex| Launch::Wasm { bytecode_hex })
+            self.wasm.map(|bytecode_hex| Launch::Wasm {
+                bytecode_hex,
+                grant_hex: self.grant,
+            })
         }
     }
 }
@@ -971,7 +984,23 @@ mod tests {
         let a = parse_entry("id='s'\nlabel='Shell'\n[launch]\naction='focus:shell'").unwrap();
         assert_eq!(a.launch, Launch::Action("focus:shell".into()));
         let w = parse_entry("id='h'\nlabel='Hola'\n[launch]\nwasm='deadbeef'").unwrap();
-        assert_eq!(w.launch, Launch::Wasm { bytecode_hex: "deadbeef".into() });
+        assert_eq!(
+            w.launch,
+            Launch::Wasm {
+                bytecode_hex: "deadbeef".into(),
+                grant_hex: None,
+            }
+        );
+        // Con concesión: el campo `grant` viaja como grant_hex.
+        let g = parse_entry("id='g'\nlabel='Cap'\n[launch]\nwasm='deadbeef'\ngrant='c0ffee'")
+            .unwrap();
+        assert_eq!(
+            g.launch,
+            Launch::Wasm {
+                bytecode_hex: "deadbeef".into(),
+                grant_hex: Some("c0ffee".into()),
+            }
+        );
     }
 
     #[test]
