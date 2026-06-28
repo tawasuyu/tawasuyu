@@ -311,6 +311,9 @@ impl App {
         };
         println!("mirada-compositor · Cerebro reconectado — re-sincronizando estado.");
         self.brain = Brain::Linked(nuevo);
+        // El primer `Place` del Cerebro fresco puede llegar con el modelo aún
+        // incompleto (antes de digerir el censo): que no oculte nada por error.
+        self.body.arm_suppress_next_hide();
         // Re-anunciá el mundo: salidas (del Cuerpo) + ventanas (de nuestro
         // registro, que tiene app_id/title). El Cerebro reconstruye su modelo y
         // vuelve a emitir `Place`; el shell re-asienta sus reservas al re-anclar.

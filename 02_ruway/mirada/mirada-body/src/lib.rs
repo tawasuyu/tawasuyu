@@ -121,6 +121,13 @@ pub struct BodyState {
     /// `BTreeMap` para que el orden de las `BodyOp` sea determinista.
     surfaces: BTreeMap<WindowId, Surface>,
     focused: Option<WindowId>,
+    /// Si está puesto, el **próximo** `Place` no oculta las superficies que no
+    /// liste — sólo (re)coloca las listadas. Se consume en ese Place. Lo activa
+    /// el compositor tras reconectar el Cerebro: el primer `Place` del Cerebro
+    /// fresco puede llegar antes de que digiera el censo (modelo aún incompleto),
+    /// y sin esto ocultaría todas las ventanas un instante (el «parpadeo»). El
+    /// segundo Place, ya con el modelo completo, oculta con normalidad.
+    suppress_next_hide: bool,
 }
 
 impl BodyState {
@@ -177,9 +184,12 @@ impl BodyState {
                     }
                 }
 
-                // Oculta lo que el Cerebro ya no coloca.
+                // Oculta lo que el Cerebro ya no coloca — salvo el primer Place
+                // tras reconectar, donde el modelo del Cerebro puede estar
+                // incompleto y ocultaría todo por error (ver `suppress_next_hide`).
+                let ocultar = !std::mem::take(&mut self.suppress_next_hide);
                 for (id, s) in &mut self.surfaces {
-                    if !listed.contains(id) && s.visible {
+                    if ocultar && !listed.contains(id) && s.visible {
                         s.visible = false;
                         // Oculta por omisión (otro escritorio, scratchpad…): no
                         // es el sueño dirigido del zoom.
@@ -352,6 +362,14 @@ impl BodyState {
     /// ([`BodyEvent::OutputMoved`]). Las ventanas las re-anuncia el compositor
     /// desde su propio registro (es quien tiene `app_id`/`title`); las reservas no
     /// se trackean acá — el shell las re-asienta al re-anclar su layer surface.
+    /// Marca que el **próximo** `Place` no debe ocultar las superficies que no
+    /// liste (ver [`BodyState::suppress_next_hide`] field). Lo llama el compositor
+    /// tras reconectar el Cerebro, para que su primer `Place` —posiblemente con
+    /// el modelo aún incompleto— no haga parpadear las ventanas.
+    pub fn arm_suppress_next_hide(&mut self) {
+        self.suppress_next_hide = true;
+    }
+
     pub fn census_outputs(&self) -> Vec<BodyEvent> {
         let mut out = Vec::with_capacity(self.outputs.len() * 2);
         for (id, rect) in &self.outputs {
@@ -409,6 +427,25 @@ mod tests {
         b.open_surface(1, "app1", "uno");
         b.open_surface(2, "app2", "dos");
         b
+    }
+
+    #[test]
+    fn suppress_next_hide_evita_el_parpadeo_tras_reconectar() {
+        let mut b = body_with_two();
+        // Place inicial: ambas visibles.
+        b.apply(BrainCommand::Place(vec![
+            placement(1, true, true),
+            placement(2, true, false),
+        ]));
+        assert!(b.surface(2).unwrap().visible);
+        // Reconexión: armamos el supresor; el Cerebro fresco manda un Place que
+        // sólo lista la 1 (aún no digirió el censo de la 2).
+        b.arm_suppress_next_hide();
+        b.apply(BrainCommand::Place(vec![placement(1, true, true)]));
+        assert!(b.surface(2).unwrap().visible, "la 2 no debía ocultarse en el 1er Place");
+        // Segundo Place (ya sin supresor) que tampoco lista la 2: ahora SÍ oculta.
+        b.apply(BrainCommand::Place(vec![placement(1, true, true)]));
+        assert!(!b.surface(2).unwrap().visible, "la 2 debía ocultarse en el 2do Place");
     }
 
     #[test]
