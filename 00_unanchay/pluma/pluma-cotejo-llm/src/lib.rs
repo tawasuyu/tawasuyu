@@ -69,39 +69,43 @@ frase: sin comillas, sin prefijos, sin punto final.";
 /// secciones cambiadas consultan al modelo; las demás llevan su línea
 /// determinista (mismo lenguaje de glifos que `pluma_cotejo::ResumidorTextual`).
 ///
-/// Las consultas se hacen en serie (una por sección cambiada). Si una falla,
-/// devuelve `Err` con el mensaje — el caller conserva entonces las líneas
-/// textuales que ya tenía y avisa, sin perder el cotejo.
+/// Las consultas a las secciones cambiadas se disparan **en paralelo** con
+/// `join_all` (las deterministas resuelven al instante). `join_all` conserva el
+/// orden de entrada, así las líneas siguen alineadas 1:1 con las secciones. Si
+/// alguna consulta falla, devuelve el primer `Err` — el caller conserva las
+/// líneas textuales que ya tenía y avisa, sin perder el cotejo.
+///
+/// La concurrencia no está acotada: dispara una request por sección cambiada a
+/// la vez. Para documentos con muchísimos cambios y un backend con rate-limit
+/// estricto convendría un `buffered(N)`; para tamaños normales, `join_all` va.
 pub async fn resumir_diferencias(
     items: &[ItemDiff],
     chat: &dyn ChatClient,
 ) -> Result<Vec<String>, String> {
-    let mut out = Vec::with_capacity(items.len());
-    for it in items {
-        let linea = if necesita_modelo(it.clase) {
-            let izq = it.izq.as_deref().unwrap_or("");
-            let der = it.der.as_deref().unwrap_or("");
-            let user = format!("Original:\n«{izq}»\n\nNueva:\n«{der}»");
-            let req = ChatRequest::una_vuelta(user, 96)
-                .con_sistema(SYSTEM)
-                .con_temperatura(0.2);
-            let resp = chat
-                .complete(&req)
-                .await
-                .map_err(|e| format!("LLM: {e:?}"))?;
-            let txt = limpiar(&resp.content);
-            let glifo = if matches!(it.clase, ClaseCambio::Similar) { "≈" } else { "✗" };
-            if txt.is_empty() {
-                linea_textual(it)
-            } else {
-                format!("{glifo} {txt}")
-            }
-        } else {
-            linea_textual(it)
-        };
-        out.push(linea);
+    let resultados = futures::future::join_all(items.iter().map(|it| resumir_item(it, chat))).await;
+    // Colecta a `Result<Vec<_>, _>`: corta en el primer error, preserva orden.
+    resultados.into_iter().collect()
+}
+
+/// Resume un ítem: consulta al modelo si la sección cambió, o devuelve la línea
+/// determinista. Aislado para poder lanzarlo concurrentemente con `join_all`.
+async fn resumir_item(it: &ItemDiff, chat: &dyn ChatClient) -> Result<String, String> {
+    if !necesita_modelo(it.clase) {
+        return Ok(linea_textual(it));
     }
-    Ok(out)
+    let izq = it.izq.as_deref().unwrap_or("");
+    let der = it.der.as_deref().unwrap_or("");
+    let user = format!("Original:\n«{izq}»\n\nNueva:\n«{der}»");
+    let req = ChatRequest::una_vuelta(user, 96)
+        .con_sistema(SYSTEM)
+        .con_temperatura(0.2);
+    let resp = chat.complete(&req).await.map_err(|e| format!("LLM: {e:?}"))?;
+    let txt = limpiar(&resp.content);
+    if txt.is_empty() {
+        return Ok(linea_textual(it));
+    }
+    let glifo = if matches!(it.clase, ClaseCambio::Similar) { "≈" } else { "✗" };
+    Ok(format!("{glifo} {txt}"))
 }
 
 /// Línea determinista de respaldo — espejo de `pluma_cotejo::ResumidorTextual`
@@ -209,6 +213,28 @@ mod pruebas {
             .con_respuesta("Llimphi", "reemplaza el motor GPUI por Llimphi");
         let lineas = resumir_diferencias(&items, &chat).await.unwrap();
         assert_eq!(lineas[0], "✗ reemplaza el motor GPUI por Llimphi");
+    }
+
+    #[tokio::test]
+    async fn join_all_preserva_el_orden_con_varias_cambiadas() {
+        // Varias secciones cambiadas intercaladas con idénticas: el resultado
+        // debe quedar 1:1 con la entrada pese a correr en paralelo.
+        let items = vec![
+            item(ClaseCambio::Divergente, 0.1, Some("uno viejo"), Some("uno ALFA")),
+            item(ClaseCambio::Identica, 1.0, Some("medio"), Some("medio")),
+            item(ClaseCambio::Similar, 0.6, Some("tres viejo"), Some("tres BETA")),
+            item(ClaseCambio::Divergente, 0.2, Some("cuatro viejo"), Some("cuatro GAMMA")),
+        ];
+        let chat = MockChatClient::default()
+            .con_respuesta("ALFA", "primero")
+            .con_respuesta("BETA", "tercero")
+            .con_respuesta("GAMMA", "cuarto");
+        let lineas = resumir_diferencias(&items, &chat).await.unwrap();
+        assert_eq!(lineas.len(), 4);
+        assert_eq!(lineas[0], "✗ primero");
+        assert_eq!(lineas[1], "≡ sin cambios");
+        assert_eq!(lineas[2], "≈ tercero");
+        assert_eq!(lineas[3], "✗ cuarto");
     }
 
     #[test]

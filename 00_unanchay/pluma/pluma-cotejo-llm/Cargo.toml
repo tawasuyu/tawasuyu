@@ -11,6 +11,7 @@ description = "pluma — resumidor IA de diferencias de un cotejo: por cada secc
 pluma-core = { path = "../pluma-core" }
 pluma-cotejo = { path = "../pluma-cotejo" }
 pluma-llm-core = { path = "../pluma-llm-core" }
+futures = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
