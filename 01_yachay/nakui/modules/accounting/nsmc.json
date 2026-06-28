@@ -1,0 +1,19 @@
+{
+  "module": "accounting",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "asentar",
+      "inputs": [
+        { "role": "debito", "entity": "Cuenta" },
+        { "role": "credito", "entity": "Cuenta" }
+      ],
+      "reads": ["debito.saldo", "debito.moneda", "credito.saldo", "credito.moneda"],
+      "writes": ["debito.saldo", "credito.saldo", "Asiento"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/asentar.rhai"
+    }
+  ]
+}
