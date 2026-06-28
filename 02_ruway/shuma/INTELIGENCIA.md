@@ -312,6 +312,16 @@ grupos por frecuencia, cwd y contexto»):
   `:filtra`/`:write`/`:yank`/`:explica` vía `%c5.1` (etapa 1 del bloque 5,
   0-based como los chips). `parse_block_and_stage` + `gather_target_text`.
 
+- **`:compara` / `:cotejar` / `:vs` `%cN %cM` — cotejo de pluma.** Integra
+  `pluma-cotejo` (alineación párrafo-a-párrafo por similitud léxica,
+  Needleman–Wunsch) para comparar la salida de dos bloques *al estilo pluma*:
+  no un diff de líneas exacto, sino emparejar líneas parecidas aunque difieran y
+  clasificarlas idéntica (≡) / similar (≈) / divergente (✗) / agregada (+) /
+  eliminada (−). Pinta un side-by-side `izq │ der` con % de similitud,
+  eliminadas en rojo, en bloque propio referenciable; el bloque se saltea el
+  desplanizador. Núcleo puro `cotejo_rows` (testeable). Acepta refs con etapa
+  (`%cN.K`). Verificado headless (`examples/pantallazo_compara.rs`).
+
 - **`:predice` / `:sugiere` / `:next` — predicción consultable.**
   `rank_command_predictions` (puro) pondera cada línea del historial por
   **frecuencia** + **afinidad con el cwd** (×3 las corridas en el directorio
