@@ -9,11 +9,22 @@
 // total = neto + impuesto, y asienta en deudor-normal:
 //     debe  Clientes += total · haber Ventas -= neto · haber IVA -= impuesto
 // Σ Δ saldo = total − neto − impuesto = 0 → la regla `conserve` lo exige.
+import "fiscal" as f;
+
 if input.states.clientes_cta.moneda != input.states.ventas_cta.moneda
    || input.states.ventas_cta.moneda != input.states.iva_cta.moneda {
     throw "las cuentas de la factura deben compartir moneda";
 }
 let moneda = input.states.clientes_cta.moneda;
+
+// Datos fiscales del cliente OPCIONALES (ver emitir_factura): si vienen,
+// se valida el dígito verificador y se guardan en la cabecera.
+let fpais = input.params.pais;
+let fdoc = input.params.documento;
+let tiene_fiscal = (type_of(fdoc) == "string" && fdoc != "");
+if tiene_fiscal && !f::dv_ok(fpais, fdoc) {
+    throw "documento del cliente inválido (" + fpais + "): el dígito verificador no coincide (" + fdoc + ")";
+}
 
 let lineas = input.params.lineas;
 if lineas.len() < 1 {
@@ -57,17 +68,21 @@ ops.push(#{ op: "set",
     path: #{ entity: "Cuenta", id: input.ids.iva_cta, field: "saldo" },
     value: input.states.iva_cta.saldo - impuesto });
 
-ops.push(#{ op: "create", entity: "Factura", id: input.params.factura_id,
-    data: #{
-        id: input.params.factura_id,
-        numero: numero,
-        cliente: input.params.cliente,
-        fecha: input.params.fecha,
-        estado: "emitida",
-        neto: neto,
-        impuesto: impuesto,
-        total: total,
-        moneda: moneda,
-    } });
+let factura = #{
+    id: input.params.factura_id,
+    numero: numero,
+    cliente: input.params.cliente,
+    fecha: input.params.fecha,
+    estado: "emitida",
+    neto: neto,
+    impuesto: impuesto,
+    total: total,
+    moneda: moneda,
+};
+if tiene_fiscal {
+    factura.pais = fpais;
+    factura.documento = fdoc;
+}
+ops.push(#{ op: "create", entity: "Factura", id: input.params.factura_id, data: factura });
 
 ops

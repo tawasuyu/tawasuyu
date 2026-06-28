@@ -14,6 +14,13 @@
 // factura no puede descuadrar el libro. El executor rechaza ligar la
 // misma cuenta a dos roles (DuplicateInputId) y deja negativos sólo donde
 // la cuenta lo admite (ingreso/pasivo acreedor).
+//
+// Datos fiscales del cliente OPCIONALES: si los params traen `documento`
+// (y `pais`), se valida el dígito verificador acá (módulo Rhai "fiscal") y
+// se guardan en la factura; el formato lo gatea el contrato Nickel. Sin
+// `documento`, la factura se emite igual (retrocompat).
+import "fiscal" as f;
+
 if input.states.clientes_cta.moneda != input.states.ventas_cta.moneda
    || input.states.ventas_cta.moneda != input.states.iva_cta.moneda {
     throw "las cuentas de la factura deben compartir moneda";
@@ -23,6 +30,28 @@ let moneda = input.states.clientes_cta.moneda;
 let neto = input.params.neto;
 let impuesto = neto * input.params.tasa / 100;
 let total = neto + impuesto;
+
+let fpais = input.params.pais;
+let fdoc = input.params.documento;
+let tiene_fiscal = (type_of(fdoc) == "string" && fdoc != "");
+if tiene_fiscal && !f::dv_ok(fpais, fdoc) {
+    throw "documento del cliente inválido (" + fpais + "): el dígito verificador no coincide (" + fdoc + ")";
+}
+
+let factura = #{
+    id: input.params.factura_id,
+    cliente: input.params.cliente,
+    fecha: input.params.fecha,
+    estado: "emitida",
+    neto: neto,
+    impuesto: impuesto,
+    total: total,
+    moneda: moneda,
+};
+if tiene_fiscal {
+    factura.pais = fpais;
+    factura.documento = fdoc;
+}
 
 [
     #{ op: "set",
@@ -34,15 +63,5 @@ let total = neto + impuesto;
     #{ op: "set",
        path: #{ entity: "Cuenta", id: input.ids.iva_cta, field: "saldo" },
        value: input.states.iva_cta.saldo - impuesto },
-    #{ op: "create", entity: "Factura", id: input.params.factura_id,
-       data: #{
-           id: input.params.factura_id,
-           cliente: input.params.cliente,
-           fecha: input.params.fecha,
-           estado: "emitida",
-           neto: neto,
-           impuesto: impuesto,
-           total: total,
-           moneda: moneda,
-       } },
+    #{ op: "create", entity: "Factura", id: input.params.factura_id, data: factura },
 ]

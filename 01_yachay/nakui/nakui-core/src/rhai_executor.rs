@@ -2,7 +2,8 @@ use rhai::packages::{
     ArithmeticPackage, BasicArrayPackage, BasicIteratorPackage, BasicMapPackage,
     BasicStringPackage, CorePackage, LogicPackage, Package,
 };
-use rhai::{Dynamic, Engine, Scope, AST};
+use rhai::module_resolvers::StaticModuleResolver;
+use rhai::{Dynamic, Engine, Module, Scope, AST};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -51,6 +52,25 @@ impl RhaiExecutor {
 
         engine.set_max_call_levels(64);
         engine.set_max_expr_depths(64, 32);
+
+        // Módulo estático "fiscal": dígito verificador compartido entre
+        // morfismos (crm, facturacion, compras). El engine sandboxeado no
+        // tiene resolver de archivos, así que el código vive embebido y se
+        // compila una vez a un Module accesible vía `import "fiscal" as f;`.
+        // Fuente de verdad: modules/_fiscal/dv.rhai (incluida en build).
+        // Límite de determinismo: el schema_hash de cada morfismo NO cubre
+        // este módulo importado (igual que el import Nickel de _fiscal); un
+        // cambio en dv.rhai no mueve esos hashes.
+        let mut resolver = StaticModuleResolver::new();
+        let dv_src = include_str!("../../modules/_fiscal/dv.rhai");
+        let dv_ast = engine
+            .compile(dv_src)
+            .expect("modules/_fiscal/dv.rhai debe compilar (módulo fiscal)");
+        let dv_module = Module::eval_ast_as_new(Scope::new(), &dv_ast, &engine)
+            .expect("modules/_fiscal/dv.rhai debe evaluar a módulo");
+        resolver.insert("fiscal", dv_module);
+        engine.set_module_resolver(resolver);
+
         Self {
             engine,
             asts: RefCell::new(HashMap::new()),

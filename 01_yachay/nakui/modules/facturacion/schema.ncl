@@ -10,18 +10,27 @@
 # Importes en unidades enteras de moneda (sin centavos). `impuesto` se
 # deriva de `neto` y la tasa; `total = neto + impuesto` por construcción.
 let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0) in
+# Pack fiscal compartido: valida el formato del documento del cliente (RIF,
+# cédula, CUIT…) según `pais`. Opt-in — una factura sin `documento` sigue
+# siendo válida; con `documento` exige `pais` y respeta el formato del país.
+# El dígito verificador lo chequea el morfismo (módulo Rhai "fiscal").
+let fiscal = import "../_fiscal/documentos.ncl" in
 {
   # Una factura de venta emitida. La crea `emitir_factura`. Cabecera con
   # los importes ya calculados; el detalle de líneas queda para una
-  # iteración futura (necesita líneas planas tipo Renglon).
-  Factura = {
-    cliente | String,
-    neto | NoNegativo,
-    impuesto | NoNegativo,
-    total | NoNegativo,
-    moneda | String,
-    ..
-  },
+  # iteración futura (necesita líneas planas tipo Renglon). Opcionalmente
+  # lleva {pais, documento} del cliente para identificación fiscal legal.
+  Factura = std.contract.Sequence [
+    fiscal.ConDocumentoFiscal,
+    {
+      cliente | String,
+      neto | NoNegativo,
+      impuesto | NoNegativo,
+      total | NoNegativo,
+      moneda | String,
+      ..
+    },
+  ],
 
   # Una línea (renglón) de una factura. La crea `facturar`, una por ítem.
   # Plana (no array anidado, por el bug de Nickel 0.18); `factura_id` la

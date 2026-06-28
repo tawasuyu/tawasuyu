@@ -11,17 +11,26 @@
 #
 # Importes en unidades enteras de moneda.
 let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0) in
+# Pack fiscal compartido: valida el formato del documento del proveedor (RIF,
+# cédula, CUIT…) según `pais`. Opt-in — una compra sin `documento` sigue
+# siendo válida; con `documento` exige `pais` y respeta el formato del país.
+# El dígito verificador lo chequea el morfismo (módulo Rhai "fiscal").
+let fiscal = import "../_fiscal/documentos.ncl" in
 {
   # Una factura de compra registrada. La crea `registrar_compra`.
-  # Cabecera con los importes ya calculados.
-  Compra = {
-    proveedor | String,
-    neto | NoNegativo,
-    impuesto | NoNegativo,
-    total | NoNegativo,
-    moneda | String,
-    ..
-  },
+  # Cabecera con los importes ya calculados. Opcionalmente lleva
+  # {pais, documento} del proveedor para identificación fiscal legal.
+  Compra = std.contract.Sequence [
+    fiscal.ConDocumentoFiscal,
+    {
+      proveedor | String,
+      neto | NoNegativo,
+      impuesto | NoNegativo,
+      total | NoNegativo,
+      moneda | String,
+      ..
+    },
+  ],
 
   # Constancia append-only del pago de una compra. La crea `pagar`: mueve
   # el total de Proveedores a Banco y marca la compra como pagada.
