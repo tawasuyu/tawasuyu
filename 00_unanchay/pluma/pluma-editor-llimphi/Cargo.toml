@@ -28,6 +28,7 @@ pluma-transform = { path = "../pluma-transform" }
 pluma-transform-tabla = { path = "../pluma-transform-tabla" }
 pluma-transform-llm = { path = "../pluma-transform-llm" }
 pluma-cotejo = { path = "../pluma-cotejo" }
+pluma-cotejo-llm = { path = "../pluma-cotejo-llm" }
 pluma-align-embeddings = { path = "../pluma-align-embeddings" }
 pluma-llm = { path = "../pluma-llm" }
 pluma-llm-core = { path = "../pluma-llm-core" }
