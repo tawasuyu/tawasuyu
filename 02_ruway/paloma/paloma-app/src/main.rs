@@ -62,17 +62,26 @@ fn cuentas_path() -> Option<PathBuf> {
 }
 
 /// Construye el secreto IMAP/SMTP de una cuenta:
-/// - OAuth2 → lee el `access_token` del archivo de token (lo escribe el helper
-///   `paloma-oauth`); falta el archivo ⇒ no hay secreto (cae a demo).
+/// - OAuth2 → consigue un `access_token` **vigente** vía
+///   [`paloma_oauth::valid_access_token`], que renueva solo con el `refresh_token`
+///   si el guardado venció (sin que el usuario corra `paloma-oauth` cada hora).
+///   Sin token/refresh válidos ⇒ no hay secreto (cae a demo, con motivo).
 /// - Contraseña → `PALOMA_PASSWORD` (o `PALOMA_IMAP_PASSWORD`/`PALOMA_SMTP_PASSWORD`).
 ///
 /// Devuelve `(imap, smtp)`; `None` si falta el secreto necesario.
 fn secrets_for(entry: &AccountEntry) -> Option<(Secret, Secret)> {
     if entry.is_oauth() {
         let dir = paloma_config_dir()?;
-        let token = read_oauth_token(&paloma_config::oauth_token_path(&dir, &entry.id))?;
-        let s = Secret::OAuth2(token);
-        return Some((s.clone(), s));
+        match paloma_oauth::valid_access_token(&dir, entry) {
+            Ok(token) => {
+                let s = Secret::OAuth2(token);
+                return Some((s.clone(), s));
+            }
+            Err(why) => {
+                eprintln!("paloma · OAuth «{}»: {why}", entry.id);
+                return None;
+            }
+        }
     }
     let both = std::env::var("PALOMA_PASSWORD").ok();
     let imap = std::env::var("PALOMA_IMAP_PASSWORD").ok().or_else(|| both.clone());
@@ -81,15 +90,6 @@ fn secrets_for(entry: &AccountEntry) -> Option<(Secret, Secret)> {
         (Some(i), Some(s)) => Some((Secret::Password(i), Secret::Password(s))),
         _ => None,
     }
-}
-
-/// Lee el `access_token` del archivo de token OAuth de una cuenta (formato que
-/// escribe `paloma-oauth`: `{"access_token": "...", ...}`). `None` si falta o no
-/// parsea.
-fn read_oauth_token(path: &std::path::Path) -> Option<String> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    v.get("access_token")?.as_str().map(|s| s.to_string())
 }
 
 /// Lo que `try_net` entrega cuando hay una conexión real.

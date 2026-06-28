@@ -27,11 +27,11 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use directories::ProjectDirs;
 use paloma_config::{oauth_token_path, AccountEntry, PalomaConfig, Preset};
+use paloma_oauth::{existing_refresh_token, refresh, save_token, token_request, Token};
 use sha2::{Digest, Sha256};
 
 fn main() -> ExitCode {
@@ -108,91 +108,8 @@ fn run(id: &str, force: bool) -> Result<String, String> {
 }
 
 // =====================================================================
-// El token persistido
-// =====================================================================
-
-/// El token guardado en `oauth-<id>.json`. `paloma-app` lee `access_token`.
-#[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
-struct Token {
-    access_token: String,
-    #[serde(default)]
-    refresh_token: String,
-    /// Unix-secs en que vence el access token (best-effort, para futura renovación).
-    #[serde(default)]
-    expires_at: u64,
-    #[serde(default)]
-    token_type: String,
-}
-
-impl Token {
-    /// Si el proveedor no devolvió `refresh_token` en la renovación (Google a
-    /// veces no lo repite), conservamos el que ya teníamos.
-    fn with_refresh_fallback(mut self, prev: &str) -> Self {
-        if self.refresh_token.is_empty() {
-            self.refresh_token = prev.to_string();
-        }
-        self
-    }
-}
-
-/// La respuesta JSON del endpoint de token del proveedor.
-#[derive(serde::Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    #[serde(default)]
-    refresh_token: String,
-    #[serde(default)]
-    expires_in: u64,
-    #[serde(default)]
-    token_type: String,
-}
-
-impl TokenResponse {
-    fn into_token(self) -> Token {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        Token {
-            access_token: self.access_token,
-            refresh_token: self.refresh_token,
-            expires_at: now + self.expires_in,
-            token_type: self.token_type,
-        }
-    }
-}
-
-fn existing_refresh_token(path: &std::path::Path) -> Option<String> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    let tok: Token = serde_json::from_str(&raw).ok()?;
-    Some(tok.refresh_token).filter(|s| !s.is_empty())
-}
-
-/// Escribe el token a disco con permisos `0600` (sólo el dueño lo lee).
-fn save_token(path: &std::path::Path, tok: &Token) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
-    }
-    let json = serde_json::to_string_pretty(tok).map_err(|e| format!("json: {e}"))?;
-    write_private(path, json.as_bytes()).map_err(|e| format!("escribir token: {e}"))
-}
-
-#[cfg(unix)]
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(bytes)
-}
-
-#[cfg(not(unix))]
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, bytes)
-}
-
-// =====================================================================
-// El flujo OAuth2
+// El flujo OAuth2 (interactivo) — la parte no interactiva (token/refresh) vive
+// en la lib (`lib.rs`), compartida con paloma-app.
 // =====================================================================
 
 /// Corre el flujo Authorization Code + PKCE por loopback y devuelve el token.
@@ -242,34 +159,6 @@ fn authorize(entry: &AccountEntry, preset: &Preset) -> Result<Token, String> {
         form.push(("client_secret", &entry.oauth_client_secret));
     }
     token_request(preset, &form)
-}
-
-/// Renueva el access token con el `refresh_token`, sin navegador.
-fn refresh(entry: &AccountEntry, preset: &Preset, refresh_token: &str) -> Result<Token, String> {
-    let mut form: Vec<(&str, &str)> = vec![
-        ("grant_type", "refresh_token"),
-        ("refresh_token", refresh_token),
-        ("client_id", &entry.oauth_client_id),
-    ];
-    if !entry.oauth_client_secret.trim().is_empty() {
-        form.push(("client_secret", &entry.oauth_client_secret));
-    }
-    token_request(preset, &form)
-}
-
-/// POST al endpoint de token del proveedor y parseo de la respuesta.
-fn token_request(preset: &Preset, form: &[(&str, &str)]) -> Result<Token, String> {
-    let body = ureq::post(preset.token_url)
-        .send_form(form)
-        .map_err(|e| format!("token endpoint: {e}"))?
-        .into_string()
-        .map_err(|e| format!("leer respuesta: {e}"))?;
-    let parsed: TokenResponse =
-        serde_json::from_str(&body).map_err(|e| format!("token JSON: {e} — respuesta: {body}"))?;
-    if parsed.access_token.is_empty() {
-        return Err("el proveedor no devolvió access_token".to_string());
-    }
-    Ok(parsed.into_token())
 }
 
 /// Bloquea hasta recibir el redirect del proveedor y devuelve `(code, state)`.
@@ -420,18 +309,5 @@ mod tests {
     fn urlencode_preserva_unreserved() {
         assert_eq!(urlencode("a-b_c.d~e"), "a-b_c.d~e");
         assert_eq!(urlencode("a b/c"), "a%20b%2Fc");
-    }
-
-    #[test]
-    fn token_response_calcula_expira() {
-        let tr = TokenResponse {
-            access_token: "x".into(),
-            refresh_token: "r".into(),
-            expires_in: 3600,
-            token_type: "Bearer".into(),
-        };
-        let tok = tr.into_token();
-        assert_eq!(tok.access_token, "x");
-        assert!(tok.expires_at > 3600); // now + 3600
     }
 }
