@@ -1,0 +1,13 @@
+{
+  "seed": [
+    {
+      "entity": "Partner",
+      "records": [
+        { "data": { "nombre": "ACME S.A.",        "tipo": "cliente",   "email": "compras@acme.example" } },
+        { "data": { "nombre": "Globex Corp",       "tipo": "cliente",   "email": "ap@globex.example" } },
+        { "data": { "nombre": "Insumos del Sur SRL", "tipo": "proveedor", "email": "ventas@insumosdelsur.example" } },
+        { "data": { "nombre": "Logística Norte",   "tipo": "ambos",     "email": "info@lognorte.example" } }
+      ]
+    }
+  ]
+}

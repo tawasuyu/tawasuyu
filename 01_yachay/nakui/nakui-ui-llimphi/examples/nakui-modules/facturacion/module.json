@@ -76,7 +76,7 @@
       "search_in": ["cliente", "estado"],
       "columns": [
         { "field": "fecha", "label": "Fecha" },
-        { "field": "cliente", "label": "Cliente" },
+        { "field": "cliente", "label": "Cliente", "ref_entity": "Partner" },
         { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
         { "field": "impuesto", "label": "IVA", "format": { "kind": "currency", "symbol": "$" } },
         { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
@@ -89,7 +89,7 @@
       "title": "Factura",
       "entity": "Factura",
       "fields": [
-        { "field": "cliente", "label": "Cliente" },
+        { "field": "cliente", "label": "Cliente", "ref_entity": "Partner" },
         { "field": "fecha", "label": "Fecha" },
         { "field": "estado", "label": "Estado" },
         { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
@@ -103,7 +103,7 @@
       "title": "Emitir factura",
       "entity": "Factura",
       "fields": [
-        { "name": "cliente", "label": "Cliente", "kind": "text", "required": true },
+        { "name": "cliente", "label": "Cliente", "kind": "entity_ref", "ref_entity": "Partner", "required": true, "help": "Elegí un tercero (cliente) registrado" },
         { "name": "neto", "label": "Neto (base imponible)", "kind": "number", "required": true, "help": "Importe gravado, sin IVA" },
         { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
         { "name": "clientes_cta", "label": "Cuenta Clientes (CxC)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Cuenta por cobrar — se debita por el total" },
@@ -125,7 +125,7 @@
       "title": "Facturar (con líneas)",
       "entity": "Factura",
       "fields": [
-        { "name": "cliente", "label": "Cliente", "kind": "text", "required": true },
+        { "name": "cliente", "label": "Cliente", "kind": "entity_ref", "ref_entity": "Partner", "required": true, "help": "Elegí un tercero (cliente) registrado" },
         {
           "name": "lineas",
           "label": "Líneas (una por renglón: concepto | cantidad | precio)",

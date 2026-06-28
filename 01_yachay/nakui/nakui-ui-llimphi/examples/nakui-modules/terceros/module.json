@@ -1,0 +1,119 @@
+{
+  "id": "terceros",
+  "label": "Terceros",
+  "description": "Clientes y proveedores como ENTIDAD (no un nombre suelto): integridad referencial + estado de cuenta. Facturas y compras referencian a un Partner por su id; su ficha agrega lo facturado/comprado y los saldos por cobrar/pagar. Master data — sin morfismos, alta directa.",
+  "entities": [
+    { "name": "Partner", "label": "Tercero", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Tablero", "view": "tablero" },
+    { "label": "Terceros", "view": "partners_list" },
+    { "label": "+ Tercero", "view": "partner_form" }
+  ],
+  "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Terceros",
+      "subtitle": "Clientes y proveedores registrados.",
+      "cards": [
+        { "label": "Terceros", "entity": "Partner", "metric": { "kind": "count" } },
+        { "label": "Por tipo", "entity": "Partner", "metric": { "kind": "group_by", "field": "tipo" }, "chart": "donut" }
+      ]
+    },
+    "partners_list": {
+      "kind": "list",
+      "title": "Terceros",
+      "entity": "Partner",
+      "row_detail": "partner_detail",
+      "search_in": ["nombre", "tipo", "email"],
+      "columns": [
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "tipo", "label": "Tipo" },
+        { "field": "email", "label": "Email" }
+      ]
+    },
+    "partner_detail": {
+      "kind": "detail",
+      "title": "Ficha del tercero",
+      "entity": "Partner",
+      "fields": [
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "tipo", "label": "Tipo" },
+        { "field": "email", "label": "Email" }
+      ],
+      "related": [
+        {
+          "title": "Facturas de venta (este cliente)",
+          "entity": "Factura",
+          "via_field": "cliente",
+          "columns": [
+            { "field": "fecha", "label": "Fecha" },
+            { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+            { "field": "estado", "label": "Estado" }
+          ]
+        },
+        {
+          "title": "Compras (este proveedor)",
+          "entity": "Compra",
+          "via_field": "proveedor",
+          "columns": [
+            { "field": "fecha", "label": "Fecha" },
+            { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+            { "field": "estado", "label": "Estado" }
+          ]
+        }
+      ],
+      "metrics": [
+        {
+          "label": "Facturado (ventas)",
+          "entity": "Factura",
+          "via_field": "cliente",
+          "metric": { "kind": "sum", "field": "total" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Por cobrar",
+          "entity": "Factura",
+          "via_field": "cliente",
+          "metric": { "kind": "sum", "field": "total" },
+          "filter": { "field": "estado", "equals": "emitida" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Comprado",
+          "entity": "Compra",
+          "via_field": "proveedor",
+          "metric": { "kind": "sum", "field": "total" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Por pagar",
+          "entity": "Compra",
+          "via_field": "proveedor",
+          "metric": { "kind": "sum", "field": "total" },
+          "filter": { "field": "estado", "equals": "registrada" },
+          "format": { "kind": "currency", "symbol": "$" }
+        }
+      ]
+    },
+    "partner_form": {
+      "kind": "form",
+      "title": "Tercero",
+      "entity": "Partner",
+      "fields": [
+        { "name": "id", "label": "Id", "kind": "auto_id" },
+        { "name": "nombre", "label": "Nombre", "kind": "text", "required": true },
+        {
+          "name": "tipo", "label": "Tipo", "kind": "select",
+          "options": [
+            { "value": "cliente", "label": "Cliente" },
+            { "value": "proveedor", "label": "Proveedor" },
+            { "value": "ambos", "label": "Cliente y proveedor" }
+          ]
+        },
+        { "name": "email", "label": "Email", "kind": "text", "required": false }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Partner", "next_view": "partners_list" }
+    }
+  }
+}

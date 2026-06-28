@@ -67,7 +67,7 @@
       "search_in": ["proveedor", "estado"],
       "columns": [
         { "field": "fecha", "label": "Fecha" },
-        { "field": "proveedor", "label": "Proveedor" },
+        { "field": "proveedor", "label": "Proveedor", "ref_entity": "Partner" },
         { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
         { "field": "impuesto", "label": "IVA", "format": { "kind": "currency", "symbol": "$" } },
         { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
@@ -79,7 +79,7 @@
       "title": "Compra",
       "entity": "Compra",
       "fields": [
-        { "field": "proveedor", "label": "Proveedor" },
+        { "field": "proveedor", "label": "Proveedor", "ref_entity": "Partner" },
         { "field": "fecha", "label": "Fecha" },
         { "field": "estado", "label": "Estado" },
         { "field": "neto", "label": "Neto", "format": { "kind": "currency", "symbol": "$" } },
@@ -93,7 +93,7 @@
       "title": "Registrar compra",
       "entity": "Compra",
       "fields": [
-        { "name": "proveedor", "label": "Proveedor", "kind": "text", "required": true },
+        { "name": "proveedor", "label": "Proveedor", "kind": "entity_ref", "ref_entity": "Partner", "required": true, "help": "Elegí un tercero (proveedor) registrado" },
         { "name": "neto", "label": "Neto (base imponible)", "kind": "number", "required": true, "help": "Importe gravado, sin IVA" },
         { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
         { "name": "compra_cta", "label": "Cuenta de gasto/inventario", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Se debita por el neto" },

@@ -412,10 +412,22 @@
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        // Siete demos: 'ventas', 'tesoro', 'punto_venta', 'contabilidad'
-        // (partida doble), 'facturacion', 'compras' e 'inventario' (stock
-        // valuado con reflejo contable).
-        assert_eq!(modules.len(), 7);
+        // Ocho demos: 'ventas', 'tesoro', 'punto_venta', 'contabilidad',
+        // 'facturacion', 'compras', 'inventario' y 'terceros' (clientes/
+        // proveedores como entidad, con estado de cuenta).
+        assert_eq!(modules.len(), 8);
+        // Terceros: el form de factura referencia al Partner por entity_ref
+        // (no un nombre suelto), y la ficha del tercero agrega sus facturas.
+        let terceros = modules.iter().find(|m| m.id == "terceros").expect("terceros");
+        assert!(matches!(terceros.views.get("partner_detail"), Some(ModuleView::Detail(_))));
+        let fact = modules.iter().find(|m| m.id == "facturacion").unwrap();
+        if let Some(ModuleView::Form(fv)) = fact.views.get("emitir_form") {
+            let cliente = fv.fields.iter().find(|f| f.name == "cliente").expect("campo cliente");
+            assert_eq!(cliente.kind, FieldKind::EntityRef);
+            assert_eq!(cliente.ref_entity.as_deref(), Some("Partner"));
+        } else {
+            panic!("emitir_form debería ser un Form");
+        }
         // Inventario expone tablero/lista/detalle + grafo, y sus forms de
         // recepción/despacho disparan los morfismos de valuación.
         let invent = modules.iter().find(|m| m.id == "inventario").expect("inventario");
@@ -1071,6 +1083,71 @@
         assert_eq!(saldo(&backend, cogs), 400);
         assert_eq!(saldo(&backend, inv), 600, "Inventario sigue espejando el valor del stock");
         assert_eq!(suma(&backend), 0, "el libro cuadra tras despachar");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// Estado de cuenta por tercero: una factura emitida a un Partner
+    /// (referenciado por su id, no por nombre) aparece agregada en la
+    /// métrica «Facturado» de la ficha de ese Partner. Prueba la
+    /// integridad referencial cliente→Partner end-to-end.
+    #[test]
+    fn estado_de_cuenta_del_partner_agrega_sus_facturas() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        use nahual_meta_schema::Metric;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for id in ["contabilidad", "facturacion"] {
+            let m = modules.iter().find(|m| m.id == id).unwrap();
+            let nakui_dir = dir.join(&m.id).join(m.nakui_module_dir.as_ref().unwrap());
+            executors.insert(id.to_string(), Arc::new(Executor::load_module(&nakui_dir).unwrap()));
+        }
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        // Tomar un Partner sembrado por `terceros` (cliente ACME).
+        let acme = backend.list_records("Partner").into_iter()
+            .find(|(_, v)| v.get("nombre").and_then(Value::as_str) == Some("ACME S.A."))
+            .map(|(id, _)| id).expect("partner ACME sembrado");
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta").into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id).unwrap()
+        };
+        // Emitir factura a ACME por su id (no por nombre): neto 1000 + IVA = 1180.
+        let mut emi = BTreeMap::new();
+        emi.insert("clientes_cta".to_string(), by_codigo(&backend, "1100"));
+        emi.insert("ventas_cta".to_string(), by_codigo(&backend, "4010"));
+        emi.insert("iva_cta".to_string(), by_codigo(&backend, "2110"));
+        backend.morphism("facturacion", "emitir_factura", emi, json!({
+            "cliente": acme.to_string(), "fecha": "2026-06-28",
+            "factura_id": Uuid::new_v4().to_string(), "neto": 1000_i64, "tasa": 18_i64,
+        })).expect("emitir");
+
+        // La ficha del Partner agrega esa factura: Facturado = 1180.
+        let dm = DetailMetric {
+            label: "Facturado".into(),
+            entity: "Factura".into(),
+            via_field: "cliente".into(),
+            metric: Metric::Sum { field: "total".into() },
+            filter: None,
+            format: ValueFormat::default(),
+        };
+        assert_eq!(
+            compute_detail_metric(&backend, &dm, acme),
+            MetricResult::Scalar(1180.0),
+            "la factura del cliente aparece en su estado de cuenta"
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
