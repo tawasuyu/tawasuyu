@@ -34,6 +34,23 @@ pub(crate) fn load_user_rules() -> Rules {
 
 /// Carga los permisos de capacidad del usuario (`~/.config/mirada/caps.ron`),
 /// o ninguno (todo permitido) si no hay archivo.
+/// Lee un flag booleano de entorno. Ausente o vacío → `default`. Presente, se
+/// considera **apagado** sólo con `0`/`false`/`off`/`no` (case-insensitive);
+/// cualquier otro valor lo enciende.
+fn env_activado(var: &str, default: bool) -> bool {
+    match std::env::var(var) {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            if v.is_empty() {
+                default
+            } else {
+                !matches!(v.as_str(), "0" | "false" | "off" | "no")
+            }
+        }
+        Err(_) => default,
+    }
+}
+
 pub(crate) fn load_user_caps() -> mirada_brain::Permisos {
     match mirada_brain::permisos::default_path() {
         Some(p) => mirada_brain::permisos::load_or_default(&p),
@@ -293,16 +310,24 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
             Ok(path) => {
                 println!("mirada-compositor · esperando al Cerebro en {path} …");
                 let server = BodyLinkServer::bind(&path)?;
-                // Bloqueá el arranque hasta el primer Cerebro (luego el server
-                // queda vivo para reconexiones).
+                // Bloqueá el arranque hasta el primer Cerebro.
                 let link = loop {
                     if let Some(l) = server.try_accept()? {
                         break l;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 };
-                println!("mirada-compositor · Cerebro conectado.");
-                brain_server = Some(server);
+                // Reconexión del Cerebro (hot-restart + resiliencia a crashes):
+                // OPCIONAL pero ACTIVA por default. Si el re-sync diera problemas
+                // en vivo, apagala con `MIRADA_BRAIN_RECONNECT=0` y volvés al
+                // Cerebro único de un solo tiro (el server se libera y
+                // `reconcile_brain` queda no-op).
+                if env_activado("MIRADA_BRAIN_RECONNECT", true) {
+                    println!("mirada-compositor · Cerebro conectado (reconexión ACTIVA).");
+                    brain_server = Some(server);
+                } else {
+                    println!("mirada-compositor · Cerebro conectado (reconexión apagada).");
+                }
                 Brain::Linked(link)
             }
             Err(_) => {
