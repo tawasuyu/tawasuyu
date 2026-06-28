@@ -127,6 +127,9 @@ pub struct WireInput {
     pub placeholder: String,
     /// Oculta el contenido (●●●) — para contraseñas.
     pub password: bool,
+    /// Acepta varias líneas: Enter inserta `\n` en vez de ignorarse. El guest
+    /// sigue siendo la fuente de verdad del texto (modelo value-driven).
+    pub multiline: bool,
 }
 
 /// Slider: barra con un valor en `[min, max]`. Al clickear/arrastrar, el host
@@ -142,6 +145,16 @@ pub struct WireSlider {
 /// la opción actual; al elegir otra, emite `on_select` con su índice.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct WireSelect {
+    pub options: Vec<String>,
+    pub selected: u32,
+}
+
+/// Grupo de radio: lista siempre visible con una opción marcada. Al clickear
+/// otra, emite `on_radio` con su índice (mismo payload que el dropdown,
+/// `Select(idx)`). Difiere del dropdown sólo en el render: todas las opciones se
+/// ven a la vez con un indicador ◉/○, sin estado de apertura.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct WireRadio {
     pub options: Vec<String>,
     pub selected: u32,
 }
@@ -172,6 +185,8 @@ pub struct WireNode {
     pub slider: Option<WireSlider>,
     /// Dropdown, si este nodo es uno.
     pub select: Option<WireSelect>,
+    /// Grupo de radio, si este nodo es uno.
+    pub radio: Option<WireRadio>,
     /// Handler de click (evento sin payload).
     pub on_click: Option<EventId>,
     /// Handler del texto tecleado en `input`.
@@ -182,6 +197,8 @@ pub struct WireNode {
     pub on_value: Option<EventId>,
     /// Handler de la opción elegida en `select`.
     pub on_select: Option<EventId>,
+    /// Handler de la opción elegida en `radio`.
+    pub on_radio: Option<EventId>,
     pub children: Vec<WireNode>,
 }
 
@@ -327,6 +344,18 @@ impl WireNode {
         self
     }
 
+    /// Marca el nodo como grupo de radio.
+    pub fn with_radio(mut self, radio: WireRadio) -> Self {
+        self.radio = Some(radio);
+        self
+    }
+
+    /// `EventId` del handler que recibe el índice elegido en el grupo de radio.
+    pub fn on_radio(mut self, id: EventId) -> Self {
+        self.on_radio = Some(id);
+        self
+    }
+
     pub fn children(mut self, children: Vec<WireNode>) -> Self {
         self.children = children;
         self
@@ -377,6 +406,7 @@ mod tests {
                     value: "hola".into(),
                     placeholder: "nombre…".into(),
                     password: false,
+                    multiline: false,
                 })
                 .on_input(7),
             row(vec![

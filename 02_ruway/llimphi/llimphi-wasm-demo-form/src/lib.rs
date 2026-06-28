@@ -1,14 +1,17 @@
-//! Formulario WASM Tier 3: texto + checkbox + slider + dropdown + saludo vivo.
+//! Formulario WASM Tier 3: texto + checkbox + slider + dropdown + multiline +
+//! radio + saludo vivo.
 //!
-//! Ejercita todos los eventos con payload: `Text` (nombre), `Toggle`
-//! (mayúsculas), `Value` (slider edad), `Select` (dropdown color) y `Click`
-//! (limpiar). El estado vive en el guest; el host sólo pinta y notifica.
+//! Ejercita todos los eventos con payload: `Text` (nombre y notas multilínea),
+//! `Toggle` (mayúsculas), `Value` (slider edad), `Select` (dropdown color y
+//! grupo de radio prioridad) y `Click` (limpiar). El estado vive en el guest;
+//! el host sólo pinta y notifica.
 
 use llimphi_wasm_app_sdk::{
     col, export_wasm_app, row, text, Align, Dim, Justify, TextAlign, Ui, WasmApp, WireNode,
 };
 
 const COLORES: [&str; 3] = ["rojo", "verde", "azul"];
+const PRIORIDADES: [&str; 3] = ["baja", "media", "alta"];
 
 #[derive(Clone)]
 pub enum Msg {
@@ -16,6 +19,8 @@ pub enum Msg {
     SetMayus(bool),
     SetEdad(f32),
     SetColor(u32),
+    SetNotas(String),
+    SetPrioridad(u32),
     Limpiar,
 }
 
@@ -24,6 +29,8 @@ pub struct Form {
     mayus: bool,
     edad: f32,
     color: u32,
+    notas: String,
+    prioridad: u32,
 }
 
 impl Default for Form {
@@ -33,6 +40,8 @@ impl Default for Form {
             mayus: false,
             edad: 30.0,
             color: 1,
+            notas: String::new(),
+            prioridad: 0,
         }
     }
 }
@@ -64,11 +73,15 @@ impl WasmApp for Form {
             Msg::SetMayus(b) => self.mayus = b,
             Msg::SetEdad(v) => self.edad = v,
             Msg::SetColor(i) => self.color = i,
+            Msg::SetNotas(s) => self.notas = s,
+            Msg::SetPrioridad(i) => self.prioridad = i,
             Msg::Limpiar => {
                 self.nombre.clear();
                 self.mayus = false;
                 self.edad = 30.0;
                 self.color = 1;
+                self.notas.clear();
+                self.prioridad = 0;
             }
         }
     }
@@ -116,16 +129,38 @@ impl WasmApp for Form {
         let saludo = text(self.saludo(), 28.0, [120, 220, 170, 255]);
         let detalle = text(
             format!(
-                "Edad: {} · Color: {}",
+                "Edad: {} · Color: {} · Prioridad: {} · Notas: {} líneas",
                 self.edad as i32,
-                COLORES[self.color as usize % COLORES.len()]
+                COLORES[self.color as usize % COLORES.len()],
+                PRIORIDADES[self.prioridad as usize % PRIORIDADES.len()],
+                self.notas.lines().count(),
             ),
             18.0,
             [150, 160, 180, 255],
         )
         .grow(1.0);
 
-        // EventId 4: botón limpiar.
+        // EventId 4: notas multilínea (Enter inserta salto de línea).
+        let notas = ui
+            .multiline_input(self.notas.clone(), "notas (Enter = nueva línea)…", Msg::SetNotas)
+            .fill([28, 34, 44, 255])
+            .radius(8.0)
+            .padding(10.0, 12.0, 10.0, 12.0)
+            .width(Dim::Pct(1.0))
+            .height(Dim::Px(72.0));
+
+        // EventId 5: grupo de radio de prioridad (el nodo es el contenedor; el
+        // host pinta una fila por opción).
+        let prioridad = ui
+            .radio(
+                PRIORIDADES.iter().map(|s| s.to_string()).collect(),
+                self.prioridad,
+                Msg::SetPrioridad,
+            )
+            .width(Dim::Pct(1.0))
+            .gap(2.0);
+
+        // EventId 6: botón limpiar.
         let limpiar = ui
             .button("limpiar", 20.0, [30, 10, 10, 255], Msg::Limpiar)
             .text_align(TextAlign::Center)
@@ -135,8 +170,10 @@ impl WasmApp for Form {
             .align(Align::Center)
             .justify(Justify::Center);
 
-        col(vec![titulo, campo, check, edad_row, color, saludo, detalle, limpiar])
-            .gap(16.0)
+        col(vec![
+            titulo, campo, check, edad_row, color, saludo, detalle, notas, prioridad, limpiar,
+        ])
+        .gap(16.0)
             .pad(28.0)
             .fill([18, 22, 30, 255])
             .width(Dim::Pct(1.0))

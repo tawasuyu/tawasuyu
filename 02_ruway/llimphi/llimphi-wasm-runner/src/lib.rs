@@ -204,19 +204,14 @@ impl WasmGuest {
             return None;
         }
         let id = self.focused?;
-        let actual = self.input_value(id).unwrap_or("");
-        let nuevo = edit_value(actual, &event.key, event.text.as_deref())?;
+        let inp = find_input(&self.view, id)?;
+        let nuevo = edit_value(&inp.value, &event.key, event.text.as_deref(), inp.multiline)?;
         Some(RunnerMsg::Event(id, EventPayload::Text(nuevo)))
     }
 
     /// `RunnerMsg` para fijar el foco (lo usa el `on_focus` del host).
     pub fn focus_msg(id: Option<u64>) -> RunnerMsg {
         RunnerMsg::Focus(id.map(|x| x as EventId))
-    }
-
-    /// Valor actual del input cuyo `on_input` es `id`, buscando en la vista.
-    fn input_value(&self, id: EventId) -> Option<&str> {
-        find_input(&self.view, id).map(|i| i.value.as_str())
     }
 
     /// Materializa la vista cacheada en un `View<RunnerMsg>` Llimphi real.
@@ -226,15 +221,17 @@ impl WasmGuest {
 }
 
 /// Computa el texto nuevo de un campo dado el actual y una tecla: Backspace borra
-/// el último carácter; un carácter se anexa; otras teclas no editan (`None`).
-/// Pura — el corazón del modelo value-driven, testeable sin un `KeyEvent`.
-pub fn edit_value(actual: &str, key: &Key, text: Option<&str>) -> Option<String> {
+/// el último carácter; un carácter se anexa; Enter inserta `\n` sólo si el campo
+/// es `multiline` (en uno de una línea no edita); otras teclas no editan
+/// (`None`). Pura — el corazón del modelo value-driven, testeable sin `KeyEvent`.
+pub fn edit_value(actual: &str, key: &Key, text: Option<&str>, multiline: bool) -> Option<String> {
     match key {
         Key::Named(NamedKey::Backspace) => {
             let mut s = actual.to_string();
             s.pop();
             Some(s)
         }
+        Key::Named(NamedKey::Enter) if multiline => Some(format!("{actual}\n")),
         Key::Character(_) => text.map(|t| format!("{actual}{t}")),
         _ => None,
     }
@@ -382,6 +379,25 @@ pub fn wire_to_view(
                 );
             }
         }
+        view = view.children(kids);
+    } else if let Some(rad) = &node.radio {
+        // Grupo de radio: todas las opciones visibles, la marcada con ◉. Cada
+        // fila emite Select(idx) (mismo payload que el dropdown).
+        let id = node.on_radio.unwrap_or(0);
+        let kids: Vec<View<RunnerMsg>> = rad
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let oid = i as u32;
+                let marcado = oid == rad.selected;
+                let glyph = if marcado { "\u{25c9}" } else { "\u{25cb}" }; // ◉ / ○
+                let col = if marcado { SLIDER_FILL } else { INPUT_TEXT };
+                item_box(30.0)
+                    .text(format!("{glyph}  {opt}"), 18.0, color(col))
+                    .on_click(RunnerMsg::Event(id, EventPayload::Select(oid)))
+            })
+            .collect();
         view = view.children(kids);
     } else {
         if let Some(t) = &node.text {

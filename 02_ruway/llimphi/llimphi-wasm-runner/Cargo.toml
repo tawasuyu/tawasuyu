@@ -22,3 +22,6 @@ format = { path = "../../../shared/format" }
 # `wat` compila en runtime el módulo-fixture que prueba el gateo por permiso,
 # sin depender del toolchain wasm32 (igual criterio que llimphi-plugin-host).
 wat = { workspace = true }
+# Los tests de render construyen WireNode/WireRadio a mano y los materializan
+# con wire_to_view, sin un .wasm guest de por medio.
+llimphi-wire-view = { workspace = true }

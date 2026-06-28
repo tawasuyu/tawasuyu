@@ -21,7 +21,7 @@
 pub use llimphi_wire_view as wire;
 pub use llimphi_wire_view::{
     col, leaf, row, spacer, text, Align, Dim, Dir, EventId, EventPayload, Justify, Rgba, TextAlign,
-    WireInput, WireNode, WireSelect, WireSlider, WireText,
+    WireInput, WireNode, WireRadio, WireSelect, WireSlider, WireText,
 };
 
 /// Handler de un evento, del lado guest. El `Ui` los guarda; el dispatch los
@@ -92,6 +92,7 @@ impl<Msg> Ui<Msg> {
                 value: value.into(),
                 placeholder: placeholder.into(),
                 password: false,
+                multiline: false,
             })
             .on_input(id)
     }
@@ -109,6 +110,26 @@ impl<Msg> Ui<Msg> {
                 value: value.into(),
                 placeholder: placeholder.into(),
                 password: true,
+                multiline: false,
+            })
+            .on_input(id)
+    }
+
+    /// Campo multilínea: Enter inserta `\n` (en `text_input` se ignora). Para
+    /// notas/descripciones. El guest sigue siendo la fuente de verdad del texto.
+    pub fn multiline_input(
+        &mut self,
+        value: impl Into<String>,
+        placeholder: impl Into<String>,
+        on_input: impl Fn(String) -> Msg + 'static,
+    ) -> WireNode {
+        let id = self.register(Handler::Text(Box::new(on_input)));
+        WireNode::new()
+            .with_input(WireInput {
+                value: value.into(),
+                placeholder: placeholder.into(),
+                password: false,
+                multiline: true,
             })
             .on_input(id)
     }
@@ -146,6 +167,22 @@ impl<Msg> Ui<Msg> {
         WireNode::new()
             .with_select(WireSelect { options, selected })
             .on_select(id)
+    }
+
+    /// Grupo de radio: `options` siempre visibles con la `selected` marcada.
+    /// `on_choose(idx)` construye el `Msg` con la opción elegida (mismo handler
+    /// que el dropdown; sólo cambia el render). Devolvé el nodo dentro de una
+    /// columna para apilar las opciones.
+    pub fn radio(
+        &mut self,
+        options: Vec<String>,
+        selected: u32,
+        on_choose: impl Fn(u32) -> Msg + 'static,
+    ) -> WireNode {
+        let id = self.register(Handler::Select(Box::new(on_choose)));
+        WireNode::new()
+            .with_radio(WireRadio { options, selected })
+            .on_radio(id)
     }
 
     /// Resuelve un evento a un `Msg`. Lo usa el runtime generado por la macro.
