@@ -1059,16 +1059,17 @@ pub(crate) fn resolver_atipay(mut s: State, text: &str) -> State {
 /// bloque (la del más reciente si no se da ref). El resultado va al output,
 /// rotulado `🜲`. `summarize=true` → `:resume`.
 pub(crate) fn apply_explain(mut s: State, rest: &str, summarize: bool) -> State {
-    let Some(block) = parse_block_ref(&s, rest) else {
+    let Some((block, stage)) = parse_block_and_stage(&s, rest) else {
         s.push_output(OutputLine::notice(
-            "uso: :explica %cN  (o sin ref, sobre el bloque más reciente con salida)",
+            "uso: :explica %cN[.K]  (o sin ref, sobre el bloque más reciente con salida)",
         ));
         return s;
     };
-    let body = gather_block_text(&s, block);
+    let label = target_label(block, stage);
+    let body = gather_target_text(&s, block, stage);
     if body.trim().is_empty() {
         s.push_output(OutputLine::notice(format!(
-            "el bloque %c{block} no tiene salida para {}",
+            "{label} no tiene salida para {}",
             if summarize { "resumir" } else { "explicar" }
         )));
         return s;
@@ -1091,14 +1092,14 @@ pub(crate) fn apply_explain(mut s: State, rest: &str, summarize: bool) -> State 
     s.llm_request = Some(LlmRequest {
         kind: LlmKind::Text,
         system: system.to_string(),
-        prompt: format!("Salida del bloque %c{block}:\n\n{body}"),
+        prompt: format!("Salida del bloque {label}:\n\n{body}"),
         max_tokens: 600,
         llm: wawa_config::WawaConfig::load().ai.llm,
     });
     // La respuesta abre su propio bloque referenciable (`%cM`) — re-filtrable.
     let etiqueta = if summarize { "resume" } else { "explica" };
-    s.llm_block_label = Some(format!("🜲 :{etiqueta} %c{block}"));
-    s.push_output(OutputLine::notice(format!("🜲 llm · {verbo} el bloque %c{block}…")));
+    s.llm_block_label = Some(format!("🜲 :{etiqueta} {label}"));
+    s.push_output(OutputLine::notice(format!("🜲 llm · {verbo} el bloque {label}…")));
     s
 }
 
@@ -1120,14 +1121,14 @@ pub(crate) fn apply_filter(mut s: State, rest: &str) -> State {
         ));
         return s;
     }
-    // ¿El primer token es una ref de bloque?
+    // ¿El primer token es una ref de bloque (con o sin etapa `.K`)?
     let mut parts = rest.splitn(2, char::is_whitespace);
     let first = parts.next().unwrap_or("");
     let first_is_ref = first.starts_with("%c") || first.starts_with("%p");
-    let (block, instr) = if first_is_ref {
-        (parse_block_ref(&s, first), parts.next().unwrap_or("").trim().to_string())
+    let (target, instr) = if first_is_ref {
+        (parse_block_and_stage(&s, first), parts.next().unwrap_or("").trim().to_string())
     } else {
-        (parse_block_ref(&s, ""), rest.to_string())
+        (parse_block_and_stage(&s, ""), rest.to_string())
     };
     if instr.is_empty() {
         s.push_output(OutputLine::notice(
@@ -1135,16 +1136,17 @@ pub(crate) fn apply_filter(mut s: State, rest: &str) -> State {
         ));
         return s;
     }
-    let Some(block) = block else {
+    let Some((block, stage)) = target else {
         s.push_output(OutputLine::notice(
             "✘ :filtra — no hay salida de un bloque previo para filtrar",
         ));
         return s;
     };
-    let body = gather_block_text(&s, block);
+    let label = target_label(block, stage);
+    let body = gather_target_text(&s, block, stage);
     if body.trim().is_empty() {
         s.push_output(OutputLine::notice(format!(
-            "✘ :filtra — el bloque %c{block} no tiene salida"
+            "✘ :filtra — {label} no tiene salida"
         )));
         return s;
     }
@@ -1157,13 +1159,13 @@ pub(crate) fn apply_filter(mut s: State, rest: &str) -> State {
     s.llm_request = Some(LlmRequest {
         kind: LlmKind::Text,
         system,
-        prompt: format!("INSTRUCCIÓN: {instr}\n\nSALIDA del bloque %c{block}:\n\n{body}"),
+        prompt: format!("INSTRUCCIÓN: {instr}\n\nSALIDA del bloque {label}:\n\n{body}"),
         max_tokens: 1200,
         llm: wawa_config::WawaConfig::load().ai.llm,
     });
-    s.llm_block_label = Some(format!("🜲 :filtra «{instr}» ← %c{block}"));
+    s.llm_block_label = Some(format!("🜲 :filtra «{instr}» ← {label}"));
     s.push_output(OutputLine::notice(format!(
-        "🜲 llm · filtrando %c{block}: {instr}…"
+        "🜲 llm · filtrando {label}: {instr}…"
     )));
     s
 }
@@ -1351,6 +1353,50 @@ fn parse_block_ref(s: &State, rest: &str) -> Option<u64> {
         .rev()
         .find(|l| l.kind == OutputKind::Stdout && l.stage.is_none())
         .map(|l| l.block)
+}
+
+/// Parsea una ref que puede traer **etapa del tee**: `%c5.2` / `%c5:2` →
+/// `(5, Some(2))`; `%c5` → `(5, None)`. La etapa es 0-based, como los chips del
+/// pipe. Reusa [`parse_block_ref`] para el bloque (acepta `%cN`/`%pN`/número
+/// pelado y, vacío, el último con salida). Así los intermedios del tee —antes
+/// sólo mirables— se vuelven direccionables por `:filtra`/`:write`/`:yank`/
+/// `:explica`.
+fn parse_block_and_stage(s: &State, token: &str) -> Option<(u64, Option<usize>)> {
+    let t = token.trim();
+    let (base, stage) = match t.rsplit_once(['.', ':']) {
+        Some((b, k)) => match k.parse::<usize>() {
+            Ok(k) => (b, Some(k)),
+            Err(_) => (t, None),
+        },
+        None => (t, None),
+    };
+    let block = parse_block_ref(s, base)?;
+    Some((block, stage))
+}
+
+/// Texto del objetivo de un redireccionador: el bloque entero
+/// ([`gather_block_text`]) o, si `stage` está dado, sólo las líneas capturadas
+/// de esa etapa intermedia del pipe (tee).
+fn gather_target_text(s: &State, block: u64, stage: Option<usize>) -> String {
+    let Some(k) = stage else {
+        return gather_block_text(s, block);
+    };
+    let mut out = String::new();
+    for l in &s.output {
+        if l.block == block && l.stage == Some(k) {
+            out.push_str(&l.text);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Etiqueta corta de un objetivo para los avisos: `%c5` o `%c5.2`.
+fn target_label(block: u64, stage: Option<usize>) -> String {
+    match stage {
+        Some(k) => format!("%c{block}.{k}"),
+        None => format!("%c{block}"),
+    }
 }
 
 /// Trunca un cuerpo a `max` chars por el medio (cabeza + cola), preservando
@@ -1563,12 +1609,12 @@ pub(crate) fn apply_write(mut s: State, rest: &str) -> State {
     // Si el primer token es una ref `%cN`/`%pN`, ese es el bloque y el resto el
     // archivo; si no, no hay ref → último bloque con stdout y todo es el path.
     let first_is_ref = first.starts_with("%c") || first.starts_with("%p");
-    let (block, path) = if first_is_ref {
-        (parse_block_ref(&s, first), parts.next().unwrap_or("").trim().to_string())
+    let (target_ref, path) = if first_is_ref {
+        (parse_block_and_stage(&s, first), parts.next().unwrap_or("").trim().to_string())
     } else {
-        (parse_block_ref(&s, ""), rest.to_string())
+        (parse_block_and_stage(&s, ""), rest.to_string())
     };
-    let Some(block) = block else {
+    let Some((block, stage)) = target_ref else {
         s.push_output(OutputLine::notice(
             "✘ :write — no hay salida de un bloque previo para volcar",
         ));
@@ -1578,17 +1624,18 @@ pub(crate) fn apply_write(mut s: State, rest: &str) -> State {
         s.push_output(OutputLine::notice("✘ :write — falta el archivo destino"));
         return s;
     }
-    let data = gather_block_text(&s, block);
+    let label = target_label(block, stage);
+    let data = gather_target_text(&s, block, stage);
     if data.is_empty() {
         s.push_output(OutputLine::notice(format!(
-            "✘ :write — el bloque %c{block} no tiene salida"
+            "✘ :write — {label} no tiene salida"
         )));
         return s;
     }
     let target = resolve_write_path(&path, &s);
     match std::fs::write(&target, data.as_bytes()) {
         Ok(()) => s.push_output(OutputLine::notice(format!(
-            "✔ %c{block}: {} bytes → {}",
+            "✔ {label}: {} bytes → {}",
             data.len(),
             target.display()
         ))),
@@ -1606,27 +1653,28 @@ pub(crate) fn apply_write(mut s: State, rest: &str) -> State {
 /// display server, igual que el copy de la selección).
 pub(crate) fn apply_yank(mut s: State, rest: &str) -> State {
     let first = rest.trim().split_whitespace().next().unwrap_or("");
-    let block = if first.starts_with("%c") || first.starts_with("%p") {
-        parse_block_ref(&s, first)
+    let target_ref = if first.starts_with("%c") || first.starts_with("%p") {
+        parse_block_and_stage(&s, first)
     } else {
-        parse_block_ref(&s, "")
+        parse_block_and_stage(&s, "")
     };
-    let Some(block) = block else {
+    let Some((block, stage)) = target_ref else {
         s.push_output(OutputLine::notice(
             "✘ :yank — no hay salida de un bloque previo para copiar",
         ));
         return s;
     };
-    let data = gather_block_text(&s, block);
+    let label = target_label(block, stage);
+    let data = gather_target_text(&s, block, stage);
     if data.is_empty() {
         s.push_output(OutputLine::notice(format!(
-            "✘ :yank — el bloque %c{block} no tiene salida"
+            "✘ :yank — {label} no tiene salida"
         )));
         return s;
     }
     set_clipboard(&data);
     s.push_output(OutputLine::notice(format!(
-        "✔ %c{block}: {} bytes ({} líneas) → clipboard",
+        "✔ {label}: {} bytes ({} líneas) → clipboard",
         data.len(),
         data.lines().count()
     )));

@@ -474,6 +474,36 @@
     }
 
     #[test]
+    fn etapa_del_tee_es_redirigible_y_filtrable() {
+        // Un pipe con captura por etapa: las líneas intermedias (stage=Some(k))
+        // antes sólo se miraban. Ahora `%cN.K` las direcciona.
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        let mut head = OutputLine::stdout("línea final del pipe");
+        head.block = 5;
+        s.output.push(head);
+        for t in ["intermedio A", "intermedio B"] {
+            let mut l = OutputLine::stage_stdout(1, t);
+            l.block = 5;
+            s.output.push(l);
+        }
+        // `:yank %c5.1` recoge SÓLO las líneas de la etapa 1, no el cuerpo.
+        s.input.set_text(":yank %c5.1");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(
+            s.output.iter().any(|l| l.text.contains("%c5.1") && l.text.contains("2 líneas")),
+            "yank de etapa no recogió 2 líneas: {:?}",
+            s.output.iter().map(|l| &l.text).collect::<Vec<_>>()
+        );
+        // `:filtra %c5.1` arma el prompt con el texto de la etapa, no del cuerpo.
+        s.input.set_text(":filtra %c5.1 dame sólo A");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let req = s.llm_request.clone().expect("filtra sobre la etapa");
+        assert!(req.prompt.contains("intermedio A"));
+        assert!(!req.prompt.contains("línea final del pipe"), "no debe traer el cuerpo");
+    }
+
+    #[test]
     fn predice_lista_comandos_por_frecuencia_y_cwd() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/repo");
