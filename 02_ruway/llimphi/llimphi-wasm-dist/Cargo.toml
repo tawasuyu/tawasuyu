@@ -1,0 +1,17 @@
+[package]
+name = "llimphi-wasm-dist"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-dist — distribución por hash de apps WASM Tier 3. Resuelve el bytecode de una app por su hash BLAKE3 (CAS local en disco hoy; backend P2P sobre BrahmanNet como impl del trait BlobSource), verifica integridad y la concesión de capacidad Ed25519 (format::ConcesionCapacidad) contra un anillo de confianza cargable, calcula los permisos efectivos y entrega una VerifiedApp lista para correr en llimphi-wasm-runner. Es el gemelo host de la cadena bytecode→concesión→permisos del kernel de wawa. Cablea app_bus::Launch::Wasm."
+
+[dependencies]
+llimphi-wasm-runner = { workspace = true }
+# El hash canónico, ConcesionCapacidad, Permisos, mensaje_capacidad, Objeto.
+format = { path = "../../../shared/format" }
+# verify_signature (Ed25519, ed25519-dalek host-side) + Keypair.
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+app-bus = { workspace = true }
+hex = { workspace = true }

@@ -12,7 +12,13 @@ llimphi-ui = { workspace = true }
 llimphi-wire-view = { workspace = true }
 wasmi = { workspace = true }
 postcard = { workspace = true }
+# Permisos: el mismo bitfield que firma una ConcesionCapacidad, para gatear
+# qué host imports se enlazan (frontera física, espejo host del kernel wawa).
+format = { path = "../../../shared/format" }
 
 [dev-dependencies]
 # El fixture .wasm del counter se compila aparte (scripts/build-wasm-demo.sh)
 # y se versiona en assets/; el test lo carga con include_bytes!.
+# `wat` compila en runtime el módulo-fixture que prueba el gateo por permiso,
+# sin depender del toolchain wasm32 (igual criterio que llimphi-plugin-host).
+wat = { workspace = true }

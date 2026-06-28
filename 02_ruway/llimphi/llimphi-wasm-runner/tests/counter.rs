@@ -29,7 +29,7 @@ fn number(guest: &WasmGuest) -> String {
 
 #[test]
 fn counter_round_trip() {
-    let mut guest = WasmGuest::load(COUNTER_WASM).expect("carga el guest counter");
+    let mut guest = WasmGuest::load(COUNTER_WASM, 0).expect("carga el guest counter");
 
     // Estado inicial.
     assert_eq!(number(&guest), "0");
@@ -56,7 +56,7 @@ fn counter_round_trip() {
 
 #[test]
 fn materializa_view_real() {
-    let guest = WasmGuest::load(COUNTER_WASM).expect("carga el guest counter");
+    let guest = WasmGuest::load(COUNTER_WASM, 0).expect("carga el guest counter");
 
     // El WireNode se convierte en un View<RunnerMsg> Llimphi de verdad: si el
     // mapeo explota (estilos, colores, handlers), esto trap-ea.

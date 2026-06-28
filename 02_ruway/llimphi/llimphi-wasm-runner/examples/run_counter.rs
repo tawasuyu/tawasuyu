@@ -22,7 +22,8 @@ impl App for Host {
     }
 
     fn init(_: &Handle<Self::Msg>) -> Self::Model {
-        WasmGuest::load(COUNTER_WASM).expect("cargar counter.wasm")
+        // App pura de UI: sin permisos. No importa nada del host.
+        WasmGuest::load(COUNTER_WASM, 0).expect("cargar counter.wasm")
     }
 
     fn update(mut model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {

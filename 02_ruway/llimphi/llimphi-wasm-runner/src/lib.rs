@@ -26,7 +26,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 use llimphi_wire_view::{Align, Dim, Dir, Justify, TextAlign, WireNode};
-use wasmi::{CompilationMode, Config, Engine, Linker, Memory, Module, Store, TypedFunc};
+use wasmi::{Caller, CompilationMode, Config, Engine, Linker, Memory, Module, Store, TypedFunc};
+
+pub use format::Permisos;
 
 /// Mensaje del host. La única variante lleva los bytes del `Msg` del guest, tal
 /// como vinieron en el `on_click` del `WireNode`. El host no los interpreta —
@@ -53,7 +55,13 @@ pub struct WasmGuest {
 
 impl WasmGuest {
     /// Instancia el `.wasm` y corre `wasm_init` + el primer `wasm_view`.
-    pub fn load(wasm_bytes: &[u8]) -> Result<Self, String> {
+    ///
+    /// `permisos` es el bitfield efectivo (típicamente
+    /// `format::permisos_efectivos(declarados, concedidos)` que calcula
+    /// `llimphi-wasm-dist` tras verificar la concesión Ed25519). Gatea qué host
+    /// imports se enlazan: si el bit falta, la función no se registra y un guest
+    /// que la importe **trap-ea al instanciar** — frontera física, no tabla.
+    pub fn load(wasm_bytes: &[u8], permisos: Permisos) -> Result<Self, String> {
         // Eager: los traps de compilación salen acá, no en pleno frame. Igual
         // criterio que llimphi-plugin-host y el kernel de wawa.
         let mut config = Config::default();
@@ -61,10 +69,9 @@ impl WasmGuest {
         let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm_bytes).map_err(|e| format!("compilar wasm: {e}"))?;
         let mut store = Store::new(&engine, ());
-        // Linker vacío: una app Tier 3 pura (sólo UI) no importa nada del host.
-        // Las capacidades (fs/red) se sumarían acá, gateadas por Permissions,
-        // igual que el gateo por import de plugin-host.
-        let linker = Linker::<()>::new(&engine);
+        // Una app Tier 3 pura (sólo UI) no importa nada; las capacidades (red…)
+        // se enlazan acá sólo si el permiso correspondiente está concedido.
+        let linker = build_linker(&engine, permisos)?;
         let instance = linker
             .instantiate_and_start(&mut store, &module)
             .map_err(|e| format!("instanciar wasm: {e}"))?;
@@ -251,4 +258,53 @@ fn map_text_align(a: TextAlign) -> llimphi_ui::llimphi_text::Alignment {
         TextAlign::Center => llimphi_ui::llimphi_text::Alignment::Center,
         TextAlign::End => llimphi_ui::llimphi_text::Alignment::End,
     }
+}
+
+// =====================================================================
+// Host imports — gateados por Permisos (frontera física, espejo host de
+// wawa::wasm::env). Namespace `"tawa"`. Si el bit no está, el import no se
+// enlaza y el guest que lo use trap-ea al instanciar.
+// =====================================================================
+
+/// Construye el linker para un guest con los `permisos` dados. Las funciones
+/// inocuas (log) van siempre; las que tocan recursos se enlazan sólo con su bit.
+pub fn build_linker(engine: &Engine, permisos: Permisos) -> Result<Linker<()>, String> {
+    let mut linker = Linker::<()>::new(engine);
+
+    // `host_log` — siempre disponible: traza, no toca recursos.
+    linker
+        .func_wrap("tawa", "host_log", |caller: Caller<'_, ()>, ptr: i32, len: i32| {
+            if let Some(s) = read_utf8(&caller, ptr, len) {
+                eprintln!("[wasm] {s}");
+            }
+        })
+        .map_err(|e| format!("enlazar host_log: {e}"))?;
+
+    // `host_net_request` — pide bytes a la red por hash (futuro: sobre
+    // BrahmanNet). Gateado por PERMISO_RED: sin él, no se enlaza. Hoy es un
+    // stub que devuelve -1 (no implementado), pero la FRONTERA ya es real:
+    // un guest sin el permiso ni siquiera instancia si lo importa.
+    if permisos & format::PERMISO_RED != 0 {
+        linker
+            .func_wrap(
+                "tawa",
+                "host_net_request",
+                |_caller: Caller<'_, ()>, _ptr: i32, _len: i32| -> i32 { -1 },
+            )
+            .map_err(|e| format!("enlazar host_net_request: {e}"))?;
+    }
+
+    Ok(linker)
+}
+
+fn read_utf8(caller: &Caller<'_, ()>, ptr: i32, len: i32) -> Option<String> {
+    let memory = caller.get_export("memory")?.into_memory()?;
+    let ptr = ptr.max(0) as usize;
+    let len = len.max(0) as usize;
+    let data = memory.data(caller);
+    let end = ptr.checked_add(len)?;
+    if end > data.len() {
+        return None;
+    }
+    String::from_utf8(data[ptr..end].to_vec()).ok()
 }

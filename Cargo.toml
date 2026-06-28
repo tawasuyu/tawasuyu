@@ -249,6 +249,7 @@ members = [
     "02_ruway/llimphi/llimphi-wire-view",
     "02_ruway/llimphi/llimphi-wasm-app-sdk",
     "02_ruway/llimphi/llimphi-wasm-runner",
+    "02_ruway/llimphi/llimphi-wasm-dist",
     "02_ruway/llimphi/llimphi-wasm-demo-counter",
     "02_ruway/llimphi/llimphi-layer",
     "02_ruway/llimphi/llimphi-motion",
@@ -783,6 +784,9 @@ llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 llimphi-wire-view = { path = "02_ruway/llimphi/llimphi-wire-view" }
 llimphi-wasm-app-sdk = { path = "02_ruway/llimphi/llimphi-wasm-app-sdk" }
 llimphi-wasm-runner = { path = "02_ruway/llimphi/llimphi-wasm-runner" }
+# Distribución por hash: resuelve+verifica (integridad + concesión Ed25519) y
+# entrega una VerifiedApp al runner. Cablea app_bus::Launch::Wasm.
+llimphi-wasm-dist = { path = "02_ruway/llimphi/llimphi-wasm-dist" }
 llimphi-3d = { path = "02_ruway/llimphi/llimphi-3d" }
 # Runner wlr-layer-shell: corre un `App` de Llimphi como barra anclada a un
 # borde (no como ventana), reusando la plumbing sctk+wgpu que pata probó.
