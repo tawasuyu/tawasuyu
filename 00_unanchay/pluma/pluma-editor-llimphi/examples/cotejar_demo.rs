@@ -30,7 +30,7 @@ use pluma_cotejo_llm::{items_desde_secciones, resumir_diferencias};
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_llimphi::multilienzo::{
-    multilienzo_cotejo_view, IndiceAtoms, MultilienzoConfig, PaletaHebras,
+    multilienzo_cotejo_view_reorderable, IndiceAtoms, MultilienzoConfig, PaletaHebras,
 };
 use pluma_editor_llimphi::Palette;
 use pluma_llm_core::ChatClient;
@@ -41,6 +41,8 @@ use uuid::Uuid;
 enum Msg {
     /// Invierte izquierda↔derecha y recalcula.
     Invertir,
+    /// Drag-to-swap: se soltó la columna `desde` sobre la `hasta`.
+    Reordenar(usize, usize),
     /// Lanza el resumidor IA sobre las secciones cambiadas.
     Resumir,
     /// Resultado del resumidor: una línea por sección, en orden.
@@ -63,6 +65,9 @@ struct Model {
     divergencias: HashMap<Uuid, f32>,
     secciones: Vec<SeccionCotejo>,
     conteo: String,
+    /// Orden de display de las 3 columnas, índices del canónico `[izq, dif, der]`.
+    /// El drag-to-swap lo permuta; `recotejar` lo resetea a `[0, 1, 2]`.
+    orden: Vec<usize>,
     // --- IA ---
     chat: Arc<dyn ChatClient>,
     resumiendo: bool,
@@ -103,7 +108,19 @@ impl Model {
         self.carta_der = col.carta_der;
         self.divergencias = divergencias;
         self.secciones = cot.secciones;
+        self.orden = vec![0, 1, 2];
     }
+}
+
+/// Busca en el pool la carta que conecta los cuerpos `a` y `b` (en cualquier
+/// orden). `None` si ese par no tiene carta — caso normal tras reordenar.
+fn carta_par<'a>(pool: &[&'a CartaHebras], a: Uuid, b: Uuid) -> Option<&'a CartaHebras> {
+    pool.iter()
+        .copied()
+        .find(|c| {
+            (c.cuerpo_a == Some(a) && c.cuerpo_b == Some(b))
+                || (c.cuerpo_a == Some(b) && c.cuerpo_b == Some(a))
+        })
 }
 
 struct Demo;
@@ -158,9 +175,10 @@ impl App for Demo {
             divergencias: HashMap::new(),
             secciones: Vec::new(),
             conteo: String::new(),
+            orden: vec![0, 1, 2],
             chat: construir_chat(),
             resumiendo: false,
-            status: "i: invertir · r: resumen IA".into(),
+            status: "arrastrá una cabecera para reordenar · i: invertir · r: resumen IA".into(),
         };
         m.recotejar();
         m
@@ -187,6 +205,13 @@ impl App for Demo {
                     "invertido — «{}» ↔ «{}»",
                     model.izq.metadatos.nombre_legible, model.der.metadatos.nombre_legible
                 );
+            }
+            Msg::Reordenar(desde, hasta) => {
+                let n = model.orden.len();
+                if desde < n && hasta < n && desde != hasta {
+                    model.orden.swap(desde, hasta);
+                    model.status = "columnas reordenadas".into();
+                }
             }
             Msg::Resumir => {
                 if model.resumiendo {
@@ -251,10 +276,18 @@ impl App for Demo {
         };
 
         let index: IndiceAtoms = model.atoms.iter().map(|(id, a)| (*id, a)).collect();
-        let cuerpos_ref: Vec<&Cuerpo> = vec![&model.izq, &model.dif, &model.der];
-        let cartas_ref: Vec<Option<&CartaHebras>> = vec![Some(&model.carta_izq), Some(&model.carta_der)];
+        // Canónico [izq, dif, der]; el display sigue `orden` (drag-to-swap).
+        let canon: [&Cuerpo; 3] = [&model.izq, &model.dif, &model.der];
+        let cuerpos_ref: Vec<&Cuerpo> = model.orden.iter().map(|&i| canon[i]).collect();
+        // Carril de cada par adyacente = la carta que conecta esos dos cuerpos
+        // (no por posición), así reordenar mueve las hebras con las columnas.
+        let pool: [&CartaHebras; 2] = [&model.carta_izq, &model.carta_der];
+        let cartas_ref: Vec<Option<&CartaHebras>> = cuerpos_ref
+            .windows(2)
+            .map(|w| carta_par(&pool, w[0].id, w[1].id))
+            .collect();
 
-        let interior = multilienzo_cotejo_view::<Msg>(
+        let interior = multilienzo_cotejo_view_reorderable::<Msg, _>(
             &cuerpos_ref,
             &index,
             &cartas_ref,
@@ -263,6 +296,7 @@ impl App for Demo {
             &paleta_hebras,
             &palette,
             "",
+            |desde, hasta| Some(Msg::Reordenar(desde, hasta)),
         );
 
         let titulo = View::<Msg>::new(Style {

@@ -450,6 +450,46 @@ fn modelo_sintetico(diente: usize) -> Model {
         }
     }
 
+    // 17 → overlay de cotejo con las columnas REORDENADAS (drag-to-swap): el
+    // lienzo de diferencias se movió a la derecha. Demuestra que los carriles se
+    // recalculan por adyacencia (izq↔der queda sin hebras; der↔dif las conserva).
+    if diente == 17 {
+        let original = [
+            "Pluma es un editor de documentos como haz de cuerpos.",
+            "Cada cuerpo es un lienzo del mismo material bajo otra mirada.",
+            "Los párrafos se alinean uno a uno entre cuerpos.",
+            "El motor gráfico se llamaba GPUI en las primeras versiones.",
+            "La persistencia vive en una base sled embebida.",
+        ];
+        let editado = [
+            "Pluma es un editor de documentos como haz de cuerpos.",
+            "Cada cuerpo es un lienzo del mismo material visto desde otra intención.",
+            "Los párrafos quedan alineados uno a uno entre los cuerpos del haz.",
+            "Hoy todo lo gráfico corre sobre Llimphi con wgpu y vello.",
+            "La persistencia vive en una base sled embebida.",
+            "Un cotejo compara dos versiones sección por sección.",
+        ];
+        let izq = cuerpo_con_atomos(&mut m.atoms, "a", "original.md", Intencion::Original, &original);
+        let der = cuerpo_con_atomos(
+            &mut m.atoms,
+            "b",
+            "editado.md",
+            Intencion::Custom { kind: "versión".into() },
+            &editado,
+        );
+        let (iid, did) = (izq.id, der.id);
+        m.cuerpos.push(izq);
+        m.cuerpos.push(der);
+        m.orden_lienzos = vec![iid, did];
+        m.seleccionados = vec![iid, did];
+        crate::update::cotejar_seleccion(&mut m);
+        // Simula el resultado de arrastrar la columna del medio (diferencias) al
+        // final: orden [izq, der, dif] en vez de [izq, dif, der].
+        if let Some(cot) = m.cotejo.as_mut() {
+            cot.cuerpos.swap(1, 2);
+        }
+    }
+
     // 12 → proyecto con historia (varios pushes + una rama) en pestaña Historia.
     if diente == 12 {
         use pluma_proyecto::{DocEstado, Proyecto};

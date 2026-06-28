@@ -783,6 +783,17 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 model.ultimo_status = format!("resumen IA aplicado a {aplicadas} secciones");
             }
         }
+        Msg::CotejoReordenar(desde, hasta) => {
+            if let Some(cot) = model.cotejo.as_mut() {
+                let n = cot.cuerpos.len();
+                if desde < n && hasta < n && desde != hasta {
+                    // Swap de columnas. Las cartas (pool) y divergencias (por id
+                    // de átomo) no dependen del orden; el carril de cada par se
+                    // recalcula por adyacencia al pintar.
+                    cot.cuerpos.swap(desde, hasta);
+                }
+            }
+        }
         Msg::CotejoResumenError(s) => {
             if let Some(cot) = model.cotejo.as_mut() {
                 cot.resumiendo = false;

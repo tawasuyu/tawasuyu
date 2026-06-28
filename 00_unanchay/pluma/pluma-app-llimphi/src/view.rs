@@ -38,7 +38,7 @@ use pluma_align::CartaHebras;
 use pluma_cuerpo::Cuerpo;
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
 use pluma_editor_llimphi::multilienzo::{
-    multilienzo_cotejo_view, IndiceAtoms, MultilienzoConfig, PaletaHebras,
+    multilienzo_cotejo_view_reorderable, IndiceAtoms, MultilienzoConfig, PaletaHebras,
 };
 use pluma_editor_llimphi::lienzos::{
     lienzos_multi_view, ConfigLienzos, EdicionLienzo, EjecucionLienzo,
@@ -2715,6 +2715,16 @@ fn divider(theme: &Theme) -> View<Msg> {
 }
 
 /// Overlay flotante: menú de edición contextual o dropdown del menú principal.
+/// Busca en el pool de cartas la que conecta los cuerpos `a` y `b` (en
+/// cualquier orden), por sus ids anotados en `cuerpo_a`/`cuerpo_b`. `None` si
+/// ese par no tiene carta (caso normal tras reordenar: un par sin hebras).
+fn carta_para_par(pool: &[CartaHebras], a: Uuid, b: Uuid) -> Option<&CartaHebras> {
+    pool.iter().find(|c| {
+        let (ca, cb) = (c.cuerpo_a, c.cuerpo_b);
+        (ca == Some(a) && cb == Some(b)) || (ca == Some(b) && cb == Some(a))
+    })
+}
+
 /// Overlay de **cotejo** a pantalla completa: dos documentos como lienzos
 /// paralelos con el lienzo de diferencias en el medio, teñidos de verde
 /// (coinciden) a rojo (difieren). Cabecera con conteo + ✕; el cuerpo es el
@@ -2742,7 +2752,8 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
             ..Default::default()
         })
         .text_aligned(
-            "Cotejo de documentos — verde = coincide · rojo = difiere".to_string(),
+            "Cotejo — verde = coincide · rojo = difiere · arrastrá una cabecera para reordenar"
+                .to_string(),
             14.0,
             theme.fg_text,
             Alignment::Start,
@@ -2793,9 +2804,15 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
 
     let index: IndiceAtoms = cot.atoms.iter().map(|(id, a)| (*id, a)).collect();
     let cuerpos_ref: Vec<&Cuerpo> = cot.cuerpos.iter().collect();
-    let cartas_ref: Vec<Option<&CartaHebras>> = cot.cartas.iter().map(Some).collect();
+    // El carril de cada par adyacente sale de la carta que conecta ESOS dos
+    // cuerpos (no por posición fija): así reordenar columnas mueve las hebras
+    // con ellas. Pares sin carta (p. ej. izquierda junto a derecha) → sin hebras.
+    let cartas_ref: Vec<Option<&CartaHebras>> = cuerpos_ref
+        .windows(2)
+        .map(|w| carta_para_par(&cot.cartas, w[0].id, w[1].id))
+        .collect();
 
-    let interior = multilienzo_cotejo_view::<Msg>(
+    let interior = multilienzo_cotejo_view_reorderable::<Msg, _>(
         &cuerpos_ref,
         &index,
         &cartas_ref,
@@ -2804,6 +2821,7 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         &paleta_hebras,
         &palette_lienzo,
         "",
+        |desde, hasta| Some(Msg::CotejoReordenar(desde, hasta)),
     );
 
     // Scroll vertical: el multilienzo se posiciona absoluto y se sube por

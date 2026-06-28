@@ -540,6 +540,9 @@ pub enum Msg {
     CotejoResumenListo(Vec<String>),
     /// El resumidor IA falló — se conserva el resumen textual y se avisa.
     CotejoResumenError(String),
+    /// Reordena las columnas del cotejo: se soltó la cabecera `desde` sobre la
+    /// `hasta` (índices dentro de `EstadoCotejo::cuerpos`). Drag-to-swap.
+    CotejoReordenar(usize, usize),
 }
 
 /// Estado del overlay de **cotejo**: dos documentos comparados como lienzos

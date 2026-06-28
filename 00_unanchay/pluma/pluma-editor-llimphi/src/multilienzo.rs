@@ -148,6 +148,12 @@ impl Default for PaletaHebras {
 /// asumir su origen.
 pub type IndiceAtoms<'a> = HashMap<Uuid, &'a NarrativeAtom>;
 
+/// Callback de reordenamiento de columnas: `(desde, hasta)` son índices dentro
+/// del slice `cuerpos`. Se invoca al soltar la cabecera de la columna `desde`
+/// sobre la columna `hasta`. `Arc` + `Send + Sync` porque viaja dentro de los
+/// closures de drag/drop del `View`.
+pub type ReorderCols<Msg> = std::sync::Arc<dyn Fn(usize, usize) -> Option<Msg> + Send + Sync>;
+
 /// Datos pre-calculados de una hebra, listos para que la closure de
 /// `paint_with` solo dibuje. Se calcula en CPU una vez por frame.
 #[derive(Debug, Clone, Copy)]
@@ -210,6 +216,7 @@ pub fn multilienzo_view_resaltado<Msg: Clone + 'static>(
         palette,
         resaltar,
         None,
+        None,
         &|_, _| None,
     )
 }
@@ -245,6 +252,42 @@ pub fn multilienzo_cotejo_view<Msg: Clone + 'static>(
         palette,
         resaltar,
         Some(divergencias),
+        None,
+        &|_, _| None,
+    )
+}
+
+/// Variante **cotejo reordenable**: como [`multilienzo_cotejo_view`] pero las
+/// cabeceras de las columnas son **arrastrables** — soltar una sobre otra emite
+/// `on_reorder(desde, hasta)` con los índices dentro de `cuerpos`. El caller
+/// reordena su modelo y recalcula qué carta va en cada carril por adyacencia.
+/// Las cintas, el coloreado y el scroll quedan idénticos: sólo se vuelve
+/// interactiva la barra de título.
+pub fn multilienzo_cotejo_view_reorderable<Msg, F>(
+    cuerpos: &[&Cuerpo],
+    atoms: &IndiceAtoms<'_>,
+    cartas: &[Option<&CartaHebras>],
+    divergencias: &HashMap<Uuid, f32>,
+    cfg: &MultilienzoConfig,
+    paleta_hebras: &PaletaHebras,
+    palette: &Palette,
+    resaltar: &str,
+    on_reorder: F,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    F: Fn(usize, usize) -> Option<Msg> + Send + Sync + 'static,
+{
+    armar_multilienzo::<Msg>(
+        cuerpos,
+        atoms,
+        cartas,
+        cfg,
+        paleta_hebras,
+        palette,
+        resaltar,
+        Some(divergencias),
+        Some(std::sync::Arc::new(on_reorder)),
         &|_, _| None,
     )
 }
@@ -282,6 +325,7 @@ where
         palette,
         resaltar,
         None,
+        None,
         &|i, id| Some(on_atom_click(i, id)),
     )
 }
@@ -299,6 +343,7 @@ fn armar_multilienzo<Msg: Clone + 'static>(
     palette: &Palette,
     resaltar: &str,
     divergencias: Option<&HashMap<Uuid, f32>>,
+    on_reorder: Option<ReorderCols<Msg>>,
     on_atom_click: &dyn Fn(usize, Uuid) -> Option<Msg>,
 ) -> View<Msg> {
     if cuerpos.is_empty() {
@@ -367,6 +412,7 @@ fn armar_multilienzo<Msg: Clone + 'static>(
             alto_contenido,
             resaltar,
             &identidad[i],
+            on_reorder.as_ref(),
             on_atom_click,
         ));
         if i + 1 < cuerpos.len() {
@@ -414,6 +460,7 @@ fn columna_cuerpo<Msg: Clone + 'static>(
     alto_total: f32,
     resaltar: &str,
     identidad: &HashMap<Uuid, Color>,
+    on_reorder: Option<&ReorderCols<Msg>>,
     on_atom_click: &dyn Fn(usize, Uuid) -> Option<Msg>,
 ) -> View<Msg> {
     let header_text = format!(
@@ -422,7 +469,7 @@ fn columna_cuerpo<Msg: Clone + 'static>(
         intencion_label(&cuerpo.metadatos.intencion)
     );
 
-    let header = View::new(Style {
+    let mut header = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(cfg.alto_header),
@@ -437,6 +484,20 @@ fn columna_cuerpo<Msg: Clone + 'static>(
     })
     .fill(palette.bg_panel)
     .text_aligned(header_text, (cfg.font_size * 0.85).max(9.0), palette.fg_muted, Alignment::Start);
+
+    // Cabecera arrastrable (sólo en la variante reordenable): se la marca como
+    // origen de drag con payload = índice de columna, y como drop target que
+    // emite `on_reorder(desde, esta_columna)`. El cuerpo de la columna no se
+    // arrastra — sólo la barra de título, como en `tiled_view_reorderable`.
+    if let Some(reorder) = on_reorder {
+        let reorder = reorder.clone();
+        let destino = i_cuerpo;
+        header = header
+            .draggable(|_p, _dx, _dy| None::<Msg>)
+            .drag_payload(i_cuerpo as u64)
+            .on_drop(move |desde| reorder(desde as usize, destino))
+            .drop_hover_fill(mezclar(palette.bg_panel, palette.fg_text, 0.20));
+    }
 
     let mut bloques: Vec<View<Msg>> = Vec::with_capacity(cuerpo.orden.len());
     let resaltar_lc = if resaltar.is_empty() {
