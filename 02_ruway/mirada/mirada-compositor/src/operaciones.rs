@@ -333,6 +333,10 @@ impl App {
                 let _ = link.send(&ev);
             }
         }
+        // Re-emití las reservas (zonas exclusivas del shell): re-derivadas del
+        // layer_map, no dependen de que pata re-commitee. Tras el censo, así el
+        // Cerebro fresco no tesela sobre la barra.
+        self.recompute_reservations();
     }
 
     /// Enfoca/activa la ventana `id` —pedido de la taskbar por
