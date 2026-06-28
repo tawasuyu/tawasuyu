@@ -130,7 +130,9 @@ fn main() -> ExitCode {
 
     // --- IMAP: conectar + autenticar ---
     print!("→ IMAP: conectando y autenticando… ");
-    let backend = match NetBackend::connect(account, &imap_pw, &smtp_pw) {
+    let imap_sec = paloma_net::Secret::Password(imap_pw);
+    let smtp_sec = paloma_net::Secret::Password(smtp_pw);
+    let backend = match NetBackend::connect(account, &imap_sec, &smtp_sec) {
         Ok(b) => {
             println!("OK");
             b

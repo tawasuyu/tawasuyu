@@ -7,9 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lettre::message::header::{Header, HeaderName, HeaderValue};
 use lettre::message::{Mailbox as LettreMailbox, MultiPart};
-use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::{Message as LettreMessage, SmtpTransport, Transport};
 use paloma_core::{Address, MailError, MessageId, OutgoingMessage, Security, ServerConfig};
+
+use crate::secret::Secret;
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
@@ -63,7 +65,7 @@ impl Header for XPalomaCuerpos {
 /// Envía `msg` por el servidor `cfg`. Devuelve el `Message-ID` asignado
 /// (lo generamos nosotros y lo fijamos en el header, así el store puede
 /// referenciar el enviado).
-pub fn send(cfg: &ServerConfig, password: &str, msg: &OutgoingMessage) -> Result<MessageId, MailError> {
+pub fn send(cfg: &ServerConfig, secret: &Secret, msg: &OutgoingMessage) -> Result<MessageId, MailError> {
     let domain = msg.from.domain().unwrap_or("paloma.local");
     let id = MessageId(format!("<{}@{}>", unique_token(), domain));
 
@@ -108,15 +110,23 @@ pub fn send(cfg: &ServerConfig, password: &str, msg: &OutgoingMessage) -> Result
     }
     .map_err(|e| MailError::Parse(e.to_string()))?;
 
-    let creds = Credentials::new(cfg.username.clone(), password.to_string());
-    let transport = match cfg.security {
+    // El secreto es la contraseña o el access token OAuth2; en este último caso
+    // forzamos el mecanismo `XOAUTH2` (lettre arma la cadena SASL Bearer).
+    let (creds, oauth) = match secret {
+        Secret::Password(pw) => (Credentials::new(cfg.username.clone(), pw.clone()), false),
+        Secret::OAuth2(token) => (Credentials::new(cfg.username.clone(), token.clone()), true),
+    };
+    let mut builder = match cfg.security {
         Security::Tls => SmtpTransport::relay(&cfg.host).map_err(map_err)?,
         Security::StartTls => SmtpTransport::starttls_relay(&cfg.host).map_err(map_err)?,
         Security::Plain => SmtpTransport::builder_dangerous(&cfg.host),
     }
     .port(cfg.port)
-    .credentials(creds)
-    .build();
+    .credentials(creds);
+    if oauth {
+        builder = builder.authentication(vec![Mechanism::Xoauth2]);
+    }
+    let transport = builder.build();
 
     transport.send(&email).map_err(map_err)?;
     Ok(id)

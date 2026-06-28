@@ -1,0 +1,18 @@
+[package]
+name = "paloma-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-config — configuración de cuentas del correo: múltiples cuentas (IMAP/SMTP), presets por proveedor (Gmail/Outlook) y método de autenticación (contraseña u OAuth2). Persistencia JSON editable a mano; migra el viejo cuenta.json. Agnóstico a UI y red."
+
+[dependencies]
+paloma-core = { path = "../paloma-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

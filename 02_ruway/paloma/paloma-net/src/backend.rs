@@ -3,25 +3,27 @@ use std::sync::Mutex;
 use paloma_core::{Account, Flags, MailBackend, Mailbox, MailError, Message, MessageId, OutgoingMessage};
 
 use crate::imap_client::ImapClient;
+use crate::secret::Secret;
 use crate::smtp;
 
 /// Implementación real del [`MailBackend`]: IMAP para entrada (sesión viva tras
 /// un `Mutex`, porque el trait es `&self` pero IMAP es stateful) y SMTP para
-/// salida (sin conexión persistente; cada envío abre/cierra). La contraseña
-/// SMTP se guarda para reusarla por envío.
+/// salida (sin conexión persistente; cada envío abre/cierra). El secreto SMTP
+/// (contraseña o token OAuth2) se guarda para reusarlo por envío.
 pub struct NetBackend {
     account: Account,
-    smtp_password: String,
+    smtp_secret: Secret,
     imap: Mutex<ImapClient>,
 }
 
 impl NetBackend {
-    /// Conecta y autentica IMAP de una vez; guarda lo necesario para SMTP.
-    pub fn connect(account: Account, imap_password: &str, smtp_password: &str) -> Result<Self, MailError> {
-        let imap = ImapClient::connect(&account.imap, imap_password)?;
+    /// Conecta y autentica IMAP de una vez; guarda lo necesario para SMTP. Cada
+    /// servidor recibe su propio secreto (contraseña o token OAuth2).
+    pub fn connect(account: Account, imap_secret: &Secret, smtp_secret: &Secret) -> Result<Self, MailError> {
+        let imap = ImapClient::connect(&account.imap, imap_secret)?;
         Ok(Self {
             account,
-            smtp_password: smtp_password.to_string(),
+            smtp_secret: smtp_secret.clone(),
             imap: Mutex::new(imap),
         })
     }
@@ -48,7 +50,7 @@ impl MailBackend for NetBackend {
     }
 
     fn send(&self, msg: &OutgoingMessage) -> Result<MessageId, MailError> {
-        smtp::send(&self.account.smtp, &self.smtp_password, msg)
+        smtp::send(&self.account.smtp, &self.smtp_secret, msg)
     }
 
     fn set_flags(&self, mailbox: &str, id: &MessageId, flags: Flags) -> Result<(), MailError> {

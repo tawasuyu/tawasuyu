@@ -18,6 +18,7 @@ path = "src/bin/test_conexion.rs"
 
 [dependencies]
 paloma-core = { path = "../paloma-core" }
+paloma-config = { path = "../paloma-config" }
 paloma-net = { path = "../paloma-net" }
 paloma-store = { path = "../paloma-store" }
 paloma-semantic = { path = "../paloma-semantic" }

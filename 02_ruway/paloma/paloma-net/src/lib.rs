@@ -13,6 +13,8 @@
 mod backend;
 pub mod imap_client;
 pub mod mime;
+mod secret;
 pub mod smtp;
 
 pub use backend::NetBackend;
+pub use secret::Secret;

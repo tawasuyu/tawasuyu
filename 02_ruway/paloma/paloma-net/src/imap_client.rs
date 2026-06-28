@@ -20,9 +20,24 @@ use native_tls::TlsStream;
 use paloma_core::{Flags, Mailbox, MailError, Message, MessageId, Security, ServerConfig};
 
 use crate::mime;
+use crate::secret::Secret;
 
 /// Cuántos mensajes recientes traer por buzón si no se configura otra cosa.
 pub const DEFAULT_FETCH_LIMIT: usize = 200;
+
+/// Autenticador `XOAUTH2` para el `imap` crate: responde la cadena SASL Bearer
+/// (`user=…\x01auth=Bearer …\x01\x01`), que el cliente codifica en base64.
+struct XOAuth2 {
+    user: String,
+    token: String,
+}
+
+impl imap::Authenticator for XOAuth2 {
+    type Response = String;
+    fn process(&self, _challenge: &[u8]) -> Self::Response {
+        Secret::xoauth2_sasl(&self.user, &self.token)
+    }
+}
 
 /// Sesión IMAP autenticada, cifrada (TLS/STARTTLS) o en claro (plano).
 enum ImapSession {
@@ -38,29 +53,29 @@ pub struct ImapClient {
 }
 
 impl ImapClient {
-    /// Conecta y hace login según `cfg.security`. La contraseña la provee el
-    /// caller (a futuro, desde el proveedor de credenciales de la suite).
-    pub fn connect(cfg: &ServerConfig, password: &str) -> Result<Self, MailError> {
+    /// Conecta y autentica según `cfg.security`, con el secreto que provee el
+    /// caller: contraseña (`LOGIN`) o token OAuth2 (`AUTHENTICATE XOAUTH2`).
+    pub fn connect(cfg: &ServerConfig, secret: &Secret) -> Result<Self, MailError> {
         let session = match cfg.security {
             Security::Tls => {
                 let tls = build_tls()?;
                 let client = imap::connect((cfg.host.as_str(), cfg.port), cfg.host.as_str(), &tls)
                     .map_err(|e| MailError::Transport(e.to_string()))?;
-                ImapSession::Tls(login(client, cfg, password)?)
+                ImapSession::Tls(auth(client, cfg, secret)?)
             }
             Security::StartTls => {
                 let tls = build_tls()?;
                 let client =
                     imap::connect_starttls((cfg.host.as_str(), cfg.port), cfg.host.as_str(), &tls)
                         .map_err(|e| MailError::Transport(e.to_string()))?;
-                ImapSession::Tls(login(client, cfg, password)?)
+                ImapSession::Tls(auth(client, cfg, secret)?)
             }
             Security::Plain => {
                 let tcp = TcpStream::connect((cfg.host.as_str(), cfg.port))
                     .map_err(|e| MailError::Transport(e.to_string()))?;
                 let mut client = imap::Client::new(tcp);
                 client.read_greeting().map_err(|e| MailError::Transport(e.to_string()))?;
-                ImapSession::Plain(login(client, cfg, password)?)
+                ImapSession::Plain(auth(client, cfg, secret)?)
             }
         };
         Ok(Self { session, fetch_limit: Some(DEFAULT_FETCH_LIMIT) })
@@ -116,13 +131,22 @@ fn build_tls() -> Result<native_tls::TlsConnector, MailError> {
         .map_err(|e| MailError::Transport(e.to_string()))
 }
 
-/// Login genérico sobre cualquier `Client<T>`, mapeando el rechazo a `Auth`.
-fn login<T: Read + Write>(
+/// Autenticación genérica sobre cualquier `Client<T>`, mapeando el rechazo a
+/// `Auth`. Con contraseña usa `LOGIN`; con token OAuth2, `AUTHENTICATE XOAUTH2`.
+fn auth<T: Read + Write>(
     client: imap::Client<T>,
     cfg: &ServerConfig,
-    password: &str,
+    secret: &Secret,
 ) -> Result<Session<T>, MailError> {
-    client.login(&cfg.username, password).map_err(|(_e, _client)| MailError::Auth)
+    match secret {
+        Secret::Password(pw) => {
+            client.login(&cfg.username, pw).map_err(|(_e, _client)| MailError::Auth)
+        }
+        Secret::OAuth2(token) => {
+            let authr = XOAuth2 { user: cfg.username.clone(), token: token.clone() };
+            client.authenticate("XOAUTH2", &authr).map_err(|(_e, _client)| MailError::Auth)
+        }
+    }
 }
 
 /// `LIST "" "*"` → buzones nativos. Genérico sobre el tipo de stream.

@@ -32,81 +32,64 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, KeyEvent, Modifiers, View, WheelDelta};
-use serde::Deserialize;
 
-use paloma_core::{Account, Address, MailBackend, Security, ServerConfig};
+use paloma_config::{AccountEntry, PalomaConfig};
+use paloma_core::{Address, MailBackend};
 use paloma_llimphi::{Model, Msg};
+use paloma_net::Secret;
 
 mod identity;
 mod llm;
 mod rail;
 mod semantic;
 
-/// La cuenta tal como se escribe en el JSON: plana y cómoda de editar a mano.
-/// Se traduce a [`Account`] al arrancar.
-#[derive(Debug, Deserialize)]
-struct CuentaFile {
-    display_name: String,
-    email: String,
-    /// Usuario de login; si falta, se usa `email`.
-    #[serde(default)]
-    username: Option<String>,
-    imap_host: String,
-    imap_port: u16,
-    #[serde(default = "sec_tls")]
-    imap_security: String,
-    smtp_host: String,
-    smtp_port: u16,
-    #[serde(default = "sec_tls")]
-    smtp_security: String,
-}
-
-fn sec_tls() -> String {
-    "tls".to_string()
-}
-
-fn parse_security(s: &str) -> Security {
-    match s.to_ascii_lowercase().as_str() {
-        "plain" | "none" => Security::Plain,
-        "starttls" => Security::StartTls,
-        _ => Security::Tls,
+/// El directorio de config de la cuenta: el de `PALOMA_CONFIG` (su padre) si
+/// está seteado, si no el del SO (`~/.config/paloma` en Linux).
+fn paloma_config_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("PALOMA_CONFIG") {
+        return PathBuf::from(p).parent().map(|d| d.to_path_buf());
     }
+    ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.config_dir().to_path_buf())
 }
 
-impl CuentaFile {
-    fn into_account(self) -> Account {
-        let user = self.username.unwrap_or_else(|| self.email.clone());
-        let imap = ServerConfig::new(self.imap_host, self.imap_port, parse_security(&self.imap_security), user.clone());
-        let smtp = ServerConfig::new(self.smtp_host, self.smtp_port, parse_security(&self.smtp_security), user);
-        Account::new(
-            "default",
-            self.display_name.clone(),
-            Address::named(self.display_name, self.email),
-            imap,
-            smtp,
-        )
-    }
-}
-
-/// Ruta del JSON de la cuenta: `PALOMA_CONFIG` si está, si no el dir de config
-/// del SO (`~/.config/paloma/cuenta.json` en Linux).
-fn config_path() -> Option<PathBuf> {
+/// Ruta del JSON de cuentas: `PALOMA_CONFIG` si está (apunta directo al archivo),
+/// si no `<config_dir>/cuentas.json`. La carga migra el viejo `cuenta.json`.
+fn cuentas_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PALOMA_CONFIG") {
         return Some(PathBuf::from(p));
     }
-    ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.config_dir().join("cuenta.json"))
+    paloma_config_dir().map(|d| paloma_config::config_path(&d))
 }
 
-/// Contraseñas IMAP/SMTP desde entorno. `PALOMA_PASSWORD` cubre ambas; las
-/// específicas la pisan. `None` si no hay ninguna (→ modo demo).
-fn passwords() -> Option<(String, String)> {
+/// Construye el secreto IMAP/SMTP de una cuenta:
+/// - OAuth2 → lee el `access_token` del archivo de token (lo escribe el helper
+///   `paloma-oauth`); falta el archivo ⇒ no hay secreto (cae a demo).
+/// - Contraseña → `PALOMA_PASSWORD` (o `PALOMA_IMAP_PASSWORD`/`PALOMA_SMTP_PASSWORD`).
+///
+/// Devuelve `(imap, smtp)`; `None` si falta el secreto necesario.
+fn secrets_for(entry: &AccountEntry) -> Option<(Secret, Secret)> {
+    if entry.is_oauth() {
+        let dir = paloma_config_dir()?;
+        let token = read_oauth_token(&paloma_config::oauth_token_path(&dir, &entry.id))?;
+        let s = Secret::OAuth2(token);
+        return Some((s.clone(), s));
+    }
     let both = std::env::var("PALOMA_PASSWORD").ok();
     let imap = std::env::var("PALOMA_IMAP_PASSWORD").ok().or_else(|| both.clone());
     let smtp = std::env::var("PALOMA_SMTP_PASSWORD").ok().or(both);
     match (imap, smtp) {
-        (Some(i), Some(s)) => Some((i, s)),
+        (Some(i), Some(s)) => Some((Secret::Password(i), Secret::Password(s))),
         _ => None,
     }
+}
+
+/// Lee el `access_token` del archivo de token OAuth de una cuenta (formato que
+/// escribe `paloma-oauth`: `{"access_token": "...", ...}`). `None` si falta o no
+/// parsea.
+fn read_oauth_token(path: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get("access_token")?.as_str().map(|s| s.to_string())
 }
 
 /// Lo que `try_net` entrega cuando hay una conexión real.
@@ -124,29 +107,37 @@ fn cache_dir() -> Option<PathBuf> {
     ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.cache_dir().to_path_buf())
 }
 
-/// Directorio de config (`~/.config/paloma` en Linux). Hogar de `cuenta.json` y
+/// Directorio de config (`~/.config/paloma` en Linux). Hogar de `cuentas.json` y
 /// de la seed de identidad (`identity.seed`).
 fn config_dir() -> Option<PathBuf> {
     ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.config_dir().to_path_buf())
 }
 
-/// Intenta armar el `NetBackend` real. Devuelve `Err(motivo)` legible si falta
-/// config/credenciales o falla la conexión — el caller cae a demo y lo informa.
+/// Intenta armar el `NetBackend` real para la **cuenta activa** de la config
+/// (`cuentas.json`, o el `cuenta.json` heredado migrado). Devuelve `Err(motivo)`
+/// legible si falta config/credenciales o falla la conexión — el caller cae a
+/// demo y lo informa. (La conmutación entre cuentas en caliente desde la UI
+/// queda para una iteración próxima; hoy arranca la activa.)
 fn try_net() -> Result<NetSession, String> {
-    let path = config_path().ok_or_else(|| "no se pudo resolver el dir de config".to_string())?;
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("sin cuenta en {}: {e}", path.display()))?;
-    let cuenta: CuentaFile =
-        serde_json::from_str(&raw).map_err(|e| format!("cuenta.json inválido: {e}"))?;
-    let (imap_pw, smtp_pw) = passwords().ok_or_else(|| {
-        "falta contraseña (PALOMA_PASSWORD o PALOMA_IMAP_PASSWORD/PALOMA_SMTP_PASSWORD)".to_string()
+    let path = cuentas_path().ok_or_else(|| "no se pudo resolver el dir de config".to_string())?;
+    let cfg = PalomaConfig::load(&path).map_err(|e| format!("config inválida: {e}"))?;
+    let entry = cfg
+        .active_account()
+        .cloned()
+        .ok_or_else(|| format!("sin cuentas configuradas en {}", path.display()))?;
+    let (imap_sec, smtp_sec) = secrets_for(&entry).ok_or_else(|| {
+        if entry.is_oauth() {
+            format!("falta el token OAuth de «{}» (corré: paloma-oauth {})", entry.id, entry.id)
+        } else {
+            "falta contraseña (PALOMA_PASSWORD o PALOMA_IMAP_PASSWORD/PALOMA_SMTP_PASSWORD)".to_string()
+        }
     })?;
-    let account = cuenta.into_account();
-    // `account.address` ya lleva el display-name (lo puso `into_account`).
+    let account = entry.to_account();
+    // `account.address` ya lleva el display-name (lo puso `to_account`).
     let me = account.address.clone();
     let account_id = account.address.email.clone();
     let label = format!("conectado · {account_id}");
-    let backend = paloma_net::NetBackend::connect(account, &imap_pw, &smtp_pw)
+    let backend = paloma_net::NetBackend::connect(account, &imap_sec, &smtp_sec)
         .map_err(|e| format!("no se pudo conectar IMAP: {e}"))?;
     // Límite de fetch opcional: `PALOMA_FETCH_LIMIT=0` (o "all") trae todo.
     if let Ok(raw) = std::env::var("PALOMA_FETCH_LIMIT") {
