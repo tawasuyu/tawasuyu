@@ -250,6 +250,7 @@ members = [
     "02_ruway/llimphi/llimphi-wasm-app-sdk",
     "02_ruway/llimphi/llimphi-wasm-runner",
     "02_ruway/llimphi/llimphi-wasm-dist",
+    "02_ruway/llimphi/llimphi-wasm-net",
     "02_ruway/llimphi/llimphi-wasm-demo-counter",
     "02_ruway/llimphi/llimphi-layer",
     "02_ruway/llimphi/llimphi-motion",
@@ -787,6 +788,8 @@ llimphi-wasm-runner = { path = "02_ruway/llimphi/llimphi-wasm-runner" }
 # Distribución por hash: resuelve+verifica (integridad + concesión Ed25519) y
 # entrega una VerifiedApp al runner. Cablea app_bus::Launch::Wasm.
 llimphi-wasm-dist = { path = "02_ruway/llimphi/llimphi-wasm-dist" }
+# Transporte P2P del bytecode por hash sobre BrahmanNet (card-net).
+llimphi-wasm-net = { path = "02_ruway/llimphi/llimphi-wasm-net" }
 llimphi-3d = { path = "02_ruway/llimphi/llimphi-3d" }
 # Runner wlr-layer-shell: corre un `App` de Llimphi como barra anclada a un
 # borde (no como ventana), reusando la plumbing sctk+wgpu que pata probó.

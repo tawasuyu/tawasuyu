@@ -1,0 +1,19 @@
+[package]
+name = "llimphi-wasm-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-net — transporte P2P para la distribución de apps WASM Tier 3. Protocolo de stream /llimphi-wasm/blob/1.0.0 sobre BrahmanNet (card-net): un BlobServer sirve los bytecodes de un DiskStore por hash; fetch_blob abre un stream a un provider y los pide; RemoteSource implementa BlobSource (con descubrimiento por DHT) para que la cadena resolver→verificar de llimphi-wasm-dist funcione sobre la red. Espejo host de la recuperación por hash sobre Akasha del kernel de wawa."
+
+[dependencies]
+llimphi-wasm-dist = { workspace = true }
+card-net = { path = "../../../shared/card/card-net" }
+serde = { workspace = true }
+postcard = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

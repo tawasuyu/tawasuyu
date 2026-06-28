@@ -24,9 +24,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use agora_core::verify_signature;
-use format::{ConcesionCapacidad, Hash, Objeto, Permisos};
+use format::{ConcesionCapacidad, Objeto, Permisos};
 
-pub use format::Permisos as PermisosBitfield;
+pub use format::{Hash, Permisos as PermisosBitfield};
 pub use llimphi_wasm_runner::WasmGuest;
 
 /// Errores de la cadena resolver→verificar.
