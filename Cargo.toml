@@ -246,6 +246,10 @@ members = [
     "02_ruway/llimphi/llimphi-theme",
     "02_ruway/llimphi/llimphi-surface",
     "02_ruway/llimphi/llimphi-ui",
+    "02_ruway/llimphi/llimphi-wire-view",
+    "02_ruway/llimphi/llimphi-wasm-app-sdk",
+    "02_ruway/llimphi/llimphi-wasm-runner",
+    "02_ruway/llimphi/llimphi-wasm-demo-counter",
     "02_ruway/llimphi/llimphi-layer",
     "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-anim",
@@ -773,6 +777,12 @@ taffy = "0.9"
 parley = "0.6"
 # Bucle Elm (input→update→view→layout→raster→present). Lo consumen las apps.
 llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
+# Tier 3 — apps WASM con UI Llimphi real. El guest pinta un WireNode (IR
+# serializable), el host (runner) lo materializa en View<Msg> y rebota los
+# eventos al update del guest. SDK = lado guest, runner = lado host.
+llimphi-wire-view = { path = "02_ruway/llimphi/llimphi-wire-view" }
+llimphi-wasm-app-sdk = { path = "02_ruway/llimphi/llimphi-wasm-app-sdk" }
+llimphi-wasm-runner = { path = "02_ruway/llimphi/llimphi-wasm-runner" }
 llimphi-3d = { path = "02_ruway/llimphi/llimphi-3d" }
 # Runner wlr-layer-shell: corre un `App` de Llimphi como barra anclada a un
 # borde (no como ventana), reusando la plumbing sctk+wgpu que pata probó.

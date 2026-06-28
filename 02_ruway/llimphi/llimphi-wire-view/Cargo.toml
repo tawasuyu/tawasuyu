@@ -1,0 +1,16 @@
+[package]
+name = "llimphi-wire-view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wire-view — IR serializable de un subset de View<Msg> que cruza la frontera WASM. El guest (app .wasm) construye un WireNode con un builder ergonómico y lo serializa (postcard); el host (llimphi-wasm-runner) lo materializa en un View<Msg> Llimphi real. Los callbacks no cruzan: cada nodo interactivo carga los bytes de su Msg (postcard) y el host los rebota al update del guest. no_std + alloc para correr igual en wawa."
+
+[dependencies]
+# serde sin std: el guest puede ser no_std; el host trae std de su lado.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+
+[dev-dependencies]
+# El round-trip se certifica del lado host (std).
+postcard = { workspace = true }

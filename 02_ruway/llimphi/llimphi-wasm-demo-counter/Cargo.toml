@@ -1,0 +1,15 @@
+[package]
+name = "llimphi-wasm-demo-counter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-demo-counter — app WASM Tier 3 de ejemplo: el contador Elm canónico de Llimphi, pero como guest .wasm. Implementa WasmApp y pinta un WireNode (número + botones +1/reset). Se compila a wasm32-unknown-unknown (scripts/build-wasm-demo.sh) y el host (llimphi-wasm-runner) lo corre dentro de una ventana Llimphi. `rlib` además de `cdylib` para reusar el tipo Msg desde los tests del host."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+llimphi-wasm-app-sdk = { workspace = true }
+serde = { workspace = true }

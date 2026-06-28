@@ -1,0 +1,18 @@
+[package]
+name = "llimphi-wasm-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-runner — lado host de las apps WASM Tier 3 de Llimphi. Carga un .wasm guest (ABI de llimphi-wasm-app-sdk), corre su bucle Elm sobre wasmi: llama wasm_view, deserializa el WireNode y lo materializa en un View<Msg> Llimphi real; rutea cada click de vuelta a wasm_dispatch y refresca la vista. Es la pieza que faltaba para correr apps WASM servidas/distribuidas dentro de una ventana Llimphi en Linux — el gemelo host del ejecutor de apps de wawa."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-wire-view = { workspace = true }
+wasmi = { workspace = true }
+postcard = { workspace = true }
+
+[dev-dependencies]
+# El fixture .wasm del counter se compila aparte (scripts/build-wasm-demo.sh)
+# y se versiona en assets/; el test lo carga con include_bytes!.

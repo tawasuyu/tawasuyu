@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-wasm-app-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-app-sdk — SDK del lado guest para apps WASM Tier 3 de Llimphi. El autor implementa el trait WasmApp (init/update/view sobre un Model propio) y construye su UI con el builder de llimphi-wire-view (col/row/text/button). La macro export_wasm_app! emite el ABI que el host (llimphi-wasm-runner) maneja: init/view/dispatch/alloc/free + memory. El Model vive en un global del módulo y persiste entre frames porque el host mantiene viva la instancia."
+
+[dependencies]
+llimphi-wire-view = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
