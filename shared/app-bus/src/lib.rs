@@ -139,15 +139,30 @@ pub fn default_entries() -> Vec<AppEntry> {
 
 #[cfg(feature = "std")]
 impl AppEntry {
-    /// Enciende la app vía `std::process`. Sólo `Exec` spawnea; `Action`/
-    /// `Wasm` devuelven `Ok(None)` — los despacha el host (chasis/kernel).
+    /// Enciende la app vía `std::process`. `Exec` spawnea el binario; `Wasm`
+    /// spawnea el launcher de escritorio `llimphi-wasm-open` con el hash del
+    /// bytecode (y, si lo hay, el de la concesión) — éste resuelve el blob
+    /// desde el CAS local, verifica integridad + concesión Ed25519 y abre la
+    /// app en una ventana Llimphi con sus permisos efectivos. `Action` devuelve
+    /// `Ok(None)`: lo despacha el chasis in-process (no es un proceso del SO).
     pub fn spawn(&self) -> std::io::Result<Option<std::process::Child>> {
         match &self.launch {
             Launch::Exec { program, args } => std::process::Command::new(program)
                 .args(args)
                 .spawn()
                 .map(Some),
-            Launch::Action(_) | Launch::Wasm { .. } => Ok(None),
+            Launch::Wasm { bytecode_hex, grant_hex } => {
+                let mut cmd = std::process::Command::new("llimphi-wasm-open");
+                cmd.arg("--hash").arg(bytecode_hex);
+                if let Some(grant) = grant_hex {
+                    cmd.arg("--grant").arg(grant);
+                }
+                if !self.label.is_empty() {
+                    cmd.arg("--name").arg(&self.label);
+                }
+                cmd.spawn().map(Some)
+            }
+            Launch::Action(_) => Ok(None),
         }
     }
 
@@ -1089,6 +1104,31 @@ mod tests {
             handles: Vec::new(),
         };
         assert_eq!(ProcessLauncher.launch(&app), Err(LaunchError::Unsupported));
+    }
+
+    #[test]
+    fn wasm_rutea_al_launcher_no_es_unsupported() {
+        // Un Launch::Wasm ya NO es Unsupported: spawnea `llimphi-wasm-open`.
+        // En el entorno de test el binario no está en PATH, así que el intento
+        // falla con NotFound — pero el punto es que SE INTENTA lanzar (el host
+        // ahora consume Wasm), no que se descarte por no soportado.
+        let app = AppEntry {
+            id: "h".into(),
+            label: "Hola WASM".into(),
+            icon: None,
+            category: None,
+            launch: Launch::Wasm {
+                bytecode_hex: "deadbeef".into(),
+                grant_hex: None,
+            },
+            handles: Vec::new(),
+        };
+        // spawn() intenta el proceso (Err NotFound), no devuelve Ok(None).
+        assert!(app.spawn().is_err(), "Wasm debe intentar spawnear el launcher");
+        assert!(matches!(
+            ProcessLauncher.launch(&app),
+            Err(LaunchError::Failed(_))
+        ));
     }
 
     #[test]

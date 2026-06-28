@@ -1,0 +1,19 @@
+[package]
+name = "llimphi-wasm-open"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-open — el launcher de escritorio de las apps WASM Tier 3 de Llimphi. Toma una app por archivo o por hash (resuelta desde un CAS local, con su concesión Ed25519 verificada contra un anillo de confianza) y la abre como una ventana Llimphi real, con los permisos efectivos gateando qué capacidades se enlazan. Es la pieza que faltaba para que una app servida/distribuida por la malla corra en el escritorio Linux — el gemelo host del ejecutor de apps de wawa, y el consumidor de app_bus::Launch::Wasm."
+
+[[bin]]
+name = "llimphi-wasm-open"
+path = "src/main.rs"
+
+[dependencies]
+# La cara "con baterías": resolver→verificar→correr. Arrastra el runner (GPU).
+llimphi-wasm-dist = { workspace = true }
+# El runtime de ventana (bucle Elm + winit + wgpu) que hospeda al guest.
+llimphi-ui = { workspace = true }
+format = { path = "../../../shared/format" }

@@ -251,6 +251,7 @@ members = [
     "02_ruway/llimphi/llimphi-wasm-runner",
     "02_ruway/llimphi/llimphi-wasm-core",
     "02_ruway/llimphi/llimphi-wasm-dist",
+    "02_ruway/llimphi/llimphi-wasm-open",
     "02_ruway/llimphi/llimphi-wasm-net",
     "02_ruway/llimphi/llimphi-wasm-demo-counter",
     "02_ruway/llimphi/llimphi-wasm-demo-form",
@@ -791,6 +792,7 @@ llimphi-wasm-runner = { path = "02_ruway/llimphi/llimphi-wasm-runner" }
 llimphi-wasm-core = { path = "02_ruway/llimphi/llimphi-wasm-core" }
 # Cara con baterías: re-exporta core + puente al runner para correr la app.
 llimphi-wasm-dist = { path = "02_ruway/llimphi/llimphi-wasm-dist" }
+llimphi-wasm-open = { path = "02_ruway/llimphi/llimphi-wasm-open" }
 # Transporte P2P del bytecode por hash sobre BrahmanNet (card-net).
 llimphi-wasm-net = { path = "02_ruway/llimphi/llimphi-wasm-net" }
 llimphi-3d = { path = "02_ruway/llimphi/llimphi-3d" }
