@@ -67,9 +67,11 @@ fn main() {
     let clientes_cta = Uuid::new_v4();
     let ventas_cta = Uuid::new_v4();
     let iva_cta = Uuid::new_v4();
+    let banco_cta = Uuid::new_v4();
     seed_cuenta(&exec, &mut store, &mut log, clientes_cta, "1100-Clientes", "activo");
     seed_cuenta(&exec, &mut store, &mut log, ventas_cta, "4000-Ventas", "ingreso");
     seed_cuenta(&exec, &mut store, &mut log, iva_cta, "2100-IVA", "pasivo");
+    seed_cuenta(&exec, &mut store, &mut log, banco_cta, "1000-Banco", "activo");
 
     // --- Acme: una oportunidad que se gana -----------------------------
     section("Acme · «Licencia anual» $12 000 — recorre el pipeline");
@@ -103,8 +105,8 @@ fn main() {
         "Contrato firmado recibido",
     );
 
-    // --- Acme ganada → cotización → factura asentada -------------------
-    section("Acme · ganada → cotización → factura (asienta en el libro)");
+    // --- Acme ganada → cotización → factura → cobro --------------------
+    section("Acme · ganada → cotización → factura → cobro (asienta en el libro)");
     let cot_acme = Uuid::new_v4();
     cotizar(&exec, &mut store, &mut log, opp_acme, cot_acme);
     let fact_acme = Uuid::new_v4();
@@ -118,6 +120,14 @@ fn main() {
         iva_cta,
         fact_acme,
         16, // IVA 16%
+    );
+    cobrar(
+        &exec,
+        &mut store,
+        &mut log,
+        banco_cta,
+        clientes_cta,
+        fact_acme,
     );
 
     // --- Beta: una oportunidad que se pierde ---------------------------
@@ -205,8 +215,11 @@ fn main() {
     print_cuenta(&store, "Clientes", clientes_cta);
     print_cuenta(&store, "Ventas  ", ventas_cta);
     print_cuenta(&store, "IVA     ", iva_cta);
-    let total_libro =
-        cuenta_saldo(&store, clientes_cta) + cuenta_saldo(&store, ventas_cta) + cuenta_saldo(&store, iva_cta);
+    print_cuenta(&store, "Banco   ", banco_cta);
+    let total_libro = cuenta_saldo(&store, clientes_cta)
+        + cuenta_saldo(&store, ventas_cta)
+        + cuenta_saldo(&store, iva_cta)
+        + cuenta_saldo(&store, banco_cta);
     println!("  Σ saldos = {total_libro} (0 = partida doble cuadrada)");
 
     let entries = log.entries().expect("leer el log");
@@ -366,6 +379,31 @@ fn facturar(
     );
 }
 
+fn cobrar(
+    exec: &Executor,
+    store: &mut MemoryStore,
+    log: &mut EventLog,
+    banco_cta: Uuid,
+    clientes_cta: Uuid,
+    fact: Uuid,
+) {
+    report(
+        "cobrar",
+        execute_and_log(
+            exec,
+            store,
+            log,
+            "cobrar",
+            &[
+                ("banco_cta", banco_cta),
+                ("clientes_cta", clientes_cta),
+                ("factura", fact),
+            ],
+            json!({ "cobro_id": Uuid::new_v4().to_string(), "fecha": TS }),
+        ),
+    );
+}
+
 fn perder(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, opp: Uuid, motivo: &str) {
     report(
         &format!("marcar_perdida ({motivo})"),
@@ -440,7 +478,8 @@ fn print_factura(store: &MemoryStore, id: Uuid) {
             let imp = v.get("impuesto").and_then(|x| x.as_i64()).unwrap_or(0);
             let total = v.get("total").and_then(|x| x.as_i64()).unwrap_or(0);
             let mon = v.get("moneda").and_then(|x| x.as_str()).unwrap_or("?");
-            println!("  Factura · neto {neto} + IVA {imp} = total {total} {mon}");
+            let est = v.get("estado").and_then(|x| x.as_str()).unwrap_or("?");
+            println!("  Factura · neto {neto} + IVA {imp} = total {total} {mon} — {est}");
         }
         None => println!("  Factura · (no emitida)"),
     }

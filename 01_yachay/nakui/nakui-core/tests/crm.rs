@@ -409,6 +409,96 @@ fn ganada_genera_cotizacion_y_factura_asentada() {
 }
 
 #[test]
+fn ciclo_completo_oportunidad_a_cobro() {
+    let exec = Executor::load_module(crm_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cliente = Uuid::new_v4();
+    seed_cliente(&mut store, cliente, "Acme Corp");
+
+    // Plan contable: Clientes (CxC), Ventas, IVA y Banco.
+    let (clientes, ventas, iva, banco) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
+    seed_cuenta(&mut store, clientes, "1100-Clientes", "activo", 0);
+    seed_cuenta(&mut store, ventas, "4000-Ventas", "ingreso", 0);
+    seed_cuenta(&mut store, iva, "2100-IVA", "pasivo", 0);
+    seed_cuenta(&mut store, banco, "1000-Banco", "activo", 0);
+
+    // Oportunidad → cotización → factura.
+    let opp = abrir_opp(&exec, &mut store, cliente);
+    ganar(&exec, &mut store, opp);
+    let cot = Uuid::new_v4();
+    exec.run(
+        &mut store,
+        "cotizar_oportunidad",
+        &[("oportunidad", opp)],
+        json!({ "cotizacion_id": cot.to_string() }),
+    )
+    .expect("cotizar debe pasar");
+    let fact = Uuid::new_v4();
+    exec.run(
+        &mut store,
+        "facturar_cotizacion",
+        &[
+            ("cotizacion", cot),
+            ("clientes_cta", clientes),
+            ("ventas_cta", ventas),
+            ("iva_cta", iva),
+        ],
+        json!({ "factura_id": fact.to_string(), "fecha": "2026-05-21", "tasa": 16 }),
+    )
+    .expect("facturar debe pasar");
+
+    // Cobro: el total (13 920) pasa de Clientes a Banco; la factura → cobrada.
+    let cobro = Uuid::new_v4();
+    exec.run(
+        &mut store,
+        "cobrar",
+        &[
+            ("banco_cta", banco),
+            ("clientes_cta", clientes),
+            ("factura", fact),
+        ],
+        json!({ "cobro_id": cobro.to_string(), "fecha": "2026-05-22" }),
+    )
+    .expect("cobrar debe pasar");
+
+    assert_eq!(saldo(&store, banco), 13_920, "Banco += total");
+    assert_eq!(saldo(&store, clientes), 0, "CxC saldada (13920 - 13920)");
+    let f = store.load("Factura", fact).expect("factura existe");
+    assert_eq!(f.get("estado").and_then(Value::as_str), Some("cobrada"));
+    let c = store.load("Cobro", cobro).expect("cobro existe");
+    assert_eq!(c.get("monto").and_then(Value::as_i64), Some(13_920));
+    assert_eq!(
+        c.get("factura_id").and_then(Value::as_str),
+        Some(fact.to_string().as_str())
+    );
+    // El libro entero sigue cuadrado tras el cobro.
+    assert_eq!(
+        saldo(&store, clientes) + saldo(&store, ventas) + saldo(&store, iva) + saldo(&store, banco),
+        0,
+        "partida doble global"
+    );
+
+    // No se cobra dos veces.
+    let r = exec.run(
+        &mut store,
+        "cobrar",
+        &[
+            ("banco_cta", banco),
+            ("clientes_cta", clientes),
+            ("factura", fact),
+        ],
+        json!({ "cobro_id": Uuid::new_v4().to_string(), "fecha": "2026-05-22" }),
+    );
+    assert!(matches!(r, Err(ExecError::Rhai(_))));
+    assert_eq!(saldo(&store, banco), 13_920, "saldo intacto tras rechazo");
+}
+
+#[test]
 fn cotizacion_no_se_factura_dos_veces() {
     let exec = Executor::load_module(crm_module()).expect("load module");
     let mut store = MemoryStore::new();
