@@ -13,6 +13,10 @@
 // (_fiscal/documentos.ncl) en el post-check del kernel; acá va sólo la
 // ARITMÉTICA módulo 11/10 que el regex no puede hacer.
 //
+// DV implementado y verificado contra vectores públicos reales: VE (RIF),
+// CL (RUT), AR (CUIT), EC (cédula), PE (RUC), CO (NIT), MX (RFC). BO queda
+// fuera: su NIT no tiene dígito de control con fórmula pública (ver dv_ok).
+//
 // Algoritmos verificados contra vectores públicos reales (ver cada fn). El
 // engine Rhai está sandboxeado (sin to_upper ni str.len()): todo sobre
 // arrays de enteros.
@@ -130,12 +134,120 @@ fn dv_ok_ve(doc) {
     dv == ds[8]
 }
 
+// Perú · RUC · módulo 11. Pesos [5,4,3,2,7,6,5,4,3,2] sobre los 10 primeros;
+// DV = 11 − (Σ%11), 10→0, 11→1. Verificado: 20306051017 (DV 7). El DNI (8
+// dígitos) no lleva DV → pasa por forma.
+fn dv_ok_pe(doc) {
+    let ds = digitos(doc);
+    if ds.len() != 11 { return true; }
+    let pesos = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
+    let suma = 0;
+    let i = 0;
+    while i < 10 {
+        suma += ds[i] * pesos[i];
+        i += 1;
+    }
+    let r = 11 - (suma % 11);
+    let dv = r;
+    if r == 10 { dv = 0; }
+    if r == 11 { dv = 1; }
+    dv == ds[10]
+}
+
+// Colombia · NIT · módulo 11 con primos. Sólo valida si el documento trae el
+// DV separado por guion ("800197268-4"); sin guion lo tratamos como cédula
+// (sin DV) y pasa. Primos de derecha a izquierda; resto 0→0, 1→1, else
+// 11−resto. Verificado: 800197268-4 (DV 4).
+fn dv_ok_co(doc) {
+    let ds = [];
+    let dash_at = -1; // cuántos dígitos había al aparecer el guion
+    for c in doc.chars() {
+        if c >= '0' && c <= '9' { ds.push(c.to_int() - 48); }
+        else if c == '-' { dash_at = ds.len(); }
+    }
+    // DV presente sólo si hubo guion y exactamente un dígito después.
+    if dash_at < 0 || ds.len() != dash_at + 1 { return true; }
+    let base_n = dash_at;
+    let dv_dado = ds[base_n];
+    let primos = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71];
+    let suma = 0;
+    let i = 0;
+    while i < base_n {
+        suma += ds[base_n - 1 - i] * primos[i];
+        i += 1;
+    }
+    let resto = suma % 11;
+    let dv = resto;
+    if resto > 1 { dv = 11 - resto; }
+    dv == dv_dado
+}
+
+// Valor de un carácter en la tabla del SAT (Anexo 20) para el DV del RFC.
+// 0-9→0-9; A-N→10-23; &→24; O-Z→25-36; espacio→37; Ñ→38. -1 si inesperado.
+fn valor_rfc(c) {
+    let n = c.to_int();
+    if c >= '0' && c <= '9' { return n - 48; }
+    if c == '&' { return 24; }
+    if c == ' ' { return 37; }
+    if n == 209 || n == 241 { return 38; } // Ñ / ñ por code-point
+    let p = -1;
+    if c >= 'A' && c <= 'Z' { p = n - 65; }
+    else if c >= 'a' && c <= 'z' { p = n - 97; }
+    if p < 0 { return -1; }
+    if p <= 13 { return 10 + p; } // A..N
+    11 + p                        // O..Z (corrige el slot de &)
+}
+
+// México · RFC · módulo 11. DV = último carácter, sobre los 12 previos (los
+// 11 de un RFC moral se rellenan a la izquierda con un espacio). Pesos
+// 13..2; DV = 11 − (Σ%11), con 11→'0' y 10→'A'. Verificado: GODE561231GR8.
+fn dv_ok_mx(doc) {
+    let chars = [];
+    for c in doc.chars() {
+        let n = c.to_int();
+        if (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+           || c == '&' || n == 209 || n == 241 {
+            chars.push(c);
+        }
+    }
+    let n = chars.len();
+    if n != 12 && n != 13 { return true; }
+    let dv_char = chars[n - 1];
+    let cuerpo_n = n - 1;          // 11 (moral) o 12 (física)
+    let pad = 12 - cuerpo_n;       // espacios de relleno a la izquierda
+    let suma = 0;
+    let pos = 0;
+    while pos < pad {
+        suma += 37 * (13 - pos);  // espacio = 37
+        pos += 1;
+    }
+    let i = 0;
+    while i < cuerpo_n {
+        let v = valor_rfc(chars[i]);
+        if v < 0 { return true; }
+        suma += v * (13 - pos);
+        pos += 1;
+        i += 1;
+    }
+    let y = 11 - (suma % 11);
+    if y == 11 { return dv_char == '0'; }
+    if y == 10 { return dv_char == 'A' || dv_char == 'a'; }
+    if dv_char >= '0' && dv_char <= '9' { return (dv_char.to_int() - 48) == y; }
+    false
+}
+
 // Dispatch por país. Países sin algoritmo cargado → true (sólo forma).
+// Bolivia (BO) queda fuera a propósito: su NIT termina en un dígito
+// asignado (descrito como aleatorio 1–9), no en un dígito de control con
+// fórmula pública verificable. Validar uno inventado sería peor que nada.
 fn dv_ok(pais, doc) {
     if pais == "CL" { return dv_ok_cl(doc); }
     if pais == "AR" { return dv_ok_ar(doc); }
     if pais == "EC" { return dv_ok_ec(doc); }
     if pais == "VE" { return dv_ok_ve(doc); }
+    if pais == "PE" { return dv_ok_pe(doc); }
+    if pais == "CO" { return dv_ok_co(doc); }
+    if pais == "MX" { return dv_ok_mx(doc); }
     true
 }
 

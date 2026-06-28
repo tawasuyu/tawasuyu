@@ -82,11 +82,33 @@ fn ve_cedula_sin_dv_pasa() {
     assert!(alta("VE", "V-12345678"), "cédula venezolana sin DV");
 }
 
-// ── Países sin algoritmo de DV cargado: sólo forma ─────────────────────────
+// ── Perú · RUC (módulo 11) ─────────────────────────────────────────────────
 #[test]
-fn pais_sin_dv_implementado_pasa_por_forma() {
-    // Perú: el pack valida forma (DNI 8 díg) pero no hay DV implementado aún.
-    assert!(alta("PE", "12345678"), "PE pasa por forma, sin verificación de DV");
+fn pe_ruc_dv_valido_e_invalido() {
+    assert!(alta("PE", "20306051017"), "RUC real válido (DV 7)");
+    assert!(!alta("PE", "20306051011"), "DV cambiado debe rebotar");
+    assert!(alta("PE", "12345678"), "DNI (8 díg) no lleva DV → pasa por forma");
+}
+
+// ── Colombia · NIT (módulo 11, primos) ─────────────────────────────────────
+#[test]
+fn co_nit_dv_valido_e_invalido() {
+    assert!(alta("CO", "800197268-4"), "NIT real válido (DV 4)");
+    assert!(!alta("CO", "800197268-1"), "DV cambiado debe rebotar");
+    assert!(alta("CO", "1234567"), "cédula sin guion → sin DV, pasa por forma");
+}
+
+// ── México · RFC (módulo 11, tabla SAT) ────────────────────────────────────
+#[test]
+fn mx_rfc_dv_valido_e_invalido() {
+    assert!(alta("MX", "GODE561231GR8"), "RFC real válido (DV 8)");
+    assert!(!alta("MX", "GODE561231GR0"), "DV cambiado debe rebotar");
+}
+
+// ── Bolivia: sin algoritmo de DV (sufijo asignado, no de control) ───────────
+#[test]
+fn bo_pasa_por_forma_sin_dv() {
+    assert!(alta("BO", "1234567"), "BO valida forma, sin verificación de DV");
 }
 
 // ── La forma sigue gateada por Nickel aunque el DV no aplique ───────────────
