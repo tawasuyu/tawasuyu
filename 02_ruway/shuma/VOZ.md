@@ -134,13 +134,23 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
 - **`rimay-voz-{whisper,piper,…}` (falta):** backends **locales** reales que
   reemplazan el mock dentro del daemon — entran como variantes del `--stt`/
   `--tts` del binario, sin tocar protocolo ni cliente.
-- **host de shuma (falta, en `shuma-agente-host`):** corre cpal y empuja los
-  frames al `Vad` (la *lógica* de VAD/segmentación ya está en core; falta sólo
-  la captura y, si se quiere robustez, swap del `DetectorEnergia` por Silero).
-  Consume `rimay-voz` y dispatcha `Msg` al update Elm. Lo único «de shuma»:
-  mapear `shuma_agente::BloqueSalida` → `rimay_voz::TipoBloque`. El cableado
-  upstream (frames → VAD → STT → máquina) ya está demostrado en
-  `examples/pipeline_vad`.
+- **`rimay-voz-host` (hecho, host de captura):** corre el micrófono y empuja
+  los frames por el lazo `VAD → STT → Maquina`, emitiendo `EventoEscucha`
+  (`Escuchando`/`Desperto`/`Dictar`/`SeDurmio`) que la app dispatcha como `Msg`.
+  **Es IA general (oír) → vive en `rimay`, no en shuma** (misma corrección que
+  STT/TTS: shuma sólo cablea). Dos capas: el `Lazo` puro (muestras `i16` mono →
+  framing → VAD → STT → máquina + `tick`), testeable sin micrófono; y el driver
+  `escuchar()` detrás de la feature **`microfono` (ON por default, apagable con
+  `--no-default-features`)**, que abre cpal en un **hilo dedicado** (el `Stream`
+  es `!Send`), prepara el audio (`a_mono` + `Remuestreador` lineal con estado +
+  `a_i16`, reusando la captura de `media-source-capture/mic`) y alimenta el
+  `Lazo` desde una task async, emitiendo eventos por canal. Certificado por
+  texto: 12 tests (lazo: ruido/llamado/cola/re-dormida/silencio; prep: downmix/
+  remuestreo/clamp). Demo en metal: `cargo run -p rimay-voz-host --example
+  escuchar_microfono`. Lo único que quedará «de shuma»: mapear
+  `shuma_agente::BloqueSalida` → `rimay_voz::TipoBloque` y dispatchar los
+  eventos. Sin micrófono real, el lazo ya está demostrado en
+  `rimay-voz/examples/pipeline_vad`.
 
 ## Dependencias candidatas
 

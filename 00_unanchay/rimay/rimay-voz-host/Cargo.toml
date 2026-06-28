@@ -1,0 +1,33 @@
+[package]
+name = "rimay-voz-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "voz — el host de captura: corre el micrófono (cpal) y empuja sus frames por el lazo VAD → STT → máquina de rimay-voz, emitiendo eventos de escucha que la app dispatcha. La lógica del lazo es pura y testeable sin micrófono; la captura real va detrás de la feature `microfono` (default-on, apagable). Es IA general — cualquier app lo consume; shuma sólo lo cablea."
+
+[features]
+# Captura real de micrófono — ON por default (decisión del usuario:
+# «opcional pero por default activo»). Arrastra cpal vía media-source-capture.
+# Apagar con `--no-default-features` deja sólo el lazo puro (sin ALSA), que es
+# lo que igual valida y testea el contenido determinista.
+default = ["microfono"]
+microfono = ["dep:media-source-capture", "dep:media-core"]
+
+[dependencies]
+rimay-voz = { path = "../rimay-voz" }
+tokio = { workspace = true }
+
+# Backend de micrófono: reusa la captura cpal del dominio media (su feature
+# `mic`), no reinventa. Opt-in vía nuestra feature `microfono`.
+media-source-capture = { path = "../../../02_ruway/media/media-source-capture", optional = true, default-features = false, features = ["mic"] }
+media-core = { path = "../../../02_ruway/media/media-core", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+# Demo que abre el micrófono real: sólo compila con la captura activa.
+[[example]]
+name = "escuchar_microfono"
+required-features = ["microfono"]
