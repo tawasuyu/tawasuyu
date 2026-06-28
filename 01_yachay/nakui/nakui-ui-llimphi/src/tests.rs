@@ -410,10 +410,27 @@
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        // Seis demos: 'ventas', 'tesoro', 'punto_venta', 'contabilidad'
-        // (partida doble), 'facturacion' (la factura asienta) y 'compras'
-        // (la compra/pago asienta — espejo de cuentas por pagar).
-        assert_eq!(modules.len(), 6);
+        // Siete demos: 'ventas', 'tesoro', 'punto_venta', 'contabilidad'
+        // (partida doble), 'facturacion', 'compras' e 'inventario' (stock
+        // valuado con reflejo contable).
+        assert_eq!(modules.len(), 7);
+        // Inventario expone tablero/lista/detalle + grafo, y sus forms de
+        // recepción/despacho disparan los morfismos de valuación.
+        let invent = modules.iter().find(|m| m.id == "inventario").expect("inventario");
+        assert!(matches!(invent.views.get("tablero"), Some(ModuleView::Dashboard(_))));
+        assert!(matches!(invent.views.get("productos_list"), Some(ModuleView::List(_))));
+        match invent.views.get("recibir_form") {
+            Some(ModuleView::Form(fv)) => assert!(
+                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "recibir_mercaderia")
+            ),
+            other => panic!("recibir_form debería ser un Form, fue {other:?}"),
+        }
+        match invent.views.get("despachar_form") {
+            Some(ModuleView::Form(fv)) => assert!(
+                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "despachar_mercaderia")
+            ),
+            other => panic!("despachar_form debería ser un Form, fue {other:?}"),
+        }
         // Compras expone tablero/lista/detalle + grafo, y sus forms de
         // registro y pago disparan los morfismos correspondientes.
         let compras = modules.iter().find(|m| m.id == "compras").expect("compras");
@@ -958,6 +975,85 @@
         assert_eq!(c.get("estado").and_then(Value::as_str), Some("pagada"));
         assert_eq!(backend.list_records("Pago").len(), 1);
         assert_eq!(suma(&backend), 0, "registrar + pagar conserva la balanza");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// End-to-end del inventario valuado: recibir mercadería (sube stock,
+    /// valor y la cuenta Inventario) y despachar (COGS al costo promedio).
+    /// El stock del Producto y el activo Inventario se mueven en sincronía
+    /// y el libro queda cuadrado.
+    #[test]
+    fn inventario_recibir_y_despachar_via_backend() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for id in ["contabilidad", "inventario"] {
+            let m = modules.iter().find(|m| m.id == id).unwrap();
+            let nakui_dir = dir.join(&m.id).join(m.nakui_module_dir.as_ref().unwrap());
+            executors.insert(id.to_string(), Arc::new(Executor::load_module(&nakui_dir).unwrap()));
+        }
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta").into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id).unwrap()
+        };
+        let prod = backend.list_records("Producto").into_iter()
+            .find(|(_, v)| v.get("sku").and_then(Value::as_str) == Some("cafe-hn"))
+            .map(|(id, _)| id).expect("producto cafe-hn sembrado");
+        let saldo = |b: &NakuiBackend, id: Uuid| -> i64 {
+            b.load_record("Cuenta", id).and_then(|v| v.get("saldo").and_then(Value::as_i64)).unwrap()
+        };
+        let pcampo = |b: &NakuiBackend, field: &str| -> i64 {
+            b.load_record("Producto", prod).and_then(|v| v.get(field).and_then(Value::as_i64)).unwrap()
+        };
+        let inv = by_codigo(&backend, "1300");
+        let prov = by_codigo(&backend, "2010");
+        let cogs = by_codigo(&backend, "5020");
+        let suma = |b: &NakuiBackend| -> i64 {
+            b.list_records("Cuenta").iter().map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0)).sum()
+        };
+
+        // Recibir 10 @ 100 contra Proveedores.
+        let mut r = BTreeMap::new();
+        r.insert("producto".to_string(), prod);
+        r.insert("inventario_cta".to_string(), inv);
+        r.insert("contrapartida_cta".to_string(), prov);
+        backend.morphism("inventario", "recibir_mercaderia", r, json!({
+            "cantidad": 10_i64, "costo_unitario": 100_i64, "fecha": "2026-06-28",
+            "movimiento_id": Uuid::new_v4().to_string(),
+        })).expect("recibir");
+        assert_eq!(pcampo(&backend, "cantidad"), 10);
+        assert_eq!(pcampo(&backend, "valor_total"), 1000);
+        assert_eq!(saldo(&backend, inv), 1000, "Inventario en sincronía con el valor del stock");
+        assert_eq!(suma(&backend), 0, "el libro cuadra tras recibir");
+
+        // Despachar 4 → costo promedio 100 → COGS 400, stock 6 valor 600.
+        let mut d = BTreeMap::new();
+        d.insert("producto".to_string(), prod);
+        d.insert("inventario_cta".to_string(), inv);
+        d.insert("cogs_cta".to_string(), cogs);
+        backend.morphism("inventario", "despachar_mercaderia", d, json!({
+            "cantidad": 4_i64, "fecha": "2026-06-29",
+            "movimiento_id": Uuid::new_v4().to_string(),
+        })).expect("despachar");
+        assert_eq!(pcampo(&backend, "cantidad"), 6);
+        assert_eq!(pcampo(&backend, "valor_total"), 600);
+        assert_eq!(saldo(&backend, cogs), 400);
+        assert_eq!(saldo(&backend, inv), 600, "Inventario sigue espejando el valor del stock");
+        assert_eq!(suma(&backend), 0, "el libro cuadra tras despachar");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));

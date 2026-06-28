@@ -1,0 +1,12 @@
+{
+  "seed": [
+    {
+      "entity": "Producto",
+      "records": [
+        { "data": { "sku": "cafe-hn", "nombre": "Café Honduras (kg)", "cantidad": 0, "valor_total": 0, "moneda": "USD" } },
+        { "data": { "sku": "te-verde", "nombre": "Té verde (kg)",      "cantidad": 0, "valor_total": 0, "moneda": "USD" } },
+        { "data": { "sku": "azucar",   "nombre": "Azúcar (kg)",        "cantidad": 0, "valor_total": 0, "moneda": "USD" } }
+      ]
+    }
+  ]
+}

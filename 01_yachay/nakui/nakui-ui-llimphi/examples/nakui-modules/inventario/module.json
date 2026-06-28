@@ -1,0 +1,178 @@
+{
+  "id": "inventario",
+  "label": "Inventario",
+  "description": "Stock valuado a costo promedio ponderado con reflejo contable obligatorio: recibir mercadería debita Inventario / acredita Proveedores|Banco; despachar debita COGS / acredita Inventario al costo promedio. La «partida doble extendida a recursos físicos». Comparte el plan de cuentas de Contabilidad. Importes en unidades enteras de moneda.",
+  "nakui_module_dir": "nakui",
+  "entities": [
+    { "name": "Cuenta", "label": "Cuenta", "fields": [] },
+    { "name": "Producto", "label": "Producto", "fields": [] },
+    { "name": "MovimientoStock", "label": "Movimiento de stock", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Tablero", "view": "tablero" },
+    { "label": "Productos", "view": "productos_list" },
+    { "label": "+ Producto", "view": "producto_form" },
+    { "label": "Recibir mercadería", "view": "recibir_form" },
+    { "label": "Despachar", "view": "despachar_form" },
+    { "label": "Movimientos", "view": "movimientos_list" },
+    { "label": "Libro de morfismos", "view": "libro" }
+  ],
+  "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Inventario",
+      "subtitle": "Valor del stock a costo promedio ponderado. Cada recepción/despacho mueve el activo Inventario por el mismo importe que el valor del producto — perpetuo y siempre asentado.",
+      "cards": [
+        { "label": "Productos", "entity": "Producto", "metric": { "kind": "count" } },
+        {
+          "label": "Unidades en stock",
+          "entity": "Producto",
+          "metric": { "kind": "sum", "field": "cantidad" }
+        },
+        {
+          "label": "Valor del stock",
+          "entity": "Producto",
+          "metric": { "kind": "sum", "field": "valor_total" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Valor por producto",
+          "entity": "Producto",
+          "metric": { "kind": "sum_by", "group": "sku", "value": "valor_total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "pie",
+          "limit": 8
+        },
+        {
+          "label": "Movimientos por tipo",
+          "entity": "MovimientoStock",
+          "metric": { "kind": "group_by", "field": "tipo" },
+          "chart": "donut"
+        },
+        {
+          "label": "Costo movido por mes",
+          "entity": "MovimientoStock",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "costo_total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "bucket": "month"
+        }
+      ]
+    },
+    "productos_list": {
+      "kind": "list",
+      "title": "Productos",
+      "entity": "Producto",
+      "row_detail": "producto_detail",
+      "search_in": ["sku", "nombre"],
+      "columns": [
+        { "field": "sku", "label": "SKU" },
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "cantidad", "label": "En stock" },
+        { "field": "valor_total", "label": "Valor", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ]
+    },
+    "producto_detail": {
+      "kind": "detail",
+      "title": "Producto",
+      "entity": "Producto",
+      "fields": [
+        { "field": "sku", "label": "SKU" },
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "cantidad", "label": "En stock" },
+        { "field": "valor_total", "label": "Valor del stock", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ],
+      "related": [
+        {
+          "title": "Movimientos del producto",
+          "entity": "MovimientoStock",
+          "via_field": "producto_id",
+          "columns": [
+            { "field": "fecha", "label": "Fecha" },
+            { "field": "tipo", "label": "Tipo" },
+            { "field": "cantidad", "label": "Cantidad" },
+            { "field": "costo_total", "label": "Costo", "format": { "kind": "currency", "symbol": "$" } }
+          ]
+        }
+      ]
+    },
+    "producto_form": {
+      "kind": "form",
+      "title": "Producto",
+      "entity": "Producto",
+      "fields": [
+        { "name": "id", "label": "Id", "kind": "auto_id" },
+        { "name": "sku", "label": "SKU", "kind": "text", "required": true },
+        { "name": "nombre", "label": "Nombre", "kind": "text", "required": true },
+        { "name": "cantidad", "label": "Stock inicial", "kind": "number", "default": "0" },
+        { "name": "valor_total", "label": "Valor inicial", "kind": "number", "default": "0" },
+        {
+          "name": "moneda", "label": "Moneda", "kind": "select",
+          "options": [ { "value": "USD", "label": "USD" }, { "value": "EUR", "label": "EUR" }, { "value": "PEN", "label": "PEN" } ]
+        }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Producto", "next_view": "productos_list" }
+    },
+    "recibir_form": {
+      "kind": "form",
+      "title": "Recibir mercadería",
+      "entity": "MovimientoStock",
+      "fields": [
+        { "name": "producto", "label": "Producto", "kind": "entity_ref", "ref_entity": "Producto", "required": true },
+        { "name": "cantidad", "label": "Cantidad", "kind": "number", "required": true },
+        { "name": "costo_unitario", "label": "Costo unitario", "kind": "number", "required": true, "help": "Costo de compra por unidad" },
+        { "name": "inventario_cta", "label": "Cuenta Inventario", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Activo — se debita por el costo total" },
+        { "name": "contrapartida_cta", "label": "Contrapartida (Proveedores o Banco)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Proveedores (a crédito) o Banco (al contado)" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false },
+        { "name": "movimiento_id", "label": "Id de movimiento", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "recibir_mercaderia",
+        "inputs": { "producto": "producto", "inventario_cta": "inventario_cta", "contrapartida_cta": "contrapartida_cta" },
+        "params": ["cantidad", "costo_unitario", "fecha", "movimiento_id"],
+        "next_view": "productos_list"
+      }
+    },
+    "despachar_form": {
+      "kind": "form",
+      "title": "Despachar mercadería",
+      "entity": "MovimientoStock",
+      "fields": [
+        { "name": "producto", "label": "Producto", "kind": "entity_ref", "ref_entity": "Producto", "required": true },
+        { "name": "cantidad", "label": "Cantidad", "kind": "number", "required": true, "help": "No puede superar el stock en mano" },
+        { "name": "inventario_cta", "label": "Cuenta Inventario", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Activo — se acredita al costo promedio" },
+        { "name": "cogs_cta", "label": "Cuenta Costo de Mercadería Vendida", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Gasto — se debita al costo promedio" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false },
+        { "name": "movimiento_id", "label": "Id de movimiento", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "despachar_mercaderia",
+        "inputs": { "producto": "producto", "inventario_cta": "inventario_cta", "cogs_cta": "cogs_cta" },
+        "params": ["cantidad", "fecha", "movimiento_id"],
+        "next_view": "productos_list"
+      }
+    },
+    "movimientos_list": {
+      "kind": "list",
+      "title": "Movimientos de stock",
+      "entity": "MovimientoStock",
+      "search_in": ["tipo"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "producto_id", "label": "Producto", "ref_entity": "Producto" },
+        { "field": "tipo", "label": "Tipo" },
+        { "field": "cantidad", "label": "Cantidad" },
+        { "field": "costo_total", "label": "Costo", "format": { "kind": "currency", "symbol": "$" } }
+      ]
+    },
+    "libro": {
+      "kind": "graph",
+      "title": "Libro de morfismos",
+      "subtitle": "Los morfismos `recibir_mercaderia` / `despachar_mercaderia` como nodos: mueven el stock del Producto y, en el mismo paso, la cuenta de Inventario contra su contrapartida."
+    }
+  }
+}

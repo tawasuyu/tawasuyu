@@ -1,0 +1,48 @@
+{
+  "module": "inventario",
+  "schemas": ["../accounting/schema.ncl", "schema.ncl"],
+  "morphisms": [
+    {
+      "name": "recibir_mercaderia",
+      "inputs": [
+        { "role": "producto", "entity": "Producto" },
+        { "role": "inventario_cta", "entity": "Cuenta" },
+        { "role": "contrapartida_cta", "entity": "Cuenta" }
+      ],
+      "reads": [
+        "producto.cantidad", "producto.valor_total",
+        "inventario_cta.saldo", "inventario_cta.moneda",
+        "contrapartida_cta.saldo", "contrapartida_cta.moneda"
+      ],
+      "writes": [
+        "producto.cantidad", "producto.valor_total",
+        "inventario_cta.saldo", "contrapartida_cta.saldo", "MovimientoStock"
+      ],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/recibir_mercaderia.rhai"
+    },
+    {
+      "name": "despachar_mercaderia",
+      "inputs": [
+        { "role": "producto", "entity": "Producto" },
+        { "role": "inventario_cta", "entity": "Cuenta" },
+        { "role": "cogs_cta", "entity": "Cuenta" }
+      ],
+      "reads": [
+        "producto.cantidad", "producto.valor_total",
+        "inventario_cta.saldo", "inventario_cta.moneda",
+        "cogs_cta.saldo", "cogs_cta.moneda"
+      ],
+      "writes": [
+        "producto.cantidad", "producto.valor_total",
+        "cogs_cta.saldo", "inventario_cta.saldo", "MovimientoStock"
+      ],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/despachar_mercaderia.rhai"
+    }
+  ]
+}

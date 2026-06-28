@@ -7,12 +7,14 @@
         { "handle": "banco",       "data": { "codigo": "1020", "nombre": "Banco",           "tipo": "activo",     "saldo": 15000,  "moneda": "USD" } },
         { "handle": "clientes",    "data": { "codigo": "1100", "nombre": "Clientes",        "tipo": "activo",     "saldo": 0,      "moneda": "USD" } },
         { "handle": "iva_credito", "data": { "codigo": "1190", "nombre": "IVA crédito fiscal", "tipo": "activo",   "saldo": 0,      "moneda": "USD" } },
+        { "handle": "inventario",  "data": { "codigo": "1300", "nombre": "Inventario",       "tipo": "activo",     "saldo": 0,      "moneda": "USD" } },
         { "handle": "equipos",     "data": { "codigo": "1500", "nombre": "Equipos",         "tipo": "activo",     "saldo": 30000,  "moneda": "USD" } },
         { "handle": "proveedores", "data": { "codigo": "2010", "nombre": "Proveedores",     "tipo": "pasivo",     "saldo": -8000,  "moneda": "USD" } },
         { "handle": "iva",         "data": { "codigo": "2110", "nombre": "IVA por pagar",   "tipo": "pasivo",     "saldo": 0,      "moneda": "USD" } },
         { "handle": "capital",     "data": { "codigo": "3010", "nombre": "Capital social",  "tipo": "patrimonio", "saldo": -42000, "moneda": "USD" } },
         { "handle": "ventas",      "data": { "codigo": "4010", "nombre": "Ventas",          "tipo": "ingreso",    "saldo": 0,      "moneda": "USD" } },
-        { "handle": "gastos",      "data": { "codigo": "5010", "nombre": "Gastos generales", "tipo": "gasto",     "saldo": 0,      "moneda": "USD" } }
+        { "handle": "gastos",      "data": { "codigo": "5010", "nombre": "Gastos generales", "tipo": "gasto",     "saldo": 0,      "moneda": "USD" } },
+        { "handle": "cogs",        "data": { "codigo": "5020", "nombre": "Costo de mercadería vendida", "tipo": "gasto", "saldo": 0, "moneda": "USD" } }
       ]
     }
   ]
