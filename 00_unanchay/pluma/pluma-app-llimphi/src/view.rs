@@ -948,9 +948,13 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
         button_view::<Msg>("importar md/docx", &palette_btn, Msg::AbrirArchivo),
         button_view::<Msg>("exportar", &palette_btn, Msg::ExportarMd),
     ]));
-    hijos.push(button_view::<Msg>("⇄ cotejar dos documentos", &palette_btn, Msg::Cotejar));
+    hijos.push(button_view::<Msg>(
+        "⇄ cotejar dos documentos…",
+        &palette_btn,
+        Msg::AbrirDialogoCotejo,
+    ));
     hijos.push(pista_texto(
-        "compara los dos seleccionados (o los dos últimos): verde = igual, rojo = difiere",
+        "dos archivos del disco, o (rutas vacías) los dos seleccionados: verde = igual, rojo = difiere",
         theme,
     ));
 
@@ -2749,6 +2753,7 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         })
         .text_aligned(cot.conteo.clone(), 11.0, theme.fg_muted, Alignment::Start),
     ]);
+    let invertir = button_view::<Msg>("⇄  invertir", &palette_btn, Msg::CotejoInvertir);
     let cerrar = button_view::<Msg>("✕  cerrar (Esc)", &palette_btn, Msg::CerrarCotejo);
     let header = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -2764,7 +2769,7 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![titulo, cerrar]);
+    .children(vec![titulo, invertir, cerrar]);
 
     // Geometría: tres columnas que llenan el ancho disponible.
     let carril = 84.0_f32;
@@ -2795,14 +2800,27 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         "",
     );
 
+    // Scroll vertical: el multilienzo se posiciona absoluto y se sube por
+    // `scroll_y`. La rueda ajusta `cot.scroll_y` (acotado al contenido). El
+    // contenedor recorta lo que sobra arriba/abajo.
+    let lienzo_desplazado = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(-cot.scroll_y),
+            right: auto(),
+            bottom: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![interior]);
     let centro = View::new(Style {
-        flex_direction: FlexDirection::Row,
+        position: Position::Relative,
         size: Size { width: percent(1.0_f32), height: length((vh - 56.0).max(120.0_f32)) },
-        justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
     .clip(true)
-    .children(vec![interior]);
+    .children(vec![lienzo_desplazado]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -2818,6 +2836,54 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     // Cotejo a pantalla completa: tiene prioridad sobre los demás overlays.
     if model.cotejo.is_some() {
         return Some(cotejo_overlay(model, &theme));
+    }
+    // Diálogo "cotejar dos archivos": dos rutas (vacías → documentos abiertos).
+    if let Some(d) = model.cotejo_dialog.as_ref() {
+        let palette_input = TextInputPalette::from_theme(&theme);
+        let mut filas: Vec<View<Msg>> = vec![
+            encabezado("archivo A (.md / .txt / .docx)", &theme),
+            text_input_view::<Msg>(
+                &d.a,
+                "ruta del primer documento…",
+                d.foco == crate::model::CotejoCampo::A,
+                &palette_input,
+                Msg::CotejoDialogFoco(crate::model::CotejoCampo::A),
+            ),
+            encabezado("archivo B", &theme),
+            text_input_view::<Msg>(
+                &d.b,
+                "ruta del segundo documento…",
+                d.foco == crate::model::CotejoCampo::B,
+                &palette_input,
+                Msg::CotejoDialogFoco(crate::model::CotejoCampo::B),
+            ),
+        ];
+        match &d.error {
+            Some(e) => filas.push(pista_texto(e, &theme)),
+            None => filas.push(pista_texto(
+                "Tab cambia de campo · dejá ambas vacías para cotejar los dos documentos abiertos",
+                &theme,
+            )),
+        }
+        let body = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+            ..Default::default()
+        })
+        .children(filas);
+        return Some(modal_view(ModalSpec {
+            title: "Cotejar dos archivos".to_string(),
+            body,
+            buttons: vec![
+                ModalButton::cancel("Cancelar", Msg::CerrarDialogoCotejo),
+                ModalButton::primary("Cotejar", Msg::ConfirmarCotejoArchivos),
+            ],
+            size: (520.0, 300.0),
+            viewport: model.viewport,
+            on_dismiss: Msg::CerrarDialogoCotejo,
+            palette: ModalPalette::from_theme(&theme),
+        }));
     }
     // Modal de push (mensaje del snapshot).
     if model.push_abierto {

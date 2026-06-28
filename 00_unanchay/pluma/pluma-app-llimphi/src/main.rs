@@ -139,6 +139,21 @@ impl App for Pluma {
         if event.state != KeyState::Pressed {
             return None;
         }
+        // Diálogo "cotejar dos archivos": Esc cierra, Enter confirma, Tab salta
+        // de campo, el resto teclea el campo con foco.
+        if let Some(d) = model.cotejo_dialog.as_ref() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CerrarDialogoCotejo),
+                Key::Named(NamedKey::Enter) => Some(Msg::ConfirmarCotejoArchivos),
+                Key::Named(NamedKey::Tab) => Some(Msg::CotejoDialogFoco(
+                    match d.foco {
+                        crate::model::CotejoCampo::A => crate::model::CotejoCampo::B,
+                        crate::model::CotejoCampo::B => crate::model::CotejoCampo::A,
+                    },
+                )),
+                _ => Some(Msg::CotejoDialogKey(event.clone())),
+            };
+        }
         // Overlay de cotejo a pantalla completa: Esc lo cierra; el resto de las
         // teclas se tragan para no editar el documento de fondo.
         if model.cotejo.is_some() {
@@ -337,6 +352,13 @@ impl App for Pluma {
         modifiers: Modifiers,
     ) -> Option<Self::Msg> {
         const PX_POR_LINEA: f32 = 48.0;
+        // Overlay de cotejo: la rueda lo desplaza en vertical.
+        if model.cotejo.is_some() {
+            if delta.y != 0.0 {
+                return Some(Msg::CotejoScroll(delta.y));
+            }
+            return None;
+        }
         if delta.x.abs() > 0.0 {
             return Some(Msg::ScrollHoriz(-delta.x * PX_POR_LINEA));
         }

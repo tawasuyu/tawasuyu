@@ -516,6 +516,22 @@ pub enum Msg {
     Cotejar,
     /// Cierra el overlay de cotejo.
     CerrarCotejo,
+    /// Desplaza verticalmente el overlay de cotejo (delta de rueda).
+    CotejoScroll(f32),
+    /// Invierte izquierda↔derecha del cotejo y lo recalcula (los lienzos son
+    /// intercambiables: ver el cambio desde la otra orilla).
+    CotejoInvertir,
+    /// Abre el diálogo de "cotejar dos archivos" (dos rutas).
+    AbrirDialogoCotejo,
+    /// Cierra el diálogo de cotejo sin comparar.
+    CerrarDialogoCotejo,
+    /// Da foco a un campo de ruta del diálogo de cotejo.
+    CotejoDialogFoco(CotejoCampo),
+    /// Teclea en el campo con foco del diálogo de cotejo.
+    CotejoDialogKey(KeyEvent),
+    /// Confirma el diálogo: carga ambos archivos (o cae a los documentos
+    /// abiertos si las rutas están vacías) y abre el overlay de cotejo.
+    ConfirmarCotejoArchivos,
 }
 
 /// Estado del overlay de **cotejo**: dos documentos comparados como lienzos
@@ -533,6 +549,29 @@ pub(crate) struct EstadoCotejo {
     pub(crate) divergencias: HashMap<Uuid, f32>,
     /// Línea de conteo para la cabecera ("2 idénticas · 1 reescrita · …").
     pub(crate) conteo: String,
+    /// Desplazamiento vertical del overlay (px), para documentos más altos que
+    /// la ventana. La rueda lo ajusta; `0.0` = tope.
+    pub(crate) scroll_y: f32,
+    /// Filas del cuerpo más alto — para acotar el scroll a su contenido.
+    pub(crate) filas_max: usize,
+}
+
+/// Qué campo del diálogo de cotejo tiene el foco de teclado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CotejoCampo {
+    A,
+    B,
+}
+
+/// Diálogo para **cotejar dos archivos del disco**: dos rutas. Si ambas quedan
+/// vacías al confirmar, el cotejo cae sobre los dos documentos ya abiertos
+/// (seleccionados o los dos últimos) — así un mismo botón sirve para comparar
+/// archivos sueltos o documentos del proyecto.
+pub(crate) struct CotejoDialog {
+    pub(crate) a: TextInputState,
+    pub(crate) b: TextInputState,
+    pub(crate) foco: CotejoCampo,
+    pub(crate) error: Option<String>,
 }
 
 pub struct Model {
@@ -699,4 +738,6 @@ pub struct Model {
     /// Overlay de cotejo activo, si lo hay. `Some` lo pinta a pantalla
     /// completa por encima de todo; `Esc` o el botón ✕ lo cierran.
     pub(crate) cotejo: Option<EstadoCotejo>,
+    /// Diálogo "cotejar dos archivos" abierto, si lo hay.
+    pub(crate) cotejo_dialog: Option<CotejoDialog>,
 }

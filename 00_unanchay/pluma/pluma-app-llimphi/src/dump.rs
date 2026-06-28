@@ -205,6 +205,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         toasts: Vec::new(),
         next_toast: 0,
         cotejo: None,
+        cotejo_dialog: None,
     };
     // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo
     // (concepto → traducir → resumir) para que el nodegraph muestre nodos+cables.
@@ -344,6 +345,49 @@ fn modelo_sintetico(diente: usize) -> Model {
         m.orden_lienzos = vec![iid, did];
         m.seleccionados = vec![iid, did];
         crate::update::cotejar_seleccion(&mut m);
+    }
+
+    // 14 → diálogo "cotejar dos archivos" (dos rutas), con foco en A.
+    if diente == 14 {
+        let mut a = llimphi_widget_text_input::TextInputState::new();
+        a.set_text("~/notas/original.md");
+        let mut b = llimphi_widget_text_input::TextInputState::new();
+        b.set_text("~/notas/editado.md");
+        m.cotejo_dialog = Some(crate::model::CotejoDialog {
+            a,
+            b,
+            foco: crate::model::CotejoCampo::A,
+            error: None,
+        });
+    }
+
+    // 15 → overlay de cotejo con un documento ALTO (más filas que la ventana)
+    // y scroll aplicado, para ver el desplazamiento vertical recortado.
+    if diente == 15 {
+        let mut orig: Vec<String> = Vec::new();
+        let mut edit: Vec<String> = Vec::new();
+        for i in 1..=11 {
+            orig.push(format!("Párrafo {i}: el texto original de esta sección del documento."));
+            // Cada tercera sección difiere; el resto igual.
+            if i % 3 == 0 {
+                edit.push(format!("Párrafo {i}: esta sección fue reescrita por completo en la nueva versión."));
+            } else {
+                edit.push(format!("Párrafo {i}: el texto original de esta sección del documento."));
+            }
+        }
+        let orig_r: Vec<&str> = orig.iter().map(|s| s.as_str()).collect();
+        let edit_r: Vec<&str> = edit.iter().map(|s| s.as_str()).collect();
+        let izq = cuerpo_con_atomos(&mut m.atoms, "a", "largo-original.md", Intencion::Original, &orig_r);
+        let der = cuerpo_con_atomos(&mut m.atoms, "b", "largo-editado.md", Intencion::Original, &edit_r);
+        let (iid, did) = (izq.id, der.id);
+        m.cuerpos.push(izq);
+        m.cuerpos.push(der);
+        m.orden_lienzos = vec![iid, did];
+        m.seleccionados = vec![iid, did];
+        crate::update::cotejar_seleccion(&mut m);
+        if let Some(cot) = m.cotejo.as_mut() {
+            cot.scroll_y = 360.0; // a media página
+        }
     }
 
     // 12 → proyecto con historia (varios pushes + una rama) en pestaña Historia.

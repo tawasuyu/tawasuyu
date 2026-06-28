@@ -173,6 +173,7 @@ pub fn init_modelo() -> Model {
         toasts: Vec::new(),
         next_toast: 0,
         cotejo: None,
+        cotejo_dialog: None,
     };
 
     // Si reabrimos un proyecto con contenido, su documento activo manda sobre el

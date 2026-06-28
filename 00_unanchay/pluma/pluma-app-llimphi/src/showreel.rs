@@ -249,6 +249,7 @@ fn escena_base() -> Escena {
         toasts: Vec::new(),
         next_toast: 0,
         cotejo: None,
+        cotejo_dialog: None,
     };
 
     Escena { model, es: es_id, qu: qu_id, en: en_id }
@@ -609,6 +610,7 @@ fn clonar_para_frame(base: &Model) -> Model {
         toasts: Vec::new(),
         next_toast: 0,
         cotejo: None,
+        cotejo_dialog: None,
     }
 }
 

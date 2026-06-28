@@ -30,8 +30,8 @@ use rimay_verbo_daemon::DaemonClient;
 use uuid::Uuid;
 
 use crate::model::{
-    EstadoCotejo, Filtro, Modo, Model, Msg, NodoFiltro, ObjetivoEstilo, ProyectoAbierto,
-    ProyectoTab, WizardTipo, BACKENDS, METRICS, VISIBLE_LINES,
+    CotejoCampo, CotejoDialog, EstadoCotejo, Filtro, Modo, Model, Msg, NodoFiltro, ObjetivoEstilo,
+    ProyectoAbierto, ProyectoTab, WizardTipo, BACKENDS, METRICS, VISIBLE_LINES,
 };
 use pluma_estilo::EstiloTexto;
 use pluma_proyecto::{DocEstado, Proyecto};
@@ -701,6 +701,69 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::CerrarCotejo => {
             model.cotejo = None;
+        }
+        Msg::CotejoScroll(dy) => {
+            if let Some(cot) = model.cotejo.as_mut() {
+                const PX_POR_LINEA: f32 = 48.0;
+                // Alto de contenido ≈ filas · (altura_atom + gap) del overlay
+                // (92 + 14), con un margen para cabecera/última fila visible.
+                let alto_contenido = cot.filas_max as f32 * 106.0 + 60.0;
+                let (_, vh) = model.viewport;
+                let visible = (vh - 56.0).max(120.0);
+                let max = (alto_contenido - visible).max(0.0);
+                cot.scroll_y = (cot.scroll_y - dy * PX_POR_LINEA).clamp(0.0, max);
+            }
+        }
+        Msg::CotejoInvertir => {
+            if let Some(cot) = model.cotejo.as_ref() {
+                // izq actual = cuerpos[0], der actual = cuerpos[2]; los swapeamos.
+                if cot.cuerpos.len() == 3 {
+                    let nueva_izq = cot.cuerpos[2].clone();
+                    let nueva_der = cot.cuerpos[0].clone();
+                    let fuente = cot.atoms.clone();
+                    let estado = construir_estado_cotejo(&nueva_izq, &nueva_der, &fuente);
+                    if let Some(e) = &estado {
+                        model.ultimo_status = format!(
+                            "cotejo «{}» ↔ «{}»: {}",
+                            nueva_izq.metadatos.nombre_legible,
+                            nueva_der.metadatos.nombre_legible,
+                            e.conteo
+                        );
+                    }
+                    model.cotejo = estado;
+                }
+            }
+        }
+        Msg::AbrirDialogoCotejo => {
+            model.cotejo_dialog = Some(CotejoDialog {
+                a: llimphi_widget_text_input::TextInputState::new(),
+                b: llimphi_widget_text_input::TextInputState::new(),
+                foco: CotejoCampo::A,
+                error: None,
+            });
+        }
+        Msg::CerrarDialogoCotejo => {
+            model.cotejo_dialog = None;
+        }
+        Msg::CotejoDialogFoco(campo) => {
+            if let Some(d) = model.cotejo_dialog.as_mut() {
+                d.foco = campo;
+            }
+        }
+        Msg::CotejoDialogKey(ev) => {
+            if let Some(d) = model.cotejo_dialog.as_mut() {
+                match d.foco {
+                    CotejoCampo::A => {
+                        d.a.apply_key(&ev);
+                    }
+                    CotejoCampo::B => {
+                        d.b.apply_key(&ev);
+                    }
+                }
+            }
+        }
+        Msg::ConfirmarCotejoArchivos => {
+            confirmar_cotejo_archivos(&mut model);
         }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
@@ -2351,21 +2414,43 @@ pub(crate) fn cotejar_seleccion(model: &mut Model) {
     let Some(der) = model.cuerpos.iter().find(|c| c.id == ids[1]).cloned() else {
         return;
     };
+    let estado = construir_estado_cotejo(&izq, &der, &model.atoms);
+    model.ultimo_status = estado
+        .as_ref()
+        .map(|e| {
+            format!(
+                "cotejo «{}» ↔ «{}»: {}",
+                izq.metadatos.nombre_legible, der.metadatos.nombre_legible, e.conteo
+            )
+        })
+        .unwrap_or_default();
+    model.ultimo_error = None;
+    model.cotejo = estado;
+}
 
-    // Índice de átomos de ambos lados (referencias a los del modelo).
+/// Arma un [`EstadoCotejo`] autónomo comparando `izq` con `der`. `atoms_src` es
+/// de dónde leer los textos (el `model.atoms` o los átomos ya clonados de un
+/// cotejo previo, p. ej. al invertir). Clona cuerpos y átomos: el overlay no
+/// depende de ediciones posteriores. `None` si algún átomo falta del índice.
+fn construir_estado_cotejo(
+    izq: &Cuerpo,
+    der: &Cuerpo,
+    atoms_src: &HashMap<Uuid, NarrativeAtom>,
+) -> Option<EstadoCotejo> {
+    // Índice de átomos de ambos lados (referencias a los de `atoms_src`).
     let idx: pluma_cotejo::IndiceAtoms = izq
         .orden
         .iter()
         .chain(der.orden.iter())
-        .filter_map(|id| model.atoms.get(id).map(|a| (*id, a)))
+        .filter_map(|id| atoms_src.get(id).map(|a| (*id, a)))
         .collect();
 
     let ahora = ahora_unix();
-    let cot = pluma_cotejo::cotejar(&izq, &der, &idx, &pluma_cotejo::ParamsCotejo::default(), ahora);
+    let cot = pluma_cotejo::cotejar(izq, der, &idx, &pluma_cotejo::ParamsCotejo::default(), ahora);
     let col = pluma_cotejo::columna_diferencias(
         &cot,
-        &izq,
-        &der,
+        izq,
+        der,
         &idx,
         &pluma_cotejo::ResumidorTextual,
         ahora,
@@ -2380,7 +2465,7 @@ pub(crate) fn cotejar_seleccion(model: &mut Model) {
     // Átomos del overlay (clonados): izquierda + diferencias + derecha.
     let mut atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
     for id in izq.orden.iter().chain(der.orden.iter()) {
-        if let Some(a) = model.atoms.get(id) {
+        if let Some(a) = atoms_src.get(id) {
             atoms.insert(*id, a.clone());
         }
     }
@@ -2392,81 +2477,132 @@ pub(crate) fn cotejar_seleccion(model: &mut Model) {
     let mut divergencias = cot.divergencias;
     divergencias.extend(col.divergencias);
 
-    let nombre_izq = izq.metadatos.nombre_legible.clone();
-    let nombre_der = der.metadatos.nombre_legible.clone();
-    model.cotejo = Some(EstadoCotejo {
-        cuerpos: vec![izq, col.cuerpo, der],
+    // Filas del cuerpo más alto: acota el scroll vertical del overlay.
+    let filas_max = izq
+        .orden
+        .len()
+        .max(der.orden.len())
+        .max(col.cuerpo.orden.len());
+
+    Some(EstadoCotejo {
+        cuerpos: vec![izq.clone(), col.cuerpo, der.clone()],
         atoms,
         cartas: vec![col.carta_izq, col.carta_der],
         divergencias,
-        conteo: conteo.clone(),
-    });
-    model.ultimo_status = format!("cotejo «{nombre_izq}» ↔ «{nombre_der}»: {conteo}");
-    model.ultimo_error = None;
+        conteo,
+        scroll_y: 0.0,
+        filas_max,
+    })
 }
 
-fn abrir_archivo(model: &mut Model) {
-    let path_raw = model.path_input.text().trim().to_string();
-    if path_raw.is_empty() {
-        model.ultimo_error = Some("ruta vacía".into());
+/// Carga dos archivos del disco y abre el cotejo. Si ambas rutas están vacías,
+/// cae sobre `cotejar_seleccion` (documentos ya abiertos). Errores de carga
+/// quedan en el `error` del diálogo (que sigue abierto) para corregir la ruta.
+fn confirmar_cotejo_archivos(model: &mut Model) {
+    let (ruta_a, ruta_b) = match &model.cotejo_dialog {
+        Some(d) => (d.a.text().trim().to_string(), d.b.text().trim().to_string()),
+        None => return,
+    };
+
+    // Ambas vacías → cotejar los documentos abiertos.
+    if ruta_a.is_empty() && ruta_b.is_empty() {
+        model.cotejo_dialog = None;
+        cotejar_seleccion(model);
         return;
     }
-    let path = expandir_ruta(&path_raw);
-    let bytes = match std::fs::read(&path) {
-        Ok(b) => b,
+
+    let izq = match cargar_archivo_a_cuerpo(&ruta_a) {
+        Ok(v) => v,
         Err(e) => {
-            model.ultimo_error = Some(format!("leyendo {path:?}: {e}"));
+            if let Some(d) = &mut model.cotejo_dialog {
+                d.error = Some(format!("archivo A: {e}"));
+            }
             return;
         }
     };
+    let der = match cargar_archivo_a_cuerpo(&ruta_b) {
+        Ok(v) => v,
+        Err(e) => {
+            if let Some(d) = &mut model.cotejo_dialog {
+                d.error = Some(format!("archivo B: {e}"));
+            }
+            return;
+        }
+    };
+
+    // Índice efímero con los átomos de ambos archivos cargados.
+    let mut atoms_src: HashMap<Uuid, NarrativeAtom> = HashMap::new();
+    for a in izq.1.iter().chain(der.1.iter()) {
+        atoms_src.insert(a.id, a.clone());
+    }
+    let estado = construir_estado_cotejo(&izq.0, &der.0, &atoms_src);
+    if let Some(e) = &estado {
+        model.ultimo_status = format!(
+            "cotejo «{}» ↔ «{}»: {}",
+            izq.0.metadatos.nombre_legible, der.0.metadatos.nombre_legible, e.conteo
+        );
+    }
+    model.cotejo_dialog = None;
+    model.cotejo = estado;
+}
+
+/// Carga un archivo `.md/.markdown/.txt/.docx` del disco a `(Cuerpo, atoms)`.
+/// Devuelve `Err(mensaje)` legible si la ruta está vacía, no se lee, no es
+/// UTF-8 (texto), la extensión no se soporta o no produjo átomos. No toca el
+/// modelo — el caller decide qué hacer con el resultado.
+fn cargar_archivo_a_cuerpo(path_raw: &str) -> Result<(Cuerpo, Vec<NarrativeAtom>), String> {
+    let path_raw = path_raw.trim();
+    if path_raw.is_empty() {
+        return Err("ruta vacía".into());
+    }
+    let path = expandir_ruta(path_raw);
+    let bytes = std::fs::read(&path).map_err(|e| format!("leyendo {path:?}: {e}"))?;
     let nombre = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archivo".to_string());
     let ahora = ahora_unix();
 
-    let importado = if extension_lower(&path) == Some("docx".to_string()) {
-        match foreign_docx::parse_docx(&bytes, "es", nombre.clone(), ahora) {
-            Ok(imp) => (imp.cuerpo, imp.atoms),
-            Err(e) => {
-                model.ultimo_error = Some(format!("parse_docx {nombre}: {e:?}"));
-                return;
-            }
-        }
-    } else if extension_lower(&path) == Some("md".to_string())
-        || extension_lower(&path) == Some("markdown".to_string())
-        || extension_lower(&path) == Some("txt".to_string())
-    {
-        let texto = match std::str::from_utf8(&bytes) {
-            Ok(s) => s.to_string(),
-            Err(e) => {
-                model.ultimo_error = Some(format!("{nombre} no es UTF-8: {e}"));
-                return;
-            }
-        };
+    let (cuerpo, atoms) = if extension_lower(&path) == Some("docx".to_string()) {
+        let imp = foreign_docx::parse_docx(&bytes, "es", nombre.clone(), ahora)
+            .map_err(|e| format!("parse_docx {nombre}: {e:?}"))?;
+        (imp.cuerpo, imp.atoms)
+    } else if matches!(
+        extension_lower(&path).as_deref(),
+        Some("md") | Some("markdown") | Some("txt")
+    ) {
+        let texto = std::str::from_utf8(&bytes)
+            .map_err(|e| format!("{nombre} no es UTF-8: {e}"))?
+            .to_string();
         let imp = pluma_md::parse_md(&texto, "es", nombre.clone(), ahora);
         (imp.cuerpo, imp.atoms)
     } else {
-        model.ultimo_error = Some(format!(
-            "extensión no soportada en {nombre} — usá .md o .docx"
-        ));
-        return;
+        return Err(format!("extensión no soportada en {nombre} — usá .md o .docx"));
     };
 
-    let (cuerpo, atoms_nuevos) = importado;
-    if atoms_nuevos.is_empty() {
-        model.ultimo_error = Some(format!("{nombre} no produjo átomos"));
-        return;
+    if atoms.is_empty() {
+        return Err(format!("{nombre} no produjo átomos"));
     }
-    for a in &atoms_nuevos {
-        model.atoms.insert(a.id, a.clone());
+    Ok((cuerpo, atoms))
+}
+
+fn abrir_archivo(model: &mut Model) {
+    let path_raw = model.path_input.text().trim().to_string();
+    match cargar_archivo_a_cuerpo(&path_raw) {
+        Ok((cuerpo, atoms_nuevos)) => {
+            let nombre = cuerpo.metadatos.nombre_legible.clone();
+            for a in &atoms_nuevos {
+                model.atoms.insert(a.id, a.clone());
+            }
+            let id = cuerpo.id;
+            let n = atoms_nuevos.len();
+            model.cuerpos.push(cuerpo);
+            model.ultimo_status = format!("abierto «{nombre}»: {n} átomos");
+            model.ultimo_error = None;
+            cambiar_activo(model, id);
+        }
+        Err(e) => model.ultimo_error = Some(e),
     }
-    let id = cuerpo.id;
-    let n = atoms_nuevos.len();
-    model.cuerpos.push(cuerpo);
-    model.ultimo_status = format!("abierto «{nombre}»: {n} átomos");
-    model.ultimo_error = None;
-    cambiar_activo(model, id);
 }
 
 fn exportar_md(model: &mut Model) {
