@@ -24,6 +24,13 @@
       "script": "scripts/mover_oportunidad.rhai"
     },
     {
+      "name": "marcar_perdida",
+      "inputs": [{ "role": "oportunidad", "entity": "Oportunidad" }],
+      "reads": ["oportunidad.etapa"],
+      "writes": ["oportunidad.etapa", "oportunidad.motivo"],
+      "script": "scripts/marcar_perdida.rhai"
+    },
+    {
       "name": "registrar_interaccion",
       "inputs": [{ "role": "cliente", "entity": "Cliente" }],
       "reads": [],

@@ -116,7 +116,13 @@ fn main() {
     );
     mover(&exec, &mut store, &mut log, opp_beta, "calificado");
     mover(&exec, &mut store, &mut log, opp_beta, "propuesta");
-    mover(&exec, &mut store, &mut log, opp_beta, "perdida");
+    perder(
+        &exec,
+        &mut store,
+        &mut log,
+        opp_beta,
+        "precio fuera de presupuesto",
+    );
 
     // --- Gamma: una oportunidad en curso -------------------------------
     section("Gamma · «Expansión regional» $25 000 — en curso");
@@ -254,6 +260,20 @@ fn mover(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, opp: Uuid
     );
 }
 
+fn perder(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, opp: Uuid, motivo: &str) {
+    report(
+        &format!("marcar_perdida ({motivo})"),
+        execute_and_log(
+            exec,
+            store,
+            log,
+            "marcar_perdida",
+            &[("oportunidad", opp)],
+            json!({ "motivo": motivo, "timestamp": TS }),
+        ),
+    );
+}
+
 fn interaccion(
     exec: &Executor,
     store: &mut MemoryStore,
@@ -296,7 +316,12 @@ fn print_oportunidad(store: &MemoryStore, etiqueta: &str, id: Uuid) {
             let titulo = v.get("titulo").and_then(|x| x.as_str()).unwrap_or("?");
             let etapa = v.get("etapa").and_then(|x| x.as_str()).unwrap_or("?");
             let monto = v.get("monto").and_then(|x| x.as_i64()).unwrap_or(0);
-            println!("  {etiqueta} · {titulo} — ${monto} — etapa: {etapa}");
+            let motivo = v
+                .get("motivo")
+                .and_then(|x| x.as_str())
+                .map(|m| format!(" ({m})"))
+                .unwrap_or_default();
+            println!("  {etiqueta} · {titulo} — ${monto} — etapa: {etapa}{motivo}");
         }
         None => println!("  {etiqueta} · (sin oportunidad)"),
     }

@@ -184,6 +184,97 @@ fn monto_negativo_es_rechazado() {
     assert!(store.load("Oportunidad", opp).is_none(), "no se creó nada");
 }
 
+/// Corre `marcar_perdida` con un motivo; devuelve el conteo de ops en éxito.
+#[allow(clippy::result_large_err)]
+fn perder(
+    exec: &Executor,
+    store: &mut MemoryStore,
+    opp: Uuid,
+    motivo: &str,
+) -> Result<usize, ExecError> {
+    exec.run(
+        store,
+        "marcar_perdida",
+        &[("oportunidad", opp)],
+        json!({ "motivo": motivo }),
+    )
+    .map(|ops| ops.len())
+}
+
+fn motivo(store: &MemoryStore, opp: Uuid) -> Option<String> {
+    store
+        .load("Oportunidad", opp)
+        .and_then(|v| v.get("motivo").and_then(Value::as_str).map(String::from))
+}
+
+#[test]
+fn marcar_perdida_cierra_con_motivo() {
+    let exec = Executor::load_module(crm_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cliente = Uuid::new_v4();
+    seed_cliente(&mut store, cliente, "Acme Corp");
+    let opp = abrir_opp(&exec, &mut store, cliente);
+
+    // Se puede perder desde cualquier etapa abierta (acá, prospecto).
+    perder(&exec, &mut store, opp, "precio fuera de presupuesto").expect("perder debe pasar");
+
+    assert_eq!(etapa(&store, opp), "perdida");
+    assert_eq!(
+        motivo(&store, opp).as_deref(),
+        Some("precio fuera de presupuesto")
+    );
+}
+
+#[test]
+fn marcar_perdida_exige_motivo() {
+    let exec = Executor::load_module(crm_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cliente = Uuid::new_v4();
+    seed_cliente(&mut store, cliente, "Acme Corp");
+    let opp = abrir_opp(&exec, &mut store, cliente);
+
+    let result = perder(&exec, &mut store, opp, "");
+    assert!(matches!(result, Err(ExecError::Rhai(_))));
+    assert_eq!(etapa(&store, opp), "prospecto", "la etapa no cambió");
+    assert!(motivo(&store, opp).is_none());
+}
+
+#[test]
+fn oportunidad_perdida_no_se_mueve() {
+    let exec = Executor::load_module(crm_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cliente = Uuid::new_v4();
+    seed_cliente(&mut store, cliente, "Acme Corp");
+    let opp = abrir_opp(&exec, &mut store, cliente);
+
+    perder(&exec, &mut store, opp, "competencia").expect("perder debe pasar");
+
+    // Una oportunidad perdida no avanza por el embudo…
+    let mov = mover(&exec, &mut store, opp, "calificado");
+    assert!(matches!(mov, Err(ExecError::Rhai(_))));
+    // …ni se vuelve a cerrar.
+    let again = perder(&exec, &mut store, opp, "otra vez");
+    assert!(matches!(again, Err(ExecError::Rhai(_))));
+    assert_eq!(etapa(&store, opp), "perdida");
+}
+
+#[test]
+fn oportunidad_ganada_no_se_marca_perdida() {
+    let exec = Executor::load_module(crm_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cliente = Uuid::new_v4();
+    seed_cliente(&mut store, cliente, "Acme Corp");
+    let opp = abrir_opp(&exec, &mut store, cliente);
+
+    for destino in ["calificado", "propuesta", "negociacion", "ganada"] {
+        mover(&exec, &mut store, opp, destino).expect("avanzar debe pasar");
+    }
+
+    let result = perder(&exec, &mut store, opp, "tarde");
+    assert!(matches!(result, Err(ExecError::Rhai(_))));
+    assert_eq!(etapa(&store, opp), "ganada");
+}
+
 #[test]
 fn registrar_interaccion_crea_registro() {
     let exec = Executor::load_module(crm_module()).expect("load module");

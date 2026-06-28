@@ -25,8 +25,10 @@ let fiscal = import "../_fiscal/documentos.ncl" in
     },
   ],
 
-  # Una oportunidad de venta. La crea `abrir_oportunidad` en etapa "prospecto"
-  # y la mueve `mover_oportunidad` por el pipeline.
+  # Una oportunidad de venta. La crea `abrir_oportunidad` en etapa "prospecto",
+  # la mueve `mover_oportunidad` por el embudo hasta cerrar en "ganada", y
+  # `marcar_perdida` la cierra como "perdida" agregando un `motivo` (campo
+  # opcional, presente sólo tras el cierre-perdida; el record es abierto).
   Oportunidad = {
     cliente_id | String,
     titulo | String,
