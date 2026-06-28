@@ -1,0 +1,40 @@
+{
+  "module": "divisas",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "vender_divisa",
+      "inputs": [
+        { "role": "clientes_cta", "entity": "Cuenta" },
+        { "role": "ventas_cta", "entity": "Cuenta" }
+      ],
+      "reads": ["clientes_cta.saldo", "ventas_cta.saldo"],
+      "writes": ["clientes_cta.saldo", "ventas_cta.saldo", "FacturaDivisa"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/vender_divisa.rhai"
+    },
+    {
+      "name": "cobrar_divisa",
+      "inputs": [
+        { "role": "banco_cta", "entity": "Cuenta" },
+        { "role": "clientes_cta", "entity": "Cuenta" },
+        { "role": "resultado_cambio_cta", "entity": "Cuenta" },
+        { "role": "factura", "entity": "FacturaDivisa" }
+      ],
+      "reads": [
+        "banco_cta.saldo", "clientes_cta.saldo", "resultado_cambio_cta.saldo",
+        "factura.monto_divisa", "factura.monto_usd", "factura.estado"
+      ],
+      "writes": [
+        "banco_cta.saldo", "clientes_cta.saldo", "resultado_cambio_cta.saldo",
+        "factura.estado", "CobroDivisa"
+      ],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/cobrar_divisa.rhai"
+    }
+  ]
+}

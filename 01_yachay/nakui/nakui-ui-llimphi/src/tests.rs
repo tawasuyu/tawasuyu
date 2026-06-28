@@ -413,10 +413,17 @@
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        // Ocho demos: 'ventas', 'tesoro', 'punto_venta', 'contabilidad',
-        // 'facturacion', 'compras', 'inventario' y 'terceros' (clientes/
-        // proveedores como entidad, con estado de cuenta).
-        assert_eq!(modules.len(), 8);
+        // Nueve demos: + 'divisas' (ventas en moneda extranjera con
+        // diferencia de cambio sobre la moneda funcional).
+        assert_eq!(modules.len(), 9);
+        let divisas = modules.iter().find(|m| m.id == "divisas").expect("divisas");
+        assert!(matches!(divisas.views.get("facturas_list"), Some(ModuleView::List(_))));
+        match divisas.views.get("cobrar_form") {
+            Some(ModuleView::Form(fv)) => assert!(
+                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "cobrar_divisa")
+            ),
+            other => panic!("cobrar_form debería ser un Form, fue {other:?}"),
+        }
         // Terceros: el form de factura referencia al Partner por entity_ref
         // (no un nombre suelto), y la ficha del tercero agrega sus facturas.
         let terceros = modules.iter().find(|m| m.id == "terceros").expect("terceros");
@@ -1231,6 +1238,76 @@
         assert_eq!(c.get("monto").and_then(Value::as_i64), Some(1000));
         assert_eq!(backend.list_records("Renglon").len(), 2, "dos renglones");
         assert_eq!(suma(&backend), 0, "el asiento de N patas conserva la balanza");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// End-to-end multi-moneda: vender en EUR (contabilizado en USD a la
+    /// tasa de emisión) y cobrar a otra tasa por el backend, reconociendo
+    /// la ganancia de cambio. El libro queda cuadrado.
+    #[test]
+    fn divisas_vender_y_cobrar_con_ganancia_via_backend() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for id in ["contabilidad", "divisas"] {
+            let m = modules.iter().find(|m| m.id == id).unwrap();
+            let nakui_dir = dir.join(&m.id).join(m.nakui_module_dir.as_ref().unwrap());
+            executors.insert(id.to_string(), Arc::new(Executor::load_module(&nakui_dir).unwrap()));
+        }
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta").into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id).unwrap()
+        };
+        let saldo = |b: &NakuiBackend, id: Uuid| -> i64 {
+            b.load_record("Cuenta", id).and_then(|v| v.get("saldo").and_then(Value::as_i64)).unwrap()
+        };
+        let suma = |b: &NakuiBackend| -> i64 {
+            b.list_records("Cuenta").iter().map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0)).sum()
+        };
+        let clientes = by_codigo(&backend, "1100");
+        let banco = by_codigo(&backend, "1020");
+        let resultado = by_codigo(&backend, "4900");
+        let b0 = saldo(&backend, banco);
+
+        // Vender 1000 EUR a 1,10 → 1100 USD.
+        let factura_id = Uuid::new_v4();
+        let mut v = BTreeMap::new();
+        v.insert("clientes_cta".to_string(), clientes);
+        v.insert("ventas_cta".to_string(), by_codigo(&backend, "4010"));
+        backend.morphism("divisas", "vender_divisa", v, json!({
+            "cliente": "ACME GmbH", "moneda_origen": "EUR", "monto_divisa": 1000_i64,
+            "tasa": 110_i64, "factura_id": factura_id.to_string(), "fecha": "2026-06-28",
+        })).expect("vender");
+        assert_eq!(saldo(&backend, clientes), 1100);
+
+        // Cobrar a 1,15 → 1150 USD; ganancia de cambio 50.
+        let mut c = BTreeMap::new();
+        c.insert("banco_cta".to_string(), banco);
+        c.insert("clientes_cta".to_string(), clientes);
+        c.insert("resultado_cambio_cta".to_string(), resultado);
+        c.insert("factura".to_string(), factura_id);
+        backend.morphism("divisas", "cobrar_divisa", c, json!({
+            "tasa": 115_i64, "cobro_id": Uuid::new_v4().to_string(), "fecha": "2026-07-01",
+        })).expect("cobrar");
+
+        assert_eq!(saldo(&backend, banco), b0 + 1150);
+        assert_eq!(saldo(&backend, clientes), 0, "CxC saldada a valor de libro");
+        assert_eq!(saldo(&backend, resultado), -50, "ganancia de cambio reconocida");
+        assert_eq!(suma(&backend), 0, "el ciclo en divisa conserva la balanza");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));

@@ -13,6 +13,7 @@
         { "handle": "iva",         "data": { "codigo": "2110", "nombre": "IVA por pagar",   "tipo": "pasivo",     "saldo": 0,      "moneda": "USD" } },
         { "handle": "capital",     "data": { "codigo": "3010", "nombre": "Capital social",  "tipo": "patrimonio", "saldo": -42000, "moneda": "USD" } },
         { "handle": "ventas",      "data": { "codigo": "4010", "nombre": "Ventas",          "tipo": "ingreso",    "saldo": 0,      "moneda": "USD" } },
+        { "handle": "result_fx",   "data": { "codigo": "4900", "nombre": "Resultado por diferencias de cambio", "tipo": "ingreso", "saldo": 0, "moneda": "USD" } },
         { "handle": "gastos",      "data": { "codigo": "5010", "nombre": "Gastos generales", "tipo": "gasto",     "saldo": 0,      "moneda": "USD" } },
         { "handle": "cogs",        "data": { "codigo": "5020", "nombre": "Costo de mercadería vendida", "tipo": "gasto", "saldo": 0, "moneda": "USD" } }
       ]

@@ -1,0 +1,122 @@
+{
+  "id": "divisas",
+  "label": "Divisas",
+  "description": "Ventas en moneda extranjera contabilizadas en la moneda funcional (USD), con reconocimiento de la diferencia de cambio al cobrar a otra cotización. El libro queda en USD; la ganancia/pérdida cambiaria surge del asiento de cobro. Tasas ×100 (1,10 = 110). Comparte el plan de cuentas de Contabilidad.",
+  "nakui_module_dir": "nakui",
+  "entities": [
+    { "name": "Cuenta", "label": "Cuenta", "fields": [] },
+    { "name": "FacturaDivisa", "label": "Factura en divisa", "fields": [] },
+    { "name": "CobroDivisa", "label": "Cobro en divisa", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Tablero", "view": "tablero" },
+    { "label": "Facturas en divisa", "view": "facturas_list" },
+    { "label": "Vender en divisa", "view": "vender_form" },
+    { "label": "Cobrar en divisa", "view": "cobrar_form" },
+    { "label": "Cobros", "view": "cobros_list" },
+    { "label": "Libro de morfismos", "view": "libro" }
+  ],
+  "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Divisas",
+      "subtitle": "Cada venta en divisa se contabiliza en USD a la tasa de emisión; al cobrar a otra tasa, la diferencia es ganancia/pérdida de cambio.",
+      "cards": [
+        { "label": "Facturas en divisa", "entity": "FacturaDivisa", "metric": { "kind": "count" } },
+        {
+          "label": "Facturado (USD)",
+          "entity": "FacturaDivisa",
+          "metric": { "kind": "sum", "field": "monto_usd" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Diferencia de cambio acumulada (USD)",
+          "entity": "CobroDivisa",
+          "metric": { "kind": "sum", "field": "diferencia_cambio" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Facturado por moneda de origen",
+          "entity": "FacturaDivisa",
+          "metric": { "kind": "sum_by", "group": "moneda_origen", "value": "monto_usd" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "donut"
+        }
+      ]
+    },
+    "facturas_list": {
+      "kind": "list",
+      "title": "Facturas en divisa",
+      "entity": "FacturaDivisa",
+      "search_in": ["cliente", "moneda_origen", "estado"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "cliente", "label": "Cliente" },
+        { "field": "moneda_origen", "label": "Moneda" },
+        { "field": "monto_divisa", "label": "Importe (divisa)" },
+        { "field": "tasa", "label": "Tasa ×100" },
+        { "field": "monto_usd", "label": "Equiv. USD", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "estado", "label": "Estado" }
+      ]
+    },
+    "vender_form": {
+      "kind": "form",
+      "title": "Vender en divisa",
+      "entity": "FacturaDivisa",
+      "fields": [
+        { "name": "cliente", "label": "Cliente", "kind": "text", "required": true },
+        { "name": "moneda_origen", "label": "Moneda de origen", "kind": "text", "required": true, "help": "Ej: EUR" },
+        { "name": "monto_divisa", "label": "Importe en divisa", "kind": "number", "required": true },
+        { "name": "tasa", "label": "Cotización ×100", "kind": "number", "required": true, "help": "1,10 → 110" },
+        { "name": "clientes_cta", "label": "Cuenta Clientes (USD)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "ventas_cta", "label": "Cuenta Ventas (USD)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false },
+        { "name": "factura_id", "label": "Id de factura", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "vender_divisa",
+        "inputs": { "clientes_cta": "clientes_cta", "ventas_cta": "ventas_cta" },
+        "params": ["cliente", "moneda_origen", "monto_divisa", "tasa", "fecha", "factura_id"],
+        "next_view": "facturas_list"
+      }
+    },
+    "cobrar_form": {
+      "kind": "form",
+      "title": "Cobrar en divisa",
+      "entity": "CobroDivisa",
+      "fields": [
+        { "name": "factura", "label": "Factura a cobrar", "kind": "entity_ref", "ref_entity": "FacturaDivisa", "required": true },
+        { "name": "tasa", "label": "Cotización del cobro ×100", "kind": "number", "required": true, "help": "Tasa del día; la diferencia con la de emisión es la ganancia/pérdida" },
+        { "name": "banco_cta", "label": "Cuenta Banco (USD)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "clientes_cta", "label": "Cuenta Clientes (USD)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "resultado_cambio_cta", "label": "Resultado por diferencias de cambio", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false },
+        { "name": "cobro_id", "label": "Id de cobro", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "cobrar_divisa",
+        "inputs": { "banco_cta": "banco_cta", "clientes_cta": "clientes_cta", "resultado_cambio_cta": "resultado_cambio_cta", "factura": "factura" },
+        "params": ["tasa", "fecha", "cobro_id"],
+        "next_view": "cobros_list"
+      }
+    },
+    "cobros_list": {
+      "kind": "list",
+      "title": "Cobros en divisa",
+      "entity": "CobroDivisa",
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "factura_id", "label": "Factura", "ref_entity": "FacturaDivisa" },
+        { "field": "monto_usd", "label": "Cobrado (USD)", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "diferencia_cambio", "label": "Dif. cambio", "format": { "kind": "currency", "symbol": "$" } }
+      ]
+    },
+    "libro": {
+      "kind": "graph",
+      "title": "Libro de morfismos",
+      "subtitle": "`vender_divisa` contabiliza la venta en USD; `cobrar_divisa` salda la CxC a su valor de libro y manda la diferencia de cotización a la cuenta de resultado."
+    }
+  }
+}
