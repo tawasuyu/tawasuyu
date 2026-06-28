@@ -18,6 +18,7 @@ pluma-cuerpo = { path = "../pluma-cuerpo" }
 pluma-md = { path = "../pluma-md" }
 foreign-docx = { path = "../foreign-docx" }
 pluma-align = { path = "../pluma-align" }
+pluma-cotejo = { path = "../pluma-cotejo" }
 pluma-editor-cuerpo = { path = "../pluma-editor-cuerpo" }
 pluma-editor-llimphi = { path = "../pluma-editor-llimphi" }
 pluma-outline = { path = "../pluma-outline" }

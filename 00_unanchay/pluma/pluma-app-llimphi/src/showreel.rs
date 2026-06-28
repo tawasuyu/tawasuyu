@@ -248,6 +248,7 @@ fn escena_base() -> Escena {
         proyectos_recientes: Vec::new(),
         toasts: Vec::new(),
         next_toast: 0,
+        cotejo: None,
     };
 
     Escena { model, es: es_id, qu: qu_id, en: en_id }
@@ -607,6 +608,7 @@ fn clonar_para_frame(base: &Model) -> Model {
         proyectos_recientes: Vec::new(),
         toasts: Vec::new(),
         next_toast: 0,
+        cotejo: None,
     }
 }
 

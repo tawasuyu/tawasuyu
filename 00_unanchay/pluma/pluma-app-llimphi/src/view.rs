@@ -37,7 +37,9 @@ use llimphi_widget_toast::{toast_stack_view, Toast};
 use pluma_align::CartaHebras;
 use pluma_cuerpo::Cuerpo;
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
-use pluma_editor_llimphi::multilienzo::PaletaHebras;
+use pluma_editor_llimphi::multilienzo::{
+    multilienzo_cotejo_view, IndiceAtoms, MultilienzoConfig, PaletaHebras,
+};
 use pluma_editor_llimphi::lienzos::{
     lienzos_multi_view, ConfigLienzos, EdicionLienzo, EjecucionLienzo,
 };
@@ -946,6 +948,11 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
         button_view::<Msg>("importar md/docx", &palette_btn, Msg::AbrirArchivo),
         button_view::<Msg>("exportar", &palette_btn, Msg::ExportarMd),
     ]));
+    hijos.push(button_view::<Msg>("⇄ cotejar dos documentos", &palette_btn, Msg::Cotejar));
+    hijos.push(pista_texto(
+        "compara los dos seleccionados (o los dos últimos): verde = igual, rojo = difiere",
+        theme,
+    ));
 
     columna(hijos)
 }
@@ -2704,8 +2711,114 @@ fn divider(theme: &Theme) -> View<Msg> {
 }
 
 /// Overlay flotante: menú de edición contextual o dropdown del menú principal.
+/// Overlay de **cotejo** a pantalla completa: dos documentos como lienzos
+/// paralelos con el lienzo de diferencias en el medio, teñidos de verde
+/// (coinciden) a rojo (difieren). Cabecera con conteo + ✕; el cuerpo es el
+/// `multilienzo_cotejo_view` real, centrado y recortado al viewport.
+fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
+    let Some(cot) = model.cotejo.as_ref() else {
+        return View::new(Style::default());
+    };
+    let (vw, vh) = model.viewport;
+    let palette_btn = ButtonPalette::from_theme(theme);
+
+    // Cabecera: título + conteo a la izquierda, botón cerrar a la derecha.
+    // Ancho explícito: taffy mide el texto antes de aplicar `flex_grow`, así
+    // que un `auto` se calcularía angosto y el título se envolvería.
+    let ancho_titulo = (vw - 240.0).max(300.0_f32);
+    let titulo = View::new(Style {
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(ancho_titulo), height: length(40.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: length(ancho_titulo), height: length(20.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(
+            "Cotejo de documentos — verde = coincide · rojo = difiere".to_string(),
+            14.0,
+            theme.fg_text,
+            Alignment::Start,
+        ),
+        View::new(Style {
+            size: Size { width: length(ancho_titulo), height: length(16.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(cot.conteo.clone(), 11.0, theme.fg_muted, Alignment::Start),
+    ]);
+    let cerrar = button_view::<Msg>("✕  cerrar (Esc)", &palette_btn, Msg::CerrarCotejo);
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(12.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![titulo, cerrar]);
+
+    // Geometría: tres columnas que llenan el ancho disponible.
+    let carril = 84.0_f32;
+    let ancho_cuerpo = ((vw - 56.0 - 2.0 * carril) / 3.0).clamp(220.0, 560.0);
+    let cfg = MultilienzoConfig {
+        altura_atom: 92.0,
+        gap_atom: 14.0,
+        ancho_cuerpo,
+        ancho_carril: carril,
+        padding_top: 14.0,
+        ..MultilienzoConfig::default()
+    };
+    let paleta_hebras = PaletaHebras::default();
+    let palette_lienzo = MultPalette::from_theme(theme);
+
+    let index: IndiceAtoms = cot.atoms.iter().map(|(id, a)| (*id, a)).collect();
+    let cuerpos_ref: Vec<&Cuerpo> = cot.cuerpos.iter().collect();
+    let cartas_ref: Vec<Option<&CartaHebras>> = cot.cartas.iter().map(Some).collect();
+
+    let interior = multilienzo_cotejo_view::<Msg>(
+        &cuerpos_ref,
+        &index,
+        &cartas_ref,
+        &cot.divergencias,
+        &cfg,
+        &paleta_hebras,
+        &palette_lienzo,
+        "",
+    );
+
+    let centro = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length((vh - 56.0).max(120.0_f32)) },
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .clip(true)
+    .children(vec![interior]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(vw.max(1.0_f32)), height: length(vh.max(1.0_f32)) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![header, centro])
+}
+
 pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     let theme = Theme::dark();
+    // Cotejo a pantalla completa: tiene prioridad sobre los demás overlays.
+    if model.cotejo.is_some() {
+        return Some(cotejo_overlay(model, &theme));
+    }
     // Modal de push (mensaje del snapshot).
     if model.push_abierto {
         let palette_input = TextInputPalette::from_theme(&theme);

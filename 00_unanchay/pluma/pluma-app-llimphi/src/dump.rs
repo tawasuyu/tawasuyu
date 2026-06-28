@@ -204,6 +204,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         proyectos_recientes: Vec::new(),
         toasts: Vec::new(),
         next_toast: 0,
+        cotejo: None,
     };
     // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo
     // (concepto → traducir → resumir) para que el nodegraph muestre nodos+cables.
@@ -308,6 +309,41 @@ fn modelo_sintetico(diente: usize) -> Model {
         w.madre = m.activo;
         w.tipo = crate::model::WizardTipo::Traducir;
         m.wizard = Some(w);
+    }
+
+    // 13 → overlay de cotejo: dos versiones de un mismo documento comparadas,
+    // teñidas verde→rojo. Siembra el par, selecciona ambos y dispara el cotejo
+    // real (mismo código que el botón «cotejar dos documentos»).
+    if diente == 13 {
+        let original = [
+            "Pluma es un editor de documentos como haz de cuerpos.",
+            "Cada cuerpo es un lienzo del mismo material bajo otra mirada.",
+            "Los párrafos se alinean uno a uno entre cuerpos.",
+            "El motor gráfico se llamaba GPUI en las primeras versiones.",
+            "La persistencia vive en una base sled embebida.",
+        ];
+        let editado = [
+            "Pluma es un editor de documentos como haz de cuerpos.",
+            "Cada cuerpo es un lienzo del mismo material visto desde otra intención.",
+            "Los párrafos quedan alineados uno a uno entre los cuerpos del haz.",
+            "Hoy todo lo gráfico corre sobre Llimphi con wgpu y vello.",
+            "La persistencia vive en una base sled embebida.",
+            "Un cotejo compara dos versiones sección por sección.",
+        ];
+        let izq = cuerpo_con_atomos(&mut m.atoms, "a", "original.md", Intencion::Original, &original);
+        let der = cuerpo_con_atomos(
+            &mut m.atoms,
+            "b",
+            "editado.md",
+            Intencion::Custom { kind: "versión".into() },
+            &editado,
+        );
+        let (iid, did) = (izq.id, der.id);
+        m.cuerpos.push(izq);
+        m.cuerpos.push(der);
+        m.orden_lienzos = vec![iid, did];
+        m.seleccionados = vec![iid, did];
+        crate::update::cotejar_seleccion(&mut m);
     }
 
     // 12 → proyecto con historia (varios pushes + una rama) en pestaña Historia.

@@ -139,6 +139,14 @@ impl App for Pluma {
         if event.state != KeyState::Pressed {
             return None;
         }
+        // Overlay de cotejo a pantalla completa: Esc lo cierra; el resto de las
+        // teclas se tragan para no editar el documento de fondo.
+        if model.cotejo.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::CerrarCotejo),
+                _ => None,
+            };
+        }
         // Menús abiertos: las flechas navegan y tienen prioridad sobre todo.
         if let Some(mi) = model.menu_open {
             let n = crate::update::menu_principal(model).menus.len().max(1);

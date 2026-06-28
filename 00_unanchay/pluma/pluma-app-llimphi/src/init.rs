@@ -172,6 +172,7 @@ pub fn init_modelo() -> Model {
         proyectos_recientes: crate::util::cargar_recientes(),
         toasts: Vec::new(),
         next_toast: 0,
+        cotejo: None,
     };
 
     // Si reabrimos un proyecto con contenido, su documento activo manda sobre el

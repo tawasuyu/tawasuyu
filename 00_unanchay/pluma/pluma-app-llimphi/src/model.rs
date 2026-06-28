@@ -509,6 +509,30 @@ pub enum Msg {
     /// Descarta un toast del stack al clickearlo (los expirados se podan solos
     /// en `FlujoTick`).
     DescartarToast(u64),
+    /// Cotejá dos documentos: toma los dos lienzos seleccionados (o, si no hay
+    /// dos en la selección, los dos últimos abiertos), los compara con
+    /// `pluma-cotejo` y abre el overlay de cotejo (verde = coincide, rojo =
+    /// difiere) con el lienzo de diferencias en el medio.
+    Cotejar,
+    /// Cierra el overlay de cotejo.
+    CerrarCotejo,
+}
+
+/// Estado del overlay de **cotejo**: dos documentos comparados como lienzos
+/// paralelos, con un tercer lienzo de diferencias en el medio. Es autónomo —
+/// clona los cuerpos y átomos involucrados para que el overlay no dependa de
+/// ediciones posteriores del modelo. Lo arma `Msg::Cotejar` vía `pluma-cotejo`.
+pub(crate) struct EstadoCotejo {
+    /// Los tres cuerpos en orden de presentación: `[izq, diferencias, der]`.
+    pub(crate) cuerpos: Vec<Cuerpo>,
+    /// Índice de todos los átomos referenciados (izquierda + diferencias + derecha).
+    pub(crate) atoms: HashMap<Uuid, NarrativeAtom>,
+    /// Cartas entre columnas consecutivas: `[izq↔dif, dif↔der]`.
+    pub(crate) cartas: Vec<CartaHebras>,
+    /// Divergencia `[0,1]` de cada átomo — alimenta el coloreado verde→rojo.
+    pub(crate) divergencias: HashMap<Uuid, f32>,
+    /// Línea de conteo para la cabecera ("2 idénticas · 1 reescrita · …").
+    pub(crate) conteo: String,
 }
 
 pub struct Model {
@@ -670,4 +694,9 @@ pub struct Model {
     pub(crate) toasts: Vec<Toast>,
     /// Id incremental para correlacionar toast ↔ `Msg::DescartarToast`.
     pub(crate) next_toast: u64,
+
+    // --- Cotejo (comparación de dos documentos) ---
+    /// Overlay de cotejo activo, si lo hay. `Some` lo pinta a pantalla
+    /// completa por encima de todo; `Esc` o el botón ✕ lo cierran.
+    pub(crate) cotejo: Option<EstadoCotejo>,
 }

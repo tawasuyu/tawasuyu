@@ -30,8 +30,8 @@ use rimay_verbo_daemon::DaemonClient;
 use uuid::Uuid;
 
 use crate::model::{
-    Filtro, Modo, Model, Msg, NodoFiltro, ObjetivoEstilo, ProyectoAbierto, ProyectoTab, WizardTipo,
-    BACKENDS, METRICS, VISIBLE_LINES,
+    EstadoCotejo, Filtro, Modo, Model, Msg, NodoFiltro, ObjetivoEstilo, ProyectoAbierto,
+    ProyectoTab, WizardTipo, BACKENDS, METRICS, VISIBLE_LINES,
 };
 use pluma_estilo::EstiloTexto;
 use pluma_proyecto::{DocEstado, Proyecto};
@@ -695,6 +695,12 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::DescartarToast(id) => {
             model.toasts.retain(|t| t.id != id);
+        }
+        Msg::Cotejar => {
+            cotejar_seleccion(&mut model);
+        }
+        Msg::CerrarCotejo => {
+            model.cotejo = None;
         }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
@@ -2304,6 +2310,98 @@ fn mover_atom_caret(model: &mut Model, delta: i32) {
         "atom movido {}",
         if delta < 0 { "↑" } else { "↓" }
     );
+    model.ultimo_error = None;
+}
+
+/// Cotejá dos documentos abiertos y abre el overlay de comparación. Elige el
+/// par así: si hay ≥2 lienzos seleccionados, los dos primeros en el orden del
+/// tree; si no, los dos últimos documentos abiertos. Con menos de dos
+/// documentos, avisa por toast y no hace nada.
+///
+/// Reusa `pluma-cotejo`: alinea párrafo-a-párrafo por similitud, arma el lienzo
+/// de diferencias del medio y el mapa de divergencias para el coloreado
+/// verde→rojo. El resultado se clona dentro de `EstadoCotejo` — el overlay es
+/// autónomo y no se invalida si después se edita un documento.
+pub(crate) fn cotejar_seleccion(model: &mut Model) {
+    // Par a cotejar: selección (en orden del tree) o los dos últimos abiertos.
+    let ids: Vec<Uuid> = {
+        let sel: Vec<Uuid> = model
+            .orden_lienzos
+            .iter()
+            .copied()
+            .filter(|id| model.seleccionados.contains(id))
+            .collect();
+        if sel.len() >= 2 {
+            sel.into_iter().take(2).collect()
+        } else {
+            model.cuerpos.iter().rev().take(2).map(|c| c.id).collect::<Vec<_>>()
+                .into_iter().rev().collect()
+        }
+    };
+    if ids.len() < 2 {
+        push_toast(model, |id| {
+            Toast::info(id, "Abrí o seleccioná dos documentos para cotejar", TOAST_TTL)
+        });
+        return;
+    }
+
+    let Some(izq) = model.cuerpos.iter().find(|c| c.id == ids[0]).cloned() else {
+        return;
+    };
+    let Some(der) = model.cuerpos.iter().find(|c| c.id == ids[1]).cloned() else {
+        return;
+    };
+
+    // Índice de átomos de ambos lados (referencias a los del modelo).
+    let idx: pluma_cotejo::IndiceAtoms = izq
+        .orden
+        .iter()
+        .chain(der.orden.iter())
+        .filter_map(|id| model.atoms.get(id).map(|a| (*id, a)))
+        .collect();
+
+    let ahora = ahora_unix();
+    let cot = pluma_cotejo::cotejar(&izq, &der, &idx, &pluma_cotejo::ParamsCotejo::default(), ahora);
+    let col = pluma_cotejo::columna_diferencias(
+        &cot,
+        &izq,
+        &der,
+        &idx,
+        &pluma_cotejo::ResumidorTextual,
+        ahora,
+    );
+
+    let c = cot.conteos();
+    let conteo = format!(
+        "{} idénticas · {} reformuladas · {} reescritas · {} agregadas · {} eliminadas",
+        c.identicas, c.similares, c.divergentes, c.agregadas, c.eliminadas
+    );
+
+    // Átomos del overlay (clonados): izquierda + diferencias + derecha.
+    let mut atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
+    for id in izq.orden.iter().chain(der.orden.iter()) {
+        if let Some(a) = model.atoms.get(id) {
+            atoms.insert(*id, a.clone());
+        }
+    }
+    for a in &col.atoms {
+        atoms.insert(a.id, a.clone());
+    }
+
+    // Divergencias unificadas: las del cotejo (izq/der) + las del lienzo del medio.
+    let mut divergencias = cot.divergencias;
+    divergencias.extend(col.divergencias);
+
+    let nombre_izq = izq.metadatos.nombre_legible.clone();
+    let nombre_der = der.metadatos.nombre_legible.clone();
+    model.cotejo = Some(EstadoCotejo {
+        cuerpos: vec![izq, col.cuerpo, der],
+        atoms,
+        cartas: vec![col.carta_izq, col.carta_der],
+        divergencias,
+        conteo: conteo.clone(),
+    });
+    model.ultimo_status = format!("cotejo «{nombre_izq}» ↔ «{nombre_der}»: {conteo}");
     model.ultimo_error = None;
 }
 
