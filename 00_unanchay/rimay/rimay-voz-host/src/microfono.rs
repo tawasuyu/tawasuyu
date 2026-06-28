@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use media_core::AudioSource;
 use media_source_capture::{MicError, MicSource};
-use rimay_voz::Transcriptor;
+use rimay_voz::{ConfigVoz, DetectorLlamado, Transcriptor};
 use tokio::sync::mpsc;
 
 use crate::lazo::{EventoEscucha, Lazo};
@@ -33,6 +33,23 @@ const HZ_OBJETIVO: u32 = 16_000;
 const POLL: Duration = Duration::from_millis(20);
 /// Cada cuánto la task manda un `tick` a la máquina (re-dormida por silencio).
 const TICK: Duration = Duration::from_millis(250);
+
+/// Opciones de la escucha: la palabra de llamada y la compuerta wake-word.
+pub struct OpcionesEscucha {
+    /// Palabra de activación que la máquina exige al frente del transcript.
+    /// Default `"shuma"` (Regla 6: no «Alexa»).
+    pub llamado: String,
+    /// Compuerta wake-word (F1) opcional. Con un detector enrolado, estando
+    /// dormida sólo se transcribe lo que suena al llamado — el audio del resto
+    /// nunca llega al STT. `None` → F0 (transcribe toda utterance).
+    pub detector: Option<Arc<dyn DetectorLlamado>>,
+}
+
+impl Default for OpcionesEscucha {
+    fn default() -> Self {
+        Self { llamado: "shuma".to_string(), detector: None }
+    }
+}
 
 /// Mantiene viva la captura: soltarla corta el hilo de audio y la task.
 pub struct GuardiaEscucha {
@@ -49,13 +66,24 @@ impl Drop for GuardiaEscucha {
     }
 }
 
-/// Arranca la escucha manos-libres sobre `stt`. Devuelve el receptor de eventos
-/// y la guardia que la mantiene viva. Debe llamarse dentro de un runtime tokio.
+/// Arranca la escucha manos-libres sobre `stt` con los defaults (palabra
+/// `"shuma"`, sin compuerta wake-word — F0). Ver [`escuchar_con`] para
+/// configurar la palabra o montar el wake-word (F1).
+pub fn escuchar(
+    stt: Arc<dyn Transcriptor>,
+) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<EventoEscucha>), MicError> {
+    escuchar_con(stt, OpcionesEscucha::default())
+}
+
+/// Como [`escuchar`] pero con [`OpcionesEscucha`] (palabra de llamada +
+/// compuerta wake-word). Devuelve el receptor de eventos y la guardia que la
+/// mantiene viva. Debe llamarse dentro de un runtime tokio.
 ///
 /// El error de «no hay micrófono» llega sincrónico: abrimos el dispositivo en el
 /// hilo de audio y reportamos el resultado antes de devolver.
-pub fn escuchar(
+pub fn escuchar_con(
     stt: Arc<dyn Transcriptor>,
+    opciones: OpcionesEscucha,
 ) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<EventoEscucha>), MicError> {
     let parar = Arc::new(AtomicBool::new(false));
     let (tx_audio, mut rx_audio) = mpsc::unbounded_channel::<Vec<i16>>();
@@ -104,8 +132,13 @@ pub fn escuchar(
 
     // --- Task async: corre el Lazo (STT async) + el reloj de re-dormida. ---
     let (tx_ev, rx_ev) = mpsc::unbounded_channel::<EventoEscucha>();
+    let OpcionesEscucha { llamado, detector } = opciones;
     let tarea = tokio::spawn(async move {
-        let mut lazo = Lazo::new(stt);
+        let cfg_voz = ConfigVoz { llamado, ..ConfigVoz::default() };
+        let mut lazo = Lazo::con_voz(stt, cfg_voz);
+        if let Some(det) = detector {
+            lazo = lazo.con_detector_llamado(det);
+        }
         let mut reloj = tokio::time::interval(TICK);
         loop {
             tokio::select! {

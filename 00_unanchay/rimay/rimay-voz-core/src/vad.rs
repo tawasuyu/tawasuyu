@@ -206,18 +206,26 @@ pub struct Vad<D: DetectorVoz> {
     detector: D,
     seg: Segmentador,
     hz: u32,
+    umbral: f32,
     buffer: Vec<i16>,
+    /// Largo del buffer justo tras el último frame *con voz*. Al cerrar se
+    /// recorta acá, así el [`Audio`] emitido no arrastra el silencio del
+    /// colgado (mejor para el STT y para el match del wake-word).
+    fin_voz: usize,
 }
 
 impl<D: DetectorVoz> Vad<D> {
     /// Crea el VAD con un detector, su config y la tasa de muestreo de los
     /// frames (la que tendrá el [`Audio`] emitido).
     pub fn new(detector: D, cfg: ConfigVad, hz: u32) -> Self {
+        let umbral = cfg.umbral;
         Self {
             detector,
             seg: Segmentador::new(cfg),
             hz,
+            umbral,
             buffer: Vec::new(),
+            fin_voz: 0,
         }
     }
 
@@ -234,20 +242,32 @@ impl<D: DetectorVoz> Vad<D> {
     /// preservar el ataque exacto, el host puede mantener un pre-roll.
     pub fn empujar(&mut self, frame: &[i16]) -> SalidaVad {
         let prob = self.detector.probabilidad(frame);
+        let es_voz = prob >= self.umbral;
         match self.seg.empujar(prob) {
             PulsoVad::Silencio => SalidaVad::Nada,
             PulsoVad::Inicio => {
                 self.buffer.clear();
                 self.buffer.extend_from_slice(frame);
+                self.fin_voz = self.buffer.len(); // el frame de inicio es voz
                 SalidaVad::Empezo
             }
             PulsoVad::Sigue => {
                 self.buffer.extend_from_slice(frame);
+                if es_voz {
+                    self.fin_voz = self.buffer.len();
+                }
                 SalidaVad::Nada
             }
             PulsoVad::Fin => {
                 self.buffer.extend_from_slice(frame);
+                if es_voz {
+                    self.fin_voz = self.buffer.len();
+                }
+                // Recortar el colgado de silencio: la utterance termina en el
+                // último frame con voz, no en el silencio que la cerró.
+                self.buffer.truncate(self.fin_voz);
                 let muestras = std::mem::take(&mut self.buffer);
+                self.fin_voz = 0;
                 SalidaVad::Termino(Audio::new(muestras, self.hz))
             }
         }
@@ -325,8 +345,9 @@ mod tests {
         assert_eq!(v.empujar(&sil), SalidaVad::Nada); // 1er silencio < colgado
         match v.empujar(&sil) {
             SalidaVad::Termino(audio) => {
-                // 4 frames de 100 muestras acumulados (inicio + sigue + 2 sil).
-                assert_eq!(audio.muestras.len(), 400);
+                // 2 frames de voz acumulados; el silencio del colgado (2 frames)
+                // se recorta — la utterance termina en el último frame con voz.
+                assert_eq!(audio.muestras.len(), 200);
                 assert_eq!(audio.hz, 16_000);
             }
             otro => panic!("esperaba Termino, vino {otro:?}"),

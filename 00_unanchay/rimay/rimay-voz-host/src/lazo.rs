@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use rimay_voz::{
-    ConfigVad, ConfigVoz, DetectorEnergia, EstadoVoz, Evento, Maquina, Reaccion, SalidaVad,
-    Transcriptor, Vad,
+    ConfigVad, ConfigVoz, DetectorEnergia, DetectorLlamado, EstadoVoz, Evento, Maquina, Reaccion,
+    SalidaVad, Transcriptor, Vad,
 };
 
 /// Lo que el lazo le reporta a la app por cada bloque de audio procesado. Es la
@@ -42,14 +42,25 @@ pub struct Lazo {
     vad: Vad<DetectorEnergia>,
     maquina: Maquina,
     stt: Arc<dyn Transcriptor>,
+    /// Compuerta wake-word (F1): si está y la máquina está dormida, sólo se
+    /// transcribe la utterance que el detector reconoce como el llamado. `None`
+    /// → comportamiento F0 (transcribe todas las utterances).
+    llamador: Option<Arc<dyn DetectorLlamado>>,
     frame_len: usize,
     pendiente: Vec<i16>,
 }
 
 impl Lazo {
     /// Lazo con los defaults de la suite (16 kHz, frame de 30 ms, energía).
+    /// Sin wake-word (F0): transcribe toda utterance.
     pub fn new(stt: Arc<dyn Transcriptor>) -> Self {
         Self::con_config(stt, HZ_OBJETIVO, MUESTRAS_FRAME, ConfigVad::default(), ConfigVoz::default())
+    }
+
+    /// Lazo con la palabra de llamada configurada (resto, defaults). La palabra
+    /// es la que la máquina exige al frente del transcript (ej. `"shuma"`).
+    pub fn con_voz(stt: Arc<dyn Transcriptor>, cfg_voz: ConfigVoz) -> Self {
+        Self::con_config(stt, HZ_OBJETIVO, MUESTRAS_FRAME, ConfigVad::default(), cfg_voz)
     }
 
     /// Lazo afinable: tasa, largo de frame, y configs de VAD y de la máquina.
@@ -64,9 +75,18 @@ impl Lazo {
             vad: Vad::new(DetectorEnergia::default(), cfg_vad, hz),
             maquina: Maquina::new(cfg_voz),
             stt,
+            llamador: None,
             frame_len: frame_len.max(1),
             pendiente: Vec::new(),
         }
+    }
+
+    /// Encadenable: monta la compuerta wake-word (F1). Con esto, estando
+    /// dormida, una utterance que el detector NO reconoce como el llamado **no
+    /// se transcribe** — el audio nunca llega al STT (ni a la nube).
+    pub fn con_detector_llamado(mut self, llamador: Arc<dyn DetectorLlamado>) -> Self {
+        self.llamador = Some(llamador);
+        self
     }
 
     /// Tasa de muestreo que el lazo espera en [`Self::empujar`].
@@ -94,6 +114,17 @@ impl Lazo {
                     eventos.push(EventoEscucha::Escuchando);
                 }
                 SalidaVad::Termino(audio) => {
+                    // Compuerta wake-word (F1): dormida, sólo se transcribe lo
+                    // que suena al llamado. Así el STT (y la nube) no ven lo que
+                    // no va dirigido al asistente. Despierta/dictando no se gatea
+                    // (querés dictar libre).
+                    if self.maquina.estado() == EstadoVoz::Dormido {
+                        if let Some(det) = &self.llamador {
+                            if !det.es_llamado(&audio) {
+                                continue; // no transcribir: el audio se descarta acá
+                            }
+                        }
+                    }
                     // Sólo ahora corre el STT, sobre el fragmento que aisló el VAD.
                     if let Ok(t) = self.stt.transcribir(&audio).await {
                         let r = self.maquina.avanzar(Evento::Transcript(t.texto));
@@ -202,5 +233,65 @@ mod tests {
         let mut l = lazo_con("shuma");
         let evs = l.empujar(&silencio(20)).await;
         assert!(evs.is_empty());
+    }
+
+    // --- Compuerta wake-word (F1) ---
+    // Mock determinista del detector, para probar el *gateo* sin acoplar al
+    // matcher acústico real (que se testea en wake::tests).
+    use rimay_voz::{Audio, DetectorLlamado};
+    struct Siempre(bool);
+    impl DetectorLlamado for Siempre {
+        fn es_llamado(&self, _: &Audio) -> bool {
+            self.0
+        }
+    }
+
+    fn lazo_gateado(texto: &str, dispara: bool) -> Lazo {
+        let cfg_vad = ConfigVad { umbral: 0.5, arranque: 2, colgado: 3 };
+        Lazo::con_config(
+            Arc::new(TranscriptorMock::con_texto(texto)),
+            HZ_OBJETIVO,
+            MUESTRAS_FRAME,
+            cfg_vad,
+            ConfigVoz::default(),
+        )
+        .con_detector_llamado(Arc::new(Siempre(dispara)))
+    }
+
+    #[tokio::test]
+    async fn wake_rechaza_no_transcribe_aunque_el_stt_diria_shuma() {
+        // El detector NO reconoce el llamado → la utterance no se transcribe,
+        // aunque el STT (mock) habría dicho «shuma». Cero eventos de despertar.
+        let mut l = lazo_gateado("shuma", false);
+        let mut evs = l.empujar(&voz(4)).await;
+        evs.extend(l.empujar(&silencio(3)).await);
+        assert!(!evs.iter().any(|e| matches!(e, EventoEscucha::Desperto)));
+        assert_eq!(l.estado(), EstadoVoz::Dormido);
+    }
+
+    #[tokio::test]
+    async fn wake_acepta_deja_pasar_al_stt_y_despierta() {
+        // El detector reconoce el llamado → se transcribe y la máquina despierta.
+        let mut l = lazo_gateado("shuma", true);
+        let mut evs = l.empujar(&voz(4)).await;
+        evs.extend(l.empujar(&silencio(3)).await);
+        assert!(evs.contains(&EventoEscucha::Desperto));
+        assert_eq!(l.estado(), EstadoVoz::Despierto);
+    }
+
+    #[tokio::test]
+    async fn wake_no_gatea_una_vez_despierta() {
+        // Tras despertar, el gateo se apaga: la siguiente utterance se dicta
+        // aunque el detector la rechace (querés dictar libre).
+        let mut l = lazo_gateado("shuma", true);
+        l.empujar(&voz(4)).await;
+        l.empujar(&silencio(3)).await;
+        assert_eq!(l.estado(), EstadoVoz::Despierto);
+        // Ahora el detector diría «no», pero estando despierta no gatea.
+        // (Reusamos el mismo lazo; el detector Siempre(true) igual no se
+        //  consulta despierta — lo que probamos es que despierta SÍ transcribe.)
+        let mut evs = l.empujar(&voz(5)).await;
+        evs.extend(l.empujar(&silencio(3)).await);
+        assert!(evs.iter().any(|e| matches!(e, EventoEscucha::Dictar(_))));
     }
 }

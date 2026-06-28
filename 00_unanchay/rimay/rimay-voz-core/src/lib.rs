@@ -13,6 +13,9 @@
 //! - [`vad`] — la primera compuerta: detector de voz por frame (trait +
 //!   default de energía, Silero después) + segmentador de utterances. Entrega
 //!   el fragmento de audio que va al STT. **Nada pesado corre hasta que hay voz.**
+//! - [`wake`] — la segunda compuerta (F1): ¿esta utterance suena al llamado?
+//!   Si no, no se transcribe (ni se manda a la nube). Trait `DetectorLlamado` +
+//!   default por plantilla enrolada (DTW, sin modelo); neuronal después.
 //! - [`maquina`] — la escucha como autómata `Dormido → Despierto → Dictando`,
 //!   con detección del llamado. **Nada cruza al consumidor hasta el llamado.**
 //! - [`lectura`] — política de TTS *discriminado*: se vocaliza sólo la prosa,
@@ -27,6 +30,7 @@ pub mod maquina;
 pub mod prosodia;
 mod traits;
 pub mod vad;
+pub mod wake;
 
 pub use lectura::{debe_leer, Politica, TipoBloque};
 pub use maquina::{detectar_llamado, ConfigVoz, EstadoVoz, Evento, Maquina, Reaccion};
@@ -35,3 +39,4 @@ pub use traits::{Audio, Locutor, Transcriptor, Transcripcion, VozError};
 pub use vad::{
     ConfigVad, DetectorEnergia, DetectorVoz, PulsoVad, SalidaVad, Segmentador, Vad,
 };
+pub use wake::{DetectorLlamado, DetectorPlantilla, ParamsLlamado, Plantilla};

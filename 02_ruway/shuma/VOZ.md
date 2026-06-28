@@ -76,8 +76,19 @@ matchea el llamado.
   (`"shuma"` u otro quechua — Regla 6, *no* "Alexa"), se entra en `Despierto`.
   Cuesta más CPU (STT por utterance) pero en desktop es aceptable y es cero
   modelo nuevo.
-- **F1 (bajar CPU):** detector dedicado (openWakeWord ONNX / KWS chico) que
-  reemplaza el "STT-then-match" — sólo dispara STT tras el llamado.
+- **F1 (compuerta dedicada, hecho):** `rimay-voz-core::wake` — trait
+  `DetectorLlamado` (¿esta utterance suena al llamado?) **antes** del STT. Si no
+  matchea, el audio **no se transcribe** (con STT de nube, no sale de la
+  máquina) — cierra el agujero de privacidad del "transcribe-todo" de F0. Default
+  sin modelo: `DetectorPlantilla`, *speaker-dependent* — se enrola con unas
+  grabaciones del llamado y compara por **DTW** sobre rasgos baratos
+  (log-energía + cruces por cero, sin FFT). El `Lazo` la consulta sólo estando
+  **dormido** (despierto/dictando no gatea, dictás libre). Un wake-word neuronal
+  *speaker-independent* (openWakeWord ONNX) entra como otra impl del trait, sin
+  tocar el lazo. **Honestidad:** los tests certifican el *mecanismo*
+  (idéntico-a-la-plantilla dispara, distinto no; el gateo corta el STT), no la
+  precisión real sobre «shuma» — eso se afina con el enrolado en metal. Falta la
+  **UX de enrolado** (grabar «shuma» N veces) en la app.
 
 ## Forma del código (Regla: un dominio = un crate raíz + subcrates)
 
@@ -93,7 +104,11 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
     otra impl del trait. `Segmentador` puro convierte el flujo de probs en
     bordes de utterance (`PulsoVad::{Inicio,Sigue,Fin}`) con debounce de
     arranque + colgado (hangover). `Vad` junta detector+segmentador+acumulación
-    y entrega el `Audio` completo al cerrar, listo para el STT.
+    y entrega el `Audio` al cerrar (recortando el silencio del colgado), listo
+    para el STT.
+  - **Wake-word** (`wake`): trait `DetectorLlamado` + default `DetectorPlantilla`
+    (DTW sobre rasgos baratos, enrolable, sin modelo). La compuerta F1 — ver
+    §Wake-word.
   - **política de lectura** discriminada: el consumidor mapea su tipo de bloque
     → `TipoBloque` (sólo la prosa se vocaliza).
   - clasificador prosódico determinista sobre features de f0.
@@ -144,10 +159,13 @@ Familia **`rimay-voz`** en el dominio `rimay`, molde de `rimay-verbo`:
   `--no-default-features`)**, que abre cpal en un **hilo dedicado** (el `Stream`
   es `!Send`), prepara el audio (`a_mono` + `Remuestreador` lineal con estado +
   `a_i16`, reusando la captura de `media-source-capture/mic`) y alimenta el
-  `Lazo` desde una task async, emitiendo eventos por canal. Certificado por
-  texto: 12 tests (lazo: ruido/llamado/cola/re-dormida/silencio; prep: downmix/
-  remuestreo/clamp). Demo en metal: `cargo run -p rimay-voz-host --example
-  escuchar_microfono`. Lo único que quedará «de shuma»: mapear
+  `Lazo` desde una task async, emitiendo eventos por canal. **Palabra de llamada
+  configurable** y **compuerta wake-word (F1) opcional** vía `OpcionesEscucha`
+  (`escuchar_con`); el `Lazo` gatea el STT con el `DetectorLlamado` estando
+  dormido. Certificado por texto: 15 tests (lazo: ruido/llamado/cola/re-dormida/
+  silencio + gateo wake acepta/rechaza/no-gatea-despierto; prep: downmix/
+  remuestreo/clamp). Demos: `escuchar_microfono` (en metal) y `wake_gateo`
+  (gateo F1 sin micrófono, por texto). Lo único que quedará «de shuma»: mapear
   `shuma_agente::BloqueSalida` → `rimay_voz::TipoBloque` y dispatchar los
   eventos. Sin micrófono real, el lazo ya está demostrado en
   `rimay-voz/examples/pipeline_vad`.
