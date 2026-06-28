@@ -100,7 +100,7 @@ use llimphi_widget_nodegraph::{
 use nahual_meta_runtime::{
     breakdown_to_csv, bucket_date, cmp_values, compute_clear_fields, compute_field_delta,
     compute_metric, cumulative_breakdown, format_value, human_label_for_record, limit_breakdown,
-    parse_field_value,
+    parse_array_value, parse_field_value,
     preview_value, record_matches, render_value, resolve_param_value, short_uuid,
     sort_breakdown_by_key, to_csv, validate_entity_refs, MetaBackend, MetricResult, WriteOutcome,
 };

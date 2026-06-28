@@ -5,12 +5,15 @@
   "nakui_module_dir": "nakui",
   "entities": [
     { "name": "Cuenta", "label": "Cuenta", "fields": [] },
-    { "name": "Factura", "label": "Factura", "fields": [] }
+    { "name": "Factura", "label": "Factura", "fields": [] },
+    { "name": "LineaFactura", "label": "Línea de factura", "fields": [] }
   ],
   "menu": [
     { "label": "Tablero", "view": "tablero" },
     { "label": "Facturas", "view": "facturas_list" },
-    { "label": "Emitir factura", "view": "emitir_form" },
+    { "label": "Facturar (con líneas)", "view": "facturar_form" },
+    { "label": "Emitir (rápida)", "view": "emitir_form" },
+    { "label": "Líneas", "view": "lineas_list" },
     { "label": "Libro de morfismos", "view": "libro" }
   ],
   "views": {
@@ -114,10 +117,57 @@
         "next_view": "facturas_list"
       }
     },
+    "facturar_form": {
+      "kind": "form",
+      "title": "Facturar (con líneas)",
+      "entity": "Factura",
+      "fields": [
+        { "name": "cliente", "label": "Cliente", "kind": "text", "required": true },
+        {
+          "name": "lineas",
+          "label": "Líneas (una por renglón: concepto | cantidad | precio)",
+          "kind": "array",
+          "required": true,
+          "help": "Una línea por fila, columnas separadas por «|». Ej: Servicio de diseño | 2 | 500",
+          "item_fields": [
+            { "name": "id", "label": "Id", "kind": "auto_id" },
+            { "name": "concepto", "label": "Concepto", "kind": "text", "required": true },
+            { "name": "cantidad", "label": "Cantidad", "kind": "number", "required": true },
+            { "name": "precio_unitario", "label": "Precio", "kind": "number", "required": true }
+          ]
+        },
+        { "name": "tasa", "label": "Tasa IVA (%)", "kind": "number", "required": true, "help": "Porcentaje entero, ej. 18" },
+        { "name": "clientes_cta", "label": "Cuenta Clientes (CxC)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "ventas_cta", "label": "Cuenta Ventas", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "iva_cta", "label": "Cuenta IVA por pagar", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" },
+        { "name": "factura_id", "label": "Id de factura", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "facturar",
+        "inputs": { "clientes_cta": "clientes_cta", "ventas_cta": "ventas_cta", "iva_cta": "iva_cta" },
+        "params": ["cliente", "lineas", "tasa", "fecha", "factura_id"],
+        "next_view": "facturas_list"
+      }
+    },
+    "lineas_list": {
+      "kind": "list",
+      "title": "Líneas de factura",
+      "entity": "LineaFactura",
+      "search_in": ["concepto"],
+      "columns": [
+        { "field": "concepto", "label": "Concepto" },
+        { "field": "cantidad", "label": "Cantidad" },
+        { "field": "precio_unitario", "label": "Precio", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "subtotal", "label": "Subtotal", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "factura_id", "label": "Factura", "ref_entity": "Factura" }
+      ]
+    },
     "libro": {
       "kind": "graph",
       "title": "Libro de morfismos",
-      "subtitle": "El morfismo `emitir_factura` como nodo: lee/escribe el saldo de las tres cuentas de control y crea la Factura."
+      "subtitle": "Los morfismos `emitir_factura` / `facturar` como nodos: leen/escriben el saldo de las tres cuentas de control y crean la Factura (y sus líneas)."
     }
   }
 }

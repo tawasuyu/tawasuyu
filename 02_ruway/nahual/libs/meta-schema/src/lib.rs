@@ -525,6 +525,15 @@ pub struct FieldSpec {
     /// consecutivos con la misma sección se agrupan bajo un encabezado.
     #[serde(default)]
     pub section: Option<String>,
+    /// Columnas de un campo `kind == Array`: el orden y tipo de cada
+    /// celda de una fila. Ignorado para los demás kinds. `Module::validate`
+    /// exige que un Array las tenga. Una columna `AutoId` la rellena el
+    /// runtime (UUID por fila); el resto se teclean en orden.
+    #[serde(default)]
+    pub item_fields: Vec<FieldSpec>,
+    /// Delimitador de columnas de un campo `Array`. Default `"|"`.
+    #[serde(default)]
+    pub delimiter: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -553,6 +562,15 @@ pub enum FieldKind {
     /// abrir el formulario; el usuario no lo teclea ni lo edita. Para
     /// los ids de idempotencia que piden los morfismos.
     AutoId,
+    /// Lista de records repetidos (líneas de factura, patas de asiento…).
+    /// MVP "feo pero sirve": se edita como texto multilínea, una fila por
+    /// línea, columnas separadas por el delimitador (`|` por defecto). El
+    /// runtime parsea cada fila a un objeto cuyas claves/tipos vienen de
+    /// `FieldSpec.item_fields`, mapeadas POSICIONALMENTE; una columna
+    /// `AutoId` no se teclea: el runtime le pone un UUID por fila (para
+    /// los ids de idempotencia que pide cada record creado). El value del
+    /// param es un `Value::Array` de esos objetos.
+    Array,
 }
 
 /// Una opción de un campo [`FieldKind::Select`].
@@ -677,6 +695,15 @@ pub enum SchemaError {
         field: String,
     },
     #[error(
+        "módulo {id} vista '{view}': field '{field}' tiene kind=array \
+         pero no declaró item_fields (columnas)"
+    )]
+    ArrayMissingItemFields {
+        id: String,
+        view: String,
+        field: String,
+    },
+    #[error(
         "módulo {id} vista '{view}': row_detail='{target}' no apunta a \
          una vista kind=detail"
     )]
@@ -730,6 +757,13 @@ impl Module {
                         }
                         if f.kind == FieldKind::Select && f.options.is_empty() {
                             return Err(SchemaError::SelectMissingOptions {
+                                id: self.id.clone(),
+                                view: view_key.clone(),
+                                field: f.name.clone(),
+                            });
+                        }
+                        if f.kind == FieldKind::Array && f.item_fields.is_empty() {
+                            return Err(SchemaError::ArrayMissingItemFields {
                                 id: self.id.clone(),
                                 view: view_key.clone(),
                                 field: f.name.clone(),
@@ -820,6 +854,8 @@ mod tests {
                         ref_entity: None,
                         options: Vec::new(),
                         section: None,
+                        item_fields: Vec::new(),
+                        delimiter: None,
                     },
                     FieldSpec {
                         name: "email".into(),
@@ -831,6 +867,8 @@ mod tests {
                         ref_entity: None,
                         options: Vec::new(),
                         section: None,
+                        item_fields: Vec::new(),
+                        delimiter: None,
                     },
                 ],
             }],
@@ -891,6 +929,8 @@ mod tests {
                             ref_entity: None,
                             options: Vec::new(),
                             section: None,
+                            item_fields: Vec::new(),
+                            delimiter: None,
                         }],
                         on_submit: Action::SeedEntity {
                             entity: "customer".into(),
@@ -985,6 +1025,8 @@ mod tests {
                     ref_entity: None,
                     options: Vec::new(),
                     section: None,
+                    item_fields: Vec::new(),
+                    delimiter: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -1017,6 +1059,8 @@ mod tests {
                     ref_entity: Some("supplier".into()),
                     options: Vec::new(),
                     section: None,
+                    item_fields: Vec::new(),
+                    delimiter: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -1050,6 +1094,8 @@ mod tests {
                     ref_entity: None,
                     options: Vec::new(),
                     section: None,
+                    item_fields: Vec::new(),
+                    delimiter: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -1091,6 +1137,8 @@ mod tests {
                         },
                     ],
                     section: None,
+                    item_fields: Vec::new(),
+                    delimiter: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),

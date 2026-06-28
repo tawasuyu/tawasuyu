@@ -25,8 +25,8 @@ fn loads_demo_modules() {
     let ids: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(
         ids,
-        vec!["tesoro", "ventas"],
-        "se esperaban los módulos demo 'tesoro' (tesorería) y 'ventas'"
+        vec!["contabilidad", "facturacion", "punto_venta", "tesoro", "ventas"],
+        "se esperaban los cinco módulos demo en orden alfabético"
     );
 }
 

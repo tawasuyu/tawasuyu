@@ -22,4 +22,16 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     moneda | String,
     ..
   },
+
+  # Una línea (renglón) de una factura. La crea `facturar`, una por ítem.
+  # Plana (no array anidado, por el bug de Nickel 0.18); `factura_id` la
+  # liga a su cabecera. `subtotal = cantidad × precio_unitario`.
+  LineaFactura = {
+    factura_id | String,
+    concepto | String,
+    cantidad | NoNegativo,
+    precio_unitario | NoNegativo,
+    subtotal | NoNegativo,
+    ..
+  },
 }

@@ -21,4 +21,13 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     moneda | String,
     ..
   },
+
+  LineaFactura = {
+    factura_id | String,
+    concepto | String,
+    cantidad | NoNegativo,
+    precio_unitario | NoNegativo,
+    subtotal | NoNegativo,
+    ..
+  },
 }

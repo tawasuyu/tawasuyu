@@ -80,7 +80,12 @@ pub(crate) fn value_to_raw(v: &Value) -> String {
 pub(crate) fn is_text_field(kind: FieldKind) -> bool {
     matches!(
         kind,
-        FieldKind::Text | FieldKind::Multiline | FieldKind::Number | FieldKind::Date
+        FieldKind::Text
+            | FieldKind::Multiline
+            | FieldKind::Number
+            | FieldKind::Date
+            // El Array se teclea como texto multilínea (una fila por línea).
+            | FieldKind::Array
     )
 }
 
@@ -116,7 +121,15 @@ pub(crate) fn submit_form(m: &mut Model) {
             to_clear.push(fr.spec.name.clone());
             continue;
         }
-        let value = match parse_field_value(fr.spec.kind, &raw) {
+        // El Array no es escalar: se parsea con su parser dedicado
+        // (filas multilínea → array de objetos por `item_fields`).
+        let parsed = if fr.spec.kind == FieldKind::Array {
+            let delim = fr.spec.delimiter.as_deref().unwrap_or("|");
+            parse_array_value(&raw, &fr.spec.item_fields, delim)
+        } else {
+            parse_field_value(fr.spec.kind, &raw)
+        };
+        let value = match parsed {
             Ok(v) => v,
             Err(e) => {
                 parse_error = Some(format!("campo '{}': {e}", fr.spec.label));

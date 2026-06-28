@@ -42,5 +42,5 @@ pub use metric::{
     breakdown_to_csv, bucket_date, compute_metric, cumulative_breakdown, limit_breakdown,
     record_matches, sort_breakdown_by_key, MetricResult, OTROS_LABEL,
 };
-pub use parse::{infer_param_value, parse_field_value, resolve_param_value};
+pub use parse::{infer_param_value, parse_array_value, parse_field_value, resolve_param_value};
 pub use refs::validate_entity_refs;

@@ -341,6 +341,8 @@
                     ref_entity: None,
                     options: Vec::new(),
                     section: None,
+                    item_fields: Vec::new(),
+                    delimiter: None,
                 },
                 FieldSpec {
                     name: "tier".into(),
@@ -352,6 +354,8 @@
                     ref_entity: None,
                     options: Vec::new(),
                     section: None,
+                    item_fields: Vec::new(),
+                    delimiter: None,
                 },
             ],
             on_submit: Action::SeedEntity {
@@ -382,6 +386,8 @@
                 ref_entity: None,
                 options: Vec::new(),
                 section: None,
+                item_fields: Vec::new(),
+                delimiter: None,
             }],
             on_submit: Action::SeedEntity {
                 entity: "Customer".into(),
@@ -424,6 +430,24 @@
                 "el form de emisión debe disparar el morfismo `emitir_factura`"
             ),
             other => panic!("emitir_form debería ser un Form, fue {other:?}"),
+        }
+        // El form `facturar_form` dispara el morfismo `facturar` y tiene un
+        // campo `lineas` de kind Array con sus columnas (item_fields).
+        match fact.views.get("facturar_form") {
+            Some(ModuleView::Form(fv)) => {
+                assert!(matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "facturar"));
+                let lineas = fv
+                    .fields
+                    .iter()
+                    .find(|f| f.name == "lineas")
+                    .expect("el form tiene el campo lineas");
+                assert_eq!(lineas.kind, FieldKind::Array);
+                assert!(
+                    !lineas.item_fields.is_empty(),
+                    "el Array debe declarar columnas (item_fields)"
+                );
+            }
+            other => panic!("facturar_form debería ser un Form, fue {other:?}"),
         }
         // Contabilidad expone las cuatro clases de vista + grafo, y su form
         // de asiento dispara un morfismo (no un seed directo).
@@ -672,6 +696,94 @@
 
         // El libro entero sigue cuadrado tras la factura.
         assert_eq!(suma_libro(&backend), 0, "la factura conserva la balanza");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
+    /// End-to-end del FieldKind::Array: toma las columnas (item_fields)
+    /// del form `facturar_form`, parsea un texto multilínea de líneas con
+    /// `parse_array_value` (como haría el submit), y corre `facturar` por
+    /// el backend. Verifica que las líneas se crean, el neto se suma y el
+    /// libro queda cuadrado — el array de la UI llega entero al morfismo.
+    #[test]
+    fn facturar_con_array_de_lineas_via_backend() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for id in ["contabilidad", "facturacion"] {
+            let m = modules.iter().find(|m| m.id == id).unwrap();
+            let nakui_dir = dir.join(&m.id).join(m.nakui_module_dir.as_ref().unwrap());
+            executors.insert(id.to_string(), Arc::new(Executor::load_module(&nakui_dir).unwrap()));
+        }
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        // Tomar las columnas declaradas en el form de facturación.
+        let fact = modules.iter().find(|m| m.id == "facturacion").unwrap();
+        let item_fields = match fact.views.get("facturar_form") {
+            Some(ModuleView::Form(fv)) => fv
+                .fields
+                .iter()
+                .find(|f| f.name == "lineas")
+                .unwrap()
+                .item_fields
+                .clone(),
+            _ => panic!("falta facturar_form"),
+        };
+        // El texto que tipearía el usuario en el textarea del Array.
+        let raw = "Servicio de diseño | 2 | 500\nHosting anual | 1 | 300";
+        let lineas = parse_array_value(raw, &item_fields, "|").expect("parsea líneas");
+        assert_eq!(lineas.as_array().unwrap().len(), 2);
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta")
+                .into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id)
+                .unwrap()
+        };
+        let mut inputs = BTreeMap::new();
+        inputs.insert("clientes_cta".to_string(), by_codigo(&backend, "1100"));
+        inputs.insert("ventas_cta".to_string(), by_codigo(&backend, "4010"));
+        inputs.insert("iva_cta".to_string(), by_codigo(&backend, "2110"));
+        let factura_id = Uuid::new_v4();
+        backend
+            .morphism(
+                "facturacion",
+                "facturar",
+                inputs,
+                json!({
+                    "cliente": "ACME S.A.",
+                    "fecha": "2026-06-28",
+                    "factura_id": factura_id.to_string(),
+                    "tasa": 18_i64,
+                    "lineas": lineas,
+                }),
+            )
+            .expect("facturar por el backend debe pasar");
+
+        // neto = 2*500 + 1*300 = 1300; IVA 18% = 234; total 1534.
+        let f = backend.load_record("Factura", factura_id).expect("factura");
+        assert_eq!(f.get("neto").and_then(Value::as_i64), Some(1300));
+        assert_eq!(f.get("total").and_then(Value::as_i64), Some(1534));
+        assert_eq!(backend.list_records("LineaFactura").len(), 2, "dos líneas creadas");
+
+        let suma: i64 = backend
+            .list_records("Cuenta")
+            .iter()
+            .map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0))
+            .sum();
+        assert_eq!(suma, 0, "la factura con líneas conserva la balanza");
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));

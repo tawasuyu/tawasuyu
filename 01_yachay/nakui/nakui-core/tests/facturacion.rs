@@ -148,6 +148,65 @@ fn factura_con_iva_truncado_sigue_cuadrando() {
 }
 
 #[test]
+fn facturar_con_lineas_calcula_neto_y_asienta() {
+    // facturar suma las líneas para el neto y crea una LineaFactura por
+    // ítem. 2×500 + 1×300 = 1300 neto; IVA 18% = 234; total 1534.
+    let exec = Executor::load_module(facturacion_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cs = cuentas_factura(&mut store, "USD");
+    let (clientes, ventas, iva) = cs;
+
+    let factura_id = Uuid::new_v4();
+    let l1 = Uuid::new_v4();
+    let l2 = Uuid::new_v4();
+    let ops = exec
+        .run(
+            &mut store,
+            "facturar",
+            &[
+                ("clientes_cta", clientes),
+                ("ventas_cta", ventas),
+                ("iva_cta", iva),
+            ],
+            json!({
+                "cliente": "ACME S.A.",
+                "fecha": "2026-06-28",
+                "factura_id": factura_id.to_string(),
+                "tasa": 18_i64,
+                "lineas": [
+                    { "id": l1.to_string(), "concepto": "Servicio de diseño", "cantidad": 2, "precio_unitario": 500 },
+                    { "id": l2.to_string(), "concepto": "Hosting anual", "cantidad": 1, "precio_unitario": 300 }
+                ]
+            }),
+        )
+        .expect("facturar debe pasar");
+
+    // 2 creates LineaFactura + 3 sets + 1 create Factura = 6 ops.
+    assert_eq!(ops.len(), 6);
+    assert_eq!(saldo(&store, clientes), 1534);
+    assert_eq!(saldo(&store, ventas), -1300);
+    assert_eq!(saldo(&store, iva), -234);
+
+    let f = store.load("Factura", factura_id).expect("factura");
+    assert_eq!(f.get("neto").and_then(Value::as_i64), Some(1300));
+    assert_eq!(f.get("impuesto").and_then(Value::as_i64), Some(234));
+    assert_eq!(f.get("total").and_then(Value::as_i64), Some(1534));
+
+    // Las dos líneas se persistieron con su subtotal y ligadas a la factura.
+    let linea1 = store.load("LineaFactura", l1).expect("línea 1");
+    assert_eq!(linea1.get("subtotal").and_then(Value::as_i64), Some(1000));
+    assert_eq!(
+        linea1.get("factura_id").and_then(Value::as_str),
+        Some(factura_id.to_string().as_str())
+    );
+    let linea2 = store.load("LineaFactura", l2).expect("línea 2");
+    assert_eq!(linea2.get("subtotal").and_then(Value::as_i64), Some(300));
+
+    let total: i64 = [clientes, ventas, iva].iter().map(|&c| saldo(&store, c)).sum();
+    assert_eq!(total, 0, "la factura con líneas conserva la balanza");
+}
+
+#[test]
 fn factura_entre_monedas_distintas_rechazada() {
     let exec = Executor::load_module(facturacion_module()).expect("load module");
     let mut store = MemoryStore::new();

@@ -1320,7 +1320,11 @@ pub(crate) fn build_inline_control(
     theme: &Theme,
 ) -> View<Msg> {
     match fr.spec.kind {
-        FieldKind::Text | FieldKind::Multiline | FieldKind::Number | FieldKind::Date => {
+        FieldKind::Text
+        | FieldKind::Multiline
+        | FieldKind::Number
+        | FieldKind::Date
+        | FieldKind::Array => {
             let placeholder = fr.spec.help.clone().unwrap_or_default();
             text_input_view(
                 &fr.input,
@@ -1428,7 +1432,11 @@ pub(crate) fn build_field_control(
     theme: &Theme,
 ) -> View<Msg> {
     match fr.spec.kind {
-        FieldKind::Text | FieldKind::Multiline | FieldKind::Number | FieldKind::Date => {
+        FieldKind::Text
+        | FieldKind::Multiline
+        | FieldKind::Number
+        | FieldKind::Date
+        | FieldKind::Array => {
             let placeholder = fr.spec.help.clone().unwrap_or_default();
             text_input_view(
                 &fr.input,

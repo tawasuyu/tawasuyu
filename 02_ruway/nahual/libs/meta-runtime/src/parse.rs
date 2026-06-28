@@ -45,7 +45,68 @@ pub fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
                 Err(format!("'{raw}' no es número"))
             }
         }
+        // Un Array no es un valor escalar: se parsea con `parse_array_value`
+        // (necesita `item_fields`). Llegar acá es un misuse del caller.
+        FieldKind::Array => {
+            Err("un campo array se parsea con parse_array_value, no como escalar".into())
+        }
     }
+}
+
+/// Parsea el texto multilínea de un campo [`FieldKind::Array`] a un
+/// `Value::Array` de objetos. Una fila por línea no vacía; las columnas
+/// se separan por `delimiter` y se mapean POSICIONALMENTE a `item_fields`.
+///
+/// Una columna `AutoId` NO consume celda: se le pone un UUID v4 por fila
+/// (para los ids de idempotencia de cada record que cree el morfismo). El
+/// resto de columnas se parsean con [`parse_field_value`] según su kind.
+/// Una celda vacía en columna requerida rebota; en opcional → `Null`.
+pub fn parse_array_value(
+    raw: &str,
+    item_fields: &[FieldSpec],
+    delimiter: &str,
+) -> Result<Value, String> {
+    let col_label = |f: &FieldSpec| {
+        if f.label.is_empty() {
+            f.name.clone()
+        } else {
+            f.label.clone()
+        }
+    };
+    let mut rows: Vec<Value> = Vec::new();
+    for (i, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let cells: Vec<&str> = line.split(delimiter).map(str::trim).collect();
+        let mut obj = serde_json::Map::new();
+        let mut cell_idx = 0usize;
+        for f in item_fields {
+            let value = if f.kind == FieldKind::AutoId {
+                json!(Uuid::new_v4().to_string())
+            } else {
+                let cell = cells.get(cell_idx).copied().unwrap_or("");
+                cell_idx += 1;
+                if cell.is_empty() {
+                    if f.required {
+                        return Err(format!(
+                            "fila {}: columna '{}' es obligatoria",
+                            i + 1,
+                            col_label(f)
+                        ));
+                    }
+                    Value::Null
+                } else {
+                    parse_field_value(f.kind, cell)
+                        .map_err(|e| format!("fila {}, columna '{}': {e}", i + 1, col_label(f)))?
+                }
+            };
+            obj.insert(f.name.clone(), value);
+        }
+        rows.push(Value::Object(obj));
+    }
+    Ok(Value::Array(rows))
 }
 
 /// Resuelve un param de morphism a su `Value` según el `FieldSpec`
@@ -78,6 +139,12 @@ pub fn resolve_param_value(
     }
     if raw.is_empty() && !s.required {
         return Ok(Value::Null);
+    }
+    // Un Array se resuelve con su parser dedicado (necesita item_fields).
+    if s.kind == FieldKind::Array {
+        let delim = s.delimiter.as_deref().unwrap_or("|");
+        return parse_array_value(raw, &s.item_fields, delim)
+            .map_err(|e| format!("param '{label}': {e}"));
     }
     parse_field_value(s.kind, raw).map_err(|e| format!("param '{label}': {e}"))
 }
@@ -123,7 +190,65 @@ mod tests {
             ref_entity: None,
             options: Vec::new(),
             section: None,
+            item_fields: Vec::new(),
+            delimiter: None,
         }
+    }
+
+    #[test]
+    fn parse_array_maps_columns_and_autogenerates_ids() {
+        // item_fields: id (AutoId, no consume celda) + concepto (Text) +
+        // cantidad (Number) + precio (Number).
+        let cols = vec![
+            spec("id", FieldKind::AutoId, false),
+            spec("concepto", FieldKind::Text, true),
+            spec("cantidad", FieldKind::Number, true),
+            spec("precio", FieldKind::Number, true),
+        ];
+        let raw = "Servicio de diseño | 2 | 500\nHosting anual | 1 | 300\n";
+        let arr = parse_array_value(raw, &cols, "|").unwrap();
+        let rows = arr.as_array().unwrap();
+        assert_eq!(rows.len(), 2, "dos filas no vacías");
+
+        let r0 = &rows[0];
+        assert_eq!(r0.get("concepto").and_then(Value::as_str), Some("Servicio de diseño"));
+        assert_eq!(r0.get("cantidad").and_then(Value::as_i64), Some(2));
+        assert_eq!(r0.get("precio").and_then(Value::as_i64), Some(500));
+        // El id se autogeneró y es un UUID válido (no vino del texto).
+        let id = r0.get("id").and_then(Value::as_str).unwrap();
+        assert!(Uuid::parse_str(id).is_ok());
+        // Cada fila trae un id distinto.
+        let id1 = rows[1].get("id").and_then(Value::as_str).unwrap();
+        assert_ne!(id, id1);
+    }
+
+    #[test]
+    fn parse_array_skips_blank_lines_and_rejects_missing_required() {
+        let cols = vec![
+            spec("concepto", FieldKind::Text, true),
+            spec("monto", FieldKind::Number, true),
+        ];
+        // Línea en blanco en el medio se ignora.
+        let ok = parse_array_value("a | 10\n\n  \nb | 20", &cols, "|").unwrap();
+        assert_eq!(ok.as_array().unwrap().len(), 2);
+
+        // Falta la columna requerida `monto` → error con número de fila.
+        let err = parse_array_value("solo concepto", &cols, "|").unwrap_err();
+        assert!(err.contains("fila 1"), "err: {err}");
+        assert!(err.contains("monto") || err.contains("obligatoria"), "err: {err}");
+    }
+
+    #[test]
+    fn resolve_param_array_dispatches_to_array_parser() {
+        let mut s = spec("lineas", FieldKind::Array, true);
+        s.item_fields = vec![
+            spec("concepto", FieldKind::Text, true),
+            spec("monto", FieldKind::Number, true),
+        ];
+        let v = resolve_param_value("lineas", "café | 5\nté | 3", Some(&s)).unwrap();
+        let rows = v.as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("monto").and_then(Value::as_i64), Some(5));
     }
 
     #[test]
