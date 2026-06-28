@@ -1293,7 +1293,17 @@ fn handle_key(m: &mut Model, ev: &KeyEvent) {
 
 fn connect_body() -> Option<BrainLink> {
     let path = std::env::var("MIRADA_SOCKET").ok()?;
-    BrainLink::connect(&path).ok()
+    // Con el socket declarado, reintentá ~2s antes de rendirte: tras un respawn
+    // del Cerebro (o un reinicio del Cuerpo) el listener puede tardar unos ms en
+    // estar listo, y no queremos caer a modo simulación por esa carrera.
+    for _ in 0..100 {
+        if let Ok(link) = BrainLink::connect(&path) {
+            return Some(link);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    eprintln!("mirada · no pude conectar al Cuerpo en {path} tras 2s — modo simulación.");
+    None
 }
 
 fn load_user_rules() -> Rules {
