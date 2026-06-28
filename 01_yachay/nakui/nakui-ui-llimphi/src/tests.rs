@@ -404,9 +404,27 @@
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        // Tres demos: 'ventas' (meta-form completo), 'tesoro' (vista grafo)
-        // y 'punto_venta' (POS: meta-form + morfismos).
-        assert_eq!(modules.len(), 3);
+        // Cuatro demos: 'ventas' (meta-form completo), 'tesoro' (vista grafo),
+        // 'punto_venta' (POS: meta-form + morfismos) y 'contabilidad'
+        // (partida doble: form que dispara el morfismo `asentar`).
+        assert_eq!(modules.len(), 4);
+        // Contabilidad expone las cuatro clases de vista + grafo, y su form
+        // de asiento dispara un morfismo (no un seed directo).
+        let cont = modules
+            .iter()
+            .find(|m| m.id == "contabilidad")
+            .expect("contabilidad");
+        assert!(matches!(cont.views.get("tablero"), Some(ModuleView::Dashboard(_))));
+        assert!(matches!(cont.views.get("cuentas_list"), Some(ModuleView::List(_))));
+        assert!(matches!(cont.views.get("cuenta_detail"), Some(ModuleView::Detail(_))));
+        assert!(matches!(cont.views.get("libro"), Some(ModuleView::Graph(_))));
+        match cont.views.get("asentar_form") {
+            Some(ModuleView::Form(fv)) => assert!(
+                matches!(&fv.on_submit, Action::Morphism { name, .. } if name == "asentar"),
+                "el form de asiento debe disparar el morfismo `asentar`"
+            ),
+            other => panic!("asentar_form debería ser un Form, fue {other:?}"),
+        }
         let tesoro = modules.iter().find(|m| m.id == "tesoro").expect("tesoro");
         assert!(
             matches!(tesoro.views.get("flujo"), Some(ModuleView::Graph(_))),
@@ -446,6 +464,108 @@
             .find(|f| f.spec.kind == FieldKind::AutoId)
             .expect("el form tiene un AutoId");
         assert!(Uuid::parse_str(&id_field.raw()).is_ok());
+    }
+
+    /// End-to-end UI→backend→kernel: el form `asentar` (un MORFISMO, no
+    /// un seed directo) corre por el backend con el executor real del
+    /// módulo contabilidad. Verifica que mueve débito (+) y crédito (−),
+    /// persiste el Asiento, y —lo central— CONSERVA la balanza: Σ de
+    /// todos los saldos sigue en cero porque el kernel exige débito =
+    /// crédito. Es la partida doble probada desde la capa de UI.
+    #[test]
+    fn asentar_via_backend_conserva_la_balanza() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+
+        // Construir el executor del módulo contabilidad (espejo de main.rs).
+        let cont = modules.iter().find(|m| m.id == "contabilidad").unwrap();
+        let nakui_dir = dir
+            .join(&cont.id)
+            .join(cont.nakui_module_dir.as_ref().unwrap());
+        let exec = Executor::load_module(&nakui_dir).expect("executor contabilidad");
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        executors.insert("contabilidad".into(), Arc::new(exec));
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+
+        // Sembrar el plan de cuentas de apertura (Σ saldos = 0).
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        let suma = |b: &NakuiBackend| -> i64 {
+            b.list_records("Cuenta")
+                .iter()
+                .map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0))
+                .sum()
+        };
+        assert_eq!(suma(&backend), 0, "el plan de apertura debe cuadrar en cero");
+
+        // Ubicar Caja (1010, activo) y Ventas (4010, ingreso) por código.
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta")
+                .into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id)
+                .expect("cuenta existe")
+        };
+        let caja = by_codigo(&backend, "1010");
+        let ventas = by_codigo(&backend, "4010");
+
+        // Asentar: debe Caja / haber Ventas por 1000 (un cobro al contado).
+        let mut inputs = BTreeMap::new();
+        inputs.insert("debito".to_string(), caja);
+        inputs.insert("credito".to_string(), ventas);
+        let asiento_id = Uuid::new_v4();
+        backend
+            .morphism(
+                "contabilidad",
+                "asentar",
+                inputs,
+                json!({
+                    "monto": 1000_i64,
+                    "glosa": "cobro al contado",
+                    "fecha": "2026-06-28",
+                    "diario": "ventas",
+                    "asiento_id": asiento_id.to_string(),
+                }),
+            )
+            .expect("asentar debe pasar");
+
+        // Débito sube el activo; crédito baja el ingreso (deudor-normal).
+        let saldo = |b: &NakuiBackend, id: Uuid| -> i64 {
+            b.load_record("Cuenta", id)
+                .and_then(|v| v.get("saldo").and_then(Value::as_i64))
+                .unwrap()
+        };
+        assert_eq!(saldo(&backend, caja), 5000 + 1000);
+        assert_eq!(saldo(&backend, ventas), 0 - 1000);
+
+        // El Asiento quedó persistido con sus dos patas.
+        let asiento = backend
+            .load_record("Asiento", asiento_id)
+            .expect("asiento persistido");
+        assert_eq!(asiento.get("monto").and_then(Value::as_i64), Some(1000));
+        assert_eq!(
+            asiento.get("debito_id").and_then(Value::as_str),
+            Some(caja.to_string().as_str())
+        );
+        assert_eq!(
+            asiento.get("credito_id").and_then(Value::as_str),
+            Some(ventas.to_string().as_str())
+        );
+
+        // Lo central: la balanza sigue cuadrada tras el asiento.
+        assert_eq!(suma(&backend), 0, "el asiento conserva la balanza en cero");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
     }
 
     #[test]

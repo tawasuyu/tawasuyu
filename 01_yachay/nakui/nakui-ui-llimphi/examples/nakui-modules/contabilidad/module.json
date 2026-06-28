@@ -1,0 +1,228 @@
+{
+  "id": "contabilidad",
+  "label": "Contabilidad",
+  "description": "Partida doble sobre el motor de conservación de nakui: plan de cuentas, asiento debe/haber por el morfismo `asentar` (el kernel exige débito = crédito), balanza de comprobación y libro de morfismos. Montos en unidades enteras de moneda.",
+  "nakui_module_dir": "nakui",
+  "entities": [
+    { "name": "Cuenta", "label": "Cuenta", "fields": [] },
+    { "name": "Asiento", "label": "Asiento", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Tablero", "view": "tablero" },
+    { "label": "Plan de cuentas", "view": "cuentas_list" },
+    { "label": "+ Cuenta", "view": "cuentas_form" },
+    { "label": "Asientos", "view": "asientos_list" },
+    { "label": "Asentar", "view": "asentar_form" },
+    { "label": "Libro de morfismos", "view": "libro" }
+  ],
+  "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Contabilidad",
+      "subtitle": "Saldo deudor-normal por cuenta (activo/gasto positivo; pasivo/patrimonio/ingreso negativo). La balanza cuadra en cero porque el kernel conserva el saldo en cada asiento.",
+      "cards": [
+        { "label": "Cuentas", "entity": "Cuenta", "metric": { "kind": "count" } },
+        { "label": "Asientos", "entity": "Asiento", "metric": { "kind": "count" } },
+        {
+          "label": "Balanza (Σ saldos)",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum", "field": "saldo" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Movido (Σ asientos)",
+          "entity": "Asiento",
+          "metric": { "kind": "sum", "field": "monto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Saldo por tipo de cuenta",
+          "entity": "Cuenta",
+          "metric": { "kind": "sum_by", "group": "tipo", "value": "saldo" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns"
+        },
+        {
+          "label": "Cuentas por tipo",
+          "entity": "Cuenta",
+          "metric": { "kind": "group_by", "field": "tipo" },
+          "chart": "donut"
+        },
+        {
+          "label": "Asientos por diario",
+          "entity": "Asiento",
+          "metric": { "kind": "group_by", "field": "diario" },
+          "chart": "donut"
+        },
+        {
+          "label": "Movimiento por mes",
+          "entity": "Asiento",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "monto" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "bucket": "month"
+        },
+        {
+          "label": "Movimiento por mes y diario",
+          "entity": "Asiento",
+          "metric": { "kind": "sum_by_series", "group": "fecha", "series": "diario", "value": "monto" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "stacked_columns",
+          "bucket": "month"
+        }
+      ]
+    },
+    "cuentas_list": {
+      "kind": "list",
+      "title": "Plan de cuentas",
+      "entity": "Cuenta",
+      "row_detail": "cuenta_detail",
+      "search_in": ["codigo", "nombre", "tipo"],
+      "columns": [
+        { "field": "codigo", "label": "Código" },
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "tipo", "label": "Tipo" },
+        { "field": "saldo", "label": "Saldo", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ]
+    },
+    "cuenta_detail": {
+      "kind": "detail",
+      "title": "Ficha de cuenta",
+      "entity": "Cuenta",
+      "fields": [
+        { "field": "codigo", "label": "Código" },
+        { "field": "nombre", "label": "Nombre" },
+        { "field": "tipo", "label": "Tipo" },
+        { "field": "saldo", "label": "Saldo", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ],
+      "related": [
+        {
+          "title": "Asientos al debe (esta cuenta debitada)",
+          "entity": "Asiento",
+          "via_field": "debito_id",
+          "columns": [
+            { "field": "fecha", "label": "Fecha" },
+            { "field": "diario", "label": "Diario" },
+            { "field": "glosa", "label": "Glosa" },
+            { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } }
+          ]
+        },
+        {
+          "title": "Asientos al haber (esta cuenta acreditada)",
+          "entity": "Asiento",
+          "via_field": "credito_id",
+          "columns": [
+            { "field": "fecha", "label": "Fecha" },
+            { "field": "diario", "label": "Diario" },
+            { "field": "glosa", "label": "Glosa" },
+            { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } }
+          ]
+        }
+      ],
+      "metrics": [
+        {
+          "label": "Total debitado",
+          "entity": "Asiento",
+          "via_field": "debito_id",
+          "metric": { "kind": "sum", "field": "monto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        },
+        {
+          "label": "Total acreditado",
+          "entity": "Asiento",
+          "via_field": "credito_id",
+          "metric": { "kind": "sum", "field": "monto" },
+          "format": { "kind": "currency", "symbol": "$" }
+        }
+      ]
+    },
+    "cuentas_form": {
+      "kind": "form",
+      "title": "Cuenta",
+      "entity": "Cuenta",
+      "fields": [
+        { "name": "id", "label": "Id", "kind": "auto_id" },
+        { "name": "codigo", "label": "Código", "kind": "text", "required": true, "help": "Código contable, ej. 1010" },
+        { "name": "nombre", "label": "Nombre", "kind": "text", "required": true },
+        {
+          "name": "tipo",
+          "label": "Tipo",
+          "kind": "select",
+          "options": [
+            { "value": "activo", "label": "Activo" },
+            { "value": "pasivo", "label": "Pasivo" },
+            { "value": "patrimonio", "label": "Patrimonio" },
+            { "value": "ingreso", "label": "Ingreso" },
+            { "value": "gasto", "label": "Gasto" }
+          ]
+        },
+        { "name": "saldo", "label": "Saldo inicial", "kind": "number", "required": true, "help": "Deudor-normal: activo/gasto positivo, pasivo/patrimonio/ingreso negativo" },
+        {
+          "name": "moneda",
+          "label": "Moneda",
+          "kind": "select",
+          "options": [
+            { "value": "USD", "label": "USD" },
+            { "value": "EUR", "label": "EUR" },
+            { "value": "PEN", "label": "PEN" }
+          ]
+        }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Cuenta", "next_view": "cuentas_list" }
+    },
+    "asientos_list": {
+      "kind": "list",
+      "title": "Asientos",
+      "entity": "Asiento",
+      "search_in": ["glosa", "diario"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "diario", "label": "Diario" },
+        { "field": "debito_id", "label": "Debe", "ref_entity": "Cuenta" },
+        { "field": "credito_id", "label": "Haber", "ref_entity": "Cuenta" },
+        { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "glosa", "label": "Glosa" },
+        { "field": "moneda", "label": "Moneda" }
+      ]
+    },
+    "asentar_form": {
+      "kind": "form",
+      "title": "Asentar (partida doble)",
+      "entity": "Asiento",
+      "fields": [
+        { "name": "debito", "label": "Cuenta al DEBE", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Cuenta que se debita (su saldo deudor-normal sube)" },
+        { "name": "credito", "label": "Cuenta al HABER", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Cuenta que se acredita (su saldo deudor-normal baja)" },
+        { "name": "monto", "label": "Monto", "kind": "number", "required": true, "help": "Positivo. Misma moneda en ambas cuentas" },
+        { "name": "glosa", "label": "Glosa", "kind": "text", "required": true, "help": "Concepto del asiento" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" },
+        {
+          "name": "diario",
+          "label": "Diario",
+          "kind": "select",
+          "options": [
+            { "value": "general", "label": "General" },
+            { "value": "ventas", "label": "Ventas" },
+            { "value": "compras", "label": "Compras" },
+            { "value": "banco", "label": "Banco" },
+            { "value": "caja", "label": "Caja" }
+          ]
+        },
+        { "name": "asiento_id", "label": "Id de asiento", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "asentar",
+        "inputs": { "debito": "debito", "credito": "credito" },
+        "params": ["monto", "glosa", "fecha", "diario", "asiento_id"],
+        "next_view": "asientos_list"
+      }
+    },
+    "libro": {
+      "kind": "graph",
+      "title": "Libro de morfismos",
+      "subtitle": "El morfismo `asentar` como nodo; sus pins son los tokens que lee/escribe (Cuenta.saldo de debe y haber, Asiento); los cables son la cascada escritura→lectura."
+    }
+  }
+}
