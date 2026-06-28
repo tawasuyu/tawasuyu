@@ -16,6 +16,7 @@
 
 mod animaciones;
 mod greeter;
+mod paloma;
 mod plugins;
 mod remote;
 mod splash;
@@ -324,6 +325,10 @@ struct Model {
     /// Biblioteca de **conjuntos de animación** (transición/slide/Prezi). El
     /// perfil activo referencia uno; el panel Animaciones edita el referenciado.
     animaciones: animaciones::Animations,
+    /// Config de **cuentas de correo** (paloma): varias cuentas IMAP/SMTP con
+    /// método de auth (contraseña u OAuth2). Se persiste en `cuentas.json`; el
+    /// diente «Correo» la edita y paloma la lee al arrancar.
+    paloma: paloma::PalomaState,
     /// Config del **greeter** (DM): fondo animado + paleta. Se persiste en
     /// `greeter.conf`; el greeter la lee en el próximo login.
     greeter: greeter::GreeterCfg,
@@ -706,6 +711,8 @@ struct SaveDirty {
     greeter: bool,
     /// Config del splash de arranque (`arje/splash.conf`).
     splash: bool,
+    /// Config de cuentas de correo de paloma (`cuentas.json`).
+    paloma: bool,
 }
 
 #[derive(Clone)]
@@ -1488,6 +1495,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
     let animaciones = animaciones::Animations::load_or_seed();
     let greeter_cfg = greeter::GreeterCfg::load();
     let splash_cfg = splash::SplashCfg::load();
+    let paloma = paloma::PalomaState::load();
 
     let prezi = PreziEdit::from_config(&mirada);
     let monitor = MonitorEdit::from_config(&mirada);
@@ -1514,6 +1522,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         rules_path,
         themes,
         animaciones,
+        paloma,
         greeter: greeter_cfg,
         splash: splash_cfg,
         monitor,
@@ -1887,6 +1896,8 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         PanelPestana { title: "Inicio".into(), icon: "⏻".into(), schema: inicio },
         PanelPestana { title: "Sistema".into(), icon: "⚙".into(), schema: sistema },
         PanelPestana { title: "Acerca".into(), icon: "🖥".into(), schema: acerca },
+        // Diente-de-app: configura las cuentas de correo de paloma.
+        PanelPestana { title: "Correo".into(), icon: "✉".into(), schema: paloma::schema(&m.paloma) },
     ]
 }
 
@@ -4073,6 +4084,18 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             }
             return;
         }
+        // Diente «Correo»: edita las cuentas de paloma (`cuentas.json`).
+        "paloma" => {
+            let action = paloma::route(&mut m.paloma, &rel, value);
+            if action.dirty {
+                m.dirty.paloma = true;
+                m.save_in = SAVE_DELAY_TICKS;
+            }
+            if !action.status.is_empty() {
+                m.status = action.status;
+            }
+            return;
+        }
         _ => return,
     }
     // Editar mirada/pata/atajos modifica el perfil ACTIVO: vuelca la config viva
@@ -4178,6 +4201,13 @@ fn flush_saves(m: &mut Model) {
         }
         m.dirty.greeter = false;
     }
+    if m.dirty.paloma {
+        match m.paloma.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· paloma save: {e}")),
+        }
+        m.dirty.paloma = false;
+    }
     if m.dirty.splash {
         match m.splash.save() {
             Ok(()) => {
@@ -4272,6 +4302,9 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
             Some("sem_socket") => m.cfg.ai.semantic.socket.clone(),
             _ => String::new(),
         };
+    }
+    if key == "paloma" {
+        return paloma::text_value(&m.paloma, &rel).unwrap_or_default();
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),

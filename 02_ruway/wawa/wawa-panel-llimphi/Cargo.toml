@@ -33,6 +33,9 @@ wawa-config = { path = "../../../shared/wawa-config" }
 mirada-brain = { path = "../../mirada/mirada-brain" }
 pata-core = { path = "../../pata/pata-core" }
 pata-config = { path = "../../pata/pata-config" }
+# Config de cuentas de correo (paloma): el diente «Correo» monta su schema.
+paloma-config = { path = "../../paloma/paloma-config" }
+directories = { workspace = true }
 # Editor de recorrido (Prezi) de la vista espacial: lienzo libre + rotación.
 pluma-deck-core = { path = "../../../00_unanchay/pluma/pluma-deck-core" }
 pluma-deck-recorrido-llimphi = { path = "../../../00_unanchay/pluma/pluma-deck-recorrido-llimphi" }
