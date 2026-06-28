@@ -575,6 +575,30 @@ fn surface_header<HostMsg: Clone + 'static>(
             .mono(),
         );
     }
+    // Chip "🜲 filtrar": filtro IA sobre la salida del bloque. Prellena el input
+    // `:filtra %cN ` y deja el cursor para la instrucción (no auto-ejecuta).
+    // Sólo en bloques con cuerpo; oculto al colapsar.
+    if expandable && !collapsed {
+        children.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                flex_shrink: 0.0,
+                padding: Rect {
+                    left: length(5.0_f32),
+                    right: length(5.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.bg_input)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::PrefillInput(format!(":filtra %c{block} "))))
+            .text_aligned("🜲 filtrar".to_string(), 10.0, theme.accent, Alignment::Start)
+            .mono(),
+        );
+    }
     // Chip "copiar": copia el bloque entero (comando + stdout + stderr) al
     // clipboard, sin depender de una selección — paridad con el "copy command
     // + output" de las terminales modernas. Sólo en bloques con cuerpo. Click
