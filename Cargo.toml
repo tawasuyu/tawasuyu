@@ -370,6 +370,7 @@ members = [
     "02_ruway/nahual/nahual-viewer-core",
     "02_ruway/paloma/paloma-core",
     "02_ruway/paloma/paloma-config",
+    "02_ruway/paloma/paloma-oauth",
     "02_ruway/paloma/paloma-net",
     "02_ruway/paloma/paloma-store",
     "02_ruway/paloma/paloma-semantic",

@@ -28,8 +28,14 @@ door SMTP can't: a **sovereign rail** where the address *is* a public key, so
 paloma-core      — agnostic model: addresses, messages, mailboxes, threads,
                    accounts, the transport trait, text search, signing bytes,
                    multilienzo bodies. No network, no UI.
+paloma-config    — multi-account config (cuentas.json): accounts + active one,
+                   provider presets (Gmail/Outlook), auth method (password|oauth2),
+                   legacy cuenta.json migration. Agnostic; serde + file IO only.
 paloma-net       — MIME bridge + IMAP (fetch) + SMTP (send); the NetBackend that
-                   implements MailBackend against real servers.
+                   implements MailBackend against real servers. Secret is a
+                   password or an OAuth2 access token (XOAUTH2).
+paloma-oauth     — OAuth2 authorizer (bin): Authorization Code + PKCE loopback;
+                   opens the browser, stores access/refresh tokens (0600).
 paloma-store     — native on-disk cache (postcard + BLAKE3), offline-first.
 paloma-llimphi   — three-pane frontend (mailboxes · threads · reading) + compose;
                    defines the capability traits, backend-agnostic.
@@ -85,10 +91,35 @@ cargo run -p paloma-llimphi --example buzon_demo --release
 cargo run -p paloma-app --bin paloma-test --release
 ```
 
-Account config is a hand-editable JSON at `~/.config/paloma/cuenta.json` (or
-`PALOMA_CONFIG`); passwords never live in the file. With no config/credentials,
-or if IMAP fails, the app falls back to the demo backend and says so in the
-status bar.
+Account config lives in `~/.config/paloma/cuentas.json` (or `PALOMA_CONFIG`): a
+hand-editable JSON holding **several accounts** and which one is `active`. The
+old single-account `cuenta.json` is migrated automatically. The easiest way to
+edit it is the **Correo** diente of the wawa control panel (`wawa-panel`):
+account list (add/duplicate/delete), per-account IMAP/SMTP, a provider preset
+(Gmail/Outlook) that autofills servers, and the auth method. Secrets never live
+in the file. With no config/credentials, or if IMAP fails, the app falls back to
+the demo backend and says so in the status bar.
+
+### Authentication: password or OAuth2
+
+Each account picks an auth method:
+
+- **Password** — the secret comes from the environment (`PALOMA_PASSWORD`); on
+  Gmail use an **app** password.
+- **OAuth2 (`XOAUTH2`)** — for Gmail/Outlook, which closed IMAP/SMTP to
+  passwords. Register an OAuth *desktop* app at the provider, paste its
+  `client_id` into the account (PKCE public client; `client_secret` stays empty
+  unless required), then run the authorizer:
+
+  ```bash
+  paloma-oauth <account-id>          # Authorization Code + PKCE loopback flow
+  paloma-oauth <account-id> --force  # force the browser flow (re-consent)
+  ```
+
+  It opens the browser, receives the code on `127.0.0.1`, and writes the token
+  to `~/.config/paloma/oauth-<id>.json` (0600). Re-running it refreshes silently
+  via the stored `refresh_token`. The panel's **Autorizar** button runs the same
+  helper. `paloma-app` reads the `access_token` and authenticates over `XOAUTH2`.
 
 ## Key environment variables
 

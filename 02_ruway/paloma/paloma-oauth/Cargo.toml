@@ -1,0 +1,23 @@
+[package]
+name = "paloma-oauth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "paloma-oauth — helper de autorización OAuth2 del correo: corre el flujo Authorization Code + PKCE por loopback (abre el navegador, recibe el código en 127.0.0.1, lo cambia por un token) y guarda el access/refresh token de la cuenta. Renueva con el refresh_token sin navegador."
+
+[[bin]]
+name = "paloma-oauth"
+path = "src/main.rs"
+
+[dependencies]
+paloma-config = { path = "../paloma-config" }
+directories = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
