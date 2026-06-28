@@ -44,4 +44,16 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     moneda | String,
     ..
   },
+
+  # Secuencia de numeración legal de comprobantes. `facturar` la lee para
+  # asignar el número correlativo de la factura y le incrementa `proximo`
+  # en el mismo asiento — atómico y SIN huecos. Como es una entidad-input
+  # (no estado oculto), el incremento es determinista y replayable: el
+  # kernel reproduce el mismo número al re-ejecutar el log.
+  Secuencia = {
+    codigo | String,
+    prefijo | String,
+    proximo | NoNegativo,
+    ..
+  },
 }

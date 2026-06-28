@@ -39,6 +39,14 @@ for l in lineas {
 let impuesto = neto * input.params.tasa / 100;
 let total = neto + impuesto;
 
+// Numeración legal correlativa: número = prefijo + el próximo de la
+// secuencia, y se incrementa `proximo` en el mismo asiento. Atómico y sin
+// huecos; determinista para el replay del log.
+let numero = input.states.secuencia.prefijo + input.states.secuencia.proximo.to_string();
+ops.push(#{ op: "set",
+    path: #{ entity: "Secuencia", id: input.ids.secuencia, field: "proximo" },
+    value: input.states.secuencia.proximo + 1 });
+
 ops.push(#{ op: "set",
     path: #{ entity: "Cuenta", id: input.ids.clientes_cta, field: "saldo" },
     value: input.states.clientes_cta.saldo + total });
@@ -52,6 +60,7 @@ ops.push(#{ op: "set",
 ops.push(#{ op: "create", entity: "Factura", id: input.params.factura_id,
     data: #{
         id: input.params.factura_id,
+        numero: numero,
         cliente: input.params.cliente,
         fecha: input.params.fecha,
         estado: "emitida",

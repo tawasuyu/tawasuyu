@@ -816,10 +816,15 @@
                 .map(|(id, _)| id)
                 .unwrap()
         };
+        // La secuencia de numeración la siembra el seed.json de facturacion.
+        let secuencia = backend.list_records("Secuencia").into_iter()
+            .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some("FAC"))
+            .map(|(id, _)| id).expect("secuencia FAC sembrada");
         let mut inputs = BTreeMap::new();
         inputs.insert("clientes_cta".to_string(), by_codigo(&backend, "1100"));
         inputs.insert("ventas_cta".to_string(), by_codigo(&backend, "4010"));
         inputs.insert("iva_cta".to_string(), by_codigo(&backend, "2110"));
+        inputs.insert("secuencia".to_string(), secuencia);
         let factura_id = Uuid::new_v4();
         backend
             .morphism(
@@ -840,6 +845,7 @@
         let f = backend.load_record("Factura", factura_id).expect("factura");
         assert_eq!(f.get("neto").and_then(Value::as_i64), Some(1300));
         assert_eq!(f.get("total").and_then(Value::as_i64), Some(1534));
+        assert_eq!(f.get("numero").and_then(Value::as_str), Some("FAC-1"), "número legal asignado");
         assert_eq!(backend.list_records("LineaFactura").len(), 2, "dos líneas creadas");
 
         let suma: i64 = backend

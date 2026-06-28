@@ -1,0 +1,10 @@
+{
+  "seed": [
+    {
+      "entity": "Secuencia",
+      "records": [
+        { "data": { "codigo": "FAC", "prefijo": "FAC-", "proximo": 1 } }
+      ]
+    }
+  ]
+}

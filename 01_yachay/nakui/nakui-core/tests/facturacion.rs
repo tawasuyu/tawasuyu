@@ -156,6 +156,12 @@ fn facturar_con_lineas_calcula_neto_y_asienta() {
     let cs = cuentas_factura(&mut store, "USD");
     let (clientes, ventas, iva) = cs;
 
+    // Secuencia de numeración legal (próximo correlativo = 1).
+    let sec = Uuid::new_v4();
+    store.seed("Secuencia", sec, json!({
+        "id": sec.to_string(), "codigo": "FAC", "prefijo": "FAC-", "proximo": 1_i64,
+    }));
+
     let factura_id = Uuid::new_v4();
     let l1 = Uuid::new_v4();
     let l2 = Uuid::new_v4();
@@ -167,6 +173,7 @@ fn facturar_con_lineas_calcula_neto_y_asienta() {
                 ("clientes_cta", clientes),
                 ("ventas_cta", ventas),
                 ("iva_cta", iva),
+                ("secuencia", sec),
             ],
             json!({
                 "cliente": "ACME S.A.",
@@ -181,8 +188,8 @@ fn facturar_con_lineas_calcula_neto_y_asienta() {
         )
         .expect("facturar debe pasar");
 
-    // 2 creates LineaFactura + 3 sets + 1 create Factura = 6 ops.
-    assert_eq!(ops.len(), 6);
+    // 2 creates LineaFactura + 1 set secuencia + 3 sets cuentas + 1 Factura = 7.
+    assert_eq!(ops.len(), 7);
     assert_eq!(saldo(&store, clientes), 1534);
     assert_eq!(saldo(&store, ventas), -1300);
     assert_eq!(saldo(&store, iva), -234);
@@ -191,6 +198,12 @@ fn facturar_con_lineas_calcula_neto_y_asienta() {
     assert_eq!(f.get("neto").and_then(Value::as_i64), Some(1300));
     assert_eq!(f.get("impuesto").and_then(Value::as_i64), Some(234));
     assert_eq!(f.get("total").and_then(Value::as_i64), Some(1534));
+    // Número correlativo asignado y secuencia incrementada (sin huecos).
+    assert_eq!(f.get("numero").and_then(Value::as_str), Some("FAC-1"));
+    assert_eq!(
+        store.load("Secuencia", sec).unwrap().get("proximo").and_then(Value::as_i64),
+        Some(2)
+    );
 
     // Las dos líneas se persistieron con su subtotal y ligadas a la factura.
     let linea1 = store.load("LineaFactura", l1).expect("línea 1");
@@ -204,6 +217,40 @@ fn facturar_con_lineas_calcula_neto_y_asienta() {
 
     let total: i64 = [clientes, ventas, iva].iter().map(|&c| saldo(&store, c)).sum();
     assert_eq!(total, 0, "la factura con líneas conserva la balanza");
+}
+
+#[test]
+fn numeracion_correlativa_sin_huecos() {
+    // Dos facturas consecutivas toman FAC-1 y FAC-2; la secuencia queda en 3.
+    let exec = Executor::load_module(facturacion_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cs = cuentas_factura(&mut store, "USD");
+    let (clientes, ventas, iva) = cs;
+    let sec = Uuid::new_v4();
+    store.seed("Secuencia", sec, json!({
+        "id": sec.to_string(), "codigo": "FAC", "prefijo": "FAC-", "proximo": 1_i64,
+    }));
+
+    let facturar_una = |store: &mut MemoryStore, fid: Uuid| {
+        exec.run(store, "facturar",
+            &[("clientes_cta", clientes), ("ventas_cta", ventas), ("iva_cta", iva), ("secuencia", sec)],
+            json!({
+                "cliente": "ACME S.A.", "fecha": "2026-06-28", "factura_id": fid.to_string(), "tasa": 0_i64,
+                "lineas": [ { "id": Uuid::new_v4().to_string(), "concepto": "x", "cantidad": 1, "precio_unitario": 100 } ]
+            }),
+        ).expect("facturar");
+    };
+    let (f1, f2) = (Uuid::new_v4(), Uuid::new_v4());
+    facturar_una(&mut store, f1);
+    facturar_una(&mut store, f2);
+
+    assert_eq!(store.load("Factura", f1).unwrap().get("numero").and_then(Value::as_str), Some("FAC-1"));
+    assert_eq!(store.load("Factura", f2).unwrap().get("numero").and_then(Value::as_str), Some("FAC-2"));
+    assert_eq!(
+        store.load("Secuencia", sec).unwrap().get("proximo").and_then(Value::as_i64),
+        Some(3),
+        "la secuencia avanza de a uno, sin huecos ni saltos"
+    );
 }
 
 /// Cuenta de banco extra (las `cuentas_factura` traen Clientes/Ventas/IVA).

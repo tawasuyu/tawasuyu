@@ -37,4 +37,11 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     moneda | String,
     ..
   },
+
+  Secuencia = {
+    codigo | String,
+    prefijo | String,
+    proximo | NoNegativo,
+    ..
+  },
 }
