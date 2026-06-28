@@ -75,11 +75,13 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
             .command
             .clone()
             .unwrap_or_else(|| format!("etapa {}", i + 1));
-        // Conteo doble (líneas + bytes) sólo cuando hay captura.
+        // El índice `K` al frente hace obvia la ref `%cN.K` (direccionar la
+        // etapa con :filtra/:write/:yank/:explica). Conteo doble (líneas +
+        // bytes) sólo cuando hay captura.
         let label = if captured > 0 {
-            format!("{base}  {captured}L {}", humanize_bytes(bytes))
+            format!("{i}· {base}  {captured}L {}", humanize_bytes(bytes))
         } else {
-            base
+            format!("{i}· {base}")
         };
         // La última etapa no tiene captura (su salida es el cuerpo): chip
         // inerte, en color tenue, para que se vea la estructura del pipe.
@@ -220,6 +222,74 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
             .animated_inout(((block << 8) | (i as u64 & 0xff)) ^ (1 << 62), COLLAPSE_ANIM),
         );
         height += block_h;
+
+        // Fila de acciones sobre la etapa: las capturas dejan de ser un
+        // registro muerto — se filtran (IA), copian, guardan o explican
+        // direccionando `%cN.K`. Filtrar/guardar prellenan el input (el
+        // usuario completa instrucción/archivo); copiar/explicar corren ya.
+        let mk_action = |txt: String, msg: Msg, color: llimphi_ui::llimphi_raster::peniko::Color| {
+            View::new(Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: length(18.0_f32),
+                },
+                padding: Rect {
+                    left: length(7.0_f32),
+                    right: length(7.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.bg_input)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .text_aligned(txt, 11.0, color, Alignment::Start)
+            .on_click(lift(msg))
+        };
+        let actions = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(STAGES_H),
+            },
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(16.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            gap: Size {
+                width: length(5.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![
+            mk_action(
+                "🜲 filtrar".to_string(),
+                Msg::PrefillInput(format!(":filtra %c{block}.{i} ")),
+                theme.accent,
+            ),
+            mk_action(
+                "copiar".to_string(),
+                Msg::RunLine(format!(":yank %c{block}.{i}")),
+                theme.fg_muted,
+            ),
+            mk_action(
+                "guardar".to_string(),
+                Msg::PrefillInput(format!(":write %c{block}.{i} ")),
+                theme.fg_muted,
+            ),
+            mk_action(
+                "explicar".to_string(),
+                Msg::RunLine(format!(":explica %c{block}.{i}")),
+                theme.fg_muted,
+            ),
+        ]);
+        out.push(actions);
+        height += STAGES_H;
     }
 
     (out, height)

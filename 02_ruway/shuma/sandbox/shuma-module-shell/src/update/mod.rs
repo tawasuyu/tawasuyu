@@ -407,6 +407,11 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.input.set_text(&corregida);
             }
         }
+        Msg::PrefillInput(text) => {
+            s.input.set_text(&text);
+            s.focused = true;
+            s.input_focus = None; // el Enter arranca un comando nuevo, no va a un job
+        }
         Msg::InsertBlockRef(block) => {
             // Apila la ref al final de lo ya tipeado: `grep error ` + `%c12`.
             let actual = s.input.text().to_string();

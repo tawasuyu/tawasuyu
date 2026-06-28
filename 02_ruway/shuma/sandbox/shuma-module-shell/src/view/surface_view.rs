@@ -841,6 +841,10 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
             let lines = body_lines_for_block(state, *id);
             let kinds = body_kinds_for_block(state, *id);
             let runs = body_color_runs(state, *id, theme);
+            // Bloque de respuesta de IA: es prosa/transformación, no salida de un
+            // comando — NO se desplaniza en secciones/tablas (eso comería el
+            // tinte de acento y partiría el texto). Se pinta plano, en acento.
+            let is_ai_block = kinds.iter().any(|k| *k == OutputKind::Ai);
             let has_stages = g.iter().any(|l| l.stage.is_some());
             let has_stdout = g
                 .iter()
@@ -906,8 +910,9 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                     .get(id)
                     .cloned()
                     .unwrap_or_else(|| header_text.clone());
-                if let Some(sections) =
-                    crate::sections::detect_sections(&cmd_for_sections, &lines)
+                if let Some(sections) = (!is_ai_block)
+                    .then(|| crate::sections::detect_sections(&cmd_for_sections, &lines))
+                    .flatten()
                 {
                     for (sidx, sec) in sections.iter().enumerate() {
                         let sec_col = is_section_collapsed(state, *id, sidx, &sec.title);

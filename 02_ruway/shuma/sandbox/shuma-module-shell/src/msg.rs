@@ -108,6 +108,11 @@ pub enum Msg {
     /// (su stdout se materializa como fuente del pipe). La dispara el click en
     /// el tag `%cN` del header.
     InsertBlockRef(u64),
+    /// Reemplaza el input con `texto` y le da el foco — SIN ejecutar. La
+    /// disparan las acciones de redirección/filtro que necesitan que el usuario
+    /// complete la línea (`:filtra %cN.K `, `:write %cN.K `): prellenan el
+    /// comando con el objetivo y dejan el cursor para que escriba el resto.
+    PrefillInput(String),
     /// Copia al clipboard el **bloque entero** `block`: el comando (`$ …`)
     /// envuelto junto con su salida completa (stdout **y** stderr). La dispara
     /// el botón ⧉ del header del bloque en la superficie; no depende de que
