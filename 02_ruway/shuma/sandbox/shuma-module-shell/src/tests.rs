@@ -474,6 +474,32 @@
     }
 
     #[test]
+    fn predice_lista_comandos_por_frecuencia_y_cwd() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/repo");
+        // Historial aislado (in-memory) para no leer el disco real.
+        s.history = std::sync::Arc::new(std::sync::Mutex::new(
+            shuma_history::History::open(PathBuf::from("/dev/null")).unwrap(),
+        ));
+        {
+            let mut h = s.history.lock().unwrap();
+            for t in 0..4 {
+                let _ = h.append(shuma_history::Entry::new("cargo build", "/repo", 2 * t));
+                let _ = h.append(shuma_history::Entry::new("git status", "/otro", 2 * t + 1));
+            }
+        }
+        s.input.set_text(":predice");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let texts: Vec<String> = s.output.iter().map(|l| l.text.clone()).collect();
+        assert!(texts.iter().any(|t| t.contains("comandos probables")), "{texts:?}");
+        // El de cwd aparece con la marca ◆ y el conteo "aquí".
+        assert!(
+            texts.iter().any(|t| t.contains("◆") && t.contains("cargo build") && t.contains("aquí")),
+            "{texts:?}"
+        );
+    }
+
+    #[test]
     fn filtra_encadena_sobre_salida_de_ia() {
         // Una respuesta de IA en un bloque debe poder volver a filtrarse: el
         // `:filtra` sobre ese bloque arma su prompt con el texto de IA.

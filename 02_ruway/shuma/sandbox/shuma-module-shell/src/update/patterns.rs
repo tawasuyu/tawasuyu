@@ -341,6 +341,26 @@ pub(crate) fn accept_alias(s: State, line: &str) -> State {
     s
 }
 
+/// Secuencias/grupos aplicables al **contexto actual**: los patrones emergentes
+/// cuyo disparo por marcadores de proyecto (`Cargo.toml`, `.git`…) se cumple en
+/// el cwd, ordenados por score (frecuencia × largo) desc. Devuelve
+/// `(nombre_sugerido, línea_ejecutable, ocurrencias)`. Un patrón sin disparo
+/// (corrió en directorios sin forma común) se incluye siempre — no hay contexto
+/// que lo contradiga. Filtra los que ya están guardados como grupo idéntico
+/// (esos se listan aparte como F-keys).
+pub(crate) fn applicable_sequences(s: &State) -> Vec<(String, String, usize)> {
+    let here = markers_in(&s.cwd.to_string_lossy());
+    s.patterns
+        .iter()
+        .filter(|p| {
+            let trigger = pattern_trigger(p);
+            trigger.is_empty() || trigger.iter().all(|m| here.contains(m))
+        })
+        .filter(|p| !s.groups.iter().any(|g| g.lines == p.example))
+        .map(|p| (p.suggested_name(), p.example.join(" && "), p.occurrences))
+        .collect()
+}
+
 /// La secuencia que el motor predice como continuación de la sesión, si la
 /// hay y el cwd comparte la forma del patrón.
 pub(crate) fn predicted_sequence(s: &State) -> Option<String> {
@@ -487,6 +507,90 @@ pub(crate) fn detect_did_you_mean(s: &mut State, block: u64) {
         };
         s.did_you_mean.insert(block, corregida);
     }
+}
+
+/// Una predicción de comando: la línea, su score combinado y los componentes
+/// que lo explican (para mostrarle al usuario el porqué).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CommandPrediction {
+    /// La línea de comando predicha.
+    pub line: String,
+    /// Score combinado (frecuencia + afinidad de cwd + recencia).
+    pub score: u64,
+    /// Veces totales en el historial.
+    pub freq: usize,
+    /// Veces en el cwd actual (o sus hijos) — el peso del "directorio actual".
+    pub cwd_freq: usize,
+}
+
+/// Peso del directorio actual: una línea usada EN el cwd vale este múltiplo de
+/// una usada en cualquier lado. Es el corazón del "depende del directorio".
+const CWD_AFFINITY_WEIGHT: u64 = 3;
+
+/// Rankea las líneas del historial como predicción del próximo comando,
+/// combinando tres señales que el usuario pidió:
+/// - **frecuencia**: cuántas veces se usó (señal base);
+/// - **directorio actual**: las corridas en el cwd (o sus hijos) pesan
+///   [`CWD_AFFINITY_WEIGHT`]× (el "contexto" del lugar);
+/// - **recencia**: un bono si la última corrida fue de las más recientes.
+///
+/// Excluye builtins `:x` y líneas vacías. Determinista: empata por score, luego
+/// por más reciente, luego lexicográfico. Puro sobre el slice del historial
+/// (testeable sin disco). `cwd` es la ruta actual como string.
+pub(crate) fn rank_command_predictions(
+    entries: &[shuma_history::Entry],
+    cwd: &str,
+    limit: usize,
+) -> Vec<CommandPrediction> {
+    use std::collections::HashMap;
+    // line → (freq, cwd_freq, índice de la última aparición).
+    let mut acc: HashMap<&str, (usize, usize, usize)> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        let line = e.line.trim();
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        let entry = acc.entry(line).or_insert((0, 0, 0));
+        entry.0 += 1;
+        if cwd_within(&e.cwd, cwd) {
+            entry.1 += 1;
+        }
+        entry.2 = i;
+    }
+    let n = entries.len();
+    let mut preds: Vec<CommandPrediction> = acc
+        .into_iter()
+        .map(|(line, (freq, cwd_freq, last_idx))| {
+            // Recencia: 0 = la más reciente del historial.
+            let recency_rank = n.saturating_sub(1).saturating_sub(last_idx);
+            let recency_bonus: u64 = if recency_rank < 10 {
+                2
+            } else if recency_rank < 50 {
+                1
+            } else {
+                0
+            };
+            let score = cwd_freq as u64 * CWD_AFFINITY_WEIGHT + freq as u64 + recency_bonus;
+            CommandPrediction {
+                line: line.to_string(),
+                score,
+                freq,
+                cwd_freq,
+            }
+        })
+        .collect();
+    // Orden: score desc, luego más reciente (mayor last_idx implícito en el
+    // recency, lo recomputamos por línea para el desempate), luego lexicográfico.
+    // Para el desempate por recencia reusamos el score que ya lo incorpora; a
+    // score igual, lexicográfico estable.
+    preds.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| b.cwd_freq.cmp(&a.cwd_freq))
+            .then_with(|| a.line.cmp(&b.line))
+    });
+    preds.truncate(limit);
+    preds
 }
 
 /// `true` si `entry_cwd` cae dentro de `base` (es el mismo directorio o un
@@ -724,6 +828,37 @@ mod a3_ghost_cwd_tests {
         assert!(cwd_within("/repo/a/b", "/repo"));
         assert!(!cwd_within("/repo-otro", "/repo")); // prefijo de string, no de path
         assert!(!cwd_within("/otro", "/repo"));
+    }
+
+    #[test]
+    fn prediccion_pondera_cwd_sobre_frecuencia_pelada() {
+        // `git status` se usó 5× en /otro; `cargo test` 2× pero en /repo (el cwd).
+        // La afinidad de cwd (×3) debe poner a `cargo test` arriba.
+        let e = |line: &str, cwd: &str, t: u64| shuma_history::Entry::new(line, cwd, t);
+        let entries = vec![
+            e("git status", "/otro", 1),
+            e("git status", "/otro", 2),
+            e("git status", "/otro", 3),
+            e("git status", "/otro", 4),
+            e("git status", "/otro", 5),
+            e("cargo test", "/repo", 6),
+            e("cargo test", "/repo/sub", 7),
+        ];
+        let preds = rank_command_predictions(&entries, "/repo", 5);
+        assert_eq!(preds[0].line, "cargo test");
+        // cargo test: cwd_freq 2 (×3) + freq 2 + recencia 2 = 10; git: 0 + 5 + 0 = 5.
+        assert!(preds[0].score > preds[1].score, "{preds:?}");
+        assert_eq!(preds[0].cwd_freq, 2);
+    }
+
+    #[test]
+    fn prediccion_excluye_builtins_y_vacios() {
+        let e = |line: &str| shuma_history::Entry::new(line, "/repo", 1);
+        let entries = vec![e(":stats"), e("  "), e("ls -la"), e("ls -la")];
+        let preds = rank_command_predictions(&entries, "/repo", 5);
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].line, "ls -la");
+        assert_eq!(preds[0].freq, 2);
     }
 
     #[test]

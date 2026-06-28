@@ -883,6 +883,66 @@ fn humanizar_hace(secs: u64) -> String {
     }
 }
 
+// ─────────────────────────── Predicción (frecuencia · cwd · contexto) ──────
+
+/// `:predice` (`:sugiere`/`:next`) — muestra qué comandos y qué secuencias/
+/// grupos son probables AQUÍ, combinando frecuencia, directorio actual y
+/// contexto (marcadores de proyecto). Es la cara consultable de la maquinaria
+/// que ya alimenta el ghost (A3) y las coreografías (A1): el ghost predice
+/// inline UNA continuación; esto lista el ranking completo para elegir.
+pub(crate) fn apply_predict(mut s: State, _rest: &str) -> State {
+    let cwd = s.cwd.display().to_string();
+    // 1) La continuación inmediata que el motor de patrones anticipa, si la hay.
+    if let Some(seq) = predicted_sequence(&s) {
+        s.push_output(OutputLine::notice(format!("→ probable ahora: {seq}")));
+    }
+    // 2) Comandos rankeados por frecuencia × cwd × recencia.
+    let preds = {
+        let entries: Vec<shuma_history::Entry> = match s.history.lock() {
+            Ok(h) => h.entries().to_vec(),
+            Err(p) => p.into_inner().entries().to_vec(),
+        };
+        rank_command_predictions(&entries, &cwd, 8)
+    };
+    if preds.is_empty() {
+        s.push_output(OutputLine::notice(
+            "(sin historial para predecir — corré algunos comandos)",
+        ));
+        return s;
+    }
+    s.push_output(OutputLine::notice(format!("comandos probables en {cwd}:")));
+    for p in &preds {
+        // Marca de afinidad: ◆ si pesó el cwd actual, · si es global.
+        let marca = if p.cwd_freq > 0 { "◆" } else { "·" };
+        let detalle = if p.cwd_freq > 0 {
+            format!("{}× aquí / {}× total", p.cwd_freq, p.freq)
+        } else {
+            format!("{}× total", p.freq)
+        };
+        s.push_output(OutputLine::stdout(format!("  {marca} {}    ({detalle})", p.line)));
+    }
+    // 3) Secuencias/grupos aplicables al contexto + grupos guardados (F-keys).
+    let seqs = applicable_sequences(&s);
+    if !seqs.is_empty() || !s.groups.is_empty() {
+        s.push_output(OutputLine::notice("secuencias / grupos aquí:"));
+    }
+    for (nombre, linea, occ) in seqs.iter().take(5) {
+        s.push_output(OutputLine::stdout(format!(
+            "  ⟫ {nombre}  ({occ}×)  →  {linea}"
+        )));
+    }
+    let group_rows: Vec<String> = s
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| format!("  F{}  {}  →  {}", i + 1, g.name, g.lines.join(" && ")))
+        .collect();
+    for row in group_rows {
+        s.push_output(OutputLine::stdout(row));
+    }
+    s
+}
+
 // ─────────────────────────── E5 · LLM como instrumento ─────────────────────
 
 /// `:?  <pregunta>` — lenguaje natural → línea de comando propuesta. El

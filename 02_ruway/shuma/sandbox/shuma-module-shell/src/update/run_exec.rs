@@ -120,6 +120,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":explica" | ":explain" => return apply_explain(s, rest, false),
             ":resume" | ":resumen" => return apply_explain(s, rest, true),
             ":filtra" | ":filter" | ":fia" => return apply_filter(s, rest),
+            ":predice" | ":sugiere" | ":next" => return apply_predict(s, rest),
             ":buscar" | ":search" => return apply_search(s, rest),
             ":buscar-archivos" | ":fbuscar" | ":fsearch" => return apply_search_files(s, rest),
             ":spawn" => return apply_spawn_session(s, rest),
