@@ -5,16 +5,14 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "llimphi-wasm-dist — distribución por hash de apps WASM Tier 3. Resuelve el bytecode de una app por su hash BLAKE3 (CAS local en disco hoy; backend P2P sobre BrahmanNet como impl del trait BlobSource), verifica integridad y la concesión de capacidad Ed25519 (format::ConcesionCapacidad) contra un anillo de confianza cargable, calcula los permisos efectivos y entrega una VerifiedApp lista para correr en llimphi-wasm-runner. Es el gemelo host de la cadena bytecode→concesión→permisos del kernel de wawa. Cablea app_bus::Launch::Wasm."
+description = "llimphi-wasm-dist — cara con baterías de la distribución Tier 3: re-exporta llimphi-wasm-core (CAS, verificación de integridad y concesión Ed25519, resolve/resolve_manifest, cableado de app_bus::Launch::Wasm) y le suma el runner para correr la VerifiedApp (VerifiedAppExt::load). Quien sólo distribuye/verifica usa llimphi-wasm-core y se ahorra el stack GPU."
 
 [dependencies]
+llimphi-wasm-core = { workspace = true }
 llimphi-wasm-runner = { workspace = true }
-# El hash canónico, ConcesionCapacidad, Permisos, mensaje_capacidad, Objeto.
-format = { path = "../../../shared/format" }
-# verify_signature (Ed25519, ed25519-dalek host-side) + Keypair.
+
+[dev-dependencies]
+# Para los tests end-to-end (firmar concesiones, armar Launch).
 agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+format = { path = "../../../shared/format" }
 app-bus = { workspace = true }
-hex = { workspace = true }
-# AppManifest serializable (postcard): el manifiesto es un objeto distribuible más.
-serde = { workspace = true }
-postcard = { workspace = true }

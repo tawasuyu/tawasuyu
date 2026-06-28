@@ -10,11 +10,12 @@ use std::sync::Arc;
 use agora_core::Keypair;
 use card_net::BrahmanNet;
 use format::{ConcesionCapacidad, PERMISO_RED};
-use llimphi_wasm_dist::{
+use llimphi_wasm_core::{
     bytecode_hash, resolve, resolve_manifest, verify_integrity, AppManifest, AppRef, BlobSource,
-    DiskStore, EventPayload, Hash, MapSource, TrustRing,
+    DiskStore, Hash, MapSource, TrustRing,
 };
 use llimphi_wasm_net::{fetch_blob, serve_blobs};
+use llimphi_wasm_runner::{EventPayload, WasmGuest};
 
 const COUNTER_WASM: &[u8] = include_bytes!("../../llimphi-wasm-runner/assets/counter.wasm");
 
@@ -64,7 +65,7 @@ async fn dos_peers_distribuyen_y_corren_la_app() {
     assert_eq!(verified.permisos, 0);
 
     // ...y la app distribuida por la red CORRE: incrementa de verdad.
-    let mut guest = verified.load().expect("carga el guest");
+    let mut guest = WasmGuest::load(&verified.wasm, verified.permisos).expect("carga el guest");
     let n0 = guest.view().children[0].text.as_ref().unwrap().content.clone();
     assert_eq!(n0, "0");
     guest.dispatch(0, EventPayload::Click).unwrap(); // Msg::Increment
@@ -123,7 +124,7 @@ async fn dos_peers_distribuyen_app_con_concesion() {
     );
 
     // Y carga con ese permiso (que gatea host_net_request) y corre.
-    let mut guest = verified.load().expect("carga con permisos");
+    let mut guest = WasmGuest::load(&verified.wasm, verified.permisos).expect("carga con permisos");
     guest.dispatch(0, EventPayload::Click).unwrap();
     assert_eq!(
         guest.view().children[0].text.as_ref().unwrap().content,

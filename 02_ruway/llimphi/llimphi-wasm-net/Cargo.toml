@@ -8,7 +8,9 @@ publish.workspace = true
 description = "llimphi-wasm-net — transporte P2P para la distribución de apps WASM Tier 3. Protocolo de stream /llimphi-wasm/blob/1.0.0 sobre BrahmanNet (card-net): un BlobServer sirve los bytecodes de un DiskStore por hash; fetch_blob abre un stream a un provider y los pide; RemoteSource implementa BlobSource (con descubrimiento por DHT) para que la cadena resolver→verificar de llimphi-wasm-dist funcione sobre la red. Espejo host de la recuperación por hash sobre Akasha del kernel de wawa."
 
 [dependencies]
-llimphi-wasm-dist = { workspace = true }
+# Sólo el núcleo de distribución — NADA del runner/GPU. Un servidor de blobs
+# headless compila sin wgpu/vello/winit.
+llimphi-wasm-core = { workspace = true }
 card-net = { path = "../../../shared/card/card-net" }
 serde = { workspace = true }
 postcard = { workspace = true }
@@ -17,6 +19,8 @@ futures = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Sólo los tests corren la app traída por la red ⇒ el runner es dev-dependency.
+llimphi-wasm-runner = { workspace = true }
 # Firmar/declarar la concesión que viaja por la red en el test end-to-end.
 agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
 format = { path = "../../../shared/format" }

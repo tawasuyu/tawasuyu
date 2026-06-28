@@ -249,6 +249,7 @@ members = [
     "02_ruway/llimphi/llimphi-wire-view",
     "02_ruway/llimphi/llimphi-wasm-app-sdk",
     "02_ruway/llimphi/llimphi-wasm-runner",
+    "02_ruway/llimphi/llimphi-wasm-core",
     "02_ruway/llimphi/llimphi-wasm-dist",
     "02_ruway/llimphi/llimphi-wasm-net",
     "02_ruway/llimphi/llimphi-wasm-demo-counter",
@@ -786,8 +787,9 @@ llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 llimphi-wire-view = { path = "02_ruway/llimphi/llimphi-wire-view" }
 llimphi-wasm-app-sdk = { path = "02_ruway/llimphi/llimphi-wasm-app-sdk" }
 llimphi-wasm-runner = { path = "02_ruway/llimphi/llimphi-wasm-runner" }
-# Distribución por hash: resuelve+verifica (integridad + concesión Ed25519) y
-# entrega una VerifiedApp al runner. Cablea app_bus::Launch::Wasm.
+# Núcleo puro de distribución (CAS + verificación + resolve), SIN runner/GPU.
+llimphi-wasm-core = { path = "02_ruway/llimphi/llimphi-wasm-core" }
+# Cara con baterías: re-exporta core + puente al runner para correr la app.
 llimphi-wasm-dist = { path = "02_ruway/llimphi/llimphi-wasm-dist" }
 # Transporte P2P del bytecode por hash sobre BrahmanNet (card-net).
 llimphi-wasm-net = { path = "02_ruway/llimphi/llimphi-wasm-net" }

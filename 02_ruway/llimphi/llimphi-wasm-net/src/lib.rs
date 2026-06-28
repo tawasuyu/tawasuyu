@@ -23,7 +23,7 @@ use card_net::{BrahmanNet, PeerId, Stream, StreamProtocol};
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
-pub use llimphi_wasm_dist::{BlobSource, DiskStore, Hash};
+pub use llimphi_wasm_core::{BlobSource, DiskStore, Hash};
 
 /// El protocolo de stream para pedir bytecodes por hash.
 pub const BLOB_PROTOCOL: StreamProtocol = StreamProtocol::new("/llimphi-wasm/blob/1.0.0");

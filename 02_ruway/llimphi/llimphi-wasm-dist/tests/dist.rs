@@ -8,7 +8,7 @@ use format::{ConcesionCapacidad, Hash, Permisos, PERMISO_GRAFO_ESCRITURA, PERMIS
 use llimphi_wasm_dist::{
     bytecode_hash, grant_hash, hash_to_hex, resolve, resolve_launch, resolve_manifest, verify_grant,
     verify_integrity, AppManifest, AppRef, BlobSource, DiskStore, DistError, EventPayload, MapSource,
-    TrustRing,
+    TrustRing, VerifiedAppExt,
 };
 
 /// El mismo wasm que corre el runner Tier 3 — lo distribuimos por hash.

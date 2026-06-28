@@ -1,0 +1,16 @@
+[package]
+name = "llimphi-wasm-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-core — núcleo puro de la distribución por hash de apps WASM Tier 3: CAS (DiskStore/MapSource/LayeredSource sobre el trait BlobSource), hash canónico de objeto (bytecode/concesión), verificación de integridad y de concesión Ed25519 contra un anillo de confianza cargable, AppRef/AppManifest y resolve/resolve_manifest con permisos efectivos. NO depende del runner ni de Llimphi (sin GPU): un servidor de blobs o relay headless lo usa sin arrastrar wgpu/vello/winit. El puente para correr la VerifiedApp vive en llimphi-wasm-dist."
+
+[dependencies]
+format = { path = "../../../shared/format" }
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+app-bus = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
