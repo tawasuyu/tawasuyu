@@ -34,4 +34,14 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     subtotal | NoNegativo,
     ..
   },
+
+  # Constancia append-only del cobro de una factura. La crea `cobrar`:
+  # mueve el total de Clientes (CxC) a Banco y marca la factura como
+  # cobrada. `monto` = total cobrado; `factura_id` la liga a su factura.
+  Cobro = {
+    factura_id | String,
+    monto | NoNegativo,
+    moneda | String,
+    ..
+  },
 }

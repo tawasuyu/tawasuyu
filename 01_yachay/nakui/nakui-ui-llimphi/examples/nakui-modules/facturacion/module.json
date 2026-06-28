@@ -6,13 +6,16 @@
   "entities": [
     { "name": "Cuenta", "label": "Cuenta", "fields": [] },
     { "name": "Factura", "label": "Factura", "fields": [] },
-    { "name": "LineaFactura", "label": "Línea de factura", "fields": [] }
+    { "name": "LineaFactura", "label": "Línea de factura", "fields": [] },
+    { "name": "Cobro", "label": "Cobro", "fields": [] }
   ],
   "menu": [
     { "label": "Tablero", "view": "tablero" },
     { "label": "Facturas", "view": "facturas_list" },
     { "label": "Facturar (con líneas)", "view": "facturar_form" },
     { "label": "Emitir (rápida)", "view": "emitir_form" },
+    { "label": "Cobrar factura", "view": "cobrar_form" },
+    { "label": "Cobros", "view": "cobros_list" },
     { "label": "Líneas", "view": "lineas_list" },
     { "label": "Libro de morfismos", "view": "libro" }
   ],
@@ -150,6 +153,37 @@
         "params": ["cliente", "lineas", "tasa", "fecha", "factura_id"],
         "next_view": "facturas_list"
       }
+    },
+    "cobrar_form": {
+      "kind": "form",
+      "title": "Cobrar factura",
+      "entity": "Cobro",
+      "fields": [
+        { "name": "factura", "label": "Factura a cobrar", "kind": "entity_ref", "ref_entity": "Factura", "required": true, "help": "Se cobra por su total y se marca «cobrada»" },
+        { "name": "banco_cta", "label": "Cuenta Banco", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Activo — se debita por el total" },
+        { "name": "clientes_cta", "label": "Cuenta Clientes (CxC)", "kind": "entity_ref", "ref_entity": "Cuenta", "required": true, "help": "Activo — se acredita (baja la cuenta por cobrar)" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": false, "help": "YYYY-MM-DD" },
+        { "name": "cobro_id", "label": "Id de cobro", "kind": "auto_id" }
+      ],
+      "on_submit": {
+        "kind": "morphism",
+        "name": "cobrar",
+        "inputs": { "banco_cta": "banco_cta", "clientes_cta": "clientes_cta", "factura": "factura" },
+        "params": ["fecha", "cobro_id"],
+        "next_view": "cobros_list"
+      }
+    },
+    "cobros_list": {
+      "kind": "list",
+      "title": "Cobros",
+      "entity": "Cobro",
+      "search_in": ["moneda"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "factura_id", "label": "Factura", "ref_entity": "Factura" },
+        { "field": "monto", "label": "Monto", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "moneda", "label": "Moneda" }
+      ]
     },
     "lineas_list": {
       "kind": "list",

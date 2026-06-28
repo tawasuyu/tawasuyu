@@ -206,6 +206,91 @@ fn facturar_con_lineas_calcula_neto_y_asienta() {
     assert_eq!(total, 0, "la factura con líneas conserva la balanza");
 }
 
+/// Cuenta de banco extra (las `cuentas_factura` traen Clientes/Ventas/IVA).
+fn cuenta_banco(store: &mut MemoryStore, moneda: &str) -> Uuid {
+    cuenta(store, "1020", "activo", moneda)
+}
+
+#[test]
+fn cobrar_reduce_cxc_y_sube_banco() {
+    let exec = Executor::load_module(facturacion_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cs = cuentas_factura(&mut store, "USD");
+    let (clientes, ventas, iva) = cs;
+    let banco = cuenta_banco(&mut store, "USD");
+
+    // Emitir: neto 1000 + IVA 18% = total 1180 → Clientes sube a 1180.
+    let factura_id = Uuid::new_v4();
+    emitir(&exec, &mut store, cs, 1000, 18, factura_id).expect("factura emitida");
+    assert_eq!(saldo(&store, clientes), 1180);
+
+    // Cobrar la factura: el total va de Clientes a Banco.
+    let cobro_id = Uuid::new_v4();
+    let ops = exec
+        .run(
+            &mut store,
+            "cobrar",
+            &[
+                ("banco_cta", banco),
+                ("clientes_cta", clientes),
+                ("factura", factura_id),
+            ],
+            json!({ "fecha": "2026-06-29", "cobro_id": cobro_id.to_string() }),
+        )
+        .expect("cobro debe pasar");
+
+    assert_eq!(ops.len(), 4, "2 sets cuentas + 1 set estado factura + 1 create Cobro");
+    assert_eq!(saldo(&store, banco), 1180, "el banco recibe el total");
+    assert_eq!(saldo(&store, clientes), 0, "la cuenta por cobrar queda saldada");
+
+    let f = store.load("Factura", factura_id).expect("factura");
+    assert_eq!(f.get("estado").and_then(Value::as_str), Some("cobrada"));
+
+    let cobro = store.load("Cobro", cobro_id).expect("cobro persistido");
+    assert_eq!(cobro.get("monto").and_then(Value::as_i64), Some(1180));
+    assert_eq!(
+        cobro.get("factura_id").and_then(Value::as_str),
+        Some(factura_id.to_string().as_str())
+    );
+
+    // El libro entero sigue cuadrado tras emitir + cobrar.
+    let total: i64 = [clientes, ventas, iva, banco].iter().map(|&c| saldo(&store, c)).sum();
+    assert_eq!(total, 0, "emitir + cobrar conserva la balanza");
+}
+
+#[test]
+fn cobrar_factura_ya_cobrada_rechazada() {
+    let exec = Executor::load_module(facturacion_module()).expect("load module");
+    let mut store = MemoryStore::new();
+    let cs = cuentas_factura(&mut store, "USD");
+    let (clientes, _, _) = cs;
+    let banco = cuenta_banco(&mut store, "USD");
+    let factura_id = Uuid::new_v4();
+    emitir(&exec, &mut store, cs, 500, 0, factura_id).expect("factura");
+
+    let cobrar = |store: &mut MemoryStore| {
+        exec.run(
+            store,
+            "cobrar",
+            &[
+                ("banco_cta", banco),
+                ("clientes_cta", clientes),
+                ("factura", factura_id),
+            ],
+            json!({ "fecha": "2026-06-29", "cobro_id": Uuid::new_v4().to_string() }),
+        )
+    };
+    cobrar(&mut store).expect("primer cobro pasa");
+    // Segundo cobro de la misma factura → throw (ya cobrada).
+    let snd = cobrar(&mut store);
+    assert!(
+        matches!(snd, Err(ExecError::Rhai(_))),
+        "esperaba throw por factura ya cobrada, obtuve {:?}",
+        snd
+    );
+    assert_eq!(saldo(&store, banco), 500, "el banco no se movió en el rechazo");
+}
+
 #[test]
 fn factura_entre_monedas_distintas_rechazada() {
     let exec = Executor::load_module(facturacion_module()).expect("load module");

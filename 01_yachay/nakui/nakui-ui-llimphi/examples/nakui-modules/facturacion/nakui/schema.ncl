@@ -30,4 +30,11 @@ let NoNegativo = std.contract.from_predicate (fun n => std.is_number n && n >= 0
     subtotal | NoNegativo,
     ..
   },
+
+  Cobro = {
+    factura_id | String,
+    monto | NoNegativo,
+    moneda | String,
+    ..
+  },
 }

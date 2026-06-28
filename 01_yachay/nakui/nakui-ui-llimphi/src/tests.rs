@@ -789,6 +789,83 @@
         let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
     }
 
+    /// End-to-end del ciclo CxC: emitir una factura (Clientes sube) y luego
+    /// `cobrar` por el backend (Banco sube, Clientes vuelve a cero, factura
+    /// «cobrada»). El libro queda cuadrado en todo momento.
+    #[test]
+    fn cobrar_factura_via_backend_salda_cxc() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("nakui-modules");
+        let (modules, _) = load_ui_modules(&dir).expect("módulos cargan");
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for id in ["contabilidad", "facturacion"] {
+            let m = modules.iter().find(|m| m.id == id).unwrap();
+            let nakui_dir = dir.join(&m.id).join(m.nakui_module_dir.as_ref().unwrap());
+            executors.insert(id.to_string(), Arc::new(Executor::load_module(&nakui_dir).unwrap()));
+        }
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let (mut backend, _) = NakuiBackend::open(path.clone(), 1000, executors);
+        seed_demo_data(&mut backend, &modules, &dir);
+
+        let by_codigo = |b: &NakuiBackend, cod: &str| -> Uuid {
+            b.list_records("Cuenta")
+                .into_iter()
+                .find(|(_, v)| v.get("codigo").and_then(Value::as_str) == Some(cod))
+                .map(|(id, _)| id)
+                .unwrap()
+        };
+        let saldo = |b: &NakuiBackend, id: Uuid| -> i64 {
+            b.load_record("Cuenta", id).and_then(|v| v.get("saldo").and_then(Value::as_i64)).unwrap()
+        };
+        let suma = |b: &NakuiBackend| -> i64 {
+            b.list_records("Cuenta").iter().map(|(_, v)| v.get("saldo").and_then(Value::as_i64).unwrap_or(0)).sum()
+        };
+        let banco = by_codigo(&backend, "1020");
+        let clientes = by_codigo(&backend, "1100");
+        let (b0, c0) = (saldo(&backend, banco), saldo(&backend, clientes));
+
+        // Emitir factura neto 1000 + IVA 18% = 1180.
+        let factura_id = Uuid::new_v4();
+        let mut emi = BTreeMap::new();
+        emi.insert("clientes_cta".to_string(), clientes);
+        emi.insert("ventas_cta".to_string(), by_codigo(&backend, "4010"));
+        emi.insert("iva_cta".to_string(), by_codigo(&backend, "2110"));
+        backend
+            .morphism("facturacion", "emitir_factura", emi, json!({
+                "cliente": "ACME S.A.", "fecha": "2026-06-28",
+                "factura_id": factura_id.to_string(), "neto": 1000_i64, "tasa": 18_i64,
+            }))
+            .expect("emitir");
+        assert_eq!(saldo(&backend, clientes), c0 + 1180);
+
+        // Cobrar la factura.
+        let mut cob = BTreeMap::new();
+        cob.insert("banco_cta".to_string(), banco);
+        cob.insert("clientes_cta".to_string(), clientes);
+        cob.insert("factura".to_string(), factura_id);
+        backend
+            .morphism("facturacion", "cobrar", cob, json!({
+                "fecha": "2026-06-29", "cobro_id": Uuid::new_v4().to_string(),
+            }))
+            .expect("cobrar");
+
+        assert_eq!(saldo(&backend, banco), b0 + 1180, "el banco recibe el total");
+        assert_eq!(saldo(&backend, clientes), c0, "la CxC vuelve a su saldo previo");
+        let f = backend.load_record("Factura", factura_id).expect("factura");
+        assert_eq!(f.get("estado").and_then(Value::as_str), Some("cobrada"));
+        assert_eq!(backend.list_records("Cobro").len(), 1);
+        assert_eq!(suma(&backend), 0, "emitir + cobrar conserva la balanza");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::backend::snapshot_path_for(&path));
+    }
+
     #[test]
     fn next_sort_cycles_asc_desc_off() {
         // Columna nueva → ascendente.

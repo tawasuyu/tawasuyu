@@ -37,6 +37,24 @@
         "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
       },
       "script": "morphisms/facturar.rhai"
+    },
+    {
+      "name": "cobrar",
+      "inputs": [
+        { "role": "banco_cta", "entity": "Cuenta" },
+        { "role": "clientes_cta", "entity": "Cuenta" },
+        { "role": "factura", "entity": "Factura" }
+      ],
+      "reads": [
+        "banco_cta.saldo", "banco_cta.moneda",
+        "clientes_cta.saldo", "clientes_cta.moneda",
+        "factura.total", "factura.moneda", "factura.estado"
+      ],
+      "writes": ["banco_cta.saldo", "clientes_cta.saldo", "factura.estado", "Cobro"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "morphisms/cobrar.rhai"
     }
   ]
 }
