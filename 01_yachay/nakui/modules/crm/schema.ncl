@@ -46,4 +46,19 @@ let fiscal = import "../_fiscal/documentos.ncl" in
     timestamp | String,
     ..
   },
+
+  # Una cotización (presupuesto) derivada de una oportunidad GANADA. La crea
+  # `cotizar_oportunidad` en estado "borrador"; `facturar_cotizacion` la lleva
+  # a "facturada" emitiendo la Factura que asienta en el libro de accounting.
+  # Es el puente comercial CRM → facturación: el negocio que ganaste se
+  # materializa primero en un presupuesto y luego en un comprobante fiscal.
+  Cotizacion = {
+    oportunidad_id | String,
+    cliente_id | String,
+    titulo | String,
+    monto | Number,
+    currency | String,
+    estado | String,
+    ..
+  },
 }

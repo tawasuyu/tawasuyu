@@ -1,6 +1,6 @@
 {
   "module": "crm",
-  "schemas": ["schema.ncl"],
+  "schemas": ["../accounting/schema.ncl", "../facturacion/schema.ncl", "schema.ncl"],
   "morphisms": [
     {
       "name": "registrar_cliente",
@@ -36,6 +36,36 @@
       "reads": [],
       "writes": ["Interaccion"],
       "script": "scripts/registrar_interaccion.rhai"
+    },
+    {
+      "name": "cotizar_oportunidad",
+      "inputs": [{ "role": "oportunidad", "entity": "Oportunidad" }],
+      "reads": [
+        "oportunidad.etapa", "oportunidad.cliente_id",
+        "oportunidad.titulo", "oportunidad.monto", "oportunidad.currency"
+      ],
+      "writes": ["Cotizacion"],
+      "script": "scripts/cotizar_oportunidad.rhai"
+    },
+    {
+      "name": "facturar_cotizacion",
+      "inputs": [
+        { "role": "cotizacion", "entity": "Cotizacion" },
+        { "role": "clientes_cta", "entity": "Cuenta" },
+        { "role": "ventas_cta", "entity": "Cuenta" },
+        { "role": "iva_cta", "entity": "Cuenta" }
+      ],
+      "reads": [
+        "cotizacion.estado", "cotizacion.monto", "cotizacion.currency", "cotizacion.cliente_id",
+        "clientes_cta.saldo", "clientes_cta.moneda",
+        "ventas_cta.saldo", "ventas_cta.moneda",
+        "iva_cta.saldo", "iva_cta.moneda"
+      ],
+      "writes": ["clientes_cta.saldo", "ventas_cta.saldo", "iva_cta.saldo", "cotizacion.estado", "Factura"],
+      "invariants": {
+        "conserve": [{ "entity": "Cuenta", "field": "saldo", "group_by": "moneda" }]
+      },
+      "script": "scripts/facturar_cotizacion.rhai"
     }
   ]
 }

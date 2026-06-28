@@ -62,6 +62,15 @@ fn main() {
         "ceo@gamma.com",
     );
 
+    // --- Seed: plan contable mínimo para asentar la venta ganada -------
+    section("seed · plan contable (Clientes / Ventas / IVA)");
+    let clientes_cta = Uuid::new_v4();
+    let ventas_cta = Uuid::new_v4();
+    let iva_cta = Uuid::new_v4();
+    seed_cuenta(&exec, &mut store, &mut log, clientes_cta, "1100-Clientes", "activo");
+    seed_cuenta(&exec, &mut store, &mut log, ventas_cta, "4000-Ventas", "ingreso");
+    seed_cuenta(&exec, &mut store, &mut log, iva_cta, "2100-IVA", "pasivo");
+
     // --- Acme: una oportunidad que se gana -----------------------------
     section("Acme · «Licencia anual» $12 000 — recorre el pipeline");
     let opp_acme = Uuid::new_v4();
@@ -92,6 +101,23 @@ fn main() {
         acme,
         "email",
         "Contrato firmado recibido",
+    );
+
+    // --- Acme ganada → cotización → factura asentada -------------------
+    section("Acme · ganada → cotización → factura (asienta en el libro)");
+    let cot_acme = Uuid::new_v4();
+    cotizar(&exec, &mut store, &mut log, opp_acme, cot_acme);
+    let fact_acme = Uuid::new_v4();
+    facturar(
+        &exec,
+        &mut store,
+        &mut log,
+        cot_acme,
+        clientes_cta,
+        ventas_cta,
+        iva_cta,
+        fact_acme,
+        16, // IVA 16%
     );
 
     // --- Beta: una oportunidad que se pierde ---------------------------
@@ -173,6 +199,15 @@ fn main() {
     print_oportunidad(&store, "Acme ", opp_acme);
     print_oportunidad(&store, "Beta ", opp_beta);
     print_oportunidad(&store, "Gamma", opp_gamma);
+
+    section("estado final · factura de Acme + libro");
+    print_factura(&store, fact_acme);
+    print_cuenta(&store, "Clientes", clientes_cta);
+    print_cuenta(&store, "Ventas  ", ventas_cta);
+    print_cuenta(&store, "IVA     ", iva_cta);
+    let total_libro =
+        cuenta_saldo(&store, clientes_cta) + cuenta_saldo(&store, ventas_cta) + cuenta_saldo(&store, iva_cta);
+    println!("  Σ saldos = {total_libro} (0 = partida doble cuadrada)");
 
     let entries = log.entries().expect("leer el log");
     let seeds = entries
@@ -260,6 +295,77 @@ fn mover(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, opp: Uuid
     );
 }
 
+fn seed_cuenta(
+    exec: &Executor,
+    store: &mut MemoryStore,
+    log: &mut EventLog,
+    id: Uuid,
+    codigo: &str,
+    tipo: &str,
+) {
+    seed_and_log(
+        exec,
+        store,
+        log,
+        "Cuenta",
+        id,
+        json!({
+            "id": id.to_string(),
+            "codigo": codigo,
+            "nombre": codigo,
+            "tipo": tipo,
+            "saldo": 0_i64,
+            "moneda": "USD",
+        }),
+    )
+    .unwrap_or_else(|e| panic!("seed cuenta {codigo}: {e}"));
+    println!("  ok · cuenta {codigo} ({tipo})");
+}
+
+fn cotizar(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, opp: Uuid, cot: Uuid) {
+    report(
+        "cotizar_oportunidad",
+        execute_and_log(
+            exec,
+            store,
+            log,
+            "cotizar_oportunidad",
+            &[("oportunidad", opp)],
+            json!({ "cotizacion_id": cot.to_string() }),
+        ),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn facturar(
+    exec: &Executor,
+    store: &mut MemoryStore,
+    log: &mut EventLog,
+    cot: Uuid,
+    clientes_cta: Uuid,
+    ventas_cta: Uuid,
+    iva_cta: Uuid,
+    fact: Uuid,
+    tasa: i64,
+) {
+    report(
+        "facturar_cotizacion",
+        execute_and_log(
+            exec,
+            store,
+            log,
+            "facturar_cotizacion",
+            &[
+                ("cotizacion", cot),
+                ("clientes_cta", clientes_cta),
+                ("ventas_cta", ventas_cta),
+                ("iva_cta", iva_cta),
+            ],
+            json!({ "factura_id": fact.to_string(), "fecha": TS, "tasa": tasa }),
+        ),
+    );
+}
+
 fn perder(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, opp: Uuid, motivo: &str) {
     report(
         &format!("marcar_perdida ({motivo})"),
@@ -325,6 +431,30 @@ fn print_oportunidad(store: &MemoryStore, etiqueta: &str, id: Uuid) {
         }
         None => println!("  {etiqueta} · (sin oportunidad)"),
     }
+}
+
+fn print_factura(store: &MemoryStore, id: Uuid) {
+    match store.load("Factura", id) {
+        Some(v) => {
+            let neto = v.get("neto").and_then(|x| x.as_i64()).unwrap_or(0);
+            let imp = v.get("impuesto").and_then(|x| x.as_i64()).unwrap_or(0);
+            let total = v.get("total").and_then(|x| x.as_i64()).unwrap_or(0);
+            let mon = v.get("moneda").and_then(|x| x.as_str()).unwrap_or("?");
+            println!("  Factura · neto {neto} + IVA {imp} = total {total} {mon}");
+        }
+        None => println!("  Factura · (no emitida)"),
+    }
+}
+
+fn cuenta_saldo(store: &MemoryStore, id: Uuid) -> i64 {
+    store
+        .load("Cuenta", id)
+        .and_then(|v| v.get("saldo").and_then(|x| x.as_i64()))
+        .unwrap_or(0)
+}
+
+fn print_cuenta(store: &MemoryStore, etiqueta: &str, id: Uuid) {
+    println!("  {etiqueta} · saldo {}", cuenta_saldo(store, id));
 }
 
 fn section(title: &str) {
