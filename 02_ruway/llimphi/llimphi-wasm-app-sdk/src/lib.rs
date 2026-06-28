@@ -21,7 +21,7 @@
 pub use llimphi_wire_view as wire;
 pub use llimphi_wire_view::{
     col, leaf, row, spacer, text, Align, Dim, Dir, EventId, EventPayload, Justify, Rgba, TextAlign,
-    WireInput, WireNode, WireText,
+    WireInput, WireNode, WireSelect, WireSlider, WireText,
 };
 
 /// Handler de un evento, del lado guest. El `Ui` los guarda; el dispatch los
@@ -33,6 +33,10 @@ pub enum Handler<Msg> {
     Text(Box<dyn Fn(String) -> Msg>),
     /// Toggle → `Msg` construido con el nuevo estado.
     Toggle(Box<dyn Fn(bool) -> Msg>),
+    /// Slider → `Msg` construido con el valor nuevo.
+    Value(Box<dyn Fn(f32) -> Msg>),
+    /// Dropdown → `Msg` construido con el índice elegido.
+    Select(Box<dyn Fn(u32) -> Msg>),
 }
 
 /// Contexto de construcción de UI: asigna [`EventId`]s y acumula los handlers
@@ -115,6 +119,35 @@ impl<Msg> Ui<Msg> {
         WireNode::new().with_toggle(checked).on_toggle(id)
     }
 
+    /// Slider con `value` en `[min, max]`. `on_value(v)` construye el `Msg` con
+    /// el valor nuevo al clickear/arrastrar la barra.
+    pub fn slider(
+        &mut self,
+        value: f32,
+        min: f32,
+        max: f32,
+        on_value: impl Fn(f32) -> Msg + 'static,
+    ) -> WireNode {
+        let id = self.register(Handler::Value(Box::new(on_value)));
+        WireNode::new()
+            .with_slider(WireSlider { value, min, max })
+            .on_value(id)
+    }
+
+    /// Dropdown con `options` y la `selected` actual. `on_select(idx)` construye
+    /// el `Msg` con el índice elegido.
+    pub fn select(
+        &mut self,
+        options: Vec<String>,
+        selected: u32,
+        on_select: impl Fn(u32) -> Msg + 'static,
+    ) -> WireNode {
+        let id = self.register(Handler::Select(Box::new(on_select)));
+        WireNode::new()
+            .with_select(WireSelect { options, selected })
+            .on_select(id)
+    }
+
     /// Resuelve un evento a un `Msg`. Lo usa el runtime generado por la macro.
     pub fn resolve(&self, id: EventId, payload: EventPayload) -> Option<Msg>
     where
@@ -128,6 +161,14 @@ impl<Msg> Ui<Msg> {
             },
             Handler::Toggle(f) => match payload {
                 EventPayload::Toggle(b) => Some(f(b)),
+                _ => None,
+            },
+            Handler::Value(f) => match payload {
+                EventPayload::Value(v) => Some(f(v)),
+                _ => None,
+            },
+            Handler::Select(f) => match payload {
+                EventPayload::Select(i) => Some(f(i)),
                 _ => None,
             },
         }

@@ -40,6 +40,8 @@ pub enum RunnerMsg {
     Event(EventId, EventPayload),
     /// El foco de teclado pasó a este input (o a ninguno).
     Focus(Option<EventId>),
+    /// Abrir/cerrar el dropdown con este `on_select` id (estado host-side).
+    ToggleSelect(EventId),
 }
 
 /// Una app WASM guest cargada y viva. Mantené una por app: el `Model` del guest
@@ -56,6 +58,8 @@ pub struct WasmGuest {
     view: WireNode,
     /// Input con el foco de teclado (su `on_input` EventId), si hay alguno.
     focused: Option<EventId>,
+    /// Dropdown abierto (su `on_select` EventId), si hay alguno.
+    open_select: Option<EventId>,
 }
 
 impl WasmGuest {
@@ -113,6 +117,7 @@ impl WasmGuest {
             f_free,
             view: WireNode::default(),
             focused: None,
+            open_select: None,
         };
         guest.refresh()?;
         Ok(guest)
@@ -164,9 +169,21 @@ impl WasmGuest {
     /// Aplica un `RunnerMsg`. Conveniencia para el `update` del host.
     pub fn apply(&mut self, msg: &RunnerMsg) -> Result<(), String> {
         match msg {
-            RunnerMsg::Event(id, payload) => self.dispatch(*id, payload.clone()),
+            RunnerMsg::Event(id, payload) => {
+                // Cualquier evento cierra un dropdown abierto (elegir/clicar = cerrar).
+                self.open_select = None;
+                self.dispatch(*id, payload.clone())
+            }
             RunnerMsg::Focus(f) => {
                 self.focused = *f;
+                Ok(())
+            }
+            RunnerMsg::ToggleSelect(id) => {
+                self.open_select = if self.open_select == Some(*id) {
+                    None
+                } else {
+                    Some(*id)
+                };
                 Ok(())
             }
         }
@@ -204,7 +221,7 @@ impl WasmGuest {
 
     /// Materializa la vista cacheada en un `View<RunnerMsg>` Llimphi real.
     pub fn render(&self) -> View<RunnerMsg> {
-        wire_to_view(&self.view, self.focused)
+        wire_to_view(&self.view, self.focused, self.open_select)
     }
 }
 
@@ -238,10 +255,20 @@ const INPUT_TEXT: [u8; 4] = [230, 235, 245, 255];
 const INPUT_PLACEHOLDER: [u8; 4] = [120, 130, 145, 255];
 const INPUT_BORDER: [u8; 4] = [80, 90, 110, 255];
 const INPUT_BORDER_FOCUS: [u8; 4] = [90, 160, 230, 255];
+const SLIDER_TRACK: [u8; 4] = [40, 46, 58, 255];
+const SLIDER_FILL: [u8; 4] = [90, 160, 230, 255];
+const SELECT_BG: [u8; 4] = [28, 34, 44, 255];
+const SELECT_ITEM: [u8; 4] = [34, 40, 52, 255];
+const SELECT_SEL: [u8; 4] = [50, 70, 100, 255];
 
 /// Materializa un [`WireNode`] en un `View<RunnerMsg>` Llimphi real,
-/// recursivamente. `focused` es el input con el foco (para pintar caret/borde).
-pub fn wire_to_view(node: &WireNode, focused: Option<EventId>) -> View<RunnerMsg> {
+/// recursivamente. `focused` = input con el foco; `open_select` = dropdown
+/// abierto (para pintar su lista).
+pub fn wire_to_view(
+    node: &WireNode,
+    focused: Option<EventId>,
+    open_select: Option<EventId>,
+) -> View<RunnerMsg> {
     let mut style = Style {
         flex_direction: match node.dir {
             Dir::Row => FlexDirection::Row,
@@ -300,6 +327,62 @@ pub fn wire_to_view(node: &WireNode, focused: Option<EventId>) -> View<RunnerMsg
         view = view
             .text(glyph, 24.0, color(INPUT_TEXT))
             .on_click(RunnerMsg::Event(id, EventPayload::Toggle(!checked)));
+    } else if let Some(sl) = &node.slider {
+        // Slider: track con una barra de relleno proporcional; click-en-x fija
+        // el valor. id/min/max van Copy a la clausura.
+        let id = node.on_value.unwrap_or(0);
+        let (min, max) = (sl.min, sl.max);
+        let frac = if max > min {
+            ((sl.value - min) / (max - min)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        view = view
+            .fill(color(SLIDER_TRACK))
+            .radius(6.0)
+            .on_click_at(move |lx, _ly, w, _h| {
+                let f = if w > 0.0 { (lx / w).clamp(0.0, 1.0) } else { 0.0 };
+                Some(RunnerMsg::Event(id, EventPayload::Value(min + f * (max - min))))
+            });
+        let bar = View::new(Style {
+            size: Size {
+                width: percent(frac),
+                height: percent(1.0),
+            },
+            ..Default::default()
+        })
+        .fill(color(SLIDER_FILL))
+        .radius(6.0);
+        view = view.children(vec![bar]);
+    } else if let Some(sel) = &node.select {
+        // Dropdown: header con la opción actual + lista inline cuando está abierto.
+        let id = node.on_select.unwrap_or(0);
+        let is_open = open_select == Some(id);
+        let current = sel
+            .options
+            .get(sel.selected as usize)
+            .cloned()
+            .unwrap_or_else(|| "\u{2014}".into()); // —
+        let arrow = if is_open { "\u{25b4}" } else { "\u{25be}" }; // ▴ / ▾
+        let header = item_box(36.0)
+            .fill(color(SELECT_BG))
+            .border(1.0, color(INPUT_BORDER))
+            .text(format!("{current}   {arrow}"), 18.0, color(INPUT_TEXT))
+            .on_click(RunnerMsg::ToggleSelect(id));
+        let mut kids = vec![header];
+        if is_open {
+            for (i, opt) in sel.options.iter().enumerate() {
+                let oid = i as u32;
+                let bg = if oid == sel.selected { SELECT_SEL } else { SELECT_ITEM };
+                kids.push(
+                    item_box(32.0)
+                        .fill(color(bg))
+                        .text(opt.clone(), 18.0, color(INPUT_TEXT))
+                        .on_click(RunnerMsg::Event(id, EventPayload::Select(oid))),
+                );
+            }
+        }
+        view = view.children(kids);
     } else {
         if let Some(t) = &node.text {
             view = view.text_aligned(
@@ -315,9 +398,34 @@ pub fn wire_to_view(node: &WireNode, focused: Option<EventId>) -> View<RunnerMsg
     }
 
     if !node.children.is_empty() {
-        view = view.children(node.children.iter().map(|c| wire_to_view(c, focused)).collect());
+        view = view.children(
+            node.children
+                .iter()
+                .map(|c| wire_to_view(c, focused, open_select))
+                .collect(),
+        );
     }
     view
+}
+
+/// Una caja de fila a `height` px, ancho completo, contenido centrado a la
+/// izquierda con padding — el ladrillo del header/items del dropdown.
+fn item_box(height: f32) -> View<RunnerMsg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0),
+            height: length(height),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(10.0),
+            right: length(10.0),
+            top: length(0.0),
+            bottom: length(0.0),
+        },
+        ..Default::default()
+    })
+    .radius(6.0)
 }
 
 /// Texto a mostrar en un input y su color: value (o placeholder), enmascarado si

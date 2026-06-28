@@ -112,6 +112,10 @@ pub enum EventPayload {
     Text(String),
     /// Nuevo estado de un checkbox/switch. Handler `Toggle(Fn(bool)->Msg)`.
     Toggle(bool),
+    /// Nuevo valor de un slider. Handler `Value(Fn(f32)->Msg)`.
+    Value(f32),
+    /// Índice de la opción elegida en un dropdown. Handler `Select(Fn(u32)->Msg)`.
+    Select(u32),
 }
 
 /// Campo de texto editable. El `value` es la fuente de verdad del guest; el host
@@ -123,6 +127,23 @@ pub struct WireInput {
     pub placeholder: String,
     /// Oculta el contenido (●●●) — para contraseñas.
     pub password: bool,
+}
+
+/// Slider: barra con un valor en `[min, max]`. Al clickear/arrastrar, el host
+/// emite `on_value` con el valor nuevo según la posición.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct WireSlider {
+    pub value: f32,
+    pub min: f32,
+    pub max: f32,
+}
+
+/// Dropdown: lista de opciones con una seleccionada. El host pinta el header con
+/// la opción actual; al elegir otra, emite `on_select` con su índice.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct WireSelect {
+    pub options: Vec<String>,
+    pub selected: u32,
 }
 
 /// Nodo del árbol. Recursivo, igual que `View<Msg>`. Construir con el builder
@@ -147,12 +168,20 @@ pub struct WireNode {
     pub input: Option<WireInput>,
     /// Estado de un checkbox, si este nodo es uno.
     pub toggle: Option<bool>,
+    /// Slider, si este nodo es uno.
+    pub slider: Option<WireSlider>,
+    /// Dropdown, si este nodo es uno.
+    pub select: Option<WireSelect>,
     /// Handler de click (evento sin payload).
     pub on_click: Option<EventId>,
     /// Handler del texto tecleado en `input`.
     pub on_input: Option<EventId>,
     /// Handler del cambio de `toggle`.
     pub on_toggle: Option<EventId>,
+    /// Handler del valor de `slider`.
+    pub on_value: Option<EventId>,
+    /// Handler de la opción elegida en `select`.
+    pub on_select: Option<EventId>,
     pub children: Vec<WireNode>,
 }
 
@@ -271,6 +300,30 @@ impl WireNode {
     /// `EventId` del handler que recibe el nuevo estado del checkbox.
     pub fn on_toggle(mut self, id: EventId) -> Self {
         self.on_toggle = Some(id);
+        self
+    }
+
+    /// Marca el nodo como slider.
+    pub fn with_slider(mut self, slider: WireSlider) -> Self {
+        self.slider = Some(slider);
+        self
+    }
+
+    /// `EventId` del handler que recibe el valor nuevo del slider.
+    pub fn on_value(mut self, id: EventId) -> Self {
+        self.on_value = Some(id);
+        self
+    }
+
+    /// Marca el nodo como dropdown.
+    pub fn with_select(mut self, select: WireSelect) -> Self {
+        self.select = Some(select);
+        self
+    }
+
+    /// `EventId` del handler que recibe el índice elegido en el dropdown.
+    pub fn on_select(mut self, id: EventId) -> Self {
+        self.on_select = Some(id);
         self
     }
 

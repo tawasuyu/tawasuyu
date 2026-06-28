@@ -61,7 +61,7 @@ fn materializa_view_real() {
 
     // El WireNode se convierte en un View<RunnerMsg> Llimphi de verdad: si el
     // mapeo explota (estilos, colores, handlers), esto trap-ea.
-    let view: llimphi_ui::View<RunnerMsg> = wire_to_view(guest.view(), None);
+    let view: llimphi_ui::View<RunnerMsg> = wire_to_view(guest.view(), None, None);
 
     // Raíz: columna con relleno y dos hijos (número + fila de botones).
     assert_eq!(view.children.len(), 2);
