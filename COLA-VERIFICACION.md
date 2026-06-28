@@ -80,6 +80,11 @@ sólo cuando es un visual nuevo no certificable de otra forma.
 ## 11. shuma — gateway móvil + flota (≈20 commits)
 > `cargo run -p shuma-gateway` → navegador en `/term`
 - [ ] matilda: contra una flota SSH real
+- [ ] **`:predice` (2026-06-28):** legibilidad del listado en metal — comandos
+  probables (marca ◆ afinidad cwd) + secuencias/grupos + F-keys. Cubierto por
+  tests (`rank_command_predictions`), NO mirado a ojo. Render rápido:
+  `cargo run -p shuma-module-shell --example pantallazo_tee --release` cubre el
+  resto del paquete IA pero no el listado de `:predice` (ese está en el input).
 
 ## 12. Pase masivo "moderniza UI" (~35 apps, 06-26)
 - [~] **Smoke de arranque (2026-06-27): 30/30 apps GUI arrancan al event loop, cero panics.**
