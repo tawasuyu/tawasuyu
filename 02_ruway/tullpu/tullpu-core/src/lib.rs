@@ -346,6 +346,39 @@ pub enum ReglaRelleno {
     NoCero,
 }
 
+/// Un relleno de gradiente. Las paradas son `(offset 0..1, color RGBA8)`,
+/// ordenadas por offset. Coordenadas en px-imagen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Gradiente {
+    /// Gradiente lineal del punto `(x1, y1)` al `(x2, y2)`.
+    Lineal {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        paradas: Vec<(f32, [u8; 4])>,
+    },
+    /// Gradiente radial centrado en `(cx, cy)` con radio `r`.
+    Radial {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        paradas: Vec<(f32, [u8; 4])>,
+    },
+}
+
+impl Gradiente {
+    /// Gradiente lineal de dos colores a lo largo de `(x1,y1)→(x2,y2)`.
+    pub fn lineal(x1: f32, y1: f32, x2: f32, y2: f32, a: [u8; 4], b: [u8; 4]) -> Self {
+        Gradiente::Lineal { x1, y1, x2, y2, paradas: vec![(0.0, a), (1.0, b)] }
+    }
+
+    /// Gradiente radial de dos colores: `a` en el centro, `b` en el borde.
+    pub fn radial(cx: f32, cy: f32, r: f32, a: [u8; 4], b: [u8; 4]) -> Self {
+        Gradiente::Radial { cx, cy, r, paradas: vec![(0.0, a), (1.0, b)] }
+    }
+}
+
 /// Parámetros editables de una capa **vectorial**. Como en texto, el path se
 /// rasteriza a un buffer Rgba8 del tamaño del lienzo (que vive en
 /// `Capa::contenido`, como cualquier raster) — por eso el compositor trata la
@@ -356,8 +389,11 @@ pub enum ReglaRelleno {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParamsVector {
     pub comandos: Vec<ComandoPath>,
-    /// Color de relleno RGBA8; `None` = sin relleno.
+    /// Color de relleno RGBA8; `None` = sin relleno sólido.
     pub relleno: Option<[u8; 4]>,
+    /// Relleno de **gradiente**; tiene prioridad sobre `relleno` (sólido) cuando
+    /// es `Some`. `None` = sin gradiente.
+    pub gradiente: Option<Gradiente>,
     pub regla: ReglaRelleno,
     /// Color de trazo (contorno) RGBA8; `None` = sin trazo.
     pub trazo: Option<[u8; 4]>,
@@ -378,6 +414,7 @@ impl ParamsVector {
                 ComandoPath::Cerrar,
             ],
             relleno: Some(relleno),
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
@@ -400,6 +437,7 @@ impl ParamsVector {
                 ComandoPath::Cerrar,
             ],
             relleno: Some(relleno),
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
@@ -590,6 +628,7 @@ impl ParamsVector {
                 ComandoPath::LineaA { x: x2, y: y2 },
             ],
             relleno: None,
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: Some(color),
             ancho_trazo: ancho.max(0.5),
@@ -618,6 +657,7 @@ impl ParamsVector {
         Self {
             comandos,
             relleno: Some(relleno),
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
@@ -664,6 +704,7 @@ impl ParamsVector {
         Self {
             comandos,
             relleno: Some(relleno),
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
@@ -1212,6 +1253,7 @@ mod tests {
                 ComandoPath::CurvaA { c1x: 1.0, c1y: 2.0, c2x: 3.0, c2y: 4.0, x: 5.0, y: 6.0 },
             ],
             relleno: Some([0, 0, 0, 255]),
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
@@ -1230,6 +1272,7 @@ mod tests {
         let mut p = ParamsVector {
             comandos: vec![],
             relleno: Some([0, 0, 0, 255]),
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
@@ -1269,6 +1312,7 @@ mod tests {
                 ComandoPath::LineaA { x: 9.0, y: 0.0 },
             ],
             relleno: Some([0, 0, 0, 255]),
+            gradiente: None,
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,

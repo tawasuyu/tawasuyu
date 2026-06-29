@@ -498,15 +498,22 @@ pub fn rasterizar_vector(params: &tullpu_core::ParamsVector, w: u32, h: u32) -> 
     };
 
     if let Some(path) = construir_path(&params.comandos) {
-        // Relleno.
-        if let Some(c) = params.relleno {
+        let regla = match params.regla {
+            tullpu_core::ReglaRelleno::ParImpar => tiny_skia::FillRule::EvenOdd,
+            tullpu_core::ReglaRelleno::NoCero => tiny_skia::FillRule::Winding,
+        };
+        // Relleno: el gradiente (si lo hay) tiene prioridad sobre el sólido.
+        if let Some(grad) = &params.gradiente {
+            if let Some(shader) = shader_gradiente(grad) {
+                let mut paint = tiny_skia::Paint::default();
+                paint.shader = shader;
+                paint.anti_alias = true;
+                pixmap.fill_path(&path, &paint, regla, tiny_skia::Transform::identity(), None);
+            }
+        } else if let Some(c) = params.relleno {
             let mut paint = tiny_skia::Paint::default();
             paint.set_color(color_skia(c));
             paint.anti_alias = true;
-            let regla = match params.regla {
-                tullpu_core::ReglaRelleno::ParImpar => tiny_skia::FillRule::EvenOdd,
-                tullpu_core::ReglaRelleno::NoCero => tiny_skia::FillRule::Winding,
-            };
             pixmap.fill_path(&path, &paint, regla, tiny_skia::Transform::identity(), None);
         }
         // Trazo (contorno).
@@ -531,6 +538,35 @@ pub fn rasterizar_vector(params: &tullpu_core::ParamsVector, w: u32, h: u32) -> 
 
 fn color_skia(c: [u8; 4]) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba8(c[0], c[1], c[2], c[3])
+}
+
+/// Construye el shader tiny-skia de un [`tullpu_core::Gradiente`]. `None` si las
+/// paradas son degeneradas (tiny-skia exige ≥ 2 y radio > 0).
+fn shader_gradiente(g: &tullpu_core::Gradiente) -> Option<tiny_skia::Shader<'static>> {
+    use tullpu_core::Gradiente;
+    let stops = |paradas: &[(f32, [u8; 4])]| -> Vec<tiny_skia::GradientStop> {
+        paradas
+            .iter()
+            .map(|(o, c)| tiny_skia::GradientStop::new(*o, color_skia(*c)))
+            .collect()
+    };
+    match g {
+        Gradiente::Lineal { x1, y1, x2, y2, paradas } => tiny_skia::LinearGradient::new(
+            tiny_skia::Point::from_xy(*x1, *y1),
+            tiny_skia::Point::from_xy(*x2, *y2),
+            stops(paradas),
+            tiny_skia::SpreadMode::Pad,
+            tiny_skia::Transform::identity(),
+        ),
+        Gradiente::Radial { cx, cy, r, paradas } => tiny_skia::RadialGradient::new(
+            tiny_skia::Point::from_xy(*cx, *cy),
+            tiny_skia::Point::from_xy(*cx, *cy),
+            *r,
+            stops(paradas),
+            tiny_skia::SpreadMode::Pad,
+            tiny_skia::Transform::identity(),
+        ),
+    }
 }
 
 /// Traduce los comandos de tullpu a un `tiny_skia::Path`. `None` si el path
@@ -660,6 +696,20 @@ mod tests {
         let c = en(&buf, w, 5, 5);
         assert!(c[0] >= 254 && c[1] >= 254 && c[2] >= 254, "RGB debería ser ~255, fue {c:?}");
         assert!((c[3] as i32 - 128).abs() <= 1, "alfa ~128, fue {}", c[3]);
+    }
+
+    #[test]
+    fn gradiente_lineal_varia_de_un_color_al_otro() {
+        use tullpu_core::Gradiente;
+        let (w, h) = (32, 8);
+        let mut p = ParamsVector::rectangulo(0.0, 0.0, w as f32, h as f32, [0, 0, 0, 255]);
+        // Rojo en x=0 → azul en x=w.
+        p.gradiente = Some(Gradiente::lineal(0.0, 0.0, w as f32, 0.0, [255, 0, 0, 255], [0, 0, 255, 255]));
+        let buf = rasterizar_vector(&p, w, h);
+        let izq = en(&buf, w, 1, 4);
+        let der = en(&buf, w, w - 2, 4);
+        assert!(izq[0] > 200 && izq[2] < 60, "izquierda roja, fue {izq:?}");
+        assert!(der[2] > 200 && der[0] < 60, "derecha azul, fue {der:?}");
     }
 
     #[test]

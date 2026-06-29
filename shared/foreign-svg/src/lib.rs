@@ -137,6 +137,9 @@ fn path_a_vector(p: &usvg::Path) -> Option<ParamsVector> {
     Some(ParamsVector {
         comandos,
         relleno,
+        // El import aproxima gradientes a sólido (ver `promedio_stops`); no
+        // reconstruye la geometría del gradiente de usvg.
+        gradiente: None,
         regla,
         trazo,
         ancho_trazo,

@@ -1617,6 +1617,7 @@ pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32)
             let params = tullpu_core::ParamsVector {
                 comandos: Vec::new(),
                 relleno: Some(color),
+                gradiente: None,
                 regla: tullpu_core::ReglaRelleno::NoCero,
                 trazo: None,
                 ancho_trazo: 0.0,
