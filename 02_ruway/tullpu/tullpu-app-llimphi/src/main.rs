@@ -1004,6 +1004,45 @@ impl App for Tullpu {
                 pushear_snapshot(&mut model, None);
                 model.estado = "vector · elipse agregada".into();
             }
+            Msg::AgregarRectRedondeado => {
+                let (w, h) = (model.lienzo.width as f32, model.lienzo.height as f32);
+                let color = model.color_picked.unwrap_or([90, 180, 130, 255]);
+                let params = tullpu_core::ParamsVector::rect_redondeado(
+                    w * 0.25, h * 0.25, w * 0.5, h * 0.5, (w.min(h)) * 0.08, color,
+                );
+                agregar_capa_vector(&mut model, params, "rect redondeado");
+                pushear_snapshot(&mut model, None);
+                model.estado = "vector · rect redondeado".into();
+            }
+            Msg::AgregarEstrella => {
+                let (w, h) = (model.lienzo.width as f32, model.lienzo.height as f32);
+                let color = model.color_picked.unwrap_or([230, 200, 60, 255]);
+                let r = w.min(h) * 0.35;
+                let params = tullpu_core::ParamsVector::estrella(w * 0.5, h * 0.5, r, r * 0.42, 5, color);
+                agregar_capa_vector(&mut model, params, "estrella");
+                pushear_snapshot(&mut model, None);
+                model.estado = "vector · estrella".into();
+            }
+            Msg::AgregarPoligono => {
+                let (w, h) = (model.lienzo.width as f32, model.lienzo.height as f32);
+                let color = model.color_picked.unwrap_or([120, 150, 230, 255]);
+                let params = tullpu_core::ParamsVector::poligono_regular(
+                    w * 0.5, h * 0.5, w.min(h) * 0.35, 6, color,
+                );
+                agregar_capa_vector(&mut model, params, "hexágono");
+                pushear_snapshot(&mut model, None);
+                model.estado = "vector · hexágono".into();
+            }
+            Msg::AgregarLinea => {
+                let (w, h) = (model.lienzo.width as f32, model.lienzo.height as f32);
+                let color = model.color_picked.unwrap_or([20, 20, 20, 255]);
+                let params = tullpu_core::ParamsVector::linea(
+                    w * 0.2, h * 0.2, w * 0.8, h * 0.8, color, (w.min(h) * 0.01).max(2.0),
+                );
+                agregar_capa_vector(&mut model, params, "línea");
+                pushear_snapshot(&mut model, None);
+                model.estado = "vector · línea".into();
+            }
             Msg::PlumaPress { lx, ly, rw, rh } => {
                 if pluma_press(&mut model, lx, ly, rw, rh) {
                     pushear_snapshot(&mut model, None);
@@ -1022,6 +1061,35 @@ impl App for Tullpu {
                 pluma_cerrar(&mut model);
                 pushear_snapshot(&mut model, None);
                 model.estado = "pluma · path cerrado".into();
+            }
+            Msg::VectorRelleno => {
+                let color = model.color_picked.unwrap_or([60, 120, 220, 255]);
+                editar_vector_seleccionado(&mut model, |p| p.relleno = Some(color));
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorRellenoQuitar => {
+                editar_vector_seleccionado(&mut model, |p| p.relleno = None);
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorTrazo => {
+                let color = model.color_picked.unwrap_or([20, 20, 20, 255]);
+                editar_vector_seleccionado(&mut model, |p| {
+                    p.trazo = Some(color);
+                    if p.ancho_trazo < 1.0 {
+                        p.ancho_trazo = 2.0;
+                    }
+                });
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorTrazoQuitar => {
+                editar_vector_seleccionado(&mut model, |p| p.trazo = None);
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorAnchoTrazo(delta) => {
+                editar_vector_seleccionado(&mut model, |p| {
+                    p.ancho_trazo = (p.ancho_trazo + delta).clamp(0.0, 200.0);
+                });
+                pushear_snapshot(&mut model, None);
             }
             Msg::TextoTecla(ev) => {
                 let actualizar = if let Some((id, input)) = model.editando_texto.as_mut() {

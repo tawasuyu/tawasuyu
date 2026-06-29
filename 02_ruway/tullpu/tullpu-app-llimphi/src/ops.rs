@@ -1459,6 +1459,17 @@ pub(crate) fn editar_params_vector(
     }
 }
 
+/// Aplica `f` a los params vectoriales de la capa **seleccionada** y
+/// re-rasteriza. No-op si no hay selección o no es vectorial.
+pub(crate) fn editar_vector_seleccionado(
+    model: &mut Model,
+    f: impl FnOnce(&mut tullpu_core::ParamsVector),
+) {
+    if let Some(id) = model.seleccionada {
+        editar_params_vector(model, id, f);
+    }
+}
+
 /// Ancla de la capa vectorial `id` más cercana a `(ix, iy)` dentro de `umbral`
 /// px-imagen; `None` si ninguna. Devuelve el índice de comando del ancla.
 fn ancla_cercana(model: &Model, id: uuid::Uuid, ix: f32, iy: f32, umbral: f32) -> Option<usize> {

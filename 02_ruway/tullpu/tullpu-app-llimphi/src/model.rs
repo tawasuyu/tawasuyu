@@ -752,12 +752,30 @@ pub(crate) enum Msg {
     PlumaSoltar,
     /// Pluma: cierra el path en edición y termina (Enter).
     PlumaCerrar,
+    /// Vector: pone el relleno de la capa seleccionada al color activo.
+    VectorRelleno,
+    /// Vector: quita el relleno (`None`) de la capa seleccionada.
+    VectorRellenoQuitar,
+    /// Vector: pone el trazo de la capa seleccionada al color activo (ancho ≥ 1).
+    VectorTrazo,
+    /// Vector: quita el trazo de la capa seleccionada.
+    VectorTrazoQuitar,
+    /// Vector: ajusta el ancho de trazo de la capa seleccionada por el delta px.
+    VectorAnchoTrazo(f32),
     /// Inserta una capa vectorial: un rectángulo centrado en el lienzo, con el
     /// color activo. (Pen tool / edición de puntos = increment futuro.)
     AgregarRectangulo,
     /// Inserta una capa vectorial: una elipse centrada en el lienzo, con el
     /// color activo.
     AgregarElipse,
+    /// Inserta una capa vectorial: un rectángulo de esquinas redondeadas.
+    AgregarRectRedondeado,
+    /// Inserta una capa vectorial: una estrella de 5 puntas, color activo.
+    AgregarEstrella,
+    /// Inserta una capa vectorial: un hexágono regular, color activo.
+    AgregarPoligono,
+    /// Inserta una capa vectorial: una línea diagonal (sólo trazo), color activo.
+    AgregarLinea,
     /// Tecla durante la edición de una capa de texto: actualiza el string y
     /// re-rasteriza en vivo.
     TextoTecla(KeyEvent),

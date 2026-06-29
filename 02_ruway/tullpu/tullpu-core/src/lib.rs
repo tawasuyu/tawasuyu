@@ -518,6 +518,75 @@ impl ParamsVector {
         }
     }
 
+    /// Segmento recto de `(x1, y1)` a `(x2, y2)` — sólo trazo (sin relleno).
+    pub fn linea(x1: f32, y1: f32, x2: f32, y2: f32, color: [u8; 4], ancho: f32) -> Self {
+        Self {
+            comandos: vec![
+                ComandoPath::MoverA { x: x1, y: y1 },
+                ComandoPath::LineaA { x: x2, y: y2 },
+            ],
+            relleno: None,
+            regla: ReglaRelleno::NoCero,
+            trazo: Some(color),
+            ancho_trazo: ancho.max(0.5),
+        }
+    }
+
+    /// Rectángulo de esquinas redondeadas (radio `r`, clampeado a la mitad del
+    /// lado menor). Esquinas como cúbicas de Bézier (kappa de círculo).
+    pub fn rect_redondeado(x: f32, y: f32, w: f32, h: f32, r: f32, relleno: [u8; 4]) -> Self {
+        const K: f32 = 0.552_284_75;
+        let rr = r.min(w * 0.5).min(h * 0.5).max(0.0);
+        let o = rr * (1.0 - K); // offset de control desde la esquina
+        let (x0, y0, x1, y1) = (x, y, x + w, y + h);
+        let comandos = vec![
+            ComandoPath::MoverA { x: x0 + rr, y: y0 },
+            ComandoPath::LineaA { x: x1 - rr, y: y0 },
+            ComandoPath::CurvaA { c1x: x1 - o, c1y: y0, c2x: x1, c2y: y0 + o, x: x1, y: y0 + rr },
+            ComandoPath::LineaA { x: x1, y: y1 - rr },
+            ComandoPath::CurvaA { c1x: x1, c1y: y1 - o, c2x: x1 - o, c2y: y1, x: x1 - rr, y: y1 },
+            ComandoPath::LineaA { x: x0 + rr, y: y1 },
+            ComandoPath::CurvaA { c1x: x0 + o, c1y: y1, c2x: x0, c2y: y1 - o, x: x0, y: y1 - rr },
+            ComandoPath::LineaA { x: x0, y: y0 + rr },
+            ComandoPath::CurvaA { c1x: x0, c1y: y0 + o, c2x: x0 + o, c2y: y0, x: x0 + rr, y: y0 },
+            ComandoPath::Cerrar,
+        ];
+        Self {
+            comandos,
+            relleno: Some(relleno),
+            regla: ReglaRelleno::NoCero,
+            trazo: None,
+            ancho_trazo: 0.0,
+        }
+    }
+
+    /// Estrella de `puntas` vértices alternando radio externo/interno alrededor
+    /// de `(cx, cy)`. Arranca con una punta hacia arriba.
+    pub fn estrella(cx: f32, cy: f32, r_ext: f32, r_int: f32, puntas: u32, relleno: [u8; 4]) -> Self {
+        let n = puntas.max(2);
+        let paso = core::f32::consts::PI / n as f32;
+        let mut pts = Vec::with_capacity((2 * n) as usize);
+        for i in 0..(2 * n) {
+            let r = if i % 2 == 0 { r_ext } else { r_int };
+            let ang = -core::f32::consts::FRAC_PI_2 + i as f32 * paso;
+            pts.push((cx + r * ang.cos(), cy + r * ang.sin()));
+        }
+        Self::poligono(&pts, relleno)
+    }
+
+    /// Polígono regular de `lados` (≥ 3) inscrito en el círculo `(cx, cy, r)`,
+    /// con un vértice hacia arriba.
+    pub fn poligono_regular(cx: f32, cy: f32, r: f32, lados: u32, relleno: [u8; 4]) -> Self {
+        let n = lados.max(3);
+        let paso = core::f32::consts::TAU / n as f32;
+        let mut pts = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let ang = -core::f32::consts::FRAC_PI_2 + i as f32 * paso;
+            pts.push((cx + r * ang.cos(), cy + r * ang.sin()));
+        }
+        Self::poligono(&pts, relleno)
+    }
+
     /// Polígono cerrado por los vértices dados (≥ 2), relleno sólido, sin trazo.
     pub fn poligono(puntos: &[(f32, f32)], relleno: [u8; 4]) -> Self {
         let mut comandos = Vec::with_capacity(puntos.len() + 1);
@@ -1117,6 +1186,31 @@ mod tests {
         let mut p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
         p.trasladar(5.0, -3.0);
         assert_eq!(p.puntos_ancla()[0].1, [5.0, -3.0]);
+    }
+
+    #[test]
+    fn linea_es_solo_trazo() {
+        let p = ParamsVector::linea(0.0, 0.0, 10.0, 5.0, [1, 2, 3, 255], 2.0);
+        assert!(p.relleno.is_none());
+        assert_eq!(p.trazo, Some([1, 2, 3, 255]));
+        assert_eq!(p.puntos_ancla().len(), 2);
+    }
+
+    #[test]
+    fn rect_redondeado_tiene_4_lineas_4_curvas_y_cierra() {
+        let p = ParamsVector::rect_redondeado(0.0, 0.0, 20.0, 10.0, 3.0, [0, 0, 0, 255]);
+        let lineas = p.comandos.iter().filter(|c| matches!(c, ComandoPath::LineaA { .. })).count();
+        let curvas = p.comandos.iter().filter(|c| matches!(c, ComandoPath::CurvaA { .. })).count();
+        assert_eq!((lineas, curvas), (4, 4));
+        assert!(matches!(p.comandos.last(), Some(ComandoPath::Cerrar)));
+    }
+
+    #[test]
+    fn estrella_y_poligono_regular_cuentan_vertices() {
+        let e = ParamsVector::estrella(0.0, 0.0, 10.0, 4.0, 5, [0, 0, 0, 255]);
+        assert_eq!(e.puntos_ancla().len(), 10); // 2 * puntas
+        let h = ParamsVector::poligono_regular(0.0, 0.0, 10.0, 6, [0, 0, 0, 255]);
+        assert_eq!(h.puntos_ancla().len(), 6);
     }
 
     #[test]

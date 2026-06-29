@@ -1162,6 +1162,31 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         )));
     }
 
+    // "vector": relleno y trazo de la capa vectorial seleccionada. El color que
+    // aplica es el activo (cuentagotas / RELLENO_DEFAULT).
+    if let Some(params) = model
+        .seleccionada
+        .and_then(|id| model.lienzo.capa(id))
+        .and_then(|c| c.params_vector())
+    {
+        let pal = ButtonPalette::from_theme(theme);
+        let rel = match params.relleno {
+            Some(_) => "relleno: on · usar color activo",
+            None => "relleno: off · activar con color",
+        };
+        let trz = match params.trazo {
+            Some(_) => "trazo: on · usar color activo",
+            None => "trazo: off · activar con color",
+        };
+        hijos.push(subtitulo(&format!("vector · trazo {:.0} px", params.ancho_trazo)));
+        hijos.push(envolver_fila(button_view(rel.to_string(), &pal, Msg::VectorRelleno)));
+        hijos.push(envolver_fila(button_view("⨯ quitar relleno".to_string(), &pal, Msg::VectorRellenoQuitar)));
+        hijos.push(envolver_fila(button_view(trz.to_string(), &pal, Msg::VectorTrazo)));
+        hijos.push(envolver_fila(button_view("⨯ quitar trazo".to_string(), &pal, Msg::VectorTrazoQuitar)));
+        hijos.push(envolver_fila(button_view("trazo −1 px".to_string(), &pal, Msg::VectorAnchoTrazo(-1.0))));
+        hijos.push(envolver_fila(button_view("trazo +1 px".to_string(), &pal, Msg::VectorAnchoTrazo(1.0))));
+    }
+
     // "histograma": chart RGB del composite vigente. Sólo se renderiza
     // si hay imagen ya recompuesta (caso típico al arrancar la app).
     if model.histograma.is_some() {
@@ -1193,6 +1218,26 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         format!("⬭ elipse vectorial {}", etiqueta_color),
         &pal,
         Msg::AgregarElipse,
+    )));
+    hijos.push(envolver_fila(button_view(
+        "▢ rect redondeado".to_string(),
+        &pal,
+        Msg::AgregarRectRedondeado,
+    )));
+    hijos.push(envolver_fila(button_view(
+        "★ estrella (5)".to_string(),
+        &pal,
+        Msg::AgregarEstrella,
+    )));
+    hijos.push(envolver_fila(button_view(
+        "⬡ hexágono".to_string(),
+        &pal,
+        Msg::AgregarPoligono,
+    )));
+    hijos.push(envolver_fila(button_view(
+        "╱ línea (trazo)".to_string(),
+        &pal,
+        Msg::AgregarLinea,
     )));
     hijos.push(envolver_fila(button_view(
         format!(
