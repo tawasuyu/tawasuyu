@@ -257,6 +257,7 @@ members = [
     "02_ruway/llimphi/llimphi-wasm-dist",
     "02_ruway/llimphi/llimphi-wasm-open",
     "02_ruway/llimphi/llimphi-wasm-registry",
+    "02_ruway/llimphi/llimphi-wasm-wasi",
     "02_ruway/llimphi/llimphi-wasm-net",
     "02_ruway/llimphi/llimphi-wasm-demo-counter",
     "02_ruway/llimphi/llimphi-wasm-demo-form",
@@ -804,6 +805,7 @@ llimphi-wasm-core = { path = "02_ruway/llimphi/llimphi-wasm-core" }
 llimphi-wasm-dist = { path = "02_ruway/llimphi/llimphi-wasm-dist" }
 llimphi-wasm-open = { path = "02_ruway/llimphi/llimphi-wasm-open" }
 llimphi-wasm-registry = { path = "02_ruway/llimphi/llimphi-wasm-registry" }
+llimphi-wasm-wasi = { path = "02_ruway/llimphi/llimphi-wasm-wasi" }
 # Transporte P2P del bytecode por hash sobre BrahmanNet (card-net).
 llimphi-wasm-net = { path = "02_ruway/llimphi/llimphi-wasm-net" }
 llimphi-3d = { path = "02_ruway/llimphi/llimphi-3d" }

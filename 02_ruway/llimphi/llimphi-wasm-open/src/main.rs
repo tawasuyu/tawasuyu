@@ -158,15 +158,39 @@ fn main() -> ExitCode {
         resolver_spec(argv.into_iter())
     };
     match spec {
-        Ok(spec) => {
-            let _ = SPEC.set(spec);
-            llimphi_ui::run::<Host>();
-            ExitCode::SUCCESS
-        }
+        Ok(spec) => correr(spec),
         Err(e) => {
             eprintln!("llimphi-wasm-open: {e}");
             uso();
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Corre la app ya resuelta según su clase: una app Tier 3 (UI) abre una
+/// ventana Llimphi; un programa WASI de consola se ejecuta y vuelca su salida
+/// al terminal, propagando el código de salida. Así el catálogo no es trampa:
+/// el WASM de consola (el grueso del ecosistema) también corre.
+fn correr(spec: LaunchSpec) -> ExitCode {
+    use llimphi_wasm_wasi::{detect_kind, run_console, WasmKind};
+
+    match detect_kind(&spec.wasm) {
+        WasmKind::WasiConsole => match run_console(&spec.wasm, &[], &[], &[]) {
+            Ok(out) => {
+                print!("{}", out.stdout_text());
+                eprint!("{}", out.stderr_text());
+                ExitCode::from(out.exit_code.clamp(0, 255) as u8)
+            }
+            Err(e) => {
+                eprintln!("llimphi-wasm-open: WASI: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        // Tier 3 (o desconocido, que intentamos como UI): ventana Llimphi.
+        _ => {
+            let _ = SPEC.set(spec);
+            llimphi_ui::run::<Host>();
+            ExitCode::SUCCESS
         }
     }
 }
@@ -252,11 +276,15 @@ fn resolver_spec(args: impl Iterator<Item = String>) -> Result<LaunchSpec, Strin
 
             let app = llimphi_wasm_dist::resolve_manifest(&store, &trust, &manifest)
                 .map_err(|e| format!("resolver app: {e}"))?;
-            // Instanciamos una vez acá para fallar temprano con un mensaje claro
-            // (un guest que importe una capacidad no concedida trap-ea al
-            // instanciar); el `WasmGuest` no cruza de hilo, así que init lo
-            // recarga desde los bytes ya verificados.
-            app.load().map_err(|e| format!("instanciar app: {e}"))?;
+            // Para una app Tier 3 instanciamos una vez acá para fallar temprano
+            // con un mensaje claro (un guest que importe una capacidad no
+            // concedida trap-ea al instanciar); el `WasmGuest` no cruza de hilo,
+            // así que init lo recarga. Una app WASI no se instancia con el
+            // runner Tier 3 (otro ABI) — la valida/corre `correr()`.
+            if llimphi_wasm_wasi::detect_kind(&app.wasm) != llimphi_wasm_wasi::WasmKind::WasiConsole
+            {
+                app.load().map_err(|e| format!("instanciar app: {e}"))?;
+            }
             Ok(LaunchSpec {
                 wasm: app.wasm,
                 permisos: app.permisos,
@@ -882,6 +910,47 @@ mod tests {
             catalogo.to_str().unwrap(),
         ]))
         .is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn app_wasi_se_resuelve_y_se_detecta_como_consola() {
+        use llimphi_wasm_wasi::{detect_kind, run_console, WasmKind};
+
+        // Un módulo WASI mínimo (escribe "ok" y sale 0), compilado de WAT.
+        let wasm = wat::parse_str(
+            r#"(module
+              (import "wasi_snapshot_preview1" "fd_write"
+                (func $w (param i32 i32 i32 i32) (result i32)))
+              (import "wasi_snapshot_preview1" "proc_exit" (func $e (param i32)))
+              (memory (export "memory") 1)
+              (data (i32.const 8) "ok")
+              (func (export "_start")
+                (i32.store (i32.const 0) (i32.const 8))
+                (i32.store (i32.const 4) (i32.const 2))
+                (drop (call $w (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 20)))
+                (call $e (i32.const 0))))"#,
+        )
+        .unwrap();
+
+        // Entra al CAS y se resuelve por hash como cualquier app.
+        let dir = cas_temporal("wasi");
+        let store = DiskStore::open(&dir).unwrap();
+        let hash = store.put(&wasm).unwrap();
+        let spec = resolver_spec(args(&[
+            "--hash",
+            &hash_to_hex(&hash),
+            "--store",
+            dir.to_str().unwrap(),
+        ]))
+        .expect("resolver WASI por hash");
+
+        // El launcher la reconocería como consola (no UI) y la correría.
+        assert_eq!(detect_kind(&spec.wasm), WasmKind::WasiConsole);
+        let out = run_console(&spec.wasm, &[], &[], &[]).unwrap();
+        assert_eq!(out.stdout_text(), "ok");
+        assert_eq!(out.exit_code, 0);
 
         std::fs::remove_dir_all(&dir).ok();
     }

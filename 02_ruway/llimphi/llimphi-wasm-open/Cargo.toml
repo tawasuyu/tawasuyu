@@ -18,7 +18,13 @@ llimphi-wasm-dist = { workspace = true }
 llimphi-ui = { workspace = true }
 # Puente a registros remotos de apps (REST/RON) + ingesta al catálogo local.
 llimphi-wasm-registry = { workspace = true }
+# Ejecutor de apps WASI de consola (el WASM público que no es UI Tier 3).
+llimphi-wasm-wasi = { workspace = true }
 # Registro de apps: el modo --install escribe un manifiesto <id>.toml que el
 # dock/spotlight descubren (entry_to_toml + apps_dir, esquema compartido).
 app-bus = { workspace = true }
 format = { path = "../../../shared/format" }
+
+[dev-dependencies]
+# Para fabricar un módulo WASI mínimo en los tests sin el toolchain wasm32-wasi.
+wat = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "llimphi-wasm-wasi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-wasi — intérprete host de apps WASI de consola sobre wasmi. Un shim mínimo de wasi_snapshot_preview1 (fd_write/fd_read/args/environ/clock/random/proc_exit…) que instancia un módulo `_start`, captura su stdout/stderr y devuelve la salida + código de salida. Es lo que vuelve EJECUTABLE el grueso del WASM público (herramientas de línea de comandos), distinto de las apps Tier 3 (UI). detect_kind() distingue un módulo Tier 3 (exporta wasm_view) de uno WASI (exporta _start) — el launcher elige cómo correrlo."
+
+[dependencies]
+wasmi = { workspace = true }
+
+[dev-dependencies]
+# Fixtures WASI escritos en WAT y compilados en runtime — certifican el shim
+# sin depender del toolchain wasm32-wasi (igual criterio que el test de gateo
+# del runner).
+wat = { workspace = true }
