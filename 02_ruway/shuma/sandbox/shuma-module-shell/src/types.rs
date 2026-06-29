@@ -210,6 +210,23 @@ pub fn app_skin_for(program: &str) -> AppSkin {
     }
 }
 
+/// Una imagen de protocolo de terminal (kitty/sixel) ya decodificada a un
+/// `peniko::Image`, con su anclaje en celdas de la grilla. `cols`/`rows` son
+/// las celdas que el protocolo pidió (kitty `c=`/`r=`); `0` = derivar del
+/// tamaño en píxeles al pintar. Vive en [`TuiSession::images`] mientras el PTY
+/// corre y se hornea en [`State::block_images`] al cerrar el comando, para que
+/// sobreviva en el scrollback.
+#[derive(Clone)]
+pub struct TermImage {
+    pub image: llimphi_image::Image,
+    pub col: u16,
+    pub row: u16,
+    pub cols: u16,
+    pub rows: u16,
+    pub px_w: u32,
+    pub px_h: u32,
+}
+
 /// Sesión TUI sobre PTY — bufferea el parser vt100 y los dims actuales.
 pub struct TuiSession {
     pub parser: vt100::Parser,
@@ -219,6 +236,11 @@ pub struct TuiSession {
     pub program: String,
     /// Skin de render elegido al arrancar.
     pub skin: AppSkin,
+    /// Separa las secuencias gráficas (kitty/sixel) del texto/ANSI antes de
+    /// alimentar el vt100. Mantiene estado entre chunks (transmisión chunked).
+    pub scanner: llimphi_term_graphics::GraphicsScanner,
+    /// Imágenes vivas colocadas por el programa, en orden de aparición.
+    pub images: Vec<TermImage>,
 }
 
 impl TuiSession {
@@ -229,7 +251,46 @@ impl TuiSession {
             cols,
             program: program.to_string(),
             skin: app_skin_for(program),
+            scanner: llimphi_term_graphics::GraphicsScanner::new(),
+            images: Vec::new(),
         }
+    }
+
+    /// Procesa un bloque de bytes crudos del PTY: separa las secuencias
+    /// gráficas (las decodifica y las acumula en `images`) y alimenta el resto
+    /// al vt100. Devuelve las respuestas de query (kitty `a=q`) que el caller
+    /// debe escribir de vuelta por el stdin del PTY para anunciar soporte.
+    pub fn process_bytes(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+        use llimphi_term_graphics::GraphicsCommand;
+        let mut passthrough = Vec::with_capacity(bytes.len());
+        let cmds = self.scanner.feed(bytes, &mut passthrough);
+        let mut responses = Vec::new();
+        if !cmds.is_empty() {
+            // Anclamos al cursor *antes* de procesar el texto de este lote —
+            // las herramientas one-shot emiten la imagen al inicio de su salida.
+            let (row, col) = self.parser.screen().cursor_position();
+            for cmd in cmds {
+                match cmd {
+                    GraphicsCommand::Image { image, cols, rows, .. } => {
+                        let (px_w, px_h) = (image.width, image.height);
+                        let brush = llimphi_image::from_rgba8(image.rgba, px_w, px_h);
+                        self.images.push(TermImage {
+                            image: brush,
+                            col,
+                            row,
+                            cols,
+                            rows,
+                            px_w,
+                            px_h,
+                        });
+                    }
+                    GraphicsCommand::Delete { .. } => self.images.clear(),
+                    GraphicsCommand::Query { response } => responses.push(response),
+                }
+            }
+        }
+        self.parser.process(&passthrough);
+        responses
     }
 
     /// Cambia las dimensiones del buffer interno del parser. El resize
@@ -265,6 +326,9 @@ pub(crate) const PTY_COLS: u16 = 80;
 pub(crate) const TUI_ALLOWLIST: &[&str] = &[
     "vi", "vim", "nvim", "nano", "emacs", "helix", "hx", "htop", "btop", "top", "less", "more",
     "man", "claude", "tig", "tui", "watch",
+    // Visores de imágenes en terminal: necesitan PTY (ser un tty) para emitir
+    // kitty/sixel, que el scanner de `TuiSession::process_bytes` decodifica.
+    "chafa", "img2sixel", "viu", "timg", "catimg", "icat", "kitten", "tdf",
 ];
 
 /// Selección activa/última en el card de vim, en coordenadas locales px
@@ -594,6 +658,11 @@ pub struct State {
     /// que el header de la card sobreviva aunque la línea Prompt se recorte del
     /// buffer en un output gigante (`MAX_OUTPUT_LINES`).
     pub block_command: std::collections::HashMap<u64, String>,
+    /// Imágenes (kitty/sixel) horneadas por bloque al cerrar un comando PTY
+    /// (chafa/icat/img2sixel/…). Persisten en el scrollback: el render de la
+    /// superficie las emite como chrome bajo el cuerpo del bloque. Sólo en
+    /// memoria (una sesión restaurada no las recupera).
+    pub block_images: std::collections::HashMap<u64, Vec<TermImage>>,
     /// Instante (unix ms) de la última tecla en el input — ancla del
     /// parpadeo del caret: queda sólido un instante tras tipear y luego
     /// titila, para que se sienta vivo sin distraer.
@@ -876,6 +945,7 @@ impl State {
             block_started: std::collections::HashMap::new(),
             block_ended: std::collections::HashMap::new(),
             block_command: std::collections::HashMap::new(),
+            block_images: std::collections::HashMap::new(),
             input_edit_at_ms: now_unix_millis(),
             config,
             exit_rule_fired: false,
@@ -1056,5 +1126,45 @@ impl State {
     /// y lo sincroniza al `shuma-module-canvas` activo.
     pub fn intent_graph(&self) -> &SessionGraph {
         &self.intent_graph
+    }
+}
+
+#[cfg(test)]
+mod graphics_glue_tests {
+    use super::*;
+    use base64::Engine;
+
+    /// Una secuencia kitty RGBA que entra por `process_bytes` debe aparecer
+    /// como un `TermImage` en la sesión (decodificada a `peniko::Image`), y el
+    /// texto que la rodea debe llegar igual al vt100.
+    #[test]
+    fn process_bytes_acumula_imagen_kitty() {
+        let mut tui = TuiSession::new("chafa", 24, 80);
+        // 2×2 RGBA crudo (16 bytes), f=32, con celdas pedidas c=4,r=2.
+        let raw: Vec<u8> = (0..16).map(|i| i as u8 * 8).collect();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
+        let seq = format!("hola\x1b_Gf=32,s=2,v=2,c=4,r=2,a=T;{b64}\x1b\\chau");
+
+        let responses = tui.process_bytes(seq.as_bytes());
+        assert!(responses.is_empty(), "sin queries, sin respuestas");
+        assert_eq!(tui.images.len(), 1, "debió acumular una imagen");
+        let ti = &tui.images[0];
+        assert_eq!((ti.px_w, ti.px_h), (2, 2));
+        assert_eq!((ti.cols, ti.rows), (4, 2), "celdas pedidas por el protocolo");
+        // El texto «hola»/«chau» llegó al vt100 (la imagen no lo comió).
+        let dump = tui.parser.screen().contents();
+        assert!(dump.contains("hola") && dump.contains("chau"), "vt100: {dump:?}");
+    }
+
+    /// Una query de capacidad kitty produce una respuesta para escribir por
+    /// stdin (el handshake que hace que chafa elija kitty).
+    #[test]
+    fn process_bytes_responde_query() {
+        let mut tui = TuiSession::new("chafa", 24, 80);
+        let responses = tui.process_bytes(b"\x1b_Gi=7,a=q;AAAA\x1b\\");
+        assert_eq!(responses.len(), 1);
+        let s = String::from_utf8_lossy(&responses[0]);
+        assert!(s.contains("OK"), "respuesta de query: {s}");
+        assert!(tui.images.is_empty(), "una query no agrega imagen");
     }
 }

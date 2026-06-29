@@ -1,0 +1,15 @@
+[package]
+name = "llimphi-term-graphics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-term-graphics — decodificador agnóstico de protocolos de gráficos de terminal (kitty graphics protocol vía APC, y sixel vía DCS). Scanner streaming que deja pasar el texto/ANSI normal (para el emulador vt100) y extrae las secuencias gráficas completas, decodificándolas a RGBA8. Sin dependencias de UI — produce píxeles, el caller los sube a una textura/peniko::Image."
+
+[dependencies]
+base64 = { workspace = true }
+flate2 = { workspace = true }
+# Sólo PNG/JPEG/WEBP/etc. para el formato kitty f=100 (imagen embebida).
+# Sixel y RGBA/RGB crudos (f=24/32) se decodifican a mano, sin el crate.
+image = { workspace = true }

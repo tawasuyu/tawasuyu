@@ -39,6 +39,10 @@ llimphi-widget-scroll = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
 llimphi-widget-terminal = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+llimphi-image = { workspace = true }
+# Decodificador kitty/sixel: extrae las imágenes del stream del PTY antes de
+# que lleguen al vt100 (que las descartaría).
+llimphi-term-graphics = { workspace = true }
 vt100 = { workspace = true }
 arboard = { workspace = true }
 serde = { workspace = true }
@@ -50,3 +54,4 @@ similar = { workspace = true }
 png = { workspace = true }
 pollster = { workspace = true }
 tempfile = { workspace = true }
+base64 = { workspace = true }

@@ -338,6 +338,7 @@ members = [
     "02_ruway/llimphi/widgets/fitted-box",
     "02_ruway/llimphi/widgets/carousel",
     "02_ruway/llimphi/llimphi-image",
+    "02_ruway/llimphi/llimphi-term-graphics",
     "02_ruway/llimphi/widgets/rating",
     "02_ruway/llimphi/widgets/gauge",
     "02_ruway/llimphi/widgets/scaffold",
@@ -832,6 +833,8 @@ llimphi-svg = { path = "02_ruway/llimphi/llimphi-svg" }
 # Puente fino velato (Lottie) → Llimphi para animación vectorial autorada (.json).
 llimphi-lottie = { path = "02_ruway/llimphi/llimphi-lottie" }
 llimphi-image = { path = "02_ruway/llimphi/llimphi-image" }
+# Decodificador de protocolos de gráficos de terminal (kitty/sixel) → RGBA.
+llimphi-term-graphics = { path = "02_ruway/llimphi/llimphi-term-graphics" }
 # Widgets reusables sobre llimphi-ui — uno por crate.
 llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
 llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }

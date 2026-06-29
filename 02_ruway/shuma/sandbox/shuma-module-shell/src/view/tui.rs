@@ -26,6 +26,9 @@ pub(crate) struct TuiSnapshot {
     pub(crate) cursor_r: u16,
     pub(crate) cursor_c: u16,
     pub(crate) hide_cursor: bool,
+    /// Imágenes (kitty/sixel) vivas, ancladas a su celda. Las pinta el painter
+    /// por encima del grid de texto.
+    pub(crate) images: Vec<crate::types::TermImage>,
 }
 
 #[derive(Clone)]
@@ -69,6 +72,7 @@ pub(crate) fn capture_tui(active: &std::sync::MutexGuard<'_, ActiveRun>) -> Opti
         cursor_r,
         cursor_c,
         hide_cursor: screen.hide_cursor(),
+        images: tui.images.clone(),
     })
 }
 
@@ -226,6 +230,27 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
                 c = end;
             }
         }
+        }
+        // Imágenes (kitty/sixel) ancladas a su celda, por encima del texto.
+        // Las pinta el path vello en ambos modos (GPU y no-GPU).
+        for pi in &snap.images {
+            let iw = pi.px_w.max(1) as f64;
+            let ih = pi.px_h.max(1) as f64;
+            let (tw, th) = if pi.cols > 0 && pi.rows > 0 {
+                (pi.cols as f64 * cell_w, pi.rows as f64 * cell_h)
+            } else {
+                // Sin celdas pedidas: encajamos los píxeles en el área libre a
+                // la derecha/abajo del ancla, sin agrandar más allá del 1:1.
+                let maxw = (avail_w - pi.col as f64 * cell_w).max(cell_w);
+                let maxh = (avail_h - pi.row as f64 * cell_h).max(cell_h);
+                let scale = (maxw / iw).min(maxh / ih).min(1.0).max(0.000_1);
+                (iw * scale, ih * scale)
+            };
+            let x0 = origin_x + pi.col as f64 * cell_w;
+            let y0 = origin_y + pi.row as f64 * cell_h;
+            let xf = vello::kurbo::Affine::translate((x0, y0))
+                * vello::kurbo::Affine::scale_non_uniform(tw / iw, th / ih);
+            scene.draw_image(&pi.image, xf);
         }
         // Cursor: barra vertical en (cursor_r, cursor_c). Lo sigue dibujando
         // el path vello en ambos modos — el `CellPipeline` no lo emite.

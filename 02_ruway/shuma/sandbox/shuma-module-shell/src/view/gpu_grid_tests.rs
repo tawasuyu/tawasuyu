@@ -22,6 +22,7 @@ fn snap_of(cells: &[&[(char, vt100::Color, vt100::Color)]]) -> TuiSnapshot {
         cursor_r: 0,
         cursor_c: 0,
         hide_cursor: true,
+        images: Vec::new(),
     }
 }
 

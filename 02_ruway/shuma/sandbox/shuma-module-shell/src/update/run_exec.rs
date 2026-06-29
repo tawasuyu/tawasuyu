@@ -573,8 +573,17 @@ pub(crate) fn drain_run(mut s: State) -> State {
                 ),
                 RunEvent::Bytes(bytes) => {
                     s.current_run_bytes = s.current_run_bytes.saturating_add(bytes.len() as u64);
-                    if let Some(tui) = guard.tui.as_mut() {
-                        tui.parser.process(&bytes);
+                    // Separa las secuencias gráficas (kitty/sixel) del texto y
+                    // alimenta el resto al vt100. Las respuestas de query se
+                    // escriben de vuelta por stdin para anunciar soporte (el
+                    // borrow de `tui` se cierra antes de tocar `handle`).
+                    let responses = if let Some(tui) = guard.tui.as_mut() {
+                        tui.process_bytes(&bytes)
+                    } else {
+                        Vec::new()
+                    };
+                    for resp in responses {
+                        guard.handle.write_input(resp);
                     }
                 }
                 ev @ (RunEvent::Exited(_) | RunEvent::Failed(_)) => {
@@ -584,6 +593,21 @@ pub(crate) fn drain_run(mut s: State) -> State {
         }
     }
     if let Some(ev) = finished_with {
+        // Horneá las imágenes (kitty/sixel) que el PTY dejó en la sesión al
+        // scrollback del bloque, para que sobrevivan al cierre del comando
+        // (los visores one-shot salen en un frame y el panel TUI desaparece).
+        {
+            let mut guard = match active_arc.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            if let Some(tui) = guard.tui.as_mut() {
+                if !tui.images.is_empty() {
+                    let imgs = std::mem::take(&mut tui.images);
+                    s.block_images.entry(run_block).or_default().extend(imgs);
+                }
+            }
+        }
         let ok = matches!(ev, RunEvent::Exited(0));
         let notice = match ev {
             RunEvent::Exited(0) => "✔ exit 0".to_string(),

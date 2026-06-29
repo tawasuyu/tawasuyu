@@ -29,6 +29,59 @@ const SECTION_TABLE_ROW_H: f32 = 20.0;
 /// según ese orden) — útil para tablas muy gordas tipo `ls -lR /usr`.
 pub(crate) const SECTION_TABLE_MAX_ROWS: usize = 200;
 
+/// Padding inferior (px) bajo una imagen horneada en el scrollback.
+const IMAGE_PAD: f32 = 6.0;
+
+/// Tamaño en px (ancho, alto-con-padding) de una imagen horneada (kitty/sixel)
+/// dadas las métricas de la superficie. Si el protocolo pidió celdas
+/// (`cols`/`rows`) se respetan; si no, se encaja el tamaño en píxeles a un
+/// ancho máximo razonable preservando el aspecto.
+fn baked_image_size(
+    img: &crate::types::TermImage,
+    m: llimphi_widget_terminal::TermMetrics,
+) -> (f32, f32) {
+    let cw = m.char_width.max(1.0);
+    let ch = m.line_height.max(1.0);
+    let target_w = if img.cols > 0 {
+        img.cols as f32 * cw
+    } else {
+        (img.px_w as f32).min(72.0 * cw)
+    };
+    let target_h = if img.rows > 0 {
+        img.rows as f32 * ch
+    } else {
+        let aspect = img.px_h as f32 / img.px_w.max(1) as f32;
+        target_w * aspect
+    };
+    (target_w, target_h + IMAGE_PAD)
+}
+
+/// Chrome de una imagen horneada: un nodo del ancho del card con la imagen
+/// alineada a la izquierda, encajada (`Contain`) en su caja `w`×`h`.
+fn baked_image_view<Msg: Clone + 'static>(
+    img: &crate::types::TermImage,
+    w: f32,
+    h: f32,
+) -> View<Msg> {
+    let inner = View::new(Style {
+        size: Size {
+            width: length(w),
+            height: length((h - IMAGE_PAD).max(1.0)),
+        },
+        ..Default::default()
+    })
+    .image(img.image.clone())
+    .image_fit(llimphi_ui::ImageFit::Contain);
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(h),
+        },
+        ..Default::default()
+    })
+    .children(vec![inner])
+}
+
 /// Alto total de una tabla con `n_rows` filas (capeado por SECTION_TABLE_MAX_ROWS,
 /// +1 fila para el mensaje "+N filas …" cuando aplica).
 pub(crate) fn section_table_height(n_rows: usize) -> f32 {
@@ -1019,6 +1072,18 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                         store.push_line(line);
                     }
                     items.push(Item::lines(start, store.len()));
+                }
+            }
+
+            // Imágenes (kitty/sixel) horneadas del PTY (chafa/icat/img2sixel…):
+            // una por chrome bajo el cuerpo. Persisten en el scrollback tras
+            // cerrar el comando, como cualquier otra salida.
+            if !collapsed {
+                if let Some(imgs) = state.block_images.get(id) {
+                    for img in imgs {
+                        let (w, h) = baked_image_size(img, metrics);
+                        items.push(Item::chrome(h, baked_image_view::<HostMsg>(img, w, h)));
+                    }
                 }
             }
 
