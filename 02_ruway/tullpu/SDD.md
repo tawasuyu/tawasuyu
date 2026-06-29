@@ -84,9 +84,17 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
   forma: `ParamsVector::{rectangulo, elipse, poligono}`. La app inserta
   rectángulo/elipse desde el panel "entrada" con el color activo
   (`agregar_capa_vector`). Tests en `tullpu-ops` (relleno dentro/fuera, elipse,
-  alfa recta, composición sobre fondo). **Falta (increment 2):** pen tool /
-  edición interactiva de puntos de control, re-rasterizado en vivo, trazo
-  configurable en UI.
+  alfa recta, composición sobre fondo).
+  - **SVG por puente `shared/foreign-svg`** (regla 4, como `foreign-psd`):
+    `importar_svg` (usvg aplana a paths absolutos con paint resuelto → un
+    `ParamsVector` por path; cuádricas elevadas a cúbicas; gradientes/patrones/
+    texto se omiten) y `exportar_svg` (escrito a mano: un `<path>` por capa con
+    `d`/`fill`/`fill-rule`/`stroke`). Round-trip `exportar→importar` preserva
+    geometría y paint (tests). La app: abrir `.svg` (`cargar_arg`) lo importa como
+    capas vectoriales rasterizadas; menú Archivo → "Exportar SVG (vectores)"
+    vuelca las capas vectoriales del lienzo.
+  - **Falta (increment 2):** pen tool / edición interactiva de puntos de control,
+    re-rasterizado en vivo, trazo configurable en UI.
 - **Pendiente:** H IA real ONNX (segment-anything / upscale / restyle).
 
 ## Estado (2026-05-31)

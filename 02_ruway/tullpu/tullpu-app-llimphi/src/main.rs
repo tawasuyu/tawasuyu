@@ -1257,6 +1257,39 @@ impl App for Tullpu {
                     }
                 }
             }
+            Msg::ExportarSvg => {
+                // Junta las capas vectoriales en orden visual (fondo→frente).
+                let vectores: Vec<tullpu_core::ParamsVector> = model
+                    .lienzo
+                    .capas
+                    .iter()
+                    .filter_map(|c| c.params_vector().cloned())
+                    .collect();
+                let id = model.next_toast;
+                model.next_toast += 1;
+                if vectores.is_empty() {
+                    model.estado = "export SVG: no hay capas vectoriales".into();
+                    push_toast(&mut model, handle, Toast::error(id, "SVG: no hay capas vectoriales", TOAST_TTL));
+                } else {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let ruta = std::path::PathBuf::from(format!("tullpu-export-{ts}.svg"));
+                    let svg = foreign_svg::exportar_svg(&vectores, model.lienzo.width, model.lienzo.height);
+                    match std::fs::write(&ruta, svg) {
+                        Ok(_) => {
+                            let n = vectores.len();
+                            model.estado = format!("exportado → {} ({n} vectores)", ruta.display());
+                            push_toast(&mut model, handle, Toast::success(id, format!("💾 SVG → {} ({n} vectores)", ruta.display()), TOAST_TTL));
+                        }
+                        Err(e) => {
+                            model.estado = format!("export SVG falló: {e}");
+                            push_toast(&mut model, handle, Toast::error(id, format!("export SVG falló: {e}"), TOAST_TTL));
+                        }
+                    }
+                }
+            }
             Msg::MenuOpen(idx) => {
                 model.menu_open = idx;
                 model.menu_active = usize::MAX;
@@ -1709,7 +1742,8 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(MenuItem::new("Exportar PNG", "file.png").shortcut("Ctrl+S").separated())
                 .item(MenuItem::new("Exportar JPEG", "file.jpeg"))
                 .item(MenuItem::new("Exportar WebP", "file.webp").shortcut("Ctrl+Shift+S"))
-                .item(MenuItem::new("Exportar PSD (capas)", "file.psd")),
+                .item(MenuItem::new("Exportar PSD (capas)", "file.psd"))
+                .item(MenuItem::new("Exportar SVG (vectores)", "file.svg")),
         )
         .menu(
             Menu::new("Editar")
@@ -1765,6 +1799,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "file.jpeg" => Some(Msg::Exportar(tullpu_render::FormatoExport::Jpeg { calidad: 90 })),
         "file.webp" => Some(Msg::Exportar(tullpu_render::FormatoExport::Webp)),
         "file.psd" => Some(Msg::ExportarPsd),
+        "file.svg" => Some(Msg::ExportarSvg),
         "edit.undo" => Some(Msg::Undo),
         "edit.redo" => Some(Msg::Redo),
         "edit.duplicar" => sel.map(Msg::Duplicar),

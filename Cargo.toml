@@ -566,6 +566,7 @@ members = [
     "shared/foreign-fs",
     "shared/foreign-lottie",
     "shared/foreign-psd",
+    "shared/foreign-svg",
     "shared/foreign-xlsx",
     "shared/foreign-platform",
     "shared/foreign-vox",

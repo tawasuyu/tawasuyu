@@ -117,8 +117,35 @@ pub(crate) fn cargar_arg(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMem
         .map(str::to_lowercase);
     match ext.as_deref() {
         Some("psd") => cargar_psd(path),
+        Some("svg") => cargar_svg(path),
         _ => cargar_png_como_capa(path),
     }
+}
+
+/// `.svg` → import a capas vectoriales nativas (vía `foreign-svg`). Cada path
+/// del SVG se rasteriza al tamaño del lienzo y se cuelga como `Capa::vector`,
+/// conservando sus params (re-editables). El lienzo toma el tamaño que declara
+/// el SVG.
+pub(crate) fn cargar_svg(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMemoria, Uuid, String)> {
+    let bytes = std::fs::read(path).ok()?;
+    let imp = match foreign_svg::importar_svg(&bytes) {
+        Ok(imp) => imp,
+        Err(e) => {
+            eprintln!("tullpu: error importando '{}': {e}", path.display());
+            return None;
+        }
+    };
+    let (w, h) = (imp.width.max(1), imp.height.max(1));
+    let mut almacen = AlmacenEnMemoria::nuevo();
+    let mut lienzo = Lienzo::nuevo(w, h);
+    let n = imp.capas.len();
+    for (i, params) in imp.capas.into_iter().enumerate() {
+        let buffer = tullpu_ops::rasterizar_vector(&params, w, h);
+        let hash = almacen.insertar(buffer);
+        lienzo.apilar(Capa::vector(format!("path {}", i + 1), hash, params));
+    }
+    let id = lienzo.capas.first()?.id;
+    Some((lienzo, almacen, id, format!("svg · {n} paths · {w}×{h}")))
 }
 
 pub(crate) fn cargar_png_como_capa(

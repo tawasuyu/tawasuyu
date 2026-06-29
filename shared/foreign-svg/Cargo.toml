@@ -1,0 +1,24 @@
+# =============================================================================
+#  tawasuyu :: foreign-svg — puente SVG ↔ capas vectoriales de tullpu
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
+#  nunca al núcleo. IMPORTA un `.svg` (usvg lo aplana a paths absolutos con
+#  paint resuelto) a `Vec<tullpu_core::ParamsVector>` — una capa vectorial por
+#  path. EXPORTA una capa vectorial de tullpu a un documento SVG (escrito a mano:
+#  un `<path>` por capa). Lo fancy (gradientes, patrones, texto, imágenes) se
+#  ingiere como se puede o se omite; tullpu trabaja siempre en su modelo nativo.
+# =============================================================================
+
+[package]
+name = "foreign-svg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tullpu/foreign-svg — importa `.svg` como capas vectoriales nativas (ParamsVector) y exporta capas vectoriales a SVG."
+
+[dependencies]
+tullpu-core = { path = "../../02_ruway/tullpu/tullpu-core" }
+usvg = "0.46"
+thiserror = { workspace = true }

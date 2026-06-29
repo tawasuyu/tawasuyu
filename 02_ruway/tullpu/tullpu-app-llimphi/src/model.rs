@@ -536,6 +536,9 @@ pub(crate) enum Msg {
     /// Exporta el lienzo como `.psd` multi-capa (vía `foreign-psd`) a CWD con
     /// timestamp. Conserva capas, blend, opacidad, visibilidad y nombre.
     ExportarPsd,
+    /// Exporta las capas **vectoriales** del lienzo como `.svg` (vía
+    /// `foreign-svg`) a CWD con timestamp. Las capas no-vectoriales se omiten.
+    ExportarSvg,
     Picker(PickerMsg),
     FileDrop(PathBuf),
     IniciarRenombrar(Uuid),

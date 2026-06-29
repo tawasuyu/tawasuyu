@@ -22,6 +22,7 @@ pixel-verbo-core = { path = "../pixel-verbo-core" }
 pixel-verbo-mock = { path = "../pixel-verbo-mock" }
 pixel-verbo-daemon = { path = "../pixel-verbo-daemon" }
 foreign-psd = { path = "../../../shared/foreign-psd" }
+foreign-svg = { path = "../../../shared/foreign-svg" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
