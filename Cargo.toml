@@ -576,6 +576,7 @@ members = [
     "shared/forth-emisor",
     "shared/launcher-core",
     "shared/launcher-llimphi",
+    "shared/pacha/pacha-core",
     "shared/rimay-localize",
     "shared/sandokan/sandokan-core",
     "shared/sandokan/sandokan-lifecycle",

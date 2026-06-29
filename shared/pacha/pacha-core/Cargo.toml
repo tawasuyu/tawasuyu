@@ -1,0 +1,13 @@
+[package]
+name = "pacha-core"
+description = "Contextos de usuario (pacha): modelo puro de un 'modo de uso' con nombre — manifiesto, estado runtime y la máquina de transición que decide qué efectos emitir al cambiar de contexto. Sin IO de side-effects ni UI: agnóstico de mirada/sandokan/wawa-config, igual que mirada-brain::fus o sandokan-lifecycle."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+ron = { workspace = true }
+thiserror = { workspace = true }
