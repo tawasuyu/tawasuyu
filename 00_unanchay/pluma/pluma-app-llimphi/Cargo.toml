@@ -42,6 +42,7 @@ pluma-llm-core = { path = "../pluma-llm-core" }
 # verbo-daemon (fallback léxico si el socket no está).
 rimay-verbo-core = { path = "../../rimay/rimay-verbo-core" }
 rimay-verbo-daemon = { path = "../../rimay/rimay-verbo-daemon" }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 llimphi-ui = { workspace = true }
 # Rail hospedado: pluma puede prestar sus secciones (Documentos/LLM/Buscar/Diff)
 # al rail de pata y colapsar sus columnas (PLUMA_DELEGATE_SIDEBAR).

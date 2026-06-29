@@ -113,11 +113,12 @@ impl Modo {
         }
     }
 
-    pub(crate) fn etiqueta(self) -> &'static str {
+    pub(crate) fn etiqueta(self) -> String {
+        use rimay_localize::t;
         match self {
-            Modo::Lienzos => "Lienzos",
-            Modo::Presentar => "Presentar",
-            Modo::Plano => "Plano",
+            Modo::Lienzos => t("pluma-app-canvases"),
+            Modo::Presentar => t("pluma-app-present"),
+            Modo::Plano => t("pluma-app-flat"),
         }
     }
 }
@@ -134,11 +135,12 @@ pub enum ObjetivoEstilo {
 }
 
 impl ObjetivoEstilo {
-    pub(crate) fn etiqueta(self) -> &'static str {
+    pub(crate) fn etiqueta(self) -> String {
+        use rimay_localize::t;
         match self {
-            ObjetivoEstilo::Lienzo => "Lienzo",
-            ObjetivoEstilo::Zona(_) => "Zona",
-            ObjetivoEstilo::Seleccion => "Selección",
+            ObjetivoEstilo::Lienzo => t("pluma-app-canvas"),
+            ObjetivoEstilo::Zona(_) => t("pluma-app-zone"),
+            ObjetivoEstilo::Seleccion => t("pluma-app-selection"),
         }
     }
 }
@@ -167,24 +169,27 @@ pub enum WizardTipo {
 }
 
 impl WizardTipo {
-    pub(crate) fn etiqueta(self) -> &'static str {
+    pub(crate) fn etiqueta(self) -> String {
+        use rimay_localize::t;
         match self {
-            WizardTipo::Traducir => "Traducir",
-            WizardTipo::Tono => "Tono",
-            WizardTipo::Resumir => "Resumir",
-            WizardTipo::Reescribir => "Reescribir",
-            WizardTipo::Custom => "Rhai",
+            WizardTipo::Traducir => t("pluma-app-wt-translate"),
+            WizardTipo::Tono => t("pluma-app-wt-tone"),
+            WizardTipo::Resumir => t("pluma-app-wt-summarize"),
+            WizardTipo::Reescribir => t("pluma-app-wt-rewrite"),
+            // "Rhai" es nombre propio del lenguaje — no se traduce.
+            WizardTipo::Custom => "Rhai".to_string(),
         }
     }
 
     /// Placeholder del campo de parámetro según el tipo.
-    pub(crate) fn placeholder(self) -> &'static str {
+    pub(crate) fn placeholder(self) -> String {
+        use rimay_localize::t;
         match self {
-            WizardTipo::Traducir => "lengua destino (qu, en, fr…)",
-            WizardTipo::Tono => "etiqueta de tono (formal, infantil…)",
-            WizardTipo::Resumir => "palabras objetivo (ej. 30) — vacío = libre",
-            WizardTipo::Reescribir => "prompt de reescritura…",
-            WizardTipo::Custom => "script Rhai: usá `texto`, ej. texto.to_upper()",
+            WizardTipo::Traducir => t("pluma-app-wt-ph-translate"),
+            WizardTipo::Tono => t("pluma-app-wt-ph-tone"),
+            WizardTipo::Resumir => t("pluma-app-wt-ph-summarize"),
+            WizardTipo::Reescribir => t("pluma-app-wt-ph-rewrite"),
+            WizardTipo::Custom => t("pluma-app-wt-ph-rhai"),
         }
     }
 }
@@ -220,12 +225,13 @@ pub enum ProyectoTab {
 }
 
 impl ProyectoTab {
-    pub(crate) fn etiqueta(self) -> &'static str {
+    pub(crate) fn etiqueta(self) -> String {
+        use rimay_localize::t;
         match self {
-            ProyectoTab::Historia => "Historia",
-            ProyectoTab::Lienzos => "Lienzos",
-            ProyectoTab::Modelo => "Modelo",
-            ProyectoTab::Grafo => "Grafo",
+            ProyectoTab::Historia => t("pluma-app-history"),
+            ProyectoTab::Lienzos => t("pluma-app-canvases"),
+            ProyectoTab::Modelo => t("pluma-app-model"),
+            ProyectoTab::Grafo => t("pluma-app-graph"),
         }
     }
 }

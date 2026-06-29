@@ -36,35 +36,46 @@ pub(crate) fn etiqueta_backend(k: BackendKind) -> &'static str {
     }
 }
 
+/// Etiqueta legible de la intención de un cuerpo (sólo para mostrar — derivada
+/// del enum, nunca persistida ni comparada como string).
 pub(crate) fn etiqueta_intencion(i: &Intencion) -> String {
+    use rimay_localize::{t, t_args};
     match i {
-        Intencion::Original => "original".into(),
-        Intencion::Traduccion => "traducción".into(),
-        Intencion::Tono { etiqueta } => format!("tono {etiqueta}"),
+        Intencion::Original => t("pluma-app-intent-original"),
+        Intencion::Traduccion => t("pluma-app-intent-translation"),
+        Intencion::Tono { etiqueta } => {
+            t_args("pluma-app-intent-tone", &[("t", etiqueta.clone().into())])
+        }
         Intencion::Resumen {
             palabras_objetivo: Some(n),
-        } => format!("resumen ≈{n}p"),
+        } => t_args("pluma-app-summary-n", &[("n", n.to_string().into())]),
         Intencion::Resumen {
             palabras_objetivo: None,
-        } => "resumen".into(),
-        Intencion::Reescritura { .. } => "reescritura".into(),
-        Intencion::Anotacion => "anotación".into(),
+        } => t("pluma-app-intent-summary"),
+        Intencion::Reescritura { .. } => t("pluma-app-intent-rewrite"),
+        Intencion::Anotacion => t("pluma-app-intent-annotation"),
         Intencion::Custom { kind } => kind.clone(),
     }
 }
 
+/// Etiqueta legible del tipo de transformación (sólo para mostrar).
 pub(crate) fn etiqueta_tipo(t: &TipoTransformacion) -> String {
+    use rimay_localize::{t as tr, t_args};
     match t {
-        TipoTransformacion::Identidad => "identidad".into(),
-        TipoTransformacion::Traducir { lengua_destino } => format!("traducir → {lengua_destino}"),
-        TipoTransformacion::Tono { etiqueta } => format!("tono {etiqueta}"),
+        TipoTransformacion::Identidad => tr("pluma-app-type-identity"),
+        TipoTransformacion::Traducir { lengua_destino } => {
+            t_args("pluma-app-type-translate", &[("l", lengua_destino.clone().into())])
+        }
+        TipoTransformacion::Tono { etiqueta } => {
+            t_args("pluma-app-intent-tone", &[("t", etiqueta.clone().into())])
+        }
         TipoTransformacion::Resumir {
             palabras_objetivo: Some(n),
-        } => format!("resumir ≈{n}p"),
+        } => t_args("pluma-app-summarize-n", &[("n", n.to_string().into())]),
         TipoTransformacion::Resumir {
             palabras_objetivo: None,
-        } => "resumir".into(),
-        TipoTransformacion::Reescribir { .. } => "reescribir".into(),
+        } => tr("pluma-app-type-summarize"),
+        TipoTransformacion::Reescribir { .. } => tr("pluma-app-type-rewrite"),
         TipoTransformacion::Custom { kind, .. } => kind.clone(),
     }
 }

@@ -63,6 +63,7 @@ use pluma_estilo::EstiloTexto;
 use pluma_proyecto::hash_corto;
 use crate::update::{contar_stale_del_activo, menu_principal};
 use crate::util::{etiqueta_backend, etiqueta_intencion, etiqueta_tipo, recortar};
+use rimay_localize::{t, t_args};
 
 /// Tamaño de ventana del init — usado como viewport para clampear los
 /// dropdowns del menú (la app no trackea el tamaño real hoy).
@@ -443,7 +444,7 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
         .iter()
         .find(|c| c.id == id)
         .map(|c| c.metadatos.nombre_legible.clone())
-        .unwrap_or_else(|| "(lienzo)".to_string());
+        .unwrap_or_else(|| t("pluma-app-canvas-fallback"));
     let objetivo = model.objetivo_estilo;
     let efectivo = efectivo_objetivo(model, id);
 
@@ -453,8 +454,10 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
         ObjetivoEstilo::Zona(_) => 1,
         ObjetivoEstilo::Seleccion => 2,
     };
+    let (lbl_lienzo, lbl_zona, lbl_sel) =
+        (t("pluma-app-canvas"), t("pluma-app-zone"), t("pluma-app-selection"));
     let seg_obj = segmented_view::<Msg, _>(
-        &["Lienzo", "Zona", "Selección"],
+        &[lbl_lienzo.as_str(), lbl_zona.as_str(), lbl_sel.as_str()],
         obj_idx,
         |i| {
             Msg::SetObjetivoEstilo(match i {
@@ -467,18 +470,21 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
     );
 
     let mut hijos: Vec<View<Msg>> = vec![
-        encabezado(&format!("estilo · {}", recortar(&nombre, 22)), theme),
+        encabezado(
+            &t_args("pluma-app-style-header", &[("n", recortar(&nombre, 22).into())]),
+            theme,
+        ),
         seg_obj,
     ];
     if matches!(objetivo, ObjetivoEstilo::Seleccion) {
-        hijos.push(pista_texto("seleccioná texto en el editor y aplicá", theme));
+        hijos.push(pista_texto(&t("pluma-app-style-sel-hint"), theme));
     }
 
     // Sub-selector de zona cuando el objetivo es Zona.
     if let ObjetivoEstilo::Zona(z_sel) = objetivo {
         let n = ide_de(model, id).map(|i| i.n_zonas()).unwrap_or(0);
         if n == 0 {
-            hijos.push(pista_texto("este lienzo no tiene zonas", theme));
+            hijos.push(pista_texto(&t("pluma-app-style-no-zones"), theme));
         } else {
             let mut botones: Vec<View<Msg>> = Vec::new();
             for z in 0..n.min(8) {
@@ -506,16 +512,18 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
     hijos.push(divider(theme));
 
     // Fuente (combo).
-    hijos.push(encabezado("fuente", theme));
+    hijos.push(encabezado(&t("pluma-app-font"), theme));
+    let fam_inherit = t("pluma-app-font-inherit");
     let fam_label = efectivo
         .font_family
         .as_deref()
         .and_then(|v| FUENTES.iter().find(|(_, css)| *css == v).map(|(l, _)| *l))
-        .unwrap_or("(heredar)");
+        .unwrap_or(fam_inherit.as_str());
+    let fam_ph = t("pluma-app-font-ph");
     let fam_item = SelectItem::new(fam_label.to_string());
     hijos.push(select_trigger_view::<Msg>(
         Some(&fam_item),
-        "fuente…",
+        &fam_ph,
         model.estilo_expand == Some(EstiloExpand::Fuente),
         None,
         &SelectPalette::from_theme(theme),
@@ -540,15 +548,16 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
     }
 
     // Tamaño (combo).
-    hijos.push(encabezado("tamaño", theme));
+    hijos.push(encabezado(&t("pluma-app-size"), theme));
     let size_label = efectivo
         .size_px
         .map(|s| format!("{}", s as i32))
-        .unwrap_or_else(|| "(auto)".to_string());
+        .unwrap_or_else(|| t("pluma-app-size-auto"));
+    let size_ph = t("pluma-app-size-ph");
     let size_item = SelectItem::new(size_label);
     hijos.push(select_trigger_view::<Msg>(
         Some(&size_item),
-        "tamaño…",
+        &size_ph,
         model.estilo_expand == Some(EstiloExpand::Tamano),
         None,
         &SelectPalette::from_theme(theme),
@@ -574,10 +583,11 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
     hijos.push(divider(theme));
 
     // Formato: peso (segmented) + switches itálica/subrayado/tachado.
-    hijos.push(encabezado("formato", theme));
+    hijos.push(encabezado(&t("pluma-app-format"), theme));
     let peso_idx = if efectivo.weight == Some(700.0) { 1 } else { 0 };
+    let (lbl_normal, lbl_bold) = (t("pluma-app-fmt-normal"), t("pluma-app-fmt-bold"));
     hijos.push(segmented_view::<Msg, _>(
-        &["Normal", "Negrita"],
+        &[lbl_normal.as_str(), lbl_bold.as_str()],
         peso_idx,
         |i| Msg::AplicarEstilo(EstiloTexto {
             weight: Some(if i == 1 { 700.0 } else { 400.0 }),
@@ -586,23 +596,23 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
         &SegmentedPalette::from_theme(theme),
     ));
     let sw_pal = SwitchPalette::from_theme(theme);
-    hijos.push(fila_switch("Itálica", efectivo.italic.unwrap_or(false), &sw_pal, theme, |v| {
+    hijos.push(fila_switch(&t("pluma-app-fmt-italic"), efectivo.italic.unwrap_or(false), &sw_pal, theme, |v| {
         Msg::AplicarEstilo(EstiloTexto { italic: Some(v), ..Default::default() })
     }));
-    hijos.push(fila_switch("Subrayado", efectivo.underline.unwrap_or(false), &sw_pal, theme, |v| {
+    hijos.push(fila_switch(&t("pluma-app-fmt-underline"), efectivo.underline.unwrap_or(false), &sw_pal, theme, |v| {
         Msg::AplicarEstilo(EstiloTexto { underline: Some(v), ..Default::default() })
     }));
-    hijos.push(fila_switch("Tachado", efectivo.strikethrough.unwrap_or(false), &sw_pal, theme, |v| {
+    hijos.push(fila_switch(&t("pluma-app-fmt-strike"), efectivo.strikethrough.unwrap_or(false), &sw_pal, theme, |v| {
         Msg::AplicarEstilo(EstiloTexto { strikethrough: Some(v), ..Default::default() })
     }));
 
     hijos.push(divider(theme));
 
     // Color de texto: swatches + "más colores" (color-picker).
-    hijos.push(encabezado("color de texto", theme));
+    hijos.push(encabezado(&t("pluma-app-color-text"), theme));
     hijos.push(fila_swatches(false));
     hijos.push(button_view::<Msg>(
-        "más colores…",
+        t("pluma-app-more-colors"),
         &palette_btn,
         Msg::ToggleEstiloExpand(EstiloExpand::ColorFg),
     ));
@@ -618,10 +628,10 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
     }
 
     // Resaltado (fondo).
-    hijos.push(encabezado("resaltado", theme));
+    hijos.push(encabezado(&t("pluma-app-highlight"), theme));
     hijos.push(fila_swatches(true));
     hijos.push(button_view::<Msg>(
-        "más colores…",
+        t("pluma-app-more-colors"),
         &palette_btn,
         Msg::ToggleEstiloExpand(EstiloExpand::ColorBg),
     ));
@@ -638,11 +648,14 @@ fn panel_estilo(model: &Model, id: Uuid, theme: &Theme) -> View<Msg> {
 
     hijos.push(divider(theme));
     hijos.push(fila_botones(vec![
-        button_view::<Msg>("quitar formato", &palette_btn, Msg::EstiloReset),
-        button_view::<Msg>("cerrar", &palette_btn, Msg::CerrarPanelEstilo),
+        button_view::<Msg>(t("pluma-app-clear-format"), &palette_btn, Msg::EstiloReset),
+        button_view::<Msg>(t("pluma-app-close-lc"), &palette_btn, Msg::CerrarPanelEstilo),
     ]));
 
-    let header = encabezado(&format!("· {} ·", objetivo.etiqueta()), theme);
+    let header = encabezado(
+        &t_args("pluma-app-style-obj-header", &[("obj", objetivo.etiqueta().into())]),
+        theme,
+    );
     let cuerpo = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -764,7 +777,7 @@ fn barra_status(model: &Model, theme: &Theme) -> View<Msg> {
         .activo
         .and_then(|id| model.cuerpos.iter().find(|c| c.id == id))
         .map(|c| c.metadatos.nombre_legible.clone())
-        .unwrap_or_else(|| "(sin doc)".to_string());
+        .unwrap_or_else(|| t("pluma-app-no-doc-short"));
     let n_sel = model.seleccionados.len();
     let backend = etiqueta_backend(BACKENDS[model.backend_idx]);
     let estado = if model.en_curso {
@@ -774,10 +787,16 @@ fn barra_status(model: &Model, theme: &Theme) -> View<Msg> {
     } else {
         "·"
     };
-    let texto = format!(
-        "pluma · [{}] · {nombre} · {n_sel} lienzo(s) · backend {backend} · {estado} {}  (Ctrl+M cambia modo)",
-        model.modo.etiqueta(),
-        model.ultimo_status
+    let texto = t_args(
+        "pluma-app-statusbar",
+        &[
+            ("modo", model.modo.etiqueta().into()),
+            ("nombre", nombre.into()),
+            ("n", n_sel.to_string().into()),
+            ("backend", backend.to_string().into()),
+            ("estado", estado.to_string().into()),
+            ("st", model.ultimo_status.clone().into()),
+        ],
     );
     View::new(Style {
         size: Size {
@@ -812,7 +831,7 @@ fn panel_diente(model: &Model, theme: &Theme) -> View<Msg> {
         }
     }
     let interior = panel_archivo(model, theme);
-    let header = encabezado("Archivo · proyectos", theme);
+    let header = encabezado(&t("pluma-app-file-header"), theme);
 
     // El rail ya no se monta sobre el panel (vive en el centro), así que el
     // panel usa padding normal.
@@ -863,31 +882,35 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
     let palette_btn = ButtonPalette::from_theme(theme);
     let palette_input = TextInputPalette::from_theme(theme);
 
-    let nuevo_proy = button_view::<Msg>("+  nuevo proyecto", &palette_btn, Msg::NuevoProyecto);
+    let nuevo_proy = button_view::<Msg>(t("pluma-app-new-project"), &palette_btn, Msg::NuevoProyecto);
 
+    let path_ph = t("pluma-app-path-ph");
     let input = text_input_view::<Msg>(
         &model.path_input,
-        "ruta .pluma (Esc sale)",
+        &path_ph,
         model.path_focused,
         &palette_input,
         Msg::FocusPath,
     );
     let acciones_ruta = fila_botones(vec![
-        button_view::<Msg>("abrir .pluma", &palette_btn, Msg::AbrirProyecto),
-        button_view::<Msg>("guardar como…", &palette_btn, Msg::GuardarProyectoComo),
+        button_view::<Msg>(t("pluma-app-open-pluma"), &palette_btn, Msg::AbrirProyecto),
+        button_view::<Msg>(t("pluma-app-save-as"), &palette_btn, Msg::GuardarProyectoComo),
     ]);
 
     let mut hijos: Vec<View<Msg>> = vec![
         nuevo_proy,
         divider(theme),
-        encabezado("abrir / guardar proyecto", theme),
+        encabezado(&t("pluma-app-open-save-project"), theme),
         input,
         acciones_ruta,
     ];
 
     // Proyectos abiertos (con ✕ para cerrar y aviso si no tiene ruta).
     hijos.push(divider(theme));
-    hijos.push(encabezado(&format!("abiertos ({})", model.proyectos.len()), theme));
+    hijos.push(encabezado(
+        &t_args("pluma-app-open-count", &[("n", model.proyectos.len().to_string().into())]),
+        theme,
+    ));
     for (i, pa) in model.proyectos.iter().enumerate() {
         let activo = i == model.proyecto_activo;
         let sin_ruta = pa.ruta.is_none();
@@ -895,7 +918,7 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
             "{}  {}{}",
             if activo { "●" } else { "○" },
             recortar(&pa.proyecto.nombre, 20),
-            if sin_ruta { "  (sin guardar)" } else { "" }
+            if sin_ruta { format!("  {}", t("pluma-app-unsaved")) } else { String::new() }
         );
         let nombre_view = View::new(Style {
             size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
@@ -930,7 +953,7 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
     // Recientes.
     if !model.proyectos_recientes.is_empty() {
         hijos.push(divider(theme));
-        hijos.push(encabezado("recientes", theme));
+        hijos.push(encabezado(&t("pluma-app-recent"), theme));
         for ruta in model.proyectos_recientes.iter().rev().take(8) {
             let nombre = ruta
                 .file_name()
@@ -942,19 +965,19 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
 
     // Operaciones de archivo del documento activo (import/export ajenos).
     hijos.push(divider(theme));
-    hijos.push(encabezado("documento activo", theme));
-    hijos.push(button_view::<Msg>("+ nuevo documento", &palette_btn, Msg::NuevoDocProyecto));
+    hijos.push(encabezado(&t("pluma-app-active-doc"), theme));
+    hijos.push(button_view::<Msg>(t("pluma-app-new-doc"), &palette_btn, Msg::NuevoDocProyecto));
     hijos.push(fila_botones(vec![
-        button_view::<Msg>("importar md/docx", &palette_btn, Msg::AbrirArchivo),
-        button_view::<Msg>("exportar", &palette_btn, Msg::ExportarMd),
+        button_view::<Msg>(t("pluma-app-import"), &palette_btn, Msg::AbrirArchivo),
+        button_view::<Msg>(t("pluma-app-export"), &palette_btn, Msg::ExportarMd),
     ]));
     hijos.push(button_view::<Msg>(
-        "⇄ cotejar dos documentos…",
+        t("pluma-app-compare-two"),
         &palette_btn,
         Msg::AbrirDialogoCotejo,
     ));
     hijos.push(pista_texto(
-        "dos archivos del disco, o (rutas vacías) los dos seleccionados: verde = igual, rojo = difiere",
+        &t("pluma-app-compare-hint"),
         theme,
     ));
 
@@ -967,7 +990,11 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
 fn panel_proyecto(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
     let palette_btn = ButtonPalette::from_theme(theme);
     let pa = &model.proyectos[idx];
-    let rama = pa.proyecto.rama_actual().unwrap_or("(detached)").to_string();
+    let rama = pa
+        .proyecto
+        .rama_actual()
+        .map(str::to_string)
+        .unwrap_or_else(|| t("pluma-app-detached"));
 
     // Título del proyecto con ✎ para renombrarlo.
     let titulo = View::new(Style {
@@ -983,7 +1010,14 @@ fn panel_proyecto(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
             ..Default::default()
         })
         .text_aligned(
-            format!("{}  ·  rama {}", recortar(&pa.proyecto.nombre, 14), rama).to_uppercase(),
+            t_args(
+                "pluma-app-proj-branch",
+                &[
+                    ("nombre", recortar(&pa.proyecto.nombre, 14).into()),
+                    ("rama", rama.clone().into()),
+                ],
+            )
+            .to_uppercase(),
             10.0,
             theme.fg_muted,
             Alignment::Start,
@@ -996,11 +1030,14 @@ fn panel_proyecto(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
         .text_aligned("✎".to_string(), 11.0, theme.fg_muted, Alignment::Center)
         .on_click(Msg::AbrirRenombrar(crate::model::RenombrarObjetivo::Proyecto)),
     ]);
-    let push_btn = button_view::<Msg>("push  ·  sellar versión  (Ctrl+K)", &palette_btn, Msg::AbrirPush);
+    let push_btn = button_view::<Msg>(t("pluma-app-push-seal"), &palette_btn, Msg::AbrirPush);
 
     // Selector de documento del proyecto: [nombre] [✎ renombrar] [✕ eliminar].
     let docs = pa.proyecto.documentos();
-    let mut filas_doc: Vec<View<Msg>> = vec![encabezado(&format!("documentos ({})", docs.len()), theme)];
+    let mut filas_doc: Vec<View<Msg>> = vec![encabezado(
+        &t_args("pluma-app-docs-count", &[("n", docs.len().to_string().into())]),
+        theme,
+    )];
     for (doc_id, nombre) in &docs {
         let activo = *doc_id == pa.doc_activo;
         let id = *doc_id;
@@ -1120,8 +1157,8 @@ fn ramas_acciones(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
     let pa = &model.proyectos[idx];
     let actual = pa.proyecto.rama_actual().unwrap_or("");
     let mut hijos: Vec<View<Msg>> = vec![
-        button_view::<Msg>("+ rama", &palette_btn, Msg::NuevaRama),
-        button_view::<Msg>("compactar", &palette_btn, Msg::CompactarProyecto),
+        button_view::<Msg>(t("pluma-app-new-branch"), &palette_btn, Msg::NuevaRama),
+        button_view::<Msg>(t("pluma-app-compact"), &palette_btn, Msg::CompactarProyecto),
     ];
     for (nombre, _) in pa.proyecto.ramas() {
         if nombre == actual {
@@ -1129,12 +1166,12 @@ fn ramas_acciones(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
         }
         // Cambiar a la rama (texto) + mergearla (botón ⤵).
         hijos.push(button_view::<Msg>(
-            &format!("ir {}", recortar(&nombre, 8)),
+            t_args("pluma-app-go-branch", &[("rama", recortar(&nombre, 8).into())]),
             &palette_btn,
             Msg::CambiarRama(nombre.clone()),
         ));
         hijos.push(button_view::<Msg>(
-            &format!("merge {}", recortar(&nombre, 8)),
+            t_args("pluma-app-merge-branch", &[("rama", recortar(&nombre, 8).into())]),
             &palette_btn,
             Msg::MergeRama(nombre.clone()),
         ));
@@ -1177,7 +1214,7 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
     let mut commits = pa.proyecto.historia(); // (Hash, Commit), padres primero
     commits.reverse(); // más reciente arriba
     if commits.is_empty() {
-        return pista_texto("sin versiones — hacé un push (Ctrl+K) para sellar la primera", theme);
+        return pista_texto(&t("pluma-app-no-versions"), theme);
     }
     const ROW: f32 = 44.0;
     const LANE_W: f32 = 15.0;
@@ -1374,8 +1411,8 @@ fn grafo_historico(model: &Model, idx: usize, theme: &Theme) -> View<Msg> {
         capas.push(preview_diff(model, idx, h, theme));
         let palette_btn = ButtonPalette::from_theme(theme);
         capas.push(fila_botones(vec![
-            button_view::<Msg>("restaurar esta versión", &palette_btn, Msg::RestaurarCommit(h)),
-            button_view::<Msg>("cerrar", &palette_btn, Msg::CerrarPreview),
+            button_view::<Msg>(t("pluma-app-restore-version"), &palette_btn, Msg::RestaurarCommit(h)),
+            button_view::<Msg>(t("pluma-app-close-lc"), &palette_btn, Msg::CerrarPreview),
         ]));
     }
 
@@ -1394,7 +1431,7 @@ fn preview_diff(model: &Model, idx: usize, h: pluma_proyecto::Hash, theme: &Them
     let pa = &model.proyectos[idx];
     let commit = match pa.proyecto.commit(&h) {
         Ok(c) => c,
-        Err(_) => return pista_texto("commit no encontrado", theme),
+        Err(_) => return pista_texto(&t("pluma-app-commit-not-found"), theme),
     };
     let mut hijos: Vec<View<Msg>> = vec![
         View::new(Style {
@@ -1402,13 +1439,25 @@ fn preview_diff(model: &Model, idx: usize, h: pluma_proyecto::Hash, theme: &Them
             ..Default::default()
         })
         .text_aligned(
-            format!("versión {} · {}", hash_corto(&h), recortar(&commit.mensaje, 28)),
+            t_args(
+                "pluma-app-version-line",
+                &[
+                    ("hash", hash_corto(&h).into()),
+                    ("msg", recortar(&commit.mensaje, 28).into()),
+                ],
+            ),
             12.0,
             theme.fg_text,
             Alignment::Start,
         ),
         pista_texto(
-            &format!("autor {} · {} padre(s)", commit.autor, commit.padres.len()),
+            &t_args(
+                "pluma-app-author-parents",
+                &[
+                    ("autor", commit.autor.clone().into()),
+                    ("n", commit.padres.len().to_string().into()),
+                ],
+            ),
             theme,
         ),
     ];
@@ -1421,9 +1470,9 @@ fn preview_diff(model: &Model, idx: usize, h: pluma_proyecto::Hash, theme: &Them
             let ambar = Color::from_rgba8(238, 178, 53, 255);
             for dd in &diff.docs {
                 let marca = match dd.doc_clase {
-                    Some(pluma_proyecto::ClaseDiff::Agregado) => "＋ doc",
-                    Some(pluma_proyecto::ClaseDiff::Eliminado) => "− doc",
-                    _ => "doc",
+                    Some(pluma_proyecto::ClaseDiff::Agregado) => t("pluma-app-diff-doc-add"),
+                    Some(pluma_proyecto::ClaseDiff::Eliminado) => t("pluma-app-diff-doc-del"),
+                    _ => t("pluma-app-diff-doc"),
                 };
                 hijos.push(pista_texto(&format!("{} {}", marca, recortar(&dd.nombre, 22)), theme));
                 for a in dd.atomos.iter().take(12) {
@@ -1448,12 +1497,15 @@ fn preview_diff(model: &Model, idx: usize, h: pluma_proyecto::Hash, theme: &Them
                     );
                 }
                 if dd.atomos.len() > 12 {
-                    hijos.push(pista_texto(&format!("  … +{} más", dd.atomos.len() - 12), theme));
+                    hijos.push(pista_texto(
+                        &format!("  {}", t_args("pluma-app-more-n", &[("n", (dd.atomos.len() - 12).to_string().into())])),
+                        theme,
+                    ));
                 }
             }
         }
-        Ok(_) => hijos.push(pista_texto("sin cambios respecto del padre", theme)),
-        Err(_) => hijos.push(pista_texto("no se pudo calcular el diff", theme)),
+        Ok(_) => hijos.push(pista_texto(&t("pluma-app-no-changes-parent"), theme)),
+        Err(_) => hijos.push(pista_texto(&t("pluma-app-diff-failed"), theme)),
     }
 
     View::new(Style {
@@ -1526,7 +1578,7 @@ fn panel_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "click abre · cuadrito suma · arrastrá el grip para reordenar".to_string(),
+        t("pluma-app-tree-hint"),
         9.5,
         theme.fg_muted,
         Alignment::Start,
@@ -1751,31 +1803,32 @@ fn wizard_body(model: &Model, theme: &Theme) -> View<Msg> {
     ]);
 
     // 3) Parámetro (significado según el tipo) — reusa preset_input.
+    let preset_ph = w.tipo.placeholder();
     let input = text_input_view::<Msg>(
         &model.preset_input,
-        w.tipo.placeholder(),
+        &preset_ph,
         model.preset_focused,
         &palette_input,
         Msg::FocusPreset,
     );
 
     let mut hijos: Vec<View<Msg>> = vec![
-        encabezado("sobre qué lienzo", theme),
+        encabezado(&t("pluma-app-wizard-on-canvas"), theme),
         lista_madre,
         divider(theme),
-        encabezado("qué transformación", theme),
+        encabezado(&t("pluma-app-wizard-which-transform"), theme),
         fila_tipo,
         input,
     ];
 
     // Presets reutilizables (sobre todo para Reescribir): guardar + usar.
     hijos.push(fila_botones(vec![button_view::<Msg>(
-        "+ guardar prompt como preset",
+        t("pluma-app-save-prompt-preset"),
         &palette_btn,
         Msg::GuardarPreset,
     )]));
     if !model.presets.is_empty() {
-        hijos.push(encabezado("presets", theme));
+        hijos.push(encabezado(&t("pluma-app-presets"), theme));
         for (i, preset) in model.presets.iter().enumerate() {
             hijos.push(fila_preset(i, preset, theme));
         }
@@ -1871,28 +1924,31 @@ fn panel_modelo(model: &Model, theme: &Theme) -> View<Msg> {
     };
     let pal_backend = &palette_btn_activo;
 
-    let etiqueta_back = format!("backend: {}  »", etiqueta_backend(BACKENDS[model.backend_idx]));
-    let cycler = button_view::<Msg>(&etiqueta_back, pal_backend, Msg::CicloBackend);
+    let etiqueta_back = t_args(
+        "pluma-app-backend",
+        &[("backend", etiqueta_backend(BACKENDS[model.backend_idx]).to_string().into())],
+    );
+    let cycler = button_view::<Msg>(etiqueta_back, pal_backend, Msg::CicloBackend);
 
     let etiqueta_solo = if model.solo_activo {
-        "ver: sólo activo  (Ctrl+D)"
+        t("pluma-app-view-only-active")
     } else {
-        "ver: todos  (Ctrl+D)"
+        t("pluma-app-view-all")
     };
     let solo_btn = button_view::<Msg>(etiqueta_solo, pal_backend, Msg::DiffToggle);
 
-    let mk = |label: &str, m: Msg| button_view::<Msg>(label, pal, m);
+    let mk = |label: String, m: Msg| button_view::<Msg>(label, pal, m);
     let botones: Vec<View<Msg>> = vec![
-        mk("traducir  »  qu", Msg::PedirTraducir("qu".into())),
-        mk("traducir  »  en", Msg::PedirTraducir("en".into())),
-        mk("tono formal", Msg::PedirTono("formal".into())),
-        mk("resumir 30p", Msg::PedirResumir(Some(30))),
+        mk(t_args("pluma-app-translate-to", &[("lang", "qu".into())]), Msg::PedirTraducir("qu".into())),
+        mk(t_args("pluma-app-translate-to", &[("lang", "en".into())]), Msg::PedirTraducir("en".into())),
+        mk(t_args("pluma-app-intent-tone", &[("t", "formal".into())]), Msg::PedirTono("formal".into())),
+        mk(t("pluma-app-summarize-30p"), Msg::PedirResumir(Some(30))),
     ];
 
     let n_stale = contar_stale_del_activo(model);
-    let label_regen = format!("regenerar stale ({n_stale})");
-    let tocar_btn = button_view::<Msg>("tocar madre", pal, Msg::TocarMadre);
-    let regen_btn = button_view::<Msg>(&label_regen, pal, Msg::RegenerarStale);
+    let label_regen = t_args("pluma-app-regen-stale", &[("n", n_stale.to_string().into())]);
+    let tocar_btn = button_view::<Msg>(t("pluma-app-touch-mother"), pal, Msg::TocarMadre);
+    let regen_btn = button_view::<Msg>(label_regen, pal, Msg::RegenerarStale);
 
     let mut hijos: Vec<View<Msg>> = vec![cycler, solo_btn, divider(theme)];
     hijos.extend(botones);
@@ -1912,7 +1968,10 @@ fn seccion_hijas(model: &Model, theme: &Theme) -> View<Msg> {
         .filter(|c| c.metadatos.intencion.es_derivada() && c.metadatos.derivado_de == activo)
         .collect();
 
-    let mut filas: Vec<View<Msg>> = vec![encabezado(&format!("hijas ({})", hijas.len()), theme)];
+    let mut filas: Vec<View<Msg>> = vec![encabezado(
+        &t_args("pluma-app-children-count", &[("n", hijas.len().to_string().into())]),
+        theme,
+    )];
     for h in &hijas {
         // El idx para el drag es la posición real en el orden maestro.
         let idx = model
@@ -1954,8 +2013,10 @@ fn seccion_historial(model: &Model, theme: &Theme) -> View<Msg> {
         .collect();
     filtradas.sort_by(|a, b| b.creada_en.cmp(&a.creada_en));
 
-    let mut filas: Vec<View<Msg>> =
-        vec![encabezado(&format!("historial ({})", filtradas.len()), theme)];
+    let mut filas: Vec<View<Msg>> = vec![encabezado(
+        &t_args("pluma-app-history-count", &[("n", filtradas.len().to_string().into())]),
+        theme,
+    )];
     for t in &filtradas {
         let madre = cuerpo_de(t.madre)
             .map(|c| c.metadatos.nombre_legible.as_str())
@@ -2004,12 +2065,12 @@ fn seccion_historial(model: &Model, theme: &Theme) -> View<Msg> {
 /// Rótulo corto de un filtro, para el título del nodo y los botones.
 pub(crate) fn etiqueta_filtro(f: &Filtro) -> String {
     match f {
-        Filtro::Traducir(l) => format!("traducir → {l}"),
-        Filtro::Tono(e) => format!("tono: {e}"),
-        Filtro::Resumir(Some(n)) => format!("resumir ≈{n}p"),
-        Filtro::Resumir(None) => "resumir".to_string(),
-        Filtro::Concepto(t) if t.is_empty() => "concepto".to_string(),
-        Filtro::Concepto(t) => format!("concepto: {t}"),
+        Filtro::Traducir(l) => t_args("pluma-app-type-translate", &[("l", l.clone().into())]),
+        Filtro::Tono(e) => t_args("pluma-app-filter-tone", &[("e", e.clone().into())]),
+        Filtro::Resumir(Some(n)) => t_args("pluma-app-summarize-n", &[("n", n.to_string().into())]),
+        Filtro::Resumir(None) => t("pluma-app-type-summarize"),
+        Filtro::Concepto(term) if term.is_empty() => t("pluma-app-filter-concept"),
+        Filtro::Concepto(term) => t_args("pluma-app-filter-concept-t", &[("t", term.clone().into())]),
     }
 }
 
@@ -2036,16 +2097,18 @@ fn panel_grafo(model: &Model, theme: &Theme) -> View<Msg> {
     };
 
     let fila_add = fila(vec![
+        // "+ →qu"/"+ →en": el "+ →" + código de lengua (dato) no lleva prosa traducible.
         button_view::<Msg>("+ →qu", &palette_btn, Msg::GrafoAdd(Filtro::Traducir("qu".into()))),
         button_view::<Msg>("+ →en", &palette_btn, Msg::GrafoAdd(Filtro::Traducir("en".into()))),
-        button_view::<Msg>("+ tono", &palette_btn, Msg::GrafoAdd(Filtro::Tono("formal".into()))),
-        button_view::<Msg>("+ resumir", &palette_btn, Msg::GrafoAdd(Filtro::Resumir(Some(30)))),
+        button_view::<Msg>(t("pluma-app-graph-add-tone"), &palette_btn, Msg::GrafoAdd(Filtro::Tono("formal".into()))),
+        button_view::<Msg>(t("pluma-app-graph-add-summarize"), &palette_btn, Msg::GrafoAdd(Filtro::Resumir(Some(30)))),
     ]);
 
     // Filtro semántico Concepto: input del término + botón que lo agrega.
+    let concepto_ph = t("pluma-app-graph-concept-ph");
     let input = text_input_view::<Msg>(
         &model.grafo_input,
-        "concepto: río, tensión… (filtra párrafos)",
+        &concepto_ph,
         model.grafo_input_focused,
         &palette_input,
         Msg::FocusGrafo,
@@ -2067,15 +2130,15 @@ fn panel_grafo(model: &Model, theme: &Theme) -> View<Msg> {
     let termino = model.grafo_input.text().trim().to_string();
     let fila_concepto = fila(vec![
         input_wrap,
-        button_view::<Msg>("+ concepto", &palette_btn, Msg::GrafoAdd(Filtro::Concepto(termino))),
+        button_view::<Msg>(t("pluma-app-graph-add-concept"), &palette_btn, Msg::GrafoAdd(Filtro::Concepto(termino))),
     ]);
 
     let fila_run = fila(vec![
-        button_view::<Msg>("generar línea  »", &palette_btn, Msg::GenerarLinea),
-        button_view::<Msg>("limpiar", &palette_btn, Msg::GrafoLimpiar),
+        button_view::<Msg>(t("pluma-app-graph-gen-line"), &palette_btn, Msg::GenerarLinea),
+        button_view::<Msg>(t("pluma-app-graph-clear"), &palette_btn, Msg::GrafoLimpiar),
     ]);
 
-    let pista = encabezado("grafo · arrastrá nodos · click derecho borra un filtro", theme);
+    let pista = encabezado(&t("pluma-app-graph-hint"), theme);
     let canvas = grafo_canvas(model, theme);
 
     columna(vec![fila_add, fila_concepto, fila_run, divider(theme), pista, canvas])
@@ -2092,7 +2155,7 @@ fn grafo_canvas(model: &Model, theme: &Theme) -> View<Msg> {
         .activo
         .and_then(|id| model.cuerpos.iter().find(|c| c.id == id))
         .map(|c| recortar(&c.metadatos.nombre_legible, 18))
-        .unwrap_or_else(|| "(sin activo)".to_string());
+        .unwrap_or_else(|| t("pluma-app-graph-source-none"));
 
     let n = model.grafo.len();
     let mut nodes: Vec<NodeSpec> = Vec::with_capacity(n + 2);
@@ -2100,11 +2163,11 @@ fn grafo_canvas(model: &Model, theme: &Theme) -> View<Msg> {
 
     nodes.push(NodeSpec {
         id: 0,
-        label: format!("fuente: {nombre_activo}"),
+        label: t_args("pluma-app-graph-source", &[("n", nombre_activo.into())]),
         x: model.grafo_src.0,
         y: model.grafo_src.1,
         inputs: Vec::new(),
-        outputs: vec!["línea".into()],
+        outputs: vec![t("pluma-app-graph-out-line")],
     });
     let mut prev: u32 = 0;
     for (i, nf) in model.grafo.iter().enumerate() {
@@ -2114,8 +2177,8 @@ fn grafo_canvas(model: &Model, theme: &Theme) -> View<Msg> {
             label: etiqueta_filtro(&nf.filtro),
             x: nf.x,
             y: nf.y,
-            inputs: vec!["entra".into()],
-            outputs: vec!["sale".into()],
+            inputs: vec![t("pluma-app-graph-in")],
+            outputs: vec![t("pluma-app-graph-out")],
         });
         wires.push(Wire {
             from_node: prev,
@@ -2128,10 +2191,10 @@ fn grafo_canvas(model: &Model, theme: &Theme) -> View<Msg> {
     let sink = (n + 1) as u32;
     nodes.push(NodeSpec {
         id: sink,
-        label: "→ nueva línea".into(),
+        label: t("pluma-app-graph-sink"),
         x: model.grafo_sink.0,
         y: model.grafo_sink.1,
-        inputs: vec!["pipe".into()],
+        inputs: vec![t("pluma-app-graph-pipe")],
         outputs: Vec::new(),
     });
     wires.push(Wire {
@@ -2244,12 +2307,15 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
             ..Default::default()
         })
         .fill(palette_lienzo.bg_app)
-        .children(vec![empty_view::<Msg>(
-            Icon::FileText,
-            "Sin lienzos en el multilienzo",
-            Some("Marcá el cuadrito de un documento en el panel Lienzos para sumarlo."),
-            &EmptyPalette::from_theme(theme),
-        )]);
+        .children(vec![{
+            let empty_desc = t("pluma-app-empty-canvases-desc");
+            empty_view::<Msg>(
+                Icon::FileText,
+                t("pluma-app-empty-canvases-title"),
+                Some(empty_desc.as_str()),
+                &EmptyPalette::from_theme(theme),
+            )
+        }]);
     }
     let activo_idx = model
         .activo
@@ -2625,9 +2691,10 @@ fn barra_find(model: &Model) -> View<Msg> {
     let palette_input = TextInputPalette::from_theme(&theme);
     let palette_btn = ButtonPalette::from_theme(&theme);
 
+    let find_ph = t("pluma-app-find-ph");
     let input = text_input_view::<Msg>(
         &model.find_input,
-        "buscar (Enter siguiente · Shift+Enter previo · Esc cerrar)",
+        &find_ph,
         true,
         &palette_input,
         Msg::FindToggle,
@@ -2752,8 +2819,7 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
             ..Default::default()
         })
         .text_aligned(
-            "Cotejo — verde = coincide · rojo = difiere · arrastrá una cabecera para reordenar"
-                .to_string(),
+            t("pluma-app-cotejo-title"),
             14.0,
             theme.fg_text,
             Alignment::Start,
@@ -2765,13 +2831,13 @@ fn cotejo_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         .text_aligned(cot.conteo.clone(), 11.0, theme.fg_muted, Alignment::Start),
     ]);
     let resumen_label = if cot.resumiendo {
-        "✨  resumiendo…"
+        t("pluma-app-cotejo-summarizing")
     } else {
-        "✨  resumen IA"
+        t("pluma-app-cotejo-summarize-ai")
     };
     let resumen_ia = button_view::<Msg>(resumen_label, &palette_btn, Msg::CotejoResumirIA);
-    let invertir = button_view::<Msg>("⇄  invertir", &palette_btn, Msg::CotejoInvertir);
-    let cerrar = button_view::<Msg>("✕  cerrar (Esc)", &palette_btn, Msg::CerrarCotejo);
+    let invertir = button_view::<Msg>(t("pluma-app-cotejo-invert"), &palette_btn, Msg::CotejoInvertir);
+    let cerrar = button_view::<Msg>(t("pluma-app-cotejo-close"), &palette_btn, Msg::CerrarCotejo);
     let header = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
@@ -2864,19 +2930,21 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     // Diálogo "cotejar dos archivos": dos rutas (vacías → documentos abiertos).
     if let Some(d) = model.cotejo_dialog.as_ref() {
         let palette_input = TextInputPalette::from_theme(&theme);
+        let ph_a = t("pluma-app-cotejo-file-a-ph");
+        let ph_b = t("pluma-app-cotejo-file-b-ph");
         let mut filas: Vec<View<Msg>> = vec![
-            encabezado("archivo A (.md / .txt / .docx)", &theme),
+            encabezado(&t("pluma-app-cotejo-file-a"), &theme),
             text_input_view::<Msg>(
                 &d.a,
-                "ruta del primer documento…",
+                &ph_a,
                 d.foco == crate::model::CotejoCampo::A,
                 &palette_input,
                 Msg::CotejoDialogFoco(crate::model::CotejoCampo::A),
             ),
-            encabezado("archivo B", &theme),
+            encabezado(&t("pluma-app-cotejo-file-b"), &theme),
             text_input_view::<Msg>(
                 &d.b,
-                "ruta del segundo documento…",
+                &ph_b,
                 d.foco == crate::model::CotejoCampo::B,
                 &palette_input,
                 Msg::CotejoDialogFoco(crate::model::CotejoCampo::B),
@@ -2885,7 +2953,7 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
         match &d.error {
             Some(e) => filas.push(pista_texto(e, &theme)),
             None => filas.push(pista_texto(
-                "Tab cambia de campo · dejá ambas vacías para cotejar los dos documentos abiertos",
+                &t("pluma-app-cotejo-tab-hint"),
                 &theme,
             )),
         }
@@ -2897,11 +2965,11 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
         })
         .children(filas);
         return Some(modal_view(ModalSpec {
-            title: "Cotejar dos archivos".to_string(),
+            title: t("pluma-app-cotejo-dialog-title"),
             body,
             buttons: vec![
-                ModalButton::cancel("Cancelar", Msg::CerrarDialogoCotejo),
-                ModalButton::primary("Cotejar", Msg::ConfirmarCotejoArchivos),
+                ModalButton::cancel(t("cancel"), Msg::CerrarDialogoCotejo),
+                ModalButton::primary(t("pluma-app-cotejo-confirm"), Msg::ConfirmarCotejoArchivos),
             ],
             size: (520.0, 300.0),
             viewport: model.viewport,
@@ -2919,21 +2987,24 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
             ..Default::default()
         })
         .children(vec![
-            encabezado("mensaje del push (versión)", &theme),
-            text_input_view::<Msg>(
-                &model.preset_input,
-                "qué cambió en esta versión…",
-                model.preset_focused,
-                &palette_input,
-                Msg::FocusPreset,
-            ),
+            encabezado(&t("pluma-app-push-msg-header"), &theme),
+            {
+                let push_ph = t("pluma-app-push-msg-ph");
+                text_input_view::<Msg>(
+                    &model.preset_input,
+                    &push_ph,
+                    model.preset_focused,
+                    &palette_input,
+                    Msg::FocusPreset,
+                )
+            },
         ]);
         return Some(modal_view(ModalSpec {
-            title: "Sellar versión (push)".to_string(),
+            title: t("pluma-app-push-title"),
             body,
             buttons: vec![
-                ModalButton::cancel("Cancelar", Msg::CerrarPush),
-                ModalButton::primary("Push", Msg::ConfirmarPush),
+                ModalButton::cancel(t("cancel"), Msg::CerrarPush),
+                ModalButton::primary(t("pluma-app-push-confirm"), Msg::ConfirmarPush),
             ],
             size: (460.0, 220.0),
             viewport: model.viewport,
@@ -2945,9 +3016,10 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     if let Some(obj) = model.renombrar {
         let palette_input = TextInputPalette::from_theme(&theme);
         let que = match obj {
-            crate::model::RenombrarObjetivo::Proyecto => "proyecto",
-            crate::model::RenombrarObjetivo::Documento(_) => "documento",
+            crate::model::RenombrarObjetivo::Proyecto => t("pluma-app-rename-obj-project"),
+            crate::model::RenombrarObjetivo::Documento(_) => t("pluma-app-rename-obj-doc"),
         };
+        let name_ph = t("pluma-app-name-ph");
         let body = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: auto() },
@@ -2955,21 +3027,21 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
             ..Default::default()
         })
         .children(vec![
-            encabezado(&format!("nuevo nombre del {que}"), &theme),
+            encabezado(&t_args("pluma-app-rename-header", &[("que", que.clone().into())]), &theme),
             text_input_view::<Msg>(
                 &model.preset_input,
-                "nombre…",
+                &name_ph,
                 model.preset_focused,
                 &palette_input,
                 Msg::FocusPreset,
             ),
         ]);
         return Some(modal_view(ModalSpec {
-            title: format!("Renombrar {que}"),
+            title: t_args("pluma-app-rename-title", &[("que", que.clone().into())]),
             body,
             buttons: vec![
-                ModalButton::cancel("Cancelar", Msg::CerrarRenombrar),
-                ModalButton::primary("Renombrar", Msg::ConfirmarRenombrar),
+                ModalButton::cancel(t("cancel"), Msg::CerrarRenombrar),
+                ModalButton::primary(t("pluma-app-rename-confirm"), Msg::ConfirmarRenombrar),
             ],
             size: (440.0, 200.0),
             viewport: model.viewport,
@@ -2980,11 +3052,11 @@ pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     // El wizard de transformación tiene prioridad: modal bloqueante.
     if model.wizard.is_some() {
         return Some(modal_view(ModalSpec {
-            title: "Nueva transformación".to_string(),
+            title: t("pluma-app-wizard-title"),
             body: wizard_body(model, &theme),
             buttons: vec![
-                ModalButton::cancel("Cancelar", Msg::CerrarWizard),
-                ModalButton::primary("Crear", Msg::WizardConfirm),
+                ModalButton::cancel(t("cancel"), Msg::CerrarWizard),
+                ModalButton::primary(t("pluma-app-wizard-confirm"), Msg::WizardConfirm),
             ],
             size: (520.0, 560.0),
             viewport: model.viewport,

@@ -37,6 +37,7 @@ use pluma_estilo::EstiloTexto;
 use pluma_proyecto::{DocEstado, Proyecto};
 use crate::util::{ahora_unix, etiqueta_backend, expandir_ruta, extension_lower};
 use crate::view::etiqueta_filtro;
+use rimay_localize::{t, t_args};
 
 /// Cuánto vive un toast antes de auto-descartarse (~4 s). Las expiraciones se
 /// podan en `Msg::FlujoTick` (que ya corre a ~33 Hz), sin spawnear un tick aparte.
@@ -123,9 +124,9 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::ToggleFocoHover => {
             model.foco_por_hover = !model.foco_por_hover;
             model.ultimo_status = if model.foco_por_hover {
-                "foco por hover: ON".into()
+                t("pluma-app-hover-on")
             } else {
-                "foco por hover: off".into()
+                t("pluma-app-hover-off")
             };
         }
         Msg::ScrollHoriz(dx) => {
@@ -172,12 +173,12 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 .unwrap_or(false);
             if tiene_ruta {
                 guardar_proyecto_activo(&mut model);
-                model.ultimo_status = "guardado en el proyecto".into();
-                push_toast(&mut model, |id| Toast::success(id, "Documento guardado", TOAST_TTL));
+                model.ultimo_status = t("pluma-app-saved-in-project");
+                push_toast(&mut model, |id| Toast::success(id, t("pluma-app-toast-doc-saved"), TOAST_TTL));
             } else {
-                model.ultimo_status = "guardá el proyecto a disco con «guardar como…»".into();
+                model.ultimo_status = t("pluma-app-save-to-disk");
                 push_toast(&mut model, |id| {
-                    Toast::info(id, "Guardá el proyecto con «guardar como…»", TOAST_TTL)
+                    Toast::info(id, t("pluma-app-toast-save-project"), TOAST_TTL)
                 });
             }
         }
@@ -298,7 +299,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::LlmError(s) => {
             eprintln!("pluma-app-llimphi :: error LLM: {s}");
             push_toast(&mut model, |id| {
-                Toast::error(id, format!("Error LLM: {}", crate::util::recortar(&s, 40)), TOAST_TTL)
+                Toast::error(id, t_args("pluma-app-toast-llm-error", &[("err", crate::util::recortar(&s, 40).into())]), TOAST_TTL)
             });
             model.ultimo_error = Some(s);
             model.en_curso = false;
@@ -322,7 +323,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             if !prompt.is_empty() {
                 lanzar(&mut model, handle, TrabajoLlm::Reescribir(prompt));
             } else {
-                model.ultimo_status = "escribí un prompt para derivar".into();
+                model.ultimo_status = t("pluma-app-write-prompt-derive");
             }
         }
         Msg::GuardarPreset => {
@@ -330,7 +331,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             if !prompt.is_empty() && !model.presets.contains(&prompt) {
                 model.presets.push(prompt);
                 crate::util::guardar_presets(&model.presets);
-                model.ultimo_status = format!("preset guardado ({})", model.presets.len());
+                model.ultimo_status = t_args("pluma-app-preset-saved", &[("n", model.presets.len().to_string().into())]);
             }
         }
         Msg::UsarPreset(i) => {
@@ -392,7 +393,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::GrafoLimpiar => {
             model.grafo.clear();
-            model.ultimo_status = "grafo vacío".into();
+            model.ultimo_status = t("pluma-app-graph-empty");
         }
         Msg::GenerarLinea => {
             generar_linea(&mut model, handle);
@@ -460,7 +461,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::CicloModo => {
             cerrar_edicion_lienzo(&mut model);
             model.modo = model.modo.siguiente();
-            model.ultimo_status = format!("modo: {}", model.modo.etiqueta());
+            model.ultimo_status = t_args("pluma-app-mode", &[("modo", model.modo.etiqueta().into())]);
             if model.modo == Modo::Presentar {
                 posicionar_presentar(&mut model);
             }
@@ -468,7 +469,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::SetModo(m) => {
             cerrar_edicion_lienzo(&mut model);
             model.modo = m;
-            model.ultimo_status = format!("modo: {}", model.modo.etiqueta());
+            model.ultimo_status = t_args("pluma-app-mode", &[("modo", model.modo.etiqueta().into())]);
             if model.modo == Modo::Presentar {
                 posicionar_presentar(&mut model);
             }
@@ -533,7 +534,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::LienzoSalida { atom, texto } => {
             model.salidas.insert(atom, texto);
             model.en_curso = false;
-            model.ultimo_status = "celda ejecutada".into();
+            model.ultimo_status = t("pluma-app-cell-executed");
         }
 
         // --- Rail derecho de estilo ---
@@ -637,9 +638,9 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             let idx = model.proyecto_activo;
             if model.proyectos[idx].proyecto.borrar_rama(&nombre) {
                 guardar_proyecto_activo(&mut model);
-                model.ultimo_status = format!("rama borrada: {nombre}");
+                model.ultimo_status = t_args("pluma-app-branch-deleted", &[("nombre", nombre.clone().into())]);
             } else {
-                model.ultimo_status = "no se puede borrar la rama actual".into();
+                model.ultimo_status = t("pluma-app-cant-delete-current-branch");
             }
         }
         Msg::AbrirRenombrar(obj) => {
@@ -691,7 +692,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             let idx = model.proyecto_activo;
             let n = model.proyectos[idx].proyecto.compactar();
             guardar_proyecto_activo(&mut model);
-            model.ultimo_status = format!("compactado: {n} objeto(s) liberado(s)");
+            model.ultimo_status = t_args("pluma-app-compacted", &[("n", n.to_string().into())]);
         }
         Msg::DescartarToast(id) => {
             model.toasts.retain(|t| t.id != id);
@@ -723,11 +724,13 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                     let fuente = cot.atoms.clone();
                     let estado = construir_estado_cotejo(&nueva_izq, &nueva_der, &fuente);
                     if let Some(e) = &estado {
-                        model.ultimo_status = format!(
-                            "cotejo «{}» ↔ «{}»: {}",
-                            nueva_izq.metadatos.nombre_legible,
-                            nueva_der.metadatos.nombre_legible,
-                            e.conteo
+                        model.ultimo_status = t_args(
+                            "pluma-app-cotejo-status",
+                            &[
+                                ("a", nueva_izq.metadatos.nombre_legible.clone().into()),
+                                ("b", nueva_der.metadatos.nombre_legible.clone().into()),
+                                ("c", e.conteo.clone().into()),
+                            ],
                         );
                     }
                     model.cotejo = estado;
@@ -780,7 +783,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                         aplicadas += 1;
                     }
                 }
-                model.ultimo_status = format!("resumen IA aplicado a {aplicadas} secciones");
+                model.ultimo_status = t_args("pluma-app-ai-summary-applied", &[("n", aplicadas.to_string().into())]);
             }
         }
         Msg::CotejoReordenar(desde, hasta) => {
@@ -799,7 +802,7 @@ pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 cot.resumiendo = false;
             }
             push_toast(&mut model, |id| {
-                Toast::error(id, format!("Resumen IA: {}", crate::util::recortar(&s, 40)), TOAST_TTL)
+                Toast::error(id, t_args("pluma-app-toast-ai-summary-error", &[("err", crate::util::recortar(&s, 40).into())]), TOAST_TTL)
             });
             model.ultimo_error = Some(s);
         }
@@ -898,42 +901,48 @@ pub(crate) fn menu_principal(model: &Model) -> app_bus::AppMenu {
     let can_undo = ed.can_undo();
     let can_redo = ed.can_redo();
 
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    // Etiqueta de un ítem de modo con el bullet «●» cuando está activo.
+    let modo_item = |activo: bool, key: &str| -> String {
+        if activo { format!("● {}", t(key)) } else { t(key) }
+    };
+
+    let mut undo = MenuItem::new(t("pluma-app-undo"), "edit.undo").shortcut("Ctrl+Z");
     if !can_undo {
         undo = undo.disabled();
     }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new(t("pluma-app-redo"), "edit.redo").shortcut("Ctrl+Y");
     if !can_redo {
         redo = redo.disabled();
     }
-    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
-    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    let mut cut = MenuItem::new(t("pluma-app-cut"), "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new(t("pluma-app-copy"), "edit.copy").shortcut("Ctrl+C");
     if !has_sel {
         cut = cut.disabled();
         copy = copy.disabled();
     }
-    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
-    let sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+    let paste = MenuItem::new(t("pluma-app-paste"), "edit.paste").shortcut("Ctrl+V");
+    let sel_all = MenuItem::new(t("pluma-app-select-all"), "edit.selectall")
         .shortcut("Ctrl+A")
         .separated();
 
     // El botón de regenerar stale sólo tiene sentido si hay alguna hija
     // stale del activo — lo grisamos cuando no.
-    let mut regen = MenuItem::new("Regenerar stale", "llm.regen");
+    let mut regen = MenuItem::new(t("pluma-app-menu-regen"), "llm.regen");
     if contar_stale_del_activo(model) == 0 {
         regen = regen.disabled();
     }
 
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Nuevo documento", "file.nuevo").shortcut("Ctrl+N"))
-                .item(MenuItem::new("Guardar", "file.guardar").shortcut("Ctrl+S"))
-                .item(MenuItem::new("Abrir archivo (ruta)", "file.abrir").separated())
-                .item(MenuItem::new("Exportar (md/docx)", "file.exportar")),
+            // "Archivo" comparte clave con el rótulo del diente hospedado.
+            Menu::new(t("pluma-app-files"))
+                .item(MenuItem::new(t("pluma-app-menu-new-doc"), "file.nuevo").shortcut("Ctrl+N"))
+                .item(MenuItem::new(t("save"), "file.guardar").shortcut("Ctrl+S"))
+                .item(MenuItem::new(t("pluma-app-menu-open-file"), "file.abrir").separated())
+                .item(MenuItem::new(t("pluma-app-menu-export"), "file.exportar")),
         )
         .menu(
-            Menu::new("Editar")
+            Menu::new(t("edit"))
                 .item(undo)
                 .item(redo)
                 .item(cut)
@@ -942,69 +951,58 @@ pub(crate) fn menu_principal(model: &Model) -> app_bus::AppMenu {
                 .item(sel_all),
         )
         .menu(
-            Menu::new("Vista")
-                .item(MenuItem::new("Ciclar modo", "vista.ciclo").shortcut("Ctrl+M"))
+            Menu::new(t("pluma-app-menu-view"))
+                .item(MenuItem::new(t("pluma-app-cycle-mode"), "vista.ciclo").shortcut("Ctrl+M"))
                 .item(
                     MenuItem::new(
-                        if model.modo == Modo::Lienzos {
-                            "● Lienzos (jerárquico)"
-                        } else {
-                            "Lienzos (jerárquico)"
-                        },
+                        modo_item(model.modo == Modo::Lienzos, "pluma-app-mode-canvases-h"),
                         "vista.lienzos",
                     )
                     .separated(),
                 )
                 .item(MenuItem::new(
-                    if model.modo == Modo::Presentar {
-                        "● Presentar (deck)"
-                    } else {
-                        "Presentar (deck)"
-                    },
+                    modo_item(model.modo == Modo::Presentar, "pluma-app-mode-present-deck"),
                     "vista.presentar",
                 ))
                 .item(MenuItem::new(
-                    if model.modo == Modo::Plano {
-                        "● Plano (editor clásico)"
-                    } else {
-                        "Plano (editor clásico)"
-                    },
+                    modo_item(model.modo == Modo::Plano, "pluma-app-mode-flat-classic"),
                     "vista.plano",
                 )),
         )
         .menu(
-            Menu::new("Buscar")
-                .item(MenuItem::new("Buscar en documento", "search.find").shortcut("Ctrl+F")),
+            Menu::new(t("pluma-app-menu-search"))
+                .item(MenuItem::new(t("pluma-app-search-in-doc"), "search.find").shortcut("Ctrl+F")),
         )
         .menu(
-            Menu::new("Multilienzo")
-                .item(MenuItem::new("Sólo activo / todos", "mult.diff").shortcut("Ctrl+D"))
+            Menu::new(t("pluma-app-menu-multicanvas"))
+                .item(MenuItem::new(t("pluma-app-only-active-all"), "mult.diff").shortcut("Ctrl+D"))
                 .item(MenuItem::new(
                     if model.foco_por_hover {
-                        "Foco por hover: ON"
+                        t("pluma-app-hover-menu-on")
                     } else {
-                        "Foco por hover: off"
+                        t("pluma-app-hover-menu-off")
                     },
                     "mult.hover",
                 ))
-                .item(MenuItem::new("Foco siguiente", "mult.foco_sig").shortcut("Ctrl+Tab"))
-                .item(MenuItem::new("Togglear fusión (zona)", "mult.fusion").shortcut("Ctrl+J"))
-                .item(MenuItem::new("Zona siguiente", "mult.zona_sig").separated())
-                .item(MenuItem::new("Zona anterior", "mult.zona_ant")),
+                .item(MenuItem::new(t("pluma-app-focus-next"), "mult.foco_sig").shortcut("Ctrl+Tab"))
+                .item(MenuItem::new(t("pluma-app-toggle-fusion"), "mult.fusion").shortcut("Ctrl+J"))
+                .item(MenuItem::new(t("pluma-app-zone-next"), "mult.zona_sig").separated())
+                .item(MenuItem::new(t("pluma-app-zone-prev"), "mult.zona_ant")),
         )
         .menu(
+            // "LLM" es acrónimo — no se traduce.
             Menu::new("LLM")
-                .item(MenuItem::new("Ciclar backend", "llm.backend"))
-                .item(MenuItem::new("Traducir → qu", "llm.trad_qu"))
-                .item(MenuItem::new("Traducir → en", "llm.trad_en"))
-                .item(MenuItem::new("Tono formal", "llm.tono"))
-                .item(MenuItem::new("Resumir 30p", "llm.resumir"))
-                .item(MenuItem::new("Tocar madre", "llm.tocar").separated())
+                .item(MenuItem::new(t("pluma-app-cycle-backend"), "llm.backend"))
+                .item(MenuItem::new(t_args("pluma-app-menu-translate", &[("l", "qu".into())]), "llm.trad_qu"))
+                .item(MenuItem::new(t_args("pluma-app-menu-translate", &[("l", "en".into())]), "llm.trad_en"))
+                .item(MenuItem::new(t("pluma-app-menu-tone-formal"), "llm.tono"))
+                .item(MenuItem::new(t("pluma-app-menu-summarize-30"), "llm.resumir"))
+                .item(MenuItem::new(t("pluma-app-menu-touch-mother"), "llm.tocar").separated())
                 .item(regen),
         )
         .menu(
-            Menu::new("Ayuda")
-                .item(MenuItem::new("pluma · editor multilienzo", "help.about").disabled()),
+            Menu::new(t("help"))
+                .item(MenuItem::new(t("pluma-app-about-line"), "help.about").disabled()),
         )
 }
 
@@ -1074,7 +1072,7 @@ fn aplicar_estilo_delta(model: &mut Model, delta: EstiloTexto) {
     let spans: Vec<(Uuid, usize, usize)> = match objetivo {
         ObjetivoEstilo::Seleccion if model.activo == Some(id) => seleccion_spans(&model.ide),
         ObjetivoEstilo::Seleccion => {
-            model.ultimo_status = "abrí el lienzo (click) para estilar su selección".into();
+            model.ultimo_status = t("pluma-app-style-open-canvas");
             return;
         }
         _ => Vec::new(),
@@ -1085,7 +1083,7 @@ fn aplicar_estilo_delta(model: &mut Model, delta: EstiloTexto) {
         ObjetivoEstilo::Zona(z) => e.set_zona(z, &delta),
         ObjetivoEstilo::Seleccion => {
             if spans.is_empty() {
-                model.ultimo_status = "no hay texto seleccionado".into();
+                model.ultimo_status = t("pluma-app-no-text-selected");
                 return;
             }
             for (atom, ini, fin) in spans {
@@ -1182,14 +1180,14 @@ fn confirmar_wizard(model: &mut Model, handle: &Handle<Msg>) {
     let trabajo = match w.tipo {
         WizardTipo::Traducir => {
             if param.is_empty() {
-                model.ultimo_status = "elegí una lengua destino".into();
+                model.ultimo_status = t("pluma-app-pick-target-lang");
                 return;
             }
             TrabajoLlm::Traducir(param)
         }
         WizardTipo::Tono => {
             if param.is_empty() {
-                model.ultimo_status = "escribí una etiqueta de tono".into();
+                model.ultimo_status = t("pluma-app-write-tone-label");
                 return;
             }
             TrabajoLlm::Tono(param)
@@ -1197,14 +1195,14 @@ fn confirmar_wizard(model: &mut Model, handle: &Handle<Msg>) {
         WizardTipo::Resumir => TrabajoLlm::Resumir(param.parse::<u32>().ok()),
         WizardTipo::Reescribir => {
             if param.is_empty() {
-                model.ultimo_status = "escribí un prompt de reescritura".into();
+                model.ultimo_status = t("pluma-app-write-rewrite-prompt");
                 return;
             }
             TrabajoLlm::Reescribir(param)
         }
         WizardTipo::Custom => {
             if param.is_empty() {
-                model.ultimo_status = "escribí un script Rhai (usá `texto`)".into();
+                model.ultimo_status = t("pluma-app-write-rhai");
                 return;
             }
             TrabajoLlm::CustomRhai(param)
@@ -1377,17 +1375,14 @@ fn nuevo_proyecto(model: &mut Model) {
     model.proyecto_tab = ProyectoTab::Historia;
     nuevo_haz_vacio(model);
     sincronizar_doc_activo(model);
-    model.ultimo_status = format!(
-        "proyecto nuevo: {}",
-        model.proyectos[model.proyecto_activo].proyecto.nombre
-    );
+    model.ultimo_status = t_args("pluma-app-project-new", &[("n", model.proyectos[model.proyecto_activo].proyecto.nombre.clone().into())]);
 }
 
 fn abrir_proyecto(model: &mut Model) {
     let texto = model.path_input.text();
     let ruta = expandir_ruta(texto.trim());
     if ruta.as_os_str().is_empty() {
-        model.ultimo_status = "escribí una ruta .pluma".into();
+        model.ultimo_status = t("pluma-app-write-pluma-path");
         return;
     }
     match Proyecto::abrir(&ruta) {
@@ -1420,10 +1415,10 @@ fn abrir_proyecto(model: &mut Model) {
                 None => nuevo_haz_vacio(model),
             }
             persistir_abiertos(model);
-            model.ultimo_status = format!("proyecto abierto: {}", ruta.display());
+            model.ultimo_status = t_args("pluma-app-project-opened", &[("ruta", ruta.display().to_string().into())]);
         }
         Err(e) => {
-            model.ultimo_error = Some(format!("abrir proyecto: {e}"));
+            model.ultimo_error = Some(t_args("pluma-app-err-open-project", &[("err", e.to_string().into())]));
         }
     }
 }
@@ -1444,7 +1439,7 @@ fn guardar_proyecto_como(model: &mut Model) {
     let texto = model.path_input.text();
     let mut ruta = expandir_ruta(texto.trim());
     if ruta.as_os_str().is_empty() {
-        model.ultimo_status = "escribí una ruta para guardar el .pluma".into();
+        model.ultimo_status = t("pluma-app-write-save-pluma-path");
         return;
     }
     if ruta.extension().is_none() {
@@ -1461,10 +1456,10 @@ fn guardar_proyecto_como(model: &mut Model) {
                 crate::util::guardar_recientes(&model.proyectos_recientes);
             }
             persistir_abiertos(model);
-            model.ultimo_status = format!("guardado: {}", ruta.display());
+            model.ultimo_status = t_args("pluma-app-saved-to", &[("ruta", ruta.display().to_string().into())]);
         }
         Err(e) => {
-            model.ultimo_error = Some(format!("guardar proyecto: {e}"));
+            model.ultimo_error = Some(t_args("pluma-app-err-save-project", &[("err", e.to_string().into())]));
         }
     }
 }
@@ -1490,7 +1485,7 @@ fn cerrar_proyecto(model: &mut Model, idx: usize) {
         Some(d) => aplicar_doc(model, d),
         None => nuevo_haz_vacio(model),
     }
-    model.ultimo_status = "proyecto cerrado".into();
+    model.ultimo_status = t("pluma-app-project-closed");
 }
 
 /// Carga el documento activo del proyecto activo en las colecciones vivas —
@@ -1546,7 +1541,7 @@ fn nuevo_doc_proyecto(model: &mut Model) {
     model.proyectos[idx].doc_activo = id;
     nuevo_haz_vacio(model);
     sincronizar_doc_activo(model);
-    model.ultimo_status = format!("documento {n} agregado al proyecto");
+    model.ultimo_status = t_args("pluma-app-doc-added", &[("n", n.to_string().into())]);
 }
 
 /// Elimina un documento del proyecto activo. Nunca deja el proyecto con 0
@@ -1554,7 +1549,7 @@ fn nuevo_doc_proyecto(model: &mut Model) {
 fn eliminar_doc(model: &mut Model, doc: Uuid) {
     let idx = model.proyecto_activo;
     if model.proyectos[idx].proyecto.documentos().len() <= 1 {
-        model.ultimo_status = "no se puede eliminar el único documento".into();
+        model.ultimo_status = t("pluma-app-cant-delete-only-doc");
         return;
     }
     model.proyectos[idx].proyecto.eliminar_documento(doc);
@@ -1566,7 +1561,7 @@ fn eliminar_doc(model: &mut Model, doc: Uuid) {
             }
         }
     }
-    model.ultimo_status = "documento eliminado".into();
+    model.ultimo_status = t("pluma-app-doc-deleted");
 }
 
 /// Nombre actual del objetivo a renombrar (para prellenar el input).
@@ -1592,7 +1587,7 @@ fn confirmar_renombrar(model: &mut Model) {
     model.preset_focused = false;
     let nombre = model.preset_input.text().trim().to_string();
     if nombre.is_empty() {
-        model.ultimo_status = "el nombre no puede estar vacío".into();
+        model.ultimo_status = t("pluma-app-name-empty");
         return;
     }
     let idx = model.proyecto_activo;
@@ -1605,7 +1600,7 @@ fn confirmar_renombrar(model: &mut Model) {
         }
     }
     guardar_proyecto_activo(model);
-    model.ultimo_status = format!("renombrado: {nombre}");
+    model.ultimo_status = t_args("pluma-app-renamed", &[("nombre", nombre.clone().into())]);
 }
 
 fn guardar_proyecto_activo(model: &mut Model) {
@@ -1613,7 +1608,7 @@ fn guardar_proyecto_activo(model: &mut Model) {
     let ruta = model.proyectos[idx].ruta.clone();
     if let Some(ruta) = ruta {
         if let Err(e) = model.proyectos[idx].proyecto.guardar(&ruta) {
-            model.ultimo_error = Some(format!("guardar proyecto: {e}"));
+            model.ultimo_error = Some(t_args("pluma-app-err-save-project", &[("err", e.to_string().into())]));
         }
     }
 }
@@ -1639,11 +1634,10 @@ fn confirmar_push(model: &mut Model) {
                 .rama_actual()
                 .unwrap_or("(detached)")
                 .to_string();
-            model.ultimo_status =
-                format!("push {} · rama {}", pluma_proyecto::hash_corto(&h), rama);
+            model.ultimo_status = t_args("pluma-app-push-status", &[("hash", pluma_proyecto::hash_corto(&h).into()), ("rama", rama.clone().into())]);
         }
         None => {
-            model.ultimo_status = "nada para pushear (sin cambios)".into();
+            model.ultimo_status = t("pluma-app-nothing-to-push");
         }
     }
 }
@@ -1651,7 +1645,7 @@ fn confirmar_push(model: &mut Model) {
 fn restaurar_commit(model: &mut Model, h: pluma_proyecto::Hash) {
     let idx = model.proyecto_activo;
     if let Err(e) = model.proyectos[idx].proyecto.checkout(h) {
-        model.ultimo_error = Some(format!("restaurar: {e}"));
+        model.ultimo_error = Some(t_args("pluma-app-err-restore", &[("err", e.to_string().into())]));
         return;
     }
     let doc_id = model.proyectos[idx]
@@ -1668,7 +1662,7 @@ fn restaurar_commit(model: &mut Model, h: pluma_proyecto::Hash) {
         }
         None => nuevo_haz_vacio(model),
     }
-    model.ultimo_status = format!("restaurado {}", pluma_proyecto::hash_corto(&h));
+    model.ultimo_status = t_args("pluma-app-restored", &[("hash", pluma_proyecto::hash_corto(&h).into())]);
 }
 
 fn nueva_rama(model: &mut Model) {
@@ -1677,7 +1671,7 @@ fn nueva_rama(model: &mut Model) {
     let nombre = format!("rama-{n}");
     model.proyectos[idx].proyecto.rama_nueva(nombre.clone(), None);
     guardar_proyecto_activo(model);
-    model.ultimo_status = format!("rama nueva: {nombre}");
+    model.ultimo_status = t_args("pluma-app-branch-new", &[("nombre", nombre.clone().into())]);
 }
 
 fn cambiar_rama_proyecto(model: &mut Model, nombre: &str) {
@@ -1690,10 +1684,10 @@ fn cambiar_rama_proyecto(model: &mut Model, nombre: &str) {
                     aplicar_doc(model, d);
                 }
             }
-            model.ultimo_status = format!("rama: {nombre}");
+            model.ultimo_status = t_args("pluma-app-branch-switched", &[("nombre", nombre.to_string().into())]);
         }
         Err(e) => {
-            model.ultimo_error = Some(format!("cambiar rama: {e}"));
+            model.ultimo_error = Some(t_args("pluma-app-err-switch-branch", &[("err", e.to_string().into())]));
         }
     }
 }
@@ -1712,22 +1706,19 @@ fn merge_rama_proyecto(model: &mut Model, nombre: &str) {
                 }
             }
             model.ultimo_status = match res {
-                pluma_proyecto::ResultadoMerge::AlDia => "merge: ya al día".into(),
-                pluma_proyecto::ResultadoMerge::FastForward(_) => "merge: fast-forward".into(),
+                pluma_proyecto::ResultadoMerge::AlDia => t("pluma-app-merge-uptodate"),
+                pluma_proyecto::ResultadoMerge::FastForward(_) => t("pluma-app-merge-fastforward"),
                 pluma_proyecto::ResultadoMerge::Merge { conflictos, .. } => {
                     if conflictos.is_empty() {
-                        "merge ok".into()
+                        t("pluma-app-merge-ok")
                     } else {
-                        format!(
-                            "merge con {} conflicto(s) de doc (gana la rama actual)",
-                            conflictos.len()
-                        )
+                        t_args("pluma-app-merge-conflicts", &[("n", conflictos.len().to_string().into())])
                     }
                 }
             };
         }
         Err(e) => {
-            model.ultimo_error = Some(format!("merge: {e}"));
+            model.ultimo_error = Some(t_args("pluma-app-err-merge", &[("err", e.to_string().into())]));
         }
     }
 }
@@ -1748,7 +1739,7 @@ fn cambiar_activo(model: &mut Model, id: Uuid) {
     let idx: HashMap<Uuid, &NarrativeAtom> =
         model.atoms.iter().map(|(k, v)| (*k, v)).collect();
     model.ide.recargar(&cuerpo, &idx);
-    model.ultimo_status = format!("doc: {}", cuerpo.metadatos.nombre_legible);
+    model.ultimo_status = t_args("pluma-app-doc-status", &[("nombre", cuerpo.metadatos.nombre_legible.clone().into())]);
     reconstruir_ides_ro(model);
 }
 
@@ -1918,21 +1909,21 @@ fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
         None => return,
     };
     let Some((lang, body)) = celda(&texto) else {
-        model.ultimo_status = "no es una celda ```lang".into();
+        model.ultimo_status = t("pluma-app-not-cell-lang");
         return;
     };
     if body.is_empty() {
-        model.ultimo_status = "celda vacía — nada que ejecutar".into();
+        model.ultimo_status = t("pluma-app-cell-empty");
         return;
     }
     if !lang_soportado(&lang) {
-        model.ultimo_status = format!("sin kernel para '{lang}' (llm/python/wasm)");
+        model.ultimo_status = t_args("pluma-app-no-kernel-lang", &[("lang", lang.clone().into())]);
         return;
     }
     let chat = model.chat.clone();
     model.en_curso = true;
     model.ultimo_error = None;
-    model.ultimo_status = format!("ejecutando celda {lang}…");
+    model.ultimo_status = t_args("pluma-app-running-cell", &[("lang", lang.clone().into())]);
     handle.spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1942,7 +1933,7 @@ fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
             Err(e) => {
                 return Msg::LienzoSalida {
                     atom,
-                    texto: format!("error runtime: {e}"),
+                    texto: t_args("pluma-app-cell-error-runtime", &[("err", e.to_string().into())]),
                 }
             }
         };
@@ -1952,7 +1943,7 @@ fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
                     let req = pluma_llm_core::ChatRequest::una_vuelta(body, 512);
                     match chat.complete(&req).await {
                         Ok(r) => r.content,
-                        Err(e) => format!("error: {e}"),
+                        Err(e) => t_args("pluma-app-cell-error", &[("err", e.to_string().into())]),
                     }
                 }
                 "python" | "py" => {
@@ -1962,7 +1953,7 @@ fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
                 "wasm" | "wat" => {
                     corre_kernel(pluma_notebook_kernel_wasm::WasmKernel::new(), &body, "wat").await
                 }
-                otro => format!("sin kernel para '{otro}'"),
+                otro => t_args("pluma-app-no-kernel-simple", &[("lang", otro.to_string().into())]),
             }
         });
         Msg::LienzoSalida { atom, texto }
@@ -1979,10 +1970,10 @@ async fn corre_kernel<K: pluma_notebook_exec::Kernel>(k: K, body: &str, lang: &s
             } else if let Some(v) = out.value {
                 v
             } else {
-                "(sin salida)".into()
+                t("pluma-app-cell-no-output")
             }
         }
-        Err(e) => format!("error: {e}"),
+        Err(e) => t_args("pluma-app-cell-error", &[("err", e.to_string().into())]),
     }
 }
 
@@ -2018,12 +2009,12 @@ fn crear_doc_nuevo(model: &mut Model) {
     model.atoms.insert(atom.id, atom);
     model.cuerpos.push(cuerpo);
     cambiar_activo(model, id);
-    model.ultimo_status = format!("doc #{n} creado");
+    model.ultimo_status = t_args("pluma-app-doc-created", &[("n", n.to_string().into())]);
 }
 
 fn guardar_activo(model: &mut Model) {
     let Some(activo_id) = model.activo else {
-        model.ultimo_status = "sin doc activo".into();
+        model.ultimo_status = t("pluma-app-no-active-doc");
         return;
     };
     let idx: HashMap<Uuid, &NarrativeAtom> =
@@ -2032,7 +2023,7 @@ fn guardar_activo(model: &mut Model) {
     drop(idx);
 
     if cambios.is_empty() {
-        model.ultimo_status = "sin cambios".into();
+        model.ultimo_status = t("pluma-app-no-changes");
         return;
     }
 
@@ -2090,7 +2081,7 @@ fn guardar_activo(model: &mut Model) {
         .iter()
         .filter(|c| matches!(c, CambioAtom::Eliminar { .. }))
         .count();
-    model.ultimo_status = format!("guardado: {n_mut} mut · {n_new} crear · {n_del} del");
+    model.ultimo_status = t_args("pluma-app-saved-counts", &[("mut", n_mut.to_string().into()), ("new", n_new.to_string().into()), ("del", n_del.to_string().into())]);
 }
 
 /// Recalcula las posiciones (línea, col) donde aparece el query en el
@@ -2141,7 +2132,7 @@ fn saltar_a_match(model: &mut Model) {
 /// invalidar las derivadas para que vuelvan a salir del LLM.
 fn tocar_madre(model: &mut Model) {
     let Some(activo_id) = model.activo else {
-        model.ultimo_status = "sin doc activo".into();
+        model.ultimo_status = t("pluma-app-no-active-doc");
         return;
     };
     let ahora = ahora_unix();
@@ -2149,7 +2140,7 @@ fn tocar_madre(model: &mut Model) {
         c.metadatos.modificado_en = ahora;
     }
     let n = contar_stale_del_activo(model);
-    model.ultimo_status = format!("madre tocada — {n} hija(s) ahora stale");
+    model.ultimo_status = t_args("pluma-app-mother-touched", &[("n", n.to_string().into())]);
     model.ultimo_error = None;
 }
 
@@ -2179,11 +2170,11 @@ pub(crate) fn contar_stale_del_activo(model: &Model) -> usize {
 /// y un error no aborte todas.
 fn regenerar_siguiente_stale(model: &mut Model, handle: &Handle<Msg>) {
     if model.en_curso {
-        model.ultimo_status = "LLM ocupado — esperá".into();
+        model.ultimo_status = t("pluma-app-llm-busy");
         return;
     }
     let Some(activo_id) = model.activo else {
-        model.ultimo_status = "sin doc activo".into();
+        model.ultimo_status = t("pluma-app-no-active-doc");
         return;
     };
     let madre_modif = match model.cuerpos.iter().find(|c| c.id == activo_id) {
@@ -2200,7 +2191,7 @@ fn regenerar_siguiente_stale(model: &mut Model, handle: &Handle<Msg>) {
         })
         .map(|c| c.id);
     let Some(hija_id) = hija_id_opt else {
-        model.ultimo_status = "no hay hijas stale — tocar madre primero".into();
+        model.ultimo_status = t("pluma-app-no-stale-children");
         return;
     };
     // Buscar la Transformacion original. Prioridad: la del store (en
@@ -2211,13 +2202,11 @@ fn regenerar_siguiente_stale(model: &mut Model, handle: &Handle<Msg>) {
         .find(|t| t.madre == activo_id && t.hija == hija_id)
         .map(|t| t.tipo.clone());
     let Some(tipo) = tipo else {
-        model.ultimo_status = format!(
-            "no se halló transformación para regenerar {hija_id} — falta historial"
-        );
+        model.ultimo_status = t_args("pluma-app-no-transform-regen", &[("hija", hija_id.to_string().into())]);
         return;
     };
     let Some(trabajo) = trabajo_de_tipo(&tipo) else {
-        model.ultimo_status = format!("tipo {tipo:?} no es regenerable automáticamente");
+        model.ultimo_status = t_args("pluma-app-type-not-regenerable", &[("tipo", format!("{tipo:?}").into())]);
         return;
     };
     lanzar(model, handle, trabajo);
@@ -2407,10 +2396,7 @@ fn mover_atom_caret(model: &mut Model, delta: i32) {
         model.ide.state.ensure_caret_visible(VISIBLE_LINES);
     }
 
-    model.ultimo_status = format!(
-        "atom movido {}",
-        if delta < 0 { "↑" } else { "↓" }
-    );
+    model.ultimo_status = t_args("pluma-app-atom-moved", &[("dir", (if delta < 0 { "↑" } else { "↓" }).into())]);
     model.ultimo_error = None;
 }
 
@@ -2441,7 +2427,7 @@ pub(crate) fn cotejar_seleccion(model: &mut Model) {
     };
     if ids.len() < 2 {
         push_toast(model, |id| {
-            Toast::info(id, "Abrí o seleccioná dos documentos para cotejar", TOAST_TTL)
+            Toast::info(id, t("pluma-app-toast-need-two-docs"), TOAST_TTL)
         });
         return;
     }
@@ -2456,9 +2442,13 @@ pub(crate) fn cotejar_seleccion(model: &mut Model) {
     model.ultimo_status = estado
         .as_ref()
         .map(|e| {
-            format!(
-                "cotejo «{}» ↔ «{}»: {}",
-                izq.metadatos.nombre_legible, der.metadatos.nombre_legible, e.conteo
+            t_args(
+                "pluma-app-cotejo-status",
+                &[
+                    ("a", izq.metadatos.nombre_legible.clone().into()),
+                    ("b", der.metadatos.nombre_legible.clone().into()),
+                    ("c", e.conteo.clone().into()),
+                ],
             )
         })
         .unwrap_or_default();
@@ -2495,9 +2485,15 @@ fn construir_estado_cotejo(
     );
 
     let c = cot.conteos();
-    let conteo = format!(
-        "{} idénticas · {} reformuladas · {} reescritas · {} agregadas · {} eliminadas",
-        c.identicas, c.similares, c.divergentes, c.agregadas, c.eliminadas
+    let conteo = t_args(
+        "pluma-app-cotejo-counts",
+        &[
+            ("id", c.identicas.to_string().into()),
+            ("sim", c.similares.to_string().into()),
+            ("div", c.divergentes.to_string().into()),
+            ("add", c.agregadas.to_string().into()),
+            ("del", c.eliminadas.to_string().into()),
+        ],
     );
 
     // Átomos del overlay (clonados): izquierda + diferencias + derecha.
@@ -2555,7 +2551,7 @@ fn confirmar_cotejo_archivos(model: &mut Model) {
         Ok(v) => v,
         Err(e) => {
             if let Some(d) = &mut model.cotejo_dialog {
-                d.error = Some(format!("archivo A: {e}"));
+                d.error = Some(t_args("pluma-app-err-file-a", &[("err", e.to_string().into())]));
             }
             return;
         }
@@ -2564,7 +2560,7 @@ fn confirmar_cotejo_archivos(model: &mut Model) {
         Ok(v) => v,
         Err(e) => {
             if let Some(d) = &mut model.cotejo_dialog {
-                d.error = Some(format!("archivo B: {e}"));
+                d.error = Some(t_args("pluma-app-err-file-b", &[("err", e.to_string().into())]));
             }
             return;
         }
@@ -2577,9 +2573,13 @@ fn confirmar_cotejo_archivos(model: &mut Model) {
     }
     let estado = construir_estado_cotejo(&izq.0, &der.0, &atoms_src);
     if let Some(e) = &estado {
-        model.ultimo_status = format!(
-            "cotejo «{}» ↔ «{}»: {}",
-            izq.0.metadatos.nombre_legible, der.0.metadatos.nombre_legible, e.conteo
+        model.ultimo_status = t_args(
+            "pluma-app-cotejo-status",
+            &[
+                ("a", izq.0.metadatos.nombre_legible.clone().into()),
+                ("b", der.0.metadatos.nombre_legible.clone().into()),
+                ("c", e.conteo.clone().into()),
+            ],
         );
     }
     model.cotejo_dialog = None;
@@ -2606,7 +2606,7 @@ fn lanzar_resumen_ia(model: &mut Model, handle: &Handle<Msg>) {
         .any(|it| matches!(it.clase, pluma_cotejo::ClaseCambio::Similar | pluma_cotejo::ClaseCambio::Divergente));
     if !hay_cambios {
         push_toast(model, |id| {
-            Toast::info(id, "No hay diferencias que resumir", TOAST_TTL)
+            Toast::info(id, t("pluma-app-toast-no-diffs"), TOAST_TTL)
         });
         return;
     }
@@ -2614,15 +2614,12 @@ fn lanzar_resumen_ia(model: &mut Model, handle: &Handle<Msg>) {
     let chat = model.chat.clone();
     model.cotejo.as_mut().unwrap().resumiendo = true;
     model.ultimo_error = None;
-    model.ultimo_status = format!(
-        "resumen IA en curso ({} backend)",
-        etiqueta_backend(BACKENDS[model.backend_idx])
-    );
+    model.ultimo_status = t_args("pluma-app-ai-summary-running", &[("backend", etiqueta_backend(BACKENDS[model.backend_idx]).to_string().into())]);
 
     handle.spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
             Ok(rt) => rt,
-            Err(e) => return Msg::CotejoResumenError(format!("runtime tokio: {e}")),
+            Err(e) => return Msg::CotejoResumenError(t_args("pluma-app-err-runtime-tokio", &[("err", e.to_string().into())])),
         };
         match rt.block_on(pluma_cotejo_llm::resumir_diferencias(&items, &*chat)) {
             Ok(lineas) => Msg::CotejoResumenListo(lineas),
@@ -2638,10 +2635,10 @@ fn lanzar_resumen_ia(model: &mut Model, handle: &Handle<Msg>) {
 fn cargar_archivo_a_cuerpo(path_raw: &str) -> Result<(Cuerpo, Vec<NarrativeAtom>), String> {
     let path_raw = path_raw.trim();
     if path_raw.is_empty() {
-        return Err("ruta vacía".into());
+        return Err(t("pluma-app-err-empty-path"));
     }
     let path = expandir_ruta(path_raw);
-    let bytes = std::fs::read(&path).map_err(|e| format!("leyendo {path:?}: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| t_args("pluma-app-err-reading", &[("path", format!("{path:?}").into()), ("err", e.to_string().into())]))?;
     let nombre = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -2650,23 +2647,23 @@ fn cargar_archivo_a_cuerpo(path_raw: &str) -> Result<(Cuerpo, Vec<NarrativeAtom>
 
     let (cuerpo, atoms) = if extension_lower(&path) == Some("docx".to_string()) {
         let imp = foreign_docx::parse_docx(&bytes, "es", nombre.clone(), ahora)
-            .map_err(|e| format!("parse_docx {nombre}: {e:?}"))?;
+            .map_err(|e| t_args("pluma-app-err-parse-docx", &[("nombre", nombre.clone().into()), ("err", format!("{e:?}").into())]))?;
         (imp.cuerpo, imp.atoms)
     } else if matches!(
         extension_lower(&path).as_deref(),
         Some("md") | Some("markdown") | Some("txt")
     ) {
         let texto = std::str::from_utf8(&bytes)
-            .map_err(|e| format!("{nombre} no es UTF-8: {e}"))?
+            .map_err(|e| t_args("pluma-app-err-not-utf8", &[("nombre", nombre.clone().into()), ("err", e.to_string().into())]))?
             .to_string();
         let imp = pluma_md::parse_md(&texto, "es", nombre.clone(), ahora);
         (imp.cuerpo, imp.atoms)
     } else {
-        return Err(format!("extensión no soportada en {nombre} — usá .md o .docx"));
+        return Err(t_args("pluma-app-err-ext-unsupported", &[("nombre", nombre.clone().into())]));
     };
 
     if atoms.is_empty() {
-        return Err(format!("{nombre} no produjo átomos"));
+        return Err(t_args("pluma-app-err-no-atoms", &[("nombre", nombre.clone().into())]));
     }
     Ok((cuerpo, atoms))
 }
@@ -2682,7 +2679,7 @@ fn abrir_archivo(model: &mut Model) {
             let id = cuerpo.id;
             let n = atoms_nuevos.len();
             model.cuerpos.push(cuerpo);
-            model.ultimo_status = format!("abierto «{nombre}»: {n} átomos");
+            model.ultimo_status = t_args("pluma-app-opened-atoms", &[("nombre", nombre.clone().into()), ("n", n.to_string().into())]);
             model.ultimo_error = None;
             cambiar_activo(model, id);
         }
@@ -2692,17 +2689,17 @@ fn abrir_archivo(model: &mut Model) {
 
 fn exportar_md(model: &mut Model) {
     let Some(activo_id) = model.activo else {
-        model.ultimo_error = Some("sin doc activo".into());
+        model.ultimo_error = Some(t("pluma-app-no-active-doc"));
         return;
     };
     let path_raw = model.path_input.text().trim().to_string();
     if path_raw.is_empty() {
-        model.ultimo_error = Some("ruta vacía".into());
+        model.ultimo_error = Some(t("pluma-app-err-empty-path"));
         return;
     }
     let path = expandir_ruta(&path_raw);
     let Some(cuerpo) = model.cuerpos.iter().find(|c| c.id == activo_id) else {
-        model.ultimo_error = Some("doc activo desapareció".into());
+        model.ultimo_error = Some(t("pluma-app-doc-gone"));
         return;
     };
 
@@ -2711,21 +2708,19 @@ fn exportar_md(model: &mut Model) {
         match foreign_docx::write_docx(cuerpo, &model.atoms) {
             Ok(b) => b,
             Err(e) => {
-                model.ultimo_error = Some(format!("write_docx: {e}"));
+                model.ultimo_error = Some(t_args("pluma-app-err-write-docx", &[("err", e.to_string().into())]));
                 return;
             }
         }
     } else if ext.is_empty() || ext == "md" || ext == "markdown" || ext == "txt" {
         let md = pluma_md::to_md(cuerpo, &model.atoms);
         if md.is_empty() {
-            model.ultimo_error = Some("doc vacío — nada que exportar".into());
+            model.ultimo_error = Some(t("pluma-app-doc-empty-export"));
             return;
         }
         md.into_bytes()
     } else {
-        model.ultimo_error = Some(format!(
-            "extensión .{ext} no soportada — usá .md o .docx"
-        ));
+        model.ultimo_error = Some(t_args("pluma-app-err-ext-export", &[("ext", ext.clone().into())]));
         return;
     };
 
@@ -2734,16 +2729,11 @@ fn exportar_md(model: &mut Model) {
     }
     match std::fs::write(&path, &bytes) {
         Ok(()) => {
-            model.ultimo_status = format!(
-                "exportado «{}» a {} ({} bytes)",
-                cuerpo.metadatos.nombre_legible,
-                path.display(),
-                bytes.len(),
-            );
+            model.ultimo_status = t_args("pluma-app-exported", &[("nombre", cuerpo.metadatos.nombre_legible.clone().into()), ("path", path.display().to_string().into()), ("bytes", bytes.len().to_string().into())]);
             model.ultimo_error = None;
         }
         Err(e) => {
-            model.ultimo_error = Some(format!("escribiendo {path:?}: {e}"));
+            model.ultimo_error = Some(t_args("pluma-app-err-writing", &[("path", format!("{path:?}").into()), ("err", e.to_string().into())]));
         }
     }
 }
@@ -2760,12 +2750,12 @@ fn cycle_backend(model: &mut Model) {
             Ok(c) => {
                 model.chat = c;
                 model.backend_idx = try_idx;
-                model.ultimo_status = format!("backend → {}", etiqueta_backend(kind));
+                model.ultimo_status = t_args("pluma-app-backend-switched", &[("backend", etiqueta_backend(kind).to_string().into())]);
                 model.ultimo_error = None;
                 return;
             }
             Err(e) => {
-                model.ultimo_error = Some(format!("backend {kind:?}: {e}"));
+                model.ultimo_error = Some(t_args("pluma-app-err-backend", &[("kind", format!("{kind:?}").into()), ("err", e.to_string().into())]));
             }
         }
     }
@@ -2788,9 +2778,9 @@ fn recibir_hija(
     model.cartas.push(carta);
     model.transformaciones.push(transformacion);
     model.en_curso = false;
-    model.ultimo_status = format!("hija «{nombre}» derivada");
+    model.ultimo_status = t_args("pluma-app-child-derived", &[("nombre", nombre.clone().into())]);
     push_toast(model, |id| {
-        Toast::success(id, format!("«{}» lista", crate::util::recortar(&nombre, 28)), TOAST_TTL)
+        Toast::success(id, t_args("pluma-app-toast-ready", &[("nombre", crate::util::recortar(&nombre, 28).into())]), TOAST_TTL)
     });
     cambiar_activo(model, hija_id);
 }
@@ -2838,7 +2828,7 @@ fn recibir_hija_en_lugar(
     // El activo NO cambia: seguís en el original. Refrescamos los editores
     // read-only para que la columna regenerada muestre el texto nuevo.
     reconstruir_ides_ro(model);
-    model.ultimo_status = format!("«{nombre}» regenerada en su lugar");
+    model.ultimo_status = t_args("pluma-app-child-regen-inplace", &[("nombre", nombre.clone().into())]);
 }
 
 // ---------------------------------------------------------------------
@@ -2899,7 +2889,7 @@ fn lanzar_modo(
         None => match model.activo {
             Some(a) => a,
             None => {
-                model.ultimo_status = "sin doc activo".into();
+                model.ultimo_status = t("pluma-app-no-active-doc");
                 return;
             }
         },
@@ -2914,12 +2904,12 @@ fn lanzar_modo(
     let madre = match model.cuerpos.iter().find(|c| c.id == activo_id) {
         Some(c) => c.clone(),
         None => {
-            model.ultimo_error = Some("doc activo desapareció".into());
+            model.ultimo_error = Some(t("pluma-app-doc-gone"));
             return;
         }
     };
     if madre.orden.is_empty() {
-        model.ultimo_status = "madre vacía — nada que transformar".into();
+        model.ultimo_status = t("pluma-app-mother-empty");
         return;
     }
 
@@ -2930,7 +2920,7 @@ fn lanzar_modo(
 
     model.en_curso = true;
     model.ultimo_error = None;
-    model.ultimo_status = format!("LLM en curso ({} backend)", etiqueta_backend(BACKENDS[model.backend_idx]));
+    model.ultimo_status = t_args("pluma-app-ai-summary-running", &[("backend", etiqueta_backend(BACKENDS[model.backend_idx]).to_string().into())]);
 
     handle.spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -2938,7 +2928,7 @@ fn lanzar_modo(
             .build()
         {
             Ok(rt) => rt,
-            Err(e) => return Msg::LlmError(format!("runtime tokio: {e}")),
+            Err(e) => return Msg::LlmError(t_args("pluma-app-err-runtime-tokio", &[("err", e.to_string().into())])),
         };
         let idx: HashMap<Uuid, &NarrativeAtom> =
             atoms_owned.iter().map(|a| (a.id, a)).collect();
@@ -3244,11 +3234,11 @@ fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
         return;
     }
     if model.grafo.is_empty() {
-        model.ultimo_status = "agregá filtros al grafo".into();
+        model.ultimo_status = t("pluma-app-add-filters");
         return;
     }
     let Some(activo_id) = model.activo else {
-        model.ultimo_status = "sin doc activo".into();
+        model.ultimo_status = t("pluma-app-no-active-doc");
         return;
     };
     // Volcar ediciones sin guardar para que los filtros vean el texto vivo.
@@ -3256,12 +3246,12 @@ fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
     let madre = match model.cuerpos.iter().find(|c| c.id == activo_id) {
         Some(c) => c.clone(),
         None => {
-            model.ultimo_error = Some("doc activo desapareció".into());
+            model.ultimo_error = Some(t("pluma-app-doc-gone"));
             return;
         }
     };
     if madre.orden.is_empty() {
-        model.ultimo_status = "lienzo activo vacío".into();
+        model.ultimo_status = t("pluma-app-active-canvas-empty");
         return;
     }
 
@@ -3277,7 +3267,7 @@ fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
 
     model.en_curso = true;
     model.ultimo_error = None;
-    model.ultimo_status = format!("grafo » {desc}");
+    model.ultimo_status = t_args("pluma-app-graph-status", &[("desc", desc.clone().into())]);
 
     let madre_para_carta = madre.clone();
     handle.spawn(move || {
@@ -3286,7 +3276,7 @@ fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
             .build()
         {
             Ok(rt) => rt,
-            Err(e) => return Msg::LlmError(format!("runtime tokio: {e}")),
+            Err(e) => return Msg::LlmError(t_args("pluma-app-err-runtime-tokio", &[("err", e.to_string().into())])),
         };
         let mut atoms_owned = atoms_owned;
         let mut acumulados: Vec<NarrativeAtom> = Vec::new();

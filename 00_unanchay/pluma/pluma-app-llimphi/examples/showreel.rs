@@ -10,6 +10,9 @@
 //! Defaults: `out_dir=showreel_frames_pluma`, `n=300`, `W=1600`, `H=900`.
 
 fn main() {
+    // Chrome localizable: el reel comparte la `vista()` del binario, que pasa
+    // sus strings por `rimay_localize::t()`.
+    rimay_localize::init();
     let mut args = std::env::args().skip(1);
     let out_dir = args
         .next()

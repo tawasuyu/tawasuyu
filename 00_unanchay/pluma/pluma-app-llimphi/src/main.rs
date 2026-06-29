@@ -68,6 +68,8 @@ use crate::update::actualizar;
 use crate::view::{vista, vista_overlay};
 
 fn main() {
+    // Strings de UI localizables (chrome): inicializa el catálogo Fluent.
+    rimay_localize::init();
     // Subcomando oculto de evidencia: `pluma-app-llimphi --dump <out.png> [diente]`.
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--dump") {
@@ -122,7 +124,7 @@ impl App for Pluma {
             // El rail izquierdo ahora es Archivo + proyectos (dinámico). En modo
             // delegado publicamos sólo Archivo; los proyectos se activan desde la
             // ventana (el host no los conoce).
-            let teeth = vec![pata_host::HostedTooth::new(0, "files", "Archivo")];
+            let teeth = vec![pata_host::HostedTooth::new(0, "files", rimay_localize::t("pluma-app-files"))];
             let h = handle.clone();
             m._host = pata_host::HostClient::connect("tawasuyu.pluma", "Pluma", teeth, move |id| {
                 h.dispatch(Msg::HostActivate(id))
