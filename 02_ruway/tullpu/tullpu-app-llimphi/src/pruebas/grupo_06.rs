@@ -834,3 +834,82 @@
         assert_eq!(model.lienzo.capa(id).unwrap().contenido, orig);
         assert!(model.transform.is_none());
     }
+
+    // === Fase F: pincel corrector (healing) ===
+
+    /// Lienzo 16×16 opaco en dos mitades: cols 0..8 gris `izq`, cols 8..16 gris
+    /// `der`. Capa raster seleccionada. `(Model, id)`.
+    fn modelo_dos_mitades(izq: u8, der: u8) -> (Model, Uuid) {
+        let mut model = modelo_minimo();
+        let n = 16u32;
+        let mut buf = vec![0u8; (n * n * 4) as usize];
+        for y in 0..n {
+            for x in 0..n {
+                let v = if x < 8 { izq } else { der };
+                let i = ((y * n + x) * 4) as usize;
+                buf[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let hash = model.almacen.insertar(buf);
+        let mut l = Lienzo::nuevo(n, n);
+        l.apilar(Capa::raster("c", hash));
+        model.lienzo = l;
+        let id = model.lienzo.capas[0].id;
+        model.seleccionada = Some(id);
+        (model, id)
+    }
+
+    fn canal_en(model: &Model, id: Uuid, n: u32, x: u32, y: u32) -> u8 {
+        let h = model.lienzo.capa(id).unwrap().contenido;
+        let buf = model.almacen.obtener(h).unwrap();
+        buf[((y * n + x) * 4) as usize]
+    }
+
+    /// Inyecta un valor gris uniforme `v` en `(x,y)` del contenido de la capa.
+    fn pintar_pixel(model: &mut Model, id: Uuid, n: u32, x: u32, y: u32, v: u8) {
+        let h = model.lienzo.capa(id).unwrap().contenido;
+        let mut buf = model.almacen.obtener(h).unwrap().to_vec();
+        let i = ((y * n + x) * 4) as usize;
+        buf[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+        let h2 = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = h2;
+    }
+
+    #[test]
+    fn sanar_borra_la_mancha_igualando_el_color_base() {
+        // Destino gris 200 con una mancha oscura (40) en (12,8); origen gris
+        // 100. Sanar muestreando el origen iguala el color base (≈200) y borra
+        // la mancha; clonar la dejaría ≈100, aún visible sobre el 200.
+        let (mut m_sanar, id) = modelo_dos_mitades(100, 200);
+        pintar_pixel(&mut m_sanar, id, 16, 12, 8, 40);
+        assert!(sanar_punto_en_capa(&mut m_sanar, 12, 8, -8, 0, 2, 1.0));
+        let v_sanado = canal_en(&m_sanar, id, 16, 12, 8);
+        assert!((185..=205).contains(&v_sanado), "el sanado funde la mancha en el fondo (≈200), fue {v_sanado}");
+
+        let (mut m_clon, id2) = modelo_dos_mitades(100, 200);
+        pintar_pixel(&mut m_clon, id2, 16, 12, 8, 40);
+        assert!(clonar_punto_en_capa(&mut m_clon, 12, 8, -8, 0, 2, 1.0));
+        let v_clon = canal_en(&m_clon, id2, 16, 12, 8);
+        assert!(v_clon < 130, "clonar pega el origen crudo (≈100), aún visible, fue {v_clon}");
+    }
+
+    #[test]
+    fn sanar_preserva_la_textura_del_origen() {
+        // Origen 100 con un "detalle" brillante en (4,8)=200; destino 200.
+        // El detalle (desviación +100 sobre su entorno) debe sobrevivir como
+        // un punto más claro que su vecindario tras igualar el color base.
+        let (mut model, id) = modelo_dos_mitades(100, 200);
+        // Inyectamos el detalle en el origen.
+        let h = model.lienzo.capa(id).unwrap().contenido;
+        let mut buf = model.almacen.obtener(h).unwrap().to_vec();
+        let det = ((8 * 16 + 4) * 4) as usize;
+        buf[det..det + 4].copy_from_slice(&[200, 200, 200, 255]);
+        let h2 = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = h2;
+        // Sanar en (12,8) muestreando (4,8): el píxel central toma el detalle.
+        assert!(sanar_punto_en_capa(&mut model, 12, 8, -8, 0, 2, 1.0));
+        let centro = canal_en(&model, id, 16, 12, 8); // tomó el detalle 200+delta
+        let vecino = canal_en(&model, id, 16, 11, 8); // tomó el 100 base+delta ≈ dest
+        assert!((180..=210).contains(&vecino), "vecino igualado al destino (≈200), fue {vecino}");
+        assert!(centro > vecino + 30, "el detalle del origen sobrevive ({centro} vs {vecino})");
+    }

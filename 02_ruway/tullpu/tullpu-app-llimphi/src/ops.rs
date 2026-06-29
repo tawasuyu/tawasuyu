@@ -870,6 +870,156 @@ fn estampar_clon(
     }
 }
 
+/// Estampa un disco de **sanado** (healing brush) en `(cx, cy)`. Como el
+/// clonado, copia píxeles del origen desplazado por `(offx, offy)`, pero les
+/// suma el delta `(media_destino − media_origen)` calculado sobre el disco:
+/// así transfiere la **textura** (las desviaciones respecto a su media) del
+/// origen sobre el **color base** del destino, fundiendo el parche en vez de
+/// pegar un recorte visible. El delta se computa sobre los píxeles opacos
+/// cubiertos; si el destino o el origen están vacíos cae a clon puro
+/// (delta cero). Respeta `bounds`.
+#[allow(clippy::too_many_arguments)]
+fn estampar_sanar(
+    dst: &mut [u8],
+    src: &[u8],
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    offx: i32,
+    offy: i32,
+    radio: i32,
+    dureza: f32,
+    bounds: Option<(u32, u32, u32, u32)>,
+) {
+    let w_i = w as i32;
+    let h_i = h as i32;
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    let r = radio.max(0);
+    // Píxeles del disco (destino) con su píxel-origen, sólo donde la cobertura
+    // es > 0 y ambos caen en el lienzo + bounds. Se reúsan en las dos pasadas.
+    let mut celdas: Vec<(usize, usize)> = Vec::new(); // (idx_destino, idx_origen)
+    let mut sum_d = [0f64; 3];
+    let mut sum_s = [0f64; 3];
+    let mut n_d = 0u32;
+    let mut n_s = 0u32;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let px = cx + dx;
+            let py = cy + dy;
+            if px < 0 || px >= w_i || py < 0 || py >= h_i {
+                continue;
+            }
+            if (px as u32) < bx0 || (px as u32) >= bx1 || (py as u32) < by0 || (py as u32) >= by1 {
+                continue;
+            }
+            let dist = ((dx * dx + dy * dy) as f32).sqrt();
+            if cobertura_pincel(dist, r as f32, dureza) <= 0.0 {
+                continue;
+            }
+            let sx = px + offx;
+            let sy = py + offy;
+            if sx < 0 || sx >= w_i || sy < 0 || sy >= h_i {
+                continue;
+            }
+            let di = ((py * w_i + px) as usize) * 4;
+            let si = ((sy * w_i + sx) as usize) * 4;
+            celdas.push((di, si));
+            if dst[di + 3] > 0 {
+                for k in 0..3 {
+                    sum_d[k] += dst[di + k] as f64;
+                }
+                n_d += 1;
+            }
+            if src[si + 3] > 0 {
+                for k in 0..3 {
+                    sum_s[k] += src[si + k] as f64;
+                }
+                n_s += 1;
+            }
+        }
+    }
+    // Delta de color base: media del destino menos media del origen. Sin
+    // píxeles opacos en alguno de los dos, el delta es cero (clon puro).
+    let mut delta = [0f64; 3];
+    if n_d > 0 && n_s > 0 {
+        for k in 0..3 {
+            delta[k] = sum_d[k] / n_d as f64 - sum_s[k] / n_s as f64;
+        }
+    }
+    // Segunda pasada: compone src+delta sobre dst con la cobertura del pincel.
+    for &(di, si) in &celdas {
+        let py = (di / 4) as i32 / w_i;
+        let px = (di / 4) as i32 % w_i;
+        let dx = px - cx;
+        let dy = py - cy;
+        let dist = ((dx * dx + dy * dy) as f32).sqrt();
+        let cov = cobertura_pincel(dist, r as f32, dureza);
+        let sa = (src[si + 3] as f32 / 255.0) * cov;
+        if sa <= 0.0 {
+            continue;
+        }
+        let da = dst[di + 3] as f32 / 255.0;
+        let inv = 1.0 - sa;
+        let out_a = sa + da * inv;
+        if out_a > 0.0 {
+            for k in 0..3 {
+                let sc = (src[si + k] as f64 + delta[k]).clamp(0.0, 255.0) as f32;
+                let dc = dst[di + k] as f32;
+                dst[di + k] = ((sc * sa + dc * da * inv) / out_a).round().clamp(0.0, 255.0) as u8;
+            }
+            dst[di + 3] = (out_a * 255.0).round() as u8;
+        }
+    }
+}
+
+/// Sana un punto: estampa el disco de sanado en `(cx, cy)` desde el origen
+/// desplazado por `(offx, offy)`, sobre la capa raster seleccionada.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sanar_punto_en_capa(
+    model: &mut Model,
+    cx: i32,
+    cy: i32,
+    offx: i32,
+    offy: i32,
+    radio: i32,
+    dureza: f32,
+) -> bool {
+    pincel_aplicar(model, |buf, w, h, _color, bounds| {
+        let src = buf.clone();
+        estampar_sanar(buf, &src, w, h, cx, cy, offx, offy, radio, dureza, bounds);
+    })
+}
+
+/// Sana un segmento `(x0,y0)→(x1,y1)`: estampa discos de sanado a lo largo de
+/// la línea (paso ~1 px). Cada disco recalcula su delta de color, así el parche
+/// sigue el color base del destino a lo largo del trazo.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sanar_segmento_en_capa(
+    model: &mut Model,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    offx: i32,
+    offy: i32,
+    radio: i32,
+    dureza: f32,
+) -> bool {
+    pincel_aplicar(model, |buf, w, h, _color, bounds| {
+        let src = buf.clone();
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let pasos = dx.abs().max(dy.abs()).max(1);
+        for i in 0..=pasos {
+            let t = i as f32 / pasos as f32;
+            let cx = (x0 as f32 + t * dx as f32).round() as i32;
+            let cy = (y0 as f32 + t * dy as f32).round() as i32;
+            estampar_sanar(buf, &src, w, h, cx, cy, offx, offy, radio, dureza, bounds);
+        }
+    })
+}
+
 /// Clona un punto: estampa el disco de clonado en `(cx, cy)` muestreando desde
 /// el origen desplazado por `(offx, offy)`, sobre la capa raster seleccionada.
 #[allow(clippy::too_many_arguments)]

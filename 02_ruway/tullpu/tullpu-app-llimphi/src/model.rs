@@ -311,6 +311,10 @@ pub(crate) enum Herramienta {
     /// Tampón de clonado: Alt+click fija el origen; luego el drag copia píxeles
     /// del origen (con el offset del primer punto) sobre la capa raster.
     Clonar,
+    /// Pincel corrector (healing): como el clonado, pero iguala el color/luz
+    /// del entorno destino — el parche se funde en vez de pegarse visible.
+    /// Comparte el ancla/offset del clon (Alt+click fija el origen).
+    Sanar,
 }
 
 impl Herramienta {
@@ -327,6 +331,7 @@ impl Herramienta {
             Herramienta::Lazo => "lazo",
             Herramienta::Texto => "texto",
             Herramienta::Clonar => "clonar",
+            Herramienta::Sanar => "sanar",
         }
     }
 

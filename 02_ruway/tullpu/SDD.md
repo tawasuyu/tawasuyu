@@ -37,8 +37,12 @@ iniciada.
   (hoy siempre alrededor del centro).
 - **Fase E — export (MAYORMENTE):** multiformato PNG/JPEG/WebP ya está; falta
   save-picker y PSD export.
-- **Pendientes:** F retoque (clone/heal), G GPU+tiling,
-  H IA real ONNX + vectores/paths.
+- **Fase F — retoque (HECHA, clone + heal).** Tampón de clonado (`c`, Alt fija
+  origen) + **pincel corrector** (`j`, healing): clona y suma el delta
+  `media_destino − media_origen` por estampa, fundiendo el parche (`estampar_sanar`
+  en ops.rs; reusa el ancla/offset del clon). Falta (menor): parche por
+  selección y modos content-aware.
+- **Pendientes:** G GPU+tiling, H IA real ONNX + vectores/paths.
 
 ## Estado (2026-05-31)
 

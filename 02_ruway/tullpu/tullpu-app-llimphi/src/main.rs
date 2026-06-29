@@ -1043,8 +1043,14 @@ impl App for Tullpu {
                         });
                         let radio = model.radio_pincel;
                         let dureza = model.dureza_pincel;
-                        let etiqueta = model.seleccionada.map(|i| (i, "clon"));
-                        if clonar_punto_en_capa(&mut model, ix, iy, off.0, off.1, radio, dureza) {
+                        let sanar = model.herramienta == Herramienta::Sanar;
+                        let etiqueta = model.seleccionada.map(|i| (i, if sanar { "sanar" } else { "clon" }));
+                        let cambio = if sanar {
+                            sanar_punto_en_capa(&mut model, ix, iy, off.0, off.1, radio, dureza)
+                        } else {
+                            clonar_punto_en_capa(&mut model, ix, iy, off.0, off.1, radio, dureza)
+                        };
+                        if cambio {
                             pushear_snapshot(&mut model, etiqueta);
                         }
                     } else {
@@ -1065,10 +1071,18 @@ impl App for Tullpu {
                         let (nx, ny) = (ix.floor() as i32, iy.floor() as i32);
                         let radio = model.radio_pincel;
                         let dureza = model.dureza_pincel;
-                        let etiqueta = model.seleccionada.map(|i| (i, "clon"));
-                        if clonar_segmento_en_capa(
-                            &mut model, pd.last_ix, pd.last_iy, nx, ny, off.0, off.1, radio, dureza,
-                        ) {
+                        let sanar = model.herramienta == Herramienta::Sanar;
+                        let etiqueta = model.seleccionada.map(|i| (i, if sanar { "sanar" } else { "clon" }));
+                        let cambio = if sanar {
+                            sanar_segmento_en_capa(
+                                &mut model, pd.last_ix, pd.last_iy, nx, ny, off.0, off.1, radio, dureza,
+                            )
+                        } else {
+                            clonar_segmento_en_capa(
+                                &mut model, pd.last_ix, pd.last_iy, nx, ny, off.0, off.1, radio, dureza,
+                            )
+                        };
+                        if cambio {
                             pushear_snapshot(&mut model, etiqueta);
                         }
                         pd.last_ix = nx;

@@ -121,6 +121,10 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("c") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Clonar));
         }
+        // `j` = pincel corrector (healing), convención Photoshop.
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("j") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Sanar));
+        }
         // `p` = pincel (paint a mano alzada).
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("p") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Pincel));

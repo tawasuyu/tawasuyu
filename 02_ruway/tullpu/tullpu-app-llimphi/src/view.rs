@@ -954,6 +954,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Clonar),
     )));
+    let etiqueta_sanar = if model.herramienta == Herramienta::Sanar {
+        "● sanar (j · alt fija)"
+    } else {
+        "○ sanar (j)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_sanar.to_string(),
+        if model.herramienta == Herramienta::Sanar {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Sanar),
+    )));
     let etiqueta_pincel = if model.herramienta == Herramienta::Pincel {
         "● pincel (p)"
     } else {
@@ -1732,7 +1746,7 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                 Herramienta::Texto => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
                     Some(Msg::AgregarTexto { lx, ly, rw, rh })
                 }),
-                Herramienta::Clonar => cuerpo_paint
+                Herramienta::Clonar | Herramienta::Sanar => cuerpo_paint
                     .on_click_at(|lx, ly, rw, rh| Some(Msg::IniciarClon { lx, ly, rw, rh }))
                     .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {
                         DragPhase::Move => Some(Msg::ContinuarClon { dx, dy }),
