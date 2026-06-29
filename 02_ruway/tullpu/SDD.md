@@ -102,9 +102,22 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
     ancla la agarra y el drag la mueve (`mover_ancla`) con re-raster en vivo;
     Enter cierra el path. Overlay de handles (cuadritos) sobre cada ancla de la
     capa en edición. Estado en `Model::{pluma_capa, pluma_ancla, pluma_rect}`.
-  - **Falta (menor):** controles Bézier arrastrables independientes (hoy el
-    ancla mueve sus controles rígido), borrar punto desde UI, y trazo
-    (color/ancho) configurable en panel.
+  - **Acciones de completitud (HECHAS, items 1–7).** (1) Panel **trazo/relleno**
+    de la capa vectorial seleccionada (activar/quitar relleno y trazo con el
+    color activo, ancho ±). (2) Más **primitivas**: `linea`, `rect_redondeado`,
+    `estrella`, `poligono_regular` (+ botones). (3) **Borrar nodo** con Alt+click.
+    (4) **Controles Bézier** independientes: `puntos_control`/`mover_control`/
+    `convertir_a_curva` (Shift+click recta→curva), handles dibujados con
+    línea-guía. (5) **Transformar** la capa vectorial sin pérdida:
+    `ParamsVector::transformar([a..f])`; Ctrl+T hornea la afín en el path al
+    confirmar (crisp + editable). (6) **Booleanos** a nivel alfa
+    (`tullpu_ops::booleano`: unión/intersección/resta) con la capa de abajo →
+    resultado raster. (7) **SVG más rico**: gradientes aproximados al promedio de
+    sus stops (la forma ya no desaparece) y **grupos `<g>` preservados** como
+    carpetas anidadas (`foreign_svg::NodoSvg` árbol; `cargar_svg` lo reconstruye).
+    Todo con tests en `tullpu-core`/`tullpu-ops`/`foreign-svg`.
+  - **Falta (menor):** texto SVG → path (necesita fontdb), snap a grid, booleanos
+    vectoriales reales (hoy a nivel alfa/raster).
 - **Pendiente:** H IA real ONNX (segment-anything / upscale / restyle).
 
 ## Estado (2026-05-31)

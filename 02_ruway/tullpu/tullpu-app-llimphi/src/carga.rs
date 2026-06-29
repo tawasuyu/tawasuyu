@@ -124,8 +124,8 @@ pub(crate) fn cargar_arg(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMem
 
 /// `.svg` → import a capas vectoriales nativas (vía `foreign-svg`). Cada path
 /// del SVG se rasteriza al tamaño del lienzo y se cuelga como `Capa::vector`,
-/// conservando sus params (re-editables). El lienzo toma el tamaño que declara
-/// el SVG.
+/// conservando sus params (re-editables); los `<g>` del SVG se preservan como
+/// **grupos** (carpetas). El lienzo toma el tamaño que declara el SVG.
 pub(crate) fn cargar_svg(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMemoria, Uuid, String)> {
     let bytes = std::fs::read(path).ok()?;
     let imp = match foreign_svg::importar_svg(&bytes) {
@@ -139,13 +139,42 @@ pub(crate) fn cargar_svg(path: &std::path::Path) -> Option<(Lienzo, AlmacenEnMem
     let mut almacen = AlmacenEnMemoria::nuevo();
     let mut lienzo = Lienzo::nuevo(w, h);
     let n = imp.capas.len();
-    for (i, params) in imp.capas.into_iter().enumerate() {
-        let buffer = tullpu_ops::rasterizar_vector(&params, w, h);
-        let hash = almacen.insertar(buffer);
-        lienzo.apilar(Capa::vector(format!("path {}", i + 1), hash, params));
-    }
+    let mut contador = 0usize;
+    construir_nodos_svg(&imp.nodos, None, &mut lienzo, &mut almacen, w, h, &mut contador);
     let id = lienzo.capas.first()?.id;
     Some((lienzo, almacen, id, format!("svg · {n} paths · {w}×{h}")))
+}
+
+/// Construye recursivamente las capas del lienzo a partir del árbol de nodos
+/// SVG, recreando los grupos (`<g>` → `Capa::grupo`) con su anidación.
+fn construir_nodos_svg(
+    nodos: &[foreign_svg::NodoSvg],
+    grupo_padre: Option<Uuid>,
+    lienzo: &mut Lienzo,
+    almacen: &mut AlmacenEnMemoria,
+    w: u32,
+    h: u32,
+    contador: &mut usize,
+) {
+    for nodo in nodos {
+        match nodo {
+            foreign_svg::NodoSvg::Path(params) => {
+                *contador += 1;
+                let buffer = tullpu_ops::rasterizar_vector(params, w, h);
+                let hash = almacen.insertar(buffer);
+                let mut capa = Capa::vector(format!("path {}", *contador), hash, params.clone());
+                capa.grupo = grupo_padre;
+                lienzo.apilar(capa);
+            }
+            foreign_svg::NodoSvg::Grupo { nombre, hijos } => {
+                let mut g = Capa::grupo(nombre.clone().unwrap_or_else(|| "grupo".into()));
+                g.grupo = grupo_padre;
+                let gid = g.id;
+                lienzo.apilar(g);
+                construir_nodos_svg(hijos, Some(gid), lienzo, almacen, w, h, contador);
+            }
+        }
+    }
 }
 
 pub(crate) fn cargar_png_como_capa(
