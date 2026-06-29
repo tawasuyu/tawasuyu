@@ -316,6 +316,14 @@
             [
               "LIBSEAT_BACKEND",
               "builtin"
+            ],
+            [
+              "PATH",
+              "/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin"
+            ],
+            [
+              "MIRADA_GREETER_BIN",
+              "/usr/local/bin/mirada-greeter"
             ]
           ]
         }
