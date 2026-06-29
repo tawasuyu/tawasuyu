@@ -9,7 +9,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
-use matilda_discover::{parse_docker_ps, parse_nginx_sites, ContainerStatus, DOCKER_PS_FORMAT};
+use matilda_discover::{
+    parse_docker_ps, parse_nginx_sites, parse_service_states, remote_service_probe_command,
+    ContainerStatus, ObservedService, DOCKER_PS_FORMAT,
+};
 use matilda_linker::{Linker, SshAuth, SshConfig};
 
 /// Cada cuánto se re-descubre cada host (la conexión SSH es cara).
@@ -30,6 +33,8 @@ pub struct HostObs {
     pub reachable: bool,
     pub containers: Vec<ContainerStatus>,
     pub vhosts: Vec<String>,
+    /// Servicios systemd declarados, con su estado real (enabled/active).
+    pub services: Vec<ObservedService>,
 }
 
 /// Feed de discover remoto en su propio hilo. `latest()` drena la última tanda.
@@ -38,7 +43,9 @@ pub struct FlotaDiscoverHandle {
 }
 
 impl FlotaDiscoverHandle {
-    pub fn spawn(hosts: Vec<HostConn>) -> Self {
+    /// `hosts` = a quién conectar; `service_units` = los servicios systemd
+    /// declarados en el inventario, que se sondean en cada host (estado real).
+    pub fn spawn(hosts: Vec<HostConn>, service_units: Vec<String>) -> Self {
         let (tx, rx) = channel();
         std::thread::Builder::new()
             .name("pata-flota-discover".into())
@@ -50,6 +57,10 @@ impl FlotaDiscoverHandle {
                     return;
                 };
                 let key = default_key_path();
+                let probe = {
+                    let refs: Vec<&str> = service_units.iter().map(|s| s.as_str()).collect();
+                    remote_service_probe_command(&refs)
+                };
                 loop {
                     let mut out = Vec::with_capacity(hosts.len());
                     for h in &hosts {
@@ -60,6 +71,7 @@ impl FlotaDiscoverHandle {
                             auth: SshAuth::Key { path: key.clone(), passphrase: None },
                             keepalive_secs: 15,
                         };
+                        let probe = probe.clone();
                         let obs = rt.block_on(async {
                             let linker = Linker::connect(&cfg).await.ok()?;
                             let ps = linker
@@ -72,20 +84,33 @@ impl FlotaDiscoverHandle {
                                 .await
                                 .ok();
                             let vhosts = vh.map(|t| parse_nginx_sites(&t)).unwrap_or_default();
-                            Some((containers, vhosts))
+                            // Servicios systemd (sólo si el inventario declara alguno).
+                            let services = if probe.is_empty() {
+                                Vec::new()
+                            } else {
+                                linker
+                                    .exec(&probe)
+                                    .await
+                                    .ok()
+                                    .map(|t| parse_service_states(&t))
+                                    .unwrap_or_default()
+                            };
+                            Some((containers, vhosts, services))
                         });
                         out.push(match obs {
-                            Some((containers, vhosts)) => HostObs {
+                            Some((containers, vhosts, services)) => HostObs {
                                 name: h.name.clone(),
                                 reachable: true,
                                 containers,
                                 vhosts,
+                                services,
                             },
                             None => HostObs {
                                 name: h.name.clone(),
                                 reachable: false,
                                 containers: Vec::new(),
                                 vhosts: Vec::new(),
+                                services: Vec::new(),
                             },
                         });
                     }

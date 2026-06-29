@@ -432,6 +432,8 @@ fn anchor_y_size(anchor: Anchor, thickness: u32) -> (LayerAnchor, (u32, u32)) {
 /// Levanta el backend layer-shell. Devuelve error si no hay sesión Wayland o el
 /// compositor no expone `wlr-layer-shell`.
 pub fn run() -> Result<(), Box<dyn Error>> {
+    rimay_localize::init();
+    let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     let cfg = pata_config::load();
     let mut theme = Theme::dark();
     if let Some(c) = crate::render::parse_hex(&cfg.general.accent) {
@@ -523,7 +525,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 port: h.ssh_port(),
             })
             .collect();
-        (!hosts.is_empty()).then(|| crate::flota_discover::FlotaDiscoverHandle::spawn(hosts))
+        let units: Vec<String> = inv.services().map(|s| s.unit.clone()).collect();
+        (!hosts.is_empty())
+            .then(|| crate::flota_discover::FlotaDiscoverHandle::spawn(hosts, units))
     });
     let unidades = crate::config_tiene_unidades(&cfg).then(crate::unidades::UnidadesHandle::spawn);
 

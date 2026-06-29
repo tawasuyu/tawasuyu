@@ -5,6 +5,7 @@
 //! pata aunque matilda viva del lado de shuma.
 
 use llimphi_theme::Theme;
+use rimay_localize::{t, t_args};
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, AlignItems, FlexDirection, JustifyContent, Size, Style,
 };
@@ -33,13 +34,13 @@ pub fn flota_view(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text("Flota".to_string(), 14.0, theme.fg_text);
+    .text(t("pata-flota"), 14.0, theme.fg_text);
 
     let mut hijos = vec![titulo];
     match inv {
         Some(inv) if !inv.is_empty() => {
             // Hosts: nombre · dirección (+ tags tenues).
-            let mut h_filas = vec![encabezado("Hosts", theme)];
+            let mut h_filas = vec![encabezado(&t("pata-flota-hosts"), theme)];
             for h in inv.hosts() {
                 let detalle = if h.tags.is_empty() {
                     h.address.clone()
@@ -53,7 +54,7 @@ pub fn flota_view(
             }
 
             // Contenedores: nombre · imagen (+ puertos tenues).
-            let mut c_filas = vec![encabezado("Contenedores", theme)];
+            let mut c_filas = vec![encabezado(&t("pata-flota-containers"), theme)];
             for c in inv.containers() {
                 let puertos: Vec<String> =
                     c.ports.iter().map(|p| format!("{}→{}", p.host, p.container)).collect();
@@ -69,7 +70,7 @@ pub fn flota_view(
             }
 
             // VHosts: dominio · upstream (TLS marcado).
-            let mut v_filas = vec![encabezado("VHosts", theme)];
+            let mut v_filas = vec![encabezado(&t("pata-flota-vhosts"), theme)];
             for v in inv.vhosts() {
                 let up = match &v.upstream {
                     Upstream::Address(a) => a.clone(),
@@ -126,7 +127,10 @@ fn plan_section(inv: &Inventory, theme: &Theme) -> Option<View<Msg>> {
         return None;
     }
     let total = steps.len();
-    let mut filas = vec![encabezado(&format!("Plan de despliegue · {total} pasos"), theme)];
+    let mut filas = vec![encabezado(
+        &t_args("pata-flota-deploy-plan", &[("total", total.to_string().into())]),
+        theme,
+    )];
     for step in steps.iter().take(MAX_PASOS) {
         // Descripción del paso + su primer comando (tenue) como pista de qué corre.
         let desc = View::new(Style {
@@ -157,7 +161,10 @@ fn plan_section(inv: &Inventory, theme: &Theme) -> Option<View<Msg>> {
         );
     }
     if total > MAX_PASOS {
-        filas.push(encabezado(&format!("… +{} pasos más", total - MAX_PASOS), theme));
+        filas.push(encabezado(
+            &t_args("pata-flota-more-steps", &[("n", (total - MAX_PASOS).to_string().into())]),
+            theme,
+        ));
     }
     Some(panel_box_flow(filas, theme))
 }
@@ -165,19 +172,32 @@ fn plan_section(inv: &Inventory, theme: &Theme) -> Option<View<Msg>> {
 /// La sección «Estado real · {host}»: lo que el discover SSH observó en vivo
 /// (contenedores con su status). Si el host no fue alcanzable, lo dice.
 fn estado_real_section(host: &HostObs, theme: &Theme) -> View<Msg> {
-    let mut filas = vec![encabezado(&format!("Estado real · {}", host.name), theme)];
+    let mut filas = vec![encabezado(
+        &t_args("pata-flota-real-state", &[("host", host.name.clone().into())]),
+        theme,
+    )];
     if !host.reachable {
-        filas.push(fila("(no alcanzable)", "SSH", theme));
+        filas.push(fila(&t("pata-flota-unreachable"), "SSH", theme));
         return panel_box_flow(filas, theme);
     }
     if host.containers.is_empty() && host.vhosts.is_empty() {
-        filas.push(fila("(sin contenedores)", "", theme));
+        filas.push(fila(&t("pata-flota-no-containers"), "", theme));
     }
     for c in &host.containers {
         // `status` de docker (p.ej. "Up 3 hours" / "Exited (0)") — verde si Up.
         let corriendo = c.status.starts_with("Up");
         let marca = if corriendo { "● " } else { "○ " };
         filas.push(fila(&format!("{marca}{}", c.name), &c.status, theme));
+    }
+    // Servicios systemd declarados, con su estado real (● activo / ○ inactivo).
+    for s in &host.services {
+        let marca = if s.active { "● " } else { "○ " };
+        let detalle = format!(
+            "{} · {}",
+            if s.enabled { "enabled" } else { "disabled" },
+            if s.active { "active" } else { "inactive" }
+        );
+        filas.push(fila(&format!("{marca}{}", s.unit), &detalle, theme));
     }
     panel_box_flow(filas, theme)
 }
@@ -234,7 +254,7 @@ fn aviso(theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text(
-        "Sin inventario de flota. Poné uno en ~/.config/tawasuyu/flota/inventory.json".to_string(),
+        t("pata-flota-no-inventory"),
         12.0,
         theme.fg_muted,
     )

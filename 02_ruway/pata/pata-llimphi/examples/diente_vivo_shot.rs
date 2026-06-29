@@ -32,7 +32,7 @@ use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_dock_rail::{
     dock_rail_view_badged, BadgeKind, DockBadge, DockRailItem, DockRailPalette, DockRailSide,
 };
-use matilda_discover::{ContainerStatus, RunState};
+use matilda_discover::{ContainerStatus, ObservedService, RunState};
 use pata_llimphi::flota_discover::HostObs;
 use pata_llimphi::render::{
     control_center_view, diente_vivo_view, flota_view, monitor_vivo_view, paint_reposo_halo,
@@ -129,12 +129,17 @@ fn main() {
                 cs("api", RunState::Exited, "Exited (1) 2 min ago"),
             ],
             vhosts: vec!["jlsoltech.com".to_string()],
+            services: vec![
+                ObservedService { unit: "nginx.service".to_string(), enabled: true, active: true },
+                ObservedService { unit: "docker.service".to_string(), enabled: true, active: true },
+            ],
         },
         HostObs {
             name: "db-1".to_string(),
             reachable: false,
             containers: vec![],
             vhosts: vec![],
+            services: vec![],
         },
     ];
 

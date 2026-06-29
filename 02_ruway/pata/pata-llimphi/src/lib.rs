@@ -458,15 +458,15 @@ impl SessionAction {
         SessionAction::Logout,
     ];
 
-    /// La etiqueta visible.
-    pub fn label(self) -> &'static str {
-        match self {
-            SessionAction::Lock => "Bloquear",
-            SessionAction::Suspend => "Suspender",
-            SessionAction::Reboot => "Reiniciar",
-            SessionAction::Shutdown => "Apagar",
-            SessionAction::Logout => "Cerrar sesión",
-        }
+    /// La etiqueta visible (localizada).
+    pub fn label(self) -> String {
+        rimay_localize::t(match self {
+            SessionAction::Lock => "pata-session-lock",
+            SessionAction::Suspend => "pata-session-suspend",
+            SessionAction::Reboot => "pata-session-reboot",
+            SessionAction::Shutdown => "pata-shutdown",
+            SessionAction::Logout => "pata-logout",
+        })
     }
 
     /// El comando de shell que la ejecuta.
@@ -1359,6 +1359,8 @@ impl App for PataApp {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        rimay_localize::init();
+        let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
         let cfg = pata_config::load();
         let rag_present = config_tiene_rag(&cfg);
         // Qué corpus monta el diente RAG (`source` del prop): "willay" = el centro
@@ -1399,7 +1401,9 @@ impl App for PataApp {
                     port: h.ssh_port(),
                 })
                 .collect();
-            (!hosts.is_empty()).then(|| flota_discover::FlotaDiscoverHandle::spawn(hosts))
+            let units: Vec<String> = inv.services().map(|s| s.unit.clone()).collect();
+            (!hosts.is_empty())
+                .then(|| flota_discover::FlotaDiscoverHandle::spawn(hosts, units))
         });
         let unidades = config_tiene_unidades(&cfg).then(unidades::UnidadesHandle::spawn);
 

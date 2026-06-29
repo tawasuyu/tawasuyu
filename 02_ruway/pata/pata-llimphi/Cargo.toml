@@ -103,6 +103,8 @@ card-sidecar = { path = "../../chasqui/card-sidecar" }
 # Config GLOBAL del escritorio (incl. dónde van los dientes): una sola fuente
 # de verdad que todas las apps respetan.
 wawa-config = { path = "../../../shared/wawa-config" }
+# Localización (i18n): los strings de usuario del chrome pasan por t()/t_args().
+rimay-localize = { path = "../../../shared/rimay-localize" }
 # MonadId = Ulid: derivamos NavId deterministas de sus bytes; los tests crean ids.
 ulid = { workspace = true }
 llimphi-theme = { workspace = true }
