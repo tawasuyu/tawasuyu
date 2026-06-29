@@ -116,8 +116,32 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
     sus stops (la forma ya no desaparece) y **grupos `<g>` preservados** como
     carpetas anidadas (`foreign_svg::NodoSvg` árbol; `cargar_svg` lo reconstruye).
     Todo con tests en `tullpu-core`/`tullpu-ops`/`foreign-svg`.
-  - **Falta (menor):** texto SVG → path (necesita fontdb), snap a grid, booleanos
-    vectoriales reales (hoy a nivel alfa/raster).
+  - **Rellenos de gradiente (HECHO).** `ParamsVector.gradiente: Option<Gradiente>`
+    (`Lineal`/`Radial` con paradas), prioridad sobre el sólido; rasterizado con
+    shader tiny-skia (`shader_gradiente`). Constructores `Gradiente::{lineal,
+    radial}`. UI: botones gradiente lineal/radial (color activo → transparente
+    sobre el bbox de la forma) + quitar. Test de gradiente lineal.
+
+  - **Roadmap hacia paridad de editor vectorial (CorelDRAW/Illustrator).**
+    Paridad *total* no es objetivo realista (Corel = ilustración + prepress de 30
+    años). El **núcleo** ya está: pen/bézier con handles, formas, edición de
+    nodos, relleno sólido+gradiente, trazo con ancho, transformar sin pérdida,
+    booleanos (raster), grupos, blend/opacidad/máscaras, import/export SVG. Gaps
+    en orden de impacto/esfuerzo:
+    1. **Trazo profesional** — dash, line cap/join, flechas. *(bajo; tiny-skia lo
+       soporta)*
+    2. **Precisión** — reglas, guías, **snapping**, grilla, alinear/distribuir.
+       *(medio; muy "Corel")*
+    3. **Texto vectorial** + texto-en-path (hoy el texto es raster aparte).
+       *(alto)*
+    4. **Booleanos vectoriales reales** (hoy alfa/raster → pierde editabilidad;
+       necesita clipping de paths, p.ej. flatten + `geo` o un clipper). *(alto)*
+    5. **Efectos vectoriales** — blend/contour/envelope/PowerClip, sombra. *(muy
+       alto)*
+    6. **CMYK/Pantone/ICC + separaciones/prepress, multipágina, mesh fill.**
+       *(otro dominio)*
+    Decisión (2026-06-29): hacer **1 y 2** (tratables y certificables); de **5 en
+    adelante** se vuelve realmente difícil → evaluar caso por caso si vale la pena.
 - **Pendiente:** H IA real ONNX (segment-anything / upscale / restyle).
 
 ## Estado (2026-05-31)
