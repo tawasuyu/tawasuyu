@@ -36,6 +36,8 @@ pub enum Superficie {
     Shuma,
     /// El sistema operativo por interfaces estándar (D-Bus: energía, red, hora…).
     Sistema,
+    /// Contextos de usuario (`pacha`): cambiar de modo de uso, listar, cerrar.
+    Pacha,
 }
 
 impl Superficie {
@@ -46,6 +48,7 @@ impl Superficie {
             Superficie::Sandokan => "sandokan",
             Superficie::Shuma => "shuma",
             Superficie::Sistema => "sistema",
+            Superficie::Pacha => "pacha",
         }
     }
 }
@@ -304,6 +307,8 @@ impl Catalogo {
         c.registrar(Box::new(crate::sistema::FuenteSistema));
         #[cfg(feature = "shuma")]
         c.registrar(Box::new(crate::shuma::FuenteShuma));
+        #[cfg(feature = "pacha")]
+        c.registrar(Box::new(crate::pacha::FuentePacha));
         c
     }
 
@@ -437,6 +442,8 @@ pub mod sandokan;
 pub mod sistema;
 #[cfg(feature = "shuma")]
 pub mod shuma;
+#[cfg(feature = "pacha")]
+pub mod pacha;
 
 #[cfg(test)]
 mod tests {
