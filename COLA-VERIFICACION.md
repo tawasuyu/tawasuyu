@@ -82,11 +82,17 @@ sólo cuando es un visual nuevo no certificable de otra forma.
 ## 11. shuma — gateway móvil + flota (≈20 commits)
 > `cargo run -p shuma-gateway` → navegador en `/term`
 - [ ] matilda: contra una flota SSH real
-- [ ] **`:predice` (2026-06-28):** legibilidad del listado en metal — comandos
-  probables (marca ◆ afinidad cwd) + secuencias/grupos + F-keys. Cubierto por
-  tests (`rank_command_predictions`), NO mirado a ojo. Render rápido:
-  `cargo run -p shuma-module-shell --example pantallazo_tee --release` cubre el
-  resto del paquete IA pero no el listado de `:predice` (ese está en el input).
+- [~] **`:predice` (2026-06-28):** legibilidad del listado en metal — comandos
+  probables (marca ◆ afinidad cwd) + secuencias/grupos + F-keys. **LÓGICA CERTIFICADA
+  EN METAL 2026-06-29:** `cargo test -p shuma-module-shell` = **232/232 verde**, incl.
+  `predice_lista_comandos_por_frecuencia_y_cwd`, `infer_predicts_next_command_in_a_repeated_sequence`,
+  `ghost_uses_prediction_before_history`, `rank_completion_by_usage_orders_by_history`.
+  **Render headless del paquete IA OK:** `pantallazo_tee` → PNG 800×560 RGBA, 14 líneas,
+  sin panic (path offscreen wgpu sano; confirmado además con `llimphi-hal clear_screen`
+  a 400–2000 fps). OJO (lección [[build-timeout-no-es-cuelgue]]): correr el binario
+  **directo** (`target/{debug,release}/examples/pantallazo_tee`) — `cargo run --release`
+  se cuelga COMPILANDO, no en runtime. **Queda tu ojo:** legibilidad del listado de
+  `:predice` en sí (está en el widget de input, no en el `pantallazo_tee`).
 
 ## 12. Pase masivo "moderniza UI" (~35 apps, 06-26)
 - [~] **Smoke de arranque (2026-06-27): 30/30 apps GUI arrancan al event loop, cero panics.**
