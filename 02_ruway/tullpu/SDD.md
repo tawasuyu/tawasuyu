@@ -4,6 +4,31 @@
 
 > Estado: **implementado (MVP+)** — ya no es sólo diseño. Ver `## Estado (2026-05-31)` abajo. Referenciado en `PLAN.md` §6.ter (tabla office/PSD) y §6.quinquies (multimedia).
 
+## Estado (2026-06-29) — paridad Photoshop/Photopea
+
+Plan por fases para cerrar gaps vs Photopea/Photoshop. **Fase A** (estructura de
+documento) y **Fase B** (selección real) completas; **D** y **E** iniciadas.
+
+- **Fase A — grupos + clipping + capas de ajuste (HECHA).** `Capa` ganó
+  `clase: ClaseCapa{Pixeles,Grupo,Ajuste(OpLocal)}`, `grupo: Option<Uuid>`
+  (jerarquía de carpetas sobre la lista plana) y `clipping: bool`. El compositor
+  `tullpu-render` es recursivo: compone cada grupo en aislamiento, aplica
+  clipping masks (recorte a la alfa de la capa base) y capas de ajuste en vivo
+  sobre el compuesto inferior dentro de su scope. Math per-pixel compartida en
+  `tullpu_core::pixel` (sin ciclo ops↔render). UI: menú "Capa", panel con
+  indentado + marcadores (📁/◫/↳), capas de ajuste editables (sliders + curvas).
+- **Fase B — selección real (HECHA).** `Model.seleccion_mascara` (máscara alfa
+  autoritativa; `seleccion` = bbox) + overlay cacheado que el painter dibuja.
+  Varita (`tullpu_paint::flood_mascara`), lazo a mano alzada
+  (`poligono_a_mascara`), suma con Shift, invertir selección. Las ops
+  destructivas honran la máscara por píxel (`aplicar_px_en_seleccion`).
+- **Fase D — transform (INICIADA):** voltear capa H/V. Falta free-transform
+  interactivo (rotar/escalar/sesgar con handles).
+- **Fase E — export (MAYORMENTE):** multiformato PNG/JPEG/WebP ya está; falta
+  save-picker y PSD export.
+- **Pendientes:** C texto (parley), F retoque (clone/heal), G GPU+tiling,
+  H IA real ONNX + vectores/paths.
+
 ## Estado (2026-05-31)
 
 ### Hecho
