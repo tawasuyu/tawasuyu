@@ -17,36 +17,34 @@
 #   │ compat   (opt) install-arje-session-gnome.sh --system — shims D-Bus de   │
 #   │                arje-compat (logind/hostnamed/…) para correr la sesión     │
 #   │                «GNOME» bajo arje. Sólo si --with-compat.                  │
-#   │ boot     (opt) install-arje.sh — entrada UEFI de arranque NATIVO de arje. │
-#   │                HONESTIDAD: hoy es un DEMO del boot-chain sin parpadeo que │
-#   │                cae a una consola de prueba en tty1 (getty-stub), NO un    │
-#   │                login/escritorio — eso necesita el rootfs hammer con la    │
-#   │                sesión mirada ensamblada (camino aparte, todavía no listo).│
-#   │                Sólo si --with-boot.                                       │
+#   │ init     (opt) install-arje-init.sh — arje-zero como INIT ALTERNO (PID 1) │
+#   │                sobre TU root actual, en una entrada de GRUB aparte (NO     │
+#   │                toca tu default). "arje" arranca splash → mirada-compositor │
+#   │                --drm --greeter → sesión mirada/pata/shuma, con la Mesa que │
+#   │                ya tenés. El reboot es prueba de metal tuya. --with-init.   │
 #   └──────────────────────────────────────────────────────────────────────────┘
 #
 # Uso:
 #   install-tawasuyu.sh                 # desktop + splash (binario, sin habilitar)
 #   install-tawasuyu.sh --with-compat   # + shims arje-compat (sesión GNOME)
-#   install-tawasuyu.sh --with-boot     # + entrada UEFI del arranque nativo (DEMO)
+#   install-tawasuyu.sh --with-init     # + arje como init alterno (entrada GRUB)
 #   install-tawasuyu.sh --enable-splash # habilita el servicio de splash del host
-#   install-tawasuyu.sh --all           # desktop + splash(habilitado) + compat + boot
+#   install-tawasuyu.sh --all           # desktop + splash(habilitado) + compat + init
 #   install-tawasuyu.sh --yes           # sin preguntas (asume defaults)
 #   install-tawasuyu.sh --uninstall     # revierte TODO lo que instaló este script
 #   install-tawasuyu.sh --help
 #
-# El SO tawasuyu "redondo" sobre disco propio (arje init + rootfs hammer) es un
-# camino SEPARADO: se construye en ../hammer (kernel genérico + product-rootfs)
-# y se instala con sus scripts (hammer-install.sh /dev/sdX). Todavía le falta
-# ensamblar la sesión mirada dentro del rootfs; cuando esté, este script ganará
-# una etapa `--metal`. Por ahora "vivir ahí" = la sesión mirada sobre tu Linux.
+# Con --with-init vivís EN arje sobre tu propio root (arje de PID 1, tu kernel,
+# tu Mesa) — sin rootfs aparte. El SO tawasuyu sobre DISCO PROPIO (rootfs hammer
+# autocontenido) es otro camino, en ../hammer (hammer-install.sh /dev/sdX); no lo
+# necesitás para vivir en arje acá.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 SCRIPTS="scripts"
 
 # ── banderas ──────────────────────────────────────────────────────────────────
 WITH_COMPAT=0
-WITH_BOOT=0
+WITH_INIT=0
 ENABLE_SPLASH=0
 ASSUME_YES=0
 DO_UNINSTALL=0
@@ -58,9 +56,9 @@ have() { command -v "$1" >/dev/null 2>&1; }
 while [ $# -gt 0 ]; do
     case "$1" in
         --with-compat)   WITH_COMPAT=1 ;;
-        --with-boot)     WITH_BOOT=1 ;;
+        --with-init)     WITH_INIT=1 ;;
         --enable-splash) ENABLE_SPLASH=1 ;;
-        --all)           WITH_COMPAT=1; WITH_BOOT=1; ENABLE_SPLASH=1 ;;
+        --all)           WITH_COMPAT=1; WITH_INIT=1; ENABLE_SPLASH=1 ;;
         --yes|-y)        ASSUME_YES=1 ;;
         --uninstall)     DO_UNINSTALL=1 ;;
         -h|--help)       sed -n '2,41p' "$0"; exit 0 ;;
@@ -107,9 +105,11 @@ if [ "$DO_UNINSTALL" = 1 ]; then
     info "desinstalando la capa de sistema tawasuyu (sudo para los archivos de sistema)"
     sudo -v || die "sudo denegado."
 
-    # boot: install-arje.sh sabe revertirse solo (entrada NVRAM + ESP).
-    info "boot: quitando la entrada de arranque de arje (si existe)"
-    "$SCRIPTS/install-arje.sh" --uninstall || echo "  (install-arje.sh --uninstall no aplicó; sigo)"
+    # init: arje como init alterno (binarios + seed + entrada de GRUB).
+    info "init: quitando arje como init alterno (si está)"
+    "$SCRIPTS/install-arje-init.sh" --uninstall || echo "  (install-arje-init.sh --uninstall no aplicó; sigo)"
+    # demo viejo (getty-stub vía install-arje.sh / entrada NVRAM), por si existía.
+    "$SCRIPTS/install-arje.sh" --uninstall 2>/dev/null || true
 
     # splash: servicio + binario + config.
     info "splash: deshabilitando y quitando el servicio del host"
@@ -159,7 +159,7 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 [ "$(id -u)" != 0 ] || die "no me corras con sudo: los sub-scripts construyen con tu toolchain y piden sudo solos."
 have cargo || die "falta cargo (instalá Rust: https://rustup.rs)."
-for s in install-mirada-dm.sh install-arje-splash.sh install-arje-session-gnome.sh install-arje.sh; do
+for s in install-mirada-dm.sh install-arje-splash.sh install-arje-session-gnome.sh install-arje-init.sh; do
     [ -x "$SCRIPTS/$s" ] || die "no encuentro $SCRIPTS/$s (¿estás en el repo correcto?)."
 done
 
@@ -170,7 +170,7 @@ cat <<RESUMEN
    desktop : mirada como escritorio/DM (sudo mirada-dm)             [SÍ]
    splash  : binario + config del arranque sin parpadeo            [$([ "$ENABLE_SPLASH" = 1 ] && echo 'SÍ + servicio' || echo 'SÍ, sin habilitar')]
    compat  : shims arje-compat (sesión GNOME bajo arje)            [$([ "$WITH_COMPAT" = 1 ] && echo SÍ || echo no)]
-   boot    : entrada UEFI del arranque NATIVO de arje (DEMO tty1)  [$([ "$WITH_BOOT" = 1 ] && echo SÍ || echo no)]
+   init    : arje como init alterno (entrada GRUB → splash/mirada) [$([ "$WITH_INIT" = 1 ] && echo SÍ || echo no)]
 
    No toca tu distro, tu kernel ni tu bootloader. Reversible:
        ./scripts/install-tawasuyu.sh --uninstall
@@ -199,13 +199,13 @@ if [ "$WITH_COMPAT" = 1 ]; then
     "$SCRIPTS/install-arje-session-gnome.sh" --system
 fi
 
-# ── etapa boot (opt-in; DEMO) ─────────────────────────────────────────────────
-if [ "$WITH_BOOT" = 1 ]; then
-    info "boot — install-arje.sh (entrada UEFI; DEMO del boot-chain, cae a tty1)"
+# ── etapa init (opt-in; arje de PID 1 sobre tu root, entrada GRUB aparte) ─────
+if [ "$WITH_INIT" = 1 ]; then
+    info "init — install-arje-init.sh (arje como init alterno; agrega entrada GRUB)"
     if [ "$ASSUME_YES" = 1 ]; then
-        "$SCRIPTS/install-arje.sh" --yes
+        "$SCRIPTS/install-arje-init.sh" --yes
     else
-        "$SCRIPTS/install-arje.sh"
+        "$SCRIPTS/install-arje-init.sh"
     fi
 fi
 
@@ -221,7 +221,7 @@ cat <<FIN
     · o elegí «mirada» desde tu display-manager actual (sesión Wayland).
 $([ "$ENABLE_SPLASH" = 1 ] && echo "  · splash habilitado: reiniciá para verlo antes del DM.")
 $([ "$WITH_COMPAT"   = 1 ] && echo "  · sesión «GNOME» disponible en el greeter (shims arje-compat instalados).")
-$([ "$WITH_BOOT"     = 1 ] && echo "  · entrada UEFI «arje» creada (DEMO: splash → consola de prueba en tty1).")
+$([ "$WITH_INIT"     = 1 ] && echo "  · entrada de GRUB «arje» creada: reiniciá y elegila para vivir EN arje (splash → mirada/pata/shuma). Tu arranque default no cambió.")
 
   Revertir todo:   ./scripts/install-tawasuyu.sh --uninstall
 FIN

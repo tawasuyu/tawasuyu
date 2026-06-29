@@ -111,6 +111,15 @@ pub fn bootstrap_kernel_surface() -> anyhow::Result<()> {
         ensure_mount(src, dst, fstype, flags, Some(data));
     }
     let _ = std::fs::create_dir_all("/run/lock");
+    // XDG_RUNTIME_DIR del compositor gráfico (mirada-compositor --drm pone su
+    // socket Wayland acá vía `bind_auto`, que NO crea el directorio). Las seeds
+    // con DM (arje-host / arje-tawasuyu*) declaran XDG_RUNTIME_DIR=/run/arje; sin
+    // este mkdir el compositor falla al abrir el socket. El compositor corre como
+    // root, así que 0700 root alcanza.
+    if let Ok(()) = std::fs::create_dir_all("/run/arje") {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions("/run/arje", std::fs::Permissions::from_mode(0o700));
+    }
 
     debug!("kernel surface bootstrap completo");
     Ok(())

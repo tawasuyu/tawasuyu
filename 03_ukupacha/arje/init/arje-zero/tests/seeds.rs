@@ -111,6 +111,77 @@ fn tawasuyu_seed_arranca_el_dm_real_no_el_getty_stub() {
 }
 
 #[test]
+fn arje_tawasuyu_host_seed_es_valida() {
+    // La seed para "vivir en arje sobre tu Linux actual": arje-zero como PID 1
+    // sobre el root real (con su Mesa), génesis net → splash → mirada-compositor
+    // (DM real) → getty de rescate. Paths /usr/local/* = los que instala
+    // scripts/install-arje-init.sh.
+    validate_seed("arje-tawasuyu-host.card.json");
+}
+
+#[test]
+fn tawasuyu_host_seed_arranca_dm_real_con_seat_builtin() {
+    // El DM debe ser mirada-compositor --drm --greeter (igual que producción),
+    // y como arje corre de PID 1 SIN logind/seatd, el compositor (root) usa el
+    // backend `builtin` de libseat — declarado en el env de su Card.
+    let path = seeds_dir().join("arje-tawasuyu-host.card.json");
+    let card = EntityCard::from_path(&path).unwrap();
+    use arje_card::{Payload, Priority};
+
+    let dm = card
+        .genesis
+        .iter()
+        .find(|c| c.label == "display-manager-mesa")
+        .expect("la seed host debe traer el display-manager-mesa");
+    match &dm.payload {
+        Payload::Native { exec, argv, envp } => {
+            assert!(
+                exec.ends_with("mirada-compositor"),
+                "el DM debe ser mirada-compositor: {exec}",
+            );
+            assert!(
+                argv.iter().any(|a| a == "--drm") && argv.iter().any(|a| a == "--greeter"),
+                "el DM debe correr --drm --greeter: {argv:?}",
+            );
+            assert!(
+                envp.iter()
+                    .any(|(k, v)| k == "LIBSEAT_BACKEND" && v == "builtin"),
+                "sin logind/seatd bajo arje, el compositor root necesita LIBSEAT_BACKEND=builtin: {envp:?}",
+            );
+        }
+        otro => panic!("payload del DM no es Native: {otro:?}"),
+    }
+
+    let splash = card
+        .genesis
+        .iter()
+        .find(|c| c.label == "arje-splash")
+        .expect("la seed host debe traer el splash (mirada temprana)");
+    assert_eq!(
+        splash.priority,
+        Priority::High,
+        "el splash debe ir con prioridad alta (antes del DM)",
+    );
+
+    // Un getty de rescate en tty2 (tty1 queda para el compositor gráfico).
+    let getty = card
+        .genesis
+        .iter()
+        .find(|c| c.label.starts_with("agetty"))
+        .expect("la seed host debe traer un getty de rescate");
+    match &getty.payload {
+        Payload::Native { exec, argv, .. } => {
+            assert!(exec.ends_with("agetty"), "el rescate no es agetty: {exec}");
+            assert!(
+                argv.iter().any(|a| a == "tty2"),
+                "el getty de rescate va en tty2 (tty1 es del compositor): {argv:?}",
+            );
+        }
+        otro => panic!("payload del getty no es Native: {otro:?}"),
+    }
+}
+
+#[test]
 fn host_seed_provee_spawn_y_journal() {
     let path = seeds_dir().join("arje-host.card.json");
     let card = EntityCard::from_path(&path).unwrap();
