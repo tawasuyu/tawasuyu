@@ -102,6 +102,23 @@ fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let tiene = |f: &str| argv.iter().any(|a| a == f);
 
+    // Modo registro: conectar a un registro de apps (REST en RON o directorio
+    // local) — listar/buscar y, con --ingest, descargar al CAS + catálogo. No
+    // abre ventana.
+    if tiene("--registry") {
+        return match registro(argv.iter().cloned()) {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("llimphi-wasm-open --registry: {e}");
+                uso();
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     // Modo catálogo (búsqueda): listar/buscar apps por texto. No abre ventana.
     if tiene("--list") || tiene("--search") {
         return match buscar(argv.iter().cloned()) {
@@ -168,6 +185,8 @@ fn uso() {
     eprintln!("      [--name <label>] [--desc <texto>] [--grant <archivo>] \\");
     eprintln!("      [--icon <glifo>] [--category <cat>] [--store <dir>] \\");
     eprintln!("      [--apps-dir <dir>] [--catalog <archivo>]");
+    eprintln!("  llimphi-wasm-open --registry <descriptor.ron> [--instance <base>] \\");
+    eprintln!("      [--query <texto>] [--ingest] [--catalog <archivo>] [--store <dir>]");
 }
 
 /// Traduce los argumentos a un [`LaunchSpec`] resuelto y verificado. El modo se
@@ -474,6 +493,109 @@ fn buscar(args: impl Iterator<Item = String>) -> Result<String, String> {
     Ok(out.trim_end().to_string())
 }
 
+/// Modo registro: conecta a un registro de apps (REST en RON, o un directorio
+/// local) y lista/busca; con `--ingest`, descarga los módulos que coincidan al
+/// CAS y los suma al catálogo local (para luego `--run`). El transporte se elige
+/// por la instancia: `http(s)://…` ⇒ red real; cualquier otra cosa ⇒ filesystem.
+fn registro(args: impl Iterator<Item = String>) -> Result<String, String> {
+    use llimphi_wasm_registry::{LocalFetch, RegistryDescriptor, RegistryProvider, UreqFetch};
+
+    let mut args = args.peekable();
+    let mut descriptor_path: Option<String> = None;
+    let mut instance: Option<String> = None;
+    let mut query: Option<String> = None;
+    let mut ingest = false;
+    let mut catalog_path: Option<String> = None;
+    let mut store_dir: Option<String> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--registry" => descriptor_path = Some(next_val(&mut args, "--registry")?),
+            "--instance" => instance = Some(next_val(&mut args, "--instance")?),
+            "--query" | "--search" => query = Some(next_val(&mut args, "--query")?),
+            "--ingest" => ingest = true,
+            "--catalog" => catalog_path = Some(next_val(&mut args, "--catalog")?),
+            "--store" => store_dir = Some(next_val(&mut args, "--store")?),
+            otro if otro.starts_with("--") => {
+                return Err(format!("opción desconocida: {otro}"))
+            }
+            _ => {}
+        }
+    }
+
+    let descriptor_path = descriptor_path.ok_or("--registry requiere el archivo .ron")?;
+    let ron = std::fs::read_to_string(&descriptor_path)
+        .map_err(|e| format!("leer descriptor {descriptor_path}: {e}"))?;
+    let descriptor =
+        RegistryDescriptor::from_ron(&ron).map_err(|e| format!("descriptor: {e}"))?;
+    let base = instance.unwrap_or_default();
+    let es_http = base.starts_with("http://") || base.starts_with("https://");
+    let q = query.unwrap_or_default();
+
+    // El listado y la ingesta son idénticos sea cual sea el transporte; sólo
+    // cambia el fetcher. Una pequeña función genérica evita duplicar la lógica.
+    fn operar<F: llimphi_wasm_registry::HttpFetch>(
+        provider: RegistryProvider<F>,
+        q: &str,
+        ingest: bool,
+        catalog_path: Option<String>,
+        store_dir: Option<String>,
+    ) -> Result<String, String> {
+        let apps = provider.list(q).map_err(|e| format!("listar: {e}"))?;
+        let hits: Vec<_> = apps.into_iter().filter(|a| a.matches(q)).collect();
+        if hits.is_empty() {
+            return Ok(format!("sin apps para «{q}» en el registro"));
+        }
+        if !ingest {
+            let mut out = format!("{} app(s) en el registro:\n", hits.len());
+            for a in &hits {
+                let cat = a.category.as_deref().unwrap_or("—");
+                out.push_str(&format!("  {:<16} {:<24} [{}]  {}\n", a.id, a.name, cat, a.wasm_url));
+            }
+            out.push_str("  (usá --ingest para bajarlas al catálogo local)");
+            return Ok(out);
+        }
+        // Ingesta: descargar cada módulo al CAS y sumarlo al catálogo local.
+        let store_dir = store_dir.unwrap_or_else(cas_por_defecto);
+        let store = DiskStore::open(&store_dir).map_err(|e| format!("abrir CAS {store_dir}: {e}"))?;
+        let cat_path = catalog_path.unwrap_or_else(catalogo_por_defecto);
+        let mut catalog = cargar_catalogo(&cat_path)?;
+        let mut n = 0;
+        for a in &hits {
+            let entry = provider
+                .ingest(a, &store)
+                .map_err(|e| format!("ingerir «{}»: {e}", a.id))?;
+            catalog.upsert(entry);
+            n += 1;
+        }
+        if let Some(parent) = std::path::Path::new(&cat_path).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("crear {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&cat_path, catalog.serializar())
+            .map_err(|e| format!("escribir catálogo {cat_path}: {e}"))?;
+        Ok(format!(
+            "ingeridas {n} app(s) al catálogo {cat_path} ({} en total)\n  CAS: {store_dir}",
+            catalog.entries.len()
+        ))
+    }
+
+    if es_http {
+        operar(RegistryProvider::<UreqFetch>::new(descriptor, base), &q, ingest, catalog_path, store_dir)
+    } else {
+        // Sin instancia http: tratamos `base` (o el dir del descriptor) como un
+        // registro local en disco.
+        let root = if base.is_empty() {
+            std::path::Path::new(&descriptor_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| ".".into())
+        } else {
+            base.clone()
+        };
+        let provider = RegistryProvider::with_fetch(descriptor, root.clone(), LocalFetch::new(&root));
+        operar(provider, &q, ingest, catalog_path, store_dir)
+    }
+}
+
 /// Modo correr-por-id: resuelve una app del catálogo por su `id` (trae bytecode
 /// + concesión del CAS, verifica) y produce el [`LaunchSpec`] para abrirla.
 fn spec_desde_catalogo(args: impl Iterator<Item = String>) -> Result<LaunchSpec, String> {
@@ -760,6 +882,68 @@ mod tests {
             catalogo.to_str().unwrap(),
         ]))
         .is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn registro_local_lista_ingiere_y_queda_corrible() {
+        // Registro local offline (un dir con apps.json + .wasm) → listar →
+        // ingerir al catálogo → correr por id. Todo sin red.
+        let dir = cas_temporal("registro");
+        std::fs::write(dir.join("counter.wasm"), COUNTER_WASM).unwrap();
+        std::fs::write(
+            dir.join("apps.json"),
+            r#"{"results":[{"slug":"counter","title":"Contador","summary":"demo offline","tags":["demo"],"download":{"wasm":"counter.wasm"}}]}"#,
+        )
+        .unwrap();
+        let ron = dir.join("reg.ron");
+        std::fs::write(
+            &ron,
+            "#![enable(implicit_some)]\n(name:\"local\",list:(path:\"/apps.json\",list_path:\"results\",fields:(id:\"slug\",name:\"title\",wasm_url:\"download.wasm\",description:\"summary\",category:\"tags.0\")))",
+        )
+        .unwrap();
+        let cas = dir.join("blobs");
+        let catalogo = dir.join("catalog.bin");
+
+        // Listar (sin --ingest) describe la app sin bajarla.
+        let listado = registro(args(&[
+            "--registry",
+            ron.to_str().unwrap(),
+            "--instance",
+            dir.to_str().unwrap(),
+        ]))
+        .expect("listar registro");
+        assert!(listado.contains("counter"), "listado: {listado}");
+        assert!(!cas.exists(), "sin --ingest no baja nada");
+
+        // Ingerir baja al CAS y suma al catálogo local.
+        let res = registro(args(&[
+            "--registry",
+            ron.to_str().unwrap(),
+            "--instance",
+            dir.to_str().unwrap(),
+            "--ingest",
+            "--store",
+            cas.to_str().unwrap(),
+            "--catalog",
+            catalogo.to_str().unwrap(),
+        ]))
+        .expect("ingerir");
+        assert!(res.contains("ingeridas 1"), "res: {res}");
+
+        // Y lo ingerido se corre por id desde el catálogo local.
+        let spec = spec_desde_catalogo(args(&[
+            "--run",
+            "counter",
+            "--catalog",
+            catalogo.to_str().unwrap(),
+            "--store",
+            cas.to_str().unwrap(),
+        ]))
+        .expect("correr lo ingerido");
+        assert_eq!(spec.wasm, COUNTER_WASM);
+        WasmGuest::load(&spec.wasm, spec.permisos).expect("instanciar lo ingerido");
 
         std::fs::remove_dir_all(&dir).ok();
     }

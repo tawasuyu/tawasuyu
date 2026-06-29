@@ -1,0 +1,33 @@
+// =============================================================================
+//  Registro LOCAL de demostración — un "catálogo" offline para probar el flujo
+//  sin depender de internet.
+//
+//  Un registro local es, simplemente, un directorio con:
+//    - un JSON de listado (acá `apps.json`)
+//    - los `.wasm` referenciados (rutas relativas al directorio)
+//
+//  Usalo con `--instance <ese-directorio>`: el launcher detecta que no es una
+//  URL http y lee del filesystem (LocalFetch). Sirve para tener "algún catálogo
+//  para probar" reproducible. Para un registro REST real, ver `rest-template.ron`.
+//
+//  Forma esperada de apps.json:
+//    { "results": [
+//        { "slug": "...", "title": "...", "summary": "...",
+//          "tags": ["..."], "download": { "wasm": "archivo.wasm" } } ] }
+// =============================================================================
+#![enable(implicit_some)]
+(
+    name: "demo-local",
+    kind: "local",
+    list: (
+        path: "/apps.json",
+        list_path: "results",
+        fields: (
+            id: "slug",
+            name: "title",
+            wasm_url: "download.wasm",
+            description: "summary",
+            category: "tags.0",
+        ),
+    ),
+)

@@ -1,0 +1,17 @@
+[package]
+name = "llimphi-wasm-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-wasm-registry — puente data-driven a registros públicos de apps WASM. Un descriptor RON describe una API REST (endpoint de listado + mapeo campo→path-JSON) y RegistryProvider la interpreta para producir entradas de catálogo Tier 3: descubrir apps por texto y, al elegir una, descargar su módulo, hashearlo al CAS y volverlo un CatalogEntry resoluble. Mismo patrón que shared/foreign-platform (providers REST en RON), aplicado al ecosistema WASM. Agnóstico: sumar un registro compatible es escribir un .ron, no Rust."
+
+[dependencies]
+# El catálogo y el CAS viven en core (sin GPU); este puente sólo le agrega
+# entradas descubiertas en la red.
+llimphi-wasm-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ron = { workspace = true }
+ureq = { workspace = true }

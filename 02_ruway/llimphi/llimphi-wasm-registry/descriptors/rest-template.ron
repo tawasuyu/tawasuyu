@@ -1,0 +1,45 @@
+// =============================================================================
+//  PLANTILLA de registro REST público de apps WASM.
+//
+//  Esto es un MOLDE, no un descriptor verificado contra un endpoint en vivo.
+//  Describe cómo mapear el JSON de un registro REST (un índice de apps en
+//  internet) a entradas de catálogo Tier 3 — sin escribir Rust, sólo ajustando
+//  paths. Apuntalo a un registro real con `--instance https://...` y corregí
+//  los `path`/`fields` al esquema concreto de esa API (mirá una respuesta real
+//  con `curl` y ajustá los dotted-paths).
+//
+//  IMPORTANTE (alcance honesto): traer e ingerir un módulo NO garantiza que
+//  corra como app Tier 3 — la mayoría del WASM público sigue otro ABI (WASI,
+//  component-model, wasm-bindgen/DOM), no el `wasm_view → WireNode` del runner.
+//  El pipeline de descubrimiento/descarga/hash es real; la ejecución como UI
+//  Llimphi sólo aplica a módulos compilados contra `llimphi-wasm-app-sdk`.
+//
+//  - `path`      : endpoint de listado, relativo a `--instance`. `{query}` se
+//                  sustituye URL-encodeado.
+//  - `query`     : pares clave→valor del query string (admiten `{query}`).
+//  - `list_path` : dónde vive el array en la respuesta ("" = la raíz es array).
+//  - `fields`    : dotted-path a cada campo dentro de un item del array.
+//                  `id`, `name`, `wasm_url` son obligatorios.
+// =============================================================================
+#![enable(implicit_some)]
+(
+    name: "registro-rest",
+    kind: "rest-generico",
+    default_instances: [
+        // Cambialo por la base real del registro al que apuntes.
+        "https://example.invalid",
+    ],
+    list: (
+        path: "/v1/apps",
+        query: [("q", "{query}"), ("limit", "50")],
+        list_path: "results",
+        fields: (
+            id: "slug",
+            name: "name",
+            wasm_url: "artifacts.wasm.url",
+            description: "description",
+            category: "category",
+            version: "version",
+        ),
+    ),
+)
