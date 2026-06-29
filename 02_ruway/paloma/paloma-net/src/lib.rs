@@ -16,5 +16,5 @@ pub mod mime;
 mod secret;
 pub mod smtp;
 
-pub use backend::NetBackend;
+pub use backend::{NetBackend, TokenSource};
 pub use secret::Secret;

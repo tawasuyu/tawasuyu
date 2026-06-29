@@ -119,9 +119,12 @@ Each account picks an auth method:
   It opens the browser, receives the code on `127.0.0.1`, and writes the token
   to `~/.config/paloma/oauth-<id>.json` (0600). The panel's **Autorizar** button
   runs the same helper. After that first authorization, **`paloma-app` refreshes
-  the access token automatically** on startup (via the stored `refresh_token`, in
-  `paloma-oauth`'s lib), so you don't re-run the helper every hour — only if the
-  refresh token itself is revoked. It then authenticates over `XOAUTH2`.
+  the access token automatically** (via the stored `refresh_token`, in
+  `paloma-oauth`'s lib): once on startup and **mid-session** too — the backend asks
+  for a fresh token on every SMTP send and, if an IMAP op fails (the session can
+  drop when the token expires), reconnects with a new token and retries. So you
+  don't re-run the helper every hour — only if the refresh token itself is revoked.
+  It authenticates over `XOAUTH2`.
 
 ## Key environment variables
 

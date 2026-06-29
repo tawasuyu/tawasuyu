@@ -61,28 +61,11 @@ fn cuentas_path() -> Option<PathBuf> {
     paloma_config_dir().map(|d| paloma_config::config_path(&d))
 }
 
-/// Construye el secreto IMAP/SMTP de una cuenta:
-/// - OAuth2 → consigue un `access_token` **vigente** vía
-///   [`paloma_oauth::valid_access_token`], que renueva solo con el `refresh_token`
-///   si el guardado venció (sin que el usuario corra `paloma-oauth` cada hora).
-///   Sin token/refresh válidos ⇒ no hay secreto (cae a demo, con motivo).
-/// - Contraseña → `PALOMA_PASSWORD` (o `PALOMA_IMAP_PASSWORD`/`PALOMA_SMTP_PASSWORD`).
-///
-/// Devuelve `(imap, smtp)`; `None` si falta el secreto necesario.
-fn secrets_for(entry: &AccountEntry) -> Option<(Secret, Secret)> {
-    if entry.is_oauth() {
-        let dir = paloma_config_dir()?;
-        match paloma_oauth::valid_access_token(&dir, entry) {
-            Ok(token) => {
-                let s = Secret::OAuth2(token);
-                return Some((s.clone(), s));
-            }
-            Err(why) => {
-                eprintln!("paloma · OAuth «{}»: {why}", entry.id);
-                return None;
-            }
-        }
-    }
+/// Secretos IMAP/SMTP por **contraseña**, desde el entorno: `PALOMA_PASSWORD`
+/// cubre ambas, o `PALOMA_IMAP_PASSWORD`/`PALOMA_SMTP_PASSWORD` por separado.
+/// `None` si falta alguna. (El camino OAuth no pasa por acá: usa una
+/// [`paloma_net::TokenSource`] refrescable — ver [`connect_account`].)
+fn password_secrets() -> Option<(Secret, Secret)> {
     let both = std::env::var("PALOMA_PASSWORD").ok();
     let imap = std::env::var("PALOMA_IMAP_PASSWORD").ok().or_else(|| both.clone());
     let smtp = std::env::var("PALOMA_SMTP_PASSWORD").ok().or(both);
@@ -90,6 +73,15 @@ fn secrets_for(entry: &AccountEntry) -> Option<(Secret, Secret)> {
         (Some(i), Some(s)) => Some((Secret::Password(i), Secret::Password(s))),
         _ => None,
     }
+}
+
+/// Una [`paloma_net::TokenSource`] para una cuenta OAuth: cada llamada devuelve un
+/// `access_token` **vigente** vía [`paloma_oauth::valid_access_token`], que renueva
+/// solo con el `refresh_token` si venció. El backend la llama por envío SMTP y al
+/// reconectar IMAP, así el token se refresca **a mitad de sesión** sin reiniciar.
+fn oauth_token_source(entry: &AccountEntry, dir: PathBuf) -> paloma_net::TokenSource {
+    let entry = entry.clone();
+    std::sync::Arc::new(move || paloma_oauth::valid_access_token(&dir, &entry))
 }
 
 /// Lo que `try_net` entrega cuando hay una conexión real.
@@ -138,18 +130,23 @@ fn try_net() -> Result<NetSession, String> {
 fn connect_account(
     entry: &AccountEntry,
 ) -> Result<(Box<dyn MailBackend + Send>, Address, String), String> {
-    let (imap_sec, smtp_sec) = secrets_for(entry).ok_or_else(|| {
-        if entry.is_oauth() {
-            format!("falta el token OAuth de «{}» (corré: paloma-oauth {})", entry.id, entry.id)
-        } else {
-            "falta contraseña (PALOMA_PASSWORD o PALOMA_IMAP_PASSWORD/PALOMA_SMTP_PASSWORD)".to_string()
-        }
-    })?;
     let account = entry.to_account();
     let me = account.address.clone();
     let account_id = entry.id.clone();
-    let backend = paloma_net::NetBackend::connect(account, &imap_sec, &smtp_sec)
-        .map_err(|e| format!("no se pudo conectar IMAP: {e}"))?;
+    let backend = if entry.is_oauth() {
+        // OAuth: inyectamos una fuente de token refrescable; el backend pide uno
+        // fresco por envío SMTP y al reconectar IMAP (refresco a mitad de sesión).
+        let dir = paloma_config_dir().ok_or("no se pudo resolver el dir de config")?;
+        let token = oauth_token_source(entry, dir);
+        paloma_net::NetBackend::connect_oauth(account, token)
+            .map_err(|e| format!("no se pudo conectar IMAP (OAuth): {e}"))?
+    } else {
+        let (imap_sec, smtp_sec) = password_secrets().ok_or_else(|| {
+            "falta contraseña (PALOMA_PASSWORD o PALOMA_IMAP_PASSWORD/PALOMA_SMTP_PASSWORD)".to_string()
+        })?;
+        paloma_net::NetBackend::connect(account, &imap_sec, &smtp_sec)
+            .map_err(|e| format!("no se pudo conectar IMAP: {e}"))?
+    };
     // Límite de fetch opcional: `PALOMA_FETCH_LIMIT=0` (o "all") trae todo.
     if let Ok(raw) = std::env::var("PALOMA_FETCH_LIMIT") {
         let limit = match raw.trim() {
