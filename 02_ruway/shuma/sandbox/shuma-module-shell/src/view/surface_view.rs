@@ -1496,3 +1496,57 @@ pub(crate) fn find_bar_view<HostMsg: Clone + 'static>(
     .fill(theme.bg_panel)
     .children(vec![lup, query_view, counter, case_chip, prev_btn, next_btn, close_btn])
 }
+
+#[cfg(test)]
+mod baked_image_tests {
+    use super::*;
+
+    fn metrics() -> llimphi_widget_terminal::TermMetrics {
+        llimphi_widget_terminal::TermMetrics {
+            font_size: 12.0,
+            line_height: 16.0,
+            char_width: 7.2,
+        }
+    }
+
+    fn img(cols: u16, rows: u16, px_w: u32, px_h: u32) -> crate::types::TermImage {
+        crate::types::TermImage {
+            image: llimphi_image::from_rgba8(vec![0u8; 4], 1, 1),
+            col: 0,
+            row: 0,
+            cols,
+            rows,
+            px_w,
+            px_h,
+        }
+    }
+
+    /// Con celdas pedidas (kitty c=/r=), el tamaño es exactamente celdas ×
+    /// métrica de celda; el alto incluye el padding inferior.
+    #[test]
+    fn tamano_por_celdas() {
+        let m = metrics();
+        let (w, h) = baked_image_size(&img(10, 4, 100, 40), m);
+        assert!((w - 10.0 * m.char_width).abs() < 0.01, "ancho {w}");
+        assert!((h - (4.0 * m.line_height + IMAGE_PAD)).abs() < 0.01, "alto {h}");
+    }
+
+    /// Sin celdas, se encaja por píxeles a un ancho máximo preservando el
+    /// aspecto (alto = ancho × aspecto + padding).
+    #[test]
+    fn tamano_por_pixeles_preserva_aspecto() {
+        let m = metrics();
+        let (w, h) = baked_image_size(&img(0, 0, 200, 100), m);
+        let aspect = 100.0 / 200.0_f32;
+        assert!(((h - IMAGE_PAD) - w * aspect).abs() < 0.5, "w={w} h={h}");
+    }
+
+    /// Imágenes muy anchas se capan al ancho máximo (72 celdas), no crecen sin
+    /// límite.
+    #[test]
+    fn ancho_capado() {
+        let m = metrics();
+        let (w, _) = baked_image_size(&img(0, 0, 100_000, 100), m);
+        assert!(w <= 72.0 * m.char_width + 0.01, "ancho capado: {w}");
+    }
+}
