@@ -1149,17 +1149,63 @@ pub(crate) fn seleccionar_por_color(model: &mut Model, sx: u32, sy: u32) -> bool
         model.estado = "varita · semilla inválida".into();
         return false;
     };
-    let Some(bbox) = bbox_de_mascara(&mascara, w, h) else {
-        model.estado = "varita · región vacía".into();
+    // Shift sostenido ⇒ suma a la selección vigente (unión).
+    fijar_o_sumar_mascara(model, mascara, model.shift_held, "varita")
+}
+
+/// Fija la máscara `nueva` como selección, o la **suma** (unión por píxel,
+/// `max`) a la máscara vigente si `sumar` es `true` (modo Shift). Recalcula el
+/// bounding box y guarda todo en el modelo. Devuelve `false` si la unión
+/// resultante queda vacía. Es el punto común de varita y lazo.
+fn fijar_o_sumar_mascara(model: &mut Model, mut nueva: Vec<u8>, sumar: bool, verbo: &str) -> bool {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    if sumar {
+        if let Some(prev) = cobertura_seleccion(model) {
+            for (n, p) in nueva.iter_mut().zip(prev.iter()) {
+                *n = (*n).max(*p);
+            }
+        }
+    }
+    let Some(bbox) = bbox_de_mascara(&nueva, w, h) else {
+        model.estado = format!("{verbo} · región vacía");
         return false;
     };
-    let n: usize = mascara.iter().filter(|&&v| v > 0).count();
-    let hash = model.almacen.insertar(mascara);
+    let count = nueva.iter().filter(|&&v| v > 0).count();
+    let hash = model.almacen.insertar(nueva);
     model.seleccion_mascara = Some(hash);
     model.seleccion = Some(bbox);
     model.seleccion_drag = None;
     model.mover_drag = None;
-    model.estado = format!("varita · {n} px seleccionados");
+    model.estado = format!("{verbo} · {count} px seleccionados");
+    true
+}
+
+/// Invierte la selección vigente (lo seleccionado pasa a no estarlo y
+/// viceversa, dentro del lienzo). Materializa la cobertura actual (máscara o
+/// rect), la complementa y la guarda como máscara. No-op si no hay selección.
+pub(crate) fn invertir_seleccion(model: &mut Model) -> bool {
+    let Some(mut cov) = cobertura_seleccion(model) else {
+        model.estado = "no hay selección que invertir".into();
+        return false;
+    };
+    for v in cov.iter_mut() {
+        *v = 255 - *v;
+    }
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some(bbox) = bbox_de_mascara(&cov, w, h) else {
+        // El complemento es vacío ⇒ estaba todo seleccionado; ahora nada.
+        model.seleccion = None;
+        model.seleccion_mascara = None;
+        model.estado = "selección invertida · vacía".into();
+        return true;
+    };
+    let count = cov.iter().filter(|&&v| v > 0).count();
+    let hash = model.almacen.insertar(cov);
+    model.seleccion_mascara = Some(hash);
+    model.seleccion = Some(bbox);
+    model.estado = format!("selección invertida · {count} px");
     true
 }
 
@@ -1175,18 +1221,7 @@ pub(crate) fn seleccionar_lazo(model: &mut Model, puntos: &[(i32, i32)]) -> bool
         return false;
     }
     let mascara = poligono_a_mascara(puntos, w, h);
-    let Some(bbox) = bbox_de_mascara(&mascara, w, h) else {
-        model.estado = "lazo · región vacía".into();
-        return false;
-    };
-    let n: usize = mascara.iter().filter(|&&v| v > 0).count();
-    let hash = model.almacen.insertar(mascara);
-    model.seleccion_mascara = Some(hash);
-    model.seleccion = Some(bbox);
-    model.seleccion_drag = None;
-    model.mover_drag = None;
-    model.estado = format!("lazo · {n} px seleccionados");
-    true
+    fijar_o_sumar_mascara(model, mascara, model.shift_held, "lazo")
 }
 
 /// Cobertura de selección como máscara `W·H` (255 = seleccionado). Prefiere

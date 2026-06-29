@@ -631,6 +631,9 @@ impl App for Tullpu {
                 model.seleccion_drag = None;
                 model.estado = "selección limpia".into();
             }
+            Msg::InvertirSeleccion => {
+                invertir_seleccion(&mut model);
+            }
             Msg::SeleccionarTodo => {
                 let w = model.lienzo.width;
                 let h = model.lienzo.height;
@@ -1488,6 +1491,7 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(pegar)
                 .item(dup_sel)
                 .item(sel_todo)
+                .item(MenuItem::new("Invertir selección", "sel.invertir"))
                 .item(limpiar_sel)
                 .item(recortar),
         )
@@ -1559,6 +1563,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "edit.dup_sel" => Some(Msg::DuplicarSeleccionACapa),
         "edit.recortar_sel" => Some(Msg::RecortarASeleccion),
         "sel.todo" => Some(Msg::SeleccionarTodo),
+        "sel.invertir" => Some(Msg::InvertirSeleccion),
         "sel.limpiar" => Some(Msg::LimpiarSeleccion),
         "view.zoom_in" => Some(Msg::Zoom { mult: ZOOM_BASE, ancla: None }),
         "view.zoom_out" => Some(Msg::Zoom { mult: 1.0 / ZOOM_BASE, ancla: None }),

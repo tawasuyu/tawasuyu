@@ -575,3 +575,44 @@
         assert!(!seleccionar_lazo(&mut model, &[(0, 0), (1, 1)]));
         assert!(model.seleccion_mascara.is_none());
     }
+
+    #[test]
+    fn invertir_seleccion_complementa_la_mascara() {
+        let mut model = modelo_minimo(); // 4×4
+        // Selección de un solo píxel (0,0).
+        let mut mask = vec![0u8; 16];
+        mask[0] = 255;
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 1, y1: 1 });
+        assert!(invertir_seleccion(&mut model));
+        // Tras invertir, (0,0) NO está y el resto sí.
+        let cov = cobertura_seleccion(&model).unwrap();
+        assert_eq!(cov[0], 0, "(0,0) deseleccionado");
+        assert_eq!(cov[1], 255, "(1,0) ahora seleccionado");
+    }
+
+    #[test]
+    fn varita_con_shift_suma_a_la_seleccion_previa() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        // Buffer 4×4: columna x<2 roja, x>=2 azul.
+        let (w, h) = (4u32, 4u32);
+        let mut buf = Vec::new();
+        for _y in 0..h {
+            for x in 0..w {
+                if x < 2 { buf.extend_from_slice(&[255, 0, 0, 255]); }
+                else { buf.extend_from_slice(&[0, 0, 255, 255]); }
+            }
+        }
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        // 1) selecciono el rojo (sin shift).
+        model.shift_held = false;
+        assert!(seleccionar_por_color(&mut model, 0, 0));
+        // 2) shift + selecciono el azul ⇒ unión = todo.
+        model.shift_held = true;
+        assert!(seleccionar_por_color(&mut model, 3, 0));
+        let cov = cobertura_seleccion(&model).unwrap();
+        assert!(cov.iter().all(|&v| v == 255), "unión cubre todo el lienzo");
+    }

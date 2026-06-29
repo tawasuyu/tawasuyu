@@ -603,6 +603,8 @@ pub(crate) enum Msg {
     /// nada (delta cero o todo fuera del lienzo). Snapshots coalescen por
     /// capa — una ráfaga de flechas = un solo Undo.
     MoverSeleccion { dx: i32, dy: i32 },
+    /// Invierte la selección vigente (máscara o rect) dentro del lienzo.
+    InvertirSeleccion,
     /// Arma una selección que cubre el lienzo entero (`(0,0)..(w,h)`).
     /// No toca píxeles ni el historial. No-op si el lienzo es degenerado.
     SeleccionarTodo,
