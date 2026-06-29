@@ -22,11 +22,16 @@ documento) y **Fase B** (selección real) completas; **D** y **E** iniciadas.
   Varita (`tullpu_paint::flood_mascara`), lazo a mano alzada
   (`poligono_a_mascara`), suma con Shift, invertir selección. Las ops
   destructivas honran la máscara por píxel (`aplicar_px_en_seleccion`).
+- **Fase C — texto (HECHA, 1er increment).** `ClaseCapa::Texto(ParamsTexto)`:
+  el `contenido` es el texto ya rasterizado (compone/exporta como píxeles).
+  Rasterizado CPU con `fontdue` en `src/texto.rs` sobre `llimphi_text::SANS_FONT_BYTES`.
+  Herramienta Texto (`t`): crea + edita en vivo; panel A−/A+. Falta:
+  fuente/peso/color/alineación configurables, free-transform del bloque.
 - **Fase D — transform (INICIADA):** voltear capa H/V. Falta free-transform
   interactivo (rotar/escalar/sesgar con handles).
 - **Fase E — export (MAYORMENTE):** multiformato PNG/JPEG/WebP ya está; falta
   save-picker y PSD export.
-- **Pendientes:** C texto (parley), F retoque (clone/heal), G GPU+tiling,
+- **Pendientes:** F retoque (clone/heal), G GPU+tiling,
   H IA real ONNX + vectores/paths.
 
 ## Estado (2026-05-31)
