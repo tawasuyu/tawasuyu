@@ -244,6 +244,7 @@ pub(crate) fn inicializar() -> Model {
         clipboard: SystemClipboard::new(),
         toasts: Vec::new(),
         next_toast: 0,
+        transform: None,
     };
     sincronizar_thumbs(&mut model);
     // Cómputo inicial del histograma desde el composite recién armado.

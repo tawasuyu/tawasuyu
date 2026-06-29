@@ -15,7 +15,9 @@ use uuid::Uuid;
 
 use crate::carga::{ajustar_a_lienzo, cargar_png};
 use crate::compose::aplicar_y_recomponer;
+use crate::historial::pushear_snapshot;
 use crate::model::*;
+use crate::viewport::transform_lienzo;
 
 pub(crate) fn op_etiqueta(op: &OpLocal) -> &'static str {
     match op {
@@ -109,6 +111,7 @@ pub(crate) use tullpu_paint::{
     rotar_buffer_90_cw_bpp,
     trazar_linea_mascara,
     trazar_linea_pincel,
+    transformar_afin,
 };
 
 /// Apila una capa raster nueva del tamaño del lienzo llena con el
@@ -1332,6 +1335,281 @@ pub(crate) fn voltear_capa_activa(model: &mut Model, horizontal: bool) -> bool {
     model.lienzo.propagar_stale(id);
     aplicar_y_recomponer(model);
     model.estado = if horizontal { "capa volteada ↔" } else { "capa volteada ↕" }.into();
+    true
+}
+
+/// Geometría de los handles de transformación libre en coords-imagen. Las 4
+/// esquinas del cuadro (TL, TR, BR, BL), los 8 handles (4 esquinas + 4 lados)
+/// con su semi-extensión local `(hx, hy)`, y el handle de rotación con su
+/// ancla en el borde superior. `inv_s` (px-imagen por px-pantalla) sólo afecta
+/// la separación del handle de rotación, que se mantiene a distancia de
+/// pantalla constante del borde.
+pub(crate) struct PuntosTransform {
+    pub(crate) esquinas: [(f64, f64); 4],
+    /// `(world_x, world_y, hx_local, hy_local)` por handle.
+    pub(crate) handles: [(f64, f64, f64, f64); 8],
+    pub(crate) rot_world: (f64, f64),
+    pub(crate) rot_ancla: (f64, f64),
+}
+
+/// Mapea los puntos del cuadro de transformación al espacio-imagen aplicando
+/// la afín vigente. Pura — la usa tanto el hit-test del press como el painter
+/// del overlay.
+pub(crate) fn puntos_transform(t: &TransformLibre, inv_s: f64) -> PuntosTransform {
+    let w2 = (t.bx1 - t.bx0) / 2.0;
+    let h2 = (t.by1 - t.by0) / 2.0;
+    let ct = t.rot.cos();
+    let st = t.rot.sin();
+    // Mapeo directo de un offset local `(lhx, lhy)` desde el pivote.
+    let fwd = |lhx: f64, lhy: f64| -> (f64, f64) {
+        let ex = t.escala_x * lhx;
+        let ey = t.escala_y * lhy;
+        let rx = ct * ex - st * ey;
+        let ry = st * ex + ct * ey;
+        (t.piv_x + t.tx + rx, t.piv_y + t.ty + ry)
+    };
+    let esquinas = [fwd(-w2, -h2), fwd(w2, -h2), fwd(w2, h2), fwd(-w2, h2)];
+    // 8 handles: combos de {-w2,0,w2}×{-h2,0,h2} salvo el centro.
+    let locs: [(f64, f64); 8] = [
+        (-w2, -h2), (0.0, -h2), (w2, -h2),
+        (-w2, 0.0),             (w2, 0.0),
+        (-w2, h2),  (0.0, h2),  (w2, h2),
+    ];
+    let mut handles = [(0.0, 0.0, 0.0, 0.0); 8];
+    for (k, &(lhx, lhy)) in locs.iter().enumerate() {
+        let (wx, wy) = fwd(lhx, lhy);
+        handles[k] = (wx, wy, lhx, lhy);
+    }
+    // Handle de rotación: ancla en el borde superior, separado 26 px-pantalla
+    // hacia "arriba" en el marco rotado (sin que la escala lo estire).
+    let rot_ancla = fwd(0.0, -h2);
+    let up_x = st; // R(rot)·(0,-1)
+    let up_y = -ct;
+    let sep = 26.0 * inv_s;
+    let rot_world = (rot_ancla.0 + up_x * sep, rot_ancla.1 + up_y * sep);
+    PuntosTransform { esquinas, handles, rot_world, rot_ancla }
+}
+
+/// Entra al modo transformación libre sobre la capa raster seleccionada.
+/// Captura su buffer original y el bbox de su contenido (o el lienzo entero si
+/// está toda pintada / vacía). No-op con estado descriptivo si no hay capa o
+/// es derivada.
+pub(crate) fn iniciar_transform(model: &mut Model) -> bool {
+    if model.transform.is_some() {
+        return false;
+    }
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    if !matches!(capa.origen, OrigenCapa::Raster) {
+        model.estado = "la capa es derivada — usá la raster madre".into();
+        return false;
+    }
+    let orig = capa.contenido;
+    let Some(buf) = model.almacen.obtener(orig) else {
+        return false;
+    };
+    // Pivote = centro del bbox del contenido; si está vacío, el lienzo entero.
+    let (bx0, by0, bx1, by1) = match bbox_no_transparente(buf, w, h) {
+        Some((x0, y0, x1, y1)) => (x0 as f64, y0 as f64, x1 as f64, y1 as f64),
+        None => (0.0, 0.0, w as f64, h as f64),
+    };
+    model.transform = Some(TransformLibre {
+        id,
+        orig,
+        piv_x: (bx0 + bx1) / 2.0,
+        piv_y: (by0 + by1) / 2.0,
+        bx0,
+        by0,
+        bx1,
+        by1,
+        tx: 0.0,
+        ty: 0.0,
+        escala_x: 1.0,
+        escala_y: 1.0,
+        rot: 0.0,
+        agarre: None,
+    });
+    model.estado = "transformar · esquinas escalan · arriba rota · centro mueve · Enter aplica · Esc cancela".into();
+    true
+}
+
+/// Press en modo transformar: convierte `(lx, ly)` a coords-imagen, hit-testea
+/// el handle más cercano (esquinas/lados → escala; handle de arriba → rotar;
+/// dentro del cuadro → mover) y arranca el drag. Sin handle bajo el cursor es
+/// no-op (el cuadro sigue como estaba).
+pub(crate) fn transform_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32) {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some((s, off_x, off_y)) =
+        transform_lienzo(w, h, rw, rh, model.factor_zoom, model.pan_x, model.pan_y)
+    else {
+        return;
+    };
+    if s <= 0.0 {
+        return;
+    }
+    let inv_s = 1.0 / s;
+    // Cursor en coords-imagen.
+    let cmx = (lx as f64 - off_x) / s;
+    let cmy = (ly as f64 - off_y) / s;
+    let Some(t) = model.transform.as_mut() else { return };
+    let pts = puntos_transform(t, inv_s);
+    // Umbral de agarre: 12 px-pantalla en coords-imagen.
+    let umbral = 12.0 * inv_s;
+    let umbral2 = umbral * umbral;
+    let dist2 = |ax: f64, ay: f64| (ax - cmx) * (ax - cmx) + (ay - cmy) * (ay - cmy);
+    // 1) Handle de rotación (prioridad sobre el resto para que no lo tape un
+    //    handle de esquina cuando el cuadro es chico).
+    if dist2(pts.rot_world.0, pts.rot_world.1) <= umbral2 {
+        t.agarre = Some(Agarre {
+            tipo: TipoAgarre::Rotar { rot0: t.rot },
+            inv_s,
+            acc_x: 0.0,
+            acc_y: 0.0,
+            q0x: pts.rot_world.0,
+            q0y: pts.rot_world.1,
+        });
+        return;
+    }
+    // 2) Handles de escala: el más cercano dentro del umbral.
+    let mut mejor: Option<(f64, usize)> = None;
+    for (k, &(wx, wy, _, _)) in pts.handles.iter().enumerate() {
+        let d = dist2(wx, wy);
+        if d <= umbral2 && mejor.map(|(md, _)| d < md).unwrap_or(true) {
+            mejor = Some((d, k));
+        }
+    }
+    if let Some((_, k)) = mejor {
+        let (wx, wy, hx, hy) = pts.handles[k];
+        t.agarre = Some(Agarre {
+            tipo: TipoAgarre::Escala { hx, hy },
+            inv_s,
+            acc_x: 0.0,
+            acc_y: 0.0,
+            q0x: wx,
+            q0y: wy,
+        });
+        return;
+    }
+    // 3) Dentro del cuadro → mover. Volvemos el cursor al marco local.
+    let ct = t.rot.cos();
+    let st = t.rot.sin();
+    let rx = cmx - t.piv_x - t.tx;
+    let ry = cmy - t.piv_y - t.ty;
+    let lvx = (ct * rx + st * ry) / t.escala_x;
+    let lvy = (-st * rx + ct * ry) / t.escala_y;
+    let w2 = (t.bx1 - t.bx0) / 2.0;
+    let h2 = (t.by1 - t.by0) / 2.0;
+    if lvx.abs() <= w2 && lvy.abs() <= h2 {
+        t.agarre = Some(Agarre {
+            tipo: TipoAgarre::Mover { tx0: t.tx, ty0: t.ty },
+            inv_s,
+            acc_x: 0.0,
+            acc_y: 0.0,
+            q0x: cmx,
+            q0y: cmy,
+        });
+    }
+}
+
+/// Move durante el drag de transformación: acumula el delta de pantalla en
+/// coords-imagen y recomputa el parámetro afectado (traslación / escala /
+/// rotación) desde el ancla del press. Luego remuestrea y recompone en vivo.
+pub(crate) fn transform_arrastrar(model: &mut Model, dx: f32, dy: f32) {
+    let Some(t) = model.transform.as_mut() else { return };
+    let Some(mut ag) = t.agarre else { return };
+    ag.acc_x += dx as f64 * ag.inv_s;
+    ag.acc_y += dy as f64 * ag.inv_s;
+    match ag.tipo {
+        TipoAgarre::Mover { tx0, ty0 } => {
+            t.tx = tx0 + ag.acc_x;
+            t.ty = ty0 + ag.acc_y;
+        }
+        TipoAgarre::Escala { hx, hy } => {
+            // Handle vigente en coords-imagen; lo llevamos al marco pre-escala
+            // (quitando pivote, traslación y rotación) → ahí `v = escala·h`.
+            let qx = ag.q0x + ag.acc_x;
+            let qy = ag.q0y + ag.acc_y;
+            let ct = t.rot.cos();
+            let st = t.rot.sin();
+            let rx = qx - t.piv_x - t.tx;
+            let ry = qy - t.piv_y - t.ty;
+            let vx = ct * rx + st * ry;
+            let vy = -st * rx + ct * ry;
+            if hx.abs() > 1e-6 {
+                t.escala_x = vx / hx;
+            }
+            if hy.abs() > 1e-6 {
+                t.escala_y = vy / hy;
+            }
+        }
+        TipoAgarre::Rotar { rot0 } => {
+            let cx = t.piv_x + t.tx;
+            let cy = t.piv_y + t.ty;
+            let a0 = (ag.q0y - cy).atan2(ag.q0x - cx);
+            let a1 = (ag.q0y + ag.acc_y - cy).atan2(ag.q0x + ag.acc_x - cx);
+            t.rot = rot0 + (a1 - a0);
+        }
+    }
+    t.agarre = Some(ag);
+    aplicar_preview_transform(model);
+}
+
+/// Remuestrea `orig` con la afín vigente y la deja como contenido de la capa
+/// (sin snapshot — es preview), recomponiendo el lienzo. No toca el historial.
+pub(crate) fn aplicar_preview_transform(model: &mut Model) {
+    let Some(t) = model.transform.as_ref() else { return };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let id = t.id;
+    let Some(src) = model.almacen.obtener(t.orig) else { return };
+    let out = transformar_afin(
+        src, w, h, t.piv_x, t.piv_y, t.escala_x, t.escala_y, t.rot, t.tx, t.ty,
+    );
+    let new_hash = model.almacen.insertar(out);
+    if let Some(c) = model.lienzo.capa_mut(id) {
+        c.contenido = new_hash;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+}
+
+/// Confirma la transformación: deja el remuestreo final horneado, snapshotea y
+/// sale del modo. No-op si no había sesión.
+pub(crate) fn confirmar_transform(model: &mut Model) -> bool {
+    let Some(t) = model.transform.take() else { return false };
+    // Si nada cambió, sólo salimos (evita una entrada de historial vacía).
+    let cambio = t.tx != 0.0
+        || t.ty != 0.0
+        || (t.escala_x - 1.0).abs() > 1e-6
+        || (t.escala_y - 1.0).abs() > 1e-6
+        || t.rot.abs() > 1e-6;
+    if cambio {
+        pushear_snapshot(model, None);
+        model.estado = "transformación aplicada".into();
+    } else {
+        model.estado = "transformar · sin cambios".into();
+    }
+    true
+}
+
+/// Cancela la transformación: restaura el buffer original de la capa y sale del
+/// modo. No-op si no había sesión.
+pub(crate) fn cancelar_transform(model: &mut Model) -> bool {
+    let Some(t) = model.transform.take() else { return false };
+    if let Some(c) = model.lienzo.capa_mut(t.id) {
+        c.contenido = t.orig;
+    }
+    model.lienzo.propagar_stale(t.id);
+    aplicar_y_recomponer(model);
+    model.estado = "transformación cancelada".into();
     true
 }
 

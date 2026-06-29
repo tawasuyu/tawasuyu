@@ -871,6 +871,112 @@ pub fn rotar_buffer_90_ccw_bpp(src: &[u8], w: u32, h: u32, bpp: usize) -> Vec<u8
     out
 }
 
+/// Muestrea bilinealmente un buffer Rgba8 `w × h` en coords **continuas de
+/// centro de píxel** `(cx, cy)` (el píxel entero `i` tiene su centro en
+/// `i + 0.5`). Devuelve `[0,0,0,0]` (transparente) si los 4 vecinos caen
+/// del todo fuera; en el borde mezcla sólo los vecinos válidos ponderando
+/// el resto como transparente. El alfa se interpola como un canal más, así
+/// que un borde opaco→transparente degrada suave. Pura.
+fn muestrear_bilineal(src: &[u8], w: u32, h: u32, cx: f64, cy: f64) -> [u8; 4] {
+    let (wi, hi) = (w as i64, h as i64);
+    // Pasamos de coords-centro a coords-grilla: el centro `i+0.5` cae en el
+    // nodo `i`, así que `u = c - 0.5` y la muestra entera reproduce el píxel.
+    let u = cx - 0.5;
+    let v = cy - 0.5;
+    let x0 = u.floor() as i64;
+    let y0 = v.floor() as i64;
+    let fx = u - x0 as f64;
+    let fy = v - y0 as f64;
+    let muestra = |x: i64, y: i64| -> [f64; 4] {
+        if x < 0 || y < 0 || x >= wi || y >= hi {
+            return [0.0; 4];
+        }
+        let i = ((y * wi + x) * 4) as usize;
+        [
+            src[i] as f64,
+            src[i + 1] as f64,
+            src[i + 2] as f64,
+            src[i + 3] as f64,
+        ]
+    };
+    let p00 = muestra(x0, y0);
+    let p10 = muestra(x0 + 1, y0);
+    let p01 = muestra(x0, y0 + 1);
+    let p11 = muestra(x0 + 1, y0 + 1);
+    let mut out = [0u8; 4];
+    for c in 0..4 {
+        let top = p00[c] * (1.0 - fx) + p10[c] * fx;
+        let bot = p01[c] * (1.0 - fx) + p11[c] * fx;
+        let val = top * (1.0 - fy) + bot * fy;
+        out[c] = val.round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+/// Remuestrea un buffer Rgba8 `w × h` aplicando una transformación afín
+/// (escala + rotación) alrededor de un **pivote** `(piv_x, piv_y)` en
+/// coords-imagen continuas, más una traslación `(tx, ty)` en píxeles. El
+/// resultado es otro buffer `w × h` (mismo lienzo): el contenido se mueve
+/// dentro del canvas y lo que cae fuera se descarta; lo que queda vacío
+/// queda transparente.
+///
+/// Mapeo directo de un punto fuente `p` al destino `q`:
+/// `q = pivote + t + R(rot)·S·(p − pivote)`. El remuestreo recorre el
+/// destino e invierte el mapeo (`p = pivote + S⁻¹·R(−rot)·(q − pivote − t)`),
+/// muestreando la fuente bilinealmente en el centro de cada píxel destino —
+/// así no quedan huecos por redondeo directo. `escala_*` son factores
+/// (1.0 = sin cambio); `rot` en radianes (horario en coords de pantalla,
+/// con `y` hacia abajo). Pura.
+///
+/// Casos degenerados (`escala` ~0) se clampean a un mínimo para no dividir
+/// por cero — el contenido se aplasta a una línea pero la función no panica.
+#[allow(clippy::too_many_arguments)]
+pub fn transformar_afin(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    piv_x: f64,
+    piv_y: f64,
+    escala_x: f64,
+    escala_y: f64,
+    rot: f64,
+    tx: f64,
+    ty: f64,
+) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    if w == 0 || h == 0 || src.len() != (w as usize) * (h as usize) * 4 {
+        return out;
+    }
+    // Clamp anti-división-por-cero conservando el signo (un flip muy
+    // aplastado sigue flippeando). 1e-3 es indistinguible visualmente.
+    let piso = |s: f64| if s.abs() < 1e-3 { if s < 0.0 { -1e-3 } else { 1e-3 } } else { s };
+    let sx = piso(escala_x);
+    let sy = piso(escala_y);
+    let ct = rot.cos();
+    let st = rot.sin();
+    let wu = w as usize;
+    for qy in 0..h as usize {
+        for qx in 0..wu {
+            // Centro del píxel destino en coords-imagen continuas.
+            let dcx = qx as f64 + 0.5;
+            let dcy = qy as f64 + 0.5;
+            // Quitamos pivote + traslación.
+            let rx = dcx - piv_x - tx;
+            let ry = dcy - piv_y - ty;
+            // R(−rot): rotación inversa.
+            let r2x = ct * rx + st * ry;
+            let r2y = -st * rx + ct * ry;
+            // S⁻¹ y vuelta al pivote → punto fuente.
+            let pcx = r2x / sx + piv_x;
+            let pcy = r2y / sy + piv_y;
+            let px = muestrear_bilineal(src, w, h, pcx, pcy);
+            let di = (qy * wu + qx) * 4;
+            out[di..di + 4].copy_from_slice(&px);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,6 +985,88 @@ mod tests {
     fn px(buf: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * w + x) * 4) as usize;
         [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    }
+
+    // Buffer de prueba con un patrón asimétrico de 4 colores distintos por
+    // cuadrante, para que rotaciones/flips se distingan sin ambigüedad.
+    fn patron_cuadrantes(w: u32, h: u32) -> Vec<u8> {
+        let mut v = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let c = match (x < w / 2, y < h / 2) {
+                    (true, true) => [255, 0, 0, 255],   // sup-izq rojo
+                    (false, true) => [0, 255, 0, 255],  // sup-der verde
+                    (true, false) => [0, 0, 255, 255],  // inf-izq azul
+                    (false, false) => [255, 255, 0, 255], // inf-der amarillo
+                };
+                let i = ((y * w + x) * 4) as usize;
+                v[i..i + 4].copy_from_slice(&c);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn transformar_identidad_reproduce_exacto() {
+        // Escala 1, sin rotar ni trasladar: cada píxel cae en su centro,
+        // la muestra bilineal es exacta y el buffer vuelve idéntico.
+        let src = patron_cuadrantes(8, 6);
+        let out = transformar_afin(&src, 8, 6, 4.0, 3.0, 1.0, 1.0, 0.0, 0.0, 0.0);
+        assert_eq!(out, src, "identidad = sin cambio bit-a-bit");
+    }
+
+    #[test]
+    fn transformar_180_equivale_a_doble_flip() {
+        // Rotar π alrededor del centro geométrico (w/2, h/2) debe coincidir
+        // con espejar H y luego V — ambos invierten ambos ejes.
+        let w = 8;
+        let h = 6;
+        let src = patron_cuadrantes(w, h);
+        let rot = transformar_afin(
+            &src, w, h, w as f64 / 2.0, h as f64 / 2.0, 1.0, 1.0, std::f64::consts::PI, 0.0, 0.0,
+        );
+        // Doble flip a mano: destino (x,y) ← fuente (w-1-x, h-1-y).
+        let mut flip = vec![0u8; src.len()];
+        for y in 0..h {
+            for x in 0..w {
+                let di = ((y * w + x) * 4) as usize;
+                let si = (((h - 1 - y) * w + (w - 1 - x)) * 4) as usize;
+                flip[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+        assert_eq!(rot, flip, "180° = flip-H + flip-V");
+    }
+
+    #[test]
+    fn transformar_traslacion_entera_corre_el_contenido() {
+        // Trasladar +2 en x lleva el píxel fuente (1,0) al destino (3,0).
+        let src = patron_cuadrantes(8, 6);
+        let out = transformar_afin(&src, 8, 6, 4.0, 3.0, 1.0, 1.0, 0.0, 2.0, 0.0);
+        assert_eq!(px(&out, 8, 3, 0), px(&src, 8, 1, 0), "contenido corrido +2 px");
+        // La columna 0/1 quedó vacía (lo que entra desde fuera es transparente).
+        assert_eq!(px(&out, 8, 0, 0), [0, 0, 0, 0], "borde nuevo transparente");
+    }
+
+    #[test]
+    fn transformar_escala_doble_agranda_el_bbox() {
+        // Un punto opaco central escalado ×2 ocupa más área no-transparente.
+        let mut src = vec![0u8; 16 * 16 * 4];
+        for y in 6..10 {
+            for x in 6..10 {
+                let i = ((y * 16 + x) * 4) as usize;
+                src[i..i + 4].copy_from_slice(&[200, 100, 50, 255]);
+            }
+        }
+        let area = |b: &[u8]| b.chunks_exact(4).filter(|p| p[3] > 0).count();
+        let out = transformar_afin(&src, 16, 16, 8.0, 8.0, 2.0, 2.0, 0.0, 0.0, 0.0);
+        assert!(area(&out) > area(&src), "×2 cubre más píxeles opacos");
+    }
+
+    #[test]
+    fn transformar_degenerado_no_panica() {
+        let src = patron_cuadrantes(4, 4);
+        let out = transformar_afin(&src, 4, 4, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(out.len(), src.len(), "escala 0 clampeada, sin panic");
     }
 
     #[test]

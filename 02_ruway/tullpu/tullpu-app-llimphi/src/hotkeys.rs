@@ -78,6 +78,12 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if m.ctrl && m.shift && s.eq_ignore_ascii_case("e") => {
             return Some(Msg::AplanarVisibles);
         }
+        // Ctrl+T = transformación libre (Photoshop) sobre la capa raster
+        // activa: mueve/escala/rota con handles. `iniciar_transform` valida
+        // que haya una capa raster seleccionada.
+        Key::Character(s) if m.ctrl && !m.shift && s.eq_ignore_ascii_case("t") => {
+            return Some(Msg::IniciarTransform);
+        }
         // Reset de vista: zoom 100% del fit + pan a cero. Global porque
         // no depende de capa seleccionada — es navegación del viewport.
         Key::Character(s) if !m.ctrl && !m.alt && s == "0" => {

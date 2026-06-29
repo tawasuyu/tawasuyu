@@ -712,3 +712,125 @@
         let oi = ((1 * w + 1) * 4) as usize;
         assert_eq!(&out[oi..oi + 4], &[255, 0, 0, 255]);
     }
+
+    // === Fase D: transformación libre (Ctrl+T) ===
+
+    /// Lienzo `n×n` con una capa raster cuyo contenido es un bloque opaco
+    /// `[x0,x1) × [y0,y1)` de color `col`; el resto transparente.
+    fn modelo_con_bloque(n: u32, x0: u32, y0: u32, x1: u32, y1: u32, col: [u8; 4]) -> (Model, Uuid) {
+        let mut model = modelo_minimo();
+        let mut buf = vec![0u8; (n * n * 4) as usize];
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = ((y * n + x) * 4) as usize;
+                buf[i..i + 4].copy_from_slice(&col);
+            }
+        }
+        let hash = model.almacen.insertar(buf);
+        let mut l = Lienzo::nuevo(n, n);
+        l.apilar(Capa::raster("c", hash));
+        model.lienzo = l;
+        let id = model.lienzo.capas[0].id;
+        model.seleccionada = Some(id);
+        (model, id)
+    }
+
+    fn alfa_en(model: &Model, id: Uuid, n: u32, x: u32, y: u32) -> u8 {
+        let h = model.lienzo.capa(id).unwrap().contenido;
+        let buf = model.almacen.obtener(h).unwrap();
+        buf[((y * n + x) * 4 + 3) as usize]
+    }
+
+    #[test]
+    fn ctrl_t_emite_iniciar_transform() {
+        let m = modelo_minimo();
+        assert!(matches!(
+            hotkey_a_msg(&m, &ev_char("t", Modifiers { ctrl: true, ..Default::default() })),
+            Some(Msg::IniciarTransform)
+        ));
+    }
+
+    #[test]
+    fn iniciar_transform_centra_el_pivote_en_el_bbox() {
+        let (mut model, _id) = modelo_con_bloque(64, 16, 16, 48, 48, [200, 50, 50, 255]);
+        assert!(iniciar_transform(&mut model));
+        let t = model.transform.as_ref().expect("modo transformar activo");
+        assert_eq!((t.piv_x, t.piv_y), (32.0, 32.0), "pivote = centro del bloque");
+        assert_eq!((t.bx0, t.by0, t.bx1, t.by1), (16.0, 16.0, 48.0, 48.0));
+    }
+
+    #[test]
+    fn iniciar_transform_rechaza_capa_derivada() {
+        let mut model = modelo_minimo();
+        let madre = model.seleccionada.unwrap();
+        // Apilamos una capa derivada (ajuste) y la seleccionamos.
+        let deriv = Capa::derivada(
+            "inv",
+            madre,
+            tullpu_core::TransformacionPixel::Local(OpLocal::Invertir),
+            [0u8; 32],
+        );
+        let id_deriv = deriv.id;
+        model.lienzo.apilar(deriv);
+        model.seleccionada = Some(id_deriv);
+        assert!(matches!(
+            model.lienzo.capa(id_deriv).unwrap().origen,
+            OrigenCapa::Derivada { .. }
+        ));
+        assert!(!iniciar_transform(&mut model), "no transforma derivadas");
+        assert!(model.transform.is_none());
+    }
+
+    #[test]
+    fn transform_mover_desplaza_el_contenido() {
+        // Bloque 16..48 sobre lienzo 64; sin zoom/pan ⇒ s=1, coords-imagen = locales.
+        let (mut model, id) = modelo_con_bloque(64, 16, 16, 48, 48, [200, 50, 50, 255]);
+        assert!(iniciar_transform(&mut model));
+        // Press en el centro (32,32) ⇒ agarre Mover; arrastrar +8 en x.
+        transform_press(&mut model, 32.0, 32.0, 64.0, 64.0);
+        assert!(matches!(
+            model.transform.as_ref().unwrap().agarre.unwrap().tipo,
+            TipoAgarre::Mover { .. }
+        ));
+        transform_arrastrar(&mut model, 8.0, 0.0);
+        assert!(confirmar_transform(&mut model));
+        assert!(model.transform.is_none(), "modo cerrado al confirmar");
+        // El bloque se corrió +8: x=52 ahora opaco, x=18 ahora vacío.
+        assert_eq!(alfa_en(&model, id, 64, 52, 32), 255, "borde derecho corrido");
+        assert_eq!(alfa_en(&model, id, 64, 18, 32), 0, "borde izquierdo liberado");
+    }
+
+    #[test]
+    fn transform_escala_esquina_agranda_el_contenido() {
+        let (mut model, id) = modelo_con_bloque(64, 16, 16, 48, 48, [200, 50, 50, 255]);
+        assert!(iniciar_transform(&mut model));
+        // Press en la esquina inferior-derecha (48,48) ⇒ agarre Escala.
+        transform_press(&mut model, 48.0, 48.0, 64.0, 64.0);
+        assert!(matches!(
+            model.transform.as_ref().unwrap().agarre.unwrap().tipo,
+            TipoAgarre::Escala { .. }
+        ));
+        // Llevar la esquina a (64,64): escala ×2 alrededor del centro (32,32),
+        // el bloque (semi-ancho 16) pasa a semi-ancho 32 → cubre todo el lienzo.
+        transform_arrastrar(&mut model, 16.0, 16.0);
+        let t = model.transform.as_ref().unwrap();
+        assert!((t.escala_x - 2.0).abs() < 1e-3 && (t.escala_y - 2.0).abs() < 1e-3);
+        assert!(confirmar_transform(&mut model));
+        // Una esquina del lienzo, antes transparente, ahora cae dentro del bloque.
+        assert_eq!(alfa_en(&model, id, 64, 2, 2), 255, "×2 llena la esquina");
+    }
+
+    #[test]
+    fn transform_cancelar_restaura_el_buffer_original() {
+        let (mut model, id) = modelo_con_bloque(64, 16, 16, 48, 48, [200, 50, 50, 255]);
+        let orig = model.lienzo.capa(id).unwrap().contenido;
+        assert!(iniciar_transform(&mut model));
+        transform_press(&mut model, 32.0, 32.0, 64.0, 64.0);
+        transform_arrastrar(&mut model, 10.0, 6.0);
+        // Preview ya cambió el contenido…
+        assert_ne!(model.lienzo.capa(id).unwrap().contenido, orig);
+        assert!(cancelar_transform(&mut model));
+        // …pero cancelar lo restaura bit-a-bit y cierra el modo.
+        assert_eq!(model.lienzo.capa(id).unwrap().contenido, orig);
+        assert!(model.transform.is_none());
+    }

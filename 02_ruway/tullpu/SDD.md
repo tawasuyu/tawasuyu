@@ -6,8 +6,9 @@
 
 ## Estado (2026-06-29) — paridad Photoshop/Photopea
 
-Plan por fases para cerrar gaps vs Photopea/Photoshop. **Fase A** (estructura de
-documento) y **Fase B** (selección real) completas; **D** y **E** iniciadas.
+Plan por fases para cerrar gaps vs Photopea/Photoshop. **Fases A** (estructura),
+**B** (selección real), **C** (texto) y **D** (transform) completas; **E**
+iniciada.
 
 - **Fase A — grupos + clipping + capas de ajuste (HECHA).** `Capa` ganó
   `clase: ClaseCapa{Pixeles,Grupo,Ajuste(OpLocal)}`, `grupo: Option<Uuid>`
@@ -27,8 +28,13 @@ documento) y **Fase B** (selección real) completas; **D** y **E** iniciadas.
   Rasterizado CPU con `fontdue` en `src/texto.rs` sobre `llimphi_text::SANS_FONT_BYTES`.
   Herramienta Texto (`t`): crea + edita en vivo; panel A−/A+. Falta:
   fuente/peso/color/alineación configurables, free-transform del bloque.
-- **Fase D — transform (INICIADA):** voltear capa H/V. Falta free-transform
-  interactivo (rotar/escalar/sesgar con handles).
+- **Fase D — transform (HECHA, free-transform interactivo).** Voltear capa H/V
+  + **transformación libre** (Ctrl+T / menú Capa): mueve, escala (handles de
+  esquina/lado, alrededor del centro) y rota (perilla superior) la capa raster
+  activa con remuestreo bilineal en vivo; Enter aplica, Esc cancela. Núcleo puro
+  `tullpu_paint::transformar_afin` (mapeo inverso + bilineal en coords de centro
+  de píxel). Falta (menor): sesgar/perspectiva y escala desde la esquina opuesta
+  (hoy siempre alrededor del centro).
 - **Fase E — export (MAYORMENTE):** multiformato PNG/JPEG/WebP ya está; falta
   save-picker y PSD export.
 - **Pendientes:** F retoque (clone/heal), G GPU+tiling,

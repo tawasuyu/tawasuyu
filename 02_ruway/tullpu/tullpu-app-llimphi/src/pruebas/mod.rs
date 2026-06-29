@@ -105,6 +105,7 @@ mod grupo_06;
             clipboard: llimphi_clipboard::SystemClipboard::new(),
             toasts: Vec::new(),
             next_toast: 0,
+            transform: None,
         }
     }
 

@@ -1283,6 +1283,26 @@ impl App for Tullpu {
             Msg::ToastExpire(id) => {
                 model.toasts.retain(|t| t.id != id);
             }
+            Msg::IniciarTransform => {
+                iniciar_transform(&mut model);
+            }
+            Msg::TransformPress { lx, ly, rw, rh } => {
+                transform_press(&mut model, lx, ly, rw, rh);
+            }
+            Msg::TransformArrastrar { dx, dy } => {
+                transform_arrastrar(&mut model, dx, dy);
+            }
+            Msg::TransformSoltar => {
+                if let Some(t) = model.transform.as_mut() {
+                    t.agarre = None;
+                }
+            }
+            Msg::ConfirmarTransform => {
+                confirmar_transform(&mut model);
+            }
+            Msg::CancelarTransform => {
+                cancelar_transform(&mut model);
+            }
         }
         model
     }
@@ -1449,6 +1469,16 @@ impl App for Tullpu {
                 }
             }
             return Some(Msg::TeclaRenombrar(event.clone()));
+        }
+        // Modo transformación libre activo: Enter aplica, Escape cancela.
+        // Absorbe estas dos teclas; el resto cae al ruteo normal de abajo
+        // (para que `s`/`r`/etc. no rompan, simplemente no hacen nada útil).
+        if model.transform.is_some() && event.state == KeyState::Pressed {
+            match &event.key {
+                Key::Named(NamedKey::Enter) => return Some(Msg::ConfirmarTransform),
+                Key::Named(NamedKey::Escape) => return Some(Msg::CancelarTransform),
+                _ => {}
+            }
         }
         // Sincronizar el estado vivo de Shift: el handler de click no
         // recibe modifiers, así que lo trackeamos desde la tecla para
@@ -1641,7 +1671,8 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(MenuItem::new("Agrupar", "capa.agrupar"))
                 .item(MenuItem::new("Máscara de recorte", "capa.clipping"))
                 .item(MenuItem::new("Voltear capa ↔", "capa.voltear_h"))
-                .item(MenuItem::new("Voltear capa ↕", "capa.voltear_v").separated())
+                .item(MenuItem::new("Voltear capa ↕", "capa.voltear_v"))
+                .item(MenuItem::new("Transformar libre (Ctrl+T)", "capa.transformar").separated())
                 .item(MenuItem::new("Ajuste: Brillo", "capa.ajuste.brillo"))
                 .item(MenuItem::new("Ajuste: Contraste", "capa.ajuste.contraste"))
                 .item(MenuItem::new("Ajuste: Niveles", "capa.ajuste.niveles"))
@@ -1681,6 +1712,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "capa.clipping" => sel.map(Msg::ToggleClipping),
         "capa.voltear_h" => Some(Msg::VoltearCapa { horizontal: true }),
         "capa.voltear_v" => Some(Msg::VoltearCapa { horizontal: false }),
+        "capa.transformar" => Some(Msg::IniciarTransform),
         "capa.ajuste.invertir" => Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Invertir)),
         "capa.ajuste.curvas" => {
             Some(Msg::AgregarAjuste(tullpu_core::OpLocal::curvas_identidad()))

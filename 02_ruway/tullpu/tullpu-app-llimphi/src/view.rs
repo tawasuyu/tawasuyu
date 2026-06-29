@@ -1570,6 +1570,9 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
             let overlay_sel = model.seleccion_overlay.clone();
             let lienzo_w = model.lienzo.width;
             let lienzo_h = model.lienzo.height;
+            // Cuadro + handles de transformación libre (Ctrl+T). Se dibuja
+            // sobre el composite con el mismo transform del lienzo.
+            let transform_libre = model.transform.clone();
             let cuerpo_paint = View::new(Style {
                 flex_grow: 1.0,
                 size: Size {
@@ -1650,12 +1653,54 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                         );
                     }
                 }
+                // Cuadro de transformación libre: marco (posiblemente rotado),
+                // 8 handles cuadrados de escala y el handle de rotación.
+                if let Some(t) = transform_libre.as_ref() {
+                    let inv_s = 1.0 / s;
+                    let pts = crate::ops::puntos_transform(t, inv_s);
+                    let to_screen = |p: (f64, f64)| Point::new(tx + p.0 * s, ty + p.1 * s);
+                    // Marco: polígono cerrado por las 4 esquinas.
+                    let mut marco = BezPath::new();
+                    marco.move_to(to_screen(pts.esquinas[0]));
+                    for e in &pts.esquinas[1..] {
+                        marco.line_to(to_screen(*e));
+                    }
+                    marco.close_path();
+                    scene.stroke(&Stroke::new(2.5), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 200), None, &marco);
+                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(255, 255, 255, 240), None, &marco);
+                    // Línea + perilla de rotación.
+                    let anc = to_screen(pts.rot_ancla);
+                    let rotp = to_screen(pts.rot_world);
+                    scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, Color::from_rgba8(255, 255, 255, 220), None, &Line::new(anc, rotp));
+                    let rr = 5.0_f64;
+                    let rknob = KurboRect::new(rotp.x - rr, rotp.y - rr, rotp.x + rr, rotp.y + rr);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgba8(120, 200, 255, 255), None, &rknob);
+                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 220), None, &rknob);
+                    // Handles de escala: cuadrados blancos con borde negro.
+                    let hl = 4.0_f64;
+                    for &(hx, hy, _, _) in pts.handles.iter() {
+                        let p = to_screen((hx, hy));
+                        let hr = KurboRect::new(p.x - hl, p.y - hl, p.x + hl, p.y + hl);
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgba8(255, 255, 255, 255), None, &hr);
+                        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 220), None, &hr);
+                    }
+                }
                 scene.pop_layer();
             });
             // El cableado de eventos depende de la herramienta: Mover
             // panea con drag; Cuentagotas recoge color con click; Marco
             // arma una selección con on_click_at (press) + draggable_at
             // (extender). El wheel sigue zoom-eando en los 3 modos.
+            if model.transform.is_some() {
+                // En modo transformar, el click/drag manipula los handles del
+                // cuadro, sin importar la herramienta activa.
+                cuerpo_paint
+                    .on_click_at(|lx, ly, rw, rh| Some(Msg::TransformPress { lx, ly, rw, rh }))
+                    .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {
+                        DragPhase::Move => Some(Msg::TransformArrastrar { dx, dy }),
+                        DragPhase::End => Some(Msg::TransformSoltar),
+                    })
+            } else {
             match model.herramienta {
                 Herramienta::Mover => cuerpo_paint.draggable(|fase, dx, dy| match fase {
                     DragPhase::Move => Some(Msg::Pan(dx, dy)),
@@ -1709,6 +1754,7 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                         DragPhase::Move => Some(Msg::AjustarDegradado { dx, dy }),
                         DragPhase::End => Some(Msg::FinalizarDegradado),
                     }),
+            }
             }
         }
         // Sin composición vigente (todas las capas ocultas/eliminadas o un

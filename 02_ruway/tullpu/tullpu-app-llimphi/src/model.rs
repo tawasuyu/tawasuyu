@@ -195,6 +195,71 @@ pub(crate) struct Model {
     pub(crate) toasts: Vec<Toast>,
     /// Id incremental para correlacionar un toast con su `Msg::ToastExpire`.
     pub(crate) next_toast: u64,
+    /// Sesión de transformación libre en curso (Ctrl+T): mueve/escala/rota
+    /// la capa raster activa con handles, remuestreando en vivo. `None` fuera
+    /// del modo transformar. Enter confirma (snapshot), Escape cancela
+    /// (restaura el buffer original). Ver [`TransformLibre`].
+    pub(crate) transform: Option<TransformLibre>,
+}
+
+/// Sesión de **transformación libre** (Photoshop: Ctrl+T) sobre una capa
+/// raster. La transformación es afín alrededor del *pivote* (centro del bbox
+/// del contenido): traslación `(tx, ty)`, escalas por eje y rotación. Mientras
+/// está viva, el buffer de la capa se reemplaza por el remuestreo en vivo de
+/// `orig` (vía `tullpu_paint::transformar_afin`); confirmar snapshotea, cancelar
+/// restaura `orig`. Escala alrededor del centro (no de la esquina opuesta) —
+/// modelo simple y robusto bajo rotación.
+#[derive(Debug, Clone)]
+pub(crate) struct TransformLibre {
+    /// Capa que se está transformando.
+    pub(crate) id: Uuid,
+    /// Buffer original (fuente de cada remuestreo). Restaurado al cancelar.
+    pub(crate) orig: Hash,
+    /// Pivote en coords-imagen continuas = centro del bbox del contenido.
+    pub(crate) piv_x: f64,
+    pub(crate) piv_y: f64,
+    /// Bounding box del contenido al entrar (coords-imagen continuas). Define
+    /// la geometría de los handles; no cambia durante la sesión.
+    pub(crate) bx0: f64,
+    pub(crate) by0: f64,
+    pub(crate) bx1: f64,
+    pub(crate) by1: f64,
+    /// Traslación acumulada del contenido en px-imagen.
+    pub(crate) tx: f64,
+    pub(crate) ty: f64,
+    /// Factores de escala por eje (1.0 = sin cambio; negativo = flip).
+    pub(crate) escala_x: f64,
+    pub(crate) escala_y: f64,
+    /// Rotación en radianes (horario en pantalla, `y` hacia abajo).
+    pub(crate) rot: f64,
+    /// Handle agarrado mientras se sostiene el drag. `None` entre gestos.
+    pub(crate) agarre: Option<Agarre>,
+}
+
+/// Handle agarrado durante un drag de transformación libre. `inv_s` (px-imagen
+/// por px-pantalla, capturado al press) convierte los deltas de pantalla del
+/// `draggable_at` a coords-imagen; `acc_*` acumula ese delta a lo largo del
+/// gesto. `q0*` es la posición-mundo (coords-imagen) del handle al iniciar el
+/// drag, ancla desde la que se recomputan escala/rotación sin deriva.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Agarre {
+    pub(crate) tipo: TipoAgarre,
+    pub(crate) inv_s: f64,
+    pub(crate) acc_x: f64,
+    pub(crate) acc_y: f64,
+    pub(crate) q0x: f64,
+    pub(crate) q0y: f64,
+}
+
+/// Qué hace el handle agarrado. `Escala` lleva las semi-extensiones locales
+/// con signo del handle (`hx`/`hy`): una esquina tiene ambas ≠ 0 (escala los
+/// dos ejes), un lado tiene una en cero (escala un solo eje). `Mover` guarda
+/// la traslación al press; `Rotar` el ángulo al press.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TipoAgarre {
+    Mover { tx0: f64, ty0: f64 },
+    Escala { hx: f64, hy: f64 },
+    Rotar { rot0: f64 },
 }
 
 /// Punto activo de un drag en el editor de curvas tonales. `rw`/`rh` son
@@ -749,6 +814,25 @@ pub(crate) enum Msg {
     EditActivate,
     /// Un toast cumplió su `TOAST_TTL`: se descarta del stack.
     ToastExpire(u64),
+    /// Entra al modo transformación libre (Ctrl+T) sobre la capa raster
+    /// activa: captura su buffer + bbox y muestra los handles.
+    IniciarTransform,
+    /// Press sobre el lienzo en modo transformar: hit-testea qué handle cae
+    /// bajo `(lx, ly)` y arranca el drag correspondiente. `rw, rh` = dims del
+    /// panel (conversión local→imagen + escala del viewport).
+    TransformPress { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Move durante el drag de transformación: acumula `(dx, dy)` (px-pantalla)
+    /// y recomputa la transformación, remuestreando en vivo.
+    TransformArrastrar { dx: f32, dy: f32 },
+    /// End del drag de transformación: suelta el handle (la transformación
+    /// vigente queda; el modo sigue activo hasta confirmar/cancelar).
+    TransformSoltar,
+    /// Confirma la transformación libre: hornea el remuestreo final y
+    /// snapshotea (Enter / doble-click / botón aplicar).
+    ConfirmarTransform,
+    /// Cancela la transformación: restaura el buffer original y sale del modo
+    /// (Escape / botón cancelar).
+    CancelarTransform,
 }
 
 /// Etiqueta del parámetro que se está editando con un slider in-situ

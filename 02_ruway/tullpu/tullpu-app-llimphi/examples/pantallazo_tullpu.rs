@@ -25,6 +25,8 @@ mod blend;
 mod carga;
 #[path = "../src/compose.rs"]
 mod compose;
+#[path = "../src/historial.rs"]
+mod historial;
 #[path = "../src/model.rs"]
 mod model;
 #[path = "../src/ops.rs"]
@@ -313,6 +315,7 @@ fn modelo_demo() -> Model {
         clipboard: SystemClipboard::new(),
         toasts: Vec::new(),
         next_toast: 0,
+        transform: None,
     };
 
     // Regenera las derivadas stale (blur + restyle) con el mock, compone el
