@@ -23,4 +23,5 @@ llimphi-image = { workspace = true }
 llimphi-icons = { workspace = true }
 llimphi-widget-empty = { workspace = true }
 llimphi-widget-toast = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 arboard = "3"

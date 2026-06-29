@@ -16,19 +16,13 @@ use super::widgets::{empty_state, fmt_mem, metric, note, pad, scroll_grid};
 
 pub(crate) fn wawa_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
-    let mut children = vec![note(
-        t,
-        "Censo del manifiesto (apps WASM instaladas, lectura host-side de los \
-         assets del kernel). El censo del executor en vivo + balizas del \
-         compositor es Fase 4 del SDD (lado-wawa, pieza futura).",
-    )];
+    let mut children = vec![note(t, &rimay_localize::t("sandokan-mon-wawa-note"))];
 
     if model.wawa.is_empty() {
         children.push(empty_state(
             t,
-            "Sin assets de Wawa",
-            "No encontré los .wasm del kernel. Apuntá SANDOKAN_WAWA_ASSETS al \
-             directorio assets de wawa-kernel.",
+            &rimay_localize::t("sandokan-mon-wawa-empty-title"),
+            &rimay_localize::t("sandokan-mon-wawa-empty-body"),
         ));
     } else {
         let cards: Vec<View<Msg>> = model.wawa.iter().map(|a| wawa_card(t, a)).collect();

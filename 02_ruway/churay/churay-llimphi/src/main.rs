@@ -260,6 +260,8 @@ impl App for Churay {
     }
 
     fn init(_: &Handle<Self::Msg>) -> Self::Model {
+        // Carga los catálogos Fluent (es/en/qu) una sola vez. Idempotente.
+        rimay_localize::init();
         // El modo puede venir forzado por el re-exec con root.
         let mode = match std::env::var("CHURAY_MODE").as_deref() {
             Ok("system") => InstallMode::System,
@@ -396,11 +398,12 @@ impl App for Churay {
             }
             Msg::BuscarRemoto => {
                 let Some(url) = model.cfg.remote_base_url.clone() else {
-                    model.repo_msg = "No hay repo remoto configurado (CHURAY_REPO).".into();
+                    model.repo_msg = rimay_localize::t("churay-no-repo");
                     return model;
                 };
                 model.buscando = true;
-                model.repo_msg = format!("Consultando {url}…");
+                model.repo_msg =
+                    rimay_localize::t_args("churay-consultando-repo", &[("url", url.clone().into())]);
                 handle.spawn(move || {
                     let res = churay_core::fetch_signed_manifest(
                         &url,
@@ -419,15 +422,20 @@ impl App for Churay {
                             .into_iter()
                             .filter(|u| u.kind != churay_core::UpdateKind::Nueva)
                             .count();
-                        model.repo_msg = format!(
-                            "Repo {} · {} unidad(es) · {} con actualización",
-                            m.suite_version,
-                            m.units.len(),
-                            pend
+                        model.repo_msg = rimay_localize::t_args(
+                            "churay-repo-resumen",
+                            &[
+                                ("version", m.suite_version.to_string().into()),
+                                ("unidades", m.units.len().to_string().into()),
+                                ("pend", pend.to_string().into()),
+                            ],
                         );
                         model.remote_manifest = Some(m);
                     }
-                    Err(e) => model.repo_msg = format!("Falló el chequeo: {e}"),
+                    Err(e) => {
+                        model.repo_msg =
+                            rimay_localize::t_args("churay-chequeo-fallo", &[("error", e.into())])
+                    }
                 }
             }
             Msg::Comenzar => {
@@ -477,7 +485,7 @@ impl App for Churay {
                 // Si hace falta root y todavía no hay contraseña, esperá a que la
                 // tecleen (el campo está en pantalla). No cierres la app.
                 if needs_root && model.password.is_empty() {
-                    model.base_error = Some("Escribí tu contraseña de sudo abajo.".into());
+                    model.base_error = Some(rimay_localize::t("churay-pass-falta"));
                     return model;
                 }
                 for i in 0..model.base.len() {
@@ -644,7 +652,7 @@ fn bienvenida(model: &Model) -> View<Msg> {
     })
     .fill(accent)
     .radius(10.0)
-    .text("Comenzar", 17.0, t.bg_app)
+    .text(rimay_localize::t("churay-comenzar"), 17.0, t.bg_app)
     .on_click(Msg::Comenzar);
 
     // "No mostrar de nuevo" — activado por defecto (es también actualizador).
@@ -663,7 +671,7 @@ fn bienvenida(model: &Model) -> View<Msg> {
         size: Size { width: length(180.0), height: length(28.0) },
         ..Default::default()
     })
-    .text_aligned("No mostrar de nuevo", 13.0, t.fg_muted, Alignment::Start)
+    .text_aligned(rimay_localize::t("churay-no-mostrar"), 13.0, t.fg_muted, Alignment::Start)
     .on_click(Msg::ToggleSkipWelcome);
     let chk = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -699,7 +707,7 @@ fn resultado(model: &Model) -> View<Msg> {
         size: Size { width: percent(1.0), height: length(40.0) },
         ..Default::default()
     })
-    .text_aligned("Listo", 28.0, t.fg_text, Alignment::Start);
+    .text_aligned(rimay_localize::t("churay-listo"), 28.0, t.fg_text, Alignment::Start);
 
     let mut filas: Vec<View<Msg>> = vec![titulo];
     filas.push(linea(&instruccion_modo(model), t.fg_muted, t));
@@ -709,7 +717,10 @@ fn resultado(model: &Model) -> View<Msg> {
         match &model.status[i] {
             UnitStatus::Done => filas.push(fila_resultado_ok(model, u, t)),
             UnitStatus::Failed(err) => filas.push(linea(
-                &format!("✗ {} — {}", u.label, err),
+                &rimay_localize::t_args(
+                    "churay-fila-fallo",
+                    &[("label", u.label.clone().into()), ("error", err.clone().into())],
+                ),
                 t.fg_destructive,
                 t,
             )),
@@ -722,12 +733,12 @@ fn resultado(model: &Model) -> View<Msg> {
     if !sug.is_empty() {
         let nombres: Vec<&str> = sug.iter().map(|&i| model.units[i].label.as_str()).collect();
         let txt = View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
-            format!("Combinan con lo que instalaste: {}", nombres.join(", ")),
+            rimay_localize::t_args("churay-combinan", &[("nombres", nombres.join(", ").into())]),
             14.0,
             t.fg_text,
             Alignment::Start,
         );
-        let add = boton("Instalar sugeridas", t.accent, t.bg_app, 170.0, Msg::InstalarSugeridasResultado);
+        let add = boton(&rimay_localize::t("churay-instalar-sugeridas"), t.accent, t.bg_app, 170.0, Msg::InstalarSugeridasResultado);
         filas.push(
             row(percent(1.0), length(40.0))
                 .gap(10.0)
@@ -739,8 +750,8 @@ fn resultado(model: &Model) -> View<Msg> {
     }
 
     // Acciones finales.
-    let volver = boton("Volver al catálogo", t.bg_button, t.fg_text, 180.0, Msg::VolverCatalogo);
-    let cerrar = boton("Cerrar", t.bg_button, t.fg_text, 110.0, Msg::Cerrar);
+    let volver = boton(&rimay_localize::t("churay-volver-catalogo"), t.bg_button, t.fg_text, 180.0, Msg::VolverCatalogo);
+    let cerrar = boton(&rimay_localize::t("close"), t.bg_button, t.fg_text, 110.0, Msg::Cerrar);
     let acciones = row(percent(1.0), length(40.0))
         .gap(10.0)
         .justify(JustifyContent::End)
@@ -765,10 +776,18 @@ fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
     let bin = model.cfg.prefix.join("bin").join(&u.program);
     let mut info_hijos = vec![
         View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
-            .text_aligned(format!("✓ {}", u.label), 16.0, t.accent, Alignment::Start),
+            .text_aligned(
+                rimay_localize::t_args("churay-fila-ok", &[("label", u.label.clone().into())]),
+                16.0,
+                t.accent,
+                Alignment::Start,
+            ),
         View::new(Style { size: Size { width: percent(1.0), height: length(16.0) }, ..Default::default() })
             .text_aligned(
-                format!("En el menú de apps · {}", bin.display()),
+                rimay_localize::t_args(
+                    "churay-en-menu",
+                    &[("path", bin.display().to_string().into())],
+                ),
                 11.0,
                 t.fg_muted,
                 Alignment::Start,
@@ -794,22 +813,21 @@ fn fila_resultado_ok(model: &Model, u: &Unit, t: &Theme) -> View<Msg> {
     // (barra, compositor, init) corren en contexto de sesión: sin Abrir.
     let mut hijos = vec![info];
     if u.launchable && !u.requires_root() {
-        hijos.push(boton("Abrir", t.accent, t.bg_app, 90.0, Msg::Lanzar(u.program.clone())));
+        hijos.push(boton(&rimay_localize::t("open"), t.accent, t.bg_app, 90.0, Msg::Lanzar(u.program.clone())));
     }
     row(percent(1.0), length(alto)).gap(10.0).pad_x(6.0).children(hijos)
 }
 
 /// Instrucción según el modo de instalación (local vs sistema).
 fn instruccion_modo(model: &Model) -> String {
+    let prefix = model.cfg.prefix.display().to_string();
     match model.mode {
-        InstallMode::Local => format!(
-            "Instalado en {}/bin. Si no aparecen en el menú, asegurate de que esa carpeta esté en tu PATH.",
-            model.cfg.prefix.display()
-        ),
-        InstallMode::System => format!(
-            "Instalado en {}/bin (en el PATH del sistema).",
-            model.cfg.prefix.display()
-        ),
+        InstallMode::Local => {
+            rimay_localize::t_args("churay-instr-local", &[("prefix", prefix.into())])
+        }
+        InstallMode::System => {
+            rimay_localize::t_args("churay-instr-system", &[("prefix", prefix.into())])
+        }
     }
 }
 
@@ -846,19 +864,19 @@ fn header(model: &Model) -> View<Msg> {
         flex_grow: 1.0,
         ..Default::default()
     })
-    .text_aligned("Instalar tawasuyu", 24.0, t.fg_text, Alignment::Start);
+    .text_aligned(rimay_localize::t("churay-header-titulo"), 24.0, t.fg_text, Alignment::Start);
 
     let mut hijos = vec![
         titulo,
-        chip("Sistema", model.mode == InstallMode::System, Msg::SetMode(InstallMode::System), t),
-        chip("Sólo para mí", model.mode == InstallMode::Local, Msg::SetMode(InstallMode::Local), t),
+        chip(&rimay_localize::t("churay-modo-sistema"), model.mode == InstallMode::System, Msg::SetMode(InstallMode::System), t),
+        chip(&rimay_localize::t("churay-modo-local"), model.mode == InstallMode::Local, Msg::SetMode(InstallMode::Local), t),
     ];
 
     // Tabs.
     let tabs = row(percent(1.0), length(34.0)).gap(8.0).children(vec![
-        tabchip("Catálogo", model.tab == Tab::Catalogo, Msg::Tab(Tab::Catalogo), t),
+        tabchip(&rimay_localize::t("churay-tab-catalogo"), model.tab == Tab::Catalogo, Msg::Tab(Tab::Catalogo), t),
         tabchip(
-            "Actualizaciones",
+            &rimay_localize::t("churay-tab-actualizaciones"),
             model.tab == Tab::Actualizaciones,
             Msg::Tab(Tab::Actualizaciones),
             t,
@@ -889,7 +907,7 @@ fn banner_root(t: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "El modo Sistema escribe en /usr/local — hace falta root.",
+        rimay_localize::t("churay-banner-root"),
         14.0,
         t.fg_text,
         Alignment::Start,
@@ -902,7 +920,7 @@ fn banner_root(t: &Theme) -> View<Msg> {
     })
     .fill(t.accent)
     .radius(8.0)
-    .text("Reabrir como root", 13.0, t.bg_app)
+    .text(rimay_localize::t("churay-reabrir-root"), 13.0, t.bg_app)
     .on_click(Msg::ReexecRoot);
     row(percent(1.0), length(40.0))
         .gap(10.0)
@@ -961,11 +979,11 @@ fn base_card(t: &Theme) -> View<Msg> {
         .grow()
         .children(vec![
             View::new(Style { size: Size { width: percent(1.0), height: length(22.0) }, ..Default::default() })
-                .text_aligned("Instalar el escritorio completo", 17.0, t.fg_text, Alignment::Start)
+                .text_aligned(rimay_localize::t("churay-escritorio-completo"), 17.0, t.fg_text, Alignment::Start)
                 .text_weight(700.0),
             View::new(Style { size: Size { width: percent(1.0), height: length(18.0) }, ..Default::default() })
                 .text_aligned(
-                    "Sistema base mirada: compositor · display manager · barra · sesión",
+                    rimay_localize::t("churay-base-card-sub"),
                     12.0,
                     t.fg_muted,
                     Alignment::Start,
@@ -995,10 +1013,10 @@ fn sistema_base(model: &Model) -> View<Msg> {
     let needs_root = InstallConfig::detect(InstallMode::System).needs_root();
 
     let titulo = View::new(Style { size: Size { width: percent(1.0), height: length(30.0) }, ..Default::default() })
-        .text_aligned("Sistema base — Escritorio mirada", 22.0, t.fg_text, Alignment::Start);
+        .text_aligned(rimay_localize::t("churay-sistemabase-titulo"), 22.0, t.fg_text, Alignment::Start);
     let sub = View::new(Style { size: Size { width: percent(1.0), height: length(20.0) }, ..Default::default() })
         .text_aligned(
-            "El display manager + compositor + sesión. Se instala en el sistema (/usr, /etc).",
+            rimay_localize::t("churay-sistemabase-sub"),
             12.0,
             t.fg_muted,
             Alignment::Start,
@@ -1006,7 +1024,7 @@ fn sistema_base(model: &Model) -> View<Msg> {
     let mut head = vec![titulo, sub];
     if model.base_done {
         head.push(linea(
-            "Listo. Reiniciá la sesión y elegí «mirada» en el greeter (TTY: sudo mirada-dm). Si instalaste un init aparte, elegilo en GRUB.",
+            &rimay_localize::t("churay-sistemabase-listo"),
             t.accent,
             t,
         ));
@@ -1032,7 +1050,7 @@ fn sistema_base(model: &Model) -> View<Msg> {
             ]);
         let estado = {
             let (txt, color) = match &model.base_status[i] {
-                UnitStatus::Working(_, _) => ("instalando…".to_string(), t.accent),
+                UnitStatus::Working(_, _) => (rimay_localize::t("churay-instalando-min"), t.accent),
                 UnitStatus::Done => ("✓".to_string(), t.accent),
                 UnitStatus::Failed(_) => ("✗".to_string(), t.fg_destructive),
                 UnitStatus::Idle => (String::new(), t.fg_muted),
@@ -1046,11 +1064,11 @@ fn sistema_base(model: &Model) -> View<Msg> {
     // Acciones.
     let n_sel = model.base_sel.iter().filter(|x| **x).count();
     let label_btn = if model.base_installing {
-        "Instalando…"
+        rimay_localize::t("churay-instalando")
     } else if needs_root {
-        "Instalar (sudo)"
+        rimay_localize::t("churay-instalar-sudo")
     } else {
-        "Instalar"
+        rimay_localize::t("churay-instalar")
     };
     let activo = n_sel > 0 && !model.base_installing && (!needs_root || !model.password.is_empty());
     let bg = if activo { t.accent } else { t.bg_button };
@@ -1064,12 +1082,18 @@ fn sistema_base(model: &Model) -> View<Msg> {
         .gap(10.0)
         .children(vec![
             View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
-                format!("{n_sel} de {} componentes", model.base.len()),
+                rimay_localize::t_args(
+                    "churay-n-componentes",
+                    &[
+                        ("sel", n_sel.to_string().into()),
+                        ("total", model.base.len().to_string().into()),
+                    ],
+                ),
                 12.0,
                 t.fg_muted,
                 Alignment::Start,
             ),
-            boton("Volver", t.bg_button, t.fg_text, 110.0, Msg::VolverCatalogo),
+            boton(&rimay_localize::t("churay-volver"), t.bg_button, t.fg_text, 110.0, Msg::VolverCatalogo),
             instalar,
         ]);
 
@@ -1099,7 +1123,7 @@ fn sistema_base(model: &Model) -> View<Msg> {
 fn campo_password(model: &Model, t: &Theme) -> View<Msg> {
     let dots: String = "•".repeat(model.password.chars().count());
     let contenido = if dots.is_empty() {
-        ("🔒  Escribí tu contraseña de sudo y presioná Enter".to_string(), t.fg_placeholder)
+        (rimay_localize::t("churay-pass-placeholder"), t.fg_placeholder)
     } else {
         (format!("🔒  {dots}"), t.fg_text)
     };
@@ -1181,11 +1205,11 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
 fn estado_view(model: &Model, i: usize, instalada: bool, t: &Theme) -> View<Msg> {
     let (txt, color) = match &model.status[i] {
         UnitStatus::Working(step, r) => (paso_label(*step, *r), t.accent),
-        UnitStatus::Done => ("✓ instalada".to_string(), t.accent),
-        UnitStatus::Failed(_) => ("✗ falló".to_string(), t.fg_destructive),
+        UnitStatus::Done => (rimay_localize::t("churay-estado-instalada-ok"), t.accent),
+        UnitStatus::Failed(_) => (rimay_localize::t("churay-estado-fallo"), t.fg_destructive),
         UnitStatus::Idle => {
             if instalada {
-                ("instalada".to_string(), t.fg_muted)
+                (rimay_localize::t("churay-estado-instalada"), t.fg_muted)
             } else {
                 (model.units[i].version.clone(), t.fg_muted)
             }
@@ -1205,14 +1229,21 @@ fn actualizaciones(model: &Model) -> View<Msg> {
     // Si bajamos un manifiesto remoto firmado, comparamos contra él; si no,
     // contra el catálogo local.
     let (manifest, fuente) = match &model.remote_manifest {
-        Some(m) => (m.clone(), "repo remoto"),
-        None => (Manifest::new(churay_core::SUITE_VERSION, model.units.clone()), "catálogo local"),
+        Some(m) => (m.clone(), rimay_localize::t("churay-fuente-remoto")),
+        None => (
+            Manifest::new(churay_core::SUITE_VERSION, model.units.clone()),
+            rimay_localize::t("churay-fuente-local"),
+        ),
     };
     let pend = pending_updates(&model.state, &manifest);
     let con_update: Vec<_> = pend.iter().filter(|u| u.kind != UpdateKind::Nueva).collect();
 
     // Encabezado: botón de chequeo remoto + estado.
-    let label_btn = if model.buscando { "Buscando…" } else { "Buscar actualizaciones" };
+    let label_btn = if model.buscando {
+        rimay_localize::t("churay-buscando")
+    } else {
+        rimay_localize::t("churay-buscar-actualizaciones")
+    };
     let tiene_repo = model.cfg.remote_base_url.is_some();
     let mut btn = View::new(Style {
         size: Size { width: length(220.0), height: length(32.0) },
@@ -1229,9 +1260,12 @@ fn actualizaciones(model: &Model) -> View<Msg> {
     let estado_repo = View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
         if model.repo_msg.is_empty() {
             if tiene_repo {
-                format!("Repo: {}", model.cfg.remote_base_url.as_deref().unwrap_or(""))
+                rimay_localize::t_args(
+                    "churay-repo-url",
+                    &[("url", model.cfg.remote_base_url.as_deref().unwrap_or("").to_string().into())],
+                )
             } else {
-                "Sin repo remoto (definí CHURAY_REPO para actualizar online).".to_string()
+                rimay_localize::t("churay-sin-repo")
             }
         } else {
             model.repo_msg.clone()
@@ -1243,7 +1277,11 @@ fn actualizaciones(model: &Model) -> View<Msg> {
     let cabecera = row(percent(1.0), length(34.0)).gap(10.0).children(vec![estado_repo, btn]);
 
     let mut hijos: Vec<View<Msg>> = vec![cabecera];
-    hijos.push(linea(&format!("Comparando contra: {fuente}"), t.fg_placeholder, t));
+    hijos.push(linea(
+        &rimay_localize::t_args("churay-comparando", &[("fuente", fuente.into())]),
+        t.fg_placeholder,
+        t,
+    ));
 
     if model.state.units.is_empty() {
         hijos.push(
@@ -1252,12 +1290,15 @@ fn actualizaciones(model: &Model) -> View<Msg> {
                 size: Size { width: percent(1.0_f32), height: length(220.0_f32) },
                 ..Default::default()
             })
-            .children(vec![empty_view(
-                Icon::Archive,
-                "Todavía no instalaste nada",
-                Some("Elegí apps en el catálogo e instalalas; sus actualizaciones aparecen acá."),
-                &EmptyPalette::from_theme(t),
-            )]),
+            .children(vec![{
+                let desc = rimay_localize::t("churay-vacio-sub");
+                empty_view(
+                    Icon::Archive,
+                    rimay_localize::t("churay-vacio-titulo"),
+                    Some(desc.as_str()),
+                    &EmptyPalette::from_theme(t),
+                )
+            }]),
         );
     } else {
         for (id, inst) in model.state.units.iter() {
@@ -1272,8 +1313,27 @@ fn actualizaciones(model: &Model) -> View<Msg> {
                 .find(|u| &u.id == id)
                 .map(|u| u.available_version.clone());
             let (txt, color) = match nueva {
-                Some(v) => (format!("{label} — {} → {}  ·  actualizar", inst.version, v), t.accent),
-                None => (format!("{label} — {}  ·  al día", inst.version), t.fg_text),
+                Some(v) => (
+                    rimay_localize::t_args(
+                        "churay-update-disponible",
+                        &[
+                            ("label", label.clone().into()),
+                            ("actual", inst.version.clone().into()),
+                            ("nueva", v.into()),
+                        ],
+                    ),
+                    t.accent,
+                ),
+                None => (
+                    rimay_localize::t_args(
+                        "churay-al-dia",
+                        &[
+                            ("label", label.clone().into()),
+                            ("version", inst.version.clone().into()),
+                        ],
+                    ),
+                    t.fg_text,
+                ),
             };
             hijos.push(linea(&txt, color, t));
         }
@@ -1291,7 +1351,13 @@ fn footer(model: &Model) -> View<Msg> {
         .count();
 
     let resumen = View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
-        format!("{n_sel} seleccionada(s) · destino: {}", model.cfg.prefix.display()),
+        rimay_localize::t_args(
+            "churay-resumen-footer",
+            &[
+                ("sel", n_sel.to_string().into()),
+                ("destino", model.cfg.prefix.display().to_string().into()),
+            ],
+        ),
         13.0,
         t.fg_muted,
         Alignment::Start,
@@ -1304,12 +1370,12 @@ fn footer(model: &Model) -> View<Msg> {
                 size: Size { width: length(90.0), height: length(34.0) },
                 ..Default::default()
             })
-            .children(vec![button_view("Todo", &ButtonPalette::from_theme(t), Msg::SeleccionarTodo(true))]),
+            .children(vec![button_view(rimay_localize::t("churay-todo"), &ButtonPalette::from_theme(t), Msg::SeleccionarTodo(true))]),
             View::new(Style {
                 size: Size { width: length(90.0), height: length(34.0) },
                 ..Default::default()
             })
-            .children(vec![button_view("Nada", &ButtonPalette::from_theme(t), Msg::SeleccionarTodo(false))]),
+            .children(vec![button_view(rimay_localize::t("churay-nada"), &ButtonPalette::from_theme(t), Msg::SeleccionarTodo(false))]),
             instalar_boton(model, n_sel, t),
         ]);
 
@@ -1320,7 +1386,7 @@ fn footer(model: &Model) -> View<Msg> {
     if !sugeridas.is_empty() && !model.installing {
         let nombres: Vec<&str> = sugeridas.iter().map(|&i| model.units[i].label.as_str()).collect();
         let txt = View::new(Style { flex_grow: 1.0, ..Default::default() }).text_aligned(
-            format!("Se complementan con: {}", nombres.join(", ")),
+            rimay_localize::t_args("churay-complementan", &[("nombres", nombres.join(", ").into())]),
             13.0,
             t.fg_text,
             Alignment::Start,
@@ -1333,7 +1399,7 @@ fn footer(model: &Model) -> View<Msg> {
         })
         .fill(t.accent)
         .radius(8.0)
-        .text("Agregar sugeridas", 12.0, t.bg_app)
+        .text(rimay_localize::t("churay-agregar-sugeridas"), 12.0, t.bg_app)
         .on_click(Msg::AgregarSugeridas);
         hijos.push(
             row(percent(1.0), length(38.0))
@@ -1355,13 +1421,13 @@ fn footer(model: &Model) -> View<Msg> {
         .collect();
     if kinds.iter().any(|k| *k == SourceKind::None) {
         hijos.push(linea(
-            "⚠ Sin fuente para algo de lo elegido: hace falta un bundle o CHURAY_REPO (este sistema no puede compilar).",
+            &rimay_localize::t("churay-sin-fuente"),
             t.fg_destructive,
             t,
         ));
     } else if kinds.iter().any(|k| *k == SourceKind::Build) {
         hijos.push(linea(
-            "⚙ Algo se compilará desde fuente (lento; modo dev, requiere cargo).",
+            &rimay_localize::t("churay-compilara"),
             t.fg_muted,
             t,
         ));
@@ -1388,7 +1454,11 @@ fn footer(model: &Model) -> View<Msg> {
 
 fn instalar_boton(model: &Model, n_sel: usize, t: &Theme) -> View<Msg> {
     let activo = n_sel > 0 && !model.installing;
-    let label = if model.installing { "Instalando…" } else { "Instalar" };
+    let label = if model.installing {
+        rimay_localize::t("churay-instalando")
+    } else {
+        rimay_localize::t("churay-instalar")
+    };
     let bg = if activo { t.accent } else { t.bg_button };
     let fg = if activo { t.bg_app } else { t.fg_muted };
     let mut v = View::new(Style {
@@ -1448,11 +1518,13 @@ fn icon_tint(category: &str) -> Color {
 fn paso_label(step: Step, r: f32) -> String {
     let pct = (r * 100.0) as u32;
     match step {
-        Step::Resolviendo => "resolviendo…".into(),
-        Step::Descargando => "bajando…".into(),
-        Step::Compilando => format!("compilando {pct}%"),
-        Step::Copiando => "copiando…".into(),
-        Step::Desktop => "instalando…".into(),
+        Step::Resolviendo => rimay_localize::t("churay-paso-resolviendo"),
+        Step::Descargando => rimay_localize::t("churay-paso-bajando"),
+        Step::Compilando => {
+            rimay_localize::t_args("churay-paso-compilando", &[("pct", pct.to_string().into())])
+        }
+        Step::Copiando => rimay_localize::t("churay-paso-copiando"),
+        Step::Desktop => rimay_localize::t("churay-instalando-min"),
         Step::Hecho => "✓".into(),
     }
 }
@@ -1532,7 +1604,7 @@ impl ViewExt for View<Msg> {
 fn elevated_install(cfg: &InstallConfig, ids: &str, pass: &str, h: &Handle<Msg>) {
     use std::io::{BufRead, BufReader, Read, Write};
     let Ok(exe) = std::env::current_exe() else {
-        h.dispatch(Msg::BaseError("no encontré el ejecutable de churay".into()));
+        h.dispatch(Msg::BaseError(rimay_localize::t("churay-err-no-exe")));
         return;
     };
     let mut cmd = std::process::Command::new("sudo");
@@ -1553,7 +1625,10 @@ fn elevated_install(cfg: &InstallConfig, ids: &str, pass: &str, h: &Handle<Msg>)
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            h.dispatch(Msg::BaseError(format!("no se pudo lanzar sudo: {e}")));
+            h.dispatch(Msg::BaseError(rimay_localize::t_args(
+                "churay-err-sudo-lanzar",
+                &[("error", e.to_string().into())],
+            )));
             return;
         }
     };
@@ -1577,9 +1652,12 @@ fn elevated_install(cfg: &InstallConfig, ids: &str, pass: &str, h: &Handle<Msg>)
         }
         let low = err.to_lowercase();
         let msg = if low.contains("incorrect") || low.contains("contraseña") || low.contains("sorry") {
-            "Contraseña incorrecta.".to_string()
+            rimay_localize::t("churay-pass-incorrecta")
         } else {
-            format!("No se pudo instalar. {}", err.lines().last().unwrap_or("").trim())
+            rimay_localize::t_args(
+                "churay-err-instalar",
+                &[("detalle", err.lines().last().unwrap_or("").trim().to_string().into())],
+            )
         };
         h.dispatch(Msg::BaseError(msg));
     }

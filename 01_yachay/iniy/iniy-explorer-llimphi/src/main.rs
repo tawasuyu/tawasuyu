@@ -41,6 +41,7 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey};
 
 use app_bus::{AppMenu, Menu, MenuItem};
+use rimay_localize::{t, t_args};
 use std::sync::Arc;
 
 use iniy_core::{Asercion, AsercionId, FuenteId, Implicacion, Opinion};
@@ -130,6 +131,7 @@ impl App for Explorer {
     }
 
     fn init(_handle: &Handle<Msg>) -> Model {
+        rimay_localize::init();
         let db_path = std::env::var("INIY_DB")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("iniy.db"));
@@ -243,10 +245,17 @@ impl App for Explorer {
                 let id = model.next_toast;
                 model.next_toast += 1;
                 let toast = match model.error.clone() {
-                    Some(e) => Toast::error(id, format!("No se pudo recargar: {e}"), TOAST_TTL),
+                    Some(e) => Toast::error(
+                        id,
+                        t_args("iniy-toast-recarga-error", &[("error", e.into())]),
+                        TOAST_TTL,
+                    ),
                     None => Toast::success(
                         id,
-                        format!("Corpus recargado · {} aserciones", model.aserciones.len()),
+                        t_args(
+                            "iniy-toast-recarga-ok",
+                            &[("n", model.aserciones.len().to_string().into())],
+                        ),
                         TOAST_TTL,
                     ),
                 };
@@ -270,12 +279,14 @@ impl App for Explorer {
         let theme = model.theme;
         let menu = app_menu(model);
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
-        let header_text = format!(
-            "iniy · {}  ·  {} fuentes  ·  {} aserciones  ·  {} relaciones",
-            model.db_path.display(),
-            model.fuentes.len(),
-            model.aserciones.len(),
-            model.n_implicaciones,
+        let header_text = t_args(
+            "iniy-header",
+            &[
+                ("db", model.db_path.display().to_string().into()),
+                ("fuentes", model.fuentes.len().to_string().into()),
+                ("aserciones", model.aserciones.len().to_string().into()),
+                ("relaciones", model.n_implicaciones.to_string().into()),
+            ],
         );
         let header =
             app_header::<Msg>(header_text, Vec::new(), &AppHeaderPalette::from_theme(&theme));
@@ -289,6 +300,7 @@ impl App for Explorer {
         if model.aserciones.is_empty() {
             // Empty-state con orientación en vez de un cartel chato: ícono
             // apagado + qué correr para poblar el corpus.
+            let empty_desc = t("iniy-empty-desc");
             let cuerpo_vacio = View::new(Style {
                 flex_grow: 1.0,
                 size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -297,8 +309,8 @@ impl App for Explorer {
             })
             .children(vec![empty_view::<Msg>(
                 Icon::Archive,
-                "corpus vacío",
-                Some("Corré `iniy ingest <ruta>` y luego `iniy extract <doc-id>` para poblarlo."),
+                t("iniy-empty-titulo"),
+                Some(empty_desc.as_str()),
                 &EmptyPalette::from_theme(&theme),
             )]);
             chrome.push(cuerpo_vacio);
@@ -308,7 +320,7 @@ impl App for Explorer {
         let palette = CardPalette::from_theme(&theme);
 
         // Bloque "fuentes" — primera mitad horizontal del cuerpo.
-        let fuentes_titulo = etiqueta_seccion("fuentes", theme.fg_muted);
+        let fuentes_titulo = etiqueta_seccion(t("iniy-seccion-fuentes"), theme.fg_muted);
         let mut fuentes_cards: Vec<View<Msg>> = vec![fuentes_titulo];
         for f in &model.fuentes {
             fuentes_cards.push(fuente_card(f, model.reputaciones.get(&f.fuente.id).copied(), &theme, &palette));
@@ -316,7 +328,7 @@ impl App for Explorer {
         let panel_fuentes = panel_columna(theme, fuentes_cards);
 
         // Bloque "aserciones" — segunda mitad horizontal.
-        let asercs_titulo = etiqueta_seccion("aserciones", theme.fg_muted);
+        let asercs_titulo = etiqueta_seccion(t("iniy-seccion-aserciones"), theme.fg_muted);
         let mut aserc_cards: Vec<View<Msg>> = vec![asercs_titulo];
         for att in model.aserciones.iter().take(MAX_ASERCIONES_VISIBLES) {
             let sel = model.seleccionada == Some(att.asercion.id);
@@ -325,7 +337,15 @@ impl App for Explorer {
         if model.aserciones.len() > MAX_ASERCIONES_VISIBLES {
             aserc_cards.push(
                 texto_simple(
-                    format!("… +{} más", model.aserciones.len() - MAX_ASERCIONES_VISIBLES),
+                    t_args(
+                        "iniy-mas-aserciones",
+                        &[(
+                            "n",
+                            (model.aserciones.len() - MAX_ASERCIONES_VISIBLES)
+                                .to_string()
+                                .into(),
+                        )],
+                    ),
                     11.0,
                     theme.fg_muted,
                 ),
@@ -371,8 +391,8 @@ impl App for Explorer {
             // Acciones reales del explorer de sólo lectura: deseleccionar la
             // aserción y recargar el corpus. No inventamos edición.
             let items = vec![
-                ContextMenuItem::action("Deseleccionar"),
-                ContextMenuItem::action("Recargar corpus"),
+                ContextMenuItem::action(t("iniy-deseleccionar")),
+                ContextMenuItem::action(t("iniy-recargar-corpus")),
             ];
             let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| match i {
                 0 => Msg::Seleccionar(sel), // toggle ⇒ deselecciona la activa
@@ -473,23 +493,23 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuB
 /// que mapean a acciones reales (recargar, deseleccionar, tema). Sin
 /// "Editar": el explorer no tiene campos de texto editables.
 fn app_menu(model: &Model) -> AppMenu {
-    let ver = Menu::new("Ver")
-        .item(MenuItem::new("Recargar corpus", "file.recargar").shortcut("Ctrl+R"))
-        .item(MenuItem::new("Cambiar tema", "view.tema").separated());
+    let ver = Menu::new(t("iniy-menu-ver"))
+        .item(MenuItem::new(t("iniy-recargar-corpus"), "file.recargar").shortcut("Ctrl+R"))
+        .item(MenuItem::new(t("cycle-theme"), "view.tema").separated());
     // "Deseleccionar" sólo tiene sentido con una aserción activa.
     let deseleccionar = if model.seleccionada.is_some() {
-        MenuItem::new("Deseleccionar", "view.deseleccionar")
+        MenuItem::new(t("iniy-deseleccionar"), "view.deseleccionar")
     } else {
-        MenuItem::new("Deseleccionar", "view.deseleccionar").disabled()
+        MenuItem::new(t("iniy-deseleccionar"), "view.deseleccionar").disabled()
     };
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Recargar corpus", "file.recargar").shortcut("Ctrl+R"))
-                .item(MenuItem::new("Salir", "file.salir").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("iniy-menu-archivo"))
+                .item(MenuItem::new(t("iniy-recargar-corpus"), "file.recargar").shortcut("Ctrl+R"))
+                .item(MenuItem::new(t("exit"), "file.salir").shortcut("Ctrl+Q").separated()),
         )
         .menu(ver.item(deseleccionar))
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
 }
 
 /// Traduce un command id del menú principal al `Msg`/efecto real.
@@ -733,10 +753,10 @@ fn asercion_card(att: &AsercionAtribuida, seleccionada: bool, theme: &Theme, pal
     let fuente_str = match &att.fuente {
         Some(f) => {
             let kind = f.kind.as_deref().map(|k| format!(" [{k}]")).unwrap_or_default();
-            let cita = if att.citada { " (citada)" } else { "" };
+            let cita = if att.citada { format!(" ({})", t("iniy-citada")) } else { String::new() };
             format!("{}{}{}  ·  {}", f.nombre, kind, cita, att.doc_titulo)
         }
-        None => format!("(sin fuente)  ·  {}", att.doc_titulo),
+        None => format!("{}  ·  {}", t("iniy-sin-fuente"), att.doc_titulo),
     };
     let fuente_line = texto_simple(fuente_str, 10.0, theme.fg_muted);
 
@@ -773,14 +793,20 @@ fn fuente_card(f: &FuenteResumen, reputacion: Option<f32>, theme: &Theme, palett
         theme.fg_text,
     );
     let conteo = texto_simple(
-        format!("{} docs  ·  {} aserciones", f.n_docs, f.n_aserciones),
+        t_args(
+            "iniy-fuente-conteo",
+            &[
+                ("docs", f.n_docs.to_string().into()),
+                ("aserciones", f.n_aserciones.to_string().into()),
+            ],
+        ),
         10.0,
         theme.fg_muted,
     );
     let mut hijos = vec![cabecera, conteo];
     let accent = if let Some(rep) = reputacion {
         hijos.push(texto_simple(
-            format!("reputación: {:+.2}", rep),
+            t_args("iniy-reputacion", &[("valor", format!("{rep:+.2}").into())]),
             10.0,
             theme.fg_muted,
         ));

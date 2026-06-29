@@ -22,7 +22,11 @@ use super::widgets::{action_btn, empty_state, fmt_mem, name_color, pad, seg_btn}
 pub(crate) fn map_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
     if model.system.is_empty() {
-        return empty_state(t, "Leyendo /proc…", "Armando el mapa de procesos.");
+        return empty_state(
+            t,
+            &rimay_localize::t("sandokan-mon-sys-empty-title"),
+            &rimay_localize::t("sandokan-mon-map-empty-body"),
+        );
     }
     let cpu = model.map_cpu;
     // Con zoom, restringe al subárbol de la raíz (incluida).
@@ -141,8 +145,9 @@ pub(crate) fn map_body(model: &Model) -> View<Msg> {
 fn map_toolbar(model: &Model) -> View<Msg> {
     let t = &model.theme;
     let mut row = vec![
-        View::new(Style::default()).text("Área por:", 12.0, t.fg_muted),
-        seg_btn(t, "Memoria", !model.map_cpu, Msg::MapMetric(false)),
+        View::new(Style::default()).text(rimay_localize::t("sandokan-mon-map-area-by"), 12.0, t.fg_muted),
+        seg_btn(t, &rimay_localize::t("sandokan-mon-memoria"), !model.map_cpu, Msg::MapMetric(false)),
+        // "CPU" es un acrónimo técnico — no se traduce.
         seg_btn(t, "CPU", model.map_cpu, Msg::MapMetric(true)),
     ];
     // Breadcrumb de zoom (si estamos dentro de un subárbol).
@@ -153,11 +158,15 @@ fn map_toolbar(model: &Model) -> View<Msg> {
             .find(|p| p.pid == r)
             .map(|p| p.name.as_str())
             .unwrap_or("?");
-        row.push(seg_btn(t, "◂ Subir", false, Msg::MapZoomOut));
-        row.push(seg_btn(t, "Todo", false, Msg::MapRoot(None)));
+        row.push(seg_btn(t, &rimay_localize::t("sandokan-mon-map-up"), false, Msg::MapZoomOut));
+        row.push(seg_btn(t, &rimay_localize::t("sandokan-mon-map-all"), false, Msg::MapRoot(None)));
         row.push(
             View::new(Style::default())
-                .text(format!("zoom: {name}"), 11.5, name_color(name)),
+                .text(
+                    rimay_localize::t_args("sandokan-mon-map-zoom", &[("name", name.to_string().into())]),
+                    11.5,
+                    name_color(name),
+                ),
         );
     }
     match model.sys_sel.and_then(|pid| model.system.iter().find(|p| p.pid == pid)) {
@@ -169,8 +178,8 @@ fn map_toolbar(model: &Model) -> View<Msg> {
                 })
                 .text(format!("▸ PID {} · {}", p.pid, p.name), 12.0, name_color(&p.name)),
             );
-            row.push(action_btn(t, "Terminar", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Term)));
-            row.push(action_btn(t, "Matar", t.fg_destructive, t.bg_app, Msg::Signal(p.pid, Sig::Kill)));
+            row.push(action_btn(t, &rimay_localize::t("sandokan-mon-sys-terminate"), t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Term)));
+            row.push(action_btn(t, &rimay_localize::t("sandokan-mon-sys-kill"), t.fg_destructive, t.bg_app, Msg::Signal(p.pid, Sig::Kill)));
         }
         None => row.push(
             View::new(Style {
@@ -178,7 +187,7 @@ fn map_toolbar(model: &Model) -> View<Msg> {
                 ..Default::default()
             })
             .text(
-                "Click: seleccionar · doble-click: zoom al subárbol · color por proceso",
+                rimay_localize::t("sandokan-mon-map-hint"),
                 11.0,
                 t.fg_muted,
             ),

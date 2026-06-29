@@ -183,19 +183,21 @@ pub(crate) struct Model {
 /// Menú de la app (Monitor / Ver / Ayuda). Los `command` los mapea
 /// `update` en `Msg::MenuCmd`.
 pub(crate) fn build_menu() -> AppMenu {
+    use rimay_localize::t;
     AppMenu::new()
         .menu(
-            Menu::new("Monitor")
-                .item(MenuItem::new("Refrescar", "monitor.refresh").shortcut("Ctrl+R").icon("⟳"))
-                .item(MenuItem::new("Sembrar demo", "monitor.seed").icon("✚").separated())
-                .item(MenuItem::new("Salir", "app.quit").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("sandokan-mon-menu-monitor"))
+                .item(MenuItem::new(t("sandokan-mon-menu-refresh"), "monitor.refresh").shortcut("Ctrl+R").icon("⟳"))
+                .item(MenuItem::new(t("sandokan-mon-menu-seed"), "monitor.seed").icon("✚").separated())
+                .item(MenuItem::new(t("exit"), "app.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Sistema", "view.system").shortcut("Ctrl+1"))
-                .item(MenuItem::new("Mapa", "view.map").shortcut("Ctrl+2"))
-                .item(MenuItem::new("Unidades", "view.units").shortcut("Ctrl+3"))
+            Menu::new(t("sandokan-mon-menu-view"))
+                .item(MenuItem::new(t("sandokan-mon-tab-system"), "view.system").shortcut("Ctrl+1"))
+                .item(MenuItem::new(t("sandokan-mon-tab-map"), "view.map").shortcut("Ctrl+2"))
+                .item(MenuItem::new(t("sandokan-mon-tab-units"), "view.units").shortcut("Ctrl+3"))
+                // "Wawa" es nombre propio del SO (marca) — no se traduce.
                 .item(MenuItem::new("Wawa", "view.wawa").shortcut("Ctrl+4")),
         )
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Observa por el contrato Engine", "help.about")))
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("sandokan-mon-menu-about"), "help.about")))
 }

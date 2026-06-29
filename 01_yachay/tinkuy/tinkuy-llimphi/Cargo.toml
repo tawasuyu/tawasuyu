@@ -19,6 +19,7 @@ llimphi-widget-empty        = { workspace = true }
 llimphi-icons               = { workspace = true }
 llimphi-motion              = { workspace = true }
 app-bus                     = { workspace = true }
+rimay-localize              = { path = "../../../shared/rimay-localize" }
 tinkuy-core   = { path = "../tinkuy-core" }
 tinkuy-dsl    = { path = "../tinkuy-dsl" }
 tinkuy-forces = { path = "../tinkuy-forces" }

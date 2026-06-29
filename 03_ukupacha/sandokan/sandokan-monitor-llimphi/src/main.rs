@@ -130,7 +130,7 @@ pub(crate) fn header(model: &Model) -> View<Msg> {
             let cpu: f32 = model.system.iter().map(|p| p.cpu_pct).sum();
             let rss: u64 = model.system.iter().map(|p| p.rss_kb).sum::<u64>() * 1024;
             vec![
-                chip(t, "procesos", &model.system.len().to_string()),
+                chip(t, &rimay_localize::t("sandokan-mon-chip-procesos"), &model.system.len().to_string()),
                 chip(t, "cpu", &format!("{cpu:.0}%")),
                 chip(t, "rss", &fmt_mem(rss)),
                 chip(t, "ram", &fmt_mem(model.mem_total_kb * 1024)),
@@ -149,16 +149,16 @@ pub(crate) fn header(model: &Model) -> View<Msg> {
                 .filter_map(|u| u.telemetry.as_ref().map(|x| x.cpu_pct))
                 .sum();
             vec![
-                chip(t, "unidades", &snap.len().to_string()),
-                chip(t, "vivas", &snap.running().to_string()),
-                chip(t, "memoria", &fmt_mem(mem)),
+                chip(t, &rimay_localize::t("sandokan-mon-chip-unidades"), &snap.len().to_string()),
+                chip(t, &rimay_localize::t("sandokan-mon-chip-vivas"), &snap.running().to_string()),
+                chip(t, &rimay_localize::t("sandokan-mon-chip-memoria"), &fmt_mem(mem)),
                 chip(t, "cpu", &format!("{cpu:.0}%")),
             ]
         }
-        Tab::Wawa => vec![chip(t, "apps wasm", &model.wawa.len().to_string())],
+        Tab::Wawa => vec![chip(t, &rimay_localize::t("sandokan-mon-chip-apps-wasm"), &model.wawa.len().to_string())],
     };
     if let Some(e) = &model.error {
-        chips.push(chip_warn(t, "aviso", e));
+        chips.push(chip_warn(t, &rimay_localize::t("sandokan-mon-chip-aviso"), e));
     }
 
     use llimphi_ui::llimphi_layout::taffy::prelude::{length, FlexDirection as FD, Size as S, Style as St};
@@ -211,9 +211,10 @@ pub(crate) fn tabs(model: &Model) -> View<Msg> {
     })
     .fill(t.bg_panel)
     .children(vec![
-        tab_btn(t, "Sistema", model.tab == Tab::System, Msg::Switch(Tab::System)),
-        tab_btn(t, "Mapa", model.tab == Tab::Map, Msg::Switch(Tab::Map)),
-        tab_btn(t, "Unidades", model.tab == Tab::Units, Msg::Switch(Tab::Units)),
+        tab_btn(t, &rimay_localize::t("sandokan-mon-tab-system"), model.tab == Tab::System, Msg::Switch(Tab::System)),
+        tab_btn(t, &rimay_localize::t("sandokan-mon-tab-map"), model.tab == Tab::Map, Msg::Switch(Tab::Map)),
+        tab_btn(t, &rimay_localize::t("sandokan-mon-tab-units"), model.tab == Tab::Units, Msg::Switch(Tab::Units)),
+        // "Wawa" es nombre propio del SO (marca) — no se traduce.
         tab_btn(t, "Wawa", model.tab == Tab::Wawa, Msg::Switch(Tab::Wawa)),
     ])
 }
@@ -239,6 +240,8 @@ impl App for Monitor {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        // Carga los catálogos Fluent (es/en/qu) una sola vez. Idempotente.
+        rimay_localize::init();
         let ctx = Arc::new(build_ctx());
 
         // Primer poll inmediato (que la UI no espere un ciclo entero).
@@ -384,13 +387,23 @@ impl App for Monitor {
             }
             Msg::Signal(pid, sig) => {
                 if let Err(e) = procfs::signal(pid, sig) {
-                    let msg = format!("señal a {pid}: {e}");
+                    let msg = rimay_localize::t_args(
+                        "sandokan-mon-toast-signal-err",
+                        &[("pid", pid.to_string().into()), ("err", e.to_string().into())],
+                    );
                     model.error = Some(msg.clone());
                     push_toast(&mut model, handle, |id| Toast::error(id, msg, TOAST_TTL));
                 } else {
                     model.error = None;
                     push_toast(&mut model, handle, |id| {
-                        Toast::info(id, format!("señal enviada a {pid}"), TOAST_TTL)
+                        Toast::info(
+                            id,
+                            rimay_localize::t_args(
+                                "sandokan-mon-toast-signal-sent",
+                                &[("pid", pid.to_string().into())],
+                            ),
+                            TOAST_TTL,
+                        )
                     });
                     handle.spawn(|| Msg::System(procfs::scan()));
                 }
@@ -404,7 +417,7 @@ impl App for Monitor {
                     Msg::Snapshot(ctx.poll())
                 });
                 push_toast(&mut model, handle, |tid| {
-                    Toast::info(tid, "Deteniendo unidad (SIGTERM → grace)…", TOAST_TTL)
+                    Toast::info(tid, rimay_localize::t("sandokan-mon-toast-stopping"), TOAST_TTL)
                 });
                 model.selected = None;
             }
@@ -415,7 +428,7 @@ impl App for Monitor {
                     Msg::Snapshot(ctx.poll())
                 });
                 push_toast(&mut model, handle, |tid| {
-                    Toast::warning(tid, "Matando unidad (grace 0)…", TOAST_TTL)
+                    Toast::warning(tid, rimay_localize::t("sandokan-mon-toast-killing"), TOAST_TTL)
                 });
                 model.selected = None;
             }

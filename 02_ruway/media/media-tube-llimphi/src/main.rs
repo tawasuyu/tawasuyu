@@ -38,6 +38,7 @@ use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, Gri
 use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_toast::{toast_stack_view, Toast};
+use rimay_localize::{t, t_args};
 
 /// Alto del header (px).
 const HEADER_H: f32 = 56.0;
@@ -347,6 +348,8 @@ impl App for MediaTube {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        // Carga los catálogos Fluent (es/en/qu) una sola vez. Idempotente.
+        rimay_localize::init();
         let backend = Backend::Invidious;
         let instance = default_instance(backend);
         // Arrancamos mostrando tendencias para que la grilla no esté vacía.
@@ -361,7 +364,7 @@ impl App for MediaTube {
             search: TextInputState::new(),
             search_focused: false,
             videos: Vec::new(),
-            status: "Tendencias…".to_string(),
+            status: t("media-tube-trending-loading"),
             gen: 1,
             query: String::new(),
             page: 0,
@@ -396,7 +399,10 @@ impl App for MediaTube {
                 let gen = m.gen;
                 m.videos.clear();
                 m.scroll_fila = 0;
-                m.status = format!("Buscando «{q}» en {}…", m.backend.nombre());
+                m.status = t_args(
+                    "media-tube-searching",
+                    &[("q", q.clone().into()), ("backend", m.backend.nombre().into())],
+                );
                 m.query = q.clone();
                 m.page = 1;
                 m.loading = true;
@@ -421,11 +427,18 @@ impl App for MediaTube {
                         m.videos = items;
                     }
                     m.status = if m.videos.is_empty() {
-                        "Sin resultados".to_string()
+                        t("media-tube-no-results")
                     } else if let Some((_, name)) = &m.channel {
-                        format!("Canal: {} · {} videos", name, m.videos.len())
+                        t_args(
+                            "media-tube-channel-status",
+                            &[("name", name.clone().into()), ("count", m.videos.len().to_string().into())],
+                        )
                     } else {
-                        let que = if m.query.is_empty() { "Tendencias" } else { "Resultados" };
+                        let que = if m.query.is_empty() {
+                            t("media-tube-trending")
+                        } else {
+                            t("media-tube-results")
+                        };
                         format!("{} · {} · {}", que, m.videos.len(), m.backend.nombre())
                     };
                     kick_thumbs(&mut m, handle);
@@ -434,10 +447,14 @@ impl App for MediaTube {
             Msg::LoadFailed(gen, e) => {
                 if gen == m.gen {
                     m.loading = false;
-                    m.status = format!("Error: {e}");
+                    m.status = t_args("media-tube-status-error", &[("e", e.clone().into())]);
                     let id = m.next_toast;
                     m.next_toast += 1;
-                    push_toast(&mut m, handle, Toast::error(id, format!("No se pudo cargar: {e}"), TOAST_TTL));
+                    push_toast(
+                        &mut m,
+                        handle,
+                        Toast::error(id, t_args("media-tube-load-failed", &[("e", e.into())]), TOAST_TTL),
+                    );
                 }
             }
             Msg::SetBackend(b) => {
@@ -452,7 +469,7 @@ impl App for MediaTube {
                     m.loading = true;
                     m.exhausted = false;
                     m.gen += 1;
-                    m.status = format!("Tendencias de {}…", b.nombre());
+                    m.status = t_args("media-tube-trending-of", &[("backend", b.nombre().into())]);
                     let (gen, inst) = (m.gen, m.instance.clone());
                     handle.spawn(move || match tendencias(b, &inst) {
                         Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
@@ -478,7 +495,7 @@ impl App for MediaTube {
                 m.scroll_fila = 0;
                 m.loading = true;
                 m.exhausted = true; // channel_videos no se pagina (descriptor sin page)
-                m.status = format!("Canal: {name}…");
+                m.status = t_args("media-tube-channel-loading", &[("name", name.clone().into())]);
                 let (gen, b, inst) = (m.gen, m.backend, m.instance.clone());
                 handle.spawn(move || match canal(b, &inst, &id) {
                     Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
@@ -493,14 +510,14 @@ impl App for MediaTube {
                 m.gen += 1;
                 let (gen, b, inst, q) = (m.gen, m.backend, m.instance.clone(), m.query.clone());
                 if q.is_empty() {
-                    m.status = "Tendencias…".to_string();
+                    m.status = t("media-tube-trending-loading");
                     handle.spawn(move || match tendencias(b, &inst) {
                         Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
                         Err(e) => Msg::LoadFailed(gen, e.to_string()),
                     });
                 } else {
                     m.page = 1;
-                    m.status = format!("Buscando «{q}»…");
+                    m.status = t_args("media-tube-searching-short", &[("q", q.clone().into())]);
                     handle.spawn(move || match buscar(b, &inst, &q, 1) {
                         Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
                         Err(e) => Msg::LoadFailed(gen, e.to_string()),
@@ -598,9 +615,10 @@ impl App for MediaTube {
             .on_click(Msg::SetBackend(b))
         };
 
+        let search_ph = t("media-tube-search-placeholder");
         let search_box = text_input_view(
             &m.search,
-            "Buscá videos…  (Enter para buscar, / para enfocar)",
+            &search_ph,
             m.search_focused,
             &TextInputPalette::from_theme(&theme),
             Msg::SearchFocus,
@@ -636,7 +654,7 @@ impl App for MediaTube {
                 .fill(Color::from_rgba8(44, 50, 62, 255))
                 .radius(7.0)
                 .hover_fill(Color::from_rgba8(60, 68, 84, 255))
-                .text("← atrás", 12.0, Color::from_rgba8(210, 216, 226, 255))
+                .text(t("media-tube-back"), 12.0, Color::from_rgba8(210, 216, 226, 255))
                 .on_click(Msg::Back),
             );
         }
@@ -740,11 +758,11 @@ impl App for MediaTube {
         } else if m.videos.is_empty() {
             let pal = EmptyPalette::from_theme(&theme);
             let (titulo, desc) = if m.query.is_empty() {
-                ("Sin videos", "Probá buscar algo con la barra de arriba o cambiá de backend.")
+                (t("media-tube-empty-no-videos-title"), t("media-tube-empty-no-videos-desc"))
             } else {
-                ("Sin resultados", "No encontramos nada para esa búsqueda. Probá otros términos o backend.")
+                (t("media-tube-no-results"), t("media-tube-empty-no-results-desc"))
             };
-            empty_view(Icon::Film, titulo, Some(desc), &pal)
+            empty_view(Icon::Film, titulo, Some(desc.as_str()), &pal)
         } else {
             grid_view(GridSpec {
                 cells,

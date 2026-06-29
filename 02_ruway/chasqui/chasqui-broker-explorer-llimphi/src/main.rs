@@ -65,6 +65,7 @@ use llimphi_icons::Icon;
 use ulid::Ulid;
 
 use app_bus::{AppMenu, Menu, MenuItem};
+use rimay_localize::{t, t_args};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -186,6 +187,7 @@ impl App for Explorer {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        rimay_localize::init();
         let flow = std::env::var("BRAHMAN_BROKER_PROBE_FLOW")
             .unwrap_or_else(|_| "broker-health".to_string());
         let type_name = std::env::var("BRAHMAN_BROKER_PROBE_TYPE")
@@ -256,12 +258,12 @@ impl App for Explorer {
                     let toast = match &m.state {
                         ProbeState::Down { reason } => Some(Toast::error(
                             m.next_toast,
-                            format!("Broker DOWN — {reason}"),
+                            t_args("chasqui-broker-down", &[("reason", reason.clone().into())]),
                             TOAST_TTL,
                         )),
                         ProbeState::UpWithProvider { .. } => Some(Toast::success(
                             m.next_toast,
-                            "Broker UP — provider matcheado",
+                            t("chasqui-toast-provider-matched"),
                             TOAST_TTL,
                         )),
                         _ => None,
@@ -323,7 +325,11 @@ impl App for Explorer {
                 m.theme = Theme::next_after(m.theme.name);
                 let id = m.next_toast;
                 m.next_toast += 1;
-                let toast = Toast::info(id, format!("Tema: {}", m.theme.name), TOAST_TTL);
+                let toast = Toast::info(
+                    id,
+                    t_args("chasqui-toast-theme", &[("name", m.theme.name.to_string().into())]),
+                    TOAST_TTL,
+                );
                 push_toast(&mut m, handle, toast);
             }
             Msg::SelectEntry(i) => {
@@ -343,7 +349,11 @@ impl App for Explorer {
                 m.context_menu = None;
                 let id = m.next_toast;
                 m.next_toast += 1;
-                push_toast(&mut m, handle, Toast::info(id, "Timeline limpiado", TOAST_TTL));
+                push_toast(
+                    &mut m,
+                    handle,
+                    Toast::info(id, t("chasqui-toast-timeline-cleared"), TOAST_TTL),
+                );
             }
             Msg::ToastExpire(id) => {
                 m.toasts.retain(|t| t.id != id);
@@ -388,15 +398,15 @@ impl App for Explorer {
             ProbeState::Pending => {}
             ProbeState::Down { reason } => body_children.push(banner_view::<Msg>(
                 BannerKind::Error,
-                format!("Broker DOWN — {reason}"),
+                t_args("chasqui-broker-down", &[("reason", reason.clone().into())]),
             )),
             ProbeState::UpNoProvider { .. } => body_children.push(banner_view::<Msg>(
                 BannerKind::Warning,
-                "Broker UP, sin provider para el flow".to_string(),
+                t("chasqui-banner-no-provider"),
             )),
             ProbeState::UpWithProvider { .. } => body_children.push(banner_view::<Msg>(
                 BannerKind::Success,
-                "Broker UP, provider matcheado".to_string(),
+                t("chasqui-banner-provider-matched"),
             )),
         }
 
@@ -408,8 +418,9 @@ impl App for Explorer {
             accent_down,
             accent_pending,
         );
+        let label_state = t("chasqui-card-state");
         body_children.push(stat_card_view::<Msg>(
-            "Estado",
+            &label_state,
             state_value,
             &state_descr,
             state_accent,
@@ -444,14 +455,13 @@ impl App for Explorer {
             .map(|l| l.entries.len().to_string())
             .unwrap_or_else(|| "—".into());
         let sessions_descr = match &model.sessions {
-            None => "lista no disponible (broker DOWN o pendiente)".to_string(),
-            Some(l) if l.entries.is_empty() => {
-                "sin sesiones registradas en el broker".into()
-            }
-            Some(_) => "labels visibles + flows in/out · (wit) = consciente".into(),
+            None => t("chasqui-sessions-unavailable"),
+            Some(l) if l.entries.is_empty() => t("chasqui-sessions-empty"),
+            Some(_) => t("chasqui-sessions-some"),
         };
+        let label_sessions = t("chasqui-card-sessions");
         body_children.push(stat_card_view::<Msg>(
-            "Sesiones activas",
+            &label_sessions,
             sessions_count_value,
             &sessions_descr,
             accent_up,
@@ -464,12 +474,13 @@ impl App for Explorer {
         // right-click en la raíz abre el contextual).
         let timeline_value = model.timeline.len().to_string();
         let timeline_descr = if model.timeline.is_empty() {
-            "esperando primer match…".to_string()
+            t("chasqui-timeline-waiting")
         } else {
-            "click selecciona · right-click = menú · cap 50 entries".to_string()
+            t("chasqui-timeline-help")
         };
+        let label_timeline = t("chasqui-card-timeline");
         body_children.push(stat_card_view::<Msg>(
-            "Timeline de matches",
+            &label_timeline,
             timeline_value,
             &timeline_descr,
             accent_partial,
@@ -502,6 +513,7 @@ impl App for Explorer {
                 }
             } else {
                 let empty_pal = EmptyPalette::from_theme(theme);
+                let empty_descr = t("chasqui-empty-descr");
                 body_children.push(
                     View::new(Style {
                         size: Size {
@@ -513,8 +525,8 @@ impl App for Explorer {
                     })
                     .children(vec![empty_view::<Msg>(
                         Icon::Bell,
-                        "Sin matches todavía",
-                        Some("El broker está alcanzable; aún no hubo matches para el flow sondeado."),
+                        t("chasqui-empty-title"),
+                        Some(empty_descr.as_str()),
                         &empty_pal,
                     )]),
                 );
@@ -613,13 +625,13 @@ impl App for Explorer {
                 .timeline
                 .get(idx)
                 .map(format_timeline_entry)
-                .unwrap_or_else(|| "Entry".to_string());
+                .unwrap_or_else(|| t("chasqui-entry-fallback"));
             let viewport = viewport_of(model);
             // Acciones reales del probe (sólo lectura): refrescar el
             // probe y limpiar el timeline. No inventamos edición.
             let items = vec![
-                ContextMenuItem::action("Refrescar probe"),
-                ContextMenuItem::action("Limpiar timeline"),
+                ContextMenuItem::action(t("chasqui-refresh-probe")),
+                ContextMenuItem::action(t("chasqui-clear-timeline")),
             ];
             let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
                 Arc::new(move |i: usize| match i {
@@ -678,17 +690,17 @@ fn menubar_spec<'a>(
 fn app_menu() -> AppMenu {
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Refrescar probe", "file.refresh").shortcut("Ctrl+R"))
-                .item(MenuItem::new("Limpiar timeline", "file.clear"))
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("chasqui-menu-file"))
+                .item(MenuItem::new(t("chasqui-refresh-probe"), "file.refresh").shortcut("Ctrl+R"))
+                .item(MenuItem::new(t("chasqui-clear-timeline"), "file.clear"))
+                .item(MenuItem::new(t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Reconectar", "view.reconnect"))
-                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+            Menu::new(t("chasqui-menu-view"))
+                .item(MenuItem::new(t("chasqui-menu-reconnect"), "view.reconnect"))
+                .item(MenuItem::new(t("cycle-theme"), "view.theme").separated()),
         )
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
 }
 
 /// Empuja un toast al stack y programa su expiración (acción real del
@@ -724,7 +736,11 @@ fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Mod
             handle.dispatch(Msg::Tick);
             let id = model.next_toast;
             model.next_toast += 1;
-            push_toast(&mut model, handle, Toast::info(id, "Refrescando probe…", TOAST_TTL));
+            push_toast(
+                &mut model,
+                handle,
+                Toast::info(id, t("chasqui-toast-refreshing"), TOAST_TTL),
+            );
             model
         }
         "file.clear" => {
@@ -772,24 +788,27 @@ fn state_card_params(
         ProbeState::Pending => (
             accent_pending,
             "PENDING".into(),
-            "esperando primer probe…".into(),
+            t("chasqui-state-pending"),
         ),
         ProbeState::Down { reason } => (
             accent_down,
             "DOWN".into(),
-            format!("connect failed: {reason}"),
+            t_args("chasqui-state-down", &[("reason", reason.clone().into())]),
         ),
         ProbeState::UpNoProvider { flow } => (
             accent_partial,
             "UP / NO PROVIDER".into(),
-            format!("broker reachable; sin productor para flow `{flow}`"),
+            t_args("chasqui-state-no-provider", &[("flow", flow.clone().into())]),
         ),
         ProbeState::UpWithProvider { flow, producer_socket } => (
             accent_up,
             "UP / PROVIDER".into(),
-            format!(
-                "flow `{flow}` matcheado en producer socket: {}",
-                producer_socket.display()
+            t_args(
+                "chasqui-state-provider",
+                &[
+                    ("flow", flow.clone().into()),
+                    ("socket", producer_socket.display().to_string().into()),
+                ],
             ),
         ),
     }

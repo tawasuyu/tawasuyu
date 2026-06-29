@@ -23,6 +23,7 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
 use llimphi_ui::llimphi_layout::taffy::Rect;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
+use rimay_localize::t_args;
 
 struct Model {
     surface: Surface,
@@ -115,6 +116,7 @@ impl App for LauncherApp {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        rimay_localize::init();
         if let Err(e) = app_bus::seed_default_apps() {
             eprintln!("launcher: no pude sembrar apps por defecto: {e}");
         }
@@ -134,7 +136,7 @@ impl App for LauncherApp {
             open_menu: None,
             stats: host::SysStats::snapshot(),
             prev_cpu: host::read_cpu_sample(),
-            status: format!("{n} apps descubiertas · clic en el dock para lanzar"),
+            status: t_args("launcher-status-discovered", &[("n", n.to_string().into())]),
         }
     }
 
@@ -152,16 +154,19 @@ impl App for LauncherApp {
             }
             Msg::OpenMenu(o) => m.open_menu = o,
             Msg::Command(cmd) => {
-                m.status = format!("menú: {cmd}");
+                m.status = t_args("launcher-status-menu", &[("cmd", cmd.into())]);
                 m.open_menu = None;
             }
             Msg::Launch(id) => {
                 m.status = match m.registry.get(&id) {
                     Some(app) => match ProcessLauncher.launch(app) {
-                        Ok(()) => format!("lancé {id}"),
-                        Err(e) => format!("no pude lanzar {id}: {e:?}"),
+                        Ok(()) => t_args("launcher-status-launched", &[("id", id.clone().into())]),
+                        Err(e) => t_args(
+                            "launcher-status-launch-failed",
+                            &[("id", id.clone().into()), ("err", format!("{e:?}").into())],
+                        ),
                     },
-                    None => format!("app desconocida: {id}"),
+                    None => t_args("launcher-status-unknown-app", &[("id", id.clone().into())]),
                 };
             }
             Msg::TearOff(id) => {
@@ -174,7 +179,7 @@ impl App for LauncherApp {
                     title: Some(id.clone()),
                     modules: vec![Module::new("launch").with("app_id", Prop::Str(id.clone()))],
                 });
-                m.status = format!("desprendí {id}");
+                m.status = t_args("launcher-status-torn-off", &[("id", id.clone().into())]);
             }
             Msg::Close(i) => {
                 if i < m.surface.floating.len() {

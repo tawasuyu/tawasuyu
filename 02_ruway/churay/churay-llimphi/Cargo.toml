@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 churay-core = { workspace = true }
 marca = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 llimphi-ui = { workspace = true }
 llimphi-image = { workspace = true }
 llimphi-theme = { workspace = true }

@@ -25,6 +25,8 @@ use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_skeleton::{skeleton_view, SkeletonPalette};
 use llimphi_widget_toast::{toast_stack_view, Toast};
 
+use rimay_localize::{t, t_args};
+
 use llimphi_image::Image;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -78,11 +80,11 @@ fn icono_clase(c: Clase) -> &'static str {
 }
 
 /// Rótulo corto de la clase (chip de faceta).
-fn etiqueta_clase(c: Clase) -> &'static str {
+fn etiqueta_clase(c: Clase) -> String {
     match c {
-        Clase::Notificacion => "Notif",
-        Clase::Captura => "Capturas",
-        Clase::Clip => "Clips",
+        Clase::Notificacion => t("willay-class-notif"),
+        Clase::Captura => t("willay-class-captures"),
+        Clase::Clip => t("willay-class-clips"),
     }
 }
 
@@ -202,7 +204,7 @@ fn ensure_tick(m: &mut Model, handle: &Handle<Msg>) {
 /// de filtro → dispara la transición de entrada del cuerpo.
 fn scene_key(m: &Model) -> u64 {
     match m.filtro {
-        Some(c) => key_of(etiqueta_clase(c)),
+        Some(c) => key_of(&etiqueta_clase(c)),
         None => key_of("todo"),
     }
 }
@@ -212,6 +214,7 @@ impl App for Panel {
     type Msg = Msg;
 
     fn init(handle: &Handle<Msg>) -> Model {
+        rimay_localize::init();
         let cmd_tx = spawn_red(handle.clone());
         let mut model = Model {
             eventos: Vec::new(),
@@ -257,13 +260,13 @@ impl App for Panel {
                 copiar_clipboard(&t);
                 let id = model.next_toast;
                 model.next_toast += 1;
-                push_toast(&mut model, handle, Toast::success(id, "Copiado al portapapeles", TOAST_TTL));
+                push_toast(&mut model, handle, Toast::success(id, rimay_localize::t("willay-toast-copied"), TOAST_TTL));
             }
             Msg::AbrirCaptura(ruta) => {
                 abrir_en_tullpu(&ruta);
                 let id = model.next_toast;
                 model.next_toast += 1;
-                push_toast(&mut model, handle, Toast::info(id, "Abriendo en tullpu…", TOAST_TTL));
+                push_toast(&mut model, handle, Toast::info(id, t("willay-toast-opening-tullpu"), TOAST_TTL));
             }
             Msg::Tick => {
                 // El thread durmió; sólo rearmamos si seguimos cargando (abajo).
@@ -294,12 +297,15 @@ impl App for Panel {
                 size: Size { width: percent(1.0_f32), height: length(area_h) },
                 ..Default::default()
             })
-            .children(vec![empty_view(
-                Icon::Bell,
-                "Sin eventos",
-                Some("Cuando lleguen notificaciones, capturas o clips aparecerán acá."),
-                &EmptyPalette::from_theme(&theme),
-            )])
+            .children(vec![{
+                let empty_desc = t("willay-empty-desc");
+                empty_view(
+                    Icon::Bell,
+                    t("willay-empty-title"),
+                    Some(empty_desc.as_str()),
+                    &EmptyPalette::from_theme(&theme),
+                )
+            }])
         } else {
             let (filas, alto) = construir_filas(&model.eventos, now);
             let lista = View::new(Style {
@@ -439,7 +445,12 @@ fn header_view(model: &Model) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(format!("Eventos ({n})"), 14.0, FG, Alignment::Start);
+    .text_aligned(
+        t_args("willay-header-events", &[("n", n.to_string().into())]),
+        14.0,
+        FG,
+        Alignment::Start,
+    );
 
     let limpiar = View::new(Style {
         size: Size { width: length(72.0_f32), height: length(28.0_f32) },
@@ -449,7 +460,7 @@ fn header_view(model: &Model) -> View<Msg> {
     })
     .fill(Color::from_rgba8(54, 40, 40, 255))
     .radius(6.0_f64)
-    .text_aligned("Limpiar".to_string(), 12.0, FG, Alignment::Center)
+    .text_aligned(t("willay-clear"), 12.0, FG, Alignment::Center)
     .on_click(Msg::Limpiar);
 
     let fila_titulo = View::new(Style {
@@ -464,9 +475,9 @@ fn header_view(model: &Model) -> View<Msg> {
     .children(vec![titulo, limpiar]);
 
     // Chips de faceta: Todo + una por clase. El activo resaltado.
-    let mut chips = vec![chip("Todo", None, model.filtro)];
+    let mut chips = vec![chip(&t("willay-chip-all"), None, model.filtro)];
     for c in [Clase::Notificacion, Clase::Captura, Clase::Clip] {
-        chips.push(chip(etiqueta_clase(c), Some(c), model.filtro));
+        chips.push(chip(&etiqueta_clase(c), Some(c), model.filtro));
     }
     let fila_chips = View::new(Style {
         flex_direction: FlexDirection::Row,

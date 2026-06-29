@@ -18,6 +18,7 @@ sandokan-monitor-core = { path = "../../../shared/sandokan/sandokan-monitor-core
 # Modo Sistema (htop): lectura de /proc + señales, núcleo agnóstico.
 sandokan-sysmon-core = { path = "../../../shared/sandokan/sandokan-sysmon-core" }
 card-core = { path = "../../../shared/card/card-core" }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 ulid = { workspace = true }
 tokio = { workspace = true }
 llimphi-ui = { workspace = true }

@@ -56,6 +56,7 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use app_bus::{AppMenu, Menu, MenuItem};
+use rimay_localize::{t, t_args};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -300,17 +301,28 @@ fn verify_audit(path: &Path) -> (bool, String) {
                 if let Some(seq) = r.broken_at_seq {
                     (
                         false,
-                        format!(
-                            "audit ROTO en seq {seq}: {}",
-                            r.error.unwrap_or_else(|| "sin detalle".into())
+                        t_args(
+                            "arje-card-audit-broken",
+                            &[
+                                ("seq", seq.to_string().into()),
+                                (
+                                    "detail",
+                                    r.error
+                                        .unwrap_or_else(|| t("arje-card-audit-no-detail"))
+                                        .into(),
+                                ),
+                            ],
                         ),
                     )
                 } else if let Some(e) = r.error {
-                    (false, format!("audit con error: {e}"))
+                    (false, t_args("arje-card-audit-error", &[("err", e.into())]))
                 } else {
                     (
                         true,
-                        format!("audit íntegro — {} entries verificadas", r.verified),
+                        t_args(
+                            "arje-card-audit-ok",
+                            &[("n", r.verified.to_string().into())],
+                        ),
                     )
                 }
             }
@@ -571,6 +583,7 @@ impl App for ArjeCard {
         handle.spawn_periodic(REFRESH_INTERVAL, || Msg::Tick);
 
         let initial_cfg = wawa_config::WawaConfig::load();
+        apply_lang_from_wawa(&initial_cfg);
         let theme = theme_from_wawa(&initial_cfg);
 
         let handle_clone = handle.clone();
@@ -636,7 +649,7 @@ impl App for ArjeCard {
                 };
             }
             Msg::VerifyAudit => {
-                m.verify = Some((true, "verificando…".into()));
+                m.verify = Some((true, t("arje-card-verifying")));
                 handle.spawn(move || {
                     let (ok, txt) = verify_audit(&brain_path());
                     Msg::VerifyDone(ok, txt)
@@ -646,6 +659,7 @@ impl App for ArjeCard {
                 m.verify = Some((ok, txt));
             }
             Msg::WawaChanged(cfg) => {
+                apply_lang_from_wawa(&cfg);
                 m.theme = theme_from_wawa(&cfg);
             }
             Msg::MenuOpen(which) => {
@@ -744,16 +758,19 @@ impl App for ArjeCard {
         let accent_cgroup = Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xff);
 
         let (ka, kb, kc) = snap.kernel;
-        let header_text = format!(
-            "Linux {ka}.{kb}.{kc}  ·  detección {} ms",
-            model.last_detect_ms
+        let header_text = t_args(
+            "arje-card-header",
+            &[
+                ("kernel", format!("{ka}.{kb}.{kc}").into()),
+                ("ms", model.last_detect_ms.to_string().into()),
+            ],
         );
         // Acción "Verificar audit" sólo tiene sentido con el brain vivo.
         let mut actions: Vec<View<Msg>> = Vec::new();
         if matches!(model.brain, BrainStatus::Live(_)) {
             let btn_palette = ButtonPalette::from_theme(theme);
             actions.push(button_view::<Msg>(
-                "Verificar audit",
+                t("arje-card-verify-audit"),
                 &btn_palette,
                 Msg::VerifyAudit,
             ));
@@ -777,9 +794,7 @@ impl App for ArjeCard {
         if snap.ns_creatable == 0 {
             body_children.push(banner_view::<Msg>(
                 BannerKind::Warning,
-                "Ningún namespace es creable aquí: las Cards que requieran \
-                 aislamiento no podrán encarnarse sin CAP_SYS_ADMIN o user-ns."
-                    .to_string(),
+                t("arje-card-no-ns-warning"),
             ));
         }
 
@@ -790,9 +805,9 @@ impl App for ArjeCard {
             .map(|(name, ok)| format!("{}  {name}", if *ok { "✓" } else { "✗" }))
             .collect();
         body_children.push(stat_card_view::<Msg>(
-            "Aislamiento",
+            &t("arje-card-iso-title"),
             format!("{}/7", snap.ns_creatable),
-            "namespaces creables para un proceso encarnado",
+            &t("arje-card-iso-desc"),
             accent_iso,
             &ns_items,
             &stat_palette,
@@ -802,8 +817,14 @@ impl App for ArjeCard {
         let priv_items = vec![
             format!(
                 "CAP_SYS_ADMIN  {}",
-                if snap.root { "sí (root)" } else { "no" }
+                if snap.root {
+                    t("arje-card-priv-yes-root")
+                } else {
+                    t("arje-card-no")
+                }
             ),
+            // "user namespaces" es el nombre técnico del kernel; el valor
+            // (snap.user_ns) viene de human_user_ns.
             format!("user namespaces  {}", snap.user_ns),
             format!(
                 "max_user_namespaces  {}",
@@ -813,9 +834,13 @@ impl App for ArjeCard {
             ),
         ];
         body_children.push(stat_card_view::<Msg>(
-            "Privilegios",
-            if snap.root { "root" } else { "usuario" },
-            "de qué dispone el supervisor para aislar",
+            &t("arje-card-priv-title"),
+            if snap.root {
+                "root".to_string()
+            } else {
+                t("arje-card-priv-user")
+            },
+            &t("arje-card-priv-desc"),
             accent_priv,
             &priv_items,
             &stat_palette,
@@ -824,18 +849,24 @@ impl App for ArjeCard {
         // Card 3 — cgroups.
         let cgroup_items = vec![
             format!(
-                "delegación  {}",
-                if snap.cgroup_delegated { "sí" } else { "no" }
+                "{}  {}",
+                t("arje-card-cgroup-delegation"),
+                if snap.cgroup_delegated {
+                    t("arje-card-yes")
+                } else {
+                    t("arje-card-no")
+                }
             ),
             format!(
-                "nuestro cgroup  {}",
+                "{}  {}",
+                t("arje-card-cgroup-our"),
                 snap.our_cgroup.as_deref().unwrap_or("—")
             ),
         ];
         body_children.push(stat_card_view::<Msg>(
             "cgroups",
             snap.cgroup_v2,
-            "control de recursos disponible",
+            &t("arje-card-cgroup-desc"),
             accent_cgroup,
             &cgroup_items,
             &stat_palette,
@@ -868,13 +899,19 @@ impl App for ArjeCard {
                         } else {
                             String::new()
                         };
-                        format!("{dot} {}  ·  {}  ·  {} hilos{restarts}", u.label, mem, thr)
+                        format!(
+                            "{dot} {}  ·  {}  ·  {} {}{restarts}",
+                            u.label,
+                            mem,
+                            thr,
+                            t("arje-card-threads")
+                        )
                     })
                     .collect();
                 body_children.push(stat_card_view::<Msg>(
-                    "Unidades (vivas)",
+                    &t("arje-card-units-live-title"),
                     format!("{}/{}", snap.running(), snap.len()),
-                    "estado + telemetría vía Engine sobre arje-bus",
+                    &t("arje-card-units-live-desc"),
                     accent_units,
                     &items,
                     &stat_palette,
@@ -891,7 +928,7 @@ impl App for ArjeCard {
                     })
                     .collect();
                 body_children.push(stat_card_view::<Msg>(
-                    "Unidades (store)",
+                    &t("arje-card-units-store-title"),
                     model.units.units.len().to_string(),
                     &model.units.dir,
                     accent_units,
@@ -954,7 +991,7 @@ impl App for ArjeCard {
             BrainStatus::Offline(e) => {
                 body_children.push(banner_view::<Msg>(
                     BannerKind::Info,
-                    format!("brain no disponible ({e})"),
+                    t_args("arje-card-brain-offline", &[("err", e.clone().into())]),
                 ));
             }
             BrainStatus::Live(b) => {
@@ -962,15 +999,24 @@ impl App for ArjeCard {
                 let accent_audit = Color::from_rgba8(0xd0, 0x87, 0x70, 0xff);
 
                 let brain_items = vec![
-                    format!("entropía  {:.2} bits", b.entropy_bits),
-                    format!("muestras  {}", b.sample_size),
-                    format!("tipos de evento  {}", b.distinct_kinds),
+                    t_args(
+                        "arje-card-brain-entropy",
+                        &[("v", format!("{:.2}", b.entropy_bits).into())],
+                    ),
+                    t_args(
+                        "arje-card-brain-samples",
+                        &[("n", b.sample_size.to_string().into())],
+                    ),
+                    t_args(
+                        "arje-card-brain-kinds",
+                        &[("n", b.distinct_kinds.to_string().into())],
+                    ),
                 ];
                 body_children.push(
                     stat_card_view::<Msg>(
                         "Brain",
                         b.rules.to_string(),
-                        "reglas vivas en el motor",
+                        &t("arje-card-brain-desc"),
                         accent_brain,
                         &brain_items,
                         &stat_palette,
@@ -991,14 +1037,14 @@ impl App for ArjeCard {
                     };
                     let valor = format!("{}✓ / {}✗", a.ok, a.fail);
                     let glosa = if a.fail == 0 {
-                        "atestación al arranque — todos los binarios críticos casan"
+                        t("arje-card-attest-ok")
                     } else {
-                        "atestación al arranque — hay binarios comprometidos"
+                        t("arje-card-attest-fail")
                     };
                     body_children.push(stat_card_view::<Msg>(
-                        "Atestación",
+                        &t("arje-card-attest-title"),
                         valor,
-                        glosa,
+                        &glosa,
                         accent_attest,
                         &a.lines,
                         &stat_palette,
@@ -1010,7 +1056,7 @@ impl App for ArjeCard {
                     b.head_seq
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| "—".into()),
-                    "seq del head — cadena de decisiones del brain",
+                    &t("arje-card-auditlog-desc"),
                     accent_audit,
                     &b.recent_audit,
                     &stat_palette,
@@ -1062,15 +1108,15 @@ impl App for ArjeCard {
             let label = model
                 .selected_unit
                 .and_then(|i| unit_labels(model).into_iter().nth(i))
-                .unwrap_or_else(|| "Unidad".to_string());
+                .unwrap_or_else(|| t("arje-card-unit-fallback"));
             let viewport = viewport_of(model);
             // Acciones reales de la card (sólo lectura): refrescar el scan y
             // verificar el audit del brain (sólo si está vivo). No inventamos
             // edición — las Cards no se editan desde acá.
-            let mut items = vec![ContextMenuItem::action("Refrescar")];
+            let mut items = vec![ContextMenuItem::action(t("arje-card-refresh"))];
             let brain_live = matches!(model.brain, BrainStatus::Live(_));
             if brain_live {
-                items.push(ContextMenuItem::action("Verificar audit"));
+                items.push(ContextMenuItem::action(t("arje-card-verify-audit")));
             }
             let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
                 Arc::new(move |i: usize| match i {
@@ -1162,22 +1208,22 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuB
 /// "Verificar audit" sale en gris si el brain no está vivo.
 fn app_menu(model: &Model) -> AppMenu {
     let brain_live = matches!(model.brain, BrainStatus::Live(_));
-    let mut verify = MenuItem::new("Verificar audit", "view.verify");
+    let mut verify = MenuItem::new(&t("arje-card-verify-audit"), "view.verify");
     if !brain_live {
         verify = verify.disabled();
     }
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Refrescar", "file.refresh").shortcut("Ctrl+R"))
+            Menu::new(&t("arje-card-menu-file"))
+                .item(MenuItem::new(&t("arje-card-refresh"), "file.refresh").shortcut("Ctrl+R"))
                 .item(
-                    MenuItem::new("Salir", "file.quit")
+                    MenuItem::new(&t("exit"), "file.quit")
                         .shortcut("Ctrl+Q")
                         .separated(),
                 ),
         )
-        .menu(Menu::new("Ver").item(verify))
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(&t("arje-card-menu-view")).item(verify))
+        .menu(Menu::new(&t("help")).item(MenuItem::new(&t("about"), "help.about")))
 }
 
 /// Traduce un command id del menú principal al `Msg`/efecto real.
@@ -1215,8 +1261,16 @@ fn theme_from_wawa(cfg: &wawa_config::WawaConfig) -> Theme {
     t
 }
 
+/// Aplica el `lang` de wawa a `rimay_localize`. Errores (locale
+/// desconocido) se ignoran — la traducción cae a la cadena default
+/// silenciosamente, no vale tumbar la UI por eso.
+fn apply_lang_from_wawa(cfg: &wawa_config::WawaConfig) {
+    let _ = rimay_localize::set_locale(&cfg.lang);
+}
+
 fn main() {
     bitacora::abrir("arje");
+    rimay_localize::init();
     llimphi_ui::run::<ArjeCard>();
 }
 

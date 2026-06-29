@@ -61,6 +61,8 @@ use llimphi_icons::Icon;
 
 use app_bus::{AppMenu, Menu, MenuItem};
 
+use rimay_localize::{t, t_args};
+
 use tinkuy_core::{
     kinetic_energy, lattice_cubica, reflect_walls, temperature, total_momentum,
     velocity_verlet_step, Grid3D, IntegratorParams, Outbox, Snapshot, World,
@@ -299,6 +301,7 @@ impl App for TinkuyApp {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        rimay_localize::init();
         let (world, grid, bounds_min, bounds_max) = init_world();
         let params = IntegratorParams {
             dt: DT,
@@ -430,10 +433,14 @@ impl App for TinkuyApp {
                 let id = model.next_toast;
                 model.next_toast += 1;
                 let toast = match &status {
-                    ForceStatus::Ok => Toast::success(id, "Fuerza recompilada", TOAST_TTL),
-                    ForceStatus::Error(msg) => {
-                        Toast::error(id, format!("Grafo inválido: {msg}"), TOAST_TTL)
+                    ForceStatus::Ok => {
+                        Toast::success(id, t("tinkuy-toast-recompiled"), TOAST_TTL)
                     }
+                    ForceStatus::Error(msg) => Toast::error(
+                        id,
+                        t_args("tinkuy-toast-invalid-graph", &[("msg", msg.as_str().into())]),
+                        TOAST_TTL,
+                    ),
                 };
                 model.force_status = status;
                 push_toast(&mut model, handle, toast);
@@ -461,7 +468,14 @@ impl App for TinkuyApp {
                         push_toast(
                             &mut model,
                             handle,
-                            Toast::info(id, format!("Rebobinado al step {}", entry.step), TOAST_TTL),
+                            Toast::info(
+                                id,
+                                t_args(
+                                    "tinkuy-toast-rewound",
+                                    &[("step", entry.step.to_string().into())],
+                                ),
+                                TOAST_TTL,
+                            ),
                         );
                     }
                 }
@@ -560,7 +574,7 @@ impl App for TinkuyApp {
                 let sel = model.selected_tile == Some(*id);
                 match id {
                     TileId::Visor => TileSpec {
-                        label: tile_label(sel, "visor 3D (axonométrico · |v|→color)"),
+                        label: tile_label(sel, &t("tinkuy-tile-visor")),
                         content: selectable_tile(visor_body(model, theme), TileId::Visor),
                     },
                     TileId::Fuerzas => TileSpec {
@@ -568,11 +582,11 @@ impl App for TinkuyApp {
                         content: selectable_tile(fuerzas_body(model, theme), TileId::Fuerzas),
                     },
                     TileId::Observables => TileSpec {
-                        label: tile_label(sel, "observables"),
+                        label: tile_label(sel, &t("tinkuy-tile-observables")),
                         content: selectable_tile(observables_body(model, theme), TileId::Observables),
                     },
                     TileId::Snapshots => TileSpec {
-                        label: tile_label(sel, "snapshots · click rebobina"),
+                        label: tile_label(sel, &t("tinkuy-tile-snapshots")),
                         content: selectable_tile(snapshots_body(model, theme), TileId::Snapshots),
                     },
                 }
@@ -718,23 +732,23 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuB
 /// mapean a `Msg` reales. Sin "Editar": no hay campos de texto editables.
 fn app_menu(model: &Model) -> AppMenu {
     let pausar_label = if model.paused {
-        "Reanudar"
+        t("resume")
     } else {
-        "Pausar"
+        t("pause")
     };
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Reiniciar", "file.reset").shortcut("R"))
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("tinkuy-menu-file"))
+                .item(MenuItem::new(t("tinkuy-menu-reset"), "file.reset").shortcut("R"))
+                .item(MenuItem::new(t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(
-            Menu::new("Simulación")
+            Menu::new(t("tinkuy-menu-sim"))
                 .item(MenuItem::new(pausar_label, "sim.toggle_pause").shortcut("Space"))
-                .item(MenuItem::new("Reiniciar", "file.reset")),
+                .item(MenuItem::new(t("tinkuy-menu-reset"), "file.reset")),
         )
-        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(t("tinkuy-menu-view")).item(MenuItem::new(t("cycle-theme"), "view.theme")))
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
 }
 
 /// Traduce un command id del menú principal al `Msg`/efecto real.
@@ -768,16 +782,15 @@ fn context_menu_for_tile(
     Arc<dyn Fn(usize) -> Msg + Send + Sync>,
 ) {
     let header = match tile {
-        TileId::Visor => "Visor 3D",
-        TileId::Fuerzas => "Fuerzas",
-        TileId::Observables => "Observables",
-        TileId::Snapshots => "Snapshots",
-    }
-    .to_string();
+        TileId::Visor => t("tinkuy-ctx-visor"),
+        TileId::Fuerzas => t("tinkuy-ctx-fuerzas"),
+        TileId::Observables => t("tinkuy-ctx-observables"),
+        TileId::Snapshots => t("tinkuy-ctx-snapshots"),
+    };
     // Acciones comunes a todos los tiles — los Msg ya existen en la app.
     let items = vec![
-        ContextMenuItem::action("Pausar / reanudar"),
-        ContextMenuItem::action("Reiniciar simulación"),
+        ContextMenuItem::action(t("tinkuy-ctx-pause-resume")),
+        ContextMenuItem::action(t("tinkuy-ctx-reset-sim")),
     ];
     let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
         0 => Msg::TogglePause,
@@ -955,8 +968,10 @@ fn visor_body(model: &Model, theme: &Theme) -> View<Msg> {
 /// el detalle viaja ahí para que el usuario no tenga que abrir otro panel.
 fn fuerzas_label(model: &Model) -> String {
     match &model.force_status {
-        ForceStatus::Ok => "fuerzas · grafo → bytecode (ok)".into(),
-        ForceStatus::Error(msg) => format!("fuerzas · ERROR: {}", msg),
+        ForceStatus::Ok => t("tinkuy-fuerzas-ok"),
+        ForceStatus::Error(msg) => {
+            t_args("tinkuy-fuerzas-error", &[("msg", msg.as_str().into())])
+        }
     }
 }
 
@@ -1010,17 +1025,21 @@ fn snapshots_body(model: &Model, theme: &Theme) -> View<Msg> {
     // Sin snapshots todavía (arranque o tras un Reset): empty-state canónico
     // en vez de un hueco con texto suelto.
     if model.snapshots.is_empty() {
+        let desc = t("tinkuy-empty-snapshots-desc");
         return empty_view(
             Icon::Camera,
-            "Sin snapshots",
-            Some("La simulación va capturando CIDs en vivo; aparecerán acá para rebobinar."),
+            t("tinkuy-empty-snapshots-title"),
+            Some(desc.as_str()),
             &EmptyPalette::from_theme(theme),
         );
     }
     // Más reciente arriba — más legible que el orden natural del VecDeque.
     let mut rows: Vec<View<Msg>> = Vec::with_capacity(SNAPSHOTS_K + 2);
     rows.push(text_row(
-        format!("últimas {} CIDs (click → rebobinar)", SNAPSHOTS_K),
+        t_args(
+            "tinkuy-snapshots-header",
+            &[("count", SNAPSHOTS_K.to_string().into())],
+        ),
         11.0,
         theme.fg_muted,
     ));
@@ -1090,12 +1109,16 @@ fn recompile_force(graph: &ForceGraph) -> (Option<DslForce>, ForceStatus) {
 
 fn lift_error_to_string(err: LiftError) -> String {
     match err {
-        LiftError::SinSalida => "grafo sin nodo F/r (Output)".into(),
-        LiftError::SalidaDuplicada => "más de un nodo F/r — debe haber exactamente uno".into(),
-        LiftError::PinDesconectado { node, pin } => {
-            format!("pin {} del nodo #{} sin cablear", pin, node)
-        }
-        LiftError::Ciclo => "ciclo detectado en el grafo".into(),
+        LiftError::SinSalida => t("tinkuy-lift-no-output"),
+        LiftError::SalidaDuplicada => t("tinkuy-lift-dup-output"),
+        LiftError::PinDesconectado { node, pin } => t_args(
+            "tinkuy-lift-pin-disconnected",
+            &[
+                ("pin", pin.to_string().into()),
+                ("node", node.to_string().into()),
+            ],
+        ),
+        LiftError::Ciclo => t("tinkuy-lift-cycle"),
     }
 }
 

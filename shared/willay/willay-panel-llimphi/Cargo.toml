@@ -28,3 +28,5 @@ llimphi-widget-toast = { workspace = true }
 llimphi-image = { workspace = true }
 # Hora/fecha en la zona local del sistema (no UTC) — la convención de fecha del repo.
 chrono = { workspace = true }
+# Localización de los textos de UI (claves `willay-*`).
+rimay-localize = { path = "../../rimay-localize" }

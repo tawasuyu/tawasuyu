@@ -16,6 +16,7 @@ llimphi-widget-context-menu = { workspace = true }
 llimphi-icons = { workspace = true }
 app-bus = { path = "../app-bus" }
 launcher-core = { path = "../launcher-core" }
+rimay-localize = { path = "../rimay-localize" }
 # Reloj real (módulo `clock` del host) y carga de la Surface del usuario.
 chrono = { workspace = true }
 toml = { workspace = true }

@@ -28,6 +28,7 @@ llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 wawa-config = { path = "../../../shared/wawa-config" }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 
 [[bin]]
 name = "arje-card-llimphi"

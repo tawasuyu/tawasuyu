@@ -32,6 +32,8 @@ use llimphi_ui::{
     App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
 
+use rimay_localize::{t, t_args};
+
 use llimphi_clipboard::SystemClipboard;
 use llimphi_icons::Icon;
 use llimphi_theme::{motion, Theme};
@@ -185,6 +187,7 @@ impl App for Uya {
     }
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
+        rimay_localize::init();
         let nombre = env::var("UYA_NOMBRE").unwrap_or_else(|_| "yo".into());
         let bind = env::var("UYA_ESCUCHAR").unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".into());
 
@@ -299,13 +302,12 @@ impl App for Uya {
                 if id != model.sala.yo {
                     model.sala.entrar(id, nombre.clone(), verificado);
                     if verificado {
-                        notar(&mut model, handle, |tid| {
-                            Toast::info(tid, format!("{nombre} se unió"), TOAST_TTL)
-                        });
+                        let msg = t_args("uya-toast-unio", &[("nombre", nombre.clone().into())]);
+                        notar(&mut model, handle, |tid| Toast::info(tid, msg, TOAST_TTL));
                     } else {
-                        notar(&mut model, handle, |tid| {
-                            Toast::warning(tid, format!("{nombre} se unió sin verificar"), TOAST_TTL)
-                        });
+                        let msg =
+                            t_args("uya-toast-unio-sin-verificar", &[("nombre", nombre.clone().into())]);
+                        notar(&mut model, handle, |tid| Toast::warning(tid, msg, TOAST_TTL));
                     }
                 }
             }
@@ -320,9 +322,8 @@ impl App for Uya {
                 model.hablando.remove(&id);
                 model.silenciados.remove(&id);
                 if let Some(nombre) = nombre {
-                    notar(&mut model, handle, |tid| {
-                        Toast::info(tid, format!("{nombre} salió"), TOAST_TTL)
-                    });
+                    let msg = t_args("uya-toast-salio", &[("nombre", nombre.into())]);
+                    notar(&mut model, handle, |tid| Toast::info(tid, msg, TOAST_TTL));
                 }
             }
             Msg::Red(EventoUya::Voz { id, hablando }) => {
@@ -409,9 +410,8 @@ impl App for Uya {
                 if !dir.is_empty() {
                     model.enlace.conectar(&dir);
                     model.conectar_input.clear();
-                    notar(&mut model, handle, |tid| {
-                        Toast::info(tid, "Conectando al par…", TOAST_TTL)
-                    });
+                    let msg = t("uya-toast-conectando");
+                    notar(&mut model, handle, |tid| Toast::info(tid, msg, TOAST_TTL));
                 }
             }
             Msg::EnviarCharla => {
@@ -420,7 +420,10 @@ impl App for Uya {
                     model.enlace.enviar_mensaje(texto.clone());
                     // Eco local: la red no me devuelve mis propios mensajes.
                     model.charla.push(LineaCharla {
-                        nombre: format!("{} (yo)", model.sala.mi_nombre),
+                        nombre: t_args(
+                            "uya-yo-suffix",
+                            &[("nombre", model.sala.mi_nombre.clone().into())],
+                        ),
                         texto,
                         yo: true,
                     });
@@ -438,9 +441,8 @@ impl App for Uya {
                 model.sala.participantes.clear();
                 let yo = model.sala.yo;
                 model.cuadros.retain(|id, _| *id == yo);
-                notar(&mut model, handle, |tid| {
-                    Toast::info(tid, "Llamada colgada", TOAST_TTL)
-                });
+                let msg = t("uya-toast-colgada");
+                notar(&mut model, handle, |tid| Toast::info(tid, msg, TOAST_TTL));
             }
             Msg::Resize(w, h) => {
                 model.viewport = (w as f32, h as f32);
@@ -460,7 +462,7 @@ impl App for Uya {
         // pop-in la primera vez que aparece su `key` (estable por identidad).
         tiles.push(
             tile(
-                &format!("{} (yo)", model.sala.mi_nombre),
+                &t_args("uya-yo-suffix", &[("nombre", model.sala.mi_nombre.clone().into())]),
                 model.cuadros.get(&model.sala.yo),
                 model.cam_on,
                 model.mic_on,
@@ -566,7 +568,7 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
         },
         ..Default::default()
     })
-    .text("charla", 14.0, ACENTO);
+    .text(t("uya-charla-titulo"), 14.0, ACENTO);
 
     // Ventana visible del hilo: las últimas `VENTANA_CHARLA` líneas, corridas
     // por el offset de scroll (0 = pegado a lo más nuevo).
@@ -579,7 +581,7 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
         // Sin descripción: el panel es angosto (~256px) y la caja de texto de
         // `empty_view` es fija (360px); con sólo icono + título encaja limpio.
         let pal = EmptyPalette::from_theme(&Theme::dark());
-        lineas.push(empty_view::<Msg>(Icon::FileText, "Sin mensajes", None, &pal));
+        lineas.push(empty_view::<Msg>(Icon::FileText, t("uya-sin-mensajes"), None, &pal));
     } else {
         for l in &model.charla[ini..fin] {
             let color = if l.yo { ACENTO } else { TEXTO };
@@ -611,7 +613,7 @@ fn panel_charla(model: &Modelo) -> View<Msg> {
     })
     .children(vec![text_input_view(
         &model.charla_input,
-        "escribí y Enter…",
+        &t("uya-charla-placeholder"),
         model.foco == Foco::Charla,
         &TextInputPalette::default(),
         Msg::Enfocar(Foco::Charla),
@@ -658,7 +660,13 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
         ..Default::default()
     })
     .text(
-        format!("huella {}  ·  {}", model.mi_huella, model.mi_dir),
+        t_args(
+            "uya-huella",
+            &[
+                ("huella", model.mi_huella.clone().into()),
+                ("dir", model.mi_dir.clone().into()),
+            ],
+        ),
         12.0,
         TENUE,
     );
@@ -673,7 +681,7 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
     })
     .children(vec![text_input_view(
         &model.conectar_input,
-        "pegá (Ctrl+V) la dirección de un par y Enter…",
+        &t("uya-conectar-placeholder"),
         model.foco == Foco::Conectar,
         &TextInputPalette::default(),
         Msg::Enfocar(Foco::Conectar),
@@ -694,7 +702,7 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
         ..Default::default()
     })
     .fill(BARRA_BG)
-    .children(vec![mi, campo, boton("conectar", Msg::Conectar, true, false)])
+    .children(vec![mi, campo, boton(&t("uya-conectar"), Msg::Conectar, true, false)])
 }
 
 /// Un tile de participante: video (o placeholder) arriba + etiqueta abajo. Si
@@ -737,23 +745,23 @@ fn tile(
         (true, None) => View::new(estilo_video)
             .fill(VIDEO_BG)
             .radius(8.0)
-            .text("conectando...", 15.0, TENUE),
+            .text(t("uya-video-conectando"), 15.0, TENUE),
         (false, _) => View::new(estilo_video)
             .fill(VIDEO_BG)
             .radius(8.0)
-            .text("camara apagada", 15.0, TENUE),
+            .text(t("uya-camara-apagada"), 15.0, TENUE),
     };
 
     // Prioridad en la etiqueta: sin verificar (seguridad) > silenciado por mí
     // (no lo oigo, así que "hablando" sería engañoso) > mic off > hablando.
     let etiqueta = if !verificado {
-        format!("{nombre}  ·  ⚠ sin verificar")
+        t_args("uya-label-sin-verificar", &[("nombre", nombre.into())])
     } else if silenciado {
-        format!("{nombre}  ·  silenciado")
+        t_args("uya-label-silenciado", &[("nombre", nombre.into())])
     } else if !mic {
-        format!("{nombre}  ·  mic off")
+        t_args("uya-label-mic-off", &[("nombre", nombre.into())])
     } else if hablando {
-        format!("{nombre}  ·  hablando")
+        t_args("uya-label-hablando", &[("nombre", nombre.into())])
     } else {
         nombre.to_string()
     };
@@ -810,19 +818,19 @@ fn tile(
 /// La barra inferior: cámara / micrófono / colgar.
 fn barra_controles(model: &Modelo) -> View<Msg> {
     let cam_label = if model.cam_on {
-        "camara: on"
+        t("uya-camara-on")
     } else {
-        "camara: off"
+        t("uya-camara-off")
     };
     let mic_label = if model.mic_on {
-        "microfono: on"
+        t("uya-microfono-on")
     } else {
-        "microfono: off"
+        t("uya-microfono-off")
     };
     let pantalla_label = if model.pantalla_on {
-        "compartiendo pantalla"
+        t("uya-compartiendo-pantalla")
     } else {
-        "compartir pantalla"
+        t("uya-compartir-pantalla")
     };
 
     View::new(Style {
@@ -842,10 +850,10 @@ fn barra_controles(model: &Modelo) -> View<Msg> {
     })
     .fill(BARRA_BG)
     .children(vec![
-        boton(cam_label, Msg::ToggleCamara, model.cam_on, false),
-        boton(mic_label, Msg::ToggleMicrofono, model.mic_on, false),
-        boton(pantalla_label, Msg::TogglePantalla, model.pantalla_on, false),
-        boton("colgar", Msg::Colgar, false, true),
+        boton(&cam_label, Msg::ToggleCamara, model.cam_on, false),
+        boton(&mic_label, Msg::ToggleMicrofono, model.mic_on, false),
+        boton(&pantalla_label, Msg::TogglePantalla, model.pantalla_on, false),
+        boton(&t("uya-colgar"), Msg::Colgar, false, true),
     ])
 }
 

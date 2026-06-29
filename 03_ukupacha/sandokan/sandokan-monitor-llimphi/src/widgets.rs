@@ -114,15 +114,15 @@ pub(crate) fn state_color(t: &Theme, s: char) -> Color {
 
 use sandokan::lifecycle::LifecycleState;
 
-pub(crate) fn state_visual(t: &Theme, s: &LifecycleState) -> (Color, &'static str) {
+pub(crate) fn state_visual(t: &Theme, s: &LifecycleState) -> (Color, String) {
     match s {
-        LifecycleState::Running => (Color::from_rgba8(0x3f, 0xcf, 0x6a, 0xff), "vivo"),
-        LifecycleState::Pending => (Color::from_rgba8(0xe0, 0xb0, 0x3a, 0xff), "pendiente"),
-        LifecycleState::Exited { .. } => (t.fg_muted, "salió"),
-        LifecycleState::Failed { .. } => (t.fg_destructive, "falló"),
-        LifecycleState::Killed => (Color::from_rgba8(0x9a, 0x55, 0x55, 0xff), "matado"),
+        LifecycleState::Running => (Color::from_rgba8(0x3f, 0xcf, 0x6a, 0xff), rimay_localize::t("sandokan-mon-state-running")),
+        LifecycleState::Pending => (Color::from_rgba8(0xe0, 0xb0, 0x3a, 0xff), rimay_localize::t("sandokan-mon-state-pending")),
+        LifecycleState::Exited { .. } => (t.fg_muted, rimay_localize::t("sandokan-mon-state-exited")),
+        LifecycleState::Failed { .. } => (t.fg_destructive, rimay_localize::t("sandokan-mon-state-failed")),
+        LifecycleState::Killed => (Color::from_rgba8(0x9a, 0x55, 0x55, 0xff), rimay_localize::t("sandokan-mon-state-killed")),
         // Aparcado esperando su piso (re-floor pendiente): púrpura suave.
-        LifecycleState::Parked { .. } => (Color::from_rgba8(0xa0, 0x80, 0xd0, 0xff), "esperando piso"),
+        LifecycleState::Parked { .. } => (Color::from_rgba8(0xa0, 0x80, 0xd0, 0xff), rimay_localize::t("sandokan-mon-state-parked")),
     }
 }
 

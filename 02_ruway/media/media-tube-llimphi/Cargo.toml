@@ -34,3 +34,4 @@ llimphi-widget-toast = { workspace = true }
 llimphi-icons = { workspace = true }
 llimphi-image = { path = "../../llimphi/llimphi-image", features = ["net"] }
 foreign-platform = { path = "../../../shared/foreign-platform" }
+rimay-localize = { path = "../../../shared/rimay-localize" }

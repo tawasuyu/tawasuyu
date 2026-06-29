@@ -18,6 +18,7 @@
 
 use alloc_compat::{Box, String, Vec};
 use llimphi_widget_nodegraph::{NodeId, NodeSpec, PinIdx, Wire};
+use rimay_localize::t;
 
 use tinkuy_dsl::{BinOp, Expr, Func, Var};
 
@@ -110,7 +111,7 @@ impl NodeKind {
                 Func::Sqrt => "sqrt".into(),
             },
             NodeKind::Neg => "neg".into(),
-            NodeKind::Output => "F/r (salida)".into(),
+            NodeKind::Output => t("tinkuy-node-output"),
         }
     }
 }

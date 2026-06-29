@@ -23,10 +23,8 @@ pub(crate) fn units_body(model: &Model) -> View<Msg> {
     if model.snapshot.is_empty() {
         return empty_state(
             t,
-            "Sin unidades vivas",
-            "No hay init (arje-zero) ni daemon sandokan en este entorno: el \
-             Engine cayó al LocalEngine in-process. Exportá \
-             SANDOKAN_MONITOR_SEED=1 y reabrí para sembrar una demo viva.",
+            &rimay_localize::t("sandokan-mon-units-empty-title"),
+            &rimay_localize::t("sandokan-mon-units-empty-body"),
         );
     }
 
@@ -102,7 +100,7 @@ fn unit_card(model: &Model, u: &UnitObservation) -> View<Msg> {
     .children(vec![
         metric(t, &format!("{cpu:.0}% cpu")),
         metric(t, &fmt_mem(mem)),
-        metric(t, &format!("{nproc} hilos")),
+        metric(t, &rimay_localize::t_args("sandokan-mon-metric-threads", &[("n", nproc.to_string().into())])),
         View::new(Style {
             flex_grow: 1.0,
             ..Default::default()

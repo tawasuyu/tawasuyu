@@ -39,7 +39,11 @@ pub(crate) const ROW_H: f32 = 21.0;
 pub(crate) fn system_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
     if model.system.is_empty() {
-        return empty_state(t, "Leyendo /proc…", "Barriendo los procesos del sistema.");
+        return empty_state(
+            t,
+            &rimay_localize::t("sandokan-mon-sys-empty-title"),
+            &rimay_localize::t("sandokan-mon-sys-empty-body"),
+        );
     }
 
     let rows = render_list(model);
@@ -61,7 +65,10 @@ pub(crate) fn system_body(model: &Model) -> View<Msg> {
                 ..Default::default()
             })
             .text(
-                &format!("… {} filas más abajo (rueda / ↑↓)", total - end),
+                rimay_localize::t_args(
+                    "sandokan-mon-sys-more-rows",
+                    &[("n", (total - end).to_string().into())],
+                ),
                 10.5,
                 t.fg_muted,
             ),
@@ -127,7 +134,7 @@ pub(crate) fn sys_graphs(model: &Model) -> View<Msg> {
     let used_kb = model.mem_total_kb.saturating_sub(model.mem_avail_kb);
     items.push(meter(
         t,
-        "Memoria",
+        &rimay_localize::t("sandokan-mon-memoria"),
         &format!("{} / {} · {mem_now:.0}%", fmt_mem(used_kb * 1024), fmt_mem(model.mem_total_kb * 1024)),
         &model.mem_hist,
         t.accent,
@@ -157,8 +164,8 @@ pub(crate) fn sys_graphs(model: &Model) -> View<Msg> {
 pub(crate) fn sys_action_bar(model: &Model, sel: Option<&SysProc>) -> View<Msg> {
     let t = &model.theme;
     let mut row: Vec<View<Msg>> = vec![
-        seg_btn(t, "Árbol", model.sys_tree, Msg::SysTree(true)),
-        seg_btn(t, "Lista", !model.sys_tree, Msg::SysTree(false)),
+        seg_btn(t, &rimay_localize::t("sandokan-mon-sys-tree"), model.sys_tree, Msg::SysTree(true)),
+        seg_btn(t, &rimay_localize::t("sandokan-mon-sys-list"), !model.sys_tree, Msg::SysTree(false)),
     ];
     match sel {
         Some(p) => {
@@ -169,10 +176,10 @@ pub(crate) fn sys_action_bar(model: &Model, sel: Option<&SysProc>) -> View<Msg> 
                 })
                 .text(&format!("PID {} · {}", p.pid, p.name), 12.5, t.fg_text),
             );
-            row.push(action_btn(t, "Terminar", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Term)));
-            row.push(action_btn(t, "Matar", t.fg_destructive, t.bg_app, Msg::Signal(p.pid, Sig::Kill)));
-            row.push(action_btn(t, "Pausar", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Stop)));
-            row.push(action_btn(t, "Seguir", t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Cont)));
+            row.push(action_btn(t, &rimay_localize::t("sandokan-mon-sys-terminate"), t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Term)));
+            row.push(action_btn(t, &rimay_localize::t("sandokan-mon-sys-kill"), t.fg_destructive, t.bg_app, Msg::Signal(p.pid, Sig::Kill)));
+            row.push(action_btn(t, &rimay_localize::t("pause"), t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Stop)));
+            row.push(action_btn(t, &rimay_localize::t("sandokan-mon-sys-continue"), t.bg_button, t.fg_text, Msg::Signal(p.pid, Sig::Cont)));
         }
         None => row.push(
             View::new(Style {
@@ -180,7 +187,7 @@ pub(crate) fn sys_action_bar(model: &Model, sel: Option<&SysProc>) -> View<Msg> 
                 ..Default::default()
             })
             .text(
-                "Elegí un proceso (click / ↑↓) para terminar, matar, pausar o seguir.",
+                rimay_localize::t("sandokan-mon-sys-pick-hint"),
                 12.0,
                 t.fg_muted,
             ),
@@ -214,7 +221,7 @@ pub(crate) fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
 
     let (shown, color) = if !has && !active {
         (
-            "Filtrar por nombre o PID  ·  «/» o Ctrl+F".to_string(),
+            rimay_localize::t("sandokan-mon-sys-filter-placeholder"),
             t.fg_placeholder,
         )
     } else {
@@ -247,7 +254,11 @@ pub(crate) fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
     if has {
         row.push(
             View::new(Style::default())
-                .text(format!("{matches} coinciden"), 11.0, t.fg_muted),
+                .text(
+                    rimay_localize::t_args("sandokan-mon-sys-matches", &[("n", matches.to_string().into())]),
+                    11.0,
+                    t.fg_muted,
+                ),
         );
         row.push(action_btn(t, "✕", t.bg_button, t.fg_text, Msg::FilterClose));
     }
@@ -301,7 +312,7 @@ pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
             flex_direction: FlexDirection::Column,
             ..Default::default()
         })
-        .text("COMANDO (nombre↕)", 10.5, fg)
+        .text(rimay_localize::t("sandokan-mon-col-command"), 10.5, fg)
         .on_click(Msg::SysSort(super::modelo::Sort::Name))
     };
     View::new(Style {
@@ -329,9 +340,9 @@ pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
         hcell("%MEM", W_MEM, Some(super::modelo::Sort::Mem)),
         hcell("RSS", W_RSS, Some(super::modelo::Sort::Mem)),
         hcell("S", W_ST, None),
-        hcell("HILOS", W_THR, None),
+        hcell(&rimay_localize::t("sandokan-mon-col-threads"), W_THR, None),
         hcell("UID", W_UID, None),
-        hcell("TIEMPO", W_TIME, Some(super::modelo::Sort::Uptime)),
+        hcell(&rimay_localize::t("sandokan-mon-col-time"), W_TIME, Some(super::modelo::Sort::Uptime)),
         cmd,
     ])
 }

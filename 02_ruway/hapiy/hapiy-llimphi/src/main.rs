@@ -23,6 +23,7 @@ use llimphi_ui::llimphi_raster::peniko::{Color, ImageBrush as Image};
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_empty::{empty_view, EmptyPalette};
 use llimphi_widget_toast::{toast_stack_view, Toast};
+use rimay_localize::{t, t_args};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -121,6 +122,7 @@ impl App for Hapiy {
     }
 
     fn init(_: &Handle<Self::Msg>) -> Self::Model {
+        rimay_localize::init();
         let cap = capturer(Backend::Auto).unwrap_or_else(|_| capturer(Backend::Grim).unwrap());
         let outputs = cap.outputs().unwrap_or_default();
         let (w0, h0) = Self::initial_size();
@@ -134,7 +136,7 @@ impl App for Hapiy {
             select_mode: false,
             corner_node: None,
             cursor_node: None,
-            status: "Pulsá Capturar.".into(),
+            status: t("hapiy-status-press-capture"),
             viewport: (w0 as f32, h0 as f32),
             toasts: Vec::new(),
             next_toast: 0,
@@ -156,7 +158,7 @@ impl App for Hapiy {
                     std::thread::sleep(Duration::from_millis(HIDE_MS));
                     Msg::DoCapture
                 });
-                model.status = "Capturando…".into();
+                model.status = t("hapiy-status-capturing");
             }
             Msg::DoCapture => {
                 capture(&mut model);
@@ -167,7 +169,10 @@ impl App for Hapiy {
                     std::thread::sleep(Duration::from_secs(STAGING_SECS));
                     Msg::Capture
                 });
-                model.status = format!("Capturando en {STAGING_SECS} s…");
+                model.status = t_args(
+                    "hapiy-status-capturing-in",
+                    &[("secs", STAGING_SECS.to_string().into())],
+                );
             }
             Msg::Save => {
                 if let Some(s) = &model.shot {
@@ -184,26 +189,33 @@ impl App for Hapiy {
                             );
                             willay_emit::emitir_silencioso(&ev);
                             (
-                                format!("Guardado en {}", p.display()),
-                                Toast::success(id, "Captura guardada", TOAST_TTL),
+                                t_args(
+                                    "hapiy-status-saved-at",
+                                    &[("path", p.display().to_string().into())],
+                                ),
+                                Toast::success(id, t("hapiy-toast-saved"), TOAST_TTL),
                             )
                         }
                         Err(e) => (
                             e.clone(),
-                            Toast::error(id, format!("No se pudo guardar: {e}"), TOAST_TTL),
+                            Toast::error(
+                                id,
+                                t_args("hapiy-toast-save-failed", &[("err", e.clone().into())]),
+                                TOAST_TTL,
+                            ),
                         ),
                     };
                     model.status = status;
                     push_toast(&mut model, handle, toast);
                 } else {
-                    model.status = "Capturá primero.".into();
+                    model.status = t("hapiy-status-capture-first");
                 }
             }
             Msg::Copy => {
                 if model.clip.is_none() {
-                    model.status = "Portapapeles no disponible.".into();
+                    model.status = t("hapiy-status-clipboard-unavailable");
                 } else if model.shot.is_none() {
-                    model.status = "Capturá primero.".into();
+                    model.status = t("hapiy-status-capture-first");
                 } else {
                     // Préstamos acotados a este bloque: al cerrarlo, `model`
                     // vuelve a estar libre para mutar (toast).
@@ -219,12 +231,16 @@ impl App for Hapiy {
                     let id = next_toast_id(&mut model);
                     let (status, toast) = match res {
                         Ok(()) => (
-                            "Copiado al portapapeles.".to_string(),
-                            Toast::success(id, "Copiado al portapapeles", TOAST_TTL),
+                            t("hapiy-status-copied"),
+                            Toast::success(id, t("hapiy-toast-copied"), TOAST_TTL),
                         ),
                         Err(e) => (
-                            format!("No se pudo copiar: {e}"),
-                            Toast::error(id, format!("No se pudo copiar: {e}"), TOAST_TTL),
+                            t_args("hapiy-status-copy-failed", &[("err", e.to_string().into())]),
+                            Toast::error(
+                                id,
+                                t_args("hapiy-status-copy-failed", &[("err", e.to_string().into())]),
+                                TOAST_TTL,
+                            ),
                         ),
                     };
                     model.status = status;
@@ -237,7 +253,12 @@ impl App for Hapiy {
                     let res = s.save_png(&p).and_then(|()| launch_tullpu(&p));
                     // Termina el préstamo de `s`.
                     match res {
-                        Ok(()) => model.status = format!("Abriendo en tullpu: {}", p.display()),
+                        Ok(()) => {
+                            model.status = t_args(
+                                "hapiy-status-opening-tullpu",
+                                &[("path", p.display().to_string().into())],
+                            )
+                        }
                         Err(e) => {
                             let id = next_toast_id(&mut model);
                             push_toast(&mut model, handle, Toast::error(id, e.clone(), TOAST_TTL));
@@ -245,7 +266,7 @@ impl App for Hapiy {
                         }
                     }
                 } else {
-                    model.status = "Capturá primero.".into();
+                    model.status = t("hapiy-status-capture-first");
                 }
             }
             Msg::Clear => {
@@ -254,7 +275,7 @@ impl App for Hapiy {
                 model.select_mode = false;
                 model.corner_node = None;
                 model.cursor_node = None;
-                model.status = "Pulsá Capturar.".into();
+                model.status = t("hapiy-status-press-capture");
             }
             Msg::ToggleSelect => {
                 if model.shot.is_some() {
@@ -262,12 +283,12 @@ impl App for Hapiy {
                     model.corner_node = None;
                     model.cursor_node = None;
                     model.status = if model.select_mode {
-                        "Región: clic una esquina y luego la opuesta.".into()
+                        t("hapiy-status-region-instructions")
                     } else {
-                        "Selección cancelada.".into()
+                        t("hapiy-status-selection-cancelled")
                     };
                 } else {
-                    model.status = "Capturá primero.".into();
+                    model.status = t("hapiy-status-capture-first");
                 }
             }
             Msg::PointerAt(lx, ly) => {
@@ -282,7 +303,7 @@ impl App for Hapiy {
                             None => {
                                 model.corner_node = Some((lx, ly));
                                 model.cursor_node = Some((lx, ly));
-                                model.status = "Esquina 1 fijada — clic la opuesta.".into();
+                                model.status = t("hapiy-status-corner-1-set");
                             }
                             Some(a) => {
                                 let pa = to_image_px(a.0, a.1, rw, rh, s.width, s.height);
@@ -290,11 +311,17 @@ impl App for Hapiy {
                                 match s.crop(region_between(pa, pb)) {
                                     Some(c) => {
                                         model.preview = Some(from_rgba8(c.rgba.clone(), c.width, c.height));
-                                        model.status = format!("Recortado a {}×{}.", c.width, c.height);
+                                        model.status = t_args(
+                                            "hapiy-status-cropped",
+                                            &[
+                                                ("w", c.width.to_string().into()),
+                                                ("h", c.height.to_string().into()),
+                                            ],
+                                        );
                                         model.shot = Some(c);
                                         model.shot_gen += 1;
                                     }
-                                    None => model.status = "Región vacía; probá de nuevo.".into(),
+                                    None => model.status = t("hapiy-status-empty-region"),
                                 }
                                 model.select_mode = false;
                                 model.cursor_node = None;
@@ -313,24 +340,37 @@ impl App for Hapiy {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let theme = Theme::dark();
 
+        let sel_label = if model.select_mode {
+            format!("✂ {}", t("cancel"))
+        } else {
+            format!("✂ {}", t("hapiy-btn-region"))
+        };
         let mut toolbar = vec![
-            boton("⛶ Capturar", BG, ACCENT, Msg::Capture),
-            boton(&format!("⏱ Capturar {STAGING_SECS}s"), FG, BTN, Msg::CaptureDelayed),
+            boton(&format!("⛶ {}", t("hapiy-btn-capture")), BG, ACCENT, Msg::Capture),
             boton(
-                if model.select_mode { "✂ Cancelar" } else { "✂ Región" },
+                &format!(
+                    "⏱ {}",
+                    t_args("hapiy-btn-capture-delayed", &[("secs", STAGING_SECS.to_string().into())])
+                ),
+                FG,
+                BTN,
+                Msg::CaptureDelayed,
+            ),
+            boton(
+                &sel_label,
                 if model.select_mode { BG } else { FG },
                 if model.select_mode { ACCENT } else { BTN },
                 Msg::ToggleSelect,
             ),
-            boton("💾 Guardar", FG, BTN, Msg::Save),
-            boton("📋 Copiar", FG, BTN, Msg::Copy),
-            boton("✎ Editar en tullpu", FG, BTN, Msg::Edit),
-            boton("🗑 Limpiar", MUTED, BTN, Msg::Clear),
+            boton(&format!("💾 {}", t("save")), FG, BTN, Msg::Save),
+            boton(&format!("📋 {}", t("copy")), FG, BTN, Msg::Copy),
+            boton(&format!("✎ {}", t("hapiy-btn-edit-tullpu")), FG, BTN, Msg::Edit),
+            boton(&format!("🗑 {}", t("hapiy-btn-clear")), MUTED, BTN, Msg::Clear),
         ];
         if model.outputs.len() > 1 {
             let todas = model.sel.is_none();
             toolbar.push(boton(
-                "🖥 Todas",
+                &format!("🖥 {}", t("hapiy-btn-all")),
                 if todas { BG } else { MUTED },
                 if todas { ACCENT } else { PANEL },
                 Msg::SelectOutput(None),
@@ -393,6 +433,7 @@ impl App for Hapiy {
                 // Sin captura todavía: empty-state con orientación en vez de un
                 // hueco con una sola línea de texto.
                 let pal = EmptyPalette::from_theme(&theme);
+                let empty_desc = t("hapiy-empty-desc");
                 View::new(Style {
                     size: Size { width: percent(1.0), height: percent(1.0) },
                     flex_grow: 1.0,
@@ -402,8 +443,8 @@ impl App for Hapiy {
                 })
                 .children(vec![empty_view(
                     Icon::Camera,
-                    "Sin captura todavía",
-                    Some("Pulsá Capturar para tomar la pantalla; después podés recortar, guardar o copiar."),
+                    t("hapiy-empty-title"),
+                    Some(empty_desc.as_str()),
                     &pal,
                 )])
             }
@@ -453,11 +494,17 @@ fn capture(model: &mut Model) {
     match model.cap.capture(out.as_deref()) {
         Ok(s) => {
             model.preview = Some(from_rgba8(s.rgba.clone(), s.width, s.height));
-            model.status = format!("Captura {}×{} — guardá, copiá o editá.", s.width, s.height);
+            model.status = t_args(
+                "hapiy-status-captured",
+                &[
+                    ("w", s.width.to_string().into()),
+                    ("h", s.height.to_string().into()),
+                ],
+            );
             model.shot = Some(s);
             model.shot_gen += 1;
         }
-        Err(e) => model.status = format!("Error al capturar: {e}"),
+        Err(e) => model.status = t_args("hapiy-status-capture-error", &[("err", e.to_string().into())]),
     }
     model.select_mode = false;
     model.corner_node = None;
@@ -526,7 +573,12 @@ fn launch_tullpu(path: &std::path::Path) -> Result<(), String> {
         .args(&args)
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("no se pudo abrir tullpu ({prog}): {e}"))
+        .map_err(|e| {
+            t_args(
+                "hapiy-error-launch-tullpu",
+                &[("prog", prog.to_string().into()), ("err", e.to_string().into())],
+            )
+        })
 }
 
 fn stamp() -> String {
