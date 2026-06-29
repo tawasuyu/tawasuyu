@@ -685,6 +685,110 @@ fn split_exec(exec: &str) -> Option<(String, Vec<String>)> {
     Some((program, it.collect()))
 }
 
+// =====================================================================
+// Abrir una URL con el navegador del usuario — agnóstico, sin recomendar
+// =====================================================================
+//
+// La suite NO trae ni sugiere un navegador: aprovecha el que el usuario ya
+// tenga instalado y elegido. El contenido web (p. ej. una app WASM marcada como
+// web en el catálogo) se abre con el handler por defecto del sistema. La
+// elección es del usuario/SO, no nuestra.
+
+/// Construye, en orden de preferencia, los comandos candidatos para abrir `url`,
+/// dado el valor de `$BROWSER` (`None`/"" = ausente). Función pura para poder
+/// testear el ruteo sin spawnear:
+///
+/// 1. `$BROWSER` — convención freedesktop: lista separada por `:` de comandos,
+///    cada uno con `%s` sustituido por la URL (o la URL como último argumento si
+///    no trae `%s`). La fija el usuario; respetarla es lo más agnóstico posible.
+/// 2. `xdg-open <url>` — respeta el handler de `x-scheme-handler/https` que el
+///    usuario configuró en su escritorio.
+/// 3. `gio open <url>` — fallback en entornos GLib.
+///
+/// Ningún navegador concreto aparece hardcodeado: salen del entorno o del SO.
+#[cfg(feature = "std")]
+pub fn resolve_open_command(url: &str, browser_env: Option<&str>) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    if let Some(b) = browser_env {
+        for cmd in b.split(':').map(str::trim).filter(|s| !s.is_empty()) {
+            let mut argv: Vec<String> = cmd.split_whitespace().map(String::from).collect();
+            if argv.is_empty() {
+                continue;
+            }
+            let mut sustituido = false;
+            for a in argv.iter_mut() {
+                if a.contains("%s") {
+                    *a = a.replace("%s", url);
+                    sustituido = true;
+                }
+            }
+            if !sustituido {
+                argv.push(url.to_string());
+            }
+            out.push(argv);
+        }
+    }
+    out.push(vec!["xdg-open".into(), url.into()]);
+    out.push(vec!["gio".into(), "open".into(), url.into()]);
+    out
+}
+
+/// Abre `url` en el navegador por defecto del usuario. Prueba los candidatos de
+/// [`resolve_open_command`] en orden y devuelve el primero que **arranca**; si
+/// ninguno está disponible, un error. No bloquea (el navegador corre detached).
+#[cfg(feature = "std")]
+pub fn open_url(url: &str) -> std::io::Result<std::process::Child> {
+    let browser = std::env::var("BROWSER").ok();
+    let candidatos = resolve_open_command(url, browser.as_deref().filter(|s| !s.is_empty()));
+    let mut ultimo_err = None;
+    for argv in candidatos {
+        let (prog, args) = argv.split_first().expect("candidato no vacío");
+        match std::process::Command::new(prog).args(args).spawn() {
+            Ok(child) => return Ok(child),
+            Err(e) => ultimo_err = Some(e),
+        }
+    }
+    Err(ultimo_err
+        .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "sin abridor de URLs")))
+}
+
+/// ¿Esta entrada `.desktop` es un navegador? De forma agnóstica: declara
+/// manejar `x-scheme-handler/https` (o, en su defecto, `text/html`). No mira la
+/// marca — sólo la capacidad declarada.
+pub fn es_navegador(e: &AppEntry) -> bool {
+    e.handles_mime("x-scheme-handler/https")
+        || e.handles_mime("x-scheme-handler/http")
+        || e.handles_mime("text/html")
+}
+
+/// Los navegadores instalados, descubiertos de las `.desktop` del sistema sin
+/// nombrar ninguna marca: las apps que declaran abrir `https`. Para ofrecer un
+/// "abrir con…" que respete lo que el usuario tiene, sin sugerir uno propio.
+#[cfg(feature = "std")]
+pub fn installed_browsers() -> Vec<AppEntry> {
+    discover_desktop_entries()
+        .into_iter()
+        .filter(es_navegador)
+        .collect()
+}
+
+/// El id del handler por defecto de `https` según el SO
+/// (`xdg-mime query default x-scheme-handler/https`). Es la elección del
+/// usuario; `None` si no se pudo determinar.
+#[cfg(feature = "std")]
+pub fn default_browser() -> Option<String> {
+    let out = std::process::Command::new("xdg-mime")
+        .args(["query", "default", "x-scheme-handler/https"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 /// Siembra manifests por defecto en [`apps_dir`] si todavía no hay
 /// ninguno, para que [`AppRegistry::discover`] devuelva las apps del repo
 /// en una máquina recién instalada. No pisa nada si ya existe algún
@@ -1188,6 +1292,48 @@ mod tests {
             handles: Vec::new(),
         };
         assert_eq!(ProcessLauncher.launch(&app), Err(LaunchError::Unsupported));
+    }
+
+    #[test]
+    fn resolve_open_command_sin_browser_cae_a_xdg_open() {
+        let cmds = resolve_open_command("https://x.test", None);
+        assert_eq!(cmds[0], vec!["xdg-open", "https://x.test"]);
+        assert_eq!(cmds[1], vec!["gio", "open", "https://x.test"]);
+        // Ningún navegador concreto aparece — sólo los abridores genéricos.
+        for c in &cmds {
+            assert!(!c[0].contains("firefox") && !c[0].contains("chrom"));
+        }
+    }
+
+    #[test]
+    fn resolve_open_command_respeta_browser_env() {
+        // $BROWSER con %s: se sustituye la URL en su lugar.
+        let cmds = resolve_open_command("https://x.test", Some("mibrowser %s --bg"));
+        assert_eq!(cmds[0], vec!["mibrowser", "https://x.test", "--bg"]);
+        // Sin %s: la URL va como último argumento.
+        let cmds = resolve_open_command("https://x.test", Some("otro"));
+        assert_eq!(cmds[0], vec!["otro", "https://x.test"]);
+        // Lista separada por `:` → varios candidatos, en orden, antes de xdg-open.
+        let cmds = resolve_open_command("u", Some("a:b %s"));
+        assert_eq!(cmds[0], vec!["a", "u"]);
+        assert_eq!(cmds[1], vec!["b", "u"]);
+        assert_eq!(cmds[2][0], "xdg-open");
+    }
+
+    #[test]
+    fn es_navegador_por_capacidad_no_por_marca() {
+        let mk = |handles: &[&str]| AppEntry {
+            id: "x".into(),
+            label: "X".into(),
+            icon: None,
+            category: None,
+            launch: Launch::Exec { program: "x".into(), args: vec![] },
+            handles: handles.iter().map(|s| s.to_string()).collect(),
+        };
+        assert!(es_navegador(&mk(&["x-scheme-handler/https", "text/html"])));
+        assert!(es_navegador(&mk(&["text/html"])));
+        assert!(!es_navegador(&mk(&["image/png"])));
+        assert!(!es_navegador(&mk(&[])));
     }
 
     #[test]
