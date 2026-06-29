@@ -616,3 +616,18 @@
         let cov = cobertura_seleccion(&model).unwrap();
         assert!(cov.iter().all(|&v| v == 255), "unión cubre todo el lienzo");
     }
+
+    #[test]
+    fn overlay_se_arma_con_la_varita_y_se_limpia_al_seleccionar_todo() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        let buf = vec![255u8; 4 * 4 * 4];
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        model.shift_held = false;
+        assert!(seleccionar_por_color(&mut model, 0, 0));
+        assert!(model.seleccion_overlay.is_some(), "varita arma overlay");
+        // Select-all degrada a rect ⇒ overlay limpio.
+        model = <Tullpu as App>::update(model, Msg::SeleccionarTodo, &Handle::for_test());
+        assert!(model.seleccion_overlay.is_none(), "select-all limpia overlay");
+    }

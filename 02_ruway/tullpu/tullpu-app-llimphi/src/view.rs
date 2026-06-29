@@ -1514,6 +1514,9 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
             // Capturas para el painter de la selección: si hay rect
             // commiteado, lo dibuja; igual si hay drag activo (preview).
             let seleccion = model.seleccion;
+            // Overlay de la máscara de selección (varita/lazo): se dibuja con
+            // el mismo transform que el composite para mostrar la forma exacta.
+            let overlay_sel = model.seleccion_overlay.clone();
             let lienzo_w = model.lienzo.width;
             let lienzo_h = model.lienzo.height;
             let cuerpo_paint = View::new(Style {
@@ -1563,6 +1566,11 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                 );
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &node_rect);
                 scene.draw_image(&img, transform);
+                // Overlay de selección no rectangular: misma geometría que el
+                // composite (la imagen del overlay es del tamaño del lienzo).
+                if let Some(ov) = overlay_sel.as_ref() {
+                    scene.draw_image(ov, transform);
+                }
                 // Overlay de selección: rect en coords-imagen → coords
                 // de pantalla vía el mismo transform que la imagen.
                 // Doble-stroke (negro grueso + blanco fino) para que

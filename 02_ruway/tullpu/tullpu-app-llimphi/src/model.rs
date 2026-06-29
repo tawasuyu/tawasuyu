@@ -85,6 +85,12 @@ pub(crate) struct Model {
     /// guarda su bounding box (para overlay y ops rápidas). Las herramientas
     /// rectangulares (marquee/select-all/expand) la limpian — degradan a rect.
     pub(crate) seleccion_mascara: Option<Hash>,
+    /// Overlay cacheado de la máscara de selección: una imagen `W·H` teñida
+    /// (cian translúcido donde está seleccionado, transparente fuera) que el
+    /// painter del lienzo dibuja sobre el composite para mostrar la forma
+    /// exacta de la selección no rectangular. Se reconstruye cuando cambia
+    /// `seleccion_mascara` y se limpia cuando la selección vuelve a rect/None.
+    pub(crate) seleccion_overlay: Option<Image>,
     /// Estado del drag de selección mientras el usuario sostiene el
     /// click. `None` fuera de un drag. Se commitea a `seleccion` en
     /// el `End` y se limpia.

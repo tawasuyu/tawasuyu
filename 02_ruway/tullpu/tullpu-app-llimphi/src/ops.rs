@@ -524,6 +524,7 @@ pub(crate) fn recortar_lienzo_a_seleccion(model: &mut Model) -> bool {
     recortar_lienzo_a(model, x0, y0, x1, y1);
     model.seleccion = None;
     model.seleccion_mascara = None;
+    model.seleccion_overlay = None;
     model.estado = format!(
         "recortado a selección {}×{} (offset {},{})",
         new_w, new_h, x0, y0
@@ -1098,6 +1099,7 @@ pub(crate) fn mover_pixeles_seleccion(
     // Mover píxeles degrada a selección rectangular (la máscara de la varita
     // no acompaña el desplazamiento por ahora).
     model.seleccion_mascara = None;
+    model.seleccion_overlay = None;
     model.estado = format!("movida selección ({:+}, {:+})", dx, dy);
     true
 }
@@ -1153,6 +1155,43 @@ pub(crate) fn seleccionar_por_color(model: &mut Model, sx: u32, sy: u32) -> bool
     fijar_o_sumar_mascara(model, mascara, model.shift_held, "varita")
 }
 
+/// Reconstruye el overlay cacheado de la selección desde `seleccion_mascara`:
+/// una imagen `W·H` con cian translúcido donde la máscara está marcada y
+/// transparente fuera. Si no hay máscara, deja el overlay en `None`. Lo
+/// dibuja el painter del lienzo encima del composite.
+pub(crate) fn sincronizar_overlay_seleccion(model: &mut Model) {
+    use llimphi_ui::llimphi_raster::peniko::{
+        Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let overlay = model.seleccion_mascara.and_then(|hm| {
+        let mascara = model.almacen.obtener(hm)?;
+        let n = (w as usize) * (h as usize);
+        if mascara.len() != n {
+            return None;
+        }
+        let mut rgba = vec![0u8; n * 4];
+        for (i, &m) in mascara.iter().enumerate() {
+            if m > 127 {
+                // Cian translúcido (premult-agnóstico: alpha straight).
+                rgba[i * 4] = 40;
+                rgba[i * 4 + 1] = 180;
+                rgba[i * 4 + 2] = 255;
+                rgba[i * 4 + 3] = 90;
+            }
+        }
+        Some(Image::new(ImageData {
+            data: Blob::from(rgba),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: w,
+            height: h,
+        }))
+    });
+    model.seleccion_overlay = overlay;
+}
+
 /// Fija la máscara `nueva` como selección, o la **suma** (unión por píxel,
 /// `max`) a la máscara vigente si `sumar` es `true` (modo Shift). Recalcula el
 /// bounding box y guarda todo en el modelo. Devuelve `false` si la unión
@@ -1177,6 +1216,7 @@ fn fijar_o_sumar_mascara(model: &mut Model, mut nueva: Vec<u8>, sumar: bool, ver
     model.seleccion = Some(bbox);
     model.seleccion_drag = None;
     model.mover_drag = None;
+    sincronizar_overlay_seleccion(model);
     model.estado = format!("{verbo} · {count} px seleccionados");
     true
 }
@@ -1198,6 +1238,7 @@ pub(crate) fn invertir_seleccion(model: &mut Model) -> bool {
         // El complemento es vacío ⇒ estaba todo seleccionado; ahora nada.
         model.seleccion = None;
         model.seleccion_mascara = None;
+        model.seleccion_overlay = None;
         model.estado = "selección invertida · vacía".into();
         return true;
     };
@@ -1205,6 +1246,7 @@ pub(crate) fn invertir_seleccion(model: &mut Model) -> bool {
     let hash = model.almacen.insertar(cov);
     model.seleccion_mascara = Some(hash);
     model.seleccion = Some(bbox);
+    sincronizar_overlay_seleccion(model);
     model.estado = format!("selección invertida · {count} px");
     true
 }

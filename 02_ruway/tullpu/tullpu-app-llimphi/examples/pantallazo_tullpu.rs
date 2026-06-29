@@ -281,6 +281,7 @@ fn modelo_demo() -> Model {
         histograma: None,
         seleccion: Some(RectImagen { x0: 430, y0: 40, x1: 620, y1: 230 }),
         seleccion_mascara: None,
+        seleccion_overlay: None,
         seleccion_drag: None,
         mover_drag: None,
         pincel_drag: None,

@@ -214,6 +214,7 @@ pub(crate) fn inicializar() -> Model {
         histograma: None,
         seleccion: None,
         seleccion_mascara: None,
+        seleccion_overlay: None,
         seleccion_drag: None,
         mover_drag: None,
         pincel_drag: None,
