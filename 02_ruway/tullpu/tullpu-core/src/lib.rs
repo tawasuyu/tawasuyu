@@ -25,8 +25,10 @@
 pub mod historial;
 pub use historial::{Etiqueta, Historial};
 
+pub mod pixel;
+
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+pub use uuid::Uuid;
 
 /// Re-exporta el hash del grafo (BLAKE3, 32 bytes) tal como lo define
 /// `shared/format`. Una capa apunta a su contenido por este hash; el
@@ -280,11 +282,47 @@ pub enum OrigenCapa {
     },
 }
 
+/// Qué **clase** de capa es, ortogonal a su [`OrigenCapa`]. La mayoría de las
+/// capas son `Pixeles` (un buffer Rgba8, pintado/importado/derivado). Un
+/// `Grupo` es un contenedor: no tiene buffer propio (`contenido` se ignora),
+/// sus hijos son las capas cuyo `grupo` apunta a su `id`, y el compositor las
+/// funde en aislamiento antes de aplicar el blend/opacidad/máscara del grupo
+/// —exactamente como una carpeta de Photoshop—. Un `Ajuste` es una capa de
+/// ajuste no destructiva: no tiene buffer; al componer aplica su [`OpLocal`]
+/// (per-píxel) al **compuesto de todo lo que tiene debajo dentro de su scope**,
+/// modulado por su opacidad y máscara. A diferencia de una capa `Derivada`
+/// (que transforma **una** madre y cachea el resultado), el ajuste se recalcula
+/// en vivo y afecta a la pila entera inferior.
+///
+/// El orden de las variantes es estable (postcard serializa por índice):
+/// variantes nuevas se agregan **al final**.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ClaseCapa {
+    /// Capa con buffer Rgba8 en `contenido` (raster o derivada).
+    Pixeles,
+    /// Carpeta: agrupa a las capas cuyo `grupo == Some(self.id)`.
+    Grupo,
+    /// Capa de ajuste: aplica `op` al compuesto inferior al componer.
+    Ajuste(OpLocal),
+}
+
+impl Default for ClaseCapa {
+    fn default() -> Self {
+        ClaseCapa::Pixeles
+    }
+}
+
 /// Una capa del lienzo. El `id` es estable a través de regeneraciones — sirve
 /// como ancla para que otras capas la apunten como madre. `contenido` es el
 /// hash BLAKE3 del buffer Rgba8 (W*H*4 bytes) que vive en el almacén
 /// content-addressed; `mascara` análogo para una máscara alfa opcional
 /// (W*H bytes).
+///
+/// `clase` distingue píxeles / grupo / ajuste (ver [`ClaseCapa`]). `grupo` es
+/// el `id` de la capa-grupo que contiene a ésta (`None` = nivel raíz);
+/// modela la jerarquía de carpetas sin dejar de ser una lista plana. `clipping`
+/// recorta esta capa a la alfa de la capa inmediatamente inferior en su mismo
+/// grupo (clipping mask de Photoshop).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Capa {
     pub id: Uuid,
@@ -295,6 +333,9 @@ pub struct Capa {
     pub mascara: Option<Hash>,
     pub visible: bool,
     pub origen: OrigenCapa,
+    pub clase: ClaseCapa,
+    pub grupo: Option<Uuid>,
+    pub clipping: bool,
 }
 
 impl Capa {
@@ -311,6 +352,51 @@ impl Capa {
             mascara: None,
             visible: true,
             origen: OrigenCapa::Raster,
+            clase: ClaseCapa::Pixeles,
+            grupo: None,
+            clipping: false,
+        }
+    }
+
+    /// Construye una capa-grupo (carpeta) vacía. No tiene buffer propio: su
+    /// `contenido` es un hash centinela que el compositor ignora. Las capas
+    /// que la integran se cuelgan poniendo su `grupo` al `id` devuelto en
+    /// [`Capa::id`]. Default visible, opacidad 1.0, blend Normal.
+    pub fn grupo(nombre: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            nombre: nombre.into(),
+            contenido: [0u8; 32],
+            blend: ModoFusion::Normal,
+            opacidad: 1.0,
+            mascara: None,
+            visible: true,
+            origen: OrigenCapa::Raster,
+            clase: ClaseCapa::Grupo,
+            grupo: None,
+            clipping: false,
+        }
+    }
+
+    /// Construye una capa de ajuste no destructiva. No tiene buffer: al
+    /// componer, `op` (per-píxel) se aplica al compuesto de lo que tenga
+    /// debajo dentro de su grupo, modulada por opacidad y máscara. Sólo tienen
+    /// sentido las ops per-píxel (invertir, brillo, contraste, niveles,
+    /// saturación, tonalidad, curvas); las espaciales/alfa el compositor las
+    /// ignora — ver [`pixel::ajustar_rgb_inplace`].
+    pub fn ajuste(nombre: impl Into<String>, op: OpLocal) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            nombre: nombre.into(),
+            contenido: [0u8; 32],
+            blend: ModoFusion::Normal,
+            opacidad: 1.0,
+            mascara: None,
+            visible: true,
+            origen: OrigenCapa::Raster,
+            clase: ClaseCapa::Ajuste(op),
+            grupo: None,
+            clipping: false,
         }
     }
 
@@ -337,7 +423,29 @@ impl Capa {
                 op,
                 estado: Frescura::Stale,
             },
+            clase: ClaseCapa::Pixeles,
+            grupo: None,
+            clipping: false,
         }
+    }
+
+    /// `true` si la capa es una carpeta-grupo.
+    pub fn es_grupo(&self) -> bool {
+        matches!(self.clase, ClaseCapa::Grupo)
+    }
+
+    /// La op de ajuste si la capa es de ajuste; `None` en otro caso.
+    pub fn op_ajuste(&self) -> Option<&OpLocal> {
+        match &self.clase {
+            ClaseCapa::Ajuste(op) => Some(op),
+            _ => None,
+        }
+    }
+
+    /// `true` si la capa aporta píxeles al compuesto vía su `contenido`
+    /// (raster o derivada). Grupos y ajustes no.
+    pub fn tiene_buffer(&self) -> bool {
+        matches!(self.clase, ClaseCapa::Pixeles)
     }
 
     /// `true` si esta capa tiene una operación derivada y está stale.
@@ -386,6 +494,51 @@ impl Lienzo {
     /// Apila una capa encima (la convierte en la capa visible top).
     pub fn apilar(&mut self, capa: Capa) {
         self.capas.push(capa);
+    }
+
+    /// Índices (en orden visual fondo→tope) de las capas hijas directas de
+    /// `grupo`: `None` = nivel raíz, `Some(id)` = dentro de esa carpeta. No
+    /// recursa — devuelve sólo el nivel pedido. Es la primitiva que el
+    /// compositor usa para recorrer la jerarquía nivel por nivel.
+    pub fn hijos_directos(&self, grupo: Option<Uuid>) -> Vec<usize> {
+        self.capas
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.grupo == grupo)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Mete las capas `ids` en una carpeta-grupo nueva llamada `nombre`. La
+    /// carpeta se inserta en la posición de la capa más alta del conjunto y
+    /// las capas pasan a colgar de ella (`grupo = Some(nuevo_id)`),
+    /// preservando su orden relativo. Devuelve el `id` del grupo, o `None` si
+    /// ningún `id` existe. Las capas conservan el grupo padre que tenían en
+    /// común; si estaban en niveles distintos, el grupo hereda el del tope.
+    pub fn agrupar(&mut self, ids: &[Uuid], nombre: impl Into<String>) -> Option<Uuid> {
+        let seleccion: std::collections::HashSet<Uuid> = ids.iter().copied().collect();
+        let posiciones: Vec<usize> = self
+            .capas
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| seleccion.contains(&c.id))
+            .map(|(i, _)| i)
+            .collect();
+        if posiciones.is_empty() {
+            return None;
+        }
+        let tope = *posiciones.iter().max().unwrap();
+        let padre = self.capas[tope].grupo;
+
+        let mut grupo = Capa::grupo(nombre);
+        grupo.grupo = padre;
+        let nuevo_id = grupo.id;
+        for &i in &posiciones {
+            self.capas[i].grupo = Some(nuevo_id);
+        }
+        // Insertar el grupo justo encima de la capa más alta del conjunto.
+        self.capas.insert(tope + 1, grupo);
+        Some(nuevo_id)
     }
 
     /// Busca una capa por su `Uuid` y devuelve referencia mutable. La forma
@@ -559,7 +712,9 @@ pub fn lienzo_a_objeto(l: &Lienzo) -> Result<format::Objeto, Error> {
     let mut hijos: Vec<Hash> = Vec::new();
     let mut vistos: std::collections::HashSet<Hash> = std::collections::HashSet::new();
     for c in &l.capas {
-        if vistos.insert(c.contenido) {
+        // Grupos y ajustes no tienen buffer propio: su `contenido` es un hash
+        // centinela que no apunta a nada en el almacén — no lo referenciamos.
+        if c.tiene_buffer() && vistos.insert(c.contenido) {
             hijos.push(c.contenido);
         }
         if let Some(m) = c.mascara {

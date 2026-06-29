@@ -110,98 +110,11 @@ pub fn aplicar_op_local(op: &OpLocal, src: &[u8], w: u32, h: u32) -> Result<Vec<
     Ok(salida)
 }
 
-/// Construye la LUT de 256 entradas de una curva tonal a partir de sus
-/// puntos de control `(x_entrada, y_salida)` en `[0,1]²`. El frontend la
-/// usa para dibujar la curva; `aplicar_op_local` la usa para mapear los
-/// canales. Pura y determinista.
-///
-/// Algoritmo: ordena los puntos por `x`, clampa a `[0,1]`, deduplica `x`
-/// colapsados (gana el primero), y si quedan < 2 puntos válidos devuelve la
-/// identidad (`lut[i] = i`). Con ≥ 2 puntos interpola por Hermite cúbica con
-/// tangentes monótonas de **Fritsch–Carlson** — la misma receta que evita el
-/// overshoot típico de Catmull-Rom (una curva de contraste no debe "rebotar"
-/// fuera de `[0,1]` ni invertir su pendiente entre puntos). Fuera del dominio
-/// cubierto por los puntos, la salida se aplana al extremo más cercano
-/// (clamp, como el panel Curves de Photoshop).
-pub fn lut_curva(puntos: &[(f32, f32)]) -> [u8; 256] {
-    // Saneo: clamp a [0,1], orden por x, dedup de x repetidos.
-    let mut pts: Vec<(f32, f32)> = puntos
-        .iter()
-        .map(|&(x, y)| (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
-
-    let mut lut = [0u8; 256];
-    if pts.len() < 2 {
-        for (i, slot) in lut.iter_mut().enumerate() {
-            *slot = i as u8;
-        }
-        return lut;
-    }
-
-    let n = pts.len();
-    let xs: Vec<f32> = pts.iter().map(|p| p.0).collect();
-    let ys: Vec<f32> = pts.iter().map(|p| p.1).collect();
-
-    // Secantes entre puntos consecutivos.
-    let mut d = vec![0.0f32; n - 1];
-    for k in 0..n - 1 {
-        let h = (xs[k + 1] - xs[k]).max(1e-6);
-        d[k] = (ys[k + 1] - ys[k]) / h;
-    }
-    // Tangentes iniciales: secantes en los extremos, promedio en el interior.
-    let mut m = vec![0.0f32; n];
-    m[0] = d[0];
-    m[n - 1] = d[n - 2];
-    for k in 1..n - 1 {
-        m[k] = (d[k - 1] + d[k]) / 2.0;
-    }
-    // Corrección de Fritsch–Carlson: garantiza monotonía por tramo.
-    for k in 0..n - 1 {
-        if d[k].abs() < 1e-12 {
-            // Tramo plano ⇒ tangentes nulas a ambos lados (sin overshoot).
-            m[k] = 0.0;
-            m[k + 1] = 0.0;
-        } else {
-            let alpha = m[k] / d[k];
-            let beta = m[k + 1] / d[k];
-            let s = alpha * alpha + beta * beta;
-            if s > 9.0 {
-                let tau = 3.0 / s.sqrt();
-                m[k] = tau * alpha * d[k];
-                m[k + 1] = tau * beta * d[k];
-            }
-        }
-    }
-
-    for (i, slot) in lut.iter_mut().enumerate() {
-        let x = i as f32 / 255.0;
-        let y = if x <= xs[0] {
-            ys[0] // clamp izquierdo
-        } else if x >= xs[n - 1] {
-            ys[n - 1] // clamp derecho
-        } else {
-            // Localiza el tramo [xs[k], xs[k+1]] que contiene x.
-            let mut k = 0;
-            while k < n - 1 && x > xs[k + 1] {
-                k += 1;
-            }
-            let h = (xs[k + 1] - xs[k]).max(1e-6);
-            let t = ((x - xs[k]) / h).clamp(0.0, 1.0);
-            let t2 = t * t;
-            let t3 = t2 * t;
-            // Base de Hermite.
-            let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-            let h10 = t3 - 2.0 * t2 + t;
-            let h01 = -2.0 * t3 + 3.0 * t2;
-            let h11 = t3 - t2;
-            h00 * ys[k] + h10 * h * m[k] + h01 * ys[k + 1] + h11 * h * m[k + 1]
-        };
-        *slot = clamp_u8(y);
-    }
-    lut
-}
+/// Construye la LUT de 256 entradas de una curva tonal. Re-exportada desde
+/// `tullpu_core::pixel`, donde vive para que la comparta el compositor (capas
+/// de ajuste de curvas en vivo) sin crear el ciclo `ops ↔ render`. El frontend
+/// la usa para dibujar la curva; [`aplicar_op_local`] para mapear los canales.
+pub use tullpu_core::pixel::lut_curva;
 
 /// Aplica una [`TransformacionPixel`] entera. Las Ia devuelven
 /// [`Error::IaNoSoportada`] — quedan para `pixel-verbo-daemon`.

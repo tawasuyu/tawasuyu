@@ -31,7 +31,7 @@
 use std::collections::HashMap;
 
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
-use tullpu_core::{Capa, Hash, Lienzo, ModoFusion};
+use tullpu_core::{pixel, Capa, ClaseCapa, Hash, Lienzo, ModoFusion};
 
 // =============================================================================
 //  Fuente de buffers
@@ -100,47 +100,99 @@ pub enum Error {
 //  Composición
 // =============================================================================
 
-/// Compone un [`Lienzo`] sobre un buffer Rgba8 nuevo, transparente como base,
-/// recorriendo las capas visibles en orden visual (fondo→tope) y fundiendo
-/// con el modo de cada una. Devuelve una `RgbaImage` del tamaño del lienzo.
+/// Compone un [`Lienzo`] sobre un buffer Rgba8 nuevo, transparente como base.
+/// Recorre la jerarquía de capas (carpetas/grupos anidados) en orden visual
+/// (fondo→tope), funde cada capa con su modo/opacidad/máscara, aplica las
+/// **capas de ajuste** en vivo al compuesto inferior y respeta las **clipping
+/// masks**. Devuelve una `RgbaImage` del tamaño del lienzo.
+///
+/// Para un lienzo plano (sólo capas `Pixeles` en la raíz, sin grupos, ajustes
+/// ni clipping) el resultado es idéntico bit-a-bit al compositor anterior.
 pub fn componer(l: &Lienzo, fuente: &impl FuenteBuffers) -> Result<RgbaImage, Error> {
+    let w = l.width;
+    let h = l.height;
+    let acc = componer_lista(l, None, fuente)?;
+    Ok(RgbaImage::from_raw(w, h, acc).expect("dimensiones cuadran con el buffer"))
+}
+
+/// Compone las capas hijas directas de `grupo` (`None` = raíz) sobre un buffer
+/// transparente y lo devuelve como Rgba8 plano (alfa recta). Recursa en cada
+/// capa-grupo. Es la unidad de "aislamiento" de un grupo de Photoshop: los
+/// hijos se funden entre sí en su propio lienzo antes de que el padre aplique
+/// el blend/opacidad/máscara del grupo.
+fn componer_lista(
+    l: &Lienzo,
+    grupo: Option<tullpu_core::Uuid>,
+    fuente: &impl FuenteBuffers,
+) -> Result<Vec<u8>, Error> {
     let w = l.width;
     let h = l.height;
     let n = (w as usize) * (h as usize);
     let mut acc = vec![0u8; n * 4];
 
-    for capa in &l.capas {
+    // Cobertura (alfa efectiva) de la última capa de base no-clipping. Las
+    // capas con `clipping` se recortan a ella; no la actualizan.
+    let mut base_alpha: Option<Vec<f32>> = None;
+
+    for i in l.hijos_directos(grupo) {
+        let capa = &l.capas[i];
         if !capa.visible {
             continue;
         }
-        fundir_capa(&mut acc, w, h, capa, fuente)?;
+        let mascara = cargar_mascara(capa, n, fuente)?;
+        let clip = if capa.clipping {
+            base_alpha.as_deref()
+        } else {
+            None
+        };
+
+        match &capa.clase {
+            ClaseCapa::Ajuste(op) => {
+                aplicar_ajuste(&mut acc, n, op, capa.opacidad, mascara.as_deref(), clip);
+                // Un ajuste no aporta base de clipping.
+            }
+            ClaseCapa::Grupo => {
+                let sub = componer_lista(l, Some(capa.id), fuente)?;
+                let cobertura =
+                    fundir_buffer(&mut acc, n, &sub, capa, mascara.as_deref(), clip);
+                if !capa.clipping {
+                    base_alpha = Some(cobertura);
+                }
+            }
+            ClaseCapa::Pixeles => {
+                let esperado_rgba = n * 4;
+                let src = fuente
+                    .obtener(capa.contenido)
+                    .ok_or(Error::BufferFaltante(capa.contenido))?;
+                if src.len() != esperado_rgba {
+                    return Err(Error::TamanioRgba {
+                        hash: capa.contenido,
+                        esperado: esperado_rgba,
+                        encontrado: src.len(),
+                    });
+                }
+                // `fundir_buffer` toma `&[u8]`; clonamos para soltar el borrow
+                // inmutable de `fuente` (la máscara ya se resolvió arriba).
+                let src = src.to_vec();
+                let cobertura =
+                    fundir_buffer(&mut acc, n, &src, capa, mascara.as_deref(), clip);
+                if !capa.clipping {
+                    base_alpha = Some(cobertura);
+                }
+            }
+        }
     }
 
-    Ok(RgbaImage::from_raw(w, h, acc).expect("dimensiones cuadran con el buffer"))
+    Ok(acc)
 }
 
-fn fundir_capa(
-    acc: &mut [u8],
-    w: u32,
-    h: u32,
+/// Resuelve y valida la máscara de una capa, si tiene. `W*H` bytes de alfa.
+fn cargar_mascara(
     capa: &Capa,
+    n: usize,
     fuente: &impl FuenteBuffers,
-) -> Result<(), Error> {
-    let n = (w as usize) * (h as usize);
-    let esperado_rgba = n * 4;
-
-    let src = fuente
-        .obtener(capa.contenido)
-        .ok_or(Error::BufferFaltante(capa.contenido))?;
-    if src.len() != esperado_rgba {
-        return Err(Error::TamanioRgba {
-            hash: capa.contenido,
-            esperado: esperado_rgba,
-            encontrado: src.len(),
-        });
-    }
-
-    let mascara = match capa.mascara {
+) -> Result<Option<Vec<u8>>, Error> {
+    match capa.mascara {
         Some(hm) => {
             let bytes = fuente.obtener(hm).ok_or(Error::BufferFaltante(hm))?;
             if bytes.len() != n {
@@ -150,21 +202,33 @@ fn fundir_capa(
                     encontrado: bytes.len(),
                 });
             }
-            Some(bytes)
+            Ok(Some(bytes.to_vec()))
         }
-        None => None,
-    };
+        None => Ok(None),
+    }
+}
 
+/// Funde un buffer Rgba8 `src` (ya validado a `n*4` bytes) sobre `acc`
+/// aplicando el modo/opacidad de `capa`, la `mascara` opcional y el recorte
+/// `clip` opcional (alfa de la capa base para clipping masks). Devuelve la
+/// **cobertura** por píxel (alfa efectiva aplicada), que sirve de base de
+/// clipping para las capas siguientes.
+fn fundir_buffer(
+    acc: &mut [u8],
+    n: usize,
+    src: &[u8],
+    capa: &Capa,
+    mascara: Option<&[u8]>,
+    clip: Option<&[f32]>,
+) -> Vec<f32> {
     let opacidad_global = capa.opacidad.clamp(0.0, 1.0);
     let modo = capa.blend;
 
-    // Dissolve es estocástico por píxel: cada píxel queda 100% src o 100%
-    // dst según un umbral PRNG sembrado por el Uuid de la capa. No factoriza
-    // por canal y no encaja en `mezclar_canal`. Rama propia y `return`.
     if matches!(modo, ModoFusion::Disolver) {
-        return fundir_disolver(acc, n, src, mascara, opacidad_global, capa);
+        return fundir_disolver(acc, n, src, mascara, opacidad_global, clip, capa);
     }
 
+    let mut cobertura = vec![0.0f32; n];
     for i in 0..n {
         let s_idx = i * 4;
         let sr = src[s_idx] as f32 / 255.0;
@@ -173,7 +237,9 @@ fn fundir_capa(
         let sa = src[s_idx + 3] as f32 / 255.0;
 
         let m = mascara.map(|m| m[i] as f32 / 255.0).unwrap_or(1.0);
-        let src_alpha = sa * opacidad_global * m;
+        let c = clip.map(|c| c[i]).unwrap_or(1.0);
+        let src_alpha = sa * opacidad_global * m * c;
+        cobertura[i] = src_alpha;
 
         let dr = acc[s_idx] as f32 / 255.0;
         let dg = acc[s_idx + 1] as f32 / 255.0;
@@ -182,10 +248,7 @@ fn fundir_capa(
 
         let (br, bg, bb) = mezclar_canal(modo, (sr, sg, sb), (dr, dg, db));
 
-        // Composite "over": el resultado del modo (br,bg,bb) actúa como
-        // fuente con alfa `src_alpha` sobre el destino (dr,dg,db,da).
         let out_a = src_alpha + da * (1.0 - src_alpha);
-        // Si out_a ~ 0, los canales no importan; evitamos NaN.
         let (or_, og, ob) = if out_a > f32::EPSILON {
             (
                 (br * src_alpha + dr * da * (1.0 - src_alpha)) / out_a,
@@ -201,8 +264,40 @@ fn fundir_capa(
         acc[s_idx + 2] = clamp_u8(ob);
         acc[s_idx + 3] = clamp_u8(out_a);
     }
+    cobertura
+}
 
-    Ok(())
+/// Aplica una capa de ajuste sobre `acc` en vivo: copia el compuesto, le aplica
+/// la op per-píxel (RGB; alfa intacto) y mezcla el resultado de vuelta por
+/// `opacidad * máscara * clip` por píxel. Las ops espaciales/alfa no son
+/// ajustes — `ajustar_rgb_inplace` devuelve `false` y no se toca nada.
+fn aplicar_ajuste(
+    acc: &mut [u8],
+    n: usize,
+    op: &tullpu_core::OpLocal,
+    opacidad: f32,
+    mascara: Option<&[u8]>,
+    clip: Option<&[f32]>,
+) {
+    let mut adj = acc.to_vec();
+    if !pixel::ajustar_rgb_inplace(op, &mut adj) {
+        return;
+    }
+    let opac = opacidad.clamp(0.0, 1.0);
+    for i in 0..n {
+        let s_idx = i * 4;
+        let m = mascara.map(|m| m[i] as f32 / 255.0).unwrap_or(1.0);
+        let c = clip.map(|c| c[i]).unwrap_or(1.0);
+        let f = opac * m * c;
+        if f <= 0.0 {
+            continue;
+        }
+        for ch in 0..3 {
+            let base = acc[s_idx + ch] as f32;
+            let nuevo = adj[s_idx + ch] as f32;
+            acc[s_idx + ch] = (base * (1.0 - f) + nuevo * f).round().clamp(0.0, 255.0) as u8;
+        }
+    }
 }
 
 #[inline]
@@ -243,14 +338,17 @@ fn fundir_disolver(
     src: &[u8],
     mascara: Option<&[u8]>,
     opacidad_global: f32,
+    clip: Option<&[f32]>,
     capa: &Capa,
-) -> Result<(), Error> {
+) -> Vec<f32> {
     let seed = semilla_dissolve(capa);
+    let mut cobertura = vec![0.0f32; n];
     for i in 0..n {
         let s_idx = i * 4;
         let sa = src[s_idx + 3] as f32 / 255.0;
         let m = mascara.map(|m| m[i] as f32 / 255.0).unwrap_or(1.0);
-        let alfa_efectivo = sa * opacidad_global * m;
+        let c = clip.map(|c| c[i]).unwrap_or(1.0);
+        let alfa_efectivo = sa * opacidad_global * m * c;
         let umbral = umbral_dissolve(seed, i);
 
         if alfa_efectivo > umbral {
@@ -259,10 +357,11 @@ fn fundir_disolver(
             acc[s_idx + 1] = src[s_idx + 1];
             acc[s_idx + 2] = src[s_idx + 2];
             acc[s_idx + 3] = 255;
+            cobertura[i] = 1.0;
         }
         // si no, dst se queda tal cual — no tocamos `acc`.
     }
-    Ok(())
+    cobertura
 }
 
 #[inline]
@@ -1272,6 +1371,197 @@ mod tests {
         let err = super::exportar_png(&l, &alm, &ruta).unwrap_err();
         assert!(matches!(err, Error::BufferFaltante(_)));
         assert!(!ruta.exists(), "no se debe crear el archivo si compose falla");
+    }
+
+    // =========================================================================
+    //  Grupos · clipping · capas de ajuste (Fase A)
+    // =========================================================================
+
+    use tullpu_core::OpLocal;
+
+    #[test]
+    fn grupo_compone_hijos_en_aislamiento() {
+        // Un grupo con un solo hijo opaco rojo debe verse igual que el hijo
+        // suelto sobre el fondo.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(1, 1, [0, 0, 0, 255]));
+        let rojo = alm.insertar(buffer_solido(1, 1, [255, 0, 0, 255]));
+
+        let mut l = Lienzo::nuevo(1, 1);
+        l.apilar(Capa::raster("fondo", fondo));
+        let g = Capa::grupo("carpeta");
+        let gid = g.id;
+        l.apilar(g);
+        let mut hijo = Capa::raster("rojo", rojo);
+        hijo.grupo = Some(gid);
+        l.apilar(hijo);
+
+        let p = pixel(&componer(&l, &alm).unwrap(), 0, 0);
+        assert_eq!(p, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn opacidad_de_grupo_modula_todo_el_contenido() {
+        // Grupo al 50% sobre fondo negro: su hijo blanco opaco debe salir ~gris
+        // medio — la opacidad se aplica al compuesto del grupo.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(1, 1, [0, 0, 0, 255]));
+        let blanco = alm.insertar(buffer_solido(1, 1, [255, 255, 255, 255]));
+
+        let mut l = Lienzo::nuevo(1, 1);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut g = Capa::grupo("carpeta");
+        g.opacidad = 0.5;
+        let gid = g.id;
+        l.apilar(g);
+        let mut hijo = Capa::raster("blanco", blanco);
+        hijo.grupo = Some(gid);
+        l.apilar(hijo);
+
+        let p = pixel(&componer(&l, &alm).unwrap(), 0, 0);
+        for c in 0..3 {
+            assert!((p[c] as i32 - 128).abs() <= 1, "esperaba ~128, {:?}", p);
+        }
+    }
+
+    #[test]
+    fn grupo_invisible_no_pinta() {
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(1, 1, [10, 20, 30, 255]));
+        let blanco = alm.insertar(buffer_solido(1, 1, [255, 255, 255, 255]));
+        let mut l = Lienzo::nuevo(1, 1);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut g = Capa::grupo("oculta");
+        g.visible = false;
+        let gid = g.id;
+        l.apilar(g);
+        let mut hijo = Capa::raster("blanco", blanco);
+        hijo.grupo = Some(gid);
+        l.apilar(hijo);
+        let p = pixel(&componer(&l, &alm).unwrap(), 0, 0);
+        assert_eq!(p, [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn grupos_anidados_componen_recursivo() {
+        // raíz → grupo A → grupo B → hijo verde. Debe verse el verde.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let verde = alm.insertar(buffer_solido(1, 1, [0, 200, 0, 255]));
+        let mut l = Lienzo::nuevo(1, 1);
+        let a = Capa::grupo("A");
+        let aid = a.id;
+        l.apilar(a);
+        let mut b = Capa::grupo("B");
+        b.grupo = Some(aid);
+        let bid = b.id;
+        l.apilar(b);
+        let mut hijo = Capa::raster("verde", verde);
+        hijo.grupo = Some(bid);
+        l.apilar(hijo);
+        let p = pixel(&componer(&l, &alm).unwrap(), 0, 0);
+        assert_eq!(p, [0, 200, 0, 255]);
+    }
+
+    #[test]
+    fn clipping_recorta_a_la_alfa_de_la_base() {
+        // Base 2×1: px0 opaco, px1 transparente. Capa clip blanca opaca encima:
+        // sólo se ve donde la base tiene alfa (px0); px1 queda como el fondo.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(2, 1, [10, 10, 10, 255]));
+        let base = alm.insertar(vec![255, 0, 0, 255, 0, 0, 0, 0]);
+        let blanco = alm.insertar(buffer_solido(2, 1, [255, 255, 255, 255]));
+
+        let mut l = Lienzo::nuevo(2, 1);
+        l.apilar(Capa::raster("fondo", fondo));
+        l.apilar(Capa::raster("base", base));
+        let mut clip = Capa::raster("clip", blanco);
+        clip.clipping = true;
+        l.apilar(clip);
+
+        let img = componer(&l, &alm).unwrap();
+        assert_eq!(pixel(&img, 0, 0), [255, 255, 255, 255]);
+        assert_eq!(pixel(&img, 1, 0), [10, 10, 10, 255]);
+    }
+
+    #[test]
+    fn ajuste_invertir_afecta_todo_lo_de_abajo() {
+        // Fondo rojo + capa de ajuste Invertir encima ⇒ cian (255-rojo).
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(1, 1, [200, 50, 10, 255]));
+        let mut l = Lienzo::nuevo(1, 1);
+        l.apilar(Capa::raster("fondo", fondo));
+        l.apilar(Capa::ajuste("invertir", OpLocal::Invertir));
+        let p = pixel(&componer(&l, &alm).unwrap(), 0, 0);
+        assert_eq!(&p[0..3], &[55, 205, 245]);
+        assert_eq!(p[3], 255);
+    }
+
+    #[test]
+    fn ajuste_opacidad_media_mezcla_a_mitad_de_camino() {
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(1, 1, [200, 200, 200, 255]));
+        let mut l = Lienzo::nuevo(1, 1);
+        l.apilar(Capa::raster("fondo", fondo));
+        let mut aj = Capa::ajuste("inv", OpLocal::Invertir);
+        aj.opacidad = 0.5;
+        l.apilar(aj);
+        let p = pixel(&componer(&l, &alm).unwrap(), 0, 0);
+        // base 200, invertido 55, mezcla 0.5 ⇒ 127.5 ≈ 128.
+        for c in 0..3 {
+            assert!((p[c] as i32 - 128).abs() <= 1, "{:?}", p);
+        }
+    }
+
+    #[test]
+    fn ajuste_dentro_de_grupo_no_escapa_del_grupo() {
+        // Ajuste Invertir dentro de un grupo afecta sólo a los hijos del grupo.
+        // Fondo rojo raíz; grupo con hijo verde + ajuste invertir. El grupo
+        // muestra el verde invertido (magenta) opaco sobre el rojo.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(1, 1, [255, 0, 0, 255]));
+        let verde = alm.insertar(buffer_solido(1, 1, [0, 255, 0, 255]));
+        let mut l = Lienzo::nuevo(1, 1);
+        l.apilar(Capa::raster("fondo", fondo));
+        let g = Capa::grupo("grupo");
+        let gid = g.id;
+        l.apilar(g);
+        let mut hijo = Capa::raster("verde", verde);
+        hijo.grupo = Some(gid);
+        l.apilar(hijo);
+        let mut aj = Capa::ajuste("inv", OpLocal::Invertir);
+        aj.grupo = Some(gid);
+        l.apilar(aj);
+
+        let p = pixel(&componer(&l, &alm).unwrap(), 0, 0);
+        assert_eq!(&p[0..3], &[255, 0, 255]);
+    }
+
+    #[test]
+    fn agrupar_mete_capas_en_carpeta_y_compone_igual() {
+        // Agrupar dos capas con `Lienzo::agrupar` (grupo Normal, opacidad 1)
+        // no debe cambiar el render respecto a tenerlas sueltas.
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(1, 1, [0, 0, 0, 255]));
+        let rojo = alm.insertar(buffer_solido(1, 1, [255, 0, 0, 128]));
+        let azul = alm.insertar(buffer_solido(1, 1, [0, 0, 255, 128]));
+
+        let mut plano = Lienzo::nuevo(1, 1);
+        plano.apilar(Capa::raster("fondo", fondo));
+        plano.apilar(Capa::raster("rojo", rojo));
+        plano.apilar(Capa::raster("azul", azul));
+        let suelto = componer(&plano, &alm).unwrap();
+
+        let mut agr = Lienzo::nuevo(1, 1);
+        agr.apilar(Capa::raster("fondo", fondo));
+        let r = Capa::raster("rojo", rojo);
+        let a = Capa::raster("azul", azul);
+        let (rid, aid) = (r.id, a.id);
+        agr.apilar(r);
+        agr.apilar(a);
+        agr.agrupar(&[rid, aid], "carpeta").unwrap();
+        let agrupado = componer(&agr, &alm).unwrap();
+
+        assert_eq!(suelto.as_raw(), agrupado.as_raw());
     }
 
     #[test]
