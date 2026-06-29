@@ -777,6 +777,85 @@ fn toggling_an_empty_special_does_nothing() {
         .is_empty());
 }
 
+// --- Membresía de contexto (pacha): place / stash / summon --------
+
+#[test]
+fn place_app_in_special_nace_visible_y_stash_summon_la_agrupa() {
+    let mut d = desktop_with_screen();
+    // El contexto declara que app1 pertenece a "pacha-x" ANTES de abrir.
+    d.apply(DesktopAction::PlaceAppInSpecial { app_id: "app1".into(), special: "pacha-x".into() });
+    open(&mut d, 1); // app1 → nace VISIBLE (no se aparta) pero etiquetada.
+    assert_eq!(d.workspace_loads()[0], 1, "la ventana del contexto nace visible");
+    // Background del contexto: stash oculta TODO el grupo.
+    d.apply(DesktopAction::StashSpecial("pacha-x".into()));
+    assert_eq!(d.workspace_loads()[0], 0, "stash oculta la ventana del contexto");
+    // Volver al contexto: summon la trae TESELADA (no flotante).
+    d.apply(DesktopAction::SummonSpecial("pacha-x".into()));
+    assert_eq!(d.workspace_loads()[0], 1, "summon la trae de vuelta");
+    assert!(!d.workspaces[0].is_floating(1), "summon es teselado, no flotante");
+}
+
+#[test]
+fn place_app_in_special_etiqueta_ventanas_ya_abiertas() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1); // app1 abierta ANTES de declarar la membresía.
+    d.apply(DesktopAction::PlaceAppInSpecial { app_id: "app1".into(), special: "pacha-y".into() });
+    // Aún visible (place no mueve), pero ya es miembro: stash la oculta.
+    assert_eq!(d.workspace_loads()[0], 1);
+    d.apply(DesktopAction::StashSpecial("pacha-y".into()));
+    assert_eq!(d.workspace_loads()[0], 0);
+}
+
+#[test]
+fn stash_special_agrupa_varias_apps_del_contexto() {
+    let mut d = desktop_with_screen();
+    d.apply(DesktopAction::PlaceAppInSpecial { app_id: "app1".into(), special: "pacha-z".into() });
+    d.apply(DesktopAction::PlaceAppInSpecial { app_id: "app2".into(), special: "pacha-z".into() });
+    open(&mut d, 1);
+    open(&mut d, 2);
+    assert_eq!(d.workspace_loads()[0], 2);
+    // Una sola acción oculta TODO el contexto.
+    d.apply(DesktopAction::StashSpecial("pacha-z".into()));
+    assert_eq!(d.workspace_loads()[0], 0);
+    // Y summon trae ambas, teseladas.
+    d.apply(DesktopAction::SummonSpecial("pacha-z".into()));
+    assert_eq!(d.workspace_loads()[0], 2);
+    assert!(!d.workspaces[0].is_floating(1));
+    assert!(!d.workspaces[0].is_floating(2));
+}
+
+#[test]
+fn stash_y_summon_de_un_especial_vacio_no_hacen_nada() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    assert!(d.apply(DesktopAction::StashSpecial("nada".into())).is_empty());
+    assert!(d.apply(DesktopAction::SummonSpecial("nada".into())).is_empty());
+    assert_eq!(d.workspace_loads()[0], 1);
+}
+
+#[test]
+fn cerrar_una_ventana_la_olvida_del_contexto() {
+    let mut d = desktop_with_screen();
+    d.apply(DesktopAction::PlaceAppInSpecial { app_id: "app1".into(), special: "pacha-x".into() });
+    open(&mut d, 1);
+    d.on_event(BodyEvent::WindowClosed { id: 1 });
+    // Ya no hay miembros: stash no encuentra nada.
+    assert!(d.apply(DesktopAction::StashSpecial("pacha-x".into())).is_empty());
+}
+
+#[test]
+fn place_stash_summon_round_trip_de_texto() {
+    use std::str::FromStr;
+    // place-app-special:<app_id>:<special> (mirada-ctl une args con ':').
+    let a = DesktopAction::from_str("place-app-special:puriy:pacha-oficina").unwrap();
+    assert_eq!(a, DesktopAction::PlaceAppInSpecial { app_id: "puriy".into(), special: "pacha-oficina".into() });
+    assert_eq!(a.to_string(), "place-app-special:puriy:pacha-oficina");
+    let s = DesktopAction::from_str("stash-special:pacha-juegos").unwrap();
+    assert_eq!(s, DesktopAction::StashSpecial("pacha-juegos".into()));
+    let m = DesktopAction::from_str("summon-special:pacha-juegos").unwrap();
+    assert_eq!(m, DesktopAction::SummonSpecial("pacha-juegos".into()));
+}
+
 // --- Terminal dropdown (quake) ------------------------------------
 
 #[test]

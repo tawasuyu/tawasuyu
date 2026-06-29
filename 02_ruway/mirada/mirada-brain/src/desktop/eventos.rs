@@ -105,7 +105,14 @@ impl Desktop {
                     .restored_homes
                     .remove(&app_id)
                     .filter(|&n| n < self.workspaces.len());
+                // Membresía de contexto (`pacha`): si esta app pertenece a un
+                // especial, etiquetamos la ventana (nace visible; se agrupa con
+                // sus compañeras para stash/summon). No se consume.
+                let special = self.special_homes.get(&app_id).cloned();
                 self.windows.insert(id, WindowInfo { app_id, title });
+                if let Some(name) = special {
+                    self.window_special.insert(id, name);
+                }
                 let ws = outcome
                     .workspace
                     .filter(|&n| n < self.workspaces.len())

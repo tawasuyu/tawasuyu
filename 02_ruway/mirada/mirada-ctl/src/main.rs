@@ -407,6 +407,9 @@ Acciones de mirada-ctl:
   toggle-dropterm            invoca u oculta el terminal Quake
   move-to-special <nombre>   manda la enfocada al escritorio especial <nombre>
   toggle-special <nombre>    invoca u oculta el escritorio especial <nombre>
+  place-app-special <app_id> <nombre>  agrupa las ventanas de <app_id> en el especial <nombre>
+  stash-special <nombre>     oculta todas las ventanas del especial <nombre>
+  summon-special <nombre>    trae teselado el especial <nombre> al activo
  Teselado:
   cycle-layout               pasa al siguiente modo de teselado
   layout <modo>              master-stack · centered-master · spiral

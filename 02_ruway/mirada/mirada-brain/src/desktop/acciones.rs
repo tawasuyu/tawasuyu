@@ -175,6 +175,11 @@ impl Desktop {
                 self.stash_focused_to_special(&name)
             }
             DesktopAction::ToggleSpecialWorkspace(name) => self.toggle_special(&name),
+            DesktopAction::PlaceAppInSpecial { app_id, special } => {
+                self.place_app_in_special(&app_id, &special)
+            }
+            DesktopAction::StashSpecial(name) => self.stash_special(&name),
+            DesktopAction::SummonSpecial(name) => self.summon_special(&name),
             DesktopAction::ToggleDropterm => {
                 // Buscamos la terminal dropdown por su marca de `app_id`.
                 let existing = self
@@ -428,6 +433,76 @@ impl Desktop {
             bucket.retain(|&w| w != id);
         }
         self.specials.retain(|_, v| !v.is_empty());
+        // También la membresía persistente de contexto (`pacha`).
+        self.window_special.remove(&id);
+    }
+
+    /// Declara que las ventanas de `app_id` pertenecen al especial `special`
+    /// (membresía persistente de contexto). Etiqueta además las ya abiertas con
+    /// ese `app_id`, sin moverlas — siguen visibles hasta un `StashSpecial`.
+    pub(super) fn place_app_in_special(&mut self, app_id: &str, special: &str) -> Vec<BrainCommand> {
+        self.special_homes.insert(app_id.to_string(), special.to_string());
+        let ya_abiertas: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|(_, info)| info.app_id == app_id)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in ya_abiertas {
+            self.window_special.insert(id, special.to_string());
+        }
+        // No hay cambio de geometría: sólo etiquetas.
+        Vec::new()
+    }
+
+    /// Aparta (oculta) **todas** las ventanas etiquetadas en el especial `name`,
+    /// estén en el escritorio que estén. Las que ya estaban apartadas siguen
+    /// donde están. Lo usa `pacha` al mandar un contexto a background.
+    pub(super) fn stash_special(&mut self, name: &str) -> Vec<BrainCommand> {
+        let miembros: Vec<WindowId> = self
+            .window_special
+            .iter()
+            .filter(|(_, n)| n.as_str() == name)
+            .map(|(&id, _)| id)
+            .collect();
+        if miembros.is_empty() {
+            return Vec::new();
+        }
+        for id in miembros {
+            // Sacar de cualquier escritorio normal.
+            for ws in &mut self.workspaces {
+                ws.remove(id);
+            }
+            // Apartar en el bucket del especial (sin duplicar).
+            let bucket = self.specials.entry(name.to_string()).or_default();
+            if !bucket.contains(&id) {
+                bucket.push(id);
+            }
+        }
+        self.relayout()
+    }
+
+    /// Trae **teselado** al escritorio activo todo lo apartado del especial
+    /// `name` (a diferencia de `toggle_special`, que las invoca flotando). Lo
+    /// usa `pacha` al volver a un contexto. Idempotente: si no hay nada
+    /// apartado, no hace nada.
+    pub(super) fn summon_special(&mut self, name: &str) -> Vec<BrainCommand> {
+        let apartadas = self.special_windows(name);
+        if apartadas.is_empty() {
+            return Vec::new();
+        }
+        let active = self.active_index();
+        for id in apartadas {
+            // Quitar del bucket y agregar teselada al activo (sin set_floating).
+            if let Some(bucket) = self.specials.get_mut(name) {
+                bucket.retain(|&w| w != id);
+            }
+            if !self.workspaces[active].windows().contains(&id) {
+                self.workspaces[active].add(id);
+            }
+        }
+        self.specials.retain(|_, v| !v.is_empty());
+        self.relayout()
     }
 
     /// Manda la ventana enfocada del escritorio activo a un especial `name`

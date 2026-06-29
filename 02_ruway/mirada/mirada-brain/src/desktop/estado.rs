@@ -50,6 +50,16 @@ pub struct Desktop {
     /// mientras están guardadas no viven en ningún escritorio normal. La clave
     /// `""` es el **scratchpad por defecto** (sin nombre).
     pub(super) specials: BTreeMap<String, Vec<WindowId>>,
+    /// **Membresía persistente** `app_id → especial`: las ventanas de esa app
+    /// nacen etiquetadas como miembros del especial (sin ocultarse). Lo fija
+    /// `PlaceAppInSpecial`; lo usa `pacha` para agrupar las ventanas de un
+    /// contexto de usuario. A diferencia de `restored_homes`, no se consume:
+    /// vale para todas las ventanas de esa app mientras el contexto exista.
+    pub(super) special_homes: HashMap<String, String>,
+    /// `WindowId → especial` al que pertenece (derivado de `special_homes` al
+    /// abrirse). Permite a `StashSpecial`/`SummonSpecial` operar sobre el grupo
+    /// entero, estén visibles u ocultas.
+    pub(super) window_special: HashMap<WindowId, String>,
     /// Mapa salida→escritorio pendiente de aplicar, restaurado de una sesión
     /// guardada: al restaurar en el arranque aún no hay salidas conectadas, así
     /// que se aplica a medida que aparecen (por orden), en `OutputAdded`.
@@ -99,6 +109,8 @@ impl Desktop {
             caps: Permisos::default(),
             config: Config::default(),
             specials: BTreeMap::new(),
+            special_homes: HashMap::new(),
+            window_special: HashMap::new(),
             pending_output_workspaces: Vec::new(),
             restored_homes: HashMap::new(),
             restored_groupings: HashMap::new(),

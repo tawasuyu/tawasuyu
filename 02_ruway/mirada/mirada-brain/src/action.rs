@@ -111,6 +111,21 @@ pub enum DesktopAction {
     /// sobre el activo (Hyprland `togglespecialworkspace nombre`): si alguna de
     /// sus ventanas está a la vista, las guarda todas; si no, las trae todas.
     ToggleSpecialWorkspace(String),
+    /// **Membresía persistente**: declara que las ventanas de `app_id` pertenecen
+    /// al especial `special`. Distinto de `MoveToSpecialWorkspace` (que aparta la
+    /// enfocada): acá la ventana **nace visible** pero queda etiquetada, para que
+    /// [`StashSpecial`](Self::StashSpecial)/[`SummonSpecial`](Self::SummonSpecial)
+    /// la oculten/traigan junto con sus compañeras. Lo usa `pacha` para agrupar
+    /// las ventanas de un contexto de usuario sin depender del foco. Las ya
+    /// abiertas con ese `app_id` también quedan etiquetadas.
+    PlaceAppInSpecial { app_id: String, special: String },
+    /// Oculta **todas** las ventanas etiquetadas en el especial `special`
+    /// (estén donde estén), apartándolas. Lo usa `pacha` al mandar un contexto a
+    /// background.
+    StashSpecial(String),
+    /// Trae **teselado** (no flotante) al escritorio activo todo lo apartado del
+    /// especial `special`. Lo usa `pacha` al volver a un contexto.
+    SummonSpecial(String),
     /// Despliega/oculta la terminal dropdown estilo *quake* — un toplevel
     /// real anclado arriba a todo el ancho, con foco de teclado normal. La
     /// crea perezosamente la primera vez (patrón pypr).
@@ -242,6 +257,11 @@ impl fmt::Display for DesktopAction {
             DesktopAction::ToggleScratchpad => f.write_str("toggle-scratchpad"),
             DesktopAction::MoveToSpecialWorkspace(name) => write!(f, "move-to-special:{name}"),
             DesktopAction::ToggleSpecialWorkspace(name) => write!(f, "toggle-special:{name}"),
+            DesktopAction::PlaceAppInSpecial { app_id, special } => {
+                write!(f, "place-app-special:{app_id}:{special}")
+            }
+            DesktopAction::StashSpecial(name) => write!(f, "stash-special:{name}"),
+            DesktopAction::SummonSpecial(name) => write!(f, "summon-special:{name}"),
             DesktopAction::ToggleDropterm => f.write_str("toggle-dropterm"),
             DesktopAction::CycleLayout => f.write_str("cycle-layout"),
             DesktopAction::SetLayout(m) => write!(f, "layout:{}", layout_slug(*m)),
@@ -321,6 +341,19 @@ impl FromStr for DesktopAction {
                         layout_from_slug(slug)
                             .ok_or_else(|| format!("modo de teselado desconocido: '{slug}'"))?,
                     )
+                } else if let Some(rest) = s.strip_prefix("place-app-special:") {
+                    // `place-app-special:<app_id>:<special>` (mirada-ctl une args con ':').
+                    let (app_id, special) = rest
+                        .split_once(':')
+                        .ok_or_else(|| "place-app-special requiere <app_id> <special>".to_string())?;
+                    Self::PlaceAppInSpecial {
+                        app_id: app_id.trim().to_string(),
+                        special: special.trim().to_string(),
+                    }
+                } else if let Some(name) = s.strip_prefix("stash-special:") {
+                    Self::StashSpecial(name.trim().to_string())
+                } else if let Some(name) = s.strip_prefix("summon-special:") {
+                    Self::SummonSpecial(name.trim().to_string())
                 } else if let Some(name) = s.strip_prefix("move-to-special:") {
                     Self::MoveToSpecialWorkspace(name.trim().to_string())
                 } else if let Some(name) = s.strip_prefix("toggle-special:") {
