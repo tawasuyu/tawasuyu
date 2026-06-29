@@ -12,6 +12,7 @@ name = "nahual-gallery"
 path = "src/main.rs"
 
 [dependencies]
+rimay-localize = { path = "../../../shared/rimay-localize" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-grid = { workspace = true }

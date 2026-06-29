@@ -428,6 +428,31 @@ nahual-shell-ai-proposing = Proponiendo nombres con IA para { $n } archivos…
 nahual-shell-ai-error = (error) { $err }
 nahual-shell-ffmpeg-failed = MP4/H.264 vía ffmpeg falló: { $err } — ¿está ffmpeg en PATH?
 nahual-shell-no-ffmpeg = MP4/H.264 sin decoder nativo (build sin feature ffmpeg) — convertí a WebM (AV1)
+# nahual-gallery
+nahual-gallery-sort-name = nombre
+nahual-gallery-sort-size = tamaño
+nahual-gallery-sort-date = fecha
+nahual-gallery-items = { $n } ítems
+nahual-gallery-thumb-fail = falló { $name }: { $err }
+nahual-gallery-order = orden: { $order }
+nahual-gallery-header = { $items } ítems · fila { $row }/{ $total } · orden:{ $order } (o) · ⏎ abrir · ⌫ subir · +/− zoom · s slideshow · { $estado }
+nahual-gallery-header-default = galería
+nahual-gallery-enter-folder = Entrar a la carpeta
+nahual-gallery-open-image = Abrir imagen
+nahual-gallery-zoom-reset = Reiniciar zoom
+nahual-gallery-cycle-order = Ciclar orden
+nahual-gallery-menu-file = Archivo
+nahual-gallery-up = Subir a carpeta padre
+nahual-gallery-menu-view = Ver
+nahual-gallery-zoom-in = Acercar (zoom +)
+nahual-gallery-zoom-out = Alejar (zoom −)
+nahual-gallery-empty-desc = Sin imágenes ni subcarpetas en { $path }
+nahual-gallery-more = … y { $n } más abajo
+# nahual-font
+nahual-font-select = (seleccioná una fuente TTF/OTF)
+nahual-font-toobig = (fuente muy grande: { $bytes } bytes)
+nahual-font-error = (no se pudo abrir: { $err })
+nahual-font-parse-error = no parsea como fuente: { $err }
 
 # === greeter (mirada login) ===
 greeter-subtitle = iniciá tu sesión

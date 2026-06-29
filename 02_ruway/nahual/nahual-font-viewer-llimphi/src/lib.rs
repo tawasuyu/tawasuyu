@@ -114,7 +114,12 @@ pub fn load_font(path: &Path, max_bytes: u64) -> FontPreview {
     };
     let face = match ttf_parser::Face::parse(&bytes, 0) {
         Ok(f) => f,
-        Err(e) => return FontPreview::Error(format!("no parsea como fuente: {e}")),
+        Err(e) => {
+            return FontPreview::Error(rimay_localize::t_args(
+                "nahual-font-parse-error",
+                &[("err", e.to_string().into())],
+            ))
+        }
     };
     FontPreview::Font(Box::new(build_info(&face)))
 }
@@ -202,7 +207,7 @@ where
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| p.display().to_string())
         ),
-        None => "(seleccioná una fuente TTF/OTF)".to_string(),
+        None => rimay_localize::t("nahual-font-select"),
     };
 
     let header = View::new(Style {
@@ -220,10 +225,10 @@ where
         FontPreview::Empty => vec![header, info_line("—", palette.fg_muted)],
         FontPreview::TooBig(n) => vec![
             header,
-            info_line(&format!("(fuente muy grande: {n} bytes)"), palette.fg_muted),
+            info_line(&rimay_localize::t_args("nahual-font-toobig", &[("bytes", n.to_string().into())]), palette.fg_muted),
         ],
         FontPreview::Error(e) => {
-            vec![header, info_line(&format!("(no se pudo abrir: {e})"), palette.fg_error)]
+            vec![header, info_line(&rimay_localize::t_args("nahual-font-error", &[("err", e.to_string().into())]), palette.fg_error)]
         }
         FontPreview::Font(info) => {
             let meta = format!(

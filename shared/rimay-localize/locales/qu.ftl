@@ -429,6 +429,31 @@ nahual-shell-ai-proposing = IA-wan sutikunata churachkan { $n } qillqapaq…
 nahual-shell-ai-error = (pantay) { $err }
 nahual-shell-ffmpeg-failed = MP4/H.264 ffmpeg-nillanta pantarqun: { $err } — ¿ffmpeg PATH-pichu?
 nahual-shell-no-ffmpeg = MP4/H.264 mana sapan decoder (build mana ffmpeg feature) — WebM-man (AV1) tikray
+# nahual-gallery
+nahual-gallery-sort-name = suti
+nahual-gallery-sort-size = chhika
+nahual-gallery-sort-date = p'unchaw
+nahual-gallery-items = { $n } kaqkuna
+nahual-gallery-thumb-fail = pantarqun { $name }: { $err }
+nahual-gallery-order = siqiy: { $order }
+nahual-gallery-header = { $items } kaqkuna · siqi { $row }/{ $total } · siqiy:{ $order } (o) · ⏎ kichay · ⌫ wichay · +/− zoom · s slideshow · { $estado }
+nahual-gallery-header-default = galería
+nahual-gallery-enter-folder = Qillqanaman yaykuy
+nahual-gallery-open-image = Rikch'ata kichay
+nahual-gallery-zoom-reset = Zoom-ta kutichiy
+nahual-gallery-cycle-order = Siqiyta muyuchiy
+nahual-gallery-menu-file = Willay
+nahual-gallery-up = Hawa qillqanaman wichay
+nahual-gallery-menu-view = Qhaway
+nahual-gallery-zoom-in = Qaylláy (zoom +)
+nahual-gallery-zoom-out = Karunchay (zoom −)
+nahual-gallery-empty-desc = Mana rikch'akuna nitaq qillqanakuna { $path } ukhupi
+nahual-gallery-more = … { $n } astawan uray
+# nahual-font
+nahual-font-select = (huk TTF/OTF qillqa-rikch'ata akllay)
+nahual-font-toobig = (qillqa-rikch'a anchata hatun: { $bytes } bytes)
+nahual-font-error = (mana kichay atikun: { $err })
+nahual-font-parse-error = mana qillqa-rikch'achu: { $err }
 
 # === greeter (mirada login) ===
 greeter-subtitle = sesionniykita qallariy

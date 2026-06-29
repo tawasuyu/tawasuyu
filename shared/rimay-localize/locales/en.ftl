@@ -425,6 +425,31 @@ nahual-shell-ai-proposing = Proposing names with AI for { $n } files…
 nahual-shell-ai-error = (error) { $err }
 nahual-shell-ffmpeg-failed = MP4/H.264 via ffmpeg failed: { $err } — is ffmpeg on PATH?
 nahual-shell-no-ffmpeg = MP4/H.264 no native decoder (build without ffmpeg feature) — convert to WebM (AV1)
+# nahual-gallery
+nahual-gallery-sort-name = name
+nahual-gallery-sort-size = size
+nahual-gallery-sort-date = date
+nahual-gallery-items = { $n } items
+nahual-gallery-thumb-fail = failed { $name }: { $err }
+nahual-gallery-order = order: { $order }
+nahual-gallery-header = { $items } items · row { $row }/{ $total } · order:{ $order } (o) · ⏎ open · ⌫ up · +/− zoom · s slideshow · { $estado }
+nahual-gallery-header-default = gallery
+nahual-gallery-enter-folder = Enter folder
+nahual-gallery-open-image = Open image
+nahual-gallery-zoom-reset = Reset zoom
+nahual-gallery-cycle-order = Cycle order
+nahual-gallery-menu-file = File
+nahual-gallery-up = Go to parent folder
+nahual-gallery-menu-view = View
+nahual-gallery-zoom-in = Zoom in (+)
+nahual-gallery-zoom-out = Zoom out (−)
+nahual-gallery-empty-desc = No images or subfolders in { $path }
+nahual-gallery-more = … and { $n } more below
+# nahual-font
+nahual-font-select = (select a TTF/OTF font)
+nahual-font-toobig = (font too large: { $bytes } bytes)
+nahual-font-error = (could not open: { $err })
+nahual-font-parse-error = not a valid font: { $err }
 
 # === greeter (mirada login) ===
 greeter-subtitle = sign in

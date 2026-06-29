@@ -154,12 +154,12 @@ impl Orden {
             Orden::Fecha => Orden::Nombre,
         }
     }
-    fn etiqueta(self) -> &'static str {
-        match self {
-            Orden::Nombre => "nombre",
-            Orden::Tamano => "tamaño",
-            Orden::Fecha => "fecha",
-        }
+    fn etiqueta(self) -> String {
+        rimay_localize::t(match self {
+            Orden::Nombre => "nahual-gallery-sort-name",
+            Orden::Tamano => "nahual-gallery-sort-size",
+            Orden::Fecha => "nahual-gallery-sort-date",
+        })
     }
 }
 
@@ -261,6 +261,7 @@ impl App for Gallery {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        rimay_localize::init();
         let dir = std::env::args()
             .nth(1)
             .map(PathBuf::from)
@@ -274,7 +275,7 @@ impl App for Gallery {
             gap: 10.0,
             pad: 12.0,
         };
-        let estado = format!("{} ítems", entries.len());
+        let estado = rimay_localize::t_args("nahual-gallery-items", &[("n", entries.len().to_string().into())]);
         let mut m = Model {
             dir,
             entries,
@@ -371,7 +372,10 @@ impl App for Gallery {
             }
             Msg::ThumbFallo(path, e) => {
                 m.plan.completar(&path);
-                m.estado = format!("falló {}: {e}", nombre(&path));
+                m.estado = rimay_localize::t_args(
+                    "nahual-gallery-thumb-fail",
+                    &[("name", nombre(&path).into()), ("err", e.to_string().into())],
+                );
                 m.fallidos.insert(path);
                 bombear(&mut m, handle);
             }
@@ -432,7 +436,7 @@ impl App for Gallery {
                 m.entries = listar(&m.dir, m.orden);
                 m.seleccionado =
                     sel_path.and_then(|p| m.entries.iter().position(|e| e.path() == p));
-                m.estado = format!("orden: {}", m.orden.etiqueta());
+                m.estado = rimay_localize::t_args("nahual-gallery-order", &[("order", m.orden.etiqueta().into())]);
                 bombear(&mut m, handle);
             }
             Msg::Activar(i) => {
@@ -512,26 +516,28 @@ impl App for Gallery {
             let sel = model.seleccionado.and_then(|i| model.entries.get(i));
             let header = sel
                 .map(|e| nombre(e.path()))
-                .unwrap_or_else(|| "galería".to_string());
+                .unwrap_or_else(|| rimay_localize::t("nahual-gallery-header-default"));
             let es_carpeta = sel.map(|e| e.es_carpeta()).unwrap_or(false);
             // Acciones reales según la entrada: carpeta ⇒ entrar; imagen ⇒
             // abrir preview. Más reset de zoom / ciclar orden, siempre útiles.
+            let zoom_reset = rimay_localize::t("nahual-gallery-zoom-reset");
+            let cycle_order = rimay_localize::t("nahual-gallery-cycle-order");
             let items = if es_carpeta {
                 vec![
-                    ContextMenuItem::action("Entrar a la carpeta"),
-                    ContextMenuItem::action("Reiniciar zoom"),
-                    ContextMenuItem::action("Ciclar orden"),
+                    ContextMenuItem::action(rimay_localize::t("nahual-gallery-enter-folder")),
+                    ContextMenuItem::action(zoom_reset.clone()),
+                    ContextMenuItem::action(cycle_order.clone()),
                 ]
             } else if sel.is_some() {
                 vec![
-                    ContextMenuItem::action("Abrir imagen"),
-                    ContextMenuItem::action("Reiniciar zoom"),
-                    ContextMenuItem::action("Ciclar orden"),
+                    ContextMenuItem::action(rimay_localize::t("nahual-gallery-open-image")),
+                    ContextMenuItem::action(zoom_reset.clone()),
+                    ContextMenuItem::action(cycle_order.clone()),
                 ]
             } else {
                 vec![
-                    ContextMenuItem::action("Reiniciar zoom"),
-                    ContextMenuItem::action("Ciclar orden"),
+                    ContextMenuItem::action(zoom_reset),
+                    ContextMenuItem::action(cycle_order),
                 ]
             };
             let idx = model.seleccionado;
@@ -587,7 +593,10 @@ impl App for Gallery {
         let cuerpo: View<Msg> = if model.entries.is_empty() {
             // Carpeta vacía: empty-state con orientación en vez de un hueco.
             let pal = EmptyPalette::from_theme(&theme);
-            let desc = format!("Sin imágenes ni subcarpetas en {}", model.dir.display());
+            let desc = rimay_localize::t_args(
+                "nahual-gallery-empty-desc",
+                &[("path", model.dir.display().to_string().into())],
+            );
             View::new(Style {
                 size: Size {
                     width: percent(1.0_f32),
@@ -596,7 +605,7 @@ impl App for Gallery {
                 ..Default::default()
             })
             .fill(theme.bg_panel)
-            .children(vec![empty_view(Icon::Image, "Carpeta vacía", Some(&desc), &pal)])
+            .children(vec![empty_view(Icon::Image, rimay_localize::t("nahual-fe-empty"), Some(&desc), &pal)])
         } else {
             let cells: Vec<GridCell<Msg>> = (v.first..v.first + v.count)
                 .map(|i| {
@@ -627,8 +636,12 @@ impl App for Gallery {
                 cols: v.cols,
                 metrics: model.metrics,
                 caption: None,
-                truncated_hint: (mostrados < model.entries.len())
-                    .then(|| format!("… y {} más abajo", model.entries.len() - mostrados)),
+                truncated_hint: (mostrados < model.entries.len()).then(|| {
+                    rimay_localize::t_args(
+                        "nahual-gallery-more",
+                        &[("n", (model.entries.len() - mostrados).to_string().into())],
+                    )
+                }),
                 palette: GridPalette::from_theme(&theme),
             })
         };
@@ -753,13 +766,15 @@ fn navegar_a(m: &mut Model, dir: PathBuf, handle: &Handle<Msg>) {
 /// Barra superior: carpeta, conteo, fila actual y estado.
 fn encabezado(model: &Model, v: &llimphi_widget_grid::VisibleWindow) -> View<Msg> {
     let theme = &model.theme;
-    let texto = format!(
-        "{} ítems · fila {}/{} · orden:{} (o) · ⏎ abrir · ⌫ subir · +/− zoom · s slideshow · {}",
-        model.entries.len(),
-        v.first_row + 1,
-        v.total_rows.max(1),
-        model.orden.etiqueta(),
-        model.estado,
+    let texto = rimay_localize::t_args(
+        "nahual-gallery-header",
+        &[
+            ("items", model.entries.len().to_string().into()),
+            ("row", (v.first_row + 1).to_string().into()),
+            ("total", v.total_rows.max(1).to_string().into()),
+            ("order", model.orden.etiqueta().into()),
+            ("estado", model.estado.clone().into()),
+        ],
     );
     View::new(Style {
         size: Size {
@@ -1052,21 +1067,22 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuB
 /// Menú principal de la galería. Archivo / Ver / Ayuda — sólo comandos que
 /// mapean a `Msg` reales. Sin "Editar": no hay campos de texto editables.
 fn app_menu() -> AppMenu {
+    use rimay_localize::t;
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Subir a carpeta padre", "file.up").shortcut("Backspace"))
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("nahual-gallery-menu-file"))
+                .item(MenuItem::new(t("nahual-gallery-up"), "file.up").shortcut("Backspace"))
+                .item(MenuItem::new(t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Acercar (zoom +)", "view.zoom_in").shortcut("+"))
-                .item(MenuItem::new("Alejar (zoom −)", "view.zoom_out").shortcut("-"))
-                .item(MenuItem::new("Reiniciar zoom", "view.zoom_reset"))
-                .item(MenuItem::new("Ciclar orden", "view.orden").shortcut("o").separated())
-                .item(MenuItem::new("Cambiar tema", "view.theme")),
+            Menu::new(t("nahual-gallery-menu-view"))
+                .item(MenuItem::new(t("nahual-gallery-zoom-in"), "view.zoom_in").shortcut("+"))
+                .item(MenuItem::new(t("nahual-gallery-zoom-out"), "view.zoom_out").shortcut("-"))
+                .item(MenuItem::new(t("nahual-gallery-zoom-reset"), "view.zoom_reset"))
+                .item(MenuItem::new(t("nahual-gallery-cycle-order"), "view.orden").shortcut("o").separated())
+                .item(MenuItem::new(t("cycle-theme"), "view.theme")),
         )
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
 }
 
 /// Traduce un command id del menú principal a su efecto real.
