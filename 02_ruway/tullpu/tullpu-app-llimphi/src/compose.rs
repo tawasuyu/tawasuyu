@@ -7,14 +7,38 @@
 use llimphi_ui::llimphi_raster::peniko::{
     Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
 };
+use std::sync::OnceLock;
+
 use tullpu_core::{Hash, Lienzo};
 use tullpu_ops::regenerar_stale_con_ia;
 use tullpu_render::{componer, FuenteBuffers};
+use tullpu_render_gpu::Compositor;
 
 use crate::model::*;
 
+/// Compositor GPU del proceso, inicializado una sola vez. `None` si la máquina
+/// no tiene adaptador GPU — en ese caso siempre se compone en CPU. La inicial-
+/// ización (adaptador + dispositivo + shader) es cara; cada composición no.
+fn compositor_gpu() -> Option<&'static Compositor> {
+    static GPU: OnceLock<Option<Compositor>> = OnceLock::new();
+    GPU.get_or_init(|| match Compositor::nuevo() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("tullpu: compositor GPU no disponible ({e}); uso CPU");
+            None
+        }
+    })
+    .as_ref()
+}
+
 pub(crate) fn recomponer(l: &Lienzo, alm: &impl FuenteBuffers) -> Option<Image> {
-    let img = componer(l, alm).ok()?;
+    // Camino GPU con fallback transparente al compositor CPU: el GPU rechaza
+    // (NoSoportado) los lienzos con capas de ajuste o modo Disolver, y cualquier
+    // error de dispositivo cae también a CPU sin que el usuario lo note.
+    let img = match compositor_gpu().and_then(|g| g.componer(l, alm).ok()) {
+        Some(img) => img,
+        None => componer(l, alm).ok()?,
+    };
     let (w, h) = (img.width(), img.height());
     let blob = Blob::from(img.into_raw());
     Some(Image::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: w, height: h }))

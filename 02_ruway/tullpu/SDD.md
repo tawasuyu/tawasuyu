@@ -8,8 +8,8 @@
 
 Plan por fases para cerrar gaps vs Photopea/Photoshop. **Fases A** (estructura),
 **B** (selección), **C** (texto), **D** (transform), **E** (export, incl. PSD)
-y **F** (retoque clone+heal) completas. Pendientes: **G** GPU+tiling, **H** IA
-ONNX + vectores/paths.
+y **F** (retoque clone+heal) completas. **Fase G** parcial: **compositing GPU
+hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
 
 - **Fase A — grupos + clipping + capas de ajuste (HECHA).** `Capa` ganó
   `clase: ClaseCapa{Pixeles,Grupo,Ajuste(OpLocal)}`, `grupo: Option<Uuid>`
@@ -46,7 +46,20 @@ ONNX + vectores/paths.
   `media_destino − media_origen` por estampa, fundiendo el parche (`estampar_sanar`
   en ops.rs; reusa el ancla/offset del clon). Falta (menor): parche por
   selección y modos content-aware.
-- **Pendientes:** G GPU+tiling, H IA real ONNX + vectores/paths.
+- **Fase G — compositing GPU (HECHA; falta tiling).** `tullpu-render-gpu`
+  (`Compositor`) espeja `tullpu-render::componer` sobre un compute shader wgpu
+  (`blend.wgsl`). El acumulador es `array<u32>` rgba8 empaquetado (un dispatch
+  por capa lee/reescribe `acc`), así el redondeo intermedio coincide con la CPU
+  y la paridad es ±1 por canal — certificada por `tests/paridad.rs` (los 26
+  modos de fusión separables/HSL/comparativos + máscara + opacidad + clipping +
+  grupos anidados, todos `diff ≤ 1` vs CPU). La **recursión de grupos** vive en
+  el host (idéntica al CPU); sólo el bucle per-píxel migra a GPU. Capas de
+  ajuste y modo **Disolver** aún no están en el shader → `componer` devuelve
+  `Error::NoSoportado` y la app (`compose.rs::recomponer`) cae al compositor CPU
+  de forma transparente; si no hay adaptador GPU, también. **Falta:** tiling
+  (capa = grafo de tiles content-addressed) para imágenes > ~33 MP, y portar
+  ajustes/Disolver al shader para evitar el fallback.
+- **Pendiente:** H IA real ONNX + vectores/paths.
 
 ## Estado (2026-05-31)
 

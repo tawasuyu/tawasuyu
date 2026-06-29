@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 tullpu-core = { path = "../tullpu-core" }
 tullpu-render = { path = "../tullpu-render" }
+tullpu-render-gpu = { path = "../tullpu-render-gpu" }
 tullpu-ops = { path = "../tullpu-ops" }
 tullpu-paint = { path = "../tullpu-paint" }
 pixel-verbo-core = { path = "../pixel-verbo-core" }
