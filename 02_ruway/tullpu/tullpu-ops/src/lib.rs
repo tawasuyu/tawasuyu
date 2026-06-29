@@ -550,6 +550,57 @@ fn construir_path(comandos: &[tullpu_core::ComandoPath]) -> Option<tiny_skia::Pa
 }
 
 // =============================================================================
+//  Operaciones booleanas entre dos buffers (a nivel alfa)
+// =============================================================================
+
+/// Operación booleana entre dos formas (buffers Rgba8 del mismo tamaño).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpBooleano {
+    /// Unión: `a` sobre `b` (src-over). La silueta combinada de ambas.
+    Union,
+    /// Intersección: sólo donde ambas tienen cobertura; color de `a`.
+    Interseccion,
+    /// Resta `a − b`: `a` allí donde `b` **no** cubre.
+    Resta,
+}
+
+/// Combina dos buffers Rgba8 `(w*h*4)` por una [`OpBooleano`] a nivel de alfa,
+/// devolviendo un buffer nuevo (alfa recta). Es el modo "destructivo" de
+/// combinar formas: el resultado es raster. `a` es la forma de arriba.
+pub fn booleano(a: &[u8], b: &[u8], op: OpBooleano) -> Vec<u8> {
+    let n = a.len().min(b.len()) / 4;
+    let mut out = vec![0u8; n * 4];
+    for i in 0..n {
+        let j = i * 4;
+        let (ar, ag, ab, aa) = (a[j] as f32, a[j + 1] as f32, a[j + 2] as f32, a[j + 3] as f32 / 255.0);
+        let (br, bg, bb, ba) = (b[j] as f32, b[j + 1] as f32, b[j + 2] as f32, b[j + 3] as f32 / 255.0);
+        let (r, g, bl, al) = match op {
+            OpBooleano::Union => {
+                // a-over-b: alfa y color compuestos src-over.
+                let oa = aa + ba * (1.0 - aa);
+                if oa <= f32::EPSILON {
+                    (0.0, 0.0, 0.0, 0.0)
+                } else {
+                    (
+                        (ar * aa + br * ba * (1.0 - aa)) / oa,
+                        (ag * aa + bg * ba * (1.0 - aa)) / oa,
+                        (ab * aa + bb * ba * (1.0 - aa)) / oa,
+                        oa,
+                    )
+                }
+            }
+            OpBooleano::Interseccion => (ar, ag, ab, aa * ba),
+            OpBooleano::Resta => (ar, ag, ab, aa * (1.0 - ba)),
+        };
+        out[j] = r.round().clamp(0.0, 255.0) as u8;
+        out[j + 1] = g.round().clamp(0.0, 255.0) as u8;
+        out[j + 2] = bl.round().clamp(0.0, 255.0) as u8;
+        out[j + 3] = (al * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+// =============================================================================
 //  Tests
 // =============================================================================
 
@@ -609,6 +660,27 @@ mod tests {
         let c = en(&buf, w, 5, 5);
         assert!(c[0] >= 254 && c[1] >= 254 && c[2] >= 254, "RGB debería ser ~255, fue {c:?}");
         assert!((c[3] as i32 - 128).abs() <= 1, "alfa ~128, fue {}", c[3]);
+    }
+
+    #[test]
+    fn booleano_union_interseccion_resta() {
+        // Dos píxeles: A opaco rojo, B opaco verde (mismo lugar).
+        let a = [255, 0, 0, 255];
+        let b = [0, 255, 0, 255];
+        // Unión: A sobre B → rojo opaco.
+        let u = booleano(&a, &b, OpBooleano::Union);
+        assert_eq!(px(&u, 0), [255, 0, 0, 255]);
+        // Intersección: ambos opacos → color A, alfa pleno.
+        let i = booleano(&a, &b, OpBooleano::Interseccion);
+        assert_eq!(px(&i, 0), [255, 0, 0, 255]);
+        // Resta A−B: B opaco tapa todo → alfa 0.
+        let r = booleano(&a, &b, OpBooleano::Resta);
+        assert_eq!(px(&r, 0)[3], 0);
+
+        // B transparente: intersección vacía, resta = A.
+        let bt = [0, 255, 0, 0];
+        assert_eq!(px(&booleano(&a, &bt, OpBooleano::Interseccion), 0)[3], 0);
+        assert_eq!(px(&booleano(&a, &bt, OpBooleano::Resta), 0), [255, 0, 0, 255]);
     }
 
     #[test]

@@ -1185,6 +1185,11 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         hijos.push(envolver_fila(button_view("⨯ quitar trazo".to_string(), &pal, Msg::VectorTrazoQuitar)));
         hijos.push(envolver_fila(button_view("trazo −1 px".to_string(), &pal, Msg::VectorAnchoTrazo(-1.0))));
         hijos.push(envolver_fila(button_view("trazo +1 px".to_string(), &pal, Msg::VectorAnchoTrazo(1.0))));
+        // Booleanos con la capa de abajo (resultado raster, destructivo).
+        hijos.push(subtitulo("booleano (con la de abajo)"));
+        hijos.push(envolver_fila(button_view("∪ unión".to_string(), &pal, Msg::BooleanoUnion)));
+        hijos.push(envolver_fila(button_view("∩ intersección".to_string(), &pal, Msg::BooleanoInter)));
+        hijos.push(envolver_fila(button_view("− resta".to_string(), &pal, Msg::BooleanoResta)));
     }
 
     // "histograma": chart RGB del composite vigente. Sólo se renderiza

@@ -765,6 +765,12 @@ pub(crate) enum Msg {
     VectorTrazoQuitar,
     /// Vector: ajusta el ancho de trazo de la capa seleccionada por el delta px.
     VectorAnchoTrazo(f32),
+    /// Booleano: combina la capa seleccionada con la de abajo (unión).
+    BooleanoUnion,
+    /// Booleano: intersección de la capa seleccionada con la de abajo.
+    BooleanoInter,
+    /// Booleano: resta (selección − capa de abajo).
+    BooleanoResta,
     /// Inserta una capa vectorial: un rectángulo centrado en el lienzo, con el
     /// color activo. (Pen tool / edición de puntos = increment futuro.)
     AgregarRectangulo,

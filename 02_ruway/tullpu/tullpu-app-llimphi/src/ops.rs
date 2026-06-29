@@ -197,6 +197,48 @@ pub(crate) fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     true
 }
 
+/// Combina la capa `id` con la directamente debajo por una operación booleana
+/// a nivel alfa (unión/intersección/resta), produciendo una capa raster que las
+/// reemplaza. Ambas deben tener buffer (no grupos/ajustes). Es destructivo
+/// (el resultado es raster); las formas vectoriales pierden su editabilidad.
+pub(crate) fn combinar_booleano(model: &mut Model, id: Uuid, op: tullpu_ops::OpBooleano) -> bool {
+    let Some(idx) = model.lienzo.capas.iter().position(|c| c.id == id) else {
+        return false;
+    };
+    if idx == 0 {
+        model.estado = "booleano · no hay capa debajo".into();
+        return false;
+    }
+    let arriba = model.lienzo.capas[idx].clone();
+    let abajo = model.lienzo.capas[idx - 1].clone();
+    if !arriba.tiene_buffer() || !abajo.tiene_buffer() {
+        model.estado = "booleano · ambas capas deben tener buffer".into();
+        return false;
+    }
+    let (Some(ba), Some(bb)) = (
+        model.almacen.obtener(arriba.contenido).map(|s| s.to_vec()),
+        model.almacen.obtener(abajo.contenido).map(|s| s.to_vec()),
+    ) else {
+        return false;
+    };
+    let res = tullpu_ops::booleano(&ba, &bb, op);
+    let hash = model.almacen.insertar(res);
+    let simbolo = match op {
+        tullpu_ops::OpBooleano::Union => "∪",
+        tullpu_ops::OpBooleano::Interseccion => "∩",
+        tullpu_ops::OpBooleano::Resta => "−",
+    };
+    let nombre = format!("{} {simbolo} {}", abajo.nombre, arriba.nombre);
+    let nueva = Capa::raster(nombre.clone(), hash);
+    let nuevo_id = nueva.id;
+    model.lienzo.capas.remove(idx);
+    model.lienzo.capas[idx - 1] = nueva;
+    model.seleccionada = Some(nuevo_id);
+    aplicar_y_recomponer(model);
+    model.estado = format!("booleano · {nombre}");
+    true
+}
+
 /// Mutador in-place del parámetro de una capa derivada con `OpLocal`
 /// parametrizable. Aplica `dv` (delta en unidades del parámetro,
 /// emitido por el slider) al campo correspondiente con clamp al rango

@@ -1092,6 +1092,27 @@ impl App for Tullpu {
                 });
                 pushear_snapshot(&mut model, None);
             }
+            Msg::BooleanoUnion => {
+                if let Some(id) = model.seleccionada {
+                    if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Union) {
+                        pushear_snapshot(&mut model, None);
+                    }
+                }
+            }
+            Msg::BooleanoInter => {
+                if let Some(id) = model.seleccionada {
+                    if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Interseccion) {
+                        pushear_snapshot(&mut model, None);
+                    }
+                }
+            }
+            Msg::BooleanoResta => {
+                if let Some(id) = model.seleccionada {
+                    if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Resta) {
+                        pushear_snapshot(&mut model, None);
+                    }
+                }
+            }
             Msg::TextoTecla(ev) => {
                 let actualizar = if let Some((id, input)) = model.editando_texto.as_mut() {
                     input.apply_key(&ev);
