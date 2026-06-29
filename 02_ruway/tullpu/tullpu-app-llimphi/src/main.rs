@@ -1430,8 +1430,13 @@ fn app_menu(model: &Model) -> AppMenu {
             Menu::new("Capa")
                 .item(MenuItem::new("Agrupar", "capa.agrupar"))
                 .item(MenuItem::new("Máscara de recorte", "capa.clipping").separated())
-                .item(MenuItem::new("Ajuste: Invertir", "capa.ajuste.invertir"))
-                .item(MenuItem::new("Ajuste: Curvas", "capa.ajuste.curvas")),
+                .item(MenuItem::new("Ajuste: Brillo", "capa.ajuste.brillo"))
+                .item(MenuItem::new("Ajuste: Contraste", "capa.ajuste.contraste"))
+                .item(MenuItem::new("Ajuste: Niveles", "capa.ajuste.niveles"))
+                .item(MenuItem::new("Ajuste: Curvas", "capa.ajuste.curvas"))
+                .item(MenuItem::new("Ajuste: Saturación", "capa.ajuste.saturacion"))
+                .item(MenuItem::new("Ajuste: Tonalidad", "capa.ajuste.tonalidad"))
+                .item(MenuItem::new("Ajuste: Invertir", "capa.ajuste.invertir")),
         )
         .menu(
             Menu::new("Ver")
@@ -1465,6 +1470,23 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "capa.ajuste.invertir" => Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Invertir)),
         "capa.ajuste.curvas" => {
             Some(Msg::AgregarAjuste(tullpu_core::OpLocal::curvas_identidad()))
+        }
+        "capa.ajuste.brillo" => {
+            Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Brillo { delta: 0.0 }))
+        }
+        "capa.ajuste.contraste" => {
+            Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Contraste { factor: 1.0 }))
+        }
+        "capa.ajuste.niveles" => Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Niveles {
+            entrada_min: 0.0,
+            entrada_max: 1.0,
+            gamma: 1.0,
+        })),
+        "capa.ajuste.saturacion" => {
+            Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Saturacion { factor: 1.0 }))
+        }
+        "capa.ajuste.tonalidad" => {
+            Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Tonalidad { grados: 0.0 }))
         }
         "edit.copiar" => Some(Msg::CopiarSeleccion),
         "edit.cortar" => Some(Msg::CortarSeleccion),

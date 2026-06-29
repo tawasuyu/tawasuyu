@@ -434,12 +434,17 @@ pub(crate) fn vista_editor_curva(
 ) -> Option<Vec<View<Msg>>> {
     let id = model.seleccionada?;
     let capa = model.lienzo.capa(id)?;
-    let puntos: Vec<(f32, f32)> = match &capa.origen {
-        OrigenCapa::Derivada {
-            op: TransformacionPixel::Local(OpLocal::Curvas { puntos }),
-            ..
-        } => puntos.clone(),
-        _ => return None,
+    // La curva editable sale de una derivada `Curvas` o de una capa de ajuste
+    // `Curvas` — el editor es el mismo, sólo cambia de dónde leemos los puntos.
+    let puntos: Vec<(f32, f32)> = match &capa.clase {
+        ClaseCapa::Ajuste(OpLocal::Curvas { puntos }) => puntos.clone(),
+        _ => match &capa.origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Curvas { puntos }),
+                ..
+            } => puntos.clone(),
+            _ => return None,
+        },
     };
     let activo = model.curva_arrastrando.map(|d| d.idx);
     let hist = model.histograma;
@@ -578,12 +583,16 @@ pub(crate) fn sliders_parametros_capa(
 ) -> Option<Vec<View<Msg>>> {
     let id = model.seleccionada?;
     let capa = model.lienzo.capa(id)?;
-    let op = match &capa.origen {
-        OrigenCapa::Derivada {
-            op: TransformacionPixel::Local(op),
-            ..
-        } => op,
-        _ => return None,
+    // El op editable sale de una derivada local o de una capa de ajuste.
+    let op = match &capa.clase {
+        ClaseCapa::Ajuste(op) => op,
+        _ => match &capa.origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(op),
+                ..
+            } => op,
+            _ => return None,
+        },
     };
     let pal = slider_pal_parametros(theme);
     let mut rows: Vec<View<Msg>> = Vec::new();

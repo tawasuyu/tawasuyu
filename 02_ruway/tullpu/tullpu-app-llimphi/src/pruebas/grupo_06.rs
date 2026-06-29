@@ -457,3 +457,32 @@
         assert!(matches!(aj.op_ajuste().unwrap(), OpLocal::Invertir));
         assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
     }
+
+    #[test]
+    fn ajustar_parametro_de_capa_de_ajuste_muta_en_vivo() {
+        // Una capa de ajuste Brillo editada por slider muta su op sin pasar
+        // por el ciclo stale (los ajustes se recomponen en vivo).
+        let mut model = modelo_minimo();
+        let aj = Capa::ajuste("brillo", OpLocal::Brillo { delta: 0.0 });
+        let id = aj.id;
+        model.lienzo.apilar(aj);
+        model.seleccionada = Some(id);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AjustarParametro {
+                id,
+                param: ParametroSlider::BrilloDelta,
+                dv: 0.3,
+            },
+            &Handle::for_test(),
+        );
+        match model.lienzo.capa(id).unwrap().op_ajuste().unwrap() {
+            OpLocal::Brillo { delta } => assert!((delta - 0.3).abs() < 1e-5, "delta={delta}"),
+            otro => panic!("esperaba Brillo, vino {otro:?}"),
+        }
+        // La capa de ajuste NO queda en estado derivado/stale.
+        assert!(matches!(
+            model.lienzo.capa(id).unwrap().origen,
+            OrigenCapa::Raster
+        ));
+    }

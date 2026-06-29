@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use tullpu_core::{
-    Capa, Frescura, Lienzo, OpLocal, OrigenCapa, TransformacionPixel,
+    Capa, ClaseCapa, Frescura, Lienzo, OpLocal, OrigenCapa, TransformacionPixel,
 };
 use tullpu_render::FuenteBuffers;
 use uuid::Uuid;
@@ -208,13 +208,18 @@ pub(crate) fn ajustar_parametro_derivada(
     let Some(capa) = model.lienzo.capa_mut(id) else {
         return false;
     };
-    let OrigenCapa::Derivada {
-        op: TransformacionPixel::Local(op),
-        estado,
-        ..
-    } = &mut capa.origen
-    else {
-        return false;
+    // El op editable sale de una capa derivada (cacheada) o de una capa de
+    // ajuste (recalculada en vivo). Tomamos `&mut OpLocal` de cualquiera.
+    let es_ajuste = matches!(capa.clase, ClaseCapa::Ajuste(_));
+    let op: &mut OpLocal = match &mut capa.clase {
+        ClaseCapa::Ajuste(op) => op,
+        _ => match &mut capa.origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(op),
+                ..
+            } => op,
+            _ => return false,
+        },
     };
     let cambio = match (param, op) {
         (ParametroSlider::BrilloDelta, OpLocal::Brillo { delta }) => {
@@ -268,8 +273,16 @@ pub(crate) fn ajustar_parametro_derivada(
     if !cambio {
         return false;
     }
-    *estado = Frescura::Stale;
-    model.lienzo.propagar_stale(id);
+    // Sólo las derivadas cachean su buffer ⇒ hay que marcarlas stale y
+    // propagar al cono. Los ajustes se recomponen en vivo: sin stale.
+    if !es_ajuste {
+        if let Some(capa) = model.lienzo.capa_mut(id) {
+            if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
+                *estado = Frescura::Stale;
+            }
+        }
+        model.lienzo.propagar_stale(id);
+    }
     true
 }
 
@@ -278,24 +291,35 @@ pub(crate) fn ajustar_parametro_derivada(
 /// `Curvas`.
 fn puntos_curva_mut(model: &mut Model, id: Uuid) -> Option<&mut Vec<(f32, f32)>> {
     let capa = model.lienzo.capa_mut(id)?;
-    match &mut capa.origen {
-        OrigenCapa::Derivada {
-            op: TransformacionPixel::Local(OpLocal::Curvas { puntos }),
-            ..
-        } => Some(puntos),
-        _ => None,
+    match &mut capa.clase {
+        ClaseCapa::Ajuste(OpLocal::Curvas { puntos }) => Some(puntos),
+        _ => match &mut capa.origen {
+            OrigenCapa::Derivada {
+                op: TransformacionPixel::Local(OpLocal::Curvas { puntos }),
+                ..
+            } => Some(puntos),
+            _ => None,
+        },
     }
 }
 
-/// Marca la capa derivada `id` como stale, propaga al cono descendiente y
-/// recompone. Helper común de las tres mutaciones del editor de curvas.
+/// Marca la capa `id` como stale (si es derivada), propaga al cono descendiente
+/// y recompone. Helper común de las tres mutaciones del editor de curvas. Las
+/// capas de ajuste no cachean ⇒ sólo recomponen, sin stale.
 fn marcar_stale_curva_y_recomponer(model: &mut Model, id: Uuid) {
-    if let Some(capa) = model.lienzo.capa_mut(id) {
-        if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
-            *estado = Frescura::Stale;
+    let es_ajuste = model
+        .lienzo
+        .capa(id)
+        .map(|c| matches!(c.clase, ClaseCapa::Ajuste(_)))
+        .unwrap_or(false);
+    if !es_ajuste {
+        if let Some(capa) = model.lienzo.capa_mut(id) {
+            if let OrigenCapa::Derivada { estado, .. } = &mut capa.origen {
+                *estado = Frescura::Stale;
+            }
         }
+        model.lienzo.propagar_stale(id);
     }
-    model.lienzo.propagar_stale(id);
     aplicar_y_recomponer(model);
 }
 
