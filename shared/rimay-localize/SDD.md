@@ -17,6 +17,27 @@ el string citado si el número no calza.
   nada, raymi, paloma, ayni, chaka-app, pluma-{editor,notebook}, chasqui-explorer,
   minga-explorer, wawa-{panel,explorer}, cosmos-modules, nahual-image-viewer).
 
+### Override en runtime — traducir sin recompilar (2026-06-29)
+
+Los catálogos siguen embebidos (`include_str!`) como **fallback garantizado**,
+pero ahora se pueden **superponer en runtime** sin recompilar:
+
+- `register_override(locale, ftl: &str)` — primitiva **agnóstica de fuente**:
+  recibe el *contenido* `.ftl`, no una ruta. Pisa claves del embebido (la última
+  capa gana) o registra un idioma nuevo si no hay embebido de esa lengua base.
+- `load_overrides_from_dir(dir)` / `load_system_overrides()` — helpers host (usan
+  `std::fs`). `init()` autocarga **sistema → usuario**: `/etc/wawa/locales/*.ftl`
+  y `~/.config/wawa/locales/*.ftl` (misma raíz `wawa` que `wawa-config`). El
+  nombre del archivo es la clave de locale (`de.ftl` → `de`, `es-PE.ftl` → `es-PE`).
+  Precedencia: **usuario > sistema > embebido**.
+- **Ángulo wawa:** wawa no tiene filesystem POSIX. La primitiva toma bytes, así
+  que lo que corra ahí lee el `.ftl` de su almacén direccionado por contenido
+  (akasha / `almacen.rs`) y llama a `register_override` — sin tocar `std::fs`. El
+  helper de disco es host-only por diseño.
+
+Así un distribuidor mete un idioma nuevo (p. ej. `de.ftl`) y un usuario corrige
+claves sueltas, ambos sin recompilar.
+
 Verificar paridad de catálogos:
 
 ```bash

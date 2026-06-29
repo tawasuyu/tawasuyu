@@ -16,5 +16,7 @@ once_cell = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+directories = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }

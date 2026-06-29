@@ -6,7 +6,18 @@
 //!   identificadores (`MsgId`) que las apps Llimphi resuelven a texto
 //!   localizado aquí, al renderizar.
 //! - Un único catálogo `.ftl` por idioma vive en `locales/{lang}.ftl`,
-//!   embebido en el binario vía [`include_str!`].
+//!   embebido en el binario vía [`include_str!`]. El embebido es el
+//!   **fallback garantizado**: nunca se puede romper la app borrando un
+//!   archivo de disco.
+//! - Sobre el embebido se pueden **superponer catálogos en runtime**
+//!   ([`register_override`]) — para traducir o corregir strings, o añadir
+//!   un idioma nuevo, **sin recompilar**. La primitiva toma el *contenido*
+//!   `.ftl`, no una ruta: en el host el helper [`load_overrides_from_dir`]
+//!   lo lee de disco (`~/.config/wawa/locales/`, `/etc/wawa/locales/`),
+//!   pero en wawa (sin filesystem POSIX) lo que corra ahí lee los bytes de
+//!   su almacén direccionado por contenido y los inyecta con la misma
+//!   primitiva. La capa de override gana sobre el embebido; usuario gana
+//!   sobre sistema.
 //! - El locale activo es un singleton de proceso. Cambiarlo recarga el
 //!   bundle pero **no** retransla automáticamente la vista — las apps
 //!   Llimphi vuelven a llamar a [`t`] en el próximo `view()`.
@@ -45,6 +56,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
@@ -95,11 +107,17 @@ pub enum LocalizeError {
 // =====================================================================
 
 struct State {
-    /// Locale activo (clave de [`CATALOGS`]).
+    /// Locale activo (clave de [`CATALOGS`] o de un override).
     active: String,
-    /// Un bundle por catálogo embebido. Se construyen perezosamente la
-    /// primera vez que un locale entra en uso y se cachean.
+    /// Un bundle por catálogo en uso. Se construyen perezosamente la
+    /// primera vez que un locale entra en uso y se cachean. Se invalidan
+    /// (se vacía el mapa) al registrar un override.
     bundles: HashMap<String, FluentBundle<FluentResource>>,
+    /// Catálogos `.ftl` superpuestos en runtime, por clave de locale ya
+    /// canonicalizada (ver [`State::canonical_key`]). Cada entrada es la
+    /// lista de fuentes en orden de registro: la última gana
+    /// (`add_resource_overriding`). Vacío por defecto.
+    overrides: HashMap<String, Vec<String>>,
 }
 
 impl State {
@@ -107,40 +125,87 @@ impl State {
         Self {
             active: FALLBACK_LOCALE.to_string(),
             bundles: HashMap::new(),
+            overrides: HashMap::new(),
         }
+    }
+
+    /// Canonicaliza una clave de override a la del catálogo embebido que
+    /// comparte lengua base, para que `es.ftl` / `es-AR.ftl` superpongan
+    /// sobre `es-PE` (el embebido) en vez de crear un locale huérfano. Un
+    /// idioma sin embebido (`de`) se conserva tal cual → locale nuevo.
+    fn canonical_key(locale: &str) -> String {
+        if CATALOGS.iter().any(|(l, _)| *l == locale) {
+            return locale.to_string();
+        }
+        let base = locale.split(['-', '_']).next().unwrap_or(locale);
+        CATALOGS
+            .iter()
+            .find(|(l, _)| l.split('-').next() == Some(base))
+            .map(|(l, _)| l.to_string())
+            .unwrap_or_else(|| locale.to_string())
+    }
+
+    /// Locales conocidos: embebidos ∪ overrides, en orden (embebidos
+    /// primero, extras después). Sin duplicados.
+    fn known_locales(&self) -> Vec<String> {
+        let mut out: Vec<String> = CATALOGS.iter().map(|(l, _)| l.to_string()).collect();
+        for k in self.overrides.keys() {
+            if !out.contains(k) {
+                out.push(k.clone());
+            }
+        }
+        out
     }
 
     fn ensure_bundle(&mut self, locale: &str) -> Result<(), LocalizeError> {
         if self.bundles.contains_key(locale) {
             return Ok(());
         }
-        let src = CATALOGS
-            .iter()
-            .find(|(l, _)| *l == locale)
-            .map(|(_, s)| *s)
-            .ok_or_else(|| LocalizeError::UnknownLocale(locale.to_string()))?;
+        let embedded = CATALOGS.iter().find(|(l, _)| *l == locale).map(|(_, s)| *s);
+        let ov = self.overrides.get(locale);
+        if embedded.is_none() && ov.map_or(true, |v| v.is_empty()) {
+            return Err(LocalizeError::UnknownLocale(locale.to_string()));
+        }
         let langid: LanguageIdentifier = locale
             .parse()
             .map_err(|e: unic_langid::LanguageIdentifierError| {
                 LocalizeError::InvalidLangId(locale.to_string(), e.to_string())
             })?;
-        let res = FluentResource::try_new(src.to_string()).map_err(|(_, errs)| {
-            LocalizeError::CatalogParse(
-                locale.to_string(),
-                errs.into_iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )
-        })?;
         let mut bundle = FluentBundle::new_concurrent(vec![langid]);
         // Fluent inserta caracteres bidi U+2068/U+2069 alrededor de los
         // placeables. En una UI de escritorio que no soporta BIDI complejo
         // (Llimphi no lo hace todavía) se ven como ◌. Los desactivamos:
         // los catálogos no mezclan RTL/LTR por ahora.
         bundle.set_use_isolating(false);
-        if let Err(errs) = bundle.add_resource(res) {
-            warn!(target: "rimay-localize", ?errs, "errores al añadir recurso a bundle '{locale}'");
+        // 1) Capa embebida (fallback garantizado).
+        if let Some(src) = embedded {
+            let res = FluentResource::try_new(src.to_string()).map_err(|(_, errs)| {
+                LocalizeError::CatalogParse(
+                    locale.to_string(),
+                    errs.into_iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )
+            })?;
+            if let Err(errs) = bundle.add_resource(res) {
+                warn!(target: "rimay-localize", ?errs, "errores al añadir recurso embebido a bundle '{locale}'");
+            }
+        }
+        // 2) Capas de override, en orden de registro: la última pisa
+        //    claves duplicadas (y el embebido). Una fuente que no parsea no
+        //    tumba el bundle — se omite con un warn.
+        if let Some(srcs) = self.overrides.get(locale) {
+            for src in srcs {
+                match FluentResource::try_new(src.clone()) {
+                    Ok(res) => bundle.add_resource_overriding(res),
+                    Err((_, errs)) => warn!(
+                        target: "rimay-localize",
+                        ?errs,
+                        "override de '{locale}' no parsea — se omite"
+                    ),
+                }
+            }
         }
         self.bundles.insert(locale.to_string(), bundle);
         Ok(())
@@ -161,6 +226,9 @@ static STATE: Lazy<RwLock<State>> = Lazy::new(|| RwLock::new(State::new()));
 /// el sistema actual. Si la app quiere fijar el locale a mano, usar
 /// [`set_locale`] después.
 pub fn init() {
+    // Cargar overrides de disco ANTES de detectar, así un idioma que solo
+    // existe como `.ftl` en disco (sin embebido) puede ganar el match.
+    load_system_overrides();
     let detected = sys_locale::get_locale().unwrap_or_else(|| FALLBACK_LOCALE.to_string());
     let chosen = best_match(&detected).unwrap_or_else(|| FALLBACK_LOCALE.to_string());
     let _ = set_locale(&chosen);
@@ -180,9 +248,115 @@ pub fn current_locale() -> String {
     STATE.read().active.clone()
 }
 
-/// Lista de locales disponibles (claves de [`CATALOGS`]).
-pub fn available_locales() -> Vec<&'static str> {
-    CATALOGS.iter().map(|(l, _)| *l).collect()
+/// Lista de locales disponibles: catálogos embebidos ∪ overrides
+/// registrados en runtime (embebidos primero). Devuelve `String` porque
+/// los overrides son dinámicos, no `'static`.
+pub fn available_locales() -> Vec<String> {
+    STATE.read().known_locales()
+}
+
+// =====================================================================
+// Overrides en runtime (traducción sin recompilar)
+// =====================================================================
+
+/// Superpone un catálogo `.ftl` sobre el embebido del mismo idioma — o
+/// registra un idioma nuevo si no hay embebido que comparta lengua base.
+///
+/// Esta es la **primitiva agnóstica de fuente**: recibe el *contenido*
+/// `.ftl`, no una ruta. En el host, [`load_overrides_from_dir`] la
+/// alimenta desde disco; en wawa (sin filesystem POSIX) lo que corra ahí
+/// lee los bytes de su almacén direccionado por contenido y llama aquí.
+///
+/// Las claves del override pisan las del embebido; varios overrides del
+/// mismo locale se aplican en orden de registro (el último gana). Una
+/// fuente que no parsea como Fluent se omite al construir el bundle (con
+/// un warn), no tumba la app.
+///
+/// `locale` debe ser un identificador BCP-47 válido (`de`, `de-DE`,
+/// `es-PE`); si no, devuelve [`LocalizeError::InvalidLangId`]. Registrar
+/// invalida los bundles cacheados para que el próximo [`t`] los reconstruya.
+pub fn register_override(locale: &str, ftl: &str) -> Result<(), LocalizeError> {
+    // Validar que el locale parsea (falla temprano, no al resolver).
+    let _: LanguageIdentifier = locale
+        .parse()
+        .map_err(|e: unic_langid::LanguageIdentifierError| {
+            LocalizeError::InvalidLangId(locale.to_string(), e.to_string())
+        })?;
+    let key = State::canonical_key(locale);
+    let mut state = STATE.write();
+    state.overrides.entry(key).or_default().push(ftl.to_string());
+    // Invalidar todo lo cacheado: la reconstrucción es perezosa y barata.
+    state.bundles.clear();
+    Ok(())
+}
+
+/// Directorio de overrides **de usuario**: `~/.config/wawa/locales/` en
+/// Linux (vía `directories`, misma raíz `wawa` que `wawa-config`).
+/// `None` si la plataforma no expone config dir.
+pub fn user_locales_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "wawa").map(|d| d.config_dir().join("locales"))
+}
+
+/// Directorio de overrides **de sistema**: `/etc/wawa/locales/` en Linux;
+/// `None` en otras plataformas (no hay convención equivalente).
+pub fn system_locales_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        Some(PathBuf::from("/etc/wawa/locales"))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Escanea un directorio de `.ftl` y registra cada uno como override. El
+/// **nombre del archivo sin extensión es la clave de locale** (`de.ftl` →
+/// `de`, `es-PE.ftl` → `es-PE`). Devuelve cuántos cargó. Errores de IO o
+/// archivos que no parsean se omiten con un warn (no propaga). Helper
+/// host-only: usa `std::fs`.
+pub fn load_overrides_from_dir(dir: &Path) -> usize {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return 0, // directorio inexistente = sin overrides, normal
+    };
+    let mut n = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("ftl") {
+            continue;
+        }
+        let Some(locale) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(src) => match register_override(locale, &src) {
+                Ok(()) => n += 1,
+                Err(e) => {
+                    warn!(target: "rimay-localize", %e, "override '{}' inválido", path.display())
+                }
+            },
+            Err(e) => {
+                warn!(target: "rimay-localize", %e, "no se pudo leer override '{}'", path.display())
+            }
+        }
+    }
+    n
+}
+
+/// Carga overrides de las capas estándar del host: **sistema primero,
+/// usuario después** (así el usuario gana sobre el sistema, y ambos sobre
+/// el embebido). Idempotente en la práctica salvo que se editen los
+/// archivos. Devuelve el total cargado. La invoca [`init`].
+pub fn load_system_overrides() -> usize {
+    let mut n = 0;
+    if let Some(d) = system_locales_dir() {
+        n += load_overrides_from_dir(&d);
+    }
+    if let Some(d) = user_locales_dir() {
+        n += load_overrides_from_dir(&d);
+    }
+    n
 }
 
 /// Resuelve un mensaje sin argumentos. Si el ID no existe en el catálogo
@@ -238,21 +412,23 @@ fn resolve(id: &str, args: Option<&FluentArgs>) -> String {
     s.into_owned()
 }
 
-/// Mejor match entre un locale solicitado y los catalogados.
+/// Mejor match entre un locale solicitado y los disponibles (embebidos ∪
+/// overrides registrados).
 ///
 /// 1. Match exacto (`qu-PE` → `qu-PE`).
 /// 2. Match por lengua base ignorando región (`es-AR` → `es-PE`,
-///    `qu-BO` → `qu-PE`).
+///    `qu-BO` → `qu-PE`, `de-AT` → `de` si hay override `de`).
 /// 3. Sin match → `None`.
 fn best_match(requested: &str) -> Option<String> {
-    if CATALOGS.iter().any(|(l, _)| *l == requested) {
+    let known = STATE.read().known_locales();
+    if known.iter().any(|l| l == requested) {
         return Some(requested.to_string());
     }
     let base = requested.split(['-', '_']).next()?;
-    CATALOGS
+    known
         .iter()
-        .find(|(l, _)| l.split('-').next() == Some(base))
-        .map(|(l, _)| l.to_string())
+        .find(|l| l.split('-').next() == Some(base))
+        .cloned()
 }
 
 // =====================================================================
@@ -326,8 +502,45 @@ mod tests {
     #[test]
     fn available_locales_lists_all() {
         let v = available_locales();
-        assert!(v.contains(&"es-PE"));
-        assert!(v.contains(&"en-US"));
-        assert!(v.contains(&"qu-PE"));
+        assert!(v.iter().any(|l| l == "es-PE"));
+        assert!(v.iter().any(|l| l == "en-US"));
+        assert!(v.iter().any(|l| l == "qu-PE"));
+    }
+
+    #[test]
+    fn override_pisa_clave_embebida() {
+        let _g = SERIAL.lock().unwrap();
+        // `es.ftl` con UNA clave → canonicaliza a es-PE y pisa solo esa.
+        register_override("es", "save = Resguardar\n").unwrap();
+        set_locale("es-PE").unwrap();
+        assert_eq!(t("save"), "Resguardar", "el override no pisó 'save'");
+        // Una clave no incluida en el override sigue viniendo del embebido.
+        assert_eq!(t("cancel"), "Cancelar", "el override borró otras claves");
+        // Limpieza: re-registrar el valor embebido para no contaminar otros tests.
+        register_override("es", "save = Guardar\n").unwrap();
+        STATE.write().bundles.clear();
+    }
+
+    #[test]
+    fn override_introduce_locale_nuevo() {
+        let _g = SERIAL.lock().unwrap();
+        // Idioma sin embebido: queda como locale propio y es matcheable.
+        register_override("de", "save = Speichern\n").unwrap();
+        assert!(available_locales().iter().any(|l| l == "de"));
+        assert_eq!(best_match("de-AT"), Some("de".to_string()));
+        set_locale("de").unwrap();
+        assert_eq!(t("save"), "Speichern");
+    }
+
+    #[test]
+    fn load_overrides_from_dir_lee_ftl() {
+        let _g = SERIAL.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("fr.ftl"), "save = Enregistrer\n").unwrap();
+        std::fs::write(dir.path().join("ignorar.txt"), "no soy ftl\n").unwrap();
+        let n = load_overrides_from_dir(dir.path());
+        assert_eq!(n, 1, "solo el .ftl debe contar");
+        set_locale("fr").unwrap();
+        assert_eq!(t("save"), "Enregistrer");
     }
 }
