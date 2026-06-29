@@ -432,6 +432,9 @@ pub(crate) enum Msg {
     /// Mete la capa `id` en una carpeta-grupo nueva (Photoshop: "group layer").
     /// La selección pasa al grupo recién creado.
     Agrupar(Uuid),
+    /// Voltea la capa raster activa: `true` = horizontal (↔), `false` = vertical
+    /// (↕). Edición raster directa, dimensiones intactas.
+    VoltearCapa { horizontal: bool },
     /// Alterna la clipping mask de la capa `id`: cuando está activa, la capa se
     /// recorta a la alfa de la capa inmediatamente inferior de su grupo.
     ToggleClipping(Uuid),

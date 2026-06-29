@@ -260,6 +260,11 @@ impl App for Tullpu {
                 aplicar_y_recomponer(&mut model);
                 pushear_snapshot(&mut model, None);
             }
+            Msg::VoltearCapa { horizontal } => {
+                if voltear_capa_activa(&mut model, horizontal) {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
             Msg::Agrupar(id) => {
                 if let Some(gid) = model.lienzo.agrupar(&[id], "grupo") {
                     model.seleccionada = Some(gid);
@@ -535,6 +540,7 @@ impl App for Tullpu {
                         // a construir una nueva sobre la marcha.
                         model.seleccion = None;
                 model.seleccion_mascara = None;
+                model.seleccion_overlay = None;
                     }
                 }
             }
@@ -544,6 +550,7 @@ impl App for Tullpu {
                     drag.cur_ly += dy;
                     let drag = *drag;
                     model.seleccion_mascara = None;
+                    model.seleccion_overlay = None;
                     model.seleccion = rect_imagen_desde_drag(
                         &drag,
                         model.lienzo.width,
@@ -628,6 +635,7 @@ impl App for Tullpu {
             Msg::LimpiarSeleccion => {
                 model.seleccion = None;
                 model.seleccion_mascara = None;
+                model.seleccion_overlay = None;
                 model.seleccion_drag = None;
                 model.estado = "selección limpia".into();
             }
@@ -641,6 +649,7 @@ impl App for Tullpu {
                     model.seleccion =
                         Some(RectImagen { x0: 0, y0: 0, x1: w, y1: h });
                     model.seleccion_mascara = None;
+                    model.seleccion_overlay = None;
                     model.seleccion_drag = None;
                     model.mover_drag = None;
                     model.estado = format!("seleccionado todo ({}×{})", w, h);
@@ -652,6 +661,7 @@ impl App for Tullpu {
                     let h = model.lienzo.height;
                     model.seleccion = expandir_rect(rect, delta, w, h);
                     model.seleccion_mascara = None;
+                    model.seleccion_overlay = None;
                     model.estado = match model.seleccion {
                         Some(r) => {
                             format!("selección {}×{}", r.x1 - r.x0, r.y1 - r.y0)
@@ -1498,7 +1508,9 @@ fn app_menu(model: &Model) -> AppMenu {
         .menu(
             Menu::new("Capa")
                 .item(MenuItem::new("Agrupar", "capa.agrupar"))
-                .item(MenuItem::new("Máscara de recorte", "capa.clipping").separated())
+                .item(MenuItem::new("Máscara de recorte", "capa.clipping"))
+                .item(MenuItem::new("Voltear capa ↔", "capa.voltear_h"))
+                .item(MenuItem::new("Voltear capa ↕", "capa.voltear_v").separated())
                 .item(MenuItem::new("Ajuste: Brillo", "capa.ajuste.brillo"))
                 .item(MenuItem::new("Ajuste: Contraste", "capa.ajuste.contraste"))
                 .item(MenuItem::new("Ajuste: Niveles", "capa.ajuste.niveles"))
@@ -1536,6 +1548,8 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "edit.aplanar" => Some(Msg::AplanarVisibles),
         "capa.agrupar" => sel.map(Msg::Agrupar),
         "capa.clipping" => sel.map(Msg::ToggleClipping),
+        "capa.voltear_h" => Some(Msg::VoltearCapa { horizontal: true }),
+        "capa.voltear_v" => Some(Msg::VoltearCapa { horizontal: false }),
         "capa.ajuste.invertir" => Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Invertir)),
         "capa.ajuste.curvas" => {
             Some(Msg::AgregarAjuste(tullpu_core::OpLocal::curvas_identidad()))

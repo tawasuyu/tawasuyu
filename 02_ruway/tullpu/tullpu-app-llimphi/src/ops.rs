@@ -1104,6 +1104,59 @@ pub(crate) fn mover_pixeles_seleccion(
     true
 }
 
+/// Voltea (espeja) el buffer de la capa raster seleccionada in situ:
+/// `horizontal=true` ↔ eje vertical (izq↔der), `false` ↕ eje horizontal
+/// (arriba↔abajo). Edición raster directa (no genera una capa derivada). Las
+/// dimensiones no cambian, así que encaja en la capa canvas-sized. No-op si no
+/// hay capa, no es raster, o el buffer no cambia. Propaga stale y recompone.
+pub(crate) fn voltear_capa_activa(model: &mut Model, horizontal: bool) -> bool {
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    if !matches!(capa.origen, OrigenCapa::Raster) {
+        model.estado = "la capa es derivada — usá la raster madre".into();
+        return false;
+    }
+    let hash_actual = capa.contenido;
+    let Some(src) = model.almacen.obtener(hash_actual) else {
+        return false;
+    };
+    let src = src.to_vec();
+    let w_us = w as usize;
+    let h_us = h as usize;
+    let mut out = vec![0u8; src.len()];
+    for y in 0..h_us {
+        for x in 0..w_us {
+            let (sx, sy) = if horizontal {
+                (w_us - 1 - x, y)
+            } else {
+                (x, h_us - 1 - y)
+            };
+            let di = (y * w_us + x) * 4;
+            let si = (sy * w_us + sx) * 4;
+            out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    let new_hash = model.almacen.insertar(out);
+    if new_hash == hash_actual {
+        model.estado = "capa simétrica · sin cambio".into();
+        return false;
+    }
+    if let Some(c) = model.lienzo.capa_mut(id) {
+        c.contenido = new_hash;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+    model.estado = if horizontal { "capa volteada ↔" } else { "capa volteada ↕" }.into();
+    true
+}
+
 /// Bounding box de los píxeles `> 0` de una máscara `W·H`. `None` si la
 /// máscara está toda en cero (selección vacía).
 fn bbox_de_mascara(mascara: &[u8], w: u32, h: u32) -> Option<RectImagen> {

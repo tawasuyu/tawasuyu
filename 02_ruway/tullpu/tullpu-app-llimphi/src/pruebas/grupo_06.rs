@@ -631,3 +631,25 @@
         model = <Tullpu as App>::update(model, Msg::SeleccionarTodo, &Handle::for_test());
         assert!(model.seleccion_overlay.is_none(), "select-all limpia overlay");
     }
+
+    #[test]
+    fn voltear_capa_horizontal_espeja_columnas() {
+        let mut model = modelo_minimo(); // 4×4
+        let id = model.seleccionada.unwrap();
+        // Fila 0: gradiente por x (x*10 en R), resto 0.
+        let (w, h) = (4u32, 4u32);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        for x in 0..w {
+            let i = (x * 4) as usize;
+            buf[i] = (x as u8) * 10;
+            buf[i + 3] = 255;
+        }
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        assert!(voltear_capa_activa(&mut model, true));
+        let nuevo = model.lienzo.capa(id).unwrap().contenido;
+        let out = model.almacen.obtener(nuevo).unwrap();
+        // Tras voltear ↔: (0,0) toma el valor que estaba en (3,0) = 30.
+        assert_eq!(out[0], 30);
+        assert_eq!(out[3 * 4], 0, "(3,0) toma el de (0,0)=0");
+    }
