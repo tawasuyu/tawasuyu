@@ -302,6 +302,8 @@ fn modelo_demo() -> Model {
         edit_active: usize::MAX,
         edit_anim: Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
+        toasts: Vec::new(),
+        next_toast: 0,
     };
 
     // Regenera las derivadas stale (blur + restyle) con el mock, compone el

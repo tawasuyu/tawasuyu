@@ -411,3 +411,49 @@
         assert_eq!(buf.len(), 2 * 4, "máscara rotada conserva conteo");
         assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
     }
+    // =====================================================================
+    //  Fase A en la app: agrupar · clipping · capa de ajuste (vía update)
+    // =====================================================================
+
+    #[test]
+    fn agrupar_envuelve_la_capa_y_selecciona_el_grupo() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        model = <Tullpu as App>::update(model, Msg::Agrupar(id), &Handle::for_test());
+        // Hay un grupo nuevo y la capa cuelga de él.
+        let gid = model.seleccionada.unwrap();
+        assert_ne!(gid, id, "la selección pasa al grupo");
+        let grupo = model.lienzo.capa(gid).unwrap();
+        assert!(grupo.es_grupo());
+        assert_eq!(model.lienzo.capa(id).unwrap().grupo, Some(gid));
+        // El render sigue siendo válido.
+        assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
+    }
+
+    #[test]
+    fn toggle_clipping_alterna_el_flag() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        assert!(!model.lienzo.capa(id).unwrap().clipping);
+        model = <Tullpu as App>::update(model, Msg::ToggleClipping(id), &Handle::for_test());
+        assert!(model.lienzo.capa(id).unwrap().clipping, "ON tras 1er toggle");
+        model = <Tullpu as App>::update(model, Msg::ToggleClipping(id), &Handle::for_test());
+        assert!(!model.lienzo.capa(id).unwrap().clipping, "OFF tras 2do toggle");
+    }
+
+    #[test]
+    fn agregar_ajuste_apila_capa_de_ajuste_y_compone() {
+        let mut model = modelo_minimo();
+        let n_antes = model.lienzo.capas.len();
+        model = <Tullpu as App>::update(
+            model,
+            Msg::AgregarAjuste(OpLocal::Invertir),
+            &Handle::for_test(),
+        );
+        assert_eq!(model.lienzo.capas.len(), n_antes + 1);
+        let id = model.seleccionada.unwrap();
+        let aj = model.lienzo.capa(id).unwrap();
+        assert!(aj.op_ajuste().is_some(), "es capa de ajuste");
+        assert!(matches!(aj.op_ajuste().unwrap(), OpLocal::Invertir));
+        assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
+    }

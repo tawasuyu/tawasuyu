@@ -385,6 +385,17 @@ pub(crate) enum Msg {
     Duplicar(Uuid),
     Eliminar(Uuid),
     Agregar(OpLocal),
+    /// Agrega una **capa de ajuste** no destructiva encima de la seleccionada.
+    /// A diferencia de `Agregar` (que deriva de UNA madre y cachea), el ajuste
+    /// aplica `op` al compuesto de todo lo que tiene debajo dentro de su grupo,
+    /// recalculado en vivo al componer. Ver `ClaseCapa::Ajuste`.
+    AgregarAjuste(OpLocal),
+    /// Mete la capa `id` en una carpeta-grupo nueva (Photoshop: "group layer").
+    /// La selección pasa al grupo recién creado.
+    Agrupar(Uuid),
+    /// Alterna la clipping mask de la capa `id`: cuando está activa, la capa se
+    /// recorta a la alfa de la capa inmediatamente inferior de su grupo.
+    ToggleClipping(Uuid),
     AgregarIa(OpPixel),
     Recargar,
     Exportar(FormatoExport),

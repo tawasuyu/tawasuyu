@@ -96,6 +96,8 @@ mod grupo_06;
             edit_active: usize::MAX,
             edit_anim: llimphi_motion::Tween::idle(1.0),
             clipboard: llimphi_clipboard::SystemClipboard::new(),
+            toasts: Vec::new(),
+            next_toast: 0,
         }
     }
 

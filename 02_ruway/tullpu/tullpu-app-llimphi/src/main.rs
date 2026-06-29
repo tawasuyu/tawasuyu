@@ -243,6 +243,41 @@ impl App for Tullpu {
                     pushear_snapshot(&mut model, None);
                 }
             }
+            Msg::AgregarAjuste(op) => {
+                // La capa de ajuste no necesita madre: opera sobre el
+                // compuesto inferior. Se apila encima de la seleccionada.
+                let nombre = format!("ajuste · {}", op_etiqueta(&op));
+                let mut nueva = Capa::ajuste(nombre, op);
+                let nuevo_id = nueva.id;
+                // Hereda el grupo de la capa seleccionada para caer en el mismo
+                // scope (si la selección está dentro de una carpeta).
+                nueva.grupo = model
+                    .seleccionada
+                    .and_then(|id| model.lienzo.capa(id))
+                    .and_then(|c| c.grupo);
+                model.lienzo.apilar(nueva);
+                model.seleccionada = Some(nuevo_id);
+                aplicar_y_recomponer(&mut model);
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::Agrupar(id) => {
+                if let Some(gid) = model.lienzo.agrupar(&[id], "grupo") {
+                    model.seleccionada = Some(gid);
+                    aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, None);
+                    model.estado = "capa agrupada".into();
+                }
+            }
+            Msg::ToggleClipping(id) => {
+                if let Some(c) = model.lienzo.capa_mut(id) {
+                    c.clipping = !c.clipping;
+                    let on = c.clipping;
+                    aplicar_y_recomponer(&mut model);
+                    pushear_snapshot(&mut model, None);
+                    model.estado =
+                        if on { "máscara de recorte ON" } else { "máscara de recorte OFF" }.into();
+                }
+            }
             Msg::AgregarIa(op) => {
                 if let Some(madre_id) = model.seleccionada {
                     let modelo = model.proveedor.model_id().name.clone();
@@ -1392,6 +1427,13 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(recortar),
         )
         .menu(
+            Menu::new("Capa")
+                .item(MenuItem::new("Agrupar", "capa.agrupar"))
+                .item(MenuItem::new("Máscara de recorte", "capa.clipping").separated())
+                .item(MenuItem::new("Ajuste: Invertir", "capa.ajuste.invertir"))
+                .item(MenuItem::new("Ajuste: Curvas", "capa.ajuste.curvas")),
+        )
+        .menu(
             Menu::new("Ver")
                 .item(MenuItem::new("Acercar", "view.zoom_in").shortcut("+"))
                 .item(MenuItem::new("Alejar", "view.zoom_out").shortcut("-"))
@@ -1418,6 +1460,12 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "edit.eliminar" => sel.map(Msg::Eliminar),
         "edit.combinar" => sel.map(Msg::Combinar),
         "edit.aplanar" => Some(Msg::AplanarVisibles),
+        "capa.agrupar" => sel.map(Msg::Agrupar),
+        "capa.clipping" => sel.map(Msg::ToggleClipping),
+        "capa.ajuste.invertir" => Some(Msg::AgregarAjuste(tullpu_core::OpLocal::Invertir)),
+        "capa.ajuste.curvas" => {
+            Some(Msg::AgregarAjuste(tullpu_core::OpLocal::curvas_identidad()))
+        }
         "edit.copiar" => Some(Msg::CopiarSeleccion),
         "edit.cortar" => Some(Msg::CortarSeleccion),
         "edit.pegar" => Some(Msg::PegarPortapapeles),
