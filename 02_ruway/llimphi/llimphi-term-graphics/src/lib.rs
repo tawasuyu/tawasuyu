@@ -92,6 +92,10 @@ enum State {
     Dcs,
     /// Dentro de DCS y vimos ESC.
     DcsEsc,
+    /// Dentro de CSI (`\e[`), acumulando params/intermedios hasta el byte
+    /// final (`0x40..=0x7e`). La CSI se reenvía **verbatim** al passthrough;
+    /// sólo emitimos una respuesta si resulta una query de capacidad.
+    Csi,
 }
 
 /// Autómata streaming que separa el texto/ANSI normal de las secuencias
@@ -146,6 +150,10 @@ impl GraphicsScanner {
                         self.seq.clear();
                         self.state = State::Dcs;
                     }
+                    b'[' => {
+                        self.seq.clear();
+                        self.state = State::Csi;
+                    }
                     ESC => {
                         // ESC ESC: el primero no era nuestro → a passthrough;
                         // seguimos evaluando este nuevo ESC.
@@ -164,6 +172,7 @@ impl GraphicsScanner {
                 State::ApcEsc => self.accumulate_esc(b, &mut out, false),
                 State::Dcs => self.accumulate(b, &mut out, true),
                 State::DcsEsc => self.accumulate_esc(b, &mut out, true),
+                State::Csi => self.accumulate_csi(b, passthrough, &mut out),
             }
         }
         out
@@ -206,6 +215,40 @@ impl GraphicsScanner {
         }
     }
 
+    /// Byte dentro de una CSI (`\e[…`). La CSI siempre se reenvía verbatim al
+    /// passthrough (el vt100 la ve idéntica); si es una query de capacidad,
+    /// además emitimos su respuesta.
+    fn accumulate_csi(
+        &mut self,
+        b: u8,
+        passthrough: &mut Vec<u8>,
+        out: &mut Vec<GraphicsCommand>,
+    ) {
+        if b == ESC {
+            // CSI abortada por un ESC nuevo: descargamos lo acumulado y
+            // re-evaluamos este ESC.
+            passthrough.extend_from_slice(&[ESC, b'[']);
+            passthrough.extend_from_slice(&self.seq);
+            self.seq.clear();
+            self.state = State::Esc;
+        } else if (0x40..=0x7e).contains(&b) {
+            // Byte final: la CSI está completa.
+            self.seq.push(b);
+            passthrough.extend_from_slice(&[ESC, b'[']);
+            passthrough.extend_from_slice(&self.seq);
+            if let Some(response) = csi_query_response(&self.seq) {
+                out.push(GraphicsCommand::Query { response });
+            }
+            self.seq.clear();
+            self.state = State::Normal;
+        } else {
+            // Params (0x30..0x3f) / intermedios (0x20..0x2f).
+            if self.seq.len() < self.max_seq {
+                self.seq.push(b);
+            }
+        }
+    }
+
     /// Cierra la secuencia acumulada: la decodifica y resetea a Normal.
     fn finish(&mut self, out: &mut Vec<GraphicsCommand>, is_dcs: bool) {
         let seq = std::mem::take(&mut self.seq);
@@ -223,6 +266,35 @@ impl GraphicsScanner {
         } else if let Some(cmd) = self.kitty.feed_apc(&seq) {
             out.push(cmd);
         }
+    }
+}
+
+/// Si `csi` (los bytes de una CSI tras `\e[`, incluido el byte final) es una
+/// query de capacidad gráfica, devuelve la respuesta que el emulador debe
+/// escribir por el stdin del PTY para anunciar soporte. Anunciamos sixel
+/// porque el decodificador lo soporta; las demás CSI devuelven `None`.
+fn csi_query_response(csi: &[u8]) -> Option<Vec<u8>> {
+    match csi {
+        // Primary Device Attributes (`\e[c` / `\e[0c`). El `4` en la respuesta
+        // es el flag que chafa/otros leen como "soporta sixel". 62 = VT220.
+        b"c" | b"0c" => Some(b"\x1b[?62;4c".to_vec()),
+        // Secondary DA (`\e[>c` / `\e[>0c`) — versión del terminal, estilo
+        // xterm. Algunos programas la piden antes de decidir capacidades.
+        b">c" | b">0c" => Some(b"\x1b[>1;95;0c".to_vec()),
+        // XTSMGRAPHICS (`\e[?Pi;Pa;…S`): consulta de registros de color /
+        // geometría sixel. Respondemos valores holgados (la sizing real la
+        // hace el caller con su tamaño de celda).
+        _ if csi.first() == Some(&b'?') && csi.last() == Some(&b'S') => {
+            let body = &csi[1..csi.len() - 1];
+            let mut it = body.split(|&b| b == b';');
+            let pi = it.next().and_then(|v| std::str::from_utf8(v).ok()?.parse::<u32>().ok());
+            match pi {
+                Some(1) => Some(b"\x1b[?1;0;65536S".to_vec()), // registros de color
+                Some(2) => Some(b"\x1b[?2;0;1000;1000S".to_vec()), // geometría máx.
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -307,6 +379,50 @@ mod tests {
         let cmds = sc.feed(seq.as_bytes(), &mut pt);
         assert_eq!(cmds.len(), 1);
         assert_eq!(pt, "antesdespués".as_bytes());
+    }
+
+    /// Primary DA (`\e[c`) → respuesta con flag sixel (`4`), y la query igual
+    /// se reenvía verbatim al vt100.
+    #[test]
+    fn da_primary_anuncia_sixel() {
+        let mut sc = GraphicsScanner::new();
+        let mut pt = Vec::new();
+        let cmds = sc.feed(b"\x1b[c", &mut pt);
+        assert_eq!(pt, b"\x1b[c", "la CSI debe pasar idéntica al vt100");
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            GraphicsCommand::Query { response } => {
+                assert_eq!(response, b"\x1b[?62;4c");
+            }
+            other => panic!("se esperaba Query, vino {other:?}"),
+        }
+    }
+
+    /// XTSMGRAPHICS de registros de color (`\e[?1;1;0S`) → respuesta `?1;0;…S`.
+    #[test]
+    fn xtsmgraphics_registros_color() {
+        let mut sc = GraphicsScanner::new();
+        let mut pt = Vec::new();
+        let cmds = sc.feed(b"\x1b[?1;1;0S", &mut pt);
+        assert_eq!(pt, b"\x1b[?1;1;0S");
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            GraphicsCommand::Query { response } => {
+                let s = String::from_utf8_lossy(response);
+                assert!(s.starts_with("\x1b[?1;0;"), "resp: {s:?}");
+            }
+            other => panic!("se esperaba Query, vino {other:?}"),
+        }
+    }
+
+    /// Una CSI normal (cursor home `\e[H`) no genera respuesta y pasa intacta.
+    #[test]
+    fn csi_normal_sin_respuesta() {
+        let mut sc = GraphicsScanner::new();
+        let mut pt = Vec::new();
+        let cmds = sc.feed(b"\x1b[H\x1b[2J", &mut pt);
+        assert!(cmds.is_empty());
+        assert_eq!(pt, b"\x1b[H\x1b[2J");
     }
 
     /// kitty f=100 (PNG embebido) — el camino real de chafa/icat. Construimos
