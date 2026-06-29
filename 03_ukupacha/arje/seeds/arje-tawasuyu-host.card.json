@@ -261,6 +261,119 @@
     },
     {
       "schema_version": 1,
+      "id": "01HQAR53D4M2NBV8KZTYXFHV08",
+      "label": "udevd",
+      "provides": [],
+      "requires": [],
+      "permissions": {
+        "networking": "none",
+        "filesystem": "read-write",
+        "ipc": {
+          "allow": []
+        },
+        "processes": true
+      },
+      "soma": {
+        "namespaces": {
+          "mount": false,
+          "pid": false,
+          "net": false,
+          "uts": false,
+          "ipc": false,
+          "user": false,
+          "cgroup": false
+        },
+        "rlimits": {
+          "mem_bytes": null,
+          "nproc": null,
+          "nofile": null
+        },
+        "cgroup": {
+          "path": "arje.slice/udevd",
+          "cpu_weight": null,
+          "io_weight": null
+        },
+        "cpu_affinity": null
+      },
+      "payload": {
+        "Native": {
+          "exec": "/usr/bin/udevd",
+          "argv": [],
+          "envp": []
+        }
+      },
+      "supervision": {
+        "Restart": {
+          "initial": 300,
+          "max": 10000
+        }
+      },
+      "lifecycle": "daemon",
+      "priority": "high",
+      "flow": {
+        "input": [],
+        "output": []
+      },
+      "genesis": []
+    },
+    {
+      "schema_version": 1,
+      "id": "01HQAR53D4M2NBV8KZTYXFHV09",
+      "label": "udev-coldplug",
+      "provides": [],
+      "requires": [],
+      "permissions": {
+        "networking": "none",
+        "filesystem": "read-write",
+        "ipc": {
+          "allow": []
+        },
+        "processes": true
+      },
+      "soma": {
+        "namespaces": {
+          "mount": false,
+          "pid": false,
+          "net": false,
+          "uts": false,
+          "ipc": false,
+          "user": false,
+          "cgroup": false
+        },
+        "rlimits": {
+          "mem_bytes": null,
+          "nproc": null,
+          "nofile": null
+        },
+        "cgroup": {
+          "path": "arje.slice/udev",
+          "cpu_weight": null,
+          "io_weight": null
+        },
+        "cpu_affinity": null
+      },
+      "payload": {
+        "Native": {
+          "exec": "/usr/bin/udevadm",
+          "argv": [
+            "trigger",
+            "--action=add",
+            "--settle"
+          ],
+          "envp": []
+        }
+      },
+      "supervision": "OneShot",
+      "lifecycle": "oneshot",
+      "priority": "high",
+      "flow": {
+        "input": [],
+        "output": []
+      },
+      "genesis": []
+    },
+    {
+      "schema_version": 1,
       "id": "01HQAR53D4M2NBV8KZTYXFHV07",
       "label": "seatd",
       "provides": [],

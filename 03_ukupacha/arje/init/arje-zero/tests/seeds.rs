@@ -157,6 +157,12 @@ fn tawasuyu_host_seed_arranca_dm_real_con_seatd() {
         card.genesis.iter().any(|c| c.label == "seatd"),
         "la seed debe traer un Ente seatd antes del compositor",
     );
+    // udevd + coldplug: sin udevd los dispositivos no llevan ID_INPUT y libinput
+    // no ve teclado/mouse bajo arje (no hay systemd-udevd corriendo).
+    assert!(
+        card.genesis.iter().any(|c| c.label == "udevd"),
+        "la seed debe traer udevd (si no, libinput no encuentra el teclado)",
+    );
 
     let splash = card
         .genesis
