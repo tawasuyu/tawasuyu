@@ -259,6 +259,7 @@ pub(crate) fn inicializar() -> Model {
         pluma_capa: None,
         pluma_ancla: None,
         pluma_rect: None,
+        pluma_control: None,
         portapapeles: None,
         editando_mascara: false,
         valor_mascara: 255,

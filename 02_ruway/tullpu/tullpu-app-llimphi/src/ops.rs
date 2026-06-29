@@ -1470,6 +1470,22 @@ pub(crate) fn editar_vector_seleccionado(
     }
 }
 
+/// Control Bézier de la capa `id` más cercano a `(ix, iy)` dentro de `umbral`;
+/// `(índice de comando, es_c1)` o `None`.
+fn control_cercano(model: &Model, id: uuid::Uuid, ix: f32, iy: f32, umbral: f32) -> Option<(usize, bool)> {
+    let p = model.lienzo.capa(id)?.params_vector()?;
+    let mut mejor = None;
+    let mut mejor_d = umbral * umbral;
+    for (idx, es_c1, [ax, ay]) in p.puntos_control() {
+        let d = (ax - ix).powi(2) + (ay - iy).powi(2);
+        if d <= mejor_d {
+            mejor_d = d;
+            mejor = Some((idx, es_c1));
+        }
+    }
+    mejor
+}
+
 /// Ancla de la capa vectorial `id` más cercana a `(ix, iy)` dentro de `umbral`
 /// px-imagen; `None` si ninguna. Devuelve el índice de comando del ancla.
 fn ancla_cercana(model: &Model, id: uuid::Uuid, ix: f32, iy: f32, umbral: f32) -> Option<usize> {
@@ -1506,25 +1522,48 @@ pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32)
         .unwrap_or(1.0);
     let umbral = (9.0 / s.max(1e-6)) as f32;
 
-    // Si hay capa en edición y el press cae sobre un ancla, la agarramos.
-    if let Some(id) = model.pluma_capa {
+    // Capa objetivo de la edición: la que está en curso, o la seleccionada si
+    // es vectorial (la adoptamos para editarla con la pluma).
+    let objetivo = model.pluma_capa.or_else(|| {
+        model.seleccionada.filter(|&id| {
+            model.lienzo.capa(id).map(|c| c.params_vector().is_some()).unwrap_or(false)
+        })
+    });
+
+    // 1) Punto de control Bézier (prioridad sobre las anclas): lo agarra.
+    if let Some(id) = objetivo {
+        if let Some((idx, es_c1)) = control_cercano(model, id, ix, iy, umbral) {
+            model.pluma_capa = Some(id);
+            model.pluma_control = Some((idx, es_c1, ix, iy));
+            return false;
+        }
+    }
+
+    // 2) Ancla: Alt+click la borra; Shift+click convierte su segmento recto en
+    //    curva (para poder curvarlo); si no, la agarra para arrastrar.
+    if let Some(id) = objetivo {
         if let Some(idx) = ancla_cercana(model, id, ix, iy, umbral) {
+            model.pluma_capa = Some(id);
+            if model.alt_held {
+                editar_params_vector(model, id, |p| p.eliminar_vertice(idx));
+                model.pluma_ancla = None;
+                return true;
+            }
+            if model.shift_held {
+                editar_params_vector(model, id, |p| p.convertir_a_curva(idx));
+                model.pluma_ancla = None;
+                return true;
+            }
             model.pluma_ancla = Some((idx, ix, iy));
             return false;
         }
     }
 
-    // Si no hay capa en edición pero la seleccionada es vectorial, la adoptamos.
+    // 3) Adoptar la capa seleccionada (sin ancla bajo el cursor) para seguir
+    //    agregándole vértices.
     if model.pluma_capa.is_none() {
-        if let Some(id) = model.seleccionada {
-            if model.lienzo.capa(id).map(|c| c.params_vector().is_some()).unwrap_or(false) {
-                if let Some(idx) = ancla_cercana(model, id, ix, iy, umbral) {
-                    model.pluma_capa = Some(id);
-                    model.pluma_ancla = Some((idx, ix, iy));
-                    return false;
-                }
-                model.pluma_capa = Some(id);
-            }
+        if let Some(id) = objetivo {
+            model.pluma_capa = Some(id);
         }
     }
 
@@ -1553,9 +1592,6 @@ pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32)
 /// Pluma: arrastre — mueve el ancla agarrada por `(dx, dy)` (deltas de pantalla,
 /// convertidos a coords-imagen con la escala vigente).
 pub(crate) fn pluma_arrastrar(model: &mut Model, dx: f32, dy: f32) {
-    let Some((idx, px, py)) = model.pluma_ancla else {
-        return;
-    };
     let Some(id) = model.pluma_capa else { return };
     let (rw, rh) = model.pluma_rect.unwrap_or((0.0, 0.0));
     let s = crate::viewport::transform_lienzo(
@@ -1565,9 +1601,19 @@ pub(crate) fn pluma_arrastrar(model: &mut Model, dx: f32, dy: f32) {
     .map(|(s, _, _)| s as f32)
     .unwrap_or(1.0)
     .max(1e-6);
-    let (nx, ny) = (px + dx / s, py + dy / s);
-    model.pluma_ancla = Some((idx, nx, ny));
-    editar_params_vector(model, id, |p| p.mover_ancla(idx, nx, ny));
+
+    // Prioridad al control Bézier; si no hay, mueve el ancla.
+    if let Some((idx, es_c1, px, py)) = model.pluma_control {
+        let (nx, ny) = (px + dx / s, py + dy / s);
+        model.pluma_control = Some((idx, es_c1, nx, ny));
+        editar_params_vector(model, id, |p| p.mover_control(idx, es_c1, nx, ny));
+        return;
+    }
+    if let Some((idx, px, py)) = model.pluma_ancla {
+        let (nx, ny) = (px + dx / s, py + dy / s);
+        model.pluma_ancla = Some((idx, nx, ny));
+        editar_params_vector(model, id, |p| p.mover_ancla(idx, nx, ny));
+    }
 }
 
 /// Pluma: cierra el path en edición y termina la edición (Enter).

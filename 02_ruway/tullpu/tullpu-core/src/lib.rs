@@ -497,6 +497,58 @@ impl ParamsVector {
         }
     }
 
+    /// Puntos de control de las cúbicas, cada uno con `(índice de comando,
+    /// es_c1, [x, y])`. `es_c1 = true` es el control saliente del ancla previa;
+    /// `false` es el entrante al endpoint de esa curva. Para el editor de
+    /// handles de Bézier.
+    pub fn puntos_control(&self) -> Vec<(usize, bool, [f32; 2])> {
+        let mut v = Vec::new();
+        for (i, c) in self.comandos.iter().enumerate() {
+            if let ComandoPath::CurvaA { c1x, c1y, c2x, c2y, .. } = *c {
+                v.push((i, true, [c1x, c1y]));
+                v.push((i, false, [c2x, c2y]));
+            }
+        }
+        v
+    }
+
+    /// Mueve un punto de control de la cúbica en `idx` a `(x, y)`. `es_c1`
+    /// elige el control saliente (`c1`) o el entrante (`c2`). No-op si `idx` no
+    /// es una `CurvaA`.
+    pub fn mover_control(&mut self, idx: usize, es_c1: bool, x: f32, y: f32) {
+        if let Some(ComandoPath::CurvaA { c1x, c1y, c2x, c2y, .. }) = self.comandos.get_mut(idx) {
+            if es_c1 {
+                *c1x = x;
+                *c1y = y;
+            } else {
+                *c2x = x;
+                *c2y = y;
+            }
+        }
+    }
+
+    /// Convierte el segmento recto (`LineaA`) en `idx` a una cúbica, sembrando
+    /// los controles a 1/3 y 2/3 del segmento (curva idéntica a la recta hasta
+    /// que el usuario arrastre los handles). No-op si `idx` no es `LineaA` o no
+    /// hay punto previo.
+    pub fn convertir_a_curva(&mut self, idx: usize) {
+        let (ex, ey) = match self.comandos.get(idx) {
+            Some(ComandoPath::LineaA { x, y }) => (*x, *y),
+            _ => return,
+        };
+        let prev = match idx.checked_sub(1).and_then(|i| self.comandos.get(i)) {
+            Some(ComandoPath::MoverA { x, y })
+            | Some(ComandoPath::LineaA { x, y })
+            | Some(ComandoPath::CurvaA { x, y, .. }) => (*x, *y),
+            _ => return,
+        };
+        let c1 = (prev.0 + (ex - prev.0) / 3.0, prev.1 + (ey - prev.1) / 3.0);
+        let c2 = (prev.0 + 2.0 * (ex - prev.0) / 3.0, prev.1 + 2.0 * (ey - prev.1) / 3.0);
+        self.comandos[idx] = ComandoPath::CurvaA {
+            c1x: c1.0, c1y: c1.1, c2x: c2.0, c2y: c2.1, x: ex, y: ey,
+        };
+    }
+
     /// Traslada **todo** el path por `(dx, dy)` (mover la capa vectorial entera).
     pub fn trasladar(&mut self, dx: f32, dy: f32) {
         for c in &mut self.comandos {
@@ -1186,6 +1238,29 @@ mod tests {
         let mut p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
         p.trasladar(5.0, -3.0);
         assert_eq!(p.puntos_ancla()[0].1, [5.0, -3.0]);
+    }
+
+    #[test]
+    fn convertir_a_curva_y_mover_control() {
+        let mut p = ParamsVector {
+            comandos: vec![
+                ComandoPath::MoverA { x: 0.0, y: 0.0 },
+                ComandoPath::LineaA { x: 9.0, y: 0.0 },
+            ],
+            relleno: Some([0, 0, 0, 255]),
+            regla: ReglaRelleno::NoCero,
+            trazo: None,
+            ancho_trazo: 0.0,
+        };
+        p.convertir_a_curva(1);
+        // El segmento es ahora una cúbica con controles a 1/3 y 2/3.
+        assert!(matches!(p.comandos[1], ComandoPath::CurvaA { .. }));
+        let ctrls = p.puntos_control();
+        assert_eq!(ctrls.len(), 2);
+        assert_eq!(ctrls[0].2, [3.0, 0.0]); // c1 a 1/3
+        assert_eq!(ctrls[1].2, [6.0, 0.0]); // c2 a 2/3
+        p.mover_control(1, true, 3.0, 5.0); // bend c1 hacia arriba
+        assert_eq!(p.puntos_control()[0].2, [3.0, 5.0]);
     }
 
     #[test]

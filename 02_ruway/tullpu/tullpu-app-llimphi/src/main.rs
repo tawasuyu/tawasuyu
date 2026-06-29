@@ -1053,7 +1053,8 @@ impl App for Tullpu {
                 pluma_arrastrar(&mut model, dx, dy);
             }
             Msg::PlumaSoltar => {
-                if model.pluma_ancla.take().is_some() {
+                let movido = model.pluma_ancla.take().is_some() || model.pluma_control.take().is_some();
+                if movido {
                     pushear_snapshot(&mut model, None);
                 }
             }

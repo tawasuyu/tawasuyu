@@ -9,7 +9,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{
-    Affine, BezPath, Line, Point, Rect as KurboRect, Stroke,
+    Affine, BezPath, Circle, Line, Point, Rect as KurboRect, Stroke,
 };
 use llimphi_ui::llimphi_raster::peniko::{BlendMode, Color, Fill, ImageBrush as Image};
 use llimphi_ui::llimphi_text::Alignment;
@@ -971,7 +971,7 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         Msg::CambiarHerramienta(Herramienta::Sanar),
     )));
     let etiqueta_pluma = if model.herramienta == Herramienta::Pluma {
-        "● pluma (n · Enter cierra)"
+        "● pluma · Enter cierra · Alt borra · Shift curva"
     } else {
         "○ pluma (n)"
     };
@@ -1660,12 +1660,35 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
             let transform_libre = model.transform.clone();
             // Anclas de la capa vectorial en edición con la pluma: se dibujan
             // como handles para mover puntos. Capturamos sus coords-imagen.
-            let anclas_pluma: Vec<[f32; 2]> = model
+            let capa_vec_edicion = model
                 .pluma_capa
                 .or(if model.herramienta == Herramienta::Pluma { model.seleccionada } else { None })
                 .and_then(|id| model.lienzo.capa(id))
-                .and_then(|c| c.params_vector())
+                .and_then(|c| c.params_vector());
+            let anclas_pluma: Vec<[f32; 2]> = capa_vec_edicion
                 .map(|p| p.puntos_ancla().into_iter().map(|(_, xy)| xy).collect())
+                .unwrap_or_default();
+            // Controles Bézier: `(control, ancla a la que se conecta)` para
+            // dibujar el handle y su línea-guía. c1 cuelga del punto previo;
+            // c2 del endpoint de la curva.
+            let controles_pluma: Vec<([f32; 2], [f32; 2])> = capa_vec_edicion
+                .map(|p| {
+                    let mut v = Vec::new();
+                    let mut prev = [0.0f32, 0.0];
+                    for c in &p.comandos {
+                        match *c {
+                            tullpu_core::ComandoPath::MoverA { x, y }
+                            | tullpu_core::ComandoPath::LineaA { x, y } => prev = [x, y],
+                            tullpu_core::ComandoPath::CurvaA { c1x, c1y, c2x, c2y, x, y } => {
+                                v.push(([c1x, c1y], prev));
+                                v.push(([c2x, c2y], [x, y]));
+                                prev = [x, y];
+                            }
+                            tullpu_core::ComandoPath::Cerrar => {}
+                        }
+                    }
+                    v
+                })
                 .unwrap_or_default();
             let cuerpo_paint = View::new(Style {
                 flex_grow: 1.0,
@@ -1746,6 +1769,25 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                             &krect,
                         );
                     }
+                }
+                // Controles Bézier: línea-guía del ancla al control + un
+                // circulito por control (se dibujan debajo de las anclas).
+                for (ctrl, anc) in controles_pluma.iter() {
+                    let cx = tx + (ctrl[0] as f64) * s;
+                    let cy = ty + (ctrl[1] as f64) * s;
+                    let ax = tx + (anc[0] as f64) * s;
+                    let ay = ty + (anc[1] as f64) * s;
+                    scene.stroke(
+                        &Stroke::new(1.0),
+                        Affine::IDENTITY,
+                        Color::from_rgba8(180, 180, 180, 200),
+                        None,
+                        &Line::new(Point::new(ax, ay), Point::new(cx, cy)),
+                    );
+                    let rr = 3.5_f64;
+                    let circ = Circle::new(Point::new(cx, cy), rr);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgba8(255, 230, 140, 255), None, &circ);
+                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 200), None, &circ);
                 }
                 // Handles de la pluma: un cuadradito por ancla del path en
                 // edición (coords-imagen → pantalla con el transform del lienzo).

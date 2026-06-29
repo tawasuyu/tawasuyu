@@ -150,6 +150,9 @@ pub(crate) struct Model {
     /// Rect de pintado del lienzo (`rw, rh`) capturado en el último press —
     /// necesario para convertir deltas de drag de pantalla a coords-imagen.
     pub(crate) pluma_rect: Option<(f32, f32)>,
+    /// Punto de control Bézier agarrado: `(índice de comando, es_c1, x, y)`.
+    /// Tiene prioridad sobre `pluma_ancla` durante el drag.
+    pub(crate) pluma_control: Option<(usize, bool, f32, f32)>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
