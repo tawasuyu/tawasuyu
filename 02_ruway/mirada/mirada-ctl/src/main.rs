@@ -424,8 +424,8 @@ Acciones de mirada-ctl:
  Escritorios:
   workspace <n>              activa el escritorio n (1..9)
   workspace-next / -prev     escritorio siguiente / anterior
-  send-to-workspace <n>      manda la enfocada al escritorio n (sigue el foco)
-  move-to-workspace <n>      manda la enfocada al escritorio n (sin seguir)
+  send-to-workspace <n>      manda la enfocada al escritorio n (sin saltar; te quedás)
+  move-to-workspace <n>      manda la enfocada al escritorio n (y saltás con ella)
  Monitores:
   focus-output-next          pasa el foco al siguiente monitor
   focus-output-<dir>         enfoca el monitor en dirección up/down/left/right
