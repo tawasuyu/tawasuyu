@@ -134,6 +134,13 @@ if [ ! -e /etc/arje/splash.conf ]; then
     printf 'source = builtin\nlogs = auto\n' | sudo tee /etc/arje/splash.conf >/dev/null
 fi
 
+# Backup de cualquier seed previa ANTES de pisarla (sólo la primera vez, para
+# no perder el original tras varias corridas). Si ya había una seed instalada
+# (p.ej. la absorbida arje.seed.host), queda recuperable.
+if [ -f "$SEED_DST" ] && [ ! -f "$SEED_DST.pre-arje-init.bak" ]; then
+    sudo cp -a "$SEED_DST" "$SEED_DST.pre-arje-init.bak"
+    info "backup de la seed previa en $SEED_DST.pre-arje-init.bak"
+fi
 info "instalando la seed en $SEED_DST"
 sudo install -Dm644 "$SEED_SRC" "$SEED_DST"
 # Chequeo de integridad: cada exec Native de la seed debe existir en el root real.
@@ -160,7 +167,7 @@ info "ecosistema sembrado en $AUTO (pata-llimphi · shuma-shell-llimphi · pata-
 # duplicado y los `echo` cosméticos. Si no encontramos un kernel ahí, abortamos
 # (mejor que adivinar el arranque).
 info "clonando tu entrada de arranque default desde $GRUB_CFG"
-BODY="$(awk '
+BODY="$(sudo awk '
     !seen && /^[[:space:]]*menuentry .*\{/ { seen=1; next }   # entra al 1er menuentry
     seen && /^[[:space:]]*}[[:space:]]*$/  { exit }           # cierra en su } (con o sin sangría)
     seen { print }
@@ -192,7 +199,7 @@ rm -f "$TMP_SNIP"
 info "regenerando $GRUB_CFG (agrega la entrada arje; tu default no cambia)"
 sudo grub-mkconfig -o "$GRUB_CFG" >/dev/null 2>&1 || \
     die "grub-mkconfig falló — quitá $GRUB_SNIPPET y regenerá; tu arranque previo sigue intacto."
-grep -q "$GRUB_TITLE" "$GRUB_CFG" && info "entrada '$GRUB_TITLE' presente en el menú." || \
+sudo grep -q "$GRUB_TITLE" "$GRUB_CFG" && info "entrada '$GRUB_TITLE' presente en el menú." || \
     echo "  ⚠ no veo la entrada en $GRUB_CFG — revisá el snippet."
 
 cat <<FIN
