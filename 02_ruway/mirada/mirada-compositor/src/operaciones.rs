@@ -2242,6 +2242,22 @@ impl App {
             (_, Ok(wd)) => wd,
             _ => String::new(),
         };
+        // El socket Wayland lo creó el compositor como ROOT en su runtime dir
+        // (p. ej. /run/arje, que arje deja en 0700). La sesión corre como el
+        // USUARIO → sin esto no puede ni entrar al dir ni conectar al socket:
+        // los clientes (pata, etc.) mueren con `NoCompositor`. Abrimos el dir
+        // (traverse) y le damos el socket al usuario. No-op cuando el compositor
+        // ya corre como el usuario (su runtime dir es propio).
+        if !wl.is_empty() {
+            if let Some(dir) = std::path::Path::new(&wl).parent() {
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+            }
+            let _ = nix::unistd::chown(
+                wl.as_str(),
+                Some(nix::unistd::Uid::from_raw(user.uid)),
+                Some(nix::unistd::Gid::from_raw(user.gid)),
+            );
+        }
         let bus_path = format!("{xrd}/bus");
         let dbus_addr = format!("unix:path={bus_path}");
         // El socket de control vive en el runtime dir del COMPOSITOR (p. ej.
