@@ -1185,6 +1185,12 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         hijos.push(envolver_fila(button_view("⨯ quitar trazo".to_string(), &pal, Msg::VectorTrazoQuitar)));
         hijos.push(envolver_fila(button_view("trazo −1 px".to_string(), &pal, Msg::VectorAnchoTrazo(-1.0))));
         hijos.push(envolver_fila(button_view("trazo +1 px".to_string(), &pal, Msg::VectorAnchoTrazo(1.0))));
+        // Gradientes (color activo → transparente sobre el bbox de la forma).
+        let grad = if params.gradiente.is_some() { "gradiente: on" } else { "gradiente: off" };
+        hijos.push(subtitulo(grad));
+        hijos.push(envolver_fila(button_view("◧ gradiente lineal".to_string(), &pal, Msg::VectorGradienteLineal)));
+        hijos.push(envolver_fila(button_view("◉ gradiente radial".to_string(), &pal, Msg::VectorGradienteRadial)));
+        hijos.push(envolver_fila(button_view("⨯ quitar gradiente".to_string(), &pal, Msg::VectorGradienteQuitar)));
         // Booleanos con la capa de abajo (resultado raster, destructivo).
         hijos.push(subtitulo("booleano (con la de abajo)"));
         hijos.push(envolver_fila(button_view("∪ unión".to_string(), &pal, Msg::BooleanoUnion)));

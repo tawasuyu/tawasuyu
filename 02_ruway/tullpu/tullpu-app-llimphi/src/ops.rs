@@ -1501,6 +1501,29 @@ pub(crate) fn editar_params_vector(
     }
 }
 
+/// Bbox `(x0, y0, x1, y1)` de los puntos de ancla del path (para ubicar un
+/// gradiente). Si el path está vacío, devuelve un cuadrado unitario.
+pub(crate) fn bbox_path(p: &tullpu_core::ParamsVector) -> (f32, f32, f32, f32) {
+    let mut it = p.puntos_ancla().into_iter().map(|(_, xy)| xy);
+    let Some([x0, y0]) = it.next() else {
+        return (0.0, 0.0, 1.0, 1.0);
+    };
+    let (mut minx, mut miny, mut maxx, mut maxy) = (x0, y0, x0, y0);
+    for [x, y] in it {
+        minx = minx.min(x);
+        miny = miny.min(y);
+        maxx = maxx.max(x);
+        maxy = maxy.max(y);
+    }
+    if (maxx - minx).abs() < 1.0 {
+        maxx = minx + 1.0;
+    }
+    if (maxy - miny).abs() < 1.0 {
+        maxy = miny + 1.0;
+    }
+    (minx, miny, maxx, maxy)
+}
+
 /// Aplica `f` a los params vectoriales de la capa **seleccionada** y
 /// re-rasteriza. No-op si no hay selección o no es vectorial.
 pub(crate) fn editar_vector_seleccionado(

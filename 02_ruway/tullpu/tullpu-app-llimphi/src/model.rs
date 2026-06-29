@@ -765,6 +765,13 @@ pub(crate) enum Msg {
     VectorTrazoQuitar,
     /// Vector: ajusta el ancho de trazo de la capa seleccionada por el delta px.
     VectorAnchoTrazo(f32),
+    /// Vector: aplica un gradiente **lineal** (color activo → transparente) al
+    /// bbox de la capa seleccionada.
+    VectorGradienteLineal,
+    /// Vector: aplica un gradiente **radial** (color activo → transparente).
+    VectorGradienteRadial,
+    /// Vector: quita el gradiente de la capa seleccionada (vuelve al sólido).
+    VectorGradienteQuitar,
     /// Booleano: combina la capa seleccionada con la de abajo (unión).
     BooleanoUnion,
     /// Booleano: intersección de la capa seleccionada con la de abajo.

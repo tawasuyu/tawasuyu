@@ -1092,6 +1092,30 @@ impl App for Tullpu {
                 });
                 pushear_snapshot(&mut model, None);
             }
+            Msg::VectorGradienteLineal => {
+                let color = model.color_picked.unwrap_or([60, 120, 220, 255]);
+                let transp = [color[0], color[1], color[2], 0];
+                editar_vector_seleccionado(&mut model, |p| {
+                    let (x0, y0, x1, y1) = bbox_path(p);
+                    p.gradiente = Some(tullpu_core::Gradiente::lineal(x0, (y0 + y1) * 0.5, x1, (y0 + y1) * 0.5, color, transp));
+                });
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorGradienteRadial => {
+                let color = model.color_picked.unwrap_or([60, 120, 220, 255]);
+                let transp = [color[0], color[1], color[2], 0];
+                editar_vector_seleccionado(&mut model, |p| {
+                    let (x0, y0, x1, y1) = bbox_path(p);
+                    let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                    let r = (((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt() * 0.5).max(1.0);
+                    p.gradiente = Some(tullpu_core::Gradiente::radial(cx, cy, r, color, transp));
+                });
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorGradienteQuitar => {
+                editar_vector_seleccionado(&mut model, |p| p.gradiente = None);
+                pushear_snapshot(&mut model, None);
+            }
             Msg::BooleanoUnion => {
                 if let Some(id) = model.seleccionada {
                     if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Union) {
