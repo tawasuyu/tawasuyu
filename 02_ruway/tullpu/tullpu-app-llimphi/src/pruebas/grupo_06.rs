@@ -486,3 +486,71 @@
             OrigenCapa::Raster
         ));
     }
+
+    // =====================================================================
+    //  Fase B: varita mágica + selección como máscara (no rectangular)
+    // =====================================================================
+
+    #[test]
+    fn varita_selecciona_region_por_color_y_arma_mascara() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        // 4×4: mitad izquierda (x<2) roja opaca, derecha azul opaca.
+        let (w, h) = (4u32, 4u32);
+        let mut buf = Vec::new();
+        for _y in 0..h {
+            for x in 0..w {
+                if x < 2 {
+                    buf.extend_from_slice(&[255, 0, 0, 255]);
+                } else {
+                    buf.extend_from_slice(&[0, 0, 255, 255]);
+                }
+            }
+        }
+        let hash = model.almacen.insertar(buf);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        // Varita desde (0,0) = rojo: agarra sólo la mitad izquierda.
+        assert!(seleccionar_por_color(&mut model, 0, 0));
+        assert!(model.seleccion_mascara.is_some(), "se armó la máscara");
+        let bbox = model.seleccion.unwrap();
+        assert_eq!(
+            (bbox.x0, bbox.y0, bbox.x1, bbox.y1),
+            (0, 0, 2, 4),
+            "bbox = mitad roja"
+        );
+    }
+
+    #[test]
+    fn limpiar_respeta_mascara_no_rectangular() {
+        let mut model = modelo_minimo();
+        let id = model.seleccionada.unwrap();
+        // Capa blanca opaca 4×4.
+        let hash = model.almacen.insertar(vec![255u8; 4 * 4 * 4]);
+        model.lienzo.capa_mut(id).unwrap().contenido = hash;
+        // Máscara: sólo el píxel (0,0) seleccionado.
+        let mut mask = vec![0u8; 16];
+        mask[0] = 255;
+        let mh = model.almacen.insertar(mask);
+        model.seleccion_mascara = Some(mh);
+        model.seleccion = Some(RectImagen { x0: 0, y0: 0, x1: 1, y1: 1 });
+        assert!(limpiar_seleccion_en_capa(&mut model));
+        let nuevo = model.lienzo.capa(id).unwrap().contenido;
+        let out = model.almacen.obtener(nuevo).unwrap();
+        assert_eq!(out[3], 0, "px (0,0) limpiado por la máscara");
+        assert_eq!(out[7], 255, "px (1,0) intacto (fuera de la máscara)");
+    }
+
+    #[test]
+    fn marquee_limpia_la_mascara_de_la_varita() {
+        // Hacer un marquee rectangular tras una selección de varita debe
+        // descartar la máscara (degrada a rect).
+        let mut model = modelo_minimo();
+        let mh = model.almacen.insertar(vec![255u8; 16]);
+        model.seleccion_mascara = Some(mh);
+        model = <Tullpu as App>::update(
+            model,
+            Msg::SeleccionarTodo,
+            &Handle::for_test(),
+        );
+        assert!(model.seleccion_mascara.is_none(), "select-all limpia la máscara");
+    }

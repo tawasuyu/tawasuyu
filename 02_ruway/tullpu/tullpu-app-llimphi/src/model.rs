@@ -79,6 +79,12 @@ pub(crate) struct Model {
     /// de imagen, no de pantalla — sobrevive a zoom/pan/rotación del
     /// viewport. `None` cuando no hay selección.
     pub(crate) seleccion: Option<RectImagen>,
+    /// Máscara de selección no rectangular (varita mágica / por color):
+    /// hash de un buffer de 1 canal `W·H` (255 = seleccionado). Cuando es
+    /// `Some`, es la forma **autoritativa** de la selección y `seleccion`
+    /// guarda su bounding box (para overlay y ops rápidas). Las herramientas
+    /// rectangulares (marquee/select-all/expand) la limpian — degradan a rect.
+    pub(crate) seleccion_mascara: Option<Hash>,
     /// Estado del drag de selección mientras el usuario sostiene el
     /// click. `None` fuera de un drag. Se commitea a `seleccion` en
     /// el `End` y se limpia.
@@ -202,6 +208,10 @@ pub(crate) enum Herramienta {
     /// activo (en el ancla) a transparente (en el extremo), compuesto
     /// src-over sobre la capa raster (acotado a la selección).
     Degradado,
+    /// Click selecciona por color (varita mágica contigua): inunda desde el
+    /// píxel clickeado sobre el composite y arma una máscara de selección no
+    /// rectangular. Tolerancia fija ([`TOL_BALDE`]).
+    Varita,
 }
 
 impl Herramienta {
@@ -214,6 +224,7 @@ impl Herramienta {
             Herramienta::Pincel => "pincel",
             Herramienta::Borrador => "borrador",
             Herramienta::Degradado => "degradé",
+            Herramienta::Varita => "varita",
         }
     }
 
@@ -578,6 +589,10 @@ pub(crate) enum Msg {
     /// Si la contracción colapsa el rect, limpia la selección. No toca
     /// píxeles ni el historial.
     ExpandirSeleccion(i32),
+    /// Click con la herramienta Varita: selección por color contigua desde el
+    /// píxel local `(lx, ly)` sobre el composite. `rw, rh` = dims del panel
+    /// del lienzo (conversión local→imagen). Arma `seleccion_mascara` + bbox.
+    SeleccionarVarita { lx: f32, ly: f32, rw: f32, rh: f32 },
     /// Click con la herramienta Balde: flood fill desde el píxel local
     /// `(lx, ly)` con el color activo sobre la capa raster seleccionada.
     /// `rw, rh` son las dims del panel del lienzo (para la conversión

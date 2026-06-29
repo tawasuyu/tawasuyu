@@ -896,6 +896,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Balde),
     )));
+    let etiqueta_varita = if model.herramienta == Herramienta::Varita {
+        "● varita (w)"
+    } else {
+        "○ varita (w)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_varita.to_string(),
+        if model.herramienta == Herramienta::Varita {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Varita),
+    )));
     let etiqueta_pincel = if model.herramienta == Herramienta::Pincel {
         "● pincel (p)"
     } else {
@@ -1587,6 +1601,9 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                     }),
                 Herramienta::Balde => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
                     Some(Msg::RellenarFlood { lx, ly, rw, rh })
+                }),
+                Herramienta::Varita => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
+                    Some(Msg::SeleccionarVarita { lx, ly, rw, rh })
                 }),
                 Herramienta::Pincel | Herramienta::Borrador => cuerpo_paint
                     .on_click_at(|lx, ly, rw, rh| {

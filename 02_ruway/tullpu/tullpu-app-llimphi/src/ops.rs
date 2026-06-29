@@ -93,6 +93,7 @@ pub(crate) use tullpu_paint::{
     extraer_rect_a_buffer,
     flood_fill,
     flood_fill_mascara,
+    flood_mascara,
     limpiar_rect_en_buffer,
     recortar_buffer,
     recortar_buffer_bpp,
@@ -521,6 +522,7 @@ pub(crate) fn recortar_lienzo_a_seleccion(model: &mut Model) -> bool {
     let new_h = y1 - y0;
     recortar_lienzo_a(model, x0, y0, x1, y1);
     model.seleccion = None;
+    model.seleccion_mascara = None;
     model.estado = format!(
         "recortado a selección {}×{} (offset {},{})",
         new_w, new_h, x0, y0
@@ -1092,21 +1094,159 @@ pub(crate) fn mover_pixeles_seleccion(
     } else {
         None
     };
+    // Mover píxeles degrada a selección rectangular (la máscara de la varita
+    // no acompaña el desplazamiento por ahora).
+    model.seleccion_mascara = None;
     model.estado = format!("movida selección ({:+}, {:+})", dx, dy);
     true
 }
 
-/// Aplica una transformación de buffer al rect de `model.seleccion`
-/// dentro de la capa raster seleccionada, compartiendo toda la
-/// validación y el cableado entre limpiar (Fase 37) y rellenar
-/// (Fase 38). `transformar(src, w, x0, y0, x1, y1)` produce el buffer
-/// nuevo. Re-clampea el rect contra el lienzo vigente. No-op si: no
-/// hay selección, no hay capa seleccionada, la capa es derivada (su
-/// buffer es cache regenerable), el rect queda con área cero tras
-/// clampear, o el buffer resultante es idéntico al original (mismo
-/// hash content-addressed). Tras la mutación propaga stale al cono
-/// descendiente y recompone; la selección se mantiene. `verbo`
-/// describe el éxito, `sin_cambio` el caso de hash igual.
+/// Bounding box de los píxeles `> 0` de una máscara `W·H`. `None` si la
+/// máscara está toda en cero (selección vacía).
+fn bbox_de_mascara(mascara: &[u8], w: u32, h: u32) -> Option<RectImagen> {
+    let w_us = w as usize;
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0u32, 0u32);
+    let mut hay = false;
+    for y in 0..h {
+        for x in 0..w {
+            if mascara[y as usize * w_us + x as usize] > 0 {
+                hay = true;
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    if hay {
+        Some(RectImagen { x0, y0, x1, y1 })
+    } else {
+        None
+    }
+}
+
+/// Varita mágica / selección por color contigua: compone el lienzo vigente,
+/// inunda desde `(sx, sy)` con tolerancia [`TOL_BALDE`] y guarda el resultado
+/// como **máscara de selección** (`model.seleccion_mascara`) más su bounding
+/// box en `model.seleccion`. No toca píxeles ni el historial. Devuelve `false`
+/// (con estado descriptivo) si la semilla cae fuera o la región sale vacía.
+pub(crate) fn seleccionar_por_color(model: &mut Model, sx: u32, sy: u32) -> bool {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    if sx >= w || sy >= h {
+        model.estado = "varita · fuera de la imagen".into();
+        return false;
+    }
+    let img = match tullpu_render::componer(&model.lienzo, &model.almacen) {
+        Ok(img) => img,
+        Err(_) => {
+            model.estado = "varita · no se pudo componer".into();
+            return false;
+        }
+    };
+    let Some(mascara) = flood_mascara(img.as_raw(), w, h, sx, sy, TOL_BALDE) else {
+        model.estado = "varita · semilla inválida".into();
+        return false;
+    };
+    let Some(bbox) = bbox_de_mascara(&mascara, w, h) else {
+        model.estado = "varita · región vacía".into();
+        return false;
+    };
+    let n: usize = mascara.iter().filter(|&&v| v > 0).count();
+    let hash = model.almacen.insertar(mascara);
+    model.seleccion_mascara = Some(hash);
+    model.seleccion = Some(bbox);
+    model.seleccion_drag = None;
+    model.mover_drag = None;
+    model.estado = format!("varita · {n} px seleccionados");
+    true
+}
+
+/// Cobertura de selección como máscara `W·H` (255 = seleccionado). Prefiere
+/// `seleccion_mascara` (forma exacta de la varita); si no, sintetiza desde el
+/// rect `seleccion`; `None` cuando no hay selección (= lienzo entero). Es el
+/// punto único que consultan las ops destructivas para acotar por píxel.
+pub(crate) fn cobertura_seleccion(model: &Model) -> Option<Vec<u8>> {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let n = (w as usize) * (h as usize);
+    if let Some(hm) = model.seleccion_mascara {
+        return model.almacen.obtener(hm).filter(|b| b.len() == n).map(|b| b.to_vec());
+    }
+    let rect = model.seleccion?;
+    let mut m = vec![0u8; n];
+    let x0 = rect.x0.min(w);
+    let y0 = rect.y0.min(h);
+    let x1 = rect.x1.min(w);
+    let y1 = rect.y1.min(h);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            m[y as usize * w as usize + x as usize] = 255;
+        }
+    }
+    Some(m)
+}
+
+/// Aplica un mutador per-píxel `f(&mut [r,g,b,a])` a los píxeles seleccionados
+/// (máscara o rect) de la capa raster seleccionada. Comparte la validación
+/// entre limpiar y rellenar y soporta selecciones no rectangulares. No-op si
+/// no hay selección/capa, la capa es derivada, o el buffer no cambia (mismo
+/// hash). `verbo`/`sin_cambio` describen los desenlaces.
+fn aplicar_px_en_seleccion(
+    model: &mut Model,
+    f: impl Fn(&mut [u8]),
+    verbo: &str,
+    sin_cambio: &str,
+) -> bool {
+    let Some(cobertura) = cobertura_seleccion(model) else {
+        model.estado = "no hay selección — `r` y arrastrar".into();
+        return false;
+    };
+    let Some(id) = model.seleccionada else {
+        model.estado = "no hay capa seleccionada".into();
+        return false;
+    };
+    let Some(capa) = model.lienzo.capas.iter().find(|c| c.id == id) else {
+        return false;
+    };
+    if !matches!(capa.origen, OrigenCapa::Raster) {
+        model.estado = "la capa seleccionada es derivada — usá la raster madre".into();
+        return false;
+    }
+    let hash_actual = capa.contenido;
+    let Some(src) = model.almacen.obtener(hash_actual) else {
+        return false;
+    };
+    let mut buf = src.to_vec();
+    let n = cobertura.len().min(buf.len() / 4);
+    let mut tocados = 0usize;
+    for i in 0..n {
+        if cobertura[i] > 127 {
+            f(&mut buf[i * 4..i * 4 + 4]);
+            tocados += 1;
+        }
+    }
+    let new_hash = model.almacen.insertar(buf);
+    if new_hash == hash_actual {
+        model.estado = sin_cambio.into();
+        return false;
+    }
+    if let Some(capa_mut) = model.lienzo.capa_mut(id) {
+        capa_mut.contenido = new_hash;
+    }
+    model.lienzo.propagar_stale(id);
+    aplicar_y_recomponer(model);
+    model.estado = format!("{verbo} ({tocados} px)");
+    true
+}
+
+/// Aplica una transformación de buffer al **rect** de `model.seleccion` dentro
+/// de la capa raster seleccionada (path histórico para selecciones
+/// rectangulares; el path por máscara es [`aplicar_px_en_seleccion`]).
+/// `transformar(src, w, x0, y0, x1, y1)` produce el buffer nuevo. Re-clampea el
+/// rect contra el lienzo vigente. No-op si: no hay selección/capa, la capa es
+/// derivada, el rect queda con área cero, o el buffer no cambia (mismo hash).
+/// Propaga stale y recompone; la selección se mantiene.
 pub(crate) fn aplicar_a_seleccion_en_capa(
     model: &mut Model,
     transformar: impl Fn(&[u8], u32, u32, u32, u32, u32) -> Vec<u8>,
@@ -1135,8 +1275,7 @@ pub(crate) fn aplicar_a_seleccion_en_capa(
         return false;
     };
     if !matches!(capa.origen, OrigenCapa::Raster) {
-        model.estado =
-            "la capa seleccionada es derivada — usá la raster madre".into();
+        model.estado = "la capa seleccionada es derivada — usá la raster madre".into();
         return false;
     }
     let hash_actual = capa.contenido;
@@ -1160,33 +1299,51 @@ pub(crate) fn aplicar_a_seleccion_en_capa(
 }
 
 /// Pone alfa=0 en los píxeles del rect de `model.seleccion` dentro de
-/// la capa raster seleccionada (ver [`aplicar_a_seleccion_en_capa`]).
+/// la capa raster seleccionada (ver [`aplicar_px_en_seleccion`]).
 /// La selección se mantiene — encaja con flujos tipo "marquee + Delete
 /// + re-pintar"; un Esc la limpia explícitamente.
 pub(crate) fn limpiar_seleccion_en_capa(model: &mut Model) -> bool {
-    aplicar_a_seleccion_en_capa(
-        model,
-        limpiar_rect_en_buffer,
-        "limpiada selección",
-        "selección ya transparente, nada que limpiar",
-    )
+    // Con máscara (varita) gateamos por píxel; con rect-solo usamos el path
+    // rectangular histórico (mismos mensajes/edge-cases).
+    if model.seleccion_mascara.is_some() {
+        aplicar_px_en_seleccion(
+            model,
+            |px| px[3] = 0,
+            "limpiada selección",
+            "selección ya transparente, nada que limpiar",
+        )
+    } else {
+        aplicar_a_seleccion_en_capa(
+            model,
+            limpiar_rect_en_buffer,
+            "limpiada selección",
+            "selección ya transparente, nada que limpiar",
+        )
+    }
 }
 
 /// Rellena los píxeles del rect de `model.seleccion` con el color
 /// activo (`color_picked`, o `RELLENO_DEFAULT` si no se leyó ninguno)
 /// dentro de la capa raster seleccionada (ver
-/// [`aplicar_a_seleccion_en_capa`]). No-op extra si el rect ya tenía
+/// [`aplicar_px_en_seleccion`]). No-op extra si el rect ya tenía
 /// ese color exacto (hash sin cambio).
 pub(crate) fn rellenar_seleccion_en_capa(model: &mut Model) -> bool {
     let rgba = model.color_picked.unwrap_or(RELLENO_DEFAULT);
-    aplicar_a_seleccion_en_capa(
-        model,
-        |src, w, x0, y0, x1, y1| {
-            rellenar_rect_en_buffer(src, w, x0, y0, x1, y1, rgba)
-        },
-        "rellenada selección",
-        "selección ya tenía ese color, sin cambio",
-    )
+    if model.seleccion_mascara.is_some() {
+        aplicar_px_en_seleccion(
+            model,
+            move |px| px.copy_from_slice(&rgba),
+            "rellenada selección",
+            "selección ya tenía ese color, sin cambio",
+        )
+    } else {
+        aplicar_a_seleccion_en_capa(
+            model,
+            |src, w, x0, y0, x1, y1| rellenar_rect_en_buffer(src, w, x0, y0, x1, y1, rgba),
+            "rellenada selección",
+            "selección ya tenía ese color, sin cambio",
+        )
+    }
 }
 
 // =============================================================================

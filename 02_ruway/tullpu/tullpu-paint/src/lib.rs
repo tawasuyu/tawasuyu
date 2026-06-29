@@ -320,6 +320,58 @@ pub fn flood_fill(
     }
 }
 
+/// Selección por inundación (varita mágica **contigua**): BFS desde
+/// `(sx, sy)` que marca cada píxel conectado cuyo color esté dentro de `tol`
+/// (suma de |Δ| sobre RGBA, métrica `0..=1020`) respecto al píxel semilla.
+/// Devuelve una **máscara** de un canal `W·H` (255 = seleccionado, 0 = no),
+/// o `None` si la semilla cae fuera del canvas. A diferencia de
+/// [`flood_fill`] no recolorea nada: produce la región, que la app guarda
+/// como máscara de selección. Pura; 4-conectividad como `flood_fill`.
+pub fn flood_mascara(src: &[u8], w: u32, h: u32, sx: u32, sy: u32, tol: u32) -> Option<Vec<u8>> {
+    let w_us = w as usize;
+    let h_us = h as usize;
+    if sx >= w || sy >= h {
+        return None;
+    }
+    let idx4 = |x: u32, y: u32| ((y as usize) * w_us + x as usize) * 4;
+    let si = idx4(sx, sy);
+    let seed = [src[si], src[si + 1], src[si + 2], src[si + 3]];
+    let dentro_tol = |i4: usize| -> bool {
+        let d = (src[i4] as i32 - seed[0] as i32).unsigned_abs()
+            + (src[i4 + 1] as i32 - seed[1] as i32).unsigned_abs()
+            + (src[i4 + 2] as i32 - seed[2] as i32).unsigned_abs()
+            + (src[i4 + 3] as i32 - seed[3] as i32).unsigned_abs();
+        d <= tol
+    };
+    let mut mascara = vec![0u8; w_us * h_us];
+    let mut visto = vec![false; w_us * h_us];
+    let mut pila = vec![(sx, sy)];
+    while let Some((x, y)) = pila.pop() {
+        let vi = y as usize * w_us + x as usize;
+        if visto[vi] {
+            continue;
+        }
+        visto[vi] = true;
+        if !dentro_tol(vi * 4) {
+            continue;
+        }
+        mascara[vi] = 255;
+        if x + 1 < w {
+            pila.push((x + 1, y));
+        }
+        if x > 0 {
+            pila.push((x - 1, y));
+        }
+        if y + 1 < h {
+            pila.push((x, y + 1));
+        }
+        if y > 0 {
+            pila.push((x, y - 1));
+        }
+    }
+    Some(mascara)
+}
+
 /// Factor de cobertura del pincel en `[0,1]` para un píxel a distancia
 /// `d` del centro, con radio `r` y `dureza` en `[0,1]`. Dentro del núcleo
 /// `dureza·r` es 1.0; entre ahí y `r` cae linealmente a 0; fuera de `r`
@@ -783,6 +835,32 @@ mod tests {
     fn px(buf: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * w + x) * 4) as usize;
         [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    }
+
+    #[test]
+    fn flood_mascara_selecciona_region_contigua_por_color() {
+        // 4×1: [rojo, rojo, azul, rojo]. Desde x=0 con tol baja sólo agarra
+        // los dos rojos contiguos; el rojo aislado tras el azul NO entra.
+        let mut src = Vec::new();
+        for c in [[255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255], [255, 0, 0, 255]] {
+            src.extend_from_slice(&c);
+        }
+        let m = flood_mascara(&src, 4, 1, 0, 0, 16).unwrap();
+        assert_eq!(m, vec![255, 255, 0, 0], "región contigua de rojos");
+    }
+
+    #[test]
+    fn flood_mascara_semilla_fuera_es_none() {
+        let src = vec![0u8; 4 * 4];
+        assert!(flood_mascara(&src, 2, 2, 5, 5, 0).is_none());
+    }
+
+    #[test]
+    fn flood_mascara_tol_alta_agarra_todo() {
+        // tol máxima (1020) ⇒ todos los píxeles conectados entran.
+        let src = vec![10, 20, 30, 255, 200, 100, 50, 255, 0, 0, 0, 0, 255, 255, 255, 255];
+        let m = flood_mascara(&src, 4, 1, 0, 0, 1020).unwrap();
+        assert_eq!(m, vec![255, 255, 255, 255]);
     }
 
     #[test]

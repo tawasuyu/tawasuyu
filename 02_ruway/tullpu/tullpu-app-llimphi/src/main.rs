@@ -534,6 +534,7 @@ impl App for Tullpu {
                         // Press fuera limpia la selección previa — vamos
                         // a construir una nueva sobre la marcha.
                         model.seleccion = None;
+                model.seleccion_mascara = None;
                     }
                 }
             }
@@ -542,6 +543,7 @@ impl App for Tullpu {
                     drag.cur_lx += dx;
                     drag.cur_ly += dy;
                     let drag = *drag;
+                    model.seleccion_mascara = None;
                     model.seleccion = rect_imagen_desde_drag(
                         &drag,
                         model.lienzo.width,
@@ -625,6 +627,7 @@ impl App for Tullpu {
             }
             Msg::LimpiarSeleccion => {
                 model.seleccion = None;
+                model.seleccion_mascara = None;
                 model.seleccion_drag = None;
                 model.estado = "selección limpia".into();
             }
@@ -634,6 +637,7 @@ impl App for Tullpu {
                 if w > 0 && h > 0 {
                     model.seleccion =
                         Some(RectImagen { x0: 0, y0: 0, x1: w, y1: h });
+                    model.seleccion_mascara = None;
                     model.seleccion_drag = None;
                     model.mover_drag = None;
                     model.estado = format!("seleccionado todo ({}×{})", w, h);
@@ -644,6 +648,7 @@ impl App for Tullpu {
                     let w = model.lienzo.width;
                     let h = model.lienzo.height;
                     model.seleccion = expandir_rect(rect, delta, w, h);
+                    model.seleccion_mascara = None;
                     model.estado = match model.seleccion {
                         Some(r) => {
                             format!("selección {}×{}", r.x1 - r.x0, r.y1 - r.y0)
@@ -751,6 +756,28 @@ impl App for Tullpu {
                     }
                 } else {
                     model.estado = "balde · fuera de la imagen".into();
+                }
+            }
+            Msg::SeleccionarVarita { lx, ly, rw, rh } => {
+                if let Some((ix, iy)) = local_a_imagen(
+                    lx,
+                    ly,
+                    rw,
+                    rh,
+                    model.lienzo.width,
+                    model.lienzo.height,
+                    model.factor_zoom,
+                    model.pan_x,
+                    model.pan_y,
+                ) {
+                    let sx = ix.floor() as u32;
+                    let sy = iy.floor() as u32;
+                    if seleccionar_por_color(&mut model, sx, sy) {
+                        // La selección no es parte del DAG de imagen — sin
+                        // snapshot, como el resto de las ops de marquee.
+                    }
+                } else {
+                    model.estado = "varita · fuera de la imagen".into();
                 }
             }
             Msg::IniciarTrazo { lx, ly, rw, rh } => {
