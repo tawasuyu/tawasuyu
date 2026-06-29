@@ -13,19 +13,21 @@
 //! CPU. Como cada capa lee y reescribe `acc` en rgba8 (no en f32 acumulado), el
 //! redondeo intermedio coincide con la CPU y la paridad es de ±1 por canal.
 //!
-//! ## Cobertura mínima de v1
+//! ## Cobertura
 //!
 //! Soporta capas `Pixeles`/`Texto`/`Grupo` con los 28 modos de fusión,
-//! máscaras, opacidad y clipping. Las **capas de ajuste** ([`ClaseCapa::Ajuste`])
-//! y el modo **Disolver** (estocástico, semilla por capa) **no** están en el
-//! shader todavía: si el lienzo los usa, [`Compositor::componer`] devuelve
-//! [`Error::NoSoportado`] y el caller cae al compositor CPU. La detección es
-//! barata (un barrido de la lista plana de capas).
+//! máscaras, opacidad y clipping, **y capas de ajuste** ([`ClaseCapa::Ajuste`])
+//! vía `ajuste.wgsl` (las ops independientes por canal se compilan a una LUT
+//! con el código exacto de la CPU; Saturacion/Tonalidad portan el HSL). El
+//! único rasgo sin soporte es el modo **Disolver** (estocástico, splitmix64 por
+//! píxel — sin u64 en WGSL): si el lienzo lo usa, [`Compositor::componer`]
+//! devuelve [`Error::NoSoportado`] y el caller cae al compositor CPU. La
+//! detección es barata (un barrido de la lista plana de capas).
 
 #![forbid(unsafe_code)]
 
 use image::RgbaImage;
-use tullpu_core::{Capa, ClaseCapa, Hash, Lienzo, ModoFusion, Uuid};
+use tullpu_core::{pixel, Capa, ClaseCapa, Hash, Lienzo, ModoFusion, OpLocal, Uuid};
 use wgpu::util::DeviceExt;
 
 // Reusamos la fuente de buffers del compositor CPU: así el mismo almacén
@@ -56,7 +58,7 @@ pub enum Error {
         esperado: usize,
         encontrado: usize,
     },
-    #[error("el lienzo usa capas de ajuste o el modo Disolver — sin soporte GPU, usá el compositor CPU")]
+    #[error("el lienzo usa el modo Disolver — sin soporte GPU, usá el compositor CPU")]
     NoSoportado,
     #[error("lienzo vacío (0 píxeles)")]
     Vacio,
@@ -143,6 +145,8 @@ pub struct Compositor {
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    ajuste_pipeline: wgpu::ComputePipeline,
+    ajuste_layout: wgpu::BindGroupLayout,
     /// Límite de hilos por dimensión X de dispatch (de los límites del device).
     max_grupos_dim: u32,
 }
@@ -232,18 +236,58 @@ impl Compositor {
             cache: None,
         });
 
+        // --- pipeline de capas de ajuste ---
+        let ajuste_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tullpu-ajuste"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("ajuste.wgsl").into()),
+        });
+        let ajuste_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("tullpu-ajuste-bgl"),
+            entries: &[
+                bgl_storage(0, false), // acc (read_write)
+                bgl_storage(1, true),  // lut (read)
+                bgl_storage(2, true),  // mask (read)
+                bgl_storage(3, true),  // clip (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let ajuste_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("tullpu-ajuste-pl"),
+            bind_group_layouts: &[&ajuste_layout],
+            push_constant_ranges: &[],
+        });
+        let ajuste_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("tullpu-ajuste-pipeline"),
+            layout: Some(&ajuste_pl),
+            module: &ajuste_shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
         Ok(Self {
             device,
             queue,
             pipeline,
             layout,
+            ajuste_pipeline,
+            ajuste_layout,
             max_grupos_dim,
         })
     }
 
     /// Compone un [`Lienzo`] en la GPU y devuelve la `RgbaImage` resultante.
-    /// Devuelve [`Error::NoSoportado`] si el lienzo usa capas de ajuste o el
-    /// modo Disolver (el caller debe caer al compositor CPU).
+    /// Devuelve [`Error::NoSoportado`] si el lienzo usa el modo Disolver (el
+    /// caller debe caer al compositor CPU).
     pub fn componer(
         &self,
         l: &Lienzo,
@@ -322,6 +366,22 @@ impl Compositor {
             let mascara = self.cargar_mascara(capa, n, fuente)?;
             let usa_clip = capa.clipping && base_alpha.is_some();
 
+            // Capas de ajuste: aplican una op per-píxel al compuesto in-place.
+            // No aportan base de clipping (igual que el compositor CPU).
+            if let ClaseCapa::Ajuste(op) = &capa.clase {
+                let clip_buf = match (usa_clip, &base_alpha) {
+                    (true, Some(b)) => b.clone(),
+                    _ => self.buffer_dummy(),
+                };
+                let mask_buf = mascara.unwrap_or_else(|| self.buffer_dummy());
+                self.despachar_ajuste(
+                    encoder, &acc, op, capa.opacidad, &mask_buf, &clip_buf, usa_clip, n, keep,
+                );
+                keep.buffers.push(mask_buf);
+                keep.buffers.push(clip_buf);
+                continue;
+            }
+
             // Resolver el buffer fuente de la capa.
             let src = match &capa.clase {
                 ClaseCapa::Grupo => {
@@ -341,8 +401,8 @@ impl Compositor {
                     }
                     self.buffer_storage(bytes, "tullpu-src")
                 }
-                // soportado() ya garantizó que no hay Ajuste.
-                ClaseCapa::Ajuste(_) => return Err(Error::NoSoportado),
+                // Las capas de ajuste se atienden en el `if let` de arriba.
+                ClaseCapa::Ajuste(_) => unreachable!("ajuste atendido antes del match"),
             };
 
             // Cobertura de salida de esta capa.
@@ -465,6 +525,85 @@ impl Compositor {
         keep.bind_groups.push(bind);
     }
 
+    /// Graba un dispatch del shader de ajuste sobre `acc` in-place. Clasifica la
+    /// op: las independientes por canal se compilan a una LUT de 256 (con el
+    /// código exacto de la CPU); Saturacion/Tonalidad van por la rama HSL del
+    /// shader; las espaciales/alfa (`Blur`/`Espejar`/`Opacidad`) no son ajustes
+    /// de composición y se omiten (la CPU también las ignora acá).
+    #[allow(clippy::too_many_arguments)]
+    fn despachar_ajuste(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        acc: &wgpu::Buffer,
+        op: &OpLocal,
+        opacidad: f32,
+        mask: &wgpu::Buffer,
+        clip: &wgpu::Buffer,
+        usa_clip: bool,
+        n: usize,
+        keep: &mut KeepAlive,
+    ) {
+        // op_kind/param/lut según la clase de op.
+        let (op_kind, param, lut_buf) = match clasificar_ajuste(op) {
+            AjusteClase::Lut(lut) => {
+                // Empaquetar 4 entradas/word (256 bytes), como la máscara.
+                (0u32, 0.0f32, self.buffer_storage(&lut, "tullpu-lut"))
+            }
+            AjusteClase::Saturacion(f) => (1u32, f, self.buffer_dummy()),
+            AjusteClase::Tonalidad(d) => (2u32, d, self.buffer_dummy()),
+            AjusteClase::NoOp => return, // Blur/Espejar/Opacidad: no es ajuste de composición.
+        };
+
+        const WG: u32 = 64;
+        let total_grupos = ((n as u32) + WG - 1) / WG;
+        let gx = total_grupos.min(self.max_grupos_dim).max(1);
+        let gy = (total_grupos + gx - 1) / gx;
+        let stride = gx * WG;
+
+        // Uniform AjusteParams (32 bytes).
+        let mut b = [0u8; 32];
+        b[0..4].copy_from_slice(&op_kind.to_le_bytes());
+        b[4..8].copy_from_slice(&(if mask.size() > 4 { 1u32 } else { 0 }).to_le_bytes());
+        b[8..12].copy_from_slice(&(if usa_clip { 1u32 } else { 0 }).to_le_bytes());
+        b[12..16].copy_from_slice(&(n as u32).to_le_bytes());
+        b[16..20].copy_from_slice(&opacidad.clamp(0.0, 1.0).to_le_bytes());
+        b[20..24].copy_from_slice(&param.to_le_bytes());
+        b[24..28].copy_from_slice(&stride.to_le_bytes());
+        let params_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("tullpu-ajuste-params"),
+                contents: &b,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tullpu-ajuste-bg"),
+            layout: &self.ajuste_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: acc.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: lut_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: mask.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: clip.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: params_buf.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("tullpu-ajuste-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.ajuste_pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(gx, gy, 1);
+        }
+
+        keep.buffers.push(lut_buf);
+        keep.buffers.push(params_buf);
+        keep.bind_groups.push(bind);
+    }
+
     fn buffer_acc_cero(&self, n: usize) -> wgpu::Buffer {
         self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("tullpu-acc"),
@@ -520,10 +659,52 @@ fn bgl_storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// `true` si el lienzo no usa capas de ajuste ni el modo Disolver — los dos
-/// rasgos que `blend.wgsl` todavía no implementa. Barrido de la lista plana.
+/// `true` si el lienzo no usa el modo **Disolver** — el único rasgo que los
+/// shaders todavía no implementan (estocástico, splitmix64 por píxel, sin u64
+/// en WGSL). Las capas de ajuste sí están soportadas (`ajuste.wgsl`). Barrido
+/// de la lista plana.
 fn soportado(l: &Lienzo) -> bool {
-    l.capas.iter().all(|c| {
-        !matches!(c.clase, ClaseCapa::Ajuste(_)) && !matches!(c.blend, ModoFusion::Disolver)
-    })
+    l.capas.iter().all(|c| !matches!(c.blend, ModoFusion::Disolver))
+}
+
+/// Clase de ejecución de una capa de ajuste en la GPU.
+enum AjusteClase {
+    /// Op independiente por canal compilada a una LUT de 256 (Invertir, Brillo,
+    /// Contraste, Niveles, Curvas). La construye el código exacto de la CPU.
+    Lut([u8; 256]),
+    /// Saturacion HSL: `s' = clamp(s · factor)`.
+    Saturacion(f32),
+    /// Tonalidad HSL: `h' = rem_euclid(h + grados/360)`.
+    Tonalidad(f32),
+    /// Op espacial/alfa (Blur/Espejar/Opacidad) — no es ajuste de composición.
+    NoOp,
+}
+
+/// Clasifica una [`OpLocal`] para el shader de ajuste. Para las ops
+/// independientes por canal construye la LUT corriendo `ajustar_rgb_inplace`
+/// sobre una rampa de gris 0..255 — reusa la math exacta de la CPU, así esos
+/// ajustes son bit-idénticos salvo el redondeo final del blend.
+fn clasificar_ajuste(op: &OpLocal) -> AjusteClase {
+    match op {
+        OpLocal::Saturacion { factor } => AjusteClase::Saturacion(*factor),
+        OpLocal::Tonalidad { grados } => AjusteClase::Tonalidad(grados / 360.0),
+        OpLocal::Blur { .. }
+        | OpLocal::EspejarHorizontal
+        | OpLocal::EspejarVertical
+        | OpLocal::Opacidad { .. } => AjusteClase::NoOp,
+        // Invertir / Brillo / Contraste / Niveles / Curvas: canal-independiente.
+        _ => {
+            let mut rampa = Vec::with_capacity(256 * 4);
+            for i in 0..256u32 {
+                rampa.extend_from_slice(&[i as u8, i as u8, i as u8, 255]);
+            }
+            let ok = pixel::ajustar_rgb_inplace(op, &mut rampa);
+            debug_assert!(ok, "op canal-independiente debería devolver true");
+            let mut lut = [0u8; 256];
+            for (i, slot) in lut.iter_mut().enumerate() {
+                *slot = rampa[i * 4];
+            }
+            AjusteClase::Lut(lut)
+        }
+    }
 }

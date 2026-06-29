@@ -47,18 +47,23 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
   en ops.rs; reusa el ancla/offset del clon). Falta (menor): parche por
   selección y modos content-aware.
 - **Fase G — compositing GPU (HECHA; falta tiling).** `tullpu-render-gpu`
-  (`Compositor`) espeja `tullpu-render::componer` sobre un compute shader wgpu
-  (`blend.wgsl`). El acumulador es `array<u32>` rgba8 empaquetado (un dispatch
-  por capa lee/reescribe `acc`), así el redondeo intermedio coincide con la CPU
-  y la paridad es ±1 por canal — certificada por `tests/paridad.rs` (los 26
-  modos de fusión separables/HSL/comparativos + máscara + opacidad + clipping +
-  grupos anidados, todos `diff ≤ 1` vs CPU). La **recursión de grupos** vive en
-  el host (idéntica al CPU); sólo el bucle per-píxel migra a GPU. Capas de
-  ajuste y modo **Disolver** aún no están en el shader → `componer` devuelve
+  (`Compositor`) espeja `tullpu-render::componer` sobre compute shaders wgpu. El
+  acumulador es `array<u32>` rgba8 empaquetado (un dispatch por capa lee/reescribe
+  `acc`), así el redondeo intermedio coincide con la CPU y la paridad es ±1 por
+  canal. Dos shaders: `blend.wgsl` (fusión de capas — los 26 modos
+  separables/HSL/comparativos + máscara + opacidad + clipping + grupos anidados)
+  y `ajuste.wgsl` (**capas de ajuste**: las ops independientes por canal —
+  Invertir/Brillo/Contraste/Niveles/Curvas — se compilan a una LUT de 256 con el
+  código exacto de la CPU vía `pixel::ajustar_rgb_inplace`, bit-idénticas;
+  Saturacion/Tonalidad portan el rgb↔hsl). La **recursión de grupos** vive en el
+  host (idéntica al CPU); sólo el bucle per-píxel migra a GPU. Todo certificado
+  por `tests/paridad.rs` (26 modos, 9 ajustes, máscara/clip/grupos, todos
+  `diff ≤ 1` vs CPU). El único rasgo sin soporte es el modo **Disolver**
+  (estocástico, splitmix64 por píxel — sin u64 en WGSL): `componer` devuelve
   `Error::NoSoportado` y la app (`compose.rs::recomponer`) cae al compositor CPU
   de forma transparente; si no hay adaptador GPU, también. **Falta:** tiling
   (capa = grafo de tiles content-addressed) para imágenes > ~33 MP, y portar
-  ajustes/Disolver al shader para evitar el fallback.
+  Disolver al shader (64-bit emulado) para cerrar el último fallback.
 - **Pendiente:** H IA real ONNX + vectores/paths.
 
 ## Estado (2026-05-31)
