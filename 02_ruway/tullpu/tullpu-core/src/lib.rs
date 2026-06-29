@@ -551,19 +551,31 @@ impl ParamsVector {
 
     /// Traslada **todo** el path por `(dx, dy)` (mover la capa vectorial entera).
     pub fn trasladar(&mut self, dx: f32, dy: f32) {
-        for c in &mut self.comandos {
-            match c {
+        self.transformar([1.0, 0.0, 0.0, 1.0, dx, dy]);
+    }
+
+    /// Aplica una transformación afín `[a, b, c, d, e, f]` a **todos** los
+    /// puntos del path (anclas y controles): `x' = a·x + c·y + e`,
+    /// `y' = b·x + d·y + f`. Cubre mover/escalar/rotar/sesgar la capa vectorial
+    /// sin pérdida (sigue siendo vectorial). Misma convención que un
+    /// `[scaleX, skewY, skewX, scaleY, transX, transY]` de SVG/Canvas.
+    pub fn transformar(&mut self, m: [f32; 6]) {
+        let [a, b, c, d, e, f] = m;
+        let map = |x: f32, y: f32| (a * x + c * y + e, b * x + d * y + f);
+        for cmd in &mut self.comandos {
+            match cmd {
                 ComandoPath::MoverA { x, y } | ComandoPath::LineaA { x, y } => {
-                    *x += dx;
-                    *y += dy;
+                    let (nx, ny) = map(*x, *y);
+                    *x = nx;
+                    *y = ny;
                 }
                 ComandoPath::CurvaA { c1x, c1y, c2x, c2y, x, y } => {
-                    *c1x += dx;
-                    *c1y += dy;
-                    *c2x += dx;
-                    *c2y += dy;
-                    *x += dx;
-                    *y += dy;
+                    let (a1, b1) = map(*c1x, *c1y);
+                    let (a2, b2) = map(*c2x, *c2y);
+                    let (ex, ey) = map(*x, *y);
+                    *c1x = a1; *c1y = b1;
+                    *c2x = a2; *c2y = b2;
+                    *x = ex; *y = ey;
                 }
                 ComandoPath::Cerrar => {}
             }
@@ -1238,6 +1250,15 @@ mod tests {
         let mut p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
         p.trasladar(5.0, -3.0);
         assert_eq!(p.puntos_ancla()[0].1, [5.0, -3.0]);
+    }
+
+    #[test]
+    fn transformar_escala_y_traslada() {
+        let mut p = ParamsVector::rectangulo(1.0, 1.0, 2.0, 2.0, [0, 0, 0, 255]);
+        // Escala x2 y traslada (10, 20): x' = 2x + 10, y' = 2y + 20.
+        p.transformar([2.0, 0.0, 0.0, 2.0, 10.0, 20.0]);
+        assert_eq!(p.puntos_ancla()[0].1, [12.0, 22.0]); // (1,1) → (12,22)
+        assert_eq!(p.puntos_ancla()[2].1, [16.0, 26.0]); // (3,3) → (16,26)
     }
 
     #[test]

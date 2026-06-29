@@ -1969,12 +1969,41 @@ pub(crate) fn confirmar_transform(model: &mut Model) -> bool {
         || (t.escala_y - 1.0).abs() > 1e-6
         || t.rot.abs() > 1e-6;
     if cambio {
+        // Si la capa es vectorial, horneamos la afín en el PATH (queda crisp y
+        // editable) en vez de conservar el remuestreo raster del preview.
+        let es_vector = model
+            .lienzo
+            .capa(t.id)
+            .map(|c| c.params_vector().is_some())
+            .unwrap_or(false);
+        if es_vector {
+            let m = afin_de_transform(&t);
+            model.seleccionada = Some(t.id);
+            editar_vector_seleccionado(model, |p| p.transformar(m));
+        }
         pushear_snapshot(model, None);
         model.estado = "transformación aplicada".into();
     } else {
         model.estado = "transformar · sin cambios".into();
     }
     true
+}
+
+/// Matriz afín `[a, b, c, d, e, f]` equivalente a la transformación libre `t`,
+/// con la misma convención que `puntos_transform` (escala·rotación alrededor
+/// del pivote + traslación). Aplicarla a un punto reproduce dónde el usuario ve
+/// el cuadro de transformación.
+fn afin_de_transform(t: &TransformLibre) -> [f32; 6] {
+    let (ct, st) = (t.rot.cos(), t.rot.sin());
+    let (sx, sy) = (t.escala_x, t.escala_y);
+    let (px, py) = (t.piv_x, t.piv_y);
+    let a = ct * sx;
+    let b = st * sx;
+    let c = -st * sy;
+    let d = ct * sy;
+    let e = px + t.tx - a * px - c * py;
+    let f = py + t.ty - b * px - d * py;
+    [a as f32, b as f32, c as f32, d as f32, e as f32, f as f32]
 }
 
 /// Cancela la transformación: restaura el buffer original de la capa y sale del
