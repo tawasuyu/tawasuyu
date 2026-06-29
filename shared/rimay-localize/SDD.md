@@ -54,17 +54,24 @@ comm -23 /tmp/keys_es.txt /tmp/keys_qu.txt   # debe salir vacío
 localizador. Más 2 consumidoras con strings a medio migrar. Regla: las apps UI
 muestran strings de usuario vía `rimay_localize::t(...)`, no literales `"..."`.
 
+### ✅ Hecho — subsistema nahual completo (2026-06-29)
+
+Localizados vía `rimay-localize` (commits `8164a36e`, `a929ac13`, `e821cbbc`):
+`nahual-image-viewer`, `nahual-audio-viewer`, `nahual-card-viewer`,
+`nahual-file-explorer`, `nahual-archive-viewer`, `nahual-font-viewer`,
+`nahual-gallery` y `nahual-shell-llimphi` (chrome + paleta + menubar +
+contextual + modales + panel IA). Claves `nahual-*` en los tres `.ftl`
+(paridad 902). **Pendiente del subsistema:** `nahual-shell-core` (otro crate)
+— `FindMode::label` / `OpKind::label` siguen en español, así que el arg
+`{mode}` del overlay de búsqueda y los labels de la cola no se traducen.
+
+Además, la infra ahora soporta **override de catálogos en runtime** (sin
+recompilar) — ver sección arriba.
+
 ### 🔴 Hardcodean español — enchufar al localizador
 
 | Crate | Pista (archivo:línea — re-grep si no calza) | Ejemplo |
 |---|---|---|
-| `02_ruway/nahual/nahual-shell-llimphi` ⚠️ | view.rs:369, overlays.rs:307 | `"Esc cierra"`, `"Enter confirma · Esc cancela"` |
-| `02_ruway/nahual/nahual-gallery-llimphi` | main.rs:159-162, 277 | `"nombre"`, `"tamaño"`, `"fecha"`, `"{} ítems"` |
-| `02_ruway/nahual/nahual-audio-viewer-llimphi` | lib.rs:283, 232 | `"(seleccioná un audio)"` |
-| `02_ruway/nahual/nahual-card-viewer-llimphi` | lib.rs:88, 111 | `"(seleccioná una card)"` |
-| `02_ruway/nahual/nahual-file-explorer-llimphi` | lib.rs:296, 285 | `"Carpeta vacía"`, `"No hay entradas en {}"` |
-| `02_ruway/nahual/nahual-font-viewer-llimphi` | lib.rs:117 | `"no parsea como fuente: {e}"` |
-| `02_ruway/nahual/nahual-archive-viewer-llimphi` | lib.rs:81 | `"(seleccioná un ZIP/tar/tar.gz)"` |
 | `00_unanchay/pluma/pluma-app-llimphi` | view.rs:639-640 | `"quitar formato"`, `"cerrar"` |
 | `00_unanchay/puriy/puriy-llimphi` | chrome.rs:46-73 | `"Deshacer"`, `"Rehacer"`, `"Cortar"` |
 | `01_yachay/iniy/iniy-explorer-llimphi` | main.rs:374-389 | `"Deseleccionar"`, `"Recargar corpus"` |
@@ -79,14 +86,13 @@ muestran strings de usuario vía `rimay_localize::t(...)`, no literales `"..."`.
 | `shared/launcher-llimphi` | src/bin/tawasuyu-launcher.rs:110, 137 | `"tawasuyu · launcher"`, `"{n} apps descubiertas"` |
 | `shared/willay/willay-panel-llimphi` | main.rs:114, 260 | `"Hoy"`, `"Copiado al portapapeles"` |
 
-⚠️ **Empezar por `nahual-shell-llimphi`**: centraliza el chrome/menús de los
-visores, así que cubre buena parte del subsistema nahual de un saque.
+⚠️ El subsistema nahual ya está hecho (ver arriba). Próximo lote sugerido por
+impacto: `pluma-app` / `puriy` / `iniy` / `tinkuy` → ruway misc → ukupacha/shared.
 
 ### 🟡 Mixtas — ya consumen el localizador pero dejaron strings sueltos
 
 | Crate | Pista | Detalle |
 |---|---|---|
-| `02_ruway/nahual/nahual-image-viewer-llimphi` | lib.rs:232 OK, lib.rs:69 hardcodea | usa `t("nahual-image-unsupported")` pero deja `"(seleccioná una imagen)"` |
 | `02_ruway/chasqui/chasqui-broker-explorer-llimphi` | main.rs:621-622 | `"Refrescar probe"`, `"Limpiar timeline"` |
 
 > **Pendiente no auditado:** las 26 consumidoras se confirmaron solo a nivel de
@@ -118,9 +124,9 @@ Por cada crate 🔴/🟡:
 5. `cargo check --workspace` (smoke test mínimo del repo).
 6. Commit por crate o por subsistema: `feat(<scope>): localiza strings via rimay-localize`.
 
-Orden sugerido por impacto: **nahual-shell** → resto de visores nahual → pluma-app
-/ puriy / iniy / tinkuy → ruway misc → ukupacha/shared. Las 🟡 son arreglo chico
-(2-3 strings) y conviene cerrarlas al pasar.
+Orden sugerido por impacto (el subsistema nahual ya está hecho): **pluma-app**
+→ puriy / iniy / tinkuy → ruway misc → ukupacha/shared. La 🟡 restante
+(`chasqui-broker-explorer`) es arreglo chico y conviene cerrarla al pasar.
 
 ## Cómo reproducir el audito (encontrar el gap completo)
 
