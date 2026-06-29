@@ -32,8 +32,9 @@ fn compositor_gpu() -> Option<&'static Compositor> {
 }
 
 pub(crate) fn recomponer(l: &Lienzo, alm: &impl FuenteBuffers) -> Option<Image> {
-    // Camino GPU con fallback transparente al compositor CPU: el GPU rechaza
-    // (NoSoportado) los lienzos con capas de ajuste o modo Disolver, y cualquier
+    // Camino GPU con fallback transparente al compositor CPU. El GPU tiene
+    // paridad completa (todos los modos, ajustes, máscaras, clipping, grupos),
+    // así que el único fallback real es la falta de adaptador GPU; cualquier
     // error de dispositivo cae también a CPU sin que el usuario lo note.
     let img = match compositor_gpu().and_then(|g| g.componer(l, alm).ok()) {
         Some(img) => img,

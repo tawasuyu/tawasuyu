@@ -17,8 +17,8 @@ struct Params {
     n: u32,
     opacidad: f32,
     stride: u32,   // anchura en hilos de la grilla 2D de dispatch
-    _p0: u32,
-    _p1: u32,
+    seed_lo: u32,  // usado sólo por disolver.wgsl (mismo layout de Params)
+    seed_hi: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> acc: array<u32>;

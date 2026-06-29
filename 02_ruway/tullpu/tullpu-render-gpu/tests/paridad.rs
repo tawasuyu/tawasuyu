@@ -208,21 +208,25 @@ fn paridad_capas_de_ajuste() {
 }
 
 #[test]
-fn lienzo_con_disolver_cae_a_cpu() {
+fn paridad_disolver() {
+    // Disolver es un umbralizador binario sembrado por el Uuid de la capa: si el
+    // splitmix64 emulado coincide con la CPU, la paridad es EXACTA (diff 0). Se
+    // ejercita con alfa variable (degradé) y opacidad < 1 para que el umbral
+    // discrimine de verdad.
     let Some(gpu) = compositor() else { return };
+    let (w, h) = (32, 24);
     let mut alm = AlmacenEnMemoria::nuevo();
-    let fondo = alm.insertar(buffer_solido(4, 4, [100, 100, 100, 255]));
-    let top = alm.insertar(buffer_solido(4, 4, [10, 200, 40, 200]));
-    let mut l = Lienzo::nuevo(4, 4);
+    let fondo = alm.insertar(buffer_solido(w, h, [20, 20, 60, 255]));
+    let top = alm.insertar(buffer_gradiente(w, h, 120));
+    let mut l = Lienzo::nuevo(w, h);
     l.apilar(Capa::raster("fondo", fondo));
     let mut c = Capa::raster("disuelta", top);
     c.blend = ModoFusion::Disolver;
+    c.opacidad = 0.6;
     l.apilar(c);
 
-    // Disolver no está en el shader: el GPU rechaza, el caller cae a CPU.
-    let r = gpu.componer(&l, &alm);
-    assert!(
-        matches!(r, Err(tullpu_render_gpu::Error::NoSoportado)),
-        "esperaba NoSoportado, fue {r:?}"
-    );
+    let cpu = componer(&l, &alm).unwrap();
+    let g = gpu.componer(&l, &alm).unwrap();
+    let d = max_diff(&cpu, &g);
+    assert_eq!(d, 0, "disolver debe ser bit-exacto vs CPU, diff {d}");
 }

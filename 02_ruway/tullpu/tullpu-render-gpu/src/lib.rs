@@ -15,14 +15,14 @@
 //!
 //! ## Cobertura
 //!
-//! Soporta capas `Pixeles`/`Texto`/`Grupo` con los 28 modos de fusión,
-//! máscaras, opacidad y clipping, **y capas de ajuste** ([`ClaseCapa::Ajuste`])
-//! vía `ajuste.wgsl` (las ops independientes por canal se compilan a una LUT
-//! con el código exacto de la CPU; Saturacion/Tonalidad portan el HSL). El
-//! único rasgo sin soporte es el modo **Disolver** (estocástico, splitmix64 por
-//! píxel — sin u64 en WGSL): si el lienzo lo usa, [`Compositor::componer`]
-//! devuelve [`Error::NoSoportado`] y el caller cae al compositor CPU. La
-//! detección es barata (un barrido de la lista plana de capas).
+//! Paridad **completa** con el compositor CPU: capas `Pixeles`/`Texto`/`Grupo`
+//! con los 28 modos de fusión (incluido **Disolver**, vía splitmix64 emulado en
+//! `disolver.wgsl` con `vec2<u32>` por falta de u64 en WGSL), máscaras,
+//! opacidad, clipping **y capas de ajuste** ([`ClaseCapa::Ajuste`]) vía
+//! `ajuste.wgsl` (las ops independientes por canal se compilan a una LUT con el
+//! código exacto de la CPU; Saturacion/Tonalidad portan el HSL). Tres shaders
+//! sobre el mismo acumulador `acc`. El único fallback al compositor CPU es la
+//! ausencia de adaptador GPU (lo decide el caller).
 
 #![forbid(unsafe_code)]
 
@@ -58,8 +58,6 @@ pub enum Error {
         esperado: usize,
         encontrado: usize,
     },
-    #[error("el lienzo usa el modo Disolver — sin soporte GPU, usá el compositor CPU")]
-    NoSoportado,
     #[error("lienzo vacío (0 píxeles)")]
     Vacio,
     #[error("mapeo de readback falló")]
@@ -117,6 +115,9 @@ struct Params {
     n: u32,
     opacidad: f32,
     stride: u32,
+    /// Semilla del RNG de Disolver (los 8 primeros bytes del Uuid de la capa).
+    /// Cero para el resto de modos (`blend.wgsl` la ignora).
+    seed: u64,
 }
 
 impl Params {
@@ -128,7 +129,9 @@ impl Params {
         b[12..16].copy_from_slice(&self.n.to_le_bytes());
         b[16..20].copy_from_slice(&self.opacidad.to_le_bytes());
         b[20..24].copy_from_slice(&self.stride.to_le_bytes());
-        // 24..32 quedan en cero (_p0, _p1).
+        let seed = self.seed.to_le_bytes();
+        b[24..28].copy_from_slice(&seed[0..4]); // seed_lo
+        b[28..32].copy_from_slice(&seed[4..8]); // seed_hi
         b
     }
 }
@@ -144,6 +147,7 @@ pub struct Compositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    disolver_pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     ajuste_pipeline: wgpu::ComputePipeline,
     ajuste_layout: wgpu::BindGroupLayout,
@@ -236,6 +240,20 @@ impl Compositor {
             cache: None,
         });
 
+        // --- pipeline de Disolver (mismo bind group layout que blend) ---
+        let disolver_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("tullpu-disolver"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("disolver.wgsl").into()),
+        });
+        let disolver_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("tullpu-disolver-pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &disolver_shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
         // --- pipeline de capas de ajuste ---
         let ajuste_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tullpu-ajuste"),
@@ -278,6 +296,7 @@ impl Compositor {
             device,
             queue,
             pipeline,
+            disolver_pipeline,
             layout,
             ajuste_pipeline,
             ajuste_layout,
@@ -286,8 +305,7 @@ impl Compositor {
     }
 
     /// Compone un [`Lienzo`] en la GPU y devuelve la `RgbaImage` resultante.
-    /// Devuelve [`Error::NoSoportado`] si el lienzo usa el modo Disolver (el
-    /// caller debe caer al compositor CPU).
+    /// Cubre todos los modos de fusión, ajustes, máscaras, clipping y grupos.
     pub fn componer(
         &self,
         l: &Lienzo,
@@ -298,9 +316,6 @@ impl Compositor {
         let n = (w as usize) * (h as usize);
         if n == 0 {
             return Err(Error::Vacio);
-        }
-        if !soportado(l) {
-            return Err(Error::NoSoportado);
         }
 
         // Recursos vivos hasta el submit: la recursión empuja todo acá. (wgpu
@@ -413,6 +428,7 @@ impl Compositor {
                 _ => self.buffer_dummy(),
             };
 
+            let es_disolver = matches!(capa.blend, ModoFusion::Disolver);
             let params = Params {
                 modo: modo_codigo(capa.blend),
                 has_mask: if mask_buf.size() > 4 { 1 } else { 0 },
@@ -420,10 +436,16 @@ impl Compositor {
                 n: n as u32,
                 opacidad: capa.opacidad.clamp(0.0, 1.0),
                 stride: 0, // lo completa despachar()
+                seed: if es_disolver { semilla_dissolve(capa) } else { 0 },
+            };
+            let pipeline = if es_disolver {
+                &self.disolver_pipeline
+            } else {
+                &self.pipeline
             };
 
             self.despachar(
-                encoder, &acc, &src, &mask_buf, &clip_buf, &cobertura, params, n, keep,
+                encoder, pipeline, &acc, &src, &mask_buf, &clip_buf, &cobertura, params, n, keep,
             );
 
             if !capa.clipping {
@@ -474,6 +496,7 @@ impl Compositor {
     fn despachar(
         &self,
         encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::ComputePipeline,
         acc: &wgpu::Buffer,
         src: &wgpu::Buffer,
         mask: &wgpu::Buffer,
@@ -515,7 +538,7 @@ impl Compositor {
                 label: Some("tullpu-blend-pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         }
@@ -659,12 +682,12 @@ fn bgl_storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// `true` si el lienzo no usa el modo **Disolver** — el único rasgo que los
-/// shaders todavía no implementan (estocástico, splitmix64 por píxel, sin u64
-/// en WGSL). Las capas de ajuste sí están soportadas (`ajuste.wgsl`). Barrido
-/// de la lista plana.
-fn soportado(l: &Lienzo) -> bool {
-    l.capas.iter().all(|c| !matches!(c.blend, ModoFusion::Disolver))
+/// Semilla del RNG de Disolver: los primeros 8 bytes del Uuid de la capa, en
+/// little-endian. Espejo de `tullpu_render::semilla_dissolve` — estable a través
+/// de regeneraciones (lo garantiza el Uuid).
+fn semilla_dissolve(capa: &Capa) -> u64 {
+    let b = capa.id.as_bytes();
+    u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
 /// Clase de ejecución de una capa de ajuste en la GPU.
