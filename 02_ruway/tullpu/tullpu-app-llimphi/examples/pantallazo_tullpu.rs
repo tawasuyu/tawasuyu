@@ -29,6 +29,8 @@ mod compose;
 mod model;
 #[path = "../src/ops.rs"]
 mod ops;
+#[path = "../src/texto.rs"]
+mod texto;
 #[path = "../src/view.rs"]
 mod view;
 #[path = "../src/viewport.rs"]
@@ -292,6 +294,7 @@ fn modelo_demo() -> Model {
         simetria: Simetria::Ninguna,
         gradiente_drag: None,
         lazo_drag: None,
+        editando_texto: None,
         portapapeles: None,
         editando_mascara: false,
         valor_mascara: 255,

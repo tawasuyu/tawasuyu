@@ -159,7 +159,9 @@ fn componer_lista(
                     base_alpha = Some(cobertura);
                 }
             }
-            ClaseCapa::Pixeles => {
+            // Texto se compone igual que píxeles: su `contenido` ya es el
+            // buffer rasterizado.
+            ClaseCapa::Pixeles | ClaseCapa::Texto(_) => {
                 let esperado_rgba = n * 4;
                 let src = fuente
                     .obtener(capa.contenido)

@@ -1104,6 +1104,72 @@ pub(crate) fn mover_pixeles_seleccion(
     true
 }
 
+/// Crea una capa de texto en `(x, y)` (coords-imagen) con un string inicial,
+/// la rasteriza y la apila encima de la seleccionada. Devuelve su `Uuid`.
+/// El color sale de `color_picked` (o negro). Hereda el grupo de la selección.
+pub(crate) fn agregar_capa_texto(model: &mut Model, x: u32, y: u32) -> uuid::Uuid {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let color = model.color_picked.unwrap_or([20, 20, 20, 255]);
+    let params = tullpu_core::ParamsTexto {
+        texto: "Texto".into(),
+        tamano: 48.0,
+        color,
+        x: x.min(w.saturating_sub(1)),
+        y: y.min(h.saturating_sub(1)),
+    };
+    let buffer = crate::texto::rasterizar_texto(&params, w, h);
+    let hash = model.almacen.insertar(buffer);
+    let mut capa = tullpu_core::Capa::texto("texto", hash, params);
+    capa.grupo = model
+        .seleccionada
+        .and_then(|id| model.lienzo.capa(id))
+        .and_then(|c| c.grupo);
+    let id = capa.id;
+    model.lienzo.apilar(capa);
+    model.seleccionada = Some(id);
+    aplicar_y_recomponer(model);
+    id
+}
+
+/// Re-rasteriza la capa de texto `id` desde sus params vigentes y actualiza su
+/// `contenido`. No-op si la capa no es de texto. Recompone.
+pub(crate) fn rerasterizar_texto(model: &mut Model, id: uuid::Uuid) {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some(params) = model.lienzo.capa(id).and_then(|c| c.params_texto()).cloned() else {
+        return;
+    };
+    let buffer = crate::texto::rasterizar_texto(&params, w, h);
+    let hash = model.almacen.insertar(buffer);
+    if let Some(c) = model.lienzo.capa_mut(id) {
+        c.contenido = hash;
+    }
+    aplicar_y_recomponer(model);
+}
+
+/// Muta los params de la capa de texto `id` por el closure `f` (p. ej. cambiar
+/// el string o el tamaño) y re-rasteriza. No-op si no es capa de texto.
+pub(crate) fn editar_params_texto(
+    model: &mut Model,
+    id: uuid::Uuid,
+    f: impl FnOnce(&mut tullpu_core::ParamsTexto),
+) {
+    let cambio = if let Some(c) = model.lienzo.capa_mut(id) {
+        if let tullpu_core::ClaseCapa::Texto(p) = &mut c.clase {
+            f(p);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if cambio {
+        rerasterizar_texto(model, id);
+    }
+}
+
 /// Voltea (espeja) el buffer de la capa raster seleccionada in situ:
 /// `horizontal=true` ↔ eje vertical (izq↔der), `false` ↕ eje horizontal
 /// (arriba↔abajo). Edición raster directa (no genera una capa derivada). Las

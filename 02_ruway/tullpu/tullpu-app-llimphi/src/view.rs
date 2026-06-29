@@ -107,13 +107,15 @@ pub(crate) fn fila_capa(
     let marca_clase = match &capa.clase {
         ClaseCapa::Grupo => "📁 ",
         ClaseCapa::Ajuste(_) => "◫ ",
+        ClaseCapa::Texto(_) => "T ",
         ClaseCapa::Pixeles => "",
     };
     let marca_clip = if capa.clipping { "↳ " } else { "" };
-    // El sub-rótulo de la clase reemplaza a "raster" para grupos/ajustes.
+    // El sub-rótulo de la clase reemplaza a "raster" para grupos/ajustes/texto.
     let nombre_op = match &capa.clase {
         ClaseCapa::Grupo => "grupo".to_string(),
         ClaseCapa::Ajuste(_) => "ajuste".to_string(),
+        ClaseCapa::Texto(_) => "texto".to_string(),
         ClaseCapa::Pixeles => nombre_op,
     };
     let etiqueta = format!(
@@ -924,6 +926,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Lazo),
     )));
+    let etiqueta_texto = if model.herramienta == Herramienta::Texto {
+        "● texto (t)"
+    } else {
+        "○ texto (t)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_texto.to_string(),
+        if model.herramienta == Herramienta::Texto {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Texto),
+    )));
     let etiqueta_pincel = if model.herramienta == Herramienta::Pincel {
         "● pincel (p)"
     } else {
@@ -1079,6 +1095,27 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
     if let Some(vistas) = vista_editor_curva(theme, model) {
         hijos.push(subtitulo("curva"));
         hijos.extend(vistas);
+    }
+
+    // "texto": tamaño de la capa de texto seleccionada (el contenido se edita
+    // tipeando sobre el lienzo con la herramienta texto). Sólo si aplica.
+    if let Some(params) = model
+        .seleccionada
+        .and_then(|id| model.lienzo.capa(id))
+        .and_then(|c| c.params_texto())
+    {
+        hijos.push(subtitulo(&format!("texto · {:.0} px", params.tamano)));
+        let pal = ButtonPalette::from_theme(theme);
+        hijos.push(envolver_fila(button_view(
+            "A−  más chico".to_string(),
+            &pal,
+            Msg::TextoTamano(-4.0),
+        )));
+        hijos.push(envolver_fila(button_view(
+            "A+  más grande".to_string(),
+            &pal,
+            Msg::TextoTamano(4.0),
+        )));
     }
 
     // "histograma": chart RGB del composite vigente. Sólo se renderiza
@@ -1633,6 +1670,9 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                         DragPhase::Move => Some(Msg::ContinuarLazo { dx, dy }),
                         DragPhase::End => Some(Msg::FinalizarLazo),
                     }),
+                Herramienta::Texto => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
+                    Some(Msg::AgregarTexto { lx, ly, rw, rh })
+                }),
                 Herramienta::Pincel | Herramienta::Borrador => cuerpo_paint
                     .on_click_at(|lx, ly, rw, rh| {
                         Some(Msg::IniciarTrazo { lx, ly, rw, rh })

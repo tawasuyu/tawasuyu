@@ -38,6 +38,9 @@ llimphi-clipboard = { workspace = true }
 app-bus = { workspace = true }
 image = { workspace = true }
 uuid = { workspace = true }
+# Rasterizado CPU de las capas de texto (misma fuente embebida que el render
+# normal vía llimphi_text). Misma versión que el atlas del widget terminal.
+fontdue = "0.9"
 
 [dev-dependencies]
 # Sólo para el example `pantallazo_tullpu` (volcado headless a PNG).

@@ -653,3 +653,36 @@
         assert_eq!(out[0], 30);
         assert_eq!(out[3 * 4], 0, "(3,0) toma el de (0,0)=0");
     }
+
+    #[test]
+    fn agregar_capa_texto_crea_capa_de_texto_visible() {
+        let mut model = modelo_minimo(); // 4×4 (chico, pero el rasterizado recorta)
+        let n_antes = model.lienzo.capas.len();
+        let id = agregar_capa_texto(&mut model, 0, 0);
+        assert_eq!(model.lienzo.capas.len(), n_antes + 1);
+        let capa = model.lienzo.capa(id).unwrap();
+        assert!(capa.params_texto().is_some(), "es capa de texto");
+        assert_eq!(capa.params_texto().unwrap().texto, "Texto");
+        assert!(capa.tiene_buffer(), "compone como píxeles");
+        // El compositor la maneja sin error.
+        assert!(tullpu_render::componer(&model.lienzo, &model.almacen).is_ok());
+    }
+
+    #[test]
+    fn editar_params_texto_re_rasteriza_y_cambia_el_buffer() {
+        // En un lienzo grande, cambiar el texto cambia el hash del contenido.
+        let mut model = modelo_minimo();
+        // Agrandar el lienzo a 64×32 para que entre texto.
+        let buf = vec![0u8; 64 * 32 * 4];
+        let hash = model.almacen.insertar(buf);
+        let mut l = Lienzo::nuevo(64, 32);
+        l.apilar(Capa::raster("base", hash));
+        model.lienzo = l;
+        model.seleccionada = model.lienzo.capas.first().map(|c| c.id);
+        let id = agregar_capa_texto(&mut model, 1, 1);
+        let antes = model.lienzo.capa(id).unwrap().contenido;
+        editar_params_texto(&mut model, id, |p| p.texto = "Hola mundo".into());
+        let despues = model.lienzo.capa(id).unwrap().contenido;
+        assert_ne!(antes, despues, "re-rasterizar cambia el buffer");
+        assert_eq!(model.lienzo.capa(id).unwrap().params_texto().unwrap().texto, "Hola mundo");
+    }

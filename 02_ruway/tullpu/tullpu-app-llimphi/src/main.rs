@@ -79,6 +79,7 @@ mod historial;
 mod hotkeys;
 mod model;
 mod ops;
+mod texto;
 mod view;
 mod viewport;
 
@@ -967,6 +968,56 @@ impl App for Tullpu {
                     }
                 }
             }
+            Msg::AgregarTexto { lx, ly, rw, rh } => {
+                if let Some((ix, iy)) = local_a_imagen(
+                    lx, ly, rw, rh,
+                    model.lienzo.width, model.lienzo.height,
+                    model.factor_zoom, model.pan_x, model.pan_y,
+                ) {
+                    let id = agregar_capa_texto(&mut model, ix.floor() as u32, iy.floor() as u32);
+                    let mut input = TextInputState::new();
+                    input.set_text("Texto".to_string());
+                    model.editando_texto = Some((id, input));
+                    pushear_snapshot(&mut model, None);
+                    model.estado = "texto · escribí · Enter/Esc cierra".into();
+                } else {
+                    model.estado = "texto · fuera de la imagen".into();
+                }
+            }
+            Msg::TextoTecla(ev) => {
+                let actualizar = if let Some((id, input)) = model.editando_texto.as_mut() {
+                    input.apply_key(&ev);
+                    Some((*id, input.text()))
+                } else {
+                    None
+                };
+                if let Some((id, txt)) = actualizar {
+                    editar_params_texto(&mut model, id, |p| p.texto = txt);
+                }
+            }
+            Msg::TextoTamano(delta) => {
+                // Aplica al texto en edición, o al texto seleccionado.
+                let target = model
+                    .editando_texto
+                    .as_ref()
+                    .map(|(id, _)| *id)
+                    .or_else(|| {
+                        model.seleccionada.filter(|id| {
+                            model.lienzo.capa(*id).map_or(false, |c| c.params_texto().is_some())
+                        })
+                    });
+                if let Some(id) = target {
+                    editar_params_texto(&mut model, id, |p| {
+                        p.tamano = (p.tamano + delta).clamp(4.0, 512.0)
+                    });
+                }
+            }
+            Msg::TerminarTexto => {
+                if model.editando_texto.take().is_some() {
+                    pushear_snapshot(&mut model, None);
+                    model.estado = "texto listo".into();
+                }
+            }
             Msg::IniciarLazo { lx, ly, rw, rh } => {
                 let mut puntos = Vec::new();
                 if let Some((ix, iy)) = local_a_imagen(
@@ -1309,6 +1360,19 @@ impl App for Tullpu {
                 });
             }
             return None;
+        }
+        // Editando una capa de texto: las teclas escriben el contenido (se
+        // re-rasteriza en vivo), salvo Enter/Escape que cierran la edición.
+        if model.editando_texto.is_some() {
+            if event.state == KeyState::Pressed {
+                match &event.key {
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter) => {
+                        return Some(Msg::TerminarTexto)
+                    }
+                    _ => {}
+                }
+            }
+            return Some(Msg::TextoTecla(event.clone()));
         }
         // Renombrando una capa: las teclas van al text-input, salvo Enter
         // (confirma) y Escape (cancela). Mismo patrón que el picker: el

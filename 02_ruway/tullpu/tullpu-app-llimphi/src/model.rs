@@ -127,6 +127,10 @@ pub(crate) struct Model {
     /// acumulada + dims del panel + los vértices recogidos en coords-imagen.
     /// `None` fuera de un drag. Al soltar se rasteriza a `seleccion_mascara`.
     pub(crate) lazo_drag: Option<LazoDrag>,
+    /// Edición de capa de texto en curso: `(uuid, input)`. Mientras es `Some`,
+    /// el panel de ops muestra el text-input y las teclas editan el contenido
+    /// (re-rasterizando en vivo). Enter/Escape lo cierra.
+    pub(crate) editando_texto: Option<(Uuid, TextInputState)>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -226,6 +230,9 @@ pub(crate) enum Herramienta {
     /// máscara de selección (lazo). Reusa la misma maquinaria de máscara que
     /// la varita.
     Lazo,
+    /// Click crea una capa de texto en esa posición y entra en edición; lo que
+    /// se tipea se rasteriza en vivo a la capa.
+    Texto,
 }
 
 impl Herramienta {
@@ -240,6 +247,7 @@ impl Herramienta {
             Herramienta::Degradado => "degradé",
             Herramienta::Varita => "varita",
             Herramienta::Lazo => "lazo",
+            Herramienta::Texto => "texto",
         }
     }
 
@@ -626,6 +634,16 @@ pub(crate) enum Msg {
     /// píxel local `(lx, ly)` sobre el composite. `rw, rh` = dims del panel
     /// del lienzo (conversión local→imagen). Arma `seleccion_mascara` + bbox.
     SeleccionarVarita { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Click con la herramienta Texto: crea una capa de texto en `(lx, ly)`
+    /// y entra en edición.
+    AgregarTexto { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Tecla durante la edición de una capa de texto: actualiza el string y
+    /// re-rasteriza en vivo.
+    TextoTecla(KeyEvent),
+    /// Ajusta el tamaño de la capa de texto en edición por `delta` px.
+    TextoTamano(f32),
+    /// Cierra la edición de texto (Enter/Escape/click afuera).
+    TerminarTexto,
     /// Press con la herramienta Lazo: arranca la polilínea en `(lx, ly)`.
     IniciarLazo { lx: f32, ly: f32, rw: f32, rh: f32 },
     /// Move del lazo: acumula `(dx, dy)` y agrega el vértice nuevo.

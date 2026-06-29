@@ -186,6 +186,12 @@ const LIBERATION_MONO: &[u8] = include_bytes!("../assets/LiberationMono.ttf");
 /// que el render normal, sin volver a embeber el archivo.
 pub const MONO_FONT_BYTES: &[u8] = LIBERATION_MONO;
 
+/// Bytes de la fuente **sans de UI embebida** (Inter Regular TTF). Pública para
+/// que otros crates rastericen texto proporcional con la misma fuente que el
+/// render normal (p. ej. `tullpu` para sus capas de texto), sin re-embeber el
+/// archivo. Referenciada por familia con [`UI_SANS`].
+pub const SANS_FONT_BYTES: &[u8] = INTER_SANS;
+
 /// Nombre de familia de la fuente monoespaciada embebida. Pasalo como
 /// `font_family: Some(llimphi_text::MONOSPACE)` en un [`TextBlock`] (o el
 /// `font_family` de `layout`) para render de ancho fijo garantizado.

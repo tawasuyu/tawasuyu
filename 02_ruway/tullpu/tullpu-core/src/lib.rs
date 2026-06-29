@@ -296,6 +296,23 @@ pub enum OrigenCapa {
 ///
 /// El orden de las variantes es estable (postcard serializa por índice):
 /// variantes nuevas se agregan **al final**.
+/// Parámetros editables de una capa de texto. El texto se rasteriza a un buffer
+/// Rgba8 del tamaño del lienzo (que vive en `Capa::contenido`, como cualquier
+/// raster) — por eso el compositor no necesita saber tipografía: trata la capa
+/// de texto igual que una de píxeles. Guardar los params permite **re-editar**
+/// el texto y re-rasterizar (no destructivo respecto al string original). La
+/// rasterización vive en el frontend (la app, con fontdue) — `tullpu-core` no
+/// depende de ninguna fuente.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParamsTexto {
+    pub texto: String,
+    pub tamano: f32,
+    pub color: [u8; 4],
+    /// Esquina superior-izquierda del bloque de texto en coords-imagen.
+    pub x: u32,
+    pub y: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClaseCapa {
     /// Capa con buffer Rgba8 en `contenido` (raster o derivada).
@@ -304,6 +321,9 @@ pub enum ClaseCapa {
     Grupo,
     /// Capa de ajuste: aplica `op` al compuesto inferior al componer.
     Ajuste(OpLocal),
+    /// Capa de texto: `contenido` lleva el texto ya rasterizado (se compone
+    /// como píxeles); estos params permiten re-editar y re-rasterizar.
+    Texto(ParamsTexto),
 }
 
 impl Default for ClaseCapa {
@@ -443,9 +463,35 @@ impl Capa {
     }
 
     /// `true` si la capa aporta píxeles al compuesto vía su `contenido`
-    /// (raster o derivada). Grupos y ajustes no.
+    /// (raster, derivada o texto rasterizado). Grupos y ajustes no.
     pub fn tiene_buffer(&self) -> bool {
-        matches!(self.clase, ClaseCapa::Pixeles)
+        matches!(self.clase, ClaseCapa::Pixeles | ClaseCapa::Texto(_))
+    }
+
+    /// Los params de texto si la capa es de texto; `None` en otro caso.
+    pub fn params_texto(&self) -> Option<&ParamsTexto> {
+        match &self.clase {
+            ClaseCapa::Texto(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Construye una capa de texto. `contenido` es el hash del buffer Rgba8 ya
+    /// rasterizado (lo produce el frontend); `params` guarda el texto editable.
+    pub fn texto(nombre: impl Into<String>, contenido: Hash, params: ParamsTexto) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            nombre: nombre.into(),
+            contenido,
+            blend: ModoFusion::Normal,
+            opacidad: 1.0,
+            mascara: None,
+            visible: true,
+            origen: OrigenCapa::Raster,
+            clase: ClaseCapa::Texto(params),
+            grupo: None,
+            clipping: false,
+        }
     }
 
     /// `true` si esta capa tiene una operación derivada y está stale.
