@@ -25,7 +25,13 @@
 //! *speaker-dependent* (precisa tu voz enrolada); el modo *speaker-independent*
 //! es el backend neuronal posterior.
 
+use serde::{Deserialize, Serialize};
+
 use crate::traits::Audio;
+
+/// Umbral de distancia DTW por defecto para aceptar una utterance como el
+/// llamado. Calibrado para el detector de plantilla; ajustable por el consumidor.
+pub const UMBRAL_LLAMADO_DEFAULT: f32 = 0.5;
 
 /// **Contrato wake-word** — ¿esta utterance es (plausiblemente) el llamado?
 ///
@@ -40,7 +46,7 @@ pub trait DetectorLlamado: Send + Sync {
 /// Parámetros de extracción de rasgos (en muestras). Defaults pensados para
 /// 16 kHz: ventana de 20 ms, salto de 10 ms. La plantilla y la utterance deben
 /// usar los mismos (y la misma tasa de muestreo).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ParamsLlamado {
     pub ventana: usize,
     pub salto: usize,
@@ -109,7 +115,7 @@ pub fn dtw(a: &[[f32; 2]], b: &[[f32; 2]]) -> f32 {
 }
 
 /// Plantilla enrolada: los rasgos de **una** grabación del llamado.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plantilla {
     rasgos: Vec<[f32; 2]>,
 }
@@ -130,7 +136,7 @@ impl Plantilla {
 /// Se enrola con una o varias grabaciones del llamado (más grabaciones = más
 /// robustez a la variación natural). Para cada utterance, alinea por DTW contra
 /// cada plantilla y dispara si la mejor distancia cae bajo el umbral.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectorPlantilla {
     plantillas: Vec<Plantilla>,
     umbral: f32,
@@ -140,6 +146,16 @@ pub struct DetectorPlantilla {
 impl DetectorPlantilla {
     pub fn new(plantillas: Vec<Plantilla>, umbral: f32, params: ParamsLlamado) -> Self {
         Self { plantillas, umbral, params }
+    }
+
+    /// Cantidad de plantillas (grabaciones) enroladas, ya filtradas las vacías.
+    pub fn num_plantillas(&self) -> usize {
+        self.plantillas.iter().filter(|p| !p.vacia()).count()
+    }
+
+    /// `true` si tiene al menos una plantilla utilizable (si no, nunca dispara).
+    pub fn enrolado(&self) -> bool {
+        self.num_plantillas() > 0
     }
 
     /// Enrola desde grabaciones crudas del llamado. Las que queden vacías (audio
@@ -226,6 +242,21 @@ mod tests {
         let otra = constante(4000);
         assert!(det.distancia(&otra) > 0.3, "dist = {}", det.distancia(&otra));
         assert!(!det.es_llamado(&otra));
+    }
+
+    #[test]
+    fn detector_round_trip_serde_conserva_la_decision() {
+        let p = ParamsLlamado { ventana: 320, salto: 160 };
+        let llamado = alternado(4000);
+        let det = DetectorPlantilla::enrolar(&[llamado.clone()], 0.3, p);
+        assert!(det.enrolado());
+        assert_eq!(det.num_plantillas(), 1);
+        // Serializar a JSON y volver: la decisión debe ser idéntica.
+        let s = serde_json::to_string(&det).unwrap();
+        let back: DetectorPlantilla = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.num_plantillas(), 1);
+        assert!(back.es_llamado(&llamado));
+        assert!(!back.es_llamado(&constante(4000)));
     }
 
     #[test]

@@ -1185,6 +1185,9 @@ pub enum Msg {
     SetSessionWidth(f32),
     SetToolWidth(f32),
     RunFromHistory(String),
+    /// El enrolamiento del wake-word terminó (lo dispatcha la task de grabación):
+    /// cierra la captura y marca el wake-word como listo.
+    VozEnrolHecho,
     RunFromHistoryNow(String),
     Module(Slot, ModuleMsg),
     ShortcutClicked(Slot, shuma_module::ShortcutAction),

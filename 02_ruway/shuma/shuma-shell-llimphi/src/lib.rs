@@ -402,6 +402,8 @@ pub fn new_model() -> Model {
 /// Abre el [`shuma_agente::Almacen`], siembra los agentes por defecto y alimenta
 /// el panel de chat con agentes + conversaciones persistidas.
 fn init_agente(model: &mut Model) {
+    // El panel rotula «re-enrolar» si ya hay un wake-word de «shuma» en disco.
+    model.agente.set_wake_listo(cargar_detector_wake().is_some());
     let Some(path) = persist::agente_db_path() else {
         return;
     };
@@ -482,10 +484,17 @@ fn iniciar_voz(m: &mut Model, handle: &Handle<Msg>) {
         tts: rimay_voz::Backend::parse(&voz.tts),
         socket: None,
     };
+    // Compuerta wake-word (F1): si está activada en wawa-panel y hay un detector
+    // enrolado en disco, se monta — así, dormido, sólo se transcribe lo que suena
+    // a «shuma». Sin enrolar, cae a F0 (transcribe-todo).
+    let detector: Option<std::sync::Arc<dyn rimay_voz::DetectorLlamado>> = if voz.wake {
+        cargar_detector_wake().map(|d| std::sync::Arc::new(d) as _)
+    } else {
+        None
+    };
     let opciones = rimay_voz_host::OpcionesEscucha {
         llamado: voz.effective_llamado().to_string(),
-        // Compuerta wake-word enrolada: futuro (necesita la UX de enrolado).
-        detector: None,
+        detector,
     };
     // Runtime propio: la captura tiene tasks tokio + intervalos; el bucle Elm no
     // es tokio. `enter()` da contexto para el `tokio::spawn` interno del host.
@@ -538,6 +547,89 @@ fn atender_mic_intent(m: &mut Model, handle: &Handle<Msg>) {
         Some(true) => iniciar_voz(m, handle),
         Some(false) => parar_voz(m),
         None => {}
+    }
+}
+
+/// Ruta del wake-word enrolado: `$XDG_CONFIG_HOME/shuma/wake.ron`.
+fn ruta_wake() -> Option<std::path::PathBuf> {
+    directories::ProjectDirs::from("", "", "shuma").map(|d| d.config_dir().join("wake.ron"))
+}
+
+/// Carga el detector de wake-word enrolado, si existe y parsea.
+fn cargar_detector_wake() -> Option<rimay_voz::DetectorPlantilla> {
+    let path = ruta_wake()?;
+    let txt = std::fs::read_to_string(path).ok()?;
+    ron::from_str::<rimay_voz::DetectorPlantilla>(&txt)
+        .ok()
+        .filter(|d| d.enrolado())
+}
+
+/// Persiste el detector enrolado a disco (crea el dir si falta).
+fn guardar_detector_wake(det: &rimay_voz::DetectorPlantilla) -> bool {
+    let Some(path) = ruta_wake() else { return false };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match ron::to_string(det) {
+        Ok(s) => std::fs::write(path, s).is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// Atiende el intent de enrolar que dejó el panel tras `EnrolarWake`/`Cancelar`.
+fn atender_enrol_intent(m: &mut Model, handle: &Handle<Msg>) {
+    match m.agente.tomar_enrol_intent() {
+        Some(true) => iniciar_enrol(m, handle),
+        Some(false) => parar_voz(m), // cancela: corta la captura de enrolado
+        None => {}
+    }
+}
+
+/// Arranca la grabación de enrolamiento: capta `ENROL_OBJETIVO` utterances de
+/// «shuma», arma el `DetectorPlantilla`, lo persiste y avisa al panel.
+fn iniciar_enrol(m: &mut Model, handle: &Handle<Msg>) {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            m.agente.enrol_terminado();
+            eprintln!("voz: no se pudo crear el runtime de enrolado: {e}");
+            return;
+        }
+    };
+    let arranque = {
+        let _g = rt.enter();
+        rimay_voz_host::enrolar()
+    };
+    match arranque {
+        Ok((guardia, mut rx)) => {
+            let h = handle.clone();
+            rt.spawn(async move {
+                let objetivo = shuma_module_agente::ENROL_OBJETIVO as usize;
+                let mut audios = Vec::new();
+                while let Some(audio) = rx.recv().await {
+                    audios.push(audio);
+                    h.dispatch(Msg::Agente(shuma_module_agente::Msg::EnrolarCapturado));
+                    if audios.len() >= objetivo {
+                        let det = rimay_voz::DetectorPlantilla::enrolar(
+                            &audios,
+                            rimay_voz::UMBRAL_LLAMADO_DEFAULT,
+                            rimay_voz::ParamsLlamado::default(),
+                        );
+                        guardar_detector_wake(&det);
+                        // El chasis cierra la captura y marca el wake listo.
+                        h.dispatch(Msg::VozEnrolHecho);
+                        break;
+                    }
+                }
+            });
+            m._voz_guardia = Some(guardia);
+            m._voz_rt = Some(rt);
+            eprintln!("voz: 🎙 enrolando — decí «shuma» {} veces", shuma_module_agente::ENROL_OBJETIVO);
+        }
+        Err(e) => {
+            m.agente.enrol_terminado(); // saca al panel del modo enrolar
+            eprintln!("voz: no se pudo abrir el micrófono para enrolar: {e}");
+        }
     }
 }
 
@@ -858,8 +950,9 @@ impl App for Shell {
             Msg::Agente(am) => {
                 m.agente.fijar_reloj(ahora_ms());
                 m.agente = shuma_module_agente::update(m.agente.clone(), am);
-                // ¿El usuario tocó el micrófono? Arrancá/pará la captura real.
+                // ¿El usuario tocó el micrófono o pidió enrolar? Arrancá/pará.
                 atender_mic_intent(&mut m, handle);
+                atender_enrol_intent(&mut m, handle);
                 // Persistí las conversaciones tras cada cambio (writes chicos).
                 if let Some(al) = &m.agente_almacen {
                     for c in m.agente.conversaciones() {
@@ -894,6 +987,15 @@ impl App for Shell {
                     let target = Slot::Session(m.active_session, Which::Shell);
                     m = apply_module_msg(m, target, insert);
                 }
+            }
+            Msg::VozEnrolHecho => {
+                // La grabación juntó las muestras y guardó el detector: cerrá la
+                // captura y marcá el wake-word listo (la compuerta F1 se monta en
+                // el próximo encendido del micrófono).
+                m._voz_guardia = None;
+                m._voz_rt = None;
+                m.agente.enrol_terminado();
+                eprintln!("voz: wake-word «shuma» enrolado");
             }
             Msg::RunFromHistory(cmd) => {
                 let slot = Slot::Session(m.active_session, Which::Shell);

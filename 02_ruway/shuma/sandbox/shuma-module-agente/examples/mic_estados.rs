@@ -34,6 +34,7 @@ fn main() {
         ("oyendo", EstadoEscucha::Oyendo, 300),
         ("despierto", EstadoEscucha::Despierto, 250),
         ("dictando", EstadoEscucha::Dictando, 200),
+        ("enrolando", EstadoEscucha::Apagado, 1), // reloj==1 dispara el modo enrolar
     ];
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
@@ -56,6 +57,11 @@ fn render_estado(hal: &Hal, renderer: &mut Renderer, escucha: EstadoEscucha, rel
     if escucha == EstadoEscucha::Dictando {
         // Mostramos texto dictado en el input.
         state = shuma_module_agente::update(state, Msg::Dictado("abrí cosmos".into()));
+    }
+    // Estado especial «enrolando»: la palabra Apagado + un enrolamiento a 1/3.
+    if matches!(escucha, EstadoEscucha::Apagado) && reloj == 1 {
+        state = shuma_module_agente::update(state, Msg::EnrolarWake);
+        state = shuma_module_agente::update(state, Msg::EnrolarCapturado);
     }
 
     let root = view(&state, &theme, |m: Msg| m);

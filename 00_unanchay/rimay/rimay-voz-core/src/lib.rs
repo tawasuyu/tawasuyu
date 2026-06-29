@@ -39,4 +39,6 @@ pub use traits::{Audio, Locutor, Transcriptor, Transcripcion, VozError};
 pub use vad::{
     ConfigVad, DetectorEnergia, DetectorVoz, PulsoVad, SalidaVad, Segmentador, Vad,
 };
-pub use wake::{DetectorLlamado, DetectorPlantilla, ParamsLlamado, Plantilla};
+pub use wake::{
+    DetectorLlamado, DetectorPlantilla, ParamsLlamado, Plantilla, UMBRAL_LLAMADO_DEFAULT,
+};

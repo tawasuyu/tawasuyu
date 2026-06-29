@@ -11,3 +11,6 @@ description = "voz — contrato agnóstico de habla para toda la suite: trait Tr
 serde = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

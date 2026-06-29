@@ -227,7 +227,19 @@ pub struct State {
     /// el micrófono; el chasis lo toma con [`State::tomar_mic_intent`] y arranca
     /// o para la captura de `rimay-voz-host`. `None` = nada pendiente.
     mic_intent: Option<bool>,
+    /// Enrolamiento del wake-word en curso: `Some(n)` = ya se grabaron `n`
+    /// muestras de «shuma» (de [`ENROL_OBJETIVO`]); `None` = no se está enrolando.
+    enrolando: Option<u8>,
+    /// Intent de enrolar (`Some(true)` arrancar, `Some(false)` cancelar); el
+    /// chasis lo toma con [`State::tomar_enrol_intent`] y corre `rimay_voz_host::enrolar`.
+    enrol_intent: Option<bool>,
+    /// `true` si ya hay un wake-word enrolado (lo fija el chasis al cargar / tras
+    /// enrolar). Sólo rotula la UI; la compuerta real la monta el chasis.
+    wake_listo: bool,
 }
+
+/// Cuántas grabaciones de «shuma» pide el enrolamiento.
+pub const ENROL_OBJETIVO: u8 = 3;
 
 impl Default for State {
     fn default() -> Self {
@@ -258,6 +270,9 @@ impl State {
             renombrando: None,
             escucha: EstadoEscucha::Apagado,
             mic_intent: None,
+            enrolando: None,
+            enrol_intent: None,
+            wake_listo: false,
         }
     }
 
@@ -288,6 +303,34 @@ impl State {
     /// consulta tras cada `update` y arranca o para `rimay-voz-host`.
     pub fn tomar_mic_intent(&mut self) -> Option<bool> {
         self.mic_intent.take()
+    }
+
+    /// Toma el intent de enrolar (arrancar/cancelar) y lo limpia.
+    pub fn tomar_enrol_intent(&mut self) -> Option<bool> {
+        self.enrol_intent.take()
+    }
+
+    /// Progreso del enrolamiento (`Some(n)` grabadas, `None` si no enrola).
+    pub fn enrolando(&self) -> Option<u8> {
+        self.enrolando
+    }
+
+    /// El chasis avisa que grabó una muestra más de «shuma» (avanza el contador).
+    pub fn enrol_capturado(&mut self) {
+        if let Some(n) = self.enrolando.as_mut() {
+            *n = n.saturating_add(1).min(ENROL_OBJETIVO);
+        }
+    }
+
+    /// El chasis avisa que el enrolamiento terminó y el wake-word quedó listo.
+    pub fn enrol_terminado(&mut self) {
+        self.enrolando = None;
+        self.wake_listo = true;
+    }
+
+    /// El chasis fija si ya hay un wake-word enrolado (al cargar la config).
+    pub fn set_wake_listo(&mut self, listo: bool) {
+        self.wake_listo = listo;
     }
 
     /// Inyecta las conversaciones (más recientes primero). Si la activa ya no
@@ -441,6 +484,14 @@ pub enum Msg {
     EscuchaCambio(EstadoEscucha),
     /// Texto dictado por voz: se inserta en el input (no envía solo).
     Dictado(String),
+    /// Empezar a enrolar la palabra de llamada (grabar «shuma» ×N).
+    EnrolarWake,
+    /// El chasis grabó una muestra más de «shuma» (avanza el contador).
+    EnrolarCapturado,
+    /// El chasis terminó: el wake-word quedó enrolado.
+    EnrolarHecho,
+    /// Cancelar el enrolamiento en curso.
+    EnrolarCancelar,
 }
 
 /// Transición pura del estado.
@@ -663,6 +714,10 @@ pub fn update(state: State, msg: Msg) -> State {
             s.editor = None;
         }
         Msg::ToggleMic => {
+            // Durante el enrolamiento el micrófono lo usa la grabación: ignorar.
+            if s.enrolando.is_some() {
+                return s;
+            }
             // Alterna encender/apagar; deja el intent para que el chasis arranque
             // o pare la captura real (rimay-voz-host).
             if s.escucha.activo() {
@@ -686,6 +741,21 @@ pub fn update(state: State, msg: Msg) -> State {
                 }
                 s.input.push_str(&t);
                 s.focused = true;
+            }
+        }
+        Msg::EnrolarWake => {
+            // No enrolar mientras se escucha (mutuamente excluyente).
+            if s.enrolando.is_none() && !s.escucha.activo() {
+                s.enrolando = Some(0);
+                s.enrol_intent = Some(true);
+            }
+        }
+        Msg::EnrolarCapturado => s.enrol_capturado(),
+        Msg::EnrolarHecho => s.enrol_terminado(),
+        Msg::EnrolarCancelar => {
+            if s.enrolando.is_some() {
+                s.enrolando = None;
+                s.enrol_intent = Some(false);
             }
         }
     }
@@ -877,12 +947,15 @@ fn params_escucha(e: EstadoEscucha) -> (u32, f64, f32) {
 /// (el chasis lo refresca mientras escucha).
 fn boton_mic<HostMsg: Clone + 'static>(
     escucha: EstadoEscucha,
+    enrolando: bool,
     reloj_ms: u64,
     theme: &Theme,
     lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
 ) -> View<HostMsg> {
     let accent = theme.accent;
     let apagado = theme.fg_muted;
+    // Enrolando: halo «grabando» en rojo cálido, anillos rápidos e intensos.
+    let grabando = llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0xE0, 0x5A, 0x5A);
     View::new(Style {
         size: Size { width: length(34.0), height: length(34.0) },
         flex_shrink: 0.0,
@@ -903,7 +976,13 @@ fn boton_mic<HostMsg: Clone + 'static>(
         let cx = (rect.x + rect.w * 0.5) as f64;
         let cy = (rect.y + rect.h * 0.5) as f64;
         let lado = rect.w.min(rect.h) as f64;
-        let (anillos, periodo, intensidad) = params_escucha(escucha);
+        // Enrolando manda sobre el estado de escucha (color rojo, máxima onda).
+        let (color, anillos, periodo, intensidad) = if enrolando {
+            (grabando, 3u32, 600.0_f64, 1.0_f32)
+        } else {
+            let (a, p, i) = params_escucha(escucha);
+            (accent, a, p, i)
+        };
 
         // Halo: anillos que emanan (las «ondas» del efecto cava).
         let r0 = lado * 0.20;
@@ -915,14 +994,14 @@ fn boton_mic<HostMsg: Clone + 'static>(
             scene.stroke(
                 &Stroke::new(1.6),
                 Affine::IDENTITY,
-                accent.with_alpha(a),
+                color.with_alpha(a),
                 None,
                 &Circle::new((cx, cy), r),
             );
         }
 
         // Glifo del micrófono, teñido por estado.
-        let gc = if escucha.activo() { accent } else { apagado };
+        let gc = if enrolando || escucha.activo() { color } else { apagado };
         let bw = lado * 0.11;
         let bh = lado * 0.20;
         let cap = RoundedRect::new(cx - bw, cy - bh - 2.0, cx + bw, cy + bh - 2.0, bw);
@@ -1070,22 +1149,63 @@ fn panel_view<HostMsg: Clone + 'static>(
                 &rr,
             );
         }
-    })
-    .children(vec![text_input_view(
+    });
+    // Enrolando: el placeholder guía la grabación de «shuma».
+    let placeholder = match state.enrolando {
+        Some(n) => format!("🎙 Grabá «shuma» — {}/{} (cancelar →)", n, ENROL_OBJETIVO),
+        None => "Escribí tu mensaje…  (Enter envía · img:/ruta para adjuntar · 🎙 dicta)".into(),
+    };
+    let input = input.children(vec![text_input_view(
         &state.input,
-        "Escribí tu mensaje…  (Enter envía · img:/ruta para adjuntar · 🎙 dicta)",
+        &placeholder,
         state.focused,
         &tp,
         lift(Msg::FocusInput),
     )]);
-    // Botón de micrófono con el indicador animado de escucha.
-    let mic = boton_mic(state.escucha, state.reloj_ms, theme, lift.clone());
+    // Botón de micrófono con el indicador animado (escucha o enrolamiento).
+    let mic = boton_mic(
+        state.escucha,
+        state.enrolando.is_some(),
+        state.reloj_ms,
+        theme,
+        lift.clone(),
+    );
     let bp = ButtonPalette::from_theme(theme);
-    let enviar = View::new(Style {
-        size: Size { width: length(96.0), height: Dimension::auto() },
-        ..Default::default()
-    })
-    .children(vec![button_view("Enviar", &bp, lift(Msg::Enviar))]);
+    // En idle, un acceso a enrolar el wake-word; enrolando, a cancelar; si no, Enviar.
+    let accion = if state.enrolando.is_some() {
+        View::new(Style {
+            size: Size { width: length(96.0), height: Dimension::auto() },
+            ..Default::default()
+        })
+        .children(vec![button_view("Cancelar", &bp, lift(Msg::EnrolarCancelar))])
+    } else if !state.escucha.activo() {
+        // Idle: ofrecé enrolar (o re-enrolar) la palabra de llamada.
+        let etq = if state.wake_listo { "re-enrolar" } else { "enrolar voz" };
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            gap: Size { width: length(8.0), height: length(0.0) },
+            ..Default::default()
+        })
+        .children(vec![
+            View::new(Style {
+                size: Size { width: length(96.0), height: Dimension::auto() },
+                ..Default::default()
+            })
+            .children(vec![button_view(etq, &bp, lift(Msg::EnrolarWake))]),
+            View::new(Style {
+                size: Size { width: length(96.0), height: Dimension::auto() },
+                ..Default::default()
+            })
+            .children(vec![button_view("Enviar", &bp, lift(Msg::Enviar))]),
+        ])
+    } else {
+        View::new(Style {
+            size: Size { width: length(96.0), height: Dimension::auto() },
+            ..Default::default()
+        })
+        .children(vec![button_view("Enviar", &bp, lift(Msg::Enviar))])
+    };
+    let enviar = accion;
 
     let barra = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -1515,6 +1635,53 @@ mod tests {
         // Vacío no cambia nada.
         s = update(s, Msg::Dictado(String::new()));
         assert_eq!(s.input.text(), "hola mundo");
+    }
+
+    #[test]
+    fn enrolar_flujo_completo() {
+        let mut s = State::new();
+        // Arrancar: deja intent y contador en 0.
+        s = update(s, Msg::EnrolarWake);
+        assert_eq!(s.enrolando(), Some(0));
+        assert_eq!(s.tomar_enrol_intent(), Some(true));
+        // El chasis reporta las 3 capturas.
+        for n in 1..=ENROL_OBJETIVO {
+            s = update(s, Msg::EnrolarCapturado);
+            assert_eq!(s.enrolando(), Some(n));
+        }
+        // Capturas de más no pasan del objetivo.
+        s = update(s, Msg::EnrolarCapturado);
+        assert_eq!(s.enrolando(), Some(ENROL_OBJETIVO));
+        // Terminar: sale de enrolando y marca wake listo.
+        s = update(s, Msg::EnrolarHecho);
+        assert_eq!(s.enrolando(), None);
+        assert!(s.wake_listo);
+    }
+
+    #[test]
+    fn enrolar_cancelar_deja_intent_de_corte() {
+        let mut s = State::new();
+        s = update(s, Msg::EnrolarWake);
+        let _ = s.tomar_enrol_intent();
+        s = update(s, Msg::EnrolarCancelar);
+        assert_eq!(s.enrolando(), None);
+        assert_eq!(s.tomar_enrol_intent(), Some(false));
+    }
+
+    #[test]
+    fn no_se_enrola_mientras_escucha_ni_se_escucha_enrolando() {
+        let mut s = State::new();
+        // Escuchando → EnrolarWake no arranca.
+        s.fijar_escucha(EstadoEscucha::Despierto);
+        s = update(s, Msg::EnrolarWake);
+        assert_eq!(s.enrolando(), None);
+        // Enrolando → ToggleMic no enciende el micrófono.
+        let mut s = State::new();
+        s = update(s, Msg::EnrolarWake);
+        let _ = s.tomar_enrol_intent();
+        s = update(s, Msg::ToggleMic);
+        assert_eq!(s.escucha(), EstadoEscucha::Apagado);
+        assert_eq!(s.tomar_mic_intent(), None);
     }
 
     #[test]

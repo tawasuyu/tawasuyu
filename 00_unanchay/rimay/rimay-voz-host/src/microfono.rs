@@ -102,16 +102,15 @@ pub fn escuchar_cfg(
 
 /// Núcleo compartido: abre el micrófono (sync, para reportar «no hay micro») y
 /// arranca la task que obtiene el STT del `stt_fut` y corre el lazo.
-fn arrancar(
-    stt_fut: std::pin::Pin<Box<dyn std::future::Future<Output = Arc<dyn Transcriptor>> + Send>>,
-    opciones: OpcionesEscucha,
-) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<EventoEscucha>), MicError> {
-    let parar = Arc::new(AtomicBool::new(false));
-    let (tx_audio, mut rx_audio) = mpsc::unbounded_channel::<Vec<i16>>();
+/// Abre el micrófono default en un **hilo dedicado** (el `Stream` de cpal es
+/// `!Send`) y entrega sus muestras ya preparadas (mono, 16 kHz, `i16`) por un
+/// canal. El `parar` corta el hilo. Reporta el error de apertura sincrónico.
+fn abrir_microfono(
+    parar: Arc<AtomicBool>,
+) -> Result<mpsc::UnboundedReceiver<Vec<i16>>, MicError> {
+    let (tx_audio, rx_audio) = mpsc::unbounded_channel::<Vec<i16>>();
     let (tx_abierto, rx_abierto) = std::sync::mpsc::channel::<Result<(), MicError>>();
 
-    // --- Hilo de audio: dueño del MicSource (!Send). ---
-    let parar_hilo = parar.clone();
     std::thread::Builder::new()
         .name("voz-microfono".into())
         .spawn(move || {
@@ -132,7 +131,7 @@ fn arrancar(
             let n = (de_hz as usize / 50).max(1) * canales.max(1) as usize;
             let mut buf = vec![0f32; n];
 
-            while !parar_hilo.load(Ordering::Relaxed) {
+            while !parar.load(Ordering::Relaxed) {
                 mic.fill(&mut buf, de_hz, canales);
                 let mono = a_mono(&buf, canales);
                 let remuestreado = remu.procesar(&mono);
@@ -144,12 +143,19 @@ fn arrancar(
         })
         .map_err(|e| MicError::Build(format!("spawn hilo de audio: {e}")))?;
 
-    // Esperamos el resultado de abrir el dispositivo (rápido).
     match rx_abierto.recv() {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => return Err(e),
-        Err(_) => return Err(MicError::Build("el hilo de audio no reportó apertura".into())),
+        Ok(Ok(())) => Ok(rx_audio),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(MicError::Build("el hilo de audio no reportó apertura".into())),
     }
+}
+
+fn arrancar(
+    stt_fut: std::pin::Pin<Box<dyn std::future::Future<Output = Arc<dyn Transcriptor>> + Send>>,
+    opciones: OpcionesEscucha,
+) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<EventoEscucha>), MicError> {
+    let parar = Arc::new(AtomicBool::new(false));
+    let mut rx_audio = abrir_microfono(parar.clone())?;
 
     // --- Task async: corre el Lazo (STT async) + el reloj de re-dormida. ---
     let (tx_ev, rx_ev) = mpsc::unbounded_channel::<EventoEscucha>();
@@ -186,4 +192,37 @@ fn arrancar(
     });
 
     Ok((GuardiaEscucha { parar, tarea }, rx_ev))
+}
+
+/// Captura para **enrolar** la palabra de llamada: abre el micrófono, segmenta
+/// utterances con el VAD (sin STT) y entrega **cada una** como [`rimay_voz::Audio`]
+/// por el canal. El consumidor junta unas cuantas grabaciones del llamado
+/// («shuma» ×N) y arma el `DetectorPlantilla`. Soltar la guardia corta la
+/// captura. No usa wake-word ni red — sólo el VAD local.
+pub fn enrolar(
+) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<rimay_voz::Audio>), MicError> {
+    use rimay_voz::{ConfigVad, DetectorEnergia, SalidaVad, Vad};
+    const MUESTRAS_FRAME: usize = 480; // 30 ms a 16 kHz
+
+    let parar = Arc::new(AtomicBool::new(false));
+    let mut rx_audio = abrir_microfono(parar.clone())?;
+    let (tx_utt, rx_utt) = mpsc::unbounded_channel::<rimay_voz::Audio>();
+
+    let tarea = tokio::spawn(async move {
+        let mut vad = Vad::new(DetectorEnergia::default(), ConfigVad::default(), HZ_OBJETIVO);
+        let mut pend: Vec<i16> = Vec::new();
+        while let Some(muestras) = rx_audio.recv().await {
+            pend.extend_from_slice(&muestras);
+            while pend.len() >= MUESTRAS_FRAME {
+                let frame: Vec<i16> = pend.drain(..MUESTRAS_FRAME).collect();
+                if let SalidaVad::Termino(audio) = vad.empujar(&frame) {
+                    if tx_utt.send(audio).is_err() {
+                        return; // el consumidor ya juntó lo que necesitaba
+                    }
+                }
+            }
+        }
+    });
+
+    Ok((GuardiaEscucha { parar, tarea }, rx_utt))
 }
