@@ -54,51 +54,42 @@ comm -23 /tmp/keys_es.txt /tmp/keys_qu.txt   # debe salir vacío
 localizador. Más 2 consumidoras con strings a medio migrar. Regla: las apps UI
 muestran strings de usuario vía `rimay_localize::t(...)`, no literales `"..."`.
 
-### ✅ Hecho — subsistema nahual completo (2026-06-29)
+### ✅ Hecho — barrido 🔴/🟡 completo (2026-06-29)
 
-Localizados vía `rimay-localize` (commits `8164a36e`, `a929ac13`, `e821cbbc`):
-`nahual-image-viewer`, `nahual-audio-viewer`, `nahual-card-viewer`,
-`nahual-file-explorer`, `nahual-archive-viewer`, `nahual-font-viewer`,
-`nahual-gallery` y `nahual-shell-llimphi` (chrome + paleta + menubar +
-contextual + modales + panel IA). Claves `nahual-*` en los tres `.ftl`
-(paridad 902). **Pendiente del subsistema:** `nahual-shell-core` (otro crate)
-— `FindMode::label` / `OpKind::label` siguen en español, así que el arg
-`{mode}` del overlay de búsqueda y los labels de la cola no se traducen.
+Todas las apps que el audito listaba como 🔴/🟡 están localizadas vía
+`rimay-localize`. Commits: nahual (`8164a36e`, `a929ac13`, `e821cbbc`),
+`pluma-app` (`f01245a2`), `puriy` (`f36c842f`), claves `pata-*`
+(`aab9373e`), y las 11 restantes —media-tube, uya, launcher, iniy,
+hapiy, willay-panel, tinkuy, arje-card, chasqui-broker-explorer, churay,
+sandokan-monitor— (`a0a4e813`). Paridad es/en/qu en 1684 claves. Quechua
+aproximado en todo, **sujeto a revisión de un hablante**.
 
-Además, la infra ahora soporta **override de catálogos en runtime** (sin
-recompilar) — ver sección arriba.
+Además la infra soporta **override de catálogos en runtime** (sin recompilar)
+— ver sección arriba.
 
-### 🔴 Hardcodean español — enchufar al localizador
+### 🟠 Pendientes puntuales (lo que NO quedó)
 
-| Crate | Pista (archivo:línea — re-grep si no calza) | Ejemplo |
-|---|---|---|
-| `00_unanchay/pluma/pluma-app-llimphi` | view.rs:639-640 | `"quitar formato"`, `"cerrar"` |
-| `00_unanchay/puriy/puriy-llimphi` | chrome.rs:46-73 | `"Deshacer"`, `"Rehacer"`, `"Cortar"` |
-| `01_yachay/iniy/iniy-explorer-llimphi` | main.rs:374-389 | `"Deseleccionar"`, `"Recargar corpus"` |
-| `01_yachay/tinkuy/tinkuy-llimphi` | lib.rs:721-737 | `"Pausar"`, `"Reanudar"`, `"Cambiar tema"` |
-| `02_ruway/churay/churay-llimphi` | main.rs:730 | `"Instalar sugeridas"` |
-| `02_ruway/hapiy/hapiy-llimphi` | main.rs:137 | `"Pulsá Capturar"` |
-| `02_ruway/media/media-tube-llimphi` | main.rs:72 | `"media tube"` |
-| `02_ruway/pata/pata-llimphi` | render/unidades.rs | `"Unidades"` |
-| `02_ruway/uya/uya-llimphi` | main.rs | `"charla"` |
-| `03_ukupacha/arje/arje-card-llimphi` | main.rs:1070, 793 | `"Refrescar"`, `"Aislamiento"` |
-| `03_ukupacha/sandokan/sandokan-monitor-llimphi` | view_sistema.rs:172, view_unidades.rs:26 | `"Terminar"`, `"Sin unidades vivas"` |
-| `shared/launcher-llimphi` | src/bin/tawasuyu-launcher.rs:110, 137 | `"tawasuyu · launcher"`, `"{n} apps descubiertas"` |
-| `shared/willay/willay-panel-llimphi` | main.rs:114, 260 | `"Hoy"`, `"Copiado al portapapeles"` |
+- **`pata-llimphi` (fuente):** las **claves** `pata-*` están commiteadas
+  (`aab9373e`, paridad ok) pero la **fuente** (las llamadas `t()` en
+  `pata/src`) quedó SIN commitear por una colisión con otra sesión que editaba
+  pata en paralelo (feature services/power-profile). Hay backup del trabajo del
+  subagente en scratchpad. **Acción:** cuando esa sesión termine pata, rehacer
+  la localización de `pata/src` sobre la versión final (las claves ya existen).
+  Hasta entonces, esas 142 claves figuran sin uso en el código committeado.
+- **`nahual-shell-core`** (otro crate): `FindMode::label` / `OpKind::label`
+  siguen en español → el arg `{mode}` del overlay de búsqueda y los labels de la
+  cola del shell no se traducen.
+- **Sentinelas con tests exact-match** (dejadas literales a propósito;
+  requieren separar *sentinela* de *etiqueta de display*, refactor fuera del
+  barrido): `willay` `etiqueta_bucket` ("Hoy"/"Ayer"/…), `arje-card`
+  `human_user_ns`/`human_cgroup`/`formatear_entrada`.
+- **Títulos de ventana** (`App::title() -> &'static str`): quedan como marca en
+  todas las apps (no se puede devolver el `String` de `t()` sin leak); donde hay
+  item "Acerca de", el texto sí se localiza ahí.
 
-⚠️ El subsistema nahual ya está hecho (ver arriba). Próximo lote sugerido por
-impacto: `pluma-app` / `puriy` / `iniy` / `tinkuy` → ruway misc → ukupacha/shared.
-
-### 🟡 Mixtas — ya consumen el localizador pero dejaron strings sueltos
-
-| Crate | Pista | Detalle |
-|---|---|---|
-| `02_ruway/chasqui/chasqui-broker-explorer-llimphi` | main.rs:621-622 | `"Refrescar probe"`, `"Limpiar timeline"` |
-
-> **Pendiente no auditado:** las 26 consumidoras se confirmaron solo a nivel de
-> dependencia, no de cobertura interna. El caso `nahual-image-viewer` sugiere que
-> puede haber strings sueltos *dentro* de ellas. Falta un audito de cobertura por
-> consumidora (grep de literales `"..."` en widgets que no pasen por `t(...)`).
+> **Pendiente no auditado:** cobertura interna de las consumidoras viejas (las
+> 26 originales) — grep de literales `"..."` en widgets que no pasen por `t(...)`.
+> No se hizo un audito exhaustivo de esas.
 
 ### ⚪ Exentas (render-libs sin texto de usuario — NO tocar)
 
@@ -117,16 +108,17 @@ Por cada crate 🔴/🟡:
 2. Por cada string de usuario hardcodeado: inventar una clave namespaced
    (`<crate>-<concepto>`, ej. `nahual-shell-esc-cierra`) y reemplazar el literal
    por `rimay_localize::t("clave")` (o la API de interpolación para `{var}`).
-3. **Agregar la clave a los TRES `.ftl`** (`es`, `en`, `qu`) — la paridad de 733 es
-   invariante de `main`; romperla es un bug. `es` = el texto que ya estaba; `en` y
-   `qu` = traducción.
+3. **Agregar la clave a los TRES `.ftl`** (`es`, `en`, `qu`) — la paridad (hoy
+   1684 claves) es invariante de `main`; romperla es un bug. `es` = el texto que
+   ya estaba; `en` y `qu` = traducción.
 4. Re-verificar paridad con el comando de arriba.
 5. `cargo check --workspace` (smoke test mínimo del repo).
 6. Commit por crate o por subsistema: `feat(<scope>): localiza strings via rimay-localize`.
 
-Orden sugerido por impacto (el subsistema nahual ya está hecho): **pluma-app**
-→ puriy / iniy / tinkuy → ruway misc → ukupacha/shared. La 🟡 restante
-(`chasqui-broker-explorer`) es arreglo chico y conviene cerrarla al pasar.
+Este plan ya se aplicó a todo el 🔴/🟡 del audito (ver "Hecho" arriba). Lo que
+queda son los **pendientes puntuales** (sección 🟠): la fuente de `pata`,
+`nahual-shell-core`, las sentinelas con tests, y el audito de cobertura interna
+de las consumidoras viejas.
 
 ## Cómo reproducir el audito (encontrar el gap completo)
 
