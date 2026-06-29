@@ -155,14 +155,15 @@ pub(crate) enum PromptKind {
 }
 
 impl Prompt {
-    /// Título humano del overlay.
-    pub(crate) fn title(&self) -> &'static str {
-        match self.kind {
-            PromptKind::NewDir { .. } => "Nueva carpeta",
-            PromptKind::NewFile { .. } => "Nuevo archivo",
-            PromptKind::Rename { .. } => "Renombrar",
-            PromptKind::SelectPattern => "Seleccionar por patrón (* comodín)",
-        }
+    /// Título humano localizado del overlay.
+    pub(crate) fn title(&self) -> String {
+        let key = match self.kind {
+            PromptKind::NewDir { .. } => "nahual-shell-new-dir",
+            PromptKind::NewFile { .. } => "nahual-shell-new-file",
+            PromptKind::Rename { .. } => "nahual-shell-rename",
+            PromptKind::SelectPattern => "nahual-shell-select-pattern-title",
+        };
+        rimay_localize::t(key)
     }
 }
 

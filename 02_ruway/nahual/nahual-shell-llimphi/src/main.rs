@@ -101,6 +101,10 @@ impl App for Shell {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"));
         let cfg = wawa_config::WawaConfig::load();
+        // i18n: cargar catálogos y fijar el locale del usuario (cfg.lang) antes
+        // de armar cualquier vista — así los strings de UI salen traducidos.
+        rimay_localize::init();
+        let _ = rimay_localize::set_locale(&cfg.lang);
         let theme = theme_from_wawa(&cfg, &Theme::dark());
         let handle_clone = handle.clone();
         let watcher = wawa_config::ConfigWatcher::spawn(move |new_cfg| {

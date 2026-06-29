@@ -347,7 +347,7 @@ pub(crate) fn ai_overlay(ai: &AiState, theme: &Theme) -> View<Msg> {
 
     let cuerpo_txt = match &ai.respuesta {
         Some(r) => r.clone(),
-        None if ai.pendiente => "consultando a la IA…".to_string(),
+        None if ai.pendiente => rimay_localize::t("nahual-shell-ai-consulting"),
         None => String::new(),
     };
     let cuerpo = View::new(Style {
@@ -366,7 +366,7 @@ pub(crate) fn ai_overlay(ai: &AiState, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .text("Esc cierra", 11.0, theme.fg_muted);
+    .text(rimay_localize::t("nahual-shell-esc-close"), 11.0, theme.fg_muted);
 
     let caja = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -404,27 +404,28 @@ pub(crate) fn find_overlay_ex(
     // Anotación del índice cuando el modo es semántico.
     let modo_txt = if matches!(f.mode, crate::modelo::FindMode::Semantic) {
         if indexing {
-            format!("{} (indexando…)", f.mode.label())
+            rimay_localize::t_args("nahual-shell-find-mode-indexing", &[("mode", f.mode.label().into())])
         } else if let Some(n) = index_entries {
-            format!("{} (índice: {n})", f.mode.label())
+            rimay_localize::t_args(
+                "nahual-shell-find-mode-index",
+                &[("mode", f.mode.label().into()), ("n", n.to_string().into())],
+            )
         } else {
-            format!("{} (sin índice · por consulta)", f.mode.label())
+            rimay_localize::t_args("nahual-shell-find-mode-noindex", &[("mode", f.mode.label().into())])
         }
     } else {
         f.mode.label().to_string()
     };
     // Cabecera: estado de la búsqueda + atajos.
     let header_txt = if f.searching {
-        format!("buscar · {modo_txt} · buscando…")
+        rimay_localize::t_args("nahual-shell-find-searching", &[("mode", modo_txt.clone().into())])
     } else if f.ran.is_some() {
-        format!(
-            "buscar · {modo_txt} · {} resultados · ↓↑ navega · Enter abre · Tab modo · Esc cierra",
-            f.results.len(),
+        rimay_localize::t_args(
+            "nahual-shell-find-results",
+            &[("mode", modo_txt.clone().into()), ("n", f.results.len().to_string().into())],
         )
     } else {
-        format!(
-            "buscar · {modo_txt} · Enter busca · Tab modo (nombre/contenido/semántico) · Esc cierra",
-        )
+        rimay_localize::t_args("nahual-shell-find-prompt", &[("mode", modo_txt.clone().into())])
     };
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
@@ -481,7 +482,7 @@ pub(crate) fn find_overlay_ex(
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
-            .text("sin resultados", 12.0, theme.fg_muted),
+            .text(rimay_localize::t("nahual-shell-no-results"), 12.0, theme.fg_muted),
         );
     }
 
@@ -515,6 +516,17 @@ pub(crate) fn find_overlay_ex(
     .children(vec![caja])
 }
 
+/// Nombre localizado del modo de vista (lista/detalle/iconos/galería).
+pub(crate) fn mode_label(view: nahual_source_core::ViewMode) -> String {
+    let key = match view {
+        nahual_source_core::ViewMode::List => "nahual-shell-mode-list",
+        nahual_source_core::ViewMode::Details => "nahual-shell-mode-details",
+        nahual_source_core::ViewMode::Icons => "nahual-shell-mode-icons",
+        nahual_source_core::ViewMode::Gallery => "nahual-shell-mode-gallery",
+    };
+    rimay_localize::t(key)
+}
+
 /// Barra de estado inferior (parity dOpus): siempre visible, resume el panel
 /// enfocado — total de entradas, cuántas hay marcadas + su tamaño sumado, y el
 /// elemento bajo el cursor con su tamaño. A la derecha, el modo de vista.
@@ -532,28 +544,40 @@ pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
         .sum();
 
     let izq = if marcadas > 0 {
-        format!("{marcadas} de {total} seleccionadas · {}", human_size(bytes))
+        rimay_localize::t_args(
+            "nahual-shell-status-selected",
+            &[
+                ("n", marcadas.to_string().into()),
+                ("total", total.to_string().into()),
+                ("size", human_size(bytes).into()),
+            ],
+        )
     } else {
         match nav.selected_node() {
             Some(n) if !n.is_container => {
                 let sz = n.size.map(human_size).unwrap_or_default();
-                format!("{total} entradas · {} · {sz}", n.name)
+                rimay_localize::t_args(
+                    "nahual-shell-status-file",
+                    &[
+                        ("total", total.to_string().into()),
+                        ("name", n.name.clone().into()),
+                        ("size", sz.into()),
+                    ],
+                )
             }
-            Some(n) => format!("{total} entradas · {}/", n.name),
-            None => format!("{total} entradas"),
+            Some(n) => rimay_localize::t_args(
+                "nahual-shell-status-dir",
+                &[("total", total.to_string().into()), ("name", n.name.clone().into())],
+            ),
+            None => rimay_localize::t_args("nahual-shell-status-entries", &[("total", total.to_string().into())]),
         }
     };
 
-    let modo = match nav.view {
-        nahual_source_core::ViewMode::List => "lista",
-        nahual_source_core::ViewMode::Details => "detalle",
-        nahual_source_core::ViewMode::Icons => "iconos",
-        nahual_source_core::ViewMode::Gallery => "galería",
-    };
+    let modo = mode_label(nav.view);
     let der_txt = if model.dual {
-        format!("dual · {modo}")
+        rimay_localize::t_args("nahual-shell-status-dual", &[("mode", modo.clone().into())])
     } else {
-        modo.to_string()
+        modo
     };
 
     let izq_view = View::new(Style {
@@ -690,7 +714,7 @@ pub(crate) fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .text("CARPETAS", 12.0, theme.fg_muted);
+    .text(rimay_localize::t("nahual-shell-folders"), 12.0, theme.fg_muted);
 
     // Ventaneo: sólo las filas que entran (offset recordado por sesión).
     let all = build_tree_rows(model, theme);
@@ -736,11 +760,11 @@ pub(crate) fn canvas_app_view(canvas: &CanvasApp, model: &Model, theme: &Theme) 
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string());
             let estado = if *dirty {
-                "● sin guardar"
+                rimay_localize::t("nahual-shell-unsaved")
             } else if *saved {
-                "✓ guardado"
+                rimay_localize::t("nahual-shell-saved")
             } else {
-                ""
+                String::new()
             };
             let titulo = View::new(Style {
                 flex_grow: 1.0,
@@ -754,7 +778,7 @@ pub(crate) fn canvas_app_view(canvas: &CanvasApp, model: &Model, theme: &Theme) 
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
-            .text("Ctrl+S guarda · Esc cierra", 11.5, theme.fg_muted);
+            .text(rimay_localize::t("nahual-shell-editor-hint"), 11.5, theme.fg_muted);
             let header = View::new(Style {
                 flex_direction: FlexDirection::Row,
                 size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
@@ -907,9 +931,12 @@ pub(crate) fn queue_panel(model: &Model, theme: &Theme) -> Option<View<Msg>> {
     let corriendo = q.running_count();
     let total = q.ops.len();
     let resumen = if corriendo > 0 {
-        format!("⚙ Operaciones · {corriendo} en curso / {total}")
+        rimay_localize::t_args(
+            "nahual-shell-queue-running",
+            &[("running", corriendo.to_string().into()), ("total", total.to_string().into())],
+        )
     } else {
-        format!("✓ Operaciones · {total} terminadas")
+        rimay_localize::t_args("nahual-shell-queue-done", &[("total", total.to_string().into())])
     };
     let flecha = if q.open { "▾" } else { "▸" };
 
@@ -932,7 +959,7 @@ pub(crate) fn queue_panel(model: &Model, theme: &Theme) -> Option<View<Msg>> {
     .fill(theme.bg_app)
     .radius(5.0)
     .on_click(Msg::ClearQueue)
-    .text("Limpiar", 12.0, theme.fg_muted);
+    .text(rimay_localize::t("nahual-shell-clear"), 12.0, theme.fg_muted);
 
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
@@ -1047,8 +1074,8 @@ pub(crate) fn pane_column(model: &Model, pane: usize, focused: bool, theme: &The
         .fill(theme.bg_panel)
         .children(vec![empty_view(
             Icon::Folder,
-            "Carpeta vacía",
-            Some("No hay archivos ni subcarpetas acá."),
+            rimay_localize::t("nahual-fe-empty"),
+            Some(&rimay_localize::t("nahual-shell-empty-body")),
             &pal,
         )])
     } else if model.panes[pane].nav().view.is_grid() {
@@ -1158,7 +1185,7 @@ pub(crate) fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
                 ToolbarItem::new(|_s, c| icon_view(Icon::ChevronRight, c, 1.7), Msg::NavForward)
                     .enabled(puede_adelante),
                 ToolbarItem::new(|_s, c| icon_view(Icon::ChevronUp, c, 1.7), Msg::Parent)
-                    .with_label("subir"),
+                    .with_label(rimay_localize::t("nahual-shell-tb-up")),
             ]),
             // Modo de la rueda con un archivo abierto en el canvas:
             // zoom (la app la usa) o lista (pasa al siguiente/anterior).
@@ -1167,13 +1194,13 @@ pub(crate) fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
                     |_s, c| icon_view(Icon::Search, c, 1.7),
                     Msg::SetWheelMode(WheelMode::Zoom),
                 )
-                .with_label("zoom")
+                .with_label(rimay_localize::t("nahual-shell-tb-zoom"))
                 .active(model.wheel_mode == WheelMode::Zoom),
                 ToolbarItem::new(
                     |_s, c| icon_view(Icon::SkipForward, c, 1.7),
                     Msg::SetWheelMode(WheelMode::Lista),
                 )
-                .with_label("lista")
+                .with_label(rimay_localize::t("nahual-shell-mode-list"))
                 .active(model.wheel_mode == WheelMode::Lista),
             ]),
             // Modos de vista (v cicla; acá acceso directo).
@@ -1188,7 +1215,7 @@ pub(crate) fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
                 ToolbarItem::new(|_s, c| icon_view(Icon::Columns, c, 1.7), Msg::ToggleDual)
                     .active(model.dual),
                 ToolbarItem::new(|_s, c| icon_view(Icon::Plus, c, 1.7), Msg::NewDirPrompt)
-                    .with_label("carpeta")
+                    .with_label(rimay_localize::t("nahual-shell-kind-folder"))
                     .enabled(model.can_edit()),
             ]),
         ],
@@ -1201,9 +1228,8 @@ pub(crate) fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
 pub(crate) fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> {
     let nav = model.panes[pane].nav();
     let marked = &model.panes[pane].marked;
-    let gallery = matches!(nav.view, nahual_source_core::ViewMode::Gallery);
     let metrics = grid_metrics_for(nav.view);
-    let modo = if gallery { "galería" } else { "iconos" };
+    let modo = mode_label(nav.view);
 
     let (_, vh) = viewport_of(model);
     let pane_w = grid_pane_w(model);
@@ -1228,15 +1254,20 @@ pub(crate) fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) ->
         .collect();
 
     let mostrados = start + cells.len();
-    let truncated_hint = (mostrados < total)
-        .then(|| format!("… y {} más (rueda para ver más)", total - mostrados));
+    let truncated_hint = (mostrados < total).then(|| {
+        rimay_localize::t_args(
+            "nahual-shell-more-wheel",
+            &[("n", (total - mostrados).to_string().into())],
+        )
+    });
 
     grid_view(GridSpec {
         cells,
         cols: win.cols,
         metrics,
-        caption: Some(format!(
-            "{total} entradas · {modo} · ↑↓ navega · Enter abre · v cambia vista"
+        caption: Some(rimay_localize::t_args(
+            "nahual-shell-grid-caption",
+            &[("total", total.to_string().into()), ("mode", modo.into())],
         )),
         truncated_hint,
         palette: GridPalette::from_theme(theme),
@@ -1319,15 +1350,19 @@ pub(crate) fn nav_caption(nav: &Navigator, filtering: bool) -> String {
     let f = nav.filter();
     if filtering || !f.is_empty() {
         let cursor = if filtering { "_" } else { "" };
-        format!(
-            "{} de {} · filtro: {f}{cursor}  (Esc sale · v vista)",
-            nav.visible_count(),
-            nav.children().len()
+        rimay_localize::t_args(
+            "nahual-shell-filter-caption",
+            &[
+                ("vis", nav.visible_count().to_string().into()),
+                ("total", nav.children().len().to_string().into()),
+                ("filter", f.to_string().into()),
+                ("cursor", cursor.into()),
+            ],
         )
     } else {
-        format!(
-            "{} entradas · ↑↓ navega · Enter abre · ⌫ vuelve · v cambia vista · / filtra",
-            nav.children().len()
+        rimay_localize::t_args(
+            "nahual-shell-list-caption",
+            &[("n", nav.children().len().to_string().into())],
         )
     }
 }
@@ -1376,7 +1411,10 @@ pub(crate) fn navigator_list_view(
         })
         .collect();
     let truncated_hint = if visibles.len() > end {
-        Some(format!("… y {} más (rueda o ↓ para ver más)", visibles.len() - end))
+        Some(rimay_localize::t_args(
+            "nahual-fe-more",
+            &[("n", (visibles.len() - end).to_string().into())],
+        ))
     } else {
         None
     };
@@ -1457,10 +1495,10 @@ pub(crate) fn navigator_detail_view(
         .collect();
 
     let columns = [
-        Column::flex("Nombre", 1.0),
-        Column::fixed("Tamaño", 88.0).right(),
-        Column::fixed("Modificado", 140.0),
-        Column::fixed("Tipo", 84.0),
+        Column::flex(rimay_localize::t("nahual-shell-col-name"), 1.0),
+        Column::fixed(rimay_localize::t("nahual-shell-col-size"), 88.0).right(),
+        Column::fixed(rimay_localize::t("nahual-shell-col-modified"), 140.0),
+        Column::fixed(rimay_localize::t("nahual-shell-col-type"), 84.0),
     ];
     detail_table_view(
         DetailSpec {
@@ -1488,22 +1526,24 @@ pub(crate) fn kind_icon(kind: nahual_source_core::NodeKind, is_container: bool) 
     }
 }
 
-/// Rótulo de la columna "tipo".
-pub(crate) fn kind_label(kind: nahual_source_core::NodeKind, name: &str) -> &'static str {
+/// Rótulo de la columna "tipo". Las palabras de prosa se localizan; los
+/// nombres de formato (rust/markdown/toml/json) quedan literales (son
+/// identificadores, no prosa traducible).
+pub(crate) fn kind_label(kind: nahual_source_core::NodeKind, name: &str) -> String {
     use nahual_source_core::NodeKind::*;
     match kind {
-        Dir => "carpeta",
-        Synthetic => "mónada",
-        Archive => "archivo",
-        Symlink => "enlace",
+        Dir => rimay_localize::t("nahual-shell-kind-folder"),
+        Synthetic => rimay_localize::t("nahual-shell-kind-monad"),
+        Archive => rimay_localize::t("nahual-shell-kind-file"),
+        Symlink => rimay_localize::t("nahual-shell-kind-link"),
         File => match name.rsplit_once('.').map(|(_, e)| e) {
-            Some("rs") => "rust",
-            Some("md") => "markdown",
-            Some("toml") => "toml",
-            Some("json") => "json",
-            Some("png" | "jpg" | "jpeg" | "webp" | "gif") => "imagen",
-            Some("txt") => "texto",
-            _ => "archivo",
+            Some("rs") => "rust".to_string(),
+            Some("md") => "markdown".to_string(),
+            Some("toml") => "toml".to_string(),
+            Some("json") => "json".to_string(),
+            Some("png" | "jpg" | "jpeg" | "webp" | "gif") => rimay_localize::t("nahual-shell-kind-image"),
+            Some("txt") => rimay_localize::t("nahual-shell-kind-text"),
+            _ => rimay_localize::t("nahual-shell-kind-file"),
         },
     }
 }

@@ -959,7 +959,7 @@ fn open_ffmpeg_video(path: &Path) -> VideoViewerState {
         }
         Err(e) => VideoViewerState::unsupported(
             path,
-            format!("MP4/H.264 vía ffmpeg falló: {e} — ¿está ffmpeg en PATH?"),
+            rimay_localize::t_args("nahual-shell-ffmpeg-failed", &[("err", e.to_string().into())]),
         ),
     }
 }
@@ -1055,7 +1055,7 @@ impl Drop for ThreadedFrameSource {
 fn open_ffmpeg_video(path: &Path) -> VideoViewerState {
     VideoViewerState::unsupported(
         path,
-        "MP4/H.264 sin decoder nativo (build sin feature ffmpeg) — convertí a WebM (AV1)",
+        rimay_localize::t("nahual-shell-no-ffmpeg"),
     )
 }
 

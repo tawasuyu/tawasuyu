@@ -32,7 +32,10 @@ pub(crate) fn contexto_para_ia(m: &Model) -> Option<(String, String)> {
             .filter(|n| pane.marked.contains(&n.id))
             .map(|n| n.name.clone())
             .collect();
-        let titulo = format!("IA · {} elementos seleccionados", nombres.len());
+        let titulo = rimay_localize::t_args(
+            "nahual-shell-ai-title-multi",
+            &[("n", nombres.len().to_string().into())],
+        );
         let prompt = format!(
             "Estos son nombres de archivos seleccionados en un explorador de \
              archivos:\n{}\n\nEn español y en un párrafo breve: ¿qué tienen en \
@@ -53,7 +56,10 @@ pub(crate) fn contexto_para_ia(m: &Model) -> Option<(String, String)> {
             .take(80)
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        let titulo = format!("IA · carpeta {}", node.name);
+        let titulo = rimay_localize::t_args(
+            "nahual-shell-ai-title-folder",
+            &[("name", node.name.clone().into())],
+        );
         let prompt = format!(
             "Contenido de la carpeta «{}»:\n{}\n\nEn español y en un párrafo \
              breve: ¿qué tipo de proyecto o conjunto de datos parece ser y qué \
@@ -65,7 +71,10 @@ pub(crate) fn contexto_para_ia(m: &Model) -> Option<(String, String)> {
     }
     // Archivo: nombre + (si es texto) un snippet de su contenido.
     let id_path = Path::new(&node.id);
-    let titulo = format!("IA · {}", node.name);
+    let titulo = rimay_localize::t_args(
+        "nahual-shell-ai-title-file",
+        &[("name", node.name.clone().into())],
+    );
     let mut prompt = format!("Archivo: «{}».", node.name);
     if id_path.is_file() && es_texto(id_path) {
         if let Some(sample) = leer_snippet(id_path, AI_SNIPPET_BYTES) {
@@ -165,7 +174,7 @@ pub(crate) fn apply_ai(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 ai.pendiente = false;
                 ai.respuesta = Some(match res {
                     Ok(texto) => texto,
-                    Err(e) => format!("(error) {e}"),
+                    Err(e) => rimay_localize::t_args("nahual-shell-ai-error", &[("err", e.into())]),
                 });
             }
         }
@@ -179,7 +188,10 @@ pub(crate) fn apply_ai(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 let targets = m.cur_pane().op_targets();
                 if !targets.is_empty() {
                     m.ai = Some(AiState {
-                        titulo: format!("Proponiendo nombres con IA para {} archivos…", targets.len()),
+                        titulo: rimay_localize::t_args(
+                            "nahual-shell-ai-proposing",
+                            &[("n", targets.len().to_string().into())],
+                        ),
                         respuesta: None,
                         pendiente: true,
                     });

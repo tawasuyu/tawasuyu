@@ -17,61 +17,73 @@ use nahual_source_core::ViewMode;
 /// Títulos y grupos en español — el fuzzy matchea sobre `"título · grupo"`,
 /// así que "ver" encuentra todo el grupo Vista.
 pub(crate) fn build_command_catalog() -> Vec<PaletteCommand> {
+    use rimay_localize::t;
+    // Nombres de grupo localizados (el fuzzy matchea sobre "título · grupo",
+    // así que el grupo también debe quedar en el idioma activo).
+    let g_nav = t("nahual-shell-grp-navigate");
+    let g_view = t("nahual-shell-grp-view");
+    let g_file = t("nahual-shell-grp-file");
+    let g_sel = t("nahual-shell-grp-selection");
+    let g_label = t("nahual-shell-grp-label");
+    let g_source = t("nahual-shell-grp-source");
+    let g_session = t("nahual-shell-grp-session");
+    let g_ai = t("nahual-shell-grp-ai");
+    let g_tools = t("nahual-shell-grp-tools");
     vec![
         // ---- Navegación ----
-        PaletteCommand::new("nav.open", "Abrir selección", "Navegar").with_shortcut("Enter"),
-        PaletteCommand::new("nav.parent", "Subir al padre", "Navegar").with_shortcut("⌫"),
-        PaletteCommand::new("nav.back", "Atrás", "Navegar"),
-        PaletteCommand::new("nav.forward", "Adelante", "Navegar"),
-        PaletteCommand::new("nav.filter", "Filtrar carpeta…", "Navegar").with_shortcut("/"),
+        PaletteCommand::new("nav.open", t("nahual-shell-open-selection"), g_nav.clone()).with_shortcut("Enter"),
+        PaletteCommand::new("nav.parent", t("nahual-shell-parent"), g_nav.clone()).with_shortcut("⌫"),
+        PaletteCommand::new("nav.back", t("nahual-shell-back"), g_nav.clone()),
+        PaletteCommand::new("nav.forward", t("nahual-shell-forward"), g_nav.clone()),
+        PaletteCommand::new("nav.filter", t("nahual-shell-filter-folder"), g_nav).with_shortcut("/"),
         // ---- Vista ----
-        PaletteCommand::new("view.list", "Vista lista", "Vista"),
-        PaletteCommand::new("view.details", "Vista detalle", "Vista"),
-        PaletteCommand::new("view.icons", "Vista iconos", "Vista"),
-        PaletteCommand::new("view.gallery", "Vista galería", "Vista"),
-        PaletteCommand::new("view.toggleDual", "Panel doble", "Vista").with_shortcut("d"),
-        PaletteCommand::new("view.togglePreview", "Panel de previsualización", "Vista"),
-        PaletteCommand::new("view.wheelZoom", "Rueda: zoom", "Vista"),
-        PaletteCommand::new("view.wheelList", "Rueda: lista", "Vista"),
-        PaletteCommand::new("view.cycleTheme", "Cambiar tema", "Vista"),
+        PaletteCommand::new("view.list", t("nahual-shell-view-list"), g_view.clone()),
+        PaletteCommand::new("view.details", t("nahual-shell-view-details"), g_view.clone()),
+        PaletteCommand::new("view.icons", t("nahual-shell-view-icons"), g_view.clone()),
+        PaletteCommand::new("view.gallery", t("nahual-shell-view-gallery"), g_view.clone()),
+        PaletteCommand::new("view.toggleDual", t("nahual-shell-dual-panel"), g_view.clone()).with_shortcut("d"),
+        PaletteCommand::new("view.togglePreview", t("nahual-shell-preview-panel"), g_view.clone()),
+        PaletteCommand::new("view.wheelZoom", t("nahual-shell-wheel-zoom"), g_view.clone()),
+        PaletteCommand::new("view.wheelList", t("nahual-shell-wheel-list"), g_view.clone()),
+        PaletteCommand::new("view.cycleTheme", t("cycle-theme"), g_view),
         // ---- Archivo ----
-        PaletteCommand::new("file.newDir", "Nueva carpeta", "Archivo").with_shortcut("F7"),
-        PaletteCommand::new("file.newFile", "Nuevo archivo", "Archivo"),
-        PaletteCommand::new("file.rename", "Renombrar", "Archivo").with_shortcut("F2"),
-        PaletteCommand::new("file.delete", "Borrar", "Archivo").with_shortcut("Supr"),
-        PaletteCommand::new("file.batchRename", "Renombrar por lote…", "Archivo"),
-        PaletteCommand::new("file.mark", "Marcar / desmarcar", "Archivo").with_shortcut("Ins"),
-        PaletteCommand::new("file.copyToOther", "Copiar al otro panel", "Archivo").with_shortcut("F5"),
-        PaletteCommand::new("file.moveToOther", "Mover al otro panel", "Archivo").with_shortcut("F6"),
-        PaletteCommand::new("file.addFavorite", "Añadir a favoritos", "Archivo"),
+        PaletteCommand::new("file.newDir", t("nahual-shell-new-dir"), g_file.clone()).with_shortcut("F7"),
+        PaletteCommand::new("file.newFile", t("nahual-shell-new-file"), g_file.clone()),
+        PaletteCommand::new("file.rename", t("nahual-shell-rename"), g_file.clone()).with_shortcut("F2"),
+        PaletteCommand::new("file.delete", t("nahual-shell-delete"), g_file.clone()).with_shortcut("Supr"),
+        PaletteCommand::new("file.batchRename", t("nahual-shell-batch-rename"), g_file.clone()),
+        PaletteCommand::new("file.mark", t("nahual-shell-toggle-mark"), g_file.clone()).with_shortcut("Ins"),
+        PaletteCommand::new("file.copyToOther", t("nahual-shell-copy-other"), g_file.clone()).with_shortcut("F5"),
+        PaletteCommand::new("file.moveToOther", t("nahual-shell-move-other"), g_file.clone()).with_shortcut("F6"),
+        PaletteCommand::new("file.addFavorite", t("nahual-shell-add-favorite"), g_file),
         // ---- Selección ----
-        PaletteCommand::new("select.all", "Seleccionar todo", "Selección").with_shortcut("Ctrl+A"),
-        PaletteCommand::new("select.none", "Deseleccionar todo", "Selección"),
-        PaletteCommand::new("select.invert", "Invertir selección", "Selección").with_shortcut("*"),
-        PaletteCommand::new("select.pattern", "Seleccionar por patrón…", "Selección"),
+        PaletteCommand::new("select.all", t("nahual-shell-select-all"), g_sel.clone()).with_shortcut("Ctrl+A"),
+        PaletteCommand::new("select.none", t("nahual-shell-select-none"), g_sel.clone()),
+        PaletteCommand::new("select.invert", t("nahual-shell-invert-selection"), g_sel.clone()).with_shortcut("*"),
+        PaletteCommand::new("select.pattern", t("nahual-shell-select-pattern"), g_sel),
         // ---- Etiquetas ----
-        PaletteCommand::new("label.red", "● Etiqueta roja", "Etiqueta"),
-        PaletteCommand::new("label.orange", "● Etiqueta naranja", "Etiqueta"),
-        PaletteCommand::new("label.yellow", "● Etiqueta amarilla", "Etiqueta"),
-        PaletteCommand::new("label.green", "● Etiqueta verde", "Etiqueta"),
-        PaletteCommand::new("label.blue", "● Etiqueta azul", "Etiqueta"),
-        PaletteCommand::new("label.purple", "● Etiqueta violeta", "Etiqueta"),
-        PaletteCommand::new("label.gray", "● Etiqueta gris", "Etiqueta"),
-        PaletteCommand::new("label.none", "Quitar etiqueta", "Etiqueta"),
+        PaletteCommand::new("label.red", t("nahual-shell-label-red"), g_label.clone()),
+        PaletteCommand::new("label.orange", t("nahual-shell-label-orange"), g_label.clone()),
+        PaletteCommand::new("label.yellow", t("nahual-shell-label-yellow"), g_label.clone()),
+        PaletteCommand::new("label.green", t("nahual-shell-label-green"), g_label.clone()),
+        PaletteCommand::new("label.blue", t("nahual-shell-label-blue"), g_label.clone()),
+        PaletteCommand::new("label.purple", t("nahual-shell-label-purple"), g_label.clone()),
+        PaletteCommand::new("label.gray", t("nahual-shell-label-gray"), g_label.clone()),
+        PaletteCommand::new("label.none", t("nahual-shell-label-clear"), g_label),
         // ---- Fuentes (montaje) ----
-        PaletteCommand::new("source.mountNouser", "Montar Mónadas (nouser)", "Fuente").with_shortcut("m"),
-        PaletteCommand::new("source.mountMinga", "Montar grafo minga", "Fuente").with_shortcut("g"),
-        PaletteCommand::new("source.unmount", "Desmontar fuente", "Fuente"),
+        PaletteCommand::new("source.mountNouser", t("nahual-shell-mount-nouser"), g_source.clone()).with_shortcut("m"),
+        PaletteCommand::new("source.mountMinga", t("nahual-shell-mount-minga"), g_source.clone()).with_shortcut("g"),
+        PaletteCommand::new("source.unmount", t("nahual-shell-unmount"), g_source),
         // ---- Sesiones ----
-        PaletteCommand::new("session.new", "Nueva sesión", "Sesión"),
+        PaletteCommand::new("session.new", t("nahual-shell-new-session"), g_session),
         // ---- IA ----
-        PaletteCommand::new("ai.ask", "Preguntar a la IA sobre la selección", "IA").with_shortcut("Ctrl+I"),
-        PaletteCommand::new("ai.rename", "Renombrar por contenido con IA…", "IA"),
-        PaletteCommand::new("ai.index", "Indexar carpeta (búsqueda semántica rápida)", "IA"),
+        PaletteCommand::new("ai.ask", t("nahual-shell-ai-ask"), g_ai.clone()).with_shortcut("Ctrl+I"),
+        PaletteCommand::new("ai.rename", t("nahual-shell-ai-rename"), g_ai.clone()),
+        PaletteCommand::new("ai.index", t("nahual-shell-ai-index"), g_ai),
         // ---- Herramientas ----
-        PaletteCommand::new("tools.find", "Buscar recursivo…", "Herramientas").with_shortcut("Ctrl+F"),
-        PaletteCommand::new("tools.terminalHere", "Abrir terminal aquí", "Herramientas"),
-        PaletteCommand::new("tools.editInNada", "Editar en Nada", "Herramientas"),
+        PaletteCommand::new("tools.find", t("nahual-shell-find"), g_tools.clone()).with_shortcut("Ctrl+F"),
+        PaletteCommand::new("tools.terminalHere", t("nahual-shell-terminal-here"), g_tools.clone()),
+        PaletteCommand::new("tools.editInNada", t("nahual-shell-edit-in-nada"), g_tools),
     ]
 }
 

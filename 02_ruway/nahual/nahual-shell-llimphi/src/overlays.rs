@@ -23,7 +23,7 @@ pub(crate) fn etiqueta_seleccion(m: &Model) -> String {
     m.cur()
         .selected_node()
         .map(|n| n.name.clone())
-        .unwrap_or_else(|| "entrada".to_string())
+        .unwrap_or_else(|| rimay_localize::t("nahual-shell-entry"))
 }
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
@@ -47,11 +47,11 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
     let montado = model.is_foreign();
     // Montar sólo aplica desde POSIX (no anidamos fuentes); desmontar sólo
     // cuando hay una fuente activa. Reflejamos eso en gris.
-    let mut mount_nouser = MenuItem::new("Montar Mónadas (nouser)", "file.mount_nouser")
+    let mut mount_nouser = MenuItem::new(rimay_localize::t("nahual-shell-mount-nouser"), "file.mount_nouser")
         .shortcut("m")
         .separated();
-    let mut mount_minga = MenuItem::new("Montar grafo minga", "file.mount_minga").shortcut("g");
-    let mut unmount = MenuItem::new("Desmontar fuente", "file.unmount").separated();
+    let mut mount_minga = MenuItem::new(rimay_localize::t("nahual-shell-mount-minga"), "file.mount_minga").shortcut("g");
+    let mut unmount = MenuItem::new(rimay_localize::t("nahual-shell-unmount"), "file.unmount").separated();
     if montado {
         mount_nouser = mount_nouser.disabled();
         mount_minga = mount_minga.disabled();
@@ -61,10 +61,10 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
     // Operaciones de archivo (Fase 4.3): sólo sobre POSIX escribible. Sobre una
     // fuente montada read-only salen en gris.
     let editable = model.can_edit();
-    let mut newdir = MenuItem::new("Nueva carpeta", "file.newdir").shortcut("F7").separated();
-    let mut newfile = MenuItem::new("Nuevo archivo", "file.newfile");
-    let mut rename = MenuItem::new("Renombrar", "file.rename").shortcut("F2");
-    let mut delete = MenuItem::new("Borrar", "file.delete").shortcut("Supr");
+    let mut newdir = MenuItem::new(rimay_localize::t("nahual-shell-new-dir"), "file.newdir").shortcut("F7").separated();
+    let mut newfile = MenuItem::new(rimay_localize::t("nahual-shell-new-file"), "file.newfile");
+    let mut rename = MenuItem::new(rimay_localize::t("nahual-shell-rename"), "file.rename").shortcut("F2");
+    let mut delete = MenuItem::new(rimay_localize::t("nahual-shell-delete"), "file.delete").shortcut("Supr");
     if !editable {
         newdir = newdir.disabled();
         newfile = newfile.disabled();
@@ -73,9 +73,9 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
     }
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Abrir", "file.open").shortcut("Enter"))
-                .item(MenuItem::new("Subir al padre", "file.parent").shortcut("Backspace"))
+            Menu::new(rimay_localize::t("nahual-shell-grp-file"))
+                .item(MenuItem::new(rimay_localize::t("open"), "file.open").shortcut("Enter"))
+                .item(MenuItem::new(rimay_localize::t("nahual-shell-parent"), "file.parent").shortcut("Backspace"))
                 .item(newdir)
                 .item(newfile)
                 .item(rename)
@@ -83,17 +83,17 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
                 .item(mount_nouser)
                 .item(mount_minga)
                 .item(unmount)
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+                .item(MenuItem::new(rimay_localize::t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(etiqueta_menu(editable))
-        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(rimay_localize::t("nahual-shell-menu-view")).item(MenuItem::new(rimay_localize::t("cycle-theme"), "view.theme")))
+        .menu(Menu::new(rimay_localize::t("help")).item(MenuItem::new(rimay_localize::t("about"), "help.about")))
 }
 
 /// El menú "Etiqueta": los siete colores + "Sin etiqueta". Aplica a la marca
 /// múltiple o, si no hay, al nodo bajo el cursor. Gris si la fuente no es POSIX.
 pub(crate) fn etiqueta_menu(editable: bool) -> Menu {
-    let mut menu = Menu::new("Etiqueta");
+    let mut menu = Menu::new(rimay_localize::t("nahual-shell-grp-label"));
     for label in Label::ALL {
         // Un punto del color como prefijo del nombre (el menubar pinta texto).
         let mut it = MenuItem::new(format!("● {}", label.name()), label_cmd(label));
@@ -102,7 +102,7 @@ pub(crate) fn etiqueta_menu(editable: bool) -> Menu {
         }
         menu = menu.item(it);
     }
-    let mut sin = MenuItem::new("Sin etiqueta", "label.none").separated();
+    let mut sin = MenuItem::new(rimay_localize::t("nahual-shell-label-none"), "label.none").separated();
     if !editable {
         sin = sin.disabled();
     }
@@ -171,45 +171,45 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
     // Construimos la lista de (item, msg) según el contexto, para que el
     // índice del `on_pick` y el item visible siempre coincidan.
     let mut acciones: Vec<(ContextMenuItem, Msg)> = vec![
-        (ContextMenuItem::action("Abrir"), Msg::OpenSelected),
-        (ContextMenuItem::action("Subir al padre"), Msg::Parent),
+        (ContextMenuItem::action(rimay_localize::t("open")), Msg::OpenSelected),
+        (ContextMenuItem::action(rimay_localize::t("nahual-shell-parent")), Msg::Parent),
     ];
     // Operaciones de archivo (Fase 4.3): sólo sobre POSIX escribible.
     if model.can_edit() {
-        acciones.push((ContextMenuItem::action("Nueva carpeta"), Msg::NewDirPrompt));
-        acciones.push((ContextMenuItem::action("Nuevo archivo"), Msg::NewFilePrompt));
+        acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-new-dir")), Msg::NewDirPrompt));
+        acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-new-file")), Msg::NewFilePrompt));
         if model.cur().selected_node().is_some() {
-            acciones.push((ContextMenuItem::action("Renombrar"), Msg::RenamePrompt));
-            acciones.push((ContextMenuItem::action("Borrar"), Msg::DeleteSelection));
+            acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-rename")), Msg::RenamePrompt));
+            acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-delete")), Msg::DeleteSelection));
         }
         if !model.cur_pane().marked.is_empty() {
             acciones.push((
-                ContextMenuItem::action("Renombrar por lote…"),
+                ContextMenuItem::action(rimay_localize::t("nahual-shell-batch-rename")),
                 Msg::BatchRenameStart,
             ));
         }
         // Renombrar por contenido con IA (marca o cursor).
         if model.cur().selected_node().is_some() || !model.cur_pane().marked.is_empty() {
             acciones.push((
-                ContextMenuItem::action("✦ Renombrar con IA…"),
+                ContextMenuItem::action(rimay_localize::t("nahual-shell-ai-rename-ctx")),
                 Msg::AiRename,
             ));
         }
-        acciones.push((ContextMenuItem::action("★ Añadir a favoritos"), Msg::AddPlace));
+        acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-add-favorite-ctx")), Msg::AddPlace));
         if model.dual {
-            acciones.push((ContextMenuItem::action("Copiar al otro panel"), Msg::CopyToOther));
-            acciones.push((ContextMenuItem::action("Mover al otro panel"), Msg::MoveToOther));
+            acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-copy-other")), Msg::CopyToOther));
+            acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-move-other")), Msg::MoveToOther));
         }
     }
     if montado {
-        acciones.push((ContextMenuItem::action("Desmontar fuente"), Msg::Unmount));
+        acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-unmount")), Msg::Unmount));
     } else {
         acciones.push((
-            ContextMenuItem::action("Montar Mónadas (nouser)"),
+            ContextMenuItem::action(rimay_localize::t("nahual-shell-mount-nouser")),
             Msg::MountNouser,
         ));
         acciones.push((
-            ContextMenuItem::action("Montar grafo minga"),
+            ContextMenuItem::action(rimay_localize::t("nahual-shell-mount-minga")),
             Msg::MountMinga,
         ));
     }
@@ -218,14 +218,17 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
     if model.ctx_target.is_some() {
         for (id, label) in &model.ctx_open_with {
             acciones.push((
-                ContextMenuItem::action(format!("Abrir con {label}")),
+                ContextMenuItem::action(rimay_localize::t_args(
+                    "nahual-shell-open-with",
+                    &[("app", label.clone().into())],
+                )),
                 Msg::OpenWith(id.clone()),
             ));
         }
-        acciones.push((ContextMenuItem::action("✦ Preguntar a la IA"), Msg::AiAsk));
-        acciones.push((ContextMenuItem::action("Editar en Nada"), Msg::EditSelected));
+        acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-ai-ask-ctx")), Msg::AiAsk));
+        acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-edit-in-nada")), Msg::EditSelected));
         acciones.push((
-            ContextMenuItem::action("Abrir terminal aquí"),
+            ContextMenuItem::action(rimay_localize::t("nahual-shell-terminal-here")),
             Msg::TerminalHere,
         ));
     }
@@ -304,7 +307,7 @@ pub(crate) fn prompt_overlay(p: &Prompt, theme: &Theme) -> View<Msg> {
     .children(vec![
         View::new(fila(30.0)).text(p.title(), 16.0, theme.fg_text),
         input,
-        View::new(fila(26.0)).text("Enter confirma · Esc cancela", 12.0, theme.fg_muted),
+        View::new(fila(26.0)).text(rimay_localize::t("nahual-shell-prompt-hint"), 12.0, theme.fg_muted),
     ]);
     modal_scrim(card, Msg::PromptCancel)
 }
@@ -314,9 +317,9 @@ pub(crate) fn prompt_overlay(p: &Prompt, theme: &Theme) -> View<Msg> {
 pub(crate) fn confirm_overlay(targets: &[(nahual_source_core::NodeId, String)], theme: &Theme) -> View<Msg> {
     let nombres: Vec<&str> = targets.iter().map(|(_, n)| n.as_str()).collect();
     let resumen = if nombres.len() == 1 {
-        format!("¿Borrar «{}»?", nombres[0])
+        rimay_localize::t_args("nahual-shell-confirm-one", &[("name", nombres[0].to_string().into())])
     } else {
-        format!("¿Borrar {} elementos?", nombres.len())
+        rimay_localize::t_args("nahual-shell-confirm-many", &[("n", nombres.len().to_string().into())])
     };
     let detalle = {
         let muestra: Vec<&str> = nombres.iter().take(4).copied().collect();
@@ -337,7 +340,7 @@ pub(crate) fn confirm_overlay(targets: &[(nahual_source_core::NodeId, String)], 
     .fill(theme.fg_destructive)
     .radius(6.0)
     .on_click(Msg::ConfirmDelete)
-    .text("Borrar (Enter)", 14.0, theme.bg_app);
+    .text(rimay_localize::t("nahual-shell-delete-btn"), 14.0, theme.bg_app);
 
     let boton_cancelar = View::new(Style {
         size: Size { width: length(120.0_f32), height: length(34.0_f32) },
@@ -349,7 +352,7 @@ pub(crate) fn confirm_overlay(targets: &[(nahual_source_core::NodeId, String)], 
     .radius(6.0)
     .border(1.0, theme.fg_muted)
     .on_click(Msg::CancelConfirm)
-    .text("Cancelar (Esc)", 14.0, theme.fg_text);
+    .text(rimay_localize::t("nahual-shell-cancel-btn"), 14.0, theme.fg_text);
 
     let botones = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
@@ -390,7 +393,7 @@ pub(crate) fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
     // En modo IA el "input" es informativo (los nombres ya vienen propuestos);
     // en modo patrón es el patrón en edición con cursor.
     let input_txt = if b.es_ia() {
-        "✦ nombres propuestos por la IA — revisá abajo".to_string()
+        rimay_localize::t("nahual-shell-batch-ai-input")
     } else {
         format!("{}_", b.pattern)
     };
@@ -433,7 +436,11 @@ pub(crate) fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
     let mut hijos_lista = filas;
     if oculto > 0 {
         hijos_lista.push(
-            View::new(fila(20.0)).text(format!("… y {oculto} más"), 12.0, theme.fg_muted),
+            View::new(fila(20.0)).text(
+                rimay_localize::t_args("nahual-shell-more", &[("n", oculto.to_string().into())]),
+                12.0,
+                theme.fg_muted,
+            ),
         );
     }
     let lista = View::new(Style {
@@ -458,26 +465,26 @@ pub(crate) fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
     .children(vec![
         View::new(fila(30.0)).text(
             if b.es_ia() {
-                format!("Renombrar con IA · {total} elementos")
+                rimay_localize::t_args("nahual-shell-batch-ai-title", &[("n", total.to_string().into())])
             } else {
-                format!("Renombrar por lote · {total} elementos")
+                rimay_localize::t_args("nahual-shell-batch-title", &[("n", total.to_string().into())])
             },
             16.0,
             theme.fg_text,
         ),
         View::new(fila(22.0)).text(
             if b.es_ia() {
-                "Propuestas por la IA — las colisiones se marcan en rojo"
+                rimay_localize::t("nahual-shell-batch-ai-sub")
             } else {
-                "Patrón — tokens: {name} · {ext} · {n} (contador)"
+                rimay_localize::t("nahual-shell-batch-sub")
             },
             12.0,
             theme.fg_muted,
         ),
         input,
-        View::new(fila(24.0)).text("Previsualización", 13.0, theme.fg_muted),
+        View::new(fila(24.0)).text(rimay_localize::t("nahual-shell-preview"), 13.0, theme.fg_muted),
         lista,
-        View::new(fila(26.0)).text("Enter aplica · Esc cancela", 12.0, theme.fg_muted),
+        View::new(fila(26.0)).text(rimay_localize::t("nahual-shell-batch-hint"), 12.0, theme.fg_muted),
     ]);
     modal_scrim(card, Msg::BatchCancel)
 }

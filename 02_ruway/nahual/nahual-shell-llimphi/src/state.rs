@@ -54,17 +54,18 @@ impl Label {
         }
     }
 
-    /// Nombre humano (para el submenú).
-    pub fn name(self) -> &'static str {
-        match self {
-            Label::Red => "Rojo",
-            Label::Orange => "Naranja",
-            Label::Yellow => "Amarillo",
-            Label::Green => "Verde",
-            Label::Blue => "Azul",
-            Label::Purple => "Violeta",
-            Label::Gray => "Gris",
-        }
+    /// Nombre humano localizado (para el submenú de "Etiqueta").
+    pub fn name(self) -> String {
+        let key = match self {
+            Label::Red => "nahual-shell-color-red",
+            Label::Orange => "nahual-shell-color-orange",
+            Label::Yellow => "nahual-shell-color-yellow",
+            Label::Green => "nahual-shell-color-green",
+            Label::Blue => "nahual-shell-color-blue",
+            Label::Purple => "nahual-shell-color-purple",
+            Label::Gray => "nahual-shell-color-gray",
+        };
+        rimay_localize::t(key)
     }
 }
 

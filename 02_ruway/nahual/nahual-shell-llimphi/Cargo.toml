@@ -23,6 +23,9 @@ default = ["ffmpeg"]
 ffmpeg = ["dep:foreign-av"]
 
 [dependencies]
+# Localización (i18n): strings de usuario pasan por t()/t_args() en vez de
+# hardcodear español. Catálogos en shared/rimay-localize/locales/{es,en,qu}.ftl.
+rimay-localize = { path = "../../../shared/rimay-localize" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-list = { workspace = true }
