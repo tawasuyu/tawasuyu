@@ -103,6 +103,10 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("w") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Varita));
         }
+        // `l` = lazo (selección a mano alzada).
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("l") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Lazo));
+        }
         // `p` = pincel (paint a mano alzada).
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("p") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Pincel));

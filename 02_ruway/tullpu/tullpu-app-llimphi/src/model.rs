@@ -117,6 +117,10 @@ pub(crate) struct Model {
     pub(crate) simetria: Simetria,
     /// Drag en curso del degradé. `None` fuera de un drag.
     pub(crate) gradiente_drag: Option<GradienteDrag>,
+    /// Drag en curso del lazo (selección a mano alzada): posición local
+    /// acumulada + dims del panel + los vértices recogidos en coords-imagen.
+    /// `None` fuera de un drag. Al soltar se rasteriza a `seleccion_mascara`.
+    pub(crate) lazo_drag: Option<LazoDrag>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -212,6 +216,10 @@ pub(crate) enum Herramienta {
     /// píxel clickeado sobre el composite y arma una máscara de selección no
     /// rectangular. Tolerancia fija ([`TOL_BALDE`]).
     Varita,
+    /// Drag a mano alzada define un polígono; al soltar lo rasteriza a una
+    /// máscara de selección (lazo). Reusa la misma maquinaria de máscara que
+    /// la varita.
+    Lazo,
 }
 
 impl Herramienta {
@@ -225,6 +233,7 @@ impl Herramienta {
             Herramienta::Borrador => "borrador",
             Herramienta::Degradado => "degradé",
             Herramienta::Varita => "varita",
+            Herramienta::Lazo => "lazo",
         }
     }
 
@@ -362,6 +371,19 @@ pub(crate) struct GradienteDrag {
     pub(crate) cur_ly: f32,
     pub(crate) rw: f32,
     pub(crate) rh: f32,
+}
+
+/// Estado del drag del lazo: posición local actual (acumulando `dx, dy` de
+/// cada Move) + dims del panel capturadas al inicio + la polilínea de vértices
+/// recogidos en coords-imagen. Al soltar, los vértices se rasterizan a una
+/// máscara de selección por relleno par-impar.
+#[derive(Debug, Clone)]
+pub(crate) struct LazoDrag {
+    pub(crate) cur_lx: f32,
+    pub(crate) cur_ly: f32,
+    pub(crate) rw: f32,
+    pub(crate) rh: f32,
+    pub(crate) puntos: Vec<(i32, i32)>,
 }
 
 /// Radio inicial del pincel en px-imagen (disco lleno; diámetro ≈ `2·r+1`).
@@ -593,6 +615,12 @@ pub(crate) enum Msg {
     /// píxel local `(lx, ly)` sobre el composite. `rw, rh` = dims del panel
     /// del lienzo (conversión local→imagen). Arma `seleccion_mascara` + bbox.
     SeleccionarVarita { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Press con la herramienta Lazo: arranca la polilínea en `(lx, ly)`.
+    IniciarLazo { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Move del lazo: acumula `(dx, dy)` y agrega el vértice nuevo.
+    ContinuarLazo { dx: f32, dy: f32 },
+    /// End del lazo: cierra el polígono y lo rasteriza a `seleccion_mascara`.
+    FinalizarLazo,
     /// Click con la herramienta Balde: flood fill desde el píxel local
     /// `(lx, ly)` con el color activo sobre la capa raster seleccionada.
     /// `rw, rh` son las dims del panel del lienzo (para la conversión

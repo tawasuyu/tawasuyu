@@ -95,6 +95,7 @@ pub(crate) use tullpu_paint::{
     flood_fill_mascara,
     flood_mascara,
     limpiar_rect_en_buffer,
+    poligono_a_mascara,
     recortar_buffer,
     recortar_buffer_bpp,
     recortar_subbuffer,
@@ -1159,6 +1160,32 @@ pub(crate) fn seleccionar_por_color(model: &mut Model, sx: u32, sy: u32) -> bool
     model.seleccion_drag = None;
     model.mover_drag = None;
     model.estado = format!("varita · {n} px seleccionados");
+    true
+}
+
+/// Lazo: rasteriza el polígono `puntos` (coords-imagen) a una máscara de
+/// selección por relleno par-impar y la guarda en `model.seleccion_mascara`
+/// con su bounding box. No toca píxeles ni el historial. No-op (con estado)
+/// si el polígono tiene < 3 vértices o el área sale vacía.
+pub(crate) fn seleccionar_lazo(model: &mut Model, puntos: &[(i32, i32)]) -> bool {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    if puntos.len() < 3 {
+        model.estado = "lazo · trazo muy corto".into();
+        return false;
+    }
+    let mascara = poligono_a_mascara(puntos, w, h);
+    let Some(bbox) = bbox_de_mascara(&mascara, w, h) else {
+        model.estado = "lazo · región vacía".into();
+        return false;
+    };
+    let n: usize = mascara.iter().filter(|&&v| v > 0).count();
+    let hash = model.almacen.insertar(mascara);
+    model.seleccion_mascara = Some(hash);
+    model.seleccion = Some(bbox);
+    model.seleccion_drag = None;
+    model.mover_drag = None;
+    model.estado = format!("lazo · {n} px seleccionados");
     true
 }
 

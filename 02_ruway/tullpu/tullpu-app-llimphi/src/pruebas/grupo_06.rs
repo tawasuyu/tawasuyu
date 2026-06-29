@@ -554,3 +554,24 @@
         );
         assert!(model.seleccion_mascara.is_none(), "select-all limpia la máscara");
     }
+
+    #[test]
+    fn lazo_rasteriza_poligono_a_mascara() {
+        let mut model = modelo_minimo(); // lienzo 4×4
+        // Triángulo que cubre la esquina superior-izquierda.
+        let puntos = vec![(0, 0), (3, 0), (0, 3)];
+        assert!(seleccionar_lazo(&mut model, &puntos));
+        assert!(model.seleccion_mascara.is_some());
+        // El bbox cubre el triángulo.
+        let bbox = model.seleccion.unwrap();
+        assert_eq!(bbox.x0, 0);
+        assert_eq!(bbox.y0, 0);
+        assert!(bbox.x1 >= 3 && bbox.y1 >= 3);
+    }
+
+    #[test]
+    fn lazo_corto_es_no_op() {
+        let mut model = modelo_minimo();
+        assert!(!seleccionar_lazo(&mut model, &[(0, 0), (1, 1)]));
+        assert!(model.seleccion_mascara.is_none());
+    }

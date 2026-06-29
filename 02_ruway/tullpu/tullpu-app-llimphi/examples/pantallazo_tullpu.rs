@@ -290,6 +290,7 @@ fn modelo_demo() -> Model {
         ultimo_pincel: None,
         simetria: Simetria::Ninguna,
         gradiente_drag: None,
+        lazo_drag: None,
         portapapeles: None,
         editando_mascara: false,
         valor_mascara: 255,

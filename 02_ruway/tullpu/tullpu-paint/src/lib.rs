@@ -372,6 +372,50 @@ pub fn flood_mascara(src: &[u8], w: u32, h: u32, sx: u32, sy: u32, tol: u32) -> 
     Some(mascara)
 }
 
+/// Rasteriza un polígono (lista de vértices en coords-imagen) a una máscara
+/// de un canal `W·H` por relleno scanline con regla **par-impar** (even-odd):
+/// 255 dentro del polígono, 0 fuera. Es la base de la herramienta lazo —
+/// el cierre del polígono es implícito (último vértice ↔ primero). Con < 3
+/// vértices devuelve una máscara vacía. Pura.
+pub fn poligono_a_mascara(pts: &[(i32, i32)], w: u32, h: u32) -> Vec<u8> {
+    let mut m = vec![0u8; (w as usize) * (h as usize)];
+    if pts.len() < 3 {
+        return m;
+    }
+    let w_i = w as i32;
+    let h_i = h as i32;
+    for y in 0..h_i {
+        let yf = y as f32 + 0.5;
+        // Intersecciones de la scanline con cada arista.
+        let mut xs: Vec<f32> = Vec::new();
+        for i in 0..pts.len() {
+            let (x0, y0) = (pts[i].0 as f32, pts[i].1 as f32);
+            let j = (i + 1) % pts.len();
+            let (x1, y1) = (pts[j].0 as f32, pts[j].1 as f32);
+            // Arista cruza la scanline (medio-abierta para no contar vértices 2×).
+            if (y0 <= yf && y1 > yf) || (y1 <= yf && y0 > yf) {
+                let t = (yf - y0) / (y1 - y0);
+                xs.push(x0 + t * (x1 - x0));
+            }
+        }
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut k = 0;
+        while k + 1 < xs.len() {
+            let xa = xs[k].ceil().max(0.0) as i32;
+            let xb = (xs[k + 1].floor() as i32).min(w_i - 1);
+            let mut x = xa;
+            while x <= xb {
+                if x >= 0 && x < w_i {
+                    m[(y * w_i + x) as usize] = 255;
+                }
+                x += 1;
+            }
+            k += 2;
+        }
+    }
+    m
+}
+
 /// Factor de cobertura del pincel en `[0,1]` para un píxel a distancia
 /// `d` del centro, con radio `r` y `dureza` en `[0,1]`. Dentro del núcleo
 /// `dureza·r` es 1.0; entre ahí y `r` cae linealmente a 0; fuera de `r`
@@ -853,6 +897,32 @@ mod tests {
     fn flood_mascara_semilla_fuera_es_none() {
         let src = vec![0u8; 4 * 4];
         assert!(flood_mascara(&src, 2, 2, 5, 5, 0).is_none());
+    }
+
+    #[test]
+    fn poligono_triangulo_rellena_interior() {
+        // Triángulo grande en 8×8 que cubre la esquina inferior-izquierda.
+        let pts = [(0, 0), (7, 0), (0, 7)];
+        let m = poligono_a_mascara(&pts, 8, 8);
+        // (1,1) está dentro (x+y < 7); (6,6) fuera.
+        assert_eq!(m[1 * 8 + 1], 255, "interior seleccionado");
+        assert_eq!(m[6 * 8 + 6], 0, "exterior libre");
+    }
+
+    #[test]
+    fn poligono_degenerado_es_vacio() {
+        assert!(poligono_a_mascara(&[(0, 0), (1, 1)], 4, 4).iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn poligono_cuadrado_llena_su_area() {
+        // Cuadrado [1,4)×[1,4) en 6×6.
+        let pts = [(1, 1), (4, 1), (4, 4), (1, 4)];
+        let m = poligono_a_mascara(&pts, 6, 6);
+        let dentro = m[2 * 6 + 2];
+        let fuera = m[0];
+        assert_eq!(dentro, 255);
+        assert_eq!(fuera, 0);
     }
 
     #[test]

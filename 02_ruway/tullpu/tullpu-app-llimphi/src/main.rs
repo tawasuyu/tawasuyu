@@ -954,6 +954,44 @@ impl App for Tullpu {
                     }
                 }
             }
+            Msg::IniciarLazo { lx, ly, rw, rh } => {
+                let mut puntos = Vec::new();
+                if let Some((ix, iy)) = local_a_imagen(
+                    lx, ly, rw, rh,
+                    model.lienzo.width, model.lienzo.height,
+                    model.factor_zoom, model.pan_x, model.pan_y,
+                ) {
+                    puntos.push((ix.floor() as i32, iy.floor() as i32));
+                }
+                model.lazo_drag = Some(LazoDrag { cur_lx: lx, cur_ly: ly, rw, rh, puntos });
+            }
+            Msg::ContinuarLazo { dx, dy } => {
+                // Acumula la posición y agrega un vértice nuevo si cambió de
+                // píxel-imagen respecto al último (evita polilíneas densísimas).
+                let punto = model.lazo_drag.as_ref().and_then(|l| {
+                    let (clx, cly) = (l.cur_lx + dx, l.cur_ly + dy);
+                    local_a_imagen(
+                        clx, cly, l.rw, l.rh,
+                        model.lienzo.width, model.lienzo.height,
+                        model.factor_zoom, model.pan_x, model.pan_y,
+                    )
+                    .map(|(ix, iy)| (clx, cly, ix.floor() as i32, iy.floor() as i32))
+                });
+                if let Some(l) = model.lazo_drag.as_mut() {
+                    l.cur_lx += dx;
+                    l.cur_ly += dy;
+                    if let Some((_, _, ix, iy)) = punto {
+                        if l.puntos.last() != Some(&(ix, iy)) {
+                            l.puntos.push((ix, iy));
+                        }
+                    }
+                }
+            }
+            Msg::FinalizarLazo => {
+                if let Some(l) = model.lazo_drag.take() {
+                    seleccionar_lazo(&mut model, &l.puntos);
+                }
+            }
             Msg::AgregarMascara => {
                 if agregar_mascara(&mut model) {
                     pushear_snapshot(&mut model, None);
