@@ -147,6 +147,10 @@ pub enum Msg {
     /// `workspaces` switcher. Se lo pide al WM (`mirada-ctl workspace N`); el
     /// switcher refleja el cambio en el próximo tick.
     SwitchWorkspace(u8),
+    /// Cambiar de **contexto de usuario** (`pacha`) por click en un chip del
+    /// control center. Le pide al daemon `pacha switch <id>`; el chip activo
+    /// se reconcilia en el próximo refresco del panel.
+    SwitchPacha(String),
     /// Rueda del mouse sobre el medidor de volumen: ajusta el volumen del sink
     /// por defecto. El `f32` es el delta de la rueda (signo = dirección).
     VolumeWheel(f32),
@@ -1804,6 +1808,11 @@ impl App for PataApp {
                 model.nahual.daemon = nahual::DaemonLoad::Failed(e);
             }
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
+            Msg::SwitchPacha(id) => {
+                spawn_cmd(&format!("pacha switch {id}"));
+                // Refrescamos el control center para que el chip activo salte.
+                model.control_extras = render::ControlExtras::read();
+            }
             Msg::SwitchWorkspace(n) => {
                 sampler::switch_workspace(n);
                 // Realce optimista: la celda clickeada se marca activa al

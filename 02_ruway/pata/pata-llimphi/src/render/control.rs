@@ -42,6 +42,9 @@ pub struct ControlExtras {
     pub power_profile: Option<String>,
     /// `true` si la luz nocturna (`wlsunset`) está corriendo.
     pub night: bool,
+    /// Contextos de usuario (`pacha`): `(id, activo)`. Vacío si no hay daemon
+    /// `pacha` corriendo (o ninguno definido). El chip activo va en acento.
+    pub pachas: Vec<(String, bool)>,
 }
 
 impl ControlExtras {
@@ -55,8 +58,32 @@ impl ControlExtras {
             bt: rfkill_on("bluetooth"),
             power_profile: read_power_profile(),
             night: night_on(),
+            pachas: read_pachas(),
         }
     }
+}
+
+/// Lee los contextos de usuario vía `pacha list`. Devuelve `(id, activo)` por
+/// línea. Tolerante: lista vacía si el binario o el daemon no están. El
+/// formato de `pacha list` es `«● »? id  estado  label`; nos basta el marcador
+/// de activo y el id (primer token tras el marcador).
+fn read_pachas() -> Vec<(String, bool)> {
+    let Ok(out) = std::process::Command::new("pacha").arg("list").output() else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let texto = String::from_utf8_lossy(&out.stdout);
+    let mut v = Vec::new();
+    for linea in texto.lines() {
+        let activo = linea.trim_start().starts_with('●');
+        // Tokens descartando el marcador: el primero es el id.
+        if let Some(id) = linea.split_whitespace().find(|t| *t != "●") {
+            v.push((id.to_string(), activo));
+        }
+    }
+    v
 }
 
 /// Lee **sólo** perfil de energía + luz nocturna `(power_profile, night)`. Para
@@ -275,6 +302,7 @@ pub fn extras_vivos(
         bt,
         power_profile: base.power_profile.clone(),
         night: base.night,
+        pachas: base.pachas.clone(),
     }
 }
 
@@ -329,6 +357,10 @@ pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View
         hijos.push(perfil_row(actual, theme));
     }
     hijos.push(switch_row("Luz nocturna", d.extras.night, theme, Msg::ControlNight));
+    // Contextos de usuario (pacha): chips de modo de uso. Sólo si hay alguno.
+    if !d.extras.pachas.is_empty() {
+        hijos.push(pacha_row(&d.extras.pachas, theme));
+    }
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -553,6 +585,66 @@ fn switch_row(label: &str, on: bool, theme: &Theme, make: fn(bool) -> Msg) -> Vi
         &SwitchPalette::from_theme(theme),
     )]);
     fila_base(vec![etiqueta, sw])
+}
+
+/// Fila «Contexto» + chips de contextos de usuario (`pacha`). El activo va en
+/// acento; al click manda `Msg::SwitchPacha(id)` (→ `pacha switch <id>`).
+/// Calca el patrón segmentado de [`perfil_row`].
+fn pacha_row(pachas: &[(String, bool)], theme: &Theme) -> View<Msg> {
+    let etiqueta = View::new(Style {
+        size: Size { width: length(60.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text("Contexto".to_string(), 12.5, theme.fg_text);
+
+    let botones: Vec<View<Msg>> = pachas
+        .iter()
+        .map(|(id, activo)| {
+            let activo = *activo;
+            let v = View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: auto(), height: length(24.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .radius(5.0)
+            .hover_fill(theme.bg_button_hover)
+            .on_click(Msg::SwitchPacha(id.clone()))
+            .text(
+                capitalizar(id),
+                11.0,
+                if activo { theme.bg_panel } else { theme.fg_muted },
+            );
+            if activo {
+                v.fill(theme.accent)
+            } else {
+                v.fill(theme.bg_button)
+            }
+        })
+        .collect();
+
+    let seg = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(botones);
+
+    fila_base(vec![etiqueta, seg])
+}
+
+/// Capitaliza la primera letra de un id-slug para el chip (`oficina` → `Oficina`).
+fn capitalizar(id: &str) -> String {
+    let mut cs = id.chars();
+    match cs.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + cs.as_str(),
+        None => String::new(),
+    }
 }
 
 fn fila_base(hijos: Vec<View<Msg>>) -> View<Msg> {
