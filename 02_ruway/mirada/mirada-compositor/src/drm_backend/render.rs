@@ -483,7 +483,7 @@ impl DrmState {
     /// que [`Self::focus_base`] pero usando los colores propios de la barra
     /// (`titlebar_focus`/`titlebar_normal`) cuando el theme los define; si son
     /// `None`, cae al color del marco — así una vista puede tener marco gris y
-    /// barra de color (Win3.1, CDE) o seguir acoplada (el resto).
+    /// barra clara/de color (mac, Breeze, CDE) o seguir acoplada (el resto).
     fn focus_base_titlebar(&self, w: &crate::ManagedWindow, now: u32, glow_ms: u32) -> [u8; 4] {
         let dec = self.app.decorations;
         let normal = dec.titlebar_normal.unwrap_or(dec.border_normal);
@@ -628,7 +628,7 @@ impl DrmState {
         // Esquinas redondeadas (radio px). `0` → camino normal (rectas). Con
         // shader GLES la ventana se rinde a una textura y se enmascara en la GPU;
         // sin shader, fallback a la máscara CPU (lee de GPU). Opt-in (default 0).
-        let corner_radius = self.app.config_corner_radius();
+        let corner_radius = self.app.decorations.corner_radius;
         let rshader = self.rounded_shader.clone();
         let anim_now = self.start.elapsed().as_millis() as u32;
 
@@ -754,6 +754,20 @@ impl DrmState {
                     // fuentes sin esos puntos. El hit-test del click usa las
                     // mismas posiciones (TB_BTN_W).
                     let _ = tr; // los íconos no dependen de la fuente
+                    // Botones con relieve 3D (CDE/Motif): cuando el theme bisela
+                    // el marco, los botones del titlebar se pintan como teclas
+                    // levantadas (cara + anillo raised) detrás de su ícono.
+                    let bevel_btns = self.app.decorations.border_bevel;
+                    let (btn_face, btn_hi, btn_lo) = if bevel_btns {
+                        let tbar = self.focus_base_titlebar(w, anim_now, glow_ms);
+                        (
+                            rgba_f32(bevel_shade(tbar, 0.12)),
+                            rgba_f32(bevel_shade(tbar, 0.6)),
+                            rgba_f32(bevel_shade(tbar, -0.5)),
+                        )
+                    } else {
+                        ([0.0; 4], [0.0; 4], [0.0; 4])
+                    };
                     for (slot, icon) in [
                         (0i32, crate::text::icon_close(TITLE_PX, title_color)),
                         (1i32, crate::text::icon_square(TITLE_PX, title_color)),
@@ -785,6 +799,24 @@ impl DrmState {
                                 Kind::Unspecified,
                             ) {
                                 into.push(Frame::Text(el));
+                            }
+                            // Tecla levantada DETRÁS del ícono (se empuja después
+                            // = queda debajo): anillo raised + cara. Sólo en temas
+                            // biselados (CDE); los demás dejan el botón plano.
+                            if bevel_btns {
+                                let bs = (crate::TB_BTN_W.min(tb) - 6).max(8);
+                                let kx = cell_x + (crate::TB_BTN_W - bs) / 2;
+                                let ky = dec_y + (tb - bs) / 2;
+                                push_bevel_ring(into, kx, ky, bs, bs, 2, btn_hi, btn_lo, true, anim_alpha);
+                                let mut fb = SolidColorBuffer::default();
+                                fb.update((bs, bs), btn_face);
+                                into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                                    &fb,
+                                    (kx, ky),
+                                    1.0,
+                                    anim_alpha,
+                                    Kind::Unspecified,
+                                )));
                             }
                         }
                     }
@@ -964,10 +996,19 @@ impl DrmState {
             } else {
                 0.0
             };
+            // Con barra de título del servidor arriba (`tb > 0`) sólo se
+            // redondean las esquinas de ABAJO: las de arriba quedan a ras de la
+            // barra (si no, se abren muescas entre barra y contenido). Sin barra
+            // (hyprland/dwm/CSD) se redondean las cuatro.
+            let round_top = tb == 0;
             let mut rounded = false;
             if radius > 0.5 {
-                if let Some(tex) = render_surface_to_texture(&mut self.renderer, &w.surface, sw, sh) {
-                    if let Some(prog) = rshader.clone() {
+                // El shader SDF redondea las 4 esquinas: sólo sirve cuando además
+                // queremos la de arriba. Con barra, vamos por el camino CPU
+                // (máscara sólo-abajo).
+                if round_top {
+                    if let Some(tex) = render_surface_to_texture(&mut self.renderer, &w.surface, sw, sh) {
+                        if let Some(prog) = rshader.clone() {
                         // Camino GPU: dibujamos la textura con el shader SDF.
                         let ctxid = self.renderer.context_id();
                         let el = TextureRenderElement::from_static_texture(
@@ -989,10 +1030,12 @@ impl DrmState {
                         ];
                         into.push(Frame::Rounded(TextureShaderElement::new(el, prog, uniforms)));
                         rounded = true;
+                        }
                     }
                 }
                 if !rounded {
-                    // Fallback CPU: leemos el contenido y enmascaramos las esquinas.
+                    // Camino CPU: leemos el contenido y enmascaramos las esquinas
+                    // (sólo las de abajo si la ventana lleva barra de título).
                     let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                         render_elements_from_surface_tree(
                             &mut self.renderer,
@@ -1008,7 +1051,7 @@ impl DrmState {
                             (sw, sh),
                             &elems,
                         ) {
-                            round_mask_bgra(&mut bytes, sw, sh, radius);
+                            round_mask_bgra(&mut bytes, sw, sh, radius, round_top);
                             let buf = MemoryRenderBuffer::from_slice(
                                 &bytes,
                                 Fourcc::Argb8888,
@@ -2960,7 +3003,7 @@ fn render_surface_to_texture(
 /// premultiplicado. Sólo toca las 4 esquinas (el centro queda intacto), así que
 /// es barato relativo a la lectura de GPU que lo precede. Pura. Es el **fallback**
 /// CPU cuando el shader GLES no compiló.
-fn round_mask_bgra(px: &mut [u8], w: i32, h: i32, radius: f32) {
+fn round_mask_bgra(px: &mut [u8], w: i32, h: i32, radius: f32, round_top: bool) {
     if w <= 0 || h <= 0 || radius <= 0.5 {
         return;
     }
@@ -2977,7 +3020,14 @@ fn round_mask_bgra(px: &mut [u8], w: i32, h: i32, radius: f32) {
     };
     for y in 0..h {
         // Sólo las bandas superior/inferior tocan esquinas; el resto queda igual.
-        if y >= margin && y < h - margin {
+        let en_tope = y < margin;
+        let en_fondo = y >= h - margin;
+        if !en_tope && !en_fondo {
+            continue;
+        }
+        // Con barra de título arriba, las esquinas superiores NO se redondean
+        // (quedan a ras de la barra) para no abrir muescas; sólo las de abajo.
+        if en_tope && !round_top {
             continue;
         }
         let row = (y as usize) * (w as usize) * 4;
@@ -3126,7 +3176,7 @@ mod tests {
     fn round_mask_recorta_esquinas_y_deja_el_centro() {
         let (w, h) = (40i32, 40i32);
         let mut px = vec![255u8; (w * h * 4) as usize]; // opaco blanco
-        round_mask_bgra(&mut px, w, h, 10.0);
+        round_mask_bgra(&mut px, w, h, 10.0, true);
         // El centro queda intacto (opaco).
         let c = ((h / 2 * w + w / 2) * 4) as usize;
         assert_eq!(&px[c..c + 4], &[255, 255, 255, 255]);
@@ -3134,8 +3184,20 @@ mod tests {
         assert_eq!(px[3], 0, "la esquina superior-izquierda se recorta");
         // Radio 0 / degenerado: no toca nada.
         let mut q = vec![255u8; (w * h * 4) as usize];
-        round_mask_bgra(&mut q, w, h, 0.0);
+        round_mask_bgra(&mut q, w, h, 0.0, true);
         assert!(q.iter().all(|&b| b == 255));
+    }
+
+    #[test]
+    fn round_mask_solo_abajo_deja_intacto_el_tope() {
+        let (w, h) = (40i32, 40i32);
+        let mut px = vec![255u8; (w * h * 4) as usize];
+        round_mask_bgra(&mut px, w, h, 10.0, false); // sólo esquinas de abajo
+        // La esquina superior-izquierda queda OPACA (no se recorta con barra).
+        assert_eq!(px[3], 255, "con barra, el tope no se redondea");
+        // La esquina inferior-izquierda sí se recorta.
+        let bl = (((h - 1) * w) * 4) as usize;
+        assert_eq!(px[bl + 3], 0, "la esquina inferior sí se recorta");
     }
 
     #[test]

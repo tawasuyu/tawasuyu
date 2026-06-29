@@ -865,8 +865,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Una layer surface por **fondo** de escritorio (Program Manager Win3.1):
-    // capa Background (detrás de las ventanas), anclada a los 4 bordes y de
+    // Una layer surface por **fondo** de escritorio (capa Background):
+    // detrás de las ventanas, anclada a los 4 bordes y de
     // tamaño 0 → el compositor la estira a la salida completa; `configure`
     // reporta el tamaño real. Sin zona exclusiva ni teclado.
     for &idx in &backgrounds {

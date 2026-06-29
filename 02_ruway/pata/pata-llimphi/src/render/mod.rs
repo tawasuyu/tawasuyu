@@ -143,7 +143,7 @@ pub struct BarData<'a> {
     pub notifications: Option<&'a crate::notifications::NotifState>,
     /// El último cuadro del visualizador de audio, para el `cava`.
     pub cava: &'a [f32],
-    /// Las apps del registro, para el `program_manager` (grilla estilo Win3.1).
+    /// Las apps del registro (lanzadores del Front Panel de CDE, etc.).
     pub apps: &'a [AppEntry],
     /// La shuma COMPLETA hospedada (live-wire `PATA_SHUMA_FULL`), si está. El
     /// cabezal `shuma` pinta el input de su sesión activa directo en la barra.
@@ -703,7 +703,6 @@ fn slots_de(
                 SlotWidget::Cava => {
                     widgets::cuantizar(weather_cava::cava_view(data.cava, theme), surface.cell, 0, "cava", dir)
                 }
-                SlotWidget::ProgramManager => start_menus::program_manager_view(data.apps, theme),
                 // El Front Panel renderiza la barra entera (lo cortocircuita
                 // `bar_view`); acá no debería llegar — placeholder vacío.
                 SlotWidget::FrontPanel => View::new(Style::default()),
@@ -1869,10 +1868,10 @@ pub fn front_panel_shot(data: &BarData, theme: &Theme) -> View<Msg> {
     cde::front_panel_view(data, theme)
 }
 
-/// **Fondo de escritorio** a pantalla completa (Program Manager de Win3.1): su
-/// contenido llena la superficie, sin el reparto en tercios de la barra. Hoy el
-/// único contenido es el Program Manager (en `center`); si no lo lleva, cae a
-/// `bar_view`.
+/// **Fondo de escritorio** a pantalla completa (capa Background). Hoy no tiene
+/// contenido propio —el Program Manager de Win3.1 se descartó por completo— así
+/// que delega en `bar_view`. Se mantiene como punto de extensión para futuros
+/// widgets de fondo de pantalla completa.
 pub fn background_view(
     surface: &Surface,
     surface_widgets: &SurfaceWidgets,
@@ -1880,30 +1879,7 @@ pub fn background_view(
     data: &BarData,
     theme: &Theme,
 ) -> View<Msg> {
-    let tiene_pm = surface_widgets
-        .center
-        .iter()
-        .chain(&surface_widgets.start)
-        .any(|w| matches!(w, SlotWidget::ProgramManager));
-    if !tiene_pm {
-        return bar_view(surface, surface_widgets, shuma_state, data, theme);
-    }
-    let pm = start_menus::program_manager_view(data.apps, theme);
-    // Contenedor a pantalla completa con padding; el PM llena el resto.
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        padding: TaffyRect {
-            left: length(surface.padding),
-            right: length(surface.padding),
-            top: length(surface.padding),
-            bottom: length(surface.padding),
-        },
-        ..Default::default()
-    })
-    .children(vec![pm])
+    bar_view(surface, surface_widgets, shuma_state, data, theme)
 }
 
 /// **Dock estilo macOS**: una fila centrada, pegada al borde, con un ícono por

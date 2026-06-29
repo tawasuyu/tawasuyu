@@ -159,7 +159,7 @@ pub struct Config {
     pub border_bevel: bool,
     /// Color RGBA de la **barra de título** con foco, desacoplado del marco.
     /// `None` (default) = la barra hereda `border_focus`. `Some` habilita el
-    /// marco gris + barra de color (Win3.1 navy, CDE). Lo fija el theme/vista.
+    /// marco gris + barra de color, o barras claras (mac/Breeze). Lo fija la vista.
     #[serde(default)]
     pub titlebar_focus: Option<[u8; 4]>,
     /// Color RGBA de la barra de título sin foco. `None` = `border_normal`.
@@ -1083,7 +1083,6 @@ pub fn default_root_menu() -> Vec<MenuEntry> {
             vec![
                 leaf("mirada (nativo)", "mirada-ctl vista use mirada"),
                 leaf("Windows XP", "mirada-ctl vista use windows-xp"),
-                leaf("Windows 3.1", "mirada-ctl vista use windows-3.1"),
                 leaf("macOS", "mirada-ctl vista use mac"),
                 leaf("KDE Plasma", "mirada-ctl vista use kde"),
                 leaf("Solaris (CDE)", "mirada-ctl vista use solaris"),
@@ -1142,6 +1141,7 @@ impl Config {
             titlebar_focus: self.titlebar_focus,
             titlebar_normal: self.titlebar_normal,
             titlebar_text: self.titlebar_text,
+            corner_radius: self.corner_radius,
         }
     }
 
@@ -1463,7 +1463,7 @@ const CONFIG_TEMPLATE: &str = "\
     border_bevel: false,
     // Color de la barra de título, desacoplado del marco. None = hereda el
     // color del marco (acoplado). Some habilita marco gris + barra de color
-    // (Win3.1 navy, mac/Breeze claras). titlebar_text fija el color del título
+    // (mac/Breeze claras). titlebar_text fija el color del título
     // (oscuro para barras claras). Ej: titlebar_focus: Some((0, 0, 128, 255)).
     titlebar_focus: None,
     titlebar_normal: None,

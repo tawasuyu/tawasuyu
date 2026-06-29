@@ -129,7 +129,7 @@ pub struct Decorations {
     /// Color RGBA de la **barra de título** con foco, **desacoplado del marco**.
     /// `None` (default) = la barra hereda el color del marco (`border_focus`),
     /// el acoplamiento histórico. `Some` permite el clásico marco gris + barra
-    /// de color (Win3.1 navy, CDE) que de otro modo es imposible.
+    /// de color, o barras claras (mac/Breeze), que de otro modo es imposible.
     #[serde(default)]
     pub titlebar_focus: Option<[u8; 4]>,
     /// Color RGBA de la barra de título **sin** foco. `None` = `border_normal`.
@@ -140,6 +140,12 @@ pub struct Decorations {
     /// oscuro para que el título y los íconos se lean.
     #[serde(default)]
     pub titlebar_text: Option<[u8; 4]>,
+    /// Radio de las **esquinas redondeadas** de ventana en px; `0` (default) =
+    /// rectas. Viaja en las decoraciones (no en la config sólo-Embedded) para
+    /// que el redondeo también ande con el Cerebro enlazado. Caro: el render lo
+    /// enmascara por ventana/frame, por eso default 0 (opt-in por vista).
+    #[serde(default)]
+    pub corner_radius: u8,
 }
 
 impl Default for Decorations {
@@ -157,6 +163,7 @@ impl Default for Decorations {
             titlebar_focus: None,
             titlebar_normal: None,
             titlebar_text: None,
+            corner_radius: 0,
         }
     }
 }
@@ -681,6 +688,7 @@ mod tests {
             titlebar_focus: Some([0, 0, 128, 255]),
             titlebar_normal: None,
             titlebar_text: Some([20, 20, 20, 255]),
+            corner_radius: 12,
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();

@@ -37,10 +37,11 @@ pub struct Vista {
 
 /// Los slugs de las vistas de fábrica, en orden de presentación. `mirada`
 /// (la nativa) encabeza.
-// windows-3.1 queda FUERA de la lista: su Program Manager pide una ventana
-// normal (toplevel movible) que pata —una barra— no puede ser; hasta tener una
-// app dedicada, no se ofrece como vista. La fn `vista_windows_31` sigue por si
-// se reintroduce.
+//
+// Windows 3.1 quedó descartado como vista: su Program Manager pide una ventana
+// toplevel propia que pata —una barra— no puede ser, y no vamos a construir un
+// Program Manager. Eliminado por completo (no hay `vista_windows_31`). La
+// paleta retro `Win3.1` de llimphi-theme sigue disponible para apps sueltas.
 pub const VISTA_NAMES: [&str; 7] = [
     "mirada",
     "windows-xp",
@@ -57,7 +58,6 @@ impl Vista {
         Some(match name {
             "mirada" => vista_mirada(),
             "windows-xp" => vista_windows_xp(),
-            "windows-3.1" => vista_windows_31(),
             "mac" => vista_mac(),
             "kde" => vista_kde(),
             "solaris" => vista_solaris(),
@@ -168,6 +168,8 @@ fn vista_mac() -> Vista {
     config.titlebar_focus = Some([232, 232, 237, 255]);
     config.titlebar_normal = Some([244, 244, 247, 255]);
     config.titlebar_text = Some([60, 60, 66, 255]);
+    // Esquinas redondeadas: el sello visual de mac.
+    config.corner_radius = 10;
     Vista {
         name: "mac",
         label: "macOS",
@@ -194,6 +196,8 @@ fn vista_kde() -> Vista {
     config.titlebar_focus = Some([247, 248, 249, 255]);
     config.titlebar_normal = Some([239, 240, 241, 255]);
     config.titlebar_text = Some([35, 38, 41, 255]);
+    // Breeze redondea suave las esquinas.
+    config.corner_radius = 6;
     Vista {
         name: "kde",
         label: "KDE Plasma",
@@ -207,20 +211,23 @@ fn vista_kde() -> Vista {
 /// Tiledad casi máxima: soltar en casi cualquier lado tesela a la región más
 /// cercana — flotar es la excepción, no la regla.
 fn vista_hyprland() -> Vista {
+    let mut config = skin(
+        "Dark",
+        LayoutMode::Spiral,
+        10,
+        2,
+        0,
+        [110, 140, 220, 255],
+        [46, 54, 70, 255],
+        0.95,
+    );
+    // Gaps amplios + esquinas redondeadas: el look firma de Hyprland.
+    config.corner_radius = 10;
     Vista {
         name: "hyprland",
         label: "Hyprland",
         keymap: "hyprland",
-        config: skin(
-            "Dark",
-            LayoutMode::Spiral,
-            10,
-            2,
-            0,
-            [110, 140, 220, 255],
-            [46, 54, 70, 255],
-            0.95,
-        ),
+        config,
     }
 }
 
@@ -241,32 +248,6 @@ fn vista_dwm() -> Vista {
             [46, 54, 70, 255],
             0.95,
         ),
-    }
-}
-
-/// **Windows 3.1** — gris Motif con barra de título azul marino, marco
-/// biselado, escritorio teal; el Program Manager lo monta la barra de pata.
-fn vista_windows_31() -> Vista {
-    let mut config = skin(
-        "Win3.1",
-        LayoutMode::MasterStack,
-        2,
-        4,                      // marco grueso biselado
-        20,
-        [198, 198, 198, 255],   // marco gris Motif (#c0c0c0) — biselado, no azul
-        [174, 174, 174, 255],   // gris algo más apagado sin foco
-        0.1,
-    );
-    config.border_bevel = true;
-    // El sello de 3.1: marco gris biselado pero barra de título azul marino
-    // (gris cuando la ventana no tiene foco). El texto sigue claro (legible).
-    config.titlebar_focus = Some([0, 0, 128, 255]);
-    config.titlebar_normal = Some([128, 128, 128, 255]);
-    Vista {
-        name: "windows-3.1",
-        label: "Windows 3.1",
-        keymap: "windows",
-        config,
     }
 }
 
@@ -332,9 +313,7 @@ mod tests {
     fn cada_vista_fija_un_tema_conocido() {
         // El Cerebro es UI-agnóstico: no resuelve la paleta (eso lo hace el
         // front con llimphi-theme), pero sí garantiza un nombre del set válido.
-        let conocidos = [
-            "Dark", "Light", "Aurora", "Sunset", "WinXP", "macOS", "Breeze", "Win3.1", "CDE",
-        ];
+        let conocidos = ["Dark", "Light", "Aurora", "Sunset", "WinXP", "macOS", "Breeze", "CDE"];
         for v in Vista::all() {
             assert!(
                 conocidos.contains(&v.config.theme.as_str()),
@@ -361,15 +340,12 @@ mod tests {
 
     #[test]
     fn las_vistas_retro_traen_marco_grueso_con_relieve() {
-        // CDE (y Win3.1) son los looks Motif: marco grueso con bevel 3D. El
-        // resto va plano. Y el flag viaja en las decoraciones que el Cerebro
-        // emite hacia el Cuerpo.
+        // CDE es el look Motif: marco grueso con bevel 3D. El resto va plano. Y
+        // el flag viaja en las decoraciones que el Cerebro emite hacia el Cuerpo.
         let cde = Vista::by_name("solaris").unwrap().config;
         assert!(cde.border_bevel, "la vista CDE debe traer relieve 3D");
         assert!(cde.border_width >= 4, "el marco CDE debe ser grueso");
         assert!(cde.decorations().border_bevel, "el bevel debe viajar en Decorations");
-        let w31 = Vista::by_name("windows-3.1").unwrap().config;
-        assert!(w31.border_bevel, "Win3.1 también es Motif biselado");
         // Las modernas van planas.
         assert!(!Vista::by_name("mirada").unwrap().config.border_bevel);
         assert!(!Vista::by_name("mac").unwrap().config.border_bevel);
@@ -387,19 +363,10 @@ mod tests {
             let tx = c.titlebar_text.expect("texto oscuro propio");
             assert!(tb[0] > 200 && tb[1] > 200 && tb[2] > 200, "{n}: barra debe ser clara");
             assert!(tx[0] < 100 && tx[1] < 100 && tx[2] < 100, "{n}: texto debe ser oscuro");
+            // Desacople real: la barra clara NO hereda el color del marco.
+            assert_ne!(c.titlebar_focus, None, "{n}: barra desacoplada del marco");
         }
-        // Win3.1: marco gris (claro) pero barra de título azul marino —
-        // desacople real (la barra NO hereda el color del marco).
-        let w31 = Vista::by_name("windows-3.1").unwrap().config;
-        let marco = w31.border_focus;
-        assert!(marco[0] > 150 && marco[1] > 150 && marco[2] > 150, "marco 3.1 gris claro");
-        assert_eq!(w31.titlebar_focus, Some([0, 0, 128, 255]), "barra 3.1 azul marino");
-        assert_ne!(
-            w31.titlebar_focus.unwrap(),
-            w31.border_focus,
-            "la barra debe diferir del marco (desacople)"
-        );
-        // Por contraste, las modernas dejan la barra acoplada al marco.
+        // Por contraste, las modernas (mirada) dejan la barra acoplada al marco.
         assert_eq!(Vista::by_name("mirada").unwrap().config.titlebar_focus, None);
     }
 

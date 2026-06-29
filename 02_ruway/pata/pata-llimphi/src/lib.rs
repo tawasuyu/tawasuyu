@@ -402,10 +402,6 @@ pub enum SlotWidget {
     /// El visualizador de audio estilo CAVA: barras animadas con el espectro.
     /// Dato del host (el binario `cava` en modo raw, ver [`cava`]).
     Cava,
-    /// El **Program Manager** estilo Windows 3.1: una grilla persistente de
-    /// íconos de apps que lanzan al click. Dato del host (`AppRegistry`), no del
-    /// view-model de core — se pasa al render aparte (como `WindowList`).
-    ProgramManager,
     /// El **Front Panel** estilo CDE/Solaris: la franja chunky inferior con
     /// botones biselados Motif (lanzadores), el **switcher de escritorios** en
     /// una caja recessed al centro, y reloj. Renderiza la barra ENTERA (no usa
@@ -931,7 +927,6 @@ impl SurfaceWidgets {
                 | SlotWidget::Tray
                 | SlotWidget::Weather { .. }
                 | SlotWidget::Cava
-                | SlotWidget::ProgramManager
                 | SlotWidget::FrontPanel
                 | SlotWidget::Control
                 | SlotWidget::Network
@@ -1187,8 +1182,6 @@ impl Model {
                         }
                     } else if spec.kind == "cava" {
                         SlotWidget::Cava
-                    } else if spec.kind == "program_manager" {
-                        SlotWidget::ProgramManager
                     } else if spec.kind == "front_panel" {
                         SlotWidget::FrontPanel
                     } else if spec.kind == "control" {

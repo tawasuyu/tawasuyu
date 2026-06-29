@@ -494,14 +494,9 @@ impl App {
         (pct as f32 / 100.0).clamp(0.0, 0.8)
     }
 
-    /// Radio (px) de las **esquinas redondeadas** de ventana. `0` (default) =
-    /// rectas. Con Cerebro enlazado: `0`.
-    pub(crate) fn config_corner_radius(&self) -> u8 {
-        match &self.brain {
-            Brain::Embedded(d) => d.config().corner_radius,
-            Brain::Linked(_) => 0,
-        }
-    }
+    // El radio de esquinas redondeadas ya no se lee de la config (que sólo
+    // existe con Cerebro Embedded): viaja en `Decorations::corner_radius`, así
+    // funciona también con el Cerebro enlazado. Ver `render`.
 
     /// Radio (px) del **blur del fondo glass** (frosted) detrás del chrome. `0`
     /// (default) = sin glass. Con Cerebro enlazado: `0`.

@@ -77,8 +77,8 @@ pub enum SurfaceKind {
     Sidebar,
     /// Fondo de escritorio: una superficie a **pantalla completa** que vive
     /// DETRÁS de las ventanas (capa Background, sin zona exclusiva). Su(s)
-    /// widget(s) llenan la pantalla — p. ej. el Program Manager de Windows 3.1,
-    /// que ES el escritorio. No reserva espacio ni roba foco.
+    /// widget(s) llenan la pantalla. Punto de extensión para fondos con
+    /// contenido; no reserva espacio ni roba foco.
     Background,
 }
 
@@ -222,8 +222,6 @@ pub fn widget_catalog() -> &'static [WidgetCatalogEntry] {
         W { kind: "navigator", label: "Navegador de archivos", icon: "❖", on_bar: false, on_sidebar: true },
         W { kind: "search", label: "Buscar", icon: "🔍", on_bar: false, on_sidebar: true },
         W { kind: "rag", label: "Correo IA (RAG)", icon: "✨", on_bar: false, on_sidebar: true },
-        // --- fondo de escritorio ---
-        W { kind: "program_manager", label: "Program Manager", icon: "▤", on_bar: false, on_sidebar: false },
     ]
 }
 
@@ -716,7 +714,6 @@ impl Config {
             "windows-xp" => Self::vista_windows_xp(),
             "mac" => Self::vista_mac(),
             "kde" => Self::vista_kde(),
-            "windows-3.1" => Self::vista_windows_31(),
             "solaris" => Self::vista_solaris(),
             _ => return None,
         })
@@ -850,30 +847,6 @@ impl Config {
         }
     }
 
-    /// Vista **Windows 3.1**: el *Program Manager* — una franja superior gris
-    /// Motif que aloja el módulo `program_manager` (grilla de íconos de apps con
-    /// título azul). Sin taskbar (Win3.1 no tenía): la "ventana" del PM es el
-    /// escritorio. El alto reserva espacio para la grilla.
-    fn vista_windows_31() -> Self {
-        // Win3.1: por ahora una barra superior gris Motif con Inicio (abre el
-        // menú de apps = "Program Manager") + lista de ventanas + reloj. El
-        // Program Manager como VENTANA normal (movible, con barra de título) es
-        // una app aparte pendiente — pata es una barra, no puede serlo, y meterlo
-        // como superficie de fondo salía como franja (mal). Ver nota en el menú.
-        let mut bar = Surface::bar(Anchor::Top);
-        bar.thickness = 28.0;
-        bar.start = vec![
-            WidgetSpec::new("start_button").with("label", Prop::Str("Archivo".to_string())),
-            WidgetSpec::new("window_title").with("max", Prop::Num(60.0)),
-        ];
-        bar.center = vec![WidgetSpec::new("window_list")];
-        bar.end = vec![WidgetSpec::new("clock").with("format", Prop::Str("%H:%M".to_string()))];
-        Self {
-            general: General::default(),
-            surfaces: vec![bar],
-        }
-    }
-
     /// Vista **Solaris CDE** (era dorada): el *Front Panel* inferior chunky con
     /// el conmutador de escritorios al **centro**, flanqueado por el lanzador y
     /// el reloj a un lado y la lista de ventanas + bandeja al otro — el sello de
@@ -938,7 +911,7 @@ mod tests {
 
     #[test]
     fn vista_preset_resuelve_las_vistas_y_difieren() {
-        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde", "windows-3.1", "solaris"] {
+        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde", "solaris"] {
             let c = Config::vista_preset(slug).unwrap_or_else(|| panic!("vista {slug}"));
             assert!(!c.surfaces.is_empty(), "vista {slug} sin superficies");
         }
