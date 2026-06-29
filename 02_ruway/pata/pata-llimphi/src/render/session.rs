@@ -132,7 +132,7 @@ fn action_row(a: SessionAction, theme: &Theme) -> View<Msg> {
     } else {
         Msg::SessionRun(a)
     };
-    fila(a.label(), theme.fg_text, theme).on_click(msg)
+    fila(&a.label(), theme.fg_text, theme).on_click(msg)
 }
 
 /// El prompt de confirmación para una acción disruptiva.
@@ -148,7 +148,7 @@ fn confirm_rows(a: SessionAction, theme: &Theme) -> Vec<View<Msg>> {
     })
     .text(format!("¿{}?", a.label()), 13.0, theme.fg_text);
 
-    let confirmar = fila(a.label(), theme.accent, theme).on_click(Msg::SessionRun(a));
+    let confirmar = fila(&a.label(), theme.accent, theme).on_click(Msg::SessionRun(a));
     let cancelar = fila("Cancelar", theme.fg_muted, theme).on_click(Msg::SessionCancel);
     vec![pregunta, confirmar, cancelar]
 }
