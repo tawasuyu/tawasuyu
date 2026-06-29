@@ -1,0 +1,26 @@
+[package]
+name = "nakui-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nakui — transporte de red soberano sobre card-net (libp2p): servidor que hospeda el escritor autoritativo y CardNetTransport (impl Transport de nakui-sync) para clientes remotos. LAN directa o WAN con NAT-traversal, mismo protocolo."
+
+[lib]
+doctest = false
+
+[dependencies]
+nakui-sync = { path = "../nakui-sync" }
+card-net = { path = "../../../shared/card/card-net" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+nakui-core = { path = "../nakui-core" }
+tempfile = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
