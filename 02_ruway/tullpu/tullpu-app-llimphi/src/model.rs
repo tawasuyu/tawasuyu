@@ -153,6 +153,9 @@ pub(crate) struct Model {
     /// Punto de control Bézier agarrado: `(índice de comando, es_c1, x, y)`.
     /// Tiene prioridad sobre `pluma_ancla` durante el drag.
     pub(crate) pluma_control: Option<(usize, bool, f32, f32)>,
+    /// Snap a grilla: `None` = libre, `Some(n)` = los puntos de la pluma se
+    /// redondean al múltiplo de `n` px más cercano (y se dibuja la grilla).
+    pub(crate) snap_grid: Option<f32>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -778,6 +781,10 @@ pub(crate) enum Msg {
     VectorTrazoJoin,
     /// Vector: alterna trazo punteado (dash) on/off.
     VectorTrazoDash,
+    /// Precisión: alterna el snap a grilla (off → 16 px → off).
+    ToggleSnap,
+    /// Precisión: centra la capa vectorial en el lienzo (`h`, `v` = ejes).
+    AlinearCentro { h: bool, v: bool },
     /// Booleano: combina la capa seleccionada con la de abajo (unión).
     BooleanoUnion,
     /// Booleano: intersección de la capa seleccionada con la de abajo.

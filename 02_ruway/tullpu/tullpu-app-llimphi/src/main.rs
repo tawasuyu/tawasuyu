@@ -1144,6 +1144,17 @@ impl App for Tullpu {
                 });
                 pushear_snapshot(&mut model, None);
             }
+            Msg::ToggleSnap => {
+                model.snap_grid = if model.snap_grid.is_some() { None } else { Some(16.0) };
+                model.estado = match model.snap_grid {
+                    Some(g) => format!("snap a grilla {g:.0} px"),
+                    None => "snap libre".into(),
+                };
+            }
+            Msg::AlinearCentro { h, v } => {
+                alinear_vector_centro(&mut model, h, v);
+                pushear_snapshot(&mut model, None);
+            }
             Msg::BooleanoUnion => {
                 if let Some(id) = model.seleccionada {
                     if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Union) {

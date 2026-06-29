@@ -1207,6 +1207,16 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         hijos.push(envolver_fila(button_view("◧ gradiente lineal".to_string(), &pal, Msg::VectorGradienteLineal)));
         hijos.push(envolver_fila(button_view("◉ gradiente radial".to_string(), &pal, Msg::VectorGradienteRadial)));
         hijos.push(envolver_fila(button_view("⨯ quitar gradiente".to_string(), &pal, Msg::VectorGradienteQuitar)));
+        // Precisión: snap a grilla + alinear al lienzo.
+        let snap_lbl = match model.snap_grid {
+            Some(g) => format!("snap: {g:.0} px (on)"),
+            None => "snap: off".to_string(),
+        };
+        hijos.push(subtitulo("precisión"));
+        hijos.push(envolver_fila(button_view(snap_lbl, &pal, Msg::ToggleSnap)));
+        hijos.push(envolver_fila(button_view("⊕ centrar en lienzo".to_string(), &pal, Msg::AlinearCentro { h: true, v: true })));
+        hijos.push(envolver_fila(button_view("↔ centrar H".to_string(), &pal, Msg::AlinearCentro { h: true, v: false })));
+        hijos.push(envolver_fila(button_view("↕ centrar V".to_string(), &pal, Msg::AlinearCentro { h: false, v: true })));
         // Booleanos con la capa de abajo (resultado raster, destructivo).
         hijos.push(subtitulo("booleano (con la de abajo)"));
         hijos.push(envolver_fila(button_view("∪ unión".to_string(), &pal, Msg::BooleanoUnion)));
@@ -1685,6 +1695,7 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
             // Cuadro + handles de transformación libre (Ctrl+T). Se dibuja
             // sobre el composite con el mismo transform del lienzo.
             let transform_libre = model.transform.clone();
+            let snap_grid = model.snap_grid;
             // Anclas de la capa vectorial en edición con la pluma: se dibujan
             // como handles para mover puntos. Capturamos sus coords-imagen.
             let capa_vec_edicion = model
@@ -1764,6 +1775,28 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                 );
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &node_rect);
                 scene.draw_image(&img, transform);
+                // Grilla de snap: líneas tenues cada `g` px-imagen (sólo si el
+                // paso en pantalla no queda tan denso que sature).
+                if let Some(g) = snap_grid {
+                    if g > 0.0 && (g as f64) * s >= 6.0 {
+                        let col_grid = Color::from_rgba8(255, 255, 255, 40);
+                        let trazo_g = Stroke::new(1.0);
+                        let mut gx = 0.0f32;
+                        while (gx as f64) <= img.image.width as f64 {
+                            let sx = tx + (gx as f64) * s;
+                            scene.stroke(&trazo_g, Affine::IDENTITY, col_grid, None,
+                                &Line::new(Point::new(sx, ty), Point::new(sx, ty + img.image.height as f64 * s)));
+                            gx += g;
+                        }
+                        let mut gy = 0.0f32;
+                        while (gy as f64) <= img.image.height as f64 {
+                            let sy = ty + (gy as f64) * s;
+                            scene.stroke(&trazo_g, Affine::IDENTITY, col_grid, None,
+                                &Line::new(Point::new(tx, sy), Point::new(tx + img.image.width as f64 * s, sy)));
+                            gy += g;
+                        }
+                    }
+                }
                 // Overlay de selección no rectangular: misma geometría que el
                 // composite (la imagen del overlay es del tamaño del lienzo).
                 if let Some(ov) = overlay_sel.as_ref() {

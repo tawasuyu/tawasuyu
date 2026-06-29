@@ -1514,6 +1514,26 @@ pub(crate) fn editar_estilo_trazo(
     });
 }
 
+/// Redondea `v` al múltiplo de la grilla de snap (si está activa).
+fn snap_v(v: f32, model: &Model) -> f32 {
+    match model.snap_grid {
+        Some(g) if g > 0.0 => (v / g).round() * g,
+        _ => v,
+    }
+}
+
+/// Alinea la capa vectorial seleccionada al centro del lienzo. `h`/`v` eligen
+/// el eje (horizontal/vertical). No-op si no es vectorial.
+pub(crate) fn alinear_vector_centro(model: &mut Model, h: bool, v: bool) {
+    let (cw, ch) = (model.lienzo.width as f32, model.lienzo.height as f32);
+    editar_vector_seleccionado(model, |p| {
+        let (x0, y0, x1, y1) = bbox_path(p);
+        let dx = if h { cw * 0.5 - (x0 + x1) * 0.5 } else { 0.0 };
+        let dy = if v { ch * 0.5 - (y0 + y1) * 0.5 } else { 0.0 };
+        p.trasladar(dx, dy);
+    });
+}
+
 /// Bbox `(x0, y0, x1, y1)` de los puntos de ancla del path (para ubicar un
 /// gradiente). Si el path está vacío, devuelve un cuadrado unitario.
 pub(crate) fn bbox_path(p: &tullpu_core::ParamsVector) -> (f32, f32, f32, f32) {
@@ -1592,7 +1612,7 @@ pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32)
     ) else {
         return false;
     };
-    let (ix, iy) = (ixf as f32, iyf as f32);
+    let (ix, iy) = (snap_v(ixf as f32, model), snap_v(iyf as f32, model));
 
     // Umbral de hit-test: ~9 px de pantalla, convertidos a px-imagen.
     let s = crate::viewport::transform_lienzo(w, h, rw, rh, model.factor_zoom, model.pan_x, model.pan_y)
@@ -1682,16 +1702,25 @@ pub(crate) fn pluma_arrastrar(model: &mut Model, dx: f32, dy: f32) {
     .unwrap_or(1.0)
     .max(1e-6);
 
+    // El estado guarda la posición CRUDA (acumulación suave); lo que se aplica
+    // al path se redondea a la grilla si el snap está activo.
+    let grid = model.snap_grid;
+    let snap = |v: f32| match grid {
+        Some(g) if g > 0.0 => (v / g).round() * g,
+        _ => v,
+    };
     // Prioridad al control Bézier; si no hay, mueve el ancla.
     if let Some((idx, es_c1, px, py)) = model.pluma_control {
-        let (nx, ny) = (px + dx / s, py + dy / s);
-        model.pluma_control = Some((idx, es_c1, nx, ny));
+        let (rx, ry) = (px + dx / s, py + dy / s);
+        model.pluma_control = Some((idx, es_c1, rx, ry));
+        let (nx, ny) = (snap(rx), snap(ry));
         editar_params_vector(model, id, |p| p.mover_control(idx, es_c1, nx, ny));
         return;
     }
     if let Some((idx, px, py)) = model.pluma_ancla {
-        let (nx, ny) = (px + dx / s, py + dy / s);
-        model.pluma_ancla = Some((idx, nx, ny));
+        let (rx, ry) = (px + dx / s, py + dy / s);
+        model.pluma_ancla = Some((idx, rx, ry));
+        let (nx, ny) = (snap(rx), snap(ry));
         editar_params_vector(model, id, |p| p.mover_ancla(idx, nx, ny));
     }
 }
