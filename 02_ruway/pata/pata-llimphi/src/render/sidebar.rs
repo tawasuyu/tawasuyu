@@ -18,6 +18,7 @@
 //!   el panel se pinta junto al rail (el eje libre lo estira el compositor).
 
 use llimphi_theme::Theme;
+use rimay_localize::{t, t_args};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style},
     Rect as TaffyRect,
@@ -310,11 +311,11 @@ fn panel_inner(
     }
     // Flota (matilda): inventario read-only de hosts/contenedores/vhosts.
     if crate::es_flota(kind) {
-        return super::flota_view(centro.flota, centro.flota_remoto, panel_h, theme);
+        return super::flota_view(centro.flota, centro.flota_remoto, nav.scroll, panel_h, theme);
     }
     // Unidades (sandokan): estado + telemetría de las unidades del plano de control.
     if crate::es_unidades(kind) {
-        return super::unidades_view(centro.unidades, panel_h, theme);
+        return super::unidades_view(centro.unidades, nav.scroll, panel_h, theme);
     }
     // Panel RAG (preguntale a tu correo): su contenido es `rag`/`search`. Trae su
     // propio cabezal + buscador + respuesta + fuentes.
@@ -619,14 +620,18 @@ fn open_with_menu(nav: &NavState, id: NavId, theme: &Theme) -> View<Msg> {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text(format!("Abrir «{name}» con:"), 12.0, theme.fg_muted),
+        .text(
+            t_args("pata-open-with-title", &[("name", name.to_string().into())]),
+            12.0,
+            theme.fg_muted,
+        ),
     );
     for (app_id, label) in &nav.menu_options {
         let aid = app_id.clone();
         rows.push(menu_button(label, theme).on_click(Msg::NavOpenWith(id, Some(aid))));
     }
-    rows.push(menu_button("El sistema (xdg-open)", theme).on_click(Msg::NavOpenWith(id, None)));
-    rows.push(menu_button("Cancelar", theme).on_click(Msg::NavMenuCancel));
+    rows.push(menu_button(&t("pata-open-with-system"), theme).on_click(Msg::NavOpenWith(id, None)));
+    rows.push(menu_button(&t("cancel"), theme).on_click(Msg::NavMenuCancel));
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -669,7 +674,7 @@ fn menu_button(label: &str, theme: &Theme) -> View<Msg> {
 fn aviso_view(nav: &NavState, theme: &Theme, viewport: f32) -> View<Msg> {
     let (texto, color) = match &nav.error {
         Some(e) => (e.clone(), theme.fg_muted),
-        None => ("Conectando con nouser…".to_string(), theme.fg_muted),
+        None => (t("pata-connecting-nouser"), theme.fg_muted),
     };
     View::new(Style {
         size: Size {

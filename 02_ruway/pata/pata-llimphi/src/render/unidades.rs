@@ -3,6 +3,7 @@
 //! por [`crate::unidades`] (arje-bus). Sin plano de control → aviso.
 
 use llimphi_theme::{Color, Theme};
+use rimay_localize::{t, t_args};
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, AlignItems, FlexDirection, JustifyContent, Size, Style,
 };
@@ -21,13 +22,18 @@ const MAX_DOTS: usize = 9;
 
 /// El panel de unidades, de alto completo: resumen (activas/total) + una fila por
 /// unidad (punto de estado + etiqueta + telemetría). Aviso si no hay snapshot.
-pub fn unidades_view(snap: Option<&MonitorSnapshot>, panel_h: f32, theme: &Theme) -> View<Msg> {
+pub fn unidades_view(
+    snap: Option<&MonitorSnapshot>,
+    scroll: f32,
+    panel_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
     let titulo = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text("Unidades".to_string(), 14.0, theme.fg_text);
+    .text(t("pata-units"), 14.0, theme.fg_text);
 
     let mut hijos = vec![titulo];
     match snap {
@@ -37,7 +43,17 @@ pub fn unidades_view(snap: Option<&MonitorSnapshot>, panel_h: f32, theme: &Theme
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
-            .text(format!("{} activas · {} en total", s.running(), s.len()), 12.0, theme.fg_muted);
+            .text(
+                t_args(
+                    "pata-units-summary",
+                    &[
+                        ("active", s.running().to_string().into()),
+                        ("total", s.len().to_string().into()),
+                    ],
+                ),
+                12.0,
+                theme.fg_muted,
+            );
             hijos.push(resumen);
 
             let filas: Vec<View<Msg>> = s.units.iter().map(|u| fila(u, theme)).collect();
@@ -48,20 +64,23 @@ pub fn unidades_view(snap: Option<&MonitorSnapshot>, panel_h: f32, theme: &Theme
         }
     }
 
-    View::new(Style {
+    // Alto estimado (para el scroll): título + resumen + una fila por unidad.
+    let n = snap.map(|s| s.len()).unwrap_or(0);
+    let content_len = 60.0 + n as f32 * 24.0;
+    let inner = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: length(panel_h) },
+        size: Size { width: percent(1.0_f32), height: auto() },
         padding: TaffyRect {
             left: length(8.0_f32),
-            right: length(8.0_f32),
+            right: length(10.0_f32),
             top: length(10.0_f32),
             bottom: length(10.0_f32),
         },
         gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .children(hijos)
+    .children(hijos);
+    super::scroll_panel(inner, scroll, content_len, panel_h, theme)
 }
 
 fn rgba(r: u8, g: u8, b: u8) -> Color {
@@ -167,15 +186,16 @@ fn pintar_unidades(
 }
 
 /// `(color del punto, rótulo)` del estado de ciclo de vida.
-fn estado_visual(s: &LifecycleState) -> (Color, &'static str) {
-    match s {
-        LifecycleState::Running => (rgba(0x4A, 0xDE, 0x80), "activa"),
-        LifecycleState::Pending => (rgba(0xFB, 0xBF, 0x24), "pendiente"),
-        LifecycleState::Parked { .. } => (rgba(0xFB, 0xBF, 0x24), "en pausa"),
-        LifecycleState::Exited { .. } => (rgba(0x94, 0xA3, 0xB8), "terminó"),
-        LifecycleState::Failed { .. } => (rgba(0xF8, 0x71, 0x71), "falló"),
-        LifecycleState::Killed => (rgba(0xF8, 0x71, 0x71), "matada"),
-    }
+fn estado_visual(s: &LifecycleState) -> (Color, String) {
+    let (color, key) = match s {
+        LifecycleState::Running => (rgba(0x4A, 0xDE, 0x80), "pata-unit-running"),
+        LifecycleState::Pending => (rgba(0xFB, 0xBF, 0x24), "pata-unit-pending"),
+        LifecycleState::Parked { .. } => (rgba(0xFB, 0xBF, 0x24), "pata-unit-parked"),
+        LifecycleState::Exited { .. } => (rgba(0x94, 0xA3, 0xB8), "pata-unit-exited"),
+        LifecycleState::Failed { .. } => (rgba(0xF8, 0x71, 0x71), "pata-unit-failed"),
+        LifecycleState::Killed => (rgba(0xF8, 0x71, 0x71), "pata-unit-killed"),
+    };
+    (color, t(key))
 }
 
 /// Una fila: punto de estado + etiqueta a la izquierda, telemetría a la derecha.
@@ -197,8 +217,8 @@ fn fila(u: &UnitObservation, theme: &Theme) -> View<Msg> {
     .text(u.label.clone(), 12.0, theme.fg_text);
     // Telemetría: mem en MiB + cpu% (o el rótulo del estado si no hay corriendo).
     let detalle = match &u.telemetry {
-        Some(t) => format!("{} MiB · {:.0}%", t.mem_bytes / (1024 * 1024), t.cpu_pct),
-        None => rotulo.to_string(),
+        Some(tel) => format!("{} MiB · {:.0}%", tel.mem_bytes / (1024 * 1024), tel.cpu_pct),
+        None => rotulo,
     };
     let der = View::new(Style {
         flex_grow: 1.0,
@@ -231,9 +251,5 @@ fn aviso(theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .text(
-        "Sin plano de control. Arrancá arje (ENTE_BUS_SOCK) para ver las unidades.".to_string(),
-        12.0,
-        theme.fg_muted,
-    )
+    .text(t("pata-units-no-control"), 12.0, theme.fg_muted)
 }

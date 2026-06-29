@@ -201,7 +201,7 @@ fn main() {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![unidades_view(Some(&unidades), H as f32, &theme)]);
+    .children(vec![unidades_view(Some(&unidades), 0.0, H as f32, &theme)]);
 
     // ---- Flota (matilda) ----
     let flota_col = View::new(Style {
@@ -209,7 +209,7 @@ fn main() {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![flota_view(Some(&inv), Some(&flota_remoto), H as f32, &theme)]);
+    .children(vec![flota_view(Some(&inv), Some(&flota_remoto), 0.0, H as f32, &theme)]);
 
     // ---- Manifestaciones del diente (derecha) ----
     let tiles = vec![

@@ -26,6 +26,7 @@ const MAX_PASOS: usize = 8;
 pub fn flota_view(
     inv: Option<&Inventory>,
     remoto: Option<&[HostObs]>,
+    scroll: f32,
     panel_h: f32,
     theme: &Theme,
 ) -> View<Msg> {
@@ -101,20 +102,47 @@ pub fn flota_view(
         }
     }
 
-    View::new(Style {
+    // Alto estimado del contenido (para el scroll): una fila ≈ 28 px (los pasos
+    // del plan ocupan dos líneas, por eso es generoso).
+    let filas_est = estimar_filas(inv, remoto);
+    let content_len = 40.0 + filas_est as f32 * 28.0;
+
+    let inner = View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: length(panel_h) },
+        size: Size { width: percent(1.0_f32), height: auto() },
         padding: TaffyRect {
             left: length(8.0_f32),
-            right: length(8.0_f32),
+            right: length(10.0_f32),
             top: length(10.0_f32),
             bottom: length(10.0_f32),
         },
         gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .children(hijos)
+    .children(hijos);
+
+    crate::render::scroll_panel(inner, scroll, content_len, panel_h, theme)
+}
+
+/// Estima cuántas «filas» tiene el panel de flota — para dimensionar el scroll.
+fn estimar_filas(inv: Option<&Inventory>, remoto: Option<&[HostObs]>) -> usize {
+    let mut n = 1; // título
+    if let Some(inv) = inv.filter(|i| !i.is_empty()) {
+        n += inv.hosts().count() + 1;
+        n += inv.containers().count() + 1;
+        n += inv.vhosts().count() + 1;
+        n += MAX_PASOS + 1; // plan (generoso)
+        if let Some(o) = remoto {
+            for h in o {
+                n += if h.reachable {
+                    h.containers.len() + h.services.len() + 1
+                } else {
+                    2
+                };
+            }
+        }
+    }
+    n
 }
 
 /// La sección «Plan de despliegue»: el diff puro `plan(vacío → inventario)`

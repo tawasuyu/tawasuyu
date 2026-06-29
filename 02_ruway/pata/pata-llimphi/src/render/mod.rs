@@ -18,6 +18,7 @@
 //! - `start_menus`  — menú de inicio estilo GNOME y XP.
 
 use llimphi_theme::Theme;
+use rimay_localize::{t, t_args};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{
         auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style,
@@ -71,6 +72,33 @@ pub use diente::{diente_vivo_view, paint_reposo_halo, DienteVivo};
 pub use flota::flota_view;
 pub use monitor::{monitor_vivo_view, sistema_monitor_view};
 pub use unidades::{unidades_view, unidades_vivo_view};
+
+/// Envuelve el contenido de un panel del sidebar en un área de scroll vertical,
+/// de alto `panel_h` y fondo de panel. Reusa `nav.scroll` como offset (sólo hay
+/// un diente abierto a la vez) → `Msg::NavScroll`. Lo usan los paneles de lista
+/// variable (Flota, Unidades). `content_len` es la altura estimada del contenido.
+pub(crate) fn scroll_panel(
+    inner: View<Msg>,
+    scroll: f32,
+    content_len: f32,
+    panel_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    let offset = clamp_offset(scroll, content_len, panel_h);
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(panel_h) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![scroll_y(
+        offset,
+        content_len,
+        panel_h,
+        inner,
+        Msg::NavScroll,
+        &ScrollPalette::from_theme(theme),
+    )])
+}
 pub use control::{
     control_button_view, control_center_view, control_overlay, extras_vivos, read_power_night,
     set_night, set_power_profile, set_radio, CentroDatos, ControlExtras,
@@ -158,7 +186,10 @@ pub fn widget_tooltip(v: &WidgetView) -> Option<String> {
             let n = fractions.len();
             Some(format!("{l} {caption} · {n} cores"))
         }
-        WidgetView::Workspaces { active, count, .. } => Some(format!("Escritorio {active}/{count}")),
+        WidgetView::Workspaces { active, count, .. } => Some(t_args(
+            "pata-workspace-count",
+            &[("active", active.to_string().into()), ("count", count.to_string().into())],
+        )),
         WidgetView::Moon { name, .. } => Some(name.clone()),
         WidgetView::Placeholder(kind) => Some(kind.clone()),
     }
@@ -901,7 +932,7 @@ fn build_menu_cats(apps: &[AppEntry]) -> Vec<MenuCat<'_>> {
 /// Barra de búsqueda del menú: lupa + texto/placeholder + conteo, fondo hundido.
 fn menu_search_bar(query: &str, count: usize, theme: &Theme) -> View<Msg> {
     let texto = if query.is_empty() {
-        "Buscar aplicaciones…".to_string()
+        t("pata-search-apps")
     } else {
         query.to_string()
     };
@@ -1023,7 +1054,7 @@ fn classic_two_pane(
             ..Default::default()
         })
         .text(
-            "sin apps (¿XDG_DATA_DIRS? ¿~/.config/tawasuyu/apps/?)".to_string(),
+            t("pata-menu-no-apps"),
             12.0,
             theme.fg_muted,
         );
@@ -1094,7 +1125,11 @@ fn classic_search_results(
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .text(format!("sin resultados para «{query}»"), 12.0, theme.fg_muted);
+        .text(
+            t_args("pata-no-results", &[("query", query.to_string().into())]),
+            12.0,
+            theme.fg_muted,
+        );
     }
     let rows: Vec<View<Msg>> = con_divisores(matches, theme);
     let content_len = matches.len() as f32 * (APP_ROW_H + 3.0);
