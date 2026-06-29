@@ -197,6 +197,34 @@ pub(crate) fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     true
 }
 
+/// Inserta una capa de **sombra paralela** justo debajo de la capa `id`: toma
+/// su buffer, genera una sombra desplazada+difuminada+tintada y la apila como
+/// raster nueva. La capa debe tener buffer (no grupos/ajustes).
+pub(crate) fn agregar_sombra(model: &mut Model, id: Uuid) -> bool {
+    let Some(idx) = model.lienzo.capas.iter().position(|c| c.id == id) else {
+        return false;
+    };
+    let capa = model.lienzo.capas[idx].clone();
+    if !capa.tiene_buffer() {
+        model.estado = "sombra · la capa no tiene buffer".into();
+        return false;
+    }
+    let Some(buf) = model.almacen.obtener(capa.contenido).map(|s| s.to_vec()) else {
+        return false;
+    };
+    let (w, h) = (model.lienzo.width, model.lienzo.height);
+    let sombra = tullpu_ops::sombra(&buf, w, h, 8, 8, 8.0, [0, 0, 0, 160]);
+    let hash = model.almacen.insertar(sombra);
+    let mut nueva = Capa::raster(format!("sombra de {}", capa.nombre), hash);
+    nueva.grupo = capa.grupo;
+    let nuevo_id = nueva.id;
+    model.lienzo.capas.insert(idx, nueva); // queda DEBAJO de la capa original
+    model.seleccionada = Some(nuevo_id);
+    aplicar_y_recomponer(model);
+    model.estado = "sombra agregada (capa debajo)".into();
+    true
+}
+
 /// Combina la capa `id` con la directamente debajo por una operación booleana
 /// a nivel alfa (unión/intersección/resta), produciendo una capa raster que las
 /// reemplaza. Ambas deben tener buffer (no grupos/ajustes). Es destructivo

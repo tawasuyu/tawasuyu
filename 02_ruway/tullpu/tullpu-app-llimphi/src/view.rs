@@ -1295,6 +1295,11 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         Msg::AplanarVisibles,
     )));
     hijos.push(envolver_fila(button_view(
+        "☁ sombra paralela".to_string(),
+        &pal,
+        Msg::AgregarSombra,
+    )));
+    hijos.push(envolver_fila(button_view(
         "⟳ rotar +90° (CW)".to_string(),
         &pal,
         Msg::RotarLienzo { cw: true },

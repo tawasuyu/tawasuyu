@@ -785,6 +785,8 @@ pub(crate) enum Msg {
     ToggleSnap,
     /// Precisión: centra la capa vectorial en el lienzo (`h`, `v` = ejes).
     AlinearCentro { h: bool, v: bool },
+    /// Inserta una sombra paralela de la capa seleccionada como capa debajo.
+    AgregarSombra,
     /// Booleano: combina la capa seleccionada con la de abajo (unión).
     BooleanoUnion,
     /// Booleano: intersección de la capa seleccionada con la de abajo.

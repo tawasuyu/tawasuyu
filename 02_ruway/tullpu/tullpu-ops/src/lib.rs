@@ -601,6 +601,44 @@ fn construir_path(comandos: &[tullpu_core::ComandoPath]) -> Option<tiny_skia::Pa
 }
 
 // =============================================================================
+//  Sombra paralela (drop shadow)
+// =============================================================================
+
+/// Genera una **sombra paralela** de un buffer Rgba8 `(w*h*4)`: toma su alfa,
+/// la desplaza por `(dx, dy)` px, la tiñe con `color` (cuyo alfa modula la
+/// opacidad) y la difumina con un gaussiano de radio `blur`. El resultado es un
+/// buffer del mismo tamaño pensado para componerse **debajo** de la capa
+/// original. Pura.
+pub fn sombra(src: &[u8], w: u32, h: u32, dx: i32, dy: i32, blur: f32, color: [u8; 4]) -> Vec<u8> {
+    let (wu, hu) = (w as usize, h as usize);
+    let mut out = vec![0u8; wu * hu * 4];
+    for y in 0..hu {
+        for x in 0..wu {
+            let sx = x as i32 - dx;
+            let sy = y as i32 - dy;
+            if sx < 0 || sy < 0 || sx >= w as i32 || sy >= h as i32 {
+                continue;
+            }
+            let sa = src[((sy as usize * wu + sx as usize) * 4) + 3] as u32;
+            let o = (y * wu + x) * 4;
+            out[o] = color[0];
+            out[o + 1] = color[1];
+            out[o + 2] = color[2];
+            out[o + 3] = ((sa * color[3] as u32) / 255) as u8;
+        }
+    }
+    if blur > 0.0 {
+        // RGB es constante (= color) donde hay sombra, así que difuminar por
+        // canal no sangra color; sólo expande el alfa.
+        if let Some(img) = RgbaImage::from_raw(w, h, out) {
+            return image::imageops::blur(&img, (blur / 2.0).max(0.0)).into_raw();
+        }
+        return vec![0u8; wu * hu * 4];
+    }
+    out
+}
+
+// =============================================================================
 //  Operaciones booleanas entre dos buffers (a nivel alfa)
 // =============================================================================
 
@@ -725,6 +763,19 @@ mod tests {
         let der = en(&buf, w, w - 2, 4);
         assert!(izq[0] > 200 && izq[2] < 60, "izquierda roja, fue {izq:?}");
         assert!(der[2] > 200 && der[0] < 60, "derecha azul, fue {der:?}");
+    }
+
+    #[test]
+    fn sombra_desplaza_y_tinta_el_alfa() {
+        // Un píxel opaco en (1,1) de un 4×4; sombra offset (1,1) sin blur,
+        // color negro semi (alfa 128) → el píxel de sombra cae en (2,2).
+        let (w, h) = (4u32, 4u32);
+        let mut src = vec![0u8; (w * h * 4) as usize];
+        let i = ((1 * w + 1) * 4) as usize;
+        src[i..i + 4].copy_from_slice(&[255, 0, 0, 255]);
+        let s = sombra(&src, w, h, 1, 1, 0.0, [0, 0, 0, 128]);
+        assert_eq!(en(&s, w, 2, 2), [0, 0, 0, 128]); // sombra desplazada y tintada
+        assert_eq!(en(&s, w, 1, 1)[3], 0); // donde estaba el original: vacío
     }
 
     #[test]

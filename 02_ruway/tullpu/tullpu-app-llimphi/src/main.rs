@@ -1155,6 +1155,13 @@ impl App for Tullpu {
                 alinear_vector_centro(&mut model, h, v);
                 pushear_snapshot(&mut model, None);
             }
+            Msg::AgregarSombra => {
+                if let Some(id) = model.seleccionada {
+                    if agregar_sombra(&mut model, id) {
+                        pushear_snapshot(&mut model, None);
+                    }
+                }
+            }
             Msg::BooleanoUnion => {
                 if let Some(id) = model.seleccionada {
                     if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Union) {
