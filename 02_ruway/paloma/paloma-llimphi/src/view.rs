@@ -145,6 +145,18 @@ fn toolbar(model: &Model) -> View<Msg> {
 fn mailboxes_panel(model: &Model) -> View<Msg> {
     let theme = &model.theme;
     let mut rows: Vec<View<Msg>> = Vec::new();
+
+    // Switcher de cuentas (en caliente): una fila por cuenta configurada, la
+    // activa resaltada. Sólo aparece con ≥2 cuentas (lo decide account_choices).
+    let choices = model.account_choices();
+    if !choices.is_empty() {
+        rows.push(panel_subheader(theme, &rimay_localize::t("paloma-accounts-header")));
+        for (id, label, active) in choices {
+            rows.push(account_row(theme, &label, active, id));
+        }
+        rows.push(panel_subheader(theme, &rimay_localize::t("paloma-mailboxes-header")));
+    }
+
     for mb in model.store_ref().mailboxes() {
         let selected = model.selected_mailbox.as_deref() == Some(mb.name.as_str());
         let unread = model.store_ref().unread_count(&mb.name);
@@ -233,6 +245,53 @@ fn nav_hint(theme: &Theme, label: &str, tag: &str) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![name, chip])
+}
+
+/// Sub-encabezado mudo dentro del panel izquierdo (separa cuentas de buzones).
+fn panel_subheader(theme: &Theme, label: &str) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: pad_xy(8.0, 0.0),
+        ..Default::default()
+    })
+    .text_aligned(label.to_uppercase(), 10.0, theme.fg_muted, Alignment::Start)
+}
+
+/// Fila de **cuenta** del switcher: glifo + etiqueta, la activa con barra de
+/// acento (como un buzón seleccionado). Click → conmuta la cuenta en caliente.
+fn account_row(theme: &Theme, label: &str, active: bool, id: String) -> View<Msg> {
+    let bg = if active { theme.bg_selected } else { theme.bg_panel_alt };
+    let fg = if active { theme.fg_text } else { theme.fg_muted };
+    let glyph = if active { "●" } else { "○" };
+    let text = View::new(Style {
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(format!("👤  {label}"), 13.0, fg, Alignment::Start);
+    let mark = View::new(Style {
+        size: Size { width: length(16.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(glyph, 12.0, if active { theme.accent } else { theme.fg_muted }, Alignment::Center);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        padding: pad_xy(8.0, 0.0),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(6.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::SwitchAccount(id))
+    .children(vec![accent_bar(if active { theme.accent } else { bg }), text, mark])
 }
 
 /// Panel central: cabecera del buzón + lista de hilos (scrolleable, clip).

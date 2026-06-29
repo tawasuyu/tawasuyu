@@ -125,7 +125,20 @@ fn try_net() -> Result<NetSession, String> {
         .active_account()
         .cloned()
         .ok_or_else(|| format!("sin cuentas configuradas en {}", path.display()))?;
-    let (imap_sec, smtp_sec) = secrets_for(&entry).ok_or_else(|| {
+    let (backend, me, account_id) = connect_account(&entry)?;
+    let label = format!("conectado · {}", entry.email);
+    Ok(NetSession { backend, me, account_id, label })
+}
+
+/// Conecta una cuenta concreta: arma el secreto (contraseña u OAuth con
+/// auto-refresh), conecta IMAP+SMTP y devuelve `(backend, dirección, id)`. El
+/// `id` (clave de la cuenta = `entry.id`) es estable y se usa de clave de caché
+/// y para marcar la cuenta activa en el switcher. Lo comparten el arranque
+/// ([`try_net`]) y la conmutación en caliente ([`ConfigAccountProvider`]).
+fn connect_account(
+    entry: &AccountEntry,
+) -> Result<(Box<dyn MailBackend>, Address, String), String> {
+    let (imap_sec, smtp_sec) = secrets_for(entry).ok_or_else(|| {
         if entry.is_oauth() {
             format!("falta el token OAuth de «{}» (corré: paloma-oauth {})", entry.id, entry.id)
         } else {
@@ -133,10 +146,8 @@ fn try_net() -> Result<NetSession, String> {
         }
     })?;
     let account = entry.to_account();
-    // `account.address` ya lleva el display-name (lo puso `to_account`).
     let me = account.address.clone();
-    let account_id = account.address.email.clone();
-    let label = format!("conectado · {account_id}");
+    let account_id = entry.id.clone();
     let backend = paloma_net::NetBackend::connect(account, &imap_sec, &smtp_sec)
         .map_err(|e| format!("no se pudo conectar IMAP: {e}"))?;
     // Límite de fetch opcional: `PALOMA_FETCH_LIMIT=0` (o "all") trae todo.
@@ -147,7 +158,34 @@ fn try_net() -> Result<NetSession, String> {
         };
         backend.set_fetch_limit(limit);
     }
-    Ok(NetSession { backend: Box::new(backend), me, account_id, label })
+    Ok((Box::new(backend), me, account_id))
+}
+
+/// Proveedor de cuentas para el switcher en caliente de la UI: relee
+/// `cuentas.json` en cada operación (así toma cambios hechos en el panel) y
+/// conecta la cuenta pedida. Implementa el trait agnóstico de `paloma-llimphi`.
+struct ConfigAccountProvider {
+    path: PathBuf,
+}
+
+impl paloma_llimphi::AccountProvider for ConfigAccountProvider {
+    fn accounts(&self) -> Vec<(String, String)> {
+        PalomaConfig::load(&self.path)
+            .map(|c| {
+                c.accounts
+                    .iter()
+                    .map(|a| (a.id.clone(), format!("{} <{}>", a.display_name, a.email)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn connect(&self, id: &str) -> Result<paloma_llimphi::ConnectedAccount, String> {
+        let cfg = PalomaConfig::load(&self.path).map_err(|e| format!("config inválida: {e}"))?;
+        let entry = cfg.get(id).cloned().ok_or_else(|| format!("no existe la cuenta «{id}»"))?;
+        let (backend, me, account_id) = connect_account(&entry)?;
+        Ok(paloma_llimphi::ConnectedAccount { backend, me, account_id })
+    }
 }
 
 struct Paloma;
@@ -237,6 +275,13 @@ impl App for Paloma {
             let path = dir.join("contactos.json");
             let book = paloma_contacts::Contactbook::load(&path).unwrap_or_default();
             model.set_contacts(book, path);
+        }
+
+        // Proveedor de cuentas: habilita el switcher en caliente de la UI
+        // (aparece con ≥2 cuentas en cuentas.json). Relee la config al conmutar,
+        // así toma altas/cambios hechos en el panel sin reiniciar.
+        if let Some(path) = cuentas_path() {
+            model.attach_accounts(Box::new(ConfigAccountProvider { path }));
         }
 
         model

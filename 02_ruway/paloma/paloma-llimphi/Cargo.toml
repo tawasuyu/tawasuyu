@@ -24,8 +24,15 @@ rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 
 [dev-dependencies]
-# El demo siembra un MockBackend; nada de red.
+# El demo siembra un MockBackend; nada de red. El pantallazo headless rasteriza
+# la view a una textura wgpu y vuelca PNG (mismo patrón que el resto de la suite).
+png = { workspace = true }
+pollster = { workspace = true }
 
 [[example]]
 name = "buzon_demo"
 path = "examples/buzon_demo.rs"
+
+[[example]]
+name = "pantallazo_paloma"
+path = "examples/pantallazo_paloma.rs"

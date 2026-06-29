@@ -101,6 +101,27 @@ pub trait Voucher: Send {
     fn vouch(&self, subject: [u8; 32], display: &str) -> paloma_trust::Attestation;
 }
 
+/// Una cuenta ya **conectada**: lo que el proveedor entrega para conmutar en
+/// caliente — un backend listo + la identidad propia + el id de la cuenta.
+pub struct ConnectedAccount {
+    pub backend: Box<dyn MailBackend>,
+    pub me: Address,
+    pub account_id: String,
+}
+
+/// **Proveedor de cuentas**, inyectado por el anfitrión. Sabe qué cuentas hay
+/// configuradas y cómo **conectar** cualquiera de ellas (config + secreto/OAuth),
+/// para que la UI conmute la cuenta activa sin reiniciar la app. La lógica
+/// concreta (leer `cuentas.json`, armar el `NetBackend`, resolver el token) vive
+/// en `paloma-app`; la UI sólo conoce este trait. `None` ⇒ sin switcher (demos).
+pub trait AccountProvider: Send {
+    /// Las cuentas configuradas como `(id, etiqueta)` para el switcher.
+    fn accounts(&self) -> Vec<(String, String)>;
+    /// Conecta la cuenta `id` y devuelve el backend listo. **Bloqueante** (red);
+    /// `Err(motivo)` legible si falla (sin token, IMAP caído…).
+    fn connect(&self, id: &str) -> Result<ConnectedAccount, String>;
+}
+
 /// Confianza de identidad de un remitente (pubkey↔persona).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SenderTrust {
@@ -253,6 +274,9 @@ pub struct Model {
     db: Option<paloma_store::MailDb>,
     /// Identificador de la cuenta — clave en la caché en disco.
     account_id: String,
+    /// Proveedor de cuentas (para conmutar la activa en caliente), inyectado por
+    /// el anfitrión. `None` = sin switcher (demos, o una sola cuenta).
+    accounts: Option<Box<dyn AccountProvider>>,
     /// Última línea de estado (resultado de un sync/envío).
     pub status: String,
     pub theme: Theme,
@@ -300,34 +324,9 @@ impl Model {
         let reader_lang = wawa_config::WawaConfig::load().lang;
         let _ = rimay_localize::set_locale(&reader_lang);
 
-        let mut store = MailStore::new();
-        // Offline-first: pintar lo cacheado antes de tocar la red.
-        if let Some(d) = &db {
-            let cached = d.load_mailboxes(&account_id);
-            if !cached.is_empty() {
-                store.ingest_mailboxes(cached);
-            }
-        }
-        // Refrescar la lista de buzones de red; si funciona, persistirla.
-        let mut status = rimay_localize::t("paloma-status-init");
-        match store.sync_mailboxes(&*backend) {
-            Ok(()) => {
-                if let Some(d) = &db {
-                    let _ = d.save_mailboxes(&account_id, store.mailboxes());
-                }
-            }
-            Err(e) => {
-                if store.mailboxes().is_empty() {
-                    status = format!("sin conexión y sin caché: {e}");
-                } else {
-                    status = format!("offline · buzones desde caché ({e})");
-                }
-            }
-        }
-        let first = store.mailboxes().first().map(|m| m.name.clone());
         let mut model = Self {
             backend,
-            store,
+            store: MailStore::new(),
             me,
             selected_mailbox: None,
             threads: Vec::new(),
@@ -356,16 +355,67 @@ impl Model {
             voucher: None,
             db,
             account_id,
-            status,
+            accounts: None,
+            status: String::new(),
             theme,
             viewport: (1180.0, 720.0),
             toasts: Vec::new(),
             next_toast: 0,
         };
-        if let Some(name) = first {
-            model.open_mailbox(&name);
-        }
+        // Offline-first + sync de buzones + abrir el primero (compartido con la
+        // conmutación de cuenta en caliente).
+        model.reload_for_current_account();
         model
+    }
+
+    /// (Re)carga los buzones de la **cuenta activa** actual: pinta lo cacheado
+    /// (offline-first), refresca contra el backend, persiste, y abre el primer
+    /// buzón. Resetea la selección/scroll/búsqueda. Lo usan tanto el arranque
+    /// como [`Self::switch_to_account`] (mismo camino, sin duplicar la lógica).
+    fn reload_for_current_account(&mut self) {
+        let mut store = MailStore::new();
+        // El buzón "Suyu" del rail P2P es independiente de la cuenta IMAP: si hay
+        // rail, lo re-fijamos tras recrear el store (si no, se perdería al conmutar).
+        if self.rail.is_some() {
+            store.pin_mailbox(paloma_core::Mailbox::new(SUYU_MAILBOX));
+        }
+        let account_id = self.account_id.clone();
+        // Offline-first: pintar lo cacheado antes de tocar la red.
+        if let Some(d) = &self.db {
+            let cached = d.load_mailboxes(&account_id);
+            if !cached.is_empty() {
+                store.ingest_mailboxes(cached);
+            }
+        }
+        // Refrescar la lista de buzones de red; si funciona, persistirla.
+        let mut status = rimay_localize::t("paloma-status-init");
+        match store.sync_mailboxes(&*self.backend) {
+            Ok(()) => {
+                if let Some(d) = &self.db {
+                    let _ = d.save_mailboxes(&account_id, store.mailboxes());
+                }
+            }
+            Err(e) => {
+                if store.mailboxes().is_empty() {
+                    status = format!("sin conexión y sin caché: {e}");
+                } else {
+                    status = format!("offline · buzones desde caché ({e})");
+                }
+            }
+        }
+        let first = store.mailboxes().first().map(|m| m.name.clone());
+        self.store = store;
+        self.selected_mailbox = None;
+        self.threads.clear();
+        self.selected_thread = None;
+        self.summary = None;
+        self.view_lang = None;
+        self.list_scroll = 0;
+        self.read_scroll = 0.0;
+        self.status = status;
+        if let Some(name) = first {
+            self.open_mailbox(&name);
+        }
     }
 
     /// Inyecta el motor de búsqueda por significado (lo hace el anfitrión tras
@@ -422,6 +472,48 @@ impl Model {
     /// ¿Hay rail P2P disponible? (Gobierna el buzón "Suyu" y el enrutado.)
     pub fn rail_available(&self) -> bool {
         self.rail.is_some()
+    }
+
+    /// Inyecta el proveedor de cuentas (para conmutar la activa en caliente). Lo
+    /// hace el anfitrión si hay config de cuentas. Sin esto, no hay switcher.
+    pub fn attach_accounts(&mut self, provider: Box<dyn AccountProvider>) {
+        self.accounts = provider.into();
+    }
+
+    /// Las cuentas para el switcher como `(id, etiqueta, es_la_activa)`. Vacío si
+    /// no hay proveedor o sólo hay una cuenta (no tiene sentido mostrar el switcher).
+    pub fn account_choices(&self) -> Vec<(String, String, bool)> {
+        let Some(p) = self.accounts.as_ref() else { return Vec::new() };
+        let all = p.accounts();
+        if all.len() < 2 {
+            return Vec::new();
+        }
+        all.into_iter().map(|(id, label)| {
+            let active = id == self.account_id;
+            (id, label, active)
+        }).collect()
+    }
+
+    /// Conmuta a la cuenta `id` **en caliente**: reconecta el backend vía el
+    /// proveedor inyectado, reemplaza identidad/caché-key y recarga los buzones.
+    /// Bloqueante (la conexión IMAP es síncrona, como en el arranque). `Err` si
+    /// no hay proveedor o la conexión falla — el caller lo muestra y NO cambia nada.
+    fn switch_to_account(&mut self, id: &str) -> Result<(), String> {
+        if id == self.account_id {
+            return Ok(());
+        }
+        let provider = self.accounts.as_ref().ok_or("sin proveedor de cuentas")?;
+        let conn = provider.connect(id)?;
+        self.backend = conn.backend;
+        self.me = conn.me;
+        self.account_id = conn.account_id;
+        // Cerrar estado atado a la cuenta vieja.
+        self.compose = None;
+        self.search = TextInputState::new();
+        self.search_focused = false;
+        self.semantic_results = None;
+        self.reload_for_current_account();
+        Ok(())
     }
 
     /// La dirección del rail de este usuario (`<hex>@suyu`), para compartir con
@@ -775,6 +867,8 @@ pub enum Msg {
     ToastExpire(u64),
     /// La ventana cambió de tamaño: reubica el overlay de toasts.
     Resize(u32, u32),
+    /// Conmutar la cuenta activa a la de `id` (reconecta el backend en caliente).
+    SwitchAccount(String),
 }
 
 /// Empuja un toast al stack y programa su expiración fuera del hilo de UI.
@@ -1105,6 +1199,22 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
         }
         Msg::ToastExpire(id) => model.toasts.retain(|t| t.id != id),
         Msg::Resize(w, h) => model.viewport = (w as f32, h as f32),
+        Msg::SwitchAccount(id) => match model.switch_to_account(&id) {
+            Ok(()) => {
+                let msg = format!("cuenta activa: {}", model.me);
+                model.status = msg.clone();
+                let tid = model.next_toast;
+                model.next_toast += 1;
+                push_toast(&mut model, handle, Toast::success(tid, msg, TOAST_TTL));
+            }
+            Err(e) => {
+                let msg = format!("no se pudo cambiar a «{id}»: {e}");
+                model.status = msg.clone();
+                let tid = model.next_toast;
+                model.next_toast += 1;
+                push_toast(&mut model, handle, Toast::error(tid, msg, TOAST_TTL));
+            }
+        },
     }
     model
 }
@@ -1355,6 +1465,62 @@ mod tests {
         fn my_address(&self) -> String {
             "test@suyu".into()
         }
+    }
+
+    /// Proveedor de cuentas falso: dos cuentas, cada una con su `me`. El backend
+    /// es un mock vacío (lo que importa acá es que la conmutación cambia
+    /// identidad/id/caché, no el contenido del buzón).
+    struct FakeProvider;
+    impl AccountProvider for FakeProvider {
+        fn accounts(&self) -> Vec<(String, String)> {
+            vec![
+                ("ana".into(), "Ana <ana@x.com>".into()),
+                ("bob".into(), "Bob <bob@y.com>".into()),
+            ]
+        }
+        fn connect(&self, id: &str) -> Result<ConnectedAccount, String> {
+            let me = match id {
+                "ana" => Address::named("Ana", "ana@x.com"),
+                "bob" => Address::named("Bob", "bob@y.com"),
+                _ => return Err("no existe".into()),
+            };
+            Ok(ConnectedAccount {
+                backend: Box::new(MockBackend::new(vec![])),
+                me,
+                account_id: id.to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn switch_account_conmuta_identidad_y_marca_activa() {
+        let mut model =
+            Model::new(Box::new(MockBackend::new(vec![])), Address::named("Ana", "ana@x.com"), Theme::dark());
+        model.account_id = "ana".to_string(); // como lo deja el arranque (entry.id)
+        model.attach_accounts(Box::new(FakeProvider));
+
+        // El switcher ofrece las dos cuentas y marca «ana» como activa.
+        let choices = model.account_choices();
+        assert_eq!(choices.len(), 2);
+        assert!(choices.iter().any(|(id, _, active)| id == "ana" && *active));
+
+        // Conmutar a «bob» cambia identidad + id de cuenta.
+        assert!(model.switch_to_account("bob").is_ok());
+        assert_eq!(model.account_id, "bob");
+        assert_eq!(model.me.email, "bob@y.com");
+        assert!(model.account_choices().iter().any(|(id, _, active)| id == "bob" && *active));
+
+        // Conmutar a la cuenta ya activa es un no-op exitoso.
+        assert!(model.switch_to_account("bob").is_ok());
+        assert!(model.switch_to_account("inexistente").is_err());
+    }
+
+    #[test]
+    fn account_choices_vacio_sin_proveedor_o_una_sola() {
+        let model =
+            Model::new(Box::new(MockBackend::new(vec![])), Address::named("Yo", "yo@x.com"), Theme::dark());
+        // Sin proveedor inyectado → sin switcher.
+        assert!(model.account_choices().is_empty());
     }
 
     #[test]
