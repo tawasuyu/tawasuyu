@@ -104,13 +104,28 @@ pub fn flythrough(mr: &MundoRender) -> Result<String, String> {
     let fog = 0.55 / dim[2] as f32; // ligera (como el turntable): el relieve se ve nítido
     let cx = dim[0] / 2;
     let empty = vello::Scene::new();
-    let sky = Color::from_rgba8(150, 186, 224, 255);
+    // Cielo de atardecer cálido detrás de los misses (la atmósfera del voxel lo
+    // pinta encima, pero el clear cálido evita un borde frío si la niebla afloja).
+    let sky = Color::from_rgba8(236, 206, 168, 255);
 
     for f in 0..N {
         let cam_z = f as f32 * speed;
         // La ventana scrollea (origen avanza en Z) → el mundo fluye hacia el ojo.
         let oz = cam_z as i32;
         preview.set_window(&hal.device, &hal.queue, mr, [0, oz], fog);
+        // **Hora dorada**: sol bajo y cálido (sombras largas que rastrillan las dunas
+        // y los cactus) + cielo de atardecer + god rays cruzando la niebla. Es el
+        // sello "anti-Minecraft" del studio, mucho más cinematográfico que el mediodía
+        // plano. Se aplica tras `set_window` (que resetea estas perillas).
+        preview.set_lighting(
+            [0.55, 0.30, -0.18], // sol bajo (y=0.30 → cálido), de costado-atrás
+            llimphi_3d::Atmosphere {
+                sky_zenith: [60, 104, 176],   // azul profundo arriba
+                sky_horizon: [240, 196, 146], // dorado/arena en el horizonte
+                fog_density: 0.85 / dim[2] as f32,
+                god_rays: 0.9,
+            },
+        );
 
         // Vuelo bajo hacia adelante, ¡EN COORDENADAS CENTRADAS! El shader hace
         // `ro = cam_eye + dim/2` → espera el volumen centrado en el origen.

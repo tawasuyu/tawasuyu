@@ -324,6 +324,15 @@ impl WorldPreview {
         self.origin = origin;
     }
 
+    /// Sobrescribe **sol + atmósfera** del render voxel (para un look cinematográfico
+    /// puntual, p.ej. la hora dorada de un flythrough). Aditivo: no toca el preview en
+    /// vivo salvo que se llame. Aplicar **después** de [`set_window`](Self::set_window)
+    /// (que recrea el voxel y resetea estas perillas a su default).
+    pub fn set_lighting(&mut self, sun_dir: [f32; 3], atmosphere: Atmosphere) {
+        self.voxel.sun_dir = sun_dir;
+        self.voxel.atmosphere = atmosphere;
+    }
+
     /// Posición (espacio de grilla, igual que el render del voxel) del **suelo**
     /// sobre la columna `(gx, gz)`: pies un voxel por encima del terreno (o `y=0` si
     /// la columna está vacía). Para parar un actor sobre el relieve.
