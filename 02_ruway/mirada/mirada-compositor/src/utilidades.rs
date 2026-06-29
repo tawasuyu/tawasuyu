@@ -462,6 +462,17 @@ pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: 
     for (k, v) in session_env {
         command.env(k, v);
     }
+    // Telemetría de sesión: capturá el stdout/stderr del app a
+    // /var/log/arje/sesion-<app>.log para poder diagnosticar la sesión post-login
+    // (pata, shuma, etc.). El compositor abre el archivo (root) y el fd sobrevive
+    // el drop a `user`. Best-effort: sin permiso (dev no-root) hereda el stdio del
+    // compositor como antes.
+    if let Some(f) = open_sesion_log(cmd) {
+        if let Ok(f2) = f.try_clone() {
+            command.stdout(std::process::Stdio::from(f));
+            command.stderr(std::process::Stdio::from(f2));
+        }
+    }
     if let Some(user) = as_user {
         if nix::unistd::geteuid().is_root() {
             apply_user(&mut command, user);
@@ -471,6 +482,25 @@ pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: 
         Ok(child) => println!("mirada-compositor · lanzado (pid {}): {cmd}", child.id()),
         Err(e) => dlog!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
     }
+}
+
+/// Abre el log de telemetría de un app de sesión: `/var/log/arje/sesion-<app>.log`
+/// (append). Deriva el nombre del primer token del comando. `None` si no se puede
+/// (sin permiso en dev no-root) → el app hereda el stdio del compositor.
+fn open_sesion_log(cmd: &str) -> Option<std::fs::File> {
+    let app = cmd.split_whitespace().next().unwrap_or("app");
+    let base = app.rsplit('/').next().unwrap_or(app);
+    let safe: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let safe = if safe.is_empty() { "app".to_string() } else { safe };
+    let _ = std::fs::create_dir_all("/var/log/arje");
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("/var/log/arje/sesion-{safe}.log"))
+        .ok()
 }
 
 /// Prepara un `Command` para que el hijo corra como `user`: fija grupos

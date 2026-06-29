@@ -61,7 +61,7 @@ fn service_to_card(svc: &ForeignService) -> Card {
 pub fn carmen_dm_card() -> Card {
     Card {
         payload: Payload::Native {
-            exec: "/usr/bin/mirada-compositor".to_string(),
+            exec: "/usr/local/bin/mirada-compositor".to_string(),
             argv: vec!["--greeter".to_string(), "--drm".to_string()],
             envp: vec![
                 (
@@ -71,7 +71,7 @@ pub fn carmen_dm_card() -> Card {
                 ("XDG_RUNTIME_DIR".to_string(), "/run".to_string()),
                 (
                     "MIRADA_GREETER_BIN".to_string(),
-                    "/usr/bin/mirada-greeter".to_string(),
+                    "/usr/local/bin/mirada-greeter".to_string(),
                 ),
             ],
         },
@@ -176,7 +176,7 @@ mod tests {
         c.validate().expect("la Card de carmen-dm debe validar");
         match &c.payload {
             card_core::Payload::Native { exec, argv, .. } => {
-                assert_eq!(exec, "/usr/bin/mirada-compositor");
+                assert_eq!(exec, "/usr/local/bin/mirada-compositor");
                 assert!(argv.contains(&"--greeter".to_string()));
             }
             _ => panic!("carmen-dm debe ser un payload Native"),
