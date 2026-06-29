@@ -207,9 +207,20 @@ fn set_flags_on<T: Read + Write>(
 fn map_err(e: imap::Error) -> MailError {
     if is_auth_error(&e) {
         MailError::Auth
+    } else if is_connection_lost(&e) {
+        MailError::Disconnected(e.to_string())
     } else {
         MailError::Transport(e.to_string())
     }
+}
+
+/// `true` si el error indica que la **sesión IMAP se cayó** (socket cerrado,
+/// server dropeó la conexión): reconectar y reintentar tiene sentido. Lo
+/// distinguimos de los fallos lógicos (`No`/`Bad` por buzón inexistente, parseo)
+/// donde reabrir la sesión no arregla nada. Un error de IO sobre el stream deja
+/// la sesión inservible (es stateful), así que cuenta como conexión perdida.
+fn is_connection_lost(e: &imap::Error) -> bool {
+    matches!(e, imap::Error::ConnectionLost | imap::Error::Io(_))
 }
 
 /// `true` si el error IMAP es un **rechazo de autenticación** (credencial/token
@@ -296,11 +307,22 @@ mod tests {
     }
 
     #[test]
-    fn no_confunde_fallos_no_auth() {
-        // Estos NO se arreglan reautenticando → no deben gatear la reconexión.
+    fn distingue_conexion_perdida_de_fallos_logicos() {
+        // Conexión caída → Disconnected (reconectar ayuda).
+        assert!(is_connection_lost(&imap::Error::ConnectionLost));
+        assert!(is_connection_lost(&imap::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pipe",
+        ))));
+        assert!(matches!(map_err(imap::Error::ConnectionLost), MailError::Disconnected(_)));
+        // Fallos lógicos → Transport (reconectar no los arregla).
+        assert!(!is_connection_lost(&imap::Error::No("[NONEXISTENT] Unknown Mailbox".into())));
         assert!(!is_auth_error(&imap::Error::No("[NONEXISTENT] Unknown Mailbox".into())));
-        assert!(!is_auth_error(&imap::Error::ConnectionLost));
-        assert!(!is_auth_error(&imap::Error::Append));
-        assert!(matches!(map_err(imap::Error::ConnectionLost), MailError::Transport(_)));
+        assert!(matches!(
+            map_err(imap::Error::No("[NONEXISTENT] Unknown Mailbox".into())),
+            MailError::Transport(_)
+        ));
+        // Un NO de auth no es "conexión perdida" (va por la rama Auth).
+        assert!(!is_connection_lost(&imap::Error::No("[AUTHENTICATIONFAILED] x".into())));
     }
 }

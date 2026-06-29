@@ -8,6 +8,11 @@ pub enum MailError {
     /// Fallo de red/transporte (conexión, TLS, timeout…).
     #[error("transporte: {0}")]
     Transport(String),
+    /// La conexión/sesión se perdió (socket cerrado, server dropeó la sesión).
+    /// A diferencia de [`Self::Transport`], reconectar **sí** ayuda — el caller
+    /// puede reabrir la sesión y reintentar.
+    #[error("conexión perdida: {0}")]
+    Disconnected(String),
     /// Credenciales rechazadas por el servidor.
     #[error("autenticación rechazada")]
     Auth,
