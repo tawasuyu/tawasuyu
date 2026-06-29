@@ -100,9 +100,11 @@ impl NetBackend {
         Ok(())
     }
 
-    /// Corre una operación IMAP; si falla **y** la cuenta es OAuth (el token pudo
-    /// vencer y tirar la sesión), reconecta con un token fresco y reintenta una
-    /// vez. Con contraseña no reintenta (la sesión no cae por vencimiento).
+    /// Corre una operación IMAP; si falla por **autenticación** (`MailError::Auth`
+    /// — el token venció y el servidor rechazó la sesión) **y** la cuenta es
+    /// OAuth, reconecta con un token fresco y reintenta una vez. Los demás fallos
+    /// (red transitoria, buzón inexistente, parseo) suben tal cual: reautenticar
+    /// no los arregla, así que no se reconecta de más.
     fn imap_op<T>(
         &self,
         mut op: impl FnMut(&mut ImapClient) -> Result<T, MailError>,
@@ -112,13 +114,12 @@ impl NetBackend {
             op(&mut guard)
         };
         match first {
-            Ok(value) => Ok(value),
-            Err(_) if self.is_oauth() => {
+            Err(MailError::Auth) if self.is_oauth() => {
                 self.reconnect_imap()?;
                 let mut guard = self.imap.lock().unwrap();
                 op(&mut guard)
             }
-            Err(e) => Err(e),
+            other => other,
         }
     }
 }

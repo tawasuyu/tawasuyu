@@ -121,8 +121,9 @@ Each account picks an auth method:
   runs the same helper. After that first authorization, **`paloma-app` refreshes
   the access token automatically** (via the stored `refresh_token`, in
   `paloma-oauth`'s lib): once on startup and **mid-session** too — the backend asks
-  for a fresh token on every SMTP send and, if an IMAP op fails (the session can
-  drop when the token expires), reconnects with a new token and retries. So you
+  for a fresh token on every SMTP send and, if an IMAP op fails **with an auth
+  error** (the server rejects the expired token), reconnects with a new token and
+  retries once (other failures — network, missing mailbox — surface as-is). So you
   don't re-run the helper every hour — only if the refresh token itself is revoked.
   It authenticates over `XOAUTH2`.
 

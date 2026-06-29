@@ -205,7 +205,35 @@ fn set_flags_on<T: Read + Write>(
 }
 
 fn map_err(e: imap::Error) -> MailError {
-    MailError::Transport(e.to_string())
+    if is_auth_error(&e) {
+        MailError::Auth
+    } else {
+        MailError::Transport(e.to_string())
+    }
+}
+
+/// `true` si el error IMAP es un **rechazo de autenticación** (credencial/token
+/// inválido o vencido) y no un fallo de red/lógico. Es el único caso donde
+/// reconectar con un token OAuth fresco ayuda — el resto (`ConnectionLost`, IO,
+/// buzón inexistente, parseo) no se arregla reautenticando. Se detecta por la
+/// respuesta `NO`/`BAD` con un código de auth (RFC 5530 `AUTHENTICATIONFAILED`/
+/// `AUTHORIZATIONFAILED`) o marcadores equivalentes de token vencido.
+fn is_auth_error(e: &imap::Error) -> bool {
+    let msg = match e {
+        imap::Error::No(s) | imap::Error::Bad(s) => s,
+        _ => return false,
+    };
+    let up = msg.to_ascii_uppercase();
+    const MARKERS: &[&str] = &[
+        "AUTHENTICATIONFAILED",
+        "AUTHORIZATIONFAILED",
+        "AUTHENTICATION FAILED",
+        "INVALID CREDENTIALS",
+        "INVALID SASL",
+        "TOKEN",   // "invalid token" / "token has expired"
+        "EXPIRED",
+    ];
+    MARKERS.iter().any(|m| up.contains(m))
 }
 
 /// Traduce los flags IMAP del servidor a nuestro [`Flags`].
@@ -254,5 +282,25 @@ mod tests {
         let f = Flags { seen: true, flagged: true, ..Default::default() };
         assert_eq!(imap_flag_string(f), "\\Seen \\Flagged");
         assert_eq!(imap_flag_string(Flags::default()), "");
+    }
+
+    #[test]
+    fn detecta_rechazo_de_autenticacion() {
+        // Respuestas NO/BAD con código de auth → reconectar con token fresco ayuda.
+        assert!(is_auth_error(&imap::Error::No(
+            "[AUTHENTICATIONFAILED] Invalid credentials (Failure)".into()
+        )));
+        assert!(is_auth_error(&imap::Error::No("[UNAVAILABLE] token has expired".into())));
+        assert!(is_auth_error(&imap::Error::Bad("Invalid SASL argument".into())));
+        assert!(matches!(map_err(imap::Error::No("[AUTHENTICATIONFAILED] x".into())), MailError::Auth));
+    }
+
+    #[test]
+    fn no_confunde_fallos_no_auth() {
+        // Estos NO se arreglan reautenticando → no deben gatear la reconexión.
+        assert!(!is_auth_error(&imap::Error::No("[NONEXISTENT] Unknown Mailbox".into())));
+        assert!(!is_auth_error(&imap::Error::ConnectionLost));
+        assert!(!is_auth_error(&imap::Error::Append));
+        assert!(matches!(map_err(imap::Error::ConnectionLost), MailError::Transport(_)));
     }
 }
