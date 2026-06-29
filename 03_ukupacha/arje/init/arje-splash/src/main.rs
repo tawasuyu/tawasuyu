@@ -31,6 +31,17 @@ const DEFAULT_DEVICE: &str = "/dev/dri/card0";
 
 fn main() -> ExitCode {
     bitacora::abrir("arje");
+    // Volcado headless del splash a PNG (evidencia visual, sin DRM): rinde el
+    // frame real de `render::paint_frame` y lo escribe como PNG. Uso:
+    //   arje-splash --dump-chakana <salida.png> [ancho alto t_ms]
+    if let Some(i) = std::env::args().position(|a| a == "--dump-chakana") {
+        let args: Vec<String> = std::env::args().collect();
+        let path = args.get(i + 1).cloned().unwrap_or_else(|| "chakana.png".into());
+        let w = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(480usize);
+        let h = args.get(i + 3).and_then(|s| s.parse().ok()).unwrap_or(300usize);
+        let t_ms = args.get(i + 4).and_then(|s| s.parse().ok()).unwrap_or(1200u64);
+        return dump_png(&path, w, h, t_ms);
+    }
     // Modo cliente de prueba (`arje-splash --poke`): simula a mirada mandando
     // READY al socket de handoff y esperando RELEASED. Para verificar Fase 2
     // end-to-end en QEMU sin levantar el compositor.
@@ -74,6 +85,38 @@ fn main() -> ExitCode {
     // Siempre salimos 0: el splash es decorativo, su fallo no debe marcar el
     // Ente como CRASHED ni disparar back-off en el supervisor.
     ExitCode::SUCCESS
+}
+
+/// Rinde el frame del splash a un PNG (XRGB8888 → RGBA). Headless, sin DRM.
+fn dump_png(path: &str, w: usize, h: usize, t_ms: u64) -> ExitCode {
+    let pitch = w * 4;
+    let mut buf = vec![0u8; pitch * h];
+    render::paint_frame(&mut buf, w, h, pitch, t_ms, 0.0);
+    // El buffer es XRGB8888 little-endian = bytes [B, G, R, X]; PNG quiere RGBA.
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for px in buf.chunks_exact(4) {
+        rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+    }
+    let file = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[arje-splash --dump-chakana] no pude crear {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    match enc.write_header().and_then(|mut wr| wr.write_image_data(&rgba)) {
+        Ok(()) => {
+            eprintln!("[arje-splash --dump-chakana] {path} ({w}x{h}, t={t_ms}ms)");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("[arje-splash --dump-chakana] error PNG: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {

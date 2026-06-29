@@ -18,8 +18,6 @@ pub const BG: (u8, u8, u8) = (18, 18, 24);
 /// Acento de la marca (== `ACCENT` del loader).
 pub const ACCENT: (u8, u8, u8) = (124, 131, 247);
 
-/// Período de la respiración del logo, en ms.
-const BREATH_MS: f32 = 2400.0;
 /// Período del barrido del indicador de progreso indeterminado, en ms.
 const SWEEP_MS: f32 = 1600.0;
 
@@ -38,35 +36,21 @@ pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64, 
     let t = t_ms as f32;
     let fade = fade.clamp(0.0, 1.0);
 
-    // Respiración: brillo del logo oscilando suave entre `lo` y 1.0.
-    let breath = 0.5 + 0.5 * (t / BREATH_MS * std::f32::consts::TAU).sin(); // 0..1
-    let lo = 0.45;
-    let logo_k = lo + (1.0 - lo) * breath;
-    let logo = scale(ACCENT, logo_k);
-
-    // Marca central: cuadrado del acento, ~1/6 del lado menor (igual que el
-    // placeholder del loader, ahora respirando).
-    let side = (w.min(h) / 6).max(8);
-    let lx = w / 2 - side / 2;
-    let ly = h / 2 - side / 2;
+    // Base de marca: la **chakana animada** de `mirada-fondo` — el MISMO glifo
+    // CPU que el compositor pinta por defecto en sus tres superficies (splash /
+    // greeter / wallpaper). Reemplaza el viejo cuadrado placeholder. Devuelve
+    // BGRA opaca empacada `w*4` por fila (orden directo a XRGB8888).
+    let chak = mirada_fondo::chakana_frame(t / 1000.0, w as u32, h as u32);
 
     // Barra de progreso indeterminada: una banda angosta cerca del borde
     // inferior que barre de izquierda a derecha y envuelve. Da sensación de
-    // actividad sin conocer el progreso real del boot.
+    // actividad sin conocer el progreso real del boot. Se superpone a la chakana.
     let bar_h = (h / 90).max(2);
     let bar_y = h.saturating_sub(h / 6);
     let band = (w / 5).max(16);
     let sweep = ((t / SWEEP_MS).fract() * (w + band) as f32) as i64 - band as i64; // -band..w
-    let bar_col = scale(ACCENT, 0.7);
-
-    let bg_bar = scale(BG, 1.8); // riel del progreso, apenas más claro
-
-    // Pre-encodamos los píxeles ya fundidos (el fade es uniforme en el frame),
-    // así el doble loop sólo elige cuál escribir — sin lerp por píxel.
-    let bg = encode(lerp(BG, BG, fade)); // == BG, pero deja explícito el patrón
-    let logo_px = encode(lerp(logo, BG, fade));
-    let bar_px = encode(lerp(bar_col, BG, fade));
-    let bg_bar_px = encode(lerp(bg_bar, BG, fade));
+    let bar_px = encode(lerp(scale(ACCENT, 0.7), BG, fade));
+    let bg_bar_px = encode(lerp(scale(BG, 1.8), BG, fade)); // riel, apenas más claro
 
     for y in 0..h {
         let row = y * pitch;
@@ -79,9 +63,7 @@ pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64, 
             if idx + 4 > buf.len() {
                 break;
             }
-            let px = if x >= lx && x < lx + side && y >= ly && y < ly + side {
-                logo_px
-            } else if in_bar_row {
+            let px = if in_bar_row {
                 let xi = x as i64;
                 if xi >= sweep && xi < sweep + band as i64 {
                     bar_px
@@ -89,7 +71,11 @@ pub fn paint_frame(buf: &mut [u8], w: usize, h: usize, pitch: usize, t_ms: u64, 
                     bg_bar_px
                 }
             } else {
-                bg
+                // Píxel base de la chakana (BGRA) → (R,G,B) → fade hacia BG (el
+                // handoff a mirada termina en el mismo bg_app, sin costura).
+                let ci = (y * w + x) * 4;
+                let (b, g, r) = (chak[ci], chak[ci + 1], chak[ci + 2]);
+                encode(lerp((r, g, b), BG, fade))
             };
             buf[idx..idx + 4].copy_from_slice(&px);
         }
@@ -193,65 +179,62 @@ mod tests {
         (buf[i + 2], buf[i + 1], buf[i]) // R, G, B (de [B,G,R,X])
     }
 
-    #[test]
-    fn fondo_en_esquina_es_bg() {
-        let pitch = W * 4;
-        let mut b = buf_for(pitch);
-        paint_frame(&mut b, W, H, pitch, 0, 0.0);
-        assert_eq!(px_at(&b, pitch, 0, 0), BG);
+    /// Escanea el frame y devuelve el primer píxel que difiere de `BG` (el glifo
+    /// de la chakana). `None` si el frame es BG uniforme.
+    fn primer_glifo(buf: &[u8], pitch: usize) -> Option<(usize, usize, (u8, u8, u8))> {
+        for y in 0..H {
+            for x in 0..W {
+                let c = px_at(buf, pitch, x, y);
+                if c != BG {
+                    return Some((x, y, c));
+                }
+            }
+        }
+        None
     }
 
     #[test]
-    fn centro_es_el_logo_no_el_fondo() {
+    fn la_chakana_se_dibuja_no_es_solo_fondo() {
+        // El splash debe pintar la chakana (algo distinto a BG), no un frame liso.
         let pitch = W * 4;
         let mut b = buf_for(pitch);
-        paint_frame(&mut b, W, H, pitch, 0, 0.0);
-        let c = px_at(&b, pitch, W / 2, H / 2);
-        assert_ne!(c, BG, "el centro debe ser el logo, no el fondo");
-        // El logo es el acento (atenuado por la respiración) → su rojo domina
-        // sobre el del fondo.
-        assert!(c.0 > BG.0, "el logo es más brillante que el fondo");
-    }
-
-    #[test]
-    fn la_respiracion_cambia_el_brillo_del_logo() {
-        let pitch = W * 4;
-        // Pico de la respiración (t=BREATH/4 → sin=1) vs valle (t=3·BREATH/4).
-        let mut pico = buf_for(pitch);
-        let mut valle = buf_for(pitch);
-        paint_frame(&mut pico, W, H, pitch, (BREATH_MS / 4.0) as u64, 0.0);
-        paint_frame(&mut valle, W, H, pitch, (3.0 * BREATH_MS / 4.0) as u64, 0.0);
-        let cp = px_at(&pico, pitch, W / 2, H / 2);
-        let cv = px_at(&valle, pitch, W / 2, H / 2);
+        paint_frame(&mut b, W, H, pitch, 1200, 0.0);
         assert!(
-            cp.0 > cv.0 && cp.1 > cv.1 && cp.2 > cv.2,
-            "el logo en el pico ({cp:?}) debe ser más brillante que en el valle ({cv:?})"
+            primer_glifo(&b, pitch).is_some(),
+            "la chakana debe pintar al menos un píxel distinto a BG",
         );
     }
 
     #[test]
     fn fade_uno_funde_todo_a_bg() {
-        // Con fade=1.0 todo el frame queda en BG sólido (handoff terminado):
-        // ni el logo ni la barra deben sobresalir.
+        // Con fade=1.0 TODO el frame queda en BG sólido (handoff terminado): ni
+        // la chakana ni la barra deben sobresalir. Garantizado por el lerp→BG.
         let pitch = W * 4;
         let mut b = buf_for(pitch);
-        paint_frame(&mut b, W, H, pitch, 0, 1.0);
-        assert_eq!(px_at(&b, pitch, W / 2, H / 2), BG, "centro funde a BG");
-        assert_eq!(px_at(&b, pitch, 0, 0), BG, "esquina sigue BG");
+        paint_frame(&mut b, W, H, pitch, 1200, 1.0);
+        for y in 0..H {
+            for x in 0..W {
+                assert_eq!(px_at(&b, pitch, x, y), BG, "fade=1 funde ({x},{y}) a BG");
+            }
+        }
     }
 
     #[test]
-    fn fade_intermedio_atenua_el_logo_hacia_bg() {
-        // A media fundición el logo está entre su color pleno y BG.
+    fn fade_intermedio_atenua_el_glifo_hacia_bg() {
+        // A media fundición, un píxel del glifo queda ENTRE su color pleno y BG
+        // (canal a canal). Robusto a la forma exacta de la chakana.
         let pitch = W * 4;
         let mut pleno = buf_for(pitch);
         let mut medio = buf_for(pitch);
-        paint_frame(&mut pleno, W, H, pitch, 0, 0.0);
-        paint_frame(&mut medio, W, H, pitch, 0, 0.5);
-        let cp = px_at(&pleno, pitch, W / 2, H / 2);
-        let cm = px_at(&medio, pitch, W / 2, H / 2);
-        // El logo es más brillante que BG; al fundir, su brillo baja hacia BG.
-        assert!(cm.0 < cp.0 && cm.0 > BG.0, "el rojo del logo baja pero aún supera BG");
+        paint_frame(&mut pleno, W, H, pitch, 1200, 0.0);
+        paint_frame(&mut medio, W, H, pitch, 1200, 0.5);
+        let (x, y, p) = primer_glifo(&pleno, pitch).expect("debe haber glifo a fade=0");
+        let m = px_at(&medio, pitch, x, y);
+        let entre = |a: u8, b: u8, c: u8| a.min(c) <= b && b <= a.max(c);
+        assert!(
+            entre(p.0, m.0, BG.0) && entre(p.1, m.1, BG.1) && entre(p.2, m.2, BG.2),
+            "el glifo a fade=0.5 ({m:?}) debe estar entre pleno ({p:?}) y BG ({BG:?})",
+        );
     }
 
     #[test]
