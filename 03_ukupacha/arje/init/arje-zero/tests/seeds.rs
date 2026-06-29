@@ -120,10 +120,10 @@ fn arje_tawasuyu_host_seed_es_valida() {
 }
 
 #[test]
-fn tawasuyu_host_seed_arranca_dm_real_con_seat_builtin() {
+fn tawasuyu_host_seed_arranca_dm_real_con_seatd() {
     // El DM debe ser mirada-compositor --drm --greeter (igual que producción),
-    // y como arje corre de PID 1 SIN logind/seatd, el compositor (root) usa el
-    // backend `builtin` de libseat — declarado en el env de su Card.
+    // y como arje corre de PID 1 SIN logind, el compositor toma el seat vía
+    // `seatd` (Ente aparte; el backend `builtin` de libseat CRASHEA con mirada).
     let path = seeds_dir().join("arje-tawasuyu-host.card.json");
     let card = EntityCard::from_path(&path).unwrap();
     use arje_card::{Payload, Priority};
@@ -145,12 +145,18 @@ fn tawasuyu_host_seed_arranca_dm_real_con_seat_builtin() {
             );
             assert!(
                 envp.iter()
-                    .any(|(k, v)| k == "LIBSEAT_BACKEND" && v == "builtin"),
-                "sin logind/seatd bajo arje, el compositor root necesita LIBSEAT_BACKEND=builtin: {envp:?}",
+                    .any(|(k, v)| k == "LIBSEAT_BACKEND" && v == "seatd"),
+                "el compositor debe tomar el seat vía seatd (builtin crashea): {envp:?}",
             );
         }
         otro => panic!("payload del DM no es Native: {otro:?}"),
     }
+
+    // seatd debe estar declarado como Ente (provee el seat a libseat sin logind).
+    assert!(
+        card.genesis.iter().any(|c| c.label == "seatd"),
+        "la seed debe traer un Ente seatd antes del compositor",
+    );
 
     let splash = card
         .genesis
