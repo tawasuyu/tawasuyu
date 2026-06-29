@@ -724,6 +724,12 @@ pub(crate) enum Msg {
     /// Click con la herramienta Texto: crea una capa de texto en `(lx, ly)`
     /// y entra en edición.
     AgregarTexto { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Inserta una capa vectorial: un rectángulo centrado en el lienzo, con el
+    /// color activo. (Pen tool / edición de puntos = increment futuro.)
+    AgregarRectangulo,
+    /// Inserta una capa vectorial: una elipse centrada en el lienzo, con el
+    /// color activo.
+    AgregarElipse,
     /// Tecla durante la edición de una capa de texto: actualiza el string y
     /// re-rasteriza en vivo.
     TextoTecla(KeyEvent),

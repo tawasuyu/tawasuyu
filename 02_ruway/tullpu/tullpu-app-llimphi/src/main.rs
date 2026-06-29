@@ -984,6 +984,26 @@ impl App for Tullpu {
                     model.estado = "texto · fuera de la imagen".into();
                 }
             }
+            Msg::AgregarRectangulo => {
+                let (w, h) = (model.lienzo.width as f32, model.lienzo.height as f32);
+                let color = model.color_picked.unwrap_or([60, 120, 220, 255]);
+                let params = tullpu_core::ParamsVector::rectangulo(
+                    w * 0.25, h * 0.25, w * 0.5, h * 0.5, color,
+                );
+                agregar_capa_vector(&mut model, params, "rectángulo");
+                pushear_snapshot(&mut model, None);
+                model.estado = "vector · rectángulo agregado".into();
+            }
+            Msg::AgregarElipse => {
+                let (w, h) = (model.lienzo.width as f32, model.lienzo.height as f32);
+                let color = model.color_picked.unwrap_or([220, 90, 60, 255]);
+                let params = tullpu_core::ParamsVector::elipse(
+                    w * 0.5, h * 0.5, w * 0.3, h * 0.3, color,
+                );
+                agregar_capa_vector(&mut model, params, "elipse");
+                pushear_snapshot(&mut model, None);
+                model.estado = "vector · elipse agregada".into();
+            }
             Msg::TextoTecla(ev) => {
                 let actualizar = if let Some((id, input)) = model.editando_texto.as_mut() {
                     input.apply_key(&ev);

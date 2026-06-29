@@ -477,6 +477,79 @@ pub fn regenerar_stale_con_ia(
 }
 
 // =============================================================================
+//  Rasterización de capas vectoriales
+// =============================================================================
+
+/// Rasteriza una capa vectorial a un buffer Rgba8 `(w*h*4)` de **alfa recta**
+/// (no premultiplicada), del tamaño del lienzo, con relleno y/o trazo
+/// anti-aliased (tiny-skia). El path va en coords-imagen (px, origen
+/// arriba-izquierda). Es el análogo vectorial de la rasterización de texto: su
+/// salida vive en `Capa::contenido` y el compositor la trata como píxeles.
+///
+/// Un path vacío o un lienzo de área cero devuelven un buffer transparente.
+pub fn rasterizar_vector(params: &tullpu_core::ParamsVector, w: u32, h: u32) -> Vec<u8> {
+    let n = (w as usize) * (h as usize);
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut pixmap = match tiny_skia::Pixmap::new(w, h) {
+        Some(p) => p,
+        None => return vec![0u8; n * 4],
+    };
+
+    if let Some(path) = construir_path(&params.comandos) {
+        // Relleno.
+        if let Some(c) = params.relleno {
+            let mut paint = tiny_skia::Paint::default();
+            paint.set_color(color_skia(c));
+            paint.anti_alias = true;
+            let regla = match params.regla {
+                tullpu_core::ReglaRelleno::ParImpar => tiny_skia::FillRule::EvenOdd,
+                tullpu_core::ReglaRelleno::NoCero => tiny_skia::FillRule::Winding,
+            };
+            pixmap.fill_path(&path, &paint, regla, tiny_skia::Transform::identity(), None);
+        }
+        // Trazo (contorno).
+        if let (Some(c), true) = (params.trazo, params.ancho_trazo > 0.0) {
+            let mut paint = tiny_skia::Paint::default();
+            paint.set_color(color_skia(c));
+            paint.anti_alias = true;
+            let mut stroke = tiny_skia::Stroke::default();
+            stroke.width = params.ancho_trazo;
+            pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+        }
+    }
+
+    // tiny-skia guarda RGBA premultiplicado; tullpu trabaja en alfa recta.
+    let mut out = Vec::with_capacity(n * 4);
+    for px in pixmap.pixels() {
+        let c = px.demultiply();
+        out.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+    out
+}
+
+fn color_skia(c: [u8; 4]) -> tiny_skia::Color {
+    tiny_skia::Color::from_rgba8(c[0], c[1], c[2], c[3])
+}
+
+/// Traduce los comandos de tullpu a un `tiny_skia::Path`. `None` si el path
+/// queda vacío o degenerado (tiny-skia rechaza paths sin área de trazado).
+fn construir_path(comandos: &[tullpu_core::ComandoPath]) -> Option<tiny_skia::Path> {
+    use tullpu_core::ComandoPath as C;
+    let mut pb = tiny_skia::PathBuilder::new();
+    for cmd in comandos {
+        match *cmd {
+            C::MoverA { x, y } => pb.move_to(x, y),
+            C::LineaA { x, y } => pb.line_to(x, y),
+            C::CurvaA { c1x, c1y, c2x, c2y, x, y } => pb.cubic_to(c1x, c1y, c2x, c2y, x, y),
+            C::Cerrar => pb.close(),
+        }
+    }
+    pb.finish()
+}
+
+// =============================================================================
 //  Tests
 // =============================================================================
 
@@ -495,6 +568,66 @@ mod tests {
         let src = buffer_solido(1, 1, [10, 200, 50, 128]);
         let out = aplicar_op_local(&OpLocal::Invertir, &src, 1, 1).unwrap();
         assert_eq!(px(&out, 0), [245, 55, 205, 128]);
+    }
+
+    // ----- rasterización vectorial ------------------------------------------
+
+    use tullpu_core::ParamsVector;
+
+    fn en(buf: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+        px(buf, (y * w + x) as usize)
+    }
+
+    #[test]
+    fn rectangulo_rellena_adentro_y_deja_afuera_transparente() {
+        let (w, h) = (40, 40);
+        let p = ParamsVector::rectangulo(10.0, 10.0, 20.0, 20.0, [200, 30, 40, 255]);
+        let buf = rasterizar_vector(&p, w, h);
+        assert_eq!(buf.len(), (w * h * 4) as usize);
+        // Centro (20,20) dentro del rect → color de relleno opaco.
+        assert_eq!(en(&buf, w, 20, 20), [200, 30, 40, 255]);
+        // Esquina (2,2) fuera → transparente.
+        assert_eq!(en(&buf, w, 2, 2), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn elipse_rellena_el_centro_y_no_las_esquinas() {
+        let (w, h) = (40, 40);
+        let p = ParamsVector::elipse(20.0, 20.0, 15.0, 15.0, [20, 180, 90, 255]);
+        let buf = rasterizar_vector(&p, w, h);
+        assert_eq!(en(&buf, w, 20, 20), [20, 180, 90, 255]); // centro
+        assert_eq!(en(&buf, w, 1, 1)[3], 0); // esquina fuera del círculo
+    }
+
+    #[test]
+    fn salida_es_alfa_recta_no_premultiplicada() {
+        // Relleno semitransparente: el RGB debe quedar pleno (alfa recta), no
+        // multiplicado por el alfa (que lo oscurecería).
+        let (w, h) = (10, 10);
+        let p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [255, 255, 255, 128]);
+        let buf = rasterizar_vector(&p, w, h);
+        let c = en(&buf, w, 5, 5);
+        assert!(c[0] >= 254 && c[1] >= 254 && c[2] >= 254, "RGB debería ser ~255, fue {c:?}");
+        assert!((c[3] as i32 - 128).abs() <= 1, "alfa ~128, fue {}", c[3]);
+    }
+
+    #[test]
+    fn vector_se_compone_sobre_el_fondo() {
+        // Rasteriza un vector, lo mete al almacén y compone sobre un fondo.
+        let (w, h) = (24, 24);
+        let mut alm = AlmacenEnMemoria::nuevo();
+        let fondo = alm.insertar(buffer_solido(w, h, [0, 0, 0, 255]));
+        let p = ParamsVector::rectangulo(6.0, 6.0, 12.0, 12.0, [255, 0, 0, 255]);
+        let raster = alm.insertar(rasterizar_vector(&p, w, h));
+
+        let mut l = Lienzo::nuevo(w, h);
+        l.apilar(Capa::raster("fondo", fondo));
+        l.apilar(Capa::vector("forma", raster, p));
+
+        let img = tullpu_render::componer(&l, &alm).unwrap();
+        // Dentro del rect: rojo. Fuera: negro del fondo.
+        assert_eq!(en(img.as_raw(), w, 12, 12), [255, 0, 0, 255]);
+        assert_eq!(en(img.as_raw(), w, 1, 1), [0, 0, 0, 255]);
     }
 
     #[test]

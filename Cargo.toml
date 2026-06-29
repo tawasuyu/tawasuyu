@@ -743,6 +743,9 @@ petgraph = "0.6"
 # Decoders puro-Rust baratos; avif queda fuera (arrastra dav1d/rav1e).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff", "tga", "qoi"] }
 
+# Rasterizador vectorial CPU (relleno/trazo anti-aliased) para capas vectoriales de tullpu.
+tiny-skia = "0.11"
+
 # === FUSE (minga-vfs) ===
 # default-features = false: prescinde de pkg-config/libfuse-dev en build.
 # El montaje pasa a ser Rust puro (vía el helper `fusermount3` en runtime).

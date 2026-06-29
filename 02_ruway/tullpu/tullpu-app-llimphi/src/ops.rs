@@ -1397,6 +1397,30 @@ pub(crate) fn agregar_capa_texto(model: &mut Model, x: u32, y: u32) -> uuid::Uui
     id
 }
 
+/// Inserta una capa vectorial nueva a partir de su path, rasterizándola al
+/// tamaño del lienzo. La cuelga del mismo grupo que la capa seleccionada (si la
+/// hay). Devuelve el id de la capa creada y recompone.
+pub(crate) fn agregar_capa_vector(
+    model: &mut Model,
+    params: tullpu_core::ParamsVector,
+    nombre: &str,
+) -> uuid::Uuid {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let buffer = tullpu_ops::rasterizar_vector(&params, w, h);
+    let hash = model.almacen.insertar(buffer);
+    let mut capa = tullpu_core::Capa::vector(nombre, hash, params);
+    capa.grupo = model
+        .seleccionada
+        .and_then(|id| model.lienzo.capa(id))
+        .and_then(|c| c.grupo);
+    let id = capa.id;
+    model.lienzo.apilar(capa);
+    model.seleccionada = Some(id);
+    aplicar_y_recomponer(model);
+    id
+}
+
 /// Re-rasteriza la capa de texto `id` desde sus params vigentes y actualiza su
 /// `contenido`. No-op si la capa no es de texto. Recompone.
 pub(crate) fn rerasterizar_texto(model: &mut Model, id: uuid::Uuid) {

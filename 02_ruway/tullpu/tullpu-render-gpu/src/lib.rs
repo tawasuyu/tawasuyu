@@ -476,7 +476,7 @@ impl Compositor {
                 ClaseCapa::Grupo => {
                     self.componer_lista(l, Some(capa.id), banda, full_n, fuente, encoder, keep)?
                 }
-                ClaseCapa::Pixeles | ClaseCapa::Texto(_) => {
+                ClaseCapa::Pixeles | ClaseCapa::Texto(_) | ClaseCapa::Vector(_) => {
                     let esperado = full_n * 4;
                     let bytes = fuente
                         .obtener(capa.contenido)

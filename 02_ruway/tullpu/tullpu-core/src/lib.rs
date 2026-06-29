@@ -313,6 +313,119 @@ pub struct ParamsTexto {
     pub y: u32,
 }
 
+/// Una orden de trazado de un path vectorial, en coordenadas-imagen (px,
+/// origen arriba-izquierda). Cúbicas de Bézier + líneas; `Cerrar` une el
+/// sub-path con su último `MoverA`. El orden de variantes es estable (postcard
+/// serializa por índice): nuevas variantes se agregan **al final**.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ComandoPath {
+    /// Arranca un sub-path nuevo en `(x, y)`.
+    MoverA { x: f32, y: f32 },
+    /// Línea recta hasta `(x, y)`.
+    LineaA { x: f32, y: f32 },
+    /// Bézier cúbica con dos puntos de control hasta `(x, y)`.
+    CurvaA {
+        c1x: f32,
+        c1y: f32,
+        c2x: f32,
+        c2y: f32,
+        x: f32,
+        y: f32,
+    },
+    /// Cierra el sub-path actual (línea de vuelta al `MoverA`).
+    Cerrar,
+}
+
+/// Regla de relleno para sub-paths que se cruzan o se anidan.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ReglaRelleno {
+    /// Par-impar (even-odd): un punto está dentro si lo cruza un nº impar de
+    /// bordes. Hace agujeros con sub-paths anidados sin importar su sentido.
+    ParImpar,
+    /// No-cero (nonzero winding): cuenta el sentido de cruce.
+    NoCero,
+}
+
+/// Parámetros editables de una capa **vectorial**. Como en texto, el path se
+/// rasteriza a un buffer Rgba8 del tamaño del lienzo (que vive en
+/// `Capa::contenido`, como cualquier raster) — por eso el compositor trata la
+/// capa vectorial igual que una de píxeles. Guardar los comandos permite
+/// **re-editar** (mover puntos de control, cambiar relleno/trazo) y
+/// re-rasterizar sin pérdida. La rasterización vive **fuera** de `tullpu-core`
+/// (en `tullpu-ops`, con tiny-skia) — el core sólo lleva el modelo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParamsVector {
+    pub comandos: Vec<ComandoPath>,
+    /// Color de relleno RGBA8; `None` = sin relleno.
+    pub relleno: Option<[u8; 4]>,
+    pub regla: ReglaRelleno,
+    /// Color de trazo (contorno) RGBA8; `None` = sin trazo.
+    pub trazo: Option<[u8; 4]>,
+    /// Ancho de trazo en px (ignorado si `trazo` es `None`).
+    pub ancho_trazo: f32,
+}
+
+impl ParamsVector {
+    /// Rectángulo con esquina superior-izquierda `(x, y)` y tamaño `w×h`,
+    /// relleno sólido, sin trazo.
+    pub fn rectangulo(x: f32, y: f32, w: f32, h: f32, relleno: [u8; 4]) -> Self {
+        Self {
+            comandos: vec![
+                ComandoPath::MoverA { x, y },
+                ComandoPath::LineaA { x: x + w, y },
+                ComandoPath::LineaA { x: x + w, y: y + h },
+                ComandoPath::LineaA { x, y: y + h },
+                ComandoPath::Cerrar,
+            ],
+            relleno: Some(relleno),
+            regla: ReglaRelleno::NoCero,
+            trazo: None,
+            ancho_trazo: 0.0,
+        }
+    }
+
+    /// Elipse centrada en `(cx, cy)` con radios `(rx, ry)`, aproximada con
+    /// cuatro cúbicas de Bézier (kappa de círculo), relleno sólido, sin trazo.
+    pub fn elipse(cx: f32, cy: f32, rx: f32, ry: f32, relleno: [u8; 4]) -> Self {
+        // Constante para aproximar un cuarto de círculo con una cúbica.
+        const K: f32 = 0.552_284_75;
+        let (ox, oy) = (rx * K, ry * K);
+        Self {
+            comandos: vec![
+                ComandoPath::MoverA { x: cx + rx, y: cy },
+                ComandoPath::CurvaA { c1x: cx + rx, c1y: cy + oy, c2x: cx + ox, c2y: cy + ry, x: cx, y: cy + ry },
+                ComandoPath::CurvaA { c1x: cx - ox, c1y: cy + ry, c2x: cx - rx, c2y: cy + oy, x: cx - rx, y: cy },
+                ComandoPath::CurvaA { c1x: cx - rx, c1y: cy - oy, c2x: cx - ox, c2y: cy - ry, x: cx, y: cy - ry },
+                ComandoPath::CurvaA { c1x: cx + ox, c1y: cy - ry, c2x: cx + rx, c2y: cy - oy, x: cx + rx, y: cy },
+                ComandoPath::Cerrar,
+            ],
+            relleno: Some(relleno),
+            regla: ReglaRelleno::NoCero,
+            trazo: None,
+            ancho_trazo: 0.0,
+        }
+    }
+
+    /// Polígono cerrado por los vértices dados (≥ 2), relleno sólido, sin trazo.
+    pub fn poligono(puntos: &[(f32, f32)], relleno: [u8; 4]) -> Self {
+        let mut comandos = Vec::with_capacity(puntos.len() + 1);
+        if let Some(&(x, y)) = puntos.first() {
+            comandos.push(ComandoPath::MoverA { x, y });
+            for &(x, y) in &puntos[1..] {
+                comandos.push(ComandoPath::LineaA { x, y });
+            }
+            comandos.push(ComandoPath::Cerrar);
+        }
+        Self {
+            comandos,
+            relleno: Some(relleno),
+            regla: ReglaRelleno::NoCero,
+            trazo: None,
+            ancho_trazo: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ClaseCapa {
     /// Capa con buffer Rgba8 en `contenido` (raster o derivada).
@@ -324,6 +437,10 @@ pub enum ClaseCapa {
     /// Capa de texto: `contenido` lleva el texto ya rasterizado (se compone
     /// como píxeles); estos params permiten re-editar y re-rasterizar.
     Texto(ParamsTexto),
+    /// Capa vectorial: `contenido` lleva el path ya rasterizado (se compone
+    /// como píxeles); `ParamsVector` permite re-editar y re-rasterizar. Variante
+    /// nueva → va **al final** (postcard serializa por índice).
+    Vector(ParamsVector),
 }
 
 impl Default for ClaseCapa {
@@ -463,9 +580,12 @@ impl Capa {
     }
 
     /// `true` si la capa aporta píxeles al compuesto vía su `contenido`
-    /// (raster, derivada o texto rasterizado). Grupos y ajustes no.
+    /// (raster, derivada, texto o vector rasterizado). Grupos y ajustes no.
     pub fn tiene_buffer(&self) -> bool {
-        matches!(self.clase, ClaseCapa::Pixeles | ClaseCapa::Texto(_))
+        matches!(
+            self.clase,
+            ClaseCapa::Pixeles | ClaseCapa::Texto(_) | ClaseCapa::Vector(_)
+        )
     }
 
     /// Los params de texto si la capa es de texto; `None` en otro caso.
@@ -473,6 +593,33 @@ impl Capa {
         match &self.clase {
             ClaseCapa::Texto(p) => Some(p),
             _ => None,
+        }
+    }
+
+    /// Los params vectoriales si la capa es vectorial; `None` en otro caso.
+    pub fn params_vector(&self) -> Option<&ParamsVector> {
+        match &self.clase {
+            ClaseCapa::Vector(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Construye una capa vectorial. `contenido` es el hash del buffer Rgba8 ya
+    /// rasterizado (lo produce `tullpu_ops::rasterizar_vector`); `params`
+    /// guarda el path editable.
+    pub fn vector(nombre: impl Into<String>, contenido: Hash, params: ParamsVector) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            nombre: nombre.into(),
+            contenido,
+            blend: ModoFusion::Normal,
+            opacidad: 1.0,
+            mascara: None,
+            visible: true,
+            origen: OrigenCapa::Raster,
+            clase: ClaseCapa::Vector(params),
+            grupo: None,
+            clipping: false,
         }
     }
 

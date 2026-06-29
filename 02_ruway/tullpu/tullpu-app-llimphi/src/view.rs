@@ -108,6 +108,7 @@ pub(crate) fn fila_capa(
         ClaseCapa::Grupo => "📁 ",
         ClaseCapa::Ajuste(_) => "◫ ",
         ClaseCapa::Texto(_) => "T ",
+        ClaseCapa::Vector(_) => "⬡ ",
         ClaseCapa::Pixeles => "",
     };
     let marca_clip = if capa.clipping { "↳ " } else { "" };
@@ -116,6 +117,7 @@ pub(crate) fn fila_capa(
         ClaseCapa::Grupo => "grupo".to_string(),
         ClaseCapa::Ajuste(_) => "ajuste".to_string(),
         ClaseCapa::Texto(_) => "texto".to_string(),
+        ClaseCapa::Vector(_) => "vector".to_string(),
         ClaseCapa::Pixeles => nombre_op,
     };
     let etiqueta = format!(
@@ -1167,6 +1169,16 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         ),
         &pal,
         Msg::AgregarRelleno,
+    )));
+    hijos.push(envolver_fila(button_view(
+        format!("▭ rectángulo vectorial {}", etiqueta_color),
+        &pal,
+        Msg::AgregarRectangulo,
+    )));
+    hijos.push(envolver_fila(button_view(
+        format!("⬭ elipse vectorial {}", etiqueta_color),
+        &pal,
+        Msg::AgregarElipse,
     )));
     hijos.push(envolver_fila(button_view(
         format!(

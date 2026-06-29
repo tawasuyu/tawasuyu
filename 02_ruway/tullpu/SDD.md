@@ -73,7 +73,21 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
   content-addressed por **tiles** (capa = grafo de tiles → dedup por tile sobre
   fondos repetidos) — refactor de `tullpu-core`, distinto del tiling de
   composición ya hecho acá.
-- **Pendiente:** H IA real ONNX + vectores/paths.
+- **Fase H — vectores/paths (EN CURSO; capa vectorial rasterizable hecha).**
+  `ClaseCapa::Vector(ParamsVector)` (modelo en `tullpu-core`): un path como lista
+  de `ComandoPath` (MoverA/LineaA/CurvaA cúbica/Cerrar) + relleno opcional con
+  `ReglaRelleno` (par-impar / no-cero) + trazo opcional con ancho. Igual que
+  texto, su `contenido` es el buffer Rgba8 ya rasterizado, así el compositor la
+  trata como píxeles (un solo brazo `Pixeles | Texto | Vector` en CPU y GPU). La
+  rasterización vive en `tullpu_ops::rasterizar_vector` (tiny-skia, relleno+trazo
+  anti-aliased, salida en **alfa recta** des-premultiplicada). Constructores de
+  forma: `ParamsVector::{rectangulo, elipse, poligono}`. La app inserta
+  rectángulo/elipse desde el panel "entrada" con el color activo
+  (`agregar_capa_vector`). Tests en `tullpu-ops` (relleno dentro/fuera, elipse,
+  alfa recta, composición sobre fondo). **Falta (increment 2):** pen tool /
+  edición interactiva de puntos de control, re-rasterizado en vivo, trazo
+  configurable en UI.
+- **Pendiente:** H IA real ONNX (segment-anything / upscale / restyle).
 
 ## Estado (2026-05-31)
 
