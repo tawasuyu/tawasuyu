@@ -47,6 +47,19 @@ fn lerp_rgba(a: [u8; 4], b: [u8; 4], m: f32) -> [u8; 4] {
     [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2]), mix(a[3], b[3])]
 }
 
+/// Aclara (`amt > 0`, mezcla hacia blanco) u oscurece (`amt < 0`, hacia negro)
+/// un color RGBA conservando el alfa. Es la base del **bevel 3D** del marco:
+/// los lados de luz (arriba/izquierda) reciben un `amt` positivo y los de
+/// sombra (abajo/derecha) uno negativo, produciendo el relieve «levantado»
+/// estilo Motif/CDE. `amt` se acota a `-1..=1`. Pura.
+fn bevel_shade(c: [u8; 4], amt: f32) -> [u8; 4] {
+    let amt = amt.clamp(-1.0, 1.0);
+    let target = if amt >= 0.0 { 255.0 } else { 0.0 };
+    let k = amt.abs();
+    let mix = |x: u8| (x as f32 + (target - x as f32) * k).round().clamp(0.0, 255.0) as u8;
+    [mix(c[0]), mix(c[1]), mix(c[2]), c[3]]
+}
+
 /// Transformación **cover** para escalar por GPU un buffer `sw×sh` a una salida
 /// `ow×oh`: devuelve `(offset_x, offset_y, escala)` — escala uniforme = máximo de
 /// las dos razones (llena la salida, recorta el sobrante), con el sobrante
@@ -2445,14 +2458,25 @@ impl DrmState {
             // pintar). Se dimensionan sobre el CONTENIDO (sin sombra CSD), igual
             // que el marco que se dibuja en el loop principal.
             let (cw, ch) = crate::content_px_size(w).unwrap_or((w.size.0, w.size.1 - tb));
-            let color = rgba_f32(lerp_rgba(
+            let base = lerp_rgba(
                 dec.border_normal,
                 dec.border_focus,
                 focus_mix(w.focused, glow_ms, w.focus_ms, now),
-            ));
+            );
+            let color = rgba_f32(base);
+            // Bevel 3D «levantado»: luz arriba+izquierda, sombra abajo+derecha.
+            // El `border_rects` devuelve los lados en orden [arriba, abajo,
+            // izquierda, derecha]; con el bevel apagado los 4 van planos.
+            let hi = rgba_f32(bevel_shade(base, 0.45));
+            let lo = rgba_f32(bevel_shade(base, -0.40));
             let rects = border_rects(0, 0, cw, ch + tb, dec.border_width);
-            for (buf, (_, _, bw, bh)) in w.borders.iter_mut().zip(rects) {
-                buf.update((bw, bh), color);
+            for (i, (buf, (_, _, bw, bh))) in w.borders.iter_mut().zip(rects).enumerate() {
+                let c = if dec.border_bevel {
+                    if i == 0 || i == 2 { hi } else { lo }
+                } else {
+                    color
+                };
+                buf.update((bw, bh), c);
             }
         }
     }
@@ -2920,7 +2944,9 @@ fn emit_popups(
 #[cfg(test)]
 mod tests {
     use super::super::{backdrop_downsample, box_blur_bgra, downsample_bgra};
-    use super::{cover_transform, focus_mix, lerp_rgba, push_glass_rim, round_mask_bgra};
+    use super::{
+        bevel_shade, cover_transform, focus_mix, lerp_rgba, push_glass_rim, round_mask_bgra,
+    };
 
     #[test]
     fn glass_rim_empuja_dos_filos_y_es_no_op_en_degenerados() {
@@ -3070,5 +3096,27 @@ mod tests {
         // Fuera de rango se recorta.
         assert_eq!(lerp_rgba(a, b, 2.0), b);
         assert_eq!(lerp_rgba(a, b, -1.0), a);
+    }
+
+    #[test]
+    fn bevel_shade_aclara_y_oscurece_conservando_alfa() {
+        let base = [100, 100, 100, 255];
+        // amt 0 = sin cambio.
+        assert_eq!(bevel_shade(base, 0.0), base);
+        // Positivo: cada canal sube hacia 255 (luz).
+        let hi = bevel_shade(base, 0.5);
+        assert!(hi[0] > base[0] && hi[1] > base[1] && hi[2] > base[2]);
+        // Negativo: cada canal baja hacia 0 (sombra).
+        let lo = bevel_shade(base, -0.5);
+        assert!(lo[0] < base[0] && lo[1] < base[1] && lo[2] < base[2]);
+        // El alfa nunca se toca.
+        assert_eq!(hi[3], 255);
+        assert_eq!(lo[3], 255);
+        // Saturación: +1 = blanco, -1 = negro (rgb), alfa intacto.
+        assert_eq!(bevel_shade(base, 1.0), [255, 255, 255, 255]);
+        assert_eq!(bevel_shade(base, -1.0), [0, 0, 0, 255]);
+        // El factor se acota: fuera de [-1, 1] no se pasa de blanco/negro.
+        assert_eq!(bevel_shade(base, 5.0), [255, 255, 255, 255]);
+        assert_eq!(bevel_shade(base, -5.0), [0, 0, 0, 255]);
     }
 }

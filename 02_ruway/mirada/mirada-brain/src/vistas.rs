@@ -233,40 +233,46 @@ fn vista_dwm() -> Vista {
 /// **Windows 3.1** — gris Motif con barra de título azul marino, marco
 /// biselado, escritorio teal; el Program Manager lo monta la barra de pata.
 fn vista_windows_31() -> Vista {
+    let mut config = skin(
+        "Win3.1",
+        LayoutMode::MasterStack,
+        2,
+        4,                      // marco grueso biselado
+        20,
+        [0, 0, 128, 255],       // azul marino con foco
+        [128, 128, 128, 255],   // gris Motif sin foco
+        0.1,
+    );
+    config.border_bevel = true;
     Vista {
         name: "windows-3.1",
         label: "Windows 3.1",
         keymap: "windows",
-        config: skin(
-            "Win3.1",
-            LayoutMode::MasterStack,
-            2,
-            2,
-            20,
-            [0, 0, 128, 255],       // azul marino con foco
-            [128, 128, 128, 255],   // gris Motif sin foco
-            0.1,
-        ),
+        config,
     }
 }
 
 /// **Solaris CDE** (era dorada) — Motif gris-azulado con acento teal, barras de
-/// título medianas; el Front Panel inferior lo monta la barra de pata.
+/// título medianas; el Front Panel inferior lo monta la barra de pata. Marco
+/// **grueso con relieve 3D** (`border_bevel`): el look retro Motif/CDE de
+/// ventanas «levantadas» con luz arriba-izquierda y sombra abajo-derecha.
 fn vista_solaris() -> Vista {
+    let mut config = skin(
+        "CDE",
+        LayoutMode::MasterStack,
+        4,
+        5,                      // marco grueso (Motif/CDE)
+        22,
+        [64, 132, 132, 255],    // teal CDE con foco
+        [108, 116, 134, 255],   // gris Motif sin foco
+        0.25,
+    );
+    config.border_bevel = true;
     Vista {
         name: "solaris",
         label: "Solaris (CDE)",
         keymap: "windows",
-        config: skin(
-            "CDE",
-            LayoutMode::MasterStack,
-            4,
-            2,
-            22,
-            [64, 132, 132, 255],    // teal CDE con foco
-            [108, 116, 134, 255],   // gris Motif sin foco
-            0.25,
-        ),
+        config,
     }
 }
 
@@ -333,6 +339,23 @@ mod tests {
         let hypr = Vista::by_name("hyprland").unwrap().config;
         assert_eq!(hypr.titlebar_height, 0);
         assert_eq!(hypr.layout, LayoutMode::Spiral);
+    }
+
+    #[test]
+    fn las_vistas_retro_traen_marco_grueso_con_relieve() {
+        // CDE (y Win3.1) son los looks Motif: marco grueso con bevel 3D. El
+        // resto va plano. Y el flag viaja en las decoraciones que el Cerebro
+        // emite hacia el Cuerpo.
+        let cde = Vista::by_name("solaris").unwrap().config;
+        assert!(cde.border_bevel, "la vista CDE debe traer relieve 3D");
+        assert!(cde.border_width >= 4, "el marco CDE debe ser grueso");
+        assert!(cde.decorations().border_bevel, "el bevel debe viajar en Decorations");
+        let w31 = Vista::by_name("windows-3.1").unwrap().config;
+        assert!(w31.border_bevel, "Win3.1 también es Motif biselado");
+        // Las modernas van planas.
+        assert!(!Vista::by_name("mirada").unwrap().config.border_bevel);
+        assert!(!Vista::by_name("mac").unwrap().config.border_bevel);
+        assert!(!Config::default().border_bevel, "el default crudo va plano");
     }
 
     #[test]

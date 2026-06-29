@@ -118,6 +118,14 @@ pub struct Decorations {
     /// servidor.
     #[serde(default)]
     pub titlebar_floating_only: bool,
+    /// Marco con **bevel 3D** estilo Motif/CDE: en vez de un color plano, los
+    /// lados superior e izquierdo se aclaran (luz) y los inferior y derecho se
+    /// oscurecen (sombra), dando un relieve *levantado*. `false` (default) =
+    /// marco plano de un solo color (comportamiento histórico). Pensado para
+    /// looks retro con marcos gruesos: con `border_width` chico el efecto es
+    /// sutil; gana con grosores de 4 px en adelante.
+    #[serde(default)]
+    pub border_bevel: bool,
 }
 
 impl Default for Decorations {
@@ -131,6 +139,7 @@ impl Default for Decorations {
             titlebar_height: 24,
             titlebar_gradient: false,
             titlebar_floating_only: false,
+            border_bevel: false,
         }
     }
 }
@@ -650,6 +659,8 @@ mod tests {
             border_normal: [1, 2, 3, 4],
             titlebar_height: 24,
             titlebar_gradient: true,
+            titlebar_floating_only: false,
+            border_bevel: true,
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();

@@ -151,6 +151,12 @@ pub struct Config {
     /// y los mosaicos limpios. No afecta a CSD/shell/fullscreen/greeter.
     #[serde(default)]
     pub titlebar_floating_only: bool,
+    /// Marco con **bevel 3D** estilo Motif/CDE: lados superior+izquierdo
+    /// aclarados (luz) e inferior+derecho oscurecidos (sombra) → relieve
+    /// *levantado*. `false` (default) = marco plano. Marida con `border_width`
+    /// grueso para el look retro; lo fija el theme/vista del perfil activo.
+    #[serde(default)]
+    pub border_bevel: bool,
     /// Ruta a la fuente para las etiquetas del compositor (título, menú).
     /// Vacía = se prueba una lista de fuentes comunes del sistema.
     pub font_path: String,
@@ -949,6 +955,7 @@ impl Default for Config {
             titlebar_height: dec.titlebar_height,
             titlebar_gradient: dec.titlebar_gradient,
             titlebar_floating_only: dec.titlebar_floating_only,
+            border_bevel: dec.border_bevel,
             font_path: String::new(),
             wallpaper_path: String::new(),
             wallpaper_fit: WallpaperFit::default(),
@@ -1116,6 +1123,7 @@ impl Config {
             titlebar_height: self.titlebar_height.max(0),
             titlebar_gradient: self.titlebar_gradient,
             titlebar_floating_only: self.titlebar_floating_only,
+            border_bevel: self.border_bevel,
         }
     }
 
@@ -1432,6 +1440,9 @@ const CONFIG_TEMPLATE: &str = "\
     border_width: 2,
     border_focus: (92, 143, 235, 255),    // azul al foco
     border_normal: (56, 56, 69, 255),     // gris discreto sin foco
+    // Relieve 3D del marco (retro Motif/CDE): true = luz arriba-izquierda +
+    // sombra abajo-derecha. Marida con border_width grueso (4+). false = plano.
+    border_bevel: false,
     // Barra de título sobre cada ventana (px). 0 = sin barra (sólo el título
     // de la ventana enfocada, superpuesto). La franja se reserva arriba.
     titlebar_height: 24,

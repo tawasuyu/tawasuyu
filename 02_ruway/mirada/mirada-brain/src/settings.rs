@@ -197,6 +197,11 @@ impl Configurable for Config {
                         "titlebar_floating_only",
                         "Barra sólo en ventanas flotantes",
                         self.titlebar_floating_only,
+                    ))
+                    .field(Field::toggle(
+                        "border_bevel",
+                        "Marco con relieve 3D (retro Motif/CDE)",
+                        self.border_bevel,
                     )),
             )
             .section(
@@ -562,6 +567,11 @@ impl Configurable for Config {
             "titlebar_floating_only" => {
                 if let Some(b) = value.as_bool() {
                     self.titlebar_floating_only = b;
+                }
+            }
+            "border_bevel" => {
+                if let Some(b) = value.as_bool() {
+                    self.border_bevel = b;
                 }
             }
             "border_focus" => {
