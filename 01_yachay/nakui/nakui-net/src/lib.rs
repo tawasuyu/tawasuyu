@@ -22,10 +22,12 @@
 //! dedicado corre un runtime tokio; el API sync manda comandos por canal.
 
 mod client;
+mod remote;
 mod server;
 mod wire;
 
 pub use client::CardNetTransport;
+pub use remote::RemoteBackend;
 pub use server::{serve, ServerHandle};
 pub use wire::{ClientMsg, ServerMsg};
 

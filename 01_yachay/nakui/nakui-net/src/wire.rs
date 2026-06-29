@@ -13,6 +13,8 @@
 //! commit por las dos vías (respuesta + difusión) es inofensivo.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use uuid::Uuid;
 
 use nakui_sync::{Commit, Intent};
 
@@ -27,6 +29,16 @@ pub enum ClientMsg {
 /// Mensaje del servidor hacia el cliente.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ServerMsg {
+    /// Catch-up inicial: el estado autoritativo completo al momento de
+    /// conectar. El servidor lo envía una vez, apenas el cliente se engancha
+    /// (atómico con el alta de su suscripción, así no hay hueco ni
+    /// duplicado con los `Broadcast` que siguen). `last_seq` es el cursor
+    /// del estado capturado: los broadcasts con `seq <= last_seq` ya están
+    /// incluidos y se saltean por idempotencia.
+    Snapshot {
+        records: Vec<(String, Uuid, Value)>,
+        last_seq: Option<u64>,
+    },
     /// Respuesta a un `Submit`: el commit autoritativo, o el error de
     /// validación (la intención fue rechazada; el estado quedó intacto).
     CommitResult {

@@ -179,6 +179,7 @@ members = [
     "01_yachay/nakui/nakui-core",
     "01_yachay/nakui/nakui-sync",
     "01_yachay/nakui/nakui-net",
+    "01_yachay/nakui/nakui-server",
     "01_yachay/nakui/nakui-backend",
     "01_yachay/nakui/yupay-core",
     "01_yachay/nakui/yupay-fns",

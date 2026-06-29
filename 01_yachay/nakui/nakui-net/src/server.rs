@@ -7,27 +7,31 @@
 //! ahí, nunca se mueve. Las tareas async de red sólo hablan con él por
 //! canales (que sí son `Send`), aislando el Rhai del executor async.
 //!
-//! El actor es además el punto de serialización (un solo thread procesa los
-//! commits en orden) y el origen de la difusión: tras cada commit exitoso,
-//! lo empuja a los subscribers; el forwarder lo manda a todos los streams.
+//! El actor es el punto de serialización (un solo thread procesa los commits
+//! en orden) y el origen de la difusión. Cada cliente tiene una tarea propia
+//! que multiplexa, sobre su único stream, sus `Submit`s y los `Broadcast`s
+//! que le tocan. Al engancharse, el actor le entrega —en un solo turno,
+//! atómico respecto a los commits— un snapshot del estado + su suscripción,
+//! así no hay hueco ni duplicado entre el catch-up y los broadcasts.
 
-use std::collections::HashMap;
 use std::sync::mpsc::{channel as std_channel, Sender as StdSender};
-use std::sync::Arc;
 
 use card_net::{BrahmanNet, Multiaddr, PeerId as LpPeerId};
 use futures::StreamExt;
-use tokio::io::WriteHalf;
-use tokio::sync::{mpsc as tmpsc, oneshot, Mutex as TMutex};
+use serde_json::Value;
+use tokio::sync::{mpsc as tmpsc, oneshot};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
+use uuid::Uuid;
 
+use nakui_core::store::Store;
 use nakui_sync::{Commit, Intent, Writer};
 
 use crate::wire::{ClientMsg, ServerMsg};
-use crate::{escribir_frame, leer_frame, CompatStream, ErrorNet, PROTO};
+use crate::{escribir_frame, leer_frame, ErrorNet, PROTO};
 
-type Escritor = WriteHalf<CompatStream>;
-type MapaEscritores = Arc<TMutex<HashMap<LpPeerId, Escritor>>>;
+/// El estado autoritativo capturado para un catch-up: cada record + el
+/// cursor (`last_seq`) hasta donde llega.
+type SnapshotData = (Vec<(String, Uuid, Value)>, Option<u64>);
 
 // ---- actor del escritor -----------------------------------------------------
 
@@ -37,8 +41,12 @@ enum ActorCmd {
         intent: Intent,
         reply: oneshot::Sender<Result<Commit, String>>,
     },
-    Subscribe {
+    /// Engancha un cliente: registra su canal de difusión y devuelve, en el
+    /// mismo turno, el snapshot del estado actual. Atómico respecto a los
+    /// commits — ningún commit se cuela entre la captura y el alta.
+    Attach {
         sub: tmpsc::UnboundedSender<Commit>,
+        reply: oneshot::Sender<SnapshotData>,
     },
 }
 
@@ -61,9 +69,15 @@ impl WriterHandle {
             .map_err(|_| "nakui-net :: el escritor no respondió".to_string())?
     }
 
-    /// Registra un canal para recibir cada commit autoritativo difundido.
-    fn subscribe(&self, sub: tmpsc::UnboundedSender<Commit>) {
-        let _ = self.cmd_tx.send(ActorCmd::Subscribe { sub });
+    /// Engancha un cliente: devuelve el snapshot inicial; el `sub` queda
+    /// registrado para recibir cada commit posterior.
+    async fn attach(&self, sub: tmpsc::UnboundedSender<Commit>) -> Result<SnapshotData, String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(ActorCmd::Attach { sub, reply: tx })
+            .map_err(|_| "nakui-net :: el escritor está caído".to_string())?;
+        rx.await
+            .map_err(|_| "nakui-net :: el escritor no respondió".to_string())
     }
 }
 
@@ -91,11 +105,27 @@ where
                     }
                     let _ = reply.send(result);
                 }
-                ActorCmd::Subscribe { sub } => subs.push(sub),
+                ActorCmd::Attach { sub, reply } => {
+                    subs.push(sub);
+                    let snap = capturar_snapshot(&writer);
+                    let _ = reply.send(snap);
+                }
             }
         }
     });
     WriterHandle { cmd_tx }
+}
+
+/// Captura el estado autoritativo completo para el catch-up de un cliente.
+fn capturar_snapshot(writer: &Writer) -> SnapshotData {
+    let store = writer.store_handle();
+    let g = match store.lock() {
+        Ok(g) => g,
+        Err(_) => return (Vec::new(), None),
+    };
+    let records: Vec<(String, Uuid, Value)> = g.iter().map(|it| it.collect()).unwrap_or_default();
+    let last_seq = g.last_applied_seq().ok().flatten();
+    (records, last_seq)
 }
 
 // ---- API pública ------------------------------------------------------------
@@ -166,7 +196,11 @@ where
                 }
             };
             let _ = listo_tx.send(Ok(dial));
-            conducir_servidor(handle, incoming).await;
+
+            let mut incoming = Box::pin(incoming);
+            while let Some((peer, stream)) = incoming.next().await {
+                tokio::spawn(atender_cliente(peer, stream, handle.clone()));
+            }
         });
     });
 
@@ -177,85 +211,67 @@ where
     }
 }
 
-/// El bucle del servidor: forwarder de difusión + aceptación de clientes.
-async fn conducir_servidor(
-    handle: WriterHandle,
-    incoming: impl futures::Stream<Item = (LpPeerId, card_net::Stream)>,
-) {
-    let escritores: MapaEscritores = Arc::new(TMutex::new(HashMap::new()));
+/// La tarea de un cliente: engancha (snapshot + suscripción), envía el
+/// catch-up, y luego multiplexa sobre su único stream los `Submit`s que
+/// recibe y los `Broadcast`s que le difunden. Un solo dueño del escritor
+/// del stream ⇒ sin contención ni mutex sobre el writer.
+async fn atender_cliente(peer: LpPeerId, stream: card_net::Stream, handle: WriterHandle) {
+    let _ = peer; // identidad del peer; reservado para autorización (fase 3+).
+    let compat = stream.compat();
+    let (mut rd, mut wr) = tokio::io::split(compat);
 
-    // Forwarder: cada commit autoritativo se difunde a todos los streams.
-    {
-        let (sub_tx, mut brx) = tmpsc::unbounded_channel::<Commit>();
-        handle.subscribe(sub_tx);
-        let escritores = escritores.clone();
-        tokio::spawn(async move {
-            while let Some(commit) = brx.recv().await {
+    // Enganche atómico: snapshot del estado + alta de la suscripción.
+    let (sub_tx, mut sub_rx) = tmpsc::unbounded_channel::<Commit>();
+    let (records, last_seq) = match handle.attach(sub_tx).await {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    // Catch-up: el estado actual, antes de cualquier broadcast.
+    let frame = match serde_json::to_vec(&ServerMsg::Snapshot { records, last_seq }) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    if escribir_frame(&mut wr, &frame).await.is_err() {
+        return;
+    }
+
+    loop {
+        tokio::select! {
+            entrante = leer_frame(&mut rd) => {
+                let bytes = match entrante {
+                    Ok(b) => b,
+                    Err(_) => break,
+                };
+                let ClientMsg::Submit { req_id, intent } = match serde_json::from_slice(&bytes) {
+                    Ok(m) => m,
+                    Err(_) => break,
+                };
+                // El actor valida/ordena/materializa y difunde a todos (este
+                // peer incluido, vía sub_rx, que dedup-ea por seq). Acá sólo
+                // respondemos el req específico.
+                let result = handle.commit(intent).await;
+                let frame = match serde_json::to_vec(&ServerMsg::CommitResult { req_id, result }) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                if escribir_frame(&mut wr, &frame).await.is_err() {
+                    break;
+                }
+            }
+            difundido = sub_rx.recv() => {
+                let commit = match difundido {
+                    Some(c) => c,
+                    None => break,
+                };
                 let frame = match serde_json::to_vec(&ServerMsg::Broadcast { commit }) {
                     Ok(b) => b,
                     Err(_) => continue,
                 };
-                let mut g = escritores.lock().await;
-                let peers: Vec<LpPeerId> = g.keys().cloned().collect();
-                let mut muertos = Vec::new();
-                for p in peers {
-                    if let Some(wr) = g.get_mut(&p) {
-                        if escribir_frame(wr, &frame).await.is_err() {
-                            muertos.push(p);
-                        }
-                    }
-                }
-                for p in muertos {
-                    g.remove(&p);
-                }
-            }
-        });
-    }
-
-    // Aceptación de clientes.
-    let mut entrantes = Box::pin(incoming);
-    while let Some((peer, stream)) = entrantes.next().await {
-        registrar_cliente(peer, stream, escritores.clone(), handle.clone()).await;
-    }
-}
-
-/// Registra un stream de cliente: guarda su escritor y lanza la tarea que
-/// lee `Submit`s, los manda al actor escritor y responde el `CommitResult`.
-async fn registrar_cliente(
-    peer: LpPeerId,
-    stream: card_net::Stream,
-    escritores: MapaEscritores,
-    handle: WriterHandle,
-) {
-    let compat = stream.compat();
-    let (mut rd, wr) = tokio::io::split(compat);
-    escritores.lock().await.insert(peer, wr);
-
-    let escritores_r = escritores.clone();
-    tokio::spawn(async move {
-        loop {
-            let bytes = match leer_frame(&mut rd).await {
-                Ok(b) => b,
-                Err(_) => break,
-            };
-            let ClientMsg::Submit { req_id, intent } = match serde_json::from_slice(&bytes) {
-                Ok(m) => m,
-                Err(_) => break,
-            };
-            // El actor valida/ordena/materializa y difunde a todos (incluido
-            // este peer, que dedup-ea por seq). Acá sólo respondemos al req.
-            let result = handle.commit(intent).await;
-            let frame = match serde_json::to_vec(&ServerMsg::CommitResult { req_id, result }) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let mut g = escritores_r.lock().await;
-            if let Some(wr) = g.get_mut(&peer) {
-                if escribir_frame(wr, &frame).await.is_err() {
+                if escribir_frame(&mut wr, &frame).await.is_err() {
                     break;
                 }
             }
         }
-        escritores_r.lock().await.remove(&peer);
-    });
+    }
 }

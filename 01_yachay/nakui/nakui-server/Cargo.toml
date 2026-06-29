@@ -1,0 +1,18 @@
+[package]
+name = "nakui-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nakui — servidor autoritativo headless: hospeda el escritor (WAL + executors por módulo) y lo sirve a clientes remotos por card-net. El host de un workspace multi-usuario."
+
+[[bin]]
+name = "nakui-server"
+path = "src/main.rs"
+
+[dependencies]
+nakui-sync = { path = "../nakui-sync" }
+nakui-net = { path = "../nakui-net" }
+nakui-core = { path = "../nakui-core" }
+cards = { path = "../../../02_ruway/cards" }
