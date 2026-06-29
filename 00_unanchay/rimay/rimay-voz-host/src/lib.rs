@@ -43,4 +43,4 @@ pub use lazo::{EventoEscucha, Lazo};
 #[cfg(feature = "microfono")]
 mod microfono;
 #[cfg(feature = "microfono")]
-pub use microfono::{escuchar, escuchar_con, GuardiaEscucha, OpcionesEscucha};
+pub use microfono::{escuchar, escuchar_cfg, escuchar_con, GuardiaEscucha, OpcionesEscucha};

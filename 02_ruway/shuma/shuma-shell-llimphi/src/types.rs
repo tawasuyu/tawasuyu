@@ -1029,6 +1029,13 @@ pub struct Model {
     /// Almacén persistente de agentes y conversaciones; `None` si no se pudo
     /// abrir (el panel sigue funcionando en memoria).
     pub agente_almacen: Option<shuma_agente::Almacen>,
+
+    /// Runtime tokio dedicado a la **voz** (el bucle Elm no es tokio; la captura
+    /// + el lazo VAD→STT viven acá). Vivo mientras el micrófono escucha.
+    pub _voz_rt: Option<tokio::runtime::Runtime>,
+    /// Guardia de la captura de voz: soltarla corta el micrófono y las tasks.
+    /// Se dropea **antes** que `_voz_rt` al apagar (orden explícito en `parar_voz`).
+    pub _voz_guardia: Option<rimay_voz_host::GuardiaEscucha>,
 }
 
 impl Model {

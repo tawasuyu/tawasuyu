@@ -26,6 +26,10 @@ shuma-config = { path = "../sandbox/shuma-config" }
 shuma-module-canvas = { path = "../sandbox/shuma-module-canvas" }
 shuma-module-agente = { path = "../sandbox/shuma-module-agente" }
 shuma-agente = { path = "../sandbox/shuma-agente" }
+# Voz manos-libres: captura de micrófono + lazo VAD→STT→máquina. La feature
+# `microfono` (default-on) trae cpal; el host la corre con la config de wawa-panel.
+rimay-voz-host = { path = "../../../00_unanchay/rimay/rimay-voz-host" }
+rimay-voz = { path = "../../../00_unanchay/rimay/rimay-voz" }
 shuma-agente-host = { path = "../sandbox/shuma-agente-host" }
 shuma-intent = { path = "../sandbox/shuma-intent" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }

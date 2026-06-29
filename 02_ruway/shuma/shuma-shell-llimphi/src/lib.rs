@@ -387,6 +387,8 @@ pub fn new_model() -> Model {
         host_active_synced: None,
         agente: shuma_module_agente::State::new(),
         agente_almacen: None,
+        _voz_rt: None,
+        _voz_guardia: None,
     };
     // Aplicar la apariencia efectiva (global o de la sesión activa) sobre el
     // tema base: si la activa es «Sistema» queda el tema de wawa ya calculado.
@@ -455,6 +457,88 @@ pub fn spawn_host_effects(model: &mut Model, handle: &Handle<Msg>) {
         }
     }
     model._host = shuma_host(handle);
+}
+
+/// Traduce un evento de `rimay-voz-host` a mensajes del panel de chat: cambia el
+/// indicador de escucha y, en el dictado, inserta el texto en el input.
+fn mapear_evento_voz(ev: rimay_voz_host::EventoEscucha) -> Vec<shuma_module_agente::Msg> {
+    use rimay_voz_host::EventoEscucha as E;
+    use shuma_module_agente::{EstadoEscucha as Es, Msg as AM};
+    match ev {
+        E::Escuchando => vec![AM::EscuchaCambio(Es::Oyendo)],
+        E::Desperto => vec![AM::EscuchaCambio(Es::Despierto)],
+        E::Dictar(t) => vec![AM::Dictado(t), AM::EscuchaCambio(Es::Dictando)],
+        E::SeDurmio => vec![AM::EscuchaCambio(Es::Esperando)],
+    }
+}
+
+/// Arranca la captura de voz con la config del SO (`wawa-config::ai.voz`, editada
+/// en wawa-panel): backend STT/TTS del híbrido + palabra de llamada. Sostiene un
+/// runtime tokio dedicado (el bucle Elm no lo es) y reenvía los eventos al chat.
+fn iniciar_voz(m: &mut Model, handle: &Handle<Msg>) {
+    let voz = wawa_config::WawaConfig::load().ai.voz;
+    let vcfg = rimay_voz::VozConfig {
+        stt: rimay_voz::Backend::parse(&voz.stt),
+        tts: rimay_voz::Backend::parse(&voz.tts),
+        socket: None,
+    };
+    let opciones = rimay_voz_host::OpcionesEscucha {
+        llamado: voz.effective_llamado().to_string(),
+        // Compuerta wake-word enrolada: futuro (necesita la UX de enrolado).
+        detector: None,
+    };
+    // Runtime propio: la captura tiene tasks tokio + intervalos; el bucle Elm no
+    // es tokio. `enter()` da contexto para el `tokio::spawn` interno del host.
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            m.agente.fijar_escucha(shuma_module_agente::EstadoEscucha::Apagado);
+            eprintln!("voz: no se pudo crear el runtime: {e}");
+            return;
+        }
+    };
+    let arranque = {
+        let _g = rt.enter();
+        rimay_voz_host::escuchar_cfg(vcfg, opciones)
+    };
+    match arranque {
+        Ok((guardia, mut rx)) => {
+            let h = handle.clone();
+            rt.spawn(async move {
+                while let Some(ev) = rx.recv().await {
+                    for msg in mapear_evento_voz(ev) {
+                        h.dispatch(Msg::Agente(msg));
+                    }
+                }
+            });
+            m._voz_guardia = Some(guardia);
+            m._voz_rt = Some(rt);
+            eprintln!("voz: 🎙 escuchando — decí «shuma»");
+        }
+        Err(e) => {
+            // El runtime se dropea al salir del scope (no quedó nada corriendo).
+            m.agente.fijar_escucha(shuma_module_agente::EstadoEscucha::Apagado);
+            eprintln!("voz: no se pudo abrir el micrófono: {e}");
+        }
+    }
+}
+
+/// Para la captura de voz: corta la guardia (aborta tasks + hilo de audio) y
+/// luego el runtime, en ese orden.
+fn parar_voz(m: &mut Model) {
+    m._voz_guardia = None; // Drop: para mic + tasks
+    m._voz_rt = None; // Drop: cierra el runtime
+    m.agente.fijar_escucha(shuma_module_agente::EstadoEscucha::Apagado);
+}
+
+/// Atiende el intent de micrófono que dejó el panel de chat tras un `ToggleMic`:
+/// arranca o para la captura real.
+fn atender_mic_intent(m: &mut Model, handle: &Handle<Msg>) {
+    match m.agente.tomar_mic_intent() {
+        Some(true) => iniciar_voz(m, handle),
+        Some(false) => parar_voz(m),
+        None => {}
+    }
 }
 
 /// Conmuta el **perfil de sesión** (contexto tipo Firefox): guarda el estado del
@@ -706,6 +790,11 @@ impl App for Shell {
             }
             Msg::ShellTick => {
                 drain_shell_instances(&mut m);
+                // Mientras la voz escucha, avanzá el reloj del chat para que el
+                // halo del micrófono y el glow del input animen (≈10 fps).
+                if m.agente.escucha().activo() {
+                    m.agente.fijar_reloj(ahora_ms());
+                }
                 // A6 — la sesión activa no badgea (el usuario la está viendo):
                 // acusá sus comandos largos en cuanto terminan, así no aparece
                 // una badge stale al cambiar de diente después de verlos vivos.
@@ -769,6 +858,8 @@ impl App for Shell {
             Msg::Agente(am) => {
                 m.agente.fijar_reloj(ahora_ms());
                 m.agente = shuma_module_agente::update(m.agente.clone(), am);
+                // ¿El usuario tocó el micrófono? Arrancá/pará la captura real.
+                atender_mic_intent(&mut m, handle);
                 // Persistí las conversaciones tras cada cambio (writes chicos).
                 if let Some(al) = &m.agente_almacen {
                     for c in m.agente.conversaciones() {

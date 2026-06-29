@@ -85,6 +85,27 @@ pub fn escuchar_con(
     stt: Arc<dyn Transcriptor>,
     opciones: OpcionesEscucha,
 ) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<EventoEscucha>), MicError> {
+    arrancar(Box::pin(async move { stt }), opciones)
+}
+
+/// Como [`escuchar_con`] pero construye el STT desde una [`rimay_voz::VozConfig`]
+/// (el híbrido mock/local/nube). Útil para el chasis: lee la config del SO
+/// (`wawa-config::VozSettings`) y la pasa tal cual. El STT se arma dentro de la
+/// task async (Local/daemon puede tardar en conectar), con caída a mock si el
+/// backend elegido no está disponible.
+pub fn escuchar_cfg(
+    voz: rimay_voz::VozConfig,
+    opciones: OpcionesEscucha,
+) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<EventoEscucha>), MicError> {
+    arrancar(Box::pin(async move { voz.construir_stt_o_mock().await }), opciones)
+}
+
+/// Núcleo compartido: abre el micrófono (sync, para reportar «no hay micro») y
+/// arranca la task que obtiene el STT del `stt_fut` y corre el lazo.
+fn arrancar(
+    stt_fut: std::pin::Pin<Box<dyn std::future::Future<Output = Arc<dyn Transcriptor>> + Send>>,
+    opciones: OpcionesEscucha,
+) -> Result<(GuardiaEscucha, mpsc::UnboundedReceiver<EventoEscucha>), MicError> {
     let parar = Arc::new(AtomicBool::new(false));
     let (tx_audio, mut rx_audio) = mpsc::unbounded_channel::<Vec<i16>>();
     let (tx_abierto, rx_abierto) = std::sync::mpsc::channel::<Result<(), MicError>>();
@@ -134,6 +155,9 @@ pub fn escuchar_con(
     let (tx_ev, rx_ev) = mpsc::unbounded_channel::<EventoEscucha>();
     let OpcionesEscucha { llamado, detector } = opciones;
     let tarea = tokio::spawn(async move {
+        // El STT puede tardar (Local conecta al daemon); se arma acá, ya en la
+        // task, no bloquea la apertura del micrófono.
+        let stt = stt_fut.await;
         let cfg_voz = ConfigVoz { llamado, ..ConfigVoz::default() };
         let mut lazo = Lazo::con_voz(stt, cfg_voz);
         if let Some(det) = detector {
