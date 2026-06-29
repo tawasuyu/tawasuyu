@@ -9,6 +9,7 @@ description = "nakui — backend agnóstico de GUI: compone MemoryStore + EventL
 
 [dependencies]
 nakui-core = { path = "../nakui-core" }
+nakui-sync = { path = "../nakui-sync" }
 nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }

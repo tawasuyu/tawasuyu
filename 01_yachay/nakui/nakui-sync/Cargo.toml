@@ -1,0 +1,18 @@
+[package]
+name = "nakui-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nakui — núcleo de sincronización multi-cliente: escritor autoritativo (dueño único del EventLog + store), protocolo Intent/Commit, y transporte enchufable (LocalTransport in-process hoy, card-net mañana). UI-agnóstico."
+
+[dependencies]
+nakui-core = { path = "../nakui-core" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

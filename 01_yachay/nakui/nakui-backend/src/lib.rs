@@ -1,265 +1,75 @@
-//! Implementación de [`MetaBackend`] para Nakui — compone
-//! `nakui_core::store::MemoryStore`, `event_log::EventLog`, los
-//! `Executor`s por módulo, y la lógica de auto-compaction.
+//! Implementación de [`MetaBackend`] para Nakui.
 //!
-//! Es lo único que sabe de Nakui en el binario nuevo. El widget de
-//! UI no toca ninguno de estos tipos directamente.
+//! Tras el split multi-cliente (fase 1 de "nakui en red"), este crate es un
+//! **cliente co-locado delgado** sobre [`nakui_sync`]: la propiedad del
+//! `EventLog` + store + executors + compaction vive ahora en
+//! [`nakui_sync::Writer`] (el escritor autoritativo, UI-agnóstico). Acá sólo
+//! queda el adaptador que proyecta el contrato `MetaBackend` del widget a
+//! intenciones [`nakui_sync::Intent`] entregadas por un
+//! [`nakui_sync::LocalTransport`].
+//!
+//! "Co-locado" = el escritor vive en el mismo proceso, así que los reads van
+//! directo al store autoritativo (handle compartido) sin tomar el lock del
+//! escritor. Un cliente *remoto* (card-net, fase 2) tendría su propia
+//! proyección puesta al día con [`nakui_sync::apply_commit`]; el contrato
+//! `MetaBackend` no cambia.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use uuid::Uuid;
 
 use nahual_meta_runtime::{MetaBackend, WriteOutcome};
-use nakui_core::delta::{FieldOp, FieldPath};
-use nakui_core::event_log::{
-    execute_and_log_with_recovery, replay_with_snapshot_into, EventLog, LogEntry, Snapshot,
-};
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
+use nakui_sync::{Intent, LocalTransport, Transport, Writer};
 
-/// Path del snapshot sibling del log:
-/// `nakui-ui-state.jsonl` ↔ `nakui-ui-state.snap.json`.
-pub fn snapshot_path_for(log_path: &Path) -> PathBuf {
-    log_path.with_extension("snap.json")
-}
+// Re-export de la superficie que el resto de Nakui (UI, explorer, tests)
+// importa históricamente desde `nakui_backend`. La lógica se mudó a
+// `nakui-sync`; estos nombres siguen resolviendo acá.
+pub use nakui_sync::{maybe_compact_log, snapshot_path_for, OpenStatus};
 
-/// Si el log file tiene >= `threshold` entries, captura un snapshot
-/// del store actual y compacta el log dejando 1 entry como anchor del
-/// cursor. Idempotente abajo del threshold o con < 2 entries.
+/// Backend Nakui: cliente co-locado sobre el escritor autoritativo.
 ///
-/// Ver el doc original (commit del runtime compact) para detalles
-/// sobre el anchor invariant. Re-locado acá porque es detalle del
-/// backend, no del widget.
-pub fn maybe_compact_log(
-    log: &mut EventLog,
-    snap_path: &Path,
-    store: &MemoryStore,
-    threshold: usize,
-) -> Result<Option<String>, String> {
-    if threshold == 0 {
-        return Ok(None);
-    }
-    let entry_count = log
-        .entries()
-        .map_err(|e| format!("read entries: {e}"))?
-        .len();
-    if entry_count < threshold || entry_count < 2 {
-        return Ok(None);
-    }
-    let snap_seq = log.next_seq() - 1;
-    let through = log.next_seq() - 2;
-    let snap = Snapshot::from_memory_store(store, snap_seq);
-    snap.write(snap_path)
-        .map_err(|e| format!("write snapshot {}: {e}", snap_path.display()))?;
-    log.compact_through(through)
-        .map_err(|e| format!("compact_through({through}): {e}"))?;
-    Ok(Some(format!(
-        "auto-compact: snapshot @ seq {snap_seq}, {} entries dropped (1 anchor kept)",
-        entry_count - 1
-    )))
-}
-
-/// Estado inicial del backend tras abrir el log + cargar snapshot
-/// + replay. Devuelto desde [`NakuiBackend::open`] para que el caller
-/// (typicamente `main.rs`) acumule mensajes informativos al banner.
-pub struct OpenStatus {
-    /// Mensaje "log X cargado: next_seq=N (snapshot @ seq K)" o similar.
-    pub init_toast: Option<String>,
-    /// Errores no-fatales acumulados (snapshot corrupto, replay falló,
-    /// log inaccesible). El backend igualmente queda usable
-    /// (eventualmente in-memory only si log_arc es None).
-    pub load_error: Option<String>,
-}
-
-/// Backend Nakui: WAL persistente + MemoryStore + executors por
-/// módulo + auto-compaction.
-///
-/// Implementa [`MetaBackend`] proyectando cada operación al
-/// pipeline de nakui-core (compute → log → apply para morphisms;
-/// log → apply para seed/edit/delete).
+/// Implementa [`MetaBackend`] proyectando cada operación a una
+/// [`Intent`] que entrega vía [`LocalTransport`]. Los reads van al store
+/// autoritativo compartido (handle del escritor).
 pub struct NakuiBackend {
-    /// Store compartido (Arc para que el render pueda hacer reads
-    /// sin bloquear writes; el lock interno serializa).
+    /// Transporte al escritor autoritativo (in-process).
+    transport: LocalTransport,
+    /// Handle al store autoritativo, para reads sin tocar el lock del
+    /// escritor. Es el MISMO store que el escritor muta en cada commit,
+    /// así que un read-after-write (propio o de otro cliente co-locado)
+    /// es consistente sin re-aplicar el delta acá.
     store: Arc<Mutex<MemoryStore>>,
-    /// Log persistente. `None` si abrir falló — el backend degrada
-    /// a in-memory only (writes no se persisten; reads siguen).
-    event_log: Option<Arc<Mutex<EventLog>>>,
-    /// Executors indexados por `module.id`. Los módulos sin
-    /// `nakui_module_dir` no aparecen acá; sus llamadas a
-    /// `morphism()` rebotan con error claro.
-    executors: BTreeMap<String, Arc<Executor>>,
-    /// Path del snapshot (cacheado del init).
-    snap_path: PathBuf,
-    /// Threshold de auto-compaction. `0` = desactivado.
-    snapshot_threshold: usize,
-    /// Contador de writes desde el último compact. Se resetea al
-    /// disparar compact.
-    writes_since_compact: u64,
 }
 
 impl NakuiBackend {
-    /// Abre/crea el log en `log_path`, intenta cargar el snapshot
-    /// sibling, hace replay al store. Si el log no abre, degrada a
-    /// in-memory only. Ningún error es fatal — los mensajes se
-    /// devuelven en `OpenStatus` para que el caller los acumule.
-    ///
-    /// `executors` se pasan ya cargados (la lógica de qué módulos
-    /// declaran `nakui_module_dir` es responsabilidad del caller).
+    /// Abre/crea el log en `log_path`, hace replay, y monta el escritor
+    /// autoritativo detrás de un [`LocalTransport`]. Firma y semántica
+    /// idénticas a la versión pre-split — el caller (`main.rs`) no cambia.
     pub fn open(
-        log_path: PathBuf,
+        log_path: std::path::PathBuf,
         snapshot_threshold: usize,
         executors: BTreeMap<String, Arc<Executor>>,
     ) -> (Self, OpenStatus) {
-        let snap_path = snapshot_path_for(&log_path);
-        let mut store = MemoryStore::new();
-        let mut init_toast: Option<String> = None;
-        let mut load_error: Option<String> = None;
-
-        // Cargar snapshot (si existe).
-        let snapshot: Option<Snapshot> = match Snapshot::load(&snap_path) {
-            Ok(s) => s,
-            Err(e) => {
-                load_error = Some(format!(
-                    "snapshot {}: {e} — full replay",
-                    snap_path.display()
-                ));
-                None
-            }
-        };
-
-        let event_log = match EventLog::open(&log_path) {
-            Ok(mut log) => {
-                match replay_with_snapshot_into(&log, snapshot.as_ref(), &mut store) {
-                    Ok(()) => {
-                        let n = log.next_seq();
-                        let from_snap = snapshot
-                            .as_ref()
-                            .map(|s| format!(" (snapshot @ seq {})", s.seq))
-                            .unwrap_or_default();
-                        if n > 0 {
-                            init_toast = Some(format!(
-                                "log {} cargado: next_seq={n}{from_snap}",
-                                log_path.display()
-                            ));
-                        } else {
-                            init_toast = Some(format!("log nuevo en {}", log_path.display()));
-                        }
-
-                        // Auto-compact si pasamos el threshold.
-                        match maybe_compact_log(&mut log, &snap_path, &store, snapshot_threshold) {
-                            Ok(Some(msg)) => {
-                                let prev = init_toast.unwrap_or_default();
-                                init_toast = Some(format!("{prev}; {msg}"));
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                let msg = format!("auto-compact: {e}");
-                                load_error = Some(match load_error {
-                                    Some(p) => format!("{p}; {msg}"),
-                                    None => msg,
-                                });
-                            }
-                        }
-                        Some(Arc::new(Mutex::new(log)))
-                    }
-                    Err(e) => {
-                        let msg = format!(
-                            "replay del log {} falló: {e} — running in-memory",
-                            log_path.display()
-                        );
-                        load_error = Some(match load_error {
-                            Some(p) => format!("{p}; {msg}"),
-                            None => msg,
-                        });
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                let msg = format!(
-                    "abrir log {}: {e} — running in-memory only",
-                    log_path.display()
-                );
-                load_error = Some(match load_error {
-                    Some(p) => format!("{p}; {msg}"),
-                    None => msg,
-                });
-                None
-            }
-        };
-
-        let backend = NakuiBackend {
-            store: Arc::new(Mutex::new(store)),
-            event_log,
-            executors,
-            snap_path,
-            snapshot_threshold,
-            writes_since_compact: 0,
-        };
-        (
-            backend,
-            OpenStatus {
-                init_toast,
-                load_error,
-            },
-        )
+        let (writer, status) = Writer::open(log_path, snapshot_threshold, executors);
+        let store = writer.store_handle();
+        let transport = LocalTransport::new(writer);
+        (NakuiBackend { transport, store }, status)
     }
 
-    /// Increment + check del threshold; si cruza, captura snapshot
-    /// + compacta. Devuelve el mensaje de status para concatenar al
-    /// `WriteOutcome.post_status`.
-    fn tick_compact(&mut self) -> Option<String> {
-        if self.snapshot_threshold == 0 {
-            return None;
-        }
-        self.writes_since_compact += 1;
-        if self.writes_since_compact < self.snapshot_threshold as u64 {
-            return None;
-        }
-        let log_arc = self.event_log.as_ref()?.clone();
-        let mut log = match log_arc.lock() {
-            Ok(l) => l,
-            Err(_) => return Some("auto-compact skip: log mutex envenenado".into()),
-        };
-        let store = match self.store.lock() {
-            Ok(s) => s,
-            Err(_) => return Some("auto-compact skip: store mutex envenenado".into()),
-        };
-        match maybe_compact_log(&mut log, &self.snap_path, &store, self.snapshot_threshold) {
-            Ok(Some(msg)) => {
-                self.writes_since_compact = 0;
-                Some(msg)
-            }
-            Ok(None) => {
-                self.writes_since_compact = 0;
-                None
-            }
-            Err(e) => Some(format!("auto-compact: {e}")),
-        }
-    }
-
-    /// Helper: append una entry al log si está disponible. Errors si
-    /// el lock falla o el append falla.
-    fn append_log(&self, entry: LogEntry) -> Result<(), String> {
-        let Some(log_arc) = self.event_log.as_ref() else {
-            return Ok(()); // in-memory mode, no log.
-        };
-        let mut log = log_arc
-            .lock()
-            .map_err(|_| "log mutex envenenado".to_string())?;
-        log.append(entry).map_err(|e| format!("append al log: {e}"))
-    }
-
-    /// Deriva el grafo de morfismos del módulo `module_id` a partir de
-    /// su `Executor`: cada morfismo es un nodo (con los tokens que lee y
-    /// escribe), y cada par escritura→lectura del mismo token es una
-    /// arista de flujo de datos. `None` si el módulo no tiene executor
-    /// (no declara `nakui_module_dir` o falló la carga).
+    /// Deriva el grafo de morfismos del módulo `module_id` a partir de su
+    /// `Executor` (vía el escritor): cada morfismo es un nodo (con los
+    /// tokens que lee y escribe), cada par escritura→lectura del mismo
+    /// token una arista. `None` si el módulo no tiene executor.
     pub fn morphism_graph(&self, module_id: &str) -> Option<MorphismGraphData> {
-        let exec = self.executors.get(module_id)?;
+        let exec = {
+            let w = self.transport.writer();
+            let guard = w.lock().ok()?;
+            guard.executor(module_id)?
+        };
         let g = &exec.graph;
         let order = g.topological_order();
         let nodes: Vec<MorphismNode> = order
@@ -288,6 +98,15 @@ impl NakuiBackend {
         }
         Some(MorphismGraphData { nodes, edges })
     }
+
+    /// Map de un [`nakui_sync::Commit`] al `WriteOutcome` que espera la UI.
+    fn outcome(commit: nakui_sync::Commit) -> WriteOutcome {
+        WriteOutcome {
+            id: commit.primary_id,
+            changed: commit.changed,
+            post_status: commit.post_status,
+        }
+    }
 }
 
 /// Un nodo del grafo de morfismos: el morfismo y los tokens que lee
@@ -299,8 +118,8 @@ pub struct MorphismNode {
     pub writes: Vec<String>,
 }
 
-/// Una arista de flujo de datos: el morfismo `from` escribe `token`,
-/// que el morfismo `to` lee — por eso `to` está aguas abajo de `from`.
+/// Una arista de flujo de datos: el morfismo `from` escribe `token`, que
+/// el morfismo `to` lee — por eso `to` está aguas abajo de `from`.
 #[derive(Debug, Clone)]
 pub struct DataFlowEdge {
     pub from: String,
@@ -308,8 +127,7 @@ pub struct DataFlowEdge {
     pub token: String,
 }
 
-/// El grafo de morfismos de un módulo: nodos (morfismos con sus tokens)
-/// + aristas de flujo de datos.
+/// El grafo de morfismos de un módulo: nodos + aristas de flujo de datos.
 #[derive(Debug, Clone)]
 pub struct MorphismGraphData {
     pub nodes: Vec<MorphismNode>,
@@ -343,42 +161,11 @@ impl MetaBackend for NakuiBackend {
         entity: &str,
         data: serde_json::Map<String, Value>,
     ) -> Result<WriteOutcome, String> {
-        let id = Uuid::new_v4();
-        // El `id` de la entity = la clave del store. Inyectarlo en el
-        // record hace que `data.id` y la clave coincidan — los schemas
-        // Nickel suelen declarar `id | String` y los morfismos lo leen.
-        let mut data = data;
-        data.insert("id".to_string(), Value::String(id.to_string()));
-        let value = Value::Object(data);
-        // WAL: log primero, store después.
-        if self.event_log.is_some() {
-            let seq = {
-                let log_arc = self.event_log.as_ref().expect("checked above").clone();
-                let log = log_arc
-                    .lock()
-                    .map_err(|_| "log mutex envenenado".to_string())?;
-                log.next_seq()
-            };
-            self.append_log(LogEntry::Seed {
-                seq,
-                entity: entity.to_string(),
-                id,
-                data: value.clone(),
-                schema_hash: None,
-            })?;
-        }
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "store mutex envenenado".to_string())?;
-        store.seed(entity, id, value);
-        drop(store);
-        let post_status = self.tick_compact();
-        Ok(WriteOutcome {
-            id: Some(id),
-            changed: 1,
-            post_status,
-        })
+        let commit = self.transport.submit(Intent::Seed {
+            entity: entity.to_string(),
+            data,
+        })?;
+        Ok(Self::outcome(commit))
     }
 
     fn update(
@@ -388,115 +175,21 @@ impl MetaBackend for NakuiBackend {
         set: serde_json::Map<String, Value>,
         clear: Vec<String>,
     ) -> Result<WriteOutcome, String> {
-        if set.is_empty() && clear.is_empty() {
-            return Ok(WriteOutcome::no_change(id));
-        }
-        // Construir ops: Set primero, después Clear (la sem es
-        // independiente del orden, pero estable mejor para diff).
-        let mut ops: Vec<FieldOp> = set
-            .iter()
-            .map(|(field, value)| FieldOp::Set {
-                path: FieldPath {
-                    entity: entity.to_string(),
-                    id,
-                    field: field.clone(),
-                },
-                value: value.clone(),
-            })
-            .collect();
-        for field in &clear {
-            ops.push(FieldOp::Clear {
-                path: FieldPath {
-                    entity: entity.to_string(),
-                    id,
-                    field: field.clone(),
-                },
-            });
-        }
-        let changed = set.len() + clear.len();
-
-        // Log: Morphism { ui.edit_record, ops, params: {entity, id, fields, cleared} }.
-        if self.event_log.is_some() {
-            let seq = {
-                let log_arc = self.event_log.as_ref().expect("checked").clone();
-                let log = log_arc
-                    .lock()
-                    .map_err(|_| "log mutex envenenado".to_string())?;
-                log.next_seq()
-            };
-            let mut params = serde_json::Map::new();
-            params.insert("entity".into(), json!(entity));
-            params.insert("id".into(), json!(id.to_string()));
-            if !set.is_empty() {
-                params.insert("fields".into(), Value::Object(set.clone()));
-            }
-            if !clear.is_empty() {
-                params.insert(
-                    "cleared".into(),
-                    Value::Array(clear.iter().map(|s| json!(s)).collect()),
-                );
-            }
-            self.append_log(LogEntry::Morphism {
-                seq,
-                morphism: "ui.edit_record".into(),
-                inputs: Default::default(),
-                params: Value::Object(params),
-                ops: ops.clone(),
-                schema_hash: None,
-            })?;
-        }
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "store mutex envenenado".to_string())?;
-        store
-            .apply(&ops)
-            .map_err(|e| format!("apply edit ops: {e}"))?;
-        drop(store);
-        let post_status = self.tick_compact();
-        Ok(WriteOutcome {
-            id: Some(id),
-            changed,
-            post_status,
-        })
+        let commit = self.transport.submit(Intent::Update {
+            entity: entity.to_string(),
+            id,
+            set,
+            clear,
+        })?;
+        Ok(Self::outcome(commit))
     }
 
     fn delete(&mut self, entity: &str, id: Uuid) -> Result<WriteOutcome, String> {
-        let ops = vec![FieldOp::Delete {
+        let commit = self.transport.submit(Intent::Delete {
             entity: entity.to_string(),
             id,
-        }];
-        if self.event_log.is_some() {
-            let seq = {
-                let log_arc = self.event_log.as_ref().expect("checked").clone();
-                let log = log_arc
-                    .lock()
-                    .map_err(|_| "log mutex envenenado".to_string())?;
-                log.next_seq()
-            };
-            self.append_log(LogEntry::Morphism {
-                seq,
-                morphism: "ui.delete_record".into(),
-                inputs: Default::default(),
-                params: json!({ "entity": entity, "id": id.to_string() }),
-                ops: ops.clone(),
-                schema_hash: None,
-            })?;
-        }
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "store mutex envenenado".to_string())?;
-        store
-            .apply(&ops)
-            .map_err(|e| format!("apply Delete: {e}"))?;
-        drop(store);
-        let post_status = self.tick_compact();
-        Ok(WriteOutcome {
-            id: Some(id),
-            changed: 1,
-            post_status,
-        })
+        })?;
+        Ok(Self::outcome(commit))
     }
 
     fn morphism_n(
@@ -506,52 +199,13 @@ impl MetaBackend for NakuiBackend {
         inputs: Vec<(String, Uuid)>,
         params: Value,
     ) -> Result<WriteOutcome, String> {
-        let executor = self
-            .executors
-            .get(module_id)
-            .ok_or_else(|| {
-                format!(
-                    "módulo '{module_id}' no tiene executor nakui (falta nakui_module_dir o falló la carga)"
-                )
-            })?
-            .clone();
-        let log_arc = self
-            .event_log
-            .as_ref()
-            .ok_or_else(|| "morphism requiere event log activo".to_string())?
-            .clone();
-
-        let inputs_owned: Vec<(String, Uuid)> = inputs;
-        let inputs_ref: Vec<(&str, Uuid)> = inputs_owned
-            .iter()
-            .map(|(r, id)| (r.as_str(), *id))
-            .collect();
-
-        let mut log = log_arc
-            .lock()
-            .map_err(|_| "log mutex envenenado".to_string())?;
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "store mutex envenenado".to_string())?;
-
-        let ops = execute_and_log_with_recovery(
-            &executor,
-            &mut *store,
-            &mut *log,
-            name,
-            &inputs_ref,
+        let commit = self.transport.submit(Intent::Morphism {
+            module_id: module_id.to_string(),
+            name: name.to_string(),
+            inputs,
             params,
-        )
-        .map_err(|e| format!("{e}"))?;
-        drop(store);
-        drop(log);
-        let post_status = self.tick_compact();
-        Ok(WriteOutcome {
-            id: None,
-            changed: ops.len(),
-            post_status,
-        })
+        })?;
+        Ok(Self::outcome(commit))
     }
 }
 
@@ -560,7 +214,8 @@ mod tests {
     //! Tests del impl `NakuiBackend` contra el contrato del trait.
     //! Exercises seed/load/list/update/delete sin GPUI ni morphism.
     //! El path de morphism está cubierto por
-    //! `morphism_pipeline_executes_real_sales_vender` en main.rs.
+    //! `morphism_pipeline_executes_real_sales_vender` en main.rs y por los
+    //! tests multi-cliente en `nakui-sync`.
 
     use super::*;
     use serde_json::json;
@@ -652,12 +307,9 @@ mod tests {
 
     #[test]
     fn morphism_graph_derives_nodes_and_data_flow_edges() {
-        // Carga el módulo demo `tesoro` y verifica que el grafo de
-        // morfismos sale del manifest: 5 nodos y las aristas de flujo
-        // de datos (escritura→lectura del mismo token canónico).
-        // El módulo de demo `tesoro` se quedó en `nakui-ui-llimphi/examples/`
-        // tras el refactor del backend (commit 7a23989a). Cruzamos por el
-        // workspace via `../nakui-ui-llimphi/...` desde el manifest dir.
+        // Carga el módulo demo `tesoro` y verifica que el grafo de morfismos
+        // sale del manifest: 5 nodos y las aristas de flujo de datos. El
+        // módulo demo vive en `nakui-ui-llimphi/examples/` tras el refactor.
         let module_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../nakui-ui-llimphi/examples/nakui-modules/tesoro/nakui");
         let exec = Executor::load_module(&module_dir).expect("tesoro carga");
@@ -669,20 +321,11 @@ mod tests {
         let g = b.morphism_graph("tesoro").expect("hay grafo");
         assert_eq!(g.nodes.len(), 5, "5 morfismos");
 
-        let edge = |from: &str, to: &str| {
-            g.edges
-                .iter()
-                .any(|e| e.from == from && e.to == to)
-        };
-        // registrar_movimiento escribe Movimiento → aplicar_movimiento lo lee.
+        let edge = |from: &str, to: &str| g.edges.iter().any(|e| e.from == from && e.to == to);
         assert!(edge("registrar_movimiento", "aplicar_movimiento"));
-        // aplicar_movimiento escribe Caja.saldo → asentar_libro y cerrar lo leen.
         assert!(edge("aplicar_movimiento", "asentar_libro"));
         assert!(edge("aplicar_movimiento", "cerrar_periodo"));
-        // asentar_libro escribe Asiento → cerrar_periodo lo lee.
         assert!(edge("asentar_libro", "cerrar_periodo"));
-        // abrir_caja escribe la entity Caja (Create), nadie lee "Caja" suelto:
-        // queda como nodo fuente sin aristas salientes de ese token.
         assert!(
             !g.edges.iter().any(|e| e.from == "abrir_caja"),
             "abrir_caja no alimenta a nadie por flujo de datos"
@@ -700,9 +343,6 @@ mod tests {
         for _ in 0..3 {
             let _ = b.seed("X", map_of(&[("k", json!(1))])).unwrap();
         }
-        // El último seed debería traer un post_status del compact.
-        // (En la 3ra llamada el contador llega a 3 y dispara.)
-        // Verificamos que el snapshot file exists.
         assert!(snap_path.exists(), "snap debería haberse escrito");
     }
 }
