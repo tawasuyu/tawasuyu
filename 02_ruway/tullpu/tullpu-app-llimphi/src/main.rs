@@ -1018,6 +1018,69 @@ impl App for Tullpu {
                     model.estado = "texto listo".into();
                 }
             }
+            Msg::SetAlt(v) => {
+                model.alt_held = v;
+            }
+            Msg::IniciarClon { lx, ly, rw, rh } => {
+                let punto = local_a_imagen(
+                    lx, ly, rw, rh,
+                    model.lienzo.width, model.lienzo.height,
+                    model.factor_zoom, model.pan_x, model.pan_y,
+                );
+                if let Some((ix, iy)) = punto {
+                    let (ix, iy) = (ix.floor() as i32, iy.floor() as i32);
+                    if model.alt_held {
+                        // Alt+click fija el origen del clon.
+                        model.clon_ancla = Some((ix, iy));
+                        model.clon_offset = None;
+                        model.estado = "clon · origen fijado".into();
+                    } else if let Some((ax, ay)) = model.clon_ancla {
+                        // Arranca un trazo: offset = origen − inicio.
+                        let off = (ax - ix, ay - iy);
+                        model.clon_offset = Some(off);
+                        model.pincel_drag = Some(PincelDrag {
+                            cur_lx: lx, cur_ly: ly, rw, rh, last_ix: ix, last_iy: iy,
+                        });
+                        let radio = model.radio_pincel;
+                        let dureza = model.dureza_pincel;
+                        let etiqueta = model.seleccionada.map(|i| (i, "clon"));
+                        if clonar_punto_en_capa(&mut model, ix, iy, off.0, off.1, radio, dureza) {
+                            pushear_snapshot(&mut model, etiqueta);
+                        }
+                    } else {
+                        model.estado = "clon · Alt+click para fijar el origen".into();
+                    }
+                }
+            }
+            Msg::ContinuarClon { dx, dy } => {
+                if let (Some(pd), Some(off)) = (model.pincel_drag, model.clon_offset) {
+                    let mut pd = pd;
+                    pd.cur_lx += dx;
+                    pd.cur_ly += dy;
+                    if let Some((ix, iy)) = local_a_imagen(
+                        pd.cur_lx, pd.cur_ly, pd.rw, pd.rh,
+                        model.lienzo.width, model.lienzo.height,
+                        model.factor_zoom, model.pan_x, model.pan_y,
+                    ) {
+                        let (nx, ny) = (ix.floor() as i32, iy.floor() as i32);
+                        let radio = model.radio_pincel;
+                        let dureza = model.dureza_pincel;
+                        let etiqueta = model.seleccionada.map(|i| (i, "clon"));
+                        if clonar_segmento_en_capa(
+                            &mut model, pd.last_ix, pd.last_iy, nx, ny, off.0, off.1, radio, dureza,
+                        ) {
+                            pushear_snapshot(&mut model, etiqueta);
+                        }
+                        pd.last_ix = nx;
+                        pd.last_iy = ny;
+                    }
+                    model.pincel_drag = Some(pd);
+                }
+            }
+            Msg::FinalizarClon => {
+                model.pincel_drag = None;
+                model.clon_offset = None;
+            }
             Msg::IniciarLazo { lx, ly, rw, rh } => {
                 let mut puntos = Vec::new();
                 if let Some((ix, iy)) = local_a_imagen(
@@ -1393,6 +1456,10 @@ impl App for Tullpu {
         // llegan como NamedKey::Shift.
         if matches!(event.key, Key::Named(NamedKey::Shift)) {
             return Some(Msg::SetShift(event.state == KeyState::Pressed));
+        }
+        // Ídem Alt: el tampón de clonado lo usa para fijar el origen.
+        if matches!(event.key, Key::Named(NamedKey::Alt)) {
+            return Some(Msg::SetAlt(event.state == KeyState::Pressed));
         }
         // Ctrl+P abre el fuzzy picker (mismo atajo que nada y VS Code).
         if picker::open_shortcut(event) {

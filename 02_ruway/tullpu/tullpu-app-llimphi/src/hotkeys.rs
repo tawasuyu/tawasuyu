@@ -111,6 +111,10 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("t") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Texto));
         }
+        // `c` = tampón de clonado.
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("c") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Clonar));
+        }
         // `p` = pincel (paint a mano alzada).
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("p") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Pincel));

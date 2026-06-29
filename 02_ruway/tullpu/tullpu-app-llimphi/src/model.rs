@@ -114,6 +114,16 @@ pub(crate) struct Model {
     /// modifiers). Habilita el trazo en línea recta: Shift+click pinta
     /// desde [`Model::ultimo_pincel`] hasta el punto nuevo.
     pub(crate) shift_held: bool,
+    /// Estado vivo de la tecla Alt (idéntico patrón que `shift_held`). El
+    /// tampón de clonado lo usa: Alt+click fija el origen del clon.
+    pub(crate) alt_held: bool,
+    /// Origen del clon (coords-imagen) fijado con Alt+click. `None` hasta
+    /// fijarlo. Persiste entre trazos hasta re-fijarlo o cambiar de herramienta.
+    pub(crate) clon_ancla: Option<(i32, i32)>,
+    /// Offset `origen − inicio_de_trazo` bloqueado al empezar un trazo de clon;
+    /// cada estampa copia del píxel destino + este offset. `None` fuera de un
+    /// trazo de clon.
+    pub(crate) clon_offset: Option<(i32, i32)>,
     /// Último punto pintado por el pincel en coords-imagen, persistente
     /// **entre trazos** (a diferencia de `pincel_drag.last_i*`, que vive
     /// sólo durante un drag). Ancla del trazo recto con Shift. `None`
@@ -233,6 +243,9 @@ pub(crate) enum Herramienta {
     /// Click crea una capa de texto en esa posición y entra en edición; lo que
     /// se tipea se rasteriza en vivo a la capa.
     Texto,
+    /// Tampón de clonado: Alt+click fija el origen; luego el drag copia píxeles
+    /// del origen (con el offset del primer punto) sobre la capa raster.
+    Clonar,
 }
 
 impl Herramienta {
@@ -248,6 +261,7 @@ impl Herramienta {
             Herramienta::Varita => "varita",
             Herramienta::Lazo => "lazo",
             Herramienta::Texto => "texto",
+            Herramienta::Clonar => "clonar",
         }
     }
 
@@ -644,6 +658,15 @@ pub(crate) enum Msg {
     TextoTamano(f32),
     /// Cierra la edición de texto (Enter/Escape/click afuera).
     TerminarTexto,
+    /// Press con la herramienta Clonar: Alt+press fija el origen; si ya hay
+    /// origen, arranca un trazo de clonado en `(lx, ly)`.
+    IniciarClon { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Move del trazo de clonado: clona el segmento desde el último punto.
+    ContinuarClon { dx: f32, dy: f32 },
+    /// End del trazo de clonado.
+    FinalizarClon,
+    /// Sincroniza el estado vivo de la tecla Alt (emitido por `on_key`).
+    SetAlt(bool),
     /// Press con la herramienta Lazo: arranca la polilínea en `(lx, ly)`.
     IniciarLazo { lx: f32, ly: f32, rw: f32, rh: f32 },
     /// Move del lazo: acumula `(dx, dy)` y agrega el vértice nuevo.

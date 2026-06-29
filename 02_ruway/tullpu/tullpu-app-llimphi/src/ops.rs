@@ -88,6 +88,7 @@ pub(crate) use tullpu_paint::{
     blit_alpha_sobre,
     buffer_relleno,
     componer_clip_en_canvas,
+    cobertura_pincel,
     estampar_disco,
     estampar_disco_mascara,
     extraer_rect_a_buffer,
@@ -800,6 +801,117 @@ pub(crate) fn rellenar_flood_en_capa(
 
 
 
+
+/// Estampa un disco de **clonado** en `(cx, cy)`: cada píxel del disco copia el
+/// píxel de `src` desplazado por `(offx, offy)` (el origen del clon), compuesto
+/// src-over sobre `dst` con la cobertura suave del pincel. `src` es una copia
+/// del buffer previa a la estampa (para no realimentarse dentro del disco).
+/// Respeta `bounds` (selección): no escribe fuera del rect.
+#[allow(clippy::too_many_arguments)]
+fn estampar_clon(
+    dst: &mut [u8],
+    src: &[u8],
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    offx: i32,
+    offy: i32,
+    radio: i32,
+    dureza: f32,
+    bounds: Option<(u32, u32, u32, u32)>,
+) {
+    let w_i = w as i32;
+    let h_i = h as i32;
+    let (bx0, by0, bx1, by1) = bounds.unwrap_or((0, 0, w, h));
+    let r = radio.max(0);
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let px = cx + dx;
+            let py = cy + dy;
+            if px < 0 || px >= w_i || py < 0 || py >= h_i {
+                continue;
+            }
+            if (px as u32) < bx0 || (px as u32) >= bx1 || (py as u32) < by0 || (py as u32) >= by1 {
+                continue;
+            }
+            let dist = ((dx * dx + dy * dy) as f32).sqrt();
+            let cov = cobertura_pincel(dist, r as f32, dureza);
+            if cov <= 0.0 {
+                continue;
+            }
+            // Píxel fuente (origen del clon).
+            let sx = px + offx;
+            let sy = py + offy;
+            if sx < 0 || sx >= w_i || sy < 0 || sy >= h_i {
+                continue;
+            }
+            let si = ((sy * w_i + sx) as usize) * 4;
+            let di = ((py * w_i + px) as usize) * 4;
+            let sa = (src[si + 3] as f32 / 255.0) * cov;
+            if sa <= 0.0 {
+                continue;
+            }
+            let da = dst[di + 3] as f32 / 255.0;
+            let inv = 1.0 - sa;
+            let out_a = sa + da * inv;
+            if out_a > 0.0 {
+                for k in 0..3 {
+                    let sc = src[si + k] as f32;
+                    let dc = dst[di + k] as f32;
+                    dst[di + k] = ((sc * sa + dc * da * inv) / out_a).round().clamp(0.0, 255.0) as u8;
+                }
+                dst[di + 3] = (out_a * 255.0).round() as u8;
+            }
+        }
+    }
+}
+
+/// Clona un punto: estampa el disco de clonado en `(cx, cy)` muestreando desde
+/// el origen desplazado por `(offx, offy)`, sobre la capa raster seleccionada.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clonar_punto_en_capa(
+    model: &mut Model,
+    cx: i32,
+    cy: i32,
+    offx: i32,
+    offy: i32,
+    radio: i32,
+    dureza: f32,
+) -> bool {
+    pincel_aplicar(model, |buf, w, h, _color, bounds| {
+        let src = buf.clone();
+        estampar_clon(buf, &src, w, h, cx, cy, offx, offy, radio, dureza, bounds);
+    })
+}
+
+/// Clona un segmento `(x0,y0)→(x1,y1)`: estampa discos de clonado a lo largo
+/// de la línea (paso ~1 px) para no dejar huecos en un drag rápido.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clonar_segmento_en_capa(
+    model: &mut Model,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    offx: i32,
+    offy: i32,
+    radio: i32,
+    dureza: f32,
+) -> bool {
+    pincel_aplicar(model, |buf, w, h, _color, bounds| {
+        let src = buf.clone();
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let pasos = dx.abs().max(dy.abs()).max(1);
+        for i in 0..=pasos {
+            let t = i as f32 / pasos as f32;
+            let cx = (x0 as f32 + t * dx as f32).round() as i32;
+            let cy = (y0 as f32 + t * dy as f32).round() as i32;
+            estampar_clon(buf, &src, w, h, cx, cy, offx, offy, radio, dureza, bounds);
+        }
+    })
+}
 
 /// Cableado común de las ops del pincel: valida capa raster seleccionada,
 /// resuelve color activo + bounds de selección, clona el buffer, aplica

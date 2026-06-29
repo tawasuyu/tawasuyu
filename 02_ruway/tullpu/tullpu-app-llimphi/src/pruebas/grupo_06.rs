@@ -686,3 +686,29 @@
         assert_ne!(antes, despues, "re-rasterizar cambia el buffer");
         assert_eq!(model.lienzo.capa(id).unwrap().params_texto().unwrap().texto, "Hola mundo");
     }
+
+    #[test]
+    fn clonar_copia_pixeles_del_origen_al_destino() {
+        // Lienzo 8×8, capa con un punto rojo opaco en (1,1); el resto vacío.
+        let mut model = modelo_minimo();
+        let (w, h) = (8u32, 8u32);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let i = ((1 * w + 1) * 4) as usize;
+        buf[i..i + 4].copy_from_slice(&[255, 0, 0, 255]);
+        let hash = model.almacen.insertar(buf);
+        let mut l = Lienzo::nuevo(w, h);
+        l.apilar(Capa::raster("c", hash));
+        model.lienzo = l;
+        let id = model.lienzo.capas[0].id;
+        model.seleccionada = Some(id);
+        // Origen = (1,1); clonar en (5,5) con offset = origen - destino = (-4,-4).
+        // radio 0 (1 px), dureza 1.0 (borde duro) → copia exacta del píxel.
+        assert!(clonar_punto_en_capa(&mut model, 5, 5, -4, -4, 0, 1.0));
+        let nuevo = model.lienzo.capa(id).unwrap().contenido;
+        let out = model.almacen.obtener(nuevo).unwrap();
+        let di = ((5 * w + 5) * 4) as usize;
+        assert_eq!(&out[di..di + 4], &[255, 0, 0, 255], "clonó el rojo en (5,5)");
+        // El origen sigue intacto.
+        let oi = ((1 * w + 1) * 4) as usize;
+        assert_eq!(&out[oi..oi + 4], &[255, 0, 0, 255]);
+    }
