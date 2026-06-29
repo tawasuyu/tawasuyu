@@ -137,16 +137,23 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
        redondea colocación y drag de nodos/controles; overlay de grilla. Alinear
        la capa vectorial al centro del lienzo (H/V/ambos). (Pendiente: reglas,
        guías arrastrables, snap a objetos, distribuir.)
-    3. **Texto vectorial** + texto-en-path (hoy el texto es raster aparte).
-       *(alto)*
+    3. **Texto vectorial + texto-en-path (HECHO).**
+       `tullpu_ops::texto_a_vector` (contornos de glifos vía ttf-parser →
+       `ComandoPath`) y `texto_sobre_path` (proyecta cada punto del contorno al
+       camino por distancia de arco + offset perpendicular). App: "convertir a
+       curvas" muta una capa de texto a vectorial; "texto sobre forma de abajo"
+       sigue el path de la capa inferior.
     4. **Booleanos vectoriales reales** (hoy alfa/raster → pierde editabilidad;
-       necesita clipping de paths, p.ej. flatten + `geo` o un clipper). *(alto)*
-    5. **Efectos vectoriales** — blend/contour/envelope/PowerClip, sombra. *(muy
-       alto)*
+       necesita clipping de paths). *(alto; valor marginal sobre los booleanos
+       alfa que ya están)*
+    5. **Efectos vectoriales** — blend/contour/envelope/PowerClip. *(muy alto)* —
+       **sombra paralela HECHA** como efecto de capa general
+       (`tullpu_ops::sombra` → capa raster debajo; sirve a cualquier capa).
     6. **CMYK/Pantone/ICC + separaciones/prepress, multipágina, mesh fill.**
        *(otro dominio)*
-    Decisión (2026-06-29): hacer **1 y 2** (tratables y certificables); de **5 en
-    adelante** se vuelve realmente difícil → evaluar caso por caso si vale la pena.
+    Decisión (2026-06-29): hechos **1, 2, 3** + **sombra** (de #5). Quedan **#4**
+    (marginal) y el resto de **#5/#6** (muy alto esfuerzo, retorno decreciente o
+    fuera de scope) — a evaluar si alguna vez vale la pena.
 - **Pendiente:** H IA real ONNX (segment-anything / upscale / restyle).
 
 ## Estado (2026-05-31)
