@@ -23,7 +23,7 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputStat
 
 use llimphi_module_file_picker::PickerMsg;
 use pixel_verbo_core::OpPixel;
-use tullpu_core::{Capa, Frescura, Lienzo, OpLocal, OrigenCapa, TransformacionPixel};
+use tullpu_core::{Capa, ClaseCapa, Frescura, Lienzo, OpLocal, OrigenCapa, TransformacionPixel};
 use tullpu_render::FormatoExport;
 
 use tullpu_ops::lut_curva;
@@ -85,6 +85,7 @@ pub(crate) fn fila_capa(
     thumb: Option<&Image>,
     thumb_mascara: Option<&Image>,
     renombrando_input: Option<&TextInputState>,
+    depth: usize,
 ) -> View<Msg> {
     let btn_pal = ButtonPalette::from_theme(theme);
     let nombre_op = match &capa.origen {
@@ -101,8 +102,24 @@ pub(crate) fn fila_capa(
     // tiene una máscara alfa adjunta (se compone, pero no se ve en el
     // thumb del contenido).
     let marca_mascara = if capa.mascara.is_some() { "🎭 " } else { "" };
+    // Marcador de clase: carpeta-grupo, capa de ajuste, o píxeles. El
+    // ↳ delata una clipping mask (la capa se recorta a la de abajo).
+    let marca_clase = match &capa.clase {
+        ClaseCapa::Grupo => "📁 ",
+        ClaseCapa::Ajuste(_) => "◫ ",
+        ClaseCapa::Pixeles => "",
+    };
+    let marca_clip = if capa.clipping { "↳ " } else { "" };
+    // El sub-rótulo de la clase reemplaza a "raster" para grupos/ajustes.
+    let nombre_op = match &capa.clase {
+        ClaseCapa::Grupo => "grupo".to_string(),
+        ClaseCapa::Ajuste(_) => "ajuste".to_string(),
+        ClaseCapa::Pixeles => nombre_op,
+    };
     let etiqueta = format!(
-        "{}{}  ·  {}  ·  α {:.2}  ·  {}",
+        "{}{}{}{}  ·  {}  ·  α {:.2}  ·  {}",
+        marca_clip,
+        marca_clase,
         marca_mascara,
         capa.nombre,
         nombre_op,
@@ -211,6 +228,19 @@ pub(crate) fn fila_capa(
     // emite estado descriptivo — el botón se pinta igual para todas las
     // capas; no escondemos para mantener el layout estable.
     let merge = mini_btn("⊕", Msg::Combinar(capa.id), &btn_pal);
+    // ↳ = clipping mask: recorta la capa a la alfa de la de abajo. Resalta
+    // cuando está activa para que el estado sea legible de un vistazo.
+    let clip_pal = if capa.clipping {
+        ButtonPalette {
+            bg: theme.bg_panel_alt,
+            bg_hover: theme.bg_button_hover,
+            fg: theme.fg_text,
+            radius: 4.0,
+        }
+    } else {
+        btn_pal.clone()
+    };
+    let clip = mini_btn("↳", Msg::ToggleClipping(capa.id), &clip_pal);
     let elim = mini_btn("✕", Msg::Eliminar(capa.id), &btn_pal);
 
     // Thumbnail a la izquierda (slot fijo aun si el cache aún no lo tiene
@@ -260,12 +290,25 @@ pub(crate) fn fila_capa(
         .image(img.clone())
     });
 
-    let mut hijos_fila: Vec<View<Msg>> = vec![thumb_view];
+    // Indentado por profundidad de grupo: un espaciador fijo a la izquierda
+    // que crece 14 px por nivel de anidado. Es lo que hace legible la
+    // jerarquía de carpetas en la lista plana.
+    let mut hijos_fila: Vec<View<Msg>> = Vec::new();
+    if depth > 0 {
+        hijos_fila.push(View::new(Style {
+            size: Size {
+                width: length(depth as f32 * 14.0),
+                height: length(24.0_f32),
+            },
+            ..Default::default()
+        }));
+    }
+    hijos_fila.push(thumb_view);
     if let Some(tm) = thumb_mascara_view {
         hijos_fila.push(tm);
     }
     hijos_fila.extend([
-        nombre, toggle, opacidad, blend, subir, bajar, dup, merge, elim,
+        nombre, toggle, opacidad, blend, subir, bajar, dup, merge, clip, elim,
     ]);
 
     View::new(Style {
@@ -691,9 +734,25 @@ pub(crate) fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<M
     })
     .text_aligned("capas (top→fondo)".to_string(), 11.0, theme.fg_muted, Alignment::Start);
     hijos.push(titulo);
+    // Mapa id → grupo padre para calcular la profundidad de anidado de cada
+    // capa (cadena de `grupo` hacia la raíz). O(capas) una vez por frame.
+    let padres: std::collections::HashMap<uuid::Uuid, Option<uuid::Uuid>> =
+        model.lienzo.capas.iter().map(|c| (c.id, c.grupo)).collect();
+    let profundidad = |mut g: Option<uuid::Uuid>| -> usize {
+        let mut d = 0;
+        while let Some(id) = g {
+            d += 1;
+            g = padres.get(&id).copied().flatten();
+            if d > 64 {
+                break; // guardia anti-ciclo
+            }
+        }
+        d
+    };
     // Las pintamos top → fondo (al revés que el orden visual interno).
     for capa in model.lienzo.capas.iter().rev() {
         let sel = model.seleccionada == Some(capa.id);
+        let depth = profundidad(capa.grupo);
         let thumb = model.thumbs.get(&capa.contenido);
         let thumb_mascara = capa
             .mascara
@@ -708,7 +767,7 @@ pub(crate) fn panel_capas(theme: &llimphi_theme::Theme, model: &Model) -> View<M
         // no la re-anima — la key no cambia.
         let key = capa.id.as_u128() as u64;
         hijos.push(
-            fila_capa(theme, capa, sel, thumb, thumb_mascara, renombrando)
+            fila_capa(theme, capa, sel, thumb, thumb_mascara, renombrando, depth)
                 .animated_enter(key, motion::NORMAL),
         );
     }
