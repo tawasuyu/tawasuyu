@@ -104,6 +104,28 @@ impl Engine for DaemonEngine {
             _ => Err(mismatch()),
         }
     }
+
+    async fn set_cpu_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        match self
+            .roundtrip(DaemonRequest::SetCpuWeight { cgroup_path, weight })
+            .await?
+        {
+            DaemonResponse::Done => Ok(()),
+            DaemonResponse::Err(e) => Err(e),
+            _ => Err(mismatch()),
+        }
+    }
+
+    async fn freeze(&self, cgroup_path: String, frozen: bool) -> Result<(), EngineError> {
+        match self
+            .roundtrip(DaemonRequest::Freeze { cgroup_path, frozen })
+            .await?
+        {
+            DaemonResponse::Done => Ok(()),
+            DaemonResponse::Err(e) => Err(e),
+            _ => Err(mismatch()),
+        }
+    }
 }
 
 #[async_trait]

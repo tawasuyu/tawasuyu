@@ -455,6 +455,16 @@ impl Engine for LocalEngine {
             restarts,
         })
     }
+
+    async fn set_cpu_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        arje_incarnate::cgroup::set_cpu_weight(&cgroup_path, weight)
+            .map_err(|e| EngineError::Cgroup(e.to_string()))
+    }
+
+    async fn freeze(&self, cgroup_path: String, frozen: bool) -> Result<(), EngineError> {
+        arje_incarnate::cgroup::set_frozen(&cgroup_path, frozen)
+            .map_err(|e| EngineError::Cgroup(e.to_string()))
+    }
 }
 
 #[cfg(test)]

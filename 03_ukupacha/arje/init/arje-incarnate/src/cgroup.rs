@@ -83,6 +83,60 @@ pub fn apply_rlimits_to_cgroup(cgroup_abs: &Path, rlimits: &ResourceLimits) -> V
     applied
 }
 
+/// Path absoluto bajo `/sys/fs/cgroup` de un cgroup declarado (mismo
+/// resolución que `CgroupSpec.path`: relativo → bajo el cgroup actual).
+/// Error si el path declarado es vacío.
+fn cgroup_abs(path: &str) -> Result<PathBuf, IncarnateError> {
+    let rel = resolve_cgroup_path(path);
+    if rel.is_empty() {
+        return Err(IncarnateError::CgroupNotWritable { path: PathBuf::from("(empty)") });
+    }
+    Ok(PathBuf::from(format!("/sys/fs/cgroup{rel}")))
+}
+
+/// Escribe un archivo de control de un cgroup, mapeando los errores típicos
+/// (sin permiso / inexistente) a `CgroupNotWritable` para que el caller
+/// pueda distinguir "cgroup no delegado" de un IO genérico.
+fn write_cgroup_file(file: &Path, content: &str) -> Result<(), IncarnateError> {
+    std::fs::write(file, content).map_err(|e| match e.kind() {
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound => {
+            IncarnateError::CgroupNotWritable { path: file.to_path_buf() }
+        }
+        _ => IncarnateError::Io(e),
+    })
+}
+
+/// Reescribe `cpu.weight` de un cgroup **ya existente** dado su dir absoluto.
+/// Es el reweight en caliente: deprioritizar/priorizar todo un subárbol (el
+/// slice de un contexto `pacha`) sin reencarnar nada. Rango cgroup v2:
+/// 1..=10000 (100 = neutro).
+pub fn set_cpu_weight_at(cgroup_abs: &Path, weight: u32) -> Result<(), IncarnateError> {
+    write_cgroup_file(&cgroup_abs.join("cpu.weight"), &format!("{weight}\n"))
+}
+
+/// Congela (`true`) o descongela (`false`) un cgroup vía el freezer v2
+/// (`cgroup.freeze`), dado su dir absoluto. Es **jerárquico**: gobierna todo
+/// el subárbol → equivale a un SIGSTOP de grupo conservando la RAM.
+pub fn set_frozen_at(cgroup_abs: &Path, frozen: bool) -> Result<(), IncarnateError> {
+    write_cgroup_file(&cgroup_abs.join("cgroup.freeze"), freeze_value(frozen))
+}
+
+/// El valor que `cgroup.freeze` espera: `"1\n"` congela, `"0\n"` descongela.
+pub fn freeze_value(frozen: bool) -> &'static str {
+    if frozen { "1\n" } else { "0\n" }
+}
+
+/// Reweight en caliente por path declarado (`CgroupSpec.path`-style). Resuelve
+/// y delega en [`set_cpu_weight_at`].
+pub fn set_cpu_weight(path: &str, weight: u32) -> Result<(), IncarnateError> {
+    set_cpu_weight_at(&cgroup_abs(path)?, weight)
+}
+
+/// Freeze/unfreeze por path declarado. Resuelve y delega en [`set_frozen_at`].
+pub fn set_frozen(path: &str, frozen: bool) -> Result<(), IncarnateError> {
+    set_frozen_at(&cgroup_abs(path)?, frozen)
+}
+
 /// Mueve `pid` a `cgroup_abs/cgroup.procs`.
 pub fn move_to_cgroup(cgroup_abs: &Path, pid: nix::unistd::Pid) -> Result<(), IncarnateError> {
     let procs = cgroup_abs.join("cgroup.procs");
@@ -112,5 +166,39 @@ mod tests {
     fn relative_path_prefixed() {
         let r = resolve_cgroup_path("shuma/ws-1");
         assert!(r.ends_with("/shuma/ws-1") || r == "/shuma/ws-1");
+    }
+
+    #[test]
+    fn freeze_value_es_1_o_0() {
+        assert_eq!(freeze_value(true), "1\n");
+        assert_eq!(freeze_value(false), "0\n");
+    }
+
+    #[test]
+    fn set_cpu_weight_at_escribe_el_archivo() {
+        let dir = std::env::temp_dir().join(format!("pacha-cg-w-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        set_cpu_weight_at(&dir, 4321).unwrap();
+        let got = std::fs::read_to_string(dir.join("cpu.weight")).unwrap();
+        assert_eq!(got, "4321\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_frozen_at_alterna_freeze() {
+        let dir = std::env::temp_dir().join(format!("pacha-cg-f-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        set_frozen_at(&dir, true).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("cgroup.freeze")).unwrap(), "1\n");
+        set_frozen_at(&dir, false).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("cgroup.freeze")).unwrap(), "0\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_a_path_inexistente_es_cgroup_not_writable() {
+        let bogus = Path::new("/sys/fs/cgroup/__pacha_no_existe__/cpu.weight");
+        let err = write_cgroup_file(bogus, "100\n").unwrap_err();
+        assert!(matches!(err, IncarnateError::CgroupNotWritable { .. }));
     }
 }

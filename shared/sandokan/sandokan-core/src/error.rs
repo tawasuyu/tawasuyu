@@ -36,4 +36,15 @@ pub enum EngineError {
     /// variante para que el caller distinga "no soportado" de "fallé".
     #[error("payload no soportado por este Engine: {kind}")]
     UnsupportedPayload { kind: String },
+
+    /// La operación pedida no la soporta este `Engine` (p. ej. control de
+    /// cgroups en un `RemoteEngine` o uno mock). El caller la distingue de
+    /// un fallo real para degradar con gracia.
+    #[error("operación no soportada por este Engine: {0}")]
+    Unsupported(String),
+
+    /// Falla al manipular cgroups (reweight/freeze): cgroup inexistente o no
+    /// delegado (sin permiso de escritura).
+    #[error("cgroup no manipulable: {0}")]
+    Cgroup(String),
 }

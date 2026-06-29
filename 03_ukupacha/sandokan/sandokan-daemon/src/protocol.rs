@@ -22,6 +22,10 @@ pub enum DaemonRequest {
     /// Encarna una sesión interactiva. El attach NO va por acá: la respuesta
     /// trae el `socket_path` y el front se conecta ahí directamente.
     RunInteractive { intent: Intent, size: PtySize },
+    /// Reweight en caliente de un cgroup ya existente (slice de un contexto).
+    SetCpuWeight { cgroup_path: String, weight: u32 },
+    /// Freeze/unfreeze de un cgroup (freezer v2, jerárquico).
+    Freeze { cgroup_path: String, frozen: bool },
 }
 
 /// Response del daemon al cliente. Una variante por resultado posible.
@@ -39,6 +43,8 @@ pub enum DaemonResponse {
         handle: ExecHandle,
         socket_path: PathBuf,
     },
+    /// Ack genérico de una operación sin payload (reweight/freeze de cgroup).
+    Done,
 }
 
 /// Límite defensivo de tamaño de frame (16 MiB). Un Intent con una Card

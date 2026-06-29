@@ -92,6 +92,18 @@ async fn dispatch<E: InteractiveEngine>(engine: &E, req: DaemonRequest) -> Daemo
             Ok(t) => DaemonResponse::Telemetry(t),
             Err(e) => DaemonResponse::Err(e),
         },
+        DaemonRequest::SetCpuWeight { cgroup_path, weight } => {
+            match engine.set_cpu_weight(cgroup_path, weight).await {
+                Ok(()) => DaemonResponse::Done,
+                Err(e) => DaemonResponse::Err(e),
+            }
+        }
+        DaemonRequest::Freeze { cgroup_path, frozen } => {
+            match engine.freeze(cgroup_path, frozen).await {
+                Ok(()) => DaemonResponse::Done,
+                Err(e) => DaemonResponse::Err(e),
+            }
+        }
     }
 }
 

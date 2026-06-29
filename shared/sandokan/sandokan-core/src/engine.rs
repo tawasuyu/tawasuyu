@@ -36,4 +36,23 @@ pub trait Engine: Send + Sync {
 
     /// Telemetría puntual de una entidad.
     async fn telemetry(&self, card_id: Ulid) -> Result<TelemetryFrame, EngineError>;
+
+    /// Reescribe `cpu.weight` de un cgroup **ya existente** (reweight en
+    /// caliente, sin reencarnar). `cgroup_path` se direcciona igual que
+    /// `CgroupSpec.path` (relativo → bajo el cgroup actual). Pensado para
+    /// deprioritizar/priorizar todo un subárbol — el slice de un contexto
+    /// `pacha` — de una sola escritura (el peso es jerárquico). El default
+    /// rebota `Unsupported` para engines que no tocan cgroups (remoto/mock).
+    async fn set_cpu_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        let _ = (cgroup_path, weight);
+        Err(EngineError::Unsupported("set_cpu_weight".into()))
+    }
+
+    /// Congela (`true`) o descongela (`false`) un cgroup vía el freezer v2
+    /// (`cgroup.freeze`). Jerárquico: gobierna todo el subárbol → SIGSTOP de
+    /// grupo conservando la RAM. Default `Unsupported`.
+    async fn freeze(&self, cgroup_path: String, frozen: bool) -> Result<(), EngineError> {
+        let _ = (cgroup_path, frozen);
+        Err(EngineError::Unsupported("freeze".into()))
+    }
 }
