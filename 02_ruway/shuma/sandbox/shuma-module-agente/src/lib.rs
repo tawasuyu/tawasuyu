@@ -22,7 +22,10 @@
 #![forbid(unsafe_code)]
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, AlignItems, Dimension, FlexDirection, LengthPercentage, Size, Style},
+    prelude::{
+        length, percent, AlignItems, Dimension, FlexDirection, JustifyContent, LengthPercentage,
+        Size, Style,
+    },
     Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
@@ -154,6 +157,31 @@ impl EditorAgente {
     }
 }
 
+/// Estado de la **escucha por voz**, para el indicador del micrófono. Lo fija el
+/// chasis a partir de los `EventoEscucha` de `rimay-voz-host`; el panel sólo lo
+/// pinta (halo del botón + glow del input).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EstadoEscucha {
+    /// Micrófono apagado.
+    #[default]
+    Apagado,
+    /// Encendido y armado, esperando la palabra de llamada.
+    Esperando,
+    /// El VAD detectó voz (alguien habla) — transitorio.
+    Oyendo,
+    /// Despertó con el llamado; listo para dictar.
+    Despierto,
+    /// Dictando: el texto fluye al input.
+    Dictando,
+}
+
+impl EstadoEscucha {
+    /// `true` si el micrófono está encendido (cualquier estado salvo apagado).
+    pub fn activo(self) -> bool {
+        !matches!(self, EstadoEscucha::Apagado)
+    }
+}
+
 /// Estado del panel de chat. Las conversaciones y agentes los **provee el
 /// chasis** desde el [`shuma_agente::Almacen`]; el módulo los edita en memoria y
 /// el chasis persiste tras cada `update`.
@@ -193,6 +221,12 @@ pub struct State {
     /// Renombre en curso: `(id de conversación, input con el título)`. `None` =
     /// no se está renombrando.
     renombrando: Option<(String, TextInputState)>,
+    /// Estado de la escucha por voz (lo fija el chasis con `fijar_escucha`).
+    escucha: EstadoEscucha,
+    /// Intent: el usuario pidió encender (`Some(true)`) o apagar (`Some(false)`)
+    /// el micrófono; el chasis lo toma con [`State::tomar_mic_intent`] y arranca
+    /// o para la captura de `rimay-voz-host`. `None` = nada pendiente.
+    mic_intent: Option<bool>,
 }
 
 impl Default for State {
@@ -222,6 +256,8 @@ impl State {
             borrar_agente_id: None,
             borrar_conv_id: None,
             renombrando: None,
+            escucha: EstadoEscucha::Apagado,
+            mic_intent: None,
         }
     }
 
@@ -234,6 +270,24 @@ impl State {
         if self.agente_sel >= self.agentes.len() {
             self.agente_sel = 0;
         }
+    }
+
+    /// Fija el estado de la escucha por voz (lo llama el chasis al recibir un
+    /// `EventoEscucha` de `rimay-voz-host`). Si la escucha se apagó por su cuenta
+    /// (timeout, error), el indicador vuelve a apagado.
+    pub fn fijar_escucha(&mut self, e: EstadoEscucha) {
+        self.escucha = e;
+    }
+
+    /// Estado actual de la escucha (para el chasis / tests).
+    pub fn escucha(&self) -> EstadoEscucha {
+        self.escucha
+    }
+
+    /// Toma el intent de encender/apagar el micrófono y lo limpia. El chasis lo
+    /// consulta tras cada `update` y arranca o para `rimay-voz-host`.
+    pub fn tomar_mic_intent(&mut self) -> Option<bool> {
+        self.mic_intent.take()
     }
 
     /// Inyecta las conversaciones (más recientes primero). Si la activa ya no
@@ -381,6 +435,12 @@ pub enum Msg {
     BorrarAgente,
     /// Cerrar el editor sin guardar.
     CancelarEditor,
+    /// Click en el micrófono: alterna encender/apagar la escucha por voz.
+    ToggleMic,
+    /// El chasis reporta un cambio de estado de la escucha por voz.
+    EscuchaCambio(EstadoEscucha),
+    /// Texto dictado por voz: se inserta en el input (no envía solo).
+    Dictado(String),
 }
 
 /// Transición pura del estado.
@@ -602,6 +662,32 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::CancelarEditor => {
             s.editor = None;
         }
+        Msg::ToggleMic => {
+            // Alterna encender/apagar; deja el intent para que el chasis arranque
+            // o pare la captura real (rimay-voz-host).
+            if s.escucha.activo() {
+                s.escucha = EstadoEscucha::Apagado;
+                s.mic_intent = Some(false);
+            } else {
+                s.escucha = EstadoEscucha::Esperando;
+                s.mic_intent = Some(true);
+            }
+        }
+        Msg::EscuchaCambio(e) => {
+            s.escucha = e;
+        }
+        Msg::Dictado(t) => {
+            // El dictado se inserta en el input; NO se envía solo (el usuario
+            // revisa y manda con Enter / el botón), salvo que diga el llamado de
+            // envío — eso lo decide quien dispatcha, no acá.
+            if !t.is_empty() {
+                if !s.input.is_empty() && !s.input.text().ends_with(' ') {
+                    s.input.push_str(" ");
+                }
+                s.input.push_str(&t);
+                s.focused = true;
+            }
+        }
     }
     s
 }
@@ -772,6 +858,99 @@ fn sidebar_view<HostMsg: Clone + 'static>(
     .children(hijos)
 }
 
+/// Parámetros de pintura del indicador de voz por estado:
+/// `(anillos, periodo_ms, intensidad)`. El color sale del theme (accent).
+fn params_escucha(e: EstadoEscucha) -> (u32, f64, f32) {
+    match e {
+        EstadoEscucha::Apagado => (0, 1600.0, 0.0),
+        EstadoEscucha::Esperando => (2, 1600.0, 0.45),
+        EstadoEscucha::Oyendo => (3, 1000.0, 0.70),
+        EstadoEscucha::Despierto => (3, 800.0, 0.90),
+        EstadoEscucha::Dictando => (3, 600.0, 1.0),
+    }
+}
+
+/// Botón de micrófono con **halo animado** según el estado de escucha — el
+/// efecto «cava»: anillos que emanan como ondas de sonido, más rápidos e
+/// intensos cuanto más activa la escucha — más el glifo del micrófono teñido por
+/// estado. El click alterna encender/apagar. La animación avanza con `reloj_ms`
+/// (el chasis lo refresca mientras escucha).
+fn boton_mic<HostMsg: Clone + 'static>(
+    escucha: EstadoEscucha,
+    reloj_ms: u64,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Send + Sync + 'static + Clone,
+) -> View<HostMsg> {
+    let accent = theme.accent;
+    let apagado = theme.fg_muted;
+    View::new(Style {
+        size: Size { width: length(34.0), height: length(34.0) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::ToggleMic))
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{
+            Affine, BezPath, Circle, Line, Point, RoundedRect, Stroke,
+        };
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let lado = rect.w.min(rect.h) as f64;
+        let (anillos, periodo, intensidad) = params_escucha(escucha);
+
+        // Halo: anillos que emanan (las «ondas» del efecto cava).
+        let r0 = lado * 0.20;
+        let spread = lado * 0.42;
+        for k in 0..anillos {
+            let fase = (((reloj_ms as f64) / periodo) + (k as f64) / (anillos as f64)).fract();
+            let r = r0 + fase * spread;
+            let a = ((1.0 - fase as f32) * intensidad).clamp(0.0, 1.0);
+            scene.stroke(
+                &Stroke::new(1.6),
+                Affine::IDENTITY,
+                accent.with_alpha(a),
+                None,
+                &Circle::new((cx, cy), r),
+            );
+        }
+
+        // Glifo del micrófono, teñido por estado.
+        let gc = if escucha.activo() { accent } else { apagado };
+        let bw = lado * 0.11;
+        let bh = lado * 0.20;
+        let cap = RoundedRect::new(cx - bw, cy - bh - 2.0, cx + bw, cy + bh - 2.0, bw);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, gc, None, &cap);
+        let aw = bw + 2.5;
+        let ay = cy + bh - 2.0;
+        let mut u = BezPath::new();
+        u.move_to(Point::new(cx - aw, cy - 2.0));
+        u.quad_to(Point::new(cx - aw, ay + 1.5), Point::new(cx, ay + 1.5));
+        u.quad_to(Point::new(cx + aw, ay + 1.5), Point::new(cx + aw, cy - 2.0));
+        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, gc, None, &u);
+        scene.stroke(
+            &Stroke::new(1.4),
+            Affine::IDENTITY,
+            gc,
+            None,
+            &Line::new(Point::new(cx, ay + 1.5), Point::new(cx, ay + 4.5)),
+        );
+        scene.stroke(
+            &Stroke::new(1.4),
+            Affine::IDENTITY,
+            gc,
+            None,
+            &Line::new(Point::new(cx - 3.0, ay + 4.5), Point::new(cx + 3.0, ay + 4.5)),
+        );
+    })
+}
+
 fn panel_view<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
@@ -857,17 +1036,50 @@ fn panel_view<HostMsg: Clone + 'static>(
 
     // Barra de input.
     let tp = TextInputPalette::from_theme(theme);
+    // Glow del input mientras escucha: borde redondeado que respira (varias
+    // pasadas con alpha decreciente para difuminar). Apagado = sin pintura.
+    let escucha = state.escucha;
+    let reloj = state.reloj_ms;
+    let accent = theme.accent;
     let input = View::new(Style {
         flex_grow: 1.0,
         ..Default::default()
     })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, RoundedRect, Stroke};
+        if !escucha.activo() || rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let (_, periodo, intensidad) = params_escucha(escucha);
+        // Respiración 0..1 (seno) sincronizada con el periodo del estado.
+        let t = (reloj as f64) / periodo * std::f64::consts::TAU;
+        let respira = 0.5 + 0.5 * (t.sin() as f32);
+        let base = intensidad * (0.35 + 0.65 * respira);
+        let (x0, y0) = (rect.x as f64 + 1.0, rect.y as f64 + 1.0);
+        let (x1, y1) = ((rect.x + rect.w) as f64 - 1.0, (rect.y + rect.h) as f64 - 1.0);
+        // Tres pasadas hacia afuera con alpha decreciente → halo difuso.
+        for (i, ancho) in [1.4_f64, 2.6, 3.8].into_iter().enumerate() {
+            let d = i as f64 * 1.3;
+            let a = base * (1.0 - i as f32 * 0.32);
+            let rr = RoundedRect::new(x0 - d, y0 - d, x1 + d, y1 + d, 8.0 + d);
+            scene.stroke(
+                &Stroke::new(ancho),
+                Affine::IDENTITY,
+                accent.with_alpha(a.clamp(0.0, 1.0)),
+                None,
+                &rr,
+            );
+        }
+    })
     .children(vec![text_input_view(
         &state.input,
-        "Escribí tu mensaje…  (Enter envía · img:/ruta para adjuntar)",
+        "Escribí tu mensaje…  (Enter envía · img:/ruta para adjuntar · 🎙 dicta)",
         state.focused,
         &tp,
         lift(Msg::FocusInput),
     )]);
+    // Botón de micrófono con el indicador animado de escucha.
+    let mic = boton_mic(state.escucha, state.reloj_ms, theme, lift.clone());
     let bp = ButtonPalette::from_theme(theme);
     let enviar = View::new(Style {
         size: Size { width: length(96.0), height: Dimension::auto() },
@@ -884,7 +1096,7 @@ fn panel_view<HostMsg: Clone + 'static>(
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![input, enviar]);
+    .children(vec![input, mic, enviar]);
 
     let hilo_wrap = View::new(Style {
         flex_grow: 1.0,
@@ -1265,6 +1477,44 @@ mod tests {
         s.set_agentes(vec![Agente::nuevo("Asistente"), Agente::nuevo("Control").con_control()]);
         s.fijar_reloj(1000);
         s
+    }
+
+    #[test]
+    fn toggle_mic_enciende_y_apaga_con_intent() {
+        let mut s = State::new();
+        assert_eq!(s.escucha(), EstadoEscucha::Apagado);
+        // Encender.
+        s = update(s, Msg::ToggleMic);
+        assert_eq!(s.escucha(), EstadoEscucha::Esperando);
+        assert_eq!(s.tomar_mic_intent(), Some(true));
+        assert_eq!(s.tomar_mic_intent(), None); // se consume una sola vez
+        // Apagar (desde cualquier estado activo).
+        s.fijar_escucha(EstadoEscucha::Dictando);
+        s = update(s, Msg::ToggleMic);
+        assert_eq!(s.escucha(), EstadoEscucha::Apagado);
+        assert_eq!(s.tomar_mic_intent(), Some(false));
+    }
+
+    #[test]
+    fn escucha_cambio_fija_el_estado() {
+        let mut s = State::new();
+        s = update(s, Msg::EscuchaCambio(EstadoEscucha::Despierto));
+        assert_eq!(s.escucha(), EstadoEscucha::Despierto);
+        assert!(s.escucha().activo());
+    }
+
+    #[test]
+    fn dictado_inserta_en_el_input_con_espacio() {
+        let mut s = State::new();
+        s = update(s, Msg::Dictado("hola".into()));
+        assert_eq!(s.input.text(), "hola");
+        assert!(s.focused);
+        // Un segundo dictado se separa con un espacio.
+        s = update(s, Msg::Dictado("mundo".into()));
+        assert_eq!(s.input.text(), "hola mundo");
+        // Vacío no cambia nada.
+        s = update(s, Msg::Dictado(String::new()));
+        assert_eq!(s.input.text(), "hola mundo");
     }
 
     #[test]

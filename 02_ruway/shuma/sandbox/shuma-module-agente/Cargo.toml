@@ -18,3 +18,9 @@ llimphi-widget-scroll = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-image = { workspace = true }
 base64 = { workspace = true }
+
+[dev-dependencies]
+# Render headless del panel a PNG (`--example mic_estados`) para verificar el
+# indicador de voz en cada estado de escucha, sin abrir ventana.
+png = { workspace = true }
+pollster = { workspace = true }
