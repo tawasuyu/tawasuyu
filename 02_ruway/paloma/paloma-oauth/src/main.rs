@@ -80,10 +80,8 @@ fn run(id: &str, force: bool) -> Result<String, String> {
         .oauth_preset()
         .ok_or_else(|| format!("proveedor OAuth desconocido: «{}»", entry.oauth_provider))?;
     if entry.oauth_client_id.trim().is_empty() {
-        return Err(format!(
-            "falta oauth_client_id de «{id}» — registrá una app OAuth en el proveedor y \
-             pegá su client_id en el panel (diente Correo) o en cuentas.json"
-        ));
+        print_setup_guide(id, entry, preset);
+        return Err(format!("falta oauth_client_id de «{id}» (ver los pasos de arriba)"));
     }
     let token_path = oauth_token_path(&dir, id);
 
@@ -105,6 +103,52 @@ fn run(id: &str, force: bool) -> Result<String, String> {
     let tok = authorize(entry, preset)?;
     save_token(&token_path, &tok)?;
     Ok(format!("cuenta «{id}» autorizada — token en {}", token_path.display()))
+}
+
+/// Imprime una guía paso a paso para registrar la app OAuth y conseguir el
+/// `client_id` (lo único que el usuario tiene que hacer a mano: Google/Microsoft
+/// no permiten clientes genéricos). Específica por proveedor.
+fn print_setup_guide(id: &str, entry: &AccountEntry, preset: &Preset) {
+    eprintln!(
+        "\n── Configurar OAuth para «{id}» ({}) ──\n\
+         Falta el client_id. Es lo único manual: {} exige que registres tu propia\n\
+         app OAuth (no hay clientes genéricos). Una sola vez:\n",
+        entry.email, preset.label
+    );
+    match entry.oauth_provider.as_str() {
+        "google" => eprintln!(
+            " 1. https://console.cloud.google.com/apis/credentials  (creá/elegí un proyecto)\n\
+             2. Habilitá la «Gmail API» (APIs y servicios → Biblioteca).\n\
+             3. Configurá la «Pantalla de consentimiento OAuth» (tipo Externo) y agregá tu\n\
+             \x20   correo como «usuario de prueba».\n\
+             4. Credenciales → «Crear credenciales» → «ID de cliente de OAuth» →\n\
+             \x20   tipo de aplicación: «Aplicación de escritorio».\n\
+             5. Copiá el «ID de cliente» (con PKCE el client_secret queda vacío)."
+        ),
+        "microsoft" => eprintln!(
+            " 1. https://entra.microsoft.com → «App registrations» → «New registration».\n\
+             2. Platform: «Mobile and desktop applications», redirect URI «http://localhost».\n\
+             3. En «Authentication», poné «Allow public client flows» = Yes (PKCE, sin secret).\n\
+             4. «API permissions» → Office 365 Exchange Online (delegado):\n\
+             \x20   IMAP.AccessAsUser.All y SMTP.Send.\n\
+             5. Copiá el «Application (client) ID»."
+        ),
+        other => eprintln!(
+            " El proveedor «{other}» no tiene preset. Registrá tu app OAuth en él como\n\
+             cliente público/escritorio con PKCE y un redirect de loopback, y completá\n\
+             oauth_provider/auth_url/token_url/scope a mano."
+        ),
+    }
+    eprintln!(
+        "\n 6. Pegá el client_id en el panel (diente Correo → OAuth → client_id) o en\n\
+         \x20   {}  (campo «oauth_client_id»).\n\
+         7. Reintentá:  paloma-oauth {id}\n\n\
+         Detalles del flujo: redirect en http://127.0.0.1:<puerto-libre> (loopback;\n\
+         las apps de escritorio lo permiten). Scope que se pedirá:\n\
+         \x20  {}\n",
+        paloma_config::config_path(&config_dir().unwrap_or_default()).display(),
+        preset.scope,
+    );
 }
 
 // =====================================================================

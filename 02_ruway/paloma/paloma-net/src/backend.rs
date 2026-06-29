@@ -13,6 +13,11 @@ use crate::smtp;
 /// llama desde el envío SMTP y desde la reconexión IMAP.
 pub type TokenSource = Arc<dyn Fn() -> Result<String, String> + Send + Sync>;
 
+/// Cuántas veces, como máximo, reconectar+reintentar una op IMAP que murió
+/// (token vencido / conexión caída) antes de rendirse. Acotado para no hacer un
+/// loop de reconexión ante un fallo persistente.
+const IMAP_MAX_RECONNECTS: usize = 2;
+
 /// Cómo se autentica la cuenta: con un secreto fijo (contraseña) o con un token
 /// OAuth2 **refrescable** a mitad de sesión.
 enum Auth {
@@ -102,25 +107,37 @@ impl NetBackend {
 
     /// Corre una operación IMAP; si falla porque **la sesión murió** —token
     /// vencido (`Auth`) o conexión perdida (`Disconnected`)— **y** la cuenta es
-    /// OAuth, reconecta con un token fresco y reintenta una vez. Los fallos
-    /// lógicos (buzón inexistente, parseo) y de transporte que no tiran la sesión
-    /// suben tal cual: reconectar no los arregla, así que no se reconecta de más.
+    /// OAuth, reconecta con un token fresco y reintenta, hasta
+    /// [`IMAP_MAX_RECONNECTS`] veces (cubre flaps de red sin loop infinito). Los
+    /// fallos lógicos (buzón inexistente, parseo) y de transporte que no tiran la
+    /// sesión suben tal cual: reconectar no los arregla, no se reconecta de más.
+    /// Sin `sleep`: estas ops pueden correr en el hilo de UI (no las bloqueamos).
     fn imap_op<T>(
         &self,
         mut op: impl FnMut(&mut ImapClient) -> Result<T, MailError>,
     ) -> Result<T, MailError> {
-        let first = {
+        let mut result = {
             let mut guard = self.imap.lock().unwrap();
             op(&mut guard)
         };
-        match first {
-            Err(MailError::Auth | MailError::Disconnected(_)) if self.is_oauth() => {
-                self.reconnect_imap()?;
-                let mut guard = self.imap.lock().unwrap();
-                op(&mut guard)
-            }
-            other => other,
+        if !self.is_oauth() {
+            return result;
         }
+        for _ in 0..IMAP_MAX_RECONNECTS {
+            match result {
+                Err(MailError::Auth | MailError::Disconnected(_)) => {
+                    // Si la reconexión misma falla (sin token, server caído), ese
+                    // error es el informativo: lo propagamos.
+                    self.reconnect_imap()?;
+                    result = {
+                        let mut guard = self.imap.lock().unwrap();
+                        op(&mut guard)
+                    };
+                }
+                other => return other,
+            }
+        }
+        result
     }
 }
 

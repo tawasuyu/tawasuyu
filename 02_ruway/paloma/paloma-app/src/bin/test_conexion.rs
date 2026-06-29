@@ -24,11 +24,23 @@
 //! La contraseña SIEMPRE por entorno (`PALOMA_PASSWORD`, o
 //! `PALOMA_IMAP_PASSWORD`/`PALOMA_SMTP_PASSWORD`). Nunca en archivo.
 //!
+//! ## Probar una cuenta de `cuentas.json` (incluido OAuth2)
+//!
+//! Pasá el **id** de la cuenta y se conecta igual que la app —OAuth (token vía
+//! `paloma-oauth`, que se renueva si venció) o contraseña—:
+//!
+//! ```sh
+//! paloma-oauth ana          # una vez, para conseguir el token OAuth
+//! cargo run -p paloma-app --bin paloma-test --release -- ana
+//! ```
+//!
 //! Para además mandar un correo de prueba a vos mismo:
 //! `PALOMA_SEND_TEST=1`.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+use paloma_config::PalomaConfig;
 use paloma_core::{Account, Address, MailBackend, OutgoingMessage, Security, ServerConfig};
 use paloma_net::NetBackend;
 
@@ -106,45 +118,97 @@ fn passwords() -> Result<(String, String), String> {
     }
 }
 
+/// Dir de config de paloma (igual criterio que la app: `PALOMA_CONFIG` o XDG).
+fn config_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("PALOMA_CONFIG") {
+        return PathBuf::from(p).parent().map(|d| d.to_path_buf());
+    }
+    directories::ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.config_dir().to_path_buf())
+}
+
+fn cuentas_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("PALOMA_CONFIG") {
+        return Some(PathBuf::from(p));
+    }
+    config_dir().map(|d| paloma_config::config_path(&d))
+}
+
+/// Conecta una cuenta de `cuentas.json` por su `id`, **igual que la app**:
+/// OAuth2 (token vía `valid_access_token`, que renueva si venció) o contraseña
+/// del entorno. Así `paloma-test <id>` verifica el camino real de una cuenta
+/// configurada, OAuth incluido. Devuelve `(backend, dirección, etiqueta)`.
+fn connect_via_config(id: &str) -> Result<(NetBackend, Address, String), String> {
+    let path = cuentas_path().ok_or("no se pudo resolver el dir de config")?;
+    let cfg = PalomaConfig::load(&path).map_err(|e| format!("config inválida: {e}"))?;
+    let entry = cfg
+        .get(id)
+        .ok_or_else(|| format!("no existe la cuenta «{id}» en {}", path.display()))?;
+    let account = entry.to_account();
+    let me = account.address.clone();
+    let metodo = if entry.is_oauth() { "OAuth2" } else { "contraseña" };
+    let donde = format!("{}:{} · {metodo} (cuentas.json)", entry.imap_host, entry.imap_port);
+    let backend = if entry.is_oauth() {
+        let dir = config_dir().ok_or("sin dir de config")?;
+        let entry = entry.clone();
+        let token: paloma_net::TokenSource =
+            std::sync::Arc::new(move || paloma_oauth::valid_access_token(&dir, &entry));
+        NetBackend::connect_oauth(account, token).map_err(|e| format!("IMAP OAuth: {e}"))?
+    } else {
+        let (i, s) = passwords()?;
+        NetBackend::connect(
+            account,
+            &paloma_net::Secret::Password(i),
+            &paloma_net::Secret::Password(s),
+        )
+        .map_err(|e| format!("IMAP: {e}"))?
+    };
+    Ok((backend, me, donde))
+}
+
+/// Camino clásico por entorno (sin id de cuenta): arma la cuenta de las envs y
+/// conecta con contraseña.
+fn connect_from_env() -> Result<(NetBackend, Address, String), String> {
+    let (account, donde) = cuenta_desde_entorno()?;
+    let (imap_pw, smtp_pw) = passwords()?;
+    let me = account.address.clone();
+    let backend = NetBackend::connect(
+        account,
+        &paloma_net::Secret::Password(imap_pw),
+        &paloma_net::Secret::Password(smtp_pw),
+    )
+    .map_err(|e| format!("{e}"))?;
+    Ok((backend, me, donde))
+}
+
 fn main() -> ExitCode {
     println!("paloma · probador de conexión\n");
 
-    let (account, donde) = match cuenta_desde_entorno() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("✗ {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let (imap_pw, smtp_pw) = match passwords() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("✗ {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    // Con un id de argumento → probamos esa cuenta de `cuentas.json` tal como la
+    // abre la app (OAuth o contraseña). Sin id → camino clásico por entorno.
+    let account_id = std::env::args().skip(1).find(|a| !a.starts_with("--"));
 
-    let me = account.address.clone();
-    println!("Cuenta : {me}");
-    println!("Destino: {donde}\n");
-
-    // --- IMAP: conectar + autenticar ---
     print!("→ IMAP: conectando y autenticando… ");
-    let imap_sec = paloma_net::Secret::Password(imap_pw);
-    let smtp_sec = paloma_net::Secret::Password(smtp_pw);
-    let backend = match NetBackend::connect(account, &imap_sec, &smtp_sec) {
-        Ok(b) => {
+    let connected = match &account_id {
+        Some(id) => connect_via_config(id),
+        None => connect_from_env(),
+    };
+    let (backend, me, donde) = match connected {
+        Ok(v) => {
             println!("OK");
-            b
+            v
         }
         Err(e) => {
             println!("FALLÓ");
             eprintln!("  ✗ {e}");
-            eprintln!("  Pista: en Gmail necesitás 2FA + contraseña de aplicación; \
-                       revisá host/puerto/seguridad.");
+            eprintln!(
+                "  Pista: contraseña → 2FA + contraseña de aplicación (Gmail); \
+                 OAuth → corré antes `paloma-oauth <id>`; revisá host/puerto/seguridad."
+            );
             return ExitCode::FAILURE;
         }
     };
+    println!("Cuenta : {me}");
+    println!("Destino: {donde}\n");
     backend.set_fetch_limit(Some(20));
 
     // --- IMAP: listar buzones ---
