@@ -150,9 +150,11 @@ fn mailboxes_panel(model: &Model) -> View<Msg> {
     // activa resaltada. Sólo aparece con ≥2 cuentas (lo decide account_choices).
     let choices = model.account_choices();
     if !choices.is_empty() {
+        let switching = model.switching_account();
         rows.push(panel_subheader(theme, &rimay_localize::t("paloma-accounts-header")));
         for (id, label, active) in choices {
-            rows.push(account_row(theme, &label, active, id));
+            let connecting = switching == Some(id.as_str());
+            rows.push(account_row(theme, &label, active, connecting, id));
         }
         rows.push(panel_subheader(theme, &rimay_localize::t("paloma-mailboxes-header")));
     }
@@ -260,10 +262,13 @@ fn panel_subheader(theme: &Theme, label: &str) -> View<Msg> {
 
 /// Fila de **cuenta** del switcher: glifo + etiqueta, la activa con barra de
 /// acento (como un buzón seleccionado). Click → conmuta la cuenta en caliente.
-fn account_row(theme: &Theme, label: &str, active: bool, id: String) -> View<Msg> {
+/// `connecting` = esta cuenta es la que se está conectando ahora (marca «⟳» y no
+/// re-dispara el cambio).
+fn account_row(theme: &Theme, label: &str, active: bool, connecting: bool, id: String) -> View<Msg> {
     let bg = if active { theme.bg_selected } else { theme.bg_panel_alt };
-    let fg = if active { theme.fg_text } else { theme.fg_muted };
-    let glyph = if active { "●" } else { "○" };
+    let fg = if active || connecting { theme.fg_text } else { theme.fg_muted };
+    // ⟳ mientras conecta, ● la activa, ○ el resto.
+    let glyph = if connecting { "⟳" } else if active { "●" } else { "○" };
     let text = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         flex_grow: 1.0,
@@ -277,9 +282,9 @@ fn account_row(theme: &Theme, label: &str, active: bool, id: String) -> View<Msg
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(glyph, 12.0, if active { theme.accent } else { theme.fg_muted }, Alignment::Center);
+    .text_aligned(glyph, 12.0, if active || connecting { theme.accent } else { theme.fg_muted }, Alignment::Center);
 
-    View::new(Style {
+    let mut row = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -289,9 +294,13 @@ fn account_row(theme: &Theme, label: &str, active: bool, id: String) -> View<Msg
     })
     .fill(bg)
     .radius(6.0)
-    .hover_fill(theme.bg_row_hover)
-    .on_click(Msg::SwitchAccount(id))
-    .children(vec![accent_bar(if active { theme.accent } else { bg }), text, mark])
+    .children(vec![accent_bar(if active { theme.accent } else { bg }), text, mark]);
+    // Mientras se conecta una cuenta, las filas no responden al click (evita
+    // disparar otra conmutación encima de la que está en vuelo).
+    if !connecting {
+        row = row.hover_fill(theme.bg_row_hover).on_click(Msg::SwitchAccount(id));
+    }
+    row
 }
 
 /// Panel central: cabecera del buzón + lista de hilos (scrolleable, clip).

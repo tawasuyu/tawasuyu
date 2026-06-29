@@ -21,7 +21,7 @@ use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint};
 
 use paloma_core::{Address, MailBackend};
-use paloma_llimphi::{AccountProvider, ConnectedAccount, Model, Msg};
+use paloma_llimphi::{AccountProvider, ConnectedAccount, Model};
 
 const W: u32 = 1180;
 const H: u32 = 720;
@@ -58,7 +58,7 @@ fn main() {
     let me = Address::named("Sergio", "sergio@jlsoltech.com");
     let mut model = Model::new(demo_backend(), me, theme.clone());
     // Engancha el switcher: con ≥2 cuentas, el panel izquierdo lo muestra.
-    model.attach_accounts(Box::new(DemoAccounts));
+    model.attach_accounts(std::sync::Arc::new(DemoAccounts));
 
     let root = paloma_llimphi::view(&model);
 

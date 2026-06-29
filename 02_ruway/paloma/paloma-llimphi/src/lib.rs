@@ -18,6 +18,7 @@
 //! un binario delga desde su propio `impl App`. Así cada anfitrión inyecta el
 //! backend que quiera en su `init` (el `App::init` de Llimphi no toma args).
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use llimphi_theme::Theme;
@@ -102,9 +103,11 @@ pub trait Voucher: Send {
 }
 
 /// Una cuenta ya **conectada**: lo que el proveedor entrega para conmutar en
-/// caliente — un backend listo + la identidad propia + el id de la cuenta.
+/// caliente — un backend listo + la identidad propia + el id de la cuenta. El
+/// backend es `+ Send` porque el `connect` corre en un worker (ver
+/// [`Msg::SwitchAccount`]) y el backend vuelve cruzando al hilo de UI.
 pub struct ConnectedAccount {
-    pub backend: Box<dyn MailBackend>,
+    pub backend: Box<dyn MailBackend + Send>,
     pub me: Address,
     pub account_id: String,
 }
@@ -114,12 +117,49 @@ pub struct ConnectedAccount {
 /// para que la UI conmute la cuenta activa sin reiniciar la app. La lógica
 /// concreta (leer `cuentas.json`, armar el `NetBackend`, resolver el token) vive
 /// en `paloma-app`; la UI sólo conoce este trait. `None` ⇒ sin switcher (demos).
-pub trait AccountProvider: Send {
+///
+/// `Send + Sync` porque se comparte por `Arc` y se usa desde un worker (la
+/// conexión no debe bloquear el hilo de UI).
+pub trait AccountProvider: Send + Sync {
     /// Las cuentas configuradas como `(id, etiqueta)` para el switcher.
     fn accounts(&self) -> Vec<(String, String)>;
     /// Conecta la cuenta `id` y devuelve el backend listo. **Bloqueante** (red);
-    /// `Err(motivo)` legible si falla (sin token, IMAP caído…).
+    /// `Err(motivo)` legible si falla (sin token, IMAP caído…). Corre en worker.
     fn connect(&self, id: &str) -> Result<ConnectedAccount, String>;
+}
+
+/// Una cuenta **cargada** por el worker: backend conectado + identidad + el store
+/// ya sincronizado (buzones + mensajes del primer buzón). El hilo de UI sólo la
+/// adopta ([`Model::apply_loaded`]) — cero red, cero bloqueo.
+struct LoadedAccount {
+    backend: Box<dyn MailBackend + Send>,
+    me: Address,
+    account_id: String,
+    store: MailStore,
+    /// Primer buzón (el que se abre tras conmutar); `None` si la cuenta no listó
+    /// buzones (offline al conmutar).
+    first: Option<String>,
+}
+
+/// Buzón compartido por el que el worker de conmutación devuelve su resultado al
+/// hilo de UI a través de un [`Msg::AccountLoaded`]. `Arc` para que el `Msg` sea
+/// `Clone`; `Mutex<Option<…>>` para sacar el resultado una sola vez.
+type SwitchSlot = Arc<Mutex<Option<Result<LoadedAccount, String>>>>;
+
+/// Conecta y **sincroniza** una cuenta entera fuera del hilo de UI: conecta el
+/// backend (vía el proveedor), trae los buzones y los mensajes del primero. Todo
+/// el costo de red vive acá; devuelve datos listos para adoptar sin bloquear.
+fn load_account(provider: &dyn AccountProvider, id: &str) -> Result<LoadedAccount, String> {
+    let conn = provider.connect(id)?;
+    let mut store = MailStore::new();
+    // Best-effort: si la red falla tras conectar, el store queda vacío (vista
+    // offline) pero igual conmutamos a la cuenta.
+    let _ = store.sync_mailboxes(&*conn.backend);
+    let first = store.mailboxes().first().map(|m| m.name.clone());
+    if let Some(f) = &first {
+        let _ = store.sync_messages(&*conn.backend, f);
+    }
+    Ok(LoadedAccount { backend: conn.backend, me: conn.me, account_id: conn.account_id, store, first })
 }
 
 /// Confianza de identidad de un remitente (pubkey↔persona).
@@ -275,8 +315,13 @@ pub struct Model {
     /// Identificador de la cuenta — clave en la caché en disco.
     account_id: String,
     /// Proveedor de cuentas (para conmutar la activa en caliente), inyectado por
-    /// el anfitrión. `None` = sin switcher (demos, o una sola cuenta).
-    accounts: Option<Box<dyn AccountProvider>>,
+    /// el anfitrión. `Arc` para compartirlo con el worker de conexión. `None` =
+    /// sin switcher (demos, o una sola cuenta).
+    accounts: Option<Arc<dyn AccountProvider>>,
+    /// `id` de la cuenta a la que se está conmutando (conexión en vuelo en un
+    /// worker), o `None` si no hay conmutación en curso. Mientras está `Some`, el
+    /// switcher marca esa fila como «conectando…» y se ignoran nuevos cambios.
+    switching: Option<String>,
     /// Última línea de estado (resultado de un sync/envío).
     pub status: String,
     pub theme: Theme,
@@ -356,6 +401,7 @@ impl Model {
             db,
             account_id,
             accounts: None,
+            switching: None,
             status: String::new(),
             theme,
             viewport: (1180.0, 720.0),
@@ -476,8 +522,8 @@ impl Model {
 
     /// Inyecta el proveedor de cuentas (para conmutar la activa en caliente). Lo
     /// hace el anfitrión si hay config de cuentas. Sin esto, no hay switcher.
-    pub fn attach_accounts(&mut self, provider: Box<dyn AccountProvider>) {
-        self.accounts = provider.into();
+    pub fn attach_accounts(&mut self, provider: Arc<dyn AccountProvider>) {
+        self.accounts = Some(provider);
     }
 
     /// Las cuentas para el switcher como `(id, etiqueta, es_la_activa)`. Vacío si
@@ -494,26 +540,56 @@ impl Model {
         }).collect()
     }
 
-    /// Conmuta a la cuenta `id` **en caliente**: reconecta el backend vía el
-    /// proveedor inyectado, reemplaza identidad/caché-key y recarga los buzones.
-    /// Bloqueante (la conexión IMAP es síncrona, como en el arranque). `Err` si
-    /// no hay proveedor o la conexión falla — el caller lo muestra y NO cambia nada.
-    fn switch_to_account(&mut self, id: &str) -> Result<(), String> {
-        if id == self.account_id {
-            return Ok(());
+    /// El `id` de la cuenta a la que se está conmutando ahora mismo (conexión en
+    /// vuelo), para que el switcher marque esa fila como «conectando…».
+    pub fn switching_account(&self) -> Option<&str> {
+        self.switching.as_deref()
+    }
+
+    /// Adopta una cuenta ya cargada por el worker: reemplaza backend/identidad/
+    /// caché-key y el store ya sincronizado, re-fija el buzón "Suyu" del rail,
+    /// persiste y abre el primer buzón. **Sin red** (todo lo de red lo hizo el
+    /// worker en [`load_account`]) — no bloquea el hilo de UI.
+    fn apply_loaded(&mut self, loaded: LoadedAccount) {
+        self.backend = loaded.backend;
+        self.me = loaded.me;
+        self.account_id = loaded.account_id;
+        let mut store = loaded.store;
+        // El buzón "Suyu" del rail es independiente de la cuenta IMAP.
+        if self.rail.is_some() {
+            store.pin_mailbox(paloma_core::Mailbox::new(SUYU_MAILBOX));
         }
-        let provider = self.accounts.as_ref().ok_or("sin proveedor de cuentas")?;
-        let conn = provider.connect(id)?;
-        self.backend = conn.backend;
-        self.me = conn.me;
-        self.account_id = conn.account_id;
+        self.store = store;
+        // Persistir la caché de la cuenta nueva (escritura local, barata).
+        if let Some(d) = &self.db {
+            let _ = d.save_mailboxes(&self.account_id, self.store.mailboxes());
+            if let Some(f) = &loaded.first {
+                let _ = d.save_messages(&self.account_id, f, self.store.messages(f));
+            }
+        }
         // Cerrar estado atado a la cuenta vieja.
         self.compose = None;
         self.search = TextInputState::new();
         self.search_focused = false;
         self.semantic_results = None;
-        self.reload_for_current_account();
-        Ok(())
+        self.selected_thread = None;
+        self.list_scroll = 0;
+        self.read_scroll = 0.0;
+        self.summary = None;
+        self.view_lang = None;
+        // Abrir el primer buzón desde el store ya sincronizado (hilos = puro).
+        match &loaded.first {
+            Some(name) => {
+                self.threads = self.store.threads(name);
+                self.selected_mailbox = Some(name.clone());
+                self.status = format!("cuenta activa: {} · {} hilos", self.me, self.threads.len());
+            }
+            None => {
+                self.threads.clear();
+                self.selected_mailbox = None;
+                self.status = format!("cuenta activa: {} (sin buzones)", self.me);
+            }
+        }
     }
 
     /// La dirección del rail de este usuario (`<hex>@suyu`), para compartir con
@@ -867,8 +943,12 @@ pub enum Msg {
     ToastExpire(u64),
     /// La ventana cambió de tamaño: reubica el overlay de toasts.
     Resize(u32, u32),
-    /// Conmutar la cuenta activa a la de `id` (reconecta el backend en caliente).
+    /// Conmutar la cuenta activa a la de `id`: arranca la conexión en un worker
+    /// (no bloquea la UI). El resultado vuelve como [`Msg::AccountLoaded`].
     SwitchAccount(String),
+    /// El worker terminó de conectar+sincronizar la cuenta `id`: el `slot` trae
+    /// el `Result<LoadedAccount, _>` (se adopta o se reporta el error).
+    AccountLoaded { id: String, slot: SwitchSlot },
 }
 
 /// Empuja un toast al stack y programa su expiración fuera del hilo de UI.
@@ -1199,22 +1279,51 @@ pub fn update(mut model: Model, msg: Msg, handle: &llimphi_ui::Handle<Msg>) -> M
         }
         Msg::ToastExpire(id) => model.toasts.retain(|t| t.id != id),
         Msg::Resize(w, h) => model.viewport = (w as f32, h as f32),
-        Msg::SwitchAccount(id) => match model.switch_to_account(&id) {
-            Ok(()) => {
-                let msg = format!("cuenta activa: {}", model.me);
-                model.status = msg.clone();
-                let tid = model.next_toast;
-                model.next_toast += 1;
-                push_toast(&mut model, handle, Toast::success(tid, msg, TOAST_TTL));
+        Msg::SwitchAccount(id) => {
+            // Ignorar si ya es la activa, si no hay proveedor, o si hay otra
+            // conmutación en vuelo (evita conexiones pisadas).
+            if id == model.account_id || model.switching.is_some() {
+                return model;
             }
-            Err(e) => {
-                let msg = format!("no se pudo cambiar a «{id}»: {e}");
-                model.status = msg.clone();
-                let tid = model.next_toast;
-                model.next_toast += 1;
-                push_toast(&mut model, handle, Toast::error(tid, msg, TOAST_TTL));
+            let Some(provider) = model.accounts.clone() else { return model };
+            model.switching = Some(id.clone());
+            model.status = format!("conectando a «{id}»…");
+            // Toda la red (conectar + sync de buzones/mensajes) corre en el
+            // worker; el resultado vuelve como Msg::AccountLoaded sin bloquear.
+            let target = id.clone();
+            handle.spawn(move || {
+                let res = load_account(provider.as_ref(), &target);
+                Msg::AccountLoaded { id: target, slot: Arc::new(Mutex::new(Some(res))) }
+            });
+        }
+        Msg::AccountLoaded { id, slot } => {
+            // Ignorar resultados de una conmutación que ya no es la vigente
+            // (p. ej. si se canceló o se pidió otra). Hoy sólo hay una en vuelo.
+            if model.switching.as_deref() != Some(id.as_str()) {
+                return model;
             }
-        },
+            model.switching = None;
+            let result = slot.lock().ok().and_then(|mut g| g.take());
+            match result {
+                Some(Ok(loaded)) => {
+                    model.apply_loaded(loaded);
+                    let msg = model.status.clone();
+                    let tid = model.next_toast;
+                    model.next_toast += 1;
+                    push_toast(&mut model, handle, Toast::success(tid, msg, TOAST_TTL));
+                }
+                Some(Err(e)) => {
+                    let msg = format!("no se pudo cambiar a «{id}»: {e}");
+                    model.status = msg.clone();
+                    let tid = model.next_toast;
+                    model.next_toast += 1;
+                    push_toast(&mut model, handle, Toast::error(tid, msg, TOAST_TTL));
+                }
+                None => {
+                    model.status = format!("conmutación a «{id}» sin resultado");
+                }
+            }
+        }
     }
     model
 }
@@ -1497,22 +1606,23 @@ mod tests {
         let mut model =
             Model::new(Box::new(MockBackend::new(vec![])), Address::named("Ana", "ana@x.com"), Theme::dark());
         model.account_id = "ana".to_string(); // como lo deja el arranque (entry.id)
-        model.attach_accounts(Box::new(FakeProvider));
+        model.attach_accounts(Arc::new(FakeProvider));
 
         // El switcher ofrece las dos cuentas y marca «ana» como activa.
         let choices = model.account_choices();
         assert_eq!(choices.len(), 2);
         assert!(choices.iter().any(|(id, _, active)| id == "ana" && *active));
 
-        // Conmutar a «bob» cambia identidad + id de cuenta.
-        assert!(model.switch_to_account("bob").is_ok());
+        // Lo que hacen worker + Msg::AccountLoaded: cargar fuera de la UI…
+        let loaded = load_account(&FakeProvider, "bob").expect("conecta bob");
+        // …y adoptar en el hilo de UI (sin red).
+        model.apply_loaded(loaded);
         assert_eq!(model.account_id, "bob");
         assert_eq!(model.me.email, "bob@y.com");
         assert!(model.account_choices().iter().any(|(id, _, active)| id == "bob" && *active));
 
-        // Conmutar a la cuenta ya activa es un no-op exitoso.
-        assert!(model.switch_to_account("bob").is_ok());
-        assert!(model.switch_to_account("inexistente").is_err());
+        // Una cuenta inexistente falla al cargar (el handler lo reporta).
+        assert!(load_account(&FakeProvider, "inexistente").is_err());
     }
 
     #[test]

@@ -137,7 +137,7 @@ fn try_net() -> Result<NetSession, String> {
 /// ([`try_net`]) y la conmutación en caliente ([`ConfigAccountProvider`]).
 fn connect_account(
     entry: &AccountEntry,
-) -> Result<(Box<dyn MailBackend>, Address, String), String> {
+) -> Result<(Box<dyn MailBackend + Send>, Address, String), String> {
     let (imap_sec, smtp_sec) = secrets_for(entry).ok_or_else(|| {
         if entry.is_oauth() {
             format!("falta el token OAuth de «{}» (corré: paloma-oauth {})", entry.id, entry.id)
@@ -281,7 +281,7 @@ impl App for Paloma {
         // (aparece con ≥2 cuentas en cuentas.json). Relee la config al conmutar,
         // así toma altas/cambios hechos en el panel sin reiniciar.
         if let Some(path) = cuentas_path() {
-            model.attach_accounts(Box::new(ConfigAccountProvider { path }));
+            model.attach_accounts(std::sync::Arc::new(ConfigAccountProvider { path }));
         }
 
         model
