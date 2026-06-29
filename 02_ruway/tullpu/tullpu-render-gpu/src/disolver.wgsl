@@ -19,6 +19,10 @@ struct Params {
     stride: u32,
     seed_lo: u32,
     seed_hi: u32,
+    band_offset: u32,
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> acc: array<u32>;
@@ -108,7 +112,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         c = clip[i];
     }
     let alfa = s.w * P.opacidad * m * c;
-    let u = umbral(vec2<u32>(P.seed_lo, P.seed_hi), i);
+    // El índice del RNG es GLOBAL (offset de banda + local) para que el patrón
+    // de disolución sea idéntico se tilee o no el lienzo.
+    let gi = P.band_offset + i;
+    let u = umbral(vec2<u32>(P.seed_lo, P.seed_hi), gi);
 
     if (alfa > u) {
         // src gana: rgb del src, opaco. (idempotente sobre el grid u8)

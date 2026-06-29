@@ -46,7 +46,7 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
   `media_destino − media_origen` por estampa, fundiendo el parche (`estampar_sanar`
   en ops.rs; reusa el ancla/offset del clon). Falta (menor): parche por
   selección y modos content-aware.
-- **Fase G — compositing GPU (HECHA, paridad completa; falta tiling).**
+- **Fase G — compositing GPU (HECHA, paridad completa + tiling por bandas).**
   `tullpu-render-gpu` (`Compositor`) espeja `tullpu-render::componer` sobre tres
   compute shaders wgpu. El acumulador es `array<u32>` rgba8 empaquetado (un
   dispatch por capa lee/reescribe `acc`), así el redondeo intermedio coincide con
@@ -61,9 +61,18 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
   vs CPU). La **recursión de grupos** vive en el host (idéntica al CPU); sólo el
   bucle per-píxel migra a GPU. Todo certificado por `tests/paridad.rs` (26 modos
   `diff ≤ 1`, 9 ajustes `diff ≤ 1`, máscara/clip/grupos `diff ≤ 1`, Disolver
-  `diff = 0`). La app (`compose.rs::recomponer`) usa GPU con fallback a CPU sólo
-  si no hay adaptador. **Falta:** tiling (capa = grafo de tiles
-  content-addressed) para imágenes > ~33 MP (límite de storage buffer).
+  `diff = 0`). **Tiling por bandas**: si el lienzo excede el límite de storage
+  buffer del device (~33 MP con el default de 128 MiB), `componer` lo parte en
+  bandas de filas completas y compone cada una en buffers acotados, ensamblando
+  el resultado en CPU — ningún buffer GPU iguala el tamaño del lienzo. El índice
+  del RNG de Disolver es global (offset de banda + local) para que el patrón no
+  cambie al tilear; certificado en `paridad_tilereado_por_bandas` (bandas chicas
+  forzadas == lienzo entero **bit a bit**, con una capa Disolver dentro de un
+  grupo). La app (`compose.rs::recomponer`) usa GPU con fallback a CPU sólo si no
+  hay adaptador. **Pendiente (separado, no bloqueante):** el modelo de datos
+  content-addressed por **tiles** (capa = grafo de tiles → dedup por tile sobre
+  fondos repetidos) — refactor de `tullpu-core`, distinto del tiling de
+  composición ya hecho acá.
 - **Pendiente:** H IA real ONNX + vectores/paths.
 
 ## Estado (2026-05-31)

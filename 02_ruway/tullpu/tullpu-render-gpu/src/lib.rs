@@ -118,11 +118,14 @@ struct Params {
     /// Semilla del RNG de Disolver (los 8 primeros bytes del Uuid de la capa).
     /// Cero para el resto de modos (`blend.wgsl` la ignora).
     seed: u64,
+    /// Offset en píxeles de la banda actual dentro del lienzo completo. Sólo lo
+    /// usa Disolver, para que el índice del RNG sea global y no por-banda.
+    band_offset: u32,
 }
 
 impl Params {
-    fn bytes(&self) -> [u8; 32] {
-        let mut b = [0u8; 32];
+    fn bytes(&self) -> [u8; 48] {
+        let mut b = [0u8; 48];
         b[0..4].copy_from_slice(&self.modo.to_le_bytes());
         b[4..8].copy_from_slice(&self.has_mask.to_le_bytes());
         b[8..12].copy_from_slice(&self.has_clip.to_le_bytes());
@@ -132,8 +135,19 @@ impl Params {
         let seed = self.seed.to_le_bytes();
         b[24..28].copy_from_slice(&seed[0..4]); // seed_lo
         b[28..32].copy_from_slice(&seed[4..8]); // seed_hi
+        b[32..36].copy_from_slice(&self.band_offset.to_le_bytes());
+        // 36..48 quedan en cero (relleno a múltiplo de 16 para uniform).
         b
     }
+}
+
+/// Una banda horizontal del lienzo: filas completas, contigua en memoria
+/// (offset y n en píxeles). Tilear por bandas mantiene cada binding GPU por
+/// debajo del límite de storage buffer sin tocar el modelo de datos.
+#[derive(Clone, Copy)]
+struct Band {
+    offset: usize,
+    n: usize,
 }
 
 // =============================================================================
@@ -153,6 +167,9 @@ pub struct Compositor {
     ajuste_layout: wgpu::BindGroupLayout,
     /// Límite de hilos por dimensión X de dispatch (de los límites del device).
     max_grupos_dim: u32,
+    /// Tamaño máximo de un binding de storage buffer (bytes). Acota el tamaño
+    /// de banda: cada píxel cuesta hasta 4 bytes en el binding más grande.
+    max_binding_bytes: usize,
 }
 
 impl Compositor {
@@ -187,6 +204,7 @@ impl Compositor {
         };
         let limits = wgpu::Limits::default().using_resolution(adapter.limits());
         let max_grupos_dim = limits.max_compute_workgroups_per_dimension.max(1);
+        let max_binding_bytes = (limits.max_storage_buffer_binding_size as usize).max(1 << 20);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("tullpu-render-gpu-device"),
@@ -301,15 +319,42 @@ impl Compositor {
             ajuste_pipeline,
             ajuste_layout,
             max_grupos_dim,
+            max_binding_bytes,
         })
     }
 
     /// Compone un [`Lienzo`] en la GPU y devuelve la `RgbaImage` resultante.
     /// Cubre todos los modos de fusión, ajustes, máscaras, clipping y grupos.
+    /// Tilea por bandas de filas si el lienzo excede el límite de storage del
+    /// device, de forma transparente (un lienzo que cabe = una sola banda).
     pub fn componer(
         &self,
         l: &Lienzo,
         fuente: &impl FuenteBuffers,
+    ) -> Result<RgbaImage, Error> {
+        let bandas = self.calcular_bandas(l.width, l.height);
+        self.componer_con_bandas(l, fuente, bandas)
+    }
+
+    /// Igual que [`Self::componer`] pero con una partición de bandas explícita.
+    /// Oculto: existe para que los tests fuercen el camino tilereado con bandas
+    /// chicas sin necesitar un lienzo de > 33 MP.
+    #[doc(hidden)]
+    pub fn componer_con_filas_por_banda(
+        &self,
+        l: &Lienzo,
+        fuente: &impl FuenteBuffers,
+        filas_por_banda: usize,
+    ) -> Result<RgbaImage, Error> {
+        let bandas = bandas_de_filas(l.width as usize, l.height as usize, filas_por_banda.max(1));
+        self.componer_con_bandas(l, fuente, bandas)
+    }
+
+    fn componer_con_bandas(
+        &self,
+        l: &Lienzo,
+        fuente: &impl FuenteBuffers,
+        bandas: Vec<Band>,
     ) -> Result<RgbaImage, Error> {
         let w = l.width;
         let h = l.height;
@@ -328,32 +373,59 @@ impl Compositor {
                 label: Some("tullpu-blend-encoder"),
             });
 
-        let acc = self.componer_lista(l, None, n, fuente, &mut encoder, &mut keep)?;
-
-        // Readback: acc (rgba8 empaquetado) → staging mapeable → RgbaImage.
-        let bytes = (n * 4) as u64;
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tullpu-blend-staging"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        encoder.copy_buffer_to_buffer(&acc, 0, &staging, 0, bytes);
+        // Una banda = filas completas contiguas. Cada banda se compone en su
+        // propio acumulador (≤ límite de binding) y se copia a su staging.
+        let mut stagings: Vec<(Band, wgpu::Buffer)> = Vec::with_capacity(bandas.len());
+        for banda in bandas {
+            let acc = self.componer_lista(l, None, banda, n, fuente, &mut encoder, &mut keep)?;
+            let bytes = (banda.n * 4) as u64;
+            let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tullpu-blend-staging"),
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_buffer_to_buffer(&acc, 0, &staging, 0, bytes);
+            keep.buffers.push(acc);
+            stagings.push((banda, staging));
+        }
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
+        // Mapear todas las bandas y ensamblar el buffer final en CPU. Ningún
+        // buffer GPU iguala el tamaño del lienzo completo — sólo el de banda.
+        let mut rxs = Vec::with_capacity(stagings.len());
+        for (_, staging) in &stagings {
+            let (tx, rx) = std::sync::mpsc::channel();
+            staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            rxs.push(rx);
+        }
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        rx.recv().map_err(|_| Error::Readback)?.map_err(|_| Error::Readback)?;
-        let data = slice.get_mapped_range();
-        let pixeles = data.to_vec();
-        drop(data);
-        staging.unmap();
+
+        let mut pixeles = vec![0u8; n * 4];
+        for ((banda, staging), rx) in stagings.iter().zip(rxs) {
+            rx.recv().map_err(|_| Error::Readback)?.map_err(|_| Error::Readback)?;
+            let data = staging.slice(..).get_mapped_range();
+            let inicio = banda.offset * 4;
+            pixeles[inicio..inicio + banda.n * 4].copy_from_slice(&data);
+            drop(data);
+            staging.unmap();
+        }
 
         RgbaImage::from_raw(w, h, pixeles).ok_or(Error::Vacio)
+    }
+
+    /// Particiona el lienzo en bandas de filas completas tales que cada binding
+    /// de storage de una banda (≤ 4 bytes/píxel) entre en el límite del device.
+    /// Un lienzo que cabe entero devuelve una sola banda (camino sin cambios).
+    fn calcular_bandas(&self, w: u32, h: u32) -> Vec<Band> {
+        let w = w as usize;
+        // Margen del 87% para dejar aire al uniform/relleno y a la varianza de
+        // implementación del límite.
+        let max_band_n = ((self.max_binding_bytes / 4) * 7 / 8).max(w.max(1));
+        let filas_por_banda = (max_band_n / w.max(1)).max(1);
+        bandas_de_filas(w, h as usize, filas_por_banda)
     }
 
     /// Compone las capas hijas directas de `grupo` (`None` = raíz) sobre un
@@ -363,11 +435,13 @@ impl Compositor {
         &self,
         l: &Lienzo,
         grupo: Option<Uuid>,
-        n: usize,
+        banda: Band,
+        full_n: usize,
         fuente: &impl FuenteBuffers,
         encoder: &mut wgpu::CommandEncoder,
         keep: &mut KeepAlive,
     ) -> Result<wgpu::Buffer, Error> {
+        let n = banda.n;
         let acc = self.buffer_acc_cero(n);
 
         // Cobertura de la última capa base no-clipping (para clipping masks).
@@ -378,7 +452,7 @@ impl Compositor {
             if !capa.visible {
                 continue;
             }
-            let mascara = self.cargar_mascara(capa, n, fuente)?;
+            let mascara = self.cargar_mascara(capa, banda, full_n, fuente)?;
             let usa_clip = capa.clipping && base_alpha.is_some();
 
             // Capas de ajuste: aplican una op per-píxel al compuesto in-place.
@@ -397,13 +471,13 @@ impl Compositor {
                 continue;
             }
 
-            // Resolver el buffer fuente de la capa.
+            // Resolver el buffer fuente de la capa (rebanado a la banda).
             let src = match &capa.clase {
                 ClaseCapa::Grupo => {
-                    self.componer_lista(l, Some(capa.id), n, fuente, encoder, keep)?
+                    self.componer_lista(l, Some(capa.id), banda, full_n, fuente, encoder, keep)?
                 }
                 ClaseCapa::Pixeles | ClaseCapa::Texto(_) => {
-                    let esperado = n * 4;
+                    let esperado = full_n * 4;
                     let bytes = fuente
                         .obtener(capa.contenido)
                         .ok_or(Error::BufferFaltante(capa.contenido))?;
@@ -414,7 +488,8 @@ impl Compositor {
                             encontrado: bytes.len(),
                         });
                     }
-                    self.buffer_storage(bytes, "tullpu-src")
+                    let ini = banda.offset * 4;
+                    self.buffer_storage(&bytes[ini..ini + n * 4], "tullpu-src")
                 }
                 // Las capas de ajuste se atienden en el `if let` de arriba.
                 ClaseCapa::Ajuste(_) => unreachable!("ajuste atendido antes del match"),
@@ -437,6 +512,7 @@ impl Compositor {
                 opacidad: capa.opacidad.clamp(0.0, 1.0),
                 stride: 0, // lo completa despachar()
                 seed: if es_disolver { semilla_dissolve(capa) } else { 0 },
+                band_offset: banda.offset as u32,
             };
             let pipeline = if es_disolver {
                 &self.disolver_pipeline
@@ -463,27 +539,30 @@ impl Compositor {
         Ok(acc)
     }
 
-    /// Resuelve y valida la máscara de una capa. Devuelve un buffer storage con
-    /// los bytes de máscara (padded a múltiplo de 4) o `None` si no tiene.
+    /// Resuelve y valida la máscara de una capa, rebanada a la banda. Devuelve
+    /// un buffer storage con los bytes de máscara de la banda (padded a múltiplo
+    /// de 4) o `None` si no tiene. La máscara en el almacén cubre el lienzo
+    /// completo (`full_n` bytes); se valida contra eso y se corta la banda.
     fn cargar_mascara(
         &self,
         capa: &Capa,
-        n: usize,
+        banda: Band,
+        full_n: usize,
         fuente: &impl FuenteBuffers,
     ) -> Result<Option<wgpu::Buffer>, Error> {
         let Some(hm) = capa.mascara else {
             return Ok(None);
         };
         let bytes = fuente.obtener(hm).ok_or(Error::BufferFaltante(hm))?;
-        if bytes.len() != n {
+        if bytes.len() != full_n {
             return Err(Error::TamanioMascara {
                 hash: hm,
-                esperado: n,
+                esperado: full_n,
                 encontrado: bytes.len(),
             });
         }
-        // Padear a múltiplo de 4 bytes (el shader lee `array<u32>`).
-        let mut padded = bytes.to_vec();
+        // Rebanar la banda y padear a múltiplo de 4 bytes (shader lee `array<u32>`).
+        let mut padded = bytes[banda.offset..banda.offset + banda.n].to_vec();
         while padded.len() % 4 != 0 {
             padded.push(0);
         }
@@ -680,6 +759,23 @@ fn bgl_storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
         },
         count: None,
     }
+}
+
+/// Parte `[0, h)` filas en bandas de `filas_por_banda` filas (la última puede
+/// ser más corta). `offset`/`n` van en píxeles (filas completas de ancho `w`).
+fn bandas_de_filas(w: usize, h: usize, filas_por_banda: usize) -> Vec<Band> {
+    let paso = filas_por_banda.max(1);
+    let mut bandas = Vec::new();
+    let mut fila = 0usize;
+    while fila < h {
+        let filas = paso.min(h - fila);
+        bandas.push(Band {
+            offset: fila * w,
+            n: filas * w,
+        });
+        fila += filas;
+    }
+    bandas
 }
 
 /// Semilla del RNG de Disolver: los primeros 8 bytes del Uuid de la capa, en

@@ -208,6 +208,74 @@ fn paridad_capas_de_ajuste() {
 }
 
 #[test]
+fn paridad_tilereado_por_bandas() {
+    // Composición tilereada (bandas chicas forzadas) vs CPU: prueba que el
+    // ensamblado por bandas y el índice GLOBAL del RNG de Disolver sobreviven al
+    // tiling. Escena rica: fondo, capa con máscara+blend, clipping, grupo y una
+    // capa Disolver (la sensible al índice global).
+    use tullpu_core::OpLocal;
+    let Some(gpu) = compositor() else { return };
+    let (w, h) = (20, 41); // alto primo → la última banda queda corta
+    let mut alm = AlmacenEnMemoria::nuevo();
+
+    let fondo = alm.insertar(buffer_gradiente(w, h, 15));
+    let base = alm.insertar(buffer_solido(w, h, [180, 60, 60, 210]));
+    let recorte = alm.insertar(buffer_gradiente(w, h, 100));
+    let disuelta = alm.insertar(buffer_gradiente(w, h, 200));
+    let hijo_buf = alm.insertar(buffer_solido(w, h, [50, 170, 90, 255]));
+
+    let mut mbytes = buffer_mascara(w, h, 255);
+    for y in 0..h {
+        for x in 0..w {
+            mbytes[(y * w + x) as usize] = (((x + y) * 255) / (w + h)) as u8;
+        }
+    }
+    let masc = alm.insertar(mbytes);
+
+    let mut l = Lienzo::nuevo(w, h);
+    l.apilar(Capa::raster("fondo", fondo));
+    let mut cm = Capa::raster("masc", disuelta);
+    cm.mascara = Some(masc);
+    cm.blend = ModoFusion::Pantalla;
+    cm.opacidad = 0.75;
+    l.apilar(cm);
+    l.apilar(Capa::raster("base", base));
+    let mut cc = Capa::raster("recorte", recorte);
+    cc.clipping = true;
+    cc.blend = ModoFusion::Multiplicar;
+    l.apilar(cc);
+    // Ajuste (LUT) para cubrir también el camino de ajuste tilereado.
+    let mut aj = Capa::ajuste("curvas", OpLocal::Curvas { puntos: vec![(0.0, 0.05), (0.5, 0.6), (1.0, 0.95)] });
+    aj.opacidad = 0.7;
+    l.apilar(aj);
+    // Grupo con un hijo en modo Disolver (RNG por índice global).
+    let mut g = Capa::grupo("carpeta");
+    g.opacidad = 0.85;
+    let gid = g.id;
+    l.apilar(g);
+    let mut hijo = Capa::raster("disuelto", hijo_buf);
+    hijo.grupo = Some(gid);
+    hijo.blend = ModoFusion::Disolver;
+    hijo.opacidad = 0.55;
+    l.apilar(hijo);
+
+    let cpu = componer(&l, &alm).unwrap();
+    // Una sola banda (camino normal) y bandas de 7 filas (camino tilereado).
+    let entero = gpu.componer(&l, &alm).unwrap();
+    let tilereado = gpu.componer_con_filas_por_banda(&l, &alm, 7).unwrap();
+
+    assert!(max_diff(&cpu, &entero) <= 1, "entero vs CPU > 1");
+    // El tilereado debe coincidir con el no-tilereado BIT a BIT: misma math, sólo
+    // cambia la partición.
+    assert_eq!(
+        max_diff(&entero, &tilereado),
+        0,
+        "tilereado difiere del entero — el banding cambió el resultado"
+    );
+    assert!(max_diff(&cpu, &tilereado) <= 1, "tilereado vs CPU > 1");
+}
+
+#[test]
 fn paridad_disolver() {
     // Disolver es un umbralizador binario sembrado por el Uuid de la capa: si el
     // splitmix64 emulado coincide con la CPU, la paridad es EXACTA (diff 0). Se

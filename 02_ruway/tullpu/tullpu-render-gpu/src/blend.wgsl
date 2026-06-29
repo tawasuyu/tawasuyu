@@ -16,9 +16,13 @@ struct Params {
     has_clip: u32,
     n: u32,
     opacidad: f32,
-    stride: u32,   // anchura en hilos de la grilla 2D de dispatch
-    seed_lo: u32,  // usado sólo por disolver.wgsl (mismo layout de Params)
+    stride: u32,        // anchura en hilos de la grilla 2D de dispatch
+    seed_lo: u32,       // usado sólo por disolver.wgsl (mismo layout de Params)
     seed_hi: u32,
+    band_offset: u32,   // idem — offset de banda para el índice global del RNG
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
 };
 
 @group(0) @binding(0) var<storage, read_write> acc: array<u32>;
