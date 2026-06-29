@@ -100,6 +100,11 @@ use tracing::warn;
 pub const CONFIG_DIR: &str = "wawa";
 /// Nombre del archivo canónico.
 pub const CONFIG_FILE: &str = "config.json";
+/// Nombre del archivo de la capa de **contexto** (`pacha`), en el mismo dir
+/// que el de usuario. Lo escribe/borra `pacha-manager` al cambiar de
+/// contexto de uso; sobreescribe a usuario y sistema mientras existe. Al
+/// borrarlo, la config efectiva vuelve a la base de usuario.
+pub const CONTEXT_FILE: &str = "context.json";
 /// Directorio de la capa de sistema en Linux. Cuando wawa sea su
 /// propio SO esta ruta se reemplaza por lo que defina arje; la API
 /// pública (`system_config_path`) se mantiene.
@@ -113,6 +118,11 @@ pub enum Layer {
     System,
     /// `$XDG_CONFIG_HOME/wawa/config.json` — override por usuario.
     User,
+    /// `$XDG_CONFIG_HOME/wawa/context.json` — override por **contexto de
+    /// uso** (`pacha`). La capa más alta: gana sobre usuario y sistema
+    /// mientras el archivo existe. Efímera por diseño — `pacha-manager` la
+    /// crea al activar un contexto y la borra al volver a la base.
+    Context,
 }
 
 /// Mapea el `theme_variant` de la config (lowercase, libre) al nombre
@@ -407,21 +417,25 @@ impl WawaConfig {
         match layer {
             Layer::System => system_config_path(),
             Layer::User => user_config_path(),
+            Layer::Context => context_config_path(),
         }
     }
 
     /// Carga la config efectiva: defaults → capa de sistema → capa de
-    /// usuario. Cada capa **sobreescribe campo por campo** lo que
-    /// definió la anterior; campos ausentes preservan el valor
-    /// previo. Para `modules`, el merge es key-by-key (no reemplazo
-    /// total del mapa).
+    /// usuario → capa de **contexto** (`pacha`). Cada capa
+    /// **sobreescribe campo por campo** lo que definió la anterior;
+    /// campos ausentes preservan el valor previo. Para `modules`, el
+    /// merge es key-by-key (no reemplazo total del mapa). La capa de
+    /// contexto es la más alta: si `context.json` existe, gana sobre
+    /// usuario y sistema; al borrarlo, la config vuelve a la base de
+    /// usuario.
     ///
     /// Si ningún archivo existe, o están corruptos, devuelve defaults
     /// — nunca falla. Los errores se loggean a `tracing::warn`.
     pub fn load() -> Self {
         let mut acc = serde_json::to_value(Self::default())
             .expect("WawaConfig::default siempre serializa");
-        for layer in [Layer::System, Layer::User] {
+        for layer in [Layer::System, Layer::User, Layer::Context] {
             if let Some(v) = load_layer_value(layer) {
                 merge_json(&mut acc, v);
             }
@@ -547,6 +561,14 @@ pub fn user_config_path() -> Option<PathBuf> {
         .map(|d| d.config_dir().join(CONFIG_FILE))
 }
 
+/// Path del archivo de la capa de **contexto** (`pacha`):
+/// `$XDG_CONFIG_HOME/wawa/context.json`, junto al de usuario. `None` si la
+/// plataforma no expone un config dir. Lo escribe/borra `pacha-manager`.
+pub fn context_config_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", CONFIG_DIR)
+        .map(|d| d.config_dir().join(CONTEXT_FILE))
+}
+
 /// Path del archivo de **sistema**. `Some("/etc/wawa/config.json")`
 /// en Linux; `None` en otras plataformas (no hay convención
 /// equivalente y no vale la pena inventarla). Cuando wawa sea su
@@ -611,6 +633,16 @@ impl ConfigWatcher {
         // entorno raro y devolvemos error como antes.
         let user_path = user_config_path().ok_or(ConfigError::NoProjectDirs)?;
         watchers.push(spawn_layer_watcher(&user_path, tx.clone(), /*must_exist=*/ true)?);
+
+        // Capa de contexto (`pacha`): vive en el mismo dir que la de
+        // usuario (ya creado arriba) pero con otro filename, así que
+        // necesita su propio watcher — el de usuario filtra por
+        // `config.json` y no vería `context.json`. Que el archivo exista o
+        // no es indistinto: notify observa el dir y dispara al crearlo,
+        // modificarlo o borrarlo (este último = volver a la base de usuario).
+        if let Some(ctx_path) = context_config_path() {
+            watchers.push(spawn_layer_watcher(&ctx_path, tx.clone(), /*must_exist=*/ true)?);
+        }
 
         // Capa de sistema es best-effort: si no aplica (no Linux), o
         // no se puede observar (sin permiso de lectura de `/etc/wawa`,
@@ -848,6 +880,60 @@ mod tests {
         assert!(!final_cfg.module_enabled(modules::MIRADA));
         assert!(!final_cfg.module_enabled(modules::SHUMA));
         assert!(final_cfg.module_enabled(modules::CHASQUI));
+    }
+
+    #[test]
+    fn merge_context_gana_sobre_usuario_y_sistema() {
+        // Sistema: theme aurora + lang qu-PE. Usuario: lang en-US.
+        // Contexto (pacha): theme light. Esperado: theme light (contexto),
+        // lang en-US (usuario), accent default (nadie lo tocó).
+        let mut base = serde_json::to_value(WawaConfig::default()).unwrap();
+        let system: serde_json::Value =
+            serde_json::from_str(r#"{"theme_variant":"aurora","lang":"qu-PE"}"#).unwrap();
+        let user: serde_json::Value = serde_json::from_str(r#"{"lang":"en-US"}"#).unwrap();
+        let context: serde_json::Value =
+            serde_json::from_str(r#"{"theme_variant":"light"}"#).unwrap();
+        merge_json(&mut base, system);
+        merge_json(&mut base, user);
+        merge_json(&mut base, context);
+        let final_cfg: WawaConfig = serde_json::from_value(base).unwrap();
+        assert_eq!(final_cfg.theme_variant, "light"); // contexto gana
+        assert_eq!(final_cfg.lang, "en-US"); // usuario, contexto no lo tocó
+        assert_eq!(final_cfg.accent, "default"); // nadie lo fijó
+    }
+
+    #[test]
+    fn merge_context_modules_es_key_by_key() {
+        // Usuario apaga shuma; contexto apaga mirada. Ambos off, resto true.
+        let mut base = serde_json::to_value(WawaConfig::default()).unwrap();
+        let user: serde_json::Value =
+            serde_json::from_str(r#"{"modules":{"shuma":false}}"#).unwrap();
+        let context: serde_json::Value =
+            serde_json::from_str(r#"{"modules":{"mirada":false}}"#).unwrap();
+        merge_json(&mut base, user);
+        merge_json(&mut base, context);
+        let final_cfg: WawaConfig = serde_json::from_value(base).unwrap();
+        assert!(!final_cfg.module_enabled(modules::SHUMA));
+        assert!(!final_cfg.module_enabled(modules::MIRADA));
+        assert!(final_cfg.module_enabled(modules::CHASQUI));
+    }
+
+    #[test]
+    fn context_path_junto_al_de_usuario_y_distinto_filename() {
+        match (user_config_path(), context_config_path()) {
+            (Some(u), Some(c)) => {
+                assert_eq!(u.parent(), c.parent(), "misma carpeta wawa/");
+                assert_eq!(c.file_name().unwrap(), CONTEXT_FILE);
+                assert_eq!(u.file_name().unwrap(), CONFIG_FILE);
+                assert_ne!(u, c);
+            }
+            _ => panic!("se esperan ambos paths en una plataforma con config dir"),
+        }
+    }
+
+    #[test]
+    fn path_for_context_coincide_con_helper() {
+        assert_eq!(WawaConfig::path_for(Layer::Context), context_config_path());
     }
 
     #[test]
