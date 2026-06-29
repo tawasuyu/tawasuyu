@@ -787,6 +787,10 @@ pub(crate) enum Msg {
     AlinearCentro { h: bool, v: bool },
     /// Inserta una sombra paralela de la capa seleccionada como capa debajo.
     AgregarSombra,
+    /// Convierte la capa de texto seleccionada a vector (contornos / curvas).
+    ConvertirTextoVector,
+    /// Texto sobre path: el texto seleccionado siguiendo la forma de abajo.
+    TextoSobrePath,
     /// Booleano: combina la capa seleccionada con la de abajo (unión).
     BooleanoUnion,
     /// Booleano: intersección de la capa seleccionada con la de abajo.

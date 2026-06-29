@@ -1160,6 +1160,16 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
             &pal,
             Msg::TextoTamano(4.0),
         )));
+        hijos.push(envolver_fila(button_view(
+            "✎ convertir a vector (curvas)".to_string(),
+            &pal,
+            Msg::ConvertirTextoVector,
+        )));
+        hijos.push(envolver_fila(button_view(
+            "↝ texto sobre forma de abajo".to_string(),
+            &pal,
+            Msg::TextoSobrePath,
+        )));
     }
 
     // "vector": relleno y trazo de la capa vectorial seleccionada. El color que

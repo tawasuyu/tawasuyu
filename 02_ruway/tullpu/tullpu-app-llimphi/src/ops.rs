@@ -197,6 +197,56 @@ pub(crate) fn combinar_capa_abajo(model: &mut Model, id: Uuid) -> bool {
     true
 }
 
+/// Convierte la capa de **texto** `id` a una capa **vectorial** (contornos de
+/// glifos, "convertir a curvas") in situ. No-op si no es capa de texto.
+pub(crate) fn convertir_texto_a_vector(model: &mut Model, id: Uuid) -> bool {
+    let Some(params_txt) = model.lienzo.capa(id).and_then(|c| c.params_texto()).cloned() else {
+        model.estado = "convertir a curvas · seleccioná una capa de texto".into();
+        return false;
+    };
+    let (w, h) = (model.lienzo.width, model.lienzo.height);
+    let font = llimphi_ui::llimphi_text::SANS_FONT_BYTES;
+    let mut pv = tullpu_ops::texto_a_vector(&params_txt.texto, params_txt.tamano, font);
+    pv.relleno = Some(params_txt.color);
+    pv.trasladar(params_txt.x as f32, params_txt.y as f32);
+    let buffer = tullpu_ops::rasterizar_vector(&pv, w, h);
+    let hash = model.almacen.insertar(buffer);
+    if let Some(c) = model.lienzo.capa_mut(id) {
+        c.contenido = hash;
+        c.clase = tullpu_core::ClaseCapa::Vector(pv);
+    }
+    aplicar_y_recomponer(model);
+    model.estado = "texto convertido a vector (curvas)".into();
+    true
+}
+
+/// **Texto sobre path**: toma la capa de texto `id` y la capa **vectorial**
+/// directamente debajo (su path es el riel), y crea una capa vectorial nueva con
+/// el texto siguiendo esa curva. No-op si los tipos no cuadran.
+pub(crate) fn texto_sobre_capa_abajo(model: &mut Model, id: Uuid) -> bool {
+    let Some(idx) = model.lienzo.capas.iter().position(|c| c.id == id) else {
+        return false;
+    };
+    let Some(params_txt) = model.lienzo.capas[idx].params_texto().cloned() else {
+        model.estado = "texto en path · seleccioná la capa de texto".into();
+        return false;
+    };
+    if idx == 0 {
+        model.estado = "texto en path · no hay forma debajo".into();
+        return false;
+    }
+    let Some(camino) = model.lienzo.capas[idx - 1].params_vector().map(|p| p.comandos.clone()) else {
+        model.estado = "texto en path · la capa de abajo debe ser vectorial".into();
+        return false;
+    };
+    let font = llimphi_ui::llimphi_text::SANS_FONT_BYTES;
+    let mut pv = tullpu_ops::texto_sobre_path(&params_txt.texto, params_txt.tamano, font, &camino);
+    pv.relleno = Some(params_txt.color);
+    agregar_capa_vector(model, pv, "texto en path");
+    model.estado = "texto sobre path creado".into();
+    true
+}
+
 /// Inserta una capa de **sombra paralela** justo debajo de la capa `id`: toma
 /// su buffer, genera una sombra desplazada+difuminada+tintada y la apila como
 /// raster nueva. La capa debe tener buffer (no grupos/ajustes).

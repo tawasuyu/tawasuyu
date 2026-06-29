@@ -1162,6 +1162,20 @@ impl App for Tullpu {
                     }
                 }
             }
+            Msg::ConvertirTextoVector => {
+                if let Some(id) = model.seleccionada {
+                    if convertir_texto_a_vector(&mut model, id) {
+                        pushear_snapshot(&mut model, None);
+                    }
+                }
+            }
+            Msg::TextoSobrePath => {
+                if let Some(id) = model.seleccionada {
+                    if texto_sobre_capa_abajo(&mut model, id) {
+                        pushear_snapshot(&mut model, None);
+                    }
+                }
+            }
             Msg::BooleanoUnion => {
                 if let Some(id) = model.seleccionada {
                     if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Union) {

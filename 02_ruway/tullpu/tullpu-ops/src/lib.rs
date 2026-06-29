@@ -601,6 +601,209 @@ fn construir_path(comandos: &[tullpu_core::ComandoPath]) -> Option<tiny_skia::Pa
 }
 
 // =============================================================================
+//  Texto → vector (contornos de glifos) y texto-en-path
+// =============================================================================
+
+use tullpu_core::{ComandoPath, ParamsVector, ReglaRelleno};
+
+/// Constructor de contorno: traduce los segmentos de un glifo (en unidades de
+/// fuente, y-arriba) a `ComandoPath`, mapeando cada punto al espacio-imagen con
+/// `map`. Lleva el punto actual en unidades de fuente para elevar las cuádricas
+/// a cúbicas antes de mapear.
+struct GlifoBuilder<F: Fn(f32, f32) -> (f32, f32)> {
+    comandos: Vec<ComandoPath>,
+    map: F,
+    cur: (f32, f32),
+}
+
+impl<F: Fn(f32, f32) -> (f32, f32)> ttf_parser::OutlineBuilder for GlifoBuilder<F> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.cur = (x, y);
+        let (mx, my) = (self.map)(x, y);
+        self.comandos.push(ComandoPath::MoverA { x: mx, y: my });
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.cur = (x, y);
+        let (mx, my) = (self.map)(x, y);
+        self.comandos.push(ComandoPath::LineaA { x: mx, y: my });
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        // Elevación cuádrica→cúbica en unidades de fuente.
+        let (cx, cy) = self.cur;
+        let c1 = (cx + 2.0 / 3.0 * (x1 - cx), cy + 2.0 / 3.0 * (y1 - cy));
+        let c2 = (x + 2.0 / 3.0 * (x1 - x), y + 2.0 / 3.0 * (y1 - y));
+        let (a1, b1) = (self.map)(c1.0, c1.1);
+        let (a2, b2) = (self.map)(c2.0, c2.1);
+        let (ex, ey) = (self.map)(x, y);
+        self.cur = (x, y);
+        self.comandos.push(ComandoPath::CurvaA { c1x: a1, c1y: b1, c2x: a2, c2y: b2, x: ex, y: ey });
+    }
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        let (a1, b1) = (self.map)(x1, y1);
+        let (a2, b2) = (self.map)(x2, y2);
+        let (ex, ey) = (self.map)(x, y);
+        self.cur = (x, y);
+        self.comandos.push(ComandoPath::CurvaA { c1x: a1, c1y: b1, c2x: a2, c2y: b2, x: ex, y: ey });
+    }
+    fn close(&mut self) {
+        self.comandos.push(ComandoPath::Cerrar);
+    }
+}
+
+fn params_texto(comandos: Vec<ComandoPath>) -> ParamsVector {
+    ParamsVector {
+        comandos,
+        relleno: Some([20, 20, 20, 255]),
+        gradiente: None,
+        regla: ReglaRelleno::NoCero,
+        trazo: None,
+        ancho_trazo: 0.0,
+        estilo_trazo: None,
+    }
+}
+
+/// Convierte un texto a una **capa vectorial** (contornos de glifos) en una
+/// baseline recta, tamaño `tamano_px`, con la fuente `font_bytes`. La esquina
+/// del primer glifo queda cerca de `(0,0)`; el caller puede trasladar. Es el
+/// "convertir a curvas" de los editores vectoriales.
+pub fn texto_a_vector(texto: &str, tamano_px: f32, font_bytes: &[u8]) -> ParamsVector {
+    let mut comandos = Vec::new();
+    if let Ok(face) = ttf_parser::Face::parse(font_bytes, 0) {
+        let scale = tamano_px / face.units_per_em().max(1) as f32;
+        let baseline = tamano_px; // glifos en y positivo
+        let mut pen_x = 0.0f32;
+        for ch in texto.chars() {
+            if let Some(gid) = face.glyph_index(ch) {
+                let ox = pen_x;
+                let mut b = GlifoBuilder {
+                    comandos: Vec::new(),
+                    map: |x: f32, y: f32| (ox + x * scale, baseline - y * scale),
+                    cur: (0.0, 0.0),
+                };
+                face.outline_glyph(gid, &mut b);
+                comandos.append(&mut b.comandos);
+                pen_x += face.glyph_hor_advance(gid).unwrap_or(0) as f32 * scale;
+            } else {
+                pen_x += tamano_px * 0.3;
+            }
+        }
+    }
+    params_texto(comandos)
+}
+
+/// Aplana un path a una polilínea (las cúbicas se muestrean) y devuelve los
+/// puntos junto a las longitudes acumuladas, para `muestrear_camino`.
+fn aplanar_camino(comandos: &[ComandoPath]) -> (Vec<(f32, f32)>, Vec<f32>) {
+    const PASOS: usize = 16;
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    let mut cur = (0.0f32, 0.0f32);
+    let mut inicio = (0.0f32, 0.0f32);
+    for c in comandos {
+        match *c {
+            ComandoPath::MoverA { x, y } => {
+                cur = (x, y);
+                inicio = (x, y);
+                pts.push(cur);
+            }
+            ComandoPath::LineaA { x, y } => {
+                cur = (x, y);
+                pts.push(cur);
+            }
+            ComandoPath::CurvaA { c1x, c1y, c2x, c2y, x, y } => {
+                let p0 = cur;
+                for i in 1..=PASOS {
+                    let t = i as f32 / PASOS as f32;
+                    let mt = 1.0 - t;
+                    let bx = mt * mt * mt * p0.0 + 3.0 * mt * mt * t * c1x + 3.0 * mt * t * t * c2x + t * t * t * x;
+                    let by = mt * mt * mt * p0.1 + 3.0 * mt * mt * t * c1y + 3.0 * mt * t * t * c2y + t * t * t * y;
+                    pts.push((bx, by));
+                }
+                cur = (x, y);
+            }
+            ComandoPath::Cerrar => {
+                pts.push(inicio);
+                cur = inicio;
+            }
+        }
+    }
+    let mut cum = Vec::with_capacity(pts.len());
+    let mut acc = 0.0f32;
+    for (i, p) in pts.iter().enumerate() {
+        if i > 0 {
+            let d = pts[i - 1];
+            acc += ((p.0 - d.0).powi(2) + (p.1 - d.1).powi(2)).sqrt();
+        }
+        cum.push(acc);
+    }
+    (pts, cum)
+}
+
+/// Punto y tangente unitaria del camino a la distancia de arco `d` (clampeada).
+fn muestrear_camino(pts: &[(f32, f32)], cum: &[f32], d: f32) -> (f32, f32, f32, f32) {
+    if pts.len() < 2 {
+        return (0.0, 0.0, 1.0, 0.0);
+    }
+    let total = *cum.last().unwrap();
+    let d = d.clamp(0.0, total);
+    let mut i = 0;
+    while i + 1 < pts.len() && cum[i + 1] < d {
+        i += 1;
+    }
+    let seg = (cum[i + 1] - cum[i]).max(1e-6);
+    let t = ((d - cum[i]) / seg).clamp(0.0, 1.0);
+    let (a, b) = (pts[i], pts[i + 1]);
+    let x = a.0 + (b.0 - a.0) * t;
+    let y = a.1 + (b.1 - a.1) * t;
+    let mut tx = b.0 - a.0;
+    let mut ty = b.1 - a.1;
+    let len = (tx * tx + ty * ty).sqrt().max(1e-6);
+    tx /= len;
+    ty /= len;
+    (x, y, tx, ty)
+}
+
+/// **Texto sobre path**: coloca los glifos del texto a lo largo de `camino`,
+/// cada punto del contorno proyectado al camino por su distancia de arco y
+/// desplazado perpendicular según su altura sobre la baseline. Devuelve una capa
+/// vectorial. Se corta cuando el texto excede el largo del camino.
+pub fn texto_sobre_path(texto: &str, tamano_px: f32, font_bytes: &[u8], camino: &[ComandoPath]) -> ParamsVector {
+    let (pts, cum) = aplanar_camino(camino);
+    let total = cum.last().copied().unwrap_or(0.0);
+    let mut comandos = Vec::new();
+    if let Ok(face) = ttf_parser::Face::parse(font_bytes, 0) {
+        let scale = tamano_px / face.units_per_em().max(1) as f32;
+        let mut pen_d = 0.0f32;
+        for ch in texto.chars() {
+            if pen_d > total {
+                break;
+            }
+            if let Some(gid) = face.glyph_index(ch) {
+                let base_d = pen_d;
+                let mut b = GlifoBuilder {
+                    comandos: Vec::new(),
+                    // (x,y) en unidades de fuente: x→avance sobre el camino,
+                    // y→altura sobre la baseline (perpendicular).
+                    map: |x: f32, y: f32| {
+                        let d = base_d + x * scale;
+                        let (px, py, tx, ty) = muestrear_camino(&pts, &cum, d);
+                        let up = y * scale;
+                        // "arriba" (y de fuente +) = normal a la izquierda del avance.
+                        (px + up * ty, py - up * tx)
+                    },
+                    cur: (0.0, 0.0),
+                };
+                face.outline_glyph(gid, &mut b);
+                comandos.append(&mut b.comandos);
+                pen_d += face.glyph_hor_advance(gid).unwrap_or(0) as f32 * scale;
+            } else {
+                pen_d += tamano_px * 0.3;
+            }
+        }
+    }
+    params_texto(comandos)
+}
+
+// =============================================================================
 //  Sombra paralela (drop shadow)
 // =============================================================================
 
@@ -763,6 +966,31 @@ mod tests {
         let der = en(&buf, w, w - 2, 4);
         assert!(izq[0] > 200 && izq[2] < 60, "izquierda roja, fue {izq:?}");
         assert!(der[2] > 200 && der[0] < 60, "derecha azul, fue {der:?}");
+    }
+
+    #[test]
+    fn muestrear_camino_recto_da_punto_medio_y_tangente() {
+        let camino = vec![
+            ComandoPath::MoverA { x: 0.0, y: 0.0 },
+            ComandoPath::LineaA { x: 100.0, y: 0.0 },
+        ];
+        let (pts, cum) = aplanar_camino(&camino);
+        assert_eq!(pts.len(), 2);
+        assert!((cum[1] - 100.0).abs() < 1e-3);
+        let (x, y, tx, ty) = muestrear_camino(&pts, &cum, 50.0);
+        assert!((x - 50.0).abs() < 1e-3 && y.abs() < 1e-3);
+        assert!((tx - 1.0).abs() < 1e-3 && ty.abs() < 1e-3);
+    }
+
+    #[test]
+    fn texto_con_fuente_invalida_no_panica_y_da_vacio() {
+        let p = texto_a_vector("hola", 24.0, b"no soy una fuente");
+        assert!(p.comandos.is_empty());
+        let q = texto_sobre_path("hola", 24.0, b"xx", &[
+            ComandoPath::MoverA { x: 0.0, y: 0.0 },
+            ComandoPath::LineaA { x: 50.0, y: 0.0 },
+        ]);
+        assert!(q.comandos.is_empty());
     }
 
     #[test]

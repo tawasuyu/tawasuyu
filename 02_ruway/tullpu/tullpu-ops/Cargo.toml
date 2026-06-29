@@ -15,6 +15,8 @@ image = { workspace = true }
 thiserror = { workspace = true }
 postcard = { workspace = true }
 tiny-skia = { workspace = true }
+# Contornos de glifos (texto → vector / texto-en-path). Mismo ecosistema que usvg.
+ttf-parser = "0.21"
 
 [dev-dependencies]
 pixel-verbo-mock = { path = "../pixel-verbo-mock" }
