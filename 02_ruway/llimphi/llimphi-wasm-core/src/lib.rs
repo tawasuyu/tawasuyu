@@ -502,3 +502,202 @@ pub fn resolve_launch(
     let manifest = manifest_from_launch(launch)?;
     resolve_manifest(source, trust, &manifest)
 }
+
+// =====================================================================
+// Catálogo — el índice buscable de apps ("qué apps existen")
+// =====================================================================
+
+/// Una entrada del catálogo: metadatos buscables + referencias **por hash** al
+/// bytecode y, opcional, a su concesión. Es la unidad que falta sobre el
+/// transporte por hash: el `BlobSource` sabe traer un blob *si conocés su hash*,
+/// pero no *qué apps hay*; esto lo nombra y lo describe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogEntry {
+    /// Identificador estable (para `get`/lanzar por id).
+    pub id: String,
+    /// Nombre legible.
+    pub name: String,
+    /// Descripción corta (entra en la búsqueda).
+    pub description: String,
+    /// Categoría opcional (para filtrar/agrupar).
+    pub category: Option<String>,
+    /// Hash del bytecode en el CAS.
+    pub bytecode: Hash,
+    /// Permisos que la app declara querer (sin concesión que los respalde, 0).
+    pub declarados: Permisos,
+    /// Hash del objeto-concesión, si la app pide capacidades.
+    pub concesion: Option<Hash>,
+}
+
+impl CatalogEntry {
+    /// El [`AppManifest`] resoluble de esta entrada — el puente catálogo→correr.
+    pub fn manifest(&self) -> AppManifest {
+        AppManifest {
+            bytecode: self.bytecode,
+            declarados: self.declarados,
+            concesion: self.concesion,
+        }
+    }
+
+    /// ¿La consulta (sin distinguir mayúsculas) aparece en id/nombre/
+    /// descripción/categoría? Una consulta vacía siempre coincide.
+    pub fn matches(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        let q = query.to_lowercase();
+        self.id.to_lowercase().contains(&q)
+            || self.name.to_lowercase().contains(&q)
+            || self.description.to_lowercase().contains(&q)
+            || self
+                .category
+                .as_deref()
+                .map(|c| c.to_lowercase().contains(&q))
+                .unwrap_or(false)
+    }
+}
+
+/// Catálogo de apps: el índice buscable. Es **él mismo un objeto
+/// content-addressed** (postcard) — por eso viaja por la misma malla que los
+/// bytecodes (`llimphi-wasm-net::fetch_blob` por su [`Catalog::hash`]) sin
+/// protocolo nuevo: quien lo publica comparte su hash, quien lo recibe lo busca.
+///
+/// **No necesita ser de confianza para ser seguro**: cada app que nombra se
+/// resuelve por su propio hash y se re-verifica de forma independiente
+/// (integridad + concesión Ed25519 contra el [`TrustRing`]). Un catálogo
+/// adversario, a lo sumo, ofrece apps cuyas concesiones igual deben estar
+/// firmadas por una clave de tu anillo — no puede colar código alterado ni
+/// permisos sin respaldo.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Catalog {
+    pub entries: Vec<CatalogEntry>,
+}
+
+impl Catalog {
+    pub fn new(entries: Vec<CatalogEntry>) -> Self {
+        Self { entries }
+    }
+
+    pub fn serializar(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("serializar Catalog")
+    }
+
+    pub fn deserializar(bytes: &[u8]) -> Result<Self, DistError> {
+        postcard::from_bytes(bytes).map_err(|_| DistError::ConcesionCorrupta)
+    }
+
+    /// La dirección de contenido del catálogo (el mismo esquema que bytecode y
+    /// concesión: `hash(Objeto{datos,hijos:[]})`), para publicarlo/traerlo.
+    pub fn hash(&self) -> Hash {
+        object_hash(&self.serializar())
+    }
+
+    /// Entradas que coinciden con `query` (substring en id/nombre/desc/cat).
+    /// Una consulta vacía devuelve todo el catálogo.
+    pub fn search(&self, query: &str) -> Vec<&CatalogEntry> {
+        self.entries.iter().filter(|e| e.matches(query)).collect()
+    }
+
+    /// La entrada de id exacto, si existe.
+    pub fn get(&self, id: &str) -> Option<&CatalogEntry> {
+        self.entries.iter().find(|e| e.id == id)
+    }
+
+    /// Agrega o reemplaza (por id) una entrada. Mantiene el id único, así
+    /// re-publicar una app la actualiza en vez de duplicarla.
+    pub fn upsert(&mut self, entry: CatalogEntry) {
+        match self.entries.iter_mut().find(|e| e.id == entry.id) {
+            Some(slot) => *slot = entry,
+            None => self.entries.push(entry),
+        }
+    }
+}
+
+/// Resuelve y verifica una app del catálogo por su `id`, end-to-end: ubica la
+/// entrada, trae bytecode (+ concesión) por hash del `source`, los verifica y
+/// devuelve la app con sus permisos efectivos. El puente catálogo→correr.
+pub fn resolve_from_catalog(
+    source: &impl BlobSource,
+    trust: &TrustRing,
+    catalog: &Catalog,
+    id: &str,
+) -> Result<VerifiedApp, DistError> {
+    let entry = catalog.get(id).ok_or(DistError::NoEncontrado)?;
+    resolve_manifest(source, trust, &entry.manifest())
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    fn entry(id: &str, name: &str, desc: &str, cat: Option<&str>) -> CatalogEntry {
+        CatalogEntry {
+            id: id.into(),
+            name: name.into(),
+            description: desc.into(),
+            category: cat.map(Into::into),
+            bytecode: bytecode_hash(id.as_bytes()),
+            declarados: 0,
+            concesion: None,
+        }
+    }
+
+    fn cat() -> Catalog {
+        Catalog::new(vec![
+            entry("counter", "Contador", "suma y resta un número", Some("demo")),
+            entry("form", "Formulario", "campos, slider y radio", Some("demo")),
+            entry("paint", "Pintura", "lienzo de dibujo", Some("arte")),
+        ])
+    }
+
+    #[test]
+    fn search_substring_case_insensitive() {
+        let c = cat();
+        // por nombre/desc, sin distinguir mayúsculas
+        let ids: Vec<&str> = c.search("RADIO").iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["form"]);
+        // por categoría: dos demos
+        assert_eq!(c.search("demo").len(), 2);
+        // consulta vacía = todo
+        assert_eq!(c.search("").len(), 3);
+        // sin coincidencias
+        assert!(c.search("zzz").is_empty());
+    }
+
+    #[test]
+    fn get_y_manifest() {
+        let c = cat();
+        let e = c.get("paint").expect("existe");
+        assert_eq!(e.name, "Pintura");
+        let m = e.manifest();
+        assert_eq!(m.bytecode, bytecode_hash(b"paint"));
+        assert!(m.concesion.is_none());
+        assert!(c.get("ausente").is_none());
+    }
+
+    #[test]
+    fn upsert_actualiza_sin_duplicar() {
+        let mut c = cat();
+        assert_eq!(c.entries.len(), 3);
+        c.upsert(entry("form", "Formulario v2", "ahora con multiline", Some("demo")));
+        assert_eq!(c.entries.len(), 3, "mismo id ⇒ reemplaza, no agrega");
+        assert_eq!(c.get("form").unwrap().name, "Formulario v2");
+        c.upsert(entry("nuevo", "Nuevo", "otra app", None));
+        assert_eq!(c.entries.len(), 4);
+    }
+
+    #[test]
+    fn serde_roundtrip_y_hash_estable() {
+        let c = cat();
+        let bytes = c.serializar();
+        let back = Catalog::deserializar(&bytes).expect("re-deserializa");
+        assert_eq!(c, back);
+        // El hash es la dirección de contenido: estable y reproducible.
+        assert_eq!(c.hash(), back.hash());
+        assert_eq!(c.hash(), object_hash(&c.serializar()));
+        // Cambiar una entrada cambia el hash.
+        let mut c2 = c.clone();
+        c2.upsert(entry("counter", "Contador", "cambió la desc", Some("demo")));
+        assert_ne!(c.hash(), c2.hash());
+    }
+}

@@ -32,8 +32,8 @@ use std::sync::OnceLock;
 use format::{ConcesionCapacidad, Permisos};
 use llimphi_ui::{App, Handle, KeyEvent, View};
 use llimphi_wasm_dist::{
-    hash_from_hex, hash_to_hex, AppManifest, DiskStore, RunnerMsg, TrustRing, VerifiedAppExt,
-    WasmGuest,
+    hash_from_hex, hash_to_hex, resolve_from_catalog, AppManifest, Catalog, CatalogEntry, DiskStore,
+    RunnerMsg, TrustRing, VerifiedAppExt, WasmGuest,
 };
 
 /// Lo resuelto en `main` y consumido por `Host::init` en el hilo de la UI.
@@ -100,10 +100,26 @@ impl App for Host {
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    let tiene = |f: &str| argv.iter().any(|a| a == f);
 
-    // Modo productor: publicar una app en el escritorio (mete el blob en el CAS
-    // y escribe el manifiesto). No abre ventana.
-    if argv.iter().any(|a| a == "--install") {
+    // Modo catálogo (búsqueda): listar/buscar apps por texto. No abre ventana.
+    if tiene("--list") || tiene("--search") {
+        return match buscar(argv.iter().cloned()) {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("llimphi-wasm-open: {e}");
+                uso();
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    // Modo productor: publicar una app (blob al CAS + manifiesto + entrada de
+    // catálogo si se pide). No abre ventana.
+    if tiene("--install") {
         return match instalar(argv.into_iter()) {
             Ok(msg) => {
                 println!("{msg}");
@@ -117,8 +133,14 @@ fn main() -> ExitCode {
         };
     }
 
-    // Modo consumidor: abrir una app como ventana.
-    match resolver_spec(argv.into_iter()) {
+    // Modo consumidor: resolver la app (por id del catálogo o por hash/archivo)
+    // y abrirla como ventana.
+    let spec = if tiene("--run") {
+        spec_desde_catalogo(argv.into_iter())
+    } else {
+        resolver_spec(argv.into_iter())
+    };
+    match spec {
         Ok(spec) => {
             let _ = SPEC.set(spec);
             llimphi_ui::run::<Host>();
@@ -138,9 +160,14 @@ fn uso() {
     eprintln!("  llimphi-wasm-open <app.wasm>");
     eprintln!("  llimphi-wasm-open --hash <hex> [--store <dir>] \\");
     eprintln!("      [--grant <hex>] [--ring <archivo>] [--name <título>]");
+    eprintln!("  llimphi-wasm-open --list [--catalog <archivo>]");
+    eprintln!("  llimphi-wasm-open --search <texto> [--catalog <archivo>]");
+    eprintln!("  llimphi-wasm-open --run <id> [--catalog <archivo>] \\");
+    eprintln!("      [--store <dir>] [--ring <archivo>]");
     eprintln!("  llimphi-wasm-open --install <app.wasm> --id <id> \\");
-    eprintln!("      [--name <label>] [--grant <archivo>] [--icon <glifo>] \\");
-    eprintln!("      [--category <cat>] [--store <dir>] [--apps-dir <dir>]");
+    eprintln!("      [--name <label>] [--desc <texto>] [--grant <archivo>] \\");
+    eprintln!("      [--icon <glifo>] [--category <cat>] [--store <dir>] \\");
+    eprintln!("      [--apps-dir <dir>] [--catalog <archivo>]");
 }
 
 /// Traduce los argumentos a un [`LaunchSpec`] resuelto y verificado. El modo se
@@ -253,17 +280,21 @@ fn instalar(args: impl Iterator<Item = String>) -> Result<String, String> {
     let mut category: Option<String> = None;
     let mut store_dir: Option<String> = None;
     let mut apps_dir: Option<String> = None;
+    let mut desc: Option<String> = None;
+    let mut catalog_path: Option<String> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--install" => wasm_path = Some(next_val(&mut args, "--install")?),
             "--id" => id = Some(next_val(&mut args, "--id")?),
             "--name" => name = Some(next_val(&mut args, "--name")?),
+            "--desc" => desc = Some(next_val(&mut args, "--desc")?),
             "--grant" => grant_file = Some(next_val(&mut args, "--grant")?),
             "--icon" => icon = Some(next_val(&mut args, "--icon")?),
             "--category" => category = Some(next_val(&mut args, "--category")?),
             "--store" => store_dir = Some(next_val(&mut args, "--store")?),
             "--apps-dir" => apps_dir = Some(next_val(&mut args, "--apps-dir")?),
+            "--catalog" => catalog_path = Some(next_val(&mut args, "--catalog")?),
             otro if otro.starts_with("--") => {
                 return Err(format!("opción desconocida: {otro}"))
             }
@@ -285,7 +316,7 @@ fn instalar(args: impl Iterator<Item = String>) -> Result<String, String> {
 
     // Si hay concesión, su blob entra también; el manifiesto la referencia por
     // hash (descubrimiento de concesiones, no inline).
-    let grant_hex = match &grant_file {
+    let grant_obj = match &grant_file {
         Some(path) => {
             let blob = std::fs::read(path).map_err(|e| format!("leer concesión {path}: {e}"))?;
             let grant = ConcesionCapacidad::deserializar(&blob)
@@ -296,16 +327,21 @@ fn instalar(args: impl Iterator<Item = String>) -> Result<String, String> {
             let h = store
                 .put_grant(&grant)
                 .map_err(|e| format!("guardar concesión: {e}"))?;
-            Some(hash_to_hex(&h))
+            Some(h)
         }
         None => None,
     };
+    let grant_hex = grant_obj.as_ref().map(hash_to_hex);
+    // Con concesión declaramos MAX (efectivos = MAX & concedidos = concedidos);
+    // sin ella, app de sólo-UI.
+    let declarados = if grant_obj.is_some() { Permisos::MAX } else { 0 };
 
+    let label = name.unwrap_or_else(|| id.clone());
     let entry = app_bus::AppEntry {
         id: id.clone(),
-        label: name.unwrap_or_else(|| id.clone()),
+        label: label.clone(),
         icon,
-        category,
+        category: category.clone(),
         launch: app_bus::Launch::Wasm {
             bytecode_hex: bytecode_hex.clone(),
             grant_hex: grant_hex.clone(),
@@ -325,11 +361,37 @@ fn instalar(args: impl Iterator<Item = String>) -> Result<String, String> {
     std::fs::write(&manifest_path, &toml)
         .map_err(|e| format!("escribir {}: {e}", manifest_path.display()))?;
 
+    // Si se pidió, publicar también en el catálogo buscable: el índice
+    // content-addressed que hace `--search`/`--run` posibles (y que viaja por la
+    // malla como un blob más).
+    let catalog_línea = match catalog_path {
+        Some(path) => {
+            let mut catalog = cargar_catalogo(&path)?;
+            catalog.upsert(CatalogEntry {
+                id: id.clone(),
+                name: label,
+                description: desc.unwrap_or_default(),
+                category,
+                bytecode,
+                declarados,
+                concesion: grant_obj,
+            });
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("crear {}: {e}", parent.display()))?;
+            }
+            std::fs::write(&path, catalog.serializar())
+                .map_err(|e| format!("escribir catálogo {path}: {e}"))?;
+            format!("\n  catálogo: {path} ({} apps)", catalog.entries.len())
+        }
+        None => String::new(),
+    };
+
     let grant_línea = grant_hex
         .map(|h| format!("\n  concesión: {h}"))
         .unwrap_or_default();
     Ok(format!(
-        "instalada «{id}» en {}\n  bytecode: {bytecode_hex}{grant_línea}\n  CAS: {store_dir}",
+        "instalada «{id}» en {}\n  bytecode: {bytecode_hex}{grant_línea}\n  CAS: {store_dir}{catalog_línea}",
         manifest_path.display()
     ))
 }
@@ -344,6 +406,115 @@ fn cas_por_defecto() -> String {
         .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.cache")))
         .unwrap_or_else(|| ".".to_string());
     format!("{base}/llimphi/blobs")
+}
+
+/// El catálogo de apps por defecto del escritorio:
+/// `$XDG_CONFIG_HOME/tawasuyu/catalog.bin` (o `~/.config/tawasuyu/catalog.bin`).
+fn catalogo_por_defecto() -> String {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.config")))
+        .unwrap_or_else(|| ".".to_string());
+    format!("{base}/tawasuyu/catalog.bin")
+}
+
+/// Carga el catálogo del archivo (o el de por defecto). Un archivo ausente es un
+/// catálogo vacío (todavía no se publicó nada); uno corrupto es error.
+fn cargar_catalogo(path: &str) -> Result<Catalog, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Catalog::deserializar(&bytes)
+            .map_err(|_| format!("el catálogo {path} está corrupto")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Catalog::default()),
+        Err(e) => Err(format!("leer catálogo {path}: {e}")),
+    }
+}
+
+/// Modo búsqueda: lista o filtra las apps del catálogo por texto. Devuelve el
+/// listado formateado (id, nombre, categoría, hash corto, marca de permisos).
+fn buscar(args: impl Iterator<Item = String>) -> Result<String, String> {
+    let mut args = args.peekable();
+    let mut query: Option<String> = None;
+    let mut catalog_path: Option<String> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--search" => query = Some(next_val(&mut args, "--search")?),
+            "--list" => {}
+            "--catalog" => catalog_path = Some(next_val(&mut args, "--catalog")?),
+            otro if otro.starts_with("--") => {
+                return Err(format!("opción desconocida: {otro}"))
+            }
+            otro => query = Some(otro.to_string()),
+        }
+    }
+    let path = catalog_path.unwrap_or_else(catalogo_por_defecto);
+    let catalog = cargar_catalogo(&path)?;
+    let q = query.unwrap_or_default();
+    let hits = catalog.search(&q);
+    if hits.is_empty() {
+        return Ok(if catalog.entries.is_empty() {
+            format!("catálogo vacío ({path}) — publicá apps con --install --catalog")
+        } else {
+            format!("sin coincidencias para «{q}» en {path}")
+        });
+    }
+    let mut out = format!("{} app(s) en {path}:\n", hits.len());
+    for e in hits {
+        let cat = e.category.as_deref().unwrap_or("—");
+        let permisos = if e.concesion.is_some() { " ⚷" } else { "" };
+        out.push_str(&format!(
+            "  {:<14} {:<22} [{}]  {}{}\n",
+            e.id,
+            e.name,
+            cat,
+            &hash_to_hex(&e.bytecode)[..12],
+            permisos,
+        ));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+/// Modo correr-por-id: resuelve una app del catálogo por su `id` (trae bytecode
+/// + concesión del CAS, verifica) y produce el [`LaunchSpec`] para abrirla.
+fn spec_desde_catalogo(args: impl Iterator<Item = String>) -> Result<LaunchSpec, String> {
+    let mut args = args.peekable();
+    let mut id: Option<String> = None;
+    let mut catalog_path: Option<String> = None;
+    let mut store_dir: Option<String> = None;
+    let mut ring_path: Option<String> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--run" => id = Some(next_val(&mut args, "--run")?),
+            "--catalog" => catalog_path = Some(next_val(&mut args, "--catalog")?),
+            "--store" => store_dir = Some(next_val(&mut args, "--store")?),
+            "--ring" => ring_path = Some(next_val(&mut args, "--ring")?),
+            otro if otro.starts_with("--") => {
+                return Err(format!("opción desconocida: {otro}"))
+            }
+            otro => id = Some(otro.to_string()),
+        }
+    }
+    let id = id.ok_or("--run requiere el id de la app")?;
+    let path = catalog_path.unwrap_or_else(catalogo_por_defecto);
+    let catalog = cargar_catalogo(&path)?;
+    let entry = catalog
+        .get(&id)
+        .ok_or_else(|| format!("«{id}» no está en el catálogo {path}"))?;
+    let title = entry.name.clone();
+
+    let store_dir = store_dir.unwrap_or_else(cas_por_defecto);
+    let store = DiskStore::open(&store_dir).map_err(|e| format!("abrir CAS {store_dir}: {e}"))?;
+    let trust = match &ring_path {
+        Some(p) => TrustRing::load(p).map_err(|e| format!("anillo {p}: {e}"))?,
+        None => TrustRing::empty(),
+    };
+    let app = resolve_from_catalog(&store, &trust, &catalog, &id)
+        .map_err(|e| format!("resolver «{id}»: {e}"))?;
+    Ok(LaunchSpec {
+        wasm: app.wasm,
+        permisos: app.permisos,
+        title,
+    })
 }
 
 /// Los primeros 8 caracteres del hex, para un título legible.
@@ -496,6 +667,99 @@ mod tests {
         .expect("lanzar lo instalado");
         assert_eq!(spec.wasm, COUNTER_WASM);
         WasmGuest::load(&spec.wasm, spec.permisos).expect("instanciar counter instalado");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn catalogo_publica_busca_y_corre_por_id() {
+        let dir = cas_temporal("catalogo");
+        let cas = dir.join("blobs");
+        let apps = dir.join("apps");
+        let catalogo = dir.join("catalog.bin");
+        let wasm_path = dir.join("counter.wasm");
+        std::fs::write(&wasm_path, COUNTER_WASM).unwrap();
+
+        // Publicar al catálogo (--catalog).
+        let resumen = instalar(args(&[
+            "--install",
+            wasm_path.to_str().unwrap(),
+            "--id",
+            "counter",
+            "--name",
+            "Contador",
+            "--desc",
+            "suma y resta un número",
+            "--category",
+            "demo",
+            "--store",
+            cas.to_str().unwrap(),
+            "--apps-dir",
+            apps.to_str().unwrap(),
+            "--catalog",
+            catalogo.to_str().unwrap(),
+        ]))
+        .expect("instalar+publicar");
+        assert!(resumen.contains("catálogo"), "resumen: {resumen}");
+
+        // Buscar por texto encuentra la app.
+        let listado = buscar(args(&[
+            "--search",
+            "resta",
+            "--catalog",
+            catalogo.to_str().unwrap(),
+        ]))
+        .expect("buscar");
+        assert!(listado.contains("counter"), "listado: {listado}");
+        assert!(listado.contains("Contador"), "listado: {listado}");
+
+        // Una búsqueda que no matchea.
+        let vacio = buscar(args(&["--search", "zzz", "--catalog", catalogo.to_str().unwrap()]))
+            .expect("buscar vacío");
+        assert!(vacio.contains("sin coincidencias"), "vacío: {vacio}");
+
+        // Correr por id resuelve desde el catálogo + CAS y produce el spec.
+        let spec = spec_desde_catalogo(args(&[
+            "--run",
+            "counter",
+            "--catalog",
+            catalogo.to_str().unwrap(),
+            "--store",
+            cas.to_str().unwrap(),
+        ]))
+        .expect("correr por id");
+        assert_eq!(spec.wasm, COUNTER_WASM);
+        assert_eq!(spec.title, "Contador");
+        WasmGuest::load(&spec.wasm, spec.permisos).expect("instanciar lo elegido");
+
+        // Re-publicar (upsert) no duplica.
+        instalar(args(&[
+            "--install",
+            wasm_path.to_str().unwrap(),
+            "--id",
+            "counter",
+            "--name",
+            "Contador v2",
+            "--store",
+            cas.to_str().unwrap(),
+            "--apps-dir",
+            apps.to_str().unwrap(),
+            "--catalog",
+            catalogo.to_str().unwrap(),
+        ]))
+        .expect("re-publicar");
+        let cat = Catalog::deserializar(&std::fs::read(&catalogo).unwrap()).unwrap();
+        assert_eq!(cat.entries.len(), 1, "upsert por id, no duplica");
+        assert_eq!(cat.get("counter").unwrap().name, "Contador v2");
+
+        // Un id ausente del catálogo es error.
+        assert!(spec_desde_catalogo(args(&[
+            "--run",
+            "fantasma",
+            "--catalog",
+            catalogo.to_str().unwrap(),
+        ]))
+        .is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }

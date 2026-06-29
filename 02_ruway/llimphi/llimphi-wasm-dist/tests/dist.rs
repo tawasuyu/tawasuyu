@@ -6,9 +6,9 @@ use agora_core::Keypair;
 use app_bus::Launch;
 use format::{ConcesionCapacidad, Hash, Permisos, PERMISO_GRAFO_ESCRITURA, PERMISO_RED};
 use llimphi_wasm_dist::{
-    bytecode_hash, grant_hash, hash_to_hex, resolve, resolve_launch, resolve_manifest, verify_grant,
-    verify_integrity, AppManifest, AppRef, BlobSource, DiskStore, DistError, EventPayload, MapSource,
-    TrustRing, VerifiedAppExt,
+    bytecode_hash, grant_hash, hash_to_hex, resolve, resolve_from_catalog, resolve_launch,
+    resolve_manifest, verify_grant, verify_integrity, AppManifest, AppRef, BlobSource, Catalog,
+    CatalogEntry, DiskStore, DistError, EventPayload, MapSource, TrustRing, VerifiedAppExt,
 };
 
 /// El mismo wasm que corre el runner Tier 3 — lo distribuimos por hash.
@@ -268,4 +268,71 @@ fn manifiesto_round_trip() {
         concesion: Some([7; 32]),
     };
     assert_eq!(AppManifest::deserializar(&m.serializar()).unwrap(), m);
+}
+
+#[test]
+fn catalogo_busca_y_corre_la_app_elegida() {
+    // El "qué apps hay": un catálogo nombra apps; buscás por texto, elegís una
+    // y se resuelve por su hash + corre. El catálogo mismo viaja como blob (su
+    // hash es su dirección de contenido).
+    let mut src = MapSource::new();
+    let bc = src.put(COUNTER_WASM); // bytecode al CAS
+    let kp = Keypair::from_seed(SEED);
+    let grant = firmar(&kp, bc, PERMISO_RED);
+    let gh = src.put_grant(&grant); // concesión al CAS
+    let trust = TrustRing::new(vec![kp.public_key()]);
+
+    let catalog = Catalog::new(vec![
+        CatalogEntry {
+            id: "counter".into(),
+            name: "Contador".into(),
+            description: "suma y resta en red".into(),
+            category: Some("demo".into()),
+            bytecode: bc,
+            declarados: PERMISO_RED,
+            concesion: Some(gh),
+        },
+        CatalogEntry {
+            id: "otra".into(),
+            name: "Otra".into(),
+            description: "app que no está en el CAS".into(),
+            category: Some("demo".into()),
+            bytecode: [9; 32],
+            declarados: 0,
+            concesion: None,
+        },
+    ]);
+
+    // El catálogo es content-addressed: serializa y rehashea estable.
+    assert_eq!(
+        Catalog::deserializar(&catalog.serializar()).unwrap().hash(),
+        catalog.hash()
+    );
+
+    // Búsqueda por texto encuentra el contador.
+    let hits = catalog.search("suma");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, "counter");
+
+    // Resolver por id: trae bytecode + concesión, verifica, permisos reales.
+    let verified = resolve_from_catalog(&src, &trust, &catalog, "counter").unwrap();
+    assert_eq!(verified.permisos, PERMISO_RED, "la concesión del catálogo da RED");
+
+    // Y CORRE.
+    let mut guest = verified.load().unwrap();
+    guest.dispatch(0, EventPayload::Click).unwrap();
+    assert_eq!(
+        guest.view().children[0].text.as_ref().unwrap().content,
+        "1",
+        "la app elegida del catálogo incrementa de verdad"
+    );
+
+    // Una entrada cuyo bytecode no está en el CAS no resuelve (pero el catálogo
+    // sí la lista — descubrir ≠ tener).
+    assert!(resolve_from_catalog(&src, &trust, &catalog, "otra").is_err());
+    // Un id ausente del catálogo.
+    assert_eq!(
+        resolve_from_catalog(&src, &trust, &catalog, "nada").unwrap_err(),
+        DistError::NoEncontrado
+    );
 }
