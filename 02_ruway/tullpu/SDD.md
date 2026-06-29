@@ -7,8 +7,9 @@
 ## Estado (2026-06-29) — paridad Photoshop/Photopea
 
 Plan por fases para cerrar gaps vs Photopea/Photoshop. **Fases A** (estructura),
-**B** (selección real), **C** (texto) y **D** (transform) completas; **E**
-iniciada.
+**B** (selección), **C** (texto), **D** (transform), **E** (export, incl. PSD)
+y **F** (retoque clone+heal) completas. Pendientes: **G** GPU+tiling, **H** IA
+ONNX + vectores/paths.
 
 - **Fase A — grupos + clipping + capas de ajuste (HECHA).** `Capa` ganó
   `clase: ClaseCapa{Pixeles,Grupo,Ajuste(OpLocal)}`, `grupo: Option<Uuid>`
@@ -35,8 +36,11 @@ iniciada.
   `tullpu_paint::transformar_afin` (mapeo inverso + bilineal en coords de centro
   de píxel). Falta (menor): sesgar/perspectiva y escala desde la esquina opuesta
   (hoy siempre alrededor del centro).
-- **Fase E — export (MAYORMENTE):** multiformato PNG/JPEG/WebP ya está; falta
-  save-picker y PSD export.
+- **Fase E — export (HECHA salvo save-picker).** Multiformato PNG/JPEG/WebP +
+  **PSD multi-capa** (`foreign_psd::exportar_psd`, menú Archivo → "Exportar PSD
+  (capas)"): encoder PSD escrito a mano (header + Layer&Mask + merged), conserva
+  capas/blend/opacidad/visibilidad/nombre; round-trip `exportar→importar` verde.
+  Falta (menor): save file-picker (hoy va a CWD con timestamp).
 - **Fase F — retoque (HECHA, clone + heal).** Tampón de clonado (`c`, Alt fija
   origen) + **pincel corrector** (`j`, healing): clona y suma el delta
   `media_destino − media_origen` por estampa, fundiendo el parche (`estampar_sanar`

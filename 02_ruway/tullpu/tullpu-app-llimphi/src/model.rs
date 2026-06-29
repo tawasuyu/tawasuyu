@@ -533,6 +533,9 @@ pub(crate) enum Msg {
     AgregarIa(OpPixel),
     Recargar,
     Exportar(FormatoExport),
+    /// Exporta el lienzo como `.psd` multi-capa (vía `foreign-psd`) a CWD con
+    /// timestamp. Conserva capas, blend, opacidad, visibilidad y nombre.
+    ExportarPsd,
     Picker(PickerMsg),
     FileDrop(PathBuf),
     IniciarRenombrar(Uuid),

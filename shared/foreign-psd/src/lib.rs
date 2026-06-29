@@ -1,5 +1,7 @@
-//! `foreign-psd` — importa archivos `.psd` (Adobe Photoshop) como
-//! [`tullpu_core::Lienzo`] nativos.
+//! `foreign-psd` — importa **y exporta** archivos `.psd` (Adobe Photoshop)
+//! contra [`tullpu_core::Lienzo`] nativos. El import está abajo; el export
+//! (encoder PSD escrito a mano, round-trip verde) vive en [`export`] —
+//! [`exportar_psd`].
 //!
 //! Una capa PSD se traduce a una [`tullpu_core::Capa`] **raster** apuntando a
 //! un buffer Rgba8 de tamaño `width × height` (el del lienzo PSD). El orden
@@ -76,6 +78,9 @@ use std::collections::HashMap;
 use psd::{Psd, PsdError, PsdGroup};
 use thiserror::Error;
 use tullpu_core::{hash_bytes, Capa, Hash, Lienzo, ModoFusion};
+
+mod export;
+pub use export::{exportar_psd, ExportPsdError};
 
 /// Resultado del import: el lienzo armado + los buffers Rgba8 que sus capas
 /// referencian por hash. El caller decide dónde persistirlos.

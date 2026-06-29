@@ -1210,6 +1210,33 @@ impl App for Tullpu {
                     }
                 }
             }
+            Msg::ExportarPsd => {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let ruta = std::path::PathBuf::from(format!("tullpu-export-{ts}.psd"));
+                let id = model.next_toast;
+                model.next_toast += 1;
+                let resultado = foreign_psd::exportar_psd(&model.lienzo, &model.almacen)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| std::fs::write(&ruta, bytes).map_err(|e| e.to_string()));
+                match resultado {
+                    Ok(_) => {
+                        let n = model.lienzo.capas.len();
+                        model.estado = format!("exportado → {} ({n} capas)", ruta.display());
+                        push_toast(
+                            &mut model,
+                            handle,
+                            Toast::success(id, format!("💾 PSD → {} ({n} capas)", ruta.display()), TOAST_TTL),
+                        );
+                    }
+                    Err(e) => {
+                        model.estado = format!("export PSD falló: {e}");
+                        push_toast(&mut model, handle, Toast::error(id, format!("export PSD falló: {e}"), TOAST_TTL));
+                    }
+                }
+            }
             Msg::MenuOpen(idx) => {
                 model.menu_open = idx;
                 model.menu_active = usize::MAX;
@@ -1661,7 +1688,8 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(MenuItem::new("Abrir imagen…", "file.abrir").shortcut("Ctrl+P"))
                 .item(MenuItem::new("Exportar PNG", "file.png").shortcut("Ctrl+S").separated())
                 .item(MenuItem::new("Exportar JPEG", "file.jpeg"))
-                .item(MenuItem::new("Exportar WebP", "file.webp").shortcut("Ctrl+Shift+S")),
+                .item(MenuItem::new("Exportar WebP", "file.webp").shortcut("Ctrl+Shift+S"))
+                .item(MenuItem::new("Exportar PSD (capas)", "file.psd")),
         )
         .menu(
             Menu::new("Editar")
@@ -1716,6 +1744,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "file.png" => Some(Msg::Exportar(tullpu_render::FormatoExport::Png)),
         "file.jpeg" => Some(Msg::Exportar(tullpu_render::FormatoExport::Jpeg { calidad: 90 })),
         "file.webp" => Some(Msg::Exportar(tullpu_render::FormatoExport::Webp)),
+        "file.psd" => Some(Msg::ExportarPsd),
         "edit.undo" => Some(Msg::Undo),
         "edit.redo" => Some(Msg::Redo),
         "edit.duplicar" => sel.map(Msg::Duplicar),
