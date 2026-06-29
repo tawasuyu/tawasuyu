@@ -132,7 +132,7 @@ pub(crate) fn start_load(m: &mut Model, url: String, push_history: bool, handle:
     t.url = url.clone();
     t.addr.set_text(url.clone());
     t.addr_focused = false;
-    t.status = format!("cargando {url}…");
+    t.status = rimay_localize::t_args("puriy-status-loading-url", &[("url", url.clone().into())]);
     t.scroll_y = 0.0;
     t.box_tree = None;
     if push_history {
@@ -242,7 +242,7 @@ pub(crate) fn start_load_post(m: &mut Model, url: String, body: String, handle: 
     t.url = url.clone();
     t.addr.set_text(url.clone());
     t.addr_focused = false;
-    t.status = format!("POST {url}…");
+    t.status = rimay_localize::t_args("puriy-status-posting", &[("url", url.clone().into())]);
     t.scroll_y = 0.0;
     t.box_tree = None;
     t.history.truncate(t.cursor + 1);

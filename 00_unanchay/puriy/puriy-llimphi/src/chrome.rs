@@ -6,6 +6,7 @@
 //! dirección renovado (theme-driven, con autocompletar) vive en `container.rs`
 //! (`nav_header_bar`). Comparte todos los tipos del crate vía `use super::*`.
 use super::*;
+use rimay_localize::{t, t_args};
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
 pub(crate) fn menubar_spec<'a>(menu: &'a app_bus::AppMenu, model: &Model) -> MenuBarSpec<'a, Msg> {
@@ -43,37 +44,37 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
     let can_redo = focused.map(|(s, _)| s.editor().can_redo()).unwrap_or(false);
     let has_input = focused.is_some();
 
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    let mut undo = MenuItem::new(t("undo"), "edit.undo").shortcut("Ctrl+Z");
     if !can_undo { undo = undo.disabled(); }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new(t("redo"), "edit.redo").shortcut("Ctrl+Y");
     if !can_redo { redo = redo.disabled(); }
-    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
-    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    let mut cut = MenuItem::new(t("cut"), "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new(t("copy"), "edit.copy").shortcut("Ctrl+C");
     if !has_sel { cut = cut.disabled(); copy = copy.disabled(); }
-    let mut paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
+    let mut paste = MenuItem::new(t("paste"), "edit.paste").shortcut("Ctrl+V");
     let mut sel_all =
-        MenuItem::new("Seleccionar todo", "edit.selectall").shortcut("Ctrl+A").separated();
+        MenuItem::new(t("puriy-select-all"), "edit.selectall").shortcut("Ctrl+A").separated();
     if !has_input { paste = paste.disabled(); sel_all = sel_all.disabled(); }
 
-    let t = model.active();
-    let can_back = t.can_back();
-    let can_fwd = t.can_fwd();
-    let mut back = MenuItem::new("Atrás", "nav.back").shortcut("Alt+←");
+    let tab = model.active();
+    let can_back = tab.can_back();
+    let can_fwd = tab.can_fwd();
+    let mut back = MenuItem::new(t("puriy-back"), "nav.back").shortcut("Alt+←");
     if !can_back { back = back.disabled(); }
-    let mut fwd = MenuItem::new("Adelante", "nav.fwd").shortcut("Alt+→");
+    let mut fwd = MenuItem::new(t("puriy-forward"), "nav.fwd").shortcut("Alt+→");
     if !can_fwd { fwd = fwd.disabled(); }
 
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Nueva pestaña", "file.newtab").shortcut("Ctrl+T"))
-                .item(MenuItem::new("Cerrar pestaña", "file.close").shortcut("Ctrl+W").separated())
-                .item(MenuItem::new("Recargar", "file.reload").shortcut("F5"))
-                .item(MenuItem::new("Ver código fuente", "file.source").shortcut("Ctrl+U"))
-                .item(MenuItem::new("Agregar marcador", "file.bookmark").shortcut("Ctrl+D")),
+            Menu::new(t("puriy-menu-file"))
+                .item(MenuItem::new(t("puriy-new-tab"), "file.newtab").shortcut("Ctrl+T"))
+                .item(MenuItem::new(t("puriy-close-tab"), "file.close").shortcut("Ctrl+W").separated())
+                .item(MenuItem::new(t("puriy-reload"), "file.reload").shortcut("F5"))
+                .item(MenuItem::new(t("puriy-view-source"), "file.source").shortcut("Ctrl+U"))
+                .item(MenuItem::new(t("puriy-add-bookmark"), "file.bookmark").shortcut("Ctrl+D")),
         )
         .menu(
-            Menu::new("Editar")
+            Menu::new(t("edit"))
                 .item(undo)
                 .item(redo)
                 .item(cut)
@@ -82,23 +83,23 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(sel_all),
         )
         .menu(
-            Menu::new("Navegar")
+            Menu::new(t("puriy-menu-navigate"))
                 .item(back)
                 .item(fwd)
-                .item(MenuItem::new("Ir a la barra de dirección", "nav.addr").shortcut("Ctrl+L").separated())
-                .item(MenuItem::new("Buscar en la página", "nav.find").shortcut("Ctrl+F")),
+                .item(MenuItem::new(t("puriy-goto-addr"), "nav.addr").shortcut("Ctrl+L").separated())
+                .item(MenuItem::new(t("puriy-find-in-page"), "nav.find").shortcut("Ctrl+F")),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Acercar", "view.zoomin").shortcut("Ctrl++"))
-                .item(MenuItem::new("Alejar", "view.zoomout").shortcut("Ctrl+-"))
-                .item(MenuItem::new("Restablecer zoom", "view.zoomreset").shortcut("Ctrl+0").separated())
-                .item(MenuItem::new("Marcadores", "view.bookmarks").shortcut("Ctrl+B"))
-                .item(MenuItem::new("Historial", "view.history").shortcut("Ctrl+H")),
+            Menu::new(t("puriy-menu-view"))
+                .item(MenuItem::new(t("puriy-zoom-in"), "view.zoomin").shortcut("Ctrl++"))
+                .item(MenuItem::new(t("puriy-zoom-out"), "view.zoomout").shortcut("Ctrl+-"))
+                .item(MenuItem::new(t("puriy-zoom-reset"), "view.zoomreset").shortcut("Ctrl+0").separated())
+                .item(MenuItem::new(t("puriy-bookmarks"), "view.bookmarks").shortcut("Ctrl+B"))
+                .item(MenuItem::new(t("puriy-history"), "view.history").shortcut("Ctrl+H")),
         )
         .menu(
-            Menu::new("Ayuda")
-                .item(MenuItem::new("Acerca de puriy", "help.about")),
+            Menu::new(t("help"))
+                .item(MenuItem::new(t("puriy-about"), "help.about")),
         )
 }
 
@@ -381,18 +382,22 @@ pub(crate) fn find_bar(
     let palette = TextInputPalette::default();
     // Siempre focado mientras está abierta — Ctrl+F fue la última acción
     // explícita del usuario, no tiene sentido que el input no acepte teclas.
-    let entry = text_input_view(input, "buscar en página…", true, &palette, Msg::FindOpen);
+    let ph = t("puriy-find-placeholder");
+    let entry = text_input_view(input, &ph, true, &palette, Msg::FindOpen);
 
     let count_label = if input.text().is_empty() {
-        "(escribí algo · Enter avanza)".to_string()
+        t("puriy-find-hint")
     } else if count == 0 {
-        "sin matches".to_string()
+        t("puriy-find-none")
     } else if current > 0 && current <= count {
-        format!("{current} de {count}")
+        t_args(
+            "puriy-find-pos",
+            &[("cur", current.to_string().into()), ("total", count.to_string().into())],
+        )
     } else if count == 1 {
-        "1 match · Enter".to_string()
+        t("puriy-find-one")
     } else {
-        format!("{count} matches · Enter")
+        t_args("puriy-find-count", &[("n", count.to_string().into())])
     };
 
     let close = View::new(Style {
@@ -483,7 +488,10 @@ pub(crate) fn panel_view(
     let title = if q_lc.is_empty() {
         title
     } else {
-        format!("{title} · filtrado: {} items", items.len())
+        t_args(
+            "puriy-panel-filtered",
+            &[("title", title.into()), ("n", items.len().to_string().into())],
+        )
     };
 
     let header = View::new(Style {
@@ -518,8 +526,8 @@ pub(crate) fn panel_view(
 
     let list: Vec<View<Msg>> = if items.is_empty() {
         let msg = match kind {
-            PanelKind::Bookmarks => "(no hay bookmarks · Ctrl+D guarda la pestaña activa)",
-            PanelKind::History => "(historial vacío)",
+            PanelKind::Bookmarks => t("puriy-bookmarks-empty"),
+            PanelKind::History => t("puriy-history-empty"),
             PanelKind::Source => unreachable!(),
         };
         vec![View::new(Style {
@@ -532,7 +540,7 @@ pub(crate) fn panel_view(
             },
             ..Default::default()
         })
-        .text_aligned(msg.to_string(), 12.0, Color::from_rgb8(140, 140, 150), Alignment::Start)]
+        .text_aligned(msg, 12.0, Color::from_rgb8(140, 140, 150), Alignment::Start)]
     } else {
         items.into_iter().map(panel_item_row).collect()
     };
@@ -548,11 +556,11 @@ pub(crate) fn panel_view(
 
     let palette = TextInputPalette::default();
     let placeholder = match kind {
-        PanelKind::Bookmarks => "filtrar bookmarks por title o url…",
-        PanelKind::History => "filtrar historial por title o url…",
+        PanelKind::Bookmarks => t("puriy-filter-bookmarks"),
+        PanelKind::History => t("puriy-filter-history"),
         PanelKind::Source => unreachable!(),
     };
-    let filter_input = text_input_view(filter, placeholder, true, &palette, Msg::ClosePanel);
+    let filter_input = text_input_view(filter, &placeholder, true, &palette, Msg::ClosePanel);
     let filter_row = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
         padding: Rect {
@@ -604,7 +612,7 @@ pub(crate) fn source_panel(source: Option<&str>, zoom: f32) -> View<Msg> {
             ..Default::default()
         })
         .text_aligned(
-            "Page Source · Ctrl+U cierra · Esc también".to_string(),
+            t("puriy-source-header"),
             13.0,
             Color::from_rgb8(230, 230, 240),
             Alignment::Start,
@@ -627,8 +635,8 @@ pub(crate) fn source_panel(source: Option<&str>, zoom: f32) -> View<Msg> {
             .take(2000) // cap protección — sources gigantes no destruyen el frame
             .map(|(i, line)| source_line_view(i + 1, line, zoom))
             .collect(),
-        Some(_) => vec![source_empty_row("(la respuesta no tenía cuerpo)")],
-        None => vec![source_empty_row("(la pestaña todavía no cargó)")],
+        Some(_) => vec![source_empty_row(&t("puriy-source-no-body"))],
+        None => vec![source_empty_row(&t("puriy-source-not-loaded"))],
     };
 
     let body = View::new(Style {
@@ -787,10 +795,10 @@ pub(crate) fn panel_item_row(item: PanelItem) -> View<Msg> {
 /// items de panel con botón de borrar.
 pub(crate) fn collect_bookmarks() -> (String, Vec<PanelItem>) {
     let Some(handle) = profile_handle() else {
-        return ("Bookmarks · (sin profile)".to_string(), Vec::new());
+        return (t("puriy-panel-bookmarks-noprofile"), Vec::new());
     };
     let Ok(p) = handle.lock() else {
-        return ("Bookmarks".to_string(), Vec::new());
+        return (t("puriy-panel-bookmarks-bare"), Vec::new());
     };
     let items: Vec<PanelItem> = p
         .bookmarks
@@ -802,7 +810,7 @@ pub(crate) fn collect_bookmarks() -> (String, Vec<PanelItem>) {
             removable: Some(b.id),
         })
         .collect();
-    let title = format!("Bookmarks · {} items", items.len());
+    let title = t_args("puriy-panel-bookmarks-count", &[("n", items.len().to_string().into())]);
     (title, items)
 }
 
@@ -810,10 +818,10 @@ pub(crate) fn collect_bookmarks() -> (String, Vec<PanelItem>) {
 /// primero), sin botón de borrado individual por ahora.
 pub(crate) fn collect_history() -> (String, Vec<PanelItem>) {
     let Some(handle) = profile_handle() else {
-        return ("Historial · (sin profile)".to_string(), Vec::new());
+        return (t("puriy-panel-history-noprofile"), Vec::new());
     };
     let Ok(p) = handle.lock() else {
-        return ("Historial".to_string(), Vec::new());
+        return (t("puriy-panel-history-bare"), Vec::new());
     };
     let items: Vec<PanelItem> = p
         .history
@@ -826,7 +834,7 @@ pub(crate) fn collect_history() -> (String, Vec<PanelItem>) {
             removable: None,
         })
         .collect();
-    let title = format!("Historial · {} entradas", items.len());
+    let title = t_args("puriy-panel-history-count", &[("n", items.len().to_string().into())]);
     (title, items)
 }
 

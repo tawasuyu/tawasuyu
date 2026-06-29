@@ -210,7 +210,7 @@ impl TabState {
             space: 0,
             url: url.clone(),
             title: String::new(),
-            status: "cargando…".into(),
+            status: rimay_localize::t("puriy-status-loading"),
             scroll_y: 0.0,
             addr,
             addr_focused: false,

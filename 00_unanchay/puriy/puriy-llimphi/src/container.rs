@@ -152,7 +152,7 @@ fn pretty_url_view(url: &str, theme: &Theme) -> View<Msg> {
         spans.push(span(truncate(&rest, 80), muted, 13.0));
     }
     if spans.is_empty() {
-        spans.push(span("ingresar URL…".into(), theme.fg_placeholder, 13.0));
+        spans.push(span(rimay_localize::t("puriy-addr-empty"), theme.fg_placeholder, 13.0));
     }
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
@@ -268,13 +268,14 @@ pub(crate) fn nav_header_bar(model: &Model) -> View<Msg> {
     let (scheme, _, _) = split_url(&t.url);
     let addr_field: View<Msg> = if t.addr_focused {
         let palette = TextInputPalette::from_theme(theme);
+        let addr_ph = rimay_localize::t("puriy-addr-placeholder");
         View::new(Style {
             size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
             ..Default::default()
         })
         .children(vec![text_input_view(
             &t.addr,
-            "ingresar URL o buscar…",
+            &addr_ph,
             true,
             &palette,
             Msg::FocusAddr,
@@ -444,7 +445,8 @@ fn vertical_tab_panel(model: &Model) -> View<Msg> {
         let t = &model.tabs[idx];
         let active = idx == model.active;
         let label = if t.title.is_empty() { t.url.as_str() } else { t.title.as_str() };
-        let label = if label.is_empty() { "(nueva pestaña)" } else { label };
+        let new_label = rimay_localize::t("puriy-new-tab-label");
+        let label = if label.is_empty() { new_label.as_str() } else { label };
         let fg = if active { theme.fg_text } else { theme.fg_muted };
 
         let close = View::new(Style {
@@ -512,7 +514,7 @@ fn vertical_tab_panel(model: &Model) -> View<Msg> {
     })
     .radius(6.0)
     .hover_fill(theme.bg_row_hover)
-    .text_aligned("+  nueva pestaña", 12.0, theme.fg_muted, Alignment::Start)
+    .text_aligned(rimay_localize::t("puriy-add-tab"), 12.0, theme.fg_muted, Alignment::Start)
     .on_click(Msg::NewTab);
     kids.push(add_tab);
 

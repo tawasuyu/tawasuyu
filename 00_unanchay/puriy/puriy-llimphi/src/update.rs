@@ -17,6 +17,8 @@ impl App for Puriy {
     }
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
+        // Carga los catálogos Fluent (es/en/qu) una sola vez. Idempotente.
+        rimay_localize::init();
         let url = PURIY_URL
             .with(|c| c.borrow().clone())
             .unwrap_or_else(|| NEW_TAB_URL.to_string());
@@ -39,7 +41,7 @@ impl App for Puriy {
         Model {
             tabs: vec![tab],
             active: 0,
-            spaces: vec![Space::new("Principal", "◆")],
+            spaces: vec![Space::new(rimay_localize::t("puriy-space-default"), "◆")],
             active_space: 0,
             orientation,
             theme: Theme::dark(),

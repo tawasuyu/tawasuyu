@@ -10,14 +10,15 @@ use super::*;
 
 use allichay::{EnumOption, Field, FieldPath, FieldValue, Schema, Section};
 use llimphi_module_allichay::{settings_overlay, AllichayMsg};
+use rimay_localize::{t, t_args};
 
 /// Describe las preferencias actuales como un esquema editable. Se reconstruye
 /// en cada frame leyendo el `Model` — los valores que muestra son los vigentes.
 pub(crate) fn settings_schema(model: &Model) -> Schema {
     // Opciones de orientación de las pestañas — el corazón de esta tarea.
     let orient_opts = vec![
-        EnumOption::new(TabOrientation::Horizontal.id(), "Horizontal (barra arriba)"),
-        EnumOption::new(TabOrientation::Vertical.id(), "Vertical (sidebar de dientes)"),
+        EnumOption::new(TabOrientation::Horizontal.id(), t("puriy-set-orient-horizontal")),
+        EnumOption::new(TabOrientation::Vertical.id(), t("puriy-set-orient-vertical")),
     ];
     // Temas: los presets de `llimphi-theme` (sus nombres son ids estables).
     let theme_opts: Vec<EnumOption> = Theme::all()
@@ -27,28 +28,28 @@ pub(crate) fn settings_schema(model: &Model) -> Schema {
 
     Schema::new()
         .section(
-            Section::new("pestanas", "Pestañas")
+            Section::new("pestanas", t("puriy-set-sec-tabs"))
                 .icon("▦")
-                .help("Cómo se disponen las pestañas del navegador.")
+                .help(t("puriy-set-tabs-help"))
                 .field(Field::dropdown(
                     "orientacion",
-                    "Orientación",
+                    t("puriy-set-orientation"),
                     model.orientation.id(),
                     orient_opts,
                 ))
                 .field(Field::display(
                     "spaces",
-                    "Spaces",
-                    format!("{} space(s)", model.space_count()),
+                    t("puriy-set-spaces"),
+                    t_args("puriy-set-spaces-count", &[("n", model.space_count().to_string().into())]),
                 )),
         )
         .section(
-            Section::new("apariencia", "Apariencia")
+            Section::new("apariencia", t("puriy-set-sec-appearance"))
                 .icon("◐")
-                .help("Tema del chrome renovado (sidebar, rail, ajustes, URL).")
+                .help(t("puriy-set-appearance-help"))
                 .field(Field::dropdown(
                     "tema",
-                    "Tema",
+                    t("puriy-set-theme"),
                     model.theme.name,
                     theme_opts,
                 )),
@@ -63,8 +64,8 @@ pub(crate) fn settings_overlay_view(model: &Model) -> View<Msg> {
     // tamaño base de la ventana (`initial_size`).
     let (w, h) = Puriy::initial_size();
     settings_overlay(
-        "Configuración",
-        "Cerrar",
+        t("puriy-settings-title"),
+        t("close"),
         &schema,
         &model.settings,
         &model.theme,
