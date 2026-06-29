@@ -53,22 +53,27 @@ impl LinuxSurfaces {
         }
     }
 
-    /// Encarna `command` bajo `slice/<unit_label>` y lo mueve al
+    /// Encarna `command` bajo `slice/<unit_label>`, agrupando su ventana en el
     /// special-workspace `special`. Devuelve el card-id como string.
+    ///
+    /// El agrupamiento es **sin race de foco**: registramos la membresía
+    /// `app_id → special` en mirada ANTES de encarnar (`place-app-special`), así
+    /// la ventana nace ya etiquetada cuando aparezca, sin depender de cuál esté
+    /// enfocada. La ventana nace visible; `stash`/`summon` la ocultan/traen con
+    /// sus compañeras al cambiar de contexto.
     async fn incarnate(&self, label: &str, command: &str, slice: &str, special: &str) -> Result<String, String> {
         let (exec, argv) = split_cmd(command);
         if exec.is_empty() {
             return Err(format!("comando vacío para `{label}`"));
         }
+        // Registrar la membresía de contexto antes de lanzar (best-effort: si
+        // mirada no corre, la encarnación igual procede).
+        let _ = self.mirada(&["place-app-special", label, special]).await;
         let mut card = Card::new(format!("pacha:{label}"));
         card.payload = Payload::Native { exec, argv, envp: vec![] };
         // Bajo el subárbol del contexto: reweight/freeze del slice lo cubre.
         card.soma.cgroup.path = format!("{slice}/{label}");
         let handle = self.engine.run(Intent::new(card)).await.map_err(|e| e.to_string())?;
-        // Agrupar la ventana en el special-workspace del contexto. NOTA: hoy
-        // `move-to-special` actúa sobre la ventana enfocada; agrupar de forma
-        // robusta por app_id es el spike de ventanas (ver plan). Best-effort.
-        let _ = self.mirada(&["move-to-special", special]).await;
         Ok(handle.card_id.to_string())
     }
 }
@@ -111,13 +116,14 @@ impl Surfaces for LinuxSurfaces {
     }
 
     async fn hide_windows(&mut self, special: &str) -> Result<(), String> {
-        // toggle-special esconde el cajón si está visible. Idempotencia real
-        // depende del estado del compositor — best-effort para MVP.
-        self.mirada(&["toggle-special", special]).await.map(|_| ())
+        // stash-special oculta TODAS las ventanas etiquetadas del contexto,
+        // estén donde estén (idempotente: si no hay ninguna, no hace nada).
+        self.mirada(&["stash-special", special]).await.map(|_| ())
     }
 
     async fn show_windows(&mut self, special: &str) -> Result<(), String> {
-        self.mirada(&["toggle-special", special]).await.map(|_| ())
+        // summon-special las trae teseladas al escritorio activo.
+        self.mirada(&["summon-special", special]).await.map(|_| ())
     }
 
     async fn set_cpu_weight(&mut self, slice: &str, weight: u32) -> Result<(), String> {
@@ -137,23 +143,15 @@ impl Surfaces for LinuxSurfaces {
         Ok(())
     }
 
-    async fn snapshot_apps(&mut self, special: &str) -> Result<Vec<String>, String> {
-        // `mirada-ctl windows --porcelain`: ID \t workspace \t app_id \t title.
-        // Filtramos por las que estén en el special-workspace del contexto.
-        // (Spike de ventanas: si mirada no etiqueta el special en `workspace`,
-        // esto devuelve vacío y el restore cae a la receta — degradación OK.)
-        let out = self.mirada(&["windows", "--porcelain"]).await.unwrap_or_default();
-        let mut ids = Vec::new();
-        for line in out.lines() {
-            let mut f = line.split('\t');
-            let (_id, ws, app_id) = (f.next(), f.next(), f.next());
-            if let (Some(ws), Some(app_id)) = (ws, app_id) {
-                if ws == special && !app_id.is_empty() {
-                    ids.push(app_id.to_string());
-                }
-            }
-        }
-        Ok(ids)
+    async fn snapshot_apps(&mut self, _special: &str) -> Result<Vec<String>, String> {
+        // Con el modelo de membresía por `app_id`, las ventanas del contexto
+        // están VISIBLES en un escritorio normal (no en un workspace llamado
+        // como el especial), así que `mirada-ctl windows` no las distingue de
+        // las demás. Capturar exactamente las del contexto requiere que mirada
+        // exponga una consulta de membresía (`window_special`) — pendiente.
+        // Hasta entonces devolvemos vacío: el restore cae a la receta del
+        // contexto (degradación documentada en el plan).
+        Ok(Vec::new())
     }
 }
 

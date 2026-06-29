@@ -48,6 +48,14 @@ pub fn ensure_cgroup(spec: &CgroupSpec) -> Result<PathBuf, IncarnateError> {
         std::io::ErrorKind::PermissionDenied => IncarnateError::CgroupNotWritable { path: abs.clone() },
         _ => IncarnateError::Io(e),
     })?;
+    // Habilita los controllers en la cadena de ancestros recién creada, para
+    // que `cpu.weight`/`io.weight`/`memory.max`/`pids.max` SEAN escribibles en
+    // este cgroup y en su slice padre (cgroup v2: un control file existe en C
+    // sólo si el PADRE de C lo tiene en `cgroup.subtree_control`). Best-effort:
+    // donde no hay delegación (o el padre tiene procesos directos — regla "no
+    // internal processes"), falla en silencio y el weight simplemente no se
+    // aplica. Es la pieza que faltaba para el reweight por slice de `pacha`.
+    enable_controllers_chain(&abs);
     if let Some(w) = spec.cpu_weight {
         let _ = std::fs::write(abs.join("cpu.weight"), format!("{w}\n"));
     }
@@ -81,6 +89,55 @@ pub fn apply_rlimits_to_cgroup(cgroup_abs: &Path, rlimits: &ResourceLimits) -> V
         }
     }
     applied
+}
+
+/// Controllers que `pacha`/arje quieren propagar a los hijos para poder fijar
+/// pesos y límites (`cpu.weight`, `io.weight`, `memory.max`, `pids.max`).
+const WANTED_CONTROLLERS: &[&str] = &["cpu", "io", "memory", "pids"];
+
+/// Habilita en `dir/cgroup.subtree_control` los controllers de
+/// [`WANTED_CONTROLLERS`] que estén **disponibles** en `dir/cgroup.controllers`
+/// (cgroup v2 sólo deja delegar a hijos los que el padre ya tiene). Best-effort:
+/// si el dir no es escribible (sin delegación), tiene procesos directos (regla
+/// "no internal processes"), o no es un cgroup, no hace nada.
+pub fn enable_subtree_controllers(dir: &Path) {
+    let available = std::fs::read_to_string(dir.join("cgroup.controllers")).unwrap_or_default();
+    let have: Vec<&str> = available.split_whitespace().collect();
+    let cmd = WANTED_CONTROLLERS
+        .iter()
+        .filter(|c| have.contains(*c))
+        .map(|c| format!("+{c}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cmd.is_empty() {
+        return;
+    }
+    if let Err(e) = std::fs::write(dir.join("cgroup.subtree_control"), &cmd) {
+        tracing::debug!(error = %e, dir = %dir.display(), "subtree_control no escribible (best-effort)");
+    }
+}
+
+/// Habilita los controllers a lo largo de toda la cadena de ancestros de `abs`
+/// bajo `/sys/fs/cgroup`, de la raíz hacia abajo — así un `cpu.weight` escrito
+/// en `abs` o en su slice padre es efectivo. Best-effort en cada nivel.
+fn enable_controllers_chain(abs: &Path) {
+    let root = Path::new("/sys/fs/cgroup");
+    let mut chain: Vec<&Path> = Vec::new();
+    let mut cur = Some(abs);
+    while let Some(d) = cur {
+        if !d.starts_with(root) {
+            break;
+        }
+        chain.push(d);
+        if d == root {
+            break;
+        }
+        cur = d.parent();
+    }
+    // De la raíz hacia el cgroup nuevo: cada nivel delega a su hijo.
+    for d in chain.iter().rev() {
+        enable_subtree_controllers(d);
+    }
 }
 
 /// Path absoluto bajo `/sys/fs/cgroup` de un cgroup declarado (mismo
@@ -192,6 +249,38 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("cgroup.freeze")).unwrap(), "1\n");
         set_frozen_at(&dir, false).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("cgroup.freeze")).unwrap(), "0\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_subtree_controllers_propaga_los_disponibles() {
+        let dir = std::env::temp_dir().join(format!("pacha-cg-sc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cgroup.controllers"), "cpu io memory pids\n").unwrap();
+        enable_subtree_controllers(&dir);
+        let got = std::fs::read_to_string(dir.join("cgroup.subtree_control")).unwrap();
+        assert_eq!(got, "+cpu +io +memory +pids");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_subtree_controllers_solo_los_presentes() {
+        let dir = std::env::temp_dir().join(format!("pacha-cg-sc2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Sólo cpu disponible → sólo +cpu.
+        std::fs::write(dir.join("cgroup.controllers"), "cpu\n").unwrap();
+        enable_subtree_controllers(&dir);
+        assert_eq!(std::fs::read_to_string(dir.join("cgroup.subtree_control")).unwrap(), "+cpu");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enable_subtree_controllers_sin_controllers_no_escribe() {
+        let dir = std::env::temp_dir().join(format!("pacha-cg-sc3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // No hay cgroup.controllers → no escribe nada (no crea subtree_control).
+        enable_subtree_controllers(&dir);
+        assert!(!dir.join("cgroup.subtree_control").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
