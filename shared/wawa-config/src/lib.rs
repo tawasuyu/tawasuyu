@@ -206,6 +206,8 @@ pub struct AiConfig {
     pub llm: LlmSettings,
     #[serde(default)]
     pub semantic: SemanticSettings,
+    #[serde(default)]
+    pub voz: VozSettings,
 }
 
 /// Selección de backend LLM. `backend` vacío = resolver por entorno (`from_env`).
@@ -250,6 +252,37 @@ impl SemanticSettings {
     /// La dimensión efectiva del fallback mock (default 384).
     pub fn effective_dim(&self) -> usize {
         if self.dim == 0 { 384 } else { self.dim }
+    }
+}
+
+/// Selección de motores de **voz** (STT/TTS) + palabra de llamada y wake-word.
+/// Espeja `rimay_voz::VozConfig` con tipos planos, para no acoplar este crate a
+/// rimay-voz. Lo edita wawa-panel; lo leen los hosts de voz (shuma, mirada…).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VozSettings {
+    /// Backend de reconocimiento (STT). `""` = mock (sin modelo); `"local"` =
+    /// daemon local; `"nube:openai:whisper-1"` = nube. Formato de
+    /// `rimay_voz::Backend::parse` / `RIMAY_VOZ_STT`.
+    #[serde(default)]
+    pub stt: String,
+    /// Backend de síntesis (TTS). Mismo formato (ej. `"nube:openai:tts-1"`).
+    #[serde(default)]
+    pub tts: String,
+    /// Palabra de llamada (wake-word). `""` = `"shuma"`.
+    #[serde(default)]
+    pub llamado: String,
+    /// Compuerta wake-word (F1): si está, estando dormido sólo se transcribe lo
+    /// que suena al llamado (privacidad: el resto no llega al STT). Apagada por
+    /// defecto (F0: transcribe toda utterance).
+    #[serde(default)]
+    pub wake: bool,
+}
+
+impl VozSettings {
+    /// Palabra de llamada efectiva (default `"shuma"`).
+    pub fn effective_llamado(&self) -> &str {
+        let l = self.llamado.trim();
+        if l.is_empty() { "shuma" } else { l }
     }
 }
 
@@ -720,6 +753,38 @@ mod tests {
         // Un campo extra no rompe la deserialización.
         let s = r#"{"theme_variant":"dark","unknown":42}"#;
         let _c: WawaConfig = serde_json::from_str(s).unwrap();
+    }
+
+    #[test]
+    fn voz_settings_round_trip() {
+        // Lo que escribe wawa-panel (ai.voz) debe sobrevivir el ciclo a disco.
+        let mut c = WawaConfig::default();
+        c.ai.voz.stt = "nube:openai:whisper-1".into();
+        c.ai.voz.tts = "local".into();
+        c.ai.voz.llamado = "shuma".into();
+        c.ai.voz.wake = true;
+        let s = serde_json::to_string(&c).unwrap();
+        let back: WawaConfig = serde_json::from_str(&s).unwrap();
+        assert_eq!(c.ai.voz, back.ai.voz);
+    }
+
+    #[test]
+    fn voz_llamado_efectivo_cae_a_shuma() {
+        let mut v = VozSettings::default();
+        assert_eq!(v.effective_llamado(), "shuma"); // vacío
+        v.llamado = "  ".into();
+        assert_eq!(v.effective_llamado(), "shuma"); // sólo espacios
+        v.llamado = "wawa".into();
+        assert_eq!(v.effective_llamado(), "wawa");
+    }
+
+    #[test]
+    fn voz_ausente_en_json_cae_a_default() {
+        // Config vieja sin `ai.voz` no debe romper: F0, mock, sin llamado fijado.
+        let c: WawaConfig = serde_json::from_str(r#"{"ai":{}}"#).unwrap();
+        assert_eq!(c.ai.voz, VozSettings::default());
+        assert!(!c.ai.voz.wake);
+        assert_eq!(c.ai.voz.effective_llamado(), "shuma");
     }
 
     #[test]

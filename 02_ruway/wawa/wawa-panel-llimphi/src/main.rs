@@ -1875,6 +1875,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     sistema.sections.push(puntero_section(&m.mirada));
     sistema.sections.push(idioma_section(&m.cfg));
     sistema.sections.push(wawa_ai_section(m));
+    sistema.sections.push(wawa_voz_section(m));
     sistema.sections.push(modulos_section(&m.cfg));
 
     // ---- Panel ACERCA ----
@@ -2804,6 +2805,67 @@ fn apply_wawa_ai(m: &mut Model, field: &str, value: FieldValue) {
     m.dirty.wawa = true;
     m.save_in = SAVE_DELAY_TICKS;
     m.status = "ajuste de IA/semántica global guardado".into();
+}
+
+/// Sección «Voz (manos libres)»: motores de STT/TTS (híbrido mock/local/nube),
+/// palabra de llamada y compuerta wake-word. Config GLOBAL del SO en
+/// `WawaConfig::ai.voz`; la leen los hosts de voz (shuma, mirada…) para armar
+/// `rimay_voz::VozConfig` + `OpcionesEscucha`.
+fn wawa_voz_section(m: &Model) -> Section {
+    use allichay::Field;
+    // Presets del híbrido. El valor crudo es el de `rimay_voz::Backend::parse`.
+    let stt_opts: Vec<EnumOption> = [
+        ("", "Mock (sin modelo)"),
+        ("local", "Local (daemon)"),
+        ("nube:openai:whisper-1", "Nube (OpenAI Whisper)"),
+    ]
+    .iter()
+    .map(|(v, l)| EnumOption::new((*v).to_string(), (*l).to_string()))
+    .collect();
+    let tts_opts: Vec<EnumOption> = [
+        ("", "Mock (sin modelo)"),
+        ("local", "Local (daemon)"),
+        ("nube:openai:tts-1", "Nube (OpenAI)"),
+    ]
+    .iter()
+    .map(|(v, l)| EnumOption::new((*v).to_string(), (*l).to_string()))
+    .collect();
+    let v = &m.cfg.ai.voz;
+    Section::new("wawa_voz::voz", "Voz (manos libres)")
+        .icon("🎙")
+        .help(
+            "Voz del SO: el reconocimiento (dictado) y la síntesis (lectura) — \
+             cada uno mock, local (daemon) o nube, por separado. La palabra de \
+             llamada despierta la escucha; con el wake-word activo, dormido sólo \
+             se transcribe lo que suena al llamado (el resto no llega al STT ni a \
+             la nube).",
+        )
+        .field(Field::radio("stt", "Reconocimiento (STT)", v.stt.clone(), stt_opts))
+        .field(Field::radio("tts", "Síntesis (TTS)", v.tts.clone(), tts_opts))
+        .field(Field::text(
+            "llamado",
+            "Palabra de llamada (vacío = «shuma»)",
+            v.llamado.clone(),
+        ))
+        .field(Field::toggle(
+            "wake",
+            "Wake-word: sólo transcribir tras el llamado",
+            v.wake,
+        ))
+}
+
+/// Aplica una edición de «Voz»: muta `WawaConfig::ai.voz` y marca para persistir.
+fn apply_wawa_voz(m: &mut Model, field: &str, value: FieldValue) {
+    match field {
+        "stt" => m.cfg.ai.voz.stt = value.as_str().unwrap_or("").to_string(),
+        "tts" => m.cfg.ai.voz.tts = value.as_str().unwrap_or("").to_string(),
+        "llamado" => m.cfg.ai.voz.llamado = value.as_str().unwrap_or("").to_string(),
+        "wake" => m.cfg.ai.voz.wake = value.as_bool().unwrap_or(false),
+        _ => return,
+    }
+    m.dirty.wawa = true;
+    m.save_in = SAVE_DELAY_TICKS;
+    m.status = "ajuste de voz guardado".into();
 }
 
 /// Nombre único para un conjunto de atajos nuevo a partir de `hint`.
@@ -3928,6 +3990,11 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             apply_wawa_ai(m, rel.leaf().unwrap_or(""), value);
             return;
         }
+        // Voz GLOBAL → WawaConfig::ai.voz (capa de usuario).
+        "wawa_voz" => {
+            apply_wawa_voz(m, rel.leaf().unwrap_or(""), value);
+            return;
+        }
         // Greeter (DM): fondo animado + paleta → greeter.conf (próximo login).
         "greeter" => {
             match rel.leaf() {
@@ -4303,6 +4370,12 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
             _ => String::new(),
         };
     }
+    if key == "wawa_voz" {
+        return match rel.leaf() {
+            Some("llamado") => m.cfg.ai.voz.llamado.clone(),
+            _ => String::new(),
+        };
+    }
     if key == "paloma" {
         return paloma::text_value(&m.paloma, &rel).unwrap_or_default();
     }
@@ -4342,6 +4415,16 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
             Some("model") => FieldValue::Text(m.cfg.ai.llm.model.clone()),
             Some("sem_enabled") => FieldValue::Bool(m.cfg.ai.semantic.enabled),
             Some("sem_socket") => FieldValue::Text(m.cfg.ai.semantic.socket.clone()),
+            _ => FieldValue::Text(String::new()),
+        });
+    }
+    // Sección «Voz»: valores vivos de WawaConfig::ai.voz.
+    if key == "wawa_voz" {
+        return Some(match rel.leaf() {
+            Some("stt") => FieldValue::Text(m.cfg.ai.voz.stt.clone()),
+            Some("tts") => FieldValue::Text(m.cfg.ai.voz.tts.clone()),
+            Some("llamado") => FieldValue::Text(m.cfg.ai.voz.llamado.clone()),
+            Some("wake") => FieldValue::Bool(m.cfg.ai.voz.wake),
             _ => FieldValue::Text(String::new()),
         });
     }

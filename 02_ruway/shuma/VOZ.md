@@ -48,6 +48,7 @@ mirada, pluma). **shuma sólo cablea** — no aloja nada de IA general.
 | Captura de micrófono (cpal + opus) | `02_ruway/media/media-recorder-wav`, `media-encode-opus`, `supay-audio` | la entrada de audio NO es código nuevo |
 | Acciones se proponen, no se auto-ejecutan | `AccionPropuesta` + `atipay` | la voz no salta este gate |
 | Backend configurable por agente | `wawa-config::LlmSettings` | el STT/TTS por agente copia el patrón |
+| Config de voz global del SO | `wawa-config::VozSettings` (`ai.voz`) | **hecho** — STT/TTS/llamado/wake editables en wawa-panel (sección «Voz»); los hosts la leen para armar `VozConfig` + `OpcionesEscucha` |
 
 Lo que **falta**: los backends reales (whisper/piper/nube), el daemon, y el
 host que corre cpal+VAD.
