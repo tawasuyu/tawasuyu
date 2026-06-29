@@ -34,11 +34,59 @@ pub fn set_bus_sock(path: String) {
 
 /// Encarna un EntityCard. Si `set_bus_sock` no fue invocado todavía,
 /// usa un Incarnator default (sin bus, sin notify).
+///
+/// Telemetría: el stdout/stderr de cada Ente se captura a
+/// `/var/log/arje/ente-<label>.log` (el «por qué» de una caída — panic/error
+/// del binario — que de otro modo se pierde con la consola al reiniciar).
+/// Excepción: los Entes interactivos (getty/shell) conservan su TTY heredado,
+/// porque redirigir su stdio los rompería.
 pub fn incarnate(card: &EntityCard) -> anyhow::Result<Pid> {
     let inc = INCARNATOR.get_or_init(|| Incarnator::new(IncarnatorConfig::default()));
-    let out = inc.incarnate(card)?;
+    let out = match open_ente_log(card) {
+        Some(file) => {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            let stdio = arje_incarnate::ChildStdio {
+                stdin_fd: None,
+                stdout_fd: Some(fd),
+                stderr_fd: Some(fd),
+            };
+            let r = inc.incarnate_with(card, stdio);
+            // El hijo ya hizo dup2(fd→1,2); soltamos nuestra copia.
+            drop(file);
+            r?
+        }
+        None => inc.incarnate(card)?,
+    };
     for d in &out.degradations {
         warn!(?d, ?out.pid, "incarnation degradation");
     }
     Ok(out.pid)
+}
+
+/// Abre el log por-Ente para capturar su stdout/stderr. Devuelve `None` para
+/// Entes interactivos (necesitan su TTY) — esos heredan la consola como antes.
+fn open_ente_log(card: &EntityCard) -> Option<std::fs::File> {
+    use arje_card::Payload;
+    let interactive = matches!(
+        &card.payload,
+        Payload::Native { exec, .. } if matches!(
+            exec.rsplit('/').next().unwrap_or(exec.as_str()),
+            "agetty" | "getty" | "mingetty" | "sh" | "bash" | "login"
+        )
+    );
+    if interactive {
+        return None;
+    }
+    let _ = std::fs::create_dir_all("/var/log/arje");
+    let safe: String = card
+        .label
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("/var/log/arje/ente-{safe}.log"))
+        .ok()
 }

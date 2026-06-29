@@ -968,12 +968,57 @@ fn read_brain_snapshot(path: &std::path::Path) -> anyhow::Result<arje_brain::obs
     Ok(snap)
 }
 
+/// Telemetría persistente del arranque: el log de arje-zero (PID 1) sobrevive el
+/// reboot y se lee desde otra sesión. Sin esto, un arranque que muere no deja
+/// rastro (kmsg/consola se pierden al reiniciar). Acá quedan los nacimientos y
+/// **muertes con exit-status** de cada Ente, y los panics de PID 1.
+const BOOT_LOG: &str = "/var/log/arje/boot.log";
+
+/// Writer del boot.log (append). Re-crea el dir best-effort por si `/` recién
+/// pasó a rw después de init_tracing. Si no se puede abrir, cae a un sink mudo
+/// (nunca paniquea desde el camino de logging).
+fn boot_log_writer() -> Box<dyn std::io::Write> {
+    let _ = std::fs::create_dir_all("/var/log/arje");
+    match std::fs::OpenOptions::new().create(true).append(true).open(BOOT_LOG) {
+        Ok(f) => Box::new(f),
+        Err(_) => Box::new(std::io::sink()),
+    }
+}
+
+/// Un panic de PID 1 = la muerte del fractal. Lo dejamos en disco (boot.log) y
+/// en kmsg/consola para que el «por qué» no se pierda al reiniciar.
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = format!("PANIC en arje-zero (PID 1): {info}\n");
+        write_to_console(&msg);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(BOOT_LOG) {
+            use std::io::Write;
+            let _ = f.write_all(msg.as_bytes());
+        }
+        prev(info);
+    }));
+}
+
 fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    use tracing_subscriber::EnvFilter;
+    let _ = std::fs::create_dir_all("/var/log/arje");
+    install_panic_hook();
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("arje_zero=debug,info"));
+    // Tee: cada evento al boot.log en disco (telemetría que sobrevive el reboot)
+    // Y a stderr/consola (vista en vivo). `with_ansi(false)`: el archivo queda
+    // legible sin códigos de color.
+    let writer = (boot_log_writer as fn() -> Box<dyn std::io::Write>).and(std::io::stderr);
     // try_init: bitacora::abrir ya puede haber instalado el subscriber global.
-    let _ = fmt().with_env_filter(filter).with_target(true).try_init();
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_ansi(false)
+        .with_writer(writer)
+        .try_init();
 }
 
 fn brain_introspect_path() -> PathBuf {
