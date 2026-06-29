@@ -128,10 +128,15 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
     nodos, relleno sólido+gradiente, trazo con ancho, transformar sin pérdida,
     booleanos (raster), grupos, blend/opacidad/máscaras, import/export SVG. Gaps
     en orden de impacto/esfuerzo:
-    1. **Trazo profesional** — dash, line cap/join, flechas. *(bajo; tiny-skia lo
-       soporta)*
-    2. **Precisión** — reglas, guías, **snapping**, grilla, alinear/distribuir.
-       *(medio; muy "Corel")*
+    1. **Trazo profesional (HECHO).** `EstiloTrazo` (cap Plano/Redondo/Cuadrado,
+       join Punta/Redondo/Bisel, dash en px) en `ParamsVector.estilo_trazo`;
+       rasterizado con `tiny_skia::Stroke` (line_cap/line_join/StrokeDash);
+       importado de SVG (linecap/linejoin/dasharray); UI cicla cap/join y alterna
+       punteado. (Flechas: pendiente menor.)
+    2. **Precisión (HECHO, parcial).** Snap a grilla (`Model.snap_grid`): la pluma
+       redondea colocación y drag de nodos/controles; overlay de grilla. Alinear
+       la capa vectorial al centro del lienzo (H/V/ambos). (Pendiente: reglas,
+       guías arrastrables, snap a objetos, distribuir.)
     3. **Texto vectorial** + texto-en-path (hoy el texto es raster aparte).
        *(alto)*
     4. **Booleanos vectoriales reales** (hoy alfa/raster → pierde editabilidad;
