@@ -78,7 +78,7 @@ where
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| p.display().to_string())
         ),
-        None => "(seleccioná un ZIP/tar/tar.gz)".to_string(),
+        None => rimay_localize::t("nahual-archive-select"),
     };
 
     let header = View::new(Style {
@@ -100,7 +100,7 @@ where
     let (body_text, body_color) = match state {
         ArchivePreview::Empty => ("—".to_string(), palette.fg_muted),
         ArchivePreview::Listing(l) => (render_listing(l), palette.fg_text),
-        ArchivePreview::Error(e) => (format!("(no se pudo abrir: {e})"), palette.fg_error),
+        ArchivePreview::Error(e) => (rimay_localize::t_args("nahual-archive-error", &[("err", e.to_string().into())]), palette.fg_error),
     };
 
     let body = View::new(Style {

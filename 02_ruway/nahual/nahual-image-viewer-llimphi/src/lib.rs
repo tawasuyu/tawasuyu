@@ -169,12 +169,12 @@ where
             image_body(image.clone()).animated_enter(key_of(path), motion::NORMAL)
         }
         ImagePreviewState::TooBig(n) => placeholder_body(
-            &format!("(archivo muy grande: {n} bytes — sin preview)"),
+            &rimay_localize::t_args("nahual-image-toobig", &[("bytes", n.to_string().into())]),
             palette.fg_muted,
         ),
         ImagePreviewState::Unsupported(s) => placeholder_body(s, palette.fg_muted),
         ImagePreviewState::Error(e) => {
-            placeholder_body(&format!("(error: {e})"), palette.fg_error)
+            placeholder_body(&rimay_localize::t_args("nahual-image-error", &[("err", e.to_string().into())]), palette.fg_error)
         }
     };
     outer(header_view(state, path, palette), body, palette)
@@ -207,12 +207,12 @@ where
         }
         ImagePreviewState::Empty => empty_body(palette),
         ImagePreviewState::TooBig(n) => placeholder_body(
-            &format!("(archivo muy grande: {n} bytes — sin preview)"),
+            &rimay_localize::t_args("nahual-image-toobig", &[("bytes", n.to_string().into())]),
             palette.fg_muted,
         ),
         ImagePreviewState::Unsupported(s) => placeholder_body(s, palette.fg_muted),
         ImagePreviewState::Error(e) => {
-            placeholder_body(&format!("(error: {e})"), palette.fg_error)
+            placeholder_body(&rimay_localize::t_args("nahual-image-error", &[("err", e.to_string().into())]), palette.fg_error)
         }
     };
     outer(header_view(state, path, palette), body, palette)
@@ -229,7 +229,7 @@ where
 {
     let name = path
         .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
-        .unwrap_or_else(|| "(seleccioná una imagen)".to_string());
+        .unwrap_or_else(|| rimay_localize::t("nahual-image-select"));
     let header_text = match state {
         ImagePreviewState::Image { width, height, .. } => {
             format!("{name} · {width}×{height}")
@@ -314,6 +314,7 @@ fn empty_body<Msg>(palette: &ImageViewerPalette) -> View<Msg>
 where
     Msg: Clone + 'static,
 {
+    let desc = rimay_localize::t("nahual-image-empty-body");
     View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -324,8 +325,8 @@ where
     })
     .children(vec![empty_view(
         Icon::Image,
-        "Sin imagen",
-        Some("Seleccioná una imagen para previsualizarla."),
+        rimay_localize::t("nahual-image-empty-title"),
+        Some(desc.as_str()),
         &empty_palette(palette),
     )])
 }

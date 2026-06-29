@@ -277,6 +277,22 @@ shuma-stat-samples = samples: { $have } / { $total }
 
 # === nahual (viewers) ===
 nahual-image-unsupported = unsupported format (only PNG/JPEG in this build)
+nahual-image-toobig = (file too large: { $bytes } bytes — no preview)
+nahual-image-error = (error: { $err })
+nahual-image-select = (select an image)
+nahual-image-empty-title = No image
+nahual-image-empty-body = Select an image to preview it.
+nahual-audio-select = (select an audio file)
+nahual-audio-error = (error: { $err })
+nahual-card-select = (select a card)
+nahual-card-invalid = (invalid card: { $err })
+nahual-fe-lines = Lines
+nahual-fe-no-entries = No entries in { $path }
+nahual-fe-empty = Empty folder
+nahual-fe-caption = { $n } entries · ↑↓ navigate · Enter to open · ⌫ to go up
+nahual-fe-more = … and { $n } more (scroll or ↓ for more)
+nahual-archive-select = (select a ZIP/tar/tar.gz)
+nahual-archive-error = (could not open: { $err })
 
 # === greeter (mirada login) ===
 greeter-subtitle = sign in

@@ -85,7 +85,7 @@ where
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| p.display().to_string())
             ),
-            None => "(seleccioná una card)".to_string(),
+            None => rimay_localize::t("nahual-card-select"),
         },
     };
 
@@ -108,7 +108,7 @@ where
     let (body_text, body_color) = match state {
         CardPreview::Empty => ("—".to_string(), palette.fg_muted),
         CardPreview::Card(c) => (summarize(c), palette.fg_text),
-        CardPreview::Error(e) => (format!("(card inválida: {e})"), palette.fg_error),
+        CardPreview::Error(e) => (rimay_localize::t_args("nahual-card-invalid", &[("err", e.to_string().into())]), palette.fg_error),
     };
 
     let body = View::new(Style {

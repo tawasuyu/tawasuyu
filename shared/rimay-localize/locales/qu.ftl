@@ -281,6 +281,22 @@ shuma-stat-samples = qhawasqakuna: { $have } / { $total }
 
 # === nahual (qhawanakuna) ===
 nahual-image-unsupported = mana atisqa formato (kay build-pi PNG/JPEG sapanlla)
+nahual-image-toobig = (yallin hatun willay: { $bytes } bytes — mana qhawachiy)
+nahual-image-error = (pantay: { $err })
+nahual-image-select = (huk rikch'ata akllay)
+nahual-image-empty-title = Mana rikch'a
+nahual-image-empty-body = Huk rikch'ata akllay qhawarinaykipaq.
+nahual-audio-select = (huk uyariyta akllay)
+nahual-audio-error = (pantay: { $err })
+nahual-card-select = (huk card-ta akllay)
+nahual-card-invalid = (mana allin card: { $err })
+nahual-fe-lines = Siqikuna
+nahual-fe-no-entries = Mana kanchu { $path } ukhupi
+nahual-fe-empty = Ch'usaq qillqana
+nahual-fe-caption = { $n } yaykuna · ↑↓ puriy · Enter yaykuy · ⌫ wichay
+nahual-fe-more = … { $n } astawan (qhaway astawan rikunaykipaq)
+nahual-archive-select = (huk ZIP/tar/tar.gz-ta akllay)
+nahual-archive-error = (mana kichay atikun: { $err })
 
 # === greeter (mirada login) ===
 greeter-subtitle = sesionniykita qallariy

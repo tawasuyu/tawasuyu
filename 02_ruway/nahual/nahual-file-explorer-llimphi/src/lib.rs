@@ -282,7 +282,10 @@ where
     // panel en blanco. Entra con el mismo pop-in que la lista.
     if state.entries.is_empty() {
         let pal = empty_palette(&palette);
-        let desc = format!("No hay entradas en {}", state.cwd.display());
+        let desc = rimay_localize::t_args(
+            "nahual-fe-no-entries",
+            &[("path", state.cwd.display().to_string().into())],
+        );
         return View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -293,7 +296,7 @@ where
         .fill(palette.bg_panel)
         .children(vec![empty_view(
             Icon::Folder,
-            "Carpeta vacía",
+            rimay_localize::t("nahual-fe-empty"),
             Some(&desc),
             &pal,
         )])
@@ -319,14 +322,14 @@ where
         })
         .collect();
 
-    let caption = format!(
-        "{} entradas · ↑↓ navega · Enter entra · ⌫ sube",
-        state.entries.len()
+    let caption = rimay_localize::t_args(
+        "nahual-fe-caption",
+        &[("n", state.entries.len().to_string().into())],
     );
     let truncated_hint = if state.entries.len() > end {
-        Some(format!(
-            "… y {} más (rueda o ↓ para ver más)",
-            state.entries.len() - end
+        Some(rimay_localize::t_args(
+            "nahual-fe-more",
+            &[("n", (state.entries.len() - end).to_string().into())],
         ))
     } else {
         None

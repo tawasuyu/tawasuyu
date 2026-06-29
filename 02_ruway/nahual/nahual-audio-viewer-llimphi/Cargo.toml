@@ -9,6 +9,7 @@ publish.workspace = true
 description = "nahual-audio-viewer-llimphi — reproductor/visor de audio sobre Llimphi. Decodifica WAV/MP3/FLAC/Opus/Vorbis (media-source-*), reproduce por cpal (media-audio-cpal) y pinta un espectro log-band en vivo vía AudioProbe + Spectrum. Quinto visor del shell nahual."
 
 [dependencies]
+rimay-localize = { path = "../../../shared/rimay-localize" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 media-core = { path = "../../media/media-core" }

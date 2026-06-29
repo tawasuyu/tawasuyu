@@ -9,6 +9,7 @@ publish.workspace = true
 description = "nahual-file-explorer-llimphi — explorador de directorios sobre Llimphi. Crate fino con la lógica de scan/navigation (cwd + Vec<Entry> + selected + visible_offset + wheel_accum) en `FileExplorerState` y un `file_explorer_view` que pinta la lista virtualizada con `llimphi-widget-list`."
 
 [dependencies]
+rimay-localize = { path = "../../../shared/rimay-localize" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-icons = { workspace = true }

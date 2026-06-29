@@ -280,7 +280,7 @@ where
     Msg: Clone + 'static,
 {
     let name = if state.name.is_empty() {
-        "(seleccioná un audio)".to_string()
+        rimay_localize::t("nahual-audio-select")
     } else {
         state.name.clone()
     };
@@ -324,7 +324,7 @@ where
     .text_aligned(header_text, 10.0, header_color, Alignment::Start);
 
     let body = match (&state.error, state._sink.is_some()) {
-        (Some(e), _) => placeholder_body(&format!("(error: {e})"), palette.fg_error),
+        (Some(e), _) => placeholder_body(&rimay_localize::t_args("nahual-audio-error", &[("err", e.to_string().into())]), palette.fg_error),
         (None, true) => spectrum_body(state.magnitudes().to_vec(), palette),
         (None, false) => placeholder_body("—", palette.fg_muted),
     };

@@ -280,6 +280,22 @@ shuma-stat-samples = muestras: { $have } / { $total }
 
 # === nahual (visores) ===
 nahual-image-unsupported = formato no soportado (sólo PNG/JPEG en esta build)
+nahual-image-toobig = (archivo muy grande: { $bytes } bytes — sin preview)
+nahual-image-error = (error: { $err })
+nahual-image-select = (seleccioná una imagen)
+nahual-image-empty-title = Sin imagen
+nahual-image-empty-body = Seleccioná una imagen para previsualizarla.
+nahual-audio-select = (seleccioná un audio)
+nahual-audio-error = (error: { $err })
+nahual-card-select = (seleccioná una card)
+nahual-card-invalid = (card inválida: { $err })
+nahual-fe-lines = Líneas
+nahual-fe-no-entries = No hay entradas en { $path }
+nahual-fe-empty = Carpeta vacía
+nahual-fe-caption = { $n } entradas · ↑↓ navega · Enter entra · ⌫ sube
+nahual-fe-more = … y { $n } más (rueda o ↓ para ver más)
+nahual-archive-select = (seleccioná un ZIP/tar/tar.gz)
+nahual-archive-error = (no se pudo abrir: { $err })
 
 # === greeter (mirada login) ===
 greeter-subtitle = iniciá tu sesión
