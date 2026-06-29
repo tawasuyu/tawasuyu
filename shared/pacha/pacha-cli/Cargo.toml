@@ -1,0 +1,20 @@
+[package]
+name = "pacha-cli"
+description = "CLI de contextos de usuario (pacha): cliente fino del daemon pacha-manager (switch/list/close/define) + el subcomando `daemon` que levanta el activador. Es la superficie que la UI de pata invoca por spawn."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pacha"
+path = "src/main.rs"
+
+[dependencies]
+pacha-core = { path = "../pacha-core" }
+pacha-manager = { path = "../pacha-manager" }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }

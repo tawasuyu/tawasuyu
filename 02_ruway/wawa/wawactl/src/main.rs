@@ -546,6 +546,7 @@ fn layer_label(l: Layer) -> &'static str {
     match l {
         Layer::System => "system",
         Layer::User => "user",
+        Layer::Context => "context",
     }
 }
 

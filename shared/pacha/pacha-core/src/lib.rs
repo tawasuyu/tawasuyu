@@ -114,6 +114,13 @@ pub fn special_for(id: &str) -> String {
     format!("pacha-{id}")
 }
 
+/// Inversa de [`slice_for`]: extrae el id de un slice (`pacha-<id>.slice`).
+/// `None` si el string no tiene esa forma. La usa el manager para mapear las
+/// unidades que encarnó (etiquetadas por slice) de vuelta a su contexto.
+pub fn id_from_slice(slice: &str) -> Option<&str> {
+    slice.strip_prefix("pacha-")?.strip_suffix(".slice")
+}
+
 /// Una app de la receta de un contexto.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSpec {
@@ -577,6 +584,14 @@ mod tests {
         let p = Pacha::new("juegos", "Juegos");
         assert_eq!(p.slice(), "pacha-juegos.slice");
         assert_eq!(p.special(), "pacha-juegos");
+    }
+
+    #[test]
+    fn id_from_slice_es_inversa_de_slice_for() {
+        assert_eq!(id_from_slice("pacha-juegos.slice"), Some("juegos"));
+        assert_eq!(id_from_slice(&slice_for("oficina")), Some("oficina"));
+        assert_eq!(id_from_slice("otra-cosa"), None);
+        assert_eq!(id_from_slice("pacha-x"), None);
     }
 
     #[test]

@@ -1,0 +1,25 @@
+[package]
+name = "pacha-manager"
+description = "El activador de contextos de usuario (pacha): mantiene el estado vivo (cuál activo, cuáles en background/pausa) y ejecuta las transiciones que decide pacha-core contra las superficies reales — overlay de wawa-config, mirada-ctl, Engine de sandokan (spawn + cgroups). Expone un socket de control que CLI y UI consumen."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+pacha-core = { path = "../pacha-core" }
+wawa-config = { path = "../../wawa-config" }
+sandokan = { path = "../../../03_ukupacha/sandokan/sandokan" }
+card-core = { path = "../../card/card-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ron = { workspace = true }
+postcard = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+ulid = { workspace = true }
+directories = { workspace = true }
+tracing = { workspace = true }

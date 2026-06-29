@@ -577,6 +577,8 @@ members = [
     "shared/launcher-core",
     "shared/launcher-llimphi",
     "shared/pacha/pacha-core",
+    "shared/pacha/pacha-manager",
+    "shared/pacha/pacha-cli",
     "shared/rimay-localize",
     "shared/sandokan/sandokan-core",
     "shared/sandokan/sandokan-lifecycle",
