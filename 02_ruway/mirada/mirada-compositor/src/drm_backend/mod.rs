@@ -774,8 +774,8 @@ fn paste_rgba_into_bgra(
 
 /// Rasteriza un título a un `MemoryRenderBuffer` (Argb8888); si no rasteriza
 /// nada, devuelve un búfer 1×1 transparente. Lo cachea el llamador.
-fn title_buffer(tr: &crate::text::TextRenderer, title: &str) -> MemoryRenderBuffer {
-    match tr.rasterize(title, TITLE_PX, TITLE_COLOR) {
+fn title_buffer(tr: &crate::text::TextRenderer, title: &str, color: [u8; 4]) -> MemoryRenderBuffer {
+    match tr.rasterize(title, TITLE_PX, color) {
         Some(r) => MemoryRenderBuffer::from_slice(
             &r.rgba,
             Fourcc::Argb8888,

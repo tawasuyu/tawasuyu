@@ -60,6 +60,60 @@ fn bevel_shade(c: [u8; 4], amt: f32) -> [u8; 4] {
     [mix(c[0]), mix(c[1]), mix(c[2]), c[3]]
 }
 
+/// Los 4 rectángulos `(x, y, w, h)` de un **anillo de bevel** de grosor `t`
+/// alrededor del rect `(x, y, w, h)`: `[arriba, izquierda, abajo, derecha]`.
+/// Los lados se solapan en las esquinas (no importa: el color de cada esquina
+/// queda definido por el lado que se pinte último, y en un bevel Motif las
+/// esquinas son ambiguas de todos modos). Pura.
+fn bevel_ring_rects(x: i32, y: i32, w: i32, h: i32, t: i32) -> [(i32, i32, i32, i32); 4] {
+    [
+        (x, y, w, t),         // arriba
+        (x, y, t, h),         // izquierda
+        (x, y + h - t, w, t), // abajo
+        (x + w - t, y, t, h), // derecha
+    ]
+}
+
+/// Pinta un anillo de bevel 3D estilo Motif sobre el rect `(x,y,w,h)`. `raised`
+/// = relieve levantado (luz arriba/izquierda, sombra abajo/derecha); `false` =
+/// hundido (invertido). Los lados se emiten como `SolidColorBuffer` inline
+/// (igual que las bandas del degradé de barra). No-op si el rect o el grosor
+/// colapsan.
+#[allow(clippy::too_many_arguments)]
+fn push_bevel_ring(
+    into: &mut Vec<Frame>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    t: i32,
+    light: [f32; 4],
+    dark: [f32; 4],
+    raised: bool,
+    alpha: f32,
+) {
+    if w <= 0 || h <= 0 || t <= 0 {
+        return;
+    }
+    let (tl, br) = if raised { (light, dark) } else { (dark, light) };
+    // arriba, izquierda = tl ; abajo, derecha = br (ver `bevel_ring_rects`).
+    let colors = [tl, tl, br, br];
+    for ((bx, by, bw, bh), col) in bevel_ring_rects(x, y, w, h, t).into_iter().zip(colors) {
+        if bw <= 0 || bh <= 0 {
+            continue;
+        }
+        let mut b = SolidColorBuffer::default();
+        b.update((bw, bh), col);
+        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &b,
+            (bx, by),
+            1.0,
+            alpha,
+            Kind::Unspecified,
+        )));
+    }
+}
+
 /// Transformación **cover** para escalar por GPU un buffer `sw×sh` a una salida
 /// `ow×oh`: devuelve `(offset_x, offset_y, escala)` — escala uniforme = máximo de
 /// las dos razones (llena la salida, recorta el sobrante), con el sobrante
@@ -425,6 +479,19 @@ impl DrmState {
         lerp_rgba(dec.border_normal, dec.border_focus, m)
     }
 
+    /// Color base de la **barra de título** de `w` con el glow aplicado. Igual
+    /// que [`Self::focus_base`] pero usando los colores propios de la barra
+    /// (`titlebar_focus`/`titlebar_normal`) cuando el theme los define; si son
+    /// `None`, cae al color del marco — así una vista puede tener marco gris y
+    /// barra de color (Win3.1, CDE) o seguir acoplada (el resto).
+    fn focus_base_titlebar(&self, w: &crate::ManagedWindow, now: u32, glow_ms: u32) -> [u8; 4] {
+        let dec = self.app.decorations;
+        let normal = dec.titlebar_normal.unwrap_or(dec.border_normal);
+        let focus = dec.titlebar_focus.unwrap_or(dec.border_focus);
+        let m = focus_mix(w.focused, glow_ms, w.focus_ms, now);
+        lerp_rgba(normal, focus, m)
+    }
+
     /// `true` si alguna ventana está dentro de su crossfade de glow de foco. El
     /// `tick` lo usa para forzar repintado mientras dura (igual que el fade-in).
     pub(super) fn focus_anim_active(&self) -> bool {
@@ -656,14 +723,18 @@ impl DrmState {
 
             if tb > 0 {
                 if let Some(tr) = &self.text {
+                    // Color del texto/íconos de la barra: el del theme si lo
+                    // define (barras claras estilo mac/Breeze piden texto oscuro),
+                    // si no el claro histórico.
+                    let title_color = self.app.decorations.titlebar_text.unwrap_or(TITLE_COLOR);
                     if !w.title.is_empty() {
                         if self.text_cache.len() > 256 {
                             self.text_cache.clear();
                         }
                         let buf = self
                             .text_cache
-                            .entry((w.title.clone(), TITLE_COLOR))
-                            .or_insert_with(|| title_buffer(tr, &w.title));
+                            .entry((w.title.clone(), title_color))
+                            .or_insert_with(|| title_buffer(tr, &w.title, title_color));
                         let ty = dec_y + (tb - TITLE_PX as i32) / 2;
                         if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                             &mut self.renderer,
@@ -684,9 +755,9 @@ impl DrmState {
                     // mismas posiciones (TB_BTN_W).
                     let _ = tr; // los íconos no dependen de la fuente
                     for (slot, icon) in [
-                        (0i32, crate::text::icon_close(TITLE_PX, TITLE_COLOR)),
-                        (1i32, crate::text::icon_square(TITLE_PX, TITLE_COLOR)),
-                        (2i32, crate::text::icon_minimize(TITLE_PX, TITLE_COLOR)),
+                        (0i32, crate::text::icon_close(TITLE_PX, title_color)),
+                        (1i32, crate::text::icon_square(TITLE_PX, title_color)),
+                        (2i32, crate::text::icon_minimize(TITLE_PX, title_color)),
                     ] {
                         if cw < (slot + 1) * crate::TB_BTN_W + 8 {
                             continue; // ventana muy angosta: sin botón
@@ -719,7 +790,9 @@ impl DrmState {
                     }
                 }
                 // Glow de foco: el color de la barra crossfadea como el marco.
-                let base = self.focus_base(w, anim_now, glow_ms);
+                // Usa los colores propios de la barra si el theme los define
+                // (marco gris + barra de color), si no hereda el del marco.
+                let base = self.focus_base_titlebar(w, anim_now, glow_ms);
                 // Glass: barra *frosted* en ventanas flotantes. Preferimos el
                 // backdrop REAL de ESTA ventana (ve las ventanas debajo, armado en
                 // `rebuild_window_backdrops`); si no se pudo armar, caemos al
@@ -819,10 +892,12 @@ impl DrmState {
                     if self.text_cache.len() > 256 {
                         self.text_cache.clear();
                     }
+                    // Título flotante sobre el contenido (sin barra): color claro
+                    // histórico — no es una barra, así que `titlebar_text` no aplica.
                     let buf = self
                         .text_cache
                         .entry((w.title.clone(), TITLE_COLOR))
-                        .or_insert_with(|| title_buffer(tr, &w.title));
+                        .or_insert_with(|| title_buffer(tr, &w.title, TITLE_COLOR));
                     if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                         &mut self.renderer,
                         ((cx + 6) as f64, (cy + 4) as f64),
@@ -850,6 +925,32 @@ impl DrmState {
                         anim_alpha,
                         Kind::Unspecified,
                     )));
+                }
+                // Relieve 3D Motif/CDE: sobre el cuerpo plano, un anillo exterior
+                // levantado (la ventana «sobresale» del escritorio) y otro interior
+                // hundido (el contenido se hunde en el marco) → doble bevel CDE.
+                if self.app.decorations.border_bevel {
+                    let bw_full = self.app.decorations.border_width;
+                    let base = self.focus_base(w, anim_now, glow_ms);
+                    let light = rgba_f32(bevel_shade(base, 0.55));
+                    let dark = rgba_f32(bevel_shade(base, -0.5));
+                    let bt = (bw_full / 2).clamp(1, 2);
+                    push_bevel_ring(into, cx, dec_y, cw, dec_h, bt, light, dark, true, anim_alpha);
+                    let io = bw_full - bt; // desplazamiento del anillo interior
+                    if io >= bt {
+                        push_bevel_ring(
+                            into,
+                            cx + io,
+                            dec_y + io,
+                            cw - 2 * io,
+                            dec_h - 2 * io,
+                            bt,
+                            light,
+                            dark,
+                            false,
+                            anim_alpha,
+                        );
+                    }
                 }
             }
             let surf_alpha = w.effects.opacity as f32 / 255.0 * anim_alpha;
@@ -2458,25 +2559,17 @@ impl DrmState {
             // pintar). Se dimensionan sobre el CONTENIDO (sin sombra CSD), igual
             // que el marco que se dibuja en el loop principal.
             let (cw, ch) = crate::content_px_size(w).unwrap_or((w.size.0, w.size.1 - tb));
-            let base = lerp_rgba(
+            // El cuerpo del marco va plano en el color base; cuando el theme pide
+            // `border_bevel`, el relieve 3D se pinta encima como dos anillos
+            // (exterior levantado + interior hundido) en el paint loop.
+            let color = rgba_f32(lerp_rgba(
                 dec.border_normal,
                 dec.border_focus,
                 focus_mix(w.focused, glow_ms, w.focus_ms, now),
-            );
-            let color = rgba_f32(base);
-            // Bevel 3D «levantado»: luz arriba+izquierda, sombra abajo+derecha.
-            // El `border_rects` devuelve los lados en orden [arriba, abajo,
-            // izquierda, derecha]; con el bevel apagado los 4 van planos.
-            let hi = rgba_f32(bevel_shade(base, 0.45));
-            let lo = rgba_f32(bevel_shade(base, -0.40));
+            ));
             let rects = border_rects(0, 0, cw, ch + tb, dec.border_width);
-            for (i, (buf, (_, _, bw, bh))) in w.borders.iter_mut().zip(rects).enumerate() {
-                let c = if dec.border_bevel {
-                    if i == 0 || i == 2 { hi } else { lo }
-                } else {
-                    color
-                };
-                buf.update((bw, bh), c);
+            for (buf, (_, _, bw, bh)) in w.borders.iter_mut().zip(rects) {
+                buf.update((bw, bh), color);
             }
         }
     }
@@ -2945,7 +3038,8 @@ fn emit_popups(
 mod tests {
     use super::super::{backdrop_downsample, box_blur_bgra, downsample_bgra};
     use super::{
-        bevel_shade, cover_transform, focus_mix, lerp_rgba, push_glass_rim, round_mask_bgra,
+        bevel_ring_rects, bevel_shade, cover_transform, focus_mix, lerp_rgba, push_glass_rim,
+        round_mask_bgra,
     };
 
     #[test]
@@ -3118,5 +3212,18 @@ mod tests {
         // El factor se acota: fuera de [-1, 1] no se pasa de blanco/negro.
         assert_eq!(bevel_shade(base, 5.0), [255, 255, 255, 255]);
         assert_eq!(bevel_shade(base, -5.0), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn bevel_ring_rects_envuelve_el_rect_con_grosor_t() {
+        // Anillo de 2 px alrededor de un rect 100×40 en (10, 5).
+        let [arriba, izq, abajo, der] = bevel_ring_rects(10, 5, 100, 40, 2);
+        assert_eq!(arriba, (10, 5, 100, 2)); // pegado al tope, ancho completo
+        assert_eq!(izq, (10, 5, 2, 40)); // pegado a la izquierda, alto completo
+        assert_eq!(abajo, (10, 5 + 40 - 2, 100, 2)); // pegado al fondo
+        assert_eq!(der, (10 + 100 - 2, 5, 2, 40)); // pegado a la derecha
+        // Los lados verticales abrazan todo el alto (se solapan en las esquinas).
+        assert_eq!(izq.3, 40);
+        assert_eq!(der.3, 40);
     }
 }

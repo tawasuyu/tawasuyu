@@ -126,6 +126,20 @@ pub struct Decorations {
     /// sutil; gana con grosores de 4 px en adelante.
     #[serde(default)]
     pub border_bevel: bool,
+    /// Color RGBA de la **barra de título** con foco, **desacoplado del marco**.
+    /// `None` (default) = la barra hereda el color del marco (`border_focus`),
+    /// el acoplamiento histórico. `Some` permite el clásico marco gris + barra
+    /// de color (Win3.1 navy, CDE) que de otro modo es imposible.
+    #[serde(default)]
+    pub titlebar_focus: Option<[u8; 4]>,
+    /// Color RGBA de la barra de título **sin** foco. `None` = `border_normal`.
+    #[serde(default)]
+    pub titlebar_normal: Option<[u8; 4]>,
+    /// Color RGBA del **texto y los botones** de la barra de título. `None`
+    /// (default) = el claro histórico. Las barras claras (mac, Breeze) lo fijan
+    /// oscuro para que el título y los íconos se lean.
+    #[serde(default)]
+    pub titlebar_text: Option<[u8; 4]>,
 }
 
 impl Default for Decorations {
@@ -140,6 +154,9 @@ impl Default for Decorations {
             titlebar_gradient: false,
             titlebar_floating_only: false,
             border_bevel: false,
+            titlebar_focus: None,
+            titlebar_normal: None,
+            titlebar_text: None,
         }
     }
 }
@@ -661,6 +678,9 @@ mod tests {
             titlebar_gradient: true,
             titlebar_floating_only: false,
             border_bevel: true,
+            titlebar_focus: Some([0, 0, 128, 255]),
+            titlebar_normal: None,
+            titlebar_text: Some([20, 20, 20, 255]),
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();

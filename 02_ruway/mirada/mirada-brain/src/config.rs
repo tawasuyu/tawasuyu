@@ -157,6 +157,18 @@ pub struct Config {
     /// grueso para el look retro; lo fija el theme/vista del perfil activo.
     #[serde(default)]
     pub border_bevel: bool,
+    /// Color RGBA de la **barra de título** con foco, desacoplado del marco.
+    /// `None` (default) = la barra hereda `border_focus`. `Some` habilita el
+    /// marco gris + barra de color (Win3.1 navy, CDE). Lo fija el theme/vista.
+    #[serde(default)]
+    pub titlebar_focus: Option<[u8; 4]>,
+    /// Color RGBA de la barra de título sin foco. `None` = `border_normal`.
+    #[serde(default)]
+    pub titlebar_normal: Option<[u8; 4]>,
+    /// Color RGBA del texto y los botones de la barra. `None` = el claro
+    /// histórico. Las barras claras (mac/Breeze) lo fijan oscuro para legibilidad.
+    #[serde(default)]
+    pub titlebar_text: Option<[u8; 4]>,
     /// Ruta a la fuente para las etiquetas del compositor (título, menú).
     /// Vacía = se prueba una lista de fuentes comunes del sistema.
     pub font_path: String,
@@ -956,6 +968,9 @@ impl Default for Config {
             titlebar_gradient: dec.titlebar_gradient,
             titlebar_floating_only: dec.titlebar_floating_only,
             border_bevel: dec.border_bevel,
+            titlebar_focus: dec.titlebar_focus,
+            titlebar_normal: dec.titlebar_normal,
+            titlebar_text: dec.titlebar_text,
             font_path: String::new(),
             wallpaper_path: String::new(),
             wallpaper_fit: WallpaperFit::default(),
@@ -1124,6 +1139,9 @@ impl Config {
             titlebar_gradient: self.titlebar_gradient,
             titlebar_floating_only: self.titlebar_floating_only,
             border_bevel: self.border_bevel,
+            titlebar_focus: self.titlebar_focus,
+            titlebar_normal: self.titlebar_normal,
+            titlebar_text: self.titlebar_text,
         }
     }
 
@@ -1443,6 +1461,13 @@ const CONFIG_TEMPLATE: &str = "\
     // Relieve 3D del marco (retro Motif/CDE): true = luz arriba-izquierda +
     // sombra abajo-derecha. Marida con border_width grueso (4+). false = plano.
     border_bevel: false,
+    // Color de la barra de título, desacoplado del marco. None = hereda el
+    // color del marco (acoplado). Some habilita marco gris + barra de color
+    // (Win3.1 navy, mac/Breeze claras). titlebar_text fija el color del título
+    // (oscuro para barras claras). Ej: titlebar_focus: Some((0, 0, 128, 255)).
+    titlebar_focus: None,
+    titlebar_normal: None,
+    titlebar_text: None,
     // Barra de título sobre cada ventana (px). 0 = sin barra (sólo el título
     // de la ventana enfocada, superpuesto). La franja se reserva arriba.
     titlebar_height: 24,

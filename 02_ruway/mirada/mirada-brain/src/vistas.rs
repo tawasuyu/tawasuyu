@@ -131,60 +131,74 @@ fn vista_mirada() -> Vista {
 /// celeste, teclas estilo Windows (Alt+Tab / Alt+F4 / Win+E). Tiledad baja:
 /// ventanas flotantes con z-order y un snap discreto en bordes/esquinas (aero).
 fn vista_windows_xp() -> Vista {
+    let mut config = skin(
+        "WinXP",
+        LayoutMode::MasterStack,
+        4,
+        3,
+        28,
+        [36, 94, 220, 255],   // azul Luna con foco
+        [122, 152, 206, 255], // celeste sin foco
+        0.2,
+    );
+    // El sello de Luna: barra de título con brillo (degradé claro→azul).
+    config.titlebar_gradient = true;
     Vista {
         name: "windows-xp",
         label: "Windows XP",
         keymap: "windows",
-        config: skin(
-            "WinXP",
-            LayoutMode::MasterStack,
-            4,
-            3,
-            28,
-            [36, 94, 220, 255],  // azul Luna con foco
-            [122, 152, 206, 255], // celeste sin foco
-            0.2,
-        ),
+        config,
     }
 }
 
 /// **macOS** — barra de título fina, marco de 1px, tema claro, teclas ⌘.
 /// Tiledad muy baja: ventanas flotantes; el snap es mínimo (sólo el borde).
 fn vista_mac() -> Vista {
+    let mut config = skin(
+        "macOS",
+        LayoutMode::MasterStack,
+        8,
+        1,
+        24,
+        [176, 176, 184, 255], // hairline gris al foco (mac NO usa marco azul)
+        [210, 210, 216, 255], // hairline más claro sin foco
+        0.15,
+    );
+    // Barra clara casi blanca con título/íconos oscuros — el chrome de mac.
+    config.titlebar_focus = Some([232, 232, 237, 255]);
+    config.titlebar_normal = Some([244, 244, 247, 255]);
+    config.titlebar_text = Some([60, 60, 66, 255]);
     Vista {
         name: "mac",
         label: "macOS",
         keymap: "mac",
-        config: skin(
-            "macOS",
-            LayoutMode::MasterStack,
-            8,
-            1,
-            24,
-            [10, 132, 255, 255],
-            [208, 208, 215, 255],
-            0.15,
-        ),
+        config,
     }
 }
 
 /// **KDE Plasma "Breeze"** — barra media, marco de 2px, tema Breeze claro,
 /// teclas estilo Windows.
 fn vista_kde() -> Vista {
+    let mut config = skin(
+        "Breeze",
+        LayoutMode::MasterStack,
+        6,
+        2,
+        26,
+        [61, 174, 233, 255],  // hairline azul Breeze al foco
+        [188, 192, 196, 255], // gris sin foco
+        0.55,
+    );
+    // Breeze es plano y claro: barra gris papel con título oscuro (el azul es
+    // sólo acento del marco al foco, no de la barra).
+    config.titlebar_focus = Some([247, 248, 249, 255]);
+    config.titlebar_normal = Some([239, 240, 241, 255]);
+    config.titlebar_text = Some([35, 38, 41, 255]);
     Vista {
         name: "kde",
         label: "KDE Plasma",
         keymap: "windows",
-        config: skin(
-            "Breeze",
-            LayoutMode::MasterStack,
-            6,
-            2,
-            26,
-            [61, 174, 233, 255],
-            [188, 192, 196, 255],
-            0.55,
-        ),
+        config,
     }
 }
 
@@ -239,11 +253,15 @@ fn vista_windows_31() -> Vista {
         2,
         4,                      // marco grueso biselado
         20,
-        [0, 0, 128, 255],       // azul marino con foco
-        [128, 128, 128, 255],   // gris Motif sin foco
+        [198, 198, 198, 255],   // marco gris Motif (#c0c0c0) — biselado, no azul
+        [174, 174, 174, 255],   // gris algo más apagado sin foco
         0.1,
     );
     config.border_bevel = true;
+    // El sello de 3.1: marco gris biselado pero barra de título azul marino
+    // (gris cuando la ventana no tiene foco). El texto sigue claro (legible).
+    config.titlebar_focus = Some([0, 0, 128, 255]);
+    config.titlebar_normal = Some([128, 128, 128, 255]);
     Vista {
         name: "windows-3.1",
         label: "Windows 3.1",
@@ -356,6 +374,33 @@ mod tests {
         assert!(!Vista::by_name("mirada").unwrap().config.border_bevel);
         assert!(!Vista::by_name("mac").unwrap().config.border_bevel);
         assert!(!Config::default().border_bevel, "el default crudo va plano");
+    }
+
+    #[test]
+    fn las_vistas_afinan_barra_y_marco_a_su_inspiracion() {
+        // XP "Luna": barra con brillo (degradé).
+        assert!(Vista::by_name("windows-xp").unwrap().config.titlebar_gradient);
+        // mac y Breeze: barras claras con texto oscuro (legibilidad).
+        for n in ["mac", "kde"] {
+            let c = Vista::by_name(n).unwrap().config;
+            let tb = c.titlebar_focus.expect("barra clara propia");
+            let tx = c.titlebar_text.expect("texto oscuro propio");
+            assert!(tb[0] > 200 && tb[1] > 200 && tb[2] > 200, "{n}: barra debe ser clara");
+            assert!(tx[0] < 100 && tx[1] < 100 && tx[2] < 100, "{n}: texto debe ser oscuro");
+        }
+        // Win3.1: marco gris (claro) pero barra de título azul marino —
+        // desacople real (la barra NO hereda el color del marco).
+        let w31 = Vista::by_name("windows-3.1").unwrap().config;
+        let marco = w31.border_focus;
+        assert!(marco[0] > 150 && marco[1] > 150 && marco[2] > 150, "marco 3.1 gris claro");
+        assert_eq!(w31.titlebar_focus, Some([0, 0, 128, 255]), "barra 3.1 azul marino");
+        assert_ne!(
+            w31.titlebar_focus.unwrap(),
+            w31.border_focus,
+            "la barra debe diferir del marco (desacople)"
+        );
+        // Por contraste, las modernas dejan la barra acoplada al marco.
+        assert_eq!(Vista::by_name("mirada").unwrap().config.titlebar_focus, None);
     }
 
     #[test]
