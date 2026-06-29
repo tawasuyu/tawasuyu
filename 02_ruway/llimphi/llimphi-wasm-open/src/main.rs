@@ -151,20 +151,64 @@ fn main() -> ExitCode {
     }
 
     // Modo consumidor: resolver la app (por id del catálogo o por hash/archivo)
-    // y abrirla como ventana.
+    // y correrla según su clase.
+    let here = tiene("--here");
     let spec = if tiene("--run") {
-        spec_desde_catalogo(argv.into_iter())
+        spec_desde_catalogo(argv.iter().cloned())
     } else {
-        resolver_spec(argv.into_iter())
+        resolver_spec(argv.iter().cloned())
     };
     match spec {
-        Ok(spec) => correr(spec),
+        Ok(spec) => {
+            // Una app WASI de consola muestra su salida en **shuma** (la
+            // terminal de la suite), no en una ventana de consola propia: si hay
+            // display, shuma está disponible y no nos pidieron `--here`,
+            // delegamos. `--here` (o sin display, o sin shuma) ⇒ corre local.
+            let es_wasi = llimphi_wasm_wasi::detect_kind(&spec.wasm)
+                == llimphi_wasm_wasi::WasmKind::WasiConsole;
+            if es_wasi && !here && hay_display() && delegar_a_shuma(&argv) {
+                return ExitCode::SUCCESS;
+            }
+            correr(spec)
+        }
         Err(e) => {
             eprintln!("llimphi-wasm-open: {e}");
             uso();
             ExitCode::FAILURE
         }
     }
+}
+
+/// ¿Hay un servidor gráfico (Wayland/X11)? Sin él no tiene sentido abrir shuma.
+fn hay_display() -> bool {
+    let set = |k: &str| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false);
+    set("WAYLAND_DISPLAY") || set("DISPLAY")
+}
+
+/// Argumentos para abrir shuma corriendo esta misma invocación en modo local:
+/// `-e <este-binario> <argv…> --here`. shuma une todo tras `-e` en una línea y
+/// la corre como primer bloque; `--here` evita que el re-lanzamiento vuelva a
+/// delegar (corre la app WASI e imprime, y shuma captura esa salida).
+fn comando_para_shuma(exe: &str, argv: &[String]) -> Vec<String> {
+    let mut v = Vec::with_capacity(argv.len() + 3);
+    v.push("-e".to_string());
+    v.push(exe.to_string());
+    v.extend(argv.iter().cloned());
+    v.push("--here".to_string());
+    v
+}
+
+/// Lanza shuma para correr esta invocación adentro. `true` si se spawneó; en
+/// error (shuma no instalado, etc.) `false` para caer a ejecución local.
+fn delegar_a_shuma(argv: &[String]) -> bool {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => return false,
+    };
+    std::process::Command::new("shuma-shell-llimphi")
+        .args(comando_para_shuma(&exe, argv))
+        .spawn()
+        .is_ok()
 }
 
 /// Corre la app ya resuelta según su clase: una app Tier 3 (UI) abre una
@@ -211,6 +255,7 @@ fn uso() {
     eprintln!("      [--apps-dir <dir>] [--catalog <archivo>]");
     eprintln!("  llimphi-wasm-open --registry <descriptor.ron> [--instance <base>] \\");
     eprintln!("      [--query <texto>] [--ingest] [--catalog <archivo>] [--store <dir>]");
+    eprintln!("  (--here fuerza la app WASI a correr local en vez de en shuma)");
 }
 
 /// Traduce los argumentos a un [`LaunchSpec`] resuelto y verificado. El modo se
@@ -233,6 +278,8 @@ fn resolver_spec(args: impl Iterator<Item = String>) -> Result<LaunchSpec, Strin
             "--store" => store_dir = Some(next_val(&mut args, "--store")?),
             "--ring" => ring_path = Some(next_val(&mut args, "--ring")?),
             "--name" => name = Some(next_val(&mut args, "--name")?),
+            // Lo agrega la delegación a shuma; acá sólo significa "corré local".
+            "--here" => {}
             "-h" | "--help" => return Err("ayuda".into()),
             otro if otro.starts_with("--") => {
                 return Err(format!("opción desconocida: {otro}"))
@@ -638,6 +685,7 @@ fn spec_desde_catalogo(args: impl Iterator<Item = String>) -> Result<LaunchSpec,
             "--catalog" => catalog_path = Some(next_val(&mut args, "--catalog")?),
             "--store" => store_dir = Some(next_val(&mut args, "--store")?),
             "--ring" => ring_path = Some(next_val(&mut args, "--ring")?),
+            "--here" => {}
             otro if otro.starts_with("--") => {
                 return Err(format!("opción desconocida: {otro}"))
             }
@@ -911,6 +959,46 @@ mod tests {
         ]))
         .is_err());
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn comando_para_shuma_envuelve_la_invocacion() {
+        let cmd = comando_para_shuma(
+            "/usr/bin/llimphi-wasm-open",
+            &["--run".into(), "hello".into(), "--store".into(), "/cas".into()],
+        );
+        assert_eq!(
+            cmd,
+            vec![
+                "-e",
+                "/usr/bin/llimphi-wasm-open",
+                "--run",
+                "hello",
+                "--store",
+                "/cas",
+                "--here",
+            ]
+        );
+        // `--here` al final ⇒ el re-lanzamiento corre local (no re-delega).
+        assert_eq!(cmd.last().unwrap(), "--here");
+    }
+
+    #[test]
+    fn here_es_aceptado_por_los_parsers() {
+        // Que `--here` no rompa el parseo (lo agrega la delegación a shuma).
+        let dir = cas_temporal("here");
+        let store = DiskStore::open(&dir).unwrap();
+        let hash = store.put(COUNTER_WASM).unwrap();
+        let spec = resolver_spec(args(&[
+            "--hash",
+            &hash_to_hex(&hash),
+            "--store",
+            dir.to_str().unwrap(),
+            "--here",
+        ]))
+        .expect("--here no rompe resolver_spec");
+        assert_eq!(spec.wasm, COUNTER_WASM);
         std::fs::remove_dir_all(&dir).ok();
     }
 

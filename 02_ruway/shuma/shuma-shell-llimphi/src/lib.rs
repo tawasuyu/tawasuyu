@@ -753,6 +753,13 @@ impl App for Shell {
         model.dock_mode = std::env::var_os("SHUMA_DOCK").is_some();
         model.collapse_on_blur = std::env::var_os("SHUMA_BAR_ON_BLUR").is_some();
         spawn_host_effects(&mut model, handle);
+        // `SHUMA_EXEC` (lo fija `-e/--exec`): corre ese comando como primer
+        // bloque. Lo quitamos del entorno para no heredarlo a procesos hijos
+        // (un comando que reinvoque shuma no debe re-disparar).
+        if let Some(cmd) = std::env::var("SHUMA_EXEC").ok().filter(|s| !s.is_empty()) {
+            std::env::remove_var("SHUMA_EXEC");
+            handle.dispatch(Msg::RunFromHistoryNow(cmd));
+        }
         model
     }
 
