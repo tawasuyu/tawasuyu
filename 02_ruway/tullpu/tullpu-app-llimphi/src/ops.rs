@@ -1501,6 +1501,19 @@ pub(crate) fn editar_params_vector(
     }
 }
 
+/// Aplica `f` al estilo de trazo (cap/join/dash) de la capa vectorial
+/// seleccionada, creándolo con defaults si no tenía. Re-rasteriza.
+pub(crate) fn editar_estilo_trazo(
+    model: &mut Model,
+    f: impl FnOnce(&mut tullpu_core::EstiloTrazo),
+) {
+    editar_vector_seleccionado(model, |p| {
+        let mut est = p.estilo_trazo.take().unwrap_or_default();
+        f(&mut est);
+        p.estilo_trazo = Some(est);
+    });
+}
+
 /// Bbox `(x0, y0, x1, y1)` de los puntos de ancla del path (para ubicar un
 /// gradiente). Si el path está vacío, devuelve un cuadrado unitario.
 pub(crate) fn bbox_path(p: &tullpu_core::ParamsVector) -> (f32, f32, f32, f32) {
@@ -1644,6 +1657,7 @@ pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32)
                 regla: tullpu_core::ReglaRelleno::NoCero,
                 trazo: None,
                 ancho_trazo: 0.0,
+                estilo_trazo: None,
             };
             let id = agregar_capa_vector(model, params, "path");
             model.pluma_capa = Some(id);

@@ -386,6 +386,40 @@ impl Gradiente {
 /// **re-editar** (mover puntos de control, cambiar relleno/trazo) y
 /// re-rasterizar sin pérdida. La rasterización vive **fuera** de `tullpu-core`
 /// (en `tullpu-ops`, con tiny-skia) — el core sólo lleva el modelo.
+/// Remate (cap) de los extremos de un trazo abierto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CapTrazo {
+    /// Corte a ras del extremo (butt).
+    #[default]
+    Plano,
+    /// Semicírculo (round).
+    Redondo,
+    /// Cuadrado que sobresale media-anchura (square).
+    Cuadrado,
+}
+
+/// Unión (join) de los vértices de un trazo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum JoinTrazo {
+    /// Punta (miter).
+    #[default]
+    Punta,
+    /// Redondeada (round).
+    Redondo,
+    /// Biselada (bevel).
+    Bisel,
+}
+
+/// Estilo extendido de trazo (cap/join/dash). Cuando `ParamsVector.estilo_trazo`
+/// es `None` se usan los defaults (Plano/Punta, sólido).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct EstiloTrazo {
+    pub cap: CapTrazo,
+    pub join: JoinTrazo,
+    /// Patrón de guiones `[trazo, hueco, trazo, hueco, …]` en px; vacío = sólido.
+    pub dash: Vec<f32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParamsVector {
     pub comandos: Vec<ComandoPath>,
@@ -399,6 +433,8 @@ pub struct ParamsVector {
     pub trazo: Option<[u8; 4]>,
     /// Ancho de trazo en px (ignorado si `trazo` es `None`).
     pub ancho_trazo: f32,
+    /// Estilo extendido del trazo (cap/join/dash); `None` = defaults.
+    pub estilo_trazo: Option<EstiloTrazo>,
 }
 
 impl ParamsVector {
@@ -418,6 +454,7 @@ impl ParamsVector {
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
+            estilo_trazo: None,
         }
     }
 
@@ -441,6 +478,7 @@ impl ParamsVector {
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
+            estilo_trazo: None,
         }
     }
 
@@ -632,6 +670,7 @@ impl ParamsVector {
             regla: ReglaRelleno::NoCero,
             trazo: Some(color),
             ancho_trazo: ancho.max(0.5),
+            estilo_trazo: None,
         }
     }
 
@@ -661,6 +700,7 @@ impl ParamsVector {
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
+            estilo_trazo: None,
         }
     }
 
@@ -708,6 +748,7 @@ impl ParamsVector {
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
+            estilo_trazo: None,
         }
     }
 }
@@ -1257,6 +1298,7 @@ mod tests {
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
+            estilo_trazo: None,
         };
         p.mover_ancla(1, 15.0, 6.0); // +10 en x
         if let ComandoPath::CurvaA { c2x, c2y, x, .. } = p.comandos[1] {
@@ -1276,6 +1318,7 @@ mod tests {
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
+            estilo_trazo: None,
         };
         p.agregar_vertice(1.0, 1.0);
         p.agregar_vertice(2.0, 2.0);
@@ -1316,6 +1359,7 @@ mod tests {
             regla: ReglaRelleno::NoCero,
             trazo: None,
             ancho_trazo: 0.0,
+            estilo_trazo: None,
         };
         p.convertir_a_curva(1);
         // El segmento es ahora una cúbica con controles a 1/3 y 2/3.

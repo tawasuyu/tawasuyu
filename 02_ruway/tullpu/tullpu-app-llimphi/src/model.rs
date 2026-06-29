@@ -772,6 +772,12 @@ pub(crate) enum Msg {
     VectorGradienteRadial,
     /// Vector: quita el gradiente de la capa seleccionada (vuelve al sólido).
     VectorGradienteQuitar,
+    /// Vector: cicla el remate de trazo (cap) Plano→Redondo→Cuadrado.
+    VectorTrazoCap,
+    /// Vector: cicla la unión de trazo (join) Punta→Redondo→Bisel.
+    VectorTrazoJoin,
+    /// Vector: alterna trazo punteado (dash) on/off.
+    VectorTrazoDash,
     /// Booleano: combina la capa seleccionada con la de abajo (unión).
     BooleanoUnion,
     /// Booleano: intersección de la capa seleccionada con la de abajo.

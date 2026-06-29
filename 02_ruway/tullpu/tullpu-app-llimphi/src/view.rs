@@ -1185,6 +1185,22 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         hijos.push(envolver_fila(button_view("⨯ quitar trazo".to_string(), &pal, Msg::VectorTrazoQuitar)));
         hijos.push(envolver_fila(button_view("trazo −1 px".to_string(), &pal, Msg::VectorAnchoTrazo(-1.0))));
         hijos.push(envolver_fila(button_view("trazo +1 px".to_string(), &pal, Msg::VectorAnchoTrazo(1.0))));
+        // Estilo de trazo: cap/join/dash (cicla en cada click).
+        let est = params.estilo_trazo.clone().unwrap_or_default();
+        let cap_n = match est.cap {
+            tullpu_core::CapTrazo::Plano => "plano",
+            tullpu_core::CapTrazo::Redondo => "redondo",
+            tullpu_core::CapTrazo::Cuadrado => "cuadrado",
+        };
+        let join_n = match est.join {
+            tullpu_core::JoinTrazo::Punta => "punta",
+            tullpu_core::JoinTrazo::Redondo => "redondo",
+            tullpu_core::JoinTrazo::Bisel => "bisel",
+        };
+        let dash_n = if est.dash.is_empty() { "sólido" } else { "punteado" };
+        hijos.push(envolver_fila(button_view(format!("remate (cap): {cap_n}"), &pal, Msg::VectorTrazoCap)));
+        hijos.push(envolver_fila(button_view(format!("unión (join): {join_n}"), &pal, Msg::VectorTrazoJoin)));
+        hijos.push(envolver_fila(button_view(format!("línea: {dash_n}"), &pal, Msg::VectorTrazoDash)));
         // Gradientes (color activo → transparente sobre el bbox de la forma).
         let grad = if params.gradiente.is_some() { "gradiente: on" } else { "gradiente: off" };
         hijos.push(subtitulo(grad));

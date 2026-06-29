@@ -14,7 +14,7 @@
 
 #![forbid(unsafe_code)]
 
-use tullpu_core::{ComandoPath, ParamsVector, ReglaRelleno};
+use tullpu_core::{CapTrazo, ComandoPath, EstiloTrazo, JoinTrazo, ParamsVector, ReglaRelleno};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -124,9 +124,27 @@ fn path_a_vector(p: &usvg::Path) -> Option<ParamsVector> {
         ),
         None => (None, ReglaRelleno::NoCero),
     };
-    let (trazo, ancho_trazo) = match p.stroke() {
-        Some(s) => (color_solido(s.paint(), s.opacity()), s.width().get()),
-        None => (None, 0.0),
+    let (trazo, ancho_trazo, estilo_trazo) = match p.stroke() {
+        Some(s) => {
+            let cap = match s.linecap() {
+                usvg::LineCap::Butt => CapTrazo::Plano,
+                usvg::LineCap::Round => CapTrazo::Redondo,
+                usvg::LineCap::Square => CapTrazo::Cuadrado,
+            };
+            let join = match s.linejoin() {
+                usvg::LineJoin::Miter | usvg::LineJoin::MiterClip => JoinTrazo::Punta,
+                usvg::LineJoin::Round => JoinTrazo::Redondo,
+                usvg::LineJoin::Bevel => JoinTrazo::Bisel,
+            };
+            let dash = s.dasharray().map(|d| d.to_vec()).unwrap_or_default();
+            let estilo = if cap != CapTrazo::Plano || join != JoinTrazo::Punta || !dash.is_empty() {
+                Some(EstiloTrazo { cap, join, dash })
+            } else {
+                None
+            };
+            (color_solido(s.paint(), s.opacity()), s.width().get(), estilo)
+        }
+        None => (None, 0.0, None),
     };
 
     // Path sin relleno ni trazo visible: nada que pintar.
@@ -143,6 +161,7 @@ fn path_a_vector(p: &usvg::Path) -> Option<ParamsVector> {
         regla,
         trazo,
         ancho_trazo,
+        estilo_trazo,
     })
 }
 

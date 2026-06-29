@@ -1116,6 +1116,34 @@ impl App for Tullpu {
                 editar_vector_seleccionado(&mut model, |p| p.gradiente = None);
                 pushear_snapshot(&mut model, None);
             }
+            Msg::VectorTrazoCap => {
+                use tullpu_core::CapTrazo::*;
+                editar_estilo_trazo(&mut model, |e| {
+                    e.cap = match e.cap {
+                        Plano => Redondo,
+                        Redondo => Cuadrado,
+                        Cuadrado => Plano,
+                    };
+                });
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorTrazoJoin => {
+                use tullpu_core::JoinTrazo::*;
+                editar_estilo_trazo(&mut model, |e| {
+                    e.join = match e.join {
+                        Punta => Redondo,
+                        Redondo => Bisel,
+                        Bisel => Punta,
+                    };
+                });
+                pushear_snapshot(&mut model, None);
+            }
+            Msg::VectorTrazoDash => {
+                editar_estilo_trazo(&mut model, |e| {
+                    e.dash = if e.dash.is_empty() { vec![12.0, 7.0] } else { Vec::new() };
+                });
+                pushear_snapshot(&mut model, None);
+            }
             Msg::BooleanoUnion => {
                 if let Some(id) = model.seleccionada {
                     if combinar_booleano(&mut model, id, tullpu_ops::OpBooleano::Union) {

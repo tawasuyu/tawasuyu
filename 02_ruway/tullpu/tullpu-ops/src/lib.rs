@@ -516,13 +516,28 @@ pub fn rasterizar_vector(params: &tullpu_core::ParamsVector, w: u32, h: u32) -> 
             paint.anti_alias = true;
             pixmap.fill_path(&path, &paint, regla, tiny_skia::Transform::identity(), None);
         }
-        // Trazo (contorno).
+        // Trazo (contorno) con estilo extendido (cap/join/dash).
         if let (Some(c), true) = (params.trazo, params.ancho_trazo > 0.0) {
             let mut paint = tiny_skia::Paint::default();
             paint.set_color(color_skia(c));
             paint.anti_alias = true;
             let mut stroke = tiny_skia::Stroke::default();
             stroke.width = params.ancho_trazo;
+            if let Some(est) = &params.estilo_trazo {
+                stroke.line_cap = match est.cap {
+                    tullpu_core::CapTrazo::Plano => tiny_skia::LineCap::Butt,
+                    tullpu_core::CapTrazo::Redondo => tiny_skia::LineCap::Round,
+                    tullpu_core::CapTrazo::Cuadrado => tiny_skia::LineCap::Square,
+                };
+                stroke.line_join = match est.join {
+                    tullpu_core::JoinTrazo::Punta => tiny_skia::LineJoin::Miter,
+                    tullpu_core::JoinTrazo::Redondo => tiny_skia::LineJoin::Round,
+                    tullpu_core::JoinTrazo::Bisel => tiny_skia::LineJoin::Bevel,
+                };
+                if est.dash.len() >= 2 {
+                    stroke.dash = tiny_skia::StrokeDash::new(est.dash.clone(), 0.0);
+                }
+            }
             pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
         }
     }
