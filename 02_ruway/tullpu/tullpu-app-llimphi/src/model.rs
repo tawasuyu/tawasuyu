@@ -141,6 +141,15 @@ pub(crate) struct Model {
     /// el panel de ops muestra el text-input y las teclas editan el contenido
     /// (re-rasterizando en vivo). Enter/Escape lo cierra.
     pub(crate) editando_texto: Option<(Uuid, TextInputState)>,
+    /// Capa vectorial en edición con la pluma (la que recibe vértices nuevos y
+    /// cuyos anclas se dibujan como handles). `None` = no hay path en curso.
+    pub(crate) pluma_capa: Option<Uuid>,
+    /// Ancla agarrada para arrastrar: `(índice de comando, posición-imagen
+    /// actual)`. Se setea al presionar sobre un ancla y se mueve con el drag.
+    pub(crate) pluma_ancla: Option<(usize, f32, f32)>,
+    /// Rect de pintado del lienzo (`rw, rh`) capturado en el último press —
+    /// necesario para convertir deltas de drag de pantalla a coords-imagen.
+    pub(crate) pluma_rect: Option<(f32, f32)>,
     /// Portapapeles interno de píxeles (copy/cut). `None` hasta el
     /// primer Ctrl+C/Ctrl+X. Pegar (Ctrl+V) compone este clip sobre una
     /// capa nueva. Vive fuera del historial — un undo no lo limpia.
@@ -315,6 +324,11 @@ pub(crate) enum Herramienta {
     /// del entorno destino — el parche se funde en vez de pegarse visible.
     /// Comparte el ancla/offset del clon (Alt+click fija el origen).
     Sanar,
+    /// Pluma (pen tool): click en vacío agrega un vértice a la capa vectorial
+    /// en edición (la crea en el primer click); click sobre un ancla existente
+    /// la agarra para arrastrar (mover el punto). Enter cierra el path, Esc
+    /// termina. Re-rasteriza en vivo.
+    Pluma,
 }
 
 impl Herramienta {
@@ -332,6 +346,7 @@ impl Herramienta {
             Herramienta::Texto => "texto",
             Herramienta::Clonar => "clonar",
             Herramienta::Sanar => "sanar",
+            Herramienta::Pluma => "pluma",
         }
     }
 
@@ -727,6 +742,16 @@ pub(crate) enum Msg {
     /// Click con la herramienta Texto: crea una capa de texto en `(lx, ly)`
     /// y entra en edición.
     AgregarTexto { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Pluma: press en el lienzo. Si cae cerca de un ancla de la capa en
+    /// edición, la agarra para arrastrar; si no, agrega un vértice (creando la
+    /// capa vectorial en el primer click).
+    PlumaPress { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Pluma: arrastre — mueve el ancla agarrada (`dx, dy` en coords locales).
+    PlumaArrastrar { dx: f32, dy: f32 },
+    /// Pluma: soltar el arrastre (libera el ancla agarrada).
+    PlumaSoltar,
+    /// Pluma: cierra el path en edición y termina (Enter).
+    PlumaCerrar,
     /// Inserta una capa vectorial: un rectángulo centrado en el lienzo, con el
     /// color activo. (Pen tool / edición de puntos = increment futuro.)
     AgregarRectangulo,

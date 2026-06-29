@@ -970,6 +970,20 @@ pub(crate) fn panel_ops(theme: &llimphi_theme::Theme, model: &Model) -> View<Msg
         },
         Msg::CambiarHerramienta(Herramienta::Sanar),
     )));
+    let etiqueta_pluma = if model.herramienta == Herramienta::Pluma {
+        "● pluma (n · Enter cierra)"
+    } else {
+        "○ pluma (n)"
+    };
+    hijos.push(envolver_fila(button_view(
+        etiqueta_pluma.to_string(),
+        if model.herramienta == Herramienta::Pluma {
+            &pal_tool_activo
+        } else {
+            &pal
+        },
+        Msg::CambiarHerramienta(Herramienta::Pluma),
+    )));
     let etiqueta_pincel = if model.herramienta == Herramienta::Pincel {
         "● pincel (p)"
     } else {
@@ -1599,6 +1613,15 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
             // Cuadro + handles de transformación libre (Ctrl+T). Se dibuja
             // sobre el composite con el mismo transform del lienzo.
             let transform_libre = model.transform.clone();
+            // Anclas de la capa vectorial en edición con la pluma: se dibujan
+            // como handles para mover puntos. Capturamos sus coords-imagen.
+            let anclas_pluma: Vec<[f32; 2]> = model
+                .pluma_capa
+                .or(if model.herramienta == Herramienta::Pluma { model.seleccionada } else { None })
+                .and_then(|id| model.lienzo.capa(id))
+                .and_then(|c| c.params_vector())
+                .map(|p| p.puntos_ancla().into_iter().map(|(_, xy)| xy).collect())
+                .unwrap_or_default();
             let cuerpo_paint = View::new(Style {
                 flex_grow: 1.0,
                 size: Size {
@@ -1677,6 +1700,18 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                             None,
                             &krect,
                         );
+                    }
+                }
+                // Handles de la pluma: un cuadradito por ancla del path en
+                // edición (coords-imagen → pantalla con el transform del lienzo).
+                if !anclas_pluma.is_empty() {
+                    let hl = 4.0_f64;
+                    for [ax, ay] in anclas_pluma.iter() {
+                        let cx = tx + (*ax as f64) * s;
+                        let cy = ty + (*ay as f64) * s;
+                        let hr = KurboRect::new(cx - hl, cy - hl, cx + hl, cy + hl);
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgba8(120, 200, 255, 255), None, &hr);
+                        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, Color::from_rgba8(0, 0, 0, 220), None, &hr);
                     }
                 }
                 // Cuadro de transformación libre: marco (posiblemente rotado),
@@ -1758,6 +1793,12 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                 Herramienta::Texto => cuerpo_paint.on_click_at(|lx, ly, rw, rh| {
                     Some(Msg::AgregarTexto { lx, ly, rw, rh })
                 }),
+                Herramienta::Pluma => cuerpo_paint
+                    .on_click_at(|lx, ly, rw, rh| Some(Msg::PlumaPress { lx, ly, rw, rh }))
+                    .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {
+                        DragPhase::Move => Some(Msg::PlumaArrastrar { dx, dy }),
+                        DragPhase::End => Some(Msg::PlumaSoltar),
+                    }),
                 Herramienta::Clonar | Herramienta::Sanar => cuerpo_paint
                     .on_click_at(|lx, ly, rw, rh| Some(Msg::IniciarClon { lx, ly, rw, rh }))
                     .draggable_at(|fase, dx, dy, _lx0, _ly0| match fase {

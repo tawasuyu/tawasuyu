@@ -133,6 +133,14 @@ pub(crate) fn hotkey_a_msg(model: &Model, event: &KeyEvent) -> Option<Msg> {
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("e") => {
             return Some(Msg::CambiarHerramienta(Herramienta::Borrador));
         }
+        // `n` = pluma (pen tool: dibuja/edita paths vectoriales).
+        Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("n") => {
+            return Some(Msg::CambiarHerramienta(Herramienta::Pluma));
+        }
+        // Enter con la pluma activa cierra el path en edición.
+        Key::Named(NamedKey::Enter) if model.herramienta == Herramienta::Pluma => {
+            return Some(Msg::PlumaCerrar);
+        }
         // `s` = cicla la simetría del trazo (sin Ctrl: Ctrl+S exporta).
         Key::Character(s) if !m.ctrl && !m.alt && s.eq_ignore_ascii_case("s") => {
             return Some(Msg::CiclarSimetria);

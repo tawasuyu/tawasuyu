@@ -406,6 +406,118 @@ impl ParamsVector {
         }
     }
 
+    // ---- Edición de path (primitivas puras para el pen tool) ----------------
+
+    /// Puntos de ancla (on-curve) del path, cada uno con el índice del comando
+    /// que lo define. Es lo que un editor dibuja como handles y usa para
+    /// hit-test. `Cerrar` no aporta ancla.
+    pub fn puntos_ancla(&self) -> Vec<(usize, [f32; 2])> {
+        let mut v = Vec::new();
+        for (i, c) in self.comandos.iter().enumerate() {
+            match *c {
+                ComandoPath::MoverA { x, y }
+                | ComandoPath::LineaA { x, y }
+                | ComandoPath::CurvaA { x, y, .. } => v.push((i, [x, y])),
+                ComandoPath::Cerrar => {}
+            }
+        }
+        v
+    }
+
+    /// Mueve el ancla (on-curve) del comando `idx` a `(x, y)`, arrastrando de
+    /// forma **rígida** los controles de Bézier pegados a ella — el control
+    /// entrante (`c2` de este comando si es `CurvaA`) y el saliente (`c1` del
+    /// comando siguiente si es `CurvaA`) — para que mover el ancla no deforme
+    /// las curvas adyacentes. No-op si `idx` no apunta a un ancla.
+    pub fn mover_ancla(&mut self, idx: usize, x: f32, y: f32) {
+        let (ax, ay) = match self.comandos.get(idx) {
+            Some(ComandoPath::MoverA { x, y })
+            | Some(ComandoPath::LineaA { x, y })
+            | Some(ComandoPath::CurvaA { x, y, .. }) => (*x, *y),
+            _ => return,
+        };
+        let (dx, dy) = (x - ax, y - ay);
+        match self.comandos.get_mut(idx) {
+            Some(ComandoPath::MoverA { x: cx, y: cy })
+            | Some(ComandoPath::LineaA { x: cx, y: cy }) => {
+                *cx = x;
+                *cy = y;
+            }
+            Some(ComandoPath::CurvaA { c2x, c2y, x: cx, y: cy, .. }) => {
+                *c2x += dx;
+                *c2y += dy;
+                *cx = x;
+                *cy = y;
+            }
+            _ => return,
+        }
+        // Control saliente: el `c1` del comando siguiente, si es una curva.
+        if let Some(ComandoPath::CurvaA { c1x, c1y, .. }) = self.comandos.get_mut(idx + 1) {
+            *c1x += dx;
+            *c1y += dy;
+        }
+    }
+
+    /// Agrega un vértice recto `(x, y)` al final del path (lo que hace el pen
+    /// tool al clickear). El primer punto se vuelve un `MoverA`; el resto,
+    /// `LineaA`. Si el path termina en `Cerrar`, inserta antes para preservar
+    /// el cierre.
+    pub fn agregar_vertice(&mut self, x: f32, y: f32) {
+        let nuevo = if self
+            .comandos
+            .iter()
+            .any(|c| !matches!(c, ComandoPath::Cerrar))
+        {
+            ComandoPath::LineaA { x, y }
+        } else {
+            ComandoPath::MoverA { x, y }
+        };
+        if matches!(self.comandos.last(), Some(ComandoPath::Cerrar)) {
+            let i = self.comandos.len() - 1;
+            self.comandos.insert(i, nuevo);
+        } else {
+            self.comandos.push(nuevo);
+        }
+    }
+
+    /// Elimina el comando de ancla en `idx`. No-op si está fuera de rango o si
+    /// apunta a un `Cerrar`.
+    pub fn eliminar_vertice(&mut self, idx: usize) {
+        if idx < self.comandos.len() && !matches!(self.comandos[idx], ComandoPath::Cerrar) {
+            self.comandos.remove(idx);
+        }
+    }
+
+    /// Cierra el path (agrega `Cerrar` si tiene comandos y no termina ya en uno).
+    pub fn cerrar_path(&mut self) {
+        if !self.comandos.is_empty()
+            && !matches!(self.comandos.last(), Some(ComandoPath::Cerrar))
+        {
+            self.comandos.push(ComandoPath::Cerrar);
+        }
+    }
+
+    /// Traslada **todo** el path por `(dx, dy)` (mover la capa vectorial entera).
+    pub fn trasladar(&mut self, dx: f32, dy: f32) {
+        for c in &mut self.comandos {
+            match c {
+                ComandoPath::MoverA { x, y } | ComandoPath::LineaA { x, y } => {
+                    *x += dx;
+                    *y += dy;
+                }
+                ComandoPath::CurvaA { c1x, c1y, c2x, c2y, x, y } => {
+                    *c1x += dx;
+                    *c1y += dy;
+                    *c2x += dx;
+                    *c2y += dy;
+                    *x += dx;
+                    *y += dy;
+                }
+                ComandoPath::Cerrar => {}
+            }
+        }
+    }
+
     /// Polígono cerrado por los vértices dados (≥ 2), relleno sólido, sin trazo.
     pub fn poligono(puntos: &[(f32, f32)], relleno: [u8; 4]) -> Self {
         let mut comandos = Vec::with_capacity(puntos.len() + 1);
@@ -937,6 +1049,82 @@ mod tests {
 
     fn h(byte: u8) -> Hash {
         [byte; 32]
+    }
+
+    // ----- edición de path vectorial ----------------------------------------
+
+    #[test]
+    fn puntos_ancla_lista_solo_on_curve() {
+        let p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
+        // rect = M, L, L, L, Z → 4 anclas (el Cerrar no aporta).
+        let anclas = p.puntos_ancla();
+        assert_eq!(anclas.len(), 4);
+        assert_eq!(anclas[0].1, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn mover_ancla_actualiza_el_punto() {
+        let mut p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
+        p.mover_ancla(0, 5.0, 7.0);
+        assert_eq!(p.puntos_ancla()[0].1, [5.0, 7.0]);
+    }
+
+    #[test]
+    fn mover_ancla_de_curva_arrastra_controles_rigidamente() {
+        // M(0,0) C(c1)(c2)(end). Mover el end +(10,0) debe mover c2 +(10,0) sin
+        // cambiar la forma relativa de ese tramo.
+        let mut p = ParamsVector {
+            comandos: vec![
+                ComandoPath::MoverA { x: 0.0, y: 0.0 },
+                ComandoPath::CurvaA { c1x: 1.0, c1y: 2.0, c2x: 3.0, c2y: 4.0, x: 5.0, y: 6.0 },
+            ],
+            relleno: Some([0, 0, 0, 255]),
+            regla: ReglaRelleno::NoCero,
+            trazo: None,
+            ancho_trazo: 0.0,
+        };
+        p.mover_ancla(1, 15.0, 6.0); // +10 en x
+        if let ComandoPath::CurvaA { c2x, c2y, x, .. } = p.comandos[1] {
+            assert_eq!(x, 15.0);
+            assert_eq!((c2x, c2y), (13.0, 4.0)); // c2 se trasladó +10 en x, y intacto
+        } else {
+            panic!("esperaba CurvaA");
+        }
+    }
+
+    #[test]
+    fn agregar_vertice_construye_polilinea() {
+        let mut p = ParamsVector {
+            comandos: vec![],
+            relleno: Some([0, 0, 0, 255]),
+            regla: ReglaRelleno::NoCero,
+            trazo: None,
+            ancho_trazo: 0.0,
+        };
+        p.agregar_vertice(1.0, 1.0);
+        p.agregar_vertice(2.0, 2.0);
+        assert!(matches!(p.comandos[0], ComandoPath::MoverA { .. }));
+        assert!(matches!(p.comandos[1], ComandoPath::LineaA { .. }));
+        // Tras cerrar, un nuevo vértice se inserta ANTES del Cerrar.
+        p.cerrar_path();
+        p.agregar_vertice(3.0, 3.0);
+        assert!(matches!(p.comandos[2], ComandoPath::LineaA { x: 3.0, .. }));
+        assert!(matches!(p.comandos.last(), Some(ComandoPath::Cerrar)));
+    }
+
+    #[test]
+    fn trasladar_mueve_todo_el_path() {
+        let mut p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
+        p.trasladar(5.0, -3.0);
+        assert_eq!(p.puntos_ancla()[0].1, [5.0, -3.0]);
+    }
+
+    #[test]
+    fn eliminar_vertice_quita_el_ancla() {
+        let mut p = ParamsVector::rectangulo(0.0, 0.0, 10.0, 10.0, [0, 0, 0, 255]);
+        let antes = p.puntos_ancla().len();
+        p.eliminar_vertice(0);
+        assert_eq!(p.puntos_ancla().len(), antes - 1);
     }
 
     #[test]

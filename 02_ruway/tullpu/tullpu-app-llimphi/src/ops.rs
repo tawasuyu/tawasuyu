@@ -1421,6 +1421,152 @@ pub(crate) fn agregar_capa_vector(
     id
 }
 
+/// Re-rasteriza la capa vectorial `id` desde sus params vigentes y actualiza su
+/// `contenido`. No-op si la capa no es vectorial. Recompone.
+pub(crate) fn rerasterizar_vector(model: &mut Model, id: uuid::Uuid) {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    let Some(params) = model.lienzo.capa(id).and_then(|c| c.params_vector()).cloned() else {
+        return;
+    };
+    let buffer = tullpu_ops::rasterizar_vector(&params, w, h);
+    let hash = model.almacen.insertar(buffer);
+    if let Some(c) = model.lienzo.capa_mut(id) {
+        c.contenido = hash;
+    }
+    aplicar_y_recomponer(model);
+}
+
+/// Muta los params vectoriales de la capa `id` por el closure `f` y
+/// re-rasteriza. No-op si la capa no es vectorial.
+pub(crate) fn editar_params_vector(
+    model: &mut Model,
+    id: uuid::Uuid,
+    f: impl FnOnce(&mut tullpu_core::ParamsVector),
+) {
+    let cambio = if let Some(c) = model.lienzo.capa_mut(id) {
+        if let tullpu_core::ClaseCapa::Vector(p) = &mut c.clase {
+            f(p);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if cambio {
+        rerasterizar_vector(model, id);
+    }
+}
+
+/// Ancla de la capa vectorial `id` más cercana a `(ix, iy)` dentro de `umbral`
+/// px-imagen; `None` si ninguna. Devuelve el índice de comando del ancla.
+fn ancla_cercana(model: &Model, id: uuid::Uuid, ix: f32, iy: f32, umbral: f32) -> Option<usize> {
+    let p = model.lienzo.capa(id)?.params_vector()?;
+    let mut mejor = None;
+    let mut mejor_d = umbral * umbral;
+    for (idx, [ax, ay]) in p.puntos_ancla() {
+        let d = (ax - ix).powi(2) + (ay - iy).powi(2);
+        if d <= mejor_d {
+            mejor_d = d;
+            mejor = Some(idx);
+        }
+    }
+    mejor
+}
+
+/// Pluma: press sobre el lienzo. Si cae cerca de un ancla de la capa en
+/// edición, la agarra para arrastrar; si no, agrega un vértice (creando la capa
+/// vectorial en el primer click, rellena con el color activo).
+pub(crate) fn pluma_press(model: &mut Model, lx: f32, ly: f32, rw: f32, rh: f32) -> bool {
+    let w = model.lienzo.width;
+    let h = model.lienzo.height;
+    model.pluma_rect = Some((rw, rh));
+    let Some((ixf, iyf)) = crate::viewport::local_a_imagen(
+        lx, ly, rw, rh, w, h, model.factor_zoom, model.pan_x, model.pan_y,
+    ) else {
+        return false;
+    };
+    let (ix, iy) = (ixf as f32, iyf as f32);
+
+    // Umbral de hit-test: ~9 px de pantalla, convertidos a px-imagen.
+    let s = crate::viewport::transform_lienzo(w, h, rw, rh, model.factor_zoom, model.pan_x, model.pan_y)
+        .map(|(s, _, _)| s)
+        .unwrap_or(1.0);
+    let umbral = (9.0 / s.max(1e-6)) as f32;
+
+    // Si hay capa en edición y el press cae sobre un ancla, la agarramos.
+    if let Some(id) = model.pluma_capa {
+        if let Some(idx) = ancla_cercana(model, id, ix, iy, umbral) {
+            model.pluma_ancla = Some((idx, ix, iy));
+            return false;
+        }
+    }
+
+    // Si no hay capa en edición pero la seleccionada es vectorial, la adoptamos.
+    if model.pluma_capa.is_none() {
+        if let Some(id) = model.seleccionada {
+            if model.lienzo.capa(id).map(|c| c.params_vector().is_some()).unwrap_or(false) {
+                if let Some(idx) = ancla_cercana(model, id, ix, iy, umbral) {
+                    model.pluma_capa = Some(id);
+                    model.pluma_ancla = Some((idx, ix, iy));
+                    return false;
+                }
+                model.pluma_capa = Some(id);
+            }
+        }
+    }
+
+    // Agregar un vértice: crea la capa vectorial si no hay ninguna en edición.
+    let id = match model.pluma_capa {
+        Some(id) => id,
+        None => {
+            let color = model.color_picked.unwrap_or([60, 120, 220, 255]);
+            let params = tullpu_core::ParamsVector {
+                comandos: Vec::new(),
+                relleno: Some(color),
+                regla: tullpu_core::ReglaRelleno::NoCero,
+                trazo: None,
+                ancho_trazo: 0.0,
+            };
+            let id = agregar_capa_vector(model, params, "path");
+            model.pluma_capa = Some(id);
+            id
+        }
+    };
+    editar_params_vector(model, id, |p| p.agregar_vertice(ix, iy));
+    model.pluma_ancla = None;
+    true
+}
+
+/// Pluma: arrastre — mueve el ancla agarrada por `(dx, dy)` (deltas de pantalla,
+/// convertidos a coords-imagen con la escala vigente).
+pub(crate) fn pluma_arrastrar(model: &mut Model, dx: f32, dy: f32) {
+    let Some((idx, px, py)) = model.pluma_ancla else {
+        return;
+    };
+    let Some(id) = model.pluma_capa else { return };
+    let (rw, rh) = model.pluma_rect.unwrap_or((0.0, 0.0));
+    let s = crate::viewport::transform_lienzo(
+        model.lienzo.width, model.lienzo.height, rw, rh,
+        model.factor_zoom, model.pan_x, model.pan_y,
+    )
+    .map(|(s, _, _)| s as f32)
+    .unwrap_or(1.0)
+    .max(1e-6);
+    let (nx, ny) = (px + dx / s, py + dy / s);
+    model.pluma_ancla = Some((idx, nx, ny));
+    editar_params_vector(model, id, |p| p.mover_ancla(idx, nx, ny));
+}
+
+/// Pluma: cierra el path en edición y termina la edición (Enter).
+pub(crate) fn pluma_cerrar(model: &mut Model) {
+    if let Some(id) = model.pluma_capa.take() {
+        editar_params_vector(model, id, |p| p.cerrar_path());
+    }
+    model.pluma_ancla = None;
+}
+
 /// Re-rasteriza la capa de texto `id` desde sus params vigentes y actualiza su
 /// `contenido`. No-op si la capa no es de texto. Recompone.
 pub(crate) fn rerasterizar_texto(model: &mut Model, id: uuid::Uuid) {

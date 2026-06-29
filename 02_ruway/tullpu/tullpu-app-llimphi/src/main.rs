@@ -1004,6 +1004,25 @@ impl App for Tullpu {
                 pushear_snapshot(&mut model, None);
                 model.estado = "vector · elipse agregada".into();
             }
+            Msg::PlumaPress { lx, ly, rw, rh } => {
+                if pluma_press(&mut model, lx, ly, rw, rh) {
+                    pushear_snapshot(&mut model, None);
+                    model.estado = "pluma · vértice · Enter cierra".into();
+                }
+            }
+            Msg::PlumaArrastrar { dx, dy } => {
+                pluma_arrastrar(&mut model, dx, dy);
+            }
+            Msg::PlumaSoltar => {
+                if model.pluma_ancla.take().is_some() {
+                    pushear_snapshot(&mut model, None);
+                }
+            }
+            Msg::PlumaCerrar => {
+                pluma_cerrar(&mut model);
+                pushear_snapshot(&mut model, None);
+                model.estado = "pluma · path cerrado".into();
+            }
             Msg::TextoTecla(ev) => {
                 let actualizar = if let Some((id, input)) = model.editando_texto.as_mut() {
                     input.apply_key(&ev);

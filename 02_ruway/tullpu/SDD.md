@@ -93,8 +93,18 @@ hecho** (falta tiling). Pendiente: **H** IA ONNX + vectores/paths.
     geometría y paint (tests). La app: abrir `.svg` (`cargar_arg`) lo importa como
     capas vectoriales rasterizadas; menú Archivo → "Exportar SVG (vectores)"
     vuelca las capas vectoriales del lienzo.
-  - **Falta (increment 2):** pen tool / edición interactiva de puntos de control,
-    re-rasterizado en vivo, trazo configurable en UI.
+  - **Edición de path (pen tool, HECHA).** Primitivas puras en `tullpu-core`
+    (`ParamsVector`): `puntos_ancla`, `mover_ancla` (arrastra rígido los
+    controles Bézier pegados), `agregar_vertice`, `eliminar_vertice`,
+    `cerrar_path`, `trasladar` — con tests. La app trae la herramienta **Pluma**
+    (`Herramienta::Pluma`, tecla `n`): click en vacío agrega un vértice (crea la
+    capa vectorial en el 1er click, rellena con el color activo); click sobre un
+    ancla la agarra y el drag la mueve (`mover_ancla`) con re-raster en vivo;
+    Enter cierra el path. Overlay de handles (cuadritos) sobre cada ancla de la
+    capa en edición. Estado en `Model::{pluma_capa, pluma_ancla, pluma_rect}`.
+  - **Falta (menor):** controles Bézier arrastrables independientes (hoy el
+    ancla mueve sus controles rígido), borrar punto desde UI, y trazo
+    (color/ancho) configurable en panel.
 - **Pendiente:** H IA real ONNX (segment-anything / upscale / restyle).
 
 ## Estado (2026-05-31)
