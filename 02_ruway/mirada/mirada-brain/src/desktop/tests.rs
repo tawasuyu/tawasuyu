@@ -1782,5 +1782,89 @@ fn a_grouping_with_an_anonymous_window_is_not_persisted() {
     assert!(d.snapshot().groupings.is_empty());
 }
 
+// --- Redimensionado del mosaico con el mouse (arrastre del divisor) ------
+
+#[test]
+fn dragging_the_master_divider_resizes_the_tiling() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    open(&mut d, 2);
+    let active = d.active_index();
+    // Por defecto MasterStack a 0.6 → maestra de 1152px (60% de 1920).
+    assert!((d.workspaces[active].params().master_ratio - 0.6).abs() < 1e-6);
+
+    // Arrastrar el divisor a x=768 (40% del ancho): el ratio sigue al puntero.
+    let cmds = d.on_event(BodyEvent::ResizeMaster { x: 768, y: 540 });
+    assert!(
+        (d.workspaces[active].params().master_ratio - 0.4).abs() < 1e-3,
+        "ratio = {}",
+        d.workspaces[active].params().master_ratio
+    );
+    // Y la maestra (ventana 1, primera en orden de teselado) pasa de 1152 a la
+    // celda del 40% (768) menos el margen del teselado (8px por lado → 752).
+    let p = places(&cmds);
+    let master = p.iter().find(|p| p.id == 1).unwrap();
+    assert_eq!(master.rect.w, 768 - 16);
+}
+
+#[test]
+fn the_master_divider_drag_clamps_at_the_extremes() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    open(&mut d, 2);
+    let active = d.active_index();
+    // Arrastre casi al borde derecho: el ratio se acota a 0.95, no se desborda.
+    d.on_event(BodyEvent::ResizeMaster { x: 1900, y: 540 });
+    assert!((d.workspaces[active].params().master_ratio - 0.95).abs() < 1e-6);
+    // Casi al borde izquierdo: acotado a 0.05.
+    d.on_event(BodyEvent::ResizeMaster { x: 10, y: 540 });
+    assert!((d.workspaces[active].params().master_ratio - 0.05).abs() < 1e-6);
+}
+
+#[test]
+fn the_master_divider_drag_centers_the_master_in_centered_mode() {
+    let mut d = desktop_with_screen();
+    for id in 1..=3 {
+        open(&mut d, id);
+    }
+    let active = d.active_index();
+    d.workspaces[active].set_mode(LayoutMode::CenteredMaster);
+    // Divisor derecho a x=1440 → ancho maestro = 2·(1440−960) = 960 → ratio 0.5.
+    d.on_event(BodyEvent::ResizeMaster { x: 1440, y: 540 });
+    assert!(
+        (d.workspaces[active].params().master_ratio - 0.5).abs() < 1e-3,
+        "ratio = {}",
+        d.workspaces[active].params().master_ratio
+    );
+}
+
+#[test]
+fn the_master_divider_drag_is_a_noop_outside_master_modes() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    open(&mut d, 2);
+    let active = d.active_index();
+    d.workspaces[active].set_mode(LayoutMode::Columns);
+    let before = d.workspaces[active].params().master_ratio;
+    // Columnas no tienen un único divisor maestro: el gesto no toca el ratio
+    // ni vuelve a teselar (sin comandos).
+    let cmds = d.on_event(BodyEvent::ResizeMaster { x: 300, y: 540 });
+    assert_eq!(d.workspaces[active].params().master_ratio, before);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn the_master_divider_drag_ignores_points_off_any_output() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    open(&mut d, 2);
+    let active = d.active_index();
+    let before = d.workspaces[active].params().master_ratio;
+    // Un punto fuera de toda salida (x más allá del monitor) no hace nada.
+    let cmds = d.on_event(BodyEvent::ResizeMaster { x: 5000, y: 540 });
+    assert_eq!(d.workspaces[active].params().master_ratio, before);
+    assert!(cmds.is_empty());
+}
+
 // Suprimir el warning de Output importado pero no usado directamente en las aserciones.
 fn _use_output_type(_: &Output) {}

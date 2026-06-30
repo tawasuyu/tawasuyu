@@ -429,6 +429,11 @@ pub(crate) enum DragMode {
     /// Reordenar una ventana **teselada**: la intercambia con la tesela
     /// bajo el puntero (el Cerebro decide el swap), sin sacarla del teselado.
     Tile,
+    /// Arrastrar el **divisor maestro/pila** del teselado: no mueve ninguna
+    /// ventana, re-reparte el mosaico (el Cerebro ajusta `master_ratio` para que
+    /// el divisor siga al puntero). El `id`/`start_rect` del [`DragGrab`] no se
+    /// usan en este modo.
+    TileResize,
 }
 
 /// El estado global del compositor.

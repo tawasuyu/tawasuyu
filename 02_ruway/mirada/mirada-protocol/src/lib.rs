@@ -603,6 +603,13 @@ pub enum BodyEvent {
     /// [`OutputAdded`](BodyEvent::OutputAdded)/[`OutputResized`](BodyEvent::OutputResized);
     /// esto fija sólo la posición.
     OutputMoved { id: OutputId, x: i32, y: i32 },
+    /// El usuario arrastra con el ratón el **divisor entre teselas** (el borde
+    /// maestro/pila): `(x, y)` es la posición global del puntero. El Cerebro
+    /// recalcula la proporción del teselado (`master_ratio`) para que el divisor
+    /// siga al puntero, en vivo. Es el redimensionado del mosaico con el mouse —
+    /// distinto de [`WindowFloatTo`](BodyEvent::WindowFloatTo), que flota una
+    /// ventana en lugar de re-repartir el teselado.
+    ResizeMaster { x: i32, y: i32 },
 }
 
 /// Tamaño máximo de un marco, en bytes. Acota el búfer de [`read_frame`]

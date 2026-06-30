@@ -272,6 +272,7 @@ impl DrmState {
                 self.app.follow_pointer_output(); // el escritorio activo sigue al monitor del mouse
                 if !self.drag_update() {
                     self.pointer_motion(time);
+                    self.update_divider_cursor(); // cursor «redimensionar» sobre el divisor
                 }
             }
 
@@ -304,6 +305,7 @@ impl DrmState {
                 self.app.follow_pointer_output(); // el escritorio activo sigue al monitor del mouse
                 if !self.drag_update() {
                     self.pointer_motion(time);
+                    self.update_divider_cursor(); // cursor «redimensionar» sobre el divisor
                 }
             }
 
@@ -501,6 +503,33 @@ impl DrmState {
                         };
                         self.app.drag = Some(grab);
                         return; // el arrastre captura el botón
+                    }
+                }
+
+                // Click izquierdo sobre el **divisor entre teselas** (sin `Super`):
+                // arranca un arrastre de redimensionado del mosaico — el divisor
+                // sigue al puntero y el Cerebro re-reparte el teselado en vivo
+                // (`master_ratio`). Va antes del titlebar/foco-al-click para que
+                // agarrar el borde no enfoque la ventana ni la arrastre.
+                if pressed
+                    && button == BTN_LEFT
+                    && self.app.drag.is_none()
+                    && !self.app.shell_activo()
+                {
+                    let super_held = self
+                        .app
+                        .keyboard
+                        .as_ref()
+                        .is_some_and(|kb| kb.modifier_state().logo);
+                    let (x, y) = self.app.pointer_loc;
+                    if !super_held && self.tile_divider_at(x, y) {
+                        self.app.drag = Some(DragGrab {
+                            id: 0,
+                            mode: DragMode::TileResize,
+                            start_pointer: (x, y),
+                            start_rect: (0, 0, 0, 0),
+                        });
+                        return; // el arrastre del divisor captura el botón
                     }
                 }
 
@@ -903,6 +932,16 @@ impl DrmState {
         let id = drag.id;
 
         let (px, py) = self.app.pointer_loc;
+        // Arrastre del divisor del teselado: no toca ninguna ventana, sólo le
+        // pide al Cerebro que mueva la frontera maestro/pila al puntero. El
+        // cursor se mantiene en «redimensionar» mientras dura el gesto.
+        if mode == DragMode::TileResize {
+            self.app.cursor_status =
+                CursorImageStatus::Named(smithay::input::pointer::CursorIcon::EwResize);
+            self.app
+                .brain_feed(BodyEvent::ResizeMaster { x: px as i32, y: py as i32 });
+            return true;
+        }
         // Drag-to-zone: resalta la zona bajo el puntero (Move/Tile, no Resize).
         // Sobre una zona, la ventana aterrizará ahí al soltar.
         let nueva_zona = if mode == DragMode::Resize { None } else { self.zone_at(px, py) };
@@ -937,9 +976,73 @@ impl DrmState {
                 (sh + dy).max(MIN_WINDOW),
             ),
             DragMode::Tile => unreachable!("Tile se maneja arriba"),
+            DragMode::TileResize => unreachable!("TileResize se maneja arriba"),
         };
         self.app.brain_feed(BodyEvent::WindowFloatTo { id, rect });
         true
+    }
+
+    /// `true` si `(x, y)` (global) cae sobre el **divisor vertical** entre dos
+    /// teselas adyacentes — la frontera maestro/pila que se arrastra para
+    /// redimensionar el mosaico. Las teseladas usan su celda (`loc`/`size`, ya en
+    /// coords globales); buscamos un par izquierda/derecha cuyos bordes se
+    /// enfrenten (tolerando el `gap` entre ambas) y que se solapen en `y` con el
+    /// puntero, y miramos si el puntero está sobre la línea media. Geometría pura
+    /// del Cuerpo: el Cerebro decide qué hacer con el arrastre (sólo
+    /// `MasterStack`/`CenteredMaster` tienen un divisor maestro útil).
+    pub(super) fn tile_divider_at(&self, x: f64, y: f64) -> bool {
+        // Tolerancia a cada lado de la línea media, en px — cuán «grueso» es el
+        // asidero del divisor para el ratón.
+        const TOL: f64 = 8.0;
+        let tiled: Vec<(f64, f64, f64, f64)> = self
+            .app
+            .windows
+            .iter()
+            .filter(|w| {
+                w.visible && !w.is_shell && !w.floating && !w.fullscreen && !w.is_greeter
+            })
+            .map(|w| (w.loc.0 as f64, w.loc.1 as f64, w.size.0 as f64, w.size.1 as f64))
+            .collect();
+        for &(ax, ay, aw, ah) in &tiled {
+            let aright = ax + aw;
+            for &(bx, by, _bw, bh) in &tiled {
+                // B estrictamente a la derecha de A.
+                if bx <= ax + 1.0 {
+                    continue;
+                }
+                // Adyacentes: el hueco entre el borde derecho de A y el izquierdo
+                // de B es el del teselado (`2·gap`); toleramos hasta ~40px.
+                let hueco = bx - aright;
+                if !(-2.0..=40.0).contains(&hueco) {
+                    continue;
+                }
+                // Solape vertical de A, B y el puntero.
+                let top = ay.max(by);
+                let bot = (ay + ah).min(by + bh);
+                if y < top || y >= bot {
+                    continue;
+                }
+                let mid = (aright + bx) / 2.0;
+                if (x - mid).abs() <= (hueco / 2.0).max(TOL) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Si el puntero (sin arrastre en curso) sobrevuela un divisor del teselado,
+    /// muestra el cursor de redimensionado horizontal — pista visual de que el
+    /// borde es arrastrable. Se llama tras el `pointer_motion` de cada evento.
+    pub(super) fn update_divider_cursor(&mut self) {
+        if self.app.drag.is_some() {
+            return;
+        }
+        let (x, y) = self.app.pointer_loc;
+        if self.tile_divider_at(x, y) {
+            self.app.cursor_status =
+                CursorImageStatus::Named(smithay::input::pointer::CursorIcon::EwResize);
+        }
     }
 
     /// El índice de la ventana visible bajo el punto `(x, y)`, si la hay

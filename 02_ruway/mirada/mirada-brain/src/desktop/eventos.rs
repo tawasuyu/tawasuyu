@@ -1,6 +1,6 @@
 //! Manejador de eventos del Cuerpo → [`Desktop::on_event`].
 
-use mirada_layout::Rect;
+use mirada_layout::{LayoutMode, Rect};
 use mirada_protocol::{BodyEvent, BrainCommand};
 
 use crate::config::DROPTERM_APP_ID;
@@ -301,6 +301,36 @@ impl Desktop {
                     None => cur_ws,
                 };
                 self.workspaces[dest_ws].set_floating(id, Some(rect));
+                self.relayout()
+            }
+            BodyEvent::ResizeMaster { x, y } => {
+                // Arrastre del divisor maestro/pila: el puntero está en `(x, y)`.
+                // Recalculamos `master_ratio` del escritorio que muestra la salida
+                // bajo el puntero para que el divisor lo siga. Sólo tienen un
+                // divisor maestro arrastrable los modos `MasterStack` y
+                // `CenteredMaster`; en el resto (columnas/filas/rejilla, sin un
+                // único divisor maestro) el gesto es inocuo.
+                let Some(oi) = self.outputs.iter().position(|o| o.rect.contains(x, y)) else {
+                    return Vec::new();
+                };
+                let work = self.outputs[oi].work_rect();
+                if work.w <= 0 {
+                    return Vec::new();
+                }
+                let wsi = self.outputs[oi].workspace;
+                let ratio = match self.workspaces[wsi].params().mode {
+                    // El divisor está en `work.x + master_w`: la fracción es la
+                    // distancia del puntero al borde izquierdo del área útil.
+                    LayoutMode::MasterStack => (x - work.x) as f32 / work.w as f32,
+                    // La maestra va centrada: su ancho es `2·|x − centro|` (el
+                    // puntero está en uno de los dos divisores simétricos).
+                    LayoutMode::CenteredMaster => {
+                        let center = work.x as f32 + work.w as f32 / 2.0;
+                        2.0 * (x as f32 - center).abs() / work.w as f32
+                    }
+                    _ => return Vec::new(),
+                };
+                self.workspaces[wsi].set_master_ratio(ratio.clamp(0.05, 0.95));
                 self.relayout()
             }
         }
