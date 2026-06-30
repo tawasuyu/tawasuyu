@@ -137,12 +137,61 @@ pub struct AppSpec {
     /// Workspace destino dentro del contexto (1-based; `None` = no fijar).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<usize>,
+    /// Perfil de aislamiento de FS de la app dentro del contexto. `None` = la
+    /// app hereda el `$HOME` del usuario, sin aislar (comportamiento clásico).
+    /// El manager lo compila a `card-core::SomaSpec.mounts` al encarnar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fs_profile: Option<FsProfile>,
 }
 
 impl AppSpec {
     pub fn new(command: impl Into<String>, app_id: impl Into<String>) -> Self {
-        Self { command: command.into(), app_id: app_id.into(), workspace: None }
+        Self { command: command.into(), app_id: app_id.into(), workspace: None, fs_profile: None }
     }
+
+    /// Fija el perfil de aislamiento de FS de la app (builder).
+    pub fn con_fs(mut self, profile: FsProfile) -> Self {
+        self.fs_profile = Some(profile);
+        self
+    }
+}
+
+/// Perfil de aislamiento de filesystem de una app. Lo *realiza* el incarnator
+/// (traduciéndolo a `card-core::MountPlan`); acá es declarativo y **plano** —
+/// sin acoplar `pacha-core` a card/pacha-dotfiles, igual que [`DotfileRef`].
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct FsProfile {
+    /// Qué `$HOME` ve la app.
+    #[serde(default)]
+    pub home: FsHome,
+    /// Ids de [`ConjuntoDotfiles`] a materializar en RAM (tmpfs) y montar como
+    /// el `$HOME` de la app. Sólo se usan con [`FsHome::Dotfiles`]. En claro hoy;
+    /// la cripto en reposo llega en Fase 2 — el tmpfs ya garantiza la
+    /// no-persistencia en disco.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secret_sets: Vec<String>,
+}
+
+impl FsProfile {
+    /// `true` si el perfil pide algún aislamiento (el manager puede saltearlo
+    /// si es `false`).
+    pub fn aisla(&self) -> bool {
+        !matches!(self.home, FsHome::Heredar)
+    }
+}
+
+/// Qué `$HOME` ve una app aislada.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FsHome {
+    /// Hereda el `$HOME` del usuario (sin aislar). Default.
+    #[default]
+    Heredar,
+    /// `$HOME` privado: un tmpfs vacío en RAM, propio de la app; se evapora al
+    /// cerrarla. No ve ni filtra dotfiles del usuario.
+    Tmpfs,
+    /// `$HOME` = los `secret_sets` materializados en un tmpfs RAM. La app ve una
+    /// copia de esos dotfiles; sus cambios no persisten ni tocan el `$HOME` real.
+    Dotfiles,
 }
 
 /// Referencia de un contexto a un **conjunto de dotfiles** (`pacha-dotfiles`).
@@ -634,6 +683,28 @@ pub enum PachaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fs_profile_builder_y_aisla() {
+        // Sin perfil = sin aislamiento.
+        let plain = AppSpec::new("puriy", "puriy");
+        assert!(plain.fs_profile.is_none());
+        // Heredar no aísla.
+        assert!(!FsProfile::default().aisla());
+        // Tmpfs / Dotfiles sí.
+        let con_dot = AppSpec::new("paloma", "paloma").con_fs(FsProfile {
+            home: FsHome::Dotfiles,
+            secret_sets: vec!["correo".into()],
+        });
+        assert!(con_dot.fs_profile.as_ref().unwrap().aisla());
+        // Round-trip RON conserva el perfil.
+        let s = ron::to_string(&con_dot).unwrap();
+        let back: AppSpec = ron::from_str(&s).unwrap();
+        assert_eq!(back, con_dot);
+        // Compat: una AppSpec vieja (sin el campo) deserializa con None.
+        let viejo: AppSpec = ron::from_str(r#"(command:"x",app_id:"x")"#).unwrap();
+        assert!(viejo.fs_profile.is_none());
+    }
 
     fn cat_basico() -> Catalog {
         let mut c = Catalog::new();

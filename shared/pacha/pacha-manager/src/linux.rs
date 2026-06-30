@@ -11,12 +11,12 @@
 //! las gobierna a todas de una.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use card_core::{Card, Payload};
-use pacha_core::{AppSpec, WawaOverlay};
+use pacha_core::{AppSpec, FsHome, FsProfile, WawaOverlay};
 use pacha_dotfiles::{ConjuntoDotfiles, Instantanea, StoreObjetos};
 use sandokan::{Engine, Intent};
 use tokio::process::Command;
@@ -125,7 +125,14 @@ impl LinuxSurfaces {
     /// la ventana nace ya etiquetada cuando aparezca, sin depender de cuál esté
     /// enfocada. La ventana nace visible; `stash`/`summon` la ocultan/traen con
     /// sus compañeras al cambiar de contexto.
-    async fn incarnate(&self, label: &str, command: &str, slice: &str, special: &str) -> Result<String, String> {
+    async fn incarnate(
+        &self,
+        label: &str,
+        command: &str,
+        slice: &str,
+        special: &str,
+        profile: Option<&FsProfile>,
+    ) -> Result<String, String> {
         let (exec, argv) = split_cmd(command);
         if exec.is_empty() {
             return Err(format!("comando vacío para `{label}`"));
@@ -137,9 +144,93 @@ impl LinuxSurfaces {
         card.payload = Payload::Native { exec, argv, envp: vec![] };
         // Bajo el subárbol del contexto: reweight/freeze del slice lo cubre.
         card.soma.cgroup.path = format!("{slice}/{label}");
+
+        // Aislamiento de FS por perfil (Fase 1): compila el FsProfile a un
+        // MountPlan que el incarnator realiza dentro del mount namespace de la
+        // app. Los secret_sets se materializan a un tmpfs en RAM (no a disco).
+        if let Some(p) = profile.filter(|p| p.aisla()) {
+            let home = self.home_real()?;
+            let staging = if matches!(p.home, FsHome::Dotfiles) {
+                Some(self.stage_secret_sets(label, &p.secret_sets)?)
+            } else {
+                None
+            };
+            if let Some(plan) = mount_plan_for(&home, p, staging.as_deref()) {
+                // mount: el ns donde viven los montajes; user: para realizarlos
+                // sin root (uid→root-in-userns), igual que en arje-incarnate.
+                card.soma.namespaces.mount = true;
+                card.soma.namespaces.user = true;
+                card.soma.mounts = plan;
+            }
+        }
+
         let handle = self.engine.run(Intent::new(card)).await.map_err(|e| e.to_string())?;
         Ok(handle.card_id.to_string())
     }
+
+    /// El `$HOME` real a aislar: el de la config de dotfiles si está, si no el
+    /// `$HOME` del entorno. Error si ninguno es resoluble.
+    fn home_real(&self) -> Result<PathBuf, String> {
+        if let Some(ctx) = &self.dotfiles {
+            return Ok(ctx.home.clone());
+        }
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "fs_profile sin dotfiles ni $HOME resoluble".into())
+    }
+
+    /// Materializa los `secret_sets` (estado ACTUAL del `$HOME`) en un tmpfs RAM
+    /// bajo `XDG_RUNTIME_DIR` y devuelve la ruta de staging. Copia en RAM: los
+    /// cambios de la app no persisten ni tocan el `$HOME` real.
+    fn stage_secret_sets(&self, label: &str, sets: &[String]) -> Result<PathBuf, String> {
+        let ctx = self.dotfiles.as_ref().ok_or("dotfiles no configurados para fs_profile")?;
+        let base = runtime_dir().join("pacha").join("secrets").join(label);
+        stage_into(ctx, &base, sets)?;
+        Ok(base)
+    }
+}
+
+/// Compila un [`FsProfile`] a un [`card_core::MountPlan`]. `home` es el `$HOME`
+/// real (sobre el que se monta); `staging` es la ruta tmpfs con los secret_sets
+/// ya materializados (sólo para [`FsHome::Dotfiles`]). `None` si el perfil no
+/// pide aislamiento. Pura: testeable sin I/O.
+fn mount_plan_for(
+    home: &Path,
+    profile: &FsProfile,
+    staging: Option<&Path>,
+) -> Option<card_core::MountPlan> {
+    use card_core::{HomeSpec, MountPlan};
+    let destino = home.display().to_string();
+    let home = match profile.home {
+        FsHome::Heredar => return None,
+        FsHome::Tmpfs => HomeSpec::Tmpfs { destino, size_bytes: None },
+        FsHome::Dotfiles => HomeSpec::Subdir {
+            origen: staging?.display().to_string(),
+            destino,
+        },
+    };
+    Some(MountPlan { home, ..Default::default() })
+}
+
+/// Materializa cada set (snapshot del `$HOME` actual) dentro de `base`,
+/// limpiando un staging previo. Libre (no método) para testearla sin `Engine`.
+fn stage_into(ctx: &DotfilesCtx, base: &Path, sets: &[String]) -> Result<(), String> {
+    let _ = std::fs::remove_dir_all(base);
+    std::fs::create_dir_all(base).map_err(|e| e.to_string())?;
+    for set_id in sets {
+        let set = ctx.sets.get(set_id).ok_or_else(|| format!("set desconocido: {set_id}"))?;
+        let raiz = pacha_dotfiles::capturar(&ctx.store, set, &ctx.home).map_err(|e| e.to_string())?;
+        pacha_dotfiles::materializar(&ctx.store, base, raiz).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Directorio de runtime en RAM (`XDG_RUNTIME_DIR`, un tmpfs). Fallback al temp
+/// del sistema si la env no está (entornos sin sesión de usuario).
+fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 #[async_trait]
@@ -169,14 +260,15 @@ impl Surfaces for LinuxSurfaces {
     }
 
     async fn spawn(&mut self, spec: &AppSpec, slice: &str, special: &str) -> Result<String, String> {
-        self.incarnate(&spec.app_id, &spec.command, slice, special).await
+        self.incarnate(&spec.app_id, &spec.command, slice, special, spec.fs_profile.as_ref()).await
     }
 
     async fn respawn(&mut self, app_id: &str, slice: &str, special: &str) -> Result<String, String> {
         // Reabrir por app_id: sin la receta original, lanzamos el binario que
         // coincide con el app_id (convención: app_id == comando base). Si el
-        // comando real difería, la receta (Fresh) es el camino fiable.
-        self.incarnate(app_id, app_id, slice, special).await
+        // comando real difería, la receta (Fresh) es el camino fiable. Sin la
+        // receta tampoco hay fs_profile: el restore aislado cae a Fresh.
+        self.incarnate(app_id, app_id, slice, special, None).await
     }
 
     async fn hide_windows(&mut self, special: &str) -> Result<(), String> {
@@ -251,5 +343,66 @@ mod tests {
         assert!(a.is_empty());
         let (e, _) = split_cmd("   ");
         assert_eq!(e, "");
+    }
+
+    #[test]
+    fn mount_plan_for_traduce_cada_modo() {
+        use card_core::HomeSpec;
+        let home = Path::new("/home/u");
+
+        // Heredar = sin aislamiento.
+        assert!(mount_plan_for(home, &FsProfile::default(), None).is_none());
+
+        // Tmpfs = $HOME privado vacío.
+        let p = FsProfile { home: FsHome::Tmpfs, secret_sets: vec![] };
+        let plan = mount_plan_for(home, &p, None).unwrap();
+        assert_eq!(plan.home, HomeSpec::Tmpfs { destino: "/home/u".into(), size_bytes: None });
+        assert!(plan.binds.is_empty());
+
+        // Dotfiles = $HOME = el staging RAM.
+        let p = FsProfile { home: FsHome::Dotfiles, secret_sets: vec!["correo".into()] };
+        let staging = Path::new("/run/user/1000/pacha/secrets/paloma");
+        let plan = mount_plan_for(home, &p, Some(staging)).unwrap();
+        assert_eq!(
+            plan.home,
+            HomeSpec::Subdir {
+                origen: "/run/user/1000/pacha/secrets/paloma".into(),
+                destino: "/home/u".into()
+            }
+        );
+        // Dotfiles sin staging resuelto ⇒ None (no se puede aislar sin RAM).
+        assert!(mount_plan_for(home, &p, None).is_none());
+    }
+
+    #[test]
+    fn stage_into_materializa_los_sets_en_ram_sin_tocar_el_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store_dir = tmp.path().join("obj");
+        let staging = tmp.path().join("ram"); // hace de XDG_RUNTIME_DIR
+
+        // $HOME real con un "secreto".
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/id_ed25519"), b"SECRETO\n").unwrap();
+
+        let set = ConjuntoDotfiles::new("claves").con(
+            pacha_dotfiles::RutaGestionada::fijado(".ssh/id_ed25519"),
+        );
+        let ctx = DotfilesCtx::new(store_dir, home.clone(), [set]).unwrap();
+
+        stage_into(&ctx, &staging, &["claves".into()]).unwrap();
+
+        // El secreto aterrizó en el staging (RAM)...
+        assert_eq!(std::fs::read(staging.join(".ssh/id_ed25519")).unwrap(), b"SECRETO\n");
+        // ...y el plan de montaje usa ese staging como $HOME.
+        let p = FsProfile { home: FsHome::Dotfiles, secret_sets: vec!["claves".into()] };
+        let plan = mount_plan_for(&home, &p, Some(&staging)).unwrap();
+        match plan.home {
+            card_core::HomeSpec::Subdir { origen, destino } => {
+                assert_eq!(origen, staging.display().to_string());
+                assert_eq!(destino, home.display().to_string());
+            }
+            otro => panic!("esperaba Subdir, fue {otro:?}"),
+        }
     }
 }

@@ -81,11 +81,22 @@ aislamiento funcionando.
    (exit 0), y el `$HOME` de disco real queda vacío. Verificado verde en esta
    máquina (unprivileged userns activo); se auto-saltea donde el userns no está.
 
-**Falta de Fase 1 — wiring `pacha`→Card (punto 3 original):** la receta de apps de
-un `Pacha` (`AppSpec`) todavía NO referencia un perfil de FS ni qué secret-sets
-montar; el `pacha-manager`/`LinuxSurfaces` aún no arma `SomaSpec.mounts` al
-encarnar. El mecanismo entero está listo y certificado de punta a punta a nivel
-incarnator — resta enchufarlo desde la receta del contexto. Es lo próximo.
+5. ✅ **Wiring `pacha`→Card (punto 3 original).** `AppSpec` ganó
+   `fs_profile: Option<FsProfile>` (tipo plano en `pacha-core`, sin acoplar a
+   card/dotfiles): `FsHome{Heredar|Tmpfs|Dotfiles}` + `secret_sets: Vec<String>`.
+   Viaja solo en `Effect::SpawnApp`. `pacha-manager`/`LinuxSurfaces::incarnate`
+   lo compila: `mount_plan_for` (pura) traduce el perfil a `card_core::MountPlan`
+   (`Tmpfs`→`$HOME` privado vacío; `Dotfiles`→`$HOME` = staging), y
+   `stage_secret_sets` materializa los sets (snapshot del `$HOME` actual) a un
+   tmpfs en `XDG_RUNTIME_DIR` (RAM, no disco). Setea `namespaces.{mount,user}` +
+   `soma.mounts` y encarna por el `Engine`. `respawn` (sin receta) cae a sin
+   aislar. 3 tests (compilador por modo, staging-en-RAM, builder+serde en core).
+
+**Fase 1 COMPLETA.** El aislamiento de FS por contexto va de la receta del
+`Pacha` (`AppSpec.fs_profile`) hasta los `mount`/`tmpfs`/`bind` reales en el
+namespace de la app, certificado por texto en cada capa. Lo único deliberadamente
+fuera de Fase 1: la cripto en reposo (Fase 2) — hoy el tmpfs garantiza la
+no-persistencia, pero los bytes en RAM están en claro.
 
 ## Fase 2 — Cifrado en reposo (secreto por defecto)
 
