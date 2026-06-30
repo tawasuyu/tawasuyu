@@ -160,6 +160,15 @@ fn draw_text(fb: &mut FrameBuffer<'_>, c: &Ctx, x: usize, y: usize, text: &str, 
     let px = enc(c.fmt, color);
     let mut cx = x;
     for ch in text.chars() {
+        // font8x8 es ASCII; mapeamos los no-ASCII comunes de los títulos a su
+        // equivalente para no mostrar '?' (em/en dash → '-', middot → '.', etc.).
+        let ch = match ch {
+            '\u{2014}' | '\u{2013}' => '-', // — –
+            '\u{00b7}' | '\u{2022}' => '.', // · •
+            '\u{2026}' => '.',              // …
+            '\u{00a0}' => ' ',              // nbsp
+            other => other,
+        };
         let code = ch as usize;
         // font8x8: bit 0 (LSB) = píxel más a la izquierda (igual que el splash).
         let glyph = if code < 128 { BASIC_LEGACY[code] } else { BASIC_LEGACY['?' as usize] };

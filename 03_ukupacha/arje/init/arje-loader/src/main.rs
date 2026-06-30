@@ -89,11 +89,12 @@ fn run() -> Result<(), Status> {
         }
         // Una sola: arranca directo, sin menú (no hay nada que elegir).
         1 => 0,
-        // Varias: menú GRÁFICO sobre el GOP — flechas + Enter, timeout 5 s.
+        // Varias: menú GRÁFICO sobre el GOP — flechas + Enter, con timeout.
         _ => {
+            let timeout = read_loader_timeout(&mut fs_root);
             let titles: Vec<String> =
                 entries.iter().enumerate().map(|(i, e)| entry_title(e, i)).collect();
-            menu::pick(&titles, default_entry(&entries), 5)
+            menu::pick(&titles, default_entry(&entries), timeout)
         }
     };
 
@@ -104,6 +105,22 @@ fn run() -> Result<(), Status> {
         entry.linux.as_deref().unwrap_or("(falta)"),
     );
     boot_entry(&mut fs_root, entry)
+}
+
+/// Lee `timeout <segundos>` de `\loader\loader.conf` (formato systemd-boot).
+/// Default 5 s; `timeout 0` = sin cuenta regresiva (espera Enter).
+fn read_loader_timeout(root: &mut uefi::proto::media::file::Directory) -> u64 {
+    let Ok(text) = read_file_utf8(root, "\\loader\\loader.conf") else {
+        return 5;
+    };
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix("timeout") {
+            if let Ok(n) = rest.trim().parse::<u64>() {
+                return n;
+            }
+        }
+    }
+    5
 }
 
 /// Título legible de una entry para el menú (su `title`, o un fallback).
@@ -173,9 +190,9 @@ fn boot_entry(
 
 /// Enumera `/loader/entries/*.conf` y las parsea. Vacío si el dir no existe.
 fn enumerate_entries(root: &mut uefi::proto::media::file::Directory) -> Vec<Entry> {
-    let mut out = Vec::new();
+    let mut pairs: alloc::vec::Vec<(String, Entry)> = Vec::new();
     let Ok(mut dir) = open_dir(root, "\\loader\\entries") else {
-        return out;
+        return Vec::new();
     };
     loop {
         match dir.read_entry_boxed() {
@@ -193,14 +210,16 @@ fn enumerate_entries(root: &mut uefi::proto::media::file::Directory) -> Vec<Entr
                     if e.title.is_none() {
                         e.title = Some(name.trim_end_matches(".conf").to_string());
                     }
-                    out.push(e);
+                    pairs.push((name, e));
                 }
             }
             Ok(None) => break,
             Err(_) => break,
         }
     }
-    out
+    // Orden estable por nombre de archivo (como systemd-boot: 10-…, 20-…, 30-…).
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    pairs.into_iter().map(|(_, e)| e).collect()
 }
 
 /// Abre un subdirectorio del root (separadores `/`→`\`).
