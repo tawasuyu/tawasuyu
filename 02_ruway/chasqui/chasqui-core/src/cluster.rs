@@ -155,9 +155,13 @@ fn top_extensions(files: &[&FileEntry], n: usize) -> Vec<String> {
 /// Elige el lente dominante según la extensión más frecuente, con
 /// fallback a `shuma-discern` sobre el head del archivo más
 /// representativo cuando la extensión no da hint claro (Lens::Grid).
-fn pick_lens(files: &[&FileEntry]) -> Lens {
-    let dominant = top_extensions(files, 1).into_iter().next();
-    let by_ext = match dominant.as_deref() {
+/// Mapea una extensión (lowercase, sin punto) a su lente determinista,
+/// o [`Lens::Grid`] si la extensión no da hint claro. Determinista y sin
+/// disco — la fuente de verdad del "lente por formato", compartida entre
+/// el clustering ([`pick_lens`]) y la evaluación de queries intensionales
+/// ([`crate::resolve`]).
+pub fn lens_from_ext(ext: Option<&str>) -> Lens {
+    match ext {
         Some("rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "go" | "java" | "kt" | "c" | "cpp"
         | "cc" | "h" | "hpp" | "rb" | "swift" | "zig") => Lens::Code,
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tiff" | "heic") => {
@@ -166,7 +170,12 @@ fn pick_lens(files: &[&FileEntry]) -> Lens {
         Some("md" | "markdown" | "rst" | "txt" | "org" | "tex") => Lens::Markdown,
         Some("db" | "sqlite" | "sqlite3" | "csv" | "tsv" | "parquet") => Lens::Database,
         _ => Lens::Grid,
-    };
+    }
+}
+
+fn pick_lens(files: &[&FileEntry]) -> Lens {
+    let dominant = top_extensions(files, 1).into_iter().next();
+    let by_ext = lens_from_ext(dominant.as_deref());
     if by_ext != Lens::Grid {
         return by_ext;
     }

@@ -29,6 +29,7 @@ pub mod cluster;
 pub mod db;
 pub mod embed;
 pub mod engine_socket;
+pub mod resolve;
 pub mod scanner;
 
 pub use chasqui_card::*;

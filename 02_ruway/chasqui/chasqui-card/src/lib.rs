@@ -33,10 +33,20 @@ use ulid::Ulid;
 // Re-export para consumidores
 pub use ::ulid;
 
+pub mod intension;
 pub mod query;
 
+pub use intension::MonadQuery;
+
 /// Versión del esquema del manifiesto. Bump al cambiar el schema.
-pub const MONAD_SCHEMA_VERSION: u16 = 1;
+///
+/// v2 (grafo de Mónadas): `MonadManifest` gana `submonads` (contención
+/// DAG: una Mónada puede contener otras) y `query` (cuerpo intensional:
+/// los miembros se derivan de un [`MonadQuery`] en vez de curarse a
+/// mano). Ambos campos son aditivos con `serde default`, así que un
+/// manifiesto v1 deserializa sin pérdida; `validate` acepta esquemas
+/// **iguales o anteriores** (sólo rechaza los más nuevos que no entiende).
+pub const MONAD_SCHEMA_VERSION: u16 = 2;
 
 /// Identificador opaco de un archivo registrado en la DB.
 pub type FileId = Ulid;
@@ -176,6 +186,26 @@ pub struct MonadManifest {
     /// IDs de archivos miembros (incluye pins).
     pub members: BTreeSet<FileId>,
 
+    /// **Sub-Mónadas contenidas** (contención DAG). Una Mónada puede
+    /// contener otras además de archivos: "Fotos" contiene el álbum
+    /// "Viaje", que contiene las fotos. Como una sub-Mónada se referencia
+    /// por su `MonadId`, la *misma* sub-Mónada puede aparecer bajo varios
+    /// padres — multi-pertenencia sin duplicar el objeto. Es el eje de
+    /// **contención**, ortogonal a `lineage` (que es *derivación*:
+    /// split/merge histórico, no quién-contiene-a-quién).
+    #[serde(default)]
+    pub submonads: BTreeSet<MonadId>,
+
+    /// Cuerpo **intensional**, si la Mónada es una consulta. `None` =
+    /// Mónada extensional (los `members` se curan a mano o por
+    /// clustering). `Some(q)` = los miembros se (re)derivan evaluando `q`
+    /// contra el corpus en cada scan; `members` queda como la
+    /// materialización cacheada de esa evaluación (más los `pins`, que el
+    /// usuario fija aunque la query no los capture). Ver
+    /// [`intension::MonadQuery`].
+    #[serde(default)]
+    pub query: Option<MonadQuery>,
+
     /// Unix ms de creación de la Mónada.
     pub created_at_ms: u64,
 
@@ -232,6 +262,8 @@ impl MonadManifest {
             dominant_lens: Lens::default(),
             pins: BTreeSet::new(),
             members: BTreeSet::new(),
+            submonads: BTreeSet::new(),
+            query: None,
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             extensions: BTreeMap::new(),
@@ -240,7 +272,11 @@ impl MonadManifest {
 
     /// Validación semántica.
     pub fn validate(&self) -> Result<(), MonadError> {
-        if self.schema_version != MONAD_SCHEMA_VERSION {
+        // Aceptamos esquemas iguales o anteriores (los campos nuevos son
+        // aditivos con default). Sólo rechazamos uno MÁS nuevo que el que
+        // este binario entiende: ahí sí podrían venir invariantes que no
+        // sabemos verificar.
+        if self.schema_version > MONAD_SCHEMA_VERSION {
             return Err(MonadError::SchemaMismatch {
                 got: self.schema_version,
                 expected: MONAD_SCHEMA_VERSION,
@@ -255,7 +291,15 @@ impl MonadManifest {
         if !(0.0..=1.0).contains(&self.entropy) {
             return Err(MonadError::InvalidEntropy(self.entropy));
         }
-        if self.members.is_empty() && self.pins.is_empty() {
+        // Una Mónada es no-vacía si tiene algo que mostrar o una regla que
+        // la define: archivos, pines, sub-Mónadas, o un cuerpo intensional
+        // (que puede resolver a cero miembros hoy y a muchos tras el
+        // próximo scan — sigue siendo una Mónada legítima).
+        if self.members.is_empty()
+            && self.pins.is_empty()
+            && self.submonads.is_empty()
+            && self.query.is_none()
+        {
             return Err(MonadError::Empty);
         }
         let actual = self.members.len() as u32;
@@ -410,6 +454,58 @@ mod tests {
         assert_eq!(data.member_count, 3);
         assert!((data.dispersion - 0.42).abs() < 1e-6);
         assert_eq!(data.presentation_hint, "code");
+    }
+
+    #[test]
+    fn submonads_solo_es_no_vacia() {
+        // Una Mónada-contenedor que sólo agrupa otras Mónadas (sin
+        // archivos propios) es válida — es el caso de "Fotos" conteniendo
+        // álbumes.
+        let mut m = MonadManifest::new("Fotos");
+        m.submonads.insert(Ulid::new());
+        m.touch();
+        m.validate().expect("submonads-only debe validar");
+    }
+
+    #[test]
+    fn query_sola_es_no_vacia() {
+        // Una Mónada intensional recién creada puede no tener miembros
+        // materializados todavía y aun así ser válida: su cuerpo es la
+        // query.
+        let mut m = MonadManifest::new("Imágenes");
+        m.query = Some(MonadQuery::imagenes());
+        m.touch();
+        assert_eq!(m.cardinality, 0);
+        m.validate().expect("query-only debe validar");
+    }
+
+    #[test]
+    fn schema_anterior_se_acepta() {
+        // Un manifiesto de un esquema previo (v1) sigue siendo legible:
+        // validate sólo rechaza esquemas MÁS nuevos.
+        let mut m = MonadManifest::new("legacy");
+        m.members.insert(Ulid::new());
+        m.touch();
+        m.schema_version = 1;
+        m.validate().expect("v1 debe validar contra un binario v2");
+
+        m.schema_version = MONAD_SCHEMA_VERSION + 1;
+        assert!(matches!(m.validate(), Err(MonadError::SchemaMismatch { .. })));
+    }
+
+    #[test]
+    fn json_roundtrip_preserva_grafo() {
+        let mut m = MonadManifest::new("Fotos");
+        m.submonads.insert(Ulid::new());
+        m.submonads.insert(Ulid::new());
+        m.query = Some(MonadQuery::Any {
+            of: vec![MonadQuery::extension("png"), MonadQuery::extension("jpg")],
+        });
+        m.touch();
+        let s = m.to_json_pretty().unwrap();
+        let m2 = MonadManifest::from_json(&s).unwrap();
+        assert_eq!(m2.submonads, m.submonads);
+        assert_eq!(m2.query, m.query);
     }
 
     #[test]
