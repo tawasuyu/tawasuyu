@@ -248,6 +248,31 @@ pub fn app_icon_view_colored<Msg: Clone + 'static>(
     })
 }
 
+/// Exporta el icono de app como **SVG** (string), en su color de marca.
+/// Mismo dibujo que [`app_icon_view`] pero en un formato de archivo: sirve para
+/// los `.desktop` (freedesktop `scalable/apps/<id>.svg`), la web, o cualquier
+/// consumidor que no renderice con Llimphi. El path es stroke-only con remates
+/// redondos, igual que el pintor vectorial. `viewBox 0 0 24 24` (la grilla).
+pub fn app_icon_svg(icon: AppIcon, stroke_width: f32) -> String {
+    let d = icon.path().to_svg();
+    let [r, g, b, _] = icon.brand().components;
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let hex = format!("#{:02x}{:02x}{:02x}", q(r), q(g), q(b));
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" \
+fill=\"none\" stroke=\"{hex}\" stroke-width=\"{sw}\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\
+<path d=\"{d}\"/></svg>\n",
+        sw = fmt_num(stroke_width),
+    )
+}
+
+/// Formatea un f32 sin ceros de cola (`1.8` no `1.8000`).
+fn fmt_num(v: f32) -> String {
+    let s = format!("{v:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.to_string()
+}
+
 /// Pintor crudo — para stampear varios iconos de app dentro del mismo
 /// `paint_with` (una grilla de launcher, por ejemplo).
 pub fn paint_app_icon(
@@ -800,6 +825,17 @@ mod tests {
                 "icono de app {} produjo path vacío",
                 icon.name()
             );
+        }
+    }
+
+    #[test]
+    fn svg_export_es_valido() {
+        for icon in ALL {
+            let svg = app_icon_svg(icon, 1.8);
+            assert!(svg.starts_with("<svg"), "{} svg sin cabecera", icon.name());
+            assert!(svg.contains("<path d=\"M"), "{} svg sin path", icon.name());
+            assert!(svg.contains("stroke=\"#"), "{} svg sin color de marca", icon.name());
+            assert!(svg.trim_end().ends_with("</svg>"), "{} svg sin cierre", icon.name());
         }
     }
 

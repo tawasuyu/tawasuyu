@@ -562,6 +562,7 @@ members = [
     "03_ukupacha/wawa-explorer/wawa-explorer-llimphi",
     "shared/allichay",
     "shared/app-bus",
+    "shared/apps-desktop",
     "shared/atipay",
     "shared/bitacora",
     "shared/marca",
