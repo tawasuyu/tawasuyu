@@ -10,33 +10,97 @@
 //! quedan bajo el subárbol cgroup del contexto y el reweight/freeze del slice
 //! las gobierna a todas de una.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use async_trait::async_trait;
 use card_core::{Card, Payload};
 use pacha_core::{AppSpec, WawaOverlay};
+use pacha_dotfiles::{ConjuntoDotfiles, Instantanea, StoreObjetos};
 use sandokan::{Engine, Intent};
 use tokio::process::Command;
 use ulid::Ulid;
 
 use crate::Surfaces;
 
+/// El contexto de versionado de dotfiles que `LinuxSurfaces` usa para
+/// materializar/recapturar sets. Embebe el almacén de objetos, el `$HOME`
+/// destino, el catálogo de [`ConjuntoDotfiles`] por id, y la cabeza (último
+/// commit) de cada set para encadenar la historia.
+pub struct DotfilesCtx {
+    store: StoreObjetos,
+    home: PathBuf,
+    sets: BTreeMap<String, ConjuntoDotfiles>,
+    heads: BTreeMap<String, [u8; 32]>,
+}
+
+impl DotfilesCtx {
+    /// Arma el contexto con un almacén en `store_dir`, materializando hacia
+    /// `home`, y el catálogo de sets indexado por su id.
+    pub fn new(
+        store_dir: impl Into<PathBuf>,
+        home: impl Into<PathBuf>,
+        sets: impl IntoIterator<Item = ConjuntoDotfiles>,
+    ) -> Result<Self, String> {
+        let store = StoreObjetos::abrir(store_dir.into()).map_err(|e| e.to_string())?;
+        let sets = sets.into_iter().map(|s| (s.id.clone(), s)).collect();
+        Ok(Self { store, home: home.into(), sets, heads: BTreeMap::new() })
+    }
+
+    /// Recaptura un set y commitea sobre su cabeza previa. Devuelve la raíz del
+    /// árbol (lo que el pin del runtime guarda y `materializar` consume).
+    fn capturar(&mut self, set_id: &str) -> Result<[u8; 32], String> {
+        let set = self.sets.get(set_id).ok_or_else(|| format!("set desconocido: {set_id}"))?;
+        let raiz = pacha_dotfiles::capturar(&self.store, set, &self.home).map_err(|e| e.to_string())?;
+        let inst = Instantanea {
+            raiz,
+            padre: self.heads.get(set_id).copied(),
+            etiqueta: format!("auto: dejar contexto ({set_id})"),
+            creada_ms: ahora_ms(),
+        };
+        let commit = pacha_dotfiles::commitear(&self.store, &inst).map_err(|e| e.to_string())?;
+        self.heads.insert(set_id.to_string(), commit);
+        Ok(raiz)
+    }
+}
+
+/// Milisegundos desde el epoch (real-side: aquí sí se consulta el reloj, a
+/// diferencia del núcleo puro de `pacha-core`).
+fn ahora_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 /// Superficies reales. Embebe el `Engine` (elegido por `sandokan::auto`: init
 /// de sistema → daemon → in-process) y conoce el binario de `mirada-ctl`.
 pub struct LinuxSurfaces {
     engine: Box<dyn Engine>,
     mirada_ctl: String,
+    dotfiles: Option<DotfilesCtx>,
 }
 
 impl LinuxSurfaces {
     /// Conecta al orquestador disponible y usa `mirada-ctl` del PATH.
     pub async fn connect() -> Self {
         let socket = sandokan::default_socket_path();
-        Self { engine: sandokan::auto(&socket).await, mirada_ctl: "mirada-ctl".into() }
+        Self {
+            engine: sandokan::auto(&socket).await,
+            mirada_ctl: "mirada-ctl".into(),
+            dotfiles: None,
+        }
     }
 
     /// Igual que [`connect`](Self::connect) pero con un `Engine` ya construido
     /// (para tests de humo o engines remotos).
     pub fn with_engine(engine: Box<dyn Engine>) -> Self {
-        Self { engine, mirada_ctl: "mirada-ctl".into() }
+        Self { engine, mirada_ctl: "mirada-ctl".into(), dotfiles: None }
+    }
+
+    /// Habilita el versionado de dotfiles (si no se llama, los efectos
+    /// `Materializar`/`Capturar` fallan best-effort con un warning).
+    pub fn with_dotfiles(mut self, ctx: DotfilesCtx) -> Self {
+        self.dotfiles = Some(ctx);
+        self
     }
 
     /// Corre `mirada-ctl <args...>`, devolviendo el stdout en éxito.
@@ -152,6 +216,16 @@ impl Surfaces for LinuxSurfaces {
         // Hasta entonces devolvemos vacío: el restore cae a la receta del
         // contexto (degradación documentada en el plan).
         Ok(Vec::new())
+    }
+
+    async fn materialize_dotfiles(&mut self, set_id: &str, raiz: [u8; 32]) -> Result<(), String> {
+        let ctx = self.dotfiles.as_ref().ok_or("dotfiles no configurados")?;
+        pacha_dotfiles::materializar(&ctx.store, &ctx.home, raiz).map_err(|e| format!("{set_id}: {e}"))
+    }
+
+    async fn capture_dotfiles(&mut self, set_id: &str) -> Result<[u8; 32], String> {
+        let ctx = self.dotfiles.as_mut().ok_or("dotfiles no configurados")?;
+        ctx.capturar(set_id)
     }
 }
 

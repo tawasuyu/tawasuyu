@@ -57,6 +57,11 @@ pub trait Surfaces: Send {
     async fn stop_units(&mut self, units: &[String]) -> Result<(), String>;
     /// Captura los `app_id` vivos del special-workspace (para `last_session`).
     async fn snapshot_apps(&mut self, special: &str) -> Result<Vec<String>, String>;
+    /// Materializa en `$HOME` la instantánea `raiz` de un set de dotfiles.
+    async fn materialize_dotfiles(&mut self, set_id: &str, raiz: [u8; 32]) -> Result<(), String>;
+    /// Recaptura un set de dotfiles desde `$HOME` y devuelve la nueva
+    /// instantánea (hash del árbol raíz) para avanzar el pin del runtime.
+    async fn capture_dotfiles(&mut self, set_id: &str) -> Result<[u8; 32], String>;
 }
 
 /// Errores del activador. Sólo los **duros** (la planificación del core);
@@ -162,6 +167,15 @@ impl<S: Surfaces> Manager<S> {
                     Ok(ids) => runtime.set_last_session(&pacha, ids),
                     Err(causa) => warnings.push(format!("snapshot_apps: {causa}")),
                 },
+                Effect::MaterializarDotfiles { set_id, raiz } => {
+                    best_effort!("materializar_dotfiles", surf.materialize_dotfiles(&set_id, raiz).await);
+                }
+                Effect::CapturarDotfiles { pacha, set_id } => {
+                    match surf.capture_dotfiles(&set_id).await {
+                        Ok(raiz) => runtime.set_dotfile_pin(&pacha, &set_id, raiz),
+                        Err(causa) => warnings.push(format!("capturar_dotfiles {set_id}: {causa}")),
+                    }
+                }
                 Effect::SpawnApp { spec, slice, special } => {
                     match surf.spawn(&spec, &slice, &special).await {
                         Ok(unit) => spawned.entry(slice).or_default().push(unit),
@@ -259,6 +273,14 @@ mod tests {
             self.log.push(format!("snapshot {special}"));
             Ok(self.snapshot.clone())
         }
+        async fn materialize_dotfiles(&mut self, set_id: &str, raiz: [u8; 32]) -> Result<(), String> {
+            self.log.push(format!("materializar {set_id} raiz={:02x}{:02x}", raiz[0], raiz[1]));
+            Ok(())
+        }
+        async fn capture_dotfiles(&mut self, set_id: &str) -> Result<[u8; 32], String> {
+            self.log.push(format!("capturar {set_id}"));
+            Ok([0xAB; 32])
+        }
     }
 
     fn cat() -> Catalog {
@@ -325,6 +347,31 @@ mod tests {
         assert_eq!(
             m.runtime.state("juegos").unwrap().last_session,
             vec!["steam".to_string(), "discord".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn dotfiles_materializa_al_entrar_y_avanza_el_pin_al_salir() {
+        let mut c = cat();
+        let mut oficina = c.get("oficina").unwrap().clone();
+        oficina.dotfiles = vec![pacha_core::DotfileRef {
+            set_id: "shell".into(),
+            instantanea: [3u8; 32],
+            rastrear: true,
+        }];
+        c.upsert(oficina);
+        let mut m = Manager::new(c, Runtime::new(), Recorder::default());
+
+        m.switch("oficina", BringUp::Restore).await.unwrap();
+        assert!(m.surfaces().log.iter().any(|l| l == "materializar shell raiz=0303"));
+
+        // Salir a juegos recaptura el set rastreado y el pin del runtime avanza
+        // a la instantánea que devolvió la superficie ([0xAB; 32]).
+        m.switch("juegos", BringUp::Restore).await.unwrap();
+        assert!(m.surfaces().log.iter().any(|l| l == "capturar shell"));
+        assert_eq!(
+            m.runtime.state("oficina").unwrap().dotfile_pins.get("shell"),
+            Some(&[0xABu8; 32])
         );
     }
 

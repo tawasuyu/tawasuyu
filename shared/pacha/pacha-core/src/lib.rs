@@ -67,6 +67,10 @@ pub struct Pacha {
     /// configurable por contexto que pidió el diseño).
     #[serde(default)]
     pub on_leave: OnLeave,
+    /// Sets de dotfiles a materializar al activar este contexto. Vacío = no
+    /// tocar el `$HOME` del usuario.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dotfiles: Vec<DotfileRef>,
 }
 
 impl Pacha {
@@ -81,6 +85,7 @@ impl Pacha {
             persist: false,
             resources: ResourcePolicy::default(),
             on_leave: OnLeave::default(),
+            dotfiles: Vec::new(),
         }
     }
 
@@ -138,6 +143,26 @@ impl AppSpec {
     pub fn new(command: impl Into<String>, app_id: impl Into<String>) -> Self {
         Self { command: command.into(), app_id: app_id.into(), workspace: None }
     }
+}
+
+/// Referencia de un contexto a un **conjunto de dotfiles** (`pacha-dotfiles`).
+/// El contexto no sabe qué archivos contiene el set — sólo lo nombra y fija qué
+/// instantánea aterrizar al activarse. Tipo plano (`[u8; 32]` = hash BLAKE3 del
+/// árbol raíz) para no acoplar `pacha-core` a `format`/`pacha-dotfiles`, igual
+/// que [`ResourcePolicy`] espeja a `card` con tipos planos.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotfileRef {
+    /// Id del [`ConjuntoDotfiles`](../pacha_dotfiles/struct.ConjuntoDotfiles.html)
+    /// (`"shell"`, `"editor"`).
+    pub set_id: String,
+    /// Instantánea a materializar cuando el runtime no tiene una más reciente
+    /// (ver `dotfile_pins`). Para un set fijado es la versión que el usuario
+    /// clavó; para uno rastreado, el punto de partida.
+    pub instantanea: [u8; 32],
+    /// Si al **dejar** este contexto se recaptura el set (modo rastreado). El
+    /// manager produce una nueva instantánea y avanza el pin del runtime.
+    #[serde(default)]
+    pub rastrear: bool,
 }
 
 /// Qué pasa con un contexto cuando se lo deja. Es el **default configurable
@@ -302,6 +327,11 @@ pub struct RuntimeState {
     /// `persist`). El manager los reabre en vez de la receta.
     #[serde(default)]
     pub last_session: Vec<String>,
+    /// Instantánea más reciente por set de dotfiles rastreado (hash del árbol
+    /// raíz). El manager la avanza tras cada recaptura; gana a la instantánea
+    /// clavada en la definición al materializar.
+    #[serde(default)]
+    pub dotfile_pins: BTreeMap<String, [u8; 32]>,
 }
 
 /// El roster vivo: qué contexto está activo y el estado de cada uno. Es el
@@ -321,6 +351,10 @@ pub enum Effect {
     // --- dejar el contexto saliente ---
     /// Capturar los `app_id` vivos del contexto a `last_session` (persist).
     SnapshotApps { pacha: String, special: String },
+    /// Recapturar un set de dotfiles rastreado al dejar el contexto. El manager
+    /// produce una nueva instantánea y la realimenta como pin del runtime
+    /// (análogo a `SnapshotApps`→`last_session`).
+    CapturarDotfiles { pacha: String, set_id: String },
     /// Rebajar el `cpu.weight` del slice (background).
     SetCpuWeight { slice: String, cpu_weight: u32 },
     /// Congelar el slice (`cgroup.freeze=1`).
@@ -337,6 +371,8 @@ pub enum Effect {
     ClearOverlay,
     /// Aplicar la vista/keymap del compositor.
     ApplyVista { vista: String },
+    /// Materializar en `$HOME` la instantánea fijada de un set de dotfiles.
+    MaterializarDotfiles { set_id: String, raiz: [u8; 32] },
 
     // --- traer el contexto entrante ---
     /// Descongelar el slice (`cgroup.freeze=0`).
@@ -390,6 +426,22 @@ impl Runtime {
         self.states.entry(id.to_string()).or_default().last_session = app_ids;
     }
 
+    /// Avanza el pin de un set de dotfiles tras una recaptura (lo llama el
+    /// manager con la nueva instantánea).
+    pub fn set_dotfile_pin(&mut self, id: &str, set_id: &str, raiz: [u8; 32]) {
+        self.states
+            .entry(id.to_string())
+            .or_default()
+            .dotfile_pins
+            .insert(set_id.to_string(), raiz);
+    }
+
+    /// Pin vigente de un set para un contexto (la recaptura más reciente), si
+    /// el manager ya capturó alguna vez.
+    fn dotfile_pin(&self, id: &str, set_id: &str) -> Option<[u8; 32]> {
+        self.states.get(id).and_then(|s| s.dotfile_pins.get(set_id).copied())
+    }
+
     /// Itera `(id, &RuntimeState)` en orden de id.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &RuntimeState)> + '_ {
         self.states.iter().map(|(k, v)| (k.as_str(), v))
@@ -429,6 +481,12 @@ impl Runtime {
         if let Some(v) = &to_def.vista {
             fx.push(Effect::ApplyVista { vista: v.clone() });
         }
+        // Dotfiles del entrante: el pin del runtime (recaptura más reciente)
+        // gana a la instantánea clavada en la definición.
+        for df in &to_def.dotfiles {
+            let raiz = self.dotfile_pin(to, &df.set_id).unwrap_or(df.instantanea);
+            fx.push(Effect::MaterializarDotfiles { set_id: df.set_id.clone(), raiz });
+        }
 
         // 3) Traer el entrante según en qué estado estaba.
         self.bring_up(to_def, bring, &mut fx);
@@ -442,6 +500,16 @@ impl Runtime {
 
     /// Efectos para dejar el contexto saliente, según su `on_leave`.
     fn leave(&mut self, from: &Pacha, fx: &mut Vec<Effect>) {
+        // Recapturar los sets rastreados ANTES de tocar nada: lee `$HOME` con la
+        // versión del saliente, antes de que el entrante materialice la suya.
+        for df in &from.dotfiles {
+            if df.rastrear {
+                fx.push(Effect::CapturarDotfiles {
+                    pacha: from.id.clone(),
+                    set_id: df.set_id.clone(),
+                });
+            }
+        }
         let st = self.states.entry(from.id.clone()).or_default();
         match from.on_leave {
             OnLeave::Background => {
@@ -518,6 +586,11 @@ impl Runtime {
     pub fn plan_close(&mut self, cat: &Catalog, id: &str) -> Result<Vec<Effect>, PachaError> {
         let def = cat.get(id).ok_or_else(|| PachaError::Unknown(id.to_string()))?;
         let mut fx = Vec::new();
+        for df in &def.dotfiles {
+            if df.rastrear {
+                fx.push(Effect::CapturarDotfiles { pacha: id.to_string(), set_id: df.set_id.clone() });
+            }
+        }
         let st = self.states.entry(id.to_string()).or_default();
         if def.persist {
             fx.push(Effect::SnapshotApps { pacha: id.to_string(), special: def.special() });
@@ -743,6 +816,42 @@ mod tests {
         // Fresh: la receta (SpawnApp), no last_session.
         assert!(fx.iter().any(|e| matches!(e, Effect::SpawnApp { .. })));
         assert!(!fx.iter().any(|e| matches!(e, Effect::RespawnApp { .. })));
+    }
+
+    #[test]
+    fn dotfiles_materializan_al_entrar_y_capturan_al_salir() {
+        let mut c = Catalog::new();
+        let mut casa = Pacha::new("casa", "Casa");
+        casa.dotfiles = vec![DotfileRef { set_id: "shell".into(), instantanea: [7u8; 32], rastrear: true }];
+        c.upsert(casa);
+        c.upsert(Pacha::new("trabajo", "Trabajo"));
+
+        let mut rt = Runtime::new();
+        let fx = rt.plan_switch(&c, "casa", BringUp::Restore).unwrap();
+        assert!(fx.contains(&Effect::MaterializarDotfiles { set_id: "shell".into(), raiz: [7u8; 32] }));
+
+        // Al salir de casa: lo primero es recapturar el set rastreado.
+        let fx = rt.plan_switch(&c, "trabajo", BringUp::Restore).unwrap();
+        assert_eq!(fx[0], Effect::CapturarDotfiles { pacha: "casa".into(), set_id: "shell".into() });
+    }
+
+    #[test]
+    fn pin_de_runtime_supera_a_la_instantanea_clavada() {
+        let mut c = Catalog::new();
+        let mut casa = Pacha::new("casa", "Casa");
+        casa.dotfiles = vec![DotfileRef { set_id: "shell".into(), instantanea: [1u8; 32], rastrear: true }];
+        c.upsert(casa);
+        c.upsert(Pacha::new("trabajo", "Trabajo"));
+
+        let mut rt = Runtime::new();
+        rt.plan_switch(&c, "casa", BringUp::Restore).unwrap();
+        // El manager recapturó y avanzó el pin a una instantánea nueva.
+        rt.set_dotfile_pin("casa", "shell", [9u8; 32]);
+        rt.plan_switch(&c, "trabajo", BringUp::Restore).unwrap();
+        let fx = rt.plan_switch(&c, "casa", BringUp::Restore).unwrap();
+        // Materializa el pin del runtime, no la instantánea clavada.
+        assert!(fx.contains(&Effect::MaterializarDotfiles { set_id: "shell".into(), raiz: [9u8; 32] }));
+        assert!(!fx.contains(&Effect::MaterializarDotfiles { set_id: "shell".into(), raiz: [1u8; 32] }));
     }
 
     #[test]
