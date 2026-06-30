@@ -41,7 +41,8 @@ cargo build --release \
     -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi \
     -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi \
     -p pata-notify -p pata-notify-panel -p pata-notify-triage \
-    -p mirada-plugin-host -p pacha-cli
+    -p mirada-plugin-host -p pacha-cli \
+    -p agora-cli -p sandokan-app -p rimay-voz-daemon-bin
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -77,6 +78,23 @@ sudo install -Dm755 "$BIN/wawa-panel"              /usr/local/bin/wawa-panel
 # subcomando `pacha dotfiles …` (versionado + cifrado de dotfiles por contexto).
 # El diente «Contextos» del wawa-panel edita `pachas.ron`; esta es la herramienta.
 sudo install -Dm755 "$BIN/pacha"                   /usr/local/bin/pacha
+# Identidad soberana (agora): la CLI `agora-cli` — crear/listar identidades y
+# `agora-cli desbloquear`, que cachea la seed en el session keyring para que
+# `pacha dotfiles …` cifre/descifre. El diente «Contextos» del panel la invoca.
+sudo install -Dm755 "$BIN/agora-cli"               /usr/local/bin/agora-cli
+# Plano de control (sandokan): la CLI `sandokan` — arranca/para/observa unidades
+# (Linux y Wawa). `sandokan-monitor` (UI) ya se instala más abajo.
+sudo install -Dm755 "$BIN/sandokan"                /usr/local/bin/sandokan
+# Daemon de voz (rimay): par STT+TTS por socket Unix. Hoy backends mock; la
+# sección «Voz» del panel lo configura. Se autoarranca on-demand por su consumidor.
+sudo install -Dm755 "$BIN/voz-daemon"              /usr/local/bin/voz-daemon
+# Daemon de embeddings (rimay-verbo): lo consumen pluma-semantic, khipu, chasqui.
+# Trae backend fastembed (pesado) → NO se fuerza su build; se instala si ya está
+# compilado (`cargo build --release -p rimay-verbo-daemon-bin`).
+if [ -x "$BIN/verbo-daemon" ]; then
+    sudo install -Dm755 "$BIN/verbo-daemon"        /usr/local/bin/verbo-daemon
+    echo "    + verbo-daemon (embeddings)"
+fi
 # Notificaciones de escritorio (org.freedesktop.Notifications):
 #   · pata-notify        — el daemon; pinta los toasts y guarda el historial.
 #                          Autoarranca con la sesión (lo sembramos en el

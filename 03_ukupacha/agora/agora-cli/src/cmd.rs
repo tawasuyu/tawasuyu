@@ -14,6 +14,15 @@ use clap::{Subcommand, ValueEnum};
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Desbloquea una identidad y cachea su seed en el **session keyring** del
+    /// kernel, para que `pacha dotfiles …` cifre/descifre sin re-pedir passphrase
+    /// (Fase 3). La passphrase del keystore se toma de `AGORA_PASSPHRASE`.
+    Desbloquear {
+        /// Identidad a desbloquear (hex o prefijo). Si se omite y hay una sola en
+        /// el keystore, se usa esa.
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// Operaciones sobre identidades.
     Identidad {
         #[command(subcommand)]

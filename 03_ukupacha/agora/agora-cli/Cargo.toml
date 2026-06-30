@@ -18,6 +18,10 @@ agora-graph = { path = "../agora-graph" }
 agora-store = { path = "../agora-store" }
 agora-keystore = { path = "../agora-keystore" }
 agora-channel = { path = "../agora-channel" }
+# Desbloqueo de sesión: `agora-cli desbloquear` cachea la seed de identidad en el
+# session keyring del kernel para que pacha cifre/descifre dotfiles sin re-pedir
+# passphrase en cada conmutación de contexto (Fase 3 de pacha-dotfiles).
+pacha-llavero = { path = "../../../shared/pacha/pacha-llavero" }
 format = { path = "../../../shared/format" }
 foreign-fs = { path = "../../../shared/foreign-fs" }
 # Transporte AoE (raw sockets de capa 2) para `wawa anunciar`: difunde el

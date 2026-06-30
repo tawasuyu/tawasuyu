@@ -63,6 +63,8 @@ pub enum Error {
     Aoe(String),
     #[error("multifirma: {0}")]
     MultiSig(agora_core::MultiSigError),
+    #[error("llavero de sesión: {0}")]
+    Llavero(String),
 }
 
 pub type CliResult<T> = std::result::Result<T, Error>;

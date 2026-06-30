@@ -8,6 +8,50 @@ use rand::RngCore;
 use crate::sesion::{ahora_unix, hex_de, kind_label, leer_seed_de_stdin, CliResult, Error, Sesion};
 
 // =============================================================================
+//  desbloquear — cachea la seed en el session keyring (para pacha)
+// =============================================================================
+
+/// Desbloquea la identidad (la indicada por `id`, o la única del keystore) y
+/// guarda su seed en el session keyring bajo `pacha:id:default`, que es donde
+/// `pacha`/`pacha-manager` la buscan para derivar la clave del store de dotfiles.
+pub fn desbloquear(id_input: Option<String>) -> CliResult<()> {
+    use pacha_llavero::Llavero;
+
+    let s = Sesion::abrir()?;
+    let id = match id_input {
+        Some(x) => s.resolver_id(&x)?,
+        None => {
+            let mias = s.keystore.list().map_err(Error::Keystore)?;
+            match mias.len() {
+                1 => mias[0],
+                0 => {
+                    return Err(Error::Llavero(
+                        "no hay ninguna identidad en el keystore; creá una con \
+                         `agora-cli identidad nueva <nombre>`"
+                            .into(),
+                    ))
+                }
+                _ => {
+                    return Err(Error::Llavero(
+                        "hay varias identidades en el keystore; especificá --id <prefijo>".into(),
+                    ))
+                }
+            }
+        }
+    };
+    let seed = s.keystore.load(id, &s.passphrase).map_err(Error::Keystore)?;
+    pacha_llavero::LlaveroKernel::new()
+        .guardar("id:default", &seed)
+        .map_err(|e| Error::Llavero(e.to_string()))?;
+    println!(
+        "✓ identidad {} desbloqueada y cacheada en la sesión \
+         (pacha la usa para cifrar/descifrar dotfiles)",
+        hex_de(id.as_bytes())
+    );
+    Ok(())
+}
+
+// =============================================================================
 //  nueva
 // =============================================================================
 

@@ -25,12 +25,29 @@ const ON_LEAVE: &[(&str, &str)] = &[
     ("close", "Cerrado (máximo ahorro)"),
 ];
 
-/// Estado del diente: el catálogo de contextos + dónde persiste + cuál se edita.
+/// Estado del diente: el catálogo de contextos + dónde persiste + cuál se edita
+/// + el estado (cacheado) de la identidad/cifrado.
 pub struct PachaState {
     pub catalog: Catalog,
     path: Option<PathBuf>,
     /// Contexto seleccionado (el que editan las secciones de detalle).
     sel: String,
+    /// Passphrase tipeada para desbloquear (transitoria, NO se persiste).
+    pass: String,
+    /// ¿La identidad está desbloqueada (seed en el session keyring)? Cacheado:
+    /// se recalcula en `load` y tras crear/desbloquear, NO en cada render.
+    desbloqueada: bool,
+    /// Clave pública X25519 (hex) si está desbloqueada; vacío si no.
+    pubkey: String,
+}
+
+/// Lee el estado de identidad UNA vez (consulta el session keyring). `(desbloqueada,
+/// pubkey_hex)`.
+fn estado_identidad() -> (bool, String) {
+    match LlaveroKernel::new().recuperar(SEED_KEY) {
+        Ok(Some(seed)) => (true, hex(&pacha_dotfiles::clave_publica_de_seed(&seed))),
+        _ => (false, String::new()),
+    }
 }
 
 /// Lo que `route` devuelve al `update` del panel: si persistir + texto de estado.
@@ -64,7 +81,15 @@ impl PachaState {
             .and_then(|s| Catalog::from_ron(&s).ok())
             .unwrap_or_default();
         let sel = catalog.iter().next().map(|p| p.id.clone()).unwrap_or_default();
-        Self { catalog, path, sel }
+        let (desbloqueada, pubkey) = estado_identidad();
+        Self { catalog, path, sel, pass: String::new(), desbloqueada, pubkey }
+    }
+
+    /// Recalcula el estado de identidad (tras crear/desbloquear).
+    fn refrescar_identidad(&mut self) {
+        let (d, p) = estado_identidad();
+        self.desbloqueada = d;
+        self.pubkey = p;
     }
 
     /// Persiste el catálogo a `pachas.ron`.
@@ -89,7 +114,7 @@ pub fn schema(state: &PachaState) -> Schema {
     if let Some(p) = state.catalog.get(&state.sel) {
         schema = schema.section(contexto_section(p));
     }
-    schema.section(dotfiles_section())
+    schema.section(identidad_section(state)).section(dotfiles_section(state))
 }
 
 /// Sección «Contextos»: selector del que se edita (● seleccionado) + alta / baja.
@@ -132,19 +157,40 @@ fn contexto_section(p: &Pacha) -> Section {
         .field(Field::display("dotfiles", "Sets de dotfiles", p.dotfiles.len().to_string()))
 }
 
-/// Sección «Dotfiles / Secretos»: estado del cifrado en reposo + clave pública.
-fn dotfiles_section() -> Section {
-    let seed = LlaveroKernel::new().recuperar(SEED_KEY).ok().flatten();
-    let (cifrado, pubkey) = match seed {
-        Some(s) => (
-            "activo — identidad desbloqueada en esta sesión".to_string(),
-            hex(&pacha_dotfiles::clave_publica_de_seed(&s)),
-        ),
-        None => (
-            "bloqueado — desbloqueá la identidad para cifrar/compartir".to_string(),
-            "(identidad bloqueada)".to_string(),
-        ),
+/// Sección «Identidad»: estado del desbloqueo + crear/desbloquear (vía `agora-cli`).
+/// Desbloquear cachea la seed en el session keyring → habilita el cifrado de pacha.
+fn identidad_section(state: &PachaState) -> Section {
+    let estado = if state.desbloqueada {
+        "● desbloqueada — el cifrado de dotfiles está activo en esta sesión".to_string()
+    } else {
+        "○ bloqueada — creá/desbloqueá tu identidad para cifrar y compartir".to_string()
     };
+    let mut sec = Section::new("pacha::identidad", "Identidad (agora)").icon("🪪").help(
+        "Tu identidad soberana Ed25519 (agora). Al desbloquearla, su seed queda en el \
+         session keyring del kernel y `pacha` la usa para cifrar/descifrar tus dotfiles sin \
+         re-pedir la frase en cada conmutación. La frase se toma del campo de abajo (no se \
+         guarda) y se pasa a `agora-cli` por `AGORA_PASSPHRASE`. Al cerrar sesión, el kernel \
+         olvida la seed. Operación equivalente por shell: `agora-cli desbloquear`.",
+    );
+    sec = sec.field(Field::display("estado", "Estado", estado));
+    if !state.desbloqueada {
+        sec = sec
+            .field(Field::text("passphrase", "Frase de la identidad (no se guarda)", ""))
+            .field(Field::button("desbloquear", "Desbloquear con la frase"))
+            .field(Field::button("crear", "Crear una identidad nueva"));
+    }
+    sec
+}
+
+/// Sección «Dotfiles / Secretos»: estado del cifrado en reposo + clave pública.
+fn dotfiles_section(state: &PachaState) -> Section {
+    let cifrado = if state.desbloqueada {
+        "activo — sellado AEAD con tu identidad".to_string()
+    } else {
+        "inactivo — el store va en claro hasta desbloquear la identidad".to_string()
+    };
+    let pubkey =
+        if state.pubkey.is_empty() { "(identidad bloqueada)".to_string() } else { state.pubkey.clone() };
     let almacen = ProjectDirs::from("", "", "pacha")
         .map(|d| d.data_dir().join("dotfiles").display().to_string())
         .unwrap_or_default();
@@ -176,6 +222,10 @@ pub fn text_value(state: &PachaState, rel: &FieldPath) -> Option<String> {
                 _ => String::new(),
             })
         }
+        "identidad" => Some(match leaf {
+            "passphrase" => state.pass.clone(),
+            _ => String::new(),
+        }),
         _ => None,
     }
 }
@@ -190,7 +240,57 @@ pub fn route(state: &mut PachaState, rel: &FieldPath, value: FieldValue) -> Pach
     match section.as_str() {
         "contextos" => route_contextos(state, rel, value),
         "contexto" => route_contexto(state, rel, value),
+        "identidad" => route_identidad(state, rel, value),
         // «dotfiles» es informativa (display): no rutea.
+        _ => PachaAction::clean(String::new()),
+    }
+}
+
+/// Acciones de identidad: tipear la frase, desbloquear (cachea la seed) o crear.
+/// Shell-out a `agora-cli` (evita acoplar el panel a `agora-keystore`).
+fn route_identidad(state: &mut PachaState, rel: &FieldPath, value: FieldValue) -> PachaAction {
+    match rel.leaf() {
+        Some("passphrase") => {
+            if let Some(v) = value.as_str() {
+                state.pass = v.to_string();
+            }
+            // No persiste nada; sólo guarda la frase tipeada para el botón.
+            PachaAction::clean(String::new())
+        }
+        Some("desbloquear") if value.as_bool() == Some(true) => {
+            let out = std::process::Command::new("agora-cli")
+                .arg("desbloquear")
+                .env("AGORA_PASSPHRASE", &state.pass)
+                .output();
+            state.pass.clear();
+            match out {
+                Ok(o) if o.status.success() => {
+                    state.refrescar_identidad();
+                    PachaAction::clean("identidad desbloqueada — cifrado activo".to_string())
+                }
+                Ok(o) => PachaAction::clean(format!(
+                    "no se pudo desbloquear: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                )),
+                Err(e) => PachaAction::clean(format!("agora-cli no disponible: {e}")),
+            }
+        }
+        Some("crear") if value.as_bool() == Some(true) => {
+            let out = std::process::Command::new("agora-cli")
+                .args(["identidad", "nueva", "--name", "yo"])
+                .env("AGORA_PASSPHRASE", if state.pass.is_empty() { "agora-dev" } else { &state.pass })
+                .output();
+            match out {
+                Ok(o) if o.status.success() => {
+                    PachaAction::clean("identidad creada — ahora desbloqueala con tu frase".to_string())
+                }
+                Ok(o) => PachaAction::clean(format!(
+                    "no se pudo crear: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                )),
+                Err(e) => PachaAction::clean(format!("agora-cli no disponible: {e}")),
+            }
+        }
         _ => PachaAction::clean(String::new()),
     }
 }
@@ -281,7 +381,14 @@ mod tests {
 
     #[test]
     fn crear_seleccionar_editar_y_borrar_contexto() {
-        let mut st = PachaState { catalog: Catalog::new(), path: None, sel: String::new() };
+        let mut st = PachaState {
+            catalog: Catalog::new(),
+            path: None,
+            sel: String::new(),
+            pass: String::new(),
+            desbloqueada: false,
+            pubkey: String::new(),
+        };
         // crear
         let a = route(&mut st, &rel("contextos", "crear"), FieldValue::Text("oficina".into()));
         assert!(a.dirty && st.catalog.contains("oficina") && st.sel == "oficina");
@@ -291,8 +398,8 @@ mod tests {
         let p = st.catalog.get("oficina").unwrap();
         assert_eq!(p.label, "Trabajo");
         assert_eq!(p.on_leave, OnLeave::Close);
-        // el schema se arma sin panic y trae las 3 secciones (lista+detalle+dotfiles)
-        assert_eq!(schema(&st).sections.len(), 3);
+        // el schema se arma sin panic: lista + detalle + identidad + dotfiles
+        assert_eq!(schema(&st).sections.len(), 4);
         // borrar
         let d = route(&mut st, &rel("contextos", "eliminar"), FieldValue::Bool(true));
         assert!(d.dirty && !st.catalog.contains("oficina"));
@@ -300,7 +407,14 @@ mod tests {
 
     #[test]
     fn crear_duplicado_no_pisa() {
-        let mut st = PachaState { catalog: Catalog::new(), path: None, sel: String::new() };
+        let mut st = PachaState {
+            catalog: Catalog::new(),
+            path: None,
+            sel: String::new(),
+            pass: String::new(),
+            desbloqueada: false,
+            pubkey: String::new(),
+        };
         route(&mut st, &rel("contextos", "crear"), FieldValue::Text("x".into()));
         st.catalog.get_mut("x").unwrap().label = "Editado".into();
         let a = route(&mut st, &rel("contextos", "crear"), FieldValue::Text("x".into()));
