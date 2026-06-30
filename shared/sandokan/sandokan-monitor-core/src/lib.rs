@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod energia;
+pub mod reglas;
 
 use sandokan_core::{Engine, EngineError, TelemetryFrame};
 use sandokan_lifecycle::LifecycleState;

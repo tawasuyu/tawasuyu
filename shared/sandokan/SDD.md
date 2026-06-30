@@ -314,7 +314,20 @@ verbos+reglas existentes, no los reimplementa.
   honran prioridad/freeze, y la capa 3 ya tiene a quién pedirle de verdad.
   **Pendiente de capa 1**: `restart`/`reload`, `io.weight`, `memory.high/max`,
   `cpuset` (pin), `nice`/`ionice`, `set_ttl`/`enable`.
-- Capas 2, 4, 5: pendientes (orden de la tabla).
+- **Capa 2** *(núcleo, 2026-06-30)*: motor de disparadores por **métrica** en
+  `sandokan-monitor-core::reglas` (puro, como `energia`): `Condicion`
+  (CpuPctMin/MemBytesMin/RestartsMin/EtiquetaContiene/Todas) + `ReglaMetrica`
+  con `durante` (sostenido-por-tiempo) → `MotorMetrico::evaluar(snapshot, dt)`
+  que acumula rachas entre polls, dispara al cruzar el umbral **una sola vez**
+  (debounce) y resetea al caer la condición. El `Disparo` se ejecuta por el
+  contrato vía `aplicar()` → `Engine::{stop,set_cpu_weight,freeze}` (los verbos
+  de la capa 1). Evalúa el **mismo `MonitorSnapshot`** que el monitor — sin
+  segunda fuente. **Pendiente de capa 2**: disparadores de **estado del
+  sistema** (AC/batería, red, idle, lock/login) y de **tiempo** (cron,
+  atardecer, boot); el lazo de poll que llama `observe→evaluar→aplicar` (lo
+  cablea el consumidor —monitor app o un daemon—, igual que pata cablea
+  `energia`).
+- Capas 4, 5: pendientes (orden de la tabla).
 
 ## Estado (2026-05-31)
 

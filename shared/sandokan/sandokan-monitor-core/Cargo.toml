@@ -11,6 +11,7 @@ publish.workspace = true
 sandokan-core = { path = "../sandokan-core" }
 sandokan-lifecycle = { path = "../sandokan-lifecycle" }
 ulid = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
