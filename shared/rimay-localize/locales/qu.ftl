@@ -348,6 +348,7 @@ nahual-shell-label-gray = ● Uqi unancha
 nahual-shell-label-clear = Unanchata qichuy
 nahual-shell-mount-nouser = Mónadas-ta churay (nouser)
 nahual-shell-mount-minga = Minga grafo-ta churay
+nahual-shell-mount-dispositivos = Dispositivokunata churay
 nahual-shell-unmount = Pukyuta hurquy
 nahual-shell-new-session = Musuq rurana
 nahual-shell-ai-ask = Akllasqamanta IA-ta tapuy

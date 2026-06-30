@@ -51,10 +51,13 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
         .shortcut("m")
         .separated();
     let mut mount_minga = MenuItem::new(rimay_localize::t("nahual-shell-mount-minga"), "file.mount_minga").shortcut("g");
+    let mut mount_disp =
+        MenuItem::new(rimay_localize::t("nahual-shell-mount-dispositivos"), "file.mount_dispositivos");
     let mut unmount = MenuItem::new(rimay_localize::t("nahual-shell-unmount"), "file.unmount").separated();
     if montado {
         mount_nouser = mount_nouser.disabled();
         mount_minga = mount_minga.disabled();
+        mount_disp = mount_disp.disabled();
     } else {
         unmount = unmount.disabled();
     }
@@ -82,6 +85,7 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
                 .item(delete)
                 .item(mount_nouser)
                 .item(mount_minga)
+                .item(mount_disp)
                 .item(unmount)
                 .item(MenuItem::new(rimay_localize::t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
@@ -149,6 +153,7 @@ pub(crate) fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>)
         "file.delete" => handle.dispatch(Msg::DeleteSelection),
         "file.mount_nouser" => handle.dispatch(Msg::MountNouser),
         "file.mount_minga" => handle.dispatch(Msg::MountMinga),
+        "file.mount_dispositivos" => handle.dispatch(Msg::MountDispositivos),
         "file.unmount" => handle.dispatch(Msg::Unmount),
         "file.quit" => std::process::exit(0),
         "view.theme" => handle.dispatch(Msg::CycleTheme),
@@ -243,6 +248,10 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
         acciones.push((
             ContextMenuItem::action(rimay_localize::t("nahual-shell-mount-minga")),
             Msg::MountMinga,
+        ));
+        acciones.push((
+            ContextMenuItem::action(rimay_localize::t("nahual-shell-mount-dispositivos")),
+            Msg::MountDispositivos,
         ));
     }
     // Open-with (AppBus): si la selección es un archivo, ofrecé abrirlo con

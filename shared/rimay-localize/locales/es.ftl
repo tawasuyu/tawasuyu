@@ -347,6 +347,7 @@ nahual-shell-label-gray = ● Etiqueta gris
 nahual-shell-label-clear = Quitar etiqueta
 nahual-shell-mount-nouser = Montar Mónadas (nouser)
 nahual-shell-mount-minga = Montar grafo minga
+nahual-shell-mount-dispositivos = Montar dispositivos
 nahual-shell-unmount = Desmontar fuente
 nahual-shell-new-session = Nueva sesión
 nahual-shell-ai-ask = Preguntar a la IA sobre la selección

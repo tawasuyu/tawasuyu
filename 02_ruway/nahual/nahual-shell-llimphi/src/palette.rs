@@ -78,6 +78,7 @@ pub(crate) fn build_command_catalog() -> Vec<PaletteCommand> {
         // ---- Fuentes (montaje) ----
         PaletteCommand::new("source.mountNouser", t("nahual-shell-mount-nouser"), g_source.clone()).with_shortcut("m"),
         PaletteCommand::new("source.mountMinga", t("nahual-shell-mount-minga"), g_source.clone()).with_shortcut("g"),
+        PaletteCommand::new("source.mountDispositivos", t("nahual-shell-mount-dispositivos"), g_source.clone()),
         PaletteCommand::new("source.unmount", t("nahual-shell-unmount"), g_source),
         // ---- Sesiones ----
         PaletteCommand::new("session.new", t("nahual-shell-new-session"), g_session),
@@ -143,6 +144,7 @@ pub(crate) fn palette_id_to_msg(id: &str) -> Option<Msg> {
         // Fuentes.
         "source.mountNouser" => Msg::MountNouser,
         "source.mountMinga" => Msg::MountMinga,
+        "source.mountDispositivos" => Msg::MountDispositivos,
         "source.unmount" => Msg::Unmount,
         // Sesiones.
         "session.new" => Msg::SessionNew,

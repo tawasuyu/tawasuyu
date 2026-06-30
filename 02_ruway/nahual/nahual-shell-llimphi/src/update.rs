@@ -12,7 +12,7 @@ use llimphi_ui::Handle;
 use llimphi_widget_menubar::{menubar_command_at, menubar_nav};
 use llimphi_widget_text_editor::{EditorMetrics, PointerEvent};
 use llimphi_ui::llimphi_raster::peniko::{Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat};
-use nahual_source_core::{Navigator, NouserSource, MingaSource};
+use nahual_source_core::{DispositivosSource, Navigator, NouserSource, MingaSource};
 use tullpu_module as tullpu;
 use media_module as mediamod;
 use wawa_config_llimphi::theme_from_wawa;
@@ -489,6 +489,19 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                         m.cur_pane_mut().nav_stack.push(nav);
                         clear_preview(&mut m);
                     }
+                }
+            }
+        }
+        Msg::MountDispositivos => {
+            // Fuente global (no depende del dir actual): se monta sólo desde
+            // POSIX para no anidar sobre otra fuente no-POSIX. Read-only, no
+            // monta nada del kernel — lee el dispositivo por bytes.
+            if !m.is_foreign() {
+                if let Some(nav) =
+                    Navigator::open(Box::new(DispositivosSource::nueva())).ok()
+                {
+                    m.cur_pane_mut().nav_stack.push(nav);
+                    clear_preview(&mut m);
                 }
             }
         }

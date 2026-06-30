@@ -344,6 +344,7 @@ nahual-shell-label-gray = ● Gray label
 nahual-shell-label-clear = Remove label
 nahual-shell-mount-nouser = Mount Monads (nouser)
 nahual-shell-mount-minga = Mount minga graph
+nahual-shell-mount-dispositivos = Mount devices
 nahual-shell-unmount = Unmount source
 nahual-shell-new-session = New session
 nahual-shell-ai-ask = Ask the AI about the selection

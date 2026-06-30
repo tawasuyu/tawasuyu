@@ -576,6 +576,9 @@ pub(crate) enum Msg {
     /// `g`: montar el directorio objetivo como grafo CAS de minga, si parece
     /// un repo `.minga` (guard anti-creación de sled en dirs ajenos).
     MountMinga,
+    /// Montar los dispositivos de bloques del sistema (USB/discos) como fuente
+    /// navegable de SÓLO LECTURA — se leen por bytes (foreign-fs), sin montar.
+    MountDispositivos,
     /// Desmonta la fuente no-POSIX activa y vuelve al filesystem.
     Unmount,
     /// Cicla el tema claro/oscuro (preset siguiente).
