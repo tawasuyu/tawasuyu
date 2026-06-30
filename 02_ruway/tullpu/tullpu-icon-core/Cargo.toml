@@ -1,0 +1,15 @@
+[package]
+name = "tullpu-icon-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tullpu-icon-core — IconSpec declarativo + vocabulario de primitivas vectoriales que compila determinísticamente a Vec<ParamsVector> de tullpu. Hueso del generador de íconos (apps/dientes/módulos nakui/runtime). Sin gráficos ni IA."
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+tullpu-core = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
