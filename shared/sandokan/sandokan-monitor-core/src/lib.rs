@@ -13,6 +13,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod energia;
+
 use sandokan_core::{Engine, EngineError, TelemetryFrame};
 use sandokan_lifecycle::LifecycleState;
 use ulid::Ulid;
