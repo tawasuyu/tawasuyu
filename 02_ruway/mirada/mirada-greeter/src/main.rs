@@ -24,6 +24,7 @@ mod cava;
 mod fire;
 mod lightning;
 mod mpris;
+mod orb;
 mod plasma;
 mod rain;
 mod rive;
@@ -207,6 +208,7 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         .collect();
     let model = Model {
         auth: pick_authenticator(),
+        orb: orb::StatusOrb::new(),
         user,
         pass,
         focus: Field::Pass,
@@ -269,6 +271,21 @@ fn shot_greeter(out: &str, w: u32, h: u32, mode: GreeterMode) {
         let steps = (model.rain_t.max(0.0) * 120.0) as usize;
         for _ in 0..steps.min(4000) {
             cb.step(1.0 / 120.0);
+        }
+    }
+    // Orbe de estado en un estado elegido (sin `RainTick` el orbe quedaría en
+    // idle): `MIRADA_SHOT_ORB=typing|auth|error|ok`. Avanza ~0.26 s para pasar
+    // el blend y dejar el efecto a media decaída (sacudida/pop visibles).
+    if let Ok(s) = std::env::var("MIRADA_SHOT_ORB") {
+        match s.trim() {
+            "typing" => model.orb.sync(true, false, false),
+            "auth" => model.orb.sync(true, true, false),
+            "error" => model.orb.sync(true, false, true),
+            "ok" => model.orb.signal_ok(),
+            _ => {}
+        }
+        for _ in 0..8 {
+            model.orb.advance(0.033);
         }
     }
     let view = <Greeter as App>::view(&model);
@@ -470,6 +487,8 @@ fn rive_bg_from(path: Option<&str>) -> Option<rive::RiveBg> {
 
 struct Model {
     auth: DynAuth,
+    /// Orbe de estado de la tarjeta, dirigido por máquina de estados (`orb`).
+    orb: orb::StatusOrb,
     user: TextInputState,
     pass: TextInputState,
     focus: Field,
@@ -697,6 +716,7 @@ impl App for Greeter {
 
         Model {
             auth: pick_authenticator(),
+            orb: orb::StatusOrb::new(),
             user,
             pass: TextInputState::masked(),
             focus,
@@ -837,6 +857,9 @@ impl App for Greeter {
                 handle.spawn(move || Msg::AuthDone(auth.authenticate(&user, &secret)));
             }
             Msg::AuthDone(Ok(user)) => {
+                // Pop verde de éxito (best-effort: el greeter suele cerrar antes
+                // de pintarlo, pero deja la máquina del orbe en su estado correcto).
+                m.orb.signal_ok();
                 // Modo lock: la contraseña validó al dueño de la sesión ⇒ basta
                 // con desbloquear. No hay tiquet ni sesión nueva que arrancar.
                 if m.mode == GreeterMode::Lock {
@@ -998,6 +1021,12 @@ impl App for Greeter {
                         m.media = Some(st);
                     }
                 }
+                // Engancha el orbe de estado a las señales reales y lo avanza.
+                let typing = !focused_input(&m).0.text().is_empty();
+                let authenticating = matches!(m.status, Status::Authenticating);
+                let failed = matches!(m.status, Status::Failed(_));
+                m.orb.sync(typing, authenticating, failed);
+                m.orb.advance(0.033);
             }
             Msg::MediaPrev => mpris::previous(),
             Msg::MediaPlayPause => mpris::play_pause(),
@@ -1227,7 +1256,8 @@ impl App for Greeter {
         .fill(theme.bg_panel)
         .radius(14.0)
         .children({
-            let mut items = vec![accent_bar, title, subtitle, spacer(6.0)];
+            let orb = model.orb.view::<Msg>(theme.accent, theme.fg_destructive);
+            let mut items = vec![orb, accent_bar, title, subtitle, spacer(6.0)];
             items.extend(user_section);
             items.push(pass_cap);
             items.push(pass_box);
@@ -2151,6 +2181,7 @@ mod tests {
         let saved = state::GreeterState::default();
         Model {
             auth: pick_authenticator(),
+            orb: orb::StatusOrb::new(),
             user: TextInputState::new(),
             pass: TextInputState::masked(),
             focus: Field::User,
