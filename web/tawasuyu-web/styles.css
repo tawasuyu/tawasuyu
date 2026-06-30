@@ -333,24 +333,35 @@ body.sidebar-stowed #sidebar.panel-open .dock-panel { display: none; }
 }
 .dock-section ul { list-style: none; margin: 0; padding: 0; }
 .dock-section li { padding: 0; }
-/* items más altos, con un ícono de color a la izquierda (por cuadrante). */
+/* items más altos, con un ÍCONO a la izquierda (glyph de app conocida o
+ * monograma generado; el JS llena data-ic). Tile cuadrado, color por
+ * cuadrante. */
 .dock-section .doc {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 9px;
+  padding: 7px 9px;
   border-radius: 4px;
   color: var(--fg-text);
   cursor: pointer;
 }
-.dock-section .doc::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 2px;
-  background: var(--sec-c, var(--fg-muted));
+.dock-section li .doc::before {
+  content: attr(data-ic);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--bg-button);
+  color: var(--sec-c, var(--fg-muted));
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
 }
+.dock-section h3.sec-head .doc::before { content: none; }
 .dock-section .doc:hover { background: var(--bg-row-hover); }
 .dock-section[data-mod="sistema"]  { --sec-c: var(--accent); }
 .dock-section[data-mod="unanchay"] { --sec-c: var(--c-unanchay); }

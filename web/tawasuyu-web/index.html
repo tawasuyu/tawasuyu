@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body>
 
@@ -246,9 +246,9 @@
           <text class="quad-name" x="0" y="-14">UNANCHAY</text>
           <text class="quad-verb" x="0" y="0">percibir</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="14" data-doc="/web/tawasuyu-web/md/aire.md" data-title="pluma" data-theme="aire">pluma</text>
-            <text class="dom" x="0" y="22" data-doc="/web/tawasuyu-web/md/sombra.md" data-title="khipu" data-theme="unanchay">khipu</text>
-            <text class="dom" x="0" y="30" data-doc="/00_unanchay/puriy/SDD.md" data-title="puriy" data-theme="unanchay">rimay · chaka · pineal</text>
+            <text class="dom" x="0" y="14" data-doc="/00_unanchay/pluma/README.md" data-title="pluma" data-theme="aire">pluma</text>
+            <text class="dom" x="0" y="22" data-doc="/00_unanchay/khipu/README.md" data-title="khipu" data-theme="unanchay">khipu</text>
+            <text class="dom" x="0" y="30" data-doc="/00_unanchay/puriy/README.md" data-title="puriy" data-theme="unanchay">rimay · chaka · pineal</text>
           </g>
         </g>
 
@@ -260,9 +260,9 @@
           <text class="quad-name" x="0" y="-14">YACHAY</text>
           <text class="quad-verb" x="0" y="0">conocer</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="14" data-doc="/01_yachay/cosmos/cosmos-core/README.md" data-title="cosmos" data-theme="yachay">cosmos</text>
-            <text class="dom" x="0" y="22" data-doc="/01_yachay/dominium/SDD.md" data-title="dominium" data-theme="yachay">dominium</text>
-            <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/cosmos.md" data-title="nakui" data-theme="cosmos">nakui</text>
+            <text class="dom" x="0" y="14" data-doc="/01_yachay/cosmos/README.md" data-title="cosmos" data-theme="yachay">cosmos</text>
+            <text class="dom" x="0" y="22" data-doc="/01_yachay/dominium/README.md" data-title="dominium" data-theme="yachay">dominium</text>
+            <text class="dom" x="0" y="30" data-doc="/01_yachay/nakui/README.md" data-title="nakui" data-theme="cosmos">nakui</text>
           </g>
         </g>
 
@@ -274,9 +274,9 @@
           <text class="quad-name" x="0" y="-14">UKUPACHA</text>
           <text class="quad-verb" x="0" y="0">raíz</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="14" data-doc="/03_ukupacha/arje/seeds/README.md" data-title="arje · wawa" data-theme="ukupacha">arje · wawa</text>
-            <text class="dom" x="0" y="22" data-doc="/web/tawasuyu-web/md/agua.md" data-title="agora" data-theme="agua">agora</text>
-            <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/tierra.md" data-title="minga" data-theme="tierra">minga</text>
+            <text class="dom" x="0" y="14" data-doc="/03_ukupacha/arje/README.md" data-title="arje · wawa" data-theme="ukupacha">arje · wawa</text>
+            <text class="dom" x="0" y="22" data-doc="/03_ukupacha/agora/README.md" data-title="agora" data-theme="agua">agora</text>
+            <text class="dom" x="0" y="30" data-doc="/03_ukupacha/minga/README.md" data-title="minga" data-theme="tierra">minga</text>
           </g>
         </g>
 
@@ -288,9 +288,9 @@
           <text class="quad-name" x="0" y="-14">RUWAY</text>
           <text class="quad-verb" x="0" y="0">hacer</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="14" data-doc="/02_ruway/mirada/mirada-compositor/README.md" data-title="mirada · nahual" data-theme="ruway">mirada · nahual</text>
-            <text class="dom" x="0" y="22" data-doc="/02_ruway/llimphi/SDD.md" data-title="shuma · chasqui" data-theme="ruway">shuma · chasqui</text>
-            <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/fuego.md" data-title="takiy" data-theme="fuego">takiy</text>
+            <text class="dom" x="0" y="14" data-doc="/02_ruway/mirada/README.md" data-title="mirada · nahual" data-theme="ruway">mirada · nahual</text>
+            <text class="dom" x="0" y="22" data-doc="/02_ruway/shuma/README.md" data-title="shuma · chasqui" data-theme="ruway">shuma · chasqui</text>
+            <text class="dom" x="0" y="30" data-doc="/02_ruway/takiy/README.md" data-title="takiy" data-theme="fuego">takiy</text>
           </g>
         </g>
       </svg>
@@ -584,8 +584,9 @@
       if (window.history.length > 1) window.history.back();
     });
 
-    // El artículo se abre maximizado encima de todo; no tocamos el estado de
-    // la sidebar (queda como la dejaste).
+    // Al abrir un documento escondemos la sidebar (guarda el panel) para
+    // dejarlo leer; se puede traer de nuevo con tawasuyu/swipe (flota encima).
+    document.body.classList.add('sidebar-stowed');
 
     cargarMdSeguro(contId, url, theme || 'tawasuyu');
     if (!fromHash) pushHash(url);
@@ -872,6 +873,21 @@
     document.addEventListener('scroll', pingGhost, true);
   }
 
+  // ===== íconos de los items del sidebar =====
+  // Glyph para apps reconocibles; para el resto, monograma (su inicial). Así
+  // los documentos sobre una app llevan su ícono y los demás uno generado.
+  const ICONOS = {
+    pluma: '¶', nakui: 'Σ', shuma: '▦', media: '▶', takiy: '♪',
+    llimphi: '◆', mirada: '▭', cosmos: '★', paloma: '@',
+    tullpu: '❖', cards: '♠', chasqui: '➤', supay: '▲',
+  };
+  function setupDocIcons() {
+    document.querySelectorAll('#sidebar .dock-section li .doc').forEach(el => {
+      const nombre = (el.textContent || '').trim().toLowerCase().split(/[\s·]/)[0];
+      el.dataset.ic = ICONOS[nombre] || (nombre.charAt(0) || '?').toUpperCase();
+    });
+  }
+
   // ===== guardar/abrir la sidebar con drag de mouse (escritorio) =====
   // Drag a la izquierda sobre la sidebar la guarda; drag a la derecha desde
   // el borde la reabre. En móvil lo maneja setupTouchGestures (touch).
@@ -972,6 +988,7 @@
     // así theme/accent/módulos arrancan respetando lo que ya configuró.
     try { aplicar_preferencias(); } catch (e) { console.error('aplicar_preferencias', e); }
     bindBrandHome();
+    setupDocIcons();
     setupDockRail();
     setupSidebarDrag();
     setupTouchGestures();
