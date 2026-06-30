@@ -724,6 +724,12 @@ pub(crate) struct App {
     /// Progreso vivo del hero de lock (`None` = sin transición). Lo avanza el
     /// frame del backend DRM y se descarta al completar el encogido.
     pub(crate) hero: Option<crate::hero::LockHero>,
+    /// Progreso vivo de la transición **CRT** (apagado/encendido «TV antigua» de
+    /// la pantalla por inactividad), o `None`. La arranca el `tick` del backend
+    /// DRM al consumir un `pending_dpms` (si `reduce_motion` está off); el frame
+    /// la avanza y, al completar un colapso, recién ahí apaga el DPMS. Sólo DRM
+    /// (winit no tiene DPMS, ignora este campo). Ver [`crate::crt`].
+    pub(crate) crt: Option<crate::crt::CrtAnim>,
     /// Último índice de salida que se le informó al greeter como «activo»
     /// (la del ratón). `usize::MAX` ⇒ aún no se empujó nada — fuerza el
     /// primer envío.

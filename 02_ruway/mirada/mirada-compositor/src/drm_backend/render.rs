@@ -267,6 +267,25 @@ impl DrmState {
                 self.hero_prev_ms = None;
             }
         }
+        // Avanzá la transición CRT (apagado/encendido «TV antigua»). `render_output`
+        // compone el colapso (escena encogida hacia el centro). Al completar un
+        // COLAPSO recién apagamos el DPMS y **salimos** del frame, para no repintar
+        // el escritorio entero (un parpadeo) antes de que la pantalla se apague.
+        if let Some(crt) = self.app.crt.as_mut() {
+            let now_ms = self.start.elapsed().as_millis() as u32;
+            let prev = self.crt_prev_ms.unwrap_or(now_ms);
+            self.crt_prev_ms = Some(now_ms);
+            let dt = now_ms.saturating_sub(prev) as f32 / 1000.0;
+            let kind = crt.kind;
+            if crt.advance(dt) {
+                self.app.crt = None;
+                self.crt_prev_ms = None;
+                if matches!(kind, crate::crt::CrtKind::Collapse) {
+                    self.set_dpms(true);
+                    return;
+                }
+            }
+        }
         // Backdrops *frosted* por ventana flotante (glass calidad N): se rearman
         // por salida dentro de `render_output`; acá sólo vaciamos el cache del
         // frame anterior (vacío sin glass → no cuesta nada).
@@ -3198,11 +3217,57 @@ impl DrmState {
             self.app.pointer_loc.0 - rect.x as f64,
             self.app.pointer_loc.1 - rect.y as f64,
         );
+        // Transición CRT (apagado/encendido «TV antigua»): sólo la salida primaria.
+        let crt = if is_primary { self.app.crt } else { None };
         let ctx = &mut self.outputs[idx];
-        // `render_frame` es genérico en el tipo de elemento, así que las dos ramas
-        // (envueltos en lupa vs. tal cual) devuelven tipos distintos; las
-        // colapsamos a `Result<bool /*is_empty*/, String>` para el manejo común.
-        let frame_result: Result<bool, String> = if magnify > 1.0 {
+        // `render_frame` es genérico en el tipo de elemento, así que las ramas
+        // (CRT / lupa / tal cual) devuelven tipos distintos; las colapsamos a
+        // `Result<bool /*is_empty*/, String>` para el manejo común.
+        let frame_result: Result<bool, String> = if let Some(crt) = crt {
+            // Colapso/expansión del tubo: la escena se encoge hacia el centro con
+            // escala NO uniforme (primero la vertical a una línea, luego a un
+            // punto), con un flash blanco y fondo negro. Reusa el envoltorio
+            // `RescaleRenderElement` de la lupa, pero encogiendo.
+            let (sx, sy) = crt.scale();
+            let center = Point::<i32, Physical>::from((rect.w / 2, rect.h / 2));
+            let ident = Point::<i32, Physical>::from((0, 0));
+            let scale = smithay::utils::Scale::from((sx as f64, sy as f64));
+            let one = smithay::utils::Scale::from(1.0);
+            let mut list: Vec<RescaleRenderElement<Frame>> = Vec::new();
+            // Flash blanco del tubo, por encima de todo (escala identidad).
+            let fa = crt.flash_alpha();
+            if fa > 0.001 {
+                let mut w = SolidColorBuffer::default();
+                w.update((rect.w, rect.h), [1.0, 1.0, 1.0, fa]);
+                let el = Frame::Solid(SolidColorRenderElement::from_buffer(
+                    &w,
+                    (0, 0),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                ));
+                list.push(RescaleRenderElement::from_element(el, ident, one));
+            }
+            // La escena, colapsando hacia el centro.
+            for f in elements {
+                list.push(RescaleRenderElement::from_element(f, center, scale));
+            }
+            // Fondo negro detrás (lo que queda al encogerse la imagen).
+            let mut blk = SolidColorBuffer::default();
+            blk.update((rect.w, rect.h), [0.0, 0.0, 0.0, 1.0]);
+            let el = Frame::Solid(SolidColorRenderElement::from_buffer(
+                &blk,
+                (0, 0),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            ));
+            list.push(RescaleRenderElement::from_element(el, ident, one));
+            ctx.compositor
+                .render_frame::<_, _>(&mut self.renderer, &list, CLEAR_COLOR, FrameFlags::DEFAULT)
+                .map(|r| r.is_empty)
+                .map_err(|e| format!("{e}"))
+        } else if magnify > 1.0 {
             let (origin, scale) = crate::magnify_origin((rect.w, rect.h), focal, magnify);
             let zoomed: Vec<RescaleRenderElement<Frame>> = elements
                 .into_iter()

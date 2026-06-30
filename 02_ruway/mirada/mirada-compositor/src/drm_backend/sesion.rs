@@ -82,7 +82,20 @@ impl DrmState {
         // (sólo el backend DRM tiene los conectores).
         self.app.idle_tick();
         if let Some(off) = self.app.pending_dpms.take() {
-            self.set_dpms(off);
+            // Transición CRT (apagado «TV antigua») salvo que «reducir movimiento»
+            // esté puesto. Al apagar, arrancamos el colapso y el DPMS-off real lo
+            // hace el render al completar (ver `render`); al encender, despertamos
+            // la GPU primero y reproducimos la expansión.
+            if self.app.config_reduce_motion() {
+                self.set_dpms(off);
+            } else if off {
+                self.app.crt = Some(crate::crt::CrtAnim::collapse());
+                self.crt_prev_ms = None;
+            } else {
+                self.set_dpms(false);
+                self.app.crt = Some(crate::crt::CrtAnim::restore());
+                self.crt_prev_ms = None;
+            }
         }
 
         // Pedido de bloqueo (Super+Escape → `BrainCommand::Lock` → `request_lock`):

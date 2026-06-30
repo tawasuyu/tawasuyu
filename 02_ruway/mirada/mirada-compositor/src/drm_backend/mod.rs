@@ -898,6 +898,10 @@ struct DrmState {
     /// Marca (epoch ms del backend) del frame previo del hero, para calcular el
     /// `dt` del avance. `None` fuera de la transición.
     hero_prev_ms: Option<u32>,
+    /// Marca (epoch ms del backend) del frame previo de la transición **CRT**
+    /// (apagado/encendido de pantalla), para el `dt` de su avance. `None` fuera de
+    /// la transición. Ver [`crate::crt`] y [`App::crt`].
+    crt_prev_ms: Option<u32>,
     /// **Backdrops *frosted* REALES por ventana flotante** (id de ventana →
     /// buffer desenfocado + su tamaño = tamaño de salida): la escena de **debajo
     /// de ESA ventana** (las ventanas inferiores en z + wallpaper) re-rendida a un
@@ -1757,6 +1761,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         rounded_shader,
         hero_frozen: None,
         hero_prev_ms: None,
+        crt_prev_ms: None,
         libinput: libinput_handle,
         shell_tx,
         active: true,
