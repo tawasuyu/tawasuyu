@@ -209,6 +209,10 @@ pub enum Msg {
     ControlPowerProfile(String),
     /// Encender/apagar la luz nocturna (`wlsunset`).
     ControlNight(bool),
+    /// «Mantener despierto» (café): inhibe el idle de energía (suspensión) y, en
+    /// el backend layer-shell, también el apagado de pantalla/bloqueo del
+    /// compositor (idle-inhibit). Reemplaza al workaround tipo `caffeine`.
+    ControlCafe(bool),
     /// Desplegar/replegar el applet de red (lista de redes Wi-Fi).
     NetworkToggle,
     /// Conectar a la red Wi-Fi `ssid` (`nmcli device wifi connect`).
@@ -1877,6 +1881,11 @@ impl App for PataApp {
             Msg::ControlNight(on) => {
                 render::set_night(on);
                 model.control_extras.night = on;
+            }
+            Msg::ControlCafe(on) => {
+                // Backend winit (dev): sólo refleja el estado; la inhibición real
+                // (suspensión + idle del compositor) vive en el path layer-shell.
+                model.control_extras.cafe = on;
             }
             Msg::NetworkToggle => {
                 model.network_open = !model.network_open;

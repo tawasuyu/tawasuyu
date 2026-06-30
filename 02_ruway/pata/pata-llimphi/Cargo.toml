@@ -129,7 +129,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # mismo protocolo que usa swayidle. mirada lo implementa; pata registra una
 # notificación de inactividad y, al dispararse, consulta el veto (unidades +
 # carga) antes de suspender — sin cortar trabajo importante.
-wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 # Bandeja del sistema (widget `tray`): StatusNotifierItem sobre D-Bus. pata corre
 # como watcher+host en un hilo aparte con zbus async sobre un runtime tokio
 # current-thread (el workspace fija zbus con la feature `tokio`, no la blocking).

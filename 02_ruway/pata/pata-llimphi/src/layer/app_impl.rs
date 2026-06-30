@@ -792,6 +792,29 @@ impl LayerApp {
         }
     }
 
+    /// Reconcilia el inhibidor de inactividad del compositor con el estado del
+    /// café: lo crea cuando se enciende (pausa apagado-de-pantalla y bloqueo en
+    /// mirada) y lo destruye al apagarlo. Idempotente.
+    pub(super) fn ensure_cafe_inhibitor(&mut self, qh: &QueueHandle<Self>) {
+        use smithay_client_toolkit::shell::WaylandSurface;
+        let quiere = self.energia_cfg.cafe;
+        if quiere == self.idle_inhibitor.is_some() {
+            return;
+        }
+        if quiere {
+            let Some(mgr) = self.idle_inhibit_mgr.clone() else {
+                return;
+            };
+            let Some(panel) = self.panels.first() else {
+                return;
+            };
+            let inh = mgr.create_inhibitor(panel.layer.wl_surface(), qh, ());
+            self.idle_inhibitor = Some(inh);
+        } else if let Some(inh) = self.idle_inhibitor.take() {
+            inh.destroy();
+        }
+    }
+
     /// El usuario volvió (hubo actividad): reinicia el ciclo del idle de energía.
     pub(super) fn energia_al_volver(&mut self, qh: &QueueHandle<Self>) {
         self.energia_disparado = false;
@@ -979,6 +1002,7 @@ impl LayerApp {
         }
         self.maybe_sample();
         self.ensure_idle_arm(qh);
+        self.ensure_cafe_inhibitor(qh);
         self.maybe_cava();
         self.poll_nav();
         self.poll_host();
@@ -1590,6 +1614,14 @@ impl LayerApp {
             Msg::ControlNight(on) => {
                 crate::render::set_night(on);
                 self.control_extras.night = on;
+                self.marcar_menu_dirty();
+            }
+            Msg::ControlCafe(on) => {
+                // «Mantener despierto»: gatea el idle de energía (vía
+                // `energia_cfg.cafe`) y, además, el inhibidor del compositor se
+                // crea/destruye en `ensure_cafe_inhibitor` (necesita `qh`).
+                self.energia_cfg.cafe = on;
+                self.control_extras.cafe = on;
                 self.marcar_menu_dirty();
             }
             Msg::NetworkToggle => {

@@ -58,6 +58,9 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notification_v1::ExtIdleNotificationV1, ext_idle_notifier_v1::ExtIdleNotifierV1,
 };
+use wayland_protocols::wp::idle_inhibit::zv1::client::{
+    zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1, zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1,
+};
 
 /// Segundos de inactividad **adicional** entre reintentos de suspensión cuando
 /// se pospuso por trabajo en curso: el compositor nos vuelve a despertar para
@@ -245,6 +248,12 @@ pub(super) struct LayerApp {
     pub(super) energia_disparado: bool,
     /// Ya se avisó «pospuesto» en este ciclo (no repetir en cada reintento).
     pub(super) energia_pospuesto: bool,
+    /// Manager de idle-inhibit del compositor (zwp_idle_inhibit_manager_v1), si
+    /// lo expone. Sostiene el «mantener despierto» (café): pausa el apagado de
+    /// pantalla y el bloqueo del compositor.
+    pub(super) idle_inhibit_mgr: Option<ZwpIdleInhibitManagerV1>,
+    /// Inhibidor vivo mientras el café está encendido; `None` si apagado.
+    pub(super) idle_inhibitor: Option<ZwpIdleInhibitorV1>,
     /// Las ventanas abiertas que reporta el compositor.
     pub(super) toplevels: Vec<Toplevel>,
     /// Orden propio de los botones del task manager (`id`s de toplevel). Vacío =
@@ -521,6 +530,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     if idle_notifier.is_none() {
         eprintln!("pata layer · el compositor no expone ext-idle-notify; idle de energía inactivo");
     }
+    // idle-inhibit (para el «mantener despierto»). Opcional: si no está, el café
+    // igual inhibe la suspensión de pata, pero no el apagado de pantalla.
+    let idle_inhibit_mgr = globals
+        .bind::<ZwpIdleInhibitManagerV1, _, _>(&qh, 1..=1, ())
+        .ok();
 
     let tray = crate::config_tiene_widget(&cfg, "tray")
         .then(TrayHandle::spawn)
@@ -659,6 +673,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         energia_cfg: crate::energia::ConfigEnergia::default(),
         energia_disparado: false,
         energia_pospuesto: false,
+        idle_inhibit_mgr,
+        idle_inhibitor: None,
         toplevels: Vec::new(),
         task_order: Vec::new(),
         task_drag: None,

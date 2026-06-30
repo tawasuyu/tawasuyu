@@ -27,6 +27,10 @@ use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notification_v1::{self, ExtIdleNotificationV1},
     ext_idle_notifier_v1::{self, ExtIdleNotifierV1},
 };
+use wayland_protocols::wp::idle_inhibit::zv1::client::{
+    zwp_idle_inhibit_manager_v1::{self, ZwpIdleInhibitManagerV1},
+    zwp_idle_inhibitor_v1::{self, ZwpIdleInhibitorV1},
+};
 
 use llimphi_ui::llimphi_compositor::{hit_test_click, hit_test_hover, hit_test_scroll, DragPhase};
 
@@ -692,6 +696,32 @@ impl Dispatch<ExtIdleNotificationV1, ()> for LayerApp {
             Event::Resumed => state.energia_al_volver(qh),
             _ => {}
         }
+    }
+}
+
+/// El manager de idle-inhibit no emite eventos; sólo fabrica inhibidores.
+impl Dispatch<ZwpIdleInhibitManagerV1, ()> for LayerApp {
+    fn event(
+        _: &mut Self,
+        _: &ZwpIdleInhibitManagerV1,
+        _: zwp_idle_inhibit_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// El inhibidor de inactividad tampoco emite eventos; existir es su efecto.
+impl Dispatch<ZwpIdleInhibitorV1, ()> for LayerApp {
+    fn event(
+        _: &mut Self,
+        _: &ZwpIdleInhibitorV1,
+        _: zwp_idle_inhibitor_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 

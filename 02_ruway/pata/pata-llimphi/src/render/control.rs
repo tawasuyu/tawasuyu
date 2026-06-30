@@ -42,6 +42,10 @@ pub struct ControlExtras {
     pub power_profile: Option<String>,
     /// `true` si la luz nocturna (`wlsunset`) está corriendo.
     pub night: bool,
+    /// «Mantener despierto» (el café integrado): mientras esté en `true`, el
+    /// idle de energía no suspende y el compositor no apaga pantalla ni bloquea.
+    /// Estado interno de pata (no una lectura del sistema).
+    pub cafe: bool,
     /// Contextos de usuario (`pacha`): `(id, activo)`. Vacío si no hay daemon
     /// `pacha` corriendo (o ninguno definido). El chip activo va en acento.
     pub pachas: Vec<(String, bool)>,
@@ -58,6 +62,7 @@ impl ControlExtras {
             bt: rfkill_on("bluetooth"),
             power_profile: read_power_profile(),
             night: night_on(),
+            cafe: false, // estado interno; el host lo sobrescribe con el suyo.
             pachas: read_pachas(),
         }
     }
@@ -283,6 +288,7 @@ pub(super) fn control_sections(
         hijos.push(perfil_row(actual, theme));
     }
     hijos.push(switch_row("Luz nocturna", extras.night, theme, Msg::ControlNight));
+    hijos.push(switch_row("Mantener despierto", extras.cafe, theme, Msg::ControlCafe));
     hijos
 }
 
@@ -302,6 +308,7 @@ pub fn extras_vivos(
         bt,
         power_profile: base.power_profile.clone(),
         night: base.night,
+        cafe: base.cafe,
         pachas: base.pachas.clone(),
     }
 }
@@ -357,6 +364,7 @@ pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View
         hijos.push(perfil_row(actual, theme));
     }
     hijos.push(switch_row("Luz nocturna", d.extras.night, theme, Msg::ControlNight));
+    hijos.push(switch_row("Mantener despierto", d.extras.cafe, theme, Msg::ControlCafe));
     // Contextos de usuario (pacha): chips de modo de uso. Sólo si hay alguno.
     if !d.extras.pachas.is_empty() {
         hijos.push(pacha_row(&d.extras.pachas, theme));
