@@ -38,13 +38,14 @@ pub struct Vista {
 /// Los slugs de las vistas de fábrica, en orden de presentación. `mirada`
 /// (la nativa) encabeza.
 //
-// Windows 3.1 quedó descartado como vista: su Program Manager pide una ventana
-// toplevel propia que pata —una barra— no puede ser, y no vamos a construir un
-// Program Manager. Eliminado por completo (no hay `vista_windows_31`). La
-// paleta retro `Win3.1` de llimphi-theme sigue disponible para apps sueltas.
-pub const VISTA_NAMES: [&str; 7] = [
+// Windows 3.1 volvió como **guiño de nostalgia**: ahora su Program Manager es
+// una app cliente real (`mirada-progman`, ventana toplevel movible), lanzada
+// como autoexec EFÍMERO de la vista — aparece con ella y muere al cambiar. Por
+// eso ya no hace falta que pata «sea» el PM (lo que la había hecho descartar).
+pub const VISTA_NAMES: [&str; 8] = [
     "mirada",
     "windows-xp",
+    "windows-3.1",
     "mac",
     "kde",
     "solaris",
@@ -58,6 +59,7 @@ impl Vista {
         Some(match name {
             "mirada" => vista_mirada(),
             "windows-xp" => vista_windows_xp(),
+            "windows-3.1" => vista_windows_31(),
             "mac" => vista_mac(),
             "kde" => vista_kde(),
             "solaris" => vista_solaris(),
@@ -146,6 +148,45 @@ fn vista_windows_xp() -> Vista {
     Vista {
         name: "windows-xp",
         label: "Windows XP",
+        keymap: "windows",
+        config,
+    }
+}
+
+/// **Windows 3.1** — gris Motif biselado con barra de título azul marino y el
+/// **Program Manager** (`mirada-progman`) como autoexec efímero: una ventana
+/// real con la grilla de programas, que aparece con la vista y muere al salir.
+/// El guiño de nostalgia, ahora sí con el PM de verdad.
+fn vista_windows_31() -> Vista {
+    let mut config = skin(
+        "Win3.1",
+        LayoutMode::MasterStack,
+        2,
+        4,                      // marco grueso biselado
+        20,
+        [198, 198, 198, 255],   // marco gris Motif (#c6c6c6), no azul
+        [174, 174, 174, 255],   // gris más apagado sin foco
+        0.1,
+    );
+    config.border_bevel = true;
+    // Marco gris biselado pero barra de título azul marino (gris sin foco), con
+    // botones como teclas biseladas. El texto sigue claro (legible sobre navy).
+    config.titlebar_layout = crate::TitlebarLayout {
+        left: vec![crate::TitlebarItem::button(crate::TitlebarAction::Menu)],
+        right: vec![
+            crate::TitlebarItem::button(crate::TitlebarAction::Minimize),
+            crate::TitlebarItem::button(crate::TitlebarAction::Maximize),
+        ],
+        button_style: crate::TitlebarButtonStyle::Bevel,
+        ..Default::default()
+    };
+    config.titlebar_focus = Some([0, 0, 128, 255]);
+    config.titlebar_normal = Some([128, 128, 128, 255]);
+    // El Program Manager como app cliente real, efímero: pertenece a la vista.
+    config.autoexec = vec![crate::AutoExec::ephemeral("mirada-progman")];
+    Vista {
+        name: "windows-3.1",
+        label: "Windows 3.1",
         keymap: "windows",
         config,
     }
@@ -339,7 +380,8 @@ mod tests {
     fn cada_vista_fija_un_tema_conocido() {
         // El Cerebro es UI-agnóstico: no resuelve la paleta (eso lo hace el
         // front con llimphi-theme), pero sí garantiza un nombre del set válido.
-        let conocidos = ["Dark", "Light", "Aurora", "Sunset", "WinXP", "macOS", "Breeze", "CDE"];
+        let conocidos =
+            ["Dark", "Light", "Aurora", "Sunset", "WinXP", "macOS", "Breeze", "Win3.1", "CDE"];
         for v in Vista::all() {
             assert!(
                 conocidos.contains(&v.config.theme.as_str()),

@@ -712,6 +712,7 @@ impl Config {
             "dwm" => Self::vista_dwm(),
             "hyprland" => Self::vista_hyprland(),
             "windows-xp" => Self::vista_windows_xp(),
+            "windows-3.1" => Self::vista_windows_31(),
             "mac" => Self::vista_mac(),
             "kde" => Self::vista_kde(),
             "solaris" => Self::vista_solaris(),
@@ -780,6 +781,25 @@ impl Config {
                 menu_style: "xp".to_string(),
                 ..General::default()
             },
+            surfaces: vec![bar],
+        }
+    }
+
+    /// Vista **Windows 3.1**: una franja superior gris Motif con menú (Archivo),
+    /// lista de ventanas y reloj — la barra de menú del escritorio. El *Program
+    /// Manager* ya no lo monta pata: es una app cliente real (`mirada-progman`)
+    /// que lanza la vista de mirada como autoexec efímero.
+    fn vista_windows_31() -> Self {
+        let mut bar = Surface::bar(Anchor::Top);
+        bar.thickness = 28.0;
+        bar.start = vec![
+            WidgetSpec::new("start_button").with("label", Prop::Str("Archivo".to_string())),
+            WidgetSpec::new("window_title").with("max", Prop::Num(60.0)),
+        ];
+        bar.center = vec![WidgetSpec::new("window_list")];
+        bar.end = vec![WidgetSpec::new("clock").with("format", Prop::Str("%H:%M".to_string()))];
+        Self {
+            general: General::default(),
             surfaces: vec![bar],
         }
     }
@@ -911,7 +931,7 @@ mod tests {
 
     #[test]
     fn vista_preset_resuelve_las_vistas_y_difieren() {
-        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde", "solaris"] {
+        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "windows-3.1", "mac", "kde", "solaris"] {
             let c = Config::vista_preset(slug).unwrap_or_else(|| panic!("vista {slug}"));
             assert!(!c.surfaces.is_empty(), "vista {slug} sin superficies");
         }

@@ -2016,11 +2016,14 @@ mod tests {
         assert_eq!(keys.iter().filter(|k| *k == "Super+Tab").count(), 1);
     }
 
-    /// El menú «Vista» lista las 6 vistas y marca con ✔ la que coincide EXACTO
-    /// con el estado actual (config + keymap). Con el default nativo, es `mirada`.
+    /// El menú «Vista» lista todas las vistas y marca con ✔ la que coincide
+    /// EXACTO con el estado actual (config + keymap). Con el look nativo activo
+    /// (la config de la vista `mirada`), la marcada es `mirada`.
     #[test]
     fn el_menu_de_vistas_marca_la_activa() {
-        let default_cfg = mirada_brain::Config::default();
+        // El estado «nativo» es la config de la vista mirada (que trae el glass),
+        // no el `Config::default()` crudo.
+        let default_cfg = Vista::by_name("mirada").unwrap().config;
         let menu = vistas_menu("mirada", &default_cfg, false);
         // Una entrada por vista + el toggle «Conservar mi barra».
         assert_eq!(menu.items.len(), Vista::all().len() + 1);

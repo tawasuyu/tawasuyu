@@ -398,6 +398,7 @@ members = [
     "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-asistente-llimphi",
     "02_ruway/mirada/mirada-aware",
+    "02_ruway/mirada/mirada-progman",
     "02_ruway/mirada/mirada-bar-core",
     "02_ruway/mirada/mirada-bar-web",
     "02_ruway/mirada/mirada-body",

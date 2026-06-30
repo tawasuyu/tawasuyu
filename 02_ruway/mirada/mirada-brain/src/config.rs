@@ -1098,6 +1098,7 @@ pub fn default_root_menu() -> Vec<MenuEntry> {
             vec![
                 leaf("mirada (nativo)", "mirada-ctl vista use mirada"),
                 leaf("Windows XP", "mirada-ctl vista use windows-xp"),
+                leaf("Windows 3.1", "mirada-ctl vista use windows-3.1"),
                 leaf("macOS", "mirada-ctl vista use mac"),
                 leaf("KDE Plasma", "mirada-ctl vista use kde"),
                 leaf("Solaris (CDE)", "mirada-ctl vista use solaris"),

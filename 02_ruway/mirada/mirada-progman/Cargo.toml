@@ -1,0 +1,18 @@
+[package]
+name = "mirada-progman"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada-progman — el Program Manager de Windows 3.1 como app cliente real (ventana Llimphi movible): una grilla de programas que lanzan al click. Un guiño de nostalgia; lo lanza la vista windows-3.1 como autoexec efímero."
+
+[[bin]]
+name = "mirada-progman"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+app-bus = { workspace = true }
