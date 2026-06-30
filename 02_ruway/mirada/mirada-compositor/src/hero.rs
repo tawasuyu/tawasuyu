@@ -1,6 +1,7 @@
 //! Estado del **hero de lock**: el progreso temporal de la transición soñada
-//! (la pantalla viva encogiéndose hasta el thumbnail de la sesión activa al
-//! bloquear).
+//! (la pantalla viva haciendo **zoom-in** —creciendo hacia el usuario— al
+//! bloquear, antes de revelar el greeter). El `target` lo decide el llamador
+//! ([`mirada_layout::zoom_in_rect`]); `LockHero` sólo interpola `full → target`.
 //!
 //! Esta parte es **pura y testeable**: sólo el reloj de progreso `0→1` y el rect
 //! interpolado. La captura congelada del output (una `GlesTexture`) y el render

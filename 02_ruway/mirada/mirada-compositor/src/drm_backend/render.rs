@@ -240,12 +240,13 @@ impl DrmState {
             self.app.pending_thumbs = false;
         }
         // Hero de lock: al enganchar el candado, congelá la escena viva en una
-        // textura y arrancá la transición que la encoge hasta el thumbnail. La
-        // captura necesita el renderer (vive acá, no en `App`).
+        // textura y arrancá la transición de **zoom-in** (la pantalla viva crece
+        // hacia el usuario mientras el velo sube, antes de revelar el greeter).
+        // La captura necesita el renderer (vive acá, no en `App`).
         if self.app.pending_hero {
             if let Some(tex) = crate::thumbs::capturar_output(&self.app, &mut self.renderer) {
                 let (ow, oh) = self.app.output_size;
-                let target = mirada_layout::landing_rect(ow, oh);
+                let target = mirada_layout::zoom_in_rect(ow, oh);
                 self.hero_frozen = Some(tex);
                 self.app.hero = Some(crate::hero::LockHero::new(target));
                 self.hero_prev_ms = Some(self.start.elapsed().as_millis() as u32);
@@ -2996,8 +2997,8 @@ impl DrmState {
     /// HUD/layer-shell/reveal-band en primaria, menú y zonas en la salida
     /// donde se inició la acción, ventanas y wallpaper en todas.
     /// **Hero de lock**: si hay una transición viva, pinta la captura congelada
-    /// del output **encogiéndose** hasta el thumbnail (con un velo oscuro detrás
-    /// que sube). Se emite temprano en el orden front-to-back (justo bajo el
+    /// del output haciendo **zoom-in** (creciendo más allá del marco, con un velo
+    /// oscuro detrás que sube). Se emite temprano en el orden front-to-back (bajo el
     /// cursor), por ENCIMA del greeter/ventanas. No-op sin transición → el camino
     /// normal queda byte-idéntico.
     fn emit_hero(&mut self, rect: Rect, into: &mut Vec<Frame>) {
@@ -3012,10 +3013,11 @@ impl DrmState {
         if dst.w <= 0 || dst.h <= 0 {
             return;
         }
-        // La captura cubre el output entero anclada en (dst.x,dst.y); el
-        // `RescaleRenderElement` la encoge alrededor de ese origen al tamaño dst
-        // (escala uniforme = dst/full, válida porque `landing_rect` preserva el
-        // aspecto). El contenido entero queda metido dentro de dst.
+        // La captura se ancla en (dst.x,dst.y) y el `RescaleRenderElement` la
+        // lleva al tamaño dst alrededor de ese origen (escala uniforme = dst/full,
+        // válida porque `zoom_in_rect` preserva el aspecto). En zoom-in dst > full
+        // y (dst.x,dst.y) es negativo → la captura crece centrada y la salida
+        // recorta los bordes.
         let ctxid = self.renderer.context_id();
         let el = TextureRenderElement::from_static_texture(
             Id::new(),

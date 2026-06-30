@@ -24,6 +24,12 @@ const LANDING_SCALE_PCT: i32 = 34;
 /// centro, por encima del centro de la tarjeta de login).
 const LANDING_TOP_PCT: i32 = 16;
 
+/// Escala del **zoom-in** del hero de lock: la captura crece hasta este % del
+/// lado de la salida (uniforme, centrada → el contenido se agranda y la salida
+/// recorta los bordes). >100 = zoom-in (la pantalla viva se mete hacia el
+/// usuario antes de revelar el greeter), en vez del encogido a thumbnail.
+const ZOOM_IN_SCALE_PCT: i32 = 140;
+
 /// El rect destino del hero: dónde aterriza el thumbnail de la sesión **activa**
 /// en una salida `out_w × out_h`. Centrado en horizontal, en el tercio superior,
 /// a una escala uniforme del tamaño de la salida (conserva su aspecto).
@@ -37,6 +43,23 @@ pub fn landing_rect(out_w: i32, out_h: i32) -> Rect {
     let h = out_h * LANDING_SCALE_PCT / 100;
     let x = (out_w - w) / 2;
     let y = out_h * LANDING_TOP_PCT / 100;
+    Rect::new(x, y, w, h)
+}
+
+/// El rect destino del hero en modo **zoom-in**: la captura crece a
+/// [`ZOOM_IN_SCALE_PCT`] del tamaño de la salida, centrada (origen negativo: los
+/// bordes salen del marco y la salida los recorta). Escala uniforme → preserva
+/// el aspecto, así la `dst/full` que usa el render sigue siendo válida. A
+/// diferencia de [`landing_rect`] (encoge a un thumbnail), esto **agranda**: la
+/// pantalla viva hace zoom-in mientras el velo sube, y al terminar se revela el
+/// greeter.
+pub fn zoom_in_rect(out_w: i32, out_h: i32) -> Rect {
+    let out_w = out_w.max(0);
+    let out_h = out_h.max(0);
+    let w = out_w * ZOOM_IN_SCALE_PCT / 100;
+    let h = out_h * ZOOM_IN_SCALE_PCT / 100;
+    let x = (out_w - w) / 2; // negativo: crece centrado, recortando bordes
+    let y = (out_h - h) / 2;
     Rect::new(x, y, w, h)
 }
 
@@ -97,6 +120,25 @@ mod tests {
     fn landing_no_panica_en_degenerados() {
         assert_eq!(landing_rect(0, 0), Rect::new(0, 0, 0, 0));
         let _ = landing_rect(-10, -10); // clamp a 0, sin panic
+    }
+
+    #[test]
+    fn zoom_in_crece_centrado_y_uniforme() {
+        let r = zoom_in_rect(1920, 1080);
+        // 140% del tamaño, uniforme (preserva aspecto).
+        assert_eq!((r.w, r.h), (1920 * 140 / 100, 1080 * 140 / 100));
+        // Centrado → origen negativo (los bordes salen del marco) y simétrico.
+        assert_eq!(r.x, (1920 - r.w) / 2);
+        assert_eq!(r.y, (1080 - r.h) / 2);
+        assert!(r.x < 0 && r.y < 0, "zoom-in crece más allá de la salida");
+        // Es un zoom-IN: más grande que la salida.
+        assert!(r.w > 1920 && r.h > 1080);
+    }
+
+    #[test]
+    fn zoom_in_no_panica_en_degenerados() {
+        assert_eq!(zoom_in_rect(0, 0), Rect::new(0, 0, 0, 0));
+        let _ = zoom_in_rect(-10, -10); // clamp a 0, sin panic
     }
 
     #[test]
