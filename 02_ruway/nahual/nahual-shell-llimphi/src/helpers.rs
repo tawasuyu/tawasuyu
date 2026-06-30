@@ -578,13 +578,31 @@ pub(crate) fn next_in_cycle(fields: &[String], current: &Option<String>) -> Opti
 /// y **revela la carpeta en el árbol lateral**; hoja → monta (`.img` wawa) o
 /// abre el visor en el sidebar derecho.
 pub(crate) fn do_open_selected(m: &mut Model, handle: &Handle<Msg>) {
-    use nahual_source_core::Opened;
+    use nahual_source_core::{NodeKind, Opened};
+    // Si lo que abrimos es una Mónada (contenedor sintético), su lente —que
+    // viaja en `mime_hint`— dicta la vista del panel al entrar. Lo capturamos
+    // ANTES de descender, porque `open_selected` mueve el cursor adentro.
+    let monada_hint = m.cur().selected_node().and_then(|n| {
+        (n.is_container && n.kind == NodeKind::Synthetic)
+            .then(|| n.mime_hint.clone())
+            .flatten()
+    });
     match m.cur_mut().open_selected() {
         Ok(Some(Opened::Descended)) => {
             m.cur_pane_mut().marked.clear();
             m.canvas = None;
             clear_preview(m);
             apply_format(m);
+            // La Mónada declara su vista: galería para fotos, detalle para
+            // código/datos, lista para texto (Fase 3b). Va después de
+            // `apply_format` para ganarle al formato de carpeta (que no aplica
+            // a una Mónada sintética).
+            if let Some(view) = monada_hint
+                .as_deref()
+                .and_then(crate::monad_dispatch::view_mode_for_hint)
+            {
+                m.cur_mut().view = view;
+            }
             record_recent(m);
             // Revela la carpeta nueva en el árbol lateral (descolapsa la
             // cadena de ancestros) y sincroniza el nombre de la sesión.

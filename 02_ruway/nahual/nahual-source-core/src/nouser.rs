@@ -30,7 +30,7 @@ use std::path::Path;
 
 use chasqui_core::ulid::Ulid;
 use chasqui_core::cluster::by_directory;
-use chasqui_core::{FileEntry, MonadId, MonadManifest};
+use chasqui_core::{FileEntry, Lens, MonadId, MonadManifest};
 use chasqui_core::db::MonadDb;
 use chasqui_core::resolve;
 use chasqui_core::scanner::{scan_directory, ScanConfig};
@@ -43,6 +43,25 @@ const RAIZ: &str = "@monadas";
 const PREF_MONADA: &str = "m:";
 /// Prefijo de id de un archivo miembro (hoja POSIX).
 const PREF_ARCHIVO: &str = "f:";
+
+/// Mime-hint del lente de una Mónada — el **vehículo para que el lente
+/// cruce la frontera `dyn Source`**. El front (`nahual-shell`) navega un
+/// `Box<dyn Source>` y no puede preguntar el `dominant_lens` de chasqui;
+/// pero sí lee `Node.mime_hint`. Etiquetamos cada nodo-Mónada con
+/// `monada/<lente>` (namespace propio, no colisiona con mimes de archivo,
+/// y un contenedor sintético nunca se discierne ni se abre como hoja), y el
+/// front mapea ese hint a la vista/app de la Mónada. `None` para `Grid`
+/// (sin lente fuerte: el front usa su vista por defecto).
+pub fn lens_mime(lens: Lens) -> Option<&'static str> {
+    Some(match lens {
+        Lens::Gallery => "monada/gallery",
+        Lens::Code => "monada/code",
+        Lens::Database => "monada/database",
+        Lens::Markdown => "monada/markdown",
+        Lens::Tree => "monada/tree",
+        Lens::Grid => return None,
+    })
+}
 
 /// Fuente que navega el grafo de Mónadas de un directorio.
 pub struct NouserSource {
@@ -101,8 +120,14 @@ impl NouserSource {
     /// resolver la query — barato para listar.
     fn nodo_monada(m: &MonadManifest) -> Node {
         let hijos = m.cardinality as usize + m.submonads.len();
-        Node::new(format!("{PREF_MONADA}{}", m.id), format!("{} ({})", m.label, hijos), true)
-            .with_kind(NodeKind::Synthetic)
+        let mut nodo =
+            Node::new(format!("{PREF_MONADA}{}", m.id), format!("{} ({})", m.label, hijos), true)
+                .with_kind(NodeKind::Synthetic);
+        // El lente viaja por mime_hint para que el front despache la vista.
+        if let Some(hint) = lens_mime(m.dominant_lens) {
+            nodo = nodo.with_mime_hint(hint);
+        }
+        nodo
     }
 
     /// Nodo de un archivo miembro (hoja POSIX). Usa el tamaño/mtime ya
@@ -290,6 +315,23 @@ mod tests {
         assert_eq!(nietos.len(), 1);
         assert_eq!(nietos[0].name, "playa.jpg");
         assert!(src.read(&nietos[0].id).is_ok());
+    }
+
+    #[test]
+    fn nodo_monada_lleva_el_lente_en_mime_hint() {
+        // El lente de la Mónada cruza la frontera Source por mime_hint, para
+        // que el front pueda fijar la vista al entrar.
+        let mut db = MonadDb::new();
+        let mut foto = MonadManifest::new("Fotos");
+        foto.dominant_lens = Lens::Gallery;
+        foto.members.insert(Ulid::new()); // miembro fantasma → no-vacía
+        foto.touch();
+        db.insert_monad(foto);
+
+        let src = NouserSource::from_db("t", db);
+        let top = src.children(&RAIZ.to_string()).unwrap();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].mime_hint.as_deref(), Some("monada/gallery"));
     }
 
     #[test]

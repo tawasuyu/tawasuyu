@@ -47,7 +47,7 @@ pub use navigator::{Navigator, Opened, SortDir, SortKey, ViewMode};
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
 #[cfg(feature = "nouser")]
-pub use nouser::NouserSource;
+pub use nouser::{lens_mime, NouserSource};
 /// Re-export del modelo de Mónada de chasqui, para que el front (el shell)
 /// despache por el lente / construya grafos sin depender de chasqui
 /// directamente — `nahual-source-core` es su seam hacia el dominio nouser.

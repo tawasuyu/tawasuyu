@@ -22,7 +22,7 @@
 //!   un menú "Abrir con…" completo.
 
 use app_bus::{AppEntry, AppRegistry};
-use nahual_source_core::Lens;
+use nahual_source_core::{Lens, ViewMode};
 
 /// El panel que pinta una Mónada *dentro* del canvas de nahual. Es la vista
 /// de la Mónada-como-unidad (no la de una hoja suelta): read-only, para
@@ -81,6 +81,24 @@ pub fn default_app_for<'a>(reg: &'a AppRegistry, lens: Lens) -> Option<&'a AppEn
     default_app_id(lens).and_then(|id| reg.get(id))
 }
 
+/// El `ViewMode` por defecto de una Mónada, a partir del **mime-hint** con
+/// que `nahual-source-core::lens_mime` la etiqueta (`monada/<lente>`). Es la
+/// pieza "la Mónada declara su vista": al entrar a una Mónada el shell fija
+/// la vista del panel a esto (galería para fotos, detalle para código/datos,
+/// lista para texto). `None` = no es una Mónada con lente conocido → el
+/// shell conserva la vista vigente.
+///
+/// Clave sobre el string que emite `lens_mime`; el test `view_mode_sigue_a_
+/// lens_mime` ata ambos lados para que no driften.
+pub fn view_mode_for_hint(hint: &str) -> Option<ViewMode> {
+    Some(match hint {
+        "monada/gallery" => ViewMode::Gallery,
+        "monada/code" | "monada/database" => ViewMode::Details,
+        "monada/markdown" | "monada/tree" => ViewMode::List,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +125,27 @@ mod tests {
         assert_eq!(default_app_for(&reg, Lens::Markdown).map(|e| e.id.as_str()), Some("pluma"));
         // Grid no tiene editor de dominio: se queda en el panel in-canvas.
         assert_eq!(default_app_for(&reg, Lens::Grid), None);
+    }
+
+    #[test]
+    fn view_mode_sigue_a_lens_mime() {
+        use nahual_source_core::lens_mime;
+        // Para cada lente con hint, el hint que emite source-core debe mapear a
+        // un ViewMode acá: ata los dos lados para que no driften.
+        for (lens, esperado) in [
+            (Lens::Gallery, Some(ViewMode::Gallery)),
+            (Lens::Code, Some(ViewMode::Details)),
+            (Lens::Database, Some(ViewMode::Details)),
+            (Lens::Markdown, Some(ViewMode::List)),
+            (Lens::Tree, Some(ViewMode::List)),
+        ] {
+            let hint = lens_mime(lens).expect("lente con hint");
+            assert_eq!(view_mode_for_hint(hint), esperado, "lente {lens:?}");
+        }
+        // Grid no tiene hint (el front conserva su vista).
+        assert_eq!(lens_mime(Lens::Grid), None);
+        // Un hint ajeno no fuerza vista.
+        assert_eq!(view_mode_for_hint("text/plain"), None);
     }
 
     #[test]
