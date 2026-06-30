@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use card_core::{Card, Payload};
 use pacha_core::{AppSpec, FsHome, FsProfile, WawaOverlay};
-use pacha_dotfiles::{ConjuntoDotfiles, Instantanea, StoreObjetos};
+use pacha_dotfiles::{Cifrador, ConjuntoDotfiles, Instantanea, StoreObjetos};
 use sandokan::{Engine, Intent};
 use tokio::process::Command;
 use ulid::Ulid;
@@ -44,8 +44,32 @@ impl DotfilesCtx {
         sets: impl IntoIterator<Item = ConjuntoDotfiles>,
     ) -> Result<Self, String> {
         let store = StoreObjetos::abrir(store_dir.into()).map_err(|e| e.to_string())?;
+        Ok(Self::con_store(store, home, sets))
+    }
+
+    /// Igual que [`new`](Self::new) pero con el store **cifrado en reposo** (Fase
+    /// 2): la clave se deriva de la `seed` de identidad del usuario — la que
+    /// `agora-keystore` desbloquea (el *cómo* desbloquearla es Fase 3; acá la
+    /// recibe ya desbloqueada de quien construye el contexto). Los secretos
+    /// quedan opacos en disco; el destino efímero los descifra en RAM.
+    pub fn new_cifrado(
+        store_dir: impl Into<PathBuf>,
+        home: impl Into<PathBuf>,
+        sets: impl IntoIterator<Item = ConjuntoDotfiles>,
+        seed: &[u8; 32],
+    ) -> Result<Self, String> {
+        let store = StoreObjetos::abrir_cifrado(store_dir.into(), Cifrador::derivar_de_seed(seed))
+            .map_err(|e| e.to_string())?;
+        Ok(Self::con_store(store, home, sets))
+    }
+
+    fn con_store(
+        store: StoreObjetos,
+        home: impl Into<PathBuf>,
+        sets: impl IntoIterator<Item = ConjuntoDotfiles>,
+    ) -> Self {
         let sets = sets.into_iter().map(|s| (s.id.clone(), s)).collect();
-        Ok(Self { store, home: home.into(), sets, heads: BTreeMap::new() })
+        Self { store, home: home.into(), sets, heads: BTreeMap::new() }
     }
 
     /// Recaptura un set y commitea sobre su cabeza previa. Devuelve la raíz del
@@ -372,6 +396,43 @@ mod tests {
         );
         // Dotfiles sin staging resuelto ⇒ None (no se puede aislar sin RAM).
         assert!(mount_plan_for(home, &p, None).is_none());
+    }
+
+    #[test]
+    fn stage_into_con_store_cifrado_descifra_en_ram_y_deja_disco_opaco() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store_dir = tmp.path().join("obj");
+        let staging = tmp.path().join("ram");
+
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/id_ed25519"), b"SECRETO-DE-CONTEXTO\n").unwrap();
+
+        let set = ConjuntoDotfiles::new("claves")
+            .con(pacha_dotfiles::RutaGestionada::fijado(".ssh/id_ed25519"));
+        // Store cifrado, clave derivada de la seed de identidad.
+        let ctx = DotfilesCtx::new_cifrado(store_dir.clone(), home.clone(), [set], &[3u8; 32]).unwrap();
+
+        stage_into(&ctx, &staging, &["claves".into()]).unwrap();
+
+        // Descifra correctamente al staging (RAM).
+        assert_eq!(std::fs::read(staging.join(".ssh/id_ed25519")).unwrap(), b"SECRETO-DE-CONTEXTO\n");
+
+        // Pero en el store de disco el secreto está OPACO.
+        let mut crudo = Vec::new();
+        for shard in std::fs::read_dir(&store_dir).unwrap() {
+            let shard = shard.unwrap().path();
+            if shard.is_dir() {
+                for o in std::fs::read_dir(&shard).unwrap() {
+                    crudo.extend(std::fs::read(o.unwrap().path()).unwrap());
+                }
+            }
+        }
+        assert!(!crudo.is_empty());
+        assert!(
+            !crudo.windows(19).any(|w| w == b"SECRETO-DE-CONTEXTO"),
+            "el secreto no debe aparecer en claro en el store"
+        );
     }
 
     #[test]

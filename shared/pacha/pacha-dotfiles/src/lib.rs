@@ -124,22 +124,115 @@ pub struct Instantanea {
 }
 
 // =====================================================================
+// Cifrado en reposo (Fase 2 — "secreto por defecto")
+// =====================================================================
+
+/// Sella/abre los bytes de un objeto antes de tocar disco. AEAD
+/// `XChaCha20Poly1305` con nonce aleatorio de 192 bits por objeto (margen amplio
+/// frente a colisión de nonce bajo una sola clave de store de larga vida). El
+/// sobre en disco es `nonce(24) || ciphertext+tag`.
+///
+/// **Identidad vs. opacidad (decisión abierta #3, resuelta).** El hash que
+/// identifica al objeto (y su ruta `aa/bbbb`) sigue siendo el de los bytes **en
+/// claro** — así el grafo (referencias hijo→hash) y el dedup por contenido NO
+/// cambian, y un store en claro se puede migrar a cifrado sin recomputar hashes.
+/// El contenido **y la estructura** (nombres de archivo en los `Arbol`) viajan
+/// cifrados: el objeto entero se sella. Lo único que filtra el disco es el hash
+/// del claro (la ruta) — habilita un ataque de *confirmación* (probar si un
+/// contenido candidato está presente), no de lectura. La opacidad total (hash
+/// del sobre) rompería el dedup determinista y queda fuera de alcance.
+#[derive(Clone)]
+pub struct Cifrador {
+    clave: chacha20poly1305::Key,
+}
+
+impl std::fmt::Debug for Cifrador {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // No filtrar la clave en logs/aserciones.
+        f.debug_struct("Cifrador").field("clave", &"<oculta>").finish()
+    }
+}
+
+impl Cifrador {
+    /// Deriva la clave del store de una `seed` de 32 bytes — la **identidad
+    /// Ed25519 del usuario** (la que `agora-keystore` desbloquea; el *cómo* se
+    /// desbloquea es Fase 3) — con HKDF-SHA256 y separación de dominio. Estilo
+    /// `age`: la seed nunca se usa directo como clave de cifrado.
+    pub fn derivar_de_seed(seed: &[u8; 32]) -> Self {
+        let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, seed);
+        let mut clave = [0u8; 32];
+        hk.expand(b"pacha-dotfiles-store-v1", &mut clave)
+            .expect("32 <= 255*HashLen");
+        let c = Self { clave: clave.into() };
+        clave.fill(0); // best-effort: no dejar la clave derivada en el stack
+        c
+    }
+
+    /// Construye un cifrador con una clave simétrica ya derivada (tests / claves
+    /// provistas por otra capa).
+    pub fn con_clave(clave: [u8; 32]) -> Self {
+        Self { clave: clave.into() }
+    }
+
+    fn sellar(&self, claro: &[u8]) -> Result<Vec<u8>, DotError> {
+        use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng};
+        use chacha20poly1305::XChaCha20Poly1305;
+        let cipher = XChaCha20Poly1305::new(&self.clave);
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ct = cipher.encrypt(&nonce, claro).map_err(|_| DotError::Cripto("sellar"))?;
+        let mut sobre = Vec::with_capacity(nonce.len() + ct.len());
+        sobre.extend_from_slice(&nonce);
+        sobre.extend_from_slice(&ct);
+        Ok(sobre)
+    }
+
+    fn abrir(&self, sobre: &[u8]) -> Result<Vec<u8>, DotError> {
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+        if sobre.len() < 24 {
+            return Err(DotError::Cripto("sobre truncado"));
+        }
+        let (nonce, ct) = sobre.split_at(24);
+        let cipher = XChaCha20Poly1305::new(&self.clave);
+        cipher
+            .decrypt(XNonce::from_slice(nonce), ct)
+            .map_err(|_| DotError::Cripto("autenticación falló (clave o sobre)"))
+    }
+}
+
+// =====================================================================
 // El almacén de objetos (host)
 // =====================================================================
 
 /// Almacén de objetos del grafo por hash, en un directorio (`aa/bbbb…`, como
 /// `.git/objects`). Content-addressed: un objeto ya presente no se reescribe.
+/// Con un [`Cifrador`] opcional, los bytes en disco son un sobre AEAD; sin él,
+/// van en claro (compat con stores existentes).
 #[derive(Clone, Debug)]
 pub struct StoreObjetos {
     raiz: PathBuf,
+    cifrador: Option<Cifrador>,
 }
 
 impl StoreObjetos {
-    /// Abre (creando si hace falta) un almacén en `raiz`.
+    /// Abre (creando si hace falta) un almacén **en claro** en `raiz`.
     pub fn abrir(raiz: impl Into<PathBuf>) -> Result<Self, DotError> {
         let raiz = raiz.into();
         fs::create_dir_all(&raiz)?;
-        Ok(Self { raiz })
+        Ok(Self { raiz, cifrador: None })
+    }
+
+    /// Abre un almacén **cifrado en reposo** con el `cifrador` dado. La identidad
+    /// (hash/ruta) sigue siendo la del claro; sólo cambian los bytes en disco.
+    pub fn abrir_cifrado(raiz: impl Into<PathBuf>, cifrador: Cifrador) -> Result<Self, DotError> {
+        let raiz = raiz.into();
+        fs::create_dir_all(&raiz)?;
+        Ok(Self { raiz, cifrador: Some(cifrador) })
+    }
+
+    /// `true` si el store sella los objetos en reposo.
+    pub fn es_cifrado(&self) -> bool {
+        self.cifrador.is_some()
     }
 
     fn ruta_de(&self, h: &Hash) -> PathBuf {
@@ -148,9 +241,11 @@ impl StoreObjetos {
     }
 
     /// Inscribe un objeto y devuelve su hash. Idempotente: si ya está, no
-    /// reescribe (la identidad ES el contenido).
+    /// reescribe (la identidad ES el contenido **en claro**). El sobre (si hay
+    /// cifrador) se pone ACÁ: `capturar`/`materializar` nunca ven cripto.
     pub fn poner(&self, obj: &Objeto) -> Result<Hash, DotError> {
         let bytes = obj.serializar().map_err(DotError::Formato)?;
+        // El hash identifica el CLARO → grafo y dedup intactos, cifre o no.
         let h = format::hash(&bytes);
         let destino = self.ruta_de(&h);
         if destino.exists() {
@@ -159,24 +254,34 @@ impl StoreObjetos {
         if let Some(dir) = destino.parent() {
             fs::create_dir_all(dir)?;
         }
+        let en_disco = match &self.cifrador {
+            Some(c) => c.sellar(&bytes)?,
+            None => bytes,
+        };
         // Escritura atómica: tmp + rename. El tmp lleva el hash → no colisiona
-        // con otros objetos; dos escritores del mismo objeto escriben bytes
-        // idénticos, el rename final es inocuo.
+        // con otros objetos; dos escritores del mismo objeto escriben sobres
+        // distintos (nonce aleatorio), pero ambos abren al mismo claro y el
+        // rename final es inocuo.
         let tmp = destino.with_extension("tmp");
-        fs::write(&tmp, &bytes)?;
+        fs::write(&tmp, &en_disco)?;
         fs::rename(&tmp, &destino)?;
         Ok(h)
     }
 
-    /// Recupera un objeto por su hash.
+    /// Recupera un objeto por su hash. Si el store es cifrado, abre el sobre en
+    /// RAM antes de deserializar — base del descifrado del destino `Efimero`.
     pub fn traer(&self, h: &Hash) -> Result<Objeto, DotError> {
-        let bytes = fs::read(self.ruta_de(h)).map_err(|e| {
+        let en_disco = fs::read(self.ruta_de(h)).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 DotError::Ausente(hex_de(h))
             } else {
                 DotError::Io(e)
             }
         })?;
+        let bytes = match &self.cifrador {
+            Some(c) => c.abrir(&en_disco)?,
+            None => en_disco,
+        };
         Objeto::deserializar(&bytes).map_err(DotError::Formato)
     }
 
@@ -501,6 +606,8 @@ pub enum DotError {
     Ausente(String),
     #[error("ruta: {0}")]
     Ruta(String),
+    #[error("cripto: {0}")]
+    Cripto(&'static str),
 }
 
 // =====================================================================
@@ -635,6 +742,112 @@ mod tests {
         materializar(&store, &dest, raiz).unwrap();
         materializar(&store, &dest, raiz).unwrap(); // segunda vez: sin error
         assert_eq!(fs::read(dest.join(".zshrc")).unwrap(), b"v1\n");
+    }
+
+    /// Lee todos los bytes de todos los objetos del store (para grep de claro).
+    fn bytes_de_todos_los_objetos(raiz: &Path) -> Vec<u8> {
+        let mut acc = Vec::new();
+        for shard in fs::read_dir(raiz).unwrap() {
+            let shard = shard.unwrap().path();
+            if shard.is_dir() {
+                for obj in fs::read_dir(&shard).unwrap() {
+                    acc.extend(fs::read(obj.unwrap().path()).unwrap());
+                }
+            }
+        }
+        acc
+    }
+
+    #[test]
+    fn cifrado_round_trip_opaco_en_disco_pero_reproduce_el_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let dest = tmp.path().join("dest");
+        let store_dir = tmp.path().join("obj");
+
+        // Un secreto reconocible + un NOMBRE de archivo reconocible (probar que
+        // la ESTRUCTURA también va cifrada, no sólo el contenido).
+        escribir(&home, ".ssh/clave_secreta", b"CONTENIDO-ULTRA-SECRETO-12345\n");
+
+        let cif = Cifrador::con_clave([7u8; 32]);
+        let store = StoreObjetos::abrir_cifrado(&store_dir, cif.clone()).unwrap();
+        assert!(store.es_cifrado());
+
+        let set = ConjuntoDotfiles::new("ssh").con(RutaGestionada::fijado(".ssh/clave_secreta"));
+        let raiz = capturar(&store, &set, &home).unwrap();
+
+        // 1) Opacidad: ni el contenido ni el nombre del archivo aparecen en claro
+        //    en NINGÚN byte de los objetos en disco.
+        let crudo = bytes_de_todos_los_objetos(&store_dir);
+        assert!(!crudo.is_empty(), "el store debería tener objetos");
+        assert!(
+            !contiene_sub(&crudo, b"CONTENIDO-ULTRA-SECRETO-12345"),
+            "el contenido en claro NO debe aparecer en disco"
+        );
+        assert!(
+            !contiene_sub(&crudo, b"clave_secreta"),
+            "el nombre de archivo (estructura) NO debe aparecer en disco"
+        );
+
+        // 2) Round-trip: materializar con el mismo cifrador reproduce el original.
+        materializar(&store, &dest, raiz).unwrap();
+        assert_eq!(
+            fs::read(dest.join(".ssh/clave_secreta")).unwrap(),
+            b"CONTENIDO-ULTRA-SECRETO-12345\n"
+        );
+
+        // 3) Reabrir el MISMO store con la MISMA clave también abre.
+        let store2 = StoreObjetos::abrir_cifrado(&store_dir, cif).unwrap();
+        let dest2 = tmp.path().join("dest2");
+        materializar(&store2, &dest2, raiz).unwrap();
+        assert_eq!(
+            fs::read(dest2.join(".ssh/clave_secreta")).unwrap(),
+            b"CONTENIDO-ULTRA-SECRETO-12345\n"
+        );
+    }
+
+    #[test]
+    fn clave_equivocada_no_abre_los_objetos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store_dir = tmp.path().join("obj");
+        escribir(&home, ".zshrc", b"export X=1\n");
+
+        let store = StoreObjetos::abrir_cifrado(&store_dir, Cifrador::con_clave([1u8; 32])).unwrap();
+        let set = ConjuntoDotfiles::new("shell").con(RutaGestionada::fijado(".zshrc"));
+        let raiz = capturar(&store, &set, &home).unwrap();
+
+        // Otro store, MISMA raíz (el hash es del claro), clave distinta ⇒ AEAD falla.
+        let store_mal = StoreObjetos::abrir_cifrado(&store_dir, Cifrador::con_clave([2u8; 32])).unwrap();
+        let dest = tmp.path().join("dest");
+        let err = materializar(&store_mal, &dest, raiz).unwrap_err();
+        assert!(matches!(err, DotError::Cripto(_)), "esperaba error de cripto, fue {err:?}");
+    }
+
+    #[test]
+    fn derivar_de_seed_es_determinista_y_separa_dominio() {
+        let seed = [9u8; 32];
+        let a = Cifrador::derivar_de_seed(&seed);
+        let b = Cifrador::derivar_de_seed(&seed);
+        // Misma seed ⇒ misma clave ⇒ un store sellado por `a` lo abre `b`.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store_dir = tmp.path().join("obj");
+        escribir(&home, ".gitconfig", b"[user]\n  name = x\n");
+        let set = ConjuntoDotfiles::new("git").con(RutaGestionada::fijado(".gitconfig"));
+        let raiz = capturar(&StoreObjetos::abrir_cifrado(&store_dir, a).unwrap(), &set, &home).unwrap();
+        let dest = tmp.path().join("dest");
+        materializar(&StoreObjetos::abrir_cifrado(&store_dir, b).unwrap(), &dest, raiz).unwrap();
+        assert_eq!(fs::read(dest.join(".gitconfig")).unwrap(), b"[user]\n  name = x\n");
+        // Una seed distinta NO debe derivar la misma clave (no se puede abrir).
+        let otra = Cifrador::derivar_de_seed(&[8u8; 32]);
+        let dest2 = tmp.path().join("dest2");
+        assert!(materializar(&StoreObjetos::abrir_cifrado(&store_dir, otra).unwrap(), &dest2, raiz).is_err());
+    }
+
+    /// `true` si `hay` contiene la subsecuencia `aguja`.
+    fn contiene_sub(hay: &[u8], aguja: &[u8]) -> bool {
+        hay.windows(aguja.len()).any(|w| w == aguja)
     }
 
     #[test]

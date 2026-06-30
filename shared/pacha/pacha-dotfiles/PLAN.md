@@ -98,20 +98,36 @@ namespace de la app, certificado por texto en cada capa. Lo único deliberadamen
 fuera de Fase 1: la cripto en reposo (Fase 2) — hoy el tmpfs garantiza la
 no-persistencia, pero los bytes en RAM están en claro.
 
-## Fase 2 — Cifrado en reposo (secreto por defecto)
+## Fase 2 — Cifrado en reposo (secreto por defecto) — HECHA
 
-1. **Capa de cifrado sobre `StoreObjetos`.** Cada blob se guarda en un sobre
-   cifrado (AEAD; nonce + ciphertext). El árbol/commit pueden ir cifrados también
-   o sólo los blobs hoja (decidir: ¿metadatos de estructura visibles? — ver
-   decisiones abiertas). La identidad del objeto sigue siendo el hash del
-   contenido **en claro** (para dedup) o del sobre (para opacidad) — decisión.
-2. **Clave desde agora.** Derivar una clave simétrica/X25519 de la identidad
-   Ed25519 del usuario (`format/firma.rs`, `agora-keystore`). Estilo `age`.
-3. **`capturar`/`materializar` no cambian de firma** — ven bytes; el sobre lo
-   pone/quita el store. El destino efímero descifra en RAM.
-4. **Test:** round-trip cifrado (capturar→store opaco en disco, grep que el
-   contenido en claro NO aparece en los bytes del objeto; materializar reproduce
-   el original).
+1. ✅ **Capa de cifrado sobre `StoreObjetos`.** `Cifrador` sella cada objeto en
+   un sobre AEAD `XChaCha20Poly1305` (`nonce(24) || ciphertext+tag`, nonce
+   aleatorio por objeto — margen amplio bajo una clave de store de larga vida).
+   El store gana `abrir_cifrado(raiz, Cifrador)` + `es_cifrado()`; `poner` sella,
+   `traer` abre — `capturar`/`materializar` **no cambian de firma** (ven bytes).
+   `None` = en claro (compat con stores existentes).
+2. ✅ **Decisión #3 resuelta (opacidad de estructura).** El objeto **entero** se
+   sella → contenido **y nombres** (los `Arbol`) van cifrados. La identidad
+   (hash/ruta `aa/bbbb`) sigue siendo la del **claro** ⇒ grafo y dedup intactos,
+   y un store en claro migra a cifrado sin recomputar hashes. Único leak: el hash
+   del claro (la ruta) habilita *confirmación*, no lectura. La opacidad total
+   (hash del sobre) rompería el dedup determinista → fuera de alcance.
+3. ✅ **Clave desde la identidad (estilo `age`).** `Cifrador::derivar_de_seed(&[u8;32])`
+   = HKDF-SHA256(seed, info=`"pacha-dotfiles-store-v1"`). La `seed` es la
+   identidad Ed25519 del usuario (la que `agora-keystore` desbloquea). El
+   `pacha-manager` gana `DotfilesCtx::new_cifrado(..., seed)`. **Nota de
+   layering:** `pacha-dotfiles` (en `shared/`) NO depende de `agora-keystore`
+   (en `03_ukupacha/`); recibe la seed ya desbloqueada de quien arma el contexto.
+   *Desbloquear* la seed es Fase 3.
+4. ✅ **Destino efímero descifra en RAM.** `materializar`/`materializar_a` →
+   `traer` → abre el sobre en RAM; el `Efimero` escribe el claro al tmpfs. Nada
+   en claro toca disco persistente.
+5. ✅ **Tests (texto, sin render).** En `pacha-dotfiles`: round-trip cifrado +
+   **grep que ni el contenido ni el nombre de archivo aparecen en claro** en los
+   objetos de disco; clave equivocada ⇒ `DotError::Cripto` (AEAD falla);
+   derivación determinista + separación de dominio (seed distinta no abre). En
+   `pacha-manager`: `stage_into` sobre store cifrado descifra al staging RAM y
+   deja el disco opaco.
 
 ## Fase 3 — Desbloqueo de la clave maestra (la decisión DIFÍCIL)
 
@@ -120,6 +136,12 @@ para acceder a los secretos". Opciones a evaluar: keyring del kernel
 (`add_key`/`keyctl`), PAM al login, passphrase + Argon2, TPM/sello,
 `agora-keystore` desbloqueado por mirada-greeter. Define qué tan fuerte es el
 modelo entero. **No avanzar Fases 4+ sin cerrar esto.**
+
+Estado: la cripto (Fase 2) ya consume una `seed` desbloqueada vía
+`derivar_de_seed`/`new_cifrado`; lo que falta es **de dónde sale desbloqueada** —
+hoy el caller la provee. `agora-keystore` ya cifra la seed en disco con passphrase
+(Argon2+ChaCha); el eslabón pendiente es **quién** pide la passphrase y **dónde**
+queda la seed viva (keyring del kernel vs. proceso del manager).
 
 ## Fase 4 — Compartir/publicar + transporte remoto
 
