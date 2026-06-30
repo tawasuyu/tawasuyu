@@ -233,9 +233,57 @@ pub(crate) fn over_layer_rects(output: Option<&Output>) -> Vec<(i32, i32, i32, i
     v
 }
 
-/// Ancho (px) de cada botón del titlebar (maximizar/cerrar), pegados al borde
-/// derecho. Compartido entre el render y el hit-test del click.
+/// Ancho (px) de cada botón del titlebar. Compartido entre el render y el
+/// hit-test del click.
 pub(crate) const TB_BTN_W: i32 = 28;
+
+/// Las celdas `(x_izquierdo, &item)` de los botones del titlebar para una
+/// ventana cuyo contenido ocupa `cx..cx+cw`. El grupo **izquierdo** se apila
+/// desde `cx` hacia la derecha; el **derecho** desde `cx+cw` hacia la izquierda.
+/// Omite los que no entran (ventana angosta) y nunca deja que los grupos se
+/// pisen. La usan por igual el render y el hit-test, así el dibujo y el click
+/// **nunca divergen** (la causa típica de "le pego al botón y no pasa nada").
+pub(crate) fn titlebar_cells<'a>(
+    layout: &'a mirada_brain::TitlebarLayout,
+    cx: i32,
+    cw: i32,
+) -> Vec<(i32, &'a mirada_brain::TitlebarItem)> {
+    let mut out = Vec::new();
+    // Izquierda: left-to-right desde `cx`.
+    let mut lx = cx;
+    for it in &layout.left {
+        if lx + TB_BTN_W > cx + cw {
+            break;
+        }
+        out.push((lx, it));
+        lx += TB_BTN_W;
+    }
+    // Derecha: el grupo se lee **left-to-right** y termina pegado al borde
+    // derecho (el último item queda más a la derecha — p. ej. «cerrar» en el
+    // layout clásico). Si no entra todo, se omiten los de la IZQUIERDA del grupo
+    // (los que pisarían el grupo izquierdo), conservando cerrar/maximizar.
+    let n = layout.right.len() as i32;
+    for (k, it) in layout.right.iter().enumerate() {
+        let x = cx + cw - (n - k as i32) * TB_BTN_W;
+        if x < lx {
+            continue;
+        }
+        out.push((x, it));
+    }
+    out
+}
+
+/// El rango horizontal `(inicio, fin)` disponible para el **título**: entre el
+/// final del grupo izquierdo y el comienzo del derecho, con un padding lateral.
+/// Para alinear el título sin pisar los botones.
+pub(crate) fn titlebar_title_range(layout: &mirada_brain::TitlebarLayout, cx: i32, cw: i32) -> (i32, i32) {
+    let pad = 8;
+    let left_n = layout.left.len() as i32;
+    let right_n = layout.right.len() as i32;
+    let start = cx + left_n * TB_BTN_W + pad;
+    let end = cx + cw - right_n * TB_BTN_W - pad;
+    (start, end.max(start))
+}
 
 /// Las imágenes de `dir` aptas como wallpaper (png/jpg/jpeg/webp/bmp),
 /// ordenadas por nombre. Para el fondo automático (slideshow).
@@ -682,4 +730,59 @@ where
         }
     });
     Ok(stdin)
+}
+
+#[cfg(test)]
+mod tests_titlebar {
+    use super::*;
+    use mirada_brain::{TitlebarAction, TitlebarItem, TitlebarLayout};
+
+    fn accion(cells: &[(i32, &TitlebarItem)], i: usize) -> TitlebarAction {
+        match cells[i].1 {
+            TitlebarItem::Button { action, .. } => action.clone(),
+            _ => panic!("se esperaba un botón"),
+        }
+    }
+
+    #[test]
+    fn layout_clasico_pone_cerrar_a_la_derecha_del_todo() {
+        // Default: derecha = [min, max, close]. Contenido en cx=100, cw=400.
+        let layout = TitlebarLayout::default();
+        let cells = titlebar_cells(&layout, 100, 400);
+        assert_eq!(cells.len(), 3);
+        // El último (cerrar) queda pegado al borde derecho (cx+cw-W).
+        let der = cells.iter().max_by_key(|(x, _)| *x).unwrap();
+        assert_eq!(der.0, 100 + 400 - TB_BTN_W);
+        assert!(matches!(der.1, TitlebarItem::Button { action: TitlebarAction::Close, .. }));
+    }
+
+    #[test]
+    fn grupos_izquierda_y_derecha_no_se_pisan() {
+        let layout = TitlebarLayout {
+            left: vec![TitlebarItem::button(TitlebarAction::Menu)],
+            right: vec![
+                TitlebarItem::button(TitlebarAction::Minimize),
+                TitlebarItem::button(TitlebarAction::Maximize),
+            ],
+            ..Default::default()
+        };
+        let cells = titlebar_cells(&layout, 0, 400);
+        assert_eq!(cells.len(), 3);
+        // El de la izquierda arranca en cx.
+        assert_eq!(cells[0].0, 0);
+        assert_eq!(accion(&cells, 0), TitlebarAction::Menu);
+        // Ninguna celda se solapa ni sale del rango [0, 400].
+        for (x, _) in &cells {
+            assert!(*x >= 0 && *x + TB_BTN_W <= 400);
+        }
+    }
+
+    #[test]
+    fn ventana_angosta_conserva_cerrar() {
+        // Sólo entra un botón: debe ser el de más a la derecha (cerrar).
+        let layout = TitlebarLayout::default();
+        let cells = titlebar_cells(&layout, 0, TB_BTN_W + 6);
+        assert_eq!(cells.len(), 1);
+        assert!(matches!(cells[0].1, TitlebarItem::Button { action: TitlebarAction::Close, .. }));
+    }
 }

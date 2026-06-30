@@ -420,6 +420,13 @@ pub struct Config {
     /// `COLA-EMBELLECIMIENTO.md`.
     #[serde(default)]
     pub corner_radius: u8,
+    /// **Layout de la barra de título**: qué botones, en qué grupo (izquierda /
+    /// derecha), en qué orden, la alineación del título y el estilo de los
+    /// botones. Lo fija la vista (mac trae traffic-lights a la izquierda, CDE el
+    /// layout Motif, mirada el clásico a la derecha) y el usuario lo puede
+    /// editar. Viaja al Cuerpo aparte de las decoraciones (no es `Copy`).
+    #[serde(default)]
+    pub titlebar_layout: crate::TitlebarLayout,
     /// **Glass — radio del desenfoque del fondo** detrás del chrome translúcido
     /// (hoy el menú raíz), en px (0–40). `0` (default) = sin glass. El compositor
     /// pasa el wallpaper por un blur de caja (una vez, al rearmarlo) y lo usa
@@ -1016,6 +1023,7 @@ impl Default for Config {
             window_close_ms: 0,
             unfocused_dim_pct: 0,
             corner_radius: 0,
+            titlebar_layout: crate::TitlebarLayout::default(),
             glass_blur: 0,
             glass_quality: default_glass_quality(),
             reduce_motion: false,

@@ -170,6 +170,20 @@ fn vista_mac() -> Vista {
     config.titlebar_text = Some([60, 60, 66, 255]);
     // Esquinas redondeadas: el sello visual de mac.
     config.corner_radius = 10;
+    // Layout mac: los **traffic-lights a la izquierda** (cerrar/minimizar/
+    // maximizar) y el título centrado. El estilo TrafficLight los pinta como
+    // círculos de color.
+    config.titlebar_layout = crate::TitlebarLayout {
+        left: vec![
+            crate::TitlebarItem::button(crate::TitlebarAction::Close),
+            crate::TitlebarItem::button(crate::TitlebarAction::Minimize),
+            crate::TitlebarItem::button(crate::TitlebarAction::Maximize),
+        ],
+        right: Vec::new(),
+        title_align: crate::TitleAlign::Center,
+        button_style: crate::TitlebarButtonStyle::TrafficLight,
+        ..Default::default()
+    };
     Vista {
         name: "mac",
         label: "macOS",
@@ -267,6 +281,18 @@ fn vista_solaris() -> Vista {
         0.25,
     );
     config.border_bevel = true;
+    // Layout Motif/CDE: botón de **menú de ventana a la izquierda** y
+    // minimizar/maximizar a la derecha, todos como teclas biseladas (estilo
+    // Bevel) — el chrome chunky de CDE.
+    config.titlebar_layout = crate::TitlebarLayout {
+        left: vec![crate::TitlebarItem::button(crate::TitlebarAction::Menu)],
+        right: vec![
+            crate::TitlebarItem::button(crate::TitlebarAction::Minimize),
+            crate::TitlebarItem::button(crate::TitlebarAction::Maximize),
+        ],
+        button_style: crate::TitlebarButtonStyle::Bevel,
+        ..Default::default()
+    };
     Vista {
         name: "solaris",
         label: "Solaris (CDE)",
@@ -368,6 +394,33 @@ mod tests {
         }
         // Por contraste, las modernas (mirada) dejan la barra acoplada al marco.
         assert_eq!(Vista::by_name("mirada").unwrap().config.titlebar_focus, None);
+    }
+
+    #[test]
+    fn los_layouts_de_titlebar_son_propios_de_cada_vista() {
+        use crate::{TitlebarAction, TitlebarButtonStyle, TitlebarItem};
+        let boton = |it: &TitlebarItem| match it {
+            TitlebarItem::Button { action, .. } => action.clone(),
+            _ => panic!("se esperaba un botón"),
+        };
+        // mac: traffic-lights a la IZQUIERDA (cerrar/min/max), nada a la derecha,
+        // estilo círculos, título centrado.
+        let mac = Vista::by_name("mac").unwrap().config.titlebar_layout;
+        assert_eq!(mac.right.len(), 0, "mac no lleva botones a la derecha");
+        assert_eq!(mac.left.len(), 3, "mac lleva los 3 a la izquierda");
+        assert_eq!(boton(&mac.left[0]), TitlebarAction::Close, "cerrar primero (rojo)");
+        assert_eq!(mac.button_style, TitlebarButtonStyle::TrafficLight);
+        assert_eq!(mac.title_align, crate::TitleAlign::Center);
+        // CDE: menú a la izquierda, min/max a la derecha, teclas biseladas.
+        let cde = Vista::by_name("solaris").unwrap().config.titlebar_layout;
+        assert_eq!(boton(&cde.left[0]), TitlebarAction::Menu, "CDE: menú a la izquierda");
+        assert_eq!(cde.right.len(), 2, "CDE: min/max a la derecha");
+        assert_eq!(cde.button_style, TitlebarButtonStyle::Bevel);
+        // mirada y el resto: el layout histórico (derecha [min, max, close]).
+        let mirada = Vista::by_name("mirada").unwrap().config.titlebar_layout;
+        assert_eq!(mirada, crate::TitlebarLayout::default());
+        assert!(mirada.left.is_empty());
+        assert_eq!(boton(mirada.right.last().unwrap()), TitlebarAction::Close, "cerrar más a la derecha");
     }
 
     #[test]

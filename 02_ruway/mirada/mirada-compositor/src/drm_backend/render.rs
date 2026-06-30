@@ -114,6 +114,35 @@ fn push_bevel_ring(
     }
 }
 
+/// El ícono rasterizado de un item del titlebar, según su acción (o su glifo
+/// custom si lo trae). `None` para items sin ícono dibujable (los `App`,
+/// reservados para apps mirada-aware). El hit-test ignora esos mismos items, así
+/// no quedan celdas "muertas".
+fn titlebar_item_icon(
+    item: &mirada_brain::TitlebarItem,
+    px: f32,
+    color: [u8; 4],
+    tr: &crate::text::TextRenderer,
+) -> Option<crate::text::Rasterized> {
+    use mirada_brain::{TitlebarAction as A, TitlebarItem as I};
+    let I::Button { action, icon, .. } = item else {
+        return None;
+    };
+    if let Some(glyph) = icon {
+        // Un glifo/emoji propio del botón (p. ej. de un Spawn custom).
+        return tr.rasterize(glyph, px, color);
+    }
+    Some(match action {
+        A::Close => crate::text::icon_close(px, color),
+        A::Minimize => crate::text::icon_minimize(px, color),
+        A::Maximize => crate::text::icon_square(px, color),
+        A::Fullscreen => crate::text::icon_fullscreen(px, color),
+        A::Float => crate::text::icon_float(px, color),
+        A::Menu => crate::text::icon_menu(px, color),
+        A::Spawn(_) => crate::text::icon_square(px, color),
+    })
+}
+
 /// Transformación **cover** para escalar por GPU un buffer `sw×sh` a una salida
 /// `ow×oh`: devuelve `(offset_x, offset_y, escala)` — escala uniforme = máximo de
 /// las dos razones (llena la salida, recorta el sobrante), con el sobrante
@@ -727,6 +756,11 @@ impl DrmState {
                     // define (barras claras estilo mac/Breeze piden texto oscuro),
                     // si no el claro histórico.
                     let title_color = self.app.decorations.titlebar_text.unwrap_or(TITLE_COLOR);
+                    let layout = &self.app.titlebar_layout;
+                    // Título: arranca tras el grupo izquierdo (así no lo pisan los
+                    // botones de ese lado). La alineación centro/derecha fina llega
+                    // con los estilos por vista; hoy queda pegado a ese inicio.
+                    let (title_x0, _title_x1) = crate::titlebar_title_range(layout, cx, cw);
                     if !w.title.is_empty() {
                         if self.text_cache.len() > 256 {
                             self.text_cache.clear();
@@ -738,7 +772,7 @@ impl DrmState {
                         let ty = dec_y + (tb - TITLE_PX as i32) / 2;
                         if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                             &mut self.renderer,
-                            ((cx + 8) as f64, ty as f64),
+                            (title_x0 as f64, ty as f64),
                             buf,
                             Some(anim_alpha),
                             None,
@@ -748,16 +782,13 @@ impl DrmState {
                             into.push(Frame::Text(el));
                         }
                     }
-                    // Botones del titlebar a la derecha: maximizar (cuadrado) y
-                    // cerrar (X). El más a la derecha es cerrar. Se dibujan a
-                    // mano (no por fuente): los glyphs ✕/□ salían como tofu en
-                    // fuentes sin esos puntos. El hit-test del click usa las
-                    // mismas posiciones (TB_BTN_W).
-                    let _ = tr; // los íconos no dependen de la fuente
-                    // Botones con relieve 3D (CDE/Motif): cuando el theme bisela
-                    // el marco, los botones del titlebar se pintan como teclas
-                    // levantadas (cara + anillo raised) detrás de su ícono.
-                    let bevel_btns = self.app.decorations.border_bevel;
+                    // Botones **data-driven** desde el layout (qué botones, en qué
+                    // grupo izq/der, en qué orden, qué acción). Dibujados a mano
+                    // (no por fuente: los glyphs ✕/□ salían como tofu). El hit-test
+                    // usa las MISMAS celdas (`titlebar_cells`), así click y dibujo
+                    // nunca divergen.
+                    let bevel_btns =
+                        layout.button_style == mirada_brain::TitlebarButtonStyle::Bevel;
                     let (btn_face, btn_hi, btn_lo) = if bevel_btns {
                         let tbar = self.focus_base_titlebar(w, anim_now, glow_ms);
                         (
@@ -768,56 +799,47 @@ impl DrmState {
                     } else {
                         ([0.0; 4], [0.0; 4], [0.0; 4])
                     };
-                    for (slot, icon) in [
-                        (0i32, crate::text::icon_close(TITLE_PX, title_color)),
-                        (1i32, crate::text::icon_square(TITLE_PX, title_color)),
-                        (2i32, crate::text::icon_minimize(TITLE_PX, title_color)),
-                    ] {
-                        if cw < (slot + 1) * crate::TB_BTN_W + 8 {
-                            continue; // ventana muy angosta: sin botón
+                    for (cell_x, item) in crate::titlebar_cells(layout, cx, cw) {
+                        let Some(r) = titlebar_item_icon(item, TITLE_PX, title_color, tr) else {
+                            continue; // item App (reservado) o sin ícono dibujable
+                        };
+                        let bx = cell_x + (crate::TB_BTN_W - r.width) / 2;
+                        let by = dec_y + (tb - r.height) / 2;
+                        let bbuf = MemoryRenderBuffer::from_slice(
+                            &r.rgba,
+                            Fourcc::Argb8888,
+                            (r.width, r.height),
+                            1,
+                            Transform::Normal,
+                            None,
+                        );
+                        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                            &mut self.renderer,
+                            (bx as f64, by as f64),
+                            &bbuf,
+                            Some(anim_alpha),
+                            None,
+                            None,
+                            Kind::Unspecified,
+                        ) {
+                            into.push(Frame::Text(el));
                         }
-                        {
-                            let r = icon;
-                            let cell_x = cx + cw - (slot + 1) * crate::TB_BTN_W;
-                            let bx = cell_x + (crate::TB_BTN_W - r.width) / 2;
-                            let by = dec_y + (tb - r.height) / 2;
-                            let bbuf = MemoryRenderBuffer::from_slice(
-                                &r.rgba,
-                                Fourcc::Argb8888,
-                                (r.width, r.height),
-                                1,
-                                Transform::Normal,
-                                None,
-                            );
-                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                                &mut self.renderer,
-                                (bx as f64, by as f64),
-                                &bbuf,
-                                Some(anim_alpha),
-                                None,
-                                None,
+                        // Tecla biselada DETRÁS del ícono (se empuja después = queda
+                        // debajo): anillo raised + cara. Sólo con estilo Bevel (CDE).
+                        if bevel_btns {
+                            let bs = (crate::TB_BTN_W.min(tb) - 6).max(8);
+                            let kx = cell_x + (crate::TB_BTN_W - bs) / 2;
+                            let ky = dec_y + (tb - bs) / 2;
+                            push_bevel_ring(into, kx, ky, bs, bs, 2, btn_hi, btn_lo, true, anim_alpha);
+                            let mut fb = SolidColorBuffer::default();
+                            fb.update((bs, bs), btn_face);
+                            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                                &fb,
+                                (kx, ky),
+                                1.0,
+                                anim_alpha,
                                 Kind::Unspecified,
-                            ) {
-                                into.push(Frame::Text(el));
-                            }
-                            // Tecla levantada DETRÁS del ícono (se empuja después
-                            // = queda debajo): anillo raised + cara. Sólo en temas
-                            // biselados (CDE); los demás dejan el botón plano.
-                            if bevel_btns {
-                                let bs = (crate::TB_BTN_W.min(tb) - 6).max(8);
-                                let kx = cell_x + (crate::TB_BTN_W - bs) / 2;
-                                let ky = dec_y + (tb - bs) / 2;
-                                push_bevel_ring(into, kx, ky, bs, bs, 2, btn_hi, btn_lo, true, anim_alpha);
-                                let mut fb = SolidColorBuffer::default();
-                                fb.update((bs, bs), btn_face);
-                                into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                                    &fb,
-                                    (kx, ky),
-                                    1.0,
-                                    anim_alpha,
-                                    Kind::Unspecified,
-                                )));
-                            }
+                            )));
                         }
                     }
                 }

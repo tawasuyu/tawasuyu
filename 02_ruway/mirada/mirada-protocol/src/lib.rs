@@ -168,6 +168,126 @@ impl Default for Decorations {
     }
 }
 
+/// El borde de la ventana donde vive la barra de título. Hoy **sólo `Top` se
+/// renderiza**; el resto queda reservado para barras verticales/inferiores (un
+/// punto de extensión sin compromiso todavía).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitlebarEdge {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+/// Alineación del **título** dentro de la barra.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitleAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Estilo visual de los botones de la barra de título.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitlebarButtonStyle {
+    /// Glifo simple sobre el fondo de la barra (el histórico).
+    #[default]
+    Glyph,
+    /// Tecla biselada Motif/CDE (cara + relieve), como [`Decorations::border_bevel`].
+    Bevel,
+    /// Círculos de color estilo macOS (rojo/amarillo/verde), el glifo aparece al
+    /// pasar el puntero.
+    TrafficLight,
+}
+
+/// Qué hace un botón de la barra de título al clickearse. El conjunto cubre las
+/// acciones de ventana que el Cuerpo ya sabe ejecutar; se agregan variantes a
+/// medida que el backend gana capacidades (shade, stick…).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitlebarAction {
+    /// Cierre ordenado (`xdg_toplevel.close`).
+    Close,
+    /// Oculta la ventana (scratchpad).
+    Minimize,
+    /// Maximiza / restaura (flotante a pantalla, conserva barra).
+    Maximize,
+    /// Pantalla completa (oculta el chrome).
+    Fullscreen,
+    /// Alterna flotante / teselada.
+    Float,
+    /// Abre el **menú contextual** de la ventana (el mismo del click derecho).
+    Menu,
+    /// Lanza un comando arbitrario (`sh -c`) — un botón "hace más cosas".
+    Spawn(String),
+}
+
+/// Un item de la barra de título. Hoy sólo botones de sistema; `App` queda
+/// **reservado** para contribuciones de apps mirada-aware (protocolo
+/// cliente↔compositor futuro), de modo que el modelo no haya que romperlo
+/// cuando llegue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitlebarItem {
+    /// Un botón de sistema: una acción + ícono/label opcionales (si son `None`,
+    /// el Cuerpo usa el glifo por defecto de la acción).
+    Button {
+        action: TitlebarAction,
+        #[serde(default)]
+        icon: Option<String>,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// (Reservado, aún sin render) un item aportado por una app mirada-aware,
+    /// identificado por un id que el protocolo futuro resolverá.
+    App { id: String },
+}
+
+impl TitlebarItem {
+    /// Atajo para un botón de sistema con ícono/label por defecto.
+    pub fn button(action: TitlebarAction) -> Self {
+        TitlebarItem::Button { action, icon: None, label: None }
+    }
+}
+
+/// El **layout configurable de la barra de título**: dos grupos ordenados
+/// (izquierda y derecha), la alineación del título, el borde donde vive (hoy
+/// sólo `Top`) y el estilo de los botones. Viaja del Cerebro al Cuerpo por
+/// [`BrainCommand::SetTitlebarLayout`] — **separado** de [`Decorations`] para no
+/// romper su `Copy`/`Eq`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TitlebarLayout {
+    #[serde(default)]
+    pub edge: TitlebarEdge,
+    #[serde(default)]
+    pub left: Vec<TitlebarItem>,
+    #[serde(default)]
+    pub right: Vec<TitlebarItem>,
+    #[serde(default)]
+    pub title_align: TitleAlign,
+    #[serde(default)]
+    pub button_style: TitlebarButtonStyle,
+}
+
+impl Default for TitlebarLayout {
+    /// El layout histórico: sin grupo izquierdo, y a la derecha
+    /// `[minimizar, maximizar, cerrar]` (cerrar más a la derecha), título a la
+    /// izquierda, glifos planos arriba.
+    fn default() -> Self {
+        Self {
+            edge: TitlebarEdge::Top,
+            left: Vec::new(),
+            right: vec![
+                TitlebarItem::button(TitlebarAction::Minimize),
+                TitlebarItem::button(TitlebarAction::Maximize),
+                TitlebarItem::button(TitlebarAction::Close),
+            ],
+            title_align: TitleAlign::Left,
+            button_style: TitlebarButtonStyle::Glyph,
+        }
+    }
+}
+
 /// Permisos de capacidad por ejecutable que el Cerebro fija en el Cuerpo.
 ///
 /// El Cuerpo es **quien otorga el protocolo Wayland**: una capacidad sensible
@@ -305,6 +425,10 @@ pub enum BrainCommand {
     /// Fija los parámetros de decoración de las ventanas (marco, …). El
     /// Cerebro lo envía al arrancar y tras recargar la config.
     SetDecorations(Decorations),
+    /// Fija el **layout de la barra de título** (botones, grupos, alineación,
+    /// estilo). Va aparte de [`SetDecorations`] porque [`TitlebarLayout`] no es
+    /// `Copy`. El Cerebro lo envía al arrancar y tras recargar la config.
+    SetTitlebarLayout(TitlebarLayout),
     /// Fija los permisos de capacidad por ejecutable (qué se le concede a
     /// quién): el snoop de portapapeles (`zwlr_data_control`), la inyección
     /// de teclas (`zwp_virtual_keyboard`), el censo de ventanas

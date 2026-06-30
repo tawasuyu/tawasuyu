@@ -170,6 +170,14 @@ impl Desktop {
         BrainCommand::SetDecorations(self.config.decorations())
     }
 
+    /// El comando que fija el **layout de la barra de título** en el Cuerpo
+    /// según la config. Va aparte de [`decorations`](Desktop::decorations)
+    /// porque el layout no es `Copy`. Se envía junto a ella (al arrancar y tras
+    /// recargar la config).
+    pub fn titlebar_layout(&self) -> BrainCommand {
+        BrainCommand::SetTitlebarLayout(self.config.titlebar_layout.clone())
+    }
+
     /// Reemplaza el keymap en caliente. Devuelve el [`BrainCommand`] que
     /// el dueño debe enviar al Cuerpo para reajustar qué teclas intercepta.
     pub fn set_keymap(&mut self, keymap: Keymap) -> BrainCommand {
@@ -202,7 +210,7 @@ impl Desktop {
     /// `FileWatch` (sin esperar a una acción manual que dispare layout).
     pub fn reload_config(&mut self, config: Config) -> Vec<BrainCommand> {
         self.set_config(config);
-        let mut cmds = vec![self.decorations()];
+        let mut cmds = vec![self.decorations(), self.titlebar_layout()];
         cmds.extend(self.relayout());
         cmds
     }

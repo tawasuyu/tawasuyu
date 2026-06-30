@@ -501,6 +501,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         overview_selected: 0,
         linked_ws: None,
         decorations: mirada_brain::Decorations::default(),
+        titlebar_layout: mirada_brain::TitlebarLayout::default(),
         ssd_surfaces: std::collections::HashSet::new(),
         caps,
         pending_keybind: None,
@@ -541,7 +542,12 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     // el traspaso a la sesión (`complete_greeter_handoff`).
     if !greeter {
         if let Brain::Embedded(desktop) = &app.brain {
-            let cmds = vec![desktop.grab_keys(), desktop.decorations(), desktop.capabilities()];
+            let cmds = vec![
+                desktop.grab_keys(),
+                desktop.decorations(),
+                desktop.titlebar_layout(),
+                desktop.capabilities(),
+            ];
             app.apply_commands(cmds);
         }
     }

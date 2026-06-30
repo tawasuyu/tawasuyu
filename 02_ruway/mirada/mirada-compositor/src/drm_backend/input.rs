@@ -411,24 +411,8 @@ impl DrmState {
                     let (x, y) = self.app.pointer_loc;
                     if let Some(i) = self.titlebar_at(x, y) {
                         let id = self.app.windows[i].id;
-                        let idx = self.output_at_point(x.round() as i32, y.round() as i32);
-                        if let Some(r) = self.outputs.get(idx).map(|o| o.rect) {
-                            let ev = self.app.body.clicked(id); // enfoca la ventana
-                            self.app.brain_feed(ev);
-                            self.menu_window = Some(id);
-                            self.menu_output_idx = Some(idx);
-                            self.root_menu = Some(crate::menu::RootMenu::open(
-                                x.round() as i32 - r.x,
-                                y.round() as i32 - r.y,
-                                crate::menu::window_menu_entries(
-                                    mirada_brain::action::WORKSPACE_COUNT,
-                                ),
-                                r.w,
-                                r.h,
-                            ));
-                            crate::screencopy::danar_todo(&mut self.app);
-                            return;
-                        }
+                        self.open_window_menu(id);
+                        return;
                     }
                 }
 
@@ -505,19 +489,14 @@ impl DrmState {
                     }
                 }
 
-                // Click izquierdo sobre un BOTÓN del titlebar (✕ cerrar / □
-                // maximizar): actúa y no arranca arrastre. Va ANTES del drag.
+                // Click izquierdo sobre un BOTÓN del titlebar: ejecuta su acción y
+                // no arranca arrastre. Va ANTES del drag. La acción la define el
+                // layout (configurable); `Menu` abre el menú contextual.
                 if pressed && button == BTN_LEFT && !self.app.shell_activo() {
                     let (x, y) = self.app.pointer_loc;
-                    if let Some((id, slot)) = self.titlebar_button_at(x, y) {
-                        match slot {
-                            0 => {
-                                if let Some(w) = self.app.windows.iter().find(|w| w.id == id) {
-                                    w.toplevel.send_close();
-                                }
-                            }
-                            1 => self.app.maximizar_ventana(id),
-                            _ => self.app.minimizar_ventana(id),
+                    if let Some((id, action)) = self.titlebar_button_at(x, y) {
+                        if !self.app.accion_titlebar(id, &action) {
+                            self.open_window_menu(id); // era `Menu`
                         }
                         return;
                     }
@@ -1002,11 +981,11 @@ impl DrmState {
 
     /// La ventana y el botón de titlebar bajo `(x, y)` global: `Some((id, true))`
     /// = cerrar (✕), `Some((id, false))` = maximizar (□). Mismas posiciones que
-    /// el render (botones pegados al borde derecho, ancho [`TB_BTN_W`]).
-    /// Devuelve `(id, slot)` del botón del titlebar bajo el puntero, donde
-    /// `slot` es 0 = cerrar (✕, el más a la derecha), 1 = maximizar (□),
-    /// 2 = minimizar (─). `None` si no hay botón ahí.
-    pub(super) fn titlebar_button_at(&self, x: f64, y: f64) -> Option<(u64, u8)> {
+    /// el render (mismas celdas vía [`crate::titlebar_cells`], así click y dibujo
+    /// nunca divergen). Devuelve `(id, acción)` del botón bajo el puntero, o
+    /// `None` si ahí no hay botón actuable (título, hueco, o item `App`
+    /// reservado → el llamador lo trata como arrastre).
+    pub(super) fn titlebar_button_at(&self, x: f64, y: f64) -> Option<(u64, mirada_brain::TitlebarAction)> {
         let tbh = self.app.decorations.titlebar_height;
         if tbh <= 0 {
             return None;
@@ -1022,6 +1001,7 @@ impl DrmState {
             let w = &self.app.windows[i];
             (!w.floating, !w.focused)
         });
+        let layout = &self.app.titlebar_layout;
         for i in idx {
             let w = &self.app.windows[i];
             let tb = crate::titlebar_for(w, tbh);
@@ -1034,21 +1014,38 @@ impl DrmState {
             if py < top || py >= top + tb {
                 continue;
             }
-            let close_x = lx + sw - crate::TB_BTN_W;
-            let max_x = lx + sw - 2 * crate::TB_BTN_W;
-            let min_x = lx + sw - 3 * crate::TB_BTN_W;
-            if px >= close_x && px < close_x + crate::TB_BTN_W {
-                return Some((w.id, 0));
-            }
-            if px >= max_x && px < max_x + crate::TB_BTN_W {
-                return Some((w.id, 1));
-            }
-            // Sólo hay botón de minimizar si la ventana es lo bastante ancha
-            // (el render lo omite en ventanas angostas — mismo umbral).
-            if sw >= 3 * crate::TB_BTN_W + 8 && px >= min_x && px < min_x + crate::TB_BTN_W {
-                return Some((w.id, 2));
+            for (cell_x, item) in crate::titlebar_cells(layout, lx, sw) {
+                if px < cell_x || px >= cell_x + crate::TB_BTN_W {
+                    continue;
+                }
+                if let mirada_brain::TitlebarItem::Button { action, .. } = item {
+                    return Some((w.id, action.clone()));
+                }
+                break; // celda de un item `App` (reservado): no actúa → arrastre
             }
         }
         None
+    }
+
+    /// Abre el **menú contextual de ventana** (minimizar/maximizar/flotar/
+    /// enviar-a/cerrar) anclado en el puntero, sobre la ventana `id`. Lo usan el
+    /// click derecho en el titlebar y el botón `Menu` del titlebar.
+    pub(super) fn open_window_menu(&mut self, id: u64) {
+        let (x, y) = self.app.pointer_loc;
+        let idx = self.output_at_point(x.round() as i32, y.round() as i32);
+        if let Some(r) = self.outputs.get(idx).map(|o| o.rect) {
+            let ev = self.app.body.clicked(id); // enfoca la ventana
+            self.app.brain_feed(ev);
+            self.menu_window = Some(id);
+            self.menu_output_idx = Some(idx);
+            self.root_menu = Some(crate::menu::RootMenu::open(
+                x.round() as i32 - r.x,
+                y.round() as i32 - r.y,
+                crate::menu::window_menu_entries(mirada_brain::action::WORKSPACE_COUNT),
+                r.w,
+                r.h,
+            ));
+            crate::screencopy::danar_todo(&mut self.app);
+        }
     }
 }

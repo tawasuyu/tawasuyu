@@ -638,6 +638,9 @@ pub(crate) struct App {
     pub(crate) linked_ws: Option<LinkedWorkspaces>,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
+    /// Layout de la barra de título (botones, grupos, alineación, estilo) que
+    /// fija el Cerebro vía `BodyOp::SetTitlebarLayout`; default = histórico.
+    pub(crate) titlebar_layout: mirada_brain::TitlebarLayout,
     /// Superficies cuyo cliente aceptó decoración del servidor (SSD) vía
     /// `xdg-decoration`. Fuente de verdad de [`ManagedWindow::ssd`]; una
     /// ventana ausente de este set se decora sola (CSD) y mirada no le pinta

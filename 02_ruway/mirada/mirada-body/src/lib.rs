@@ -19,7 +19,8 @@
 use std::collections::BTreeMap;
 
 use mirada_protocol::{
-    BodyEvent, BrainCommand, Decorations, OutputId, Permisos, Rect, WindowEffects, WindowId,
+    BodyEvent, BrainCommand, Decorations, OutputId, Permisos, Rect, TitlebarLayout, WindowEffects,
+    WindowId,
 };
 
 /// Una superficie Wayland desde la óptica del Cuerpo.
@@ -92,6 +93,8 @@ pub enum BodyOp {
     SetCursor(String),
     /// Fija los parámetros de decoración de las ventanas (marco, …).
     SetDecorations(Decorations),
+    /// Fija el layout de la barra de título (botones, grupos, alineación, estilo).
+    SetTitlebarLayout(TitlebarLayout),
     /// Fija los permisos de capacidad por ejecutable: el backend los consulta
     /// al decidir qué clientes ven los globals sensibles (el snoop de
     /// portapapeles `zwlr_data_control`, la inyección de teclas
@@ -228,6 +231,7 @@ impl BodyState {
             BrainCommand::GrabKeys(keys) => vec![BodyOp::SetGrabs(keys)],
             BrainCommand::SetCursor(name) => vec![BodyOp::SetCursor(name)],
             BrainCommand::SetDecorations(d) => vec![BodyOp::SetDecorations(d)],
+            BrainCommand::SetTitlebarLayout(l) => vec![BodyOp::SetTitlebarLayout(l)],
             BrainCommand::SetCapabilities(p) => vec![BodyOp::SetCapabilities(p)],
             BrainCommand::Spawn(cmd) => vec![BodyOp::Spawn(cmd)],
             BrainCommand::Shutdown => vec![BodyOp::Shutdown],

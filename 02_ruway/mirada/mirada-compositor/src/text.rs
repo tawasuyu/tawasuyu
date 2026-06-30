@@ -211,6 +211,62 @@ pub fn icon_square(px: f32, color: [u8; 4]) -> Rasterized {
     Rasterized { rgba, width: s, height: s }
 }
 
+/// Ícono **pantalla completa**: cuatro corchetes en las esquinas (apuntando
+/// hacia afuera). Dibujado a mano, mismo formato que los demás.
+pub fn icon_fullscreen(px: f32, color: [u8; 4]) -> Rasterized {
+    let s = px.max(6.0) as i32;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let pad = (s as f32 * 0.26).max(2.0);
+    let (lo, hi) = (pad, s as f32 - pad);
+    let th = (s as f32 * 0.11).clamp(1.4, 2.4);
+    let arm = (hi - lo) * 0.4; // largo de cada brazo del corchete
+    // Esquina sup-izq, sup-der, inf-izq, inf-der (dos brazos cada una).
+    draw_line_aa(&mut rgba, s, s, (lo, lo), (lo + arm, lo), th, color);
+    draw_line_aa(&mut rgba, s, s, (lo, lo), (lo, lo + arm), th, color);
+    draw_line_aa(&mut rgba, s, s, (hi, lo), (hi - arm, lo), th, color);
+    draw_line_aa(&mut rgba, s, s, (hi, lo), (hi, lo + arm), th, color);
+    draw_line_aa(&mut rgba, s, s, (lo, hi), (lo + arm, hi), th, color);
+    draw_line_aa(&mut rgba, s, s, (lo, hi), (lo, hi - arm), th, color);
+    draw_line_aa(&mut rgba, s, s, (hi, hi), (hi - arm, hi), th, color);
+    draw_line_aa(&mut rgba, s, s, (hi, hi), (hi, hi - arm), th, color);
+    Rasterized { rgba, width: s, height: s }
+}
+
+/// Ícono **menú** (hamburguesa: tres rayas horizontales). Abre el menú
+/// contextual de la ventana.
+pub fn icon_menu(px: f32, color: [u8; 4]) -> Rasterized {
+    let s = px.max(6.0) as i32;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let pad = (s as f32 * 0.26).max(2.0);
+    let (lo, hi) = (pad, s as f32 - pad);
+    let th = (s as f32 * 0.10).clamp(1.3, 2.2);
+    for k in 0..3 {
+        let y = lo + (hi - lo) * (k as f32) / 2.0;
+        draw_line_aa(&mut rgba, s, s, (lo, y), (hi, y), th, color);
+    }
+    Rasterized { rgba, width: s, height: s }
+}
+
+/// Ícono **flotar/teselar**: dos cuadraditos superpuestos (cascada).
+pub fn icon_float(px: f32, color: [u8; 4]) -> Rasterized {
+    let s = px.max(6.0) as i32;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let pad = (s as f32 * 0.26).max(2.0);
+    let th = (s as f32 * 0.10).clamp(1.3, 2.0);
+    let side = (s as f32 - 2.0 * pad) * 0.66;
+    let off = side * 0.34;
+    // Cuadrado de atrás (arriba-derecha) y de adelante (abajo-izquierda).
+    let sq = |rgba: &mut [u8], x: f32, y: f32| {
+        draw_line_aa(rgba, s, s, (x, y), (x + side, y), th, color);
+        draw_line_aa(rgba, s, s, (x, y + side), (x + side, y + side), th, color);
+        draw_line_aa(rgba, s, s, (x, y), (x, y + side), th, color);
+        draw_line_aa(rgba, s, s, (x + side, y), (x + side, y + side), th, color);
+    };
+    sq(&mut rgba, pad + off, pad);
+    sq(&mut rgba, pad, pad + off);
+    Rasterized { rgba, width: s, height: s }
+}
+
 /// Rellena un rect opaco/translúcido en el búfer (color en orden **R,G,B,A**,
 /// igual que [`blend_px`]). Recorta a los límites.
 fn fill_rect(rgba: &mut [u8], w: i32, h: i32, x: i32, y: i32, rw: i32, rh: i32, color: [u8; 4]) {

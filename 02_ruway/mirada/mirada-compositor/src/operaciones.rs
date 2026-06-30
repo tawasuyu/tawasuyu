@@ -768,6 +768,42 @@ impl App {
         self.apply_commands(cmds);
     }
 
+    /// Ejecuta la acción de un **botón del titlebar** sobre la ventana `id`.
+    /// Devuelve `false` para [`TitlebarAction::Menu`] —que el llamador resuelve
+    /// abriendo el menú contextual, porque necesita la posición del puntero— y
+    /// `true` para todo lo demás (ya manejado acá).
+    pub(crate) fn accion_titlebar(&mut self, id: u64, action: &mirada_brain::TitlebarAction) -> bool {
+        use mirada_brain::{DesktopAction, TitlebarAction as A};
+        match action {
+            A::Close => {
+                if let Some(w) = self.windows.iter().find(|w| w.id == id) {
+                    w.toplevel.send_close();
+                }
+            }
+            A::Minimize => self.minimizar_ventana(id),
+            A::Maximize => self.maximizar_ventana(id),
+            A::Spawn(cmd) => self.spawn_user(cmd),
+            A::Menu => return false, // lo abre el llamador (necesita el puntero)
+            A::Float | A::Fullscreen => {
+                let extra = if matches!(action, A::Float) {
+                    DesktopAction::ToggleFloat
+                } else {
+                    DesktopAction::ToggleFullscreen
+                };
+                let cmds = match &mut self.brain {
+                    Brain::Embedded(d) => {
+                        let mut c = d.apply(DesktopAction::FocusWindow(id));
+                        c.extend(d.apply(extra));
+                        c
+                    }
+                    Brain::Linked(_) => return true,
+                };
+                self.apply_commands(cmds);
+            }
+        }
+        true
+    }
+
     /// Cambia al escritorio `idx` (0-based) — confirmación del switcher de
     /// Win+Tab. Por el Cerebro embebido.
     /// El escritorio ("zona") activo, para el clipboard por zona. `0` si no se
@@ -1413,6 +1449,7 @@ impl App {
             }
             BodyOp::SetCursor(_) => {}
             BodyOp::SetDecorations(d) => self.decorations = d,
+            BodyOp::SetTitlebarLayout(l) => self.titlebar_layout = l,
             BodyOp::SetCapabilities(p) => *escribir_tolerante(&self.caps) = p,
             BodyOp::Spawn(cmd) => {
                 // Con un shell de credenciales arriba (greeter o lock) no se
@@ -2182,7 +2219,7 @@ impl App {
         // Ya en sesión: registra los atajos del escritorio y la decoración
         // (en modo greeter se omitieron a propósito — ver `build_app`).
         if let Brain::Embedded(desktop) = &self.brain {
-            let cmds = vec![desktop.grab_keys(), desktop.decorations()];
+            let cmds = vec![desktop.grab_keys(), desktop.decorations(), desktop.titlebar_layout()];
             self.apply_commands(cmds);
         }
 
