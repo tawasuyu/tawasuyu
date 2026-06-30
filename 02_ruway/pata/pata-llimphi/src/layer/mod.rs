@@ -670,7 +670,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         toplevel_mgr,
         idle_notifier,
         idle_notif: None,
-        energia_cfg: crate::energia::ConfigEnergia::default(),
+        energia_cfg: crate::energia::ConfigEnergia::from_core(&cfg.general.energia),
         energia_disparado: false,
         energia_pospuesto: false,
         idle_inhibit_mgr,

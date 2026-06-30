@@ -49,18 +49,28 @@ pub struct ConfigEnergia {
     pub cafe: bool,
 }
 
-impl Default for ConfigEnergia {
-    fn default() -> Self {
+impl ConfigEnergia {
+    /// Construye la config de runtime desde la política de disco
+    /// (`launcher.toml`, sección `[general.energia]`). El café arranca apagado:
+    /// es un toggle de sesión (el switch «mantener despierto»), no de disco.
+    pub fn from_core(c: &pata_core::config::EnergiaCfg) -> Self {
         Self {
-            habilitado: true,
-            suspender_secs: 900, // 15 min
-            apagar_secs: 0,      // apagar automático desactivado por defecto
-            solo_con_bateria: true,
-            cpu_ocupada_pct: 25.0,
-            carga_ocupada_por_core: 0.7,
-            etiquetas_despiertas: Vec::new(),
+            habilitado: c.habilitado,
+            suspender_secs: c.suspender_secs,
+            apagar_secs: c.apagar_secs,
+            solo_con_bateria: c.solo_con_bateria,
+            cpu_ocupada_pct: c.cpu_ocupada_pct,
+            carga_ocupada_por_core: c.carga_ocupada_por_core,
+            etiquetas_despiertas: c.etiquetas_despiertas.clone(),
             cafe: false,
         }
+    }
+}
+
+impl Default for ConfigEnergia {
+    // Los defaults seguros viven una sola vez, en `EnergiaCfg::default()`.
+    fn default() -> Self {
+        Self::from_core(&pata_core::config::EnergiaCfg::default())
     }
 }
 
