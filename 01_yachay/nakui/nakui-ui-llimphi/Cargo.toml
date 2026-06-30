@@ -18,6 +18,9 @@ llimphi-widget-app-header = { workspace = true }
 llimphi-widget-banner = { workspace = true }
 llimphi-widget-panel = { workspace = true }
 llimphi-widget-list = { workspace = true }
+# Ícono derivado (determinista) por módulo, pintado como vector.
+tullpu-icon-core = { workspace = true }
+tullpu-icon-llimphi = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-field = { workspace = true }
 llimphi-widget-text-input = { workspace = true }

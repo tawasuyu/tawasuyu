@@ -215,6 +215,114 @@ fn row_view<Msg: Clone + 'static>(row: ListRow<Msg>, height: f32, palette: &List
     .on_click(row.on_click)
 }
 
+// =============================================================================
+//  Variante con ícono líder
+// =============================================================================
+
+/// Como [`ListRow`] pero con un **ícono vectorial** opcional al inicio de la
+/// fila. El ícono es un `View<Msg>` ya construido por el caller (p.ej. con
+/// `tullpu_icon_llimphi::spec_view`) — el widget no conoce tullpu ni el motor de
+/// íconos, sólo lo coloca y deja sitio. Pensado para listas de módulos/apps que
+/// quieren un emblema por fila sin caer en glifos de fuente.
+pub struct IconRow<Msg> {
+    pub icon: Option<View<Msg>>,
+    pub label: String,
+    pub selected: bool,
+    pub on_click: Msg,
+}
+
+/// Especificación de una lista con íconos líderes. Misma forma que [`ListSpec`].
+pub struct IconListSpec<Msg> {
+    pub rows: Vec<IconRow<Msg>>,
+    pub total: usize,
+    pub caption: Option<String>,
+    pub truncated_hint: Option<String>,
+    pub row_height: f32,
+    pub palette: ListPalette,
+}
+
+/// Compone una lista con un ícono opcional por fila. Equivalente a [`list_view`]
+/// pero cada fila es `[icono] etiqueta`. Aditivo: no afecta a [`list_view`].
+pub fn icon_list_view<Msg: Clone + 'static>(spec: IconListSpec<Msg>) -> View<Msg> {
+    let IconListSpec { rows, total: _, caption, truncated_hint, row_height, palette } = spec;
+    let mut children: Vec<View<Msg>> = Vec::with_capacity(rows.len() + 2);
+
+    if let Some(text) = caption {
+        children.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+                padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(text, 10.0, palette.fg_muted, Alignment::Start),
+        );
+    }
+
+    for row in rows {
+        children.push(icon_row_view(row, row_height, &palette));
+    }
+
+    if let Some(text) = truncated_hint {
+        children.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+                padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(text, 10.0, palette.fg_muted, Alignment::Start),
+        );
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        padding: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(6.0_f32) },
+        ..Default::default()
+    })
+    .fill(palette.bg_panel)
+    .clip(true)
+    .children(children)
+}
+
+fn icon_row_view<Msg: Clone + 'static>(row: IconRow<Msg>, height: f32, palette: &ListPalette) -> View<Msg> {
+    let bg = if row.selected { palette.bg_selected } else { palette.bg_panel };
+    let icon_px = (height * 0.66).min(20.0).max(12.0);
+
+    let label = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(row.label, 12.0, palette.fg_text, Alignment::Start)
+    .ellipsis(1);
+
+    let mut children: Vec<View<Msg>> = Vec::with_capacity(2);
+    if let Some(icon) = row.icon {
+        children.push(
+            View::new(Style {
+                size: Size { width: length(icon_px), height: length(icon_px) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .children(vec![icon]),
+        );
+    }
+    children.push(label);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(height) },
+        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .fill(bg)
+    .children(children)
+    .on_click(row.on_click)
+}
+
 /// Función que el caller usa para reaccionar a un reorder. Recibe `(from,
 /// to)` — índices en `rows` — y devuelve el `Msg` a despachar (o `None`
 /// para ignorar el drop, p. ej. si `from == to`).

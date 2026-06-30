@@ -19,19 +19,25 @@ pub(crate) fn build_banners(model: &Model) -> Vec<View<Msg>> {
 pub(crate) fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
     let palette = ListPalette::from_theme(theme);
 
-    // Sección 1: lista de módulos.
-    let module_rows: Vec<ListRow<Msg>> = model
+    // Sección 1: lista de módulos. Cada módulo lleva un ícono VECTORIAL derivado
+    // determinísticamente de su `id` (identicon de tullpu-icon) — color y forma
+    // estables por módulo, en toda máquina, sin glifos de fuente.
+    let module_rows: Vec<IconRow<Msg>> = model
         .modules
         .iter()
         .enumerate()
-        .map(|(i, m)| ListRow {
+        .map(|(i, m)| IconRow {
+            icon: Some(tullpu_icon_llimphi::spec_view(
+                tullpu_icon_core::derivar_spec(&m.id),
+                theme.fg_text,
+            )),
             label: m.label.clone(),
             selected: model.selected_module == Some(i),
             on_click: Msg::SelectModule(i),
         })
         .collect();
 
-    let modules_panel = list_view(ListSpec {
+    let modules_panel = icon_list_view(IconListSpec {
         rows: module_rows,
         total: model.modules.len(),
         caption: Some(rimay_localize::t_args(

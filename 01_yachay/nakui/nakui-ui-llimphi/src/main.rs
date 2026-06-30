@@ -119,7 +119,9 @@ use llimphi_ui::{
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_field::{field_view, FieldPalette, FieldSpec as FieldWidgetSpec};
-use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
+use llimphi_widget_list::{
+    icon_list_view, list_view, IconListSpec, IconRow, ListPalette, ListRow, ListSpec,
+};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,

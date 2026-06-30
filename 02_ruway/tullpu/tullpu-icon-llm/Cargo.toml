@@ -1,0 +1,18 @@
+[package]
+name = "tullpu-icon-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tullpu-icon-llm — fachada híbrida: una descripción en lenguaje natural → IconSpec, vía un ChatClient de pluma-llm. La IA PROPONE el spec (datos), el compilador de tullpu-icon-core lo materializa en vectores. Sin LLM/credenciales cae a derivación paramétrica determinista."
+
+[dependencies]
+tullpu-icon-core = { workspace = true }
+pluma-llm-core = { path = "../../../00_unanchay/pluma/pluma-llm-core" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1"
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -285,6 +285,64 @@ impl IconSpec {
     }
 }
 
+// =============================================================================
+//  Derivación paramétrica — un ícono determinista a partir de una clave
+// =============================================================================
+
+/// Hash FNV-1a de 64 bits, sin dependencias. Estable entre corridas y máquinas
+/// (no usa `RandomState`), así la derivación es reproducible.
+fn fnv1a(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Paleta de fondos para los íconos derivados. Tonos saturados pero no chillones,
+/// pensados para llevar un emblema claro encima.
+const PALETA_DERIVA: [[u8; 4]; 8] = [
+    [229, 91, 122, 255], // rosa
+    [74, 134, 232, 255], // azul
+    [59, 178, 115, 255], // verde
+    [240, 168, 48, 255], // ámbar
+    [155, 89, 182, 255], // violeta
+    [43, 179, 192, 255], // teal
+    [231, 110, 80, 255], // terracota
+    [99, 110, 250, 255], // índigo
+];
+
+/// Deriva un [`IconSpec`] **determinista** a partir de una clave arbitraria
+/// (p.ej. el `id` de un módulo nakui, o una descripción). Estilo *identicon*:
+/// una baldosa redondeada de color elegido por el hash + un emblema geométrico
+/// (también por el hash) en blanco. Sirve como ícono estable y con color para
+/// cualquier entidad que no traiga uno propio — y como red de seguridad del
+/// generador IA cuando no hay backend disponible.
+///
+/// La misma clave da siempre el mismo ícono, en cualquier máquina.
+pub fn derivar_spec(clave: &str) -> IconSpec {
+    let h = fnv1a(clave);
+    let bg = PALETA_DERIVA[(h % PALETA_DERIVA.len() as u64) as usize];
+    let fg = [255, 255, 255, 255];
+    let emblema = (h >> 8) % 6;
+    let forma_emblema = match emblema {
+        0 => Forma::Circulo { cx: 12.0, cy: 12.0, r: 5.0 },
+        1 => Forma::Estrella { cx: 12.0, cy: 12.0, r_ext: 6.0, r_int: 2.6, puntas: 5 },
+        2 => Forma::PoligonoRegular { cx: 12.0, cy: 13.0, r: 6.0, lados: 3 },
+        3 => Forma::PoligonoRegular { cx: 12.0, cy: 12.0, r: 6.0, lados: 6 },
+        4 => Forma::Estrella { cx: 12.0, cy: 12.0, r_ext: 6.0, r_int: 2.4, puntas: 4 },
+        _ => Forma::RectRedondeado { x: 7.5, y: 7.5, w: 9.0, h: 9.0, r: 2.0 },
+    };
+    IconSpec::nuevo(
+        clave,
+        vec![
+            Capa::rellena(Forma::RectRedondeado { x: 2.0, y: 2.0, w: 20.0, h: 20.0, r: 5.0 }, Color::Rgba(bg)),
+            Capa::rellena(forma_emblema, Color::Rgba(fg)),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +405,20 @@ mod tests {
         let txt = serde_json::to_string(&spec).expect("serializa");
         let back: IconSpec = serde_json::from_str(&txt).expect("deserializa");
         assert_eq!(spec, back);
+    }
+
+    #[test]
+    fn derivar_es_determinista_y_pintable() {
+        // Misma clave → mismo ícono (bit a bit).
+        assert_eq!(derivar_spec("ventas"), derivar_spec("ventas"));
+        // Claves distintas → casi siempre distinto (al menos el fondo varía).
+        assert_ne!(derivar_spec("ventas"), derivar_spec("contabilidad"));
+        // Dos capas (baldosa + emblema), ambas con relleno.
+        let spec = derivar_spec("crm");
+        assert_eq!(spec.capas.len(), 2);
+        let r = ColorFijo::nuevo([0, 0, 0, 255]);
+        for pv in spec.compilar(&r) {
+            assert!(pv.relleno.is_some());
+        }
     }
 }
