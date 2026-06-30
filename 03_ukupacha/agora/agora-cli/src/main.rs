@@ -42,7 +42,7 @@ struct Cli {
 
 fn run(cmd: Cmd) -> CliResult<()> {
     match cmd {
-        Cmd::Desbloquear { id } => identidad::desbloquear(id),
+        Cmd::Desbloquear { id, passphrase_file } => identidad::desbloquear(id, passphrase_file),
         Cmd::Identidad { op } => match op {
             IdentidadOp::Nueva { name, kind, seed_stdin } => {
                 identidad::identidad_nueva(name, kind.into(), seed_stdin)

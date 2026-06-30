@@ -127,7 +127,53 @@ fn main() {
         shot_greeter(&out, w, h, mode);
         return;
     }
+    // Autologin (preferencia): si está configurado, emite el ticket y sale sin
+    // mostrar el prompt. No aplica al lock ni si algo pidió no-autologin.
+    if try_autologin(mode) {
+        return;
+    }
     llimphi_ui::run::<Greeter>();
+}
+
+/// Intenta el autologin. Devuelve `true` si emitió un `StartSession` (el caller
+/// debe salir sin mostrar UI). Best-effort: ante cualquier duda, cae al login
+/// normal en vez de trabarse.
+fn try_autologin(mode: GreeterMode) -> bool {
+    // Sólo en login (nunca en lock), y respeta un veto explícito (lo pone el DM
+    // al volver de un logout/cambio de usuario, para no re-entrar en bucle).
+    if mode != GreeterMode::Login || std::env::var_os("MIRADA_NO_AUTOLOGIN").is_some() {
+        return false;
+    }
+    let cfg = auth_core::AutologinCfg::load();
+    if !cfg.enabled || cfg.user.is_empty() {
+        return false;
+    }
+    let user = match auth_core::resolve_user(&cfg.user) {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("mirada-greeter · autologin: usuario «{}» no resuelve; muestro login", cfg.user);
+            return false;
+        }
+    };
+    // Resolver la sesión elegida → (exec, foreign), como en el login normal.
+    let sessions = sessions::discover();
+    let (exec, foreign) = sessions
+        .iter()
+        .find(|s| s.name == cfg.session)
+        .map(|s| (s.exec.clone(), s.foreign))
+        .unwrap_or_default();
+    let mut ticket = SessionTicket::new(user);
+    if !exec.is_empty() {
+        ticket = ticket.with_session(exec).foreign(foreign);
+    }
+    eprintln!(
+        "mirada-greeter · autologin: entrando como «{}» (sesión «{}», secretos={})",
+        cfg.user,
+        if cfg.session.is_empty() { "por defecto" } else { &cfg.session },
+        cfg.secretos.tag(),
+    );
+    emit_action(&ShellAction::StartSession(ticket));
+    true
 }
 
 /// Monitores simulados para `--shot` desde `MIRADA_SHOT_MONITORS`

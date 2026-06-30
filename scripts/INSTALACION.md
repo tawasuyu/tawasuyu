@@ -143,6 +143,29 @@ pacha:id:default` **antes** de cerrar tu sesión. Detalle completo en el `.examp
 Si la passphrase de agora NO es tu contraseña de login, usá el **desbloqueo
 manual**: el panel (Contextos → Identidad → Desbloquear) o `agora-cli desbloquear`.
 
+## Autologin (entrar sin contraseña)
+
+Preferencia para equipos de un solo usuario o de confianza física. Se configura en
+**wawa-panel → Inicio → Autologin** (toggle + usuario + sesión). El greeter lee
+`mirada/autologin.conf` y, si está activo, entra solo sin mostrar el prompt.
+
+Como el autologin **no te pide contraseña**, choca con el cifrado de dotfiles (que
+la necesita para desbloquear la identidad). Por eso, al activarlo, el panel **te
+hace elegir** el tradeoff:
+
+- **Manual (seguro, default):** tus dotfiles cifrados quedan **bloqueados** al
+  entrar; los desbloqueás cuando quieras (Contextos → Identidad, o `agora-cli
+  desbloquear`). Ninguna frase toca el disco.
+- **Sellada (cómodo, menos seguro):** la frase de tu identidad se guarda en un
+  archivo privado (`~/.config/mirada/.agora-seal`, modo 0600) y la sesión
+  auto-desbloquea al entrar (una línea `agora-cli desbloquear --passphrase-file …`
+  en tu autostart). **Debilita el modelo**: quien lea ese archivo desbloquea tus
+  secretos. Usalo sólo con disco cifrado (LUKS).
+
+El veto `MIRADA_NO_AUTOLOGIN=1` (lo pone el DM al volver de un logout/cambio de
+usuario) desactiva el autologin para esa invocación del greeter, para no entrar en
+bucle. El lock nunca autologuea.
+
 ## Desinstalar
 
 ```bash

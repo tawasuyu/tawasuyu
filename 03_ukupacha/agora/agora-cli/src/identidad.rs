@@ -14,10 +14,19 @@ use crate::sesion::{ahora_unix, hex_de, kind_label, leer_seed_de_stdin, CliResul
 /// Desbloquea la identidad (la indicada por `id`, o la única del keystore) y
 /// guarda su seed en el session keyring bajo `pacha:id:default`, que es donde
 /// `pacha`/`pacha-manager` la buscan para derivar la clave del store de dotfiles.
-pub fn desbloquear(id_input: Option<String>) -> CliResult<()> {
+pub fn desbloquear(id_input: Option<String>, passphrase_file: Option<std::path::PathBuf>) -> CliResult<()> {
     use pacha_llavero::Llavero;
 
     let s = Sesion::abrir()?;
+    // La frase: del archivo sellado si se indicó, si no la de `AGORA_PASSPHRASE`
+    // (que `Sesion::abrir` ya leyó). El archivo se trimea (sin el \n final).
+    let passphrase = match &passphrase_file {
+        Some(p) => std::fs::read_to_string(p)
+            .map_err(Error::Io)?
+            .trim_end_matches(['\n', '\r'])
+            .to_string(),
+        None => s.passphrase.clone(),
+    };
     let id = match id_input {
         Some(x) => s.resolver_id(&x)?,
         None => {
@@ -39,7 +48,7 @@ pub fn desbloquear(id_input: Option<String>) -> CliResult<()> {
             }
         }
     };
-    let seed = s.keystore.load(id, &s.passphrase).map_err(Error::Keystore)?;
+    let seed = s.keystore.load(id, &passphrase).map_err(Error::Keystore)?;
     pacha_llavero::LlaveroKernel::new()
         .guardar("id:default", &seed)
         .map_err(|e| Error::Llavero(e.to_string()))?;

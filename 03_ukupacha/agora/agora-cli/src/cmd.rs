@@ -22,6 +22,10 @@ pub enum Cmd {
         /// el keystore, se usa esa.
         #[arg(long)]
         id: Option<String>,
+        /// Lee la passphrase de este archivo (en vez de `AGORA_PASSPHRASE`). Para
+        /// el auto-desbloqueo «sellado» del autologin: un archivo 0600 con la frase.
+        #[arg(long)]
+        passphrase_file: Option<PathBuf>,
     },
     /// Operaciones sobre identidades.
     Identidad {

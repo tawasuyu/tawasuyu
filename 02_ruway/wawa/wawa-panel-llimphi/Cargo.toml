@@ -40,6 +40,8 @@ paloma-config = { path = "../../paloma/paloma-config" }
 pacha-core = { path = "../../../shared/pacha/pacha-core" }
 pacha-dotfiles = { path = "../../../shared/pacha/pacha-dotfiles" }
 pacha-llavero = { path = "../../../shared/pacha/pacha-llavero" }
+# Autologin: el diente «Inicio» edita la política (auth_core::AutologinCfg).
+auth-core = { path = "../../../shared/auth/auth-core" }
 directories = { workspace = true }
 # Editor de recorrido (Prezi) de la vista espacial: lienzo libre + rotación.
 pluma-deck-core = { path = "../../../00_unanchay/pluma/pluma-deck-core" }

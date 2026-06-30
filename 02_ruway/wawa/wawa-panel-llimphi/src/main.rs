@@ -16,6 +16,7 @@
 
 mod animaciones;
 mod greeter;
+mod autologin;
 mod pacha;
 mod paloma;
 mod plugins;
@@ -333,6 +334,9 @@ struct Model {
     /// Catálogo de **contextos** (pacha): modos de uso con nombre. El diente
     /// «Contextos» edita `pachas.ron` y muestra el estado del cifrado de dotfiles.
     pacha: pacha::PachaState,
+    /// Política de **autologin** (entrar sin contraseña). El diente «Inicio» la
+    /// edita; el greeter la lee. Incluye el tradeoff de secretos.
+    autologin: autologin::AutologinState,
     /// Config del **greeter** (DM): fondo animado + paleta. Se persiste en
     /// `greeter.conf`; el greeter la lee en el próximo login.
     greeter: greeter::GreeterCfg,
@@ -719,6 +723,8 @@ struct SaveDirty {
     paloma: bool,
     /// Catálogo de contextos de pacha (`pachas.ron`).
     pacha: bool,
+    /// Política de autologin (`autologin.conf`).
+    autologin: bool,
 }
 
 #[derive(Clone)]
@@ -1503,6 +1509,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
     let splash_cfg = splash::SplashCfg::load();
     let paloma = paloma::PalomaState::load();
     let pacha = pacha::PachaState::load();
+    let autologin = autologin::AutologinState::load();
 
     let prezi = PreziEdit::from_config(&mirada);
     let monitor = MonitorEdit::from_config(&mirada);
@@ -1531,6 +1538,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         animaciones,
         paloma,
         pacha,
+        autologin,
         greeter: greeter_cfg,
         splash: splash_cfg,
         monitor,
@@ -1872,6 +1880,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
     // ---- Panel INICIO ----
     let mut inicio = Schema::new();
     inicio.sections.push(arranque_section());
+    inicio.sections.push(autologin::section(&m.autologin));
     inicio.sections.push(autostart_section());
     inicio.sections.push(remote::sessions_section(&m.mirada.startup));
     inicio.sections.push(plugins::plugins_section(&m.mirada_plugins));
@@ -4185,6 +4194,17 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             }
             return;
         }
+        "autologin" => {
+            let action = autologin::route(&mut m.autologin, &rel, value);
+            if action.dirty {
+                m.dirty.autologin = true;
+                m.save_in = SAVE_DELAY_TICKS;
+            }
+            if !action.status.is_empty() {
+                m.status = action.status;
+            }
+            return;
+        }
         _ => return,
     }
     // Editar mirada/pata/atajos modifica el perfil ACTIVO: vuelca la config viva
@@ -4304,6 +4324,13 @@ fn flush_saves(m: &mut Model) {
         }
         m.dirty.pacha = false;
     }
+    if m.dirty.autologin {
+        match m.autologin.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· autologin save: {e}")),
+        }
+        m.dirty.autologin = false;
+    }
     if m.dirty.splash {
         match m.splash.save() {
             Ok(()) => {
@@ -4410,6 +4437,9 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
     }
     if key == "pacha" {
         return pacha::text_value(&m.pacha, &rel).unwrap_or_default();
+    }
+    if key == "autologin" {
+        return autologin::text_value(&m.autologin, &rel).unwrap_or_default();
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),

@@ -17,11 +17,13 @@
 //! compositor necesita para arrancar la sesión.
 
 mod accion;
+mod autologin;
 mod pam_backend;
 mod ticket;
 mod user;
 
 pub use accion::{ShellAction, CANCEL_TAG, UNLOCK_TAG};
+pub use autologin::{AutologinCfg, SecretosPolitica};
 pub use pam_backend::{PamAuthenticator, DEFAULT_SERVICE};
 pub use ticket::{SessionTicket, TICKET_TAG};
 pub use user::{resolve_user, UserInfo};
