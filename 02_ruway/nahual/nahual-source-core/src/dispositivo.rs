@@ -23,7 +23,7 @@
 //! `Source` deja deshabilitadas crear/borrar/renombrar. Escribir en un FS ajeno
 //! sin driver es otra liga; esta fase sólo lee.
 
-use std::io::{self};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use foreign_fs::particion::{
@@ -156,6 +156,25 @@ impl DispositivosSource {
     }
 }
 
+impl DispositivosSource {
+    /// Vuelca la hoja `id` a `w` por STREAMING: lee el archivo en ventanas
+    /// (foreign-fs `leer_archivo_en`) sin materializarlo entero en RAM. Devuelve
+    /// los bytes escritos. Es lo que deja EXTRAER un archivo grande (un video,
+    /// una ISO) de un dispositivo sin OOM —a diferencia de [`Source::read`], que
+    /// devuelve un `Vec` completo—.
+    pub fn leer_a_escritor<W: Write>(&self, id: &NodeId, w: &mut W) -> io::Result<u64> {
+        match decode(id)? {
+            Loc::Ruta { ruta_dev, indice, interna } => {
+                volcar_particion(&ruta_dev, indice, &interna, w)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "sólo una hoja de un dispositivo se vuelca por streaming",
+            )),
+        }
+    }
+}
+
 impl Source for DispositivosSource {
     fn label(&self) -> String {
         "Dispositivos".into()
@@ -274,6 +293,57 @@ fn listar_generico<L: LectorFs>(
     // Orden presentable: contenedores primero, luego por nombre.
     out.sort_by(|a, b| b.is_container.cmp(&a.is_container).then(a.name.cmp(&b.name)));
     Ok(out)
+}
+
+/// Tamaño de ventana de streaming (256 KiB, = `foreign_fs::TAMANO_TROZO`): el
+/// pico de RAM al extraer es una ventana, no el archivo entero.
+const VENTANA: usize = 256 * 1024;
+
+/// Despacho streaming (espejo de [`con_particion`], pero escribe a `w` en vez de
+/// devolver). Inline —y no con cierres sobre `con_particion`— porque dos cierres
+/// capturando `&mut w` no compilan aunque sólo corra uno.
+fn volcar_particion<W: Write>(
+    ruta_dev: &Path,
+    indice: usize,
+    interna: &str,
+    w: &mut W,
+) -> io::Result<u64> {
+    let fuente = FuenteArchivo::abrir(ruta_dev)?;
+    let parts = tabla_particiones_fuente(&fuente).map_err(fserr)?;
+    let p = parts.into_iter().find(|p| p.indice == indice).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, format!("partición {indice} inexistente"))
+    })?;
+    let sub = SubFuente::nueva(fuente, p.inicio, p.tam);
+    match detectar_fs_fuente(&sub) {
+        SistemaArchivos::Fat => volcar_generico(&LectorFat::nuevo(sub).map_err(fserr)?, interna, w),
+        SistemaArchivos::Ext => volcar_generico(&LectorExt4::nuevo(sub).map_err(fserr)?, interna, w),
+        SistemaArchivos::Desconocido => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "el FS de la partición no es FAT ni ext",
+        )),
+    }
+}
+
+/// Resuelve `interna` a una hoja y la streamea a `w` por ventanas de [`VENTANA`].
+fn volcar_generico<L: LectorFs, W: Write>(fs: &L, interna: &str, w: &mut W) -> io::Result<u64> {
+    let (manija, es_dir) = resolver(fs, interna)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("ruta inexistente: {interna}")))?;
+    if es_dir {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "un directorio no se vuelca como hoja"));
+    }
+    let mut buf = vec![0u8; VENTANA];
+    let mut offset = 0u64;
+    let mut total = 0u64;
+    loop {
+        let n = fs.leer_archivo_en(&manija, offset, &mut buf).map_err(fserr)?;
+        if n == 0 {
+            break;
+        }
+        w.write_all(&buf[..n])?;
+        offset += n as u64;
+        total += n as u64;
+    }
+    Ok(total)
 }
 
 fn leer_generico<L: LectorFs>(fs: &L, interna: &str) -> io::Result<Vec<u8>> {

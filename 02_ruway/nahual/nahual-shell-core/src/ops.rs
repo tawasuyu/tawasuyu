@@ -81,10 +81,11 @@ impl OpKind {
 }
 
 /// Vuelca el nodo `id` de `origen` a la ruta POSIX `destino`, recursivo. Un
-/// archivo se lee entero y se escribe; un directorio se crea y se baja a sus
-/// hijos. Los nombres se sanean (un FS ajeno podría traer `..` o `/`).
+/// archivo se STREAMEA por ventanas (sin materializarlo entero en RAM — clave
+/// para un video/ISO grande); un directorio se crea y se baja a sus hijos. Los
+/// nombres se sanean (un FS ajeno podría traer `..` o `/`).
 fn extraer_nodo(
-    origen: &dyn Source,
+    origen: &DispositivosSource,
     id: &NodeId,
     es_dir: bool,
     destino: &Path,
@@ -99,8 +100,8 @@ fn extraer_nodo(
         if let Some(p) = destino.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let bytes = origen.read(id)?;
-        std::fs::write(destino, bytes)?;
+        let mut f = std::fs::File::create(destino)?;
+        origen.leer_a_escritor(id, &mut f)?;
     }
     Ok(())
 }
@@ -295,6 +296,53 @@ mod tests {
         let resultado = op.run().unwrap().unwrap();
         assert_eq!(fs::read(&resultado).unwrap(), b"datos del usb\n");
         assert_eq!(fs::read(destino.join("hola.txt")).unwrap(), b"datos del usb\n");
+    }
+
+    #[test]
+    fn extraer_archivo_grande_streamea_identico() {
+        use nahual_source_core::{DispositivoInfo, DispositivosSource};
+        use std::process::Command;
+        if !which("mkfs.fat") || !which("mcopy") {
+            eprintln!("SKIP: faltan mkfs.fat/mcopy");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("disco.img");
+        fs::File::create(&img).unwrap().set_len(8 * 1024 * 1024).unwrap();
+        assert!(Command::new("mkfs.fat").arg(&img).output().unwrap().status.success());
+
+        // 700 KiB: cruza la ventana de 256 KiB tres veces — ejercita el lazo de
+        // streaming (varias `leer_archivo_en`), no una sola lectura.
+        let grande: Vec<u8> = (0..700_000u32).map(|i| (i % 251) as u8).collect();
+        let fuente = dir.path().join("grande.bin");
+        fs::write(&fuente, &grande).unwrap();
+        assert!(Command::new("mcopy")
+            .arg("-i").arg(&img).arg(&fuente).arg("::grande.bin")
+            .output().unwrap().status.success());
+
+        let info = DispositivoInfo {
+            ruta: img.clone(),
+            nombre: "usb".into(),
+            tam: Some(fs::metadata(&img).unwrap().len()),
+            removible: true,
+            modelo: None,
+        };
+        let src = DispositivosSource::con_dispositivos(vec![info]);
+        let parts = src.children(&src.children(&src.root().id).unwrap()[0].id).unwrap();
+        let files = src.children(&parts[0].id).unwrap();
+        let archivo = files.iter().find(|n| n.name == "grande.bin").expect("grande.bin");
+
+        let destino = dir.path().join("salida");
+        fs::create_dir_all(&destino).unwrap();
+        let op = OpKind::Extraer {
+            src_id: archivo.id.clone(),
+            name: "grande.bin".into(),
+            es_dir: false,
+            dest_parent: destino.to_string_lossy().into_owned(),
+        };
+        op.run().unwrap().unwrap();
+        // Byte-idéntico tras streamear por ventanas.
+        assert_eq!(fs::read(destino.join("grande.bin")).unwrap(), grande);
     }
 
     #[test]
