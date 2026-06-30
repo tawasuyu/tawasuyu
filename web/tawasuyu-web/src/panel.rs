@@ -753,6 +753,27 @@ fn render_language(lang: &str) -> String {
     )
 }
 
+/// Mapea el `title` de una card al nombre de archivo del ícono de marca
+/// (`AppIcon::name`). Colapsa los títulos compuestos (`mirada-compositor`,
+/// `arje-seeds`…) a su app raíz. `None` si no hay ícono para esa card.
+fn icon_de(title: &str) -> Option<&'static str> {
+    let t = title.trim();
+    let base = if t.starts_with("mirada") {
+        "mirada"
+    } else if t.starts_with("arje") {
+        "arje"
+    } else {
+        t
+    };
+    const NAMES: &[&str] = &[
+        "chaka", "khipu", "pineal", "pluma", "puriy", "rimay", "cosmos", "dominium", "iniy",
+        "nakui", "tinkuy", "ayni", "cards", "chasqui", "llimphi", "media", "mirada", "nada",
+        "nahual", "shuma", "supay", "takiy", "tullpu", "wawa", "agora", "arje", "minga",
+        "sandokan", "wawa-explorer",
+    ];
+    NAMES.iter().copied().find(|n| *n == base)
+}
+
 fn render_apps() -> String {
     // Catálogo de apps. (name, quad-label, theme, desc, doc-url, doc-title)
     // Los textos son cortos a propósito; cada card abre el README/SDD en una
@@ -832,10 +853,18 @@ fn render_apps() -> String {
 
     let mut body = String::new();
     for (name, quad, theme, desc, url, title) in cards {
+        // Ícono de marca de la app (SVG generado de AppIcon, ver
+        // `tawasuyu-apps-desktop --svg-dir`). Si el título no mapea, sin ícono.
+        let icono = match icon_de(title) {
+            Some(n) => format!(
+                r#"<img class="panel-card-icon" src="/web/tawasuyu-web/assets/icons/{n}.svg" alt="" width="20" height="20" />"#
+            ),
+            None => String::new(),
+        };
         body.push_str(&format!(
             r#"<div class="panel-card" data-theme="{theme}" data-doc="{url}" data-title="{title}">
   <div class="panel-card-head">
-    <span class="panel-card-name">{name}</span>
+    {icono}<span class="panel-card-name">{name}</span>
     <span class="panel-card-quad">{quad}</span>
   </div>
   <div class="panel-card-desc">{desc}</div>

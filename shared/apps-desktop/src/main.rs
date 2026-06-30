@@ -24,16 +24,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use app_bus::{default_entries, AppEntry, Launch};
-use llimphi_icons::app_icons::{app_icon_svg, AppIcon};
+use llimphi_icons::app_icons::{app_icon_svg, AppIcon, ALL};
 
 fn main() {
     let mut base: Option<PathBuf> = None;
+    let mut svg_dir: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--prefix" => base = args.next().map(PathBuf::from),
+            // Vuelca todos los AppIcon como `<name>.svg` planos en <dir> y sale
+            // (para la web u otros consumidores de assets sueltos).
+            "--svg-dir" => svg_dir = args.next().map(PathBuf::from),
             "-h" | "--help" => {
-                eprintln!("uso: tawasuyu-apps-desktop [--prefix <data-dir>]");
+                eprintln!("uso: tawasuyu-apps-desktop [--prefix <data-dir>] [--svg-dir <dir>]");
                 return;
             }
             otro => {
@@ -41,6 +45,11 @@ fn main() {
                 std::process::exit(2);
             }
         }
+    }
+
+    if let Some(dir) = svg_dir {
+        volcar_svgs_planos(&dir);
+        return;
     }
 
     let data_dir = base.unwrap_or_else(default_data_dir);
@@ -90,6 +99,24 @@ fn main() {
 
     println!("{n_desktop} .desktop y {n_icon} íconos en {}", data_dir.display());
     refrescar_db(&apps_dir);
+}
+
+/// Vuelca los 29 `AppIcon` como `<name>.svg` planos en `dir` (la web los
+/// referencia por `<img src="assets/icons/<name>.svg">`).
+fn volcar_svgs_planos(dir: &Path) {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("no pude crear {}: {e}", dir.display());
+        std::process::exit(1);
+    }
+    let mut n = 0usize;
+    for icon in ALL {
+        let ruta = dir.join(format!("{}.svg", icon.name()));
+        match std::fs::write(&ruta, app_icon_svg(icon, 1.8)) {
+            Ok(()) => n += 1,
+            Err(e) => eprintln!("  ! {}: {e}", icon.name()),
+        }
+    }
+    println!("{n} íconos SVG en {}", dir.display());
 }
 
 /// `$XDG_DATA_HOME` o `~/.local/share`.

@@ -981,14 +981,23 @@ body.sidebar-stowed #sidebar.panel-open .dock-panel { display: none; }
 }
 .panel-card-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  align-items: center;
+  gap: 7px;
+}
+.panel-card-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  display: block;
 }
 .panel-card-name {
   font-size: 13px;
   color: var(--fg-text);
   letter-spacing: 0.04em;
+}
+/* El cuadrante se va a la derecha; el ícono + nombre quedan agrupados a la izq. */
+.panel-card-quad {
+  margin-left: auto;
 }
 .panel-card-quad {
   font-size: 10px;
