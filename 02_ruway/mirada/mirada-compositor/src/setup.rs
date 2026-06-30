@@ -506,6 +506,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         titlebar_layout: mirada_brain::TitlebarLayout::default(),
         aware_items: std::collections::HashMap::new(),
         aware_clicks: std::collections::HashMap::new(),
+        autoexec_procs: std::collections::HashMap::new(),
         ssd_surfaces: std::collections::HashSet::new(),
         caps,
         pending_keybind: None,

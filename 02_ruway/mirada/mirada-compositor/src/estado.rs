@@ -648,6 +648,10 @@ pub(crate) struct App {
     /// Clicks pendientes sobre botones aportados, por `app_id` — la app los
     /// drena con `PollClicks`.
     pub(crate) aware_clicks: std::collections::HashMap<String, Vec<mirada_aware::AwareClick>>,
+    /// Apps de **autoexec** que el compositor lanzó, por comando → (PID,
+    /// efímero). Sirve para no relanzar (idempotencia) y para `SIGTERM` a los
+    /// efímeros al cambiar de vista. Ver `reconcile_autoexec`.
+    pub(crate) autoexec_procs: std::collections::HashMap<String, (u32, bool)>,
     /// Superficies cuyo cliente aceptó decoración del servidor (SSD) vía
     /// `xdg-decoration`. Fuente de verdad de [`ManagedWindow::ssd`]; una
     /// ventana ausente de este set se decora sola (CSD) y mirada no le pinta

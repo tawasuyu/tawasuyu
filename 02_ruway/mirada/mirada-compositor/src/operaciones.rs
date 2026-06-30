@@ -929,6 +929,40 @@ impl App {
         }
     }
 
+    /// Lanza un comando de **autoexec** como el usuario de la sesión y devuelve su
+    /// PID. No-op (con un shell de credenciales arriba) → `None`.
+    fn spawn_autoexec(&self, cmd: &str) -> Option<u32> {
+        if self.shell_activo() {
+            return None;
+        }
+        spawn_command(cmd, self.active_user().as_ref(), &self.active_env())
+    }
+
+    /// Reconcilia las **apps de arranque de la vista** (`autoexec`) con lo que ya
+    /// está corriendo: termina (`SIGTERM`) los efímeros que dejaron de estar
+    /// (cambio de vista) y lanza los nuevos. **No relanza** lo ya lanzado (respeta
+    /// que el usuario lo cierre a mano). La decisión la toma
+    /// [`mirada_brain::autoexec_plan`]; acá sólo se ejecuta.
+    pub(crate) fn reconcile_autoexec(&mut self, autoexec: &[mirada_brain::AutoExec]) {
+        let running: std::collections::HashMap<String, bool> =
+            self.autoexec_procs.iter().map(|(c, (_, eph))| (c.clone(), *eph)).collect();
+        let (kill, launch) = mirada_brain::autoexec_plan(&running, autoexec);
+        for cmd in kill {
+            if let Some((pid, _)) = self.autoexec_procs.remove(&cmd) {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+                println!("mirada-compositor · autoexec efímero terminado (pid {pid}): {cmd}");
+            }
+        }
+        for a in launch {
+            if let Some(pid) = self.spawn_autoexec(&a.command) {
+                self.autoexec_procs.insert(a.command.clone(), (pid, a.ephemeral));
+            }
+        }
+    }
+
     /// Recarga el keymap del usuario en caliente. Conserva el anterior si
     /// el archivo nuevo es inválido. No-op con el Cerebro enlazado (el
     /// keymap es asunto suyo). Lo dispara [`ConfigWatches::poll`].
@@ -963,6 +997,9 @@ impl App {
     pub(crate) fn reload_config_from(&mut self, path: &std::path::Path) {
         match mirada_brain::Config::load(path) {
             Ok(cfg) => {
+                // El autoexec viaja en la config: lo reconciliamos esté el Cerebro
+                // embebido o enlazado (lanzar/matar procesos es del Cuerpo).
+                let autoexec = cfg.autoexec.clone();
                 let cmds = if let Brain::Embedded(d) = &mut self.brain {
                     d.reload_config(cfg)
                 } else {
@@ -972,6 +1009,7 @@ impl App {
                     self.apply_commands(cmds);
                     println!("mirada-compositor · config recargada.");
                 }
+                self.reconcile_autoexec(&autoexec);
             }
             Err(e) => {
                 dlog!("mirada-compositor · config inválida, conservo la anterior: {e}")
@@ -2253,7 +2291,10 @@ impl App {
         // (en modo greeter se omitieron a propósito — ver `build_app`).
         if let Brain::Embedded(desktop) = &self.brain {
             let cmds = vec![desktop.grab_keys(), desktop.decorations(), desktop.titlebar_layout()];
+            let autoexec = desktop.config().autoexec.clone();
             self.apply_commands(cmds);
+            // Apps de arranque de la vista inicial (ya con el entorno de sesión).
+            self.reconcile_autoexec(&autoexec);
         }
 
         // Arranca la sesión. Tres caminos:

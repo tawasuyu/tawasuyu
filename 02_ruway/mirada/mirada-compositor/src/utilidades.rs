@@ -544,10 +544,18 @@ pub(crate) fn menu_node_from_entry(e: &mirada_brain::MenuEntry) -> crate::menu::
     }
 }
 
-pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: &[(String, String)]) {
+/// Lanza `cmd` como el usuario de la sesión. Devuelve el **PID** del hijo cuando
+/// lo spawnea por el camino crudo (para que el autoexec pueda terminarlo luego);
+/// `None` si no hay comando, si falla, o si lo entregó a arje como Ente (modo
+/// session-manager, donde el PID no es nuestro).
+pub(crate) fn spawn_command(
+    cmd: &str,
+    as_user: Option<&UserInfo>,
+    session_env: &[(String, String)],
+) -> Option<u32> {
     let cmd = cmd.trim();
     if cmd.is_empty() {
-        return;
+        return None;
     }
     // Session-manager (opt-in, `MIRADA_SESSION_ENTES=1`): entregar la app a arje
     // como Ente supervisado + re-floorable en vez de spawnearla cruda. Default OFF
@@ -557,7 +565,7 @@ pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: 
     if crate::session::ente_mode() {
         let label = cmd.split_whitespace().next().unwrap_or("app");
         if crate::session::try_spawn_as_ente(label, cmd, as_user, session_env) {
-            return;
+            return None; // lo maneja arje; el PID no es nuestro
         }
     }
     let mut command = std::process::Command::new("sh");
@@ -584,8 +592,15 @@ pub(crate) fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: 
         }
     }
     match command.spawn() {
-        Ok(child) => println!("mirada-compositor · lanzado (pid {}): {cmd}", child.id()),
-        Err(e) => dlog!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
+        Ok(child) => {
+            let pid = child.id();
+            println!("mirada-compositor · lanzado (pid {pid}): {cmd}");
+            Some(pid)
+        }
+        Err(e) => {
+            dlog!("mirada-compositor · no pude lanzar «{cmd}»: {e}");
+            None
+        }
     }
 }
 

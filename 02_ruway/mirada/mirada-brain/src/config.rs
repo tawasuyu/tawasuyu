@@ -427,6 +427,12 @@ pub struct Config {
     /// editar. Viaja al Cuerpo aparte de las decoraciones (no es `Copy`).
     #[serde(default)]
     pub titlebar_layout: crate::TitlebarLayout,
+    /// **Apps de arranque de la vista** (`autoexec`): comandos que el compositor
+    /// lanza al aplicar la vista. Los marcados `ephemeral` mueren al cambiar de
+    /// vista (la app *pertenece* a la vista, p. ej. el Program Manager de Win3.1);
+    /// los demás sobreviven. Vacío por defecto.
+    #[serde(default)]
+    pub autoexec: Vec<crate::AutoExec>,
     /// **Glass — radio del desenfoque del fondo** detrás del chrome translúcido
     /// (hoy el menú raíz), en px (0–40). `0` (default) = sin glass. El compositor
     /// pasa el wallpaper por un blur de caja (una vez, al rearmarlo) y lo usa
@@ -1024,6 +1030,7 @@ impl Default for Config {
             unfocused_dim_pct: 0,
             corner_radius: 0,
             titlebar_layout: crate::TitlebarLayout::default(),
+            autoexec: Vec::new(),
             glass_blur: 0,
             glass_quality: default_glass_quality(),
             reduce_motion: false,

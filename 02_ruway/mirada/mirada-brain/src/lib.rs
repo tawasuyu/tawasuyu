@@ -22,6 +22,7 @@
 
 pub mod action;
 pub mod activity;
+pub mod autoexec;
 pub mod config;
 pub mod ctl;
 pub mod desktop;
@@ -45,6 +46,7 @@ pub use action::{
     DesktopAction, PRESET_NAMES, WORKSPACE_COUNT,
 };
 pub use activity::{ActivityGraph, Lineage};
+pub use autoexec::{autoexec_plan, AutoExec};
 pub use config::{
     default_root_menu, default_zones, waypipe_command, waypipe_ssh_command, Config, Easing,
     MenuEntry, OutputOverride, OverviewPlace, StartupApp, WaypipeTuning, WorkspaceSwitchMode,
