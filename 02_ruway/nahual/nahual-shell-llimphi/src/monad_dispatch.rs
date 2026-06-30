@@ -99,6 +99,21 @@ pub fn view_mode_for_hint(hint: &str) -> Option<ViewMode> {
     })
 }
 
+/// El **id de app** que abre una Mónada de cierto lente, a partir de su
+/// mime-hint (`monada/<lente>`). Es [`default_app_id`] reexpresado sobre el
+/// hint que cruza la frontera `dyn Source`, para el "abrir Mónada con…"
+/// externo. `None` = sin editor de dominio (la Mónada se queda en el panel
+/// in-canvas). El test `app_id_sigue_a_lens_mime` lo ata a [`default_app_id`].
+pub fn app_id_for_hint(hint: &str) -> Option<&'static str> {
+    match hint {
+        "monada/gallery" => Some("tullpu"),
+        "monada/code" | "monada/tree" => Some("nada"),
+        "monada/database" => Some("nakui"),
+        "monada/markdown" => Some("pluma"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +161,18 @@ mod tests {
         assert_eq!(lens_mime(Lens::Grid), None);
         // Un hint ajeno no fuerza vista.
         assert_eq!(view_mode_for_hint("text/plain"), None);
+    }
+
+    #[test]
+    fn app_id_sigue_a_lens_mime() {
+        use nahual_source_core::lens_mime;
+        // El app-id por hint debe coincidir con default_app_id(lente) para cada
+        // lente con hint — ata los dos caminos (por lente / por hint).
+        for lens in [Lens::Gallery, Lens::Code, Lens::Database, Lens::Markdown, Lens::Tree] {
+            let hint = lens_mime(lens).unwrap();
+            assert_eq!(app_id_for_hint(hint), default_app_id(lens), "lente {lens:?}");
+        }
+        assert_eq!(app_id_for_hint("text/plain"), None);
     }
 
     #[test]

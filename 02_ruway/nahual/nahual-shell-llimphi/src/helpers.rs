@@ -66,6 +66,28 @@ pub(crate) fn compute_open_with(m: &mut Model) {
     m.ctx_target = None;
     m.ctx_temp = None;
 
+    // Caso Mónada: el cursor sobre una Mónada (contenedor sintético `m:` con
+    // lente) ofrece "abrir la Mónada con" la app de su lente, apuntando a su
+    // anclaje en disco (el directorio del que se clusterizó). Reusa todo el
+    // render/flujo de open-with (ctx_open_with + Msg::OpenWith).
+    let monada = m
+        .cur()
+        .selected_node()
+        .filter(|n| n.is_container && n.id.starts_with("m:"))
+        .map(|n| (n.id.clone(), n.mime_hint.clone()));
+    if let Some((id, hint)) = monada {
+        let target = m.cur().monad_graph().and_then(|g| g.monad_open_target(&id));
+        if let (Some(hint), Some(target)) = (hint, target) {
+            if let Some(app_id) = crate::monad_dispatch::app_id_for_hint(&hint) {
+                if let Some(app) = m.registry.get(app_id).map(|a| (a.id.clone(), a.label.clone())) {
+                    m.ctx_open_with.push(app);
+                    m.ctx_target = Some(PathBuf::from(target));
+                }
+            }
+        }
+        return;
+    }
+
     let nav = m.cur();
     let (path, temp): (Option<PathBuf>, Option<tempfile::TempDir>) = match nav.selected_node() {
         Some(n) if !n.is_container => {

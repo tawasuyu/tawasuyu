@@ -225,6 +225,12 @@ pub trait MonadGraphMut: Source {
     /// Borra la Mónada `id` y la desvincula de todo padre. No borra archivos
     /// ni sub-Mónadas — sólo disuelve el agrupamiento.
     fn delete_monad(&self, id: &NodeId) -> std::io::Result<()>;
+
+    /// **Anclaje en disco** de la Mónada `id`, si tiene uno: el directorio del
+    /// que se clusterizó. Es lo que el front abre cuando "abrís la Mónada con
+    /// una app" (galería→tullpu, etc.) — la app recibe ese directorio.
+    /// `None` para Mónadas intensionales/derivadas sin raíz física.
+    fn monad_open_target(&self, id: &NodeId) -> Option<String>;
 }
 
 /// La cara **mutable** de una fuente. Trait aparte (no métodos en [`Source`])

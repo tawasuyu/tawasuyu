@@ -284,6 +284,12 @@ impl MonadGraphMut for NouserSource {
         edit::delete_monad(&mut db, mid);
         Ok(())
     }
+
+    fn monad_open_target(&self, id: &NodeId) -> Option<String> {
+        let mid = parse_monada(id)?;
+        let db = self.db.read().ok()?;
+        db.monad(mid).and_then(|m| m.path_hint.clone())
+    }
 }
 
 #[cfg(test)]
