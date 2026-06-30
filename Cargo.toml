@@ -204,6 +204,7 @@ members = [
     "02_ruway/cards",
     "02_ruway/tullpu/tullpu-core",
     "02_ruway/tullpu/tullpu-icon-core",
+    "02_ruway/tullpu/tullpu-icon-cli",
     "02_ruway/tullpu/tullpu-render",
     "02_ruway/tullpu/tullpu-render-gpu",
     "02_ruway/tullpu/tullpu-ops",
@@ -1002,6 +1003,8 @@ media-module = { path = "02_ruway/media/media-module" }
 tullpu-module = { path = "02_ruway/tullpu/tullpu-module" }
 tullpu-core = { path = "02_ruway/tullpu/tullpu-core" }
 tullpu-icon-core = { path = "02_ruway/tullpu/tullpu-icon-core" }
+tullpu-icon-cli = { path = "02_ruway/tullpu/tullpu-icon-cli" }
+foreign-svg = { path = "shared/foreign-svg" }
 tullpu-render = { path = "02_ruway/tullpu/tullpu-render" }
 tullpu-render-gpu = { path = "02_ruway/tullpu/tullpu-render-gpu" }
 tullpu-ops = { path = "02_ruway/tullpu/tullpu-ops" }

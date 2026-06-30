@@ -1,0 +1,22 @@
+[package]
+name = "tullpu-icon-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tullpu-icon — generador de íconos headless desde IconSpec: compila a vectores nativos de tullpu y exporta SVG (vectorial) o PNG/WebP/JPEG (rasterizado por tiny-skia + compositor de tullpu-render). Subcomandos generar/lote."
+
+[[bin]]
+name = "tullpu-icon"
+path = "src/main.rs"
+
+[dependencies]
+tullpu-icon-core = { workspace = true }
+tullpu-core = { workspace = true }
+tullpu-ops = { workspace = true }
+tullpu-render = { workspace = true }
+foreign-svg = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
