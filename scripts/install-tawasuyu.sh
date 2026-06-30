@@ -11,6 +11,9 @@
 #   │ desktop  (def) install-mirada-dm.sh — compositor + greeter + pata +      │
 #   │                shuma + lanzadores + notificaciones + portal + wallpaper. │
 #   │                Es lo que arrancás con `sudo mirada-dm` y donde vivís.     │
+#   │ apps     (def) install-apps-desktop.sh — un .desktop + ícono SVG por app │
+#   │                de la suite en ~/.local/share (aparecen en el menú). Per-  │
+#   │                usuario, sin sudo.                                        │
 #   │ splash   (def) install-arje-splash.sh --system — binario + config del    │
 #   │                splash sin parpadeo. NO habilita el servicio (--enable-    │
 #   │                splash lo activa).                                         │
@@ -61,7 +64,7 @@ while [ $# -gt 0 ]; do
         --all)           WITH_COMPAT=1; WITH_INIT=1; ENABLE_SPLASH=1 ;;
         --yes|-y)        ASSUME_YES=1 ;;
         --uninstall)     DO_UNINSTALL=1 ;;
-        -h|--help)       sed -n '2,41p' "$0"; exit 0 ;;
+        -h|--help)       sed -n '2,43p' "$0"; exit 0 ;;
         *) die "opción desconocida: $1 (ver --help)" ;;
     esac
     shift
@@ -152,6 +155,13 @@ if [ "$DO_UNINSTALL" = 1 ]; then
         sudo rm -f "/usr/share/wayland-sessions/$s.desktop"
     done
 
+    # lanzadores .desktop de apps (per-user, en $HOME — sin sudo).
+    info "lanzadores: quitando los .desktop + íconos de apps de ~/.local/share"
+    DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+    rm -f "$DATA"/applications/tawasuyu-*.desktop 2>/dev/null || true
+    rm -f "$DATA"/icons/hicolor/scalable/apps/tawasuyu-*.svg 2>/dev/null || true
+    have update-desktop-database && update-desktop-database "$DATA/applications" 2>/dev/null || true
+
     echo
     echo "✓ capa de sistema tawasuyu desinstalada. Tu distro, tu kernel y tu"
     echo "  bootloader quedan intactos. NO toqué tu ~/.config/mirada ni los grupos"
@@ -164,7 +174,7 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 [ "$(id -u)" != 0 ] || die "no me corras con sudo: los sub-scripts construyen con tu toolchain y piden sudo solos."
 have cargo || die "falta cargo (instalá Rust: https://rustup.rs)."
-for s in install-mirada-dm.sh install-arje-splash.sh install-arje-session-gnome.sh install-arje-init.sh; do
+for s in install-mirada-dm.sh install-apps-desktop.sh install-arje-splash.sh install-arje-session-gnome.sh install-arje-init.sh; do
     [ -x "$SCRIPTS/$s" ] || die "no encuentro $SCRIPTS/$s (¿estás en el repo correcto?)."
 done
 
@@ -173,6 +183,7 @@ cat <<RESUMEN
 
   ── tawasuyu :: capa de sistema sobre este Linux ───────────────────────
    desktop : mirada como escritorio/DM (sudo mirada-dm)             [SÍ]
+   apps    : lanzadores .desktop + íconos de apps en el menú        [SÍ]
    splash  : binario + config del arranque sin parpadeo            [$([ "$ENABLE_SPLASH" = 1 ] && echo 'SÍ + servicio' || echo 'SÍ, sin habilitar')]
    compat  : shims arje-compat (sesión GNOME bajo arje)            [$([ "$WITH_COMPAT" = 1 ] && echo SÍ || echo no)]
    init    : arje como init alterno (entrada GRUB → splash/mirada) [$([ "$WITH_INIT" = 1 ] && echo SÍ || echo no)]
@@ -189,6 +200,12 @@ fi
 # ── etapa desktop (siempre) ───────────────────────────────────────────────────
 info "desktop — install-mirada-dm.sh (construye con tu toolchain, pide sudo para instalar)"
 "$SCRIPTS/install-mirada-dm.sh"
+
+# ── lanzadores .desktop de las apps (per-user, en ~/.local/share; sin sudo) ────
+# Genera un .desktop + ícono SVG por app de la suite, para que aparezcan en el
+# menú/lanzador del escritorio. Es per-usuario (no toca /usr/share).
+info "lanzadores — install-apps-desktop.sh (.desktop + íconos de apps en ~/.local/share)"
+"$SCRIPTS/install-apps-desktop.sh"
 
 # ── etapa splash (siempre; servicio sólo con --enable-splash) ─────────────────
 info "splash — install-arje-splash.sh --system"
