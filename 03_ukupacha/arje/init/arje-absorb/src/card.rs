@@ -125,14 +125,36 @@ pub fn graphical_overlay(root: &Path) -> Vec<Card> {
         cards.push(overlay_card("seatd", seatd, &[], true, Priority::High));
     }
 
-    // Red: el primer gestor presente, como daemon en primer plano (mejor que el
-    // wrapper init.d absorbido, que asume el entorno rc del init viejo). Cubre
-    // el caso común (DHCP cableado); WiFi/NetworkManager queda como refinamiento.
-    if let Some(dhcpcd) = detect(root, &["/usr/sbin/dhcpcd", "/sbin/dhcpcd", "/usr/bin/dhcpcd"]) {
-        cards.push(overlay_card("dhcpcd", dhcpcd, &["-B"], true, Priority::Normal));
-    } else if let Some(nm) = detect(root, &["/usr/bin/NetworkManager", "/usr/sbin/NetworkManager"])
-    {
+    // Red. WiFi necesita el gestor que ya tiene las redes guardadas del host
+    // (NetworkManager / iwd / connman); esos hablan por el **bus de sistema**, así
+    // que si hay uno, levantamos dbus-system primero. dhcpcd solo (cableado) es el
+    // último recurso. Todo DETECTADO: corre el gestor que la máquina YA usa, con
+    // sus credenciales — no uno que yo elija.
+    let dbus = detect(root, &["/usr/bin/dbus-daemon", "/bin/dbus-daemon", "/usr/sbin/dbus-daemon"]);
+    let nm = detect(root, &["/usr/bin/NetworkManager", "/usr/sbin/NetworkManager"]);
+    let iwd = detect(root, &["/usr/lib/iwd/iwd", "/usr/libexec/iwd", "/usr/libexec/iwd/iwd"]);
+    let connman = detect(root, &["/usr/bin/connmand", "/usr/sbin/connmand"]);
+
+    if (nm.is_some() || iwd.is_some() || connman.is_some()) && dbus.is_some() {
+        // El gestor de WiFi habla por el bus de sistema → sin esto no arranca.
+        cards.push(overlay_card(
+            "dbus-system",
+            dbus.unwrap(),
+            &["--system", "--nofork"],
+            true,
+            Priority::High,
+        ));
+    }
+    if let Some(nm) = nm {
         cards.push(overlay_card("networkmanager", nm, &["--no-daemon"], true, Priority::Normal));
+    } else if let Some(iwd) = iwd {
+        cards.push(overlay_card("iwd", iwd, &[], true, Priority::Normal));
+    } else if let Some(connman) = connman {
+        cards.push(overlay_card("connman", connman, &["-n"], true, Priority::Normal));
+    } else if let Some(dhcpcd) =
+        detect(root, &["/usr/sbin/dhcpcd", "/sbin/dhcpcd", "/usr/bin/dhcpcd"])
+    {
+        cards.push(overlay_card("dhcpcd", dhcpcd, &["-B"], true, Priority::Normal));
     }
 
     // Splash sin parpadeo (la chakana). Path tawasuyu, lo instala el instalador.
@@ -386,5 +408,25 @@ mod tests {
         assert!(names.contains(&"arje-splash".to_string()), "{names:?}");
         assert!(names.contains(&"carmen-dm".to_string()), "{names:?}");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn overlay_con_networkmanager_levanta_dbus_y_gana_a_dhcpcd() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("arje-absorb-nm-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        for p in ["usr/bin/NetworkManager", "usr/bin/dbus-daemon", "usr/sbin/dhcpcd"] {
+            let f = tmp.join(p);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(&f, b"").unwrap();
+        }
+        let names: Vec<String> =
+            graphical_overlay(&tmp).iter().map(|c| c.label.clone()).collect();
+        // WiFi por NM necesita el bus de sistema arriba primero.
+        assert!(names.contains(&"dbus-system".to_string()), "falta dbus: {names:?}");
+        assert!(names.contains(&"networkmanager".to_string()), "{names:?}");
+        // NM (que maneja WiFi con credenciales) gana sobre dhcpcd (sólo cableado).
+        assert!(!names.contains(&"dhcpcd".to_string()), "NM presente → sin dhcpcd: {names:?}");
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

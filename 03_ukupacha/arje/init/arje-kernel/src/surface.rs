@@ -120,6 +120,10 @@ pub fn bootstrap_kernel_surface() -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions("/run/arje", std::fs::Permissions::from_mode(0o700));
     }
+    // `/run/dbus` para el socket del bus de sistema (dbus-daemon --system NO crea
+    // el directorio). Lo pide el gestor de red (NetworkManager/iwd/connman) que
+    // levanta el WiFi con las credenciales del host.
+    let _ = std::fs::create_dir_all("/run/dbus");
 
     debug!("kernel surface bootstrap completo");
     Ok(())
