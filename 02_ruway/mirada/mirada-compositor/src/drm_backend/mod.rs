@@ -188,6 +188,11 @@ render_elements! {
     /// Contenido de una ventana rendido a textura y dibujado con el shader de
     /// esquinas redondeadas (SDF). Ver `corner_radius` y `render_surface_to_texture`.
     Rounded = TextureShaderElement,
+    /// Una textura cruda (captura congelada del output) — la usa el **hero de
+    /// lock** para encoger la pantalla hasta el thumbnail. `ScaledTexture` la
+    /// envuelve en un `RescaleRenderElement` para el resize real.
+    Texture = smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>,
+    ScaledTexture = RescaleRenderElement<smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>>,
 }
 
 /// Fragment shader (GLES) de **esquinas redondeadas**: clon del shader de
@@ -841,6 +846,14 @@ struct DrmState {
     /// `None` si la compilación falló → el render cae a la máscara CPU (o a
     /// esquinas rectas). Sólo se usa con `corner_radius > 0`.
     rounded_shader: Option<GlesTexProgram>,
+    /// **Hero de lock**: la captura congelada del output al bloquear (textura
+    /// GLES), que el frame encoge hasta el thumbnail según [`App::hero`]. `None`
+    /// fuera de la transición. Se llena cuando [`App::pending_hero`] está puesto
+    /// y se descarta al completar el encogido. Ver [`crate::hero`].
+    hero_frozen: Option<smithay::backend::renderer::gles::GlesTexture>,
+    /// Marca (epoch ms del backend) del frame previo del hero, para calcular el
+    /// `dt` del avance. `None` fuera de la transición.
+    hero_prev_ms: Option<u32>,
     /// **Backdrops *frosted* REALES por ventana flotante** (id de ventana →
     /// buffer desenfocado + su tamaño = tamaño de salida): la escena de **debajo
     /// de ESA ventana** (las ventanas inferiores en z + wallpaper) re-rendida a un
@@ -1689,6 +1702,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         outputs: output_ctxs,
         renderer,
         rounded_shader,
+        hero_frozen: None,
+        hero_prev_ms: None,
         libinput: libinput_handle,
         shell_tx,
         active: true,

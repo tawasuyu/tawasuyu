@@ -685,6 +685,14 @@ pub(crate) struct App {
     /// consume el bucle del backend en el próximo cuadro (necesita el renderer,
     /// que no vive en `App`). Ver [`crate::thumbs`].
     pub(crate) pending_thumbs: bool,
+    /// **Hero de lock**: pedido de arrancar la transición soñada (la pantalla
+    /// viva encogiéndose hasta el thumbnail). Lo enciende el enganche del lock y
+    /// lo consume el próximo frame del backend DRM, que congela el output en una
+    /// textura y arranca [`hero`](Self::hero). Ver [`crate::hero`].
+    pub(crate) pending_hero: bool,
+    /// Progreso vivo del hero de lock (`None` = sin transición). Lo avanza el
+    /// frame del backend DRM y se descarta al completar el encogido.
+    pub(crate) hero: Option<crate::hero::LockHero>,
     /// Último índice de salida que se le informó al greeter como «activo»
     /// (la del ratón). `usize::MAX` ⇒ aún no se empujó nada — fuerza el
     /// primer envío.

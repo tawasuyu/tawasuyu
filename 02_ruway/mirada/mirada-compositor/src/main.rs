@@ -101,6 +101,7 @@ mod drm_backend;
 mod floor;
 mod gamma_control;
 mod handoff;
+mod hero;
 mod idle_notify;
 mod menu;
 mod screencopy;

@@ -239,6 +239,34 @@ impl DrmState {
             self.app.send_thumbs(&caps);
             self.app.pending_thumbs = false;
         }
+        // Hero de lock: al enganchar el candado, congelá la escena viva en una
+        // textura y arrancá la transición que la encoge hasta el thumbnail. La
+        // captura necesita el renderer (vive acá, no en `App`).
+        if self.app.pending_hero {
+            if let Some(tex) = crate::thumbs::capturar_output(&self.app, &mut self.renderer) {
+                let (ow, oh) = self.app.output_size;
+                let target = mirada_layout::landing_rect(ow, oh);
+                self.hero_frozen = Some(tex);
+                self.app.hero = Some(crate::hero::LockHero::new(target));
+                self.hero_prev_ms = Some(self.start.elapsed().as_millis() as u32);
+            }
+            // Si no había nada que congelar (sin GPU/ventanas), no arrancamos el
+            // hero: el lock cae al corte seco de siempre.
+            self.app.pending_hero = false;
+        }
+        // Avanzá el hero por el dt real del frame; al completar el encogido se
+        // descarta (la captura y el reloj) y el greeter queda revelado.
+        if let Some(hero) = self.app.hero.as_mut() {
+            let now_ms = self.start.elapsed().as_millis() as u32;
+            let prev = self.hero_prev_ms.unwrap_or(now_ms);
+            self.hero_prev_ms = Some(now_ms);
+            let dt = now_ms.saturating_sub(prev) as f32 / 1000.0;
+            if hero.advance(dt) {
+                self.app.hero = None;
+                self.hero_frozen = None;
+                self.hero_prev_ms = None;
+            }
+        }
         // Backdrops *frosted* por ventana flotante (glass calidad N): se rearman
         // por salida dentro de `render_output`; acá sólo vaciamos el cache del
         // frame anterior (vacío sin glass → no cuesta nada).
@@ -2856,6 +2884,61 @@ impl DrmState {
     /// no a esta salida (gates por dueño) — el cursor en la del puntero,
     /// HUD/layer-shell/reveal-band en primaria, menú y zonas en la salida
     /// donde se inició la acción, ventanas y wallpaper en todas.
+    /// **Hero de lock**: si hay una transición viva, pinta la captura congelada
+    /// del output **encogiéndose** hasta el thumbnail (con un velo oscuro detrás
+    /// que sube). Se emite temprano en el orden front-to-back (justo bajo el
+    /// cursor), por ENCIMA del greeter/ventanas. No-op sin transición → el camino
+    /// normal queda byte-idéntico.
+    fn emit_hero(&mut self, rect: Rect, into: &mut Vec<Frame>) {
+        let Some(hero) = self.app.hero else {
+            return;
+        };
+        let Some(tex) = self.hero_frozen.clone() else {
+            return;
+        };
+        let full = mirada_layout::geometry::Rect::new(rect.x, rect.y, rect.w, rect.h);
+        let dst = hero.rect(full);
+        if dst.w <= 0 || dst.h <= 0 {
+            return;
+        }
+        // La captura cubre el output entero anclada en (dst.x,dst.y); el
+        // `RescaleRenderElement` la encoge alrededor de ese origen al tamaño dst
+        // (escala uniforme = dst/full, válida porque `landing_rect` preserva el
+        // aspecto). El contenido entero queda metido dentro de dst.
+        let ctxid = self.renderer.context_id();
+        let el = TextureRenderElement::from_static_texture(
+            Id::new(),
+            ctxid,
+            (dst.x as f64, dst.y as f64),
+            tex,
+            1,
+            Transform::Normal,
+            Some(1.0),
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        );
+        let s = dst.w as f64 / rect.w.max(1) as f64;
+        let origin = Point::<i32, Physical>::from((dst.x, dst.y));
+        into.push(Frame::ScaledTexture(RescaleRenderElement::from_element(el, origin, s)));
+        // Velo oscuro detrás de la captura (sube 0→0.6 con el progreso): la
+        // sesión cediendo paso al greeter. Se empuja DESPUÉS → queda DEBAJO de la
+        // captura pero ENCIMA del greeter (que se emite más abajo).
+        let veil = hero.veil_alpha() * 0.6;
+        if veil > 0.001 {
+            let mut scrim = SolidColorBuffer::default();
+            scrim.update((rect.w, rect.h), [0.0, 0.0, 0.0, veil]);
+            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                &scrim,
+                (rect.x, rect.y),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            )));
+        }
+    }
+
     fn render_output(&mut self, idx: usize) {
         if self.outputs[idx].pending_flip {
             return;
@@ -2874,6 +2957,10 @@ impl DrmState {
 
             // 1. Cursor (si el puntero cae sobre esta salida).
             self.emit_cursor(rect, &mut out);
+
+            // 1.bis Hero de lock: la captura congelada encogiéndose hasta el
+            //    thumbnail, por encima de todo lo demás (no-op sin transición).
+            self.emit_hero(rect, &mut out);
 
             if cube_here {
                 self.emit_cube(rect, &mut out);

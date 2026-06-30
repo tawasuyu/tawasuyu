@@ -516,6 +516,8 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         running: true,
         greeter_stdin: None,
         pending_thumbs: false,
+        pending_hero: false,
+        hero: None,
         greeter_active_output: usize::MAX,
         pending_lock: None,
         pending_new_session: false,

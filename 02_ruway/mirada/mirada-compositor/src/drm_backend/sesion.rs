@@ -97,6 +97,9 @@ impl DrmState {
                 Ok(stdin) => {
                     self.app.greeter_stdin = Some(stdin);
                     self.app.mode = crate::estado::BodyMode::Locked;
+                    // Hero de lock: el próximo frame congela la pantalla y la
+                    // encoge hasta el thumbnail antes de revelar el greeter.
+                    self.app.pending_hero = true;
                     // Empuja el roster: el lock ofrece «cambiar usuario» a otra.
                     self.app.push_sessions_to_greeter();
                     dlog!("mirada-compositor · sesión bloqueada (lock de «{user}»).");

@@ -23,7 +23,7 @@ use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 
 use mirada_brain::SessionId;
 
@@ -132,6 +132,43 @@ pub(crate) fn capturar(app: &App, renderer: &mut GlesRenderer) -> Vec<(SessionId
         }
     }
     out
+}
+
+/// Captura la **escena activa visible** (las ventanas de la sesión activa, sin
+/// shell ni greeter) a una `GlesTexture` del tamaño del output — la captura
+/// congelada que el **hero de lock** encoge hasta el thumbnail. `None` si no hay
+/// nada que rendir o la GPU falla. A diferencia de [`capturar`] (que quiere las
+/// sesiones de fondo), acá filtramos por `session_visible`: lo que se ve al
+/// bloquear.
+pub(crate) fn capturar_output(app: &App, renderer: &mut GlesRenderer) -> Option<GlesTexture> {
+    let (out_w, out_h) = app.output_size;
+    if out_w <= 0 || out_h <= 0 {
+        return None;
+    }
+    let tbh = app.decorations.titlebar_height;
+    let mut elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+    for w in app
+        .windows
+        .iter()
+        .filter(|w| w.visible && !w.is_shell && !w.is_greeter && app.session_visible(w))
+    {
+        if !crate::buffer_render_sano(&w.surface) {
+            continue;
+        }
+        let loc = crate::render_loc(w, out_h, tbh);
+        elems.extend(render_elements_from_surface_tree(
+            renderer,
+            &w.surface,
+            loc,
+            1.0,
+            w.effects.opacity as f32 / 255.0,
+            Kind::Unspecified,
+        ));
+    }
+    if elems.is_empty() {
+        return None;
+    }
+    crate::screencopy::capturar_textura(renderer, (out_w, out_h), &elems)
 }
 
 /// El alto de la miniatura para `THUMB_W` de ancho, respetando el aspecto.

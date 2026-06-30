@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 bitacora = { workspace = true }
 mirada-brain = { path = "../mirada-brain" }
+mirada-layout = { path = "../mirada-layout" }
 mirada-body = { path = "../mirada-body" }
 mirada-aware = { path = "../mirada-aware" }
 mirada-link = { path = "../mirada-link" }

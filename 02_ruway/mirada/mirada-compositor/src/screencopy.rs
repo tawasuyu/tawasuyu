@@ -720,6 +720,37 @@ where
     Some(out)
 }
 
+/// Como [`render_elements_offscreen`] pero **conserva la textura** en vez de
+/// leerla a CPU: rinde los elementos a un offscreen `GlesTexture` y lo devuelve
+/// para re-renderizarlo escalado con `render_texture_from_to`. Lo usa el **hero
+/// de lock**, que congela el output al bloquear y lo encoge frame a frame hasta
+/// el thumbnail. `None` si la GPU falla.
+pub fn capturar_textura<E>(
+    renderer: &mut GlesRenderer,
+    size: (i32, i32),
+    elements: &[E],
+) -> Option<GlesTexture>
+where
+    E: smithay::backend::renderer::element::RenderElement<GlesRenderer>,
+{
+    if size.0 <= 0 || size.1 <= 0 {
+        return None;
+    }
+    let buffer_size: Size<i32, BufferCoord> = (size.0, size.1).into();
+    let mut tex =
+        Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buffer_size).ok()?;
+    {
+        let mut target = renderer.bind(&mut tex).ok()?;
+        let fisico: Size<i32, smithay::utils::Physical> = (size.0, size.1).into();
+        let damage = [Rectangle::from_size(fisico)];
+        let mut frame = renderer.render(&mut target, fisico, Transform::Normal).ok()?;
+        frame.clear(Color32F::TRANSPARENT, &damage).ok()?;
+        draw_render_elements(&mut frame, 1.0, elements, &damage).ok()?;
+        frame.finish().ok()?;
+    }
+    Some(tex)
+}
+
 /// Como [`render_elements_offscreen`] pero el dibujo lo hace un **closure** con
 /// acceso crudo al [`GlesFrame`] — para componer con `render_texture_from_to`
 /// pasando texturas EXTRAÍDAS a mano (la vista espacial rotada lo necesita: el
