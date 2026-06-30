@@ -302,7 +302,7 @@ a:hover { color: var(--fg-text); }
  */
 .chakana-body {
   fill: var(--accent);
-  opacity: 0.7;
+  opacity: 0.9;
 }
 .chakana-core {
   fill: var(--fg-text);
