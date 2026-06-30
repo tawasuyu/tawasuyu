@@ -16,6 +16,7 @@
 
 mod animaciones;
 mod greeter;
+mod iconos;
 mod autologin;
 mod pacha;
 mod paloma;
@@ -5599,12 +5600,15 @@ fn rail_overlay(pestanas: &[PanelPestana], pest: usize, theme: &Theme) -> View<M
             active: i == pest,
         })
         .collect();
-    let icons: Vec<String> = pestanas.iter().map(|p| p.icon.clone()).collect();
+    // Cada diente se pinta como ícono vectorial (determinista en toda máquina),
+    // no como glifo unicode. Mapeamos por título de pestaña a su IconSpec.
+    let specs: Vec<tullpu_icon_core::IconSpec> =
+        pestanas.iter().map(|p| iconos::spec_diente(&p.title)).collect();
     let rail = dock_rail_view(
         &items,
         RAIL_W,
         &DockRailPalette::from_theme(theme),
-        move |id, size, color| tooth_icon(icons.get(id as usize).cloned(), size, color),
+        move |id, size, color| tooth_icon(specs.get(id as usize).cloned(), size, color),
         Msg::SelectPestana,
         |_| None,
     );
@@ -5692,12 +5696,17 @@ fn resumen_view(title: &str, sections: &[Section], theme: &Theme) -> View<Msg> {
     .children(kids)
 }
 
-/// Icono de un diente (emoji que la fuente tenga), color resuelto por el rail.
+/// Icono de un diente: ícono **vectorial** (IconSpec → vello), pintado por el
+/// puente `tullpu-icon-llimphi`. El `color` que resuelve el rail (activo/inactivo)
+/// alimenta los `Color::Corriente` del spec; los acentos de color son fijos. A
+/// diferencia del glifo de texto anterior, esto es determinista en toda máquina
+/// (no depende de las fuentes del sistema).
 fn tooth_icon(
-    glyph: Option<String>,
+    spec: Option<tullpu_icon_core::IconSpec>,
     size: f32,
     color: llimphi_ui::llimphi_raster::peniko::Color,
 ) -> View<Msg> {
+    let spec = spec.unwrap_or_else(|| iconos::spec_diente(""));
     View::new(Style {
         size: Size {
             width: length(size),
@@ -5707,12 +5716,7 @@ fn tooth_icon(
         justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(
-        glyph.unwrap_or_else(|| "•".to_string()),
-        size * 0.9,
-        color,
-        Alignment::Center,
-    )
+    .children(vec![tullpu_icon_llimphi::spec_view(spec, color)])
 }
 
 fn build_status(model: &Model, theme: &Theme) -> View<Msg> {

@@ -19,6 +19,10 @@ llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
+# Íconos vectoriales de los dientes (deterministas, no glifos de fuente).
+tullpu-icon-core = { workspace = true }
+tullpu-icon-llimphi = { workspace = true }
+tullpu-core = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 # Toasts efímeros: confirmaciones de guardado y errores de persistencia.
 llimphi-widget-toast = { workspace = true }
