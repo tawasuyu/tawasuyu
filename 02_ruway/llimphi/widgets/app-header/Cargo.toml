@@ -11,3 +11,5 @@ description = "llimphi-widget-app-header — tira superior estándar para apps L
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-panel = { workspace = true }
+# Ícono de marca de la app en el titlebar (app_header_iconed).
+llimphi-icons = { workspace = true }

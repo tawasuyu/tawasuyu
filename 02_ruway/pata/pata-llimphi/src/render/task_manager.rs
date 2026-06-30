@@ -79,6 +79,24 @@ pub(super) fn window_list_view(
 /// Interacción: clic izquierdo activa (o, si `reorderable`, arrastra para
 /// reordenar y el click "sin movimiento" lo reinterpreta el backend como
 /// activación); clic derecho y clic medio cierran la ventana.
+/// Resuelve el `AppIcon` de marca desde el `app_id` de Wayland, tolerando los
+/// sufijos de binario de la suite (`tullpu-app-llimphi`→tullpu,
+/// `nakui-sheet-llimphi`→nakui, `nahual-shell-llimphi`→nahual…).
+fn app_icon_de(app_id: &str) -> Option<llimphi_icons::app_icons::AppIcon> {
+    use llimphi_icons::app_icons::AppIcon;
+    if let Some(i) = AppIcon::from_app_id(app_id) {
+        return Some(i);
+    }
+    for suf in ["-app-llimphi", "-sheet-llimphi", "-shell-llimphi", "-llimphi", "-app"] {
+        if let Some(base) = app_id.strip_suffix(suf) {
+            if let Some(i) = AppIcon::from_app_id(base) {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
 fn window_button(w: &WindowEntry, reorderable: bool, theme: &Theme) -> View<Msg> {
     let (fg, fill, badge_bg, badge_fg) = if w.active {
         (theme.fg_text, theme.bg_panel, theme.accent, theme.bg_panel)
@@ -88,7 +106,7 @@ fn window_button(w: &WindowEntry, reorderable: bool, theme: &Theme) -> View<Msg>
         (theme.fg_text, theme.bg_panel_alt, theme.bg_panel, theme.fg_muted)
     };
 
-    let badge = View::new(Style {
+    let badge_box = View::new(Style {
         size: Size {
             width: length(WIN_BADGE_PX),
             height: length(WIN_BADGE_PX),
@@ -98,8 +116,20 @@ fn window_button(w: &WindowEntry, reorderable: bool, theme: &Theme) -> View<Msg>
         ..Default::default()
     })
     .fill(badge_bg)
-    .radius(4.0)
-    .text(w.inicial(), 11.0, badge_fg);
+    .radius(4.0);
+    // Ícono de marca de la app (vectorial, determinista) si el app_id resuelve;
+    // si no (apps de terceros), cae a la inicial como antes.
+    let badge = match app_icon_de(&w.app_id) {
+        Some(icon) => badge_box.children(vec![View::new(Style {
+            size: Size {
+                width: length(WIN_BADGE_PX - 6.0),
+                height: length(WIN_BADGE_PX - 6.0),
+            },
+            ..Default::default()
+        })
+        .children(vec![llimphi_icons::app_icons::app_icon_view_colored(icon, badge_fg, 1.6)])]),
+        None => badge_box.text(w.inicial(), 11.0, badge_fg),
+    };
 
     let titulo = View::new(Style {
         // Crece para llenar el ancho fijo del botón; el texto va a la izquierda
