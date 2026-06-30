@@ -69,6 +69,9 @@ html, body {
   font-size: 13px;
   line-height: 1.5;
   overflow: hidden;
+  /* anula el pull-to-refresh nativo y el rebote del back-swipe: los gestos
+   * los maneja nuestro JS (setupTouchGestures). */
+  overscroll-behavior: none;
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -214,6 +217,7 @@ a:hover { color: var(--fg-text); }
 /* portada: sidebar (rail+panel) al lado del plano. Al guardar la sidebar
  * (drag a la izquierda) el plano toma todo el ancho. */
 #portada {
+  position: relative;
   display: flex;
   overflow: hidden;
   min-height: 0;
@@ -228,44 +232,44 @@ a:hover { color: var(--fg-text); }
 }
 body.sidebar-stowed #sidebar { display: none; }
 
-/* rail: columna de dientes, siempre visible cuando la sidebar no está
- * guardada. Los dientes "sobresalen" del panel (estilo llimphi). */
+/* rail = columna de dientes-ícono por el lado de adentro (a la derecha del
+ * panel, mirando al plano). Cada diente es un ícono chico: la chakana para
+ * sistema y el hex del cuadrante (0x00…0x03). */
 .dock-rail {
+  order: 2;                    /* siempre a la derecha del panel (lado interno) */
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 0;
-  width: 38px;
+  padding: 10px 5px;
   background: var(--bg-panel-alt);
+  border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
 }
 .diente {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
+  width: 34px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   appearance: none;
   border: 1px solid var(--border);
-  border-left: 2px solid var(--diente-c, var(--fg-muted));
-  border-radius: 0 6px 6px 0;
+  border-right: 2px solid var(--diente-c, var(--fg-muted));  /* acento en la punta interna */
+  border-radius: 5px;
   background: var(--bg-panel);
   color: var(--fg-muted);
   font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  padding: 10px 3px;
-  margin-right: -1px;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
   cursor: pointer;
-  white-space: nowrap;
 }
 .diente:hover { color: var(--fg-text); background: var(--bg-row-hover); }
 .diente.active {
   color: var(--fg-text);
-  background: var(--bg-panel);
+  background: var(--bg-button);
   border-color: var(--border);
-  border-left-color: var(--diente-c, var(--accent));
-  /* el diente activo se "pega" al panel: sin borde derecho */
-  border-right-color: var(--bg-panel);
-  z-index: 1;
+  border-right-color: var(--diente-c, var(--accent));
 }
+.diente-chakana { width: 15px; height: 15px; color: var(--diente-c, var(--accent)); }
 .diente[data-theme="tawasuyu"] { --diente-c: var(--accent); }
 .diente[data-theme="unanchay"] { --diente-c: var(--c-unanchay); }
 .diente[data-theme="yachay"]   { --diente-c: var(--c-yachay); }
@@ -274,6 +278,7 @@ body.sidebar-stowed #sidebar { display: none; }
 
 /* panel: lista de docs del diente activo; sólo visible con .panel-open */
 .dock-panel {
+  order: 1;                    /* a la izquierda (borde de pantalla) */
   width: 230px;
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
@@ -640,6 +645,34 @@ body.sidebar-stowed #sidebar { display: none; }
 /* (taskbar inferior removida — los indicadores de ventana viven en
  *  el topbar y el reloj también. Mirá la sección "topbar" arriba.) */
 
+/* indicador de pull-to-refresh: bolita con ↻ que baja desde la topbar
+ * mientras se arrastra hacia abajo; al soltar pasado el umbral, recarga. */
+#pull-refresh {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -44px);
+  z-index: 200;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-button);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 17px;
+  opacity: 0;
+  pointer-events: none;
+}
+#pull-refresh.pr-active { opacity: 1; }
+#pull-refresh.pr-ready { border-color: var(--accent); }
+#pull-refresh .pr-glyph { display: block; line-height: 1; transition: transform 0.1s; }
+#pull-refresh.pr-ready .pr-glyph { transform: rotate(180deg); }
+#pull-refresh.pr-spinning .pr-glyph { animation: pr-spin 0.6s linear infinite; }
+@keyframes pr-spin { to { transform: rotate(360deg); } }
+
 /* responsivo: en pantallas chicas el plano usa todo el ancho; la sidebar
  * (overlay) arranca guardada y se trae con drag a la derecha. */
 @media (max-width: 800px) {
@@ -656,6 +689,18 @@ body.sidebar-stowed #sidebar { display: none; }
   .quad-verb { font-size: 5.5px; }
   .dom       { font-size: 5.5px; }
   .axis-label { font-size: 5.5px; }
+
+  /* La sidebar arranca OCULTA por CSS (no por JS) → sin parpadeo. Se trae
+     con drag a la derecha desde el borde, como overlay sobre el plano (no
+     le come ancho). */
+  #sidebar {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    z-index: 45;
+    display: none;
+    box-shadow: 8px 0 24px rgba(0,0,0,0.5);
+  }
+  body.sidebar-peek #sidebar { display: flex; }
 }
 
 /* Header de sección (h3) dentro del panel del diente, clickable */

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 
@@ -50,13 +50,6 @@
          Drag a la izquierda lo guarda; drag a la derecha desde el borde lo
          vuelve a abrir. -->
     <aside id="sidebar">
-      <nav class="dock-rail" aria-label="secciones">
-        <button class="diente" type="button" data-diente="sistema"  data-theme="tawasuyu">sistema</button>
-        <button class="diente" type="button" data-diente="unanchay" data-theme="unanchay">unanchay</button>
-        <button class="diente" type="button" data-diente="yachay"   data-theme="yachay">yachay</button>
-        <button class="diente" type="button" data-diente="ruway"    data-theme="ruway">ruway</button>
-        <button class="diente" type="button" data-diente="ukupacha" data-theme="ukupacha">ukupacha</button>
-      </nav>
       <div class="dock-panel">
       <div class="dock-section" data-mod="sistema">
         <h3 class="sec-head"><span class="doc" data-doc="/README.md" data-title="tawasuyu" data-theme="tawasuyu">sistema</span></h3>
@@ -127,6 +120,19 @@
         </ul>
       </div>
       </div><!-- /.dock-panel -->
+      <!-- rail de dientes (íconos) por el lado de adentro: la chakana =
+           sistema, y los 4 cuadrantes por su hex (0x00…0x03). -->
+      <nav class="dock-rail" aria-label="secciones">
+        <button class="diente diente-sis" type="button" data-diente="sistema" data-theme="tawasuyu" title="sistema">
+          <svg class="diente-chakana" viewBox="-3 -3 6 6" aria-hidden="true">
+            <path d="M -0.5 -2.5 L 0.5 -2.5 L 0.5 -2.0 L 1.0 -2.0 L 1.0 -1.5 L 1.5 -1.5 L 1.5 -1.0 L 2.0 -1.0 L 2.0 -0.5 L 2.5 -0.5 L 2.5 0.5 L 2.0 0.5 L 2.0 1.0 L 1.5 1.0 L 1.5 1.5 L 1.0 1.5 L 1.0 2.0 L 0.5 2.0 L 0.5 2.5 L -0.5 2.5 L -0.5 2.0 L -1.0 2.0 L -1.0 1.5 L -1.5 1.5 L -1.5 1.0 L -2.0 1.0 L -2.0 0.5 L -2.5 0.5 L -2.5 -0.5 L -2.0 -0.5 L -2.0 -1.0 L -1.5 -1.0 L -1.5 -1.5 L -1.0 -1.5 L -1.0 -2.0 L -0.5 -2.0 Z" fill="currentColor"/>
+          </svg>
+        </button>
+        <button class="diente" type="button" data-diente="unanchay" data-theme="unanchay" title="unanchay · percibir">0x00</button>
+        <button class="diente" type="button" data-diente="yachay"   data-theme="yachay"   title="yachay · conocer">0x01</button>
+        <button class="diente" type="button" data-diente="ruway"    data-theme="ruway"    title="ruway · hacer">0x02</button>
+        <button class="diente" type="button" data-diente="ukupacha" data-theme="ukupacha" title="ukupacha · raíz">0x03</button>
+      </nav>
     </aside>
 
     <!-- centro: plano cartesiano de cuadrantes -->
@@ -291,6 +297,9 @@
     </section>
 
   </main>
+
+  <!-- indicador de "soltá para actualizar" (pull-to-refresh móvil) -->
+  <div id="pull-refresh" aria-hidden="true"><span class="pr-glyph">↻</span></div>
 
   <!-- capa de ventanas (las ventanas se inyectan acá). Sin taskbar: ahora
        va de topbar hasta el borde inferior (CSS lo cubre). -->
@@ -575,6 +584,7 @@
     // Al abrir un artículo guardamos la sidebar para que ocupe todo el
     // ancho (el artículo se abre maximizado encima del plano).
     document.body.classList.add('sidebar-stowed');
+    document.body.classList.remove('sidebar-peek');
 
     cargarMdSeguro(contId, url, theme || 'tawasuyu');
     if (!fromHash) pushHash(url);
@@ -813,17 +823,17 @@
     if (!window.matchMedia('(max-width: 800px)').matches) activar('sistema');
   }
 
-  // ===== guardar/abrir la sidebar con drag horizontal =====
-  // Drag a la izquierda (sobre la sidebar) la guarda; drag a la derecha
-  // desde el borde izquierdo la vuelve a abrir. Umbral para no confundir
-  // con un click en diente/doc.
+  function esMovil() { return window.matchMedia('(max-width: 800px)').matches; }
+
+  // ===== guardar/abrir la sidebar con drag de mouse (escritorio) =====
+  // Drag a la izquierda sobre la sidebar la guarda; drag a la derecha desde
+  // el borde la reabre. En móvil lo maneja setupTouchGestures (touch).
   function setupSidebarDrag() {
     const UMBRAL = 36;
     let start = null;
-    function px(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
-    function pxUp(e) { return e.changedTouches ? e.changedTouches[0].clientX : e.clientX; }
     function onDown(e) {
-      const x = px(e);
+      if (esMovil()) return;
+      const x = e.clientX;
       const stowed = document.body.classList.contains('sidebar-stowed');
       const enSidebar = e.target.closest && e.target.closest('#sidebar');
       if (stowed && x <= 28) start = { x, mode: 'open' };
@@ -832,17 +842,79 @@
     }
     function onUp(e) {
       if (!start) return;
-      const dx = pxUp(e) - start.x;
+      const dx = e.clientX - start.x;
       if (start.mode === 'stow' && dx < -UMBRAL) document.body.classList.add('sidebar-stowed');
       if (start.mode === 'open' && dx >  UMBRAL) document.body.classList.remove('sidebar-stowed');
       start = null;
     }
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('pointerup',   onUp);
-    // En móvil arranca guardada para que el plano use todo el ancho.
-    if (window.matchMedia('(max-width: 800px)').matches) {
-      document.body.classList.add('sidebar-stowed');
+  }
+
+  // ===== gestos táctiles (móvil) =====
+  // · drag a la derecha desde el borde → abre la sidebar (peek), y bloquea
+  //   el "volver atrás" del navegador (preventDefault).
+  // · drag a la izquierda sobre la sidebar → la guarda.
+  // · drag hacia abajo desde arriba → pull-to-refresh (recarga fresca).
+  function recargarFresco() {
+    location.href = location.pathname + '?r=' + Date.now() + location.hash;
+  }
+  function setupTouchGestures() {
+    const pr = document.getElementById('pull-refresh');
+    const EDGE = 28, H = 44, PULL = 88;
+    let t = null;
+    function artScroll(target) {
+      const win = target.closest && target.closest('.window');
+      return win ? win.querySelector('.win-body') : null;
     }
+    document.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) { t = null; return; }
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      t = {
+        x0: x, y0: y, x, y, mode: null,
+        peek: document.body.classList.contains('sidebar-peek'),
+        enSidebar: !!(e.target.closest && e.target.closest('#sidebar')),
+        scroll: artScroll(e.target),
+      };
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+      if (!t) return;
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      const dx = x - t.x0, dy = y - t.y0;
+      t.x = x; t.y = y;
+      if (!t.mode) {
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
+          if (!t.peek && t.x0 <= EDGE && dx > 0) t.mode = 'open';
+          else if (t.peek && t.enSidebar && dx < 0) t.mode = 'stow';
+          else t.mode = 'ignore';
+        } else if (dy > 8 && dy > Math.abs(dx)) {
+          const atTop = !t.scroll || t.scroll.scrollTop <= 0;
+          t.mode = atTop ? 'pull' : 'ignore';
+        }
+      }
+      if (t.mode === 'open' || t.mode === 'stow') {
+        e.preventDefault();                 // bloquea el back-swipe
+      } else if (t.mode === 'pull') {
+        e.preventDefault();
+        const d = Math.max(0, Math.min(120, dy));
+        pr.classList.add('pr-active');
+        pr.style.transform = `translate(-50%, ${Math.min(d - 44, 18)}px)`;
+        pr.classList.toggle('pr-ready', dy > PULL);
+      }
+    }, { passive: false });
+
+    document.addEventListener('touchend', () => {
+      if (!t) return;
+      const dx = t.x - t.x0, dy = t.y - t.y0;
+      if (t.mode === 'open' && dx >  H) document.body.classList.add('sidebar-peek');
+      if (t.mode === 'stow' && dx < -H) document.body.classList.remove('sidebar-peek');
+      if (t.mode === 'pull') {
+        if (dy > PULL) { pr.classList.add('pr-spinning'); recargarFresco(); }
+        else { pr.classList.remove('pr-active', 'pr-ready'); pr.style.transform = ''; }
+      }
+      t = null;
+    }, { passive: true });
   }
 
   init().then(() => {
@@ -852,6 +924,7 @@
     bindBrandHome();
     setupDockRail();
     setupSidebarDrag();
+    setupTouchGestures();
     bindQuadTriggers();
     bindDocTriggers(document);
     tickClock();
