@@ -173,6 +173,12 @@ done
 # (idempotente, sin pisar lo que ya tengas) para que el escritorio venga entero.
 AUTO="${HOME}/.config/mirada/autostart"
 mkdir -p "$(dirname "$AUTO")"
+# Audio: pipewire es un daemon de USUARIO (el init no lo arranca). Lo sembramos
+# en el autostart de la sesión —si está instalado— para tener sonido. wireplumber
+# es su session-manager; pipewire-pulse da compat PulseAudio. Van primero.
+for a in pipewire wireplumber pipewire-pulse; do
+    have "$a" && { grep -qxF "$a" "$AUTO" 2>/dev/null || echo "$a" >> "$AUTO"; }
+done
 for line in pata-llimphi shuma-shell-llimphi pata-notify; do
     grep -qxF "$line" "$AUTO" 2>/dev/null || echo "$line" >> "$AUTO"
 done
