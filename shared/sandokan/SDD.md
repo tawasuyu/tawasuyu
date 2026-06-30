@@ -324,10 +324,21 @@ verbos+reglas existentes, no los reimplementa.
   de la capa 1). Evalúa el **mismo `MonitorSnapshot`** que el monitor — sin
   segunda fuente. **Pendiente de capa 2**: disparadores de **estado del
   sistema** (AC/batería, red, idle, lock/login) y de **tiempo** (cron,
-  atardecer, boot); el lazo de poll que llama `observe→evaluar→aplicar` (lo
-  cablea el consumidor —monitor app o un daemon—, igual que pata cablea
-  `energia`).
-- Capas 4, 5: pendientes (orden de la tabla).
+  atardecer, boot).
+- **Lazo vivo** *(2026-06-30)*: `sandokan-vigilante::Vigilante` corre la capa 2 —
+  cada `intervalo`: `observe(engine) → MotorMetrico::evaluar → aplicar(&engine)`,
+  todo por el contrato. Reglas **hot-swappables** (`armar(reglas)`): el gancho
+  donde la capa 4 enchufa (una intención arma su set al entrar). Test de lazo
+  cerrado: una unidad a 95 % CPU dispara y el `stop` llega al Engine mock.
+- **Capa 4** *(parcial, 2026-06-30)*: la capa de intención **ya existe** —`pacha`
+  (contextos de usuario): cada `Pacha` reconcilia overlay/vista/apps/`cpu_weight`/
+  freeze/hide vía `Effect`s que `pacha-manager` aplica sobre el `Engine` de
+  sandokan (`LinuxSurfaces`). No se reinventa. **Falta el seam con la capa 2**:
+  que un `Pacha` cargue además un set de `ReglaMetrica` y que el switch llame
+  `Vigilante::armar` (intención que *condiciona servicios* mientras está
+  enfocada, no sólo fija prioridades estáticas). El mecanismo (`armar`) ya está;
+  falta `Pacha.reglas` + un `Effect::ArmarReglas`/`Surfaces`.
+- Capa 5: pendiente.
 
 ## Estado (2026-05-31)
 
