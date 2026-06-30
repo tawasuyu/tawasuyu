@@ -14,7 +14,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, View};
-use llimphi_widget_app_header::{app_header, AppHeaderPalette};
+use llimphi_widget_app_header::{app_header_iconed, AppHeaderPalette, AppIcon};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
@@ -146,7 +146,8 @@ impl App for Gallery {
         let input_palette = TextInputPalette::from_theme(&theme);
 
         // --- Header con acción a la derecha ---
-        let header = app_header(
+        let header = app_header_iconed(
+            AppIcon::Llimphi,
             format!(
                 "llimphi widget gallery · última acción: {}",
                 match model.last_action {

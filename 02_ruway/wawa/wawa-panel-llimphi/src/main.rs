@@ -54,7 +54,7 @@ use llimphi_widget_toast::{toast_stack_view, Toast};
 // Editor de recorrido (Prezi) de la vista espacial — lienzo libre + rotación.
 use pluma_deck_core::{Camara, ContenidoMarco, Marco, Recorrido, RecorridoState, Rect as DeckRect};
 use pluma_deck_recorrido_llimphi::{panel_actual, recorrido_view_editor};
-use llimphi_widget_app_header::{app_header, AppHeaderPalette};
+use llimphi_widget_app_header::{app_header_iconed, AppHeaderPalette, AppIcon};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
@@ -4577,7 +4577,7 @@ fn theme_from_cfg(cfg: &WawaConfig) -> Theme {
 
 fn build_header(theme: &Theme) -> View<Msg> {
     let palette = AppHeaderPalette::from_theme(theme);
-    app_header(rimay_localize::t("wawa-panel-title"), vec![], &palette)
+    app_header_iconed(AppIcon::Wawa, rimay_localize::t("wawa-panel-title"), vec![], &palette)
 }
 
 /// Editor de **recorrido** del Prezi (la vista espacial): un lienzo libre tipo

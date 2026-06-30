@@ -62,6 +62,8 @@ pub enum AppIcon {
     Takiy,
     Tullpu,
     Wawa,
+    Hapiy,
+    Raymi,
     // --- 03_ukupacha · RAÍZ ---
     Agora,
     Arje,
@@ -71,7 +73,7 @@ pub enum AppIcon {
 }
 
 /// Las 29 apps, en orden de cuadrante. Útil para iterar (galerías, tests).
-pub const ALL: [AppIcon; 29] = [
+pub const ALL: [AppIcon; 31] = [
     AppIcon::Chaka,
     AppIcon::Khipu,
     AppIcon::Pineal,
@@ -96,6 +98,8 @@ pub const ALL: [AppIcon; 29] = [
     AppIcon::Takiy,
     AppIcon::Tullpu,
     AppIcon::Wawa,
+    AppIcon::Hapiy,
+    AppIcon::Raymi,
     AppIcon::Agora,
     AppIcon::Arje,
     AppIcon::Minga,
@@ -131,6 +135,8 @@ impl AppIcon {
             AppIcon::Takiy => "takiy",
             AppIcon::Tullpu => "tullpu",
             AppIcon::Wawa => "wawa",
+            AppIcon::Hapiy => "hapiy",
+            AppIcon::Raymi => "raymi",
             AppIcon::Agora => "agora",
             AppIcon::Arje => "arje",
             AppIcon::Minga => "minga",
@@ -175,6 +181,8 @@ impl AppIcon {
             AppIcon::Takiy => (229, 99, 155),
             AppIcon::Tullpu => (224, 96, 58),
             AppIcon::Wawa => (91, 141, 239),
+            AppIcon::Hapiy => (38, 184, 156),
+            AppIcon::Raymi => (216, 88, 120),
             AppIcon::Agora => (47, 158, 143),
             AppIcon::Arje => (176, 141, 87),
             AppIcon::Minga => (224, 123, 57),
@@ -211,6 +219,8 @@ impl AppIcon {
             AppIcon::Takiy => path_takiy(),
             AppIcon::Tullpu => path_tullpu(),
             AppIcon::Wawa => path_wawa(),
+            AppIcon::Hapiy => path_hapiy(),
+            AppIcon::Raymi => path_raymi(),
             AppIcon::Agora => path_agora(),
             AppIcon::Arje => path_arje(),
             AppIcon::Minga => path_minga(),
@@ -796,6 +806,42 @@ fn path_sandokan() -> BezPath {
     p.line_to((18.0, 4.0));
     p.line_to((18.0, 14.0));
     p.line_to((14.0, 18.0));
+    p
+}
+
+fn path_hapiy() -> BezPath {
+    // hapiy = asir/capturar: marco de cuatro esquinas (encuadre de captura).
+    let mut p = BezPath::new();
+    p.move_to((4.0, 8.0));
+    p.line_to((4.0, 4.0));
+    p.line_to((8.0, 4.0)); // sup-izq
+    p.move_to((16.0, 4.0));
+    p.line_to((20.0, 4.0));
+    p.line_to((20.0, 8.0)); // sup-der
+    p.move_to((20.0, 16.0));
+    p.line_to((20.0, 20.0));
+    p.line_to((16.0, 20.0)); // inf-der
+    p.move_to((8.0, 20.0));
+    p.line_to((4.0, 20.0));
+    p.line_to((4.0, 16.0)); // inf-izq
+    p
+}
+
+fn path_raymi() -> BezPath {
+    // raymi = fiesta/calendario: hoja con anillas, cabecera y día marcado.
+    let mut p = BezPath::new();
+    p.move_to((4.0, 6.0));
+    p.line_to((20.0, 6.0));
+    p.line_to((20.0, 20.0));
+    p.line_to((4.0, 20.0));
+    p.close_path();
+    p.move_to((4.0, 10.0));
+    p.line_to((20.0, 10.0)); // cabecera
+    p.move_to((8.0, 4.0));
+    p.line_to((8.0, 7.5)); // anilla izq
+    p.move_to((16.0, 4.0));
+    p.line_to((16.0, 7.5)); // anilla der
+    push_all(&mut p, circle(12.0, 15.0, 1.8, 12)); // día marcado
     p
 }
 
