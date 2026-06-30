@@ -76,7 +76,7 @@ done
 MIRADA_BINS=(
     mirada-compositor mirada-greeter pata-llimphi shuma-shell-llimphi
     mirada-launcher mirada-llimphi mirada-ctl mirada-portal mirada-wallpaper
-    wawa-panel pacha agora-cli sandokan voz-daemon verbo-daemon
+    wawa-panel pacha agora-cli sandokan sandokan-cerebro voz-daemon verbo-daemon
     pata-notify pata-notify-panel pata-notify-triage
     mirada-plugin-host mirada-plugin-sign mirada-session mirada-session-pata
     mirada-session-plugins mirada-dm mirada-supervise

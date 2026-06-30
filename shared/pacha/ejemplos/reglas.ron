@@ -1,0 +1,28 @@
+// Reglas de métrica por contexto (pacha) — capa 2/4.
+// Mapa: id-de-contexto → [reglas]. El contexto debe existir en pachas.ron.
+// Cuando una regla se cumple SOSTENIDAMENTE por `durante`, el Vigilante aplica
+// `entonces` por el contrato (set_cpu_weight / freeze / stop).
+// Copiá/editá a ~/.config/pacha/reglas.ron.
+{
+    "oficina": [
+        (
+            id: "fondo-tranquilo",
+            // Una unidad cuyo label contiene "build" sobre 80% CPU por 30 s…
+            cuando: Todas([
+                EtiquetaContiene("build"),
+                CpuPctMin(80.0),
+            ]),
+            durante: (secs: 30, nanos: 0),
+            // …deprioritiza el slice de fondo (cpu.weight=10).
+            entonces: Priorizar(cgroup_path: "pacha-secundario.slice", weight: 10),
+        ),
+    ],
+    "presentando": [
+        (
+            id: "congelar-fondo-si-quema",
+            cuando: CpuPctMin(60.0),
+            durante: (secs: 10, nanos: 0),
+            entonces: Congelar(cgroup_path: "pacha-secundario.slice", frozen: true),
+        ),
+    ],
+}

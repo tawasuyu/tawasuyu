@@ -555,6 +555,7 @@ members = [
     "03_ukupacha/sandokan/sandokan-daemon",
     "03_ukupacha/sandokan/sandokan-arje-engine",
     "03_ukupacha/sandokan/sandokan-brain",
+    "03_ukupacha/sandokan/sandokan-brain-daemon",
     "03_ukupacha/sandokan/sandokan-local",
     "03_ukupacha/sandokan/sandokan-remote",
     "03_ukupacha/sandokan/sandokan-monitor-llimphi",

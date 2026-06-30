@@ -1,0 +1,32 @@
+[
+  {
+    "id": "01HV4N7XHE3JKWQM4Z5P5F6Z80",
+    "priority": 5,
+    "when": { "type": "Single", "kind": "EnteDied" },
+    "then": [
+      {
+        "kind": "Log",
+        "level": "info",
+        "message": "cerebro: un Ente del fractal terminó (el supervisor decide si reincarna)"
+      }
+    ],
+    "scope": {}
+  },
+  {
+    "id": "01HV4N7XHE3JKWQM4Z5P5F6Z81",
+    "priority": 8,
+    "when": {
+      "type": "Sequence",
+      "kinds": ["EnteDied", "EnteDied", "EnteDied"],
+      "within_ms": 10000
+    },
+    "then": [
+      {
+        "kind": "Log",
+        "level": "error",
+        "message": "cerebro: tormenta de crashes — 3 muertes en menos de 10 s sobre el mismo Ente. Posible loop de regresión."
+      }
+    ],
+    "scope": {}
+  }
+]

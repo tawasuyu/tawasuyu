@@ -1,0 +1,23 @@
+[package]
+name = "sandokan-brain-daemon"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Daemon de capa 3: suscribe a los eventos de ciclo de vida del init (arje-bus), corre el RuleEngine determinista y despacha sus acciones por el contrato vía EngineSink. Es el consumidor vivo que le da teeth al cerebro de reglas."
+
+[[bin]]
+name = "sandokan-cerebro"
+path = "src/main.rs"
+
+[dependencies]
+arje-bus = { path = "../../arje/runtime/arje-bus" }
+arje-brain-rules = { path = "../../arje/runtime/arje-brain-rules" }
+sandokan = { path = "../sandokan" }
+sandokan-brain = { path = "../sandokan-brain" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+ulid = { workspace = true }
+directories = { workspace = true }

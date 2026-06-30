@@ -1,0 +1,31 @@
+[
+  "NOTA: este archivo es REFERENCIA, no se carga. Muestra acciones de CONTROL",
+  "(capa 3): el cerebro actúa sobre el contrato Engine. Copiá las reglas que",
+  "quieras a ~/.config/sandokan/cerebro.json (sacando estas líneas de texto).",
+
+  {
+    "id": "01HV4N7XHE3JKWQM4Z5P5F6Z90",
+    "priority": 9,
+    "_comentario": "Tormenta de crashes de un slice de fondo → deprioritizarlo (cpu.weight=10) en vez de dejarlo quemar CPU reincarnando.",
+    "when": {
+      "type": "Sequence",
+      "kinds": ["EnteDied", "EnteDied", "EnteDied"],
+      "within_ms": 10000
+    },
+    "then": [
+      { "kind": "Log", "level": "warn", "message": "cerebro: deprioritizando slice de fondo por crash-storm" },
+      { "kind": "SetCpuWeight", "cgroup_path": "pacha-secundario.slice", "weight": 10 }
+    ],
+    "scope": { "subject_label": "fondo" }
+  },
+  {
+    "id": "01HV4N7XHE3JKWQM4Z5P5F6Z91",
+    "priority": 7,
+    "_comentario": "Congelar un slice cuando muere su Ente piloto (deja la RAM, libera CPU).",
+    "when": { "type": "Single", "kind": "EnteDied" },
+    "then": [
+      { "kind": "Freeze", "cgroup_path": "pacha-secundario.slice", "frozen": true }
+    ],
+    "scope": { "subject_label": "secundario-piloto" }
+  }
+]

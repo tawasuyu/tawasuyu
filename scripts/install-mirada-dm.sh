@@ -42,7 +42,8 @@ cargo build --release \
     -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi \
     -p pata-notify -p pata-notify-panel -p pata-notify-triage \
     -p mirada-plugin-host -p pacha-cli \
-    -p agora-cli -p sandokan-cli -p rimay-voz-daemon-bin -p pam-tawasuyu
+    -p agora-cli -p sandokan-cli -p sandokan-brain-daemon \
+    -p rimay-voz-daemon-bin -p pam-tawasuyu
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -85,6 +86,10 @@ sudo install -Dm755 "$BIN/agora-cli"               /usr/local/bin/agora-cli
 # Plano de control (sandokan): la CLI `sandokan` — arranca/para/observa unidades
 # (Linux y Wawa). `sandokan-monitor` (UI) ya se instala más abajo.
 sudo install -Dm755 "$BIN/sandokan"                /usr/local/bin/sandokan
+# El cerebro de reglas vivo (sandokan-cerebro): suscribe a los eventos del init
+# y, cuando una regla matchea, actúa por el contrato (stop/cpu.weight/freeze).
+# Sin reglas en disco es un no-op seguro. Se autostartea más abajo.
+sudo install -Dm755 "$BIN/sandokan-cerebro"        /usr/local/bin/sandokan-cerebro
 # Daemon de voz (rimay): par STT+TTS por socket Unix. Hoy backends mock; la
 # sección «Voz» del panel lo configura. Se autoarranca on-demand por su consumidor.
 sudo install -Dm755 "$BIN/voz-daemon"              /usr/local/bin/voz-daemon
@@ -186,6 +191,32 @@ echo "==> pata-notify sembrado en $AUTO"
 # y `pacha list`. Sin él, conmutar de contexto no hace nada. Idempotente.
 grep -qxF 'pacha daemon' "$AUTO" 2>/dev/null || echo 'pacha daemon' >> "$AUTO"
 echo "==> pacha daemon sembrado en $AUTO"
+
+# El cerebro de reglas vivo (capa 3): reacciona a los eventos del init y actúa
+# por el contrato. Arranca con el `cerebro.json` que sembramos abajo (Log-only
+# = seguro/observable); editalo para agregar acciones de control. Idempotente.
+grep -qxF 'sandokan-cerebro' "$AUTO" 2>/dev/null || echo 'sandokan-cerebro' >> "$AUTO"
+echo "==> sandokan-cerebro sembrado en $AUTO"
+
+# --- Configs de ejemplo del plano de control (sólo si faltan; no pisan los tuyos) ---
+# Reglas del cerebro (eventos → acciones). El ejemplo sembrado es Log-only:
+# el daemon corre y reacciona VISIBLEMENTE (journalctl) sin tocar nada. Para
+# acciones de control, mirá ejemplos/cerebro.ejemplo-acciones.json.
+CEREBRO_DST="${HOME}/.config/sandokan/cerebro.json"
+if [ ! -e "$CEREBRO_DST" ]; then
+    mkdir -p "$(dirname "$CEREBRO_DST")"
+    cp "$REPO/03_ukupacha/sandokan/ejemplos/cerebro.json" "$CEREBRO_DST" \
+        && echo "==> reglas del cerebro sembradas en $CEREBRO_DST (Log-only; editá para actuar)"
+fi
+# Reglas de métrica por contexto (Vigilante): el contexto debe existir en
+# pachas.ron. El ejemplo deprioritiza/congela un slice de fondo ante carga
+# sostenida; ajustá los nombres de contexto a los tuyos.
+REGLAS_DST="${HOME}/.config/pacha/reglas.ron"
+if [ ! -e "$REGLAS_DST" ]; then
+    mkdir -p "$(dirname "$REGLAS_DST")"
+    cp "$REPO/shared/pacha/ejemplos/reglas.ron" "$REGLAS_DST" \
+        && echo "==> reglas de métrica sembradas en $REGLAS_DST (ajustá los contextos)"
+fi
 
 # Siembra los plugins de ejemplo en ~/.config/mirada/plugins, para que la sesión
 # «mirada · plugins» arranque con algo que mostrar: el layout (right-master) y el

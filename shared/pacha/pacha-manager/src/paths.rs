@@ -155,4 +155,15 @@ mod tests {
     fn parse_reglas_basura_es_error() {
         assert!(parse_reglas("no es ron {{{").is_err());
     }
+
+    /// El `reglas.ron` que siembra el install DEBE parsear — si no, el daemon
+    /// arranca sin reglas y el usuario no se entera.
+    #[test]
+    fn ejemplo_sembrado_parsea() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ejemplos/reglas.ron");
+        let s = std::fs::read_to_string(&p).expect("leer ejemplos/reglas.ron");
+        let mapa = parse_reglas(&s).expect("reglas.ron de ejemplo no parsea");
+        assert!(mapa.contains_key("oficina"));
+        assert!(mapa.contains_key("presentando"));
+    }
 }

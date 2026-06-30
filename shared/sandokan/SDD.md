@@ -301,7 +301,13 @@ verbos+reglas existentes, no los reimplementa.
   `03_ukupacha/sandokan/sandokan-brain` con `EngineSink` que implementa
   `ActionSink` enrutando los tres verbos a un `sandokan_core::Engine`
   (fire-and-forget vía `Handle::spawn`), probado con un Engine mock que registra
-  las llamadas. Cierra el lazo observar→actuar sin tocar PID 1.
+  las llamadas. Cierra el lazo observar→actuar sin tocar PID 1. **Desplegada**
+  (2026-06-30): `sandokan-brain-daemon` (binario `sandokan-cerebro`) es el
+  consumidor vivo — suscribe a los `BusEvent` del init (`arje-bus Subscribe`),
+  traduce a `EventKind`/`SubjectInfo`, corre el `RuleEngine` de
+  `~/.config/sandokan/cerebro.json` y despacha por `EngineSink` sobre
+  `sandokan::auto` (ArjeEngine). `install-mirada-dm.sh` lo construye, instala y
+  autostartea, y siembra un `cerebro.json` Log-only (no-op seguro/observable).
 - **Capa 1** *(parcial, 2026-06-30)*: `set_cpu_weight`/`freeze` cableados
   **end-to-end** por Linux — antes existían en el contrato pero el único Engine
   real (`ArjeEngine` sobre arje-bus) los dejaba en `Unsupported`. Ahora
