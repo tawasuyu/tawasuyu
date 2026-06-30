@@ -192,20 +192,25 @@ echo "==> pata-notify sembrado en $AUTO"
 grep -qxF 'pacha daemon' "$AUTO" 2>/dev/null || echo 'pacha daemon' >> "$AUTO"
 echo "==> pacha daemon sembrado en $AUTO"
 
-# El cerebro de reglas vivo (capa 3): reacciona a los eventos del init y actúa
-# por el contrato. Arranca con el `cerebro.json` que sembramos abajo (Log-only
-# = seguro/observable); editalo para agregar acciones de control. Idempotente.
-grep -qxF 'sandokan-cerebro' "$AUTO" 2>/dev/null || echo 'sandokan-cerebro' >> "$AUTO"
-echo "==> sandokan-cerebro sembrado en $AUTO"
+# El cerebro de reglas vivo (capa 3) NO va acá: corre como Ente de SISTEMA
+# (root) para llegar al bus del init (root-only) y para que sus acciones de
+# control pasen el gate del bus, que exige identidad de Ente. Lo agrega
+# `arje-absorb` al seed (`graphical_overlay`), junto al compositor. Si quedó una
+# entrada vieja del cerebro en el autostart de usuario (instalaciones previas),
+# la quitamos: ahí corría como el usuario y ni conectaba al bus.
+if [ -f "$AUTO" ]; then
+    sed -i '/^sandokan-cerebro$/d' "$AUTO" && echo "==> sandokan-cerebro removido del autostart de usuario (ahora es Ente de sistema)"
+fi
 
 # --- Configs de ejemplo del plano de control (sólo si faltan; no pisan los tuyos) ---
 # Reglas del cerebro (eventos → acciones). El ejemplo sembrado es Log-only:
-# el daemon corre y reacciona VISIBLEMENTE (journalctl) sin tocar nada. Para
+# el daemon corre y reacciona VISIBLEMENTE (journal) sin tocar nada. Para
 # acciones de control, mirá ejemplos/cerebro.ejemplo-acciones.json.
-CEREBRO_DST="${HOME}/.config/sandokan/cerebro.json"
+# Va en /etc/sandokan (root-controlada): el cerebro corre como Ente de sistema
+# (root, $HOME=/root) y lee de ahí — ver ruta_reglas() en sandokan-brain-daemon.
+CEREBRO_DST="/etc/sandokan/cerebro.json"
 if [ ! -e "$CEREBRO_DST" ]; then
-    mkdir -p "$(dirname "$CEREBRO_DST")"
-    cp "$REPO/03_ukupacha/sandokan/ejemplos/cerebro.json" "$CEREBRO_DST" \
+    sudo install -Dm644 "$REPO/03_ukupacha/sandokan/ejemplos/cerebro.json" "$CEREBRO_DST" \
         && echo "==> reglas del cerebro sembradas en $CEREBRO_DST (Log-only; editá para actuar)"
 fi
 # Reglas de métrica por contexto (Vigilante): el contexto debe existir en

@@ -188,6 +188,21 @@ pub fn graphical_overlay(root: &Path) -> Vec<Card> {
     // El compositor-greeter (auto-detecta el asiento; sin pin de LIBSEAT_BACKEND).
     cards.push(carmen_dm_card());
 
+    // El cerebro de reglas vivo (sandokan-cerebro, capa 3): Ente de SISTEMA
+    // (root) — no entrada del autostart de la sesión de usuario. Tiene que
+    // correr como root para suscribirse al bus del init (root-only) y para que
+    // sus acciones de control (stop/cpu.weight/freeze) pasen el gate del bus,
+    // que exige identidad de Ente, no sólo uid 0. Como Ente del génesis, arje le
+    // inyecta ENTE_BUS_SOCK + ENTE_ID. Sin reglas en /etc/sandokan/cerebro.json
+    // es un no-op seguro (escucha y no actúa). Daemon supervisado con back-off.
+    cards.push(overlay_card(
+        "sandokan-cerebro",
+        "/usr/local/bin/sandokan-cerebro".to_string(),
+        &[],
+        true,
+        Priority::Normal,
+    ));
+
     // Getty de rescate en tty2 (tty1 es del compositor).
     if let Some(getty) = detect(root, &["/sbin/agetty", "/usr/bin/agetty", "/bin/agetty"]) {
         cards.push(overlay_card(
@@ -401,7 +416,7 @@ mod tests {
         }
         let overlay = graphical_overlay(&tmp);
         let names: Vec<&str> = overlay.iter().map(|c| c.label.as_str()).collect();
-        for must in ["sysctl", "udevd", "seatd", "dhcpcd", "arje-splash", "carmen-dm", "agetty-rescue"] {
+        for must in ["sysctl", "udevd", "seatd", "dhcpcd", "arje-splash", "carmen-dm", "sandokan-cerebro", "agetty-rescue"] {
             assert!(names.contains(&must), "falta {must} en {names:?}");
         }
         // El exec es el path ABSOLUTO del sistema destino, SIN el prefijo root.
@@ -427,6 +442,8 @@ mod tests {
             graphical_overlay(&tmp).iter().map(|c| c.label.clone()).collect();
         assert!(names.contains(&"arje-splash".to_string()), "{names:?}");
         assert!(names.contains(&"carmen-dm".to_string()), "{names:?}");
+        // El cerebro es un path tawasuyu (no del host) → siempre en el overlay.
+        assert!(names.contains(&"sandokan-cerebro".to_string()), "{names:?}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

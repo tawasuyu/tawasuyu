@@ -112,8 +112,21 @@ fn sujeto(id: Ulid, label: &str) -> SubjectInfo {
     }
 }
 
-/// `~/.config/sandokan/cerebro.json`. `None` si no hay config dir.
+/// Resuelve el `cerebro.json`. El cerebro corre como Ente de SISTEMA (root) —
+/// su `$HOME` es `/root`, así que `~/.config` no sirve para el despliegue real.
+/// Orden de resolución: override explícito por env `SANDOKAN_CEREBRO_REGLAS`
+/// (para tests y overrides puntuales) → `/etc/sandokan/cerebro.json` (ruta de
+/// sistema canónica, root-controlada, donde la siembra el install) → fallback
+/// `~/.config/sandokan/cerebro.json` (corrida como usuario en dev). `None` sólo
+/// si no hay ni env, ni `/etc`, ni config dir.
 fn ruta_reglas() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("SANDOKAN_CEREBRO_REGLAS") {
+        return Some(PathBuf::from(p));
+    }
+    let etc = PathBuf::from("/etc/sandokan/cerebro.json");
+    if etc.exists() {
+        return Some(etc);
+    }
     directories::ProjectDirs::from("", "", "sandokan").map(|d| d.config_dir().join("cerebro.json"))
 }
 
@@ -145,6 +158,19 @@ mod tests {
         let s = std::fs::read_to_string(&p).expect("leer ejemplos/cerebro.json");
         let eng = RuleEngine::load_json(&s).expect("cerebro.json de ejemplo no parsea");
         assert_eq!(eng.len(), 2, "el ejemplo trae 2 reglas (death + crash-storm)");
+    }
+
+    /// El override por env gana sobre `/etc` y `~/.config`: es lo que usan los
+    /// tests y un operador que quiera apuntar a otro archivo sin tocar el sistema.
+    #[test]
+    fn env_override_gana_la_ruta() {
+        let antes = std::env::var("SANDOKAN_CEREBRO_REGLAS").ok();
+        std::env::set_var("SANDOKAN_CEREBRO_REGLAS", "/tmp/cerebro-test-xyz.json");
+        assert_eq!(ruta_reglas(), Some(PathBuf::from("/tmp/cerebro-test-xyz.json")));
+        match antes {
+            Some(v) => std::env::set_var("SANDOKAN_CEREBRO_REGLAS", v),
+            None => std::env::remove_var("SANDOKAN_CEREBRO_REGLAS"),
+        }
     }
 
     #[test]
