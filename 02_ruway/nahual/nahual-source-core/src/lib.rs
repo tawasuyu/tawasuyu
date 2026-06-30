@@ -52,7 +52,10 @@ pub use nouser::NouserSource;
 /// despache por el lente / construya grafos sin depender de chasqui
 /// directamente — `nahual-source-core` es su seam hacia el dominio nouser.
 #[cfg(feature = "nouser")]
-pub use chasqui_core::{db::MonadDb, edit, resolve, Lens, MonadManifest, MonadQuery};
+pub use chasqui_core::{
+    cluster, db::MonadDb, edit, resolve, scanner, FileEntry, FileId, Lens, MonadId, MonadManifest,
+    MonadQuery,
+};
 #[cfg(feature = "nouser-daemon")]
 pub use nouser_daemon::NouserDaemonSource;
 #[cfg(feature = "minga")]
