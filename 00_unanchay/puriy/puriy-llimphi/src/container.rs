@@ -376,7 +376,10 @@ fn space_rail(model: &Model) -> View<Msg> {
                 justify_content: Some(JustifyContent::Center),
                 ..Default::default()
             })
-            .text_aligned(glyph, size * 0.9, color, Alignment::Center)
+            // Ícono del diente: vector si el glifo está en el catálogo, texto
+            // si no (las iniciales de nombre caen a texto). El nodo ya tiene
+            // size fijo, así que el View absoluto 100% del helper se dimensiona bien.
+            .children(vec![llimphi_icons::glyph_or_text_view(&glyph, size * 0.9, color, 1.8)])
         },
         |id| Msg::SelectSpace(id as usize),
         // El rail no recibe drops de tabs (no sabe sobre qué diente cayó).

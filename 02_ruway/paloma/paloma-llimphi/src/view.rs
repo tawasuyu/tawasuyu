@@ -190,13 +190,30 @@ fn mailbox_row(
     let bg = if selected { theme.bg_selected } else { theme.bg_panel_alt };
     let fg = if unread > 0 || selected { theme.fg_text } else { theme.fg_muted };
 
-    let label = View::new(Style {
+    // Glifo del rol como ícono vectorial (cae a texto si no está en catálogo)
+    // seguido del nombre del buzón, en una fila.
+    let icono = View::new(Style {
+        size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![llimphi_icons::glyph_or_text_view(glyph, 14.0, fg, 1.7)]);
+    let nombre = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
-        flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(format!("{glyph}  {name}"), 14.0, fg, Alignment::Start);
+    .text_aligned(name.to_string(), 14.0, fg, Alignment::Start);
+    let label = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![icono, nombre]);
 
     let mut children = vec![accent_bar(if selected { theme.accent } else { bg }), label];
     if unread > 0 {
@@ -269,20 +286,42 @@ fn account_row(theme: &Theme, label: &str, active: bool, connecting: bool, id: S
     let fg = if active || connecting { theme.fg_text } else { theme.fg_muted };
     // ⟳ mientras conecta, ● la activa, ○ el resto.
     let glyph = if connecting { "⟳" } else if active { "●" } else { "○" };
-    let text = View::new(Style {
+    // Ícono de usuario (vectorial) + etiqueta de la cuenta, en una fila.
+    let icono = View::new(Style {
+        size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![llimphi_icons::glyph_or_text_view("👤", 13.0, fg, 1.7)]);
+    let nombre = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
-        flex_grow: 1.0,
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(format!("👤  {label}"), 13.0, fg, Alignment::Start);
+    .text_aligned(label.to_string(), 13.0, fg, Alignment::Start);
+    let text = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![icono, nombre]);
+    // Marca de estado: ⟳ conectando, ● activa, ○ resto (vectorial; ○ cae a texto).
     let mark = View::new(Style {
         size: Size { width: length(16.0_f32), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(glyph, 12.0, if active || connecting { theme.accent } else { theme.fg_muted }, Alignment::Center);
+    .children(vec![llimphi_icons::glyph_or_text_view(
+        glyph,
+        12.0,
+        if active || connecting { theme.accent } else { theme.fg_muted },
+        1.7,
+    )]);
 
     let mut row = View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -451,7 +490,8 @@ fn star_toggle(theme: &Theme, flagged: bool, id: Option<paloma_core::MessageId>)
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text(glyph, 14.0, color);
+    // Estrella vectorial (★/☆ → Icon::Sparkle); el nodo tiene tamaño fijo.
+    .children(vec![llimphi_icons::glyph_or_text_view(glyph, 14.0, color, 1.7)]);
     if let Some(id) = id {
         v = v.on_click(Msg::ToggleStar(id));
     }
@@ -1039,13 +1079,15 @@ pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
 /// identidad de agora llega al integrar el keystore (ver LEEME · Pendiente).
 fn sign_checkbox(theme: &Theme, on: bool) -> View<Msg> {
     let (box_glyph, color) = if on { ("☑", theme.accent) } else { ("☐", theme.fg_muted) };
+    // Casilla vectorial si el glifo está en catálogo; cae a texto si no
+    // (☑/☐ no mapean hoy → texto). El nodo tiene tamaño fijo.
     let mark = View::new(Style {
         size: Size { width: length(20.0_f32), height: length(20.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text(box_glyph, 16.0, color);
+    .children(vec![llimphi_icons::glyph_or_text_view(box_glyph, 16.0, color, 1.7)]);
     let label = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),

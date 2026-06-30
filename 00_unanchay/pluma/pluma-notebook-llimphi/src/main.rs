@@ -1237,7 +1237,10 @@ fn edit_button_view(id: CellId, editing: bool, palette: &Palette) -> View<Msg> {
     .fill(palette.bg_panel)
     .hover_fill(palette.accent_fresh)
     .on_click(msg)
-    .text_aligned(glyph, 10.0, palette.fg_text, Alignment::Center)
+    // Ícono del botón editar/commit: vector si el glifo está en el catálogo,
+    // texto si no. El nodo ya tiene size fijo (RUN_BTN_SIZE), así que el View
+    // absoluto 100% del helper se dimensiona correctamente.
+    .children(vec![llimphi_icons::glyph_or_text_view(glyph, 10.0, palette.fg_text, 1.8)])
 }
 
 fn orphan_notice(n: usize, palette: &Palette) -> View<Msg> {

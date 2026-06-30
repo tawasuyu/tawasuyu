@@ -4906,8 +4906,10 @@ fn bar_widgets_view(surf: usize, s: &pata_core::Surface, theme: &Theme) -> View<
                 .radius(5.0)
                 .tooltip(label.clone())
                 .children(vec![
+                    View::new(Style { size: Size { width: length(16.0_f32), height: length(16.0_f32) }, flex_shrink: 0.0, ..Default::default() })
+                        .children(vec![llimphi_icons::glyph_or_text_view(&icon, 12.0, theme.fg_text, 1.7)]),
                     View::new(Style { size: Size { width: auto(), height: length(24.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
-                        .text_aligned(format!("{icon} {label}"), 12.0, theme.fg_text, Alignment::Start),
+                        .text_aligned(label.clone(), 12.0, theme.fg_text, Alignment::Start),
                     x,
                 ])
             })
@@ -4944,7 +4946,11 @@ fn bar_widgets_view(surf: usize, s: &pata_core::Surface, theme: &Theme) -> View<
                 .border(1.0, theme.border)
                 .tooltip(format!("Agregar {}", w.label))
                 .on_click(Msg::BarWidgetAdd(surf, slot_idx, kind))
-                .text_aligned(w.icon.to_string(), 14.0, theme.fg_muted, Alignment::Center)
+                .children(vec![View::new(Style {
+                    size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![llimphi_icons::glyph_or_text_view(w.icon, 14.0, theme.fg_muted, 1.7)])])
             })
             .collect();
         let paleta = View::new(Style {
@@ -5001,13 +5007,20 @@ fn sidebar_dientes_view(surf: usize, s: &pata_core::Surface, theme: &Theme) -> V
         .map(|(i, t)| {
             let icon = if t.icon.chars().count() <= 2 { t.icon.clone() } else { "❖".to_string() };
             let label = if t.label.trim().is_empty() { t.content.kind.clone() } else { t.label.clone() };
+            // Ícono del diente como vector (glifo→vector, determinista).
+            let icono = View::new(Style {
+                size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .children(vec![llimphi_icons::glyph_or_text_view(&icon, 13.0, theme.fg_text, 1.7)]);
             let nombre = View::new(Style {
                 flex_grow: 1.0,
                 size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
-            .text_aligned(format!("{icon}  {label}   ·  {}", t.content.kind), 13.0, theme.fg_text, Alignment::Start)
+            .text_aligned(format!("{label}   ·  {}", t.content.kind), 13.0, theme.fg_text, Alignment::Start)
             .ellipsis(1);
             let del = View::new(Style {
                 size: Size { width: length(28.0_f32), height: length(28.0_f32) },
@@ -5032,7 +5045,7 @@ fn sidebar_dientes_view(surf: usize, s: &pata_core::Surface, theme: &Theme) -> V
             })
             .fill(theme.bg_panel)
             .radius(5.0)
-            .children(vec![nombre, del])
+            .children(vec![icono, nombre, del])
         })
         .collect();
     if filas.is_empty() {

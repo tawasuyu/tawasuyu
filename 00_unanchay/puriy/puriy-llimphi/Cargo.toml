@@ -22,6 +22,7 @@ llimphi-motion = { workspace = true }
 llimphi-clipboard = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
+llimphi-icons = { workspace = true }
 allichay = { workspace = true }
 llimphi-module-allichay = { workspace = true }
 app-bus = { workspace = true }

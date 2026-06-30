@@ -1167,7 +1167,9 @@ fn fila(model: &Model, i: usize) -> View<Msg> {
     })
     .fill(icon_tint(&u.category))
     .radius(9.0)
-    .text(u.icon.clone(), 20.0, icon_color(&u.category));
+    // Glifo de la unidad como ícono vectorial (cae a texto si no está en
+    // catálogo); el nodo-pastilla ya tiene tamaño fijo 38×38.
+    .children(vec![llimphi_icons::glyph_or_text_view(&u.icon, 20.0, icon_color(&u.category), 1.7)]);
     let icono = View::new(Style {
         size: Size { width: length(46.0), height: length(ROW_H) },
         align_items: Some(AlignItems::Center),

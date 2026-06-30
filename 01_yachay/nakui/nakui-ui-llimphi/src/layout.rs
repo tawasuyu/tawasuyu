@@ -53,20 +53,24 @@ pub(crate) fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
     let menu_panel = match model.selected_module {
         Some(mod_idx) => {
             let m = &model.modules[mod_idx];
-            let rows: Vec<ListRow<Msg>> = m
+            // Cada item del menú lleva su ícono como VECTORIAL (vía el catálogo
+            // de `llimphi_icons`), cayendo a texto si el glifo no está mapeado.
+            // Ya no se antepone el glifo al label.
+            let rows: Vec<IconRow<Msg>> = m
                 .menu
                 .iter()
                 .enumerate()
-                .map(|(i, item)| ListRow {
-                    label: match &item.icon {
-                        Some(ic) => format!("{ic}  {}", item.label),
-                        None => item.label.clone(),
-                    },
+                .map(|(i, item)| IconRow {
+                    icon: item
+                        .icon
+                        .as_deref()
+                        .map(|g| llimphi_icons::glyph_or_text_view(g, 14.0, theme.fg_text, 1.7)),
+                    label: item.label.clone(),
                     selected: model.selected_menu == Some(i),
                     on_click: Msg::SelectMenu(i),
                 })
                 .collect();
-            list_view(ListSpec {
+            icon_list_view(IconListSpec {
                 rows,
                 total: m.menu.len(),
                 caption: Some(rimay_localize::t("nakui-sidebar-menu")),

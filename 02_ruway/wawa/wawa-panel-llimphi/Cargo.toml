@@ -23,6 +23,8 @@ llimphi-widget-dock-rail = { workspace = true }
 tullpu-icon-core = { workspace = true }
 tullpu-icon-llimphi = { workspace = true }
 tullpu-core = { workspace = true }
+# Catálogo glifo→vector para los editores de barra/dientes del panel.
+llimphi-icons = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 # Toasts efímeros: confirmaciones de guardado y errores de persistencia.
 llimphi-widget-toast = { workspace = true }
