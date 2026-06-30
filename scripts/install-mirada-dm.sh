@@ -42,7 +42,7 @@ cargo build --release \
     -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi \
     -p pata-notify -p pata-notify-panel -p pata-notify-triage \
     -p mirada-plugin-host -p pacha-cli \
-    -p agora-cli -p sandokan-app -p rimay-voz-daemon-bin -p pam-tawasuyu
+    -p agora-cli -p sandokan-cli -p rimay-voz-daemon-bin -p pam-tawasuyu
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"

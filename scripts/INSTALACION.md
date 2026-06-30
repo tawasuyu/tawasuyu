@@ -162,7 +162,7 @@ las querés.
 # Todo el desktop + sistema soberano:
 cargo build --release -p mirada-compositor -p mirada-greeter -p pata-llimphi \
   -p shuma-shell-llimphi -p wawa-panel-llimphi -p pacha-cli -p agora-cli \
-  -p sandokan-app -p rimay-voz-daemon-bin -p pam-tawasuyu
+  -p sandokan-cli -p rimay-voz-daemon-bin -p pam-tawasuyu
 # Embeddings (pesado, opcional):
 cargo build --release -p rimay-verbo-daemon-bin
 ```
