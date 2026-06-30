@@ -127,6 +127,18 @@ install -m 0644 "$WEB/styles.css" "$DEST/styles.css"
 rm -rf "$DEST/pkg"
 cp -r "$WEB/pkg" "$DEST/pkg"
 
+# --- 6.5) assets estáticos (íconos SVG de las apps, etc.).
+#       Se sirven en /web/tawasuyu-web/assets/… para que las rutas absolutas
+#       de las cards (`<img src="/web/tawasuyu-web/assets/icons/<app>.svg">`)
+#       resuelvan. Los SVG se regeneran con:
+#         cargo run -p tawasuyu-apps-desktop -- --svg-dir web/tawasuyu-web/assets/icons
+if [ -d "$WEB/assets" ]; then
+  echo "==> assets (íconos de apps) → $DEST/web/tawasuyu-web/assets/"
+  rm -rf "$DEST/web/tawasuyu-web/assets"
+  mkdir -p "$DEST/web/tawasuyu-web"
+  cp -r "$WEB/assets" "$DEST/web/tawasuyu-web/assets"
+fi
+
 # --- 7) tamaño y reporte ---
 SIZE=$(du -sh "$DEST" 2>/dev/null | awk '{print $1}')
 MDS=$(find "$DEST" -name '*.md' -type f 2>/dev/null | wc -l)
