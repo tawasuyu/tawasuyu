@@ -334,7 +334,7 @@ impl WinitSurface {
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
         };
-        surface.configure(&hal.device, &config);
+        configure_checked(&hal.device, &surface, &config).map_err(HalError::CreateSurface)?;
         let (intermediate, intermediate_view) =
             create_intermediate(&hal.device, config.width, config.height);
         let (overlay, overlay_view) =
@@ -439,7 +439,7 @@ impl RawSurface {
             alpha_mode,
             view_formats: vec![],
         };
-        surface.configure(&hal.device, &config);
+        configure_checked(&hal.device, &surface, &config).map_err(HalError::CreateSurface)?;
         let (intermediate, intermediate_view) =
             create_intermediate(&hal.device, config.width, config.height);
         let (overlay, overlay_view) =
@@ -480,7 +480,9 @@ impl Surface for RawSurface {
         }
         self.config.width = w;
         self.config.height = h;
-        self.surface.configure(&self.device, &self.config);
+        if let Err(e) = configure_checked(&self.device, &self.surface, &self.config) {
+            eprintln!("llimphi-hal: configure en resize falló (surface perdida?): {e}");
+        }
         let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
         self.intermediate = tex;
         self.intermediate_view = view;
@@ -498,7 +500,14 @@ impl Surface for RawSurface {
             // y reintentamos una vez. Sin esto el panel quedaría en negro para
             // siempre tras el primer `Outdated`.
             Err(e @ (wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost)) => {
-                self.surface.configure(&self.device, &self.config);
+                // Reconfigurar CAPTURANDO: si la surface está realmente perdida,
+                // `configure` emite un error de validación que, sin captura,
+                // mataría el proceso (era el crash de pata). Acá lo devolvemos
+                // como `Lost` y el caller salta el frame e intenta de nuevo.
+                if let Err(msg) = configure_checked(&self.device, &self.surface, &self.config) {
+                    eprintln!("llimphi-hal: reconfigurar tras {e:?} falló (surface perdida): {msg}");
+                    return Err(SurfaceError::Lost);
+                }
                 self.surface.get_current_texture().map_err(|_| match e {
                     wgpu::SurfaceError::Lost => SurfaceError::Lost,
                     _ => SurfaceError::Outdated,
@@ -571,6 +580,29 @@ fn choose_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
         Mailbox
     } else {
         Fifo
+    }
+}
+
+/// Configura el swapchain **capturando** los errores de validación de wgpu, en
+/// vez de dejar que el handler por defecto («wgpu errors as fatal») paniquee el
+/// proceso entero. Devuelve `Err(mensaje)` si la configuración falló — casi
+/// siempre porque la surface se perdió (`SURFACE_LOST`, un hipo transitorio del
+/// compositor/GPU): el caller decide (saltar el frame, marcar perdida) en vez de
+/// morir. Robustez: una app no debe caerse por un glitch del surface (lo que
+/// tumbaba a `pata` con «Surface does not support the adapter's queue family»).
+///
+/// Los errores de validación de wgpu son CPU-side: el scope los captura durante
+/// la llamada, así que `pop_error_scope` resuelve sin bloquear contra la GPU.
+fn configure_checked(
+    device: &wgpu::Device,
+    surface: &wgpu::Surface<'static>,
+    config: &wgpu::SurfaceConfiguration,
+) -> Result<(), String> {
+    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    surface.configure(device, config);
+    match pollster::block_on(device.pop_error_scope()) {
+        Some(e) => Err(e.to_string()),
+        None => Ok(()),
     }
 }
 
@@ -1525,7 +1557,9 @@ impl Surface for WinitSurface {
     fn resize(&mut self, width: u32, height: u32) {
         self.config.width = width.max(1);
         self.config.height = height.max(1);
-        self.surface.configure(&self.device, &self.config);
+        if let Err(e) = configure_checked(&self.device, &self.surface, &self.config) {
+            eprintln!("llimphi-hal: configure en resize falló (surface perdida?): {e}");
+        }
         let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
         self.intermediate = tex;
         self.intermediate_view = view;
