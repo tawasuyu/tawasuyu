@@ -10,6 +10,9 @@ description = "nahual-source-core — abstracción de FUENTE navegable para el f
 
 [dependencies]
 wawa-explorer-core = { path = "../../../03_ukupacha/wawa-explorer/wawa-explorer-core" }
+# Lectura SOBERANA de un dispositivo de bloques crudo (FAT/ext, GPT/MBR) sin
+# montar: navegar un USB/partición leyendo sus bytes, no vía udisks/run-media.
+foreign-fs = { path = "../../../shared/foreign-fs" }
 chasqui-core = { path = "../../chasqui/chasqui-core", optional = true }
 chasqui-card = { path = "../../chasqui/chasqui-card", optional = true }
 card-sidecar = { path = "../../chasqui/card-sidecar", optional = true }

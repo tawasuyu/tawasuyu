@@ -32,6 +32,7 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod dispositivo;
 pub mod navigator;
 pub mod posix;
 pub mod wawa;
@@ -43,6 +44,7 @@ pub mod nouser_daemon;
 pub mod minga;
 
 pub use archive::ArchiveSource;
+pub use dispositivo::{DispositivoInfo, DispositivosSource};
 pub use navigator::{Navigator, Opened, SortDir, SortKey, ViewMode};
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
