@@ -55,6 +55,14 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
     zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1, EVT_TOPLEVEL_OPCODE},
 };
+use wayland_protocols::ext::idle_notify::v1::client::{
+    ext_idle_notification_v1::ExtIdleNotificationV1, ext_idle_notifier_v1::ExtIdleNotifierV1,
+};
+
+/// Segundos de inactividad **adicional** entre reintentos de suspensión cuando
+/// se pospuso por trabajo en curso: el compositor nos vuelve a despertar para
+/// reintentar en cuanto el trabajo termine (sin volver a pedir input).
+pub(super) const REINTENTO_ENERGIA_SECS: u32 = 60;
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_compositor::{
@@ -225,6 +233,18 @@ pub(super) struct LayerApp {
     /// El manager de wlr-foreign-toplevel, si el compositor lo expone.
     #[allow(dead_code)]
     pub(super) toplevel_mgr: Option<ZwlrForeignToplevelManagerV1>,
+    /// Notificador de inactividad del compositor (ext-idle-notify-v1), si lo
+    /// expone. Fuente del idle inteligente de energía.
+    pub(super) idle_notifier: Option<ExtIdleNotifierV1>,
+    /// Notificación de inactividad viva (timeout para suspender). Se re-arma al
+    /// posponer; `None` hasta que haya seat + notifier.
+    pub(super) idle_notif: Option<ExtIdleNotificationV1>,
+    /// Política del idle de energía (suspender/apagar por inactividad).
+    pub(super) energia_cfg: crate::energia::ConfigEnergia,
+    /// Ya se emitió la suspensión/apagado en este ciclo de inactividad.
+    pub(super) energia_disparado: bool,
+    /// Ya se avisó «pospuesto» en este ciclo (no repetir en cada reintento).
+    pub(super) energia_pospuesto: bool,
     /// Las ventanas abiertas que reporta el compositor.
     pub(super) toplevels: Vec<Toplevel>,
     /// Orden propio de los botones del task manager (`id`s de toplevel). Vacío =
@@ -493,6 +513,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         eprintln!("pata layer · el compositor no expone wlr-foreign-toplevel; window_list vacío");
     }
 
+    // Inactividad del sistema (idle inteligente de energía). Si el compositor no
+    // lo expone, el idle queda inactivo (no es fatal: pata sigue como barra).
+    let idle_notifier = globals
+        .bind::<ExtIdleNotifierV1, _, _>(&qh, 1..=2, ())
+        .ok();
+    if idle_notifier.is_none() {
+        eprintln!("pata layer · el compositor no expone ext-idle-notify; idle de energía inactivo");
+    }
+
     let tray = crate::config_tiene_widget(&cfg, "tray")
         .then(TrayHandle::spawn)
         .flatten();
@@ -625,6 +654,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         pointer: None,
         seat: None,
         toplevel_mgr,
+        idle_notifier,
+        idle_notif: None,
+        energia_cfg: crate::energia::ConfigEnergia::default(),
+        energia_disparado: false,
+        energia_pospuesto: false,
         toplevels: Vec::new(),
         task_order: Vec::new(),
         task_drag: None,

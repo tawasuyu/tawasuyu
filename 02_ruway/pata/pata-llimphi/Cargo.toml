@@ -125,6 +125,11 @@ wayland-client = "0.31"
 # Lista de ventanas (widget `window_list`): wlr-foreign-toplevel-management, el
 # protocolo que usan waybar/eww para enumerar y activar toplevels en wlroots.
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# Inactividad del sistema (idle inteligente de energía): ext-idle-notify-v1, el
+# mismo protocolo que usa swayidle. mirada lo implementa; pata registra una
+# notificación de inactividad y, al dispararse, consulta el veto (unidades +
+# carga) antes de suspender — sin cortar trabajo importante.
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 # Bandeja del sistema (widget `tray`): StatusNotifierItem sobre D-Bus. pata corre
 # como watcher+host en un hilo aparte con zbus async sobre un runtime tokio
 # current-thread (el workspace fija zbus con la feature `tokio`, no la blocking).

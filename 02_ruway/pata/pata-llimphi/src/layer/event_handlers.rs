@@ -23,6 +23,10 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
     zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1, EVT_TOPLEVEL_OPCODE},
 };
+use wayland_protocols::ext::idle_notify::v1::client::{
+    ext_idle_notification_v1::{self, ExtIdleNotificationV1},
+    ext_idle_notifier_v1::{self, ExtIdleNotifierV1},
+};
 
 use llimphi_ui::llimphi_compositor::{hit_test_click, hit_test_hover, hit_test_scroll, DragPhase};
 
@@ -654,6 +658,41 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for LayerApp {
     event_created_child!(LayerApp, ZwlrForeignToplevelManagerV1, [
         EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
     ]);
+}
+
+/// El notificador de inactividad no emite eventos propios; sólo fabrica
+/// notificaciones. Impl vacía para poder bindear el global.
+impl Dispatch<ExtIdleNotifierV1, ()> for LayerApp {
+    fn event(
+        _: &mut Self,
+        _: &ExtIdleNotifierV1,
+        _: ext_idle_notifier_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// La notificación de inactividad: `idled` cuando el sistema cumplió el timeout
+/// sin actividad, `resumed` al volver. Es la señal que dispara el idle de
+/// energía — y, vía re-armado, su reintento.
+impl Dispatch<ExtIdleNotificationV1, ()> for LayerApp {
+    fn event(
+        state: &mut Self,
+        _: &ExtIdleNotificationV1,
+        event: ext_idle_notification_v1::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        use ext_idle_notification_v1::Event;
+        match event {
+            Event::Idled => state.energia_al_ociar(qh),
+            Event::Resumed => state.energia_al_volver(qh),
+            _ => {}
+        }
+    }
 }
 
 /// Un handle de toplevel: el compositor le manda título / app_id / estado.

@@ -725,6 +725,83 @@ impl LayerApp {
         }
     }
 
+    /// Arma la notificación de inactividad si el compositor la expone y el idle
+    /// de energía está habilitado. Idempotente: no re-crea si ya hay una viva.
+    pub(super) fn ensure_idle_arm(&mut self, qh: &QueueHandle<Self>) {
+        if self.idle_notif.is_some() || !self.energia_cfg.habilitado {
+            return;
+        }
+        let secs = self.energia_cfg.suspender_secs;
+        if secs > 0 {
+            self.armar_idle(secs, qh);
+        }
+    }
+
+    /// (Re)crea la notificación de inactividad con `secs` de timeout. Necesita
+    /// notifier + seat; cae al primer seat conocido si `self.seat` aún es `None`
+    /// (mismo fallback que `activar_ventana`).
+    fn armar_idle(&mut self, secs: u32, qh: &QueueHandle<Self>) {
+        let Some(notifier) = self.idle_notifier.clone() else {
+            return;
+        };
+        let seat = self
+            .seat
+            .clone()
+            .or_else(|| self.seat_state.seats().next());
+        let Some(seat) = seat else {
+            return;
+        };
+        if let Some(old) = self.idle_notif.take() {
+            old.destroy();
+        }
+        let notif = notifier.get_idle_notification(secs.saturating_mul(1000), &seat, qh, ());
+        self.idle_notif = Some(notif);
+    }
+
+    /// El sistema cumplió el umbral de inactividad: consulta el veto (unidades
+    /// del plano de control + carga del sistema) y suspende, **pospone** (con
+    /// aviso del motivo) o no hace nada según la política.
+    pub(super) fn energia_al_ociar(&mut self, qh: &QueueHandle<Self>) {
+        if self.energia_disparado {
+            return;
+        }
+        // Hay batería y NO está cargando = corriendo con batería.
+        let en_bateria = matches!(self.bat_now, Some((_, false)));
+        let bloqueos =
+            crate::energia::reunir_bloqueos(self.unidades_now.as_ref(), &self.energia_cfg);
+        let accion = crate::energia::decidir(
+            &self.energia_cfg,
+            crate::energia::Nivel::Suspender,
+            en_bateria,
+            &bloqueos,
+        );
+        match accion {
+            crate::energia::Accion::Suspender | crate::energia::Accion::Apagar => {
+                crate::energia::ejecutar(&accion, false);
+                self.energia_disparado = true;
+            }
+            crate::energia::Accion::Posponer { .. } => {
+                // Avisar el motivo una sola vez; reintentar más tarde si la
+                // inactividad sigue (el trabajo puede terminar y entonces sí
+                // conviene suspender).
+                crate::energia::ejecutar(&accion, !self.energia_pospuesto);
+                self.energia_pospuesto = true;
+                self.armar_idle(super::REINTENTO_ENERGIA_SECS, qh);
+            }
+            crate::energia::Accion::Nada => {}
+        }
+    }
+
+    /// El usuario volvió (hubo actividad): reinicia el ciclo del idle de energía.
+    pub(super) fn energia_al_volver(&mut self, qh: &QueueHandle<Self>) {
+        self.energia_disparado = false;
+        self.energia_pospuesto = false;
+        let secs = self.energia_cfg.suspender_secs;
+        if self.energia_cfg.habilitado && secs > 0 {
+            self.armar_idle(secs, qh);
+        }
+    }
+
     /// Drena el último cuadro del visualizador (cava).
     pub(super) fn maybe_cava(&mut self) {
         let Some(h) = &self.cava else {
@@ -901,6 +978,7 @@ impl LayerApp {
             }
         }
         self.maybe_sample();
+        self.ensure_idle_arm(qh);
         self.maybe_cava();
         self.poll_nav();
         self.poll_host();
