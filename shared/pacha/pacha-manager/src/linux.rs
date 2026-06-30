@@ -128,11 +128,97 @@ impl DotfilesCtx {
         pacha_dotfiles::empujar(&self.store, remoto, raiz).map_err(|e| e.to_string())
     }
 
+    // ---- Operaciones de versionado para CLI/daemon (Fase 5) ----
+
+    /// `add`: agrega una ruta gestionada a un set (creándolo si no existe). La
+    /// DEFINICIÓN del set vive en la config de pacha; esto la muta en caliente.
+    pub fn agregar_ruta(&mut self, set_id: &str, ruta: pacha_dotfiles::RutaGestionada) {
+        self.sets
+            .entry(set_id.to_string())
+            .or_insert_with(|| ConjuntoDotfiles::new(set_id))
+            .entradas
+            .push(ruta);
+    }
+
+    /// `snapshot`: captura+commitea el set (honrando splicing por ruta) y avanza
+    /// su cabeza. Devuelve la raíz. Pública sobre la recaptura interna.
+    pub fn snapshot_set(&mut self, set_id: &str) -> Result<[u8; 32], String> {
+        self.capturar(set_id)
+    }
+
+    /// `restore`: materializa en `$HOME` la cabeza actual del set (su último
+    /// commit). Error si el set no tiene historial todavía.
+    pub fn restaurar_set(&self, set_id: &str) -> Result<(), String> {
+        let commit = self
+            .heads
+            .get(set_id)
+            .ok_or_else(|| format!("set sin snapshot: {set_id}"))?;
+        let inst = pacha_dotfiles::leer_instantanea(&self.store, commit).map_err(|e| e.to_string())?;
+        pacha_dotfiles::materializar(&self.store, &self.home, inst.raiz).map_err(|e| e.to_string())
+    }
+
+    /// La cabeza (último commit) de un set, si tiene historial.
+    pub fn cabeza(&self, set_id: &str) -> Option<[u8; 32]> {
+        self.heads.get(set_id).copied()
+    }
+
+    /// Los sets definidos (para listar/persistir el catálogo desde la CLI).
+    pub fn sets(&self) -> Vec<ConjuntoDotfiles> {
+        self.sets.values().cloned().collect()
+    }
+
+    /// `$HOME` destino de materialización (para mensajes de la CLI).
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    /// Persiste las **cabezas** (commit por set) a `path` en RON. Las definiciones
+    /// de sets viven en la config; esto es el estado-runtime del versionado, que
+    /// debe sobrevivir reinicios del daemon (sin él, `restore` perdería el linaje).
+    pub fn guardar_estado(&self, path: &Path) -> Result<(), String> {
+        let estado: BTreeMap<String, String> =
+            self.heads.iter().map(|(k, v)| (k.clone(), hex32(v))).collect();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let ron = ron::ser::to_string(&estado).map_err(|e| e.to_string())?;
+        std::fs::write(path, ron).map_err(|e| e.to_string())
+    }
+
+    /// Carga las cabezas persistidas (mergea sobre las actuales). Silencioso si el
+    /// archivo no existe (primer arranque).
+    pub fn cargar_estado(&mut self, path: &Path) -> Result<(), String> {
+        let bytes = match std::fs::read_to_string(path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let estado: BTreeMap<String, String> = ron::from_str(&bytes).map_err(|e| e.to_string())?;
+        for (k, v) in estado {
+            self.heads.insert(k, deshex32(&v)?);
+        }
+        Ok(())
+    }
+
     /// Recaptura un set y commitea sobre su cabeza previa. Devuelve la raíz del
     /// árbol (lo que el pin del runtime guarda y `materializar` consume).
+    ///
+    /// **Splicing por ruta (Fase 5):** sólo recaptura de `$HOME` las rutas
+    /// `Rastreado`; las `Fijado` se conservan del snapshot pinneado (la raíz del
+    /// commit cabeza). Así dejar el contexto guarda lo editado sin pisar lo clavado.
     fn capturar(&mut self, set_id: &str) -> Result<[u8; 32], String> {
         let set = self.sets.get(set_id).ok_or_else(|| format!("set desconocido: {set_id}"))?;
-        let raiz = pacha_dotfiles::capturar(&self.store, set, &self.home).map_err(|e| e.to_string())?;
+        // Base = la raíz del commit cabeza previo, si hay (para conservar Fijado).
+        let base = match self.heads.get(set_id) {
+            Some(commit) => Some(
+                pacha_dotfiles::leer_instantanea(&self.store, commit)
+                    .map_err(|e| e.to_string())?
+                    .raiz,
+            ),
+            None => None,
+        };
+        let raiz = pacha_dotfiles::capturar_splice(&self.store, set, &self.home, base)
+            .map_err(|e| e.to_string())?;
         let inst = Instantanea {
             raiz,
             padre: self.heads.get(set_id).copied(),
@@ -143,6 +229,27 @@ impl DotfilesCtx {
         self.heads.insert(set_id.to_string(), commit);
         Ok(raiz)
     }
+}
+
+/// Hex de un hash de 32 bytes (para persistir cabezas legibles en RON).
+fn hex32(h: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in h {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Inversa de [`hex32`]: parsea 64 hex a `[u8; 32]`.
+fn deshex32(s: &str) -> Result<[u8; 32], String> {
+    if s.len() != 64 {
+        return Err(format!("hash hex de largo inválido: {} (esperaba 64)", s.len()));
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }
 
 /// Milisegundos desde el epoch (real-side: aquí sí se consulta el reloj, a
@@ -452,6 +559,48 @@ mod tests {
         );
         // Dotfiles sin staging resuelto ⇒ None (no se puede aislar sin RAM).
         assert!(mount_plan_for(home, &p, None).is_none());
+    }
+
+    #[test]
+    fn ops_add_snapshot_restore_y_persistencia_de_cabezas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store_dir = tmp.path().join("obj");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".zshrc"), b"v1\n").unwrap();
+
+        let mut ctx = DotfilesCtx::new(store_dir.clone(), home.clone(), []).unwrap();
+        // add: el set no existía; se crea con la ruta.
+        ctx.agregar_ruta("shell", pacha_dotfiles::RutaGestionada::rastreado(".zshrc"));
+        // snapshot: captura v1 y avanza cabeza.
+        ctx.snapshot_set("shell").unwrap();
+        let cabeza_v1 = ctx.cabeza("shell").expect("debe tener cabeza tras snapshot");
+
+        // Editar y restaurar: vuelve a v1.
+        std::fs::write(home.join(".zshrc"), b"v2-EDITADO\n").unwrap();
+        ctx.restaurar_set("shell").unwrap();
+        assert_eq!(std::fs::read(home.join(".zshrc")).unwrap(), b"v1\n", "restore trae la cabeza");
+
+        // Persistir cabezas y recargarlas en un ctx NUEVO (otro 'arranque').
+        let estado = tmp.path().join("estado.ron");
+        ctx.guardar_estado(&estado).unwrap();
+
+        let mut ctx2 = DotfilesCtx::new(store_dir, home.clone(), [
+            ConjuntoDotfiles::new("shell").con(pacha_dotfiles::RutaGestionada::rastreado(".zshrc")),
+        ]).unwrap();
+        assert!(ctx2.cabeza("shell").is_none(), "ctx nuevo arranca sin cabezas");
+        ctx2.cargar_estado(&estado).unwrap();
+        assert_eq!(ctx2.cabeza("shell"), Some(cabeza_v1), "la cabeza sobrevivió el reinicio");
+
+        // Y restore desde el ctx recargado sigue funcionando.
+        std::fs::write(home.join(".zshrc"), b"otra-cosa\n").unwrap();
+        ctx2.restaurar_set("shell").unwrap();
+        assert_eq!(std::fs::read(home.join(".zshrc")).unwrap(), b"v1\n");
+
+        // cargar_estado sobre archivo ausente no rompe.
+        let mut ctx3 = DotfilesCtx::new(tmp.path().join("obj3"), home, []).unwrap();
+        ctx3.cargar_estado(&tmp.path().join("noexiste.ron")).unwrap();
+        assert!(ctx3.cabeza("shell").is_none());
     }
 
     #[test]

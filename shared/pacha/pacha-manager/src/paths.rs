@@ -38,6 +38,13 @@ pub fn runtime_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", DIR).map(|d| d.config_dir().to_path_buf())
 }
 
+/// Directorio **persistente** del versionado de dotfiles
+/// (`~/.local/share/pacha/dotfiles`): almacén de objetos + catálogo + cabezas.
+/// A diferencia del state runtime, esto NO es efímero (el historial perdura).
+pub fn dotfiles_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", DIR).map(|d| d.data_dir().join("dotfiles"))
+}
+
 /// Carga el catálogo de `pachas.ron`. Si no existe o está corrupto, devuelve
 /// uno vacío (nunca falla el arranque; el error se loggea).
 pub fn load_catalog() -> Catalog {

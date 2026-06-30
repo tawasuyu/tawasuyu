@@ -193,14 +193,28 @@ orquestador. Pendiente menor: el transporte de red real (hoy "remoto" = otro
 `StoreObjetos` en otra ruta/disco, que es exactamente lo que el PLAN pedía para
 empezar).
 
-## Fase 5 — Refinamientos
+## Fase 5 — Refinamientos — mayormente HECHA
 
-- **Splicing por ruta:** honrar `ModoGestion` por-ruta (recapturar sólo subárboles
-  Rastreados, conservar los Fijado pinneados). Hoy se recaptura el set entero.
-- **Persistencia daemon + CLI:** catálogo de sets + cabezas en
-  `pacha-manager/server.rs`; comandos `pacha dotfiles add/snapshot/restore/publish`.
-- **UI:** proyectar los sets como Mónadas en nahual (`NouserSource`) para browsear
-  — capa de vista, no de verdad.
+1. ✅ **Splicing por ruta.** `capturar_splice(store, set, home, base)` recaptura de
+   `$HOME` sólo las rutas `Rastreado` y **conserva** las `Fijado` desde `base` (el
+   árbol pinneado), navegándolo con `buscar_en_arbol`. `base=None` ⇒ primer pase
+   (todo fresco). Cableado en `DotfilesCtx::capturar` (al dejar el contexto): la
+   base es la raíz del commit cabeza. Tests: fijado conserva v1 ignorando la
+   edición en disco / rastreado recaptura v2 / fijado sin base cae a `$HOME`.
+2. ✅ **Persistencia + CLI.** `DotfilesCtx` ganó las ops del versionado:
+   `agregar_ruta` (add), `snapshot_set`, `restaurar_set` (restore a `$HOME`),
+   `cabeza`, `sets`, y `guardar_estado`/`cargar_estado` (cabezas a RON — el linaje
+   sobrevive reinicios). `pacha dotfiles {add,snapshot,restore,list,pubkey,publish,
+   push}` opera **local** (sin daemon) sobre `~/.local/share/pacha/dotfiles`; si la
+   seed está desbloqueada en el llavero de sesión, el almacén va **cifrado**.
+   Verificado end-to-end como binario real: add→snapshot→edit→restore vuelve a v1,
+   list, push (5 objetos al remoto), pubkey; y con seed cacheada el store queda
+   **opaco** en disco y restore descifra en RAM. Tests unitarios de las ops +
+   round-trip de persistencia de cabezas tras "reinicio".
+3. ⏳ **UI en nahual** (sets como Mónadas, `NouserSource`) — **diferida**: es capa
+   de vista (lo dice el propio plan), visual y cruza al dominio nahual; el modelo y
+   las ops ya están listos para que una UI los consuma. Pendiente menor de F4: el
+   transporte de red real (hoy "remoto" = otro `StoreObjetos` en otra ruta/disco).
 
 ## Decisiones abiertas
 

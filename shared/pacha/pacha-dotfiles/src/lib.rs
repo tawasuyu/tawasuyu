@@ -316,6 +316,68 @@ pub fn capturar(
     sellar(store, &raiz)
 }
 
+/// Captura **por política de ruta** (Fase 5, "splicing"): recaptura de `$HOME`
+/// sólo las rutas [`ModoGestion::Rastreado`] y **conserva** las
+/// [`ModoGestion::Fijado`] tal como estaban en `base` (la instantánea/árbol
+/// pinneado). Así "dejar el contexto" snapshot­ea lo que editaste sin pisar lo
+/// que clavaste. `base = None` ⇒ primer pase: todo se captura fresco (los
+/// `Fijado` caen a `$HOME`). Devuelve la raíz del árbol nuevo.
+///
+/// `base` es un hash de **árbol** (lo que devuelve [`capturar`]), no de commit.
+pub fn capturar_splice(
+    store: &StoreObjetos,
+    set: &ConjuntoDotfiles,
+    home: &Path,
+    base: Option<Hash>,
+) -> Result<Hash, DotError> {
+    let mut raiz: Arbolillo = BTreeMap::new();
+    for rg in &set.entradas {
+        let comps = componentes(&rg.origen)?;
+        // Para `Fijado` con base: reusar la hoja pinneada si está.
+        if rg.modo == ModoGestion::Fijado {
+            if let Some(b) = base {
+                if let Some((hash, modo)) = buscar_en_arbol(store, b, &comps)? {
+                    insertar(&mut raiz, &comps, Hoja { hash, modo })?;
+                    continue;
+                }
+            }
+        }
+        // `Rastreado`, o `Fijado` sin base/sin entrada previa: capturar de $HOME.
+        let abs = home.join(&rg.origen);
+        if !abs.symlink_existe() {
+            continue;
+        }
+        let (hash, modo) = capturar_fs(store, &abs)?;
+        insertar(&mut raiz, &comps, Hoja { hash, modo })?;
+    }
+    sellar(store, &raiz)
+}
+
+/// Navega un árbol del almacén por componentes y devuelve `(hash, modo)` de la
+/// hoja si existe. `None` si la ruta no está (o cruza algo que no es directorio).
+fn buscar_en_arbol(
+    store: &StoreObjetos,
+    raiz: Hash,
+    comps: &[String],
+) -> Result<Option<(Hash, ModoEntrada)>, DotError> {
+    let obj = store.traer(&raiz)?;
+    let arbol = Arbol::deserializar(&obj.datos).map_err(DotError::Formato)?;
+    match comps {
+        [] => Ok(None),
+        [ultimo] => Ok(arbol
+            .entradas
+            .into_iter()
+            .find(|e| &e.nombre == ultimo)
+            .map(|e| (e.hash, e.modo))),
+        [primero, resto @ ..] => {
+            match arbol.entradas.into_iter().find(|e| &e.nombre == primero) {
+                Some(e) if e.modo == ModoEntrada::Directorio => buscar_en_arbol(store, e.hash, resto),
+                _ => Ok(None),
+            }
+        }
+    }
+}
+
 /// Representación intermedia: un directorio en construcción. Las hojas ya están
 /// inscritas en el almacén; las ramas se sellan a árbol al final.
 type Arbolillo = BTreeMap<String, Nodo>;
@@ -1004,6 +1066,56 @@ mod tests {
             }
         }
         acc
+    }
+
+    #[test]
+    fn splice_conserva_fijado_y_recaptura_rastreado() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store = StoreObjetos::abrir(tmp.path().join("obj")).unwrap();
+
+        // .vimrc FIJADO (clavado), .zshrc RASTREADO (se snapshotea al salir).
+        let set = ConjuntoDotfiles::new("shell")
+            .con(RutaGestionada::fijado(".vimrc"))
+            .con(RutaGestionada::rastreado(".zshrc"));
+
+        // Base v1 de ambos (primer pase, base=None ⇒ captura todo fresco).
+        escribir(&home, ".vimrc", b"set nocompatible \" v1\n");
+        escribir(&home, ".zshrc", b"export V=1\n");
+        let base = capturar_splice(&store, &set, &home, None).unwrap();
+        // En el primer pase, el Fijado SÍ se capturó de $HOME.
+        let dest0 = tmp.path().join("d0");
+        materializar(&store, &dest0, base).unwrap();
+        assert_eq!(fs::read(dest0.join(".vimrc")).unwrap(), b"set nocompatible \" v1\n");
+
+        // Editar ambos en disco a v2.
+        escribir(&home, ".vimrc", b"set nocompatible \" v2-EDITADO\n");
+        escribir(&home, ".zshrc", b"export V=2\n");
+
+        // Splice con base: rastreado→v2, fijado→conserva v1 del base.
+        let nuevo = capturar_splice(&store, &set, &home, Some(base)).unwrap();
+        let dest = tmp.path().join("d1");
+        materializar(&store, &dest, nuevo).unwrap();
+        assert_eq!(fs::read(dest.join(".zshrc")).unwrap(), b"export V=2\n", "rastreado se recaptura");
+        assert_eq!(
+            fs::read(dest.join(".vimrc")).unwrap(),
+            b"set nocompatible \" v1\n",
+            "fijado se conserva del base, ignora la edición en disco"
+        );
+    }
+
+    #[test]
+    fn splice_fijado_sin_base_cae_a_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store = StoreObjetos::abrir(tmp.path().join("obj")).unwrap();
+        let set = ConjuntoDotfiles::new("x").con(RutaGestionada::fijado(".gitconfig"));
+        escribir(&home, ".gitconfig", b"[core]\n");
+        // base=None y también base con la ruta ausente: ambas caen a $HOME.
+        let raiz = capturar_splice(&store, &set, &home, None).unwrap();
+        let dest = tmp.path().join("d");
+        materializar(&store, &dest, raiz).unwrap();
+        assert_eq!(fs::read(dest.join(".gitconfig")).unwrap(), b"[core]\n");
     }
 
     #[test]
