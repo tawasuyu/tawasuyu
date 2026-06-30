@@ -22,12 +22,14 @@
 extern crate alloc;
 
 pub mod geometry;
+pub mod hero;
 pub mod layout;
 pub mod outputs;
 pub mod tree;
 pub mod workspace;
 
 pub use geometry::Rect;
+pub use hero::{hero_rect, landing_rect, lerp_rect};
 pub use layout::{tile, wallpaper_dst_rect, LayoutMode, LayoutParams, WallpaperFit, ZoneFrac};
 pub use outputs::{disponer, disponer_logico, envolvente, Disposicion, Salida, ESCALA_100};
 pub use tree::{LayoutNode, SpaceNode};
