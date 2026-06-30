@@ -37,6 +37,7 @@ pub mod toplevel;
 pub mod tray;
 pub mod unidades;
 pub mod bateria;
+pub mod energia;
 pub mod bluetooth;
 pub mod mpris;
 pub mod network;
