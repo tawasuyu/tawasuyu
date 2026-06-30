@@ -367,25 +367,41 @@ pub(crate) fn completion_popup<HostMsg: Clone + 'static>(
     theme: &Theme,
 ) -> Option<View<HostMsg>> {
     let comp = state.completion.as_ref()?;
-    if comp.candidates.is_empty() {
+    // Lista unificada en capas: candidatos de token (tier 1) + sugerencias de
+    // línea/grupo (tiers 2/3). Cada fila lleva su texto ya pintado y si es un
+    // tier "alto" (línea/grupo) para distinguirlo visualmente.
+    use crate::types::SugKind;
+    let mut entries: Vec<(String, Option<SugKind>)> = Vec::new();
+    for c in &comp.candidates {
+        entries.push((c.clone(), None));
+    }
+    for sug in &state.completion_extra {
+        entries.push((sug.display.clone(), Some(sug.kind)));
+    }
+    if entries.is_empty() {
         return None;
     }
     const MAX_ROWS: usize = 8;
     const ROW: f32 = 18.0;
-    let n = comp.candidates.len();
+    let n = entries.len();
     let sel = state.completion_index.min(n - 1);
     // Ventana deslizante centrada en la selección.
     let start = sel.saturating_sub(MAX_ROWS / 2).min(n.saturating_sub(MAX_ROWS));
     let end = (start + MAX_ROWS).min(n);
 
     let mut rows: Vec<View<HostMsg>> = Vec::new();
-    for (i, cand) in comp.candidates[start..end].iter().enumerate() {
+    for (i, (cand, tier)) in entries[start..end].iter().enumerate() {
         let idx = start + i;
         let selected = idx == sel;
+        // Los tiers altos (línea/grupo) se pintan en el color de acento tenue
+        // cuando no están resaltados, para leerse como "otra capa".
         let (fill, fg) = if selected {
             (theme.accent, theme.bg_panel)
         } else {
-            (theme.bg_input, theme.fg_text)
+            match tier {
+                Some(_) => (theme.bg_input, theme.fg_muted),
+                None => (theme.bg_input, theme.fg_text),
+            }
         };
         rows.push(
             View::new(Style {

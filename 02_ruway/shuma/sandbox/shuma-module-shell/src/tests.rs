@@ -1248,6 +1248,64 @@
     }
 
     #[test]
+    fn layered_completion_offers_full_history_lines() {
+        // Tier 2: una línea completa del historial que extiende lo tipeado.
+        use crate::update::build_extra_suggestions;
+        let mut s = State::new(Source::Local);
+        let cwd = s.cwd.to_string_lossy().to_string();
+        {
+            let mut h = s.history.lock().unwrap();
+            h.append(shuma_history::Entry::new("cargo build --release", &cwd, 1))
+                .unwrap();
+        }
+        s.input.set_text("cargo b");
+        let extra = build_extra_suggestions(&s);
+        assert!(
+            extra.iter().any(|e| e.insert == "cargo build --release"
+                && matches!(e.kind, crate::types::SugKind::Line)),
+            "la línea completa del historial aparece como sugerencia de tier 2"
+        );
+    }
+
+    #[test]
+    fn layered_completion_offers_command_groups() {
+        // Tier 3: un grupo guardado cuyo primer comando empieza con el texto.
+        use crate::update::build_extra_suggestions;
+        let mut s = State::new(Source::Local);
+        s.groups.push(crate::types::CommandGroup {
+            name: "deploy".into(),
+            lines: vec!["cargo build".into(), "scp x y".into()],
+        });
+        s.input.set_text("cargo");
+        let extra = build_extra_suggestions(&s);
+        let g = extra
+            .iter()
+            .find(|e| matches!(e.kind, crate::types::SugKind::Group));
+        assert!(g.is_some(), "el grupo aparece como sugerencia de tier 3");
+        assert_eq!(g.unwrap().insert, "cargo build && scp x y");
+    }
+
+    #[test]
+    fn accepting_a_group_suggestion_inserts_the_whole_sequence() {
+        // Aceptar una sugerencia de grupo reemplaza TODA la línea por la
+        // secuencia (su rango propio 0..len), no sólo el token.
+        let mut s = State::new(Source::Local);
+        s.input.set_text("cargo");
+        s.completion = Some(fake_completion(&[], 0, 0)); // popup abierto, sin tokens
+        s.completion_extra = vec![crate::types::Suggestion {
+            display: "⊞ deploy".into(),
+            insert: "cargo build && scp x y".into(),
+            replace_start: 0,
+            replace_end: 5,
+            kind: crate::types::SugKind::Group,
+        }];
+        s.completion_index = 0; // el primer (y único) extra
+        s = crate::update::accept_completion(s);
+        assert_eq!(s.input.text(), "cargo build && scp x y");
+        assert!(s.completion.is_none(), "y cierra el popup");
+    }
+
+    #[test]
     fn ctrl_a_selects_whole_input_line() {
         let mut s = State::new(Source::Local);
         s.input.set_text("git status");

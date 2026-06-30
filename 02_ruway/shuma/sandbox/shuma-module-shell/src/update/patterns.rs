@@ -595,7 +595,7 @@ pub(crate) fn rank_command_predictions(
 
 /// `true` si `entry_cwd` cae dentro de `base` (es el mismo directorio o un
 /// hijo) — el criterio de "contexto" del ghost por cwd (A3).
-fn cwd_within(entry_cwd: &str, base: &str) -> bool {
+pub(crate) fn cwd_within(entry_cwd: &str, base: &str) -> bool {
     entry_cwd == base
         || entry_cwd
             .strip_prefix(base)

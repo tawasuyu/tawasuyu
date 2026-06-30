@@ -560,8 +560,15 @@ pub struct State {
     pub group_anchor: usize,
     /// Completado activo (popup de candidatos). `Some` = popup abierto (Tab
     /// con ≥2 opciones); se navega con Tab/flechas y se acepta con Enter.
+    /// Es el **tier 1** del completado: tokens (comando/flag/ruta).
     pub completion: Option<shuma_line::Completion>,
-    /// Candidato resaltado dentro del popup de completado.
+    /// Tiers 2 y 3 del completado en capas, **anexados** bajo los candidatos
+    /// de token en el mismo popup: líneas completas del historial y grupos /
+    /// coreografías de comandos. El índice global recorre primero los
+    /// candidatos de `completion` y luego éstos.
+    pub completion_extra: Vec<Suggestion>,
+    /// Candidato resaltado dentro del popup de completado (índice global sobre
+    /// candidatos de token + [`State::completion_extra`]).
     pub completion_index: usize,
     /// Scroll del panel de output, en px medidos desde el fondo. `0` =
     /// pegado al fondo (lo último siempre visible, como una terminal).
@@ -833,6 +840,33 @@ pub struct HistorySearch {
     pub selected: usize,
 }
 
+/// Qué tier del completado en capas produjo una sugerencia anexa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SugKind {
+    /// Tier 2 — una **línea completa** del historial que extiende el texto.
+    Line,
+    /// Tier 3 — un **grupo / coreografía** de varios comandos (joined `&&`).
+    Group,
+}
+
+/// Una sugerencia de los tiers 2/3 del completado en capas. A diferencia de un
+/// candidato de token (que reemplaza sólo la palabra bajo el cursor), una
+/// sugerencia trae su **propio rango de reemplazo** (típicamente toda la línea)
+/// y un texto a insertar distinto de lo que se muestra (un grupo se muestra con
+/// su nombre pero inserta la secuencia entera).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    /// Lo que se pinta en la fila del popup (con su marcador de tier).
+    pub display: String,
+    /// El texto que se inserta al aceptar.
+    pub insert: String,
+    /// Inicio del rango de bytes a reemplazar.
+    pub replace_start: usize,
+    /// Fin del rango de bytes a reemplazar.
+    pub replace_end: usize,
+    pub kind: SugKind,
+}
+
 /// Grupo de comandos guardado (`:save <nombre>`) — una secuencia ejecutable
 /// como una sola línea (`l1 && l2 && …`) desde una tecla de función.
 #[derive(Debug, Clone)]
@@ -926,6 +960,7 @@ impl State {
             groups: Vec::new(),
             group_anchor,
             completion: None,
+            completion_extra: Vec::new(),
             completion_index: 0,
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
