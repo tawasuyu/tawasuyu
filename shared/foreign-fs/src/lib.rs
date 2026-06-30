@@ -83,6 +83,59 @@ impl Fuente for &[u8] {
     }
 }
 
+/// Una referencia a una `Fuente` es ella misma una `Fuente`. Hace componibles
+/// los lectores y los olfateadores sin mover el medio: `LectorFat::nuevo(&f)`,
+/// `detectar_fs_fuente(&f)`, etc. `F: Sized` a propósito —excluye `[u8]`, así
+/// no solapa con `impl Fuente for &[u8]`—.
+impl<F: Fuente> Fuente for &F {
+    fn tamano(&self) -> u64 {
+        (**self).tamano()
+    }
+    fn leer_en(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        (**self).leer_en(offset, buf)
+    }
+}
+
+/// Una **ventana** sobre otra `Fuente`: presenta `[base, base+len)` del medio
+/// subyacente como si fuera un medio entero que empieza en 0. Es la pieza que
+/// vuelve navegable una PARTICIÓN sin copiar sus bytes: el BPB de FAT vive en el
+/// offset 0 de su partición y el superbloque ext en el 1024 de la suya, así que
+/// envolver el dispositivo con `SubFuente { base: inicio, len: tam }` deja al
+/// lector leer desde 0 — espejo, sobre `Fuente`, del sub-slice de `particion.rs`.
+pub struct SubFuente<F: Fuente> {
+    inner: F,
+    base: u64,
+    len: u64,
+}
+
+impl<F: Fuente> SubFuente<F> {
+    /// Crea la ventana `[base, base+len)`. No valida contra el tamaño del medio
+    /// en construcción —cada `leer_en` ya acota—; un `len` que se pase del
+    /// medio simplemente fallará al leerse.
+    pub fn nueva(inner: F, base: u64, len: u64) -> Self {
+        Self { inner, base, len }
+    }
+}
+
+impl<F: Fuente> Fuente for SubFuente<F> {
+    fn tamano(&self) -> u64 {
+        self.len
+    }
+    fn leer_en(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        let fin = offset
+            .checked_add(buf.len() as u64)
+            .ok_or(FsError::Corrupto("offset de lectura desbordó"))?;
+        if fin > self.len {
+            return Err(FsError::Corrupto("lectura fuera de la sub-fuente"));
+        }
+        let abs = self
+            .base
+            .checked_add(offset)
+            .ok_or(FsError::Corrupto("offset absoluto desbordó"))?;
+        self.inner.leer_en(abs, buf)
+    }
+}
+
 /// Clase de una entrada de directorio en el FS de origen, ya normalizada a los
 /// modos del grafo. FAT no tiene ni bit de ejecución ni enlaces simbólicos, así
 /// que su lector sólo produce `Archivo`/`Directorio`; ext4 sí los preserva y su
