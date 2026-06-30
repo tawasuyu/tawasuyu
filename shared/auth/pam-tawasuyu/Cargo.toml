@@ -1,0 +1,16 @@
+[package]
+name = "pam-tawasuyu"
+description = "Módulo PAM `pam_tawasuyu.so` — desbloqueo automático de la identidad agora al login. En la fase de sesión, ejecuta `agora-cli desbloquear` COMO EL USUARIO (con la passphrase capturada en la fase de auth por AGORA_PASSPHRASE), de modo que la seed quede en el session keyring que la sesión hereda y `pacha` cifre/descifre dotfiles sin re-pedir la frase. Best-effort: nunca bloquea el login."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "pam_tawasuyu"
+# cdylib = la .so que carga PAM; rlib = para poder testear los helpers puros.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libc = { workspace = true }

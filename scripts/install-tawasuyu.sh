@@ -144,6 +144,10 @@ if [ "$DO_UNINSTALL" = 1 ]; then
         sudo rm -f "/usr/local/bin/$b"
     done
     sudo rm -f /etc/pam.d/mirada
+    # Módulo PAM de desbloqueo de identidad (en /usr/lib/security, no en bin).
+    sudo rm -f /usr/lib/security/pam_tawasuyu.so /lib/security/pam_tawasuyu.so \
+               /usr/local/share/tawasuyu/pam-tawasuyu.example 2>/dev/null || true
+    echo "  (si activaste pam_tawasuyu.so en /etc/pam.d/<servicio>, quitá esas líneas a mano)"
     for s in "${WAYLAND_SESSIONS[@]}"; do
         sudo rm -f "/usr/share/wayland-sessions/$s.desktop"
     done

@@ -562,6 +562,7 @@ members = [
     "shared/bitacora",
     "shared/marca",
     "shared/auth/auth-core",
+    "shared/auth/pam-tawasuyu",
     "shared/card/card-core",
     "shared/card/card-net",
     "shared/card/card-wit",

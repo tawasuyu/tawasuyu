@@ -110,12 +110,38 @@ Lo mismo se hace desde el **wawa-panel → Contextos → Identidad** (botones «
 no se guarda). Mientras la seed esté en el keyring, el cifrado está activo; al
 cerrar sesión el kernel la olvida.
 
-**Desbloqueo automático al login (pendiente).** Hoy el desbloqueo es manual (panel
-o `agora-cli desbloquear`). El camino automático «al loguear» requiere que la frase
-llegue a la sesión del usuario (el session keyring es por-sesión); las opciones son
-un módulo PAM que desbloquee al login (estilo `pam_gnome_keyring`) o que el greeter
-pase la frase a la sesión. No está cableado: el greeter de mirada delega la
-autenticación y no captura la frase de forma directa. Por ahora: desbloqueo manual.
+### Desbloqueo automático al login (módulo PAM)
+
+`pam_tawasuyu.so` desbloquea la identidad **al loguear**, reusando la contraseña
+que ya tipeás. El instalador **copia la `.so`** a `/usr/lib/security/` y el ejemplo
+de config a `/usr/local/share/tawasuyu/pam-tawasuyu.example`, pero **NO toca
+`/etc/pam.d`** (una mala config puede dejarte sin login): la activación es manual.
+
+Cómo funciona:
+
+- En la fase `auth` (tras `pam_unix`), el módulo captura `PAM_AUTHTOK` (tu
+  contraseña ya validada) y la guarda para la fase de sesión.
+- En la fase `session` (tras `pam_keyinit`), ejecuta `agora-cli desbloquear`
+  **como el usuario**, con la frase en `AGORA_PASSPHRASE`. La seed queda en el
+  *session keyring* que tu sesión hereda → `pacha` cifra/descifra sin re-pedir.
+  `pam_keyinit ... revoke` la evapora al cerrar sesión.
+
+Activación (en, p.ej., `/etc/pam.d/login` o el servicio de tu greeter):
+
+```text
+auth     optional   pam_tawasuyu.so                 # después de pam_unix
+session  optional   pam_keyinit.so   force revoke
+session  optional   pam_tawasuyu.so                 # después de pam_keyinit
+```
+
+Requisito: la passphrase de la identidad agora (la que pusiste al crearla con
+`AGORA_PASSPHRASE`) debe ser la **misma** que tu contraseña de login. Si difieren,
+el desbloqueo falla en silencio (best-effort — nunca rompe el login). Probá con
+`pamtester <servicio> "$USER" open_session` y `keyctl search @s user
+pacha:id:default` **antes** de cerrar tu sesión. Detalle completo en el `.example`.
+
+Si la passphrase de agora NO es tu contraseña de login, usá el **desbloqueo
+manual**: el panel (Contextos → Identidad → Desbloquear) o `agora-cli desbloquear`.
 
 ## Desinstalar
 
@@ -136,7 +162,7 @@ las querés.
 # Todo el desktop + sistema soberano:
 cargo build --release -p mirada-compositor -p mirada-greeter -p pata-llimphi \
   -p shuma-shell-llimphi -p wawa-panel-llimphi -p pacha-cli -p agora-cli \
-  -p sandokan-app -p rimay-voz-daemon-bin
+  -p sandokan-app -p rimay-voz-daemon-bin -p pam-tawasuyu
 # Embeddings (pesado, opcional):
 cargo build --release -p rimay-verbo-daemon-bin
 ```

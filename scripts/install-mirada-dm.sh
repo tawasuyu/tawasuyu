@@ -42,7 +42,7 @@ cargo build --release \
     -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi \
     -p pata-notify -p pata-notify-panel -p pata-notify-triage \
     -p mirada-plugin-host -p pacha-cli \
-    -p agora-cli -p sandokan-app -p rimay-voz-daemon-bin
+    -p agora-cli -p sandokan-app -p rimay-voz-daemon-bin -p pam-tawasuyu
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -94,6 +94,18 @@ sudo install -Dm755 "$BIN/voz-daemon"              /usr/local/bin/voz-daemon
 if [ -x "$BIN/verbo-daemon" ]; then
     sudo install -Dm755 "$BIN/verbo-daemon"        /usr/local/bin/verbo-daemon
     echo "    + verbo-daemon (embeddings)"
+fi
+# Módulo PAM de desbloqueo de identidad al login (pam_tawasuyu.so): copia la .so a
+# /usr/lib/security y el ejemplo de config, pero NO toca /etc/pam.d (una mala
+# config puede dejarte sin login). La activación es MANUAL — ver el ejemplo.
+PAM_SECDIR="/usr/lib/security"
+[ -d "$PAM_SECDIR" ] || PAM_SECDIR="/lib/security"
+if [ -f "$BIN/libpam_tawasuyu.so" ]; then
+    sudo install -Dm644 "$BIN/libpam_tawasuyu.so"  "$PAM_SECDIR/pam_tawasuyu.so"
+    sudo install -Dm644 "$REPO/scripts/pam-tawasuyu.example" \
+        /usr/local/share/tawasuyu/pam-tawasuyu.example
+    echo "    + pam_tawasuyu.so en $PAM_SECDIR (activación MANUAL:"
+    echo "      ver /usr/local/share/tawasuyu/pam-tawasuyu.example)"
 fi
 # Notificaciones de escritorio (org.freedesktop.Notifications):
 #   · pata-notify        — el daemon; pinta los toasts y guarda el historial.

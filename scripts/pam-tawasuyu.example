@@ -1,0 +1,37 @@
+# pam_tawasuyu.so — desbloqueo automático de la identidad agora al login.
+#
+# NO se aplica automáticamente: una mala config de PAM puede dejarte SIN poder
+# loguear. Editá a mano el servicio PAM que uses (login en consola, o el del
+# greeter) agregando estas dos líneas. Probá en una terminal aparte / TTY de
+# rescate ANTES de cerrar tu sesión.
+#
+# Requiere que la passphrase de la identidad agora (AGORA_PASSPHRASE) sea la
+# MISMA que tu contraseña de login — el módulo reusa la que tipeás al entrar.
+# Si difieren, el desbloqueo falla en silencio (best-effort, no rompe el login).
+#
+# ── En /etc/pam.d/<servicio> (ej. /etc/pam.d/login) ──────────────────────────
+#
+# 1) En la sección `auth`, DESPUÉS de pam_unix (que valida y deja la password en
+#    PAM_AUTHTOK), agregá:
+#
+#       auth     optional   pam_tawasuyu.so
+#
+# 2) En la sección `session`, DESPUÉS de pam_keyinit (que crea el session keyring
+#    de la sesión), agregá:
+#
+#       session  optional   pam_keyinit.so   force revoke
+#       session  optional   pam_tawasuyu.so
+#
+#    `pam_keyinit ... revoke` evapora el keyring (y la seed) al cerrar sesión.
+#
+# Opción: ruta explícita de agora-cli (si no está en /usr/local/bin):
+#
+#       session  optional   pam_tawasuyu.so   agora_cli=/ruta/a/agora-cli
+#
+# Verificación sin loguear (paquete `pam_wrapper`/`pamtester`):
+#
+#       pamtester <servicio> "$USER" open_session
+#       keyctl search @s user pacha:id:default    # debería encontrarla
+#
+# El módulo es best-effort: si no hay identidad agora, si la frase no abre el
+# keystore, o si agora-cli no está, el login procede normalmente.
