@@ -11,3 +11,5 @@ description = "llimphi-widget-context-menu — menú contextual tawasuyu: panel 
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-panel = { workspace = true }
+# Resuelve el glifo del gutter a ícono vectorial (determinista); fallback a texto.
+llimphi-icons = { workspace = true }

@@ -384,9 +384,12 @@ where
     )
 }
 
-/// Dibuja el icono de un diente (un glifo emoji que la fuente tenga), con el
-/// color ya resuelto por el widget según el estado activo/inactivo.
+/// Dibuja el icono de un diente. El glifo declarado en `Section.icon` se
+/// resuelve a un **ícono vectorial** de `llimphi-icons` (determinista en toda
+/// máquina); si el glifo no está en el catálogo, cae a texto. El color lo
+/// resuelve el widget según el estado activo/inactivo.
 fn tooth_icon<Msg: Clone + 'static>(glyph: Option<String>, size: f32, color: Color) -> View<Msg> {
+    let g = glyph.unwrap_or_else(|| "•".to_string());
     View::new(Style {
         size: Size {
             width: length(size),
@@ -396,12 +399,7 @@ fn tooth_icon<Msg: Clone + 'static>(glyph: Option<String>, size: f32, color: Col
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(
-        glyph.unwrap_or_else(|| "•".to_string()),
-        size * 0.9,
-        color,
-        Alignment::Center,
-    )
+    .children(vec![llimphi_icons::glyph_or_text_view(&g, size * 0.9, color, 1.8)])
 }
 
 fn build_panel<Msg, F>(schema: &Schema, state: &AllichayState, theme: &Theme, on_msg: F) -> View<Msg>

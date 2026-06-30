@@ -135,6 +135,37 @@ pub enum Icon {
     User,
     /// Gota de agua (Leyes / físicas).
     Droplet,
+    // --- Sistema / settings panels (sweep glifo→vector 2026-06-30) ---
+    /// Reloj con manecillas (hora, contextos, tiempo).
+    Clock,
+    /// Símbolo de encendido/apagado.
+    Power,
+    /// Sobre de correo.
+    Mail,
+    /// Teclado (atajos).
+    Keyboard,
+    /// Paleta de pintor (themes/apariencia).
+    Palette,
+    /// Candado (seguridad/privacidad).
+    Lock,
+    /// Llave.
+    Key,
+    /// Monitor/pantalla (sistema, acerca del equipo).
+    Monitor,
+    /// Destello de cuatro puntas (animaciones, efectos).
+    Sparkle,
+    /// Micrófono (voz, audio in).
+    Mic,
+    /// Ratón.
+    Mouse,
+    /// Nube (red/online).
+    Cloud,
+    /// Luna (modo oscuro, noche).
+    Moon,
+    /// Flecha circular (recargar/refrescar).
+    Refresh,
+    /// Pieza de rompecabezas (plugins/módulos).
+    Puzzle,
 }
 
 impl Icon {
@@ -198,6 +229,21 @@ impl Icon {
             Icon::Leaf => "leaf",
             Icon::User => "user",
             Icon::Droplet => "droplet",
+            Icon::Clock => "clock",
+            Icon::Power => "power",
+            Icon::Mail => "mail",
+            Icon::Keyboard => "keyboard",
+            Icon::Palette => "palette",
+            Icon::Lock => "lock",
+            Icon::Key => "key",
+            Icon::Monitor => "monitor",
+            Icon::Sparkle => "sparkle",
+            Icon::Mic => "mic",
+            Icon::Mouse => "mouse",
+            Icon::Cloud => "cloud",
+            Icon::Moon => "moon",
+            Icon::Refresh => "refresh",
+            Icon::Puzzle => "puzzle",
         }
     }
 
@@ -261,7 +307,116 @@ impl Icon {
             Icon::Leaf => path_leaf(),
             Icon::User => path_user(),
             Icon::Droplet => path_droplet(),
+            Icon::Clock => path_clock(),
+            Icon::Power => path_power(),
+            Icon::Mail => path_mail(),
+            Icon::Keyboard => path_keyboard(),
+            Icon::Palette => path_palette(),
+            Icon::Lock => path_lock(),
+            Icon::Key => path_key(),
+            Icon::Monitor => path_monitor(),
+            Icon::Sparkle => path_sparkle(),
+            Icon::Mic => path_mic(),
+            Icon::Mouse => path_mouse(),
+            Icon::Cloud => path_cloud(),
+            Icon::Moon => path_moon(),
+            Icon::Refresh => path_refresh(),
+            Icon::Puzzle => path_puzzle(),
         }
+    }
+
+    /// Mapea un **glifo unicode** (el que muchas apps usaban como ícono de
+    /// texto) al `Icon` vectorial equivalente. Es el corazón del barrido
+    /// glifo→vector: un sitio de render hace `from_glyph(s)` y, si hay match,
+    /// pinta el vector (determinista en toda máquina) en vez del glifo de fuente
+    /// (que en hardware sin esa fuente sale notdef/tofu). `None` ⇒ el caller cae
+    /// a texto. Acepta el glifo con o sin variation-selector (`\u{FE0F}`).
+    pub fn from_glyph(glifo: &str) -> Option<Icon> {
+        let g = glifo.trim().trim_end_matches('\u{FE0F}');
+        let mut chars = g.chars();
+        let c = chars.next()?;
+        if chars.next().is_some() {
+            // Más de un code-point (sin el VS16): no es un glifo-ícono simple.
+            return None;
+        }
+        Some(match c {
+            // Multimedia / transporte
+            '▶' | '►' | '⏵' => Icon::Play,
+            '⏸' => Icon::Pause,
+            '⏹' | '■' => Icon::Stop,
+            '⏺' | '●' | '◉' | '⚫' => Icon::Record,
+            '⏮' | '⏪' => Icon::SkipBack,
+            '⏭' | '⏩' => Icon::SkipForward,
+            '🔀' => Icon::Shuffle,
+            '🔁' | '🔂' => Icon::Repeat,
+            '🔊' | '🔉' | '🔈' => Icon::Volume,
+            '🔇' => Icon::VolumeMute,
+            '♪' | '♫' | '🎵' | '🎶' => Icon::Music,
+            '🎙' | '🎤' => Icon::Mic,
+            '🎛' | '🎚' => Icon::Equalizer,
+            '📷' | '📸' => Icon::Camera,
+            '🎞' | '🎬' | '📽' => Icon::Film,
+            '🖼' => Icon::Image,
+            // Navegación / chevrons / flechas
+            '▲' | '△' => Icon::ChevronUp,
+            '▼' | '▽' => Icon::ChevronDown,
+            '◀' | '◁' | '‹' => Icon::ChevronLeft,
+            '▷' | '›' | '❯' | '❭' | '⟩' => Icon::ChevronRight,
+            '⟳' | '🔃' | '🔄' | '↻' | '⥁' => Icon::Refresh,
+            // Sistema / settings
+            '⚙' | '🛠' | '🔧' => Icon::Settings,
+            '☰' | '≡' | '≣' | '𝍢' => Icon::Rows,
+            '▦' | '▤' | '⊞' | '𐩕' => Icon::Grid,
+            '⏻' | '⏼' | '⭘' => Icon::Power,
+            '🎨' => Icon::Palette,
+            '⌨' => Icon::Keyboard,
+            '🖥' | '💻' | '🖳' => Icon::Monitor,
+            '🖱' => Icon::Mouse,
+            '🔐' | '🔒' | '🔏' => Icon::Lock,
+            '🔑' | '🗝' => Icon::Key,
+            '✉' | '📧' | '📨' | '📩' => Icon::Mail,
+            '🧩' => Icon::Puzzle,
+            '☁' => Icon::Cloud,
+            '🌐' | '🌍' | '🌎' | '🌏' => Icon::Globe,
+            '🌙' | '🌚' | '☾' | '◐' => Icon::Moon,
+            '✨' | '✦' | '✶' | '✷' | '❇' | '❋' | '★' | '☆' | '✩' => Icon::Sparkle,
+            '◴' | '◷' | '◵' | '◶' | '🕐' | '🕒' | '⏰' | '⌚' => Icon::Clock,
+            // Documento / contenido
+            '📄' | '📃' | '📝' => Icon::FileText,
+            '📁' | '📂' => Icon::Folder,
+            '💾' => Icon::Save,
+            '🔍' | '🔎' => Icon::Search,
+            '🔔' => Icon::Bell,
+            '🗑' => Icon::Trash,
+            '👤' | '🧑' | '🙍' => Icon::User,
+            'ℹ' | 'ⓘ' => Icon::Info,
+            '⚠' => Icon::Warning,
+            '➕' | '+' => Icon::Plus,
+            '✕' | '✖' | '×' | '✗' => Icon::X,
+            '✓' | '✔' => Icon::Check,
+            _ => return None,
+        })
+    }
+}
+
+/// Vista de un glifo como **ícono vectorial** si [`Icon::from_glyph`] lo conoce,
+/// o como texto (su fallback histórico) si no. Es el reemplazo directo de
+/// `.text_aligned(glifo, …)` en los sitios de render que usaban íconos-glifo:
+/// el resultado es determinista en toda máquina cuando hay match.
+pub fn glyph_or_text_view<Msg: Clone + 'static>(
+    glifo: &str,
+    size: f32,
+    color: Color,
+    stroke_width: f32,
+) -> View<Msg> {
+    match Icon::from_glyph(glifo) {
+        Some(icon) => icon_view(icon, color, stroke_width),
+        None => View::new(Style {
+            position: Position::Absolute,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(glifo.to_string(), size, color, llimphi_ui::llimphi_text::Alignment::Center),
     }
 }
 
@@ -1112,6 +1267,214 @@ fn path_columns() -> BezPath {
     p
 }
 
+// ---- Sweep glifo→vector: íconos de sistema/settings -----------------------
+
+fn path_clock() -> BezPath {
+    let mut p = path_circle(12.0, 12.0, 8.5, 28);
+    p.move_to((12.0, 12.0));
+    p.line_to((12.0, 6.5)); // manecilla de hora
+    p.move_to((12.0, 12.0));
+    p.line_to((16.0, 13.5)); // minutero
+    p
+}
+
+fn path_power() -> BezPath {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    let mut p = BezPath::new();
+    let (cx, cy, r) = (12.0, 13.0, 7.0);
+    let segs = 28;
+    // Anillo con un hueco arriba (clásico símbolo de encendido).
+    let start = -FRAC_PI_2 + 0.55;
+    let end = -FRAC_PI_2 - 0.55 + TAU;
+    for i in 0..=segs {
+        let t = start + (end - start) * (i as f64) / (segs as f64);
+        let (x, y) = (cx + r * t.cos(), cy + r * t.sin());
+        if i == 0 {
+            p.move_to((x, y));
+        } else {
+            p.line_to((x, y));
+        }
+    }
+    p.move_to((12.0, 4.0));
+    p.line_to((12.0, 12.0)); // barra vertical
+    p
+}
+
+fn path_mail() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((3.5, 6.0));
+    p.line_to((20.5, 6.0));
+    p.line_to((20.5, 18.0));
+    p.line_to((3.5, 18.0));
+    p.close_path();
+    p.move_to((3.5, 6.5));
+    p.line_to((12.0, 13.0));
+    p.line_to((20.5, 6.5)); // solapa
+    p
+}
+
+fn path_keyboard() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((2.5, 7.0));
+    p.line_to((21.5, 7.0));
+    p.line_to((21.5, 17.0));
+    p.line_to((2.5, 17.0));
+    p.close_path();
+    for (x, y) in [(5.5, 10.0), (9.0, 10.0), (12.5, 10.0), (16.0, 10.0)] {
+        p.move_to((x, y));
+        p.line_to((x + 1.6, y));
+    }
+    p.move_to((8.0, 13.8));
+    p.line_to((16.0, 13.8)); // barra espaciadora
+    p
+}
+
+fn path_palette() -> BezPath {
+    let mut p = path_circle(12.0, 12.0, 8.5, 28);
+    let hueco = path_circle(12.0, 16.5, 1.8, 12); // agujero del pulgar
+    for el in hueco.elements() {
+        p.push(*el);
+    }
+    for (cx, cy) in [(8.3, 9.0), (12.0, 7.4), (15.7, 9.4)] {
+        let muestra = path_circle(cx, cy, 1.0, 10);
+        for el in muestra.elements() {
+            p.push(*el);
+        }
+    }
+    p
+}
+
+fn path_lock() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((6.0, 11.0));
+    p.line_to((18.0, 11.0));
+    p.line_to((18.0, 20.0));
+    p.line_to((6.0, 20.0));
+    p.close_path();
+    p.move_to((8.5, 11.0));
+    p.line_to((8.5, 8.0));
+    p.curve_to((8.5, 5.0), (15.5, 5.0), (15.5, 8.0));
+    p.line_to((15.5, 11.0)); // arco
+    p
+}
+
+fn path_key() -> BezPath {
+    let mut p = path_circle(8.0, 8.0, 3.5, 18); // ojo
+    p.move_to((10.5, 10.5));
+    p.line_to((19.0, 19.0)); // caña
+    p.move_to((16.5, 16.5));
+    p.line_to((19.0, 14.0)); // diente
+    p
+}
+
+fn path_monitor() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((3.0, 5.0));
+    p.line_to((21.0, 5.0));
+    p.line_to((21.0, 16.0));
+    p.line_to((3.0, 16.0));
+    p.close_path();
+    p.move_to((9.5, 19.0));
+    p.line_to((14.5, 19.0)); // base
+    p.move_to((12.0, 16.0));
+    p.line_to((12.0, 19.0)); // cuello
+    p
+}
+
+fn path_sparkle() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((12.0, 3.0));
+    p.line_to((13.7, 10.3));
+    p.line_to((21.0, 12.0));
+    p.line_to((13.7, 13.7));
+    p.line_to((12.0, 21.0));
+    p.line_to((10.3, 13.7));
+    p.line_to((3.0, 12.0));
+    p.line_to((10.3, 10.3));
+    p.close_path();
+    p
+}
+
+fn path_mic() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((9.0, 6.0));
+    p.curve_to((9.0, 3.5), (15.0, 3.5), (15.0, 6.0));
+    p.line_to((15.0, 11.0));
+    p.curve_to((15.0, 13.5), (9.0, 13.5), (9.0, 11.0));
+    p.close_path();
+    p.move_to((6.5, 11.0));
+    p.curve_to((6.5, 16.0), (17.5, 16.0), (17.5, 11.0)); // soporte
+    p.move_to((12.0, 16.0));
+    p.line_to((12.0, 20.0));
+    p.move_to((8.5, 20.0));
+    p.line_to((15.5, 20.0));
+    p
+}
+
+fn path_mouse() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((7.0, 8.0));
+    p.curve_to((7.0, 4.0), (17.0, 4.0), (17.0, 8.0));
+    p.line_to((17.0, 16.0));
+    p.curve_to((17.0, 20.0), (7.0, 20.0), (7.0, 16.0));
+    p.close_path();
+    p.move_to((12.0, 5.0));
+    p.line_to((12.0, 9.0)); // rueda
+    p
+}
+
+fn path_cloud() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((7.0, 17.0));
+    p.curve_to((3.5, 17.0), (3.5, 12.0), (7.0, 12.0));
+    p.curve_to((7.0, 7.5), (13.5, 7.0), (14.5, 11.0));
+    p.curve_to((18.5, 10.5), (20.5, 16.0), (17.0, 17.0));
+    p.close_path();
+    p
+}
+
+fn path_moon() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((15.0, 4.5));
+    p.curve_to((9.0, 6.0), (9.0, 18.0), (15.0, 19.5));
+    p.curve_to((10.0, 17.0), (10.0, 7.0), (15.0, 4.5));
+    p.close_path();
+    p
+}
+
+fn path_refresh() -> BezPath {
+    let mut p = BezPath::new();
+    let (cx, cy, r) = (12.0, 12.0, 7.0);
+    let segs = 24;
+    let (start, end) = (-2.2_f64, 2.2_f64);
+    for i in 0..=segs {
+        let t = start + (end - start) * (i as f64) / (segs as f64);
+        let (x, y) = (cx + r * t.cos(), cy + r * t.sin());
+        if i == 0 {
+            p.move_to((x, y));
+        } else {
+            p.line_to((x, y));
+        }
+    }
+    let (ex, ey) = (cx + r * end.cos(), cy + r * end.sin());
+    p.move_to((ex - 1.6, ey - 1.9));
+    p.line_to((ex, ey));
+    p.line_to((ex + 2.2, ey - 0.7)); // cabeza de flecha
+    p
+}
+
+fn path_puzzle() -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to((5.0, 9.0));
+    p.line_to((9.5, 9.0));
+    p.curve_to((9.5, 6.0), (14.5, 6.0), (14.5, 9.0));
+    p.line_to((19.0, 9.0));
+    p.line_to((19.0, 19.0));
+    p.line_to((5.0, 19.0));
+    p.close_path();
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1161,5 +1524,35 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), n, "nombres duplicados en Icon::name()");
+    }
+
+    #[test]
+    fn iconos_nuevos_tienen_path() {
+        let nuevos = [
+            Icon::Clock, Icon::Power, Icon::Mail, Icon::Keyboard, Icon::Palette,
+            Icon::Lock, Icon::Key, Icon::Monitor, Icon::Sparkle, Icon::Mic,
+            Icon::Mouse, Icon::Cloud, Icon::Moon, Icon::Refresh, Icon::Puzzle,
+        ];
+        for icon in nuevos {
+            assert!(!icon.path().elements().is_empty(), "{} sin path", icon.name());
+        }
+    }
+
+    #[test]
+    fn from_glyph_mapea_los_comunes() {
+        // Casos que cubrían el bug del wawa-panel y de los menús.
+        assert_eq!(Icon::from_glyph("⚙"), Some(Icon::Settings));
+        assert_eq!(Icon::from_glyph("🎨"), Some(Icon::Palette));
+        assert_eq!(Icon::from_glyph("⌨"), Some(Icon::Keyboard));
+        assert_eq!(Icon::from_glyph("⏻"), Some(Icon::Power));
+        assert_eq!(Icon::from_glyph("✉"), Some(Icon::Mail));
+        assert_eq!(Icon::from_glyph("🔊"), Some(Icon::Volume));
+        assert_eq!(Icon::from_glyph("≡"), Some(Icon::Rows));
+        assert_eq!(Icon::from_glyph("▶"), Some(Icon::Play));
+        // Variation selector (emoji presentation) se tolera.
+        assert_eq!(Icon::from_glyph("🖥\u{FE0F}"), Some(Icon::Monitor));
+        // Texto real (no un glifo-ícono) no matchea → caería a texto.
+        assert_eq!(Icon::from_glyph("Archivo"), None);
+        assert_eq!(Icon::from_glyph(""), None);
     }
 }

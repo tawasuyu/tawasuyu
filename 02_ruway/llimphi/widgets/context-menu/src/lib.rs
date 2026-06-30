@@ -549,7 +549,19 @@ fn item_view<Msg: Clone + 'static>(
         indicator
     };
 
-    // Gutter de ícono — auto height para que el row lo centre vertical.
+    // Gutter de ícono — el glifo declarado se resuelve a un ícono VECTORIAL
+    // (determinista en toda máquina); si el catálogo no lo conoce, cae a texto.
+    let glifo = item.icon.clone().unwrap_or_default();
+    let icon_inner: View<Msg> = match llimphi_icons::Icon::from_glyph(&glifo) {
+        Some(icon) => View::new(Style {
+            size: Size { width: length(15.0_f32), height: length(15.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .children(vec![llimphi_icons::icon_view(icon, icon_fg, 1.6)]),
+        None => View::new(Style { size: Size { width: auto(), height: auto() }, ..Default::default() })
+            .text_aligned(glifo, 13.0, icon_fg, Alignment::Center),
+    };
     let icon_cell = View::new(Style {
         size: Size {
             width: length(ICON_W),
@@ -560,7 +572,7 @@ fn item_view<Msg: Clone + 'static>(
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text_aligned(item.icon.clone().unwrap_or_default(), 13.0, icon_fg, Alignment::Center);
+    .children(vec![icon_inner]);
 
     // Label — auto height (lo centra el align_items Center del row).
     let label = View::new(Style {

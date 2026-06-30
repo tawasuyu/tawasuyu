@@ -12,6 +12,8 @@ allichay = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
+# Íconos vectoriales de los dientes (glifo→vector, determinista en toda máquina).
+llimphi-icons = { workspace = true }
 llimphi-widget-switch = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-segmented = { workspace = true }
