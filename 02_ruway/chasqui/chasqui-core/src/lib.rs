@@ -27,6 +27,7 @@
 
 pub mod cluster;
 pub mod db;
+pub mod edit;
 pub mod embed;
 pub mod engine_socket;
 pub mod resolve;

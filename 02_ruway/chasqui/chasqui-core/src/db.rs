@@ -146,6 +146,19 @@ impl MonadDb {
         self.monads.get(&id)
     }
 
+    /// Elimina una Mónada del store (cache + persistencia). Devuelve el
+    /// manifiesto removido, o `None` si no existía. No toca a quién la
+    /// referenciaba como sub-Mónada — eso es responsabilidad de la capa
+    /// de edición (`crate::edit`), que mantiene la coherencia del grafo.
+    pub fn remove_monad(&mut self, id: MonadId) -> Option<MonadManifest> {
+        if let Some(db) = &self.persistence {
+            if let Ok(tree) = db.open_tree(TREE_MONADS) {
+                let _ = tree.remove(id.to_string().as_bytes());
+            }
+        }
+        self.monads.remove(&id)
+    }
+
     pub fn monads(&self) -> impl Iterator<Item = &MonadManifest> + '_ {
         self.monads.values()
     }
