@@ -1,0 +1,12 @@
+[package]
+name = "pacha-llavero"
+description = "Caché de secretos de sesión para pacha (Fase 3 de pacha-dotfiles): el 'secreto para acceder a los secretos'. Trait Llavero (guardar/recuperar/olvidar un secreto de 32 bytes — p.ej. la seed de identidad desbloqueada) con backend enchufable: LlaveroKernel sobre el session keyring del kernel (vida atada a la sesión, se evapora al logout) y LlaveroMemoria para tests/headless. Desacoplado de la cripto: quien lo usa deriva el Cifrador del secreto cacheado."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc = { workspace = true }
+thiserror = { workspace = true }

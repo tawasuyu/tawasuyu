@@ -129,19 +129,35 @@ no-persistencia, pero los bytes en RAM están en claro.
    `pacha-manager`: `stage_into` sobre store cifrado descifra al staging RAM y
    deja el disco opaco.
 
-## Fase 3 — Desbloqueo de la clave maestra (la decisión DIFÍCIL)
+## Fase 3 — Desbloqueo de la clave maestra (la decisión DIFÍCIL) — núcleo HECHO
 
-Para descifrar al vuelo hace falta la clave desbloqueada en la sesión: "un secreto
-para acceder a los secretos". Opciones a evaluar: keyring del kernel
-(`add_key`/`keyctl`), PAM al login, passphrase + Argon2, TPM/sello,
-`agora-keystore` desbloqueado por mirada-greeter. Define qué tan fuerte es el
-modelo entero. **No avanzar Fases 4+ sin cerrar esto.**
+"Un secreto para acceder a los secretos": la seed desbloqueada debe vivir en la
+sesión para no re-preguntar en cada conmutación. **Decisión tomada (enchufable):
+el kernel session keyring es el default**, con la *política* aislada tras un trait
+para poder cambiarla sin tocar cripto ni manager.
 
-Estado: la cripto (Fase 2) ya consume una `seed` desbloqueada vía
-`derivar_de_seed`/`new_cifrado`; lo que falta es **de dónde sale desbloqueada** —
-hoy el caller la provee. `agora-keystore` ya cifra la seed en disco con passphrase
-(Argon2+ChaCha); el eslabón pendiente es **quién** pide la passphrase y **dónde**
-queda la seed viva (keyring del kernel vs. proceso del manager).
+1. ✅ **`pacha-llavero` (crate nuevo).** Trait [`Llavero`] (`guardar`/`recuperar`/
+   `olvidar` un secreto de 32 bytes) = el **punto de conmutación de política**.
+   Impls: `LlaveroKernel` (session keyring del kernel vía `add_key`/`keyctl`:
+   vida atada a la sesión, se evapora al logout, no toca disco — análogo a
+   `ssh-agent`) y `LlaveroMemoria` (RAM del proceso, tests/headless). `unsafe`
+   contenido sólo acá (las otras crates pacha siguen `forbid(unsafe_code)`).
+   **Desacople de la cripto a propósito:** maneja 32 bytes opacos, no conoce
+   `Cifrador`/HKDF — cambiar de backend (PAM/TPM/passphrase+Argon2/greeter) NO
+   toca a quien lo usa. 2 tests (memoria + round-trip REAL por el session keyring).
+2. ✅ **Bridge en `pacha-manager`.** `DotfilesCtx::desde_llavero(..., llavero,
+   nombre)` abre el store cifrado tomando la seed del llavero; `Ok(None)` si no
+   está cacheada (→ hay que desbloquear primero). `DotfilesCtx::cachear_seed`
+   guarda la seed (ya obtenida de agora) para la sesión. Test: `None` sin caché;
+   tras `cachear_seed` la MISMA seed abre el MISMO store; seed equivocada no abre.
+
+**Lo que queda (glue dependiente del entorno, NO mecanismo):** el orquestador (un
+binario/daemon, o `mirada-greeter` al login) debe, la primera vez: pedir la
+passphrase, abrir `agora-keystore` (que ya cifra la seed en disco con
+Argon2+ChaCha) y llamar `cachear_seed`. Eso es interactivo/contextual y no se
+certifica headless; el mecanismo entero por debajo ya está y testeado. La elección
+de endurecimiento (TTL de la key, `KEYCTL_SET_TIMEOUT`, TPM-seal) queda abierta
+pero NO bloquea Fase 4: la seed ya se desbloquea y retiene de forma segura.
 
 ## Fase 4 — Compartir/publicar + transporte remoto
 

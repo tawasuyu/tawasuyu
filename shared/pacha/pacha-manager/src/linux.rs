@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use card_core::{Card, Payload};
 use pacha_core::{AppSpec, FsHome, FsProfile, WawaOverlay};
 use pacha_dotfiles::{Cifrador, ConjuntoDotfiles, Instantanea, StoreObjetos};
+use pacha_llavero::Llavero;
 use sandokan::{Engine, Intent};
 use tokio::process::Command;
 use ulid::Ulid;
@@ -70,6 +71,36 @@ impl DotfilesCtx {
     ) -> Self {
         let sets = sets.into_iter().map(|s| (s.id.clone(), s)).collect();
         Self { store, home: home.into(), sets, heads: BTreeMap::new() }
+    }
+
+    /// Abre el ctx **cifrado** tomando la seed del **llavero de sesión** (Fase
+    /// 3) bajo `nombre`. `Ok(None)` si la seed no está cacheada todavía — hay que
+    /// **desbloquear primero** (pedir passphrase, abrir `agora-keystore`) y luego
+    /// [`cachear_seed`](Self::cachear_seed). Así no se re-pregunta en cada
+    /// conmutación de contexto: el kernel retiene la seed mientras viva la sesión.
+    pub fn desde_llavero(
+        store_dir: impl Into<PathBuf>,
+        home: impl Into<PathBuf>,
+        sets: impl IntoIterator<Item = ConjuntoDotfiles>,
+        llavero: &dyn Llavero,
+        nombre: &str,
+    ) -> Result<Option<Self>, String> {
+        match llavero.recuperar(nombre).map_err(|e| e.to_string())? {
+            Some(seed) => Ok(Some(Self::new_cifrado(store_dir, home, sets, &seed)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Desbloquea para la sesión: guarda la `seed` (ya obtenida de `agora`) en el
+    /// llavero bajo `nombre`, para que [`desde_llavero`](Self::desde_llavero) la
+    /// encuentre sin re-preguntar. El *cómo* obtener la seed (passphrase →
+    /// keystore) es del orquestador; acá sólo la retenemos en la sesión.
+    pub fn cachear_seed(
+        llavero: &dyn Llavero,
+        nombre: &str,
+        seed: &[u8; 32],
+    ) -> Result<(), String> {
+        llavero.guardar(nombre, seed).map_err(|e| e.to_string())
     }
 
     /// Recaptura un set y commitea sobre su cabeza previa. Devuelve la raíz del
@@ -396,6 +427,51 @@ mod tests {
         );
         // Dotfiles sin staging resuelto ⇒ None (no se puede aislar sin RAM).
         assert!(mount_plan_for(home, &p, None).is_none());
+    }
+
+    #[test]
+    fn desde_llavero_none_sin_cache_y_abre_el_mismo_store_tras_cachear() {
+        use pacha_llavero::LlaveroMemoria;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let store_dir = tmp.path().join("obj");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".zshrc"), b"export OK=1\n").unwrap();
+        let set = || {
+            ConjuntoDotfiles::new("shell").con(pacha_dotfiles::RutaGestionada::fijado(".zshrc"))
+        };
+
+        let seed = [55u8; 32];
+        // Escribir el store cifrado por la vía directa (seed en mano) y capturar.
+        let directo = DotfilesCtx::new_cifrado(store_dir.clone(), home.clone(), [set()], &seed).unwrap();
+        let raiz = pacha_dotfiles::capturar(&directo.store, directo.sets.get("shell").unwrap(), &home).unwrap();
+
+        // Sin cachear, el llavero no entrega ctx.
+        let ll = LlaveroMemoria::new();
+        let vacio = DotfilesCtx::desde_llavero(
+            store_dir.clone(), home.clone(), [set()], &ll, "id:default",
+        ).unwrap();
+        assert!(vacio.is_none(), "sin seed cacheada, desde_llavero = None");
+
+        // Tras cachear LA MISMA seed, el ctx del llavero abre el MISMO store.
+        DotfilesCtx::cachear_seed(&ll, "id:default", &seed).unwrap();
+        let ctx = DotfilesCtx::desde_llavero(
+            store_dir.clone(), home.clone(), [set()], &ll, "id:default",
+        ).unwrap().expect("con seed cacheada debe dar Some");
+
+        let dest = tmp.path().join("dest");
+        pacha_dotfiles::materializar(&ctx.store, &dest, raiz).unwrap();
+        assert_eq!(std::fs::read(dest.join(".zshrc")).unwrap(), b"export OK=1\n");
+
+        // Una seed equivocada cacheada NO abre (AEAD falla al materializar).
+        let ll_mal = LlaveroMemoria::new();
+        DotfilesCtx::cachear_seed(&ll_mal, "id:default", &[1u8; 32]).unwrap();
+        let ctx_mal = DotfilesCtx::desde_llavero(
+            store_dir.clone(), home.clone(), [set()], &ll_mal, "id:default",
+        ).unwrap().unwrap();
+        let dest_mal = tmp.path().join("dest_mal");
+        assert!(pacha_dotfiles::materializar(&ctx_mal.store, &dest_mal, raiz).is_err());
     }
 
     #[test]

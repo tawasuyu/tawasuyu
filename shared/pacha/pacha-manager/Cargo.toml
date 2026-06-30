@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 pacha-core = { path = "../pacha-core" }
 pacha-dotfiles = { path = "../pacha-dotfiles" }
+pacha-llavero = { path = "../pacha-llavero" }
 wawa-config = { path = "../../wawa-config" }
 sandokan = { path = "../../../03_ukupacha/sandokan/sandokan" }
 card-core = { path = "../../card/card-core" }
