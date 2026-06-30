@@ -1736,6 +1736,7 @@ pub fn volume_menu_view(
     theme: &Theme,
     bar_px: f32,
     ctx: &pata_core::widget::WidgetCtx,
+    sinks: &[crate::sampler::Sink],
     sink_inputs: &[crate::sampler::SinkInput],
     anchor_x: f32,
     avail_w: f32,
@@ -1754,7 +1755,7 @@ pub fn volume_menu_view(
         size: Size { width: length(VOL_PANEL_W), height: auto() },
         ..Default::default()
     })
-    .children(vec![panels::volume_panel(ctx, sink_inputs, theme)]);
+    .children(vec![panels::volume_panel(ctx, sinks, sink_inputs, theme)]);
 
     let mut body_style = Style {
         size: Size { width: percent(1.0_f32), height: length(0.0_f32) },

@@ -184,6 +184,10 @@ pub enum Msg {
     SinkInputVolume(u32, f32),
     /// Togglear el mute del sink-input `index` desde el mezclador.
     SinkInputMute(u32),
+    /// Elegir el dispositivo de salida (sink) por su nombre de máquina desde el
+    /// selector de salida: lo fija por defecto y mueve las corrientes activas a
+    /// él. La lista refleja el cambio en el próximo refresco del panel.
+    SinkSelect(String),
     /// Ajusta un campo del borrador de fecha/hora `(campo 0..=4, delta)`:
     /// 0=año 1=mes 2=día 3=hora 4=minuto.
     ClockAdjust(u8, i32),
@@ -1002,6 +1006,9 @@ pub struct Model {
     /// Corrientes de audio por app (sink-inputs) para el mezclador. Se muestrean
     /// al abrir la ventanita de volumen y cada tick mientras está abierta.
     pub sink_inputs: Vec<sampler::SinkInput>,
+    /// Dispositivos de salida (sinks) para el selector de salida. Se muestrean
+    /// junto con `sink_inputs` mientras la ventanita de volumen está abierta.
+    pub sinks: Vec<sampler::Sink>,
     /// `true` cuando la ventanita de brillo está desplegada.
     pub brightness_open: bool,
     /// Último snapshot del sistema — cacheado para alimentar las ventanitas
@@ -1438,6 +1445,7 @@ impl App for PataApp {
             ram_open: false,
             volume_open: false,
             sink_inputs: Vec::new(),
+            sinks: Vec::new(),
             brightness_open: false,
             last_ctx: pata_core::widget::WidgetCtx::default(),
             tray,
@@ -1642,6 +1650,7 @@ impl App for PataApp {
                 // abierto (los sliders siguen al sistema en vivo).
                 if model.volume_open {
                     model.sink_inputs = sampler::sample_sink_inputs();
+                    model.sinks = sampler::sample_sinks();
                 }
                 // El OSD se desvanece al cumplir su tiempo.
                 if model.osd.map(|o| o.expired()).unwrap_or(false) {
@@ -2039,6 +2048,7 @@ impl App for PataApp {
                 model.volume_open = !model.volume_open;
                 if model.volume_open {
                     model.sink_inputs = sampler::sample_sink_inputs();
+                    model.sinks = sampler::sample_sinks();
                     model.cpu_open = false;
                     model.ram_open = false;
                     model.brightness_open = false;
@@ -2048,6 +2058,14 @@ impl App for PataApp {
             }
             Msg::SinkInputVolume(index, frac) => sampler::set_sink_input_volume(index, frac),
             Msg::SinkInputMute(index) => sampler::toggle_sink_input_mute(index),
+            Msg::SinkSelect(name) => {
+                sampler::set_default_sink(&name);
+                // Refleja al toque el nuevo default en el selector (la marca ●),
+                // sin esperar al próximo tick.
+                for s in &mut model.sinks {
+                    s.is_default = s.name == name;
+                }
+            }
             Msg::BrightnessPanel => {
                 model.brightness_open = !model.brightness_open;
                 if model.brightness_open {
@@ -2420,6 +2438,7 @@ impl App for PataApp {
             let bar_h = bar_thickness_for(&model.cfg, "volume");
             return Some(entra(render::volume_overlay(
                 &model.last_ctx,
+                &model.sinks,
                 &model.sink_inputs,
                 bar_h,
                 &model.theme,

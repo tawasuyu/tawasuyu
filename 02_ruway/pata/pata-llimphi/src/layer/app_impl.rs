@@ -687,6 +687,7 @@ impl LayerApp {
         // Mezclador: refresca mientras su popup está abierto (sliders en vivo).
         if self.menu_open && self.menu_kind == MenuKind::Volume {
             self.sink_inputs = crate::sampler::sample_sink_inputs();
+            self.sinks = crate::sampler::sample_sinks();
         }
         // Aviso de batería baja (una vez por escalón al descargar).
         if let Some((pct, charging)) = crate::bateria::read() {
@@ -1109,6 +1110,7 @@ impl LayerApp {
                     &self.theme,
                     self.menu_bar_px as f32,
                     &self.ctx,
+                    &self.sinks,
                     &self.sink_inputs,
                     self.panels[idx].cursor_x.unwrap_or(self.panels[idx].width as f32 * 0.5),
                     self.panels[idx].width as f32,
@@ -1390,6 +1392,7 @@ impl LayerApp {
                 // Antes lanzaba pavucontrol externo; ahora el mezclador nativo.
                 if !(self.menu_open && self.menu_kind == MenuKind::Volume) {
                     self.sink_inputs = crate::sampler::sample_sink_inputs();
+                    self.sinks = crate::sampler::sample_sinks();
                 }
                 self.toggle_menu(MenuKind::Volume);
             }
@@ -1397,6 +1400,14 @@ impl LayerApp {
                 crate::sampler::set_sink_input_volume(index, frac);
             }
             Msg::SinkInputMute(index) => crate::sampler::toggle_sink_input_mute(index),
+            Msg::SinkSelect(name) => {
+                crate::sampler::set_default_sink(&name);
+                // Refleja al toque el nuevo default (la marca ●) sin esperar al
+                // próximo refresco del panel.
+                for s in &mut self.sinks {
+                    s.is_default = s.name == name;
+                }
+            }
             Msg::SessionToggle => {
                 self.session_confirm = None;
                 self.toggle_menu(MenuKind::Session);

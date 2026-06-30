@@ -344,9 +344,11 @@ pub fn ram_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
     overlay_con_scrim(ram_panel(ctx, theme), Msg::RamPanel, bar_h, theme)
 }
 
-/// La ventanita de volumen: slider vertical + botón mute + porcentaje.
+/// La ventanita de volumen: slider vertical + botón mute + porcentaje, el
+/// selector de dispositivo de salida y el mezclador por aplicación.
 pub fn volume_panel(
     ctx: &WidgetCtx,
+    sinks: &[crate::sampler::Sink],
     sink_inputs: &[crate::sampler::SinkInput],
     theme: &Theme,
 ) -> View<Msg> {
@@ -396,8 +398,16 @@ pub fn volume_panel(
     })
     .children(vec![slider, valor]);
 
-    // Mezclador por aplicación (el "vapucontrol" nativo): una fila por corriente.
     let mut hijos = vec![header, row];
+    // Selector de salida: a qué dispositivo sale el audio. Sólo si hay más de
+    // uno donde elegir (con un único sink no hay decisión que tomar).
+    if sinks.len() > 1 {
+        hijos.push(header_panel("Salida", theme));
+        for s in sinks {
+            hijos.push(sink_row(s, theme));
+        }
+    }
+    // Mezclador por aplicación (el "vapucontrol" nativo): una fila por corriente.
     if !sink_inputs.is_empty() {
         hijos.push(header_panel("Aplicaciones", theme));
         for si in sink_inputs {
@@ -405,6 +415,34 @@ pub fn volume_panel(
         }
     }
     panel_box(hijos, theme)
+}
+
+/// Una fila del selector de salida: marcador (● activo / ○ inactivo) + la
+/// descripción del dispositivo, resaltada en acento si es el sink por defecto.
+/// Al click manda `Msg::SinkSelect(name)` (→ `set-default-sink` + mueve las
+/// corrientes activas).
+fn sink_row(sink: &crate::sampler::Sink, theme: &Theme) -> View<Msg> {
+    let activo = sink.is_default;
+    let marca = if activo { "● " } else { "○ " };
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .radius(5.0)
+    .hover_fill(theme.bg_button_hover)
+    .on_click(Msg::SinkSelect(sink.name.clone()))
+    .text(
+        format!("{marca}{}", recortar(&sink.description, 34)),
+        12.0,
+        if activo { theme.accent } else { theme.fg_text },
+    )
 }
 
 /// Una fila del mezclador: nombre de la app + slider horizontal + botón mute.
@@ -479,14 +517,21 @@ fn recortar(s: &str, max: usize) -> String {
     t
 }
 
-/// Overlay (winit) de la ventanita de volumen (con mezclador por app).
+/// Overlay (winit) de la ventanita de volumen (con selector de salida y
+/// mezclador por app).
 pub fn volume_overlay(
     ctx: &WidgetCtx,
+    sinks: &[crate::sampler::Sink],
     sink_inputs: &[crate::sampler::SinkInput],
     bar_h: f32,
     theme: &Theme,
 ) -> View<Msg> {
-    overlay_con_scrim(volume_panel(ctx, sink_inputs, theme), Msg::VolumePanel, bar_h, theme)
+    overlay_con_scrim(
+        volume_panel(ctx, sinks, sink_inputs, theme),
+        Msg::VolumePanel,
+        bar_h,
+        theme,
+    )
 }
 
 /// La ventanita de brillo: slider vertical + porcentaje.

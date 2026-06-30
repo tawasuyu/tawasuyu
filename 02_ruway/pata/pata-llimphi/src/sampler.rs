@@ -354,6 +354,39 @@ Sink Input #57
     }
 
     #[test]
+    fn parse_sinks_lee_name_description_y_marca_default() {
+        let s = "\
+Sink #52
+\tState: SUSPENDED
+\tName: alsa_output.pci-0000_00_1f.3.analog-stereo
+\tDescription: Audio interno Estéreo analógico
+\tProperties:
+\t\tdevice.description = \"otra cosa\"
+Sink #58
+\tState: RUNNING
+\tName: bluez_output.AA_BB.1
+\tDescription: Auriculares BT";
+        let sinks = super::parse_sinks(s, Some("bluez_output.AA_BB.1"));
+        assert_eq!(sinks.len(), 2);
+        assert_eq!(sinks[0].name, "alsa_output.pci-0000_00_1f.3.analog-stereo");
+        // La Description del tope del bloque gana a la de Properties.
+        assert_eq!(sinks[0].description, "Audio interno Estéreo analógico");
+        assert!(!sinks[0].is_default);
+        assert_eq!(sinks[1].description, "Auriculares BT");
+        assert!(sinks[1].is_default);
+    }
+
+    #[test]
+    fn parse_sinks_sin_description_cae_al_name_y_sin_default() {
+        let s = "Sink #1\n\tName: solo_nombre";
+        let sinks = super::parse_sinks(s, None);
+        assert_eq!(sinks.len(), 1);
+        assert_eq!(sinks[0].description, "solo_nombre");
+        assert!(!sinks[0].is_default);
+        assert!(super::parse_sinks("", None).is_empty());
+    }
+
+    #[test]
     fn parse_sink_inputs_vacio_y_sin_app() {
         assert!(super::parse_sink_inputs("").is_empty());
         // Sin Properties: cae al nombre por índice.
@@ -775,6 +808,94 @@ pub fn sample_sink_inputs() -> Vec<SinkInput> {
     run("pactl", &["list", "sink-inputs"])
         .map(|o| parse_sink_inputs(&o))
         .unwrap_or_default()
+}
+
+// --- Selector de dispositivo de salida (sinks) --------------------------------
+//
+// El complemento del mezclador: a qué dispositivo sale el audio (parlantes,
+// auriculares, HDMI, Bluetooth…). Lo enumera `pactl list sinks` (Name de máquina
+// + Description legible) y el default sale de `pactl get-default-sink`. Al elegir
+// uno, además de `set-default-sink` movemos las corrientes que ya están sonando
+// (`move-sink-input`) para que el audio salte al toque al dispositivo nuevo, no
+// sólo las reproducciones futuras.
+
+/// Un dispositivo de salida de audio (sink), para el selector de salida.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sink {
+    /// Nombre de máquina del sink (lo usa `set-default-sink`/`move-sink-input`).
+    pub name: String,
+    /// Descripción legible para la UI (`Built-in Audio Analog Stereo`).
+    pub description: String,
+    /// `true` si es el sink por defecto actual.
+    pub is_default: bool,
+}
+
+/// Lee los dispositivos de salida y marca el default. Vacío si pactl no está. El
+/// nombre del default sale de `pactl get-default-sink`; el resto (Name +
+/// Description por bloque) de `pactl list sinks`.
+pub fn sample_sinks() -> Vec<Sink> {
+    let Some(list) = run("pactl", &["list", "sinks"]) else {
+        return Vec::new();
+    };
+    let default = run("pactl", &["get-default-sink"]).map(|s| s.trim().to_string());
+    parse_sinks(&list, default.as_deref())
+}
+
+/// Parsea `pactl list sinks`: un bloque por `Sink #N`, con `Name:` (nombre de
+/// máquina) y `Description:` (legible) al tope del bloque. Marca el default
+/// casando el `Name` con `default`. Toma sólo la primera aparición de cada clave
+/// por bloque (las `Properties:` traen claves parecidas más abajo).
+pub fn parse_sinks(out: &str, default: Option<&str>) -> Vec<Sink> {
+    let mut sinks = Vec::new();
+    let mut name: Option<String> = None;
+    let mut desc: Option<String> = None;
+
+    fn flush(
+        sinks: &mut Vec<Sink>,
+        name: Option<String>,
+        desc: Option<String>,
+        default: Option<&str>,
+    ) {
+        if let Some(name) = name {
+            let is_default = default == Some(name.as_str());
+            let description = desc.unwrap_or_else(|| name.clone());
+            sinks.push(Sink { name, description, is_default });
+        }
+    }
+
+    for raw in out.lines() {
+        let line = raw.trim();
+        if line.starts_with("Sink #") {
+            flush(&mut sinks, name.take(), desc.take(), default);
+            continue;
+        }
+        if name.is_none() {
+            if let Some(v) = line.strip_prefix("Name:") {
+                name = Some(v.trim().to_string());
+                continue;
+            }
+        }
+        if desc.is_none() {
+            if let Some(v) = line.strip_prefix("Description:") {
+                desc = Some(v.trim().to_string());
+            }
+        }
+    }
+    flush(&mut sinks, name.take(), desc.take(), default);
+    sinks
+}
+
+/// Fija el sink por defecto y **mueve** las corrientes activas a él, para que el
+/// audio que ya suena salte al dispositivo elegido (no sólo las reproducciones
+/// nuevas). `name` viene de `pactl list sinks` (nombre de nodo: letras, dígitos,
+/// `._-`), sin espacios ni metacaracteres de shell. Desacoplado, como
+/// [`set_volume`].
+pub fn set_default_sink(name: &str) {
+    crate::spawn_cmd(&format!(
+        "pactl set-default-sink \"{name}\"; \
+         for i in $(pactl list short sink-inputs | cut -f1); do \
+         pactl move-sink-input \"$i\" \"{name}\"; done"
+    ));
 }
 
 /// Fija el volumen de un sink-input a `frac` (`0..1`). Desacoplado, como
