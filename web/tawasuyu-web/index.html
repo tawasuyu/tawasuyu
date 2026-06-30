@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 
@@ -13,9 +13,8 @@
 
   <header id="topbar">
     <div class="topbar-left">
-      <!-- brand = "volver a la chakana": minimiza todas las ventanas para
-           ver el escritorio (el plano cartesiano). -->
-      <button class="brand" id="brand-home" type="button" aria-label="mostrar escritorio (minimizar todo)" title="mostrar escritorio">
+      <!-- brand = chakana + tawasuyu: swapea (muestra/guarda) la barra lateral. -->
+      <button class="brand" id="brand-home" type="button" aria-label="alternar barra lateral" title="alternar barra lateral">
         <!-- chakana inline: cuerpo monocromo (currentColor) + centro
              circular del color del fondo, dando efecto de "luz" central. -->
         <svg class="brand-chakana" viewBox="-3 -3 6 6" aria-hidden="true">
@@ -585,9 +584,8 @@
       if (window.history.length > 1) window.history.back();
     });
 
-    // Al abrir un artículo guardamos la sidebar para que ocupe todo el
-    // ancho (el artículo se abre maximizado encima del plano).
-    document.body.classList.add('sidebar-stowed');
+    // El artículo se abre maximizado encima de todo; no tocamos el estado de
+    // la sidebar (queda como la dejaste).
 
     cargarMdSeguro(contId, url, theme || 'tawasuyu');
     if (!fromHash) pushHash(url);
@@ -818,31 +816,19 @@
       document.body.classList.toggle('sidebar-stowed', !!s.stowed);
       if (s.diente) activarDiente(s.diente); else cerrarPanel();
     } else {
-      // default: escritorio arranca con "sistema" abierto; móvil sólo el rail.
-      document.body.classList.remove('sidebar-stowed');
-      if (!esMovil()) activarDiente('sistema'); else cerrarPanel();
+      // default: escritorio abierto con "sistema"; móvil guardado (fantasma).
+      if (!esMovil()) { document.body.classList.remove('sidebar-stowed'); activarDiente('sistema'); }
+      else { document.body.classList.add('sidebar-stowed'); cerrarPanel(); }
     }
   }
 
   // ===== brand (tawasuyu / chakana, arriba-izquierda) =====
-  // Si hay una página abierta → vuelve al escritorio (baja las ventanas) y
-  // deja la sidebar COMO LA DEJASTE. Si ya estás en el escritorio → swapea
-  // (muestra/guarda) la sidebar.
-  function hayVentanaVisible() {
-    for (const v of ventanas.values()) if (!v.minimized) return true;
-    return false;
-  }
+  // Swapea la sidebar: la guarda (oculta el panel) o la abre. Al abrir sin
+  // diente activo, abre "sistema" para que haya contenido.
   function onBrand() {
-    if (hayVentanaVisible()) {
-      for (const id of [...ventanas.keys()]) minimizar(id);
-      if (window.location.hash) {
-        window.history.pushState({}, '', window.location.pathname + window.location.search);
-      }
-      restaurarSidebar();
-    } else {
-      document.body.classList.toggle('sidebar-stowed');
-      guardarSidebar();
-    }
+    const stowed = document.body.classList.toggle('sidebar-stowed');
+    if (!stowed && !dienteActivo) activarDiente('sistema');
+    guardarSidebar();
   }
   function bindBrandHome() {
     const btn = document.getElementById('brand-home');
@@ -850,20 +836,41 @@
   }
 
   // ===== dock-rail (dientes) =====
-  // Clic en un diente abre/cierra su panel y guarda el estado.
+  // Clic en un diente: abre su panel (y desguarda). Clic en el activo ya
+  // abierto → lo guarda.
   function setupDockRail() {
     const rail = document.querySelector('#sidebar .dock-rail');
     if (!rail) return;
     rail.querySelectorAll('.diente').forEach(d => d.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (d.classList.contains('active')) cerrarPanel();
-      else activarDiente(d.dataset.diente);
+      const stowed = document.body.classList.contains('sidebar-stowed');
+      if (d.classList.contains('active') && !stowed) {
+        document.body.classList.add('sidebar-stowed');
+      } else {
+        document.body.classList.remove('sidebar-stowed');
+        activarDiente(d.dataset.diente);
+      }
       guardarSidebar();
     }));
     restaurarSidebar();  // estado inicial (recordado o default)
   }
 
   function esMovil() { return window.matchMedia('(max-width: 800px)').matches; }
+
+  // ===== dientes fantasma (móvil) =====
+  // Cuando la sidebar está guardada en móvil, los dientes asoman al scroll/
+  // swipe y se desvanecen solos para dejar leer.
+  let ghostTimer = null;
+  function pingGhost() {
+    if (!esMovil() || !document.body.classList.contains('sidebar-stowed')) return;
+    document.body.classList.add('sidebar-ghost');
+    if (ghostTimer) clearTimeout(ghostTimer);
+    ghostTimer = setTimeout(() => document.body.classList.remove('sidebar-ghost'), 2500);
+  }
+  function setupGhost() {
+    document.addEventListener('touchmove', pingGhost, { passive: true });
+    document.addEventListener('scroll', pingGhost, true);
+  }
 
   // ===== guardar/abrir la sidebar con drag de mouse (escritorio) =====
   // Drag a la izquierda sobre la sidebar la guarda; drag a la derecha desde
@@ -968,6 +975,7 @@
     setupDockRail();
     setupSidebarDrag();
     setupTouchGestures();
+    setupGhost();
     bindQuadTriggers();
     bindDocTriggers(document);
     tickClock();

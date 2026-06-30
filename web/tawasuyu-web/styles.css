@@ -234,7 +234,9 @@ a:hover { color: var(--fg-text); }
   font-size: 12px;
   pointer-events: none;
 }
-body.sidebar-stowed #sidebar { display: none; }
+/* "guardado" = se oculta el PANEL; el rail (dientes) queda. En escritorio el
+ * rail sigue visible; en móvil pasa a fantasma (ver media query). */
+body.sidebar-stowed #sidebar.panel-open .dock-panel { display: none; }
 
 /* rail = franja redondeada (estilo dock-rail de llimphi): los dientes se
  * UNEN dentro de la franja (sin gaps), cada uno con una barra de acento de
@@ -730,6 +732,19 @@ body.sidebar-stowed #sidebar { display: none; }
     left: 0; top: 0; bottom: 0;
     z-index: 45;
   }
+
+  /* Móvil + guardado: los dientes son FANTASMAS — invisibles para dejar leer,
+     aparecen al hacer scroll/swipe (body.sidebar-ghost) y se desvanecen solos
+     a los ~2.5s. Mientras están invisibles no capturan clicks. */
+  body.sidebar-stowed .dock-rail {
+    opacity: 0;
+    transition: opacity 0.6s ease 0.4s;
+  }
+  body.sidebar-stowed.sidebar-ghost .dock-rail {
+    opacity: 1;
+    transition: opacity 0.18s ease;
+  }
+  body.sidebar-stowed:not(.sidebar-ghost) .diente { pointer-events: none; }
 
   /* la barra de arriba copa rápido con ventanas abiertas → paneo horizontal */
   #taskbar-items {
