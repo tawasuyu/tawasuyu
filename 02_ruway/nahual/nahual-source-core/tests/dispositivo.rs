@@ -155,6 +155,42 @@ fn navega_un_ext4_suelto() {
 }
 
 #[test]
+fn read_preview_acota_la_cabeza() {
+    if !which("mkfs.fat") || !which("mcopy") || !which("mmd") {
+        eprintln!("SKIP: faltan mkfs.fat/mcopy/mmd");
+        return;
+    }
+    const TOPE: usize = 16 * 1024 * 1024; // = TOPE_PREVIEW (privado en el crate)
+    let tmp = tmpdir("disp-preview");
+    let img = tmp.join("fat.img");
+    fs::File::create(&img).unwrap().set_len(48 * 1024 * 1024).unwrap();
+    assert!(Command::new("mkfs.fat").arg(&img).output().unwrap().status.success());
+
+    // Archivo de 17 MiB (> tope) y uno chico (< tope).
+    let grande = tmp.join("grande.bin");
+    fs::write(&grande, vec![0xABu8; 17 * 1024 * 1024]).unwrap();
+    assert!(Command::new("mcopy").arg("-i").arg(&img).arg(&grande).arg("::grande.bin").output().unwrap().status.success());
+    let chico = tmp.join("chico.txt");
+    fs::write(&chico, b"corto\n").unwrap();
+    assert!(Command::new("mcopy").arg("-i").arg(&img).arg(&chico).arg("::chico.txt").output().unwrap().status.success());
+
+    let src = DispositivosSource::con_dispositivos(vec![info_de(&img, "usb0")]);
+    let parts = src.children(&src.children(&src.root().id).unwrap()[0].id).unwrap();
+    let files = src.children(&parts[0].id).unwrap();
+
+    let g = files.iter().find(|n| n.name == "grande.bin").unwrap();
+    // Preview acota a TOPE; read completo trae los 17 MiB.
+    assert_eq!(src.read_preview(&g.id).unwrap().len(), TOPE);
+    assert_eq!(src.read(&g.id).unwrap().len(), 17 * 1024 * 1024);
+
+    let c = files.iter().find(|n| n.name == "chico.txt").unwrap();
+    // Un archivo chico: preview == read (no se trunca de más).
+    assert_eq!(src.read_preview(&c.id).unwrap(), b"corto\n");
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn id_basura_es_error_no_panic() {
     let src = DispositivosSource::con_dispositivos(vec![]);
     assert!(src.children(&"no-existe".to_string()).is_err());

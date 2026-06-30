@@ -23,14 +23,21 @@
 //! `Source` deja deshabilitadas crear/borrar/renombrar. Escribir en un FS ajeno
 //! sin driver es otra liga; esta fase sólo lee.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use foreign_fs::particion::{
-    detectar_fs_fuente, tabla_particiones_fuente, SistemaArchivos,
+    detectar_fs_fuente, tabla_particiones_fuente, Particion, SistemaArchivos,
 };
 use foreign_fs::{ext4::LectorExt4, fat::LectorFat};
 use foreign_fs::{Clase, FsError, FuenteArchivo, LectorFs, SubFuente};
+
+/// Tope de bytes que [`DispositivosSource::read_preview`] lee de una hoja para
+/// previsualizar: suficiente para discernir el tipo + cabeza de texto/hex, sin
+/// volcar a RAM un video/ISO entero. Archivos grandes se EXTRAEN, no se preven.
+const TOPE_PREVIEW: u64 = 16 * 1024 * 1024;
 
 use crate::{Node, NodeId, NodeKind, Source};
 
@@ -87,9 +94,20 @@ pub struct DispositivoInfo {
     pub modelo: Option<String>,
 }
 
+/// Cache por instancia: la fuente abierta y la tabla de particiones de cada
+/// device, para no reabrir/re-parsear en cada `children`/`read`. Clave al
+/// extraer un árbol: el device se abre UNA vez, no una por archivo. Seguro
+/// porque la navegación es read-only —el device no cambia bajo nuestros pies—.
+#[derive(Default)]
+struct Cache {
+    fuentes: HashMap<PathBuf, Arc<FuenteArchivo>>,
+    tablas: HashMap<PathBuf, Arc<Vec<Particion>>>,
+}
+
 /// Fuente navegable de los dispositivos de bloques del sistema.
 pub struct DispositivosSource {
     dispositivos: Vec<DispositivoInfo>,
+    cache: Mutex<Cache>,
 }
 
 impl DispositivosSource {
@@ -98,14 +116,43 @@ impl DispositivosSource {
     /// `/sys` (no-Linux) devuelve una lista vacía —la raíz queda sin hijos, sin
     /// reventar—.
     pub fn nueva() -> Self {
-        Self { dispositivos: enumerar_sys_block() }
+        Self::con_dispositivos(enumerar_sys_block())
     }
 
     /// Construye la fuente con una lista explícita de dispositivos. Es la puerta
     /// para pruebas (apuntar a una imagen de archivo como si fuera un device) y
     /// para un front que ya tenga su propia enumeración.
     pub fn con_dispositivos(dispositivos: Vec<DispositivoInfo>) -> Self {
-        Self { dispositivos }
+        Self { dispositivos, cache: Mutex::new(Cache::default()) }
+    }
+
+    /// La fuente abierta de `ruta_dev`, cacheada (se abre una sola vez).
+    fn fuente_de(&self, ruta_dev: &Path) -> io::Result<Arc<FuenteArchivo>> {
+        let mut c = self.cache.lock().map_err(|_| io::Error::other("cache envenenado"))?;
+        if let Some(f) = c.fuentes.get(ruta_dev) {
+            return Ok(f.clone());
+        }
+        let f = Arc::new(FuenteArchivo::abrir(ruta_dev)?);
+        c.fuentes.insert(ruta_dev.to_path_buf(), f.clone());
+        Ok(f)
+    }
+
+    /// La tabla de particiones de `ruta_dev`, cacheada.
+    fn tabla_de(&self, ruta_dev: &Path) -> io::Result<Arc<Vec<Particion>>> {
+        {
+            let c = self.cache.lock().map_err(|_| io::Error::other("cache envenenado"))?;
+            if let Some(t) = c.tablas.get(ruta_dev) {
+                return Ok(t.clone());
+            }
+        }
+        let f = self.fuente_de(ruta_dev)?;
+        let t = Arc::new(tabla_particiones_fuente(&f).map_err(fserr)?);
+        self.cache
+            .lock()
+            .map_err(|_| io::Error::other("cache envenenado"))?
+            .tablas
+            .insert(ruta_dev.to_path_buf(), t.clone());
+        Ok(t)
     }
 
     /// Reconstruye una fuente capaz de LEER por `id` —un [`NodeId`] que esta
@@ -154,10 +201,10 @@ impl DispositivosSource {
     }
 
     fn hijos_dispositivo(&self, ruta_dev: &Path) -> io::Result<Vec<Node>> {
-        let fuente = FuenteArchivo::abrir(ruta_dev)?;
-        let parts = tabla_particiones_fuente(&fuente).map_err(fserr)?;
+        let fuente = self.fuente_de(ruta_dev)?;
+        let parts = self.tabla_de(ruta_dev)?;
         let mut out = Vec::new();
-        for p in parts {
+        for p in parts.iter() {
             // Olfatea el FS de la partición SIN mover la fuente (la presta).
             let sub = SubFuente::nueva(&fuente, p.inicio, p.tam);
             let (etiqueta, navegable) = match detectar_fs_fuente(&sub) {
@@ -186,13 +233,24 @@ impl DispositivosSource {
     /// una ISO) de un dispositivo sin OOM —a diferencia de [`Source::read`], que
     /// devuelve un `Vec` completo—.
     pub fn leer_a_escritor<W: Write>(&self, id: &NodeId, w: &mut W) -> io::Result<u64> {
-        match decode(id)? {
-            Loc::Ruta { ruta_dev, indice, interna } => {
-                volcar_particion(&ruta_dev, indice, &interna, w)
+        let (ruta_dev, indice, interna) = match decode(id)? {
+            Loc::Ruta { ruta_dev, indice, interna } => (ruta_dev, indice, interna),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "sólo una hoja de un dispositivo se vuelca por streaming",
+                ))
             }
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "sólo una hoja de un dispositivo se vuelca por streaming",
+        };
+        // Inline (no `con_particion`): dos cierres capturando `&mut w` no
+        // compilan aunque sólo corra uno; un solo match lo evita.
+        let sub = self.ventana_de(&ruta_dev, indice)?;
+        match detectar_fs_fuente(&sub) {
+            SistemaArchivos::Fat => volcar_generico(&LectorFat::nuevo(sub).map_err(fserr)?, &interna, w),
+            SistemaArchivos::Ext => volcar_generico(&LectorExt4::nuevo(sub).map_err(fserr)?, &interna, w),
+            SistemaArchivos::Desconocido => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "el FS de la partición no es FAT ni ext",
             )),
         }
     }
@@ -211,14 +269,12 @@ impl Source for DispositivosSource {
         match decode(id)? {
             Loc::Raiz => Ok(self.hijos_raiz()),
             Loc::Dispositivo { ruta } => self.hijos_dispositivo(&ruta),
-            Loc::Ruta { ruta_dev, indice, interna } => {
-                con_particion(
-                    &ruta_dev,
-                    indice,
-                    |l| listar_generico(l, &interna, &ruta_dev, indice),
-                    |l| listar_generico(l, &interna, &ruta_dev, indice),
-                )
-            }
+            Loc::Ruta { ruta_dev, indice, interna } => self.con_particion(
+                &ruta_dev,
+                indice,
+                |l| listar_generico(l, &interna, &ruta_dev, indice),
+                |l| listar_generico(l, &interna, &ruta_dev, indice),
+            ),
         }
     }
 
@@ -228,7 +284,7 @@ impl Source for DispositivosSource {
                 io::ErrorKind::InvalidInput,
                 "un contenedor de dispositivos no tiene contenido leíble",
             )),
-            Loc::Ruta { ruta_dev, indice, interna } => con_particion(
+            Loc::Ruta { ruta_dev, indice, interna } => self.con_particion(
                 &ruta_dev,
                 indice,
                 |l| leer_generico(l, &interna),
@@ -236,33 +292,61 @@ impl Source for DispositivosSource {
             ),
         }
     }
+
+    /// Para PREVIEW: a diferencia de [`read`](Self::read) (archivo entero), lee
+    /// a lo sumo [`TOPE_PREVIEW`] bytes por streaming. Evita el OOM al hacer
+    /// clic sobre un video/ISO en un device — el preview sólo necesita la cabeza
+    /// (discernir el tipo, texto/hex). Para abrirlo de verdad se EXTRAE.
+    fn read_preview(&self, id: &NodeId) -> io::Result<Vec<u8>> {
+        match decode(id)? {
+            Loc::Ruta { ruta_dev, indice, interna } => self.con_particion(
+                &ruta_dev,
+                indice,
+                |l| leer_acotado(l, &interna, TOPE_PREVIEW),
+                |l| leer_acotado(l, &interna, TOPE_PREVIEW),
+            ),
+            _ => self.read(id),
+        }
+    }
 }
 
 // ── Despacho de partición + recorrido del FS ────────────────────────────────
 
-/// Abre la partición `indice` de `ruta_dev`, detecta su FS y corre el cierre
-/// correspondiente sobre el lector ya construido. Los dos cierres existen
-/// porque FAT y ext son tipos de lector distintos; en la práctica ambos llaman
-/// a la misma función genérica, así que no hay lógica duplicada.
-fn con_particion<R>(
-    ruta_dev: &Path,
-    indice: usize,
-    en_fat: impl FnOnce(&LectorFat<SubFuente<FuenteArchivo>>) -> io::Result<R>,
-    en_ext: impl FnOnce(&LectorExt4<SubFuente<FuenteArchivo>>) -> io::Result<R>,
-) -> io::Result<R> {
-    let fuente = FuenteArchivo::abrir(ruta_dev)?;
-    let parts = tabla_particiones_fuente(&fuente).map_err(fserr)?;
-    let p = parts.into_iter().find(|p| p.indice == indice).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, format!("partición {indice} inexistente"))
-    })?;
-    let sub = SubFuente::nueva(fuente, p.inicio, p.tam);
-    match detectar_fs_fuente(&sub) {
-        SistemaArchivos::Fat => en_fat(&LectorFat::nuevo(sub).map_err(fserr)?),
-        SistemaArchivos::Ext => en_ext(&LectorExt4::nuevo(sub).map_err(fserr)?),
-        SistemaArchivos::Desconocido => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "el FS de la partición no es FAT ni ext",
-        )),
+/// La ventana (`SubFuente`) de una partición sobre la fuente CACHEADA. Compartir
+/// el `Arc` evita reabrir el device por llamada.
+type VentanaParticion = SubFuente<Arc<FuenteArchivo>>;
+
+impl DispositivosSource {
+    /// Localiza la partición `indice` de `ruta_dev` (vía cache), construye su
+    /// lector y corre el cierre correspondiente. Los dos cierres existen porque
+    /// FAT y ext son tipos de lector distintos; en la práctica ambos llaman a la
+    /// misma función genérica, así que no hay lógica duplicada.
+    fn con_particion<R>(
+        &self,
+        ruta_dev: &Path,
+        indice: usize,
+        en_fat: impl FnOnce(&LectorFat<VentanaParticion>) -> io::Result<R>,
+        en_ext: impl FnOnce(&LectorExt4<VentanaParticion>) -> io::Result<R>,
+    ) -> io::Result<R> {
+        let sub = self.ventana_de(ruta_dev, indice)?;
+        match detectar_fs_fuente(&sub) {
+            SistemaArchivos::Fat => en_fat(&LectorFat::nuevo(sub).map_err(fserr)?),
+            SistemaArchivos::Ext => en_ext(&LectorExt4::nuevo(sub).map_err(fserr)?),
+            SistemaArchivos::Desconocido => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "el FS de la partición no es FAT ni ext",
+            )),
+        }
+    }
+
+    /// La `SubFuente` de la partición `indice` sobre la fuente cacheada.
+    fn ventana_de(&self, ruta_dev: &Path, indice: usize) -> io::Result<VentanaParticion> {
+        let fuente = self.fuente_de(ruta_dev)?;
+        let parts = self.tabla_de(ruta_dev)?;
+        let p = parts.iter().find(|p| p.indice == indice).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, format!("partición {indice} inexistente"))
+        })?;
+        Ok(SubFuente::nueva(fuente, p.inicio, p.tam))
     }
 }
 
@@ -322,31 +406,6 @@ fn listar_generico<L: LectorFs>(
 /// pico de RAM al extraer es una ventana, no el archivo entero.
 const VENTANA: usize = 256 * 1024;
 
-/// Despacho streaming (espejo de [`con_particion`], pero escribe a `w` en vez de
-/// devolver). Inline —y no con cierres sobre `con_particion`— porque dos cierres
-/// capturando `&mut w` no compilan aunque sólo corra uno.
-fn volcar_particion<W: Write>(
-    ruta_dev: &Path,
-    indice: usize,
-    interna: &str,
-    w: &mut W,
-) -> io::Result<u64> {
-    let fuente = FuenteArchivo::abrir(ruta_dev)?;
-    let parts = tabla_particiones_fuente(&fuente).map_err(fserr)?;
-    let p = parts.into_iter().find(|p| p.indice == indice).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, format!("partición {indice} inexistente"))
-    })?;
-    let sub = SubFuente::nueva(fuente, p.inicio, p.tam);
-    match detectar_fs_fuente(&sub) {
-        SistemaArchivos::Fat => volcar_generico(&LectorFat::nuevo(sub).map_err(fserr)?, interna, w),
-        SistemaArchivos::Ext => volcar_generico(&LectorExt4::nuevo(sub).map_err(fserr)?, interna, w),
-        SistemaArchivos::Desconocido => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "el FS de la partición no es FAT ni ext",
-        )),
-    }
-}
-
 /// Resuelve `interna` a una hoja y la streamea a `w` por ventanas de [`VENTANA`].
 fn volcar_generico<L: LectorFs, W: Write>(fs: &L, interna: &str, w: &mut W) -> io::Result<u64> {
     let (manija, es_dir) = resolver(fs, interna)
@@ -367,6 +426,29 @@ fn volcar_generico<L: LectorFs, W: Write>(fs: &L, interna: &str, w: &mut W) -> i
         total += n as u64;
     }
     Ok(total)
+}
+
+/// Lee a lo sumo `max` bytes de la hoja `interna` (por ventanas) a un `Vec`. Es
+/// el preview acotado: la cabeza basta para discernir/ver texto sin OOM.
+fn leer_acotado<L: LectorFs>(fs: &L, interna: &str, max: u64) -> io::Result<Vec<u8>> {
+    let (manija, es_dir) = resolver(fs, interna)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("ruta inexistente: {interna}")))?;
+    if es_dir {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "un directorio no se lee como hoja"));
+    }
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; VENTANA];
+    let mut offset = 0u64;
+    while offset < max {
+        let pedir = core::cmp::min(VENTANA as u64, max - offset) as usize;
+        let n = fs.leer_archivo_en(&manija, offset, &mut buf[..pedir]).map_err(fserr)?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+        offset += n as u64;
+    }
+    Ok(out)
 }
 
 fn leer_generico<L: LectorFs>(fs: &L, interna: &str) -> io::Result<Vec<u8>> {

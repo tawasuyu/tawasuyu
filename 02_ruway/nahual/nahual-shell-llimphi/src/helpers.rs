@@ -674,8 +674,10 @@ pub(crate) fn do_open_selected(m: &mut Model, handle: &Handle<Msg>) {
                     None => open_path(m, &id_path.to_path_buf()),
                 }
             } else {
-                // Hoja no-POSIX (wawa/nouser/minga): tempfile bridge.
-                match m.cur().read(&id) {
+                // Hoja no-POSIX (wawa/nouser/minga): tempfile bridge. Para
+                // preview usamos `read_preview` — en un device acota la cabeza y
+                // no revienta la RAM con un archivo enorme.
+                match m.cur().read_preview(&id) {
                     Ok(bytes) => {
                         preview_from_bytes(m, bytes, &nombre);
                         m.viewer_open = true;
@@ -884,7 +886,8 @@ pub(crate) fn refresh_preview(m: &mut Model) {
             if p.is_file() {
                 Accion::Posix(p.to_path_buf())
             } else {
-                match m.cur().read(&n.id) {
+                // Preview: `read_preview` acota la lectura en un device.
+                match m.cur().read_preview(&n.id) {
                     Ok(bytes) => Accion::Bytes(bytes, n.name.clone()),
                     Err(_) => Accion::Limpiar,
                 }

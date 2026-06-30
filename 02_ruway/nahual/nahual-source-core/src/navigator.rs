@@ -301,6 +301,13 @@ impl Navigator {
         self.source.read(id)
     }
 
+    /// Bytes para PREVIEW (delega en la fuente): la mayoría devuelve el archivo
+    /// entero, pero una fuente de dispositivo acota la lectura para no reventar
+    /// la RAM con un video/ISO.
+    pub fn read_preview(&self, id: &NodeId) -> io::Result<Vec<u8>> {
+        self.source.read_preview(id)
+    }
+
     /// Mueve la selección a la fila visible anterior (salta lo filtrado).
     pub fn up(&mut self) -> bool {
         let Some(prev) = (0..self.selected).rev().find(|&i| self.passes(&self.children[i])) else {

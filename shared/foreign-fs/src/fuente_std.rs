@@ -55,6 +55,18 @@ impl Fuente for FuenteArchivo {
     }
 }
 
+/// Un `Arc<F>` es una `Fuente` —deja CACHEAR una fuente abierta y compartirla
+/// entre llamadas (y entre las ventanas `SubFuente` de cada partición) sin
+/// reabrir el device—. std-only: lo usa el cache del navegador host.
+impl<F: Fuente> Fuente for std::sync::Arc<F> {
+    fn tamano(&self) -> u64 {
+        (**self).tamano()
+    }
+    fn leer_en(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
+        (**self).leer_en(offset, buf)
+    }
+}
+
 /// Codifica un hash de 32 bytes a 64 chars hex en minúscula —el nombre con que
 /// el bundle direccionado por contenido nombra cada objeto (`<hash>.obj`)—.
 pub fn hex32(bytes: &[u8; 32]) -> String {

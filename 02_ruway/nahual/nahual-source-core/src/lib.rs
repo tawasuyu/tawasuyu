@@ -179,6 +179,15 @@ pub trait Source: Send + Sync {
     /// Error si el id no existe o no tiene contenido leíble.
     fn read(&self, id: &NodeId) -> std::io::Result<Vec<u8>>;
 
+    /// Bytes para PREVIEW. Por defecto = [`read`](Self::read) (el archivo
+    /// entero). Una fuente cuya hoja puede ser enorme y cara de materializar
+    /// —un dispositivo de bloques— lo redefine para leer sólo una cabeza acotada
+    /// (discernir el tipo + texto/hex) y NO reventar la RAM al previsualizar un
+    /// video/ISO. Para abrirlo de verdad se usa [`read`](Self::read).
+    fn read_preview(&self, id: &NodeId) -> std::io::Result<Vec<u8>> {
+        self.read(id)
+    }
+
     /// Si la fuente soporta mutación, devuelve su cara [`SourceMut`]; si es
     /// read-only (wawa/minga son CAS inmutables, nouser es derivado), `None`.
     ///
