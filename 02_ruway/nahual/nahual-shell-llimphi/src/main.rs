@@ -52,6 +52,7 @@ use std::path::PathBuf;
 mod ops;
 mod state;
 mod viewer_registry;
+mod monad_dispatch;
 mod modelo;
 mod helpers;
 mod overlays;

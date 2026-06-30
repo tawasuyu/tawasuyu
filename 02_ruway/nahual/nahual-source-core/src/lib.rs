@@ -48,6 +48,11 @@ pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
 #[cfg(feature = "nouser")]
 pub use nouser::NouserSource;
+/// Re-export del modelo de Mónada de chasqui, para que el front (el shell)
+/// despache por el lente / construya grafos sin depender de chasqui
+/// directamente — `nahual-source-core` es su seam hacia el dominio nouser.
+#[cfg(feature = "nouser")]
+pub use chasqui_core::{db::MonadDb, edit, resolve, Lens, MonadManifest, MonadQuery};
 #[cfg(feature = "nouser-daemon")]
 pub use nouser_daemon::NouserDaemonSource;
 #[cfg(feature = "minga")]
