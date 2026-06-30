@@ -232,6 +232,9 @@ pub fn run<A: App>(cfg: LayerConfig) -> Result<(), Box<dyn Error>> {
         pointer: None,
         seat: None,
         layer,
+        compositor,
+        layer_shell,
+        cfg,
         width: size.0.max(1),
         height: size.1.max(1),
         gpu: None,
@@ -242,6 +245,7 @@ pub fn run<A: App>(cfg: LayerConfig) -> Result<(), Box<dyn Error>> {
         model: Some(model),
         handle,
         rx,
+        recreate_count: 0,
         exit: false,
     };
 
@@ -358,6 +362,12 @@ struct Runner<A: App> {
     pointer: Option<wl_pointer::WlPointer>,
     seat: Option<wl_seat::WlSeat>,
     layer: LayerSurface,
+    /// Compositor + shell + config retenidos para **re-crear** la layer-surface
+    /// si el compositor nos manda `closed` (reset/quita del output) en vez de
+    /// morir. Ver [`Runner::recreate_surface`] y el handler `closed`.
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+    cfg: LayerConfig,
     width: u32,
     height: u32,
     gpu: Option<PanelGpu>,
@@ -369,6 +379,10 @@ struct Runner<A: App> {
     model: Option<A::Model>,
     handle: Handle<A::Msg>,
     rx: Receiver<A::Msg>,
+    /// Cierres consecutivos sin lograr pintar un frame. Resetea al presentar; si
+    /// pasa el tope, nos rendimos (`exit`) para que el supervisor reinicie con
+    /// estado limpio (output realmente ausente, no un reset transitorio).
+    recreate_count: u32,
     exit: bool,
 }
 
@@ -500,6 +514,35 @@ impl<A: App> Runner<A> {
         });
     }
 
+    /// Re-crea la layer-surface tras un `closed` del compositor (reset/quita del
+    /// output: churn DRM, DPMS, hotplug). Suelta la surface GPU vieja —atada al
+    /// `wl_surface` ya muerto; el `hal`/device **sobrevive**— y crea una nueva
+    /// con la misma config. El próximo `configure` que mande el compositor
+    /// reconstruye la GPU vía [`ensure_gpu`](Self::ensure_gpu) y `draw` re-arma
+    /// el latido. Así la barra sobrevive a un reset de output sin morir.
+    fn recreate_surface(&mut self, qh: &QueueHandle<Self>) {
+        self.gpu = None;
+        self.cache = None;
+        let resolved = resolve_anchor(&self.cfg);
+        let wl_surface = self.compositor.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            wl_surface,
+            self.cfg.layer.into(),
+            Some(self.cfg.namespace.clone()),
+            None,
+        );
+        layer.set_anchor(resolved.anchor);
+        layer.set_size(resolved.size.0, resolved.size.1);
+        layer.set_exclusive_zone(resolved.exclusive_zone);
+        if let Some(m) = resolved.margins {
+            layer.set_margin(m.top, m.right, m.bottom, m.left);
+        }
+        layer.set_keyboard_interactivity(self.cfg.keyboard.into());
+        layer.commit();
+        self.layer = layer; // dropea la LayerSurface cerrada
+    }
+
     /// Mantiene vivo el latido: pide el siguiente frame-callback. El loop de
     /// frames se auto-sostiene así (cada `frame` re-pide el próximo), lo que
     /// permite drenar el canal de la app por frame sin un timer aparte.
@@ -564,6 +607,9 @@ impl<A: App> Runner<A> {
         }
         gpu.surface.present(frame, hal);
 
+        // Pintamos un frame con éxito: el ciclo de re-creación (si lo hubo) se
+        // recuperó del todo. Resetea el backoff de `closed`.
+        self.recreate_count = 0;
         self.cache = Some(RenderCache { mounted, computed });
         self.latido(qh);
     }
@@ -616,8 +662,29 @@ impl<A: App> CompositorHandler for Runner<A> {
 }
 
 impl<A: App> LayerShellHandler for Runner<A> {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.exit = true;
+    fn closed(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: &LayerSurface) {
+        // El compositor cerró nuestra superficie — típicamente al resetear o
+        // quitar el output al que estábamos anclados (churn DRM, DPMS, hotplug).
+        // Antes esto mataba el proceso (`exit = true`) y la barra quedaba muerta
+        // hasta un respawn externo. Ahora re-creamos la layer-surface sobre el
+        // output vigente y seguimos vivos. Con tope: si nos cierran repetido sin
+        // lograr pintar (output realmente ausente, no un reset transitorio), nos
+        // rendimos y salimos para que el supervisor reinicie con estado limpio.
+        const MAX_RECREATES: u32 = 16;
+        self.recreate_count += 1;
+        if self.recreate_count > MAX_RECREATES {
+            eprintln!(
+                "llimphi-layer · cerrados {} veces sin recuperar; salgo (que reinicie el supervisor).",
+                self.recreate_count
+            );
+            self.exit = true;
+            return;
+        }
+        eprintln!(
+            "llimphi-layer · el compositor cerró la superficie; re-creo (intento {}).",
+            self.recreate_count
+        );
+        self.recreate_surface(qh);
     }
     fn configure(
         &mut self,
