@@ -207,6 +207,38 @@ crudo), volveríamos a tener dos fuentes de verdad —la del control y la de la
 observación— que es justo el tipo de duplicado que este SDD elimina. El monitor
 es la cara de lectura del Engine.
 
+### 6.bis — Segundo consumidor de lectura: veto de suspensión (`energia`) — 2026-06-30
+El `MonitorSnapshot` no sólo se pinta; también se **juzga**. El escritorio
+(`pata`, el shell de la sesión) antes de **suspender por inactividad** le pregunta
+al plano de control "¿hay trabajo importante en curso?" — para no cortar procesos
+como los sistemas brutos (el dolor que motiva los workarounds tipo `caffeine`).
+
+- **Pieza:** `sandokan-monitor-core::energia` (módulo, no crate nuevo) —
+  `evaluar(&MonitorSnapshot, &PoliticaVeto) -> VeredictoSuspension { permite, bloqueos }`.
+  **Puro**, sobre el snapshot que el monitor ya produce. Veta una unidad
+  **corriendo** si quema ≥ `cpu_ocupada_pct` de CPU, o si su `label` coincide con
+  una de las `etiquetas_despiertas` (keep-awake declarativo). No mira `/proc` ni
+  el reloj: el consumidor combina este veredicto con sus propias señales de
+  sistema.
+- **Respeta el principio §6:** es otra cara de **lectura por el contrato** — se
+  alimenta del mismo `Engine::{list,status,telemetry}` vía `observe()`, no de un
+  canal paralelo. El veto no controla (no para nada); aconseja.
+- **Límite honesto del transporte (importante):** vía **arje-bus** la telemetría
+  **no trae CPU** (`sandokan-arje-engine`: `cpu_pct = 0.0`; el bus da RSS + hilos,
+  no jiffies). Por eso el veto-por-CPU sólo pesa con engines que la miden
+  (`LocalEngine`); con el engine que `pata` usa de verdad (arje), la coordinación
+  que **sí** funciona es por **`label` keep-awake** (los labels llegan en
+  `list()`). El "sistema ocupado" genérico (un `cargo build` suelto, que **no** es
+  unidad gestionada) lo cubre el consumidor con `/proc/loadavg` por su cuenta —
+  fuera del contrato, porque no es una unidad del plano de control.
+- **Lo que NO se hizo, a propósito:** no se agregó `priority`/`inhibits_suspend`
+  al wire de `EnteStatus`/`TelemetryFrame` ni a `UnitObservation`. Surfacear la
+  `Card.priority` por el contrato tentaría tocar los enums de `arje-bus`, que
+  `hammer` espeja por discriminantes hardcodeados (rompe en silencio). Si algún
+  día se quiere "esta unidad inhibe suspensión" declarativo desde la Card, va por
+  un método **aditivo** del trait `Engine` (`fn suspend_inhibit(id) -> Option<…>`,
+  default `None`), no por cambiar la telemetría.
+
 ## 7. Reglas duras (resumen)
 
 1. Un **contrato** de control: `sandokan-core::Engine`.
@@ -281,6 +313,7 @@ verbos+reglas existentes, no los reimplementa.
 - **App dedicada `sandokan-monitor-llimphi`** ✅ 2026-06-01 (frontend Fase 3, variante "app propia"): monitor de procesos sobre Llimphi, **tres pestañas**. (1) **Sistema**: todos los procesos del SO leídos de `/proc` (módulo `procfs`), tabla virtualizada con %CPU (delta de jiffies)/%MEM/RSS/estado/hilos/uid/**tiempo de vida** (uptime del proceso)/comando, orden por columna, y señales reales (`Terminar`/`Matar`/`Pausar`/`Seguir` vía `nix::sys::signal::kill`). Con **árbol padre/hijo** (toggle Lista/Árbol): jerarquía por `ppid` aplanada DFS, nodos colapsables (triángulo o ←/→), sangría por profundidad. **Filtro/búsqueda** incremental por nombre/comando/PID (`/` o Ctrl+F; con filtro activo cae a lista plana de coincidencias, estilo htop). **Gráficos en el tope**: un gráfico de %uso **por core** (delta busy/total de cada `cpuN` en `/proc/stat`, **ordenados por número**, línea **coloreada por nivel** verde→ámbar→rojo) + uno de memoria usada, área + línea vía `paint_with`, ~2 min a 1 Hz, en FlexWrap. La columna comando rellena el espacio disponible (flex), texto a la izquierda y se pica con `...` medido pixel-exacto en `paint_with`; el triángulo del árbol va dibujado (no glifo de fuente). (2) **Unidades**: las unidades del plano de control, observadas SOLO por el contrato `Engine` (`observe()` sobre `auto_default()`), tarjetas vivas con sparkline de CPU; detener/matar por `Engine::stop`. (3) **Wawa**: censo host-side de las apps WASM instaladas. Bindings de teclado reales (`on_key`/`on_wheel`: Tab cicla, ↑↓ navegan, Supr termina, Ctrl+1/2/3, Ctrl+R/F5/Ctrl+Q). `SANDOKAN_MONITOR_SEED=1` siembra unidades reales para demo. Binario: `sandokan-monitor`.
   - **Mapa (treemap fractal)** ✅ 2026-06-01: pestaña con un **treemap jerárquico** de los procesos del SO — cada proceso es un rectángulo de área proporcional a su memoria (RSS) o CPU (toggle), anidado por padre/hijo (slice-and-dice recursivo, módulo `treemap` puro y testeado), **coloreado por proceso** (paleta categórica estable por nombre, compartida con la lista; opacidad sube con el uso de CPU, baja con la profundidad; **gradiente vertical leve** por celda; cada recuadro con espacio muestra **nombre + %CPU · RAM**). **Interactivo**: click selecciona (hit-test recomputando el layout en coords locales) y la barra ofrece Terminar/Matar (o Supr); **doble-click hace zoom al subárbol** (detección por `Instant`), con breadcrumb Subir/Todo y Backspace para subir. Misma fuente `/proc` que el modo Sistema.
   - **Nota de límites (SDD §6):** el modo **Sistema** lee `/proc` directo a propósito —es el SO entero, una fuente sin dueño en el control plane—. NO viola "una sola fuente de verdad": esa regla aplica a las **unidades gestionadas**, que siguen observándose por el `Engine` (pestaña Unidades). Sistema y Unidades son fuentes distintas que no se pisan.
+- **Veto de suspensión `energia`** ✅ 2026-06-30 (segundo consumidor de lectura, §6.bis): `sandokan-monitor-core::energia::evaluar` juzga el `MonitorSnapshot` para que `pata` no suspenda por inactividad si hay trabajo (unidad ocupada o keep-awake por label). 5 tests. Límite: vía arje-bus `cpu_pct=0`, así que el veto real es por label; el "sistema ocupado" no-unidad lo cubre el consumidor con `/proc/loadavg`.
 
 ### Pendiente
 - **`RunCard{card}` arbitraria** *(en curso)*: el `Engine::run` transmite la `Card` entera por el bus (`BusRequest::RunCard{card: WireCard}`) en vez de pedirla del store por nombre. Modelo de confianza fijado (2026-06-05): **gate por `Capability::Spawn` del caller + caller como requester** — sólo Entes con `Spawn` pueden usarlo y la card se encarna con las caps del caller (no de la Semilla), así que es imposible escalar privilegios. `SpawnCardFromDisk` sigue existiendo para el caso store-based (timers, systemd1-compat).
