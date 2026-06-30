@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=12">
+<link rel="stylesheet" href="styles.css?v=13">
 </head>
 <body>
 
@@ -874,17 +874,30 @@
   }
 
   // ===== íconos de los items del sidebar =====
-  // Glyph para apps reconocibles; para el resto, monograma (su inicial). Así
-  // los documentos sobre una app llevan su ícono y los demás uno generado.
-  const ICONOS = {
-    pluma: '¶', nakui: 'Σ', shuma: '▦', media: '▶', takiy: '♪',
-    llimphi: '◆', mirada: '▭', cosmos: '★', paloma: '@',
-    tullpu: '❖', cards: '♠', chasqui: '➤', supay: '▲',
-  };
+  // Cada app tiene su SVG real en assets/icons/. Si el item es una app con
+  // ícono, lo usamos; si no (docs del sistema, churay, paloma…), monograma.
+  const ICONO_APPS = new Set([
+    'agora','arje','cards','chaka','chasqui','cosmos','dominium','hapiy','iniy',
+    'khipu','llimphi','media','minga','mirada','nada','nahual','nakui','pineal',
+    'pluma','puriy','rimay','sandokan','shuma','supay','takiy','tinkuy','tullpu',
+    'wawa-explorer','wawa',
+  ]);
   function setupDocIcons() {
     document.querySelectorAll('#sidebar .dock-section li .doc').forEach(el => {
-      const nombre = (el.textContent || '').trim().toLowerCase().split(/[\s·]/)[0];
-      el.dataset.ic = ICONOS[nombre] || (nombre.charAt(0) || '?').toUpperCase();
+      if (el.querySelector('.doc-ic')) return;
+      const nombre = (el.textContent || '').trim().toLowerCase().split(/[\s·↗(]/)[0];
+      let ic;
+      if (ICONO_APPS.has(nombre)) {
+        ic = document.createElement('img');
+        ic.className = 'doc-ic';
+        ic.src = `/web/tawasuyu-web/assets/icons/${nombre}.svg`;
+        ic.setAttribute('aria-hidden', 'true');
+      } else {
+        ic = document.createElement('span');
+        ic.className = 'doc-ic doc-ic-mono';
+        ic.textContent = (nombre.charAt(0) || '?').toUpperCase();
+      }
+      el.prepend(ic);
     });
   }
 
