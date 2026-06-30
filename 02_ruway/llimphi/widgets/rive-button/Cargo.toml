@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-widget-rive-button"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-rive-button — botón reactivo dirigido por máquina de estados estilo Rive (llimphi-anim). Tres estados idle/hover/press con clips Lottie, transiciones por hover (bool) y click (trigger), crossfade entre estados. Primer consumidor real de la StateMachine fuera del studio."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-anim = { workspace = true }
+llimphi-lottie = { workspace = true }

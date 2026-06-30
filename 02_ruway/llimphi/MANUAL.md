@@ -698,6 +698,17 @@ current, ±1)` para nav, `resolve(visible, pos) -> Option<orig_idx>`.
 **spinner** — `spinner_view(color, stroke_ratio, speed_rev_per_sec)`. Animado por
 reloj absoluto; requiere redraws periódicos (`spawn_periodic`).
 
+**rive-button** — botón reactivo dirigido por **máquina de estados** (`llimphi-anim`,
+estilo Rive) — primer consumidor real de la `StateMachine` fuera del studio.
+**Stateful** (como `text-editor`): guardás `RiveButton` en tu Model. Tres estados
+`idle`/`hover`/`press`, cada uno con su clip Lottie; hover por bool (listeners
+Enter/Exit del motor), press por trigger (`ClipDone` lo devuelve solo). API:
+`RiveButton::new(idle, hover, press, press_secs, blend_secs)` o `::builtin()`
+(clips embebidos); `advance(dt)` desde un tick, `pointer(Option<(f64,f64)>)`,
+`press()` desde el `on_click` del host, `current_state()`/`is_transitioning()`.
+Render: `view(on_pointer: Fn(Option<(f64,f64)>)->Msg, on_click: Msg)`. Demo:
+`cargo run -p llimphi-widget-rive-button --example rive_button_demo --release`.
+
 **badge** — `count_badge_view(count, BadgeKind)` ("99+" si ≥100) y
 `dot_badge_view(BadgeKind)`. `BadgeKind::{Info,Success,Warning,Error,Neutral}`.
 
