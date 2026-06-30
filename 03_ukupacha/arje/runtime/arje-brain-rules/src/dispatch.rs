@@ -19,6 +19,26 @@ pub trait ActionSink: Send + Sync {
     fn notify(&self, target_id: ulid::Ulid, message: &str);
     /// Inhibe un comportamiento (placeholder; semántica depende del sink).
     fn inhibit(&self, reason: &str);
+
+    // --- Verbos de control (SDD §8 capa 3). Default no-op: un sink que sólo
+    // observa/loguea no controla nada. Un sink con teeth (`EngineSink`) los
+    // override y enruta a `sandokan_core::Engine`. Quedan con default para que
+    // los sinks existentes (NullSink, GraphSink) compilen sin cambios. ---
+    /// Detiene una unidad gestionada (`Engine::stop`). No-op por defecto.
+    fn stop(&self, target_id: ulid::Ulid, grace_ms: u64) {
+        let _ = (target_id, grace_ms);
+        trace!("ActionSink::stop sin teeth (no-op)");
+    }
+    /// Reescribe el peso de CPU de un cgroup (`Engine::set_cpu_weight`). No-op por defecto.
+    fn set_cpu_weight(&self, cgroup_path: &str, weight: u32) {
+        let _ = (cgroup_path, weight);
+        trace!("ActionSink::set_cpu_weight sin teeth (no-op)");
+    }
+    /// Congela/descongela un cgroup (`Engine::freeze`). No-op por defecto.
+    fn freeze(&self, cgroup_path: &str, frozen: bool) {
+        let _ = (cgroup_path, frozen);
+        trace!("ActionSink::freeze sin teeth (no-op)");
+    }
 }
 
 /// Sink por defecto que sólo logea. Útil para tests y dev sin runtime.
@@ -59,6 +79,10 @@ async fn execute_action(action: &Action, sink: &dyn ActionSink, rule_id: ulid::U
         Action::Spawn { card_blob } => sink.spawn(card_blob),
         Action::Invoke { target_cap, blob } => sink.invoke(target_cap.clone(), blob.clone()),
         Action::Inhibit { reason } => sink.inhibit(reason),
+        // Verbos de control (SDD §8 capa 3) → el sink los enruta al Engine.
+        Action::Stop { target_id, grace_ms } => sink.stop(*target_id, *grace_ms),
+        Action::SetCpuWeight { cgroup_path, weight } => sink.set_cpu_weight(cgroup_path, *weight),
+        Action::Freeze { cgroup_path, frozen } => sink.freeze(cgroup_path, *frozen),
     }
 }
 

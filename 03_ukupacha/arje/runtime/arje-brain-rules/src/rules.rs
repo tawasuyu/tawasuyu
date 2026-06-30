@@ -197,6 +197,32 @@ pub enum Action {
     Inhibit {
         reason: String,
     },
+
+    // --- Verbos de control (SDD §8 capa 3): el cerebro cierra el lazo —
+    // observa Y actúa sobre el plano de control. Los ejecuta un `ActionSink`
+    // con teeth (`sandokan-brain::EngineSink` → `sandokan_core::Engine`); un
+    // sink de sólo-observación (NullSink, GraphSink hoy) los deja en no-op. ---
+    /// Detener una unidad gestionada por su `card_id` (SIGTERM → grace →
+    /// SIGKILL). `grace_ms == 0` = kill inmediato. → `Engine::stop`.
+    Stop {
+        target_id: Ulid,
+        #[serde(default)]
+        grace_ms: u64,
+    },
+    /// Reescribir el peso de CPU de un cgroup ya existente (priorizar o
+    /// deprioritizar en caliente, sin reencarnar). `cgroup_path` se direcciona
+    /// como `CgroupSpec.path`. → `Engine::set_cpu_weight`.
+    SetCpuWeight {
+        cgroup_path: String,
+        weight: u32,
+    },
+    /// Congelar (`true`) o descongelar (`false`) un cgroup vía freezer v2 —
+    /// SIGSTOP de grupo conservando la RAM. → `Engine::freeze`.
+    Freeze {
+        cgroup_path: String,
+        #[serde(default)]
+        frozen: bool,
+    },
 }
 
 fn default_log_level() -> LogLevel { LogLevel::Info }

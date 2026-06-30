@@ -218,6 +218,60 @@ es la cara de lectura del Engine.
    (no_std) + DAG.
 6. El **monitor observa por el contrato**, nunca por un canal paralelo.
 
+## 8. Repotenciación: del monitor al centro de control (2026-06-30)
+
+> El plano de control ya tiene **contrato** (`Engine`), **política**
+> (`sandokan-lifecycle`), **observación** (`sandokan-monitor-core` + la app
+> `sandokan-monitor-llimphi`) y hasta un **cerebro de automatización**
+> (`arje-brain-rules` evento→acción + `arje-brain-cognitive` que cristaliza
+> reglas de patrones observados). Lo que falta no es inventar el orquestador
+> —es **cablear y exponer** poderes que están a medio construir—. El objetivo:
+> que el usuario controle el sistema **por intención**, no sólo matando PIDs.
+
+El estado de partida tiene tres huecos verificados en disco (2026-06-30):
+
+1. **El cerebro observa pero no actúa.** `arje_brain_rules::Action` =
+   `Log/Notify/Spawn/Invoke/Inhibit`. Ninguna acción toca el contrato `Engine`
+   (no hay `Stop`/`SetCpuWeight`/`Freeze`). El lazo está abierto.
+2. **Verbos del contrato declarados pero no cableados.** `Engine` define
+   `set_cpu_weight` y `freeze`, pero el único Engine real de Linux
+   (`sandokan-arje-engine::ArjeEngine`, sobre `arje-bus`) los deja en
+   `Unsupported` — no viajan por el bus, no hay `restart`, ni `io.weight`,
+   `memory.high`, `cpuset`, `nice`/`ionice`.
+3. **Disparadores y acciones pobres + sin capa de intención.** El cerebro sólo
+   reacciona a `EnteSpawned/Died/Device/Bus`; no a umbrales de métrica, estado
+   del sistema (AC/batería/red/idle) ni tiempo/agenda. Y no hay capa
+   declarativa de **intención** (“presentando”, “ahorro”, “build pesado”) que
+   reconcilie un conjunto de prioridades+reglas. Casa natural: `pacha`
+   (contextos de usuario) + el `set_cpu_weight` cuyo doc ya cita “el slice de un
+   contexto pacha”.
+
+### Las cinco capas (fases verificables, orden por riesgo)
+
+| Capa | Qué agrega | Invariante de cierre |
+|---|---|---|
+| **3 — Action→Engine** *(primera)* | el cerebro **actúa** sobre el contrato: `Action::{Stop,SetCpuWeight,Freeze}` + un `ActionSink` con teeth (`EngineSink`) que enruta a `sandokan_core::Engine` | una regla evento→acción puede detener/priorizar/congelar una unidad **vía el contrato**, probado con un Engine mock |
+| **1 — verbos que faltan** | `Engine::restart`/`reload`; cablear `set_cpu_weight`/`freeze` por `arje-bus`→arje-zero (cgroup v2); `io.weight`, `memory.high/max`, `cpuset` (pin), `nice`/`ionice`; `set_ttl`/`enable` | `ArjeEngine` deja de responder `Unsupported`; el slider de prioridad del monitor escribe de verdad |
+| **2 — disparadores** | `EventKind`/condición por **umbral de métrica** (CPU>X durante Ns, mem, temp, disco, batería), **estado** (AC/batería, red, idle, lock, login) y **tiempo** (cron, atardecer, boot, cada N). Forma canónica = evaluación pura sobre `MonitorSnapshot` (como `monitor-core::energia::evaluar`) | una regla “si chasqui >80% CPU 30 s → bajá su peso” se declara y dispara |
+| **4 — intención (pacha)** | capa declarativa: intenciones nombradas que un **reconciliador** traduce a prioridades+reglas+freeze de estado deseado; atadas a `pacha` | elegir “presentando” congela lo no-esencial y prioriza mirada de una |
+| **5 — UI centro de control** | el monitor pasa de leer+matar a **gobernar**: slider de prioridad (→`set_cpu_weight`), toggle freeze, restart, editor de reglas/automatizaciones, selector de intenciones, vista de dependencias | desde la app se ejerce cada verbo y se edita una automatización sin tocar JSON a mano |
+
+**Reglas de la repotenciación** (heredadas del SDD): las acciones de control se
+expresan **sólo** por el contrato `Engine` (capa 3 no abre un canal paralelo);
+los disparadores de métrica evalúan el **mismo `MonitorSnapshot`** que el
+monitor (capa 2 no inventa una segunda fuente); la intención (capa 4) **compone**
+verbos+reglas existentes, no los reimplementa.
+
+### Estado de la repotenciación
+- **Capa 3** *(en curso, 2026-06-30)*: `arje_brain_rules::Action` gana
+  `Stop/SetCpuWeight/Freeze` + `ActionSink` gana los métodos de control (default
+  no-op para sinks de sólo-observación). Crate nuevo
+  `03_ukupacha/sandokan/sandokan-brain` con `EngineSink` que implementa
+  `ActionSink` enrutando los tres verbos a un `sandokan_core::Engine`
+  (fire-and-forget vía `Handle::spawn`), probado con un Engine mock que registra
+  las llamadas. Cierra el lazo observar→actuar sin tocar PID 1.
+- Capas 1, 2, 4, 5: pendientes (orden de la tabla).
+
 ## Estado (2026-05-31)
 
 ### Hecho
