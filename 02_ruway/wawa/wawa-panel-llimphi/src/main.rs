@@ -16,6 +16,7 @@
 
 mod animaciones;
 mod greeter;
+mod pacha;
 mod paloma;
 mod plugins;
 mod remote;
@@ -329,6 +330,9 @@ struct Model {
     /// método de auth (contraseña u OAuth2). Se persiste en `cuentas.json`; el
     /// diente «Correo» la edita y paloma la lee al arrancar.
     paloma: paloma::PalomaState,
+    /// Catálogo de **contextos** (pacha): modos de uso con nombre. El diente
+    /// «Contextos» edita `pachas.ron` y muestra el estado del cifrado de dotfiles.
+    pacha: pacha::PachaState,
     /// Config del **greeter** (DM): fondo animado + paleta. Se persiste en
     /// `greeter.conf`; el greeter la lee en el próximo login.
     greeter: greeter::GreeterCfg,
@@ -713,6 +717,8 @@ struct SaveDirty {
     splash: bool,
     /// Config de cuentas de correo de paloma (`cuentas.json`).
     paloma: bool,
+    /// Catálogo de contextos de pacha (`pachas.ron`).
+    pacha: bool,
 }
 
 #[derive(Clone)]
@@ -1496,6 +1502,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
     let greeter_cfg = greeter::GreeterCfg::load();
     let splash_cfg = splash::SplashCfg::load();
     let paloma = paloma::PalomaState::load();
+    let pacha = pacha::PachaState::load();
 
     let prezi = PreziEdit::from_config(&mirada);
     let monitor = MonitorEdit::from_config(&mirada);
@@ -1523,6 +1530,7 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         themes,
         animaciones,
         paloma,
+        pacha,
         greeter: greeter_cfg,
         splash: splash_cfg,
         monitor,
@@ -1899,6 +1907,8 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         PanelPestana { title: "Acerca".into(), icon: "🖥".into(), schema: acerca },
         // Diente-de-app: configura las cuentas de correo de paloma.
         PanelPestana { title: "Correo".into(), icon: "✉".into(), schema: paloma::schema(&m.paloma) },
+        // Diente-de-app: contextos (pacha) + estado del cifrado de dotfiles.
+        PanelPestana { title: "Contextos".into(), icon: "◴".into(), schema: pacha::schema(&m.pacha) },
     ]
 }
 
@@ -4164,6 +4174,17 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             }
             return;
         }
+        "pacha" => {
+            let action = pacha::route(&mut m.pacha, &rel, value);
+            if action.dirty {
+                m.dirty.pacha = true;
+                m.save_in = SAVE_DELAY_TICKS;
+            }
+            if !action.status.is_empty() {
+                m.status = action.status;
+            }
+            return;
+        }
         _ => return,
     }
     // Editar mirada/pata/atajos modifica el perfil ACTIVO: vuelca la config viva
@@ -4276,6 +4297,13 @@ fn flush_saves(m: &mut Model) {
         }
         m.dirty.paloma = false;
     }
+    if m.dirty.pacha {
+        match m.pacha.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· pacha save: {e}")),
+        }
+        m.dirty.pacha = false;
+    }
     if m.dirty.splash {
         match m.splash.save() {
             Ok(()) => {
@@ -4379,6 +4407,9 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
     }
     if key == "paloma" {
         return paloma::text_value(&m.paloma, &rel).unwrap_or_default();
+    }
+    if key == "pacha" {
+        return pacha::text_value(&m.pacha, &rel).unwrap_or_default();
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),

@@ -35,13 +35,13 @@ MC="$REPO/02_ruway/mirada/mirada-compositor"
 # corré `git pull` (o `./scripts/actualizar-mirada.sh`) ANTES.
 echo "==> repo en: $(git -C "$REPO" log -1 --format='%h %ci %s' 2>/dev/null || echo '¿no es un repo git?')"
 
-echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers, panel, ctl, portal, wallpaper y notificaciones"
+echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers, panel, ctl, portal, wallpaper, notificaciones y pacha"
 cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \
     -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi \
     -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi \
     -p pata-notify -p pata-notify-panel -p pata-notify-triage \
-    -p mirada-plugin-host
+    -p mirada-plugin-host -p pacha-cli
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -73,6 +73,10 @@ sudo install -Dm755 "$BIN/mirada-wallpaper"        /usr/local/bin/mirada-wallpap
 # el sistema —cada app una pestaña—, incluida la «Vista espacial» con el Prezi.
 # Es el panel donde las apps integran sus ajustes. No estaba instalado.
 sudo install -Dm755 "$BIN/wawa-panel"              /usr/local/bin/wawa-panel
+# Contextos de usuario (pacha): la CLI `pacha` — switch de contexto y el
+# subcomando `pacha dotfiles …` (versionado + cifrado de dotfiles por contexto).
+# El diente «Contextos» del wawa-panel edita `pachas.ron`; esta es la herramienta.
+sudo install -Dm755 "$BIN/pacha"                   /usr/local/bin/pacha
 # Notificaciones de escritorio (org.freedesktop.Notifications):
 #   · pata-notify        — el daemon; pinta los toasts y guarda el historial.
 #                          Autoarranca con la sesión (lo sembramos en el

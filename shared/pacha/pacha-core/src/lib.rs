@@ -317,6 +317,11 @@ impl Catalog {
         self.pachas.get(id)
     }
 
+    /// Acceso mutable a un contexto por id (para editores como el wawa-panel).
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut Pacha> {
+        self.pachas.get_mut(id)
+    }
+
     pub fn contains(&self, id: &str) -> bool {
         self.pachas.contains_key(id)
     }
