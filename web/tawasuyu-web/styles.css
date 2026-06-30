@@ -236,47 +236,65 @@ a:hover { color: var(--fg-text); }
 }
 body.sidebar-stowed #sidebar { display: none; }
 
-/* rail = columna TRANSPARENTE; los dientes son fichas individuales que
- * sobresalen (sombra propia), separadas entre sí, por el lado de adentro
- * (a la derecha del panel, mirando al plano). El resto de la columna queda
- * para el fondo. Cada diente es un ícono: chakana=sistema, hex 0x00…0x03. */
+/* rail = franja redondeada (estilo dock-rail de llimphi): los dientes se
+ * UNEN dentro de la franja (sin gaps), cada uno con una barra de acento de
+ * 3px pegada a la IZQUIERDA (encendida sólo en el activo) + ícono centrado.
+ * El activo se resalta (fondo distinto + esquina redondeada hacia el plano)
+ * pero nunca se separa de la franja. La franja sólo abarca los dientes; el
+ * resto de la columna queda para el fondo. */
 .dock-rail {
   order: 2;
+  align-self: flex-start;       /* la franja sólo abarca los dientes */
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  padding: 12px 6px;
-  background: transparent;
-  pointer-events: none;        /* sólo los dientes capturan clicks */
+  margin: 12px 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+  overflow: hidden;             /* recorta las esquinas de los dientes */
+  pointer-events: none;
 }
 .diente {
   pointer-events: auto;
-  width: 38px;
-  height: 30px;
-  display: inline-flex;
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
   appearance: none;
-  border: 1px solid var(--border);
-  border-right: 3px solid var(--diente-c, var(--fg-muted));  /* lomo de color, lado interno */
-  border-radius: 7px;
-  background: var(--bg-panel);
-  box-shadow: 0 2px 7px rgba(0,0,0,0.5);    /* ficha dibujada, sobresale */
+  border: none;
+  background: transparent;
   color: var(--fg-muted);
   font-family: var(--mono);
   font-size: 9.5px;
   letter-spacing: 0.02em;
   cursor: pointer;
-  transition: transform 0.12s, background 0.12s;
 }
-.diente:hover { color: var(--fg-text); background: var(--bg-row-hover); transform: translateX(2px); }
+/* barra de acento, pegada a la izquierda — sólo encendida si activo */
+.diente::before {
+  content: "";
+  width: 3px;
+  height: 30px;
+  border-radius: 2px;
+  background: transparent;
+  flex-shrink: 0;
+}
+.diente.active::before { background: var(--diente-c, var(--accent)); }
+.diente-ic {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.diente:hover { background: var(--bg-row-hover); color: var(--fg-text); }
 .diente.active {
-  color: var(--fg-text);
-  background: var(--bg-button);
-  border-right-color: var(--diente-c, var(--accent));
-  transform: translateX(3px);
+  background: var(--bg-selected, var(--bg-button));
+  color: var(--diente-c, var(--accent));
+  border-radius: 0 8px 8px 0;   /* sobresale hacia el plano, sin separarse */
 }
-.diente-chakana { width: 15px; height: 15px; color: var(--diente-c, var(--accent)); }
+.diente-chakana { width: 18px; height: 18px; color: currentColor; }
 .diente[data-theme="tawasuyu"] { --diente-c: var(--accent); }
 .diente[data-theme="unanchay"] { --diente-c: var(--c-unanchay); }
 .diente[data-theme="yachay"]   { --diente-c: var(--c-yachay); }
@@ -312,18 +330,30 @@ body.sidebar-stowed #sidebar { display: none; }
 }
 .dock-section ul { list-style: none; margin: 0; padding: 0; }
 .dock-section li { padding: 0; }
+/* items más altos, con un ícono de color a la izquierda (por cuadrante). */
 .dock-section .doc {
-  display: block;
-  padding: 3px 8px;
-  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border-radius: 4px;
   color: var(--fg-text);
   cursor: pointer;
-  border-left: 2px solid transparent;
 }
-.dock-section .doc:hover {
-  background: var(--bg-row-hover);
-  border-left-color: var(--accent);
+.dock-section .doc::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--sec-c, var(--fg-muted));
+  flex-shrink: 0;
 }
+.dock-section .doc:hover { background: var(--bg-row-hover); }
+.dock-section[data-mod="sistema"]  { --sec-c: var(--accent); }
+.dock-section[data-mod="unanchay"] { --sec-c: var(--c-unanchay); }
+.dock-section[data-mod="yachay"]   { --sec-c: var(--c-yachay); }
+.dock-section[data-mod="ruway"]    { --sec-c: var(--c-ruway); }
+.dock-section[data-mod="ukupacha"] { --sec-c: var(--c-ukupacha); }
 
 /* plano cartesiano */
 #plano-wrap {

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
 
@@ -123,15 +123,17 @@
       <!-- rail de dientes (íconos) por el lado de adentro: la chakana =
            sistema, y los 4 cuadrantes por su hex (0x00…0x03). -->
       <nav class="dock-rail" aria-label="secciones">
-        <button class="diente diente-sis" type="button" data-diente="sistema" data-theme="tawasuyu" title="sistema">
-          <svg class="diente-chakana" viewBox="-3 -3 6 6" aria-hidden="true">
-            <path d="M -0.5 -2.5 L 0.5 -2.5 L 0.5 -2.0 L 1.0 -2.0 L 1.0 -1.5 L 1.5 -1.5 L 1.5 -1.0 L 2.0 -1.0 L 2.0 -0.5 L 2.5 -0.5 L 2.5 0.5 L 2.0 0.5 L 2.0 1.0 L 1.5 1.0 L 1.5 1.5 L 1.0 1.5 L 1.0 2.0 L 0.5 2.0 L 0.5 2.5 L -0.5 2.5 L -0.5 2.0 L -1.0 2.0 L -1.0 1.5 L -1.5 1.5 L -1.5 1.0 L -2.0 1.0 L -2.0 0.5 L -2.5 0.5 L -2.5 -0.5 L -2.0 -0.5 L -2.0 -1.0 L -1.5 -1.0 L -1.5 -1.5 L -1.0 -1.5 L -1.0 -2.0 L -0.5 -2.0 Z" fill="currentColor"/>
-          </svg>
+        <button class="diente" type="button" data-diente="sistema" data-theme="tawasuyu" title="sistema">
+          <span class="diente-ic">
+            <svg class="diente-chakana" viewBox="-3 -3 6 6" aria-hidden="true">
+              <path d="M -0.5 -2.5 L 0.5 -2.5 L 0.5 -2.0 L 1.0 -2.0 L 1.0 -1.5 L 1.5 -1.5 L 1.5 -1.0 L 2.0 -1.0 L 2.0 -0.5 L 2.5 -0.5 L 2.5 0.5 L 2.0 0.5 L 2.0 1.0 L 1.5 1.0 L 1.5 1.5 L 1.0 1.5 L 1.0 2.0 L 0.5 2.0 L 0.5 2.5 L -0.5 2.5 L -0.5 2.0 L -1.0 2.0 L -1.0 1.5 L -1.5 1.5 L -1.5 1.0 L -2.0 1.0 L -2.0 0.5 L -2.5 0.5 L -2.5 -0.5 L -2.0 -0.5 L -2.0 -1.0 L -1.5 -1.0 L -1.5 -1.5 L -1.0 -1.5 L -1.0 -2.0 L -0.5 -2.0 Z" fill="currentColor"/>
+            </svg>
+          </span>
         </button>
-        <button class="diente" type="button" data-diente="unanchay" data-theme="unanchay" title="unanchay · percibir">0x00</button>
-        <button class="diente" type="button" data-diente="yachay"   data-theme="yachay"   title="yachay · conocer">0x01</button>
-        <button class="diente" type="button" data-diente="ruway"    data-theme="ruway"    title="ruway · hacer">0x02</button>
-        <button class="diente" type="button" data-diente="ukupacha" data-theme="ukupacha" title="ukupacha · raíz">0x03</button>
+        <button class="diente" type="button" data-diente="unanchay" data-theme="unanchay" title="unanchay · percibir"><span class="diente-ic">0x00</span></button>
+        <button class="diente" type="button" data-diente="yachay"   data-theme="yachay"   title="yachay · conocer"><span class="diente-ic">0x01</span></button>
+        <button class="diente" type="button" data-diente="ruway"    data-theme="ruway"    title="ruway · hacer"><span class="diente-ic">0x02</span></button>
+        <button class="diente" type="button" data-diente="ukupacha" data-theme="ukupacha" title="ukupacha · raíz"><span class="diente-ic">0x03</span></button>
       </nav>
     </aside>
 
@@ -890,9 +892,10 @@
       const dx = x - t.x0, dy = y - t.y0;
       t.x = x; t.y = y;
       if (!t.mode) {
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
-          if (t.stowed && t.x0 <= EDGE && dx > 0) t.mode = 'open';
-          else if (!t.stowed && t.enSidebar && dx < 0) t.mode = 'stow';
+        // horizontal en cualquier parte de la página: derecha abre, izquierda guarda.
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 12) {
+          if (t.stowed && dx > 0) t.mode = 'open';
+          else if (!t.stowed && dx < 0) t.mode = 'stow';
           else t.mode = 'ignore';
         } else if (dy > 8 && dy > Math.abs(dx)) {
           const atTop = !t.scroll || t.scroll.scrollTop <= 0;
