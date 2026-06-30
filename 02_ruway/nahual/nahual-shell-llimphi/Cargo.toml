@@ -53,6 +53,9 @@ pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 tullpu-module = { workspace = true }
 media-module = { workspace = true }
 llimphi-icons = { workspace = true }
+# Ícono por Mónada según su naturaleza (lente) + color por contexto (id).
+tullpu-icon-core = { workspace = true }
+tullpu-icon-llimphi = { workspace = true }
 # Modernización visual: skeleton shimmer en miniaturas que decodifican y
 # empty-state cuando una carpeta no tiene entradas (en vez de un hueco).
 llimphi-widget-skeleton = { workspace = true }

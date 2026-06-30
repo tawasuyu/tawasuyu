@@ -134,6 +134,27 @@ pub enum Forma {
 }
 
 impl Forma {
+    /// Polilínea abierta a partir de una lista de puntos (el primero es `MoverA`,
+    /// el resto `LineaA`). Atajo para no tener que importar `ComandoPath` en cada
+    /// consumidor que quiera trazar segmentos. Con `Pintura::Trazo` da una línea
+    /// quebrada; con relleno, un polígono (sin cerrar explícito).
+    pub fn polilinea(puntos: &[(f32, f32)]) -> Forma {
+        let comandos = puntos
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y))| {
+                if i == 0 {
+                    ComandoPath::MoverA { x, y }
+                } else {
+                    ComandoPath::LineaA { x, y }
+                }
+            })
+            .collect();
+        Forma::Path { comandos }
+    }
+}
+
+impl Forma {
     /// Lista de comandos de la primitiva. Reutiliza los constructores del core
     /// para no duplicar el cálculo de Bézier; el color es irrelevante aquí (se
     /// fija después), así que se pasa opaco y se descartan los campos de paint.

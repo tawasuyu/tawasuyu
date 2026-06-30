@@ -1293,6 +1293,17 @@ pub(crate) fn icon_tile_content(model: &Model, node: &Node, theme: &Theme, lado:
         })
         .children(vec![icon_view(icon, color, 1.6)])])
     };
+    // Una Mónada se pinta según su naturaleza (lente) con un color propio
+    // derivado de su id — no como carpeta genérica. Ver `monad_icon`.
+    if crate::monad_icon::es_monada(&node.id, node.mime_hint.as_deref()) {
+        let lens = crate::monad_icon::lens_de_hint(node.mime_hint.as_deref());
+        let spec = crate::monad_icon::monada_icon_spec(lens, &node.id);
+        return View::new(base()).fill(theme.bg_panel_alt).children(vec![View::new(Style {
+            size: Size { width: length(big), height: length(big) },
+            ..Default::default()
+        })
+        .children(vec![tullpu_icon_llimphi::spec_view(spec, theme.fg_text)])]);
+    }
     if node.is_container {
         let icon = match node.kind {
             NodeKind::Archive => Icon::Archive,

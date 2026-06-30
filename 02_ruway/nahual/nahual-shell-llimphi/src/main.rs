@@ -53,6 +53,7 @@ mod ops;
 mod state;
 mod viewer_registry;
 mod monad_dispatch;
+mod monad_icon;
 mod modelo;
 mod helpers;
 mod overlays;
