@@ -322,6 +322,7 @@ nahual-shell-preview-panel = Qhaway panel
 nahual-shell-wheel-zoom = Rueda: zoom
 nahual-shell-wheel-list = Rueda: lista
 nahual-shell-new-dir = Musuq qillqana
+nahual-shell-submonadize = Akllasqata submonadizay (uchuy Mónada suti)
 nahual-shell-new-file = Musuq qillqa
 nahual-shell-rename = Sutichay
 nahual-shell-delete = Pichay

@@ -152,6 +152,10 @@ pub(crate) enum PromptKind {
     /// Seleccionar (marcar) por patrón: el texto es un glob (`*.png`, `foto*`).
     /// No opera sobre el filesystem — marca los hijos visibles que matchean.
     SelectPattern,
+    /// **Submonadizar**: el texto es el nombre de la Mónada hija que agrupa a
+    /// `members` (la selección) dentro de la Mónada `parent` (la actual). No
+    /// toca el filesystem — reorganiza el grafo vía `MonadGraphMut`.
+    Submonadize { parent: nahual_source_core::NodeId, members: Vec<nahual_source_core::NodeId> },
 }
 
 impl Prompt {
@@ -162,6 +166,7 @@ impl Prompt {
             PromptKind::NewFile { .. } => "nahual-shell-new-file",
             PromptKind::Rename { .. } => "nahual-shell-rename",
             PromptKind::SelectPattern => "nahual-shell-select-pattern-title",
+            PromptKind::Submonadize { .. } => "nahual-shell-submonadize",
         };
         rimay_localize::t(key)
     }
@@ -617,6 +622,10 @@ pub(crate) enum Msg {
     NewFilePrompt,
     /// Abre el prompt de renombrar sobre el nodo seleccionado (texto = nombre).
     RenamePrompt,
+    /// Abre el prompt para **submonadizar** la selección (marca o cursor) de la
+    /// Mónada actual en una sub-Mónada nueva (texto = nombre). Sólo aplica
+    /// dentro de un grafo de Mónadas (`monad_graph()` presente).
+    SubmonadizePrompt,
     /// Agrega texto al prompt activo.
     PromptInput(String),
     /// Borra el último carácter del prompt.

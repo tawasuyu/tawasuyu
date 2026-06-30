@@ -619,6 +619,22 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                 }
             }
         }
+        Msg::SubmonadizePrompt => {
+            // Sólo dentro de una Mónada de un grafo editable: la actual es el
+            // padre, la marca (o el cursor) son los miembros a trasladar.
+            let parent = m.cur().current_id().clone();
+            if m.cur().monad_graph().is_some() && parent.starts_with("m:") {
+                let members: Vec<nahual_source_core::NodeId> =
+                    m.cur_pane().op_targets().into_iter().map(|(id, _)| id).collect();
+                if !members.is_empty() {
+                    m.prompt = Some(Prompt {
+                        kind: PromptKind::Submonadize { parent, members },
+                        text: String::new(),
+                    });
+                    m.context_menu = None;
+                }
+            }
+        }
         Msg::PromptInput(s) => {
             if let Some(p) = m.prompt.as_mut() {
                 p.text.push_str(&s);
@@ -638,12 +654,24 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                     if !texto.is_empty() {
                         select_by_pattern(&mut m, &texto);
                     }
+                } else if let PromptKind::Submonadize { parent, members } = &p.kind {
+                    // Edición de grafo en memoria (síncrona, no pasa por la cola
+                    // de ops del filesystem): submonadizá y refrescá el listado.
+                    if !texto.is_empty() {
+                        if let Some(graph) = m.cur().monad_graph() {
+                            let _ = graph.submonadize(parent, &texto, members);
+                        }
+                        let _ = m.cur_mut().reload();
+                        m.cur_pane_mut().marked.clear();
+                    }
                 } else if !texto.is_empty() {
                     let kind = match p.kind {
                         PromptKind::NewDir { parent } => OpKind::NewDir { parent, name: texto },
                         PromptKind::NewFile { parent } => OpKind::NewFile { parent, name: texto },
                         PromptKind::Rename { id } => OpKind::Rename { id, new_name: texto },
-                        PromptKind::SelectPattern => unreachable!("manejado arriba"),
+                        PromptKind::SelectPattern | PromptKind::Submonadize { .. } => {
+                            unreachable!("manejado arriba")
+                        }
                     };
                     enqueue(&mut m, handle, kind);
                 }

@@ -424,6 +424,14 @@ impl Navigator {
         self.source.writable()
     }
 
+    /// La cara **editable del grafo de Mónadas** de la fuente activa, si la
+    /// ofrece (`Some` sólo para nouser; `None` para POSIX/wawa/minga). El
+    /// front gatea las acciones de organización (submonadizar/fusionar/…) con
+    /// esto, igual que [`writable`](Self::writable) gatea las de archivo.
+    pub fn monad_graph(&self) -> Option<&dyn crate::MonadGraphMut> {
+        self.source.monad_graph()
+    }
+
     /// Mueve la selección al nodo de id `id` si está entre los hijos actuales
     /// (tras crear o renombrar, para dejar el cursor sobre el resultado).
     /// `false` si no existe.

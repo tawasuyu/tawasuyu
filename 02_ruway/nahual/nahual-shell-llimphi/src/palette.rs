@@ -55,7 +55,9 @@ pub(crate) fn build_command_catalog() -> Vec<PaletteCommand> {
         PaletteCommand::new("file.mark", t("nahual-shell-toggle-mark"), g_file.clone()).with_shortcut("Ins"),
         PaletteCommand::new("file.copyToOther", t("nahual-shell-copy-other"), g_file.clone()).with_shortcut("F5"),
         PaletteCommand::new("file.moveToOther", t("nahual-shell-move-other"), g_file.clone()).with_shortcut("F6"),
-        PaletteCommand::new("file.addFavorite", t("nahual-shell-add-favorite"), g_file),
+        PaletteCommand::new("file.addFavorite", t("nahual-shell-add-favorite"), g_file.clone()),
+        // Organización del grafo de Mónadas (sólo activa con nouser montado).
+        PaletteCommand::new("monad.submonadize", t("nahual-shell-submonadize"), g_file),
         // ---- Selección ----
         PaletteCommand::new("select.all", t("nahual-shell-select-all"), g_sel.clone()).with_shortcut("Ctrl+A"),
         PaletteCommand::new("select.none", t("nahual-shell-select-none"), g_sel.clone()),
@@ -117,6 +119,7 @@ pub(crate) fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "file.copyToOther" => Msg::CopyToOther,
         "file.moveToOther" => Msg::MoveToOther,
         "file.addFavorite" => Msg::AddPlace,
+        "monad.submonadize" => Msg::SubmonadizePrompt,
         // Selección.
         "select.all" => Msg::SelectAll,
         "select.none" => Msg::SelectNone,

@@ -318,6 +318,7 @@ nahual-shell-preview-panel = Preview panel
 nahual-shell-wheel-zoom = Wheel: zoom
 nahual-shell-wheel-list = Wheel: list
 nahual-shell-new-dir = New folder
+nahual-shell-submonadize = Submonadize selection (name of the sub-Monad)
 nahual-shell-new-file = New file
 nahual-shell-rename = Rename
 nahual-shell-delete = Delete

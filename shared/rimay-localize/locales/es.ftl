@@ -321,6 +321,7 @@ nahual-shell-preview-panel = Panel de previsualización
 nahual-shell-wheel-zoom = Rueda: zoom
 nahual-shell-wheel-list = Rueda: lista
 nahual-shell-new-dir = Nueva carpeta
+nahual-shell-submonadize = Submonadizar selección (nombre de la sub-Mónada)
 nahual-shell-new-file = Nuevo archivo
 nahual-shell-rename = Renombrar
 nahual-shell-delete = Borrar
