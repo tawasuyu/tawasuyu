@@ -95,6 +95,15 @@ pub fn graphical_overlay(root: &Path) -> Vec<Card> {
         cards.push(overlay_card("swap-on", swapon, &["-a"], false, Priority::Normal));
     }
 
+    // Aplica los sysctl del host (/etc/sysctl.d, /usr/lib/sysctl.d): tunables de
+    // red/seguridad — entre ellos `net.ipv4.ping_group_range` (ping sin sudo).
+    // OpenRC lo hace por su servicio `sysctl`; acá lo replicamos, detectado.
+    if let Some(sysctl) =
+        detect(root, &["/usr/sbin/sysctl", "/sbin/sysctl", "/usr/bin/sysctl", "/bin/sysctl"])
+    {
+        cards.push(overlay_card("sysctl", sysctl, &["--system"], false, Priority::Normal));
+    }
+
     // udevd: sin él los dispositivos no llevan ID_INPUT y libinput no ve el
     // teclado. Daemon (el wrapper init.d absorbido es oneshot → no supervisa).
     if let Some(udevd) = detect(
@@ -374,6 +383,7 @@ mod tests {
             "usr/bin/seatd",
             "sbin/agetty",
             "usr/sbin/dhcpcd",
+            "usr/sbin/sysctl",
         ] {
             let f = tmp.join(p);
             fs::create_dir_all(f.parent().unwrap()).unwrap();
@@ -381,7 +391,7 @@ mod tests {
         }
         let overlay = graphical_overlay(&tmp);
         let names: Vec<&str> = overlay.iter().map(|c| c.label.as_str()).collect();
-        for must in ["udevd", "seatd", "dhcpcd", "arje-splash", "carmen-dm", "agetty-rescue"] {
+        for must in ["sysctl", "udevd", "seatd", "dhcpcd", "arje-splash", "carmen-dm", "agetty-rescue"] {
             assert!(names.contains(&must), "falta {must} en {names:?}");
         }
         // El exec es el path ABSOLUTO del sistema destino, SIN el prefijo root.
