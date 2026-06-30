@@ -635,6 +635,64 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                 }
             }
         }
+        Msg::RenameMonadPrompt => {
+            // El cursor debe estar sobre una Mónada (`m:`) de un grafo editable.
+            let target = m.cur().selected_node().filter(|n| n.id.starts_with("m:")).map(|n| {
+                let label = n
+                    .name
+                    .rsplit_once(" (")
+                    .map(|(l, _)| l.to_string())
+                    .unwrap_or_else(|| n.name.clone());
+                (n.id.clone(), label)
+            });
+            if m.cur().monad_graph().is_some() {
+                if let Some((id, label)) = target {
+                    m.prompt =
+                        Some(Prompt { kind: PromptKind::RenameMonad { id }, text: label });
+                    m.context_menu = None;
+                }
+            }
+        }
+        Msg::DeleteMonad => {
+            let id = m
+                .cur()
+                .selected_node()
+                .filter(|n| n.id.starts_with("m:"))
+                .map(|n| n.id.clone());
+            if let Some(id) = id {
+                if let Some(graph) = m.cur().monad_graph() {
+                    let _ = graph.delete_monad(&id);
+                }
+                let _ = m.cur_mut().reload();
+                m.context_menu = None;
+            }
+        }
+        Msg::MergeMonads => {
+            // Fusiona las Mónadas marcadas dentro de la Mónada bajo el cursor.
+            let into = m
+                .cur()
+                .selected_node()
+                .filter(|n| n.id.starts_with("m:"))
+                .map(|n| n.id.clone());
+            if let Some(into) = into {
+                let froms: Vec<nahual_source_core::NodeId> = m
+                    .cur_pane()
+                    .marked
+                    .iter()
+                    .filter(|id| id.starts_with("m:") && **id != into)
+                    .cloned()
+                    .collect();
+                if !froms.is_empty() {
+                    if let Some(graph) = m.cur().monad_graph() {
+                        for from in &froms {
+                            let _ = graph.merge_monads(&into, from);
+                        }
+                    }
+                    let _ = m.cur_mut().reload();
+                    m.cur_pane_mut().marked.clear();
+                }
+            }
+        }
         Msg::PromptInput(s) => {
             if let Some(p) = m.prompt.as_mut() {
                 p.text.push_str(&s);
@@ -664,12 +722,21 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                         let _ = m.cur_mut().reload();
                         m.cur_pane_mut().marked.clear();
                     }
+                } else if let PromptKind::RenameMonad { id } = &p.kind {
+                    if !texto.is_empty() {
+                        if let Some(graph) = m.cur().monad_graph() {
+                            let _ = graph.rename_monad(id, &texto);
+                        }
+                        let _ = m.cur_mut().reload();
+                    }
                 } else if !texto.is_empty() {
                     let kind = match p.kind {
                         PromptKind::NewDir { parent } => OpKind::NewDir { parent, name: texto },
                         PromptKind::NewFile { parent } => OpKind::NewFile { parent, name: texto },
                         PromptKind::Rename { id } => OpKind::Rename { id, new_name: texto },
-                        PromptKind::SelectPattern | PromptKind::Submonadize { .. } => {
+                        PromptKind::SelectPattern
+                        | PromptKind::Submonadize { .. }
+                        | PromptKind::RenameMonad { .. } => {
                             unreachable!("manejado arriba")
                         }
                     };

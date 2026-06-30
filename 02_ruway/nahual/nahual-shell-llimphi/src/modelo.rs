@@ -156,6 +156,9 @@ pub(crate) enum PromptKind {
     /// `members` (la selección) dentro de la Mónada `parent` (la actual). No
     /// toca el filesystem — reorganiza el grafo vía `MonadGraphMut`.
     Submonadize { parent: nahual_source_core::NodeId, members: Vec<nahual_source_core::NodeId> },
+    /// **Renombrar una Mónada**: el texto es el nuevo nombre de la Mónada `id`.
+    /// Edición de grafo (no de archivo), vía `MonadGraphMut::rename_monad`.
+    RenameMonad { id: nahual_source_core::NodeId },
 }
 
 impl Prompt {
@@ -167,6 +170,7 @@ impl Prompt {
             PromptKind::Rename { .. } => "nahual-shell-rename",
             PromptKind::SelectPattern => "nahual-shell-select-pattern-title",
             PromptKind::Submonadize { .. } => "nahual-shell-submonadize",
+            PromptKind::RenameMonad { .. } => "nahual-shell-rename-monad",
         };
         rimay_localize::t(key)
     }
@@ -626,6 +630,13 @@ pub(crate) enum Msg {
     /// Mónada actual en una sub-Mónada nueva (texto = nombre). Sólo aplica
     /// dentro de un grafo de Mónadas (`monad_graph()` presente).
     SubmonadizePrompt,
+    /// Abre el prompt para **renombrar** la Mónada seleccionada (texto = nombre).
+    RenameMonadPrompt,
+    /// **Borra** la Mónada seleccionada (disuelve el agrupamiento; no borra
+    /// archivos ni sub-Mónadas). Edición de grafo, no destructiva.
+    DeleteMonad,
+    /// **Fusiona** las Mónadas marcadas dentro de la Mónada bajo el cursor.
+    MergeMonads,
     /// Agrega texto al prompt activo.
     PromptInput(String),
     /// Borra el último carácter del prompt.

@@ -57,7 +57,10 @@ pub(crate) fn build_command_catalog() -> Vec<PaletteCommand> {
         PaletteCommand::new("file.moveToOther", t("nahual-shell-move-other"), g_file.clone()).with_shortcut("F6"),
         PaletteCommand::new("file.addFavorite", t("nahual-shell-add-favorite"), g_file.clone()),
         // Organización del grafo de Mónadas (sólo activa con nouser montado).
-        PaletteCommand::new("monad.submonadize", t("nahual-shell-submonadize"), g_file),
+        PaletteCommand::new("monad.submonadize", t("nahual-shell-submonadize"), g_file.clone()),
+        PaletteCommand::new("monad.rename", t("nahual-shell-rename-monad"), g_file.clone()),
+        PaletteCommand::new("monad.merge", t("nahual-shell-merge-monads"), g_file.clone()),
+        PaletteCommand::new("monad.delete", t("nahual-shell-delete-monad"), g_file),
         // ---- Selección ----
         PaletteCommand::new("select.all", t("nahual-shell-select-all"), g_sel.clone()).with_shortcut("Ctrl+A"),
         PaletteCommand::new("select.none", t("nahual-shell-select-none"), g_sel.clone()),
@@ -120,6 +123,9 @@ pub(crate) fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "file.moveToOther" => Msg::MoveToOther,
         "file.addFavorite" => Msg::AddPlace,
         "monad.submonadize" => Msg::SubmonadizePrompt,
+        "monad.rename" => Msg::RenameMonadPrompt,
+        "monad.merge" => Msg::MergeMonads,
+        "monad.delete" => Msg::DeleteMonad,
         // Selección.
         "select.all" => Msg::SelectAll,
         "select.none" => Msg::SelectNone,
