@@ -165,10 +165,26 @@ impl MotorMetrico {
 /// Aplica un disparo por el contrato `Engine` — el mismo que observa y controla
 /// todo lo demás. Es el puente de la capa 2 a los verbos que cableó la capa 1.
 pub async fn aplicar(d: &Disparo, engine: &dyn Engine) -> Result<(), EngineError> {
-    match &d.accion {
-        AccionControl::Detener { grace_ms } => {
-            engine.stop(d.card_id, Duration::from_millis(*grace_ms)).await
-        }
+    aplicar_accion(&d.accion, Some(d.card_id), engine).await
+}
+
+/// Enruta una `AccionControl` al verbo del contrato. `card_id` es la unidad que
+/// disparó (la necesita `Detener`); las reglas de **sistema** no tienen unidad
+/// culpable, así que pasan `None` —`Detener` sin unidad es `Unsupported` (una
+/// regla global no sabe a quién parar; usá `Priorizar`/`Congelar` sobre un
+/// slice)—.
+async fn aplicar_accion(
+    accion: &AccionControl,
+    card_id: Option<Ulid>,
+    engine: &dyn Engine,
+) -> Result<(), EngineError> {
+    match accion {
+        AccionControl::Detener { grace_ms } => match card_id {
+            Some(id) => engine.stop(id, Duration::from_millis(*grace_ms)).await,
+            None => Err(EngineError::Unsupported(
+                "Detener sin unidad: una regla de sistema debe usar Priorizar/Congelar sobre un slice".into(),
+            )),
+        },
         AccionControl::Priorizar { cgroup_path, weight } => {
             engine.set_cpu_weight(cgroup_path.clone(), *weight).await
         }
@@ -176,6 +192,92 @@ pub async fn aplicar(d: &Disparo, engine: &dyn Engine) -> Result<(), EngineError
             engine.freeze(cgroup_path.clone(), *frozen).await
         }
     }
+}
+
+// =====================================================================
+// Reglas de SISTEMA: disparadores por estado global (no por-unidad)
+// =====================================================================
+
+/// Señales **globales** del sistema, las que no caben en el snapshot por-unidad:
+/// energía, red, inactividad. Las provee el consumidor (lee `/sys`, upower, el
+/// idle del compositor…) — el evaluador es **puro**, igual que `energia` recibe
+/// `en_bateria` ya resuelto.
+#[derive(Debug, Clone, Default)]
+pub struct EstadoSistema {
+    /// `true` si corre a batería (no en AC). Un escritorio siempre `false`.
+    pub en_bateria: bool,
+    /// Carga de batería 0–100, si hay batería.
+    pub bateria_pct: Option<u8>,
+    /// `true` si hay red utilizable.
+    pub red: bool,
+    /// Tiempo desde la última interacción del usuario.
+    pub idle: Duration,
+}
+
+/// Predicado sobre el [`EstadoSistema`]. Recursivo (Todas/Cualquiera) para
+/// componer («a batería **y** ocioso 10 min»).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CondicionSistema {
+    /// Corriendo a batería.
+    EnBateria,
+    /// Enchufado a corriente (AC).
+    EnCorriente,
+    /// `bateria_pct <= v` (si hay batería; sin batería no matchea).
+    BateriaMenorQue(u8),
+    /// No hay red utilizable.
+    SinRed,
+    /// `idle >= v` (el usuario lleva ese rato sin tocar nada).
+    IdleMayorQue(Duration),
+    /// AND.
+    Todas(Vec<CondicionSistema>),
+    /// OR.
+    Cualquiera(Vec<CondicionSistema>),
+}
+
+impl CondicionSistema {
+    /// `true` si el estado satisface la condición.
+    pub fn evalua(&self, e: &EstadoSistema) -> bool {
+        match self {
+            CondicionSistema::EnBateria => e.en_bateria,
+            CondicionSistema::EnCorriente => !e.en_bateria,
+            CondicionSistema::BateriaMenorQue(v) => e.bateria_pct.is_some_and(|p| p <= *v),
+            CondicionSistema::SinRed => !e.red,
+            CondicionSistema::IdleMayorQue(d) => e.idle >= *d,
+            CondicionSistema::Todas(cs) => cs.iter().all(|c| c.evalua(e)),
+            CondicionSistema::Cualquiera(cs) => cs.iter().any(|c| c.evalua(e)),
+        }
+    }
+}
+
+/// Regla global: cuando el sistema entra en `cuando`, ejecutá `entonces`. La
+/// acción opera sobre un slice (`Priorizar`/`Congelar`); `Detener` no aplica
+/// (no hay unidad culpable). Instantánea por naturaleza —el estado del sistema
+/// ya es un nivel, no un evento—, sin `durante`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReglaSistema {
+    pub id: String,
+    pub cuando: CondicionSistema,
+    pub entonces: AccionControl,
+}
+
+/// Evalúa las reglas de sistema contra el estado. Devuelve `(id, acción)` por
+/// cada regla que matchea. **Pura** — el caller decide cuándo pollear el estado
+/// y aplica con [`aplicar_sistema`]. Sin debounce: el caller aplica lo que sale
+/// (los verbos son idempotentes — re-escribir el mismo peso/freeze no daña).
+pub fn evaluar_sistema<'a>(
+    e: &EstadoSistema,
+    reglas: &'a [ReglaSistema],
+) -> Vec<(&'a str, &'a AccionControl)> {
+    reglas
+        .iter()
+        .filter(|r| r.cuando.evalua(e))
+        .map(|r| (r.id.as_str(), &r.entonces))
+        .collect()
+}
+
+/// Aplica una acción de regla de **sistema** (sin unidad) por el contrato.
+pub async fn aplicar_sistema(accion: &AccionControl, engine: &dyn Engine) -> Result<(), EngineError> {
+    aplicar_accion(accion, None, engine).await
 }
 
 #[cfg(test)]
@@ -307,6 +409,61 @@ mod tests {
         async fn freeze(&self, p: String, f: bool) -> Result<(), EngineError> {
             self.tx.send(Llamada::Freeze(p, f)).unwrap(); Ok(())
         }
+    }
+
+    #[test]
+    fn condicion_sistema_bateria_y_idle() {
+        let e = EstadoSistema { en_bateria: true, bateria_pct: Some(15), red: false, idle: Duration::from_secs(600) };
+        assert!(CondicionSistema::EnBateria.evalua(&e));
+        assert!(!CondicionSistema::EnCorriente.evalua(&e));
+        assert!(CondicionSistema::BateriaMenorQue(20).evalua(&e));
+        assert!(!CondicionSistema::BateriaMenorQue(10).evalua(&e));
+        assert!(CondicionSistema::SinRed.evalua(&e));
+        assert!(CondicionSistema::IdleMayorQue(Duration::from_secs(300)).evalua(&e));
+        // Compuesta: a batería Y ocioso → cierto.
+        let y = CondicionSistema::Todas(vec![
+            CondicionSistema::EnBateria,
+            CondicionSistema::IdleMayorQue(Duration::from_secs(300)),
+        ]);
+        assert!(y.evalua(&e));
+    }
+
+    #[test]
+    fn bateria_sin_dato_no_matchea() {
+        let e = EstadoSistema { en_bateria: false, bateria_pct: None, red: true, idle: Duration::ZERO };
+        assert!(!CondicionSistema::BateriaMenorQue(50).evalua(&e));
+        assert!(CondicionSistema::EnCorriente.evalua(&e));
+    }
+
+    #[test]
+    fn evaluar_sistema_filtra_las_que_matchean() {
+        let reglas = vec![
+            ReglaSistema {
+                id: "ahorro".into(),
+                cuando: CondicionSistema::EnBateria,
+                entonces: AccionControl::Congelar { cgroup_path: "pacha/secundario".into(), frozen: true },
+            },
+            ReglaSistema {
+                id: "solo-sin-red".into(),
+                cuando: CondicionSistema::SinRed,
+                entonces: AccionControl::Priorizar { cgroup_path: "x".into(), weight: 1 },
+            },
+        ];
+        let e = EstadoSistema { en_bateria: true, bateria_pct: Some(80), red: true, idle: Duration::ZERO };
+        let m = evaluar_sistema(&e, &reglas);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].0, "ahorro");
+    }
+
+    #[tokio::test]
+    async fn aplicar_sistema_enruta_congelar_y_detener_sin_unidad_falla() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let engine = MockEngine { tx };
+        aplicar_sistema(&AccionControl::Congelar { cgroup_path: "s".into(), frozen: true }, &engine).await.unwrap();
+        assert_eq!(rx.recv().await.unwrap(), Llamada::Freeze("s".into(), true));
+        // Detener sin unidad (regla de sistema) es Unsupported — no hay a quién parar.
+        let err = aplicar_sistema(&AccionControl::Detener { grace_ms: 0 }, &engine).await;
+        assert!(matches!(err, Err(sandokan_core::EngineError::Unsupported(_))));
     }
 
     #[tokio::test]

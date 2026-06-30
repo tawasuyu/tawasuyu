@@ -18,34 +18,69 @@ use std::time::Duration;
 
 use sandokan_core::Engine;
 use sandokan_monitor_core::observe;
-use sandokan_monitor_core::reglas::{aplicar, Disparo, MotorMetrico, ReglaMetrica};
+use sandokan_monitor_core::reglas::{
+    aplicar, aplicar_sistema, evaluar_sistema, Disparo, EstadoSistema, MotorMetrico, ReglaMetrica,
+    ReglaSistema,
+};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 /// Corre las reglas de métrica contra un `Engine` en un lazo de poll. El motor
 /// (con su estado de rachas) vive tras un `Mutex` para poder **reemplazar el
-/// set de reglas en caliente** sin recrear el Vigilante.
+/// set de reglas en caliente** sin recrear el Vigilante. Lleva además un set de
+/// **reglas de sistema** (energía/red/idle), evaluadas contra un `EstadoSistema`
+/// que el caller provee en [`tick_sistema`](Vigilante::tick_sistema) —el I/O de
+/// sensar batería/red vive en el borde, como en `energia`—.
 pub struct Vigilante {
     engine: Arc<dyn Engine>,
     motor: Mutex<MotorMetrico>,
+    sistema: Mutex<Vec<ReglaSistema>>,
     intervalo: Duration,
 }
 
 impl Vigilante {
-    /// Vigilante sobre `engine`, evaluando `reglas` cada `intervalo`.
+    /// Vigilante sobre `engine`, evaluando `reglas` cada `intervalo`. Las reglas
+    /// de sistema arrancan vacías (se arman con [`armar_sistema`](Self::armar_sistema)).
     pub fn new(engine: Arc<dyn Engine>, reglas: Vec<ReglaMetrica>, intervalo: Duration) -> Self {
         Self {
             engine,
             motor: Mutex::new(MotorMetrico::new(reglas)),
+            sistema: Mutex::new(Vec::new()),
             intervalo,
         }
     }
 
-    /// Reemplaza el set de reglas activo (descarta el estado de rachas previo).
-    /// Es el gancho de la capa 4: al cambiar de intención `pacha`, se arma el
-    /// set de la intención entrante. Pasar `vec![]` desarma todo.
+    /// Reemplaza el set de reglas de métrica activo (descarta el estado de
+    /// rachas previo). Es el gancho de la capa 4: al cambiar de intención
+    /// `pacha`, se arma el set de la intención entrante. `vec![]` desarma todo.
     pub async fn armar(&self, reglas: Vec<ReglaMetrica>) {
         *self.motor.lock().await = MotorMetrico::new(reglas);
+    }
+
+    /// Reemplaza el set de **reglas de sistema** activo (energía/red/idle).
+    /// También parte del armado por intención. `vec![]` desarma.
+    pub async fn armar_sistema(&self, reglas: Vec<ReglaSistema>) {
+        *self.sistema.lock().await = reglas;
+    }
+
+    /// Evalúa las reglas de **sistema** contra `estado` (que el caller sensó:
+    /// batería/red/idle) y aplica las que matchean por el contrato. Devuelve los
+    /// ids de regla aplicados. Separado de [`tick`](Self::tick) porque su entrada
+    /// es I/O del borde, no el snapshot del Engine.
+    pub async fn tick_sistema(&self, estado: &EstadoSistema) -> Vec<String> {
+        let reglas = self.sistema.lock().await;
+        let matched = evaluar_sistema(estado, &reglas);
+        let mut aplicadas = Vec::with_capacity(matched.len());
+        for (id, accion) in matched {
+            match aplicar_sistema(accion, self.engine.as_ref()).await {
+                Ok(()) => {
+                    debug!(regla = %id, "vigilante: regla de sistema aplicada");
+                    aplicadas.push(id.to_string());
+                }
+                Err(e) => warn!(regla = %id, error = %e, "vigilante: aplicar_sistema falló"),
+            }
+        }
+        aplicadas
     }
 
     /// Una vuelta del lazo: pollea el Engine, evalúa avanzando `intervalo` de
@@ -174,6 +209,25 @@ mod tests {
         let v = Vigilante::new(eng.clone(), vec![regla_stop_si_cpu(Duration::ZERO)], Duration::from_secs(1));
         assert!(v.tick().await.is_empty());
         assert!(eng.aplicados.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tick_sistema_aplica_regla_de_energia() {
+        use sandokan_monitor_core::reglas::{EstadoSistema, ReglaSistema, CondicionSistema};
+        let eng = Arc::new(MockEngine { id: Ulid::new(), cpu: 5.0, aplicados: StdMutex::new(vec![]) });
+        let v = Vigilante::new(eng.clone(), vec![], Duration::from_secs(1));
+        v.armar_sistema(vec![ReglaSistema {
+            id: "ahorro".into(),
+            cuando: CondicionSistema::EnBateria,
+            entonces: AccionControl::Congelar { cgroup_path: "pacha/secundario".into(), frozen: true },
+        }]).await;
+        // En AC: no dispara.
+        let ac = EstadoSistema { en_bateria: false, ..Default::default() };
+        assert!(v.tick_sistema(&ac).await.is_empty());
+        // A batería: congela el slice secundario.
+        let bat = EstadoSistema { en_bateria: true, ..Default::default() };
+        assert_eq!(v.tick_sistema(&bat).await, vec!["ahorro".to_string()]);
+        assert_eq!(eng.aplicados.lock().unwrap().as_slice(), &["freeze pacha/secundario=true".to_string()]);
     }
 
     #[tokio::test]

@@ -322,9 +322,14 @@ verbos+reglas existentes, no los reimplementa.
   (debounce) y resetea al caer la condición. El `Disparo` se ejecuta por el
   contrato vía `aplicar()` → `Engine::{stop,set_cpu_weight,freeze}` (los verbos
   de la capa 1). Evalúa el **mismo `MonitorSnapshot`** que el monitor — sin
-  segunda fuente. **Pendiente de capa 2**: disparadores de **estado del
-  sistema** (AC/batería, red, idle, lock/login) y de **tiempo** (cron,
-  atardecer, boot).
+  segunda fuente. **Disparadores de estado del sistema** ✅ (2026-06-30):
+  `EstadoSistema` (en_bateria/bateria_pct/red/idle) + `CondicionSistema`
+  (EnBateria/EnCorriente/BateriaMenorQue/SinRed/IdleMayorQue + Todas/Cualquiera)
+  + `ReglaSistema` → `evaluar_sistema` (puro) + `aplicar_sistema`; el I/O de
+  sensar vive en el borde (el caller pasa el estado, como `energia`). El
+  Vigilante los corre en `tick_sistema(estado)` con set hot-swap
+  (`armar_sistema`). **Pendiente de capa 2**: disparadores de **tiempo**
+  (cron/atardecer/boot) — son un *scheduler*, no una condición de snapshot.
 - **Lazo vivo** *(2026-06-30)*: `sandokan-vigilante::Vigilante` corre la capa 2 —
   cada `intervalo`: `observe(engine) → MotorMetrico::evaluar → aplicar(&engine)`,
   todo por el contrato. Reglas **hot-swappables** (`armar(reglas)`): el gancho
