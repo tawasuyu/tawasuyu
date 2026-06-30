@@ -351,9 +351,17 @@ verbos+reglas existentes, no los reimplementa.
   descripción lo dice—). `Surfaces::armar_reglas` + `Manager::con_reglas` +
   `Manager::switch/close` arman/desarman; `LinuxSurfaces` enruta al `Vigilante`
   real (inyectado por el daemon vía `with_vigilante`). Probado con el `Recorder`
-  (switch arma n=1, contexto sin reglas n=0, close desarma). **Pendiente**: que
-  el daemon de pacha construya el `Vigilante` y spawnee su `correr()` (pieza de
-  metal); cargar el binding desde disco junto al catálogo.
+  (switch arma n=1, contexto sin reglas n=0, close desarma). El **daemon ya lo
+  enciende**: `LinuxSurfaces::connect_vigilado()` construye el `Vigilante` con un
+  handle propio al orquestador, spawnea su `correr()` (poll cada 2 s) y lo
+  cablea; `paths::load_reglas()` lee el binding `contexto → [ReglaMetrica]` de
+  `~/.config/pacha/reglas.ron` (aparte del catálogo, que es agnóstico de
+  sandokan), y `pacha-cli run_daemon` hace `Manager::con_reglas(...)`. **Gaps
+  conocidos**: (1) si el daemon arranca con un contexto ya activo, sus reglas no
+  se arman hasta el próximo switch; (2) el `Vigilante` por métrica sólo es útil
+  con un Engine que muestree CPU (`LocalEngine`/`DaemonEngine` sí; `ArjeEngine`
+  da `cpu_pct = 0`, así que las reglas de CPU no disparan vía el engine de
+  sistema hasta que arje-zero muestree `/proc` en `EnteTelemetry`).
 - Capa 5: pendiente.
 
 ## Estado (2026-05-31)

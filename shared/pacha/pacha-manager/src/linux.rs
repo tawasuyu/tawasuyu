@@ -23,10 +23,16 @@ use sandokan::{Engine, Intent};
 use sandokan_monitor_core::reglas::ReglaMetrica;
 use sandokan_vigilante::Vigilante;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
 use ulid::Ulid;
 
 use crate::Surfaces;
+
+/// Cada cuánto el `Vigilante` pollea el plano de control y evalúa las reglas de
+/// métrica. 2 s: suficiente para reaccionar a un pico sostenido sin cargar el
+/// sistema con `observe()` constante.
+pub const VIGILANTE_INTERVALO: Duration = Duration::from_secs(2);
 
 /// El contexto de versionado de dotfiles que `LinuxSurfaces` usa para
 /// materializar/recapturar sets. Embebe el almacén de objetos, el `$HOME`
@@ -290,6 +296,20 @@ impl LinuxSurfaces {
     /// (para tests de humo o engines remotos).
     pub fn with_engine(engine: Box<dyn Engine>) -> Self {
         Self { engine, mirada_ctl: "mirada-ctl".into(), dotfiles: None, vigilante: None }
+    }
+
+    /// Arranque **completo** del daemon: como [`connect`](Self::connect) pero
+    /// además enciende un [`Vigilante`] —lazo de reglas de métrica— sobre un
+    /// handle propio al mismo orquestador (`sandokan::auto`), spawnea su
+    /// `correr()` y lo cablea para `armar_reglas`. Requiere un runtime tokio.
+    /// Los dos handles al Engine (éste y el de las superficies) son clientes
+    /// stateless del mismo backend, así que no se pisan.
+    pub async fn connect_vigilado() -> Self {
+        let socket = sandokan::default_socket_path();
+        let engine: Arc<dyn Engine> = Arc::from(sandokan::auto(&socket).await);
+        let vigilante = Arc::new(Vigilante::new(engine, Vec::new(), VIGILANTE_INTERVALO));
+        tokio::spawn(vigilante.clone().correr());
+        Self::connect().await.with_vigilante(vigilante)
     }
 
     /// Cablea el `Vigilante` que armará las reglas de métrica por contexto. El

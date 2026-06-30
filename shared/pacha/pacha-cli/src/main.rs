@@ -225,8 +225,12 @@ async fn run_daemon() -> Result<()> {
     let socket = paths::socket_path().context("sin runtime dir para el socket")?;
     let catalog = paths::load_catalog();
     let runtime = paths::load_runtime();
-    let surf = LinuxSurfaces::connect().await;
-    let manager = Manager::new(catalog, runtime, surf);
+    let reglas = paths::load_reglas();
+    // Arranque vigilado: enciende el Vigilante (reglas de métrica) y lo cablea a
+    // las superficies; `con_reglas` asocia el set de cada contexto, que el
+    // switch arma al enfocarse (SDD §8 capa 2/4).
+    let surf = LinuxSurfaces::connect_vigilado().await;
+    let manager = Manager::new(catalog, runtime, surf).con_reglas(reglas);
     println!("pacha-manager escuchando en {}", socket.display());
     server::serve(manager, &socket).await?;
     Ok(())
