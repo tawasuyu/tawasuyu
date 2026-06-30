@@ -295,37 +295,23 @@ a:hover { color: var(--fg-text); }
   font-style: italic;
 }
 
-/* ----- chakana al origen (decorativa) -----
- * Cuerpo: del color opuesto al texto (negro en oscuro, blanco en claro).
- *   → se funde con el fondo, "casi invisible".
- * Centro: del color del texto (blanco en oscuro, negro en claro).
- *   → contrasta con el fondo, hace de luz.
+/* ----- chakana al origen = marca, pequeña pero visible -----
+ * Cuerpo: color de acento (lee como la marca en ambos themes).
+ * Centro: color del texto, hace de luz brillante.
+ * Glow: halo de acento difuso.
  */
 .chakana-body {
-  fill: #000;
-  opacity: 0.32;
+  fill: var(--accent);
+  opacity: 0.7;
 }
 .chakana-core {
-  fill: #FFF;
-  opacity: 0.92;
+  fill: var(--fg-text);
+  opacity: 0.95;
 }
 .chakana-glow {
-  fill: #FFF;
-  opacity: 0.10;
+  fill: var(--accent);
+  opacity: 0.18;
   filter: blur(0.6px);
-}
-
-[data-theme-variant="light"] .chakana-body {
-  fill: #FFF;
-  opacity: 0.45;
-}
-[data-theme-variant="light"] .chakana-core {
-  fill: #000;
-  opacity: 0.85;
-}
-[data-theme-variant="light"] .chakana-glow {
-  fill: #000;
-  opacity: 0.08;
 }
 
 .quad { cursor: pointer; }
@@ -637,6 +623,20 @@ body.sidebar-collapsed #sidebar { display: none; }
   .brand:hover { background: var(--bg-button-hover); }
   .brand::before { content: "≡  "; color: var(--accent); }
   .brand-sub { display: none; }
+
+  /* En pantallas chicas el plano quedaba diminuto e ilegible: que use
+     casi todo el ancho y agrandamos el texto dentro del viewBox para
+     que los nombres de cuadrante/dominio se lean. */
+  #plano-wrap { padding: 8px; }
+  #plano {
+    width: min(96vw, 78vh);
+    max-height: calc(100vh - var(--topbar-h) - var(--taskbar-h) - 16px);
+  }
+  .quad-id   { font-size: 5.5px; }
+  .quad-name { font-size: 8px; letter-spacing: 0.08em; }
+  .quad-verb { font-size: 5px; }
+  .dom       { font-size: 5px; }
+  .axis-label { font-size: 5px; }
 }
 
 /* Header de cuadrante clickable */
