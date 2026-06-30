@@ -633,6 +633,16 @@ pub(crate) struct App {
     /// la app el keybind sentinela de commit (`OVERVIEW_WINTAB_COMMIT`) para que
     /// salte al destino resaltado. Embebido NO lo usa (ahí pinta el Cuerpo).
     pub(crate) prezi_wintab_linked: bool,
+    /// Detección de la **tecla Super sola** (un tap, estilo «Actividades» de
+    /// GNOME). `super_tap_armed` se arma en el flanco de presión de Super y se
+    /// **desarma** apenas llega cualquier combo (Super se usó como modificador) o
+    /// un botón del puntero (Super+arrastre). `super_was_held` recuerda el estado
+    /// anterior para detectar el flanco de soltado en el `tick`. Al soltar Super
+    /// armada y con el escritorio en reposo, el compositor reenvía el sentinela
+    /// `SuperTap` al Cerebro enlazado (la app abre el overview-lanzador según su
+    /// `super_tap_action`). El Cerebro embebido no lo usa (no tiene esa UI).
+    pub(crate) super_tap_armed: bool,
+    pub(crate) super_was_held: bool,
     /// Estado de escritorios empujado por el Cerebro enlazado (`SetWorkspaces`),
     /// para el switcher Win+Tab + slide en modo DE. `None` con Cerebro embebido.
     pub(crate) linked_ws: Option<LinkedWorkspaces>,

@@ -51,6 +51,19 @@ fn switch_mode_options() -> Vec<EnumOption> {
     ]
 }
 
+/// Opciones de la **tecla Super sola** (slug que se guarda en `super_tap_action`
+/// + rótulo). El compositor detecta el tap y la app las interpreta.
+fn super_tap_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("none", "Nada"),
+        EnumOption::new(
+            "overview-launcher",
+            "Actividades (vista espacial + buscador)",
+        ),
+        EnumOption::new("overview", "Vista espacial (sin buscador)"),
+    ]
+}
+
 fn switch_mode_slug(m: crate::config::WorkspaceSwitchMode) -> &'static str {
     use crate::config::WorkspaceSwitchMode::*;
     match m {
@@ -530,6 +543,12 @@ impl Configurable for Config {
                         "overview_show_titles",
                         "Mostrar títulos en las miniaturas",
                         self.overview_show_titles,
+                    ))
+                    .field(Field::dropdown(
+                        "super_tap_action",
+                        "Tecla Super sola",
+                        self.super_tap_action.as_str(),
+                        super_tap_options(),
                     ))
                     .field(Field::dropdown(
                         "workspace_switch_mode",
@@ -1037,6 +1056,11 @@ impl Configurable for Config {
                     self.workspace_switch_mode = m;
                 }
             }
+            "super_tap_action" => {
+                if let Some(s) = value.as_str() {
+                    self.super_tap_action = s.to_string();
+                }
+            }
             "overview_geometry" => {
                 // Tabla (col, fila) por escritorio → geometría 2D del Prezi.
                 if let Some(rows) = value.as_table() {
@@ -1230,7 +1254,8 @@ mod tests {
                 "inactividad",
                 "movimiento",
                 "efectos",
-                "glass"
+                "glass",
+                "hot_corners"
             ]
         );
     }

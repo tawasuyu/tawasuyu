@@ -286,6 +286,36 @@ impl DrmState {
                     self.app.brain_feed(ev);
                 }
             }
+            // Tecla **Super sola** (tap, estilo «Actividades» de GNOME). El
+            // filtro de teclado no ve el release de un modificador pelado, así que
+            // —igual que el cierre de Win+Tab— SONDEAMOS el estado de Super cada
+            // tick. Al ARMARSE (flanco de presión) marcamos; si se suelta sin que
+            // ningún combo ni botón la haya desarmado (no se usó como
+            // modificador), reenviamos el sentinela `SuperTap` al Cerebro. Sólo en
+            // modo ENLAZADO (la app pinta el overview-lanzador) y con el
+            // escritorio en reposo (sin overview/switcher/shell de credenciales).
+            if !self.app.brain_is_embedded() {
+                let super_held = self
+                    .app
+                    .keyboard
+                    .as_ref()
+                    .is_some_and(|kb| kb.modifier_state().logo);
+                if super_held && !self.app.super_was_held {
+                    self.app.super_tap_armed = true; // flanco de presión
+                }
+                if !super_held && self.app.super_was_held && self.app.super_tap_armed {
+                    self.app.super_tap_armed = false;
+                    let reposo = !self.app.overview_open
+                        && self.app.switcher.is_none()
+                        && !self.app.shell_activo();
+                    if reposo {
+                        // DEBE coincidir con SUPER_TAP en mirada-app-llimphi.
+                        let ev = self.app.body.keybind("SuperTap");
+                        self.app.brain_feed(ev);
+                    }
+                }
+                self.app.super_was_held = super_held;
+            }
             let now = self.start.elapsed().as_millis() as u32;
             let anim_ms = self.app.config_overview_anim_ms().max(1);
             if self.app.overview_open && !self.prev_overview_open {

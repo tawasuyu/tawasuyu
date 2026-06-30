@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use app_bus::{AppMenu, Menu, MenuItem};
+use app_bus::{AppEntry, AppMenu, AppRegistry, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
@@ -65,6 +65,7 @@ use mirada_brain::{
 };
 use mirada_link::BrainLink;
 
+use mirada_app_llimphi::launcher::{filtrar_apps, launcher_overlay};
 use mirada_app_llimphi::overview::{overview_view, Camera};
 
 /// Pantalla virtual del modo simulación — coincide con el lienzo.
@@ -93,6 +94,20 @@ struct OverviewState {
     /// `SwitchWorkspace(destino)` y se cierra la vista. `None` mientras la
     /// vista está abierta sin elección.
     landing: Option<usize>,
+    /// Sub-modo **lanzador** (estilo «Actividades» de GNOME): cuando es `Some`,
+    /// el overview pinta encima un buscador de apps sobre el registro de
+    /// `app-bus`. `/` lo abre desde el mapa; la tecla Super (ver
+    /// `super_tap_action` de la config) puede abrir el overview ya en este modo.
+    /// Esc lo cierra (vuelve al mapa); Esc de nuevo cierra el overview.
+    search: Option<Search>,
+}
+
+/// Estado del buscador-lanzador de la vista espacial.
+struct Search {
+    /// Texto tecleado; filtra el registro por subcadena (case-insensitive).
+    query: String,
+    /// Fila resaltada en los resultados (0-based, se acota al filtrar).
+    sel: usize,
 }
 
 struct Model {
@@ -123,6 +138,13 @@ struct Model {
     /// Super se soltó durante un Win+Tab de Prezi (el Cuerpo nos lo avisa con el
     /// keybind sentinela): confirmar el destino resaltado. Lo procesa `Msg::Tick`.
     pending_overview_commit: bool,
+    /// La tecla **Super sola** (tap): el Cuerpo nos reenvía el sentinela
+    /// `SuperTap` y lo marcamos pendiente; `Msg::Tick` lo atiende (necesita el
+    /// `handle` para animar el zoom del overview-lanzador). Ver [`super_tap`].
+    pending_super_tap: bool,
+    /// Registro de apps de `app-bus` (catálogo de la suite + `*.toml` del usuario
+    /// + `.desktop` del sistema), para el buscador-lanzador del overview.
+    apps: AppRegistry,
     /// Último `(activo, cargas)` empujado al Cuerpo vía `SetWorkspaces` (para el
     /// switcher Win+Tab + slide en modo enlazado). Evita re-enviar sin cambios.
     last_ws_push: Option<(usize, Vec<usize>)>,
@@ -205,6 +227,21 @@ enum Msg {
     /// Arrastre de una celda en el editor: `(escritorio, fase, dcol, dfila)`
     /// con el delta EN CELDAS. Acumula durante el drag y aplica al soltar.
     OverviewDrag(usize, llimphi_ui::DragPhase, f32, f32),
+    /// Entra al sub-modo **lanzador** del overview (tecla `/`): muestra el
+    /// buscador de apps vacío, listo para tipear.
+    OverviewSearchStart,
+    /// Sale del buscador (Esc / click-fuera): vuelve al mapa de escritorios.
+    OverviewSearchExit,
+    /// Caracteres tecleados en el buscador (se anexan a la query).
+    OverviewSearchChar(String),
+    /// Borra el último carácter de la query del buscador.
+    OverviewSearchBackspace,
+    /// Mueve la fila resaltada de los resultados: +1 baja, -1 sube (con wrap).
+    OverviewSearchMove(i32),
+    /// Click en la fila `i` de los resultados: lanza esa app.
+    OverviewSearchPick(usize),
+    /// Enter en el buscador: lanza la app resaltada.
+    OverviewSearchLaunch,
     /// Click en una ventana del lienzo.
     FocusWindow(WindowId),
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
@@ -325,6 +362,8 @@ impl App for Mirada {
             overview_wintab: None,
             pending_overview_step: None,
             pending_overview_commit: false,
+            pending_super_tap: false,
+            apps: AppRegistry::with_defaults(),
             last_ws_push: None,
             placements: Vec::new(),
             next_id: 1,
@@ -375,7 +414,21 @@ impl App for Mirada {
         }
         // Con la vista espacial abierta, es modal: Esc/`e` la cierran, un
         // dígito 1..9 aterriza en ese escritorio, y el resto se traga.
-        if model.overview.is_some() {
+        if let Some(ov) = model.overview.as_ref() {
+            // Sub-modo lanzador: el teclado escribe en el buscador. Esc vuelve al
+            // mapa; Enter lanza; flechas mueven la selección; el resto se anexa.
+            if ov.search.is_some() {
+                return match &e.key {
+                    Key::Named(NamedKey::Escape) => Some(Msg::OverviewSearchExit),
+                    Key::Named(NamedKey::Enter) => Some(Msg::OverviewSearchLaunch),
+                    Key::Named(NamedKey::Backspace) => Some(Msg::OverviewSearchBackspace),
+                    Key::Named(NamedKey::ArrowDown) => Some(Msg::OverviewSearchMove(1)),
+                    Key::Named(NamedKey::ArrowUp) => Some(Msg::OverviewSearchMove(-1)),
+                    Key::Named(NamedKey::Space) => Some(Msg::OverviewSearchChar(" ".into())),
+                    Key::Character(s) => Some(Msg::OverviewSearchChar(s.to_string())),
+                    _ => None,
+                };
+            }
             let editing = model.overview_edit;
             return match &e.key {
                 Key::Named(NamedKey::Escape) => Some(Msg::ToggleOverview),
@@ -391,6 +444,10 @@ impl App for Mirada {
                     }
                     if s == "g" {
                         return Some(Msg::OverviewEditToggle);
+                    }
+                    // `/` abre el buscador-lanzador (estilo Actividades).
+                    if s == "/" {
+                        return Some(Msg::OverviewSearchStart);
                     }
                     match s.bytes().next() {
                         Some(c) if c.is_ascii_digit() && c != b'0' => {
@@ -455,6 +512,12 @@ impl App for Mirada {
                     m.pending_overview_commit = false;
                     overview_commit(&mut m, handle);
                 }
+                // Tecla Super sola (tap): abre/cierra el overview-lanzador según
+                // la config. Se atiende acá por el `handle` (anima el zoom).
+                if m.pending_super_tap {
+                    m.pending_super_tap = false;
+                    super_tap(&mut m, handle);
+                }
             }
             Msg::Key(ev) => handle_key(&mut m, &ev),
             Msg::SwitchWorkspace(i) => act(&mut m, DesktopAction::SwitchWorkspace(i)),
@@ -494,6 +557,49 @@ impl App for Mirada {
                         }
                     }
                 }
+            }
+            Msg::OverviewSearchStart => {
+                if let Some(ov) = m.overview.as_mut() {
+                    ov.search = Some(Search { query: String::new(), sel: 0 });
+                    m.note = "buscar apps · tecleá, Enter lanza, Esc vuelve al mapa".into();
+                }
+            }
+            Msg::OverviewSearchExit => {
+                if let Some(ov) = m.overview.as_mut() {
+                    ov.search = None;
+                }
+            }
+            Msg::OverviewSearchChar(s) => {
+                if let Some(se) = m.overview.as_mut().and_then(|o| o.search.as_mut()) {
+                    // Sólo imprimibles (descarta control); reinicia la selección.
+                    for ch in s.chars().filter(|c| !c.is_control()) {
+                        se.query.push(ch);
+                    }
+                    se.sel = 0;
+                }
+            }
+            Msg::OverviewSearchBackspace => {
+                if let Some(se) = m.overview.as_mut().and_then(|o| o.search.as_mut()) {
+                    se.query.pop();
+                    se.sel = 0;
+                }
+            }
+            Msg::OverviewSearchMove(dir) => {
+                let n = overview_search_hits(&m).len();
+                if let Some(se) = m.overview.as_mut().and_then(|o| o.search.as_mut()) {
+                    if n > 0 {
+                        se.sel = (se.sel as i64 + dir as i64).rem_euclid(n as i64) as usize;
+                    }
+                }
+            }
+            Msg::OverviewSearchPick(i) => launch_overview_app(&mut m, i),
+            Msg::OverviewSearchLaunch => {
+                let sel = m
+                    .overview
+                    .as_ref()
+                    .and_then(|o| o.search.as_ref())
+                    .map_or(0, |s| s.sel);
+                launch_overview_app(&mut m, sel);
             }
             Msg::OverviewTick => {
                 // Si el aterrizaje terminó, salta al destino y cierra la vista.
@@ -713,6 +819,11 @@ impl App for Mirada {
                 palette: ContextMenuPalette::from_theme(&model.theme),
             }));
         }
+        // Buscador-lanzador del overview (estilo Actividades): se pinta encima
+        // del mapa de escritorios cuando el sub-modo lanzador está activo.
+        if let Some(panel) = overview_search_overlay(model) {
+            return Some(panel);
+        }
         // Si no, el dropdown del menú principal.
         let menu = app_menu(model);
         menubar_overlay_animated(
@@ -880,6 +991,13 @@ const OVERVIEW_WINTAB: &[&str] = &["Super+Tab", "Super+Shift+Tab"];
 /// así que el compositor lo sintetiza. Ver `input.rs`/`sesion.rs` del compositor.
 pub const OVERVIEW_WINTAB_COMMIT: &str = "PreziWintabCommit";
 
+/// Combo **sentinela** que el Cuerpo reenvía cuando detecta un **tap de Super**
+/// (la tecla sola, sin combo). La app lo interpreta según `super_tap_action` de
+/// la config (ver [`super_tap`]). DEBE coincidir con el literal del compositor
+/// (`drm_backend/sesion.rs`). No es una tecla real ni va en los grabs: el
+/// compositor lo sintetiza al soltar Super si no se usó como modificador.
+pub const SUPER_TAP: &str = "SuperTap";
+
 /// Aumenta un `BrainCommand::GrabKeys` con los atajos del overview (idempotente):
 /// `Super+e` (toggle directo) y `Super+Tab`/`Super+Shift+Tab` (Win+Tab en Prezi).
 /// Se aplica en cada envío de grabs al Cuerpo para que sobreviva a recargas de
@@ -918,6 +1036,11 @@ fn feed(m: &mut Model, event: BodyEvent) {
         // Super se soltó durante el Win+Tab: confirmar el destino.
         BodyEvent::Keybind(ref combo) if combo == OVERVIEW_WINTAB_COMMIT => {
             m.pending_overview_commit = true;
+        }
+        // Tap de Super (tecla sola): abrir/cerrar el overview-lanzador según
+        // `super_tap_action`. Lo procesa `Msg::Tick` (necesita el `handle`).
+        BodyEvent::Keybind(ref combo) if combo == SUPER_TAP => {
+            m.pending_super_tap = true;
         }
         // Win+Tab confirmó un salto de escritorio en el Cuerpo (modo enlazado):
         // lo aplicamos como una acción de escritorio normal.
@@ -1172,6 +1295,77 @@ fn apply_geometry_move(m: &mut Model, desktop: usize, dx: i32, dy: i32) {
     m.desktop.set_config(cfg);
 }
 
+/// Atiende la tecla **Super sola** (tap) según `super_tap_action` de la config:
+/// `"overview-launcher"` abre la vista espacial ya en modo buscador (estilo
+/// Actividades); `"overview"` la abre pelada; cualquier otro valor (`"none"`) no
+/// hace nada. Es un **toggle**: con el overview abierto, lo cierra.
+fn super_tap(m: &mut Model, handle: &Handle<Msg>) {
+    let action = m.desktop.config().super_tap_action.clone();
+    match action.as_str() {
+        "overview-launcher" => {
+            if m.overview.is_some() {
+                m.overview = None;
+                m.overview_wintab = None;
+            } else {
+                open_overview(m, handle);
+                if let Some(ov) = m.overview.as_mut() {
+                    ov.search = Some(Search { query: String::new(), sel: 0 });
+                }
+            }
+        }
+        "overview" => toggle_overview(m, handle),
+        _ => {}
+    }
+}
+
+/// Resultados vigentes del buscador-lanzador: apps que matchean la query actual,
+/// o vacío si el overview no está en modo lanzador.
+fn overview_search_hits(m: &Model) -> Vec<&AppEntry> {
+    match m.overview.as_ref().and_then(|o| o.search.as_ref()) {
+        Some(se) => filtrar_apps(&m.apps, &se.query),
+        None => Vec::new(),
+    }
+}
+
+/// Lanza la app `i` de los resultados vigentes (spawn de proceso del host) y
+/// cierra la vista espacial. No-op si el índice no existe.
+fn launch_overview_app(m: &mut Model, i: usize) {
+    let chosen: Option<AppEntry> = overview_search_hits(m).get(i).map(|e| (*e).clone());
+    let Some(entry) = chosen else {
+        return;
+    };
+    match entry.spawn() {
+        Ok(_) => m.note = format!("lanzando: {}", entry.label),
+        Err(e) => m.note = format!("no pude lanzar {}: {e}", entry.label),
+    }
+    m.overview = None;
+    m.overview_wintab = None;
+}
+
+/// Pinta el buscador-lanzador del overview (estilo «Actividades»): un scrim
+/// tenue, un campo de búsqueda y la lista de apps que matchean la query. Cada
+/// fila es clicable (`OverviewSearchPick`). `None` si el overview no está en
+/// modo lanzador. El mapa de escritorios queda pintado debajo (es el `canvas`).
+fn overview_search_overlay(model: &Model) -> Option<View<Msg>> {
+    let se = model.overview.as_ref()?.search.as_ref()?;
+    let hits = filtrar_apps(&model.apps, &se.query);
+    let sel = if hits.is_empty() {
+        0
+    } else {
+        se.sel.min(hits.len() - 1)
+    };
+    Some(launcher_overlay(
+        &model.theme,
+        &hits,
+        &se.query,
+        sel,
+        Msg::OverviewSearchPick,
+        Msg::OverviewSearchExit,
+        // Click dentro del panel: `MenuTick` es un re-render no-op (lo traga).
+        Msg::MenuTick,
+    ))
+}
+
 /// Abre la vista espacial (zoom-out desde el escritorio activo) o la cierra si
 /// ya estaba abierta. No hace nada si la config la deshabilita.
 fn toggle_overview(m: &mut Model, handle: &Handle<Msg>) {
@@ -1194,6 +1388,7 @@ fn open_overview(m: &mut Model, handle: &Handle<Msg>) {
         zoom: Tween::new(0.0, 1.0, dur, motion::ease_out_cubic),
         focus: m.desktop.active_index(),
         landing: None,
+        search: None,
     });
     animate(handle, dur, || Msg::OverviewTick);
 }
@@ -2215,5 +2410,50 @@ mod tests {
             .find(|it| it.command == "profile.use.mío")
             .unwrap();
         assert!(mio.icon.is_some());
+    }
+
+    // ─── Buscador-lanzador del overview ─────────────────────────────────
+
+    use app_bus::{AppEntry, AppRegistry, Launch};
+
+    fn app(id: &str, label: &str) -> AppEntry {
+        AppEntry {
+            id: id.into(),
+            label: label.into(),
+            icon: None,
+            category: None,
+            launch: Launch::Exec {
+                program: id.into(),
+                args: vec![],
+            },
+            handles: vec![],
+        }
+    }
+
+    #[test]
+    fn filtrar_apps_subcadena_case_insensitive_en_label_e_id() {
+        let reg = AppRegistry::new(vec![
+            app("cosmos", "Cosmos"),
+            app("nada", "Nada"),
+            app("nahual-shell-llimphi", "Nahual"),
+        ]);
+        // Query vacía: todas, en orden alfabético por label (el del registro).
+        let todas: Vec<&str> = super::filtrar_apps(&reg, "")
+            .iter()
+            .map(|e| e.label.as_str())
+            .collect();
+        assert_eq!(todas, vec!["Cosmos", "Nada", "Nahual"]);
+        // Subcadena por label, sin importar mayúsculas.
+        let na: Vec<&str> = super::filtrar_apps(&reg, "NA")
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(na, vec!["nada", "nahual-shell-llimphi"]);
+        // Matchea también por id (aunque el label no lo tenga).
+        let por_id = super::filtrar_apps(&reg, "shell");
+        assert_eq!(por_id.len(), 1);
+        assert_eq!(por_id[0].id, "nahual-shell-llimphi");
+        // Sin coincidencias: vacío (la UI pinta «sin resultados»).
+        assert!(super::filtrar_apps(&reg, "zzz").is_empty());
     }
 }

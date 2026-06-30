@@ -500,6 +500,8 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         overview_closing: false,
         overview_via_wintab: false,
         prezi_wintab_linked: false,
+        super_tap_armed: false,
+        super_was_held: false,
         overview_selected: 0,
         linked_ws: None,
         decorations: mirada_brain::Decorations::default(),

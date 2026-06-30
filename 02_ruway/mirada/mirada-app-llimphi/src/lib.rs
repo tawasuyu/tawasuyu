@@ -3,4 +3,5 @@
 //! **vista espacial** (el "Prezi" de mirada) para que `examples/dump_overview`
 //! la pinte a PNG sin levantar el compositor.
 
+pub mod launcher;
 pub mod overview;

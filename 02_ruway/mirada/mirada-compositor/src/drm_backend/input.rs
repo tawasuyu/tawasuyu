@@ -41,6 +41,11 @@ impl DrmState {
                             return FilterResult::Intercept(());
                         }
                         if let Some(combo) = combo_string(mods, sym) {
+                            // Cualquier combo (tecla real, con o sin modificador)
+                            // significa que Super NO fue un tap solo: desarma la
+                            // detección de la tecla Super sola. Un modificador
+                            // pelado (Super) no produce combo, así que no desarma.
+                            st.super_tap_armed = false;
                             if crate::is_escape_hatch(&combo) {
                                 eprintln!(
                                     "mirada-compositor · salida de emergencia ({combo})."
@@ -303,6 +308,11 @@ impl DrmState {
             InputEvent::PointerButton { event } => {
                 let pressed = event.state() == ButtonState::Pressed;
                 let button = event.button_code();
+                // Un botón del puntero mientras Super está sostenida (p.ej.
+                // Super+arrastre para mover/redimensionar) tampoco es un tap solo.
+                if pressed {
+                    self.app.super_tap_armed = false;
+                }
 
                 // Popups (menús de apps GTK/Qt) abiertos: al APRETAR, un click
                 // sobre el menú se le reenvía (el motion ya lo enfocó), sin pasar

@@ -285,6 +285,14 @@ pub struct Config {
     /// espacial. `false` = sólo el rectángulo (mosaicos más limpios).
     #[serde(default = "default_true")]
     pub overview_show_titles: bool,
+    /// Acción de la tecla **Super sola** (un tap sin combo), estilo «Actividades»
+    /// de GNOME. `"none"` (default) = no hace nada; `"overview-launcher"` = abre
+    /// la vista espacial como **lanzador** (mapa de escritorios + buscador de
+    /// apps); `"overview"` = abre la vista espacial pelada. El compositor detecta
+    /// el tap y reenvía el sentinela `SuperTap`; la app (mirada-llimphi) lo
+    /// interpreta según este valor. No pisa los combos `Super+…` del keymap.
+    #[serde(default = "default_super_tap_action")]
+    pub super_tap_action: String,
     /// Divisor de frames de las ventanas **de fondo** (visibles pero sin foco,
     /// teseladas): el Cuerpo les espacia los `wl_surface.frame` callbacks a 1 de
     /// cada N vblanks, así dejan de quemar GPU pintando a 60 Hz detrás del foco.
@@ -640,6 +648,12 @@ fn default_one() -> u32 {
 /// nivel fuera configurable (cuando el glass siempre era calidad N).
 fn default_glass_quality() -> u8 {
     2
+}
+
+/// Default de [`Config::super_tap_action`]: la tecla Super sola no hace nada
+/// (sólo los combos `Super+…` del keymap). El usuario la activa en el panel.
+fn default_super_tap_action() -> String {
+    "none".to_string()
 }
 
 /// Default de [`Config::overview_anim_ms`]: un vuelo de cámara ágil.
@@ -1095,6 +1109,7 @@ impl Default for Config {
             overview_columns: 0,
             overview_anim_ms: 260,
             overview_show_titles: true,
+            super_tap_action: default_super_tap_action(),
             background_frame_divisor: 1,
             theme: default_theme(),
             workspace_switch_mode: WorkspaceSwitchMode::default(),
