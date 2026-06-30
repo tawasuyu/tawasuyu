@@ -345,31 +345,33 @@ body.sidebar-stowed #sidebar.panel-open .dock-panel { display: none; }
   color: var(--fg-text);
   cursor: pointer;
 }
-/* ícono del item: tile claro para que el SVG de marca (color propio)
- * contraste sobre el sidebar oscuro; monograma para los que no son app. */
+/* ícono del item = OBJETO: tile sólido del color de marca de la app, con el
+ * ícono en blanco encima (mask). Los que no son app: tile del color del
+ * cuadrante con su inicial. */
 .dock-section .doc-ic {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  background: var(--app-c, var(--sec-c, var(--bg-button)));
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12);
 }
-.dock-section img.doc-ic {
-  padding: 3px;
-  background: #eef1f6;
-  object-fit: contain;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.35);
+.dock-section .doc-ic-glyph {
+  width: 22px;
+  height: 22px;
+  background: #fff;
+  -webkit-mask: var(--ic) center / 19px 19px no-repeat;
+  mask: var(--ic) center / 19px 19px no-repeat;
 }
 .dock-section .doc-ic-mono {
-  background: #eef1f6;
-  color: #3a4150;
+  color: #fff;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.35);
 }
 .dock-section .doc:hover { background: var(--bg-row-hover); }
 .dock-section[data-mod="sistema"]  { --sec-c: var(--accent); }

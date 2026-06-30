@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=13">
+<link rel="stylesheet" href="styles.css?v=14">
 </head>
 <body>
 
@@ -874,30 +874,37 @@
   }
 
   // ===== íconos de los items del sidebar =====
-  // Cada app tiene su SVG real en assets/icons/. Si el item es una app con
-  // ícono, lo usamos; si no (docs del sistema, churay, paloma…), monograma.
-  const ICONO_APPS = new Set([
-    'agora','arje','cards','chaka','chasqui','cosmos','dominium','hapiy','iniy',
-    'khipu','llimphi','media','minga','mirada','nada','nahual','nakui','pineal',
-    'pluma','puriy','rimay','sandokan','shuma','supay','takiy','tinkuy','tullpu',
-    'wawa-explorer','wawa',
-  ]);
+  // Cada app es un OBJETO: tile del color de marca de la app + su ícono en
+  // blanco encima (via CSS mask, para recolorear el trazo del SVG sin tocarlo).
+  // Los items sin app (docs del sistema, churay, paloma…) caen a monograma.
+  const ICONO_COLOR = {
+    agora:'#2f9e8f', arje:'#b08d57', cards:'#8e63ce', chaka:'#2ba6a4',
+    chasqui:'#34b36a', cosmos:'#e6b800', dominium:'#4a6fa5', hapiy:'#26b89c',
+    iniy:'#7cb342', khipu:'#b5651d', llimphi:'#e55b7a', media:'#e23e57',
+    minga:'#e07b39', mirada:'#2d7dd2', nada:'#8893a0', nahual:'#7c4dbf',
+    nakui:'#c2549d', pineal:'#6c4fd8', pluma:'#3d3b8e', puriy:'#3fa34d',
+    rimay:'#e8833a', sandokan:'#c0392b', shuma:'#e0a526', supay:'#9b3fb5',
+    takiy:'#e5639b', tinkuy:'#d9534f', tullpu:'#e0603a',
+    'wawa-explorer':'#6ea0f0', wawa:'#5b8def',
+  };
   function setupDocIcons() {
     document.querySelectorAll('#sidebar .dock-section li .doc').forEach(el => {
       if (el.querySelector('.doc-ic')) return;
       const nombre = (el.textContent || '').trim().toLowerCase().split(/[\s·↗(]/)[0];
-      let ic;
-      if (ICONO_APPS.has(nombre)) {
-        ic = document.createElement('img');
-        ic.className = 'doc-ic';
-        ic.src = `/web/tawasuyu-web/assets/icons/${nombre}.svg`;
-        ic.setAttribute('aria-hidden', 'true');
+      const tile = document.createElement('span');
+      tile.className = 'doc-ic';
+      const color = ICONO_COLOR[nombre];
+      if (color) {
+        tile.style.setProperty('--app-c', color);
+        const g = document.createElement('i');
+        g.className = 'doc-ic-glyph';
+        g.style.setProperty('--ic', `url(/web/tawasuyu-web/assets/icons/${nombre}.svg)`);
+        tile.appendChild(g);
       } else {
-        ic = document.createElement('span');
-        ic.className = 'doc-ic doc-ic-mono';
-        ic.textContent = (nombre.charAt(0) || '?').toUpperCase();
+        tile.classList.add('doc-ic-mono');
+        tile.textContent = (nombre.charAt(0) || '?').toUpperCase();
       }
-      el.prepend(ic);
+      el.prepend(tile);
     });
   }
 
