@@ -39,7 +39,14 @@ sólo cuando es un visual nuevo no certificable de otra forma.
 
 ## 4. llimphi — motor gráfico (37 commits)
 > `cargo run -p llimphi-anim-studio --release` · `-p llimphi-voxel-studio --release`
-- [ ] Máquina de animación Rive (Tiers 1→5) — usarla en una app real (nada la consume fuera del studio)
+- [x] **Máquina de animación Rive — primer consumidor real ENCHUFADO 2026-06-29:**
+  el widget `llimphi-widget-rive-button` empaqueta la `StateMachine` (que sólo
+  consumían el studio y los examples de lottie) como botón reactivo idle/hover/
+  press. Ciclo certificado headless (3/3 tests: idle→hover→press→hover→idle por
+  puntero+click; press-sin-hover→idle). Example `rive_button_demo`. **Queda tu
+  ojo:** mirarlo corriendo (`cargo run -p llimphi-widget-rive-button --example
+  rive_button_demo --release`). NOTA: el "(Tiers 1→5)" de la versión previa era
+  una confusión — esos Tiers son de PARIDAD-FLUTTER.md, no de la máquina.
 - [ ] anim-studio F1/F2/F3 — exportar/consumir desde otra app
 - [ ] llimphi-lottie — con archivos Lottie reales
 - [ ] voxel-studio — autoría + render de showreel (editor independiente, no enchufado a producto)
