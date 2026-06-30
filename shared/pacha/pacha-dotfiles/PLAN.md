@@ -159,13 +159,39 @@ certifica headless; el mecanismo entero por debajo ya está y testeado. La elecc
 de endurecimiento (TTL de la key, `KEYCTL_SET_TIMEOUT`, TPM-seal) queda abierta
 pero NO bloquea Fase 4: la seed ya se desbloquea y retiene de forma segura.
 
-## Fase 4 — Compartir/publicar + transporte remoto
+## Fase 4 — Compartir/publicar + transporte remoto — HECHA
 
-- **Publicar:** re-cifrar un set (o instantánea) a un conjunto de destinatarios
-  (claves públicas agora), o exportar en claro — verbo explícito en `pacha-cli`.
-- **Remoto:** "push" = set-difference de hashes (lo que el remoto no tiene), como
-  `git push`; espeja lo que `akasha` hace en wawa para el grafo. Empezar con un
-  store en otra ruta/disco.
+1. ✅ **Remoto / push por set-difference.** `alcanzables(store, desde)` recorre el
+   cono siguiendo las aristas `hijos` (uniforme: commit→`[raiz,padre]`,
+   árbol→entradas, índice→trozos; **no parsea `Arbol`**, igual que el MARK del GC
+   del kernel). `empujar(origen, destino, desde) -> PushStats{copiados,
+   ya_presentes}` copia sólo lo que al destino le falta (como `git push`; espeja
+   `akasha`). Reusa `traer`/`poner`: descifra en RAM y re-sella con la clave del
+   **destino** ⇒ el remoto puede tener **otra clave** (o ninguna) y queda opaco;
+   la identidad (hash del claro) cruza stores, así el dedup también. Tests: delta
+   real (cambia 1 archivo → copia sólo su camino, el resto `ya_presentes`),
+   idempotencia, cruce de claves con remoto opaco.
+2. ✅ **Publicar / re-cifrar a destinatarios (estilo `age`).** `publicar_para(
+   store, raiz, &[pub_x25519]) -> SobreCompartido`: bundlea el cono en claro,
+   lo sella con una clave de contenido fresca, y **envuelve** esa clave a cada
+   destinatario (efímero por destinatario + ECDH X25519 + HKDF + AEAD = una
+   stanza age). `abrir_compartido(sobre, &mi_seed)` prueba las stanzas, verifica
+   integridad por hash y devuelve los objetos; `importar(store, objetos)` los
+   re-`poner`á (re-cifrando con la clave del receptor). `clave_publica_de_seed`
+   da tu pública (X25519 derivada de la misma seed Ed25519, patrón de
+   `ayni-crypto`). Verbo explícito: re-cifrar a otros, jamás el default. Tests:
+   sólo el destinatario abre (un no-destinatario falla), multi-destinatario,
+   sobre serializado sin claro filtrado. Exportar **en claro** = `materializar`
+   a un dir (ya existe; no se duplica).
+3. ✅ **Bridge en `pacha-manager`.** `DotfilesCtx::{publicar_set, empujar_set}`
+   capturan el set actual y delegan. Test end-to-end por el manager.
+
+**Layering:** todo vive en `pacha-dotfiles` (en `shared/`), tomando **claves
+X25519 crudas** — sin depender de `agora`. Convertir la identidad Ed25519 de un
+contacto a su X25519 pública (y obtener la libreta de contactos) es del
+orquestador. Pendiente menor: el transporte de red real (hoy "remoto" = otro
+`StoreObjetos` en otra ruta/disco, que es exactamente lo que el PLAN pedía para
+empezar).
 
 ## Fase 5 — Refinamientos
 
@@ -178,7 +204,10 @@ pero NO bloquea Fase 4: la seed ya se desbloquea y retiene de forma segura.
 
 ## Decisiones abiertas
 
-1. **Desbloqueo de la clave maestra** (Fase 3) — la grande.
+1. ~~**Desbloqueo de la clave maestra** (Fase 3) — la grande.~~ **RESUELTA:**
+   session keyring del kernel como default, **enchufable** tras el trait `Llavero`
+   (`pacha-llavero`). Queda abierto sólo el endurecimiento (TTL/TPM) y el front de
+   desbloqueo inicial (greeter/passphrase), no el mecanismo.
 2. **Granularidad del aislamiento:** un mount ns por pacha vs uno por Card.
    ¿Secretos scoped a pacha, a un set de apps, o a Cards individuales?
 3. **Opacidad de estructura:** ¿el árbol/nombres de archivo van cifrados (oculta

@@ -103,6 +103,31 @@ impl DotfilesCtx {
         llavero.guardar(nombre, seed).map_err(|e| e.to_string())
     }
 
+    /// **Publica** (Fase 4) el estado ACTUAL de `set_id` cifrado a `destinatarios`
+    /// (claves públicas X25519). Verbo explícito: re-cifra a otros. Devuelve el
+    /// sobre portable; el contenido en claro nunca lo deja.
+    pub fn publicar_set(
+        &self,
+        set_id: &str,
+        destinatarios: &[[u8; 32]],
+    ) -> Result<pacha_dotfiles::SobreCompartido, String> {
+        let set = self.sets.get(set_id).ok_or_else(|| format!("set desconocido: {set_id}"))?;
+        let raiz = pacha_dotfiles::capturar(&self.store, set, &self.home).map_err(|e| e.to_string())?;
+        pacha_dotfiles::publicar_para(&self.store, raiz, destinatarios).map_err(|e| e.to_string())
+    }
+
+    /// **Empuja** (Fase 4) el estado ACTUAL de `set_id` a un store `remoto` por
+    /// set-difference de hashes (backup tipo `git push`). Devuelve cuántos copió.
+    pub fn empujar_set(
+        &self,
+        set_id: &str,
+        remoto: &StoreObjetos,
+    ) -> Result<pacha_dotfiles::PushStats, String> {
+        let set = self.sets.get(set_id).ok_or_else(|| format!("set desconocido: {set_id}"))?;
+        let raiz = pacha_dotfiles::capturar(&self.store, set, &self.home).map_err(|e| e.to_string())?;
+        pacha_dotfiles::empujar(&self.store, remoto, raiz).map_err(|e| e.to_string())
+    }
+
     /// Recaptura un set y commitea sobre su cabeza previa. Devuelve la raíz del
     /// árbol (lo que el pin del runtime guarda y `materializar` consume).
     fn capturar(&mut self, set_id: &str) -> Result<[u8; 32], String> {
@@ -427,6 +452,35 @@ mod tests {
         );
         // Dotfiles sin staging resuelto ⇒ None (no se puede aislar sin RAM).
         assert!(mount_plan_for(home, &p, None).is_none());
+    }
+
+    #[test]
+    fn publicar_y_empujar_set_desde_el_manager() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".zshrc"), b"export FASE4=1\n").unwrap();
+        let set = ConjuntoDotfiles::new("shell")
+            .con(pacha_dotfiles::RutaGestionada::fijado(".zshrc"));
+        let ctx = DotfilesCtx::new_cifrado(tmp.path().join("obj"), home.clone(), [set], &[7u8; 32]).unwrap();
+
+        // Publicar a un destinatario y que SÓLO él abra.
+        let seed_bob = [44u8; 32];
+        let sobre = ctx.publicar_set("shell", &[pacha_dotfiles::clave_publica_de_seed(&seed_bob)]).unwrap();
+        let (raiz, objs) = pacha_dotfiles::abrir_compartido(&sobre, &seed_bob).unwrap();
+        let store_bob = StoreObjetos::abrir(tmp.path().join("bob")).unwrap();
+        pacha_dotfiles::importar(&store_bob, &objs).unwrap();
+        let dest = tmp.path().join("dest");
+        pacha_dotfiles::materializar(&store_bob, &dest, raiz).unwrap();
+        assert_eq!(std::fs::read(dest.join(".zshrc")).unwrap(), b"export FASE4=1\n");
+
+        // Empujar a un remoto y reproducir.
+        let remoto = StoreObjetos::abrir_cifrado(tmp.path().join("remoto"), Cifrador::con_clave([8u8; 32])).unwrap();
+        let stats = ctx.empujar_set("shell", &remoto).unwrap();
+        assert!(stats.copiados > 0);
+        let dest2 = tmp.path().join("dest2");
+        pacha_dotfiles::materializar(&remoto, &dest2, raiz).unwrap();
+        assert_eq!(std::fs::read(dest2.join(".zshrc")).unwrap(), b"export FASE4=1\n");
     }
 
     #[test]

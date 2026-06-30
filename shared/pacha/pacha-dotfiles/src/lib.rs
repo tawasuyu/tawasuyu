@@ -549,6 +549,254 @@ pub fn historial(
 }
 
 // =====================================================================
+// Transporte remoto: push por set-difference (Fase 4)
+// =====================================================================
+
+/// Estadística de un [`empujar`]: cuántos objetos se copiaron y cuántos ya
+/// estaban en el destino (el delta es el set-difference por hash).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PushStats {
+    pub copiados: usize,
+    pub ya_presentes: usize,
+}
+
+/// Conjunto de hashes **alcanzables** desde `desde` siguiendo las aristas
+/// `hijos` del grafo — uniforme y agnóstico al tipo de objeto: un commit apunta
+/// a `[raiz, padre]`, un árbol a las entradas, un índice de blob a sus trozos.
+/// No parsea `Arbol` (igual que el MARK del GC del kernel). Cubre todo el cono:
+/// contenido **y** linaje si `desde` es un commit.
+pub fn alcanzables(store: &StoreObjetos, desde: Hash) -> Result<std::collections::BTreeSet<Hash>, DotError> {
+    let mut vistos = std::collections::BTreeSet::new();
+    let mut pila = vec![desde];
+    while let Some(h) = pila.pop() {
+        if !vistos.insert(h) {
+            continue;
+        }
+        let obj = store.traer(&h)?;
+        pila.extend(obj.hijos);
+    }
+    Ok(vistos)
+}
+
+/// Empuja a `destino` los objetos alcanzables desde `desde` que **le falten**
+/// (set-difference por hash, como `git push`; espeja lo que `akasha` hace con el
+/// grafo en wawa). Reusa `traer`/`poner`: descifra en RAM del origen y re-sella
+/// con la clave del destino — el destino puede tener **otra clave** (o ninguna),
+/// y el contenido nunca queda en claro en su disco. La identidad (hash del claro)
+/// es la misma en ambos, así que el dedup cruza stores.
+pub fn empujar(origen: &StoreObjetos, destino: &StoreObjetos, desde: Hash) -> Result<PushStats, DotError> {
+    let mut stats = PushStats::default();
+    for h in alcanzables(origen, desde)? {
+        if destino.contiene(&h) {
+            stats.ya_presentes += 1;
+            continue;
+        }
+        let obj = origen.traer(&h)?;
+        let puesto = destino.poner(&obj)?;
+        debug_assert_eq!(puesto, h, "el hash del claro debe coincidir entre stores");
+        stats.copiados += 1;
+    }
+    Ok(stats)
+}
+
+// =====================================================================
+// Compartir/publicar a destinatarios (Fase 4) — re-cifrado estilo `age`
+// =====================================================================
+
+/// Un objeto del bundle compartido: su hash de identidad + los bytes **en
+/// claro** del `Objeto` serializado. El receptor re-`poner`á (re-cifrando con su
+/// propia clave de store).
+#[derive(Serialize, Deserialize)]
+struct ObjetoBundle {
+    hash: Hash,
+    claro: Vec<u8>,
+}
+
+/// Sobre por destinatario: la clave de contenido **envuelta** a su clave pública
+/// X25519 — efímero por destinatario + ECDH + HKDF + AEAD, como una stanza `age`.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Stanza {
+    efimero_pub: [u8; 32],
+    nonce: [u8; 24],
+    clave_envuelta: Vec<u8>,
+}
+
+/// Un set de objetos (el cono de una raíz/commit) cifrado a uno o más
+/// destinatarios. Cualquiera con la secreta de UNA stanza lo abre; nadie más.
+/// Portable (postcard) → es el artefacto que viaja al publicar.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SobreCompartido {
+    raiz: Hash,
+    nonce: [u8; 24],
+    carga_sellada: Vec<u8>,
+    stanzas: Vec<Stanza>,
+}
+
+impl SobreCompartido {
+    pub fn serializar(&self) -> Result<Vec<u8>, DotError> {
+        Ok(postcard::to_allocvec(self)?)
+    }
+    pub fn deserializar(bytes: &[u8]) -> Result<Self, DotError> {
+        Ok(postcard::from_bytes(bytes)?)
+    }
+    /// La raíz/commit empaquetado (lo que el receptor materializará tras importar).
+    pub fn raiz(&self) -> Hash {
+        self.raiz
+    }
+    pub fn num_destinatarios(&self) -> usize {
+        self.stanzas.len()
+    }
+}
+
+/// Deriva la clave X25519 secreta de identidad de una `seed` de 32 bytes, con
+/// HKDF y separación de dominio (mismo patrón que `ayni-crypto`). Distinta del
+/// dominio de la clave del store ([`Cifrador::derivar_de_seed`]): firmar/compartir
+/// y cifrar-en-reposo no comparten clave.
+fn x25519_secreto_de_seed(seed: &[u8; 32]) -> x25519_dalek::StaticSecret {
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, seed);
+    let mut okm = [0u8; 32];
+    hk.expand(b"pacha-dotfiles-x25519-v1", &mut okm).expect("32 <= 255*HashLen");
+    x25519_dalek::StaticSecret::from(okm)
+}
+
+/// La clave **pública** X25519 de una identidad (lo que se comparte para que
+/// otros te publiquen un set). Derivada de la misma seed Ed25519.
+pub fn clave_publica_de_seed(seed: &[u8; 32]) -> [u8; 32] {
+    x25519_dalek::PublicKey::from(&x25519_secreto_de_seed(seed)).to_bytes()
+}
+
+/// HKDF de la clave de envoltura desde el secreto ECDH, ligada al par
+/// (efímero, destinatario) como salt — estilo `age`.
+fn clave_envoltura(compartido: &[u8], efimero_pub: &[u8; 32], dest_pub: &[u8; 32]) -> [u8; 32] {
+    let mut salt = [0u8; 64];
+    salt[..32].copy_from_slice(efimero_pub);
+    salt[32..].copy_from_slice(dest_pub);
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(&salt), compartido);
+    let mut out = [0u8; 32];
+    hk.expand(b"pacha-share-wrap-v1", &mut out).expect("32 <= 255*HashLen");
+    out
+}
+
+/// **Publica** el cono alcanzable desde `raiz` cifrado a `destinatarios` (claves
+/// públicas X25519, p.ej. [`clave_publica_de_seed`] de cada uno). Verbo
+/// explícito: re-cifra a OTROS, jamás el camino por omisión. El sobre resultante
+/// es opaco salvo para los destinatarios; el contenido en claro nunca lo deja.
+pub fn publicar_para(
+    store: &StoreObjetos,
+    raiz: Hash,
+    destinatarios: &[[u8; 32]],
+) -> Result<SobreCompartido, DotError> {
+    use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng};
+    use chacha20poly1305::XChaCha20Poly1305;
+    use rand::RngCore;
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    if destinatarios.is_empty() {
+        return Err(DotError::Cripto("sin destinatarios"));
+    }
+
+    // 1) Juntar los objetos alcanzables EN CLARO en un bundle.
+    let mut bundle = Vec::new();
+    for h in alcanzables(store, raiz)? {
+        let obj = store.traer(&h)?;
+        bundle.push(ObjetoBundle { hash: h, claro: obj.serializar().map_err(DotError::Formato)? });
+    }
+    let bundle_bytes = postcard::to_allocvec(&bundle)?;
+
+    // 2) Clave de contenido fresca; sellar el bundle con ella.
+    let mut ckey = [0u8; 32];
+    OsRng.fill_bytes(&mut ckey);
+    let cipher = XChaCha20Poly1305::new((&ckey).into());
+    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let carga = cipher
+        .encrypt(&nonce, bundle_bytes.as_slice())
+        .map_err(|_| DotError::Cripto("sellar carga"))?;
+
+    // 3) Envolver la clave de contenido a cada destinatario (efímero + ECDH).
+    let mut stanzas = Vec::with_capacity(destinatarios.len());
+    for dest in destinatarios {
+        let efimero = StaticSecret::random_from_rng(OsRng);
+        let efimero_pub = PublicKey::from(&efimero).to_bytes();
+        let compartido = efimero.diffie_hellman(&PublicKey::from(*dest));
+        let wrap = clave_envoltura(compartido.as_bytes(), &efimero_pub, dest);
+        let wc = XChaCha20Poly1305::new((&wrap).into());
+        let wn = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let env = wc
+            .encrypt(&wn, ckey.as_slice())
+            .map_err(|_| DotError::Cripto("envolver clave"))?;
+        stanzas.push(Stanza { efimero_pub, nonce: copiar24(&wn), clave_envuelta: env });
+    }
+    ckey.fill(0);
+
+    Ok(SobreCompartido { raiz, nonce: copiar24(&nonce), carga_sellada: carga, stanzas })
+}
+
+/// **Abre** un sobre publicado con la identidad (`seed`) del receptor: prueba
+/// cada stanza, desenvuelve la clave de contenido y devuelve `(raiz, objetos en
+/// claro)`. Luego se [`importar`]an al store del receptor.
+pub fn abrir_compartido(
+    sobre: &SobreCompartido,
+    mi_seed: &[u8; 32],
+) -> Result<(Hash, Vec<(Hash, Objeto)>), DotError> {
+    use chacha20poly1305::aead::{Aead, KeyInit};
+    use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+    use x25519_dalek::PublicKey;
+
+    let secreta = x25519_secreto_de_seed(mi_seed);
+    let mi_pub = PublicKey::from(&secreta).to_bytes();
+
+    // Buscar la stanza que abre con nuestra identidad.
+    let mut ckey: Option<[u8; 32]> = None;
+    for st in &sobre.stanzas {
+        let compartido = secreta.diffie_hellman(&PublicKey::from(st.efimero_pub));
+        let wrap = clave_envoltura(compartido.as_bytes(), &st.efimero_pub, &mi_pub);
+        let wc = XChaCha20Poly1305::new((&wrap).into());
+        if let Ok(k) = wc.decrypt(XNonce::from_slice(&st.nonce), st.clave_envuelta.as_slice()) {
+            if k.len() == 32 {
+                let mut a = [0u8; 32];
+                a.copy_from_slice(&k);
+                ckey = Some(a);
+                break;
+            }
+        }
+    }
+    let ckey = ckey.ok_or(DotError::Cripto("ninguna stanza abre con esta identidad"))?;
+
+    // Abrir la carga y reconstruir los objetos, verificando integridad por hash.
+    let cc = XChaCha20Poly1305::new((&ckey).into());
+    let bundle_bytes = cc
+        .decrypt(XNonce::from_slice(&sobre.nonce), sobre.carga_sellada.as_slice())
+        .map_err(|_| DotError::Cripto("abrir carga"))?;
+    let bundle: Vec<ObjetoBundle> = postcard::from_bytes(&bundle_bytes)?;
+    let mut objetos = Vec::with_capacity(bundle.len());
+    for ob in bundle {
+        if format::hash(&ob.claro) != ob.hash {
+            return Err(DotError::Cripto("hash de objeto no coincide (sobre manipulado)"));
+        }
+        let obj = Objeto::deserializar(&ob.claro).map_err(DotError::Formato)?;
+        objetos.push((ob.hash, obj));
+    }
+    Ok((sobre.raiz, objetos))
+}
+
+/// Importa al `store` los objetos abiertos de un sobre (re-cifra con la clave del
+/// receptor si el store es cifrado). Tras esto, `materializar(store, dest, raiz)`
+/// reconstruye el set compartido.
+pub fn importar(store: &StoreObjetos, objetos: &[(Hash, Objeto)]) -> Result<(), DotError> {
+    for (_, obj) in objetos {
+        store.poner(obj)?;
+    }
+    Ok(())
+}
+
+/// Copia un nonce de 24 bytes desde el `GenericArray` de la AEAD.
+fn copiar24(n: &[u8]) -> [u8; 24] {
+    let mut out = [0u8; 24];
+    out.copy_from_slice(n);
+    out
+}
+
+// =====================================================================
 // Utilidades
 // =====================================================================
 
@@ -756,6 +1004,121 @@ mod tests {
             }
         }
         acc
+    }
+
+    #[test]
+    fn empujar_copia_solo_el_delta_y_el_remoto_reproduce() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let local = StoreObjetos::abrir(tmp.path().join("local")).unwrap();
+        let remoto = StoreObjetos::abrir(tmp.path().join("remoto")).unwrap();
+
+        escribir(&home, ".zshrc", b"v1\n");
+        escribir(&home, ".config/nvim/init.lua", b"-- v1\n");
+        let set = set_basico();
+        let raiz1 = capturar(&local, &set, &home).unwrap();
+
+        // Primer push: copia TODO el cono alcanzable; el remoto estaba vacío.
+        let s1 = empujar(&local, &remoto, raiz1).unwrap();
+        assert_eq!(s1.ya_presentes, 0);
+        assert_eq!(s1.copiados, alcanzables(&local, raiz1).unwrap().len());
+        // El remoto reproduce el snapshot.
+        let dest = tmp.path().join("dest");
+        materializar(&remoto, &dest, raiz1).unwrap();
+        assert_eq!(fs::read(dest.join(".zshrc")).unwrap(), b"v1\n");
+
+        // Push idempotente: nada nuevo.
+        let s2 = empujar(&local, &remoto, raiz1).unwrap();
+        assert_eq!(s2.copiados, 0);
+        assert_eq!(s2.ya_presentes, s1.copiados);
+
+        // Cambiar un archivo y commitear: el segundo push copia SOLO el delta
+        // (el .zshrc nuevo + árboles en su camino), no los objetos compartidos.
+        escribir(&home, ".zshrc", b"v2\n");
+        let c2 = capturar_y_commitear(&local, &set, &home, None, "v2", 1).unwrap();
+        let s3 = empujar(&local, &remoto, c2).unwrap();
+        assert!(s3.copiados > 0 && s3.copiados < alcanzables(&local, c2).unwrap().len(),
+            "debe copiar el delta, no todo: copiados={} de {}", s3.copiados, alcanzables(&local, c2).unwrap().len());
+        assert!(s3.ya_presentes > 0, "el nvim no cambió: debe estar ya presente");
+    }
+
+    #[test]
+    fn empujar_cruza_claves_y_el_remoto_queda_opaco() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        // Origen cifrado con K1, destino cifrado con K2 distinta.
+        let local = StoreObjetos::abrir_cifrado(tmp.path().join("l"), Cifrador::con_clave([1u8; 32])).unwrap();
+        let remoto = StoreObjetos::abrir_cifrado(tmp.path().join("r"), Cifrador::con_clave([2u8; 32])).unwrap();
+        escribir(&home, ".ssh/k", b"SECRETO-CRUZADO\n");
+        let set = ConjuntoDotfiles::new("ssh").con(RutaGestionada::fijado(".ssh/k"));
+        let raiz = capturar(&local, &set, &home).unwrap();
+
+        empujar(&local, &remoto, raiz).unwrap();
+        // El remoto materializa con SU clave (re-cifrado en el push).
+        let dest = tmp.path().join("dest");
+        materializar(&remoto, &dest, raiz).unwrap();
+        assert_eq!(fs::read(dest.join(".ssh/k")).unwrap(), b"SECRETO-CRUZADO\n");
+        // Y su disco no tiene el claro.
+        let crudo = bytes_de_todos_los_objetos(&tmp.path().join("r"));
+        assert!(!contiene_sub(&crudo, b"SECRETO-CRUZADO"), "el remoto debe quedar opaco");
+    }
+
+    #[test]
+    fn publicar_y_abrir_solo_para_destinatarios() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let local = StoreObjetos::abrir_cifrado(tmp.path().join("l"), Cifrador::con_clave([5u8; 32])).unwrap();
+        escribir(&home, ".gitconfig", b"[user]\n  name = ana\n");
+        let set = ConjuntoDotfiles::new("git").con(RutaGestionada::fijado(".gitconfig"));
+        let raiz = capturar(&local, &set, &home).unwrap();
+
+        // Dos identidades: bob (destinatario) y eve (no destinataria).
+        let seed_bob = [11u8; 32];
+        let seed_eve = [22u8; 32];
+        let pub_bob = clave_publica_de_seed(&seed_bob);
+
+        let sobre = publicar_para(&local, raiz, &[pub_bob]).unwrap();
+        assert_eq!(sobre.num_destinatarios(), 1);
+        // El sobre viaja serializado.
+        let bytes = sobre.serializar().unwrap();
+        // Opacidad: el contenido en claro NO está en el artefacto publicado.
+        assert!(!contiene_sub(&bytes, b"name = ana"), "el sobre no debe filtrar claro");
+        let sobre = SobreCompartido::deserializar(&bytes).unwrap();
+
+        // Bob abre, importa a SU store (otra clave) y materializa.
+        let (raiz_b, objetos) = abrir_compartido(&sobre, &seed_bob).unwrap();
+        assert_eq!(raiz_b, raiz);
+        let store_bob = StoreObjetos::abrir_cifrado(tmp.path().join("bob"), Cifrador::con_clave([9u8; 32])).unwrap();
+        importar(&store_bob, &objetos).unwrap();
+        let dest = tmp.path().join("dest_bob");
+        materializar(&store_bob, &dest, raiz).unwrap();
+        assert_eq!(fs::read(dest.join(".gitconfig")).unwrap(), b"[user]\n  name = ana\n");
+
+        // Eve NO es destinataria: ninguna stanza abre.
+        let err = abrir_compartido(&sobre, &seed_eve).unwrap_err();
+        assert!(matches!(err, DotError::Cripto(_)), "eve no debe poder abrir, fue {err:?}");
+    }
+
+    #[test]
+    fn publicar_a_varios_cada_uno_abre_lo_suyo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let local = StoreObjetos::abrir(tmp.path().join("l")).unwrap();
+        escribir(&home, ".vimrc", b"set nocompatible\n");
+        let set = ConjuntoDotfiles::new("vim").con(RutaGestionada::fijado(".vimrc"));
+        let raiz = capturar(&local, &set, &home).unwrap();
+
+        let seeds = [[1u8; 32], [2u8; 32], [3u8; 32]];
+        let pubs: Vec<[u8; 32]> = seeds.iter().map(clave_publica_de_seed).collect();
+        let sobre = publicar_para(&local, raiz, &pubs).unwrap();
+        assert_eq!(sobre.num_destinatarios(), 3);
+        // Los tres abren; un cuarto no.
+        for seed in &seeds {
+            let (r, objs) = abrir_compartido(&sobre, seed).unwrap();
+            assert_eq!(r, raiz);
+            assert!(!objs.is_empty());
+        }
+        assert!(abrir_compartido(&sobre, &[99u8; 32]).is_err());
     }
 
     #[test]
