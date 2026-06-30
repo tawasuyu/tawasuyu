@@ -151,6 +151,12 @@ AUTO="${HOME}/.config/mirada/autostart"
 grep -qxF 'pata-notify' "$AUTO" 2>/dev/null || echo 'pata-notify' >> "$AUTO"
 echo "==> pata-notify sembrado en $AUTO"
 
+# El activador de contextos (pacha): sirve el socket que consumen `pacha switch`
+# (lo invocan los chips de «Contexto» de pata y el diente «Contextos» del panel)
+# y `pacha list`. Sin él, conmutar de contexto no hace nada. Idempotente.
+grep -qxF 'pacha daemon' "$AUTO" 2>/dev/null || echo 'pacha daemon' >> "$AUTO"
+echo "==> pacha daemon sembrado en $AUTO"
+
 # Siembra los plugins de ejemplo en ~/.config/mirada/plugins, para que la sesión
 # «mirada · plugins» arranque con algo que mostrar: el layout (right-master) y el
 # reactor (terminal Super+a + atenuado por foco + auto-monocle). Idempotente:
