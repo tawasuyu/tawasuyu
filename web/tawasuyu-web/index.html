@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 
@@ -237,10 +237,9 @@
         <!-- φ escondida: la pista del chiste, casi invisible cerca del origen -->
         <text class="axis-phi" x="3.2" y="-3.2">φ</text>
 
-        <!-- Cuadrante II: 00_unanchay PERCIBIR — el click al fondo abre pluma
-             (no la README del cuadrante). -->
+        <!-- Cuadrante II: 00_unanchay PERCIBIR -->
         <g class="quad" data-cuad="00_unanchay" data-theme="unanchay" transform="translate(-50,-50)"
-           data-doc="/00_unanchay/pluma/README.md" data-title="pluma" data-open-theme="aire">
+           data-doc="/00_unanchay/README.md" data-title="00 unanchay · percibir">
           <rect x="-40" y="-40" width="80" height="80"/>
           <text class="quad-id"   x="0" y="-30">0x00</text>
           <text class="quad-name" x="0" y="-14">UNANCHAY</text>
@@ -565,6 +564,9 @@
       if (v.minimized) restaurar(id);
       else if (v.el.classList.contains('focused')) minimizar(id);
       else traerAlFrente(id);
+      // la URL refleja la subpágina activa al tocar su item en la barra.
+      const vv = ventanas.get(id);
+      if (vv && !vv.minimized && vv.url && !vv.url.startsWith('__')) pushHash(vv.url);
     });
     taskItems.appendChild(taskEl);
 
@@ -584,7 +586,6 @@
     // Al abrir un artículo guardamos la sidebar para que ocupe todo el
     // ancho (el artículo se abre maximizado encima del plano).
     document.body.classList.add('sidebar-stowed');
-    document.body.classList.remove('sidebar-peek');
 
     cargarMdSeguro(contId, url, theme || 'tawasuyu');
     if (!fromHash) pushHash(url);
@@ -785,9 +786,12 @@
   }
 
   // Brand = "volver a la chakana": minimiza todas las ventanas para dejar
-  // ver el escritorio (el plano). Ya no togglea la sidebar.
+  // ver el escritorio (el plano) y lleva la URL al home (sin subpágina).
   function minimizarTodos() {
     for (const id of [...ventanas.keys()]) minimizar(id);
+    if (window.location.hash) {
+      window.history.pushState({}, '', window.location.pathname + window.location.search);
+    }
   }
   function bindBrandHome() {
     const btn = document.getElementById('brand-home');
@@ -869,10 +873,12 @@
     }
     document.addEventListener('touchstart', (e) => {
       if (e.touches.length !== 1) { t = null; return; }
+      // toques sobre la barra de arriba → la dejamos panear nativo (pan-x).
+      if (e.target.closest && e.target.closest('#topbar')) { t = null; return; }
       const x = e.touches[0].clientX, y = e.touches[0].clientY;
       t = {
         x0: x, y0: y, x, y, mode: null,
-        peek: document.body.classList.contains('sidebar-peek'),
+        stowed: document.body.classList.contains('sidebar-stowed'),
         enSidebar: !!(e.target.closest && e.target.closest('#sidebar')),
         scroll: artScroll(e.target),
       };
@@ -885,8 +891,8 @@
       t.x = x; t.y = y;
       if (!t.mode) {
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
-          if (!t.peek && t.x0 <= EDGE && dx > 0) t.mode = 'open';
-          else if (t.peek && t.enSidebar && dx < 0) t.mode = 'stow';
+          if (t.stowed && t.x0 <= EDGE && dx > 0) t.mode = 'open';
+          else if (!t.stowed && t.enSidebar && dx < 0) t.mode = 'stow';
           else t.mode = 'ignore';
         } else if (dy > 8 && dy > Math.abs(dx)) {
           const atTop = !t.scroll || t.scroll.scrollTop <= 0;
@@ -907,8 +913,8 @@
     document.addEventListener('touchend', () => {
       if (!t) return;
       const dx = t.x - t.x0, dy = t.y - t.y0;
-      if (t.mode === 'open' && dx >  H) document.body.classList.add('sidebar-peek');
-      if (t.mode === 'stow' && dx < -H) document.body.classList.remove('sidebar-peek');
+      if (t.mode === 'open' && dx >  H) document.body.classList.remove('sidebar-stowed');
+      if (t.mode === 'stow' && dx < -H) document.body.classList.add('sidebar-stowed');
       if (t.mode === 'pull') {
         if (dy > PULL) { pr.classList.add('pr-spinning'); recargarFresco(); }
         else { pr.classList.remove('pr-active', 'pr-ready'); pr.style.transform = ''; }

@@ -223,51 +223,58 @@ a:hover { color: var(--fg-text); }
   min-height: 0;
 }
 
-/* ===== sidebar = dock-rail (dientes) + panel del diente activo ===== */
+/* ===== sidebar = dock-rail (dientes) + panel del diente activo =====
+ * El sidebar deja pasar los clicks (pointer-events:none); sólo los dientes
+ * y el panel los capturan. Así la columna del rail queda transparente para
+ * el fondo y no bloquea el plano. */
 #sidebar {
   display: flex;
   align-items: stretch;
   flex-shrink: 0;
   font-size: 12px;
+  pointer-events: none;
 }
 body.sidebar-stowed #sidebar { display: none; }
 
-/* rail = columna de dientes-ícono por el lado de adentro (a la derecha del
- * panel, mirando al plano). Cada diente es un ícono chico: la chakana para
- * sistema y el hex del cuadrante (0x00…0x03). */
+/* rail = columna TRANSPARENTE; los dientes son fichas individuales que
+ * sobresalen (sombra propia), separadas entre sí, por el lado de adentro
+ * (a la derecha del panel, mirando al plano). El resto de la columna queda
+ * para el fondo. Cada diente es un ícono: chakana=sistema, hex 0x00…0x03. */
 .dock-rail {
-  order: 2;                    /* siempre a la derecha del panel (lado interno) */
+  order: 2;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 5px;
-  background: var(--bg-panel-alt);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  gap: 9px;
+  padding: 12px 6px;
+  background: transparent;
+  pointer-events: none;        /* sólo los dientes capturan clicks */
 }
 .diente {
-  width: 34px;
-  height: 28px;
+  pointer-events: auto;
+  width: 38px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   appearance: none;
   border: 1px solid var(--border);
-  border-right: 2px solid var(--diente-c, var(--fg-muted));  /* acento en la punta interna */
-  border-radius: 5px;
+  border-right: 3px solid var(--diente-c, var(--fg-muted));  /* lomo de color, lado interno */
+  border-radius: 7px;
   background: var(--bg-panel);
+  box-shadow: 0 2px 7px rgba(0,0,0,0.5);    /* ficha dibujada, sobresale */
   color: var(--fg-muted);
   font-family: var(--mono);
   font-size: 9.5px;
   letter-spacing: 0.02em;
   cursor: pointer;
+  transition: transform 0.12s, background 0.12s;
 }
-.diente:hover { color: var(--fg-text); background: var(--bg-row-hover); }
+.diente:hover { color: var(--fg-text); background: var(--bg-row-hover); transform: translateX(2px); }
 .diente.active {
   color: var(--fg-text);
   background: var(--bg-button);
-  border-color: var(--border);
   border-right-color: var(--diente-c, var(--accent));
+  transform: translateX(3px);
 }
 .diente-chakana { width: 15px; height: 15px; color: var(--diente-c, var(--accent)); }
 .diente[data-theme="tawasuyu"] { --diente-c: var(--accent); }
@@ -279,9 +286,11 @@ body.sidebar-stowed #sidebar { display: none; }
 /* panel: lista de docs del diente activo; sólo visible con .panel-open */
 .dock-panel {
   order: 1;                    /* a la izquierda (borde de pantalla) */
+  pointer-events: auto;
   width: 230px;
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
+  box-shadow: 2px 0 12px rgba(0,0,0,0.4);
   padding: 10px 0;
   overflow-y: auto;
   display: none;
@@ -690,17 +699,21 @@ body.sidebar-stowed #sidebar { display: none; }
   .dom       { font-size: 5.5px; }
   .axis-label { font-size: 5.5px; }
 
-  /* La sidebar arranca OCULTA por CSS (no por JS) → sin parpadeo. Se trae
-     con drag a la derecha desde el borde, como overlay sobre el plano (no
-     le come ancho). */
+  /* La sidebar es overlay sobre el plano y arranca VISIBLE: los dientes
+     flotan sobre el borde izquierdo (columna transparente, clicks pasan al
+     plano). El plano queda a todo el ancho. Drag a la izquierda la guarda
+     (body.sidebar-stowed); drag a la derecha la trae. */
   #sidebar {
     position: absolute;
     left: 0; top: 0; bottom: 0;
     z-index: 45;
-    display: none;
-    box-shadow: 8px 0 24px rgba(0,0,0,0.5);
   }
-  body.sidebar-peek #sidebar { display: flex; }
+
+  /* la barra de arriba copa rápido con ventanas abiertas → paneo horizontal */
+  #taskbar-items {
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 /* Header de sección (h3) dentro del panel del diente, clickable */
