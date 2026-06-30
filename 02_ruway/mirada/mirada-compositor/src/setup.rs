@@ -531,7 +531,12 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         variant: &ucfg.xkb_variant,
         ..Default::default()
     };
-    let keyboard = app.seat.add_keyboard(xkb, 200, 25)?;
+    // (repeat_delay_ms, repeat_rate_hz). El delay es cuánto hay que MANTENER una
+    // tecla antes de que empiece a repetir; 200 ms era demasiado corto — un
+    // tecleo normal (se sostiene ~150-250 ms) cruzaba el umbral y la tecla salía
+    // DOBLE. 600 ms es el estándar (X11 ~660, GNOME 500, KDE 600): un tap normal
+    // ya no repite, mantener sí.
+    let keyboard = app.seat.add_keyboard(xkb, 600, 25)?;
     app.keyboard = Some(keyboard);
     app.pointer = Some(app.seat.add_pointer());
 
