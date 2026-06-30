@@ -13,6 +13,9 @@ pacha-dotfiles = { path = "../pacha-dotfiles" }
 pacha-llavero = { path = "../pacha-llavero" }
 wawa-config = { path = "../../wawa-config" }
 sandokan = { path = "../../../03_ukupacha/sandokan/sandokan" }
+# Capa 4: ReglaMetrica (binding intención→reglas) + el Vigilante que las corre.
+sandokan-monitor-core = { path = "../../sandokan/sandokan-monitor-core" }
+sandokan-vigilante = { path = "../../sandokan/sandokan-vigilante" }
 card-core = { path = "../../card/card-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }

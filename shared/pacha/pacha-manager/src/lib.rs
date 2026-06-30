@@ -21,10 +21,11 @@ pub mod paths;
 pub mod proto;
 pub mod server;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
 use pacha_core::{AppSpec, BringUp, Catalog, Effect, Runtime, WawaOverlay};
+use sandokan_monitor_core::reglas::ReglaMetrica;
 use thiserror::Error;
 
 pub use pacha_core;
@@ -62,6 +63,11 @@ pub trait Surfaces: Send {
     /// Recaptura un set de dotfiles desde `$HOME` y devuelve la nueva
     /// instantánea (hash del árbol raíz) para avanzar el pin del runtime.
     async fn capture_dotfiles(&mut self, set_id: &str) -> Result<[u8; 32], String>;
+    /// Arma (reemplaza) el set de **reglas de métrica** activo del plano de
+    /// control — las que la intención entrante condiciona mientras está
+    /// enfocada (SDD §8 capa 2/4). `&[]` desarma. La superficie real las pasa
+    /// al `Vigilante`; el `Recorder` de tests sólo las cuenta.
+    async fn armar_reglas(&mut self, reglas: &[ReglaMetrica]) -> Result<(), String>;
 }
 
 /// Errores del activador. Sólo los **duros** (la planificación del core);
@@ -78,11 +84,23 @@ pub struct Manager<S: Surfaces> {
     pub catalog: Catalog,
     pub runtime: Runtime,
     surf: S,
+    /// Reglas de métrica por id de contexto: las que esa intención arma al
+    /// enfocarse. Vive **acá** —no en `pacha-core`, que es agnóstico de
+    /// sandokan por diseño— porque es el manager quien integra el plano de
+    /// control. Vacío para un contexto = no condiciona servicios, sólo fija
+    /// prioridades estáticas.
+    reglas: HashMap<String, Vec<ReglaMetrica>>,
 }
 
 impl<S: Surfaces> Manager<S> {
     pub fn new(catalog: Catalog, runtime: Runtime, surf: S) -> Self {
-        Self { catalog, runtime, surf }
+        Self { catalog, runtime, surf, reglas: HashMap::new() }
+    }
+
+    /// Asocia las reglas de métrica que cada contexto arma al enfocarse.
+    pub fn con_reglas(mut self, reglas: HashMap<String, Vec<ReglaMetrica>>) -> Self {
+        self.reglas = reglas;
+        self
     }
 
     /// Acceso de sólo lectura a las superficies (para impls que exponen
@@ -97,14 +115,30 @@ impl<S: Surfaces> Manager<S> {
     /// (cgroup sin delegación, compositor ausente…) sin abortar el cambio.
     pub async fn switch(&mut self, to: &str, bring: BringUp) -> Result<Vec<String>, ManagerError> {
         let fx = self.runtime.plan_switch(&self.catalog, to, bring)?;
-        Ok(self.apply(fx).await)
+        let mut warnings = self.apply(fx).await;
+        // Capa 4: la intención entrante arma su set de reglas de métrica; un
+        // contexto sin reglas pasa `&[]`, que desarma las de la saliente.
+        let reglas = self.reglas.get(to).cloned().unwrap_or_default();
+        if let Err(causa) = self.surf.armar_reglas(&reglas).await {
+            warnings.push(format!("armar_reglas: {causa}"));
+        }
+        Ok(warnings)
     }
 
     /// Cierra explícitamente un contexto (libera sus recursos) sin cambiar el
     /// foco. Devuelve warnings de efectos best-effort.
     pub async fn close(&mut self, id: &str) -> Result<Vec<String>, ManagerError> {
+        // ¿Cerramos el contexto enfocado? Entonces sus reglas se desarman (las
+        // reglas viven con la intención activa). plan_close limpia `active`.
+        let era_activo = self.runtime.active() == Some(id);
         let fx = self.runtime.plan_close(&self.catalog, id)?;
-        Ok(self.apply(fx).await)
+        let mut warnings = self.apply(fx).await;
+        if era_activo {
+            if let Err(causa) = self.surf.armar_reglas(&[]).await {
+                warnings.push(format!("desarmar_reglas: {causa}"));
+            }
+        }
+        Ok(warnings)
     }
 
     /// Ejecuta una lista de efectos contra las superficies. Realimenta al
@@ -281,6 +315,10 @@ mod tests {
             self.log.push(format!("capturar {set_id}"));
             Ok([0xAB; 32])
         }
+        async fn armar_reglas(&mut self, reglas: &[ReglaMetrica]) -> Result<(), String> {
+            self.log.push(format!("armar_reglas n={}", reglas.len()));
+            Ok(())
+        }
     }
 
     fn cat() -> Catalog {
@@ -373,6 +411,33 @@ mod tests {
             m.runtime.state("oficina").unwrap().dotfile_pins.get("shell"),
             Some(&[0xABu8; 32])
         );
+    }
+
+    #[tokio::test]
+    async fn switch_arma_las_reglas_de_la_intencion_entrante() {
+        use sandokan_monitor_core::reglas::{AccionControl, Condicion};
+        // "juegos" condiciona: si algo sostiene CPU alta, detenelo.
+        let mut reglas = HashMap::new();
+        reglas.insert(
+            "juegos".to_string(),
+            vec![ReglaMetrica {
+                id: "matar-hog".into(),
+                cuando: Condicion::CpuPctMin(80.0),
+                durante: std::time::Duration::ZERO,
+                entonces: AccionControl::Detener { grace_ms: 0 },
+            }],
+        );
+        let mut m = Manager::new(cat(), Runtime::new(), Recorder::default()).con_reglas(reglas);
+        // Entrar a "oficina" (sin reglas) arma un set vacío (desarma).
+        m.switch("oficina", BringUp::Restore).await.unwrap();
+        assert!(m.surfaces().log.contains(&"armar_reglas n=0".to_string()));
+        // Entrar a "juegos" arma su regla.
+        m.switch("juegos", BringUp::Restore).await.unwrap();
+        assert!(m.surfaces().log.contains(&"armar_reglas n=1".to_string()));
+        // Cerrar el contexto enfocado desarma.
+        let antes = m.surfaces().log.len();
+        m.close("juegos").await.unwrap();
+        assert!(m.surfaces().log[antes..].contains(&"armar_reglas n=0".to_string()));
     }
 
     #[tokio::test]

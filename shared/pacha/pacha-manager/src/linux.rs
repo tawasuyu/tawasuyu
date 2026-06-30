@@ -20,6 +20,9 @@ use pacha_core::{AppSpec, FsHome, FsProfile, WawaOverlay};
 use pacha_dotfiles::{Cifrador, ConjuntoDotfiles, Instantanea, StoreObjetos};
 use pacha_llavero::Llavero;
 use sandokan::{Engine, Intent};
+use sandokan_monitor_core::reglas::ReglaMetrica;
+use sandokan_vigilante::Vigilante;
+use std::sync::Arc;
 use tokio::process::Command;
 use ulid::Ulid;
 
@@ -264,6 +267,11 @@ pub struct LinuxSurfaces {
     engine: Box<dyn Engine>,
     mirada_ctl: String,
     dotfiles: Option<DotfilesCtx>,
+    /// El `Vigilante` que corre las reglas de métrica de la intención activa
+    /// (capa 4). Lo **inyecta el daemon** (que es quien lo construye con su
+    /// propio handle al Engine y spawnea su lazo de poll); si no se cableó,
+    /// `armar_reglas` degrada con un warning en vez de fallar.
+    vigilante: Option<Arc<Vigilante>>,
 }
 
 impl LinuxSurfaces {
@@ -274,13 +282,22 @@ impl LinuxSurfaces {
             engine: sandokan::auto(&socket).await,
             mirada_ctl: "mirada-ctl".into(),
             dotfiles: None,
+            vigilante: None,
         }
     }
 
     /// Igual que [`connect`](Self::connect) pero con un `Engine` ya construido
     /// (para tests de humo o engines remotos).
     pub fn with_engine(engine: Box<dyn Engine>) -> Self {
-        Self { engine, mirada_ctl: "mirada-ctl".into(), dotfiles: None }
+        Self { engine, mirada_ctl: "mirada-ctl".into(), dotfiles: None, vigilante: None }
+    }
+
+    /// Cablea el `Vigilante` que armará las reglas de métrica por contexto. El
+    /// daemon lo construye (con su Engine) y spawnea su `correr()`; acá sólo
+    /// guardamos el handle para `armar_reglas`.
+    pub fn with_vigilante(mut self, vigilante: Arc<Vigilante>) -> Self {
+        self.vigilante = Some(vigilante);
+        self
     }
 
     /// Habilita el versionado de dotfiles (si no se llama, los efectos
@@ -505,6 +522,24 @@ impl Surfaces for LinuxSurfaces {
     async fn capture_dotfiles(&mut self, set_id: &str) -> Result<[u8; 32], String> {
         let ctx = self.dotfiles.as_mut().ok_or("dotfiles no configurados")?;
         ctx.capturar(set_id)
+    }
+
+    async fn armar_reglas(&mut self, reglas: &[ReglaMetrica]) -> Result<(), String> {
+        match &self.vigilante {
+            Some(v) => {
+                v.armar(reglas.to_vec()).await;
+                Ok(())
+            }
+            // Sin Vigilante cableado (el daemon no lo inyectó): las reglas de
+            // métrica no corren. Degrada — no es un error duro que deba
+            // impedir el cambio de contexto.
+            None => {
+                if !reglas.is_empty() {
+                    tracing::warn!(n = reglas.len(), "armar_reglas sin Vigilante: reglas de métrica ignoradas");
+                }
+                Ok(())
+            }
+        }
     }
 }
 

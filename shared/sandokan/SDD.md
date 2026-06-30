@@ -330,14 +330,19 @@ verbos+reglas existentes, no los reimplementa.
   todo por el contrato. Reglas **hot-swappables** (`armar(reglas)`): el gancho
   donde la capa 4 enchufa (una intención arma su set al entrar). Test de lazo
   cerrado: una unidad a 95 % CPU dispara y el `stop` llega al Engine mock.
-- **Capa 4** *(parcial, 2026-06-30)*: la capa de intención **ya existe** —`pacha`
-  (contextos de usuario): cada `Pacha` reconcilia overlay/vista/apps/`cpu_weight`/
-  freeze/hide vía `Effect`s que `pacha-manager` aplica sobre el `Engine` de
-  sandokan (`LinuxSurfaces`). No se reinventa. **Falta el seam con la capa 2**:
-  que un `Pacha` cargue además un set de `ReglaMetrica` y que el switch llame
-  `Vigilante::armar` (intención que *condiciona servicios* mientras está
-  enfocada, no sólo fija prioridades estáticas). El mecanismo (`armar`) ya está;
-  falta `Pacha.reglas` + un `Effect::ArmarReglas`/`Surfaces`.
+- **Capa 4** *(seam, 2026-06-30)*: la capa de intención **ya existía** —`pacha`
+  (contextos): cada `Pacha` reconcilia overlay/vista/apps/`cpu_weight`/freeze/hide
+  vía `Effect`s que `pacha-manager` aplica sobre el `Engine` (`LinuxSurfaces`).
+  No se reinventó. El **seam con la capa 2** ya está: una intención **arma sus
+  reglas de métrica** al enfocarse y las desarma al salir. Decisión de capas:
+  el binding `contexto → Vec<ReglaMetrica>` vive en `pacha-manager` (no en
+  `pacha-core`, que es **agnóstico de sandokan por diseño** —su propia
+  descripción lo dice—). `Surfaces::armar_reglas` + `Manager::con_reglas` +
+  `Manager::switch/close` arman/desarman; `LinuxSurfaces` enruta al `Vigilante`
+  real (inyectado por el daemon vía `with_vigilante`). Probado con el `Recorder`
+  (switch arma n=1, contexto sin reglas n=0, close desarma). **Pendiente**: que
+  el daemon de pacha construya el `Vigilante` y spawnee su `correr()` (pieza de
+  metal); cargar el binding desde disco junto al catálogo.
 - Capa 5: pendiente.
 
 ## Estado (2026-05-31)

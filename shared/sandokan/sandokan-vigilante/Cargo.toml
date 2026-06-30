@@ -7,12 +7,12 @@ publish.workspace = true
 description = "El lazo vivo de la capa 2: pollea el Engine, evalúa las reglas de métrica y aplica los disparos por el contrato. Reglas hot-swappables (una intención pacha arma/desarma su set). SDD §8 capa 2/4."
 
 [dependencies]
-sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }
-sandokan-monitor-core = { path = "../../../shared/sandokan/sandokan-monitor-core" }
+sandokan-core = { path = "../sandokan-core" }
+sandokan-monitor-core = { path = "../sandokan-monitor-core" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
+sandokan-lifecycle = { path = "../sandokan-lifecycle" }
 ulid = { workspace = true }
