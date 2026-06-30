@@ -36,6 +36,13 @@ use crate::{Node, NodeId, NodeKind, Source};
 
 /// Id sintético de la raíz: contiene la lista de dispositivos.
 const RAIZ: &str = "@dispositivos";
+
+/// `true` si `id` pertenece a una [`DispositivosSource`] (su raíz, o un nodo
+/// device/partición/archivo). Deja al front rutar una extracción cross-source
+/// (leer del device, escribir en POSIX) sin conocer el tipo concreto de fuente.
+pub fn es_id_de_dispositivo(id: &str) -> bool {
+    id == RAIZ || id.starts_with("dev\u{1f}") || id.starts_with("fs\u{1f}")
+}
 /// Separador de campos del [`NodeId`]: el byte `US` (unit separator). No aparece
 /// nunca en una ruta de dispositivo ni en un nombre de archivo, así que parte el
 /// id sin ambigüedad.
@@ -76,6 +83,30 @@ impl DispositivosSource {
     /// para un front que ya tenga su propia enumeración.
     pub fn con_dispositivos(dispositivos: Vec<DispositivoInfo>) -> Self {
         Self { dispositivos }
+    }
+
+    /// Reconstruye una fuente capaz de LEER por `id` —un [`NodeId`] que esta
+    /// fuente entregó—. Los ids `dev`/`fs` codifican la ruta del device, así que
+    /// `children`/`read` no consultan la lista de dispositivos: basta sembrarla
+    /// con el device del id. Es lo que deja a un worker (la cola de ops) extraer
+    /// de un dispositivo sin compartir la fuente viva entre hilos.
+    pub fn reconstruir_para(id: &NodeId) -> io::Result<Self> {
+        let ruta = match decode(id)? {
+            Loc::Dispositivo { ruta } => ruta,
+            Loc::Ruta { ruta_dev, .. } => ruta_dev,
+            Loc::Raiz => return Err(id_malo()),
+        };
+        let nombre = ruta
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(Self::con_dispositivos(vec![DispositivoInfo {
+            ruta,
+            nombre,
+            tam: None,
+            removible: false,
+            modelo: None,
+        }]))
     }
 
     fn hijos_raiz(&self) -> Vec<Node> {

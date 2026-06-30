@@ -13,7 +13,9 @@
 //! son rutas absolutas, el worker no necesita el `Navigator` del panel — sólo
 //! los ids — así que no hace falta compartir el `Box<dyn Source>` entre hilos.
 
-use nahual_source_core::{NodeId, PosixSource, Source};
+use std::path::{Path, PathBuf};
+
+use nahual_source_core::{DispositivosSource, NodeId, PosixSource, Source};
 
 /// Qué hace una operación de archivo. Los `NodeId` son rutas absolutas POSIX.
 #[derive(Clone, Debug)]
@@ -30,6 +32,11 @@ pub enum OpKind {
     Copy { id: NodeId, name: String, dest_parent: NodeId },
     /// Mover `id` dentro de `dest_parent`.
     Move { id: NodeId, name: String, dest_parent: NodeId },
+    /// **Extraer** `src_id` (de un dispositivo de bloques read-only) a un
+    /// directorio POSIX `dest_parent`, recursivo. Es la copia CROSS-SOURCE:
+    /// lee por la `Source` del device (bytes, sin montar) y escribe en disco.
+    /// `dest_parent` es una ruta POSIX absoluta; `name` el nombre destino.
+    Extraer { src_id: NodeId, name: String, es_dir: bool, dest_parent: NodeId },
 }
 
 impl OpKind {
@@ -42,6 +49,7 @@ impl OpKind {
             OpKind::Delete { name, .. } => format!("Borrar · {name}"),
             OpKind::Copy { name, .. } => format!("Copiar · {name}"),
             OpKind::Move { name, .. } => format!("Mover · {name}"),
+            OpKind::Extraer { name, .. } => format!("Extraer · {name}"),
         }
     }
 
@@ -60,8 +68,52 @@ impl OpKind {
             OpKind::Delete { id, .. } => mutable.delete(id).map(|()| None),
             OpKind::Copy { id, dest_parent, .. } => mutable.copy_into(id, dest_parent).map(Some),
             OpKind::Move { id, dest_parent, .. } => mutable.move_into(id, dest_parent).map(Some),
+            OpKind::Extraer { src_id, name, es_dir, dest_parent } => {
+                // El device se reconstruye desde el id (no se comparte la fuente
+                // viva entre hilos) y se vuelca a POSIX recursivamente.
+                let origen = DispositivosSource::reconstruir_para(src_id)?;
+                let destino = Path::new(dest_parent).join(sanear(name));
+                extraer_nodo(&origen, src_id, *es_dir, &destino)?;
+                Ok(Some(destino.to_string_lossy().into_owned()))
+            }
         }
     }
+}
+
+/// Vuelca el nodo `id` de `origen` a la ruta POSIX `destino`, recursivo. Un
+/// archivo se lee entero y se escribe; un directorio se crea y se baja a sus
+/// hijos. Los nombres se sanean (un FS ajeno podría traer `..` o `/`).
+fn extraer_nodo(
+    origen: &dyn Source,
+    id: &NodeId,
+    es_dir: bool,
+    destino: &Path,
+) -> std::io::Result<()> {
+    if es_dir {
+        std::fs::create_dir_all(destino)?;
+        for hijo in origen.children(id)? {
+            let sub = destino.join(sanear(&hijo.name));
+            extraer_nodo(origen, &hijo.id, hijo.is_container, &sub)?;
+        }
+    } else {
+        if let Some(p) = destino.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let bytes = origen.read(id)?;
+        std::fs::write(destino, bytes)?;
+    }
+    Ok(())
+}
+
+/// Sanea un nombre de archivo ajeno para que no escape del destino: sin barras,
+/// y `.`/`..` neutralizados. Un nombre vacío cae a `_`.
+fn sanear(nombre: &str) -> PathBuf {
+    let limpio = nombre.replace(['/', '\\'], "_");
+    let limpio = match limpio.as_str() {
+        "" | "." | ".." => "_".to_string(),
+        _ => limpio,
+    };
+    PathBuf::from(limpio)
 }
 
 /// Estado de un job en la cola.
@@ -187,6 +239,70 @@ mod tests {
         let mv = OpKind::Move { id: hola, name: "hola.txt".into(), dest_parent: dst };
         mv.run().unwrap().unwrap();
         assert!(!dir.path().join("hola.txt").exists());
+    }
+
+    fn which(bin: &str) -> bool {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("command -v {bin}"))
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn extraer_de_un_dispositivo_a_posix() {
+        use nahual_source_core::{DispositivoInfo, DispositivosSource};
+        use std::process::Command;
+        if !which("mkfs.fat") || !which("mcopy") {
+            eprintln!("SKIP: faltan mkfs.fat/mcopy");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        // Forjar una imagen FAT con un archivo.
+        let img = dir.path().join("disco.img");
+        fs::File::create(&img).unwrap().set_len(4 * 1024 * 1024).unwrap();
+        assert!(Command::new("mkfs.fat").arg(&img).output().unwrap().status.success());
+        let fuente = dir.path().join("hola.txt");
+        fs::write(&fuente, b"datos del usb\n").unwrap();
+        assert!(Command::new("mcopy")
+            .arg("-i").arg(&img).arg(&fuente).arg("::hola.txt")
+            .output().unwrap().status.success());
+
+        // Navegar el device para obtener el id del archivo.
+        let info = DispositivoInfo {
+            ruta: img.clone(),
+            nombre: "usb".into(),
+            tam: Some(fs::metadata(&img).unwrap().len()),
+            removible: true,
+            modelo: None,
+        };
+        let src = DispositivosSource::con_dispositivos(vec![info]);
+        let devs = src.children(&src.root().id).unwrap();
+        let parts = src.children(&devs[0].id).unwrap();
+        let files = src.children(&parts[0].id).unwrap();
+        let archivo = files.iter().find(|n| n.name == "hola.txt").expect("hola.txt");
+
+        // Extraer a un dir POSIX y verificar bytes idénticos.
+        let destino = dir.path().join("salida");
+        fs::create_dir_all(&destino).unwrap();
+        let op = OpKind::Extraer {
+            src_id: archivo.id.clone(),
+            name: "hola.txt".into(),
+            es_dir: false,
+            dest_parent: destino.to_string_lossy().into_owned(),
+        };
+        let resultado = op.run().unwrap().unwrap();
+        assert_eq!(fs::read(&resultado).unwrap(), b"datos del usb\n");
+        assert_eq!(fs::read(destino.join("hola.txt")).unwrap(), b"datos del usb\n");
+    }
+
+    #[test]
+    fn sanear_neutraliza_escapes() {
+        assert_eq!(sanear("a/b"), PathBuf::from("a_b"));
+        assert_eq!(sanear(".."), PathBuf::from("_"));
+        assert_eq!(sanear(""), PathBuf::from("_"));
+        assert_eq!(sanear("normal.txt"), PathBuf::from("normal.txt"));
     }
 
     #[test]

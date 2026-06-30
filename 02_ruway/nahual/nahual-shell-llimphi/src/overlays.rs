@@ -206,6 +206,18 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
             acciones.push((ContextMenuItem::action(rimay_localize::t("nahual-shell-move-other")), Msg::MoveToOther));
         }
     }
+    // Extracción desde un dispositivo de bloques read-only al otro panel POSIX
+    // (fuera del gate `can_edit`: el device no es escribible, pero sí extraíble).
+    if model.dual
+        && model.activo_es_dispositivo()
+        && model.panes[1 - model.focus].nav().writable().is_some()
+        && (model.cur().selected_node().is_some() || !model.cur_pane().marked.is_empty())
+    {
+        acciones.push((
+            ContextMenuItem::action(rimay_localize::t("nahual-shell-extract-other")),
+            Msg::CopyToOther,
+        ));
+    }
     // Edición del grafo de Mónadas (sólo con un grafo nouser montado): las
     // mismas ops que la command palette, contextuales a la selección.
     if model.cur().monad_graph().is_some() {

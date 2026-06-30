@@ -333,6 +333,7 @@ nahual-shell-batch-rename = Tantachasqa sutichay…
 nahual-shell-toggle-mark = Sutiy / qichuy
 nahual-shell-copy-other = Huk panelman kopiay
 nahual-shell-move-other = Huk panelman astay
+nahual-shell-extract-other = Huk panelman hurquy
 nahual-shell-add-favorite = Munasqaman yapay
 nahual-shell-select-all = Llapanta akllay
 nahual-shell-select-none = Mana imatapas akllay

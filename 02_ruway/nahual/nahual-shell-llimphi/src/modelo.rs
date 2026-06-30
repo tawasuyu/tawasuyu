@@ -835,6 +835,13 @@ impl Model {
         self.cur().writable().is_some()
     }
 
+    /// `true` si el panel activo navega un dispositivo de bloques (read-only,
+    /// leído por bytes). Habilita la EXTRACCIÓN al otro panel —su fuente no es
+    /// escribible, así que `can_edit()` es falso, pero sí se puede sacar de él—.
+    pub(crate) fn activo_es_dispositivo(&self) -> bool {
+        nahual_source_core::es_id_de_dispositivo(self.cur().current_id().as_str())
+    }
+
     /// Vuelca los campos vivos de navegación/preview a un `SessionSnap`
     /// (deja los campos del `Model` en su estado por defecto, listos para
     /// recibir los de otra sesión).

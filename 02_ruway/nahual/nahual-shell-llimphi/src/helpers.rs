@@ -465,7 +465,20 @@ pub(crate) fn copy_or_move(m: &mut Model, handle: &Handle<Msg>, is_move: bool) {
     }
     let dest = m.panes[other].nav().current_id().clone();
     for (id, name) in m.cur_pane().op_targets() {
-        let kind = if is_move {
+        let kind = if nahual_source_core::es_id_de_dispositivo(&id) {
+            // Fuente = dispositivo de bloques read-only: no es copia POSIX→POSIX
+            // sino EXTRACCIÓN (leer por bytes, escribir en disco). `move` sobre
+            // algo read-only degrada a copiar — no se borra del device.
+            let es_dir = m
+                .cur_pane()
+                .nav()
+                .children()
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.is_container)
+                .unwrap_or(false);
+            OpKind::Extraer { src_id: id, name, es_dir, dest_parent: dest.clone() }
+        } else if is_move {
             OpKind::Move { id, name, dest_parent: dest.clone() }
         } else {
             OpKind::Copy { id, name, dest_parent: dest.clone() }

@@ -412,7 +412,11 @@ impl App for Shell {
             Key::Named(NamedKey::F2) if _model.can_edit() => Some(Msg::RenamePrompt),
             Key::Named(NamedKey::Delete) if _model.can_edit() => Some(Msg::DeleteSelection),
             // F5 copiar / F6 mover al otro panel (sólo en dual).
-            Key::Named(NamedKey::F5) if _model.can_edit() && _model.dual => Some(Msg::CopyToOther),
+            Key::Named(NamedKey::F5)
+                if _model.dual && (_model.can_edit() || _model.activo_es_dispositivo()) =>
+            {
+                Some(Msg::CopyToOther)
+            }
             Key::Named(NamedKey::F6) if _model.can_edit() && _model.dual => Some(Msg::MoveToOther),
             // Puntos de entrada del front universal: montar el directorio
             // objetivo (el subdir seleccionado, o el cwd) como otra `Source`.
