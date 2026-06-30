@@ -13,6 +13,32 @@ impl DrmState {
             self.set_dpms(off);
         }
         match event {
+            // --- Tapa del laptop (SW_LID) --------------------------------
+            // En arje no hay logind que maneje la tapa, así que lo hacemos acá.
+            // Cerrar la tapa: bloquear + apagar la pantalla (DPMS off). El DPMS
+            // off corta el render (render.rs: `if dpms_off { return }`), que es
+            // la fuente principal de calor del compositor — clave para no
+            // recalentar con la tapa cerrada en la mochila. arje todavía NO
+            // suspende de verdad (`BusRequest::Suspend` es stub), así que esto es
+            // lo seguro y efectivo hasta que exista suspend real. Abrir la tapa:
+            // reanudar (encender); el lock queda hasta que el usuario autentique.
+            // Una acción explícita del usuario → ignora inhibidores de inactividad.
+            InputEvent::SwitchToggle { event } => {
+                // Llamadas calificadas al trait de smithay: el tipo de evento de
+                // libinput tiene un `switch()` inherente que devuelve el `Switch`
+                // de libinput (otro tipo) y le ganaría a la resolución por método.
+                if SwitchToggleEvent::switch(&event) == Some(Switch::Lid) {
+                    match SwitchToggleEvent::state(&event) {
+                        SwitchState::On => {
+                            self.app.request_lock();
+                            self.set_dpms(true);
+                        }
+                        SwitchState::Off => {
+                            self.set_dpms(false);
+                        }
+                    }
+                }
+            }
             // --- Teclado: intercepta los atajos del Cerebro --------------
             InputEvent::Keyboard { event } => {
                 let Some(keyboard) = self.app.keyboard.clone() else {
