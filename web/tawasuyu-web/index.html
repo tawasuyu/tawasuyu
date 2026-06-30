@@ -120,7 +120,7 @@
 
     <!-- centro: plano cartesiano de cuadrantes -->
     <section id="plano-wrap">
-      <svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
+      <svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="none">
         <defs>
           <!-- flechas de los ejes; userSpaceOnUse para no escalar con stroke -->
           <marker id="axisArrow" viewBox="0 0 10 10" refX="9" refY="5"
@@ -275,6 +275,27 @@
             <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/fuego.md" data-title="takiy" data-theme="fuego">takiy</text>
           </g>
         </g>
+      </svg>
+
+      <!-- Chakana de marca como capa cuadrada centrada en el origen. En
+           móvil el plano se estira (preserveAspectRatio="none") y la
+           chakana de adentro saldría deformada (rombo flaco); esta vive
+           fuera del SVG estirado, así mantiene su forma. Sólo visible en
+           móvil; en escritorio se usa la de adentro del plano. -->
+      <svg class="chakana-mark" viewBox="-3 -3 6 6" aria-hidden="true">
+        <circle class="chakana-glow" cx="0" cy="0" r="1.9"/>
+        <path class="chakana-body" d="
+          M -0.5 -2.5
+          L  0.5 -2.5  L  0.5 -2.0  L  1.0 -2.0  L  1.0 -1.5
+          L  1.5 -1.5  L  1.5 -1.0  L  2.0 -1.0  L  2.0 -0.5
+          L  2.5 -0.5  L  2.5  0.5  L  2.0  0.5  L  2.0  1.0
+          L  1.5  1.0  L  1.5  1.5  L  1.0  1.5  L  1.0  2.0
+          L  0.5  2.0  L  0.5  2.5  L -0.5  2.5  L -0.5  2.0
+          L -1.0  2.0  L -1.0  1.5  L -1.5  1.5  L -1.5  1.0
+          L -2.0  1.0  L -2.0  0.5  L -2.5  0.5  L -2.5 -0.5
+          L -2.0 -0.5  L -2.0 -1.0  L -1.5 -1.0  L -1.5 -1.5
+          L -1.0 -1.5  L -1.0 -2.0  L -0.5 -2.0  Z"/>
+        <circle class="chakana-core" cx="0" cy="0" r="0.7"/>
       </svg>
     </section>
 

@@ -314,6 +314,19 @@ a:hover { color: var(--fg-text); }
   filter: blur(0.6px);
 }
 
+/* Capa de marca: sólo en móvil (ver media query). En escritorio el plano
+   no se estira, así que se usa la chakana de adentro del SVG. */
+.chakana-mark {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 54px;
+  height: 54px;
+  pointer-events: none;
+}
+
 .quad { cursor: pointer; }
 .quad rect {
   fill: rgba(22, 26, 36, 0.4);
@@ -625,18 +638,28 @@ body.sidebar-collapsed #sidebar { display: none; }
   .brand-sub { display: none; }
 
   /* En pantallas chicas el plano quedaba diminuto e ilegible: que use
-     casi todo el ancho y agrandamos el texto dentro del viewBox para
-     que los nombres de cuadrante/dominio se lean. */
-  #plano-wrap { padding: 8px; }
+     todo el ancho disponible (edge-to-edge) y, si la pantalla es muy
+     alta, que crezca hasta donde quepa. Agrandamos también el texto del
+     viewBox para que los nombres de cuadrante/dominio se lean. */
+  #plano-wrap { padding: 6px; align-items: stretch; position: relative; }
   #plano {
-    width: min(96vw, 78vh);
-    max-height: calc(100vh - var(--topbar-h) - var(--taskbar-h) - 16px);
+    width: 100%;
+    /* En móvil el plano se estira a rectángulo vertical para llenar la
+       pantalla (preserveAspectRatio="none"): aprovecha ancho y alto, sin
+       el margen muerto del cuadrado. */
+    height: calc(100vh - var(--topbar-h) - 12px);
+    aspect-ratio: auto;
+    max-height: none;
   }
-  .quad-id   { font-size: 5.5px; }
-  .quad-name { font-size: 8px; letter-spacing: 0.08em; }
-  .quad-verb { font-size: 5px; }
-  .dom       { font-size: 5px; }
-  .axis-label { font-size: 5px; }
+  /* La chakana de adentro saldría deformada por el estiramiento: se oculta
+     y se usa la capa cuadrada centrada en el origen. */
+  .chakana { display: none; }
+  .chakana-mark { display: block; }
+  .quad-id   { font-size: 6px; }
+  .quad-name { font-size: 9px; letter-spacing: 0.06em; }
+  .quad-verb { font-size: 5.5px; }
+  .dom       { font-size: 5.5px; }
+  .axis-label { font-size: 5.5px; }
 }
 
 /* Header de cuadrante clickable */
