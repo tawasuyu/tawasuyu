@@ -28,6 +28,13 @@ description = "tawasuyu :: puente de sistemas de archivos ajenos (FAT) al grafo 
 bench = false
 doctest = false
 
+[features]
+default = []
+# Host-side: habilita `FuenteArchivo` (una `Fuente` sobre `std::fs::File`) para
+# absorber/navegar un `/dev/sdX` o imagen sin cargarla a RAM. APAGADA por
+# defecto: el kernel/in-cage compilan el crate `no_std`.
+std = []
+
 [dependencies]
 # La única verdad del format del grafo. Por `path`: cruza la frontera bare-metal
 # igual que lo hace el kernel.

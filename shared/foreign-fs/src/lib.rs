@@ -20,7 +20,7 @@
 //  `<hash>.obj`; in-cage llamaría a `sys_object_put`. El absorbedor sólo habla
 //  el idioma `format::Objeto`.
 // =============================================================================
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
 
@@ -30,6 +30,16 @@ use alloc::vec::Vec;
 pub mod ext4;
 pub mod fat;
 pub mod particion;
+
+/// `FuenteArchivo` — una [`Fuente`] sobre un archivo o dispositivo de bloques
+/// real (host-side, requiere `std`). Es la pieza que deja absorber/navegar un
+/// `/dev/sdX` leyendo por offset bajo demanda, sin cargarlo a RAM. Sólo se
+/// compila con la feature `std` (apagada por defecto: el kernel/in-cage usan
+/// `foreign-fs` `no_std`).
+#[cfg(feature = "std")]
+mod fuente_std;
+#[cfg(feature = "std")]
+pub use fuente_std::FuenteArchivo;
 
 /// Tamaño de trozo para archivos grandes. IDÉNTICO al host
 /// (`agora-cli::TAMANO_TROZO`): 256 KiB << `MAX_OBJETO` (1 MiB). Cambiarlo aquí

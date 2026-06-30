@@ -23,7 +23,7 @@ use alloc::vec::Vec;
 
 use crate::ext4::LectorExt4;
 use crate::fat::LectorFat;
-use crate::{absorber, Emisor, Fuente, FsError};
+use crate::{absorber, Emisor, Fuente, FsError, SubFuente};
 
 /// Tamaño de sector lógico asumido para interpretar LBAs de GPT/MBR.
 const SECTOR: u64 = 512;
@@ -363,6 +363,51 @@ pub fn absorber_dispositivo<E: Emisor>(
             continue; // swap / FS no soportado: se salta
         }
         let hash = absorber_particion(datos, p, emisor)?;
+        entradas.push(format::EntradaArbol {
+            nombre: format!("particion{}", p.indice),
+            modo: format::ModoEntrada::Directorio,
+            hash,
+        });
+    }
+    let objeto = format::objeto_arbol(entradas).map_err(FsError::Format)?;
+    emisor.emitir(&objeto)
+}
+
+/// Absorbe UNA partición de una [`Fuente`] (gemelo de [`absorber_particion`],
+/// pero perezoso: la presta como [`SubFuente`] y el lector lee sólo lo que
+/// necesita). Es el camino para tragar una partición de un dispositivo real que
+/// no entra en RAM.
+pub fn absorber_particion_fuente<F: Fuente, E: Emisor>(
+    f: &F,
+    p: &Particion,
+    emisor: &mut E,
+) -> Result<format::Hash, FsError> {
+    let sub = SubFuente::nueva(f, p.inicio, p.tam);
+    match detectar_fs_fuente(&sub) {
+        SistemaArchivos::Fat => absorber(&LectorFat::nuevo(sub)?, emisor),
+        SistemaArchivos::Ext => absorber(&LectorExt4::nuevo(sub)?, emisor),
+        SistemaArchivos::Desconocido => {
+            Err(FsError::MedioInvalido("FS de la partición no reconocido"))
+        }
+    }
+}
+
+/// Absorbe un DISPOSITIVO entero de una [`Fuente`] (gemelo de
+/// [`absorber_dispositivo`], perezoso). Cada partición con FS reconocido es un
+/// subárbol `particionN`; las desconocidas (swap, NTFS…) se omiten. Determinista:
+/// el orden de la tabla fija los nombres, idéntico a la variante `&[u8]`.
+pub fn absorber_dispositivo_fuente<F: Fuente, E: Emisor>(
+    f: &F,
+    emisor: &mut E,
+) -> Result<format::Hash, FsError> {
+    let parts = tabla_particiones_fuente(f)?;
+    let mut entradas: Vec<format::EntradaArbol> = Vec::new();
+    for p in &parts {
+        let sub = SubFuente::nueva(f, p.inicio, p.tam);
+        if detectar_fs_fuente(&sub) == SistemaArchivos::Desconocido {
+            continue;
+        }
+        let hash = absorber_particion_fuente(f, p, emisor)?;
         entradas.push(format::EntradaArbol {
             nombre: format!("particion{}", p.indice),
             modo: format::ModoEntrada::Directorio,
