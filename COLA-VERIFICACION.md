@@ -23,6 +23,16 @@ sólo cuando es un visual nuevo no certificable de otra forma.
 - [~] Prezi / vista espacial — **3 BUGS CORREGIDOS 2026-06-27:** (1) el modo no viajaba al Cuerpo enlazado (colapsaba a Hyprland — mismo fix que el cubo); (2) Win+Tab en enlazado hacía el slide «sencillo» porque el compositor sólo abría la vista espacial en embebido; (3) aun abriéndola, quedaba modal: no ciclaba ni conmutaba al soltar Super («se hace el efecto pero se queda en el mismo workspace»). Ahora es un switcher real: Win+Tab cicla el destino entre escritorios ocupados (resaltado ámbar) y al soltar Super salta a él (el compositor sondea el release y reenvía un keybind de commit; la app hace el vuelo+switch). Navegación alterna también con dígitos/click. **Probar en metal:** Win+Tab entre 2 escritorios con ventanas → debe saltar al soltar Super. Pendiente aparte: rotación viva + mapa Prezi editable en wawa-panel.
 - [x] **Camino vivo brain↔mirada-ctl certificado en metal 2026-06-29 (el que usa `pata` para su switcher):** compositor anidado + 3 `foot`; `mirada-ctl windows/workspaces/focus-*/workspace/move-to-workspace/send-to-workspace` responden correcto sobre el socket de control (`/run/user/1000/mirada-ctl.sock`). Estados como TEXTO: `loads` y `active` cambian coherentes con cada acción. **BUG ENCONTRADO Y CORREGIDO (commit `5886173d`):** la ayuda del ctl describía al revés el seguir-foco de `send`/`move-to-workspace` (la implementación en `acciones.rs` + `keymap.rs` siempre fue correcta: `send`=sin saltar, `move`=salta; lo confirmó el metal). Solo texto, sin cambio de comportamiento. Pendiente aparte: latencia del switcher a ojo (item 3 pata).
 - [ ] FUS sesiones: login→lock→switch-user→logout completo en metal
+- [~] **Hero de lock (NUEVO 2026-06-29):** al bloquear (Super+Escape) la pantalla
+  viva se congela y **encoge** hasta el thumbnail (~420 ms, easing smoothstep) con
+  velo oscuro detrás, antes de revelar el greeter. Lado compositor cableado
+  end-to-end (backend DRM): `thumbs::capturar_output` + `screencopy::capturar_textura`
+  congelan, `hero::LockHero` + `mirada_layout::hero` dan el progreso/geometría,
+  `Frame::ScaledTexture` encoge en `render_output`. Progreso puro testeado (3/3),
+  compositor 88/88, geometría 7/7. **VISUAL = METAL:** sólo se ve booteando mirada.
+  **Pendiente de tu ojo + tuneo:** alinear el thumbnail del greeter con
+  `landing_rect` (hoy cae en la tira centrada, cerca pero no pixel-perfect). Y el
+  **orbe de estado del greeter** (otra anim soñada) ya está en metal-shot.
 - [ ] Efectos nuevos: corner_radius GPU vía GlesRenderer
 - [x] **Wallpaper video por salida (worker por monitor):** ya implementado — cada `OutputCtx` corre su propio `VideoWallpaper` (drm_backend). Falta confirmar multi-monitor en metal.
 - [x] **ENCHUFADO 2026-06-27 — wallpaper ESTÁTICO por salida:** `mirada-wallpaper` ya no rechaza `output != ""`; con un conector (`output: "DP-1"`) reescribe el `OutputOverride` de esa salida en `config.ron` (editor RON quirúrgico `set_output_wallpaper_path`, preserva comentarios). 23/23 tests verdes.
