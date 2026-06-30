@@ -144,6 +144,9 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                     let ev = state.body.keybind(combo);
                     state.brain_feed(ev);
                 }
+                // Refresca el indicador de distribución: un `grp:*toggle` pudo
+                // cambiar el grupo XKB con esta tecla.
+                state.refresh_kbd_layout();
                 // El teclado cuenta como actividad (reinicia el reloj de ocio).
                 state.idle_activity();
             }

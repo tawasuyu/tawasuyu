@@ -1238,6 +1238,8 @@ fn serve_ctl(m: &mut Model, req: CtlRequest) -> CtlReply {
             layout: mirada_brain::layout_slug(m.desktop.active_workspace().params().mode)
                 .to_string(),
             on_other_outputs: m.desktop.workspaces_on_other_outputs(),
+            // Cerebro externo: no es dueño del teclado, no reporta distribución.
+            keyboard_layout: String::new(),
         }),
         // Las zonas de arrastre son del compositor; esta app de Cerebro no las
         // gestiona.

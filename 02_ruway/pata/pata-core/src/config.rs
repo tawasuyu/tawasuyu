@@ -207,6 +207,7 @@ pub fn widget_catalog() -> &'static [WidgetCatalogEntry] {
         // --- chicos, de barra (estado / control en línea) ---
         W { kind: "clock", label: "Reloj", icon: "◷", on_bar: true, on_sidebar: false },
         W { kind: "workspaces", label: "Escritorios", icon: "▦", on_bar: true, on_sidebar: false },
+        W { kind: "keyboard_layout", label: "Distribución de teclado", icon: "⌨", on_bar: true, on_sidebar: false },
         W { kind: "window_list", label: "Ventanas (taskbar)", icon: "▭", on_bar: true, on_sidebar: false },
         W { kind: "control", label: "Control (volumen/brillo)", icon: "🔊", on_bar: true, on_sidebar: false },
         W { kind: "cava", label: "Visualizador (cava)", icon: "♪", on_bar: true, on_sidebar: false },
@@ -508,6 +509,11 @@ pub struct General {
     /// `"Alt+Enter"`). El grab global lo hace el compositor (atajo de mirada).
     #[cfg_attr(feature = "serde", serde(default = "default_shuma_key"))]
     pub shuma_key: String,
+    /// Política del idle de energía (suspender/apagar por inactividad). Va
+    /// **al final** de `General`: es una tabla y TOML exige las tablas tras los
+    /// valores escalares.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub energia: EnergiaCfg,
 }
 
 impl Default for General {
@@ -520,8 +526,74 @@ impl Default for General {
             shuma_height: default_shuma_height(),
             shuma_bg: String::new(),
             shuma_key: default_shuma_key(),
+            energia: EnergiaCfg::default(),
         }
     }
+}
+
+/// Política del **idle de energía**: suspender (o apagar) por inactividad sin
+/// cortar trabajo importante. El frontend (`pata-llimphi`) la consulta contra
+/// el plano de control (sandokan — unidades ocupadas o keep-awake por label) y
+/// la carga del sistema antes de actuar; si algo trabaja, **pospone** en vez de
+/// cortar. Defaults seguros: sólo con batería, 15 min, apagado automático off.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct EnergiaCfg {
+    /// Maestro: si está en `false`, el idle de energía no hace nada.
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    pub habilitado: bool,
+    /// Segundos de inactividad para **suspender** (`0` = nunca).
+    #[cfg_attr(feature = "serde", serde(default = "default_suspender_secs"))]
+    pub suspender_secs: u32,
+    /// Segundos de inactividad para **apagar** (`0` = nunca; sólo tiene sentido
+    /// si es mayor que `suspender_secs`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub apagar_secs: u32,
+    /// Sólo actuar con batería: en AC (o escritorio) no suspende solo.
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    pub solo_con_bateria: bool,
+    /// %CPU por unidad que cuenta como ocupada (veto del plano de control). Nota:
+    /// vía arje-bus la telemetría no trae CPU (queda en 0), así que este umbral
+    /// pesa con engines que sí la miden; el grueso del «ocupado» lo da la carga.
+    #[cfg_attr(feature = "serde", serde(default = "default_cpu_ocupada_pct"))]
+    pub cpu_ocupada_pct: f64,
+    /// Carga (loadavg 1m) **por core** sobre la cual el sistema se considera
+    /// ocupado por procesos que no son unidades gestionadas (un `cargo build`…).
+    #[cfg_attr(feature = "serde", serde(default = "default_carga_por_core"))]
+    pub carga_ocupada_por_core: f64,
+    /// Subcadenas de **label de unidad** (sandokan) a mantener despiertas: si una
+    /// unidad cuyo label las contiene corre, no se suspende (backups, sync,
+    /// transcodificación…). Es la coordinación explícita con el plano de control,
+    /// y funciona vía arje-bus (los labels llegan en `list()`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub etiquetas_despiertas: Vec<String>,
+}
+
+impl Default for EnergiaCfg {
+    fn default() -> Self {
+        Self {
+            habilitado: true,
+            suspender_secs: default_suspender_secs(),
+            apagar_secs: 0,
+            solo_con_bateria: true,
+            cpu_ocupada_pct: default_cpu_ocupada_pct(),
+            carga_ocupada_por_core: default_carga_por_core(),
+            etiquetas_despiertas: Vec::new(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_suspender_secs() -> u32 {
+    900
+}
+fn default_cpu_ocupada_pct() -> f64 {
+    25.0
+}
+fn default_carga_por_core() -> f64 {
+    0.7
 }
 
 fn default_shuma_height() -> f32 {
@@ -732,7 +804,10 @@ impl Config {
             WidgetSpec::new("layout"),
         ];
         bar.center = vec![WidgetSpec::new("window_title").with("max", Prop::Num(70.0))];
-        bar.end = vec![WidgetSpec::new("clock").with("format", Prop::Str("%a %d %H:%M".to_string()))];
+        bar.end = vec![
+            WidgetSpec::new("keyboard_layout"),
+            WidgetSpec::new("clock").with("format", Prop::Str("%a %d %H:%M".to_string())),
+        ];
         Self {
             general: General::default(),
             surfaces: vec![bar],
@@ -752,6 +827,7 @@ impl Config {
         bar.start = vec![WidgetSpec::new("workspaces"), WidgetSpec::new("layout")];
         bar.center = vec![WidgetSpec::new("window_title").with("max", Prop::Num(80.0))];
         bar.end = vec![
+            WidgetSpec::new("keyboard_layout"),
             WidgetSpec::new("volume"),
             WidgetSpec::new("cpu_meter"),
             WidgetSpec::new("clock"),

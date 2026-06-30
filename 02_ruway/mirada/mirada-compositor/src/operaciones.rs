@@ -857,6 +857,46 @@ impl App {
         self.restore_zone_clipboard(idx);
     }
 
+    /// Recompila el keymap del teclado vivo con la distribución/variante/opciones
+    /// dadas (recarga en caliente). `layout`/`variant` aceptan listas con coma
+    /// para multi-distribución; `options` lleva el `grp:*toggle` de cambio. Si la
+    /// compilación falla (XKB inválido) conserva el keymap anterior. Tras
+    /// aplicarlo, refresca el indicador. No-op sin teclado.
+    pub(crate) fn apply_xkb_config(&mut self, layout: &str, variant: &str, options: &str) {
+        let Some(kbd) = self.keyboard.clone() else {
+            return;
+        };
+        let xkb = smithay::input::keyboard::XkbConfig {
+            layout,
+            variant,
+            options: (!options.is_empty()).then(|| options.to_string()),
+            ..Default::default()
+        };
+        match kbd.set_xkb_config(self, xkb) {
+            Ok(()) => self.refresh_kbd_layout(),
+            Err(e) => dlog!("mirada-compositor · XKB inválido, conservo el anterior: {e}"),
+        }
+    }
+
+    /// Relee la distribución de teclado activa del estado XKB y la cachea en
+    /// `kbd_layout` (para `mirada-ctl workspaces` → indicador de `pata`). Se
+    /// llama tras cada evento de teclado: así un `grp:*toggle` que cambió el
+    /// grupo se refleja en la barra. Barato (un lock + lectura); sólo escribe si
+    /// cambió. No-op sin teclado o con Cerebro externo (no dueño del teclado).
+    pub(crate) fn refresh_kbd_layout(&mut self) {
+        let Some(kbd) = self.keyboard.clone() else {
+            return;
+        };
+        let csv = match &self.brain {
+            Brain::Embedded(d) => d.config().xkb_layout.clone(),
+            Brain::Linked(_) => return,
+        };
+        let code = kbd.with_xkb_state(self, |ctx| crate::short_layout(ctx.xkb(), &csv));
+        if self.kbd_layout != code {
+            self.kbd_layout = code;
+        }
+    }
+
     /// Atiende una petición del API de control (`mirada-ctl`).
     pub(crate) fn serve_ctl(&mut self, req: CtlRequest) -> CtlReply {
         match req {
@@ -888,6 +928,7 @@ impl App {
                     layout: mirada_brain::layout_slug(d.active_workspace().params().mode)
                         .to_string(),
                     on_other_outputs: d.workspaces_on_other_outputs(),
+                    keyboard_layout: self.kbd_layout.clone(),
                 }),
                 Brain::Linked(_) => CtlReply::Error("el Cerebro es externo".into()),
             },
@@ -1000,6 +1041,11 @@ impl App {
                 // El autoexec viaja en la config: lo reconciliamos esté el Cerebro
                 // embebido o enlazado (lanzar/matar procesos es del Cuerpo).
                 let autoexec = cfg.autoexec.clone();
+                // La distribución de teclado (XKB) es asunto del Cuerpo: la
+                // aplicamos EN CALIENTE recompilando el keymap del teclado vivo,
+                // así cambiar `xkb_layout`/`xkb_variant`/`xkb_options` (p. ej.
+                // desde wawa-panel) surte efecto sin reiniciar la sesión.
+                self.apply_xkb_config(&cfg.xkb_layout, &cfg.xkb_variant, &cfg.xkb_options);
                 let cmds = if let Brain::Embedded(d) = &mut self.brain {
                     d.reload_config(cfg)
                 } else {

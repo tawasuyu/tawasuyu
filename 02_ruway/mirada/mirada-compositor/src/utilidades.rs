@@ -1,11 +1,35 @@
 // Funciones utilitarias del compositor.
 use crate::*;
-use smithay::input::keyboard::{xkb, ModifiersState, Keysym};
+use smithay::input::keyboard::{xkb, ModifiersState, Keysym, Xkb};
+use std::sync::Mutex;
 use smithay::input::pointer::CursorImageSurfaceData;
 use smithay::wayland::compositor::{with_states, with_surface_tree_downward, SurfaceAttributes, TraversalAction};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
 use auth_core::{ShellAction, UserInfo};
+
+/// Código corto de la distribución de teclado **activa** para el indicador de
+/// la barra. Con una sola distribución devuelve `""` (no hay nada que indicar y
+/// el widget se oculta). Con varias, prefiere el código que el usuario puso en
+/// `xkb_layout` (`csv`, p. ej. `"us,es,ru"`) indexado por el grupo activo —da
+/// justo `"US"`/`"ES"`/`"RU"`—; si el índice no calza, cae al nombre humano que
+/// reporta el keymap (`"Spanish"`…). `csv` es el `Config::xkb_layout` crudo.
+pub(crate) fn short_layout(xkb: &Mutex<Xkb>, csv: &str) -> String {
+    let g = match xkb.lock() {
+        Ok(g) => g,
+        Err(_) => return String::new(),
+    };
+    if g.layouts().count() <= 1 {
+        return String::new();
+    }
+    let active = g.active_layout();
+    let idx = active.0 as usize;
+    let codes: Vec<&str> = csv.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    match codes.get(idx) {
+        Some(code) => code.to_uppercase(),
+        None => g.layout_name(active).to_string(),
+    }
+}
 
 /// Construye la cadena de un atajo (`"Super+Shift+j"`) desde el estado de
 /// modificadores y el keysym, con el mismo format que el mapa de teclas

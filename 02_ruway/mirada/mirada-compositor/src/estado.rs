@@ -538,6 +538,12 @@ pub(crate) struct App {
     #[allow(dead_code)]
     pub(crate) output_manager_state: OutputManagerState,
     pub(crate) keyboard: Option<KeyboardHandle<App>>,
+    /// Código corto de la distribución de teclado **activa** (`"ES"`, `"US"`…),
+    /// para el indicador de `pata` vía `mirada-ctl workspaces`. Lo refresca
+    /// [`App::refresh_kbd_layout`] tras cada evento de teclado (así capta el
+    /// cambio de grupo de `grp:*toggle`) y lo siembra el arranque. Vacío con una
+    /// sola distribución (nada que indicar).
+    pub(crate) kbd_layout: String,
     /// Foco de teclado **diferido**: cuando el Cerebro enfoca una ventana
     /// recién abierta, su superficie todavía no presentó buffer (no está
     /// mapeada) y `set_focus` se perdería —el cliente puede no haber bindeado

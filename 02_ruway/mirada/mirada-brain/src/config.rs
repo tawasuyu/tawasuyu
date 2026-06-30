@@ -330,15 +330,26 @@ pub struct Config {
     /// respeta, incluida la rotación.
     #[serde(default)]
     pub overview_places: Vec<OverviewPlace>,
-    /// Distribución de teclado XKB (`"us"`, `"es"`, `"latam"`, `"fr"`, …).
-    /// Vacío = la del sistema (XKB_DEFAULT_LAYOUT / `us`). La aplica el
-    /// compositor al crear el teclado; cambia al reiniciar la sesión.
+    /// Distribución(es) de teclado XKB (`"us"`, `"es"`, `"latam"`, `"fr"`, …).
+    /// Vacío = la del sistema (XKB_DEFAULT_LAYOUT / `us`). Acepta **varias**
+    /// separadas por coma (`"us,es,ru"`): la 1.ª arranca activa y se rota con
+    /// la opción `grp:*` que se ponga en [`xkb_options`](Self::xkb_options). La
+    /// aplica el compositor; ahora también **en caliente** al guardar la config
+    /// (antes pedía reiniciar la sesión).
     #[serde(default)]
     pub xkb_layout: String,
     /// Variante XKB opcional (`"dvorak"`, `"nodeadkeys"`, …). Vacío = sin
-    /// variante.
+    /// variante. Con varias distribuciones, una variante por distribución
+    /// separada por coma (`",dvorak"` = la 1.ª default, la 2.ª dvorak).
     #[serde(default)]
     pub xkb_variant: String,
+    /// Opciones XKB, separadas por coma (`"grp:alt_shift_toggle"`,
+    /// `"grp:win_space_toggle"`, `"caps:escape"`, …). Vacío = ninguna. Acá
+    /// vive la **tecla de cambio de distribución**: con varias distribuciones
+    /// en `xkb_layout` (`"us,es,ru"`), `grp:alt_shift_toggle` las rota. Lista
+    /// completa en `/usr/share/X11/xkb/rules/evdev.lst` (sección `! option`).
+    #[serde(default)]
+    pub xkb_options: String,
     /// Scroll natural (el contenido sigue al dedo/rueda) en punteros y
     /// touchpads. La aplica el compositor a cada dispositivo libinput.
     #[serde(default)]
@@ -1117,6 +1128,7 @@ impl Default for Config {
             overview_places: Vec::new(),
             xkb_layout: String::new(),
             xkb_variant: String::new(),
+            xkb_options: String::new(),
             natural_scroll: false,
             tap_to_click: true,
             pointer_speed: 0.0,

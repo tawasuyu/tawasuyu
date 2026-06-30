@@ -75,6 +75,12 @@ pub struct WorkspacesState {
     /// reporta una versión vieja.
     #[serde(default)]
     pub on_other_outputs: Vec<usize>,
+    /// Código corto de la **distribución de teclado activa** (`"ES"`, `"US"`,
+    /// `"RU"`…), para que la barra (`pata`) pinte el indicador de layout. Vacío
+    /// si hay una sola distribución (nada que indicar), si lo reporta una
+    /// versión vieja, o con un Cerebro externo (no es dueño del teclado).
+    #[serde(default)]
+    pub keyboard_layout: String,
 }
 
 /// Una ventana en la vista de `mirada-ctl windows`.

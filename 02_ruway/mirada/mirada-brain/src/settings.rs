@@ -933,6 +933,11 @@ impl Configurable for Config {
                     self.xkb_variant = s.to_string();
                 }
             }
+            "xkb_options" => {
+                if let Some(s) = value.as_str() {
+                    self.xkb_options = s.to_string();
+                }
+            }
             "natural_scroll" => {
                 if let Some(b) = value.as_bool() {
                     self.natural_scroll = b;

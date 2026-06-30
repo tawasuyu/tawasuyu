@@ -39,6 +39,19 @@ sólo cuando es un visual nuevo no certificable de otra forma.
 - [x] **Plugins WASM grants firmados:** ya implementado y testeado (27/27, `mirada-plugin-host` trust.rs — Ed25519 sobre blake3(wasm)‖caps, fail-closed). Falta probar hot-reload con catálogo real.
 - [ ] Sesiones remotas waypipe: contra host remoto real
 - [ ] Sistema: night-light/DPMS/idle/auto-lock en metal
+- [~] **Distribución de teclado XKB — multi-layout + cambio en caliente + indicador (2026-06-30):**
+  cadena end-to-end certificada por compilación (7 crates `cargo check` verdes, `--tests`/`--examples`
+  donde aplica). `Config` gana `xkb_options` y soporta varias distribuciones por coma en
+  `xkb_layout`/`xkb_variant`; el compositor recompila el keymap **en caliente** al guardar
+  (`apply_xkb_config`, conserva el anterior si el XKB es inválido) y refresca el indicador tras
+  cada tecla (`refresh_kbd_layout`+`short_layout`). `mirada-ctl workspaces` emite `kbd=ES`; el
+  Cerebro externo/headless reportan `""`. La barra `pata` lo pinta con el widget `KbdLayout`, y
+  `wawa-panel` ofrece distribución(es)+variante(s)+tecla `grp:*toggle` (Alt+Shift, Super+Espacio…).
+  **Falta en metal (tu ojo):** (1) que `grp:*toggle` rote de verdad entre `us,es,ru…` con la tecla
+  elegida; (2) que el indicador de `pata` muestre la distribución activa al vuelo al rotar; (3) que
+  guardar `xkb_layout`/`xkb_variant`/`xkb_options` desde wawa-panel surta efecto SIN reiniciar la
+  sesión; (4) que con una sola distribución el indicador quede oculto (vacío). Nada de esto es
+  certificable headless (depende del estado XKB del teclado real).
 
 ## 3. pata — barra/panel/host de shell (42 commits)
 > Test aislado: `scripts/test-pata-mirada.sh`.

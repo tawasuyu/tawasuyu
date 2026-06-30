@@ -55,8 +55,14 @@ impl Sampler {
         let (ram, ram_used_mb, ram_total_mb) = sample_ram();
         let (sun_longitude_deg, moon_phase) = astro_from_jd(jd_from_unix(Utc::now().timestamp()));
         let (volume, muted) = sample_volume().unwrap_or((0.0, false));
-        let (active_workspace, workspace_count, workspace_occupied, workspace_others, layout) =
-            sample_workspaces().unwrap_or((0, 0, 0, 0, LayoutGlyph::Unknown));
+        let (
+            active_workspace,
+            workspace_count,
+            workspace_occupied,
+            workspace_others,
+            layout,
+            keyboard_layout,
+        ) = sample_workspaces().unwrap_or((0, 0, 0, 0, LayoutGlyph::Unknown, String::new()));
         let focused_title = sample_focused_title();
         // /proc/stat se lee una sola vez por tick: el agregado (línea `cpu`) y
         // el detalle por core (líneas `cpuN`) salen del mismo texto.
@@ -82,6 +88,7 @@ impl Sampler {
             cpu_cores_n,
             layout,
             focused_title,
+            keyboard_layout,
         }
     }
 
@@ -958,10 +965,21 @@ pub fn reconcile_optimistic(pending: Option<(u8, u8)>, sampled_active: u8) -> (O
 /// `None` si no hay compositor que responda (`mirada-ctl` falla o no está) — el
 /// switcher se oculta entonces. Corre un subproceso por muestreo (~1Hz), con el
 /// mismo tope de tiempo que el resto (barato a esa frecuencia).
-fn sample_workspaces() -> Option<(u8, u8, u16, u16, LayoutGlyph)> {
+fn sample_workspaces() -> Option<(u8, u8, u16, u16, LayoutGlyph, String)> {
     let out = run("mirada-ctl", &["workspaces"])?;
     let (active, count, occupied, others) = parse_workspaces(&out)?;
-    Some((active, count, occupied, others, parse_layout(&out)))
+    Some((active, count, occupied, others, parse_layout(&out), parse_kbd(&out)))
+}
+
+/// Extrae el `kbd=<código>` de la línea de `mirada-ctl workspaces` — la
+/// distribución de teclado activa (`"ES"`, `"US"`…) para el indicador. Cadena
+/// vacía si no viene (WM viejo o una sola distribución).
+fn parse_kbd(s: &str) -> String {
+    s.lines()
+        .find(|l| l.contains("active="))
+        .and_then(|l| l.split_whitespace().find_map(|t| t.strip_prefix("kbd=")))
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Extrae el `layout=<slug>` de la línea de `mirada-ctl workspaces` y lo mapea a

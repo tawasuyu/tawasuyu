@@ -91,6 +91,7 @@ fn main() {
                         )
                         .to_string(),
                         on_other_outputs: desktop.workspaces_on_other_outputs(),
+                        keyboard_layout: String::new(),
                     }),
                     // Las zonas son del Cuerpo (compositor); este ejemplo
                     // headless del Cerebro no las tiene.

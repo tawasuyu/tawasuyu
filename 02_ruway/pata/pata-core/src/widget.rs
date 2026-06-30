@@ -152,6 +152,11 @@ pub struct WidgetCtx {
     /// Título de la ventana enfocada, para el widget de título estilo dwm.
     /// Vacío = sin foco (o sin WM) → el widget se oculta.
     pub focused_title: String,
+    /// Código corto de la **distribución de teclado activa** (`"ES"`, `"US"`…),
+    /// para el indicador de layout de teclado. Vacío = una sola distribución (o
+    /// sin WM que reporte) → el widget [`KbdLayout`] se oculta. El host lo
+    /// muestrea del WM (en Linux, `kbd=` de `mirada-ctl workspaces`).
+    pub keyboard_layout: String,
 }
 
 impl Default for WidgetCtx {
@@ -175,6 +180,7 @@ impl Default for WidgetCtx {
             cpu_cores_n: 0,
             layout: LayoutGlyph::Unknown,
             focused_title: String::new(),
+            keyboard_layout: String::new(),
         }
     }
 }
@@ -857,6 +863,37 @@ impl Widget for WindowTitle {
     }
 }
 
+/// Indicador de **distribución de teclado** (`ES`/`US`/`RU`…), estilo el
+/// `keyboard` de waybar. El código viene del WM por [`WidgetCtx::keyboard_layout`]
+/// (en mirada, la opción `grp:*toggle` rota entre las distribuciones de
+/// `xkb_layout`). Vacío = una sola distribución (nada que indicar) o sin WM →
+/// [`WidgetView::Empty`] y desaparece.
+#[derive(Debug, Clone, Default)]
+pub struct KbdLayout {
+    code: String,
+}
+
+impl KbdLayout {
+    /// Construye desde el spec (hoy sin props; el estado viene del WM).
+    pub fn from_spec(_spec: &WidgetSpec) -> Self {
+        Self::default()
+    }
+}
+
+impl Widget for KbdLayout {
+    fn tick(&mut self, ctx: &WidgetCtx) {
+        self.code = ctx.keyboard_layout.clone();
+    }
+
+    fn view(&self) -> WidgetView {
+        if self.code.is_empty() {
+            WidgetView::Empty
+        } else {
+            WidgetView::Text(self.code.clone())
+        }
+    }
+}
+
 /// Widget de relleno para un `kind` que el core no implementa todavía. Su `view`
 /// es siempre un [`WidgetView::Placeholder`] con el nombre del kind.
 #[derive(Debug, Clone)]
@@ -897,6 +934,7 @@ pub fn build(spec: &WidgetSpec) -> Box<dyn Widget> {
         "start_button" => Box::new(StartButton::from_spec(spec)),
         "workspaces" | "workspace_switcher" => Box::new(WorkspaceSwitcher::from_spec(spec)),
         "layout" | "layout_indicator" => Box::new(LayoutIndicator::from_spec(spec)),
+        "keyboard_layout" | "kbd_layout" => Box::new(KbdLayout::from_spec(spec)),
         "window_title" | "title" => Box::new(WindowTitle::from_spec(spec)),
         _ => Box::new(Placeholder::new(&spec.kind)),
     }

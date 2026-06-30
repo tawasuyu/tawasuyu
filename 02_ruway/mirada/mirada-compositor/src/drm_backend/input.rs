@@ -231,6 +231,9 @@ impl DrmState {
                         self.app.overview_commit();
                     }
                 }
+                // Refresca el indicador de distribución: un `grp:*toggle` pudo
+                // cambiar el grupo XKB con esta tecla.
+                self.app.refresh_kbd_layout();
             }
 
             // --- Puntero: movimiento relativo (ratón, touchpad) ----------

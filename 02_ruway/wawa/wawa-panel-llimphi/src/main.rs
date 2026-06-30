@@ -3263,24 +3263,58 @@ const XKB_LAYOUTS: &[(&str, &str)] = &[
     ("gb", "Inglés (Reino Unido)"),
 ];
 
-/// Teclado: distribución XKB del compositor. REAL: la aplica mirada al crear el
-/// teclado (cambia al reiniciar la sesión). Ruteado a la config de mirada.
+/// Opciones XKB de **cambio de distribución** (`grp:*`) ofrecidas: la tecla que
+/// rota entre varias distribuciones. El id se escribe tal cual a `xkb_options`.
+const XKB_GRP_TOGGLES: &[(&str, &str)] = &[
+    ("", "Sin cambio rápido"),
+    ("grp:alt_shift_toggle", "Alt + Shift"),
+    ("grp:ctrl_shift_toggle", "Ctrl + Shift"),
+    ("grp:win_space_toggle", "Super + Espacio"),
+    ("grp:caps_toggle", "Bloq Mayús"),
+    ("grp:alts_toggle", "Ambos Alt juntos"),
+    ("grp:shifts_toggle", "Ambos Shift juntos"),
+    ("grp:lalt_toggle", "Alt izquierdo"),
+    ("grp:rwin_toggle", "Super derecho"),
+];
+
+/// Teclado: distribución(es) XKB del compositor. REAL: mirada las aplica **en
+/// caliente** al guardar (ya no pide reiniciar la sesión). Soporta **varias**
+/// distribuciones separadas por coma + una tecla `grp:*` para rotarlas; la barra
+/// `pata` pinta la distribución activa. Ruteado a la config de mirada.
 fn teclado_section(mir: &mirada_brain::Config) -> Section {
+    // Catálogo de distribuciones comunes para la ayuda (código → nombre).
+    let lista: String = XKB_LAYOUTS
+        .iter()
+        .filter(|(id, _)| !id.is_empty())
+        .map(|(id, l)| format!("{id}={l}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     Section::new("mirada::teclado", "Teclado")
         .icon("⌨")
-        .help("Distribución del teclado (XKB). Se aplica al reiniciar la sesión.")
-        .field(Field::dropdown(
-            "xkb_layout",
-            "Distribución",
-            mir.xkb_layout.clone(),
-            XKB_LAYOUTS
-                .iter()
-                .map(|(id, l)| EnumOption::new(*id, *l))
-                .collect(),
-        ))
+        .help("Distribución(es) de teclado (XKB). Se aplica al guardar, sin reiniciar.")
         .field(
-            Field::text("xkb_variant", "Variante (opcional)", mir.xkb_variant.clone())
-                .help("p. ej. dvorak, nodeadkeys — vacío = ninguna"),
+            Field::text("xkb_layout", "Distribución(es)", mir.xkb_layout.clone()).help(format!(
+                "una o varias separadas por coma (p. ej. «es» o «us,es,ru»). \
+                 Vacío = la del sistema. Comunes: {lista}"
+            )),
+        )
+        .field(
+            Field::text("xkb_variant", "Variante(s)", mir.xkb_variant.clone()).help(
+                "opcional, una por distribución separada por coma \
+                 (p. ej. «,dvorak» = 1.ª normal, 2.ª dvorak). Vacío = ninguna",
+            ),
+        )
+        .field(
+            Field::dropdown(
+                "xkb_options",
+                "Cambiar distribución con",
+                mir.xkb_options.clone(),
+                XKB_GRP_TOGGLES
+                    .iter()
+                    .map(|(id, l)| EnumOption::new(*id, *l))
+                    .collect(),
+            )
+            .help("la tecla que rota entre las distribuciones de arriba"),
         )
 }
 

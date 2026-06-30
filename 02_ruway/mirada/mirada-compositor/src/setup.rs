@@ -466,6 +466,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         idle_notifs: Vec::new(),
         seat,
         keyboard: None,
+        kbd_layout: String::new(),
         pending_kb_focus: None,
         popup_saved_focus: None,
         pointer: None,
@@ -538,6 +539,10 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     let xkb = smithay::input::keyboard::XkbConfig {
         layout: &ucfg.xkb_layout,
         variant: &ucfg.xkb_variant,
+        // `options` lleva la tecla de cambio de distribución (`grp:*toggle`) y
+        // demás ajustes XKB. `layout`/`variant` aceptan listas con coma para
+        // multi-distribución; xkb las parsea solo.
+        options: (!ucfg.xkb_options.is_empty()).then(|| ucfg.xkb_options.clone()),
         ..Default::default()
     };
     // (repeat_delay_ms, repeat_rate_hz). El delay es cuánto hay que MANTENER una
@@ -546,6 +551,11 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     // DOBLE. 600 ms es el estándar (X11 ~660, GNOME 500, KDE 600): un tap normal
     // ya no repite, mantener sí.
     let keyboard = app.seat.add_keyboard(xkb, 600, 25)?;
+    // Siembra el indicador con la distribución activa de arranque (vacío si hay
+    // una sola). `csv` es la lista cruda de distribuciones; el grupo activo la
+    // indexa para dar el código corto.
+    let csv = ucfg.xkb_layout.clone();
+    app.kbd_layout = keyboard.with_xkb_state(&mut app, |ctx| crate::short_layout(ctx.xkb(), &csv));
     app.keyboard = Some(keyboard);
     app.pointer = Some(app.seat.add_pointer());
 

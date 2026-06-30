@@ -287,7 +287,7 @@ fn print_windows_porcelain(windows: &[WindowLine]) {
 
 /// Imprime el estado de los escritorios en **una línea key=value** estable —
 /// pensada para que la consuma un *workspace switcher* (la barra de `pata`) sin
-/// parsear texto humano: `active=2 count=9 loads=1,0,3,0,0,0,0,0,0`.
+/// parsear texto humano: `active=2 count=9 loads=1,0,3,0,0,0,0,0,0 kbd=ES`.
 fn print_workspaces(st: &WorkspacesState) {
     let loads = st
         .loads
@@ -302,11 +302,12 @@ fn print_workspaces(st: &WorkspacesState) {
         .collect::<Vec<_>>()
         .join(",");
     println!(
-        "active={} count={} loads={} layout={} others={}",
+        "active={} count={} loads={} layout={} kbd={} others={}",
         st.active,
         st.loads.len(),
         loads,
         st.layout,
+        st.keyboard_layout,
         others
     );
 }
