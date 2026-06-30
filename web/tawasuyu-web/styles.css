@@ -224,13 +224,18 @@ a:hover { color: var(--fg-text); }
 }
 
 /* ===== sidebar = dock-rail (dientes) + panel del diente activo =====
- * El sidebar deja pasar los clicks (pointer-events:none); sólo los dientes
- * y el panel los capturan. Así la columna del rail queda transparente para
- * el fondo y no bloquea el plano. */
+ * Overlay FIJO por encima de todo (incluidos los documentos abiertos), así
+ * los dientes/sidebar son accesibles también mientras leés un documento.
+ * Deja pasar los clicks (pointer-events:none); sólo los dientes y el panel
+ * los capturan, para no bloquear el plano ni el documento. */
 #sidebar {
+  position: fixed;
+  left: 0;
+  top: var(--topbar-h);
+  bottom: 0;
+  z-index: 9000;
   display: flex;
   align-items: stretch;
-  flex-shrink: 0;
   font-size: 12px;
   pointer-events: none;
 }
@@ -727,12 +732,6 @@ body.sidebar-stowed #sidebar.panel-open .dock-panel { display: none; }
      flotan sobre el borde izquierdo (columna transparente, clicks pasan al
      plano). El plano queda a todo el ancho. Drag a la izquierda la guarda
      (body.sidebar-stowed); drag a la derecha la trae. */
-  #sidebar {
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    z-index: 45;
-  }
-
   /* Móvil + guardado: los dientes son FANTASMAS — invisibles para dejar leer,
      aparecen al hacer scroll/swipe (body.sidebar-ghost) y se desvanecen solos
      a los ~2.5s. Mientras están invisibles no capturan clicks. */
