@@ -439,6 +439,16 @@ pub struct SomaSpec {
     /// en `WireCard` y postcard exige layout fijo (igual que `cpu_affinity`).
     #[serde(default)]
     pub run_as: Option<RunAs>,
+    /// Plan de montajes del Ente: qué `$HOME` ve y qué archivos extra
+    /// (secretos, binds) se le inyectan DENTRO de su mount namespace. Vacío
+    /// (default) = hereda el FS del Init sin tocar. El Admin lo compila a ops
+    /// `tmpfs`/`bind` dentro del `CLONE_NEWNS` del Ente — por eso requiere
+    /// `namespaces.mount`. La frontera es física (el namespace), no una tabla
+    /// de permisos: coherente con la doctrina de wawa. `#[serde(default)]` ⇒
+    /// compat con Cards previas; SIN `skip_serializing_if` por el layout fijo
+    /// de postcard en `WireCard` (igual que `run_as`/`cpu_affinity`).
+    #[serde(default)]
+    pub mounts: MountPlan,
 }
 
 /// Identidad de usuario a la que un Ente baja privilegios antes de `execve`.
@@ -476,6 +486,85 @@ pub struct CgroupSpec {
     pub path: String,
     pub cpu_weight: Option<u32>,
     pub io_weight: Option<u32>,
+}
+
+// =====================================================================
+// MountPlan — aislamiento de FS por Ente (Fase 1 de pacha-dotfiles)
+// =====================================================================
+
+/// Declaración de qué filesystem ve un Ente dentro de su mount namespace.
+/// Puramente declarativo: el incarnator (arje-incarnate) lo traduce a
+/// syscalls `mount` reales, en orden, ejecutadas en el hijo tras
+/// `make_root_private` y antes de bajar privilegios. Default = `is_empty()`
+/// = no se toca nada.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MountPlan {
+    /// Qué `$HOME` ve el Ente.
+    #[serde(default)]
+    pub home: HomeSpec,
+    /// Bind-mounts extra (inyectar archivos/dirs ya existentes: secretos en
+    /// claro hoy, descifrados a tmpfs en Fase 2). Se aplican DESPUÉS del home,
+    /// para poder apuntar dentro de un home tmpfs recién montado.
+    #[serde(default)]
+    pub binds: Vec<BindSpec>,
+    /// Tmpfs vacíos extra a montar (scratch, runtime dirs en RAM).
+    #[serde(default)]
+    pub tmpfs: Vec<TmpfsSpec>,
+    /// Monta un tmpfs vacío sobre el `$HOME` real para ocultarlo aunque no se
+    /// reemplace por uno propio (≈ `ProtectHome=tmpfs` de systemd). Lo aplica
+    /// el incarnator sólo si `home` es `Heredar` (si no, el home ya se reemplaza).
+    #[serde(default)]
+    pub hide_home_real: Option<String>,
+}
+
+impl MountPlan {
+    /// `true` si no pide ningún cambio de FS (el incarnator puede saltearse el
+    /// armado de ops). Un `MountPlan` vacío deja el FS del Init intacto.
+    pub fn is_empty(&self) -> bool {
+        matches!(self.home, HomeSpec::Heredar)
+            && self.binds.is_empty()
+            && self.tmpfs.is_empty()
+            && self.hide_home_real.is_none()
+    }
+}
+
+/// Qué `$HOME` ve el Ente.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HomeSpec {
+    /// Hereda el `$HOME` del Init sin aislar. Default.
+    #[default]
+    Heredar,
+    /// `$HOME` es un tmpfs vacío en RAM, propio del Ente; se evapora con el
+    /// namespace. `destino` es la ruta absoluta a montar (ej. `/home/sergio`).
+    Tmpfs {
+        destino: String,
+        /// Tope de tamaño en bytes; `None` = default del kernel. SIN
+        /// `skip_serializing_if`: viaja en `WireCard` (postcard, layout fijo).
+        #[serde(default)]
+        size_bytes: Option<u64>,
+    },
+    /// Bind-montar `origen` (un subdir, p.ej. del pacha) como `destino`
+    /// (`$HOME`). El contenido vive en `origen`; los cambios persisten ahí.
+    Subdir { origen: String, destino: String },
+}
+
+/// Un bind-mount: hacer visible `origen` en `destino` dentro del namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindSpec {
+    pub origen: String,
+    pub destino: String,
+    /// Si `true`, remonta el bind como sólo-lectura (`MS_RDONLY`).
+    #[serde(default)]
+    pub ro: bool,
+}
+
+/// Un tmpfs vacío a montar en `destino`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TmpfsSpec {
+    pub destino: String,
+    /// SIN `skip_serializing_if`: viaja en `WireCard` (postcard, layout fijo).
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
 }
 
 // =====================================================================
@@ -1720,6 +1809,46 @@ mod tests {
             "payload": "Virtual", "supervision": "OneShot"
         }"#;
         assert!(Card::from_json(viejo).unwrap().soma.run_as.is_none());
+    }
+
+    #[test]
+    fn mount_plan_default_es_vacio_y_compat() {
+        // Default no toca FS.
+        let mp = MountPlan::default();
+        assert!(mp.is_empty(), "MountPlan default debe ser is_empty");
+        assert_eq!(mp.home, HomeSpec::Heredar);
+
+        // Card vieja (soma sin `mounts`) ⇒ MountPlan vacío.
+        let viejo = r#"{
+            "schema_version": 1, "id": "01HQAR53D4M2NBV8KZTYXFGS01", "label": "v",
+            "soma": { "namespaces": {"mount":false,"pid":false,"net":false,"uts":false,"ipc":false,"user":false,"cgroup":false},
+                      "rlimits": {"mem_bytes":null,"nproc":null,"nofile":null},
+                      "cgroup": {"path":"x","cpu_weight":null,"io_weight":null}, "cpu_affinity": null },
+            "payload": "Virtual", "supervision": "OneShot"
+        }"#;
+        assert!(Card::from_json(viejo).unwrap().soma.mounts.is_empty());
+    }
+
+    #[test]
+    fn mount_plan_roundtrip_json_y_wire() {
+        let mut c = Card::new("app-aislada");
+        c.soma.namespaces.mount = true;
+        c.soma.mounts = MountPlan {
+            home: HomeSpec::Tmpfs { destino: "/home/sergio".into(), size_bytes: Some(64 << 20) },
+            binds: vec![BindSpec { origen: "/run/pacha/secret".into(), destino: "/home/sergio/.ssh/id".into(), ro: true }],
+            tmpfs: vec![TmpfsSpec { destino: "/home/sergio/.cache".into(), size_bytes: None }],
+            hide_home_real: None,
+        };
+        assert!(!c.soma.mounts.is_empty());
+        // JSON.
+        let json = serde_json::to_string(&c).unwrap();
+        let back: Card = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.soma.mounts, c.soma.mounts);
+        // Wire (postcard) vía WireCard.
+        let wire: WireCard = c.clone().into();
+        let bytes = postcard::to_allocvec(&wire).unwrap();
+        let c_back: Card = postcard::from_bytes::<WireCard>(&bytes).unwrap().into();
+        assert_eq!(c_back.soma.mounts, c.soma.mounts);
     }
 
     #[test]

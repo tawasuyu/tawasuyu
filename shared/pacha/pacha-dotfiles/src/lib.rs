@@ -307,6 +307,47 @@ pub fn materializar(
     escribir_arbol(store, destino, raiz)
 }
 
+/// Dónde aterrizar un árbol materializado (Fase 1 de aislamiento por contexto).
+///
+/// La capa de captura/store/historia NO distingue destinos: sólo cambia la ruta
+/// de escritura y el *significado* de esa ruta. El aislamiento real (montar el
+/// tmpfs, bindearlo al `$HOME` del Card) vive en `SomaSpec::mounts` y lo realiza
+/// el incarnator — acá sólo escribimos el contenido donde el plan de montajes lo
+/// espera.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MaterializeTarget {
+    /// El `$HOME` real en disco. Comportamiento clásico: los dotfiles persisten.
+    Disco(PathBuf),
+    /// Una ruta tmpfs en RAM (mont. por el manager/incarnator) que luego se
+    /// bindea al `$HOME` del Card. El contenido se evapora con el namespace —
+    /// no toca el disco. Base del "secreto que no toca disco" (la cripto en
+    /// reposo llega en Fase 2; hoy el tmpfs es la garantía de no-persistencia).
+    Efimero(PathBuf),
+}
+
+impl MaterializeTarget {
+    /// La ruta de escritura, sea cual sea el destino.
+    pub fn ruta(&self) -> &Path {
+        match self {
+            MaterializeTarget::Disco(p) | MaterializeTarget::Efimero(p) => p,
+        }
+    }
+    /// `true` si el destino no persiste en disco.
+    pub fn es_efimero(&self) -> bool {
+        matches!(self, MaterializeTarget::Efimero(_))
+    }
+}
+
+/// Materializa un árbol al destino indicado. Mismo escritor para ambos; el
+/// destino sólo determina la ruta (y, semánticamente, si persiste).
+pub fn materializar_a(
+    store: &StoreObjetos,
+    destino: &MaterializeTarget,
+    raiz: Hash,
+) -> Result<(), DotError> {
+    escribir_arbol(store, destino.ruta(), raiz)
+}
+
 fn escribir_arbol(store: &StoreObjetos, dir: &Path, raiz: Hash) -> Result<(), DotError> {
     fs::create_dir_all(dir)?;
     let obj = store.traer(&raiz)?;
@@ -594,6 +635,28 @@ mod tests {
         materializar(&store, &dest, raiz).unwrap();
         materializar(&store, &dest, raiz).unwrap(); // segunda vez: sin error
         assert_eq!(fs::read(dest.join(".zshrc")).unwrap(), b"v1\n");
+    }
+
+    #[test]
+    fn materializar_a_efimero_escribe_en_la_ruta_y_no_en_disco() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let disco = tmp.path().join("disco_home"); // $HOME "real": debe quedar vacío
+        let efimero = tmp.path().join("ram"); // hace de tmpfs
+        let store = StoreObjetos::abrir(tmp.path().join("obj")).unwrap();
+        escribir(&home, ".ssh/id_ed25519", b"SECRETO\n");
+
+        let set = ConjuntoDotfiles::new("claves").con(RutaGestionada::fijado(".ssh/id_ed25519"));
+        let raiz = capturar(&store, &set, &home).unwrap();
+
+        let destino = MaterializeTarget::Efimero(efimero.clone());
+        assert!(destino.es_efimero());
+        materializar_a(&store, &destino, raiz).unwrap();
+
+        // El contenido aterrizó en la ruta efímera...
+        assert_eq!(fs::read(efimero.join(".ssh/id_ed25519")).unwrap(), b"SECRETO\n");
+        // ...y el $HOME de disco quedó intacto (nunca se escribió).
+        assert!(!disco.exists(), "Efimero no debe tocar el $HOME de disco");
     }
 
     #[test]

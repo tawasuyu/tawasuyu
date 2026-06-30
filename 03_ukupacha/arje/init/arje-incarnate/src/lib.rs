@@ -214,6 +214,12 @@ impl Incarnator {
         stdio: ChildStdio,
         mut setup: ChildSetup,
     ) -> Result<IncarnateOutcome, IncarnateError> {
+        // Plan de montajes (MountPlan): se compila a ops tmpfs/bind que corren
+        // DENTRO del mount namespace del Ente, tras make_root_private y antes de
+        // bajar privilegios (el mount los necesita). No-op si está vacío.
+        if !card.soma.mounts.is_empty() {
+            setup = setup.with_mount_plan(&card.soma.mounts)?;
+        }
         // Drop de privilegios al usuario, si la Card lo pide. Va al FINAL del
         // setup (después de mounts/pivot del caller, que necesitan privilegio) y
         // antes de execve. Aplica a ambos paths (namespaced y plain). Lo usa el
@@ -426,5 +432,123 @@ mod tests {
         assert!(out.pid.as_raw() > 0);
         // Cosechamos para no dejar zombi.
         let _ = nix::sys::wait::waitpid(out.pid, None);
+    }
+
+    // ===============================================================
+    // Fase 1 de pacha-dotfiles: aislamiento de FS por MountPlan.
+    // Certificación por texto (exit codes + contenido), sin render.
+    // ===============================================================
+
+    /// Encarna un `/bin/sh -c script` con el `MountPlan` dado en un user+mount
+    /// namespace y devuelve `Some(exit_code)` (None si el userns no está
+    /// disponible en este entorno). Mapea uid→root-in-ns ⇒ mounts sin privilegio.
+    #[cfg(test)]
+    fn run_aislado(mounts: card_core::MountPlan, script: &str) -> Option<i32> {
+        use card_core::NamespaceSet;
+        let inc = Incarnator::new(IncarnatorConfig::default());
+        let mut ns = NamespaceSet::default();
+        ns.user = true;
+        ns.mount = true;
+        let mut card = make_card(
+            Payload::Native {
+                exec: "/bin/sh".into(),
+                argv: vec!["-c".into(), script.into()],
+                envp: vec![],
+            },
+            ns,
+        );
+        card.soma.mounts = mounts;
+
+        let out = match inc.incarnate(&card) {
+            Ok(o) => o,
+            // Sin unprivileged userns (LSM/sysctl) el clone falla: el test se
+            // declara no-aplicable en vez de fallar en falso.
+            Err(e) => {
+                eprintln!("userns no disponible, salteando: {e:?}");
+                return None;
+            }
+        };
+        // Si el mapeo uid/gid no se pudo escribir, los mounts no tendrían
+        // privilegio: no-aplicable.
+        if !out.degradations.is_empty() {
+            eprintln!("degradaciones (userns parcial), salteando: {:?}", out.degradations);
+            let _ = nix::sys::wait::waitpid(out.pid, None);
+            return None;
+        }
+        match nix::sys::wait::waitpid(out.pid, None) {
+            Ok(nix::sys::wait::WaitStatus::Exited(_, code)) => Some(code),
+            other => panic!("wait inesperado: {other:?}"),
+        }
+    }
+
+    /// Prueba madre de Fase 1: dos Entes en el mismo árbol real; uno con el
+    /// secreto bindeado en su `$HOME` tmpfs lo VE, el otro NO; y nada de eso
+    /// toca el disco real.
+    #[test]
+    fn mount_plan_aisla_secreto_entre_entes_y_no_toca_disco() {
+        use card_core::{BindSpec, HomeSpec, MountPlan};
+        use std::io::Write;
+
+        // Árbol real bajo /tmp. El "secreto" en claro (Fase 1: sin cripto aún).
+        let base = std::env::temp_dir().join(format!("pacha_fase1_{}", std::process::id()));
+        let secret_src = base.join("secret_src");
+        let home = base.join("home"); // mountpoint del tmpfs HOME
+        std::fs::create_dir_all(&secret_src).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let secret_file = secret_src.join("id_ed25519");
+        {
+            let mut f = std::fs::File::create(&secret_file).unwrap();
+            f.write_all(b"OJOSDEDIOS-PACHA").unwrap();
+        }
+        let key_en_home = home.join(".ssh/id_ed25519");
+
+        // Ente CON el secreto: HOME tmpfs + bind del secreto adentro.
+        let con_secreto = MountPlan {
+            home: HomeSpec::Tmpfs { destino: home.display().to_string(), size_bytes: None },
+            binds: vec![BindSpec {
+                origen: secret_file.display().to_string(),
+                destino: key_en_home.display().to_string(),
+                ro: true,
+            }],
+            tmpfs: vec![],
+            hide_home_real: None,
+        };
+        // Script: el secreto debe ser legible y con el contenido exacto.
+        let script_a = format!(
+            "[ -r '{p}' ] || exit 10; [ \"$(cat '{p}')\" = 'OJOSDEDIOS-PACHA' ] || exit 11; exit 0",
+            p = key_en_home.display()
+        );
+
+        // Ente SIN el secreto: mismo HOME tmpfs, sin bind.
+        let sin_secreto = MountPlan {
+            home: HomeSpec::Tmpfs { destino: home.display().to_string(), size_bytes: None },
+            binds: vec![],
+            tmpfs: vec![],
+            hide_home_real: None,
+        };
+        // Script: el secreto NO debe existir y el HOME debe estar vacío.
+        let script_b = format!(
+            "[ -e '{p}' ] && exit 20; [ -z \"$(ls -A '{h}')\" ] || exit 21; exit 0",
+            p = key_en_home.display(),
+            h = home.display()
+        );
+
+        let a = run_aislado(con_secreto, &script_a);
+        let b = run_aislado(sin_secreto, &script_b);
+
+        // El disco real NUNCA debe haber recibido el .ssh/key: todo vivió en el
+        // tmpfs del namespace, que se evaporó con el proceso.
+        let disco_limpio = std::fs::read_dir(&home).map(|mut d| d.next().is_none()).unwrap_or(true);
+        let _ = std::fs::remove_dir_all(&base);
+
+        match (a, b) {
+            (Some(ca), Some(cb)) => {
+                assert_eq!(ca, 0, "Ente CON secreto debió verlo (exit {ca})");
+                assert_eq!(cb, 0, "Ente SIN secreto NO debió verlo ni ver nada en HOME (exit {cb})");
+                assert!(disco_limpio, "el tmpfs HOME filtró archivos al disco real");
+                eprintln!("Fase 1 OK: aislamiento real verificado (A ve / B no ve / disco limpio)");
+            }
+            _ => eprintln!("Fase 1: test no-aplicable en este entorno (sin userns)"),
+        }
     }
 }

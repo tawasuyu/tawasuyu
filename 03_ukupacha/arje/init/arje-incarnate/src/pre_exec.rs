@@ -45,6 +45,16 @@ pub enum ChildPreExec {
         put_old: CString,
         old_root_after: CString,
     },
+    /// Monta un tmpfs vacío en `target` (creando el mountpoint si falta).
+    /// `options` es la cadena `size=...` pre-construida por el padre, o vacía
+    /// (`""`) para el default del kernel. Requiere mount namespace.
+    MountTmpfs { target: CString, options: CString },
+    /// Bind-monta `source` sobre `target` (creando el target — dir si
+    /// `source_is_dir`, archivo vacío si no — y sus padres). Si `ro`, remonta
+    /// el bind sólo-lectura. Requiere mount namespace. Pensado para inyectar
+    /// secretos/dotfiles ya materializados (en claro hoy; desde tmpfs en RAM
+    /// en Fase 2) dentro del `$HOME` privado del Ente.
+    BindMount { source: CString, target: CString, source_is_dir: bool, ro: bool },
     /// Baja privilegios al usuario antes de `execve`: `setgroups` (suplementarios)
     /// → `setgid` → `setuid`, EN ESE ORDEN (tras `setuid` se pierde el privilegio
     /// de cambiar gid/groups). Va al FINAL de la lista (después de mounts/pivot,
@@ -122,6 +132,61 @@ impl ChildSetup {
         });
         Ok(self)
     }
+
+    /// Compila un [`MountPlan`](card_core::MountPlan) declarativo a la secuencia
+    /// de ops `mount`/`tmpfs`/`bind` que lo realizan, en orden: primero el
+    /// `$HOME` (para que los binds posteriores caigan dentro de un home tmpfs
+    /// recién montado), luego los tmpfs extra, luego los binds. Statea el origen
+    /// de cada bind AQUÍ (en el padre, con allocator) para decidir dir/archivo —
+    /// el hijo, async-signal-safe, sólo crea el target y monta.
+    ///
+    /// No-op si `plan.is_empty()`. Requiere que la Card tenga `namespaces.mount`.
+    pub fn with_mount_plan(mut self, plan: &card_core::MountPlan) -> Result<Self, IncarnateError> {
+        use card_core::HomeSpec;
+        match &plan.home {
+            HomeSpec::Heredar => {
+                if let Some(home) = &plan.hide_home_real {
+                    self.ops.push(tmpfs_op(Path::new(home), None)?);
+                }
+            }
+            HomeSpec::Tmpfs { destino, size_bytes } => {
+                self.ops.push(tmpfs_op(Path::new(destino), *size_bytes)?);
+            }
+            HomeSpec::Subdir { origen, destino } => {
+                self.ops.push(bind_op(Path::new(origen), Path::new(destino), false)?);
+            }
+        }
+        for t in &plan.tmpfs {
+            self.ops.push(tmpfs_op(Path::new(&t.destino), t.size_bytes)?);
+        }
+        for b in &plan.binds {
+            self.ops.push(bind_op(Path::new(&b.origen), Path::new(&b.destino), b.ro)?);
+        }
+        Ok(self)
+    }
+}
+
+/// Construye una op `MountTmpfs` (resuelve la cadena `size=...`).
+fn tmpfs_op(target: &Path, size_bytes: Option<u64>) -> Result<ChildPreExec, IncarnateError> {
+    let opts = match size_bytes {
+        Some(n) => format!("size={n}"),
+        None => String::new(),
+    };
+    Ok(ChildPreExec::MountTmpfs {
+        target: path_cstring(target)?,
+        options: CString::new(opts).map_err(|_| IncarnateError::InvalidRootfsPath)?,
+    })
+}
+
+/// Construye una op `BindMount`, stateando el origen para saber si es dir.
+fn bind_op(source: &Path, target: &Path, ro: bool) -> Result<ChildPreExec, IncarnateError> {
+    let source_is_dir = std::fs::metadata(source).map(|m| m.is_dir()).unwrap_or(false);
+    Ok(ChildPreExec::BindMount {
+        source: path_cstring(source)?,
+        target: path_cstring(target)?,
+        source_is_dir,
+        ro,
+    })
 }
 
 /// Convierte un `Path` a `CString` (rechaza NUL bytes interiores).
@@ -231,6 +296,82 @@ pub unsafe fn apply_unchecked(ops: &[ChildPreExec]) -> i32 {
                     return 119;
                 }
             }
+            ChildPreExec::MountTmpfs { target, options } => {
+                if unsafe { mkdir_prefixes(target.as_ptr(), true) } != 0 {
+                    return 140;
+                }
+                let data = if options.as_bytes().is_empty() {
+                    std::ptr::null()
+                } else {
+                    options.as_ptr() as *const libc::c_void
+                };
+                let r = unsafe {
+                    libc::mount(
+                        b"tmpfs\0".as_ptr() as *const libc::c_char,
+                        target.as_ptr(),
+                        b"tmpfs\0".as_ptr() as *const libc::c_char,
+                        0,
+                        data,
+                    )
+                };
+                if r != 0 {
+                    return 141;
+                }
+            }
+            ChildPreExec::BindMount { source, target, source_is_dir, ro } => {
+                // Crear el mountpoint: dir si el origen es dir, archivo vacío si no.
+                if *source_is_dir {
+                    if unsafe { mkdir_prefixes(target.as_ptr(), true) } != 0 {
+                        return 142;
+                    }
+                } else {
+                    if unsafe { mkdir_prefixes(target.as_ptr(), false) } != 0 {
+                        return 142;
+                    }
+                    let fd = unsafe {
+                        libc::open(
+                            target.as_ptr(),
+                            libc::O_CREAT | libc::O_WRONLY | libc::O_CLOEXEC,
+                            0o600,
+                        )
+                    };
+                    if fd < 0 {
+                        let e = unsafe { *libc::__errno_location() };
+                        if e != libc::EEXIST {
+                            return 143;
+                        }
+                    } else {
+                        unsafe { libc::close(fd) };
+                    }
+                }
+                let r = unsafe {
+                    libc::mount(
+                        source.as_ptr(),
+                        target.as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_BIND,
+                        std::ptr::null(),
+                    )
+                };
+                if r != 0 {
+                    return 144;
+                }
+                if *ro {
+                    // El bind RO necesita un segundo mount con MS_REMOUNT.
+                    let r = unsafe {
+                        libc::mount(
+                            source.as_ptr(),
+                            target.as_ptr(),
+                            std::ptr::null(),
+                            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
+                            std::ptr::null(),
+                        )
+                    };
+                    if r != 0 {
+                        return 145;
+                    }
+                }
+            }
             ChildPreExec::DropPrivileges { uid, gid, groups } => {
                 // ORDEN: setgroups → setgid → setuid. Tras bajar el uid se pierde
                 // el privilegio de cambiar gid/groups, así que el uid va ÚLTIMO.
@@ -247,6 +388,57 @@ pub unsafe fn apply_unchecked(ops: &[ChildPreExec]) -> i32 {
                     return 132;
                 }
             }
+        }
+    }
+    0
+}
+
+/// `mkdir -p` async-signal-safe sobre un path absoluto. Crea cada componente
+/// terminado en `/` con modo 0755, ignorando `EEXIST`. Si `include_final`, crea
+/// también el componente final. Devuelve 0 OK, -1 si el path no entra en el
+/// buffer o un `mkdir` falla por algo distinto de `EEXIST`.
+///
+/// SAFETY: corre en el hijo post-clone, pre-execve. Sólo libc; buffer en stack,
+/// sin allocator.
+unsafe fn mkdir_prefixes(path: *const libc::c_char, include_final: bool) -> i32 {
+    let mut buf = [0u8; 4096];
+    let mut len = 0usize;
+    loop {
+        let c = unsafe { *path.add(len) };
+        if c == 0 {
+            break;
+        }
+        if len >= buf.len() - 1 {
+            return -1;
+        }
+        buf[len] = c as u8;
+        len += 1;
+    }
+    let mut i = 1usize; // saltear el '/' raíz
+    while i < len {
+        if buf[i] == b'/' {
+            buf[i] = 0;
+            if unsafe { mkdir_one(buf.as_ptr() as *const libc::c_char) } != 0 {
+                return -1;
+            }
+            buf[i] = b'/';
+        }
+        i += 1;
+    }
+    if include_final && len > 0 && buf[len - 1] != b'/' {
+        if unsafe { mkdir_one(buf.as_ptr() as *const libc::c_char) } != 0 {
+            return -1;
+        }
+    }
+    0
+}
+
+/// `mkdir(path, 0755)` que tolera `EEXIST`. 0 OK / -1 error real.
+unsafe fn mkdir_one(path: *const libc::c_char) -> i32 {
+    if unsafe { libc::mkdir(path, 0o755) } != 0 {
+        let e = unsafe { *libc::__errno_location() };
+        if e != libc::EEXIST {
+            return -1;
         }
     }
     0
@@ -291,6 +483,48 @@ mod tests {
             }
             other => panic!("esperaba PivotRoot, fue {other:?}"),
         }
+    }
+
+    #[test]
+    fn mount_plan_compila_home_tmpfs_luego_binds() {
+        use card_core::{BindSpec, HomeSpec, MountPlan, TmpfsSpec};
+        let plan = MountPlan {
+            home: HomeSpec::Tmpfs { destino: "/home/u".into(), size_bytes: Some(1024) },
+            tmpfs: vec![TmpfsSpec { destino: "/home/u/.cache".into(), size_bytes: None }],
+            binds: vec![BindSpec { origen: "/etc/hostname".into(), destino: "/home/u/.host".into(), ro: true }],
+            hide_home_real: None,
+        };
+        let s = ChildSetup::new().with_mount_plan(&plan).unwrap();
+        // Orden: home tmpfs → tmpfs extra → binds.
+        match &s.ops[0] {
+            ChildPreExec::MountTmpfs { target, options } => {
+                assert_eq!(target.to_str().unwrap(), "/home/u");
+                assert_eq!(options.to_str().unwrap(), "size=1024");
+            }
+            o => panic!("op[0] esperaba MountTmpfs home, fue {o:?}"),
+        }
+        match &s.ops[1] {
+            ChildPreExec::MountTmpfs { target, options } => {
+                assert_eq!(target.to_str().unwrap(), "/home/u/.cache");
+                assert_eq!(options.to_str().unwrap(), ""); // sin size
+            }
+            o => panic!("op[1] esperaba MountTmpfs cache, fue {o:?}"),
+        }
+        match &s.ops[2] {
+            ChildPreExec::BindMount { source, target, source_is_dir, ro } => {
+                assert_eq!(source.to_str().unwrap(), "/etc/hostname");
+                assert_eq!(target.to_str().unwrap(), "/home/u/.host");
+                assert!(!source_is_dir, "/etc/hostname es archivo");
+                assert!(ro);
+            }
+            o => panic!("op[2] esperaba BindMount, fue {o:?}"),
+        }
+    }
+
+    #[test]
+    fn mount_plan_vacio_no_agrega_ops() {
+        let s = ChildSetup::new().with_mount_plan(&card_core::MountPlan::default()).unwrap();
+        assert!(s.is_empty());
     }
 
     #[test]

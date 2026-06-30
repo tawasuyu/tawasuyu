@@ -50,28 +50,42 @@ el destino y gana una capa de cifrado en el store.
   `LinuxSurfaces::with_dotfiles(DotfilesCtx)` ejecuta lo real. 4 tests.
 - `cargo check --workspace` verde.
 
-## Fase 1 — Aislamiento de FS + destino efímero (siguiente, MAYOR señal)
+## Fase 1 — Aislamiento de FS + destino efímero (mecanismo HECHO; falta wiring pacha)
 
 Secretos todavía **en claro** (la cripto va en Fase 2): primero ver el
 aislamiento funcionando.
 
-1. **`MountPlan` en `card-core::SomaSpec`.** Nuevo campo `mounts: MountPlan`
-   declarativo: `home: HomeSpec` (heredar | tmpfs | subdir-del-pacha | overlay),
-   `binds: Vec<BindSpec{origen, destino, ro}>`, `tmpfs: Vec<TmpfsSpec{destino,
-   size, fuente_secreto: Option<…>}>`, `oculta_home_real: bool` (≈ `ProtectHome`).
-   El Admin (incarnator de sandokan/arje) lo compila a `unshare(CLONE_NEWNS)` +
-   `mount`/`pivot_root`/`bind`. `namespaces.mount` ya existe como toggle.
-2. **Destino `Efimero` en `materializar`.** `pacha-dotfiles` gana un target:
-   `MaterializeTarget::{Disco(home), Efimero(mount_fd|ruta_tmpfs)}`. El efímero
-   escribe el árbol descifrado a un tmpfs montado en el namespace del Card, no al
-   `$HOME` real.
-3. **Wiring pacha→Card.** La receta de apps de un `Pacha` (`AppSpec`) gana
-   referencia opcional a un perfil de FS + qué secret-sets montar. `LinuxSurfaces`
-   arma el `SomaSpec.mounts` al `incarnate`.
-4. **Test headless:** encarnar dos Cards en un mismo pacha; uno con el secret-set
-   montado y un HOME tmpfs propio, otro sin nada. Asertar (por inspección de
-   `/proc/<pid>/mountinfo` o ejecutando un binario que lista su HOME) que el
-   primero ve el archivo y el segundo NO, y que nada apareció en el disco real.
+1. ✅ **`MountPlan` en `card-core::SomaSpec`.** Campo `mounts: MountPlan`
+   declarativo: `home: HomeSpec` (`Heredar` | `Tmpfs{destino,size_bytes}` |
+   `Subdir{origen,destino}`), `binds: Vec<BindSpec{origen, destino, ro}>`,
+   `tmpfs: Vec<TmpfsSpec{destino, size_bytes}>`, `hide_home_real: Option<String>`
+   (≈ `ProtectHome`). `#[serde(default)]` + sin `skip_serializing_if` (layout
+   fijo de postcard en `WireCard`). `is_empty()` ⇒ no-op. 2 tests (default+compat,
+   round-trip JSON+wire). _(Pendiente del enum: `HomeSpec::Overlay` — ya hay op
+   `MountOverlay`, falta el ciclo upper/work; y `fuente_secreto` en `TmpfsSpec`
+   llega con la cripto, Fase 2.)_
+2. ✅ **El incarnator lo realiza.** `arje-incarnate` ganó ops
+   `ChildPreExec::{MountTmpfs, BindMount}` (+ `mkdir_prefixes` async-signal-safe
+   para crear mountpoints) y `ChildSetup::with_mount_plan(&MountPlan)` que compila
+   el plan a ops en orden (home → tmpfs extra → binds), stateando el origen de
+   cada bind en el padre. `incarnate_full` las inserta tras `make_root_private` y
+   antes del drop de privilegios. Corre **sin root** mapeando uid→root-in-userns.
+3. ✅ **Destino `Efimero` en `pacha-dotfiles`.** `MaterializeTarget::{Disco(p),
+   Efimero(p)}` + `materializar_a`. El efímero escribe a una ruta tmpfs (RAM) que
+   el manager bindea al `$HOME` del Card; no toca disco. _(La cripto en reposo
+   sigue siendo Fase 2: hoy el tmpfs es la garantía de no-persistencia.)_
+4. ✅ **Test madre headless (certificado por texto).**
+   `mount_plan_aisla_secreto_entre_entes_y_no_toca_disco`: encarna dos Entes
+   (`/bin/sh -c …`) en el mismo árbol real; el que tiene el secreto bindeado en su
+   `$HOME` tmpfs lo lee (exit 0), el que no, no lo ve ni ve nada en su HOME
+   (exit 0), y el `$HOME` de disco real queda vacío. Verificado verde en esta
+   máquina (unprivileged userns activo); se auto-saltea donde el userns no está.
+
+**Falta de Fase 1 — wiring `pacha`→Card (punto 3 original):** la receta de apps de
+un `Pacha` (`AppSpec`) todavía NO referencia un perfil de FS ni qué secret-sets
+montar; el `pacha-manager`/`LinuxSurfaces` aún no arma `SomaSpec.mounts` al
+encarnar. El mecanismo entero está listo y certificado de punta a punta a nivel
+incarnator — resta enchufarlo desde la receta del contexto. Es lo próximo.
 
 ## Fase 2 — Cifrado en reposo (secreto por defecto)
 
