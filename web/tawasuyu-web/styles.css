@@ -247,11 +247,8 @@ body.sidebar-stowed #sidebar { display: none; }
   align-self: flex-start;       /* la franja sólo abarca los dientes */
   display: flex;
   flex-direction: column;
-  margin: 12px 6px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+  background: var(--bg-panel);   /* mismo bg que el panel: se lee como atado */
+  border-radius: 0 7px 7px 0;   /* redondeado sólo hacia el plano */
   overflow: hidden;             /* recorta las esquinas de los dientes */
   pointer-events: none;
 }
@@ -307,8 +304,7 @@ body.sidebar-stowed #sidebar { display: none; }
   pointer-events: auto;
   width: 230px;
   background: var(--bg-panel);
-  border-right: 1px solid var(--border);
-  box-shadow: 2px 0 12px rgba(0,0,0,0.4);
+  border-right: 4px solid var(--bg-app);   /* SEPARADOR GRUESO panel|rail */
   padding: 10px 0;
   overflow-y: auto;
   display: none;
@@ -366,11 +362,12 @@ body.sidebar-stowed #sidebar { display: none; }
   min-height: 0;
   overflow: hidden;
 }
+/* El plano LLENA su contenedor (que está acotado entre topbar y borde) y el
+ * SVG con preserveAspectRatio="meet" centra el cuadrado adentro. Así nunca
+ * desborda la pantalla, pase lo que pase con 100vh dinámico del móvil. */
 #plano {
-  width: min(80vh, 80%);
-  height: auto;
-  aspect-ratio: 1 / 1;
-  max-height: calc(100vh - var(--topbar-h) - var(--taskbar-h) - 48px);
+  width: 100%;
+  height: 100%;
 }
 
 .axis  { stroke: var(--fg-muted); stroke-width: 0.5; }
@@ -715,14 +712,9 @@ body.sidebar-stowed #sidebar { display: none; }
 /* responsivo: en pantallas chicas el plano usa todo el ancho; la sidebar
  * (overlay) arranca guardada y se trae con drag a la derecha. */
 @media (max-width: 800px) {
-  /* En pantallas chicas el plano queda atado al ancho (lado más corto);
-     que use todo el ancho disponible sin deformarse, y agrandamos el texto
-     del viewBox para que los nombres se lean. */
+  /* En pantallas chicas, menos padding y texto del viewBox más grande para
+     que los nombres se lean (el tamaño del plano lo maneja la regla base). */
   #plano-wrap { padding: 6px; }
-  #plano {
-    width: 100%;
-    max-height: calc(100vh - var(--topbar-h) - 12px);
-  }
   .quad-id   { font-size: 6px; }
   .quad-name { font-size: 9px; letter-spacing: 0.06em; }
   .quad-verb { font-size: 5.5px; }

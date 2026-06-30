@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
 
@@ -787,46 +787,80 @@
     document.getElementById('clock').textContent = `${hh}:${mm}`;
   }
 
-  // Brand = "volver a la chakana": minimiza todas las ventanas para dejar
-  // ver el escritorio (el plano) y lleva la URL al home (sin subpágina).
-  function minimizarTodos() {
-    for (const id of [...ventanas.keys()]) minimizar(id);
-    if (window.location.hash) {
-      window.history.pushState({}, '', window.location.pathname + window.location.search);
+  // ===== estado de la sidebar (recordado en localStorage) =====
+  // Recordamos si está guardada (stowed) y qué diente tiene el panel abierto.
+  let dienteActivo = null;
+  function activarDiente(name) {
+    const sb = document.getElementById('sidebar');
+    sb.querySelectorAll('.diente').forEach(d => d.classList.toggle('active', d.dataset.diente === name));
+    sb.querySelectorAll('.dock-section').forEach(s => s.classList.toggle('active', s.dataset.mod === name));
+    sb.classList.add('panel-open');
+    dienteActivo = name;
+  }
+  function cerrarPanel() {
+    const sb = document.getElementById('sidebar');
+    sb.querySelectorAll('.diente').forEach(d => d.classList.remove('active'));
+    sb.classList.remove('panel-open');
+    dienteActivo = null;
+  }
+  function guardarSidebar() {
+    try {
+      localStorage.setItem('tawasuyu.sidebar', JSON.stringify({
+        stowed: document.body.classList.contains('sidebar-stowed'),
+        diente: dienteActivo,
+      }));
+    } catch (e) {}
+  }
+  function restaurarSidebar() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem('tawasuyu.sidebar') || 'null'); } catch (e) {}
+    if (s) {
+      document.body.classList.toggle('sidebar-stowed', !!s.stowed);
+      if (s.diente) activarDiente(s.diente); else cerrarPanel();
+    } else {
+      // default: escritorio arranca con "sistema" abierto; móvil sólo el rail.
+      document.body.classList.remove('sidebar-stowed');
+      if (!esMovil()) activarDiente('sistema'); else cerrarPanel();
+    }
+  }
+
+  // ===== brand (tawasuyu / chakana, arriba-izquierda) =====
+  // Si hay una página abierta → vuelve al escritorio (baja las ventanas) y
+  // deja la sidebar COMO LA DEJASTE. Si ya estás en el escritorio → swapea
+  // (muestra/guarda) la sidebar.
+  function hayVentanaVisible() {
+    for (const v of ventanas.values()) if (!v.minimized) return true;
+    return false;
+  }
+  function onBrand() {
+    if (hayVentanaVisible()) {
+      for (const id of [...ventanas.keys()]) minimizar(id);
+      if (window.location.hash) {
+        window.history.pushState({}, '', window.location.pathname + window.location.search);
+      }
+      restaurarSidebar();
+    } else {
+      document.body.classList.toggle('sidebar-stowed');
+      guardarSidebar();
     }
   }
   function bindBrandHome() {
     const btn = document.getElementById('brand-home');
-    if (btn) btn.addEventListener('click', minimizarTodos);
+    if (btn) btn.addEventListener('click', onBrand);
   }
 
   // ===== dock-rail (dientes) =====
-  // 5 dientes: sistema + los 4 cuadrantes. Clic en un diente abre su panel
-  // al costado del rail; clic en el diente activo lo cierra (vuelve a sólo
-  // rail).
+  // Clic en un diente abre/cierra su panel y guarda el estado.
   function setupDockRail() {
-    const sidebar = document.getElementById('sidebar');
-    const rail = sidebar && sidebar.querySelector('.dock-rail');
+    const rail = document.querySelector('#sidebar .dock-rail');
     if (!rail) return;
-    const dientes = [...rail.querySelectorAll('.diente')];
-    function activar(name) {
-      dientes.forEach(d => d.classList.toggle('active', d.dataset.diente === name));
-      sidebar.querySelectorAll('.dock-section').forEach(s =>
-        s.classList.toggle('active', s.dataset.mod === name));
-      sidebar.classList.add('panel-open');
-    }
-    function cerrarPanel() {
-      dientes.forEach(d => d.classList.remove('active'));
-      sidebar.classList.remove('panel-open');
-    }
-    dientes.forEach(d => d.addEventListener('click', (e) => {
+    rail.querySelectorAll('.diente').forEach(d => d.addEventListener('click', (e) => {
       e.stopPropagation();
       if (d.classList.contains('active')) cerrarPanel();
-      else activar(d.dataset.diente);
+      else activarDiente(d.dataset.diente);
+      guardarSidebar();
     }));
-    // En escritorio arranca con "sistema" abierto; en móvil sólo el rail
-    // (y además guardado, ver setupSidebarDrag).
-    if (!window.matchMedia('(max-width: 800px)').matches) activar('sistema');
+    restaurarSidebar();  // estado inicial (recordado o default)
   }
 
   function esMovil() { return window.matchMedia('(max-width: 800px)').matches; }
@@ -849,8 +883,8 @@
     function onUp(e) {
       if (!start) return;
       const dx = e.clientX - start.x;
-      if (start.mode === 'stow' && dx < -UMBRAL) document.body.classList.add('sidebar-stowed');
-      if (start.mode === 'open' && dx >  UMBRAL) document.body.classList.remove('sidebar-stowed');
+      if (start.mode === 'stow' && dx < -UMBRAL) { document.body.classList.add('sidebar-stowed'); guardarSidebar(); }
+      if (start.mode === 'open' && dx >  UMBRAL) { document.body.classList.remove('sidebar-stowed'); guardarSidebar(); }
       start = null;
     }
     document.addEventListener('pointerdown', onDown);
@@ -916,8 +950,8 @@
     document.addEventListener('touchend', () => {
       if (!t) return;
       const dx = t.x - t.x0, dy = t.y - t.y0;
-      if (t.mode === 'open' && dx >  H) document.body.classList.remove('sidebar-stowed');
-      if (t.mode === 'stow' && dx < -H) document.body.classList.add('sidebar-stowed');
+      if (t.mode === 'open' && dx >  H) { document.body.classList.remove('sidebar-stowed'); guardarSidebar(); }
+      if (t.mode === 'stow' && dx < -H) { document.body.classList.add('sidebar-stowed'); guardarSidebar(); }
       if (t.mode === 'pull') {
         if (dy > PULL) { pr.classList.add('pr-spinning'); recargarFresco(); }
         else { pr.classList.remove('pr-active', 'pr-ready'); pr.style.transform = ''; }
