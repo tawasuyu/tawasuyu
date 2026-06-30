@@ -302,7 +302,19 @@ verbos+reglas existentes, no los reimplementa.
   `ActionSink` enrutando los tres verbos a un `sandokan_core::Engine`
   (fire-and-forget vía `Handle::spawn`), probado con un Engine mock que registra
   las llamadas. Cierra el lazo observar→actuar sin tocar PID 1.
-- Capas 1, 2, 4, 5: pendientes (orden de la tabla).
+- **Capa 1** *(parcial, 2026-06-30)*: `set_cpu_weight`/`freeze` cableados
+  **end-to-end** por Linux — antes existían en el contrato pero el único Engine
+  real (`ArjeEngine` sobre arje-bus) los dejaba en `Unsupported`. Ahora
+  `arje-bus` lleva `SetCpuWeight`/`Freeze` (agregados **al final** del enum: el
+  wire postcard numera por posición y hammer espeja discriminantes), arje-zero
+  los atiende escribiendo `cpu.weight`/`cgroup.freeze` con el escritor canónico
+  `arje_incarnate::cgroup` (mismo que `LocalEngine`), gateados por identidad
+  autenticada y anclados en la cadena de auditoría (`AuditAction::Cgroup`). Con
+  esto los tres Engines de Linux (`LocalEngine`, `DaemonEngine`, `ArjeEngine`)
+  honran prioridad/freeze, y la capa 3 ya tiene a quién pedirle de verdad.
+  **Pendiente de capa 1**: `restart`/`reload`, `io.weight`, `memory.high/max`,
+  `cpuset` (pin), `nice`/`ionice`, `set_ttl`/`enable`.
+- Capas 2, 4, 5: pendientes (orden de la tabla).
 
 ## Estado (2026-05-31)
 

@@ -192,6 +192,25 @@ pub enum BusRequest {
     /// `ListEntes`): no requiere identidad autenticada. La conexión deja de
     /// servir para request-response — pasa a ser un canal de sólo-eventos.
     Subscribe,
+
+    // NOTA DE WIRE: postcard numera las variantes por **posición**. Agregar
+    // siempre al FINAL — insertar en el medio corre los discriminantes de las
+    // de abajo y rompe a consumidores que los hardcodean (`hammerd::arje_link`
+    // pinea el byte de `Subscribe`; hay un test que lo delata).
+    /// Reescribe `cpu.weight` de un cgroup **ya existente** (priorizar o
+    /// deprioritizar en caliente, sin reencarnar). `cgroup_path` se direcciona
+    /// como `CgroupSpec.path` (relativo → bajo el cgroup actual); el peso es
+    /// jerárquico, así que gobierna todo el subárbol —el slice de un contexto
+    /// `pacha`— de una sola escritura. Transporte de
+    /// `sandokan_core::Engine::set_cpu_weight` (SDD §8 capa 1). Requiere
+    /// identidad autenticada; queda en la cadena de auditoría.
+    SetCpuWeight { cgroup_path: String, weight: u32 },
+
+    /// Congela (`true`) o descongela (`false`) un cgroup vía el freezer v2
+    /// (`cgroup.freeze`). Jerárquico: gobierna todo el subárbol → SIGSTOP de
+    /// grupo conservando la RAM. Transporte de `sandokan_core::Engine::freeze`
+    /// (SDD §8 capa 1). Requiere identidad autenticada; auditado.
+    Freeze { cgroup_path: String, frozen: bool },
 }
 
 /// Estado de vida de un Ente, tal como lo conoce arje-zero.

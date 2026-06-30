@@ -17,6 +17,7 @@ arje-bus = { path = "../../runtime/arje-bus" }
 arje-cas = { path = "../../runtime/arje-cas" }
 arje-kernel = { path = "../arje-kernel" }
 arje-soma = { path = "../arje-soma" }
+arje-incarnate = { path = "../arje-incarnate" }   # cgroup::{set_cpu_weight,set_frozen} para reweight/freeze en caliente
 arje-wasm = { path = "../../runtime/arje-wasm" }
 arje-snapshot = { path = "../arje-snapshot" }
 arje-brain = { path = "../../runtime/arje-brain" }

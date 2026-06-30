@@ -45,6 +45,12 @@ pub enum AuditAction {
     /// Card. La card se encarna con las capacidades del caller (ver
     /// `arje_bus::BusRequest::RunCard`).
     RunCard { caller: Ulid, label: String },
+    /// Un peer del bus reescribió la prioridad/estado de un cgroup ya
+    /// existente (reweight de `cpu.weight` o freeze/thaw vía freezer v2). Es
+    /// una operación privilegiada —cambia el scheduling de todo un subárbol—
+    /// así que se ancla en la cadena igual que `KillEnte`. `change` describe la
+    /// mutación en forma legible (p. ej. `"cpu.weight=10"`, `"freeze=on"`).
+    Cgroup { caller: Ulid, cgroup: String, change: String },
     /// El cerebro declaró una inhibición. Mientras la entrada esté viva
     /// (TTL en el grafo), las acciones escalatorias quedan bloqueadas;
     /// auditar la entrada permite reconstruir por qué.
@@ -81,6 +87,7 @@ pub enum AuditActionKind {
     KillEnte,
     SpawnCardFromDisk,
     RunCard,
+    Cgroup,
     BrainInhibit,
     PowerMgmt,
     AttestationCheck,
@@ -98,6 +105,7 @@ impl AuditActionKind {
             Self::KillEnte => "kill-ente",
             Self::SpawnCardFromDisk => "spawn-card-from-disk",
             Self::RunCard => "run-card",
+            Self::Cgroup => "cgroup",
             Self::BrainInhibit => "brain-inhibit",
             Self::PowerMgmt => "power-mgmt",
             Self::AttestationCheck => "attestation-check",
@@ -112,6 +120,7 @@ impl AuditActionKind {
             "kill-ente" => Some(Self::KillEnte),
             "spawn-card-from-disk" => Some(Self::SpawnCardFromDisk),
             "run-card" => Some(Self::RunCard),
+            "cgroup" => Some(Self::Cgroup),
             "brain-inhibit" => Some(Self::BrainInhibit),
             "power-mgmt" => Some(Self::PowerMgmt),
             "attestation-check" => Some(Self::AttestationCheck),
@@ -129,6 +138,7 @@ impl AuditAction {
             Self::KillEnte { .. } => AuditActionKind::KillEnte,
             Self::SpawnCardFromDisk { .. } => AuditActionKind::SpawnCardFromDisk,
             Self::RunCard { .. } => AuditActionKind::RunCard,
+            Self::Cgroup { .. } => AuditActionKind::Cgroup,
             Self::BrainInhibit { .. } => AuditActionKind::BrainInhibit,
             Self::PowerMgmt { .. } => AuditActionKind::PowerMgmt,
             Self::AttestationCheck { .. } => AuditActionKind::AttestationCheck,
@@ -502,6 +512,7 @@ pub fn replay_chain(
             AuditAction::KillEnte { .. }
             | AuditAction::SpawnCardFromDisk { .. }
             | AuditAction::RunCard { .. }
+            | AuditAction::Cgroup { .. }
             | AuditAction::BrainInhibit { .. }
             | AuditAction::PowerMgmt { .. }
             | AuditAction::AttestationCheck { .. } => {
@@ -856,6 +867,7 @@ mod tests {
             AuditActionKind::KillEnte,
             AuditActionKind::SpawnCardFromDisk,
             AuditActionKind::RunCard,
+            AuditActionKind::Cgroup,
             AuditActionKind::BrainInhibit,
             AuditActionKind::PowerMgmt,
         ] {

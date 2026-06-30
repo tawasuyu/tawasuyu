@@ -33,6 +33,8 @@ fn requires_auth(req: &BusRequest) -> bool {
             | BusRequest::SpawnCardFromDisk { .. }
             | BusRequest::StopCardFromDisk { .. }
             | BusRequest::RunCard { .. }
+            | BusRequest::SetCpuWeight { .. }
+            | BusRequest::Freeze { .. }
     )
 }
 
@@ -282,6 +284,38 @@ impl EnteGraph {
                         None => BusResponse::Error("ente sin proceso (Virtual/Wasm)".into()),
                     },
                     None => BusResponse::Error("ente no vivo".into()),
+                };
+                let _ = reply.send(resp);
+            }
+            BusRequest::SetCpuWeight { cgroup_path, weight } => {
+                // Verbo de control (SDD §8 capa 1): reweight en caliente del
+                // slice. El gate de auth ya garantizó caller autenticado; el
+                // escritor canónico (mismo que usa LocalEngine) resuelve el
+                // path bajo /sys/fs/cgroup y escribe `cpu.weight`.
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = match arje_incarnate::cgroup::set_cpu_weight(&cgroup_path, weight) {
+                    Ok(()) => {
+                        info!(%caller, %cgroup_path, weight, "SetCpuWeight");
+                        BusResponse::Ok
+                    }
+                    Err(e) => {
+                        warn!(%caller, %cgroup_path, weight, ?e, "SetCpuWeight falló");
+                        BusResponse::Error(e.to_string())
+                    }
+                };
+                let _ = reply.send(resp);
+            }
+            BusRequest::Freeze { cgroup_path, frozen } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = match arje_incarnate::cgroup::set_frozen(&cgroup_path, frozen) {
+                    Ok(()) => {
+                        info!(%caller, %cgroup_path, frozen, "Freeze");
+                        BusResponse::Ok
+                    }
+                    Err(e) => {
+                        warn!(%caller, %cgroup_path, frozen, ?e, "Freeze falló");
+                        BusResponse::Error(e.to_string())
+                    }
                 };
                 let _ = reply.send(resp);
             }

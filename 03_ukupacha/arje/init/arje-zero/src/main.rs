@@ -878,6 +878,13 @@ fn bus_request_to_audit(
         BusRequest::RunCard { card } => from.map(|caller| AuditAction::RunCard {
             caller, label: card.label.clone(),
         }),
+        BusRequest::SetCpuWeight { cgroup_path, weight } => from.map(|caller| AuditAction::Cgroup {
+            caller, cgroup: cgroup_path.clone(), change: format!("cpu.weight={weight}"),
+        }),
+        BusRequest::Freeze { cgroup_path, frozen } => from.map(|caller| AuditAction::Cgroup {
+            caller, cgroup: cgroup_path.clone(),
+            change: format!("freeze={}", if *frozen { "on" } else { "off" }),
+        }),
         BusRequest::PowerOff { interactive } => Some(AuditAction::PowerMgmt {
             caller: *from, peer_pid: peer.pid, kind: "PowerOff".into(), interactive: *interactive,
         }),

@@ -19,9 +19,11 @@
 //! | `list` | `ListEntes` | `started_at` no lo da el bus → `now()` aproximado. |
 //! | `status` | `EnteStatus` | sólo `Running`/`Gone`; `Gone` → `NotFound` (arje-zero no retiene exit codes). |
 //! | `telemetry` | `EnteTelemetry` | `cpu_pct = 0.0` (el bus da RSS + hilos, no CPU). |
+//! | `set_cpu_weight` | `SetCpuWeight{cgroup_path,weight}` | arje-zero escribe `cpu.weight` del slice (SDD §8 capa 1). |
+//! | `freeze` | `Freeze{cgroup_path,frozen}` | arje-zero escribe `cgroup.freeze` (freezer v2). |
 //!
-//! `run`/`stop` requieren que el bridge corra como un Ente autenticado con
-//! `Capability::Spawn` (igual que `arje-systemd1-compat`); `list`/`status`/
+//! `run`/`stop`/`set_cpu_weight`/`freeze` requieren que el bridge corra como un
+//! Ente autenticado (igual que `arje-systemd1-compat`); `list`/`status`/
 //! `telemetry` son anónimos.
 
 #![forbid(unsafe_code)]
@@ -182,6 +184,32 @@ impl Engine for ArjeEngine {
             BusResponse::Error(_) => Err(EngineError::NotFound(card_id)),
             other => Err(EngineError::Transport(format!(
                 "respuesta inesperada a EnteTelemetry: {other:?}"
+            ))),
+        }
+    }
+
+    async fn set_cpu_weight(&self, cgroup_path: String, weight: u32) -> Result<(), EngineError> {
+        // SDD §8 capa 1: el verbo de prioridad viaja por el bus hasta arje-zero,
+        // que escribe `cpu.weight` del slice. Antes caía en el default
+        // `Unsupported` —declarado en el contrato, pero no cableado—.
+        match self
+            .call(BusRequest::SetCpuWeight { cgroup_path, weight })
+            .await?
+        {
+            BusResponse::Ok => Ok(()),
+            BusResponse::Error(e) => Err(EngineError::Cgroup(e)),
+            other => Err(EngineError::Transport(format!(
+                "respuesta inesperada a SetCpuWeight: {other:?}"
+            ))),
+        }
+    }
+
+    async fn freeze(&self, cgroup_path: String, frozen: bool) -> Result<(), EngineError> {
+        match self.call(BusRequest::Freeze { cgroup_path, frozen }).await? {
+            BusResponse::Ok => Ok(()),
+            BusResponse::Error(e) => Err(EngineError::Cgroup(e)),
+            other => Err(EngineError::Transport(format!(
+                "respuesta inesperada a Freeze: {other:?}"
             ))),
         }
     }
