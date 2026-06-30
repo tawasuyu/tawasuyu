@@ -104,6 +104,12 @@ async fn dispatch<E: InteractiveEngine>(engine: &E, req: DaemonRequest) -> Daemo
                 Err(e) => DaemonResponse::Err(e),
             }
         }
+        DaemonRequest::Restart { card_id, grace_ms } => {
+            match engine.restart(card_id, Duration::from_millis(grace_ms)).await {
+                Ok(()) => DaemonResponse::Done,
+                Err(e) => DaemonResponse::Err(e),
+            }
+        }
     }
 }
 

@@ -358,6 +358,7 @@ impl InteractiveEngine for LocalEngine {
             card_id,
             Entity {
                 handle: handle.clone(),
+                intent: intent.clone(),
                 pid,
                 state: LifecycleState::Running,
                 tracker: crate::default_tracker(),

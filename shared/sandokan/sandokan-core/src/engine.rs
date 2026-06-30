@@ -55,4 +55,16 @@ pub trait Engine: Send + Sync {
         let _ = (cgroup_path, frozen);
         Err(EngineError::Unsupported("freeze".into()))
     }
+
+    /// Reinicia una unidad: la detiene (con `grace`, igual que `stop`) y la
+    /// vuelve a encarnar con la **misma Card** (mismo `card_id`). Para
+    /// `LocalEngine` es stop→run del intent guardado; para un supervisor
+    /// (arje-zero) el reinicio puede delegarse en su `RestartPolicy`. Default
+    /// `Unsupported` para engines que no retienen el intent (remoto/mock) o
+    /// cuyo reinicio vive en otra capa. Pensado para que una regla de métrica o
+    /// del cerebro recicle una unidad colgada sin matarla a mano.
+    async fn restart(&self, card_id: Ulid, grace: Duration) -> Result<(), EngineError> {
+        let _ = (card_id, grace);
+        Err(EngineError::Unsupported("restart".into()))
+    }
 }

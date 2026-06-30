@@ -126,6 +126,15 @@ impl Engine for DaemonEngine {
             _ => Err(mismatch()),
         }
     }
+
+    async fn restart(&self, card_id: Ulid, grace: Duration) -> Result<(), EngineError> {
+        let req = DaemonRequest::Restart { card_id, grace_ms: grace.as_millis() as u64 };
+        match self.roundtrip(req).await? {
+            DaemonResponse::Done => Ok(()),
+            DaemonResponse::Err(e) => Err(e),
+            _ => Err(mismatch()),
+        }
+    }
 }
 
 #[async_trait]

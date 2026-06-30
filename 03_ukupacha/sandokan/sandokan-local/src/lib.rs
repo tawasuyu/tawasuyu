@@ -32,6 +32,10 @@ use ulid::Ulid;
 struct Entity {
     handle: ExecHandle,
     pid: i32,
+    /// El intent con que se encarnó, retenido para poder **reiniciarla** sin
+    /// que el caller vuelva a traer la Card (`restart` = stop + run del mismo
+    /// intent). Es el único estado nuevo que `restart` necesita.
+    intent: Intent,
     state: LifecycleState,
     /// Conteo + política de restart. El tracker se incrementa en cada
     /// transición a un estado terminal de fallo (`Exited{code != 0}`,
@@ -282,6 +286,7 @@ impl Engine for LocalEngine {
                 card_id,
                 Entity {
                     handle: handle.clone(),
+                    intent: intent.clone(),
                     pid: VIRTUAL_PID,
                     state: LifecycleState::Running,
                     tracker: default_tracker(),
@@ -312,6 +317,7 @@ impl Engine for LocalEngine {
                 card_id,
                 Entity {
                     handle: handle.clone(),
+                    intent: intent.clone(),
                     pid: WASM_PID,
                     state: LifecycleState::Running,
                     tracker: default_tracker(),
@@ -345,6 +351,7 @@ impl Engine for LocalEngine {
             card_id,
             Entity {
                 handle: handle.clone(),
+                intent: intent.clone(),
                 pid: outcome.pid.as_raw(),
                 state: LifecycleState::Running,
                 tracker: default_tracker(),
@@ -465,6 +472,22 @@ impl Engine for LocalEngine {
         arje_incarnate::cgroup::set_frozen(&cgroup_path, frozen)
             .map_err(|e| EngineError::Cgroup(e.to_string()))
     }
+
+    async fn restart(&self, card_id: Ulid, grace: Duration) -> Result<(), EngineError> {
+        // Capturamos el intent ANTES de parar (stop suelta el registro de la
+        // entidad). Reiniciar es stop→run del mismo intent: misma Card, mismo
+        // card_id (Card.id es estable), entidad fresca en Running. El tracker
+        // de restart arranca de cero — es un reinicio deliberado, no un fallo
+        // contado (esos los cuenta `on_failure` en el reap).
+        let intent = {
+            let reg = self.registry.lock().expect("registry lock");
+            reg.get(&card_id)
+                .map(|e| e.intent.clone())
+                .ok_or(EngineError::NotFound(card_id))?
+        };
+        self.stop(card_id, grace).await?;
+        self.run(intent).await.map(|_| ())
+    }
 }
 
 #[cfg(test)]
@@ -529,6 +552,37 @@ mod tests {
         e.stop(id, Duration::ZERO).await.expect("stop");
         assert!(e.list().await.unwrap().is_empty());
         assert!(e.status(id).await.unwrap().is_terminal());
+    }
+
+    #[tokio::test]
+    async fn restart_recicla_la_unidad_con_el_mismo_id() {
+        let e = LocalEngine::new();
+        let card = sh_card("sandbox-restart", "sleep 30");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run");
+        let pid_inicial = e.telemetry(id).await.unwrap().card_id; // (id estable)
+        assert_eq!(pid_inicial, id);
+        assert_eq!(e.status(id).await.unwrap(), LifecycleState::Running);
+
+        // Reiniciar: la para y la vuelve a encarnar con el mismo card_id.
+        e.restart(id, Duration::ZERO).await.expect("restart");
+
+        // Sigue viva, con el mismo id, y es un proceso nuevo (RSS > 0).
+        assert_eq!(e.status(id).await.unwrap(), LifecycleState::Running);
+        assert_eq!(e.list().await.unwrap().len(), 1);
+        assert!(e.telemetry(id).await.unwrap().mem_bytes > 0);
+
+        e.stop(id, Duration::ZERO).await.expect("stop");
+        assert!(e.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn restart_de_inexistente_es_not_found() {
+        let e = LocalEngine::new();
+        assert!(matches!(
+            e.restart(Ulid::new(), Duration::ZERO).await,
+            Err(EngineError::NotFound(_))
+        ));
     }
 
     #[tokio::test]

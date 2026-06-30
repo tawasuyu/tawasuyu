@@ -25,6 +25,13 @@
 //! `run`/`stop`/`set_cpu_weight`/`freeze` requieren que el bridge corra como un
 //! Ente autenticado (igual que `arje-systemd1-compat`); `list`/`status`/
 //! `telemetry` son anónimos.
+//!
+//! `restart` queda **`Unsupported`** (default del contrato) a propósito: en arje
+//! el reinicio de una unidad supervisada lo gobierna su `RestartPolicy` —muere y
+//! el init la re-erige—, no un stop+run by-id como en `LocalEngine`. Cablear un
+//! `restart` explícito por el bus (kill marcando + re-encarnar la card del
+//! grafo) es trabajo de PID 1 pendiente (SDD §8 capa 1); hasta entonces el verbo
+//! lo cubren `LocalEngine`/`DaemonEngine` (sesiones/sandboxes).
 
 #![forbid(unsafe_code)]
 

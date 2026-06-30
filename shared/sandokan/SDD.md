@@ -312,7 +312,13 @@ verbos+reglas existentes, no los reimplementa.
   autenticada y anclados en la cadena de auditoría (`AuditAction::Cgroup`). Con
   esto los tres Engines de Linux (`LocalEngine`, `DaemonEngine`, `ArjeEngine`)
   honran prioridad/freeze, y la capa 3 ya tiene a quién pedirle de verdad.
-  **Pendiente de capa 1**: `restart`/`reload`, `io.weight`, `memory.high/max`,
+  **`restart`** ✅ (2026-06-30): verbo del contrato (default `Unsupported`),
+  implementado en `LocalEngine` (retiene el `intent` en `Entity` → stop+run del
+  mismo, mismo `card_id`) y `DaemonEngine` (passthrough, `DaemonRequest::Restart`
+  al final del enum). `ArjeEngine` lo deja `Unsupported` a propósito: en arje el
+  reinicio de una unidad supervisada lo gobierna su `RestartPolicy`; un restart
+  by-id por el bus (kill+re-encarnar del grafo) es trabajo de PID 1 pendiente.
+  **Pendiente de capa 1**: restart en arje, `io.weight`, `memory.high/max`,
   `cpuset` (pin), `nice`/`ionice`, `set_ttl`/`enable`.
 - **Capa 2** *(núcleo, 2026-06-30)*: motor de disparadores por **métrica** en
   `sandokan-monitor-core::reglas` (puro, como `energia`): `Condicion`

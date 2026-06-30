@@ -26,6 +26,9 @@ pub enum DaemonRequest {
     SetCpuWeight { cgroup_path: String, weight: u32 },
     /// Freeze/unfreeze de un cgroup (freezer v2, jerárquico).
     Freeze { cgroup_path: String, frozen: bool },
+    /// Reinicia una unidad (stop→run del intent retenido). Append al final del
+    /// enum: postcard numera por posición y un cliente viejo no debe correrse.
+    Restart { card_id: Ulid, grace_ms: u64 },
 }
 
 /// Response del daemon al cliente. Una variante por resultado posible.
