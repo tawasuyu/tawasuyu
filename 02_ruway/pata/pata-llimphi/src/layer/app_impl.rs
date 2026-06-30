@@ -1624,6 +1624,14 @@ impl LayerApp {
                 self.control_extras.cafe = on;
                 self.marcar_menu_dirty();
             }
+            Msg::Magnify(pct) => {
+                // Lupa de pantalla: el compositor la aplica (sigue el puntero).
+                // Guardamos el nivel para resaltar el segmento activo (best-effort:
+                // los atajos de teclado lo mueven sin que pata se entere).
+                crate::spawn_cmd(&format!("mirada-ctl magnify {pct}"));
+                self.control_extras.magnify_pct = pct;
+                self.marcar_menu_dirty();
+            }
             Msg::NetworkToggle => {
                 self.net_password = None;
                 self.set_menu_keyboard(false);

@@ -49,6 +49,10 @@ pub struct ControlExtras {
     /// Contextos de usuario (`pacha`): `(id, activo)`. Vacío si no hay daemon
     /// `pacha` corriendo (o ninguno definido). El chip activo va en acento.
     pub pachas: Vec<(String, bool)>,
+    /// **Lupa**: factor de zoom de pantalla completa vigente, en porcentaje
+    /// (`100` = 1.0× apagada). Lo fija pata al clickear el segmento (best-effort:
+    /// no hay readback del compositor, así que los atajos lo mueven sin avisar).
+    pub magnify_pct: u16,
 }
 
 impl ControlExtras {
@@ -64,6 +68,9 @@ impl ControlExtras {
             night: night_on(),
             cafe: false, // estado interno; el host lo sobrescribe con el suyo.
             pachas: read_pachas(),
+            // Sin readback del compositor; arranca «apagada» y se actualiza al
+            // clickear un segmento de la lupa.
+            magnify_pct: 100,
         }
     }
 }
@@ -289,7 +296,65 @@ pub(super) fn control_sections(
     }
     hijos.push(switch_row("Luz nocturna", extras.night, theme, Msg::ControlNight));
     hijos.push(switch_row("Mantener despierto", extras.cafe, theme, Msg::ControlCafe));
+    hijos.push(lupa_row(extras.magnify_pct, theme));
     hijos
+}
+
+/// Niveles de **lupa** que ofrece el control, como `(porcentaje, rótulo)`. `100`
+/// = apagada (1.0×). El paso casa con `MAGNIFY_STEP_PCT` del Cerebro.
+pub(super) const NIVELES_LUPA: [(u16, &str); 4] =
+    [(100, "1×"), (150, "1.5×"), (200, "2×"), (300, "3×")];
+
+/// Fila «Lupa» + selector segmentado de factores de zoom de pantalla completa
+/// (accesibilidad). El activo va en acento; al click manda `Msg::Magnify(pct)`
+/// (→ `mirada-ctl magnify <pct>`). Calca el patrón de [`perfil_row`].
+fn lupa_row(actual_pct: u16, theme: &Theme) -> View<Msg> {
+    let etiqueta = View::new(Style {
+        size: Size { width: length(60.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text("Lupa".to_string(), 12.5, theme.fg_text);
+
+    let botones: Vec<View<Msg>> = NIVELES_LUPA
+        .iter()
+        .map(|(pct, rotulo)| {
+            // El «1×» (apagada) cubre cualquier factor <=100; el resto, igualdad.
+            let activo = if *pct == 100 { actual_pct <= 100 } else { *pct == actual_pct };
+            let v = View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: auto(), height: length(24.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .radius(5.0)
+            .hover_fill(theme.bg_button_hover)
+            .on_click(Msg::Magnify(*pct))
+            .text(
+                rotulo.to_string(),
+                11.0,
+                if activo { theme.bg_panel } else { theme.fg_muted },
+            );
+            if activo {
+                v.fill(theme.accent)
+            } else {
+                v.fill(theme.bg_button)
+            }
+        })
+        .collect();
+
+    let seg = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(botones);
+
+    fila_base(vec![etiqueta, seg])
 }
 
 /// Construye un [`ControlExtras`] con los datos **vivos** del modelo (batería,
@@ -310,6 +375,7 @@ pub fn extras_vivos(
         night: base.night,
         cafe: base.cafe,
         pachas: base.pachas.clone(),
+        magnify_pct: base.magnify_pct,
     }
 }
 
@@ -365,6 +431,8 @@ pub fn control_center_view(panel_h: f32, d: &CentroDatos, theme: &Theme) -> View
     }
     hijos.push(switch_row("Luz nocturna", d.extras.night, theme, Msg::ControlNight));
     hijos.push(switch_row("Mantener despierto", d.extras.cafe, theme, Msg::ControlCafe));
+    // Lupa (zoom de pantalla completa, accesibilidad).
+    hijos.push(lupa_row(d.extras.magnify_pct, theme));
     // Contextos de usuario (pacha): chips de modo de uso. Sólo si hay alguno.
     if !d.extras.pachas.is_empty() {
         hijos.push(pacha_row(&d.extras.pachas, theme));

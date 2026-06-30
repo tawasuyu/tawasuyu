@@ -18,6 +18,15 @@ use mirada_layout::{LayoutMode, WindowId};
 /// Número de escritorios virtuales que mantiene el `Desktop`.
 pub const WORKSPACE_COUNT: usize = 9;
 
+/// **Lupa** (zoom de pantalla completa) — porcentaje mínimo: `100` = 1.0×, sin
+/// zoom. Es el suelo de [`DesktopAction::MagnifyOut`].
+pub const MAGNIFY_MIN_PCT: u16 = 100;
+/// **Lupa** — porcentaje máximo: `800` = 8.0×. Techo de [`DesktopAction::MagnifyIn`].
+pub const MAGNIFY_MAX_PCT: u16 = 800;
+/// **Lupa** — paso de cada [`MagnifyIn`](DesktopAction::MagnifyIn) /
+/// [`MagnifyOut`](DesktopAction::MagnifyOut): `50` % (1.5×, 2.0×, 2.5×…).
+pub const MAGNIFY_STEP_PCT: u16 = 50;
+
 /// Una dirección cardinal en pantalla — para el foco (y, a futuro, el
 /// movimiento) espacial entre ventanas teseladas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +173,20 @@ pub enum DesktopAction {
     ZoomIn,
     /// Sale ("zoom out") un nivel hacia el espacio contenedor.
     ZoomOut,
+    /// **Lupa**: acerca el zoom de pantalla completa un paso ([`MAGNIFY_STEP_PCT`]),
+    /// hasta [`MAGNIFY_MAX_PCT`]. Accesibilidad para hipermétropes — agranda TODA
+    /// la pantalla alrededor del puntero (no es el zoom-Z de ventanas: ver
+    /// [`ZoomIn`](DesktopAction::ZoomIn)).
+    MagnifyIn,
+    /// **Lupa**: aleja el zoom de pantalla completa un paso, hasta apagarlo
+    /// ([`MAGNIFY_MIN_PCT`] = 100 % = 1.0×).
+    MagnifyOut,
+    /// **Lupa**: apaga el zoom de pantalla completa (vuelve a 1.0×).
+    MagnifyReset,
+    /// **Lupa**: fija el factor de zoom de pantalla completa en un porcentaje
+    /// exacto (acotado a `[MAGNIFY_MIN_PCT, MAGNIFY_MAX_PCT]`). Para `mirada-ctl
+    /// magnify 200` y el control de pata.
+    MagnifySet(u16),
     /// Salta el foco a la **siguiente constelación** (familia de ventanas por
     /// linaje de proceso) del escritorio activo — el "alt-tab" por actividad, no
     /// por ventana suelta.
@@ -276,6 +299,10 @@ impl fmt::Display for DesktopAction {
             DesktopAction::Ungroup => f.write_str("ungroup"),
             DesktopAction::ZoomIn => f.write_str("zoom-in"),
             DesktopAction::ZoomOut => f.write_str("zoom-out"),
+            DesktopAction::MagnifyIn => f.write_str("magnify-in"),
+            DesktopAction::MagnifyOut => f.write_str("magnify-out"),
+            DesktopAction::MagnifyReset => f.write_str("magnify-reset"),
+            DesktopAction::MagnifySet(pct) => write!(f, "magnify:{pct}"),
             DesktopAction::FocusConstellationNext => f.write_str("focus-constellation-next"),
             DesktopAction::FocusConstellationPrev => f.write_str("focus-constellation-prev"),
             DesktopAction::WorkspaceNext => f.write_str("workspace-next"),
@@ -327,6 +354,9 @@ impl FromStr for DesktopAction {
             "ungroup" => Self::Ungroup,
             "zoom-in" => Self::ZoomIn,
             "zoom-out" => Self::ZoomOut,
+            "magnify-in" => Self::MagnifyIn,
+            "magnify-out" => Self::MagnifyOut,
+            "magnify-reset" => Self::MagnifyReset,
             "focus-constellation-next" => Self::FocusConstellationNext,
             "focus-constellation-prev" => Self::FocusConstellationPrev,
             "workspace-next" => Self::WorkspaceNext,
@@ -386,6 +416,12 @@ impl FromStr for DesktopAction {
                     Self::MoveToWorkspace(parse_workspace(n)?)
                 } else if let Some(n) = s.strip_prefix("workspace:") {
                     Self::SwitchWorkspace(parse_workspace(n)?)
+                } else if let Some(pct) = s.strip_prefix("magnify:") {
+                    let pct: u16 = pct
+                        .trim()
+                        .parse()
+                        .map_err(|_| format!("factor de lupa inválido: '{pct}'"))?;
+                    Self::MagnifySet(pct.clamp(MAGNIFY_MIN_PCT, MAGNIFY_MAX_PCT))
                 } else if let Some(cmd) = s.strip_prefix("spawn:") {
                     let cmd = cmd.trim();
                     if cmd.is_empty() {
@@ -476,6 +512,12 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+Shift+Tab".into(), DesktopAction::WorkspacePrev),
         ("Super+i".into(), DesktopAction::ZoomIn),
         ("Super+u".into(), DesktopAction::ZoomOut),
+        // Lupa (zoom de pantalla completa, accesibilidad): Super++ acerca,
+        // Super+- aleja, Super+0 la apaga. Las teclas «+/-/0» son lo universal
+        // para zoom; no chocan con nada del default (los escritorios son 1..9).
+        ("Super+equal".into(), DesktopAction::MagnifyIn),
+        ("Super+minus".into(), DesktopAction::MagnifyOut),
+        ("Super+0".into(), DesktopAction::MagnifyReset),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
         ("Super+p".into(), DesktopAction::Spawn("foot -e mirada-launcher".into())),
         // Panel de control unificado (wawa-panel): ajustes de mirada/pata/sistema

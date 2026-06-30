@@ -78,6 +78,12 @@ pub struct Desktop {
     /// Grafo de actividad: el linaje de proceso de cada ventana, para agrupar y
     /// navegar por *constelación* (familias de ventanas emparentadas).
     pub(super) activity: ActivityGraph,
+    /// **Lupa**: factor de zoom de pantalla completa vigente, en porcentaje
+    /// (`100` = 1.0×, apagada). Lo mueven las acciones `Magnify*`; el Cerebro lo
+    /// empuja al Cuerpo con [`BrainCommand::SetMagnify`](mirada_protocol::BrainCommand::SetMagnify),
+    /// que es quien lo aplica al render (conoce el puntero). Vive en el Cerebro
+    /// para que su estado (el paso actual) sobreviva y se pueda subir/bajar.
+    pub(super) magnify_pct: u16,
 }
 
 impl Default for Desktop {
@@ -115,6 +121,7 @@ impl Desktop {
             restored_homes: HashMap::new(),
             restored_groupings: HashMap::new(),
             activity: ActivityGraph::default(),
+            magnify_pct: crate::action::MAGNIFY_MIN_PCT,
         }
     }
 

@@ -1478,6 +1478,42 @@ fn a_session_home_is_consumed_after_the_first_window() {
     assert_eq!(d.workspace_loads()[2], 0);
 }
 
+/// Extrae el `factor_pct` de un `SetMagnify` en la lista de comandos, si lo hay.
+fn magnify_of(cmds: &[BrainCommand]) -> Option<u16> {
+    cmds.iter().find_map(|c| match c {
+        BrainCommand::SetMagnify { factor_pct } => Some(*factor_pct),
+        _ => None,
+    })
+}
+
+#[test]
+fn la_lupa_sube_baja_se_acota_y_resetea() {
+    use crate::action::{MAGNIFY_MAX_PCT, MAGNIFY_MIN_PCT, MAGNIFY_STEP_PCT};
+    let mut d = desktop_with_screen();
+    // Arranca apagada (1.0×).
+    assert_eq!(d.magnify_pct(), MAGNIFY_MIN_PCT);
+    // Acercar un paso: emite SetMagnify y deja el estado en 100+paso.
+    let cmds = d.apply(DesktopAction::MagnifyIn);
+    assert_eq!(magnify_of(&cmds), Some(MAGNIFY_MIN_PCT + MAGNIFY_STEP_PCT));
+    assert_eq!(d.magnify_pct(), MAGNIFY_MIN_PCT + MAGNIFY_STEP_PCT);
+    // No baja por debajo de 100 por más MagnifyOut que se pidan.
+    d.apply(DesktopAction::MagnifyOut);
+    let cmds = d.apply(DesktopAction::MagnifyOut);
+    assert_eq!(magnify_of(&cmds), Some(MAGNIFY_MIN_PCT));
+    assert_eq!(d.magnify_pct(), MAGNIFY_MIN_PCT);
+    // No sube por encima del techo.
+    for _ in 0..50 {
+        d.apply(DesktopAction::MagnifyIn);
+    }
+    assert_eq!(d.magnify_pct(), MAGNIFY_MAX_PCT);
+    // Set exacto se acota; reset apaga.
+    let cmds = d.apply(DesktopAction::MagnifySet(250));
+    assert_eq!(magnify_of(&cmds), Some(250));
+    let cmds = d.apply(DesktopAction::MagnifyReset);
+    assert_eq!(magnify_of(&cmds), Some(MAGNIFY_MIN_PCT));
+    assert_eq!(d.magnify_pct(), MAGNIFY_MIN_PCT);
+}
+
 #[test]
 fn group_stack_then_zoom_makes_the_stack_absorb_the_screen() {
     let mut d = desktop_with_screen();

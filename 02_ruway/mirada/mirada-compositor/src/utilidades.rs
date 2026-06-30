@@ -257,6 +257,42 @@ pub(crate) fn over_layer_rects(output: Option<&Output>) -> Vec<(i32, i32, i32, i
     v
 }
 
+/// La transformada de la **lupa** (zoom de pantalla completa — accesibilidad
+/// para hipermétropes). Dado el tamaño de la salida `size = (w, h)` en px, el
+/// punto focal `(fx, fy)` —el puntero, en coords **locales** a la salida— y el
+/// `factor` (>1), devuelve `(origin, scale)` para envolver cada elemento
+/// compuesto en `RescaleRenderElement::from_element(el, origin, scale)`: el
+/// reescalado fija `origin` y multiplica las distancias por `scale`, así que toda
+/// la escena se agranda alrededor del puntero.
+///
+/// El foco se **acota** para que la región magnificada (de tamaño `(w/factor,
+/// h/factor)`) quepa entera en la salida: pegado a un borde el puntero deja de
+/// estar centrado —no se puede paneár más allá del borde—, como toda lupa real.
+/// Con `factor <= 1` o salida degenerada devuelve la identidad (`origin` (0,0),
+/// `scale` 1.0). Pura y testeada.
+pub(crate) fn magnify_origin(
+    size: (i32, i32),
+    focal: (f64, f64),
+    factor: f32,
+) -> (Point<i32, smithay::utils::Physical>, f64) {
+    let (w, h) = (size.0 as f64, size.1 as f64);
+    let z = factor as f64;
+    if z <= 1.0 || w <= 0.0 || h <= 0.0 {
+        return (Point::from((0, 0)), 1.0);
+    }
+    // Por eje: acota el foco a `[media-ventana, largo - media-ventana]` y resuelve
+    // `origin` de `centro = origin + (foco - origin)·z`, que da `origin ∈ [0, largo]`.
+    let axis = |f: f64, len: f64| -> f64 {
+        let half = len / (2.0 * z);
+        let centro = len / 2.0;
+        let fc = f.clamp(half, len - half);
+        ((centro - fc * z) / (1.0 - z)).clamp(0.0, len)
+    };
+    let ox = axis(focal.0, w).round() as i32;
+    let oy = axis(focal.1, h).round() as i32;
+    (Point::from((ox, oy)), z)
+}
+
 /// Ancho (px) de cada botón del titlebar. Compartido entre el render y el
 /// hit-test del click.
 pub(crate) const TB_BTN_W: i32 = 28;
@@ -826,6 +862,60 @@ where
         }
     });
     Ok(stdin)
+}
+
+#[cfg(test)]
+mod tests_magnify {
+    use super::magnify_origin;
+
+    #[test]
+    fn factor_uno_es_identidad() {
+        let (o, s) = magnify_origin((1920, 1080), (960.0, 540.0), 1.0);
+        assert_eq!((o.x, o.y), (0, 0));
+        assert_eq!(s, 1.0);
+    }
+
+    #[test]
+    fn salida_degenerada_es_identidad() {
+        let (o, s) = magnify_origin((0, 0), (10.0, 10.0), 2.0);
+        assert_eq!((o.x, o.y), (0, 0));
+        assert_eq!(s, 1.0);
+    }
+
+    #[test]
+    fn foco_centrado_fija_el_centro() {
+        // Puntero en el centro: el reescalado se ancla en el centro y conserva
+        // el factor pedido.
+        let (o, s) = magnify_origin((1000, 800), (500.0, 400.0), 2.0);
+        assert_eq!((o.x, o.y), (500, 400));
+        assert_eq!(s, 2.0);
+    }
+
+    #[test]
+    fn foco_en_esquina_se_acota_al_borde() {
+        // Puntero en (0,0): el origen se pega a la esquina superior-izquierda,
+        // mostrando la región [0, w/z] — sin paneár fuera de la salida.
+        let (o, _) = magnify_origin((1000, 800), (0.0, 0.0), 2.0);
+        assert_eq!((o.x, o.y), (0, 0));
+    }
+
+    #[test]
+    fn foco_en_esquina_opuesta_se_acota_al_otro_borde() {
+        let (o, _) = magnify_origin((1000, 800), (1000.0, 800.0), 2.0);
+        assert_eq!((o.x, o.y), (1000, 800));
+    }
+
+    #[test]
+    fn el_origen_nunca_se_sale_de_la_salida() {
+        // Para cualquier foco (incluso fuera de rango) y factor, origin ∈ [0,len].
+        for &f in &[-50.0, 0.0, 123.0, 500.0, 999.0, 1200.0] {
+            for &z in &[1.5_f32, 2.0, 4.0, 8.0] {
+                let (o, _) = magnify_origin((1000, 800), (f, f.min(800.0)), z);
+                assert!((0..=1000).contains(&o.x), "x={} z={}", o.x, z);
+                assert!((0..=800).contains(&o.y), "y={} z={}", o.y, z);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

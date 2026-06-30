@@ -12,6 +12,24 @@ use super::geometria::{
 };
 
 impl Desktop {
+    /// Fija el factor de **lupa** (porcentaje, acotado a
+    /// `[MAGNIFY_MIN_PCT, MAGNIFY_MAX_PCT]`) y devuelve el comando que el Cuerpo
+    /// aplica al render. Si no cambió nada (ya estaba en ese valor) devuelve el
+    /// comando igual — es idempotente y barato; el Cuerpo sólo repinta.
+    fn set_magnify(&mut self, pct: u16) -> Vec<BrainCommand> {
+        use crate::action::{MAGNIFY_MAX_PCT, MAGNIFY_MIN_PCT};
+        self.magnify_pct = pct.clamp(MAGNIFY_MIN_PCT, MAGNIFY_MAX_PCT);
+        vec![BrainCommand::SetMagnify {
+            factor_pct: self.magnify_pct,
+        }]
+    }
+
+    /// El factor de **lupa** vigente, en porcentaje (`100` = 1.0×). Para tests y
+    /// para que la app dueña lo refleje en una UI.
+    pub fn magnify_pct(&self) -> u16 {
+        self.magnify_pct
+    }
+
     /// Aplica una acción de escritorio directamente (sin pasar por una
     /// tecla). Útil para disparar acciones desde un HUD.
     pub fn apply(&mut self, action: DesktopAction) -> Vec<BrainCommand> {
@@ -286,6 +304,19 @@ impl Desktop {
                 self.workspaces[active].zoom_out();
                 self.relayout()
             }
+            // Lupa (zoom de pantalla completa): no toca el layout — sólo mueve el
+            // factor y lo empuja al Cuerpo, que lo aplica al render alrededor del
+            // puntero. Ver `BrainCommand::SetMagnify`.
+            DesktopAction::MagnifyIn => self.set_magnify(
+                self.magnify_pct
+                    .saturating_add(crate::action::MAGNIFY_STEP_PCT),
+            ),
+            DesktopAction::MagnifyOut => self.set_magnify(
+                self.magnify_pct
+                    .saturating_sub(crate::action::MAGNIFY_STEP_PCT),
+            ),
+            DesktopAction::MagnifyReset => self.set_magnify(crate::action::MAGNIFY_MIN_PCT),
+            DesktopAction::MagnifySet(pct) => self.set_magnify(pct),
             DesktopAction::FocusConstellationNext => self.focus_constellation(true),
             DesktopAction::FocusConstellationPrev => self.focus_constellation(false),
             DesktopAction::SwitchWorkspace(n) => {

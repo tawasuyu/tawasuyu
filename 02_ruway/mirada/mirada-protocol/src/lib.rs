@@ -463,6 +463,14 @@ pub enum BrainCommand {
     /// no listadas conservan los suyos. Es el canal Tier-2 declarativo: efectos
     /// nuevos se agregan como campos de [`WindowEffects`], sin tocar este enum.
     SetEffects(Vec<(WindowId, WindowEffects)>),
+    /// Fija el **factor de lupa** (zoom de pantalla completa) del Cuerpo, en
+    /// porcentaje: `100` = sin zoom (1.0×), `200` = 2.0×, … El Cuerpo escala toda
+    /// la escena compuesta alrededor del **puntero** al presentar — no cambia la
+    /// geometría de las ventanas, es puro render. Entero (como las opacidades y
+    /// los colores) para conservar `Eq`. Es accesibilidad: una lupa de pantalla
+    /// para hipermétropes. El foco lo conoce sólo el Cuerpo (es su puntero), por
+    /// eso el comando lleva únicamente el factor.
+    SetMagnify { factor_pct: u16 },
 }
 
 /// Un hecho del Cuerpo que el Cerebro debe conocer.
@@ -757,6 +765,15 @@ mod tests {
             (7, WindowEffects { opacity: 180, shadow: false }),
             (9, WindowEffects { opacity: 255, shadow: true }),
         ]);
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &cmd).unwrap();
+        let back: BrainCommand = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn frame_round_trips_set_magnify() {
+        let cmd = BrainCommand::SetMagnify { factor_pct: 250 };
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
         let back: BrainCommand = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();

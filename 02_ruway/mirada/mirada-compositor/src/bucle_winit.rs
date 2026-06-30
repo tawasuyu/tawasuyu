@@ -324,7 +324,25 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                 dlog!("mirada-compositor · clear winit falló ({e}); salteo el frame.");
                 break 'frame;
             }
-            if let Err(e) = draw_render_elements(&mut frame, 1.0, &elements, &[damage]) {
+            // Lupa (zoom de pantalla completa): con factor >1 envolvemos cada
+            // elemento en un `RescaleRenderElement` anclado al origen que centra
+            // el puntero, así toda la escena se agranda alrededor del cursor. El
+            // backend winit es de salida única anclada en (0,0): el puntero global
+            // ya está en coords locales. El daño es de salida completa, así que el
+            // paneo repinta entero sin trucos.
+            let draw_res = if state.magnify > 1.0 {
+                use smithay::backend::renderer::element::utils::RescaleRenderElement;
+                let (origin, scale) =
+                    crate::magnify_origin((size.w, size.h), state.pointer_loc, state.magnify);
+                let zoomed: Vec<RescaleRenderElement<_>> = elements
+                    .into_iter()
+                    .map(|e| RescaleRenderElement::from_element(e, origin, scale))
+                    .collect();
+                draw_render_elements(&mut frame, 1.0, &zoomed, &[damage])
+            } else {
+                draw_render_elements(&mut frame, 1.0, &elements, &[damage])
+            };
+            if let Err(e) = draw_res {
                 dlog!("mirada-compositor · draw winit falló ({e}); salteo el frame.");
                 break 'frame;
             }

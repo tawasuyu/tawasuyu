@@ -213,6 +213,10 @@ pub enum Msg {
     /// el backend layer-shell, también el apagado de pantalla/bloqueo del
     /// compositor (idle-inhibit). Reemplaza al workaround tipo `caffeine`.
     ControlCafe(bool),
+    /// **Lupa**: fija el factor de zoom de pantalla completa, en porcentaje
+    /// (`100` = 1.0× apagada, `200` = 2.0×) vía `mirada-ctl magnify <pct>`.
+    /// Accesibilidad para hipermétropes.
+    Magnify(u16),
     /// Desplegar/replegar el applet de red (lista de redes Wi-Fi).
     NetworkToggle,
     /// Conectar a la red Wi-Fi `ssid` (`nmcli device wifi connect`).
@@ -1886,6 +1890,11 @@ impl App for PataApp {
                 // Backend winit (dev): sólo refleja el estado; la inhibición real
                 // (suspensión + idle del compositor) vive en el path layer-shell.
                 model.control_extras.cafe = on;
+            }
+            Msg::Magnify(pct) => {
+                // Lupa de pantalla: el compositor la aplica (sigue el puntero).
+                spawn_cmd(&format!("mirada-ctl magnify {pct}"));
+                model.control_extras.magnify_pct = pct;
             }
             Msg::NetworkToggle => {
                 model.network_open = !model.network_open;

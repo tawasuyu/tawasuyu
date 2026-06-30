@@ -82,6 +82,10 @@ fn run(args: &[String]) -> Result<(), String> {
         // en caliente. Es lo que hace alcanzable el «panel de control» (las
         // vistas) desde la sesión real, sin la app de simulación.
         Some("vista" | "vistas") => run_vista(&args[1..]),
+        // Lupa (zoom de pantalla completa, accesibilidad): forma amable sobre las
+        // acciones `magnify-*`. `magnify 200`/`magnify 2x` fijan el factor;
+        // `in`/`out` lo mueven un paso; sin args o `reset`/`off` la apaga.
+        Some("magnify" | "lupa" | "zoom-screen") => run_magnify(&args[1..]),
         // App remota vía waypipe: `mirada-ctl remote [user@]host <app> [args…]`
         // envuelve la app en `waypipe ssh …` y la lanza como un Spawn normal —
         // para el compositor es un cliente Wayland más (sin protocolo nuevo). No
@@ -312,6 +316,35 @@ fn print_workspaces(st: &WorkspacesState) {
     );
 }
 
+/// **Lupa** (zoom de pantalla completa): traduce `mirada-ctl magnify …` a la
+/// `DesktopAction` correspondiente y la dispara. Sin args (o `reset`/`off`/`1x`)
+/// la apaga; `in`/`out` mueven un paso; un número es porcentaje (`200` = 2.0×) y
+/// con sufijo `x` es multiplicador (`2x` = 200 %). El factor se acota en el
+/// Cerebro.
+fn run_magnify(args: &[String]) -> Result<(), String> {
+    let action = match args.first().map(|s| s.trim()) {
+        None | Some("reset" | "off" | "1x" | "1") => DesktopAction::MagnifyReset,
+        Some("in" | "+" | "more") => DesktopAction::MagnifyIn,
+        Some("out" | "-" | "less") => DesktopAction::MagnifyOut,
+        Some(s) => {
+            let (num, mult) = match s.strip_suffix('x') {
+                Some(n) => (n, true),
+                None => (s.trim_end_matches('%'), false),
+            };
+            let n: u16 = num.trim().parse().map_err(|_| {
+                "uso: mirada-ctl magnify <porcentaje | Nx | in | out | reset>  (ej: magnify 200, magnify 2x)"
+                    .to_string()
+            })?;
+            DesktopAction::MagnifySet(if mult { n.saturating_mul(100) } else { n })
+        }
+    };
+    match request(CtlRequest::Do(action))? {
+        CtlReply::Ok => Ok(()),
+        CtlReply::Error(e) => Err(e),
+        _ => Err("respuesta inesperada del Cerebro".into()),
+    }
+}
+
 /// Lanza una app remota envolviéndola en waypipe sobre ssh. `args` es
 /// `[user@]host <app> [args…]`. Construye el comando con [`waypipe_remote_cmd`]
 /// y lo manda como `DesktopAction::Spawn` — el Cuerpo lo corre con `sh -c` y la
@@ -348,6 +381,7 @@ fn print_help() {
            mirada-ctl windows       lista las ventanas (--porcelain: TAB-separado)\n  \
            mirada-ctl workspaces    estado de los escritorios (active/count/loads)\n  \
            mirada-ctl cycle-zones   cicla el preset de zonas de arrastre\n  \
+           mirada-ctl magnify …     lupa de pantalla (zoom accesible; ver abajo)\n  \
            mirada-ctl profile …     biblioteca de perfiles de atajos (ver abajo)\n  \
            mirada-ctl vista …       vistas de escritorio completo (ver abajo)\n  \
            mirada-ctl remote …      lanza una app remota vía waypipe (ver abajo)\n  \
@@ -366,6 +400,13 @@ fn print_help() {
            mirada-ctl profile rename <origen> <nombre>       renombra uno propio\n  \
            mirada-ctl profile rm <nombre>       borra un perfil propio\n  \
            presets de fábrica: dwm · i3 · hyprland\n\
+         \n\
+         LUPA (zoom de pantalla completa — accesibilidad, sigue el puntero):\n  \
+           mirada-ctl magnify 200     fija el factor (porcentaje: 200 = 2.0×)\n  \
+           mirada-ctl magnify 2x      idem con multiplicador\n  \
+           mirada-ctl magnify in/out  acerca / aleja un paso\n  \
+           mirada-ctl magnify reset   la apaga (1.0×)\n  \
+           atajos por defecto: Super++ acerca · Super+- aleja · Super+0 apaga\n\
          \n\
          REMOTE (app de otra máquina, túnel waypipe+ssh):\n  \
            mirada-ctl remote [user@]host <app> [args…]\n  \
@@ -425,6 +466,10 @@ Acciones de mirada-ctl:
   ungroup                    deshace el grupo de la enfocada
   zoom-in / zoom-out         acerca / aleja el zoom-Z
   focus-constellation-next / -prev   recorre las constelaciones
+ Lupa (zoom de pantalla completa — accesibilidad, sigue el puntero):
+  magnify-in / magnify-out   acerca / aleja la lupa un paso
+  magnify-reset              apaga la lupa (1.0×)
+  magnify:<pct>              fija el factor (200 = 2.0×); ver: mirada-ctl magnify
  Escritorios:
   workspace <n>              activa el escritorio n (1..9)
   workspace-next / -prev     escritorio siguiente / anterior

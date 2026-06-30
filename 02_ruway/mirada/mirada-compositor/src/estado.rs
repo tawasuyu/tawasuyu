@@ -652,6 +652,11 @@ pub(crate) struct App {
     /// Estado de escritorios empujado por el Cerebro enlazado (`SetWorkspaces`),
     /// para el switcher Win+Tab + slide en modo DE. `None` con Cerebro embebido.
     pub(crate) linked_ws: Option<LinkedWorkspaces>,
+    /// **Lupa**: factor de zoom de pantalla completa vigente (`1.0` = apagada).
+    /// Lo fija el Cerebro con [`mirada_protocol::BrainCommand::SetMagnify`]; el
+    /// render escala toda la escena alrededor del puntero por este factor antes
+    /// de presentar (ver `magnify_origin`). Accesibilidad para hipermétropes.
+    pub(crate) magnify: f32,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
     /// Layout de la barra de título (botones, grupos, alineación, estilo) que

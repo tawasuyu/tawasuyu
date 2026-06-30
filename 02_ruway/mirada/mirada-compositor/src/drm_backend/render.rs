@@ -3152,15 +3152,60 @@ impl DrmState {
             }
         };
 
+        // Capturas screencopy pendientes de esta salida: se hacen ANTES de
+        // presentar y sobre los elementos **sin lupa** —una captura toma los
+        // píxeles reales, no la vista magnificada—; el framebuffer real vive
+        // dentro del DrmCompositor, así que se re-componen los mismos elementos en
+        // un offscreen propio (independiente del present) y se copia de ahí.
+        if !self.app.pending_screencopy.is_empty() {
+            let output = self.outputs[idx].output.clone();
+            let capturas =
+                crate::screencopy::tomar_capturas(&mut self.app, &output, (rect.x, rect.y));
+            if !capturas.is_empty() {
+                crate::screencopy::servir_offscreen(
+                    &mut self.renderer,
+                    (rect.w, rect.h),
+                    &elements,
+                    CLEAR_COLOR.into(),
+                    capturas,
+                );
+            }
+        }
+
+        // Lupa (zoom de pantalla completa): con factor >1 envolvemos cada `Frame`
+        // compuesto en un `RescaleRenderElement` anclado al origen que centra el
+        // puntero (en coords locales a esta salida), así toda la escena —cursor
+        // incluido— se agranda alrededor del cursor. El paneo cambia la geometría
+        // de los elementos frame a frame, de modo que el rastreo de daño del
+        // DrmCompositor repinta solo. Sin lupa, los elementos van tal cual.
+        let magnify = self.app.magnify;
+        let focal = (
+            self.app.pointer_loc.0 - rect.x as f64,
+            self.app.pointer_loc.1 - rect.y as f64,
+        );
         let ctx = &mut self.outputs[idx];
-        match ctx.compositor.render_frame::<_, _>(
-            &mut self.renderer,
-            &elements,
-            CLEAR_COLOR,
-            FrameFlags::DEFAULT,
-        ) {
-            Ok(result) => {
-                if !result.is_empty {
+        // `render_frame` es genérico en el tipo de elemento, así que las dos ramas
+        // (envueltos en lupa vs. tal cual) devuelven tipos distintos; las
+        // colapsamos a `Result<bool /*is_empty*/, String>` para el manejo común.
+        let frame_result: Result<bool, String> = if magnify > 1.0 {
+            let (origin, scale) = crate::magnify_origin((rect.w, rect.h), focal, magnify);
+            let zoomed: Vec<RescaleRenderElement<Frame>> = elements
+                .into_iter()
+                .map(|f| RescaleRenderElement::from_element(f, origin, scale))
+                .collect();
+            ctx.compositor
+                .render_frame::<_, _>(&mut self.renderer, &zoomed, CLEAR_COLOR, FrameFlags::DEFAULT)
+                .map(|r| r.is_empty)
+                .map_err(|e| format!("{e}"))
+        } else {
+            ctx.compositor
+                .render_frame::<_, _>(&mut self.renderer, &elements, CLEAR_COLOR, FrameFlags::DEFAULT)
+                .map(|r| r.is_empty)
+                .map_err(|e| format!("{e}"))
+        };
+        match frame_result {
+            Ok(is_empty) => {
+                if !is_empty {
                     match ctx.compositor.queue_frame(()) {
                         Ok(()) => {
                             ctx.pending_flip = true;
@@ -3186,24 +3231,6 @@ impl DrmState {
                 "mirada-compositor · render_frame[{}]: {e}",
                 ctx.name
             ),
-        }
-
-        // Capturas screencopy pendientes de esta salida: el framebuffer real
-        // vive dentro del DrmCompositor, así que se re-componen los mismos
-        // elementos en un offscreen y se copia de ahí.
-        if !self.app.pending_screencopy.is_empty() {
-            let output = self.outputs[idx].output.clone();
-            let capturas =
-                crate::screencopy::tomar_capturas(&mut self.app, &output, (rect.x, rect.y));
-            if !capturas.is_empty() {
-                crate::screencopy::servir_offscreen(
-                    &mut self.renderer,
-                    (rect.w, rect.h),
-                    &elements,
-                    CLEAR_COLOR.into(),
-                    capturas,
-                );
-            }
         }
     }
 }

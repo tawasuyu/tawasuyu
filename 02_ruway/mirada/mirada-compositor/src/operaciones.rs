@@ -1385,6 +1385,14 @@ impl App {
                             .unwrap_or_default(),
                     });
                 }
+                // Lupa: zoom de pantalla completa. No produce BodyOps sobre
+                // superficies (no cambia geometría) — sólo fija el factor y fuerza
+                // un repintado completo; el render escala la escena alrededor del
+                // puntero. `100` (1.0×) la apaga.
+                BrainCommand::SetMagnify { factor_pct } => {
+                    self.magnify = (factor_pct as f32 / 100.0).max(1.0);
+                    crate::screencopy::danar_todo(self);
+                }
                 other => {
                     for op in self.body.apply(other) {
                         self.exec_op(op);

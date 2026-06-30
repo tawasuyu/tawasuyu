@@ -150,6 +150,10 @@ impl BodyState {
             // consume el compositor en `apply_commands` antes de delegar acá; el
             // `Body` no materializa superficies para él.
             BrainCommand::SetWorkspaces { .. } => Vec::new(),
+            // La lupa (zoom de pantalla completa) es render puro: la consume el
+            // compositor en `apply_commands` (fija su factor y repinta) antes de
+            // delegar acá; el `Body` no materializa superficies para ella.
+            BrainCommand::SetMagnify { .. } => Vec::new(),
             BrainCommand::Place(placements) => {
                 let mut ops = Vec::new();
                 let listed: Vec<WindowId> = placements.iter().map(|p| p.id).collect();

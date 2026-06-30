@@ -505,6 +505,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         super_was_held: false,
         overview_selected: 0,
         linked_ws: None,
+        magnify: 1.0,
         decorations: mirada_brain::Decorations::default(),
         titlebar_layout: mirada_brain::TitlebarLayout::default(),
         aware_items: std::collections::HashMap::new(),
