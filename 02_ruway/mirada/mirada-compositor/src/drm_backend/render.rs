@@ -803,7 +803,38 @@ impl DrmState {
                         self.app.aware_items.get(&w.app_id).map(|v| v.as_slice()).unwrap_or(&[]);
                     // Título: alineado en el hueco entre los grupos (botones de
                     // sistema + contribuciones), según title_align.
-                    let (title_x0, title_x1) = crate::titlebar_title_range(layout, contribs, cx, cw);
+                    let (mut title_x0, title_x1) = crate::titlebar_title_range(layout, contribs, cx, cw);
+                    // Ícono de marca de la app a la izquierda del título: rasterizado
+                    // de su SVG embebido (CPU, cacheado por app_id+px). Si la app no
+                    // tiene AppIcon, no se dibuja nada (el título queda como antes).
+                    {
+                        let icon_px = (tb - 10).clamp(14, 20);
+                        if self.app_icon_cache.len() > 256 {
+                            self.app_icon_cache.clear();
+                        }
+                        let entry = self
+                            .app_icon_cache
+                            .entry((w.app_id.clone(), icon_px))
+                            .or_insert_with(|| super::app_icon_buffer(&w.app_id, icon_px));
+                        if let Some((ibuf, side)) = entry {
+                            let side = *side;
+                            if title_x0 + side <= title_x1 {
+                                let iy = dec_y + (tb - side) / 2;
+                                if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                                    &mut self.renderer,
+                                    (title_x0 as f64, iy as f64),
+                                    ibuf,
+                                    Some(anim_alpha),
+                                    None,
+                                    None,
+                                    Kind::Unspecified,
+                                ) {
+                                    into.push(Frame::Text(el));
+                                }
+                                title_x0 += side + 6;
+                            }
+                        }
+                    }
                     if !w.title.is_empty() {
                         if self.title_cache.len() > 256 {
                             self.title_cache.clear();

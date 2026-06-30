@@ -41,6 +41,10 @@ xcursor = "0.3"
 # Rasterizado de texto sobre CPU (etiquetas: barra de título, menú). Es un
 # rasterizador puro-Rust ligero; smithay sube el búfer RGBA como textura.
 ab_glyph = "0.2"
+# Rasterizado CPU del ícono de marca de la app en el titlebar (SVG → RGBA), sin
+# vello: el compositor sigue sin GPU-rasterizar en caliente. Cacheado por app.
+resvg = "0.46"
+app-iconset = { workspace = true }
 # Decodifica y escala el wallpaper (PNG/JPEG/WebP) para componerlo en el fondo.
 image = { workspace = true }
 # Matrices 3×3 para el cubo de Win+Tab: `GlesFrame::render_texture` toma

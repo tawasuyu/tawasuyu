@@ -1,0 +1,10 @@
+[package]
+name = "app-iconset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "app-iconset — SVG de los íconos de marca de cada app de la suite, embebidos como strings. Crate cero-dependencias para consumidores que no pueden depender de llimphi-icons (el compositor mirada los rasteriza con resvg). Generado por tawasuyu-apps-desktop --rust-iconset."
+
+[dependencies]

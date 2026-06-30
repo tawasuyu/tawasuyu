@@ -562,6 +562,7 @@ members = [
     "03_ukupacha/wawa-explorer/wawa-explorer-llimphi",
     "shared/allichay",
     "shared/app-bus",
+    "shared/app-iconset",
     "shared/apps-desktop",
     "shared/atipay",
     "shared/bitacora",
@@ -641,6 +642,7 @@ bitacora = { path = "shared/bitacora" }
 mirada-fondo = { path = "02_ruway/mirada/mirada-fondo", default-features = false }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
+app-iconset = { path = "shared/app-iconset" }
 # === Centro de eventos (notificaciones + capturas + clipboard + …) ===
 willay-core = { path = "shared/willay/willay-core" }
 willay-store = { path = "shared/willay/willay-store" }

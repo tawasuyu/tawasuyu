@@ -29,6 +29,7 @@ use llimphi_icons::app_icons::{app_icon_svg, AppIcon, ALL};
 fn main() {
     let mut base: Option<PathBuf> = None;
     let mut svg_dir: Option<PathBuf> = None;
+    let mut rust_iconset: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -36,8 +37,11 @@ fn main() {
             // Vuelca todos los AppIcon como `<name>.svg` planos en <dir> y sale
             // (para la web u otros consumidores de assets sueltos).
             "--svg-dir" => svg_dir = args.next().map(PathBuf::from),
+            // Emite un módulo Rust cero-dep con los SVG embebidos (para consumidores
+            // que no pueden depender de llimphi-icons, p.ej. el compositor mirada).
+            "--rust-iconset" => rust_iconset = args.next().map(PathBuf::from),
             "-h" | "--help" => {
-                eprintln!("uso: tawasuyu-apps-desktop [--prefix <data-dir>] [--svg-dir <dir>]");
+                eprintln!("uso: tawasuyu-apps-desktop [--prefix <data-dir>] [--svg-dir <dir>] [--rust-iconset <file>]");
                 return;
             }
             otro => {
@@ -49,6 +53,10 @@ fn main() {
 
     if let Some(dir) = svg_dir {
         volcar_svgs_planos(&dir);
+        return;
+    }
+    if let Some(file) = rust_iconset {
+        emitir_rust_iconset(&file);
         return;
     }
 
@@ -117,6 +125,32 @@ fn volcar_svgs_planos(dir: &Path) {
         }
     }
     println!("{n} íconos SVG en {}", dir.display());
+}
+
+/// Emite un módulo Rust cero-dependencias con los 29 SVG embebidos, para
+/// consumidores que no pueden depender de llimphi-icons (el compositor mirada
+/// rasteriza estos SVG con resvg). Generado — no editar a mano.
+fn emitir_rust_iconset(file: &Path) {
+    let mut s = String::new();
+    s.push_str("//! Generado por `tawasuyu-apps-desktop --rust-iconset`. NO editar a mano.\n");
+    s.push_str("//!\n//! SVG de los íconos de marca de cada app, embebidos como strings. Crate\n");
+    s.push_str("//! cero-dependencias: lo consume quien no puede depender de llimphi-icons\n");
+    s.push_str("//! (p.ej. el compositor mirada, que rasteriza el SVG con resvg).\n\n");
+    s.push_str("/// SVG del ícono de marca de la app `name` (== `AppIcon::name`), o `None`.\n");
+    s.push_str("pub fn svg(name: &str) -> Option<&'static str> {\n    Some(match name {\n");
+    for icon in ALL {
+        let svg = app_icon_svg(icon, 1.8);
+        // `r##"…"##`: los colores `stroke="#rrggbb"` meten la secuencia `"#`, que
+        // cerraría un `r#"…"#`; con dos almohadillas no hay colisión (`"##` no
+        // aparece en un SVG).
+        s.push_str(&format!("        {:?} => r##\"{}\"##,\n", icon.name(), svg.trim_end()));
+    }
+    s.push_str("        _ => return None,\n    })\n}\n");
+    if let Err(e) = std::fs::write(file, s) {
+        eprintln!("no pude escribir {}: {e}", file.display());
+        std::process::exit(1);
+    }
+    println!("iconset Rust ({} apps) → {}", ALL.len(), file.display());
 }
 
 /// `$XDG_DATA_HOME` o `~/.local/share`.

@@ -816,6 +816,49 @@ fn title_buffer_w(tr: &crate::text::TextRenderer, title: &str, color: [u8; 4]) -
     }
 }
 
+/// Resuelve el SVG embebido del ícono de marca de un `app_id`, tolerando los
+/// sufijos de binario de la suite (`tullpu-app-llimphi`→tullpu, etc.). `None`
+/// si la app no tiene AppIcon — el titlebar cae a solo-texto (sin regresión).
+fn app_icon_svg_for(app_id: &str) -> Option<&'static str> {
+    let norm = app_id.trim().to_ascii_lowercase().replace('_', "-");
+    if let Some(s) = app_iconset::svg(&norm) {
+        return Some(s);
+    }
+    for suf in ["-app-llimphi", "-sheet-llimphi", "-shell-llimphi", "-llimphi", "-app"] {
+        if let Some(base) = norm.strip_suffix(suf) {
+            if let Some(s) = app_iconset::svg(base) {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+/// Rasteriza el ícono de marca de la app a un buffer del compositor (cuadrado,
+/// `side` px), o `None` si no hay ícono. Usa resvg sobre CPU (no vello). El
+/// formato es BGRA premultiplicado (`Argb8888`), igual que el texto, por eso se
+/// intercambia R↔B sobre la salida RGBA de tiny-skia.
+fn app_icon_buffer(app_id: &str, side: i32) -> Option<(MemoryRenderBuffer, i32)> {
+    let svg = app_icon_svg_for(app_id)?;
+    let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default()).ok()?;
+    let s = side.max(1) as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(s, s)?;
+    let scale = s as f32 / 24.0; // viewBox 24×24
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let mut data = pixmap.take(); // RGBA premultiplicado
+    for px in data.chunks_exact_mut(4) {
+        px.swap(0, 2); // RGBA → BGRA (Argb8888)
+    }
+    Some((
+        MemoryRenderBuffer::from_slice(&data, Fourcc::Argb8888, (side, side), 1, Transform::Normal, None),
+        side,
+    ))
+}
+
 /// Códigos de botón de `<linux/input-event-codes.h>`.
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -955,6 +998,10 @@ struct DrmState {
     /// ancho px). Guarda el ancho —que el `text_cache` general no— para poder
     /// **alinear** el título (centro/derecha) sin re-medir cada cuadro.
     title_cache: std::collections::HashMap<(String, [u8; 4]), (MemoryRenderBuffer, i32)>,
+    /// Caché del **ícono de marca de la app** rasterizado, por (app_id, lado px)
+    /// → buffer + lado. `None` = la app no tiene AppIcon (no re-intentar cada
+    /// cuadro). Evita rasterizar SVG en caliente.
+    app_icon_cache: std::collections::HashMap<(String, i32), Option<(MemoryRenderBuffer, i32)>>,
     /// Árbol del menú raíz (de la config), con submenús anidados.
     menu_entries: Vec<crate::menu::MenuNode>,
     /// Menú raíz abierto, si lo hay (click derecho sobre el fondo). Sus
@@ -1749,6 +1796,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         },
         text_cache: std::collections::HashMap::new(),
         title_cache: std::collections::HashMap::new(),
+        app_icon_cache: std::collections::HashMap::new(),
         window_backdrops: std::collections::HashMap::new(),
         menu_entries,
         root_menu: None,
