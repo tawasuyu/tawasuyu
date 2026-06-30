@@ -398,8 +398,14 @@ impl App for Shell {
             }
             Key::Character(c) if c == "*" => Some(Msg::InvertSelection),
             // ---- Fase 4.3: operaciones de archivo (sólo sobre POSIX). ----
-            // Marcar/desmarcar (selección múltiple) bajo el cursor.
-            Key::Named(NamedKey::Insert) if _model.can_edit() => Some(Msg::ToggleMark),
+            // Marcar/desmarcar (selección múltiple) bajo el cursor. Útil tanto
+            // sobre POSIX (operaciones de archivo) como dentro de un grafo de
+            // Mónadas (submonadizar/fusionar la selección).
+            Key::Named(NamedKey::Insert)
+                if _model.can_edit() || _model.cur().monad_graph().is_some() =>
+            {
+                Some(Msg::ToggleMark)
+            }
             // F7 nueva carpeta · F2 renombrar · Delete borrar.
             Key::Named(NamedKey::F7) if _model.can_edit() => Some(Msg::NewDirPrompt),
             Key::Named(NamedKey::F2) if _model.can_edit() => Some(Msg::RenamePrompt),
