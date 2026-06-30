@@ -23,16 +23,14 @@
 //! `Source` deja deshabilitadas crear/borrar/renombrar. Escribir en un FS ajeno
 //! sin driver es otra liga; esta fase sólo lee.
 
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use foreign_fs::particion::{
     detectar_fs_fuente, tabla_particiones_fuente, SistemaArchivos,
 };
 use foreign_fs::{ext4::LectorExt4, fat::LectorFat};
-use foreign_fs::{Clase, Fuente, FsError, LectorFs, SubFuente};
+use foreign_fs::{Clase, FsError, FuenteArchivo, LectorFs, SubFuente};
 
 use crate::{Node, NodeId, NodeKind, Source};
 
@@ -164,44 +162,6 @@ impl Source for DispositivosSource {
                 |l| leer_generico(l, &interna),
             ),
         }
-    }
-}
-
-// ── Fuente sobre un archivo/dispositivo real ────────────────────────────────
-
-/// Una [`Fuente`](foreign_fs::Fuente) que lee por offset de un archivo o
-/// dispositivo real, bajo demanda (`seek` + `read_exact`). El `Mutex` resuelve
-/// dos cosas: `Fuente::leer_en` toma `&self` pero `File` necesita `&mut` para
-/// posicionar, y vuelve el tipo `Sync` (lo exige `Source: Send + Sync`).
-struct FuenteArchivo {
-    f: Mutex<File>,
-    tam: u64,
-}
-
-impl FuenteArchivo {
-    fn abrir(ruta: &Path) -> io::Result<Self> {
-        let mut f = File::open(ruta)?;
-        // En un dispositivo de bloques `metadata().len()` es 0; un `seek` al
-        // final da el tamaño real tanto para `/dev/sdX` como para un archivo.
-        let tam = f.seek(SeekFrom::End(0))?;
-        Ok(Self { f: Mutex::new(f), tam })
-    }
-}
-
-impl Fuente for FuenteArchivo {
-    fn tamano(&self) -> u64 {
-        self.tam
-    }
-    fn leer_en(&self, offset: u64, buf: &mut [u8]) -> Result<(), FsError> {
-        let mut f = self
-            .f
-            .lock()
-            .map_err(|_| FsError::Corrupto("lock del dispositivo envenenado"))?;
-        f.seek(SeekFrom::Start(offset))
-            .map_err(|_| FsError::Corrupto("seek del dispositivo falló"))?;
-        f.read_exact(buf)
-            .map_err(|_| FsError::Corrupto("lectura corta del dispositivo"))?;
-        Ok(())
     }
 }
 
