@@ -74,7 +74,17 @@ fn overlay_card(
 /// equivalentes absorbidos (wrappers `/etc/init.d/<svc>` oneshot) se descartan
 /// para no duplicarlos. Ver [`OVERLAY_OVERRIDES`].
 pub const OVERLAY_OVERRIDES: &[&str] = &[
-    "udev", "eudev", "seatd", "agetty", "getty", "elogind",
+    // Lo que el overlay PROVEE (evita el doble servicio: dos NM/dbus/… peleando).
+    "udev", "eudev", "seatd", "elogind", "dbus", "sysctl", "swap", "mount",
+    "dhcpcd", "NetworkManager", "networkmanager", "iwd", "connman",
+    // gettys (el compositor toma tty1; el rescate va aparte).
+    "agetty", "getty",
+    // init de bajo nivel del init viejo que arje YA hace en su bootstrap
+    // (montó procfs/sysfs/devtmpfs/cgroup/run, es PID 1, etc.) — correrlo bajo
+    // arje es redundante o rompe (fsck sobre root montado, re-montar root…).
+    "cgroup", "devfs", "sysfs", "procfs", "kmod", "mtab", "fsck", "root",
+    "loopback", "net.lo", "modules", "binfmt", "hwclock", "seedrng",
+    "bootmisc", "keymaps", "termencoding", "etmpfiles", "esysusers", "dmesg",
     // display-managers ajenos: carmen ES el DM; dos pelean por el DRM.
     "sddm", "gdm", "lightdm", "greetd", "lxdm", "xdm", "slim", "-ly", "ly.",
 ];

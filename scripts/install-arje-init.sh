@@ -39,6 +39,7 @@ INIT_FLAG="init=$ZERO_DST"
 
 ASSUME_YES=0
 DO_UNINSTALL=0
+WITH_SERVICES=0
 
 die()  { echo "✗ $*" >&2; exit 1; }
 info() { echo "==> $*"; }
@@ -46,9 +47,10 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --yes|-y)    ASSUME_YES=1 ;;
-        --uninstall) DO_UNINSTALL=1 ;;
-        -h|--help)   sed -n '2,24p' "$0"; exit 0 ;;
+        --yes|-y)        ASSUME_YES=1 ;;
+        --uninstall)     DO_UNINSTALL=1 ;;
+        --with-services) WITH_SERVICES=1 ;;
+        -h|--help)       sed -n '2,24p' "$0"; exit 0 ;;
         *) die "opción desconocida: $1 (ver --help)" ;;
     esac
     shift
@@ -143,9 +145,19 @@ fi
 # tawasuyu con paths DETECTADOS (udev/seatd/red/splash/compositor/getty). Así el
 # MISMO instalador sirve en cualquier distro libre, no sólo en esta máquina.
 sudo install -d "$(dirname "$SEED_DST")"
-info "generando la seed del host con arje-absorb (--overlay-only: bring-up esencial detectado)"
-if sudo "$M/arje-absorb" --overlay-only --label arje.seed.host --output "$SEED_DST"; then
-    info "seed derivada de tu init en $SEED_DST"
+# Por defecto sólo el escritorio (--overlay-only); con --with-services además
+# absorbe tus servicios HABILITADOS del init (caddy, sshd, scripts…) — los que
+# declaran el daemon real corren supervisados, el resto por el wrapper init.d.
+# Los DESACTIVADOS y los DMs ajenos (sddm/ly) NO entran.
+if [ "$WITH_SERVICES" = 1 ]; then
+    ABSORB=(--from auto --with-carmen)
+    info "generando la seed: tus servicios habilitados + escritorio (arje-absorb --from auto --with-carmen)"
+else
+    ABSORB=(--overlay-only)
+    info "generando la seed: sólo el escritorio detectado (arje-absorb --overlay-only; sumá --with-services para tus servicios)"
+fi
+if sudo "$M/arje-absorb" "${ABSORB[@]}" --label arje.seed.host --output "$SEED_DST"; then
+    info "seed derivada de tu host en $SEED_DST"
 else
     echo "  ⚠ arje-absorb no autodetectó tu init; caigo a la seed de referencia."
     sudo install -Dm644 "$SEED_SRC" "$SEED_DST"
