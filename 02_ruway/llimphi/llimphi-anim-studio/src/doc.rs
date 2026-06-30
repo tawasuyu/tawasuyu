@@ -357,4 +357,54 @@ mod tests {
         let back: Doc = ron::from_str(&ron).expect("deserializa");
         assert_eq!(doc, back);
     }
+
+    /// Un grafo con forma de **botón reactivo** (idle/hover/press, hovered+pressed)
+    /// authored en el studio sobrevive el round-trip RON y, al compilar, corre el
+    /// ciclo completo dirigido por inputs. Certifica el lazo autor→export→consumo
+    /// que enchufa `llimphi-widget-rive-button::from_state_machine`.
+    fn boton_doc() -> Doc {
+        let mut doc = Doc::default();
+        doc.states.push(StateDef::new("idle", 60.0, 80.0));
+        doc.states.push(StateDef::new("hover", 260.0, 80.0));
+        let mut press = StateDef::new("press", 460.0, 80.0);
+        press.looping = false;
+        press.clip_len = 0.4;
+        doc.states.push(press);
+        doc.entry = 0;
+
+        doc.inputs.push(InputDef::new("hovered", InputKind::Bool));
+        doc.inputs.push(InputDef::new("pressed", InputKind::Trigger));
+
+        let b = |input: &str, value: bool| CondDef::Bool { input: input.into(), value };
+        doc.transitions.push(TransDef { from: Some(0), to: 1, conditions: vec![b("hovered", true)], duration_secs: 0.18 });
+        doc.transitions.push(TransDef { from: Some(1), to: 0, conditions: vec![b("hovered", false)], duration_secs: 0.18 });
+        doc.transitions.push(TransDef { from: None, to: 2, conditions: vec![CondDef::Trigger { input: "pressed".into() }], duration_secs: 0.06 });
+        doc.transitions.push(TransDef { from: Some(2), to: 1, conditions: vec![CondDef::ClipDone, b("hovered", true)], duration_secs: 0.18 });
+        doc.transitions.push(TransDef { from: Some(2), to: 0, conditions: vec![CondDef::ClipDone, b("hovered", false)], duration_secs: 0.18 });
+        doc
+    }
+
+    #[test]
+    fn boton_authorado_round_trip_corre_el_ciclo() {
+        let doc = boton_doc();
+        // Export → import (lo que hace Project::save/load del studio).
+        let ron = ron::ser::to_string_pretty(&doc, ron::ser::PrettyConfig::default()).expect("serializa");
+        let back: Doc = ron::from_str(&ron).expect("deserializa");
+        assert_eq!(doc, back);
+
+        // Consumo: la máquina compilada del doc reimportado corre el ciclo.
+        let mut inst = back.compile().instance();
+        assert_eq!(inst.current_state(), "idle");
+        inst.set_bool("hovered", true);
+        inst.advance(0.5);
+        assert_eq!(inst.current_state(), "hover");
+        inst.fire("pressed");
+        inst.advance(0.2);
+        assert_eq!(inst.current_state(), "press");
+        inst.advance(0.6); // clip de 0.4 s termina → ClipDone, sigue hovered → hover
+        assert_eq!(inst.current_state(), "hover");
+        inst.set_bool("hovered", false);
+        inst.advance(0.5);
+        assert_eq!(inst.current_state(), "idle");
+    }
 }

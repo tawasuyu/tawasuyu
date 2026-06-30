@@ -85,11 +85,22 @@ impl RiveButton {
         sm.transition(s_press, s_hover, vec![Condition::clip_done(), Condition::bool("hovered", true)], blend_secs);
         sm.transition(s_press, s_idle, vec![Condition::clip_done(), Condition::bool("hovered", false)], blend_secs);
 
-        // Listeners: el motor traduce el puntero crudo → inputs (Tier 3).
+        Self::from_state_machine(sm, vec![idle, hover, press])
+    }
+
+    /// Envuelve una `StateMachine` **ya armada** como botón reactivo — el seam por
+    /// el que entra una máquina **authored en `llimphi-anim-studio`**
+    /// (`Project::load(..).doc.compile()`), cerrando el lazo autor→consumidor.
+    ///
+    /// Le agrega los listeners de puntero estándar (`Enter`/`Exit` → input
+    /// `hovered`) para que el hover ande, ya que el `Doc` del studio es grafo
+    /// puro sin listeners. La máquina debe usar por convención el bool `hovered`
+    /// y el trigger `pressed`, y un estado de press no-loop; `clips` se indexa por
+    /// `ClipId` (= índice de estado en las máquinas del studio).
+    pub fn from_state_machine(mut sm: StateMachine, clips: Vec<LottieAsset>) -> Self {
         sm.listener(Area::All, PointerTrigger::Enter, Action::set_bool("hovered", true));
         sm.listener(Area::All, PointerTrigger::Exit, Action::set_bool("hovered", false));
-
-        Self { inst: sm.instance(), clips: vec![idle, hover, press] }
+        Self { inst: sm.instance(), clips }
     }
 
     /// Botón listo para usar con clips Lottie embebidos (círculo que late en
