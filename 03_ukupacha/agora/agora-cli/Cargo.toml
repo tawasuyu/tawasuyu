@@ -23,7 +23,7 @@ agora-channel = { path = "../agora-channel" }
 # passphrase en cada conmutación de contexto (Fase 3 de pacha-dotfiles).
 pacha-llavero = { path = "../../../shared/pacha/pacha-llavero" }
 format = { path = "../../../shared/format" }
-foreign-fs = { path = "../../../shared/foreign-fs" }
+foreign-fs = { path = "../../../shared/foreign-fs", features = ["std"] }
 # Transporte AoE (raw sockets de capa 2) para `wawa anunciar`: difunde el
 # AnunciarCanal firmado y sirve los objetos del bundle a una wawa en la misma
 # red. Reusa el cliente ya probado en vez de duplicar el unsafe de libc.

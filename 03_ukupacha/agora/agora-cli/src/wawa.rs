@@ -673,26 +673,29 @@ pub fn wawa_importar_imagen(
     particion: Option<usize>,
 ) -> CliResult<()> {
     use foreign_fs::particion::{
-        absorber_dispositivo, absorber_particion, detectar_fs, tabla_particiones,
-        SistemaArchivos,
+        absorber_dispositivo_fuente, absorber_particion_fuente, detectar_fs_fuente,
+        tabla_particiones_fuente, Particion, SistemaArchivos,
     };
+    use foreign_fs::{Fuente, FuenteArchivo, SubFuente};
 
-    let datos = fs::read(imagen)?;
+    // Abre por OFFSET, perezoso: vale igual para un `.img` que para un
+    // dispositivo de bloques real `/dev/sdX` —se leen sólo los sectores que
+    // cada partición/archivo necesita, sin cargar el medio entero a RAM—.
+    let fuente = FuenteArchivo::abrir(imagen)?;
     fs::create_dir_all(salida)?;
 
     // Enumera y reporta la tabla — orientación para el operador.
-    let particiones = tabla_particiones(&datos).map_err(Error::ForeignFs)?;
-    println!("imagen: {} ({} bytes)", imagen.display(), datos.len());
+    let particiones = tabla_particiones_fuente(&fuente).map_err(Error::ForeignFs)?;
+    let fs_de = |p: &Particion| -> SistemaArchivos {
+        detectar_fs_fuente(&SubFuente::nueva(&fuente, p.inicio, p.tam))
+    };
+    println!("imagen: {} ({} bytes)", imagen.display(), fuente.tamano());
     println!("particiones:");
     for p in &particiones {
-        let fin = ((p.inicio + p.tam) as usize).min(datos.len());
-        let fs_str = match datos.get(p.inicio as usize..fin) {
-            Some(s) => match detectar_fs(s) {
-                SistemaArchivos::Fat => "FAT",
-                SistemaArchivos::Ext => "ext2/3/4",
-                SistemaArchivos::Desconocido => "desconocido (se omite)",
-            },
-            None => "fuera del medio",
+        let fs_str = match fs_de(p) {
+            SistemaArchivos::Fat => "FAT",
+            SistemaArchivos::Ext => "ext2/3/4",
+            SistemaArchivos::Desconocido => "desconocido (se omite)",
         };
         println!(
             "  [{}] {:?}  inicio={} tam={}  fs={}",
@@ -706,19 +709,13 @@ pub fn wawa_importar_imagen(
             .iter()
             .find(|p| p.indice == slot)
             .ok_or_else(|| Error::Spec(format!("no hay partición en el slot {slot}")))?;
-        absorber_particion(&datos, p, &mut emisor)
+        absorber_particion_fuente(&fuente, p, &mut emisor)
     } else {
         // Por defecto: una sola partición reconocida → su FS directo (sin
         // envoltorio); varias → árbol de dispositivo `particionN/`.
         let reconocidas: Vec<_> = particiones
             .iter()
-            .filter(|p| {
-                let fin = ((p.inicio + p.tam) as usize).min(datos.len());
-                datos
-                    .get(p.inicio as usize..fin)
-                    .map(|s| detectar_fs(s) != SistemaArchivos::Desconocido)
-                    .unwrap_or(false)
-            })
+            .filter(|p| fs_de(p) != SistemaArchivos::Desconocido)
             .collect();
         match reconocidas.len() {
             0 => {
@@ -726,8 +723,8 @@ pub fn wawa_importar_imagen(
                     "ninguna partición con un FS reconocido (FAT/ext)".into(),
                 ))
             }
-            1 => absorber_particion(&datos, reconocidas[0], &mut emisor),
-            _ => absorber_dispositivo(&datos, &mut emisor),
+            1 => absorber_particion_fuente(&fuente, reconocidas[0], &mut emisor),
+            _ => absorber_dispositivo_fuente(&fuente, &mut emisor),
         }
     };
 

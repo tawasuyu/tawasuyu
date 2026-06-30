@@ -404,7 +404,9 @@ pub enum WawaOp {
     ///   - varias                  → la raíz es un árbol `particionN/` por cada
     ///                               FS reconocido (las swap/desconocidas se omiten).
     ImportarImagen {
-        /// Archivo de imagen del dispositivo (un disco entero o una partición).
+        /// Imagen `.img` O dispositivo de bloques real (`/dev/sdX`, `/dev/sda2`).
+        /// Se lee por offset, perezoso: un disco de TB se absorbe sin cargarlo a
+        /// RAM (puede requerir permisos de lectura sobre el device, p.ej. sudo).
         #[arg(long)]
         imagen: PathBuf,
         /// Directorio de salida del bundle (se crea si no existe).
