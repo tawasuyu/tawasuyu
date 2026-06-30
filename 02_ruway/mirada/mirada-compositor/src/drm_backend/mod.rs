@@ -795,6 +795,21 @@ fn title_buffer(tr: &crate::text::TextRenderer, title: &str, color: [u8; 4]) -> 
     }
 }
 
+/// Como [`title_buffer`] pero devuelve también el **ancho** en px del texto —
+/// para alinear el título (centro/derecha). `0` si no rasterizó nada.
+fn title_buffer_w(tr: &crate::text::TextRenderer, title: &str, color: [u8; 4]) -> (MemoryRenderBuffer, i32) {
+    match tr.rasterize(title, TITLE_PX, color) {
+        Some(r) => (
+            MemoryRenderBuffer::from_slice(&r.rgba, Fourcc::Argb8888, (r.width, r.height), 1, Transform::Normal, None),
+            r.width,
+        ),
+        None => (
+            MemoryRenderBuffer::from_slice(&[0u8; 4], Fourcc::Argb8888, (1, 1), 1, Transform::Normal, None),
+            0,
+        ),
+    }
+}
+
 /// Códigos de botón de `<linux/input-event-codes.h>`.
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -921,6 +936,10 @@ struct DrmState {
     /// Caché de etiquetas ya rasterizadas, por (texto, color) → búfer subido.
     /// Evita re-rasterizar y re-subir la textura en cada cuadro.
     text_cache: std::collections::HashMap<(String, [u8; 4]), MemoryRenderBuffer>,
+    /// Caché del **título de ventana** rasterizado, por (texto, color) → (búfer,
+    /// ancho px). Guarda el ancho —que el `text_cache` general no— para poder
+    /// **alinear** el título (centro/derecha) sin re-medir cada cuadro.
+    title_cache: std::collections::HashMap<(String, [u8; 4]), (MemoryRenderBuffer, i32)>,
     /// Árbol del menú raíz (de la config), con submenús anidados.
     menu_entries: Vec<crate::menu::MenuNode>,
     /// Menú raíz abierto, si lo hay (click derecho sobre el fondo). Sus
@@ -1706,6 +1725,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             t
         },
         text_cache: std::collections::HashMap::new(),
+        title_cache: std::collections::HashMap::new(),
         window_backdrops: std::collections::HashMap::new(),
         menu_entries,
         root_menu: None,

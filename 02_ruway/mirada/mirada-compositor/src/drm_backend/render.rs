@@ -143,6 +143,19 @@ fn titlebar_item_icon(
     })
 }
 
+/// El color del disco «traffic light» (estilo macOS) de un botón según su
+/// acción: cerrar rojo, minimizar amarillo, maximizar/pantalla verde, el resto
+/// gris.
+fn traffic_color(action: &mirada_brain::TitlebarAction) -> [u8; 4] {
+    use mirada_brain::TitlebarAction as A;
+    match action {
+        A::Close => [237, 106, 94, 255],
+        A::Minimize => [245, 191, 79, 255],
+        A::Maximize | A::Fullscreen => [98, 197, 84, 255],
+        _ => [180, 180, 186, 255],
+    }
+}
+
 /// Transformación **cover** para escalar por GPU un buffer `sw×sh` a una salida
 /// `ow×oh`: devuelve `(offset_x, offset_y, escala)` — escala uniforme = máximo de
 /// las dos razones (llena la salida, recorta el sobrante), con el sobrante
@@ -760,19 +773,29 @@ impl DrmState {
                     // Título: arranca tras el grupo izquierdo (así no lo pisan los
                     // botones de ese lado). La alineación centro/derecha fina llega
                     // con los estilos por vista; hoy queda pegado a ese inicio.
-                    let (title_x0, _title_x1) = crate::titlebar_title_range(layout, cx, cw);
+                    let (title_x0, title_x1) = crate::titlebar_title_range(layout, cx, cw);
                     if !w.title.is_empty() {
-                        if self.text_cache.len() > 256 {
-                            self.text_cache.clear();
+                        if self.title_cache.len() > 256 {
+                            self.title_cache.clear();
                         }
-                        let buf = self
-                            .text_cache
-                            .entry((w.title.clone(), title_color))
-                            .or_insert_with(|| title_buffer(tr, &w.title, title_color));
+                        let (buf, tw) = {
+                            let e = self
+                                .title_cache
+                                .entry((w.title.clone(), title_color))
+                                .or_insert_with(|| title_buffer_w(tr, &w.title, title_color));
+                            (&e.0, e.1)
+                        };
+                        // Alineación dentro del hueco entre los dos grupos.
+                        let avail = (title_x1 - title_x0).max(0);
+                        let tx = match layout.title_align {
+                            mirada_brain::TitleAlign::Left => title_x0,
+                            mirada_brain::TitleAlign::Center => title_x0 + ((avail - tw) / 2).max(0),
+                            mirada_brain::TitleAlign::Right => title_x1 - tw.min(avail),
+                        };
                         let ty = dec_y + (tb - TITLE_PX as i32) / 2;
                         if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                             &mut self.renderer,
-                            (title_x0 as f64, ty as f64),
+                            (tx as f64, ty as f64),
                             buf,
                             Some(anim_alpha),
                             None,
@@ -787,8 +810,9 @@ impl DrmState {
                     // (no por fuente: los glyphs ✕/□ salían como tofu). El hit-test
                     // usa las MISMAS celdas (`titlebar_cells`), así click y dibujo
                     // nunca divergen.
-                    let bevel_btns =
-                        layout.button_style == mirada_brain::TitlebarButtonStyle::Bevel;
+                    let style = layout.button_style;
+                    let bevel_btns = style == mirada_brain::TitlebarButtonStyle::Bevel;
+                    let traffic = style == mirada_brain::TitlebarButtonStyle::TrafficLight;
                     let (btn_face, btn_hi, btn_lo) = if bevel_btns {
                         let tbar = self.focus_base_titlebar(w, anim_now, glow_ms);
                         (
@@ -800,8 +824,29 @@ impl DrmState {
                         ([0.0; 4], [0.0; 4], [0.0; 4])
                     };
                     for (cell_x, item) in crate::titlebar_cells(layout, cx, cw) {
+                        let mirada_brain::TitlebarItem::Button { action, .. } = item else {
+                            continue; // item App (reservado), aún sin render
+                        };
+                        // Estilo traffic-light (mac): un disco de color, sin glifo
+                        // (como macOS, que muestra el símbolo sólo al hover).
+                        if traffic {
+                            let ds = (crate::TB_BTN_W.min(tb) - 12).max(8) as f32;
+                            let disc = crate::text::icon_disc(ds, traffic_color(action));
+                            let dx = cell_x + (crate::TB_BTN_W - disc.width) / 2;
+                            let dy = dec_y + (tb - disc.height) / 2;
+                            let dbuf = MemoryRenderBuffer::from_slice(
+                                &disc.rgba, Fourcc::Argb8888, (disc.width, disc.height), 1, Transform::Normal, None,
+                            );
+                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                                &mut self.renderer, (dx as f64, dy as f64), &dbuf,
+                                Some(anim_alpha), None, None, Kind::Unspecified,
+                            ) {
+                                into.push(Frame::Text(el));
+                            }
+                            continue;
+                        }
                         let Some(r) = titlebar_item_icon(item, TITLE_PX, title_color, tr) else {
-                            continue; // item App (reservado) o sin ícono dibujable
+                            continue; // sin ícono dibujable
                         };
                         let bx = cell_x + (crate::TB_BTN_W - r.width) / 2;
                         let by = dec_y + (tb - r.height) / 2;

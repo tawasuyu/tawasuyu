@@ -752,6 +752,8 @@ impl App {
         }
         let extra = if cmd == "float" {
             DesktopAction::ToggleFloat
+        } else if cmd == "fullscreen" {
+            DesktopAction::ToggleFullscreen
         } else if let Some(n) = cmd.strip_prefix("ws:").and_then(|s| s.parse::<usize>().ok()) {
             DesktopAction::MoveToWorkspace(n)
         } else {

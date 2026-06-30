@@ -267,6 +267,25 @@ pub fn icon_float(px: f32, color: [u8; 4]) -> Rasterized {
     Rasterized { rgba, width: s, height: s }
 }
 
+/// **Disco** lleno antialiased (un círculo) del color dado — el botón estilo
+/// macOS («traffic light»). Mismo formato que los demás íconos.
+pub fn icon_disc(px: f32, color: [u8; 4]) -> Rasterized {
+    let s = px.max(6.0) as i32;
+    let mut rgba = vec![0u8; (s * s * 4) as usize];
+    let c = s as f32 / 2.0;
+    let r = c - 0.5;
+    for y in 0..s {
+        for x in 0..s {
+            let d = ((x as f32 + 0.5 - c).powi(2) + (y as f32 + 0.5 - c).powi(2)).sqrt();
+            let cov = (r - d + 0.5).clamp(0.0, 1.0); // ~1px de antialias en el borde
+            if cov > 0.0 {
+                blend_px(&mut rgba, s, s, x, y, color, cov);
+            }
+        }
+    }
+    Rasterized { rgba, width: s, height: s }
+}
+
 /// Rellena un rect opaco/translúcido en el búfer (color en orden **R,G,B,A**,
 /// igual que [`blend_px`]). Recorta a los límites.
 fn fill_rect(rgba: &mut [u8], w: i32, h: i32, x: i32, y: i32, rw: i32, rh: i32, color: [u8; 4]) {

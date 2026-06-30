@@ -59,6 +59,7 @@ pub fn window_menu_entries(workspaces: usize) -> Vec<MenuNode> {
     vec![
         MenuNode::leaf("Minimizar", "@win:min"),
         MenuNode::leaf("Maximizar / restaurar", "@win:max"),
+        MenuNode::leaf("Pantalla completa", "@win:fullscreen"),
         MenuNode::leaf("Flotar / teselar", "@win:float"),
         MenuNode::submenu("Enviar a…", destinos),
         MenuNode::leaf("Cerrar", "@win:close"),
