@@ -407,6 +407,7 @@ nahual-shell-unsaved = ● sin guardar
 nahual-shell-saved = ✓ guardado
 nahual-shell-editor-hint = Ctrl+S guarda · Esc cierra
 nahual-shell-folders = CARPETAS
+nahual-shell-devices = Dispositivos
 nahual-shell-queue-running = ⚙ Operaciones · { $running } en curso / { $total }
 nahual-shell-queue-done = ✓ Operaciones · { $total } terminadas
 nahual-shell-clear = Limpiar

@@ -404,6 +404,7 @@ nahual-shell-unsaved = ● unsaved
 nahual-shell-saved = ✓ saved
 nahual-shell-editor-hint = Ctrl+S saves · Esc closes
 nahual-shell-folders = FOLDERS
+nahual-shell-devices = Devices
 nahual-shell-queue-running = ⚙ Operations · { $running } running / { $total }
 nahual-shell-queue-done = ✓ Operations · { $total } done
 nahual-shell-clear = Clear

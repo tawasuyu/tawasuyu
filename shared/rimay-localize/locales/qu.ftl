@@ -408,6 +408,7 @@ nahual-shell-unsaved = ● mana waqaychasqa
 nahual-shell-saved = ✓ waqaychasqa
 nahual-shell-editor-hint = Ctrl+S waqaychan · Esc wisq'an
 nahual-shell-folders = QILLQANAKUNA
+nahual-shell-devices = Dispositivokuna
 nahual-shell-queue-running = ⚙ Rurakuna · { $running } rurachkan / { $total }
 nahual-shell-queue-done = ✓ Rurakuna · { $total } tukusqa
 nahual-shell-clear = Pichay

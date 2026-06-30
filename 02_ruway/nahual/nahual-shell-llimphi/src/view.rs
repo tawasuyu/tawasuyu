@@ -716,6 +716,41 @@ pub(crate) fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .text(rimay_localize::t("nahual-shell-folders"), 12.0, theme.fg_muted);
 
+    // Acceso fijo a los dispositivos de bloques (USB/discos): los monta como
+    // fuente navegable read-only en el panel activo. Fuera del árbol de rutas
+    // —no es una carpeta POSIX, es una fuente sintética—, así queda descubrible
+    // sin enterrarlo en un menú.
+    let dispositivos = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        padding: pad_h(12.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::MountDispositivos)
+    .children(vec![
+        View::new(Style {
+            size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .children(vec![icon_view(Icon::Save, theme.fg_muted, 1.5)]),
+        View::new(Style {
+            flex_grow: 1.0,
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            size: Size { width: auto(), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .text(rimay_localize::t("nahual-shell-devices"), 12.5, theme.fg_text),
+    ]);
+
     // Ventaneo: sólo las filas que entran (offset recordado por sesión).
     let all = build_tree_rows(model, theme);
     let vis = tree_visible_rows(model);
@@ -746,7 +781,7 @@ pub(crate) fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
     .fill(theme.bg_panel_alt)
     // La rueda sobre el sidebar la rutea `on_wheel` por región (cursor.x <
     // tree_w) — el handler local se perdía entre updates rápidos.
-    .children(vec![header, tree_wrap])
+    .children(vec![header, dispositivos, tree_wrap])
 }
 
 /// La app integrada abierta en el canvas: editor de texto potente (con
