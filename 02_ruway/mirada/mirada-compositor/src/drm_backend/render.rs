@@ -770,10 +770,12 @@ impl DrmState {
                     // si no el claro histórico.
                     let title_color = self.app.decorations.titlebar_text.unwrap_or(TITLE_COLOR);
                     let layout = &self.app.titlebar_layout;
-                    // Título: arranca tras el grupo izquierdo (así no lo pisan los
-                    // botones de ese lado). La alineación centro/derecha fina llega
-                    // con los estilos por vista; hoy queda pegado a ese inicio.
-                    let (title_x0, title_x1) = crate::titlebar_title_range(layout, cx, cw);
+                    // Botones que la app mirada-aware aporta a SU barra (por app_id).
+                    let contribs: &[mirada_aware::AwareItem] =
+                        self.app.aware_items.get(&w.app_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                    // Título: alineado en el hueco entre los grupos (botones de
+                    // sistema + contribuciones), según title_align.
+                    let (title_x0, title_x1) = crate::titlebar_title_range(layout, contribs, cx, cw);
                     if !w.title.is_empty() {
                         if self.title_cache.len() > 256 {
                             self.title_cache.clear();
@@ -823,30 +825,27 @@ impl DrmState {
                     } else {
                         ([0.0; 4], [0.0; 4], [0.0; 4])
                     };
-                    for (cell_x, item) in crate::titlebar_cells(layout, cx, cw) {
-                        let mirada_brain::TitlebarItem::Button { action, .. } = item else {
-                            continue; // item App (reservado), aún sin render
-                        };
-                        // Estilo traffic-light (mac): un disco de color, sin glifo
-                        // (como macOS, que muestra el símbolo sólo al hover).
-                        if traffic {
-                            let ds = (crate::TB_BTN_W.min(tb) - 12).max(8) as f32;
-                            let disc = crate::text::icon_disc(ds, traffic_color(action));
-                            let dx = cell_x + (crate::TB_BTN_W - disc.width) / 2;
-                            let dy = dec_y + (tb - disc.height) / 2;
-                            let dbuf = MemoryRenderBuffer::from_slice(
-                                &disc.rgba, Fourcc::Argb8888, (disc.width, disc.height), 1, Transform::Normal, None,
-                            );
-                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                                &mut self.renderer, (dx as f64, dy as f64), &dbuf,
-                                Some(anim_alpha), None, None, Kind::Unspecified,
-                            ) {
-                                into.push(Frame::Text(el));
+                    for (cell_x, cell) in crate::titlebar_cells_for(layout, contribs, cx, cw) {
+                        let es_sys = matches!(cell, crate::TbCell::Sys(_));
+                        // El ícono a pintar: el glifo de la app (contribución), el
+                        // disco de color (traffic-light), o el ícono de la acción.
+                        let r = match &cell {
+                            crate::TbCell::App { glyph, .. } => match tr.rasterize(glyph, TITLE_PX, title_color) {
+                                Some(r) => r,
+                                None => continue,
+                            },
+                            crate::TbCell::Sys(item) => {
+                                let Some(action) = cell.action() else { continue };
+                                if traffic {
+                                    let ds = (crate::TB_BTN_W.min(tb) - 12).max(8) as f32;
+                                    crate::text::icon_disc(ds, traffic_color(action))
+                                } else {
+                                    match titlebar_item_icon(item, TITLE_PX, title_color, tr) {
+                                        Some(r) => r,
+                                        None => continue,
+                                    }
+                                }
                             }
-                            continue;
-                        }
-                        let Some(r) = titlebar_item_icon(item, TITLE_PX, title_color, tr) else {
-                            continue; // sin ícono dibujable
                         };
                         let bx = cell_x + (crate::TB_BTN_W - r.width) / 2;
                         let by = dec_y + (tb - r.height) / 2;
@@ -870,8 +869,9 @@ impl DrmState {
                             into.push(Frame::Text(el));
                         }
                         // Tecla biselada DETRÁS del ícono (se empuja después = queda
-                        // debajo): anillo raised + cara. Sólo con estilo Bevel (CDE).
-                        if bevel_btns {
+                        // debajo): anillo raised + cara. Sólo botones de sistema con
+                        // estilo Bevel (CDE); las contribuciones van planas.
+                        if bevel_btns && es_sys {
                             let bs = (crate::TB_BTN_W.min(tb) - 6).max(8);
                             let kx = cell_x + (crate::TB_BTN_W - bs) / 2;
                             let ky = dec_y + (tb - bs) / 2;

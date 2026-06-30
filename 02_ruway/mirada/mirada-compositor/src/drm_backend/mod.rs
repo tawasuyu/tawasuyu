@@ -865,6 +865,7 @@ struct DrmState {
     /// Vigías de los archivos de config recargables en caliente.
     watches: crate::ConfigWatches,
     ctl: Option<crate::CtlServer>,
+    aware: Option<mirada_aware::AwareServer>,
     /// Próximo `OutputId` a asignar a un monitor recién enchufado. Monótono y
     /// **nunca reusado** (a diferencia de `outputs.len()`, que reciclaba ids
     /// tras un desenchufe y los hacía colisionar): así cada salida tiene una
@@ -1275,7 +1276,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // 7 · El estado Wayland (Cerebro, teclado, keymap, control).
     println!("[7/8] armando el estado Wayland …");
     timing_hito("mirada:surface-lista");
-    let Setup { mut display, mut app, watches, ctl } =
+    let Setup { mut display, mut app, watches, ctl, aware } =
         crate::build_app(greeter)?;
     timing_hito("mirada:build_app-listo");
     // Con el renderer ya creado, anuncia dmabuf — sin esto las apps que
@@ -1693,6 +1694,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         active: true,
         watches,
         ctl,
+        aware,
         next_output_id,
         start: Instant::now(),
         last_windows: 0,

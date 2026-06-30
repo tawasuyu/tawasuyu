@@ -898,6 +898,37 @@ impl App {
         }
     }
 
+    /// Atiende una petición del protocolo **mirada-aware** (botones que las apps
+    /// aportan a su barra). Stateless: guarda/retira contribuciones por `app_id`
+    /// y drena los clicks pendientes.
+    pub(crate) fn serve_aware(
+        &mut self,
+        req: mirada_aware::AwareRequest,
+    ) -> mirada_aware::AwareReply {
+        use mirada_aware::{AwareReply, AwareRequest};
+        match req {
+            AwareRequest::Register { app_id, items } => {
+                if items.is_empty() {
+                    self.aware_items.remove(&app_id);
+                } else {
+                    self.aware_items.insert(app_id, items);
+                }
+                crate::screencopy::danar_todo(self); // repintar las barras
+                AwareReply::Ok
+            }
+            AwareRequest::Unregister { app_id } => {
+                self.aware_items.remove(&app_id);
+                self.aware_clicks.remove(&app_id);
+                crate::screencopy::danar_todo(self);
+                AwareReply::Ok
+            }
+            AwareRequest::PollClicks { app_id } => {
+                let clicks = self.aware_clicks.remove(&app_id).unwrap_or_default();
+                AwareReply::Clicks(clicks)
+            }
+        }
+    }
+
     /// Recarga el keymap del usuario en caliente. Conserva el anterior si
     /// el archivo nuevo es inválido. No-op con el Cerebro enlazado (el
     /// keymap es asunto suyo). Lo dispara [`ConfigWatches::poll`].

@@ -20,6 +20,7 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
         app: mut state,
         watches,
         ctl,
+        aware,
     } = build_app(greeter)?;
     let keyboard = state.keyboard.clone().expect("teclado inicializado");
 
@@ -215,6 +216,16 @@ pub(crate) fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>>
                     Err(e) => CtlReply::Error(format!("{e}")),
                 };
                 let _ = conn.reply(&reply);
+            }
+        }
+
+        // 2 quinquies · Protocolo mirada-aware (botones aportados por apps).
+        if let Some(aware) = &aware {
+            while let Some(mut conn) = aware.poll() {
+                if let Ok(Some(req)) = conn.read_request() {
+                    let reply = state.serve_aware(req);
+                    let _ = conn.reply(&reply);
+                }
             }
         }
 

@@ -641,6 +641,13 @@ pub(crate) struct App {
     /// Layout de la barra de título (botones, grupos, alineación, estilo) que
     /// fija el Cerebro vía `BodyOp::SetTitlebarLayout`; default = histórico.
     pub(crate) titlebar_layout: mirada_brain::TitlebarLayout,
+    /// Botones que las apps **mirada-aware** aportan a su propia barra, por
+    /// `app_id` (protocolo `mirada-aware`). Se pintan junto a los de sistema en
+    /// las ventanas de ese `app_id`.
+    pub(crate) aware_items: std::collections::HashMap<String, Vec<mirada_aware::AwareItem>>,
+    /// Clicks pendientes sobre botones aportados, por `app_id` — la app los
+    /// drena con `PollClicks`.
+    pub(crate) aware_clicks: std::collections::HashMap<String, Vec<mirada_aware::AwareClick>>,
     /// Superficies cuyo cliente aceptó decoración del servidor (SSD) vía
     /// `xdg-decoration`. Fuente de verdad de [`ManagedWindow::ssd`]; una
     /// ventana ausente de este set se decora sola (CSD) y mirada no le pinta

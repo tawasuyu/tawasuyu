@@ -1,0 +1,13 @@
+[package]
+name = "mirada-aware"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — protocolo «mirada-aware»: una app cliente registra botones propios en su barra de título y recibe los clicks. Socket Unix de petición/respuesta (postcard), igual que mirada-ctl."
+
+[dependencies]
+serde = { workspace = true }
+# Reusa el framing con prefijo de longitud (read_frame/write_frame) de mirada.
+mirada-protocol = { path = "../mirada-protocol" }

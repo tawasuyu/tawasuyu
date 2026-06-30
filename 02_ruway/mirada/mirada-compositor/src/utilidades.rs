@@ -237,49 +237,106 @@ pub(crate) fn over_layer_rects(output: Option<&Output>) -> Vec<(i32, i32, i32, i
 /// hit-test del click.
 pub(crate) const TB_BTN_W: i32 = 28;
 
-/// Las celdas `(x_izquierdo, &item)` de los botones del titlebar para una
-/// ventana cuyo contenido ocupa `cx..cx+cw`. El grupo **izquierdo** se apila
-/// desde `cx` hacia la derecha; el **derecho** desde `cx+cw` hacia la izquierda.
-/// Omite los que no entran (ventana angosta) y nunca deja que los grupos se
-/// pisen. La usan por igual el render y el hit-test, así el dibujo y el click
-/// **nunca divergen** (la causa típica de "le pego al botón y no pasa nada").
-pub(crate) fn titlebar_cells<'a>(
+/// Una celda de la barra de título: un botón de **sistema** (el item del layout,
+/// siempre un `Button`) o uno **aportado por una app** mirada-aware (id + glifo).
+pub(crate) enum TbCell<'a> {
+    Sys(&'a mirada_brain::TitlebarItem),
+    App { item_id: &'a str, glyph: &'a str },
+}
+
+impl TbCell<'_> {
+    /// La acción de un botón de sistema (`None` para los aportados por apps).
+    pub(crate) fn action(&self) -> Option<&mirada_brain::TitlebarAction> {
+        match self {
+            TbCell::Sys(mirada_brain::TitlebarItem::Button { action, .. }) => Some(action),
+            _ => None,
+        }
+    }
+}
+
+/// El nº efectivo de botones a izquierda y derecha = los de sistema (sólo los
+/// `Button` del layout; los `App` reservados no cuentan) + las contribuciones de
+/// la app por lado. Lo comparten el cálculo de celdas y el rango del título.
+fn effective_counts(
+    layout: &mirada_brain::TitlebarLayout,
+    contribs: &[mirada_aware::AwareItem],
+) -> (i32, i32) {
+    let es_boton = |it: &mirada_brain::TitlebarItem| matches!(it, mirada_brain::TitlebarItem::Button { .. });
+    let lc = layout.left.iter().filter(|i| es_boton(i)).count() as i32
+        + contribs.iter().filter(|c| c.side == mirada_aware::AwareSide::Left).count() as i32;
+    let rc = layout.right.iter().filter(|i| es_boton(i)).count() as i32
+        + contribs.iter().filter(|c| c.side == mirada_aware::AwareSide::Right).count() as i32;
+    (lc, rc)
+}
+
+/// Las celdas `(x_izquierdo, celda)` del titlebar de una ventana cuyo contenido
+/// ocupa `cx..cx+cw`, combinando los botones de **sistema** del `layout` con las
+/// **contribuciones** de la app (`contribs`). Grupo izquierdo: sistema-izq +
+/// contribuciones-izq, apilados desde `cx`. Grupo derecho: contribuciones-der +
+/// sistema-der, terminando en el borde derecho (los de sistema quedan pegados al
+/// borde: cerrar/maximizar nunca los desplaza una contribución). Omite lo que no
+/// entra. La usan **por igual** el render y el hit-test, así dibujo y click nunca
+/// divergen.
+pub(crate) fn titlebar_cells_for<'a>(
     layout: &'a mirada_brain::TitlebarLayout,
+    contribs: &'a [mirada_aware::AwareItem],
     cx: i32,
     cw: i32,
-) -> Vec<(i32, &'a mirada_brain::TitlebarItem)> {
-    let mut out = Vec::new();
-    // Izquierda: left-to-right desde `cx`.
-    let mut lx = cx;
+) -> Vec<(i32, TbCell<'a>)> {
+    use mirada_aware::AwareSide;
+    use mirada_brain::TitlebarItem;
+    // Items efectivos por grupo, en orden de pintado.
+    let mut left: Vec<TbCell> = Vec::new();
     for it in &layout.left {
+        if matches!(it, TitlebarItem::Button { .. }) {
+            left.push(TbCell::Sys(it));
+        }
+    }
+    for c in contribs.iter().filter(|c| c.side == AwareSide::Left) {
+        left.push(TbCell::App { item_id: &c.id, glyph: &c.glyph });
+    }
+    let mut right: Vec<TbCell> = Vec::new();
+    for c in contribs.iter().filter(|c| c.side == AwareSide::Right) {
+        right.push(TbCell::App { item_id: &c.id, glyph: &c.glyph });
+    }
+    for it in &layout.right {
+        if matches!(it, TitlebarItem::Button { .. }) {
+            right.push(TbCell::Sys(it));
+        }
+    }
+    // Posicionar: izquierda left-to-right desde cx; derecha left-to-right
+    // terminando en el borde derecho.
+    let mut out = Vec::new();
+    let mut lx = cx;
+    for cell in left {
         if lx + TB_BTN_W > cx + cw {
             break;
         }
-        out.push((lx, it));
+        out.push((lx, cell));
         lx += TB_BTN_W;
     }
-    // Derecha: el grupo se lee **left-to-right** y termina pegado al borde
-    // derecho (el último item queda más a la derecha — p. ej. «cerrar» en el
-    // layout clásico). Si no entra todo, se omiten los de la IZQUIERDA del grupo
-    // (los que pisarían el grupo izquierdo), conservando cerrar/maximizar.
-    let n = layout.right.len() as i32;
-    for (k, it) in layout.right.iter().enumerate() {
+    let n = right.len() as i32;
+    for (k, cell) in right.into_iter().enumerate() {
         let x = cx + cw - (n - k as i32) * TB_BTN_W;
         if x < lx {
             continue;
         }
-        out.push((x, it));
+        out.push((x, cell));
     }
     out
 }
 
 /// El rango horizontal `(inicio, fin)` disponible para el **título**: entre el
-/// final del grupo izquierdo y el comienzo del derecho, con un padding lateral.
-/// Para alinear el título sin pisar los botones.
-pub(crate) fn titlebar_title_range(layout: &mirada_brain::TitlebarLayout, cx: i32, cw: i32) -> (i32, i32) {
+/// final del grupo izquierdo y el comienzo del derecho (contribuciones
+/// incluidas), con un padding lateral. Para alinear el título sin pisar botones.
+pub(crate) fn titlebar_title_range(
+    layout: &mirada_brain::TitlebarLayout,
+    contribs: &[mirada_aware::AwareItem],
+    cx: i32,
+    cw: i32,
+) -> (i32, i32) {
     let pad = 8;
-    let left_n = layout.left.len() as i32;
-    let right_n = layout.right.len() as i32;
+    let (left_n, right_n) = effective_counts(layout, contribs);
     let start = cx + left_n * TB_BTN_W + pad;
     let end = cx + cw - right_n * TB_BTN_W - pad;
     (start, end.max(start))
@@ -735,25 +792,23 @@ where
 #[cfg(test)]
 mod tests_titlebar {
     use super::*;
+    use mirada_aware::{AwareItem, AwareSide};
     use mirada_brain::{TitlebarAction, TitlebarItem, TitlebarLayout};
 
-    fn accion(cells: &[(i32, &TitlebarItem)], i: usize) -> TitlebarAction {
-        match cells[i].1 {
-            TitlebarItem::Button { action, .. } => action.clone(),
-            _ => panic!("se esperaba un botón"),
-        }
+    fn es_accion(cell: &TbCell, want: TitlebarAction) -> bool {
+        cell.action() == Some(&want)
     }
 
     #[test]
     fn layout_clasico_pone_cerrar_a_la_derecha_del_todo() {
         // Default: derecha = [min, max, close]. Contenido en cx=100, cw=400.
         let layout = TitlebarLayout::default();
-        let cells = titlebar_cells(&layout, 100, 400);
+        let cells = titlebar_cells_for(&layout, &[], 100, 400);
         assert_eq!(cells.len(), 3);
         // El último (cerrar) queda pegado al borde derecho (cx+cw-W).
         let der = cells.iter().max_by_key(|(x, _)| *x).unwrap();
         assert_eq!(der.0, 100 + 400 - TB_BTN_W);
-        assert!(matches!(der.1, TitlebarItem::Button { action: TitlebarAction::Close, .. }));
+        assert!(es_accion(&der.1, TitlebarAction::Close));
     }
 
     #[test]
@@ -766,12 +821,10 @@ mod tests_titlebar {
             ],
             ..Default::default()
         };
-        let cells = titlebar_cells(&layout, 0, 400);
+        let cells = titlebar_cells_for(&layout, &[], 0, 400);
         assert_eq!(cells.len(), 3);
-        // El de la izquierda arranca en cx.
         assert_eq!(cells[0].0, 0);
-        assert_eq!(accion(&cells, 0), TitlebarAction::Menu);
-        // Ninguna celda se solapa ni sale del rango [0, 400].
+        assert!(es_accion(&cells[0].1, TitlebarAction::Menu));
         for (x, _) in &cells {
             assert!(*x >= 0 && *x + TB_BTN_W <= 400);
         }
@@ -779,10 +832,25 @@ mod tests_titlebar {
 
     #[test]
     fn ventana_angosta_conserva_cerrar() {
-        // Sólo entra un botón: debe ser el de más a la derecha (cerrar).
         let layout = TitlebarLayout::default();
-        let cells = titlebar_cells(&layout, 0, TB_BTN_W + 6);
+        let cells = titlebar_cells_for(&layout, &[], 0, TB_BTN_W + 6);
         assert_eq!(cells.len(), 1);
-        assert!(matches!(cells[0].1, TitlebarItem::Button { action: TitlebarAction::Close, .. }));
+        assert!(es_accion(&cells[0].1, TitlebarAction::Close));
+    }
+
+    #[test]
+    fn las_contribuciones_de_app_entran_entre_titulo_y_botones_de_sistema() {
+        // App aporta un botón a la derecha; debe quedar a la IZQUIERDA de los de
+        // sistema (cerrar sigue pegado al borde), y aparecer como TbCell::App.
+        let layout = TitlebarLayout::default(); // right = [min, max, close]
+        let contribs = vec![AwareItem { id: "run".into(), glyph: "▶".into(), label: "Correr".into(), side: AwareSide::Right }];
+        let cells = titlebar_cells_for(&layout, &contribs, 0, 400);
+        assert_eq!(cells.len(), 4, "3 de sistema + 1 aportado");
+        // Cerrar sigue siendo el más a la derecha.
+        let der = cells.iter().max_by_key(|(x, _)| *x).unwrap();
+        assert!(es_accion(&der.1, TitlebarAction::Close));
+        // El aportado existe y está a la izquierda de los 3 de sistema.
+        let app = cells.iter().find(|(_, c)| matches!(c, TbCell::App { item_id, .. } if *item_id == "run")).unwrap();
+        assert!(app.0 < cells.iter().filter(|(_, c)| matches!(c, TbCell::Sys(_))).map(|(x, _)| *x).min().unwrap());
     }
 }

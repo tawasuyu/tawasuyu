@@ -16,6 +16,7 @@ path = "src/main.rs"
 bitacora = { workspace = true }
 mirada-brain = { path = "../mirada-brain" }
 mirada-body = { path = "../mirada-body" }
+mirada-aware = { path = "../mirada-aware" }
 mirada-link = { path = "../mirada-link" }
 mirada-procedural = { path = "../mirada-procedural" }
 auth-core = { path = "../../../shared/auth/auth-core" }

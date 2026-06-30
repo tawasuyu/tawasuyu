@@ -192,6 +192,16 @@ impl DrmState {
             }
         }
 
+        // Protocolo mirada-aware: apps que aportan botones a su titlebar.
+        if let Some(aware) = &self.aware {
+            while let Some(mut conn) = aware.poll() {
+                if let Ok(Some(req)) = conn.read_request() {
+                    let reply = self.app.serve_aware(req);
+                    let _ = conn.reply(&reply);
+                }
+            }
+        }
+
         // Slide de transición de escritorios (Win+Tab modo Hyprland/Prezi): al
         // detectar que el escritorio activo cambió, arranca un slide; el render
         // (cada tick) lo anima por tiempo y `emit_windows` aplica el offset.

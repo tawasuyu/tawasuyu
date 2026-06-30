@@ -494,9 +494,22 @@ impl DrmState {
                 // layout (configurable); `Menu` abre el menú contextual.
                 if pressed && button == BTN_LEFT && !self.app.shell_activo() {
                     let (x, y) = self.app.pointer_loc;
-                    if let Some((id, action)) = self.titlebar_button_at(x, y) {
-                        if !self.app.accion_titlebar(id, &action) {
-                            self.open_window_menu(id); // era `Menu`
+                    if let Some(target) = self.titlebar_button_at(x, y) {
+                        match target {
+                            TbClickTarget::Sys { id, action } => {
+                                if !self.app.accion_titlebar(id, &action) {
+                                    self.open_window_menu(id); // era `Menu`
+                                }
+                            }
+                            // Botón aportado por una app: encolar el click para que
+                            // la app lo drene con PollClicks (protocolo mirada-aware).
+                            TbClickTarget::App { app_id, item_id, window, window_title } => {
+                                self.app
+                                    .aware_clicks
+                                    .entry(app_id)
+                                    .or_default()
+                                    .push(mirada_aware::AwareClick { item_id, window, window_title });
+                            }
                         }
                         return;
                     }
@@ -979,13 +992,12 @@ impl DrmState {
         })
     }
 
-    /// La ventana y el botón de titlebar bajo `(x, y)` global: `Some((id, true))`
-    /// = cerrar (✕), `Some((id, false))` = maximizar (□). Mismas posiciones que
-    /// el render (mismas celdas vía [`crate::titlebar_cells`], así click y dibujo
-    /// nunca divergen). Devuelve `(id, acción)` del botón bajo el puntero, o
-    /// `None` si ahí no hay botón actuable (título, hueco, o item `App`
-    /// reservado → el llamador lo trata como arrastre).
-    pub(super) fn titlebar_button_at(&self, x: f64, y: f64) -> Option<(u64, mirada_brain::TitlebarAction)> {
+    /// El **objetivo de click** del botón de titlebar bajo `(x, y)` global: un
+    /// botón de sistema (con su acción) o uno aportado por una app mirada-aware.
+    /// Mismas celdas que el render (`titlebar_cells_for`), así click y dibujo
+    /// nunca divergen. `None` si ahí no hay botón actuable (título, hueco → el
+    /// llamador lo trata como arrastre).
+    pub(super) fn titlebar_button_at(&self, x: f64, y: f64) -> Option<TbClickTarget> {
         let tbh = self.app.decorations.titlebar_height;
         if tbh <= 0 {
             return None;
@@ -1014,14 +1026,28 @@ impl DrmState {
             if py < top || py >= top + tb {
                 continue;
             }
-            for (cell_x, item) in crate::titlebar_cells(layout, lx, sw) {
+            let contribs: &[mirada_aware::AwareItem] =
+                self.app.aware_items.get(&w.app_id).map(|v| v.as_slice()).unwrap_or(&[]);
+            for (cell_x, cell) in crate::titlebar_cells_for(layout, contribs, lx, sw) {
                 if px < cell_x || px >= cell_x + crate::TB_BTN_W {
                     continue;
                 }
-                if let mirada_brain::TitlebarItem::Button { action, .. } = item {
-                    return Some((w.id, action.clone()));
+                match &cell {
+                    crate::TbCell::Sys(_) => {
+                        if let Some(action) = cell.action() {
+                            return Some(TbClickTarget::Sys { id: w.id, action: action.clone() });
+                        }
+                    }
+                    crate::TbCell::App { item_id, .. } => {
+                        return Some(TbClickTarget::App {
+                            app_id: w.app_id.clone(),
+                            item_id: (*item_id).to_string(),
+                            window: w.id,
+                            window_title: w.title.clone(),
+                        });
+                    }
                 }
-                break; // celda de un item `App` (reservado): no actúa → arrastre
+                break; // celda hallada pero no actuable → arrastre
             }
         }
         None
@@ -1048,4 +1074,12 @@ impl DrmState {
             crate::screencopy::danar_todo(&mut self.app);
         }
     }
+}
+
+/// El objetivo de un click sobre un botón del titlebar: un botón de **sistema**
+/// (con su acción) o uno **aportado por una app** mirada-aware (a rutear de
+/// vuelta al cliente por `app_id`). Lo produce `titlebar_button_at`.
+pub(super) enum TbClickTarget {
+    Sys { id: u64, action: mirada_brain::TitlebarAction },
+    App { app_id: String, item_id: String, window: u64, window_title: String },
 }

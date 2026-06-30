@@ -270,6 +270,8 @@ pub(crate) struct Setup {
     pub(crate) app: App,
     pub(crate) watches: ConfigWatches,
     pub(crate) ctl: Option<CtlServer>,
+    /// Socket del protocolo mirada-aware (apps que aportan botones al titlebar).
+    pub(crate) aware: Option<mirada_aware::AwareServer>,
 }
 
 /// Arma el estado del compositor — todo lo independiente del backend
@@ -502,6 +504,8 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         linked_ws: None,
         decorations: mirada_brain::Decorations::default(),
         titlebar_layout: mirada_brain::TitlebarLayout::default(),
+        aware_items: std::collections::HashMap::new(),
+        aware_clicks: std::collections::HashMap::new(),
         ssd_surfaces: std::collections::HashSet::new(),
         caps,
         pending_keybind: None,
@@ -602,5 +606,21 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         Brain::Linked(_) => None,
     };
 
-    Ok(Setup { display, app, watches, ctl })
+    // Socket mirada-aware: lo abren ambos modos (las apps clientes pueden
+    // aportar botones esté el Cerebro embebido o enlazado).
+    let aware = {
+        let path = mirada_aware::default_socket_path();
+        match mirada_aware::AwareServer::bind(&path) {
+            Ok(s) => {
+                println!("mirada-compositor · protocolo mirada-aware en {}", path.display());
+                Some(s)
+            }
+            Err(e) => {
+                dlog!("mirada-compositor · sin protocolo mirada-aware: {e}");
+                None
+            }
+        }
+    };
+
+    Ok(Setup { display, app, watches, ctl, aware })
 }
