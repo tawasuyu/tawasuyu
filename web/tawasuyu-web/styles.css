@@ -107,8 +107,8 @@ a:hover { color: var(--fg-text); }
 }
 .topbar-left { flex: 1; min-width: 0; }
 
-/* brand: en desktop es texto + chakana mini (cursor default); en mobile
- * pasa a botón hamburguesa que togglea body.sidebar-open. */
+/* brand = chakana + tawasuyu; al clickear minimiza todo (mostrar
+ * escritorio / "volver a la chakana"). */
 .brand {
   display: inline-flex;
   align-items: center;
@@ -121,7 +121,7 @@ a:hover { color: var(--fg-text); }
   letter-spacing: 0.08em;
   font-weight: 500;
   padding: 4px 8px;
-  cursor: default;
+  cursor: pointer;
   border-radius: 3px;
 }
 .brand:hover { background: var(--bg-row-hover); }
@@ -211,32 +211,84 @@ a:hover { color: var(--fg-text); }
 .task-item[data-theme="cosmos"]   .task-dot { background: var(--c-cosmos); }
 .task-label { overflow: hidden; text-overflow: ellipsis; }
 
-/* portada: sidebar + plano */
+/* portada: sidebar (rail+panel) al lado del plano. Al guardar la sidebar
+ * (drag a la izquierda) el plano toma todo el ancho. */
 #portada {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  display: flex;
   overflow: hidden;
   min-height: 0;
 }
 
-/* sidebar */
+/* ===== sidebar = dock-rail (dientes) + panel del diente activo ===== */
 #sidebar {
-  background: var(--bg-panel);
-  border-right: 1px solid var(--border);
-  padding: 12px 0;
-  overflow-y: auto;
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
   font-size: 12px;
 }
-#sidebar::-webkit-scrollbar { width: 8px; }
-#sidebar::-webkit-scrollbar-track { background: transparent; }
-#sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+body.sidebar-stowed #sidebar { display: none; }
 
-.sidebar-section {
-  padding: 6px 12px 10px;
-  border-bottom: 1px dashed var(--border);
+/* rail: columna de dientes, siempre visible cuando la sidebar no está
+ * guardada. Los dientes "sobresalen" del panel (estilo llimphi). */
+.dock-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  width: 38px;
+  background: var(--bg-panel-alt);
+  border-right: 1px solid var(--border);
 }
-.sidebar-section:last-child { border-bottom: none; }
-.sidebar-section h3 {
+.diente {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--diente-c, var(--fg-muted));
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 10px 3px;
+  margin-right: -1px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.diente:hover { color: var(--fg-text); background: var(--bg-row-hover); }
+.diente.active {
+  color: var(--fg-text);
+  background: var(--bg-panel);
+  border-color: var(--border);
+  border-left-color: var(--diente-c, var(--accent));
+  /* el diente activo se "pega" al panel: sin borde derecho */
+  border-right-color: var(--bg-panel);
+  z-index: 1;
+}
+.diente[data-theme="tawasuyu"] { --diente-c: var(--accent); }
+.diente[data-theme="unanchay"] { --diente-c: var(--c-unanchay); }
+.diente[data-theme="yachay"]   { --diente-c: var(--c-yachay); }
+.diente[data-theme="ruway"]    { --diente-c: var(--c-ruway); }
+.diente[data-theme="ukupacha"] { --diente-c: var(--c-ukupacha); }
+
+/* panel: lista de docs del diente activo; sólo visible con .panel-open */
+.dock-panel {
+  width: 230px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  padding: 10px 0;
+  overflow-y: auto;
+  display: none;
+}
+#sidebar.panel-open .dock-panel { display: block; }
+.dock-panel::-webkit-scrollbar { width: 8px; }
+.dock-panel::-webkit-scrollbar-track { background: transparent; }
+.dock-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.dock-section { display: none; padding: 4px 12px 8px; }
+.dock-section.active { display: block; }
+.dock-section h3 {
   margin: 4px 0 6px;
   font-size: 11px;
   font-weight: 500;
@@ -244,15 +296,9 @@ a:hover { color: var(--fg-text); }
   color: var(--fg-muted);
   text-transform: lowercase;
 }
-.sidebar-section ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.sidebar-section li {
-  padding: 0;
-}
-.sidebar-section .doc {
+.dock-section ul { list-style: none; margin: 0; padding: 0; }
+.dock-section li { padding: 0; }
+.dock-section .doc {
   display: block;
   padding: 3px 8px;
   border-radius: 3px;
@@ -260,13 +306,15 @@ a:hover { color: var(--fg-text); }
   cursor: pointer;
   border-left: 2px solid transparent;
 }
-.sidebar-section .doc:hover {
+.dock-section .doc:hover {
   background: var(--bg-row-hover);
   border-left-color: var(--accent);
 }
 
 /* plano cartesiano */
 #plano-wrap {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -314,19 +362,6 @@ a:hover { color: var(--fg-text); }
   filter: blur(0.6px);
 }
 
-/* Capa de marca: sólo en móvil (ver media query). En escritorio el plano
-   no se estira, así que se usa la chakana de adentro del SVG. */
-.chakana-mark {
-  display: none;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 54px;
-  height: 54px;
-  pointer-events: none;
-}
-
 .quad { cursor: pointer; }
 .quad rect {
   fill: rgba(22, 26, 36, 0.4);
@@ -368,19 +403,16 @@ a:hover { color: var(--fg-text); }
 
 /* ===================== ventanas ===================== */
 
-/* Las ventanas viven SOLO en el área del contenido (a la derecha de la
- * sidebar) cuando la sidebar está abierta. En desktop la sidebar vive
- * abierta por default; en mobile arranca cerrada — ambos casos se
- * cubren con las reglas de body.sidebar-{open,collapsed} más abajo. */
+/* Las ventanas (artículos) cubren todo el ancho bajo la topbar; la sidebar
+ * es un overlay que se guarda al abrir un artículo. */
 #windows-layer {
   position: absolute;
   top: var(--topbar-h);
-  left: var(--sidebar-w);
+  left: 0;
   right: 0;
   bottom: 0;
   pointer-events: none;
 }
-body.sidebar-collapsed #windows-layer { left: 0; }
 
 .window {
   position: absolute;
@@ -608,53 +640,17 @@ body.sidebar-collapsed #windows-layer { left: 0; }
 /* (taskbar inferior removida — los indicadores de ventana viven en
  *  el topbar y el reloj también. Mirá la sección "topbar" arriba.) */
 
-/* responsivo: oculta sidebar en pantallas chicas */
-/* En desktop la sidebar vive abierta. La brand del topbar es texto (no
- * botón). El toggle body.sidebar-collapsed la oculta manualmente y deja
- * que #windows-layer ocupe todo el ancho. */
-body.sidebar-collapsed #portada { grid-template-columns: 0 1fr; }
-body.sidebar-collapsed #sidebar { display: none; }
-
-/* En mobile la sidebar arranca colapsada y la brand se vuelve botón
- * hamburguesa visible. Al abrir un artículo, el JS hace
- * body.classList.remove('sidebar-open') para que el contenido respire. */
+/* responsivo: en pantallas chicas el plano usa todo el ancho; la sidebar
+ * (overlay) arranca guardada y se trae con drag a la derecha. */
 @media (max-width: 800px) {
-  /* Default mobile = sidebar oculta, layer ocupa todo */
-  #portada { grid-template-columns: 1fr; }
-  #sidebar { display: none; }
-  #windows-layer { left: 0; }
-
-  body.sidebar-open #portada { grid-template-columns: var(--sidebar-w) 1fr; }
-  body.sidebar-open #sidebar { display: block; }
-  body.sidebar-open #windows-layer { left: var(--sidebar-w); }
-
-  .brand {
-    cursor: pointer;
-    background: var(--bg-button);
-    border: 1px solid var(--border);
-  }
-  .brand:hover { background: var(--bg-button-hover); }
-  .brand::before { content: "≡  "; color: var(--accent); }
-  .brand-sub { display: none; }
-
-  /* En pantallas chicas el plano quedaba diminuto e ilegible: que use
-     todo el ancho disponible (edge-to-edge) y, si la pantalla es muy
-     alta, que crezca hasta donde quepa. Agrandamos también el texto del
-     viewBox para que los nombres de cuadrante/dominio se lean. */
-  #plano-wrap { padding: 6px; align-items: stretch; position: relative; }
+  /* En pantallas chicas el plano queda atado al ancho (lado más corto);
+     que use todo el ancho disponible sin deformarse, y agrandamos el texto
+     del viewBox para que los nombres se lean. */
+  #plano-wrap { padding: 6px; }
   #plano {
     width: 100%;
-    /* En móvil el plano se estira a rectángulo vertical para llenar la
-       pantalla (preserveAspectRatio="none"): aprovecha ancho y alto, sin
-       el margen muerto del cuadrado. */
-    height: calc(100vh - var(--topbar-h) - 12px);
-    aspect-ratio: auto;
-    max-height: none;
+    max-height: calc(100vh - var(--topbar-h) - 12px);
   }
-  /* La chakana de adentro saldría deformada por el estiramiento: se oculta
-     y se usa la capa cuadrada centrada en el origen. */
-  .chakana { display: none; }
-  .chakana-mark { display: block; }
   .quad-id   { font-size: 6px; }
   .quad-name { font-size: 9px; letter-spacing: 0.06em; }
   .quad-verb { font-size: 5.5px; }
@@ -662,12 +658,12 @@ body.sidebar-collapsed #sidebar { display: none; }
   .axis-label { font-size: 5.5px; }
 }
 
-/* Header de cuadrante clickable */
-.sidebar-section h3.sec-head {
+/* Header de sección (h3) dentro del panel del diente, clickable */
+.dock-section h3.sec-head {
   margin: 6px 0 8px;
   padding: 0;
 }
-.sidebar-section h3.sec-head .doc {
+.dock-section h3.sec-head .doc {
   display: block;
   padding: 3px 8px;
   border-radius: 3px;
@@ -679,15 +675,15 @@ body.sidebar-collapsed #sidebar { display: none; }
   cursor: pointer;
   border-left: 2px solid transparent;
 }
-.sidebar-section h3.sec-head .doc:hover {
+.dock-section h3.sec-head .doc:hover {
   background: var(--bg-row-hover);
   color: var(--fg-text);
   border-left-color: var(--accent);
 }
-.sidebar-section[data-mod="unanchay"] h3.sec-head .doc { color: var(--c-unanchay); }
-.sidebar-section[data-mod="yachay"]   h3.sec-head .doc { color: var(--c-yachay); }
-.sidebar-section[data-mod="ruway"]    h3.sec-head .doc { color: var(--c-ruway); }
-.sidebar-section[data-mod="ukupacha"] h3.sec-head .doc { color: var(--c-ukupacha); }
+.dock-section[data-mod="unanchay"] h3.sec-head .doc { color: var(--c-unanchay); }
+.dock-section[data-mod="yachay"]   h3.sec-head .doc { color: var(--c-yachay); }
+.dock-section[data-mod="ruway"]    h3.sec-head .doc { color: var(--c-ruway); }
+.dock-section[data-mod="ukupacha"] h3.sec-head .doc { color: var(--c-ukupacha); }
 
 /* ===================== panel de control ===================== */
 
@@ -1013,8 +1009,8 @@ body.sidebar-collapsed #sidebar { display: none; }
 .density-compact .panel-group { margin-bottom: 14px; }
 .density-compact .panel-content { padding: 16px 20px; }
 
-/* sidebar section visibility (driven by Panel → Módulos) */
-.sidebar-section.mod-hidden { display: none; }
+/* dock section visibility (driven by Panel → Módulos) */
+.dock-section.mod-hidden { display: none; }
 
 /* accent override (driven by Panel → Apariencia) */
 [data-accent="unanchay"] { --accent: var(--c-unanchay); --border-focus: var(--c-unanchay); }

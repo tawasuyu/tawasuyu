@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=2">
+<link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 
@@ -13,9 +13,9 @@
 
   <header id="topbar">
     <div class="topbar-left">
-      <!-- En desktop con sidebar abierta, .brand es texto; en mobile pasa
-           a botón hamburguesa via CSS (cambia el cursor + listener). -->
-      <button class="brand" id="brand-toggle" type="button" aria-label="alternar barra lateral">
+      <!-- brand = "volver a la chakana": minimiza todas las ventanas para
+           ver el escritorio (el plano cartesiano). -->
+      <button class="brand" id="brand-home" type="button" aria-label="mostrar escritorio (minimizar todo)" title="mostrar escritorio">
         <!-- chakana inline: cuerpo monocromo (currentColor) + centro
              circular del color del fondo, dando efecto de "luz" central. -->
         <svg class="brand-chakana" viewBox="-3 -3 6 6" aria-hidden="true">
@@ -44,11 +44,21 @@
 
   <main id="portada">
 
-    <!-- panel izquierdo: árbol por cuadrante hasta nivel app (no crate).
-         El <h3> de cada cuadrante abre la README del cuadrante; cada
-         <li> abre la README de la app correspondiente. -->
+    <!-- panel izquierdo = dock-rail (dientes, estilo llimphi) + panel del
+         diente activo. 5 dientes: sistema + los 4 cuadrantes. El rail vive
+         pegado al borde; el panel del diente activo se abre al costado.
+         Drag a la izquierda lo guarda; drag a la derecha desde el borde lo
+         vuelve a abrir. -->
     <aside id="sidebar">
-      <div class="sidebar-section" data-mod="sistema">
+      <nav class="dock-rail" aria-label="secciones">
+        <button class="diente" type="button" data-diente="sistema"  data-theme="tawasuyu">sistema</button>
+        <button class="diente" type="button" data-diente="unanchay" data-theme="unanchay">unanchay</button>
+        <button class="diente" type="button" data-diente="yachay"   data-theme="yachay">yachay</button>
+        <button class="diente" type="button" data-diente="ruway"    data-theme="ruway">ruway</button>
+        <button class="diente" type="button" data-diente="ukupacha" data-theme="ukupacha">ukupacha</button>
+      </nav>
+      <div class="dock-panel">
+      <div class="dock-section" data-mod="sistema">
         <h3 class="sec-head"><span class="doc" data-doc="/README.md" data-title="tawasuyu" data-theme="tawasuyu">sistema</span></h3>
         <ul>
           <li><span class="doc" data-doc="/README.md" data-title="tawasuyu · README" data-theme="tawasuyu">tawasuyu</span></li>
@@ -61,7 +71,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section" data-mod="unanchay">
+      <div class="dock-section" data-mod="unanchay">
         <h3 class="sec-head"><span class="doc" data-doc="/00_unanchay/README.md" data-title="00 unanchay · percibir" data-theme="unanchay">00 unanchay · percibir</span></h3>
         <ul>
           <li><span class="doc" data-doc="/00_unanchay/chaka/README.md"  data-title="chaka"  data-theme="unanchay">chaka</span></li>
@@ -73,7 +83,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section" data-mod="yachay">
+      <div class="dock-section" data-mod="yachay">
         <h3 class="sec-head"><span class="doc" data-doc="/01_yachay/README.md" data-title="01 yachay · conocer" data-theme="yachay">01 yachay · conocer</span></h3>
         <ul>
           <li><span class="doc" data-doc="/01_yachay/cosmos/README.md"   data-title="cosmos"   data-theme="yachay">cosmos</span></li>
@@ -84,7 +94,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section" data-mod="ruway">
+      <div class="dock-section" data-mod="ruway">
         <h3 class="sec-head"><span class="doc" data-doc="/02_ruway/README.md" data-title="02 ruway · hacer" data-theme="ruway">02 ruway · hacer</span></h3>
         <ul>
           <li><span class="doc" data-doc="/02_ruway/cards/README.md"   data-title="cards"   data-theme="ruway">cards</span></li>
@@ -105,7 +115,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section" data-mod="ukupacha">
+      <div class="dock-section" data-mod="ukupacha">
         <h3 class="sec-head"><span class="doc" data-doc="/03_ukupacha/README.md" data-title="03 ukupacha · raíz" data-theme="ukupacha">03 ukupacha · raíz</span></h3>
         <ul>
           <li><span class="doc" data-doc="/03_ukupacha/agora/README.md"         data-title="agora"         data-theme="agua">agora</span></li>
@@ -116,11 +126,12 @@
           <li><span class="doc" data-doc="/03_ukupacha/wawa-explorer/README.md" data-title="wawa-explorer" data-theme="ukupacha">wawa-explorer</span></li>
         </ul>
       </div>
+      </div><!-- /.dock-panel -->
     </aside>
 
     <!-- centro: plano cartesiano de cuadrantes -->
     <section id="plano-wrap">
-      <svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="none">
+      <svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
         <defs>
           <!-- flechas de los ejes; userSpaceOnUse para no escalar con stroke -->
           <marker id="axisArrow" viewBox="0 0 10 10" refX="9" refY="5"
@@ -220,9 +231,10 @@
         <!-- φ escondida: la pista del chiste, casi invisible cerca del origen -->
         <text class="axis-phi" x="3.2" y="-3.2">φ</text>
 
-        <!-- Cuadrante II: 00_unanchay PERCIBIR -->
+        <!-- Cuadrante II: 00_unanchay PERCIBIR — el click al fondo abre pluma
+             (no la README del cuadrante). -->
         <g class="quad" data-cuad="00_unanchay" data-theme="unanchay" transform="translate(-50,-50)"
-           data-doc="/00_unanchay/README.md" data-title="00 unanchay · percibir">
+           data-doc="/00_unanchay/pluma/README.md" data-title="pluma" data-open-theme="aire">
           <rect x="-40" y="-40" width="80" height="80"/>
           <text class="quad-id"   x="0" y="-30">0x00</text>
           <text class="quad-name" x="0" y="-14">UNANCHAY</text>
@@ -275,27 +287,6 @@
             <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/fuego.md" data-title="takiy" data-theme="fuego">takiy</text>
           </g>
         </g>
-      </svg>
-
-      <!-- Chakana de marca como capa cuadrada centrada en el origen. En
-           móvil el plano se estira (preserveAspectRatio="none") y la
-           chakana de adentro saldría deformada (rombo flaco); esta vive
-           fuera del SVG estirado, así mantiene su forma. Sólo visible en
-           móvil; en escritorio se usa la de adentro del plano. -->
-      <svg class="chakana-mark" width="54" height="54" viewBox="-3 -3 6 6" aria-hidden="true">
-        <circle class="chakana-glow" cx="0" cy="0" r="1.9"/>
-        <path class="chakana-body" d="
-          M -0.5 -2.5
-          L  0.5 -2.5  L  0.5 -2.0  L  1.0 -2.0  L  1.0 -1.5
-          L  1.5 -1.5  L  1.5 -1.0  L  2.0 -1.0  L  2.0 -0.5
-          L  2.5 -0.5  L  2.5  0.5  L  2.0  0.5  L  2.0  1.0
-          L  1.5  1.0  L  1.5  1.5  L  1.0  1.5  L  1.0  2.0
-          L  0.5  2.0  L  0.5  2.5  L -0.5  2.5  L -0.5  2.0
-          L -1.0  2.0  L -1.0  1.5  L -1.5  1.5  L -1.5  1.0
-          L -2.0  1.0  L -2.0  0.5  L -2.5  0.5  L -2.5 -0.5
-          L -2.0 -0.5  L -2.0 -1.0  L -1.5 -1.0  L -1.5 -1.5
-          L -1.0 -1.5  L -1.0 -2.0  L -0.5 -2.0  Z"/>
-        <circle class="chakana-core" cx="0" cy="0" r="0.7"/>
       </svg>
     </section>
 
@@ -581,12 +572,9 @@
       if (window.history.length > 1) window.history.back();
     });
 
-    // En mobile (≤ 800px) auto-cerramos la sidebar para que el artículo
-    // ocupe todo el ancho. En desktop la sidebar sigue abierta y el
-    // artículo respeta su ancho (lo arregla el CSS de #windows-layer).
-    if (window.matchMedia('(max-width: 800px)').matches) {
-      document.body.classList.remove('sidebar-open');
-    }
+    // Al abrir un artículo guardamos la sidebar para que ocupe todo el
+    // ancho (el artículo se abre maximizado encima del plano).
+    document.body.classList.add('sidebar-stowed');
 
     cargarMdSeguro(contId, url, theme || 'tawasuyu');
     if (!fromHash) pushHash(url);
@@ -734,7 +722,7 @@
         } else {
           url   = g.dataset.doc;
           title = g.dataset.title;
-          theme = g.dataset.theme;
+          theme = g.dataset.openTheme || g.dataset.theme;
         }
         if (!url) return;
         abrirVentana(url, title || url, theme || 'tawasuyu');
@@ -786,24 +774,84 @@
     document.getElementById('clock').textContent = `${hh}:${mm}`;
   }
 
-  // Toggle del sidebar — desktop usa `sidebar-collapsed` (oculta una
-  // sidebar que vive abierta), mobile usa `sidebar-open` (muestra una
-  // sidebar que vive cerrada). El brand decide cuál según el viewport.
-  function bindSidebarToggle() {
-    const btn = document.getElementById('brand-toggle');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      const isMobile = window.matchMedia('(max-width: 800px)').matches;
-      const cls = isMobile ? 'sidebar-open' : 'sidebar-collapsed';
-      document.body.classList.toggle(cls);
-    });
+  // Brand = "volver a la chakana": minimiza todas las ventanas para dejar
+  // ver el escritorio (el plano). Ya no togglea la sidebar.
+  function minimizarTodos() {
+    for (const id of [...ventanas.keys()]) minimizar(id);
+  }
+  function bindBrandHome() {
+    const btn = document.getElementById('brand-home');
+    if (btn) btn.addEventListener('click', minimizarTodos);
+  }
+
+  // ===== dock-rail (dientes) =====
+  // 5 dientes: sistema + los 4 cuadrantes. Clic en un diente abre su panel
+  // al costado del rail; clic en el diente activo lo cierra (vuelve a sólo
+  // rail).
+  function setupDockRail() {
+    const sidebar = document.getElementById('sidebar');
+    const rail = sidebar && sidebar.querySelector('.dock-rail');
+    if (!rail) return;
+    const dientes = [...rail.querySelectorAll('.diente')];
+    function activar(name) {
+      dientes.forEach(d => d.classList.toggle('active', d.dataset.diente === name));
+      sidebar.querySelectorAll('.dock-section').forEach(s =>
+        s.classList.toggle('active', s.dataset.mod === name));
+      sidebar.classList.add('panel-open');
+    }
+    function cerrarPanel() {
+      dientes.forEach(d => d.classList.remove('active'));
+      sidebar.classList.remove('panel-open');
+    }
+    dientes.forEach(d => d.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (d.classList.contains('active')) cerrarPanel();
+      else activar(d.dataset.diente);
+    }));
+    // En escritorio arranca con "sistema" abierto; en móvil sólo el rail
+    // (y además guardado, ver setupSidebarDrag).
+    if (!window.matchMedia('(max-width: 800px)').matches) activar('sistema');
+  }
+
+  // ===== guardar/abrir la sidebar con drag horizontal =====
+  // Drag a la izquierda (sobre la sidebar) la guarda; drag a la derecha
+  // desde el borde izquierdo la vuelve a abrir. Umbral para no confundir
+  // con un click en diente/doc.
+  function setupSidebarDrag() {
+    const UMBRAL = 36;
+    let start = null;
+    function px(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
+    function pxUp(e) { return e.changedTouches ? e.changedTouches[0].clientX : e.clientX; }
+    function onDown(e) {
+      const x = px(e);
+      const stowed = document.body.classList.contains('sidebar-stowed');
+      const enSidebar = e.target.closest && e.target.closest('#sidebar');
+      if (stowed && x <= 28) start = { x, mode: 'open' };
+      else if (!stowed && enSidebar) start = { x, mode: 'stow' };
+      else start = null;
+    }
+    function onUp(e) {
+      if (!start) return;
+      const dx = pxUp(e) - start.x;
+      if (start.mode === 'stow' && dx < -UMBRAL) document.body.classList.add('sidebar-stowed');
+      if (start.mode === 'open' && dx >  UMBRAL) document.body.classList.remove('sidebar-stowed');
+      start = null;
+    }
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('pointerup',   onUp);
+    // En móvil arranca guardada para que el plano use todo el ancho.
+    if (window.matchMedia('(max-width: 800px)').matches) {
+      document.body.classList.add('sidebar-stowed');
+    }
   }
 
   init().then(() => {
     // Aplicar preferencias persistidas antes de mostrar nada interactivo,
     // así theme/accent/módulos arrancan respetando lo que ya configuró.
     try { aplicar_preferencias(); } catch (e) { console.error('aplicar_preferencias', e); }
-    bindSidebarToggle();
+    bindBrandHome();
+    setupDockRail();
+    setupSidebarDrag();
     bindQuadTriggers();
     bindDocTriggers(document);
     tickClock();

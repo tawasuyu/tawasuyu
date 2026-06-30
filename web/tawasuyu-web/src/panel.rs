@@ -427,7 +427,7 @@ fn apply_theme(doc: &Document, state: &State) -> Result<(), JsValue> {
 }
 
 fn apply_modules(doc: &Document, hidden: &[String]) -> Result<(), JsValue> {
-    let secs = doc.query_selector_all(".sidebar-section")?;
+    let secs = doc.query_selector_all(".dock-section")?;
     for i in 0..secs.length() {
         let n = match secs.item(i) {
             Some(n) => n,
