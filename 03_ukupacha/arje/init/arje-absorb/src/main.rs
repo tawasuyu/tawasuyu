@@ -63,6 +63,7 @@ fn run() -> anyhow::Result<()> {
     let mut output = "-".to_string();
     let mut label = "arje.seed.absorbed".to_string();
     let mut with_carmen = false;
+    let mut overlay_only = false;
     let mut rootkey: Option<PathBuf> = None;
     let mut gen_rootkey = false;
     let mut attest_from: Option<PathBuf> = None;
@@ -92,6 +93,7 @@ fn run() -> anyhow::Result<()> {
                     args.next().ok_or_else(|| anyhow::anyhow!("--label necesita un valor"))?
             }
             "--with-carmen" => with_carmen = true,
+            "--overlay-only" => overlay_only = true,
             "--rootkey" => {
                 rootkey = Some(PathBuf::from(
                     args.next().ok_or_else(|| anyhow::anyhow!("--rootkey necesita un valor"))?,
@@ -111,39 +113,62 @@ fn run() -> anyhow::Result<()> {
         anyhow::bail!("--gen-rootkey requiere --rootkey <path> (dónde crear/leer la rootkey)");
     }
 
-    let init = if from == "auto" {
-        detect(&root).ok_or_else(|| {
-            anyhow::anyhow!(
-                "no pude autodetectar el init en {} — pasá --from <init>",
-                root.display()
-            )
-        })?
+    // --overlay-only: NO absorbe los servicios del init (en un desktop rico eso
+    // arrastra DMs ajenos, gettys y daemons que no hacen falta y que sólo andan
+    // bajo el rc del init viejo). El seed = sólo el bring-up esencial DETECTADO
+    // del host (overlay), que es lo general y lo que la sesión necesita.
+    let services = if overlay_only {
+        eprintln!(
+            "arje-absorb: modo overlay-only — sólo el bring-up esencial detectado (sin absorber el init)."
+        );
+        Vec::new()
     } else {
-        from.clone()
+        let init = if from == "auto" {
+            detect(&root).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no pude autodetectar el init en {} — pasá --from <init>",
+                    root.display()
+                )
+            })?
+        } else {
+            from.clone()
+        };
+        let services = match init.as_str() {
+            "sysvinit" => sysvinit::absorb(&root)?,
+            "runit" => runit::absorb(&root)?,
+            "dinit" => dinit::absorb(&root)?,
+            "openrc" => openrc::absorb(&root)?,
+            other => anyhow::bail!(
+                "init «{other}» no soportado (sysvinit | runit | dinit | openrc | auto)"
+            ),
+        };
+        eprintln!(
+            "arje-absorb: init «{init}» → {} servicio(s) absorbido(s).",
+            services.len()
+        );
+        services
     };
 
-    let services = match init.as_str() {
-        "sysvinit" => sysvinit::absorb(&root)?,
-        "runit" => runit::absorb(&root)?,
-        "dinit" => dinit::absorb(&root)?,
-        "openrc" => openrc::absorb(&root)?,
-        other => anyhow::bail!(
-            "init «{other}» no soportado (sysvinit | runit | dinit | openrc | auto)"
-        ),
+    // Con --with-carmen, los servicios de bajo nivel que el overlay gráfico
+    // provee como daemons propios (udev/seatd/getty/elogind) se descartan de lo
+    // absorbido: el wrapper init.d es oneshot y no supervisaría el daemon.
+    let services: Vec<_> = if with_carmen {
+        services
+            .into_iter()
+            .filter(|s| !card::OVERLAY_OVERRIDES.iter().any(|o| s.name.contains(o)))
+            .collect()
+    } else {
+        services
     };
-
-    eprintln!(
-        "arje-absorb: init «{init}» → {} servicio(s) absorbido(s).",
-        services.len()
-    );
-    if services.is_empty() {
-        eprintln!("arje-absorb: aviso: 0 servicios — la Semilla quedará sin hijas.");
-    }
 
     let mut seed = card::build_seed(&label, &services);
-    if with_carmen {
-        seed.genesis.push(card::carmen_dm_card());
-        eprintln!("arje-absorb: agregado carmen-dm (gestor de login gráfico).");
+    if with_carmen || overlay_only {
+        let overlay = card::graphical_overlay(&root);
+        eprintln!(
+            "arje-absorb: overlay tawasuyu ({} entes, paths detectados del host: mount/swap → udev → seatd → red → splash → compositor → getty).",
+            overlay.len()
+        );
+        seed.genesis.extend(overlay);
     }
 
     // Binarios de cada servicio leídos del sistema fuente (`root/<exec>`). Se

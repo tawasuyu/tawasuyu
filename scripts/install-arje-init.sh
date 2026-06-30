@@ -92,10 +92,10 @@ echo "$(lspci 2>/dev/null)" | grep -qi nvidia && \
 
 # ── Construir los binarios de init (glibc del root real, no musl: arje corre
 #    sobre tu rootfs que ya tiene libc) ────────────────────────────────────────
-info "compilando arje-zero, arje-splash, arje-net-bring-up (release)"
-cargo build --release -p arje-zero -p arje-splash -p arje-net-bring-up
+info "compilando arje-zero, arje-splash, arje-absorb (release)"
+cargo build --release -p arje-zero -p arje-splash -p arje-absorb
 M="target/release"
-for b in arje-zero arje-splash arje-net-bring-up; do
+for b in arje-zero arje-splash arje-absorb; do
     [ -x "$M/$b" ] || die "no se compiló $M/$b"
 done
 
@@ -105,7 +105,7 @@ KERN_SRC="$(awk '{for(i=1;i<=NF;i++) if($i ~ /^BOOT_IMAGE=/){sub(/^BOOT_IMAGE=/,
 cat <<RESUMEN
 
   ── arje como init alterno — resumen ────────────────────────────────────
-   seed       : $SEED_SRC  →  $SEED_DST
+   seed       : generada del host (arje-absorb)  →  $SEED_DST
    binarios   : $ZERO_DST
                 $LIBDIR/{arje-splash,net-bring-up}
    DM         : $PREFIX/bin/mirada-compositor --drm --greeter (seat builtin)
@@ -124,9 +124,8 @@ fi
 
 # ── Instalar binarios + seed ─────────────────────────────────────────────────
 info "instalando binarios de init en $PREFIX (sudo)"
-sudo install -Dm755 "$M/arje-zero"          "$ZERO_DST"
-sudo install -Dm755 "$M/arje-splash"        "$LIBDIR/arje-splash"
-sudo install -Dm755 "$M/arje-net-bring-up"  "$LIBDIR/net-bring-up"
+sudo install -Dm755 "$M/arje-zero"   "$ZERO_DST"
+sudo install -Dm755 "$M/arje-splash" "$LIBDIR/arje-splash"
 
 # Config del splash (logo respirando + panel de logs automático) si no existe.
 if [ ! -e /etc/arje/splash.conf ]; then
@@ -134,19 +133,26 @@ if [ ! -e /etc/arje/splash.conf ]; then
     printf 'source = builtin\nlogs = auto\n' | sudo tee /etc/arje/splash.conf >/dev/null
 fi
 
-# Backup de cualquier seed previa ANTES de pisarla (sólo la primera vez, para
-# no perder el original tras varias corridas). Si ya había una seed instalada
-# (p.ej. la absorbida arje.seed.host), queda recuperable.
+# Backup de cualquier seed previa ANTES de pisarla (sólo la primera vez).
 if [ -f "$SEED_DST" ] && [ ! -f "$SEED_DST.pre-arje-init.bak" ]; then
     sudo cp -a "$SEED_DST" "$SEED_DST.pre-arje-init.bak"
     info "backup de la seed previa en $SEED_DST.pre-arje-init.bak"
 fi
-info "instalando la seed en $SEED_DST"
-sudo install -Dm644 "$SEED_SRC" "$SEED_DST"
-# Chequeo de integridad: cada exec Native de la seed debe existir en el root real.
-for exe in "$ZERO_DST" "$LIBDIR/arje-splash" "$LIBDIR/net-bring-up" \
-           "$PREFIX/bin/mirada-compositor" /sbin/agetty; do
-    [ -x "$exe" ] || echo "  ⚠ la seed referencia $exe pero no es ejecutable en disco — revisá."
+# La seed se DERIVA del host, no se hardcodea: arje-absorb detecta tu init
+# (openrc/runit/dinit/sysvinit) + sus servicios, y suma el overlay gráfico
+# tawasuyu con paths DETECTADOS (udev/seatd/red/splash/compositor/getty). Así el
+# MISMO instalador sirve en cualquier distro libre, no sólo en esta máquina.
+sudo install -d "$(dirname "$SEED_DST")"
+info "generando la seed del host con arje-absorb (--overlay-only: bring-up esencial detectado)"
+if sudo "$M/arje-absorb" --overlay-only --label arje.seed.host --output "$SEED_DST"; then
+    info "seed derivada de tu init en $SEED_DST"
+else
+    echo "  ⚠ arje-absorb no autodetectó tu init; caigo a la seed de referencia."
+    sudo install -Dm644 "$SEED_SRC" "$SEED_DST"
+fi
+# Chequeo mínimo: el compositor y arje-zero existen (el resto la seed los detectó).
+for exe in "$ZERO_DST" "$LIBDIR/arje-splash" "$PREFIX/bin/mirada-compositor"; do
+    [ -x "$exe" ] || echo "  ⚠ falta $exe en disco — revisá."
 done
 
 # ── Sembrar el ecosistema en el autostart de la sesión (tu usuario) ──────────

@@ -3,6 +3,7 @@
 //! Cada [`ForeignService`] se vuelve una Card hija; el conjunto cuelga
 //! como `genesis` de una Card raíz que `arje-zero` encarna al arrancar.
 
+use std::path::Path;
 use std::time::Duration;
 
 use card_core::{
@@ -11,6 +12,154 @@ use card_core::{
 };
 
 use crate::model::{ForeignService, ServiceKind};
+
+/// Primer candidato de `cands` que existe bajo `root`; devuelve el path
+/// ABSOLUTO en el sistema destino (sin el prefijo `root`, que sólo se usa para
+/// chequear presencia — el seed corre sobre el sistema real con `root=/`).
+/// Es el corazón de la generalización: el seed se DERIVA de qué binarios tiene
+/// la máquina, en vez de hardcodear `/usr/bin/...` de una distro.
+fn detect(root: &Path, cands: &[&str]) -> Option<String> {
+    cands.iter().find_map(|c| {
+        let rel = c.strip_prefix('/').unwrap_or(c);
+        root.join(rel).exists().then(|| (*c).to_string())
+    })
+}
+
+/// Construye una Card Native del overlay gráfico (daemon supervisado o oneshot).
+fn overlay_card(
+    name: &str,
+    exec: String,
+    argv: &[&str],
+    daemon: bool,
+    priority: Priority,
+) -> Card {
+    let (lifecycle, supervision) = if daemon {
+        (
+            Lifecycle::Daemon,
+            Supervision::Restart {
+                initial: Duration::from_millis(300),
+                max: Duration::from_millis(30_000),
+            },
+        )
+    } else {
+        (Lifecycle::Oneshot, Supervision::OneShot)
+    };
+    Card {
+        payload: Payload::Native {
+            exec,
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            envp: Vec::new(),
+        },
+        supervision,
+        lifecycle,
+        priority,
+        permissions: Permissions {
+            filesystem: FsPolicy::ReadWrite,
+            networking: NetworkingPolicy::Full,
+            processes: true,
+            ..Permissions::default()
+        },
+        soma: SomaSpec {
+            cgroup: CgroupSpec {
+                path: format!("ente.slice/{name}"),
+                ..CgroupSpec::default()
+            },
+            ..SomaSpec::default()
+        },
+        ..Card::new(name)
+    }
+}
+
+/// Nombres de servicio que el overlay gráfico PROVEE como daemons propios; sus
+/// equivalentes absorbidos (wrappers `/etc/init.d/<svc>` oneshot) se descartan
+/// para no duplicarlos. Ver [`OVERLAY_OVERRIDES`].
+pub const OVERLAY_OVERRIDES: &[&str] = &[
+    "udev", "eudev", "seatd", "agetty", "getty", "elogind",
+    // display-managers ajenos: carmen ES el DM; dos pelean por el DRM.
+    "sddm", "gdm", "lightdm", "greetd", "lxdm", "xdm", "slim", "-ly", "ly.",
+];
+
+/// Overlay del **escritorio tawasuyu**: el stack gráfico que `arje-absorb` no
+/// puede sacar del init del host (es nuestro), con los paths de sistema
+/// DETECTADOS bajo `root` para que ande en cualquier distro, no sólo en una.
+/// Orden: udev (input) → seatd (asiento) → red → splash → compositor → getty.
+pub fn graphical_overlay(root: &Path) -> Vec<Card> {
+    let mut cards = Vec::new();
+
+    // Montaje de /etc/fstab (p. ej. /home en partición aparte) y swap. Sin esto
+    // la sesión queda sin home. Oneshots.
+    if let Some(mount) = detect(root, &["/bin/mount", "/usr/bin/mount"]) {
+        cards.push(overlay_card("mount-fstab", mount, &["-a"], false, Priority::High));
+    }
+    if let Some(swapon) = detect(root, &["/sbin/swapon", "/usr/sbin/swapon", "/usr/bin/swapon"]) {
+        cards.push(overlay_card("swap-on", swapon, &["-a"], false, Priority::Normal));
+    }
+
+    // udevd: sin él los dispositivos no llevan ID_INPUT y libinput no ve el
+    // teclado. Daemon (el wrapper init.d absorbido es oneshot → no supervisa).
+    if let Some(udevd) = detect(
+        root,
+        &[
+            "/usr/bin/udevd",
+            "/sbin/udevd",
+            "/lib/systemd/systemd-udevd",
+            "/usr/lib/systemd/systemd-udevd",
+        ],
+    ) {
+        cards.push(overlay_card("udevd", udevd, &[], true, Priority::High));
+        if let Some(udevadm) = detect(root, &["/usr/bin/udevadm", "/sbin/udevadm", "/bin/udevadm"])
+        {
+            cards.push(overlay_card(
+                "udev-coldplug",
+                udevadm,
+                &["trigger", "--action=add", "--settle"],
+                false,
+                Priority::High,
+            ));
+        }
+    }
+
+    // seatd: el asiento para libseat cuando no hay logind (el backend builtin
+    // crashea con mirada). Daemon. Si no está, libseat auto-detecta (logind).
+    if let Some(seatd) = detect(root, &["/usr/bin/seatd", "/sbin/seatd", "/usr/local/bin/seatd"]) {
+        cards.push(overlay_card("seatd", seatd, &[], true, Priority::High));
+    }
+
+    // Red: el primer gestor presente, como daemon en primer plano (mejor que el
+    // wrapper init.d absorbido, que asume el entorno rc del init viejo). Cubre
+    // el caso común (DHCP cableado); WiFi/NetworkManager queda como refinamiento.
+    if let Some(dhcpcd) = detect(root, &["/usr/sbin/dhcpcd", "/sbin/dhcpcd", "/usr/bin/dhcpcd"]) {
+        cards.push(overlay_card("dhcpcd", dhcpcd, &["-B"], true, Priority::Normal));
+    } else if let Some(nm) = detect(root, &["/usr/bin/NetworkManager", "/usr/sbin/NetworkManager"])
+    {
+        cards.push(overlay_card("networkmanager", nm, &["--no-daemon"], true, Priority::Normal));
+    }
+
+    // Splash sin parpadeo (la chakana). Path tawasuyu, lo instala el instalador.
+    cards.push(overlay_card(
+        "arje-splash",
+        "/usr/local/lib/arje/arje-splash".to_string(),
+        &[],
+        false,
+        Priority::High,
+    ));
+
+    // El compositor-greeter (auto-detecta el asiento; sin pin de LIBSEAT_BACKEND).
+    cards.push(carmen_dm_card());
+
+    // Getty de rescate en tty2 (tty1 es del compositor).
+    if let Some(getty) = detect(root, &["/sbin/agetty", "/usr/bin/agetty", "/bin/agetty"]) {
+        cards.push(overlay_card(
+            "agetty-rescue",
+            getty,
+            &["--noclear", "tty2", "linux"],
+            true,
+            Priority::Normal,
+        ));
+    }
+
+    cards
+}
 
 /// Convierte un servicio absorbido en una Card hija (genesis child).
 fn service_to_card(svc: &ForeignService) -> Card {
@@ -189,5 +338,53 @@ mod tests {
         seed.genesis.push(carmen_dm_card());
         seed.validate().expect("la Semilla con carmen debe validar");
         assert_eq!(seed.genesis.len(), 2);
+    }
+
+    #[test]
+    fn overlay_detecta_paths_del_host_y_arma_el_stack() {
+        use std::fs;
+        // Raíz falsa con binarios "instalados" en rutas típicas.
+        let tmp = std::env::temp_dir().join(format!("arje-absorb-overlay-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        for p in [
+            "usr/bin/udevd",
+            "usr/bin/udevadm",
+            "usr/bin/seatd",
+            "sbin/agetty",
+            "usr/sbin/dhcpcd",
+        ] {
+            let f = tmp.join(p);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(&f, b"").unwrap();
+        }
+        let overlay = graphical_overlay(&tmp);
+        let names: Vec<&str> = overlay.iter().map(|c| c.label.as_str()).collect();
+        for must in ["udevd", "seatd", "dhcpcd", "arje-splash", "carmen-dm", "agetty-rescue"] {
+            assert!(names.contains(&must), "falta {must} en {names:?}");
+        }
+        // El exec es el path ABSOLUTO del sistema destino, SIN el prefijo root.
+        let udevd = overlay.iter().find(|c| c.label == "udevd").unwrap();
+        match &udevd.payload {
+            Payload::Native { exec, .. } => assert_eq!(exec, "/usr/bin/udevd"),
+            _ => panic!("udevd debe ser Native"),
+        }
+        // Una semilla absorbida + overlay debe validar.
+        let mut seed = build_seed("arje.seed.host", &[svc("dbus", ServiceKind::Daemon)]);
+        seed.genesis.extend(overlay);
+        seed.validate().expect("seed con overlay debe validar");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn overlay_sin_binarios_igual_trae_splash_y_compositor() {
+        // En una raíz sin udev/seatd/getty, el overlay igual aporta el piso
+        // gráfico (splash + carmen), que son paths tawasuyu, no del host.
+        let tmp = std::env::temp_dir().join(format!("arje-absorb-empty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let names: Vec<String> =
+            graphical_overlay(&tmp).iter().map(|c| c.label.clone()).collect();
+        assert!(names.contains(&"arje-splash".to_string()), "{names:?}");
+        assert!(names.contains(&"carmen-dm".to_string()), "{names:?}");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
