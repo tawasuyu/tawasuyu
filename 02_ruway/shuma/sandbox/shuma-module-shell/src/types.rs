@@ -873,6 +873,11 @@ impl State {
                 }
                 shuma_config::DedupPolicy::EraseDups => shuma_history::DedupPolicy::EraseDups,
             });
+            // Absorbe el historial de bash/zsh (incremental) antes de fijar el
+            // anchor de grupos — así lo importado queda "antes" de la sesión.
+            if config.history.import_shells {
+                absorb_shell_histories(&mut h);
+            }
         }
         // El anchor de grupos arranca al final del historial durable: el
         // primer `:save` agrupa sólo lo tipeado en ESTA sesión, no meses

@@ -56,10 +56,25 @@ pub enum DedupPolicy {
 }
 
 /// Configuración del historial durable.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryConfig {
     #[serde(default)]
     pub dedup: DedupPolicy,
+    /// Absorber los historiales de bash/zsh (`~/.bash_history`,
+    /// `~/.zsh_history`) al historial propio en el arranque. Incremental:
+    /// sólo lo nuevo desde la última vez. `true` por defecto.
+    #[serde(default = "default_import_shells")]
+    pub import_shells: bool,
+}
+
+fn default_import_shells() -> bool {
+    true
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self { dedup: DedupPolicy::default(), import_shells: true }
+    }
 }
 
 /// Configuración de la política de captura de salida por sesión.

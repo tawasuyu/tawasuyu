@@ -14,6 +14,17 @@ pub(crate) fn open_history() -> shuma_history::History {
         .unwrap_or_else(|_| panic!("no se pudo abrir ni /dev/null como history"))
 }
 
+/// Absorbe los historiales de bash/zsh al historial propio (incremental).
+/// No-op si no hay fuentes en disco o si nada creció desde la última vez.
+/// Devuelve cuántas líneas se importaron (0 = nada nuevo).
+pub(crate) fn absorb_shell_histories(history: &mut shuma_history::History) -> usize {
+    let sources = shuma_history::foreign::default_sources();
+    if sources.is_empty() {
+        return 0;
+    }
+    shuma_history::foreign::absorb_foreign(history, &sources).imported
+}
+
 /// Segundos unix actuales (0 si el reloj está antes de la época).
 pub(crate) fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()

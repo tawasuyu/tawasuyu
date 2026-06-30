@@ -26,6 +26,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod foreign;
+
 /// Una entrada del historial durable — la línea y su contexto mínimo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
@@ -189,6 +191,35 @@ impl History {
         self.write_one(&entry)?;
         self.entries.push(entry);
         Ok(true)
+    }
+
+    /// Appendea muchas entradas en una sola apertura del fichero — pensado
+    /// para **importación en bloque** (historiales ajenos). Colapsa
+    /// duplicados *consecutivos* (idéntica `line`) y saltea líneas vacías,
+    /// independiente de la [`DedupPolicy`] activa (la importación no debe
+    /// reescribir el fichero entero por cada entrada). Devuelve cuántas se
+    /// añadieron de verdad.
+    pub fn append_bulk(
+        &mut self,
+        entries: impl IntoIterator<Item = Entry>,
+    ) -> io::Result<usize> {
+        let mut f = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut added = 0usize;
+        for entry in entries {
+            if entry.line.trim().is_empty() {
+                continue;
+            }
+            if self.entries.last().is_some_and(|e| e.line == entry.line) {
+                continue;
+            }
+            let mut s = serde_json::to_string(&entry).map_err(io::Error::other)?;
+            s.push('\n');
+            f.write_all(s.as_bytes())?;
+            self.entries.push(entry);
+            added += 1;
+        }
+        f.flush()?;
+        Ok(added)
     }
 
     /// Actualiza la última entrada con el código de salida y la duración
