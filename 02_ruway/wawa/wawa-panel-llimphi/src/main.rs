@@ -3027,6 +3027,7 @@ fn animaciones_schema(m: &Model) -> Schema {
                         EnumOption::new("direct", "Directo (sin animación)"),
                         EnumOption::new("hyprland", "Deslizar (estilo Hyprland)"),
                         EnumOption::new("prezi", "Zoom a vista espacial (Prezi)"),
+                        EnumOption::new("cube", "Cubo 3D (estilo Compiz)"),
                     ],
                 ))
                 .field(Field::slider_int("slide_ms", "Duración del slide (ms)", a.slide_ms as i64, 0, 600))

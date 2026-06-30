@@ -87,6 +87,10 @@ impl Animations {
             "prezi".into(),
             Animation { switch_mode: WorkspaceSwitchMode::Prezi, slide_ms: 220, overview_anim_ms: 320 },
         );
+        lib.animations.insert(
+            "cubo".into(),
+            Animation { switch_mode: WorkspaceSwitchMode::Cube, slide_ms: 220, overview_anim_ms: 320 },
+        );
         lib.active = "fluido".into();
         let _ = lib.save();
         lib
