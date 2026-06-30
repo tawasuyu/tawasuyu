@@ -217,6 +217,19 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
             ContextMenuItem::action(rimay_localize::t("nahual-shell-extract-other")),
             Msg::CopyToOther,
         ));
+        // Absorber al grafo wawa: sólo si la selección es un device o una
+        // partición (no un archivo/dir interno).
+        if model
+            .cur()
+            .selected_node()
+            .map(|n| nahual_source_core::objetivo_absorcion(&n.id).is_some())
+            .unwrap_or(false)
+        {
+            acciones.push((
+                ContextMenuItem::action(rimay_localize::t("nahual-shell-absorb-wawa")),
+                Msg::AbsorberDispositivo,
+            ));
+        }
     }
     // Edición del grafo de Mónadas (sólo con un grafo nouser montado): las
     // mismas ops que la command palette, contextuales a la selección.

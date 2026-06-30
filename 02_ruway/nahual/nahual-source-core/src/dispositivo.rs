@@ -43,6 +43,29 @@ const RAIZ: &str = "@dispositivos";
 pub fn es_id_de_dispositivo(id: &str) -> bool {
     id == RAIZ || id.starts_with("dev\u{1f}") || id.starts_with("fs\u{1f}")
 }
+
+/// Qué se puede ABSORBER al grafo wawa desde un nodo de la fuente: un
+/// dispositivo entero (árbol `particionN/`) o una partición concreta (su FS
+/// directo). Un archivo/dir interno o la raíz `@dispositivos` no son objetivos.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObjetivoAbsorcion {
+    /// El dispositivo entero: `ruta` al device.
+    Dispositivo(PathBuf),
+    /// La partición `indice` (1-based) del device en `ruta`.
+    Particion(PathBuf, usize),
+}
+
+/// Decide el [`ObjetivoAbsorcion`] de un `id`, o `None` si no es absorbible (un
+/// archivo/dir dentro de un FS, o la raíz sintética).
+pub fn objetivo_absorcion(id: &NodeId) -> Option<ObjetivoAbsorcion> {
+    match decode(id).ok()? {
+        Loc::Dispositivo { ruta } => Some(ObjetivoAbsorcion::Dispositivo(ruta)),
+        Loc::Ruta { ruta_dev, indice, interna } if interna == "/" => {
+            Some(ObjetivoAbsorcion::Particion(ruta_dev, indice))
+        }
+        _ => None,
+    }
+}
 /// Separador de campos del [`NodeId`]: el byte `US` (unit separator). No aparece
 /// nunca en una ruta de dispositivo ni en un nombre de archivo, así que parte el
 /// id sin ambigüedad.

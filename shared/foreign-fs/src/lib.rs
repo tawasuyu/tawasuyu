@@ -39,7 +39,7 @@ pub mod particion;
 #[cfg(feature = "std")]
 mod fuente_std;
 #[cfg(feature = "std")]
-pub use fuente_std::FuenteArchivo;
+pub use fuente_std::{hex32, EmisorBundle, FuenteArchivo};
 
 /// Tamaño de trozo para archivos grandes. IDÉNTICO al host
 /// (`agora-cli::TAMANO_TROZO`): 256 KiB << `MAX_OBJETO` (1 MiB). Cambiarlo aquí

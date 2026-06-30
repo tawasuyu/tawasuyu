@@ -13,10 +13,10 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::{Fuente, FsError};
+use crate::{Emisor, Fuente, FsError};
 
 /// Una [`Fuente`] respaldada por un archivo o dispositivo de bloques. El `Mutex`
 /// resuelve dos cosas: `Fuente::leer_en` toma `&self` pero `File` necesita
@@ -52,5 +52,51 @@ impl Fuente for FuenteArchivo {
         f.read_exact(buf)
             .map_err(|_| FsError::Corrupto("lectura corta del dispositivo"))?;
         Ok(())
+    }
+}
+
+/// Codifica un hash de 32 bytes a 64 chars hex en minúscula —el nombre con que
+/// el bundle direccionado por contenido nombra cada objeto (`<hash>.obj`)—.
+pub fn hex32(bytes: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Un [`Emisor`] que persiste cada objeto del grafo como `<hash>.obj` en un
+/// directorio bundle —el mismo formato servible por `servir_release`—. Es la
+/// contraparte sink de [`FuenteArchivo`] (host-side): donde aquélla LEE el
+/// dispositivo, ésta ESCRIBE el grafo absorbido. Hogar único del `<hash>.obj`,
+/// hoy duplicado en `agora-cli`.
+pub struct EmisorBundle {
+    dir: PathBuf,
+    error_io: Option<std::io::Error>,
+}
+
+impl EmisorBundle {
+    pub fn nuevo(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: dir.into(), error_io: None }
+    }
+
+    /// El error de I/O real de la primera emisión que falló (si hubo), para
+    /// reportarlo con detalle en vez del genérico [`FsError::EmisionFallida`].
+    pub fn tomar_error_io(&mut self) -> Option<std::io::Error> {
+        self.error_io.take()
+    }
+}
+
+impl Emisor for EmisorBundle {
+    fn emitir(&mut self, objeto: &format::Objeto) -> Result<format::Hash, FsError> {
+        let payload = objeto.serializar().map_err(FsError::Format)?;
+        let hash = format::hash(&payload);
+        let ruta = self.dir.join(format!("{}.obj", hex32(&hash)));
+        if let Err(e) = std::fs::write(&ruta, &payload) {
+            self.error_io.get_or_insert(e);
+            return Err(FsError::EmisionFallida);
+        }
+        Ok(hash)
     }
 }

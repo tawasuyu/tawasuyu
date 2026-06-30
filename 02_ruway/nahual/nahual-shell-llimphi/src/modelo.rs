@@ -579,6 +579,9 @@ pub(crate) enum Msg {
     /// Montar los dispositivos de bloques del sistema (USB/discos) como fuente
     /// navegable de SÓLO LECTURA — se leen por bytes (foreign-fs), sin montar.
     MountDispositivos,
+    /// Absorber el dispositivo/partición seleccionado al grafo wawa: forja un
+    /// bundle `<name>-wawa/` en el directorio del OTRO panel (POSIX).
+    AbsorberDispositivo,
     /// Desmonta la fuente no-POSIX activa y vuelve al filesystem.
     Unmount,
     /// Cicla el tema claro/oscuro (preset siguiente).

@@ -330,6 +330,7 @@ nahual-shell-toggle-mark = Mark / unmark
 nahual-shell-copy-other = Copy to other panel
 nahual-shell-move-other = Move to other panel
 nahual-shell-extract-other = Extract to other panel
+nahual-shell-absorb-wawa = Absorb into wawa graph
 nahual-shell-add-favorite = Add to favorites
 nahual-shell-select-all = Select all
 nahual-shell-select-none = Deselect all

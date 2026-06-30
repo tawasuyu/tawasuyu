@@ -333,6 +333,7 @@ nahual-shell-toggle-mark = Marcar / desmarcar
 nahual-shell-copy-other = Copiar al otro panel
 nahual-shell-move-other = Mover al otro panel
 nahual-shell-extract-other = Extraer al otro panel
+nahual-shell-absorb-wawa = Absorber al grafo wawa
 nahual-shell-add-favorite = Añadir a favoritos
 nahual-shell-select-all = Seleccionar todo
 nahual-shell-select-none = Deseleccionar todo

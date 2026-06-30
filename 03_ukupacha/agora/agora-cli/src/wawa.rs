@@ -638,33 +638,6 @@ fn emitir_objeto(objeto: &format::Objeto, salida: &Path) -> CliResult<format::Ha
 //  importar-imagen (foreign-fs)
 // =============================================================================
 
-/// `foreign_fs::Emisor` que escribe cada objeto como `<hash>.obj` en el bundle
-/// —el mismo formato que produce `emitir_objeto`/`importar`, así que la salida
-/// de `importar-imagen` es servible por `servir_release` igual que la de
-/// `importar`. Captura el primer error de I/O para reportarlo con detalle.
-struct EmisorBundle<'a> {
-    salida: &'a Path,
-    error_io: Option<std::io::Error>,
-}
-
-impl<'a> EmisorBundle<'a> {
-    fn nuevo(salida: &'a Path) -> Self {
-        Self { salida, error_io: None }
-    }
-}
-
-impl foreign_fs::Emisor for EmisorBundle<'_> {
-    fn emitir(&mut self, objeto: &format::Objeto) -> Result<format::Hash, foreign_fs::FsError> {
-        let payload = objeto.serializar().map_err(foreign_fs::FsError::Format)?;
-        let hash = format::hash(&payload);
-        if let Err(e) = fs::write(self.salida.join(format!("{}.obj", hex_de(&hash))), &payload) {
-            self.error_io.get_or_insert(e);
-            return Err(foreign_fs::FsError::EmisionFallida);
-        }
-        Ok(hash)
-    }
-}
-
 /// `agora-cli wawa importar-imagen` — absorbe una imagen de dispositivo (sin
 /// montar) al grafo, vía `foreign-fs`.
 pub fn wawa_importar_imagen(
@@ -703,7 +676,7 @@ pub fn wawa_importar_imagen(
         );
     }
 
-    let mut emisor = EmisorBundle::nuevo(salida);
+    let mut emisor = foreign_fs::EmisorBundle::nuevo(salida);
     let raiz = if let Some(slot) = particion {
         let p = particiones
             .iter()
@@ -733,7 +706,7 @@ pub fn wawa_importar_imagen(
         Ok(h) => h,
         Err(foreign_fs::FsError::EmisionFallida) => {
             return Err(emisor
-                .error_io
+                .tomar_error_io()
                 .map(Error::Io)
                 .unwrap_or(Error::ForeignFs(foreign_fs::FsError::EmisionFallida)))
         }

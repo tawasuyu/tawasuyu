@@ -505,6 +505,28 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                 }
             }
         }
+        Msg::AbsorberDispositivo => {
+            // Absorbe el device/partición seleccionado a un bundle wawa en el
+            // dir del OTRO panel (POSIX escribible). Sólo si la selección es un
+            // objetivo válido (device o partición, no un archivo/dir interno).
+            let other = 1 - m.focus;
+            if m.panes[other].nav().writable().is_some() {
+                if let Some(node) = m.cur().selected_node().cloned() {
+                    if nahual_source_core::objetivo_absorcion(&node.id).is_some() {
+                        let dest = m.panes[other].nav().current_id().clone();
+                        enqueue(
+                            &mut m,
+                            handle,
+                            OpKind::AbsorberDispositivo {
+                                src_id: node.id,
+                                name: node.name,
+                                dest_parent: dest,
+                            },
+                        );
+                    }
+                }
+            }
+        }
         Msg::Unmount => {
             if m.is_foreign() {
                 m.cur_pane_mut().nav_stack.pop();

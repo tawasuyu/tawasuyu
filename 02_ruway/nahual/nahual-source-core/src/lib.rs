@@ -44,7 +44,10 @@ pub mod nouser_daemon;
 pub mod minga;
 
 pub use archive::ArchiveSource;
-pub use dispositivo::{es_id_de_dispositivo, DispositivoInfo, DispositivosSource};
+pub use dispositivo::{
+    es_id_de_dispositivo, objetivo_absorcion, DispositivoInfo, DispositivosSource,
+    ObjetivoAbsorcion,
+};
 pub use navigator::{Navigator, Opened, SortDir, SortKey, ViewMode};
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;

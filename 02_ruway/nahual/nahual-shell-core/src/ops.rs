@@ -37,6 +37,10 @@ pub enum OpKind {
     /// lee por la `Source` del device (bytes, sin montar) y escribe en disco.
     /// `dest_parent` es una ruta POSIX absoluta; `name` el nombre destino.
     Extraer { src_id: NodeId, name: String, es_dir: bool, dest_parent: NodeId },
+    /// **Absorber** un dispositivo/partición (`src_id`) al grafo wawa: produce un
+    /// bundle `<name>-wawa/` (objetos `<hash>.obj` + `raiz.txt`) dentro de
+    /// `dest_parent` (POSIX). Lee el device por bytes, sin montar.
+    AbsorberDispositivo { src_id: NodeId, name: String, dest_parent: NodeId },
 }
 
 impl OpKind {
@@ -50,6 +54,7 @@ impl OpKind {
             OpKind::Copy { name, .. } => format!("Copiar · {name}"),
             OpKind::Move { name, .. } => format!("Mover · {name}"),
             OpKind::Extraer { name, .. } => format!("Extraer · {name}"),
+            OpKind::AbsorberDispositivo { name, .. } => format!("Absorber · {name}"),
         }
     }
 
@@ -76,8 +81,71 @@ impl OpKind {
                 extraer_nodo(&origen, src_id, *es_dir, &destino)?;
                 Ok(Some(destino.to_string_lossy().into_owned()))
             }
+            OpKind::AbsorberDispositivo { src_id, name, dest_parent } => {
+                absorber_a_bundle(src_id, name, dest_parent).map(Some)
+            }
         }
     }
+}
+
+/// Absorbe el device/partición `src_id` a un bundle wawa `<name>-wawa/` dentro
+/// de `dest_parent`. Reusa el motor PEREZOSO de `foreign-fs` (lee por bytes, sin
+/// montar) y el sink `EmisorBundle` (`<hash>.obj`). Devuelve la ruta del bundle.
+fn absorber_a_bundle(
+    src_id: &NodeId,
+    name: &str,
+    dest_parent: &NodeId,
+) -> std::io::Result<NodeId> {
+    use foreign_fs::particion::{
+        absorber_dispositivo_fuente, absorber_particion_fuente, tabla_particiones_fuente,
+    };
+    use foreign_fs::{EmisorBundle, FuenteArchivo};
+    use nahual_source_core::ObjetivoAbsorcion;
+
+    let objetivo = nahual_source_core::objetivo_absorcion(src_id).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "sólo un dispositivo o una partición se absorben al grafo",
+        )
+    })?;
+
+    let destino = Path::new(dest_parent).join(format!("{}-wawa", sanear(name).to_string_lossy()));
+    std::fs::create_dir_all(&destino)?;
+    let mut emisor = EmisorBundle::nuevo(&destino);
+
+    let raiz = match &objetivo {
+        ObjetivoAbsorcion::Dispositivo(ruta) => {
+            let fa = FuenteArchivo::abrir(ruta)?;
+            absorber_dispositivo_fuente(&fa, &mut emisor)
+        }
+        ObjetivoAbsorcion::Particion(ruta, idx) => {
+            let fa = FuenteArchivo::abrir(ruta)?;
+            let parts = tabla_particiones_fuente(&fa).map_err(fserr)?;
+            let p = parts.into_iter().find(|p| p.indice == *idx).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, format!("partición {idx} inexistente"))
+            })?;
+            absorber_particion_fuente(&fa, &p, &mut emisor)
+        }
+    };
+
+    // Propaga el error de I/O real del emisor si lo hubo.
+    let raiz = match raiz {
+        Ok(h) => h,
+        Err(foreign_fs::FsError::EmisionFallida) => {
+            return Err(emisor
+                .tomar_error_io()
+                .unwrap_or_else(|| std::io::Error::other("emisión del bundle fallida")))
+        }
+        Err(e) => return Err(fserr(e)),
+    };
+
+    std::fs::write(destino.join("raiz.txt"), format!("{}\n", foreign_fs::hex32(&raiz)))?;
+    Ok(destino.to_string_lossy().into_owned())
+}
+
+/// Mapea un `FsError` de foreign-fs a un `io::Error` con detalle.
+fn fserr(e: foreign_fs::FsError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, format!("foreign-fs: {e:?}"))
 }
 
 /// Vuelca el nodo `id` de `origen` a la ruta POSIX `destino`, recursivo. Un
@@ -343,6 +411,59 @@ mod tests {
         op.run().unwrap().unwrap();
         // Byte-idéntico tras streamear por ventanas.
         assert_eq!(fs::read(destino.join("grande.bin")).unwrap(), grande);
+    }
+
+    #[test]
+    fn absorber_un_dispositivo_a_bundle_wawa() {
+        use nahual_source_core::{DispositivoInfo, DispositivosSource};
+        use std::process::Command;
+        if !which("mkfs.fat") || !which("mcopy") {
+            eprintln!("SKIP: faltan mkfs.fat/mcopy");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let img = dir.path().join("disco.img");
+        fs::File::create(&img).unwrap().set_len(4 * 1024 * 1024).unwrap();
+        assert!(Command::new("mkfs.fat").arg(&img).output().unwrap().status.success());
+        let f = dir.path().join("a.txt");
+        fs::write(&f, b"al grafo\n").unwrap();
+        assert!(Command::new("mcopy")
+            .arg("-i").arg(&img).arg(&f).arg("::a.txt")
+            .output().unwrap().status.success());
+
+        // Id del dispositivo entero.
+        let info = DispositivoInfo {
+            ruta: img.clone(),
+            nombre: "usb".into(),
+            tam: Some(fs::metadata(&img).unwrap().len()),
+            removible: true,
+            modelo: None,
+        };
+        let src = DispositivosSource::con_dispositivos(vec![info]);
+        let dev = src.children(&src.root().id).unwrap()[0].id.clone();
+
+        let bundle_parent = dir.path().join("salida");
+        fs::create_dir_all(&bundle_parent).unwrap();
+        let op = OpKind::AbsorberDispositivo {
+            src_id: dev,
+            name: "usb".into(),
+            dest_parent: bundle_parent.to_string_lossy().into_owned(),
+        };
+        let bundle = op.run().unwrap().unwrap();
+        let bundle = std::path::PathBuf::from(bundle);
+        assert!(bundle.ends_with("usb-wawa"));
+
+        // Bundle válido: ≥1 objeto y raiz.txt con un hash de 64 hex.
+        let objs = fs::read_dir(&bundle)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".obj"))
+            .count();
+        assert!(objs >= 1, "el bundle debe tener objetos");
+        let raiz = fs::read_to_string(bundle.join("raiz.txt")).unwrap();
+        let raiz = raiz.trim();
+        assert_eq!(raiz.len(), 64);
+        assert!(raiz.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
