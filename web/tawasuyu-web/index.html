@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tawasuyu · escritorio</title>
-<link rel="stylesheet" href="styles.css?v=14">
+<link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
 
@@ -891,20 +891,27 @@
     document.querySelectorAll('#sidebar .dock-section li .doc').forEach(el => {
       if (el.querySelector('.doc-ic')) return;
       const nombre = (el.textContent || '').trim().toLowerCase().split(/[\s·↗(]/)[0];
-      const tile = document.createElement('span');
-      tile.className = 'doc-ic';
+      const ic = document.createElement('span');
+      ic.className = 'doc-ic';
       const color = ICONO_COLOR[nombre];
       if (color) {
-        tile.style.setProperty('--app-c', color);
-        const g = document.createElement('i');
-        g.className = 'doc-ic-glyph';
-        g.style.setProperty('--ic', `url(/web/tawasuyu-web/assets/icons/${nombre}.svg)`);
-        tile.appendChild(g);
+        // ícono SÓLIDO (relleno) sobre fondo transparente: relleno el trazo
+        // con fill + fill-rule=evenodd (recorta huecos internos) y mantengo un
+        // stroke fino para las partes que son sólo línea.
+        fetch(`/web/tawasuyu-web/assets/icons/${nombre}.svg`)
+          .then(r => (r.ok ? r.text() : ''))
+          .then(svg => {
+            if (!svg) return;
+            svg = svg.replace('fill="none"', `fill="${color}" fill-rule="evenodd"`)
+                     .replace(/stroke-width="[^"]*"/, 'stroke-width="1.1"');
+            ic.innerHTML = svg;
+          })
+          .catch(() => {});
       } else {
-        tile.classList.add('doc-ic-mono');
-        tile.textContent = (nombre.charAt(0) || '?').toUpperCase();
+        ic.classList.add('doc-ic-mono');
+        ic.textContent = (nombre.charAt(0) || '?').toUpperCase();
       }
-      el.prepend(tile);
+      el.prepend(ic);
     });
   }
 
