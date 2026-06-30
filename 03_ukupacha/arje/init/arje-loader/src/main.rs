@@ -47,8 +47,9 @@ use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::{boot, guid, CStr16, Guid, Identify};
 
 mod gop;
+mod menu;
 
-/// Ruta canónica donde arje-installer deja la entry.
+/// Ruta canónica de la entry única (back-compat si no hay varias en el dir).
 const ENTRY_PATH: &str = r"\loader\entries\arje.conf";
 
 #[entry]
@@ -71,31 +72,84 @@ fn run() -> Result<(), Status> {
     gop::paint_boot_splash();
 
     let mut fs_root = open_boot_fs()?;
-    let entry_text = read_file_utf8(&mut fs_root, ENTRY_PATH)?;
-    let entry = parse_entry(&entry_text);
+
+    // Enumerar TODAS las entries `/loader/entries/*.conf` (formato systemd-boot).
+    // Back-compat: si el directorio no existe, la entry única `arje.conf`.
+    let mut entries = enumerate_entries(&mut fs_root);
+    if entries.is_empty() {
+        if let Ok(text) = read_file_utf8(&mut fs_root, ENTRY_PATH) {
+            entries.push(parse_entry(&text));
+        }
+    }
+
+    let chosen = match entries.len() {
+        0 => {
+            log::error!("arje-loader :: no hay entries en /loader/entries/");
+            return Err(Status::NOT_FOUND);
+        }
+        // Una sola: arranca directo, sin menú (no hay nada que elegir).
+        1 => 0,
+        // Varias: menú GRÁFICO sobre el GOP — flechas + Enter, timeout 5 s.
+        _ => {
+            let titles: Vec<String> =
+                entries.iter().enumerate().map(|(i, e)| entry_title(e, i)).collect();
+            menu::pick(&titles, default_entry(&entries), 5)
+        }
+    };
+
+    let entry = &entries[chosen];
     log::info!(
-        "arje-loader :: entry — linux={} initrd={} options={}",
+        "arje-loader :: arrancando «{}» — linux={}",
+        entry.title.as_deref().unwrap_or("?"),
         entry.linux.as_deref().unwrap_or("(falta)"),
-        entry.initrd.as_deref().unwrap_or("(falta)"),
-        entry.options.as_deref().unwrap_or(""),
     );
+    boot_entry(&mut fs_root, entry)
+}
 
-    let linux = entry.linux.ok_or(Status::INVALID_PARAMETER)?;
-    let initrd = entry.initrd.ok_or(Status::INVALID_PARAMETER)?;
-    let options = entry.options.unwrap_or_default();
+/// Título legible de una entry para el menú (su `title`, o un fallback).
+fn entry_title(e: &Entry, i: usize) -> String {
+    if let Some(t) = &e.title {
+        if !t.is_empty() {
+            return t.clone();
+        }
+    }
+    let mut s = String::from("entrada ");
+    s.push((b'1' + i as u8) as char);
+    s
+}
 
-    // 1) Initramfs a memoria y registramos un handle con LoadFile2.
-    let initrd_bytes = read_file_bytes(&mut fs_root, &initrd)?;
-    log::info!("arje-loader :: initramfs leído, {} bytes", initrd_bytes.len());
+/// Entry seleccionada por defecto: la primera cuyo título mencione lo nuestro
+/// (`arje`/`tawasuyu`); si no, la primera.
+fn default_entry(entries: &[Entry]) -> usize {
+    entries
+        .iter()
+        .position(|e| {
+            e.title
+                .as_deref()
+                .map(|t| t.contains("arje") || t.contains("tawasuyu"))
+                .unwrap_or(false)
+        })
+        .unwrap_or(0)
+}
+
+/// Carga kernel + initramfs de una entry y le entrega el control. No retorna en
+/// el camino feliz: `start_image` salta al kernel.
+fn boot_entry(
+    fs_root: &mut uefi::proto::media::file::Directory,
+    entry: &Entry,
+) -> Result<(), Status> {
+    let linux = entry.linux.as_deref().ok_or(Status::INVALID_PARAMETER)?;
+    let initrd = entry.initrd.as_deref().ok_or(Status::INVALID_PARAMETER)?;
+    let options = entry.options.as_deref().unwrap_or("");
+
+    // 1) Initramfs a memoria + handle LoadFile2 (cómo el EFISTUB lo encuentra).
+    let initrd_bytes = read_file_bytes(fs_root, initrd)?;
+    log::info!("arje-loader :: initramfs {} bytes", initrd_bytes.len());
     install_initrd_loadfile2(initrd_bytes)?;
-    log::info!("arje-loader :: LoadFile2 LINUX_EFI_INITRD instalado");
 
-    // 2) Kernel a memoria.
-    let kernel_bytes = read_file_bytes(&mut fs_root, &linux)?;
-    log::info!("arje-loader :: kernel leído, {} bytes", kernel_bytes.len());
-    drop(fs_root);
-
-    // 3) LoadImage del kernel desde el buffer.
+    // 2) Kernel a memoria + LoadImage desde el buffer.
+    let kernel_bytes = read_file_bytes(fs_root, linux)?;
+    log::info!("arje-loader :: kernel {} bytes", kernel_bytes.len());
     let kernel_handle = boot::load_image(
         boot::image_handle(),
         boot::LoadImageSource::FromBuffer {
@@ -107,19 +161,64 @@ fn run() -> Result<(), Status> {
         log::error!("load_image: {e:?}");
         e.status()
     })?;
-    log::info!("arje-loader :: LoadImage OK");
 
-    // 4) Cmdline. Cuando el initrd va por LoadFile2, no necesitamos
-    //    `initrd=` en el cmdline. Lo dejamos en el cmdline sólo si las
-    //    options del .conf no usan LoadFile2 (compat con bootloaders
-    //    viejos) — el kernel preferirá LoadFile2 si lo encuentra.
-    let cmdline = compose_cmdline(&initrd, &options);
+    // 3) Cmdline (sin `initrd=` si va por LoadFile2) + control al kernel.
+    let cmdline = compose_cmdline(initrd, options);
     log::info!("arje-loader :: cmdline = {cmdline}");
     set_load_options(kernel_handle, &cmdline)?;
-
     log::info!("arje-loader :: start_image");
     boot::start_image(kernel_handle).map_err(|e| e.status())?;
     Ok(())
+}
+
+/// Enumera `/loader/entries/*.conf` y las parsea. Vacío si el dir no existe.
+fn enumerate_entries(root: &mut uefi::proto::media::file::Directory) -> Vec<Entry> {
+    let mut out = Vec::new();
+    let Ok(mut dir) = open_dir(root, "\\loader\\entries") else {
+        return out;
+    };
+    loop {
+        match dir.read_entry_boxed() {
+            Ok(Some(info)) => {
+                if info.attribute().contains(FileAttribute::DIRECTORY) {
+                    continue;
+                }
+                let name = info.file_name().to_string();
+                if !name.ends_with(".conf") {
+                    continue;
+                }
+                let path = alloc::format!("\\loader\\entries\\{name}");
+                if let Ok(text) = read_file_utf8(root, &path) {
+                    let mut e = parse_entry(&text);
+                    if e.title.is_none() {
+                        e.title = Some(name.trim_end_matches(".conf").to_string());
+                    }
+                    out.push(e);
+                }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    out
+}
+
+/// Abre un subdirectorio del root (separadores `/`→`\`).
+fn open_dir(
+    root: &mut uefi::proto::media::file::Directory,
+    path: &str,
+) -> Result<uefi::proto::media::file::Directory, Status> {
+    let normalized: String = path.chars().map(|c| if c == '/' { '\\' } else { c }).collect();
+    let mut buf = [0u16; 256];
+    let cpath =
+        CStr16::from_str_with_buf(&normalized, &mut buf).map_err(|_| Status::INVALID_PARAMETER)?;
+    let h = root
+        .open(cpath, FileMode::Read, FileAttribute::empty())
+        .map_err(|e| e.status())?;
+    match h.into_type().map_err(|e| e.status())? {
+        FileType::Dir(d) => Ok(d),
+        FileType::Regular(_) => Err(Status::INVALID_PARAMETER),
+    }
 }
 
 // =====================================================================
@@ -311,6 +410,7 @@ fn file_size(file: &mut RegularFile) -> Result<usize, Status> {
 
 #[derive(Default)]
 struct Entry {
+    title: Option<String>,
     linux: Option<String>,
     initrd: Option<String>,
     options: Option<String>,
@@ -328,6 +428,7 @@ fn parse_entry(text: &str) -> Entry {
         };
         let val = val.trim().to_string();
         match key.trim() {
+            "title" => e.title = Some(val),
             "linux" => e.linux = Some(val),
             "initrd" => e.initrd = Some(val),
             "options" => e.options = Some(val),
