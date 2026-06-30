@@ -582,6 +582,7 @@ members = [
     "shared/pacha/pacha-core",
     "shared/pacha/pacha-manager",
     "shared/pacha/pacha-cli",
+    "shared/pacha/pacha-dotfiles",
     "shared/rimay-localize",
     "shared/sandokan/sandokan-core",
     "shared/sandokan/sandokan-lifecycle",

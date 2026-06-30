@@ -1,0 +1,17 @@
+[package]
+name = "pacha-dotfiles"
+description = "Versionado de dotfiles para contextos de usuario (pacha): captura un conjunto de rutas del $HOME al grafo direccionado por contenido de `format` (blob + árbol, el modelo de objetos de git) y lo materializa de vuelta. Cada conmutación de pacha fija qué instantánea aterriza; el historial es un DAG de instantáneas con dedup por contenido. Núcleo verificable por hashes, sin acoplar a mirada/sandokan."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+format = { path = "../../format" }
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
