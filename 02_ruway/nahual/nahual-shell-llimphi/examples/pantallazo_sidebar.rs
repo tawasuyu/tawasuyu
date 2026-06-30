@@ -31,6 +31,7 @@ use llimphi_widget_detail_table::{
     detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
 };
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_icons::{icon_view, Icon};
 
 use app_bus::{AppMenu, Menu, MenuItem};
 
@@ -231,7 +232,38 @@ fn sidebar(theme: &Theme) -> View<Msg> {
         .text(format!("🕘 {nombre}"), 12.5, theme.fg_muted)
     };
 
+    // Acceso «Dispositivos» — CÓDIGO IDÉNTICO al de `sidebar_view` (icon_view +
+    // texto), para que el render verifique el primitivo real (Icon::Save).
+    let dispositivos = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        padding: pad_h(12.0),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![icon_view(Icon::Save, theme.fg_muted, 1.5)]),
+        View::new(Style {
+            flex_grow: 1.0,
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .text("Dispositivos", 12.5, theme.fg_text),
+    ]);
+
     let hijos = vec![
+        seccion("CARPETAS"),
+        dispositivos,
         seccion("FAVORITOS"),
         place("proyecto"),
         place("fotos"),
