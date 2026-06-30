@@ -2438,20 +2438,23 @@ impl DrmState {
         } else {
             mirada_brain::Easing::EaseOutCubic.apply(t)
         };
-        let base = 0.12 + 0.5 * prog; // alfa pico del resplandor
+        let base = 0.10 + 0.45 * prog; // alfa pico del resplandor
         let c = rgba_f32(self.app.decorations.border_focus);
         let color = [c[0], c[1], c[2], 1.0];
-        // De la capa interna (chica y brillante, va ARRIBA) a la externa (grande
-        // y tenue, asoma como halo): el front-to-back pinta primero = encima.
-        const LAYERS: i32 = 5;
+        // Muchas capas concéntricas con caída cuadrática del alfa fingen un
+        // *bloom* suave: la interna (chica, opaca) va ARRIBA (front-to-back pinta
+        // primero = encima) y la externa se desvanece a ~0, así no queda el canto
+        // duro de un rectángulo. La forma es cuadrada (los rects son axis-aligned),
+        // pero el degradé la lee como un panel que irradia.
+        const LAYERS: i32 = 16;
         for i in (0..LAYERS).rev() {
-            let f = i as f32 / LAYERS as f32; // 0 = interna … →1 externa
+            let f = i as f32 / (LAYERS - 1) as f32; // 0 = interna … →1 externa
             let ix = (gw as f32 * f * 0.5) as i32;
             let iy = (gh as f32 * f * 0.5) as i32;
             let lw = (gw - 2 * ix).max(1);
             let lh = (gh - 2 * iy).max(1);
-            let a = base * (1.0 - 0.7 * f); // interna más opaca
-            if a <= 0.0 {
+            let a = base * (1.0 - f).powf(1.6); // se desvanece hacia el borde
+            if a <= 0.001 {
                 continue;
             }
             let mut b = SolidColorBuffer::default();
