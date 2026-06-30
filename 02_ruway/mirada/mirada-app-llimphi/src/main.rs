@@ -43,6 +43,8 @@ use llimphi_theme::Theme;
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
+use allichay::{Configurable, FieldPath, FieldValue};
+use llimphi_module_allichay::{settings_overlay, AllichayMsg, AllichayState};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
     DEFAULT_HEIGHT as MENU_H,
@@ -158,6 +160,11 @@ struct Model {
     /// coordenadas de ventana. `None` cerrado. No hay edición de texto,
     /// así que el contextual sólo ofrece acciones de gestión de ventana.
     context_menu: Option<(f32, f32)>,
+    /// Panel de **configuración** abierto (estado del renderer de schema de
+    /// allichay): `Some` mientras el modal está visible. Edita la config del
+    /// escritorio —incluido el editor de la barra de título— y persiste a
+    /// config.ron (el compositor lo recarga en caliente).
+    settings: Option<AllichayState>,
     /// Ruta de la sesión persistida (`~/.local/share/mirada/session.ron`);
     /// `None` si no se pudo determinar el directorio de datos.
     session_path: Option<PathBuf>,
@@ -218,6 +225,10 @@ enum Msg {
     /// Ejecuta una acción de escritorio (usado por el menú contextual y
     /// el principal sobre la ventana enfocada).
     Act(DesktopAction),
+    /// Cierra el panel de configuración.
+    SettingsClose,
+    /// Un evento del panel de configuración (cambio de campo, diente, scroll).
+    Settings(AllichayMsg),
 }
 
 struct Mirada;
@@ -323,6 +334,7 @@ impl App for Mirada {
             keymap_watch,
             profiles,
             profiles_path,
+            settings: None,
             vista_keep_bar: false,
             ctl,
             menu_open: None,
@@ -541,6 +553,24 @@ impl App for Mirada {
                 m.context_menu = None;
                 act(&mut m, action);
             }
+            Msg::SettingsClose => {
+                m.settings = None;
+            }
+            Msg::Settings(am) => match am {
+                // Un cambio de campo: se aplica a la config, se manda en vivo al
+                // Cuerpo y se persiste a config.ron.
+                AllichayMsg::Change(path, value) => apply_settings_change(&mut m, &path, value),
+                // El resto sólo muta el estado del panel (diente activo, scroll).
+                other => {
+                    if let Some(st) = m.settings.as_mut() {
+                        match other {
+                            AllichayMsg::SelectSection(i) => st.select(i),
+                            AllichayMsg::ScrollTo(o) => st.set_scroll(o),
+                            _ => {}
+                        }
+                    }
+                }
+            },
         }
         m
     }
@@ -632,6 +662,11 @@ impl App for Mirada {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El panel de configuración es un modal: captura todo mientras está
+        // abierto, así que tiene prioridad sobre los menús.
+        if let Some(state) = model.settings.as_ref() {
+            return Some(settings_overlay_view(model, state));
+        }
         // El menú contextual de la ventana enfocada tiene prioridad.
         if let Some((x, y)) = model.context_menu {
             let focused = model.desktop.focused_window();
@@ -1411,7 +1446,9 @@ fn app_menu(model: &Model) -> AppMenu {
         model.profiles.active(),
         model.desktop.config(),
         model.vista_keep_bar,
-    );
+    )
+    // El panel de configuración (incluye el editor de la barra de título).
+    .item(MenuItem::new(t("settings"), "settings.open").separated());
     // Menú «Atajos»: la biblioteca de perfiles de teclas.
     let atajos = profiles_menu(&model.profiles);
 
@@ -1508,7 +1545,45 @@ fn vistas_menu(active_keymap: &str, current: &mirada_brain::Config, keep_bar: bo
 }
 
 /// Traduce un command id del menú principal a la acción real del Desktop.
+/// Pinta el panel de configuración como modal centrado. El schema sale de la
+/// config viva del Desktop (incluye el editor de la barra de título).
+fn settings_overlay_view(model: &Model, state: &AllichayState) -> View<Msg> {
+    let schema = model.desktop.config().schema();
+    settings_overlay(
+        rimay_localize::t("settings"),
+        rimay_localize::t("close"),
+        &schema,
+        state,
+        &model.theme,
+        viewport_of(model),
+        Msg::Settings,
+        Msg::SettingsClose,
+    )
+}
+
+/// Aplica un cambio del panel: muta una copia de la config, la instala en vivo
+/// en el Cuerpo (`reload_config` → SetDecorations/SetTitlebarLayout/autoexec) y
+/// la persiste a config.ron (el compositor también la FileWatchea).
+fn apply_settings_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
+    let mut cfg = m.desktop.config().clone();
+    if cfg.apply(path, value).is_err() {
+        return;
+    }
+    let cmds = m.desktop.reload_config(cfg.clone());
+    dispatch(m, cmds);
+    if let Some(p) = mirada_brain::Config::default_path() {
+        if let Err(e) = cfg.save(&p) {
+            m.note = format!("config: {e}");
+        }
+    }
+}
+
 fn handle_menu_command(m: &mut Model, cmd: &str) {
+    // Abrir el panel de configuración (modal con el schema de la config).
+    if cmd == "settings.open" {
+        m.settings = Some(AllichayState::new());
+        return;
+    }
     // Cambio de idioma: aplica el locale en caliente y lo persiste en wawa-config.
     if let Some(code) = cmd.strip_prefix("lang.") {
         let _ = rimay_localize::set_locale(code);

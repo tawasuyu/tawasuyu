@@ -106,6 +106,131 @@ fn wallpaper_fit_options() -> Vec<EnumOption> {
     ]
 }
 
+// --- Editor de la barra de título -------------------------------------------
+//
+// El usuario edita el `titlebar_layout` con dropdowns: por cada botón de sistema
+// elige Oculto / Izquierda / Derecha, y dos radios fijan alineación del título y
+// estilo de botón. El orden dentro de cada grupo es **canónico** (el de
+// `TB_EDITABLE`); para órdenes a medida o botones `Spawn` custom queda config.ron.
+
+use crate::{TitleAlign, TitlebarAction as TbAct, TitlebarButtonStyle, TitlebarItem};
+
+/// Los botones de sistema editables desde el panel, en **orden canónico**
+/// (izquierda→derecha): así, puesto a un lado, cada uno cae en su lugar y
+/// «Cerrar» queda último (más a la derecha).
+fn tb_editable() -> [(&'static str, &'static str, TbAct); 6] {
+    [
+        ("btn_menu", "Botón: Menú", TbAct::Menu),
+        ("btn_float", "Botón: Flotar / teselar", TbAct::Float),
+        ("btn_fullscreen", "Botón: Pantalla completa", TbAct::Fullscreen),
+        ("btn_minimize", "Botón: Minimizar", TbAct::Minimize),
+        ("btn_maximize", "Botón: Maximizar", TbAct::Maximize),
+        ("btn_close", "Botón: Cerrar", TbAct::Close),
+    ]
+}
+
+fn tb_pos_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("hidden", "Oculto"),
+        EnumOption::new("left", "Izquierda"),
+        EnumOption::new("right", "Derecha"),
+    ]
+}
+
+fn title_align_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("left", "Izquierda"),
+        EnumOption::new("center", "Centro"),
+        EnumOption::new("right", "Derecha"),
+    ]
+}
+
+fn button_style_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("glyph", "Glifo plano"),
+        EnumOption::new("bevel", "Relieve 3D (Motif/CDE)"),
+        EnumOption::new("traffic", "Círculos (estilo mac)"),
+    ]
+}
+
+fn title_align_slug(a: TitleAlign) -> &'static str {
+    match a {
+        TitleAlign::Left => "left",
+        TitleAlign::Center => "center",
+        TitleAlign::Right => "right",
+    }
+}
+
+fn title_align_from(s: &str) -> Option<TitleAlign> {
+    Some(match s {
+        "left" => TitleAlign::Left,
+        "center" => TitleAlign::Center,
+        "right" => TitleAlign::Right,
+        _ => return None,
+    })
+}
+
+fn button_style_slug(s: TitlebarButtonStyle) -> &'static str {
+    match s {
+        TitlebarButtonStyle::Glyph => "glyph",
+        TitlebarButtonStyle::Bevel => "bevel",
+        TitlebarButtonStyle::TrafficLight => "traffic",
+    }
+}
+
+fn button_style_from(s: &str) -> Option<TitlebarButtonStyle> {
+    Some(match s {
+        "glyph" => TitlebarButtonStyle::Glyph,
+        "bevel" => TitlebarButtonStyle::Bevel,
+        "traffic" => TitlebarButtonStyle::TrafficLight,
+        _ => return None,
+    })
+}
+
+fn item_is(it: &TitlebarItem, a: &TbAct) -> bool {
+    matches!(it, TitlebarItem::Button { action, .. } if action == a)
+}
+
+/// En qué grupo está hoy un botón: `"left"` / `"right"` / `"hidden"`.
+fn tb_button_pos(layout: &crate::TitlebarLayout, a: &TbAct) -> &'static str {
+    if layout.left.iter().any(|it| item_is(it, a)) {
+        "left"
+    } else if layout.right.iter().any(|it| item_is(it, a)) {
+        "right"
+    } else {
+        "hidden"
+    }
+}
+
+fn tb_rank(a: &TbAct) -> usize {
+    tb_editable().iter().position(|(_, _, act)| act == a).unwrap_or(usize::MAX)
+}
+
+/// Inserta `action` en `group` conservando el orden canónico de [`tb_editable`].
+fn tb_insert_canonical(group: &mut Vec<TitlebarItem>, action: TbAct) {
+    let rank = tb_rank(&action);
+    let pos = group
+        .iter()
+        .position(|it| match it {
+            TitlebarItem::Button { action: a, .. } => tb_rank(a) > rank,
+            _ => true, // los items App (si los hubiera) van después de los de sistema
+        })
+        .unwrap_or(group.len());
+    group.insert(pos, TitlebarItem::button(action));
+}
+
+/// Mueve un botón al lado pedido (`"left"`/`"right"`/`"hidden"`): lo saca de
+/// ambos grupos y lo reinserta en su posición canónica del lado elegido.
+fn tb_set_side(layout: &mut crate::TitlebarLayout, action: TbAct, side: &str) {
+    layout.left.retain(|it| !item_is(it, &action));
+    layout.right.retain(|it| !item_is(it, &action));
+    match side {
+        "left" => tb_insert_canonical(&mut layout.left, action),
+        "right" => tb_insert_canonical(&mut layout.right, action),
+        _ => {} // hidden
+    }
+}
+
 impl Configurable for Config {
     fn schema(&self) -> Schema {
         Schema::new()
@@ -204,6 +329,34 @@ impl Configurable for Config {
                         self.border_bevel,
                     )),
             )
+            .section({
+                // Editor de la barra de título: alineación + estilo + por cada
+                // botón de sistema, de qué lado va (o si se oculta).
+                let mut sec = Section::new("titlebar", "Barra de título")
+                    .icon("▭")
+                    .help("Qué botones lleva la barra de cada ventana, de qué lado, y el estilo")
+                    .field(Field::radio(
+                        "title_align",
+                        "Alineación del título",
+                        title_align_slug(self.titlebar_layout.title_align),
+                        title_align_options(),
+                    ))
+                    .field(Field::radio(
+                        "button_style",
+                        "Estilo de botones",
+                        button_style_slug(self.titlebar_layout.button_style),
+                        button_style_options(),
+                    ));
+                for (id, label, action) in tb_editable() {
+                    sec = sec.field(Field::dropdown(
+                        id,
+                        label,
+                        tb_button_pos(&self.titlebar_layout, &action),
+                        tb_pos_options(),
+                    ));
+                }
+                sec
+            })
             .section(
                 Section::new("fondo", "Fondo")
                     .icon("")
@@ -574,6 +727,29 @@ impl Configurable for Config {
                     self.border_bevel = b;
                 }
             }
+            // --- Editor de la barra de título ---
+            "title_align" => {
+                if let Some(a) = value.as_str().and_then(title_align_from) {
+                    self.titlebar_layout.title_align = a;
+                }
+            }
+            "button_style" => {
+                if let Some(s) = value.as_str().and_then(button_style_from) {
+                    self.titlebar_layout.button_style = s;
+                }
+            }
+            // Un botón cambió de lado (Oculto/Izquierda/Derecha): lo movemos en el
+            // layout, conservando el orden canónico.
+            id @ ("btn_menu" | "btn_float" | "btn_fullscreen" | "btn_minimize"
+                | "btn_maximize" | "btn_close") => {
+                if let Some(side) = value.as_str() {
+                    if let Some((_, _, action)) =
+                        tb_editable().into_iter().find(|(fid, _, _)| *fid == id)
+                    {
+                        tb_set_side(&mut self.titlebar_layout, action, side);
+                    }
+                }
+            }
             "border_focus" => {
                 if let Some(c) = value.as_color() {
                     self.border_focus = c;
@@ -875,6 +1051,7 @@ mod tests {
             vec![
                 "teselado",
                 "decoracion",
+                "titlebar",
                 "fondo",
                 "terminal",
                 "monitores",
@@ -1167,5 +1344,38 @@ mod tests {
     fn apply_ruta_desconocida_es_error() {
         let mut c = Config::default();
         assert!(c.apply(&"teselado.nope".into(), FieldValue::Int(1)).is_err());
+    }
+
+    #[test]
+    fn editor_de_titlebar_mueve_botones_y_conserva_orden() {
+        use crate::{TitlebarAction, TitlebarItem};
+        let mut c = Config::default();
+        // Default: derecha = [Minimize, Maximize, Close]. Mando «Minimizar» a la
+        // izquierda.
+        c.apply(&"titlebar.btn_minimize".into(), FieldValue::Enum("left".into())).unwrap();
+        let l = &c.titlebar_layout;
+        assert!(
+            l.left.iter().any(|it| matches!(it, TitlebarItem::Button { action: TitlebarAction::Minimize, .. })),
+            "minimizar pasó a la izquierda"
+        );
+        assert!(
+            !l.right.iter().any(|it| matches!(it, TitlebarItem::Button { action: TitlebarAction::Minimize, .. })),
+            "ya no está a la derecha"
+        );
+        // «Cerrar» sigue siendo el último de la derecha (más a la derecha).
+        assert!(matches!(
+            l.right.last(),
+            Some(TitlebarItem::Button { action: TitlebarAction::Close, .. })
+        ));
+        // Ocultar «Maximizar».
+        c.apply(&"titlebar.btn_maximize".into(), FieldValue::Enum("hidden".into())).unwrap();
+        assert!(!c.titlebar_layout.right.iter().chain(&c.titlebar_layout.left).any(|it| {
+            matches!(it, TitlebarItem::Button { action: TitlebarAction::Maximize, .. })
+        }), "maximizar quedó oculto");
+        // Estilo y alineación por radio.
+        c.apply(&"titlebar.button_style".into(), FieldValue::Enum("traffic".into())).unwrap();
+        c.apply(&"titlebar.title_align".into(), FieldValue::Enum("center".into())).unwrap();
+        assert_eq!(c.titlebar_layout.button_style, crate::TitlebarButtonStyle::TrafficLight);
+        assert_eq!(c.titlebar_layout.title_align, crate::TitleAlign::Center);
     }
 }
