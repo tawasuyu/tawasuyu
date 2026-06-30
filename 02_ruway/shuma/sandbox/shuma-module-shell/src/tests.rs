@@ -59,6 +59,57 @@
     }
 
     #[test]
+    fn export_sets_session_env_var() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("export SHUMA_TEST_EXPORT_A=hola");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(std::env::var("SHUMA_TEST_EXPORT_A").as_deref(), Ok("hola"));
+        assert!(s.output.iter().any(|l| l.text.contains("export SHUMA_TEST_EXPORT_A=hola")));
+        std::env::remove_var("SHUMA_TEST_EXPORT_A");
+    }
+
+    #[test]
+    fn export_expands_existing_vars() {
+        std::env::set_var("SHUMA_TEST_EXPORT_B", "base");
+        let mut s = State::new(Source::Local);
+        s.input.set_text("export SHUMA_TEST_EXPORT_B=$SHUMA_TEST_EXPORT_B:extra");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(std::env::var("SHUMA_TEST_EXPORT_B").as_deref(), Ok("base:extra"));
+        std::env::remove_var("SHUMA_TEST_EXPORT_B");
+    }
+
+    #[test]
+    fn bare_assignment_persists_to_session() {
+        // `NAME=valor` sin comando se aplica a la sesión (no a un bash efímero).
+        let mut s = State::new(Source::Local);
+        s.input.set_text("SHUMA_TEST_EXPORT_C=mundo");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(std::env::var("SHUMA_TEST_EXPORT_C").as_deref(), Ok("mundo"));
+        std::env::remove_var("SHUMA_TEST_EXPORT_C");
+    }
+
+    #[test]
+    fn unset_removes_session_env_var() {
+        std::env::set_var("SHUMA_TEST_EXPORT_D", "x");
+        let mut s = State::new(Source::Local);
+        s.input.set_text("unset SHUMA_TEST_EXPORT_D");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(std::env::var_os("SHUMA_TEST_EXPORT_D").is_none());
+    }
+
+    #[test]
+    fn assignment_with_command_is_not_intercepted() {
+        // `FOO=bar cmd` NO debe persistir FOO en la sesión: es env de un solo
+        // comando, va a bash. Verificamos que NO se setea en el proceso.
+        use crate::update::es_asignacion_pura;
+        assert!(es_asignacion_pura("PATH=/a:/b"));
+        assert!(es_asignacion_pura("A=1 B=2"));
+        assert!(!es_asignacion_pura("A=1 echo hola"));
+        assert!(!es_asignacion_pura("echo hola"));
+        assert!(!es_asignacion_pura(""));
+    }
+
+    #[test]
     fn clear_msg_empties_output() {
         let mut s = State::new(Source::Local);
         s.output.push(OutputLine::stdout("hola"));

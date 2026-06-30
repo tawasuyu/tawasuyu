@@ -103,6 +103,8 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":stop" => return apply_jobs_signal(s, rest, JobSignal::Stop),
             ":cont" => return apply_jobs_signal(s, rest, JobSignal::Cont),
             ":env" => return apply_env(s, rest),
+            "export" => return apply_export(s, rest),
+            "unset" => return apply_unset(s, rest),
             ":persist" => return apply_persist(s, rest),
             ":limit" => return apply_capture_limit(s, rest),
             ":spill" => return apply_spill(s, rest),
@@ -130,6 +132,14 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":kill-session" => return apply_kill_session(s, rest),
             _ => {}
         }
+    }
+
+    // Línea de **sólo asignaciones** (`PATH=$PATH:/opt/bin`, `FOO=bar BAZ=qux`):
+    // se aplican a la sesión, no a un bash efímero donde no persistirían. Un
+    // `FOO=bar cmd` (con comando) NO entra acá — eso es env de un solo comando
+    // y va a bash, como corresponde.
+    if es_asignacion_pura(&exec_line) {
+        return apply_export(s, &exec_line);
     }
 
     // Sufijo `&` (con espacios opcionales antes) → background. El

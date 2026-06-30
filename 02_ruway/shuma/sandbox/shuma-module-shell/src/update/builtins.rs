@@ -223,6 +223,117 @@ fn es_nombre_env(name: &str) -> bool {
             .all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()))
 }
 
+/// `true` si la línea es **sólo** asignaciones `NAME=VALOR` (una o más,
+/// separadas por espacios) sin comando que las siga — el caso `PATH=$PATH:/x`
+/// o `FOO=bar BAZ=qux` que el usuario espera que **persista en la sesión**
+/// (a diferencia de `FOO=bar cmd`, que es env de un solo comando y debe ir a
+/// bash). Un token que no tenga forma `nombre=...` corta: hay un comando.
+pub(crate) fn es_asignacion_pura(line: &str) -> bool {
+    let mut vio_alguna = false;
+    for tok in line.split_whitespace() {
+        match tok.split_once('=') {
+            Some((name, _)) if es_nombre_env(name) => vio_alguna = true,
+            _ => return false,
+        }
+    }
+    vio_alguna
+}
+
+/// Aplica una asignación `NAME=VALOR` al ambiente del proceso (los hijos la
+/// heredan). Expande `$VAR` contra el ambiente vigente. Devuelve el nombre si
+/// se aplicó, y si tocó `PATH` (para refrescar el cache de comandos).
+fn set_session_var(asign: &str) -> Option<(String, bool)> {
+    let (name, value) = asign.split_once('=')?;
+    let name = name.trim();
+    if !es_nombre_env(name) {
+        return None;
+    }
+    // Quita comillas envolventes simples/dobles antes de expandir.
+    let raw = value.trim();
+    let raw = raw
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| raw.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(raw);
+    let value = shuma_config::expand_env(raw);
+    std::env::set_var(name, &value);
+    Some((name.to_string(), name == "PATH"))
+}
+
+/// `export NAME=VALOR [NAME2=VALOR2 …]` — variables de ambiente de **sesión**.
+/// A diferencia de `:env` (que aprende al `env.json` y sobrevive reinicios),
+/// `export` es efímero como en un shell real: vale para los comandos de esta
+/// sesión y se pierde al cerrar. `$VAR` se expande. Si toca `PATH`, se
+/// refresca el escaneo de binarios para el autocompletado.
+///
+/// También es el camino de las **asignaciones puras** (`PATH=$PATH:/opt/bin`):
+/// se rutean acá en vez de a bash (donde no persistirían entre comandos).
+pub(crate) fn apply_export(mut s: State, rest: &str) -> State {
+    let arg = rest.trim();
+    if arg.is_empty() {
+        s.push_output(OutputLine::notice(
+            "export NAME=valor — variable de sesión (efímera). Para que sobreviva reinicios: :env",
+        ));
+        return s;
+    }
+    let mut aplicadas: Vec<String> = Vec::new();
+    let mut path_cambio = false;
+    for tok in arg.split_whitespace() {
+        if !tok.contains('=') {
+            // `export NAME` (sin `=`): en nuestro modelo el ambiente ya se
+            // hereda, así que es informativo. Avisamos si no existe.
+            if std::env::var_os(tok).is_none() {
+                s.push_output(OutputLine::notice(format!("export: {tok} no está definida")));
+            }
+            continue;
+        }
+        match set_session_var(tok) {
+            Some((name, es_path)) => {
+                path_cambio |= es_path;
+                aplicadas.push(name);
+            }
+            None => {
+                s.push_output(OutputLine::notice(format!(
+                    "export: `{tok}` no es una asignación válida (NAME=valor)"
+                )));
+            }
+        }
+    }
+    if path_cambio {
+        // PATH cambió → el cache de comandos del completado quedó viejo;
+        // reconstruimos la fuente para que los binarios nuevos aparezcan.
+        s.completion_source = crate::completion_source_for(&s.source, &s.cwd);
+    }
+    for name in &aplicadas {
+        let val = std::env::var(name).unwrap_or_default();
+        s.push_output(OutputLine::notice(format!("✔ export {name}={val}")));
+    }
+    s
+}
+
+/// `unset NAME [NAME2 …]` — quita variables de ambiente de la sesión.
+pub(crate) fn apply_unset(mut s: State, rest: &str) -> State {
+    let arg = rest.trim();
+    if arg.is_empty() {
+        s.push_output(OutputLine::notice("uso: unset NAME [NAME2 …]"));
+        return s;
+    }
+    let mut path_cambio = false;
+    for name in arg.split_whitespace() {
+        if !es_nombre_env(name) {
+            s.push_output(OutputLine::notice(format!("unset: `{name}` no es un nombre válido")));
+            continue;
+        }
+        std::env::remove_var(name);
+        path_cambio |= name == "PATH";
+        s.push_output(OutputLine::notice(format!("✔ unset {name}")));
+    }
+    if path_cambio {
+        s.completion_source = crate::completion_source_for(&s.source, &s.cwd);
+    }
+    s
+}
+
 /// `:persist` — asegura que la sesión persista lo máximo posible hoy.
 ///
 /// - `:persist` muestra el estado de cada capa de persistencia.
