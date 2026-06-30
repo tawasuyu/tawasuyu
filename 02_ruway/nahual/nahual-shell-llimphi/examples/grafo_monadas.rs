@@ -96,17 +96,25 @@ fn main() {
     imprimir(&src, &raiz.id, 0);
 
     // ----- métrica: archivos transitivos de "Fotos" (baja por el DAG) -----
-    let n = resolve::transitive_files(src.db(), fotos).len();
+    let n = src.with_db(|db| resolve::transitive_files(db, fotos)).len();
     println!("\n'Fotos' alcanza {n} archivos transitivamente (Viaje 3 + Familia 1).");
 
     // ----- Fase 3a: despacho por lente -----
     let reg = AppRegistry::new(default_entries());
     println!("\n== Despacho a nivel de Mónada (lente → panel · abrir en) ==");
-    for m in src.db().monads() {
-        let lens = m.dominant_lens;
-        let app = default_app(&reg, lens).unwrap_or("—");
-        println!("  {:<16} {:<10} → panel {:<8} · abrir en {}", m.label, lens_str(lens), panel_str(lens), app);
-    }
+    src.with_db(|db| {
+        for m in db.monads() {
+            let lens = m.dominant_lens;
+            let app = default_app(&reg, lens).unwrap_or("—");
+            println!(
+                "  {:<16} {:<10} → panel {:<8} · abrir en {}",
+                m.label,
+                lens_str(lens),
+                panel_str(lens),
+                app
+            );
+        }
+    });
 }
 
 /// Recorre el árbol de una `Source` imprimiéndolo indentado.

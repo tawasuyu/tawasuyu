@@ -182,6 +182,49 @@ pub trait Source: Send + Sync {
     fn writable(&self) -> Option<&dyn SourceMut> {
         None
     }
+
+    /// Si la fuente es un **grafo de Mónadas editable**, devuelve su cara
+    /// [`MonadGraphMut`]; si no (POSIX/wawa/minga), `None`. Es el análogo de
+    /// [`writable`](Self::writable) para editar la **organización** en vez de
+    /// los archivos: submonadizar, fusionar, renombrar, borrar Mónadas. La
+    /// frontera honesta vuelve a aplicar — sólo el grafo de nouser la ofrece.
+    fn monad_graph(&self) -> Option<&dyn MonadGraphMut> {
+        None
+    }
+}
+
+/// La cara **editable del grafo de Mónadas**. Trait aparte de [`SourceMut`]
+/// porque opera sobre la *organización* (qué Mónada contiene qué), no sobre
+/// el filesystem: ningún archivo se mueve en disco. Sólo el grafo de nouser
+/// lo implementa.
+///
+/// Las operaciones toman `&self` (como [`SourceMut`]) — el grafo mutable vive
+/// detrás de interior mutability en el adapter, así el trait queda object-safe
+/// tras un `&dyn` y el front lo llama sin exclusividad. Los ids son [`NodeId`]
+/// opacos (los mismos que la navegación entrega), así el front no necesita
+/// conocer los tipos de chasqui.
+pub trait MonadGraphMut: Source {
+    /// **Submonadiza**: crea una Mónada hija de `parent` con `label`, le
+    /// traslada los `members` (ids de archivos y/o sub-Mónadas que hoy cuelgan
+    /// de `parent`) y la cuelga de `parent`. Devuelve el id de la hija. Es la
+    /// operación canónica de "agrupar esta selección en su propia Mónada".
+    fn submonadize(
+        &self,
+        parent: &NodeId,
+        label: &str,
+        members: &[NodeId],
+    ) -> std::io::Result<NodeId>;
+
+    /// Renombra la Mónada `id`.
+    fn rename_monad(&self, id: &NodeId, label: &str) -> std::io::Result<()>;
+
+    /// Fusiona `from` en `into`: traslada el contenido de `from` a `into`,
+    /// repunta a los padres de `from` y la borra.
+    fn merge_monads(&self, into: &NodeId, from: &NodeId) -> std::io::Result<()>;
+
+    /// Borra la Mónada `id` y la desvincula de todo padre. No borra archivos
+    /// ni sub-Mónadas — sólo disuelve el agrupamiento.
+    fn delete_monad(&self, id: &NodeId) -> std::io::Result<()>;
 }
 
 /// La cara **mutable** de una fuente. Trait aparte (no métodos en [`Source`])

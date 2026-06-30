@@ -27,15 +27,16 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use chasqui_core::ulid::Ulid;
 use chasqui_core::cluster::by_directory;
-use chasqui_core::{FileEntry, Lens, MonadId, MonadManifest};
+use chasqui_core::{edit, FileEntry, FileId, Lens, MonadId, MonadManifest};
 use chasqui_core::db::MonadDb;
 use chasqui_core::resolve;
 use chasqui_core::scanner::{scan_directory, ScanConfig};
 
-use crate::{Node, NodeId, NodeKind, Source};
+use crate::{MonadGraphMut, Node, NodeId, NodeKind, Source};
 
 /// Id de la raíz sintética que lista las Mónadas de nivel superior.
 const RAIZ: &str = "@monadas";
@@ -64,9 +65,15 @@ pub fn lens_mime(lens: Lens) -> Option<&'static str> {
 }
 
 /// Fuente que navega el grafo de Mónadas de un directorio.
+///
+/// El grafo vive detrás de `Arc<RwLock<…>>` (interior mutability) para que la
+/// cara [`MonadGraphMut`] pueda editarlo con `&self` —igual que `SourceMut`
+/// edita el filesystem con `&self`— manteniendo `Source` object-safe. Los
+/// lectores (navegación) toman el lock de lectura; las ediciones, el de
+/// escritura.
 pub struct NouserSource {
     etiqueta: String,
-    db: MonadDb,
+    db: Arc<RwLock<MonadDb>>,
 }
 
 impl NouserSource {
@@ -87,31 +94,32 @@ impl NouserSource {
         db.ingest_files(files);
         db.replace_monads(monadas);
 
-        Ok(Self { etiqueta: dir.to_string_lossy().into_owned(), db })
+        Ok(Self::from_db(dir.to_string_lossy().into_owned(), db))
     }
 
     /// Construye la fuente sobre un grafo ya armado. Es la vía para montar
     /// un grafo con sub-Mónadas / Mónadas intensionales (construido por la
     /// capa de edición o por tests) sin pasar por `escanear`.
     pub fn from_db(label: impl Into<String>, db: MonadDb) -> Self {
-        Self { etiqueta: label.into(), db }
+        Self { etiqueta: label.into(), db: Arc::new(RwLock::new(db)) }
     }
 
-    /// Acceso de sólo lectura al grafo subyacente.
-    pub fn db(&self) -> &MonadDb {
-        &self.db
+    /// Corre `f` con acceso de sólo lectura al grafo subyacente (toma el lock
+    /// de lectura). Para consultas que el front quiera hacer sobre el grafo
+    /// (p. ej. `resolve::transitive_files`) sin exponer el lock.
+    pub fn with_db<R>(&self, f: impl FnOnce(&MonadDb) -> R) -> R {
+        f(&self.db.read().expect("MonadDb lock envenenado"))
     }
 
-    /// Mónadas de nivel superior: las que ninguna otra contiene como
-    /// sub-Mónada (las raíces del bosque de contención).
-    fn top_level(&self) -> Vec<&MonadManifest> {
+    /// Mónadas de nivel superior (las que ninguna otra contiene) como nodos.
+    fn top_level_nodes(db: &MonadDb) -> Vec<Node> {
         let mut contenidas: BTreeSet<MonadId> = BTreeSet::new();
-        for m in self.db.monads() {
+        for m in db.monads() {
             contenidas.extend(m.submonads.iter().copied());
         }
-        self.db
-            .monads()
+        db.monads()
             .filter(|m| !contenidas.contains(&m.id))
+            .map(Self::nodo_monada)
             .collect()
     }
 
@@ -168,11 +176,12 @@ impl Source for NouserSource {
     }
 
     fn children(&self, id: &NodeId) -> io::Result<Vec<Node>> {
+        let db = self.db.read().expect("MonadDb lock envenenado");
         if id == RAIZ {
-            return Ok(self.top_level().into_iter().map(Self::nodo_monada).collect());
+            return Ok(Self::top_level_nodes(&db));
         }
         if let Some(mid) = parse_monada(id) {
-            if self.db.monad(mid).is_none() {
+            if db.monad(mid).is_none() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("Mónada inexistente: {id}"),
@@ -180,12 +189,12 @@ impl Source for NouserSource {
             }
             // Sub-Mónadas primero (contenedores), luego archivos efectivos
             // (curados ∪ intensional ∪ pines), resueltos por el grafo.
-            let mut hijos: Vec<Node> = resolve::child_monads(&self.db, mid)
+            let mut hijos: Vec<Node> = resolve::child_monads(&db, mid)
                 .into_iter()
                 .map(Self::nodo_monada)
                 .collect();
-            for fid in resolve::effective_members(&self.db, mid) {
-                if let Some(f) = self.db.file(fid) {
+            for fid in resolve::effective_members(&db, mid) {
+                if let Some(f) = db.file(fid) {
                     hijos.push(Self::nodo_archivo(f));
                 }
             }
@@ -204,10 +213,76 @@ impl Source for NouserSource {
                 format!("sólo los archivos miembro son leíbles: {id}"),
             )
         })?;
-        let archivo = self.db.file(fid).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, format!("archivo inexistente: {id}"))
-        })?;
-        std::fs::read(&archivo.path)
+        // Sacá la ruta bajo el lock y soltalo antes del I/O de disco.
+        let path = self
+            .db
+            .read()
+            .expect("MonadDb lock envenenado")
+            .file(fid)
+            .map(|f| f.path.clone())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, format!("archivo inexistente: {id}"))
+            })?;
+        std::fs::read(&path)
+    }
+
+    fn monad_graph(&self) -> Option<&dyn MonadGraphMut> {
+        Some(self)
+    }
+}
+
+/// Mapea un [`edit::EditError`] a `io::Error` para cruzar la frontera del trait.
+fn edit_err(e: edit::EditError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, e.to_string())
+}
+
+/// Exige que `id` sea una Mónada (`m:<ulid>`).
+fn exigir_monada(id: &NodeId) -> io::Result<MonadId> {
+    parse_monada(id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("no es una Mónada: {id}")))
+}
+
+impl MonadGraphMut for NouserSource {
+    fn submonadize(
+        &self,
+        parent: &NodeId,
+        label: &str,
+        members: &[NodeId],
+    ) -> io::Result<NodeId> {
+        let pid = exigir_monada(parent)?;
+        // Partí la selección: ids `f:` son archivos, `m:` son sub-Mónadas.
+        let mut files: Vec<FileId> = Vec::new();
+        let mut subs: Vec<MonadId> = Vec::new();
+        for m in members {
+            if let Some(fid) = parse_archivo(m) {
+                files.push(fid);
+            } else if let Some(mid) = parse_monada(m) {
+                subs.push(mid);
+            }
+        }
+        let mut db = self.db.write().expect("MonadDb lock envenenado");
+        let hija = edit::submonadize(&mut db, pid, label, &files, &subs).map_err(edit_err)?;
+        Ok(format!("{PREF_MONADA}{hija}"))
+    }
+
+    fn rename_monad(&self, id: &NodeId, label: &str) -> io::Result<()> {
+        let mid = exigir_monada(id)?;
+        let mut db = self.db.write().expect("MonadDb lock envenenado");
+        edit::rename(&mut db, mid, label).map_err(edit_err)
+    }
+
+    fn merge_monads(&self, into: &NodeId, from: &NodeId) -> io::Result<()> {
+        let i = exigir_monada(into)?;
+        let f = exigir_monada(from)?;
+        let mut db = self.db.write().expect("MonadDb lock envenenado");
+        edit::merge(&mut db, i, f).map_err(edit_err)
+    }
+
+    fn delete_monad(&self, id: &NodeId) -> io::Result<()> {
+        let mid = exigir_monada(id)?;
+        let mut db = self.db.write().expect("MonadDb lock envenenado");
+        edit::delete_monad(&mut db, mid);
+        Ok(())
     }
 }
 
@@ -332,6 +407,54 @@ mod tests {
         let top = src.children(&RAIZ.to_string()).unwrap();
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].mime_hint.as_deref(), Some("monada/gallery"));
+    }
+
+    #[test]
+    fn editar_grafo_via_monad_graph() {
+        // Editá el grafo a TRAVÉS del trait object `dyn Source` —el mismo camino
+        // que el shell tiene— y verificá que la navegación refleja el cambio.
+        let dir = tempfile::tempdir().unwrap();
+        for n in ["a.rs", "b.rs", "c.rs"] {
+            fs::File::create(dir.path().join(n)).unwrap();
+        }
+        let files =
+            scan_directory(dir.path(), &ScanConfig::default()).map_err(io::Error::other).unwrap();
+        let mut db = MonadDb::new();
+        db.ingest_files(files.clone());
+
+        let mut padre = MonadManifest::new("todo");
+        for f in &files {
+            padre.members.insert(f.id);
+        }
+        padre.touch();
+        let padre_node = format!("{PREF_MONADA}{}", padre.id);
+        db.insert_monad(padre);
+
+        // Detrás de un `Box<dyn Source>`, como lo ve el shell.
+        let src: Box<dyn Source> = Box::new(NouserSource::from_db("t", db));
+        let graph = src.monad_graph().expect("nouser ofrece MonadGraphMut");
+
+        // Submonadizá dos de los tres archivos a una hija "sub".
+        let seleccion: Vec<NodeId> =
+            vec![format!("{PREF_ARCHIVO}{}", files[0].id), format!("{PREF_ARCHIVO}{}", files[1].id)];
+        let hija = graph.submonadize(&padre_node, "sub", &seleccion).unwrap();
+        assert!(hija.starts_with(PREF_MONADA));
+
+        // Navegando el padre: ahora hay 1 archivo + la hija (contenedor).
+        let hijos = src.children(&padre_node).unwrap();
+        let contenedores = hijos.iter().filter(|n| n.is_container).count();
+        let archivos = hijos.iter().filter(|n| !n.is_container).count();
+        assert_eq!(contenedores, 1, "la hija aparece como sub-Mónada");
+        assert_eq!(archivos, 1, "el padre soltó 2 de 3 archivos");
+
+        // La hija tiene los 2 trasladados.
+        assert_eq!(src.children(&hija).unwrap().len(), 2);
+
+        // Renombrar y borrar también cruzan el trait.
+        graph.rename_monad(&hija, "viaje").unwrap();
+        assert!(src.children(&padre_node).unwrap().iter().any(|n| n.name.starts_with("viaje")));
+        graph.delete_monad(&hija).unwrap();
+        assert!(!src.children(&padre_node).unwrap().iter().any(|n| n.is_container));
     }
 
     #[test]
