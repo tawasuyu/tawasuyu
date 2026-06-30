@@ -128,6 +128,14 @@ sólo cuando es un visual nuevo no certificable de otra forma.
   pluma-notebook-app (demo que sale 0). **Queda tu ojo:** que empty-state/pop-in/toasts/skeleton
   no rompan *layout* (lo visual no se certifica con exit-code).
 
+## 13. nahual — dispositivos/USB (soberano de lectura + montaje rw) (2026-06-30)
+> `cargo run -p nahual-shell-llimphi --release` → botón «Dispositivos» del sidebar.
+> Pre-check: `udisksctl --version` (gate del montaje rw).
+- [x] **Lectura soberana certificada por tests con imágenes FAT/ext REALES** (mkfs.fat/mcopy/mke2fs -d): navegar device→partición→árbol→leer; extraer al FS por **streaming** (700 KiB cruza ventana 3× → byte-idéntico); absorber a bundle wawa (`<hash>.obj`+raiz 64-hex); `read_preview` acota a 16 MiB (17 MiB→16/17). foreign-fs no_std+std verde; agora-cli `importar-imagen` round-trip byte-idéntico.
+- [x] **Botón «Dispositivos» del sidebar — render headless mirado** (mock espejo con `icon_view(Icon::Save)`: glifo limpio, alineado).
+- [ ] **Falta en metal (hardware: USB físico + sesión polkit):** **montar/desmontar rw vía `udisksctl`** con un device removible real. Verificar: (1) el parseo de la salida de `udisksctl mount` calza con la versión instalada (etiqueta con espacios, con/sin punto final); (2) `/run/media/$USER/...` se navega Y se escribe (crear/renombrar/borrar); (3) auto-recuperación si ya estaba montado (fallback a `/proc/mounts`); (4) «Desmontar (rw)» encuentra el device por `/proc/mounts`. Helpers puros ya testeados (derivación sdb2/nvme0n1p2/mmcblk0p1, parseo, `/proc/mounts` ida-y-vuelta); el `exec` en sí no es certificable en sandbox.
+- [ ] **Tu ojo en metal:** con un USB enchufado — el botón lo lista, click derecho en partición ofrece «Montar (rw)»/«Absorber al grafo wawa», extraer al otro panel funciona, y el preview de un archivo grande no cuelga (acotado).
+
 ---
 
 ## Orden recomendado de aprobación
