@@ -527,6 +527,43 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                 }
             }
         }
+        Msg::MontarRw => {
+            // Montar (rw) sólo una PARTICIÓN: derivamos su device de kernel,
+            // udisksctl la monta en /run/media y navegamos ese punto como POSIX.
+            if let Some(node) = m.cur().selected_node().cloned() {
+                if let Some(nahual_source_core::ObjetivoAbsorcion::Particion(disco, idx)) =
+                    nahual_source_core::objetivo_absorcion(&node.id)
+                {
+                    let dev = nahual_source_core::montaje::device_de_particion(&disco, idx);
+                    match nahual_source_core::montaje::montar_rw(&dev) {
+                        Ok(punto) => {
+                            m.cur_pane_mut().nav_stack.push(posix_nav(&punto));
+                            clear_preview(&mut m);
+                        }
+                        Err(e) => eprintln!("nahual-shell · montar rw: {e}"),
+                    }
+                }
+            }
+        }
+        Msg::DesmontarRw => {
+            // El panel activo navega un punto de montaje POSIX: hallamos su
+            // device por /proc/mounts y udisksctl lo desmonta; volvemos atrás.
+            let punto = std::path::PathBuf::from(m.cur().current_id().as_str());
+            if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
+                if let Some(dev) = nahual_source_core::montaje::dispositivo_montado_en(&mounts, &punto)
+                {
+                    match nahual_source_core::montaje::desmontar(&dev) {
+                        Ok(()) => {
+                            if m.is_foreign() {
+                                m.cur_pane_mut().nav_stack.pop();
+                            }
+                            clear_preview(&mut m);
+                        }
+                        Err(e) => eprintln!("nahual-shell · desmontar rw: {e}"),
+                    }
+                }
+            }
+        }
         Msg::Unmount => {
             if m.is_foreign() {
                 m.cur_pane_mut().nav_stack.pop();

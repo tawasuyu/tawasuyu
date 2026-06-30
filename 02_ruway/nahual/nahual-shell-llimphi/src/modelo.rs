@@ -582,6 +582,12 @@ pub(crate) enum Msg {
     /// Absorber el dispositivo/partición seleccionado al grafo wawa: forja un
     /// bundle `<name>-wawa/` en el directorio del OTRO panel (POSIX).
     AbsorberDispositivo,
+    /// Montar la partición seleccionada en LECTURA-ESCRITURA (vía udisksctl) y
+    /// navegar su punto de montaje como POSIX en el panel activo.
+    MontarRw,
+    /// Desmontar (vía udisksctl) la partición cuyo punto de montaje navega el
+    /// panel activo, y volver atrás.
+    DesmontarRw,
     /// Desmonta la fuente no-POSIX activa y vuelve al filesystem.
     Unmount,
     /// Cicla el tema claro/oscuro (preset siguiente).

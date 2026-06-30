@@ -231,6 +231,29 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
             ));
         }
     }
+    // Montar (lectura-escritura) una partición vía udisksctl: la convencional,
+    // para ESCRIBIR (lo soberano es read-only). Sólo sobre una partición.
+    if model.activo_es_dispositivo()
+        && matches!(
+            model.cur().selected_node().and_then(|n| nahual_source_core::objetivo_absorcion(&n.id)),
+            Some(nahual_source_core::ObjetivoAbsorcion::Particion(..))
+        )
+    {
+        acciones.push((
+            ContextMenuItem::action(rimay_localize::t("nahual-shell-mount-rw")),
+            Msg::MontarRw,
+        ));
+    }
+    // Desmontar (rw) si el panel navega un punto de montaje removible.
+    {
+        let p = model.cur().current_id();
+        if p.starts_with("/run/media/") || p.starts_with("/media/") {
+            acciones.push((
+                ContextMenuItem::action(rimay_localize::t("nahual-shell-unmount-rw")),
+                Msg::DesmontarRw,
+            ));
+        }
+    }
     // Edición del grafo de Mónadas (sólo con un grafo nouser montado): las
     // mismas ops que la command palette, contextuales a la selección.
     if model.cur().monad_graph().is_some() {

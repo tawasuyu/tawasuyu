@@ -33,6 +33,7 @@
 
 pub mod archive;
 pub mod dispositivo;
+pub mod montaje;
 pub mod navigator;
 pub mod posix;
 pub mod wawa;
