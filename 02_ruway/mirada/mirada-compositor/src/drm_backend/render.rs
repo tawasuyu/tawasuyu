@@ -2408,6 +2408,64 @@ impl DrmState {
     /// Emite la pista de revelado del dock autoescondido — una franja fina en
     /// el borde anclado mientras está oculto. Sólo en la salida donde vive
     /// el shell (primaria).
+    /// Pinta el resplandor de la esquina caliente activa, en su salida. Crece
+    /// con el reposo (aviso de que va a disparar) y queda al máximo tras
+    /// disparar, hasta que el puntero sale de la zona. Capas concéntricas
+    /// translúcidas (la interna más brillante) fingen un *bloom* sin shader.
+    /// Coords **locales** a `rect`. No-op sin zona activa, en otra salida, o con
+    /// el resplandor apagado en la config.
+    fn emit_hot_corners(&mut self, idx: usize, rect: Rect, into: &mut Vec<Frame>) {
+        let Some(h) = self.hot_zone else {
+            return;
+        };
+        if h.output != idx {
+            return;
+        }
+        let cfg = self.app.config_hot_corners();
+        if !cfg.enabled || !cfg.glow {
+            return;
+        }
+        let (gx, gy, gw, gh) = super::hot_corners::glow_rect(h.zone, rect.w, rect.h, cfg.size_px);
+        if gw <= 0 || gh <= 0 {
+            return;
+        }
+        // Progreso del reposo (0..1, ease-out); tras disparar, al máximo.
+        let now = self.start.elapsed().as_millis() as u32;
+        let dwell = cfg.dwell_ms.max(1) as f32;
+        let t = (now.saturating_sub(h.since_ms) as f32 / dwell).clamp(0.0, 1.0);
+        let prog = if h.fired {
+            1.0
+        } else {
+            mirada_brain::Easing::EaseOutCubic.apply(t)
+        };
+        let base = 0.12 + 0.5 * prog; // alfa pico del resplandor
+        let c = rgba_f32(self.app.decorations.border_focus);
+        let color = [c[0], c[1], c[2], 1.0];
+        // De la capa interna (chica y brillante, va ARRIBA) a la externa (grande
+        // y tenue, asoma como halo): el front-to-back pinta primero = encima.
+        const LAYERS: i32 = 5;
+        for i in (0..LAYERS).rev() {
+            let f = i as f32 / LAYERS as f32; // 0 = interna … →1 externa
+            let ix = (gw as f32 * f * 0.5) as i32;
+            let iy = (gh as f32 * f * 0.5) as i32;
+            let lw = (gw - 2 * ix).max(1);
+            let lh = (gh - 2 * iy).max(1);
+            let a = base * (1.0 - 0.7 * f); // interna más opaca
+            if a <= 0.0 {
+                continue;
+            }
+            let mut b = SolidColorBuffer::default();
+            b.update((lw, lh), color);
+            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                &b,
+                (gx + ix, gy + iy),
+                1.0,
+                a,
+                Kind::Unspecified,
+            )));
+        }
+    }
+
     fn emit_reveal_band(&mut self, rect: Rect, into: &mut Vec<Frame>) {
         if !(crate::shell_dock().autohide && self.app.shell_hidden) {
             return;
@@ -2978,6 +3036,9 @@ impl DrmState {
             // 3. Zonas de arrastre — en la salida bajo el puntero durante
             //    un drag (helper filtra por intersección de work-rect).
             self.emit_zone_overlay(rect, &mut out);
+
+            // 3.bis Resplandor de la esquina caliente activa (en su salida).
+            self.emit_hot_corners(idx, rect, &mut out);
 
             // 4. Menú raíz — sólo en la salida donde se abrió. Se EMITE más
             //    abajo (tras la escena), para poder armar su backdrop *frosted*

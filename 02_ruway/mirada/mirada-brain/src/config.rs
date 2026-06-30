@@ -454,6 +454,95 @@ pub struct Config {
     /// interruptor maestro para quien marea el movimiento.
     #[serde(default)]
     pub reduce_motion: bool,
+    /// **Esquinas calientes** (hot corners): al apoyar el puntero en una de las
+    /// 8 zonas del borde de la pantalla (4 esquinas + 4 centros de lado), dispara
+    /// una acción tras un breve reposo, con un resplandor que crece como aviso.
+    /// Reemplaza al *hover* de barras: p. ej. el centro-abajo despliega shuma.
+    #[serde(default)]
+    pub hot_corners: HotCorners,
+}
+
+/// Las 8 zonas de borde de las [esquinas calientes](Config::hot_corners) y la
+/// acción que cada una dispara. Cada acción es una cadena del vocabulario de
+/// [`crate::DesktopAction`] (`"workspace-next"`, `"toggle-dropterm"`,
+/// `"spawn:foot"`, …) o una de las pseudo-acciones que resuelve el Cuerpo:
+/// `"reveal-shell"` (desplegar la barra/dock), `"overview"` (vista espacial
+/// Prezi) y `"root-menu"` (menú raíz). `"none"` (o vacío) = zona inerte: ni
+/// dispara ni brilla.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotCorners {
+    /// Interruptor maestro. `false` (default) = ninguna zona reacciona.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Reposo (ms) que el puntero debe quedarse en la zona antes de disparar.
+    /// Filtra los roces accidentales; el resplandor llena en este lapso.
+    #[serde(default = "default_hc_dwell_ms")]
+    pub dwell_ms: u32,
+    /// Tamaño (px) de la zona sensible: lado del cuadrado en las esquinas y
+    /// grosor de la banda en los centros de lado.
+    #[serde(default = "default_hc_size_px")]
+    pub size_px: i32,
+    /// Pinta el resplandor animado en la zona activa. `false` = sólo la acción.
+    #[serde(default = "default_true")]
+    pub glow: bool,
+    #[serde(default = "hc_none")]
+    pub top_left: String,
+    #[serde(default = "hc_none")]
+    pub top_center: String,
+    #[serde(default = "hc_none")]
+    pub top_right: String,
+    #[serde(default = "hc_none")]
+    pub right_center: String,
+    #[serde(default = "hc_none")]
+    pub bottom_right: String,
+    /// Default sembrado a `"reveal-shell"`: el centro-abajo despliega la barra
+    /// (shuma/pata) — la alternativa pedida al *hover* fastidioso.
+    #[serde(default = "hc_reveal_shell")]
+    pub bottom_center: String,
+    #[serde(default = "hc_none")]
+    pub bottom_left: String,
+    #[serde(default = "hc_none")]
+    pub left_center: String,
+}
+
+impl Default for HotCorners {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dwell_ms: default_hc_dwell_ms(),
+            size_px: default_hc_size_px(),
+            glow: true,
+            top_left: hc_none(),
+            top_center: hc_none(),
+            top_right: hc_none(),
+            right_center: hc_none(),
+            bottom_right: hc_none(),
+            bottom_center: hc_reveal_shell(),
+            bottom_left: hc_none(),
+            left_center: hc_none(),
+        }
+    }
+}
+
+/// Default de [`HotCorners::dwell_ms`]: un reposo corto, suficiente para
+/// distinguir intención de roce.
+fn default_hc_dwell_ms() -> u32 {
+    140
+}
+
+/// Default de [`HotCorners::size_px`]: una zona discreta pero alcanzable.
+fn default_hc_size_px() -> i32 {
+    8
+}
+
+/// La acción «sin asignar» de una zona caliente.
+fn hc_none() -> String {
+    "none".to_string()
+}
+
+/// Default de [`HotCorners::bottom_center`]: desplegar la barra.
+fn hc_reveal_shell() -> String {
+    "reveal-shell".to_string()
 }
 
 impl Config {
@@ -1034,6 +1123,7 @@ impl Default for Config {
             glass_blur: 0,
             glass_quality: default_glass_quality(),
             reduce_motion: false,
+            hot_corners: HotCorners::default(),
         }
     }
 }
@@ -1589,6 +1679,31 @@ const CONFIG_TEMPLATE: &str = "\
     //       (command: \"mpv\",  app_id: \"mpv\", fullscreen: true),
     //   ],
     startup: [],
+
+    // Esquinas calientes: apoyá el puntero en un borde y, tras un reposo breve,
+    // dispara una acción (con un resplandor que crece como aviso). Reemplaza al
+    // hover de las barras — por defecto el centro-abajo despliega la barra.
+    // `enabled: false` deja todo inerte. Acciones posibles por zona:
+    //   \"none\"          inerte (no dispara ni brilla)
+    //   \"reveal-shell\"  desplegar la barra/dock (shuma/pata)
+    //   \"overview\"      vista espacial (Prezi)
+    //   \"root-menu\"     menú raíz
+    //   \"workspace-next\" / \"workspace-prev\"   ciclar escritorios
+    //   \"toggle-dropterm\"  terminal desplegable (quake)
+    //   \"toggle-scratchpad\"  scratchpad
+    //   \"cycle-layout\"   cambiar modo de teselado
+    //   \"lock\"          bloquear la sesión
+    //   \"spawn:<cmd>\"   ejecutar un comando (ej. \"spawn:foot\")
+    // Las 8 zonas: top_left/top_center/top_right, left_center/right_center,
+    // bottom_left/bottom_center/bottom_right.
+    // hot_corners: (
+    //     enabled: true,
+    //     dwell_ms: 140,   // reposo antes de disparar
+    //     size_px: 8,      // tamaño de la zona sensible
+    //     glow: true,      // resplandor animado
+    //     top_left: \"overview\",
+    //     bottom_center: \"reveal-shell\",
+    // ),
 )
 ";
 

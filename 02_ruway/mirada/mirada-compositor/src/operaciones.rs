@@ -1792,6 +1792,59 @@ impl App {
         }
     }
 
+    /// La config de [esquinas calientes](mirada_brain::HotCorners) vigente.
+    /// Con Cerebro enlazado no hay config local: se devuelve el default
+    /// (deshabilitado), igual que el resto de getters `config_*`.
+    pub(crate) fn config_hot_corners(&self) -> mirada_brain::HotCorners {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().hot_corners.clone(),
+            Brain::Linked(_) => mirada_brain::HotCorners::default(),
+        }
+    }
+
+    /// Despliega la barra/dock autoescondido (la acción `reveal-shell` de una
+    /// esquina caliente): la hace visible aunque el puntero no esté en la banda
+    /// del borde. El autohide normal la vuelve a ocultar al salir de su franja
+    /// (de ahí que convenga mapearla a la zona del MISMO borde que el dock).
+    /// No-op sin autohide, sin dock acoplado, o si ya está visible.
+    pub(crate) fn reveal_shell(&mut self) -> bool {
+        if !self.shell_hidden || !shell_dock().autohide {
+            return false;
+        }
+        if !self.windows.iter().any(|w| w.is_shell) {
+            return false;
+        }
+        self.shell_hidden = false;
+        let mut danio = None;
+        if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
+            w.visible = true;
+            danio = Some(Rectangle::new(w.loc.into(), w.size.into()));
+        }
+        if let Some(d) = danio {
+            screencopy::danar(self, d);
+        }
+        true
+    }
+
+    /// Abre (o pide cerrar) la vista espacial «Prezi» — la acción `overview` de
+    /// una esquina caliente. Espeja el toggle de `Super+e`: con Cerebro embebido
+    /// la pinta el Cuerpo; enlazado, le reenvía el atajo a la app dueña.
+    pub(crate) fn open_overview(&mut self) {
+        if !self.brain_is_embedded() {
+            let ev = self.body.keybind("Super+e".to_string());
+            self.brain_feed(ev);
+            return;
+        }
+        if self.overview_open {
+            self.overview_closing = true;
+        } else {
+            self.overview_open = true;
+            self.overview_closing = false;
+            self.overview_via_wintab = false;
+            self.overview_selected = self.workspace_overview().map_or(0, |(a, _)| a);
+        }
+    }
+
     /// Con el dock autoescondido, ajusta su visibilidad según el puntero
     /// `(px, py)`: se revela al tocar la banda del borde anclado y se oculta al
     /// salir de su franja. Devuelve `true` si el estado cambió (el backend lo

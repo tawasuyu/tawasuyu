@@ -153,6 +153,38 @@ fn button_style_options() -> Vec<EnumOption> {
     ]
 }
 
+/// Acciones ofrecidas para cada [esquina caliente](crate::HotCorners). El `id`
+/// de cada opción ES la cadena que se guarda y dispara — pseudo-acciones del
+/// Cuerpo (`reveal-shell`/`overview`/`root-menu`) o vocabulario de
+/// [`crate::DesktopAction`] (incluido `spawn:<cmd>`). Para un comando a medida,
+/// editá el `.ron` a mano: `spawn:tu-comando`.
+fn hot_corner_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("none", "Ninguna"),
+        EnumOption::new("reveal-shell", "Desplegar barra (shuma/pata)"),
+        EnumOption::new("overview", "Vista espacial (Prezi)"),
+        EnumOption::new("root-menu", "Menú raíz"),
+        EnumOption::new("workspace-next", "Escritorio siguiente"),
+        EnumOption::new("workspace-prev", "Escritorio anterior"),
+        EnumOption::new("toggle-dropterm", "Terminal desplegable"),
+        EnumOption::new("toggle-scratchpad", "Scratchpad"),
+        EnumOption::new("cycle-layout", "Cambiar teselado"),
+        EnumOption::new("lock", "Bloquear sesión"),
+        EnumOption::new("spawn:foot", "Abrir terminal"),
+    ]
+}
+
+/// Si `s` no está entre las opciones ofrecidas (p. ej. un `spawn:` a medida
+/// puesto a mano en el `.ron`), lo agrega como opción extra para que el combo
+/// no lo pierda al re-renderizar.
+fn hot_corner_options_with(s: &str) -> Vec<EnumOption> {
+    let mut opts = hot_corner_options();
+    if !s.is_empty() && !opts.iter().any(|o| o.id == s) {
+        opts.push(EnumOption::new(s, s));
+    }
+    opts
+}
+
 fn title_align_slug(a: TitleAlign) -> &'static str {
     match a {
         TitleAlign::Left => "left",
@@ -657,6 +689,83 @@ impl Configurable for Config {
                         2,
                     )),
             )
+            .section(
+                Section::new("hot_corners", "Esquinas calientes")
+                    .icon("🔥")
+                    .help(
+                        "Apoyá el puntero en un borde y dispara una acción tras un \
+                         reposo breve (con un resplandor de aviso). Reemplaza al hover \
+                         de las barras — el centro-abajo despliega shuma por defecto.",
+                    )
+                    .field(Field::toggle(
+                        "hc_enabled",
+                        "Activar esquinas calientes",
+                        self.hot_corners.enabled,
+                    ))
+                    .field(Field::slider_int(
+                        "hc_dwell_ms",
+                        "Reposo antes de disparar (ms)",
+                        self.hot_corners.dwell_ms as i64,
+                        0,
+                        600,
+                    ))
+                    .field(Field::slider_int(
+                        "hc_size_px",
+                        "Tamaño de la zona sensible (px)",
+                        self.hot_corners.size_px as i64,
+                        2,
+                        48,
+                    ))
+                    .field(Field::toggle("hc_glow", "Resplandor animado", self.hot_corners.glow))
+                    .field(Field::dropdown(
+                        "hc_top_left",
+                        "Arriba-izquierda",
+                        self.hot_corners.top_left.clone(),
+                        hot_corner_options_with(&self.hot_corners.top_left),
+                    ))
+                    .field(Field::dropdown(
+                        "hc_top_center",
+                        "Arriba-centro",
+                        self.hot_corners.top_center.clone(),
+                        hot_corner_options_with(&self.hot_corners.top_center),
+                    ))
+                    .field(Field::dropdown(
+                        "hc_top_right",
+                        "Arriba-derecha",
+                        self.hot_corners.top_right.clone(),
+                        hot_corner_options_with(&self.hot_corners.top_right),
+                    ))
+                    .field(Field::dropdown(
+                        "hc_left_center",
+                        "Centro-izquierda",
+                        self.hot_corners.left_center.clone(),
+                        hot_corner_options_with(&self.hot_corners.left_center),
+                    ))
+                    .field(Field::dropdown(
+                        "hc_right_center",
+                        "Centro-derecha",
+                        self.hot_corners.right_center.clone(),
+                        hot_corner_options_with(&self.hot_corners.right_center),
+                    ))
+                    .field(Field::dropdown(
+                        "hc_bottom_left",
+                        "Abajo-izquierda",
+                        self.hot_corners.bottom_left.clone(),
+                        hot_corner_options_with(&self.hot_corners.bottom_left),
+                    ))
+                    .field(Field::dropdown(
+                        "hc_bottom_center",
+                        "Abajo-centro",
+                        self.hot_corners.bottom_center.clone(),
+                        hot_corner_options_with(&self.hot_corners.bottom_center),
+                    ))
+                    .field(Field::dropdown(
+                        "hc_bottom_right",
+                        "Abajo-derecha",
+                        self.hot_corners.bottom_right.clone(),
+                        hot_corner_options_with(&self.hot_corners.bottom_right),
+                    )),
+            )
     }
 
     fn apply(&mut self, path: &FieldPath, value: FieldValue) -> Result<(), AllichayError> {
@@ -1029,6 +1138,67 @@ impl Configurable for Config {
             "slide_ms" => {
                 if let Some(v) = value.as_int() {
                     self.slide_ms = v.clamp(0, 600) as u32;
+                }
+            }
+            // --- Esquinas calientes ---
+            "hc_enabled" => {
+                if let Some(b) = value.as_bool() {
+                    self.hot_corners.enabled = b;
+                }
+            }
+            "hc_dwell_ms" => {
+                if let Some(v) = value.as_int() {
+                    self.hot_corners.dwell_ms = v.clamp(0, 2000) as u32;
+                }
+            }
+            "hc_size_px" => {
+                if let Some(v) = value.as_int() {
+                    self.hot_corners.size_px = v.clamp(1, 200) as i32;
+                }
+            }
+            "hc_glow" => {
+                if let Some(b) = value.as_bool() {
+                    self.hot_corners.glow = b;
+                }
+            }
+            "hc_top_left" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.top_left = s.to_string();
+                }
+            }
+            "hc_top_center" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.top_center = s.to_string();
+                }
+            }
+            "hc_top_right" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.top_right = s.to_string();
+                }
+            }
+            "hc_left_center" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.left_center = s.to_string();
+                }
+            }
+            "hc_right_center" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.right_center = s.to_string();
+                }
+            }
+            "hc_bottom_left" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.bottom_left = s.to_string();
+                }
+            }
+            "hc_bottom_center" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.bottom_center = s.to_string();
+                }
+            }
+            "hc_bottom_right" => {
+                if let Some(s) = value.as_str() {
+                    self.hot_corners.bottom_right = s.to_string();
                 }
             }
             _ => return Err(unknown()),

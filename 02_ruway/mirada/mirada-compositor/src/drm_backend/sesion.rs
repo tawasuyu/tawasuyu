@@ -359,6 +359,9 @@ impl DrmState {
         self.manage_video_wallpaper();
         // Wallpaper de marca animado (fondo por defecto vivo): late a ~20 fps.
         self.tick_animated_default();
+        // Esquinas calientes: dispara la zona bajo el puntero si cumplió el
+        // reposo (acá, no en el motion, para medirlo aun con el cursor quieto).
+        self.tick_hot_corners();
 
         self.render();
         let _ = self.display.flush_clients();

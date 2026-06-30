@@ -72,6 +72,7 @@ use crate::{
     Setup,
 };
 
+mod hot_corners;
 mod outputs;
 mod render;
 mod sesion;
@@ -963,6 +964,11 @@ struct DrmState {
     /// Índice de la salida en la que vive el menú raíz abierto. `None` =
     /// no hay menú.
     menu_output_idx: Option<usize>,
+    /// Esquina caliente bajo el puntero (zona + salida + sellado de entrada),
+    /// si la feature está activa y el cursor está apoyado en una zona con
+    /// acción. La arma [`Self::update_hot_corners`], la dispara
+    /// [`Self::tick_hot_corners`] y la pinta `render::emit_hot_corners`.
+    hot_zone: Option<hot_corners::HotState>,
     /// Ventana objetivo del menú **contextual** abierto (click derecho en el
     /// titlebar). `None` = el menú abierto es el raíz (del fondo), no de ventana.
     menu_window: Option<u64>,
@@ -1747,6 +1753,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         menu_entries,
         root_menu: None,
         menu_output_idx: None,
+        hot_zone: None,
         menu_window: None,
         last_titlebar_click: None,
         zones,
